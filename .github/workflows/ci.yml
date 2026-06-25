@@ -2,10 +2,9 @@
 #
 # Runs on every push, and on pull requests targeting any channel branch
 # (dev, unstable, stable, main) or a release/* branch; blocks merges on failure.
-# The Rust workspace is not scaffolded yet, so the fmt/clippy/build/
-# test steps are PLACEHOLDERS that echo the eventual cargo command and exit 0.
-# When Cargo.toml lands at the workspace root, swap each placeholder for the
-# real command shown alongside it.
+# The fmt/clippy/build/test jobs run the real cargo commands against the
+# workspace. GitHub-hosted runners ship a stable toolchain with rustfmt and
+# clippy, so no toolchain-setup action is needed (minimal-deps).
 #
 # Jobs run sequentially via a needs: chain so a failure short-circuits the rest
 # of that matrix leg: version -> ledger -> fmt -> clippy -> build -> test.
@@ -56,9 +55,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - name: cargo fmt --check
-        # TODO: replace with `cargo fmt --check` once the workspace exists.
-        run: |
-          echo "TODO: cargo fmt --check"
+        run: cargo fmt --check
 
   clippy:
     name: clippy
@@ -70,10 +67,8 @@ jobs:
         os: [ubuntu-latest, windows-latest]
     steps:
       - uses: actions/checkout@v7
-      - name: cargo clippy --all-targets -- -D warnings
-        # TODO: replace with `cargo clippy --all-targets -- -D warnings`.
-        run: |
-          echo "TODO: cargo clippy"
+      - name: cargo clippy --all-targets --workspace -- -D warnings
+        run: cargo clippy --all-targets --workspace -- -D warnings
 
   build:
     name: build
@@ -85,10 +80,8 @@ jobs:
         os: [ubuntu-latest, windows-latest]
     steps:
       - uses: actions/checkout@v7
-      - name: cargo build --release
-        # TODO: replace with `cargo build --release` once the workspace exists.
-        run: |
-          echo "TODO: cargo build --release"
+      - name: cargo build --release --workspace
+        run: cargo build --release --workspace
 
   test:
     name: test
@@ -100,7 +93,5 @@ jobs:
         os: [ubuntu-latest, windows-latest]
     steps:
       - uses: actions/checkout@v7
-      - name: cargo test
-        # TODO: replace with `cargo test` once the workspace exists.
-        run: |
-          echo "TODO: cargo test"
+      - name: cargo test --workspace
+        run: cargo test --workspace
