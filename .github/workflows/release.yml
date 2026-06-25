@@ -61,7 +61,7 @@ jobs:
         run: |
           mkdir -p dist
           echo "pokeemerald-rs linux prototype v${VERSION}" > "dist/pokeemerald-rs-${VERSION}-linux.txt"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: pokeemerald-rs-${{ needs.setup.outputs.version }}-linux
           path: dist/
@@ -81,7 +81,7 @@ jobs:
         run: |
           mkdir -p dist
           echo "pokeemerald-rs windows prototype v${VERSION}" > "dist/pokeemerald-rs-${VERSION}-windows.txt"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: pokeemerald-rs-${{ needs.setup.outputs.version }}-windows
           path: dist/
