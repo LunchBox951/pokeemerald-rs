@@ -100,12 +100,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Download Linux artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: pokeemerald-rs-${{ needs.setup.outputs.version }}-linux
           path: artifacts/linux
       - name: Download Windows artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: pokeemerald-rs-${{ needs.setup.outputs.version }}-windows
           path: artifacts/windows
