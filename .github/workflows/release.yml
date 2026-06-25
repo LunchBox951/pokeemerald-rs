@@ -32,7 +32,7 @@ jobs:
       tag: ${{ steps.read.outputs.tag }}
       final: ${{ steps.read.outputs.final }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - name: Read VERSION and compute tag
@@ -55,7 +55,7 @@ jobs:
     env:
       VERSION: ${{ needs.setup.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Produce sentinel artifact
         # TODO: replace with `cargo build --release` and package the binary.
         run: |
@@ -74,7 +74,7 @@ jobs:
     env:
       VERSION: ${{ needs.setup.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Produce sentinel artifact
         # TODO: replace with `cargo build --release` and package the binary.
         shell: bash
@@ -98,7 +98,7 @@ jobs:
       VERSION: ${{ needs.setup.outputs.version }}
       FINAL: ${{ needs.setup.outputs.final }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Download Linux artifact
         uses: actions/download-artifact@v8
         with:
