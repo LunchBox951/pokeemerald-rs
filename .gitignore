@@ -1,6 +1,9 @@
 # Upstream reference checkouts pulled by init.sh — never commit these.
-/pokeemerald/
-/mgba/
+# No trailing slash: in worktrees init.sh creates these as symlinks, which a
+# directory-only pattern (`/pokeemerald/`) would not match. These anchored
+# patterns ignore a dir or a symlink of that name.
+/pokeemerald
+/mgba
 
 # Rust build output
 /target/
