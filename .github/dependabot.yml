@@ -1,0 +1,23 @@
+# Dependabot config. Updates are proposals only; every dependency bump still
+# flows through normal review and owner approval (minimal-deps, gated-by-default).
+version: 2
+updates:
+  # GitHub Actions used by the CI / release workflows.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    labels:
+      - "ci"
+      - "needs-review"
+
+  # Cargo dependencies. The workspace is not scaffolded yet; this entry activates
+  # once a root Cargo.toml exists. Until then Dependabot finds no
+  # manifest here and simply no-ops.
+  - package-ecosystem: "cargo"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    labels:
+      - "rust"
+      - "needs-review"

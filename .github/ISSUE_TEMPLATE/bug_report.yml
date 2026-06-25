@@ -1,0 +1,46 @@
+name: Bug report
+description: Something behaves differently from upstream Pokémon Emerald.
+labels: ["needs-review"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for filing. Keep it lean (lean-docs). Behaviour is judged against
+        the player-visible result of upstream Emerald (behavioral-fidelity), not
+        internal structure.
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: What's wrong, in a sentence or two.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behaviour
+      description: What upstream Emerald does instead. Cite the canonical source in pokeemerald/ if known.
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behaviour
+      description: What this port does. Include logs, screenshots, or a save state if relevant.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: Minimal steps. Note branch (dev / unstable / stable / main) and version (VERSION file).
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version / branch
+      description: Value from the VERSION file plus the branch you hit this on.
+      placeholder: "0.0.0.0 on dev"
+    validations:
+      required: false

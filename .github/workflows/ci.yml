@@ -1,0 +1,106 @@
+# CI gate for pokeemerald-rs. See docs/acceptance/v1.md.
+#
+# Runs on every push, and on pull requests targeting any channel branch
+# (dev, unstable, stable, main) or a release/* branch; blocks merges on failure.
+# The Rust workspace is not scaffolded yet, so the fmt/clippy/build/
+# test steps are PLACEHOLDERS that echo the eventual cargo command and exit 0.
+# When Cargo.toml lands at the workspace root, swap each placeholder for the
+# real command shown alongside it.
+#
+# Jobs run sequentially via a needs: chain so a failure short-circuits the rest
+# of that matrix leg: version -> ledger -> fmt -> clippy -> build -> test.
+#
+# Required status-check contexts for branch protection (R-4): `version` and
+# `ledger` report under their bare job names; the matrixed jobs report per OS —
+# `fmt (ubuntu-latest)`, `fmt (windows-latest)`, `clippy (ubuntu-latest)`,
+# `clippy (windows-latest)`, `build (ubuntu-latest)`, `build (windows-latest)`,
+# `test (ubuntu-latest)`, `test (windows-latest)`. Register those exact names.
+name: ci
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: [dev, unstable, stable, main, "release/**"]
+
+jobs:
+  # Policy gate (ubuntu-only): reject malformed versions and version regressions.
+  version:
+    name: version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # full history so version_check can reach origin/main
+      - name: Validate VERSION
+        run: python3 scripts/version_check.py --base origin/main --head HEAD
+
+  # Policy gate (ubuntu-only): reject stale ledger targets once Rust targets exist.
+  ledger:
+    name: ledger
+    runs-on: ubuntu-latest
+    needs: version
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify ledger
+        run: python3 scripts/ledger.py verify
+
+  fmt:
+    name: fmt
+    needs: ledger
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - name: cargo fmt --check
+        # TODO: replace with `cargo fmt --check` once the workspace exists.
+        run: |
+          echo "TODO: cargo fmt --check"
+
+  clippy:
+    name: clippy
+    needs: fmt
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - name: cargo clippy --all-targets -- -D warnings
+        # TODO: replace with `cargo clippy --all-targets -- -D warnings`.
+        run: |
+          echo "TODO: cargo clippy"
+
+  build:
+    name: build
+    needs: clippy
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - name: cargo build --release
+        # TODO: replace with `cargo build --release` once the workspace exists.
+        run: |
+          echo "TODO: cargo build --release"
+
+  test:
+    name: test
+    needs: build
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - name: cargo test
+        # TODO: replace with `cargo test` once the workspace exists.
+        run: |
+          echo "TODO: cargo test"

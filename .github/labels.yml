@@ -1,0 +1,95 @@
+# Canonical label set for the repository. Kept lean (lean-docs) and stable so
+# contributors inherit a clear workflow from the start. Apply with a label-sync
+# action or `gh label` against this file.
+
+# --- Subsystem / area ---
+- name: roadmap
+  color: "5319e7"
+  description: Roadmap / design-task work toward a v1 acceptance criterion.
+- name: rust
+  color: "dea584"
+  description: Rust source, workspace, or toolchain changes.
+- name: assets
+  color: "c2e0c6"
+  description: Extracted/transcoded data, graphics, audio, maps.
+- name: engine
+  color: "0e8a16"
+  description: Overworld, scripts, dialog, save, RNG, menus.
+- name: battle
+  color: "b60205"
+  description: Battle state machine, moves, AI, animations, UI.
+- name: docs
+  color: "0075ca"
+  description: Documentation and contributor guides.
+
+# --- Process / infra ---
+- name: release
+  color: "1d76db"
+  description: Release process, versioning, tagging, packaging.
+- name: ci
+  color: "fbca04"
+  description: CI/CD workflows and status checks.
+- name: ledger
+  color: "fef2c0"
+  description: Coverage ledger (ledger/) entries and verification.
+
+# --- Review / gating ---
+- name: needs-review
+  color: "d4c5f9"
+  description: Awaiting maintainer or routine review before it can advance.
+- name: needs-operator
+  color: "e99695"
+  description: Blocked on a genuine human decision, incl. player-channel promotion signoff.
+- name: snapshot-review-needed
+  color: "bfd4f2"
+  description: Visual/audio snapshots need human blessing, not hash alone.
+- name: waiver-required
+  color: "fad8c7"
+  description: Needs a recorded waiver to proceed past a gate.
+
+# --- Severity / risk ---
+- name: release-blocker
+  color: "b60205"
+  description: Must be resolved before any release can be cut.
+- name: breaking-change
+  color: "d93f0b"
+  description: Breaks a repository contract or player-visible compatibility.
+- name: save-data-risk
+  color: "e11d21"
+  description: May corrupt, migrate, or invalidate save data — handle with care.
+- name: performance-regression
+  color: "e11d21"
+  description: Measured regression against a release-mode performance budget.
+
+# --- Branch regressions (release ladder) ---
+- name: main-regression
+  color: "8b0000"
+  description: Regression observed on the main (stable release) branch.
+- name: stable-regression
+  color: "b60205"
+  description: Regression observed on the stable (beta) branch.
+- name: unstable-regression
+  color: "d93f0b"
+  description: Regression observed on the unstable (nightly) branch.
+
+# --- Routine / pipeline state ---
+- name: routine
+  color: "5319e7"
+  description: Tracking item owned by the automated maintenance routine.
+- name: soaking
+  color: "fbca04"
+  description: Change is soaking across passes before merge/promotion.
+- name: ready-to-merge
+  color: "0e8a16"
+  description: Reviewed and green; eligible to merge on a later pass.
+- name: blocked
+  color: "000000"
+  description: Cannot proceed until a dependency or decision clears.
+
+# --- Contributor onboarding ---
+- name: good-first-issue
+  color: "7057ff"
+  description: Good entry point for a new contributor.
+- name: help-wanted
+  color: "008672"
+  description: Maintainer is actively seeking help on this.

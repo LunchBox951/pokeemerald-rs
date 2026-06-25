@@ -1,0 +1,119 @@
+# Release-channel promotion automation. See RELEASE.md (the `release/*` model).
+#
+# A long-lived `release/X` branch is the vehicle that climbs the gated ladder
+# `dev → unstable → stable → main`. This workflow does the mechanical PR-opening
+# so the maintainer only has to review and gate:
+#
+#   * When a `release/*` branch is CREATED, open its `release/X → unstable` PR
+#     (the start of a promotion cycle).
+#   * When a `release/*` branch is MERGED into a rung (a push to `unstable` or
+#     `stable`), open the next-rung PR from the same `release/X`.
+#
+# Player channels (`stable`, `main`) still require human signoff before merge —
+# this only opens the PR; it never merges one.
+#
+# No rung-skipping: this only ever opens the NEXT rung (unstable -> stable ->
+# main), so nothing reaches `main` without clearing `unstable` and `stable` first
+# — there is no `dev -> main` shortcut, even for a consolidated release branch.
+#
+# ASSUMPTIONS (verify once live, R-4):
+#   * Promotions use a MERGE COMMIT, not squash — the ancestor checks below rely
+#     on `release/X` history being preserved in the channel branch.
+#   * Repo setting "Allow GitHub Actions to create and approve pull requests" is
+#     ON, and workflow permissions are Read/Write (see docs go-live runbook).
+#   * The labels `release`, `needs-review`, and `needs-operator` already exist
+#     (created from .github/labels.yml at go-live) — `gh pr create --label` fails
+#     on a missing label.
+name: promote
+
+on:
+  push:
+    branches: [unstable, stable]
+  create:
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  promote:
+    name: open-promotion-pr
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # full history so the ancestor checks below can resolve
+
+      # Cycle start: a new `release/*` branch was created -> open it into unstable.
+      - name: Open cycle-start PR (release/* -> unstable)
+        if: github.event_name == 'create' && github.event.ref_type == 'branch' && startsWith(github.event.ref, 'release/')
+        env:
+          # Bind the untrusted ref to an env var; never interpolate ${{ }} into
+          # the shell directly (branch names can carry shell metacharacters).
+          EVENT_REF: ${{ github.event.ref }}
+        run: |
+          set -euo pipefail
+          release_branch="${EVENT_REF}"
+          target="unstable"
+          if git merge-base --is-ancestor "origin/${release_branch}" "origin/${target}"; then
+            echo "${release_branch} already contained in ${target}; nothing to open."
+            exit 0
+          fi
+          existing="$(gh pr list --head "${release_branch}" --base "${target}" --state open --json number --jq 'length')"
+          if [ "${existing}" != "0" ]; then
+            echo "Promotion PR ${release_branch} -> ${target} already open."
+            exit 0
+          fi
+          gh pr create \
+            --head "${release_branch}" \
+            --base "${target}" \
+            --title "Promote ${release_branch} → ${target}" \
+            --body "$(printf 'Automated cycle-start promotion opened by promote.yml when %s was created.\n\nCandidate: `%s` @ %s\nGates for **%s** are in RELEASE.md — attach evidence before merge.' "${release_branch}" "${release_branch}" "$(git rev-parse --short "origin/${release_branch}")" "${target}")" \
+            --label "release" \
+            --label "needs-review"
+
+      # Next rung: a release/* branch was merged into unstable/stable -> open the
+      # PR to the rung above it.
+      - name: Open next-rung PR (release/* -> next channel)
+        if: github.event_name == 'push'
+        run: |
+          set -euo pipefail
+          merged="${GITHUB_REF_NAME}"   # the channel just pushed to
+          case "${merged}" in
+            unstable) target="stable" ;;
+            stable)   target="main" ;;
+            *) echo "no next rung for ${merged}"; exit 0 ;;
+          esac
+          # Find the most-recent release/* branch that is now an ancestor of the
+          # channel we just pushed to (i.e. the vehicle that was promoted in).
+          release_branch=""
+          for ref in $(git for-each-ref --format='%(refname:short)' --sort=-committerdate 'refs/remotes/origin/release/*'); do
+            name="${ref#origin/}"
+            if git merge-base --is-ancestor "origin/${name}" "origin/${merged}"; then
+              release_branch="${name}"
+              break
+            fi
+          done
+          if [ -z "${release_branch}" ]; then
+            echo "No release/* branch merged into ${merged}; nothing to promote."
+            exit 0
+          fi
+          if git merge-base --is-ancestor "origin/${release_branch}" "origin/${target}"; then
+            echo "${release_branch} already contained in ${target}; nothing to open."
+            exit 0
+          fi
+          existing="$(gh pr list --head "${release_branch}" --base "${target}" --state open --json number --jq 'length')"
+          if [ "${existing}" != "0" ]; then
+            echo "Promotion PR ${release_branch} -> ${target} already open."
+            exit 0
+          fi
+          gh pr create \
+            --head "${release_branch}" \
+            --base "${target}" \
+            --title "Promote ${release_branch} → ${target}" \
+            --body "$(printf 'Automated next-rung promotion opened by promote.yml after %s merged into %s.\n\nCandidate: `%s` @ %s\nGates for **%s** are in RELEASE.md. Player channels (`stable`, `main`) require owner signoff (`needs-operator`) before merge.' "${release_branch}" "${merged}" "${release_branch}" "$(git rev-parse --short "origin/${release_branch}")" "${target}")" \
+            --label "release" \
+            --label "needs-review" \
+            --label "needs-operator"

@@ -1,0 +1,122 @@
+# Release pipeline for pokeemerald-rs. See docs/acceptance/v1.md.
+#
+# Triggers only on versioned pushes to main (changes under VERSION, CHANGELOG,
+# this workflow, or scripts/**). It reads the canonical VERSION file, computes
+# the tag v${version}, builds per-OS artifacts, and publishes a GitHub Release.
+#
+# The Rust binary does not exist yet, so build-linux/build-windows
+# emit a small sentinel file as their artifact. This exercises the full
+# upload -> download -> release pipeline end-to-end before the real binary
+# lands; swap the sentinel step for `cargo build --release` + packaging then.
+name: release
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - VERSION
+      - CHANGELOG.md
+      - .github/workflows/release.yml
+      - scripts/**
+
+permissions:
+  contents: write # required to create tags and GitHub Releases
+
+jobs:
+  # Read VERSION, derive the tag, and expose both as job outputs.
+  setup:
+    name: setup
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.read.outputs.version }}
+      tag: ${{ steps.read.outputs.tag }}
+      final: ${{ steps.read.outputs.final }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Read VERSION and compute tag
+        id: read
+        run: |
+          version="$(cat VERSION)"
+          tag="v${version}"
+          final="${version%%.*}"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+          echo "final=${final}" >> "$GITHUB_OUTPUT"
+      - name: Validate version before release
+        run: python3 scripts/version_check.py --base origin/main --head HEAD
+
+  # Placeholder Linux build: emit a sentinel artifact named with the version.
+  build-linux:
+    name: build-linux
+    needs: setup
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ needs.setup.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Produce sentinel artifact
+        # TODO: replace with `cargo build --release` and package the binary.
+        run: |
+          mkdir -p dist
+          echo "pokeemerald-rs linux prototype v${VERSION}" > "dist/pokeemerald-rs-${VERSION}-linux.txt"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pokeemerald-rs-${{ needs.setup.outputs.version }}-linux
+          path: dist/
+
+  # Placeholder Windows build: emit a sentinel artifact named with the version.
+  build-windows:
+    name: build-windows
+    needs: setup
+    runs-on: windows-latest
+    env:
+      VERSION: ${{ needs.setup.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Produce sentinel artifact
+        # TODO: replace with `cargo build --release` and package the binary.
+        shell: bash
+        run: |
+          mkdir -p dist
+          echo "pokeemerald-rs windows prototype v${VERSION}" > "dist/pokeemerald-rs-${VERSION}-windows.txt"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pokeemerald-rs-${{ needs.setup.outputs.version }}-windows
+          path: dist/
+
+  # Create the GitHub Release, attaching both build artifacts.
+  # FINAL=0 releases are prereleases; stable (FINAL>=1) is maintainer-gated.
+  release:
+    name: release
+    needs: [setup, build-linux, build-windows]
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ needs.setup.outputs.tag }}
+      VERSION: ${{ needs.setup.outputs.version }}
+      FINAL: ${{ needs.setup.outputs.final }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download Linux artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: pokeemerald-rs-${{ needs.setup.outputs.version }}-linux
+          path: artifacts/linux
+      - name: Download Windows artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: pokeemerald-rs-${{ needs.setup.outputs.version }}-windows
+          path: artifacts/windows
+      - name: Create GitHub Release
+        run: |
+          prerelease_flag=""
+          if [ "${FINAL}" = "0" ]; then
+            prerelease_flag="--prerelease"
+          fi
+          gh release create "${TAG}" \
+            --title "Release ${TAG}" \
+            --generate-notes \
+            ${prerelease_flag} \
+            artifacts/linux/* artifacts/windows/*

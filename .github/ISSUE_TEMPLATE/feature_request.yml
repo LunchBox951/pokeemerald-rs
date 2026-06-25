@@ -1,0 +1,37 @@
+name: Feature request
+description: Propose a capability or enhancement for the Rust port.
+labels: ["needs-review"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Scope-setting note: this project is a from-scratch port of upstream
+        Pokémon Emerald. Net-new behaviour beyond upstream parity is rarely in
+        scope before v1. Keep it lean (lean-docs).
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem / motivation
+      description: What gap or need does this address?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed change
+      description: What you'd like to happen. Note any upstream behaviour it maps to (behavioral-fidelity).
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+    validations:
+      required: false
+  - type: checkboxes
+    id: constraints
+    attributes:
+      label: Constraints acknowledged
+      options:
+        - label: This does not require copying upstream C verbatim (no-verbatim).
+        - label: This does not add a new Cargo dependency, or it flags one for owner approval (minimal-deps).

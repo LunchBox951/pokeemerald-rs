@@ -1,0 +1,31 @@
+name: Roadmap task
+description: A unit of roadmap work that ladders up to a v1 acceptance criterion.
+labels: ["needs-review"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Roadmap work lives in GitHub, not in committed plan docs (constitution-vs-roadmap).
+        Each task must ladder up to a stable acceptance ID in docs/acceptance/v1.md.
+  - type: textarea
+    id: task
+    attributes:
+      label: Task
+      description: The bounded slice of work to do.
+    validations:
+      required: true
+  - type: input
+    id: acceptance
+    attributes:
+      label: Acceptance criteria / laddered ID
+      description: The stable ID(s) in docs/acceptance/v1.md this task satisfies, e.g. F-7.
+      placeholder: "F-7"
+    validations:
+      required: true
+  - type: textarea
+    id: definition-of-done
+    attributes:
+      label: Definition of done
+      description: Objective, checkable outcomes. CI green plus review is the floor (gated-by-default).
+    validations:
+      required: true

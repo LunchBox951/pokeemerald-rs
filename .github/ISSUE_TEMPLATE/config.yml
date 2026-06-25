@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Design questions & discussion
+    url: https://github.com/LunchBox951/pokeemerald-rs/discussions
+    about: Ask design questions and discuss direction in GitHub Discussions, not in issues.

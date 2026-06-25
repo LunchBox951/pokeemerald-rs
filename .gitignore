@@ -1,0 +1,26 @@
+# Upstream reference checkouts pulled by init.sh — never commit these.
+/pokeemerald/
+/mgba/
+
+# Rust build output
+/target/
+**/*.rs.bk
+Cargo.lock.bak
+
+# Editor / OS noise
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# Logs and local scratch
+*.log
+/tmp/
+/scratch/
+
+# Python bytecode cache
+__pycache__/
+*.pyc
