@@ -7,9 +7,8 @@
 #
 # Behaviour:
 #   * In the main checkout: clones from GitHub.
-#   * In a git worktree:    clones from the main checkout's local pokeemerald/
-#                           and mgba/ directories (fast, no network, hardlinks
-#                           via git's default --local behaviour).
+#   * In a git worktree:    creates symlinks to the main checkout's pokeemerald/
+#                           and mgba/ directories (no extra disk, no clone).
 
 set -euo pipefail
 
@@ -28,21 +27,25 @@ git_dir_abs="$(cd "$(git rev-parse --git-dir)" && pwd)"
 git_common_dir_abs="$(cd "$(git rev-parse --git-common-dir)" && pwd)"
 
 if [[ "$git_dir_abs" != "$git_common_dir_abs" ]]; then
-    # Worktree: main repo's working tree is the parent of the common git dir.
+    # Worktree: symlink the main checkout's reference directories rather than
+    # re-cloning them. This works with both git-cloned and tarball-extracted
+    # sources and avoids duplicating gigabytes of read-only data per worktree.
     main_repo="$(dirname "$git_common_dir_abs")"
-    pokeemerald_source="$main_repo/pokeemerald"
-    mgba_source="$main_repo/mgba"
-    for src in "$pokeemerald_source" "$mgba_source"; do
-        if [[ ! -d "$src/.git" ]]; then
-            echo "error: $src not found. Run init.sh in the main checkout ($main_repo) first." >&2
+    for name in pokeemerald mgba; do
+        src="$main_repo/$name"
+        if [[ ! -d "$src" ]]; then
+            echo "error: $src missing; run init.sh in the main checkout ($main_repo) first." >&2
             exit 1
         fi
+        if [[ -L "$name" || -d "$name" ]]; then
+            echo "skip: $name already present"
+        else
+            ln -s "$src" "$name"
+            echo "linked $name -> $src"
+        fi
     done
-    echo "worktree detected; cloning from $main_repo"
-else
-    pokeemerald_source="$POKEEMERALD_REMOTE"
-    mgba_source="$MGBA_REMOTE"
-    echo "main checkout detected; cloning from GitHub"
+    echo "done."
+    exit 0
 fi
 
 clone_if_missing() {
@@ -56,7 +59,8 @@ clone_if_missing() {
     git clone "$source" "$target"
 }
 
-clone_if_missing "$pokeemerald_source" "pokeemerald"
-clone_if_missing "$mgba_source" "mgba"
+echo "main checkout detected; cloning from GitHub"
+clone_if_missing "$POKEEMERALD_REMOTE" "pokeemerald"
+clone_if_missing "$MGBA_REMOTE" "mgba"
 
 echo "done."
