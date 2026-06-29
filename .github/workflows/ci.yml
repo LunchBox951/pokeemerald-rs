@@ -3,8 +3,10 @@
 # Runs on every push, and on pull requests targeting any channel branch
 # (dev, unstable, stable, main) or a release/* branch; blocks merges on failure.
 # The fmt/clippy/build/test jobs run the real cargo commands against the
-# workspace. GitHub-hosted runners ship a stable toolchain with rustfmt and
-# clippy, so no toolchain-setup action is needed (minimal-deps).
+# workspace. GitHub-hosted runners ship a stable toolchain via rustup; the fmt
+# and clippy jobs defensively `rustup component add` their component first so the
+# required checks stay green across `ubuntu-latest`/`windows-latest` image drift
+# (the rolling alias). rustup is preinstalled, so no new action/dep (minimal-deps).
 #
 # Jobs run sequentially via a needs: chain so a failure short-circuits the rest
 # of that matrix leg: version -> ledger -> fmt -> clippy -> build -> test.
@@ -54,6 +56,8 @@ jobs:
         os: [ubuntu-latest, windows-latest]
     steps:
       - uses: actions/checkout@v7
+      - name: Ensure rustfmt component
+        run: rustup component add rustfmt
       - name: cargo fmt --check
         run: cargo fmt --check
 
@@ -67,6 +71,8 @@ jobs:
         os: [ubuntu-latest, windows-latest]
     steps:
       - uses: actions/checkout@v7
+      - name: Ensure clippy component
+        run: rustup component add clippy
       - name: cargo clippy --all-targets --workspace -- -D warnings
         run: cargo clippy --all-targets --workspace -- -D warnings
 
