@@ -18,6 +18,10 @@
 # `test (ubuntu-latest)`, `test (windows-latest)`. Register those exact names.
 name: ci
 
+# Least-privilege GITHUB_TOKEN: every job here only checks out and reads the repo.
+permissions:
+  contents: read
+
 on:
   push:
     branches: ["**"]
