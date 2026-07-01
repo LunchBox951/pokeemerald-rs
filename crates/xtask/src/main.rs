@@ -19,7 +19,8 @@ commands:
   extract            extract data/assets from the upstream reference
   record-snapshot    record a golden snapshot for regression tests
   scenario           run a scripted gameplay scenario
-  e2e --suite <s>    run the end-to-end suite; <s> is smoke | full | soak";
+  e2e --suite <s> [--release]
+                     run the end-to-end suite; <s> is smoke | full | soak";
 
 /// Errors produced while parsing an `xtask` invocation.
 ///
@@ -99,8 +100,13 @@ pub enum Command {
     RecordSnapshot,
     /// `scenario`
     Scenario,
-    /// `e2e --suite <suite>`
-    E2e(Suite),
+    /// `e2e --suite <suite> [--release]`
+    E2e {
+        /// The selected test suite.
+        suite: Suite,
+        /// Whether `--release` was requested (release-mode gates: V-2/V-3).
+        release: bool,
+    },
 }
 
 /// Parse the post-program-name arguments into a [`Command`].
@@ -112,7 +118,7 @@ pub enum Command {
 ///
 /// Returns [`XtaskError::UnknownCommand`] for an empty or unrecognised
 /// subcommand, [`XtaskError::UnexpectedArg`] when a subcommand that takes no
-/// arguments is given one (or `e2e` is given a stray token),
+/// arguments is given one (or `e2e` is given a stray/duplicate token),
 /// [`XtaskError::MissingSuiteValue`] if `e2e --suite` has no value, and
 /// [`XtaskError::InvalidSuite`] for an unknown suite name.
 pub fn parse(args: &[String]) -> Result<Command, XtaskError> {
@@ -125,7 +131,7 @@ pub fn parse(args: &[String]) -> Result<Command, XtaskError> {
         "extract" => no_args(rest).map(|()| Command::Extract),
         "record-snapshot" => no_args(rest).map(|()| Command::RecordSnapshot),
         "scenario" => no_args(rest).map(|()| Command::Scenario),
-        "e2e" => parse_e2e(rest).map(Command::E2e),
+        "e2e" => parse_e2e(rest).map(|(suite, release)| Command::E2e { suite, release }),
         other => Err(XtaskError::UnknownCommand(other.to_owned())),
     }
 }
@@ -142,22 +148,34 @@ fn no_args(rest: &[String]) -> Result<(), XtaskError> {
     }
 }
 
-/// Parse the arguments following the `e2e` subcommand: `--suite <value>`.
+/// Parse the arguments following the `e2e` subcommand:
+/// `--suite <value> [--release]`.
 ///
-/// Requires the exact form `--suite <value>` with no leading or trailing
-/// tokens; anything else is an [`XtaskError::UnexpectedArg`].
-fn parse_e2e(rest: &[String]) -> Result<Suite, XtaskError> {
-    let Some(flag) = rest.first() else {
-        return Err(XtaskError::MissingSuiteValue);
-    };
-    if flag != "--suite" {
-        return Err(XtaskError::UnexpectedArg(flag.clone()));
+/// `--suite <value>` is required; `--release` is an optional release-mode flag
+/// (the V-2/V-3 gate commands in `RELEASE.md`). The two may appear in either
+/// order, but any other token — or a repeated/stray argument — is an
+/// [`XtaskError::UnexpectedArg`]. Returns the suite and whether release mode
+/// was requested.
+fn parse_e2e(rest: &[String]) -> Result<(Suite, bool), XtaskError> {
+    let mut suite: Option<Suite> = None;
+    let mut release = false;
+    let mut i = 0;
+    while i < rest.len() {
+        match rest[i].as_str() {
+            "--suite" if suite.is_none() => {
+                let value = rest.get(i + 1).ok_or(XtaskError::MissingSuiteValue)?;
+                suite = Some(Suite::parse(value)?);
+                i += 2;
+            }
+            "--release" if !release => {
+                release = true;
+                i += 1;
+            }
+            other => return Err(XtaskError::UnexpectedArg(other.to_owned())),
+        }
     }
-    let value = rest.get(1).ok_or(XtaskError::MissingSuiteValue)?;
-    if let Some(extra) = rest.get(2) {
-        return Err(XtaskError::UnexpectedArg(extra.clone()));
-    }
-    Suite::parse(value)
+    let suite = suite.ok_or(XtaskError::MissingSuiteValue)?;
+    Ok((suite, release))
 }
 
 /// Dispatch a parsed command, printing its (not-yet-implemented) status.
@@ -168,8 +186,9 @@ fn dispatch(cmd: &Command) {
             println!("xtask record-snapshot: not implemented yet");
         }
         Command::Scenario => println!("xtask scenario: not implemented yet"),
-        Command::E2e(suite) => {
-            println!("xtask e2e ({suite:?}): not implemented yet");
+        Command::E2e { suite, release } => {
+            let mode = if *release { "release" } else { "debug" };
+            println!("xtask e2e ({suite:?}, {mode}): not implemented yet");
         }
     }
 }
@@ -228,7 +247,10 @@ mod tests {
     fn parse_e2e_smoke() {
         assert_eq!(
             parse(&args(&["e2e", "--suite", "smoke"])).unwrap(),
-            Command::E2e(Suite::Smoke)
+            Command::E2e {
+                suite: Suite::Smoke,
+                release: false
+            }
         );
     }
 
@@ -236,7 +258,10 @@ mod tests {
     fn parse_e2e_full() {
         assert_eq!(
             parse(&args(&["e2e", "--suite", "full"])).unwrap(),
-            Command::E2e(Suite::Full)
+            Command::E2e {
+                suite: Suite::Full,
+                release: false
+            }
         );
     }
 
@@ -244,8 +269,58 @@ mod tests {
     fn parse_e2e_soak() {
         assert_eq!(
             parse(&args(&["e2e", "--suite", "soak"])).unwrap(),
-            Command::E2e(Suite::Soak)
+            Command::E2e {
+                suite: Suite::Soak,
+                release: false
+            }
         );
+    }
+
+    #[test]
+    fn parse_e2e_full_release() {
+        // RELEASE.md V-2 gate: `cargo xtask e2e --suite full --release`.
+        assert_eq!(
+            parse(&args(&["e2e", "--suite", "full", "--release"])).unwrap(),
+            Command::E2e {
+                suite: Suite::Full,
+                release: true
+            }
+        );
+    }
+
+    #[test]
+    fn parse_e2e_soak_release() {
+        // RELEASE.md V-3 gate: `cargo xtask e2e --suite soak --release`.
+        assert_eq!(
+            parse(&args(&["e2e", "--suite", "soak", "--release"])).unwrap(),
+            Command::E2e {
+                suite: Suite::Soak,
+                release: true
+            }
+        );
+    }
+
+    #[test]
+    fn parse_e2e_release_before_suite() {
+        assert_eq!(
+            parse(&args(&["e2e", "--release", "--suite", "smoke"])).unwrap(),
+            Command::E2e {
+                suite: Suite::Smoke,
+                release: true
+            }
+        );
+    }
+
+    #[test]
+    fn parse_e2e_rejects_duplicate_release() {
+        let err = parse(&args(&["e2e", "--suite", "full", "--release", "--release"])).unwrap_err();
+        assert!(matches!(err, XtaskError::UnexpectedArg(s) if s == "--release"));
+    }
+
+    #[test]
+    fn parse_e2e_rejects_unknown_flag() {
+        let err = parse(&args(&["e2e", "--suite", "smoke", "--bogus"])).unwrap_err();
+        assert!(matches!(err, XtaskError::UnexpectedArg(s) if s == "--bogus"));
     }
 
     #[test]
