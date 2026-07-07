@@ -577,7 +577,10 @@ def cmd_categories(args):
     by_cat = {}
     for path, e in ledger["files"].items():
         cat = e.get("category", "?")
-        st = e.get("status", "pending")
+        # Use effective_status so a terminal parent with a still-pending
+        # sub-artifact counts as pending here, consistent with status/report/
+        # gaps and the L-1 accounting rule.
+        st = effective_status(e)
         by_cat.setdefault(cat, Counter())[st] += 1
     if not by_cat:
         print(f"{project}: ledger is empty (run `init` or `scan`)")

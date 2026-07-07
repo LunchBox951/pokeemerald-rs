@@ -311,6 +311,28 @@ class TestStatusCounting(LedgerTestBase):
         self.assertIn("## Accounted for, by spec", out)
         self.assertIn("| `s` | 1 |", out)
 
+    def test_categories_uses_effective_status(self):
+        # Own terminal + pending sub-artifact must count as pending in the
+        # per-category breakdown too, agreeing with status/report/gaps.
+        self.write_ledger({"Makefile": {
+            "category": "meta.build", "kind": "file", "status": "rewritten",
+            "spec": "s", "reason": "r", "rust_target": "x.rs",
+            "artifacts": {"a": {"status": "pending"}}}})
+        out = self.capture(ledger.cmd_categories, ns(project=PROJECT))
+        row = next(l for l in out.splitlines() if "meta.build" in l)
+        _, total, pending, terminal = row.split()
+        self.assertEqual((total, pending, terminal), ("1", "1", "0"))
+
+    def test_categories_accounts_when_all_terminal(self):
+        self.write_ledger({"Makefile": {
+            "category": "meta.build", "kind": "file", "status": "rewritten",
+            "spec": "s", "reason": "r", "rust_target": "x.rs",
+            "artifacts": {"a": {"status": "ported"}}}})
+        out = self.capture(ledger.cmd_categories, ns(project=PROJECT))
+        row = next(l for l in out.splitlines() if "meta.build" in l)
+        _, total, pending, terminal = row.split()
+        self.assertEqual((total, pending, terminal), ("1", "0", "1"))
+
 
 # ── 5. scan preservation ─────────────────────────────────────────────────────
 
