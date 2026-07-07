@@ -1,9 +1,13 @@
 //! `xtask` — the project's task-automation entry point (F-3).
 //!
 //! A hand-rolled dev runner (std only, no `clap`/`anyhow` — `minimal-deps`).
-//! This is a SKELETON: every subcommand parses, dispatches, and reports that it
-//! is not implemented yet. Real `extract` / `record-snapshot` / `scenario` /
-//! `e2e` behaviour, and wiring `e2e` into CI (V-1), are out of scope here.
+//! This is a SKELETON: every subcommand parses and dispatches, then fails
+//! *closed* — a recognised-but-unimplemented subcommand returns
+//! [`XtaskError::NotImplemented`] (non-zero exit) rather than exiting 0, so the
+//! `RELEASE.md` gate commands (`e2e --suite …`) can never be satisfied by a
+//! no-op stub `(gated-by-default)`. Real `extract` / `record-snapshot` /
+//! `scenario` / `e2e` behaviour, and wiring `e2e` into CI (V-1), are out of
+//! scope here.
 //!
 //! Run via the workspace alias: `cargo xtask <subcommand>`.
 
@@ -37,6 +41,12 @@ pub enum XtaskError {
     /// A subcommand received an argument it does not accept. Carries the
     /// offending token.
     UnexpectedArg(String),
+    /// A recognised subcommand whose behaviour is not implemented yet. Carries
+    /// the command's name. Returned so stub subcommands fail *closed* (non-zero
+    /// exit) rather than silently reporting success — the `RELEASE.md` gate
+    /// commands must never be satisfiable by a no-op `(gated-by-default)`
+    /// `(test-ratchet)`.
+    NotImplemented(&'static str),
 }
 
 impl fmt::Display for XtaskError {
@@ -56,6 +66,11 @@ impl fmt::Display for XtaskError {
             }
             Self::UnexpectedArg(arg) => {
                 writeln!(f, "error: unexpected argument `{arg}`")?;
+            }
+            // A not-implemented status is a runtime failure, not a usage error,
+            // so it gets no USAGE tail.
+            Self::NotImplemented(what) => {
+                return write!(f, "error: `{what}` is not implemented yet");
             }
         }
         write!(f, "{USAGE}")
@@ -178,19 +193,25 @@ fn parse_e2e(rest: &[String]) -> Result<(Suite, bool), XtaskError> {
     Ok((suite, release))
 }
 
-/// Dispatch a parsed command, printing its (not-yet-implemented) status.
-fn dispatch(cmd: &Command) {
-    match cmd {
-        Command::Extract => println!("xtask extract: not implemented yet"),
-        Command::RecordSnapshot => {
-            println!("xtask record-snapshot: not implemented yet");
-        }
-        Command::Scenario => println!("xtask scenario: not implemented yet"),
-        Command::E2e { suite, release } => {
-            let mode = if *release { "release" } else { "debug" };
-            println!("xtask e2e ({suite:?}, {mode}): not implemented yet");
-        }
-    }
+/// Dispatch a parsed command.
+///
+/// Every subcommand is currently a stub. Rather than exiting 0, each returns
+/// [`XtaskError::NotImplemented`] so the process fails *closed* (non-zero
+/// exit): the `RELEASE.md` promotion gates run these exact commands, so a stub
+/// that reported success would satisfy a gate with zero validation
+/// `(gated-by-default)` `(test-ratchet)`.
+///
+/// # Errors
+///
+/// Always returns [`XtaskError::NotImplemented`] until real behaviour lands.
+fn dispatch(cmd: &Command) -> Result<(), XtaskError> {
+    let name = match cmd {
+        Command::Extract => "extract",
+        Command::RecordSnapshot => "record-snapshot",
+        Command::Scenario => "scenario",
+        Command::E2e { .. } => "e2e",
+    };
+    Err(XtaskError::NotImplemented(name))
 }
 
 /// Parse and dispatch a single invocation.
@@ -199,11 +220,11 @@ fn dispatch(cmd: &Command) {
 ///
 /// # Errors
 ///
-/// Propagates any [`XtaskError`] from [`parse`].
+/// Propagates any [`XtaskError`] from [`parse`], and (until the subcommands are
+/// implemented) [`XtaskError::NotImplemented`] from [`dispatch`].
 pub fn run(args: &[String]) -> Result<(), XtaskError> {
     let cmd = parse(args)?;
-    dispatch(&cmd);
-    Ok(())
+    dispatch(&cmd)
 }
 
 fn main() -> ExitCode {
@@ -385,9 +406,30 @@ mod tests {
     }
 
     #[test]
-    fn run_ok_for_recognised() {
-        assert!(run(&args(&["extract"])).is_ok());
-        assert!(run(&args(&["e2e", "--suite", "smoke"])).is_ok());
+    fn run_stub_commands_fail_closed() {
+        // Recognised-but-unimplemented subcommands must NOT report success:
+        // RELEASE.md wires `xtask e2e --suite …` in as promotion gates, so a
+        // stub exiting 0 would satisfy a gate with zero validation
+        // `(gated-by-default)` `(test-ratchet)`.
+        assert!(matches!(
+            run(&args(&["extract"])).unwrap_err(),
+            XtaskError::NotImplemented("extract")
+        ));
+        assert!(matches!(
+            run(&args(&["e2e", "--suite", "smoke"])).unwrap_err(),
+            XtaskError::NotImplemented("e2e")
+        ));
+        assert!(matches!(
+            run(&args(&["e2e", "--suite", "full", "--release"])).unwrap_err(),
+            XtaskError::NotImplemented("e2e")
+        ));
+    }
+
+    #[test]
+    fn not_implemented_display_has_no_usage_tail() {
+        let rendered = XtaskError::NotImplemented("e2e").to_string();
+        assert!(rendered.contains("not implemented"));
+        assert!(!rendered.contains("usage: cargo xtask"));
     }
 
     #[test]
