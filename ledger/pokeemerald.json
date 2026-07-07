@@ -12913,7 +12913,10 @@
     "include/random.h": {
       "category": "code.header",
       "kind": "file",
-      "status": "pending"
+      "reason": "PRNG interface (SeedRng, Random, Random32, ISO_RANDOMIZE constants) re-expressed on the Rng type",
+      "rust_target": "crates/engine/src/rng.rs",
+      "spec": "S-5",
+      "status": "rewritten"
     },
     "include/rayquaza_scene.h": {
       "category": "code.header",
@@ -20286,7 +20289,10 @@
     "src/random.c": {
       "category": "code.source",
       "kind": "file",
-      "status": "pending"
+      "reason": "LCG PRNG re-implemented as owned Rng type (Random/Random2/Random32)",
+      "rust_target": "crates/engine/src/rng.rs",
+      "spec": "S-5",
+      "status": "rewritten"
     },
     "src/rayquaza_scene.c": {
       "category": "code.source",
