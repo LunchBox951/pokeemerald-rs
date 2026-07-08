@@ -18587,6 +18587,14 @@
       "status": "pending"
     },
     "src/battle_main.c": {
+      "artifacts": {
+        "gTypeEffectiveness": {
+          "reason": "gTypeEffectiveness (const u8[336] at src/battle_main.c:335) transcribed to a typed TypeChart in crates/assets, pinned to upstream by an exhaustive 289-matchup golden-grid test (#19). Registered as a sub-file artifact now that #21 landed; battle_main.c itself stays pending (rest of the file unported).",
+          "rust_target": "crates/assets/src/type_chart.rs",
+          "spec": "S-4",
+          "status": "ported"
+        }
+      },
       "category": "code.source",
       "kind": "file",
       "status": "pending"
@@ -20616,5 +20624,5 @@
     }
   },
   "project": "pokeemerald",
-  "schema_version": 2
+  "schema_version": 3
 }
