@@ -33,8 +33,10 @@
     "charmap.txt": {
       "category": "meta.charmap",
       "kind": "file",
-      "spec_owner": "02-rendering",
-      "status": "pending"
+      "reason": "Gen-3 text codec: byte<->glyph table and typed control codes re-implemented idiomatically from charmap.txt (decode/encode with typed Token variants)",
+      "rust_target": "crates/engine/src/text.rs",
+      "spec": "S-5",
+      "status": "rewritten"
     },
     "data/battle_ai_scripts.s": {
       "category": "data.script",
@@ -20616,5 +20618,5 @@
     }
   },
   "project": "pokeemerald",
-  "schema_version": 2
+  "schema_version": 3
 }
