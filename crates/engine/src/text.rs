@@ -4,10 +4,30 @@
 //! single-byte text encoding. Every dialog line, menu label, name and save
 //! string upstream is stored in this encoding, mapping one byte to one glyph
 //! with a handful of multi-byte *control codes*. The byte↔glyph table is
-//! transcribed from `pokeemerald/charmap.txt` (the default Latin font used by
-//! the English build) and the control-code semantics from
-//! `pokeemerald/include/constants/characters.h` +
+//! transcribed from `pokeemerald/charmap.txt` and the control-code semantics
+//! from `pokeemerald/include/constants/characters.h` +
 //! `pokeemerald/src/string_util.c` (`GetExtCtrlCodeLength`).
+//!
+//! # Scope
+//!
+//! This slice implements the **Latin/English font** only — the byte→glyph
+//! assignments used by the English build. Two kinds of Latin-font byte are not
+//! plain Unicode scalars and so cannot live in [`GLYPHS`]:
+//!
+//! * *Control codes* (`0xFA`–`0xFF`, `0xF7`) decode to their own typed
+//!   [`Token`] variant.
+//! * *Named font tiles* (`{LV}`, the `PKMN`/`POKEBLOCK` word tiles, the
+//!   directional arrows, the French superscripts, …) decode to a typed
+//!   [`Token::Symbol`] — they are glyph *tiles*, not text characters, so they
+//!   are carried as [`Symbol`] rather than being flattened to lookalike chars.
+//!
+//! The **Japanese hiragana/katakana and Japanese-only punctuation font sections
+//! of `charmap.txt` (its `@ Hiragana` block onward) are out of scope for this
+//! slice and remain unimplemented.** Those byte values collide with the Latin
+//! font (the encoding is font-relative), so this codec never guesses at them:
+//! any byte that is neither an assigned Latin glyph, a named Latin tile, nor a
+//! control code surfaces as [`TextError::UnknownByte`] — nothing is silently
+//! lost or mis-rendered.
 //!
 //! The codec owns no global state `(oop-boundaries)`: [`decode`] turns bytes
 //! into a [`Vec`] of typed [`Token`]s and [`encode`] performs the inverse for
@@ -54,14 +74,65 @@ pub const CHAR_PROMPT_CLEAR: u8 = 0xFB;
 /// without memorising the raw index.
 pub const PLACEHOLDER_PLAYER: u8 = 0x01;
 
+/// A named single-byte *font tile* from the Latin/English font that is not a
+/// plain Unicode scalar and so cannot live in [`GLYPHS`].
+///
+/// These are stylised glyph tiles (abbreviations, the letters of the
+/// `POKéMON`/`POKéBLOCK` logo words, directional arrows, French superscripts),
+/// transcribed from `pokeemerald/charmap.txt`. Each maps to exactly one byte —
+/// decoding is byte-faithful, one byte to one [`Symbol`], with no lookahead or
+/// composite detection. Note that some of these bytes also appear standalone
+/// (e.g. `PK` = `0x53` is both the first tile of `PKMN` and a tile in its own
+/// right).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Symbol {
+    /// `LV` — the stylised "Lv" level tile (`0x34`).
+    Lv,
+    /// `PK` — first tile of the stylised `POKé` abbreviation (`0x53`); also the
+    /// leading tile of the `PKMN` word.
+    Pk,
+    /// `MN` — second tile of the stylised `PKMN` word (`0x54`).
+    Mn,
+    /// First tile of the stylised `POKéBLOCK` word (`0x55`).
+    Pokeblock1,
+    /// Second tile of the stylised `POKéBLOCK` word (`0x56`).
+    Pokeblock2,
+    /// Third tile of the stylised `POKéBLOCK` word (`0x57`).
+    Pokeblock3,
+    /// Fourth tile of the stylised `POKéBLOCK` word (`0x58`).
+    Pokeblock4,
+    /// Fifth tile of the stylised `POKéBLOCK` word (`0x59`).
+    Pokeblock5,
+    /// `UNK_SPACER` — an unnamed spacer tile (`0x77`).
+    Spacer,
+    /// `UP_ARROW` — the up directional arrow tile (`0x79`).
+    UpArrow,
+    /// `DOWN_ARROW` — the down directional arrow tile (`0x7A`).
+    DownArrow,
+    /// `LEFT_ARROW` — the left directional arrow tile (`0x7B`).
+    LeftArrow,
+    /// `RIGHT_ARROW` — the right directional arrow tile (`0x7C`).
+    RightArrow,
+    /// `SUPER_ER` — superscript "er" tile, used by the French build (`0x2C`).
+    SuperEr,
+    /// `SUPER_E` — superscript "e" tile, used by the French build (`0x84`).
+    SuperE,
+    /// `SUPER_RE` — superscript "re" tile, used by the French build (`0xA0`).
+    SuperRe,
+}
+
 /// A decoded unit of Gen-3 text.
 ///
-/// Printable glyphs decode to [`Token::Char`]; every control code decodes to
-/// its own typed variant so nothing is lost or misrendered.
+/// Printable glyphs decode to [`Token::Char`]; named non-text font tiles decode
+/// to [`Token::Symbol`]; every control code decodes to its own typed variant so
+/// nothing is lost or misrendered.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Token {
     /// A printable glyph (letter, digit, punctuation, space, …).
     Char(char),
+    /// A named non-text font tile (arrow, `LV`/`PKMN`/`POKEBLOCK` word tile,
+    /// French superscript, …) — see [`Symbol`].
+    Symbol(Symbol),
     /// Line break (`0xFE`).
     Newline,
     /// Wait for input, then scroll the dialog window (`0xFA`).
@@ -197,8 +268,13 @@ pub fn decode(bytes: &[u8]) -> Result<Vec<Token>, TextError> {
                 i = args_end;
             }
             other => {
-                let c = byte_to_char(other).ok_or(TextError::UnknownByte(other))?;
-                out.push(Token::Char(c));
+                if let Some(c) = byte_to_char(other) {
+                    out.push(Token::Char(c));
+                } else if let Some(sym) = symbol_from_byte(other) {
+                    out.push(Token::Symbol(sym));
+                } else {
+                    return Err(TextError::UnknownByte(other));
+                }
                 i += 1;
             }
         }
@@ -220,6 +296,7 @@ pub fn decode_to_string(bytes: &[u8]) -> Result<String, TextError> {
     for tok in decode(bytes)? {
         match tok {
             Token::Char(c) => s.push(c),
+            Token::Symbol(sym) => s.push_str(symbol_placeholder(sym)),
             Token::Newline => s.push('\n'),
             Token::PromptScroll => s.push_str("{SCROLL}"),
             Token::PromptClear => s.push_str("{CLEAR}"),
@@ -253,6 +330,7 @@ pub fn encode(tokens: &[Token]) -> Result<Vec<u8>, TextError> {
     for tok in tokens {
         match tok {
             Token::Char(c) => out.push(char_to_byte(*c).ok_or(TextError::UnencodableChar(*c))?),
+            Token::Symbol(s) => out.push(byte_from_symbol(*s)),
             Token::Newline => out.push(CHAR_NEWLINE),
             Token::PromptScroll => out.push(CHAR_PROMPT_SCROLL),
             Token::PromptClear => out.push(CHAR_PROMPT_CLEAR),
@@ -296,8 +374,11 @@ pub fn encode_str(s: &str) -> Result<Vec<u8>, TextError> {
 /// English default font in `pokeemerald/charmap.txt`.
 ///
 /// This is the single source of truth for both [`byte_to_char`] and
-/// [`char_to_byte`]. Only unambiguous printable glyphs are listed; multi-byte
-/// composites (`PKMN`, `POKEBLOCK`, …) and control codes are handled elsewhere.
+/// [`char_to_byte`]. Only plain Unicode-scalar glyphs are listed here; the
+/// named non-text tiles that `charmap.txt` also assigns in the Latin font
+/// (`LV`, the `PKMN`/`POKEBLOCK` word tiles, the arrows, the French
+/// superscripts) are structurally not `char`s and live in [`SYMBOLS`], and
+/// control codes are handled by [`decode`]/[`encode`] directly.
 /// Byte `0xB4` maps to `’` here (both `’` and `'` share `0xB4` upstream; the
 /// typographic apostrophe is chosen as canonical for round-tripping, and the
 /// ASCII apostrophe is accepted on encode only via [`char_to_byte`]).
@@ -462,6 +543,76 @@ pub fn char_to_byte(c: char) -> Option<u8> {
         return Some(0xB4);
     }
     GLYPHS.iter().find(|&&(g, _)| g == c).map(|&(_, b)| b)
+}
+
+/// The named non-text tiles of the Latin/English font: `(Symbol, byte)` pairs
+/// transcribed from `pokeemerald/charmap.txt`.
+///
+/// This is the single source of truth for both [`symbol_from_byte`] and
+/// [`byte_from_symbol`], the [`Symbol`] analogue of [`GLYPHS`]. Every byte here
+/// is disjoint from the bytes in [`GLYPHS`] (the two tables partition the
+/// assigned single-byte Latin space between plain glyphs and named tiles).
+const SYMBOLS: &[(Symbol, u8)] = &[
+    (Symbol::SuperEr, 0x2C),
+    (Symbol::Lv, 0x34),
+    (Symbol::Pk, 0x53),
+    (Symbol::Mn, 0x54),
+    (Symbol::Pokeblock1, 0x55),
+    (Symbol::Pokeblock2, 0x56),
+    (Symbol::Pokeblock3, 0x57),
+    (Symbol::Pokeblock4, 0x58),
+    (Symbol::Pokeblock5, 0x59),
+    (Symbol::Spacer, 0x77),
+    (Symbol::UpArrow, 0x79),
+    (Symbol::DownArrow, 0x7A),
+    (Symbol::LeftArrow, 0x7B),
+    (Symbol::RightArrow, 0x7C),
+    (Symbol::SuperE, 0x84),
+    (Symbol::SuperRe, 0xA0),
+];
+
+/// Map a single Gen-3 byte to its named font tile, or `None` if the byte is not
+/// an assigned Latin-font tile (it may be a plain glyph, a control code, or
+/// unassigned).
+#[must_use]
+pub fn symbol_from_byte(byte: u8) -> Option<Symbol> {
+    SYMBOLS.iter().find(|&&(_, b)| b == byte).map(|&(s, _)| s)
+}
+
+/// Map a named font tile to its Gen-3 byte. Total: every [`Symbol`] has a byte.
+///
+/// The lookup is over [`SYMBOLS`], which is exhaustive over [`Symbol`]; the
+/// `unreachable!` therefore cannot fire and this function never panics.
+#[must_use]
+pub fn byte_from_symbol(sym: Symbol) -> u8 {
+    match SYMBOLS.iter().find(|&&(s, _)| s == sym) {
+        Some(&(_, b)) => b,
+        // SYMBOLS lists every Symbol variant, so no match is impossible.
+        None => unreachable!("SYMBOLS table is exhaustive over Symbol"),
+    }
+}
+
+/// A readable brace placeholder for a [`Symbol`], for lossy logging via
+/// [`decode_to_string`]. Uses the tile's `charmap.txt` name.
+fn symbol_placeholder(sym: Symbol) -> &'static str {
+    match sym {
+        Symbol::Lv => "{LV}",
+        Symbol::Pk => "{PK}",
+        Symbol::Mn => "{MN}",
+        Symbol::Pokeblock1 => "{POKEBLOCK1}",
+        Symbol::Pokeblock2 => "{POKEBLOCK2}",
+        Symbol::Pokeblock3 => "{POKEBLOCK3}",
+        Symbol::Pokeblock4 => "{POKEBLOCK4}",
+        Symbol::Pokeblock5 => "{POKEBLOCK5}",
+        Symbol::Spacer => "{UNK_SPACER}",
+        Symbol::UpArrow => "{UP_ARROW}",
+        Symbol::DownArrow => "{DOWN_ARROW}",
+        Symbol::LeftArrow => "{LEFT_ARROW}",
+        Symbol::RightArrow => "{RIGHT_ARROW}",
+        Symbol::SuperEr => "{SUPER_ER}",
+        Symbol::SuperE => "{SUPER_E}",
+        Symbol::SuperRe => "{SUPER_RE}",
+    }
 }
 
 #[cfg(test)]
@@ -685,5 +836,101 @@ mod tests {
         let before = bytes.len();
         bytes.dedup();
         assert_eq!(before, bytes.len(), "duplicate byte in GLYPHS table");
+    }
+
+    #[test]
+    fn charmap_ground_truth_symbol_bytes() {
+        // Ground-truth pins for every named Latin-font tile, quoted directly
+        // from pokeemerald/charmap.txt (not read from this module). MN is the
+        // second tile of `PKMN = 53 54`.
+        assert_eq!(byte_from_symbol(Symbol::SuperEr), 0x2C);
+        assert_eq!(byte_from_symbol(Symbol::Lv), 0x34);
+        assert_eq!(byte_from_symbol(Symbol::Pk), 0x53);
+        assert_eq!(byte_from_symbol(Symbol::Mn), 0x54);
+        assert_eq!(byte_from_symbol(Symbol::Pokeblock1), 0x55);
+        assert_eq!(byte_from_symbol(Symbol::Pokeblock2), 0x56);
+        assert_eq!(byte_from_symbol(Symbol::Pokeblock3), 0x57);
+        assert_eq!(byte_from_symbol(Symbol::Pokeblock4), 0x58);
+        assert_eq!(byte_from_symbol(Symbol::Pokeblock5), 0x59);
+        assert_eq!(byte_from_symbol(Symbol::Spacer), 0x77);
+        assert_eq!(byte_from_symbol(Symbol::UpArrow), 0x79);
+        assert_eq!(byte_from_symbol(Symbol::DownArrow), 0x7A);
+        assert_eq!(byte_from_symbol(Symbol::LeftArrow), 0x7B);
+        assert_eq!(byte_from_symbol(Symbol::RightArrow), 0x7C);
+        assert_eq!(byte_from_symbol(Symbol::SuperE), 0x84);
+        assert_eq!(byte_from_symbol(Symbol::SuperRe), 0xA0);
+    }
+
+    #[test]
+    fn every_symbol_byte_decodes_and_round_trips() {
+        // Each assigned Latin symbol byte decodes to the matching typed Symbol
+        // and re-encodes back to the same byte.
+        for &(sym, byte) in SYMBOLS {
+            assert_eq!(symbol_from_byte(byte), Some(sym), "byte {byte:#04x}");
+            let toks = decode(&[byte]).unwrap();
+            assert_eq!(toks, vec![Token::Symbol(sym)], "decode {byte:#04x}");
+            let back = encode(&toks).unwrap();
+            assert_eq!(back, vec![byte], "encode {sym:?}");
+        }
+    }
+
+    #[test]
+    fn realistic_symbol_sequence_decodes_and_round_trips() {
+        // A realistic mix: "Lv", the PKMN word (53 54), a POKEBLOCK word
+        // (55 56 57 58 59), and an arrow — none should error as UnknownByte.
+        let bytes = [
+            0x34, // LV
+            0x53, 0x54, // PKMN
+            0x79, // UP_ARROW
+            0x55, 0x56, 0x57, 0x58, 0x59, // POKEBLOCK
+            EOS,
+        ];
+        let toks = decode(&bytes).unwrap();
+        assert_eq!(
+            toks,
+            vec![
+                Token::Symbol(Symbol::Lv),
+                Token::Symbol(Symbol::Pk),
+                Token::Symbol(Symbol::Mn),
+                Token::Symbol(Symbol::UpArrow),
+                Token::Symbol(Symbol::Pokeblock1),
+                Token::Symbol(Symbol::Pokeblock2),
+                Token::Symbol(Symbol::Pokeblock3),
+                Token::Symbol(Symbol::Pokeblock4),
+                Token::Symbol(Symbol::Pokeblock5),
+                Token::End,
+            ]
+        );
+        // Round-trips through encode (End emits EOS, so the byte stream matches).
+        assert_eq!(encode(&toks).unwrap(), bytes);
+    }
+
+    #[test]
+    fn symbol_table_has_no_duplicate_bytes() {
+        let mut bytes: Vec<u8> = SYMBOLS.iter().map(|&(_, b)| b).collect();
+        bytes.sort_unstable();
+        let before = bytes.len();
+        bytes.dedup();
+        assert_eq!(before, bytes.len(), "duplicate byte in SYMBOLS table");
+    }
+
+    #[test]
+    fn glyphs_and_symbols_are_disjoint() {
+        // No byte may be both a plain glyph and a named tile — decode must have
+        // an unambiguous target for every assigned byte.
+        for &(_, gb) in GLYPHS {
+            assert!(
+                symbol_from_byte(gb).is_none(),
+                "byte {gb:#04x} is in both GLYPHS and SYMBOLS"
+            );
+        }
+    }
+
+    #[test]
+    fn unassigned_latin_byte_is_still_unknown() {
+        // Guards the still-valid unknown_byte test: 0x60 must be in neither
+        // table so it genuinely errors.
+        assert_eq!(byte_to_char(0x60), None);
+        assert_eq!(symbol_from_byte(0x60), None);
     }
 }
