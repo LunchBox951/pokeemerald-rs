@@ -19340,6 +19340,14 @@
       "status": "pending"
     },
     "src/data/pokemon/species_info.h": {
+      "artifacts": {
+        "base_stats": {
+          "reason": "Numeric/enum base-stats fields of gSpeciesInfo (base stats, types, catch rate, base exp, EV yields, held items, gender ratio, egg cycles, friendship, growth rate, egg groups, abilities, safari flee rate, body color, noFlip) as a typed owned SpeciesTable. Graphics/cries/learnsets/dex remain out of scope, so the parent file stays pending.",
+          "rust_target": "crates/assets/src/species.rs",
+          "spec": "S-4",
+          "status": "ported"
+        }
+      },
       "category": "code.header",
       "kind": "file",
       "status": "pending"

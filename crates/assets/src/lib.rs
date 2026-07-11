@@ -1,12 +1,17 @@
 //! Assets subsystem (S-4): extraction pipeline + typed access.
 //!
 //! Exposes extracted upstream game data as idiomatic, owned Rust types
-//! `(oop-boundaries)`. The first extracted table is the battle
-//! type-effectiveness chart (see [`type_chart`]); more data follows as the
-//! crate fills out.
+//! `(oop-boundaries)`. Extracted so far: the battle type-effectiveness chart
+//! (see [`type_chart`]) and the species base-stats table (see [`species`]);
+//! more data follows as the crate fills out.
 
 pub mod error;
+pub mod species;
 pub mod type_chart;
 
 pub use error::AssetError;
+pub use species::{
+    AbilityId, BaseStats, BodyColor, EggGroup, EvYield, GenderRatio, GrowthRate, ItemId, SpeciesId,
+    SpeciesTable,
+};
 pub use type_chart::{Effectiveness, Type, TypeChart};
