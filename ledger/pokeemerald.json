@@ -18972,7 +18972,10 @@
     "src/data/battle_moves.h": {
       "category": "code.header",
       "kind": "file",
-      "status": "pending"
+      "reason": "gBattleMoves per-move battle-data table transcribed into a typed owned MoveTable (MoveData rows: effect/power/type/accuracy/pp/secondaryEffectChance/target/signed priority/flags), pinned to upstream by unit tests.",
+      "rust_target": "crates/assets/src/battle_moves.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "src/data/contest_moves.h": {
       "category": "code.header",
