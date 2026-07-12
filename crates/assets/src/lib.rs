@@ -2,11 +2,15 @@
 //!
 //! Exposes extracted upstream game data as idiomatic, owned Rust types
 //! `(oop-boundaries)`. The first extracted table is the battle
-//! type-effectiveness chart (see [`type_chart`]); more data follows as the
-//! crate fills out.
+//! type-effectiveness chart (see [`type_chart`]) and the per-move battle-data
+//! table (see [`battle_moves`]); more data follows as the crate fills out.
 
+pub mod battle_moves;
 pub mod error;
 pub mod type_chart;
 
+pub use battle_moves::{
+    MoveData, MoveEffect, MoveFlags, MoveId, MoveTable, MoveTarget, MoveType, MOVES_COUNT,
+};
 pub use error::AssetError;
 pub use type_chart::{Effectiveness, Type, TypeChart};

@@ -16,12 +16,21 @@ pub enum AssetError {
     ///
     /// [`Type`]: crate::type_chart::Type
     UnknownType(u8),
+
+    /// A raw move id fell outside the `gBattleMoves` table.
+    ///
+    /// Carries the offending id. Upstream defines ids `0..MOVES_COUNT`
+    /// (`0..355`); anything else has no battle-data entry.
+    ///
+    /// [`MoveId`]: crate::battle_moves::MoveId
+    UnknownMove(u16),
 }
 
 impl fmt::Display for AssetError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::UnknownType(id) => write!(f, "unknown battle type id `{id}`"),
+            Self::UnknownMove(id) => write!(f, "unknown move id `{id}`"),
         }
     }
 }
