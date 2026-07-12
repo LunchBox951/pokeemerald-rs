@@ -19345,7 +19345,10 @@
     "src/data/pokemon/species_info.h": {
       "category": "code.header",
       "kind": "file",
-      "status": "pending"
+      "reason": "gSpeciesInfo (species_info.h) extracted in full as a typed owned SpeciesTable: base HP/Atk/Def/Spe/SpA/SpD, both types, catch rate, base exp, EV yields, held items, gender ratio, egg cycles, friendship, growth rate, egg groups, abilities, safari flee rate, body color, noFlip. This file holds only these base-stat/enum fields; graphics/cries/learnsets/dex live in separate ledger entries.",
+      "rust_target": "crates/assets/src/species.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "src/data/pokemon/tmhm_learnsets.h": {
       "category": "code.header",
