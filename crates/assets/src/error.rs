@@ -33,6 +33,16 @@ pub enum AssetError {
     ///
     /// [`MoveId`]: crate::battle_moves::MoveId
     UnknownMove(u16),
+
+    /// A raw `EVO_*` method id did not correspond to any modelled
+    /// [`EvoMethod`].
+    ///
+    /// Carries the offending id. Upstream defines methods `1..=15`
+    /// (`constants/pokemon.h`); `0` is the empty `{0, 0, 0}` filler slot and
+    /// anything else is unknown.
+    ///
+    /// [`EvoMethod`]: crate::evolution::EvoMethod
+    UnknownEvolutionMethod(u16),
 }
 
 impl fmt::Display for AssetError {
@@ -41,6 +51,9 @@ impl fmt::Display for AssetError {
             Self::UnknownType(id) => write!(f, "unknown battle type id `{id}`"),
             Self::UnknownSpecies(id) => write!(f, "unknown species id `{id}`"),
             Self::UnknownMove(id) => write!(f, "unknown move id `{id}`"),
+            Self::UnknownEvolutionMethod(id) => {
+                write!(f, "unknown evolution method id `{id}`")
+            }
         }
     }
 }
