@@ -33,6 +33,30 @@ pub enum AssetError {
     ///
     /// [`MoveId`]: crate::battle_moves::MoveId
     UnknownMove(u16),
+
+    /// An [`ItemId`] fell outside the extracted `gItems` range.
+    ///
+    /// Carries the offending id. Valid ids are `0..`[`ItemTable::len`]
+    /// (`0..377`); anything else has no item-data entry.
+    ///
+    /// [`ItemId`]: crate::items::ItemId
+    /// [`ItemTable::len`]: crate::items::ItemTable::len
+    UnknownItem(u16),
+
+    /// A raw `pocket` byte did not correspond to any [`Pocket`].
+    ///
+    /// Carries the offending id. Upstream defines `POCKET_*` values `0..=5`.
+    ///
+    /// [`Pocket`]: crate::items::Pocket
+    UnknownItemPocket(u8),
+
+    /// A raw `battleUsage` byte did not correspond to any [`BattleUsage`].
+    ///
+    /// Carries the offending id. Upstream defines `0` and `ITEM_B_USE_*`
+    /// (`1..=2`); anything else is unknown.
+    ///
+    /// [`BattleUsage`]: crate::items::BattleUsage
+    UnknownItemBattleUsage(u8),
 }
 
 impl fmt::Display for AssetError {
@@ -41,6 +65,11 @@ impl fmt::Display for AssetError {
             Self::UnknownType(id) => write!(f, "unknown battle type id `{id}`"),
             Self::UnknownSpecies(id) => write!(f, "unknown species id `{id}`"),
             Self::UnknownMove(id) => write!(f, "unknown move id `{id}`"),
+            Self::UnknownItem(id) => write!(f, "unknown item id `{id}`"),
+            Self::UnknownItemPocket(id) => write!(f, "unknown item pocket id `{id}`"),
+            Self::UnknownItemBattleUsage(id) => {
+                write!(f, "unknown item battle-usage id `{id}`")
+            }
         }
     }
 }
