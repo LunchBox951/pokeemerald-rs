@@ -14,8 +14,8 @@
 //! assignments used by the English build. Two kinds of Latin-font byte are not
 //! plain Unicode scalars and so cannot live in [`GLYPHS`]:
 //!
-//! * *Control codes* (`0xFA`–`0xFF`, `0xF7`) decode to their own typed
-//!   [`Token`] variant.
+//! * *Control codes* (`0xF7`–`0xFF`, and the Bard delimiter `0x37`) decode to
+//!   their own typed [`Token`] variant.
 //! * *Named font tiles* (`{LV}`, the `PKMN`/`POKEBLOCK` word tiles, the
 //!   directional arrows, the French superscripts, …) decode to a typed
 //!   [`Token::Symbol`] — they are glyph *tiles*, not text characters, so they
@@ -28,6 +28,16 @@
 //! any byte that is neither an assigned Latin glyph, a named Latin tile, nor a
 //! control code surfaces as [`TextError::UnknownByte`] — nothing is silently
 //! lost or mis-rendered.
+//!
+//! Because the font is selectable at runtime, [`decode`] tracks the active font
+//! the way the upstream renderer does (`textPrinter->japanese`, `text.c`): an
+//! `EXT_CTRL_CODE_JPN` (`0xFC 0x15`) switches subsequent glyph bytes to the
+//! Japanese font and `EXT_CTRL_CODE_ENG` (`0xFC 0x16`) switches back. While the
+//! Japanese font is active, glyph bytes belong to the out-of-scope JP table, so
+//! they surface as [`TextError::UnsupportedJapanese`] rather than being decoded
+//! as their Latin lookalikes — the font-independent control codes still decode
+//! normally. This keeps the "never silently mis-render" guarantee honest across
+//! a font switch.
 //!
 //! The codec owns no global state `(oop-boundaries)`: [`decode`] turns bytes
 //! into a [`Vec`] of typed [`Token`]s and [`encode`] performs the inverse for
@@ -58,8 +68,43 @@ pub const PLACEHOLDER_BEGIN: u8 = 0xFD;
 pub const EXT_CTRL_CODE_BEGIN: u8 = 0xFC;
 
 /// "Dynamic" placeholder lead byte (upstream `CHAR_DYNAMIC`). Followed by one
-/// index byte selecting a runtime-registered dynamic string.
+/// index byte selecting a runtime-registered dynamic string, so it is a
+/// **two-byte** sequence, not a bare token: the `{DYNAMIC N}` macro in upstream
+/// text (e.g. `src/strings.c`) emits `0xF7 <N>`, and the renderer reads that
+/// trailing byte (`text.c`, `case CHAR_DYNAMIC: … GetPlaceholderPtr(*++str)`;
+/// `GetStringWidth` advances past it exactly as it does for `PLACEHOLDER_BEGIN`).
+/// The `DYNAMIC = F7` line in `charmap.txt` only defines the macro's lead byte,
+/// not its arity.
 pub const CHAR_DYNAMIC: u8 = 0xF7;
+
+/// Keypad-icon lead byte (upstream `CHAR_KEYPAD_ICON`). Followed by one index
+/// byte selecting a button/keypad icon tile; the renderer reads that trailing
+/// byte (`text.c`, `case CHAR_KEYPAD_ICON: … *currentChar++`). A two-byte
+/// sequence, font-independent.
+pub const CHAR_KEYPAD_ICON: u8 = 0xF8;
+
+/// Extra-symbol lead byte (upstream `CHAR_EXTRA_SYMBOL`). Followed by one index
+/// byte selecting a glyph from the extended symbol page (`currChar | 0x100` in
+/// `text.c`). A two-byte sequence, font-independent.
+pub const CHAR_EXTRA_SYMBOL: u8 = 0xF9;
+
+/// Word-delimiter control byte used by the Bard's song (upstream
+/// `CHAR_BARD_WORD_DELIMIT`). An "empty space" that separates easy-chat words:
+/// the Bard code swaps `CHAR_SPACE`⇄this byte while shuffling the song and
+/// substitutes it back to `CHAR_SPACE` before printing (`mauville_old_man.c`).
+/// It is a Latin-font control constant, not a `charmap.txt` glyph (byte `0x37`
+/// is unassigned in the Latin font — it is `が` only in the JP font), so it
+/// decodes to its own [`Token::BardWordDelimit`] and round-trips losslessly.
+pub const CHAR_BARD_WORD_DELIMIT: u8 = 0x37;
+
+/// Extended control sub-code that switches the active font to Japanese
+/// (upstream `EXT_CTRL_CODE_JPN`); emitted as `0xFC 0x15`, zero arguments.
+pub const EXT_CTRL_CODE_JPN: u8 = 0x15;
+
+/// Extended control sub-code that switches the active font back to
+/// Latin/English (upstream `EXT_CTRL_CODE_ENG`); emitted as `0xFC 0x16`, zero
+/// arguments.
+pub const EXT_CTRL_CODE_ENG: u8 = 0x16;
 
 /// Prompt-then-scroll byte: wait for a button press, then scroll the dialog box
 /// up one line (upstream `CHAR_PROMPT_SCROLL`).
@@ -135,6 +180,11 @@ pub enum Token {
     Symbol(Symbol),
     /// Line break (`0xFE`).
     Newline,
+    /// The Bard's-song word delimiter (`0x37`, `CHAR_BARD_WORD_DELIMIT`) — an
+    /// empty word-separator space that upstream substitutes for `CHAR_SPACE`
+    /// before printing. Carried as its own token so it round-trips to `0x37`
+    /// rather than collapsing to the space glyph (`0x00`).
+    BardWordDelimit,
     /// Wait for input, then scroll the dialog window (`0xFA`).
     PromptScroll,
     /// Wait for input, then clear the dialog window (`0xFB`).
@@ -144,6 +194,11 @@ pub enum Token {
     Placeholder(u8),
     /// A runtime dynamic-string reference (`0xF7 <index>`).
     Dynamic(u8),
+    /// A keypad/button icon tile (`0xF8 <index>`). The index selects which icon.
+    KeypadIcon(u8),
+    /// An extended-symbol-page glyph (`0xF9 <index>`). The index selects the
+    /// glyph within the extra-symbol page.
+    ExtraSymbol(u8),
     /// An extended control code (`0xFC <sub> <args…>`), e.g. colour or font
     /// changes. `sub` is the sub-code byte; `args` are its trailing argument
     /// bytes (may be empty). Preserved verbatim so re-encoding is lossless.
@@ -163,6 +218,11 @@ pub enum TextError {
     /// A byte encountered during decode has no known glyph and is not a
     /// recognised control code.
     UnknownByte(u8),
+    /// A glyph byte was encountered while the Japanese font was active (after an
+    /// `EXT_CTRL_CODE_JPN` switch). The Japanese font is out of scope for this
+    /// slice, so the byte is reported rather than decoded as its Latin
+    /// lookalike. Carries the offending byte.
+    UnsupportedJapanese(u8),
     /// A control code was cut off by the end of input (e.g. `0xFD` with no index
     /// byte, or an extended code missing its arguments). Carries the lead byte.
     Truncated(u8),
@@ -174,6 +234,9 @@ impl fmt::Display for TextError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::UnknownByte(b) => write!(f, "no glyph or control code for byte {b:#04x}"),
+            Self::UnsupportedJapanese(b) => {
+                write!(f, "byte {b:#04x} is a Japanese-font glyph (unsupported)")
+            }
             Self::Truncated(b) => write!(f, "control code {b:#04x} truncated at end of input"),
             Self::UnencodableChar(c) => write!(f, "character {c:?} has no Gen-3 encoding"),
         }
@@ -225,6 +288,9 @@ pub const fn ext_ctrl_code_len(sub: u8) -> u8 {
 pub fn decode(bytes: &[u8]) -> Result<Vec<Token>, TextError> {
     let mut out = Vec::new();
     let mut i = 0;
+    // Active font, mirroring `textPrinter->japanese` upstream. Glyph bytes are
+    // font-relative; control codes are not. Toggled by EXT_CTRL_CODE_JPN/ENG.
+    let mut japanese = false;
     while i < bytes.len() {
         let b = bytes[i];
         match b {
@@ -254,6 +320,16 @@ pub fn decode(bytes: &[u8]) -> Result<Vec<Token>, TextError> {
                 out.push(Token::Dynamic(idx));
                 i += 2;
             }
+            CHAR_KEYPAD_ICON => {
+                let idx = *bytes.get(i + 1).ok_or(TextError::Truncated(b))?;
+                out.push(Token::KeypadIcon(idx));
+                i += 2;
+            }
+            CHAR_EXTRA_SYMBOL => {
+                let idx = *bytes.get(i + 1).ok_or(TextError::Truncated(b))?;
+                out.push(Token::ExtraSymbol(idx));
+                i += 2;
+            }
             EXT_CTRL_CODE_BEGIN => {
                 let sub = *bytes.get(i + 1).ok_or(TextError::Truncated(b))?;
                 let total = ext_ctrl_code_len(sub) as usize; // includes sub byte
@@ -264,11 +340,24 @@ pub fn decode(bytes: &[u8]) -> Result<Vec<Token>, TextError> {
                     return Err(TextError::Truncated(b));
                 }
                 let args = bytes[args_start..args_end].to_vec();
+                match sub {
+                    EXT_CTRL_CODE_JPN => japanese = true,
+                    EXT_CTRL_CODE_ENG => japanese = false,
+                    _ => {}
+                }
                 out.push(Token::ExtCtrl { sub, args });
                 i = args_end;
             }
             other => {
-                if let Some(c) = byte_to_char(other) {
+                // Glyph bytes are font-relative. While the Japanese font is
+                // active, this out-of-scope byte must not be decoded as its
+                // Latin lookalike — report it honestly instead.
+                if japanese {
+                    return Err(TextError::UnsupportedJapanese(other));
+                }
+                if other == CHAR_BARD_WORD_DELIMIT {
+                    out.push(Token::BardWordDelimit);
+                } else if let Some(c) = byte_to_char(other) {
                     out.push(Token::Char(c));
                 } else if let Some(sym) = symbol_from_byte(other) {
                     out.push(Token::Symbol(sym));
@@ -298,6 +387,7 @@ pub fn decode_to_string(bytes: &[u8]) -> Result<String, TextError> {
             Token::Char(c) => s.push(c),
             Token::Symbol(sym) => s.push_str(symbol_placeholder(sym)),
             Token::Newline => s.push('\n'),
+            Token::BardWordDelimit => s.push_str("{BARD_DELIM}"),
             Token::PromptScroll => s.push_str("{SCROLL}"),
             Token::PromptClear => s.push_str("{CLEAR}"),
             // Writes to a String are infallible, so the Result is discarded.
@@ -306,6 +396,12 @@ pub fn decode_to_string(bytes: &[u8]) -> Result<String, TextError> {
             }
             Token::Dynamic(idx) => {
                 let _ = write!(s, "{{DYNAMIC:{idx:#04x}}}");
+            }
+            Token::KeypadIcon(idx) => {
+                let _ = write!(s, "{{KEYPAD:{idx:#04x}}}");
+            }
+            Token::ExtraSymbol(idx) => {
+                let _ = write!(s, "{{EXTRA:{idx:#04x}}}");
             }
             Token::ExtCtrl { sub, .. } => {
                 let _ = write!(s, "{{CTRL:{sub:#04x}}}");
@@ -332,6 +428,7 @@ pub fn encode(tokens: &[Token]) -> Result<Vec<u8>, TextError> {
             Token::Char(c) => out.push(char_to_byte(*c).ok_or(TextError::UnencodableChar(*c))?),
             Token::Symbol(s) => out.push(byte_from_symbol(*s)),
             Token::Newline => out.push(CHAR_NEWLINE),
+            Token::BardWordDelimit => out.push(CHAR_BARD_WORD_DELIMIT),
             Token::PromptScroll => out.push(CHAR_PROMPT_SCROLL),
             Token::PromptClear => out.push(CHAR_PROMPT_CLEAR),
             Token::Placeholder(idx) => {
@@ -340,6 +437,14 @@ pub fn encode(tokens: &[Token]) -> Result<Vec<u8>, TextError> {
             }
             Token::Dynamic(idx) => {
                 out.push(CHAR_DYNAMIC);
+                out.push(*idx);
+            }
+            Token::KeypadIcon(idx) => {
+                out.push(CHAR_KEYPAD_ICON);
+                out.push(*idx);
+            }
+            Token::ExtraSymbol(idx) => {
+                out.push(CHAR_EXTRA_SYMBOL);
                 out.push(*idx);
             }
             Token::ExtCtrl { sub, args } => {
@@ -932,5 +1037,147 @@ mod tests {
         // table so it genuinely errors.
         assert_eq!(byte_to_char(0x60), None);
         assert_eq!(symbol_from_byte(0x60), None);
+    }
+
+    #[test]
+    fn bard_word_delimiter_decodes_and_round_trips() {
+        // CHAR_BARD_WORD_DELIMIT (0x37) is a Latin-font control byte the Bard's
+        // song uses as an empty word separator (characters.h:55,
+        // mauville_old_man.c). It must decode to its own token and round-trip to
+        // 0x37 — never surface as UnknownByte nor collapse to the space glyph.
+        assert_eq!(CHAR_BARD_WORD_DELIMIT, 0x37);
+        let bytes = [0xC2, CHAR_BARD_WORD_DELIMIT, 0xDD, EOS]; // 'H' <delim> 'i'
+        let toks = decode(&bytes).unwrap();
+        assert_eq!(
+            toks,
+            vec![
+                Token::Char('H'),
+                Token::BardWordDelimit,
+                Token::Char('i'),
+                Token::End,
+            ]
+        );
+        // Round-trips: the delimiter re-encodes to 0x37, not to the space byte.
+        assert_eq!(encode(&toks).unwrap(), bytes);
+        assert_ne!(encode(&[Token::BardWordDelimit]).unwrap(), vec![0x00]);
+    }
+
+    #[test]
+    fn dynamic_is_a_two_byte_sequence_not_a_bare_token() {
+        // Ground truth: `{DYNAMIC N}` emits 0xF7 <N> (src/strings.c), and the
+        // renderer reads the trailing index byte (text.c, GetPlaceholderPtr(*++str);
+        // GetStringWidth advances past it like PLACEHOLDER_BEGIN). So 0xF7 must
+        // consume the following byte as its index — decoding 0xF7 0x03 0xBB must
+        // yield Dynamic(3) then 'A', not Dynamic-with-no-arg then a stray byte.
+        let bytes = [CHAR_DYNAMIC, 0x03, 0xBB, EOS];
+        let toks = decode(&bytes).unwrap();
+        assert_eq!(
+            toks,
+            vec![Token::Dynamic(0x03), Token::Char('A'), Token::End]
+        );
+        assert_eq!(encode(&toks).unwrap(), bytes);
+        // Truncated (lead byte with no index) is an error, like PLACEHOLDER_BEGIN.
+        assert_eq!(
+            decode(&[CHAR_DYNAMIC]).unwrap_err(),
+            TextError::Truncated(CHAR_DYNAMIC)
+        );
+    }
+
+    #[test]
+    fn keypad_icon_and_extra_symbol_are_two_byte_codes() {
+        // CHAR_KEYPAD_ICON (0xF8) and CHAR_EXTRA_SYMBOL (0xF9) each take one
+        // trailing index byte (text.c groups them with DYNAMIC/PLACEHOLDER at
+        // GetStringWidth; the renderer reads *currentChar++). They are
+        // font-independent control codes, so they must not surface as
+        // UnknownByte.
+        assert_eq!(CHAR_KEYPAD_ICON, 0xF8);
+        assert_eq!(CHAR_EXTRA_SYMBOL, 0xF9);
+        let bytes = [CHAR_KEYPAD_ICON, 0x02, CHAR_EXTRA_SYMBOL, 0x05, 0xBB, EOS];
+        let toks = decode(&bytes).unwrap();
+        assert_eq!(
+            toks,
+            vec![
+                Token::KeypadIcon(0x02),
+                Token::ExtraSymbol(0x05),
+                Token::Char('A'),
+                Token::End,
+            ]
+        );
+        assert_eq!(encode(&toks).unwrap(), bytes);
+        // Missing index byte is a truncation error, like the other lead bytes.
+        assert_eq!(
+            decode(&[CHAR_KEYPAD_ICON]).unwrap_err(),
+            TextError::Truncated(CHAR_KEYPAD_ICON)
+        );
+        assert_eq!(
+            decode(&[CHAR_EXTRA_SYMBOL]).unwrap_err(),
+            TextError::Truncated(CHAR_EXTRA_SYMBOL)
+        );
+    }
+
+    #[test]
+    fn japanese_font_switch_errors_rather_than_misdecoding() {
+        // After EXT_CTRL_CODE_JPN (0xFC 0x15) the font is Japanese; glyph byte
+        // 0xBB is a JP-font glyph, NOT Latin 'A'. It must surface as
+        // UnsupportedJapanese, never be silently decoded as 'A'.
+        let bytes = [EXT_CTRL_CODE_BEGIN, EXT_CTRL_CODE_JPN, 0xBB, EOS];
+        assert_eq!(
+            decode(&bytes).unwrap_err(),
+            TextError::UnsupportedJapanese(0xBB)
+        );
+        // EXT_CTRL_CODE_ENG (0xFC 0x16) switches back: the same byte is Latin 'A'.
+        let bytes = [
+            EXT_CTRL_CODE_BEGIN,
+            EXT_CTRL_CODE_JPN,
+            EXT_CTRL_CODE_BEGIN,
+            EXT_CTRL_CODE_ENG,
+            0xBB,
+            EOS,
+        ];
+        let toks = decode(&bytes).unwrap();
+        assert_eq!(
+            toks,
+            vec![
+                Token::ExtCtrl {
+                    sub: EXT_CTRL_CODE_JPN,
+                    args: vec![]
+                },
+                Token::ExtCtrl {
+                    sub: EXT_CTRL_CODE_ENG,
+                    args: vec![]
+                },
+                Token::Char('A'),
+                Token::End,
+            ]
+        );
+        // The switch tokens themselves round-trip.
+        assert_eq!(encode(&toks).unwrap(), bytes);
+    }
+
+    #[test]
+    fn control_codes_still_decode_under_japanese_font() {
+        // Font-independent control codes (newline, placeholder, terminator) must
+        // keep decoding after a JPN switch; only glyph bytes are gated.
+        let bytes = [
+            EXT_CTRL_CODE_BEGIN,
+            EXT_CTRL_CODE_JPN,
+            CHAR_NEWLINE,
+            PLACEHOLDER_BEGIN,
+            PLACEHOLDER_PLAYER,
+            EOS,
+        ];
+        let toks = decode(&bytes).unwrap();
+        assert_eq!(
+            toks,
+            vec![
+                Token::ExtCtrl {
+                    sub: EXT_CTRL_CODE_JPN,
+                    args: vec![]
+                },
+                Token::Newline,
+                Token::Placeholder(PLACEHOLDER_PLAYER),
+                Token::End,
+            ]
+        );
     }
 }
