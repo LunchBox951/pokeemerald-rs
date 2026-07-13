@@ -31,6 +31,14 @@
       "status": "pending"
     },
     "charmap.txt": {
+      "artifacts": {
+        "latin": {
+          "reason": "Latin/English-font byte<->glyph table + typed control codes and named Symbol tiles re-implemented as the Gen-3 text codec (decode/encode). Japanese hiragana/katakana/punctuation font sections remain unimplemented, so charmap.txt itself stays pending until they land (mirrors #27's sub-file scoping).",
+          "rust_target": "crates/engine/src/text.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        }
+      },
       "category": "meta.charmap",
       "kind": "file",
       "spec_owner": "02-rendering",
