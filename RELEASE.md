@@ -136,6 +136,50 @@ impact. Never fold feature work into a promotion. If a promotion needs a fix, fi
 the **source** (`release/X` or the rung below) first, let its gates pass, and let
 CI reopen the promotion.
 
+## Repository controls go-live
+
+The workflow files establish the review and scan policy; repository settings make
+it enforceable. Apply and verify these settings as an owner-level operation before
+claiming R-4 is complete:
+
+1. On `dev`, `unstable`, `stable`, and `main`, require pull requests, one approval,
+   CODEOWNERS review, dismissal of stale approvals, and branches up to date before
+   merge. Include administrators; disallow direct pushes, force pushes, and branch
+   deletion.
+2. Require the CI contexts named in `.github/workflows/ci.yml`: `version`,
+   `ledger`, `fmt (ubuntu-latest)`, `fmt (windows-latest)`,
+   `clippy (ubuntu-latest)`, `clippy (windows-latest)`,
+   `build (ubuntu-latest)`, `build (windows-latest)`, `test (ubuntu-latest)`, and
+   `test (windows-latest)`. Require `dependency-review`, `codeql (actions)`,
+   `codeql (python)`, and `codeql (rust)` after each has reported successfully
+   on the protected branch.
+3. On `unstable`, `stable`, and `main`, also require `require-release-source` and
+   `require-rung-cleared`. Follow the bootstrap order documented at the head of
+   `channel-merge-policy.yml` before registering them, or the first promotion will
+   deadlock.
+4. Keep merge commits enabled and disable squash and rebase merging for promotions
+   into `unstable`, `stable`, and `main`; their ancestry checks depend on preserved
+   `release/*` history. Enable Actions to create pull requests for `promote.yml`.
+   For every promotion PR it opens with `GITHUB_TOKEN`, a maintainer with write
+   access must select **Approve workflows to run** before required checks start.
+5. Set the repository's default **Workflow permissions** to read-only. Workflows
+   that mutate repository state grant only their required write scopes explicitly.
+6. After `.github/workflows/codeql.yml` is on `dev`, disable GitHub's CodeQL
+   **default setup** in the repository security settings, set the Actions
+   repository variable `CODEQL_ADVANCED_UPLOADS_ENABLED` to `true`, re-enable the
+   `codeql` workflow if default setup disabled it, then manually dispatch `codeql`
+   and confirm its results upload. Until the variable is enabled, the advanced
+   jobs analyze without uploading because default setup rejects repository-owned
+   advanced-workflow results. The advanced workflow scans Rust, Python, and Actions
+   weekly and on relevant pushes and pull requests.
+7. Keep secret scanning and push protection enabled. They are already enabled for
+   this repository; their alerts are triaged alongside CodeQL and Dependabot.
+
+Unsafe-code alerts are deliberately non-blocking. Each finding must be reviewed
+as accepted (with its safety rationale), a refactor candidate, or a linked
+follow-up issue. An alert is an inventory entry, not proof that the code is
+incorrect or that `unsafe` is inherently slower than safe Rust.
+
 ## Version scheme — `vFINAL.MAJOR.MINOR.PATCH`
 
 The canonical version lives in [`VERSION`](VERSION) **without** the `v` prefix;

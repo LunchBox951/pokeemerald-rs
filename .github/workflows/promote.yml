@@ -20,7 +20,10 @@
 #   * Promotions use a MERGE COMMIT, not squash — the ancestor checks below rely
 #     on `release/X` history being preserved in the channel branch.
 #   * Repo setting "Allow GitHub Actions to create and approve pull requests" is
-#     ON, and workflow permissions are Read/Write (see docs go-live runbook).
+#     ON. A maintainer with write access approves the workflow runs that GitHub
+#     holds for each GITHUB_TOKEN-created PR (see docs go-live runbook).
+#   * Default workflow permissions are read-only; this workflow's explicit
+#     `pull-requests: write` grant is the narrow exception used to open PRs.
 #   * The labels `release`, `needs-review`, and `needs-operator` already exist
 #     (created from .github/labels.yml at go-live) — `gh pr create --label` fails
 #     on a missing label.
@@ -42,7 +45,7 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
           fetch-depth: 0 # full history so the ancestor checks below can resolve
 
@@ -70,7 +73,7 @@ jobs:
             --head "${release_branch}" \
             --base "${target}" \
             --title "Promote ${release_branch} → ${target}" \
-            --body "$(printf 'Automated cycle-start promotion opened by promote.yml when %s was created.\n\nCandidate: `%s` @ %s\nGates for **%s** are in RELEASE.md — attach evidence before merge.' "${release_branch}" "${release_branch}" "$(git rev-parse --short "origin/${release_branch}")" "${target}")" \
+            --body "$(printf 'Automated cycle-start promotion opened by promote.yml when %s was created.\n\nCandidate: `%s` @ %s\nGates for **%s** are in RELEASE.md — attach evidence before merge. A maintainer with write access must select **Approve workflows to run** before the required checks start.' "${release_branch}" "${release_branch}" "$(git rev-parse --short "origin/${release_branch}")" "${target}")" \
             --label "release" \
             --label "needs-review"
 
@@ -113,7 +116,7 @@ jobs:
             --head "${release_branch}" \
             --base "${target}" \
             --title "Promote ${release_branch} → ${target}" \
-            --body "$(printf 'Automated next-rung promotion opened by promote.yml after %s merged into %s.\n\nCandidate: `%s` @ %s\nGates for **%s** are in RELEASE.md. Player channels (`stable`, `main`) require owner signoff (`needs-operator`) before merge.' "${release_branch}" "${merged}" "${release_branch}" "$(git rev-parse --short "origin/${release_branch}")" "${target}")" \
+            --body "$(printf 'Automated next-rung promotion opened by promote.yml after %s merged into %s.\n\nCandidate: `%s` @ %s\nGates for **%s** are in RELEASE.md. A maintainer with write access must select **Approve workflows to run** before the required checks start. Player channels (`stable`, `main`) require owner signoff (`needs-operator`) before merge.' "${release_branch}" "${merged}" "${release_branch}" "$(git rev-parse --short "origin/${release_branch}")" "${target}")" \
             --label "release" \
             --label "needs-review" \
             --label "needs-operator"
