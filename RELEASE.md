@@ -165,11 +165,13 @@ claiming R-4 is complete:
 5. Set the repository's default **Workflow permissions** to read-only. Workflows
    that mutate repository state grant only their required write scopes explicitly.
 6. After `.github/workflows/codeql.yml` is on `dev`, disable GitHub's CodeQL
-   **default setup** in the repository security settings, re-enable the `codeql`
-   workflow if default setup disabled it, then manually dispatch `codeql` and
-   confirm its results upload. Default setup suppresses CodeQL results from
-   repository-owned advanced workflows. The advanced workflow scans Rust, Python,
-   and Actions weekly and on relevant pushes and pull requests.
+   **default setup** in the repository security settings, set the Actions
+   repository variable `CODEQL_ADVANCED_UPLOADS_ENABLED` to `true`, re-enable the
+   `codeql` workflow if default setup disabled it, then manually dispatch `codeql`
+   and confirm its results upload. Until the variable is enabled, the advanced
+   jobs analyze without uploading because default setup rejects repository-owned
+   advanced-workflow results. The advanced workflow scans Rust, Python, and Actions
+   weekly and on relevant pushes and pull requests.
 7. Keep secret scanning and push protection enabled. They are already enabled for
    this repository; their alerts are triaged alongside CodeQL and Dependabot.
 
