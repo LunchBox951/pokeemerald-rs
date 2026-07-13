@@ -31,6 +31,14 @@
       "status": "pending"
     },
     "charmap.txt": {
+      "artifacts": {
+        "latin": {
+          "reason": "Latin/English-font byte<->glyph table + typed control codes and named Symbol tiles re-implemented as the Gen-3 text codec (decode/encode). Japanese hiragana/katakana/punctuation font sections remain unimplemented, so charmap.txt itself stays pending until they land (mirrors #27's sub-file scoping).",
+          "rust_target": "crates/engine/src/text.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        }
+      },
       "category": "meta.charmap",
       "kind": "file",
       "spec_owner": "02-rendering",
@@ -19218,6 +19226,14 @@
       "status": "pending"
     },
     "src/data/items.h": {
+      "artifacts": {
+        "gItems_numeric": {
+          "reason": "gItems numeric/enum fields (id, price, hold effect+param, pocket, type, battle usage, importance, registrability, secondaryId) for all 377 entries; name/description/use-func pointers remain pending",
+          "rust_target": "crates/assets/src/items.rs",
+          "spec": "S-4",
+          "status": "ported"
+        }
+      },
       "category": "code.header",
       "kind": "file",
       "status": "pending"

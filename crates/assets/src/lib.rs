@@ -10,6 +10,7 @@
 pub mod battle_moves;
 pub mod error;
 pub mod evolution;
+pub mod items;
 pub mod species;
 pub mod type_chart;
 
@@ -18,6 +19,11 @@ pub use battle_moves::{
 };
 pub use error::AssetError;
 pub use evolution::{EvoMethod, Evolution, EvolutionTable};
+// `items::ItemId` is the full item-table identifier; it is intentionally *not*
+// re-exported at the crate root to avoid clashing with `species::ItemId` (the
+// lightweight held-item reference used by the species table). Reach it via the
+// `items` module path.
+pub use items::{BattleUsage, HoldEffect, ItemData, ItemTable, ItemType, Pocket, ITEMS_COUNT};
 pub use species::{
     AbilityId, BaseStats, BodyColor, EggGroup, EvYield, GenderRatio, GrowthRate, ItemId, SpeciesId,
     SpeciesTable,
