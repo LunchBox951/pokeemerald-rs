@@ -31,6 +31,14 @@
       "status": "pending"
     },
     "charmap.txt": {
+      "artifacts": {
+        "latin": {
+          "reason": "Latin/English-font byte<->glyph table + typed control codes and named Symbol tiles re-implemented as the Gen-3 text codec (decode/encode). Japanese hiragana/katakana/punctuation font sections remain unimplemented, so charmap.txt itself stays pending until they land (mirrors #27's sub-file scoping).",
+          "rust_target": "crates/engine/src/text.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        }
+      },
       "category": "meta.charmap",
       "kind": "file",
       "spec_owner": "02-rendering",
@@ -12913,7 +12921,10 @@
     "include/random.h": {
       "category": "code.header",
       "kind": "file",
-      "status": "pending"
+      "reason": "PRNG interface (SeedRng, Random, Random32, ISO_RANDOMIZE constants) re-expressed on the Rng type",
+      "rust_target": "crates/engine/src/rng.rs",
+      "spec": "S-5",
+      "status": "rewritten"
     },
     "include/rayquaza_scene.h": {
       "category": "code.header",
@@ -18584,6 +18595,14 @@
       "status": "pending"
     },
     "src/battle_main.c": {
+      "artifacts": {
+        "gTypeEffectiveness": {
+          "reason": "gTypeEffectiveness (const u8[336] at src/battle_main.c:335) transcribed to a typed TypeChart in crates/assets, pinned to upstream by an exhaustive 289-matchup golden-grid test (#19). Registered as a sub-file artifact now that #21 landed; battle_main.c itself stays pending (rest of the file unported).",
+          "rust_target": "crates/assets/src/type_chart.rs",
+          "spec": "S-4",
+          "status": "ported"
+        }
+      },
       "category": "code.source",
       "kind": "file",
       "status": "pending"
@@ -18961,7 +18980,10 @@
     "src/data/battle_moves.h": {
       "category": "code.header",
       "kind": "file",
-      "status": "pending"
+      "reason": "gBattleMoves per-move battle-data table transcribed into a typed owned MoveTable (MoveData rows: effect/power/type/accuracy/pp/secondaryEffectChance/target/signed priority/flags), pinned to upstream by unit tests.",
+      "rust_target": "crates/assets/src/battle_moves.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "src/data/contest_moves.h": {
       "category": "code.header",
@@ -19204,6 +19226,14 @@
       "status": "pending"
     },
     "src/data/items.h": {
+      "artifacts": {
+        "gItems_numeric": {
+          "reason": "gItems numeric/enum fields (id, price, hold effect+param, pocket, type, battle usage, importance, registrability, secondaryId) for all 377 entries; name/description/use-func pointers remain pending",
+          "rust_target": "crates/assets/src/items.rs",
+          "spec": "S-4",
+          "status": "ported"
+        }
+      },
       "category": "code.header",
       "kind": "file",
       "status": "pending"
@@ -19331,7 +19361,10 @@
     "src/data/pokemon/species_info.h": {
       "category": "code.header",
       "kind": "file",
-      "status": "pending"
+      "reason": "gSpeciesInfo (species_info.h) extracted in full as a typed owned SpeciesTable: base HP/Atk/Def/Spe/SpA/SpD, both types, catch rate, base exp, EV yields, held items, gender ratio, egg cycles, friendship, growth rate, egg groups, abilities, safari flee rate, body color, noFlip. This file holds only these base-stat/enum fields; graphics/cries/learnsets/dex live in separate ledger entries.",
+      "rust_target": "crates/assets/src/species.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "src/data/pokemon/tmhm_learnsets.h": {
       "category": "code.header",
@@ -20286,7 +20319,10 @@
     "src/random.c": {
       "category": "code.source",
       "kind": "file",
-      "status": "pending"
+      "reason": "LCG PRNG re-implemented as owned Rng type (Random/Random2/Random32)",
+      "rust_target": "crates/engine/src/rng.rs",
+      "spec": "S-5",
+      "status": "rewritten"
     },
     "src/rayquaza_scene.c": {
       "category": "code.source",
@@ -20610,5 +20646,5 @@
     }
   },
   "project": "pokeemerald",
-  "schema_version": 2
+  "schema_version": 3
 }

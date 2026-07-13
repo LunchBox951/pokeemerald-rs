@@ -70,6 +70,19 @@ together. Two rules keep that autonomy from becoming a bypass:
 Reviewed, CI-green, ledger-verified work merges here. Dependency additions are
 owner-approved `(minimal-deps)`. Release impact is recorded on each PR.
 
+**Ledger — the L-1 accounting rule.** The ledger may carry *sub-file artifacts*:
+a single data table (e.g. `gTypeEffectiveness`) carved out of a large
+multi-concern source file (`src/battle_main.c#gTypeEffectiveness`), each with its
+own status and `rust_target`. This keeps coverage honest for partially-ported
+files. A file's own `status` covers everything **not** broken out into a named
+artifact; a file counts as accounted for (does **not** count toward `pending`,
+does not block **L-1**) **only when its own status is terminal AND every one of
+its sub-artifacts is terminal** — otherwise it counts as `pending`. So one ported
+table can never over-claim the whole file, and extracting a table under-claims
+nothing once the file's own status covers the remainder. Files with no
+sub-artifacts count exactly as their own status. `ledger.py verify` checks
+sub-artifact `rust_target` pointers alongside file-level ones.
+
 ### `release/X → unstable` — nightly (may auto-advance)
 
 Promote when **all** hold; otherwise skip rather than ship a broken nightly:

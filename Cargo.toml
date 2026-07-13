@@ -1,0 +1,28 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/platform",
+    "crates/rendering",
+    "crates/audio",
+    "crates/assets",
+    "crates/engine",
+    "crates/battle",
+    "crates/pokeemerald-rs",
+    "crates/xtask",
+]
+
+# Shared package metadata inherited by every member via `field.workspace = true`.
+[workspace.package]
+edition = "2021"
+version = "0.0.0"
+publish = false
+
+# Workspace-wide lints (F-2). Inherited by every member via `[lints] workspace = true`.
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+# Lower priority so the specific lint above wins over this group (clippy::lint_groups_priority).
+rust_2018_idioms = { level = "warn", priority = -1 }
+
+[workspace.lints.clippy]
+# `warn`, not `deny`: pedantic is noisy on empty stubs. Tighten as crates fill out.
+pedantic = "warn"

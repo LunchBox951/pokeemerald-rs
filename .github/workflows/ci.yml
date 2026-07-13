@@ -2,10 +2,11 @@
 #
 # Runs on every push, and on pull requests targeting any channel branch
 # (dev, unstable, stable, main) or a release/* branch; blocks merges on failure.
-# The Rust workspace is not scaffolded yet, so the fmt/clippy/build/
-# test steps are PLACEHOLDERS that echo the eventual cargo command and exit 0.
-# When Cargo.toml lands at the workspace root, swap each placeholder for the
-# real command shown alongside it.
+# The fmt/clippy/build/test jobs run the real cargo commands against the
+# workspace. GitHub-hosted runners ship a stable toolchain via rustup; the fmt
+# and clippy jobs defensively `rustup component add` their component first so the
+# required checks stay green across `ubuntu-latest`/`windows-latest` image drift
+# (the rolling alias). rustup is preinstalled, so no new action/dep (minimal-deps).
 #
 # Jobs run sequentially via a needs: chain so a failure short-circuits the rest
 # of that matrix leg: version -> ledger -> fmt -> clippy -> build -> test.
@@ -17,16 +18,15 @@
 # `test (ubuntu-latest)`, `test (windows-latest)`. Register those exact names.
 name: ci
 
+# Least-privilege GITHUB_TOKEN: every job here only checks out and reads the repo.
+permissions:
+  contents: read
+
 on:
   push:
     branches: ["**"]
   pull_request:
     branches: [dev, unstable, stable, main, "release/**"]
-
-# CI only reads the checkout. Keep the default token unable to mutate repository
-# state if a future step is compromised.
-permissions:
-  contents: read
 
 jobs:
   # Policy gate (ubuntu-only): reject malformed versions and version regressions.
@@ -60,10 +60,10 @@ jobs:
         os: [ubuntu-latest, windows-latest]
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+      - name: Ensure rustfmt component
+        run: rustup component add rustfmt
       - name: cargo fmt --check
-        # TODO: replace with `cargo fmt --check` once the workspace exists.
-        run: |
-          echo "TODO: cargo fmt --check"
+        run: cargo fmt --check
 
   clippy:
     name: clippy
@@ -75,10 +75,10 @@ jobs:
         os: [ubuntu-latest, windows-latest]
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
-      - name: cargo clippy --all-targets -- -D warnings
-        # TODO: replace with `cargo clippy --all-targets -- -D warnings`.
-        run: |
-          echo "TODO: cargo clippy"
+      - name: Ensure clippy component
+        run: rustup component add clippy
+      - name: cargo clippy --all-targets --workspace -- -D warnings
+        run: cargo clippy --all-targets --workspace -- -D warnings
 
   build:
     name: build
@@ -90,10 +90,8 @@ jobs:
         os: [ubuntu-latest, windows-latest]
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
-      - name: cargo build --release
-        # TODO: replace with `cargo build --release` once the workspace exists.
-        run: |
-          echo "TODO: cargo build --release"
+      - name: cargo build --release --workspace
+        run: cargo build --release --workspace
 
   test:
     name: test
@@ -105,7 +103,5 @@ jobs:
         os: [ubuntu-latest, windows-latest]
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
-      - name: cargo test
-        # TODO: replace with `cargo test` once the workspace exists.
-        run: |
-          echo "TODO: cargo test"
+      - name: cargo test --workspace
+        run: cargo test --workspace

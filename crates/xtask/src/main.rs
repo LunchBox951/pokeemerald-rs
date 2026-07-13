@@ -1,0 +1,447 @@
+//! `xtask` — the project's task-automation entry point (F-3).
+//!
+//! A hand-rolled dev runner (std only, no `clap`/`anyhow` — `minimal-deps`).
+//! This is a SKELETON: every subcommand parses and dispatches, then fails
+//! *closed* — a recognised-but-unimplemented subcommand returns
+//! [`XtaskError::NotImplemented`] (non-zero exit) rather than exiting 0, so the
+//! `RELEASE.md` gate commands (`e2e --suite …`) can never be satisfied by a
+//! no-op stub `(gated-by-default)`. Real `extract` / `record-snapshot` /
+//! `scenario` / `e2e` behaviour, and wiring `e2e` into CI (V-1), are out of
+//! scope here.
+//!
+//! Run via the workspace alias: `cargo xtask <subcommand>`.
+
+use std::error::Error;
+use std::fmt;
+use std::process::ExitCode;
+
+/// Usage text shown on stderr for any parse error.
+const USAGE: &str = "\
+usage: cargo xtask <command>
+
+commands:
+  extract            extract data/assets from the upstream reference
+  record-snapshot    record a golden snapshot for regression tests
+  scenario           run a scripted gameplay scenario
+  e2e --suite <s> [--release]
+                     run the end-to-end suite; <s> is smoke | full | soak";
+
+/// Errors produced while parsing an `xtask` invocation.
+///
+/// Concrete per-crate enum (`oop-boundaries`); no `anyhow`.
+#[derive(Debug)]
+pub enum XtaskError {
+    /// No subcommand, or an unrecognised one. Carries the offending input
+    /// (empty string when no subcommand was given).
+    UnknownCommand(String),
+    /// `e2e` was given a `--suite` value that is not `smoke`, `full`, or `soak`.
+    InvalidSuite(String),
+    /// `e2e --suite` was present but no value followed it.
+    MissingSuiteValue,
+    /// A subcommand received an argument it does not accept. Carries the
+    /// offending token.
+    UnexpectedArg(String),
+    /// A recognised subcommand whose behaviour is not implemented yet. Carries
+    /// the command's name. Returned so stub subcommands fail *closed* (non-zero
+    /// exit) rather than silently reporting success — the `RELEASE.md` gate
+    /// commands must never be satisfiable by a no-op `(gated-by-default)`
+    /// `(test-ratchet)`.
+    NotImplemented(&'static str),
+}
+
+impl fmt::Display for XtaskError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::UnknownCommand(cmd) if cmd.is_empty() => {
+                writeln!(f, "error: no subcommand given")?;
+            }
+            Self::UnknownCommand(cmd) => {
+                writeln!(f, "error: unknown subcommand `{cmd}`")?;
+            }
+            Self::InvalidSuite(suite) => {
+                writeln!(f, "error: unknown e2e suite `{suite}`")?;
+            }
+            Self::MissingSuiteValue => {
+                writeln!(f, "error: `e2e --suite` requires a value")?;
+            }
+            Self::UnexpectedArg(arg) => {
+                writeln!(f, "error: unexpected argument `{arg}`")?;
+            }
+            // A not-implemented status is a runtime failure, not a usage error,
+            // so it gets no USAGE tail.
+            Self::NotImplemented(what) => {
+                return write!(f, "error: `{what}` is not implemented yet");
+            }
+        }
+        write!(f, "{USAGE}")
+    }
+}
+
+impl Error for XtaskError {}
+
+/// The `e2e` test suite selected via `--suite`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Suite {
+    /// Fast confidence check.
+    Smoke,
+    /// Full regression run.
+    Full,
+    /// Long-running stability run.
+    Soak,
+}
+
+impl Suite {
+    /// Parse a suite name.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`XtaskError::InvalidSuite`] if `value` is not a known suite.
+    pub fn parse(value: &str) -> Result<Self, XtaskError> {
+        match value {
+            "smoke" => Ok(Self::Smoke),
+            "full" => Ok(Self::Full),
+            "soak" => Ok(Self::Soak),
+            other => Err(XtaskError::InvalidSuite(other.to_owned())),
+        }
+    }
+}
+
+/// A parsed, validated `xtask` invocation.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Command {
+    /// `extract`
+    Extract,
+    /// `record-snapshot`
+    RecordSnapshot,
+    /// `scenario`
+    Scenario,
+    /// `e2e --suite <suite> [--release]`
+    E2e {
+        /// The selected test suite.
+        suite: Suite,
+        /// Whether `--release` was requested (release-mode gates: V-2/V-3).
+        release: bool,
+    },
+}
+
+/// Parse the post-program-name arguments into a [`Command`].
+///
+/// `args` is the slice *after* the program name (i.e. what `cargo xtask`
+/// forwards). The first element is the subcommand.
+///
+/// # Errors
+///
+/// Returns [`XtaskError::UnknownCommand`] for an empty or unrecognised
+/// subcommand, [`XtaskError::UnexpectedArg`] when a subcommand that takes no
+/// arguments is given one (or `e2e` is given a stray/duplicate token),
+/// [`XtaskError::MissingSuiteValue`] if `e2e --suite` has no value, and
+/// [`XtaskError::InvalidSuite`] for an unknown suite name.
+pub fn parse(args: &[String]) -> Result<Command, XtaskError> {
+    let Some(subcommand) = args.first() else {
+        return Err(XtaskError::UnknownCommand(String::new()));
+    };
+    let rest = &args[1..];
+
+    match subcommand.as_str() {
+        "extract" => no_args(rest).map(|()| Command::Extract),
+        "record-snapshot" => no_args(rest).map(|()| Command::RecordSnapshot),
+        "scenario" => no_args(rest).map(|()| Command::Scenario),
+        "e2e" => parse_e2e(rest).map(|(suite, release)| Command::E2e { suite, release }),
+        other => Err(XtaskError::UnknownCommand(other.to_owned())),
+    }
+}
+
+/// Reject any trailing arguments for a subcommand that accepts none.
+///
+/// # Errors
+///
+/// Returns [`XtaskError::UnexpectedArg`] carrying the first stray token.
+fn no_args(rest: &[String]) -> Result<(), XtaskError> {
+    match rest.first() {
+        None => Ok(()),
+        Some(arg) => Err(XtaskError::UnexpectedArg(arg.clone())),
+    }
+}
+
+/// Parse the arguments following the `e2e` subcommand:
+/// `--suite <value> [--release]`.
+///
+/// `--suite <value>` is required; `--release` is an optional release-mode flag
+/// (the V-2/V-3 gate commands in `RELEASE.md`). The two may appear in either
+/// order, but any other token — or a repeated/stray argument — is an
+/// [`XtaskError::UnexpectedArg`]. Returns the suite and whether release mode
+/// was requested.
+fn parse_e2e(rest: &[String]) -> Result<(Suite, bool), XtaskError> {
+    let mut suite: Option<Suite> = None;
+    let mut release = false;
+    let mut i = 0;
+    while i < rest.len() {
+        match rest[i].as_str() {
+            "--suite" if suite.is_none() => {
+                let value = rest.get(i + 1).ok_or(XtaskError::MissingSuiteValue)?;
+                suite = Some(Suite::parse(value)?);
+                i += 2;
+            }
+            "--release" if !release => {
+                release = true;
+                i += 1;
+            }
+            other => return Err(XtaskError::UnexpectedArg(other.to_owned())),
+        }
+    }
+    let suite = suite.ok_or(XtaskError::MissingSuiteValue)?;
+    Ok((suite, release))
+}
+
+/// Dispatch a parsed command.
+///
+/// Every subcommand is currently a stub. Rather than exiting 0, each returns
+/// [`XtaskError::NotImplemented`] so the process fails *closed* (non-zero
+/// exit): the `RELEASE.md` promotion gates run these exact commands, so a stub
+/// that reported success would satisfy a gate with zero validation
+/// `(gated-by-default)` `(test-ratchet)`.
+///
+/// # Errors
+///
+/// Always returns [`XtaskError::NotImplemented`] until real behaviour lands.
+fn dispatch(cmd: &Command) -> Result<(), XtaskError> {
+    let name = match cmd {
+        Command::Extract => "extract",
+        Command::RecordSnapshot => "record-snapshot",
+        Command::Scenario => "scenario",
+        Command::E2e { .. } => "e2e",
+    };
+    Err(XtaskError::NotImplemented(name))
+}
+
+/// Parse and dispatch a single invocation.
+///
+/// Kept separate from `main` so tests can drive it without spawning a process.
+///
+/// # Errors
+///
+/// Propagates any [`XtaskError`] from [`parse`], and (until the subcommands are
+/// implemented) [`XtaskError::NotImplemented`] from [`dispatch`].
+pub fn run(args: &[String]) -> Result<(), XtaskError> {
+    let cmd = parse(args)?;
+    dispatch(&cmd)
+}
+
+fn main() -> ExitCode {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    match run(&args) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(err) => {
+            eprintln!("{err}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{parse, run, Command, Suite, XtaskError};
+
+    fn args(parts: &[&str]) -> Vec<String> {
+        parts.iter().map(|s| (*s).to_owned()).collect()
+    }
+
+    #[test]
+    fn parse_extract_routes() {
+        assert_eq!(parse(&args(&["extract"])).unwrap(), Command::Extract);
+    }
+
+    #[test]
+    fn parse_record_snapshot_routes() {
+        assert_eq!(
+            parse(&args(&["record-snapshot"])).unwrap(),
+            Command::RecordSnapshot
+        );
+    }
+
+    #[test]
+    fn parse_scenario_routes() {
+        assert_eq!(parse(&args(&["scenario"])).unwrap(), Command::Scenario);
+    }
+
+    #[test]
+    fn parse_e2e_smoke() {
+        assert_eq!(
+            parse(&args(&["e2e", "--suite", "smoke"])).unwrap(),
+            Command::E2e {
+                suite: Suite::Smoke,
+                release: false
+            }
+        );
+    }
+
+    #[test]
+    fn parse_e2e_full() {
+        assert_eq!(
+            parse(&args(&["e2e", "--suite", "full"])).unwrap(),
+            Command::E2e {
+                suite: Suite::Full,
+                release: false
+            }
+        );
+    }
+
+    #[test]
+    fn parse_e2e_soak() {
+        assert_eq!(
+            parse(&args(&["e2e", "--suite", "soak"])).unwrap(),
+            Command::E2e {
+                suite: Suite::Soak,
+                release: false
+            }
+        );
+    }
+
+    #[test]
+    fn parse_e2e_full_release() {
+        // RELEASE.md V-2 gate: `cargo xtask e2e --suite full --release`.
+        assert_eq!(
+            parse(&args(&["e2e", "--suite", "full", "--release"])).unwrap(),
+            Command::E2e {
+                suite: Suite::Full,
+                release: true
+            }
+        );
+    }
+
+    #[test]
+    fn parse_e2e_soak_release() {
+        // RELEASE.md V-3 gate: `cargo xtask e2e --suite soak --release`.
+        assert_eq!(
+            parse(&args(&["e2e", "--suite", "soak", "--release"])).unwrap(),
+            Command::E2e {
+                suite: Suite::Soak,
+                release: true
+            }
+        );
+    }
+
+    #[test]
+    fn parse_e2e_release_before_suite() {
+        assert_eq!(
+            parse(&args(&["e2e", "--release", "--suite", "smoke"])).unwrap(),
+            Command::E2e {
+                suite: Suite::Smoke,
+                release: true
+            }
+        );
+    }
+
+    #[test]
+    fn parse_e2e_rejects_duplicate_release() {
+        let err = parse(&args(&["e2e", "--suite", "full", "--release", "--release"])).unwrap_err();
+        assert!(matches!(err, XtaskError::UnexpectedArg(s) if s == "--release"));
+    }
+
+    #[test]
+    fn parse_e2e_rejects_unknown_flag() {
+        let err = parse(&args(&["e2e", "--suite", "smoke", "--bogus"])).unwrap_err();
+        assert!(matches!(err, XtaskError::UnexpectedArg(s) if s == "--bogus"));
+    }
+
+    #[test]
+    fn parse_e2e_invalid_suite() {
+        let err = parse(&args(&["e2e", "--suite", "bogus"])).unwrap_err();
+        assert!(matches!(err, XtaskError::InvalidSuite(s) if s == "bogus"));
+    }
+
+    #[test]
+    fn parse_e2e_missing_suite_value() {
+        let err = parse(&args(&["e2e", "--suite"])).unwrap_err();
+        assert!(matches!(err, XtaskError::MissingSuiteValue));
+    }
+
+    #[test]
+    fn parse_e2e_requires_suite_flag() {
+        let err = parse(&args(&["e2e"])).unwrap_err();
+        assert!(matches!(err, XtaskError::MissingSuiteValue));
+    }
+
+    #[test]
+    fn parse_rejects_trailing_args() {
+        let err = parse(&args(&["extract", "foo"])).unwrap_err();
+        assert!(matches!(err, XtaskError::UnexpectedArg(s) if s == "foo"));
+        let err = parse(&args(&["scenario", "x", "y"])).unwrap_err();
+        assert!(matches!(err, XtaskError::UnexpectedArg(s) if s == "x"));
+    }
+
+    #[test]
+    fn parse_e2e_rejects_leading_token() {
+        let err = parse(&args(&["e2e", "junk", "--suite", "smoke"])).unwrap_err();
+        assert!(matches!(err, XtaskError::UnexpectedArg(s) if s == "junk"));
+    }
+
+    #[test]
+    fn parse_e2e_rejects_trailing_token() {
+        let err = parse(&args(&["e2e", "--suite", "smoke", "extra"])).unwrap_err();
+        assert!(matches!(err, XtaskError::UnexpectedArg(s) if s == "extra"));
+    }
+
+    #[test]
+    fn parse_unknown_command() {
+        let err = parse(&args(&["frobnicate"])).unwrap_err();
+        assert!(matches!(err, XtaskError::UnknownCommand(s) if s == "frobnicate"));
+    }
+
+    #[test]
+    fn parse_empty() {
+        let err = parse(&args(&[])).unwrap_err();
+        assert!(matches!(err, XtaskError::UnknownCommand(s) if s.is_empty()));
+    }
+
+    #[test]
+    fn suite_parse_roundtrip() {
+        assert_eq!(Suite::parse("smoke").unwrap(), Suite::Smoke);
+        assert_eq!(Suite::parse("full").unwrap(), Suite::Full);
+        assert_eq!(Suite::parse("soak").unwrap(), Suite::Soak);
+        assert!(matches!(
+            Suite::parse("nope").unwrap_err(),
+            XtaskError::InvalidSuite(_)
+        ));
+    }
+
+    #[test]
+    fn run_stub_commands_fail_closed() {
+        // Recognised-but-unimplemented subcommands must NOT report success:
+        // RELEASE.md wires `xtask e2e --suite …` in as promotion gates, so a
+        // stub exiting 0 would satisfy a gate with zero validation
+        // `(gated-by-default)` `(test-ratchet)`.
+        assert!(matches!(
+            run(&args(&["extract"])).unwrap_err(),
+            XtaskError::NotImplemented("extract")
+        ));
+        assert!(matches!(
+            run(&args(&["e2e", "--suite", "smoke"])).unwrap_err(),
+            XtaskError::NotImplemented("e2e")
+        ));
+        assert!(matches!(
+            run(&args(&["e2e", "--suite", "full", "--release"])).unwrap_err(),
+            XtaskError::NotImplemented("e2e")
+        ));
+    }
+
+    #[test]
+    fn not_implemented_display_has_no_usage_tail() {
+        let rendered = XtaskError::NotImplemented("e2e").to_string();
+        assert!(rendered.contains("not implemented"));
+        assert!(!rendered.contains("usage: cargo xtask"));
+    }
+
+    #[test]
+    fn run_err_for_unknown() {
+        assert!(run(&args(&["frobnicate"])).is_err());
+    }
+
+    #[test]
+    fn display_includes_usage() {
+        let rendered = XtaskError::UnknownCommand("x".to_owned()).to_string();
+        assert!(rendered.contains("usage: cargo xtask"));
+        assert!(rendered.contains("extract"));
+        assert!(rendered.contains("e2e --suite"));
+    }
+}
