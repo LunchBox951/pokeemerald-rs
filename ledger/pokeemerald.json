@@ -19226,6 +19226,14 @@
       "status": "pending"
     },
     "src/data/items.h": {
+      "artifacts": {
+        "gItems_numeric": {
+          "reason": "gItems numeric/enum fields (id, price, hold effect+param, pocket, type, battle usage, importance, registrability, secondaryId) for all 377 entries; name/description/use-func pointers remain pending",
+          "rust_target": "crates/assets/src/items.rs",
+          "spec": "S-4",
+          "status": "ported"
+        }
+      },
       "category": "code.header",
       "kind": "file",
       "status": "pending"
