@@ -160,13 +160,17 @@ claiming R-4 is complete:
 4. Keep merge commits enabled and disable squash and rebase merging for promotions
    into `unstable`, `stable`, and `main`; their ancestry checks depend on preserved
    `release/*` history. Enable Actions to create pull requests for `promote.yml`.
-5. After `.github/workflows/codeql.yml` is on `dev`, disable GitHub's CodeQL
+   For every promotion PR it opens with `GITHUB_TOKEN`, a maintainer with write
+   access must select **Approve workflows to run** before required checks start.
+5. Set the repository's default **Workflow permissions** to read-only. Workflows
+   that mutate repository state grant only their required write scopes explicitly.
+6. After `.github/workflows/codeql.yml` is on `dev`, disable GitHub's CodeQL
    **default setup** in the repository security settings, re-enable the `codeql`
    workflow if default setup disabled it, then manually dispatch `codeql` and
    confirm its results upload. Default setup suppresses CodeQL results from
    repository-owned advanced workflows. The advanced workflow scans Rust, Python,
    and Actions weekly and on relevant pushes and pull requests.
-6. Keep secret scanning and push protection enabled. They are already enabled for
+7. Keep secret scanning and push protection enabled. They are already enabled for
    this repository; their alerts are triaged alongside CodeQL and Dependabot.
 
 Unsafe-code alerts are deliberately non-blocking. Each finding must be reviewed

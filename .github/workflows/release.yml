@@ -97,12 +97,10 @@ jobs:
     permissions:
       contents: write # creates tags and GitHub Releases
     env:
-      GH_TOKEN: ${{ github.token }}
       TAG: ${{ needs.setup.outputs.tag }}
       VERSION: ${{ needs.setup.outputs.version }}
       FINAL: ${{ needs.setup.outputs.final }}
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
       - name: Download Linux artifact
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
@@ -114,6 +112,9 @@ jobs:
           name: pokeemerald-rs-${{ needs.setup.outputs.version }}-windows
           path: artifacts/windows
       - name: Create GitHub Release
+        env:
+          GH_REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           prerelease_flag=""
           if [ "${FINAL}" = "0" ]; then
