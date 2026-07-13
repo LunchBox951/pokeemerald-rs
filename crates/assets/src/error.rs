@@ -57,6 +57,14 @@ pub enum AssetError {
     ///
     /// [`BattleUsage`]: crate::items::BattleUsage
     UnknownItemBattleUsage(u8),
+
+    /// A [`SpeciesId`] has no egg-move group in `gEggMoves`.
+    ///
+    /// Carries the queried species id. Only breeding base-forms appear in
+    /// `gEggMoves`; every other species (including `SPECIES_NONE`) is absent.
+    ///
+    /// [`SpeciesId`]: crate::species::SpeciesId
+    NoEggMoves(u16),
 }
 
 impl fmt::Display for AssetError {
@@ -70,6 +78,7 @@ impl fmt::Display for AssetError {
             Self::UnknownItemBattleUsage(id) => {
                 write!(f, "unknown item battle-usage id `{id}`")
             }
+            Self::NoEggMoves(id) => write!(f, "species id `{id}` has no egg moves"),
         }
     }
 }

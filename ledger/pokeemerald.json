@@ -19316,7 +19316,10 @@
     "src/data/pokemon/egg_moves.h": {
       "category": "code.header",
       "kind": "file",
-      "status": "pending"
+      "reason": "gEggMoves flat u16 stream parsed into per-species EggMoveList table keyed by SpeciesId",
+      "rust_target": "crates/assets/src/egg_moves.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "src/data/pokemon/evolution.h": {
       "category": "code.header",
