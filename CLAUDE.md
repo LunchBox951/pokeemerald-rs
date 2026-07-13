@@ -20,6 +20,10 @@ formulas); `mgba/` clarifies hardware behaviour. Both are read-only `(reference-
 - `docs/principles.md` — the invariants. Cite by handle.
 - `docs/acceptance/v1.md` — v1 criteria with stable IDs (`F-1`, `I-4`, …). The
   roadmap to reach them lives in GitHub issues/PRs/discussions `(constitution-vs-roadmap)`.
+  Issues are grouped by area milestones (M1–M7 = v1, M8 = deferred); each
+  milestone description is that area's briefing — read it via
+  `gh api repos/:owner/:repo/milestones/<n>` and list its issues with
+  `gh issue list --milestone "<title>"`. Conventions: `CONTRIBUTING.md` §Milestones.
 - `ledger/pokeemerald.json` + `scripts/ledger.py` — the coverage ledger.
 - `init.sh` — clones the read-only upstream references into `pokeemerald/` and `mgba/`.
 - `pokeemerald/`, `mgba/` — gitignored upstream references. Never edit or commit.

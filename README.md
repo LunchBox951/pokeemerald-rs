@@ -25,6 +25,27 @@ If you'd like to contribute, you're very welcome — see
 [`CONTRIBUTING.md`](CONTRIBUTING.md). The design lives in
 [`docs/`](docs/README.md); start with [`docs/principles.md`](docs/principles.md).
 
+## Roadmap & progress
+
+Work toward v1 is grouped into [**milestones**](../../milestones?state=all), one
+per area — the milestones page shows live progress bars, and each milestone's
+description is a self-contained briefing on that area's scope:
+
+| Milestone | Covers |
+|-----------|--------|
+| [M1 · v1: Foundation](../../milestone/1) | workspace, CI, versioning, release plumbing |
+| [M2 · v1: Assets](../../milestone/2) | extraction pipeline + typed game data |
+| [M3 · v1: Platform & A/V](../../milestone/3) | window, input, 240×160 renderer, M4A audio |
+| [M4 · v1: Engine](../../milestone/4) | overworld, scripts, dialog, save, RNG, menus |
+| [M5 · v1: Battle](../../milestone/5) | battle state machine, moves, AI, animations, UI |
+| [M6 · v1: Integration & E2E](../../milestone/6) | wiring it into one binary + end-to-end suites |
+| [M7 · v1: Release & Signoff](../../milestone/7) | packaging, ledger gate, operator signoff |
+| [M8 · Post-v1 (deferred)](../../milestone/8) | consciously deferred work, with reasons |
+
+The authoritative per-criterion status lives in
+[`docs/acceptance/v1.md`](docs/acceptance/v1.md); a kanban view is on the
+repository's [Projects tab](../../projects).
+
 ## Building
 
 Once the workspace lands, the flow will be:
