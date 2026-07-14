@@ -3,15 +3,16 @@
 //! Exposes extracted upstream game data as idiomatic, owned Rust types
 //! `(oop-boundaries)`. Extracted so far: the battle type-effectiveness chart
 //! (see [`type_chart`]), the per-move battle-data table (see [`battle_moves`]),
-//! the species base-stats table (see [`species`]), and the per-species
-//! evolution table (see [`evolution`]); more data follows as the crate fills
-//! out.
+//! the species base-stats table (see [`species`]), the per-species evolution
+//! table (see [`evolution`]), and the per-species TM/HM learnsets (see
+//! [`tmhm_learnsets`]); more data follows as the crate fills out.
 
 pub mod battle_moves;
 pub mod error;
 pub mod evolution;
 pub mod items;
 pub mod species;
+pub mod tmhm_learnsets;
 pub mod type_chart;
 
 pub use battle_moves::{
@@ -28,4 +29,5 @@ pub use species::{
     AbilityId, BaseStats, BodyColor, EggGroup, EvYield, GenderRatio, GrowthRate, ItemId, SpeciesId,
     SpeciesTable,
 };
+pub use tmhm_learnsets::{TmHmLearnsets, TmHmSlot};
 pub use type_chart::{Effectiveness, Type, TypeChart};
