@@ -19321,7 +19321,10 @@
     "src/data/pokemon/evolution.h": {
       "category": "code.header",
       "kind": "file",
-      "status": "pending"
+      "reason": "gEvolutionTable: 184 evolution entries across 172 species as typed EvoMethod/Evolution keyed by SpeciesId",
+      "rust_target": "crates/assets/src/evolution.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "src/data/pokemon/experience_tables.h": {
       "category": "code.header",
