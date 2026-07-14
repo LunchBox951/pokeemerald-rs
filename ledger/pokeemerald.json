@@ -20480,6 +20480,38 @@
       "status": "pending"
     },
     "src/string_util.c": {
+      "artifacts": {
+        "ConvertIntToDecimalStringN": {
+          "reason": "Signed decimal number-to-glyph-token conversion (STR_CONV_MODE_LEFT_ALIGN/RIGHT_ALIGN/LEADING_ZEROS), including the u16 quotient-truncation and CHAR_QUESTION_MARK overflow quirks, as convert_int_to_decimal_string_n.",
+          "rust_target": "crates/engine/src/text/format.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "ConvertIntToHexStringN": {
+          "reason": "Hex number-to-glyph-token conversion, same three StringConvertMode variants, preserving the full-width (not narrowed) quotient reinterpretation quirk, as convert_int_to_hex_string_n.",
+          "rust_target": "crates/engine/src/text/format.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "ConvertUIntToDecimalStringN": {
+          "reason": "Unsigned decimal number-to-glyph-token conversion, same three StringConvertMode variants, as convert_uint_to_decimal_string_n.",
+          "rust_target": "crates/engine/src/text/format.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "GetExpandedPlaceholder": {
+          "reason": "Placeholder-id dispatch modelled as a caller-supplied PlaceholderResolver trait (no global save-block state); the state-independent entries (version, faction/legendary names) are built in as StaticPlaceholders, player-name/gender-resolved ids left as resolver call sites.",
+          "rust_target": "crates/engine/src/text/format.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "StringExpandPlaceholders": {
+          "reason": "Recursive placeholder expansion over the decoded Token stream, with EXT_CTRL_CODE_BEGIN sub-codes (and their already-grouped argument bytes) passed through unmolested, as expand_placeholders / PlaceholderResolver.",
+          "rust_target": "crates/engine/src/text/format.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        }
+      },
       "category": "code.source",
       "kind": "file",
       "status": "pending"
