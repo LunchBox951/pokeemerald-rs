@@ -101,7 +101,18 @@ pub struct Tilemap {
 }
 
 impl Tilemap {
-    /// Build a tilemap from a row-major grid of screen entries.
+    /// Edge length, in tiles, of one GBA tilemap screenblock (32x32 entries).
+    const SCREENBLOCK_DIM: usize = 32;
+
+    /// Build a tilemap from a grid of `width_tiles * height_tiles` screen
+    /// entries.
+    ///
+    /// Storage order follows the GBA regular-BG tilemap layout: a map whose
+    /// width or height exceeds 32 tiles is stored as a sequence of contiguous
+    /// 32x32-entry *screenblocks*, ordered left-to-right then top-to-bottom
+    /// (64x32 = left, right; 32x64 = top, bottom; 64x64 = TL, TR, BL, BR),
+    /// exactly as `Tilemap::entry` decodes them. A map that is at most 32x32
+    /// in both axes is a single screenblock and is therefore plain row-major.
     ///
     /// # Errors
     ///
@@ -142,14 +153,33 @@ impl Tilemap {
         self.height_tiles
     }
 
-    /// The screen entry at tile coordinates `(col, row)`, or `None` if out
-    /// of range.
+    /// The screen entry at logical tile coordinates `(col, row)`, or `None`
+    /// if out of range.
+    ///
+    /// GBA regular BG tilemaps larger than 32x32 are stored as contiguous
+    /// 32x32-entry screenblocks (see [`Tilemap::new`]); this resolves the
+    /// logical coordinate to the correct screenblock and in-block offset, so
+    /// on a 64-wide map `(col=0, row=1)` is entry 32 (row 1 of screenblock 0)
+    /// and `(col=32, row=0)` is entry 1024 (start of the next screenblock).
+    /// A map at most 32x32 in both axes is a single screenblock, so this
+    /// reduces to plain `row * width_tiles + col`.
     #[must_use]
     pub fn entry(&self, col: usize, row: usize) -> Option<ScreenEntry> {
         if col >= self.width_tiles || row >= self.height_tiles {
             return None;
         }
-        self.entries.get(row * self.width_tiles + col).copied()
+        let index = if self.width_tiles > Self::SCREENBLOCK_DIM
+            || self.height_tiles > Self::SCREENBLOCK_DIM
+        {
+            const DIM: usize = Tilemap::SCREENBLOCK_DIM;
+            const ENTRIES_PER_BLOCK: usize = DIM * DIM;
+            let blocks_wide = self.width_tiles.div_ceil(DIM);
+            let block = (row / DIM) * blocks_wide + (col / DIM);
+            block * ENTRIES_PER_BLOCK + (row % DIM) * DIM + (col % DIM)
+        } else {
+            row * self.width_tiles + col
+        };
+        self.entries.get(index).copied()
     }
 }
 
@@ -213,6 +243,11 @@ impl<'a> BgLayer<'a> {
     /// applying the screen entry's flip bits and resolving palette indices
     /// through this layer's palette (bank-relative for 4bpp, flat for
     /// 8bpp).
+    ///
+    /// Palette index 0 is transparent on a regular BG — in every 4bpp bank
+    /// and for 8bpp — so index-0 pixels are skipped and leave whatever is
+    /// already in the framebuffer (backdrop or a lower layer) untouched,
+    /// matching mgba's software mode-0 renderer.
     fn composite_tile(
         &self,
         framebuffer: &mut Framebuffer,
@@ -234,11 +269,14 @@ impl<'a> BgLayer<'a> {
                 } else {
                     local_x
                 };
-                // Slice-1 scope: color index 0 is written literally. On hardware,
-                // BG color index 0 is TRANSPARENT (backdrop/lower layer shows
-                // through); multi-layer compositing must SKIP index-0 pixels here
-                // rather than paint them, or upper layers will occlude lower ones.
                 let index = tile.index(tile_x, tile_y);
+                // Regular-BG palette index 0 is transparent in every bank
+                // (4bpp) and for 8bpp: the backdrop or a lower layer shows
+                // through, so leave the framebuffer pixel untouched rather
+                // than paint colors[bank*16] / colors[0] over it.
+                if index == 0 {
+                    continue;
+                }
                 let color = match self.tileset.bit_depth() {
                     BitDepth::Bpp4 => self.palette.bank_color(entry.palette_bank(), index),
                     BitDepth::Bpp8 => self.palette.color(index),
@@ -362,7 +400,11 @@ mod tests {
 
         // Entry 0 (unflipped, bank 0): pixel(x,y) = tile pixel(x,y) through
         // bank 0.
-        assert_eq!(fb.pixel(0, 0), Some(Rgb888::BLACK)); // index 0
+        // (test-ratchet) This used to assert `Some(Rgb888::BLACK)`, pinning
+        // the pre-fix defect where index 0 was painted as colors[0]. Index 0
+        // is transparent on a regular BG, so the sentinel backdrop must show
+        // through untouched here.
+        assert_eq!(fb.pixel(0, 0), Some(sentinel)); // index 0 -> transparent
         assert_eq!(fb.pixel(1, 0), Some(red.to_rgb888())); // index 1
         assert_eq!(fb.pixel(7, 0), Some(green.to_rgb888())); // index 7
         assert_eq!(fb.pixel(0, 1), Some(blue.to_rgb888())); // index 8
@@ -442,5 +484,108 @@ mod tests {
         layer.composite(&mut fb); // must not panic
 
         assert_eq!(fb.pixel(239, 159), Some(colors[15].to_rgb888()));
+    }
+
+    #[test]
+    fn composite_leaves_index_0_pixels_transparent_over_a_backdrop() {
+        // A tile whose top-left pixel is palette index 0 and whose next pixel
+        // is index 1; index 0 must let the backdrop show through.
+        let mut tile_bytes = [0u8; 32];
+        tile_bytes[0] = 0x10; // pixel(0,0)=0, pixel(1,0)=1
+        let tileset = Tileset::decode(BitDepth::Bpp4, &tile_bytes).unwrap();
+
+        let mut colors = [Bgr555::default(); Palette::LEN];
+        let red = Bgr555::from_channels(0x1F, 0, 0);
+        colors[1] = red;
+        let palette = Palette::new(colors);
+
+        let entries = vec![ScreenEntry::new(0, false, false, 0)];
+        let tilemap = Tilemap::new(1, 1, entries).unwrap();
+
+        let layer = BgLayer::new(&tileset, &palette, &tilemap);
+        let mut fb = Framebuffer::new();
+        let backdrop = Rgb888 { r: 7, g: 8, b: 9 };
+        fb.fill(backdrop);
+
+        layer.composite(&mut fb);
+
+        // Index-0 pixel: backdrop shows through untouched.
+        assert_eq!(fb.pixel(0, 0), Some(backdrop));
+        // Index-1 pixel: painted red over the backdrop.
+        assert_eq!(fb.pixel(1, 0), Some(red.to_rgb888()));
+    }
+
+    #[test]
+    fn composite_does_not_paint_bank_color_for_index_0_in_a_nonzero_bank() {
+        // Regression: a 4bpp tile drawn through bank>0 must NOT paint
+        // colors[bank*16] for its index-0 pixels — index 0 is transparent in
+        // every bank, so the backdrop must survive.
+        let mut tile_bytes = [0u8; 32];
+        tile_bytes[0] = 0x00; // pixel(0,0)=0, pixel(1,0)=0
+        let tileset = Tileset::decode(BitDepth::Bpp4, &tile_bytes).unwrap();
+
+        let mut colors = [Bgr555::default(); Palette::LEN];
+        // Bank 1 index 0 is a vivid colour we must never see on screen.
+        let bank1_index0 = Bgr555::from_channels(0x1F, 0, 0x1F);
+        colors[16] = bank1_index0;
+        let palette = Palette::new(colors);
+
+        let entries = vec![ScreenEntry::new(0, false, false, 1)];
+        let tilemap = Tilemap::new(1, 1, entries).unwrap();
+
+        let layer = BgLayer::new(&tileset, &palette, &tilemap);
+        let mut fb = Framebuffer::new();
+        let backdrop = Rgb888 { r: 3, g: 4, b: 5 };
+        fb.fill(backdrop);
+
+        layer.composite(&mut fb);
+
+        // Backdrop survives; the bank-1 index-0 colour never appears.
+        assert_eq!(fb.pixel(0, 0), Some(backdrop));
+        assert_ne!(fb.pixel(0, 0), Some(bank1_index0.to_rgb888()));
+    }
+
+    #[test]
+    fn entry_uses_screenblock_addressing_for_a_64x32_map() {
+        // A 64x32 map is two horizontal 32x32 screenblocks: SB0 (cols 0-31),
+        // SB1 (cols 32-63). Mark two storage slots and confirm the logical
+        // coordinates that must resolve to them.
+        let mut entries = vec![ScreenEntry::new(0, false, false, 0); 64 * 32];
+        entries[32] = ScreenEntry::new(111, false, false, 0); // SB0 row 1, col 0
+        entries[1024] = ScreenEntry::new(222, false, false, 0); // SB1 row 0, col 0
+        let tilemap = Tilemap::new(64, 32, entries).unwrap();
+
+        // (col=0, row=1) -> entry 32 within SB0.
+        assert_eq!(tilemap.entry(0, 1).unwrap().tile_index(), 111);
+        // (col=32, row=0) -> entry 1024, the first entry of SB1.
+        assert_eq!(tilemap.entry(32, 0).unwrap().tile_index(), 222);
+        // A plain flat map would have put (col=32, row=0) at index 32; prove
+        // the two addressings genuinely differ here.
+        assert_eq!(tilemap.entry(0, 0).unwrap().tile_index(), 0);
+    }
+
+    #[test]
+    fn entry_uses_screenblock_addressing_for_a_64x64_map() {
+        // A 64x64 map is four screenblocks: SB0 TL, SB1 TR, SB2 BL, SB3 BR,
+        // each 1024 entries.
+        let mut entries = vec![ScreenEntry::new(0, false, false, 0); 64 * 64];
+        entries[1024] = ScreenEntry::new(1, false, false, 0); // SB1 (TR), (32,0)
+        entries[2048] = ScreenEntry::new(2, false, false, 0); // SB2 (BL), (0,32)
+        entries[3072] = ScreenEntry::new(3, false, false, 0); // SB3 (BR), (32,32)
+        let tilemap = Tilemap::new(64, 64, entries).unwrap();
+
+        assert_eq!(tilemap.entry(32, 0).unwrap().tile_index(), 1);
+        assert_eq!(tilemap.entry(0, 32).unwrap().tile_index(), 2);
+        assert_eq!(tilemap.entry(32, 32).unwrap().tile_index(), 3);
+    }
+
+    #[test]
+    fn entry_stays_flat_row_major_for_maps_up_to_32_wide() {
+        // Maps at most 32x32 in both axes are a single screenblock, so the
+        // legacy flat `row * width + col` addressing must be unchanged.
+        let mut entries = vec![ScreenEntry::new(0, false, false, 0); 10 * 5];
+        entries[10] = ScreenEntry::new(77, false, false, 0); // row 1, col 0
+        let tilemap = Tilemap::new(10, 5, entries).unwrap();
+        assert_eq!(tilemap.entry(0, 1).unwrap().tile_index(), 77);
     }
 }

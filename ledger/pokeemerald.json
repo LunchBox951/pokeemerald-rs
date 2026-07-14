@@ -18723,7 +18723,7 @@
     "src/bg.c": {
       "artifacts": {
         "regular_tile_layer": {
-          "reason": "BgLayer/ScreenEntry/Tilemap port the regular (non-affine) BG tile-layer compositing semantics: screen-entry tile index/flip/palette-bank bits and 4bpp/8bpp tile-to-pixel resolution, verified against mgba's GBA_TEXT_MAP_* decode macros; scrolling, affine BGs, and multi-layer priority are out of scope for this slice (issue #50).",
+          "reason": "BgLayer/ScreenEntry/Tilemap port the regular (non-affine) BG tile-layer compositing semantics: screen-entry tile index/flip/palette-bank bits, 4bpp/8bpp tile-to-pixel resolution, transparent palette index 0 (every bank), and >32-tile tilemaps addressed as 32x32 screenblocks, verified against mgba's software mode-0 renderer; scrolling, affine BGs, and multi-layer priority are out of scope for this slice (issue #50).",
           "rust_target": "crates/rendering/src/bg.rs",
           "spec": "S-2",
           "status": "rewritten"
