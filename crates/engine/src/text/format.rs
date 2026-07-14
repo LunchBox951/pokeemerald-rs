@@ -55,6 +55,14 @@
 //! player-name/gender-dependent placeholders (`PLAYER`, `KUN`, `RIVAL`) and
 //! the runtime string-var buffers are left for the caller's own resolver,
 //! since no save state exists yet in this crate.
+//!
+//! Ext-ctrl argument grouping here follows the token pipeline's
+//! [`super::ext_ctrl_code_len`] (e.g. `PLAY_SE`, sub-code `0x10`, carries 2 arg
+//! bytes), which is stricter than upstream's hand-rolled `switch` in
+//! `StringExpandPlaceholders`: that switch has no `PLAY_SE` case, so it falls
+//! through to `default` and copies only 1 byte for it. A deliberate deviation,
+//! practically unreachable since placeholder expansion never splits a decoded
+//! [`Token::ExtCtrl`]'s already-grouped argument slice.
 
 use super::{Symbol, Token};
 use std::fmt;
@@ -442,9 +450,22 @@ const MAX_PLACEHOLDER_DEPTH: u32 = 32;
 /// `_PLAY_BGM` has no analogue here because [`Token::ExtCtrl`] already carries
 /// its full argument slice as one unit. A placeholder's replacement is itself
 /// recursively expanded (mirroring upstream's recursive call), so a
-/// replacement may itself contain placeholders. Expansion halts at the first
-/// [`Token::End`], matching upstream halting at `EOS`: any tokens after it are
-/// not copied.
+/// replacement may itself contain placeholders.
+///
+/// # Terminators and the resolver contract
+///
+/// At the *top level*, expansion halts at the first [`Token::End`], which is
+/// emitted, matching upstream halting at `EOS`: any tokens after it are not
+/// copied. Inside a *replacement* stream returned by `resolver`, a
+/// [`Token::End`] instead acts purely as an end-of-replacement marker: it stops
+/// that replacement's expansion (any tokens after it in the same replacement
+/// are dropped, whether the `End` is trailing or embedded mid-stream) but is
+/// **not** emitted into the output and does **not** end the surrounding walk —
+/// the parent continues with whatever follows the placeholder. This mirrors
+/// upstream's `dest = StringExpandPlaceholders(dest, expandedString)` pointer
+/// behaviour (the child's `EOS` is left to be overwritten by the parent's next
+/// write). A resolver may therefore return replacements with or without a
+/// trailing `End`; both expand identically.
 ///
 /// # Errors
 /// Returns [`FormatError::PlaceholderRecursionLimit`] if replacement chains
@@ -479,7 +500,22 @@ where
                 )?);
             }
             Token::End => {
-                out.push(Token::End);
+                // Upstream `StringExpandPlaceholders` ends a walk with
+                // `*dest = EOS; return dest;` — it writes the terminator but
+                // does NOT advance `dest`. At the top level that halts with the
+                // EOS in place. Inside a recursive replacement expansion
+                // (`dest = StringExpandPlaceholders(dest, expandedString)`) the
+                // returned `dest` still points AT that EOS, so the parent's
+                // next write overwrites it: the replacement's terminator is
+                // discarded and the parent walk continues. Mirror that pointer
+                // dance here. `depth == 0` is the top level (see
+                // `expand_placeholders`), so only it emits `End` and halts; a
+                // replacement's `End` — trailing OR embedded mid-stream — stops
+                // that replacement without emitting `End` and without ending
+                // the parent's walk.
+                if depth == 0 {
+                    out.push(Token::End);
+                }
                 return Ok(out);
             }
             other => out.push(other.clone()),
@@ -773,6 +809,104 @@ mod tests {
         let tokens = vec![Token::Char('A'), Token::End, Token::Char('Z')];
         let expanded = expand_placeholders(&tokens, &StaticPlaceholders).unwrap();
         assert_eq!(expanded, vec![Token::Char('A'), Token::End]);
+    }
+
+    #[test]
+    fn replacement_trailing_end_is_consumed_not_spliced_into_parent() {
+        // Upstream ground truth: `dest = StringExpandPlaceholders(dest,
+        // expandedString)` returns `dest` pointing AT the child's EOS (it does
+        // `*dest = EOS; return dest;` without advancing), so the parent's next
+        // write overwrites that EOS. A replacement's own terminator is
+        // therefore discarded and expansion continues in the parent. Source
+        // "{P}!\xFF" with P -> "EM\xFF" expands to upstream bytes "EM!\xFF".
+        let resolver = |id: u8| -> Option<Vec<Token>> {
+            if id == PLACEHOLDER_ID_STRING_VAR_1 {
+                Some(vec![Token::Char('E'), Token::Char('M'), Token::End])
+            } else {
+                None
+            }
+        };
+        let tokens = vec![
+            Token::Placeholder(PLACEHOLDER_ID_STRING_VAR_1),
+            Token::Char('!'),
+            Token::End,
+        ];
+        let expanded = expand_placeholders(&tokens, &resolver).unwrap();
+        assert_eq!(
+            expanded,
+            vec![
+                Token::Char('E'),
+                Token::Char('M'),
+                Token::Char('!'),
+                Token::End,
+            ]
+        );
+    }
+
+    #[test]
+    fn nested_placeholder_with_end_stops_its_replacement_without_ending_parent() {
+        // A nested placeholder whose replacement ends in `End`: the inner
+        // `End` terminates the inner replacement (its recursive
+        // StringExpandPlaceholders returns, leaving its EOS to be overwritten)
+        // but must not terminate the outer replacement or the top-level walk.
+        // Source "{SV1}?\xFF", SV1 -> "{SV2}Z", SV2 -> "AB\xFF" gives upstream
+        // bytes "ABZ?\xFF".
+        let resolver = |id: u8| -> Option<Vec<Token>> {
+            match id {
+                PLACEHOLDER_ID_STRING_VAR_1 => Some(vec![
+                    Token::Placeholder(PLACEHOLDER_ID_STRING_VAR_2),
+                    Token::Char('Z'),
+                ]),
+                PLACEHOLDER_ID_STRING_VAR_2 => {
+                    Some(vec![Token::Char('A'), Token::Char('B'), Token::End])
+                }
+                _ => None,
+            }
+        };
+        let tokens = vec![
+            Token::Placeholder(PLACEHOLDER_ID_STRING_VAR_1),
+            Token::Char('?'),
+            Token::End,
+        ];
+        let expanded = expand_placeholders(&tokens, &resolver).unwrap();
+        assert_eq!(
+            expanded,
+            vec![
+                Token::Char('A'),
+                Token::Char('B'),
+                Token::Char('Z'),
+                Token::Char('?'),
+                Token::End,
+            ]
+        );
+    }
+
+    #[test]
+    fn embedded_end_mid_replacement_stops_that_replacement_only() {
+        // Upstream ground truth: the recursive StringExpandPlaceholders loop
+        // over the replacement hits `case EOS:` the instant it reaches the
+        // embedded terminator and does `return dest`, so any replacement bytes
+        // AFTER that EOS are never processed — but the parent walk (which never
+        // saw an EOS of its own) continues. Source "{P}!\xFF" with the
+        // replacement P -> "E\xFFX" expands to upstream bytes "E!\xFF": the
+        // trailing 'X' is dropped, the parent's '!' and terminator survive.
+        let resolver = |id: u8| -> Option<Vec<Token>> {
+            if id == PLACEHOLDER_ID_STRING_VAR_1 {
+                Some(vec![Token::Char('E'), Token::End, Token::Char('X')])
+            } else {
+                None
+            }
+        };
+        let tokens = vec![
+            Token::Placeholder(PLACEHOLDER_ID_STRING_VAR_1),
+            Token::Char('!'),
+            Token::End,
+        ];
+        let expanded = expand_placeholders(&tokens, &resolver).unwrap();
+        assert_eq!(
+            expanded,
+            vec![Token::Char('E'), Token::Char('!'), Token::End]
+        );
     }
 
     #[test]
