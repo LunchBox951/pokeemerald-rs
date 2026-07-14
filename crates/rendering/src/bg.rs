@@ -107,6 +107,10 @@ impl Tilemap {
     ///
     /// Returns [`RenderError::TilemapSizeMismatch`] if `entries.len() !=
     /// width_tiles * height_tiles`.
+    /// Slice-1 scope: sizes are caller-supplied and the compositor CLIPS at the
+    /// framebuffer edge. Real regular BGs are fixed hardware sizes (256x256 /
+    /// 512x256 / 256x512 / 512x512) and WRAP; once scrolling lands, wraparound
+    /// must replace this clip behaviour — do not generalize from it.
     pub fn new(
         width_tiles: usize,
         height_tiles: usize,
@@ -230,6 +234,10 @@ impl<'a> BgLayer<'a> {
                 } else {
                     local_x
                 };
+                // Slice-1 scope: color index 0 is written literally. On hardware,
+                // BG color index 0 is TRANSPARENT (backdrop/lower layer shows
+                // through); multi-layer compositing must SKIP index-0 pixels here
+                // rather than paint them, or upper layers will occlude lower ones.
                 let index = tile.index(tile_x, tile_y);
                 let color = match self.tileset.bit_depth() {
                     BitDepth::Bpp4 => self.palette.bank_color(entry.palette_bank(), index),
