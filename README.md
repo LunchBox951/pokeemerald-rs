@@ -51,7 +51,20 @@ Players will get three choices: **stable** (`main`), **beta** (`stable`), and
 We default to the standard library; every crate added is justified here
 `(minimal-deps)`:
 
-- _(none yet)_
+- **`winit`** (`crates/platform`) — cross-platform window creation and the OS
+  event loop (window/keyboard events, resize). Owner-approved for exactly this
+  crate in Discussion #17. On Linux it links the system X11 and/or Wayland
+  client libraries (`libX11`/`libxcb` or `libwayland-client`, whichever the
+  session provides) — it is a normal Rust crate binding those system libs at
+  compile/link time, not FFI or linkage to the upstream C `(no-ffi)`; it is
+  **not** a pure-Rust-only dependency, per the owner's caveat in Discussion #17.
+- **`softbuffer`** (`crates/platform`) — the CPU-side pixel buffer presented
+  each frame to a `winit` window; there is no GPU/renderer dependency for a
+  240x160 software-scaled image. Owner-approved alongside `winit` in
+  Discussion #17. On Linux it likewise binds the system X11
+  (`libX11`/`libxcb`) and/or Wayland (`libwayland-client`) client libraries to
+  present pixels into the window's surface — same caveat as `winit` above, not
+  pure-Rust-only.
 
 ## License
 
