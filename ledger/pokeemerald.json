@@ -18718,6 +18718,14 @@
       "status": "pending"
     },
     "src/bg.c": {
+      "artifacts": {
+        "regular_tile_layer": {
+          "reason": "BgLayer/ScreenEntry/Tilemap port the regular (non-affine) BG tile-layer compositing semantics: screen-entry tile index/flip/palette-bank bits and 4bpp/8bpp tile-to-pixel resolution, verified against mgba's GBA_TEXT_MAP_* decode macros; scrolling, affine BGs, and multi-layer priority are out of scope for this slice (issue #50).",
+          "rust_target": "crates/rendering/src/bg.rs",
+          "spec": "S-2",
+          "status": "rewritten"
+        }
+      },
       "category": "code.source",
       "kind": "file",
       "status": "pending"
@@ -20147,6 +20155,14 @@
       "status": "pending"
     },
     "src/palette.c": {
+      "artifacts": {
+        "Bgr555ToRgb888": {
+          "reason": "Bgr555::to_rgb888 ports the BGR555->RGB888 5-to-8-bit channel expansion ((c<<3)|(c>>2)), verified against mgba's gl.c normalized /31. reference; the rest of palette.c (fades, blending) is out of scope for this slice (issue #50).",
+          "rust_target": "crates/rendering/src/palette.rs",
+          "spec": "S-2",
+          "status": "rewritten"
+        }
+      },
       "category": "code.source",
       "kind": "file",
       "status": "pending"
