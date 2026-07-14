@@ -12151,7 +12151,10 @@
     "include/constants/tms_hms.h": {
       "category": "code.constants",
       "kind": "file",
-      "status": "pending"
+      "reason": "FOREACH_TM/HM/TMHM ordered TM/HM list transcribed as the 58-slot bit order and slot->move mapping (SLOT_MOVES, TmHmSlot)",
+      "rust_target": "crates/assets/src/tmhm_learnsets.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "include/constants/trade.h": {
       "category": "code.constants",
@@ -19294,6 +19297,14 @@
       "status": "pending"
     },
     "src/data/party_menu.h": {
+      "artifacts": {
+        "sTMHMMoves": {
+          "reason": "sTMHMMoves (FOREACH_TMHM(TMHM_MOVE)) slot->MoveId mapping transcribed into SLOT_MOVES",
+          "rust_target": "crates/assets/src/tmhm_learnsets.rs",
+          "spec": "S-4",
+          "status": "ported"
+        }
+      },
       "category": "code.header",
       "kind": "file",
       "status": "pending"
@@ -19321,7 +19332,10 @@
     "src/data/pokemon/evolution.h": {
       "category": "code.header",
       "kind": "file",
-      "status": "pending"
+      "reason": "gEvolutionTable: 184 evolution entries across 172 species as typed EvoMethod/Evolution keyed by SpeciesId",
+      "rust_target": "crates/assets/src/evolution.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "src/data/pokemon/experience_tables.h": {
       "category": "code.header",
@@ -19369,7 +19383,10 @@
     "src/data/pokemon/tmhm_learnsets.h": {
       "category": "code.header",
       "kind": "file",
-      "status": "pending"
+      "reason": "gTMHMLearnsets extracted to a u64-per-species learnset bitmask table (TmHmLearnsets), keyed by SpeciesId over the 58 ordered TM/HM slots",
+      "rust_target": "crates/assets/src/tmhm_learnsets.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "src/data/pokemon/trainer_class_lookups.h": {
       "category": "code.header",

@@ -22,6 +22,28 @@ the authority.
   [`docs/acceptance/v1.md`](docs/acceptance/v1.md). PRs should name the acceptance
   ID they advance.
 
+### Milestones
+
+Roadmap issues are grouped by [milestones](../../milestones?state=all) — one per
+area of v1 (`M1 · v1: Foundation` … `M7 · v1: Release & Signoff`) plus
+`M8 · Post-v1 (deferred)`. Each milestone's description is a self-contained
+briefing for that area: its acceptance IDs, scope, upstream references, and
+definition of done.
+
+- Every roadmap issue gets **exactly one** milestone. v1 work goes in M1–M7,
+  matched by the acceptance ID it ladders to (the mapping is in each milestone's
+  description).
+- Consciously deferred work goes in **M8 with a recorded reason** — deferral is
+  a decision, not an absence. An issue closed as not-planned gets no milestone.
+- A milestone **closes only when its acceptance IDs are all ☑ or a recorded ⊘**
+  in `docs/acceptance/v1.md` — the issue bar can hit 100% while criteria are
+  still in progress; the markers gate closure, not the count.
+- Closing a milestone is the "completed milestone" trigger for a `MINOR`
+  version bump in [`RELEASE.md`](RELEASE.md).
+
+`docs/acceptance/v1.md` stays the source of truth for *status*; milestones are
+the grouping and scoping layer over the issues that get there.
+
 ## Legal posture — read this first
 
 This project ships **no license**, intentionally, matching the

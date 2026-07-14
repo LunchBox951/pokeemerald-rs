@@ -4,10 +4,9 @@
 # this workflow, or scripts/**). It reads the canonical VERSION file, computes
 # the tag v${version}, builds per-OS artifacts, and publishes a GitHub Release.
 #
-# The Rust binary does not exist yet, so build-linux/build-windows
-# emit a small sentinel file as their artifact. This exercises the full
-# upload -> download -> release pipeline end-to-end before the real binary
-# lands; swap the sentinel step for `cargo build --release` + packaging then.
+# build-linux/build-windows run `cargo build --release --workspace` (matching
+# the `build` job in ci.yml) and package the resulting `pokeemerald-rs` binary
+# into a version-named archive alongside README.md/CHANGELOG.md.
 name: release
 
 on:
@@ -49,7 +48,8 @@ jobs:
       - name: Validate version before release
         run: python3 scripts/version_check.py --base origin/main --head HEAD
 
-  # Placeholder Linux build: emit a sentinel artifact named with the version.
+  # Linux build: `cargo build --release`, then package the binary (+ docs)
+  # into a version-named tarball.
   build-linux:
     name: build-linux
     needs: setup
@@ -58,17 +58,23 @@ jobs:
       VERSION: ${{ needs.setup.outputs.version }}
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
-      - name: Produce sentinel artifact
-        # TODO: replace with `cargo build --release` and package the binary.
+      - name: cargo build --release --workspace
+        run: cargo build --release --workspace
+      - name: Package Linux archive
         run: |
-          mkdir -p dist
-          echo "pokeemerald-rs linux prototype v${VERSION}" > "dist/pokeemerald-rs-${VERSION}-linux.txt"
+          pkg="pokeemerald-rs-${VERSION}-linux"
+          mkdir -p "dist/${pkg}"
+          cp target/release/pokeemerald-rs "dist/${pkg}/"
+          cp README.md CHANGELOG.md "dist/${pkg}/"
+          tar -czf "dist/${pkg}.tar.gz" -C dist "${pkg}"
+          rm -rf "dist/${pkg}"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: pokeemerald-rs-${{ needs.setup.outputs.version }}-linux
           path: dist/
 
-  # Placeholder Windows build: emit a sentinel artifact named with the version.
+  # Windows build: `cargo build --release`, then package the binary (+ docs)
+  # into a version-named zip.
   build-windows:
     name: build-windows
     needs: setup
@@ -77,12 +83,17 @@ jobs:
       VERSION: ${{ needs.setup.outputs.version }}
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
-      - name: Produce sentinel artifact
-        # TODO: replace with `cargo build --release` and package the binary.
-        shell: bash
+      - name: cargo build --release --workspace
+        run: cargo build --release --workspace
+      - name: Package Windows archive
+        shell: pwsh
         run: |
-          mkdir -p dist
-          echo "pokeemerald-rs windows prototype v${VERSION}" > "dist/pokeemerald-rs-${VERSION}-windows.txt"
+          $pkg = "pokeemerald-rs-${env:VERSION}-windows"
+          New-Item -ItemType Directory -Path "dist/$pkg" -Force | Out-Null
+          Copy-Item target/release/pokeemerald-rs.exe "dist/$pkg/"
+          Copy-Item README.md, CHANGELOG.md "dist/$pkg/"
+          Compress-Archive -Path "dist/$pkg/*" -DestinationPath "dist/$pkg.zip"
+          Remove-Item -Recurse -Force "dist/$pkg"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: pokeemerald-rs-${{ needs.setup.outputs.version }}-windows
