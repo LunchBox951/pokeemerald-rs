@@ -1856,9 +1856,13 @@ impl EggMoveTable {
     ///
     /// # Errors
     ///
-    /// Returns [`AssetError::NoEggMoves`] if `species` has no egg-move group in
+    /// Returns [`AssetError::UnknownSpecies`] if `species` is out of range, or
+    /// [`AssetError::NoEggMoves`] if a valid `species` has no egg-move group in
     /// `gEggMoves` (most species — only breeding base-forms carry egg moves).
     pub fn get(&self, species: SpeciesId) -> Result<&EggMoveList, AssetError> {
+        if species.0 >= crate::species::SpeciesTable::LEN_U16 {
+            return Err(AssetError::UnknownSpecies(species.0));
+        }
         // The table is stored in ascending species-id order (mirroring the flat
         // stream), so a binary search is both correct and cheap.
         self.groups
@@ -1971,6 +1975,23 @@ mod tests {
         assert_eq!(table.get(SpeciesId(0)), Err(AssetError::NoEggMoves(0)));
         assert_eq!(table.get(SpeciesId(25)), Err(AssetError::NoEggMoves(25)));
         assert_eq!(table.moves_for(SpeciesId(25)), None);
+    }
+
+    #[test]
+    fn out_of_range_species_is_an_error() {
+        // Out-of-range ids are `UnknownSpecies`, never conflated with a valid
+        // species that merely lacks an egg-move group.
+        let table = EggMoveTable::new();
+        let first_bad = crate::species::SpeciesTable::LEN_U16;
+        assert_eq!(
+            table.get(SpeciesId(first_bad)),
+            Err(AssetError::UnknownSpecies(first_bad))
+        );
+        assert_eq!(
+            table.get(SpeciesId(u16::MAX)),
+            Err(AssetError::UnknownSpecies(u16::MAX))
+        );
+        assert_eq!(table.moves_for(SpeciesId(u16::MAX)), None);
     }
 
     #[test]
