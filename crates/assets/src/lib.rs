@@ -4,13 +4,15 @@
 //! `(oop-boundaries)`. Extracted so far: the battle type-effectiveness chart
 //! (see [`type_chart`]), the per-move battle-data table (see [`battle_moves`]),
 //! the species base-stats table (see [`species`]), the per-species evolution
-//! table (see [`evolution`]), and the per-species TM/HM learnsets (see
-//! [`tmhm_learnsets`]); more data follows as the crate fills out.
+//! table (see [`evolution`]), the per-species TM/HM learnsets (see
+//! [`tmhm_learnsets`]), and the per-species level-up learnsets (see
+//! [`level_up_learnsets`]); more data follows as the crate fills out.
 
 pub mod battle_moves;
 pub mod error;
 pub mod evolution;
 pub mod items;
+pub mod level_up_learnsets;
 pub mod species;
 pub mod tmhm_learnsets;
 pub mod type_chart;
@@ -20,6 +22,8 @@ pub use battle_moves::{
 };
 pub use error::AssetError;
 pub use evolution::{EvoMethod, Evolution, EvolutionTable};
+pub use level_up_learnsets::{LevelUpLearnsets, LevelUpMove, SPECIES_COUNT};
+
 // `items::ItemId` is the full item-table identifier; it is intentionally *not*
 // re-exported at the crate root to avoid clashing with `species::ItemId` (the
 // lightweight held-item reference used by the species table). Reach it via the
