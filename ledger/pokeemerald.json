@@ -12472,6 +12472,14 @@
       "status": "pending"
     },
     "include/gba/io_reg.h": {
+      "artifacts": {
+        "keys": {
+          "reason": "A_BUTTON..L_BUTTON bit positions and KEYS_MASK (0x03FF) re-expressed as the Buttons bitmask newtype, plus a ButtonState held/newly-pressed pair mirroring gMain.heldKeys/newKeys (JOY_HELD/JOY_NEW, include/global.h) and a default keyboard Keymap. Rest of io_reg.h (unrelated MMIO registers) stays pending.",
+          "rust_target": "crates/platform/src/input.rs",
+          "spec": "S-1",
+          "status": "rewritten"
+        }
+      },
       "category": "code.header",
       "kind": "file",
       "status": "pending"
@@ -20021,6 +20029,14 @@
       "status": "pending"
     },
     "src/main.c": {
+      "artifacts": {
+        "WaitForVBlank": {
+          "reason": "WaitForVBlank's fixed-cadence wait re-implemented as FramePacer::tick, targeting the GBA's real ~59.7275Hz refresh (280896 cycles / 16.777216MHz, per src/m4a.c's own comments) instead of a rounded 60Hz, with hardware-faithful catch-up: it always waits for the next upcoming vblank boundary, never queues up missed frames. Built on an injectable Instant seam so cadence/drift math is unit-tested without sleeping. Rest of main.c (unrelated main-loop plumbing) stays pending.",
+          "rust_target": "crates/platform/src/pacing.rs",
+          "spec": "S-1",
+          "status": "rewritten"
+        }
+      },
       "category": "code.source",
       "kind": "file",
       "status": "pending"
