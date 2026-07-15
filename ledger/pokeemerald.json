@@ -19343,7 +19343,10 @@
     "src/data/pokemon/egg_moves.h": {
       "category": "code.header",
       "kind": "file",
-      "status": "pending"
+      "reason": "gEggMoves flat u16 stream parsed into per-species EggMoveList table keyed by SpeciesId",
+      "rust_target": "crates/assets/src/egg_moves.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "src/data/pokemon/evolution.h": {
       "category": "code.header",
@@ -19366,12 +19369,18 @@
     "src/data/pokemon/level_up_learnset_pointers.h": {
       "category": "code.header",
       "kind": "file",
-      "status": "pending"
+      "reason": "gLevelUpLearnsets[NUM_SPECIES] species->learnset pointer mapping modelled as the SPECIES_COUNT-wide LEARNSETS array indexed by SpeciesId (SPECIES_NONE aliases Bulbasaur, as upstream).",
+      "rust_target": "crates/assets/src/level_up_learnsets.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "src/data/pokemon/level_up_learnsets.h": {
       "category": "code.header",
       "kind": "file",
-      "status": "pending"
+      "reason": "Per-species level-up learnset arrays (sXxxLevelUpLearnset[], LEVEL_UP_MOVE packing / LEVEL_UP_END sentinel) transcribed into the typed LEARNSETS table of ordered (level, MoveId) entries.",
+      "rust_target": "crates/assets/src/level_up_learnsets.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "src/data/pokemon/pokedex_entries.h": {
       "category": "code.header",
