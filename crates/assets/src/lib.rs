@@ -4,14 +4,16 @@
 //! `(oop-boundaries)`. Extracted so far: the battle type-effectiveness chart
 //! (see [`type_chart`]), the per-move battle-data table (see [`battle_moves`]),
 //! the species base-stats table (see [`species`]), the per-species evolution
-//! table (see [`evolution`]), and the per-species TM/HM learnsets (see
-//! [`tmhm_learnsets`]); more data follows as the crate fills out.
+//! table (see [`evolution`]), the per-species TM/HM learnsets (see
+//! [`tmhm_learnsets`]), and per-species display names (see [`species_names`]);
+//! more data follows as the crate fills out.
 
 pub mod battle_moves;
 pub mod error;
 pub mod evolution;
 pub mod items;
 pub mod species;
+pub mod species_names;
 pub mod tmhm_learnsets;
 pub mod type_chart;
 
@@ -29,5 +31,6 @@ pub use species::{
     AbilityId, BaseStats, BodyColor, EggGroup, EvYield, GenderRatio, GrowthRate, ItemId, SpeciesId,
     SpeciesTable,
 };
+pub use species_names::SpeciesNames;
 pub use tmhm_learnsets::{TmHmLearnsets, TmHmSlot};
 pub use type_chart::{Effectiveness, Type, TypeChart};
