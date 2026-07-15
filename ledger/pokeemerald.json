@@ -13010,6 +13010,26 @@
       "status": "pending"
     },
     "include/script.h": {
+      "artifacts": {
+        "ScrCmdFunc": {
+          "reason": "ScrCmdFunc typedef re-expressed as the Command<'a> fn-pointer type alias",
+          "rust_target": "crates/engine/src/script.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "ScriptContext": {
+          "reason": "struct ScriptContext (cursor, stack[20], data[4], mode, comparisonResult, cmdTable) re-expressed as the owned ScriptContext type",
+          "rust_target": "crates/engine/src/script.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "ScriptReadByte": {
+          "reason": "ScriptReadByte macro's fetch-and-advance behavior inlined in ScriptContext::run's opcode fetch",
+          "rust_target": "crates/engine/src/script.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        }
+      },
       "category": "code.header",
       "kind": "file",
       "status": "pending"
@@ -20453,6 +20473,80 @@
       "status": "pending"
     },
     "src/script.c": {
+      "artifacts": {
+        "InitScriptContext": {
+          "reason": "zeroed-state construction re-implemented as ScriptContext::new",
+          "rust_target": "crates/engine/src/script.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "RunScriptCommand": {
+          "reason": "native-vs-bytecode mode switch and bytecode fetch/dispatch loop, incl. cmdTable bounds check, re-implemented as ScriptContext::run",
+          "rust_target": "crates/engine/src/script.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "ScriptCall": {
+          "reason": "re-implemented as ScriptContext::call (push return address, then jump), propagating a stack-overflow push failure instead of jumping anyway",
+          "rust_target": "crates/engine/src/script.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "ScriptJump": {
+          "reason": "re-implemented as ScriptContext::jump",
+          "rust_target": "crates/engine/src/script.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "ScriptPop": {
+          "reason": "re-implemented as ScriptContext::pop, surfacing underflow as ScriptError::StackUnderflow instead of a silent NULL",
+          "rust_target": "crates/engine/src/script.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "ScriptPush": {
+          "reason": "re-implemented as ScriptContext::push, preserving the upstream depth+1>=20 off-by-one but surfacing overflow as ScriptError::StackOverflow instead of a discarded bool",
+          "rust_target": "crates/engine/src/script.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "ScriptReadHalfword": {
+          "reason": "re-implemented as ScriptContext::read_u16, a little-endian operand reader over the borrowed script slice",
+          "rust_target": "crates/engine/src/script.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "ScriptReadWord": {
+          "reason": "re-implemented as ScriptContext::read_u32, a little-endian operand reader over the borrowed script slice",
+          "rust_target": "crates/engine/src/script.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "ScriptReturn": {
+          "reason": "re-implemented as ScriptContext::script_return, propagating a stack-underflow pop failure instead of writing a silent NULL cursor",
+          "rust_target": "crates/engine/src/script.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "SetupBytecodeScript": {
+          "reason": "re-implemented as ScriptContext::setup_bytecode",
+          "rust_target": "crates/engine/src/script.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "SetupNativeScript": {
+          "reason": "re-implemented as ScriptContext::setup_native, folding nativePtr into the Native mode variant",
+          "rust_target": "crates/engine/src/script.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "StopScript": {
+          "reason": "re-implemented as ScriptContext::stop",
+          "rust_target": "crates/engine/src/script.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        }
+      },
       "category": "code.source",
       "kind": "file",
       "status": "pending"
