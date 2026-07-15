@@ -5,13 +5,15 @@
 //! (see [`type_chart`]), the per-move battle-data table (see [`battle_moves`]),
 //! the species base-stats table (see [`species`]), the per-species evolution
 //! table (see [`evolution`]), the per-species TM/HM learnsets (see
-//! [`tmhm_learnsets`]), and per-species display names (see [`species_names`]);
-//! more data follows as the crate fills out.
+//! [`tmhm_learnsets`]), and species/move display names (see
+//! [`species_names`], [`move_names`]); more data follows as the crate fills
+//! out.
 
 pub mod battle_moves;
 pub mod error;
 pub mod evolution;
 pub mod items;
+pub mod move_names;
 pub mod species;
 pub mod species_names;
 pub mod tmhm_learnsets;
@@ -27,6 +29,7 @@ pub use evolution::{EvoMethod, Evolution, EvolutionTable};
 // lightweight held-item reference used by the species table). Reach it via the
 // `items` module path.
 pub use items::{BattleUsage, HoldEffect, ItemData, ItemTable, ItemType, Pocket, ITEMS_COUNT};
+pub use move_names::MoveNames;
 pub use species::{
     AbilityId, BaseStats, BodyColor, EggGroup, EvYield, GenderRatio, GrowthRate, ItemId, SpeciesId,
     SpeciesTable,
