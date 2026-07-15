@@ -107,6 +107,11 @@ impl ApplicationHandler for App {
     ) {
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
+            // Winit does not synthesize key-release events on focus loss
+            // (macOS/Wayland), so a key held across an alt-tab would stay
+            // stuck in `frame_held` forever. Drop all held state instead;
+            // still-held keys re-register on the next real press.
+            WindowEvent::Focused(false) => self.frame_held = Buttons::NONE,
             WindowEvent::KeyboardInput { event, .. } => {
                 if let PhysicalKey::Code(code) = event.physical_key {
                     if let Some(button) = self.keymap.lookup(code) {
