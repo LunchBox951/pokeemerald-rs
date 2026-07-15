@@ -6,3 +6,7 @@ publish.workspace = true
 
 [lints]
 workspace = true
+
+[dependencies]
+softbuffer = "0.4"
+winit = "0.30"
