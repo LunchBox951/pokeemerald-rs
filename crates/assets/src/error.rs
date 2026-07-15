@@ -75,6 +75,16 @@ pub enum AssetError {
     ///
     /// [`TmHmLearnsets::SLOT_COUNT`]: crate::tmhm_learnsets::TmHmLearnsets::SLOT_COUNT
     UnknownTmHmSlot(usize),
+
+    /// An [`AbilityId`] fell outside the extracted `gAbilityNames` /
+    /// `gAbilityDescriptions` range.
+    ///
+    /// Carries the offending id. Valid ids are `0..`[`Abilities::LEN`]
+    /// (`0..78`); `0` is the reserved `ABILITY_NONE` slot.
+    ///
+    /// [`AbilityId`]: crate::species::AbilityId
+    /// [`Abilities::LEN`]: crate::abilities::Abilities::LEN
+    UnknownAbility(u16),
 }
 
 impl fmt::Display for AssetError {
@@ -92,6 +102,7 @@ impl fmt::Display for AssetError {
                 write!(f, "unknown item battle-usage id `{id}`")
             }
             Self::UnknownTmHmSlot(index) => write!(f, "unknown TM/HM slot index `{index}`"),
+            Self::UnknownAbility(id) => write!(f, "unknown ability id `{id}`"),
         }
     }
 }

@@ -5,10 +5,11 @@
 //! (see [`type_chart`]), the per-move battle-data table (see [`battle_moves`]),
 //! the species base-stats table (see [`species`]), the per-species evolution
 //! table (see [`evolution`]), the per-species TM/HM learnsets (see
-//! [`tmhm_learnsets`]), and species/move display names (see
-//! [`species_names`], [`move_names`]); more data follows as the crate fills
-//! out.
+//! [`tmhm_learnsets`]), and species/move/ability display text (see
+//! [`species_names`], [`move_names`], [`abilities`]); more data follows as
+//! the crate fills out.
 
+pub mod abilities;
 pub mod battle_moves;
 pub mod error;
 pub mod evolution;
@@ -19,6 +20,7 @@ pub mod species_names;
 pub mod tmhm_learnsets;
 pub mod type_chart;
 
+pub use abilities::{Abilities, AbilityData, ABILITIES_COUNT};
 pub use battle_moves::{
     MoveData, MoveEffect, MoveFlags, MoveId, MoveTable, MoveTarget, MoveType, MOVES_COUNT,
 };
