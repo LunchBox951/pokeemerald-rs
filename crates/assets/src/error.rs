@@ -85,6 +85,14 @@ pub enum AssetError {
     /// [`AbilityId`]: crate::species::AbilityId
     /// [`Abilities::LEN`]: crate::abilities::Abilities::LEN
     UnknownAbility(u16),
+
+    /// A level passed to an experience-curve lookup exceeded upstream
+    /// `MAX_LEVEL`.
+    ///
+    /// Carries the offending level. Valid levels are `0..=`[`MAX_LEVEL`].
+    ///
+    /// [`MAX_LEVEL`]: crate::experience::MAX_LEVEL
+    InvalidLevel(u8),
 }
 
 impl fmt::Display for AssetError {
@@ -103,6 +111,7 @@ impl fmt::Display for AssetError {
             }
             Self::UnknownTmHmSlot(index) => write!(f, "unknown TM/HM slot index `{index}`"),
             Self::UnknownAbility(id) => write!(f, "unknown ability id `{id}`"),
+            Self::InvalidLevel(level) => write!(f, "invalid level `{level}` (exceeds MAX_LEVEL)"),
         }
     }
 }

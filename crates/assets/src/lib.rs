@@ -5,14 +5,16 @@
 //! (see [`type_chart`]), the per-move battle-data table (see [`battle_moves`]),
 //! the species base-stats table (see [`species`]), the per-species evolution
 //! table (see [`evolution`]), the per-species TM/HM learnsets (see
-//! [`tmhm_learnsets`]), and species/move/ability display text (see
-//! [`species_names`], [`move_names`], [`abilities`]); more data follows as
-//! the crate fills out.
+//! [`tmhm_learnsets`]), the species/move/ability display text (see
+//! [`species_names`], [`move_names`], [`abilities`]), and the experience
+//! growth curves (see [`experience`]); more data follows as the crate fills
+//! out.
 
 pub mod abilities;
 pub mod battle_moves;
 pub mod error;
 pub mod evolution;
+pub mod experience;
 pub mod items;
 pub mod move_names;
 pub mod species;
@@ -26,6 +28,7 @@ pub use battle_moves::{
 };
 pub use error::AssetError;
 pub use evolution::{EvoMethod, Evolution, EvolutionTable};
+pub use experience::{experience_for_level, MAX_LEVEL};
 // `items::ItemId` is the full item-table identifier; it is intentionally *not*
 // re-exported at the crate root to avoid clashing with `species::ItemId` (the
 // lightweight held-item reference used by the species table). Reach it via the
