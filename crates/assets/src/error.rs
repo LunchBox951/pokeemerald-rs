@@ -34,6 +34,16 @@ pub enum AssetError {
     /// [`MoveId`]: crate::battle_moves::MoveId
     UnknownMove(u16),
 
+    /// A raw `EVO_*` method id did not correspond to any modelled
+    /// [`EvoMethod`].
+    ///
+    /// Carries the offending id. Upstream defines methods `1..=15`
+    /// (`constants/pokemon.h`); `0` is the empty `{0, 0, 0}` filler slot and
+    /// anything else is unknown.
+    ///
+    /// [`EvoMethod`]: crate::evolution::EvoMethod
+    UnknownEvolutionMethod(u16),
+
     /// An [`ItemId`] fell outside the extracted `gItems` range.
     ///
     /// Carries the offending id. Valid ids are `0..`[`ItemTable::len`]
@@ -57,6 +67,14 @@ pub enum AssetError {
     ///
     /// [`BattleUsage`]: crate::items::BattleUsage
     UnknownItemBattleUsage(u8),
+
+    /// A TM/HM slot index fell outside the ordered TM/HM list.
+    ///
+    /// Carries the offending index. Valid indices are
+    /// `0..`[`TmHmLearnsets::SLOT_COUNT`] (`0..58`): TM01..TM50 then HM01..HM08.
+    ///
+    /// [`TmHmLearnsets::SLOT_COUNT`]: crate::tmhm_learnsets::TmHmLearnsets::SLOT_COUNT
+    UnknownTmHmSlot(usize),
 }
 
 impl fmt::Display for AssetError {
@@ -65,11 +83,15 @@ impl fmt::Display for AssetError {
             Self::UnknownType(id) => write!(f, "unknown battle type id `{id}`"),
             Self::UnknownSpecies(id) => write!(f, "unknown species id `{id}`"),
             Self::UnknownMove(id) => write!(f, "unknown move id `{id}`"),
+            Self::UnknownEvolutionMethod(id) => {
+                write!(f, "unknown evolution method id `{id}`")
+            }
             Self::UnknownItem(id) => write!(f, "unknown item id `{id}`"),
             Self::UnknownItemPocket(id) => write!(f, "unknown item pocket id `{id}`"),
             Self::UnknownItemBattleUsage(id) => {
                 write!(f, "unknown item battle-usage id `{id}`")
             }
+            Self::UnknownTmHmSlot(index) => write!(f, "unknown TM/HM slot index `{index}`"),
         }
     }
 }

@@ -12151,7 +12151,10 @@
     "include/constants/tms_hms.h": {
       "category": "code.constants",
       "kind": "file",
-      "status": "pending"
+      "reason": "FOREACH_TM/HM/TMHM ordered TM/HM list transcribed as the 58-slot bit order and slot->move mapping (SLOT_MOVES, TmHmSlot)",
+      "rust_target": "crates/assets/src/tmhm_learnsets.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "include/constants/trade.h": {
       "category": "code.constants",
@@ -18726,6 +18729,14 @@
       "status": "pending"
     },
     "src/bg.c": {
+      "artifacts": {
+        "regular_tile_layer": {
+          "reason": "BgLayer/ScreenEntry/Tilemap port the regular (non-affine) BG tile-layer compositing semantics: screen-entry tile index/flip/palette-bank bits, 4bpp/8bpp tile-to-pixel resolution, transparent palette index 0 (every bank), and >32-tile tilemaps addressed as 32x32 screenblocks, verified against mgba's software mode-0 renderer; scrolling, affine BGs, and multi-layer priority are out of scope for this slice (issue #50).",
+          "rust_target": "crates/rendering/src/bg.rs",
+          "spec": "S-2",
+          "status": "rewritten"
+        }
+      },
       "category": "code.source",
       "kind": "file",
       "status": "pending"
@@ -19302,6 +19313,14 @@
       "status": "pending"
     },
     "src/data/party_menu.h": {
+      "artifacts": {
+        "sTMHMMoves": {
+          "reason": "sTMHMMoves (FOREACH_TMHM(TMHM_MOVE)) slot->MoveId mapping transcribed into SLOT_MOVES",
+          "rust_target": "crates/assets/src/tmhm_learnsets.rs",
+          "spec": "S-4",
+          "status": "ported"
+        }
+      },
       "category": "code.header",
       "kind": "file",
       "status": "pending"
@@ -19329,7 +19348,10 @@
     "src/data/pokemon/evolution.h": {
       "category": "code.header",
       "kind": "file",
-      "status": "pending"
+      "reason": "gEvolutionTable: 184 evolution entries across 172 species as typed EvoMethod/Evolution keyed by SpeciesId",
+      "rust_target": "crates/assets/src/evolution.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "src/data/pokemon/experience_tables.h": {
       "category": "code.header",
@@ -19377,7 +19399,10 @@
     "src/data/pokemon/tmhm_learnsets.h": {
       "category": "code.header",
       "kind": "file",
-      "status": "pending"
+      "reason": "gTMHMLearnsets extracted to a u64-per-species learnset bitmask table (TmHmLearnsets), keyed by SpeciesId over the 58 ordered TM/HM slots",
+      "rust_target": "crates/assets/src/tmhm_learnsets.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "src/data/pokemon/trainer_class_lookups.h": {
       "category": "code.header",
@@ -20163,6 +20188,14 @@
       "status": "pending"
     },
     "src/palette.c": {
+      "artifacts": {
+        "Bgr555ToRgb888": {
+          "reason": "Bgr555::to_rgb888 ports the BGR555->RGB888 5-to-8-bit channel expansion ((c<<3)|(c>>2)), verified against mgba's gl.c normalized /31. reference; the rest of palette.c (fades, blending) is out of scope for this slice (issue #50).",
+          "rust_target": "crates/rendering/src/palette.rs",
+          "spec": "S-2",
+          "status": "rewritten"
+        }
+      },
       "category": "code.source",
       "kind": "file",
       "status": "pending"
@@ -20496,6 +20529,38 @@
       "status": "pending"
     },
     "src/string_util.c": {
+      "artifacts": {
+        "ConvertIntToDecimalStringN": {
+          "reason": "Signed decimal number-to-glyph-token conversion (STR_CONV_MODE_LEFT_ALIGN/RIGHT_ALIGN/LEADING_ZEROS), including the u16 quotient-truncation and CHAR_QUESTION_MARK overflow quirks, as convert_int_to_decimal_string_n.",
+          "rust_target": "crates/engine/src/text/format.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "ConvertIntToHexStringN": {
+          "reason": "Hex number-to-glyph-token conversion, same three StringConvertMode variants, preserving the full-width (not narrowed) quotient reinterpretation quirk, as convert_int_to_hex_string_n.",
+          "rust_target": "crates/engine/src/text/format.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "ConvertUIntToDecimalStringN": {
+          "reason": "Unsigned decimal number-to-glyph-token conversion, same three StringConvertMode variants, as convert_uint_to_decimal_string_n.",
+          "rust_target": "crates/engine/src/text/format.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "GetExpandedPlaceholder": {
+          "reason": "Placeholder-id dispatch modelled as a caller-supplied PlaceholderResolver trait (no global save-block state); the state-independent entries (version, faction/legendary names) are built in as StaticPlaceholders, player-name/gender-resolved ids left as resolver call sites.",
+          "rust_target": "crates/engine/src/text/format.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "StringExpandPlaceholders": {
+          "reason": "Recursive placeholder expansion over the decoded Token stream, with EXT_CTRL_CODE_BEGIN sub-codes (and their already-grouped argument bytes) passed through unmolested, as expand_placeholders / PlaceholderResolver.",
+          "rust_target": "crates/engine/src/text/format.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        }
+      },
       "category": "code.source",
       "kind": "file",
       "status": "pending"

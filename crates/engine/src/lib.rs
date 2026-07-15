@@ -2,7 +2,9 @@
 //!
 //! Implementation lands incrementally, one concept per module. So far:
 //! - [`rng`] — Emerald's deterministic PRNG (issue #22).
-//! - [`text`] — the Gen-3 text codec (issue #25).
+//! - [`text`] — the Gen-3 text codec (issue #25), plus
+//!   [`text::format`] for number-to-text formatting and placeholder
+//!   expansion (issue #55).
 
 pub mod rng;
 pub mod text;

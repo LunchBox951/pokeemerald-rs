@@ -49,6 +49,8 @@
 
 use std::fmt;
 
+pub mod format;
+
 /// End-of-string terminator byte (`EOS`, upstream `0xFF`).
 ///
 /// Note: `charmap.txt` also lists `'$' = FF`, but `0xFF` is unambiguously the
