@@ -3,19 +3,23 @@
 //! Exposes extracted upstream game data as idiomatic, owned Rust types
 //! `(oop-boundaries)`. Extracted so far: the battle type-effectiveness chart
 //! (see [`type_chart`]), the per-move battle-data table (see [`battle_moves`]),
-//! the species base-stats table (see [`species`]), the per-species evolution
-//! table (see [`evolution`]), the per-species TM/HM learnsets (see
-//! [`tmhm_learnsets`]), the species/move/ability display text (see
-//! [`species_names`], [`move_names`], [`abilities`]), and the experience
+//! the species base-stats table (see [`species`]), the item table (see
+//! [`items`]), the per-species evolution table (see [`evolution`]), the
+//! per-species TM/HM learnsets (see [`tmhm_learnsets`]), the per-species
+//! level-up learnsets (see [`level_up_learnsets`]), the per-species
+//! egg-move lists (see [`egg_moves`]), the species/move/ability display text
+//! (see [`species_names`], [`move_names`], [`abilities`]), and the experience
 //! growth curves (see [`experience`]); more data follows as the crate fills
 //! out.
 
 pub mod abilities;
 pub mod battle_moves;
+pub mod egg_moves;
 pub mod error;
 pub mod evolution;
 pub mod experience;
 pub mod items;
+pub mod level_up_learnsets;
 pub mod move_names;
 pub mod species;
 pub mod species_names;
@@ -26,9 +30,15 @@ pub use abilities::{Abilities, AbilityData, ABILITIES_COUNT};
 pub use battle_moves::{
     MoveData, MoveEffect, MoveFlags, MoveId, MoveTable, MoveTarget, MoveType, MOVES_COUNT,
 };
+pub use egg_moves::{
+    EggMoveList, EggMoveTable, EGG_MOVES_SPECIES_OFFSET, EGG_MOVES_TERMINATOR,
+    EGG_MOVE_SPECIES_COUNT,
+};
 pub use error::AssetError;
 pub use evolution::{EvoMethod, Evolution, EvolutionTable};
 pub use experience::{experience_for_level, MAX_LEVEL};
+pub use level_up_learnsets::{LevelUpLearnsets, LevelUpMove, SPECIES_COUNT};
+
 // `items::ItemId` is the full item-table identifier; it is intentionally *not*
 // re-exported at the crate root to avoid clashing with `species::ItemId` (the
 // lightweight held-item reference used by the species table). Reach it via the

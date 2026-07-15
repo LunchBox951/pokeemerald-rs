@@ -76,6 +76,14 @@ pub enum AssetError {
     /// [`TmHmLearnsets::SLOT_COUNT`]: crate::tmhm_learnsets::TmHmLearnsets::SLOT_COUNT
     UnknownTmHmSlot(usize),
 
+    /// A [`SpeciesId`] has no egg-move group in `gEggMoves`.
+    ///
+    /// Carries the queried species id. Only breeding base-forms appear in
+    /// `gEggMoves`; every other species (including `SPECIES_NONE`) is absent.
+    ///
+    /// [`SpeciesId`]: crate::species::SpeciesId
+    NoEggMoves(u16),
+
     /// An [`AbilityId`] fell outside the extracted `gAbilityNames` /
     /// `gAbilityDescriptions` range.
     ///
@@ -110,6 +118,7 @@ impl fmt::Display for AssetError {
                 write!(f, "unknown item battle-usage id `{id}`")
             }
             Self::UnknownTmHmSlot(index) => write!(f, "unknown TM/HM slot index `{index}`"),
+            Self::NoEggMoves(id) => write!(f, "species id `{id}` has no egg moves"),
             Self::UnknownAbility(id) => write!(f, "unknown ability id `{id}`"),
             Self::InvalidLevel(level) => write!(f, "invalid level `{level}` (exceeds MAX_LEVEL)"),
         }
