@@ -19359,7 +19359,10 @@
     "src/data/pokemon/experience_tables.h": {
       "category": "code.header",
       "kind": "file",
-      "status": "pending"
+      "reason": "gExperienceTables re-implemented as closed-form growth-curve functions (experience_for_level), keyed by GrowthRate, matching MAX_LEVEL, instead of transcribing the 606-entry table",
+      "rust_target": "crates/assets/src/experience.rs",
+      "spec": "S-4",
+      "status": "rewritten"
     },
     "src/data/pokemon/item_effects.h": {
       "category": "code.header",
@@ -19506,7 +19509,10 @@
     "src/data/text/abilities.h": {
       "category": "code.header",
       "kind": "file",
-      "status": "pending"
+      "reason": "gAbilityNames and gAbilityDescriptions extracted to a typed Abilities name+description table, keyed by AbilityId, matching ABILITIES_COUNT",
+      "rust_target": "crates/assets/src/abilities.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "src/data/text/gift_ribbon_descriptions.h": {
       "category": "code.header",
@@ -19531,7 +19537,10 @@
     "src/data/text/move_names.h": {
       "category": "code.header",
       "kind": "file",
-      "status": "pending"
+      "reason": "gMoveNames extracted to a typed MoveNames display-name table, keyed by MoveId, matching MOVES_COUNT",
+      "rust_target": "crates/assets/src/move_names.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "src/data/text/nature_names.h": {
       "category": "code.header",
@@ -19546,7 +19555,10 @@
     "src/data/text/species_names.h": {
       "category": "code.header",
       "kind": "file",
-      "status": "pending"
+      "reason": "gSpeciesNames extracted to a typed SpeciesNames display-name table, keyed by SpeciesId, matching NUM_SPECIES",
+      "rust_target": "crates/assets/src/species_names.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "src/data/text/trainer_class_names.h": {
       "category": "code.header",
