@@ -11989,6 +11989,14 @@
       "status": "pending"
     },
     "include/constants/flags.h": {
+      "artifacts": {
+        "flag_id_space": {
+          "reason": "TEMP_FLAGS_START/END, DAILY_FLAGS_START/END (used only to derive FLAGS_COUNT; ClearDailyFlags itself is out of scope), FLAGS_COUNT, SPECIAL_FLAGS_START/END, and the five named system flags ClearTempFieldEventData also clears (FLAG_SYS_ENC_UP_ITEM, FLAG_SYS_ENC_DOWN_ITEM, FLAG_SYS_USE_STRENGTH, FLAG_SYS_CTRL_OBJ_DELETE, FLAG_NURSE_UNION_ROOM_REMINDER) transcribed as typed constants; the individual FLAG_* name registry (thousands of entries) remains pending for a later assets slice",
+          "rust_target": "crates/engine/src/event_data.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        }
+      },
       "category": "code.constants",
       "kind": "file",
       "status": "pending"
@@ -12187,6 +12195,14 @@
       "status": "pending"
     },
     "include/constants/vars.h": {
+      "artifacts": {
+        "var_id_space": {
+          "reason": "VARS_START/END, VARS_COUNT, TEMP_VARS_START/END, and SPECIAL_VARS_START/END transcribed as typed constants; the individual VAR_* name registry remains pending for a later assets slice",
+          "rust_target": "crates/engine/src/event_data.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        }
+      },
       "category": "code.constants",
       "kind": "file",
       "status": "pending"
@@ -12322,6 +12338,62 @@
       "status": "pending"
     },
     "include/event_data.h": {
+      "artifacts": {
+        "ClearTempFieldEventData": {
+          "reason": "Prototype for ClearTempFieldEventData, implemented per src/event_data.c#ClearTempFieldEventData",
+          "rust_target": "crates/engine/src/event_data.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "FlagClear": {
+          "reason": "Prototype for FlagClear, implemented per src/event_data.c#FlagClear",
+          "rust_target": "crates/engine/src/event_data.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "FlagGet": {
+          "reason": "Prototype for FlagGet, implemented per src/event_data.c#FlagGet",
+          "rust_target": "crates/engine/src/event_data.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "FlagSet": {
+          "reason": "Prototype for FlagSet, implemented per src/event_data.c#FlagSet",
+          "rust_target": "crates/engine/src/event_data.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "GetFlagPointer": {
+          "reason": "Prototype for GetFlagPointer, implemented per src/event_data.c#GetFlagPointer",
+          "rust_target": "crates/engine/src/event_data.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "GetVarPointer": {
+          "reason": "Prototype for GetVarPointer, implemented per src/event_data.c#GetVarPointer",
+          "rust_target": "crates/engine/src/event_data.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "InitEventData": {
+          "reason": "Prototype for InitEventData, implemented per src/event_data.c#InitEventData",
+          "rust_target": "crates/engine/src/event_data.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "VarGet": {
+          "reason": "Prototype for VarGet, implemented per src/event_data.c#VarGet",
+          "rust_target": "crates/engine/src/event_data.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "VarSet": {
+          "reason": "Prototype for VarSet, implemented per src/event_data.c#VarSet",
+          "rust_target": "crates/engine/src/event_data.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        }
+      },
       "category": "code.header",
       "kind": "file",
       "status": "pending"
@@ -19716,6 +19788,62 @@
       "status": "pending"
     },
     "src/event_data.c": {
+      "artifacts": {
+        "ClearTempFieldEventData": {
+          "reason": "Temp flag/var range clear plus the five named system-flag clears re-implemented as EventData::clear_temp_field_event_data",
+          "rust_target": "crates/engine/src/event_data.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "FlagClear": {
+          "reason": "Bit-clear via GetFlagPointer re-implemented as EventData::flag_clear",
+          "rust_target": "crates/engine/src/event_data.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "FlagGet": {
+          "reason": "Bit-test via GetFlagPointer re-implemented as EventData::flag_get",
+          "rust_target": "crates/engine/src/event_data.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "FlagSet": {
+          "reason": "Bit-set via GetFlagPointer re-implemented as EventData::flag_set",
+          "rust_target": "crates/engine/src/event_data.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "GetFlagPointer": {
+          "reason": "id==0/ordinary/special-flag branching re-expressed as the private classify_flag helper, with an explicit bounds check replacing the unchecked pointer arithmetic for ids upstream would read/write out of bounds",
+          "rust_target": "crates/engine/src/event_data.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "GetVarPointer": {
+          "reason": "VARS_START-offset indexing, the immediate-passthrough for id<VARS_START, and the special-var range re-expressed inline in EventData::var_get/var_set (special range surfaced as EventDataError::SpecialVar, a typed not-stored-here case)",
+          "rust_target": "crates/engine/src/event_data.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "InitEventData": {
+          "reason": "Zeroed-state construction (memset over flags/vars/sSpecialFlags) re-implemented as EventData::new/Default",
+          "rust_target": "crates/engine/src/event_data.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "VarGet": {
+          "reason": "Var read, including the id<VARS_START immediate-passthrough quirk, re-implemented as EventData::var_get",
+          "rust_target": "crates/engine/src/event_data.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "VarSet": {
+          "reason": "Var write, including the id<VARS_START no-op quirk, re-implemented as EventData::var_set",
+          "rust_target": "crates/engine/src/event_data.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        }
+      },
       "category": "code.source",
       "kind": "file",
       "status": "pending"
