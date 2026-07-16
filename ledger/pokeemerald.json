@@ -19608,12 +19608,18 @@
     "src/data/trainer_parties.h": {
       "category": "code.header",
       "kind": "file",
-      "status": "pending"
+      "reason": "The sParty_* arrays gTrainers[i].party points into (854 arrays, 1825 party mons total) transcribed alongside trainers.h into the same typed TrainerParty tables in crates/assets, pinned by the same full mechanical diff against trainer_parties.h.",
+      "rust_target": "crates/assets/src/trainers.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "src/data/trainers.h": {
       "category": "code.header",
       "kind": "file",
-      "status": "pending"
+      "reason": "gTrainers (855 entries: TRAINER_NONE + 854 real trainers) transcribed to a typed TrainerTable in crates/assets, with the C union TrainerMonPtr/partyFlags replaced by a 4-variant TrainerParty enum; pinned to upstream by a full mechanical diff plus sampled upstream-tie tests covering all four party shapes and the TRAINER_NONE sentinel.",
+      "rust_target": "crates/assets/src/trainers.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "src/data/union_room.h": {
       "category": "code.header",
@@ -20712,6 +20718,14 @@
       "status": "pending"
     },
     "src/wild_encounter.c": {
+      "artifacts": {
+        "gWildMonHeaders": {
+          "reason": "gWildMonHeaders (per-map wild encounter tables, generated from src/data/wild_encounters.json) transcribed to a typed table in crates/assets, pinned to upstream by sampled-entry + slot-count tests; wild_encounter.c itself stays pending (runtime encounter-roll unported).",
+          "rust_target": "crates/assets/src/wild_encounters.rs",
+          "spec": "S-4",
+          "status": "ported"
+        }
+      },
       "category": "code.source",
       "kind": "file",
       "status": "pending"
