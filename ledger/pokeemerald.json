@@ -13032,7 +13032,7 @@
           "status": "rewritten"
         },
         "ScriptReadByte": {
-          "reason": "ScriptReadByte macro's fetch-and-advance behavior inlined in ScriptContext::run's opcode fetch",
+          "reason": "ScriptReadByte macro (fetch-and-advance byte read, used ~173x in src/scrcmd.c for condition bytes, data-register indexes, warp map IDs) rewritten as ScriptContext::read_u8, symmetric with read_u16/read_u32",
           "rust_target": "crates/engine/src/script.rs",
           "spec": "S-5",
           "status": "rewritten"
