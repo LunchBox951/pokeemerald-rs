@@ -6,19 +6,27 @@
 //! the species base-stats table (see [`species`]), the item table (see
 //! [`items`]), the per-species evolution table (see [`evolution`]), the
 //! per-species TM/HM learnsets (see [`tmhm_learnsets`]), the per-species
-//! level-up learnsets (see [`level_up_learnsets`]), and the per-species
-//! egg-move lists (see [`egg_moves`]); more data follows as the crate fills out.
+//! level-up learnsets (see [`level_up_learnsets`]), the per-species
+//! egg-move lists (see [`egg_moves`]), the species/move/ability display text
+//! (see [`species_names`], [`move_names`], [`abilities`]), and the experience
+//! growth curves (see [`experience`]); more data follows as the crate fills
+//! out.
 
+pub mod abilities;
 pub mod battle_moves;
 pub mod egg_moves;
 pub mod error;
 pub mod evolution;
+pub mod experience;
 pub mod items;
 pub mod level_up_learnsets;
+pub mod move_names;
 pub mod species;
+pub mod species_names;
 pub mod tmhm_learnsets;
 pub mod type_chart;
 
+pub use abilities::{Abilities, AbilityData, ABILITIES_COUNT};
 pub use battle_moves::{
     MoveData, MoveEffect, MoveFlags, MoveId, MoveTable, MoveTarget, MoveType, MOVES_COUNT,
 };
@@ -28,6 +36,7 @@ pub use egg_moves::{
 };
 pub use error::AssetError;
 pub use evolution::{EvoMethod, Evolution, EvolutionTable};
+pub use experience::{experience_for_level, MAX_LEVEL};
 pub use level_up_learnsets::{LevelUpLearnsets, LevelUpMove, SPECIES_COUNT};
 
 // `items::ItemId` is the full item-table identifier; it is intentionally *not*
@@ -35,9 +44,11 @@ pub use level_up_learnsets::{LevelUpLearnsets, LevelUpMove, SPECIES_COUNT};
 // lightweight held-item reference used by the species table). Reach it via the
 // `items` module path.
 pub use items::{BattleUsage, HoldEffect, ItemData, ItemTable, ItemType, Pocket, ITEMS_COUNT};
+pub use move_names::MoveNames;
 pub use species::{
     AbilityId, BaseStats, BodyColor, EggGroup, EvYield, GenderRatio, GrowthRate, ItemId, SpeciesId,
     SpeciesTable,
 };
+pub use species_names::SpeciesNames;
 pub use tmhm_learnsets::{TmHmLearnsets, TmHmSlot};
 pub use type_chart::{Effectiveness, Type, TypeChart};
