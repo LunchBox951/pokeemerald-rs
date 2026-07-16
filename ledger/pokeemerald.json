@@ -12512,7 +12512,7 @@
     "include/gba/types.h": {
       "artifacts": {
         "OamData": {
-          "reason": "OamEntry mirrors struct OamData's regular (non-affine) bitfield layout (y, tile/priority/palette fields in attr2, shape/bpp/mosaic in attr0, x/size in attr1), cross-checked against mgba's GBAObjAttributesA/B/C bitfield decls; the affine-mode/matrix-index fields are not modelled (issue #64 scope).",
+          "reason": "OamEntry mirrors struct OamData's regular (non-affine) bitfield layout (y in attr0, x/size/flip in attr1, tile/priority/palette in attr2, shape/bpp in attr0), cross-checked against mgba's GBAObjAttributesA/B/C bitfield decls; affine-mode/matrix-index, mosaic, and objMode (semi-transparent/window) fields are deliberately not modelled (issue #64 scope).",
           "rust_target": "crates/rendering/src/oam.rs",
           "spec": "S-2",
           "status": "rewritten"

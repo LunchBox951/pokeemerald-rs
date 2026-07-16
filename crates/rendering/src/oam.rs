@@ -159,6 +159,12 @@ impl OamEntry {
 
     /// The tile index into OBJ tile memory (`0..1024`) of this sprite's
     /// top-left tile.
+    ///
+    /// This index counts *native tiles of this sprite's bit depth* in the
+    /// [`Tileset`](crate::tile::Tileset) it is paired with. Hardware `attr2`
+    /// counts 32-byte units regardless of depth, so when real OBJ assets are
+    /// wired in, a hardware 8bpp base index `N` corresponds to native tile
+    /// `N / 2` here.
     #[must_use]
     pub const fn tile_index(self) -> u16 {
         self.tile_index
