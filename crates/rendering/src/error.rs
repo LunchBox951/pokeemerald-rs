@@ -22,8 +22,8 @@ pub enum RenderError {
         len: usize,
     },
 
-    /// A [`Tilemap`](crate::bg::Tilemap)'s screen-entry count did not match
-    /// `width_tiles * height_tiles`.
+    /// A [`Tilemap`](crate::tilemap::Tilemap)'s screen-entry count did not
+    /// match `width_tiles * height_tiles`.
     TilemapSizeMismatch {
         /// The expected entry count (`width_tiles * height_tiles`).
         expected: usize,
