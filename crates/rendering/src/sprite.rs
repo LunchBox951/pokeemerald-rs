@@ -17,7 +17,11 @@
 //! Sprite-vs-sprite ordering is verified against
 //! `mgba/src/gba/renderers/software-obj.c` and `video-software.c`: among
 //! sprites covering the same pixel, the lowest OBJ priority wins; a
-//! same-priority tie is won by the lower OAM index (see
+//! same-priority tie is won by the lower OAM index. Crucially, a *transparent*
+//! texel of a better-order sprite still upgrades the pixel's stored OBJ
+//! priority (without changing its color) when it sits over an
+//! already-written, worse-priority opaque sprite — the color-supplying and
+//! priority-supplying sprites can differ (see
 //! [`SpriteLayer::resolve_pixel`]) `(behavioral-fidelity)`.
 
 use crate::framebuffer::Framebuffer;
@@ -28,11 +32,17 @@ use crate::tile::{BitDepth, Tileset};
 /// One resolved, opaque sprite pixel: a color plus the OBJ priority it
 /// composited at (needed by the cross-layer priority compositor to compare
 /// against BG layer priorities).
+///
+/// The `color` comes from the topmost opaque sprite covering the pixel, but
+/// `priority` is the *best* OBJ order among all sprites covering it —
+/// including a better-order sprite whose own texel there is transparent (see
+/// [`SpriteLayer::resolve_pixel`]). The two can therefore come from different
+/// sprites.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SpritePixel {
     /// The resolved color.
     pub color: Rgb888,
-    /// The winning sprite's OBJ priority (`0..=3`).
+    /// The winning OBJ priority (`0..=3`).
     pub priority: u8,
 }
 
@@ -87,41 +97,76 @@ impl<'a> SpriteLayer<'a> {
         }
     }
 
-    /// Resolve the winning sprite pixel at `(x, y)`, or `None` if every
-    /// sprite is disabled, transparent, or clipped there.
+    /// Resolve the winning sprite pixel at `(x, y)`, or `None` if no sprite
+    /// contributes an opaque texel there.
     ///
-    /// Implements the OBJ ordering rule verified against
-    /// `mgba/src/gba/renderers/software-obj.c` and `video-software.c`: among
-    /// sprites that cover this pixel, the lowest [`OamEntry::priority`]
-    /// wins; a tie is won by the lower OAM index (this method only replaces
-    /// the current winner on a strictly lower priority, so the
-    /// first-encountered — lowest-indexed — entry keeps a tie)
-    /// `(behavioral-fidelity)`.
+    /// Mirrors the per-pixel `spriteLayer` state machine of
+    /// `mgba/src/gba/renderers/software-obj.c`'s
+    /// `SPRITE_DRAW_PIXEL_*_NORMAL` macros, verified against
+    /// `video-software.c`. mgba iterates OAM `0..=127` over a buffer that
+    /// starts `FLAG_UNWRITTEN`; a sprite acts on a pixel only when its OBJ
+    /// order strictly beats the stored order — order being priority first,
+    /// then (because same-priority sprites share an order value and only a
+    /// strictly-better one overwrites) OAM iteration position, so the
+    /// lowest-indexed entry keeps a priority tie.
+    ///
+    /// When a sprite acts:
+    /// - an **opaque** texel supplies the color and lowers the stored order
+    ///   to its own (the opaque branch: `spriteLayer[x] = palette | flags`);
+    /// - a **transparent** texel over an already-written pixel lowers the
+    ///   stored order *without* changing the color (the `else if (current !=
+    ///   FLAG_UNWRITTEN)` branch: order bits upgraded, color kept), so a
+    ///   better-order sprite's hole promotes a worse-priority opaque sprite
+    ///   underneath it to the front order;
+    /// - a transparent texel over a still-unwritten pixel does nothing.
+    ///
+    /// The returned [`SpritePixel::priority`] is therefore the best order
+    /// among *all* covering sprites, which may be a different sprite than the
+    /// one that supplied [`SpritePixel::color`] `(behavioral-fidelity)`.
     #[must_use]
     pub fn resolve_pixel(&self, x: usize, y: usize) -> Option<SpritePixel> {
-        let mut winner: Option<SpritePixel> = None;
+        // Stored OBJ order, starting worse than any real priority (`0..=3`),
+        // standing in for mgba's `FLAG_UNWRITTEN` sentinel. `color` is `Some`
+        // exactly when the pixel has been written by an opaque texel.
+        const UNWRITTEN_ORDER: u8 = u8::MAX;
+        let mut order = UNWRITTEN_ORDER;
+        let mut color: Option<Rgb888> = None;
         for entry in self.entries {
             if !entry.enabled() {
                 continue;
             }
-            let Some(color) = self.sample_entry(entry, x, y) else {
+            let texel = self.sample_entry(entry, x, y);
+            if matches!(texel, Texel::Outside) {
                 continue;
-            };
-            let candidate = SpritePixel {
-                color,
-                priority: entry.priority(),
-            };
-            winner = match winner {
-                Some(w) if w.priority <= candidate.priority => Some(w),
-                _ => Some(candidate),
-            };
+            }
+            // Only a strictly-better order acts (`current order > flags`), so
+            // an equal-priority later entry never displaces an earlier one.
+            if entry.priority() >= order {
+                continue;
+            }
+            match texel {
+                Texel::Opaque(c) => {
+                    color = Some(c);
+                    order = entry.priority();
+                }
+                // Transparent hole: upgrade the stored order only if an
+                // opaque sprite has already written here (mgba's `current !=
+                // FLAG_UNWRITTEN` guard); the color is left untouched.
+                Texel::Transparent if color.is_some() => order = entry.priority(),
+                Texel::Transparent => {}
+                Texel::Outside => unreachable!("filtered above"),
+            }
         }
-        winner
+        color.map(|color| SpritePixel {
+            color,
+            priority: order,
+        })
     }
 
-    /// Sample one sprite's pixel at framebuffer coordinate `(x, y)`, or
-    /// `None` if `(x, y)` is outside the sprite's footprint or lands on a
-    /// transparent (palette index 0) texel.
+    /// Sample one sprite's texel at framebuffer coordinate `(x, y)`:
+    /// [`Texel::Outside`] if `(x, y)` is beyond the sprite's footprint (or
+    /// its tile is absent from the tileset), [`Texel::Transparent`] on a
+    /// palette-index-0 texel, else [`Texel::Opaque`] with the resolved color.
     ///
     /// `x`/`y` are always framebuffer coordinates (`<240`, `<160`) and
     /// sprite dimensions never exceed 64, so the `i32` round-trips below
@@ -133,7 +178,7 @@ impl<'a> SpriteLayer<'a> {
         clippy::cast_possible_wrap,
         clippy::cast_sign_loss
     )]
-    fn sample_entry(&self, entry: &OamEntry, x: usize, y: usize) -> Option<Rgb888> {
+    fn sample_entry(&self, entry: &OamEntry, x: usize, y: usize) -> Texel {
         const DIM: usize = BitDepth::TILE_DIM;
         let (width, height) = entry.dimensions();
 
@@ -142,14 +187,14 @@ impl<'a> SpriteLayer<'a> {
         // offset+clip.
         let dx = x as i32 - i32::from(entry.x());
         if dx < 0 || dx as usize >= width {
-            return None;
+            return Texel::Outside;
         }
 
         // Y: OBJ Y-space wraps modulo 256, so a sprite hanging off the
         // bottom re-appears at the top (oam.rs's module docs).
         let dy = (y as i32 - i32::from(entry.y())).rem_euclid(OamEntry::Y_SPACE) as usize;
         if dy >= height {
-            return None;
+            return Texel::Outside;
         }
 
         // H/V flip mirrors the whole sprite footprint, not each tile
@@ -166,25 +211,50 @@ impl<'a> SpriteLayer<'a> {
         let tile_row = local_row / DIM;
         #[allow(clippy::cast_possible_truncation)] // OAM tile indices fit in u16.
         let tile_offset = (tile_row * tiles_per_row + tile_col) as u16;
-        let tile_idx = entry.tile_index().wrapping_add(tile_offset);
+        // A multi-tile sprite's derived tile index wraps within the 32 KiB
+        // OBJ VRAM window (mgba's `(xBase + charBase) & maskLo` byte-address
+        // wrap), so a base index near the end of OBJ tile space rolls over to
+        // the start rather than reading past it — the mask depends on bit
+        // depth (see [`BitDepth::obj_tile_index_mask`]).
+        let bit_depth = entry.bit_depth();
+        let tile_idx =
+            entry.tile_index().wrapping_add(tile_offset) & bit_depth.obj_tile_index_mask();
 
-        let tileset = match entry.bit_depth() {
+        let tileset = match bit_depth {
             BitDepth::Bpp4 => self.tileset_4bpp,
             BitDepth::Bpp8 => self.tileset_8bpp,
         };
-        let tile = tileset.tile(tile_idx)?;
+        let Some(tile) = tileset.tile(tile_idx) else {
+            return Texel::Outside;
+        };
         let index = tile.index(local_col % DIM, local_row % DIM);
         // Palette index 0 is transparent, in every bank and for 8bpp, same
         // as a regular BG (see bg.rs's sample_pixel).
         if index == 0 {
-            return None;
+            return Texel::Transparent;
         }
-        let color = match entry.bit_depth() {
+        let color = match bit_depth {
             BitDepth::Bpp4 => self.palette.bank_color(entry.palette_bank(), index),
             BitDepth::Bpp8 => self.palette.color(index),
         };
-        Some(color.to_rgb888())
+        Texel::Opaque(color.to_rgb888())
     }
+}
+
+/// One sampled sprite texel: outside the footprint (or missing tile),
+/// transparent (palette index 0), or an opaque color. Distinguishing the
+/// transparent case from the outside case is what lets a better-order sprite
+/// with a transparent hole upgrade the OBJ priority of an opaque sprite
+/// beneath it (see [`SpriteLayer::resolve_pixel`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Texel {
+    /// `(x, y)` lies beyond the sprite's footprint, or its tile is absent
+    /// from the tileset — the sprite does not cover this pixel at all.
+    Outside,
+    /// The sprite covers this pixel but the texel is palette index 0.
+    Transparent,
+    /// The sprite covers this pixel with an opaque texel of this color.
+    Opaque(Rgb888),
 }
 
 #[cfg(test)]
@@ -549,6 +619,155 @@ mod tests {
         assert_eq!(
             layer.resolve_pixel(8, 0).map(|p| p.color),
             Some(colors[2].to_rgb888())
+        );
+    }
+
+    /// Build a 4bpp tileset with tile 0 fully opaque (index 15) and tile 1
+    /// fully transparent (index 0), plus a palette mapping index 15 to blue.
+    fn opaque_and_transparent_tiles() -> (Tileset, Palette) {
+        let mut two_tiles = [0u8; 64];
+        two_tiles[..32].copy_from_slice(&[0xFFu8; 32]); // tile 0: all index 15
+        let tileset = Tileset::decode(BitDepth::Bpp4, &two_tiles).unwrap();
+        let mut colors = [Bgr555::default(); Palette::LEN];
+        colors[15] = Bgr555::from_channels(0, 0, 0x1F); // blue
+        (tileset, Palette::new(colors))
+    }
+
+    fn square_8x8(tile: u16, priority: u8, oam_slot_color_bank: u8) -> OamEntry {
+        OamEntry::new(
+            0,
+            0,
+            tile,
+            oam_slot_color_bank,
+            BitDepth::Bpp4,
+            false,
+            false,
+            ObjShape::Square,
+            0,
+            priority,
+            true,
+        )
+    }
+
+    #[test]
+    fn resolve_pixel_better_sprites_hole_over_opaque_worse_sprite_upgrades_priority() {
+        // Finding 1: opaque B (priority 2, tile 0, OAM index 0) is written
+        // first; A (priority 0, transparent tile 1, OAM index 1) then sits on
+        // top with a hole here. mgba keeps B's color but upgrades the stored
+        // OBJ order to priority 0 (the `else if (current != FLAG_UNWRITTEN)`
+        // branch), so the resolved pixel is B's color at priority 0.
+        let (tileset, palette) = opaque_and_transparent_tiles();
+        let entries = [square_8x8(0, 2, 0), square_8x8(1, 0, 0)];
+        let layer = SpriteLayer::new(&entries, &tileset, &tileset, &palette);
+
+        let pixel = layer.resolve_pixel(0, 0).unwrap();
+        assert_eq!(pixel.color, Bgr555::from_channels(0, 0, 0x1F).to_rgb888());
+        assert_eq!(pixel.priority, 0, "A's hole upgrades B's order to 0");
+    }
+
+    #[test]
+    fn resolve_pixel_better_transparent_sprite_before_opaque_worse_does_not_upgrade() {
+        // The reachable-state subtlety: when the better-order transparent
+        // sprite is iterated *before* any opaque write (OAM index 0), its
+        // hole lands on an unwritten pixel, so mgba's `current !=
+        // FLAG_UNWRITTEN` guard fails and nothing is written. The later
+        // opaque B (priority 2) then writes at its own order, so the pixel
+        // stays priority 2 — a leading hole never promotes anything.
+        let (tileset, palette) = opaque_and_transparent_tiles();
+        // A (priority 0, transparent tile 1) at OAM index 0; B (priority 2,
+        // opaque tile 0) at OAM index 1.
+        let entries = [square_8x8(1, 0, 0), square_8x8(0, 2, 0)];
+        let layer = SpriteLayer::new(&entries, &tileset, &tileset, &palette);
+
+        let pixel = layer.resolve_pixel(0, 0).unwrap();
+        assert_eq!(pixel.color, Bgr555::from_channels(0, 0, 0x1F).to_rgb888());
+        assert_eq!(
+            pixel.priority, 2,
+            "a leading transparent hole over an unwritten pixel must not upgrade order"
+        );
+    }
+
+    #[test]
+    fn multi_tile_sprite_wraps_a_4bpp_tile_index_off_the_end_of_obj_vram() {
+        // Finding 2: a 16x8 (2-tile-wide) 4bpp sprite based at tile 1023 —
+        // the last 4bpp OBJ tile. Its left half reads tile 1023; its right
+        // half's derived index 1024 must wrap modulo 1024 back to tile 0
+        // rather than falling off the end and vanishing.
+        let mut tiles = vec![0u8; 32 * 1024]; // all 1024 4bpp OBJ tiles
+        tiles[0] = 0x11; // tile 0, pixel(0,0) -> index 1 (green)
+        tiles[1023 * 32] = 0x22; // tile 1023, pixel(0,0) -> index 2 (red)
+        let tileset = Tileset::decode(BitDepth::Bpp4, &tiles).unwrap();
+        let mut colors = [Bgr555::default(); Palette::LEN];
+        colors[1] = Bgr555::from_channels(0, 0x1F, 0); // green (tile 0)
+        colors[2] = Bgr555::from_channels(0x1F, 0, 0); // red (tile 1023)
+        let palette = Palette::new(colors);
+
+        let entries = [OamEntry::new(
+            0,
+            0,
+            1023,
+            0,
+            BitDepth::Bpp4,
+            false,
+            false,
+            ObjShape::Horizontal,
+            0, // 16x8
+            0,
+            true,
+        )];
+        let layer = SpriteLayer::new(&entries, &tileset, &tileset, &palette);
+
+        assert_eq!(
+            layer.resolve_pixel(0, 0).map(|p| p.color),
+            Some(colors[2].to_rgb888()),
+            "left half reads base tile 1023"
+        );
+        assert_eq!(
+            layer.resolve_pixel(8, 0).map(|p| p.color),
+            Some(colors[1].to_rgb888()),
+            "right half's index 1024 wraps to tile 0, not dropped"
+        );
+    }
+
+    #[test]
+    fn multi_tile_sprite_wraps_an_8bpp_tile_index_off_the_end_of_obj_vram() {
+        // Finding 2, 8bpp: OBJ VRAM holds 512 native 8bpp tiles, so a 16x8
+        // sprite based at tile 511 wraps its right half (derived index 512)
+        // modulo 512 back to tile 0.
+        let mut tiles = vec![0u8; 64 * 512]; // all 512 8bpp OBJ tiles
+        tiles[0] = 100; // tile 0, pixel(0,0) -> index 100
+        tiles[511 * 64] = 200; // tile 511, pixel(0,0) -> index 200
+        let tileset = Tileset::decode(BitDepth::Bpp8, &tiles).unwrap();
+        let mut colors = [Bgr555::default(); Palette::LEN];
+        colors[100] = Bgr555::from_channels(0, 0x1F, 0);
+        colors[200] = Bgr555::from_channels(0x1F, 0, 0);
+        let palette = Palette::new(colors);
+
+        let entries = [OamEntry::new(
+            0,
+            0,
+            511,
+            0,
+            BitDepth::Bpp8,
+            false,
+            false,
+            ObjShape::Horizontal,
+            0, // 16x8
+            0,
+            true,
+        )];
+        let tileset_4bpp = Tileset::decode(BitDepth::Bpp4, &[0u8; 32]).unwrap();
+        let layer = SpriteLayer::new(&entries, &tileset_4bpp, &tileset, &palette);
+
+        assert_eq!(
+            layer.resolve_pixel(0, 0).map(|p| p.color),
+            Some(colors[200].to_rgb888()),
+            "left half reads base tile 511"
+        );
+        assert_eq!(
+            layer.resolve_pixel(8, 0).map(|p| p.color),
+            Some(colors[100].to_rgb888()),
+            "right half's index 512 wraps to tile 0, not dropped"
         );
     }
 

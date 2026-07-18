@@ -305,6 +305,66 @@ mod tests {
     }
 
     #[test]
+    fn better_sprites_transparent_hole_promotes_a_worse_sprite_over_the_bg() {
+        // Finding 1: opaque sprite B (priority 2) sits under sprite A
+        // (priority 0), whose texel at this pixel is a transparent hole; a BG
+        // sits between them at priority 1. On hardware A's hole upgrades B's
+        // stored OBJ order to priority 0, so the OBJ layer (still showing B's
+        // color) beats the BG — even though B's own priority (2) is worse
+        // than the BG's (1). Pre-fix the OBJ pixel carried priority 2 and the
+        // BG wrongly won.
+        let (ts, pal, tm) = opaque_bg_fixture(7);
+        let bg_layer = crate::bg::BgLayer::new(&ts, &pal, &tm);
+        let slots = [BgSlot::new(bg_layer, 0, 1, 0, 0, true)]; // BG priority 1
+
+        // A single shared 4bpp tileset: tile 0 fully opaque (B draws it),
+        // tile 1 fully transparent (A draws it). B is OAM index 0 so it
+        // writes first; A (index 1) then upgrades the order via its hole.
+        let mut two_tiles = [0u8; 64];
+        two_tiles[..32].copy_from_slice(&[0xFFu8; 32]); // tile 0 -> index 15 everywhere
+        let shared = Tileset::decode(BitDepth::Bpp4, &two_tiles).unwrap();
+        let mut colors = [Bgr555::default(); Palette::LEN];
+        colors[15] = Bgr555::from_channels(0, 0, 9); // B's color (blue)
+        let palette = Palette::new(colors);
+
+        let b_opaque_prio2 = OamEntry::new(
+            0,
+            0,
+            0, // tile 0 (opaque)
+            0,
+            BitDepth::Bpp4,
+            false,
+            false,
+            ObjShape::Square,
+            0,
+            2,
+            true,
+        );
+        let a_transparent_prio0 = OamEntry::new(
+            0,
+            0,
+            1, // tile 1 (transparent)
+            0,
+            BitDepth::Bpp4,
+            false,
+            false,
+            ObjShape::Square,
+            0,
+            0,
+            true,
+        );
+        let entries = [b_opaque_prio2, a_transparent_prio0];
+        let sprites = SpriteLayer::new(&entries, &shared, &shared, &palette);
+
+        let fb = compose_frame(&sprites, &slots);
+        assert_eq!(
+            fb.pixel(0, 0),
+            Some(Bgr555::from_channels(0, 0, 9).to_rgb888()),
+            "B's color must beat the BG because A's hole upgrades it to priority 0"
+        );
+    }
+
+    #[test]
     fn pixel_with_no_opaque_layer_stays_at_the_backdrop() {
         let entries: [OamEntry; 0] = [];
         let no_sprite_tiles = Tileset::decode(BitDepth::Bpp4, &[]).unwrap();

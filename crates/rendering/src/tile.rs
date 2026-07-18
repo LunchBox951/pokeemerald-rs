@@ -31,6 +31,23 @@ impl BitDepth {
             Self::Bpp8 => Self::TILE_DIM * Self::TILE_DIM,
         }
     }
+
+    /// Wrap mask for a derived OBJ (sprite) tile index of this bit depth.
+    ///
+    /// The GBA's OBJ character VRAM is a fixed `0x8000`-byte (32 KiB) window,
+    /// so a multi-tile sprite whose derived tile address runs off the end
+    /// wraps back to the start rather than reading past it. mgba applies this
+    /// as a byte-address mask (`(xBase + charBase) & maskLo`, `maskLo =
+    /// 0x7FFE` for 1D mapping, in `software-obj.c`); expressed as a *native
+    /// tile* index mask it is `mod 1024` for 4bpp (32-byte) tiles and `mod
+    /// 512` for 8bpp (64-byte) tiles, both powers of two `(behavioral-fidelity)`.
+    #[must_use]
+    pub const fn obj_tile_index_mask(self) -> u16 {
+        match self {
+            Self::Bpp4 => 0x03FF, // 1024 tiles * 32 bytes = 0x8000
+            Self::Bpp8 => 0x01FF, // 512 tiles * 64 bytes = 0x8000
+        }
+    }
 }
 
 /// One decoded 8x8 tile: palette indices in row-major order.
