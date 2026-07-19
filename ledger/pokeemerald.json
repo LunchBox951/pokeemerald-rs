@@ -12582,6 +12582,14 @@
       "status": "pending"
     },
     "include/gba/types.h": {
+      "artifacts": {
+        "OamData": {
+          "reason": "OamEntry mirrors struct OamData's regular (non-affine) bitfield layout (y in attr0, x/size/flip in attr1, tile/priority/palette in attr2, shape/bpp in attr0), cross-checked against mgba's GBAObjAttributesA/B/C bitfield decls; affine-mode/matrix-index, mosaic, and objMode (semi-transparent/window) fields are deliberately not modelled (issue #64 scope).",
+          "rust_target": "crates/rendering/src/oam.rs",
+          "spec": "S-2",
+          "status": "rewritten"
+        }
+      },
       "category": "code.header",
       "kind": "file",
       "status": "pending"
@@ -18827,6 +18835,12 @@
           "rust_target": "crates/rendering/src/bg.rs",
           "spec": "S-2",
           "status": "rewritten"
+        },
+        "scroll_wrapping": {
+          "reason": "BgLayer::composite_scrolled/sample_scrolled port ChangeBgX/ChangeBgY's 9-bit wrapping regular-BG scroll offsets: the visible window wraps within the tilemap's own pixel size (256/512px per axis for a hardware-sized regular BG), verified against mgba's software mode-0 renderer; affine BG scroll/rotation is out of scope (issue #64).",
+          "rust_target": "crates/rendering/src/bg.rs",
+          "spec": "S-2",
+          "status": "rewritten"
         }
       },
       "category": "code.source",
@@ -20763,6 +20777,20 @@
       "status": "pending"
     },
     "src/sprite.c": {
+      "artifacts": {
+        "oam_regular_fields": {
+          "reason": "OamEntry/ObjShape/obj_dimensions port the regular (non-affine) OBJ attribute fields sprite.c populates: screen position (with the 9-bit sign-extended X and modulo-256-wrapping Y verified against mgba's software-obj.c), tile index, 4bpp palette bank/8bpp flag, H/V flip, the twelve square/wide/tall shape-size pairs, priority, and enabled state; affine attributes are out of scope (issue #64).",
+          "rust_target": "crates/rendering/src/oam.rs",
+          "spec": "S-2",
+          "status": "rewritten"
+        },
+        "sprite_composite": {
+          "reason": "SpriteLayer composites OamEntry values into pixels: transparency (palette index 0), whole-sprite H/V flip, 1D-mapped multi-tile addressing (DISPCNT_OBJ_1D_MAP, the layout nearly every pokeemerald SetGpuReg(REG_OFFSET_DISPCNT, ...) call uses), off-screen clipping, and the OBJ sprite-vs-sprite priority/OAM-index ordering rule verified against mgba's software-obj.c and video-software.c; affine sprites, windows, and blending are out of scope (issue #64).",
+          "rust_target": "crates/rendering/src/sprite.rs",
+          "spec": "S-2",
+          "status": "rewritten"
+        }
+      },
       "category": "code.source",
       "kind": "file",
       "status": "pending"
