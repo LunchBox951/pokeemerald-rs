@@ -9,12 +9,17 @@
 //! buffer" guidance; a few hundred samples per callback under a short-held
 //! lock is not a contention risk here.
 //!
-//! [`Consumer::pop_or_silence`] is the one primitive every consumer of a
-//! ring buffer is built on — the real device callback,
-//! [`crate::resample::Resampler`], and the null backend used in tests all
-//! call it (directly or via [`Consumer::fill`]), so "fill silence and count
-//! an underrun when the buffer runs dry" is exactly one code path, exercised
-//! by both the tests below and the real playback path.
+//! [`Consumer::fill`] is the hot path every consumer of a ring buffer is
+//! built on — the real device callback, [`crate::resample::Resampler`], and
+//! the null backend used in tests all drive it (directly, or one frame at a
+//! time from the resampler). It takes the queue lock exactly once per call,
+//! bulk-drains whatever is queued into the requested slice, and pads any
+//! shortfall with silence, adding that shortfall to the underrun counter in a
+//! single consolidated update. That keeps the promised "short-held single
+//! lock per callback" true: no per-sample lock churn. [`Consumer::pop_or_silence`]
+//! is the same "fill silence and count one underrun when the buffer runs dry"
+//! rule for a single sample, retained for callers that genuinely want one
+//! sample at a time.
 
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -118,7 +123,9 @@ impl Consumer {
     /// Pop the next queued sample; if none is queued, count one underrun
     /// sample and return silence (`0.0`).
     ///
-    /// The underrun-safe primitive every backend is built on.
+    /// The single-sample form of the underrun-safe rule; the callback hot
+    /// path uses the bulk [`Consumer::fill`] instead, but the accounting is
+    /// identical.
     #[must_use]
     pub fn pop_or_silence(&self) -> f32 {
         self.try_pop().unwrap_or_else(|| {
@@ -127,11 +134,32 @@ impl Consumer {
         })
     }
 
-    /// Fill `out` completely via [`Consumer::pop_or_silence`] — draining
-    /// whatever is queued and padding any shortfall with silence.
+    /// Fill `out` completely under a single lock acquisition — bulk-draining
+    /// whatever is queued into the front of `out` and padding any shortfall
+    /// with silence.
+    ///
+    /// The queue lock is taken exactly once, regardless of `out.len()`: this
+    /// is the callback hot path, so it must not lock per sample. Any
+    /// shortfall (`out` longer than the queue) counts as that many underrun
+    /// samples, added to the counter in one update — identical accounting to
+    /// calling [`Consumer::pop_or_silence`] once per missing sample.
     pub fn fill(&self, out: &mut [f32]) {
-        for slot in out {
-            *slot = self.pop_or_silence();
+        let shortfall = {
+            let mut queue = lock(&self.shared.queue);
+            let drained = out.len().min(queue.len());
+            for (slot, sample) in out.iter_mut().zip(queue.drain(..drained)) {
+                *slot = sample;
+            }
+            for slot in &mut out[drained..] {
+                *slot = 0.0;
+            }
+            out.len() - drained
+        };
+        if shortfall > 0 {
+            self.shared.underruns.fetch_add(
+                u64::try_from(shortfall).unwrap_or(u64::MAX),
+                Ordering::Relaxed,
+            );
         }
     }
 
@@ -182,6 +210,34 @@ mod tests {
         assert_eq!(consumer.underruns(), 3);
         // Producer's view of the counter is the same shared counter.
         assert_eq!(producer.underruns(), 3);
+    }
+
+    #[test]
+    fn bulk_fill_consolidates_shortfall_into_the_underrun_count() {
+        // A single `fill` that outruns the queue must add exactly the missing
+        // sample count to the counter — the bulk drain's consolidated update
+        // is required to match the old per-sample accounting exactly.
+        let (producer, consumer) = ring_buffer(64);
+        assert_eq!(producer.push(&[1.0, 2.0, 3.0]), 3);
+
+        let mut out = [9.0; 10];
+        consumer.fill(&mut out);
+        assert_eq!(out, [1.0, 2.0, 3.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]);
+        // 3 drained, 7 padded: exactly 7 underrun samples from one call.
+        assert_eq!(consumer.underruns(), 7);
+
+        // A wholly-empty fill counts its entire length, accumulating onto the
+        // previous consolidated total.
+        let mut out2 = [0.0; 5];
+        consumer.fill(&mut out2);
+        assert_eq!(consumer.underruns(), 12);
+
+        // A fill fully satisfied by the queue adds nothing.
+        assert_eq!(producer.push(&[4.0, 5.0]), 2);
+        let mut out3 = [0.0; 2];
+        consumer.fill(&mut out3);
+        assert_eq!(out3, [4.0, 5.0]);
+        assert_eq!(consumer.underruns(), 12);
     }
 
     #[test]

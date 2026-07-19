@@ -31,8 +31,8 @@
 //!   [`PlatformError::UnsupportedAudioConfig`].
 //! - **Underruns**: [`Source::fill`] always fills its output buffer
 //!   completely; any shortfall is silence, counted via
-//!   [`crate::ring::Consumer::pop_or_silence`] (see `crate::ring` and
-//!   `crate::resample`) for later use by V-5 audio checks.
+//!   [`crate::ring::Consumer::fill`]'s single-lock bulk drain (see
+//!   `crate::ring` and `crate::resample`) for later use by V-5 audio checks.
 //!
 //! CI is headless, so nothing here opens a real cpal stream in a test: only
 //! [`AudioOutput::open`] and the private `negotiate`/stream-building helpers
@@ -49,9 +49,9 @@ use crate::ring::{ring_buffer, Consumer, Producer};
 /// Either play ring-buffer samples straight through, or bridge a sample-rate
 /// mismatch via [`Resampler`] — see the module docs.
 ///
-/// Both variants bottom out in [`crate::ring::Consumer::pop_or_silence`], so
-/// the underrun-safe behaviour tested against the null backend below is
-/// exactly what the real device callback runs.
+/// Both variants bottom out in [`crate::ring::Consumer::fill`]'s single-lock
+/// bulk drain, so the underrun-safe behaviour tested against the null backend
+/// below is exactly what the real device callback runs.
 enum Source {
     Direct(Consumer),
     Resampled(Resampler),
@@ -308,6 +308,12 @@ fn f32_to_i16(sample: f32) -> i16 {
     }
 }
 
+/// Fallback capacity (interleaved `f32` samples) for the `i16` callback's
+/// scratch buffer when the device advertises no concrete buffer-size range.
+/// Generously larger than any realistic callback buffer (8192 stereo frames)
+/// so pre-sizing still spares the real-time thread an allocation.
+const DEFAULT_SCRATCH_SAMPLES: usize = 8192 * 2;
+
 /// Build (but do not start) the output stream for `config`, driven by
 /// `source`.
 fn build_stream(
@@ -330,7 +336,23 @@ fn build_stream(
             None,
         )?,
         cpal::SampleFormat::I16 => {
-            let mut scratch: Vec<f32> = Vec::new();
+            // Pre-size the `f32` scratch buffer here, off the real-time
+            // callback thread, so steady-state callbacks never allocate. The
+            // device's largest supported buffer (in frames) bounds any
+            // `data.len()` cpal will hand us; multiply by the channel count
+            // for interleaved samples. A device that reports no buffer-size
+            // range gets a generous fallback. The in-callback `resize` below
+            // then only reallocates in the last-resort case where cpal hands
+            // us a buffer larger than anything advertised.
+            let max_frames = match config.buffer_size() {
+                cpal::SupportedBufferSize::Range { max, .. } => usize::try_from(*max).unwrap_or(0),
+                cpal::SupportedBufferSize::Unknown => 0,
+            };
+            let channels = usize::from(config.channels());
+            let scratch_capacity = max_frames
+                .saturating_mul(channels)
+                .max(DEFAULT_SCRATCH_SAMPLES);
+            let mut scratch: Vec<f32> = Vec::with_capacity(scratch_capacity);
             device.build_output_stream(
                 stream_config,
                 move |data: &mut [i16], _| {

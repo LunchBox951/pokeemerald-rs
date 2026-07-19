@@ -3,18 +3,18 @@
 //! directly (see `crate::audio` for when this is and is not used).
 //!
 //! [`Resampler`] pulls interleaved frames from a [`crate::ring::Consumer`]
-//! one at a time via [`crate::ring::Consumer::pop_or_silence`] — the exact
-//! same underrun-safe primitive the no-resampling direct path uses — so
-//! underrun accounting behaves identically whether or not resampling is in
-//! play.
+//! one frame at a time via [`crate::ring::Consumer::fill`] — the exact same
+//! underrun-safe bulk-drain the no-resampling direct path uses — so underrun
+//! accounting behaves identically whether or not resampling is in play, and
+//! each frame pull takes the queue lock once rather than once per sample.
 
 use crate::ring::Consumer;
 
-/// Pull one interleaved frame (`into.len()` samples) from `consumer`.
+/// Pull one interleaved frame (`into.len()` samples) from `consumer` under a
+/// single lock acquisition, padding any shortfall with silence and counting
+/// it as underrun (see [`crate::ring::Consumer::fill`]).
 fn pull_frame(consumer: &Consumer, into: &mut [f32]) {
-    for sample in into {
-        *sample = consumer.pop_or_silence();
-    }
+    consumer.fill(into);
 }
 
 /// Linear-interpolation resampler bridging a [`Consumer`]'s nominal sample
