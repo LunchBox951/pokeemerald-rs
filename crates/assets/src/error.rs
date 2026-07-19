@@ -101,6 +101,24 @@ pub enum AssetError {
     ///
     /// [`MAX_LEVEL`]: crate::experience::MAX_LEVEL
     InvalidLevel(u8),
+
+    /// A [`MapId`] name or [`WildEncounterHeader`] label did not match any
+    /// entry in `gWildMonHeaders`.
+    ///
+    /// Carries the offending name/label.
+    ///
+    /// [`MapId`]: crate::wild_encounters::MapId
+    /// [`WildEncounterHeader`]: crate::wild_encounters::WildEncounterHeader
+    UnknownMap(&'static str),
+
+    /// A [`TrainerId`] fell outside the extracted `gTrainers` range.
+    ///
+    /// Carries the offending id. Valid ids are `0..`[`TrainerTable::LEN`]
+    /// (`0..855`; `0` is `TRAINER_NONE`).
+    ///
+    /// [`TrainerId`]: crate::trainers::TrainerId
+    /// [`TrainerTable::LEN`]: crate::trainers::TrainerTable::LEN
+    UnknownTrainer(u16),
 }
 
 impl fmt::Display for AssetError {
@@ -121,6 +139,8 @@ impl fmt::Display for AssetError {
             Self::NoEggMoves(id) => write!(f, "species id `{id}` has no egg moves"),
             Self::UnknownAbility(id) => write!(f, "unknown ability id `{id}`"),
             Self::InvalidLevel(level) => write!(f, "invalid level `{level}` (exceeds MAX_LEVEL)"),
+            Self::UnknownMap(name) => write!(f, "unknown map or wild-encounter label `{name}`"),
+            Self::UnknownTrainer(id) => write!(f, "unknown trainer id `{id}`"),
         }
     }
 }

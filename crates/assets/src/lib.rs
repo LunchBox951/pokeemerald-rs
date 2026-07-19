@@ -8,9 +8,10 @@
 //! per-species TM/HM learnsets (see [`tmhm_learnsets`]), the per-species
 //! level-up learnsets (see [`level_up_learnsets`]), the per-species
 //! egg-move lists (see [`egg_moves`]), the species/move/ability display text
-//! (see [`species_names`], [`move_names`], [`abilities`]), and the experience
-//! growth curves (see [`experience`]); more data follows as the crate fills
-//! out.
+//! (see [`species_names`], [`move_names`], [`abilities`]), the experience
+//! growth curves (see [`experience`]), the per-map wild encounter tables (see
+//! [`wild_encounters`]), and the trainer roster and parties (see
+//! [`trainers`]); more data follows as the crate fills out.
 
 pub mod abilities;
 pub mod battle_moves;
@@ -24,7 +25,9 @@ pub mod move_names;
 pub mod species;
 pub mod species_names;
 pub mod tmhm_learnsets;
+pub mod trainers;
 pub mod type_chart;
+pub mod wild_encounters;
 
 pub use abilities::{Abilities, AbilityData, ABILITIES_COUNT};
 pub use battle_moves::{
@@ -51,4 +54,14 @@ pub use species::{
 };
 pub use species_names::SpeciesNames;
 pub use tmhm_learnsets::{TmHmLearnsets, TmHmSlot};
+pub use trainers::{
+    AiFlags, EncounterMusic, TrainerClass, TrainerData, TrainerId, TrainerMonItemCustomMoves,
+    TrainerMonItemDefaultMoves, TrainerMonNoItemCustomMoves, TrainerMonNoItemDefaultMoves,
+    TrainerParty, TrainerPicId, TrainerTable, MAX_TRAINER_ITEMS, TRAINERS_COUNT,
+};
 pub use type_chart::{Effectiveness, Type, TypeChart};
+pub use wild_encounters::{
+    FishingEncounters, FishingRod, LandEncounters, MapId, RockSmashEncounters, WaterEncounters,
+    WildEncounterHeader, WildEncounterTable, WildPokemon, FISHING_SLOTS, LAND_SLOTS,
+    MAP_HEADER_COUNT, ROCK_SMASH_SLOTS, WATER_SLOTS,
+};
