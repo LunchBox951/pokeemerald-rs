@@ -86,6 +86,16 @@ We default to the standard library; every crate added is justified here
   (`libX11`/`libxcb`) and/or Wayland (`libwayland-client`) client libraries to
   present pixels into the window's surface — same caveat as `winit` above, not
   pure-Rust-only.
+- **`cpal`** (`crates/platform`) — the RustAudio project's cross-platform
+  audio I/O library: opening the default output device and running one
+  output stream that a ring-buffer callback fills. Owner-approved for
+  exactly this crate and exactly this scope in Discussion #78 — no decoding,
+  no effects, just the device/stream and the callback the future `audio`
+  crate (M4A engine) writes PCM into. On Linux it binds the system ALSA
+  library (`libasound`) at compile/link time — it is a normal Rust crate
+  binding that system lib, not FFI or linkage to the upstream C `(no-ffi)`;
+  it is **not** a pure-Rust-only dependency, same caveat as `winit`/
+  `softbuffer` above.
 
 ## License
 

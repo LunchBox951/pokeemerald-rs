@@ -5,7 +5,8 @@
 
 use std::fmt;
 
-/// An error produced while creating or driving the platform window.
+/// An error produced while creating or driving the platform window or audio
+/// output.
 #[derive(Debug)]
 pub enum PlatformError {
     /// The windowing event loop could not be created, or failed while
@@ -15,6 +16,14 @@ pub enum PlatformError {
     Os(winit::error::OsError),
     /// `softbuffer` failed to create, resize, or present a surface.
     SoftBuffer(softbuffer::SoftBufferError),
+    /// No default audio output device is available (headless CI, no audio
+    /// hardware, no driver running, etc).
+    NoAudioDevice,
+    /// The default audio output device has no stream configuration this
+    /// crate can use (see `crate::audio` for the requirements).
+    UnsupportedAudioConfig,
+    /// `cpal` failed to query, configure, build, or drive an audio stream.
+    Audio(cpal::Error),
 }
 
 impl fmt::Display for PlatformError {
@@ -23,6 +32,14 @@ impl fmt::Display for PlatformError {
             Self::EventLoop(err) => write!(f, "windowing event loop error: {err}"),
             Self::Os(err) => write!(f, "OS window error: {err}"),
             Self::SoftBuffer(err) => write!(f, "softbuffer presentation error: {err}"),
+            Self::NoAudioDevice => write!(f, "no default audio output device is available"),
+            Self::UnsupportedAudioConfig => {
+                write!(
+                    f,
+                    "the default audio output device has no usable stream configuration"
+                )
+            }
+            Self::Audio(err) => write!(f, "audio device error: {err}"),
         }
     }
 }
@@ -33,6 +50,8 @@ impl std::error::Error for PlatformError {
             Self::EventLoop(err) => Some(err),
             Self::Os(err) => Some(err),
             Self::SoftBuffer(err) => Some(err),
+            Self::NoAudioDevice | Self::UnsupportedAudioConfig => None,
+            Self::Audio(err) => Some(err),
         }
     }
 }
@@ -52,5 +71,11 @@ impl From<winit::error::OsError> for PlatformError {
 impl From<softbuffer::SoftBufferError> for PlatformError {
     fn from(err: softbuffer::SoftBufferError) -> Self {
         Self::SoftBuffer(err)
+    }
+}
+
+impl From<cpal::Error> for PlatformError {
+    fn from(err: cpal::Error) -> Self {
+        Self::Audio(err)
     }
 }
