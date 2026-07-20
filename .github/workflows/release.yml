@@ -58,6 +58,9 @@ jobs:
       VERSION: ${{ needs.setup.outputs.version }}
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+      - name: Install ALSA dev headers (Linux; crates/platform's cpal dependency links libasound at compile time)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev
       - name: cargo build --release --workspace
         run: cargo build --release --workspace
       - name: Package Linux archive

@@ -8,5 +8,6 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
+cpal = "0.18"
 softbuffer = "0.4"
 winit = "0.30"

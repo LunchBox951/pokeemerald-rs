@@ -1,9 +1,7 @@
-//! Platform subsystem (S-1): window, input mapping, frame pacing, and
-//! `softbuffer` presentation. Audio output is explicitly deferred to S-3
-//! (`cpal`, its own future sign-off per Discussion #17) and is out of scope
-//! here.
+//! Platform subsystem (S-1): window, input mapping, frame pacing,
+//! `softbuffer` presentation, and audio output.
 //!
-//! Four owned types, one per concern `(oop-boundaries)`:
+//! Owned types, one per concern `(oop-boundaries)`:
 //!
 //! - [`input::Buttons`] / [`input::ButtonState`] / [`input::Keymap`] — the
 //!   GBA button bitmask (mirroring `pokeemerald/include/gba/io_reg.h`), the
@@ -19,19 +17,33 @@
 //!   the native window, and the `softbuffer` surface, and exposes all of the
 //!   above behind a small per-frame API (pump events, read button state,
 //!   present a frame, pace to the next one).
+//! - [`audio::AudioOutput`] — the audio output device (or a headless null
+//!   stand-in): owns at most one `cpal` output stream and exposes a
+//!   [`ring::Producer`] handle the future `audio` crate (M4A engine, S-3)
+//!   fills from its own thread. `cpal` is owner-approved for exactly this
+//!   crate and use in Discussion #78.
 //!
-//! CI is headless, so nothing here opens a real window in a test; only
-//! [`window::Platform`] touches `winit`/`softbuffer` directly; the other
-//! three modules are pure logic with full unit-test coverage.
+//! CI is headless, so nothing here opens a real window or a real `cpal`
+//! stream in a test; only [`window::Platform`] and [`audio::AudioOutput`]
+//! touch `winit`/`softbuffer`/`cpal` directly, and `AudioOutput` only does so
+//! behind its explicit `open` constructor — its `null` constructor and the
+//! `ring`/`resample` modules it is built on are pure logic with full
+//! unit-test coverage.
 
+pub mod audio;
 pub mod error;
 pub mod input;
 pub mod pacing;
 pub mod present;
+pub mod resample;
+pub mod ring;
 pub mod window;
 
+pub use audio::AudioOutput;
 pub use error::PlatformError;
 pub use input::{ButtonState, Buttons, Keymap};
 pub use pacing::{FramePacer, GBA_FRAME_PERIOD};
 pub use present::{Frame, Letterbox, GBA_HEIGHT, GBA_WIDTH, PIXEL_COUNT};
+pub use resample::Resampler;
+pub use ring::{ring_buffer, Consumer, Producer};
 pub use window::Platform;
