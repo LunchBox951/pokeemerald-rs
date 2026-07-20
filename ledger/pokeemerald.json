@@ -20189,11 +20189,45 @@
       "status": "pending"
     },
     "src/m4a.c": {
+      "artifacts": {
+        "MidiKeyToFreq": {
+          "reason": "MidiKeyToFreq + umul3232H32 re-implemented behaviourally as pitch::midi_key_to_freq/umul3232_hi (S-3 slice 1).",
+          "rust_target": "crates/audio/src/pitch.rs",
+          "spec": "S-3",
+          "status": "rewritten"
+        },
+        "TrkVolPitSet": {
+          "reason": "TrkVolPitSet vol/pan+pitch resolution re-implemented as sequencer::track_volume/track_pitch (S-3 slice 1).",
+          "rust_target": "crates/audio/src/sequencer.rs",
+          "spec": "S-3",
+          "status": "rewritten"
+        }
+      },
       "category": "code.source",
       "kind": "file",
       "status": "pending"
     },
     "src/m4a_tables.c": {
+      "artifacts": {
+        "gClockTable": {
+          "reason": "Note-length clock table reproduced as sequence::CLOCK_TABLE for wait/note decoding (S-3 slice 1).",
+          "rust_target": "crates/audio/src/sequence.rs",
+          "spec": "S-3",
+          "status": "ported"
+        },
+        "gFreqTable": {
+          "reason": "Per-octave Q32 frequency-ratio table reproduced as pitch::FREQ_TABLE (S-3 slice 1).",
+          "rust_target": "crates/audio/src/pitch.rs",
+          "spec": "S-3",
+          "status": "ported"
+        },
+        "gScaleTable": {
+          "reason": "MIDI-key scale table reproduced as pitch::SCALE_TABLE, backing midi_key_to_freq (S-3 slice 1).",
+          "rust_target": "crates/audio/src/pitch.rs",
+          "spec": "S-3",
+          "status": "ported"
+        }
+      },
       "category": "code.source",
       "kind": "file",
       "status": "pending"

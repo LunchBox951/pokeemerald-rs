@@ -6,3 +6,9 @@ publish.workspace = true
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+# The offline mixer renders at exactly `platform::AudioOutput::M4A_MIXER_RATE`;
+# the smoke test/example feeds a rendered sequence through that producer API.
+# `platform` is an in-workspace crate, not a new external dependency.
+platform = { path = "../platform" }
