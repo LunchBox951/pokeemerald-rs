@@ -1211,6 +1211,10 @@ dependencies = [
 [[package]]
 name = "pokeemerald-rs"
 version = "0.0.0"
+dependencies = [
+ "platform",
+ "rendering",
+]
 
 [[package]]
 name = "polling"
