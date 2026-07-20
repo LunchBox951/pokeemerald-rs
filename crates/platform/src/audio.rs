@@ -335,11 +335,21 @@ fn is_openable_format(format: cpal::SampleFormat) -> bool {
 /// Candidates are first restricted to formats [`build_stream`] can open
 /// (`f32`/`i16`) — a `u16`-only config whose rate range happens to cover the
 /// target must never win, or `AudioOutput::open` would hard-fail instead of
-/// resampling on an available openable format. Among the openable survivors
-/// (ranked by [`sample_format_rank`], `f32` before `i16`) it prefers any
-/// candidate whose `[min, max]` range covers `target` exactly; failing that,
-/// it clamps `target` into the most-preferred openable candidate's range for
-/// [`AudioOutput::open`] to resample against.
+/// resampling on an available openable format. Each openable candidate is then
+/// scored by `(format rank, distance)`, where `distance` is how far `target`
+/// must be clamped to land inside the candidate's `[min, max]` range, and the
+/// minimum is chosen:
+///
+/// - **Format rank is primary** ([`sample_format_rank`]: `f32` before `i16`).
+///   `f32` is the ring buffer's native format, and the 13379 Hz target is
+///   resampled on real hardware either way (see the module docs), so an `f32`
+///   config is preferred even over an `i16` config that sits nearer the
+///   target — the extra resample distance costs nothing the direct path saves.
+/// - **Distance is secondary**: within one format the nearest achievable rate
+///   wins, regardless of the order the device enumerated its ranges. A range
+///   that covers `target` has distance `0`, so exact support is naturally
+///   preferred over resampling within the same format. Ties (equal rank and
+///   distance) keep device-enumeration order.
 ///
 /// Returns the chosen candidate's index into `candidates` and the rate to
 /// open it at, or `None` if no openable candidate exists.
@@ -347,23 +357,15 @@ fn select_config(
     candidates: &[(cpal::SampleFormat, u32, u32)],
     target: u32,
 ) -> Option<(usize, u32)> {
-    let mut openable: Vec<usize> = (0..candidates.len())
+    (0..candidates.len())
         .filter(|&i| is_openable_format(candidates[i].0))
-        .collect();
-    // Stable sort by format preference keeps the original device order within
-    // a format.
-    openable.sort_by_key(|&i| sample_format_rank(candidates[i].0));
-
-    if let Some(&i) = openable
-        .iter()
-        .find(|&&i| (candidates[i].1..=candidates[i].2).contains(&target))
-    {
-        return Some((i, target));
-    }
-
-    let &i = openable.first()?;
-    let (_, min, max) = candidates[i];
-    Some((i, target.clamp(min, max)))
+        .map(|i| {
+            let (format, min, max) = candidates[i];
+            let rate = target.clamp(min, max);
+            (i, rate, sample_format_rank(format), rate.abs_diff(target))
+        })
+        .min_by_key(|&(_, _, rank, distance)| (rank, distance))
+        .map(|(i, rate, _, _)| (i, rate))
 }
 
 /// Pick a stereo output configuration for [`AudioOutput::M4A_MIXER_RATE`],
@@ -596,14 +598,28 @@ mod tests {
     }
 
     #[test]
-    fn select_config_takes_i16_exact_over_f32_noncovering() {
-        // f32 is preferred but does not cover the target; the exact-rate i16
-        // config beats resampling on f32.
+    fn select_config_prefers_f32_over_a_nearer_i16() {
+        // Policy: format rank is primary, distance secondary. f32 does not
+        // cover the target and must be resampled from 44100; i16 covers 13379
+        // exactly (distance 0). f32 still wins — it is the ring buffer's native
+        // format and the target is resampled on real hardware either way, so
+        // the extra resample distance costs nothing the direct path would save.
         let candidates = [
-            (cpal::SampleFormat::F32, 44_100, 48_000), // does not cover 13379
-            (cpal::SampleFormat::I16, 8_000, 48_000),  // covers 13379 exactly
+            (cpal::SampleFormat::F32, 44_100, 48_000), // rank 0, distance 30721
+            (cpal::SampleFormat::I16, 8_000, 48_000),  // rank 1, distance 0
         ];
-        assert_eq!(select_config(&candidates, 13_379), Some((1, 13_379)));
+        assert_eq!(select_config(&candidates, 13_379), Some((0, 44_100)));
+    }
+
+    #[test]
+    fn select_config_picks_nearest_rate_within_a_format() {
+        // Two f32 ranges, the LATER one nearer the target: distance decides
+        // within a format, independent of device-enumeration order.
+        let candidates = [
+            (cpal::SampleFormat::F32, 44_100, 48_000), // nearest 44100, distance 30721
+            (cpal::SampleFormat::F32, 8_000, 11_025),  // nearest 11025, distance 2354
+        ];
+        assert_eq!(select_config(&candidates, 13_379), Some((1, 11_025)));
     }
 
     #[test]

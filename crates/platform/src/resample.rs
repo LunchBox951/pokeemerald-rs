@@ -11,6 +11,14 @@
 //! frame — so the resampled path locks no more often than the direct path,
 //! and underrun accounting (counted inside `Consumer::fill`) is identical
 //! whether or not resampling is in play.
+//!
+//! A source frame is pulled only when an output frame actually consumes it:
+//! the per-frame advance runs *before* producing each frame (never as a
+//! trailing step after the last one), so the lookahead frame the *next*
+//! callback needs is deferred to that callback — when the producer has had
+//! time to refill. Pulling it eagerly at end-of-callback would latch a
+//! spurious underrun/silence into `next` whenever the producer was momentarily
+//! one frame short, a glitch the direct path never produces.
 
 use crate::ring::Consumer;
 
@@ -42,6 +50,12 @@ pub struct Resampler {
     /// than the constructor's estimate).
     scratch: Vec<f32>,
     primed: bool,
+    /// Whether the next output frame should first advance the interpolation
+    /// cursor. `false` only for the very first frame ever produced (which sits
+    /// exactly on the primed `prev`); `true` forever after. Advancing *before*
+    /// each frame — rather than after — is what defers the trailing lookahead
+    /// pull to the next callback (see the module docs).
+    need_advance: bool,
 }
 
 impl Resampler {
@@ -89,6 +103,7 @@ impl Resampler {
             next: vec![0.0; channels],
             scratch: vec![0.0; scratch_frames * channels],
             primed: false,
+            need_advance: false,
         }
     }
 
@@ -114,21 +129,29 @@ impl Resampler {
         let steps = out.len().div_ceil(self.channels);
 
         // Source frames this call consumes: 2 to prime the `prev`/`next`
-        // lookahead on the first call, plus one per source-frame boundary the
-        // interpolation cursor crosses. Count the crossings with a dry run
-        // using the *identical* f64 arithmetic the loop below performs, so the
-        // bulk drain matches consumption exactly — never relying on `floor`
-        // agreeing with incremental accumulation at an exact boundary (a
-        // mismatch would drop a source frame or index past the scratch).
+        // lookahead on the very first call, plus one per source-frame boundary
+        // the interpolation cursor crosses. The advance runs *before* each
+        // frame (skipped only for the very first frame ever), so the trailing
+        // lookahead pull is deferred to the next callback — see the module
+        // docs. Count the crossings with a dry run that mirrors the loop below
+        // exactly: same `need_advance` gate, same `frac`/`step` f64 arithmetic
+        // in the same order. That parity is what makes the bulk drain match
+        // consumption precisely — never relying on `floor` agreeing with
+        // incremental accumulation at an exact boundary (a mismatch would drop
+        // a source frame or index past the scratch).
         let prime = if self.primed { 0 } else { 2 };
         let mut frac_probe = self.frac;
+        let mut advance_probe = self.need_advance;
         let mut crossings = 0usize;
         for _ in 0..steps {
-            frac_probe += self.step;
-            while frac_probe >= 1.0 {
-                frac_probe -= 1.0;
-                crossings += 1;
+            if advance_probe {
+                frac_probe += self.step;
+                while frac_probe >= 1.0 {
+                    frac_probe -= 1.0;
+                    crossings += 1;
+                }
             }
+            advance_probe = true;
         }
         let source_frames = prime + crossings;
         let needed = source_frames * self.channels;
@@ -151,24 +174,30 @@ impl Resampler {
         }
 
         for frame in out.chunks_mut(self.channels) {
+            // Advance to this frame's position first, pulling the source
+            // frame(s) it needs. Skipped only for the first frame ever, which
+            // sits exactly on the primed `prev`/`next` pair at `frac == 0`.
+            if self.need_advance {
+                self.frac += self.step;
+                while self.frac >= 1.0 {
+                    self.frac -= 1.0;
+                    std::mem::swap(&mut self.prev, &mut self.next);
+                    let base = src * self.channels;
+                    self.next
+                        .copy_from_slice(&self.scratch[base..base + self.channels]);
+                    src += 1;
+                }
+            }
+            self.need_advance = true;
+
             // `self.frac` is a loop invariant always in `[0.0, 1.0)` (see
-            // the `while` below), so narrowing to `f32` here never
+            // the `while` above), so narrowing to `f32` here never
             // truncates meaningfully — audio-rate linear interpolation
             // doesn't need `f64`'s extra precision either way.
             #[allow(clippy::cast_possible_truncation)]
             let frac = self.frac as f32;
             for ((sample, &prev), &next) in frame.iter_mut().zip(&self.prev).zip(&self.next) {
                 *sample = prev.mul_add(1.0 - frac, next * frac);
-            }
-
-            self.frac += self.step;
-            while self.frac >= 1.0 {
-                self.frac -= 1.0;
-                std::mem::swap(&mut self.prev, &mut self.next);
-                let base = src * self.channels;
-                self.next
-                    .copy_from_slice(&self.scratch[base..base + self.channels]);
-                src += 1;
             }
         }
     }
@@ -186,13 +215,12 @@ mod tests {
 
     #[test]
     fn identity_ratio_passes_frames_through_unchanged() {
-        // `Resampler` always keeps one frame of lookahead (`prev`/`next`),
-        // so priming plus 4 output frames pulls 6 source frames total; push
-        // exactly that many so the pass-through values are exercised
-        // without also tripping the tail-end underrun that lookahead
-        // otherwise causes once the source runs out (production code never
-        // hits this: `AudioOutput::open` only builds a `Resampler` when the
-        // rates actually differ, never for this identity case).
+        // With the deferred lookahead pull, priming plus 4 output frames pulls
+        // only 5 source frames within this call (the 6th is deferred to a next
+        // callback that never comes here); push a comfortable margin so the
+        // pass-through values are exercised without a tail-end underrun
+        // (production code never hits this identity case: `AudioOutput::open`
+        // only builds a `Resampler` when the rates actually differ).
         let (producer, consumer) = ring_buffer(16);
         assert_eq!(producer.push(&[0.0, 10.0, 20.0, 30.0, 40.0, 50.0]), 6);
         let mut resampler = Resampler::new(consumer, 1, 100, 100, 16);
@@ -215,8 +243,10 @@ mod tests {
         let mut out = [0.0; 4];
         resampler.fill(&mut out);
         assert_eq!(out, [0.0, 5.0, 10.0, 15.0]);
-        // The 4th output frame's "next" pull ran past the 3 queued samples.
-        assert_eq!(resampler.underruns(), 1);
+        // No underrun: this call consumes exactly the 3 queued frames. The
+        // eager lookahead pull that formerly ran past them (recording a
+        // spurious 4th-frame underrun) is now deferred to the next callback.
+        assert_eq!(resampler.underruns(), 0);
     }
 
     #[test]
@@ -231,7 +261,10 @@ mod tests {
         let mut out = [0.0; 2];
         resampler.fill(&mut out);
         assert_eq!(out, [0.0, 20.0]);
-        assert_eq!(resampler.underruns(), 1);
+        // No underrun: 2 output frames consume 4 of the 5 queued source frames
+        // (the deferred lookahead frame would be the 5th). The former
+        // eager-pull assertion of 1 encoded the trailing-pull artifact.
+        assert_eq!(resampler.underruns(), 0);
     }
 
     #[test]
@@ -244,5 +277,33 @@ mod tests {
         let mut out = [0.0; 4]; // 2 stereo frames
         resampler.fill(&mut out);
         assert_eq!(out, [0.0, 100.0, 5.0, 150.0]);
+    }
+
+    #[test]
+    fn deferred_pull_avoids_glitch_when_producer_catches_up_between_callbacks() {
+        // step = 0.5. Callback 1 is given exactly the source frames it needs
+        // (0, 10); the eager-pull code would have pulled a 3rd frame past the
+        // queue end, recording an underrun and latching silence into `next`.
+        // With the pull deferred, callback 1 underruns 0 and leaves `next`
+        // pointing at real data. The producer then supplies the next frame
+        // (20) *before* callback 2, which must interpolate 10 -> 20 cleanly
+        // (no silence blend) with underruns still 0.
+        let (producer, consumer) = ring_buffer(16);
+        assert_eq!(producer.push(&[0.0, 10.0]), 2);
+        let mut resampler = Resampler::new(consumer, 1, 1, 2, 8);
+
+        let mut cb1 = [0.0; 2];
+        resampler.fill(&mut cb1);
+        assert_eq!(cb1, [0.0, 5.0]);
+        assert_eq!(resampler.underruns(), 0);
+
+        // Producer catches up between callbacks.
+        assert_eq!(producer.push(&[20.0]), 1);
+
+        let mut cb2 = [0.0; 2];
+        resampler.fill(&mut cb2);
+        // Interpolates against the real frame 20, not stale silence.
+        assert_eq!(cb2, [10.0, 15.0]);
+        assert_eq!(resampler.underruns(), 0);
     }
 }
