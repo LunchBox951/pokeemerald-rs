@@ -59,22 +59,27 @@
 //!
 //! Upstream draws a sharp line between two ways a var-id operand gets
 //! resolved:
-//! * `VarGet`/`GetVarPointer` (what [`EventData::var_get`] mirrors): an id
-//!   below `VARS_START` passes through unchanged as an immediate value — the
-//!   `compare`/`setorcopyvar`/`subvar` opcodes below use this so a script can
-//!   pass either a `VAR_*` id or a literal in the same operand slot.
+//! * `VarGet` (what [`EventData::var_get`] mirrors): an id below `VARS_START`
+//!   passes through unchanged as an immediate value — only `setorcopyvar`'s
+//!   source and `subvar`'s subtrahend use this upstream, so a script can pass
+//!   either a `VAR_*` id or a literal in those two operand slots.
 //! * A raw, unchecked `GetVarPointer(id)` dereference (what `setvar`,
-//!   `addvar`'s destination, and `copyvar`'s source use upstream): `id`
-//!   *must* already be a valid var id, or the dereference is undefined
-//!   behaviour. This port has no raw-pointer primitive to reproduce that
-//!   with — [`EventData::var_get`]/[`EventData::var_set`] (the *checked*
+//!   `addvar`'s destination, `copyvar`'s source, and `compare`'s var operand
+//!   use upstream): `id` *must* already be a valid var id, or the dereference
+//!   is undefined behaviour. Note `compare_var_to_value` reads its var operand
+//!   as `*GetVarPointer(...)`, the *same* raw-deref primitive as `copyvar`'s
+//!   source — not `VarGet` — so its var slot is a strict var id, never a
+//!   literal-or-var slot (its *second* operand is the literal). This port has
+//!   no raw-pointer primitive to reproduce that with —
+//!   [`EventData::var_get`]/[`EventData::var_set`] (the *checked*
 //!   `VarGet`/`VarSet`) are the only var accessors it exposes — so every
 //!   command below reads and writes vars through them uniformly. For every
 //!   id a real script ever actually passes (always a proper `VAR_*` id in
-//!   these positions) the two give identical results; the only place this
-//!   is observable is `copyvar`'s source, which then behaves exactly like
-//!   `setorcopyvar`'s already-checked resolution — a strictly safer
-//!   substitute for upstream's UB, not a behavioural gap `(behavioral-fidelity)`.
+//!   these positions) the two give identical results; the only places this
+//!   is observable are `copyvar`'s source and `compare`'s var operand, which
+//!   then behave exactly like `setorcopyvar`'s already-checked resolution — a
+//!   strictly safer substitute for upstream's UB, not a behavioural gap
+//!   `(behavioral-fidelity)`.
 //!
 //! `addvar`'s second operand is the one documented exception:
 //! `pokeemerald/asm/macros/event.inc` notes upstream `ScrCmd_addvar` never
