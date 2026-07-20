@@ -24,7 +24,8 @@ pub enum Event {
     /// [`Event::EndOfTie`] or explicit stop.
     Note { key: u8, velocity: u8, gate: u8 },
     /// End a tie (`EOT`); `key` is `None` when the command omitted its key
-    /// operand (the track's current key is used).
+    /// operand, in which case the sequencer matches on the track's current key
+    /// (`track->key`, the last note's key).
     EndOfTie { key: Option<u8> },
     /// Delay this track for `ticks` sequencer ticks (`W..` commands).
     Wait(u8),

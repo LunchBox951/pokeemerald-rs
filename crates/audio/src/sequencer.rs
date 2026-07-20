@@ -50,6 +50,9 @@ struct TrackState {
     bend_range: u8,
     tune: i8,
     key_shift: i8,
+    /// The track's current MIDI key (`track->key`): the raw key of the last
+    /// note, reused when an `EOT` omits its key operand (`m4a_1.s:1830`).
+    key: u8,
 }
 
 impl TrackState {
@@ -65,6 +68,9 @@ impl TrackState {
             bend_range: DEFAULT_BEND_RANGE,
             tune: 0,
             key_shift: 0,
+            // Upstream zeroes `track->key` at init; no `EOT` should fire before
+            // a note sets it in real data.
+            key: 0,
         }
     }
 }
@@ -241,9 +247,22 @@ impl Sequencer {
                 velocity,
                 gate,
             } => {
+                // `ply_note` records the raw command key as `track->key`.
+                track.key = key;
                 Self::note_on(song, track, mixer, track_id, key, velocity, gate);
             }
-            Event::EndOfTie { key } => mixer.note_off_track(track_id, key),
+            Event::EndOfTie { key } => {
+                // With an operand, `ply_endtie` stores it as the new `track->key`
+                // and matches on it; without one, it matches the current key.
+                let match_key = match key {
+                    Some(k) => {
+                        track.key = k;
+                        k
+                    }
+                    None => track.key,
+                };
+                mixer.note_off_track(track_id, match_key);
+            }
             // Decoded but not executed by this slice (see the module docs).
             _ => {}
         }
@@ -524,6 +543,56 @@ mod tests {
         let mut out = vec![0.0; Sequencer::FRAME_SAMPLES * 3];
         seq.mix_into(&mut out);
         assert!(out.iter().any(|&s| s.abs() > 0.0));
+    }
+
+    /// A song whose instrument reads a wave at frequency `0`, so a tied voice
+    /// never advances through the sample and only stops on an explicit
+    /// note-off — isolating end-of-tie behaviour from wave exhaustion.
+    fn held_note_song(track: Vec<Event>) -> Song {
+        let wave = Arc::new(WaveData::one_shot(0, vec![100; SAMPLES_PER_FRAME]));
+        let voices = vec![ToneData::new(wave, Adsr::flat())];
+        Song::new(voices, vec![track], 150)
+    }
+
+    #[test]
+    fn end_of_tie_without_operand_stops_only_the_last_keyed_note() {
+        // Two overlapping tied notes (keys 60 then 64). An `EOT` with no
+        // operand resolves to the track's current key (64, the last note),
+        // retiring only that voice; the key-60 note keeps sounding. A later
+        // `EOT` naming key 60 then retires the survivor — proving the omitted
+        // operand resolved to 64, not 60 and not "every voice".
+        let track = vec![
+            Event::Voice(0),
+            Event::Note {
+                key: 60,
+                velocity: 127,
+                gate: 0,
+            },
+            Event::Note {
+                key: 64,
+                velocity: 127,
+                gate: 0,
+            },
+            Event::EndOfTie { key: None },
+            Event::Wait(2),
+            Event::EndOfTie { key: Some(60) },
+            Event::Wait(2),
+            Event::Fine,
+        ];
+        let mut seq = Sequencer::new(held_note_song(track));
+        let mut out = vec![0.0; Sequencer::FRAME_SAMPLES];
+
+        seq.render_frame(&mut out);
+        // Exactly one voice retired: the last-keyed note (64). Before the fix
+        // this stopped both voices, leaving zero.
+        assert_eq!(seq.voice_count(), 1);
+
+        // Advance until the `EOT{Some(60)}` fires; the survivor was key 60, so
+        // it is now retired too.
+        for _ in 0..4 {
+            seq.render_frame(&mut out);
+        }
+        assert_eq!(seq.voice_count(), 0);
     }
 
     #[test]

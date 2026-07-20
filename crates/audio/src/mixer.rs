@@ -86,15 +86,18 @@ impl Mixer {
         }
     }
 
-    /// Release every still-sounding voice on `track` whose key matches `key`
-    /// (end-of-tie), or all of the track's voices when `key` is `None`.
-    pub fn note_off_track(&mut self, track: usize, key: Option<u8>) {
+    /// Release the *first* still-sounding voice on `track` whose MIDI key is
+    /// `key` (end-of-tie), then stop.
+    ///
+    /// This mirrors `ply_endtie` (`m4a_1.s:1837`): it walks the track's channel
+    /// list and stops only the first channel matching `track->key`, breaking out
+    /// of the loop on the first hit. A track can hold several voices with the
+    /// same key (overlapping ties), and an `EOT` retires just one of them.
+    pub fn note_off_track(&mut self, track: usize, key: u8) {
         for voice in &mut self.voices {
-            if voice.track() == track
-                && !voice.is_stopping()
-                && key.is_none_or(|k| k == voice.midi_key())
-            {
+            if voice.track() == track && !voice.is_stopping() && voice.midi_key() == key {
                 voice.note_off();
+                break;
             }
         }
     }
@@ -155,17 +158,22 @@ mod tests {
     }
 
     fn constant_voice(level: i8, track: usize) -> Voice {
-        // A long constant wave so a whole frame renders without ending.
+        keyed_voice(level, track, 60, 0xFF, 0xFF)
+    }
+
+    fn keyed_voice(level: i8, track: usize, key: u8, right: u8, left: u8) -> Voice {
+        // A long constant wave so a whole frame renders without ending; a `0`
+        // gate makes it tied (it only stops on an explicit note-off).
         let data = vec![level; SAMPLES_PER_FRAME + 4];
         let wave = Arc::new(WaveData::one_shot(0, data));
         Voice::new(
             wave,
             Adsr::flat(),
             unity_freq(),
-            0xFF,
-            0xFF,
+            right,
+            left,
             0,
-            60,
+            key,
             track,
             0,
             0,
@@ -228,6 +236,40 @@ mod tests {
         let mut out = vec![0.0; SAMPLES_PER_FRAME * 2];
         mixer.mix_frame(&mut out);
         assert!((out[0] - (-1.0)).abs() < 1e-6);
+    }
+
+    #[test]
+    fn note_off_track_stops_only_the_first_matching_voice() {
+        // Two overlapping voices share key 60 on track 0; a third holds key 64.
+        // `EOT` retires exactly one key-60 voice, leaving the other still
+        // sounding (mirrors `ply_endtie`'s break-on-first-match).
+        let mut mixer = Mixer::default();
+        mixer.add_voice(keyed_voice(50, 0, 60, 0xFF, 0xFF));
+        mixer.add_voice(keyed_voice(50, 0, 60, 0xFF, 0xFF));
+        mixer.add_voice(keyed_voice(50, 0, 64, 0xFF, 0xFF));
+        mixer.note_off_track(0, 60);
+        let mut out = vec![0.0; SAMPLES_PER_FRAME * 2];
+        mixer.mix_frame(&mut out);
+        // Only the first key-60 voice was released and retired.
+        assert_eq!(mixer.voice_count(), 2);
+    }
+
+    #[test]
+    fn note_off_track_matches_the_requested_key() {
+        // Key 60 is panned hard-left, key 64 hard-right, both on track 0. An
+        // `EOT` on key 64 stops only that voice, silencing the right channel
+        // while the left keeps sounding.
+        let mut mixer = Mixer::default();
+        mixer.add_voice(keyed_voice(60, 0, 60, 0x00, 0xFF));
+        mixer.add_voice(keyed_voice(60, 0, 64, 0xFF, 0x00));
+        mixer.note_off_track(0, 64);
+        let mut out = vec![0.0; SAMPLES_PER_FRAME * 2];
+        mixer.mix_frame(&mut out);
+        let left: f32 = out.iter().step_by(2).map(|s| s.abs()).sum();
+        let right: f32 = out.iter().skip(1).step_by(2).map(|s| s.abs()).sum();
+        assert_eq!(mixer.voice_count(), 1);
+        assert!(left > 0.0, "surviving key-60 voice should keep sounding");
+        assert_eq!(right, 0.0, "released key-64 voice should be silent");
     }
 
     #[test]
