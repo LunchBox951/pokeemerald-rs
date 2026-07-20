@@ -18,13 +18,15 @@
 //!   instead (common on Linux/ALSA), the device callback converts on the
 //!   way out; the ring buffer and the `audio` crate's producer API never
 //!   need to know.
-//! - **Sample rate**: [`AudioOutput::GBA_SAMPLE_RATE`] (32768 Hz, upstream's
-//!   M4A mixing rate) is always the ring buffer's nominal rate — the
-//!   `audio` crate renders at this rate unconditionally. If the device's
-//!   default output config offers this rate directly, samples stream
-//!   through 1:1 (see [`Source::Direct`]). If not, a
-//!   [`crate::resample::Resampler`] linearly interpolates from nominal to
-//!   the device's actual rate inside the callback (see [`Source::Resampled`]).
+//! - **Sample rate**: [`AudioOutput::M4A_MIXER_RATE`] (13379 Hz, the rate
+//!   upstream's M4A engine actually renders PCM at — see the const's docs) is
+//!   always the ring buffer's nominal rate; the `audio` crate renders at this
+//!   rate unconditionally. Real output devices are 44.1/48 kHz and virtually
+//!   never advertise 13379 Hz, so a [`crate::resample::Resampler`] linearly
+//!   interpolating from nominal to the device's actual rate inside the
+//!   callback (see [`Source::Resampled`]) is the common path. Direct 1:1
+//!   streaming (see [`Source::Direct`]) only happens when a device supports
+//!   13379 Hz exactly, or for the null backend.
 //! - **Channels**: fixed at [`AudioOutput::CHANNELS`] (stereo), matching the
 //!   GBA's Direct Sound A/B stereo output. A device with no stereo output
 //!   config at all is out of scope and reported as
@@ -33,12 +35,20 @@
 //!   completely; any shortfall is silence, counted via
 //!   [`crate::ring::Consumer::fill`]'s single-lock bulk drain (see
 //!   `crate::ring` and `crate::resample`) for later use by V-5 audio checks.
+//! - **Stream health**: underruns cover the producer-outran-consumer case,
+//!   but a `cpal` stream can also fail asynchronously (device disconnect,
+//!   driver error) on its own callback thread. Those are counted separately
+//!   via [`AudioOutput::stream_errors`]; a nonzero count means the stream is
+//!   unhealthy even when [`AudioOutput::underruns`] stays flat.
 //!
 //! CI is headless, so nothing here opens a real cpal stream in a test: only
 //! [`AudioOutput::open`] and the private `negotiate`/stream-building helpers
 //! touch `cpal` directly. The ring buffer and resampler — the logic that
 //! actually matters for correctness — are pure and fully unit tested
 //! against [`AudioOutput::null`] and the `ring`/`resample` modules directly.
+
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 
@@ -91,26 +101,46 @@ pub struct AudioOutput {
     device_sample_rate: u32,
     channels: u16,
     running: bool,
+    /// Count of asynchronous `cpal` stream errors reported to the callback's
+    /// error function (device disconnect, driver failure, …). Shared with the
+    /// stream's error closure; a nonzero value means the stream is unhealthy.
+    /// Always zero for the null backend, which owns no `cpal` stream.
+    stream_errors: Arc<AtomicU64>,
 }
 
 impl AudioOutput {
-    /// The GBA's M4A mixing rate (`pokeemerald/src/m4a.c`), and the only
-    /// sample rate the ring buffer / `audio` crate ever need to reason
-    /// about — see the module docs for how a device that doesn't support it
-    /// directly is handled.
-    pub const GBA_SAMPLE_RATE: u32 = 32_768;
+    /// The rate upstream's M4A engine actually renders PCM at — the nominal
+    /// producer contract for the ring buffer and the future `audio` crate
+    /// (S-3), which render against exactly this rate.
+    ///
+    /// Derived from `pokeemerald/src/m4a.c`: `m4aSoundInit` selects
+    /// `SOUND_MODE_FREQ_13379` (m4a.c:79), and `SoundInit` calls
+    /// `SampleFreqSet(SOUND_MODE_FREQ_13379)` (m4a.c:395). `SampleFreqSet`
+    /// (m4a.c:400) looks up `gPcmSamplesPerVBlank = gPcmSamplesPerVBlankTable[
+    /// freq - 1]` — with the `13379` frequency index that is table entry `224`
+    /// (`m4a_tables.c:107`) — then computes
+    /// `pcmFreq = (597275 * pcmSamplesPerVBlank + 5000) / 10000`
+    /// (m4a.c:410) = `(597275 * 224 + 5000) / 10000` = **13379 Hz**.
+    ///
+    /// Note: 32768 Hz (a value seen elsewhere in GBA audio docs) is only the
+    /// `SOUNDBIAS` DAC/PWM carrier frequency, *not* the mixer's PCM render
+    /// rate. Using it here would bake in a ~2.45x pitch/timing error, so this
+    /// contract is the mixer rate. Devices virtually never advertise 13379 Hz,
+    /// so resampling to the device rate is the norm — see the module docs.
+    pub const M4A_MIXER_RATE: u32 = 13_379;
 
     /// Interleaved channel count the ring buffer and device stream use
     /// (stereo, matching the GBA's Direct Sound A/B output).
     pub const CHANNELS: u16 = 2;
 
-    /// Open the default output device and negotiate [`Self::GBA_SAMPLE_RATE`]
+    /// Open the default output device and negotiate [`Self::M4A_MIXER_RATE`]
     /// or the nearest supported rate (falling back to on-the-fly resampling
-    /// if the exact rate is unavailable — see the module docs). The stream
-    /// is created but not started; call [`AudioOutput::start`].
+    /// if the exact rate is unavailable — the common case, see the module
+    /// docs). The stream is created but not started; call
+    /// [`AudioOutput::start`].
     ///
     /// `ring_capacity_frames` sizes the ring buffer in stereo frames (e.g.
-    /// `4096` is ~125ms of headroom at the nominal rate).
+    /// `4096` is ~306ms of headroom at the nominal 13379 Hz rate).
     ///
     /// # Errors
     ///
@@ -130,26 +160,32 @@ impl AudioOutput {
         let device_sample_rate = config.sample_rate();
         let channels = config.channels();
         let (producer, consumer) = ring_buffer(ring_capacity_frames * channels as usize);
-        let source = if device_sample_rate == Self::GBA_SAMPLE_RATE {
+        let source = if device_sample_rate == Self::M4A_MIXER_RATE {
             Source::Direct(consumer)
         } else {
+            // Pre-size the resampler's source-frame scratch off the real-time
+            // thread, bounded by the device's largest advertised callback (in
+            // frames); see `Resampler::new` and `max_buffer_frames`.
             Source::Resampled(Resampler::new(
                 consumer,
                 channels,
-                Self::GBA_SAMPLE_RATE,
+                Self::M4A_MIXER_RATE,
                 device_sample_rate,
+                max_buffer_frames(&config),
             ))
         };
 
-        let stream = build_stream(&device, &config, source)?;
+        let stream_errors = Arc::new(AtomicU64::new(0));
+        let stream = build_stream(&device, &config, source, Arc::clone(&stream_errors))?;
 
         Ok(Self {
             backend: Backend::Device(stream),
             producer,
-            sample_rate: Self::GBA_SAMPLE_RATE,
+            sample_rate: Self::M4A_MIXER_RATE,
             device_sample_rate,
             channels,
             running: false,
+            stream_errors,
         })
     }
 
@@ -165,10 +201,11 @@ impl AudioOutput {
         Self {
             backend: Backend::Null(Source::Direct(consumer)),
             producer,
-            sample_rate: Self::GBA_SAMPLE_RATE,
-            device_sample_rate: Self::GBA_SAMPLE_RATE,
+            sample_rate: Self::M4A_MIXER_RATE,
+            device_sample_rate: Self::M4A_MIXER_RATE,
             channels: Self::CHANNELS,
             running: false,
+            stream_errors: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -210,7 +247,7 @@ impl AudioOutput {
     }
 
     /// The nominal PCM sample rate the `audio` crate should always render
-    /// at ([`Self::GBA_SAMPLE_RATE`]), regardless of the device's physical
+    /// at ([`Self::M4A_MIXER_RATE`]), regardless of the device's physical
     /// rate.
     #[must_use]
     pub fn sample_rate(&self) -> u32 {
@@ -238,10 +275,25 @@ impl AudioOutput {
         self.producer.clone()
     }
 
-    /// Total samples played as silence so far due to ring-buffer underrun.
+    /// Total samples played as silence so far due to ring-buffer underrun
+    /// (producer outran consumer). Distinct from [`Self::stream_errors`],
+    /// which covers asynchronous device/driver failures.
     #[must_use]
     pub fn underruns(&self) -> u64 {
         self.producer.underruns()
+    }
+
+    /// Count of asynchronous `cpal` stream errors reported since the stream
+    /// was built (device disconnect, driver failure, …).
+    ///
+    /// A nonzero value means the stream is unhealthy: playback may have
+    /// stopped at the OS level even though [`Self::is_running`] still reports
+    /// `true` and [`Self::underruns`] is flat, because the callback that
+    /// drains the ring buffer is no longer being invoked. Always zero for the
+    /// null backend, which owns no `cpal` stream.
+    #[must_use]
+    pub fn stream_errors(&self) -> u64 {
+        self.stream_errors.load(Ordering::Relaxed)
     }
 
     /// Drive the null backend by hand, filling `out` through the exact same
@@ -268,32 +320,81 @@ fn sample_format_rank(format: cpal::SampleFormat) -> u8 {
     }
 }
 
-/// Pick a stereo output configuration: [`AudioOutput::GBA_SAMPLE_RATE`] if
-/// any candidate supports it directly, otherwise the nearest supported rate
-/// on the most-preferred sample format (see [`sample_format_rank`]) —
-/// [`AudioOutput::open`] falls back to resampling in that case.
+/// Whether [`build_stream`] can actually open a stream in this sample format.
+/// Only `f32` and `i16` are convertible to/from the ring buffer's `f32`
+/// samples; any other format (e.g. `u16`) hits `build_stream`'s `_ =>` error
+/// arm, so it must never be selected — see [`select_config`].
+fn is_openable_format(format: cpal::SampleFormat) -> bool {
+    matches!(format, cpal::SampleFormat::F32 | cpal::SampleFormat::I16)
+}
+
+/// Pure config selection over device candidates reduced to
+/// `(sample_format, min_rate, max_rate)` tuples, so it is unit-testable
+/// without a `cpal` device (see the tests below).
+///
+/// Candidates are first restricted to formats [`build_stream`] can open
+/// (`f32`/`i16`) — a `u16`-only config whose rate range happens to cover the
+/// target must never win, or `AudioOutput::open` would hard-fail instead of
+/// resampling on an available openable format. Among the openable survivors
+/// (ranked by [`sample_format_rank`], `f32` before `i16`) it prefers any
+/// candidate whose `[min, max]` range covers `target` exactly; failing that,
+/// it clamps `target` into the most-preferred openable candidate's range for
+/// [`AudioOutput::open`] to resample against.
+///
+/// Returns the chosen candidate's index into `candidates` and the rate to
+/// open it at, or `None` if no openable candidate exists.
+fn select_config(
+    candidates: &[(cpal::SampleFormat, u32, u32)],
+    target: u32,
+) -> Option<(usize, u32)> {
+    let mut openable: Vec<usize> = (0..candidates.len())
+        .filter(|&i| is_openable_format(candidates[i].0))
+        .collect();
+    // Stable sort by format preference keeps the original device order within
+    // a format.
+    openable.sort_by_key(|&i| sample_format_rank(candidates[i].0));
+
+    if let Some(&i) = openable
+        .iter()
+        .find(|&&i| (candidates[i].1..=candidates[i].2).contains(&target))
+    {
+        return Some((i, target));
+    }
+
+    let &i = openable.first()?;
+    let (_, min, max) = candidates[i];
+    Some((i, target.clamp(min, max)))
+}
+
+/// Pick a stereo output configuration for [`AudioOutput::M4A_MIXER_RATE`],
+/// delegating the selection policy to [`select_config`] and mapping the
+/// chosen candidate back to a concrete [`cpal::SupportedStreamConfig`].
 fn negotiate(device: &cpal::Device) -> Result<cpal::SupportedStreamConfig, PlatformError> {
-    let mut candidates: Vec<cpal::SupportedStreamConfigRange> = device
+    let candidates: Vec<cpal::SupportedStreamConfigRange> = device
         .supported_output_configs()
         .map_err(PlatformError::from)?
         .filter(|c| c.channels() == AudioOutput::CHANNELS)
         .collect();
-    candidates.sort_by_key(|c| sample_format_rank(c.sample_format()));
 
-    let target = AudioOutput::GBA_SAMPLE_RATE;
-    if let Some(exact) = candidates
+    let tuples: Vec<(cpal::SampleFormat, u32, u32)> = candidates
         .iter()
-        .find(|c| (c.min_sample_rate()..=c.max_sample_rate()).contains(&target))
-    {
-        return Ok((*exact).with_sample_rate(target));
-    }
+        .map(|c| (c.sample_format(), c.min_sample_rate(), c.max_sample_rate()))
+        .collect();
 
-    let best = candidates
-        .into_iter()
-        .next()
+    let (index, rate) = select_config(&tuples, AudioOutput::M4A_MIXER_RATE)
         .ok_or(PlatformError::UnsupportedAudioConfig)?;
-    let nearest = target.clamp(best.min_sample_rate(), best.max_sample_rate());
-    Ok(best.with_sample_rate(nearest))
+    Ok(candidates[index].with_sample_rate(rate))
+}
+
+/// The device's largest advertised callback size in frames, or `0` if the
+/// device advertises no concrete range (`Unknown`). Used to pre-size
+/// real-time scratch buffers off the callback thread (see [`build_stream`]'s
+/// `i16` path and [`Resampler::new`]).
+fn max_buffer_frames(config: &cpal::SupportedStreamConfig) -> usize {
+    match config.buffer_size() {
+        cpal::SupportedBufferSize::Range { max, .. } => usize::try_from(*max).unwrap_or(0),
+        cpal::SupportedBufferSize::Unknown => 0,
+    }
 }
 
 /// Convert one `f32` sample in `[-1.0, 1.0]` to `i16`, clamping out-of-range
@@ -315,17 +416,23 @@ fn f32_to_i16(sample: f32) -> i16 {
 const DEFAULT_SCRATCH_SAMPLES: usize = 8192 * 2;
 
 /// Build (but do not start) the output stream for `config`, driven by
-/// `source`.
+/// `source`. Asynchronous stream errors are recorded into `stream_errors`,
+/// the counter [`AudioOutput::stream_errors`] reads.
 fn build_stream(
     device: &cpal::Device,
     config: &cpal::SupportedStreamConfig,
     mut source: Source,
+    stream_errors: Arc<AtomicU64>,
 ) -> Result<cpal::Stream, PlatformError> {
     let stream_config = config.config();
-    let err_fn = |_err: cpal::Error| {
-        // Nothing actionable to do from inside the audio callback thread;
-        // `AudioOutput::underruns` and a future health check are the
-        // observable signal for playback problems.
+    // A `cpal` stream reports async failures (device disconnect, driver
+    // error) on the callback thread, where nothing here can recover them.
+    // Record each into a shared atomic so `AudioOutput::stream_errors` can
+    // surface an otherwise-invisible unhealthy stream (`is_running` stays
+    // `true`, `underruns` stays flat, because the drain callback simply stops
+    // firing).
+    let err_fn = move |_err: cpal::Error| {
+        stream_errors.fetch_add(1, Ordering::Relaxed);
     };
 
     let stream = match config.sample_format() {
@@ -344,10 +451,7 @@ fn build_stream(
             // range gets a generous fallback. The in-callback `resize` below
             // then only reallocates in the last-resort case where cpal hands
             // us a buffer larger than anything advertised.
-            let max_frames = match config.buffer_size() {
-                cpal::SupportedBufferSize::Range { max, .. } => usize::try_from(*max).unwrap_or(0),
-                cpal::SupportedBufferSize::Unknown => 0,
-            };
+            let max_frames = max_buffer_frames(config);
             let channels = usize::from(config.channels());
             let scratch_capacity = max_frames
                 .saturating_mul(channels)
@@ -386,12 +490,17 @@ mod tests {
     use super::*;
 
     #[test]
-    fn null_backend_reports_the_nominal_gba_rate() {
+    fn null_backend_reports_the_m4a_mixer_rate() {
         let output = AudioOutput::null(256);
-        assert_eq!(output.sample_rate(), AudioOutput::GBA_SAMPLE_RATE);
-        assert_eq!(output.device_sample_rate(), AudioOutput::GBA_SAMPLE_RATE);
+        // The nominal producer contract is upstream's 13379 Hz M4A mixer
+        // rate, not the SOUNDBIAS carrier; see `M4A_MIXER_RATE`'s derivation.
+        assert_eq!(output.sample_rate(), 13_379);
+        assert_eq!(output.sample_rate(), AudioOutput::M4A_MIXER_RATE);
+        assert_eq!(output.device_sample_rate(), AudioOutput::M4A_MIXER_RATE);
         assert_eq!(output.channels(), AudioOutput::CHANNELS);
         assert!(!output.is_running());
+        // The null backend owns no cpal stream, so it never records errors.
+        assert_eq!(output.stream_errors(), 0);
     }
 
     #[test]
@@ -460,5 +569,53 @@ mod tests {
             sample_format_rank(cpal::SampleFormat::I16)
                 < sample_format_rank(cpal::SampleFormat::U16)
         );
+    }
+
+    #[test]
+    fn select_config_prefers_f32_at_the_exact_target_rate() {
+        // Both openable formats cover the target; f32 wins on preference.
+        let candidates = [
+            (cpal::SampleFormat::I16, 8_000, 48_000),
+            (cpal::SampleFormat::F32, 8_000, 48_000),
+        ];
+        assert_eq!(select_config(&candidates, 13_379), Some((1, 13_379)));
+    }
+
+    #[test]
+    fn select_config_ignores_an_unopenable_format_that_covers_the_target() {
+        // Regression: a u16 config whose range covers the target must not be
+        // chosen (build_stream can't open it). No openable format covers
+        // 13379 here, so selection falls back to the preferred openable
+        // format's nearest rate — never the u16 config.
+        let candidates = [
+            (cpal::SampleFormat::U16, 8_000, 48_000), // covers 13379, unopenable
+            (cpal::SampleFormat::F32, 44_100, 48_000), // openable, nearest = 44100
+            (cpal::SampleFormat::I16, 44_100, 48_000),
+        ];
+        assert_eq!(select_config(&candidates, 13_379), Some((1, 44_100)));
+    }
+
+    #[test]
+    fn select_config_takes_i16_exact_over_f32_noncovering() {
+        // f32 is preferred but does not cover the target; the exact-rate i16
+        // config beats resampling on f32.
+        let candidates = [
+            (cpal::SampleFormat::F32, 44_100, 48_000), // does not cover 13379
+            (cpal::SampleFormat::I16, 8_000, 48_000),  // covers 13379 exactly
+        ];
+        assert_eq!(select_config(&candidates, 13_379), Some((1, 13_379)));
+    }
+
+    #[test]
+    fn select_config_clamps_to_nearest_when_no_openable_format_covers_target() {
+        // Only openable format sits entirely above the target: clamp up.
+        let candidates = [(cpal::SampleFormat::F32, 44_100, 48_000)];
+        assert_eq!(select_config(&candidates, 13_379), Some((0, 44_100)));
+    }
+
+    #[test]
+    fn select_config_returns_none_with_no_openable_format() {
+        let candidates = [(cpal::SampleFormat::U16, 8_000, 48_000)];
+        assert_eq!(select_config(&candidates, 13_379), None);
     }
 }
