@@ -119,6 +119,47 @@ pub enum AssetError {
     /// [`TrainerId`]: crate::trainers::TrainerId
     /// [`TrainerTable::LEN`]: crate::trainers::TrainerTable::LEN
     UnknownTrainer(u16),
+
+    /// A [`LayoutId`] did not match any entry in `gMapLayouts`.
+    ///
+    /// Carries the offending `LAYOUT_*` name.
+    ///
+    /// [`LayoutId`]: crate::map_layouts::LayoutId
+    UnknownLayout(&'static str),
+
+    /// A [`MapId`] did not match any entry in the extracted map-header
+    /// table.
+    ///
+    /// Carries the offending `MAP_*` name. Distinct from [`AssetError::UnknownMap`]
+    /// (which is specifically about `gWildMonHeaders` lookups) so the two
+    /// tables' misses stay independently traceable.
+    ///
+    /// [`MapId`]: crate::wild_encounters::MapId
+    UnknownMapHeader(&'static str),
+
+    /// A raw `WEATHER_*` id did not correspond to any modelled
+    /// [`Weather`](crate::map_headers::Weather).
+    ///
+    /// Carries the offending id.
+    UnknownWeather(u8),
+
+    /// A raw `MAP_TYPE_*` id did not correspond to any modelled
+    /// [`MapType`](crate::map_headers::MapType).
+    ///
+    /// Carries the offending id.
+    UnknownMapType(u8),
+
+    /// A raw `MAP_BATTLE_SCENE_*` id did not correspond to any modelled
+    /// [`BattleScene`](crate::map_headers::BattleScene).
+    ///
+    /// Carries the offending id.
+    UnknownBattleScene(u8),
+
+    /// A raw `CONNECTION_*` id did not correspond to any modelled
+    /// [`Direction`](crate::map_headers::Direction).
+    ///
+    /// Carries the offending id.
+    UnknownConnectionDirection(u8),
 }
 
 impl fmt::Display for AssetError {
@@ -141,6 +182,14 @@ impl fmt::Display for AssetError {
             Self::InvalidLevel(level) => write!(f, "invalid level `{level}` (exceeds MAX_LEVEL)"),
             Self::UnknownMap(name) => write!(f, "unknown map or wild-encounter label `{name}`"),
             Self::UnknownTrainer(id) => write!(f, "unknown trainer id `{id}`"),
+            Self::UnknownLayout(name) => write!(f, "unknown map layout id `{name}`"),
+            Self::UnknownMapHeader(name) => write!(f, "unknown map header id `{name}`"),
+            Self::UnknownWeather(id) => write!(f, "unknown weather id `{id}`"),
+            Self::UnknownMapType(id) => write!(f, "unknown map type id `{id}`"),
+            Self::UnknownBattleScene(id) => write!(f, "unknown battle scene id `{id}`"),
+            Self::UnknownConnectionDirection(id) => {
+                write!(f, "unknown connection direction id `{id}`")
+            }
         }
     }
 }
