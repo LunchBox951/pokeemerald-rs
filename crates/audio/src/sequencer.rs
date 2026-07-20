@@ -269,8 +269,11 @@ impl Sequencer {
         let right = channel_volume(vol_mr, 0x80, velocity);
         let left = channel_volume(vol_ml, 0x7F, velocity);
 
-        // key + keyM, floored at 0 (`bpl _081DDCA0; movs r3, 0`).
-        let note_key = u8::try_from((i32::from(key) + key_m).clamp(0, 255)).unwrap_or(255);
+        // key + keyM, floored at 0 (`bpl _081DDCA0; movs r3, 0`), then the sum
+        // is passed to `MidiKeyToFreq`'s `u8 key` param, truncating the register
+        // to its low byte — so a sum above 255 wraps modulo 256, it does not
+        // saturate (`ldrb r1, [key]; adds r3, r1, r0; ... bl MidiKeyToFreq`).
+        let note_key = u8::try_from((i32::from(key) + key_m).max(0) & 0xFF).unwrap_or(0);
         let freq = pitch::midi_key_to_freq(tone.wave.freq(), note_key, pit_m);
 
         let voice = Voice::new(
@@ -309,7 +312,13 @@ fn track_volume(track: &TrackState) -> (u8, u8) {
 fn track_pitch(track: &TrackState) -> (i32, u8) {
     let bend = i32::from(track.bend) * i32::from(track.bend_range);
     let x = (i32::from(track.tune) + bend) * 4 + (i32::from(track.key_shift) << 8);
-    let key_m = x >> 8;
+    // Hardware stores `keyM = x >> 8` into a `u8` field
+    // (`m4a_internal.h:282`) and reads it back with a signed byte load
+    // (`ldrsb r0, [keyM]`, `m4a_1.s:1762`): the effective offset is
+    // `(s8)((x >> 8) & 0xFF)`, wrapping modulo 256 rather than staying full
+    // width. Truncate to a byte, then reinterpret those bits as signed.
+    let key_m_byte = u8::try_from((x >> 8) & 0xFF).unwrap_or(0);
+    let key_m = i32::from(i8::from_le_bytes([key_m_byte]));
     let pit_m = u8::try_from(x & 0xFF).unwrap_or(0);
     (key_m, pit_m)
 }
@@ -515,6 +524,29 @@ mod tests {
         let mut out = vec![0.0; Sequencer::FRAME_SAMPLES * 3];
         seq.mix_into(&mut out);
         assert!(out.iter().any(|&s| s.abs() > 0.0));
+    }
+
+    #[test]
+    fn track_pitch_key_m_stays_full_width_within_a_signed_byte() {
+        // In-range key offsets pass through untouched: `keyM = x >> 8` fits a
+        // signed byte, so truncation is a no-op.
+        let mut track = TrackState::new();
+        track.key_shift = 127; // x >> 8 == 127
+        assert_eq!(track_pitch(&track).0, 127);
+        track.key_shift = -128; // x >> 8 == -128
+        assert_eq!(track_pitch(&track).0, -128);
+    }
+
+    #[test]
+    fn track_pitch_key_m_wraps_through_a_signed_byte() {
+        // KEYSH 127 with a positive bend pushes `x >> 8` to 128, one past the
+        // signed-byte range. Hardware stores it in a `u8` and reads it back
+        // signed, so the effective offset wraps to `(s8)128 == -128`, not +128.
+        let mut track = TrackState::new();
+        track.key_shift = 127;
+        track.bend = 1;
+        track.bend_range = 64; // bend == 64; (64*4 + 127*256) >> 8 == 128
+        assert_eq!(track_pitch(&track).0, -128);
     }
 
     #[test]
