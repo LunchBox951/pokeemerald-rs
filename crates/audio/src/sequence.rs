@@ -166,8 +166,9 @@ struct Fixup {
 ///
 /// The `bytes` are a self-contained track: `GOTO`/`PATT`/`REPT` operands are
 /// 4-byte little-endian **byte offsets into `bytes`** (this crate's convention
-/// for self-contained sequences), resolved here to event indices. Decoding
-/// stops at `FINE` or the end of the slice.
+/// for self-contained sequences), resolved here to event indices. The whole
+/// slice is decoded, including the `PATT`/`REPT` bodies mid2agb lays out after
+/// the main track's `FINE`; the runtime still stops at the first `FINE` event.
 ///
 /// # Errors
 ///
@@ -218,17 +219,20 @@ impl Decoder<'_> {
                 byte
             };
 
-            if self.dispatch(cmd, start)? {
-                break; // FINE
-            }
+            // `FINE` no longer halts decoding: mid2agb stores a track's
+            // `PATT`/`REPT` bodies (ending in `PEND`/`FINE`) *after* the main
+            // track's `FINE`, so the whole slice must be decoded for those
+            // bodies' offsets to be recorded and their fixups to resolve. The
+            // runtime still stops at the first `Event::Fine` it reaches.
+            self.dispatch(cmd, start)?;
         }
         Ok(())
     }
 
-    /// Handle one command, returning `true` if it terminates the track.
+    /// Handle one command, appending its decoded [`Event`].
     // A flat command-dispatch table: long by nature, but each arm is trivial.
     #[allow(clippy::too_many_lines)]
-    fn dispatch(&mut self, cmd: u8, start: usize) -> Result<bool, DecodeError> {
+    fn dispatch(&mut self, cmd: u8, start: usize) -> Result<(), DecodeError> {
         match cmd {
             WAIT_LO..=WAIT_HI => {
                 let ticks = CLOCK_TABLE[(cmd - WAIT_LO) as usize];
@@ -236,7 +240,6 @@ impl Decoder<'_> {
             }
             FINE => {
                 self.push(start, Event::Fine);
-                return Ok(true);
             }
             GOTO => self.jump(start, Event::Goto)?,
             PATT => self.jump(start, Event::Pattern)?,
@@ -333,7 +336,7 @@ impl Decoder<'_> {
                 });
             }
         }
-        Ok(false)
+        Ok(())
     }
 
     /// Decode a note (or tie) with its optional key/velocity/gate operands,
@@ -576,6 +579,47 @@ mod tests {
         let events = decode_track(&bytes).unwrap();
         // events: [Voice, Note, Goto]; the note is index 1.
         assert_eq!(events[2], Event::Goto(1));
+    }
+
+    #[test]
+    fn patt_body_after_main_fine_decodes_and_resolves() {
+        // Standard mid2agb layout: the main track ends in FINE, and the PATT's
+        // body (ending in PEND) is stored *after* it. Decoding must cover the
+        // post-FINE body so its offset is recorded and the PATT fixup resolves.
+        // Layout:
+        //   0: VOICE 0        BD 00
+        //   2: PATT -> 8      B3 08 00 00 00
+        //   7: FINE           B1
+        //   8: N04 60 127     D3 3C 7F      (body)
+        //  11: PEND           B4
+        let bytes = [
+            VOICE, 0x00, PATT, 0x08, 0x00, 0x00, 0x00, FINE, 0xD3, 60, 127, PEND,
+        ];
+        let events = decode_track(&bytes).unwrap();
+        // events: [Voice, Pattern, Fine, Note, PatternEnd]; the body Note is
+        // index 3, so the PATT (offset 8) must resolve there.
+        assert_eq!(events[1], Event::Pattern(3));
+        assert_eq!(events[2], Event::Fine);
+        assert_eq!(
+            events[3],
+            Event::Note {
+                key: 60,
+                velocity: 127,
+                gate: 4
+            }
+        );
+        assert_eq!(events[4], Event::PatternEnd);
+    }
+
+    #[test]
+    fn dangling_jump_past_end_still_errors() {
+        // A PATT whose target byte offset lies beyond the slice never lands on
+        // a decoded boundary, so it must still error rather than resolve.
+        let bytes = [VOICE, 0x00, PATT, 0x63, 0x00, 0x00, 0x00, FINE];
+        assert!(matches!(
+            decode_track(&bytes),
+            Err(DecodeError::UnresolvedJump { .. })
+        ));
     }
 
     #[test]

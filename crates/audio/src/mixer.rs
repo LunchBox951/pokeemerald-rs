@@ -13,14 +13,18 @@
 use crate::pitch::SAMPLES_PER_FRAME;
 use crate::voice::{StereoAcc, Voice};
 
-/// Default global mix level (`0..=15`); upstream's max master volume.
-pub const DEFAULT_MASTER_VOLUME: u8 = 15;
+/// Default global mix level (`0..=15`). Emerald's `m4aSoundInit` reconfigures
+/// the driver the instant it starts, calling `m4aSoundMode` with
+/// `12 << SOUND_MODE_MASVOL_SHIFT` (`m4a.c:78`..`:81`); the generic
+/// `SoundInit` placeholder of `15` (`m4a.c:383`) never reaches gameplay.
+pub const DEFAULT_MASTER_VOLUME: u8 = 12;
 
 /// Default DirectSound voice cap. The hardware allows up to
-/// `MAX_DIRECTSOUND_CHANNELS` (12); games configure fewer. New notes past the
-/// cap are dropped for this slice (priority-based voice stealing is out of
-/// scope).
-pub const DEFAULT_MAX_VOICES: usize = 8;
+/// `MAX_DIRECTSOUND_CHANNELS` (12); Emerald's `m4aSoundInit` configures `5`
+/// via `5 << SOUND_MODE_MAXCHN_SHIFT` (`m4a.c:78`..`:81`), overriding the
+/// generic `SoundInit` placeholder of `8` (`m4a.c:384`). New notes past the cap
+/// are dropped for this slice (priority-based voice stealing is out of scope).
+pub const DEFAULT_MAX_VOICES: usize = 5;
 
 /// Owns the playing voices and renders them to interleaved stereo `f32`.
 #[derive(Debug)]
@@ -63,10 +67,23 @@ impl Mixer {
         self.voices.is_empty()
     }
 
+    /// Read-only view of the live voices, for the sequencer's own tests to
+    /// inspect mid-note volume/pitch updates.
+    #[cfg(test)]
+    pub(crate) fn voices(&self) -> &[Voice] {
+        &self.voices
+    }
+
     /// The global mix level.
     #[must_use]
     pub fn master_volume(&self) -> u8 {
         self.master_volume
+    }
+
+    /// The DirectSound voice cap.
+    #[must_use]
+    pub fn max_voices(&self) -> usize {
+        self.max_voices
     }
 
     /// Add a voice, honouring the voice cap. Returns `false` (dropping the
@@ -98,6 +115,51 @@ impl Mixer {
             if voice.track() == track && !voice.is_stopping() && voice.midi_key() == key {
                 voice.note_off();
                 break;
+            }
+        }
+    }
+
+    /// Release every still-sounding voice on `track` (track-end / `FINE`).
+    ///
+    /// Mirrors `ply_fine` (`m4a_1.s:750`): it walks the track's channel chain
+    /// and sets `SOUND_CHANNEL_SF_STOP` on every channel still flagged
+    /// `SOUND_CHANNEL_SF_ON`, releasing it, before the track is cleared. Without
+    /// this a track owning a tied voice (`gate_time == 0`, never auto-releasing)
+    /// or a looping wave would leave that voice sounding forever.
+    pub fn release_track(&mut self, track: usize) {
+        for voice in &mut self.voices {
+            if voice.track() == track && !voice.is_stopping() {
+                voice.note_off();
+            }
+        }
+    }
+
+    /// Rewrite the live base volumes of `track`'s channels from updated track
+    /// `volMR`/`volML` (`MPT_FLG_VOLCHG`).
+    ///
+    /// Mirrors `MPlayMain`'s per-tick re-run of `ChnVolSetAsm` for each ON
+    /// channel of a flagged track (`m4a_1.s:1394`): each voice keeps its own
+    /// velocity, so a mid-note `VOL`/`PAN` change is audible on the held note.
+    pub fn set_track_volume(&mut self, track: usize, vol_mr: u8, vol_ml: u8) {
+        for voice in &mut self.voices {
+            if voice.track() == track {
+                voice.set_track_volume(vol_mr, vol_ml);
+            }
+        }
+    }
+
+    /// Rewrite the live playback frequency of `track`'s channels from updated
+    /// track `keyM`/`pitM` (`MPT_FLG_PITCHG`).
+    ///
+    /// Mirrors `MPlayMain`'s per-tick pitch re-run for each ON channel of a
+    /// flagged track (`m4a_1.s:1403`..`:1451`): it recomputes the played
+    /// frequency from the channel's stored key plus the track's updated key/fine
+    /// offset via `MidiKeyToFreq`, so a mid-note `BEND`/`BENDR`/`KEYSH`/`TUNE`
+    /// bends the held note.
+    pub fn set_track_pitch(&mut self, track: usize, key_m: i32, pit_m: u8) {
+        for voice in &mut self.voices {
+            if voice.track() == track {
+                voice.set_track_pitch(key_m, pit_m);
             }
         }
     }
@@ -172,6 +234,7 @@ mod tests {
             unity_freq(),
             right,
             left,
+            127,
             0,
             key,
             track,
@@ -191,7 +254,9 @@ mod tests {
 
     #[test]
     fn single_voice_is_scaled_and_normalised() {
-        let mut mixer = Mixer::default();
+        // Pin master volume to 15 so the documented `254` env gain holds; this
+        // test exercises the mixing math, not the Emerald default (12).
+        let mut mixer = Mixer::new(15, DEFAULT_MAX_VOICES);
         mixer.add_voice(constant_voice(50, 0));
         let mut out = vec![0.0; SAMPLES_PER_FRAME * 2];
         mixer.mix_frame(&mut out);
@@ -202,7 +267,7 @@ mod tests {
 
     #[test]
     fn two_voices_sum() {
-        let mut mixer = Mixer::default();
+        let mut mixer = Mixer::new(15, DEFAULT_MAX_VOICES);
         mixer.add_voice(constant_voice(40, 0));
         mixer.add_voice(constant_voice(30, 1));
         assert_eq!(mixer.voice_count(), 2);
@@ -216,7 +281,7 @@ mod tests {
 
     #[test]
     fn loud_sum_clips_to_full_scale() {
-        let mut mixer = Mixer::default();
+        let mut mixer = Mixer::new(15, DEFAULT_MAX_VOICES);
         // Four hard-driven voices sum past the s8 range and must clip.
         for track in 0..4 {
             mixer.add_voice(constant_voice(127, track));
@@ -229,7 +294,7 @@ mod tests {
 
     #[test]
     fn negative_sum_clips_to_minus_one() {
-        let mut mixer = Mixer::default();
+        let mut mixer = Mixer::new(15, DEFAULT_MAX_VOICES);
         for track in 0..4 {
             mixer.add_voice(constant_voice(-128, track));
         }

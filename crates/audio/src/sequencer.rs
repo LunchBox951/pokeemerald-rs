@@ -15,7 +15,7 @@
 use crate::pitch::{self, SAMPLES_PER_FRAME};
 use crate::sequence::Event;
 use crate::song::Song;
-use crate::voice::Voice;
+use crate::voice::{channel_volume, Voice};
 use crate::{Mixer, DEFAULT_MASTER_VOLUME, DEFAULT_MAX_VOICES};
 
 /// Tempo units per tick; `MPlayMain` fires a tick each time `tempoC` crosses
@@ -232,16 +232,44 @@ impl Sequencer {
     ) {
         match *event {
             Event::Wait(ticks) => track.wait = u16::from(ticks),
-            Event::Fine => track.ended = true,
+            Event::Fine => {
+                // `ply_fine` releases every still-ON channel this track owns
+                // before clearing it, so tied voices and looping waves stop.
+                mixer.release_track(track_id);
+                track.ended = true;
+            }
             Event::Goto(index) => track.cursor = index,
             Event::Voice(v) => track.voice = usize::from(v),
-            Event::Volume(v) => track.vol = v,
-            Event::Pan(p) => track.pan = p,
+            // Volume/pan set `MPT_FLG_VOLCHG`; pitch commands set
+            // `MPT_FLG_PITCHG`. Upstream re-runs `TrkVolPitSet` + per-channel
+            // `ChnVolSetAsm`/`MidiKeyToFreq` for the flagged track each tick;
+            // here every event executes before the frame renders, so applying
+            // the change to the track's live voices immediately is equivalent.
+            Event::Volume(v) => {
+                track.vol = v;
+                Self::apply_track_volume(track, mixer, track_id);
+            }
+            Event::Pan(p) => {
+                track.pan = p;
+                Self::apply_track_volume(track, mixer, track_id);
+            }
             Event::Tempo(bpm) => *tempo_i = bpm,
-            Event::KeyShift(k) => track.key_shift = k,
-            Event::Bend(b) => track.bend = b,
-            Event::BendRange(r) => track.bend_range = r,
-            Event::Tune(t) => track.tune = t,
+            Event::KeyShift(k) => {
+                track.key_shift = k;
+                Self::apply_track_pitch(track, mixer, track_id);
+            }
+            Event::Bend(b) => {
+                track.bend = b;
+                Self::apply_track_pitch(track, mixer, track_id);
+            }
+            Event::BendRange(r) => {
+                track.bend_range = r;
+                Self::apply_track_pitch(track, mixer, track_id);
+            }
+            Event::Tune(t) => {
+                track.tune = t;
+                Self::apply_track_pitch(track, mixer, track_id);
+            }
             Event::Note {
                 key,
                 velocity,
@@ -266,6 +294,22 @@ impl Sequencer {
             // Decoded but not executed by this slice (see the module docs).
             _ => {}
         }
+    }
+
+    /// Re-run `TrkVolPitSet`'s volume half for the track and push the new
+    /// `volMR`/`volML` onto its live voices (`MPT_FLG_VOLCHG`,
+    /// `m4a_1.s:1391`..`:1394`).
+    fn apply_track_volume(track: &TrackState, mixer: &mut Mixer, track_id: usize) {
+        let (vol_mr, vol_ml) = track_volume(track);
+        mixer.set_track_volume(track_id, vol_mr, vol_ml);
+    }
+
+    /// Re-run `TrkVolPitSet`'s pitch half for the track and push the new
+    /// `keyM`/`pitM` onto its live voices (`MPT_FLG_PITCHG`,
+    /// `m4a_1.s:1403`..`:1451`).
+    fn apply_track_pitch(track: &TrackState, mixer: &mut Mixer, track_id: usize) {
+        let (key_m, pit_m) = track_pitch(track);
+        mixer.set_track_pitch(track_id, key_m, pit_m);
     }
 
     /// Allocate a voice for a note, resolving its stereo volume and pitch from
@@ -301,6 +345,7 @@ impl Sequencer {
             freq,
             right,
             left,
+            velocity,
             u16::from(gate),
             key,
             track_id,
@@ -342,14 +387,6 @@ fn track_pitch(track: &TrackState) -> (i32, u8) {
     (key_m, pit_m)
 }
 
-/// `ChnVolSetAsm`: fold a per-side base volume with the pan term and velocity,
-/// clamped to `255` (`m4a_1.s:1508`). `pan_term` is `0x80` for the right
-/// channel, `0x7F` for the left (rhythm pan is `0` for this slice).
-fn channel_volume(vol_side: u8, pan_term: u32, velocity: u8) -> u8 {
-    let scaled = (u32::from(vol_side) * (pan_term * u32::from(velocity))) >> 14;
-    u8::try_from(scaled.min(255)).unwrap_or(255)
-}
-
 #[cfg(test)]
 // The reciprocal wave-frequency the test song derives narrows to `u32` (well
 // within range for these inputs); silence/pan checks compare exact `0.0`.
@@ -379,6 +416,18 @@ mod tests {
         let wave = Arc::new(WaveData::one_shot(freq, vec![100; SAMPLES_PER_FRAME * 4]));
         let voices = vec![ToneData::new(wave, Adsr::flat())];
         Song::new(voices, tracks, tempo)
+    }
+
+    #[test]
+    fn new_uses_emerald_init_defaults() {
+        // `m4aSoundInit` reconfigures the driver to master volume 12 and 5
+        // DirectSound channels (`m4a.c:78`..`:81`), not the generic `SoundInit`
+        // placeholders (15/8).
+        assert_eq!(DEFAULT_MASTER_VOLUME, 12);
+        assert_eq!(DEFAULT_MAX_VOICES, 5);
+        let seq = Sequencer::new(test_song(vec![vec![Event::Fine]], 150));
+        assert_eq!(seq.mixer.master_volume(), 12);
+        assert_eq!(seq.mixer.max_voices(), 5);
     }
 
     #[test]
@@ -593,6 +642,98 @@ mod tests {
             seq.render_frame(&mut out);
         }
         assert_eq!(seq.voice_count(), 0);
+    }
+
+    #[test]
+    fn fine_releases_a_tied_voice_and_the_song_finishes() {
+        // A tied note (gate 0) never auto-releases; the freq-0 wave never
+        // exhausts. Before the fix, FINE only marked the track ended, leaving
+        // the voice sounding forever so `is_finished()` never returned true.
+        let track = vec![
+            Event::Voice(0),
+            Event::Note {
+                key: 60,
+                velocity: 127,
+                gate: 0,
+            },
+            Event::Wait(2),
+            Event::Fine,
+        ];
+        let mut seq = Sequencer::new(held_note_song(track));
+        let mut out = vec![0.0; Sequencer::FRAME_SAMPLES];
+        let mut frames = 0;
+        while !seq.is_finished() && frames < 500 {
+            seq.render_frame(&mut out);
+            frames += 1;
+        }
+        assert!(seq.is_finished(), "FINE must release the tied voice");
+    }
+
+    #[test]
+    fn volume_change_updates_a_held_notes_gains() {
+        // Start a tied note at full volume, then drop VOL mid-note: the live
+        // voice's base gains must follow (before the fix, note-on baked the
+        // gains once and later VOL commands never touched the voice).
+        let track = vec![
+            Event::Voice(0),
+            Event::Volume(127),
+            Event::Note {
+                key: 60,
+                velocity: 127,
+                gate: 0,
+            },
+            Event::Wait(4),
+            Event::Volume(20),
+            Event::Wait(4),
+            Event::Fine,
+        ];
+        let mut seq = Sequencer::new(held_note_song(track));
+        let mut out = vec![0.0; Sequencer::FRAME_SAMPLES];
+        seq.render_frame(&mut out); // tick 1: note on at full volume
+        let (loud_r, loud_l) = seq.mixer.voices()[0].base_volume();
+        // Advance past the mid-note `VOL 20` (fires once the first wait drains).
+        for _ in 0..5 {
+            seq.render_frame(&mut out);
+        }
+        let (soft_r, soft_l) = seq.mixer.voices()[0].base_volume();
+        assert!(
+            soft_r < loud_r && soft_l < loud_l,
+            "VOL must lower the held note ({soft_r},{soft_l} vs {loud_r},{loud_l})",
+        );
+        assert!(soft_r > 0 && soft_l > 0);
+    }
+
+    #[test]
+    fn bend_changes_a_held_notes_frequency() {
+        // Start a tied note, then BEND up mid-note: the live voice's frequency
+        // must rise (before the fix, BEND only mutated track state).
+        let wave = Arc::new(WaveData::looping(1 << 20, 0, vec![100; SAMPLES_PER_FRAME]));
+        let voices = vec![ToneData::new(wave, Adsr::flat())];
+        let track = vec![
+            Event::Voice(0),
+            Event::BendRange(2),
+            Event::Note {
+                key: 60,
+                velocity: 127,
+                gate: 0,
+            },
+            Event::Wait(4),
+            Event::Bend(63),
+            Event::Wait(4),
+            Event::Fine,
+        ];
+        let mut seq = Sequencer::new(Song::new(voices, vec![track], 150));
+        let mut out = vec![0.0; Sequencer::FRAME_SAMPLES];
+        seq.render_frame(&mut out); // tick 1: note on, unbent
+        let base_freq = seq.mixer.voices()[0].frequency();
+        for _ in 0..5 {
+            seq.render_frame(&mut out);
+        }
+        let bent_freq = seq.mixer.voices()[0].frequency();
+        assert!(
+            bent_freq > base_freq,
+            "BEND up must raise the held note's frequency ({bent_freq} vs {base_freq})",
+        );
     }
 
     #[test]
