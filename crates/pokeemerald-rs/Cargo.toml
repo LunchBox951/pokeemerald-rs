@@ -1,0 +1,12 @@
+[package]
+name = "pokeemerald-rs"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+platform = { path = "../platform" }
+rendering = { path = "../rendering" }

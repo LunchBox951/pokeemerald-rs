@@ -70,6 +70,19 @@ together. Two rules keep that autonomy from becoming a bypass:
 Reviewed, CI-green, ledger-verified work merges here. Dependency additions are
 owner-approved `(minimal-deps)`. Release impact is recorded on each PR.
 
+**Ledger — the L-1 accounting rule.** The ledger may carry *sub-file artifacts*:
+a single data table (e.g. `gTypeEffectiveness`) carved out of a large
+multi-concern source file (`src/battle_main.c#gTypeEffectiveness`), each with its
+own status and `rust_target`. This keeps coverage honest for partially-ported
+files. A file's own `status` covers everything **not** broken out into a named
+artifact; a file counts as accounted for (does **not** count toward `pending`,
+does not block **L-1**) **only when its own status is terminal AND every one of
+its sub-artifacts is terminal** — otherwise it counts as `pending`. So one ported
+table can never over-claim the whole file, and extracting a table under-claims
+nothing once the file's own status covers the remainder. Files with no
+sub-artifacts count exactly as their own status. `ledger.py verify` checks
+sub-artifact `rust_target` pointers alongside file-level ones.
+
 ### `release/X → unstable` — nightly (may auto-advance)
 
 Promote when **all** hold; otherwise skip rather than ship a broken nightly:
@@ -122,6 +135,50 @@ CI/E2E/artifact/playtest evidence, known issues + active waivers, declared relea
 impact. Never fold feature work into a promotion. If a promotion needs a fix, fix
 the **source** (`release/X` or the rung below) first, let its gates pass, and let
 CI reopen the promotion.
+
+## Repository controls go-live
+
+The workflow files establish the review and scan policy; repository settings make
+it enforceable. Apply and verify these settings as an owner-level operation before
+claiming R-4 is complete:
+
+1. On `dev`, `unstable`, `stable`, and `main`, require pull requests, one approval,
+   CODEOWNERS review, dismissal of stale approvals, and branches up to date before
+   merge. Include administrators; disallow direct pushes, force pushes, and branch
+   deletion.
+2. Require the CI contexts named in `.github/workflows/ci.yml`: `version`,
+   `ledger`, `fmt (ubuntu-latest)`, `fmt (windows-latest)`,
+   `clippy (ubuntu-latest)`, `clippy (windows-latest)`,
+   `build (ubuntu-latest)`, `build (windows-latest)`, `test (ubuntu-latest)`, and
+   `test (windows-latest)`. Require `dependency-review`, `codeql (actions)`,
+   `codeql (python)`, and `codeql (rust)` after each has reported successfully
+   on the protected branch.
+3. On `unstable`, `stable`, and `main`, also require `require-release-source` and
+   `require-rung-cleared`. Follow the bootstrap order documented at the head of
+   `channel-merge-policy.yml` before registering them, or the first promotion will
+   deadlock.
+4. Keep merge commits enabled and disable squash and rebase merging for promotions
+   into `unstable`, `stable`, and `main`; their ancestry checks depend on preserved
+   `release/*` history. Enable Actions to create pull requests for `promote.yml`.
+   For every promotion PR it opens with `GITHUB_TOKEN`, a maintainer with write
+   access must select **Approve workflows to run** before required checks start.
+5. Set the repository's default **Workflow permissions** to read-only. Workflows
+   that mutate repository state grant only their required write scopes explicitly.
+6. After `.github/workflows/codeql.yml` is on `dev`, disable GitHub's CodeQL
+   **default setup** in the repository security settings, set the Actions
+   repository variable `CODEQL_ADVANCED_UPLOADS_ENABLED` to `true`, re-enable the
+   `codeql` workflow if default setup disabled it, then manually dispatch `codeql`
+   and confirm its results upload. Until the variable is enabled, the advanced
+   jobs analyze without uploading because default setup rejects repository-owned
+   advanced-workflow results. The advanced workflow scans Rust, Python, and Actions
+   weekly and on relevant pushes and pull requests.
+7. Keep secret scanning and push protection enabled. They are already enabled for
+   this repository; their alerts are triaged alongside CodeQL and Dependabot.
+
+Unsafe-code alerts are deliberately non-blocking. Each finding must be reviewed
+as accepted (with its safety rationale), a refactor candidate, or a linked
+follow-up issue. An alert is an inventory entry, not proof that the code is
+incorrect or that `unsafe` is inherently slower than safe Rust.
 
 ## Version scheme — `vFINAL.MAJOR.MINOR.PATCH`
 

@@ -1,0 +1,46 @@
+# Repository-owned CodeQL configuration. Until the owner completes the go-live
+# sequence in RELEASE.md, analysis runs but uploads stay disabled because
+# GitHub's default setup rejects advanced-workflow SARIF.
+name: codeql
+
+on:
+  push:
+    branches: [dev, unstable, stable, main, "release/**"]
+  pull_request:
+    branches: [dev, unstable, stable, main, "release/**"]
+  schedule:
+    - cron: "17 4 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  analyze:
+    name: codeql (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - language: actions
+            config_file: ""
+          - language: python
+            config_file: ""
+          - language: rust
+            config_file: ./.github/codeql/codeql-config.yml
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@7188fc363630916deb702c7fdcf4e481b751f97a # v4.37.1
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: none
+          config-file: ${{ matrix.config_file }}
+          tools: linked
+      - name: Analyze
+        uses: github/codeql-action/analyze@7188fc363630916deb702c7fdcf4e481b751f97a # v4.37.1
+        with:
+          upload: ${{ vars.CODEQL_ADVANCED_UPLOADS_ENABLED == 'true' && 'always' || 'never' }}

@@ -147,7 +147,7 @@ jobs:
             exit 1
           fi
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         # No containment check on the entry rung, so skip the full-history
         # checkout entirely for base=unstable.
         if: github.base_ref != 'unstable'
