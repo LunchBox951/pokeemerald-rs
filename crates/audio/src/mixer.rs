@@ -103,15 +103,18 @@ impl Mixer {
         }
     }
 
-    /// Release the *first* still-sounding voice on `track` whose MIDI key is
+    /// Release the *newest* still-sounding voice on `track` whose MIDI key is
     /// `key` (end-of-tie), then stop.
     ///
-    /// This mirrors `ply_endtie` (`m4a_1.s:1837`): it walks the track's channel
-    /// list and stops only the first channel matching `track->key`, breaking out
-    /// of the loop on the first hit. A track can hold several voices with the
-    /// same key (overlapping ties), and an `EOT` retires just one of them.
+    /// This mirrors `ply_endtie` (`m4a_1.s:1819`): it walks the track's channel
+    /// chain from the head and stops the first channel matching `track->key`.
+    /// Note-on prepends each new channel at the head of that chain (`ply_note`,
+    /// `m4a_1.s:1724`), so "first in the chain" is the most recently started
+    /// voice. We store voices oldest-first, so the scan runs in reverse. A track
+    /// can hold several voices with the same key (overlapping ties); an `EOT`
+    /// retires exactly one — the newest.
     pub fn note_off_track(&mut self, track: usize, key: u8) {
-        for voice in &mut self.voices {
+        for voice in self.voices.iter_mut().rev() {
             if voice.track() == track && !voice.is_stopping() && voice.midi_key() == key {
                 voice.note_off();
                 break;
@@ -335,6 +338,27 @@ mod tests {
         assert_eq!(mixer.voice_count(), 1);
         assert!(left > 0.0, "surviving key-60 voice should keep sounding");
         assert_eq!(right, 0.0, "released key-64 voice should be silent");
+    }
+
+    #[test]
+    fn note_off_track_releases_the_newest_matching_voice() {
+        // Upstream `ply_note` prepends each new channel at the head of the
+        // track's chain and `ply_endtie` stops the first match — the newest
+        // voice. Two key-60 voices overlap on track 0: the older is panned
+        // hard-left, the newer hard-right. An `EOT` must retire the newer
+        // (right) voice, leaving the left one sounding. Before the fix the scan
+        // ran oldest-first and silenced the left channel instead.
+        let mut mixer = Mixer::default();
+        mixer.add_voice(keyed_voice(60, 0, 60, 0x00, 0xFF)); // older: left only
+        mixer.add_voice(keyed_voice(60, 0, 60, 0xFF, 0x00)); // newer: right only
+        mixer.note_off_track(0, 60);
+        let mut out = vec![0.0; SAMPLES_PER_FRAME * 2];
+        mixer.mix_frame(&mut out);
+        let left: f32 = out.iter().step_by(2).map(|s| s.abs()).sum();
+        let right: f32 = out.iter().skip(1).step_by(2).map(|s| s.abs()).sum();
+        assert_eq!(mixer.voice_count(), 1);
+        assert!(left > 0.0, "older left voice should keep sounding");
+        assert_eq!(right, 0.0, "newer right voice should be released");
     }
 
     #[test]

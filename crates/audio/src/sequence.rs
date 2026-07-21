@@ -69,10 +69,24 @@ pub enum Event {
     PatternEnd,
     /// Repeat (`REPT`) `count` times from an event index.
     Repeat { count: u8, target: usize },
-    /// Memory-accumulator op (`MEMACC`).
-    MemAcc { op: u8, addr: u8, value: u8 },
-    /// Extended command (`XCMD`).
-    Xcmd { kind: u8, value: u8 },
+    /// Memory-accumulator op (`MEMACC`). Conditional ops (`op` in `6..=17`)
+    /// carry a `GOTO`-style jump `target`, resolved to an event index like any
+    /// other jump; unconditional ops (`0..=5`) mutate memory and leave it
+    /// `None` (`ply_memacc`, `m4a.c`).
+    MemAcc {
+        op: u8,
+        addr: u8,
+        value: u8,
+        target: Option<usize>,
+    },
+    /// Extended command (`XCMD`). `value` holds the little-endian payload; its
+    /// width depends on `kind` (0, 1, 2, or 4 bytes) exactly as the matching
+    /// `gXcmdTable` handler reads it (see `xcmd_payload_width`).
+    Xcmd { kind: u8, value: u32 },
+    /// Portamento (`PORT`). Two operand bytes — a CGB sound-register selector
+    /// and the value written to it (`ply_port`, `m4a_1.s:1057`). Decoded for
+    /// stream fidelity; not acted on by this slice.
+    Port { control: u8, value: u8 },
 }
 
 /// Something wrong with a track's byte program.
@@ -130,6 +144,7 @@ const LFODL: u8 = 0xC3;
 const MOD: u8 = 0xC4;
 const MODT: u8 = 0xC5;
 const TUNE: u8 = 0xC8;
+const PORT: u8 = 0xCC;
 const XCMD: u8 = 0xCD;
 const EOT: u8 = 0xCE;
 const TIE: u8 = 0xCF;
@@ -138,6 +153,11 @@ const CENTER: u8 = 0x40;
 /// Running status is remembered only for commands at or above this byte
 /// (`cmp r1, 0xBD` in `MPlayMain`).
 const RUNNING_STATUS_MIN: u8 = 0xBD;
+/// `MEMACC` operation numbers that are conditional jumps: each is followed by a
+/// 4-byte `GOTO`-style target after its op/addr/value operands. Unconditional
+/// ops (`0..=5`) carry none (`ply_memacc`, `m4a.c`; mid2agb emits the target
+/// word only for these ops).
+const MEMACC_COND_OPS: std::ops::RangeInclusive<u8> = 6..=17;
 
 /// Note-length lookup, `gClockTable` (`m4a_tables.c:177`), indexed by
 /// `note_byte - TIE`.
@@ -259,7 +279,39 @@ impl Decoder<'_> {
                 let op = self.byte()?;
                 let addr = self.byte()?;
                 let value = self.byte()?;
-                self.push(start, Event::MemAcc { op, addr, value });
+                // Conditional ops carry a `GOTO`-style 4-byte target after the
+                // value byte: `ply_memacc` runs `gMPlayJumpTable[1]`/`ply_goto`
+                // on a true condition and `cmdPtr += 4` on a false one, so the
+                // target word is always present and must be consumed. Record a
+                // fixup so it resolves to an event index like any other jump.
+                if MEMACC_COND_OPS.contains(&op) {
+                    let target = self.u32_le()?;
+                    let event = self.events.len();
+                    self.push(
+                        start,
+                        Event::MemAcc {
+                            op,
+                            addr,
+                            value,
+                            target: Some(0),
+                        },
+                    );
+                    self.fixups.push(Fixup {
+                        event,
+                        target,
+                        source_offset: start,
+                    });
+                } else {
+                    self.push(
+                        start,
+                        Event::MemAcc {
+                            op,
+                            addr,
+                            value,
+                            target: None,
+                        },
+                    );
+                }
             }
             PRIO => {
                 let v = self.byte()?;
@@ -315,8 +367,21 @@ impl Decoder<'_> {
             }
             XCMD => {
                 let kind = self.byte()?;
-                let value = self.byte()?;
+                // The payload width is per sub-command: `xWAVE` (1) and
+                // `xcmd_0D` (0x0D) read a 4-byte word, `xWAIT` (0x0C) a 16-bit
+                // length, the tone/pseudo-echo setters one byte, and `ply_xxx`
+                // (kinds 0/3) none (`ply_xcmd` + `gXcmdTable`, `m4a.c`).
+                let width = xcmd_payload_width(kind);
+                let mut value = 0u32;
+                for i in 0..width {
+                    value |= u32::from(self.byte()?) << (8 * i);
+                }
                 self.push(start, Event::Xcmd { kind, value });
+            }
+            PORT => {
+                let control = self.byte()?;
+                let value = self.byte()?;
+                self.push(start, Event::Port { control, value });
             }
             EOT => {
                 let key = if self.peek_arg().is_some() {
@@ -426,13 +491,33 @@ impl Decoder<'_> {
                     target: fixup.target,
                 })?;
             match &mut self.events[fixup.event] {
-                Event::Goto(t) | Event::Pattern(t) | Event::Repeat { target: t, .. } => {
+                Event::Goto(t)
+                | Event::Pattern(t)
+                | Event::Repeat { target: t, .. }
+                | Event::MemAcc {
+                    target: Some(t), ..
+                } => {
                     *t = index;
                 }
                 _ => {}
             }
         }
         Ok(())
+    }
+}
+
+/// Byte width of an `XCMD` sub-command's payload, indexed by its `kind`. Each
+/// `gXcmdTable` handler reads exactly this many bytes (`m4a.c`): `ply_xwave`
+/// (kind 1) and `ply_xcmd_0D` (kind `0x0D`) read a 4-byte word, `ply_xwait`
+/// (kind `0x0C`) a 16-bit length, the tone and pseudo-echo setters one byte,
+/// and `ply_xxx` (kinds 0 and 3) none. Kinds past the table (`>= 0x0E`) never
+/// appear in real data; one byte keeps decoding as aligned as it can.
+fn xcmd_payload_width(kind: u8) -> usize {
+    match kind {
+        0x00 | 0x03 => 0,
+        0x01 | 0x0D => 4,
+        0x0C => 2,
+        _ => 1,
     }
 }
 
@@ -652,5 +737,104 @@ mod tests {
     fn end_of_track_without_fine_stops_cleanly() {
         let events = decode_track(&[VOICE, 0x01]).unwrap();
         assert_eq!(events, vec![Event::Voice(1)]);
+    }
+
+    #[test]
+    fn port_command_is_decoded_with_two_operands() {
+        // PORT (0xCC) dispatches to `ply_port`, which consumes two operand
+        // bytes (a register selector and a value) before returning. Without an
+        // arm the byte errors as UnknownCommand; with one it is preserved and
+        // the trailing FINE still aligns.
+        let bytes = [PORT, 0x02, 0x7F, FINE];
+        let events = decode_track(&bytes).unwrap();
+        assert_eq!(
+            events,
+            vec![
+                Event::Port {
+                    control: 0x02,
+                    value: 0x7F,
+                },
+                Event::Fine,
+            ]
+        );
+    }
+
+    #[test]
+    fn memacc_conditional_op_consumes_and_resolves_its_jump_target() {
+        // A conditional MEMACC (op 6 = mem_beq) carries a GOTO-style 4-byte
+        // target after op/addr/value. Consuming only three operands would
+        // misread the target bytes as commands; here the target (offset 0)
+        // resolves to the VOICE event and the trailing FINE stays aligned.
+        //   0: VOICE 0             BD 00
+        //   2: MEMACC 6 addr val   B9 06 01 05
+        //   6: target -> 0         00 00 00 00
+        //  10: FINE                B1
+        let bytes = [
+            VOICE, 0x00, MEMACC, 0x06, 0x01, 0x05, 0x00, 0x00, 0x00, 0x00, FINE,
+        ];
+        let events = decode_track(&bytes).unwrap();
+        assert_eq!(
+            events,
+            vec![
+                Event::Voice(0),
+                Event::MemAcc {
+                    op: 6,
+                    addr: 1,
+                    value: 5,
+                    target: Some(0),
+                },
+                Event::Fine,
+            ]
+        );
+    }
+
+    #[test]
+    fn unconditional_memacc_has_no_jump_target() {
+        // op 1 = mem_add: three operands, no trailing target word.
+        let events = decode_track(&[MEMACC, 0x01, 0x02, 0x03, FINE]).unwrap();
+        assert_eq!(
+            events,
+            vec![
+                Event::MemAcc {
+                    op: 1,
+                    addr: 2,
+                    value: 3,
+                    target: None,
+                },
+                Event::Fine,
+            ]
+        );
+    }
+
+    #[test]
+    fn xcmd_payload_widths_track_the_sub_command() {
+        // xWAVE (kind 1) reads a 4-byte little-endian pointer; xWAIT (0x0C) a
+        // 16-bit length; a tone param (xRELE, kind 7) one byte. Consuming a
+        // fixed single byte would misalign the following commands.
+        let bytes = [
+            XCMD, 0x01, 0x0D, 0x0C, 0x00, 0x08, // xWAVE 0x0800_0C0D
+            XCMD, 0x0C, 0x3C, 0x00, // xWAIT len 0x003C
+            XCMD, 0x07, 0x05, // xRELE 5
+            FINE,
+        ];
+        let events = decode_track(&bytes).unwrap();
+        assert_eq!(
+            events,
+            vec![
+                Event::Xcmd {
+                    kind: 0x01,
+                    value: 0x0800_0C0D,
+                },
+                Event::Xcmd {
+                    kind: 0x0C,
+                    value: 0x0000_003C,
+                },
+                Event::Xcmd {
+                    kind: 0x07,
+                    value: 0x0000_0005,
+                },
+                Event::Fine,
+            ]
+        );
     }
 }
