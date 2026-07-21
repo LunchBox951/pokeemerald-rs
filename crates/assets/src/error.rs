@@ -5,6 +5,8 @@
 use std::error::Error;
 use std::fmt;
 
+use crate::map_layouts::BORDER_CELLS;
+
 /// An error produced while accessing or decoding extracted game data.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AssetError {
@@ -127,6 +129,30 @@ pub enum AssetError {
     /// [`LayoutId`]: crate::map_layouts::LayoutId
     UnknownLayout(&'static str),
 
+    /// A caller-supplied `map.bin`-shaped buffer was too short for its
+    /// [`MapLayout`]'s `width * height`.
+    ///
+    /// Carries the offending layout's `LAYOUT_*` name, the minimum expected
+    /// length (`width * height * 2`), and the buffer's actual length.
+    /// Grid bytes are never embedded in this crate (Discussion #71 policy
+    /// A) — they arrive from the local extract pack (issue #81) and are
+    /// validated by [`LayoutGrid::new`] at the point the caller hands them
+    /// in.
+    ///
+    /// [`MapLayout`]: crate::map_layouts::MapLayout
+    /// [`LayoutGrid::new`]: crate::map_layouts::LayoutGrid::new
+    LayoutGridTooShort(&'static str, usize, usize),
+
+    /// A caller-supplied `border.bin`-shaped buffer was not exactly
+    /// [`BORDER_CELLS`] `* 2` bytes.
+    ///
+    /// Carries the buffer's actual length. Every upstream `border.bin` is
+    /// exactly 8 bytes; see [`BorderGrid::new`].
+    ///
+    /// [`BORDER_CELLS`]: crate::map_layouts::BORDER_CELLS
+    /// [`BorderGrid::new`]: crate::map_layouts::BorderGrid::new
+    LayoutBorderWrongSize(usize),
+
     /// A [`MapId`] did not match any entry in the extracted map-header
     /// table.
     ///
@@ -183,6 +209,15 @@ impl fmt::Display for AssetError {
             Self::UnknownMap(name) => write!(f, "unknown map or wild-encounter label `{name}`"),
             Self::UnknownTrainer(id) => write!(f, "unknown trainer id `{id}`"),
             Self::UnknownLayout(name) => write!(f, "unknown map layout id `{name}`"),
+            Self::LayoutGridTooShort(name, expected, actual) => write!(
+                f,
+                "layout `{name}` grid buffer too short: expected at least {expected} bytes, got {actual}"
+            ),
+            Self::LayoutBorderWrongSize(actual) => write!(
+                f,
+                "border buffer wrong size: expected exactly {} bytes, got {actual}",
+                BORDER_CELLS * 2
+            ),
             Self::UnknownMapHeader(name) => write!(f, "unknown map header id `{name}`"),
             Self::UnknownWeather(id) => write!(f, "unknown weather id `{id}`"),
             Self::UnknownMapType(id) => write!(f, "unknown map type id `{id}`"),

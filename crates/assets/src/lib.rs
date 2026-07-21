@@ -50,8 +50,8 @@ pub use map_headers::{
     RegionMapSectionId, Weather, MAP_COUNT, MAP_GROUP_COUNT,
 };
 pub use map_layouts::{
-    LayoutId, LayoutTable, MapLayout, MetatileCell, BORDER_CELLS, BORDER_HEIGHT, BORDER_WIDTH,
-    LAYOUT_COUNT,
+    BorderGrid, LayoutGrid, LayoutId, LayoutTable, MapLayout, MetatileCell, BORDER_CELLS,
+    BORDER_HEIGHT, BORDER_WIDTH, LAYOUT_COUNT,
 };
 
 // `items::ItemId` is the full item-table identifier; it is intentionally *not*

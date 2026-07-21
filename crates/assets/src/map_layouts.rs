@@ -1,13 +1,23 @@
 //! Map layout geometry (S-4): the `gMapLayouts` table.
 //!
-//! Ports every map layout's dimensions, tileset references, and per-cell
-//! metatile grid from the upstream reference
-//! `pokeemerald/data/layouts/layouts.json` (`layouts_table_label:
-//! "gMapLayouts"`, 441 entries) plus the two binary files each entry points
-//! at: `border_filepath` (a fixed 2x2 grid, always 8 bytes) and
-//! `blockdata_filepath` (a `width * height` grid, [`MetatileCell`]-packed
-//! `u16` cells). The record layout is `struct MapLayout` in
-//! `pokeemerald/include/global.fieldmap.h`.
+//! Ports every map layout's dimensions and tileset references from the
+//! upstream reference `pokeemerald/data/layouts/layouts.json`
+//! (`layouts_table_label: "gMapLayouts"`, 441 entries). The record layout is
+//! `struct MapLayout` in `pokeemerald/include/global.fieldmap.h`.
+//!
+//! **Grid/border bytes are not in this crate.** Per the recorded owner
+//! decision in GitHub Discussion #71 ("policy A"), binary asset content —
+//! explicitly including complete map metatile grids and borders
+//! (`map.bin`/`border.bin`) — must never be committed to the repository.
+//! Each entry's `border_filepath` (a fixed 2x2 grid, always 8 bytes) and
+//! `blockdata_filepath` (a `width * height` grid of [`MetatileCell`]-packed
+//! `u16` cells) instead ship in a local, gitignored asset pack produced by
+//! `cargo xtask extract` (tracked as issue #81, not yet implemented). This
+//! module provides the metadata table ([`MapLayout`], [`LayoutTable`]) plus
+//! the decode layer ([`LayoutGrid`], [`BorderGrid`]) that pack loading will
+//! feed at runtime: callers read the pack's bytes off disk and hand them to
+//! [`LayoutGrid::new`] / [`BorderGrid::new`], which validate and decode them
+//! without this crate ever owning the bytes itself.
 //!
 //! **Tileset references are names, not data.** `primary_tileset` /
 //! `secondary_tileset` carry the upstream `gTileset_*` symbol
@@ -21,68 +31,50 @@
 //! index for each `LAYOUT_*`) no longer exists in this reference checkout,
 //! so deriving a numeric id would mean guessing rather than transcribing.
 //!
-//! **Blockdata: committed binary, not literal `u16` arrays.** The 441
-//! `map.bin` files total ~634 KiB and `border.bin` files ~3.4 KiB raw
-//! (measured against the upstream checkout at authoring time). Formatting
-//! that as decimal/struct-literal Rust source (the pattern every other
-//! extracted table in this crate uses) would multiply it several-fold in
-//! committed text and add hundreds of thousands of const-array elements for
-//! `rustc` to evaluate, for no fidelity benefit over the source bytes
-//! themselves. Instead each layout's `map.bin` / `border.bin` is copied
-//! byte-for-byte into `crates/assets/data/layouts/<Name>/` and pulled in via
-//! `include_bytes!`; [`MapLayout::cell_at`] / [`MapLayout::cells`] /
-//! [`MapLayout::border_cell`] decode the packed `u16` cells on demand. Net
-//! committed size added by this module: ~638 KiB of binary data files plus
-//! the (much smaller) generated Rust source below — see the PR description
-//! for the exact delta (`H-3`, the operator-tracked `data/` size budget).
-//!
-//! **Cell packing.** Both files are flat, row-major, little-endian `u16`
-//! grids (`pokeemerald/include/global.fieldmap.h`): bits 0-9 the metatile id
-//! (`MAPGRID_METATILE_ID_MASK`, `0x03FF`), bits 10-11 the collision value
-//! (`MAPGRID_COLLISION_MASK`, `0x0C00`), bits 12-15 the elevation
-//! (`MAPGRID_ELEVATION_MASK`, `0xF000`). [`MetatileCell`] is the decoded
-//! form; [`MetatileCell::from_raw`] / [`MetatileCell::pack`] are exact
-//! inverses of upstream's `UNPACK_*` / `PACK_*` macros.
+//! **Cell packing.** Both `map.bin` and `border.bin` are flat, row-major,
+//! little-endian `u16` grids (`pokeemerald/include/global.fieldmap.h`):
+//! bits 0-9 the metatile id (`MAPGRID_METATILE_ID_MASK`, `0x03FF`), bits
+//! 10-11 the collision value (`MAPGRID_COLLISION_MASK`, `0x0C00`), bits
+//! 12-15 the elevation (`MAPGRID_ELEVATION_MASK`, `0xF000`). [`MetatileCell`]
+//! is the decoded form; [`MetatileCell::from_raw`] / [`MetatileCell::pack`]
+//! are exact inverses of upstream's `UNPACK_*` / `PACK_*` macros.
 //!
 //! **Border is always 2x2.** Every `border.bin` in the upstream checkout is
 //! exactly 8 bytes (4 cells); `pokeemerald/src/fieldmap.c`'s
 //! `GetBorderBlockAt` indexes it as `((x+1)&1) + (((y+1)&1)<<1)`, which
-//! [`MapLayout::border_cell`] reproduces. [`BORDER_WIDTH`] /
-//! [`BORDER_HEIGHT`] pin this as a checked invariant rather than a per-entry
-//! field.
+//! [`BorderGrid::cell_at`] reproduces. [`BORDER_WIDTH`] / [`BORDER_HEIGHT`]
+//! pin this as a checked invariant: [`BorderGrid::new`] rejects any buffer
+//! whose length isn't exactly [`BORDER_CELLS`] `* 2` bytes.
 //!
-//! **`width`/`height` vs. `blockdata` length.** Most layouts satisfy
-//! `blockdata.len() == width * height * 2` exactly, but a handful of
-//! upstream "unused" leftover layouts (`LAYOUT_UNUSED_CAVE1`..`14`,
+//! **`width`/`height` vs. grid buffer length.** Most layouts satisfy
+//! `bytes.len() == width * height * 2` exactly, but a handful of upstream
+//! "unused" leftover layouts (`LAYOUT_UNUSED_CAVE1`..`14`,
 //! `LAYOUT_UNUSED_CONTEST_ROOM1`..`3`,
 //! `LAYOUT_BATTLE_FRONTIER_BATTLE_PIKE_ROOM_UNUSED`,
 //! `LAYOUT_CAVE_OF_ORIGIN_UNUSED_B4F_LAVA`,
 //! `LAYOUT_LITTLEROOT_TOWN_PROFESSOR_BIRCHS_LAB_WITH_TABLE`) carry a few
 //! bytes of trailing padding in `map.bin` beyond `width * height * 2`.
-//! Nothing in the running game reads past `width * height` cells, so this is
-//! transcribed as-is (the raw bytes, padding included) rather than silently
-//! truncated; [`MapLayout::cell_at`] / [`MapLayout::cells`] only ever read
-//! the first `width * height` cells regardless. A structural test below
-//! pins `blockdata.len() >= width * height * 2` for every layout.
+//! Nothing in the running game reads past `width * height` cells, so
+//! [`LayoutGrid::new`] accepts any buffer `>= width * height * 2` bytes
+//! (never `==`), and [`LayoutGrid::cell_at`] / [`LayoutGrid::cells`] only
+//! ever read the first `width * height` cells regardless of how much longer
+//! the buffer is.
 //!
-//! **Re-running the extraction.** This module (and the sibling
-//! `crates/assets/data/layouts/` binary tree) was generated by a
-//! development-time-only script, not checked into the workspace (consistent
-//! with how the `wild_encounters` / `trainers` modules document their own
-//! transcription instead of shipping a generator). To regenerate: for each
-//! entry in `pokeemerald/data/layouts/layouts.json`, copy
-//! `<entry>.border_filepath` and `<entry>.blockdata_filepath` verbatim into
-//! `crates/assets/data/layouts/<basename of blockdata_filepath's directory>/`
-//! as `border.bin` / `map.bin`, then emit one [`MapLayout`] literal per entry
-//! (`id`, `name`, `width`, `height`, `primary_tileset`, `secondary_tileset`,
-//! plus `include_bytes!` of the two copied files) into the `LAYOUTS` array below,
-//! in `layouts.json` order. No other transformation is applied — the binary
-//! files are copied unmodified `(no-verbatim` covers re-implemented *code*,
-//! not opaque per-cell grid data with no code of its own to transliterate`)`.
+//! **Re-running the extraction.** This module's metadata table was
+//! generated by a development-time-only script, not checked into the
+//! workspace (consistent with how the `wild_encounters` / `trainers`
+//! modules document their own transcription instead of shipping a
+//! generator). To regenerate: for each entry in
+//! `pokeemerald/data/layouts/layouts.json`, emit one [`MapLayout`] literal
+//! (`id`, `name`, `width`, `height`, `primary_tileset`, `secondary_tileset`)
+//! into the `LAYOUTS` array below, in `layouts.json` order. Unlike the
+//! original extraction, regeneration no longer copies any `.bin` files —
+//! `border_filepath` / `blockdata_filepath` bytes are out of scope for this
+//! crate and belong solely to the `cargo xtask extract` asset pack (issue
+//! #81).
 //!
 //! The upstream-tie tests at the bottom pin Littleroot Town's 20x20
-//! dimensions plus a structural size/border-shape check over the whole
-//! table.
+//! dimensions plus a structural size check over the whole table.
 
 use crate::error::AssetError;
 
@@ -161,7 +153,14 @@ impl MetatileCell {
     }
 }
 
-/// One `gMapLayouts` entry — the owned form of upstream `struct MapLayout`.
+/// One `gMapLayouts` entry — the owned metadata form of upstream `struct
+/// MapLayout`.
+///
+/// Carries dimensions and tileset references only. The grid/border bytes
+/// this layout's map is built from are *not* stored here — per Discussion
+/// #71 policy A they live in the local asset pack, out of this crate's
+/// reach until a caller reads them off disk and hands them to
+/// [`LayoutGrid::new`] / [`BorderGrid::new`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MapLayout {
     /// This layout's id (upstream `LAYOUT_*` name).
@@ -180,15 +179,6 @@ pub struct MapLayout {
     /// The secondary tileset's upstream symbol (upstream
     /// `secondaryTileset`, e.g. `"gTileset_Petalburg"`).
     pub secondary_tileset: &'static str,
-    /// The raw `map.bin` bytes: a row-major, little-endian `u16` grid, at
-    /// least `width * height * 2` bytes (see the module docs on the
-    /// "unused" layouts' trailing padding). Decode via
-    /// [`cell_at`](MapLayout::cell_at) / [`cells`](MapLayout::cells).
-    blockdata: &'static [u8],
-    /// The raw `border.bin` bytes: always [`BORDER_CELLS`] little-endian
-    /// `u16` cells ([`BORDER_WIDTH`] x [`BORDER_HEIGHT`]). Decode via
-    /// [`border_cell`](MapLayout::border_cell).
-    border: &'static [u8],
 }
 
 impl MapLayout {
@@ -198,11 +188,64 @@ impl MapLayout {
         usize::from(self.width) * usize::from(self.height)
     }
 
-    /// The raw `map.bin` byte length (may exceed `cell_count() * 2` for a
-    /// handful of upstream "unused" layouts — see the module docs).
+    /// Build a [`LayoutGrid`] view over caller-supplied `map.bin`-shaped
+    /// bytes for this layout. See [`LayoutGrid::new`] for the validation
+    /// this performs.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AssetError::LayoutGridTooShort`] if `bytes` is shorter than
+    /// this layout requires.
+    pub fn grid<'a>(&self, bytes: &'a [u8]) -> Result<LayoutGrid<'a>, AssetError> {
+        LayoutGrid::new(self, bytes)
+    }
+}
+
+/// A borrowed, validated view over a layout's decoded metatile grid.
+///
+/// Wraps a [`MapLayout`]'s dimensions together with caller-supplied
+/// `map.bin` bytes — this module ships no grid bytes of its own; the bytes
+/// come from the local, gitignored asset pack (`cargo xtask extract`, issue
+/// #81; see the module docs). [`cell_at`](LayoutGrid::cell_at) /
+/// [`cells`](LayoutGrid::cells) decode row-major, little-endian `u16` cells
+/// on demand (see [`MetatileCell`]).
+#[derive(Debug, Clone, Copy)]
+pub struct LayoutGrid<'a> {
+    width: u16,
+    height: u16,
+    bytes: &'a [u8],
+}
+
+impl<'a> LayoutGrid<'a> {
+    /// Build a view of `bytes` (a `map.bin`-shaped buffer) for `layout`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AssetError::LayoutGridTooShort`] if `bytes.len()` is less
+    /// than `layout.width * layout.height * 2`. A handful of upstream
+    /// "unused" layouts carry trailing padding beyond that minimum (see the
+    /// module docs), so a *longer* buffer is accepted — reads never go past
+    /// `width * height` cells regardless.
+    pub fn new(layout: &MapLayout, bytes: &'a [u8]) -> Result<Self, AssetError> {
+        let expected = usize::from(layout.width) * usize::from(layout.height) * 2;
+        if bytes.len() < expected {
+            return Err(AssetError::LayoutGridTooShort(
+                layout.id.0,
+                expected,
+                bytes.len(),
+            ));
+        }
+        Ok(Self {
+            width: layout.width,
+            height: layout.height,
+            bytes,
+        })
+    }
+
+    /// The number of metatile cells in this grid (`width * height`).
     #[must_use]
-    pub const fn blockdata_len(&self) -> usize {
-        self.blockdata.len()
+    pub fn cell_count(&self) -> usize {
+        usize::from(self.width) * usize::from(self.height)
     }
 
     /// The decoded cell at `(x, y)`, or `None` if out of bounds.
@@ -213,7 +256,7 @@ impl MapLayout {
         }
         let index = usize::from(y) * usize::from(self.width) + usize::from(x);
         let offset = index * 2;
-        let bytes = self.blockdata.get(offset..offset + 2)?;
+        let bytes = self.bytes.get(offset..offset + 2)?;
         Some(MetatileCell::from_raw(u16::from_le_bytes([
             bytes[0], bytes[1],
         ])))
@@ -222,10 +265,36 @@ impl MapLayout {
     /// Every decoded cell, row-major (`y` outer, `x` inner), matching
     /// upstream's flat storage order.
     pub fn cells(&self) -> impl Iterator<Item = MetatileCell> + '_ {
-        self.blockdata
+        self.bytes
             .chunks_exact(2)
             .take(self.cell_count())
             .map(|b| MetatileCell::from_raw(u16::from_le_bytes([b[0], b[1]])))
+    }
+}
+
+/// A borrowed, validated view over a layout's fixed [`BORDER_WIDTH`] x
+/// [`BORDER_HEIGHT`] border block.
+///
+/// Wraps caller-supplied `border.bin` bytes — this module ships no border
+/// bytes of its own; see the module docs.
+#[derive(Debug, Clone, Copy)]
+pub struct BorderGrid<'a> {
+    bytes: &'a [u8],
+}
+
+impl<'a> BorderGrid<'a> {
+    /// Build a view of `bytes` (a `border.bin`-shaped buffer).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AssetError::LayoutBorderWrongSize`] if `bytes.len()` is not
+    /// exactly [`BORDER_CELLS`] `* 2` bytes (every upstream `border.bin` is
+    /// exactly 8 bytes; see the module docs).
+    pub fn new(bytes: &'a [u8]) -> Result<Self, AssetError> {
+        if bytes.len() != BORDER_CELLS * 2 {
+            return Err(AssetError::LayoutBorderWrongSize(bytes.len()));
+        }
+        Ok(Self { bytes })
     }
 
     /// The decoded border cell covering world position `(x, y)`, per
@@ -236,17 +305,17 @@ impl MapLayout {
     // sign, so the `i32 -> usize` cast never loses information.
     #[allow(clippy::cast_sign_loss)]
     #[must_use]
-    pub fn border_cell(&self, x: i32, y: i32) -> MetatileCell {
+    pub fn cell_at(&self, x: i32, y: i32) -> MetatileCell {
         let index = (((x + 1) & 1) + (((y + 1) & 1) << 1)) as usize;
         let offset = index * 2;
-        let raw = u16::from_le_bytes([self.border[offset], self.border[offset + 1]]);
+        let raw = u16::from_le_bytes([self.bytes[offset], self.bytes[offset + 1]]);
         MetatileCell::from_raw(raw)
     }
 
     /// Every decoded border cell, in upstream storage order (index
     /// `0..BORDER_CELLS`).
-    pub fn border_cells(&self) -> impl Iterator<Item = MetatileCell> + '_ {
-        self.border
+    pub fn cells(&self) -> impl Iterator<Item = MetatileCell> + '_ {
+        self.bytes
             .chunks_exact(2)
             .map(|b| MetatileCell::from_raw(u16::from_le_bytes([b[0], b[1]])))
     }
@@ -262,8 +331,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 30,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Petalburg",
-        blockdata: include_bytes!("../data/layouts/PetalburgCity/map.bin"),
-        border: include_bytes!("../data/layouts/PetalburgCity/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_SLATEPORT_CITY"),
@@ -272,8 +339,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 60,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Slateport",
-        blockdata: include_bytes!("../data/layouts/SlateportCity/map.bin"),
-        border: include_bytes!("../data/layouts/SlateportCity/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_MAUVILLE_CITY"),
@@ -282,8 +347,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 20,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Mauville",
-        blockdata: include_bytes!("../data/layouts/MauvilleCity/map.bin"),
-        border: include_bytes!("../data/layouts/MauvilleCity/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_RUSTBORO_CITY"),
@@ -292,8 +355,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 60,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Rustboro",
-        blockdata: include_bytes!("../data/layouts/RustboroCity/map.bin"),
-        border: include_bytes!("../data/layouts/RustboroCity/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_FORTREE_CITY"),
@@ -302,8 +363,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 20,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Fortree",
-        blockdata: include_bytes!("../data/layouts/FortreeCity/map.bin"),
-        border: include_bytes!("../data/layouts/FortreeCity/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_LILYCOVE_CITY"),
@@ -312,8 +371,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 40,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Lilycove",
-        blockdata: include_bytes!("../data/layouts/LilycoveCity/map.bin"),
-        border: include_bytes!("../data/layouts/LilycoveCity/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_MOSSDEEP_CITY"),
@@ -322,8 +379,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 40,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Mossdeep",
-        blockdata: include_bytes!("../data/layouts/MossdeepCity/map.bin"),
-        border: include_bytes!("../data/layouts/MossdeepCity/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_SOOTOPOLIS_CITY"),
@@ -332,8 +387,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 60,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Sootopolis",
-        blockdata: include_bytes!("../data/layouts/SootopolisCity/map.bin"),
-        border: include_bytes!("../data/layouts/SootopolisCity/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_EVER_GRANDE_CITY"),
@@ -342,8 +395,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 80,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_EverGrande",
-        blockdata: include_bytes!("../data/layouts/EverGrandeCity/map.bin"),
-        border: include_bytes!("../data/layouts/EverGrandeCity/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_LITTLEROOT_TOWN"),
@@ -352,8 +403,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 20,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Petalburg",
-        blockdata: include_bytes!("../data/layouts/LittlerootTown/map.bin"),
-        border: include_bytes!("../data/layouts/LittlerootTown/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_OLDALE_TOWN"),
@@ -362,8 +411,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 20,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Petalburg",
-        blockdata: include_bytes!("../data/layouts/OldaleTown/map.bin"),
-        border: include_bytes!("../data/layouts/OldaleTown/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_DEWFORD_TOWN"),
@@ -372,8 +419,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 20,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Dewford",
-        blockdata: include_bytes!("../data/layouts/DewfordTown/map.bin"),
-        border: include_bytes!("../data/layouts/DewfordTown/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_LAVARIDGE_TOWN"),
@@ -382,8 +427,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 20,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Lavaridge",
-        blockdata: include_bytes!("../data/layouts/LavaridgeTown/map.bin"),
-        border: include_bytes!("../data/layouts/LavaridgeTown/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_FALLARBOR_TOWN"),
@@ -392,8 +435,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 20,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Fallarbor",
-        blockdata: include_bytes!("../data/layouts/FallarborTown/map.bin"),
-        border: include_bytes!("../data/layouts/FallarborTown/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_VERDANTURF_TOWN"),
@@ -402,8 +443,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 20,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Mauville",
-        blockdata: include_bytes!("../data/layouts/VerdanturfTown/map.bin"),
-        border: include_bytes!("../data/layouts/VerdanturfTown/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_PACIFIDLOG_TOWN"),
@@ -412,8 +451,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 40,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Pacifidlog",
-        blockdata: include_bytes!("../data/layouts/PacifidlogTown/map.bin"),
-        border: include_bytes!("../data/layouts/PacifidlogTown/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_ROUTE101"),
@@ -422,8 +459,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 20,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Petalburg",
-        blockdata: include_bytes!("../data/layouts/Route101/map.bin"),
-        border: include_bytes!("../data/layouts/Route101/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_ROUTE102"),
@@ -432,8 +467,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 20,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Petalburg",
-        blockdata: include_bytes!("../data/layouts/Route102/map.bin"),
-        border: include_bytes!("../data/layouts/Route102/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_ROUTE103"),
@@ -442,8 +475,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 22,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Petalburg",
-        blockdata: include_bytes!("../data/layouts/Route103/map.bin"),
-        border: include_bytes!("../data/layouts/Route103/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_ROUTE104"),
@@ -452,8 +483,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 80,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Rustboro",
-        blockdata: include_bytes!("../data/layouts/Route104/map.bin"),
-        border: include_bytes!("../data/layouts/Route104/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_ROUTE105"),
@@ -462,8 +491,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 80,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Dewford",
-        blockdata: include_bytes!("../data/layouts/Route105/map.bin"),
-        border: include_bytes!("../data/layouts/Route105/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_ROUTE106"),
@@ -472,8 +499,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 20,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Dewford",
-        blockdata: include_bytes!("../data/layouts/Route106/map.bin"),
-        border: include_bytes!("../data/layouts/Route106/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_ROUTE107"),
@@ -482,8 +507,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 20,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Dewford",
-        blockdata: include_bytes!("../data/layouts/Route107/map.bin"),
-        border: include_bytes!("../data/layouts/Route107/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_ROUTE108"),
@@ -492,8 +515,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 20,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Slateport",
-        blockdata: include_bytes!("../data/layouts/Route108/map.bin"),
-        border: include_bytes!("../data/layouts/Route108/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_ROUTE109"),
@@ -502,8 +523,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 63,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Slateport",
-        blockdata: include_bytes!("../data/layouts/Route109/map.bin"),
-        border: include_bytes!("../data/layouts/Route109/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_ROUTE110"),
@@ -512,8 +531,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 100,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Mauville",
-        blockdata: include_bytes!("../data/layouts/Route110/map.bin"),
-        border: include_bytes!("../data/layouts/Route110/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_ROUTE111"),
@@ -522,8 +539,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 140,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Mauville",
-        blockdata: include_bytes!("../data/layouts/Route111/map.bin"),
-        border: include_bytes!("../data/layouts/Route111/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_ROUTE112"),
@@ -532,8 +547,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 60,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Lavaridge",
-        blockdata: include_bytes!("../data/layouts/Route112/map.bin"),
-        border: include_bytes!("../data/layouts/Route112/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_ROUTE113"),
@@ -542,8 +555,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 20,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Fallarbor",
-        blockdata: include_bytes!("../data/layouts/Route113/map.bin"),
-        border: include_bytes!("../data/layouts/Route113/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_ROUTE114"),
@@ -552,8 +563,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 80,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Fallarbor",
-        blockdata: include_bytes!("../data/layouts/Route114/map.bin"),
-        border: include_bytes!("../data/layouts/Route114/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_ROUTE115"),
@@ -562,8 +571,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 80,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Fallarbor",
-        blockdata: include_bytes!("../data/layouts/Route115/map.bin"),
-        border: include_bytes!("../data/layouts/Route115/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_ROUTE116"),
@@ -572,8 +579,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 20,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Rustboro",
-        blockdata: include_bytes!("../data/layouts/Route116/map.bin"),
-        border: include_bytes!("../data/layouts/Route116/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_ROUTE117"),
@@ -582,8 +587,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 20,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Mauville",
-        blockdata: include_bytes!("../data/layouts/Route117/map.bin"),
-        border: include_bytes!("../data/layouts/Route117/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_ROUTE118"),
@@ -592,8 +595,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 20,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Mauville",
-        blockdata: include_bytes!("../data/layouts/Route118/map.bin"),
-        border: include_bytes!("../data/layouts/Route118/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_ROUTE119"),
@@ -602,8 +603,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 140,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Fortree",
-        blockdata: include_bytes!("../data/layouts/Route119/map.bin"),
-        border: include_bytes!("../data/layouts/Route119/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_ROUTE120"),
@@ -612,8 +611,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 100,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Fortree",
-        blockdata: include_bytes!("../data/layouts/Route120/map.bin"),
-        border: include_bytes!("../data/layouts/Route120/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_ROUTE121"),
@@ -622,8 +619,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 20,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Lilycove",
-        blockdata: include_bytes!("../data/layouts/Route121/map.bin"),
-        border: include_bytes!("../data/layouts/Route121/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_ROUTE122"),
@@ -632,8 +627,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 40,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Lilycove",
-        blockdata: include_bytes!("../data/layouts/Route122/map.bin"),
-        border: include_bytes!("../data/layouts/Route122/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_ROUTE123"),
@@ -642,8 +635,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 20,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Lilycove",
-        blockdata: include_bytes!("../data/layouts/Route123/map.bin"),
-        border: include_bytes!("../data/layouts/Route123/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_ROUTE124"),
@@ -652,8 +643,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 80,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Mossdeep",
-        blockdata: include_bytes!("../data/layouts/Route124/map.bin"),
-        border: include_bytes!("../data/layouts/Route124/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_ROUTE125"),
@@ -662,8 +651,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 40,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Mossdeep",
-        blockdata: include_bytes!("../data/layouts/Route125/map.bin"),
-        border: include_bytes!("../data/layouts/Route125/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_ROUTE126"),
@@ -672,8 +659,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 80,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Mossdeep",
-        blockdata: include_bytes!("../data/layouts/Route126/map.bin"),
-        border: include_bytes!("../data/layouts/Route126/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_ROUTE127"),
@@ -682,8 +667,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 80,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Mossdeep",
-        blockdata: include_bytes!("../data/layouts/Route127/map.bin"),
-        border: include_bytes!("../data/layouts/Route127/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_ROUTE128"),
@@ -692,8 +675,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 40,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Mossdeep",
-        blockdata: include_bytes!("../data/layouts/Route128/map.bin"),
-        border: include_bytes!("../data/layouts/Route128/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_ROUTE129"),
@@ -702,8 +683,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 40,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Mossdeep",
-        blockdata: include_bytes!("../data/layouts/Route129/map.bin"),
-        border: include_bytes!("../data/layouts/Route129/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_ROUTE130_MIRAGE_ISLAND"),
@@ -712,8 +691,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 40,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Cave",
-        blockdata: include_bytes!("../data/layouts/Route130_MirageIsland/map.bin"),
-        border: include_bytes!("../data/layouts/Route130_MirageIsland/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_ROUTE131"),
@@ -722,8 +699,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 40,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Pacifidlog",
-        blockdata: include_bytes!("../data/layouts/Route131/map.bin"),
-        border: include_bytes!("../data/layouts/Route131/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_ROUTE132"),
@@ -732,8 +707,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 40,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Pacifidlog",
-        blockdata: include_bytes!("../data/layouts/Route132/map.bin"),
-        border: include_bytes!("../data/layouts/Route132/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_ROUTE133"),
@@ -742,8 +715,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 40,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Pacifidlog",
-        blockdata: include_bytes!("../data/layouts/Route133/map.bin"),
-        border: include_bytes!("../data/layouts/Route133/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_ROUTE134"),
@@ -752,8 +723,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 40,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Pacifidlog",
-        blockdata: include_bytes!("../data/layouts/Route134/map.bin"),
-        border: include_bytes!("../data/layouts/Route134/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_UNDERWATER_ROUTE126"),
@@ -762,8 +731,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 80,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Underwater",
-        blockdata: include_bytes!("../data/layouts/Underwater_Route126/map.bin"),
-        border: include_bytes!("../data/layouts/Underwater_Route126/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_UNDERWATER_ROUTE127"),
@@ -772,8 +739,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 80,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Underwater",
-        blockdata: include_bytes!("../data/layouts/Underwater_Route127/map.bin"),
-        border: include_bytes!("../data/layouts/Underwater_Route127/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_UNDERWATER_ROUTE128"),
@@ -782,8 +747,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 40,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Underwater",
-        blockdata: include_bytes!("../data/layouts/Underwater_Route128/map.bin"),
-        border: include_bytes!("../data/layouts/Underwater_Route128/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_LITTLEROOT_TOWN_BRENDANS_HOUSE_1F"),
@@ -792,8 +755,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 9,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_BrendansMaysHouse",
-        blockdata: include_bytes!("../data/layouts/LittlerootTown_BrendansHouse_1F/map.bin"),
-        border: include_bytes!("../data/layouts/LittlerootTown_BrendansHouse_1F/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_LITTLEROOT_TOWN_BRENDANS_HOUSE_2F"),
@@ -802,8 +763,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 8,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_BrendansMaysHouse",
-        blockdata: include_bytes!("../data/layouts/LittlerootTown_BrendansHouse_2F/map.bin"),
-        border: include_bytes!("../data/layouts/LittlerootTown_BrendansHouse_2F/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_LITTLEROOT_TOWN_MAYS_HOUSE_1F"),
@@ -812,8 +771,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 9,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_BrendansMaysHouse",
-        blockdata: include_bytes!("../data/layouts/LittlerootTown_MaysHouse_1F/map.bin"),
-        border: include_bytes!("../data/layouts/LittlerootTown_MaysHouse_1F/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_LITTLEROOT_TOWN_MAYS_HOUSE_2F"),
@@ -822,8 +779,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 8,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_BrendansMaysHouse",
-        blockdata: include_bytes!("../data/layouts/LittlerootTown_MaysHouse_2F/map.bin"),
-        border: include_bytes!("../data/layouts/LittlerootTown_MaysHouse_2F/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_LITTLEROOT_TOWN_PROFESSOR_BIRCHS_LAB"),
@@ -832,8 +787,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 13,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_Lab",
-        blockdata: include_bytes!("../data/layouts/LittlerootTown_ProfessorBirchsLab/map.bin"),
-        border: include_bytes!("../data/layouts/LittlerootTown_ProfessorBirchsLab/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_HOUSE1"),
@@ -842,8 +795,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 9,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_GenericBuilding",
-        blockdata: include_bytes!("../data/layouts/House1/map.bin"),
-        border: include_bytes!("../data/layouts/House1/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_HOUSE2"),
@@ -852,8 +803,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 8,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_GenericBuilding",
-        blockdata: include_bytes!("../data/layouts/House2/map.bin"),
-        border: include_bytes!("../data/layouts/House2/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_POKEMON_CENTER_1F"),
@@ -862,8 +811,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 9,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_PokemonCenter",
-        blockdata: include_bytes!("../data/layouts/PokemonCenter_1F/map.bin"),
-        border: include_bytes!("../data/layouts/PokemonCenter_1F/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_POKEMON_CENTER_2F"),
@@ -872,8 +819,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 10,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_PokemonCenter",
-        blockdata: include_bytes!("../data/layouts/PokemonCenter_2F/map.bin"),
-        border: include_bytes!("../data/layouts/PokemonCenter_2F/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_MART"),
@@ -882,8 +827,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 8,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_Shop",
-        blockdata: include_bytes!("../data/layouts/Mart/map.bin"),
-        border: include_bytes!("../data/layouts/Mart/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_HOUSE3"),
@@ -892,8 +835,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 8,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_GenericBuilding",
-        blockdata: include_bytes!("../data/layouts/House3/map.bin"),
-        border: include_bytes!("../data/layouts/House3/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_DEWFORD_TOWN_GYM"),
@@ -902,8 +843,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 28,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_DewfordGym",
-        blockdata: include_bytes!("../data/layouts/DewfordTown_Gym/map.bin"),
-        border: include_bytes!("../data/layouts/DewfordTown_Gym/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_DEWFORD_TOWN_HALL"),
@@ -912,8 +851,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 9,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_GenericBuilding",
-        blockdata: include_bytes!("../data/layouts/DewfordTown_Hall/map.bin"),
-        border: include_bytes!("../data/layouts/DewfordTown_Hall/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_HOUSE4"),
@@ -922,8 +859,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 9,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_GenericBuilding",
-        blockdata: include_bytes!("../data/layouts/House4/map.bin"),
-        border: include_bytes!("../data/layouts/House4/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_LAVARIDGE_TOWN_HERB_SHOP"),
@@ -932,8 +867,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 8,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_Shop",
-        blockdata: include_bytes!("../data/layouts/LavaridgeTown_HerbShop/map.bin"),
-        border: include_bytes!("../data/layouts/LavaridgeTown_HerbShop/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_LAVARIDGE_TOWN_GYM_1F"),
@@ -942,8 +875,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 19,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_LavaridgeGym",
-        blockdata: include_bytes!("../data/layouts/LavaridgeTown_Gym_1F/map.bin"),
-        border: include_bytes!("../data/layouts/LavaridgeTown_Gym_1F/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_LAVARIDGE_TOWN_GYM_B1F"),
@@ -952,8 +883,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 19,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_LavaridgeGym",
-        blockdata: include_bytes!("../data/layouts/LavaridgeTown_Gym_B1F/map.bin"),
-        border: include_bytes!("../data/layouts/LavaridgeTown_Gym_B1F/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_LAVARIDGE_TOWN_POKEMON_CENTER_1F"),
@@ -962,8 +891,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 9,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_PokemonCenter",
-        blockdata: include_bytes!("../data/layouts/LavaridgeTown_PokemonCenter_1F/map.bin"),
-        border: include_bytes!("../data/layouts/LavaridgeTown_PokemonCenter_1F/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_FALLARBOR_TOWN_LEFTOVER_RSCONTEST_LOBBY"),
@@ -972,8 +899,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 7,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_Contest",
-        blockdata: include_bytes!("../data/layouts/FallarborTown_LeftoverRSContestLobby/map.bin"),
-        border: include_bytes!("../data/layouts/FallarborTown_LeftoverRSContestLobby/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_FALLARBOR_TOWN_LEFTOVER_RSCONTEST_HALL"),
@@ -982,8 +907,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 18,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_Contest",
-        blockdata: include_bytes!("../data/layouts/FallarborTown_LeftoverRSContestHall/map.bin"),
-        border: include_bytes!("../data/layouts/FallarborTown_LeftoverRSContestHall/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_LILYCOVE_CITY_HOUSE2"),
@@ -992,8 +915,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 8,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_GenericBuilding",
-        blockdata: include_bytes!("../data/layouts/LilycoveCity_House2/map.bin"),
-        border: include_bytes!("../data/layouts/LilycoveCity_House2/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_UNUSED_CONTEST_ROOM1"),
@@ -1002,8 +923,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 1,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_Contest",
-        blockdata: include_bytes!("../data/layouts/UnusedContestRoom1/map.bin"),
-        border: include_bytes!("../data/layouts/UnusedContestRoom1/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_VERDANTURF_TOWN_WANDAS_HOUSE"),
@@ -1012,8 +931,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 8,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_GenericBuilding",
-        blockdata: include_bytes!("../data/layouts/VerdanturfTown_WandasHouse/map.bin"),
-        border: include_bytes!("../data/layouts/VerdanturfTown_WandasHouse/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_PACIFIDLOG_TOWN_HOUSE1"),
@@ -1022,8 +939,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 9,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_GenericBuilding",
-        blockdata: include_bytes!("../data/layouts/PacifidlogTown_House1/map.bin"),
-        border: include_bytes!("../data/layouts/PacifidlogTown_House1/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_PACIFIDLOG_TOWN_HOUSE2"),
@@ -1032,8 +947,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 9,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_GenericBuilding",
-        blockdata: include_bytes!("../data/layouts/PacifidlogTown_House2/map.bin"),
-        border: include_bytes!("../data/layouts/PacifidlogTown_House2/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_PETALBURG_CITY_GYM"),
@@ -1042,8 +955,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 112,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_PetalburgGym",
-        blockdata: include_bytes!("../data/layouts/PetalburgCity_Gym/map.bin"),
-        border: include_bytes!("../data/layouts/PetalburgCity_Gym/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_HOUSE_WITH_BED"),
@@ -1052,8 +963,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 8,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_GenericBuilding",
-        blockdata: include_bytes!("../data/layouts/HouseWithBed/map.bin"),
-        border: include_bytes!("../data/layouts/HouseWithBed/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_SLATEPORT_CITY_STERNS_SHIPYARD_1F"),
@@ -1062,8 +971,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 15,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Facility",
-        blockdata: include_bytes!("../data/layouts/SlateportCity_SternsShipyard_1F/map.bin"),
-        border: include_bytes!("../data/layouts/SlateportCity_SternsShipyard_1F/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_SLATEPORT_CITY_STERNS_SHIPYARD_2F"),
@@ -1072,8 +979,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 15,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Facility",
-        blockdata: include_bytes!("../data/layouts/SlateportCity_SternsShipyard_2F/map.bin"),
-        border: include_bytes!("../data/layouts/SlateportCity_SternsShipyard_2F/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_UNUSED_CONTEST_ROOM2"),
@@ -1082,8 +987,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 1,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_Contest",
-        blockdata: include_bytes!("../data/layouts/UnusedContestRoom2/map.bin"),
-        border: include_bytes!("../data/layouts/UnusedContestRoom2/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_UNUSED_CONTEST_ROOM3"),
@@ -1092,8 +995,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 1,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_Contest",
-        blockdata: include_bytes!("../data/layouts/UnusedContestRoom3/map.bin"),
-        border: include_bytes!("../data/layouts/UnusedContestRoom3/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_SLATEPORT_CITY_POKEMON_FAN_CLUB"),
@@ -1102,8 +1003,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 11,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_PokemonFanClub",
-        blockdata: include_bytes!("../data/layouts/SlateportCity_PokemonFanClub/map.bin"),
-        border: include_bytes!("../data/layouts/SlateportCity_PokemonFanClub/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_SLATEPORT_CITY_OCEANIC_MUSEUM_1F"),
@@ -1112,8 +1011,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 9,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_OceanicMuseum",
-        blockdata: include_bytes!("../data/layouts/SlateportCity_OceanicMuseum_1F/map.bin"),
-        border: include_bytes!("../data/layouts/SlateportCity_OceanicMuseum_1F/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_SLATEPORT_CITY_OCEANIC_MUSEUM_2F"),
@@ -1122,8 +1019,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 9,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_OceanicMuseum",
-        blockdata: include_bytes!("../data/layouts/SlateportCity_OceanicMuseum_2F/map.bin"),
-        border: include_bytes!("../data/layouts/SlateportCity_OceanicMuseum_2F/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_HARBOR"),
@@ -1132,8 +1027,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 15,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Facility",
-        blockdata: include_bytes!("../data/layouts/Harbor/map.bin"),
-        border: include_bytes!("../data/layouts/Harbor/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_MAUVILLE_CITY_GYM"),
@@ -1142,8 +1035,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 21,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_MauvilleGym",
-        blockdata: include_bytes!("../data/layouts/MauvilleCity_Gym/map.bin"),
-        border: include_bytes!("../data/layouts/MauvilleCity_Gym/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_MAUVILLE_CITY_BIKE_SHOP"),
@@ -1152,8 +1043,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 9,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_BikeShop",
-        blockdata: include_bytes!("../data/layouts/MauvilleCity_BikeShop/map.bin"),
-        border: include_bytes!("../data/layouts/MauvilleCity_BikeShop/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_MAUVILLE_CITY_GAME_CORNER"),
@@ -1162,8 +1051,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 11,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_MauvilleGameCorner",
-        blockdata: include_bytes!("../data/layouts/MauvilleCity_GameCorner/map.bin"),
-        border: include_bytes!("../data/layouts/MauvilleCity_GameCorner/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_RUSTBORO_CITY_DEVON_CORP_1F"),
@@ -1172,8 +1059,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 9,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_Facility",
-        blockdata: include_bytes!("../data/layouts/RustboroCity_DevonCorp_1F/map.bin"),
-        border: include_bytes!("../data/layouts/RustboroCity_DevonCorp_1F/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_RUSTBORO_CITY_DEVON_CORP_2F"),
@@ -1182,8 +1067,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 9,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Facility",
-        blockdata: include_bytes!("../data/layouts/RustboroCity_DevonCorp_2F/map.bin"),
-        border: include_bytes!("../data/layouts/RustboroCity_DevonCorp_2F/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_RUSTBORO_CITY_GYM"),
@@ -1192,8 +1075,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 20,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_RustboroGym",
-        blockdata: include_bytes!("../data/layouts/RustboroCity_Gym/map.bin"),
-        border: include_bytes!("../data/layouts/RustboroCity_Gym/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_RUSTBORO_CITY_POKEMON_SCHOOL"),
@@ -1202,8 +1083,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 11,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_PokemonSchool",
-        blockdata: include_bytes!("../data/layouts/RustboroCity_PokemonSchool/map.bin"),
-        border: include_bytes!("../data/layouts/RustboroCity_PokemonSchool/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_RUSTBORO_CITY_HOUSE"),
@@ -1212,8 +1091,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 9,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_GenericBuilding",
-        blockdata: include_bytes!("../data/layouts/RustboroCity_House/map.bin"),
-        border: include_bytes!("../data/layouts/RustboroCity_House/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_RUSTBORO_CITY_HOUSE1"),
@@ -1222,8 +1099,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 8,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_GenericBuilding",
-        blockdata: include_bytes!("../data/layouts/RustboroCity_House1/map.bin"),
-        border: include_bytes!("../data/layouts/RustboroCity_House1/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_RUSTBORO_CITY_CUTTERS_HOUSE"),
@@ -1232,8 +1107,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 9,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_GenericBuilding",
-        blockdata: include_bytes!("../data/layouts/RustboroCity_CuttersHouse/map.bin"),
-        border: include_bytes!("../data/layouts/RustboroCity_CuttersHouse/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_FORTREE_CITY_HOUSE1"),
@@ -1242,8 +1115,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 6,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_GenericBuilding",
-        blockdata: include_bytes!("../data/layouts/FortreeCity_House1/map.bin"),
-        border: include_bytes!("../data/layouts/FortreeCity_House1/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_FORTREE_CITY_GYM"),
@@ -1252,8 +1123,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 25,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_FortreeGym",
-        blockdata: include_bytes!("../data/layouts/FortreeCity_Gym/map.bin"),
-        border: include_bytes!("../data/layouts/FortreeCity_Gym/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_FORTREE_CITY_HOUSE2"),
@@ -1262,8 +1131,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 6,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_GenericBuilding",
-        blockdata: include_bytes!("../data/layouts/FortreeCity_House2/map.bin"),
-        border: include_bytes!("../data/layouts/FortreeCity_House2/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_ROUTE104_MR_BRINEYS_HOUSE"),
@@ -1272,8 +1139,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 9,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_GenericBuilding",
-        blockdata: include_bytes!("../data/layouts/Route104_MrBrineysHouse/map.bin"),
-        border: include_bytes!("../data/layouts/Route104_MrBrineysHouse/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_LILYCOVE_CITY_LILYCOVE_MUSEUM_1F"),
@@ -1282,8 +1147,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 14,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_LilycoveMuseum",
-        blockdata: include_bytes!("../data/layouts/LilycoveCity_LilycoveMuseum_1F/map.bin"),
-        border: include_bytes!("../data/layouts/LilycoveCity_LilycoveMuseum_1F/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_LILYCOVE_CITY_LILYCOVE_MUSEUM_2F"),
@@ -1292,8 +1155,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 13,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_LilycoveMuseum",
-        blockdata: include_bytes!("../data/layouts/LilycoveCity_LilycoveMuseum_2F/map.bin"),
-        border: include_bytes!("../data/layouts/LilycoveCity_LilycoveMuseum_2F/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_LILYCOVE_CITY_CONTEST_LOBBY"),
@@ -1302,8 +1163,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 12,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_Contest",
-        blockdata: include_bytes!("../data/layouts/LilycoveCity_ContestLobby/map.bin"),
-        border: include_bytes!("../data/layouts/LilycoveCity_ContestLobby/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_LILYCOVE_CITY_CONTEST_HALL"),
@@ -1312,8 +1171,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 33,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_Contest",
-        blockdata: include_bytes!("../data/layouts/LilycoveCity_ContestHall/map.bin"),
-        border: include_bytes!("../data/layouts/LilycoveCity_ContestHall/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_LILYCOVE_CITY_POKEMON_TRAINER_FAN_CLUB"),
@@ -1322,8 +1179,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 14,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_GenericBuilding",
-        blockdata: include_bytes!("../data/layouts/LilycoveCity_PokemonTrainerFanClub/map.bin"),
-        border: include_bytes!("../data/layouts/LilycoveCity_PokemonTrainerFanClub/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_MOSSDEEP_CITY_GYM"),
@@ -1332,8 +1187,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 36,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_MossdeepGym",
-        blockdata: include_bytes!("../data/layouts/MossdeepCity_Gym/map.bin"),
-        border: include_bytes!("../data/layouts/MossdeepCity_Gym/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_SOOTOPOLIS_CITY_GYM_1F"),
@@ -1342,8 +1195,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 26,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_SootopolisGym",
-        blockdata: include_bytes!("../data/layouts/SootopolisCity_Gym_1F/map.bin"),
-        border: include_bytes!("../data/layouts/SootopolisCity_Gym_1F/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_SOOTOPOLIS_CITY_GYM_B1F"),
@@ -1352,8 +1203,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 26,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_SootopolisGym",
-        blockdata: include_bytes!("../data/layouts/SootopolisCity_Gym_B1F/map.bin"),
-        border: include_bytes!("../data/layouts/SootopolisCity_Gym_B1F/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_EVER_GRANDE_CITY_SIDNEYS_ROOM"),
@@ -1362,8 +1211,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 14,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_EliteFour",
-        blockdata: include_bytes!("../data/layouts/EverGrandeCity_SidneysRoom/map.bin"),
-        border: include_bytes!("../data/layouts/EverGrandeCity_SidneysRoom/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_EVER_GRANDE_CITY_PHOEBES_ROOM"),
@@ -1372,8 +1219,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 14,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_EliteFour",
-        blockdata: include_bytes!("../data/layouts/EverGrandeCity_PhoebesRoom/map.bin"),
-        border: include_bytes!("../data/layouts/EverGrandeCity_PhoebesRoom/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_EVER_GRANDE_CITY_GLACIAS_ROOM"),
@@ -1382,8 +1227,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 14,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_EliteFour",
-        blockdata: include_bytes!("../data/layouts/EverGrandeCity_GlaciasRoom/map.bin"),
-        border: include_bytes!("../data/layouts/EverGrandeCity_GlaciasRoom/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_EVER_GRANDE_CITY_DRAKES_ROOM"),
@@ -1392,8 +1235,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 14,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_EliteFour",
-        blockdata: include_bytes!("../data/layouts/EverGrandeCity_DrakesRoom/map.bin"),
-        border: include_bytes!("../data/layouts/EverGrandeCity_DrakesRoom/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_EVER_GRANDE_CITY_CHAMPIONS_ROOM"),
@@ -1402,8 +1243,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 13,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_EliteFour",
-        blockdata: include_bytes!("../data/layouts/EverGrandeCity_ChampionsRoom/map.bin"),
-        border: include_bytes!("../data/layouts/EverGrandeCity_ChampionsRoom/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_EVER_GRANDE_CITY_SHORT_HALL"),
@@ -1412,8 +1251,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 13,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_EliteFour",
-        blockdata: include_bytes!("../data/layouts/EverGrandeCity_ShortHall/map.bin"),
-        border: include_bytes!("../data/layouts/EverGrandeCity_ShortHall/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_ROUTE104_PRETTY_PETAL_FLOWER_SHOP"),
@@ -1422,8 +1259,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 9,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_PrettyPetalFlowerShop",
-        blockdata: include_bytes!("../data/layouts/Route104_PrettyPetalFlowerShop/map.bin"),
-        border: include_bytes!("../data/layouts/Route104_PrettyPetalFlowerShop/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_CABLE_CAR_STATION"),
@@ -1432,8 +1267,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 12,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Facility",
-        blockdata: include_bytes!("../data/layouts/CableCarStation/map.bin"),
-        border: include_bytes!("../data/layouts/CableCarStation/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_ROUTE114_FOSSIL_MANIACS_HOUSE"),
@@ -1442,8 +1275,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 8,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_GenericBuilding",
-        blockdata: include_bytes!("../data/layouts/Route114_FossilManiacsHouse/map.bin"),
-        border: include_bytes!("../data/layouts/Route114_FossilManiacsHouse/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_ROUTE114_FOSSIL_MANIACS_TUNNEL"),
@@ -1452,8 +1283,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 26,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Fallarbor",
-        blockdata: include_bytes!("../data/layouts/Route114_FossilManiacsTunnel/map.bin"),
-        border: include_bytes!("../data/layouts/Route114_FossilManiacsTunnel/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_ROUTE114_LANETTES_HOUSE"),
@@ -1462,8 +1291,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 8,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_Lab",
-        blockdata: include_bytes!("../data/layouts/Route114_LanettesHouse/map.bin"),
-        border: include_bytes!("../data/layouts/Route114_LanettesHouse/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_ROUTE116_TUNNELERS_REST_HOUSE"),
@@ -1472,8 +1299,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 9,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_GenericBuilding",
-        blockdata: include_bytes!("../data/layouts/Route116_TunnelersRestHouse/map.bin"),
-        border: include_bytes!("../data/layouts/Route116_TunnelersRestHouse/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_ROUTE117_POKEMON_DAY_CARE"),
@@ -1482,8 +1307,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 9,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_PokemonDayCare",
-        blockdata: include_bytes!("../data/layouts/Route117_PokemonDayCare/map.bin"),
-        border: include_bytes!("../data/layouts/Route117_PokemonDayCare/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_ROUTE121_SAFARI_ZONE_ENTRANCE"),
@@ -1492,8 +1315,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 14,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_Shop",
-        blockdata: include_bytes!("../data/layouts/Route121_SafariZoneEntrance/map.bin"),
-        border: include_bytes!("../data/layouts/Route121_SafariZoneEntrance/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_METEOR_FALLS_1F_1R"),
@@ -1502,8 +1323,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 42,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_MeteorFalls",
-        blockdata: include_bytes!("../data/layouts/MeteorFalls_1F_1R/map.bin"),
-        border: include_bytes!("../data/layouts/MeteorFalls_1F_1R/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_METEOR_FALLS_1F_2R"),
@@ -1512,8 +1331,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 32,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_MeteorFalls",
-        blockdata: include_bytes!("../data/layouts/MeteorFalls_1F_2R/map.bin"),
-        border: include_bytes!("../data/layouts/MeteorFalls_1F_2R/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_METEOR_FALLS_B1F_1R"),
@@ -1522,8 +1339,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 38,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_MeteorFalls",
-        blockdata: include_bytes!("../data/layouts/MeteorFalls_B1F_1R/map.bin"),
-        border: include_bytes!("../data/layouts/MeteorFalls_B1F_1R/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_METEOR_FALLS_B1F_2R"),
@@ -1532,8 +1347,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 18,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_MeteorFalls",
-        blockdata: include_bytes!("../data/layouts/MeteorFalls_B1F_2R/map.bin"),
-        border: include_bytes!("../data/layouts/MeteorFalls_B1F_2R/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_RUSTURF_TUNNEL"),
@@ -1542,8 +1355,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 24,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_RusturfTunnel",
-        blockdata: include_bytes!("../data/layouts/RusturfTunnel/map.bin"),
-        border: include_bytes!("../data/layouts/RusturfTunnel/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_UNDERWATER_SOOTOPOLIS_CITY"),
@@ -1552,8 +1363,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 10,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Underwater",
-        blockdata: include_bytes!("../data/layouts/Underwater_SootopolisCity/map.bin"),
-        border: include_bytes!("../data/layouts/Underwater_SootopolisCity/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_DESERT_RUINS"),
@@ -1562,8 +1371,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 33,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Cave",
-        blockdata: include_bytes!("../data/layouts/DesertRuins/map.bin"),
-        border: include_bytes!("../data/layouts/DesertRuins/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_GRANITE_CAVE_1F"),
@@ -1572,8 +1379,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 15,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Cave",
-        blockdata: include_bytes!("../data/layouts/GraniteCave_1F/map.bin"),
-        border: include_bytes!("../data/layouts/GraniteCave_1F/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_GRANITE_CAVE_B1F"),
@@ -1582,8 +1387,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 26,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Cave",
-        blockdata: include_bytes!("../data/layouts/GraniteCave_B1F/map.bin"),
-        border: include_bytes!("../data/layouts/GraniteCave_B1F/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_GRANITE_CAVE_B2F"),
@@ -1592,8 +1395,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 26,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Cave",
-        blockdata: include_bytes!("../data/layouts/GraniteCave_B2F/map.bin"),
-        border: include_bytes!("../data/layouts/GraniteCave_B2F/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_PETALBURG_WOODS"),
@@ -1602,8 +1403,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 44,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Rustboro",
-        blockdata: include_bytes!("../data/layouts/PetalburgWoods/map.bin"),
-        border: include_bytes!("../data/layouts/PetalburgWoods/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_MT_CHIMNEY"),
@@ -1612,8 +1411,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 47,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Lavaridge",
-        blockdata: include_bytes!("../data/layouts/MtChimney/map.bin"),
-        border: include_bytes!("../data/layouts/MtChimney/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_MT_PYRE_1F"),
@@ -1622,8 +1419,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 19,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Facility",
-        blockdata: include_bytes!("../data/layouts/MtPyre_1F/map.bin"),
-        border: include_bytes!("../data/layouts/MtPyre_1F/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_MT_PYRE_2F"),
@@ -1632,8 +1427,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 13,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Facility",
-        blockdata: include_bytes!("../data/layouts/MtPyre_2F/map.bin"),
-        border: include_bytes!("../data/layouts/MtPyre_2F/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_MT_PYRE_3F"),
@@ -1642,8 +1435,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 13,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Facility",
-        blockdata: include_bytes!("../data/layouts/MtPyre_3F/map.bin"),
-        border: include_bytes!("../data/layouts/MtPyre_3F/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_MT_PYRE_4F"),
@@ -1652,8 +1443,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 13,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Facility",
-        blockdata: include_bytes!("../data/layouts/MtPyre_4F/map.bin"),
-        border: include_bytes!("../data/layouts/MtPyre_4F/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_MT_PYRE_5F"),
@@ -1662,8 +1451,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 13,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Facility",
-        blockdata: include_bytes!("../data/layouts/MtPyre_5F/map.bin"),
-        border: include_bytes!("../data/layouts/MtPyre_5F/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_MT_PYRE_6F"),
@@ -1672,8 +1459,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 13,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Facility",
-        blockdata: include_bytes!("../data/layouts/MtPyre_6F/map.bin"),
-        border: include_bytes!("../data/layouts/MtPyre_6F/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_AQUA_HIDEOUT_1F"),
@@ -1682,8 +1467,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 30,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Facility",
-        blockdata: include_bytes!("../data/layouts/AquaHideout_1F/map.bin"),
-        border: include_bytes!("../data/layouts/AquaHideout_1F/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_AQUA_HIDEOUT_B1F"),
@@ -1692,8 +1475,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 24,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Facility",
-        blockdata: include_bytes!("../data/layouts/AquaHideout_B1F/map.bin"),
-        border: include_bytes!("../data/layouts/AquaHideout_B1F/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_AQUA_HIDEOUT_B2F"),
@@ -1702,8 +1483,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 24,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Facility",
-        blockdata: include_bytes!("../data/layouts/AquaHideout_B2F/map.bin"),
-        border: include_bytes!("../data/layouts/AquaHideout_B2F/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_UNDERWATER_SEAFLOOR_CAVERN"),
@@ -1712,8 +1491,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 9,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Underwater",
-        blockdata: include_bytes!("../data/layouts/Underwater_SeafloorCavern/map.bin"),
-        border: include_bytes!("../data/layouts/Underwater_SeafloorCavern/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_SEAFLOOR_CAVERN_ENTRANCE"),
@@ -1722,8 +1499,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 20,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Cave",
-        blockdata: include_bytes!("../data/layouts/SeafloorCavern_Entrance/map.bin"),
-        border: include_bytes!("../data/layouts/SeafloorCavern_Entrance/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_SEAFLOOR_CAVERN_ROOM1"),
@@ -1732,8 +1507,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 21,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Cave",
-        blockdata: include_bytes!("../data/layouts/SeafloorCavern_Room1/map.bin"),
-        border: include_bytes!("../data/layouts/SeafloorCavern_Room1/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_SEAFLOOR_CAVERN_ROOM2"),
@@ -1742,8 +1515,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 12,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Cave",
-        blockdata: include_bytes!("../data/layouts/SeafloorCavern_Room2/map.bin"),
-        border: include_bytes!("../data/layouts/SeafloorCavern_Room2/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_SEAFLOOR_CAVERN_ROOM3"),
@@ -1752,8 +1523,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 17,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Cave",
-        blockdata: include_bytes!("../data/layouts/SeafloorCavern_Room3/map.bin"),
-        border: include_bytes!("../data/layouts/SeafloorCavern_Room3/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_SEAFLOOR_CAVERN_ROOM4"),
@@ -1762,8 +1531,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 19,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Cave",
-        blockdata: include_bytes!("../data/layouts/SeafloorCavern_Room4/map.bin"),
-        border: include_bytes!("../data/layouts/SeafloorCavern_Room4/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_SEAFLOOR_CAVERN_ROOM5"),
@@ -1772,8 +1539,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 20,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Cave",
-        blockdata: include_bytes!("../data/layouts/SeafloorCavern_Room5/map.bin"),
-        border: include_bytes!("../data/layouts/SeafloorCavern_Room5/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_SEAFLOOR_CAVERN_ROOM6"),
@@ -1782,8 +1547,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 23,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Pacifidlog",
-        blockdata: include_bytes!("../data/layouts/SeafloorCavern_Room6/map.bin"),
-        border: include_bytes!("../data/layouts/SeafloorCavern_Room6/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_SEAFLOOR_CAVERN_ROOM7"),
@@ -1792,8 +1555,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 25,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Pacifidlog",
-        blockdata: include_bytes!("../data/layouts/SeafloorCavern_Room7/map.bin"),
-        border: include_bytes!("../data/layouts/SeafloorCavern_Room7/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_SEAFLOOR_CAVERN_ROOM8"),
@@ -1802,8 +1563,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 14,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Cave",
-        blockdata: include_bytes!("../data/layouts/SeafloorCavern_Room8/map.bin"),
-        border: include_bytes!("../data/layouts/SeafloorCavern_Room8/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_SEAFLOOR_CAVERN_ROOM9"),
@@ -1812,8 +1571,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 46,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Cave",
-        blockdata: include_bytes!("../data/layouts/SeafloorCavern_Room9/map.bin"),
-        border: include_bytes!("../data/layouts/SeafloorCavern_Room9/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_CAVE_OF_ORIGIN_ENTRANCE"),
@@ -1822,8 +1579,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 26,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Cave",
-        blockdata: include_bytes!("../data/layouts/CaveOfOrigin_Entrance/map.bin"),
-        border: include_bytes!("../data/layouts/CaveOfOrigin_Entrance/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_CAVE_OF_ORIGIN_1F"),
@@ -1832,8 +1587,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 23,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Cave",
-        blockdata: include_bytes!("../data/layouts/CaveOfOrigin_1F/map.bin"),
-        border: include_bytes!("../data/layouts/CaveOfOrigin_1F/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_CAVE_OF_ORIGIN_UNUSED_RUBY_SAPPHIRE_MAP1"),
@@ -1842,8 +1595,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 23,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Cave",
-        blockdata: include_bytes!("../data/layouts/CaveOfOrigin_UnusedRubySapphireMap1/map.bin"),
-        border: include_bytes!("../data/layouts/CaveOfOrigin_UnusedRubySapphireMap1/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_CAVE_OF_ORIGIN_UNUSED_RUBY_SAPPHIRE_MAP2"),
@@ -1852,8 +1603,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 21,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Cave",
-        blockdata: include_bytes!("../data/layouts/CaveOfOrigin_UnusedRubySapphireMap2/map.bin"),
-        border: include_bytes!("../data/layouts/CaveOfOrigin_UnusedRubySapphireMap2/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_CAVE_OF_ORIGIN_UNUSED_RUBY_SAPPHIRE_MAP3"),
@@ -1862,8 +1611,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 21,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Cave",
-        blockdata: include_bytes!("../data/layouts/CaveOfOrigin_UnusedRubySapphireMap3/map.bin"),
-        border: include_bytes!("../data/layouts/CaveOfOrigin_UnusedRubySapphireMap3/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_CAVE_OF_ORIGIN_B1F"),
@@ -1872,8 +1619,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 19,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Cave",
-        blockdata: include_bytes!("../data/layouts/CaveOfOrigin_B1F/map.bin"),
-        border: include_bytes!("../data/layouts/CaveOfOrigin_B1F/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_VICTORY_ROAD_1F"),
@@ -1882,8 +1627,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 45,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Cave",
-        blockdata: include_bytes!("../data/layouts/VictoryRoad_1F/map.bin"),
-        border: include_bytes!("../data/layouts/VictoryRoad_1F/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_SHOAL_CAVE_LOW_TIDE_ENTRANCE_ROOM"),
@@ -1892,8 +1635,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 35,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Cave",
-        blockdata: include_bytes!("../data/layouts/ShoalCave_LowTideEntranceRoom/map.bin"),
-        border: include_bytes!("../data/layouts/ShoalCave_LowTideEntranceRoom/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_SHOAL_CAVE_LOW_TIDE_INNER_ROOM"),
@@ -1902,8 +1643,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 38,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Cave",
-        blockdata: include_bytes!("../data/layouts/ShoalCave_LowTideInnerRoom/map.bin"),
-        border: include_bytes!("../data/layouts/ShoalCave_LowTideInnerRoom/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_SHOAL_CAVE_LOW_TIDE_STAIRS_ROOM"),
@@ -1912,8 +1651,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 15,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Cave",
-        blockdata: include_bytes!("../data/layouts/ShoalCave_LowTideStairsRoom/map.bin"),
-        border: include_bytes!("../data/layouts/ShoalCave_LowTideStairsRoom/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_SHOAL_CAVE_LOW_TIDE_LOWER_ROOM"),
@@ -1922,8 +1659,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 14,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Cave",
-        blockdata: include_bytes!("../data/layouts/ShoalCave_LowTideLowerRoom/map.bin"),
-        border: include_bytes!("../data/layouts/ShoalCave_LowTideLowerRoom/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_SHOAL_CAVE_HIGH_TIDE_ENTRANCE_ROOM"),
@@ -1932,8 +1667,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 35,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Cave",
-        blockdata: include_bytes!("../data/layouts/ShoalCave_HighTideEntranceRoom/map.bin"),
-        border: include_bytes!("../data/layouts/ShoalCave_HighTideEntranceRoom/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_SHOAL_CAVE_HIGH_TIDE_INNER_ROOM"),
@@ -1942,8 +1675,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 38,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Cave",
-        blockdata: include_bytes!("../data/layouts/ShoalCave_HighTideInnerRoom/map.bin"),
-        border: include_bytes!("../data/layouts/ShoalCave_HighTideInnerRoom/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_UNUSED_CAVE1"),
@@ -1952,8 +1683,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 1,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Cave",
-        blockdata: include_bytes!("../data/layouts/UnusedCave1/map.bin"),
-        border: include_bytes!("../data/layouts/UnusedCave1/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_UNUSED_CAVE2"),
@@ -1962,8 +1691,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 1,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Cave",
-        blockdata: include_bytes!("../data/layouts/UnusedCave2/map.bin"),
-        border: include_bytes!("../data/layouts/UnusedCave2/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_UNUSED_CAVE3"),
@@ -1972,8 +1699,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 1,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Cave",
-        blockdata: include_bytes!("../data/layouts/UnusedCave3/map.bin"),
-        border: include_bytes!("../data/layouts/UnusedCave3/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_UNUSED_CAVE4"),
@@ -1982,8 +1707,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 1,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Cave",
-        blockdata: include_bytes!("../data/layouts/UnusedCave4/map.bin"),
-        border: include_bytes!("../data/layouts/UnusedCave4/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_UNUSED_CAVE5"),
@@ -1992,8 +1715,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 1,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Cave",
-        blockdata: include_bytes!("../data/layouts/UnusedCave5/map.bin"),
-        border: include_bytes!("../data/layouts/UnusedCave5/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_UNUSED_CAVE6"),
@@ -2002,8 +1723,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 1,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Cave",
-        blockdata: include_bytes!("../data/layouts/UnusedCave6/map.bin"),
-        border: include_bytes!("../data/layouts/UnusedCave6/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_UNUSED_CAVE7"),
@@ -2012,8 +1731,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 1,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Cave",
-        blockdata: include_bytes!("../data/layouts/UnusedCave7/map.bin"),
-        border: include_bytes!("../data/layouts/UnusedCave7/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_UNUSED_CAVE8"),
@@ -2022,8 +1739,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 1,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Cave",
-        blockdata: include_bytes!("../data/layouts/UnusedCave8/map.bin"),
-        border: include_bytes!("../data/layouts/UnusedCave8/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_UNUSED_CAVE9"),
@@ -2032,8 +1747,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 1,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Cave",
-        blockdata: include_bytes!("../data/layouts/UnusedCave9/map.bin"),
-        border: include_bytes!("../data/layouts/UnusedCave9/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_UNUSED_CAVE10"),
@@ -2042,8 +1755,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 1,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Cave",
-        blockdata: include_bytes!("../data/layouts/UnusedCave10/map.bin"),
-        border: include_bytes!("../data/layouts/UnusedCave10/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_UNUSED_CAVE11"),
@@ -2052,8 +1763,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 1,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Cave",
-        blockdata: include_bytes!("../data/layouts/UnusedCave11/map.bin"),
-        border: include_bytes!("../data/layouts/UnusedCave11/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_UNUSED_CAVE12"),
@@ -2062,8 +1771,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 1,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Cave",
-        blockdata: include_bytes!("../data/layouts/UnusedCave12/map.bin"),
-        border: include_bytes!("../data/layouts/UnusedCave12/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_UNUSED_CAVE13"),
@@ -2072,8 +1779,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 1,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Cave",
-        blockdata: include_bytes!("../data/layouts/UnusedCave13/map.bin"),
-        border: include_bytes!("../data/layouts/UnusedCave13/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_UNUSED_CAVE14"),
@@ -2082,8 +1787,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 1,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Cave",
-        blockdata: include_bytes!("../data/layouts/UnusedCave14/map.bin"),
-        border: include_bytes!("../data/layouts/UnusedCave14/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_NEW_MAUVILLE_ENTRANCE"),
@@ -2092,8 +1795,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 9,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Facility",
-        blockdata: include_bytes!("../data/layouts/NewMauville_Entrance/map.bin"),
-        border: include_bytes!("../data/layouts/NewMauville_Entrance/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_NEW_MAUVILLE_INSIDE"),
@@ -2102,8 +1803,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 41,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_BikeShop",
-        blockdata: include_bytes!("../data/layouts/NewMauville_Inside/map.bin"),
-        border: include_bytes!("../data/layouts/NewMauville_Inside/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_ABANDONED_SHIP_DECK"),
@@ -2112,8 +1811,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 21,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Facility",
-        blockdata: include_bytes!("../data/layouts/AbandonedShip_Deck/map.bin"),
-        border: include_bytes!("../data/layouts/AbandonedShip_Deck/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_ABANDONED_SHIP_CORRIDORS_1F"),
@@ -2122,8 +1819,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 12,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_InsideShip",
-        blockdata: include_bytes!("../data/layouts/AbandonedShip_Corridors_1F/map.bin"),
-        border: include_bytes!("../data/layouts/AbandonedShip_Corridors_1F/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_ABANDONED_SHIP_ROOMS_1F"),
@@ -2132,8 +1827,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 17,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_InsideShip",
-        blockdata: include_bytes!("../data/layouts/AbandonedShip_Rooms_1F/map.bin"),
-        border: include_bytes!("../data/layouts/AbandonedShip_Rooms_1F/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_ABANDONED_SHIP_CORRIDORS_B1F"),
@@ -2142,8 +1835,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 10,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_InsideShip",
-        blockdata: include_bytes!("../data/layouts/AbandonedShip_Corridors_B1F/map.bin"),
-        border: include_bytes!("../data/layouts/AbandonedShip_Corridors_B1F/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_ABANDONED_SHIP_ROOMS_B1F"),
@@ -2152,8 +1843,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 8,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_InsideShip",
-        blockdata: include_bytes!("../data/layouts/AbandonedShip_Rooms_B1F/map.bin"),
-        border: include_bytes!("../data/layouts/AbandonedShip_Rooms_B1F/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_ABANDONED_SHIP_ROOMS2_B1F"),
@@ -2162,8 +1851,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 8,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_InsideShip",
-        blockdata: include_bytes!("../data/layouts/AbandonedShip_Rooms2_B1F/map.bin"),
-        border: include_bytes!("../data/layouts/AbandonedShip_Rooms2_B1F/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_ABANDONED_SHIP_UNDERWATER1"),
@@ -2172,8 +1859,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 8,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_InsideShip",
-        blockdata: include_bytes!("../data/layouts/AbandonedShip_Underwater1/map.bin"),
-        border: include_bytes!("../data/layouts/AbandonedShip_Underwater1/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_ABANDONED_SHIP_ROOM_B1F"),
@@ -2182,8 +1867,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 8,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_InsideShip",
-        blockdata: include_bytes!("../data/layouts/AbandonedShip_Room_B1F/map.bin"),
-        border: include_bytes!("../data/layouts/AbandonedShip_Room_B1F/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_ABANDONED_SHIP_ROOMS2_1F"),
@@ -2192,8 +1875,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 17,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_InsideShip",
-        blockdata: include_bytes!("../data/layouts/AbandonedShip_Rooms2_1F/map.bin"),
-        border: include_bytes!("../data/layouts/AbandonedShip_Rooms2_1F/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_ABANDONED_SHIP_CAPTAINS_OFFICE"),
@@ -2202,8 +1883,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 7,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Facility",
-        blockdata: include_bytes!("../data/layouts/AbandonedShip_CaptainsOffice/map.bin"),
-        border: include_bytes!("../data/layouts/AbandonedShip_CaptainsOffice/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_ABANDONED_SHIP_UNDERWATER2"),
@@ -2212,8 +1891,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 7,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_InsideShip",
-        blockdata: include_bytes!("../data/layouts/AbandonedShip_Underwater2/map.bin"),
-        border: include_bytes!("../data/layouts/AbandonedShip_Underwater2/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_SECRET_BASE_RED_CAVE1"),
@@ -2222,8 +1899,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 9,
         primary_tileset: "gTileset_SecretBase",
         secondary_tileset: "gTileset_SecretBaseRedCave",
-        blockdata: include_bytes!("../data/layouts/SecretBase_RedCave1/map.bin"),
-        border: include_bytes!("../data/layouts/SecretBase_RedCave1/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_SECRET_BASE_BROWN_CAVE1"),
@@ -2232,8 +1907,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 9,
         primary_tileset: "gTileset_SecretBase",
         secondary_tileset: "gTileset_SecretBaseBrownCave",
-        blockdata: include_bytes!("../data/layouts/SecretBase_BrownCave1/map.bin"),
-        border: include_bytes!("../data/layouts/SecretBase_BrownCave1/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_SECRET_BASE_BLUE_CAVE1"),
@@ -2242,8 +1915,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 9,
         primary_tileset: "gTileset_SecretBase",
         secondary_tileset: "gTileset_SecretBaseBlueCave",
-        blockdata: include_bytes!("../data/layouts/SecretBase_BlueCave1/map.bin"),
-        border: include_bytes!("../data/layouts/SecretBase_BlueCave1/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_SECRET_BASE_YELLOW_CAVE1"),
@@ -2252,8 +1923,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 9,
         primary_tileset: "gTileset_SecretBase",
         secondary_tileset: "gTileset_SecretBaseYellowCave",
-        blockdata: include_bytes!("../data/layouts/SecretBase_YellowCave1/map.bin"),
-        border: include_bytes!("../data/layouts/SecretBase_YellowCave1/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_SECRET_BASE_TREE1"),
@@ -2262,8 +1931,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 9,
         primary_tileset: "gTileset_SecretBase",
         secondary_tileset: "gTileset_SecretBaseTree",
-        blockdata: include_bytes!("../data/layouts/SecretBase_Tree1/map.bin"),
-        border: include_bytes!("../data/layouts/SecretBase_Tree1/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_SECRET_BASE_SHRUB1"),
@@ -2272,8 +1939,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 9,
         primary_tileset: "gTileset_SecretBase",
         secondary_tileset: "gTileset_SecretBaseShrub",
-        blockdata: include_bytes!("../data/layouts/SecretBase_Shrub1/map.bin"),
-        border: include_bytes!("../data/layouts/SecretBase_Shrub1/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_SECRET_BASE_RED_CAVE2"),
@@ -2282,8 +1947,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 16,
         primary_tileset: "gTileset_SecretBase",
         secondary_tileset: "gTileset_SecretBaseRedCave",
-        blockdata: include_bytes!("../data/layouts/SecretBase_RedCave2/map.bin"),
-        border: include_bytes!("../data/layouts/SecretBase_RedCave2/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_SECRET_BASE_BROWN_CAVE2"),
@@ -2292,8 +1955,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 9,
         primary_tileset: "gTileset_SecretBase",
         secondary_tileset: "gTileset_SecretBaseBrownCave",
-        blockdata: include_bytes!("../data/layouts/SecretBase_BrownCave2/map.bin"),
-        border: include_bytes!("../data/layouts/SecretBase_BrownCave2/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_SECRET_BASE_BLUE_CAVE2"),
@@ -2302,8 +1963,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 7,
         primary_tileset: "gTileset_SecretBase",
         secondary_tileset: "gTileset_SecretBaseBlueCave",
-        blockdata: include_bytes!("../data/layouts/SecretBase_BlueCave2/map.bin"),
-        border: include_bytes!("../data/layouts/SecretBase_BlueCave2/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_SECRET_BASE_YELLOW_CAVE2"),
@@ -2312,8 +1971,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 9,
         primary_tileset: "gTileset_SecretBase",
         secondary_tileset: "gTileset_SecretBaseYellowCave",
-        blockdata: include_bytes!("../data/layouts/SecretBase_YellowCave2/map.bin"),
-        border: include_bytes!("../data/layouts/SecretBase_YellowCave2/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_SECRET_BASE_TREE2"),
@@ -2322,8 +1979,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 16,
         primary_tileset: "gTileset_SecretBase",
         secondary_tileset: "gTileset_SecretBaseTree",
-        blockdata: include_bytes!("../data/layouts/SecretBase_Tree2/map.bin"),
-        border: include_bytes!("../data/layouts/SecretBase_Tree2/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_SECRET_BASE_SHRUB2"),
@@ -2332,8 +1987,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 7,
         primary_tileset: "gTileset_SecretBase",
         secondary_tileset: "gTileset_SecretBaseShrub",
-        blockdata: include_bytes!("../data/layouts/SecretBase_Shrub2/map.bin"),
-        border: include_bytes!("../data/layouts/SecretBase_Shrub2/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_SECRET_BASE_RED_CAVE3"),
@@ -2342,8 +1995,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 8,
         primary_tileset: "gTileset_SecretBase",
         secondary_tileset: "gTileset_SecretBaseRedCave",
-        blockdata: include_bytes!("../data/layouts/SecretBase_RedCave3/map.bin"),
-        border: include_bytes!("../data/layouts/SecretBase_RedCave3/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_SECRET_BASE_BROWN_CAVE3"),
@@ -2352,8 +2003,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 11,
         primary_tileset: "gTileset_SecretBase",
         secondary_tileset: "gTileset_SecretBaseBrownCave",
-        blockdata: include_bytes!("../data/layouts/SecretBase_BrownCave3/map.bin"),
-        border: include_bytes!("../data/layouts/SecretBase_BrownCave3/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_SECRET_BASE_BLUE_CAVE3"),
@@ -2362,8 +2011,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 17,
         primary_tileset: "gTileset_SecretBase",
         secondary_tileset: "gTileset_SecretBaseBlueCave",
-        blockdata: include_bytes!("../data/layouts/SecretBase_BlueCave3/map.bin"),
-        border: include_bytes!("../data/layouts/SecretBase_BlueCave3/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_SECRET_BASE_YELLOW_CAVE3"),
@@ -2372,8 +2019,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 11,
         primary_tileset: "gTileset_SecretBase",
         secondary_tileset: "gTileset_SecretBaseYellowCave",
-        blockdata: include_bytes!("../data/layouts/SecretBase_YellowCave3/map.bin"),
-        border: include_bytes!("../data/layouts/SecretBase_YellowCave3/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_SECRET_BASE_TREE3"),
@@ -2382,8 +2027,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 8,
         primary_tileset: "gTileset_SecretBase",
         secondary_tileset: "gTileset_SecretBaseTree",
-        blockdata: include_bytes!("../data/layouts/SecretBase_Tree3/map.bin"),
-        border: include_bytes!("../data/layouts/SecretBase_Tree3/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_SECRET_BASE_SHRUB3"),
@@ -2392,8 +2035,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 11,
         primary_tileset: "gTileset_SecretBase",
         secondary_tileset: "gTileset_SecretBaseShrub",
-        blockdata: include_bytes!("../data/layouts/SecretBase_Shrub3/map.bin"),
-        border: include_bytes!("../data/layouts/SecretBase_Shrub3/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_SECRET_BASE_RED_CAVE4"),
@@ -2402,8 +2043,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 15,
         primary_tileset: "gTileset_SecretBase",
         secondary_tileset: "gTileset_SecretBaseRedCave",
-        blockdata: include_bytes!("../data/layouts/SecretBase_RedCave4/map.bin"),
-        border: include_bytes!("../data/layouts/SecretBase_RedCave4/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_SECRET_BASE_BROWN_CAVE4"),
@@ -2412,8 +2051,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 12,
         primary_tileset: "gTileset_SecretBase",
         secondary_tileset: "gTileset_SecretBaseBrownCave",
-        blockdata: include_bytes!("../data/layouts/SecretBase_BrownCave4/map.bin"),
-        border: include_bytes!("../data/layouts/SecretBase_BrownCave4/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_SECRET_BASE_BLUE_CAVE4"),
@@ -2422,8 +2059,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 17,
         primary_tileset: "gTileset_SecretBase",
         secondary_tileset: "gTileset_SecretBaseBlueCave",
-        blockdata: include_bytes!("../data/layouts/SecretBase_BlueCave4/map.bin"),
-        border: include_bytes!("../data/layouts/SecretBase_BlueCave4/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_SECRET_BASE_YELLOW_CAVE4"),
@@ -2432,8 +2067,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 14,
         primary_tileset: "gTileset_SecretBase",
         secondary_tileset: "gTileset_SecretBaseYellowCave",
-        blockdata: include_bytes!("../data/layouts/SecretBase_YellowCave4/map.bin"),
-        border: include_bytes!("../data/layouts/SecretBase_YellowCave4/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_SECRET_BASE_TREE4"),
@@ -2442,8 +2075,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 14,
         primary_tileset: "gTileset_SecretBase",
         secondary_tileset: "gTileset_SecretBaseTree",
-        blockdata: include_bytes!("../data/layouts/SecretBase_Tree4/map.bin"),
-        border: include_bytes!("../data/layouts/SecretBase_Tree4/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_SECRET_BASE_SHRUB4"),
@@ -2452,8 +2083,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 11,
         primary_tileset: "gTileset_SecretBase",
         secondary_tileset: "gTileset_SecretBaseShrub",
-        blockdata: include_bytes!("../data/layouts/SecretBase_Shrub4/map.bin"),
-        border: include_bytes!("../data/layouts/SecretBase_Shrub4/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_BATTLE_COLOSSEUM_2P"),
@@ -2462,8 +2091,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 9,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_CableClub",
-        blockdata: include_bytes!("../data/layouts/BattleColosseum_2P/map.bin"),
-        border: include_bytes!("../data/layouts/BattleColosseum_2P/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_TRADE_CENTER"),
@@ -2472,8 +2099,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 9,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_CableClub",
-        blockdata: include_bytes!("../data/layouts/TradeCenter/map.bin"),
-        border: include_bytes!("../data/layouts/TradeCenter/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_RECORD_CORNER"),
@@ -2482,8 +2107,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 10,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_CableClub",
-        blockdata: include_bytes!("../data/layouts/RecordCorner/map.bin"),
-        border: include_bytes!("../data/layouts/RecordCorner/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_BATTLE_COLOSSEUM_4P"),
@@ -2492,8 +2115,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 9,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_CableClub",
-        blockdata: include_bytes!("../data/layouts/BattleColosseum_4P/map.bin"),
-        border: include_bytes!("../data/layouts/BattleColosseum_4P/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_CONTEST_HALL"),
@@ -2502,8 +2123,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 11,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Contest",
-        blockdata: include_bytes!("../data/layouts/ContestHall/map.bin"),
-        border: include_bytes!("../data/layouts/ContestHall/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_UNUSED_CONTEST_HALL1"),
@@ -2512,8 +2131,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 1,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_Contest",
-        blockdata: include_bytes!("../data/layouts/UnusedContestHall1/map.bin"),
-        border: include_bytes!("../data/layouts/UnusedContestHall1/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_UNUSED_CONTEST_HALL2"),
@@ -2522,8 +2139,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 1,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_Contest",
-        blockdata: include_bytes!("../data/layouts/UnusedContestHall2/map.bin"),
-        border: include_bytes!("../data/layouts/UnusedContestHall2/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_UNUSED_CONTEST_HALL3"),
@@ -2532,8 +2147,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 1,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_Contest",
-        blockdata: include_bytes!("../data/layouts/UnusedContestHall3/map.bin"),
-        border: include_bytes!("../data/layouts/UnusedContestHall3/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_UNUSED_CONTEST_HALL4"),
@@ -2542,8 +2155,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 1,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_Contest",
-        blockdata: include_bytes!("../data/layouts/UnusedContestHall4/map.bin"),
-        border: include_bytes!("../data/layouts/UnusedContestHall4/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_UNUSED_CONTEST_HALL5"),
@@ -2552,8 +2163,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 1,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_Contest",
-        blockdata: include_bytes!("../data/layouts/UnusedContestHall5/map.bin"),
-        border: include_bytes!("../data/layouts/UnusedContestHall5/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_UNUSED_CONTEST_HALL6"),
@@ -2562,8 +2171,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 1,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_Contest",
-        blockdata: include_bytes!("../data/layouts/UnusedContestHall6/map.bin"),
-        border: include_bytes!("../data/layouts/UnusedContestHall6/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_CONTEST_HALL_BEAUTY"),
@@ -2572,8 +2179,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 11,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Contest",
-        blockdata: include_bytes!("../data/layouts/ContestHallBeauty/map.bin"),
-        border: include_bytes!("../data/layouts/ContestHallBeauty/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_CONTEST_HALL_TOUGH"),
@@ -2582,8 +2187,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 11,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Contest",
-        blockdata: include_bytes!("../data/layouts/ContestHallTough/map.bin"),
-        border: include_bytes!("../data/layouts/ContestHallTough/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_CONTEST_HALL_COOL"),
@@ -2592,8 +2195,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 11,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Contest",
-        blockdata: include_bytes!("../data/layouts/ContestHallCool/map.bin"),
-        border: include_bytes!("../data/layouts/ContestHallCool/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_CONTEST_HALL_SMART"),
@@ -2602,8 +2203,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 11,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Contest",
-        blockdata: include_bytes!("../data/layouts/ContestHallSmart/map.bin"),
-        border: include_bytes!("../data/layouts/ContestHallSmart/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_CONTEST_HALL_CUTE"),
@@ -2612,8 +2211,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 11,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Contest",
-        blockdata: include_bytes!("../data/layouts/ContestHallCute/map.bin"),
-        border: include_bytes!("../data/layouts/ContestHallCute/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_INSIDE_OF_TRUCK"),
@@ -2622,8 +2219,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 5,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_InsideOfTruck",
-        blockdata: include_bytes!("../data/layouts/InsideOfTruck/map.bin"),
-        border: include_bytes!("../data/layouts/InsideOfTruck/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_SAFARI_ZONE_NORTHWEST"),
@@ -2632,8 +2227,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 40,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Lilycove",
-        blockdata: include_bytes!("../data/layouts/SafariZone_Northwest/map.bin"),
-        border: include_bytes!("../data/layouts/SafariZone_Northwest/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_SAFARI_ZONE_NORTH"),
@@ -2642,8 +2235,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 40,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Lilycove",
-        blockdata: include_bytes!("../data/layouts/SafariZone_North/map.bin"),
-        border: include_bytes!("../data/layouts/SafariZone_North/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_SAFARI_ZONE_SOUTHWEST"),
@@ -2652,8 +2243,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 40,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Lilycove",
-        blockdata: include_bytes!("../data/layouts/SafariZone_Southwest/map.bin"),
-        border: include_bytes!("../data/layouts/SafariZone_Southwest/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_SAFARI_ZONE_SOUTH"),
@@ -2662,8 +2251,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 40,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Lilycove",
-        blockdata: include_bytes!("../data/layouts/SafariZone_South/map.bin"),
-        border: include_bytes!("../data/layouts/SafariZone_South/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_UNUSED_OUTDOOR_AREA"),
@@ -2672,8 +2259,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 26,
         primary_tileset: "gTileset_General",
         secondary_tileset: "0",
-        blockdata: include_bytes!("../data/layouts/UnusedOutdoorArea/map.bin"),
-        border: include_bytes!("../data/layouts/UnusedOutdoorArea/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_ROUTE109_SEASHORE_HOUSE"),
@@ -2682,8 +2267,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 10,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_SeashoreHouse",
-        blockdata: include_bytes!("../data/layouts/Route109_SeashoreHouse/map.bin"),
-        border: include_bytes!("../data/layouts/Route109_SeashoreHouse/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_ROUTE110_TRICK_HOUSE_ENTRANCE"),
@@ -2692,8 +2275,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 8,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_GenericBuilding",
-        blockdata: include_bytes!("../data/layouts/Route110_TrickHouseEntrance/map.bin"),
-        border: include_bytes!("../data/layouts/Route110_TrickHouseEntrance/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_ROUTE110_TRICK_HOUSE_END"),
@@ -2702,8 +2283,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 8,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_GenericBuilding",
-        blockdata: include_bytes!("../data/layouts/Route110_TrickHouseEnd/map.bin"),
-        border: include_bytes!("../data/layouts/Route110_TrickHouseEnd/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_ROUTE110_TRICK_HOUSE_CORRIDOR"),
@@ -2712,8 +2291,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 24,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_GenericBuilding",
-        blockdata: include_bytes!("../data/layouts/Route110_TrickHouseCorridor/map.bin"),
-        border: include_bytes!("../data/layouts/Route110_TrickHouseCorridor/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_ROUTE110_TRICK_HOUSE_PUZZLE1"),
@@ -2722,8 +2299,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 22,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_TrickHousePuzzle",
-        blockdata: include_bytes!("../data/layouts/Route110_TrickHousePuzzle1/map.bin"),
-        border: include_bytes!("../data/layouts/Route110_TrickHousePuzzle1/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_ROUTE110_TRICK_HOUSE_PUZZLE2"),
@@ -2732,8 +2307,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 22,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_TrickHousePuzzle",
-        blockdata: include_bytes!("../data/layouts/Route110_TrickHousePuzzle2/map.bin"),
-        border: include_bytes!("../data/layouts/Route110_TrickHousePuzzle2/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_ROUTE110_TRICK_HOUSE_PUZZLE3"),
@@ -2742,8 +2315,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 22,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_TrickHousePuzzle",
-        blockdata: include_bytes!("../data/layouts/Route110_TrickHousePuzzle3/map.bin"),
-        border: include_bytes!("../data/layouts/Route110_TrickHousePuzzle3/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_ROUTE110_TRICK_HOUSE_PUZZLE4"),
@@ -2752,8 +2323,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 22,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_TrickHousePuzzle",
-        blockdata: include_bytes!("../data/layouts/Route110_TrickHousePuzzle4/map.bin"),
-        border: include_bytes!("../data/layouts/Route110_TrickHousePuzzle4/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_ROUTE110_TRICK_HOUSE_PUZZLE5"),
@@ -2762,8 +2331,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 22,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_TrickHousePuzzle",
-        blockdata: include_bytes!("../data/layouts/Route110_TrickHousePuzzle5/map.bin"),
-        border: include_bytes!("../data/layouts/Route110_TrickHousePuzzle5/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_ROUTE110_TRICK_HOUSE_PUZZLE6"),
@@ -2772,8 +2339,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 22,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_TrickHousePuzzle",
-        blockdata: include_bytes!("../data/layouts/Route110_TrickHousePuzzle6/map.bin"),
-        border: include_bytes!("../data/layouts/Route110_TrickHousePuzzle6/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_ROUTE110_TRICK_HOUSE_PUZZLE7"),
@@ -2782,8 +2347,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 22,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_TrickHousePuzzle",
-        blockdata: include_bytes!("../data/layouts/Route110_TrickHousePuzzle7/map.bin"),
-        border: include_bytes!("../data/layouts/Route110_TrickHousePuzzle7/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_ROUTE110_TRICK_HOUSE_PUZZLE8"),
@@ -2792,8 +2355,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 22,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_TrickHousePuzzle",
-        blockdata: include_bytes!("../data/layouts/Route110_TrickHousePuzzle8/map.bin"),
-        border: include_bytes!("../data/layouts/Route110_TrickHousePuzzle8/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_FORTREE_CITY_DECORATION_SHOP"),
@@ -2802,8 +2363,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 6,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_GenericBuilding",
-        blockdata: include_bytes!("../data/layouts/FortreeCity_DecorationShop/map.bin"),
-        border: include_bytes!("../data/layouts/FortreeCity_DecorationShop/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_ROUTE110_SEASIDE_CYCLING_ROAD_ENTRANCE"),
@@ -2812,8 +2371,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 6,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_Shop",
-        blockdata: include_bytes!("../data/layouts/Route110_SeasideCyclingRoadEntrance/map.bin"),
-        border: include_bytes!("../data/layouts/Route110_SeasideCyclingRoadEntrance/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_LILYCOVE_CITY_DEPARTMENT_STORE_1F"),
@@ -2822,8 +2379,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 8,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_Shop",
-        blockdata: include_bytes!("../data/layouts/LilycoveCity_DepartmentStore_1F/map.bin"),
-        border: include_bytes!("../data/layouts/LilycoveCity_DepartmentStore_1F/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_LILYCOVE_CITY_DEPARTMENT_STORE_2F"),
@@ -2832,8 +2387,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 8,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_Shop",
-        blockdata: include_bytes!("../data/layouts/LilycoveCity_DepartmentStore_2F/map.bin"),
-        border: include_bytes!("../data/layouts/LilycoveCity_DepartmentStore_2F/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_LILYCOVE_CITY_DEPARTMENT_STORE_3F"),
@@ -2842,8 +2395,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 8,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_Shop",
-        blockdata: include_bytes!("../data/layouts/LilycoveCity_DepartmentStore_3F/map.bin"),
-        border: include_bytes!("../data/layouts/LilycoveCity_DepartmentStore_3F/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_LILYCOVE_CITY_DEPARTMENT_STORE_4F"),
@@ -2852,8 +2403,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 8,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_Shop",
-        blockdata: include_bytes!("../data/layouts/LilycoveCity_DepartmentStore_4F/map.bin"),
-        border: include_bytes!("../data/layouts/LilycoveCity_DepartmentStore_4F/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_LILYCOVE_CITY_DEPARTMENT_STORE_5F"),
@@ -2862,8 +2411,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 8,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_Shop",
-        blockdata: include_bytes!("../data/layouts/LilycoveCity_DepartmentStore_5F/map.bin"),
-        border: include_bytes!("../data/layouts/LilycoveCity_DepartmentStore_5F/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_LILYCOVE_CITY_DEPARTMENT_STORE_ROOFTOP"),
@@ -2872,8 +2419,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 12,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_Shop",
-        blockdata: include_bytes!("../data/layouts/LilycoveCity_DepartmentStoreRooftop/map.bin"),
-        border: include_bytes!("../data/layouts/LilycoveCity_DepartmentStoreRooftop/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_ROUTE130"),
@@ -2882,8 +2427,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 40,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Cave",
-        blockdata: include_bytes!("../data/layouts/Route130/map.bin"),
-        border: include_bytes!("../data/layouts/Route130/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_BATTLE_FRONTIER_BATTLE_TOWER_LOBBY"),
@@ -2892,8 +2435,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 10,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_BattleFrontier",
-        blockdata: include_bytes!("../data/layouts/BattleFrontier_BattleTowerLobby/map.bin"),
-        border: include_bytes!("../data/layouts/BattleFrontier_BattleTowerLobby/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_BATTLE_FRONTIER_OUTSIDE_WEST"),
@@ -2902,8 +2443,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 72,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_BattleFrontierOutsideWest",
-        blockdata: include_bytes!("../data/layouts/BattleFrontier_OutsideWest/map.bin"),
-        border: include_bytes!("../data/layouts/BattleFrontier_OutsideWest/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_BATTLE_ELEVATOR"),
@@ -2912,8 +2451,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 7,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_BattleFrontier",
-        blockdata: include_bytes!("../data/layouts/BattleElevator/map.bin"),
-        border: include_bytes!("../data/layouts/BattleElevator/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_BATTLE_FRONTIER_BATTLE_TOWER_CORRIDOR"),
@@ -2922,8 +2459,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 5,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_BattleFrontier",
-        blockdata: include_bytes!("../data/layouts/BattleFrontier_BattleTowerCorridor/map.bin"),
-        border: include_bytes!("../data/layouts/BattleFrontier_BattleTowerCorridor/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_BATTLE_FRONTIER_BATTLE_TOWER_BATTLE_ROOM"),
@@ -2932,8 +2467,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 9,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_BattleFrontier",
-        blockdata: include_bytes!("../data/layouts/BattleFrontier_BattleTowerBattleRoom/map.bin"),
-        border: include_bytes!("../data/layouts/BattleFrontier_BattleTowerBattleRoom/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_RUSTBORO_CITY_DEVON_CORP_3F"),
@@ -2942,8 +2475,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 9,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_Facility",
-        blockdata: include_bytes!("../data/layouts/RustboroCity_DevonCorp_3F/map.bin"),
-        border: include_bytes!("../data/layouts/RustboroCity_DevonCorp_3F/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_EVER_GRANDE_CITY_POKEMON_LEAGUE_1F"),
@@ -2952,8 +2483,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 12,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_PokemonCenter",
-        blockdata: include_bytes!("../data/layouts/EverGrandeCity_PokemonLeague_1F/map.bin"),
-        border: include_bytes!("../data/layouts/EverGrandeCity_PokemonLeague_1F/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_ROUTE119_WEATHER_INSTITUTE_1F"),
@@ -2962,8 +2491,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 13,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_Lab",
-        blockdata: include_bytes!("../data/layouts/Route119_WeatherInstitute_1F/map.bin"),
-        border: include_bytes!("../data/layouts/Route119_WeatherInstitute_1F/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_ROUTE119_WEATHER_INSTITUTE_2F"),
@@ -2972,8 +2499,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 11,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_Lab",
-        blockdata: include_bytes!("../data/layouts/Route119_WeatherInstitute_2F/map.bin"),
-        border: include_bytes!("../data/layouts/Route119_WeatherInstitute_2F/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_LILYCOVE_CITY_DEPARTMENT_STORE_ELEVATOR"),
@@ -2982,8 +2507,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 6,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_BattleFrontier",
-        blockdata: include_bytes!("../data/layouts/LilycoveCity_DepartmentStoreElevator/map.bin"),
-        border: include_bytes!("../data/layouts/LilycoveCity_DepartmentStoreElevator/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_UNDERWATER_ROUTE124"),
@@ -2992,8 +2515,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 80,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Underwater",
-        blockdata: include_bytes!("../data/layouts/Underwater_Route124/map.bin"),
-        border: include_bytes!("../data/layouts/Underwater_Route124/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_MOSSDEEP_CITY_SPACE_CENTER_1F"),
@@ -3002,8 +2523,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 10,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Facility",
-        blockdata: include_bytes!("../data/layouts/MossdeepCity_SpaceCenter_1F/map.bin"),
-        border: include_bytes!("../data/layouts/MossdeepCity_SpaceCenter_1F/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_MOSSDEEP_CITY_SPACE_CENTER_2F"),
@@ -3012,8 +2531,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 10,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Facility",
-        blockdata: include_bytes!("../data/layouts/MossdeepCity_SpaceCenter_2F/map.bin"),
-        border: include_bytes!("../data/layouts/MossdeepCity_SpaceCenter_2F/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_SS_TIDAL_CORRIDOR"),
@@ -3022,8 +2539,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 13,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_InsideShip",
-        blockdata: include_bytes!("../data/layouts/SSTidalCorridor/map.bin"),
-        border: include_bytes!("../data/layouts/SSTidalCorridor/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_SS_TIDAL_LOWER_DECK"),
@@ -3032,8 +2547,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 13,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_InsideShip",
-        blockdata: include_bytes!("../data/layouts/SSTidalLowerDeck/map.bin"),
-        border: include_bytes!("../data/layouts/SSTidalLowerDeck/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_SS_TIDAL_ROOMS"),
@@ -3042,8 +2555,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 18,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_InsideShip",
-        blockdata: include_bytes!("../data/layouts/SSTidalRooms/map.bin"),
-        border: include_bytes!("../data/layouts/SSTidalRooms/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_ISLAND_CAVE"),
@@ -3052,8 +2563,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 33,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Cave",
-        blockdata: include_bytes!("../data/layouts/IslandCave/map.bin"),
-        border: include_bytes!("../data/layouts/IslandCave/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_ANCIENT_TOMB"),
@@ -3062,8 +2571,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 33,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Cave",
-        blockdata: include_bytes!("../data/layouts/AncientTomb/map.bin"),
-        border: include_bytes!("../data/layouts/AncientTomb/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_UNDERWATER_ROUTE134"),
@@ -3072,8 +2579,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 10,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Underwater",
-        blockdata: include_bytes!("../data/layouts/Underwater_Route134/map.bin"),
-        border: include_bytes!("../data/layouts/Underwater_Route134/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_UNDERWATER_SEALED_CHAMBER"),
@@ -3082,8 +2587,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 48,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Underwater",
-        blockdata: include_bytes!("../data/layouts/Underwater_SealedChamber/map.bin"),
-        border: include_bytes!("../data/layouts/Underwater_SealedChamber/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_SEALED_CHAMBER_OUTER_ROOM"),
@@ -3092,8 +2595,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 23,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Cave",
-        blockdata: include_bytes!("../data/layouts/SealedChamber_OuterRoom/map.bin"),
-        border: include_bytes!("../data/layouts/SealedChamber_OuterRoom/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_VICTORY_ROAD_B1F"),
@@ -3102,8 +2603,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 31,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Cave",
-        blockdata: include_bytes!("../data/layouts/VictoryRoad_B1F/map.bin"),
-        border: include_bytes!("../data/layouts/VictoryRoad_B1F/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_VICTORY_ROAD_B2F"),
@@ -3112,8 +2611,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 31,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Cave",
-        blockdata: include_bytes!("../data/layouts/VictoryRoad_B2F/map.bin"),
-        border: include_bytes!("../data/layouts/VictoryRoad_B2F/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_ROUTE104_PROTOTYPE"),
@@ -3122,8 +2619,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 1,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Rustboro",
-        blockdata: include_bytes!("../data/layouts/Route104_Prototype/map.bin"),
-        border: include_bytes!("../data/layouts/Route104_Prototype/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_GRANITE_CAVE_STEVENS_ROOM"),
@@ -3132,8 +2627,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 14,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Cave",
-        blockdata: include_bytes!("../data/layouts/GraniteCave_StevensRoom/map.bin"),
-        border: include_bytes!("../data/layouts/GraniteCave_StevensRoom/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_ABANDONED_SHIP_HIDDEN_FLOOR_CORRIDORS"),
@@ -3142,8 +2635,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 11,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_InsideShip",
-        blockdata: include_bytes!("../data/layouts/AbandonedShip_HiddenFloorCorridors/map.bin"),
-        border: include_bytes!("../data/layouts/AbandonedShip_HiddenFloorCorridors/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_SOUTHERN_ISLAND_EXTERIOR"),
@@ -3152,8 +2643,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 30,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Rustboro",
-        blockdata: include_bytes!("../data/layouts/SouthernIsland_Exterior/map.bin"),
-        border: include_bytes!("../data/layouts/SouthernIsland_Exterior/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_SOUTHERN_ISLAND_INTERIOR"),
@@ -3162,8 +2651,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 24,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Rustboro",
-        blockdata: include_bytes!("../data/layouts/SouthernIsland_Interior/map.bin"),
-        border: include_bytes!("../data/layouts/SouthernIsland_Interior/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_JAGGED_PASS"),
@@ -3172,8 +2659,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 46,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Lavaridge",
-        blockdata: include_bytes!("../data/layouts/JaggedPass/map.bin"),
-        border: include_bytes!("../data/layouts/JaggedPass/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_FIERY_PATH"),
@@ -3182,8 +2667,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 38,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Lavaridge",
-        blockdata: include_bytes!("../data/layouts/FieryPath/map.bin"),
-        border: include_bytes!("../data/layouts/FieryPath/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_RUSTBORO_CITY_FLAT2_1F"),
@@ -3192,8 +2675,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 9,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_GenericBuilding",
-        blockdata: include_bytes!("../data/layouts/RustboroCity_Flat2_1F/map.bin"),
-        border: include_bytes!("../data/layouts/RustboroCity_Flat2_1F/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_RUSTBORO_CITY_FLAT2_2F"),
@@ -3202,8 +2683,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 9,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_GenericBuilding",
-        blockdata: include_bytes!("../data/layouts/RustboroCity_Flat2_2F/map.bin"),
-        border: include_bytes!("../data/layouts/RustboroCity_Flat2_2F/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_RUSTBORO_CITY_FLAT2_3F"),
@@ -3212,8 +2691,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 9,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_GenericBuilding",
-        blockdata: include_bytes!("../data/layouts/RustboroCity_Flat2_3F/map.bin"),
-        border: include_bytes!("../data/layouts/RustboroCity_Flat2_3F/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_SOOTOPOLIS_CITY_LOTAD_AND_SEEDOT_HOUSE"),
@@ -3222,8 +2699,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 7,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_GenericBuilding",
-        blockdata: include_bytes!("../data/layouts/SootopolisCity_LotadAndSeedotHouse/map.bin"),
-        border: include_bytes!("../data/layouts/SootopolisCity_LotadAndSeedotHouse/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_EVER_GRANDE_CITY_HALL_OF_FAME"),
@@ -3232,8 +2707,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 17,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_CableClub",
-        blockdata: include_bytes!("../data/layouts/EverGrandeCity_HallOfFame/map.bin"),
-        border: include_bytes!("../data/layouts/EverGrandeCity_HallOfFame/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_LILYCOVE_CITY_COVE_LILY_MOTEL_1F"),
@@ -3242,8 +2715,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 9,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_GenericBuilding",
-        blockdata: include_bytes!("../data/layouts/LilycoveCity_CoveLilyMotel_1F/map.bin"),
-        border: include_bytes!("../data/layouts/LilycoveCity_CoveLilyMotel_1F/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_LILYCOVE_CITY_COVE_LILY_MOTEL_2F"),
@@ -3252,8 +2723,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 9,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_GenericBuilding",
-        blockdata: include_bytes!("../data/layouts/LilycoveCity_CoveLilyMotel_2F/map.bin"),
-        border: include_bytes!("../data/layouts/LilycoveCity_CoveLilyMotel_2F/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_ROUTE124_DIVING_TREASURE_HUNTERS_HOUSE"),
@@ -3262,8 +2731,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 9,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_GenericBuilding",
-        blockdata: include_bytes!("../data/layouts/Route124_DivingTreasureHuntersHouse/map.bin"),
-        border: include_bytes!("../data/layouts/Route124_DivingTreasureHuntersHouse/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_MT_PYRE_EXTERIOR"),
@@ -3272,8 +2739,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 51,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Facility",
-        blockdata: include_bytes!("../data/layouts/MtPyre_Exterior/map.bin"),
-        border: include_bytes!("../data/layouts/MtPyre_Exterior/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_MT_PYRE_SUMMIT"),
@@ -3282,8 +2747,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 37,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Facility",
-        blockdata: include_bytes!("../data/layouts/MtPyre_Summit/map.bin"),
-        border: include_bytes!("../data/layouts/MtPyre_Summit/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_SEALED_CHAMBER_INNER_ROOM"),
@@ -3292,8 +2755,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 23,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Cave",
-        blockdata: include_bytes!("../data/layouts/SealedChamber_InnerRoom/map.bin"),
-        border: include_bytes!("../data/layouts/SealedChamber_InnerRoom/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_MOSSDEEP_CITY_GAME_CORNER_1F"),
@@ -3302,8 +2763,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 10,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_MossdeepGameCorner",
-        blockdata: include_bytes!("../data/layouts/MossdeepCity_GameCorner_1F/map.bin"),
-        border: include_bytes!("../data/layouts/MossdeepCity_GameCorner_1F/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_MOSSDEEP_CITY_GAME_CORNER_B1F"),
@@ -3312,8 +2771,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 9,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_GenericBuilding",
-        blockdata: include_bytes!("../data/layouts/MossdeepCity_GameCorner_B1F/map.bin"),
-        border: include_bytes!("../data/layouts/MossdeepCity_GameCorner_B1F/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_SOOTOPOLIS_CITY_HOUSE1"),
@@ -3322,8 +2779,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 7,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_GenericBuilding",
-        blockdata: include_bytes!("../data/layouts/SootopolisCity_House1/map.bin"),
-        border: include_bytes!("../data/layouts/SootopolisCity_House1/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_SOOTOPOLIS_CITY_HOUSE2"),
@@ -3332,8 +2787,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 7,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_GenericBuilding",
-        blockdata: include_bytes!("../data/layouts/SootopolisCity_House2/map.bin"),
-        border: include_bytes!("../data/layouts/SootopolisCity_House2/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_SOOTOPOLIS_CITY_HOUSE3"),
@@ -3342,8 +2795,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 7,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_GenericBuilding",
-        blockdata: include_bytes!("../data/layouts/SootopolisCity_House3/map.bin"),
-        border: include_bytes!("../data/layouts/SootopolisCity_House3/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_ABANDONED_SHIP_HIDDEN_FLOOR_ROOMS"),
@@ -3352,8 +2803,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 15,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_InsideShip",
-        blockdata: include_bytes!("../data/layouts/AbandonedShip_HiddenFloorRooms/map.bin"),
-        border: include_bytes!("../data/layouts/AbandonedShip_HiddenFloorRooms/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_SCORCHED_SLAB"),
@@ -3362,8 +2811,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 20,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Cave",
-        blockdata: include_bytes!("../data/layouts/ScorchedSlab/map.bin"),
-        border: include_bytes!("../data/layouts/ScorchedSlab/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_CAVE_OF_ORIGIN_UNUSED_B4F_LAVA"),
@@ -3372,8 +2819,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 19,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Cave",
-        blockdata: include_bytes!("../data/layouts/CaveOfOrigin_Unused_B4F_Lava/map.bin"),
-        border: include_bytes!("../data/layouts/CaveOfOrigin_Unused_B4F_Lava/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_RUSTBORO_CITY_FLAT1_1F"),
@@ -3382,8 +2827,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 8,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_GenericBuilding",
-        blockdata: include_bytes!("../data/layouts/RustboroCity_Flat1_1F/map.bin"),
-        border: include_bytes!("../data/layouts/RustboroCity_Flat1_1F/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_RUSTBORO_CITY_FLAT1_2F"),
@@ -3392,8 +2835,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 8,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_GenericBuilding",
-        blockdata: include_bytes!("../data/layouts/RustboroCity_Flat1_2F/map.bin"),
-        border: include_bytes!("../data/layouts/RustboroCity_Flat1_2F/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_EVER_GRANDE_CITY_HALL4"),
@@ -3402,8 +2843,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 34,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_EliteFour",
-        blockdata: include_bytes!("../data/layouts/EverGrandeCity_Hall4/map.bin"),
-        border: include_bytes!("../data/layouts/EverGrandeCity_Hall4/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_AQUA_HIDEOUT_UNUSED_RUBY_MAP1"),
@@ -3412,8 +2851,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 30,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Facility",
-        blockdata: include_bytes!("../data/layouts/AquaHideout_UnusedRubyMap1/map.bin"),
-        border: include_bytes!("../data/layouts/AquaHideout_UnusedRubyMap1/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_AQUA_HIDEOUT_UNUSED_RUBY_MAP2"),
@@ -3422,8 +2859,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 24,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Facility",
-        blockdata: include_bytes!("../data/layouts/AquaHideout_UnusedRubyMap2/map.bin"),
-        border: include_bytes!("../data/layouts/AquaHideout_UnusedRubyMap2/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_AQUA_HIDEOUT_UNUSED_RUBY_MAP3"),
@@ -3432,8 +2867,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 24,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Facility",
-        blockdata: include_bytes!("../data/layouts/AquaHideout_UnusedRubyMap3/map.bin"),
-        border: include_bytes!("../data/layouts/AquaHideout_UnusedRubyMap3/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_ROUTE131_SKY_PILLAR"),
@@ -3442,8 +2875,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 40,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Pacifidlog",
-        blockdata: include_bytes!("../data/layouts/Route131_SkyPillar/map.bin"),
-        border: include_bytes!("../data/layouts/Route131_SkyPillar/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_SKY_PILLAR_ENTRANCE"),
@@ -3452,8 +2883,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 18,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Cave",
-        blockdata: include_bytes!("../data/layouts/SkyPillar_Entrance/map.bin"),
-        border: include_bytes!("../data/layouts/SkyPillar_Entrance/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_SKY_PILLAR_OUTSIDE"),
@@ -3462,8 +2891,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 23,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Pacifidlog",
-        blockdata: include_bytes!("../data/layouts/SkyPillar_Outside/map.bin"),
-        border: include_bytes!("../data/layouts/SkyPillar_Outside/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_SKY_PILLAR_1F"),
@@ -3472,8 +2899,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 14,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Pacifidlog",
-        blockdata: include_bytes!("../data/layouts/SkyPillar_1F/map.bin"),
-        border: include_bytes!("../data/layouts/SkyPillar_1F/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_SKY_PILLAR_2F"),
@@ -3482,8 +2907,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 14,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Pacifidlog",
-        blockdata: include_bytes!("../data/layouts/SkyPillar_2F/map.bin"),
-        border: include_bytes!("../data/layouts/SkyPillar_2F/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_SKY_PILLAR_3F"),
@@ -3492,8 +2915,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 14,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Pacifidlog",
-        blockdata: include_bytes!("../data/layouts/SkyPillar_3F/map.bin"),
-        border: include_bytes!("../data/layouts/SkyPillar_3F/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_SKY_PILLAR_4F"),
@@ -3502,8 +2923,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 14,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Pacifidlog",
-        blockdata: include_bytes!("../data/layouts/SkyPillar_4F/map.bin"),
-        border: include_bytes!("../data/layouts/SkyPillar_4F/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_SEAFLOOR_CAVERN_ROOM9_LAVA"),
@@ -3512,8 +2931,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 46,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Cave",
-        blockdata: include_bytes!("../data/layouts/SeafloorCavern_Room9_Lava/map.bin"),
-        border: include_bytes!("../data/layouts/SeafloorCavern_Room9_Lava/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_MOSSDEEP_CITY_STEVENS_HOUSE"),
@@ -3522,8 +2939,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 8,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_GenericBuilding",
-        blockdata: include_bytes!("../data/layouts/MossdeepCity_StevensHouse/map.bin"),
-        border: include_bytes!("../data/layouts/MossdeepCity_StevensHouse/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_SHOAL_CAVE_LOW_TIDE_ICE_ROOM"),
@@ -3532,8 +2947,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 30,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Cave",
-        blockdata: include_bytes!("../data/layouts/ShoalCave_LowTideIceRoom/map.bin"),
-        border: include_bytes!("../data/layouts/ShoalCave_LowTideIceRoom/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_SAFARI_ZONE_REST_HOUSE"),
@@ -3542,8 +2955,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 9,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_GenericBuilding",
-        blockdata: include_bytes!("../data/layouts/SafariZone_RestHouse/map.bin"),
-        border: include_bytes!("../data/layouts/SafariZone_RestHouse/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_SKY_PILLAR_5F"),
@@ -3552,8 +2963,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 14,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Pacifidlog",
-        blockdata: include_bytes!("../data/layouts/SkyPillar_5F/map.bin"),
-        border: include_bytes!("../data/layouts/SkyPillar_5F/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_SKY_PILLAR_TOP"),
@@ -3562,8 +2971,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 24,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Pacifidlog",
-        blockdata: include_bytes!("../data/layouts/SkyPillar_Top/map.bin"),
-        border: include_bytes!("../data/layouts/SkyPillar_Top/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_BATTLE_FRONTIER_BATTLE_DOME_LOBBY"),
@@ -3572,8 +2979,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 17,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_BattleDome",
-        blockdata: include_bytes!("../data/layouts/BattleFrontier_BattleDomeLobby/map.bin"),
-        border: include_bytes!("../data/layouts/BattleFrontier_BattleDomeLobby/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_BATTLE_FRONTIER_BATTLE_DOME_CORRIDOR"),
@@ -3582,8 +2987,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 7,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_BattleDome",
-        blockdata: include_bytes!("../data/layouts/BattleFrontier_BattleDomeCorridor/map.bin"),
-        border: include_bytes!("../data/layouts/BattleFrontier_BattleDomeCorridor/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_BATTLE_FRONTIER_BATTLE_DOME_PRE_BATTLE_ROOM"),
@@ -3592,8 +2995,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 8,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_BattleDome",
-        blockdata: include_bytes!("../data/layouts/BattleFrontier_BattleDomePreBattleRoom/map.bin"),
-        border: include_bytes!("../data/layouts/BattleFrontier_BattleDomePreBattleRoom/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_BATTLE_FRONTIER_BATTLE_DOME_BATTLE_ROOM"),
@@ -3602,8 +3003,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 10,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_BattleDome",
-        blockdata: include_bytes!("../data/layouts/BattleFrontier_BattleDomeBattleRoom/map.bin"),
-        border: include_bytes!("../data/layouts/BattleFrontier_BattleDomeBattleRoom/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_MAGMA_HIDEOUT_1F"),
@@ -3612,8 +3011,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 38,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Lavaridge",
-        blockdata: include_bytes!("../data/layouts/MagmaHideout_1F/map.bin"),
-        border: include_bytes!("../data/layouts/MagmaHideout_1F/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_MAGMA_HIDEOUT_2F_1R"),
@@ -3622,8 +3019,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 39,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Lavaridge",
-        blockdata: include_bytes!("../data/layouts/MagmaHideout_2F_1R/map.bin"),
-        border: include_bytes!("../data/layouts/MagmaHideout_2F_1R/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_MAGMA_HIDEOUT_2F_2R"),
@@ -3632,8 +3027,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 28,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Lavaridge",
-        blockdata: include_bytes!("../data/layouts/MagmaHideout_2F_2R/map.bin"),
-        border: include_bytes!("../data/layouts/MagmaHideout_2F_2R/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_MAGMA_HIDEOUT_3F_1R"),
@@ -3642,8 +3035,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 24,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Lavaridge",
-        blockdata: include_bytes!("../data/layouts/MagmaHideout_3F_1R/map.bin"),
-        border: include_bytes!("../data/layouts/MagmaHideout_3F_1R/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_MAGMA_HIDEOUT_3F_2R"),
@@ -3652,8 +3043,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 17,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Lavaridge",
-        blockdata: include_bytes!("../data/layouts/MagmaHideout_3F_2R/map.bin"),
-        border: include_bytes!("../data/layouts/MagmaHideout_3F_2R/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_MAGMA_HIDEOUT_4F"),
@@ -3662,8 +3051,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 28,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Lavaridge",
-        blockdata: include_bytes!("../data/layouts/MagmaHideout_4F/map.bin"),
-        border: include_bytes!("../data/layouts/MagmaHideout_4F/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_BATTLE_FRONTIER_BATTLE_PALACE_LOBBY"),
@@ -3672,8 +3059,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 12,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_BattlePalace",
-        blockdata: include_bytes!("../data/layouts/BattleFrontier_BattlePalaceLobby/map.bin"),
-        border: include_bytes!("../data/layouts/BattleFrontier_BattlePalaceLobby/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_BATTLE_FRONTIER_BATTLE_PALACE_CORRIDOR"),
@@ -3682,8 +3067,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 14,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_BattlePalace",
-        blockdata: include_bytes!("../data/layouts/BattleFrontier_BattlePalaceCorridor/map.bin"),
-        border: include_bytes!("../data/layouts/BattleFrontier_BattlePalaceCorridor/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_BATTLE_FRONTIER_BATTLE_PALACE_BATTLE_ROOM"),
@@ -3692,8 +3075,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 10,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_BattlePalace",
-        blockdata: include_bytes!("../data/layouts/BattleFrontier_BattlePalaceBattleRoom/map.bin"),
-        border: include_bytes!("../data/layouts/BattleFrontier_BattlePalaceBattleRoom/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_BATTLE_FRONTIER_OUTSIDE_EAST"),
@@ -3702,8 +3083,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 72,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_BattleFrontierOutsideEast",
-        blockdata: include_bytes!("../data/layouts/BattleFrontier_OutsideEast/map.bin"),
-        border: include_bytes!("../data/layouts/BattleFrontier_OutsideEast/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_BATTLE_FRONTIER_BATTLE_FACTORY_LOBBY"),
@@ -3712,8 +3091,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 12,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_BattleFactory",
-        blockdata: include_bytes!("../data/layouts/BattleFrontier_BattleFactoryLobby/map.bin"),
-        border: include_bytes!("../data/layouts/BattleFrontier_BattleFactoryLobby/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_BATTLE_FRONTIER_BATTLE_FACTORY_PRE_BATTLE_ROOM"),
@@ -3722,12 +3099,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 14,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_BattleFactory",
-        blockdata: include_bytes!(
-            "../data/layouts/BattleFrontier_BattleFactoryPreBattleRoom/map.bin"
-        ),
-        border: include_bytes!(
-            "../data/layouts/BattleFrontier_BattleFactoryPreBattleRoom/border.bin"
-        ),
     },
     MapLayout {
         id: LayoutId("LAYOUT_BATTLE_FRONTIER_BATTLE_FACTORY_BATTLE_ROOM"),
@@ -3736,8 +3107,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 12,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_BattleFactory",
-        blockdata: include_bytes!("../data/layouts/BattleFrontier_BattleFactoryBattleRoom/map.bin"),
-        border: include_bytes!("../data/layouts/BattleFrontier_BattleFactoryBattleRoom/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_BATTLE_FRONTIER_BATTLE_PIKE_LOBBY"),
@@ -3746,8 +3115,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 13,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_BattlePike",
-        blockdata: include_bytes!("../data/layouts/BattleFrontier_BattlePikeLobby/map.bin"),
-        border: include_bytes!("../data/layouts/BattleFrontier_BattlePikeLobby/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_BATTLE_FRONTIER_BATTLE_PIKE_CORRIDOR"),
@@ -3756,8 +3123,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 8,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_BattlePike",
-        blockdata: include_bytes!("../data/layouts/BattleFrontier_BattlePikeCorridor/map.bin"),
-        border: include_bytes!("../data/layouts/BattleFrontier_BattlePikeCorridor/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_BATTLE_FRONTIER_BATTLE_PIKE_THREE_PATH_ROOM"),
@@ -3766,8 +3131,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 11,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_BattlePike",
-        blockdata: include_bytes!("../data/layouts/BattleFrontier_BattlePikeThreePathRoom/map.bin"),
-        border: include_bytes!("../data/layouts/BattleFrontier_BattlePikeThreePathRoom/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_BATTLE_FRONTIER_BATTLE_PIKE_ROOM_NORMAL"),
@@ -3776,8 +3139,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 8,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_BattlePike",
-        blockdata: include_bytes!("../data/layouts/BattleFrontier_BattlePikeRoomNormal/map.bin"),
-        border: include_bytes!("../data/layouts/BattleFrontier_BattlePikeRoomNormal/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_BATTLE_FRONTIER_BATTLE_PIKE_ROOM_FINAL"),
@@ -3786,8 +3147,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 8,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_BattlePike",
-        blockdata: include_bytes!("../data/layouts/BattleFrontier_BattlePikeRoomFinal/map.bin"),
-        border: include_bytes!("../data/layouts/BattleFrontier_BattlePikeRoomFinal/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_BATTLE_FRONTIER_BATTLE_ARENA_LOBBY"),
@@ -3796,8 +3155,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 13,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_BattleArena",
-        blockdata: include_bytes!("../data/layouts/BattleFrontier_BattleArenaLobby/map.bin"),
-        border: include_bytes!("../data/layouts/BattleFrontier_BattleArenaLobby/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_BATTLE_FRONTIER_BATTLE_ARENA_CORRIDOR"),
@@ -3806,8 +3163,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 14,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_BattleArena",
-        blockdata: include_bytes!("../data/layouts/BattleFrontier_BattleArenaCorridor/map.bin"),
-        border: include_bytes!("../data/layouts/BattleFrontier_BattleArenaCorridor/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_BATTLE_FRONTIER_BATTLE_ARENA_BATTLE_ROOM"),
@@ -3816,8 +3171,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 11,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_BattleArena",
-        blockdata: include_bytes!("../data/layouts/BattleFrontier_BattleArenaBattleRoom/map.bin"),
-        border: include_bytes!("../data/layouts/BattleFrontier_BattleArenaBattleRoom/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_SOOTOPOLIS_CITY_LEGENDS_BATTLE"),
@@ -3826,8 +3179,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 60,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Sootopolis",
-        blockdata: include_bytes!("../data/layouts/SootopolisCity_LegendsBattle/map.bin"),
-        border: include_bytes!("../data/layouts/SootopolisCity_LegendsBattle/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_BATTLE_FRONTIER_BATTLE_PIKE_ROOM_WILD_MONS"),
@@ -3836,8 +3187,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 20,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_BattlePike",
-        blockdata: include_bytes!("../data/layouts/BattleFrontier_BattlePikeRoomWildMons/map.bin"),
-        border: include_bytes!("../data/layouts/BattleFrontier_BattlePikeRoomWildMons/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_BATTLE_FRONTIER_BATTLE_PIKE_ROOM_UNUSED"),
@@ -3846,8 +3195,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 1,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_BattlePike",
-        blockdata: include_bytes!("../data/layouts/BattleFrontier_BattlePikeRoomUnused/map.bin"),
-        border: include_bytes!("../data/layouts/BattleFrontier_BattlePikeRoomUnused/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_BATTLE_FRONTIER_BATTLE_PYRAMID_LOBBY"),
@@ -3856,8 +3203,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 18,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_BattlePyramid",
-        blockdata: include_bytes!("../data/layouts/BattleFrontier_BattlePyramidLobby/map.bin"),
-        border: include_bytes!("../data/layouts/BattleFrontier_BattlePyramidLobby/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_BATTLE_FRONTIER_BATTLE_PYRAMID_FLOOR"),
@@ -3866,8 +3211,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 8,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_BattlePyramid",
-        blockdata: include_bytes!("../data/layouts/BattleFrontier_BattlePyramidFloor/map.bin"),
-        border: include_bytes!("../data/layouts/BattleFrontier_BattlePyramidFloor/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_BATTLE_PYRAMID_SQUARE01"),
@@ -3876,8 +3219,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 8,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_BattlePyramid",
-        blockdata: include_bytes!("../data/layouts/BattlePyramidSquare01/map.bin"),
-        border: include_bytes!("../data/layouts/BattlePyramidSquare01/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_BATTLE_PYRAMID_SQUARE02"),
@@ -3886,8 +3227,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 8,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_BattlePyramid",
-        blockdata: include_bytes!("../data/layouts/BattlePyramidSquare02/map.bin"),
-        border: include_bytes!("../data/layouts/BattlePyramidSquare02/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_BATTLE_PYRAMID_SQUARE03"),
@@ -3896,8 +3235,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 8,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_BattlePyramid",
-        blockdata: include_bytes!("../data/layouts/BattlePyramidSquare03/map.bin"),
-        border: include_bytes!("../data/layouts/BattlePyramidSquare03/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_BATTLE_PYRAMID_SQUARE04"),
@@ -3906,8 +3243,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 8,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_BattlePyramid",
-        blockdata: include_bytes!("../data/layouts/BattlePyramidSquare04/map.bin"),
-        border: include_bytes!("../data/layouts/BattlePyramidSquare04/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_BATTLE_PYRAMID_SQUARE05"),
@@ -3916,8 +3251,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 8,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_BattlePyramid",
-        blockdata: include_bytes!("../data/layouts/BattlePyramidSquare05/map.bin"),
-        border: include_bytes!("../data/layouts/BattlePyramidSquare05/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_BATTLE_PYRAMID_SQUARE06"),
@@ -3926,8 +3259,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 8,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_BattlePyramid",
-        blockdata: include_bytes!("../data/layouts/BattlePyramidSquare06/map.bin"),
-        border: include_bytes!("../data/layouts/BattlePyramidSquare06/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_BATTLE_PYRAMID_SQUARE07"),
@@ -3936,8 +3267,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 8,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_BattlePyramid",
-        blockdata: include_bytes!("../data/layouts/BattlePyramidSquare07/map.bin"),
-        border: include_bytes!("../data/layouts/BattlePyramidSquare07/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_BATTLE_PYRAMID_SQUARE08"),
@@ -3946,8 +3275,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 8,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_BattlePyramid",
-        blockdata: include_bytes!("../data/layouts/BattlePyramidSquare08/map.bin"),
-        border: include_bytes!("../data/layouts/BattlePyramidSquare08/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_BATTLE_PYRAMID_SQUARE09"),
@@ -3956,8 +3283,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 8,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_BattlePyramid",
-        blockdata: include_bytes!("../data/layouts/BattlePyramidSquare09/map.bin"),
-        border: include_bytes!("../data/layouts/BattlePyramidSquare09/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_BATTLE_PYRAMID_SQUARE10"),
@@ -3966,8 +3291,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 8,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_BattlePyramid",
-        blockdata: include_bytes!("../data/layouts/BattlePyramidSquare10/map.bin"),
-        border: include_bytes!("../data/layouts/BattlePyramidSquare10/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_BATTLE_PYRAMID_SQUARE11"),
@@ -3976,8 +3299,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 8,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_BattlePyramid",
-        blockdata: include_bytes!("../data/layouts/BattlePyramidSquare11/map.bin"),
-        border: include_bytes!("../data/layouts/BattlePyramidSquare11/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_BATTLE_PYRAMID_SQUARE12"),
@@ -3986,8 +3307,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 8,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_BattlePyramid",
-        blockdata: include_bytes!("../data/layouts/BattlePyramidSquare12/map.bin"),
-        border: include_bytes!("../data/layouts/BattlePyramidSquare12/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_BATTLE_PYRAMID_SQUARE13"),
@@ -3996,8 +3315,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 8,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_BattlePyramid",
-        blockdata: include_bytes!("../data/layouts/BattlePyramidSquare13/map.bin"),
-        border: include_bytes!("../data/layouts/BattlePyramidSquare13/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_BATTLE_PYRAMID_SQUARE14"),
@@ -4006,8 +3323,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 8,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_BattlePyramid",
-        blockdata: include_bytes!("../data/layouts/BattlePyramidSquare14/map.bin"),
-        border: include_bytes!("../data/layouts/BattlePyramidSquare14/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_BATTLE_PYRAMID_SQUARE15"),
@@ -4016,8 +3331,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 8,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_BattlePyramid",
-        blockdata: include_bytes!("../data/layouts/BattlePyramidSquare15/map.bin"),
-        border: include_bytes!("../data/layouts/BattlePyramidSquare15/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_BATTLE_PYRAMID_SQUARE16"),
@@ -4026,8 +3339,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 8,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_BattlePyramid",
-        blockdata: include_bytes!("../data/layouts/BattlePyramidSquare16/map.bin"),
-        border: include_bytes!("../data/layouts/BattlePyramidSquare16/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_BATTLE_FRONTIER_BATTLE_PYRAMID_TOP"),
@@ -4036,8 +3347,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 23,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_BattlePyramid",
-        blockdata: include_bytes!("../data/layouts/BattleFrontier_BattlePyramidTop/map.bin"),
-        border: include_bytes!("../data/layouts/BattleFrontier_BattlePyramidTop/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_MAGMA_HIDEOUT_3F_3R"),
@@ -4046,8 +3355,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 24,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Lavaridge",
-        blockdata: include_bytes!("../data/layouts/MagmaHideout_3F_3R/map.bin"),
-        border: include_bytes!("../data/layouts/MagmaHideout_3F_3R/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_MAGMA_HIDEOUT_2F_3R"),
@@ -4056,8 +3363,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 19,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Lavaridge",
-        blockdata: include_bytes!("../data/layouts/MagmaHideout_2F_3R/map.bin"),
-        border: include_bytes!("../data/layouts/MagmaHideout_2F_3R/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_MIRAGE_TOWER_1F"),
@@ -4066,8 +3371,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 17,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_MirageTower",
-        blockdata: include_bytes!("../data/layouts/MirageTower_1F/map.bin"),
-        border: include_bytes!("../data/layouts/MirageTower_1F/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_MIRAGE_TOWER_2F"),
@@ -4076,8 +3379,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 17,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_MirageTower",
-        blockdata: include_bytes!("../data/layouts/MirageTower_2F/map.bin"),
-        border: include_bytes!("../data/layouts/MirageTower_2F/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_MIRAGE_TOWER_3F"),
@@ -4086,8 +3387,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 17,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_MirageTower",
-        blockdata: include_bytes!("../data/layouts/MirageTower_3F/map.bin"),
-        border: include_bytes!("../data/layouts/MirageTower_3F/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_BATTLE_TENT_LOBBY"),
@@ -4096,8 +3395,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 10,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_BattleTent",
-        blockdata: include_bytes!("../data/layouts/BattleTentLobby/map.bin"),
-        border: include_bytes!("../data/layouts/BattleTentLobby/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_BATTLE_TENT_CORRIDOR"),
@@ -4106,8 +3403,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 8,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_BattleTent",
-        blockdata: include_bytes!("../data/layouts/BattleTentCorridor/map.bin"),
-        border: include_bytes!("../data/layouts/BattleTentCorridor/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_BATTLE_TENT_BATTLE_ROOM"),
@@ -4116,8 +3411,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 9,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_BattleTent",
-        blockdata: include_bytes!("../data/layouts/BattleTentBattleRoom/map.bin"),
-        border: include_bytes!("../data/layouts/BattleTentBattleRoom/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_VERDANTURF_TOWN_BATTLE_TENT_BATTLE_ROOM"),
@@ -4126,8 +3419,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 9,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_BattleTent",
-        blockdata: include_bytes!("../data/layouts/VerdanturfTown_BattleTentBattleRoom/map.bin"),
-        border: include_bytes!("../data/layouts/VerdanturfTown_BattleTentBattleRoom/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_MIRAGE_TOWER_4F"),
@@ -4136,8 +3427,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 10,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_MirageTower",
-        blockdata: include_bytes!("../data/layouts/MirageTower_4F/map.bin"),
-        border: include_bytes!("../data/layouts/MirageTower_4F/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_DESERT_UNDERPASS"),
@@ -4146,8 +3435,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 23,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Cave",
-        blockdata: include_bytes!("../data/layouts/DesertUnderpass/map.bin"),
-        border: include_bytes!("../data/layouts/DesertUnderpass/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_BATTLE_FRONTIER_BATTLE_TOWER_MULTI_PARTNER_ROOM"),
@@ -4156,12 +3443,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 15,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_BattleFrontier",
-        blockdata: include_bytes!(
-            "../data/layouts/BattleFrontier_BattleTowerMultiPartnerRoom/map.bin"
-        ),
-        border: include_bytes!(
-            "../data/layouts/BattleFrontier_BattleTowerMultiPartnerRoom/border.bin"
-        ),
     },
     MapLayout {
         id: LayoutId("LAYOUT_BATTLE_FRONTIER_BATTLE_TOWER_MULTI_CORRIDOR"),
@@ -4170,12 +3451,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 5,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_BattleFrontier",
-        blockdata: include_bytes!(
-            "../data/layouts/BattleFrontier_BattleTowerMultiCorridor/map.bin"
-        ),
-        border: include_bytes!(
-            "../data/layouts/BattleFrontier_BattleTowerMultiCorridor/border.bin"
-        ),
     },
     MapLayout {
         id: LayoutId("LAYOUT_ROUTE111_NO_MIRAGE_TOWER"),
@@ -4184,8 +3459,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 140,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Mauville",
-        blockdata: include_bytes!("../data/layouts/Route111_NoMirageTower/map.bin"),
-        border: include_bytes!("../data/layouts/Route111_NoMirageTower/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_UNION_ROOM"),
@@ -4194,8 +3467,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 12,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_UnionRoom",
-        blockdata: include_bytes!("../data/layouts/UnionRoom/map.bin"),
-        border: include_bytes!("../data/layouts/UnionRoom/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_SAFARI_ZONE_NORTHEAST"),
@@ -4204,8 +3475,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 40,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Lilycove",
-        blockdata: include_bytes!("../data/layouts/SafariZone_Northeast/map.bin"),
-        border: include_bytes!("../data/layouts/SafariZone_Northeast/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_SAFARI_ZONE_SOUTHEAST"),
@@ -4214,8 +3483,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 40,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Lilycove",
-        blockdata: include_bytes!("../data/layouts/SafariZone_Southeast/map.bin"),
-        border: include_bytes!("../data/layouts/SafariZone_Southeast/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_BATTLE_FRONTIER_RANKING_HALL"),
@@ -4224,8 +3491,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 15,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_BattleFrontierRankingHall",
-        blockdata: include_bytes!("../data/layouts/BattleFrontier_RankingHall/map.bin"),
-        border: include_bytes!("../data/layouts/BattleFrontier_RankingHall/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_BATTLE_FRONTIER_LOUNGE1"),
@@ -4234,8 +3499,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 8,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_BattleFrontier",
-        blockdata: include_bytes!("../data/layouts/BattleFrontier_Lounge1/map.bin"),
-        border: include_bytes!("../data/layouts/BattleFrontier_Lounge1/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_BATTLE_FRONTIER_EXCHANGE_SERVICE_CORNER"),
@@ -4244,8 +3507,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 11,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_BattleFrontier",
-        blockdata: include_bytes!("../data/layouts/BattleFrontier_ExchangeServiceCorner/map.bin"),
-        border: include_bytes!("../data/layouts/BattleFrontier_ExchangeServiceCorner/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_BATTLE_FRONTIER_RECEPTION_GATE"),
@@ -4254,8 +3515,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 14,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_BattleFrontier",
-        blockdata: include_bytes!("../data/layouts/BattleFrontier_ReceptionGate/map.bin"),
-        border: include_bytes!("../data/layouts/BattleFrontier_ReceptionGate/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_ARTISAN_CAVE_B1F"),
@@ -4264,8 +3523,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 54,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Cave",
-        blockdata: include_bytes!("../data/layouts/ArtisanCave_B1F/map.bin"),
-        border: include_bytes!("../data/layouts/ArtisanCave_B1F/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_ARTISAN_CAVE_1F"),
@@ -4274,8 +3531,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 22,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Cave",
-        blockdata: include_bytes!("../data/layouts/ArtisanCave_1F/map.bin"),
-        border: include_bytes!("../data/layouts/ArtisanCave_1F/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_FARAWAY_ISLAND_ENTRANCE"),
@@ -4284,8 +3539,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 46,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Rustboro",
-        blockdata: include_bytes!("../data/layouts/FarawayIsland_Entrance/map.bin"),
-        border: include_bytes!("../data/layouts/FarawayIsland_Entrance/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_FARAWAY_ISLAND_INTERIOR"),
@@ -4294,8 +3547,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 26,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Fortree",
-        blockdata: include_bytes!("../data/layouts/FarawayIsland_Interior/map.bin"),
-        border: include_bytes!("../data/layouts/FarawayIsland_Interior/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_BIRTH_ISLAND_EXTERIOR"),
@@ -4304,8 +3555,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 30,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Dewford",
-        blockdata: include_bytes!("../data/layouts/BirthIsland_Exterior/map.bin"),
-        border: include_bytes!("../data/layouts/BirthIsland_Exterior/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_ISLAND_HARBOR"),
@@ -4314,8 +3563,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 13,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_IslandHarbor",
-        blockdata: include_bytes!("../data/layouts/IslandHarbor/map.bin"),
-        border: include_bytes!("../data/layouts/IslandHarbor/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_UNDERWATER_MARINE_CAVE"),
@@ -4324,8 +3571,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 10,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Underwater",
-        blockdata: include_bytes!("../data/layouts/Underwater_MarineCave/map.bin"),
-        border: include_bytes!("../data/layouts/Underwater_MarineCave/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_MARINE_CAVE_ENTRANCE"),
@@ -4334,8 +3579,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 20,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Cave",
-        blockdata: include_bytes!("../data/layouts/MarineCave_Entrance/map.bin"),
-        border: include_bytes!("../data/layouts/MarineCave_Entrance/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_TERRA_CAVE_ENTRANCE"),
@@ -4344,8 +3587,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 20,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Cave",
-        blockdata: include_bytes!("../data/layouts/TerraCave_Entrance/map.bin"),
-        border: include_bytes!("../data/layouts/TerraCave_Entrance/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_TERRA_CAVE_END"),
@@ -4354,8 +3595,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 30,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Cave",
-        blockdata: include_bytes!("../data/layouts/TerraCave_End/map.bin"),
-        border: include_bytes!("../data/layouts/TerraCave_End/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_UNDERWATER_ROUTE105"),
@@ -4364,8 +3603,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 80,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Underwater",
-        blockdata: include_bytes!("../data/layouts/Underwater_Route105/map.bin"),
-        border: include_bytes!("../data/layouts/Underwater_Route105/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_UNDERWATER_ROUTE125"),
@@ -4374,8 +3611,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 40,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Underwater",
-        blockdata: include_bytes!("../data/layouts/Underwater_Route125/map.bin"),
-        border: include_bytes!("../data/layouts/Underwater_Route125/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_UNDERWATER_ROUTE129"),
@@ -4384,8 +3619,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 40,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Underwater",
-        blockdata: include_bytes!("../data/layouts/Underwater_Route129/map.bin"),
-        border: include_bytes!("../data/layouts/Underwater_Route129/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_MARINE_CAVE_END"),
@@ -4394,8 +3627,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 30,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Cave",
-        blockdata: include_bytes!("../data/layouts/MarineCave_End/map.bin"),
-        border: include_bytes!("../data/layouts/MarineCave_End/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_TRAINER_HILL_ENTRANCE"),
@@ -4404,8 +3635,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 17,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_TrainerHill",
-        blockdata: include_bytes!("../data/layouts/TrainerHill_Entrance/map.bin"),
-        border: include_bytes!("../data/layouts/TrainerHill_Entrance/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_TRAINER_HILL_1F"),
@@ -4414,8 +3643,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 21,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_TrainerHill",
-        blockdata: include_bytes!("../data/layouts/TrainerHill_1F/map.bin"),
-        border: include_bytes!("../data/layouts/TrainerHill_1F/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_TRAINER_HILL_2F"),
@@ -4424,8 +3651,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 21,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_TrainerHill",
-        blockdata: include_bytes!("../data/layouts/TrainerHill_2F/map.bin"),
-        border: include_bytes!("../data/layouts/TrainerHill_2F/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_TRAINER_HILL_3F"),
@@ -4434,8 +3659,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 21,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_TrainerHill",
-        blockdata: include_bytes!("../data/layouts/TrainerHill_3F/map.bin"),
-        border: include_bytes!("../data/layouts/TrainerHill_3F/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_TRAINER_HILL_4F"),
@@ -4444,8 +3667,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 21,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_TrainerHill",
-        blockdata: include_bytes!("../data/layouts/TrainerHill_4F/map.bin"),
-        border: include_bytes!("../data/layouts/TrainerHill_4F/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_TRAINER_HILL_ROOF"),
@@ -4454,8 +3675,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 16,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_TrainerHill",
-        blockdata: include_bytes!("../data/layouts/TrainerHill_Roof/map.bin"),
-        border: include_bytes!("../data/layouts/TrainerHill_Roof/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_ALTERING_CAVE"),
@@ -4464,8 +3683,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 24,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Cave",
-        blockdata: include_bytes!("../data/layouts/AlteringCave/map.bin"),
-        border: include_bytes!("../data/layouts/AlteringCave/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_NAVEL_ROCK_EXTERIOR"),
@@ -4474,8 +3691,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 24,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Dewford",
-        blockdata: include_bytes!("../data/layouts/NavelRock_Exterior/map.bin"),
-        border: include_bytes!("../data/layouts/NavelRock_Exterior/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_NAVEL_ROCK_ENTRANCE"),
@@ -4484,8 +3699,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 32,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_NavelRock",
-        blockdata: include_bytes!("../data/layouts/NavelRock_Entrance/map.bin"),
-        border: include_bytes!("../data/layouts/NavelRock_Entrance/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_NAVEL_ROCK_TOP"),
@@ -4494,8 +3707,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 28,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_NavelRock",
-        blockdata: include_bytes!("../data/layouts/NavelRock_Top/map.bin"),
-        border: include_bytes!("../data/layouts/NavelRock_Top/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_NAVEL_ROCK_BOTTOM"),
@@ -4504,8 +3715,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 22,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_NavelRock",
-        blockdata: include_bytes!("../data/layouts/NavelRock_Bottom/map.bin"),
-        border: include_bytes!("../data/layouts/NavelRock_Bottom/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_NAVEL_ROCK_LADDER_ROOM1"),
@@ -4514,8 +3723,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 8,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_NavelRock",
-        blockdata: include_bytes!("../data/layouts/NavelRock_LadderRoom1/map.bin"),
-        border: include_bytes!("../data/layouts/NavelRock_LadderRoom1/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_NAVEL_ROCK_LADDER_ROOM2"),
@@ -4524,8 +3731,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 8,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_NavelRock",
-        blockdata: include_bytes!("../data/layouts/NavelRock_LadderRoom2/map.bin"),
-        border: include_bytes!("../data/layouts/NavelRock_LadderRoom2/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_NAVEL_ROCK_B1F"),
@@ -4534,8 +3739,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 11,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_NavelRock",
-        blockdata: include_bytes!("../data/layouts/NavelRock_B1F/map.bin"),
-        border: include_bytes!("../data/layouts/NavelRock_B1F/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_NAVEL_ROCK_FORK"),
@@ -4544,8 +3747,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 86,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_NavelRock",
-        blockdata: include_bytes!("../data/layouts/NavelRock_Fork/map.bin"),
-        border: include_bytes!("../data/layouts/NavelRock_Fork/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_BATTLE_FRONTIER_LOUNGE2"),
@@ -4554,8 +3755,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 10,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_BattleFrontier",
-        blockdata: include_bytes!("../data/layouts/BattleFrontier_Lounge2/map.bin"),
-        border: include_bytes!("../data/layouts/BattleFrontier_Lounge2/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_BATTLE_FRONTIER_SCOTTS_HOUSE"),
@@ -4564,8 +3763,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 8,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_BattleFrontier",
-        blockdata: include_bytes!("../data/layouts/BattleFrontier_ScottsHouse/map.bin"),
-        border: include_bytes!("../data/layouts/BattleFrontier_ScottsHouse/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_METEOR_FALLS_STEVENS_CAVE"),
@@ -4574,8 +3771,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 32,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_MeteorFalls",
-        blockdata: include_bytes!("../data/layouts/MeteorFalls_StevensCave/map.bin"),
-        border: include_bytes!("../data/layouts/MeteorFalls_StevensCave/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_LITTLEROOT_TOWN_PROFESSOR_BIRCHS_LAB_WITH_TABLE"),
@@ -4584,12 +3779,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 13,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_Lab",
-        blockdata: include_bytes!(
-            "../data/layouts/LittlerootTown_ProfessorBirchsLabWithTable/map.bin"
-        ),
-        border: include_bytes!(
-            "../data/layouts/LittlerootTown_ProfessorBirchsLabWithTable/border.bin"
-        ),
     },
     MapLayout {
         id: LayoutId("LAYOUT_SKY_PILLAR_1F_CLEAN"),
@@ -4598,8 +3787,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 14,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Pacifidlog",
-        blockdata: include_bytes!("../data/layouts/SkyPillar_1F_Clean/map.bin"),
-        border: include_bytes!("../data/layouts/SkyPillar_1F_Clean/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_SKY_PILLAR_2F_CLEAN"),
@@ -4608,8 +3795,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 14,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Pacifidlog",
-        blockdata: include_bytes!("../data/layouts/SkyPillar_2F_Clean/map.bin"),
-        border: include_bytes!("../data/layouts/SkyPillar_2F_Clean/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_SKY_PILLAR_3F_CLEAN"),
@@ -4618,8 +3803,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 14,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Pacifidlog",
-        blockdata: include_bytes!("../data/layouts/SkyPillar_3F_Clean/map.bin"),
-        border: include_bytes!("../data/layouts/SkyPillar_3F_Clean/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_SKY_PILLAR_4F_CLEAN"),
@@ -4628,8 +3811,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 14,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Pacifidlog",
-        blockdata: include_bytes!("../data/layouts/SkyPillar_4F_Clean/map.bin"),
-        border: include_bytes!("../data/layouts/SkyPillar_4F_Clean/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_SKY_PILLAR_5F_CLEAN"),
@@ -4638,8 +3819,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 14,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Pacifidlog",
-        blockdata: include_bytes!("../data/layouts/SkyPillar_5F_Clean/map.bin"),
-        border: include_bytes!("../data/layouts/SkyPillar_5F_Clean/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_SKY_PILLAR_TOP_CLEAN"),
@@ -4648,8 +3827,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 24,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_Pacifidlog",
-        blockdata: include_bytes!("../data/layouts/SkyPillar_Top_Clean/map.bin"),
-        border: include_bytes!("../data/layouts/SkyPillar_Top_Clean/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_SOOTOPOLIS_CITY_MYSTERY_EVENTS_HOUSE_1F"),
@@ -4658,8 +3835,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 8,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_MysteryEventsHouse",
-        blockdata: include_bytes!("../data/layouts/SootopolisCity_MysteryEventsHouse_1F/map.bin"),
-        border: include_bytes!("../data/layouts/SootopolisCity_MysteryEventsHouse_1F/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_SOOTOPOLIS_CITY_MYSTERY_EVENTS_HOUSE_B1F"),
@@ -4668,8 +3843,6 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 9,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_MysteryEventsHouse",
-        blockdata: include_bytes!("../data/layouts/SootopolisCity_MysteryEventsHouse_B1F/map.bin"),
-        border: include_bytes!("../data/layouts/SootopolisCity_MysteryEventsHouse_B1F/border.bin"),
     },
     MapLayout {
         id: LayoutId("LAYOUT_SOOTOPOLIS_CITY_MYSTERY_EVENTS_HOUSE_1F_STAIRS_UNBLOCKED"),
@@ -4678,19 +3851,12 @@ static LAYOUTS: [MapLayout; LAYOUT_COUNT] = [
         height: 8,
         primary_tileset: "gTileset_Building",
         secondary_tileset: "gTileset_MysteryEventsHouse",
-        blockdata: include_bytes!(
-            "../data/layouts/SootopolisCity_MysteryEventsHouse_1F_StairsUnblocked/map.bin"
-        ),
-        border: include_bytes!(
-            "../data/layouts/SootopolisCity_MysteryEventsHouse_1F_StairsUnblocked/border.bin"
-        ),
     },
 ];
 
 // --- end generated ---
-
 /// The `gMapLayouts` table: owned, read-only access to every map layout's
-/// geometry and blockdata with typed lookup `(oop-boundaries)`.
+/// metadata with typed lookup `(oop-boundaries)`.
 #[derive(Debug, Clone, Copy)]
 pub struct LayoutTable {
     layouts: &'static [MapLayout; LAYOUT_COUNT],
@@ -4747,7 +3913,9 @@ impl Default for LayoutTable {
 
 #[cfg(test)]
 mod tests {
-    use super::{LayoutId, LayoutTable, MetatileCell, BORDER_CELLS, LAYOUT_COUNT};
+    use super::{
+        BorderGrid, LayoutGrid, LayoutId, LayoutTable, MetatileCell, BORDER_CELLS, LAYOUT_COUNT,
+    };
     use crate::error::AssetError;
 
     #[test]
@@ -4771,7 +3939,6 @@ mod tests {
         assert_eq!(l.primary_tileset, "gTileset_General");
         assert_eq!(l.secondary_tileset, "gTileset_Petalburg");
         assert_eq!(l.cell_count(), 400);
-        assert_eq!(l.cells().count(), 400);
     }
 
     #[test]
@@ -4784,78 +3951,11 @@ mod tests {
     }
 
     #[test]
-    fn every_layout_has_enough_blockdata_for_its_dimensions() {
-        // blockdata may be longer than width*height*2 (a few "unused"
-        // leftover layouts carry trailing padding — see module docs) but
-        // never shorter.
+    fn every_layout_id_is_unique() {
         let table = LayoutTable::new();
-        for l in table.iter() {
-            let expected = l.cell_count() * 2;
-            assert!(
-                l.blockdata_len() >= expected,
-                "{}: blockdata {} bytes < {} expected (w={} h={})",
-                l.id.name(),
-                l.blockdata_len(),
-                expected,
-                l.width,
-                l.height,
-            );
-        }
-    }
-
-    #[test]
-    fn every_border_is_a_fixed_two_by_two_block() {
-        let table = LayoutTable::new();
-        for l in table.iter() {
-            assert_eq!(
-                l.border_cells().count(),
-                BORDER_CELLS,
-                "{}: border cell count",
-                l.id.name()
-            );
-        }
-    }
-
-    #[test]
-    fn cell_at_matches_manual_row_major_decode() {
-        let table = LayoutTable::new();
-        let l = table.layout(LayoutId("LAYOUT_LITTLEROOT_TOWN")).unwrap();
-        let all: Vec<_> = l.cells().collect();
-        for y in 0..l.height {
-            for x in 0..l.width {
-                let expected = all[y as usize * l.width as usize + x as usize];
-                assert_eq!(l.cell_at(x, y), Some(expected));
-            }
-        }
-        assert_eq!(l.cell_at(l.width, 0), None);
-        assert_eq!(l.cell_at(0, l.height), None);
-    }
-
-    #[test]
-    fn border_cell_indexes_by_parity_like_upstream() {
-        // GetBorderBlockAt: ((x+1)&1) + (((y+1)&1)<<1).
-        //   (0,0) -> (1&1) + ((1&1)<<1) = 1 + 2 = 3
-        //   (1,0) -> (0&1) + ((1&1)<<1) = 0 + 2 = 2
-        //   (0,1) -> (1&1) + ((0&1)<<1) = 1 + 0 = 1
-        //   (1,1) -> (0&1) + ((0&1)<<1) = 0 + 0 = 0
-        let table = LayoutTable::new();
-        let l = table.layout(LayoutId("LAYOUT_LITTLEROOT_TOWN")).unwrap();
-        let cells: Vec<_> = l.border_cells().collect();
-        assert_eq!(l.border_cell(0, 0), cells[3]);
-        assert_eq!(l.border_cell(1, 0), cells[2]);
-        assert_eq!(l.border_cell(0, 1), cells[1]);
-        assert_eq!(l.border_cell(1, 1), cells[0]);
-    }
-
-    #[test]
-    fn metatile_cell_round_trips_through_pack() {
-        for raw in [0u16, 1, 0x03FF, 0x0400, 0x0800, 0x0C00, 0xF000, 0xFFFF] {
-            let cell = MetatileCell::from_raw(raw);
-            assert!(cell.metatile_id <= 0x03FF);
-            assert!(cell.collision <= 3);
-            assert!(cell.elevation <= 15);
-            assert_eq!(cell.pack(), raw);
-        }
+        let ids: Vec<_> = table.iter().map(|l| l.id).collect();
+        let unique: std::collections::HashSet<_> = ids.iter().collect();
+        assert_eq!(ids.len(), unique.len(), "duplicate LayoutId in table");
     }
 
     #[test]
@@ -4869,10 +3969,147 @@ mod tests {
     }
 
     #[test]
-    fn every_layout_id_is_unique() {
-        let table = LayoutTable::new();
-        let ids: Vec<_> = table.iter().map(|l| l.id).collect();
-        let unique: std::collections::HashSet<_> = ids.iter().collect();
-        assert_eq!(ids.len(), unique.len(), "duplicate LayoutId in table");
+    fn metatile_cell_round_trips_through_pack() {
+        for raw in [0u16, 1, 0x03FF, 0x0400, 0x0800, 0x0C00, 0xF000, 0xFFFF] {
+            let cell = MetatileCell::from_raw(raw);
+            assert!(cell.metatile_id <= 0x03FF);
+            assert!(cell.collision <= 3);
+            assert!(cell.elevation <= 15);
+            assert_eq!(cell.pack(), raw);
+        }
+    }
+
+    // --- LayoutGrid: synthetic-byte decode coverage (no embedded data; the
+    // grid content itself lives only in the local extract pack, issue #81). ---
+
+    /// Build a `MapLayout` with the given dimensions for grid tests. The
+    /// tileset/name/id fields are irrelevant to grid decoding.
+    fn layout_meta(width: u16, height: u16) -> super::MapLayout {
+        super::MapLayout {
+            id: LayoutId("LAYOUT_TEST"),
+            name: "Test_Layout",
+            width,
+            height,
+            primary_tileset: "gTileset_General",
+            secondary_tileset: "gTileset_General",
+        }
+    }
+
+    #[test]
+    fn layout_grid_decodes_row_major_little_endian_cells() {
+        // 2x2 grid: raw u16 cells chosen to exercise metatile/collision/
+        // elevation packing simultaneously.
+        let layout = layout_meta(2, 2);
+        let raws: [u16; 4] = [0x1001, 0x2402, 0x0C03, 0xF3FF];
+        let mut bytes = Vec::new();
+        for raw in raws {
+            bytes.extend_from_slice(&raw.to_le_bytes());
+        }
+        let grid = LayoutGrid::new(&layout, &bytes).unwrap();
+        assert_eq!(grid.cell_count(), 4);
+
+        let decoded: Vec<_> = grid.cells().collect();
+        assert_eq!(decoded.len(), 4);
+        for (i, raw) in raws.iter().enumerate() {
+            assert_eq!(decoded[i], MetatileCell::from_raw(*raw));
+        }
+
+        // Row-major: (x, y) -> index y * width + x.
+        assert_eq!(grid.cell_at(0, 0), Some(MetatileCell::from_raw(raws[0])));
+        assert_eq!(grid.cell_at(1, 0), Some(MetatileCell::from_raw(raws[1])));
+        assert_eq!(grid.cell_at(0, 1), Some(MetatileCell::from_raw(raws[2])));
+        assert_eq!(grid.cell_at(1, 1), Some(MetatileCell::from_raw(raws[3])));
+    }
+
+    #[test]
+    fn layout_grid_cell_at_out_of_bounds_is_none() {
+        let layout = layout_meta(2, 2);
+        let bytes = [0u8; 8];
+        let grid = LayoutGrid::new(&layout, &bytes).unwrap();
+        assert_eq!(grid.cell_at(2, 0), None);
+        assert_eq!(grid.cell_at(0, 2), None);
+    }
+
+    #[test]
+    fn layout_grid_accepts_trailing_padding() {
+        // Mirrors the upstream "unused" layouts that carry a few extra
+        // bytes in map.bin beyond width * height * 2 (see module docs):
+        // longer-than-required buffers must be accepted, and cells() /
+        // cell_at() must never read past width * height cells.
+        let layout = layout_meta(1, 1);
+        let mut bytes = 0x0005u16.to_le_bytes().to_vec();
+        bytes.extend_from_slice(&[0xFF, 0xFF, 0xFF, 0xFF]); // trailing padding
+        let grid = LayoutGrid::new(&layout, &bytes).unwrap();
+        assert_eq!(grid.cell_count(), 1);
+        assert_eq!(grid.cells().count(), 1);
+        assert_eq!(grid.cell_at(0, 0), Some(MetatileCell::from_raw(0x0005)));
+    }
+
+    #[test]
+    fn layout_grid_rejects_short_buffer() {
+        let layout = layout_meta(2, 2); // needs 8 bytes
+        let bytes = [0u8; 6];
+        let err = LayoutGrid::new(&layout, &bytes).unwrap_err();
+        assert_eq!(err, AssetError::LayoutGridTooShort("LAYOUT_TEST", 8, 6));
+    }
+
+    #[test]
+    fn layout_grid_exact_length_is_accepted() {
+        let layout = layout_meta(3, 2); // needs exactly 12 bytes
+        let bytes = [0u8; 12];
+        assert!(LayoutGrid::new(&layout, &bytes).is_ok());
+    }
+
+    // --- BorderGrid: synthetic-byte decode coverage. ---
+
+    #[test]
+    fn border_grid_indexes_by_parity_like_upstream() {
+        // GetBorderBlockAt: ((x+1)&1) + (((y+1)&1)<<1).
+        //   (0,0) -> (1&1) + ((1&1)<<1) = 1 + 2 = 3
+        //   (1,0) -> (0&1) + ((1&1)<<1) = 0 + 2 = 2
+        //   (0,1) -> (1&1) + ((0&1)<<1) = 1 + 0 = 1
+        //   (1,1) -> (0&1) + ((0&1)<<1) = 0 + 0 = 0
+        let raws: [u16; 4] = [0x1000, 0x2000, 0x3000, 0x4000];
+        let mut bytes = Vec::new();
+        for raw in raws {
+            bytes.extend_from_slice(&raw.to_le_bytes());
+        }
+        let grid = BorderGrid::new(&bytes).unwrap();
+        let cells: Vec<_> = grid.cells().collect();
+        assert_eq!(cells.len(), BORDER_CELLS);
+        assert_eq!(grid.cell_at(0, 0), cells[3]);
+        assert_eq!(grid.cell_at(1, 0), cells[2]);
+        assert_eq!(grid.cell_at(0, 1), cells[1]);
+        assert_eq!(grid.cell_at(1, 1), cells[0]);
+    }
+
+    #[test]
+    fn border_grid_rejects_wrong_size() {
+        assert_eq!(
+            BorderGrid::new(&[0u8; 6]).unwrap_err(),
+            AssetError::LayoutBorderWrongSize(6)
+        );
+        assert_eq!(
+            BorderGrid::new(&[0u8; 10]).unwrap_err(),
+            AssetError::LayoutBorderWrongSize(10)
+        );
+        assert_eq!(
+            BorderGrid::new(&[]).unwrap_err(),
+            AssetError::LayoutBorderWrongSize(0)
+        );
+    }
+
+    #[test]
+    fn border_grid_exact_eight_bytes_is_accepted() {
+        assert!(BorderGrid::new(&[0u8; 8]).is_ok());
+    }
+
+    #[test]
+    fn map_layout_grid_convenience_method_matches_layout_grid_new() {
+        let layout = layout_meta(2, 1);
+        let bytes = [1, 0, 2, 0];
+        let via_method: Vec<_> = layout.grid(&bytes).unwrap().cells().collect();
+        let via_ctor: Vec<_> = LayoutGrid::new(&layout, &bytes).unwrap().cells().collect();
+        assert_eq!(via_method, via_ctor);
     }
 }
