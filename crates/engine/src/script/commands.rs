@@ -618,7 +618,7 @@ pub const COMMAND_TABLE: [Command<ScriptHost>; 0x2c] = [
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::event_data::{SPECIAL_FLAGS_START, VARS_START};
+    use crate::event_data::{SPECIAL_FLAGS_START, SPECIAL_VARS_START, VARS_START};
 
     /// Builds a fresh context wired to [`COMMAND_TABLE`] and a fresh host.
     fn setup() -> (ScriptContext<'static, 'static, ScriptHost>, ScriptHost) {
@@ -837,6 +837,23 @@ mod tests {
             "runs off the end after the one command"
         );
         assert_eq!(host.event_data.var_get(VARS_START), Ok(42));
+    }
+
+    #[test]
+    fn setvar_writes_a_special_var() {
+        // Upstream `GetVarPointer` serves 0x8000..=0x8015 through the
+        // `gSpecialVars` table as plain storage, so a field script's
+        // `setvar VAR_RESULT, n` must write, not trap.
+        let (mut ctx, mut host) = setup();
+        let var_result = SPECIAL_VARS_START + 0xD; // VAR_RESULT
+        let mut bytes = vec![0x16];
+        bytes.extend_from_slice(&var_result.to_le_bytes());
+        bytes.extend_from_slice(&7u16.to_le_bytes());
+        ctx.setup_bytecode(&bytes);
+
+        assert!(!ctx.run(&mut host));
+        assert_eq!(host.trap, None, "setvar on a special var must not trap");
+        assert_eq!(host.event_data.var_get(var_result), Ok(7));
     }
 
     #[test]
