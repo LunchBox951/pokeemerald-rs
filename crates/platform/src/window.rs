@@ -8,6 +8,11 @@
 //! all the tested logic; this module is thin glue over `winit`/`softbuffer`
 //! plus a manual event pump (see [`Platform::pump`]) so a caller stays in
 //! control of its own frame loop rather than handing control to `winit`.
+//!
+//! Quit is a platform-level concept, not a GBA button: the OS window-close
+//! control and the Escape key both end the loop via [`Platform::pump`]
+//! returning `false`, independent of [`crate::input::Keymap`]'s GBA button
+//! bindings.
 
 use std::num::NonZeroU32;
 use std::rc::Rc;
@@ -18,7 +23,7 @@ use winit::application::ApplicationHandler;
 use winit::dpi::LogicalSize;
 use winit::event::{ElementState, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, EventLoop};
-use winit::keyboard::PhysicalKey;
+use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::platform::pump_events::{EventLoopExtPumpEvents, PumpStatus};
 use winit::window::{Window, WindowId};
 
@@ -114,6 +119,14 @@ impl ApplicationHandler for App {
             WindowEvent::Focused(false) => self.frame_held = Buttons::NONE,
             WindowEvent::KeyboardInput { event, .. } => {
                 if let PhysicalKey::Code(code) = event.physical_key {
+                    // Escape is a dev/emulator quit affordance, not a GBA
+                    // button (there is no hardware key it could map to), so
+                    // it is handled here directly rather than through
+                    // `Keymap` — same exit path as a window-close request.
+                    if code == KeyCode::Escape && event.state == ElementState::Pressed {
+                        event_loop.exit();
+                        return;
+                    }
                     if let Some(button) = self.keymap.lookup(code) {
                         match event.state {
                             ElementState::Pressed => self.frame_held |= button,
@@ -179,7 +192,8 @@ impl Platform {
     ///
     /// Non-blocking: returns immediately after draining whatever events are
     /// already pending. Returns `false` once the window has been asked to
-    /// close, at which point the caller should stop calling into this
+    /// close (via the OS close control or the Escape key — see the module
+    /// docs), at which point the caller should stop calling into this
     /// `Platform` and drop it.
     ///
     /// # Errors

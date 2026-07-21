@@ -25683,6 +25683,128 @@
       "status": "pending"
     },
     "src/scrcmd.c": {
+      "artifacts": {
+        "Compare": {
+          "reason": "u8 Compare(u16,u16) helper re-implemented as commands::compare_u16, returning a CompareResult enum instead of a bare 0/1/2",
+          "rust_target": "crates/engine/src/script/commands.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "ScrCmd_addvar": {
+          "reason": "Literal add with u16 wraparound re-implemented as commands::addvar (SCR_OP_ADDVAR, 0x17); the second operand is deliberately not VarGet-resolved, matching upstream's own comment on ScrCmd_addvar",
+          "rust_target": "crates/engine/src/script/commands.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "ScrCmd_call": {
+          "reason": "Push+jump re-implemented as commands::call (SCR_OP_CALL, 0x04); destination resolved via ScriptContext::resolve's byte-offset scheme instead of a raw ROM address",
+          "rust_target": "crates/engine/src/script/commands.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "ScrCmd_call_if": {
+          "reason": "Conditional call re-implemented as commands::call_if (SCR_OP_CALL_IF, 0x07) via the shared commands::conditional body and ScriptCondition/CONDITION_TABLE",
+          "rust_target": "crates/engine/src/script/commands.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "ScrCmd_checkflag": {
+          "reason": "FlagGet call re-implemented as commands::checkflag (SCR_OP_CHECKFLAG, 0x2b), storing the bool result in ScriptContext::comparison_result",
+          "rust_target": "crates/engine/src/script/commands.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "ScrCmd_clearflag": {
+          "reason": "FlagClear call re-implemented as commands::clearflag (SCR_OP_CLEARFLAG, 0x2a) over EventData::flag_clear",
+          "rust_target": "crates/engine/src/script/commands.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "ScrCmd_compare_var_to_value": {
+          "reason": "Var-to-literal compare re-implemented as commands::compare (SCR_OP_COMPARE_VAR_TO_VALUE, 0x21)",
+          "rust_target": "crates/engine/src/script/commands.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "ScrCmd_compare_var_to_var": {
+          "reason": "Var-to-var compare re-implemented as commands::comparevars (SCR_OP_COMPARE_VAR_TO_VAR, 0x22)",
+          "rust_target": "crates/engine/src/script/commands.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "ScrCmd_copyvar": {
+          "reason": "Var-to-var copy re-implemented as commands::copyvar (SCR_OP_COPYVAR, 0x19) over EventData::var_get/var_set (the checked VarGet substitutes for upstream's raw, unchecked GetVarPointer dereference of the source)",
+          "rust_target": "crates/engine/src/script/commands.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "ScrCmd_end": {
+          "reason": "StopScript re-implemented as commands::end (SCR_OP_END, 0x02)",
+          "rust_target": "crates/engine/src/script/commands.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "ScrCmd_goto": {
+          "reason": "Jump re-implemented as commands::goto (SCR_OP_GOTO, 0x05); destination resolved via ScriptContext::resolve's byte-offset scheme instead of a raw ROM address",
+          "rust_target": "crates/engine/src/script/commands.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "ScrCmd_goto_if": {
+          "reason": "Conditional jump re-implemented as commands::goto_if (SCR_OP_GOTO_IF, 0x06) via the shared commands::conditional body and ScriptCondition/CONDITION_TABLE",
+          "rust_target": "crates/engine/src/script/commands.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "ScrCmd_nop": {
+          "reason": "Does nothing; SCR_OP_NOP (0x00) re-implemented as commands::nop",
+          "rust_target": "crates/engine/src/script/commands.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "ScrCmd_nop1": {
+          "reason": "Does nothing; SCR_OP_NOP1 (0x01) re-implemented as commands::nop1, kept distinct from nop for a 1:1 opcode mapping",
+          "rust_target": "crates/engine/src/script/commands.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "ScrCmd_return": {
+          "reason": "ScriptReturn call re-implemented as commands::script_return (SCR_OP_RETURN, 0x03), trapping on stack underflow instead of the upstream silent NULL",
+          "rust_target": "crates/engine/src/script/commands.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "ScrCmd_setflag": {
+          "reason": "FlagSet call re-implemented as commands::setflag (SCR_OP_SETFLAG, 0x29) over EventData::flag_set",
+          "rust_target": "crates/engine/src/script/commands.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "ScrCmd_setorcopyvar": {
+          "reason": "VarGet-or-literal copy re-implemented as commands::setorcopyvar (SCR_OP_SETORCOPYVAR, 0x1a), sharing commands::copyvar's body since both already resolve their source through the checked VarGet",
+          "rust_target": "crates/engine/src/script/commands.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "ScrCmd_setvar": {
+          "reason": "Literal var write re-implemented as commands::setvar (SCR_OP_SETVAR, 0x16) over EventData::var_set",
+          "rust_target": "crates/engine/src/script/commands.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "ScrCmd_subvar": {
+          "reason": "VarGet-resolved subtract with u16 wraparound re-implemented as commands::subvar (SCR_OP_SUBVAR, 0x18)",
+          "rust_target": "crates/engine/src/script/commands.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "sScriptConditionTable": {
+          "reason": "goto_if/call_if condition truth table transcribed 1:1 as commands::CONDITION_TABLE, consulted via ScriptCondition::matches",
+          "rust_target": "crates/engine/src/script/commands.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        }
+      },
       "category": "code.source",
       "kind": "file",
       "status": "pending"

@@ -39,6 +39,11 @@
 //! into a completely different script, exactly as upstream allows, as long as
 //! both slices share `'script`.
 //!
+//! [`ScriptContext::resolve`] gives the concrete-command layer a way to turn
+//! a *byte offset* operand into one of these slices without ever
+//! reintroducing a raw address; see its docs for how that maps onto
+//! upstream's `goto`/`call`/`goto_if`/`call_if`.
+//!
 //! # Lifetimes and host state
 //!
 //! The command table and the script bytes have **independent** lifetimes
@@ -59,6 +64,8 @@
 //! handle to whatever state the embedder owns.
 
 use std::fmt;
+
+pub mod commands;
 
 /// Fixed call-stack depth, matching upstream's `stack[20]`.
 const STACK_DEPTH: usize = 20;
@@ -123,6 +130,18 @@ pub enum ScriptError {
     /// The fetched opcode byte has no entry in the command table — upstream's
     /// `func >= cmdTableEnd` bounds check. Carries the offending opcode.
     OpcodeOutOfRange(u8),
+    /// [`ScriptContext::resolve`] could not turn a jump-target byte offset
+    /// into a `&'script [u8]` target — either no script is loaded, or the
+    /// offset runs past the end of it. Carries the offending offset.
+    ///
+    /// Concrete `goto`/`call`/`goto_if`/`call_if` commands (a later,
+    /// concrete-command layer, not this shell) read this offset from a
+    /// 4-byte operand that upstream instead treats as a raw ROM address —
+    /// see [`ScriptContext::resolve`] for why this port uses an offset
+    /// instead. Upstream never bounds-checks that address at all (an
+    /// out-of-range one reads whatever ROM/RAM happens to sit there); this
+    /// port refuses it instead.
+    InvalidJumpTarget(u32),
     /// An operand reader ([`ScriptContext::read_u8`]/
     /// [`ScriptContext::read_u16`]/[`ScriptContext::read_u32`]) needed more
     /// bytes than the cursor had left (including an unset cursor). Upstream
@@ -146,6 +165,9 @@ impl fmt::Display for ScriptError {
             Self::StackUnderflow => write!(f, "script call stack is empty"),
             Self::OpcodeOutOfRange(op) => {
                 write!(f, "opcode {op:#04x} has no command table entry")
+            }
+            Self::InvalidJumpTarget(offset) => {
+                write!(f, "jump-target offset {offset:#010x} is out of range")
             }
             Self::UnexpectedEnd => write!(f, "script cursor ran out of bytes"),
         }
@@ -193,6 +215,7 @@ pub struct ScriptContext<'cmd, 'script, H> {
     mode: Mode<H>,
     comparison_result: u8,
     cursor: Option<&'script [u8]>,
+    base: Option<&'script [u8]>,
     stack: [&'script [u8]; STACK_DEPTH],
     stack_depth: usize,
     data: [u32; DATA_REGISTERS],
@@ -210,6 +233,7 @@ impl<'cmd, 'script, H> ScriptContext<'cmd, 'script, H> {
             mode: Mode::Stopped,
             comparison_result: 0,
             cursor: None,
+            base: None,
             stack: [&[]; STACK_DEPTH],
             stack_depth: 0,
             data: [0; DATA_REGISTERS],
@@ -218,8 +242,12 @@ impl<'cmd, 'script, H> ScriptContext<'cmd, 'script, H> {
 
     /// Load a bytecode script and switch to bytecode mode. Mirrors
     /// `SetupBytecodeScript`.
+    ///
+    /// `script` also becomes the base [`resolve`](Self::resolve) offsets are
+    /// taken against, i.e. offset `0` means "the first byte of `script`".
     pub fn setup_bytecode(&mut self, script: &'script [u8]) {
         self.cursor = Some(script);
+        self.base = Some(script);
         self.mode = Mode::Bytecode;
     }
 
@@ -360,6 +388,36 @@ impl<'cmd, 'script, H> ScriptContext<'cmd, 'script, H> {
         let ptr = self.pop()?;
         self.cursor = Some(ptr);
         Ok(())
+    }
+
+    /// Resolve a byte offset into a `&'script [u8]` jump target — the
+    /// concrete-command layer's equivalent of upstream's 4-byte "address"
+    /// operand (`goto`/`call`/`goto_if`/`call_if` each read one via
+    /// `ScriptReadWord`, then cast it straight to a `const u8 *`).
+    ///
+    /// Upstream scripts, their subroutines, and every jump/call target share
+    /// one flat ROM address space; `(oop-boundaries)` rules that out here
+    /// (see the module's [Address space](self#address-space) section), so
+    /// concrete commands can't reproduce "cast the operand to a pointer"
+    /// verbatim. This port's substitute keeps the same 4-byte operand width
+    /// and upstream opcode numbers but gives it a meaning a hand-assembled
+    /// (or, later, compiled) script can express purely in its own bytes: an
+    /// offset from the start of the buffer most recently passed to
+    /// [`setup_bytecode`](Self::setup_bytecode), i.e. the top-level script
+    /// currently running. That covers intra-script jumps and calls to
+    /// subroutines compiled into the same buffer — everything this slice's
+    /// `goto`/`call`/`goto_if`/`call_if` commands are in scope for; jumping
+    /// into a *different* compiled script (`gotostd` and friends) needs the
+    /// std-script table machinery a later slice adds.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ScriptError::InvalidJumpTarget`] if no script is loaded, or
+    /// if `offset` is past the end of it.
+    pub fn resolve(&self, offset: u32) -> Result<&'script [u8], ScriptError> {
+        self.base
+            .and_then(|base| usize::try_from(offset).ok().and_then(|off| base.get(off..)))
+            .ok_or(ScriptError::InvalidJumpTarget(offset))
     }
 
     /// Read a single byte operand and advance the cursor past it. Mirrors
@@ -809,6 +867,43 @@ mod tests {
 
         assert!(ctx.run(&mut host), "yields on the finishing call too");
         assert_eq!(host.ticks, 2, "native step reached the host again");
+    }
+
+    #[test]
+    fn resolve_returns_the_suffix_at_the_given_offset() {
+        let table: &[Command<TestHost>] = &[cmd_nop];
+        let bytes = [0x10, 0x11, 0x12, 0x13];
+        let mut ctx: ScriptContext<'_, '_, TestHost> = ScriptContext::new(table);
+        ctx.setup_bytecode(&bytes);
+
+        assert_eq!(ctx.resolve(0), Ok(&bytes[..]));
+        assert_eq!(ctx.resolve(2), Ok(&bytes[2..]));
+        assert_eq!(
+            ctx.resolve(4),
+            Ok(&bytes[4..]),
+            "offset == len is the empty tail"
+        );
+    }
+
+    #[test]
+    fn resolve_past_the_end_is_a_typed_error() {
+        let table: &[Command<TestHost>] = &[cmd_nop];
+        let bytes = [0x10, 0x11];
+        let mut ctx: ScriptContext<'_, '_, TestHost> = ScriptContext::new(table);
+        ctx.setup_bytecode(&bytes);
+
+        assert_eq!(ctx.resolve(3), Err(ScriptError::InvalidJumpTarget(3)));
+        assert_eq!(
+            ctx.resolve(u32::MAX),
+            Err(ScriptError::InvalidJumpTarget(u32::MAX))
+        );
+    }
+
+    #[test]
+    fn resolve_with_no_script_loaded_is_a_typed_error() {
+        let table: &[Command<TestHost>] = &[cmd_nop];
+        let ctx: ScriptContext<'_, '_, TestHost> = ScriptContext::new(table);
+        assert_eq!(ctx.resolve(0), Err(ScriptError::InvalidJumpTarget(0)));
     }
 
     #[test]

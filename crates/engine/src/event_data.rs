@@ -13,11 +13,14 @@
 //! # Scope
 //!
 //! Per issue #65: the store, its accessors, and the id-space semantics only.
-//! Deferred: the `gSpecialVars` dispatch table (those globals, e.g.
-//! `gSpecialVar_LastTalked`, don't exist yet — [`EventData::var_get`]/
-//! [`EventData::var_set`] surface the range as
-//! [`EventDataError::SpecialVar`] rather than silently misreading it),
-//! `VarGetObjectEventGraphicsId` (no object events yet), save-block
+//! The special-var range (`SPECIAL_VARS_START..=SPECIAL_VARS_END`) is backed
+//! by a flat array here: upstream serves it via `gSpecialVars`, a pointer
+//! table over 22 standalone `u16` EWRAM globals (`gSpecialVar_0x8000` …
+//! `gTrainerBattleOpponent_A`), which are pure storage — `GetVarPointer`
+//! reads and writes them exactly like ordinary vars, so a flat array is the
+//! faithful shape. What *is* deferred is the `special`/`specialvar` command
+//! dispatch that gives some of those ids subsystem meaning (a later slice's
+//! job), `VarGetObjectEventGraphicsId` (no object events yet), save-block
 //! persistence, `ClearDailyFlags` (RTC-tied, explicitly out of scope —
 //! `DAILY_FLAGS_START`/`DAILY_FLAGS_END` still appear below, private,
 //! because `FLAGS_COUNT` is defined in terms of them upstream), and any
@@ -122,26 +125,21 @@ pub const TEMP_VARS_END: u16 = TEMP_VARS_START + 0xF;
 /// `NUM_TEMP_VARS`.
 pub const NUM_TEMP_VARS: u16 = TEMP_VARS_END - TEMP_VARS_START + 1;
 
-/// `SPECIAL_VARS_START`. Out of scope for this slice — see the module docs.
+/// `SPECIAL_VARS_START`.
 pub const SPECIAL_VARS_START: u16 = 0x8000;
 /// `SPECIAL_VARS_END` (`VAR_TRAINER_BATTLE_OPPONENT_A`).
 pub const SPECIAL_VARS_END: u16 = 0x8015;
+/// The number of special vars (the length of upstream's `gSpecialVars`
+/// pointer table).
+pub const NUM_SPECIAL_VARS: u16 = SPECIAL_VARS_END - SPECIAL_VARS_START + 1;
 
 /// Errors surfaced by [`EventData`]'s flag and var accessors.
 ///
-/// Upstream leaves the equivalent conditions either silently unreachable (no
+/// Upstream leaves the equivalent condition silently unreachable (no
 /// `FLAG_*`/`VAR_*` constant is ever defined in the gap `OutOfRange`
-/// describes) or dispatched to state this port doesn't have yet
-/// (`SpecialVar`). Neither is a panic path.
+/// describes). Not a panic path.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EventDataError {
-    /// `id` is in the special-var dispatch range
-    /// (`SPECIAL_VARS_START..=SPECIAL_VARS_END`), which upstream serves via
-    /// `gSpecialVars`, a table of pointers to standalone globals
-    /// (`gSpecialVar_0x8000`, `gSpecialVar_LastTalked`, …). Those globals —
-    /// and the subsystems that would own them — don't exist in this port
-    /// yet; wiring them up is a later slice's job.
-    SpecialVar(u16),
     /// `id` falls in a gap no real `FLAG_*`/`VAR_*` constant ever
     /// occupies, which upstream's `GetFlagPointer`/`GetVarPointer` leave
     /// completely unchecked (an id here reads or corrupts memory adjacent to
@@ -154,12 +152,6 @@ pub enum EventDataError {
 impl std::fmt::Display for EventDataError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::SpecialVar(id) => {
-                write!(
-                    f,
-                    "var {id:#06x} is in the special-var range (not backed by this store yet)"
-                )
-            }
             Self::OutOfRange(id) => write!(f, "id {id:#06x} is out of range"),
         }
     }
@@ -222,6 +214,11 @@ pub struct EventData {
     /// Ordinary vars, `VARS_START..=VARS_END`, indexed by `id - VARS_START`.
     /// Upstream `gSaveBlock1Ptr->vars`.
     vars: [u16; VARS_COUNT],
+    /// Special vars, `SPECIAL_VARS_START..=SPECIAL_VARS_END`, indexed by
+    /// `id - SPECIAL_VARS_START`. Upstream's 22 standalone `u16` EWRAM
+    /// globals reached through the `gSpecialVars` pointer table; like
+    /// `special_flags`, session-only and never part of the save block.
+    special_vars: [u16; NUM_SPECIAL_VARS as usize],
 }
 
 impl Default for EventData {
@@ -233,13 +230,15 @@ impl Default for EventData {
 impl EventData {
     /// A freshly initialized store: every flag clear, every var zero.
     /// Mirrors `InitEventData` (`memset` over `flags`, `vars`, and the
-    /// static `sSpecialFlags`).
+    /// static `sSpecialFlags`) plus the zero-initialization the special-var
+    /// EWRAM globals get at load.
     #[must_use]
     pub const fn new() -> Self {
         Self {
             flags: [0; NUM_FLAG_BYTES],
             special_flags: [0; SPECIAL_FLAGS_BYTES],
             vars: [0; VARS_COUNT],
+            special_vars: [0; NUM_SPECIAL_VARS as usize],
         }
     }
 
@@ -316,16 +315,15 @@ impl EventData {
     ///
     /// # Errors
     ///
-    /// Returns [`EventDataError::SpecialVar`] if `id` is in the special-var
-    /// dispatch range, or [`EventDataError::OutOfRange`] if `id` falls in
-    /// the unchecked-in-C gap described in the module docs.
+    /// Returns [`EventDataError::OutOfRange`] if `id` falls in the
+    /// unchecked-in-C gap described in the module docs.
     pub fn var_get(&self, id: u16) -> Result<u16, EventDataError> {
         if id < VARS_START {
             Ok(id)
         } else if id <= VARS_END {
             Ok(self.vars[usize::from(id - VARS_START)])
         } else if (SPECIAL_VARS_START..=SPECIAL_VARS_END).contains(&id) {
-            Err(EventDataError::SpecialVar(id))
+            Ok(self.special_vars[usize::from(id - SPECIAL_VARS_START)])
         } else {
             Err(EventDataError::OutOfRange(id))
         }
@@ -339,9 +337,8 @@ impl EventData {
     ///
     /// # Errors
     ///
-    /// Returns [`EventDataError::SpecialVar`] if `id` is in the special-var
-    /// dispatch range, or [`EventDataError::OutOfRange`] if `id` falls in
-    /// the unchecked-in-C gap described in the module docs.
+    /// Returns [`EventDataError::OutOfRange`] if `id` falls in the
+    /// unchecked-in-C gap described in the module docs.
     pub fn var_set(&mut self, id: u16, value: u16) -> Result<(), EventDataError> {
         if id < VARS_START {
             Ok(())
@@ -349,7 +346,8 @@ impl EventData {
             self.vars[usize::from(id - VARS_START)] = value;
             Ok(())
         } else if (SPECIAL_VARS_START..=SPECIAL_VARS_END).contains(&id) {
-            Err(EventDataError::SpecialVar(id))
+            self.special_vars[usize::from(id - SPECIAL_VARS_START)] = value;
+            Ok(())
         } else {
             Err(EventDataError::OutOfRange(id))
         }
@@ -406,6 +404,8 @@ mod tests {
         assert_eq!(NUM_TEMP_VARS, 16);
         assert_eq!(SPECIAL_VARS_START, 0x8000);
         assert_eq!(SPECIAL_VARS_END, 0x8015);
+        // The 22 entries of upstream's `gSpecialVars` pointer table.
+        assert_eq!(NUM_SPECIAL_VARS, 22);
     }
 
     #[test]
@@ -543,20 +543,16 @@ mod tests {
     }
 
     #[test]
-    fn var_special_range_is_reported_as_not_stored_here() {
+    fn var_special_range_round_trips_through_set() {
         let mut data = EventData::new();
-        assert_eq!(
-            data.var_get(SPECIAL_VARS_START),
-            Err(EventDataError::SpecialVar(SPECIAL_VARS_START))
-        );
-        assert_eq!(
-            data.var_get(SPECIAL_VARS_END),
-            Err(EventDataError::SpecialVar(SPECIAL_VARS_END))
-        );
-        assert_eq!(
-            data.var_set(SPECIAL_VARS_START, 1),
-            Err(EventDataError::SpecialVar(SPECIAL_VARS_START))
-        );
+        assert_eq!(data.var_get(SPECIAL_VARS_START), Ok(0));
+        assert_eq!(data.var_get(SPECIAL_VARS_END), Ok(0));
+        data.var_set(SPECIAL_VARS_START, 42).unwrap();
+        data.var_set(SPECIAL_VARS_END, 0xBEEF).unwrap();
+        assert_eq!(data.var_get(SPECIAL_VARS_START), Ok(42));
+        assert_eq!(data.var_get(SPECIAL_VARS_END), Ok(0xBEEF));
+        // A special var and an ordinary var never alias.
+        assert_eq!(data.var_get(VARS_START), Ok(0));
     }
 
     #[test]
@@ -636,12 +632,7 @@ mod tests {
 
     #[test]
     fn error_display_is_human_readable() {
-        let special = EventDataError::SpecialVar(0x8000);
         let out_of_range = EventDataError::OutOfRange(0x1000);
-        assert_eq!(
-            special.to_string(),
-            "var 0x8000 is in the special-var range (not backed by this store yet)"
-        );
         assert_eq!(out_of_range.to_string(), "id 0x1000 is out of range");
     }
 }

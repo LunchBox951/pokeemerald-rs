@@ -6,11 +6,13 @@
 //!   [`text::format`] for number-to-text formatting and placeholder
 //!   expansion (issue #55).
 //! - [`script`] — the script bytecode interpreter core: context state,
-//!   fetch/dispatch loop, call stack, and operand readers, with no concrete
-//!   script commands yet (issue #56).
+//!   fetch/dispatch loop, call stack, and operand readers (issue #56), plus
+//!   [`script::commands`], the first batch of concrete script commands —
+//!   control flow, comparison, flags, and vars — bound to [`event_data`]
+//!   (issue #69).
 //! - [`event_data`] — the event flags/vars store: bit-packed flag storage,
 //!   var storage with the `VARS_START` offset, and the temp/special id-space
-//!   semantics, with no script-command wiring yet (issue #65).
+//!   semantics (issue #65).
 
 pub mod event_data;
 pub mod rng;
