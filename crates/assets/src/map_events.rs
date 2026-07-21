@@ -74,7 +74,7 @@
 //! **`MAP_DYNAMIC`/`WARP_ID_DYNAMIC`/`WARP_ID_SECRET_BASE`
 //! (`pokeemerald/include/constants/maps.h`), handled explicitly.** A handful
 //! of warps (elevators, the truck, Union Room, secret bases, trade/record
-//! rooms — 45 `WARP_ID_DYNAMIC` + 32 `WARP_ID_SECRET_BASE` across the whole
+//! rooms — 21 `WARP_ID_DYNAMIC` + 24 `WARP_ID_SECRET_BASE` across the whole
 //! table) don't name a fixed destination: their `dest_map` is the sentinel
 //! `MAP_DYNAMIC` and `dest_warp_id` is one of the two sentinel warp ids,
 //! meaning "resolve at runtime" (from `gSaveBlock1Ptr->dynamicWarp`, or the
