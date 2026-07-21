@@ -6,3 +6,7 @@ publish.workspace = true
 
 [lints]
 workspace = true
+
+[dependencies]
+platform = { path = "../platform" }
+rendering = { path = "../rendering" }
