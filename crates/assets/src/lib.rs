@@ -11,9 +11,9 @@
 //! (see [`species_names`], [`move_names`], [`abilities`]), the experience
 //! growth curves (see [`experience`]), the per-map wild encounter tables (see
 //! [`wild_encounters`]), the trainer roster and parties (see [`trainers`]),
-//! the map layout geometry (see [`map_layouts`]), and the map headers,
-//! groups, and connections (see [`map_headers`]); more data follows as the
-//! crate fills out.
+//! the map layout geometry (see [`map_layouts`]), the map headers, groups,
+//! and connections (see [`map_headers`]), and the per-map object/warp/coord/
+//! bg events (see [`map_events`]); more data follows as the crate fills out.
 
 pub mod abilities;
 pub mod battle_moves;
@@ -23,6 +23,7 @@ pub mod evolution;
 pub mod experience;
 pub mod items;
 pub mod level_up_learnsets;
+pub mod map_events;
 pub mod map_headers;
 pub mod map_layouts;
 pub mod move_names;
@@ -45,6 +46,11 @@ pub use error::AssetError;
 pub use evolution::{EvoMethod, Evolution, EvolutionTable};
 pub use experience::{experience_for_level, MAX_LEVEL};
 pub use level_up_learnsets::{LevelUpLearnsets, LevelUpMove, SPECIES_COUNT};
+pub use map_events::{
+    BgEvent, BgEventKind, CoordEvent, CoordEventKind, CoordWeather, FacingDirection, MapEvents,
+    MapEventsTable, MovementType, ObjectEvent, SecretBaseId, TrainerType, WarpDestination,
+    WarpEvent, WarpId, MAP_EVENTS_COUNT,
+};
 pub use map_headers::{
     BattleScene, Direction, MapConnection, MapGroup, MapHeader, MapHeaderTable, MapType, MusicId,
     RegionMapSectionId, Weather, MAP_COUNT, MAP_GROUP_COUNT,
