@@ -10,6 +10,7 @@
 //! deliberate, benign fidelity choice for this slice — the wrap-and-carry
 //! behaviour of the packed DMA lanes is a deferred quirk.
 
+use crate::cgb_voice::CgbVoice;
 use crate::pitch::SAMPLES_PER_FRAME;
 use crate::voice::{StereoAcc, Voice};
 
@@ -30,6 +31,13 @@ pub const DEFAULT_MAX_VOICES: usize = 5;
 #[derive(Debug)]
 pub struct Mixer {
     voices: Vec<Voice>,
+    /// The four fixed CGB PSG hardware channels (square 1, square 2, wave,
+    /// noise — indexed by [`crate::cgb_voice::CgbChannelNumber::slot`]).
+    /// Unlike the pooled DirectSound voices, each of these exists at most
+    /// once: starting a new note on the same channel number replaces
+    /// whatever was already sounding there, mirroring `CgbSound`'s loop over
+    /// fixed channel slots (`m4a.c:946`).
+    cgb_voices: [Option<CgbVoice>; 4],
     master_volume: u8,
     max_voices: usize,
     /// Reusable per-frame accumulator, sized to [`SAMPLES_PER_FRAME`], so
@@ -49,22 +57,23 @@ impl Mixer {
     pub fn new(master_volume: u8, max_voices: usize) -> Self {
         Self {
             voices: Vec::new(),
+            cgb_voices: [None, None, None, None],
             master_volume,
             max_voices,
             scratch: vec![(0, 0); SAMPLES_PER_FRAME],
         }
     }
 
-    /// Number of voices currently sounding.
+    /// Number of voices currently sounding, DirectSound and CGB combined.
     #[must_use]
     pub fn voice_count(&self) -> usize {
-        self.voices.len()
+        self.voices.len() + self.cgb_voices.iter().filter(|v| v.is_some()).count()
     }
 
-    /// Whether any voice is active.
+    /// Whether any voice (DirectSound or CGB) is active.
     #[must_use]
     pub fn is_idle(&self) -> bool {
-        self.voices.is_empty()
+        self.voices.is_empty() && self.cgb_voices.iter().all(Option::is_none)
     }
 
     /// Read-only view of the live voices, for the sequencer's own tests to
@@ -96,9 +105,20 @@ impl Mixer {
         true
     }
 
+    /// Start a CGB voice, replacing whatever already occupied that hardware
+    /// channel slot (there is no pool to cap — see [`Self::cgb_voices`]'s
+    /// doc comment).
+    pub fn add_cgb_voice(&mut self, voice: CgbVoice) {
+        let slot = voice.channel().slot();
+        self.cgb_voices[slot] = Some(voice);
+    }
+
     /// Tick every voice's note-off gate down by one sequencer tick.
     pub fn tick_gates(&mut self) {
         for voice in &mut self.voices {
+            voice.tick_gate();
+        }
+        for voice in self.cgb_voices.iter_mut().flatten() {
             voice.tick_gate();
         }
     }
@@ -117,7 +137,15 @@ impl Mixer {
         for voice in self.voices.iter_mut().rev() {
             if voice.track() == track && !voice.is_stopping() && voice.midi_key() == key {
                 voice.note_off();
-                break;
+                return;
+            }
+        }
+        // CGB channels are not pooled (at most one per hardware channel
+        // number), so at most one can ever match here.
+        for voice in self.cgb_voices.iter_mut().flatten() {
+            if voice.track() == track && !voice.is_stopping() && voice.midi_key() == key {
+                voice.note_off();
+                return;
             }
         }
     }
@@ -131,6 +159,11 @@ impl Mixer {
     /// or a looping wave would leave that voice sounding forever.
     pub fn release_track(&mut self, track: usize) {
         for voice in &mut self.voices {
+            if voice.track() == track && !voice.is_stopping() {
+                voice.note_off();
+            }
+        }
+        for voice in self.cgb_voices.iter_mut().flatten() {
             if voice.track() == track && !voice.is_stopping() {
                 voice.note_off();
             }
@@ -149,6 +182,11 @@ impl Mixer {
                 voice.set_track_volume(vol_mr, vol_ml);
             }
         }
+        for voice in self.cgb_voices.iter_mut().flatten() {
+            if voice.track() == track {
+                voice.set_track_volume(vol_mr, vol_ml);
+            }
+        }
     }
 
     /// Rewrite the live playback frequency of `track`'s channels from updated
@@ -161,6 +199,11 @@ impl Mixer {
     /// bends the held note.
     pub fn set_track_pitch(&mut self, track: usize, key_m: i32, pit_m: u8) {
         for voice in &mut self.voices {
+            if voice.track() == track {
+                voice.set_track_pitch(key_m, pit_m);
+            }
+        }
+        for voice in self.cgb_voices.iter_mut().flatten() {
             if voice.track() == track {
                 voice.set_track_pitch(key_m, pit_m);
             }
@@ -189,6 +232,16 @@ impl Mixer {
             voice.render(&mut self.scratch);
         }
         self.voices.retain(Voice::is_active);
+
+        for slot in &mut self.cgb_voices {
+            if let Some(voice) = slot {
+                voice.begin_frame(self.master_volume);
+                voice.render(&mut self.scratch);
+                if !voice.is_active() {
+                    *slot = None;
+                }
+            }
+        }
 
         for (frame, acc) in self.scratch.iter().enumerate() {
             out[frame * 2] = clip(acc.0);

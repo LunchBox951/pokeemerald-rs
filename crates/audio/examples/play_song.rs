@@ -10,7 +10,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use audio::{decode_track, Adsr, Sequencer, Song, ToneData, WaveData, MIXER_RATE};
+use audio::{decode_track, Adsr, Instrument, Sequencer, Song, ToneData, WaveData, MIXER_RATE};
 use platform::AudioOutput;
 
 fn main() {
@@ -79,5 +79,5 @@ fn build_song() -> Song {
     bytes.push(0xB1); // FINE
 
     let events = decode_track(&bytes).expect("valid demo track");
-    Song::new(vec![instrument], vec![events], 120)
+    Song::new(vec![Instrument::DirectSound(instrument)], vec![events], 120)
 }
