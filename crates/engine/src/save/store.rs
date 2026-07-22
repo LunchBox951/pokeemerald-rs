@@ -383,6 +383,13 @@ impl SaveStore {
         let scans = [self.scan_slot(0), self.scan_slot(1)];
         let (status, winner, counter) = Self::resolve(&scans[0], &scans[1]);
         self.save_counter = counter;
+        // `GetSaveValidStatus` also resets `gLastWrittenSector = 0` in its
+        // two terminal branches (both slots empty, both slots errored)
+        // before `CopySaveSlotData`'s `id == 0` recovery gets a chance to
+        // re-derive it from a surviving footer.
+        if matches!(status, SaveStatus::Empty | SaveStatus::Corrupt) {
+            self.last_written_sector = 0;
+        }
         let copy_slot = winner.unwrap_or(0);
 
         let mut block2_bytes = vec![0u8; SaveBlock2::PAYLOAD_LEN];
@@ -441,6 +448,19 @@ impl SaveStore {
 mod tests {
     use super::*;
     use crate::save::block::{Coords16, PlayerGender, WarpData};
+
+    #[test]
+    fn counter_comparison_is_wraparound_aware() {
+        // Ordinary ordering.
+        assert!(counter_b_is_newer(3, 7));
+        assert!(!counter_b_is_newer(7, 3));
+        assert!(!counter_b_is_newer(5, 5));
+        // The wraparound special case `GetSaveValidStatus` singles out:
+        // a counter that just wrapped to 0 is newer than u32::MAX...
+        assert!(counter_b_is_newer(u32::MAX, 0));
+        // ...in either slot order.
+        assert!(!counter_b_is_newer(0, u32::MAX));
+    }
 
     fn sample_block2() -> SaveBlock2 {
         SaveBlock2 {
