@@ -74,8 +74,9 @@ pub const FLAGS_COUNT: u16 = DAILY_FLAGS_END + 1;
 const _: () = assert!(DAILY_FLAGS_END - DAILY_FLAGS_START + 1 == 64);
 
 /// `NUM_FLAG_BYTES` (`ROUND_BITS_TO_BYTES(FLAGS_COUNT)`) — the size of the
-/// ordinary flag byte array.
-const NUM_FLAG_BYTES: usize = (FLAGS_COUNT as usize).div_ceil(8);
+/// ordinary flag byte array. Public: the save system (`crate::save`) needs
+/// it to size the serialized flag payload.
+pub const NUM_FLAG_BYTES: usize = (FLAGS_COUNT as usize).div_ceil(8);
 
 /// `SPECIAL_FLAGS_START`.
 pub const SPECIAL_FLAGS_START: u16 = 0x4000;
@@ -238,6 +239,41 @@ impl EventData {
             flags: [0; NUM_FLAG_BYTES],
             special_flags: [0; SPECIAL_FLAGS_BYTES],
             vars: [0; VARS_COUNT],
+            special_vars: [0; NUM_SPECIAL_VARS as usize],
+        }
+    }
+
+    /// The ordinary flag bytes, for save serialization
+    /// (`crate::save::block::SaveBlock1`). Mirrors the byte layout upstream
+    /// stores at `SaveBlock1::flags`. `special_flags` is deliberately not
+    /// exposed here: it is session-only (see the module docs) and was never
+    /// part of the save block upstream serializes either.
+    #[must_use]
+    pub const fn flag_bytes(&self) -> &[u8; NUM_FLAG_BYTES] {
+        &self.flags
+    }
+
+    /// The ordinary var words, for save serialization
+    /// (`crate::save::block::SaveBlock1`). Mirrors the layout upstream
+    /// stores at `SaveBlock1::vars`. `special_vars` is deliberately not
+    /// exposed here, for the same session-only reason as `special_flags`
+    /// (see [`EventData::flag_bytes`]).
+    #[must_use]
+    pub const fn vars_raw(&self) -> &[u16; VARS_COUNT] {
+        &self.vars
+    }
+
+    /// Reconstruct a store from previously-saved ordinary flag bytes and var
+    /// words (the inverse of [`EventData::flag_bytes`] /
+    /// [`EventData::vars_raw`]). `special_flags`/`special_vars` are
+    /// session-only and always start cleared, exactly as a fresh
+    /// [`EventData::new`] leaves them.
+    #[must_use]
+    pub const fn from_saved_state(flags: [u8; NUM_FLAG_BYTES], vars: [u16; VARS_COUNT]) -> Self {
+        Self {
+            flags,
+            special_flags: [0; SPECIAL_FLAGS_BYTES],
+            vars,
             special_vars: [0; NUM_SPECIAL_VARS as usize],
         }
     }
@@ -628,6 +664,23 @@ mod tests {
             Ok(123),
             "vars outside the temp range must survive the clear"
         );
+    }
+
+    #[test]
+    fn saved_state_round_trips_ordinary_flags_and_vars_only() {
+        let mut data = EventData::new();
+        data.flag_set(100).unwrap();
+        data.var_set(VARS_START, 0xBEEF).unwrap();
+        // Session-only state that must NOT survive the round trip.
+        data.flag_set(SPECIAL_FLAGS_START).unwrap();
+        data.var_set(SPECIAL_VARS_START, 999).unwrap();
+
+        let restored = EventData::from_saved_state(*data.flag_bytes(), *data.vars_raw());
+
+        assert_eq!(restored.flag_get(100), Ok(true));
+        assert_eq!(restored.var_get(VARS_START), Ok(0xBEEF));
+        assert_eq!(restored.flag_get(SPECIAL_FLAGS_START), Ok(false));
+        assert_eq!(restored.var_get(SPECIAL_VARS_START), Ok(0));
     }
 
     #[test]
