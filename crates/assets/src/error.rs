@@ -186,6 +186,46 @@ pub enum AssetError {
     ///
     /// Carries the offending id.
     UnknownConnectionDirection(u8),
+
+    /// A [`MapId`] did not match any entry in the extracted map-events
+    /// table.
+    ///
+    /// Carries the offending `MAP_*` name. Distinct from
+    /// [`AssetError::UnknownMapHeader`] (which is specifically about the
+    /// header/connections table) so the two tables' misses stay
+    /// independently traceable.
+    ///
+    /// [`MapId`]: crate::wild_encounters::MapId
+    UnknownMapEvents(&'static str),
+
+    /// A raw `MOVEMENT_TYPE_*` id did not correspond to any modelled
+    /// [`MovementType`](crate::map_events::MovementType).
+    ///
+    /// Carries the offending id. Upstream defines ids `0..=0x50` (81
+    /// values, `constants/event_object_movement.h`).
+    UnknownMovementType(u8),
+
+    /// A raw `TRAINER_TYPE_*` id did not correspond to any modelled
+    /// [`TrainerType`](crate::map_events::TrainerType).
+    ///
+    /// Carries the offending id. Upstream defines ids `0..=3`
+    /// (`constants/trainer_types.h`).
+    UnknownTrainerType(u8),
+
+    /// A raw `BG_EVENT_PLAYER_FACING_*` id did not correspond to any
+    /// modelled [`FacingDirection`](crate::map_events::FacingDirection).
+    ///
+    /// Carries the offending id. Upstream defines ids `0..=4`
+    /// (`constants/event_bg.h`).
+    UnknownFacingDirection(u8),
+
+    /// A raw `COORD_EVENT_WEATHER_*` id did not correspond to any modelled
+    /// [`CoordWeather`](crate::map_events::CoordWeather).
+    ///
+    /// Carries the offending id. Upstream defines this as a distinct,
+    /// smaller numbering from `WEATHER_*` (`constants/weather.h`) — see the
+    /// `map_events` module docs.
+    UnknownCoordWeather(u8),
 }
 
 impl fmt::Display for AssetError {
@@ -225,6 +265,11 @@ impl fmt::Display for AssetError {
             Self::UnknownConnectionDirection(id) => {
                 write!(f, "unknown connection direction id `{id}`")
             }
+            Self::UnknownMapEvents(name) => write!(f, "unknown map-events id `{name}`"),
+            Self::UnknownMovementType(id) => write!(f, "unknown movement type id `{id}`"),
+            Self::UnknownTrainerType(id) => write!(f, "unknown trainer type id `{id}`"),
+            Self::UnknownFacingDirection(id) => write!(f, "unknown facing direction id `{id}`"),
+            Self::UnknownCoordWeather(id) => write!(f, "unknown coord weather id `{id}`"),
         }
     }
 }
