@@ -102,7 +102,12 @@ impl TrackState {
             key: 0,
             mod_depth: 0,
             mod_type: 0,
-            lfo_speed: 0,
+            // Upstream track init seeds `lfoSpeed = 0x16` (`m4a_1.s:1226`,
+            // `movs r0, 0x16`), a sibling of the `bendRange = 2` / `volX = 0x40`
+            // defaults already mirrored above. Modulation still gates on
+            // `mod_depth > 0` (`m4a_1.s:1288`), so this default alone never
+            // makes a silent track wobble.
+            lfo_speed: 22,
             lfo_delay: 0,
             lfo_delay_c: 0,
             lfo_speed_c: 0,
@@ -436,9 +441,17 @@ impl Sequencer {
             return;
         }
 
-        track.lfo_speed_c = track.lfo_speed_c.wrapping_add(track.lfo_speed);
-        let value = lfo_triangle(track.lfo_speed_c);
-        let raw = (i32::from(track.mod_depth) * i32::from(value)) >> 6;
+        // The asm adds `lfoSpeed` into `lfoSpeedC` in a wide register, stores
+        // only the low byte back (`strb`, `m4a_1.s:1298`..`:1300`), but keeps
+        // the FULL sum live in `r1` for the falling-half mirror. Carry that
+        // untruncated `u16` sum (up to 510) into `lfo_triangle`.
+        let full_sum = u16::from(track.lfo_speed_c) + u16::from(track.lfo_speed);
+        #[allow(clippy::cast_possible_truncation)]
+        {
+            track.lfo_speed_c = full_sum as u8;
+        }
+        let value = lfo_triangle(full_sum);
+        let raw = (i32::from(track.mod_depth) * value) >> 6;
         // `strb` truncates the product to a byte before it is compared and
         // stored, so only the low 8 bits (reinterpreted as signed) survive.
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
@@ -624,21 +637,31 @@ fn track_pitch(track: &TrackState) -> (i32, u8) {
     (key_m, pit_m)
 }
 
-/// The LFO's triangle-wave shape: given the wrapping `0..=255` phase
-/// (`track->lfoSpeedC`), derive the signed slope value later scaled by depth.
+/// The LFO's triangle-wave shape: given the running phase sum
+/// `lfoSpeedC + lfoSpeed` (`m4a_1.s:1298`..`:1300`, an untruncated `u16` up to
+/// 510), derive the signed slope value later scaled by depth.
+///
 /// Behavioural port of `MPlayMain`'s inline triangle computation
-/// (`m4a_1.s:1301`..`:1311`) — reproduced by its intended (truncated, always
-/// byte-consistent) arithmetic rather than the asm's incidental wide-register
-/// reuse, which only diverges from this in an unreachable-in-practice corner
-/// (see the module's PR discussion) `(no-verbatim)`.
-#[allow(clippy::cast_possible_wrap)]
-fn lfo_triangle(phase: u8) -> i8 {
+/// (`m4a_1.s:1301`..`:1311`). The rising-vs-falling branch keys off the
+/// *truncated* 8-bit phase (`full_sum & 0xFF`, the byte written back to
+/// `lfoSpeedC`), but the falling half computes `0x80 - r1` where `r1` still
+/// holds the *full* pre-`strb` sum (`_081DD96E`, `m4a_1.s:1308`..`:1310`). When
+/// `lfoSpeed >= 65` that sum can reach the falling half (truncated phase in
+/// `[0x40, 0xBF]`) while exceeding 255, so the mirror term stays wide and the
+/// slope drops below `-128`. Reproduced faithfully by returning the full signed
+/// slope (an `i32`); the caller scales by depth and truncates the product to a
+/// byte with `strb`, exactly as the asm does `(no-verbatim)`.
+#[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
+fn lfo_triangle(full_sum: u16) -> i32 {
+    let phase = full_sum as u8;
     if (phase.wrapping_sub(0x40) as i8) >= 0 {
-        // Falling half: mirror around 0x80.
-        0x80u8.wrapping_sub(phase) as i8
+        // Falling half: mirror around 0x80 using the FULL untruncated sum
+        // (`movs r0, 0x80; subs r2, r0, r1` with `r1 = lfoSpeedC + lfoSpeed`).
+        0x80i32 - i32::from(full_sum)
     } else {
-        // Rising half: the phase itself, reinterpreted as signed.
-        phase as i8
+        // Rising half: the truncated phase, reinterpreted as signed
+        // (`lsls r2, r1, 24; asrs r2, 24`).
+        i32::from(phase as i8)
     }
 }
 
@@ -1140,6 +1163,38 @@ mod tests {
                 "frequency must not move during the LFO delay"
             );
         }
+    }
+
+    #[test]
+    #[allow(clippy::cast_sign_loss)] // mirrors `apply_lfo`'s `strb` truncation
+    fn lfo_triangle_falling_half_uses_the_untruncated_phase_sum() {
+        // Regression for the wide-register corner at `_081DD96E`
+        // (`m4a_1.s:1308`..`:1310`). With `lfoSpeed >= 65` the running phase
+        // sum `lfoSpeedC + lfoSpeed` can exceed 255 while its low byte still
+        // lands in the falling half (`0x40..=0xBF`). The asm mirrors the FULL
+        // pre-`strb` sum (`0x80 - r1`), not the byte written back to lfoSpeedC.
+        //
+        // Hand computation for the cited corner, full_sum = 400 (0x190),
+        // MOD (mod_depth) = 40:
+        //   truncated phase = 400 & 0xFF = 0x90 (144) -> in [0x40,0xBF] -> falling
+        //   value = 0x80 - r1 = 128 - 400 = -272        (r1 = full sum, not 144)
+        //   raw   = (40 * -272) >> 6 = -10880 >> 6 = -170   (muls; asrs r2, #6)
+        //   modM  = (i8)(-170 & 0xFF) = (i8)0x56 = +86      (strb truncation)
+        // The old truncated-phase port used 0x80 - 144 = -16 instead, giving
+        //   raw = (40 * -16) >> 6 = -640 >> 6 = -10, modM = -10 -- the divergence.
+        assert_eq!(lfo_triangle(400), -272);
+
+        // Replicate `apply_lfo`'s depth-scale + `strb` truncation on that slope.
+        let value = lfo_triangle(400);
+        let raw = (i32::from(40u8) * value) >> 6;
+        let modm = i8::from_ne_bytes([raw as u32 as u8]);
+        assert_eq!(modm, 86, "falling half must mirror the full 16-bit sum");
+
+        // Sanity: sums <= 255 (no wide corner) still behave as before -- the
+        // falling half only reaches here for full_sum in [0x140, 0x1BF].
+        assert_eq!(lfo_triangle(0x80), 0); // p=0x80 -> 0x80 - 0x80 == 0
+        assert_eq!(lfo_triangle(0x20), 0x20); // rising: (i8)0x20
+        assert_eq!(lfo_triangle(0xC0), -64); // rising: (i8)0xC0
     }
 
     // --- Pattern execution (`PATT`/`PEND`/`REPT`) ---------------------------
