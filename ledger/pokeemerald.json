@@ -2742,8 +2742,11 @@
     },
     "data/map_events.s": {
       "category": "data.script",
+      "fold_target": "crates/assets/src/map_events.rs",
       "kind": "file",
-      "status": "pending"
+      "reason": "Aggregate-only artifact: upstream data/map_events.s just includes data/maps/events.inc, whose per-map event lists are fully ported to the typed MapEventsTable in map_events.rs; no un-ported remainder.",
+      "spec": "S-4",
+      "status": "folded"
     },
     "data/maps.s": {
       "category": "data.script",
