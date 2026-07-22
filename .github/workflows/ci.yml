@@ -9,13 +9,20 @@
 # (the rolling alias). rustup is preinstalled, so no new action/dep (minimal-deps).
 #
 # Jobs run sequentially via a needs: chain so a failure short-circuits the rest
-# of that matrix leg: version -> ledger -> fmt -> clippy -> build -> test.
+# of that matrix leg: version -> ledger -> fmt -> clippy -> build -> test ->
+# smoke. `smoke` runs `cargo xtask e2e --suite smoke` (F-3): a headless,
+# in-process boot of the `pokeemerald-rs` shell (see crates/xtask/src/e2e.rs
+# and crates/platform's `Platform::new_headless`) proving V-1's smoke-E2E
+# leg. It is not yet a required check (see below) -- R-4 registers it once
+# the gate has proven stable.
 #
 # Required status-check contexts for branch protection (R-4): `version` and
 # `ledger` report under their bare job names; the matrixed jobs report per OS —
 # `fmt (ubuntu-latest)`, `fmt (windows-latest)`, `clippy (ubuntu-latest)`,
 # `clippy (windows-latest)`, `build (ubuntu-latest)`, `build (windows-latest)`,
 # `test (ubuntu-latest)`, `test (windows-latest)`. Register those exact names.
+# `smoke (ubuntu-latest)` / `smoke (windows-latest)` are deliberately NOT on
+# this list yet.
 name: ci
 
 # Least-privilege GITHUB_TOKEN: every job here only checks out and reads the repo.
@@ -114,3 +121,22 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y libasound2-dev
       - name: cargo test --workspace
         run: cargo test --workspace
+
+  # V-1: the smoke leg of the E2E acceptance criterion. Not yet a required
+  # check (see the header comment) -- R-4 promotes it once it has proven
+  # stable in CI.
+  smoke:
+    name: smoke
+    needs: test
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+      - name: Install ALSA dev headers (Linux; crates/platform's cpal dependency links libasound at compile time)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev
+      - name: cargo xtask e2e --suite smoke
+        run: cargo xtask e2e --suite smoke
