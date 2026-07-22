@@ -6,3 +6,10 @@ publish.workspace = true
 
 [lints]
 workspace = true
+
+[dependencies]
+# The `e2e --suite smoke` run (F-3, V-1) drives the boot shell's `App` in
+# headless mode, in-process (see `crate::e2e`) -- a workspace-local path
+# dependency, not an external crate, so `minimal-deps` owner approval does
+# not apply.
+pokeemerald-rs = { path = "../pokeemerald-rs" }

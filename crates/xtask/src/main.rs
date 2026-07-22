@@ -1,19 +1,24 @@
 //! `xtask` — the project's task-automation entry point (F-3).
 //!
-//! A hand-rolled dev runner (std only, no `clap`/`anyhow` — `minimal-deps`).
-//! This is a SKELETON: every subcommand parses and dispatches, then fails
-//! *closed* — a recognised-but-unimplemented subcommand returns
-//! [`XtaskError::NotImplemented`] (non-zero exit) rather than exiting 0, so the
-//! `RELEASE.md` gate commands (`e2e --suite …`) can never be satisfied by a
-//! no-op stub `(gated-by-default)`. Real `extract` / `record-snapshot` /
-//! `scenario` / `e2e` behaviour, and wiring `e2e` into CI (V-1), are out of
-//! scope here.
+//! A hand-rolled dev runner (std only, no `clap`/`anyhow` for the CLI itself
+//! — `minimal-deps`; `crate::e2e`'s only dependency is the workspace-local
+//! `pokeemerald-rs` crate under test). Every subcommand parses and
+//! dispatches; a recognised-but-unimplemented subcommand fails *closed* —
+//! returning [`XtaskError::NotImplemented`] (non-zero exit) rather than
+//! exiting 0 — so the `RELEASE.md` gate commands (`e2e --suite …`) can never
+//! be satisfied by a no-op stub `(gated-by-default)`.
+//!
+//! `e2e --suite smoke` (F-3, V-1) is real: see [`crate::e2e::run_smoke`] for
+//! the headless boot-shell run it drives. `extract` / `record-snapshot` /
+//! `scenario`, and the `e2e` `full`/`soak` suites, remain stubs.
 //!
 //! Run via the workspace alias: `cargo xtask <subcommand>`.
 
 use std::error::Error;
 use std::fmt;
 use std::process::ExitCode;
+
+mod e2e;
 
 /// Usage text shown on stderr for any parse error.
 const USAGE: &str = "\
@@ -47,6 +52,9 @@ pub enum XtaskError {
     /// commands must never be satisfiable by a no-op `(gated-by-default)`
     /// `(test-ratchet)`.
     NotImplemented(&'static str),
+    /// `e2e --suite smoke` ran but did not report a clean boot. Carries
+    /// [`e2e::E2eError`]'s rendered message.
+    SmokeFailed(String),
 }
 
 impl fmt::Display for XtaskError {
@@ -71,6 +79,11 @@ impl fmt::Display for XtaskError {
             // so it gets no USAGE tail.
             Self::NotImplemented(what) => {
                 return write!(f, "error: `{what}` is not implemented yet");
+            }
+            // Likewise a smoke-run failure: it's a runtime/behavioural
+            // failure, not a malformed invocation.
+            Self::SmokeFailed(reason) => {
+                return write!(f, "error: `e2e --suite smoke` failed: {reason}");
             }
         }
         write!(f, "{USAGE}")
@@ -195,23 +208,30 @@ fn parse_e2e(rest: &[String]) -> Result<(Suite, bool), XtaskError> {
 
 /// Dispatch a parsed command.
 ///
-/// Every subcommand is currently a stub. Rather than exiting 0, each returns
-/// [`XtaskError::NotImplemented`] so the process fails *closed* (non-zero
-/// exit): the `RELEASE.md` promotion gates run these exact commands, so a stub
-/// that reported success would satisfy a gate with zero validation
-/// `(gated-by-default)` `(test-ratchet)`.
+/// `e2e --suite smoke` is real (F-3, V-1): see [`e2e::run_smoke`]. Every
+/// other subcommand — `extract`, `record-snapshot`, `scenario`, and the
+/// `e2e` `full`/`soak` suites — remains a stub: rather than exiting 0, each
+/// returns [`XtaskError::NotImplemented`] so the process fails *closed*
+/// (non-zero exit). The `RELEASE.md` promotion gates run these exact
+/// commands, so a stub that reported success would satisfy a gate with zero
+/// validation `(gated-by-default)` `(test-ratchet)`.
 ///
 /// # Errors
 ///
-/// Always returns [`XtaskError::NotImplemented`] until real behaviour lands.
+/// Returns [`XtaskError::NotImplemented`] for every still-stubbed
+/// subcommand/suite, or [`XtaskError::SmokeFailed`] if `e2e --suite smoke`
+/// ran but did not report a clean boot.
 fn dispatch(cmd: &Command) -> Result<(), XtaskError> {
-    let name = match cmd {
-        Command::Extract => "extract",
-        Command::RecordSnapshot => "record-snapshot",
-        Command::Scenario => "scenario",
-        Command::E2e { .. } => "e2e",
-    };
-    Err(XtaskError::NotImplemented(name))
+    match cmd {
+        Command::Extract => Err(XtaskError::NotImplemented("extract")),
+        Command::RecordSnapshot => Err(XtaskError::NotImplemented("record-snapshot")),
+        Command::Scenario => Err(XtaskError::NotImplemented("scenario")),
+        Command::E2e {
+            suite: Suite::Smoke,
+            ..
+        } => e2e::run_smoke().map_err(|err| XtaskError::SmokeFailed(err.to_string())),
+        Command::E2e { .. } => Err(XtaskError::NotImplemented("e2e")),
+    }
 }
 
 /// Parse and dispatch a single invocation.
@@ -410,25 +430,43 @@ mod tests {
         // Recognised-but-unimplemented subcommands must NOT report success:
         // RELEASE.md wires `xtask e2e --suite …` in as promotion gates, so a
         // stub exiting 0 would satisfy a gate with zero validation
-        // `(gated-by-default)` `(test-ratchet)`.
+        // `(gated-by-default)` `(test-ratchet)`. `e2e --suite smoke` is
+        // deliberately absent here (see `run_e2e_smoke_boots_cleanly`
+        // below): it is no longer a stub (F-3, V-1), and asserting it still
+        // failed would itself be testing for a regression, not a stub.
         assert!(matches!(
             run(&args(&["extract"])).unwrap_err(),
             XtaskError::NotImplemented("extract")
         ));
         assert!(matches!(
-            run(&args(&["e2e", "--suite", "smoke"])).unwrap_err(),
-            XtaskError::NotImplemented("e2e")
-        ));
-        assert!(matches!(
             run(&args(&["e2e", "--suite", "full", "--release"])).unwrap_err(),
             XtaskError::NotImplemented("e2e")
         ));
+        assert!(matches!(
+            run(&args(&["e2e", "--suite", "soak", "--release"])).unwrap_err(),
+            XtaskError::NotImplemented("e2e")
+        ));
+    }
+
+    #[test]
+    fn run_e2e_smoke_boots_cleanly() {
+        // `e2e --suite smoke` (F-3, V-1): real dispatch, not a stub. Runs
+        // the same headless in-process boot as `crate::e2e::run_smoke`.
+        assert!(run(&args(&["e2e", "--suite", "smoke"])).is_ok());
     }
 
     #[test]
     fn not_implemented_display_has_no_usage_tail() {
         let rendered = XtaskError::NotImplemented("e2e").to_string();
         assert!(rendered.contains("not implemented"));
+        assert!(!rendered.contains("usage: cargo xtask"));
+    }
+
+    #[test]
+    fn smoke_failed_display_carries_the_reason_and_has_no_usage_tail() {
+        let rendered = XtaskError::SmokeFailed("boom".to_owned()).to_string();
+        assert!(rendered.contains("e2e --suite smoke"));
+        assert!(rendered.contains("boom"));
         assert!(!rendered.contains("usage: cargo xtask"));
     }
 
