@@ -13,8 +13,14 @@
 //! - [`event_data`] — the event flags/vars store: bit-packed flag storage,
 //!   var storage with the `VARS_START` offset, and the temp/special id-space
 //!   semantics (issue #65).
+//! - [`save`] — save system slice 1: typed `SaveBlock1`/`SaveBlock2` models
+//!   over the state modeled so far (player identity, [`event_data`]
+//!   flags/vars, a position stub), plus a versioned, checksummed, rotating
+//!   two-slot save store faithful to upstream's flash sector layout (issue
+//!   #94).
 
 pub mod event_data;
 pub mod rng;
+pub mod save;
 pub mod script;
 pub mod text;
