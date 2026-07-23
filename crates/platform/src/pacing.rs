@@ -104,6 +104,19 @@ impl Default for FramePacer {
 }
 
 #[cfg(test)]
+impl FramePacer {
+    /// Whether [`FramePacer::tick`] has ever been called (i.e. a deadline
+    /// has been scheduled). Test-only introspection used to assert,
+    /// deterministically, that a caller never consults the pacer at all —
+    /// see `window::tests::headless_wait_for_next_frame_never_consults_pacer`,
+    /// the replacement for a wall-clock timing assertion that could flake
+    /// under scheduler pressure.
+    pub(crate) fn has_ticked(&self) -> bool {
+        self.next_deadline.is_some()
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 

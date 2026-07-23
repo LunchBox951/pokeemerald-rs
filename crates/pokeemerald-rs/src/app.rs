@@ -5,11 +5,28 @@
 //! [`App`] is intentionally the only thing `main` touches (`main` stays
 //! thin, see the crate root docs) `(oop-boundaries)` -- this is the shell
 //! future engine state plugs into.
+//!
+//! [`App::new_headless`] plus [`App::step`] (F-3, V-1) are the seam `xtask`'s
+//! `e2e --suite smoke` run drives in-process: the exact same composed scene
+//! and per-frame loop body as [`App::run`], just against `platform`'s null
+//! window backend instead of a real one (see
+//! `platform::Platform::new_headless`).
 
-use platform::{ButtonState, Buttons, Platform, PlatformError};
+use platform::{ButtonState, Buttons, Frame, Platform, PlatformError};
 
 use crate::frame::to_platform_frame;
 use crate::scene::BootScene;
+
+/// Compose a fresh [`BootScene`] into a `platform`-ready frame.
+///
+/// Shared by both constructors, which each call this exactly once: the
+/// scene is static for this slice (no engine state exists yet to reflect
+/// per frame, see the module docs), so composing it once up front and
+/// caching the result on [`App`] is correct and avoids re-allocating a
+/// 240x160 frame every [`App::step`].
+fn compose_boot_frame() -> Box<Frame> {
+    to_platform_frame(&BootScene::new().compose())
+}
 
 /// The GBA button names in [`Buttons`] bit order, used only to format a
 /// human-readable input log line (see [`describe_newly_pressed`]).
@@ -26,15 +43,17 @@ const BUTTON_NAMES: [(Buttons, &str); 10] = [
     (Buttons::L, "L"),
 ];
 
-/// The running game shell: an open window and the (currently static)
-/// placeholder scene it presents every frame.
+/// The running game shell: an open window (or, headlessly, `platform`'s null
+/// backend) and the (currently static) placeholder scene's already-composed
+/// frame, presented unchanged every frame.
 ///
 /// No engine/battle state yet (out of scope for this slice, see the crate
-/// root docs) -- `scene` is a fixed placeholder recomposited unchanged each
-/// frame; a future slice replaces it with real per-frame game state.
+/// root docs) -- the scene is a fixed placeholder; a future slice replaces
+/// `frame` with real per-frame recomposition once there is engine state to
+/// reflect (see [`compose_boot_frame`]).
 pub struct App {
     platform: Platform,
-    scene: BootScene,
+    frame: Box<Frame>,
 }
 
 impl App {
@@ -47,33 +66,78 @@ impl App {
     pub fn new(title: impl Into<String>) -> Result<Self, PlatformError> {
         Ok(Self {
             platform: Platform::new(title)?,
-            scene: BootScene::new(),
+            frame: compose_boot_frame(),
         })
     }
 
-    /// Run the frame loop until the window is closed or Escape is pressed
-    /// (see `platform::window`'s docs): pump input, present the composed
-    /// scene, pace to the next GBA vblank.
+    /// Build the same placeholder scene as [`App::new`], but against
+    /// `platform`'s explicit headless/null backend (F-3, V-1) instead of a
+    /// real window.
     ///
-    /// The scene is static for this slice, so it is composed once up front
-    /// rather than every frame; a future slice recomposites per frame once
-    /// there is engine state to reflect.
+    /// Always succeeds (mirrors `platform::Platform::new_headless`, which
+    /// opens no OS resources), unlike [`App::new`]. This is the constructor
+    /// `xtask`'s `e2e --suite smoke` run uses to drive the boot shell
+    /// in-process without a display server.
+    #[must_use]
+    pub fn new_headless() -> Self {
+        Self {
+            platform: Platform::new_headless(),
+            frame: compose_boot_frame(),
+        }
+    }
+
+    /// Run the frame loop until the window is closed or Escape is pressed
+    /// (see `platform::window`'s docs), or (for a headless `App`, which
+    /// never signals a close) forever -- callers that need a bounded run
+    /// (e.g. `xtask`'s smoke suite) should call [`App::step`] directly
+    /// instead of `run`.
     ///
     /// # Errors
     ///
     /// Returns a [`PlatformError`] if window/surface creation or
     /// presentation fails.
     pub fn run(&mut self) -> Result<(), PlatformError> {
-        let frame = to_platform_frame(&self.scene.compose());
-
-        while self.platform.pump()? {
-            if let Some(line) = describe_newly_pressed(*self.platform.buttons()) {
-                eprintln!("{line}");
-            }
-            self.platform.present(&frame)?;
-            self.platform.wait_for_next_frame();
-        }
+        while self.step()? {}
         Ok(())
+    }
+
+    /// Run exactly one iteration of the frame loop body: pump input, log
+    /// any newly-pressed buttons, present the composed scene, and pace to
+    /// the next GBA vblank (a no-op for a headless `App`, see
+    /// `platform::Platform::wait_for_next_frame`).
+    ///
+    /// Returns whether the loop should keep going -- `false` once
+    /// `platform::Platform::pump` reports a close request, at which point
+    /// the frame is *not* presented (mirroring the `while` loop this method
+    /// replaces in [`App::run`]). Always `true` for a headless `App`, which
+    /// has no window to close.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`PlatformError`] if input pumping or presentation fails.
+    pub fn step(&mut self) -> Result<bool, PlatformError> {
+        if !self.platform.pump()? {
+            return Ok(false);
+        }
+        if let Some(line) = describe_newly_pressed(*self.platform.buttons()) {
+            eprintln!("{line}");
+        }
+        self.platform.present(&self.frame)?;
+        self.platform.wait_for_next_frame();
+        Ok(true)
+    }
+
+    /// The composed placeholder scene's frame, as most recently handed to
+    /// `platform::Platform::present` (or about to be, on the first
+    /// [`App::step`]).
+    ///
+    /// Exposed for e2e assertions (`xtask`'s `e2e --suite smoke` checks it
+    /// is non-blank as proof the boot scene actually rendered something,
+    /// not just that the loop ran) -- not needed by [`App::run`]/`step`
+    /// themselves, which read the cached `frame` field directly.
+    #[must_use]
+    pub fn frame(&self) -> &Frame {
+        &self.frame
     }
 }
 
@@ -102,8 +166,37 @@ fn describe_newly_pressed(state: ButtonState) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::describe_newly_pressed;
+    use super::{describe_newly_pressed, App};
     use platform::{ButtonState, Buttons};
+
+    #[test]
+    fn headless_frame_is_non_blank() {
+        let app = App::new_headless();
+        assert!(
+            app.frame().iter().any(|&pixel| pixel != 0),
+            "the composed boot scene must produce a non-blank frame"
+        );
+    }
+
+    #[test]
+    fn headless_step_keeps_going_and_never_errors() {
+        let mut app = App::new_headless();
+        for _ in 0..10 {
+            assert!(app.step().expect("headless step never errors"));
+        }
+    }
+
+    #[test]
+    fn headless_frame_is_stable_across_steps() {
+        // The scene is static for this slice (see the module docs), so the
+        // composed frame must not change between steps.
+        let mut app = App::new_headless();
+        let before = app.frame().to_vec();
+        for _ in 0..5 {
+            app.step().expect("headless step never errors");
+        }
+        assert_eq!(app.frame().to_vec(), before);
+    }
 
     #[test]
     fn no_input_yields_no_log_line() {

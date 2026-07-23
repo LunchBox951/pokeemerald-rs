@@ -9,13 +9,27 @@
 # (the rolling alias). rustup is preinstalled, so no new action/dep (minimal-deps).
 #
 # Jobs run sequentially via a needs: chain so a failure short-circuits the rest
-# of that matrix leg: version -> ledger -> fmt -> clippy -> build -> test.
+# of that matrix leg: version -> ledger -> fmt -> clippy -> build -> test ->
+# smoke. `smoke` runs `cargo run -p xtask --features smoke -- e2e --suite
+# smoke` plus `cargo test -p xtask --features smoke` (F-3): a headless,
+# in-process boot of the `pokeemerald-rs` shell (see crates/xtask/src/e2e.rs
+# and crates/platform's `Platform::new_headless`) proving V-1's smoke-E2E
+# leg. `pokeemerald-rs` is an optional dependency of `xtask` gated behind the
+# `smoke` cargo feature (see crates/xtask/Cargo.toml), so it must be passed
+# explicitly here -- the plain `cargo xtask` alias (.cargo/config.toml) does
+# not enable it, and the required `build`/`test` jobs above deliberately
+# build without it so they stay dependency-free of `platform`'s
+# cpal/winit/softbuffer (ALSA dev headers included). It is not yet a
+# required check (see below) -- R-4 registers it once the gate has proven
+# stable.
 #
 # Required status-check contexts for branch protection (R-4): `version` and
 # `ledger` report under their bare job names; the matrixed jobs report per OS —
 # `fmt (ubuntu-latest)`, `fmt (windows-latest)`, `clippy (ubuntu-latest)`,
 # `clippy (windows-latest)`, `build (ubuntu-latest)`, `build (windows-latest)`,
 # `test (ubuntu-latest)`, `test (windows-latest)`. Register those exact names.
+# `smoke (ubuntu-latest)` / `smoke (windows-latest)` are deliberately NOT on
+# this list yet.
 name: ci
 
 # Least-privilege GITHUB_TOKEN: every job here only checks out and reads the repo.
@@ -114,3 +128,33 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y libasound2-dev
       - name: cargo test --workspace
         run: cargo test --workspace
+
+  # V-1: the smoke leg of the E2E acceptance criterion. Not yet a required
+  # check (see the header comment) -- R-4 promotes it once it has proven
+  # stable in CI.
+  smoke:
+    name: smoke
+    needs: test
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+      - name: Install ALSA dev headers (Linux; crates/platform's cpal dependency links libasound at compile time)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev
+      # `--features smoke` is required: it's what pulls the optional
+      # `pokeemerald-rs` dependency (and `mod e2e`) into this build at all
+      # (see crates/xtask/Cargo.toml and crates/xtask/src/main.rs). The bare
+      # `cargo xtask` alias does not pass it, so this bypasses the alias.
+      - name: cargo run -p xtask --features smoke -- e2e --suite smoke
+        run: cargo run -p xtask --features smoke -- e2e --suite smoke
+      # Also run xtask's own test suite with the feature enabled, so the
+      # smoke-run unit tests (compiled in only under `--features smoke`,
+      # e.g. `crate::e2e::tests::smoke_suite_boots_cleanly_headless`) get
+      # exercised somewhere in CI -- deliberately not under the required
+      # `test` job's plain `cargo test --workspace` (see the header comment).
+      - name: cargo test -p xtask --features smoke
+        run: cargo test -p xtask --features smoke

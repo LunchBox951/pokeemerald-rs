@@ -88,7 +88,9 @@ sub-artifact `rust_target` pointers alongside file-level ones.
 Promote when **all** hold; otherwise skip rather than ship a broken nightly:
 
 - candidate passes normal CI and `ledger.py verify`;
-- `cargo xtask e2e --suite smoke` passes (once E2E lands);
+- `cargo run -p xtask --features smoke -- e2e --suite smoke` passes (the
+  `smoke` feature keeps the platform stack out of default xtask builds, so the
+  plain `cargo xtask` alias cannot run this suite);
 - channel artifacts build;
 - no known launch-blocking, crash-on-start, or save-corrupting issue.
 
