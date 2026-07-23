@@ -111,6 +111,11 @@ impl CgbEnvelope {
     /// Request note-off: subsequent steps ramp down by `release` per step.
     pub fn note_off(&mut self) {
         self.stop = true;
+        // The stop transition reloads the envelope counter (`m4a.c:1063`,
+        // `envelopeCounter = release`) so the release ramp paces from a clean
+        // start regardless of where the interrupted phase's counter stood — in
+        // particular the live 7-frame counter a sustaining note now carries.
+        self.counter = 0;
     }
 
     /// Retire the voice immediately (e.g. a channel-1 sweep overflow, which
@@ -157,8 +162,7 @@ impl CgbEnvelope {
         match self.phase {
             Phase::Attack => self.attack_step(),
             Phase::Decay => self.decay_step(),
-            // Sustain holds at `sustain_goal` until `note_off`.
-            Phase::Sustain => {}
+            Phase::Sustain => self.sustain_step(),
         }
     }
 
@@ -232,7 +236,26 @@ impl CgbEnvelope {
         }
         self.volume = self.sustain_goal;
         self.phase = Phase::Sustain;
-        self.counter = 0;
+        // `envelope_sustain` loads `envelopeCounter = 7` *after* landing on the
+        // goal (`m4a.c:1108`..`:1114`) — the fixed sustain re-snap cadence, not
+        // the instant-fire `0` the attack/decay enters use.
+        self.counter = 7;
+    }
+
+    /// Sustain phase (`envelope_sustain`, `m4a.c:1112`..`:1114`): every 7 frames
+    /// the counter elapses, upstream re-runs `CgbModVol`, and `envelopeVolume`
+    /// snaps back to the freshly recomputed `sustainGoal` before the counter
+    /// reloads with `7`. It is a *snap* to the live goal, not a gradual step.
+    /// A mid-note `VOL`/`PAN` change or `MODT` tremolo reaches this envelope
+    /// only through [`Self::set_goal`] rewriting `sustain_goal`, so this
+    /// re-snap is what makes those changes audible — with the upstream-visible
+    /// lag of up to 7 frames.
+    fn sustain_step(&mut self) {
+        self.counter -= 1;
+        if self.counter == 0 {
+            self.volume = self.sustain_goal;
+            self.counter = 7;
+        }
     }
 
     /// The stop/release ramp: `-1` per `release` frames toward `0`, retiring
@@ -445,6 +468,48 @@ mod tests {
         }
         assert!(!env.is_active());
         assert_eq!(env.volume(), 0);
+    }
+
+    #[test]
+    fn sustain_re_snaps_live_goal_within_seven_frames() {
+        // A held PSG note with instant attack+decay lands straight in sustain.
+        // While sustaining, upstream re-runs CgbModVol and snaps envelopeVolume
+        // to the recomputed sustainGoal every 7 frames (envelope_sustain reloads
+        // envelopeCounter = 7, m4a.c:1112-1114). A mid-note VOL/PAN change routed
+        // through set_goal must therefore reach the audible volume within 7
+        // frames — never sooner (the counter has not elapsed), never later.
+        let adsr = CgbAdsr {
+            attack: 0,
+            decay: 0,
+            sustain: 8,
+            release: 0,
+        };
+        let mut env = CgbEnvelope::new(adsr, 10);
+        env.step(); // lands on sustain_goal = (10*8+15)>>4 = 5, counter := 7
+        assert_eq!(env.volume(), 5);
+
+        // Live VOL bump mid-sustain: set_goal only rewrites goal/sustain_goal
+        // (goal 10 -> 20 => sustain_goal = (20*8+15)>>4 = 10), not the counter.
+        env.set_goal(adsr, 20);
+
+        // The 7-frame counter has not elapsed, so the new goal must NOT reach
+        // the volume yet — this pins the deliberate upstream-visible lag.
+        for frame in 1..7 {
+            env.step();
+            assert_eq!(
+                env.volume(),
+                5,
+                "sustain must not re-snap before the counter elapses (frame {frame})"
+            );
+        }
+        // On the 7th frame the counter reaches 0 and the volume snaps to the
+        // recomputed sustain_goal.
+        env.step();
+        assert_eq!(
+            env.volume(),
+            10,
+            "sustain re-snaps to the live sustain_goal on the 7th frame"
+        );
     }
 
     #[test]

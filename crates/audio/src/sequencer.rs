@@ -610,9 +610,13 @@ fn track_volume(track: &TrackState) -> (u8, u8) {
     // `(y + 128)` and `(127 - y)` are both in `0..=255`.
     let vol_mr = (u32::try_from(y + 128).unwrap_or(0) * x) >> 8;
     let vol_ml = (u32::try_from(127 - y).unwrap_or(0) * x) >> 8;
+    // Upstream stores the `>> 8` result straight into the `u8` fields
+    // `volMR`/`volML` (`m4a.c:787`..`:788`, `m4a_internal.h:290`..`:291`): the
+    // byte store truncates modulo 256, so a tremolo (`modT == 1`) peak past
+    // `0xFF` wraps rather than saturating (e.g. a raw 504 stores 248, not 255).
     (
-        u8::try_from(vol_mr.min(255)).unwrap_or(255),
-        u8::try_from(vol_ml.min(255)).unwrap_or(255),
+        u8::try_from(vol_mr & 0xFF).unwrap_or(0),
+        u8::try_from(vol_ml & 0xFF).unwrap_or(0),
     )
 }
 
@@ -1036,6 +1040,32 @@ mod tests {
         track.bend = 1;
         track.bend_range = 64; // bend == 64; (64*4 + 127*256) >> 8 == 128
         assert_eq!(track_pitch(&track).0, -128);
+    }
+
+    #[test]
+    fn track_volume_in_range_channels_pass_through() {
+        // A plain centred track stays well within a byte, so truncation is a
+        // no-op: guards the fix against changing ordinary volumes.
+        let track = TrackState::new(); // vol 127, pan 0, modT 0
+                                       // x = (127*0x40)>>5 = 254; y = 0.
+                                       // volMR = (128*254)>>8 = 127; volML = (127*254)>>8 = 126.
+        assert_eq!(track_volume(&track), (127, 126));
+    }
+
+    #[test]
+    fn track_volume_tremolo_peak_wraps_through_a_byte() {
+        // TrkVolPitSet stores `(u32)((y+128)*x)>>8` straight into the u8 fields
+        // volMR/volML (m4a.c:787-788, m4a_internal.h:290-291), so a tremolo peak
+        // past 0xFF wraps modulo 256 rather than saturating at 255.
+        let mut track = TrackState::new();
+        track.vol = 127;
+        track.mod_type = 1; // amplitude LFO scales the volume term
+        track.mod_m = 127; // factor = 127+128 = 255
+        track.pan = 63; // hard right: y = 126, y+128 = 254
+                        // x = (127*0x40)>>5 = 254; x = (254*255)>>7 = 506.
+                        // raw volMR = (254*506)>>8 = 502 -> 502 & 0xFF = 246 (not 255).
+                        // raw volML = (1*506)>>8 = 1, unaffected.
+        assert_eq!(track_volume(&track), (246, 1));
     }
 
     #[test]
