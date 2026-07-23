@@ -75,6 +75,14 @@
       "status": "pending"
     },
     "data/event_scripts.s": {
+      "artifacts": {
+        "gStdScripts": {
+          "reason": "gStdScripts's 11 labels transcribed as the StdScript enum, in table order; the scripts themselves are content, out of scope",
+          "rust_target": "crates/engine/src/script/std_script.rs",
+          "spec": "S-5",
+          "status": "ported"
+        }
+      },
       "category": "data.script",
       "kind": "file",
       "spec_owner": "06-engine",
@@ -11446,8 +11454,10 @@
     "data/specials.inc": {
       "category": "data.script",
       "kind": "file",
-      "spec_owner": "06-engine",
-      "status": "pending"
+      "reason": "gSpecials name+waitstate-flag table (527 entries) transcribed in order into SPECIALS; SPECIAL_TABLE dispatch hooks all start None (no subsystem wired yet)",
+      "rust_target": "crates/engine/src/script/specials.rs",
+      "spec": "S-5",
+      "status": "ported"
     },
     "data/text/abnormal_weather.inc": {
       "category": "data.text",
@@ -25991,6 +26001,18 @@
           "spec": "S-5",
           "status": "rewritten"
         },
+        "ScrCmd_callstd": {
+          "reason": "callstd shares gotostd's dispatch body; jump-vs-call is not yet observable with no std-script content to resolve",
+          "rust_target": "crates/engine/src/script/commands.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "ScrCmd_callstd_if": {
+          "reason": "callstd_if shares gotostd_if's dispatch body for the same reason as callstd",
+          "rust_target": "crates/engine/src/script/commands.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
         "ScrCmd_checkflag": {
           "reason": "FlagGet call re-implemented as commands::checkflag (SCR_OP_CHECKFLAG, 0x2b), storing the bool result in ScriptContext::comparison_result",
           "rust_target": "crates/engine/src/script/commands.rs",
@@ -26039,6 +26061,18 @@
           "spec": "S-5",
           "status": "rewritten"
         },
+        "ScrCmd_gotostd": {
+          "reason": "gotostd dispatches through the typed StdScript label table; traps naming the resolved label since no compiled std-script content exists yet",
+          "rust_target": "crates/engine/src/script/commands.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "ScrCmd_gotostd_if": {
+          "reason": "gotostd_if reads condition+index unconditionally then dispatches through the shared std-script table lookup on a match",
+          "rust_target": "crates/engine/src/script/commands.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
         "ScrCmd_nop": {
           "reason": "Does nothing; SCR_OP_NOP (0x00) re-implemented as commands::nop",
           "rust_target": "crates/engine/src/script/commands.rs",
@@ -26047,6 +26081,12 @@
         },
         "ScrCmd_nop1": {
           "reason": "Does nothing; SCR_OP_NOP1 (0x01) re-implemented as commands::nop1, kept distinct from nop for a 1:1 opcode mapping",
+          "rust_target": "crates/engine/src/script/commands.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "ScrCmd_random": {
+          "reason": "random draws Rng::next_u16() % limit and writes VAR_RESULT via EventData; zero limit traps instead of panicking",
           "rust_target": "crates/engine/src/script/commands.rs",
           "spec": "S-5",
           "status": "rewritten"
@@ -26075,8 +26115,26 @@
           "spec": "S-5",
           "status": "rewritten"
         },
+        "ScrCmd_special": {
+          "reason": "special dispatches through the SpecialId/SPECIAL_TABLE callback-hook scaffold; every slot traps Unimplemented until a subsystem lands",
+          "rust_target": "crates/engine/src/script/commands.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "ScrCmd_specialvar": {
+          "reason": "specialvar shares special's dispatch scaffold and additionally writes the callback's result to the output var",
+          "rust_target": "crates/engine/src/script/commands.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
         "ScrCmd_subvar": {
           "reason": "VarGet-resolved subtract with u16 wraparound re-implemented as commands::subvar (SCR_OP_SUBVAR, 0x18)",
+          "rust_target": "crates/engine/src/script/commands.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "ScrCmd_waitstate": {
+          "reason": "waitstate re-expresses upstream's global CONTEXT_WAITING pause as ScriptContext's existing native-step mode polling ScriptHost::waiting",
           "rust_target": "crates/engine/src/script/commands.rs",
           "spec": "S-5",
           "status": "rewritten"

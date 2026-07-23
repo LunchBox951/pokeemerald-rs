@@ -66,6 +66,8 @@
 use std::fmt;
 
 pub mod commands;
+pub mod specials;
+pub mod std_script;
 
 /// Fixed call-stack depth, matching upstream's `stack[20]`.
 const STACK_DEPTH: usize = 20;
