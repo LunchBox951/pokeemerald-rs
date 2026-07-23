@@ -131,29 +131,40 @@ impl CgbEnvelope {
     }
 
     /// Advance the envelope by one render frame.
+    ///
+    /// A zero-period phase is *instant*: within this one call the volume lands
+    /// on the phase's target and chains straight into the next phase, exactly
+    /// as upstream's `goto` chain does (`m4a.c:1031`..`:1163`). Only a
+    /// non-zero period paces a ramp one level per frame (`m4a.c:1147` attack,
+    /// `:1120` decay).
     pub fn step(&mut self) {
         if !self.active {
             return;
         }
         if self.stop {
-            self.step_toward(0, self.adsr.release);
+            // Release. `release == 0` silences the channel this same frame
+            // (`m4a.c:1071` goto `envelope_pseudoecho_start`; with no
+            // pseudo-echo volume that falls through to `oscillator_off`,
+            // `:1102`). A non-zero release paces one level per frame down to
+            // `0`, retiring on arrival.
+            if self.adsr.release == 0 {
+                self.silence();
+            } else {
+                self.release_step();
+            }
             return;
         }
         match self.phase {
-            Phase::Attack => {
-                let goal = self.goal;
-                self.step_up_to(goal, self.adsr.attack, Phase::Decay);
-            }
-            Phase::Decay => {
-                let sustain_goal = self.sustain_goal;
-                self.step_down_to(sustain_goal, self.adsr.decay, Phase::Sustain);
-            }
+            Phase::Attack => self.attack_step(),
+            Phase::Decay => self.decay_step(),
+            // Sustain holds at `sustain_goal` until `note_off`.
             Phase::Sustain => {}
         }
     }
 
     /// Wait out `period` frames, then return `true` exactly on the frame a
-    /// step should apply (period `0` steps every frame).
+    /// step should apply. Only called with a non-zero `period`; zero-period
+    /// phases never pace — they transition instantly (see [`Self::step`]).
     fn counter_elapsed(&mut self, period: u8) -> bool {
         if self.counter > 0 {
             self.counter -= 1;
@@ -163,47 +174,87 @@ impl CgbEnvelope {
         true
     }
 
-    fn step_up_to(&mut self, target: u8, period: u8, next: Phase) {
-        if !self.counter_elapsed(period) {
+    /// Attack phase. `attack == 0` skips the ramp entirely (`m4a.c:1039` goto
+    /// `envelope_decay_start`); otherwise `+1` per `attack` frames toward
+    /// `goal` (`m4a.c:1147`, `:1167`), entering decay once it arrives.
+    fn attack_step(&mut self) {
+        if self.adsr.attack == 0 {
+            self.enter_decay();
             return;
         }
-        if self.volume < target {
+        if !self.counter_elapsed(self.adsr.attack) {
+            return;
+        }
+        if self.volume < self.goal {
             self.volume += 1;
         }
-        if self.volume >= target {
-            self.volume = target;
-            self.phase = next;
-            self.counter = 0;
+        if self.volume >= self.goal {
+            self.enter_decay();
         }
     }
 
-    fn step_down_to(&mut self, target: u8, period: u8, next: Phase) {
-        if !self.counter_elapsed(period) {
+    /// `envelope_decay_start` (`m4a.c:1150`): a non-zero `decay` snaps the
+    /// volume to `goal` (`:1156`) and paces the decay ramp; a zero `decay`
+    /// skips the ramp and chains to the sustain start (`:1160`).
+    fn enter_decay(&mut self) {
+        if self.adsr.decay == 0 {
+            self.enter_sustain_start();
             return;
         }
-        if self.volume > target {
+        self.volume = self.goal;
+        self.phase = Phase::Decay;
+        self.counter = 0;
+    }
+
+    /// Decay phase (only entered with a non-zero `decay`): `-1` per `decay`
+    /// frames toward `sustain_goal` (`m4a.c:1120`, `:1142`), entering the
+    /// sustain start once it arrives.
+    fn decay_step(&mut self) {
+        if !self.counter_elapsed(self.adsr.decay) {
+            return;
+        }
+        if self.volume > self.sustain_goal {
             self.volume -= 1;
         }
-        if self.volume <= target {
-            self.volume = target;
-            self.phase = next;
-            self.counter = 0;
+        if self.volume <= self.sustain_goal {
+            self.enter_sustain_start();
         }
     }
 
-    /// The stop/release ramp: steps toward `target` (always `0`) and retires
-    /// the voice once it arrives.
-    fn step_toward(&mut self, target: u8, period: u8) {
-        if !self.counter_elapsed(period) {
+    /// `envelope_sustain_start` (`m4a.c:1125`): a zero `sustain` fraction ends
+    /// the note through the pseudo-echo path (`:1129`), which with no
+    /// pseudo-echo volume silences the channel; otherwise hold at
+    /// `sustain_goal` (`envelope_sustain`, `:1113`).
+    fn enter_sustain_start(&mut self) {
+        if self.adsr.sustain == 0 {
+            self.silence();
             return;
         }
-        if self.volume > target {
+        self.volume = self.sustain_goal;
+        self.phase = Phase::Sustain;
+        self.counter = 0;
+    }
+
+    /// The stop/release ramp: `-1` per `release` frames toward `0`, retiring
+    /// the voice once it arrives (`m4a.c:1087`, then `envelope_pseudoecho_start`
+    /// -> `oscillator_off`).
+    fn release_step(&mut self) {
+        if !self.counter_elapsed(self.adsr.release) {
+            return;
+        }
+        if self.volume > 0 {
             self.volume -= 1;
         }
-        if self.volume <= target {
-            self.volume = target;
+        if self.volume == 0 {
             self.active = false;
         }
+    }
+
+    /// Silence and retire the channel this frame (`oscillator_off`,
+    /// `m4a.c:1053`).
+    fn silence(&mut self) {
+        self.volume = 0;
+        self.active = false;
     }
 }
 
@@ -255,8 +306,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn attack_ramps_to_goal_then_decays_to_sustain() {
-        // period 0 -> one step per frame; goal 10, sustain fraction 8 (~half).
+    fn attack_zero_and_decay_zero_land_on_sustain_immediately() {
+        // attack==0 & decay==0 chains the whole goto sequence in a single
+        // frame: envelope_decay_start (decay==0) -> envelope_sustain_start ->
+        // envelope_sustain, landing on sustainGoal (m4a.c:1040, :1160, :1113).
+        // This test previously expected a one-level-per-frame ramp, which is
+        // the bug being fixed: zero-period phases are instant, not paced.
         let mut env = CgbEnvelope::new(
             CgbAdsr {
                 attack: 0,
@@ -266,12 +321,53 @@ mod tests {
             },
             10,
         );
+        env.step();
+        // sustain_goal = (10*8+15)>>4 = 5, reached on the first frame.
+        assert_eq!(env.volume(), 5, "should land on sustain_goal instantly");
+        // ...and then hold there.
         for _ in 0..10 {
             env.step();
         }
-        assert_eq!(env.volume(), 10, "attack should have reached the goal");
-        // sustain_goal = (10*8+15)>>4 = 5.
-        for _ in 0..10 {
+        assert_eq!(env.volume(), 5);
+    }
+
+    #[test]
+    fn attack_zero_with_nonzero_decay_starts_at_goal() {
+        // attack==0 skips the ramp (m4a.c:1039 goto envelope_decay_start);
+        // with a non-zero decay, envelopeVolume snaps to envelopeGoal on the
+        // first frame (m4a.c:1156) before the decay ramp paces it down.
+        let mut env = CgbEnvelope::new(
+            CgbAdsr {
+                attack: 0,
+                decay: 3,
+                sustain: 8,
+                release: 0,
+            },
+            10,
+        );
+        env.step();
+        assert_eq!(env.volume(), 10, "attack==0 lands on the goal, not ramped");
+    }
+
+    #[test]
+    fn nonzero_decay_paces_down_to_sustain() {
+        // Regression guard: a non-zero decay still steps one level per frame
+        // toward sustainGoal (m4a.c:1120), not instantly.
+        let mut env = CgbEnvelope::new(
+            CgbAdsr {
+                attack: 0,
+                decay: 1,
+                sustain: 8,
+                release: 0,
+            },
+            10,
+        );
+        env.step(); // attack==0 -> at goal
+        assert_eq!(env.volume(), 10);
+        env.step(); // first decay step: one level down, not a jump to sustain
+        assert_eq!(env.volume(), 9, "non-zero decay paces, not instant");
+        // sustain_goal = 5; paced down and then held.
+        for _ in 0..20 {
             env.step();
         }
         assert_eq!(env.volume(), 5);
@@ -299,7 +395,11 @@ mod tests {
     }
 
     #[test]
-    fn release_ramps_to_zero_and_retires() {
+    fn release_zero_silences_the_same_frame() {
+        // release==0 ends the note the same frame note_off takes effect:
+        // m4a.c:1071 goto envelope_pseudoecho_start; with no pseudo-echo volume
+        // the channel reaches oscillator_off (m4a.c:1102). This test previously
+        // expected a one-level-per-frame release ramp, which is the bug fixed.
         let mut env = CgbEnvelope::new(
             CgbAdsr {
                 attack: 0,
@@ -309,12 +409,38 @@ mod tests {
             },
             8,
         );
-        for _ in 0..8 {
-            env.step();
-        }
+        env.step();
+        // sustain_goal = (8*15+15)>>4 = 8, reached instantly.
         assert_eq!(env.volume(), 8);
+        assert!(env.is_active());
         env.note_off();
-        for _ in 0..8 {
+        env.step();
+        assert!(!env.is_active(), "release==0 silences the same frame");
+        assert_eq!(env.volume(), 0);
+    }
+
+    #[test]
+    fn nonzero_release_ramps_to_zero_and_retires() {
+        // Regression guard: a non-zero release still paces one level per frame
+        // to 0, retiring on arrival (m4a.c:1087, then envelope_pseudoecho_start
+        // -> oscillator_off).
+        let mut env = CgbEnvelope::new(
+            CgbAdsr {
+                attack: 0,
+                decay: 0,
+                sustain: 15,
+                release: 1,
+            },
+            4,
+        );
+        env.step();
+        // sustain_goal = (4*15+15)>>4 = 4.
+        assert_eq!(env.volume(), 4);
+        env.note_off();
+        env.step(); // first release step: one level down, not instant silence
+        assert_eq!(env.volume(), 3, "non-zero release paces, not instant");
+        assert!(env.is_active());
+        for _ in 0..20 {
             env.step();
         }
         assert!(!env.is_active());
