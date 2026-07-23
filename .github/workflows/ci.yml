@@ -10,11 +10,18 @@
 #
 # Jobs run sequentially via a needs: chain so a failure short-circuits the rest
 # of that matrix leg: version -> ledger -> fmt -> clippy -> build -> test ->
-# smoke. `smoke` runs `cargo xtask e2e --suite smoke` (F-3): a headless,
+# smoke. `smoke` runs `cargo run -p xtask --features smoke -- e2e --suite
+# smoke` plus `cargo test -p xtask --features smoke` (F-3): a headless,
 # in-process boot of the `pokeemerald-rs` shell (see crates/xtask/src/e2e.rs
 # and crates/platform's `Platform::new_headless`) proving V-1's smoke-E2E
-# leg. It is not yet a required check (see below) -- R-4 registers it once
-# the gate has proven stable.
+# leg. `pokeemerald-rs` is an optional dependency of `xtask` gated behind the
+# `smoke` cargo feature (see crates/xtask/Cargo.toml), so it must be passed
+# explicitly here -- the plain `cargo xtask` alias (.cargo/config.toml) does
+# not enable it, and the required `build`/`test` jobs above deliberately
+# build without it so they stay dependency-free of `platform`'s
+# cpal/winit/softbuffer (ALSA dev headers included). It is not yet a
+# required check (see below) -- R-4 registers it once the gate has proven
+# stable.
 #
 # Required status-check contexts for branch protection (R-4): `version` and
 # `ledger` report under their bare job names; the matrixed jobs report per OS —
@@ -138,5 +145,16 @@ jobs:
       - name: Install ALSA dev headers (Linux; crates/platform's cpal dependency links libasound at compile time)
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libasound2-dev
-      - name: cargo xtask e2e --suite smoke
-        run: cargo xtask e2e --suite smoke
+      # `--features smoke` is required: it's what pulls the optional
+      # `pokeemerald-rs` dependency (and `mod e2e`) into this build at all
+      # (see crates/xtask/Cargo.toml and crates/xtask/src/main.rs). The bare
+      # `cargo xtask` alias does not pass it, so this bypasses the alias.
+      - name: cargo run -p xtask --features smoke -- e2e --suite smoke
+        run: cargo run -p xtask --features smoke -- e2e --suite smoke
+      # Also run xtask's own test suite with the feature enabled, so the
+      # smoke-run unit tests (compiled in only under `--features smoke`,
+      # e.g. `crate::e2e::tests::smoke_suite_boots_cleanly_headless`) get
+      # exercised somewhere in CI -- deliberately not under the required
+      # `test` job's plain `cargo test --workspace` (see the header comment).
+      - name: cargo test -p xtask --features smoke
+        run: cargo test -p xtask --features smoke

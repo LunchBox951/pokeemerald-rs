@@ -2,22 +2,33 @@
 //!
 //! A hand-rolled dev runner (std only, no `clap`/`anyhow` for the CLI itself
 //! — `minimal-deps`; `crate::e2e`'s only dependency is the workspace-local
-//! `pokeemerald-rs` crate under test). Every subcommand parses and
-//! dispatches; a recognised-but-unimplemented subcommand fails *closed* —
-//! returning [`XtaskError::NotImplemented`] (non-zero exit) rather than
-//! exiting 0 — so the `RELEASE.md` gate commands (`e2e --suite …`) can never
-//! be satisfied by a no-op stub `(gated-by-default)`.
+//! `pokeemerald-rs` crate under test, and it is optional — see below). Every
+//! subcommand parses and dispatches; a recognised-but-unimplemented
+//! subcommand fails *closed* — returning [`XtaskError::NotImplemented`]
+//! (non-zero exit) rather than exiting 0 — so the `RELEASE.md` gate commands
+//! (`e2e --suite …`) can never be satisfied by a no-op stub
+//! `(gated-by-default)`.
 //!
 //! `e2e --suite smoke` (F-3, V-1) is real: see [`crate::e2e::run_smoke`] for
 //! the headless boot-shell run it drives. `extract` / `record-snapshot` /
 //! `scenario`, and the `e2e` `full`/`soak` suites, remain stubs.
 //!
-//! Run via the workspace alias: `cargo xtask <subcommand>`.
+//! `mod e2e` and its `pokeemerald-rs` dependency are gated behind the
+//! `smoke` cargo feature: a default `cargo build -p xtask` (every other
+//! subcommand) stays dependency-free, matching pre-PR `xtask`. Without the
+//! feature, `e2e --suite smoke` still fails *closed* — [`XtaskError::SmokeUnavailable`],
+//! not a silent no-op — telling the caller to rebuild with `--features
+//! smoke`.
+//!
+//! Run via the workspace alias: `cargo xtask <subcommand>` (add `--features
+//! smoke` for `e2e --suite smoke`, e.g.
+//! `cargo run -p xtask --features smoke -- e2e --suite smoke`).
 
 use std::error::Error;
 use std::fmt;
 use std::process::ExitCode;
 
+#[cfg(feature = "smoke")]
 mod e2e;
 
 /// Usage text shown on stderr for any parse error.
@@ -55,6 +66,11 @@ pub enum XtaskError {
     /// `e2e --suite smoke` ran but did not report a clean boot. Carries
     /// [`e2e::E2eError`]'s rendered message.
     SmokeFailed(String),
+    /// `e2e --suite smoke` was requested, but this `xtask` binary was built
+    /// without the `smoke` feature, so `mod e2e` (and its `pokeemerald-rs`
+    /// dependency) was not compiled in. Fails *closed* rather than silently
+    /// reporting success `(gated-by-default)` `(test-ratchet)`.
+    SmokeUnavailable,
 }
 
 impl fmt::Display for XtaskError {
@@ -84,6 +100,15 @@ impl fmt::Display for XtaskError {
             // failure, not a malformed invocation.
             Self::SmokeFailed(reason) => {
                 return write!(f, "error: `e2e --suite smoke` failed: {reason}");
+            }
+            // Likewise: a missing feature is a build-configuration problem,
+            // not a malformed invocation, so it gets no USAGE tail either.
+            Self::SmokeUnavailable => {
+                return write!(
+                    f,
+                    "error: `e2e --suite smoke` requires the `smoke` feature: rebuild with \
+                     `cargo run -p xtask --features smoke -- e2e --suite smoke`"
+                );
             }
         }
         write!(f, "{USAGE}")
@@ -208,28 +233,39 @@ fn parse_e2e(rest: &[String]) -> Result<(Suite, bool), XtaskError> {
 
 /// Dispatch a parsed command.
 ///
-/// `e2e --suite smoke` is real (F-3, V-1): see [`e2e::run_smoke`]. Every
-/// other subcommand — `extract`, `record-snapshot`, `scenario`, and the
-/// `e2e` `full`/`soak` suites — remains a stub: rather than exiting 0, each
-/// returns [`XtaskError::NotImplemented`] so the process fails *closed*
-/// (non-zero exit). The `RELEASE.md` promotion gates run these exact
-/// commands, so a stub that reported success would satisfy a gate with zero
-/// validation `(gated-by-default)` `(test-ratchet)`.
+/// `e2e --suite smoke` is real (F-3, V-1) when built with `--features
+/// smoke`: see [`e2e::run_smoke`]. Without that feature, the same command
+/// still fails *closed* — [`XtaskError::SmokeUnavailable`] — rather than
+/// silently no-opping. Every other subcommand — `extract`,
+/// `record-snapshot`, `scenario`, and the `e2e` `full`/`soak` suites —
+/// remains a stub: rather than exiting 0, each returns
+/// [`XtaskError::NotImplemented`] so the process fails *closed* (non-zero
+/// exit). The `RELEASE.md` promotion gates run these exact commands, so a
+/// stub that reported success would satisfy a gate with zero validation
+/// `(gated-by-default)` `(test-ratchet)`.
 ///
 /// # Errors
 ///
 /// Returns [`XtaskError::NotImplemented`] for every still-stubbed
-/// subcommand/suite, or [`XtaskError::SmokeFailed`] if `e2e --suite smoke`
-/// ran but did not report a clean boot.
+/// subcommand/suite, [`XtaskError::SmokeUnavailable`] if `e2e --suite smoke`
+/// was requested but this binary was built without the `smoke` feature, or
+/// [`XtaskError::SmokeFailed`] if `e2e --suite smoke` ran but did not report
+/// a clean boot.
 fn dispatch(cmd: &Command) -> Result<(), XtaskError> {
     match cmd {
         Command::Extract => Err(XtaskError::NotImplemented("extract")),
         Command::RecordSnapshot => Err(XtaskError::NotImplemented("record-snapshot")),
         Command::Scenario => Err(XtaskError::NotImplemented("scenario")),
+        #[cfg(feature = "smoke")]
         Command::E2e {
             suite: Suite::Smoke,
             ..
         } => e2e::run_smoke().map_err(|err| XtaskError::SmokeFailed(err.to_string())),
+        #[cfg(not(feature = "smoke"))]
+        Command::E2e {
+            suite: Suite::Smoke,
+            ..
+        } => Err(XtaskError::SmokeUnavailable),
         Command::E2e { .. } => Err(XtaskError::NotImplemented("e2e")),
     }
 }
@@ -431,9 +467,14 @@ mod tests {
         // RELEASE.md wires `xtask e2e --suite …` in as promotion gates, so a
         // stub exiting 0 would satisfy a gate with zero validation
         // `(gated-by-default)` `(test-ratchet)`. `e2e --suite smoke` is
-        // deliberately absent here (see `run_e2e_smoke_boots_cleanly`
-        // below): it is no longer a stub (F-3, V-1), and asserting it still
-        // failed would itself be testing for a regression, not a stub.
+        // deliberately absent here: with `--features smoke` it is no longer
+        // a stub (F-3, V-1) and is covered directly by
+        // `crate::e2e::tests::smoke_suite_boots_cleanly_headless` (the same
+        // headless boot, kept there rather than duplicated here; the
+        // dispatch routing itself is exercised by the CI smoke job's
+        // `cargo run` step); without the feature it fails closed a different
+        // way (see `e2e_smoke_without_feature_fails_closed` below), not as a
+        // `NotImplemented` stub.
         assert!(matches!(
             run(&args(&["extract"])).unwrap_err(),
             XtaskError::NotImplemented("extract")
@@ -448,11 +489,26 @@ mod tests {
         ));
     }
 
+    // Without `--features smoke`, `mod e2e` is not compiled in at all, so
+    // this binary must fail *closed* rather than silently no-opping
+    // `(gated-by-default)` `(test-ratchet)`. `cargo test --workspace` (the
+    // required CI job) builds without the feature, so this is exactly the
+    // path that job exercises for `e2e --suite smoke` — it must NOT run the
+    // real smoke boot (that stays confined to the non-required `smoke` CI
+    // job building with `--features smoke`; see
+    // `crate::e2e::tests::smoke_suite_boots_cleanly_headless`).
     #[test]
-    fn run_e2e_smoke_boots_cleanly() {
-        // `e2e --suite smoke` (F-3, V-1): real dispatch, not a stub. Runs
-        // the same headless in-process boot as `crate::e2e::run_smoke`.
-        assert!(run(&args(&["e2e", "--suite", "smoke"])).is_ok());
+    #[cfg(not(feature = "smoke"))]
+    fn e2e_smoke_without_feature_fails_closed() {
+        let err = run(&args(&["e2e", "--suite", "smoke"])).unwrap_err();
+        assert!(matches!(err, XtaskError::SmokeUnavailable));
+    }
+
+    #[test]
+    fn smoke_unavailable_display_names_the_feature_and_has_no_usage_tail() {
+        let rendered = XtaskError::SmokeUnavailable.to_string();
+        assert!(rendered.contains("--features smoke"));
+        assert!(!rendered.contains("usage: cargo xtask"));
     }
 
     #[test]

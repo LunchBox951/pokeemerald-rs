@@ -371,15 +371,21 @@ mod tests {
     }
 
     #[test]
-    fn headless_wait_for_next_frame_never_blocks() {
+    fn headless_wait_for_next_frame_never_consults_pacer() {
         // Regression: if this ever started sleeping, a smoke run driving
         // many frames headlessly would slow down for no visible benefit
-        // (there is no real display to pace against).
+        // (there is no real display to pace against). A wall-clock
+        // assertion here would be scheduler-sensitive and could flake under
+        // CI load, so instead this pins the actual code path: the null arm
+        // of `wait_for_next_frame` returns before ever calling
+        // `FramePacer::tick` (the only place `next_deadline` moves out of
+        // `None`, and the only place that can compute a nonzero wait to
+        // sleep on) — deterministic, and a direct check of the "never
+        // blocks" contract rather than a proxy for it.
         let mut platform = Platform::new_headless();
-        let start = std::time::Instant::now();
         for _ in 0..1000 {
             platform.wait_for_next_frame();
         }
-        assert!(start.elapsed() < std::time::Duration::from_millis(50));
+        assert!(!platform.pacer.has_ticked());
     }
 }
