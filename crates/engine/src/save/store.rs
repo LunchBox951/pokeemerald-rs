@@ -144,7 +144,10 @@ fn chunk_of(payload: &[u8], chunk_num: usize) -> &[u8] {
 /// bytes to recompute the checksum over).
 fn expected_len_for(id: u16) -> Option<usize> {
     if id == SECTOR_ID_SAVEBLOCK2 {
-        Some(SaveBlock2::PAYLOAD_LEN)
+        // The checksummed span is the 4-aligned serialized length, not the
+        // modeled byte count, so byte `PAYLOAD_LEN - 1` stays covered
+        // `(behavioral-fidelity)` — see [`SaveBlock2::PADDED_LEN`].
+        Some(SaveBlock2::PADDED_LEN)
     } else if (SECTOR_ID_SAVEBLOCK1_START..SECTOR_ID_SAVEBLOCK1_START + SAVE_BLOCK1_CHUNKS_U16)
         .contains(&id)
     {
@@ -340,48 +343,55 @@ impl SaveStore {
         SlotScan { status, counter }
     }
 
-    /// Resolve which physical slot (if any) is current, mirroring
-    /// `GetSaveValidStatus`'s decision table. Returns the overall
-    /// [`SaveStatus`], the winning physical slot index (`None` only when
-    /// both slots are [`SaveStatus::Empty`]), and the save counter to adopt.
-    fn resolve(a: &SlotScan, b: &SlotScan) -> (SaveStatus, Option<usize>, u32) {
+    /// Resolve the overall [`SaveStatus`] and the save counter to adopt,
+    /// mirroring `GetSaveValidStatus`'s decision table. Upstream returns only
+    /// a status and leaves `gSaveCounter` set to the adopted value; the
+    /// physical slot to read is then re-derived from that counter's parity in
+    /// `CopySaveSlotData`, so this returns no separate "winner" slot index.
+    fn resolve(a: &SlotScan, b: &SlotScan) -> (SaveStatus, u32) {
         use RawSlotStatus::{Empty, Error, Ok};
         match (a.status, b.status) {
             (Ok, Ok) => {
-                let winner = usize::from(counter_b_is_newer(a.counter, b.counter));
-                let counter = if winner == 0 { a.counter } else { b.counter };
-                (SaveStatus::Ok, Some(winner), counter)
+                let counter = if counter_b_is_newer(a.counter, b.counter) {
+                    b.counter
+                } else {
+                    a.counter
+                };
+                (SaveStatus::Ok, counter)
             }
-            (Ok, Error) => (SaveStatus::Error, Some(0), a.counter),
-            (Ok, Empty) => (SaveStatus::Ok, Some(0), a.counter),
-            (Error, Ok) => (SaveStatus::Error, Some(1), b.counter),
-            (Empty, Ok) => (SaveStatus::Ok, Some(1), b.counter),
-            (Empty, Empty) => (SaveStatus::Empty, None, 0),
+            (Ok, Error) => (SaveStatus::Error, a.counter),
+            (Ok, Empty) => (SaveStatus::Ok, a.counter),
+            (Error, Ok) => (SaveStatus::Error, b.counter),
+            (Empty, Ok) => (SaveStatus::Ok, b.counter),
+            (Empty, Empty) => (SaveStatus::Empty, 0),
             // Both slots have problems and neither is a clean OK: upstream
             // resets to slot 0 (`gSaveCounter = 0`) and still attempts a
             // best-effort copy from it.
-            (Error | Empty, Error) | (Error, Empty) => (SaveStatus::Corrupt, Some(0), 0),
+            (Error | Empty, Error) | (Error, Empty) => (SaveStatus::Corrupt, 0),
         }
     }
 
     /// Load the current save state, mirroring `TryLoadSaveSlot(
     /// FULL_SAVE_SLOT, ...)` -> `GetSaveValidStatus` + `CopySaveSlotData`.
     ///
-    /// Resolves which of the two slots is current (see [`SaveStatus`]) and
-    /// adopts its save counter (`gSaveCounter`). Then — exactly as upstream
-    /// `TryLoadSaveSlot` *always* calls `CopySaveSlotData` after
-    /// `GetSaveValidStatus`, regardless of the status just computed — scans
-    /// the slot `gSaveCounter % NUM_SAVE_SLOTS` now selects (slot 0 when
+    /// Resolves the overall status (see [`SaveStatus`]) and adopts a save
+    /// counter (`gSaveCounter`). Then — exactly as upstream `TryLoadSaveSlot`
+    /// *always* calls `CopySaveSlotData` after `GetSaveValidStatus`,
+    /// regardless of the status just computed — scans the slot the *adopted
+    /// counter's parity* selects (`gSaveCounter % NUM_SAVE_SLOTS`; slot 0 when
     /// both slots were empty, matching `GetSaveValidStatus` resetting
     /// `gSaveCounter` to 0 in that case) and copies every sector that
     /// individually validates (signature + checksum) into the returned
-    /// blocks. A slot that is [`SaveStatus::Error`] (one or more corrupt
-    /// sectors) or [`SaveStatus::Corrupt`] still yields whatever *did*
-    /// validate for its unaffected sectors.
+    /// blocks. The copied slot is chosen by counter parity, not by which slot
+    /// won validation — the two can differ when a payload-valid slot carries a
+    /// corrupted footer counter (see the copy-slot comment below). A slot that
+    /// is [`SaveStatus::Error`] (one or more corrupt sectors) or
+    /// [`SaveStatus::Corrupt`] still yields whatever *did* validate for its
+    /// unaffected sectors.
     #[must_use]
     pub fn load(&mut self) -> LoadOutcome {
         let scans = [self.scan_slot(0), self.scan_slot(1)];
-        let (status, winner, counter) = Self::resolve(&scans[0], &scans[1]);
+        let (status, counter) = Self::resolve(&scans[0], &scans[1]);
         self.save_counter = counter;
         // `GetSaveValidStatus` also resets `gLastWrittenSector = 0` in its
         // two terminal branches (both slots empty, both slots errored)
@@ -390,9 +400,15 @@ impl SaveStore {
         if matches!(status, SaveStatus::Empty | SaveStatus::Corrupt) {
             self.last_written_sector = 0;
         }
-        let copy_slot = winner.unwrap_or(0);
+        // `CopySaveSlotData` selects its slot purely from the adopted counter's
+        // parity — `NUM_SECTORS_PER_SLOT * (gSaveCounter % NUM_SAVE_SLOTS)` —
+        // *not* from `GetSaveValidStatus`'s physical winner. The footer counter
+        // is outside the payload checksum, so a payload-valid but
+        // counter-corrupted slot can make the two disagree; matching upstream
+        // means keying off the adopted counter here `(behavioral-fidelity)`.
+        let copy_slot = (self.save_counter % NUM_SAVE_SLOTS_U32) as usize;
 
-        let mut block2_bytes = vec![0u8; SaveBlock2::PAYLOAD_LEN];
+        let mut block2_bytes = vec![0u8; SaveBlock2::PADDED_LEN];
         let mut block1_bytes = vec![0u8; SaveBlock1::PAYLOAD_LEN];
 
         for i in 0..SECTORS_PER_SLOT_U16 {
@@ -447,7 +463,7 @@ impl SaveStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::save::block::{Coords16, PlayerGender, WarpData};
+    use crate::save::block::{Coords16, PlayerGender, WarpData, TRAINER_ID_LENGTH};
 
     #[test]
     fn counter_comparison_is_wraparound_aware() {
@@ -627,6 +643,80 @@ mod tests {
         assert_eq!(
             store.last_written_sector(),
             u16::try_from(in_slot0).unwrap()
+        );
+    }
+
+    #[test]
+    fn corrupting_the_last_saveblock2_payload_byte_is_detected() {
+        // Regression: `SaveBlock2::PAYLOAD_LEN` (13) isn't 4-aligned, so
+        // before the payload was zero-padded to `PADDED_LEN` the checksum's
+        // `chunks_exact(4)` dropped the final live byte —
+        // `player_trainer_id[3]`, at index `PAYLOAD_LEN - 1` — letting a
+        // corrupted trainer id pass validation. It must now be caught. The
+        // existing byte-0 corruption tests stay; this pins the *last* byte.
+        let mut store = SaveStore::new();
+        let block1 = sample_block1();
+        let block2 = sample_block2();
+
+        store.save(&block1, &block2); // slot 1 (counter 1)
+        store.save(&block1, &block2); // slot 0 is current (counter 2)
+
+        let sector_in_slot = store.find_sector_in_slot(0, SECTOR_ID_SAVEBLOCK2);
+        store.corrupt_byte(0, sector_in_slot, SaveBlock2::PAYLOAD_LEN - 1);
+
+        // The sector must fail validation over its (now 4-aligned) span.
+        assert!(!store
+            .read_physical(0, sector_in_slot)
+            .is_valid(SaveBlock2::PADDED_LEN));
+
+        // And load must fall back to slot 1's intact copy, not return Ok with
+        // the corrupted trainer id.
+        let outcome = store.load();
+        assert_eq!(outcome.status, SaveStatus::Error);
+        assert_eq!(outcome.block2, block2);
+        assert_eq!(store.save_counter(), 1);
+    }
+
+    #[test]
+    fn copy_slot_follows_adopted_counter_parity_not_validation_winner() {
+        // Regression for `CopySaveSlotData`'s slot selection: upstream copies
+        // from `NUM_SECTORS_PER_SLOT * (gSaveCounter % NUM_SAVE_SLOTS)` —
+        // purely the adopted counter's parity, not which slot won validation.
+        // The footer counter is outside the payload checksum, so corrupting
+        // only the counter keeps a slot payload-valid while flipping its
+        // parity, making the two disagree.
+        let mut store = SaveStore::new();
+        let block1 = sample_block1();
+        // Distinguish the slots by trainer id so the copied slot is
+        // identifiable.
+        let block2_slot1 = SaveBlock2 {
+            player_trainer_id: [0x11; TRAINER_ID_LENGTH],
+            ..sample_block2()
+        };
+        let block2_slot0 = SaveBlock2 {
+            player_trainer_id: [0x22; TRAINER_ID_LENGTH],
+            ..sample_block2()
+        };
+
+        store.save(&block1, &block2_slot1); // slot 1, counter 1
+        store.save(&block1, &block2_slot0); // slot 0, counter 2 (physical winner)
+
+        // Flip the low byte of every sector's footer counter in slot 0:
+        // 2 -> 253 (`2 ^ 0xFF`). Still the newest (253 > 1) so slot 0 remains
+        // the validation winner, but now odd — the same parity divergence as
+        // the doc's "2 -> 3" example, reachable via the XOR-flip test hook.
+        // The payload checksum is untouched, so slot 0 stays fully valid.
+        for i in 0..SECTORS_PER_SLOT {
+            store.corrupt_byte(0, i, SECTOR_SIZE - 4);
+        }
+
+        let outcome = store.load();
+        // Adopted counter is 253 (odd); upstream copies slot 253 % 2 == 1.
+        assert_eq!(store.save_counter(), 253);
+        assert_eq!(outcome.status, SaveStatus::Ok);
+        assert_eq!(
+            outcome.block2, block2_slot1,
+            "copy must follow counter parity (slot 1), not the validation winner (slot 0)"
         );
     }
 

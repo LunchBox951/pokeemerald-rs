@@ -245,17 +245,31 @@ pub struct SaveBlock2 {
 }
 
 impl SaveBlock2 {
-    /// The fixed length of [`SaveBlock2::to_bytes`]'s output.
+    /// The number of modeled payload bytes (8 name + 1 gender + 4 trainer id
+    /// = 13). Not 4-aligned, so it is *not* the serialized length — see
+    /// [`SaveBlock2::PADDED_LEN`], which [`SaveBlock2::to_bytes`] emits.
     pub const PAYLOAD_LEN: usize = PLAYER_NAME_BUF_LEN + 1 + TRAINER_ID_LENGTH;
 
+    /// The fixed length of [`SaveBlock2::to_bytes`]'s output: [`PAYLOAD_LEN`]
+    /// rounded up to a 4-byte boundary, with the trailing bytes zero-padded.
+    /// The sector checksum sums the payload as little-endian `u32` words
+    /// (`super::checksum`), so any non-4-aligned length would leave its last
+    /// live bytes outside the checksummed span `(behavioral-fidelity)`. This
+    /// mirrors upstream, whose `CalculateChecksum(data, sizeof(struct
+    /// SaveBlock2))` always covers everything because `sizeof` is 4-aligned.
+    ///
+    /// [`PAYLOAD_LEN`]: SaveBlock2::PAYLOAD_LEN
+    pub const PADDED_LEN: usize = Self::PAYLOAD_LEN.next_multiple_of(4);
+
     /// Serialize to this slice's `SaveBlock2` payload layout (see the module
-    /// docs — not upstream-offset-compatible).
+    /// docs — not upstream-offset-compatible), zero-padded to
+    /// [`SaveBlock2::PADDED_LEN`] so every live byte is checksum-covered.
     #[must_use]
-    pub fn to_bytes(&self) -> [u8; Self::PAYLOAD_LEN] {
-        let mut out = [0u8; Self::PAYLOAD_LEN];
+    pub fn to_bytes(&self) -> [u8; Self::PADDED_LEN] {
+        let mut out = [0u8; Self::PADDED_LEN];
         out[..PLAYER_NAME_BUF_LEN].copy_from_slice(&self.player_name);
         out[PLAYER_NAME_BUF_LEN] = self.player_gender.to_byte();
-        out[PLAYER_NAME_BUF_LEN + 1..].copy_from_slice(&self.player_trainer_id);
+        out[PLAYER_NAME_BUF_LEN + 1..Self::PAYLOAD_LEN].copy_from_slice(&self.player_trainer_id);
         out
     }
 
@@ -359,6 +373,17 @@ impl SaveBlock1 {
     }
 }
 
+// Regression guard for the checksum-coverage invariant: the serialized
+// payload length of every save block must be 4-aligned, because the sector
+// checksum (`super::checksum`) only sums whole little-endian `u32` words and
+// silently drops any trailing partial word. `SaveBlock2` reaches this via its
+// zero-padded `PADDED_LEN`; `SaveBlock1`'s chunked payload stays covered as
+// long as its own `PAYLOAD_LEN` is 4-aligned (every chunk but the last is a
+// full 4-aligned `SECTOR_DATA_SIZE`). Any future block that forgets to align
+// its payload fails to compile here rather than losing coverage at runtime.
+const _: () = assert!(SaveBlock2::PADDED_LEN.is_multiple_of(4));
+const _: () = assert!(SaveBlock1::PAYLOAD_LEN.is_multiple_of(4));
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -371,7 +396,10 @@ mod tests {
             player_trainer_id: [0x12, 0x34, 0x56, 0x78],
         };
         let bytes = block.to_bytes();
-        assert_eq!(bytes.len(), SaveBlock2::PAYLOAD_LEN);
+        assert_eq!(bytes.len(), SaveBlock2::PADDED_LEN);
+        // The padding bytes past the modeled fields must be zero, so the
+        // checksum over the padded span is deterministic.
+        assert!(bytes[SaveBlock2::PAYLOAD_LEN..].iter().all(|&b| b == 0));
         let restored = SaveBlock2::from_bytes(&bytes).unwrap();
         assert_eq!(restored, block);
     }
