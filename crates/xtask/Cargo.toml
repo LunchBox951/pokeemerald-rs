@@ -6,3 +6,19 @@ publish.workspace = true
 
 [lints]
 workspace = true
+
+[dependencies]
+# The `e2e --suite smoke` run (F-3, V-1) drives the boot shell's `App` in
+# headless mode, in-process (see `crate::e2e`) -- a workspace-local path
+# dependency, not an external crate, so `minimal-deps` owner approval does
+# not apply. Optional, gated behind the `smoke` feature: unconditionally
+# depending on `pokeemerald-rs` would transitively drag `platform` (and its
+# `cpal`/`winit`/`softbuffer`, i.e. ALSA dev headers on Linux) into every
+# `xtask` subcommand's build -- `extract`/`record-snapshot`/`scenario`
+# included -- when pre-PR `xtask` was std-only. Only `e2e --suite smoke`
+# needs it, so only `--features smoke` pulls it in; `cargo build -p xtask`
+# without the feature stays dependency-free.
+pokeemerald-rs = { path = "../pokeemerald-rs", optional = true }
+
+[features]
+smoke = ["dep:pokeemerald-rs"]
