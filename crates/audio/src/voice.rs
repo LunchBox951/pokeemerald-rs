@@ -48,6 +48,12 @@ pub struct Voice {
     midi_key: u8,
     /// Owning track index, so per-track note-off can find its voices.
     track: usize,
+    /// Monotonic note-on ordinal stamped by the mixer when the voice starts,
+    /// shared across DirectSound and CGB voices. `ply_note` prepends every new
+    /// channel — either kind — at the head of the track's one channel chain
+    /// (`m4a_1.s:1719`), so a higher ordinal is strictly newer; `ply_endtie`
+    /// releases the newest match by walking from the head (`m4a_1.s:1819`).
+    seq: u64,
 }
 
 impl Voice {
@@ -85,7 +91,21 @@ impl Voice {
             gate_time,
             midi_key,
             track,
+            seq: 0,
         }
+    }
+
+    /// Stamp this voice's shared note-on ordinal (see [`Self::seq`]). Called by
+    /// the mixer as it accepts the voice, so the counter lives on the owner
+    /// rather than in global state.
+    pub(crate) fn set_seq(&mut self, seq: u64) {
+        self.seq = seq;
+    }
+
+    /// This voice's shared note-on ordinal (higher is newer).
+    #[must_use]
+    pub(crate) fn seq(&self) -> u64 {
+        self.seq
     }
 
     /// Whether the voice is still producing sound.

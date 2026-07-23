@@ -583,7 +583,7 @@ impl Sequencer {
             }
             Instrument::CgbNoise(n) => {
                 mixer.add_cgb_voice(CgbVoice::noise(
-                    n.adsr, note_key, vol_mr, vol_ml, velocity, gate, key, track_id,
+                    n.adsr, note_key, n.period, vol_mr, vol_ml, velocity, gate, key, track_id,
                 ));
             }
         }
@@ -1400,6 +1400,7 @@ mod tests {
     #[test]
     fn a_cgb_noise_note_produces_sound_through_the_sequencer() {
         let voices = vec![Instrument::CgbNoise(NoiseTone {
+            period: 0,
             adsr: CgbAdsr::flat(),
         })];
         let song = Song::new(voices, vec![cgb_test_track()], 150);
@@ -1460,6 +1461,7 @@ mod tests {
         // channel) in immediate succession: the second retriggers the
         // channel rather than accumulating a second voice.
         let voices = vec![Instrument::CgbNoise(NoiseTone {
+            period: 0,
             adsr: CgbAdsr::flat(),
         })];
         let track = vec![

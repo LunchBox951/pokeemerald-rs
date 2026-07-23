@@ -56,6 +56,18 @@ fn oscillator_sample(osc: &mut Oscillator) -> i32 {
     }
 }
 
+/// The `NR43`-style noise control byte for `note_key`, with the instrument's
+/// width selector folded into bit 3 (`0x08`).
+///
+/// The `gNoiseTable` byte carries clock-shift and divisor bits but never the
+/// width bit (`m4a_tables.c:149`); `CgbSound` supplies it separately from the
+/// instrument via `*nrx3ptr = wavePointer << 3` (`m4a.c:1022`), whose low bit
+/// is `voice_noise`'s `period & 1` (`music_voice.inc:105`). Reproduced here by
+/// ORing that bit into the table byte.
+fn noise_control_byte(note_key: u8, period: u8) -> u8 {
+    midi_key_to_noise_control(note_key) | ((period & 1) << 3)
+}
+
 /// A live CGB PSG voice.
 #[derive(Clone, Debug)]
 pub struct CgbVoice {
@@ -72,6 +84,10 @@ pub struct CgbVoice {
     gate_time: u16,
     midi_key: u8,
     track: usize,
+    /// Monotonic note-on ordinal, shared with the DirectSound
+    /// [`crate::voice::Voice`]s so an end-of-tie can pick the newest match
+    /// across both kinds (see that type's `seq` field). Stamped by the mixer.
+    seq: u64,
 }
 
 impl CgbVoice {
@@ -134,12 +150,18 @@ impl CgbVoice {
     }
 
     /// Start a noise (channel 4) voice. Noise ignores fine pitch, matching
-    /// `MidiKeyToCgbFreq`'s noise branch (`m4a.c:812`).
+    /// `MidiKeyToCgbFreq`'s noise branch (`m4a.c:812`). `period` is the
+    /// instrument's width selector (`ToneData` byte from `voice_noise`'s
+    /// `period & 1`, `music_voice.inc:105`): its low bit becomes `NR43` bit 3
+    /// (`0x08`), which `CgbSound` sets via `*nrx3ptr = wavePointer << 3`
+    /// (`m4a.c:1022`) and which the `gNoiseTable` control byte never carries
+    /// itself — so it alone selects the LFSR's narrow (7-bit) mode.
     #[must_use]
     #[allow(clippy::too_many_arguments)]
     pub fn noise(
         adsr: CgbAdsr,
         note_key: u8,
+        period: u8,
         vol_mr: u8,
         vol_ml: u8,
         velocity: u8,
@@ -147,7 +169,7 @@ impl CgbVoice {
         midi_key: u8,
         track: usize,
     ) -> Self {
-        let control = midi_key_to_noise_control(note_key);
+        let control = noise_control_byte(note_key, period);
         let oscillator = Oscillator::Noise(NoiseChannel::from_control_byte(control));
         Self::new(
             CgbChannelNumber::Noise,
@@ -192,7 +214,20 @@ impl CgbVoice {
             gate_time,
             midi_key,
             track,
+            seq: 0,
         }
+    }
+
+    /// Stamp this voice's shared note-on ordinal (see [`Self::seq`]). Called by
+    /// the mixer as it accepts the voice.
+    pub(crate) fn set_seq(&mut self, seq: u64) {
+        self.seq = seq;
+    }
+
+    /// This voice's shared note-on ordinal (higher is newer).
+    #[must_use]
+    pub(crate) fn seq(&self) -> u64 {
+        self.seq
     }
 
     /// Which hardware channel slot this voice occupies.
@@ -257,6 +292,11 @@ impl CgbVoice {
     /// `keyM`/`pitM`, mirroring `MidiKeyToCgbFreq` re-runs in `MPlayMain`'s
     /// per-tick pitch pass (`m4a_1.s:1416`..`:1425`). Noise channels ignore
     /// `pit_m`, matching `MidiKeyToCgbFreq`'s noise branch.
+    ///
+    /// The noise retune only carries the table's clock/divisor bits; the width
+    /// selector set at note-on is preserved by [`NoiseChannel::retune`],
+    /// mirroring `CgbSound`'s `*nrx3ptr = (*nrx3ptr & 0x08) | frequency`
+    /// (`m4a.c:1200`).
     pub fn set_track_pitch(&mut self, key_m: i32, pit_m: u8) {
         let note_key = u8::try_from((i32::from(self.midi_key) + key_m).max(0) & 0xFF).unwrap_or(0);
         match &mut self.oscillator {
@@ -300,5 +340,52 @@ impl CgbVoice {
                 slot.0 += contribution;
             }
         }
+    }
+}
+
+#[cfg(test)]
+impl CgbVoice {
+    /// Whether this voice's noise oscillator is in narrow (7-bit) mode, or
+    /// `None` if it is not a noise voice.
+    fn noise_is_narrow(&self) -> Option<bool> {
+        match &self.oscillator {
+            Oscillator::Noise(n) => Some(n.is_narrow()),
+            _ => None,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn noise_control_byte_sets_width_bit_only_for_odd_period() {
+        // The `gNoiseTable` entry itself never carries the width bit
+        // (`m4a_tables.c:149`); the instrument's `period` supplies it.
+        assert_eq!(midi_key_to_noise_control(60) & 0x08, 0);
+        assert_eq!(noise_control_byte(60, 1) & 0x08, 0x08);
+        assert_eq!(noise_control_byte(60, 0) & 0x08, 0);
+    }
+
+    #[test]
+    fn noise_period_bit_drives_narrow_lfsr_mode() {
+        // A `period == 1` instrument must produce a narrow (periodic) noise
+        // channel; `period == 0` stays wide. Before the fix `NoiseTone`
+        // carried no period, so narrow mode was unreachable and every
+        // instrument played wide 15-bit noise.
+        let narrow = CgbVoice::noise(CgbAdsr::flat(), 60, 1, 0xFF, 0xFF, 127, 0, 60, 0);
+        assert_eq!(narrow.noise_is_narrow(), Some(true));
+        let wide = CgbVoice::noise(CgbAdsr::flat(), 60, 0, 0xFF, 0xFF, 127, 0, 60, 0);
+        assert_eq!(wide.noise_is_narrow(), Some(false));
+    }
+
+    #[test]
+    fn noise_retune_preserves_the_width_bit() {
+        // `MidiKeyToCgbFreq`'s noise retune supplies only clock/divisor bits;
+        // the width selector set at note-on survives (`m4a.c:1200`).
+        let mut narrow = CgbVoice::noise(CgbAdsr::flat(), 60, 1, 0xFF, 0xFF, 127, 0, 60, 0);
+        narrow.set_track_pitch(12, 0);
+        assert_eq!(narrow.noise_is_narrow(), Some(true));
     }
 }

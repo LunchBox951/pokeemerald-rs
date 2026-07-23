@@ -57,6 +57,12 @@ pub struct WaveTone {
 /// A CGB noise instrument (hardware channel 4).
 #[derive(Clone, Copy, Debug)]
 pub struct NoiseTone {
+    /// Width selector (`voice_noise`'s `period & 1`, `music_voice.inc:105`).
+    /// Its low bit becomes `NR43` bit 3 (`0x08`), selecting the LFSR's narrow
+    /// (7-bit periodic) mode; `0` leaves it in wide 15-bit mode. The
+    /// `gNoiseTable` control bytes never set this bit themselves, so it comes
+    /// only from the instrument (`m4a.c:1022`).
+    pub period: u8,
     pub adsr: CgbAdsr,
 }
 

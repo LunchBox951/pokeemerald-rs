@@ -309,11 +309,14 @@ impl NoiseChannel {
 
     /// Retune to a new control byte without resetting the LFSR, matching a
     /// live `NR43` rewrite on real hardware (only a channel *trigger*, not a
-    /// frequency change, resets the shift register).
+    /// frequency change, resets the shift register). The width selector (bit 3)
+    /// is preserved from the note-on control byte, not taken from `byte`,
+    /// mirroring `CgbSound`'s `*nrx3ptr = (*nrx3ptr & 0x08) | frequency`
+    /// (`m4a.c:1200`) — the retune frequency (a `gNoiseTable` entry) never
+    /// carries a width bit of its own.
     pub fn retune(&mut self, byte: u8) {
-        let (step_delta, narrow) = noise_control(byte);
+        let (step_delta, _narrow) = noise_control(byte);
         self.step_delta = step_delta;
-        self.narrow = narrow;
     }
 
     /// One Galois LFSR clock: feed back `!(bit0 ^ bit1)` into the top bit
@@ -333,6 +336,12 @@ impl NoiseChannel {
             }
         }
         self.output = if feedback == 1 { 1 } else { -1 };
+    }
+
+    /// Whether the channel is in narrow (7-bit periodic) mode.
+    #[cfg(test)]
+    pub(crate) fn is_narrow(&self) -> bool {
+        self.narrow
     }
 
     /// Produce the next bipolar unit sample (`-1` or `1`), clocking the LFSR
