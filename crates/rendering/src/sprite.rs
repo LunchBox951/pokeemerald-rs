@@ -24,9 +24,11 @@
 //! priority-supplying sprites can differ (see
 //! [`SpriteLayer::resolve_pixel`]) `(behavioral-fidelity)`.
 
+use crate::affine::AffineMatrix;
 use crate::framebuffer::Framebuffer;
-use crate::oam::OamEntry;
+use crate::oam::{AffineMode, OamEntry};
 use crate::palette::{Palette, Rgb888};
+use crate::sprite_affine;
 use crate::tile::{BitDepth, Tileset};
 
 /// One resolved, opaque sprite pixel: a color plus the OBJ priority it
@@ -63,11 +65,14 @@ pub struct SpriteLayer<'a> {
     tileset_4bpp: &'a Tileset,
     tileset_8bpp: &'a Tileset,
     palette: &'a Palette,
+    matrices: &'a [AffineMatrix],
 }
 
 impl<'a> SpriteLayer<'a> {
     /// Borrow a sprite entry list together with the tile/palette data it
-    /// draws from.
+    /// draws from. No affine parameter groups are attached — every entry
+    /// must be [`AffineMode::Regular`], or use
+    /// [`with_affine_matrices`](Self::with_affine_matrices) to attach them.
     #[must_use]
     pub const fn new(
         entries: &'a [OamEntry],
@@ -80,7 +85,21 @@ impl<'a> SpriteLayer<'a> {
             tileset_4bpp,
             tileset_8bpp,
             palette,
+            matrices: &[],
         }
+    }
+
+    /// Return a copy of this layer with `matrices` attached as the OAM
+    /// affine parameter groups (`gOamMatrices`) that [`AffineMode::Affine`]/
+    /// [`AffineMode::AffineDoubleSize`] entries select into by `matrix_num`
+    /// (S-2 slice 3, issue #98).
+    ///
+    /// A builder rather than a `new` parameter so every pre-affine call site
+    /// (S-2 slice 2) keeps working unchanged.
+    #[must_use]
+    pub const fn with_affine_matrices(mut self, matrices: &'a [AffineMatrix]) -> Self {
+        self.matrices = matrices;
+        self
     }
 
     /// Composite only the sprite layer into `framebuffer` (no BG layers) —
@@ -180,7 +199,12 @@ impl<'a> SpriteLayer<'a> {
     )]
     fn sample_entry(&self, entry: &OamEntry, x: usize, y: usize) -> Texel {
         const DIM: usize = BitDepth::TILE_DIM;
-        let (width, height) = entry.dimensions();
+        // Footprint clipping uses the *bounding box* — equal to
+        // `entry.dimensions()` for a regular or plain-affine sprite, but
+        // doubled for `AffineMode::AffineDoubleSize` (oam.rs's module docs)
+        // — so a double-size sprite's larger on-screen box is honored before
+        // any affine-specific sampling happens.
+        let (width, height) = entry.bounding_box();
 
         // X: no positional wrap (the 9-bit field already decoded to a
         // signed screen position, see oam.rs's module docs) — just
@@ -195,6 +219,23 @@ impl<'a> SpriteLayer<'a> {
         let dy = (y as i32 - i32::from(entry.y())).rem_euclid(OamEntry::Y_SPACE) as usize;
         if dy >= height {
             return Texel::Outside;
+        }
+
+        if !matches!(entry.affine(), AffineMode::Regular) {
+            // Affine (and affine-double-size) sampling is a genuinely
+            // different texture-space projection — h/v flip do not apply
+            // (the matrix supplies any mirroring; oam.rs's module docs) —
+            // handled by sprite_affine.rs, kept out of this already-large
+            // module.
+            return sprite_affine::sample_texel(
+                entry,
+                self.matrices,
+                self.tileset_4bpp,
+                self.tileset_8bpp,
+                self.palette,
+                dx as usize,
+                dy,
+            );
         }
 
         // H/V flip mirrors the whole sprite footprint, not each tile
@@ -247,7 +288,7 @@ impl<'a> SpriteLayer<'a> {
 /// with a transparent hole upgrade the OBJ priority of an opaque sprite
 /// beneath it (see [`SpriteLayer::resolve_pixel`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Texel {
+pub(crate) enum Texel {
     /// `(x, y)` lies beyond the sprite's footprint, or its tile is absent
     /// from the tileset — the sprite does not cover this pixel at all.
     Outside,
