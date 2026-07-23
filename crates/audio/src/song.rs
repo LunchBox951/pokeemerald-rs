@@ -48,9 +48,12 @@ pub struct SquareTone {
 pub struct WaveTone {
     /// Packed wave RAM: 16 bytes, two 4-bit samples each
     /// (see [`crate::psg::WaveChannel::decode_wave_ram`]).
+    ///
+    /// A programmable-wave instrument has no output-level field: upstream's
+    /// `voice_programmable_wave` carries only key/pan/wave-pointer and the ADSR
+    /// (`music_voice.inc`; `ToneData`, `m4a_internal.h:57`). Channel-3
+    /// amplitude comes solely from the envelope (`m4a.c:1211`).
     pub table: [u8; 16],
-    /// `NR32`-style output level code, `0..=3` (mute/100%/50%/25%).
-    pub volume_shift: u8,
     pub adsr: CgbAdsr,
 }
 

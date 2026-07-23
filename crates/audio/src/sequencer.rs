@@ -568,17 +568,7 @@ impl Sequencer {
             Instrument::CgbWave(w) => {
                 let samples = WaveChannel::decode_wave_ram(&w.table);
                 mixer.add_cgb_voice(CgbVoice::wave(
-                    samples,
-                    w.volume_shift,
-                    w.adsr,
-                    note_key,
-                    pit_m,
-                    vol_mr,
-                    vol_ml,
-                    velocity,
-                    gate,
-                    key,
-                    track_id,
+                    samples, w.adsr, note_key, pit_m, vol_mr, vol_ml, velocity, gate, key, track_id,
                 ));
             }
             Instrument::CgbNoise(n) => {
@@ -1416,7 +1406,6 @@ mod tests {
     fn a_cgb_wave_note_produces_sound_through_the_sequencer() {
         let voices = vec![Instrument::CgbWave(WaveTone {
             table: [0xFF; 16],
-            volume_shift: 1,
             adsr: CgbAdsr::flat(),
         })];
         let song = Song::new(voices, vec![cgb_test_track()], 150);

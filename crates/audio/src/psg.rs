@@ -98,6 +98,24 @@ impl Sweep {
         }
     }
 
+    /// Whether the overflow calc hardware runs *immediately at trigger* would
+    /// disable the channel. On note-on, if the sweep shift is non-zero the
+    /// unit runs one upward overflow check right away — regardless of the sweep
+    /// period, period `0` included (`mgba audio.c:184`, `_updateSweep(ch,
+    /// true)`; the upward branch disables when `frequency + (frequency >>
+    /// shift) >= 2048`, `audio.c:975`..`:986`). A subtract-direction sweep
+    /// never disables at trigger (its result can only fall, `audio.c:969`), so
+    /// this reports `true` only for an additive sweep with non-zero shift whose
+    /// first step would overflow `0x7FF`.
+    #[must_use]
+    pub fn overflows_at_trigger(&self) -> bool {
+        if self.subtract || self.shift == 0 {
+            return false;
+        }
+        let delta = self.frequency >> self.shift;
+        self.frequency + delta > 0x7FF
+    }
+
     /// Advance the sweep unit by one render frame.
     pub fn tick(&mut self) -> SweepResult {
         if self.period == 0 {
@@ -142,6 +160,11 @@ pub struct SquareChannel {
     phase: u32,
     step_delta: u32,
     sweep: Option<Sweep>,
+    /// Set when the channel-1 sweep's trigger-time overflow check already fired
+    /// (see [`Sweep::overflows_at_trigger`]): the channel is born dead and the
+    /// voice layer must treat it as immediately inactive, exactly as a sweep
+    /// overflow on a later tick retires it.
+    disabled: bool,
 }
 
 impl SquareChannel {
@@ -152,14 +175,23 @@ impl SquareChannel {
     /// through, `m4a.c:998`).
     #[must_use]
     pub fn new(duty: u8, freq_reg: u16, sweep: Option<Sweep>) -> Self {
+        let disabled = sweep.as_ref().is_some_and(Sweep::overflows_at_trigger);
         let mut chan = Self {
             duty: duty & 0x03,
             phase: 0,
             step_delta: 0,
             sweep,
+            disabled,
         };
         chan.set_frequency(freq_reg);
         chan
+    }
+
+    /// Whether this channel was born dead because its sweep's trigger-time
+    /// overflow check already fired (see [`Sweep::overflows_at_trigger`]).
+    #[must_use]
+    pub fn is_disabled(&self) -> bool {
+        self.disabled
     }
 
     /// Retune to a new 11-bit frequency register value.
@@ -198,14 +230,18 @@ impl SquareChannel {
 }
 
 /// The programmable wave channel (CGB hardware channel 3): 32 four-bit
-/// samples read cyclically at a frequency-derived rate, attenuated by a
-/// coarse `NR32`-style volume code.
+/// samples read cyclically at a frequency-derived rate.
+///
+/// The channel carries no output-level byte of its own: upstream's
+/// `voice_programmable_wave` instrument has no level field (`music_voice.inc`;
+/// `ToneData`, `m4a_internal.h:57`), and channel-3 amplitude comes *solely*
+/// from the envelope, which the driver quantises through `gCgb3Vol` when
+/// writing `NR32` (`*nrx2ptr = gCgb3Vol[envelopeVolume]`, `m4a.c:1211`). That
+/// stepped level is applied in the voice's render path
+/// ([`crate::cgb_voice`]); this generator emits the raw decoded nibble.
 #[derive(Clone, Debug)]
 pub struct WaveChannel {
     samples: [i8; 32],
-    /// `0` mutes, `1` is full volume, `2` halves it, `3` quarters it —
-    /// `NR32`'s two-bit output-level field.
-    volume_shift: u8,
     phase: u32,
     step_delta: u32,
 }
@@ -230,10 +266,9 @@ impl WaveChannel {
 
     /// A wave channel over already-decoded `samples` at `freq_reg`.
     #[must_use]
-    pub fn new(samples: [i8; 32], volume_shift: u8, freq_reg: u16) -> Self {
+    pub fn new(samples: [i8; 32], freq_reg: u16) -> Self {
         let mut chan = Self {
             samples,
-            volume_shift: volume_shift.min(3),
             phase: 0,
             step_delta: 0,
         };
@@ -247,17 +282,13 @@ impl WaveChannel {
         self.step_delta = phase_delta(hz, 32.0);
     }
 
-    /// Produce the next sample, in `-8..=7` before the volume code shift.
+    /// Produce the next decoded nibble sample, in `-8..=7`. Channel-3 output
+    /// level is applied later from the envelope (see the type's doc comment),
+    /// not here.
     pub fn sample(&mut self) -> i8 {
         let step = (self.phase / PHASE_ONE) as usize & 0x1F;
         self.phase = self.phase.wrapping_add(self.step_delta);
-        let raw = self.samples[step];
-        match self.volume_shift {
-            0 => 0,
-            1 => raw,
-            2 => raw >> 1,
-            _ => raw >> 2,
-        }
+        self.samples[step]
     }
 }
 
@@ -418,6 +449,37 @@ mod tests {
     }
 
     #[test]
+    fn upward_sweep_overflow_disables_the_channel_at_trigger() {
+        // Hardware runs the overflow calc immediately on trigger when the sweep
+        // shift is non-zero, regardless of the sweep period — period 0 included
+        // (`mgba audio.c:184`). A high starting frequency with an upward shift
+        // overflows 0x7FF and the channel is born dead.
+        let period_zero = Sweep::from_byte(0b0000_0001, 0x700); // period 0, add, shift 1
+        assert!(period_zero.overflows_at_trigger());
+        assert!(SquareChannel::new(2, 0x700, Some(period_zero)).is_disabled());
+
+        let with_period = Sweep::from_byte(0b0011_0001, 0x700); // period 3, add, shift 1
+        assert!(with_period.overflows_at_trigger());
+    }
+
+    #[test]
+    fn trigger_overflow_spares_normal_and_downward_sweeps() {
+        // A frequency whose first upward step stays within 0x7FF is untouched.
+        let normal = Sweep::from_byte(0b0000_0001, 0x100); // add, shift 1: 0x100 + 0x80
+        assert!(!normal.overflows_at_trigger());
+        assert!(!SquareChannel::new(2, 0x100, Some(normal)).is_disabled());
+
+        // A subtract-direction sweep never disables at trigger (its result can
+        // only fall), even from a high frequency.
+        let down = Sweep::from_byte(0b0000_1001, 0x700); // subtract, shift 1
+        assert!(!down.overflows_at_trigger());
+
+        // Shift 0 never runs the trigger check at all.
+        let no_shift = Sweep::from_byte(0b0000_0000, 0x7FF); // add, shift 0
+        assert!(!no_shift.overflows_at_trigger());
+    }
+
+    #[test]
     fn wave_ram_decodes_high_nibble_first() {
         let bytes = [0xF0, 0x08, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
         let samples = WaveChannel::decode_wave_ram(&bytes);
@@ -430,15 +492,16 @@ mod tests {
     }
 
     #[test]
-    fn wave_channel_volume_shift_attenuates_samples() {
+    fn wave_channel_emits_raw_decoded_nibbles() {
+        // The wave generator carries no output-level of its own — that comes
+        // solely from the envelope via `gCgb3Vol` in the voice render path
+        // (`m4a.c:1211`). `sample()` returns the decoded nibble unattenuated,
+        // so a full-swing entry reads back as its raw `-8..=7` value.
         let bytes = [0xF0; 16]; // every decoded sample[0] is 0xF - 8 = 7
         let full = WaveChannel::decode_wave_ram(&bytes);
-        let mut muted = WaveChannel::new(full, 0, 0);
-        let mut quarter = WaveChannel::new(full, 3, 0);
-        muted.step_delta = 0; // stay on sample 0
-        quarter.step_delta = 0;
-        assert_eq!(muted.sample(), 0);
-        assert_eq!(quarter.sample(), 7 >> 2);
+        let mut chan = WaveChannel::new(full, 0);
+        chan.step_delta = 0; // stay on sample 0
+        assert_eq!(chan.sample(), 7);
     }
 
     #[test]

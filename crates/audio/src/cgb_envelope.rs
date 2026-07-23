@@ -83,7 +83,17 @@ impl CgbEnvelope {
             sustain_goal,
             phase: Phase::Attack,
             volume: 0,
-            counter: 0,
+            // Arm-on-entry: note-on sets `envelopeCounter = attack` (m4a.c:1031)
+            // with `envelopeVolume = 0` (:1034), then the note-on frame renders
+            // volume 0 and only decrements the counter via `goto
+            // envelope_step_complete` (:1035, decrement at :1176) — no step
+            // fires that frame. The first `+1` increment lands exactly `attack`
+            // frames later. This crate's step machine is decrement-first
+            // (fires the frame the counter hits 0, like `sustain_step`), so the
+            // extra `+1` here reserves that note-on frame the driver renders at
+            // volume 0 before the ramp begins. `attack == 0` (instant) ignores
+            // the counter entirely (see [`Self::attack_step`]).
+            counter: adsr.attack.saturating_add(1),
             stop: false,
             active: true,
         }
@@ -111,11 +121,17 @@ impl CgbEnvelope {
     /// Request note-off: subsequent steps ramp down by `release` per step.
     pub fn note_off(&mut self) {
         self.stop = true;
-        // The stop transition reloads the envelope counter (`m4a.c:1063`,
-        // `envelopeCounter = release`) so the release ramp paces from a clean
-        // start regardless of where the interrupted phase's counter stood — in
-        // particular the live 7-frame counter a sustaining note now carries.
-        self.counter = 0;
+        // The stop transition arms the release counter (`m4a.c:1063`,
+        // `envelopeCounter = release`) so the ramp paces from a clean start
+        // regardless of where the interrupted phase's counter stood — in
+        // particular the live 7-frame counter a sustaining note carries. As at
+        // note-on, the note-off frame itself renders the *held* level and only
+        // decrements the counter (`goto envelope_step_complete`, m4a.c:1067);
+        // the note holds its current volume for `release` frames before the
+        // first `-1`. The `+1` reserves that held note-off frame for this
+        // crate's decrement-first machine (matching [`Self::new`]). `release ==
+        // 0` silences the same frame, ignoring the counter (see [`Self::step`]).
+        self.counter = self.adsr.release.saturating_add(1);
     }
 
     /// Retire the voice immediately (e.g. a channel-1 sweep overflow, which
@@ -166,27 +182,32 @@ impl CgbEnvelope {
         }
     }
 
-    /// Wait out `period` frames, then return `true` exactly on the frame a
-    /// step should apply. Only called with a non-zero `period`; zero-period
-    /// phases never pace — they transition instantly (see [`Self::step`]).
-    fn counter_elapsed(&mut self, period: u8) -> bool {
-        if self.counter > 0 {
-            self.counter -= 1;
-            return false;
-        }
-        self.counter = period;
-        true
+    /// Decrement this phase's frame counter and report whether it just reached
+    /// zero — the frame a paced step fires. The counter is *armed on entry* to
+    /// the phase ([`Self::new`], [`Self::enter_decay`], [`Self::note_off`]) and
+    /// reloaded by the caller only while the phase continues, the same
+    /// decrement-first `counter -= 1; fire at 0` shape [`Self::sustain_step`]
+    /// uses. Upstream decrements `envelopeCounter` once per frame at
+    /// `envelope_step_complete` (`m4a.c:1176`) and fires the next frame whose
+    /// `envelope_step_repeat` sees it at zero (`m4a.c:1080`). Only ever called
+    /// with a non-zero armed counter; zero-period phases transition instantly
+    /// and never reach here (see [`Self::step`]).
+    fn counter_reached_zero(&mut self) -> bool {
+        self.counter -= 1;
+        self.counter == 0
     }
 
     /// Attack phase. `attack == 0` skips the ramp entirely (`m4a.c:1039` goto
     /// `envelope_decay_start`); otherwise `+1` per `attack` frames toward
-    /// `goal` (`m4a.c:1147`, `:1167`), entering decay once it arrives.
+    /// `goal` (`m4a.c:1147`, `:1167`), entering decay once it arrives. The
+    /// counter was armed on entry, so the first increment lands `attack` frames
+    /// after note-on rather than on the first frame.
     fn attack_step(&mut self) {
         if self.adsr.attack == 0 {
             self.enter_decay();
             return;
         }
-        if !self.counter_elapsed(self.adsr.attack) {
+        if !self.counter_reached_zero() {
             return;
         }
         if self.volume < self.goal {
@@ -194,6 +215,8 @@ impl CgbEnvelope {
         }
         if self.volume >= self.goal {
             self.enter_decay();
+        } else {
+            self.counter = self.adsr.attack;
         }
     }
 
@@ -207,14 +230,17 @@ impl CgbEnvelope {
         }
         self.volume = self.goal;
         self.phase = Phase::Decay;
-        self.counter = 0;
+        // Arm-on-entry: `envelope_decay_start` loads `envelopeCounter = decay`
+        // (`m4a.c:1156`). The transition frame is consumed here, so the first
+        // `-1` lands `decay` frames later — decrement-first from `decay`.
+        self.counter = self.adsr.decay;
     }
 
     /// Decay phase (only entered with a non-zero `decay`): `-1` per `decay`
     /// frames toward `sustain_goal` (`m4a.c:1120`, `:1142`), entering the
     /// sustain start once it arrives.
     fn decay_step(&mut self) {
-        if !self.counter_elapsed(self.adsr.decay) {
+        if !self.counter_reached_zero() {
             return;
         }
         if self.volume > self.sustain_goal {
@@ -222,6 +248,8 @@ impl CgbEnvelope {
         }
         if self.volume <= self.sustain_goal {
             self.enter_sustain_start();
+        } else {
+            self.counter = self.adsr.decay;
         }
     }
 
@@ -262,7 +290,7 @@ impl CgbEnvelope {
     /// the voice once it arrives (`m4a.c:1087`, then `envelope_pseudoecho_start`
     /// -> `oscillator_off`).
     fn release_step(&mut self) {
-        if !self.counter_elapsed(self.adsr.release) {
+        if !self.counter_reached_zero() {
             return;
         }
         if self.volume > 0 {
@@ -270,6 +298,8 @@ impl CgbEnvelope {
         }
         if self.volume == 0 {
             self.active = false;
+        } else {
+            self.counter = self.adsr.release;
         }
     }
 
@@ -398,6 +428,15 @@ mod tests {
 
     #[test]
     fn attack_period_paces_the_ramp() {
+        // Corrected cadence (was: an immediate first increment on frame 0 with
+        // an `attack + 1` steady interval — the bug being fixed). Upstream arms
+        // `envelopeCounter = attack` at note-on with `envelopeVolume = 0`
+        // (m4a.c:1031, :1034); the note-on frame renders volume 0 and only
+        // decrements the counter (:1035 goto envelope_step_complete, :1176), so
+        // the FIRST +1 lands exactly `attack` frames after note-on and the
+        // steady interval is exactly `attack` frames (:1147, :1167). Traced by
+        // hand for attack == 2: frames 0,1 render 0; frame 2 -> 1; frames 3
+        // renders 1; frame 4 -> 2.
         let mut env = CgbEnvelope::new(
             CgbAdsr {
                 attack: 2,
@@ -407,13 +446,15 @@ mod tests {
             },
             4,
         );
-        env.step(); // immediate first step: volume 1
+        env.step(); // frame 0 (note-on frame): still 0
+        assert_eq!(env.volume(), 0);
+        env.step(); // frame 1: still 0
+        assert_eq!(env.volume(), 0);
+        env.step(); // frame 2 == attack: first increment
         assert_eq!(env.volume(), 1);
-        env.step(); // waiting
+        env.step(); // frame 3: holding between steps
         assert_eq!(env.volume(), 1);
-        env.step(); // waiting
-        assert_eq!(env.volume(), 1);
-        env.step(); // second step: volume 2
+        env.step(); // frame 4 == 2*attack: second increment
         assert_eq!(env.volume(), 2);
     }
 
@@ -444,9 +485,15 @@ mod tests {
 
     #[test]
     fn nonzero_release_ramps_to_zero_and_retires() {
-        // Regression guard: a non-zero release still paces one level per frame
-        // to 0, retiring on arrival (m4a.c:1087, then envelope_pseudoecho_start
-        // -> oscillator_off).
+        // Corrected cadence (was: an immediate `-1` on the first frame after
+        // note-off — the shortened-tail bug being fixed). Note-off arms
+        // `envelopeCounter = release` (m4a.c:1063) and the note-off frame
+        // renders the *held* level, only decrementing the counter (:1067 goto
+        // envelope_step_complete, :1176); the note holds for `release` frames
+        // before the first `-1`, which then paces one level per frame to 0,
+        // retiring on arrival (:1087 -> envelope_pseudoecho_start ->
+        // oscillator_off). Traced for release == 1: the note-off frame holds 4,
+        // then frame +1 -> 3, +2 -> 2, ... down to 0.
         let mut env = CgbEnvelope::new(
             CgbAdsr {
                 attack: 0,
@@ -460,9 +507,11 @@ mod tests {
         // sustain_goal = (4*15+15)>>4 = 4.
         assert_eq!(env.volume(), 4);
         env.note_off();
-        env.step(); // first release step: one level down, not instant silence
-        assert_eq!(env.volume(), 3, "non-zero release paces, not instant");
+        env.step(); // note-off frame: holds the current level, no `-1` yet
+        assert_eq!(env.volume(), 4, "release holds for `release` frames first");
         assert!(env.is_active());
+        env.step(); // first paced `-1`
+        assert_eq!(env.volume(), 3, "non-zero release paces, not instant");
         for _ in 0..20 {
             env.step();
         }
