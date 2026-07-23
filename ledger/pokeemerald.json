@@ -25377,6 +25377,36 @@
     },
     "src/m4a.c": {
       "artifacts": {
+        "CgbModVol": {
+          "reason": "CgbModVol's envelope-goal/sustain-goal resolution re-implemented as cgb_envelope::cgb_envelope_goal + CgbEnvelope::new/set_goal (S-3 slice 2).",
+          "rust_target": "crates/audio/src/cgb_envelope.rs",
+          "spec": "S-3",
+          "status": "rewritten"
+        },
+        "CgbOscOff": {
+          "fold_target": "crates/audio/src/cgb_envelope.rs",
+          "reason": "CgbOscOff's immediate-silence effect is absorbed by CgbEnvelope::retire (called on a channel-1 sweep overflow); this crate has no hardware NRxx registers to zero (S-3 slice 2).",
+          "spec": "S-3",
+          "status": "folded"
+        },
+        "CgbPan": {
+          "reason": "CgbPan's hard-pan-vs-centre decision re-implemented as cgb_envelope::cgb_pan (S-3 slice 2).",
+          "rust_target": "crates/audio/src/cgb_envelope.rs",
+          "spec": "S-3",
+          "status": "rewritten"
+        },
+        "CgbSound": {
+          "reason": "CgbSound's per-hardware-channel envelope/oscillator/pan loop re-implemented as cgb_voice::CgbVoice, driven from Mixer::mix_frame (S-3 slice 2).",
+          "rust_target": "crates/audio/src/cgb_voice.rs",
+          "spec": "S-3",
+          "status": "rewritten"
+        },
+        "MidiKeyToCgbFreq": {
+          "reason": "MidiKeyToCgbFreq re-implemented behaviourally as cgb_pitch::midi_key_to_cgb_freq_reg/midi_key_to_noise_control (S-3 slice 2).",
+          "rust_target": "crates/audio/src/cgb_pitch.rs",
+          "spec": "S-3",
+          "status": "rewritten"
+        },
         "MidiKeyToFreq": {
           "reason": "MidiKeyToFreq + umul3232H32 re-implemented behaviourally as pitch::midi_key_to_freq/umul3232_hi (S-3 slice 1).",
           "rust_target": "crates/audio/src/pitch.rs",
@@ -25384,7 +25414,7 @@
           "status": "rewritten"
         },
         "TrkVolPitSet": {
-          "reason": "TrkVolPitSet vol/pan+pitch resolution re-implemented as sequencer::track_volume/track_pitch (S-3 slice 1).",
+          "reason": "TrkVolPitSet vol/pan+pitch resolution re-implemented as sequencer::track_volume/track_pitch (S-3 slice 1); slice 2 extends both with the MOD/MODT modM folding (amplitude/pan/pitch vibrato).",
           "rust_target": "crates/audio/src/sequencer.rs",
           "spec": "S-3",
           "status": "rewritten"
@@ -25396,6 +25426,18 @@
     },
     "src/m4a_tables.c": {
       "artifacts": {
+        "gCgbFreqTable": {
+          "reason": "CGB per-octave frequency-register-delta table reproduced as cgb_pitch::CGB_FREQ_TABLE (S-3 slice 2).",
+          "rust_target": "crates/audio/src/cgb_pitch.rs",
+          "spec": "S-3",
+          "status": "ported"
+        },
+        "gCgbScaleTable": {
+          "reason": "CGB MIDI-key scale table reproduced as cgb_pitch::CGB_SCALE_TABLE, backing midi_key_to_cgb_freq_reg (S-3 slice 2).",
+          "rust_target": "crates/audio/src/cgb_pitch.rs",
+          "spec": "S-3",
+          "status": "ported"
+        },
         "gClockTable": {
           "reason": "Note-length clock table reproduced as sequence::CLOCK_TABLE for wait/note decoding (S-3 slice 1).",
           "rust_target": "crates/audio/src/sequence.rs",
@@ -25405,6 +25447,12 @@
         "gFreqTable": {
           "reason": "Per-octave Q32 frequency-ratio table reproduced as pitch::FREQ_TABLE (S-3 slice 1).",
           "rust_target": "crates/audio/src/pitch.rs",
+          "spec": "S-3",
+          "status": "ported"
+        },
+        "gNoiseTable": {
+          "reason": "Noise-channel NR43 control-byte table reproduced as cgb_pitch::NOISE_TABLE, backing midi_key_to_noise_control (S-3 slice 2).",
+          "rust_target": "crates/audio/src/cgb_pitch.rs",
           "spec": "S-3",
           "status": "ported"
         },
@@ -25854,6 +25902,50 @@
       "status": "pending"
     },
     "src/save.c": {
+      "artifacts": {
+        "CalculateChecksum": {
+          "reason": "Sum-32bit-words-then-fold-to-16-bits checksum re-implemented as checksum::checksum, verified against independently hand-computed vectors",
+          "rust_target": "crates/engine/src/save/checksum.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "CopySaveSlotData": {
+          "reason": "Per-sector copy-if-valid from the winning slot, including the unconditional id==0 gLastWrittenSector recovery, re-implemented inline in SaveStore::load",
+          "rust_target": "crates/engine/src/save/store.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "GetSaveValidStatus": {
+          "reason": "Per-slot signature/checksum scan plus the OK/Empty/Corrupt/Error decision table, including the save-counter wraparound comparison, re-implemented as SaveStore::scan_slot + SaveStore::resolve",
+          "rust_target": "crates/engine/src/save/store.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "HandleWriteSector": {
+          "reason": "Per-sector footer build (id/signature/counter/checksum) plus rotated physical placement re-implemented as SaveStore::save's per-sector loop, over Sector::write",
+          "rust_target": "crates/engine/src/save/store.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "ReadFlashSector": {
+          "reason": "Raw sector read re-implemented as SaveStore::read_physical over the in-memory Vec<u8> buffer instead of ReadFlash",
+          "rust_target": "crates/engine/src/save/store.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "TryLoadSaveSlot": {
+          "reason": "GetSaveValidStatus + CopySaveSlotData composition (FULL_SAVE_SLOT path) re-implemented as SaveStore::load",
+          "rust_target": "crates/engine/src/save/store.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "WriteSaveSectorOrSlot": {
+          "reason": "Full-slot write with gLastWrittenSector/gSaveCounter advance re-implemented as SaveStore::save (the FULL_SAVE_SLOT path; the single-sector path is never reached upstream either)",
+          "rust_target": "crates/engine/src/save/store.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        }
+      },
       "category": "code.source",
       "kind": "file",
       "status": "pending"

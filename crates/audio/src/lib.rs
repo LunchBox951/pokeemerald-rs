@@ -2,18 +2,28 @@
 //!
 //! This crate re-implements the *behaviour* of `pokeemerald`'s M4A sound
 //! driver `(behavioral-fidelity)` — no GBA emulation, no transliterated C
-//! `(no-verbatim)`. Slice 1 covers the DirectSound (PCM) music path:
+//! `(no-verbatim)`. Slice 1 covers the DirectSound (PCM) music path; slice 2
+//! adds the four CGB PSG channels, LFO/vibrato, and pattern execution:
 //!
 //! - [`sequence`] — the typed track model and the decoder that turns MP2K's
 //!   byte-coded command stream into [`Event`]s once, ahead of playback.
-//! - [`song`] — a loaded [`Song`] (voicegroup + decoded tracks).
-//! - [`envelope`] — the per-voice ADSR state machine.
+//! - [`song`] — a loaded [`Song`] (voicegroup + decoded tracks); its
+//!   [`song::Instrument`] selects a DirectSound sample or a CGB PSG kind.
+//! - [`envelope`] — the per-voice DirectSound ADSR state machine.
 //! - [`voice`] — one playing DirectSound [`Voice`]: pitch-stepped, interpolated
 //!   sample playback shaped by an envelope.
-//! - [`mixer`] — the software [`Mixer`] that sums voices to interleaved stereo
-//!   `f32` and clips.
+//! - [`cgb_pitch`] — MIDI key → CGB hardware frequency register / noise
+//!   control byte.
+//! - [`psg`] — the four CGB PSG waveform generators (square/wave/noise).
+//! - [`cgb_envelope`] — the CGB hardware's coarse `0..=15` envelope, plus its
+//!   `CgbPan`/`CgbModVol` stereo-routing helpers.
+//! - [`cgb_voice`] — one playing CGB [`cgb_voice::CgbVoice`], tying an
+//!   oscillator, envelope, and panning together.
+//! - [`mixer`] — the software [`Mixer`] that sums DirectSound and CGB voices
+//!   to interleaved stereo `f32` and clips.
 //! - [`sequencer`] — the owned [`Sequencer`] tying it together: the tick engine
-//!   plus an offline, device-free rendering path ([`Sequencer::mix_into`]).
+//!   (including LFO/vibrato and `PATT`/`PEND`/`REPT` pattern execution) plus
+//!   an offline, device-free rendering path ([`Sequencer::mix_into`]).
 //! - [`pitch`] — the MIDI-key → frequency table and the fixed-point step math.
 //!
 //! Everything renders at exactly [`pitch::MIXER_RATE`] (13379 Hz), the rate the
@@ -21,10 +31,10 @@
 //!
 //! ## Out of scope for this slice
 //!
-//! CGB PSG channels (square/wave/noise), reverb, SFX priority/interruption and
-//! voice stealing, the M4A player command interface, compressed/fixed-rate
-//! waves, LFO/vibrato, and patterns (`PATT`/`PEND`/`REPT`). Commands the engine
-//! does not yet execute are still *decoded* so the byte stream stays in sync.
+//! Reverb, SFX priority/interruption and voice stealing, the M4A player
+//! command interface, compressed/fixed-rate DirectSound waves, and the CGB
+//! pseudo-echo tail. `MEMACC` and `XCMD` are still only *decoded*, not
+//! executed, so the byte stream stays in sync.
 
 // This crate's docs cite upstream C symbols and hardware names heavily
 // (DirectSound, MP2K, SongHeader, …); backticking every prose mention adds
@@ -32,22 +42,28 @@
 // close names (volMR/volML, keyM/pitM) taken verbatim from the reference.
 #![allow(clippy::doc_markdown, clippy::similar_names)]
 
+pub mod cgb_envelope;
+pub mod cgb_pitch;
+pub mod cgb_voice;
 pub mod envelope;
 pub mod mixer;
 pub mod pitch;
+pub mod psg;
 pub mod sample;
 pub mod sequence;
 pub mod sequencer;
 pub mod song;
 pub mod voice;
 
+pub use cgb_envelope::{CgbAdsr, CgbEnvelope};
+pub use cgb_voice::CgbVoice;
 pub use envelope::{Adsr, Envelope, Phase};
 pub use mixer::{Mixer, DEFAULT_MASTER_VOLUME, DEFAULT_MAX_VOICES};
 pub use pitch::{MIXER_RATE, SAMPLES_PER_FRAME};
 pub use sample::WaveData;
 pub use sequence::{decode_track, DecodeError, Event};
 pub use sequencer::Sequencer;
-pub use song::{Song, ToneData};
+pub use song::{Instrument, Song, ToneData};
 pub use voice::Voice;
 
 #[cfg(test)]
@@ -79,7 +95,11 @@ mod tests {
             13_697_024,
             vec![80; SAMPLES_PER_FRAME * 4],
         ));
-        let song = Song::new(vec![ToneData::new(wave, Adsr::flat())], vec![events], 150);
+        let song = Song::new(
+            vec![Instrument::DirectSound(ToneData::new(wave, Adsr::flat()))],
+            vec![events],
+            150,
+        );
         let mut seq = Sequencer::new(song);
 
         // Render two frames' worth of audio.
