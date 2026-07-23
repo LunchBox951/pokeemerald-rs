@@ -11668,14 +11668,18 @@
     "data/tilesets/primary/building": {
       "category": "data.tileset",
       "kind": "dir",
-      "spec_owner": "05-assets",
-      "status": "pending"
+      "reason": "Full directory extracted into the local gitignored asset pack (issue #81, Discussion #71 policy A, F-3's real cargo xtask extract): tiles.png + every anim/**/*.png frame decoded via the std-only PNG/inflate decoder, all 16 palettes/NN.pal decoded via the JASC-PAL parser, and metatiles.bin/metatile_attributes.bin copied as opaque raw blobs. Read back with typed access via AssetPack::tileset in crates/assets/src/pack.rs. Metatile-to-tile decoding itself remains a future rendering-layer slice.",
+      "rust_target": "crates/xtask/src/extract/mod.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "data/tilesets/primary/general": {
       "category": "data.tileset",
       "kind": "dir",
-      "spec_owner": "05-assets",
-      "status": "pending"
+      "reason": "Full directory extracted into the local gitignored asset pack (issue #81, Discussion #71 policy A, F-3's real cargo xtask extract): tiles.png + every anim/**/*.png frame decoded via the std-only PNG/inflate decoder (crates/xtask/src/extract/png.rs, inflate.rs), all 16 palettes/NN.pal decoded via the JASC-PAL parser (jasc_pal.rs), and metatiles.bin/metatile_attributes.bin copied as opaque raw blobs. Read back with typed access via AssetPack::tileset in crates/assets/src/pack.rs. Metatile-to-tile decoding itself remains a future rendering-layer slice.",
+      "rust_target": "crates/xtask/src/extract/mod.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "data/tilesets/primary/secret_base": {
       "category": "data.tileset",
@@ -11758,8 +11762,10 @@
     "data/tilesets/secondary/brendans_mays_house": {
       "category": "data.tileset",
       "kind": "dir",
-      "spec_owner": "05-assets",
-      "status": "pending"
+      "reason": "Full directory extracted into the local gitignored asset pack (issue #81, Discussion #71 policy A, F-3's real cargo xtask extract): tiles.png decoded via the std-only PNG/inflate decoder, all 16 palettes/NN.pal decoded via the JASC-PAL parser, and metatiles.bin/metatile_attributes.bin copied as opaque raw blobs. This is the protagonist's-room tileset (I-3). Read back with typed access via AssetPack::tileset in crates/assets/src/pack.rs.",
+      "rust_target": "crates/xtask/src/extract/mod.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "data/tilesets/secondary/cable_club": {
       "category": "data.tileset",
@@ -11854,8 +11860,10 @@
     "data/tilesets/secondary/lab": {
       "category": "data.tileset",
       "kind": "dir",
-      "spec_owner": "05-assets",
-      "status": "pending"
+      "reason": "Full directory extracted into the local gitignored asset pack (issue #81, Discussion #71 policy A, F-3's real cargo xtask extract): tiles.png decoded via the std-only PNG/inflate decoder, all 16 palettes/NN.pal decoded via the JASC-PAL parser, and metatiles.bin/metatile_attributes.bin copied as opaque raw blobs. Read back with typed access via AssetPack::tileset in crates/assets/src/pack.rs.",
+      "rust_target": "crates/xtask/src/extract/mod.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "data/tilesets/secondary/lavaridge": {
       "category": "data.tileset",
@@ -11956,8 +11964,10 @@
     "data/tilesets/secondary/petalburg": {
       "category": "data.tileset",
       "kind": "dir",
-      "spec_owner": "05-assets",
-      "status": "pending"
+      "reason": "Full directory extracted into the local gitignored asset pack (issue #81, Discussion #71 policy A, F-3's real cargo xtask extract): tiles.png decoded via the std-only PNG/inflate decoder, all 16 palettes/NN.pal decoded via the JASC-PAL parser, and metatiles.bin/metatile_attributes.bin copied as opaque raw blobs (no anim/ subdirectory in this tileset). Read back with typed access via AssetPack::tileset in crates/assets/src/pack.rs.",
+      "rust_target": "crates/xtask/src/extract/mod.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "data/tilesets/secondary/petalburg_gym": {
       "category": "data.tileset",
@@ -13612,8 +13622,10 @@
     "graphics/object_events/pics/people": {
       "category": "graphics.object_event",
       "kind": "dir",
-      "spec_owner": "05-assets",
-      "status": "pending"
+      "reason": "Every PNG in the directory (133 files: Brendan's and May's own animation sheets plus the full upstream NPC roster) decoded via the std-only PNG/inflate decoder into the local gitignored asset pack (issue #81, Discussion #71 policy A, F-3's real cargo xtask extract). Brendan's and May's real in-game palettes (object_events/palettes/{brendan,may}.pal) are extracted alongside as the two unambiguous player-character palette matches; the broader NPC roster's per-character palette assignment (the object_event_graphics_info indirection table) is not modelled and remains a future slice. Read back via AssetPack::sprite/sprite_palette in crates/assets/src/pack.rs.",
+      "rust_target": "crates/xtask/src/extract/mod.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/object_events/pics/pokemon": {
       "category": "graphics.object_event",
@@ -16060,8 +16072,10 @@
     "graphics/title_screen": {
       "category": "graphics.scene",
       "kind": "dir",
-      "spec_owner": "05-assets",
-      "status": "pending"
+      "reason": "Full directory extracted into the local gitignored asset pack (issue #81, Discussion #71 policy A, F-3's real cargo xtask extract): all 6 PNGs decoded via the std-only PNG/inflate decoder, all 3 .pal files decoded via the JASC-PAL parser, and the 3 .bin tile-arrangement files copied as opaque raw blobs (their internal layout is not decoded). Gates I-2 (title screen). Read back via AssetPack::image/palette/raw in crates/assets/src/pack.rs.",
+      "rust_target": "crates/xtask/src/extract/mod.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/trade": {
       "category": "graphics.ui",

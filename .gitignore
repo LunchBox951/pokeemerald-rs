@@ -5,6 +5,12 @@
 /pokeemerald
 /mgba
 
+# The local, gitignored asset pack `cargo xtask extract` produces (S-4, F-3,
+# issue #81, Discussion #71 policy A). Never committed, never a CI artifact,
+# never embedded in a binary or release archive — see
+# `crates/xtask/src/extract/mod.rs`'s module docs.
+/assets-pack
+
 # Rust build output
 /target/
 **/*.rs.bk
