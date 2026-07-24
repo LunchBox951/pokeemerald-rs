@@ -17827,6 +17827,20 @@
       "status": "pending"
     },
     "include/global.h": {
+      "artifacts": {
+        "ItemSlotAndBagPocketLayouts": {
+          "reason": "ItemSlot layout and Emerald fixed pocket capacities implemented as the typed Bag serialization boundary",
+          "rust_target": "crates/engine/src/save/bag.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "SaveBlockPartyMoneyWarpOffsets": {
+          "reason": "Exact SaveBlock1 and SaveBlock2 sizes and modeled offsets for identity, encryption key, warps, party, money, bag, flags, and vars implemented in full-size zero-filled payloads",
+          "rust_target": "crates/engine/src/save/block.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        }
+      },
       "category": "code.header",
       "kind": "file",
       "status": "pending"
@@ -18187,6 +18201,14 @@
       "status": "pending"
     },
     "include/pokemon.h": {
+      "artifacts": {
+        "BoxPokemonAndPartyPokemonLayouts": {
+          "reason": "Exact 80-byte BoxPokemon and 100-byte party Pokemon layouts implemented with raw header preservation and typed party-only fields",
+          "rust_target": "crates/engine/src/save/pokemon.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        }
+      },
       "category": "code.header",
       "kind": "file",
       "status": "pending"
@@ -25322,6 +25344,14 @@
       "status": "pending"
     },
     "src/item.c": {
+      "artifacts": {
+        "BagQuantityEncryption": {
+          "reason": "Bag quantity XOR serialization with the encryption key low 16 bits re-implemented while inventory mutation behavior remains pending",
+          "rust_target": "crates/engine/src/save/bag.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        }
+      },
       "category": "code.source",
       "kind": "file",
       "status": "pending"
@@ -25597,6 +25627,14 @@
       "status": "pending"
     },
     "src/money.c": {
+      "artifacts": {
+        "MoneyEncryption": {
+          "reason": "Money XOR serialization with the full 32-bit SaveBlock2 encryption key re-implemented while economy behavior remains pending",
+          "rust_target": "crates/engine/src/save/block.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        }
+      },
       "category": "code.source",
       "kind": "file",
       "status": "pending"
@@ -25750,6 +25788,14 @@
       "status": "pending"
     },
     "src/pokemon.c": {
+      "artifacts": {
+        "PokemonSubstructureSerialization": {
+          "reason": "All 24 personality orders, personality-XOR-OT-id encryption, wrapping secure checksum validation, and checksum-aware substructure replacement re-implemented",
+          "rust_target": "crates/engine/src/save/pokemon.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        }
+      },
       "category": "code.source",
       "kind": "file",
       "status": "pending"

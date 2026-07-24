@@ -20,13 +20,11 @@
 //! are otherwise unchanged from upstream and generalize cleanly to a larger
 //! `SECTORS_PER_SLOT` once Pokémon storage lands.
 //!
-//! `SaveBlock1`'s payload is still chunked across up to
+//! The full-size `SaveBlock1` payload is chunked across all
 //! [`SAVE_BLOCK1_CHUNKS`] sectors the way `SAVEBLOCK_CHUNK` computes it
 //! upstream (`offset = chunkNum * SECTOR_DATA_SIZE`, `size =
-//! min(len - offset, SECTOR_DATA_SIZE)` if `len >= offset` else `0`), even
-//! though today's small payload only ever fills chunk 0 — the chunking
-//! mechanism itself is what future slices need as the modeled `SaveBlock1`
-//! grows.
+//! min(len - offset, SECTOR_DATA_SIZE)` if `len >= offset` else `0`).
+//! PC Pokémon storage and its nine additional sectors remain deferred.
 //!
 //! # Simplifications
 //!
@@ -116,10 +114,15 @@ pub struct LoadOutcome {
 ///     ? min(sizeof(structure) - chunkNum * SECTOR_DATA_SIZE, SECTOR_DATA_SIZE)
 ///     : 0
 /// ```
-fn chunk_len(total_len: usize, chunk_num: usize) -> usize {
+const fn chunk_len(total_len: usize, chunk_num: usize) -> usize {
     let offset = chunk_num * SECTOR_DATA_SIZE;
-    if total_len >= offset {
-        (total_len - offset).min(SECTOR_DATA_SIZE)
+    if total_len > offset {
+        let remaining = total_len - offset;
+        if remaining < SECTOR_DATA_SIZE {
+            remaining
+        } else {
+            SECTOR_DATA_SIZE
+        }
     } else {
         0
     }
@@ -144,10 +147,7 @@ fn chunk_of(payload: &[u8], chunk_num: usize) -> &[u8] {
 /// bytes to recompute the checksum over).
 fn expected_len_for(id: u16) -> Option<usize> {
     if id == SECTOR_ID_SAVEBLOCK2 {
-        // The checksummed span is the 4-aligned serialized length, not the
-        // modeled byte count, so byte `PAYLOAD_LEN - 1` stays covered
-        // `(behavioral-fidelity)` — see [`SaveBlock2::PADDED_LEN`].
-        Some(SaveBlock2::PADDED_LEN)
+        Some(SaveBlock2::PAYLOAD_LEN)
     } else if (SECTOR_ID_SAVEBLOCK1_START..SECTOR_ID_SAVEBLOCK1_START + SAVE_BLOCK1_CHUNKS_U16)
         .contains(&id)
     {
@@ -287,7 +287,7 @@ impl SaveStore {
     /// whichever physical slot `gSaveCounter % NUM_SAVE_SLOTS` now selects.
     pub fn save(&mut self, block1: &SaveBlock1, block2: &SaveBlock2) {
         let block2_bytes = block2.to_bytes();
-        let block1_bytes = block1.to_bytes();
+        let block1_bytes = block1.to_bytes(block2.encryption_key);
 
         let new_last_written_sector = (self.last_written_sector + 1) % SECTORS_PER_SLOT_U16;
         let new_save_counter = self.save_counter.wrapping_add(1);
@@ -408,7 +408,7 @@ impl SaveStore {
         // means keying off the adopted counter here `(behavioral-fidelity)`.
         let copy_slot = (self.save_counter % NUM_SAVE_SLOTS_U32) as usize;
 
-        let mut block2_bytes = vec![0u8; SaveBlock2::PADDED_LEN];
+        let mut block2_bytes = vec![0u8; SaveBlock2::PAYLOAD_LEN];
         let mut block1_bytes = vec![0u8; SaveBlock1::PAYLOAD_LEN];
 
         for i in 0..SECTORS_PER_SLOT_U16 {
@@ -450,7 +450,8 @@ impl SaveStore {
         }
 
         let block2 = SaveBlock2::from_bytes(&block2_bytes).unwrap_or_default();
-        let block1 = SaveBlock1::from_bytes(&block1_bytes).unwrap_or_default();
+        let block1 =
+            SaveBlock1::from_bytes(&block1_bytes, block2.encryption_key).unwrap_or_default();
 
         LoadOutcome {
             status,
@@ -460,10 +461,17 @@ impl SaveStore {
     }
 }
 
+const _: () = assert!(chunk_len(SaveBlock1::PAYLOAD_LEN, 0) == 3968);
+const _: () = assert!(chunk_len(SaveBlock1::PAYLOAD_LEN, 1) == 3968);
+const _: () = assert!(chunk_len(SaveBlock1::PAYLOAD_LEN, 2) == 3968);
+const _: () = assert!(chunk_len(SaveBlock1::PAYLOAD_LEN, 3) == 3848);
+const _: () = assert!(chunk_len(SaveBlock1::PAYLOAD_LEN, SAVE_BLOCK1_CHUNKS) == 0);
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::save::block::{Coords16, PlayerGender, WarpData, TRAINER_ID_LENGTH};
+    use crate::save::{BoxPokemon, ItemSlot, Pokemon, PokemonSubstructures};
 
     #[test]
     fn counter_comparison_is_wraparound_aware() {
@@ -483,6 +491,7 @@ mod tests {
             player_name: *b"RUSTY\xFF\0\0",
             player_gender: PlayerGender::Female,
             player_trainer_id: [1, 2, 3, 4],
+            encryption_key: 0xA1B2_C3D4,
         }
     }
 
@@ -496,7 +505,44 @@ mod tests {
                 x: 4,
                 y: 5,
             },
+            continue_game_warp: WarpData {
+                map_group: -4,
+                map_num: 5,
+                warp_id: -6,
+                x: -700,
+                y: 800,
+            },
+            last_heal_location: WarpData {
+                map_group: 7,
+                map_num: -8,
+                warp_id: 9,
+                x: 1_000,
+                y: -1_100,
+            },
+            player_party_count: 6,
+            player_party: std::array::from_fn(sample_pokemon),
+            money: 987_654,
             ..SaveBlock1::default()
+        };
+        block.bag.items[0] = ItemSlot {
+            item_id: 1,
+            quantity: 99,
+        };
+        block.bag.key_items[29] = ItemSlot {
+            item_id: 2,
+            quantity: 1,
+        };
+        block.bag.poke_balls[15] = ItemSlot {
+            item_id: 3,
+            quantity: 42,
+        };
+        block.bag.tms_hms[63] = ItemSlot {
+            item_id: 4,
+            quantity: 7,
+        };
+        block.bag.berries[45] = ItemSlot {
+            item_id: 5,
+            quantity: 88,
         };
         block.event_data.flag_set(42).unwrap();
         block
@@ -504,6 +550,33 @@ mod tests {
             .var_set(crate::event_data::VARS_START, 777)
             .unwrap();
         block
+    }
+
+    fn sample_pokemon(index: usize) -> Pokemon {
+        let byte = u8::try_from(index).unwrap();
+        let mut box_data = BoxPokemon::new(
+            24 + u32::try_from(index).unwrap(),
+            0xDEAD_0000 | u32::try_from(index).unwrap(),
+        );
+        box_data.set_substructures(&PokemonSubstructures {
+            growth: [byte; 12],
+            attacks: [byte.wrapping_add(1); 12],
+            evs_and_condition: [byte.wrapping_add(2); 12],
+            misc: [byte.wrapping_add(3); 12],
+        });
+        Pokemon {
+            box_data,
+            status: 0x1000_0000 + u32::try_from(index).unwrap(),
+            level: 20 + byte,
+            mail: 30 + byte,
+            hp: 40 + u16::from(byte),
+            max_hp: 50 + u16::from(byte),
+            attack: 60 + u16::from(byte),
+            defense: 70 + u16::from(byte),
+            speed: 80 + u16::from(byte),
+            special_attack: 90 + u16::from(byte),
+            special_defense: 100 + u16::from(byte),
+        }
     }
 
     #[test]
@@ -528,6 +601,12 @@ mod tests {
         assert_eq!(outcome.block2, block2);
         assert_eq!(outcome.block1.pos, block1.pos);
         assert_eq!(outcome.block1.location, block1.location);
+        assert_eq!(outcome.block1.continue_game_warp, block1.continue_game_warp);
+        assert_eq!(outcome.block1.last_heal_location, block1.last_heal_location);
+        assert_eq!(outcome.block1.player_party_count, block1.player_party_count);
+        assert_eq!(outcome.block1.player_party, block1.player_party);
+        assert_eq!(outcome.block1.money, block1.money);
+        assert_eq!(outcome.block1.bag, block1.bag);
         assert_eq!(outcome.block1.event_data.flag_get(42), Ok(true));
         assert_eq!(
             outcome
@@ -619,6 +698,28 @@ mod tests {
     }
 
     #[test]
+    fn corrupted_later_block1_sector_falls_back_to_the_intact_slot() {
+        let mut store = SaveStore::new();
+        let mut older = sample_block1();
+        older.pos.x = 111;
+        let mut newer = sample_block1();
+        newer.pos.x = 222;
+        let block2 = sample_block2();
+
+        store.save(&older, &block2);
+        store.save(&newer, &block2);
+
+        let later_id = SECTOR_ID_SAVEBLOCK1_START + 3;
+        let later_sector = store.find_sector_in_slot(0, later_id);
+        store.corrupt_byte(0, later_sector, 0);
+
+        let outcome = store.load();
+        assert_eq!(outcome.status, SaveStatus::Error);
+        assert_eq!(outcome.block1.pos.x, 111);
+        assert_eq!(store.save_counter(), 1);
+    }
+
+    #[test]
     fn both_slots_corrupt_reports_corrupt_status() {
         let mut store = SaveStore::new();
         let block1 = sample_block1();
@@ -648,12 +749,8 @@ mod tests {
 
     #[test]
     fn corrupting_the_last_saveblock2_payload_byte_is_detected() {
-        // Regression: `SaveBlock2::PAYLOAD_LEN` (13) isn't 4-aligned, so
-        // before the payload was zero-padded to `PADDED_LEN` the checksum's
-        // `chunks_exact(4)` dropped the final live byte —
-        // `player_trainer_id[3]`, at index `PAYLOAD_LEN - 1` — letting a
-        // corrupted trainer id pass validation. It must now be caught. The
-        // existing byte-0 corruption tests stay; this pins the *last* byte.
+        // The entire exact-size block, including deferred bytes, remains
+        // checksum-covered. Pin the final byte as a boundary regression.
         let mut store = SaveStore::new();
         let block1 = sample_block1();
         let block2 = sample_block2();
@@ -664,10 +761,10 @@ mod tests {
         let sector_in_slot = store.find_sector_in_slot(0, SECTOR_ID_SAVEBLOCK2);
         store.corrupt_byte(0, sector_in_slot, SaveBlock2::PAYLOAD_LEN - 1);
 
-        // The sector must fail validation over its (now 4-aligned) span.
+        // The sector must fail validation over the full 4-aligned span.
         assert!(!store
             .read_physical(0, sector_in_slot)
-            .is_valid(SaveBlock2::PADDED_LEN));
+            .is_valid(SaveBlock2::PAYLOAD_LEN));
 
         // And load must fall back to slot 1's intact copy, not return Ok with
         // the corrupted trainer id.
@@ -737,6 +834,13 @@ mod tests {
 
     #[test]
     fn chunk_len_matches_the_saveblock_chunk_macro_semantics() {
+        assert_eq!(
+            (0..SAVE_BLOCK1_CHUNKS)
+                .map(|chunk| chunk_len(SaveBlock1::PAYLOAD_LEN, chunk))
+                .collect::<Vec<_>>(),
+            [3968, 3968, 3968, 3848]
+        );
+
         // A payload that exactly fills one chunk and spills one byte into
         // the next.
         let total = SECTOR_DATA_SIZE + 1;

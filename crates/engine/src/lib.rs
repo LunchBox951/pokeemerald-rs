@@ -13,11 +13,10 @@
 //! - [`event_data`] — the event flags/vars store: bit-packed flag storage,
 //!   var storage with the `VARS_START` offset, and the temp/special id-space
 //!   semantics (issue #65).
-//! - [`save`] — save system slice 1: typed `SaveBlock1`/`SaveBlock2` models
-//!   over the state modeled so far (player identity, [`event_data`]
-//!   flags/vars, a position stub), plus a versioned, checksummed, rotating
-//!   two-slot save store faithful to upstream's flash sector layout (issue
-//!   #94).
+//! - [`save`] — upstream-offset-compatible `SaveBlock1`/`SaveBlock2` models
+//!   for identity, location/warps, party Pokémon, money, bag contents, and
+//!   [`event_data`] flags/vars, plus a checksummed rotating two-slot store
+//!   faithful to upstream's flash layout (issues #94/#117).
 
 pub mod event_data;
 pub mod rng;
