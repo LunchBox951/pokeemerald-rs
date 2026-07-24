@@ -26,7 +26,8 @@
 
 use crate::affine::AffineMatrix;
 use crate::framebuffer::Framebuffer;
-use crate::oam::{AffineMode, OamEntry};
+use crate::mosaic::MosaicSize;
+use crate::oam::{AffineMode, OamEntry, ObjMode};
 use crate::palette::{Palette, Rgb888};
 use crate::sprite_affine;
 use crate::tile::{BitDepth, Tileset};
@@ -46,6 +47,14 @@ pub struct SpritePixel {
     pub color: Rgb888,
     /// The winning OBJ priority (`0..=3`).
     pub priority: u8,
+    /// Whether the sprite that set [`priority`](Self::priority) — which, per
+    /// the struct docs, may differ from the one that supplied
+    /// [`color`](Self::color) — has [`ObjMode::SemiTransparent`] (OAM mode
+    /// 1). When set, the cross-layer compositor forces this pixel to
+    /// alpha-blend against whatever's behind it, overriding whichever color
+    /// effect was actually selected (S-2 slice 4, issue #99; see
+    /// [`crate::effects::resolve_pixel_color`]).
+    pub semi_transparent: bool,
 }
 
 /// The full regular-sprite OBJ layer: up to 128 [`OamEntry`] values plus the
@@ -144,17 +153,49 @@ impl<'a> SpriteLayer<'a> {
     /// one that supplied [`SpritePixel::color`] `(behavioral-fidelity)`.
     #[must_use]
     pub fn resolve_pixel(&self, x: usize, y: usize) -> Option<SpritePixel> {
+        self.resolve_pixel_inner(x, y, MosaicSize::NONE)
+    }
+
+    /// Resolve the winning sprite pixel at `(x, y)`, mosaic-snapping
+    /// mosaic-enabled entries' sampling coordinate to their `mosaic`
+    /// block's origin first (S-2 slice 4, issue #99; see [`crate::mosaic`]).
+    /// Otherwise identical to [`resolve_pixel`](Self::resolve_pixel), which
+    /// is exactly this method called with [`MosaicSize::NONE`] (a no-op
+    /// snap), so it stays byte-for-byte unaffected by this parameter.
+    #[must_use]
+    pub fn resolve_pixel_with_mosaic(
+        &self,
+        x: usize,
+        y: usize,
+        mosaic: MosaicSize,
+    ) -> Option<SpritePixel> {
+        self.resolve_pixel_inner(x, y, mosaic)
+    }
+
+    /// Shared implementation behind [`resolve_pixel`](Self::resolve_pixel)
+    /// and [`resolve_pixel_with_mosaic`](Self::resolve_pixel_with_mosaic).
+    ///
+    /// [`ObjMode::Window`] entries are skipped entirely — they contribute
+    /// only to the `OBJWIN` mask ([`Self::objwin_mask`]), never a pixel of
+    /// their own (see [`ObjMode`]'s docs).
+    fn resolve_pixel_inner(&self, x: usize, y: usize, mosaic: MosaicSize) -> Option<SpritePixel> {
         // Stored OBJ order, starting worse than any real priority (`0..=3`),
         // standing in for mgba's `FLAG_UNWRITTEN` sentinel. `color` is `Some`
         // exactly when the pixel has been written by an opaque texel.
         const UNWRITTEN_ORDER: u8 = u8::MAX;
         let mut order = UNWRITTEN_ORDER;
         let mut color: Option<Rgb888> = None;
+        let mut semi_transparent = false;
         for entry in self.entries {
-            if !entry.enabled() {
+            if !entry.enabled() || entry.mode() == ObjMode::Window {
                 continue;
             }
-            let texel = self.sample_entry(entry, x, y);
+            let (sx, sy) = if entry.mosaic() {
+                mosaic.snap(x, y)
+            } else {
+                (x, y)
+            };
+            let texel = self.sample_entry(entry, sx, sy);
             if matches!(texel, Texel::Outside) {
                 continue;
             }
@@ -167,11 +208,20 @@ impl<'a> SpriteLayer<'a> {
                 Texel::Opaque(c) => {
                     color = Some(c);
                     order = entry.priority();
+                    semi_transparent = entry.mode() == ObjMode::SemiTransparent;
                 }
                 // Transparent hole: upgrade the stored order only if an
                 // opaque sprite has already written here (mgba's `current !=
-                // FLAG_UNWRITTEN` guard); the color is left untouched.
-                Texel::Transparent if color.is_some() => order = entry.priority(),
+                // FLAG_UNWRITTEN` guard); the color is left untouched. The
+                // order-upgrading entry's own mode still replaces
+                // `semi_transparent`, matching mgba's flag write, which
+                // merges in the *new* write's target-1 bit along with the
+                // order it upgrades, not the original color-supplying
+                // sprite's `(behavioral-fidelity)`.
+                Texel::Transparent if color.is_some() => {
+                    order = entry.priority();
+                    semi_transparent = entry.mode() == ObjMode::SemiTransparent;
+                }
                 Texel::Transparent => {}
                 Texel::Outside => unreachable!("filtered above"),
             }
@@ -179,6 +229,41 @@ impl<'a> SpriteLayer<'a> {
         color.map(|color| SpritePixel {
             color,
             priority: order,
+            semi_transparent,
+        })
+    }
+
+    /// Whether an `OBJWIN`-mode sprite (OAM mode 2, [`ObjMode::Window`])
+    /// draws an opaque texel at `(x, y)` — the per-pixel `OBJWIN` mask that
+    /// [`crate::window::WindowConfig::classify`] consults. `OBJWIN` entries
+    /// never contribute a display pixel themselves (see [`ObjMode`]'s docs),
+    /// only this mask.
+    #[must_use]
+    pub fn objwin_mask(&self, x: usize, y: usize) -> bool {
+        self.objwin_mask_inner(x, y, MosaicSize::NONE)
+    }
+
+    /// [`objwin_mask`](Self::objwin_mask), mosaic-snapping mosaic-enabled
+    /// `OBJWIN` entries' sampling coordinate first — see
+    /// [`resolve_pixel_with_mosaic`](Self::resolve_pixel_with_mosaic)'s docs
+    /// for why this stays byte-for-byte equivalent to
+    /// [`objwin_mask`](Self::objwin_mask) at [`MosaicSize::NONE`].
+    #[must_use]
+    pub fn objwin_mask_with_mosaic(&self, x: usize, y: usize, mosaic: MosaicSize) -> bool {
+        self.objwin_mask_inner(x, y, mosaic)
+    }
+
+    fn objwin_mask_inner(&self, x: usize, y: usize, mosaic: MosaicSize) -> bool {
+        self.entries.iter().any(|entry| {
+            if !entry.enabled() || entry.mode() != ObjMode::Window {
+                return false;
+            }
+            let (sx, sy) = if entry.mosaic() {
+                mosaic.snap(x, y)
+            } else {
+                (x, y)
+            };
+            matches!(self.sample_entry(entry, sx, sy), Texel::Opaque(_))
         })
     }
 

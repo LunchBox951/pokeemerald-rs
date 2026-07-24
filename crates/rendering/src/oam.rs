@@ -74,6 +74,32 @@ pub const fn obj_dimensions(shape: ObjShape, size: u8) -> (usize, usize) {
     }
 }
 
+/// An OAM entry's OBJ display mode (`OamData::objMode`, attr0 bits 10-11) —
+/// S-2 slice 4, issue #99.
+///
+/// Verified against `mgba/src/gba/renderers/software-obj.c`:
+/// [`ObjMode::SemiTransparent`] (mode `01`) forces the sprite's pixel to
+/// alpha-blend against a valid second target behind it, unconditionally
+/// overriding whichever color effect `BLDCNT` actually selected
+/// (`GBAVideoSoftwareRendererPreprocessSprite`'s `FLAG_TARGET_1 * (... ||
+/// mode == OBJ_MODE_SEMITRANSPARENT)` — the `mode` check has no other
+/// gating condition) — see [`crate::effects::resolve_pixel_color`].
+/// [`ObjMode::Window`] (mode `10`) contributes only to the `OBJWIN` mask
+/// ([`crate::sprite::SpriteLayer::objwin_mask`]) and never draws a pixel of
+/// its own into the OBJ layer (`SPRITE_DRAW_PIXEL_*_OBJWIN`'s `if (tileData)
+/// { row[outX] |= FLAG_OBJWIN; }` branch never writes `spriteLayer`)
+/// `(behavioral-fidelity)`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum ObjMode {
+    /// Mode `00`: an ordinary, fully-opaque-or-transparent sprite pixel.
+    #[default]
+    Normal,
+    /// Mode `01`: forces alpha blend for this sprite's pixel (module docs).
+    SemiTransparent,
+    /// Mode `10`: contributes to the `OBJWIN` mask only (module docs).
+    Window,
+}
+
 /// Whether and how an OAM entry is affine-transformed, decoded from OAM
 /// attr0 bits 8-9 and (when transformed) attr1 bits 9-13 — see the module
 /// docs.
@@ -110,6 +136,11 @@ pub enum AffineMode {
 /// compositing. `priority`, `size`, and `palette_bank` are masked to their
 /// hardware bit widths on construction, so `new` never panics.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+// Each bool is an independent single-bit hardware field of `OamData`
+// (h_flip, v_flip, enabled, mosaic) -- a state machine or enum would not
+// make this any clearer, so the pedantic four-bools-in-a-struct lint is
+// intentionally not applicable here.
+#[allow(clippy::struct_excessive_bools)]
 pub struct OamEntry {
     x: i16,
     y: u8,
@@ -123,6 +154,8 @@ pub struct OamEntry {
     priority: u8,
     enabled: bool,
     affine: AffineMode,
+    mode: ObjMode,
+    mosaic: bool,
 }
 
 impl OamEntry {
@@ -180,6 +213,8 @@ impl OamEntry {
             priority: priority & 0x03,
             enabled,
             affine: AffineMode::Regular,
+            mode: ObjMode::Normal,
+            mosaic: false,
         }
     }
 
@@ -200,6 +235,25 @@ impl OamEntry {
                 matrix_num: matrix_num & 0x1F,
             },
         };
+        self
+    }
+
+    /// Return a copy of this entry with its [`ObjMode`] replaced (S-2 slice
+    /// 4, issue #99). A builder rather than a `new` parameter so every
+    /// pre-slice-4 call site keeps working unchanged (defaults to
+    /// [`ObjMode::Normal`]).
+    #[must_use]
+    pub const fn with_mode(mut self, mode: ObjMode) -> Self {
+        self.mode = mode;
+        self
+    }
+
+    /// Return a copy of this entry with its mosaic bit
+    /// (`OamData::mosaic`) replaced — S-2 slice 4, issue #99. Defaults to
+    /// `false`.
+    #[must_use]
+    pub const fn with_mosaic(mut self, mosaic: bool) -> Self {
+        self.mosaic = mosaic;
         self
     }
 
@@ -284,6 +338,21 @@ impl OamEntry {
         self.affine
     }
 
+    /// This entry's OBJ display mode (module docs on [`ObjMode`]).
+    #[must_use]
+    pub const fn mode(self) -> ObjMode {
+        self.mode
+    }
+
+    /// Whether this entry's mosaic bit is set — when set and a non-`NONE`
+    /// OBJ mosaic size is configured, [`SpriteLayer`](crate::sprite::SpriteLayer)
+    /// samples this sprite from its mosaic block's origin rather than the
+    /// raw pixel (`crate::mosaic`).
+    #[must_use]
+    pub const fn mosaic(self) -> bool {
+        self.mosaic
+    }
+
     /// This sprite's on-screen bounding box `(width, height)`: equal to
     /// [`dimensions`](Self::dimensions) for [`AffineMode::Regular`]/
     /// [`AffineMode::Affine`], or doubled for
@@ -303,7 +372,7 @@ impl OamEntry {
 
 #[cfg(test)]
 mod tests {
-    use super::{obj_dimensions, AffineMode, OamEntry, ObjShape};
+    use super::{obj_dimensions, AffineMode, OamEntry, ObjMode, ObjShape};
     use crate::tile::BitDepth;
 
     #[test]
@@ -402,6 +471,26 @@ mod tests {
 
         let affine = entry(0, 0, true).with_affine(AffineMode::Affine { matrix_num: 3 });
         assert_eq!(affine.bounding_box(), affine.dimensions());
+    }
+
+    #[test]
+    fn new_defaults_to_normal_obj_mode_and_no_mosaic() {
+        let e = entry(0, 0, true);
+        assert_eq!(e.mode(), ObjMode::Normal);
+        assert!(!e.mosaic());
+    }
+
+    #[test]
+    fn with_mode_and_with_mosaic_are_independent_builders() {
+        let e = entry(0, 0, true)
+            .with_mode(ObjMode::SemiTransparent)
+            .with_mosaic(true);
+        assert_eq!(e.mode(), ObjMode::SemiTransparent);
+        assert!(e.mosaic());
+
+        let window = entry(0, 0, true).with_mode(ObjMode::Window);
+        assert_eq!(window.mode(), ObjMode::Window);
+        assert!(!window.mosaic());
     }
 
     #[test]
