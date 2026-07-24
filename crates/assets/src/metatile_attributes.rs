@@ -202,7 +202,7 @@ mod tests {
     fn metatile_attribute_round_trips_through_pack() {
         for raw in [0x0000u16, 0x00FF, 0x1000, 0x2001, 0x00AB] {
             let attr = MetatileAttribute::from_raw(raw).unwrap();
-            assert!(attr.behavior == (raw & 0x00FF) as u8);
+            assert_eq!(attr.behavior, (raw & 0x00FF) as u8);
             assert_eq!(attr.pack(), raw);
         }
     }

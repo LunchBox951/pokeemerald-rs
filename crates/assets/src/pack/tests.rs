@@ -44,6 +44,13 @@ fn synthetic_pack() -> Vec<u8> {
             payload: vec![9, 9, 9],
         },
         Entry {
+            id: "tileset/test/metatile_attributes",
+            kind_tag: 2,
+            meta: vec![],
+            // Three valid behavior/layer-type pairs, little-endian.
+            payload: vec![0x01, 0x00, 0x02, 0x10, 0x03, 0x20],
+        },
+        Entry {
             id: "layout/test/map",
             kind_tag: 2,
             meta: vec![],
@@ -289,20 +296,28 @@ fn unknown_layout_name_reports_missing_asset() {
 fn tileset_metatile_attribute_table_decodes_from_the_bundled_raw_bytes() {
     use crate::metatile_attributes::MetatileAttribute;
 
-    // Build a pack whose `tileset/test/metatiles` payload doubles as (for
-    // this test's purposes) the metatile_attributes bytes too -- simplest
-    // way to exercise `TilesetHandle::metatile_attribute_table` without
-    // needing all 16 palette slots the full `tileset()` bundler requires.
+    // Build the handle from the synthetic pack's typed entries so this
+    // exercises `TilesetHandle::metatile_attribute_table` without needing
+    // all 16 distinct palette slots the full `tileset()` bundler requires.
     let path = write_synthetic_pack("metatile-attrs");
     let pack = AssetPack::load(&path).unwrap();
-    let raw = pack.raw("tileset/test/metatiles").unwrap();
-    let table = crate::metatile_attributes::MetatileAttributeTable::new(raw);
-    assert_eq!(table.len(), 1);
-    let attr = table.attribute_at(0).unwrap().unwrap();
-    assert_eq!(
-        attr,
-        MetatileAttribute::from_raw(u16::from_le_bytes([9, 9])).unwrap()
-    );
+    let palette = pack.palette("tileset/test/palette/00").unwrap();
+    let handle = super::TilesetHandle {
+        tiles: pack.image("tileset/test/tiles").unwrap(),
+        palettes: [palette; 16],
+        metatiles: pack.raw("tileset/test/metatiles").unwrap(),
+        metatile_attributes: pack.raw("tileset/test/metatile_attributes").unwrap(),
+    };
+
+    let table = handle.metatile_attribute_table();
+    assert_eq!(table.len(), 3);
+    for (id, raw) in [0x0001u16, 0x1002, 0x2003].into_iter().enumerate() {
+        let attr = table
+            .attribute_at(u16::try_from(id).unwrap())
+            .unwrap()
+            .unwrap();
+        assert_eq!(attr, MetatileAttribute::from_raw(raw).unwrap());
+    }
     let _ = std::fs::remove_file(path);
 }
 
