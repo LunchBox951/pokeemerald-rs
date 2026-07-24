@@ -10,7 +10,9 @@
 //! `(gated-by-default)`.
 //!
 //! `e2e --suite smoke` (F-3, V-1) is real: see [`crate::e2e::run_smoke`] for
-//! the headless boot-shell run it drives. `extract` / `record-snapshot` /
+//! the headless boot-shell run it drives. `extract` (S-4, F-3) is also
+//! real: see [`crate::extract::run`] for the local asset-pack pipeline it
+//! drives (Discussion #71 policy A, issue #81). `record-snapshot` /
 //! `scenario`, and the `e2e` `full`/`soak` suites, remain stubs.
 //!
 //! `mod e2e` and its `pokeemerald-rs` dependency are gated behind the
@@ -18,7 +20,8 @@
 //! subcommand) stays dependency-free, matching pre-PR `xtask`. Without the
 //! feature, `e2e --suite smoke` still fails *closed* — [`XtaskError::SmokeUnavailable`],
 //! not a silent no-op — telling the caller to rebuild with `--features
-//! smoke`.
+//! smoke`. `mod extract` needs no such gate: it depends on nothing beyond
+//! `std`, so it is always compiled in.
 //!
 //! Run via the workspace alias: `cargo xtask <subcommand>` (add `--features
 //! smoke` for `e2e --suite smoke`, e.g.
@@ -30,6 +33,7 @@ use std::process::ExitCode;
 
 #[cfg(feature = "smoke")]
 mod e2e;
+mod extract;
 
 /// Usage text shown on stderr for any parse error.
 const USAGE: &str = "\
@@ -63,6 +67,10 @@ pub enum XtaskError {
     /// commands must never be satisfiable by a no-op `(gated-by-default)`
     /// `(test-ratchet)`.
     NotImplemented(&'static str),
+    /// `extract` ran but failed. Carries [`extract::ExtractError`]'s
+    /// rendered message (missing upstream checkout, a malformed source
+    /// file, or a write failure — see that type for the exact cases).
+    ExtractFailed(String),
     /// `e2e --suite smoke` ran but did not report a clean boot. Carries
     /// [`e2e::E2eError`]'s rendered message.
     SmokeFailed(String),
@@ -95,6 +103,11 @@ impl fmt::Display for XtaskError {
             // so it gets no USAGE tail.
             Self::NotImplemented(what) => {
                 return write!(f, "error: `{what}` is not implemented yet");
+            }
+            // Likewise an extract failure: runtime/behavioural, not a
+            // malformed invocation.
+            Self::ExtractFailed(reason) => {
+                return write!(f, "error: `extract` failed: {reason}");
             }
             // Likewise a smoke-run failure: it's a runtime/behavioural
             // failure, not a malformed invocation.
@@ -233,27 +246,39 @@ fn parse_e2e(rest: &[String]) -> Result<(Suite, bool), XtaskError> {
 
 /// Dispatch a parsed command.
 ///
-/// `e2e --suite smoke` is real (F-3, V-1) when built with `--features
-/// smoke`: see [`e2e::run_smoke`]. Without that feature, the same command
-/// still fails *closed* — [`XtaskError::SmokeUnavailable`] — rather than
-/// silently no-opping. Every other subcommand — `extract`,
-/// `record-snapshot`, `scenario`, and the `e2e` `full`/`soak` suites —
-/// remains a stub: rather than exiting 0, each returns
-/// [`XtaskError::NotImplemented`] so the process fails *closed* (non-zero
-/// exit). The `RELEASE.md` promotion gates run these exact commands, so a
-/// stub that reported success would satisfy a gate with zero validation
-/// `(gated-by-default)` `(test-ratchet)`.
+/// `extract` is real (S-4, F-3): see [`extract::run`] for the local
+/// asset-pack pipeline it drives. `e2e --suite smoke` is also real (F-3,
+/// V-1) when built with `--features smoke`: see [`e2e::run_smoke`].
+/// Without that feature, the same command still fails *closed* —
+/// [`XtaskError::SmokeUnavailable`] — rather than silently no-opping. Every
+/// other subcommand — `record-snapshot`, `scenario`, and the `e2e`
+/// `full`/`soak` suites — remains a stub: rather than exiting 0, each
+/// returns [`XtaskError::NotImplemented`] so the process fails *closed*
+/// (non-zero exit). The `RELEASE.md` promotion gates run these exact
+/// commands, so a stub that reported success would satisfy a gate with zero
+/// validation `(gated-by-default)` `(test-ratchet)`.
 ///
 /// # Errors
 ///
 /// Returns [`XtaskError::NotImplemented`] for every still-stubbed
-/// subcommand/suite, [`XtaskError::SmokeUnavailable`] if `e2e --suite smoke`
-/// was requested but this binary was built without the `smoke` feature, or
+/// subcommand/suite, [`XtaskError::ExtractFailed`] if `extract` ran but
+/// failed, [`XtaskError::SmokeUnavailable`] if `e2e --suite smoke` was
+/// requested but this binary was built without the `smoke` feature, or
 /// [`XtaskError::SmokeFailed`] if `e2e --suite smoke` ran but did not report
 /// a clean boot.
 fn dispatch(cmd: &Command) -> Result<(), XtaskError> {
     match cmd {
-        Command::Extract => Err(XtaskError::NotImplemented("extract")),
+        Command::Extract => {
+            let report =
+                extract::run().map_err(|err| XtaskError::ExtractFailed(err.to_string()))?;
+            println!(
+                "extracted {} asset(s), {} bytes, to {}",
+                report.entry_count,
+                report.pack_size,
+                report.output_path.display()
+            );
+            Ok(())
+        }
         Command::RecordSnapshot => Err(XtaskError::NotImplemented("record-snapshot")),
         Command::Scenario => Err(XtaskError::NotImplemented("scenario")),
         #[cfg(feature = "smoke")]
@@ -296,7 +321,7 @@ fn main() -> ExitCode {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse, run, Command, Suite, XtaskError};
+    use super::{extract, parse, run, Command, Suite, XtaskError};
 
     fn args(parts: &[&str]) -> Vec<String> {
         parts.iter().map(|s| (*s).to_owned()).collect()
@@ -466,19 +491,15 @@ mod tests {
         // Recognised-but-unimplemented subcommands must NOT report success:
         // RELEASE.md wires `xtask e2e --suite …` in as promotion gates, so a
         // stub exiting 0 would satisfy a gate with zero validation
-        // `(gated-by-default)` `(test-ratchet)`. `e2e --suite smoke` is
-        // deliberately absent here: with `--features smoke` it is no longer
-        // a stub (F-3, V-1) and is covered directly by
-        // `crate::e2e::tests::smoke_suite_boots_cleanly_headless` (the same
-        // headless boot, kept there rather than duplicated here; the
-        // dispatch routing itself is exercised by the CI smoke job's
-        // `cargo run` step); without the feature it fails closed a different
-        // way (see `e2e_smoke_without_feature_fails_closed` below), not as a
-        // `NotImplemented` stub.
-        assert!(matches!(
-            run(&args(&["extract"])).unwrap_err(),
-            XtaskError::NotImplemented("extract")
-        ));
+        // `(gated-by-default)` `(test-ratchet)`. `extract` and
+        // `e2e --suite smoke` are deliberately absent here: both are no
+        // longer stubs (S-4/F-3 and F-3/V-1 respectively) and each has its
+        // own dedicated coverage — `extract` via
+        // `extract_dispatch_fails_closed_without_local_checkout`/
+        // `extract_dispatch_succeeds_with_local_checkout` below, `e2e
+        // --suite smoke` via `crate::e2e::tests::smoke_suite_boots_cleanly_headless`
+        // (with the feature) and `e2e_smoke_without_feature_fails_closed`
+        // below (without it).
         assert!(matches!(
             run(&args(&["e2e", "--suite", "full", "--release"])).unwrap_err(),
             XtaskError::NotImplemented("e2e")
@@ -487,6 +508,30 @@ mod tests {
             run(&args(&["e2e", "--suite", "soak", "--release"])).unwrap_err(),
             XtaskError::NotImplemented("e2e")
         ));
+    }
+
+    #[test]
+    fn extract_dispatch_fails_closed_without_local_checkout() {
+        // In an environment with no `pokeemerald/` checkout (e.g. CI, or a
+        // fresh clone before `./init.sh`), `extract` must fail loudly, not
+        // silently report success `(gated-by-default)`. Checked read-only
+        // (`extract::upstream_present`) rather than by calling
+        // `extract::run()` and inspecting the result, so this test never
+        // triggers a real (slow, disk-writing) extraction as a side effect
+        // in a dev environment that *does* have a checkout -- that path is
+        // covered instead by `extract_dispatch_succeeds_with_local_checkout`.
+        if extract::upstream_present() {
+            return;
+        }
+        let err = run(&args(&["extract"])).unwrap_err();
+        assert!(matches!(err, XtaskError::ExtractFailed(_)));
+        assert!(err.to_string().contains("init.sh"));
+    }
+
+    #[test]
+    #[ignore = "needs a local `./init.sh`-fetched pokeemerald/ checkout"]
+    fn extract_dispatch_succeeds_with_local_checkout() {
+        run(&args(&["extract"])).expect("extract should succeed against a real checkout");
     }
 
     // Without `--features smoke`, `mod e2e` is not compiled in at all, so
