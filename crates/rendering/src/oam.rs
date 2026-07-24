@@ -1,16 +1,25 @@
-//! An OAM-equivalent regular (non-affine) sprite entry (S-2 slice 2).
+//! An OAM-equivalent sprite entry: regular and affine (S-2 slices 2 and 3).
 //!
-//! Ports the regular-OBJ attribute semantics of `pokeemerald/src/sprite.c`
-//! and `struct OamData` (`pokeemerald/include/gba/types.h`): each sprite has
-//! a screen position, a tile index into OBJ tile memory, a 4bpp palette bank
-//! or flat 8bpp palette, independent horizontal/vertical flip, one of the
-//! twelve regular square/wide/tall shape-size combinations (`8x8` ..
-//! `64x64`), a priority (`0..=3`), and an enabled/disabled state.
+//! Ports the OBJ attribute semantics of `pokeemerald/src/sprite.c` and
+//! `struct OamData` (`pokeemerald/include/gba/types.h`): each sprite has a
+//! screen position, a tile index into OBJ tile memory, a 4bpp palette bank
+//! or flat 8bpp palette, one of the twelve regular square/wide/tall
+//! shape-size combinations (`8x8` .. `64x64`), a priority (`0..=3`), an
+//! enabled/disabled state, and — via [`AffineMode`] — either regular
+//! independent horizontal/vertical flip or an affine (optionally
+//! double-size) transform selecting one of 32 OAM parameter groups.
 //!
-//! Affine attributes (`OamData::affineMode`/`matrixNum`/the rotation-scale
-//! parameter) are not modelled — affine rendering is out of scope for this
-//! slice (issue #64). Every [`OamEntry`] here is a regular (non-transformed)
-//! sprite.
+//! [`AffineMode`] decodes `OamData::affineMode`/`matrixNum`
+//! (`pokeemerald/include/gba/types.h:58`, `:65`): attr0 bits 8-9 are `00`
+//! regular, `01` affine, `10` hidden (folded into [`OamEntry::enabled`] by
+//! the caller, not represented here), `11` affine double-size — verified
+//! against `mgba`'s `GBAObjAttributesAIsTransformed`/`GetDoubleSize`
+//! (`mgba/include/mgba/internal/gba/video.h:64-66`). When affine, attr1 bits
+//! 9-13 (`matrixNum`, 5 bits, `0..=31`) select an OAM parameter group instead
+//! of carrying h/v-flip — hardware reuses the same two bits (`ST_OAM_HFLIP`/
+//! `ST_OAM_VFLIP` are `matrixNum` bits 3/4) for both purposes, so a regular
+//! sprite's flip bits and an affine sprite's `matrixNum` are mutually
+//! exclusive, never both meaningful at once `(behavioral-fidelity)`.
 //!
 //! Position wrapping is verified against `mgba/src/gba/renderers/software-obj.c`:
 //! the X coordinate is a 9-bit hardware field that is sign-extended
@@ -65,7 +74,35 @@ pub const fn obj_dimensions(shape: ObjShape, size: u8) -> (usize, usize) {
     }
 }
 
-/// One regular (non-affine) OAM-equivalent sprite entry.
+/// Whether and how an OAM entry is affine-transformed, decoded from OAM
+/// attr0 bits 8-9 and (when transformed) attr1 bits 9-13 — see the module
+/// docs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum AffineMode {
+    /// attr0 bits 8-9 = `00`: a regular sprite. [`OamEntry::h_flip`]/
+    /// [`OamEntry::v_flip`] apply.
+    Regular,
+    /// attr0 bits 8-9 = `01`: affine-transformed, drawn within its ordinary
+    /// (undoubled) bounding box — a rotated/scaled sprite can be clipped by
+    /// its own nominal footprint. `h_flip`/`v_flip` do not apply; the
+    /// matrix supplies any mirroring.
+    Affine {
+        /// The OAM parameter group (`0..=31`) selecting one of the 32
+        /// [`AffineMatrix`](crate::affine::AffineMatrix) slots
+        /// (`gOamMatrices` in `pokeemerald/src/sprite.c`).
+        matrix_num: u8,
+    },
+    /// attr0 bits 8-9 = `11`: affine-transformed with a doubled bounding box
+    /// (`ST_OAM_AFFINE_DOUBLE`), so a scaled/rotated sprite has room to
+    /// extend beyond its nominal footprint without clipping. `h_flip`/
+    /// `v_flip` do not apply.
+    AffineDoubleSize {
+        /// Same matrix-group selection as [`AffineMode::Affine`].
+        matrix_num: u8,
+    },
+}
+
+/// One OAM-equivalent sprite entry: regular (non-affine) or affine.
 ///
 /// Screen position wraps the way GBA OBJ hardware wraps it (see the module
 /// docs): `x` is a 9-bit sign-extended field (`-256..255`) and `y` is a
@@ -85,6 +122,7 @@ pub struct OamEntry {
     size: u8,
     priority: u8,
     enabled: bool,
+    affine: AffineMode,
 }
 
 impl OamEntry {
@@ -141,7 +179,28 @@ impl OamEntry {
             size: size & 0x03,
             priority: priority & 0x03,
             enabled,
+            affine: AffineMode::Regular,
         }
+    }
+
+    /// Return a copy of this entry with its [`AffineMode`] replaced.
+    ///
+    /// A builder rather than a `new` parameter so every existing regular-OBJ
+    /// call site (which predates affine support, S-2 slice 2) keeps working
+    /// unchanged; `mode` masks `matrix_num` to 5 bits (`0..=31`), matching
+    /// the hardware field's width, so this never panics.
+    #[must_use]
+    pub const fn with_affine(mut self, mode: AffineMode) -> Self {
+        self.affine = match mode {
+            AffineMode::Regular => AffineMode::Regular,
+            AffineMode::Affine { matrix_num } => AffineMode::Affine {
+                matrix_num: matrix_num & 0x1F,
+            },
+            AffineMode::AffineDoubleSize { matrix_num } => AffineMode::AffineDoubleSize {
+                matrix_num: matrix_num & 0x1F,
+            },
+        };
+        self
     }
 
     /// Decoded screen X position (`-256..=255`).
@@ -210,15 +269,41 @@ impl OamEntry {
     }
 
     /// This sprite's pixel `(width, height)`, from its shape/size pair.
+    ///
+    /// For an affine sprite this is the *source texture* size, not
+    /// necessarily its on-screen bounding box — see
+    /// [`bounding_box`](Self::bounding_box).
     #[must_use]
     pub const fn dimensions(self) -> (usize, usize) {
         obj_dimensions(self.shape, self.size)
+    }
+
+    /// This entry's affine transform state (module docs).
+    #[must_use]
+    pub const fn affine(self) -> AffineMode {
+        self.affine
+    }
+
+    /// This sprite's on-screen bounding box `(width, height)`: equal to
+    /// [`dimensions`](Self::dimensions) for [`AffineMode::Regular`]/
+    /// [`AffineMode::Affine`], or doubled for
+    /// [`AffineMode::AffineDoubleSize`] — matching mgba's `totalWidth =
+    /// width << doubleSize` (`mgba/src/gba/renderers/software-obj.c:216-217`),
+    /// which gives a scaled/rotated sprite room to extend beyond its nominal
+    /// footprint without being clipped by it.
+    #[must_use]
+    pub const fn bounding_box(self) -> (usize, usize) {
+        let (w, h) = self.dimensions();
+        match self.affine {
+            AffineMode::AffineDoubleSize { .. } => (w * 2, h * 2),
+            AffineMode::Regular | AffineMode::Affine { .. } => (w, h),
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{obj_dimensions, OamEntry, ObjShape};
+    use super::{obj_dimensions, AffineMode, OamEntry, ObjShape};
     use crate::tile::BitDepth;
 
     #[test]
@@ -291,5 +376,52 @@ mod tests {
         assert_eq!(e.palette_bank(), 0x0F);
         assert_eq!(e.priority(), 0x03);
         assert_eq!(e.dimensions(), obj_dimensions(ObjShape::Square, 0x03));
+    }
+
+    #[test]
+    fn new_defaults_to_regular_affine_mode() {
+        assert_eq!(entry(0, 0, true).affine(), AffineMode::Regular);
+    }
+
+    #[test]
+    fn with_affine_masks_matrix_num_to_5_bits() {
+        let e = entry(0, 0, true).with_affine(AffineMode::Affine { matrix_num: 0xFF });
+        assert_eq!(e.affine(), AffineMode::Affine { matrix_num: 0x1F });
+
+        let e = entry(0, 0, true).with_affine(AffineMode::AffineDoubleSize { matrix_num: 0xFF });
+        assert_eq!(
+            e.affine(),
+            AffineMode::AffineDoubleSize { matrix_num: 0x1F }
+        );
+    }
+
+    #[test]
+    fn bounding_box_matches_dimensions_for_regular_and_plain_affine() {
+        let regular = entry(0, 0, true);
+        assert_eq!(regular.bounding_box(), regular.dimensions());
+
+        let affine = entry(0, 0, true).with_affine(AffineMode::Affine { matrix_num: 3 });
+        assert_eq!(affine.bounding_box(), affine.dimensions());
+    }
+
+    #[test]
+    fn bounding_box_doubles_for_affine_double_size() {
+        // 16x16 (ObjShape::Square, size 1) doubles to 32x32.
+        let e = OamEntry::new(
+            0,
+            0,
+            0,
+            0,
+            BitDepth::Bpp4,
+            false,
+            false,
+            ObjShape::Square,
+            1,
+            0,
+            true,
+        )
+        .with_affine(AffineMode::AffineDoubleSize { matrix_num: 0 });
+        assert_eq!(e.dimensions(), (16, 16));
+        assert_eq!(e.bounding_box(), (32, 32));
     }
 }

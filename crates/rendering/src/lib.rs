@@ -12,10 +12,18 @@
 //! compositor ([`compose_frame`]) that orders up to four BG layers plus
 //! sprites the way the GBA PPU does.
 //!
-//! Affine transforms (BG or sprite), windows (`WIN0`/`WIN1`/`OBJWIN`), alpha
-//! blending/brightness effects, and mosaic are out of scope for both slices;
-//! wiring this crate into `platform`'s presentation surface is a future
-//! integration issue `(constitution-vs-roadmap)`.
+//! Slice 3 (issue #98) adds affine (rotation/scaling) support: the shared
+//! [`AffineMatrix`] parameter type, an affine BG tile layer
+//! ([`AffineTilemap`], [`AffineBgLayer`]), and affine (plus double-size)
+//! sprite sampling on [`SpriteLayer`] via [`OamEntry::with_affine`] and
+//! [`SpriteLayer::with_affine_matrices`]. Both slot into
+//! [`compose_frame`]/[`BgSlot`] without changing their signatures
+//! ([`BgSlot::new_affine`] adds the affine BG entry point).
+//!
+//! Windows (`WIN0`/`WIN1`/`OBJWIN`), alpha blending/brightness effects, and
+//! mosaic remain out of scope; wiring this crate into `platform`'s
+//! presentation surface is a future integration issue
+//! `(constitution-vs-roadmap)`.
 //!
 //! `std`-only, no FFI, no dependency on `platform` `(minimal-deps, no-ffi)`.
 //! Behaviour is transcribed from `pokeemerald/src/palette.c`,
@@ -23,21 +31,26 @@
 //! `mgba`'s software renderer as the hardware-behaviour reference — never
 //! copied verbatim `(no-verbatim, behavioral-fidelity)`.
 
+pub mod affine;
 pub mod bg;
+pub mod bg_affine;
 pub mod compositor;
 pub mod error;
 pub mod framebuffer;
 pub mod oam;
 pub mod palette;
 pub mod sprite;
+mod sprite_affine;
 pub mod tile;
 pub mod tilemap;
 
+pub use affine::AffineMatrix;
 pub use bg::BgLayer;
+pub use bg_affine::{AffineBgLayer, AffineTilemap, Overflow};
 pub use compositor::{compose_frame, BgSlot};
 pub use error::RenderError;
 pub use framebuffer::Framebuffer;
-pub use oam::{obj_dimensions, OamEntry, ObjShape};
+pub use oam::{obj_dimensions, AffineMode, OamEntry, ObjShape};
 pub use palette::{Bgr555, Palette, Rgb888};
 pub use sprite::{SpriteLayer, SpritePixel};
 pub use tile::{BitDepth, Tile, Tileset};
