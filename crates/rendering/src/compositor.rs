@@ -177,6 +177,33 @@ impl<'a> BgSlot<'a> {
 /// BG, and BGs break same-priority ties by ascending `bg_index`, matching
 /// the ordering rules in the module docs.
 type OrderKey = (u8, u8);
+type Candidate = (OrderKey, Rgb888, LayerKind, bool);
+
+/// Insert a layer into the two frontmost candidates for one pixel.
+///
+/// Candidates arrive in the same order the old stable sort saw them
+/// (sprite, then BG slots), so strict comparisons preserve the existing
+/// first-seen tie-break for duplicate order keys.
+fn insert_candidate(
+    front: &mut Option<Candidate>,
+    next: &mut Option<Candidate>,
+    candidate: Candidate,
+) {
+    match *front {
+        None => *front = Some(candidate),
+        Some(front_candidate) if candidate.0 < front_candidate.0 => {
+            *next = *front;
+            *front = Some(candidate);
+        }
+        Some(_) => match *next {
+            None => *next = Some(candidate),
+            Some(next_candidate) if candidate.0 < next_candidate.0 => {
+                *next = Some(candidate);
+            }
+            Some(_) => {}
+        },
+    }
+}
 
 /// Composite up to four [`BgSlot`]s and one [`SpriteLayer`] into a new
 /// [`Framebuffer`], applying the GBA's priority ordering rules (module
@@ -256,20 +283,25 @@ fn compose_pixel(
 ) -> Rgb888 {
     let (wx, wy) = (x as u8, y as u8);
 
-    let objwin_mask = sprites.objwin_mask_with_mosaic(x, y, effects.mosaic.obj);
+    let objwin_mask = effects.windows.obj_window.is_some()
+        && sprites.objwin_mask_with_mosaic(x, y, effects.mosaic.obj);
     let window = effects.windows.classify(wx, wy, objwin_mask);
 
-    let mut candidates: Vec<(OrderKey, Rgb888, LayerKind, bool)> =
-        Vec::with_capacity(bg_slots.len() + 1);
+    let mut front = None;
+    let mut next = None;
 
     if window.obj {
         if let Some(pixel) = sprites.resolve_pixel_with_mosaic(x, y, effects.mosaic.obj) {
-            candidates.push((
-                (pixel.priority, 0),
-                pixel.color,
-                LayerKind::Obj,
-                pixel.semi_transparent,
-            ));
+            insert_candidate(
+                &mut front,
+                &mut next,
+                (
+                    (pixel.priority, 0),
+                    pixel.color,
+                    LayerKind::Obj,
+                    pixel.semi_transparent,
+                ),
+            );
         }
     }
     for slot in bg_slots {
@@ -279,21 +311,19 @@ fn compose_pixel(
         let Some(color) = slot.sample(x, y, effects.mosaic.bg) else {
             continue;
         };
-        candidates.push((
-            (slot.priority, 1 + slot.bg_index),
-            color,
-            LayerKind::Bg(slot.bg_index),
-            false,
-        ));
+        insert_candidate(
+            &mut front,
+            &mut next,
+            (
+                (slot.priority, 1 + slot.bg_index),
+                color,
+                LayerKind::Bg(slot.bg_index),
+                false,
+            ),
+        );
     }
-    // Stable sort: equal keys (only possible with a caller-misconfigured
-    // duplicate bg_index) keep the earlier-pushed (sprite, then earlier
-    // bg_slots) entry first, matching compose_frame's pre-slice-4 `<=`
-    // tie-break.
-    candidates.sort_by_key(|&(key, ..)| key);
 
-    let mut candidates = candidates.into_iter();
-    let Some((_, front_color, front_kind, front_semi_transparent)) = candidates.next() else {
+    let Some((_, front_color, front_kind, front_semi_transparent)) = front else {
         // Nothing drawn: the backdrop itself is shown, subject only to
         // brighten/darken (effects::resolve_pixel_color never alpha-blends
         // the backdrop against itself).
@@ -305,7 +335,7 @@ fn compose_pixel(
             effects.backdrop,
         );
     };
-    let next = candidates.next().map(|(_, color, kind, _)| (color, kind));
+    let next = next.map(|(_, color, kind, _)| (color, kind));
     effects::resolve_pixel_color(
         &effects.color,
         window.effects,

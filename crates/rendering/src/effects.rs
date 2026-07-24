@@ -491,6 +491,44 @@ mod tests {
     }
 
     #[test]
+    fn resolve_semi_transparent_obj_forces_blend_when_window_effects_are_disabled() {
+        // OAM mode 1 sets mGBA's FLAG_TARGET_1 independently of the current
+        // window's BlendEnable bit (software-obj.c:159). A valid target2
+        // therefore still blends when effects_enabled=false.
+        let cfg = EffectsConfig {
+            effect: ColorEffect::None,
+            target1: LayerTargets::default(),
+            target2: LayerTargets {
+                bg: [true, false, false, false],
+                obj: false,
+                backdrop: false,
+            },
+            eva: 8,
+            evb: 8,
+            evy: 0,
+        };
+        let front = (Rgb888 { r: 0, g: 0, b: 0 }, LayerKind::Obj, true);
+        let next = Some((
+            Rgb888 {
+                r: 255,
+                g: 255,
+                b: 255,
+            },
+            LayerKind::Bg(0),
+        ));
+
+        let result = resolve_pixel_color(&cfg, false, front, next, Rgb888::BLACK);
+
+        assert_eq!(
+            result.r,
+            crate::palette::Bgr555::from_channels(15, 0, 0)
+                .to_rgb888()
+                .r,
+            "window effect-disable must not suppress OAM mode 1 forced alpha"
+        );
+    }
+
+    #[test]
     fn resolve_semi_transparent_obj_with_no_target2_stays_unblended() {
         // Default config: OBJ is *not* a BLDCNT first target and the effect is
         // None, so mgba's `variant` selector is off — with no target2 the
