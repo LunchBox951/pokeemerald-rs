@@ -14,6 +14,12 @@
 //! the map layout geometry (see [`map_layouts`]), the map headers, groups,
 //! and connections (see [`map_headers`]), and the per-map object/warp/coord/
 //! bg events (see [`map_events`]); more data follows as the crate fills out.
+//!
+//! Binary graphics (tileset tile graphics, palettes, player/NPC sprite
+//! sheets) are not compiled into this crate as Rust source, unlike the
+//! tables above — per Discussion #71 policy A they live in a local,
+//! gitignored asset pack that `cargo xtask extract` produces (issue #81);
+//! [`pack`] is this crate's typed loader over that pack.
 
 pub mod abilities;
 pub mod battle_moves;
@@ -27,6 +33,7 @@ pub mod map_events;
 pub mod map_headers;
 pub mod map_layouts;
 pub mod move_names;
+pub mod pack;
 pub mod species;
 pub mod species_names;
 pub mod tmhm_learnsets;
@@ -66,6 +73,7 @@ pub use map_layouts::{
 // `items` module path.
 pub use items::{BattleUsage, HoldEffect, ItemData, ItemTable, ItemType, Pocket, ITEMS_COUNT};
 pub use move_names::MoveNames;
+pub use pack::{AssetPack, EntryKind, ImageRef, PackError, PaletteRef, TilesetHandle};
 pub use species::{
     AbilityId, BaseStats, BodyColor, EggGroup, EvYield, GenderRatio, GrowthRate, ItemId, SpeciesId,
     SpeciesTable,

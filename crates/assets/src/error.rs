@@ -1,6 +1,21 @@
 //! Error types for the `assets` crate.
 //!
 //! A concrete per-crate enum `(oop-boundaries)` — no `anyhow` in library crates.
+//!
+//! **[`pack::PackError`](crate::pack::PackError) is a deliberate second
+//! enum**, not folded into [`AssetError`]. Several tables in this crate
+//! (`items::i`, and others alongside it) build their entries in `const fn`
+//! initializers that pattern-match a `Result<_, AssetError>` and `panic!`
+//! on `Err` (a transcription-error guard, evaluated at compile time). That
+//! requires the compiler to const-evaluate dropping the unmatched `Err`
+//! branch, which is only possible if every field `AssetError` can hold has
+//! a trivial (or `const`) destructor. A pack-loading error needs to carry
+//! owned, dynamic data — a [`PathBuf`](std::path::PathBuf) for "which file
+//! was missing", a `String` for "which runtime-supplied asset id wasn't
+//! found" — and both types have non-`const` destructors, so adding them to
+//! `AssetError` breaks every one of those `const fn` tables (`error[E0493]`).
+//! Keeping pack errors in their own type sidesteps that entirely, at the
+//! cost of two error enums instead of one.
 
 use std::error::Error;
 use std::fmt;

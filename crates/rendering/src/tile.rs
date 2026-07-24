@@ -102,7 +102,7 @@ impl Tile {
 }
 
 /// An owned collection of decoded tiles at a single bit depth, indexable by
-/// the raw tile number used in a [`ScreenEntry`](crate::bg::ScreenEntry).
+/// the raw tile number used in a [`ScreenEntry`](crate::tilemap::ScreenEntry).
 #[derive(Debug, Clone)]
 pub struct Tileset {
     bit_depth: BitDepth,
