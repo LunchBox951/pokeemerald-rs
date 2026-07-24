@@ -75,6 +75,14 @@
       "status": "pending"
     },
     "data/event_scripts.s": {
+      "artifacts": {
+        "gStdScripts": {
+          "reason": "gStdScripts's 11 labels transcribed as the StdScript enum, in table order; the scripts themselves are content, out of scope",
+          "rust_target": "crates/engine/src/script/std_script.rs",
+          "spec": "S-5",
+          "status": "ported"
+        }
+      },
       "category": "data.script",
       "kind": "file",
       "spec_owner": "06-engine",
@@ -11446,8 +11454,10 @@
     "data/specials.inc": {
       "category": "data.script",
       "kind": "file",
-      "spec_owner": "06-engine",
-      "status": "pending"
+      "reason": "gSpecials name+waitstate-flag table (527 entries) transcribed in order into SPECIALS; SPECIAL_TABLE dispatch hooks all start None (no subsystem wired yet)",
+      "rust_target": "crates/engine/src/script/specials.rs",
+      "spec": "S-5",
+      "status": "ported"
     },
     "data/text/abnormal_weather.inc": {
       "category": "data.text",
@@ -17784,8 +17794,14 @@
     },
     "include/gba/types.h": {
       "artifacts": {
+        "BgAffineDstData": {
+          "reason": "AffineMatrix ports BgAffineDstData's pa/pb/pc/pd 8.8 fixed-point shape (the hardware-register-ready output of BgAffineSet, and structurally identical to one OAM parameter group's a/b/c/d, gOamMatrices) as the type shared by both the affine BG layer (bg_affine.rs) and affine OBJ sampling (sprite_affine.rs), verified against mgba's BG2PA..PD/OAM-matrix register loads (video-software.c, software-obj.c). BgAffineSrcData/ObjAffineSrcData's trig-input side (srcCenterX/Y, scaleX/Y, rotationAngle -> BgAffineSet) is not modelled; only the resolved destination matrix is (issue #98).",
+          "rust_target": "crates/rendering/src/affine.rs",
+          "spec": "S-2",
+          "status": "rewritten"
+        },
         "OamData": {
-          "reason": "OamEntry mirrors struct OamData's regular (non-affine) bitfield layout (y in attr0, x/size/flip in attr1, tile/priority/palette in attr2, shape/bpp in attr0), cross-checked against mgba's GBAObjAttributesA/B/C bitfield decls; affine-mode/matrix-index, mosaic, and objMode (semi-transparent/window) fields are deliberately not modelled (issue #64 scope).",
+          "reason": "OamEntry mirrors struct OamData's bitfield layout (y in attr0, x/size/flip in attr1, tile/priority/palette in attr2, shape/bpp in attr0), cross-checked against mgba's GBAObjAttributesA/B/C bitfield decls. As of S-2 slice 3 (issue #98), affine-mode/matrixNum (attr0 bits 8-9, attr1 bits 9-13) are also modelled via AffineMode/OamEntry::with_affine/bounding_box; mosaic and objMode (semi-transparent/window) remain deliberately unmodelled (out of scope, slice 4/#64).",
           "rust_target": "crates/rendering/src/oam.rs",
           "spec": "S-2",
           "status": "rewritten"
@@ -24031,6 +24047,12 @@
     },
     "src/bg.c": {
       "artifacts": {
+        "affine_tile_layer": {
+          "reason": "AffineTilemap/AffineBgLayer port SetBgAffine/SetBgAffineInternal-driven mode 1/2 affine BG semantics: 8bpp-only flat single-byte tile indices (no per-tile flip/palette bank), P/Q matrix (AffineMatrix, affine.rs) + 20.8 fixed-point reference-point texture-space sampling, and wrap (overflow=1) vs transparent (overflow=0) out-of-bounds handling, verified against mgba's GBAVideoSoftwareRendererDrawBackgroundMode2 and MODE_2_COORD_OVERFLOW/NO_OVERFLOW macros (software-bg.c). The per-scanline sx/sy accumulation mgba's renderer performs collapses into one static per-frame closed-form sample under pokeemerald's observed once-per-frame BG2X/Y/PA..PD write pattern (bg.c:244-282); a game that rewrote the reference point mid-frame would observe different behavior, out of scope here. Slots into compose_frame via BgSlot::new_affine (issue #98).",
+          "rust_target": "crates/rendering/src/bg_affine.rs",
+          "spec": "S-2",
+          "status": "rewritten"
+        },
         "regular_tile_layer": {
           "reason": "BgLayer/ScreenEntry/Tilemap port the regular (non-affine) BG tile-layer compositing semantics: screen-entry tile index/flip/palette-bank bits, 4bpp/8bpp tile-to-pixel resolution, transparent palette index 0 (every bank), and >32-tile tilemaps addressed as 32x32 screenblocks, verified against mgba's software mode-0 renderer; scrolling, affine BGs, and multi-layer priority are out of scope for this slice (issue #50).",
           "rust_target": "crates/rendering/src/bg.rs",
@@ -26005,6 +26027,18 @@
           "spec": "S-5",
           "status": "rewritten"
         },
+        "ScrCmd_callstd": {
+          "reason": "callstd shares gotostd's dispatch body; jump-vs-call is not yet observable with no std-script content to resolve",
+          "rust_target": "crates/engine/src/script/commands.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "ScrCmd_callstd_if": {
+          "reason": "callstd_if shares gotostd_if's dispatch body for the same reason as callstd",
+          "rust_target": "crates/engine/src/script/commands.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
         "ScrCmd_checkflag": {
           "reason": "FlagGet call re-implemented as commands::checkflag (SCR_OP_CHECKFLAG, 0x2b), storing the bool result in ScriptContext::comparison_result",
           "rust_target": "crates/engine/src/script/commands.rs",
@@ -26053,6 +26087,18 @@
           "spec": "S-5",
           "status": "rewritten"
         },
+        "ScrCmd_gotostd": {
+          "reason": "gotostd dispatches through the typed StdScript label table; traps naming the resolved label since no compiled std-script content exists yet",
+          "rust_target": "crates/engine/src/script/commands.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "ScrCmd_gotostd_if": {
+          "reason": "gotostd_if reads condition+index unconditionally then dispatches through the shared std-script table lookup on a match",
+          "rust_target": "crates/engine/src/script/commands.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
         "ScrCmd_nop": {
           "reason": "Does nothing; SCR_OP_NOP (0x00) re-implemented as commands::nop",
           "rust_target": "crates/engine/src/script/commands.rs",
@@ -26061,6 +26107,12 @@
         },
         "ScrCmd_nop1": {
           "reason": "Does nothing; SCR_OP_NOP1 (0x01) re-implemented as commands::nop1, kept distinct from nop for a 1:1 opcode mapping",
+          "rust_target": "crates/engine/src/script/commands.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "ScrCmd_random": {
+          "reason": "random draws Rng::next_u16() % limit and writes VAR_RESULT via EventData; zero limit traps instead of panicking",
           "rust_target": "crates/engine/src/script/commands.rs",
           "spec": "S-5",
           "status": "rewritten"
@@ -26089,8 +26141,26 @@
           "spec": "S-5",
           "status": "rewritten"
         },
+        "ScrCmd_special": {
+          "reason": "special dispatches through the SpecialId/SPECIAL_TABLE callback-hook scaffold; every slot traps Unimplemented until a subsystem lands",
+          "rust_target": "crates/engine/src/script/commands.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "ScrCmd_specialvar": {
+          "reason": "specialvar shares special's dispatch scaffold and additionally writes the callback's result to the output var",
+          "rust_target": "crates/engine/src/script/commands.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
         "ScrCmd_subvar": {
           "reason": "VarGet-resolved subtract with u16 wraparound re-implemented as commands::subvar (SCR_OP_SUBVAR, 0x18)",
+          "rust_target": "crates/engine/src/script/commands.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "ScrCmd_waitstate": {
+          "reason": "waitstate re-expresses upstream's global CONTEXT_WAITING pause as ScriptContext's existing native-step mode polling ScriptHost::waiting",
           "rust_target": "crates/engine/src/script/commands.rs",
           "spec": "S-5",
           "status": "rewritten"
@@ -26227,6 +26297,12 @@
     },
     "src/sprite.c": {
       "artifacts": {
+        "affine_oam": {
+          "reason": "sprite_affine::sample_texel (paired with OamEntry::AffineMode/with_affine/bounding_box in oam.rs) ports affine and affine-double-size OBJ sampling: matrix-group selection by matrixNum (0..=31, gOamMatrices), the double-size bounding box (CalcCenterToCornerVec's ST_OAM_AFFINE_DOUBLE doubling), and center-relative texture-space sampling biased onto the nominal (undoubled) texture, verified pixel-for-pixel against mgba's GBAObjAttributesAIsTransformed branch and xAccum/yAccum setup (software-obj.c:215-316) including the outside-texture-vs-transparent-hole distinction that feeds SpriteLayer::resolve_pixel's priority-upgrade rule. h/v flip are correctly ignored once affine (hardware reuses those bits as matrixNum bits 3-4). The rotation/scale-to-matrix computation (ObjAffineSet/SetOamMatrix trig side) is not modelled — only matrix selection and consumption are. Windows/blending/mosaic remain out of scope (issue #98).",
+          "rust_target": "crates/rendering/src/sprite_affine.rs",
+          "spec": "S-2",
+          "status": "rewritten"
+        },
         "oam_regular_fields": {
           "reason": "OamEntry/ObjShape/obj_dimensions port the regular (non-affine) OBJ attribute fields sprite.c populates: screen position (with the 9-bit sign-extended X and modulo-256-wrapping Y verified against mgba's software-obj.c), tile index, 4bpp palette bank/8bpp flag, H/V flip, the twelve square/wide/tall shape-size pairs, priority, and enabled state; affine attributes are out of scope (issue #64).",
           "rust_target": "crates/rendering/src/oam.rs",

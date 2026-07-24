@@ -18,31 +18,53 @@
 //! - At equal priority among sprites, the **lower OAM index wins** — see
 //!   [`SpriteLayer::resolve_pixel`](crate::sprite::SpriteLayer::resolve_pixel).
 //!
-//! Windows, blending, mosaic, and affine layers are out of scope (issue
-//! #64) `(behavioral-fidelity)`.
+//! Windows, blending, and mosaic are out of scope (issue #64's remaining
+//! deferral); affine BG layers slot in as of S-2 slice 3 (issue #98) via
+//! [`BgSlot::new_affine`] — [`compose_frame`]'s own signature is unchanged
+//! `(behavioral-fidelity)`.
 
+use crate::affine::AffineMatrix;
 use crate::bg::BgLayer;
+use crate::bg_affine::{AffineBgLayer, Overflow};
 use crate::framebuffer::Framebuffer;
+use crate::palette::Rgb888;
 use crate::sprite::SpriteLayer;
 
-/// One of up to four regular BG layers participating in priority
-/// composition, paired with the register-level state the GBA PPU consults
-/// alongside the tile/palette data itself: which of BG0..BG3 this is
-/// (breaks same-priority ties), the layer's priority, its current scroll
-/// position, and whether it's enabled at all.
+/// A BG slot's per-pixel sampling mode: a regular BG (wrapping scroll
+/// offsets, [`BgLayer`]) or an affine BG (matrix + reference point +
+/// overflow, [`AffineBgLayer`]) — see [`BgSlot::new`]/[`BgSlot::new_affine`].
+#[derive(Debug, Clone, Copy)]
+enum BgKind<'a> {
+    Regular {
+        layer: BgLayer<'a>,
+        scroll_x: u16,
+        scroll_y: u16,
+    },
+    Affine {
+        layer: AffineBgLayer<'a>,
+        matrix: AffineMatrix,
+        ref_x: i32,
+        ref_y: i32,
+        overflow: Overflow,
+    },
+}
+
+/// One of up to four BG layers (regular or affine) participating in
+/// priority composition, paired with the register-level state the GBA PPU
+/// consults alongside the tile/palette data itself: which of BG0..BG3 this
+/// is (breaks same-priority ties), the layer's priority, its per-pixel
+/// sampling mode, and whether it's enabled at all.
 #[derive(Debug, Clone, Copy)]
 pub struct BgSlot<'a> {
-    layer: BgLayer<'a>,
+    kind: BgKind<'a>,
     bg_index: u8,
     priority: u8,
-    scroll_x: u16,
-    scroll_y: u16,
     enabled: bool,
 }
 
 impl<'a> BgSlot<'a> {
-    /// Build a BG slot. `bg_index` (`0..=3`, identifying BG0..BG3) and
-    /// `priority` (`0..=3`) are masked to 2 bits, so this never panics.
+    /// Build a regular BG slot. `bg_index` (`0..=3`, identifying BG0..BG3)
+    /// and `priority` (`0..=3`) are masked to 2 bits, so this never panics.
     #[must_use]
     pub const fn new(
         layer: BgLayer<'a>,
@@ -53,12 +75,65 @@ impl<'a> BgSlot<'a> {
         enabled: bool,
     ) -> Self {
         Self {
-            layer,
+            kind: BgKind::Regular {
+                layer,
+                scroll_x,
+                scroll_y,
+            },
             bg_index: bg_index & 0x03,
             priority: priority & 0x03,
-            scroll_x,
-            scroll_y,
             enabled,
+        }
+    }
+
+    /// Build an affine BG slot (S-2 slice 3, issue #98). `bg_index` and
+    /// `priority` are masked exactly as in [`new`](Self::new). `ref_x`/
+    /// `ref_y` are the frame's latched reference point in 20.8 fixed point
+    /// (see [`crate::bg_affine`]'s module docs for why one static
+    /// reference point per frame is the behaviorally-correct model of how
+    /// pokeemerald drives `BG2X`/`BG2Y`).
+    #[must_use]
+    #[allow(clippy::too_many_arguments)] // Mirrors the affine BG's full per-frame register set.
+    pub const fn new_affine(
+        layer: AffineBgLayer<'a>,
+        bg_index: u8,
+        priority: u8,
+        matrix: AffineMatrix,
+        ref_x: i32,
+        ref_y: i32,
+        overflow: Overflow,
+        enabled: bool,
+    ) -> Self {
+        Self {
+            kind: BgKind::Affine {
+                layer,
+                matrix,
+                ref_x,
+                ref_y,
+                overflow,
+            },
+            bg_index: bg_index & 0x03,
+            priority: priority & 0x03,
+            enabled,
+        }
+    }
+
+    /// Sample this slot's resolved color at `(x, y)`, dispatching to the
+    /// regular or affine layer per [`BgKind`].
+    fn sample(&self, x: usize, y: usize) -> Option<Rgb888> {
+        match self.kind {
+            BgKind::Regular {
+                layer,
+                scroll_x,
+                scroll_y,
+            } => layer.sample_scrolled(x, y, scroll_x, scroll_y),
+            BgKind::Affine {
+                layer,
+                matrix,
+                ref_x,
+                ref_y,
+                overflow,
+            } => layer.sample_pixel(matrix, ref_x, ref_y, overflow, x, y),
         }
     }
 }
@@ -92,10 +167,7 @@ pub fn compose_frame(sprites: &SpriteLayer<'_>, bg_slots: &[BgSlot<'_>]) -> Fram
                 if !slot.enabled {
                     continue;
                 }
-                let Some(color) = slot
-                    .layer
-                    .sample_scrolled(x, y, slot.scroll_x, slot.scroll_y)
-                else {
+                let Some(color) = slot.sample(x, y) else {
                     continue;
                 };
                 let key = (slot.priority, 1 + slot.bg_index);
@@ -116,6 +188,8 @@ pub fn compose_frame(sprites: &SpriteLayer<'_>, bg_slots: &[BgSlot<'_>]) -> Fram
 #[cfg(test)]
 mod tests {
     use super::{compose_frame, BgSlot};
+    use crate::affine::AffineMatrix;
+    use crate::bg_affine::{AffineBgLayer, AffineTilemap, Overflow};
     use crate::oam::{OamEntry, ObjShape};
     use crate::palette::{Bgr555, Palette};
     use crate::sprite::SpriteLayer;
@@ -370,6 +444,75 @@ mod tests {
         let no_sprite_tiles = Tileset::decode(BitDepth::Bpp4, &[]).unwrap();
         let sprites = empty_sprite_layer(&entries, &no_sprite_tiles);
         let fb = compose_frame(&sprites, &[]);
+        assert_eq!(fb.pixel(0, 0), Some(crate::palette::Rgb888::BLACK));
+    }
+
+    /// A fully opaque 1x1-tile (8x8px) *affine* BG layer using flat 8bpp
+    /// palette index 200, plus its owning tileset/palette/tilemap.
+    fn opaque_affine_bg_fixture(color_channel: u8) -> (Tileset, Palette, AffineTilemap) {
+        let tileset = Tileset::decode(BitDepth::Bpp8, &[200u8; 64]).unwrap();
+        let mut colors = [Bgr555::default(); Palette::LEN];
+        colors[200] = Bgr555::from_channels(color_channel, 0, 0);
+        let palette = Palette::new(colors);
+        let tilemap = AffineTilemap::new(1, 1, vec![0]).unwrap();
+        (tileset, palette, tilemap)
+    }
+
+    #[test]
+    fn affine_bg_slot_participates_in_priority_ordering_like_a_regular_bg() {
+        // An affine BG (priority 0, best) must beat a regular BG (priority
+        // 1) at the same pixel, exactly as two regular BGs would — proving
+        // BgSlot::new_affine slots into compose_frame's existing ordering
+        // without changing compose_frame's own signature.
+        let (affine_tiles, affine_palette, affine_tilemap) = opaque_affine_bg_fixture(9);
+        let affine_layer = AffineBgLayer::new(&affine_tiles, &affine_palette, &affine_tilemap);
+        let (regular_tiles, regular_palette, regular_map) = opaque_bg_fixture(1);
+        let regular_layer = crate::bg::BgLayer::new(&regular_tiles, &regular_palette, &regular_map);
+
+        let slots = [
+            BgSlot::new_affine(
+                affine_layer,
+                0,
+                0, // best priority
+                AffineMatrix::IDENTITY,
+                0,
+                0,
+                Overflow::Transparent,
+                true,
+            ),
+            BgSlot::new(regular_layer, 1, 1, 0, 0, true), // worse priority
+        ];
+        let entries: [OamEntry; 0] = [];
+        let no_sprite_tiles = Tileset::decode(BitDepth::Bpp4, &[]).unwrap();
+        let sprites = empty_sprite_layer(&entries, &no_sprite_tiles);
+
+        let fb = compose_frame(&sprites, &slots);
+        assert_eq!(
+            fb.pixel(0, 0),
+            Some(Bgr555::from_channels(9, 0, 0).to_rgb888()),
+            "the affine BG's better priority must win"
+        );
+    }
+
+    #[test]
+    fn disabled_affine_bg_slot_contributes_nothing() {
+        let (tiles, palette, tilemap) = opaque_affine_bg_fixture(9);
+        let layer = AffineBgLayer::new(&tiles, &palette, &tilemap);
+        let slots = [BgSlot::new_affine(
+            layer,
+            0,
+            0,
+            AffineMatrix::IDENTITY,
+            0,
+            0,
+            Overflow::Transparent,
+            false, // disabled
+        )];
+        let entries: [OamEntry; 0] = [];
+        let no_sprite_tiles = Tileset::decode(BitDepth::Bpp4, &[]).unwrap();
+        let sprites = empty_sprite_layer(&entries, &no_sprite_tiles);
+
+        let fb = compose_frame(&sprites, &slots);
         assert_eq!(fb.pixel(0, 0), Some(crate::palette::Rgb888::BLACK));
     }
 }

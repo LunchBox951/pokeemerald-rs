@@ -30,6 +30,15 @@ pub enum RenderError {
         /// The actual number of entries supplied.
         actual: usize,
     },
+
+    /// An [`AffineTilemap`](crate::bg_affine::AffineTilemap)'s raw tile-index
+    /// count did not match `width_tiles * height_tiles`.
+    AffineTilemapSizeMismatch {
+        /// The expected tile-index count (`width_tiles * height_tiles`).
+        expected: usize,
+        /// The actual number of tile indices supplied.
+        actual: usize,
+    },
 }
 
 impl fmt::Display for RenderError {
@@ -43,6 +52,10 @@ impl fmt::Display for RenderError {
             Self::TilemapSizeMismatch { expected, actual } => write!(
                 f,
                 "tilemap expected {expected} screen entries, got {actual}"
+            ),
+            Self::AffineTilemapSizeMismatch { expected, actual } => write!(
+                f,
+                "affine tilemap expected {expected} tile indices, got {actual}"
             ),
         }
     }
