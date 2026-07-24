@@ -58,6 +58,52 @@ impl MosaicSize {
     pub const fn snap(&self, x: usize, y: usize) -> (usize, usize) {
         (x - x % self.h as usize, y - y % self.v as usize)
     }
+
+    /// Snap a *sprite-local* footprint offset to its mosaic block origin and
+    /// clamp the result back into the sprite footprint — the OBJ-mosaic
+    /// variant of [`snap`](Self::snap).
+    ///
+    /// `local` is screen coordinate `screen`'s offset inside a sprite whose
+    /// footprint runs `0..dim` along this axis (`local = screen - origin`).
+    /// The block origin in local space is `local - (screen % size)`; unlike
+    /// [`snap`](Self::snap), which floors a *screen* coordinate and lets an
+    /// out-of-footprint result be discarded (a transparent leading band when
+    /// the sprite's edge is not block-aligned), this clamps that origin into
+    /// `0..=dim-1`, so the block straddling the leading edge samples the edge
+    /// column/row instead of vanishing. Reproduces mgba's OBJ-mosaic edge
+    /// clamp: `localX` to `[0, width-1]`
+    /// (`software-obj.c`'s `SPRITE_MOSAIC_LOOP`, lines 20-25) and `localY` to
+    /// `[sprite->y, endY-1]` (`video-software.c`, lines 1043-1050)
+    /// `(behavioral-fidelity)`. At [`MosaicSize::NONE`] the block position is
+    /// always `0`, so it returns `local` unchanged — a no-op snap.
+    ///
+    /// The caller still decides footprint membership from the *raw*
+    /// coordinate; this only relocates the sampled position.
+    #[must_use]
+    pub const fn snap_local(
+        &self,
+        local: (usize, usize),
+        screen: (usize, usize),
+        dim: (usize, usize),
+    ) -> (usize, usize) {
+        (
+            Self::snap_local_axis(local.0, screen.0, self.h, dim.0),
+            Self::snap_local_axis(local.1, screen.1, self.v, dim.1),
+        )
+    }
+
+    /// One axis of [`snap_local`](Self::snap_local): floor `local` to its
+    /// block origin (`local - screen % size`, low edge clamped to `0` via
+    /// `saturating_sub`) then clamp the high edge to `dim - 1`.
+    const fn snap_local_axis(local: usize, screen: usize, size: u8, dim: usize) -> usize {
+        let block_offset = screen % size as usize;
+        let origin = local.saturating_sub(block_offset);
+        if origin >= dim {
+            dim - 1
+        } else {
+            origin
+        }
+    }
 }
 
 impl Default for MosaicSize {
@@ -104,6 +150,29 @@ mod tests {
         assert_eq!(size.snap(4, 2), (4, 2));
         assert_eq!(size.snap(7, 3), (4, 2));
         assert_eq!(size.snap(8, 5), (8, 4));
+    }
+
+    #[test]
+    fn snap_local_clamps_the_leading_partial_block_to_the_edge() {
+        // 4-wide blocks, sprite footprint 0..8, footprint origin at screen 2.
+        // Screen x=2 (local 0) and x=3 (local 1) fall in screen block [0,4),
+        // whose origin is left of the footprint; the local block origin
+        // (local - screen%4) goes negative and must clamp to 0 (the edge),
+        // matching mgba's `localX` clamp to [0, width-1].
+        let m = MosaicSize::new(4, 1);
+        assert_eq!(m.snap_local((0, 0), (2, 0), (8, 8)), (0, 0));
+        assert_eq!(m.snap_local((1, 0), (3, 0), (8, 8)), (0, 0));
+        // Interior block [4,8): local origin stays inside the footprint (col 2).
+        assert_eq!(m.snap_local((2, 0), (4, 0), (8, 8)), (2, 0));
+        assert_eq!(m.snap_local((5, 0), (7, 0), (8, 8)), (2, 0));
+    }
+
+    #[test]
+    fn snap_local_is_identity_at_none() {
+        let none = MosaicSize::NONE;
+        for (local, screen) in [((0, 0), (5, 9)), ((3, 7), (200, 130)), ((7, 7), (2, 2))] {
+            assert_eq!(none.snap_local(local, screen, (8, 8)), local);
+        }
     }
 
     #[test]

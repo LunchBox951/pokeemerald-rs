@@ -190,6 +190,15 @@ pub const fn darken(color: Rgb888, evy: u8) -> Rgb888 {
 /// alpha-blends against a valid second target behind it — *overriding*
 /// brighten/darken/none if that's what was configured
 /// `(behavioral-fidelity)`.
+///
+/// When that forced blend finds *no* valid second target, mgba does not fall
+/// back to the raw color: it clears the target-1 flag but leaves its
+/// `variant` (brighten/darken) selector set, which stays on precisely when the
+/// OBJ is a `BLDCNT` first target and the selected effect is brighten/darken
+/// with effects enabled here (`software-obj.c:177-192`). This function mirrors
+/// that by falling through to the normal brighten/darken branch on the
+/// no-second-target path rather than returning `front_color`
+/// `(behavioral-fidelity)`.
 #[must_use]
 pub fn resolve_pixel_color(
     cfg: &EffectsConfig,
@@ -211,13 +220,22 @@ pub fn resolve_pixel_color(
                 && cfg.target1.contains(front_kind)));
 
     if alpha_target1 {
-        return match next {
+        match next {
             Some((next_color, next_kind)) if cfg.target2.contains(next_kind) => {
-                alpha_blend(front_color, next_color, cfg.eva, cfg.evb)
+                return alpha_blend(front_color, next_color, cfg.eva, cfg.evb);
             }
-            None if cfg.target2.backdrop => alpha_blend(front_color, backdrop, cfg.eva, cfg.evb),
-            Some(_) | None => front_color,
-        };
+            None if cfg.target2.backdrop => {
+                return alpha_blend(front_color, backdrop, cfg.eva, cfg.evb);
+            }
+            // No valid second target: do *not* return the raw front color.
+            // mgba only zeroes `variant` (its brighten/darken selector) in the
+            // target2-present branch (software-obj.c:177-192); with no target2
+            // it clears FLAG_TARGET_1 but leaves `variant` set, so an OBJ that
+            // is a BLDCNT first target under a brighten/darken effect still
+            // gets that effect. Fall through to the brighten/darken branch
+            // below `(behavioral-fidelity)`.
+            Some(_) | None => {}
+        }
     }
 
     if effects_enabled && cfg.target1.contains(front_kind) {
@@ -474,11 +492,44 @@ mod tests {
 
     #[test]
     fn resolve_semi_transparent_obj_with_no_target2_stays_unblended() {
+        // Default config: OBJ is *not* a BLDCNT first target and the effect is
+        // None, so mgba's `variant` selector is off — with no target2 the
+        // forced blend is dropped and no brighten/darken applies, leaving the
+        // raw color (software-obj.c:177-192).
         let cfg = EffectsConfig::default();
         let front_color = Rgb888 { r: 7, g: 7, b: 7 };
         let front = (front_color, LayerKind::Obj, true);
         let result = resolve_pixel_color(&cfg, true, front, None, Rgb888::BLACK);
         assert_eq!(result, front_color);
+    }
+
+    #[test]
+    fn resolve_semi_transparent_obj_target1_brighten_with_no_target2_still_brightens() {
+        // A semi-transparent OBJ (forced_alpha=true) that is *also* a BLDCNT
+        // first target under a BRIGHTEN effect, with nothing valid behind it.
+        // mgba only zeroes its brighten/darken `variant` in the target2-present
+        // branch; with no target2 it clears FLAG_TARGET_1 but keeps `variant`,
+        // so the sprite is brightened rather than emitted raw
+        // (software-obj.c:177-192). The pre-fix code returned the raw color on
+        // this no-second-target path.
+        let cfg = EffectsConfig {
+            effect: ColorEffect::Brighten,
+            target1: LayerTargets {
+                bg: [false; 4],
+                obj: true, // OBJ *is* a BLDCNT first target
+                backdrop: false,
+            },
+            target2: LayerTargets::default(), // nothing is a valid second target
+            eva: 0,
+            evb: 0,
+            evy: 16,
+        };
+        let front = (Rgb888 { r: 0, g: 0, b: 0 }, LayerKind::Obj, true);
+        let result = resolve_pixel_color(&cfg, true, front, None, Rgb888::BLACK);
+        assert_eq!(
+            result.r, 255,
+            "no valid target2 must fall back to the selected brighten, not the raw color"
+        );
     }
 
     #[test]

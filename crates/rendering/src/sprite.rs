@@ -190,12 +190,7 @@ impl<'a> SpriteLayer<'a> {
             if !entry.enabled() || entry.mode() == ObjMode::Window {
                 continue;
             }
-            let (sx, sy) = if entry.mosaic() {
-                mosaic.snap(x, y)
-            } else {
-                (x, y)
-            };
-            let texel = self.sample_entry(entry, sx, sy);
+            let texel = self.sample_entry_mosaic(entry, x, y, mosaic);
             if matches!(texel, Texel::Outside) {
                 continue;
             }
@@ -258,12 +253,10 @@ impl<'a> SpriteLayer<'a> {
             if !entry.enabled() || entry.mode() != ObjMode::Window {
                 return false;
             }
-            let (sx, sy) = if entry.mosaic() {
-                mosaic.snap(x, y)
-            } else {
-                (x, y)
-            };
-            matches!(self.sample_entry(entry, sx, sy), Texel::Opaque(_))
+            matches!(
+                self.sample_entry_mosaic(entry, x, y, mosaic),
+                Texel::Opaque(_)
+            )
         })
     }
 
@@ -271,6 +264,44 @@ impl<'a> SpriteLayer<'a> {
     /// [`Texel::Outside`] if `(x, y)` is beyond the sprite's footprint (or
     /// its tile is absent from the tileset), [`Texel::Transparent`] on a
     /// palette-index-0 texel, else [`Texel::Opaque`] with the resolved color.
+    ///
+    /// Sample one sprite's texel at framebuffer coordinate `(x, y)`, honoring
+    /// its OBJ mosaic if set: [`Texel::Outside`] if `(x, y)` is beyond the
+    /// sprite's footprint (or its tile is absent from the tileset),
+    /// [`Texel::Transparent`] on a palette-index-0 texel, else
+    /// [`Texel::Opaque`] with the resolved color.
+    ///
+    /// A composition of [`footprint`](Self::footprint) (does the *raw*
+    /// coordinate land on the sprite, and where) and
+    /// [`sample_local`](Self::sample_local) (fetch the texel at a
+    /// footprint-local offset). For a mosaic-enabled entry the sampled texel
+    /// comes from the mosaic block origin, clamped back into the footprint
+    /// ([`MosaicSize::snap_local`]); keeping the footprint test on the raw
+    /// coordinate is what avoids the pre-fix transparent leading band when the
+    /// sprite's top/left edge is not block-aligned — the block straddling the
+    /// edge now replicates the edge column/row instead of being discarded
+    /// `(behavioral-fidelity)`. At [`MosaicSize::NONE`] (or a non-mosaic entry)
+    /// the snap is a no-op.
+    fn sample_entry_mosaic(
+        &self,
+        entry: &OamEntry,
+        x: usize,
+        y: usize,
+        mosaic: MosaicSize,
+    ) -> Texel {
+        let Some((dx, dy)) = Self::footprint(entry, x, y) else {
+            return Texel::Outside;
+        };
+        let (lx, ly) = if entry.mosaic() {
+            mosaic.snap_local((dx, dy), (x, y), entry.bounding_box())
+        } else {
+            (dx, dy)
+        };
+        self.sample_local(entry, lx, ly)
+    }
+
+    /// Whether framebuffer coordinate `(x, y)` lands on `entry`'s footprint,
+    /// and if so its footprint-local offset `(dx, dy)` (both `< bounding box`).
     ///
     /// `x`/`y` are always framebuffer coordinates (`<240`, `<160`) and
     /// sprite dimensions never exceed 64, so the `i32` round-trips below
@@ -282,8 +313,7 @@ impl<'a> SpriteLayer<'a> {
         clippy::cast_possible_wrap,
         clippy::cast_sign_loss
     )]
-    fn sample_entry(&self, entry: &OamEntry, x: usize, y: usize) -> Texel {
-        const DIM: usize = BitDepth::TILE_DIM;
+    fn footprint(entry: &OamEntry, x: usize, y: usize) -> Option<(usize, usize)> {
         // Footprint clipping uses the *bounding box* — equal to
         // `entry.dimensions()` for a regular or plain-affine sprite, but
         // doubled for `AffineMode::AffineDoubleSize` (oam.rs's module docs)
@@ -296,7 +326,7 @@ impl<'a> SpriteLayer<'a> {
         // offset+clip.
         let dx = x as i32 - i32::from(entry.x());
         if dx < 0 || dx as usize >= width {
-            return Texel::Outside;
+            return None;
         }
 
         // Y: OBJ Y-space is 8-bit, but hardware does not clip each scanline
@@ -314,9 +344,19 @@ impl<'a> SpriteLayer<'a> {
         }
         let dy = y as i32 - y0;
         if dy < 0 || dy as usize >= height {
-            return Texel::Outside;
+            return None;
         }
-        let dy = dy as usize;
+        Some((dx as usize, dy as usize))
+    }
+
+    /// Fetch the texel at footprint-local offset `(dx, dy)` (both already
+    /// known to be inside the bounding box, e.g. from
+    /// [`footprint`](Self::footprint)). Applies affine projection or H/V
+    /// flip and tile addressing.
+    #[allow(clippy::cast_possible_truncation)] // OAM tile indices fit in u16.
+    fn sample_local(&self, entry: &OamEntry, dx: usize, dy: usize) -> Texel {
+        const DIM: usize = BitDepth::TILE_DIM;
+        let (width, height) = entry.bounding_box();
 
         if !matches!(entry.affine(), AffineMode::Regular) {
             // Affine (and affine-double-size) sampling is a genuinely
@@ -330,24 +370,19 @@ impl<'a> SpriteLayer<'a> {
                 self.tileset_4bpp,
                 self.tileset_8bpp,
                 self.palette,
-                dx as usize,
+                dx,
                 dy,
             );
         }
 
         // H/V flip mirrors the whole sprite footprint, not each tile
         // independently (unlike a BG ScreenEntry's per-tile flip bits).
-        let local_col = if entry.h_flip() {
-            width - 1 - dx as usize
-        } else {
-            dx as usize
-        };
+        let local_col = if entry.h_flip() { width - 1 - dx } else { dx };
         let local_row = if entry.v_flip() { height - 1 - dy } else { dy };
 
         let tiles_per_row = width / DIM;
         let tile_col = local_col / DIM;
         let tile_row = local_row / DIM;
-        #[allow(clippy::cast_possible_truncation)] // OAM tile indices fit in u16.
         let tile_offset = (tile_row * tiles_per_row + tile_col) as u16;
         // A multi-tile sprite's derived tile index wraps within the 32 KiB
         // OBJ VRAM window (mgba's `(xBase + charBase) & maskLo` byte-address
@@ -399,6 +434,7 @@ pub(crate) enum Texel {
 mod tests {
     use super::SpriteLayer;
     use crate::framebuffer::Framebuffer;
+    use crate::mosaic::MosaicSize;
     use crate::oam::{OamEntry, ObjShape};
     use crate::palette::{Bgr555, Palette, Rgb888};
     use crate::tile::{BitDepth, Tileset};
@@ -909,6 +945,65 @@ mod tests {
             layer.resolve_pixel(8, 0).map(|p| p.color),
             Some(colors[100].to_rgb888()),
             "right half's index 512 wraps to tile 0, not dropped"
+        );
+    }
+
+    #[test]
+    fn mosaic_sprite_leading_partial_block_replicates_the_edge_column() {
+        // Finding 1: OBJ mosaic with a sprite whose left edge is not
+        // block-aligned. mosaicH=4, sprite x=2: the screen-aligned block [0,4)
+        // straddles the sprite's leading edge (only screen x=2,3 sit on the
+        // sprite). mgba clamps the snapped sample coordinate back into the
+        // footprint — `localX` to `[0, width-1]` (software-obj.c:20-25) — so
+        // that partial block samples the sprite's edge column (local col 0) and
+        // stays visible. The pre-fix screen-space snap floored to block origin
+        // 0, which fell outside the footprint and was discarded, leaving a
+        // transparent leading band.
+        let mut bytes = [0u8; 32];
+        bytes[0] = 0x01; // row 0 col 0 -> index 1 (red)   -- the edge column
+        bytes[1] = 0x02; // row 0 col 2 -> index 2 (green) -- first full block
+        bytes[3] = 0x03; // row 0 col 6 -> index 3 (blue)
+        let tileset = Tileset::decode(BitDepth::Bpp4, &bytes).unwrap();
+        let mut colors = [Bgr555::default(); Palette::LEN];
+        colors[1] = Bgr555::from_channels(0x1F, 0, 0); // red
+        colors[2] = Bgr555::from_channels(0, 0x1F, 0); // green
+        colors[3] = Bgr555::from_channels(0, 0, 0x1F); // blue
+        let palette = Palette::new(colors);
+
+        let entries = [entry(2, 0, true).with_mosaic(true)];
+        let layer = SpriteLayer::new(&entries, &tileset, &tileset, &palette);
+        // 4-wide blocks horizontally; no vertical mosaic (isolate the H edge).
+        let mosaic = MosaicSize::new(4, 1);
+
+        // Leading partial block (screen x = 2, 3): must replicate the edge
+        // column (local col 0 = red), not stay transparent.
+        assert_eq!(
+            layer.resolve_pixel_with_mosaic(2, 0, mosaic).map(|p| p.color),
+            Some(colors[1].to_rgb888()),
+            "the block straddling the leading edge must show the edge column, not a transparent band"
+        );
+        assert_eq!(
+            layer
+                .resolve_pixel_with_mosaic(3, 0, mosaic)
+                .map(|p| p.color),
+            Some(colors[1].to_rgb888()),
+        );
+
+        // Interior block [4,8): its origin is inside the footprint, so it still
+        // samples local col 2 (green) exactly as the pre-fix screen-space snap
+        // did — interior behavior is unchanged.
+        assert_eq!(
+            layer
+                .resolve_pixel_with_mosaic(4, 0, mosaic)
+                .map(|p| p.color),
+            Some(colors[2].to_rgb888()),
+            "interior block still samples its block-origin column (unchanged)"
+        );
+        assert_eq!(
+            layer
+                .resolve_pixel_with_mosaic(7, 0, mosaic)
+                .map(|p| p.color),
+            Some(colors[2].to_rgb888()),
         );
     }
 
