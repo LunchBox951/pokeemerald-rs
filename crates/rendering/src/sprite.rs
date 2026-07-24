@@ -214,12 +214,24 @@ impl<'a> SpriteLayer<'a> {
             return Texel::Outside;
         }
 
-        // Y: OBJ Y-space wraps modulo 256, so a sprite hanging off the
-        // bottom re-appears at the top (oam.rs's module docs).
-        let dy = (y as i32 - i32::from(entry.y())).rem_euclid(OamEntry::Y_SPACE) as usize;
-        if dy >= height {
+        // Y: OBJ Y-space is 8-bit, but hardware does not clip each scanline
+        // against the box modulo 256 — it places the box *once*, as a single
+        // contiguous band. A box whose bottom would pass row 256 is pulled up
+        // to start at a negative origin (mgba's OAM-clean rule: `y = objY; if
+        // (y + height > 256) { y -= 256; }`, then a scanline is covered iff
+        // `y0 <= y < y0 + height`, `common.c` / `video-software.c`). This
+        // matters for tall boxes: a 128-tall double-size OBJ at raw Y in
+        // 129..159 must render only its top-wrapped rows, never a second band
+        // down at its raw Y — the modulo-per-scanline reading drew both.
+        let mut y0 = i32::from(entry.y());
+        if y0 + height as i32 > OamEntry::Y_SPACE {
+            y0 -= OamEntry::Y_SPACE;
+        }
+        let dy = y as i32 - y0;
+        if dy < 0 || dy as usize >= height {
             return Texel::Outside;
         }
+        let dy = dy as usize;
 
         if !matches!(entry.affine(), AffineMode::Regular) {
             // Affine (and affine-double-size) sampling is a genuinely
@@ -487,10 +499,10 @@ mod tests {
 
     #[test]
     fn composite_wraps_a_sprite_hanging_off_the_bottom_to_the_top() {
-        // y=250 with an 8-tall sprite covers OBJ rows 250..258. Row 256
-        // wraps to screen row 0, i.e. local sprite row 6 (250+6=256).
-        // Screen row 0 -> dy = (0 - 250).rem_euclid(256) = 6, so an opaque
-        // pixel at tile row 6 must be visible at screen row 0.
+        // y=250 with an 8-tall sprite: 250+8>256, so the box is placed once
+        // at negative origin y0 = 250-256 = -6, covering screen rows -6..2,
+        // i.e. only rows 0..1 on-screen. Screen row 0 -> dy = 0 - (-6) = 6, so
+        // an opaque pixel at tile row 6 must be visible at screen row 0.
         let mut bytes = [0u8; 32];
         bytes[6 * 4] = 0x11; // tile row 6, col 0 -> index 1 (opaque)
         let tileset = Tileset::decode(BitDepth::Bpp4, &bytes).unwrap();
@@ -505,9 +517,12 @@ mod tests {
             layer.resolve_pixel(0, 0).map(|p| p.color),
             Some(colors[1].to_rgb888())
         );
-        // Screen row 5 -> dy = (5-250).rem_euclid(256) = 11, outside the
-        // 8-tall footprint (>= height), so nothing is drawn there.
+        // Screen row 5 -> dy = 5 - (-6) = 11, past the 8-tall footprint
+        // (>= height), so nothing is drawn there.
         assert_eq!(layer.resolve_pixel(0, 5), None);
+        // The single-band rule must also leave screen row 100 (far from both
+        // the wrapped top band and the raw Y=250 origin) empty.
+        assert_eq!(layer.resolve_pixel(0, 100), None);
     }
 
     #[test]
