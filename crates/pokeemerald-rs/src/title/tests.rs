@@ -7,8 +7,8 @@
 //! `#[ignore]`d.
 
 use super::{
-    affine_tilemap_from_raw, image_to_tileset, palette_from_ref, regular_tilemap_from_raw,
-    TitleSceneError,
+    affine_tilemap_from_raw, image_to_tileset, regular_tilemap_from_raw, title_palette_from_refs,
+    TitleSceneError, LOGO_PALETTE_COLORS,
 };
 use assets::{AssetPack, ImageRef};
 use rendering::{BitDepth, RenderError};
@@ -116,74 +116,107 @@ fn image_to_tileset_rejects_non_tile_aligned_dimensions() {
     );
 }
 
-/// Write a minimal, single-entry synthetic pack (mirroring
-/// `assets::pack::tests`' fixture style) holding one `Palette` entry at
-/// `title/palette/test`, so [`palette_from_ref`] can be exercised
-/// against a real [`assets::PaletteRef`] -- its `raw` field is
-/// crate-private to `assets::pack`, so this is the only way to build
-/// one from outside that crate.
-fn write_synthetic_palette_pack(colors: &[u8]) -> std::path::PathBuf {
-    let entry_id = "title/palette/test";
-    let color_count = u16::try_from(colors.len() / 2).unwrap();
+#[test]
+fn image_to_tileset_rejects_payload_shorter_than_declared_dimensions() {
+    let pixels = vec![0u8; 63];
+    let image = ImageRef {
+        width: 8,
+        height: 8,
+        bit_depth: 4,
+        pixels: &pixels,
+    };
+    let err = image_to_tileset("bogus/id", image, BitDepth::Bpp4).unwrap_err();
+    assert_eq!(
+        err,
+        TitleSceneError::ImagePixelCountMismatch {
+            id: "bogus/id",
+            width: 8,
+            height: 8,
+            actual: 63,
+        }
+    );
+}
 
+/// Write a minimal synthetic pack (mirroring `assets::pack::tests`'
+/// fixture style) holding the supplied `Palette` entries, so
+/// [`title_palette_from_refs`] can be exercised against real
+/// [`assets::PaletteRef`] values -- their `raw` field is crate-private to
+/// `assets::pack`.
+fn write_synthetic_palette_pack(entries: &[(&str, &[u8])]) -> std::path::PathBuf {
     let header_size = 8 + 4 + 4;
-    let directory_size = 2 + entry_id.len() + 1 + 8 + 8 + 2; // + color_count meta (2 bytes)
-    let payload_offset = header_size + directory_size;
+    let directory_size: usize = entries
+        .iter()
+        .map(|(id, _)| 2 + id.len() + 1 + 8 + 8 + 2)
+        .sum();
+    let mut payload_offset = header_size + directory_size;
 
     let mut out = Vec::new();
     out.extend_from_slice(&assets::pack::MAGIC);
     out.extend_from_slice(&assets::pack::FORMAT_VERSION.to_le_bytes());
-    out.extend_from_slice(&1u32.to_le_bytes()); // entry_count
-    out.extend_from_slice(&u16::try_from(entry_id.len()).unwrap().to_le_bytes());
-    out.extend_from_slice(entry_id.as_bytes());
-    out.push(1); // EntryKind tag 1 = Palette
-    out.extend_from_slice(&(payload_offset as u64).to_le_bytes());
-    out.extend_from_slice(&(colors.len() as u64).to_le_bytes());
-    out.extend_from_slice(&color_count.to_le_bytes());
-    out.extend_from_slice(colors);
+    out.extend_from_slice(&u32::try_from(entries.len()).unwrap().to_le_bytes());
+    for (entry_id, colors) in entries {
+        let color_count = u16::try_from(colors.len() / 2).unwrap();
+        out.extend_from_slice(&u16::try_from(entry_id.len()).unwrap().to_le_bytes());
+        out.extend_from_slice(entry_id.as_bytes());
+        out.push(1); // EntryKind tag 1 = Palette
+        out.extend_from_slice(&(payload_offset as u64).to_le_bytes());
+        out.extend_from_slice(&(colors.len() as u64).to_le_bytes());
+        out.extend_from_slice(&color_count.to_le_bytes());
+        payload_offset += colors.len();
+    }
+    for (_, colors) in entries {
+        out.extend_from_slice(colors);
+    }
 
     let path = std::env::temp_dir().join(format!(
         "pokeemerald-rs-title-test-palette-{}-{}.pack",
         std::process::id(),
-        colors.len()
+        out.len()
     ));
     std::fs::write(&path, &out).unwrap();
     path
 }
 
 #[test]
-fn palette_from_ref_caps_to_usable_colors() {
-    // 4 BGR555 colors: red, green, blue, white.
-    let raw: [u8; 8] = [
-        0x1F, 0x00, // red   (r=0x1F, g=0, b=0)
-        0xE0, 0x03, // green (r=0, g=0x1F, b=0)
-        0x00, 0x7C, // blue  (r=0, g=0, b=0x1F)
-        0xFF, 0x7F, // white
-    ];
-    let path = write_synthetic_palette_pack(&raw);
+fn title_palette_splices_rayquaza_clouds_after_224_logo_colors() {
+    let logo = [0x1F, 0x00].repeat(256); // red
+    let rayquaza_clouds = [0xE0, 0x03].repeat(16); // green
+    let path = write_synthetic_palette_pack(&[
+        ("title/palette/pokemon_logo", &logo),
+        ("title/palette/rayquaza_and_clouds", &rayquaza_clouds),
+    ]);
     let pack = AssetPack::load(&path).unwrap();
-    let palette_ref = pack.palette("title/palette/test").unwrap();
-
-    let palette = palette_from_ref(palette_ref, 2);
-    assert_eq!(palette.color(0).to_rgb888().r, 255);
-    assert_eq!(palette.color(1).to_rgb888().g, 255);
-    // Capped out: index 2 (blue) was never loaded, stays default/black.
-    assert_eq!(palette.color(2), rendering::Bgr555::default());
+    let palette = title_palette_from_refs(
+        pack.palette("title/palette/pokemon_logo").unwrap(),
+        pack.palette("title/palette/rayquaza_and_clouds").unwrap(),
+    );
+    let split = u8::try_from(LOGO_PALETTE_COLORS).unwrap();
+    assert_eq!(palette.color(split - 1).to_rgb888().r, 255);
+    assert_eq!(palette.color(split).to_rgb888().g, 255);
+    assert_eq!(palette.color(split + 15).to_rgb888().g, 255);
+    assert_eq!(palette.color(split + 16), rendering::Bgr555::default());
 
     let _ = std::fs::remove_file(path);
 }
 
 #[test]
-fn palette_from_ref_never_reads_past_the_entrys_own_color_count() {
-    let raw: [u8; 2] = [0x1F, 0x00]; // one color: red
-    let path = write_synthetic_palette_pack(&raw);
+fn title_palette_never_reads_past_either_entrys_own_color_count() {
+    let logo: [u8; 2] = [0x1F, 0x00]; // one color: red
+    let rayquaza_clouds: [u8; 2] = [0xE0, 0x03]; // one color: green
+    let path = write_synthetic_palette_pack(&[
+        ("title/palette/pokemon_logo", &logo),
+        ("title/palette/rayquaza_and_clouds", &rayquaza_clouds),
+    ]);
     let pack = AssetPack::load(&path).unwrap();
-    let palette_ref = pack.palette("title/palette/test").unwrap();
-
-    // Cap requested (240) far exceeds this entry's actual 1 color.
-    let palette = palette_from_ref(palette_ref, 240);
+    let palette = title_palette_from_refs(
+        pack.palette("title/palette/pokemon_logo").unwrap(),
+        pack.palette("title/palette/rayquaza_and_clouds").unwrap(),
+    );
     assert_eq!(palette.color(0).to_rgb888().r, 255);
     assert_eq!(palette.color(1), rendering::Bgr555::default());
+    let split = u8::try_from(LOGO_PALETTE_COLORS).unwrap();
+    assert_eq!(palette.color(split).to_rgb888().g, 255);
+    assert_eq!(palette.color(split + 1), rendering::Bgr555::default());
 
     let _ = std::fs::remove_file(path);
 }

@@ -24,13 +24,13 @@
 //! extracted file sizes (`clouds.bin`/`rayquaza.bin` are 2048 bytes = 1024
 //! `u16`s; `pokemon_logo.bin` is 1024 bytes = 1024 `u8`s).
 //!
-//! All three layers share **one** [`Palette`], built from
-//! `title/palette/pokemon_logo` (256 colors): upstream's own
+//! All three layers share **one** [`Palette`], matching upstream's
+//! `gTitleScreenBgPalettes`: the build truncates
+//! `title/palette/pokemon_logo` to 224 colors, concatenates the 16 colors
+//! from `title/palette/rayquaza_and_clouds`, then
 //! `LoadPalette(gTitleScreenBgPalettes, BG_PLTT_ID(0), 15 * PLTT_SIZE_4BPP)`
-//! loads exactly the first 240 (`15 * 16`) colors of that same file into BG
-//! palette RAM -- `title/palette/rayquaza_and_clouds` (concatenated after
-//! it in the real ROM data) never actually reaches VRAM, and is therefore
-//! *not* used here, matching hardware. See [`LOADED_BG_PALETTE_COLORS`].
+//! loads that full 240-color block into BG palette RAM. See
+//! [`LOGO_PALETTE_COLORS`] and [`RAYQUAZA_CLOUDS_PALETTE_COLORS`].
 //!
 //! The affine BG2 layer's reference point/matrix are the steady-state
 //! values `CB2_InitTitleScreen`/`Task_TitleScreenPhase2` settle on once the
@@ -71,10 +71,13 @@ use rendering::{
 /// matching `BGCNT_TXT256x256`/`BGCNT_AFF256x256` (see the module docs).
 const BG_DIM_TILES: usize = 32;
 
-/// How many of `title/palette/pokemon_logo`'s 256 colors upstream actually
-/// loads into BG palette RAM (see the module docs): `15 * PLTT_SIZE_4BPP`
-/// bytes, i.e. 15 palette banks.
-const LOADED_BG_PALETTE_COLORS: usize = 15 * Palette::BANK_LEN;
+/// How many `title/palette/pokemon_logo` colors upstream's build keeps:
+/// `-num_colors 224`, i.e. 14 palette banks (see the module docs).
+const LOGO_PALETTE_COLORS: usize = 14 * Palette::BANK_LEN;
+
+/// The final palette bank upstream concatenates from
+/// `title/palette/rayquaza_and_clouds` (see the module docs).
+const RAYQUAZA_CLOUDS_PALETTE_COLORS: usize = Palette::BANK_LEN;
 
 /// BG indices and priorities, transcribed from `CB2_InitTitleScreen`'s
 /// `BGnCNT` register writes (see the module docs' table).
@@ -117,6 +120,19 @@ pub enum TitleSceneError {
         /// The entry's height in pixels.
         height: u32,
     },
+    /// A `title/image/<id>` entry's payload length does not match its
+    /// declared dimensions. Guards [`image_to_tileset`] against slicing
+    /// beyond malformed or stale pack data.
+    ImagePixelCountMismatch {
+        /// The pack entry id.
+        id: &'static str,
+        /// The entry's declared width in pixels.
+        width: u32,
+        /// The entry's declared height in pixels.
+        height: u32,
+        /// The number of one-byte pixels actually present.
+        actual: usize,
+    },
 }
 
 impl fmt::Display for TitleSceneError {
@@ -127,6 +143,15 @@ impl fmt::Display for TitleSceneError {
             Self::ImageNotTileAligned { id, width, height } => write!(
                 f,
                 "title screen: image `{id}` ({width}x{height}) is not a whole number of 8x8 tiles"
+            ),
+            Self::ImagePixelCountMismatch {
+                id,
+                width,
+                height,
+                actual,
+            } => write!(
+                f,
+                "title screen: image `{id}` declares {width}x{height} pixels but its payload contains {actual}"
             ),
         }
     }
@@ -178,7 +203,8 @@ impl TitleScene {
     ///
     /// [`TitleSceneError::Pack`] if any `title/{image,palette,raw}/*` entry
     /// this needs is missing or the wrong kind; [`TitleSceneError::Render`]
-    /// or [`TitleSceneError::ImageNotTileAligned`] if a present entry's
+    /// [`TitleSceneError::ImageNotTileAligned`], or
+    /// [`TitleSceneError::ImagePixelCountMismatch`] if a present entry's
     /// bytes don't fit the shape `rendering`'s types expect (see the module
     /// docs -- unreachable against a real pack).
     pub fn from_pack(pack: &AssetPack) -> Result<Self, TitleSceneError> {
@@ -198,9 +224,9 @@ impl TitleScene {
             BitDepth::Bpp8,
         )?;
 
-        let palette = palette_from_ref(
+        let palette = title_palette_from_refs(
             pack.palette("title/palette/pokemon_logo")?,
-            LOADED_BG_PALETTE_COLORS,
+            pack.palette("title/palette/rayquaza_and_clouds")?,
         );
 
         let rayquaza_map = regular_tilemap_from_raw(pack.raw("title/raw/rayquaza")?)?;
@@ -303,8 +329,10 @@ pub fn load_default() -> Result<TitleScene, TitleSceneError> {
 ///
 /// # Errors
 ///
-/// [`TitleSceneError::ImageNotTileAligned`] if `image`'s width or height is
-/// not a multiple of 8 (never true for the real upstream art);
+/// [`TitleSceneError::ImagePixelCountMismatch`] if `image`'s declared
+/// dimensions do not match its payload length;
+/// [`TitleSceneError::ImageNotTileAligned`] if its width or height is not a
+/// multiple of 8 (neither is true for the real upstream art);
 /// [`TitleSceneError::Render`] should the repacked byte length somehow not
 /// match `bit_depth`'s tile size (unreachable in practice -- the packer
 /// below always emits a whole number of tiles).
@@ -316,6 +344,17 @@ fn image_to_tileset(
     const DIM: usize = BitDepth::TILE_DIM;
 
     let (width, height) = (image.width as usize, image.height as usize);
+    let pixel_count_matches = width
+        .checked_mul(height)
+        .is_some_and(|expected| expected == image.pixels.len());
+    if !pixel_count_matches {
+        return Err(TitleSceneError::ImagePixelCountMismatch {
+            id,
+            width: image.width,
+            height: image.height,
+            actual: image.pixels.len(),
+        });
+    }
     if !width.is_multiple_of(DIM) || !height.is_multiple_of(DIM) {
         return Err(TitleSceneError::ImageNotTileAligned {
             id,
@@ -354,20 +393,28 @@ fn image_to_tileset(
     Tileset::decode(bit_depth, &packed).map_err(TitleSceneError::from)
 }
 
-/// Build a flat 256-color [`Palette`] from a pack palette entry, using only
-/// its first `usable_colors` colors (capped to both the entry's actual
-/// [`PaletteRef::color_count`] and [`Palette::LEN`]) -- every remaining slot
-/// stays [`Bgr555::default`] (raw `0`), matching unloaded GBA palette RAM
-/// (see the module docs on why the title screen caps this at
-/// [`LOADED_BG_PALETTE_COLORS`]).
-fn palette_from_ref(palette: PaletteRef<'_>, usable_colors: usize) -> Palette {
-    let usable_colors = usable_colors
-        .min(Palette::LEN)
-        .min(usize::from(palette.color_count));
+/// Build the title screen's flat 256-color [`Palette`] exactly as upstream's
+/// concatenated `gTitleScreenBgPalettes`: 224 logo colors followed by the
+/// 16-color Rayquaza/cloud bank. Every remaining slot stays
+/// [`Bgr555::default`] (raw `0`), matching unloaded GBA palette RAM.
+fn title_palette_from_refs(logo: PaletteRef<'_>, rayquaza_clouds: PaletteRef<'_>) -> Palette {
     let mut colors = [Bgr555::default(); Palette::LEN];
-    for (slot, raw) in colors.iter_mut().zip(palette.colors()).take(usable_colors) {
+
+    let logo_colors = usize::from(logo.color_count).min(LOGO_PALETTE_COLORS);
+    for (slot, raw) in colors.iter_mut().zip(logo.colors()).take(logo_colors) {
         *slot = Bgr555::from_raw(raw);
     }
+
+    let rayquaza_clouds_colors =
+        usize::from(rayquaza_clouds.color_count).min(RAYQUAZA_CLOUDS_PALETTE_COLORS);
+    for (slot, raw) in colors[LOGO_PALETTE_COLORS..]
+        .iter_mut()
+        .zip(rayquaza_clouds.colors())
+        .take(rayquaza_clouds_colors)
+    {
+        *slot = Bgr555::from_raw(raw);
+    }
+
     Palette::new(colors)
 }
 
