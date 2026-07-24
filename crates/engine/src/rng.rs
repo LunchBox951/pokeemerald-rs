@@ -49,6 +49,18 @@ pub struct Rng {
     state: u32,
 }
 
+impl Default for Rng {
+    /// Seed `0` — a plain starting point for callers (e.g. a composed host
+    /// struct's `#[derive(Default)]`) that don't otherwise care about the
+    /// initial seed and will reseed explicitly before relying on the
+    /// sequence. Upstream has no equivalent "default" generator: `gRngValue`
+    /// / `gRng2Value` are always explicitly seeded (`SeedRng`/`SeedRng2`)
+    /// before use.
+    fn default() -> Self {
+        Self::new(0)
+    }
+}
+
 impl Rng {
     /// Create a generator with the given seed.
     ///
@@ -166,6 +178,11 @@ mod tests {
     fn iso_transforms_use_their_documented_constants() {
         assert_eq!(iso_randomize1(1), 1_103_539_936);
         assert_eq!(iso_randomize2(1), 1_103_527_590);
+    }
+
+    #[test]
+    fn default_seeds_zero() {
+        assert_eq!(Rng::default().state(), Rng::new(0).state());
     }
 
     #[test]
