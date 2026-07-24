@@ -340,10 +340,11 @@ fn extract_title_screen(upstream: &Path, writer: &mut PackWriter) -> Result<(), 
     let dir = upstream.join("graphics/title_screen");
 
     let mut entries: Vec<PathBuf> = std::fs::read_dir(&dir)
-        .map_err(|e| ExtractError::ReadFailed(dir.clone(), e.to_string()))?
-        .filter_map(Result::ok)
-        .map(|e| e.path())
-        .collect();
+        .and_then(|it| {
+            it.map(|entry| entry.map(|e| e.path()))
+                .collect::<std::io::Result<_>>()
+        })
+        .map_err(|e| ExtractError::ReadFailed(dir.clone(), e.to_string()))?;
     entries.sort();
 
     for path in entries {
