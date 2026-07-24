@@ -31,10 +31,16 @@
 //! [`AssetPack::tileset`] returns a [`TilesetHandle`] bundling a tileset's
 //! tile bitmap, its 16 palettes, and its raw metatile tables.
 //! [`AssetPack::sprite`] and [`AssetPack::sprite_palette`] reach the
-//! player/NPC sprite sheets and the two player palettes. The lower-level
-//! [`AssetPack::image`] / [`AssetPack::palette`] / [`AssetPack::raw`]
-//! accessors work over any entry by its full id (used directly for e.g.
-//! `title/image/*` entries, which have no bundling handle of their own).
+//! player/NPC sprite sheets and the two player palettes.
+//! [`AssetPack::layout_map`] / [`AssetPack::layout_border`] reach a map
+//! layout's grid/border bytes — deliberately raw byte accessors, not a
+//! decoding handle: `crate::map_layouts`'s `LayoutGrid`/`BorderGrid` own the
+//! decode, this crate's pack loader stays decoupled from it (same rationale
+//! as `xtask::extract`/`crates::assets::pack` staying decoupled from each
+//! other — see this module's docs). The lower-level [`AssetPack::image`] /
+//! [`AssetPack::palette`] / [`AssetPack::raw`] accessors work over any entry
+//! by its full id (used directly for e.g. `title/image/*` entries, which
+//! have no bundling handle of their own).
 //!
 //! # Format (mirrors `xtask::extract::pack`'s write side — version 1)
 //!
@@ -264,6 +270,37 @@ impl AssetPack {
     /// Same as [`palette`](Self::palette).
     pub fn sprite_palette(&self, who: &str) -> Result<PaletteRef<'_>, PackError> {
         self.palette(&format!("sprite/palette/{who}"))
+    }
+
+    /// Look up a map layout's grid bytes (`map.bin`) by its normalized pack
+    /// name (e.g. `"littleroot_town"` — see `xtask::extract::mod`'s module
+    /// docs for the id scheme and which layouts the pack currently ships).
+    ///
+    /// Hand the returned bytes to
+    /// [`MapLayout::grid`](crate::map_layouts::MapLayout::grid) or
+    /// [`LayoutGrid::new`](crate::map_layouts::LayoutGrid::new) to decode —
+    /// this crate's pack loader and its map-layout decode layer stay
+    /// decoupled by design (see this module's docs), so this method only
+    /// fetches bytes; it never constructs a `LayoutGrid` itself.
+    ///
+    /// # Errors
+    ///
+    /// Same as [`raw`](Self::raw).
+    pub fn layout_map(&self, name: &str) -> Result<&[u8], PackError> {
+        self.raw(&format!("layout/{name}/map"))
+    }
+
+    /// Look up a map layout's border bytes (`border.bin`) by its normalized
+    /// pack name. Hand the returned bytes to
+    /// [`BorderGrid::new`](crate::map_layouts::BorderGrid::new) to decode
+    /// (see [`layout_map`](Self::layout_map)'s docs on why this stays a raw
+    /// byte accessor).
+    ///
+    /// # Errors
+    ///
+    /// Same as [`raw`](Self::raw).
+    pub fn layout_border(&self, name: &str) -> Result<&[u8], PackError> {
+        self.raw(&format!("layout/{name}/border"))
     }
 }
 
