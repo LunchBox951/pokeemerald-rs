@@ -1,31 +1,76 @@
-//! The boot shell's top-level owned type (I-1 slice 1): wires `platform`'s
-//! window/input/pacing loop to a composed `rendering` scene, converting and
-//! presenting each frame.
+//! The boot shell's top-level owned type (I-1 slice 1; I-2, issue #109):
+//! wires `platform`'s window/input/pacing loop to a composed `rendering`
+//! scene, converting and presenting each frame.
 //!
 //! [`App`] is intentionally the only thing `main` touches (`main` stays
 //! thin, see the crate root docs) `(oop-boundaries)` -- this is the shell
 //! future engine state plugs into.
 //!
 //! [`App::new_headless`] plus [`App::step`] (F-3, V-1) are the seam `xtask`'s
-//! `e2e --suite smoke` run drives in-process: the exact same composed scene
-//! and per-frame loop body as [`App::run`], just against `platform`'s null
-//! window backend instead of a real one (see
-//! `platform::Platform::new_headless`).
+//! `e2e --suite smoke` run drives in-process: the exact same per-frame loop
+//! body as [`App::run`], just against `platform`'s null window backend
+//! instead of a real one (see `platform::Platform::new_headless`).
+//! [`App::new_headless`] always composes the I-1 synthetic [`BootScene`]
+//! (never the real title screen) so that suite's no-local-pack CI behaviour
+//! stays exactly as it was before I-2 -- see [`crate::title`]'s module docs
+//! for the real title screen, which only [`App::new`] (the real windowed
+//! entry point) composes.
 
 use platform::{ButtonState, Buttons, Frame, Platform, PlatformError};
 
 use crate::frame::to_platform_frame;
 use crate::scene::BootScene;
+use crate::title::{self, TitleSceneError};
 
 /// Compose a fresh [`BootScene`] into a `platform`-ready frame.
 ///
-/// Shared by both constructors, which each call this exactly once: the
-/// scene is static for this slice (no engine state exists yet to reflect
-/// per frame, see the module docs), so composing it once up front and
-/// caching the result on [`App`] is correct and avoids re-allocating a
-/// 240x160 frame every [`App::step`].
+/// The synthetic placeholder scene: only [`App::new_headless`] uses this
+/// now (see the module docs) -- it exists purely so headless tests and
+/// `xtask`'s smoke suite keep a scene to render when no asset pack has been
+/// extracted, without depending on one.
 fn compose_boot_frame() -> Box<Frame> {
     to_platform_frame(&BootScene::new().compose())
+}
+
+/// Why [`App::new`] failed to start.
+///
+/// Concrete per-crate enum `(oop-boundaries)` -- no `anyhow`. Wraps both
+/// halves of startup: opening the platform window, and loading/decoding the
+/// real title screen ([`crate::title::load_default`]). The latter is the
+/// I-2 "missing pack" diagnostic: [`AppError::Title`] with
+/// [`TitleSceneError::is_pack_missing`] true prints exactly what to run
+/// (`./init.sh` then `cargo xtask extract`) and lets `main` exit cleanly --
+/// no panic, no window ever opened.
+#[derive(Debug)]
+pub enum AppError {
+    /// Opening the platform window/event loop failed.
+    Platform(PlatformError),
+    /// Loading or decoding the real title screen failed -- see
+    /// [`TitleSceneError`], most commonly "no pack extracted yet".
+    Title(TitleSceneError),
+}
+
+impl std::fmt::Display for AppError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Platform(err) => write!(f, "{err}"),
+            Self::Title(err) => write!(f, "{err}"),
+        }
+    }
+}
+
+impl std::error::Error for AppError {}
+
+impl From<PlatformError> for AppError {
+    fn from(err: PlatformError) -> Self {
+        Self::Platform(err)
+    }
+}
+
+impl From<TitleSceneError> for AppError {
+    fn from(err: TitleSceneError) -> Self {
+        Self::Title(err)
+    }
 }
 
 /// The GBA button names in [`Buttons`] bit order, used only to format a
@@ -44,35 +89,48 @@ const BUTTON_NAMES: [(Buttons, &str); 10] = [
 ];
 
 /// The running game shell: an open window (or, headlessly, `platform`'s null
-/// backend) and the (currently static) placeholder scene's already-composed
-/// frame, presented unchanged every frame.
+/// backend) and the current scene's already-composed frame, presented
+/// unchanged every frame.
 ///
 /// No engine/battle state yet (out of scope for this slice, see the crate
 /// root docs) -- the scene is a fixed placeholder; a future slice replaces
 /// `frame` with real per-frame recomposition once there is engine state to
-/// reflect (see [`compose_boot_frame`]).
+/// reflect. [`App::new`] composes the real title screen
+/// ([`compose_boot_frame`]'s synthetic scene is [`App::new_headless`]-only,
+/// see the module docs).
 pub struct App {
     platform: Platform,
     frame: Box<Frame>,
 }
 
 impl App {
-    /// Open a window titled `title` and build the placeholder scene.
+    /// Load the real title screen (I-2) from the local asset pack, then open
+    /// a window titled `title` to present it.
+    ///
+    /// Loads/decodes the scene *before* opening the platform window, so a
+    /// missing pack (or any other title-screen error) is surfaced cleanly
+    /// without ever flashing a window open first.
     ///
     /// # Errors
     ///
-    /// Returns a [`PlatformError`] if the platform's windowing event loop
-    /// could not be created.
-    pub fn new(title: impl Into<String>) -> Result<Self, PlatformError> {
-        Ok(Self {
-            platform: Platform::new(title)?,
-            frame: compose_boot_frame(),
-        })
+    /// Returns [`AppError::Title`] if the asset pack has not been extracted
+    /// yet (check [`TitleSceneError::is_pack_missing`] -- its rendered
+    /// message names the exact `./init.sh`/`cargo xtask extract` commands to
+    /// run) or is otherwise malformed; [`AppError::Platform`] if the
+    /// platform's windowing event loop could not be created.
+    pub fn new(title: impl Into<String>) -> Result<Self, AppError> {
+        let scene = title::load_default()?;
+        let frame = to_platform_frame(&scene.compose());
+        let platform = Platform::new(title)?;
+        Ok(Self { platform, frame })
     }
 
-    /// Build the same placeholder scene as [`App::new`], but against
-    /// `platform`'s explicit headless/null backend (F-3, V-1) instead of a
-    /// real window.
+    /// Build the I-1 synthetic placeholder scene against `platform`'s
+    /// explicit headless/null backend (F-3, V-1) instead of a real window --
+    /// deliberately *not* the real title screen (see the module docs), so
+    /// this constructor's behaviour (and `xtask`'s smoke suite, which drives
+    /// it) stays exactly as it was before I-2 regardless of whether a local
+    /// asset pack happens to be present.
     ///
     /// Always succeeds (mirrors `platform::Platform::new_headless`, which
     /// opens no OS resources), unlike [`App::new`]. This is the constructor
@@ -94,9 +152,9 @@ impl App {
     ///
     /// # Errors
     ///
-    /// Returns a [`PlatformError`] if window/surface creation or
+    /// Returns [`AppError::Platform`] if window/surface creation or
     /// presentation fails.
-    pub fn run(&mut self) -> Result<(), PlatformError> {
+    pub fn run(&mut self) -> Result<(), AppError> {
         while self.step()? {}
         Ok(())
     }
@@ -114,8 +172,9 @@ impl App {
     ///
     /// # Errors
     ///
-    /// Returns a [`PlatformError`] if input pumping or presentation fails.
-    pub fn step(&mut self) -> Result<bool, PlatformError> {
+    /// Returns [`AppError::Platform`] if input pumping or presentation
+    /// fails.
+    pub fn step(&mut self) -> Result<bool, AppError> {
         if !self.platform.pump()? {
             return Ok(false);
         }
