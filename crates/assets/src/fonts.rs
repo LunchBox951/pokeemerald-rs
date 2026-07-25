@@ -181,13 +181,23 @@ impl<'a> FontGlyphSheet<'a> {
     ///
     /// Returns [`AssetError::FontSheetWrongShape`] if `image`'s dimensions
     /// aren't exactly [`SHEET_WIDTH`] x [`SHEET_HEIGHT`] — every real
-    /// upstream Latin font sheet is.
+    /// upstream Latin font sheet is — or
+    /// [`AssetError::FontSheetWrongPixelCount`] if its pixel buffer doesn't
+    /// contain exactly one palette index per pixel.
     pub const fn new(font: FontId, image: ImageRef<'a>) -> Result<Self, AssetError> {
         if image.width != SHEET_WIDTH || image.height != SHEET_HEIGHT {
             return Err(AssetError::FontSheetWrongShape(
                 font.pack_name(),
                 image.width,
                 image.height,
+            ));
+        }
+        let expected_pixels = (SHEET_WIDTH * SHEET_HEIGHT) as usize;
+        if image.pixels.len() != expected_pixels {
+            return Err(AssetError::FontSheetWrongPixelCount(
+                font.pack_name(),
+                expected_pixels,
+                image.pixels.len(),
             ));
         }
         Ok(Self { font, image })
@@ -412,6 +422,21 @@ mod tests {
         };
         let err = FontGlyphSheet::new(FontId::Normal, image).unwrap_err();
         assert_eq!(err, AssetError::FontSheetWrongShape("normal", 2, 2));
+    }
+
+    #[test]
+    fn rejects_wrong_pixel_count() {
+        let expected = (SHEET_WIDTH * SHEET_HEIGHT) as usize;
+
+        for pixels in [vec![0u8; expected - 1], vec![0u8; expected + 1]] {
+            let actual = pixels.len();
+            let image = synthetic_sheet(&pixels);
+            let err = FontGlyphSheet::new(FontId::Normal, image).unwrap_err();
+            assert_eq!(
+                err,
+                AssetError::FontSheetWrongPixelCount("normal", expected, actual)
+            );
+        }
     }
 
     #[test]

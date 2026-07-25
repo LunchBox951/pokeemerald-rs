@@ -260,6 +260,14 @@ pub enum AssetError {
     /// image's actual width/height. Every real upstream Latin font sheet is
     /// exactly that shape; see [`FontGlyphSheet::new`](crate::fonts::FontGlyphSheet::new).
     FontSheetWrongShape(&'static str, u32, u32),
+
+    /// A caller-supplied font glyph-sheet image's pixel buffer didn't contain
+    /// exactly one palette index per pixel.
+    ///
+    /// Carries the offending font's asset-pack name, the expected pixel
+    /// count, and the actual pixel count. See
+    /// [`FontGlyphSheet::new`](crate::fonts::FontGlyphSheet::new).
+    FontSheetWrongPixelCount(&'static str, usize, usize),
 }
 
 impl fmt::Display for AssetError {
@@ -312,6 +320,10 @@ impl fmt::Display for AssetError {
                 "font `{name}` glyph sheet wrong shape: expected {}x{}, got {width}x{height}",
                 crate::fonts::SHEET_WIDTH,
                 crate::fonts::SHEET_HEIGHT
+            ),
+            Self::FontSheetWrongPixelCount(name, expected, actual) => write!(
+                f,
+                "font `{name}` glyph sheet wrong pixel count: expected {expected}, got {actual}"
             ),
         }
     }
