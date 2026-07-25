@@ -56,13 +56,27 @@
 //!   which is why the other ~130 NPC palettes are *not* extracted here —
 //!   documented as a deferred item).
 //!
+//! - **Map layout grids** (S-4): the Littleroot Town layout family's
+//!   `map.bin` / `border.bin` grid files — the town itself plus every
+//!   interior it contains (both player houses' floors, Professor Birch's
+//!   lab, and its rarely-referenced "with table" variant; see [`LAYOUTS`]).
+//!   Resolved via `data/layouts/layouts.json` ([`layouts_json`]) rather than
+//!   hardcoded upstream paths, and extracted as opaque
+//!   [`pack::PackKind::Raw`] blobs — same rationale as `metatiles.bin` /
+//!   `metatile_attributes.bin` above: these are upstream's own flat binary
+//!   files, not compiled from another source. `crates/assets::map_layouts`
+//!   already ships the typed decode layer (`MetatileCell`, `LayoutGrid`,
+//!   `BorderGrid`) that reads these bytes back out of the pack; this
+//!   pipeline only needs to get the bytes *into* the pack.
+//!
 //! Explicitly **not** extracted (deferred to future slices, not silently
 //! dropped): metatile-to-tile mapping beyond the raw `metatiles.bin` bytes
 //! (no decode/typed access yet — that's a rendering-layer concern once
 //! `crates/rendering` needs it), NPC-specific palette assignment (the
-//! `object_event_graphics_info` indirection table), and any tileset outside
-//! the five above (every other `data/tilesets/*` directory stays `pending`
-//! in the ledger).
+//! `object_event_graphics_info` indirection table), any tileset outside the
+//! five above (every other `data/tilesets/*` directory stays `pending` in
+//! the ledger), and any map layout outside the Littleroot Town family above
+//! (every other `data/layouts/*` directory likewise stays `pending`).
 //!
 //! # Asset id scheme
 //!
@@ -73,6 +87,8 @@
 //! - `title/image/<name>`, `title/palette/<name>`, `title/raw/<name>`
 //! - `sprite/<relative-path>` (e.g. `sprite/brendan/walking`, `sprite/nurse`)
 //! - `sprite/palette/brendan`, `sprite/palette/may`
+//! - `layout/<name>/map`, `layout/<name>/border` (e.g.
+//!   `layout/littleroot_town/map`, `layout/littleroot_town/border`)
 //!
 //! `<name>` is always a normalized, stable identifier (upstream's own
 //! directory/file naming, which is already `snake_case` and stable across
@@ -82,6 +98,7 @@
 mod error;
 pub mod inflate;
 pub mod jasc_pal;
+mod layouts_json;
 pub mod pack;
 pub mod png;
 
@@ -172,6 +189,7 @@ fn extract_to(output_path: &Path) -> Result<ExtractReport, ExtractError> {
     }
     extract_title_screen(&upstream, &mut writer)?;
     extract_sprites(&upstream, &mut writer)?;
+    extract_layouts(&upstream, &mut writer)?;
 
     let entry_count = writer.len();
     let bytes = writer.finish()?;
@@ -384,9 +402,112 @@ fn extract_sprites(upstream: &Path, writer: &mut PackWriter) -> Result<(), Extra
     Ok(())
 }
 
+/// `(LAYOUT_* id, normalized pack name)` — the Littleroot Town layout
+/// family this pipeline extracts: the town itself plus every interior it
+/// contains. See the module docs for why this list, not the full
+/// `data/layouts/` tree, is in scope.
+///
+/// Every id here is looked up in `layouts.json` at extract time
+/// ([`extract_layouts`]) rather than the directory name being derived
+/// mechanically from it, so a typo here surfaces as a clear
+/// [`ExtractError::UnknownLayoutInJson`] instead of a silently-wrong path.
+const LAYOUTS: [(&str, &str); 7] = [
+    ("LAYOUT_LITTLEROOT_TOWN", "littleroot_town"),
+    (
+        "LAYOUT_LITTLEROOT_TOWN_BRENDANS_HOUSE_1F",
+        "littleroot_town_brendans_house_1f",
+    ),
+    (
+        "LAYOUT_LITTLEROOT_TOWN_BRENDANS_HOUSE_2F",
+        "littleroot_town_brendans_house_2f",
+    ),
+    (
+        "LAYOUT_LITTLEROOT_TOWN_MAYS_HOUSE_1F",
+        "littleroot_town_mays_house_1f",
+    ),
+    (
+        "LAYOUT_LITTLEROOT_TOWN_MAYS_HOUSE_2F",
+        "littleroot_town_mays_house_2f",
+    ),
+    (
+        "LAYOUT_LITTLEROOT_TOWN_PROFESSOR_BIRCHS_LAB",
+        "littleroot_town_professor_birchs_lab",
+    ),
+    (
+        // Upstream's rarely-used variant with an extra table prop; its
+        // `map.bin` is one of the handful with trailing padding beyond
+        // `width * height * 2` bytes (see
+        // `crates/assets::map_layouts`'s module docs) -- included anyway
+        // since it's the same directory family and the extraction below
+        // doesn't need to treat it specially (the padding is inside the
+        // grid `LayoutGrid` already knows to tolerate, not in how this
+        // pipeline copies the file).
+        "LAYOUT_LITTLEROOT_TOWN_PROFESSOR_BIRCHS_LAB_WITH_TABLE",
+        "littleroot_town_professor_birchs_lab_with_table",
+    ),
+];
+
+/// Every upstream `border.bin` is a fixed 2x2 grid of `u16` cells (see
+/// `crates/assets::map_layouts::BORDER_CELLS`, duplicated here rather than
+/// shared -- this pipeline's crate never depends on `crates/assets`, and
+/// vice versa, matching `crates/assets::pack`'s documented decoupling from
+/// this module's own pack format).
+const BORDER_BLOCK_BYTES: usize = 2 * 2 * 2;
+
+/// Extract the Littleroot Town layout family's `map.bin` / `border.bin`
+/// grid files (see [`LAYOUTS`] and the module docs).
+fn extract_layouts(upstream: &Path, writer: &mut PackWriter) -> Result<(), ExtractError> {
+    let json_path = upstream.join("data/layouts/layouts.json");
+    let text = read_text(&json_path)?;
+    let entries =
+        layouts_json::parse(&text).map_err(|e| ExtractError::LayoutsJson(json_path.clone(), e))?;
+
+    for (layout_id, name) in LAYOUTS {
+        let entry =
+            entries
+                .iter()
+                .find(|e| e.id == layout_id)
+                .ok_or(ExtractError::UnknownLayoutInJson(
+                    json_path.clone(),
+                    layout_id,
+                ))?;
+
+        let map_bytes = read_file(&upstream.join(&entry.blockdata_filepath))?;
+        let width = usize::try_from(entry.width).unwrap_or(usize::MAX);
+        let height = usize::try_from(entry.height).unwrap_or(usize::MAX);
+        let expected_min = width.saturating_mul(height).saturating_mul(2);
+        if map_bytes.len() < expected_min {
+            return Err(ExtractError::LayoutGridTooShort {
+                layout_id,
+                expected: expected_min,
+                actual: map_bytes.len(),
+            });
+        }
+        writer.push(PackEntry {
+            id: format!("layout/{name}/map"),
+            kind: PackKind::Raw,
+            payload: map_bytes,
+        });
+
+        let border_bytes = read_file(&upstream.join(&entry.border_filepath))?;
+        if border_bytes.len() != BORDER_BLOCK_BYTES {
+            return Err(ExtractError::LayoutBorderWrongSize {
+                layout_id,
+                actual: border_bytes.len(),
+            });
+        }
+        writer.push(PackEntry {
+            id: format!("layout/{name}/border"),
+            kind: PackKind::Raw,
+            payload: border_bytes,
+        });
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{collect_pngs_sorted, extract_to, upstream_present, ExtractError};
+    use super::{collect_pngs_sorted, extract_to, upstream_present, ExtractError, LAYOUTS};
 
     // Real-checkout tests: `pokeemerald/` must be present locally
     // (`./init.sh`) to run these. `cargo test --workspace` in CI never has
@@ -442,5 +563,54 @@ mod tests {
     fn collect_pngs_sorted_rejects_missing_dir() {
         let err = collect_pngs_sorted(std::path::Path::new("/does/not/exist")).unwrap_err();
         assert!(matches!(err, super::ExtractError::ReadFailed(..)));
+    }
+
+    #[test]
+    fn layouts_list_has_no_duplicate_ids_or_names() {
+        // Pure data check -- no filesystem access -- so it runs everywhere.
+        let ids: Vec<_> = LAYOUTS.iter().map(|(id, _)| *id).collect();
+        let names: Vec<_> = LAYOUTS.iter().map(|(_, name)| *name).collect();
+        let unique_ids: std::collections::HashSet<_> = ids.iter().collect();
+        let unique_names: std::collections::HashSet<_> = names.iter().collect();
+        assert_eq!(ids.len(), unique_ids.len(), "duplicate LAYOUT_* id");
+        assert_eq!(names.len(), unique_names.len(), "duplicate pack name");
+        for id in &ids {
+            assert!(id.starts_with("LAYOUT_LITTLEROOT_TOWN"));
+        }
+        for name in &names {
+            assert!(name.starts_with("littleroot_town"));
+            // Pack ids are ASCII lowercase + digits + underscores + `/` only
+            // (see `crate::extract`'s "Asset id scheme" docs).
+            assert!(name
+                .chars()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_'));
+        }
+    }
+
+    #[test]
+    #[ignore = "needs a local `./init.sh`-fetched pokeemerald/ checkout"]
+    fn layout_grids_are_extracted() {
+        // No pack reader lives in this crate (`crates/assets` owns that,
+        // and this crate deliberately never depends on it -- see the
+        // module docs), so this just confirms every expected `layout/*`
+        // id's bytes made it into the pack's directory, via a crude
+        // substring search over the raw file (every id is stored verbatim,
+        // UTF-8, in the directory region -- see `pack`'s format docs).
+        assert!(upstream_present(), "run ./init.sh first");
+        let path = scratch_path("layouts");
+        let report = extract_to(&path).expect("extraction should succeed against a real checkout");
+        let bytes = std::fs::read(&report.output_path).unwrap();
+        for (_, name) in LAYOUTS {
+            for suffix in ["map", "border"] {
+                let id = format!("layout/{name}/{suffix}");
+                assert!(
+                    bytes
+                        .windows(id.len())
+                        .any(|window| window == id.as_bytes()),
+                    "missing pack entry id `{id}`"
+                );
+            }
+        }
+        let _ = std::fs::remove_file(report.output_path);
     }
 }

@@ -43,6 +43,27 @@ fn synthetic_pack() -> Vec<u8> {
             meta: vec![],
             payload: vec![9, 9, 9],
         },
+        Entry {
+            id: "tileset/test/metatile_attributes",
+            kind_tag: 2,
+            meta: vec![],
+            // Three valid behavior/layer-type pairs, little-endian.
+            payload: vec![0x01, 0x00, 0x02, 0x10, 0x03, 0x20],
+        },
+        Entry {
+            id: "layout/test/map",
+            kind_tag: 2,
+            meta: vec![],
+            // A 2x1 grid: two raw MetatileCell u16s, little-endian.
+            payload: vec![0x01, 0x00, 0x02, 0x00],
+        },
+        Entry {
+            id: "layout/test/border",
+            kind_tag: 2,
+            meta: vec![],
+            // A fixed 2x2 border block (8 bytes).
+            payload: vec![0x01, 0x00, 0x02, 0x00, 0x03, 0x00, 0x04, 0x00],
+        },
     ];
     // Directory entries must be written in id-sorted order, exactly like
     // the real writer (`extract::pack::PackWriter::finish`) -- sort here
@@ -193,6 +214,114 @@ fn truncated_pack_is_rejected() {
 }
 
 #[test]
+fn layout_map_and_border_are_raw_blobs() {
+    let path = write_synthetic_pack("layout-raw");
+    let pack = AssetPack::load(&path).unwrap();
+
+    let map_bytes = pack.layout_map("test").unwrap();
+    assert_eq!(map_bytes, &[0x01, 0x00, 0x02, 0x00]);
+
+    let border_bytes = pack.layout_border("test").unwrap();
+    assert_eq!(
+        border_bytes,
+        &[0x01, 0x00, 0x02, 0x00, 0x03, 0x00, 0x04, 0x00]
+    );
+
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn layout_map_bytes_decode_through_map_layouts_layout_grid() {
+    // Exercises the intended pipeline end to end: pack bytes -> a caller-
+    // supplied `MapLayout` -> `LayoutGrid` decode. This crate's pack loader
+    // never constructs a `LayoutGrid` itself (see `pack`'s module docs);
+    // this test proves the two sides agree on the byte shape regardless.
+    use crate::map_layouts::{LayoutGrid, LayoutId, MapLayout, MetatileCell};
+
+    let path = write_synthetic_pack("layout-decode");
+    let pack = AssetPack::load(&path).unwrap();
+    let map_bytes = pack.layout_map("test").unwrap();
+
+    let layout = MapLayout {
+        id: LayoutId("LAYOUT_TEST"),
+        name: "Test_Layout",
+        width: 2,
+        height: 1,
+        primary_tileset: "gTileset_General",
+        secondary_tileset: "gTileset_General",
+    };
+    let grid = LayoutGrid::new(&layout, map_bytes).unwrap();
+    let cells: Vec<_> = grid.cells().collect();
+    assert_eq!(
+        cells,
+        vec![MetatileCell::from_raw(1), MetatileCell::from_raw(2)]
+    );
+
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn layout_border_bytes_decode_through_map_layouts_border_grid() {
+    use crate::map_layouts::{BorderGrid, MetatileCell};
+
+    let path = write_synthetic_pack("border-decode");
+    let pack = AssetPack::load(&path).unwrap();
+    let border_bytes = pack.layout_border("test").unwrap();
+
+    let border = BorderGrid::new(border_bytes).unwrap();
+    let cells: Vec<_> = border.cells().collect();
+    assert_eq!(
+        cells,
+        vec![
+            MetatileCell::from_raw(1),
+            MetatileCell::from_raw(2),
+            MetatileCell::from_raw(3),
+            MetatileCell::from_raw(4),
+        ]
+    );
+
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn unknown_layout_name_reports_missing_asset() {
+    let path = write_synthetic_pack("layout-unknown");
+    let pack = AssetPack::load(&path).unwrap();
+    let err = pack.layout_map("does_not_exist").unwrap_err();
+    assert!(matches!(err, PackError::UnknownAsset(id) if id == "layout/does_not_exist/map"));
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn tileset_metatile_attribute_table_decodes_from_the_bundled_raw_bytes() {
+    use crate::metatile_attributes::MetatileAttribute;
+
+    // Build the handle from the synthetic pack's typed entries so this
+    // exercises `TilesetHandle::metatile_attribute_table` without needing
+    // all 16 distinct palette slots the full `tileset()` bundler requires.
+    let path = write_synthetic_pack("metatile-attrs");
+    let pack = AssetPack::load(&path).unwrap();
+    let palette = pack.palette("tileset/test/palette/00").unwrap();
+    let handle = super::TilesetHandle {
+        tiles: pack.image("tileset/test/tiles").unwrap(),
+        palettes: [palette; 16],
+        metatiles: pack.raw("tileset/test/metatiles").unwrap(),
+        metatile_attributes: pack.raw("tileset/test/metatile_attributes").unwrap(),
+    };
+
+    let table = handle.metatile_attribute_table();
+    assert_eq!(table.len(), 3);
+    for (id, raw) in [0x0001u16, 0x1002, 0x2003].into_iter().enumerate() {
+        let attr = table
+            .attribute_at(u16::try_from(id).unwrap())
+            .unwrap()
+            .unwrap();
+        assert_eq!(attr, MetatileAttribute::from_raw(raw).unwrap());
+    }
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
 fn default_path_ends_with_expected_relative_path() {
     let path = AssetPack::default_path();
     assert!(path.ends_with("assets-pack/pokeemerald.pack"));
@@ -206,6 +335,8 @@ fn default_path_ends_with_expected_relative_path() {
 #[test]
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
 fn real_pack_loads_and_every_typed_accessor_works() {
+    use crate::map_layouts::{BorderGrid, LayoutId, LayoutTable};
+
     let pack = AssetPack::load_default().expect("run `cargo xtask extract` first");
 
     let general = pack
@@ -250,4 +381,62 @@ fn real_pack_loads_and_every_typed_accessor_works() {
         .expect("title logo palette");
     pack.raw("title/raw/pokemon_logo")
         .expect("title logo raw tilemap");
+
+    // `general`'s metatile_attributes should decode cleanly end to end
+    // (every real upstream layer-type value is 0..=2).
+    let attr_table = general.metatile_attribute_table();
+    assert!(!attr_table.is_empty());
+    for attr in attr_table.attributes() {
+        attr.unwrap_or_else(|e| panic!("metatile attribute decode failed: {e}"));
+    }
+
+    // Every Littleroot Town layout's map/border bytes should be present and
+    // decode through `crate::map_layouts`'s typed grid views, using the
+    // hand-transcribed `LayoutTable` metadata for dimensions.
+    let table = LayoutTable::new();
+    for (layout_id, pack_name) in [
+        ("LAYOUT_LITTLEROOT_TOWN", "littleroot_town"),
+        (
+            "LAYOUT_LITTLEROOT_TOWN_BRENDANS_HOUSE_1F",
+            "littleroot_town_brendans_house_1f",
+        ),
+        (
+            "LAYOUT_LITTLEROOT_TOWN_BRENDANS_HOUSE_2F",
+            "littleroot_town_brendans_house_2f",
+        ),
+        (
+            "LAYOUT_LITTLEROOT_TOWN_MAYS_HOUSE_1F",
+            "littleroot_town_mays_house_1f",
+        ),
+        (
+            "LAYOUT_LITTLEROOT_TOWN_MAYS_HOUSE_2F",
+            "littleroot_town_mays_house_2f",
+        ),
+        (
+            "LAYOUT_LITTLEROOT_TOWN_PROFESSOR_BIRCHS_LAB",
+            "littleroot_town_professor_birchs_lab",
+        ),
+        (
+            "LAYOUT_LITTLEROOT_TOWN_PROFESSOR_BIRCHS_LAB_WITH_TABLE",
+            "littleroot_town_professor_birchs_lab_with_table",
+        ),
+    ] {
+        let layout = table
+            .layout(LayoutId(layout_id))
+            .unwrap_or_else(|e| panic!("{layout_id} should be in LayoutTable: {e}"));
+        let map_bytes = pack
+            .layout_map(pack_name)
+            .unwrap_or_else(|e| panic!("layout/{pack_name}/map should be in the pack: {e}"));
+        let grid = layout
+            .grid(map_bytes)
+            .unwrap_or_else(|e| panic!("{layout_id}'s map.bin should decode: {e}"));
+        assert_eq!(grid.cell_count(), layout.cell_count());
+
+        let border_bytes = pack
+            .layout_border(pack_name)
+            .unwrap_or_else(|e| panic!("layout/{pack_name}/border should be in the pack: {e}"));
+        let border = BorderGrid::new(border_bytes)
+            .unwrap_or_else(|e| panic!("{layout_id}'s border.bin should decode: {e}"));
+        assert_eq!(border.cells().count(), crate::map_layouts::BORDER_CELLS);
+    }
 }

@@ -4,6 +4,7 @@ use std::fmt;
 use std::path::PathBuf;
 
 use super::jasc_pal::JascPalError;
+use super::layouts_json::LayoutsJsonError;
 use super::pack::PackWriteError;
 use super::png::PngError;
 
@@ -35,6 +36,38 @@ pub enum ExtractError {
     /// internal bug in this pipeline's manifest, since every id is
     /// generated here, not user-supplied).
     Pack(PackWriteError),
+    /// `data/layouts/layouts.json` failed to parse. Carries its path and
+    /// the parser error.
+    LayoutsJson(PathBuf, LayoutsJsonError),
+    /// A `LAYOUT_*` id this pipeline's [`super::LAYOUTS`] list expected was
+    /// missing from `layouts.json` — a defensive check that only fires if
+    /// the upstream reference checkout changes underneath this pipeline's
+    /// hand-picked list. Carries the manifest's path and the missing id.
+    UnknownLayoutInJson(PathBuf, &'static str),
+    /// A layout's `map.bin` was shorter than its `layouts.json` entry's
+    /// declared `width * height * 2` bytes — a defensive integrity check
+    /// against a corrupt or truncated upstream checkout (mirrors the
+    /// equivalent check `crates/assets::map_layouts::LayoutGrid::new` runs,
+    /// duplicated here so a bad extraction is caught at extract time, not
+    /// only when the pack is later read). Carries the layout id, the
+    /// expected minimum, and the actual length.
+    LayoutGridTooShort {
+        /// The offending layout's `LAYOUT_*` id.
+        layout_id: &'static str,
+        /// The minimum expected length (`width * height * 2` bytes).
+        expected: usize,
+        /// The buffer's actual length.
+        actual: usize,
+    },
+    /// A layout's `border.bin` was not exactly 8 bytes (a fixed 2x2 grid of
+    /// `u16` cells — see [`LayoutGridTooShort`](Self::LayoutGridTooShort)).
+    /// Carries the layout id and the actual length.
+    LayoutBorderWrongSize {
+        /// The offending layout's `LAYOUT_*` id.
+        layout_id: &'static str,
+        /// The buffer's actual length.
+        actual: usize,
+    },
 }
 
 impl fmt::Display for ExtractError {
@@ -51,6 +84,26 @@ impl fmt::Display for ExtractError {
             Self::Png(path, err) => write!(f, "decoding `{}` failed: {err}", path.display()),
             Self::Pal(path, err) => write!(f, "parsing `{}` failed: {err}", path.display()),
             Self::Pack(err) => write!(f, "assembling pack failed: {err}"),
+            Self::LayoutsJson(path, err) => {
+                write!(f, "parsing `{}` failed: {err}", path.display())
+            }
+            Self::UnknownLayoutInJson(path, id) => write!(
+                f,
+                "`{}` has no entry for layout id `{id}`",
+                path.display()
+            ),
+            Self::LayoutGridTooShort {
+                layout_id,
+                expected,
+                actual,
+            } => write!(
+                f,
+                "layout `{layout_id}`: map.bin too short: expected at least {expected} bytes, got {actual}"
+            ),
+            Self::LayoutBorderWrongSize { layout_id, actual } => write!(
+                f,
+                "layout `{layout_id}`: border.bin wrong size: expected exactly 8 bytes, got {actual}"
+            ),
         }
     }
 }

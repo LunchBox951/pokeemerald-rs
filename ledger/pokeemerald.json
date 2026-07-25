@@ -1039,44 +1039,58 @@
     "data/layouts/LittlerootTown": {
       "category": "data.layout",
       "kind": "dir",
-      "spec_owner": "05-assets",
-      "status": "pending"
+      "reason": "map.bin/border.bin extracted as opaque raw blobs into the local gitignored asset pack (issue #81, Discussion #71 policy A), ids layout/littleroot_town/map and layout/littleroot_town/border (crates/xtask/src/extract/mod.rs::extract_layouts, resolved via data/layouts/layouts.json). Read back with AssetPack::layout_map/layout_border (crates/assets/src/pack.rs) and decoded into typed grids via crates/assets/src/map_layouts.rs's existing MapLayout::grid/LayoutGrid/BorderGrid (MAPGRID_* masks).",
+      "rust_target": "crates/xtask/src/extract/mod.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "data/layouts/LittlerootTown_BrendansHouse_1F": {
       "category": "data.layout",
       "kind": "dir",
-      "spec_owner": "05-assets",
-      "status": "pending"
+      "reason": "map.bin/border.bin extracted as opaque raw blobs into the local gitignored asset pack (issue #81, Discussion #71 policy A), ids layout/littleroot_town_brendans_house_1f/map and layout/littleroot_town_brendans_house_1f/border (crates/xtask/src/extract/mod.rs::extract_layouts, resolved via data/layouts/layouts.json). Read back with AssetPack::layout_map/layout_border (crates/assets/src/pack.rs) and decoded into typed grids via crates/assets/src/map_layouts.rs's existing MapLayout::grid/LayoutGrid/BorderGrid (MAPGRID_* masks).",
+      "rust_target": "crates/xtask/src/extract/mod.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "data/layouts/LittlerootTown_BrendansHouse_2F": {
       "category": "data.layout",
       "kind": "dir",
-      "spec_owner": "05-assets",
-      "status": "pending"
+      "reason": "map.bin/border.bin extracted as opaque raw blobs into the local gitignored asset pack (issue #81, Discussion #71 policy A), ids layout/littleroot_town_brendans_house_2f/map and layout/littleroot_town_brendans_house_2f/border (crates/xtask/src/extract/mod.rs::extract_layouts, resolved via data/layouts/layouts.json). Read back with AssetPack::layout_map/layout_border (crates/assets/src/pack.rs) and decoded into typed grids via crates/assets/src/map_layouts.rs's existing MapLayout::grid/LayoutGrid/BorderGrid (MAPGRID_* masks).",
+      "rust_target": "crates/xtask/src/extract/mod.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "data/layouts/LittlerootTown_MaysHouse_1F": {
       "category": "data.layout",
       "kind": "dir",
-      "spec_owner": "05-assets",
-      "status": "pending"
+      "reason": "map.bin/border.bin extracted as opaque raw blobs into the local gitignored asset pack (issue #81, Discussion #71 policy A), ids layout/littleroot_town_mays_house_1f/map and layout/littleroot_town_mays_house_1f/border (crates/xtask/src/extract/mod.rs::extract_layouts, resolved via data/layouts/layouts.json). Read back with AssetPack::layout_map/layout_border (crates/assets/src/pack.rs) and decoded into typed grids via crates/assets/src/map_layouts.rs's existing MapLayout::grid/LayoutGrid/BorderGrid (MAPGRID_* masks).",
+      "rust_target": "crates/xtask/src/extract/mod.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "data/layouts/LittlerootTown_MaysHouse_2F": {
       "category": "data.layout",
       "kind": "dir",
-      "spec_owner": "05-assets",
-      "status": "pending"
+      "reason": "map.bin/border.bin extracted as opaque raw blobs into the local gitignored asset pack (issue #81, Discussion #71 policy A), ids layout/littleroot_town_mays_house_2f/map and layout/littleroot_town_mays_house_2f/border (crates/xtask/src/extract/mod.rs::extract_layouts, resolved via data/layouts/layouts.json). Read back with AssetPack::layout_map/layout_border (crates/assets/src/pack.rs) and decoded into typed grids via crates/assets/src/map_layouts.rs's existing MapLayout::grid/LayoutGrid/BorderGrid (MAPGRID_* masks).",
+      "rust_target": "crates/xtask/src/extract/mod.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "data/layouts/LittlerootTown_ProfessorBirchsLab": {
       "category": "data.layout",
       "kind": "dir",
-      "spec_owner": "05-assets",
-      "status": "pending"
+      "reason": "map.bin/border.bin extracted as opaque raw blobs into the local gitignored asset pack (issue #81, Discussion #71 policy A), ids layout/littleroot_town_professor_birchs_lab/map and layout/littleroot_town_professor_birchs_lab/border (crates/xtask/src/extract/mod.rs::extract_layouts, resolved via data/layouts/layouts.json). Read back with AssetPack::layout_map/layout_border (crates/assets/src/pack.rs) and decoded into typed grids via crates/assets/src/map_layouts.rs's existing MapLayout::grid/LayoutGrid/BorderGrid (MAPGRID_* masks).",
+      "rust_target": "crates/xtask/src/extract/mod.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "data/layouts/LittlerootTown_ProfessorBirchsLabWithTable": {
       "category": "data.layout",
       "kind": "dir",
-      "spec_owner": "05-assets",
-      "status": "pending"
+      "reason": "map.bin/border.bin extracted as opaque raw blobs into the local gitignored asset pack (issue #81, Discussion #71 policy A), ids layout/littleroot_town_professor_birchs_lab_with_table/map and layout/littleroot_town_professor_birchs_lab_with_table/border (crates/xtask/src/extract/mod.rs::extract_layouts, resolved via data/layouts/layouts.json). Read back with AssetPack::layout_map/layout_border (crates/assets/src/pack.rs) and decoded into typed grids via crates/assets/src/map_layouts.rs's existing MapLayout::grid/LayoutGrid/BorderGrid (MAPGRID_* masks).",
+      "rust_target": "crates/xtask/src/extract/mod.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "data/layouts/MagmaHideout_1F": {
       "category": "data.layout",
@@ -17822,6 +17836,14 @@
       "status": "pending"
     },
     "include/global.fieldmap.h": {
+      "artifacts": {
+        "METATILE_ATTR": {
+          "reason": "METATILE_ATTR_BEHAVIOR_MASK/METATILE_ATTR_LAYER_MASK unpack (UNPACK_BEHAVIOR/UNPACK_LAYER_TYPE) plus the METATILE_LAYER_TYPE_* enum, ported as MetatileAttribute/MetatileLayerType/MetatileAttributeTable (crates/assets/src/metatile_attributes.rs), read over a tileset's metatile_attributes.bin bytes via TilesetHandle::metatile_attribute_table (crates/assets/src/pack/handles.rs).",
+          "rust_target": "crates/assets/src/metatile_attributes.rs",
+          "spec": "S-4",
+          "status": "ported"
+        }
+      },
       "category": "code.header",
       "kind": "file",
       "status": "pending"
