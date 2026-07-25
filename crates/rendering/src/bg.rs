@@ -10,9 +10,11 @@
 //! per axis for a hardware-sized regular BG), so scrolling off one edge
 //! reveals the opposite edge `(behavioral-fidelity)`.
 //!
-//! Affine transforms, multi-layer priority ordering (see
-//! [`compositor`](crate::compositor)), and windows/blending are out of
-//! scope — see issue #64.
+//! Affine transforms and multi-layer priority ordering are out of scope for
+//! this type — see [`compositor`](crate::compositor). Likewise, windows,
+//! color effects, and mosaic (S-2 slice 4, issue #99) are applied by
+//! [`compositor::BgSlot`](crate::compositor::BgSlot) around this type's
+//! sampled output, not by [`BgLayer`] itself.
 
 use crate::framebuffer::Framebuffer;
 use crate::palette::{Palette, Rgb888};
@@ -24,8 +26,9 @@ use crate::tilemap::Tilemap;
 /// [`Framebuffer`].
 ///
 /// No priority-vs-other-layers ordering (see
-/// [`compositor`](crate::compositor)), no affine transform, and no
-/// windows/blending — see issue #64's scope.
+/// [`compositor`](crate::compositor)) and no affine transform. Windows,
+/// color effects, and mosaic (issue #99) are handled around this type by
+/// [`compositor::BgSlot`](crate::compositor::BgSlot), not here.
 #[derive(Debug, Clone, Copy)]
 pub struct BgLayer<'a> {
     tileset: &'a Tileset,

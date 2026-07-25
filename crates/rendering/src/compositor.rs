@@ -18,17 +18,28 @@
 //! - At equal priority among sprites, the **lower OAM index wins** — see
 //!   [`SpriteLayer::resolve_pixel`](crate::sprite::SpriteLayer::resolve_pixel).
 //!
-//! Windows, blending, and mosaic are out of scope (issue #64's remaining
-//! deferral); affine BG layers slot in as of S-2 slice 3 (issue #98) via
+//! Affine BG layers slot in as of S-2 slice 3 (issue #98) via
 //! [`BgSlot::new_affine`] — [`compose_frame`]'s own signature is unchanged
 //! `(behavioral-fidelity)`.
+//!
+//! S-2 slice 4 (issue #99) adds hardware windows (`WIN0`/`WIN1`/`OBJWIN`),
+//! color special effects (alpha blend, brighten, darken), and mosaic via
+//! [`compose_frame_with_effects`] and the [`FrameEffects`] parameter
+//! struct — [`compose_frame`] becomes a thin delegation to
+//! [`compose_frame_with_effects`] with [`FrameEffects::default`], which
+//! disables every slice-4 feature and so reproduces this slice's output
+//! byte-for-byte, keeping [`compose_frame`]'s own signature (and every
+//! existing caller) unchanged `(behavioral-fidelity)`.
 
 use crate::affine::AffineMatrix;
 use crate::bg::BgLayer;
 use crate::bg_affine::{AffineBgLayer, Overflow};
+use crate::effects::{self, EffectsConfig, LayerKind};
 use crate::framebuffer::Framebuffer;
+use crate::mosaic::{MosaicConfig, MosaicSize};
 use crate::palette::Rgb888;
 use crate::sprite::SpriteLayer;
+use crate::window::WindowConfig;
 
 /// A BG slot's per-pixel sampling mode: a regular BG (wrapping scroll
 /// offsets, [`BgLayer`]) or an affine BG (matrix + reference point +
@@ -60,6 +71,7 @@ pub struct BgSlot<'a> {
     bg_index: u8,
     priority: u8,
     enabled: bool,
+    mosaic: bool,
 }
 
 impl<'a> BgSlot<'a> {
@@ -83,6 +95,7 @@ impl<'a> BgSlot<'a> {
             bg_index: bg_index & 0x03,
             priority: priority & 0x03,
             enabled,
+            mosaic: false,
         }
     }
 
@@ -115,12 +128,32 @@ impl<'a> BgSlot<'a> {
             bg_index: bg_index & 0x03,
             priority: priority & 0x03,
             enabled,
+            mosaic: false,
         }
     }
 
+    /// Return a copy of this slot with its mosaic bit (`BGxCNT`'s mosaic
+    /// bit) replaced — S-2 slice 4, issue #99. A builder rather than a
+    /// `new`/`new_affine` parameter so every pre-slice-4 call site keeps
+    /// working unchanged; defaults to `false`.
+    #[must_use]
+    pub const fn with_mosaic(mut self, mosaic: bool) -> Self {
+        self.mosaic = mosaic;
+        self
+    }
+
     /// Sample this slot's resolved color at `(x, y)`, dispatching to the
-    /// regular or affine layer per [`BgKind`].
-    fn sample(&self, x: usize, y: usize) -> Option<Rgb888> {
+    /// regular or affine layer per [`BgKind`]. When this slot's mosaic bit is
+    /// set, `(x, y)` is first snapped to `bg_mosaic`'s block origin
+    /// (`crate::mosaic`); [`MosaicSize::NONE`] makes this a no-op regardless
+    /// of the slot's own mosaic bit, which is what keeps
+    /// [`compose_frame`]'s output byte-for-byte unaffected by this slice.
+    fn sample(&self, x: usize, y: usize, bg_mosaic: MosaicSize) -> Option<Rgb888> {
+        let (x, y) = if self.mosaic {
+            bg_mosaic.snap(x, y)
+        } else {
+            (x, y)
+        };
         match self.kind {
             BgKind::Regular {
                 layer,
@@ -144,6 +177,33 @@ impl<'a> BgSlot<'a> {
 /// BG, and BGs break same-priority ties by ascending `bg_index`, matching
 /// the ordering rules in the module docs.
 type OrderKey = (u8, u8);
+type Candidate = (OrderKey, Rgb888, LayerKind, bool);
+
+/// Insert a layer into the two frontmost candidates for one pixel.
+///
+/// Candidates arrive in the same order the old stable sort saw them
+/// (sprite, then BG slots), so strict comparisons preserve the existing
+/// first-seen tie-break for duplicate order keys.
+fn insert_candidate(
+    front: &mut Option<Candidate>,
+    next: &mut Option<Candidate>,
+    candidate: Candidate,
+) {
+    match *front {
+        None => *front = Some(candidate),
+        Some(front_candidate) if candidate.0 < front_candidate.0 => {
+            *next = *front;
+            *front = Some(candidate);
+        }
+        Some(_) => match *next {
+            None => *next = Some(candidate),
+            Some(next_candidate) if candidate.0 < next_candidate.0 => {
+                *next = Some(candidate);
+            }
+            Some(_) => {}
+        },
+    }
+}
 
 /// Composite up to four [`BgSlot`]s and one [`SpriteLayer`] into a new
 /// [`Framebuffer`], applying the GBA's priority ordering rules (module
@@ -152,49 +212,167 @@ type OrderKey = (u8, u8);
 /// `bg_slots` need not have exactly four entries (a scene may use fewer BG
 /// layers); disabled slots contribute nothing. Pixels covered by no enabled,
 /// opaque layer are left at the framebuffer's default backdrop
-/// ([`Rgb888::BLACK`](crate::palette::Rgb888::BLACK)) — a real backdrop
-/// color register is out of scope for this slice.
+/// ([`Rgb888::BLACK`](crate::palette::Rgb888::BLACK)).
+///
+/// A thin delegation to [`compose_frame_with_effects`] with
+/// [`FrameEffects::default`] (S-2 slice 4, issue #99) — every window/color
+/// effect/mosaic feature is disabled by that default, so this function's
+/// output, and its signature, are unaffected by that slice
+/// `(behavioral-fidelity)`.
 #[must_use]
 pub fn compose_frame(sprites: &SpriteLayer<'_>, bg_slots: &[BgSlot<'_>]) -> Framebuffer {
+    compose_frame_with_effects(sprites, bg_slots, &FrameEffects::default())
+}
+
+/// Bundled optional per-frame effects for [`compose_frame_with_effects`]:
+/// hardware windows, color special effects, and mosaic (S-2 slice 4, issue
+/// #99).
+///
+/// [`Default`] disables every one of them (no active window, no color
+/// effect, no mosaic, black backdrop) — this is what makes
+/// [`compose_frame`] byte-for-byte equivalent to calling
+/// [`compose_frame_with_effects`] with a default `FrameEffects`
+/// `(behavioral-fidelity)`.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct FrameEffects {
+    /// Hardware window configuration (`WIN0`/`WIN1`/`OBJWIN`/`WINOUT`).
+    pub windows: WindowConfig,
+    /// Color special-effect configuration (`BLDCNT`/`BLDALPHA`/`BLDY`).
+    pub color: EffectsConfig,
+    /// BG/OBJ mosaic block sizes (`MOSAIC`).
+    pub mosaic: MosaicConfig,
+    /// The backdrop color shown where no enabled, opaque layer covers a
+    /// pixel — defaults to [`Rgb888::BLACK`](crate::palette::Rgb888::BLACK),
+    /// matching [`Framebuffer::new`]'s default fill.
+    pub backdrop: Rgb888,
+}
+
+/// [`compose_frame`], extended with hardware windows, color special
+/// effects, and mosaic (S-2 slice 4, issue #99).
+///
+/// Per pixel: gather every enabled BG slot's and (if not window-masked) the
+/// sprite layer's opaque contribution, sort by the module docs' priority
+/// ordering, then resolve the front (topmost) one through
+/// [`effects::resolve_pixel_color`] against the layer immediately behind it
+/// (or the backdrop, if nothing else was drawn) — see that function's docs
+/// for exactly which second target a pixel is allowed to blend against.
+#[must_use]
+pub fn compose_frame_with_effects(
+    sprites: &SpriteLayer<'_>,
+    bg_slots: &[BgSlot<'_>],
+    effects: &FrameEffects,
+) -> Framebuffer {
+    // mgba's global "any target2" signal (software-obj.c:181-185): the
+    // backdrop target2 bit, OR any BG that is a BLDCNT target2 *and* enabled.
+    // A forced-alpha OBJ that fails to blend against its immediate neighbor
+    // keeps its brighten/darken variant only when this is false (see
+    // effects::resolve_pixel_color). It is a per-frame constant, so compute it
+    // once rather than per pixel.
+    let any_target2 = effects.color.target2.backdrop
+        || bg_slots.iter().any(|slot| {
+            slot.enabled && effects.color.target2.contains(LayerKind::Bg(slot.bg_index))
+        });
+
     let mut framebuffer = Framebuffer::new();
     for y in 0..framebuffer.height() {
         for x in 0..framebuffer.width() {
-            let mut winner: Option<(OrderKey, _)> = sprites
-                .resolve_pixel(x, y)
-                .map(|pixel| ((pixel.priority, 0u8), pixel.color));
-
-            for slot in bg_slots {
-                if !slot.enabled {
-                    continue;
-                }
-                let Some(color) = slot.sample(x, y) else {
-                    continue;
-                };
-                let key = (slot.priority, 1 + slot.bg_index);
-                winner = match winner {
-                    Some((w_key, w_color)) if w_key <= key => Some((w_key, w_color)),
-                    _ => Some((key, color)),
-                };
-            }
-
-            if let Some((_, color)) = winner {
-                framebuffer.set_pixel(x, y, color);
-            }
+            let color = compose_pixel(sprites, bg_slots, effects, any_target2, x, y);
+            framebuffer.set_pixel(x, y, color);
         }
     }
     framebuffer
 }
 
+/// Resolve one pixel's final color for [`compose_frame_with_effects`].
+#[allow(clippy::cast_possible_truncation)] // Framebuffer coordinates are always < 240/160, well within u8.
+fn compose_pixel(
+    sprites: &SpriteLayer<'_>,
+    bg_slots: &[BgSlot<'_>],
+    effects: &FrameEffects,
+    any_target2: bool,
+    x: usize,
+    y: usize,
+) -> Rgb888 {
+    let (wx, wy) = (x as u8, y as u8);
+
+    let objwin_mask = effects.windows.obj_window.is_some()
+        && sprites.objwin_mask_with_mosaic(x, y, effects.mosaic.obj);
+    let window = effects.windows.classify(wx, wy, objwin_mask);
+
+    let mut front = None;
+    let mut next = None;
+
+    if window.obj {
+        if let Some(pixel) = sprites.resolve_pixel_with_mosaic(x, y, effects.mosaic.obj) {
+            insert_candidate(
+                &mut front,
+                &mut next,
+                (
+                    (pixel.priority, 0),
+                    pixel.color,
+                    LayerKind::Obj,
+                    pixel.semi_transparent,
+                ),
+            );
+        }
+    }
+    for slot in bg_slots {
+        if !slot.enabled || !window.bg_enabled(slot.bg_index) {
+            continue;
+        }
+        let Some(color) = slot.sample(x, y, effects.mosaic.bg) else {
+            continue;
+        };
+        insert_candidate(
+            &mut front,
+            &mut next,
+            (
+                (slot.priority, 1 + slot.bg_index),
+                color,
+                LayerKind::Bg(slot.bg_index),
+                false,
+            ),
+        );
+    }
+
+    let Some((_, front_color, front_kind, front_semi_transparent)) = front else {
+        // Nothing drawn: the backdrop itself is shown, subject only to
+        // brighten/darken (effects::resolve_pixel_color never alpha-blends
+        // the backdrop against itself).
+        return effects::resolve_pixel_color(
+            &effects.color,
+            window.effects,
+            any_target2,
+            (effects.backdrop, LayerKind::Backdrop, false),
+            None,
+            effects.backdrop,
+        );
+    };
+    let next = next.map(|(_, color, kind, _)| (color, kind));
+    effects::resolve_pixel_color(
+        &effects.color,
+        window.effects,
+        any_target2,
+        (front_color, front_kind, front_semi_transparent),
+        next,
+        effects.backdrop,
+    )
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{compose_frame, BgSlot};
+    use super::{compose_frame, compose_frame_with_effects, BgSlot, FrameEffects};
     use crate::affine::AffineMatrix;
     use crate::bg_affine::{AffineBgLayer, AffineTilemap, Overflow};
+    use crate::effects::{ColorEffect, EffectsConfig, LayerTargets};
+    use crate::mosaic::MosaicSize;
+    use crate::oam::ObjMode;
     use crate::oam::{OamEntry, ObjShape};
     use crate::palette::{Bgr555, Palette};
     use crate::sprite::SpriteLayer;
     use crate::tile::{BitDepth, Tileset};
     use crate::tilemap::{ScreenEntry, Tilemap};
+    use crate::window::{WindowConfig, WindowLayerEnable, WindowRange, WindowRect};
 
     /// A fully opaque 1x1-tile (8x8px) BG layer using palette index 15 in
     /// bank 0, plus its owning tileset/palette/tilemap (kept alive by the
@@ -514,5 +692,617 @@ mod tests {
 
         let fb = compose_frame(&sprites, &slots);
         assert_eq!(fb.pixel(0, 0), Some(crate::palette::Rgb888::BLACK));
+    }
+
+    // -- S-2 slice 4 (issue #99): windows, color effects, mosaic -----------
+
+    /// A 4bpp tile whose top-left 2x2 block has a distinct opaque color per
+    /// pixel — (0,0)=index 1, (1,0)=index 2, (0,1)=index 3, (1,1)=index 4 —
+    /// so mosaic block-snapping (which forces a whole block to read the
+    /// block origin's pixel) is observable, unlike a uniformly-opaque tile.
+    fn quadrant_bg_fixture() -> (Tileset, Palette, Tilemap) {
+        let mut bytes = [0u8; 32];
+        bytes[0] = 0x21; // (0,0)=index 1, (1,0)=index 2
+        bytes[4] = 0x43; // (0,1)=index 3, (1,1)=index 4
+        let tileset = Tileset::decode(BitDepth::Bpp4, &bytes).unwrap();
+        let mut colors = [Bgr555::default(); Palette::LEN];
+        colors[1] = Bgr555::from_channels(1, 0, 0);
+        colors[2] = Bgr555::from_channels(2, 0, 0);
+        colors[3] = Bgr555::from_channels(3, 0, 0);
+        colors[4] = Bgr555::from_channels(4, 0, 0);
+        let palette = Palette::new(colors);
+        let entries = vec![ScreenEntry::new(0, false, false, 0)];
+        let tilemap = Tilemap::new(1, 1, entries).unwrap();
+        (tileset, palette, tilemap)
+    }
+
+    #[test]
+    fn no_effects_default_reproduces_compose_frame_byte_for_byte() {
+        // A non-trivial mixed scene (two BGs at different priorities plus a
+        // sprite) composed both ways must match exactly -- the explicit
+        // "no-effects default" regression the DoD calls for.
+        let (tiles_a, palette_a, map_a) = opaque_bg_fixture(3);
+        let (tiles_b, palette_b, map_b) = opaque_bg_fixture(6);
+        let layer_a = crate::bg::BgLayer::new(&tiles_a, &palette_a, &map_a);
+        let layer_b = crate::bg::BgLayer::new(&tiles_b, &palette_b, &map_b);
+        let slots = [
+            BgSlot::new(layer_a, 0, 1, 0, 0, true),
+            BgSlot::new(layer_b, 1, 0, 0, 0, true),
+        ];
+
+        let sprite_tileset = Tileset::decode(BitDepth::Bpp4, &[0xFFu8; 32]).unwrap();
+        let mut sprite_colors = [Bgr555::default(); Palette::LEN];
+        sprite_colors[15] = Bgr555::from_channels(0, 9, 0);
+        let sprite_palette = Palette::new(sprite_colors);
+        let entries = [OamEntry::new(
+            0,
+            0,
+            0,
+            0,
+            BitDepth::Bpp4,
+            false,
+            false,
+            ObjShape::Square,
+            0,
+            2,
+            true,
+        )];
+        let sprites = SpriteLayer::new(&entries, &sprite_tileset, &sprite_tileset, &sprite_palette);
+
+        let via_compose_frame = compose_frame(&sprites, &slots);
+        let via_effects_default =
+            compose_frame_with_effects(&sprites, &slots, &FrameEffects::default());
+        assert_eq!(via_compose_frame.pixels(), via_effects_default.pixels());
+    }
+
+    #[test]
+    fn window_gates_a_bg_layer_by_region_even_though_its_own_enable_bit_is_on() {
+        // BG0 (red, priority 0 -- otherwise always wins) is only enabled
+        // inside WIN0 (x<4); BG1 (blue, priority 1) is only enabled via
+        // WINOUT (outside every window). Both slots' own `enabled` bit is
+        // `true` throughout -- only the window's per-region bg-enable bit
+        // gates visibility here.
+        let (tiles_r, palette_r, map_r) = opaque_bg_fixture(9); // red channel
+        let (tiles_b, _palette_b, map_b) = opaque_bg_fixture(0); // blue via a dedicated color below
+        let layer_r = crate::bg::BgLayer::new(&tiles_r, &palette_r, &map_r);
+        let mut blue_colors = [Bgr555::default(); Palette::LEN];
+        blue_colors[15] = Bgr555::from_channels(0, 0, 9);
+        let blue_palette = Palette::new(blue_colors);
+        let layer_b = crate::bg::BgLayer::new(&tiles_b, &blue_palette, &map_b);
+        let slots = [
+            BgSlot::new(layer_r, 0, 0, 0, 0, true),
+            BgSlot::new(layer_b, 1, 1, 0, 0, true),
+        ];
+        let entries: [OamEntry; 0] = [];
+        let no_sprite_tiles = Tileset::decode(BitDepth::Bpp4, &[]).unwrap();
+        let sprites = empty_sprite_layer(&entries, &no_sprite_tiles);
+
+        let mut bg0_only = WindowLayerEnable::NONE;
+        bg0_only.bg[0] = true;
+        let mut bg1_only = WindowLayerEnable::NONE;
+        bg1_only.bg[1] = true;
+
+        let effects = FrameEffects {
+            windows: WindowConfig {
+                win0: Some((
+                    WindowRect::new(WindowRange::new(0, 4), WindowRange::new(0, 8)),
+                    bg0_only,
+                )),
+                win1: None,
+                obj_window: None,
+                winout: bg1_only,
+            },
+            ..FrameEffects::default()
+        };
+
+        let fb = compose_frame_with_effects(&sprites, &slots, &effects);
+        assert_eq!(
+            fb.pixel(0, 0),
+            Some(Bgr555::from_channels(9, 0, 0).to_rgb888()),
+            "inside WIN0, only BG0 is enabled"
+        );
+        assert_eq!(
+            fb.pixel(5, 0),
+            Some(Bgr555::from_channels(0, 0, 9).to_rgb888()),
+            "outside every window (WINOUT), only BG1 is enabled, despite BG0's better priority"
+        );
+    }
+
+    #[test]
+    fn objwin_mode_sprite_gates_a_layer_and_never_draws_its_own_color() {
+        // A mode-2 (OBJWIN) sprite covering the right half of an 8x8 tile
+        // only contributes a mask -- BG0 is enabled only where that mask is
+        // set (via `obj_window`'s enable bits), and the mask sprite's own
+        // (loud, distinctive) color must never appear on screen.
+        let (tiles, palette, map) = opaque_bg_fixture(9);
+        let layer = crate::bg::BgLayer::new(&tiles, &palette, &map);
+        let slots = [BgSlot::new(layer, 0, 0, 0, 0, true)];
+
+        // Each row is 4 bytes covering column pairs (0,1) (2,3) (4,5) (6,7);
+        // a byte's low nibble is its left pixel, high nibble its right
+        // (tile.rs's decode order). `0x00, 0x00, 0xFF, 0xFF` per row makes
+        // columns 0..4 transparent and columns 4..8 opaque (index 15).
+        let mut mask_tile = [0u8; 32];
+        for row in mask_tile.chunks_exact_mut(4) {
+            row.copy_from_slice(&[0x00, 0x00, 0xFF, 0xFF]);
+        }
+        let mask_tileset = Tileset::decode(BitDepth::Bpp4, &mask_tile).unwrap();
+        let mut mask_colors = [Bgr555::default(); Palette::LEN];
+        mask_colors[15] = Bgr555::from_channels(0, 31, 31); // a loud color that must never render
+        let mask_palette = Palette::new(mask_colors);
+        let entries = [OamEntry::new(
+            0,
+            0,
+            0,
+            0,
+            BitDepth::Bpp4,
+            false,
+            false,
+            ObjShape::Square,
+            0,
+            0,
+            true,
+        )
+        .with_mode(ObjMode::Window)];
+        let sprites = SpriteLayer::new(&entries, &mask_tileset, &mask_tileset, &mask_palette);
+
+        let mut bg0_only = WindowLayerEnable::NONE;
+        bg0_only.bg[0] = true;
+
+        let effects = FrameEffects {
+            windows: WindowConfig {
+                win0: None,
+                win1: None,
+                obj_window: Some(bg0_only),
+                winout: WindowLayerEnable::NONE,
+            },
+            ..FrameEffects::default()
+        };
+
+        let fb = compose_frame_with_effects(&sprites, &slots, &effects);
+        assert_eq!(
+            fb.pixel(1, 0),
+            Some(crate::palette::Rgb888::BLACK),
+            "outside the OBJWIN mask, BG0 must stay disabled"
+        );
+        assert_eq!(
+            fb.pixel(5, 0),
+            Some(Bgr555::from_channels(9, 0, 0).to_rgb888()),
+            "inside the OBJWIN mask, BG0 must be enabled"
+        );
+        assert_ne!(
+            fb.pixel(5, 0),
+            Some(Bgr555::from_channels(0, 31, 31).to_rgb888()),
+            "the mask sprite itself must never draw a visible pixel"
+        );
+    }
+
+    #[test]
+    fn mosaic_snaps_bg_sampling_to_its_block_origin() {
+        let (tileset, palette, tilemap) = quadrant_bg_fixture();
+        let layer = crate::bg::BgLayer::new(&tileset, &palette, &tilemap);
+        let slot = BgSlot::new(layer, 0, 0, 0, 0, true).with_mosaic(true);
+        let entries: [OamEntry; 0] = [];
+        let no_sprite_tiles = Tileset::decode(BitDepth::Bpp4, &[]).unwrap();
+        let sprites = empty_sprite_layer(&entries, &no_sprite_tiles);
+
+        let effects = FrameEffects {
+            mosaic: crate::mosaic::MosaicConfig {
+                bg: MosaicSize::new(2, 2),
+                obj: MosaicSize::NONE,
+            },
+            ..FrameEffects::default()
+        };
+        let fb = compose_frame_with_effects(&sprites, &[slot], &effects);
+
+        // The whole 2x2 block containing (0,0)..(1,1) must all read the
+        // block origin's color (index 1), not each pixel's own distinct
+        // color.
+        let origin_color = Bgr555::from_channels(1, 0, 0).to_rgb888();
+        assert_eq!(fb.pixel(0, 0), Some(origin_color));
+        assert_eq!(
+            fb.pixel(1, 0),
+            Some(origin_color),
+            "snapped from (1,0) to (0,0)"
+        );
+        assert_eq!(
+            fb.pixel(0, 1),
+            Some(origin_color),
+            "snapped from (0,1) to (0,0)"
+        );
+        assert_eq!(
+            fb.pixel(1, 1),
+            Some(origin_color),
+            "snapped from (1,1) to (0,0)"
+        );
+    }
+
+    #[test]
+    fn mosaic_only_applies_to_bg_slots_with_their_own_mosaic_bit_set() {
+        let (tileset, palette, tilemap) = quadrant_bg_fixture();
+        let layer = crate::bg::BgLayer::new(&tileset, &palette, &tilemap);
+        // Mosaic is NOT requested on this slot, even though a 2x2 BG mosaic
+        // size is configured for the frame.
+        let slot = BgSlot::new(layer, 0, 0, 0, 0, true);
+        let entries: [OamEntry; 0] = [];
+        let no_sprite_tiles = Tileset::decode(BitDepth::Bpp4, &[]).unwrap();
+        let sprites = empty_sprite_layer(&entries, &no_sprite_tiles);
+
+        let effects = FrameEffects {
+            mosaic: crate::mosaic::MosaicConfig {
+                bg: MosaicSize::new(2, 2),
+                obj: MosaicSize::NONE,
+            },
+            ..FrameEffects::default()
+        };
+        let fb = compose_frame_with_effects(&sprites, &[slot], &effects);
+
+        assert_eq!(
+            fb.pixel(1, 1),
+            Some(Bgr555::from_channels(4, 0, 0).to_rgb888())
+        );
+    }
+
+    #[test]
+    fn mosaic_snaps_obj_sampling_to_its_block_origin() {
+        let mut bytes = [0u8; 32];
+        bytes[0] = 0x21; // (0,0)=index 1, (1,0)=index 2
+        bytes[4] = 0x43; // (0,1)=index 3, (1,1)=index 4
+        let tileset = Tileset::decode(BitDepth::Bpp4, &bytes).unwrap();
+        let mut colors = [Bgr555::default(); Palette::LEN];
+        colors[1] = Bgr555::from_channels(0, 1, 0);
+        colors[2] = Bgr555::from_channels(0, 2, 0);
+        colors[3] = Bgr555::from_channels(0, 3, 0);
+        colors[4] = Bgr555::from_channels(0, 4, 0);
+        let palette = Palette::new(colors);
+        let entries = [OamEntry::new(
+            0,
+            0,
+            0,
+            0,
+            BitDepth::Bpp4,
+            false,
+            false,
+            ObjShape::Square,
+            0,
+            0,
+            true,
+        )
+        .with_mosaic(true)];
+        let sprites = SpriteLayer::new(&entries, &tileset, &tileset, &palette);
+
+        let effects = FrameEffects {
+            mosaic: crate::mosaic::MosaicConfig {
+                bg: MosaicSize::NONE,
+                obj: MosaicSize::new(2, 2),
+            },
+            ..FrameEffects::default()
+        };
+        let fb = compose_frame_with_effects(&sprites, &[], &effects);
+
+        let origin_color = Bgr555::from_channels(0, 1, 0).to_rgb888();
+        assert_eq!(
+            fb.pixel(1, 1),
+            Some(origin_color),
+            "snapped from (1,1) to (0,0)"
+        );
+    }
+
+    #[test]
+    fn alpha_blend_end_to_end_over_two_bg_layers() {
+        // BG0 (black, priority 0, target1) alpha-blended with BG1 (white,
+        // priority 1, target2) at eva=evb=8 (50/50) must land on the 5-bit
+        // midpoint color, exactly as effects::alpha_blend computes in
+        // isolation.
+        let (tiles_a, palette_a, map_a) = opaque_bg_fixture(0);
+        let (tiles_b, palette_b, map_b) = opaque_bg_fixture(31);
+        let layer_a = crate::bg::BgLayer::new(&tiles_a, &palette_a, &map_a);
+        let layer_b = crate::bg::BgLayer::new(&tiles_b, &palette_b, &map_b);
+        let slots = [
+            BgSlot::new(layer_a, 0, 0, 0, 0, true),
+            BgSlot::new(layer_b, 1, 1, 0, 0, true),
+        ];
+        let entries: [OamEntry; 0] = [];
+        let no_sprite_tiles = Tileset::decode(BitDepth::Bpp4, &[]).unwrap();
+        let sprites = empty_sprite_layer(&entries, &no_sprite_tiles);
+
+        let effects = FrameEffects {
+            color: EffectsConfig {
+                effect: ColorEffect::AlphaBlend,
+                target1: LayerTargets {
+                    bg: [true, false, false, false],
+                    obj: false,
+                    backdrop: false,
+                },
+                target2: LayerTargets {
+                    bg: [false, true, false, false],
+                    obj: false,
+                    backdrop: false,
+                },
+                eva: 8,
+                evb: 8,
+                evy: 0,
+            },
+            ..FrameEffects::default()
+        };
+        let fb = compose_frame_with_effects(&sprites, &slots, &effects);
+        assert_eq!(
+            fb.pixel(0, 0),
+            Some(Bgr555::from_channels(15, 0, 0).to_rgb888())
+        );
+    }
+
+    #[test]
+    fn semi_transparent_obj_forces_blend_end_to_end_overriding_brighten() {
+        // BLDCNT selects BRIGHTEN, and OBJ is not even configured target1 --
+        // but a semi-transparent (OAM mode 1) sprite over a target2 BG must
+        // still alpha-blend, per OamEntry::with_mode's docs.
+        let (tiles, palette, map) = opaque_bg_fixture(31);
+        let bg_layer = crate::bg::BgLayer::new(&tiles, &palette, &map);
+        let slots = [BgSlot::new(bg_layer, 0, 1, 0, 0, true)];
+
+        let sprite_tileset = Tileset::decode(BitDepth::Bpp4, &[0xFFu8; 32]).unwrap();
+        let mut sprite_colors = [Bgr555::default(); Palette::LEN];
+        sprite_colors[15] = Bgr555::from_channels(0, 0, 0);
+        let sprite_palette = Palette::new(sprite_colors);
+        let entries = [OamEntry::new(
+            0,
+            0,
+            0,
+            0,
+            BitDepth::Bpp4,
+            false,
+            false,
+            ObjShape::Square,
+            0,
+            0,
+            true,
+        )
+        .with_mode(ObjMode::SemiTransparent)];
+        let sprites = SpriteLayer::new(&entries, &sprite_tileset, &sprite_tileset, &sprite_palette);
+
+        let effects = FrameEffects {
+            color: EffectsConfig {
+                effect: ColorEffect::Brighten,
+                target1: LayerTargets::default(), // OBJ not configured target1
+                target2: LayerTargets {
+                    bg: [true, false, false, false],
+                    obj: false,
+                    backdrop: false,
+                },
+                eva: 8,
+                evb: 8,
+                evy: 16,
+            },
+            ..FrameEffects::default()
+        };
+        let fb = compose_frame_with_effects(&sprites, &slots, &effects);
+        assert_eq!(
+            fb.pixel(0, 0),
+            Some(Bgr555::from_channels(15, 0, 0).to_rgb888()),
+            "semi-transparency must force alpha blend even though BRIGHTEN was selected"
+        );
+    }
+
+    #[test]
+    fn brighten_end_to_end_over_a_single_bg_layer() {
+        let (tiles, palette, map) = opaque_bg_fixture(0);
+        let layer = crate::bg::BgLayer::new(&tiles, &palette, &map);
+        let slots = [BgSlot::new(layer, 0, 0, 0, 0, true)];
+        let entries: [OamEntry; 0] = [];
+        let no_sprite_tiles = Tileset::decode(BitDepth::Bpp4, &[]).unwrap();
+        let sprites = empty_sprite_layer(&entries, &no_sprite_tiles);
+
+        let effects = FrameEffects {
+            color: EffectsConfig {
+                effect: ColorEffect::Brighten,
+                target1: LayerTargets {
+                    bg: [true, false, false, false],
+                    obj: false,
+                    backdrop: false,
+                },
+                target2: LayerTargets::default(),
+                eva: 0,
+                evb: 0,
+                evy: 16,
+            },
+            ..FrameEffects::default()
+        };
+        let fb = compose_frame_with_effects(&sprites, &slots, &effects);
+        assert_eq!(
+            fb.pixel(0, 0),
+            Some(Bgr555::from_channels(31, 31, 31).to_rgb888()),
+            "full brighten (evy=16) of black must reach white"
+        );
+    }
+
+    #[test]
+    fn backdrop_blending_end_to_end_when_nothing_is_behind_the_front_layer() {
+        // A single BG (black, target1) alpha-blended against the backdrop
+        // (white, target2-backdrop) when nothing else is drawn underneath.
+        let (tiles, palette, map) = opaque_bg_fixture(0);
+        let layer = crate::bg::BgLayer::new(&tiles, &palette, &map);
+        let slots = [BgSlot::new(layer, 0, 0, 0, 0, true)];
+        let entries: [OamEntry; 0] = [];
+        let no_sprite_tiles = Tileset::decode(BitDepth::Bpp4, &[]).unwrap();
+        let sprites = empty_sprite_layer(&entries, &no_sprite_tiles);
+
+        let effects = FrameEffects {
+            color: EffectsConfig {
+                effect: ColorEffect::AlphaBlend,
+                target1: LayerTargets {
+                    bg: [true, false, false, false],
+                    obj: false,
+                    backdrop: false,
+                },
+                target2: LayerTargets {
+                    bg: [false; 4],
+                    obj: false,
+                    backdrop: true,
+                },
+                eva: 8,
+                evb: 8,
+                evy: 0,
+            },
+            backdrop: Bgr555::from_channels(31, 31, 31).to_rgb888(),
+            ..FrameEffects::default()
+        };
+        let fb = compose_frame_with_effects(&sprites, &slots, &effects);
+        assert_eq!(
+            fb.pixel(0, 0),
+            Some(Bgr555::from_channels(15, 15, 15).to_rgb888()),
+            "BG blended 50/50 with the white backdrop"
+        );
+    }
+
+    #[test]
+    fn objwin_transparent_hole_promotes_a_worse_sprite_over_the_bg() {
+        // Finding 1 end-to-end: opaque sprite B (priority 2, OAM index 0) sits
+        // under a priority-0 OBJWIN-mode sprite whose texel here is a
+        // transparent hole; a BG sits between them at priority 1. mgba's
+        // SPRITE_DRAW_PIXEL_*_OBJWIN transparent branch upgrades B's stored OBJ
+        // order to 0, so the OBJ layer (still B's color) beats the BG, even
+        // though B's own priority (2) is worse than the BG's (1).
+        let (ts, pal, tm) = opaque_bg_fixture(7);
+        let bg_layer = crate::bg::BgLayer::new(&ts, &pal, &tm);
+        let slots = [BgSlot::new(bg_layer, 0, 1, 0, 0, true)]; // BG priority 1
+
+        // tile 0 fully opaque (B), tile 1 fully transparent (the OBJWIN hole).
+        let mut two_tiles = [0u8; 64];
+        two_tiles[..32].copy_from_slice(&[0xFFu8; 32]);
+        let shared = Tileset::decode(BitDepth::Bpp4, &two_tiles).unwrap();
+        let mut colors = [Bgr555::default(); Palette::LEN];
+        colors[15] = Bgr555::from_channels(0, 0, 9); // B's color (blue)
+        let palette = Palette::new(colors);
+
+        let b_opaque_prio2 = OamEntry::new(
+            0,
+            0,
+            0, // tile 0 (opaque)
+            0,
+            BitDepth::Bpp4,
+            false,
+            false,
+            ObjShape::Square,
+            0,
+            2,
+            true,
+        );
+        let objwin_hole_prio0 = OamEntry::new(
+            0,
+            0,
+            1, // tile 1 (transparent)
+            0,
+            BitDepth::Bpp4,
+            false,
+            false,
+            ObjShape::Square,
+            0,
+            0,
+            true,
+        )
+        .with_mode(ObjMode::Window);
+
+        let entries = [b_opaque_prio2, objwin_hole_prio0];
+        let sprites = SpriteLayer::new(&entries, &shared, &shared, &palette);
+        let fb = compose_frame(&sprites, &slots);
+        assert_eq!(
+            fb.pixel(0, 0),
+            Some(Bgr555::from_channels(0, 0, 9).to_rgb888()),
+            "the OBJWIN hole upgrades B to priority 0, beating the BG"
+        );
+
+        // Control: without the OBJWIN sprite, B stays priority 2 and the
+        // priority-1 BG wins.
+        let control_entries = [b_opaque_prio2];
+        let control_sprites = SpriteLayer::new(&control_entries, &shared, &shared, &palette);
+        let control_fb = compose_frame(&control_sprites, &slots);
+        assert_eq!(
+            control_fb.pixel(0, 0),
+            Some(Bgr555::from_channels(7, 0, 0).to_rgb888()),
+            "without the OBJWIN hole, B keeps priority 2 and the BG wins"
+        );
+    }
+
+    #[test]
+    fn semi_transparent_obj_variant_dropped_by_a_deeper_enabled_target2_bg() {
+        // Finding 3 end-to-end: a semi-transparent OBJ (forced alpha) that is a
+        // BLDCNT first target under BRIGHTEN sits over BG_a (priority 1, its
+        // immediate neighbour, NOT a target2) with BG_b (priority 2, a target2)
+        // enabled deeper in the frame. Because *some* target2 exists globally,
+        // mgba clears the brighten variant and the OBJ shows its raw (black)
+        // color. The control clears BG_b's target2 bit -> no target2 anywhere
+        // -> the OBJ is brightened to white.
+        let (tiles_a, palette_a, map_a) = opaque_bg_fixture(5);
+        let (tiles_b, palette_b, map_b) = opaque_bg_fixture(10);
+        let layer_a = crate::bg::BgLayer::new(&tiles_a, &palette_a, &map_a);
+        let layer_b = crate::bg::BgLayer::new(&tiles_b, &palette_b, &map_b);
+        let slots = [
+            BgSlot::new(layer_a, 0, 1, 0, 0, true), // BG0, priority 1 (immediate next)
+            BgSlot::new(layer_b, 1, 2, 0, 0, true), // BG1, priority 2 (deeper)
+        ];
+
+        let sprite_tileset = Tileset::decode(BitDepth::Bpp4, &[0xFFu8; 32]).unwrap();
+        let mut sprite_colors = [Bgr555::default(); Palette::LEN];
+        sprite_colors[15] = Bgr555::from_channels(0, 0, 0); // black
+        let sprite_palette = Palette::new(sprite_colors);
+        let entries = [OamEntry::new(
+            0,
+            0,
+            0,
+            0,
+            BitDepth::Bpp4,
+            false,
+            false,
+            ObjShape::Square,
+            0,
+            0, // priority 0: the front layer
+            true,
+        )
+        .with_mode(ObjMode::SemiTransparent)];
+        let sprites = SpriteLayer::new(&entries, &sprite_tileset, &sprite_tileset, &sprite_palette);
+
+        let base_color = EffectsConfig {
+            effect: ColorEffect::Brighten,
+            target1: LayerTargets {
+                bg: [false; 4],
+                obj: true,
+                backdrop: false,
+            },
+            target2: LayerTargets {
+                bg: [false, true, false, false], // BG1 (deeper) is a target2
+                obj: false,
+                backdrop: false,
+            },
+            eva: 8,
+            evb: 8,
+            evy: 16,
+        };
+
+        let effects = FrameEffects {
+            color: base_color,
+            ..FrameEffects::default()
+        };
+        let fb = compose_frame_with_effects(&sprites, &slots, &effects);
+        assert_eq!(
+            fb.pixel(0, 0),
+            Some(Bgr555::from_channels(0, 0, 0).to_rgb888()),
+            "a deeper enabled target2 BG clears the variant -> raw (black) OBJ"
+        );
+
+        // Control: drop BG1's target2 bit -> no target2 anywhere -> variant
+        // survives -> the OBJ is brightened to white.
+        let mut control_color = base_color;
+        control_color.target2 = LayerTargets::default();
+        let control_effects = FrameEffects {
+            color: control_color,
+            ..FrameEffects::default()
+        };
+        let control_fb = compose_frame_with_effects(&sprites, &slots, &control_effects);
+        assert_eq!(
+            control_fb.pixel(0, 0),
+            Some(Bgr555::from_channels(31, 31, 31).to_rgb888()),
+            "no target2 anywhere -> the semi-transparent OBJ is brightened to white"
+        );
     }
 }

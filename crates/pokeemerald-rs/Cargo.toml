@@ -8,5 +8,12 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
+# Workspace-local path dependencies, not external crates -- `minimal-deps`
+# owner approval does not apply (see `xtask`'s `Cargo.toml` for the identical
+# reasoning). `assets` is the I-2 title-screen pack loader
+# (`crate::title::load_default`); it is itself dependency-free (std-only), so
+# adding it here does not drag anything new into `xtask`'s `smoke`-gated
+# `pokeemerald-rs` dependency either.
+assets = { path = "../assets" }
 platform = { path = "../platform" }
 rendering = { path = "../rendering" }

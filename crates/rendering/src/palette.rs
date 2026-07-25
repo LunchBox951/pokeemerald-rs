@@ -83,8 +83,28 @@ impl Bgr555 {
 }
 
 /// Expand a 5-bit channel value (`0..=31`) to 8 bits.
-const fn expand_5_to_8(c: u8) -> u8 {
+///
+/// `pub(crate)` (not private) so [`crate::effects`] can round-trip an
+/// already-expanded [`Rgb888`] channel back through the hardware's native
+/// 5-bit color math (see [`compress_8_to_5`]) instead of mixing 8-bit values
+/// directly, which would round differently than real GBA color blending
+/// `(behavioral-fidelity)`.
+pub(crate) const fn expand_5_to_8(c: u8) -> u8 {
     (c << 3) | (c >> 2)
+}
+
+/// Compress an 8-bit channel back to its originating 5-bit value.
+///
+/// The exact inverse of [`expand_5_to_8`]: for any `c` in `0..=31`,
+/// `expand_5_to_8(c) = c * 8 + floor(c / 4)`, and `floor(c / 4) < 8`, so the
+/// low 3 bits of the expanded byte never carry into the high 5 — a plain
+/// right-shift recovers `c` exactly with no rounding loss. This only holds
+/// for channels that actually came from [`expand_5_to_8`] (e.g. every
+/// [`Rgb888`] this crate produces, all ultimately from [`Bgr555::to_rgb888`]
+/// or a blend/brighten/darken of one) — an arbitrary externally-supplied
+/// [`Rgb888`] would round-trip through the nearest 5-bit value instead.
+pub(crate) const fn compress_8_to_5(c: u8) -> u8 {
+    c >> 3
 }
 
 /// An 8-bit-per-channel RGB color, ready for framebuffer presentation.
@@ -148,7 +168,14 @@ impl Palette {
 
 #[cfg(test)]
 mod tests {
-    use super::{Bgr555, Palette, Rgb888};
+    use super::{compress_8_to_5, expand_5_to_8, Bgr555, Palette, Rgb888};
+
+    #[test]
+    fn compress_is_the_exact_inverse_of_expand_for_every_5bit_value() {
+        for c in 0u8..32 {
+            assert_eq!(compress_8_to_5(expand_5_to_8(c)), c, "channel value {c}");
+        }
+    }
 
     #[test]
     fn boundary_channels_expand_to_boundary_bytes() {

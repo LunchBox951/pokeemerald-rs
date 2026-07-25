@@ -1039,44 +1039,58 @@
     "data/layouts/LittlerootTown": {
       "category": "data.layout",
       "kind": "dir",
-      "spec_owner": "05-assets",
-      "status": "pending"
+      "reason": "map.bin/border.bin extracted as opaque raw blobs into the local gitignored asset pack (issue #81, Discussion #71 policy A), ids layout/littleroot_town/map and layout/littleroot_town/border (crates/xtask/src/extract/mod.rs::extract_layouts, resolved via data/layouts/layouts.json). Read back with AssetPack::layout_map/layout_border (crates/assets/src/pack.rs) and decoded into typed grids via crates/assets/src/map_layouts.rs's existing MapLayout::grid/LayoutGrid/BorderGrid (MAPGRID_* masks).",
+      "rust_target": "crates/xtask/src/extract/mod.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "data/layouts/LittlerootTown_BrendansHouse_1F": {
       "category": "data.layout",
       "kind": "dir",
-      "spec_owner": "05-assets",
-      "status": "pending"
+      "reason": "map.bin/border.bin extracted as opaque raw blobs into the local gitignored asset pack (issue #81, Discussion #71 policy A), ids layout/littleroot_town_brendans_house_1f/map and layout/littleroot_town_brendans_house_1f/border (crates/xtask/src/extract/mod.rs::extract_layouts, resolved via data/layouts/layouts.json). Read back with AssetPack::layout_map/layout_border (crates/assets/src/pack.rs) and decoded into typed grids via crates/assets/src/map_layouts.rs's existing MapLayout::grid/LayoutGrid/BorderGrid (MAPGRID_* masks).",
+      "rust_target": "crates/xtask/src/extract/mod.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "data/layouts/LittlerootTown_BrendansHouse_2F": {
       "category": "data.layout",
       "kind": "dir",
-      "spec_owner": "05-assets",
-      "status": "pending"
+      "reason": "map.bin/border.bin extracted as opaque raw blobs into the local gitignored asset pack (issue #81, Discussion #71 policy A), ids layout/littleroot_town_brendans_house_2f/map and layout/littleroot_town_brendans_house_2f/border (crates/xtask/src/extract/mod.rs::extract_layouts, resolved via data/layouts/layouts.json). Read back with AssetPack::layout_map/layout_border (crates/assets/src/pack.rs) and decoded into typed grids via crates/assets/src/map_layouts.rs's existing MapLayout::grid/LayoutGrid/BorderGrid (MAPGRID_* masks).",
+      "rust_target": "crates/xtask/src/extract/mod.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "data/layouts/LittlerootTown_MaysHouse_1F": {
       "category": "data.layout",
       "kind": "dir",
-      "spec_owner": "05-assets",
-      "status": "pending"
+      "reason": "map.bin/border.bin extracted as opaque raw blobs into the local gitignored asset pack (issue #81, Discussion #71 policy A), ids layout/littleroot_town_mays_house_1f/map and layout/littleroot_town_mays_house_1f/border (crates/xtask/src/extract/mod.rs::extract_layouts, resolved via data/layouts/layouts.json). Read back with AssetPack::layout_map/layout_border (crates/assets/src/pack.rs) and decoded into typed grids via crates/assets/src/map_layouts.rs's existing MapLayout::grid/LayoutGrid/BorderGrid (MAPGRID_* masks).",
+      "rust_target": "crates/xtask/src/extract/mod.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "data/layouts/LittlerootTown_MaysHouse_2F": {
       "category": "data.layout",
       "kind": "dir",
-      "spec_owner": "05-assets",
-      "status": "pending"
+      "reason": "map.bin/border.bin extracted as opaque raw blobs into the local gitignored asset pack (issue #81, Discussion #71 policy A), ids layout/littleroot_town_mays_house_2f/map and layout/littleroot_town_mays_house_2f/border (crates/xtask/src/extract/mod.rs::extract_layouts, resolved via data/layouts/layouts.json). Read back with AssetPack::layout_map/layout_border (crates/assets/src/pack.rs) and decoded into typed grids via crates/assets/src/map_layouts.rs's existing MapLayout::grid/LayoutGrid/BorderGrid (MAPGRID_* masks).",
+      "rust_target": "crates/xtask/src/extract/mod.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "data/layouts/LittlerootTown_ProfessorBirchsLab": {
       "category": "data.layout",
       "kind": "dir",
-      "spec_owner": "05-assets",
-      "status": "pending"
+      "reason": "map.bin/border.bin extracted as opaque raw blobs into the local gitignored asset pack (issue #81, Discussion #71 policy A), ids layout/littleroot_town_professor_birchs_lab/map and layout/littleroot_town_professor_birchs_lab/border (crates/xtask/src/extract/mod.rs::extract_layouts, resolved via data/layouts/layouts.json). Read back with AssetPack::layout_map/layout_border (crates/assets/src/pack.rs) and decoded into typed grids via crates/assets/src/map_layouts.rs's existing MapLayout::grid/LayoutGrid/BorderGrid (MAPGRID_* masks).",
+      "rust_target": "crates/xtask/src/extract/mod.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "data/layouts/LittlerootTown_ProfessorBirchsLabWithTable": {
       "category": "data.layout",
       "kind": "dir",
-      "spec_owner": "05-assets",
-      "status": "pending"
+      "reason": "map.bin/border.bin extracted as opaque raw blobs into the local gitignored asset pack (issue #81, Discussion #71 policy A), ids layout/littleroot_town_professor_birchs_lab_with_table/map and layout/littleroot_town_professor_birchs_lab_with_table/border (crates/xtask/src/extract/mod.rs::extract_layouts, resolved via data/layouts/layouts.json). Read back with AssetPack::layout_map/layout_border (crates/assets/src/pack.rs) and decoded into typed grids via crates/assets/src/map_layouts.rs's existing MapLayout::grid/LayoutGrid/BorderGrid (MAPGRID_* masks).",
+      "rust_target": "crates/xtask/src/extract/mod.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "data/layouts/MagmaHideout_1F": {
       "category": "data.layout",
@@ -17822,6 +17836,14 @@
       "status": "pending"
     },
     "include/global.fieldmap.h": {
+      "artifacts": {
+        "METATILE_ATTR": {
+          "reason": "METATILE_ATTR_BEHAVIOR_MASK/METATILE_ATTR_LAYER_MASK unpack (UNPACK_BEHAVIOR/UNPACK_LAYER_TYPE) plus the METATILE_LAYER_TYPE_* enum, ported as MetatileAttribute/MetatileLayerType/MetatileAttributeTable (crates/assets/src/metatile_attributes.rs), read over a tileset's metatile_attributes.bin bytes via TilesetHandle::metatile_attribute_table (crates/assets/src/pack/handles.rs).",
+          "rust_target": "crates/assets/src/metatile_attributes.rs",
+          "spec": "S-4",
+          "status": "ported"
+        }
+      },
       "category": "code.header",
       "kind": "file",
       "status": "pending"
@@ -24075,6 +24097,12 @@
           "spec": "S-2",
           "status": "rewritten"
         },
+        "mosaic": {
+          "reason": "BgSlot::with_mosaic (compositor.rs) plus crate::mosaic::MosaicSize/MosaicConfig port BGxCNT's mosaic bit and the shared MOSAIC register's BG H/V block-size fields: a mosaic-enabled BG slot's sampling coordinate is snapped to its block's top-left origin (coord - coord % size) at composite time, verified against mgba's BACKGROUND_BITMAP_INIT mosaic macros (S-2 slice 4, issue #99). Complements regular_tile_layer/affine_tile_layer/scroll_wrapping.",
+          "rust_target": "crates/rendering/src/mosaic.rs",
+          "spec": "S-2",
+          "status": "rewritten"
+        },
         "regular_tile_layer": {
           "reason": "BgLayer/ScreenEntry/Tilemap port the regular (non-affine) BG tile-layer compositing semantics: screen-entry tile index/flip/palette-bank bits, 4bpp/8bpp tile-to-pixel resolution, transparent palette index 0 (every bank), and >32-tile tilemaps addressed as 32x32 screenblocks, verified against mgba's software mode-0 renderer; scrolling, affine BGs, and multi-layer priority are out of scope for this slice (issue #50).",
           "rust_target": "crates/rendering/src/bg.rs",
@@ -25726,6 +25754,12 @@
           "rust_target": "crates/rendering/src/palette.rs",
           "spec": "S-2",
           "status": "rewritten"
+        },
+        "color_effect_blend": {
+          "reason": "effects::alpha_blend/brighten/darken port the hardware BLDALPHA/BLDY per-pixel color-effect math -- the same per-channel weighted-lerp-over-16 formula BlendPalette (util.c) uses for CPU palette fades, generalized to the two-independent-weight (EVA/EVB) form and operating on the compositor's live per-pixel layer stack rather than a static palette buffer, verified against mgba's mColorMix5Bit/_brighten/_darken (S-2 slice 4, issue #99). The rest of palette.c (BeginNormalPaletteFade/UpdatePaletteFade's CPU fade sequencing, TintPalette_GrayScale/_SepiaTone, InvertPlttBuffer) remains pending -- distinct software palette-buffer features, not this hardware register path.",
+          "rust_target": "crates/rendering/src/effects.rs",
+          "spec": "S-2",
+          "status": "rewritten"
         }
       },
       "category": "code.source",
@@ -26346,6 +26380,18 @@
         "affine_oam": {
           "reason": "sprite_affine::sample_texel (paired with OamEntry::AffineMode/with_affine/bounding_box in oam.rs) ports affine and affine-double-size OBJ sampling: matrix-group selection by matrixNum (0..=31, gOamMatrices), the double-size bounding box (CalcCenterToCornerVec's ST_OAM_AFFINE_DOUBLE doubling), and center-relative texture-space sampling biased onto the nominal (undoubled) texture, verified pixel-for-pixel against mgba's GBAObjAttributesAIsTransformed branch and xAccum/yAccum setup (software-obj.c:215-316) including the outside-texture-vs-transparent-hole distinction that feeds SpriteLayer::resolve_pixel's priority-upgrade rule. h/v flip are correctly ignored once affine (hardware reuses those bits as matrixNum bits 3-4). The rotation/scale-to-matrix computation (ObjAffineSet/SetOamMatrix trig side) is not modelled — only matrix selection and consumption are. Windows/blending/mosaic remain out of scope (issue #98).",
           "rust_target": "crates/rendering/src/sprite_affine.rs",
+          "spec": "S-2",
+          "status": "rewritten"
+        },
+        "oam_mosaic": {
+          "reason": "OamEntry::mosaic/with_mosaic port OamData's OBJ mosaic bit; SpriteLayer::resolve_pixel_with_mosaic/objwin_mask_with_mosaic snap a mosaic-enabled entry's sampling coordinate to its MOSAIC-register OBJ block origin (crate::mosaic) before sampling, verified against mgba's SPRITE_MOSAIC_LOOP macro (S-2 slice 4, issue #99). Complements oam_regular_fields/affine_oam/oam_obj_mode.",
+          "rust_target": "crates/rendering/src/sprite.rs",
+          "spec": "S-2",
+          "status": "rewritten"
+        },
+        "oam_obj_mode": {
+          "reason": "OamEntry::mode/with_mode/ObjMode port OamData's objMode field (attr0 bits 10-11): SemiTransparent forces the sprite's pixel to alpha-blend against a valid second target behind it, unconditionally overriding whichever color effect BLDCNT actually selected, and Window contributes only to the OBJWIN mask (SpriteLayer::objwin_mask) rather than drawing a pixel of its own -- both verified against mgba's software-obj.c (S-2 slice 4, issue #99). Complements oam_regular_fields/affine_oam, which cover the rest of OamData's fields.",
+          "rust_target": "crates/rendering/src/oam.rs",
           "spec": "S-2",
           "status": "rewritten"
         },

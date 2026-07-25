@@ -44,8 +44,10 @@ impl<'a> PaletteRef<'a> {
 
 /// A tileset's bundled graphics: its tile bitmap, all 16 palette slots, and
 /// its raw metatile tables (see `xtask::extract::mod`'s module docs for
-/// exactly what's in each — `metatiles`/`metatile_attributes` are opaque,
-/// upstream-format bytes this crate does not yet decode).
+/// exactly what's in each). `metatiles` stays undecoded (metatile-to-tile
+/// mapping is a future rendering-layer concern); `metatile_attributes` has a
+/// typed view available via
+/// [`metatile_attribute_table`](TilesetHandle::metatile_attribute_table).
 #[derive(Debug, Clone, Copy)]
 pub struct TilesetHandle<'a> {
     /// The tileset's tile bitmap.
@@ -54,6 +56,20 @@ pub struct TilesetHandle<'a> {
     pub palettes: [PaletteRef<'a>; 16],
     /// Raw `metatiles.bin` bytes (undecoded).
     pub metatiles: &'a [u8],
-    /// Raw `metatile_attributes.bin` bytes (undecoded).
+    /// Raw `metatile_attributes.bin` bytes. See
+    /// [`metatile_attribute_table`](TilesetHandle::metatile_attribute_table)
+    /// for the typed decode.
     pub metatile_attributes: &'a [u8],
+}
+
+impl<'a> TilesetHandle<'a> {
+    /// A typed view over this tileset's `metatile_attributes` bytes,
+    /// indexed by local metatile id. See
+    /// [`crate::metatile_attributes`] for the decode.
+    #[must_use]
+    pub const fn metatile_attribute_table(
+        &self,
+    ) -> crate::metatile_attributes::MetatileAttributeTable<'a> {
+        crate::metatile_attributes::MetatileAttributeTable::new(self.metatile_attributes)
+    }
 }
