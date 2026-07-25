@@ -1,109 +1,49 @@
-//! `SaveBlock1`/`SaveBlock2` models (S-5).
+//! Upstream-offset-compatible `SaveBlock1`/`SaveBlock2` models (S-5).
 //!
-//! Behavioural re-implementation `(behavioral-fidelity)` of the subset of
-//! `struct SaveBlock1`/`struct SaveBlock2` (`include/global.h`) that has a
-//! Rust home in the engine crate today. Every other field of those upstream
-//! structs is **explicitly deferred** — listed below field by field, not
-//! silently dropped — for a later slice to add once the subsystem it backs
-//! exists.
+//! The modeled fields are written at their exact Emerald offsets inside
+//! full-size, zero-filled block buffers. Unknown and deferred fields are
+//! ignored on decode and zeroed on encode. This slice models:
 //!
-//! # `SaveBlock2` — modeled fields
+//! - `SaveBlock2`: player identity and the encryption key.
+//! - `SaveBlock1`: position, current/continue/last-heal warps, raw party
+//!   count, six party Pokémon, money, all five bag pockets, flags, and vars.
 //!
-//! Player identity only:
-//!
-//! * `playerName` -> [`SaveBlock2::player_name`] (raw game-text bytes,
-//!   `PLAYER_NAME_LENGTH + 1` = 8, including the `0xFF` terminator slot —
-//!   see [`crate::text`] for the codec that decodes it to glyphs).
-//! * `playerGender` -> [`SaveBlock2::player_gender`] ([`PlayerGender`]).
-//! * `playerTrainerId` -> [`SaveBlock2::player_trainer_id`] (raw
-//!   `TRAINER_ID_LENGTH` = 4 bytes; upstream reads this as both the 16-bit
-//!   public id and the full 32-bit id depending on context — this port
-//!   keeps the raw bytes rather than picking one interpretation, since
-//!   neither trainer-id consumer exists yet).
-//!
-//! ## `SaveBlock2` — deferred fields
-//!
-//! `specialSaveWarpFlags`; play time (`playTimeHours/Minutes/Seconds/
-//! VBlanks`); all `options*` bitfields (button mode, text speed, window
-//! frame, sound, battle style, battle scene, region map zoom) — no options
-//! menu yet; `pokedex` — no Pokédex yet; `localTimeOffset`/
-//! `lastBerryTreeUpdate` — no RTC; `gcnLinkFlags`/`encryptionKey` — no
-//! `GameCube` link; `playerApprentice`/`apprentices` — no Battle Frontier;
-//! `berryCrush`/`pokeJump`/`berryPick` — no minigames; `hallRecords1P`/
-//! `hallRecords2P`/`contestLinkResults` — no Contest/Hall of Fame; `frontier`
-//! — no Battle Frontier.
-//!
-//! # `SaveBlock1` — modeled fields
-//!
-//! Position and the flags/vars store:
-//!
-//! * `pos` -> [`SaveBlock1::pos`] ([`Coords16`]) — the "position stub" this
-//!   slice's model owns; no overworld movement system consumes it yet.
-//! * `location` -> [`SaveBlock1::location`] ([`WarpData`]) — the player's
-//!   current map/warp.
-//! * `flags`/`vars` -> [`SaveBlock1::event_data`] ([`crate::event_data::EventData`]),
-//!   via [`crate::event_data::EventData::flag_bytes`]/
-//!   [`crate::event_data::EventData::vars_raw`]/
-//!   [`crate::event_data::EventData::from_saved_state`]. `EventData`'s
-//!   `special_flags`/`special_vars` are session-only and correctly excluded
-//!   (see that module's docs).
-//!
-//! ## `SaveBlock1` — deferred fields
-//!
-//! `continueGameWarp`/`dynamicWarp`/`lastHealLocation`/`escapeWarp` — no
-//! warp-triggered save points (Dig/Escape Rope/whiteout/teleport) yet;
-//! `savedMusic`/`weather`/`weatherCycleStage`/`flashLevel`/`mapLayoutId`/
-//! `mapView` — no overworld map rendering state yet; `playerPartyCount`/
-//! `playerParty` — no party system; `money`/`coins`/`registeredItem` — no
-//! economy; `pcItems`/`bagPocket_*` — no bag; `pokeblocks` — no Pokéblocks;
-//! `seen1` (Pokédex "seen" bitfield) — no Pokédex; `berryBlenderRecords` —
-//! no Berry Blender; `trainerRematchStepCounter`/`trainerRematches` — no
-//! rematch system; `objectEvents`/`objectEventTemplates` — no object events;
-//! `gameStats` — no game-stat tracking; `berryTrees` — no Berry system;
-//! `secretBases` — no Secret Bases; `playerRoomDecorations*`/
-//! `decoration*` — no decorations; `tvShows`/`pokeNews` — no TV; outbreak
-//! fields (`outbreak*`) — no Pokémon outbreaks; `gabbyAndTyData` — no
-//! Gabby & Ty; `easyChat*`/`registeredTexts` — no Easy Chat; `mail` — no
-//! Mail; `unlockedTrendySayings` — no Easy Chat; `oldMan` — no tutorial
-//! recording; `dewfordTrends` — no Dewford Trend; `contestWinners` — no
-//! Contests; `daycare` — no Day Care; `linkBattleRecords` — no link
-//! battles; `giftRibbons` — no ribbons; `externalEventData`/
-//! `externalEventFlags` — no e-Reader/external events; `roamer` — no
-//! roaming Pokémon; `enigmaBerry` — no Enigma Berry; `mysteryGift` — no
-//! Mystery Gift; `trainerHillTimes`/`trainerHill` — no Trainer Hill;
-//! `ramScript` — no RAM scripts; `recordMixingGift` — no record mixing;
-//! `seen2` — no Pokédex; `lilycoveLady` — no Lilycove Lady; `trainerNameRecords`
-//! — no Union Room; `waldaPhrase` — no Walda Phrase.
-//!
-//! # Layout is not upstream-offset-compatible (yet)
-//!
-//! [`SaveBlock1::to_bytes`]/[`SaveBlock2::to_bytes`] pack only the modeled
-//! fields, tightly, in the order listed above. This is **not** the same
-//! byte layout as upstream's full structs (which are hundreds of bytes
-//! larger and include every deferred field at a fixed offset) — it is this
-//! port's own, minimal, foundation layout that later slices grow as they add
-//! fields. What *does* follow upstream byte-for-byte is the sector/footer
-//! format around this payload (see [`super::sector`]) — that's what future
-//! real-save import will actually parse; importing a real save's field
-//! *contents* is separate future work this slice does not attempt.
+//! Dynamic/escape warps, coins, registered/PC items, PC Pokémon storage, and
+//! the remaining gameplay subsystems retain no typed Rust home yet.
 
+use super::bag::{Bag, BAG_LEN};
+use super::pokemon::{Pokemon, POKEMON_LEN};
 use crate::event_data::{self, EventData};
 
-/// A byte-serialization error for [`SaveBlock1`]/[`SaveBlock2`].
+const PLAYER_NAME_OFFSET: usize = 0x00;
+const PLAYER_GENDER_OFFSET: usize = 0x08;
+const PLAYER_TRAINER_ID_OFFSET: usize = 0x0A;
+const ENCRYPTION_KEY_OFFSET: usize = 0xAC;
+
+const POSITION_OFFSET: usize = 0x00;
+const LOCATION_OFFSET: usize = 0x04;
+const CONTINUE_GAME_WARP_OFFSET: usize = 0x0C;
+const LAST_HEAL_LOCATION_OFFSET: usize = 0x1C;
+const PARTY_COUNT_OFFSET: usize = 0x234;
+const PARTY_OFFSET: usize = 0x238;
+const MONEY_OFFSET: usize = 0x490;
+const BAG_ITEMS_OFFSET: usize = 0x560;
+const FLAGS_OFFSET: usize = 0x1270;
+const VARS_OFFSET: usize = 0x139C;
+
+/// A byte-serialization error for [`SaveBlock1`] or [`SaveBlock2`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SaveError {
-    /// `from_bytes` was given fewer bytes than the block's fixed payload
-    /// length.
+    /// `from_bytes` was given fewer bytes than the block's full upstream
+    /// payload length.
     Truncated {
-        /// The number of bytes the block's payload needs.
+        /// The number of bytes required.
         expected: usize,
-        /// The number of bytes actually supplied.
+        /// The number of bytes supplied.
         got: usize,
     },
-    /// [`SaveBlock2::player_gender`]'s stored byte was neither `MALE` (0)
-    /// nor `FEMALE` (1). Upstream never validates this byte (it's read as a
-    /// raw `u8` and compared against `MALE`); this port surfaces the
-    /// otherwise-silent case explicitly instead of guessing.
+    /// The stored player-gender byte was neither `MALE` (0) nor `FEMALE`
+    /// (1).
     InvalidGender(u8),
 }
 
@@ -120,18 +60,17 @@ impl std::fmt::Display for SaveError {
 
 impl std::error::Error for SaveError {}
 
-/// `PLAYER_NAME_LENGTH` (`include/constants/global.h`) — the player name's
-/// glyph capacity, not counting the terminator.
+/// `PLAYER_NAME_LENGTH`: glyph capacity without the terminator.
 pub const PLAYER_NAME_LENGTH: usize = 7;
-/// The player name buffer size, including the trailing `0xFF` terminator
-/// slot (`PLAYER_NAME_LENGTH + 1`, matching `playerName[PLAYER_NAME_LENGTH +
-/// 1]`).
+/// Player-name buffer size including its terminator slot.
 pub const PLAYER_NAME_BUF_LEN: usize = PLAYER_NAME_LENGTH + 1;
-/// `TRAINER_ID_LENGTH` (`include/constants/global.h`).
+/// `TRAINER_ID_LENGTH`.
 pub const TRAINER_ID_LENGTH: usize = 4;
+/// `PARTY_SIZE`.
+pub const PARTY_SIZE: usize = 6;
 
-/// World-map tile coordinates. Mirrors upstream `struct Coords16`
-/// (`include/global.h`).
+/// World-map tile coordinates, matching `struct Coords16`.
+#[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Coords16 {
     /// X coordinate.
@@ -145,35 +84,32 @@ impl Coords16 {
 
     fn to_bytes(self) -> [u8; Self::LEN] {
         let mut out = [0u8; Self::LEN];
-        out[0..2].copy_from_slice(&self.x.to_le_bytes());
-        out[2..4].copy_from_slice(&self.y.to_le_bytes());
+        out[..2].copy_from_slice(&self.x.to_le_bytes());
+        out[2..].copy_from_slice(&self.y.to_le_bytes());
         out
     }
 
     fn from_bytes(bytes: &[u8]) -> Self {
         Self {
-            x: i16::from_le_bytes([bytes[0], bytes[1]]),
-            y: i16::from_le_bytes([bytes[2], bytes[3]]),
+            x: read_i16(bytes, 0),
+            y: read_i16(bytes, 2),
         }
     }
 }
 
-/// A map warp target: which map, which warp on it, and the tile to land on.
-/// Mirrors upstream `struct WarpData` (`include/global.h`), including its
-/// unused alignment padding byte (kept so this struct's serialized size
-/// matches upstream's exactly, in case a future slice needs to align this
-/// payload to real upstream offsets).
+/// A map/warp target and its signed destination coordinates.
+#[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct WarpData {
-    /// `mapGroup`.
+    /// Map group.
     pub map_group: i8,
-    /// `mapNum`.
+    /// Map number.
     pub map_num: i8,
-    /// `warpId` — which warp event on the destination map.
+    /// Warp-event id.
     pub warp_id: i8,
-    /// `x`.
+    /// Destination X coordinate.
     pub x: i16,
-    /// `y`.
+    /// Destination Y coordinate.
     pub y: i16,
 }
 
@@ -185,7 +121,7 @@ impl WarpData {
         out[0] = self.map_group.to_le_bytes()[0];
         out[1] = self.map_num.to_le_bytes()[0];
         out[2] = self.warp_id.to_le_bytes()[0];
-        out[3] = 0; // upstream's unused padding byte
+        out[3] = 0;
         out[4..6].copy_from_slice(&self.x.to_le_bytes());
         out[6..8].copy_from_slice(&self.y.to_le_bytes());
         out
@@ -196,15 +132,13 @@ impl WarpData {
             map_group: bytes[0].cast_signed(),
             map_num: bytes[1].cast_signed(),
             warp_id: bytes[2].cast_signed(),
-            // bytes[3] is upstream's unused padding byte.
-            x: i16::from_le_bytes([bytes[4], bytes[5]]),
-            y: i16::from_le_bytes([bytes[6], bytes[7]]),
+            x: read_i16(bytes, 4),
+            y: read_i16(bytes, 6),
         }
     }
 }
 
-/// The player's gender. Mirrors upstream `MALE`/`FEMALE`
-/// (`include/constants/global.h`), stored at `SaveBlock2::playerGender`.
+/// Player gender stored in `SaveBlock2`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum PlayerGender {
     /// `MALE` (0).
@@ -231,278 +165,412 @@ impl PlayerGender {
     }
 }
 
-/// Player identity, the `SaveBlock2` subset this slice models. See the
-/// module docs for the full field mapping and everything deferred.
+/// Modeled fields from Emerald's full `SaveBlock2`.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct SaveBlock2 {
-    /// `playerName` — raw game-text bytes (see [`crate::text`]).
+    /// Raw game-text player name bytes.
     pub player_name: [u8; PLAYER_NAME_BUF_LEN],
-    /// `playerGender`.
+    /// Player gender.
     pub player_gender: PlayerGender,
-    /// `playerTrainerId` — raw bytes (see the module docs for why this
-    /// isn't decoded to a public/secret id pair yet).
+    /// Raw four-byte trainer id.
     pub player_trainer_id: [u8; TRAINER_ID_LENGTH],
+    /// Key used to serialize money and item quantities.
+    pub encryption_key: u32,
 }
 
 impl SaveBlock2 {
-    /// The number of modeled payload bytes (8 name + 1 gender + 4 trainer id
-    /// = 13). Not 4-aligned, so it is *not* the serialized length — see
-    /// [`SaveBlock2::PADDED_LEN`], which [`SaveBlock2::to_bytes`] emits.
-    pub const PAYLOAD_LEN: usize = PLAYER_NAME_BUF_LEN + 1 + TRAINER_ID_LENGTH;
+    /// Exact upstream `sizeof(struct SaveBlock2)`.
+    pub const PAYLOAD_LEN: usize = 0xF2C;
 
-    /// The fixed length of [`SaveBlock2::to_bytes`]'s output: [`PAYLOAD_LEN`]
-    /// rounded up to a 4-byte boundary, with the trailing bytes zero-padded.
-    /// The sector checksum sums the payload as little-endian `u32` words
-    /// (`super::checksum`), so any non-4-aligned length would leave its last
-    /// live bytes outside the checksummed span `(behavioral-fidelity)`. This
-    /// mirrors upstream, whose `CalculateChecksum(data, sizeof(struct
-    /// SaveBlock2))` always covers everything because `sizeof` is 4-aligned.
-    ///
-    /// [`PAYLOAD_LEN`]: SaveBlock2::PAYLOAD_LEN
-    pub const PADDED_LEN: usize = Self::PAYLOAD_LEN.next_multiple_of(4);
-
-    /// Serialize to this slice's `SaveBlock2` payload layout (see the module
-    /// docs — not upstream-offset-compatible), zero-padded to
-    /// [`SaveBlock2::PADDED_LEN`] so every live byte is checksum-covered.
+    /// Serialize into the exact full-size layout, zeroing deferred bytes.
     #[must_use]
-    pub fn to_bytes(&self) -> [u8; Self::PADDED_LEN] {
-        let mut out = [0u8; Self::PADDED_LEN];
-        out[..PLAYER_NAME_BUF_LEN].copy_from_slice(&self.player_name);
-        out[PLAYER_NAME_BUF_LEN] = self.player_gender.to_byte();
-        out[PLAYER_NAME_BUF_LEN + 1..Self::PAYLOAD_LEN].copy_from_slice(&self.player_trainer_id);
+    pub fn to_bytes(&self) -> [u8; Self::PAYLOAD_LEN] {
+        let mut out = [0u8; Self::PAYLOAD_LEN];
+        out[PLAYER_NAME_OFFSET..PLAYER_NAME_OFFSET + PLAYER_NAME_BUF_LEN]
+            .copy_from_slice(&self.player_name);
+        out[PLAYER_GENDER_OFFSET] = self.player_gender.to_byte();
+        out[PLAYER_TRAINER_ID_OFFSET..PLAYER_TRAINER_ID_OFFSET + TRAINER_ID_LENGTH]
+            .copy_from_slice(&self.player_trainer_id);
+        out[ENCRYPTION_KEY_OFFSET..ENCRYPTION_KEY_OFFSET + 4]
+            .copy_from_slice(&self.encryption_key.to_le_bytes());
         out
     }
 
-    /// Deserialize from this slice's `SaveBlock2` payload layout.
+    /// Decode modeled fields from the exact full-size layout.
     ///
     /// # Errors
     ///
-    /// Returns [`SaveError::Truncated`] if `bytes` is shorter than
-    /// [`SaveBlock2::PAYLOAD_LEN`], or [`SaveError::InvalidGender`] if the
-    /// gender byte is neither 0 nor 1.
+    /// Returns [`SaveError::Truncated`] for a short block or
+    /// [`SaveError::InvalidGender`] for a gender byte other than 0 or 1.
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, SaveError> {
-        if bytes.len() < Self::PAYLOAD_LEN {
-            return Err(SaveError::Truncated {
-                expected: Self::PAYLOAD_LEN,
-                got: bytes.len(),
-            });
-        }
+        require_len(bytes, Self::PAYLOAD_LEN)?;
         let mut player_name = [0u8; PLAYER_NAME_BUF_LEN];
-        player_name.copy_from_slice(&bytes[..PLAYER_NAME_BUF_LEN]);
-        let player_gender = PlayerGender::from_byte(bytes[PLAYER_NAME_BUF_LEN])?;
+        player_name
+            .copy_from_slice(&bytes[PLAYER_NAME_OFFSET..PLAYER_NAME_OFFSET + PLAYER_NAME_BUF_LEN]);
+        let player_gender = PlayerGender::from_byte(bytes[PLAYER_GENDER_OFFSET])?;
         let mut player_trainer_id = [0u8; TRAINER_ID_LENGTH];
-        player_trainer_id.copy_from_slice(&bytes[PLAYER_NAME_BUF_LEN + 1..Self::PAYLOAD_LEN]);
+        player_trainer_id.copy_from_slice(
+            &bytes[PLAYER_TRAINER_ID_OFFSET..PLAYER_TRAINER_ID_OFFSET + TRAINER_ID_LENGTH],
+        );
         Ok(Self {
             player_name,
             player_gender,
             player_trainer_id,
+            encryption_key: read_u32(bytes, ENCRYPTION_KEY_OFFSET),
         })
     }
 }
 
-/// Position and event-data state, the `SaveBlock1` subset this slice
-/// models. See the module docs for the full field mapping and everything
-/// deferred.
-#[derive(Debug, Clone, Default)]
+/// Modeled fields from Emerald's full `SaveBlock1`.
+#[derive(Debug, Clone)]
 pub struct SaveBlock1 {
-    /// `pos` — current tile coordinates (the "position stub").
+    /// Current tile coordinates.
     pub pos: Coords16,
-    /// `location` — current map/warp.
+    /// Current map/warp.
     pub location: WarpData,
-    /// `flags`/`vars`, via the existing [`EventData`] store.
+    /// Warp used when continuing the game.
+    pub continue_game_warp: WarpData,
+    /// Whiteout/Teleport destination.
+    pub last_heal_location: WarpData,
+    /// Raw stored party count. Values above six are preserved.
+    pub player_party_count: u8,
+    /// Six exact party Pokémon values.
+    pub player_party: [Pokemon; PARTY_SIZE],
+    /// Plaintext money value.
+    pub money: u32,
+    /// Plaintext bag model.
+    pub bag: Bag,
+    /// Persistent ordinary flags and vars.
     pub event_data: EventData,
 }
 
-impl SaveBlock1 {
-    /// The fixed length of [`SaveBlock1::to_bytes`]'s output.
-    pub const PAYLOAD_LEN: usize =
-        Coords16::LEN + WarpData::LEN + event_data::NUM_FLAG_BYTES + event_data::VARS_COUNT * 2;
-
-    /// Serialize to this slice's `SaveBlock1` payload layout (see the module
-    /// docs — not upstream-offset-compatible): `pos`, then `location`, then
-    /// the ordinary flag bytes, then the ordinary var words (little-endian).
-    #[must_use]
-    pub fn to_bytes(&self) -> Vec<u8> {
-        let mut out = Vec::with_capacity(Self::PAYLOAD_LEN);
-        out.extend_from_slice(&self.pos.to_bytes());
-        out.extend_from_slice(&self.location.to_bytes());
-        out.extend_from_slice(self.event_data.flag_bytes());
-        for var in self.event_data.vars_raw() {
-            out.extend_from_slice(&var.to_le_bytes());
+impl Default for SaveBlock1 {
+    fn default() -> Self {
+        Self {
+            pos: Coords16::default(),
+            location: WarpData::default(),
+            continue_game_warp: WarpData::default(),
+            last_heal_location: WarpData::default(),
+            player_party_count: 0,
+            player_party: [Pokemon::default(); PARTY_SIZE],
+            money: 0,
+            bag: Bag::default(),
+            event_data: EventData::default(),
         }
-        debug_assert_eq!(out.len(), Self::PAYLOAD_LEN);
+    }
+}
+
+impl SaveBlock1 {
+    /// Exact upstream `sizeof(struct SaveBlock1)`.
+    pub const PAYLOAD_LEN: usize = 0x3D88;
+
+    /// Serialize into the exact full-size layout, encrypting money and bag
+    /// quantities with `encryption_key` and zeroing deferred bytes.
+    #[must_use]
+    pub fn to_bytes(&self, encryption_key: u32) -> [u8; Self::PAYLOAD_LEN] {
+        let mut out = [0u8; Self::PAYLOAD_LEN];
+        out[POSITION_OFFSET..POSITION_OFFSET + Coords16::LEN].copy_from_slice(&self.pos.to_bytes());
+        write_warp(&mut out, LOCATION_OFFSET, self.location);
+        write_warp(&mut out, CONTINUE_GAME_WARP_OFFSET, self.continue_game_warp);
+        write_warp(&mut out, LAST_HEAL_LOCATION_OFFSET, self.last_heal_location);
+        out[PARTY_COUNT_OFFSET] = self.player_party_count;
+        for (index, pokemon) in self.player_party.iter().enumerate() {
+            let offset = PARTY_OFFSET + index * POKEMON_LEN;
+            out[offset..offset + POKEMON_LEN].copy_from_slice(&pokemon.to_bytes());
+        }
+        out[MONEY_OFFSET..MONEY_OFFSET + 4]
+            .copy_from_slice(&(self.money ^ encryption_key).to_le_bytes());
+        out[BAG_ITEMS_OFFSET..BAG_ITEMS_OFFSET + BAG_LEN]
+            .copy_from_slice(&self.bag.to_bytes(encryption_key));
+        out[FLAGS_OFFSET..FLAGS_OFFSET + event_data::NUM_FLAG_BYTES]
+            .copy_from_slice(self.event_data.flag_bytes());
+        for (index, value) in self.event_data.vars_raw().iter().enumerate() {
+            let offset = VARS_OFFSET + index * 2;
+            out[offset..offset + 2].copy_from_slice(&value.to_le_bytes());
+        }
         out
     }
 
-    /// Deserialize from this slice's `SaveBlock1` payload layout.
+    /// Decode modeled fields, decrypting money and bag quantities with
+    /// `encryption_key`.
     ///
     /// # Errors
     ///
-    /// Returns [`SaveError::Truncated`] if `bytes` is shorter than
-    /// [`SaveBlock1::PAYLOAD_LEN`].
-    pub fn from_bytes(bytes: &[u8]) -> Result<Self, SaveError> {
-        if bytes.len() < Self::PAYLOAD_LEN {
-            return Err(SaveError::Truncated {
-                expected: Self::PAYLOAD_LEN,
-                got: bytes.len(),
-            });
+    /// Returns [`SaveError::Truncated`] if `bytes` is shorter than the full
+    /// upstream block.
+    pub fn from_bytes(bytes: &[u8], encryption_key: u32) -> Result<Self, SaveError> {
+        require_len(bytes, Self::PAYLOAD_LEN)?;
+        let mut player_party = [Pokemon::default(); PARTY_SIZE];
+        for (index, pokemon) in player_party.iter_mut().enumerate() {
+            let offset = PARTY_OFFSET + index * POKEMON_LEN;
+            let mut raw = [0u8; POKEMON_LEN];
+            raw.copy_from_slice(&bytes[offset..offset + POKEMON_LEN]);
+            *pokemon = Pokemon::from_bytes(raw);
         }
-        let pos = Coords16::from_bytes(&bytes[0..Coords16::LEN]);
-        let location_start = Coords16::LEN;
-        let location = WarpData::from_bytes(&bytes[location_start..location_start + WarpData::LEN]);
 
-        let flags_start = location_start + WarpData::LEN;
-        let flags_end = flags_start + event_data::NUM_FLAG_BYTES;
+        let mut bag_bytes = [0u8; BAG_LEN];
+        bag_bytes.copy_from_slice(&bytes[BAG_ITEMS_OFFSET..BAG_ITEMS_OFFSET + BAG_LEN]);
         let mut flags = [0u8; event_data::NUM_FLAG_BYTES];
-        flags.copy_from_slice(&bytes[flags_start..flags_end]);
-
-        let vars_end = flags_end + event_data::VARS_COUNT * 2;
+        flags.copy_from_slice(&bytes[FLAGS_OFFSET..FLAGS_OFFSET + event_data::NUM_FLAG_BYTES]);
         let mut vars = [0u16; event_data::VARS_COUNT];
-        for (slot, chunk) in vars
-            .iter_mut()
-            .zip(bytes[flags_end..vars_end].chunks_exact(2))
-        {
-            *slot = u16::from_le_bytes([chunk[0], chunk[1]]);
+        for (index, value) in vars.iter_mut().enumerate() {
+            *value = read_u16(bytes, VARS_OFFSET + index * 2);
         }
 
         Ok(Self {
-            pos,
-            location,
+            pos: Coords16::from_bytes(&bytes[POSITION_OFFSET..POSITION_OFFSET + Coords16::LEN]),
+            location: WarpData::from_bytes(
+                &bytes[LOCATION_OFFSET..LOCATION_OFFSET + WarpData::LEN],
+            ),
+            continue_game_warp: WarpData::from_bytes(
+                &bytes[CONTINUE_GAME_WARP_OFFSET..CONTINUE_GAME_WARP_OFFSET + WarpData::LEN],
+            ),
+            last_heal_location: WarpData::from_bytes(
+                &bytes[LAST_HEAL_LOCATION_OFFSET..LAST_HEAL_LOCATION_OFFSET + WarpData::LEN],
+            ),
+            player_party_count: bytes[PARTY_COUNT_OFFSET],
+            player_party,
+            money: read_u32(bytes, MONEY_OFFSET) ^ encryption_key,
+            bag: Bag::from_bytes(bag_bytes, encryption_key),
             event_data: EventData::from_saved_state(flags, vars),
         })
     }
 }
 
-// Regression guard for the checksum-coverage invariant: the serialized
-// payload length of every save block must be 4-aligned, because the sector
-// checksum (`super::checksum`) only sums whole little-endian `u32` words and
-// silently drops any trailing partial word. `SaveBlock2` reaches this via its
-// zero-padded `PADDED_LEN`; `SaveBlock1`'s chunked payload stays covered as
-// long as its own `PAYLOAD_LEN` is 4-aligned (every chunk but the last is a
-// full 4-aligned `SECTOR_DATA_SIZE`). Any future block that forgets to align
-// its payload fails to compile here rather than losing coverage at runtime.
-const _: () = assert!(SaveBlock2::PADDED_LEN.is_multiple_of(4));
+fn require_len(bytes: &[u8], expected: usize) -> Result<(), SaveError> {
+    if bytes.len() < expected {
+        Err(SaveError::Truncated {
+            expected,
+            got: bytes.len(),
+        })
+    } else {
+        Ok(())
+    }
+}
+
+fn write_warp(out: &mut [u8], offset: usize, warp: WarpData) {
+    out[offset..offset + WarpData::LEN].copy_from_slice(&warp.to_bytes());
+}
+
+fn read_i16(bytes: &[u8], offset: usize) -> i16 {
+    i16::from_le_bytes([bytes[offset], bytes[offset + 1]])
+}
+
+fn read_u16(bytes: &[u8], offset: usize) -> u16 {
+    u16::from_le_bytes([bytes[offset], bytes[offset + 1]])
+}
+
+fn read_u32(bytes: &[u8], offset: usize) -> u32 {
+    u32::from_le_bytes([
+        bytes[offset],
+        bytes[offset + 1],
+        bytes[offset + 2],
+        bytes[offset + 3],
+    ])
+}
+
+const _: () = assert!(std::mem::size_of::<Coords16>() == Coords16::LEN);
+const _: () = assert!(std::mem::align_of::<Coords16>() == 2);
+const _: () = assert!(std::mem::size_of::<WarpData>() == WarpData::LEN);
+const _: () = assert!(std::mem::align_of::<WarpData>() == 2);
+const _: () = assert!(SaveBlock2::PAYLOAD_LEN.is_multiple_of(4));
 const _: () = assert!(SaveBlock1::PAYLOAD_LEN.is_multiple_of(4));
+const _: () = assert!(PARTY_OFFSET + PARTY_SIZE * POKEMON_LEN == MONEY_OFFSET);
+const _: () = assert!(BAG_ITEMS_OFFSET + BAG_LEN == 0x848);
+const _: () = assert!(FLAGS_OFFSET + event_data::NUM_FLAG_BYTES == VARS_OFFSET);
+const _: () = assert!(SaveBlock1::PAYLOAD_LEN == super::sector::SECTOR_DATA_SIZE * 3 + 3848);
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::save::{ItemSlot, PokemonSubstructures};
+
+    fn sample_warp(seed: i8) -> WarpData {
+        WarpData {
+            map_group: seed,
+            map_num: seed.wrapping_add(1),
+            warp_id: seed.wrapping_add(2),
+            x: i16::from(seed) * -101,
+            y: i16::from(seed) * 203,
+        }
+    }
+
+    fn sample_pokemon(index: u8) -> Pokemon {
+        let personality = u32::from(index) * 5 + 1;
+        let mut pokemon = Pokemon {
+            box_data: super::super::pokemon::BoxPokemon::new(
+                personality,
+                0xA5A5_0000 | u32::from(index),
+            ),
+            status: 0x1020_3040 + u32::from(index),
+            level: 10 + index,
+            mail: 20 + index,
+            hp: 100 + u16::from(index),
+            max_hp: 110 + u16::from(index),
+            attack: 120 + u16::from(index),
+            defense: 130 + u16::from(index),
+            speed: 140 + u16::from(index),
+            special_attack: 150 + u16::from(index),
+            special_defense: 160 + u16::from(index),
+        };
+        pokemon.box_data.set_substructures(&PokemonSubstructures {
+            growth: [index; 12],
+            attacks: [index.wrapping_add(1); 12],
+            evs_and_condition: [index.wrapping_add(2); 12],
+            misc: [index.wrapping_add(3); 12],
+        });
+        pokemon
+    }
 
     #[test]
-    fn save_block2_round_trips_through_bytes() {
+    fn save_block2_uses_full_upstream_offsets() {
         let block = SaveBlock2 {
             player_name: *b"RUSTY\xFF\0\0",
             player_gender: PlayerGender::Female,
             player_trainer_id: [0x12, 0x34, 0x56, 0x78],
+            encryption_key: 0x89AB_CDEF,
         };
         let bytes = block.to_bytes();
-        assert_eq!(bytes.len(), SaveBlock2::PADDED_LEN);
-        // The padding bytes past the modeled fields must be zero, so the
-        // checksum over the padded span is deterministic.
-        assert!(bytes[SaveBlock2::PAYLOAD_LEN..].iter().all(|&b| b == 0));
-        let restored = SaveBlock2::from_bytes(&bytes).unwrap();
-        assert_eq!(restored, block);
+        assert_eq!(bytes.len(), 0xF2C);
+        assert_eq!(&bytes[0x00..0x08], b"RUSTY\xFF\0\0");
+        assert_eq!(bytes[0x08], 1);
+        assert_eq!(bytes[0x09], 0);
+        assert_eq!(&bytes[0x0A..0x0E], &[0x12, 0x34, 0x56, 0x78]);
+        assert_eq!(&bytes[0xAC..0xB0], &[0xEF, 0xCD, 0xAB, 0x89]);
+        assert_eq!(SaveBlock2::from_bytes(&bytes).unwrap(), block);
     }
 
     #[test]
-    fn save_block2_default_round_trips() {
-        let block = SaveBlock2::default();
-        let restored = SaveBlock2::from_bytes(&block.to_bytes()).unwrap();
-        assert_eq!(restored, block);
+    fn save_block2_ignores_unmodeled_bytes_and_zeroes_them_on_encode() {
+        let mut bytes = [0xA5; SaveBlock2::PAYLOAD_LEN];
+        bytes[PLAYER_GENDER_OFFSET] = 0;
+        let decoded = SaveBlock2::from_bytes(&bytes).unwrap();
+        let encoded = decoded.to_bytes();
+        assert_eq!(encoded[0x09], 0);
+        assert_eq!(encoded[0x20], 0);
+        assert_eq!(encoded[SaveBlock2::PAYLOAD_LEN - 1], 0);
     }
 
     #[test]
-    fn save_block2_rejects_truncated_bytes() {
-        let short = vec![0u8; SaveBlock2::PAYLOAD_LEN - 1];
-        assert_eq!(
-            SaveBlock2::from_bytes(&short),
-            Err(SaveError::Truncated {
-                expected: SaveBlock2::PAYLOAD_LEN,
-                got: SaveBlock2::PAYLOAD_LEN - 1
-            })
-        );
-    }
-
-    #[test]
-    fn save_block2_rejects_invalid_gender_byte() {
-        let mut bytes = SaveBlock2::default().to_bytes().to_vec();
-        bytes[PLAYER_NAME_BUF_LEN] = 7;
-        assert_eq!(
-            SaveBlock2::from_bytes(&bytes),
-            Err(SaveError::InvalidGender(7))
-        );
-    }
-
-    #[test]
-    fn save_block1_round_trips_position_location_and_event_data() {
+    fn save_block1_round_trips_every_modeled_offset() {
+        let key = 0xA1B2_C3D4;
         let mut block = SaveBlock1 {
-            pos: Coords16 { x: -12, y: 340 },
-            location: WarpData {
-                map_group: 1,
-                map_num: -2,
-                warp_id: 3,
-                x: 5,
-                y: -5,
-            },
+            pos: Coords16 { x: -1234, y: 2345 },
+            location: sample_warp(-3),
+            continue_game_warp: sample_warp(7),
+            last_heal_location: sample_warp(-11),
+            player_party_count: 0xFE,
+            player_party: std::array::from_fn(|index| sample_pokemon(u8::try_from(index).unwrap())),
+            money: 0x1234_5678,
             ..SaveBlock1::default()
         };
-        block.event_data.flag_set(100).unwrap();
+        block.bag.items[0] = ItemSlot {
+            item_id: 0x1234,
+            quantity: 0x5678,
+        };
+        block.bag.berries[45] = ItemSlot {
+            item_id: 0xABCD,
+            quantity: 0xEF01,
+        };
+        block.event_data.flag_set(0x95F).unwrap();
         block
             .event_data
-            .var_set(event_data::VARS_START, 0xBEEF)
+            .var_set(event_data::VARS_END, 0xBEEF)
             .unwrap();
 
-        let bytes = block.to_bytes();
-        assert_eq!(bytes.len(), SaveBlock1::PAYLOAD_LEN);
-        let restored = SaveBlock1::from_bytes(&bytes).unwrap();
+        let bytes = block.to_bytes(key);
+        assert_eq!(bytes.len(), 0x3D88);
+        assert_eq!(&bytes[0x00..0x04], &block.pos.to_bytes());
+        assert_eq!(&bytes[0x04..0x0C], &block.location.to_bytes());
+        assert_eq!(&bytes[0x0C..0x14], &block.continue_game_warp.to_bytes());
+        assert_eq!(&bytes[0x1C..0x24], &block.last_heal_location.to_bytes());
+        assert_eq!(bytes[0x234], 0xFE);
+        for index in 0..PARTY_SIZE {
+            let offset = 0x238 + index * POKEMON_LEN;
+            assert_eq!(
+                &bytes[offset..offset + POKEMON_LEN],
+                &block.player_party[index].to_bytes()
+            );
+        }
+        assert_eq!(
+            read_u32(&bytes, 0x490),
+            block.money ^ key,
+            "money uses the full 32-bit key"
+        );
+        assert_eq!(&bytes[0x560..0x564], &[0x34, 0x12, 0xAC, 0x95]);
+        assert_eq!(&bytes[0x844..0x848], &[0xCD, 0xAB, 0xD5, 0x2C]);
+        assert_eq!(bytes[0x1270 + event_data::NUM_FLAG_BYTES - 1], 0x80);
+        assert_eq!(&bytes[0x159A..0x159C], &[0xEF, 0xBE]);
 
+        let restored = SaveBlock1::from_bytes(&bytes, key).unwrap();
         assert_eq!(restored.pos, block.pos);
         assert_eq!(restored.location, block.location);
-        assert_eq!(restored.event_data.flag_get(100), Ok(true));
+        assert_eq!(restored.continue_game_warp, block.continue_game_warp);
+        assert_eq!(restored.last_heal_location, block.last_heal_location);
+        assert_eq!(restored.player_party_count, 0xFE);
+        assert_eq!(restored.player_party, block.player_party);
+        assert_eq!(restored.money, block.money);
+        assert_eq!(restored.bag, block.bag);
+        assert_eq!(restored.event_data.flag_get(0x95F), Ok(true));
         assert_eq!(
-            restored.event_data.var_get(event_data::VARS_START),
+            restored.event_data.var_get(event_data::VARS_END),
             Ok(0xBEEF)
         );
     }
 
     #[test]
-    fn save_block1_rejects_truncated_bytes() {
-        let short = vec![0u8; SaveBlock1::PAYLOAD_LEN - 1];
+    fn hand_built_block1_bytes_decode_signed_warps_money_and_bag() {
+        let key = u32::MAX;
+        let mut bytes = [0u8; SaveBlock1::PAYLOAD_LEN];
+        bytes[0..4].copy_from_slice(&Coords16 { x: -1, y: i16::MIN }.to_bytes());
+        bytes[0x04..0x0C].copy_from_slice(&sample_warp(-8).to_bytes());
+        bytes[0x0C..0x14].copy_from_slice(&sample_warp(9).to_bytes());
+        bytes[0x1C..0x24].copy_from_slice(&sample_warp(-10).to_bytes());
+        bytes[0x234] = 7;
+        bytes[0x490..0x494].copy_from_slice(&(0x0001_E240u32 ^ key).to_le_bytes());
+        bytes[0x560..0x564].copy_from_slice(&[2, 0, 0xFC, 0xFF]);
+
+        let block = SaveBlock1::from_bytes(&bytes, key).unwrap();
+        assert_eq!(block.pos, Coords16 { x: -1, y: i16::MIN });
+        assert_eq!(block.location, sample_warp(-8));
+        assert_eq!(block.continue_game_warp, sample_warp(9));
+        assert_eq!(block.last_heal_location, sample_warp(-10));
+        assert_eq!(block.player_party_count, 7);
+        assert_eq!(block.money, 123_456);
         assert_eq!(
-            SaveBlock1::from_bytes(&short).unwrap_err(),
+            block.bag.items[0],
+            ItemSlot {
+                item_id: 2,
+                quantity: 3
+            }
+        );
+    }
+
+    #[test]
+    fn block_decoders_reject_short_full_size_payloads() {
+        assert_eq!(
+            SaveBlock2::from_bytes(&vec![0; SaveBlock2::PAYLOAD_LEN - 1]),
+            Err(SaveError::Truncated {
+                expected: SaveBlock2::PAYLOAD_LEN,
+                got: SaveBlock2::PAYLOAD_LEN - 1,
+            })
+        );
+        assert_eq!(
+            SaveBlock1::from_bytes(&vec![0; SaveBlock1::PAYLOAD_LEN - 1], 0).unwrap_err(),
             SaveError::Truncated {
                 expected: SaveBlock1::PAYLOAD_LEN,
-                got: SaveBlock1::PAYLOAD_LEN - 1
+                got: SaveBlock1::PAYLOAD_LEN - 1,
             }
         );
     }
 
     #[test]
-    fn warp_data_round_trips_negative_coordinates() {
-        let warp = WarpData {
-            map_group: -1,
-            map_num: 127,
-            warp_id: -128,
-            x: -30000,
-            y: 30000,
-        };
-        let bytes = warp.to_bytes();
-        assert_eq!(WarpData::from_bytes(&bytes), warp);
-    }
-
-    #[test]
-    fn error_display_is_human_readable() {
+    fn save_block2_rejects_invalid_gender() {
+        let mut bytes = SaveBlock2::default().to_bytes();
+        bytes[PLAYER_GENDER_OFFSET] = 9;
         assert_eq!(
-            SaveError::Truncated {
-                expected: 10,
-                got: 3
-            }
-            .to_string(),
-            "expected at least 10 bytes, got 3"
-        );
-        assert_eq!(
-            SaveError::InvalidGender(9).to_string(),
-            "invalid player gender byte 0x09"
+            SaveBlock2::from_bytes(&bytes),
+            Err(SaveError::InvalidGender(9))
         );
     }
 }
