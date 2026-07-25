@@ -21,11 +21,11 @@
 //! asset pack *is* present (`cargo xtask extract` has been run), it
 //! additionally loads the real title screen
 //! (`pokeemerald_rs::title::load_default`) and asserts, at two fixed frame
-//! indices (0 and 37, issue #116's OBJ sprites / alpha blend / cloud scroll
+//! indices (0 and 20, issue #116's OBJ sprites / alpha blend / cloud scroll
 //! slice), that: composing the same frame index twice is pixel-identical
 //! (deterministic), each composed frame is non-blank, and frame 0 differs
-//! from frame 37 (the logo shine sweep and "Press Start" blink cadence have
-//! both visibly moved on by then -- see `pokeemerald_rs::title`'s module
+//! from frame 20 (the "Press Start" blink cadence and cloud scroll have both
+//! visibly moved on by then -- see `pokeemerald_rs::title`'s module
 //! docs) -- entirely separately from `App`, so it neither depends on nor
 //! perturbs the headless `App` run above. Without a local pack, this step is
 //! a no-op.
@@ -81,10 +81,9 @@ pub enum E2eError {
     /// Carries the offending frame index.
     TitleFrameBlank(u32),
     /// A local asset pack is present and both checked frames composed
-    /// deterministically and non-blank, but frame 0 and frame 37 were
-    /// pixel-identical -- the animated OBJ sprites (logo shine sweep,
-    /// "Press Start" blink) should have visibly moved on by frame 37 (I-2,
-    /// issue #116).
+    /// deterministically and non-blank, but frame 0 and frame 20 were
+    /// pixel-identical -- the "Press Start" blink and cloud scroll should
+    /// have visibly moved on by frame 20 (I-2, issue #116).
     TitleFramesNotAnimated,
 }
 
@@ -111,7 +110,7 @@ impl fmt::Display for E2eError {
             }
             Self::TitleFramesNotAnimated => write!(
                 f,
-                "title screen frame 0 and frame 37 were pixel-identical -- expected the OBJ sprites to have animated by then"
+                "title screen frame 0 and frame 20 were pixel-identical -- expected the animation to have moved on by then"
             ),
         }
     }
@@ -148,7 +147,7 @@ pub fn run_smoke() -> Result<(), E2eError> {
 
 /// The I-2 smoke addition (issue #109, strengthened for issue #116): with a
 /// local asset pack present, load the real title screen and, at frame
-/// indices 0 and 37, assert the composed frame is non-blank and
+/// indices 0 and 20, assert the composed frame is non-blank and
 /// deterministic across two `compose_frame` calls at that same index, then
 /// assert the two frames differ from each other (module docs); without a
 /// pack, do nothing.
@@ -163,7 +162,7 @@ pub fn run_smoke() -> Result<(), E2eError> {
 /// decode for any reason other than "no pack" (that case returns `Ok(())`,
 /// not an error -- see [`pokeemerald_rs::title::TitleSceneError::is_pack_missing`]);
 /// [`E2eError::TitleFrameNotDeterministic`] or [`E2eError::TitleFrameBlank`]
-/// if a pack is present and loads, but composing frame 0 or frame 37 fails
+/// if a pack is present and loads, but composing frame 0 or frame 20 fails
 /// either check; [`E2eError::TitleFramesNotAnimated`] if both frames pass
 /// but are pixel-identical to each other.
 fn check_title_screen() -> Result<(), E2eError> {
@@ -187,16 +186,16 @@ fn check_title_screen() -> Result<(), E2eError> {
         return Err(E2eError::TitleFrameBlank(0));
     }
 
-    let frame37_a = scene.compose_frame(37);
-    let frame37_b = scene.compose_frame(37);
-    if frame37_a != frame37_b {
-        return Err(E2eError::TitleFrameNotDeterministic(37));
+    let moved_a = scene.compose_frame(20);
+    let moved_b = scene.compose_frame(20);
+    if moved_a != moved_b {
+        return Err(E2eError::TitleFrameNotDeterministic(20));
     }
-    if frame37_a.iter().all(|&pixel| pixel == 0) {
-        return Err(E2eError::TitleFrameBlank(37));
+    if moved_a.iter().all(|&pixel| pixel == 0) {
+        return Err(E2eError::TitleFrameBlank(20));
     }
 
-    if frame0_a == frame37_a {
+    if frame0_a == moved_a {
         return Err(E2eError::TitleFramesNotAnimated);
     }
 
@@ -217,7 +216,7 @@ mod tests {
         // Whether or not this environment has run `cargo xtask extract`,
         // the check must never fail: no pack -> `Ok(())` (module docs); a
         // real local pack -> genuinely valid, non-blank, deterministic,
-        // animated frames at indices 0 and 37 (see `pokeemerald_rs::title::tests`'
+        // animated frames at indices 0 and 20 (see `pokeemerald_rs::title::tests`'
         // `real_pack_composes_non_blank_deterministic_title_frames` for the
         // dedicated, always-runnable-with-`--ignored` version of this same
         // assertion).

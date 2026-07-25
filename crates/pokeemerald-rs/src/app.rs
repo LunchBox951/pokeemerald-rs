@@ -23,8 +23,8 @@
 //! describe): [`App::new`] keeps the loaded [`TitleScene`] alive alongside a
 //! running tick count, and every [`App::step`] recomposes the *next* tick's
 //! frame right after presenting the current one -- so the windowed title
-//! screen animates (cloud scroll, "Press Start" blink, the logo shine
-//! sweep) using exactly the same [`TitleScene::compose`] calls this crate's
+//! screen animates (cloud scroll, "Press Start" blink) using exactly the
+//! same [`TitleScene::compose`] calls this crate's
 //! tests and `xtask`'s smoke suite exercise headlessly, just one call per
 //! real frame instead of at two fixed indices.
 

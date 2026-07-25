@@ -26502,10 +26502,9 @@
     "src/title_screen.c": {
       "artifacts": {
         "SpriteCB_PokemonLogoShine": {
-          "reason": "The SHINE_MODE_SINGLE_NO_BG_COLOR sweep (x += SHINE_SPEED per tick from (0,68) until offscreen, then destroyed) transcribed as the pure fn shine_x(frame) (issue #116), covering the one shine trigger this module's modeled idle-state window includes. NOT covered: the other two upstream re-triggers (DOUBLE/SINGLE modes) deep in Task_TitleScreenPhase1's countdown, and the background-color flash/pulse those modes drive -- both depend on this module's un-modeled absolute boot timeline (see crates/pokeemerald-rs/src/title.rs's module docs, 'Documented fidelity deltas').",
-          "rust_target": "crates/pokeemerald-rs/src/title.rs",
+          "reason": "Not modeled (option b, documented fidelity delta). The shine is created with oam.objMode = ST_OAM_OBJ_WINDOW (title_screen.c:536): it never draws its own pixels but defines an OBJWIN region that, with WININ/WINOUT + BLDCNT_TGT1_BG2|BLDCNT_EFFECT_LIGHTEN + BLDY=12 (case 4, lines 646-660), lightens BG2 as the mask sweeps -- a Phase1-only effect running while only BG2 is displayed, before clouds/version/press-start exist and before the settled Phase3 cloud alpha blend (line 750) replaces that BLDCNT. The GBA runs one BLDCNT effect per frame and rendering's EffectsConfig mirrors that (one ColorEffect/frame), so the windowed BG2 lighten cannot be composited into the same settled frame whose color effect is already the alpha blend. Drawing it as an opaque OBJ would be visibly wrong; so it is omitted, along with its bg-color flash and the two later Phase1 re-triggers. See crates/pokeemerald-rs/src/title.rs module docs, 'Documented fidelity deltas'.",
           "spec": "I-2",
-          "status": "rewritten"
+          "status": "dropped"
         },
         "SpriteCB_PressStartCopyrightBanner": {
           "reason": "Blink cadence (visible 16 ticks, invisible 16, alternating forever) transcribed as the pure fn press_start_visible(frame) -- issue #116. The copyright banner's own sAnimate is never set upstream, so it stays always-visible, matching this callback's else branch; that half needs no port of its own.",

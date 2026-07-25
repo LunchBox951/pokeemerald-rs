@@ -9,9 +9,8 @@
 
 use super::{
     affine_tilemap_from_raw, cloud_scroll_y, crop_and_pack_tile_bytes, image_to_tileset,
-    press_start_visible, regular_tilemap_from_raw, shine_x, sprite_entries,
-    title_palette_from_refs, TitleSceneError, LOGO_PALETTE_COLORS, NUM_COPYRIGHT_FRAMES,
-    NUM_PRESS_START_FRAMES, SHINE_DESPAWN_X,
+    press_start_visible, regular_tilemap_from_raw, sprite_entries, title_palette_from_refs,
+    TitleSceneError, LOGO_PALETTE_COLORS, NUM_COPYRIGHT_FRAMES, NUM_PRESS_START_FRAMES,
 };
 use assets::{AssetPack, ImageRef};
 use rendering::{BitDepth, RenderError};
@@ -309,12 +308,15 @@ fn load_default_reports_pack_missing_when_no_pack_is_extracted() {
 /// local pack: run `cargo xtask extract` first, then `cargo test -p
 /// pokeemerald-rs -- --ignored`.
 ///
-/// Checks frames 0 and 37 specifically (I-2, issue #116): both must be
+/// Checks frames 0 and 20 specifically (I-2, issue #116): both must be
 /// non-blank and each deterministic (composing the same frame index twice
-/// is pixel-identical), and the two must *differ* from each other --
-/// frame 37 falls inside the logo shine's sweep (`shine_x`) and the "Press
-/// Start" banner's blink window (`press_start_visible`), both of which have
-/// already moved/changed state relative to frame 0.
+/// is pixel-identical), and the two must *differ* from each other. Frame 20
+/// differs from frame 0 on two independent axes: the "Press Start" banner
+/// has toggled from invisible to visible (`press_start_visible(0)` is
+/// `false`, `press_start_visible(20)` is `true`) and the clouds have
+/// scrolled (`cloud_scroll_y(0) == 0`, `cloud_scroll_y(20) == 5`). The logo
+/// shine is deliberately not composed (see the module docs' "Documented
+/// fidelity deltas"), so it plays no part in this distinction.
 #[test]
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
 fn real_pack_composes_non_blank_deterministic_title_frames() {
@@ -335,25 +337,25 @@ fn real_pack_composes_non_blank_deterministic_title_frames() {
         "frame 0 must be a non-blank frame"
     );
 
-    let frame37_first = scene.compose(37);
-    let frame37_second = scene.compose(37);
+    let moved_first = scene.compose(20);
+    let moved_second = scene.compose(20);
     assert_eq!(
-        frame37_first.pixels(),
-        frame37_second.pixels(),
-        "composing frame 37 twice must be deterministic"
+        moved_first.pixels(),
+        moved_second.pixels(),
+        "composing frame 20 twice must be deterministic"
     );
     assert!(
-        frame37_first
+        moved_first
             .pixels()
             .iter()
             .any(|&p| p != rendering::Rgb888::BLACK),
-        "frame 37 must be a non-blank frame"
+        "frame 20 must be a non-blank frame"
     );
 
     assert_ne!(
         frame0_first.pixels(),
-        frame37_first.pixels(),
-        "frame 0 and frame 37 must differ (shine sweep / blink cadence)"
+        moved_first.pixels(),
+        "frame 0 and frame 20 must differ (Press Start blink / cloud scroll)"
     );
 }
 
@@ -372,19 +374,6 @@ fn press_start_blinks_every_16_ticks() {
     assert!(!press_start_visible(31));
     assert!(!press_start_visible(46));
     assert!(press_start_visible(47));
-}
-
-#[test]
-fn shine_sweeps_at_4px_per_tick_then_despawns() {
-    assert_eq!(shine_x(0), Some(4));
-    assert_eq!(shine_x(1), Some(8));
-    assert_eq!(shine_x(36), Some(148));
-    // The last tick still `< SHINE_DESPAWN_X` (272): frame 66 -> x=268.
-    assert_eq!(shine_x(66), Some(268));
-    assert!(shine_x(66).unwrap() < SHINE_DESPAWN_X);
-    // Frame 67 -> x=272, no longer `< SHINE_DESPAWN_X`: destroyed.
-    assert_eq!(shine_x(67), None);
-    assert_eq!(shine_x(1000), None);
 }
 
 #[test]
@@ -444,27 +433,28 @@ fn sprite_entries_always_includes_5_press_start_and_5_copyright_segments() {
             .iter()
             .filter(|e| e.bit_depth() == BitDepth::Bpp4)
             .count();
-        // 5 "Press Start" + 5 copyright, plus the shine while it's still
-        // sweeping (true for every frame this test checks).
+        // Exactly 5 "Press Start" + 5 copyright, and never any more: the
+        // logo shine is not composed (module docs' "Documented fidelity
+        // deltas"), so this stays 10 at every frame.
         assert_eq!(
             four_bpp_count,
-            NUM_PRESS_START_FRAMES + NUM_COPYRIGHT_FRAMES + 1,
+            NUM_PRESS_START_FRAMES + NUM_COPYRIGHT_FRAMES,
             "frame {frame}"
         );
     }
 }
 
 #[test]
-fn sprite_entries_drops_the_shine_once_it_would_despawn() {
-    assert_eq!(
-        sprite_entries(0).len(),
-        2 + NUM_PRESS_START_FRAMES + NUM_COPYRIGHT_FRAMES + 1
-    );
-    assert_eq!(
-        sprite_entries(1000).len(),
-        2 + NUM_PRESS_START_FRAMES + NUM_COPYRIGHT_FRAMES,
-        "the shine sprite must be gone long after it despawns"
-    );
+fn sprite_entries_never_includes_the_logo_shine() {
+    // The shine is an OBJ-window lighten belonging to an un-modeled boot
+    // phase (module docs' "Documented fidelity deltas"): it must never be
+    // composed as an opaque OBJ, at any frame -- including the ticks where
+    // upstream's sweep would have been on-screen (its old start, mid, and
+    // post-despawn frames) and arbitrarily far into the future.
+    let expected = 2 + NUM_PRESS_START_FRAMES + NUM_COPYRIGHT_FRAMES;
+    for frame in [0, 1, 36, 67, 1000] {
+        assert_eq!(sprite_entries(frame).len(), expected, "frame {frame}");
+    }
 }
 
 #[test]
@@ -494,8 +484,34 @@ fn crop_and_pack_tile_bytes_crops_the_requested_sub_rectangle() {
         pixels: &pixels,
     };
     // Crop just the right 8x8 tile.
-    let packed = crop_and_pack_tile_bytes(image, 8, 0, 8, 8, BitDepth::Bpp4);
+    let packed = crop_and_pack_tile_bytes("test", image, 8, 0, 8, 8, BitDepth::Bpp4).unwrap();
     let tileset = rendering::Tileset::decode(BitDepth::Bpp4, &packed).unwrap();
     assert_eq!(tileset.len(), 1);
     assert_eq!(tileset.tile(0).unwrap().index(0, 0), 2);
+}
+
+#[test]
+fn crop_and_pack_tile_bytes_rejects_a_short_payload_instead_of_panicking() {
+    // A sheet that *declares* 16x8 (2x1 tiles) but whose payload is one
+    // pixel short: cropping the second tile would slice past the end of
+    // `pixels`. The guard must turn that into a typed error, not a panic
+    // (mirrors `image_to_tileset`'s own BG-path guard).
+    let pixels = vec![0u8; 16 * 8 - 1];
+    let image = ImageRef {
+        width: 16,
+        height: 8,
+        bit_depth: 4,
+        pixels: &pixels,
+    };
+    let err =
+        crop_and_pack_tile_bytes("bogus/sheet", image, 8, 0, 8, 8, BitDepth::Bpp4).unwrap_err();
+    assert_eq!(
+        err,
+        TitleSceneError::ImagePixelCountMismatch {
+            id: "bogus/sheet",
+            width: 16,
+            height: 8,
+            actual: 16 * 8 - 1,
+        }
+    );
 }

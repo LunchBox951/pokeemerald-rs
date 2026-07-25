@@ -49,7 +49,10 @@
 //! | version banner (x2)    | `sVersionBannerLeft`/`RightSpriteTemplate`  | 64x32, 8bpp   | `VERSION_BANNER_LEFT_X`/`RIGHT_X` (98/162)  | `VERSION_BANNER_Y_GOAL` (66) |
 //! | "Press Start" (x5)     | `sStartCopyrightBannerSpriteTemplate`      | 32x8, 4bpp    | `START_BANNER_X-64+32*i` (64,96,128,160,192) | 108 |
 //! | copyright (x5)         | `sStartCopyrightBannerSpriteTemplate`      | 32x8, 4bpp    | same as above                                | 148 |
-//! | logo shine (x1)        | `sPokemonLogoShineSpriteTemplate`          | 64x64, 4bpp   | [`shine_x`] (sweeps)                         | 68  |
+//!
+//! (The logo shine `sPokemonLogoShineSpriteTemplate` is deliberately *not*
+//! composed -- it is an OBJ-window lighten effect belonging to a boot phase
+//! this module does not model; see "Documented fidelity deltas" below.)
 //!
 //! Every one of these OBJs uses priority 0 (`.priority = 0` on every
 //! `struct OamData` above) -- always in front of every BG, matching real
@@ -63,9 +66,9 @@
 //! not an observable one `(no-verbatim)`: [`crop_and_pack_tile_bytes`]
 //! packs each crop with the exact same GBA tile encoding
 //! [`image_to_tileset`] uses for the BG layers ([`pack_tile_bytes`]), so the
-//! rendered pixels are identical either way. `title/image/logo_shine`
-//! (64x64) needs no cropping. See [`VERSION_LEFT_TILE`]/[`VERSION_RIGHT_TILE`]/
-//! [`PRESS_START_BASE_TILE`]/[`COPYRIGHT_BASE_TILE`]/[`LOGO_SHINE_BASE_TILE`]
+//! rendered pixels are identical either way. See
+//! [`VERSION_LEFT_TILE`]/[`VERSION_RIGHT_TILE`]/
+//! [`PRESS_START_BASE_TILE`]/[`COPYRIGHT_BASE_TILE`]
 //! for the resulting combined-tileset layout this module chose.
 //!
 //! Both OBJ sprite sheets needing a palette of their own share **one**
@@ -75,12 +78,8 @@
 //! `0..16` (read directly by the 8bpp version banner, which ignores
 //! `palette_bank`), and `title/palette/press_start`'s sit at
 //! [`SPRITE_4BPP_BANK`]'s 16-color bank (read by the "Press Start"/copyright
-//! sprites, and by the logo shine, which upstream deliberately points at
-//! the *same* palette tag as "Press Start"
-//! (`sPokemonLogoShineSpriteTemplate.paletteTag = TAG_PRESS_START_COPYRIGHT`)
-//! rather than loading `logo_shine.png`'s own embedded colors -- see
-//! [`sprite_palette_from_refs`]). Neither `emerald_version.png` nor
-//! `press_start.png` has a sibling `.pal` file in
+//! sprites -- see [`sprite_palette_from_refs`]). Neither `emerald_version.png`
+//! nor `press_start.png` has a sibling `.pal` file in
 //! `graphics/title_screen/`; upstream's own build derives their in-game
 //! palette straight from each PNG's embedded color table
 //! (`INCGFX_U16(...png", ".gbapal")` in `graphics.c`), which is why
@@ -100,11 +99,6 @@
 //!   visible for 16 ticks, invisible for 16, repeating. The copyright
 //!   banner's own `sAnimate` is never set `TRUE`, so (per that same
 //!   callback's `else` branch) it is simply always visible.
-//! - **Logo shine sweep** ([`shine_x`]): transcribed from
-//!   `SpriteCB_PokemonLogoShine`'s `SHINE_MODE_SINGLE_NO_BG_COLOR` case --
-//!   `sprite->x += SHINE_SPEED` (4px) every tick from its `(0, 68)` starting
-//!   point until `x >= DISPLAY_WIDTH + 32`, at which point upstream
-//!   destroys the sprite (modeled here as [`shine_x`] returning `None`).
 //! - **Cloud vertical scroll** ([`cloud_scroll_y`]): transcribed from
 //!   `Task_TitleScreenPhase3`'s `if (++gTasks[taskId].tCounter & 1)
 //!   tBg1Y++; gBattle_BG1_Y = tBg1Y / 2;`, whose *result* is what
@@ -146,19 +140,44 @@
 //!   directly from `frame` 0 onward: the version banner already at its
 //!   resting position/full opacity (matching this module's existing
 //!   precedent for BG2's own settle-in transient, see `LOGO_REF_X`/`_Y`'s
-//!   docs above), "Press Start"/copyright already created and blinking, the
-//!   cloud alpha blend and scroll already active -- and exactly **one**
-//!   logo-shine sweep (matching upstream's very first, `case 5`,
-//!   `SHINE_MODE_SINGLE_NO_BG_COLOR` trigger) starting at `frame` 0, rather
-//!   than upstream's later two re-triggers deep in `Phase1`'s countdown.
+//!   docs above), "Press Start"/copyright already created and blinking, and
+//!   the cloud alpha blend and scroll already active.
+//! - **The logo-shine sweep is not modeled at all.** Upstream's
+//!   `StartPokemonLogoShine` (`title_screen.c:536`) creates the shine sprite
+//!   with `oam.objMode = ST_OAM_OBJ_WINDOW`: it never draws its own pixels,
+//!   it defines an OBJ-window region that, combined with the
+//!   `WININ`/`WINOUT` and `BLDCNT_TGT1_BG2 | BLDCNT_EFFECT_LIGHTEN` +
+//!   `BLDY = 12` config `CB2_InitTitleScreen` sets in `case 4`
+//!   (`title_screen.c:646-660`), *lightens BG2* (the logo) as the mask
+//!   sweeps. Crucially that lighten is a **`Phase1`-only** effect: it runs
+//!   while only BG2 is displayed (`DISPCNT` there enables `BG2_ON`, not
+//!   BG0/BG1), before the clouds, version banner, and "Press Start" exist,
+//!   and before the settled `Phase3` `BLDCNT` (the cloud alpha blend, see
+//!   "Alpha blend" above, `title_screen.c:750`) replaces it -- upstream tears
+//!   the windows/lighten down (`WININ`/`WINOUT` back to `0`,
+//!   `title_screen.c:708-709`) on the way out of `Phase1`. The GBA can only
+//!   run **one** `BLDCNT` effect per frame, and the `rendering` crate's
+//!   [`EffectsConfig`] mirrors that (a single [`ColorEffect`] per frame), so
+//!   the shine's windowed BG2 lighten cannot be faithfully composited into
+//!   the same frame whose single color effect this module has already
+//!   committed to the settled `Phase3` cloud alpha blend. Rather than draw
+//!   the shine as an opaque OBJ (its raw `logo_shine.png` pixels are never
+//!   visible on hardware) or fabricate a two-`BLDCNT` frame that never
+//!   exists upstream, this module omits the shine entirely. Its
+//!   background-color flash/pulse (`SHINE_MODE_SINGLE`/`DOUBLE`, which
+//!   `SHINE_MODE_SINGLE_NO_BG_COLOR` deliberately skips) and upstream's two
+//!   later re-triggers deep in `Phase1`'s countdown fall away with it.
 //! - **The legendary-marking palette pulse is not modeled**
 //!   (`UpdateLegendaryMarkingColor`, a `Cos`-driven recolor of one specific
 //!   BG palette slot every 4 ticks of `Phase3`) -- out of this issue's
 //!   explicit scope (OBJ sprites, alpha blend, cloud scroll).
-//! - **The shine's background-color flash** (`SHINE_MODE_SINGLE_NO_BG_COLOR`
-//!   deliberately does *not* do this, but the other two modes upstream
-//!   doesn't trigger in this module's modeled window would) is out of
-//!   scope along with the un-modeled re-triggers above.
+//! - **BG1's per-scanline horizontal wave is not modeled.** During boot
+//!   `case 5` calls `ScanlineEffect_InitWave(0, DISPLAY_HEIGHT, 4, 4, 0,
+//!   SCANLINE_EFFECT_REG_BG1HOFS, TRUE)` (`title_screen.c:669`), which drives
+//!   a small sinusoidal per-scanline `BG1HOFS` offset on the clouds for the
+//!   whole idle screen. This module treats BG1's horizontal scroll as a flat
+//!   `0` (only its **vertical** [`cloud_scroll_y`] scroll is modeled); the
+//!   per-scanline wave is un-modeled.
 
 use std::fmt;
 
@@ -212,10 +231,6 @@ const VERSION_HALF_W: usize = VERSION_SHEET_W as usize / 2;
 const PRESS_START_SHEET_W: u32 = 160;
 const PRESS_START_SHEET_H: u32 = 24;
 
-/// `title/image/logo_shine`'s full sheet size (needs no cropping).
-const LOGO_SHINE_SHEET_W: u32 = 64;
-const LOGO_SHINE_SHEET_H: u32 = 64;
-
 /// One "Press Start"/copyright segment's pixel size (`SPRITE_SHAPE(32x8)`).
 const PRESS_START_FRAME_W: usize = 32;
 const PRESS_START_FRAME_H: usize = 8;
@@ -226,12 +241,10 @@ const NUM_PRESS_START_FRAMES: usize = 5;
 const NUM_COPYRIGHT_FRAMES: usize = 5;
 
 /// OAM shape/size codes (see `rendering::oam::obj_dimensions`'s table):
-/// `SPRITE_SIZE(64x32)` (`ObjShape::Horizontal`, size 3), `SPRITE_SIZE(32x8)`
-/// (`ObjShape::Horizontal`, size 1), `SPRITE_SIZE(64x64)` (`ObjShape::Square`,
-/// size 3).
+/// `SPRITE_SIZE(64x32)` (`ObjShape::Horizontal`, size 3) and
+/// `SPRITE_SIZE(32x8)` (`ObjShape::Horizontal`, size 1).
 const VERSION_BANNER_OBJ_SIZE: u8 = 3;
 const PRESS_START_COPYRIGHT_OBJ_SIZE: u8 = 1;
-const LOGO_SHINE_OBJ_SIZE: u8 = 3;
 
 /// How many tiles one combined-tileset unit occupies, at its own bit depth
 /// -- `width/8 * height/8` for each cropped/whole sprite sheet region.
@@ -247,24 +260,20 @@ const VERSION_LEFT_TILE: u16 = 0;
 const VERSION_RIGHT_TILE: u16 = VERSION_HALF_TILES;
 
 /// Tile-index bases into the combined 4bpp tileset (see [`TitleScene::from_pack`]'s
-/// build order: 5 "Press Start" frames, then 5 copyright frames, then the
-/// logo shine -- module docs' table).
+/// build order: 5 "Press Start" frames, then 5 copyright frames -- module
+/// docs' table).
 const PRESS_START_BASE_TILE: u16 = 0;
 #[allow(clippy::cast_possible_truncation)] // `NUM_PRESS_START_FRAMES` (5) always fits u16.
 const COPYRIGHT_BASE_TILE: u16 =
     PRESS_START_BASE_TILE + NUM_PRESS_START_FRAMES as u16 * PRESS_START_FRAME_TILES;
-#[allow(clippy::cast_possible_truncation)] // `NUM_COPYRIGHT_FRAMES` (5) always fits u16.
-const LOGO_SHINE_BASE_TILE: u16 =
-    COPYRIGHT_BASE_TILE + NUM_COPYRIGHT_FRAMES as u16 * PRESS_START_FRAME_TILES;
 
 // Compile-time check that the combined-tileset regions above are laid out
 // back to back with no overlap (a plain unit test would just be asserting
 // on already-known constants, which clippy rightly calls pointless).
 const _: () = assert!(VERSION_RIGHT_TILE > VERSION_LEFT_TILE);
 const _: () = assert!(COPYRIGHT_BASE_TILE > PRESS_START_BASE_TILE);
-const _: () = assert!(LOGO_SHINE_BASE_TILE > COPYRIGHT_BASE_TILE);
 
-/// The 4bpp OBJ palette bank ("Press Start"/copyright/logo shine's shared
+/// The 4bpp OBJ palette bank ("Press Start"/copyright's shared
 /// bank, module docs) -- the 8bpp version banner reads its own
 /// `title/palette/emerald_version` colors flat, at indices `0..16`, so bank
 /// 1 (indices `16..32`) is the first bank that does not overlap them.
@@ -279,14 +288,6 @@ const VERSION_BANNER_Y_GOAL: u8 = 66;
 const START_BANNER_X: i32 = 128;
 const PRESS_START_Y: u8 = 108;
 const COPYRIGHT_Y: u8 = 148;
-
-/// `SpriteCB_PokemonLogoShine`'s starting position and per-tick speed
-/// (`SHINE_SPEED`), and the despawn threshold (`DISPLAY_WIDTH + 32`) --
-/// see [`shine_x`].
-const SHINE_Y: u8 = 68;
-const SHINE_SPEED: i32 = 4;
-#[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)] // `Framebuffer::WIDTH` is always 240.
-const SHINE_DESPAWN_X: i32 = Framebuffer::WIDTH as i32 + 32;
 
 /// Why building or composing a [`TitleScene`] failed.
 ///
@@ -482,8 +483,8 @@ impl TitleScene {
     ///
     /// Deterministic: composing the same `frame` twice always produces
     /// pixel-identical output, since every animated quantity
-    /// ([`press_start_visible`], [`shine_x`], [`cloud_scroll_y`]) is a pure
-    /// function of `frame` alone -- no wall-clock time, no RNG.
+    /// ([`press_start_visible`], [`cloud_scroll_y`]) is a pure function of
+    /// `frame` alone -- no wall-clock time, no RNG.
     #[must_use]
     pub fn compose(&self, frame: u32) -> Framebuffer {
         let rayquaza_layer = BgLayer::new(&self.rayquaza_tiles, &self.palette, &self.rayquaza_map);
@@ -676,25 +677,47 @@ fn pack_tile_bytes(width: usize, height: usize, pixels: &[u8], bit_depth: BitDep
 
 /// Crop a `w`x`h` sub-rectangle at `(x0, y0)` out of an OBJ sprite sheet
 /// image and pack it with [`pack_tile_bytes`] (module docs' OBJ sprite
-/// table). Every crop this module makes has `w`/`h` already whole multiples
-/// of 8 (checked once, at the whole-sheet level, by
-/// [`check_sprite_sheet_dimensions`]), so unlike [`image_to_tileset`] this
-/// never needs to return an error.
+/// table). [`check_sprite_sheet_dimensions`] has already confirmed the
+/// sheet's *declared* dimensions, so every crop's `w`/`h` is a whole
+/// multiple of 8 and lies inside `image.width`x`image.height`.
+///
+/// # Errors
+///
+/// [`TitleSceneError::ImagePixelCountMismatch`] if `image`'s payload length
+/// does not equal its declared `width * height` -- exactly the guard
+/// [`image_to_tileset`] applies on the BG path. Without it a sheet whose
+/// declared dimensions pass [`check_sprite_sheet_dimensions`] but whose
+/// payload is short would panic on the `image.pixels[start..start + w]`
+/// slice below (never true for a real `cargo xtask extract` pack; a typed
+/// failure rather than a panic if the pack is ever corrupt).
 fn crop_and_pack_tile_bytes(
+    id: &'static str,
     image: ImageRef<'_>,
     x0: usize,
     y0: usize,
     w: usize,
     h: usize,
     bit_depth: BitDepth,
-) -> Vec<u8> {
+) -> Result<Vec<u8>, TitleSceneError> {
     let stride = image.width as usize;
+    let pixel_count_matches = stride
+        .checked_mul(image.height as usize)
+        .is_some_and(|expected| expected == image.pixels.len());
+    if !pixel_count_matches {
+        return Err(TitleSceneError::ImagePixelCountMismatch {
+            id,
+            width: image.width,
+            height: image.height,
+            actual: image.pixels.len(),
+        });
+    }
+
     let mut cropped = Vec::with_capacity(w * h);
     for row in 0..h {
         let start = (y0 + row) * stride + x0;
         cropped.extend_from_slice(&image.pixels[start..start + w]);
     }
-    pack_tile_bytes(w, h, &cropped, bit_depth)
+    Ok(pack_tile_bytes(w, h, &cropped, bit_depth))
 }
 
 /// Guard [`crop_and_pack_tile_bytes`]'s hardcoded crop coordinates against a
@@ -722,91 +745,81 @@ fn check_sprite_sheet_dimensions(
     }
 }
 
-/// Build the combined 4bpp ("Press Start" x5, copyright x5, logo shine) and
-/// 8bpp (version banner left, version banner right) OBJ tilesets -- see the
+/// Build the combined 4bpp ("Press Start" x5, copyright x5) and 8bpp
+/// (version banner left, version banner right) OBJ tilesets -- see the
 /// module docs' table and [`VERSION_LEFT_TILE`]/[`VERSION_RIGHT_TILE`]/
-/// [`PRESS_START_BASE_TILE`]/[`COPYRIGHT_BASE_TILE`]/[`LOGO_SHINE_BASE_TILE`]
-/// for the resulting tile-index layout, which mirrors this function's build
-/// order exactly.
+/// [`PRESS_START_BASE_TILE`]/[`COPYRIGHT_BASE_TILE`] for the resulting
+/// tile-index layout, which mirrors this function's build order exactly.
+/// (The logo shine is deliberately not built -- see the module docs'
+/// "Documented fidelity deltas".)
 ///
 /// # Errors
 ///
 /// [`TitleSceneError::Pack`] if a needed `title/image/*` entry is missing;
 /// [`TitleSceneError::SpriteSheetWrongDimensions`] if one's dimensions
-/// don't match the module docs' table; [`TitleSceneError::Render`] should
+/// don't match the module docs' table;
+/// [`TitleSceneError::ImagePixelCountMismatch`] if a sheet's payload length
+/// doesn't match its declared dimensions; [`TitleSceneError::Render`] should
 /// the packed byte length somehow not match `bit_depth`'s tile size
 /// (unreachable in practice -- every crop below is tile-aligned).
 fn build_sprite_tilesets(pack: &AssetPack) -> Result<(Tileset, Tileset), TitleSceneError> {
-    let version_image = pack.image("title/image/emerald_version")?;
+    const VERSION_ID: &str = "title/image/emerald_version";
+    const PRESS_START_ID: &str = "title/image/press_start";
+
+    let version_image = pack.image(VERSION_ID)?;
+    check_sprite_sheet_dimensions(VERSION_ID, version_image, VERSION_SHEET_W, VERSION_SHEET_H)?;
+    let press_start_image = pack.image(PRESS_START_ID)?;
     check_sprite_sheet_dimensions(
-        "title/image/emerald_version",
-        version_image,
-        VERSION_SHEET_W,
-        VERSION_SHEET_H,
-    )?;
-    let press_start_image = pack.image("title/image/press_start")?;
-    check_sprite_sheet_dimensions(
-        "title/image/press_start",
+        PRESS_START_ID,
         press_start_image,
         PRESS_START_SHEET_W,
         PRESS_START_SHEET_H,
     )?;
-    let logo_shine_image = pack.image("title/image/logo_shine")?;
-    check_sprite_sheet_dimensions(
-        "title/image/logo_shine",
-        logo_shine_image,
-        LOGO_SHINE_SHEET_W,
-        LOGO_SHINE_SHEET_H,
-    )?;
 
     let version_height = VERSION_SHEET_H as usize;
     let mut bytes_8bpp = crop_and_pack_tile_bytes(
+        VERSION_ID,
         version_image,
         0,
         0,
         VERSION_HALF_W,
         version_height,
         BitDepth::Bpp8,
-    );
+    )?;
     bytes_8bpp.extend(crop_and_pack_tile_bytes(
+        VERSION_ID,
         version_image,
         VERSION_HALF_W,
         0,
         VERSION_HALF_W,
         version_height,
         BitDepth::Bpp8,
-    ));
+    )?);
     let sprite_tiles_8bpp = Tileset::decode(BitDepth::Bpp8, &bytes_8bpp)?;
 
     let mut bytes_4bpp = Vec::new();
     for i in 0..NUM_PRESS_START_FRAMES {
         bytes_4bpp.extend(crop_and_pack_tile_bytes(
+            PRESS_START_ID,
             press_start_image,
             i * PRESS_START_FRAME_W,
             0,
             PRESS_START_FRAME_W,
             PRESS_START_FRAME_H,
             BitDepth::Bpp4,
-        ));
+        )?);
     }
     for i in 0..NUM_COPYRIGHT_FRAMES {
         bytes_4bpp.extend(crop_and_pack_tile_bytes(
+            PRESS_START_ID,
             press_start_image,
             i * PRESS_START_FRAME_W,
             PRESS_START_FRAME_H,
             PRESS_START_FRAME_W,
             PRESS_START_FRAME_H,
             BitDepth::Bpp4,
-        ));
+        )?);
     }
-    bytes_4bpp.extend(crop_and_pack_tile_bytes(
-        logo_shine_image,
-        0,
-        0,
-        LOGO_SHINE_SHEET_W as usize,
-        LOGO_SHINE_SHEET_H as usize,
-        BitDepth::Bpp4,
-    ));
     let sprite_tiles_4bpp = Tileset::decode(BitDepth::Bpp4, &bytes_4bpp)?;
 
     Ok((sprite_tiles_4bpp, sprite_tiles_8bpp))
@@ -856,22 +869,6 @@ const fn press_start_visible(frame: u32) -> bool {
     (frame.wrapping_add(1) & 16) != 0
 }
 
-/// The logo shine's sweep motion, transcribed from
-/// `SpriteCB_PokemonLogoShine`'s `SHINE_MODE_SINGLE_NO_BG_COLOR` case
-/// (module docs): `x` starts at 0 and advances [`SHINE_SPEED`] every tick
-/// until it would reach [`SHINE_DESPAWN_X`], at which point upstream
-/// destroys the sprite -- modeled here by returning `None`.
-#[must_use]
-#[allow(clippy::cast_possible_wrap)] // `frame` realistically never nears `i32::MAX` ticks.
-const fn shine_x(frame: u32) -> Option<i32> {
-    let x = SHINE_SPEED * (frame as i32 + 1);
-    if x < SHINE_DESPAWN_X {
-        Some(x)
-    } else {
-        None
-    }
-}
-
 /// The cloud layer's vertical scroll, transcribed from
 /// `Task_TitleScreenPhase3`'s `if (++gTasks[taskId].tCounter & 1)
 /// tBg1Y++; gBattle_BG1_Y = tBg1Y / 2;` (module docs): `tBg1Y` increments on
@@ -892,13 +889,14 @@ const fn cloud_scroll_y(frame: u32) -> u16 {
 
 /// Build every OBJ sprite entry visible at `frame`, in the same OAM-index
 /// order upstream creates them (module docs' table): version banner
-/// left/right, "Press Start" x5, copyright x5, logo shine. Every one of
-/// these shares OBJ priority 0 (module docs), so this creation order is
-/// also their same-priority tie-break order
-/// (`rendering::sprite::SpriteLayer`'s docs: lower OAM index wins).
+/// left/right, "Press Start" x5, copyright x5. Every one of these shares OBJ
+/// priority 0 (module docs), so this creation order is also their
+/// same-priority tie-break order (`rendering::sprite::SpriteLayer`'s docs:
+/// lower OAM index wins). The logo shine is intentionally absent -- see the
+/// module docs' "Documented fidelity deltas".
 #[allow(clippy::cast_possible_truncation)] // `i` is always `0..5` here.
 fn sprite_entries(frame: u32) -> Vec<OamEntry> {
-    let mut entries = Vec::with_capacity(2 + NUM_PRESS_START_FRAMES + NUM_COPYRIGHT_FRAMES + 1);
+    let mut entries = Vec::with_capacity(2 + NUM_PRESS_START_FRAMES + NUM_COPYRIGHT_FRAMES);
 
     // Version banner: settled at its steady-state position (module docs'
     // "Documented fidelity deltas" -- the transient slide-in/fade-in is not
@@ -925,30 +923,6 @@ fn sprite_entries(frame: u32) -> Vec<OamEntry> {
     for i in 0..NUM_COPYRIGHT_FRAMES {
         let tile = COPYRIGHT_BASE_TILE + i as u16 * PRESS_START_FRAME_TILES;
         entries.push(press_start_copyright_entry(i, COPYRIGHT_Y, tile, true));
-    }
-
-    if let Some(x) = shine_x(frame) {
-        // `OamEntry::new` masks and sign-extends the raw 9-bit hardware X
-        // field itself (`rendering::oam`'s docs) -- passing the sweep's
-        // full-precision `x` straight through reproduces the same
-        // off-screen wraparound real hardware would show at the very last
-        // visible tick, when `x` first exceeds 255.
-        #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
-        // `x` is always in `0..SHINE_DESPAWN_X` (272) here.
-        let x_raw = x as u16;
-        entries.push(OamEntry::new(
-            x_raw,
-            SHINE_Y,
-            LOGO_SHINE_BASE_TILE,
-            SPRITE_4BPP_BANK,
-            BitDepth::Bpp4,
-            false,
-            false,
-            ObjShape::Square,
-            LOGO_SHINE_OBJ_SIZE,
-            0,
-            true,
-        ));
     }
 
     entries
