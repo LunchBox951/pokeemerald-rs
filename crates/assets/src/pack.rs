@@ -311,7 +311,7 @@ impl AssetPack {
 
     /// Look up a Latin font's glyph sheet by its normalized pack name (e.g.
     /// `"normal"`, `"small_narrow"` — see `xtask::extract::mod`'s module
-    /// docs for the id scheme and [`FONTS`](crate::fonts::FONTS) for the
+    /// docs for the id scheme and [`FontId`](crate::fonts::FontId) for the
     /// five names this pack currently ships). Hand the returned image to
     /// [`FontGlyphSheet::new`](crate::fonts::FontGlyphSheet::new) to decode
     /// individual glyphs — this crate's pack loader and its font decode

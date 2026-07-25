@@ -219,7 +219,7 @@ pub fn decode(data: &[u8]) -> Result<IndexedImage, PngError> {
 }
 
 /// Undo PNG's per-scanline filtering (RFC 2083 §6) and unpack sub-byte
-/// pixel indices (bit depths 4) into one byte per pixel.
+/// pixel indices (bit depths 2 and 4) into one byte per pixel.
 fn defilter_and_unpack(
     raw: &[u8],
     width: u32,
@@ -231,7 +231,7 @@ fn defilter_and_unpack(
     // Bytes-per-pixel for filtering purposes: PNG defines the filter's
     // "corresponding byte" step as ceil(bit_depth * channels / 8). Indexed
     // colour has exactly one channel, so at both bit depths this decoder
-    // supports (4 and 8) that step is always 1 whole byte.
+    // supports (2, 4, and 8) that step is always 1 whole byte.
     let bpp_for_filter: usize = 1;
     let packed_row_bytes = (width * usize::from(bit_depth)).div_ceil(8);
     let stride = packed_row_bytes + 1; // +1 for the filter-type byte prefix
