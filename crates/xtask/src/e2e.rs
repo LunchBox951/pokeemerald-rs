@@ -17,13 +17,18 @@
 //! real title screen, see `pokeemerald_rs::app`'s module docs), so the above
 //! is unchanged from before I-2 -- exactly the "WITHOUT a pack (CI), the
 //! current synthetic-scene smoke behavior stays exactly as is" requirement
-//! (issue #109). [`check_title_screen`] is the minimal I-2 addition: when a
-//! local asset pack *is* present (`cargo xtask extract` has been run), it
+//! (issue #109). [`check_title_screen`] is the I-2 addition: when a local
+//! asset pack *is* present (`cargo xtask extract` has been run), it
 //! additionally loads the real title screen
-//! (`pokeemerald_rs::title::load_default`) and asserts its composed frame is
-//! non-blank and deterministic (stable across two `compose` calls) --
-//! entirely separately from `App`, so it neither depends on nor perturbs the
-//! headless `App` run above. Without a local pack, this step is a no-op.
+//! (`pokeemerald_rs::title::load_default`) and asserts, at two fixed frame
+//! indices (0 and 37, issue #116's OBJ sprites / alpha blend / cloud scroll
+//! slice), that: composing the same frame index twice is pixel-identical
+//! (deterministic), each composed frame is non-blank, and frame 0 differs
+//! from frame 37 (the logo shine sweep and "Press Start" blink cadence have
+//! both visibly moved on by then -- see `pokeemerald_rs::title`'s module
+//! docs) -- entirely separately from `App`, so it neither depends on nor
+//! perturbs the headless `App` run above. Without a local pack, this step is
+//! a no-op.
 //!
 //! No real window, audio device, or timer wait is touched -- `Platform`'s
 //! null backend no-ops `wait_for_next_frame` (see its docs) -- so this suite
@@ -65,13 +70,22 @@ pub enum E2eError {
     /// `pokeemerald_rs::title::TitleSceneError`'s rendered message.
     TitleSceneFailed(String),
     /// A local asset pack is present and the real title screen loaded, but
-    /// composing it twice produced two different frames -- `compose` must
-    /// be a pure function of already-decoded data (I-2, issue #109).
-    TitleFrameNotDeterministic,
+    /// composing the same frame index twice produced two different frames --
+    /// `compose` must be a pure function of its frame index and
+    /// already-decoded data (I-2, issues #109 and #116). Carries the
+    /// offending frame index.
+    TitleFrameNotDeterministic(u32),
     /// A local asset pack is present and the real title screen composed
-    /// deterministically, but the frame was blank (every pixel black) --
-    /// the decoded BG layers, or the compositor, produced nothing.
-    TitleFrameBlank,
+    /// deterministically, but a frame was blank (every pixel black) -- the
+    /// decoded BG layers/sprites, or the compositor, produced nothing.
+    /// Carries the offending frame index.
+    TitleFrameBlank(u32),
+    /// A local asset pack is present and both checked frames composed
+    /// deterministically and non-blank, but frame 0 and frame 37 were
+    /// pixel-identical -- the animated OBJ sprites (logo shine sweep,
+    /// "Press Start" blink) should have visibly moved on by frame 37 (I-2,
+    /// issue #116).
+    TitleFramesNotAnimated,
 }
 
 impl fmt::Display for E2eError {
@@ -83,15 +97,22 @@ impl fmt::Display for E2eError {
             Self::Step(msg) => write!(f, "boot shell step failed: {msg}"),
             Self::BlankFrame => write!(f, "composed boot scene frame was blank (all black)"),
             Self::TitleSceneFailed(msg) => write!(f, "title screen failed to load: {msg}"),
-            Self::TitleFrameNotDeterministic => {
+            Self::TitleFrameNotDeterministic(frame) => {
                 write!(
                     f,
-                    "composing the title screen twice produced different frames"
+                    "composing title screen frame {frame} twice produced different frames"
                 )
             }
-            Self::TitleFrameBlank => {
-                write!(f, "composed title screen frame was blank (all black)")
+            Self::TitleFrameBlank(frame) => {
+                write!(
+                    f,
+                    "composed title screen frame {frame} was blank (all black)"
+                )
             }
+            Self::TitleFramesNotAnimated => write!(
+                f,
+                "title screen frame 0 and frame 37 were pixel-identical -- expected the OBJ sprites to have animated by then"
+            ),
         }
     }
 }
@@ -125,10 +146,12 @@ pub fn run_smoke() -> Result<(), E2eError> {
     check_title_screen()
 }
 
-/// The I-2 (issue #109) smoke addition: with a local asset pack present,
-/// load the real title screen and assert its composed frame is non-blank
-/// and deterministic across two `compose` calls; without one, do nothing
-/// (see the module docs).
+/// The I-2 smoke addition (issue #109, strengthened for issue #116): with a
+/// local asset pack present, load the real title screen and, at frame
+/// indices 0 and 37, assert the composed frame is non-blank and
+/// deterministic across two `compose_frame` calls at that same index, then
+/// assert the two frames differ from each other (module docs); without a
+/// pack, do nothing.
 ///
 /// Deliberately independent of `App`/`App::new_headless` above -- it loads
 /// `pokeemerald_rs::title::load_default` directly, so this check can never
@@ -140,8 +163,9 @@ pub fn run_smoke() -> Result<(), E2eError> {
 /// decode for any reason other than "no pack" (that case returns `Ok(())`,
 /// not an error -- see [`pokeemerald_rs::title::TitleSceneError::is_pack_missing`]);
 /// [`E2eError::TitleFrameNotDeterministic`] or [`E2eError::TitleFrameBlank`]
-/// if a pack is present and loads, but the composed frame fails either
-/// check.
+/// if a pack is present and loads, but composing frame 0 or frame 37 fails
+/// either check; [`E2eError::TitleFramesNotAnimated`] if both frames pass
+/// but are pixel-identical to each other.
 fn check_title_screen() -> Result<(), E2eError> {
     let scene = match pokeemerald_rs::title::load_default() {
         Ok(scene) => scene,
@@ -149,13 +173,31 @@ fn check_title_screen() -> Result<(), E2eError> {
         Err(err) => return Err(E2eError::TitleSceneFailed(err.to_string())),
     };
 
-    let first = scene.compose_frame();
-    let second = scene.compose_frame();
-    if first != second {
-        return Err(E2eError::TitleFrameNotDeterministic);
+    // Composed frames are `Box<platform::Frame>` -- deliberately never named
+    // here (module docs: this suite's only workspace dependency stays
+    // `pokeemerald-rs`, not `platform`), so each frame index's determinism
+    // check is inlined rather than factored into a helper with an explicit
+    // return type.
+    let frame0_a = scene.compose_frame(0);
+    let frame0_b = scene.compose_frame(0);
+    if frame0_a != frame0_b {
+        return Err(E2eError::TitleFrameNotDeterministic(0));
     }
-    if first.iter().all(|&pixel| pixel == 0) {
-        return Err(E2eError::TitleFrameBlank);
+    if frame0_a.iter().all(|&pixel| pixel == 0) {
+        return Err(E2eError::TitleFrameBlank(0));
+    }
+
+    let frame37_a = scene.compose_frame(37);
+    let frame37_b = scene.compose_frame(37);
+    if frame37_a != frame37_b {
+        return Err(E2eError::TitleFrameNotDeterministic(37));
+    }
+    if frame37_a.iter().all(|&pixel| pixel == 0) {
+        return Err(E2eError::TitleFrameBlank(37));
+    }
+
+    if frame0_a == frame37_a {
+        return Err(E2eError::TitleFramesNotAnimated);
     }
 
     Ok(())
@@ -174,9 +216,9 @@ mod tests {
     fn title_screen_check_is_a_no_op_or_succeeds() {
         // Whether or not this environment has run `cargo xtask extract`,
         // the check must never fail: no pack -> `Ok(())` (module docs); a
-        // real local pack -> a genuinely valid, non-blank, deterministic
-        // frame (see `pokeemerald_rs::title::tests`'
-        // `real_pack_composes_a_non_blank_deterministic_title_frame` for the
+        // real local pack -> genuinely valid, non-blank, deterministic,
+        // animated frames at indices 0 and 37 (see `pokeemerald_rs::title::tests`'
+        // `real_pack_composes_non_blank_deterministic_title_frames` for the
         // dedicated, always-runnable-with-`--ignored` version of this same
         // assertion).
         check_title_screen().expect("title screen check should never fail in a clean checkout");
