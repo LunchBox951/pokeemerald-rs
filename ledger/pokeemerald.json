@@ -25197,6 +25197,62 @@
       "status": "pending"
     },
     "src/field_player_avatar.c": {
+      "artifacts": {
+        "CheckForPlayerAvatarCollision": {
+          "reason": "Destination-tile collision check re-implemented via MapRuntime::metatile_cell plus collision.rs's Collision/elevation_mismatch; only the grid collision-bit and elevation-mismatch cases are ported (object-event/ledge/boulder/rotating-gate/acro-bike sub-checks are out of v1 scope)",
+          "rust_target": "crates/engine/src/overworld/player.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "CheckMovementInputNotOnBike": {
+          "reason": "NOT_MOVING/TURN_DIRECTION/MOVING classification re-implemented as PlayerState::step's running-state branch, including the exact turn-vs-step rule (direction change only turns when not already mid-movement)",
+          "rust_target": "crates/engine/src/overworld/player.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "GetPlayerFacingDirection": {
+          "reason": "Facing-direction accessor re-implemented as PlayerState::facing",
+          "rust_target": "crates/engine/src/overworld/player.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "GetPlayerMovementDirection": {
+          "reason": "Folded into the same PlayerState::facing field as GetPlayerFacingDirection: upstream's facingDirection/movementDirection only diverge under facingDirectionLocked (bike wheelies/slides), which is out of v1 scope, so this port never needs to distinguish them",
+          "rust_target": "crates/engine/src/overworld/player.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "PlayerGetElevation": {
+          "reason": "Elevation accessor re-implemented as PlayerState::elevation",
+          "rust_target": "crates/engine/src/overworld/player.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "PlayerNotOnBikeMoving": {
+          "reason": "Ordinary-walk attempt-to-move re-implemented as PlayerState::step's Advanced/Blocked branch; surf/run/ledge-jump/boulder-push/rotating-gate/Faraway-Island-Mew special cases are out of v1 scope and not ported",
+          "rust_target": "crates/engine/src/overworld/player.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "PlayerNotOnBikeNotMoving": {
+          "reason": "No-input case re-implemented as PlayerState::step's None-input branch (StepOutcome::Idle, running state reset to NotMoving)",
+          "rust_target": "crates/engine/src/overworld/player.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "PlayerNotOnBikeTurningInPlace": {
+          "reason": "Turn-in-place (no tile movement, facing updated) re-implemented as PlayerState::step's StepOutcome::Turned branch",
+          "rust_target": "crates/engine/src/overworld/player.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "PlayerStep": {
+          "reason": "Per-input-poll orchestration (special-anim interrupt / bike branch / forced-movement dispatch stripped, on-foot-only v1 scope) re-implemented as PlayerState::step",
+          "rust_target": "crates/engine/src/overworld/player.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        }
+      },
       "category": "code.source",
       "kind": "file",
       "status": "pending"
@@ -25242,6 +25298,56 @@
       "status": "pending"
     },
     "src/fieldmap.c": {
+      "artifacts": {
+        "GetMetatileAttributesById": {
+          "reason": "Primary-vs-secondary tileset attribute table selection (NUM_METATILES_IN_PRIMARY split) re-implemented in MapRuntime::metatile_behavior",
+          "rust_target": "crates/engine/src/overworld/map_runtime.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "IsCoordInConnectingMap": {
+          "reason": "Single-axis in-range check re-implemented inline in map_runtime::landing_position's bounds test",
+          "rust_target": "crates/engine/src/overworld/map_runtime.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "IsPosInConnectingMap": {
+          "reason": "Perpendicular-axis bounds check for a connection crossing re-implemented in map_runtime::landing_position, called from MapRuntime::resolve_connection",
+          "rust_target": "crates/engine/src/overworld/map_runtime.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "MapGridGetCollisionAt": {
+          "reason": "Grid collision-bit lookup re-implemented as MapRuntime::metatile_cell (MetatileCell::collision), consumed by PlayerState::step's collision check",
+          "rust_target": "crates/engine/src/overworld/map_runtime.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "MapGridGetElevationAt": {
+          "reason": "Grid elevation lookup re-implemented as MapRuntime::metatile_cell (MetatileCell::elevation); MAPGRID_UNDEFINED's fallback-to-0 is superseded by this port's explicit out-of-bounds/connection-crossing handling instead",
+          "rust_target": "crates/engine/src/overworld/map_runtime.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "MapGridGetMetatileBehaviorAt": {
+          "reason": "Metatile-id-to-behavior lookup re-implemented as MapRuntime::metatile_behavior",
+          "rust_target": "crates/engine/src/overworld/map_runtime.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "MapGridGetMetatileIdAt": {
+          "reason": "Grid metatile-id lookup re-implemented as MapRuntime::metatile_cell (MetatileCell::metatile_id); the MAPGRID_UNDEFINED border-block fallback is not ported (no camera/backing-buffer border scheme in this slice)",
+          "rust_target": "crates/engine/src/overworld/map_runtime.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "SetPositionFromConnection": {
+          "reason": "Per-direction landing-position formula re-implemented in map_runtime::landing_position, simplified to land exactly at the crossed axis's tile-space edge rather than upstream's pixel-precision post-camera-swap position (no camera in this slice)",
+          "rust_target": "crates/engine/src/overworld/map_runtime.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        }
+      },
       "category": "code.source",
       "kind": "file",
       "status": "pending"
@@ -25630,6 +25736,26 @@
       "status": "pending"
     },
     "src/metatile_behavior.c": {
+      "artifacts": {
+        "MetatileBehavior_IsDoor": {
+          "reason": "Re-implemented as metatile_behavior::is_door restricted to MB_ANIMATED_DOOR; MB_PETALBURG_GYM_DOOR is not ported (out of the v1 north-star path)",
+          "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "MetatileBehavior_IsNonAnimDoor": {
+          "reason": "Re-implemented as metatile_behavior::is_door restricted to MB_NON_ANIMATED_DOOR; MB_WATER_DOOR and MB_DEEP_SOUTH_WARP are not ported (out of the v1 north-star path)",
+          "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "MetatileBehavior_IsWarpDoor": {
+          "reason": "MB_ANIMATED_DOOR check re-implemented as metatile_behavior::is_door",
+          "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        }
+      },
       "category": "code.source",
       "kind": "file",
       "status": "pending"
