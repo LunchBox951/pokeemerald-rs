@@ -423,12 +423,13 @@ impl SaveStore {
         // rather than the plaintext defaults `LoadOutcome` promises; the
         // re-seed pass below fixes that.
         let mut block1_chunk_valid = [false; SAVE_BLOCK1_CHUNKS];
-        // Whether the SaveBlock2 sector validated. When it didn't, no usable
-        // encryption key was recovered (`block2_bytes` stays zeroed and
-        // decodes to `encryption_key == 0`), so any genuine SaveBlock1
-        // ciphertext must not be decrypted with that fallback key — see the
-        // key-encrypted-field default pass below.
-        let mut block2_valid = false;
+        // Whether the SaveBlock2 *sector* validated (signature + checksum),
+        // so its payload bytes were copied. Necessary but not sufficient for a
+        // usable key: `SaveBlock2::from_bytes` can still reject a checksum-
+        // valid payload (e.g. an out-of-range gender byte, which the additive
+        // checksum does not constrain), in which case no key is recovered —
+        // see the key-recovery decode below.
+        let mut block2_sector_valid = false;
 
         for i in 0..SECTORS_PER_SLOT_U16 {
             let sector = self.read_physical(copy_slot, usize::from(i));
@@ -460,7 +461,7 @@ impl SaveStore {
 
             if id == SECTOR_ID_SAVEBLOCK2 {
                 block2_bytes[..expected_len].copy_from_slice(&sector.data()[..expected_len]);
-                block2_valid = true;
+                block2_sector_valid = true;
             } else {
                 let chunk_num = (id - SECTOR_ID_SAVEBLOCK1_START) as usize;
                 let offset = chunk_num * SECTOR_DATA_SIZE;
@@ -470,7 +471,17 @@ impl SaveStore {
             }
         }
 
-        let block2 = SaveBlock2::from_bytes(&block2_bytes).unwrap_or_default();
+        // A usable key is recovered only when the SaveBlock2 sector validated
+        // *and* its payload actually decodes. Keying off the checksum alone
+        // would miss a checksum-valid-but-decode-failing payload (the additive
+        // checksum doesn't constrain, say, the gender byte): decoding then
+        // falls back to `encryption_key == 0`, and — without this gate — the
+        // key-encrypted-field cleanup below would be skipped, leaking genuine
+        // SaveBlock1 ciphertext decrypted under key 0.
+        let (block2, key_recovered) = match SaveBlock2::from_bytes(&block2_bytes) {
+            Ok(block2) if block2_sector_valid => (block2, true),
+            _ => (SaveBlock2::default(), false),
+        };
 
         // Re-seed any SaveBlock1 chunk that did *not* validate with the
         // *encryption of the default block* under the recovered key, so that
@@ -501,21 +512,30 @@ impl SaveStore {
         let mut block1 =
             SaveBlock1::from_bytes(&block1_bytes, block2.encryption_key).unwrap_or_default();
 
-        // Mirror of the re-seed pass above, for the opposite failure: the
-        // SaveBlock2 sector did *not* validate, so no usable key was
-        // recovered and `encryption_key` fell back to 0. A SaveBlock1 chunk
-        // that *did* validate then holds genuine ciphertext, which decrypting
-        // under key 0 would surface verbatim (e.g. `money == money ^ real_key`,
-        // bag quantities as raw ciphertext) — again breaking the `LoadOutcome`
-        // contract that key-encrypted fields decode to plaintext defaults
-        // whenever no key was recovered. Force just those fields (money and
-        // bag quantities are the only key-encrypted state this slice models)
-        // to their defaults, leaving the plaintext fields any validated chunk
-        // provided untouched.
-        if !block2_valid {
-            let defaults = SaveBlock1::default();
-            block1.money = defaults.money;
-            block1.bag = defaults.bag;
+        // Mirror of the re-seed pass above, for the opposite failure: no
+        // usable key was recovered (the SaveBlock2 sector was missing/corrupt,
+        // or validated but failed to decode), so `encryption_key` fell back to
+        // 0. A SaveBlock1 chunk that *did* validate then holds genuine
+        // ciphertext, which decrypting under key 0 would surface verbatim
+        // (e.g. `money == money ^ real_key`, bag quantities as raw ciphertext)
+        // — again breaking the `LoadOutcome` contract that key-encrypted
+        // fields decode to plaintext defaults whenever no key was recovered.
+        // Reset only the key-encrypted state — money and each bag *quantity*
+        // (item_ids are stored in the clear, so a validated chunk's genuine
+        // ids must survive) — leaving all other validated plaintext untouched.
+        if !key_recovered {
+            block1.money = 0;
+            for slot in block1
+                .bag
+                .items
+                .iter_mut()
+                .chain(&mut block1.bag.key_items)
+                .chain(&mut block1.bag.poke_balls)
+                .chain(&mut block1.bag.tms_hms)
+                .chain(&mut block1.bag.berries)
+            {
+                slot.quantity = 0;
+            }
         }
 
         LoadOutcome {
@@ -983,6 +1003,68 @@ mod tests {
         {
             assert_eq!(slot.quantity, 0, "bag quantities must decode to 0");
         }
+        // item_ids are stored in the clear, so the validated chunk's genuine
+        // ids (from `sample_block1`) must survive the quantity-only cleanup —
+        // only the key-XOR'd quantity is reset, not the whole slot.
+        assert_eq!(bag.items[0].item_id, 1);
+        assert_eq!(bag.key_items[29].item_id, 2);
+        assert_eq!(bag.poke_balls[15].item_id, 3);
+        assert_eq!(bag.tms_hms[63].item_id, 4);
+        assert_eq!(bag.berries[45].item_id, 5);
+    }
+
+    #[test]
+    fn checksum_valid_but_decode_failing_block2_recovers_no_key() {
+        // A SaveBlock2 sector whose checksum validates but whose payload fails
+        // to decode (an out-of-range gender byte, which the additive checksum
+        // doesn't constrain) must NOT count as a recovered key. Otherwise the
+        // key-encrypted-field cleanup is skipped and a validated SaveBlock1
+        // chunk's genuine ciphertext leaks, decrypted under the fallback key 0.
+        const PLAYER_GENDER_OFFSET: usize = 0x08;
+        let mut store = SaveStore::new();
+        let block1 = sample_block1();
+        let block2 = sample_block2();
+        assert_ne!(block1.money, 0, "test needs nonzero encrypted state");
+
+        store.save(&block1, &block2); // slot 1, counter 1
+        store.save(&block1, &block2); // slot 0, counter 2 (current)
+
+        // Replace slot 0's SaveBlock2 sector with one whose payload carries an
+        // invalid gender byte but a *freshly recomputed* checksum, so it still
+        // passes `is_valid` — only `SaveBlock2::from_bytes` rejects it. The
+        // counter matches the slot's (2) so slot 0 still scans as the winner.
+        let mut payload = block2.to_bytes();
+        payload[PLAYER_GENDER_OFFSET] = 9; // neither MALE (0) nor FEMALE (1)
+        assert!(SaveBlock2::from_bytes(&payload).is_err());
+        let bad_sector = Sector::write(SECTOR_ID_SAVEBLOCK2, &payload, 2);
+        assert!(bad_sector.is_valid(SaveBlock2::PAYLOAD_LEN));
+        let slot0_block2 = store.find_sector_in_slot(0, SECTOR_ID_SAVEBLOCK2);
+        store.write_physical(0, slot0_block2, &bad_sector);
+
+        // Corrupt slot 1 so there is no clean fallback slot.
+        let slot1_block2 = store.find_sector_in_slot(1, SECTOR_ID_SAVEBLOCK2);
+        store.corrupt_byte(1, slot1_block2, 0);
+
+        let outcome = store.load();
+        // The checksum-valid SaveBlock2 sector still failed to decode, so no
+        // key was recovered and block2 is the default (encryption_key 0)...
+        assert_eq!(outcome.block2.encryption_key, 0);
+        // ...and the validated SaveBlock1 chunk's key-encrypted fields decode
+        // to plaintext defaults rather than leaking ciphertext under key 0.
+        assert_eq!(outcome.block1.money, 0);
+        let bag = &outcome.block1.bag;
+        for slot in bag
+            .items
+            .iter()
+            .chain(&bag.key_items)
+            .chain(&bag.poke_balls)
+            .chain(&bag.tms_hms)
+            .chain(&bag.berries)
+        {
+            assert_eq!(slot.quantity, 0, "bag quantities must decode to 0");
+        }
+        // Plaintext item_ids from the validated chunk still survive.
+        assert_eq!(bag.items[0].item_id, 1);
     }
 
     #[test]
