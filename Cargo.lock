@@ -1215,6 +1215,7 @@ dependencies = [
 name = "pokeemerald-rs"
 version = "0.0.0"
 dependencies = [
+ "assets",
  "platform",
  "rendering",
 ]

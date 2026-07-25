@@ -241,6 +241,15 @@ pub enum AssetError {
     /// smaller numbering from `WEATHER_*` (`constants/weather.h`) — see the
     /// `map_events` module docs.
     UnknownCoordWeather(u8),
+
+    /// A raw metatile-attribute layer-type value (bits 12-15 of a
+    /// `metatile_attributes.bin` entry) did not correspond to any modelled
+    /// [`MetatileLayerType`](crate::metatile_attributes::MetatileLayerType).
+    ///
+    /// Carries the offending value. Upstream defines `METATILE_LAYER_TYPE_*`
+    /// values `0..=2`; anything else has no modelled meaning (see
+    /// `crate::metatile_attributes`'s module docs).
+    UnknownMetatileLayerType(u8),
 }
 
 impl fmt::Display for AssetError {
@@ -285,6 +294,9 @@ impl fmt::Display for AssetError {
             Self::UnknownTrainerType(id) => write!(f, "unknown trainer type id `{id}`"),
             Self::UnknownFacingDirection(id) => write!(f, "unknown facing direction id `{id}`"),
             Self::UnknownCoordWeather(id) => write!(f, "unknown coord weather id `{id}`"),
+            Self::UnknownMetatileLayerType(id) => {
+                write!(f, "unknown metatile layer type id `{id}`")
+            }
         }
     }
 }

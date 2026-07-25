@@ -16,10 +16,15 @@
 //! bg events (see [`map_events`]); more data follows as the crate fills out.
 //!
 //! Binary graphics (tileset tile graphics, palettes, player/NPC sprite
-//! sheets) are not compiled into this crate as Rust source, unlike the
-//! tables above — per Discussion #71 policy A they live in a local,
-//! gitignored asset pack that `cargo xtask extract` produces (issue #81);
-//! [`pack`] is this crate's typed loader over that pack.
+//! sheets) and map layout grid/border bytes are not compiled into this
+//! crate as Rust source, unlike the tables above — per Discussion #71
+//! policy A they live in a local, gitignored asset pack that
+//! `cargo xtask extract` produces (issue #81); [`pack`] is this crate's
+//! typed loader over that pack. [`map_layouts`] and [`metatile_attributes`]
+//! provide the decode layer those bytes feed once read out of the pack:
+//! [`map_layouts::LayoutGrid`]/[`map_layouts::BorderGrid`] for a layout's
+//! metatile grid, [`metatile_attributes::MetatileAttributeTable`] for a
+//! tileset's per-metatile behavior/layer-type attributes.
 
 pub mod abilities;
 pub mod battle_moves;
@@ -32,6 +37,7 @@ pub mod level_up_learnsets;
 pub mod map_events;
 pub mod map_headers;
 pub mod map_layouts;
+pub mod metatile_attributes;
 pub mod move_names;
 pub mod pack;
 pub mod species;
@@ -66,6 +72,7 @@ pub use map_layouts::{
     BorderGrid, LayoutGrid, LayoutId, LayoutTable, MapLayout, MetatileCell, BORDER_CELLS,
     BORDER_HEIGHT, BORDER_WIDTH, LAYOUT_COUNT,
 };
+pub use metatile_attributes::{MetatileAttribute, MetatileAttributeTable, MetatileLayerType};
 
 // `items::ItemId` is the full item-table identifier; it is intentionally *not*
 // re-exported at the crate root to avoid clashing with `species::ItemId` (the
