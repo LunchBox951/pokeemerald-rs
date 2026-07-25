@@ -250,6 +250,16 @@ pub enum AssetError {
     /// values `0..=2`; anything else has no modelled meaning (see
     /// `crate::metatile_attributes`'s module docs).
     UnknownMetatileLayerType(u8),
+
+    /// A caller-supplied font glyph-sheet image wasn't exactly
+    /// [`SHEET_WIDTH`](crate::fonts::SHEET_WIDTH) x
+    /// [`SHEET_HEIGHT`](crate::fonts::SHEET_HEIGHT) pixels.
+    ///
+    /// Carries the offending font's asset-pack name
+    /// ([`FontId::pack_name`](crate::fonts::FontId::pack_name)) and the
+    /// image's actual width/height. Every real upstream Latin font sheet is
+    /// exactly that shape; see [`FontGlyphSheet::new`](crate::fonts::FontGlyphSheet::new).
+    FontSheetWrongShape(&'static str, u32, u32),
 }
 
 impl fmt::Display for AssetError {
@@ -297,6 +307,12 @@ impl fmt::Display for AssetError {
             Self::UnknownMetatileLayerType(id) => {
                 write!(f, "unknown metatile layer type id `{id}`")
             }
+            Self::FontSheetWrongShape(name, width, height) => write!(
+                f,
+                "font `{name}` glyph sheet wrong shape: expected {}x{}, got {width}x{height}",
+                crate::fonts::SHEET_WIDTH,
+                crate::fonts::SHEET_HEIGHT
+            ),
         }
     }
 }

@@ -11,6 +11,10 @@ use super::{AssetPack, PackError, MAGIC};
 /// the issue's CI caveat, no test in this crate touches `pokeemerald/` or
 /// the real extracted pack) with one entry of each kind: an `Image`, a
 /// `Palette`, and a `Raw` blob.
+// Long because it lists one fixture entry per accessor this module tests
+// (tileset/layout/font/text-window) — splitting the literal list across
+// helper functions would just move the line count, not reduce it.
+#[allow(clippy::too_many_lines)]
 fn synthetic_pack() -> Vec<u8> {
     struct Entry {
         id: &'static str,
@@ -63,6 +67,60 @@ fn synthetic_pack() -> Vec<u8> {
             meta: vec![],
             // A fixed 2x2 border block (8 bytes).
             payload: vec![0x01, 0x00, 0x02, 0x00, 0x03, 0x00, 0x04, 0x00],
+        },
+        Entry {
+            id: "font/normal/glyphs",
+            kind_tag: 0,
+            meta: {
+                let mut m = Vec::new();
+                m.extend_from_slice(&2u32.to_le_bytes()); // width
+                m.extend_from_slice(&2u32.to_le_bytes()); // height
+                m.push(2); // bit_depth
+                m
+            },
+            payload: vec![0, 1, 2, 3],
+        },
+        Entry {
+            id: "text-window/image/1",
+            kind_tag: 0,
+            meta: {
+                let mut m = Vec::new();
+                m.extend_from_slice(&2u32.to_le_bytes());
+                m.extend_from_slice(&2u32.to_le_bytes());
+                m.push(4);
+                m
+            },
+            payload: vec![0, 1, 2, 3],
+        },
+        Entry {
+            id: "text-window/palette/1",
+            kind_tag: 1,
+            meta: 2u16.to_le_bytes().to_vec(),
+            payload: vec![0x11, 0x00, 0x22, 0x00],
+        },
+        Entry {
+            id: "text-window/image/message_box",
+            kind_tag: 0,
+            meta: {
+                let mut m = Vec::new();
+                m.extend_from_slice(&2u32.to_le_bytes());
+                m.extend_from_slice(&2u32.to_le_bytes());
+                m.push(4);
+                m
+            },
+            payload: vec![4, 5, 6, 7],
+        },
+        Entry {
+            id: "text-window/palette/message_box",
+            kind_tag: 1,
+            meta: 2u16.to_le_bytes().to_vec(),
+            payload: vec![0x33, 0x00, 0x44, 0x00],
+        },
+        Entry {
+            id: "text-window/palette/text_pal1",
+            kind_tag: 1,
+            meta: 2u16.to_le_bytes().to_vec(),
+            payload: vec![0x55, 0x00, 0x66, 0x00],
         },
     ];
     // Directory entries must be written in id-sorted order, exactly like
@@ -284,6 +342,68 @@ fn layout_border_bytes_decode_through_map_layouts_border_grid() {
 }
 
 #[test]
+fn font_accessor_reaches_the_glyph_sheet_image() {
+    let path = write_synthetic_pack("font");
+    let pack = AssetPack::load(&path).unwrap();
+
+    let image = pack.font("normal").unwrap();
+    assert_eq!(image.width, 2);
+    assert_eq!(image.height, 2);
+    assert_eq!(image.bit_depth, 2);
+    assert_eq!(image.pixels, &[0, 1, 2, 3]);
+
+    let err = pack.font("does_not_exist").unwrap_err();
+    assert!(matches!(err, PackError::UnknownAsset(id) if id == "font/does_not_exist/glyphs"));
+
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn text_window_frame_bundles_tiles_and_its_own_plte_derived_palette() {
+    let path = write_synthetic_pack("text-window-frame");
+    let pack = AssetPack::load(&path).unwrap();
+
+    let frame = pack.text_window_frame(1).unwrap();
+    assert_eq!(frame.tiles.pixels, &[0, 1, 2, 3]);
+    assert_eq!(frame.palette.color_count, 2);
+    assert_eq!(frame.palette.color(0), Some(0x0011));
+    assert_eq!(frame.palette.color(1), Some(0x0022));
+
+    let err = pack.text_window_frame(99).unwrap_err();
+    assert!(matches!(err, PackError::UnknownAsset(id) if id == "text-window/image/99"));
+
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn message_box_bundles_its_own_tiles_and_palette() {
+    let path = write_synthetic_pack("message-box");
+    let pack = AssetPack::load(&path).unwrap();
+
+    let handle = pack.message_box().unwrap();
+    assert_eq!(handle.tiles.pixels, &[4, 5, 6, 7]);
+    assert_eq!(handle.palette.color(0), Some(0x0033));
+    assert_eq!(handle.palette.color(1), Some(0x0044));
+
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn text_window_extra_palette_reaches_the_sibling_pal_files() {
+    let path = write_synthetic_pack("text-window-extra-palette");
+    let pack = AssetPack::load(&path).unwrap();
+
+    let palette = pack.text_window_extra_palette(1).unwrap();
+    assert_eq!(palette.color(0), Some(0x0055));
+    assert_eq!(palette.color(1), Some(0x0066));
+
+    let err = pack.text_window_extra_palette(9).unwrap_err();
+    assert!(matches!(err, PackError::UnknownAsset(id) if id == "text-window/palette/text_pal9"));
+
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
 fn unknown_layout_name_reports_missing_asset() {
     let path = write_synthetic_pack("layout-unknown");
     let pack = AssetPack::load(&path).unwrap();
@@ -332,9 +452,16 @@ fn default_path_ends_with_expected_relative_path() {
 /// (`xtask::extract::pack`) and this reader agree byte-for-byte on the
 /// format, not just on the synthetic fixtures above. Needs a local pack:
 /// run `cargo xtask extract` first, then `cargo test -p assets -- --ignored`.
+// Long because it's one end-to-end smoke test exercising every typed
+// accessor this module offers (tileset/sprite/title/layout/font/text-window)
+// against the real extracted pack -- splitting it up would just scatter the
+// same "does the real pack round-trip" assertion across several `#[ignore]`d
+// tests that all need the same `cargo xtask extract` precondition.
+#[allow(clippy::too_many_lines)]
 #[test]
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
 fn real_pack_loads_and_every_typed_accessor_works() {
+    use crate::fonts::FontId;
     use crate::map_layouts::{BorderGrid, LayoutId, LayoutTable};
 
     let pack = AssetPack::load_default().expect("run `cargo xtask extract` first");
@@ -438,5 +565,45 @@ fn real_pack_loads_and_every_typed_accessor_works() {
         let border = BorderGrid::new(border_bytes)
             .unwrap_or_else(|e| panic!("{layout_id}'s border.bin should decode: {e}"));
         assert_eq!(border.cells().count(), crate::map_layouts::BORDER_CELLS);
+    }
+
+    // Every Latin font's glyph sheet should be present and decode through
+    // `crate::fonts::FontGlyphSheet`, glyph 0 (the space) included.
+    for font in FontId::ALL {
+        let image = pack
+            .font(font.pack_name())
+            .unwrap_or_else(|e| panic!("font `{}` should be in the pack: {e}", font.pack_name()));
+        assert_eq!(image.width, crate::fonts::SHEET_WIDTH);
+        assert_eq!(image.height, crate::fonts::SHEET_HEIGHT);
+        let sheet = crate::fonts::FontGlyphSheet::new(font, image)
+            .unwrap_or_else(|e| panic!("font `{}` sheet shape: {e}", font.pack_name()));
+        let glyph = sheet
+            .glyph(0)
+            .unwrap_or_else(|| panic!("font `{}` glyph 0 should decode", font.pack_name()));
+        assert_eq!(glyph.advance_width, font.glyph_width(0).unwrap());
+    }
+
+    // Every numbered text-window border frame should bundle a tile bitmap
+    // with a 16-colour palette read out of its own PNG `PLTE` chunk, the
+    // default message-box frame likewise, and the four extra textbox
+    // palettes should each be a 16-colour palette too.
+    for n in 1..=20u8 {
+        let frame = pack
+            .text_window_frame(n)
+            .unwrap_or_else(|e| panic!("text-window frame {n} should be in the pack: {e}"));
+        assert!(frame.tiles.width > 0 && frame.tiles.height > 0);
+        assert_eq!(frame.palette.color_count, 16);
+        assert_eq!(frame.palette.colors().count(), 16);
+    }
+    let message_box = pack
+        .message_box()
+        .expect("message-box frame should be in the pack");
+    assert!(message_box.tiles.width > 0 && message_box.tiles.height > 0);
+    assert_eq!(message_box.palette.color_count, 16);
+    for n in 1..=4u8 {
+        let palette = pack
+            .text_window_extra_palette(n)
+            .unwrap_or_else(|e| panic!("text-window extra palette {n} should be in the pack: {e}"));
+        assert_eq!(palette.color_count, 16);
     }
 }

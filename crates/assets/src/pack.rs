@@ -37,7 +37,13 @@
 //! decoding handle: `crate::map_layouts`'s `LayoutGrid`/`BorderGrid` own the
 //! decode, this crate's pack loader stays decoupled from it (same rationale
 //! as `xtask::extract`/`crates::assets::pack` staying decoupled from each
-//! other — see this module's docs). The lower-level [`AssetPack::image`] /
+//! other — see this module's docs). [`AssetPack::font`] reaches a Latin
+//! font's glyph sheet (S-4, issue #114) — again a raw [`ImageRef`], with
+//! [`crate::fonts::FontGlyphSheet`] owning the per-glyph decode.
+//! [`AssetPack::text_window_frame`] / [`AssetPack::message_box`] bundle a
+//! border frame's tile bitmap with its palette (see [`WindowFrameHandle`]);
+//! [`AssetPack::text_window_extra_palette`] reaches the four additional
+//! textbox colour palettes. The lower-level [`AssetPack::image`] /
 //! [`AssetPack::palette`] / [`AssetPack::raw`] accessors work over any entry
 //! by its full id (used directly for e.g. `title/image/*` entries, which
 //! have no bundling handle of their own).
@@ -68,7 +74,7 @@ use std::path::{Path, PathBuf};
 
 pub use error::PackError;
 pub use format::{EntryKind, FORMAT_VERSION, MAGIC};
-pub use handles::{ImageRef, PaletteRef, TilesetHandle};
+pub use handles::{ImageRef, PaletteRef, TilesetHandle, WindowFrameHandle};
 
 use format::Entry;
 
@@ -301,6 +307,70 @@ impl AssetPack {
     /// Same as [`raw`](Self::raw).
     pub fn layout_border(&self, name: &str) -> Result<&[u8], PackError> {
         self.raw(&format!("layout/{name}/border"))
+    }
+
+    /// Look up a Latin font's glyph sheet by its normalized pack name (e.g.
+    /// `"normal"`, `"small_narrow"` — see `xtask::extract::mod`'s module
+    /// docs for the id scheme and [`FONTS`](crate::fonts::FONTS) for the
+    /// five names this pack currently ships). Hand the returned image to
+    /// [`FontGlyphSheet::new`](crate::fonts::FontGlyphSheet::new) to decode
+    /// individual glyphs — this crate's pack loader and its font decode
+    /// layer stay decoupled by design (see this module's docs), so this
+    /// method only fetches the raw sheet bitmap.
+    ///
+    /// # Errors
+    ///
+    /// Same as [`image`](Self::image).
+    pub fn font(&self, name: &str) -> Result<ImageRef<'_>, PackError> {
+        self.image(&format!("font/{name}/glyphs"))
+    }
+
+    /// Bundle one numbered text-window border frame's tile bitmap and
+    /// palette (`n` is `1..=20`, upstream's own `WINDOW_FRAMES_COUNT`
+    /// numbering, `pokeemerald/include/text_window.h`). The palette comes
+    /// from the source PNG's own `PLTE` chunk, not a sibling `.pal` file —
+    /// see `xtask::extract::png::decode_palette`'s docs.
+    ///
+    /// # Errors
+    ///
+    /// [`PackError::UnknownAsset`] if `n` isn't a frame in this pack (out of
+    /// `1..=20`, or the pack predates this frame); the same
+    /// [`PackError::WrongKind`] cases as [`image`](Self::image) /
+    /// [`palette`](Self::palette) otherwise.
+    pub fn text_window_frame(&self, n: u8) -> Result<WindowFrameHandle<'_>, PackError> {
+        Ok(WindowFrameHandle {
+            tiles: self.image(&format!("text-window/image/{n}"))?,
+            palette: self.palette(&format!("text-window/palette/{n}"))?,
+        })
+    }
+
+    /// Bundle the default message-box tile bitmap and palette (upstream
+    /// `gMessageBox_Gfx`/`gMessageBox_Pal`, `pokeemerald/src/graphics.c`) —
+    /// the frame every standard overworld/battle text box uses, distinct
+    /// from the 20 selectable [`text_window_frame`](Self::text_window_frame)
+    /// options menu frames.
+    ///
+    /// # Errors
+    ///
+    /// Same as [`text_window_frame`](Self::text_window_frame).
+    pub fn message_box(&self) -> Result<WindowFrameHandle<'_>, PackError> {
+        Ok(WindowFrameHandle {
+            tiles: self.image("text-window/image/message_box")?,
+            palette: self.palette("text-window/palette/message_box")?,
+        })
+    }
+
+    /// Look up one of the four additional textbox colour palettes (`n` is
+    /// `1..=4`, upstream `text_pal1.pal`..`text_pal4.pal`,
+    /// `sTextWindowPalettes[1..=4]` — slot `0` is
+    /// [`message_box`](Self::message_box)'s own palette, not reachable
+    /// through this accessor).
+    ///
+    /// # Errors
+    ///
+    /// Same as [`palette`](Self::palette).
+    pub fn text_window_extra_palette(&self, n: u8) -> Result<PaletteRef<'_>, PackError> {
+        self.palette(&format!("text-window/palette/text_pal{n}"))
     }
 }
 

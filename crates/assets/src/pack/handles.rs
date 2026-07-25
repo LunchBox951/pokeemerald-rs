@@ -73,3 +73,26 @@ impl<'a> TilesetHandle<'a> {
         crate::metatile_attributes::MetatileAttributeTable::new(self.metatile_attributes)
     }
 }
+
+/// A message-box/text-window border frame's bundled graphics: its tile
+/// bitmap and its one palette (S-4, issue #114). Bundles
+/// [`AssetPack::text_window_frame`](super::AssetPack::text_window_frame)'s
+/// and [`AssetPack::message_box`](super::AssetPack::message_box)'s image +
+/// palette pair, mirroring [`TilesetHandle`] minus the metatile tables (text
+/// window frames have none). Unlike a tileset's per-slot palettes (which
+/// come from sibling JASC `.pal` files), a frame's palette is read out of
+/// its own PNG's `PLTE` chunk (`xtask::extract::png::decode_palette`) — see
+/// `crate::pack`'s module docs.
+///
+/// This crate deliberately stops at the raw tile bitmap: interpreting the
+/// 3x3-tile border layout (which tile goes where relative to a window's
+/// size, per upstream `DrawTextBorderOuter`/`DrawTextBorderInner`,
+/// `pokeemerald/src/text_window.c`) is rendering behaviour, out of scope
+/// here.
+#[derive(Debug, Clone, Copy)]
+pub struct WindowFrameHandle<'a> {
+    /// The frame's tile bitmap.
+    pub tiles: ImageRef<'a>,
+    /// The frame's 16-colour palette.
+    pub palette: PaletteRef<'a>,
+}

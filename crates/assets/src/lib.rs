@@ -16,15 +16,19 @@
 //! bg events (see [`map_events`]); more data follows as the crate fills out.
 //!
 //! Binary graphics (tileset tile graphics, palettes, player/NPC sprite
-//! sheets) and map layout grid/border bytes are not compiled into this
-//! crate as Rust source, unlike the tables above — per Discussion #71
-//! policy A they live in a local, gitignored asset pack that
-//! `cargo xtask extract` produces (issue #81); [`pack`] is this crate's
-//! typed loader over that pack. [`map_layouts`] and [`metatile_attributes`]
-//! provide the decode layer those bytes feed once read out of the pack:
+//! sheets, font glyph sheets, text-window border frames) and map layout
+//! grid/border bytes are not compiled into this crate as Rust source,
+//! unlike the tables above — per Discussion #71 policy A they live in a
+//! local, gitignored asset pack that `cargo xtask extract` produces (issue
+//! #81); [`pack`] is this crate's typed loader over that pack.
+//! [`map_layouts`], [`metatile_attributes`], and [`fonts`] provide the
+//! decode layer those bytes feed once read out of the pack:
 //! [`map_layouts::LayoutGrid`]/[`map_layouts::BorderGrid`] for a layout's
 //! metatile grid, [`metatile_attributes::MetatileAttributeTable`] for a
-//! tileset's per-metatile behavior/layer-type attributes.
+//! tileset's per-metatile behavior/layer-type attributes, and
+//! [`fonts::FontGlyphSheet`] for a Latin font's per-glyph bitmap (its
+//! per-glyph advance widths, unlike the bitmaps, are ordinary Rust data —
+//! see that module's docs).
 
 pub mod abilities;
 pub mod battle_moves;
@@ -32,6 +36,7 @@ pub mod egg_moves;
 pub mod error;
 pub mod evolution;
 pub mod experience;
+pub mod fonts;
 pub mod items;
 pub mod level_up_learnsets;
 pub mod map_events;
@@ -58,6 +63,10 @@ pub use egg_moves::{
 pub use error::AssetError;
 pub use evolution::{EvoMethod, Evolution, EvolutionTable};
 pub use experience::{experience_for_level, MAX_LEVEL};
+pub use fonts::{
+    FontGlyphSheet, FontId, Glyph, GLYPH_COLUMNS, GLYPH_COUNT, GLYPH_PIXELS, GLYPH_ROWS,
+    GLYPH_SIZE, SHEET_HEIGHT, SHEET_WIDTH,
+};
 pub use level_up_learnsets::{LevelUpLearnsets, LevelUpMove, SPECIES_COUNT};
 pub use map_events::{
     BgEvent, BgEventKind, CoordEvent, CoordEventKind, CoordWeather, FacingDirection, MapEvents,
