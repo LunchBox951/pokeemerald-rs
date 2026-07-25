@@ -76,6 +76,10 @@ pub enum ExtractError {
     /// addition cannot be silently ignored while the ledger claims the full
     /// directory is ported.
     UnexpectedTextWindowAsset(PathBuf),
+    /// A text-window PNG or standalone palette did not contain exactly the
+    /// 16 colours promised by the typed asset handle. Carries the source path
+    /// and actual colour count.
+    TextWindowPaletteWrongColorCount(PathBuf, usize),
 }
 
 impl fmt::Display for ExtractError {
@@ -120,6 +124,11 @@ impl fmt::Display for ExtractError {
             Self::UnexpectedTextWindowAsset(path) => write!(
                 f,
                 "unexpected text-window asset `{}`: update the extraction manifest and coverage ledger before extracting",
+                path.display()
+            ),
+            Self::TextWindowPaletteWrongColorCount(path, actual) => write!(
+                f,
+                "text-window palette `{}` has {actual} colours: expected exactly 16",
                 path.display()
             ),
         }

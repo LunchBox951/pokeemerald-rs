@@ -594,6 +594,9 @@ const TEXT_WINDOW_IMAGE_STEMS: [&str; 21] = [
 /// `graphics/text_window/`.
 const TEXT_WINDOW_PALETTE_STEMS: [&str; 4] = ["text_pal1", "text_pal2", "text_pal3", "text_pal4"];
 
+/// Every text-window palette occupies one 16-colour GBA palette bank.
+const TEXT_WINDOW_PALETTE_COLORS: usize = 16;
+
 /// Extract the five Latin font glyph sheets (see [`FONTS`] and the module
 /// docs). Per-glyph advance widths are not extracted here — they're ported
 /// as Rust data directly in `crates/assets::fonts`.
@@ -622,12 +625,40 @@ fn extract_text_window(upstream: &Path, writer: &mut PackWriter) -> Result<(), E
         decode_png_entry(&path, format!("text-window/image/{stem}"), writer)?;
         let bytes = read_file(&path)?;
         let colors = png::decode_palette(&bytes).map_err(|e| ExtractError::Png(path.clone(), e))?;
-        push_palette_entry(&colors, format!("text-window/palette/{stem}"), writer);
+        push_text_window_palette_entry(
+            &path,
+            &colors,
+            format!("text-window/palette/{stem}"),
+            writer,
+        )?;
     }
     for stem in TEXT_WINDOW_PALETTE_STEMS {
         let path = dir.join(format!("{stem}.pal"));
-        decode_palette_entry(&path, format!("text-window/palette/{stem}"), writer)?;
+        let text = read_text(&path)?;
+        let colors = jasc_pal::parse(&text).map_err(|e| ExtractError::Pal(path.clone(), e))?;
+        push_text_window_palette_entry(
+            &path,
+            &colors,
+            format!("text-window/palette/{stem}"),
+            writer,
+        )?;
     }
+    Ok(())
+}
+
+fn push_text_window_palette_entry(
+    path: &Path,
+    colors: &[jasc_pal::Rgb888],
+    id: String,
+    writer: &mut PackWriter,
+) -> Result<(), ExtractError> {
+    if colors.len() != TEXT_WINDOW_PALETTE_COLORS {
+        return Err(ExtractError::TextWindowPaletteWrongColorCount(
+            path.to_path_buf(),
+            colors.len(),
+        ));
+    }
+    push_palette_entry(colors, id, writer);
     Ok(())
 }
 
@@ -669,8 +700,9 @@ fn validate_text_window_manifest(dir: &Path) -> Result<(), ExtractError> {
 #[cfg(test)]
 mod tests {
     use super::{
-        collect_pngs_sorted, extract_to, upstream_present, validate_text_window_manifest,
-        ExtractError, FONTS, LAYOUTS, TEXT_WINDOW_IMAGE_STEMS, TEXT_WINDOW_PALETTE_STEMS,
+        collect_pngs_sorted, extract_to, push_text_window_palette_entry, upstream_present,
+        validate_text_window_manifest, ExtractError, FONTS, LAYOUTS, TEXT_WINDOW_IMAGE_STEMS,
+        TEXT_WINDOW_PALETTE_COLORS, TEXT_WINDOW_PALETTE_STEMS,
     };
 
     // Real-checkout tests: `pokeemerald/` must be present locally
@@ -870,6 +902,44 @@ mod tests {
         }
 
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn text_window_palettes_require_exactly_sixteen_colors() {
+        let path = std::path::Path::new("graphics/text_window/example.png");
+        let color = super::jasc_pal::Rgb888 { r: 0, g: 0, b: 0 };
+
+        for actual in [0, 1, 15, 17] {
+            let colors = vec![color; actual];
+            let mut writer = super::pack::PackWriter::new();
+            let err = push_text_window_palette_entry(
+                path,
+                &colors,
+                "text-window/palette/example".to_owned(),
+                &mut writer,
+            )
+            .unwrap_err();
+            assert!(
+                matches!(
+                    err,
+                    ExtractError::TextWindowPaletteWrongColorCount(error_path, count)
+                        if error_path == path && count == actual
+                ),
+                "wrong error for {actual}-colour text-window palette"
+            );
+            assert_eq!(writer.len(), 0, "invalid palette must not be serialized");
+        }
+
+        let colors = vec![color; TEXT_WINDOW_PALETTE_COLORS];
+        let mut writer = super::pack::PackWriter::new();
+        push_text_window_palette_entry(
+            path,
+            &colors,
+            "text-window/palette/example".to_owned(),
+            &mut writer,
+        )
+        .unwrap();
+        assert_eq!(writer.len(), 1);
     }
 
     #[test]
