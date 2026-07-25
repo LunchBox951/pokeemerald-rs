@@ -17,8 +17,14 @@
 //!   for identity, location/warps, party Pokémon, money, bag contents, and
 //!   [`event_data`] flags/vars, plus a checksummed rotating two-slot store
 //!   faithful to upstream's flash layout (issues #94/#117).
+//! - [`overworld`] — the map runtime ([`overworld::MapRuntime`]: typed map
+//!   data binding, connection-edge crossing, object/warp/coord event
+//!   lookup) and the on-foot player movement state machine
+//!   ([`overworld::PlayerState`]): turn/step semantics, collision against
+//!   grid geometry, and warp triggering (issue #108).
 
 pub mod event_data;
+pub mod overworld;
 pub mod rng;
 pub mod save;
 pub mod script;
