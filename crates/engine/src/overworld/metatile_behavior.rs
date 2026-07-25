@@ -31,15 +31,15 @@
 /// `0`.
 pub const MB_NORMAL: u8 = 0;
 
-/// `MB_NON_ANIMATED_DOOR` (101): a warp tile with no open/close animation.
+/// `MB_NON_ANIMATED_DOOR` (`0x60`): a warp tile with no open/close animation.
 /// Upstream uses this for interior staircases and other "just teleport"
 /// warps as well as literal unanimated doors (`MetatileBehavior_IsNonAnimDoor`
 /// also matches `MB_WATER_DOOR`/`MB_DEEP_SOUTH_WARP`, both out of v1 scope
 /// and not ported here). This is the behavior the v1 north-star path's
 /// house-interior stairs are assumed to use.
-pub const MB_NON_ANIMATED_DOOR: u8 = 101;
+pub const MB_NON_ANIMATED_DOOR: u8 = 0x60;
 
-/// `MB_ANIMATED_DOOR` (110): a warp tile that plays an open/close animation
+/// `MB_ANIMATED_DOOR` (`0x69`): a warp tile that plays an open/close animation
 /// (`MetatileBehavior_IsWarpDoor`/`MetatileBehavior_IsDoor`) — ordinary
 /// building entrance doors. This port has no rendering/animation, so
 /// [`is_warp_trigger`] treats it identically to
@@ -47,7 +47,7 @@ pub const MB_NON_ANIMATED_DOOR: u8 = 101;
 /// matches a [`WarpEvent`](assets::WarpEvent), with no distinction for the
 /// door-approach-before-stepping-on-it timing upstream's `TryDoorWarp`
 /// applies (see the module docs on that simplification in `crate::overworld::warp`).
-pub const MB_ANIMATED_DOOR: u8 = 110;
+pub const MB_ANIMATED_DOOR: u8 = 0x69;
 
 /// Whether `behavior` is one of the two door ids this slice ports, mirroring
 /// the union of upstream `MetatileBehavior_IsNonAnimDoor` and
@@ -82,8 +82,11 @@ mod tests {
 
     #[test]
     fn door_ids_are_recognized() {
+        assert_eq!(MB_NON_ANIMATED_DOOR, 0x60);
+        assert_eq!(MB_ANIMATED_DOOR, 0x69);
         assert!(is_door(MB_NON_ANIMATED_DOOR));
         assert!(is_door(MB_ANIMATED_DOOR));
+        assert!(!is_door(0x65), "MB_SOUTH_ARROW_WARP is not a door");
     }
 
     #[test]
@@ -93,11 +96,11 @@ mod tests {
 
     #[test]
     fn unported_warp_behaviors_fail_closed() {
-        // MB_LADDER (102) and MB_UP_ESCALATOR (111): real upstream warp
+        // MB_LADDER (0x61) and MB_UP_ESCALATOR (0x6A): real upstream warp
         // triggers this slice deliberately does not port (see the module
         // docs). They must not be silently treated as a warp trigger.
-        const MB_LADDER: u8 = 102;
-        const MB_UP_ESCALATOR: u8 = 111;
+        const MB_LADDER: u8 = 0x61;
+        const MB_UP_ESCALATOR: u8 = 0x6A;
         assert!(!is_warp_trigger(MB_LADDER));
         assert!(!is_warp_trigger(MB_UP_ESCALATOR));
     }

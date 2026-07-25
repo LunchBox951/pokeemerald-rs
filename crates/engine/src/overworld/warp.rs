@@ -21,6 +21,7 @@
 
 use assets::{MapId, WarpDestination, WarpEvent, WarpId};
 
+use super::collision::{ELEVATION_MULTI_LEVEL, ELEVATION_TRANSITION};
 use super::map_runtime::MapRuntime;
 use super::metatile_behavior::is_warp_trigger;
 
@@ -92,25 +93,31 @@ pub fn resolve_warp_event(warp: &WarpEvent) -> WarpTrigger {
     WarpTrigger::Resolved { map, warp_id }
 }
 
-/// The `(x, y, elevation)` a player arrives at after warping to
-/// `events`'s `warp_id`-th warp event, or `None` if that map has no warp
-/// event at that index.
+/// The `(x, y, elevation)` a player arrives at after warping to `runtime`'s
+/// `warp_id`-th warp event, or `None` if that map has no warp event at that
+/// index or its destination cell is unavailable.
 ///
 /// This is the destination-side half of upstream `SetupWarp`
-/// (`field_control_avatar.c`), which — after this port's simplification —
-/// reduces to "read the destination map's own warp table at the given
-/// index"; the source-side bookkeeping upstream's `SetupWarp` also does
+/// (`field_control_avatar.c`) plus `SetPlayerCoordsFromWarp`
+/// (`overworld.c`) and `ObjectEventUpdateElevation`
+/// (`event_object_movement.c`). The warp event selects the arrival position,
+/// but its elevation is only a trigger-matching filter; the player's actual
+/// elevation comes from the destination grid cell. A multi-level destination
+/// cell leaves the avatar at transition elevation,
+/// matching upstream's initialization and `ObjectEventUpdateElevation` skip
+/// rule. The source-side bookkeeping upstream's `SetupWarp` also does
 /// (escape-warp tracking, Trainer Hill/Battle Pyramid floor special-casing)
 /// is out of v1 scope.
 #[must_use]
-pub fn warp_destination_position(
-    events: &assets::MapEvents,
-    warp_id: u8,
-) -> Option<(i16, i16, u8)> {
-    events
-        .warp_events
-        .get(usize::from(warp_id))
-        .map(|w| (w.x, w.y, w.elevation))
+pub fn warp_destination_position(runtime: &MapRuntime<'_>, warp_id: u8) -> Option<(i16, i16, u8)> {
+    let warp = runtime.events().warp_events.get(usize::from(warp_id))?;
+    let cell = runtime.metatile_cell(i32::from(warp.x), i32::from(warp.y))?;
+    let elevation = if cell.elevation == ELEVATION_MULTI_LEVEL {
+        ELEVATION_TRANSITION
+    } else {
+        cell.elevation
+    };
+    Some((warp.x, warp.y, elevation))
 }
 
 #[cfg(test)]
@@ -238,10 +245,10 @@ mod tests {
 
     #[test]
     fn unrecognized_warp_behavior_fails_closed_even_with_a_matching_warp_event() {
-        // MB_LADDER (102): a real upstream warp trigger this slice does not
+        // MB_LADDER (0x61): a real upstream warp trigger this slice does not
         // port. Even though a WarpEvent sits exactly at this position, the
         // unsupported behavior must suppress the trigger.
-        const MB_LADDER: u8 = 102;
+        const MB_LADDER: u8 = 0x61;
         let runtime = runtime_with_door(MB_LADDER, sample_warp());
         assert_eq!(trigger_warp(&runtime, 1, 0, 0), None);
     }
@@ -282,31 +289,82 @@ mod tests {
     }
 
     #[test]
-    fn warp_destination_position_reads_the_indexed_warp() {
+    fn warp_destination_position_uses_the_destination_cell_elevation() {
+        let mut bytes = cell_bytes(2, 1, |x, _| x);
+        let multi_level = MetatileCell {
+            metatile_id: 0,
+            collision: 0,
+            elevation: ELEVATION_MULTI_LEVEL,
+        }
+        .pack();
+        let elevated = MetatileCell {
+            metatile_id: 1,
+            collision: 0,
+            elevation: 3,
+        }
+        .pack();
+        bytes[0..2].copy_from_slice(&multi_level.to_le_bytes());
+        bytes[2..4].copy_from_slice(&elevated.to_le_bytes());
+        let layout = assets::MapLayout {
+            id: assets::LayoutId("MAP_DEST"),
+            name: "MapDest",
+            width: 2,
+            height: 1,
+            primary_tileset: "gTileset_General",
+            secondary_tileset: "gTileset_General",
+        };
+        let header = MapHeader {
+            id: MapId("MAP_DEST"),
+            group: 0,
+            num: 0,
+            name: "MapDest",
+            layout: assets::LayoutId("MAP_DEST"),
+            music: assets::MusicId(0),
+            region_map_section: assets::RegionMapSectionId("MAPSEC_NONE"),
+            requires_flash: false,
+            weather: assets::Weather::None,
+            map_type: assets::MapType::Indoor,
+            allow_bike: false,
+            allow_escape: false,
+            allow_run: false,
+            show_name: false,
+            battle_scene: assets::BattleScene::Normal,
+            connections: &[],
+        };
         let events = MapEvents {
             id: MapId("MAP_DEST"),
             shared_events_map: None,
             object_events: &[],
             warp_events: &[
                 assets::WarpEvent {
-                    x: 0,
+                    x: 1,
                     y: 0,
                     elevation: 0,
                     dest_map: WarpDestination::Map(MapId("MAP_A")),
                     dest_warp_id: WarpId::Fixed(0),
                 },
                 assets::WarpEvent {
-                    x: 9,
-                    y: 8,
-                    elevation: 3,
-                    dest_map: WarpDestination::Map(MapId("MAP_A")),
+                    x: 0,
+                    y: 0,
+                    elevation: 4,
+                    dest_map: WarpDestination::Map(MapId("MAP_B")),
                     dest_warp_id: WarpId::Fixed(0),
                 },
             ],
             coord_events: &[],
             bg_events: &[],
         };
-        assert_eq!(warp_destination_position(&events, 1), Some((9, 8, 3)));
-        assert_eq!(warp_destination_position(&events, 5), None);
+        let runtime = MapRuntime::new(
+            MapId("MAP_DEST"),
+            &header,
+            &events,
+            layout.grid(&bytes).unwrap(),
+            MetatileAttributeTable::new(&[]),
+            MetatileAttributeTable::new(&[]),
+        );
+
+        assert_eq!(warp_destination_position(&runtime, 0), Some((1, 0, 3)));
+        assert_eq!(warp_destination_position(&runtime, 1), Some((0, 0, 0)));
+        assert_eq!(warp_destination_position(&runtime, 5), None);
     }
 }

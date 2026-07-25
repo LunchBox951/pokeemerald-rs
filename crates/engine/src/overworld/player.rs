@@ -193,9 +193,11 @@ impl PlayerState {
     /// # Busy gate
     ///
     /// If [`PlayerState::in_transit`], this call is a no-op returning
-    /// [`StepOutcome::Idle`] (mirrors upstream's `PlayerIsAnimActive()`
-    /// gate on every `PlayerSetAnimId` call, turns included). Call
-    /// [`PlayerState::tick`] each frame to drain it.
+    /// [`StepOutcome::Idle`]. In upstream, `TryInterruptObjectEventSpecialAnim`
+    /// consumes `DIR_NONE` while the held walk movement is unfinished, before
+    /// `CheckMovementInputNotOnBike` can reset `runningState`; preserving the
+    /// state here retains the same corner-cut behavior at tile center. Call
+    /// [`PlayerState::tick`] each frame to drain the transit timer.
     pub fn step(
         &mut self,
         input: Option<Direction>,
@@ -511,6 +513,54 @@ mod tests {
         // Still "moving" (held South continuously); now change to East. Per
         // CheckMovementInputNotOnBike, `runningState == MOVING` short-circuits the
         // turn-in-place branch, so this steps East immediately rather than turning.
+        let outcome = player.step(Some(Direction::East), &runtime, &no_connections);
+        assert_eq!(
+            outcome,
+            StepOutcome::Advanced {
+                from: (2, 3),
+                to: (3, 3),
+            }
+        );
+    }
+
+    #[test]
+    fn release_during_transit_does_not_end_the_movement_streak() {
+        let (bytes, header, events) = flat_runtime(5, 5, |_, _| 0);
+        let layout = assets::MapLayout {
+            id: assets::LayoutId("MAP_TEST"),
+            name: "MapTest",
+            width: 5,
+            height: 5,
+            primary_tileset: "gTileset_General",
+            secondary_tileset: "gTileset_General",
+        };
+        let grid = layout.grid(&bytes).unwrap();
+        let runtime = MapRuntime::new(
+            assets::MapId("MAP_TEST"),
+            &header,
+            &events,
+            grid,
+            MetatileAttributeTable::new(&[]),
+            MetatileAttributeTable::new(&[]),
+        );
+
+        let mut player = PlayerState::new((2, 2), 3, Direction::South);
+        assert!(matches!(
+            player.step(Some(Direction::South), &runtime, &no_connections),
+            StepOutcome::Advanced { .. }
+        ));
+
+        // TryInterruptObjectEventSpecialAnim consumes DIR_NONE while the
+        // current held movement is unfinished, so CheckMovementInputNotOnBike
+        // cannot reset runningState to NOT_MOVING during these polls.
+        for _ in 0..WALK_FRAMES_PER_TILE {
+            assert_eq!(
+                player.step(None, &runtime, &no_connections),
+                StepOutcome::Idle
+            );
+            player.tick();
+        }
+
         let outcome = player.step(Some(Direction::East), &runtime, &no_connections);
         assert_eq!(
             outcome,
