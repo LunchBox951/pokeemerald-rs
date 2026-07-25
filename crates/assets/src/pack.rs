@@ -328,22 +328,31 @@ impl AssetPack {
         Ok(FontImageRef::new(font, image))
     }
 
-    /// Bundle one numbered text-window border frame's tile bitmap and
-    /// palette (`n` is `1..=20`, upstream's own `WINDOW_FRAMES_COUNT`
-    /// numbering, `pokeemerald/include/text_window.h`). The palette comes
-    /// from the source PNG's own `PLTE` chunk, not a sibling `.pal` file —
-    /// see `xtask::extract::png::decode_palette`'s docs.
+    /// Bundle one text-window border frame's tile bitmap and palette.
+    /// `frame_id` is Emerald's zero-based `sWindowFrames` index (`0..=19`);
+    /// it is translated to the one-based source filenames
+    /// `1.png`..`20.png`. Like upstream `GetWindowFrameTilesPal`, an id at or
+    /// above `WINDOW_FRAMES_COUNT` falls back to frame id `0` (source file
+    /// `1.png`). The palette comes from the source PNG's own `PLTE` chunk,
+    /// not a sibling `.pal` file — see
+    /// `xtask::extract::png::decode_palette`'s docs.
     ///
     /// # Errors
     ///
-    /// [`PackError::UnknownAsset`] if `n` isn't a frame in this pack (out of
-    /// `1..=20`, or the pack predates this frame); the same
+    /// [`PackError::UnknownAsset`] if the selected frame is absent from the
+    /// pack (including when an older pack predates it); the same
     /// [`PackError::WrongKind`] cases as [`image`](Self::image) /
     /// [`palette`](Self::palette) otherwise.
-    pub fn text_window_frame(&self, n: u8) -> Result<WindowFrameHandle<'_>, PackError> {
+    pub fn text_window_frame(&self, frame_id: u8) -> Result<WindowFrameHandle<'_>, PackError> {
+        const WINDOW_FRAMES_COUNT: u8 = 20;
+        let source_number = if frame_id < WINDOW_FRAMES_COUNT {
+            frame_id + 1
+        } else {
+            1
+        };
         Ok(WindowFrameHandle {
-            tiles: self.image(&format!("text-window/image/{n}"))?,
-            palette: self.palette(&format!("text-window/palette/{n}"))?,
+            tiles: self.image(&format!("text-window/image/{source_number}"))?,
+            palette: self.palette(&format!("text-window/palette/{source_number}"))?,
         })
     }
 

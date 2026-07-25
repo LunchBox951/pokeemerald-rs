@@ -100,6 +100,24 @@ fn synthetic_pack() -> Vec<u8> {
             payload: vec![0x11, 0x00, 0x22, 0x00],
         },
         Entry {
+            id: "text-window/image/20",
+            kind_tag: 0,
+            meta: {
+                let mut m = Vec::new();
+                m.extend_from_slice(&2u32.to_le_bytes());
+                m.extend_from_slice(&2u32.to_le_bytes());
+                m.push(4);
+                m
+            },
+            payload: vec![8, 9, 10, 11],
+        },
+        Entry {
+            id: "text-window/palette/20",
+            kind_tag: 1,
+            meta: 2u16.to_le_bytes().to_vec(),
+            payload: vec![0x77, 0x00, 0x88, 0x00],
+        },
+        Entry {
             id: "text-window/image/message_box",
             kind_tag: 0,
             meta: {
@@ -366,14 +384,31 @@ fn text_window_frame_bundles_tiles_and_its_own_plte_derived_palette() {
     let path = write_synthetic_pack("text-window-frame");
     let pack = AssetPack::load(&path).unwrap();
 
-    let frame = pack.text_window_frame(1).unwrap();
+    let frame = pack.text_window_frame(0).unwrap();
     assert_eq!(frame.tiles.pixels, &[0, 1, 2, 3]);
     assert_eq!(frame.palette.color_count, 2);
     assert_eq!(frame.palette.color(0), Some(0x0011));
     assert_eq!(frame.palette.color(1), Some(0x0022));
 
-    let err = pack.text_window_frame(99).unwrap_err();
-    assert!(matches!(err, PackError::UnknownAsset(id) if id == "text-window/image/99"));
+    let err = pack.text_window_frame(1).unwrap_err();
+    assert!(matches!(err, PackError::UnknownAsset(id) if id == "text-window/image/2"));
+
+    let last = pack.text_window_frame(19).unwrap();
+    assert_eq!(last.tiles.pixels, &[8, 9, 10, 11]);
+    assert_eq!(
+        last.palette.colors().collect::<Vec<_>>(),
+        vec![0x0077, 0x0088]
+    );
+
+    let fallback = pack.text_window_frame(20).unwrap();
+    assert_eq!(fallback.tiles.pixels, frame.tiles.pixels);
+    assert_eq!(
+        fallback.palette.colors().collect::<Vec<_>>(),
+        vec![0x0011, 0x0022]
+    );
+
+    let far_out_of_range = pack.text_window_frame(u8::MAX).unwrap();
+    assert_eq!(far_out_of_range.tiles.pixels, frame.tiles.pixels);
 
     let _ = std::fs::remove_file(path);
 }
@@ -590,10 +625,10 @@ fn real_pack_loads_and_every_typed_accessor_works() {
     // with a 16-colour palette read out of its own PNG `PLTE` chunk, the
     // default message-box frame likewise, and the four extra textbox
     // palettes should each be a 16-colour palette too.
-    for n in 1..=20u8 {
-        let frame = pack
-            .text_window_frame(n)
-            .unwrap_or_else(|e| panic!("text-window frame {n} should be in the pack: {e}"));
+    for frame_id in 0..20u8 {
+        let frame = pack.text_window_frame(frame_id).unwrap_or_else(|e| {
+            panic!("text-window frame id {frame_id} should be in the pack: {e}")
+        });
         assert!(frame.tiles.width > 0 && frame.tiles.height > 0);
         assert_eq!(frame.palette.color_count, 16);
         assert_eq!(frame.palette.colors().count(), 16);

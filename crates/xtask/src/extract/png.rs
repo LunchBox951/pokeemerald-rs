@@ -41,7 +41,9 @@
 //! for the per-frame border graphics — only the four `text_pal*.pal` extras
 //! do). [`decode_palette`] reads exactly that chunk, separately from
 //! [`decode`]'s pixel path, so the common tileset/sprite/font case (`PLTE`
-//! ignored) stays exactly as it was.
+//! ignored) stays exactly as it was. Every PNG chunk's CRC-32 is verified
+//! before either path consumes its contents, so corrupt palette or image
+//! bytes fail extraction rather than entering the pack.
 
 use std::fmt;
 
@@ -68,6 +70,9 @@ pub enum PngError {
     /// The inflated pixel data was shorter than `IHDR`'s width/height/depth
     /// require.
     PixelDataTooShort,
+    /// A chunk's stored CRC-32 did not match its type and data bytes. Carries
+    /// the offending four-byte PNG chunk type.
+    ChunkCrcMismatch([u8; 4]),
     /// [`decode_palette`] was asked to read a `PLTE` chunk that is absent,
     /// empty, or whose length isn't a whole number of 3-byte RGB entries.
     MissingOrBadPalette,
@@ -84,6 +89,11 @@ impl fmt::Display for PngError {
             Self::PixelDataTooShort => {
                 write!(f, "PNG pixel data shorter than IHDR dimensions imply")
             }
+            Self::ChunkCrcMismatch(kind) => write!(
+                f,
+                "PNG {} chunk CRC mismatch",
+                String::from_utf8_lossy(kind)
+            ),
             Self::MissingOrBadPalette => {
                 write!(
                     f,
@@ -119,12 +129,24 @@ pub struct IndexedImage {
 
 const SIGNATURE: [u8; 8] = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
 
-/// One raw chunk: its 4-byte type tag and its data (CRC not verified —
-/// `extract` already checksums the whole pack for determinism; a corrupt
-/// upstream checkout would fail loudly at pixel-unpack time instead).
+/// One raw chunk: its 4-byte type tag and its CRC-verified data.
 struct Chunk<'a> {
     kind: [u8; 4],
     data: &'a [u8],
+}
+
+/// PNG's CRC-32 over a chunk's type and data bytes (ISO 3309 polynomial,
+/// reflected representation), initialized and finalized with all bits set.
+fn crc32(bytes: &[u8]) -> u32 {
+    let mut crc = u32::MAX;
+    for &byte in bytes {
+        crc ^= u32::from(byte);
+        for _ in 0..8 {
+            let low_bit_mask = (crc & 1).wrapping_neg();
+            crc = (crc >> 1) ^ (0xEDB8_8320 & low_bit_mask);
+        }
+    }
+    !crc
 }
 
 fn read_chunks(mut rest: &[u8]) -> Result<Vec<Chunk<'_>>, PngError> {
@@ -140,6 +162,15 @@ fn read_chunks(mut rest: &[u8]) -> Result<Vec<Chunk<'_>>, PngError> {
         let crc_end = body_end.checked_add(4).ok_or(PngError::Truncated)?;
         if rest.len() < crc_end {
             return Err(PngError::Truncated);
+        }
+        let stored_crc = u32::from_be_bytes([
+            rest[body_end],
+            rest[body_end + 1],
+            rest[body_end + 2],
+            rest[body_end + 3],
+        ]);
+        if crc32(&rest[4..body_end]) != stored_crc {
+            return Err(PngError::ChunkCrcMismatch(kind));
         }
         let data = &rest[body_start..body_end];
         let is_end = &kind == b"IEND";
@@ -378,14 +409,20 @@ mod tests {
         (b << 16) | a
     }
 
-    /// Build one raw PNG chunk (length + type + data + a dummy CRC, unread
-    /// by [`decode`]) -- shared by every hand-built test fixture below.
+    #[test]
+    fn crc32_matches_standard_check_value() {
+        // ISO CRC-32's canonical independent check vector.
+        assert_eq!(super::crc32(b"123456789"), 0xCBF4_3926);
+    }
+
+    /// Build one raw PNG chunk (length + type + data + CRC-32), shared by
+    /// every hand-built test fixture below.
     fn chunk(kind: [u8; 4], data: &[u8]) -> Vec<u8> {
         let mut out = Vec::new();
         out.extend_from_slice(&u32::try_from(data.len()).unwrap().to_be_bytes());
         out.extend_from_slice(&kind);
         out.extend_from_slice(data);
-        out.extend_from_slice(&[0, 0, 0, 0]); // CRC unchecked by this decoder
+        out.extend_from_slice(&super::crc32(&out[4..]).to_be_bytes());
         out
     }
 
@@ -644,6 +681,16 @@ mod tests {
         let png = indexed_png_with_palette(&[]);
         let err = decode_palette(&png).unwrap_err();
         assert_eq!(err, PngError::MissingOrBadPalette);
+    }
+
+    #[test]
+    fn decode_palette_rejects_corrupt_plte_crc() {
+        let mut png = indexed_png_with_palette(&[(115, 205, 164)]);
+        // Signature (8) + IHDR chunk (25) + PLTE length/type (8) reaches
+        // the first palette byte. Corrupt the data without updating CRC.
+        png[8 + 25 + 8] ^= 0xFF;
+        let err = decode_palette(&png).unwrap_err();
+        assert_eq!(err, PngError::ChunkCrcMismatch(*b"PLTE"));
     }
 
     #[test]

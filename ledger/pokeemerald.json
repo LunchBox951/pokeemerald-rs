@@ -18479,7 +18479,7 @@
     "include/text_window.h": {
       "artifacts": {
         "frame_data": {
-          "reason": "WINDOW_FRAMES_COUNT (20) and struct TilesPal's tiles+pal shape are mirrored exactly by AssetPack::text_window_frame's 1..=20 range and the WindowFrameHandle{tiles,palette} bundle (crates/assets/src/pack.rs). The header's function prototypes (LoadWindowGfx, LoadUserWindowBorderGfx*, DrawTextBorderOuter/Inner, rbox_fill_rectangle, GetWindowFrameTilesPal, GetTextWindowPalette, GetOverworldTextboxPalettePtr) declare real VRAM-loading/rendering behavior that is not implemented, so the file's own status stays pending.",
+          "reason": "WINDOW_FRAMES_COUNT (20), GetWindowFrameTilesPal's zero-based 0..19 lookup with out-of-range fallback to frame 0, and struct TilesPal's tiles+pal shape are mirrored by AssetPack::text_window_frame and the WindowFrameHandle{tiles,palette} bundle (crates/assets/src/pack.rs); the accessor translates those ids to extracted source filenames 1.png..20.png. The header's VRAM-loading/rendering prototypes (LoadWindowGfx, LoadUserWindowBorderGfx*, DrawTextBorderOuter/Inner, rbox_fill_rectangle, GetTextWindowPalette, GetOverworldTextboxPalettePtr) remain unimplemented, so the file's own status stays pending.",
           "rust_target": "crates/assets/src/pack.rs",
           "spec": "S-4",
           "status": "ported"
@@ -26516,7 +26516,7 @@
     "src/text_window.c": {
       "artifacts": {
         "frame_data": {
-          "reason": "The gTextWindowFrame1_Gfx/sTextWindowFrame2_Gfx..20, their .gbapal-derived palettes, and sWindowFrames/sTextWindowPalettes's data-table shape are covered: the 20 frame tile+palette pairs and the 4 extra text_pal*.pal palettes are extracted into the asset pack (crates/xtask/src/extract/mod.rs) and bundled by AssetPack::text_window_frame/message_box/text_window_extra_palette (WindowFrameHandle, crates/assets/src/pack.rs). The VRAM-loading/tilemap-filling behavior in this file (LoadWindowGfx, DrawTextBorderOuter/Inner, rbox_fill_rectangle, GetWindowFrameTilesPal, GetTextWindowPalette) is not implemented -- that's a future rendering/engine slice -- so the file's own status stays pending.",
+          "reason": "The gTextWindowFrame1_Gfx/sTextWindowFrame2_Gfx..20, their .gbapal-derived palettes, sWindowFrames/sTextWindowPalettes's data-table shape, and GetWindowFrameTilesPal's zero-based lookup with out-of-range fallback to frame 0 are covered: all 20 frame tile+palette pairs and 4 extra text_pal*.pal palettes are extracted into the asset pack (crates/xtask/src/extract/mod.rs) and exposed by AssetPack::text_window_frame/message_box/text_window_extra_palette (WindowFrameHandle, crates/assets/src/pack.rs). The remaining VRAM-loading/tilemap-filling behavior (LoadWindowGfx, DrawTextBorderOuter/Inner, rbox_fill_rectangle, GetTextWindowPalette) is not implemented -- that is a future rendering/engine slice -- so the file's own status stays pending.",
           "rust_target": "crates/assets/src/pack.rs",
           "spec": "S-4",
           "status": "ported"
