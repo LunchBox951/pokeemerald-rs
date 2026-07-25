@@ -96,9 +96,13 @@ pub enum SaveStatus {
 /// validate decode to their [`Default`] value (this port has no "previous RAM
 /// contents" to fall back on the way upstream's already-resident
 /// `gSaveBlock1Ptr`/`gSaveBlock2Ptr` do). This holds even for the
-/// key-encrypted fields (money, bag quantities): a non-validating `SaveBlock1`
-/// sector yields plaintext defaults — money `0`, quantities `0` — even when a
-/// nonzero `encryption_key` was recovered from an intact `SaveBlock2`.
+/// key-encrypted fields (money, bag quantities), in both failure directions:
+/// a non-validating `SaveBlock1` sector yields plaintext defaults — money `0`,
+/// quantities `0` — even when a nonzero `encryption_key` was recovered from an
+/// intact `SaveBlock2`; and, conversely, a validating `SaveBlock1` sector's
+/// key-encrypted fields also decode to those defaults when the `SaveBlock2`
+/// sector did *not* validate (so no usable key was recovered), rather than
+/// leaking genuine ciphertext decrypted under the fallback key `0`.
 #[derive(Debug, Clone)]
 pub struct LoadOutcome {
     /// Which slot (if any) was used, and how intact it was.
@@ -419,6 +423,12 @@ impl SaveStore {
         // rather than the plaintext defaults `LoadOutcome` promises; the
         // re-seed pass below fixes that.
         let mut block1_chunk_valid = [false; SAVE_BLOCK1_CHUNKS];
+        // Whether the SaveBlock2 sector validated. When it didn't, no usable
+        // encryption key was recovered (`block2_bytes` stays zeroed and
+        // decodes to `encryption_key == 0`), so any genuine SaveBlock1
+        // ciphertext must not be decrypted with that fallback key — see the
+        // key-encrypted-field default pass below.
+        let mut block2_valid = false;
 
         for i in 0..SECTORS_PER_SLOT_U16 {
             let sector = self.read_physical(copy_slot, usize::from(i));
@@ -450,6 +460,7 @@ impl SaveStore {
 
             if id == SECTOR_ID_SAVEBLOCK2 {
                 block2_bytes[..expected_len].copy_from_slice(&sector.data()[..expected_len]);
+                block2_valid = true;
             } else {
                 let chunk_num = (id - SECTOR_ID_SAVEBLOCK1_START) as usize;
                 let offset = chunk_num * SECTOR_DATA_SIZE;
@@ -487,8 +498,25 @@ impl SaveStore {
             }
         }
 
-        let block1 =
+        let mut block1 =
             SaveBlock1::from_bytes(&block1_bytes, block2.encryption_key).unwrap_or_default();
+
+        // Mirror of the re-seed pass above, for the opposite failure: the
+        // SaveBlock2 sector did *not* validate, so no usable key was
+        // recovered and `encryption_key` fell back to 0. A SaveBlock1 chunk
+        // that *did* validate then holds genuine ciphertext, which decrypting
+        // under key 0 would surface verbatim (e.g. `money == money ^ real_key`,
+        // bag quantities as raw ciphertext) — again breaking the `LoadOutcome`
+        // contract that key-encrypted fields decode to plaintext defaults
+        // whenever no key was recovered. Force just those fields (money and
+        // bag quantities are the only key-encrypted state this slice models)
+        // to their defaults, leaving the plaintext fields any validated chunk
+        // provided untouched.
+        if !block2_valid {
+            let defaults = SaveBlock1::default();
+            block1.money = defaults.money;
+            block1.bag = defaults.bag;
+        }
 
         LoadOutcome {
             status,
@@ -904,6 +932,56 @@ mod tests {
                 "empty bag slots must decode to quantity 0"
             );
             assert_eq!(slot.item_id, 0);
+        }
+    }
+
+    #[test]
+    fn corrupt_recovery_without_a_recovered_key_decodes_encrypted_fields_to_plaintext_defaults() {
+        // Mirror of the case above: when no intact fallback slot exists
+        // (status Corrupt) and the copied slot's SaveBlock2 sector does *not*
+        // validate, no usable encryption_key is recovered (it falls back to
+        // 0). A SaveBlock1 chunk-0 sector that *does* validate then holds
+        // genuine ciphertext, which must still decode its key-encrypted fields
+        // (money at 0x490, bag quantities in 0x560..0x848) to plaintext
+        // defaults rather than leaking the raw ciphertext under key 0.
+        let mut store = SaveStore::new();
+        let block1 = sample_block1();
+        let block2 = sample_block2();
+        assert_ne!(block2.encryption_key, 0, "test needs a nonzero key");
+        assert_ne!(block1.money, 0, "test needs nonzero encrypted state");
+
+        store.save(&block1, &block2); // slot 1, counter 1
+        store.save(&block1, &block2); // slot 0, counter 2 (copy slot after reset)
+
+        // Corrupt only the parity-selected slot's (slot 0) SaveBlock2 sector,
+        // leaving its SaveBlock1 chunk-0 sector intact so the genuine
+        // money/bag ciphertext survives.
+        let slot0_block2 = store.find_sector_in_slot(0, SECTOR_ID_SAVEBLOCK2);
+        store.corrupt_byte(0, slot0_block2, 0);
+        // Also corrupt slot 1 so there is no intact fallback slot: the overall
+        // status becomes Corrupt.
+        let slot1_block2 = store.find_sector_in_slot(1, SECTOR_ID_SAVEBLOCK2);
+        store.corrupt_byte(1, slot1_block2, 0);
+
+        let outcome = store.load();
+        assert_eq!(outcome.status, SaveStatus::Corrupt);
+        // No key was recovered (SaveBlock2 sector invalid).
+        assert_eq!(outcome.block2.encryption_key, 0);
+        // The still-valid SaveBlock1 ciphertext must not leak: money must be
+        // the plaintext default 0, never `money ^ real_key`.
+        assert_eq!(outcome.block1.money, 0);
+        // Every bag quantity must read the plaintext default 0, not raw
+        // ciphertext.
+        let bag = &outcome.block1.bag;
+        for slot in bag
+            .items
+            .iter()
+            .chain(&bag.key_items)
+            .chain(&bag.poke_balls)
+            .chain(&bag.tms_hms)
+            .chain(&bag.berries)
+        {
+            assert_eq!(slot.quantity, 0, "bag quantities must decode to 0");
         }
     }
 
