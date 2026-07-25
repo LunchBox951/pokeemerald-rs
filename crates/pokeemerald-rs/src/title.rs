@@ -44,11 +44,18 @@
 //! `Task_TitleScreenPhase1`/`Phase2`/`Phase3` create, transcribed from their
 //! sprite templates and callbacks:
 //!
-//! | sprite(s)              | upstream template                          | shape/bpp     | x                                          | y   |
-//! |-------------------------|--------------------------------------------|---------------|---------------------------------------------|-----|
+//! | sprite(s)              | upstream template                          | shape/bpp     | `CreateSprite` center x                    | center y |
+//! |-------------------------|--------------------------------------------|---------------|---------------------------------------------|----------|
 //! | version banner (x2)    | `sVersionBannerLeft`/`RightSpriteTemplate`  | 64x32, 8bpp   | `VERSION_BANNER_LEFT_X`/`RIGHT_X` (98/162)  | `VERSION_BANNER_Y_GOAL` (66) |
 //! | "Press Start" (x5)     | `sStartCopyrightBannerSpriteTemplate`      | 32x8, 4bpp    | `START_BANNER_X-64+32*i` (64,96,128,160,192) | 108 |
 //! | copyright (x5)         | `sStartCopyrightBannerSpriteTemplate`      | 32x8, 4bpp    | same as above                                | 148 |
+//!
+//! Upstream's sprite runtime converts those centers to hardware OAM
+//! top-left origins through `CalcCenterToCornerVec`/`UpdateOamCoords`.
+//! [`OamEntry::new`] accepts the already-converted hardware coordinates, so
+//! this module performs the equivalent half-width/half-height subtraction:
+//! version halves start at `(66, 50)`/`(130, 50)`, the five banner segments
+//! at x `48,80,112,144,176`, and their y origins at `104`/`144`.
 //!
 //! (The logo shine `sPokemonLogoShineSpriteTemplate` is deliberately *not*
 //! composed -- it is an OBJ-window lighten effect belonging to a boot phase
@@ -246,6 +253,14 @@ const NUM_COPYRIGHT_FRAMES: usize = 5;
 const VERSION_BANNER_OBJ_SIZE: u8 = 3;
 const PRESS_START_COPYRIGHT_OBJ_SIZE: u8 = 1;
 
+/// `CreateSprite` receives sprite centers, while hardware OAM stores the
+/// top-left origin. These are the center-to-corner offsets produced by
+/// upstream's `CalcCenterToCornerVec` for the two shape/size pairs above.
+const VERSION_BANNER_CENTER_TO_CORNER_X: u16 = 32;
+const VERSION_BANNER_CENTER_TO_CORNER_Y: u8 = 16;
+const PRESS_START_CENTER_TO_CORNER_X: i32 = 16;
+const PRESS_START_CENTER_TO_CORNER_Y: u8 = 4;
+
 /// How many tiles one combined-tileset unit occupies, at its own bit depth
 /// -- `width/8 * height/8` for each cropped/whole sprite sheet region.
 /// Written as plain `u16` literals (not derived from the `usize`/`u32` size
@@ -280,8 +295,9 @@ const _: () = assert!(COPYRIGHT_BASE_TILE > PRESS_START_BASE_TILE);
 const SPRITE_4BPP_BANK: u8 = 1;
 
 /// `VERSION_BANNER_LEFT_X`/`_RIGHT_X`/`_Y_GOAL`, and `START_BANNER_X`
-/// (module docs' table) -- OBJ screen positions, transcribed directly from
-/// `title_screen.c`'s `#define`s.
+/// (module docs' table) -- `CreateSprite` center positions, transcribed
+/// directly from `title_screen.c`'s `#define`s/call sites. Entry construction
+/// converts them to hardware OAM top-left origins.
 const VERSION_BANNER_LEFT_X: u16 = 98;
 const VERSION_BANNER_RIGHT_X: u16 = 162;
 const VERSION_BANNER_Y_GOAL: u8 = 66;
@@ -932,8 +948,8 @@ fn sprite_entries(frame: u32) -> Vec<OamEntry> {
 /// position.
 fn version_banner_entry(x: u16, tile: u16) -> OamEntry {
     OamEntry::new(
-        x,
-        VERSION_BANNER_Y_GOAL,
+        x - VERSION_BANNER_CENTER_TO_CORNER_X,
+        VERSION_BANNER_Y_GOAL - VERSION_BANNER_CENTER_TO_CORNER_Y,
         tile,
         0, // ignored for 8bpp entries (flat palette lookup)
         BitDepth::Bpp8,
@@ -950,17 +966,19 @@ fn version_banner_entry(x: u16, tile: u16) -> OamEntry {
 /// `x -= 64; for i in 0..5 { ...create...; x += 32 }`, transcribed from
 /// `CreatePressStartBanner`/`CreateCopyrightBanner`.
 fn press_start_copyright_entry(i: usize, y: u8, tile: u16, visible: bool) -> OamEntry {
-    // `i` is always `0..5`, so `x` (in `START_BANNER_X - 64 + 32*i`) is
-    // always in `64..192`: every cast below is lossless in practice.
+    // `i` is always `0..5`, so the center x (in
+    // `START_BANNER_X - 64 + 32*i`) is always in `64..192`, and the OAM
+    // origin after the center-to-corner conversion is always in `48..176`:
+    // every cast below is lossless in practice.
     #[allow(
         clippy::cast_possible_truncation,
         clippy::cast_possible_wrap,
         clippy::cast_sign_loss
     )]
-    let x = (START_BANNER_X - 64 + 32 * i as i32) as u16;
+    let x = (START_BANNER_X - 64 + 32 * i as i32 - PRESS_START_CENTER_TO_CORNER_X) as u16;
     OamEntry::new(
         x,
-        y,
+        y - PRESS_START_CENTER_TO_CORNER_Y,
         tile,
         SPRITE_4BPP_BANK,
         BitDepth::Bpp4,

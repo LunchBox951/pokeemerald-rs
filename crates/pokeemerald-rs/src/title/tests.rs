@@ -426,6 +426,33 @@ fn sprite_entries_always_includes_the_settled_version_banner() {
 }
 
 #[test]
+fn sprite_entries_convert_upstream_centers_to_oam_origins() {
+    // pokeemerald's CreateSprite coordinates are centers. Its sprite runtime
+    // subtracts half the sprite dimensions before writing OAM; our renderer
+    // consumes those final top-left OAM coordinates directly.
+    let entries = sprite_entries(0);
+
+    assert_eq!((entries[0].x(), entries[0].y()), (66, 50));
+    assert_eq!((entries[1].x(), entries[1].y()), (130, 50));
+    assert_eq!(entries[0].dimensions(), (64, 32));
+    assert_eq!(entries[1].dimensions(), (64, 32));
+
+    let press_start = &entries[2..2 + NUM_PRESS_START_FRAMES];
+    let press_start_origins: Vec<_> = press_start.iter().map(|entry| entry.x()).collect();
+    assert_eq!(press_start_origins, [48, 80, 112, 144, 176]);
+    assert!(press_start.iter().all(|entry| entry.y() == 104));
+    assert!(press_start
+        .iter()
+        .all(|entry| entry.dimensions() == (32, 8)));
+
+    let copyright =
+        &entries[2 + NUM_PRESS_START_FRAMES..2 + NUM_PRESS_START_FRAMES + NUM_COPYRIGHT_FRAMES];
+    let copyright_origins: Vec<_> = copyright.iter().map(|entry| entry.x()).collect();
+    assert_eq!(copyright_origins, [48, 80, 112, 144, 176]);
+    assert!(copyright.iter().all(|entry| entry.y() == 144));
+}
+
+#[test]
 fn sprite_entries_always_includes_5_press_start_and_5_copyright_segments() {
     for frame in [0, 15, 16, 37] {
         let entries = sprite_entries(frame);
