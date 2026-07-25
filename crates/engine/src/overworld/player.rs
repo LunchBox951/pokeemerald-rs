@@ -99,7 +99,9 @@ pub enum StepOutcome {
     /// The step landed outside the current map's grid, on a tile a
     /// [`super::map_runtime::MapConnection`](assets::MapConnection) covers.
     /// The caller must rebind its [`MapRuntime`] to `to_map`'s data before
-    /// the next call — `to_position` is already expressed in `to_map`'s own
+    /// the next call, and re-seat the player's elevation from the landing
+    /// tile of the new grid (the crossing itself cannot read it) —
+    /// `to_position` is already expressed in `to_map`'s own
     /// coordinate space (see
     /// [`MapRuntime::resolve_connection`](super::map_runtime::MapRuntime::resolve_connection)).
     Crossed {
@@ -238,13 +240,13 @@ impl PlayerState {
 
             let from = self.position;
             self.position = target;
-            // ObjectEventUpdateElevation (event_object_movement.c): adopt
-            // the arrival tile's elevation, unless it's a
-            // transition/multi-level tile (those never change the mover's
-            // "real" elevation).
-            if cell.elevation != super::collision::ELEVATION_TRANSITION
-                && cell.elevation != super::collision::ELEVATION_MULTI_LEVEL
-            {
+            // ObjectEventUpdateElevation (event_object_movement.c):
+            // `currentElevation` — the field the collision mismatch check
+            // consumes — adopts the arrival tile's elevation, including
+            // ELEVATION_TRANSITION (0). That 0 is the wildcard that lets
+            // the next step cross between levels (stairs/bridge landings).
+            // Only multi-level tiles are skipped, mirroring upstream.
+            if cell.elevation != super::collision::ELEVATION_MULTI_LEVEL {
                 self.elevation = cell.elevation;
             }
             self.transit_frames = Some(0);
@@ -637,6 +639,94 @@ mod tests {
             }
         );
         assert_eq!(player.position(), (2, 2));
+    }
+
+    /// `ObjectEventUpdateElevation` adopts `currentElevation` from the
+    /// arrival tile *including* `ELEVATION_TRANSITION` (0) — that 0 is the
+    /// wildcard letting the next step cross between levels (stairs/bridge
+    /// landings). A 3 → transition → 5 walk must therefore succeed.
+    #[test]
+    fn transition_tile_lets_the_next_step_cross_between_elevations() {
+        let width = 5u16;
+        let height = 5u16;
+        let mut bytes = Vec::with_capacity(usize::from(width) * usize::from(height) * 2);
+        for y in 0..height {
+            for x in 0..width {
+                // Column x=2: elevation 3 at y=1, transition (0) at y=2,
+                // elevation 5 at y=3; everything else elevation 3.
+                let elevation = match (x, y) {
+                    (2, 2) => 0,
+                    (2, 3) => 5,
+                    _ => 3,
+                };
+                let raw = MetatileCell {
+                    metatile_id: 1,
+                    collision: 0,
+                    elevation,
+                }
+                .pack();
+                bytes.extend_from_slice(&raw.to_le_bytes());
+            }
+        }
+        let layout = assets::MapLayout {
+            id: assets::LayoutId("MAP_TEST"),
+            name: "MapTest",
+            width,
+            height,
+            primary_tileset: "gTileset_General",
+            secondary_tileset: "gTileset_General",
+        };
+        let grid = layout.grid(&bytes).unwrap();
+        let header = MapHeader {
+            id: assets::MapId("MAP_TEST"),
+            group: 0,
+            num: 0,
+            name: "MapTest",
+            layout: assets::LayoutId("MAP_TEST"),
+            music: assets::MusicId(0),
+            region_map_section: RegionMapSectionId("MAPSEC_NONE"),
+            requires_flash: false,
+            weather: Weather::None,
+            map_type: MapType::Route,
+            allow_bike: true,
+            allow_escape: true,
+            allow_run: true,
+            show_name: false,
+            battle_scene: BattleScene::Normal,
+            connections: &[] as &'static [MapConnection],
+        };
+        let events = MapEvents {
+            id: assets::MapId("MAP_TEST"),
+            shared_events_map: None,
+            object_events: &[],
+            warp_events: &[],
+            coord_events: &[],
+            bg_events: &[],
+        };
+        let runtime = MapRuntime::new(
+            assets::MapId("MAP_TEST"),
+            &header,
+            &events,
+            grid,
+            MetatileAttributeTable::new(&[]),
+            MetatileAttributeTable::new(&[]),
+        );
+
+        let mut player = PlayerState::new((2, 1), 3, Direction::South);
+        // Step onto the transition tile: allowed, elevation becomes the
+        // wildcard 0.
+        let onto_transition = player.step(Some(Direction::South), &runtime, &no_connections);
+        assert!(matches!(onto_transition, StepOutcome::Advanced { .. }));
+        assert_eq!(player.elevation(), 0);
+        for _ in 0..WALK_FRAMES_PER_TILE {
+            player.tick();
+        }
+        // Step from the transition tile onto elevation 5: the wildcard
+        // permits it (upstream would block 3 → 5 directly).
+        let onto_upper = player.step(Some(Direction::South), &runtime, &no_connections);
+        assert!(matches!(onto_upper, StepOutcome::Advanced { .. }));
+        assert_eq!(player.position(), (2, 3));
+        assert_eq!(player.elevation(), 5);
     }
 
     #[test]

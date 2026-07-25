@@ -38,7 +38,9 @@
 //! Out of scope (tracked as future overworld slices, not silently
 //! approximated): rendering/camera, NPC/object-event AI and scripts, script
 //! binding of any kind, the bike and running, forced movement (currents,
-//! conveyor slopes, ice sliding), ledges, and every `MB_*` behavior this
+//! conveyor slopes, ice sliding), ledges, directional metatile impassability
+//! (`IsMetatileDirectionallyImpassable` — one-way rails and the like, absent
+//! from the v1 path), and every `MB_*` behavior this
 //! module doesn't explicitly name. Where an unported behavior could
 //! otherwise be silently treated as passable/normal, this crate fails
 //! closed instead (denies the action) rather than guessing — see
