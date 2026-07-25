@@ -32,6 +32,13 @@ pub enum ExtractError {
     /// A `.pal` source file failed to parse. Carries its path and the
     /// parser error.
     Pal(PathBuf, JascPalError),
+    /// A title-screen OBJ sprite sheet PNG that upstream's build derives
+    /// its in-game palette directly from (no sibling `.pal` file — see
+    /// `crate::extract::extract_title_screen`) had no embedded `PLTE`
+    /// chunk. Never true for the real upstream art; guards against a
+    /// silently-empty sprite palette if the source ever changes shape.
+    /// Carries the PNG's path.
+    MissingEmbeddedPalette(PathBuf),
     /// Assembling the final pack failed (duplicate or invalid id — an
     /// internal bug in this pipeline's manifest, since every id is
     /// generated here, not user-supplied).
@@ -83,6 +90,11 @@ impl fmt::Display for ExtractError {
             Self::WriteFailed(path, msg) => write!(f, "writing `{}` failed: {msg}", path.display()),
             Self::Png(path, err) => write!(f, "decoding `{}` failed: {err}", path.display()),
             Self::Pal(path, err) => write!(f, "parsing `{}` failed: {err}", path.display()),
+            Self::MissingEmbeddedPalette(path) => write!(
+                f,
+                "`{}` has no embedded PLTE chunk (expected upstream's in-game palette there)",
+                path.display()
+            ),
             Self::Pack(err) => write!(f, "assembling pack failed: {err}"),
             Self::LayoutsJson(path, err) => {
                 write!(f, "parsing `{}` failed: {err}", path.display())
