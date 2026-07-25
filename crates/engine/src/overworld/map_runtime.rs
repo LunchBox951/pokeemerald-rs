@@ -11,12 +11,11 @@
 //!   [`MapRuntime::resolve_connection`] for the exact correspondence and the
 //!   one deliberate simplification against that family).
 //! - Object/warp/coord event lookup by position:
-//!   `src/field_control_avatar.c`'s `GetWarpEventAtPosition` /
-//!   `GetCoordEventScriptAtPosition` (object events don't have an upstream
-//!   position-lookup helper of their own — no script/interaction system
-//!   exists yet to need one — so [`MapRuntime::object_event_at`] applies the
-//!   same x/y-plus-elevation-wildcard convention as the warp/coord lookups
-//!   for consistency).
+//!   `src/event_object_movement.c`'s `GetObjectEventIdByPosition` /
+//!   `ObjectEventDoesElevationMatch` (object or query elevation `0` is a
+//!   wildcard), and `src/field_control_avatar.c`'s
+//!   `GetWarpEventAtPosition` / `GetCoordEventScriptAtPosition` (only the
+//!   stored event elevation `0` is a wildcard).
 //!
 //! **What this type does *not* own.** Per the issue #108 scope, `MapRuntime`
 //! binds to exactly one map's already-decoded data; it never loads a pack
@@ -195,13 +194,20 @@ impl<'a> MapRuntime<'a> {
         attribute.and_then(Result::ok).map(|a| a.behavior)
     }
 
-    /// The object event whose static position is `(x, y)`, or `None`.
+    /// The object event whose static position is `(x, y, elevation)`, or
+    /// `None`, mirroring upstream `GetObjectEventIdByPosition` /
+    /// `ObjectEventDoesElevationMatch` (`event_object_movement.c`). Position
+    /// must match exactly; elevation must match unless either the query or
+    /// object uses [`super::collision::ELEVATION_TRANSITION`] as a wildcard.
     #[must_use]
-    pub fn object_event_at(&self, x: i32, y: i32) -> Option<&'static ObjectEvent> {
-        self.events
-            .object_events
-            .iter()
-            .find(|o| i32::from(o.x) == x && i32::from(o.y) == y)
+    pub fn object_event_at(&self, x: i32, y: i32, elevation: u8) -> Option<&'static ObjectEvent> {
+        self.events.object_events.iter().find(|o| {
+            i32::from(o.x) == x
+                && i32::from(o.y) == y
+                && (o.elevation == elevation
+                    || o.elevation == super::collision::ELEVATION_TRANSITION
+                    || elevation == super::collision::ELEVATION_TRANSITION)
+        })
     }
 
     /// The warp event at `(x, y, elevation)`, mirroring `GetWarpEventAtPosition`
@@ -547,22 +553,52 @@ mod tests {
     }
 
     #[test]
-    fn object_event_at_matches_static_position() {
+    fn object_event_at_matches_static_position_and_elevation_wildcard() {
         let hdr = header("MAP_F", &[]);
-        let objects: &'static [ObjectEvent] = Box::leak(Box::new([ObjectEvent {
-            local_id: 1,
-            graphics_id: "OBJ_EVENT_GFX_MOM",
-            x: 6,
-            y: 6,
-            elevation: 3,
-            movement_type: assets::MovementType::FaceDown,
-            movement_range_x: 0,
-            movement_range_y: 0,
-            trainer_type: assets::TrainerType::None,
-            trainer_sight_or_berry_tree_id: "0",
-            script: "0x0",
-            flag: "0",
-        }]));
+        let objects: &'static [ObjectEvent] = Box::leak(Box::new([
+            ObjectEvent {
+                local_id: 1,
+                graphics_id: "OBJ_EVENT_GFX_KECLEON",
+                x: 6,
+                y: 6,
+                elevation: 4,
+                movement_type: assets::MovementType::FaceDown,
+                movement_range_x: 0,
+                movement_range_y: 0,
+                trainer_type: assets::TrainerType::None,
+                trainer_sight_or_berry_tree_id: "0",
+                script: "0x0",
+                flag: "0",
+            },
+            ObjectEvent {
+                local_id: 2,
+                graphics_id: "OBJ_EVENT_GFX_KECLEON_BRIDGE_SHADOW",
+                x: 6,
+                y: 6,
+                elevation: 3,
+                movement_type: assets::MovementType::FaceDown,
+                movement_range_x: 0,
+                movement_range_y: 0,
+                trainer_type: assets::TrainerType::None,
+                trainer_sight_or_berry_tree_id: "0",
+                script: "0x0",
+                flag: "0",
+            },
+            ObjectEvent {
+                local_id: 3,
+                graphics_id: "OBJ_EVENT_GFX_MOM",
+                x: 7,
+                y: 7,
+                elevation: 0,
+                movement_type: assets::MovementType::FaceDown,
+                movement_range_x: 0,
+                movement_range_y: 0,
+                trainer_type: assets::TrainerType::None,
+                trainer_sight_or_berry_tree_id: "0",
+                script: "0x0",
+                flag: "0",
+            },
+        ]));
         let events: &'static MapEvents = Box::leak(Box::new(MapEvents {
             id: MapId("MAP_F"),
             shared_events_map: None,
@@ -590,8 +626,23 @@ mod tests {
             MetatileAttributeTable::new(&[]),
         );
 
-        assert!(runtime.object_event_at(6, 6).is_some());
-        assert!(runtime.object_event_at(0, 0).is_none());
+        assert_eq!(
+            runtime.object_event_at(6, 6, 4).map(|o| o.local_id),
+            Some(1)
+        );
+        assert_eq!(
+            runtime.object_event_at(6, 6, 3).map(|o| o.local_id),
+            Some(2)
+        );
+        assert_eq!(
+            runtime.object_event_at(6, 6, 0).map(|o| o.local_id),
+            Some(1)
+        );
+        assert_eq!(
+            runtime.object_event_at(7, 7, 9).map(|o| o.local_id),
+            Some(3)
+        );
+        assert!(runtime.object_event_at(0, 0, 0).is_none());
     }
 
     /// Crossing south, matching Route 101 -> Littleroot Town's real
