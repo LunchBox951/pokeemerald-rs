@@ -92,10 +92,13 @@ pub enum SaveStatus {
 }
 
 /// The outcome of [`SaveStore::load`]: the resolved [`SaveStatus`] plus the
-/// best-effort reconstructed blocks. Sectors that didn't validate leave
-/// their corresponding bytes at their [`Default`] value (this port has no
-/// "previous RAM contents" to fall back on the way upstream's
-/// already-resident `gSaveBlock1Ptr`/`gSaveBlock2Ptr` do).
+/// best-effort reconstructed blocks. Fields backed by a sector that didn't
+/// validate decode to their [`Default`] value (this port has no "previous RAM
+/// contents" to fall back on the way upstream's already-resident
+/// `gSaveBlock1Ptr`/`gSaveBlock2Ptr` do). This holds even for the
+/// key-encrypted fields (money, bag quantities): a non-validating `SaveBlock1`
+/// sector yields plaintext defaults — money `0`, quantities `0` — even when a
+/// nonzero `encryption_key` was recovered from an intact `SaveBlock2`.
 #[derive(Debug, Clone)]
 pub struct LoadOutcome {
     /// Which slot (if any) was used, and how intact it was.
@@ -410,6 +413,12 @@ impl SaveStore {
 
         let mut block2_bytes = vec![0u8; SaveBlock2::PAYLOAD_LEN];
         let mut block1_bytes = vec![0u8; SaveBlock1::PAYLOAD_LEN];
+        // Which SaveBlock1 chunks were copied from a validating sector. A
+        // chunk left `false` keeps `block1_bytes`' zero fill, which — under a
+        // recovered nonzero key — would XOR-decrypt to `key`/`low16(key)`
+        // rather than the plaintext defaults `LoadOutcome` promises; the
+        // re-seed pass below fixes that.
+        let mut block1_chunk_valid = [false; SAVE_BLOCK1_CHUNKS];
 
         for i in 0..SECTORS_PER_SLOT_U16 {
             let sector = self.read_physical(copy_slot, usize::from(i));
@@ -446,10 +455,38 @@ impl SaveStore {
                 let offset = chunk_num * SECTOR_DATA_SIZE;
                 block1_bytes[offset..offset + expected_len]
                     .copy_from_slice(&sector.data()[..expected_len]);
+                block1_chunk_valid[chunk_num] = true;
             }
         }
 
         let block2 = SaveBlock2::from_bytes(&block2_bytes).unwrap_or_default();
+
+        // Re-seed any SaveBlock1 chunk that did *not* validate with the
+        // *encryption of the default block* under the recovered key, so that
+        // decoding it yields plaintext defaults (money 0, quantities 0)
+        // regardless of the key. Without this, a corrupt SaveBlock1 chunk
+        // paired with an intact SaveBlock2 (recovering a nonzero key) would
+        // decode its zero bytes to `money == key` and every empty bag slot to
+        // `quantity == low16(key)`, diverging from upstream and breaking the
+        // `LoadOutcome` contract. Validated chunks are untouched, so the
+        // intact and single-corrupt-sector fallback paths stay byte-identical.
+        if block1_chunk_valid.iter().any(|valid| !valid) {
+            let default_bytes = SaveBlock1::default().to_bytes(block2.encryption_key);
+            for (chunk_num, _) in block1_chunk_valid
+                .iter()
+                .enumerate()
+                .filter(|(_, valid)| !**valid)
+            {
+                let len = chunk_len(SaveBlock1::PAYLOAD_LEN, chunk_num);
+                if len == 0 {
+                    continue;
+                }
+                let offset = chunk_num * SECTOR_DATA_SIZE;
+                block1_bytes[offset..offset + len]
+                    .copy_from_slice(&default_bytes[offset..offset + len]);
+            }
+        }
+
         let block1 =
             SaveBlock1::from_bytes(&block1_bytes, block2.encryption_key).unwrap_or_default();
 
@@ -815,6 +852,59 @@ mod tests {
             outcome.block2, block2_slot1,
             "copy must follow counter parity (slot 1), not the validation winner (slot 0)"
         );
+    }
+
+    #[test]
+    fn corrupt_recovery_with_intact_block2_decodes_encrypted_fields_to_plaintext_defaults() {
+        // Regression: when no intact fallback slot exists (overall status
+        // Corrupt) but the copied slot's SaveBlock2 sector still validates —
+        // recovering a nonzero encryption_key — a corrupt SaveBlock1 chunk-0
+        // sector (holding money at 0x490 and the whole bag at 0x560..0x848)
+        // must still decode those key-encrypted fields to plaintext defaults,
+        // not to `key`/`low16(key)`.
+        let mut store = SaveStore::new();
+        let block1 = sample_block1();
+        let block2 = sample_block2();
+        assert_ne!(block2.encryption_key, 0, "test needs a nonzero key");
+
+        store.save(&block1, &block2); // slot 1, counter 1
+        store.save(&block1, &block2); // slot 0, counter 2 (copy slot after reset)
+
+        // Corrupt the parity-selected slot's (slot 0, since the reset counter
+        // is 0) SaveBlock1 chunk-0 sector, but leave its SaveBlock2 sector
+        // intact so the key is still recovered.
+        let block1_chunk0 = store.find_sector_in_slot(0, SECTOR_ID_SAVEBLOCK1_START);
+        store.corrupt_byte(0, block1_chunk0, 0);
+        // Also corrupt slot 1 entirely (its SaveBlock2 sector) so there is no
+        // intact fallback slot: the overall status becomes Corrupt.
+        let slot1_block2 = store.find_sector_in_slot(1, SECTOR_ID_SAVEBLOCK2);
+        store.corrupt_byte(1, slot1_block2, 0);
+
+        let outcome = store.load();
+        assert_eq!(outcome.status, SaveStatus::Corrupt);
+        // SaveBlock2 validated, so the nonzero key was recovered...
+        assert_eq!(outcome.block2, block2);
+        // ...yet the corrupt SaveBlock1 chunk decodes to plaintext defaults,
+        // never `money == encryption_key`.
+        assert_eq!(outcome.block1.money, 0);
+        assert_ne!(outcome.block1.money, outcome.block2.encryption_key);
+        // Every bag slot — including the empty ones — must read quantity 0,
+        // not `low16(key)`.
+        let bag = &outcome.block1.bag;
+        for slot in bag
+            .items
+            .iter()
+            .chain(&bag.key_items)
+            .chain(&bag.poke_balls)
+            .chain(&bag.tms_hms)
+            .chain(&bag.berries)
+        {
+            assert_eq!(
+                slot.quantity, 0,
+                "empty bag slots must decode to quantity 0"
+            );
+            assert_eq!(slot.item_id, 0);
+        }
     }
 
     #[test]
