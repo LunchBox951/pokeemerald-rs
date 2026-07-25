@@ -68,8 +68,8 @@ pub enum PngError {
     /// The inflated pixel data was shorter than `IHDR`'s width/height/depth
     /// require.
     PixelDataTooShort,
-    /// [`decode_palette`] was asked to read a `PLTE` chunk that isn't
-    /// present, or whose length isn't a whole number of 3-byte RGB entries.
+    /// [`decode_palette`] was asked to read a `PLTE` chunk that is absent,
+    /// empty, or whose length isn't a whole number of 3-byte RGB entries.
     MissingOrBadPalette,
 }
 
@@ -87,7 +87,7 @@ impl fmt::Display for PngError {
             Self::MissingOrBadPalette => {
                 write!(
                     f,
-                    "PNG has no PLTE chunk, or its length isn't a multiple of 3"
+                    "PNG has no PLTE chunk, an empty PLTE chunk, or a PLTE length that isn't a multiple of 3"
                 )
             }
         }
@@ -333,7 +333,7 @@ fn unpack_row(packed: &[u8], width: usize, bit_depth: u8, out: &mut Vec<u8>) {
 ///
 /// [`PngError::BadSignature`] / [`PngError::Truncated`] for a malformed
 /// file (same as [`decode`]); [`PngError::MissingOrBadPalette`] if no `PLTE`
-/// chunk is present, or its length is not a multiple of 3 bytes.
+/// chunk is present, is empty, or its length is not a multiple of 3 bytes.
 pub fn decode_palette(data: &[u8]) -> Result<Vec<Rgb888>, PngError> {
     if data.len() < 8 || data[..8] != SIGNATURE {
         return Err(PngError::BadSignature);
@@ -344,7 +344,7 @@ pub fn decode_palette(data: &[u8]) -> Result<Vec<Rgb888>, PngError> {
         .iter()
         .find(|c| &c.kind == b"PLTE")
         .ok_or(PngError::MissingOrBadPalette)?;
-    if plte.data.len() % 3 != 0 {
+    if plte.data.is_empty() || plte.data.len() % 3 != 0 {
         return Err(PngError::MissingOrBadPalette);
     }
 
@@ -635,6 +635,13 @@ mod tests {
     fn decode_palette_rejects_missing_plte() {
         // A well-formed indexed PNG with no PLTE chunk at all.
         let png = tiny_indexed_png(8, 2, 1, &[1, 2]);
+        let err = decode_palette(&png).unwrap_err();
+        assert_eq!(err, PngError::MissingOrBadPalette);
+    }
+
+    #[test]
+    fn decode_palette_rejects_empty_plte() {
+        let png = indexed_png_with_palette(&[]);
         let err = decode_palette(&png).unwrap_err();
         assert_eq!(err, PngError::MissingOrBadPalette);
     }

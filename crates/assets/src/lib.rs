@@ -64,8 +64,8 @@ pub use error::AssetError;
 pub use evolution::{EvoMethod, Evolution, EvolutionTable};
 pub use experience::{experience_for_level, MAX_LEVEL};
 pub use fonts::{
-    FontGlyphSheet, FontId, Glyph, GLYPH_COLUMNS, GLYPH_COUNT, GLYPH_PIXELS, GLYPH_ROWS,
-    GLYPH_SIZE, SHEET_HEIGHT, SHEET_WIDTH,
+    FontGlyphSheet, FontId, FontImageRef, Glyph, GLYPH_COLUMNS, GLYPH_COUNT, GLYPH_PIXELS,
+    GLYPH_ROWS, GLYPH_SIZE, SHEET_HEIGHT, SHEET_WIDTH,
 };
 pub use level_up_learnsets::{LevelUpLearnsets, LevelUpMove, SPECIES_COUNT};
 pub use map_events::{

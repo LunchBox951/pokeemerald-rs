@@ -10,8 +10,10 @@
 //! gitignored asset pack, reachable via
 //! [`AssetPack::font`](crate::pack::AssetPack::font). This module is the
 //! decode layer that pack bytes feed once read: [`FontGlyphSheet::new`]
-//! validates a fetched [`ImageRef`] and [`FontGlyphSheet::glyph`] slices out
-//! one glyph's pixels.
+//! validates a fetched [`FontImageRef`] and [`FontGlyphSheet::glyph`] slices
+//! out one glyph's pixels. [`FontImageRef`] binds the fetched bitmap to the
+//! [`FontId`] used for its pack lookup, so a sheet cannot accidentally pair
+//! one font's pixels with another font's advance-width table.
 //!
 //! **Advance widths are ordinary Rust data**, unlike the bitmaps. Upstream's
 //! per-glyph width tables (`gFontNormalLatinGlyphWidths` and its four
@@ -163,9 +165,39 @@ pub struct Glyph {
     pub pixels: [u8; GLYPH_PIXELS],
 }
 
+/// A borrowed font image bound to the [`FontId`] used to fetch it.
+///
+/// Only [`AssetPack::font`](crate::pack::AssetPack::font) constructs this
+/// handle outside this module. Keeping the identity and raw image together
+/// prevents callers from pairing (for example) Normal pixels with Small
+/// advance widths when constructing a [`FontGlyphSheet`].
+#[derive(Debug, Clone, Copy)]
+pub struct FontImageRef<'a> {
+    font: FontId,
+    image: ImageRef<'a>,
+}
+
+impl<'a> FontImageRef<'a> {
+    pub(crate) const fn new(font: FontId, image: ImageRef<'a>) -> Self {
+        Self { font, image }
+    }
+
+    /// The identity this image was fetched under.
+    #[must_use]
+    pub const fn font(&self) -> FontId {
+        self.font
+    }
+
+    /// The underlying pack image, for callers that need its metadata.
+    #[must_use]
+    pub const fn image(&self) -> ImageRef<'a> {
+        self.image
+    }
+}
+
 /// A borrowed, validated view over one font's glyph sheet bitmap.
 ///
-/// Wraps an [`ImageRef`] fetched from
+/// Wraps a [`FontImageRef`] fetched from
 /// [`AssetPack::font`](crate::pack::AssetPack::font) — this module ships no
 /// sheet bytes of its own; see the module docs.
 #[derive(Debug, Clone, Copy)]
@@ -175,7 +207,8 @@ pub struct FontGlyphSheet<'a> {
 }
 
 impl<'a> FontGlyphSheet<'a> {
-    /// Build a view of `image` for `font`.
+    /// Build a validated glyph-sheet view of a font image fetched from the
+    /// asset pack.
     ///
     /// # Errors
     ///
@@ -183,8 +216,12 @@ impl<'a> FontGlyphSheet<'a> {
     /// aren't exactly [`SHEET_WIDTH`] x [`SHEET_HEIGHT`] — every real
     /// upstream Latin font sheet is — or
     /// [`AssetError::FontSheetWrongPixelCount`] if its pixel buffer doesn't
-    /// contain exactly one palette index per pixel.
-    pub const fn new(font: FontId, image: ImageRef<'a>) -> Result<Self, AssetError> {
+    /// contain exactly one palette index per pixel, or
+    /// [`AssetError::FontSheetInvalidPixel`] if any pixel is outside the
+    /// four-colour `0..=3` range.
+    pub const fn new(source: FontImageRef<'a>) -> Result<Self, AssetError> {
+        let font = source.font;
+        let image = source.image;
         if image.width != SHEET_WIDTH || image.height != SHEET_HEIGHT {
             return Err(AssetError::FontSheetWrongShape(
                 font.pack_name(),
@@ -199,6 +236,17 @@ impl<'a> FontGlyphSheet<'a> {
                 expected_pixels,
                 image.pixels.len(),
             ));
+        }
+        let mut index = 0;
+        while index < image.pixels.len() {
+            if image.pixels[index] > 3 {
+                return Err(AssetError::FontSheetInvalidPixel(
+                    font.pack_name(),
+                    index,
+                    image.pixels[index],
+                ));
+            }
+            index += 1;
         }
         Ok(Self { font, image })
     }
@@ -349,7 +397,9 @@ static SMALL_NARROW_WIDTHS: [u8; GLYPH_COUNT] = [
 
 #[cfg(test)]
 mod tests {
-    use super::{FontGlyphSheet, FontId, GLYPH_COUNT, GLYPH_PIXELS, SHEET_HEIGHT, SHEET_WIDTH};
+    use super::{
+        FontGlyphSheet, FontId, FontImageRef, GLYPH_COUNT, GLYPH_PIXELS, SHEET_HEIGHT, SHEET_WIDTH,
+    };
     use crate::error::AssetError;
     use crate::pack::ImageRef;
 
@@ -401,6 +451,10 @@ mod tests {
         }
     }
 
+    fn synthetic_font_image(font: FontId, pixels: &[u8]) -> FontImageRef<'_> {
+        FontImageRef::new(font, synthetic_sheet(pixels))
+    }
+
     fn patterned_pixels() -> Vec<u8> {
         let mut pixels = vec![0u8; (SHEET_WIDTH * SHEET_HEIGHT) as usize];
         for y in 0..SHEET_HEIGHT {
@@ -420,7 +474,7 @@ mod tests {
             bit_depth: 8,
             pixels: &pixels,
         };
-        let err = FontGlyphSheet::new(FontId::Normal, image).unwrap_err();
+        let err = FontGlyphSheet::new(FontImageRef::new(FontId::Normal, image)).unwrap_err();
         assert_eq!(err, AssetError::FontSheetWrongShape("normal", 2, 2));
     }
 
@@ -430,8 +484,8 @@ mod tests {
 
         for pixels in [vec![0u8; expected - 1], vec![0u8; expected + 1]] {
             let actual = pixels.len();
-            let image = synthetic_sheet(&pixels);
-            let err = FontGlyphSheet::new(FontId::Normal, image).unwrap_err();
+            let image = synthetic_font_image(FontId::Normal, &pixels);
+            let err = FontGlyphSheet::new(image).unwrap_err();
             assert_eq!(
                 err,
                 AssetError::FontSheetWrongPixelCount("normal", expected, actual)
@@ -440,10 +494,22 @@ mod tests {
     }
 
     #[test]
+    fn rejects_out_of_palette_pixel() {
+        let mut pixels = patterned_pixels();
+        let invalid_index = pixels.len() / 2;
+        pixels[invalid_index] = 4;
+        let err = FontGlyphSheet::new(synthetic_font_image(FontId::Normal, &pixels)).unwrap_err();
+        assert_eq!(
+            err,
+            AssetError::FontSheetInvalidPixel("normal", invalid_index, 4)
+        );
+    }
+
+    #[test]
     fn glyph_zero_is_the_top_left_cell() {
         let pixels = patterned_pixels();
-        let image = synthetic_sheet(&pixels);
-        let sheet = FontGlyphSheet::new(FontId::Normal, image).unwrap();
+        let image = synthetic_font_image(FontId::Normal, &pixels);
+        let sheet = FontGlyphSheet::new(image).unwrap();
 
         let glyph = sheet.glyph(0).unwrap();
         assert_eq!(glyph.advance_width, FontId::Normal.glyph_width(0).unwrap());
@@ -467,14 +533,14 @@ mod tests {
         let mut pixels = vec![0u8; (SHEET_WIDTH * SHEET_HEIGHT) as usize];
         for y in 16..32u32 {
             for x in 16..32u32 {
-                pixels[(y * SHEET_WIDTH + x) as usize] = 7;
+                pixels[(y * SHEET_WIDTH + x) as usize] = 3;
             }
         }
-        let image = synthetic_sheet(&pixels);
-        let sheet = FontGlyphSheet::new(FontId::Small, image).unwrap();
+        let image = synthetic_font_image(FontId::Small, &pixels);
+        let sheet = FontGlyphSheet::new(image).unwrap();
 
         let glyph = sheet.glyph(17).unwrap();
-        assert!(glyph.pixels.iter().all(|&p| p == 7));
+        assert!(glyph.pixels.iter().all(|&p| p == 3));
 
         // A neighboring cell (glyph 18, column 2 row 1) should be untouched.
         let neighbor = sheet.glyph(18).unwrap();
@@ -484,8 +550,8 @@ mod tests {
     #[test]
     fn glyph_out_of_range_is_none() {
         let pixels = patterned_pixels();
-        let image = synthetic_sheet(&pixels);
-        let sheet = FontGlyphSheet::new(FontId::Narrow, image).unwrap();
+        let image = synthetic_font_image(FontId::Narrow, &pixels);
+        let sheet = FontGlyphSheet::new(image).unwrap();
         assert!(sheet.glyph(512).is_none());
         assert!(sheet.glyph(u16::MAX).is_none());
     }
@@ -494,8 +560,8 @@ mod tests {
     fn every_font_decodes_glyph_zero_from_the_same_shaped_sheet() {
         let pixels = patterned_pixels();
         for font in FontId::ALL {
-            let image = synthetic_sheet(&pixels);
-            let sheet = FontGlyphSheet::new(font, image).unwrap();
+            let image = synthetic_font_image(font, &pixels);
+            let sheet = FontGlyphSheet::new(image).unwrap();
             let glyph = sheet.glyph(0).unwrap();
             assert_eq!(glyph.advance_width, font.glyph_width(0).unwrap());
         }

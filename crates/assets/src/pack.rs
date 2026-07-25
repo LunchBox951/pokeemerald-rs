@@ -38,7 +38,8 @@
 //! decode, this crate's pack loader stays decoupled from it (same rationale
 //! as `xtask::extract`/`crates::assets::pack` staying decoupled from each
 //! other — see this module's docs). [`AssetPack::font`] reaches a Latin
-//! font's glyph sheet (S-4, issue #114) — again a raw [`ImageRef`], with
+//! font's glyph sheet (S-4, issue #114) as a
+//! [`FontImageRef`] bound to its [`FontId`], with
 //! [`crate::fonts::FontGlyphSheet`] owning the per-glyph decode.
 //! [`AssetPack::text_window_frame`] / [`AssetPack::message_box`] bundle a
 //! border frame's tile bitmap with its palette (see [`WindowFrameHandle`]);
@@ -71,6 +72,8 @@ mod format;
 mod handles;
 
 use std::path::{Path, PathBuf};
+
+use crate::fonts::{FontId, FontImageRef};
 
 pub use error::PackError;
 pub use format::{EntryKind, FORMAT_VERSION, MAGIC};
@@ -309,20 +312,20 @@ impl AssetPack {
         self.raw(&format!("layout/{name}/border"))
     }
 
-    /// Look up a Latin font's glyph sheet by its normalized pack name (e.g.
-    /// `"normal"`, `"small_narrow"` — see `xtask::extract::mod`'s module
-    /// docs for the id scheme and [`FontId`](crate::fonts::FontId) for the
-    /// five names this pack currently ships). Hand the returned image to
+    /// Look up a Latin font's glyph sheet by its typed identity. The returned
+    /// [`FontImageRef`] is bound to that identity, preventing a caller from
+    /// combining one font's pixels with another font's width table. Hand it to
     /// [`FontGlyphSheet::new`](crate::fonts::FontGlyphSheet::new) to decode
     /// individual glyphs — this crate's pack loader and its font decode
     /// layer stay decoupled by design (see this module's docs), so this
-    /// method only fetches the raw sheet bitmap.
+    /// method only fetches and identity-binds the raw sheet bitmap.
     ///
     /// # Errors
     ///
     /// Same as [`image`](Self::image).
-    pub fn font(&self, name: &str) -> Result<ImageRef<'_>, PackError> {
-        self.image(&format!("font/{name}/glyphs"))
+    pub fn font(&self, font: FontId) -> Result<FontImageRef<'_>, PackError> {
+        let image = self.image(&format!("font/{}/glyphs", font.pack_name()))?;
+        Ok(FontImageRef::new(font, image))
     }
 
     /// Bundle one numbered text-window border frame's tile bitmap and

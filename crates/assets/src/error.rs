@@ -268,6 +268,14 @@ pub enum AssetError {
     /// count, and the actual pixel count. See
     /// [`FontGlyphSheet::new`](crate::fonts::FontGlyphSheet::new).
     FontSheetWrongPixelCount(&'static str, usize, usize),
+
+    /// A caller-supplied font glyph-sheet image contained a palette index
+    /// outside the four-colour `0..=3` range.
+    ///
+    /// Carries the offending font's asset-pack name, the pixel's row-major
+    /// index, and the invalid palette index. See
+    /// [`FontGlyphSheet::new`](crate::fonts::FontGlyphSheet::new).
+    FontSheetInvalidPixel(&'static str, usize, u8),
 }
 
 impl fmt::Display for AssetError {
@@ -324,6 +332,10 @@ impl fmt::Display for AssetError {
             Self::FontSheetWrongPixelCount(name, expected, actual) => write!(
                 f,
                 "font `{name}` glyph sheet wrong pixel count: expected {expected}, got {actual}"
+            ),
+            Self::FontSheetInvalidPixel(name, index, value) => write!(
+                f,
+                "font `{name}` glyph sheet has invalid palette index {value} at pixel {index}: expected 0..=3"
             ),
         }
     }

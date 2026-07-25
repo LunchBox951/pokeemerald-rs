@@ -6,6 +6,7 @@
 //! [`real_pack_loads_and_every_typed_accessor_works`], is `#[ignore]`d.
 
 use super::{AssetPack, PackError, MAGIC};
+use crate::fonts::FontId;
 
 /// Build a tiny, synthetic pack in memory (never real upstream art — per
 /// the issue's CI caveat, no test in this crate touches `pokeemerald/` or
@@ -346,14 +347,16 @@ fn font_accessor_reaches_the_glyph_sheet_image() {
     let path = write_synthetic_pack("font");
     let pack = AssetPack::load(&path).unwrap();
 
-    let image = pack.font("normal").unwrap();
+    let source = pack.font(FontId::Normal).unwrap();
+    assert_eq!(source.font(), FontId::Normal);
+    let image = source.image();
     assert_eq!(image.width, 2);
     assert_eq!(image.height, 2);
     assert_eq!(image.bit_depth, 2);
     assert_eq!(image.pixels, &[0, 1, 2, 3]);
 
-    let err = pack.font("does_not_exist").unwrap_err();
-    assert!(matches!(err, PackError::UnknownAsset(id) if id == "font/does_not_exist/glyphs"));
+    let err = pack.font(FontId::Small).unwrap_err();
+    assert!(matches!(err, PackError::UnknownAsset(id) if id == "font/small/glyphs"));
 
     let _ = std::fs::remove_file(path);
 }
@@ -571,11 +574,11 @@ fn real_pack_loads_and_every_typed_accessor_works() {
     // `crate::fonts::FontGlyphSheet`, glyph 0 (the space) included.
     for font in FontId::ALL {
         let image = pack
-            .font(font.pack_name())
+            .font(font)
             .unwrap_or_else(|e| panic!("font `{}` should be in the pack: {e}", font.pack_name()));
-        assert_eq!(image.width, crate::fonts::SHEET_WIDTH);
-        assert_eq!(image.height, crate::fonts::SHEET_HEIGHT);
-        let sheet = crate::fonts::FontGlyphSheet::new(font, image)
+        assert_eq!(image.image().width, crate::fonts::SHEET_WIDTH);
+        assert_eq!(image.image().height, crate::fonts::SHEET_HEIGHT);
+        let sheet = crate::fonts::FontGlyphSheet::new(image)
             .unwrap_or_else(|e| panic!("font `{}` sheet shape: {e}", font.pack_name()));
         let glyph = sheet
             .glyph(0)

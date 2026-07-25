@@ -565,6 +565,35 @@ const FONTS: [(&str, &str); 5] = [
     ("small_narrow", "latin_small_narrow.png"),
 ];
 
+/// Filename stems for every PNG required from `graphics/text_window/`.
+const TEXT_WINDOW_IMAGE_STEMS: [&str; 21] = [
+    "1",
+    "2",
+    "3",
+    "4",
+    "5",
+    "6",
+    "7",
+    "8",
+    "9",
+    "10",
+    "11",
+    "12",
+    "13",
+    "14",
+    "15",
+    "16",
+    "17",
+    "18",
+    "19",
+    "20",
+    "message_box",
+];
+
+/// Filename stems for every standalone palette required from
+/// `graphics/text_window/`.
+const TEXT_WINDOW_PALETTE_STEMS: [&str; 4] = ["text_pal1", "text_pal2", "text_pal3", "text_pal4"];
+
 /// Extract the five Latin font glyph sheets (see [`FONTS`] and the module
 /// docs). Per-glyph advance widths are not extracted here — they're ported
 /// as Rust data directly in `crates/assets::fonts`.
@@ -586,30 +615,32 @@ fn extract_fonts(upstream: &Path, writer: &mut PackWriter) -> Result<(), Extract
 fn extract_text_window(upstream: &Path, writer: &mut PackWriter) -> Result<(), ExtractError> {
     let dir = upstream.join("graphics/text_window");
 
-    let mut entries: Vec<PathBuf> = std::fs::read_dir(&dir)
-        .and_then(|it| {
-            it.map(|entry| entry.map(|e| e.path()))
-                .collect::<std::io::Result<_>>()
-        })
-        .map_err(|e| ExtractError::ReadFailed(dir.clone(), e.to_string()))?;
-    entries.sort();
+    validate_text_window_manifest(&dir)?;
 
-    for path in entries {
-        let Some(stem) = path.file_stem().map(|s| s.to_string_lossy().into_owned()) else {
-            continue;
-        };
-        match path.extension().and_then(|e| e.to_str()) {
-            Some("png") => {
-                decode_png_entry(&path, format!("text-window/image/{stem}"), writer)?;
-                let bytes = read_file(&path)?;
-                let colors =
-                    png::decode_palette(&bytes).map_err(|e| ExtractError::Png(path.clone(), e))?;
-                push_palette_entry(&colors, format!("text-window/palette/{stem}"), writer);
+    for stem in TEXT_WINDOW_IMAGE_STEMS {
+        let path = dir.join(format!("{stem}.png"));
+        decode_png_entry(&path, format!("text-window/image/{stem}"), writer)?;
+        let bytes = read_file(&path)?;
+        let colors = png::decode_palette(&bytes).map_err(|e| ExtractError::Png(path.clone(), e))?;
+        push_palette_entry(&colors, format!("text-window/palette/{stem}"), writer);
+    }
+    for stem in TEXT_WINDOW_PALETTE_STEMS {
+        let path = dir.join(format!("{stem}.pal"));
+        decode_palette_entry(&path, format!("text-window/palette/{stem}"), writer)?;
+    }
+    Ok(())
+}
+
+fn validate_text_window_manifest(dir: &Path) -> Result<(), ExtractError> {
+    for (stems, extension) in [
+        (TEXT_WINDOW_IMAGE_STEMS.as_slice(), "png"),
+        (TEXT_WINDOW_PALETTE_STEMS.as_slice(), "pal"),
+    ] {
+        for stem in stems {
+            let path = dir.join(format!("{stem}.{extension}"));
+            if !path.is_file() {
+                return Err(ExtractError::MissingTextWindowAsset(path));
             }
-            Some("pal") => {
-                decode_palette_entry(&path, format!("text-window/palette/{stem}"), writer)?;
-            }
-            _ => {}
         }
     }
     Ok(())
@@ -617,7 +648,10 @@ fn extract_text_window(upstream: &Path, writer: &mut PackWriter) -> Result<(), E
 
 #[cfg(test)]
 mod tests {
-    use super::{collect_pngs_sorted, extract_to, upstream_present, ExtractError, FONTS, LAYOUTS};
+    use super::{
+        collect_pngs_sorted, extract_to, upstream_present, validate_text_window_manifest,
+        ExtractError, FONTS, LAYOUTS, TEXT_WINDOW_IMAGE_STEMS, TEXT_WINDOW_PALETTE_STEMS,
+    };
 
     // Real-checkout tests: `pokeemerald/` must be present locally
     // (`./init.sh`) to run these. `cargo test --workspace` in CI never has
@@ -750,6 +784,42 @@ mod tests {
                 .extension()
                 .is_some_and(|ext| ext.eq_ignore_ascii_case("png")));
         }
+    }
+
+    #[test]
+    fn text_window_manifest_rejects_each_missing_required_file() {
+        let dir = std::env::temp_dir().join(format!(
+            "pokeemerald-rs-text-window-manifest-test-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let required: Vec<_> = TEXT_WINDOW_IMAGE_STEMS
+            .iter()
+            .map(|stem| format!("{stem}.png"))
+            .chain(
+                TEXT_WINDOW_PALETTE_STEMS
+                    .iter()
+                    .map(|stem| format!("{stem}.pal")),
+            )
+            .collect();
+        for filename in &required {
+            std::fs::write(dir.join(filename), []).unwrap();
+        }
+
+        for filename in &required {
+            let missing = dir.join(filename);
+            std::fs::remove_file(&missing).unwrap();
+            let err = validate_text_window_manifest(&dir).unwrap_err();
+            assert!(
+                matches!(err, ExtractError::MissingTextWindowAsset(path) if path == missing),
+                "wrong error for missing `{filename}`"
+            );
+            std::fs::write(&missing, []).unwrap();
+        }
+
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

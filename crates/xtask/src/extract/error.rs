@@ -68,6 +68,9 @@ pub enum ExtractError {
         /// The buffer's actual length.
         actual: usize,
     },
+    /// One of the fixed text-window source files required by the extraction
+    /// manifest was missing or not a regular file. Carries the expected path.
+    MissingTextWindowAsset(PathBuf),
 }
 
 impl fmt::Display for ExtractError {
@@ -103,6 +106,11 @@ impl fmt::Display for ExtractError {
             Self::LayoutBorderWrongSize { layout_id, actual } => write!(
                 f,
                 "layout `{layout_id}`: border.bin wrong size: expected exactly 8 bytes, got {actual}"
+            ),
+            Self::MissingTextWindowAsset(path) => write!(
+                f,
+                "required text-window asset `{}` is missing or is not a file",
+                path.display()
             ),
         }
     }
