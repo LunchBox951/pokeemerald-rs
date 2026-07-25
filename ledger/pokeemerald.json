@@ -16096,7 +16096,7 @@
     "graphics/title_screen": {
       "category": "graphics.scene",
       "kind": "dir",
-      "reason": "Full directory extracted into the local gitignored asset pack (issue #81, Discussion #71 policy A, F-3's real cargo xtask extract): all 6 PNGs decoded via the std-only PNG/inflate decoder, all 3 .pal files decoded via the JASC-PAL parser, and the 3 .bin tile-arrangement files copied as opaque raw blobs (their internal layout is not decoded). Gates I-2 (title screen). Read back via AssetPack::image/palette/raw in crates/assets/src/pack.rs.",
+      "reason": "Full directory extracted into the local gitignored asset pack (issue #81, Discussion #71 policy A, F-3's real cargo xtask extract): all 6 PNGs decoded via the std-only PNG/inflate decoder, all 3 .pal files decoded via the JASC-PAL parser, and the 3 .bin tile-arrangement files copied as opaque raw blobs (their internal layout is not decoded). emerald_version.png and press_start.png additionally get a title/palette/<name> entry decoded straight from their own embedded PLTE chunk (issue #116) -- upstream's build derives their in-game palette that way (INCGFX_U16(...png\", \".gbapal\") in graphics.c), not from a sibling .pal file. Gates I-2 (title screen). Read back via AssetPack::image/palette/raw in crates/assets/src/pack.rs.",
       "rust_target": "crates/xtask/src/extract/mod.rs",
       "spec": "S-4",
       "status": "ported"
@@ -26500,6 +26500,32 @@
       "status": "pending"
     },
     "src/title_screen.c": {
+      "artifacts": {
+        "SpriteCB_PokemonLogoShine": {
+          "reason": "The SHINE_MODE_SINGLE_NO_BG_COLOR sweep (x += SHINE_SPEED per tick from (0,68) until offscreen, then destroyed) transcribed as the pure fn shine_x(frame) (issue #116), covering the one shine trigger this module's modeled idle-state window includes. NOT covered: the other two upstream re-triggers (DOUBLE/SINGLE modes) deep in Task_TitleScreenPhase1's countdown, and the background-color flash/pulse those modes drive -- both depend on this module's un-modeled absolute boot timeline (see crates/pokeemerald-rs/src/title.rs's module docs, 'Documented fidelity deltas').",
+          "rust_target": "crates/pokeemerald-rs/src/title.rs",
+          "spec": "I-2",
+          "status": "rewritten"
+        },
+        "SpriteCB_PressStartCopyrightBanner": {
+          "reason": "Blink cadence (visible 16 ticks, invisible 16, alternating forever) transcribed as the pure fn press_start_visible(frame) -- issue #116. The copyright banner's own sAnimate is never set upstream, so it stays always-visible, matching this callback's else branch; that half needs no port of its own.",
+          "rust_target": "crates/pokeemerald-rs/src/title.rs",
+          "spec": "I-2",
+          "status": "rewritten"
+        },
+        "alpha_blend_steady_state": {
+          "reason": "Task_TitleScreenPhase2's terminal BLDCNT_TGT1_BG1|EFFECT_BLEND|TGT2_BG0|TGT2_BD, BLDALPHA_BLEND(6,15) -- set once and never revisited by Phase3 -- wired as a constant EffectsConfig in TitleScene::compose (issue #116). Only this static steady-state config is covered, not the surrounding task state machine (input handling, phase transitions), which stays pending on the parent file.",
+          "rust_target": "crates/pokeemerald-rs/src/title.rs",
+          "spec": "I-2",
+          "status": "rewritten"
+        },
+        "cloud_scroll": {
+          "reason": "Task_TitleScreenPhase3's cloud vertical scroll (tCounter/tBg1Y/gBattle_BG1_Y -> BG1VOFS) transcribed as the pure fn cloud_scroll_y(frame) (issue #116); confirmed vertical, not horizontal, by reading the actual code (BG1HOFS is only ever set once, statically, by ScanlineEffect_InitWave during boot). The legendary-marking palette pulse (UpdateLegendaryMarkingColor) in the same function is out of scope and stays pending.",
+          "rust_target": "crates/pokeemerald-rs/src/title.rs",
+          "spec": "I-2",
+          "status": "rewritten"
+        }
+      },
       "category": "code.source",
       "kind": "file",
       "status": "pending"
