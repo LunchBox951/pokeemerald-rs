@@ -15,12 +15,24 @@
 //! stays exactly as it was before I-2 -- see [`crate::title`]'s module docs
 //! for the real title screen, which only [`App::new`] (the real windowed
 //! entry point) composes.
+//!
+//! # Animating the real title screen (I-2, issue #116)
+//!
+//! [`crate::title::TitleScene::compose`] takes a `frame` counter (the same
+//! deterministic, wall-clock-free counter [`crate::title`]'s module docs
+//! describe): [`App::new`] keeps the loaded [`TitleScene`] alive alongside a
+//! running tick count, and every [`App::step`] recomposes the *next* tick's
+//! frame right after presenting the current one -- so the windowed title
+//! screen animates (cloud scroll, "Press Start" blink, the logo shine
+//! sweep) using exactly the same [`TitleScene::compose`] calls this crate's
+//! tests and `xtask`'s smoke suite exercise headlessly, just one call per
+//! real frame instead of at two fixed indices.
 
 use platform::{ButtonState, Buttons, Frame, Platform, PlatformError};
 
 use crate::frame::to_platform_frame;
 use crate::scene::BootScene;
-use crate::title::{self, TitleSceneError};
+use crate::title::{self, TitleScene, TitleSceneError};
 
 /// Compose a fresh [`BootScene`] into a `platform`-ready frame.
 ///
@@ -93,14 +105,26 @@ const BUTTON_NAMES: [(Buttons, &str); 10] = [
 /// unchanged every frame.
 ///
 /// No engine/battle state yet (out of scope for this slice, see the crate
-/// root docs) -- the scene is a fixed placeholder; a future slice replaces
-/// `frame` with real per-frame recomposition once there is engine state to
-/// reflect. [`App::new`] composes the real title screen
-/// ([`compose_boot_frame`]'s synthetic scene is [`App::new_headless`]-only,
-/// see the module docs).
+/// root docs). [`App::new`] composes the real title screen and keeps it
+/// animating every frame (module docs' "Animating the real title screen"
+/// section); [`App::new_headless`]'s synthetic [`BootScene`] stays a fixed
+/// placeholder, unchanged from before I-2.
 pub struct App {
     platform: Platform,
     frame: Box<Frame>,
+    /// The real title screen's scene plus its running tick count, kept
+    /// alive so [`App::step`] can recompose it every frame -- `None` for a
+    /// headless `App` (module docs), whose [`BootScene`] frame never
+    /// changes.
+    title: Option<AnimatedTitle>,
+}
+
+/// [`App`]'s per-frame animation state for the real title screen (module
+/// docs): the loaded scene, and the tick most recently composed into
+/// [`App`]'s cached `frame`.
+struct AnimatedTitle {
+    scene: TitleScene,
+    tick: u32,
 }
 
 impl App {
@@ -120,9 +144,13 @@ impl App {
     /// platform's windowing event loop could not be created.
     pub fn new(title: impl Into<String>) -> Result<Self, AppError> {
         let scene = title::load_default()?;
-        let frame = to_platform_frame(&scene.compose());
+        let frame = to_platform_frame(&scene.compose(0));
         let platform = Platform::new(title)?;
-        Ok(Self { platform, frame })
+        Ok(Self {
+            platform,
+            frame,
+            title: Some(AnimatedTitle { scene, tick: 0 }),
+        })
     }
 
     /// Build the I-1 synthetic placeholder scene against `platform`'s
@@ -141,6 +169,7 @@ impl App {
         Self {
             platform: Platform::new_headless(),
             frame: compose_boot_frame(),
+            title: None,
         }
     }
 
@@ -160,9 +189,12 @@ impl App {
     }
 
     /// Run exactly one iteration of the frame loop body: pump input, log
-    /// any newly-pressed buttons, present the composed scene, and pace to
-    /// the next GBA vblank (a no-op for a headless `App`, see
-    /// `platform::Platform::wait_for_next_frame`).
+    /// any newly-pressed buttons, present the composed scene, pace to the
+    /// next GBA vblank (a no-op for a headless `App`, see
+    /// `platform::Platform::wait_for_next_frame`), then -- for a real title
+    /// screen ([`App::new`]) only -- recompose the *next* tick's frame so
+    /// the following [`App::step`] presents it (module docs' "Animating the
+    /// real title screen" section).
     ///
     /// Returns whether the loop should keep going -- `false` once
     /// `platform::Platform::pump` reports a close request, at which point
@@ -183,6 +215,10 @@ impl App {
         }
         self.platform.present(&self.frame)?;
         self.platform.wait_for_next_frame();
+        if let Some(title) = &mut self.title {
+            title.tick = title.tick.wrapping_add(1);
+            self.frame = to_platform_frame(&title.scene.compose(title.tick));
+        }
         Ok(true)
     }
 

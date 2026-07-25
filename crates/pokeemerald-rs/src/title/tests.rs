@@ -1,14 +1,17 @@
-//! Unit tests for [`super::TitleScene`] and its private decoding helpers.
+//! Unit tests for [`super::TitleScene`] and its private decoding/animation
+//! helpers.
 //!
 //! Every test builds small **synthetic** fixtures rather than touching the
 //! real extracted pack, per `assets::pack::tests`' CI caveat (CI has no
 //! `pokeemerald/` checkout and no real pack). The one exception,
-//! [`real_pack_composes_a_non_blank_deterministic_title_frame`], is
+//! [`real_pack_composes_non_blank_deterministic_title_frames`], is
 //! `#[ignore]`d.
 
 use super::{
-    affine_tilemap_from_raw, image_to_tileset, regular_tilemap_from_raw, title_palette_from_refs,
-    TitleSceneError, LOGO_PALETTE_COLORS,
+    affine_tilemap_from_raw, cloud_scroll_y, crop_and_pack_tile_bytes, image_to_tileset,
+    press_start_visible, regular_tilemap_from_raw, shine_x, sprite_entries,
+    title_palette_from_refs, TitleSceneError, LOGO_PALETTE_COLORS, NUM_COPYRIGHT_FRAMES,
+    NUM_PRESS_START_FRAMES, SHINE_DESPAWN_X,
 };
 use assets::{AssetPack, ImageRef};
 use rendering::{BitDepth, RenderError};
@@ -305,22 +308,194 @@ fn load_default_reports_pack_missing_when_no_pack_is_extracted() {
 /// extracted title-screen assets, not just synthetic fixtures. Needs a
 /// local pack: run `cargo xtask extract` first, then `cargo test -p
 /// pokeemerald-rs -- --ignored`.
+///
+/// Checks frames 0 and 37 specifically (I-2, issue #116): both must be
+/// non-blank and each deterministic (composing the same frame index twice
+/// is pixel-identical), and the two must *differ* from each other --
+/// frame 37 falls inside the logo shine's sweep (`shine_x`) and the "Press
+/// Start" banner's blink window (`press_start_visible`), both of which have
+/// already moved/changed state relative to frame 0.
 #[test]
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
-fn real_pack_composes_a_non_blank_deterministic_title_frame() {
+fn real_pack_composes_non_blank_deterministic_title_frames() {
     let scene = super::load_default().expect("run `cargo xtask extract` first");
-    let first = scene.compose();
-    let second = scene.compose();
+
+    let frame0_first = scene.compose(0);
+    let frame0_second = scene.compose(0);
     assert_eq!(
-        first.pixels(),
-        second.pixels(),
-        "composing must be deterministic"
+        frame0_first.pixels(),
+        frame0_second.pixels(),
+        "composing frame 0 twice must be deterministic"
     );
     assert!(
-        first
+        frame0_first
             .pixels()
             .iter()
             .any(|&p| p != rendering::Rgb888::BLACK),
-        "the real title screen must produce a non-blank frame"
+        "frame 0 must be a non-blank frame"
     );
+
+    let frame37_first = scene.compose(37);
+    let frame37_second = scene.compose(37);
+    assert_eq!(
+        frame37_first.pixels(),
+        frame37_second.pixels(),
+        "composing frame 37 twice must be deterministic"
+    );
+    assert!(
+        frame37_first
+            .pixels()
+            .iter()
+            .any(|&p| p != rendering::Rgb888::BLACK),
+        "frame 37 must be a non-blank frame"
+    );
+
+    assert_ne!(
+        frame0_first.pixels(),
+        frame37_first.pixels(),
+        "frame 0 and frame 37 must differ (shine sweep / blink cadence)"
+    );
+}
+
+// -- OBJ sprite animation cadences (I-2, issue #116) -- all pure functions
+// of `frame`, so none of these need a pack at all. --------------------------
+
+#[test]
+fn press_start_blinks_every_16_ticks() {
+    // `sTimer` starts at 0 and is incremented *before* the bit-16 test
+    // (`SpriteCB_PressStartCopyrightBanner`), so frame 0 -> timer 1 (bit 4
+    // clear -> invisible), frames 15 and 16 straddle the flip to visible.
+    assert!(!press_start_visible(0));
+    assert!(!press_start_visible(14));
+    assert!(press_start_visible(15));
+    assert!(press_start_visible(30));
+    assert!(!press_start_visible(31));
+    assert!(!press_start_visible(46));
+    assert!(press_start_visible(47));
+}
+
+#[test]
+fn shine_sweeps_at_4px_per_tick_then_despawns() {
+    assert_eq!(shine_x(0), Some(4));
+    assert_eq!(shine_x(1), Some(8));
+    assert_eq!(shine_x(36), Some(148));
+    // The last tick still `< SHINE_DESPAWN_X` (272): frame 66 -> x=268.
+    assert_eq!(shine_x(66), Some(268));
+    assert!(shine_x(66).unwrap() < SHINE_DESPAWN_X);
+    // Frame 67 -> x=272, no longer `< SHINE_DESPAWN_X`: destroyed.
+    assert_eq!(shine_x(67), None);
+    assert_eq!(shine_x(1000), None);
+}
+
+#[test]
+#[allow(clippy::cast_possible_truncation)] // `tb_g1_y` stays tiny over 20 ticks.
+fn cloud_scroll_advances_roughly_one_pixel_every_4_ticks() {
+    // Hand-simulated from `Task_TitleScreenPhase3`'s own per-tick update
+    // (module docs): `tCounter` increments every tick, `tBg1Y` only on odd
+    // `tCounter` values, and the applied scroll is `tBg1Y / 2`.
+    let mut counter: u32 = 0;
+    let mut tb_g1_y: u32 = 0;
+    let mut expected = Vec::new();
+    for _ in 0..20 {
+        counter += 1;
+        if counter & 1 != 0 {
+            tb_g1_y += 1;
+        }
+        expected.push((tb_g1_y / 2) as u16);
+    }
+    let actual: Vec<u16> = (0..20).map(cloud_scroll_y).collect();
+    assert_eq!(actual, expected);
+    // Confirms genuine (if slow) forward motion, not a stuck value.
+    assert!(actual[19] > actual[0]);
+}
+
+#[test]
+fn cloud_scroll_is_a_pure_function_of_frame() {
+    assert_eq!(cloud_scroll_y(37), cloud_scroll_y(37));
+}
+
+#[test]
+fn sprite_entries_always_includes_the_settled_version_banner() {
+    // The version banner is permanently visible/settled in this module's
+    // modeled idle state (module docs' "Documented fidelity deltas") --
+    // true at frame 0 and arbitrarily far into the future alike.
+    for frame in [0, 37, 10_000] {
+        let entries = sprite_entries(frame);
+        let version_banner_count = entries
+            .iter()
+            .filter(|e| e.bit_depth() == BitDepth::Bpp8)
+            .count();
+        assert_eq!(version_banner_count, 2, "frame {frame}");
+        assert!(
+            entries
+                .iter()
+                .filter(|e| e.bit_depth() == BitDepth::Bpp8)
+                .all(|e| e.enabled()),
+            "frame {frame}: both version banner halves must be visible"
+        );
+    }
+}
+
+#[test]
+fn sprite_entries_always_includes_5_press_start_and_5_copyright_segments() {
+    for frame in [0, 15, 16, 37] {
+        let entries = sprite_entries(frame);
+        let four_bpp_count = entries
+            .iter()
+            .filter(|e| e.bit_depth() == BitDepth::Bpp4)
+            .count();
+        // 5 "Press Start" + 5 copyright, plus the shine while it's still
+        // sweeping (true for every frame this test checks).
+        assert_eq!(
+            four_bpp_count,
+            NUM_PRESS_START_FRAMES + NUM_COPYRIGHT_FRAMES + 1,
+            "frame {frame}"
+        );
+    }
+}
+
+#[test]
+fn sprite_entries_drops_the_shine_once_it_would_despawn() {
+    assert_eq!(
+        sprite_entries(0).len(),
+        2 + NUM_PRESS_START_FRAMES + NUM_COPYRIGHT_FRAMES + 1
+    );
+    assert_eq!(
+        sprite_entries(1000).len(),
+        2 + NUM_PRESS_START_FRAMES + NUM_COPYRIGHT_FRAMES,
+        "the shine sprite must be gone long after it despawns"
+    );
+}
+
+#[test]
+fn sprite_entries_press_start_visibility_tracks_the_blink_cadence_but_copyright_never_blinks() {
+    let entries_invisible_tick = sprite_entries(0); // press_start_visible(0) == false
+    let press_start: Vec<_> = entries_invisible_tick[2..2 + NUM_PRESS_START_FRAMES].to_vec();
+    let copyright: Vec<_> = entries_invisible_tick
+        [2 + NUM_PRESS_START_FRAMES..2 + NUM_PRESS_START_FRAMES + NUM_COPYRIGHT_FRAMES]
+        .to_vec();
+    assert!(press_start.iter().all(|e| !e.enabled()));
+    assert!(copyright.iter().all(|e| e.enabled()));
+
+    let entries_visible_tick = sprite_entries(15); // press_start_visible(15) == true
+    let press_start: Vec<_> = entries_visible_tick[2..2 + NUM_PRESS_START_FRAMES].to_vec();
+    assert!(press_start.iter().all(|e| e.enabled()));
+}
+
+#[test]
+fn crop_and_pack_tile_bytes_crops_the_requested_sub_rectangle() {
+    // A 16x8 (2x1 tile) source image: left tile all index 1, right tile all
+    // index 2 (same fixture style as `image_to_tileset`'s own tests above).
+    let pixels = tiled_image(16, 8, |col, _row| if col == 0 { 1 } else { 2 });
+    let image = ImageRef {
+        width: 16,
+        height: 8,
+        bit_depth: 4,
+        pixels: &pixels,
+    };
+    // Crop just the right 8x8 tile.
+    let packed = crop_and_pack_tile_bytes(image, 8, 0, 8, 8, BitDepth::Bpp4);
+    let tileset = rendering::Tileset::decode(BitDepth::Bpp4, &packed).unwrap();
+    assert_eq!(tileset.len(), 1);
+    assert_eq!(tileset.tile(0).unwrap().index(0, 0), 2);
 }
