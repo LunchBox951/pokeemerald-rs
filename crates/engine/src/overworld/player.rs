@@ -28,7 +28,7 @@ use assets::MapId;
 
 use super::collision::elevation_mismatch;
 use super::direction::Direction;
-use super::map_runtime::{MapDimensions, MapRuntime};
+use super::map_runtime::{ConnectedMapData, MapRuntime};
 
 /// Frames a normal (on-foot, not running) walk step takes to cross one
 /// tile. Mirrors upstream `MOVE_SPEED_NORMAL`'s per-frame step table
@@ -99,9 +99,8 @@ pub enum StepOutcome {
     /// The step landed outside the current map's grid, on a tile a
     /// [`super::map_runtime::MapConnection`](assets::MapConnection) covers.
     /// The caller must rebind its [`MapRuntime`] to `to_map`'s data before
-    /// the next call, and re-seat the player's elevation from the landing
-    /// tile of the new grid (the crossing itself cannot read it) —
-    /// `to_position` is already expressed in `to_map`'s own
+    /// the next call. The landing cell has already been checked and its
+    /// elevation adopted; `to_position` is expressed in `to_map`'s own
     /// coordinate space (see
     /// [`MapRuntime::resolve_connection`](super::map_runtime::MapRuntime::resolve_connection)).
     Crossed {
@@ -201,7 +200,7 @@ impl PlayerState {
         &mut self,
         input: Option<Direction>,
         runtime: &MapRuntime<'_>,
-        dims: &impl MapDimensions,
+        maps: &impl ConnectedMapData,
     ) -> StepOutcome {
         if self.in_transit() {
             return StepOutcome::Idle;
@@ -253,8 +252,32 @@ impl PlayerState {
             return StepOutcome::Advanced { from, to: target };
         }
 
-        if let Some(crossing) = runtime.resolve_connection(direction, target.0, target.1, dims) {
+        if let Some(crossing) = runtime.resolve_connection(direction, target.0, target.1, maps) {
+            let Some(cell) =
+                maps.metatile_cell(crossing.target, crossing.position.0, crossing.position.1)
+            else {
+                return StepOutcome::Blocked {
+                    direction,
+                    collision: super::collision::Collision::Impassable,
+                };
+            };
+            if cell.collision != 0 {
+                return StepOutcome::Blocked {
+                    direction,
+                    collision: super::collision::Collision::Impassable,
+                };
+            }
+            if elevation_mismatch(self.elevation, cell.elevation) {
+                return StepOutcome::Blocked {
+                    direction,
+                    collision: super::collision::Collision::ElevationMismatch,
+                };
+            }
+
             self.position = crossing.position;
+            if cell.elevation != super::collision::ELEVATION_MULTI_LEVEL {
+                self.elevation = cell.elevation;
+            }
             self.transit_frames = Some(0);
             return StepOutcome::Crossed {
                 to_map: crossing.target,
@@ -326,6 +349,52 @@ mod tests {
 
     fn no_connections(_: MapId) -> Option<(u16, u16)> {
         None
+    }
+
+    #[derive(Debug, Clone, Copy)]
+    struct SingleConnectedMap {
+        id: MapId,
+        dimensions: (u16, u16),
+        landing_position: TilePos,
+        landing_cell: MetatileCell,
+    }
+
+    impl ConnectedMapData for SingleConnectedMap {
+        fn dimensions(&self, map: MapId) -> Option<(u16, u16)> {
+            (map == self.id).then_some(self.dimensions)
+        }
+
+        fn metatile_cell(&self, map: MapId, x: i32, y: i32) -> Option<MetatileCell> {
+            (map == self.id && (x, y) == self.landing_position).then_some(self.landing_cell)
+        }
+    }
+
+    fn south_connected_runtime() -> MapRuntime<'static> {
+        let (bytes, mut header, events) = flat_runtime(5, 5, |_, _| 0);
+        header.connections = &[MapConnection {
+            direction: assets::Direction::South,
+            offset: 0,
+            target: MapId("MAP_SOUTH"),
+        }];
+        let layout = assets::MapLayout {
+            id: assets::LayoutId("MAP_TEST"),
+            name: "MapTest",
+            width: 5,
+            height: 5,
+            primary_tileset: "gTileset_General",
+            secondary_tileset: "gTileset_General",
+        };
+        let bytes = Box::leak(bytes.into_boxed_slice());
+        let header = Box::leak(Box::new(header));
+        let events = Box::leak(Box::new(events));
+        MapRuntime::new(
+            MapId("MAP_TEST"),
+            header,
+            events,
+            layout.grid(bytes).unwrap(),
+            MetatileAttributeTable::new(&[]),
+            MetatileAttributeTable::new(&[]),
+        )
     }
 
     #[test]
@@ -731,58 +800,20 @@ mod tests {
 
     #[test]
     fn stepping_off_the_edge_with_a_connection_crosses_maps() {
-        let (bytes, _header, events) = flat_runtime(5, 5, |_, _| 0);
-        let connections: &'static [MapConnection] = &[MapConnection {
-            direction: assets::Direction::South,
-            offset: 0,
-            target: assets::MapId("MAP_SOUTH"),
-        }];
-        let header = MapHeader {
-            id: assets::MapId("MAP_TEST"),
-            group: 0,
-            num: 0,
-            name: "MapTest",
-            layout: assets::LayoutId("MAP_TEST"),
-            music: assets::MusicId(0),
-            region_map_section: RegionMapSectionId("MAPSEC_NONE"),
-            requires_flash: false,
-            weather: Weather::None,
-            map_type: MapType::Route,
-            allow_bike: true,
-            allow_escape: true,
-            allow_run: true,
-            show_name: false,
-            battle_scene: BattleScene::Normal,
-            connections,
-        };
-        let layout = assets::MapLayout {
-            id: assets::LayoutId("MAP_TEST"),
-            name: "MapTest",
-            width: 5,
-            height: 5,
-            primary_tileset: "gTileset_General",
-            secondary_tileset: "gTileset_General",
-        };
-        let grid = layout.grid(&bytes).unwrap();
-        let runtime = MapRuntime::new(
-            assets::MapId("MAP_TEST"),
-            &header,
-            &events,
-            grid,
-            MetatileAttributeTable::new(&[]),
-            MetatileAttributeTable::new(&[]),
-        );
-
-        let dims = |map: MapId| -> Option<(u16, u16)> {
-            if map == MapId("MAP_SOUTH") {
-                Some((5, 5))
-            } else {
-                None
-            }
+        let runtime = south_connected_runtime();
+        let maps = SingleConnectedMap {
+            id: MapId("MAP_SOUTH"),
+            dimensions: (5, 5),
+            landing_position: (2, 0),
+            landing_cell: MetatileCell {
+                metatile_id: 1,
+                collision: 0,
+                elevation: 0,
+            },
         };
 
         let mut player = PlayerState::new((2, 4), 3, Direction::South);
-        let outcome = player.step(Some(Direction::South), &runtime, &dims);
+        let outcome = player.step(Some(Direction::South), &runtime, &maps);
         assert_eq!(
             outcome,
             StepOutcome::Crossed {
@@ -791,6 +822,59 @@ mod tests {
             }
         );
         assert_eq!(player.position(), (2, 0));
+        assert_eq!(player.elevation(), 0);
+    }
+
+    #[test]
+    fn connected_map_collision_bit_blocks_crossing() {
+        let runtime = south_connected_runtime();
+        let maps = SingleConnectedMap {
+            id: MapId("MAP_SOUTH"),
+            dimensions: (5, 5),
+            landing_position: (2, 0),
+            landing_cell: MetatileCell {
+                metatile_id: 1,
+                collision: 1,
+                elevation: 3,
+            },
+        };
+        let mut player = PlayerState::new((2, 4), 3, Direction::South);
+
+        assert_eq!(
+            player.step(Some(Direction::South), &runtime, &maps),
+            StepOutcome::Blocked {
+                direction: Direction::South,
+                collision: super::super::collision::Collision::Impassable,
+            }
+        );
+        assert_eq!(player.position(), (2, 4));
+        assert_eq!(player.elevation(), 3);
+    }
+
+    #[test]
+    fn connected_map_elevation_mismatch_blocks_crossing() {
+        let runtime = south_connected_runtime();
+        let maps = SingleConnectedMap {
+            id: MapId("MAP_SOUTH"),
+            dimensions: (5, 5),
+            landing_position: (2, 0),
+            landing_cell: MetatileCell {
+                metatile_id: 1,
+                collision: 0,
+                elevation: 4,
+            },
+        };
+        let mut player = PlayerState::new((2, 4), 3, Direction::South);
+
+        assert_eq!(
+            player.step(Some(Direction::South), &runtime, &maps),
+            StepOutcome::Blocked {
+                direction: Direction::South,
+                collision: super::super::collision::Collision::ElevationMismatch,
+            }
+        );
+        assert_eq!(player.position(), (2, 4));
+        assert_eq!(player.elevation(), 3);
     }
 
     #[test]

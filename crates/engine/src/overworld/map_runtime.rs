@@ -23,11 +23,10 @@
 //! itself (that's the integration lane's job — see the crate-level
 //! `crate::overworld` docs) and it never holds every map in the game at
 //! once. Both the current map's [`LayoutGrid`]/[`MetatileAttributeTable`]
-//! bytes and a connection target's dimensions (needed only for
-//! [`MapRuntime::resolve_connection`]) are supplied by the caller — the
-//! latter through the small [`MapDimensions`] trait rather than a
-//! crate-owned table of every map, so tests can supply a two-entry synthetic
-//! map graph instead of the real 518-map table.
+//! bytes and a connection target's dimensions/landing cells are supplied by
+//! the caller — the latter through the small [`ConnectedMapData`] trait
+//! rather than a crate-owned table of every map, so tests can supply a
+//! two-entry synthetic map graph instead of the real 518-map table.
 
 use assets::{
     CoordEvent, LayoutGrid, MapConnection, MapEvents, MapHeader, MapId, MetatileAttributeTable,
@@ -52,28 +51,37 @@ pub struct ConnectionCrossing {
     pub position: (i32, i32),
 }
 
-/// Supplies a connected map's layout dimensions so [`MapRuntime`] can
-/// resolve connection-edge crossings without owning every map's data
-/// itself.
+/// Supplies the connected-map data needed to resolve and validate an edge
+/// crossing without making [`MapRuntime`] own every map.
 ///
 /// The integration lane implements this by wrapping the real
 /// `assets::MapHeaderTable` (to go from a [`MapId`] to its `layout` id) and
-/// `assets::LayoutTable` (to go from a layout id to its width/height) — both
-/// are plain compiled-in metadata tables, not gitignored pack bytes, so
-/// wrapping them here does not violate the "don't load the pack yourself"
-/// rule. Tests implement this over a small hand-written map graph (see
-/// `crate::overworld::map_runtime::tests`).
+/// `assets::LayoutTable` (to go from a layout id to its width/height), plus
+/// the destination layout's decoded grid cell. These are caller-owned
+/// tables/pack data, so wrapping them here does not violate the "don't load
+/// the pack yourself" rule. Tests implement this over a small hand-written
+/// map graph (see `crate::overworld::map_runtime::tests`).
 ///
 /// A blanket implementation over `Fn(MapId) -> Option<(u16, u16)>` is
-/// provided below so a plain closure (or a `HashMap::get` wrapped in one)
-/// satisfies this trait without a dedicated type.
-pub trait MapDimensions {
+/// provided below for geometry-only users such as
+/// [`MapRuntime::resolve_connection`]. Its cell lookup deliberately returns
+/// `None`, so [`crate::overworld::player::PlayerState::step`] fails closed
+/// rather than entering a connected map whose landing tile was not supplied.
+pub trait ConnectedMapData {
     /// `map`'s `(width, height)` in metatiles, or `None` if `map` is not
     /// known to this dimension source.
     fn dimensions(&self, map: MapId) -> Option<(u16, u16)>;
+
+    /// The decoded cell at `(x, y)` in `map`, or `None` if the map/cell data
+    /// is unavailable. Player movement requires this to validate collision
+    /// and elevation before committing a connection crossing, mirroring the
+    /// neighbouring cells in upstream's padded map grid.
+    fn metatile_cell(&self, _map: MapId, _x: i32, _y: i32) -> Option<MetatileCell> {
+        None
+    }
 }
 
-impl<F> MapDimensions for F
+impl<F> ConnectedMapData for F
 where
     F: Fn(MapId) -> Option<(u16, u16)>,
 {
@@ -249,14 +257,14 @@ impl<'a> MapRuntime<'a> {
         direction: Direction,
         x: i32,
         y: i32,
-        dims: &impl MapDimensions,
+        maps: &impl ConnectedMapData,
     ) -> Option<ConnectionCrossing> {
         let wanted = direction.to_connection_direction();
         for connection in self.header.connections {
             if connection.direction != wanted {
                 continue;
             }
-            let Some((target_width, target_height)) = dims.dimensions(connection.target) else {
+            let Some((target_width, target_height)) = maps.dimensions(connection.target) else {
                 continue;
             };
             let Some(position) =
@@ -724,7 +732,7 @@ mod tests {
     }
 
     #[test]
-    fn map_dimensions_blanket_impl_accepts_a_closure() {
+    fn connected_map_data_blanket_impl_accepts_a_dimensions_closure() {
         let dims = |map: MapId| -> Option<(u16, u16)> {
             if map == MapId("MAP_X") {
                 Some((4, 4))

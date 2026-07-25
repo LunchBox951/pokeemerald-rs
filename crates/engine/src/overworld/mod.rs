@@ -56,6 +56,6 @@ pub mod warp;
 
 pub use collision::{elevation_mismatch, Collision, ELEVATION_MULTI_LEVEL, ELEVATION_TRANSITION};
 pub use direction::Direction;
-pub use map_runtime::{ConnectionCrossing, MapDimensions, MapRuntime, NUM_METATILES_IN_PRIMARY};
+pub use map_runtime::{ConnectedMapData, ConnectionCrossing, MapRuntime, NUM_METATILES_IN_PRIMARY};
 pub use player::{PlayerState, StepOutcome, TilePos, WALK_FRAMES_PER_TILE};
 pub use warp::{resolve_warp_event, trigger_warp, warp_destination_position, WarpTrigger};
