@@ -143,8 +143,10 @@ pub enum Overflow {
 /// [`Palette`], and an [`AffineTilemap`], sampled through an
 /// [`AffineMatrix`] and a reference point.
 ///
-/// No cross-layer priority ordering (see [`compositor`](crate::compositor)),
-/// no windows/blending/mosaic — see issue #98's scope.
+/// No cross-layer priority ordering. Windows, color effects, and mosaic
+/// (issue #99) are handled around this type by
+/// [`compositor::BgSlot`](crate::compositor::BgSlot) — see
+/// [`compositor`](crate::compositor).
 #[derive(Debug, Clone, Copy)]
 pub struct AffineBgLayer<'a> {
     tileset: &'a Tileset,

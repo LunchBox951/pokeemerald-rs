@@ -20,10 +20,18 @@
 //! [`compose_frame`]/[`BgSlot`] without changing their signatures
 //! ([`BgSlot::new_affine`] adds the affine BG entry point).
 //!
-//! Windows (`WIN0`/`WIN1`/`OBJWIN`), alpha blending/brightness effects, and
-//! mosaic remain out of scope; wiring this crate into `platform`'s
-//! presentation surface is a future integration issue
-//! `(constitution-vs-roadmap)`.
+//! Slice 4 (issue #99) completes the deferred effect group: hardware
+//! windows (`WIN0`/`WIN1`/`OBJWIN`/`WINOUT`, [`window`]), color special
+//! effects (alpha blend, brighten, darken, [`effects`]), and mosaic
+//! ([`mosaic`]), all wired into [`compositor::compose_frame_with_effects`]
+//! via the [`compositor::FrameEffects`] parameter struct.
+//! [`compose_frame`]'s own signature is unchanged — it delegates to
+//! [`compositor::compose_frame_with_effects`] with
+//! [`compositor::FrameEffects::default`], which reproduces pre-slice-4
+//! output byte-for-byte.
+//!
+//! Wiring this crate into `platform`'s presentation surface is a future
+//! integration issue `(constitution-vs-roadmap)`.
 //!
 //! `std`-only, no FFI, no dependency on `platform` `(minimal-deps, no-ffi)`.
 //! Behaviour is transcribed from `pokeemerald/src/palette.c`,
@@ -35,23 +43,31 @@ pub mod affine;
 pub mod bg;
 pub mod bg_affine;
 pub mod compositor;
+pub mod effects;
 pub mod error;
 pub mod framebuffer;
+pub mod mosaic;
 pub mod oam;
 pub mod palette;
 pub mod sprite;
 mod sprite_affine;
 pub mod tile;
 pub mod tilemap;
+pub mod window;
 
 pub use affine::AffineMatrix;
 pub use bg::BgLayer;
 pub use bg_affine::{AffineBgLayer, AffineTilemap, Overflow};
-pub use compositor::{compose_frame, BgSlot};
+pub use compositor::{compose_frame, compose_frame_with_effects, BgSlot, FrameEffects};
+pub use effects::{
+    alpha_blend, brighten, darken, ColorEffect, EffectsConfig, LayerKind, LayerTargets,
+};
 pub use error::RenderError;
 pub use framebuffer::Framebuffer;
-pub use oam::{obj_dimensions, AffineMode, OamEntry, ObjShape};
+pub use mosaic::{MosaicConfig, MosaicSize};
+pub use oam::{obj_dimensions, AffineMode, OamEntry, ObjMode, ObjShape};
 pub use palette::{Bgr555, Palette, Rgb888};
 pub use sprite::{SpriteLayer, SpritePixel};
 pub use tile::{BitDepth, Tile, Tileset};
 pub use tilemap::{ScreenEntry, Tilemap};
+pub use window::{WindowConfig, WindowLayerEnable, WindowRange, WindowRect};
