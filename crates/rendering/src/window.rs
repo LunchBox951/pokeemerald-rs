@@ -33,8 +33,10 @@ impl WindowRange {
         Self { start, end }
     }
 
-    /// Whether `coord` falls within this range (module docs for wrap
-    /// semantics).
+    /// Whether `coord` falls within this range using the **horizontal**
+    /// (`WINxH`) wrap semantics (module docs). This is the 8-bit spatial wrap
+    /// mgba's `_breakWindow` encodes; the vertical axis does *not* share it —
+    /// see [`contains_vertical`](Self::contains_vertical).
     #[must_use]
     pub const fn contains(&self, coord: u8) -> bool {
         if self.start < self.end {
@@ -44,6 +46,46 @@ impl WindowRange {
         } else {
             false
         }
+    }
+
+    /// Whether visible scanline `y` (`0..160`) falls within this range using
+    /// the **vertical** (`WINxV`) semantics, which — unlike the horizontal
+    /// axis — are *not* a spatial wrap but the observable result of mgba's
+    /// per-scanline `on` flip-flop (`video-software.c`
+    /// `GBAVideoSoftwareRendererStepWindow`, ~881-892) seeded by the vblank
+    /// preprocessing in `GBAVideoSoftwareRendererFinishFrame` (~760-772).
+    ///
+    /// - `start <= end` (including `start == end`, empty): the ordinary
+    ///   half-open band `[start, end)`. An `end` past the screen simply keeps
+    ///   the window open to the bottom, which `[start, 160)` already yields for
+    ///   visible `y`.
+    /// - `start > end` (**wrapped**): the window closes at `end` and reopens at
+    ///   `start`. The upper band `[start, 160)` is only reachable when
+    ///   `start < 160`. The lower band `[0, end)` reappears at line 0 only if
+    ///   the flip-flop was armed during vblank, which the preprocessing does
+    ///   solely for a `start` in `[160, 228)` (`GBA_VIDEO_VERTICAL_PIXELS ..
+    ///   VIDEO_VERTICAL_TOTAL_PIXELS`); a `start` of `228..=255` never arms it,
+    ///   so the window never opens and every line falls through to `WINOUT`.
+    #[must_use]
+    pub const fn contains_vertical(&self, y: u8) -> bool {
+        /// mgba's `GBA_VIDEO_VERTICAL_PIXELS` — the first non-visible line.
+        const VISIBLE_LINES: u8 = 160;
+        /// mgba's `VIDEO_VERTICAL_TOTAL_PIXELS` — one past the last reachable
+        /// `VCOUNT`; a wrapped `start` at or beyond this never reopens.
+        const TOTAL_LINES: u16 = 228;
+
+        if self.start <= self.end {
+            // Non-wrapping (start == end is an empty band): the flip-flop is
+            // armed at `start` and cleared at `end`, both within the visible
+            // range only when they are, giving exactly [start, end).
+            return y >= self.start && y < self.end;
+        }
+        // Wrapped. Upper band [start, 160): only present when `start` is a
+        // visible line (start < 160). Lower band [0, end): only present when
+        // the vblank preprocessing armed the flip-flop, i.e. start < 228.
+        let upper = self.start < VISIBLE_LINES && y >= self.start;
+        let lower = (self.start as u16) < TOTAL_LINES && y < self.end;
+        upper || lower
     }
 }
 
@@ -64,11 +106,14 @@ impl WindowRect {
         Self { x, y }
     }
 
-    /// Whether `(x, y)` falls within this rectangle (both axes independently
-    /// satisfy [`WindowRange::contains`]).
+    /// Whether `(x, y)` falls within this rectangle. The horizontal axis uses
+    /// [`WindowRange::contains`] (spatial 8-bit wrap); the vertical axis uses
+    /// [`WindowRange::contains_vertical`] (the `WINxV` scanline flip-flop),
+    /// since the two axes diverge for a wrapped range whose `start` lands in
+    /// vblank (module docs on `contains_vertical`).
     #[must_use]
     pub const fn contains(&self, x: u8, y: u8) -> bool {
-        self.x.contains(x) && self.y.contains(y)
+        self.x.contains(x) && self.y.contains_vertical(y)
     }
 }
 
@@ -208,6 +253,69 @@ mod tests {
         let r = WindowRange::new(50, 50);
         for coord in [0, 49, 50, 51, 255] {
             assert!(!r.contains(coord), "coord {coord}");
+        }
+    }
+
+    #[test]
+    fn vertical_non_wrapping_is_the_ordinary_half_open_band() {
+        let r = WindowRange::new(30, 40);
+        assert!(!r.contains_vertical(29));
+        assert!(r.contains_vertical(30));
+        assert!(r.contains_vertical(39));
+        assert!(!r.contains_vertical(40));
+    }
+
+    #[test]
+    fn vertical_start_equals_end_contains_no_scanline() {
+        let r = WindowRange::new(50, 50);
+        for y in [0, 49, 50, 51, 159] {
+            assert!(!r.contains_vertical(y), "y {y}");
+        }
+    }
+
+    #[test]
+    fn vertical_wrapped_with_visible_start_shows_both_bands() {
+        // start=100 > end=40, start visible: closes at 40, reopens at 100.
+        let r = WindowRange::new(100, 40);
+        assert!(r.contains_vertical(0));
+        assert!(r.contains_vertical(39));
+        assert!(!r.contains_vertical(40));
+        assert!(!r.contains_vertical(99));
+        assert!(r.contains_vertical(100));
+        assert!(r.contains_vertical(159));
+    }
+
+    #[test]
+    fn vertical_wrapped_start_in_vblank_reopens_at_line_zero() {
+        // start=200 is in [160,228): the vblank preprocessing arms the
+        // flip-flop, so the window reopens at line 0 and closes at end=40.
+        // (The horizontal `contains` for the same bytes would coincidentally
+        // agree here; the divergence is the 228..=255 case below.)
+        let r = WindowRange::new(200, 40);
+        assert!(r.contains_vertical(0));
+        assert!(r.contains_vertical(39));
+        assert!(!r.contains_vertical(40));
+        assert!(!r.contains_vertical(100));
+        assert!(!r.contains_vertical(159));
+    }
+
+    #[test]
+    fn vertical_wrapped_start_past_vblank_never_opens() {
+        // start in 228..=255 (unreachable VCOUNT): the flip-flop is never
+        // armed, so no scanline is inside — every line falls through to
+        // WINOUT. This is where vertical diverges from the horizontal wrap,
+        // which would have shown [0, end).
+        for start in [228u8, 240, 255] {
+            let r = WindowRange::new(start, 40);
+            for y in [0u8, 20, 39, 40, 100, 159] {
+                assert!(
+                    !r.contains_vertical(y),
+                    "start={start} y={y} must never open"
+                );
+            }
+            // The horizontal wrap, unchanged, still reports the lower band.
+            assert!(r.contains(0), "horizontal wrap semantics stay intact");
+            assert!(r.contains(39));
         }
     }
 

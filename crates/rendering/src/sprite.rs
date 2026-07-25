@@ -175,9 +175,14 @@ impl<'a> SpriteLayer<'a> {
     /// Shared implementation behind [`resolve_pixel`](Self::resolve_pixel)
     /// and [`resolve_pixel_with_mosaic`](Self::resolve_pixel_with_mosaic).
     ///
-    /// [`ObjMode::Window`] entries are skipped entirely — they contribute
-    /// only to the `OBJWIN` mask ([`Self::objwin_mask`]), never a pixel of
-    /// their own (see [`ObjMode`]'s docs).
+    /// [`ObjMode::Window`] entries never supply a *display* pixel of their
+    /// own — an opaque `OBJWIN` texel contributes only to the `OBJWIN` mask
+    /// ([`Self::objwin_mask`]). But a *transparent* `OBJWIN` texel still takes
+    /// part in the order-upgrade path: mgba's `SPRITE_DRAW_PIXEL_*_OBJWIN`
+    /// else branch (`software-obj.c`) rewrites an already-written underlying
+    /// pixel's order exactly like the `NORMAL` macro, so a priority-0 `OBJWIN`
+    /// hole promotes a worse-priority opaque OBJ beneath it. Both cases are
+    /// handled inline below `(behavioral-fidelity)`.
     fn resolve_pixel_inner(&self, x: usize, y: usize, mosaic: MosaicSize) -> Option<SpritePixel> {
         // Stored OBJ order, starting worse than any real priority (`0..=3`),
         // standing in for mgba's `FLAG_UNWRITTEN` sentinel. `color` is `Some`
@@ -187,7 +192,7 @@ impl<'a> SpriteLayer<'a> {
         let mut color: Option<Rgb888> = None;
         let mut semi_transparent = false;
         for entry in self.entries {
-            if !entry.enabled() || entry.mode() == ObjMode::Window {
+            if !entry.enabled() {
                 continue;
             }
             let texel = self.sample_entry_mosaic(entry, x, y, mosaic);
@@ -199,7 +204,14 @@ impl<'a> SpriteLayer<'a> {
             if entry.priority() >= order {
                 continue;
             }
+            let is_objwin = entry.mode() == ObjMode::Window;
             match texel {
+                // An opaque `OBJWIN` (OAM mode 2) texel feeds only the
+                // `OBJWIN` mask ([`Self::objwin_mask`]) — mgba's
+                // `SPRITE_DRAW_PIXEL_*_OBJWIN` opaque branch touches only
+                // `renderer->row`, never `spriteLayer` — so it supplies
+                // neither a color nor an order upgrade in this resolution.
+                Texel::Opaque(_) if is_objwin => {}
                 Texel::Opaque(c) => {
                     color = Some(c);
                     order = entry.priority();
@@ -207,12 +219,17 @@ impl<'a> SpriteLayer<'a> {
                 }
                 // Transparent hole: upgrade the stored order only if an
                 // opaque sprite has already written here (mgba's `current !=
-                // FLAG_UNWRITTEN` guard); the color is left untouched. The
+                // FLAG_UNWRITTEN` guard); the color is left untouched. This
+                // fires for a regular *or* `OBJWIN`-mode sprite — the
+                // `SPRITE_DRAW_PIXEL_*_OBJWIN` transparent (else) branch
+                // rewrites the underlying pixel's order/REBLEND/TARGET_1 bits
+                // exactly like the `NORMAL` macro, so a better-order `OBJWIN`
+                // hole promotes a worse-priority opaque OBJ underneath it. The
                 // order-upgrading entry's own mode still replaces
-                // `semi_transparent`, matching mgba's flag write, which
-                // merges in the *new* write's target-1 bit along with the
-                // order it upgrades, not the original color-supplying
-                // sprite's `(behavioral-fidelity)`.
+                // `semi_transparent` (an `OBJWIN` sprite, never OAM mode 1,
+                // therefore clears it), matching mgba merging in the *new*
+                // write's target-1 bit along with the order it upgrades, not
+                // the original color-supplying sprite's `(behavioral-fidelity)`.
                 Texel::Transparent if color.is_some() => {
                     order = entry.priority();
                     semi_transparent = entry.mode() == ObjMode::SemiTransparent;
@@ -435,7 +452,7 @@ mod tests {
     use super::SpriteLayer;
     use crate::framebuffer::Framebuffer;
     use crate::mosaic::MosaicSize;
-    use crate::oam::{OamEntry, ObjShape};
+    use crate::oam::{OamEntry, ObjMode, ObjShape};
     use crate::palette::{Bgr555, Palette, Rgb888};
     use crate::tile::{BitDepth, Tileset};
 
@@ -840,6 +857,49 @@ mod tests {
         let pixel = layer.resolve_pixel(0, 0).unwrap();
         assert_eq!(pixel.color, Bgr555::from_channels(0, 0, 0x1F).to_rgb888());
         assert_eq!(pixel.priority, 0, "A's hole upgrades B's order to 0");
+    }
+
+    #[test]
+    fn resolve_pixel_objwin_transparent_hole_upgrades_an_opaque_worse_sprite() {
+        // Finding 1: an OBJWIN-mode sprite (OAM mode 2) whose texel here is a
+        // transparent hole still upgrades the stored OBJ order of an
+        // already-written, worse-priority opaque sprite beneath it — mgba's
+        // `SPRITE_DRAW_PIXEL_*_OBJWIN` transparent (else) branch, which
+        // rewrites the underlying pixel's order just like the NORMAL macro.
+        // Opaque B (priority 2, OAM index 0) writes first; the priority-0
+        // OBJWIN sprite (transparent tile 1) then upgrades B's order to 0
+        // without changing its color, and contributes no display pixel itself.
+        let (tileset, palette) = opaque_and_transparent_tiles();
+        let b_opaque_prio2 = square_8x8(0, 2, 0);
+        let objwin_hole_prio0 = square_8x8(1, 0, 0).with_mode(ObjMode::Window);
+        let entries = [b_opaque_prio2, objwin_hole_prio0];
+        let layer = SpriteLayer::new(&entries, &tileset, &tileset, &palette);
+
+        let pixel = layer.resolve_pixel(0, 0).unwrap();
+        assert_eq!(pixel.color, Bgr555::from_channels(0, 0, 0x1F).to_rgb888());
+        assert_eq!(
+            pixel.priority, 0,
+            "the OBJWIN hole upgrades B's OBJ order to 0"
+        );
+
+        // Control: without the OBJWIN sprite, B alone keeps its own priority 2.
+        let entries_control = [b_opaque_prio2];
+        let control = SpriteLayer::new(&entries_control, &tileset, &tileset, &palette);
+        assert_eq!(control.resolve_pixel(0, 0).unwrap().priority, 2);
+    }
+
+    #[test]
+    fn resolve_pixel_objwin_opaque_texel_supplies_no_display_pixel() {
+        // The opaque half of the same OBJWIN sprite must never become a
+        // display pixel on its own (it only feeds the OBJWIN mask): with no
+        // other sprite covering the pixel, resolve_pixel stays `None`.
+        let (tileset, palette) = opaque_and_transparent_tiles();
+        let objwin_opaque = square_8x8(0, 0, 0).with_mode(ObjMode::Window); // opaque tile 0
+        let entries = [objwin_opaque];
+        let layer = SpriteLayer::new(&entries, &tileset, &tileset, &palette);
+        assert_eq!(layer.resolve_pixel(0, 0), None);
+        // ...but it does register on the OBJWIN mask.
+        assert!(layer.objwin_mask(0, 0));
     }
 
     #[test]

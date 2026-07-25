@@ -262,10 +262,21 @@ pub fn compose_frame_with_effects(
     bg_slots: &[BgSlot<'_>],
     effects: &FrameEffects,
 ) -> Framebuffer {
+    // mgba's global "any target2" signal (software-obj.c:181-185): the
+    // backdrop target2 bit, OR any BG that is a BLDCNT target2 *and* enabled.
+    // A forced-alpha OBJ that fails to blend against its immediate neighbor
+    // keeps its brighten/darken variant only when this is false (see
+    // effects::resolve_pixel_color). It is a per-frame constant, so compute it
+    // once rather than per pixel.
+    let any_target2 = effects.color.target2.backdrop
+        || bg_slots.iter().any(|slot| {
+            slot.enabled && effects.color.target2.contains(LayerKind::Bg(slot.bg_index))
+        });
+
     let mut framebuffer = Framebuffer::new();
     for y in 0..framebuffer.height() {
         for x in 0..framebuffer.width() {
-            let color = compose_pixel(sprites, bg_slots, effects, x, y);
+            let color = compose_pixel(sprites, bg_slots, effects, any_target2, x, y);
             framebuffer.set_pixel(x, y, color);
         }
     }
@@ -278,6 +289,7 @@ fn compose_pixel(
     sprites: &SpriteLayer<'_>,
     bg_slots: &[BgSlot<'_>],
     effects: &FrameEffects,
+    any_target2: bool,
     x: usize,
     y: usize,
 ) -> Rgb888 {
@@ -330,6 +342,7 @@ fn compose_pixel(
         return effects::resolve_pixel_color(
             &effects.color,
             window.effects,
+            any_target2,
             (effects.backdrop, LayerKind::Backdrop, false),
             None,
             effects.backdrop,
@@ -339,6 +352,7 @@ fn compose_pixel(
     effects::resolve_pixel_color(
         &effects.color,
         window.effects,
+        any_target2,
         (front_color, front_kind, front_semi_transparent),
         next,
         effects.backdrop,
@@ -1138,6 +1152,157 @@ mod tests {
             fb.pixel(0, 0),
             Some(Bgr555::from_channels(15, 15, 15).to_rgb888()),
             "BG blended 50/50 with the white backdrop"
+        );
+    }
+
+    #[test]
+    fn objwin_transparent_hole_promotes_a_worse_sprite_over_the_bg() {
+        // Finding 1 end-to-end: opaque sprite B (priority 2, OAM index 0) sits
+        // under a priority-0 OBJWIN-mode sprite whose texel here is a
+        // transparent hole; a BG sits between them at priority 1. mgba's
+        // SPRITE_DRAW_PIXEL_*_OBJWIN transparent branch upgrades B's stored OBJ
+        // order to 0, so the OBJ layer (still B's color) beats the BG, even
+        // though B's own priority (2) is worse than the BG's (1).
+        let (ts, pal, tm) = opaque_bg_fixture(7);
+        let bg_layer = crate::bg::BgLayer::new(&ts, &pal, &tm);
+        let slots = [BgSlot::new(bg_layer, 0, 1, 0, 0, true)]; // BG priority 1
+
+        // tile 0 fully opaque (B), tile 1 fully transparent (the OBJWIN hole).
+        let mut two_tiles = [0u8; 64];
+        two_tiles[..32].copy_from_slice(&[0xFFu8; 32]);
+        let shared = Tileset::decode(BitDepth::Bpp4, &two_tiles).unwrap();
+        let mut colors = [Bgr555::default(); Palette::LEN];
+        colors[15] = Bgr555::from_channels(0, 0, 9); // B's color (blue)
+        let palette = Palette::new(colors);
+
+        let b_opaque_prio2 = OamEntry::new(
+            0,
+            0,
+            0, // tile 0 (opaque)
+            0,
+            BitDepth::Bpp4,
+            false,
+            false,
+            ObjShape::Square,
+            0,
+            2,
+            true,
+        );
+        let objwin_hole_prio0 = OamEntry::new(
+            0,
+            0,
+            1, // tile 1 (transparent)
+            0,
+            BitDepth::Bpp4,
+            false,
+            false,
+            ObjShape::Square,
+            0,
+            0,
+            true,
+        )
+        .with_mode(ObjMode::Window);
+
+        let entries = [b_opaque_prio2, objwin_hole_prio0];
+        let sprites = SpriteLayer::new(&entries, &shared, &shared, &palette);
+        let fb = compose_frame(&sprites, &slots);
+        assert_eq!(
+            fb.pixel(0, 0),
+            Some(Bgr555::from_channels(0, 0, 9).to_rgb888()),
+            "the OBJWIN hole upgrades B to priority 0, beating the BG"
+        );
+
+        // Control: without the OBJWIN sprite, B stays priority 2 and the
+        // priority-1 BG wins.
+        let control_entries = [b_opaque_prio2];
+        let control_sprites = SpriteLayer::new(&control_entries, &shared, &shared, &palette);
+        let control_fb = compose_frame(&control_sprites, &slots);
+        assert_eq!(
+            control_fb.pixel(0, 0),
+            Some(Bgr555::from_channels(7, 0, 0).to_rgb888()),
+            "without the OBJWIN hole, B keeps priority 2 and the BG wins"
+        );
+    }
+
+    #[test]
+    fn semi_transparent_obj_variant_dropped_by_a_deeper_enabled_target2_bg() {
+        // Finding 3 end-to-end: a semi-transparent OBJ (forced alpha) that is a
+        // BLDCNT first target under BRIGHTEN sits over BG_a (priority 1, its
+        // immediate neighbour, NOT a target2) with BG_b (priority 2, a target2)
+        // enabled deeper in the frame. Because *some* target2 exists globally,
+        // mgba clears the brighten variant and the OBJ shows its raw (black)
+        // color. The control clears BG_b's target2 bit -> no target2 anywhere
+        // -> the OBJ is brightened to white.
+        let (tiles_a, palette_a, map_a) = opaque_bg_fixture(5);
+        let (tiles_b, palette_b, map_b) = opaque_bg_fixture(10);
+        let layer_a = crate::bg::BgLayer::new(&tiles_a, &palette_a, &map_a);
+        let layer_b = crate::bg::BgLayer::new(&tiles_b, &palette_b, &map_b);
+        let slots = [
+            BgSlot::new(layer_a, 0, 1, 0, 0, true), // BG0, priority 1 (immediate next)
+            BgSlot::new(layer_b, 1, 2, 0, 0, true), // BG1, priority 2 (deeper)
+        ];
+
+        let sprite_tileset = Tileset::decode(BitDepth::Bpp4, &[0xFFu8; 32]).unwrap();
+        let mut sprite_colors = [Bgr555::default(); Palette::LEN];
+        sprite_colors[15] = Bgr555::from_channels(0, 0, 0); // black
+        let sprite_palette = Palette::new(sprite_colors);
+        let entries = [OamEntry::new(
+            0,
+            0,
+            0,
+            0,
+            BitDepth::Bpp4,
+            false,
+            false,
+            ObjShape::Square,
+            0,
+            0, // priority 0: the front layer
+            true,
+        )
+        .with_mode(ObjMode::SemiTransparent)];
+        let sprites = SpriteLayer::new(&entries, &sprite_tileset, &sprite_tileset, &sprite_palette);
+
+        let base_color = EffectsConfig {
+            effect: ColorEffect::Brighten,
+            target1: LayerTargets {
+                bg: [false; 4],
+                obj: true,
+                backdrop: false,
+            },
+            target2: LayerTargets {
+                bg: [false, true, false, false], // BG1 (deeper) is a target2
+                obj: false,
+                backdrop: false,
+            },
+            eva: 8,
+            evb: 8,
+            evy: 16,
+        };
+
+        let effects = FrameEffects {
+            color: base_color,
+            ..FrameEffects::default()
+        };
+        let fb = compose_frame_with_effects(&sprites, &slots, &effects);
+        assert_eq!(
+            fb.pixel(0, 0),
+            Some(Bgr555::from_channels(0, 0, 0).to_rgb888()),
+            "a deeper enabled target2 BG clears the variant -> raw (black) OBJ"
+        );
+
+        // Control: drop BG1's target2 bit -> no target2 anywhere -> variant
+        // survives -> the OBJ is brightened to white.
+        let mut control_color = base_color;
+        control_color.target2 = LayerTargets::default();
+        let control_effects = FrameEffects {
+            color: control_color,
+            ..FrameEffects::default()
+        };
+        let control_fb = compose_frame_with_effects(&sprites, &slots, &control_effects);
+        assert_eq!(
+            control_fb.pixel(0, 0),
+            Some(Bgr555::from_channels(31, 31, 31).to_rgb888()),
+            "no target2 anywhere -> the semi-transparent OBJ is brightened to white"
         );
     }
 }

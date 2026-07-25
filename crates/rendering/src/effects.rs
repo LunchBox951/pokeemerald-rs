@@ -191,18 +191,24 @@ pub const fn darken(color: Rgb888, evy: u8) -> Rgb888 {
 /// brighten/darken/none if that's what was configured
 /// `(behavioral-fidelity)`.
 ///
-/// When that forced blend finds *no* valid second target, mgba does not fall
-/// back to the raw color: it clears the target-1 flag but leaves its
-/// `variant` (brighten/darken) selector set, which stays on precisely when the
-/// OBJ is a `BLDCNT` first target and the selected effect is brighten/darken
-/// with effects enabled here (`software-obj.c:177-192`). This function mirrors
-/// that by falling through to the normal brighten/darken branch on the
-/// no-second-target path rather than returning `front_color`
-/// `(behavioral-fidelity)`.
+/// When that forced blend finds no target2 among the *immediate* next layer,
+/// mgba does not decide the fallback from that neighbor. `software-obj.c`
+/// (177-192) instead consults a **global** signal: it sums whether *any*
+/// target2 layer exists in the whole frame — any enabled BG that is a `BLDCNT`
+/// target2, or the backdrop target2. If some target2 exists it clears the
+/// sprite's brighten/darken `variant` selector and emits the raw color; only
+/// when *no* target2 exists anywhere does `variant` survive, which stays on
+/// precisely when the OBJ is a `BLDCNT` first target under a brighten/darken
+/// effect with effects enabled here. The caller therefore passes that global
+/// `any_target2_enabled` signal (which cannot be recovered from the immediate
+/// `next` alone): a forced-alpha OBJ whose immediate neighbor is not a target2
+/// emits its raw color when any target2 is enabled anywhere, and falls through
+/// to the brighten/darken branch only when none is `(behavioral-fidelity)`.
 #[must_use]
 pub fn resolve_pixel_color(
     cfg: &EffectsConfig,
     effects_enabled: bool,
+    any_target2_enabled: bool,
     front: (Rgb888, LayerKind, bool),
     next: Option<(Rgb888, LayerKind)>,
     backdrop: Rgb888,
@@ -227,14 +233,16 @@ pub fn resolve_pixel_color(
             None if cfg.target2.backdrop => {
                 return alpha_blend(front_color, backdrop, cfg.eva, cfg.evb);
             }
-            // No valid second target: do *not* return the raw front color.
-            // mgba only zeroes `variant` (its brighten/darken selector) in the
-            // target2-present branch (software-obj.c:177-192); with no target2
-            // it clears FLAG_TARGET_1 but leaves `variant` set, so an OBJ that
-            // is a BLDCNT first target under a brighten/darken effect still
-            // gets that effect. Fall through to the brighten/darken branch
+            // No target2 in the *immediate* neighbor. mgba decides the
+            // fallback from the global `any_target2_enabled` signal, not this
+            // neighbor (software-obj.c:177-192): when any target2 layer exists
+            // in the frame it clears the brighten/darken `variant` and emits
+            // the raw front color; only with no target2 anywhere does `variant`
+            // survive, letting an OBJ that is a BLDCNT first target under a
+            // brighten/darken effect still get that effect via the branch
             // below `(behavioral-fidelity)`.
-            Some(_) | None => {}
+            _ if any_target2_enabled => return front_color,
+            _ => {}
         }
     }
 
@@ -397,7 +405,7 @@ mod tests {
             },
             LayerKind::Bg(1),
         ));
-        let result = resolve_pixel_color(&cfg, true, front, next, Rgb888::BLACK);
+        let result = resolve_pixel_color(&cfg, true, true, front, next, Rgb888::BLACK);
         assert_eq!(
             result.r,
             crate::palette::Bgr555::from_channels(15, 0, 0)
@@ -424,6 +432,7 @@ mod tests {
         let result = resolve_pixel_color(
             &cfg,
             true,
+            true,
             front,
             next,
             Rgb888 {
@@ -445,7 +454,7 @@ mod tests {
             g: 255,
             b: 255,
         };
-        let result = resolve_pixel_color(&cfg, true, front, None, backdrop);
+        let result = resolve_pixel_color(&cfg, true, true, front, None, backdrop);
         assert_eq!(
             result.r,
             crate::palette::Bgr555::from_channels(15, 0, 0)
@@ -480,7 +489,7 @@ mod tests {
             },
             LayerKind::Bg(0),
         ));
-        let result = resolve_pixel_color(&cfg, true, front, next, Rgb888::BLACK);
+        let result = resolve_pixel_color(&cfg, true, true, front, next, Rgb888::BLACK);
         assert_eq!(
             result.r,
             crate::palette::Bgr555::from_channels(15, 0, 0)
@@ -517,7 +526,7 @@ mod tests {
             LayerKind::Bg(0),
         ));
 
-        let result = resolve_pixel_color(&cfg, false, front, next, Rgb888::BLACK);
+        let result = resolve_pixel_color(&cfg, false, true, front, next, Rgb888::BLACK);
 
         assert_eq!(
             result.r,
@@ -537,7 +546,7 @@ mod tests {
         let cfg = EffectsConfig::default();
         let front_color = Rgb888 { r: 7, g: 7, b: 7 };
         let front = (front_color, LayerKind::Obj, true);
-        let result = resolve_pixel_color(&cfg, true, front, None, Rgb888::BLACK);
+        let result = resolve_pixel_color(&cfg, true, false, front, None, Rgb888::BLACK);
         assert_eq!(result, front_color);
     }
 
@@ -563,10 +572,87 @@ mod tests {
             evy: 16,
         };
         let front = (Rgb888 { r: 0, g: 0, b: 0 }, LayerKind::Obj, true);
-        let result = resolve_pixel_color(&cfg, true, front, None, Rgb888::BLACK);
+        let result = resolve_pixel_color(&cfg, true, false, front, None, Rgb888::BLACK);
         assert_eq!(
             result.r, 255,
             "no valid target2 must fall back to the selected brighten, not the raw color"
+        );
+    }
+
+    #[test]
+    fn resolve_semi_transparent_obj_immediate_next_not_target2_but_global_target2_emits_raw() {
+        // Finding 3: a forced-alpha OBJ that is also a BLDCNT first target
+        // under BRIGHTEN, whose *immediate* next layer is NOT a target2 — but
+        // some other target2 layer exists in the frame
+        // (any_target2_enabled=true). mgba clears the brighten/darken `variant`
+        // whenever any target2 exists globally (software-obj.c:177-192), so the
+        // sprite emits its raw color, not a brightened one. The pre-fix code
+        // read only the immediate neighbor and wrongly brightened here.
+        let cfg = EffectsConfig {
+            effect: ColorEffect::Brighten,
+            target1: LayerTargets {
+                bg: [false; 4],
+                obj: true,
+                backdrop: false,
+            },
+            target2: LayerTargets {
+                bg: [false, true, false, false], // BG1 is a target2 elsewhere
+                obj: false,
+                backdrop: false,
+            },
+            eva: 8,
+            evb: 8,
+            evy: 16,
+        };
+        let front_color = Rgb888 { r: 0, g: 0, b: 0 };
+        let front = (front_color, LayerKind::Obj, true);
+        // The immediate neighbor is BG2, which is not a target2.
+        let next = Some((
+            Rgb888 {
+                r: 255,
+                g: 255,
+                b: 255,
+            },
+            LayerKind::Bg(2),
+        ));
+        let result = resolve_pixel_color(&cfg, true, true, front, next, Rgb888::BLACK);
+        assert_eq!(
+            result, front_color,
+            "a global target2 clears the variant -> raw color, not brighten"
+        );
+    }
+
+    #[test]
+    fn resolve_semi_transparent_obj_no_target2_anywhere_falls_back_to_brighten() {
+        // The other side of finding 3: the same forced-alpha OBJ + BRIGHTEN
+        // first target with an immediate neighbor that is not a target2, but
+        // NO target2 exists anywhere (any_target2_enabled=false). mgba keeps
+        // `variant`, so the sprite is brightened rather than emitted raw.
+        let cfg = EffectsConfig {
+            effect: ColorEffect::Brighten,
+            target1: LayerTargets {
+                bg: [false; 4],
+                obj: true,
+                backdrop: false,
+            },
+            target2: LayerTargets::default(),
+            eva: 0,
+            evb: 0,
+            evy: 16,
+        };
+        let front = (Rgb888 { r: 0, g: 0, b: 0 }, LayerKind::Obj, true);
+        let next = Some((
+            Rgb888 {
+                r: 255,
+                g: 255,
+                b: 255,
+            },
+            LayerKind::Bg(0),
+        ));
+        let result = resolve_pixel_color(&cfg, true, false, front, next, Rgb888::BLACK);
+        assert_eq!(
+            result.r, 255,
+            "no target2 anywhere -> variant survives -> full brighten to white"
         );
     }
 
@@ -585,7 +671,7 @@ mod tests {
             evy: 16,
         };
         let front = (Rgb888 { r: 0, g: 0, b: 0 }, LayerKind::Bg(0), false);
-        let result = resolve_pixel_color(&cfg, true, front, None, Rgb888::BLACK);
+        let result = resolve_pixel_color(&cfg, true, false, front, None, Rgb888::BLACK);
         assert_eq!(result.r, 255, "full brighten of black must reach white");
     }
 
@@ -612,7 +698,7 @@ mod tests {
             LayerKind::Obj,
             false,
         );
-        let result = resolve_pixel_color(&cfg, true, front, None, Rgb888::BLACK);
+        let result = resolve_pixel_color(&cfg, true, false, front, None, Rgb888::BLACK);
         assert_eq!(result.r, 0, "full darken of white must reach black");
     }
 
@@ -636,7 +722,7 @@ mod tests {
             b: 10,
         };
         let front = (front_color, LayerKind::Bg(0), false);
-        let result = resolve_pixel_color(&cfg, false, front, None, Rgb888::BLACK);
+        let result = resolve_pixel_color(&cfg, false, false, front, None, Rgb888::BLACK);
         assert_eq!(
             result, front_color,
             "window's effect-enable bit must gate brighten"
@@ -659,7 +745,7 @@ mod tests {
         };
         let backdrop = Rgb888 { r: 0, g: 0, b: 0 };
         let front = (backdrop, LayerKind::Backdrop, false);
-        let result = resolve_pixel_color(&cfg, true, front, None, backdrop);
+        let result = resolve_pixel_color(&cfg, true, false, front, None, backdrop);
         assert_eq!(result.r, 255);
     }
 
@@ -690,7 +776,7 @@ mod tests {
             b: 42,
         };
         let front = (backdrop, LayerKind::Backdrop, false);
-        let result = resolve_pixel_color(&cfg, true, front, None, backdrop);
+        let result = resolve_pixel_color(&cfg, true, true, front, None, backdrop);
         assert_eq!(result, backdrop);
     }
 }
