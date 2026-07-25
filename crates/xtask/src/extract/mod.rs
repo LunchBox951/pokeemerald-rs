@@ -69,14 +69,44 @@
 //!   `BorderGrid`) that reads these bytes back out of the pack; this
 //!   pipeline only needs to get the bytes *into* the pack.
 //!
+//! - **Fonts** (S-4, issue #114): the five upstream Latin glyph sheets
+//!   (`graphics/fonts/latin_{normal,narrow,short,small,small_narrow}.png`
+//!   — see [`FONTS`]), each a 256x512, 16-column x 32-row grid of 512
+//!   16x16-pixel glyph cells, decoded via [`png::decode`]'s new bit-depth-2
+//!   support (these sheets are 2bpp — 4 colours, `gbagfx`'s
+//!   `SetFontPalette` — unlike tilesets'/sprites' 4/8bpp). Per-glyph advance
+//!   widths (upstream `gFont*LatinGlyphWidths`) are *not* in the pack —
+//!   they're a small, stable table of constants, ported directly as Rust
+//!   data in `crates/assets::fonts` instead (see that module's docs).
+//!   Japanese/braille/keypad/arrow glyph sheets (the other 12 files under
+//!   `graphics/fonts/`) are **not** extracted — v1 is English-only text, so
+//!   they stay `pending` in the ledger.
+//!
+//! - **Text window frames** (S-4, issue #114): every file under
+//!   `graphics/text_window/` — all 20 numbered border-frame tile sheets
+//!   (`1.png`..`20.png`, upstream `sWindowFrames`/`WINDOW_FRAMES_COUNT`,
+//!   `pokeemerald/src/text_window.c`), the default message-box tile sheet
+//!   (`message_box.png`, upstream `gMessageBox_Gfx`), and the four extra
+//!   textbox colour palettes (`text_pal1.pal`..`text_pal4.pal`, upstream
+//!   `sTextWindowPalettes`).
+//!   Unlike tilesets/sprites, the frame and message-box PNGs have no sibling
+//!   `.pal` file of their own — upstream's own `INCGFX_U16(..., ".gbapal")`
+//!   build rule for them reads the palette straight out of each PNG's own
+//!   `PLTE` chunk, so this pipeline does too, via [`png::decode_palette`]
+//!   (see that function's docs for why it's a separate read path from
+//!   [`png::decode`]). This is every file in the directory, so
+//!   `graphics/text_window` closes fully `ported` in the ledger (unlike
+//!   `graphics/fonts` above).
+//!
 //! Explicitly **not** extracted (deferred to future slices, not silently
 //! dropped): metatile-to-tile mapping beyond the raw `metatiles.bin` bytes
 //! (no decode/typed access yet — that's a rendering-layer concern once
 //! `crates/rendering` needs it), NPC-specific palette assignment (the
 //! `object_event_graphics_info` indirection table), any tileset outside the
 //! five above (every other `data/tilesets/*` directory stays `pending` in
-//! the ledger), and any map layout outside the Littleroot Town family above
-//! (every other `data/layouts/*` directory likewise stays `pending`).
+//! the ledger), any map layout outside the Littleroot Town family above
+//! (every other `data/layouts/*` directory likewise stays `pending`), and
+//! every non-Latin font sheet under `graphics/fonts/` (see above).
 //!
 //! # Asset id scheme
 //!
@@ -89,6 +119,15 @@
 //! - `sprite/palette/brendan`, `sprite/palette/may`
 //! - `layout/<name>/map`, `layout/<name>/border` (e.g.
 //!   `layout/littleroot_town/map`, `layout/littleroot_town/border`)
+//! - `font/<name>/glyphs` (e.g. `font/normal/glyphs` — `<name>` is the
+//!   upstream `FONT_*` id, lowercased: `small`, `normal`, `short`, `narrow`,
+//!   `small_narrow`; see [`FONTS`])
+//! - `text-window/image/<stem>`, `text-window/palette/<stem>` — `<stem>` is
+//!   the upstream filename's stem (e.g. `1` .. `20`, `message_box`,
+//!   `text_pal1` .. `text_pal4`), mirroring `title/image/<name>` above.
+//!   `text-window/palette/1`..`20`/`message_box` come from each PNG's own
+//!   `PLTE`; `text-window/palette/text_pal1`..`4` come from the sibling
+//!   `.pal` files.
 //!
 //! `<name>` is always a normalized, stable identifier (upstream's own
 //! directory/file naming, which is already `snake_case` and stable across
@@ -190,6 +229,8 @@ fn extract_to(output_path: &Path) -> Result<ExtractReport, ExtractError> {
     extract_title_screen(&upstream, &mut writer)?;
     extract_sprites(&upstream, &mut writer)?;
     extract_layouts(&upstream, &mut writer)?;
+    extract_fonts(&upstream, &mut writer)?;
+    extract_text_window(&upstream, &mut writer)?;
 
     let entry_count = writer.len();
     let bytes = writer.finish()?;
@@ -251,8 +292,16 @@ fn decode_palette_entry(
 ) -> Result<(), ExtractError> {
     let text = read_text(path)?;
     let colors = jasc_pal::parse(&text).map_err(|e| ExtractError::Pal(path.to_path_buf(), e))?;
+    push_palette_entry(&colors, id, writer);
+    Ok(())
+}
+
+/// Serialize already-decoded colours (from either a JASC `.pal` file or a
+/// PNG's own `PLTE` chunk — see [`extract_text_window`]) into a
+/// [`PackKind::Palette`] entry.
+fn push_palette_entry(colors: &[jasc_pal::Rgb888], id: String, writer: &mut PackWriter) {
     let mut payload = Vec::with_capacity(colors.len() * 2);
-    for color in &colors {
+    for color in colors {
         payload.extend_from_slice(&color.to_gba555().to_le_bytes());
     }
     #[allow(clippy::cast_possible_truncation)]
@@ -263,7 +312,6 @@ fn decode_palette_entry(
         },
         payload,
     });
-    Ok(())
 }
 
 fn raw_entry(path: &Path, id: String, writer: &mut PackWriter) -> Result<(), ExtractError> {
@@ -505,9 +553,71 @@ fn extract_layouts(upstream: &Path, writer: &mut PackWriter) -> Result<(), Extra
     Ok(())
 }
 
+/// `(upstream `FONT_*` id, lowercased; `graphics/fonts/` filename)` — the
+/// five Latin glyph sheets this pipeline extracts. See the module docs for
+/// why only these five, not the other 12 files under `graphics/fonts/`
+/// (Japanese, braille, arrows, the keypad icon sheet).
+const FONTS: [(&str, &str); 5] = [
+    ("small", "latin_small.png"),
+    ("normal", "latin_normal.png"),
+    ("short", "latin_short.png"),
+    ("narrow", "latin_narrow.png"),
+    ("small_narrow", "latin_small_narrow.png"),
+];
+
+/// Extract the five Latin font glyph sheets (see [`FONTS`] and the module
+/// docs). Per-glyph advance widths are not extracted here — they're ported
+/// as Rust data directly in `crates/assets::fonts`.
+fn extract_fonts(upstream: &Path, writer: &mut PackWriter) -> Result<(), ExtractError> {
+    let dir = upstream.join("graphics/fonts");
+    for (name, filename) in FONTS {
+        decode_png_entry(&dir.join(filename), format!("font/{name}/glyphs"), writer)?;
+    }
+    Ok(())
+}
+
+/// Extract `graphics/text_window/`'s full contents: the 20 numbered
+/// border-frame tile sheets, the default message-box tile sheet, and the
+/// four extra textbox palettes (see the module docs). Every PNG's palette
+/// comes from its own embedded `PLTE` chunk ([`png::decode_palette`]) since
+/// none of these files has a sibling `.pal` of its own; the four `text_pal*`
+/// files are ordinary JASC `.pal` files, decoded the same way tileset/sprite
+/// palettes are.
+fn extract_text_window(upstream: &Path, writer: &mut PackWriter) -> Result<(), ExtractError> {
+    let dir = upstream.join("graphics/text_window");
+
+    let mut entries: Vec<PathBuf> = std::fs::read_dir(&dir)
+        .and_then(|it| {
+            it.map(|entry| entry.map(|e| e.path()))
+                .collect::<std::io::Result<_>>()
+        })
+        .map_err(|e| ExtractError::ReadFailed(dir.clone(), e.to_string()))?;
+    entries.sort();
+
+    for path in entries {
+        let Some(stem) = path.file_stem().map(|s| s.to_string_lossy().into_owned()) else {
+            continue;
+        };
+        match path.extension().and_then(|e| e.to_str()) {
+            Some("png") => {
+                decode_png_entry(&path, format!("text-window/image/{stem}"), writer)?;
+                let bytes = read_file(&path)?;
+                let colors =
+                    png::decode_palette(&bytes).map_err(|e| ExtractError::Png(path.clone(), e))?;
+                push_palette_entry(&colors, format!("text-window/palette/{stem}"), writer);
+            }
+            Some("pal") => {
+                decode_palette_entry(&path, format!("text-window/palette/{stem}"), writer)?;
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{collect_pngs_sorted, extract_to, upstream_present, ExtractError, LAYOUTS};
+    use super::{collect_pngs_sorted, extract_to, upstream_present, ExtractError, FONTS, LAYOUTS};
 
     // Real-checkout tests: `pokeemerald/` must be present locally
     // (`./init.sh`) to run these. `cargo test --workspace` in CI never has
@@ -610,6 +720,85 @@ mod tests {
                     "missing pack entry id `{id}`"
                 );
             }
+        }
+        let _ = std::fs::remove_file(report.output_path);
+    }
+
+    #[test]
+    fn fonts_list_has_no_duplicate_names_or_filenames() {
+        // Pure data check -- no filesystem access -- so it runs everywhere.
+        let names: Vec<_> = FONTS.iter().map(|(name, _)| *name).collect();
+        let filenames: Vec<_> = FONTS.iter().map(|(_, filename)| *filename).collect();
+        let unique_names: std::collections::HashSet<_> = names.iter().collect();
+        let unique_filenames: std::collections::HashSet<_> = filenames.iter().collect();
+        assert_eq!(names.len(), unique_names.len(), "duplicate font name");
+        assert_eq!(
+            filenames.len(),
+            unique_filenames.len(),
+            "duplicate filename"
+        );
+        for name in &names {
+            // Pack ids are ASCII lowercase + digits + underscores + `/` only
+            // (see `crate::extract`'s "Asset id scheme" docs).
+            assert!(name
+                .chars()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_'));
+        }
+        for filename in &filenames {
+            assert!(filename.starts_with("latin_"));
+            assert!(std::path::Path::new(filename)
+                .extension()
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("png")));
+        }
+    }
+
+    #[test]
+    #[ignore = "needs a local `./init.sh`-fetched pokeemerald/ checkout"]
+    fn font_glyph_sheets_are_extracted() {
+        // Same crude substring-search strategy as `layout_grids_are_extracted`
+        // above (no pack reader lives in this crate -- see its comment).
+        assert!(upstream_present(), "run ./init.sh first");
+        let path = scratch_path("fonts");
+        let report = extract_to(&path).expect("extraction should succeed against a real checkout");
+        let bytes = std::fs::read(&report.output_path).unwrap();
+        for (name, _) in FONTS {
+            let id = format!("font/{name}/glyphs");
+            assert!(
+                bytes
+                    .windows(id.len())
+                    .any(|window| window == id.as_bytes()),
+                "missing pack entry id `{id}`"
+            );
+        }
+        let _ = std::fs::remove_file(report.output_path);
+    }
+
+    #[test]
+    #[ignore = "needs a local `./init.sh`-fetched pokeemerald/ checkout"]
+    fn text_window_frames_are_extracted() {
+        assert!(upstream_present(), "run ./init.sh first");
+        let path = scratch_path("text-window");
+        let report = extract_to(&path).expect("extraction should succeed against a real checkout");
+        let bytes = std::fs::read(&report.output_path).unwrap();
+
+        let mut expected_ids: Vec<String> = Vec::new();
+        for n in 1..=20 {
+            expected_ids.push(format!("text-window/image/{n}"));
+            expected_ids.push(format!("text-window/palette/{n}"));
+        }
+        expected_ids.push("text-window/image/message_box".to_owned());
+        expected_ids.push("text-window/palette/message_box".to_owned());
+        for n in 1..=4 {
+            expected_ids.push(format!("text-window/palette/text_pal{n}"));
+        }
+
+        for id in expected_ids {
+            assert!(
+                bytes
+                    .windows(id.len())
+                    .any(|window| window == id.as_bytes()),
+                "missing pack entry id `{id}`"
+            );
         }
         let _ = std::fs::remove_file(report.output_path);
     }
