@@ -643,6 +643,26 @@ fn validate_text_window_manifest(dir: &Path) -> Result<(), ExtractError> {
             }
         }
     }
+
+    let entries = std::fs::read_dir(dir)
+        .map_err(|e| ExtractError::ReadFailed(dir.to_path_buf(), e.to_string()))?;
+    let mut paths = entries
+        .map(|entry| entry.map(|entry| entry.path()))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| ExtractError::ReadFailed(dir.to_path_buf(), e.to_string()))?;
+    paths.sort();
+    for path in paths {
+        let stem = path.file_stem().and_then(|stem| stem.to_str());
+        let extension = path.extension().and_then(|extension| extension.to_str());
+        let is_expected = match extension {
+            Some("png") => stem.is_some_and(|stem| TEXT_WINDOW_IMAGE_STEMS.contains(&stem)),
+            Some("pal") => stem.is_some_and(|stem| TEXT_WINDOW_PALETTE_STEMS.contains(&stem)),
+            _ => false,
+        };
+        if !is_expected {
+            return Err(ExtractError::UnexpectedTextWindowAsset(path));
+        }
+    }
     Ok(())
 }
 
@@ -817,6 +837,36 @@ mod tests {
                 "wrong error for missing `{filename}`"
             );
             std::fs::write(&missing, []).unwrap();
+        }
+
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn text_window_manifest_rejects_unexpected_assets() {
+        let dir = std::env::temp_dir().join(format!(
+            "pokeemerald-rs-text-window-unexpected-test-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        for stem in TEXT_WINDOW_IMAGE_STEMS {
+            std::fs::write(dir.join(format!("{stem}.png")), []).unwrap();
+        }
+        for stem in TEXT_WINDOW_PALETTE_STEMS {
+            std::fs::write(dir.join(format!("{stem}.pal")), []).unwrap();
+        }
+
+        for filename in ["new_frame.png", "text_pal5.pal"] {
+            let unexpected = dir.join(filename);
+            std::fs::write(&unexpected, []).unwrap();
+            let err = validate_text_window_manifest(&dir).unwrap_err();
+            assert!(
+                matches!(err, ExtractError::UnexpectedTextWindowAsset(path) if path == unexpected),
+                "wrong error for unexpected text-window asset `{filename}`"
+            );
+            std::fs::remove_file(unexpected).unwrap();
         }
 
         std::fs::remove_dir_all(dir).unwrap();

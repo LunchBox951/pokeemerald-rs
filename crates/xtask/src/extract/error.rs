@@ -71,6 +71,11 @@ pub enum ExtractError {
     /// One of the fixed text-window source files required by the extraction
     /// manifest was missing or not a regular file. Carries the expected path.
     MissingTextWindowAsset(PathBuf),
+    /// `graphics/text_window/` contained a path that is not part of the
+    /// extraction manifest. Carries the unexpected path so an upstream
+    /// addition cannot be silently ignored while the ledger claims the full
+    /// directory is ported.
+    UnexpectedTextWindowAsset(PathBuf),
 }
 
 impl fmt::Display for ExtractError {
@@ -110,6 +115,11 @@ impl fmt::Display for ExtractError {
             Self::MissingTextWindowAsset(path) => write!(
                 f,
                 "required text-window asset `{}` is missing or is not a file",
+                path.display()
+            ),
+            Self::UnexpectedTextWindowAsset(path) => write!(
+                f,
+                "unexpected text-window asset `{}`: update the extraction manifest and coverage ledger before extracting",
                 path.display()
             ),
         }
