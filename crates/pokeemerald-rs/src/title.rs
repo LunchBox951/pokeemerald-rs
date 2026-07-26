@@ -915,15 +915,19 @@ const fn press_start_visible(frame: u32) -> bool {
 /// -- roughly 1px every 4 ticks. `frame` is ticks since the idle screen
 /// appeared (`frame` 0 is already the first tick, i.e. `tCounter == 1`).
 ///
-/// Uses wrapping arithmetic throughout: `BG1VOFS` is a 16-bit hardware
-/// register (and upstream's own `tBg1Y`/`gBattle_BG1_Y` are 16-bit fields),
-/// so wrapping on an extremely long-running idle screen is the actual
-/// hardware-faithful behavior, not an overflow bug.
+/// Models upstream's exact integer types on an extremely long-running
+/// idle screen: `tBg1Y` is a *signed* 16-bit task field (`data[4]`), so
+/// after 32,767 increments it wraps to -32768 and the subsequent `/ 2` is
+/// a signed, truncate-toward-zero division whose raw bits differ from an
+/// unsigned divide (e.g. -32768/2 = -16384 = `0xC000`, where a `u32`
+/// accumulator would give `0x4000`). The accumulator is therefore
+/// truncated to its 16 raw bits *first* and divided as `i16`, exactly as
+/// hardware and the C would `(behavioral-fidelity)`.
 #[must_use]
-#[allow(clippy::cast_possible_truncation)] // wraparound is hardware-faithful (docs above).
+#[allow(clippy::cast_possible_truncation)] // s16 modeling (docs above).
 const fn cloud_scroll_y(frame: u32) -> u16 {
-    let tb_g1_y = frame.wrapping_add(2) / 2; // ceil((frame + 1) / 2)
-    (tb_g1_y / 2) as u16
+    let tb_g1_y = (frame.wrapping_add(2) / 2) as u16; // ceil((frame + 1) / 2), s16 raw bits
+    (tb_g1_y.cast_signed() / 2).cast_unsigned()
 }
 
 /// Build every OBJ sprite entry visible at `frame`, in the same OAM-index

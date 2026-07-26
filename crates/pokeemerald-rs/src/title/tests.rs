@@ -423,6 +423,21 @@ fn cloud_scroll_is_a_pure_function_of_frame() {
 }
 
 #[test]
+fn cloud_scroll_wraps_like_upstreams_signed_16_bit_accumulator() {
+    // Upstream's `tBg1Y` is a *signed* 16-bit task field: after 32,767
+    // increments it wraps to -32768, and `tBg1Y / 2` is then a signed
+    // truncate-toward-zero division. At frame 65,534 the accumulator's
+    // raw bits are 0x8000 (-32768), so the scroll must be -16384 as raw
+    // bits (0xC000) -- not the 0x4000 a plain u32 divide would give.
+    assert_eq!(cloud_scroll_y(65_532), 0x3FFF); // tb_g1_y = 32767 (last positive)
+    assert_eq!(cloud_scroll_y(65_534), 0xC000); // tb_g1_y = -32768
+                                                // -32767 / 2 truncates toward zero: -16383 = 0xC001.
+    assert_eq!(cloud_scroll_y(65_536), 0xC001); // tb_g1_y = -32767
+                                                // A full 16-bit lap later the sequence repeats exactly.
+    assert_eq!(cloud_scroll_y(131_070), cloud_scroll_y(0));
+}
+
+#[test]
 fn sprite_entries_always_includes_the_settled_version_banner() {
     // The version banner is permanently visible/settled in this module's
     // modeled idle state (module docs' "Documented fidelity deltas") --

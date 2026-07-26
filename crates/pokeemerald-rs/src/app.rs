@@ -217,12 +217,17 @@ impl App {
     /// Run exactly one iteration of the frame loop body: pump input, log
     /// any newly-pressed buttons, then -- for a real title screen
     /// ([`App::new`]) whose current frame has already been presented --
-    /// advance to and compose the next tick's frame, present the composed
-    /// scene, and pace to the next GBA vblank (a no-op for a headless
-    /// `App`, see `platform::Platform::wait_for_next_frame`; module docs'
-    /// "Animating the real title screen" section). Composing *before*
-    /// presenting keeps [`App::frame`]'s "most recently presented"
-    /// contract true after every step.
+    /// advance to and compose the next tick's frame, pace to the next GBA
+    /// vblank (a no-op for a headless `App`, see
+    /// `platform::Platform::wait_for_next_frame`), and present the
+    /// composed scene (module docs' "Animating the real title screen"
+    /// section). Composing *before* presenting keeps [`App::frame`]'s
+    /// "most recently presented" contract true after every step, and
+    /// pacing *before* presenting spaces consecutive presents one GBA
+    /// frame apart -- including the first-to-second gap, which a
+    /// present-then-pace order would collapse to zero on backends whose
+    /// `present` doesn't block for vsync (the pacer's first tick
+    /// establishes the deadline and returns immediately).
     ///
     /// Returns whether the loop should keep going -- `false` once
     /// `platform::Platform::pump` reports a close request, at which point
@@ -248,8 +253,8 @@ impl App {
             }
             title.presented = true;
         }
-        self.platform.present(&self.frame)?;
         self.platform.wait_for_next_frame();
+        self.platform.present(&self.frame)?;
         Ok(true)
     }
 

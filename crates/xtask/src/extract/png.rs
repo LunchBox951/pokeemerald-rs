@@ -250,11 +250,10 @@ pub fn decode(data: &[u8]) -> Result<IndexedImage, PngError> {
 
     let raw = inflate::inflate_zlib(&idat)?;
     let pixels = defilter_and_unpack(&raw, width, height, bit_depth)?;
-    let palette = chunks
-        .iter()
-        .find(|c| &c.kind == b"PLTE")
-        .map(|c| parse_plte(c.data))
-        .unwrap_or_default();
+    let palette = match chunks.iter().find(|c| &c.kind == b"PLTE") {
+        Some(c) => parse_plte(c.data)?,
+        None => Vec::new(),
+    };
 
     Ok(IndexedImage {
         width,
@@ -267,11 +266,19 @@ pub fn decode(data: &[u8]) -> Result<IndexedImage, PngError> {
 
 /// Parse a `PLTE` chunk's body into `[r, g, b]` triples (RFC 2083 §11.2.3:
 /// three one-byte samples per entry, no separate length field — the chunk
-/// length itself, divided by 3, gives the entry count). A trailing 1- or
-/// 2-byte remainder (which would mean a malformed chunk, not divisible by
-/// 3) is simply not emitted as a partial entry.
-fn parse_plte(data: &[u8]) -> Vec<[u8; 3]> {
-    data.chunks_exact(3).map(|c| [c[0], c[1], c[2]]).collect()
+/// length itself, divided by 3, gives the entry count).
+///
+/// # Errors
+///
+/// [`PngError::MissingOrBadPalette`] if the chunk is empty or its length
+/// is not a multiple of three — the same fail-closed treatment
+/// [`decode_palette`] applies, so a malformed source PNG fails extraction
+/// instead of silently producing a truncated palette in the pack.
+fn parse_plte(data: &[u8]) -> Result<Vec<[u8; 3]>, PngError> {
+    if data.is_empty() || !data.len().is_multiple_of(3) {
+        return Err(PngError::MissingOrBadPalette);
+    }
+    Ok(data.chunks_exact(3).map(|c| [c[0], c[1], c[2]]).collect())
 }
 
 /// Undo PNG's per-scanline filtering (RFC 2083 §6) and unpack sub-byte
@@ -753,12 +760,21 @@ mod tests {
     }
 
     #[test]
-    fn parse_plte_ignores_a_trailing_partial_entry() {
-        // 3 full colours (9 bytes) plus 2 leftover bytes -- not divisible by
-        // 3, so the partial 4th entry is simply dropped, not an error.
+    fn parse_plte_rejects_a_trailing_partial_entry() {
+        // 3 full colours (9 bytes) plus 2 leftover bytes -- not divisible
+        // by 3, so the chunk is malformed and must fail closed (same
+        // treatment as `decode_palette`), never silently truncate.
         let plte = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11];
         assert_eq!(
-            super::parse_plte(&plte),
+            super::parse_plte(&plte).unwrap_err(),
+            PngError::MissingOrBadPalette
+        );
+        assert_eq!(
+            super::parse_plte(&[]).unwrap_err(),
+            PngError::MissingOrBadPalette
+        );
+        assert_eq!(
+            super::parse_plte(&[1, 2, 3, 4, 5, 6, 7, 8, 9]).unwrap(),
             vec![[1, 2, 3], [4, 5, 6], [7, 8, 9]]
         );
     }
