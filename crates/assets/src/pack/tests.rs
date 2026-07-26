@@ -27,6 +27,32 @@ fn text_window_palette_colors(first: u16, second: u16) -> Vec<u16> {
     colors
 }
 
+/// Fixed image-entry metadata: width, height, bit depth.
+fn image_meta(width: u32, height: u32, bit_depth: u8) -> Vec<u8> {
+    let mut m = Vec::new();
+    m.extend_from_slice(&width.to_le_bytes());
+    m.extend_from_slice(&height.to_le_bytes());
+    m.push(bit_depth);
+    m
+}
+
+/// A valid 24x24 border-frame pixel buffer (the exact shape
+/// `text_window_frame` requires), seeded so each fixture frame stays
+/// distinguishable; every index stays within a 16-colour palette.
+fn frame_pixels(seed: u8) -> Vec<u8> {
+    (0..24u16 * 24)
+        .map(|i| u8::try_from((i + u16::from(seed)) % 16).unwrap())
+        .collect()
+}
+
+/// A valid 56x16 message-box pixel buffer (the exact shape `message_box`
+/// requires); every index stays within a 16-colour palette.
+fn message_box_pixels() -> Vec<u8> {
+    (0..56u16 * 16)
+        .map(|i| u8::try_from(i % 16).unwrap())
+        .collect()
+}
+
 /// Build a tiny, synthetic pack in memory (never real upstream art — per
 /// the issue's CI caveat, no test in this crate touches `pokeemerald/` or
 /// the real extracted pack) with one entry of each kind: an `Image`, a
@@ -103,14 +129,8 @@ fn synthetic_pack() -> Vec<u8> {
         Entry {
             id: "text-window/image/1",
             kind_tag: 0,
-            meta: {
-                let mut m = Vec::new();
-                m.extend_from_slice(&2u32.to_le_bytes());
-                m.extend_from_slice(&2u32.to_le_bytes());
-                m.push(4);
-                m
-            },
-            payload: vec![0, 1, 2, 3],
+            meta: image_meta(24, 24, 4),
+            payload: frame_pixels(0),
         },
         Entry {
             id: "text-window/palette/1",
@@ -123,14 +143,8 @@ fn synthetic_pack() -> Vec<u8> {
         Entry {
             id: "text-window/image/2",
             kind_tag: 0,
-            meta: {
-                let mut m = Vec::new();
-                m.extend_from_slice(&2u32.to_le_bytes());
-                m.extend_from_slice(&2u32.to_le_bytes());
-                m.push(4);
-                m
-            },
-            payload: vec![12, 13, 14, 15],
+            meta: image_meta(24, 24, 4),
+            payload: frame_pixels(1),
         },
         Entry {
             id: "text-window/palette/2",
@@ -143,14 +157,12 @@ fn synthetic_pack() -> Vec<u8> {
         Entry {
             id: "text-window/image/3",
             kind_tag: 0,
-            meta: {
-                let mut m = Vec::new();
-                m.extend_from_slice(&2u32.to_le_bytes());
-                m.extend_from_slice(&2u32.to_le_bytes());
-                m.push(8);
-                m
+            meta: image_meta(24, 24, 8),
+            payload: {
+                let mut pixels = frame_pixels(2);
+                pixels[5] = 16;
+                pixels
             },
-            payload: vec![0, 15, 16, 3],
         },
         Entry {
             id: "text-window/palette/3",
@@ -158,18 +170,13 @@ fn synthetic_pack() -> Vec<u8> {
             meta: 16u16.to_le_bytes().to_vec(),
             payload: text_window_palette_payload(0x0099, 0x00AA),
         },
-        // Frame source `4` declares 2x2 pixels but carries only 3 payload
-        // bytes — the ImageRef pixel-count invariant would be false.
+        // Frame source `4` declares the right 24x24 shape but carries only
+        // 3 payload bytes — the ImageRef pixel-count invariant would be
+        // false.
         Entry {
             id: "text-window/image/4",
             kind_tag: 0,
-            meta: {
-                let mut m = Vec::new();
-                m.extend_from_slice(&2u32.to_le_bytes());
-                m.extend_from_slice(&2u32.to_le_bytes());
-                m.push(4);
-                m
-            },
+            meta: image_meta(24, 24, 4),
             payload: vec![0, 1, 2],
         },
         Entry {
@@ -178,19 +185,14 @@ fn synthetic_pack() -> Vec<u8> {
             meta: 16u16.to_le_bytes().to_vec(),
             payload: text_window_palette_payload(0x00BB, 0x00CC),
         },
-        // Frame source `5` declares a zero-area 0x2 bitmap with an empty
-        // payload — length and pixel checks would both pass vacuously.
+        // Frame source `5` is a self-consistent 8x8 bitmap (payload
+        // matches its declared dimensions) — but a border frame must be a
+        // complete 3x3 grid of 8x8 tiles, i.e. exactly 24x24.
         Entry {
             id: "text-window/image/5",
             kind_tag: 0,
-            meta: {
-                let mut m = Vec::new();
-                m.extend_from_slice(&0u32.to_le_bytes());
-                m.extend_from_slice(&2u32.to_le_bytes());
-                m.push(4);
-                m
-            },
-            payload: vec![],
+            meta: image_meta(8, 8, 4),
+            payload: vec![0; 64],
         },
         Entry {
             id: "text-window/palette/5",
@@ -201,14 +203,8 @@ fn synthetic_pack() -> Vec<u8> {
         Entry {
             id: "text-window/image/20",
             kind_tag: 0,
-            meta: {
-                let mut m = Vec::new();
-                m.extend_from_slice(&2u32.to_le_bytes());
-                m.extend_from_slice(&2u32.to_le_bytes());
-                m.push(4);
-                m
-            },
-            payload: vec![8, 9, 10, 11],
+            meta: image_meta(24, 24, 4),
+            payload: frame_pixels(3),
         },
         Entry {
             id: "text-window/palette/20",
@@ -219,14 +215,8 @@ fn synthetic_pack() -> Vec<u8> {
         Entry {
             id: "text-window/image/message_box",
             kind_tag: 0,
-            meta: {
-                let mut m = Vec::new();
-                m.extend_from_slice(&2u32.to_le_bytes());
-                m.extend_from_slice(&2u32.to_le_bytes());
-                m.push(4);
-                m
-            },
-            payload: vec![4, 5, 6, 7],
+            meta: image_meta(56, 16, 4),
+            payload: message_box_pixels(),
         },
         Entry {
             id: "text-window/palette/message_box",
@@ -492,7 +482,9 @@ fn text_window_frame_bundles_tiles_and_its_own_plte_derived_palette() {
     let pack = AssetPack::load(&path).unwrap();
 
     let frame = pack.text_window_frame(0).unwrap();
-    assert_eq!(frame.tiles.pixels, &[0, 1, 2, 3]);
+    assert_eq!(frame.tiles.width, 24);
+    assert_eq!(frame.tiles.height, 24);
+    assert_eq!(frame.tiles.pixels, frame_pixels(0).as_slice());
     assert_eq!(frame.palette.color_count, 16);
     assert_eq!(frame.palette.color(0), Some(0x0011));
     assert_eq!(frame.palette.color(1), Some(0x0022));
@@ -501,7 +493,7 @@ fn text_window_frame_bundles_tiles_and_its_own_plte_derived_palette() {
     assert!(matches!(err, PackError::UnknownAsset(id) if id == "text-window/image/6"));
 
     let last = pack.text_window_frame(19).unwrap();
-    assert_eq!(last.tiles.pixels, &[8, 9, 10, 11]);
+    assert_eq!(last.tiles.pixels, frame_pixels(3).as_slice());
     assert_eq!(
         last.palette.colors().collect::<Vec<_>>(),
         text_window_palette_colors(0x0077, 0x0088)
@@ -526,7 +518,9 @@ fn message_box_bundles_its_own_tiles_and_palette() {
     let pack = AssetPack::load(&path).unwrap();
 
     let handle = pack.message_box().unwrap();
-    assert_eq!(handle.tiles.pixels, &[4, 5, 6, 7]);
+    assert_eq!(handle.tiles.width, 56);
+    assert_eq!(handle.tiles.height, 16);
+    assert_eq!(handle.tiles.pixels, message_box_pixels().as_slice());
     assert_eq!(handle.palette.color_count, 16);
     assert_eq!(handle.palette.color(0), Some(0x0033));
     assert_eq!(handle.palette.color(1), Some(0x0044));
@@ -579,31 +573,32 @@ fn malformed_text_window_palettes_are_rejected_on_read() {
         } if id == "text-window/image/3"
     ));
 
-    // Frame id 3 selects source `4`: a tile bitmap declaring 2x2 pixels
-    // over a 3-byte payload — the ImageRef pixel-count invariant would be
-    // false, so the typed accessor rejects it.
+    // Frame id 3 selects source `4`: the right 24x24 shape over a 3-byte
+    // payload — the ImageRef pixel-count invariant would be false, so the
+    // typed accessor rejects it.
     let err = pack.text_window_frame(3).unwrap_err();
     assert!(matches!(
         &err,
         PackError::MalformedTextWindowImage {
             id,
-            width: 2,
-            height: 2,
+            width: 24,
+            height: 24,
             byte_len: 3,
         } if id == "text-window/image/4"
     ));
 
-    // Frame id 4 selects source `5`: a zero-area 0x2 bitmap whose empty
-    // payload would pass the length and pixel checks vacuously — the
-    // typed accessor rejects zero dimensions outright.
+    // Frame id 4 selects source `5`: a self-consistent 8x8 bitmap — but a
+    // border frame must be the complete 3x3 grid of 8x8 tiles (24x24), so
+    // the typed accessor rejects the wrong shape outright.
     let err = pack.text_window_frame(4).unwrap_err();
     assert!(matches!(
         &err,
-        PackError::MalformedTextWindowImage {
+        PackError::TextWindowImageWrongDimensions {
             id,
-            width: 0,
-            height: 2,
-            byte_len: 0,
+            width: 8,
+            height: 8,
+            expected_width: 24,
+            expected_height: 24,
         } if id == "text-window/image/5"
     ));
 

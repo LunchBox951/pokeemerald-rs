@@ -95,12 +95,24 @@ pub enum ExtractError {
         /// The decoded bit depth.
         bit_depth: u8,
     },
-    /// A text-window PNG declared zero-area dimensions (`0xN` or `Nx0`) —
-    /// its empty pixel buffer would pass the pixel-range validation
-    /// vacuously, and the read side (`AssetPack`'s typed accessors)
-    /// rejects such an entry anyway, so extraction must not produce it.
-    /// Carries the source path and the decoded dimensions.
-    TextWindowImageZeroArea(PathBuf, u32, u32),
+    /// A text-window PNG was not the exact shape its kind requires (24x24
+    /// for the numbered border frames — a 3x3 grid of 8x8 tiles — or
+    /// 56x16 for `message_box.png`). The read side (`AssetPack`'s typed
+    /// accessors) rejects any other shape, so extraction must not produce
+    /// it. Carries the source path, the decoded dimensions, and the
+    /// required dimensions.
+    TextWindowImageWrongDimensions {
+        /// The offending image's source path.
+        path: PathBuf,
+        /// The decoded width in pixels.
+        width: u32,
+        /// The decoded height in pixels.
+        height: u32,
+        /// The width this kind of text-window image requires.
+        expected_width: u32,
+        /// The height this kind of text-window image requires.
+        expected_height: u32,
+    },
     /// A text-window PNG contained a pixel index that cannot be mapped
     /// through its own bundled palette (an 8-bit-indexed PNG can carry
     /// indices at or above 16 while still holding the exactly-16-entry
@@ -169,9 +181,16 @@ impl fmt::Display for ExtractError {
                  256x512 at 2bpp",
                 path.display()
             ),
-            Self::TextWindowImageZeroArea(path, width, height) => write!(
+            Self::TextWindowImageWrongDimensions {
+                path,
+                width,
+                height,
+                expected_width,
+                expected_height,
+            } => write!(
                 f,
-                "text-window image `{}` declares zero-area dimensions {width}x{height}",
+                "text-window image `{}` is {width}x{height}: this kind requires exactly \
+                 {expected_width}x{expected_height}",
                 path.display()
             ),
             Self::TextWindowPixelOutsidePalette(path, pixel, palette_len) => write!(

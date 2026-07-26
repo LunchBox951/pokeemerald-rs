@@ -86,6 +86,19 @@ use format::Entry;
 /// shared, per this module's docs on why the two crates stay decoupled).
 const OUTPUT_RELATIVE_PATH: &str = "assets-pack/pokeemerald.pack";
 
+/// Every selectable text-window border frame is a 3x3 grid of 8x8 tiles —
+/// a 24x24 source sheet (upstream `sWindowFrames`,
+/// `graphics/text_window/1.png`..`20.png`).
+const FRAME_WIDTH: u32 = 24;
+/// See [`FRAME_WIDTH`].
+const FRAME_HEIGHT: u32 = 24;
+/// The default message-box sheet (upstream `gMessageBox_Gfx`,
+/// `graphics/text_window/message_box.png`) is a 56x16 (7x2-tile) strip,
+/// distinct from the border frames' 24x24 shape.
+const MESSAGE_BOX_WIDTH: u32 = 56;
+/// See [`MESSAGE_BOX_WIDTH`].
+const MESSAGE_BOX_HEIGHT: u32 = 16;
+
 /// A loaded asset pack: the whole file's bytes, plus a parsed, id-sorted
 /// directory for lookups.
 ///
@@ -345,6 +358,9 @@ impl AssetPack {
     /// [`palette`](Self::palette);
     /// [`PackError::MalformedTextWindowPalette`] if the palette entry is
     /// not the exact 16-colour/32-byte bank the handle documents;
+    /// [`PackError::TextWindowImageWrongDimensions`] if the tile bitmap
+    /// is not the exact shape this frame kind requires (24x24 here — a
+    /// 3x3 grid of 8x8 tiles, upstream's border layout);
     /// [`PackError::MalformedTextWindowImage`] if the tile bitmap's
     /// payload length disagrees with its declared `width * height`;
     /// [`PackError::TextWindowPixelOutsidePalette`] if the tile bitmap
@@ -359,6 +375,8 @@ impl AssetPack {
         self.window_frame(
             &format!("text-window/image/{source_number}"),
             &format!("text-window/palette/{source_number}"),
+            FRAME_WIDTH,
+            FRAME_HEIGHT,
         )
     }
 
@@ -375,6 +393,8 @@ impl AssetPack {
         self.window_frame(
             "text-window/image/message_box",
             "text-window/palette/message_box",
+            MESSAGE_BOX_WIDTH,
+            MESSAGE_BOX_HEIGHT,
         )
     }
 
@@ -418,10 +438,11 @@ impl AssetPack {
     /// Bundle a text-window frame's tile bitmap and palette, validating
     /// the pair on read like [`text_window_palette`](Self::text_window_palette)
     /// does for the palette alone: the read side must not trust pack
-    /// contents. A tile bitmap whose payload length disagrees with its own
-    /// declared `width * height` (violating [`ImageRef`]'s documented
-    /// pixel-count invariant), or holding a pixel its 16-colour palette
-    /// cannot map (possible in a corrupt or hand-built pack carrying an
+    /// contents. A tile bitmap that is not the exact shape its frame kind
+    /// requires, whose payload length disagrees with its own declared
+    /// `width * height` (violating [`ImageRef`]'s documented pixel-count
+    /// invariant), or holding a pixel its 16-colour palette cannot map
+    /// (possible in a corrupt or hand-built pack carrying an
     /// 8-bit-indexed image), is rejected here rather than handed to a
     /// renderer to index out of bounds. Extraction enforces the same pair
     /// rule on write (`xtask::extract`'s text-window pairing checks).
@@ -429,16 +450,21 @@ impl AssetPack {
         &self,
         image_id: &str,
         palette_id: &str,
+        expected_width: u32,
+        expected_height: u32,
     ) -> Result<WindowFrameHandle<'_>, PackError> {
         let tiles = self.image(image_id)?;
-        // A frame is a real 3x3-tile border bitmap: zero-area dimensions
-        // are as malformed as a mismatched payload (and would otherwise
-        // vacuously pass both the length and pixel-range checks).
+        if tiles.width != expected_width || tiles.height != expected_height {
+            return Err(PackError::TextWindowImageWrongDimensions {
+                id: image_id.to_owned(),
+                width: tiles.width,
+                height: tiles.height,
+                expected_width,
+                expected_height,
+            });
+        }
         let declared = u64::from(tiles.width) * u64::from(tiles.height);
-        if tiles.width == 0
-            || tiles.height == 0
-            || !u64::try_from(tiles.pixels.len()).is_ok_and(|len| len == declared)
-        {
+        if !u64::try_from(tiles.pixels.len()).is_ok_and(|len| len == declared) {
             return Err(PackError::MalformedTextWindowImage {
                 id: image_id.to_owned(),
                 width: tiles.width,

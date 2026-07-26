@@ -60,6 +60,24 @@ pub enum PackError {
         /// The entry's actual payload length in bytes.
         byte_len: usize,
     },
+    /// A text-window frame's tile bitmap is not the exact shape its frame
+    /// kind requires (24x24 for the selectable border frames — a 3x3 grid
+    /// of 8x8 tiles — or 56x16 for the default message box). A corrupt or
+    /// hand-built pack could otherwise hand a renderer an incomplete
+    /// border. Surfaced on read; extraction enforces the same shapes on
+    /// write.
+    TextWindowImageWrongDimensions {
+        /// The tile bitmap entry's id.
+        id: String,
+        /// The entry's declared width in pixels.
+        width: u32,
+        /// The entry's declared height in pixels.
+        height: u32,
+        /// The width this frame kind requires.
+        expected_width: u32,
+        /// The height this frame kind requires.
+        expected_height: u32,
+    },
     /// A text-window frame's tile bitmap entry's payload length disagrees
     /// with its own declared `width * height` pixel count — a corrupt or
     /// hand-built pack whose [`ImageRef`](crate::pack::ImageRef)
@@ -127,6 +145,17 @@ impl fmt::Display for PackError {
                 f,
                 "asset pack: text-window palette `{id}` declares {color_count} colours in \
                  {byte_len} bytes: expected exactly 16 colours in 32 bytes"
+            ),
+            Self::TextWindowImageWrongDimensions {
+                id,
+                width,
+                height,
+                expected_width,
+                expected_height,
+            } => write!(
+                f,
+                "asset pack: text-window image `{id}` is {width}x{height}: this frame kind \
+                 requires exactly {expected_width}x{expected_height}"
             ),
             Self::MalformedTextWindowImage {
                 id,

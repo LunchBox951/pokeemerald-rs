@@ -58,6 +58,23 @@ const TEXT_WINDOW_PALETTE_STEMS: [&str; 4] = ["text_pal1", "text_pal2", "text_pa
 /// Every text-window palette occupies one 16-colour GBA palette bank.
 const TEXT_WINDOW_PALETTE_COLORS: usize = 16;
 
+/// Every numbered border frame is a 3x3 grid of 8x8 tiles — a 24x24
+/// source sheet (upstream `sWindowFrames`).
+const FRAME_DIMENSIONS: (u32, u32) = (24, 24);
+
+/// `message_box.png` (upstream `gMessageBox_Gfx`) is a 56x16 (7x2-tile)
+/// strip, distinct from the border frames' 24x24 shape.
+const MESSAGE_BOX_DIMENSIONS: (u32, u32) = (56, 16);
+
+/// The exact shape `stem`'s image must have (see the two constants above).
+fn expected_dimensions(stem: &str) -> (u32, u32) {
+    if stem == "message_box" {
+        MESSAGE_BOX_DIMENSIONS
+    } else {
+        FRAME_DIMENSIONS
+    }
+}
+
 /// Extract `graphics/text_window/`'s full contents (see the module docs).
 pub(super) fn extract_text_window(
     upstream: &Path,
@@ -73,12 +90,11 @@ pub(super) fn extract_text_window(
         let image = png::decode(&bytes).map_err(|e| ExtractError::Png(path.clone(), e))?;
         let colors = png::decode_palette(&bytes).map_err(|e| ExtractError::Png(path.clone(), e))?;
         // Validate the pair as a unit, before either entry is serialized
-        // (see the module docs). Zero-area dimensions would make the
-        // pixel-range check below pass vacuously (and the read side
-        // rejects such an entry anyway); the colour-count check runs
-        // before the pixel check so an undersized palette reports as a
-        // palette problem, not as a pixel out of range.
-        validate_text_window_dimensions(&path, &image)?;
+        // (see the module docs): exact per-kind shape first (the read
+        // side rejects any other shape), then the colour count before the
+        // pixel check so an undersized palette reports as a palette
+        // problem, not as a pixel out of range.
+        validate_text_window_dimensions(&path, &image, expected_dimensions(stem))?;
         if colors.len() != TEXT_WINDOW_PALETTE_COLORS {
             return Err(ExtractError::TextWindowPaletteWrongColorCount(
                 path,
@@ -116,20 +132,23 @@ pub(super) fn extract_text_window(
     Ok(())
 }
 
-/// Reject a zero-area (`0xN` / `Nx0`) text-window bitmap (see
-/// [`extract_text_window`]'s pairing validation) — its empty pixel buffer
-/// would pass the pixel-range check vacuously, and the read side rejects
-/// such an entry anyway.
+/// Reject a text-window bitmap that is not the exact shape its kind
+/// requires (see [`extract_text_window`]'s pairing validation and
+/// [`expected_dimensions`]) — the read side rejects any other shape, so
+/// extraction must not produce one.
 fn validate_text_window_dimensions(
     path: &Path,
     image: &png::IndexedImage,
+    (expected_width, expected_height): (u32, u32),
 ) -> Result<(), ExtractError> {
-    if image.width == 0 || image.height == 0 {
-        return Err(ExtractError::TextWindowImageZeroArea(
-            path.to_path_buf(),
-            image.width,
-            image.height,
-        ));
+    if image.width != expected_width || image.height != expected_height {
+        return Err(ExtractError::TextWindowImageWrongDimensions {
+            path: path.to_path_buf(),
+            width: image.width,
+            height: image.height,
+            expected_width,
+            expected_height,
+        });
     }
     Ok(())
 }
@@ -210,7 +229,7 @@ fn validate_text_window_manifest(dir: &Path) -> Result<(), ExtractError> {
 mod tests {
     use super::super::{extract_to, png, upstream_present};
     use super::{
-        push_text_window_palette_entry, validate_text_window_dimensions,
+        expected_dimensions, push_text_window_palette_entry, validate_text_window_dimensions,
         validate_text_window_manifest, validate_text_window_pixels, ExtractError,
         TEXT_WINDOW_IMAGE_STEMS, TEXT_WINDOW_PALETTE_COLORS, TEXT_WINDOW_PALETTE_STEMS,
     };
@@ -327,7 +346,7 @@ mod tests {
     }
 
     #[test]
-    fn text_window_images_must_have_nonzero_area() {
+    fn text_window_images_must_match_their_kind_shape() {
         let path = std::path::Path::new("graphics/text_window/example.png");
         let image = |width: u32, height: u32| png::IndexedImage {
             width,
@@ -336,15 +355,28 @@ mod tests {
             pixels: Vec::new(),
         };
 
-        validate_text_window_dimensions(path, &image(24, 24)).unwrap();
+        // Numbered border frames are 24x24; message_box is 56x16.
+        assert_eq!(expected_dimensions("7"), (24, 24));
+        assert_eq!(expected_dimensions("message_box"), (56, 16));
+        validate_text_window_dimensions(path, &image(24, 24), expected_dimensions("7")).unwrap();
+        validate_text_window_dimensions(path, &image(56, 16), expected_dimensions("message_box"))
+            .unwrap();
 
-        for (width, height) in [(0, 2), (2, 0), (0, 0)] {
-            let err = validate_text_window_dimensions(path, &image(width, height)).unwrap_err();
+        // Anything else — including a self-consistent single 8x8 tile and
+        // zero-area shapes — must fail at extraction, not later on read.
+        for (width, height) in [(8, 8), (56, 16), (0, 2), (2, 0), (0, 0)] {
+            let err =
+                validate_text_window_dimensions(path, &image(width, height), (24, 24)).unwrap_err();
             assert!(
                 matches!(
                     err,
-                    ExtractError::TextWindowImageZeroArea(error_path, error_width, error_height)
-                        if error_path == path && error_width == width && error_height == height
+                    ExtractError::TextWindowImageWrongDimensions {
+                        path: error_path,
+                        width: error_width,
+                        height: error_height,
+                        expected_width: 24,
+                        expected_height: 24,
+                    } if error_path == path && error_width == width && error_height == height
                 ),
                 "wrong error for a {width}x{height} text-window image"
             );
