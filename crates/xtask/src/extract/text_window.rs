@@ -73,9 +73,12 @@ pub(super) fn extract_text_window(
         let image = png::decode(&bytes).map_err(|e| ExtractError::Png(path.clone(), e))?;
         let colors = png::decode_palette(&bytes).map_err(|e| ExtractError::Png(path.clone(), e))?;
         // Validate the pair as a unit, before either entry is serialized
-        // (see the module docs). The colour-count check runs first so an
-        // undersized palette reports as a palette problem, not as a
-        // pixel out of range.
+        // (see the module docs). Zero-area dimensions would make the
+        // pixel-range check below pass vacuously (and the read side
+        // rejects such an entry anyway); the colour-count check runs
+        // before the pixel check so an undersized palette reports as a
+        // palette problem, not as a pixel out of range.
+        validate_text_window_dimensions(&path, &image)?;
         if colors.len() != TEXT_WINDOW_PALETTE_COLORS {
             return Err(ExtractError::TextWindowPaletteWrongColorCount(
                 path,
@@ -109,6 +112,24 @@ pub(super) fn extract_text_window(
             format!("text-window/palette/{stem}"),
             writer,
         )?;
+    }
+    Ok(())
+}
+
+/// Reject a zero-area (`0xN` / `Nx0`) text-window bitmap (see
+/// [`extract_text_window`]'s pairing validation) — its empty pixel buffer
+/// would pass the pixel-range check vacuously, and the read side rejects
+/// such an entry anyway.
+fn validate_text_window_dimensions(
+    path: &Path,
+    image: &png::IndexedImage,
+) -> Result<(), ExtractError> {
+    if image.width == 0 || image.height == 0 {
+        return Err(ExtractError::TextWindowImageZeroArea(
+            path.to_path_buf(),
+            image.width,
+            image.height,
+        ));
     }
     Ok(())
 }
@@ -187,11 +208,11 @@ fn validate_text_window_manifest(dir: &Path) -> Result<(), ExtractError> {
 
 #[cfg(test)]
 mod tests {
-    use super::super::{extract_to, upstream_present};
+    use super::super::{extract_to, png, upstream_present};
     use super::{
-        push_text_window_palette_entry, validate_text_window_manifest, validate_text_window_pixels,
-        ExtractError, TEXT_WINDOW_IMAGE_STEMS, TEXT_WINDOW_PALETTE_COLORS,
-        TEXT_WINDOW_PALETTE_STEMS,
+        push_text_window_palette_entry, validate_text_window_dimensions,
+        validate_text_window_manifest, validate_text_window_pixels, ExtractError,
+        TEXT_WINDOW_IMAGE_STEMS, TEXT_WINDOW_PALETTE_COLORS, TEXT_WINDOW_PALETTE_STEMS,
     };
 
     fn scratch_path(name: &str) -> std::path::PathBuf {
@@ -303,6 +324,31 @@ mod tests {
         )
         .unwrap();
         assert_eq!(writer.len(), 1);
+    }
+
+    #[test]
+    fn text_window_images_must_have_nonzero_area() {
+        let path = std::path::Path::new("graphics/text_window/example.png");
+        let image = |width: u32, height: u32| png::IndexedImage {
+            width,
+            height,
+            bit_depth: 4,
+            pixels: Vec::new(),
+        };
+
+        validate_text_window_dimensions(path, &image(24, 24)).unwrap();
+
+        for (width, height) in [(0, 2), (2, 0), (0, 0)] {
+            let err = validate_text_window_dimensions(path, &image(width, height)).unwrap_err();
+            assert!(
+                matches!(
+                    err,
+                    ExtractError::TextWindowImageZeroArea(error_path, error_width, error_height)
+                        if error_path == path && error_width == width && error_height == height
+                ),
+                "wrong error for a {width}x{height} text-window image"
+            );
+        }
     }
 
     #[test]

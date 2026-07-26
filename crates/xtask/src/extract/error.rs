@@ -95,6 +95,12 @@ pub enum ExtractError {
         /// The decoded bit depth.
         bit_depth: u8,
     },
+    /// A text-window PNG declared zero-area dimensions (`0xN` or `Nx0`) —
+    /// its empty pixel buffer would pass the pixel-range validation
+    /// vacuously, and the read side (`AssetPack`'s typed accessors)
+    /// rejects such an entry anyway, so extraction must not produce it.
+    /// Carries the source path and the decoded dimensions.
+    TextWindowImageZeroArea(PathBuf, u32, u32),
     /// A text-window PNG contained a pixel index that cannot be mapped
     /// through its own bundled palette (an 8-bit-indexed PNG can carry
     /// indices at or above 16 while still holding the exactly-16-entry
@@ -161,6 +167,11 @@ impl fmt::Display for ExtractError {
                 f,
                 "font glyph sheet `{}` is {width}x{height} at {bit_depth}bpp: expected exactly \
                  256x512 at 2bpp",
+                path.display()
+            ),
+            Self::TextWindowImageZeroArea(path, width, height) => write!(
+                f,
+                "text-window image `{}` declares zero-area dimensions {width}x{height}",
                 path.display()
             ),
             Self::TextWindowPixelOutsidePalette(path, pixel, palette_len) => write!(
