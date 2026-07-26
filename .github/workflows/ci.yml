@@ -50,9 +50,20 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
-          fetch-depth: 0 # full history so version_check can reach origin/main
+          fetch-depth: 0 # full history so version_check can reach every channel branch
       - name: Validate VERSION
-        run: python3 scripts/version_check.py --base origin/main --head HEAD
+        # The monotonic-version guarantee is against the actual merge target,
+        # not always origin/main: a channel/release branch ahead of main must
+        # not be allowed to regress just because it is still above main (#128).
+        # `github.base_ref` is only set for pull_request events; push events
+        # (direct commits, promotions) have no PR target and keep comparing
+        # against origin/main.
+        run: |
+          base="origin/main"
+          if [ -n "${{ github.base_ref }}" ]; then
+            base="origin/${{ github.base_ref }}"
+          fi
+          python3 scripts/version_check.py --base "$base" --head HEAD
 
   # Policy gate (ubuntu-only): reject stale ledger targets once Rust targets exist.
   ledger:
