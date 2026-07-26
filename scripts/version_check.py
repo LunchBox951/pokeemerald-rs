@@ -28,9 +28,22 @@ What this script checks:
 4. Reject a proposed version lower than the base (lexicographic compare over
    four unsigned ints: FINAL, then MAJOR, then MINOR, then PATCH).
 5. Reject a MAJOR or MINOR bump that does not reset all lower components to 0.
-6. Reject a FINAL change unless a maintainer-approved override marker file is
-   present. ``FINAL`` is maintainer-only and must never be moved by
-   automation or drive-by contributors (handle: gated-by-default).
+6. Reject a FINAL change unless the maintainer-approved override marker file
+   (``docs/release/final-gate-approved.md`` by default) is present *at head*,
+   parses as an explicit approval of the exact proposed VERSION, and differs
+   from whatever that same path contained at the base ref. ``FINAL`` is
+   maintainer-only and must never be moved by automation or drive-by
+   contributors (handle: gated-by-default). A marker is only evidence for
+   *this* transition if the diff actually touched it -- an untouched marker
+   left over from an earlier approval authorizes nothing.
+
+   The marker must contain, one per line (case-insensitive keys, order
+   doesn't matter)::
+
+       Approved version: <FINAL.MAJOR.MINOR.PATCH>
+       Date: <YYYY-MM-DD>
+
+   the ``Approved version`` must equal the proposed VERSION exactly.
 
 Exit status: ``0`` on success (prints a clear OK line), non-zero with a clear
 message on any rejection or read/parse error.
@@ -43,7 +56,8 @@ Self-test notes -- example version transitions.
     0.1.2.5 -> 0.1.2.6   # PATCH bump
     0.1.2.5 -> 0.1.3.0   # MINOR bump, lower components reset
     0.1.2.5 -> 0.2.0.0   # MAJOR bump, lower components reset
-    0.9.9.9 -> 1.0.0.0   # FINAL bump -- ONLY with the approval marker present
+    0.9.9.9 -> 1.0.0.0   # FINAL bump -- ONLY with a freshly committed marker
+                         # naming "Approved version: 1.0.0.0" plus a Date
 
   Rejected:
     0.1.2.5 -> 0.1.1.6   # regression (MINOR moved backward)
@@ -51,6 +65,8 @@ Self-test notes -- example version transitions.
     0.1.2.5 -> v0.1.2.6  # malformed (VERSION must omit the tag prefix)
     0.1.2.5 -> 0.1.3.6   # MINOR bump did NOT reset PATCH to 0
     0.9.9.9 -> 1.0.0.0   # FINAL bump WITHOUT the approval marker -> rejected
+    0.9.9.9 -> 1.0.0.0   # FINAL bump whose marker is unchanged from base,
+                         # malformed, or names a version other than 1.0.0.0
 
 You can exercise these by writing a VERSION file and running, e.g.::
 
@@ -62,8 +78,10 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import subprocess
 import sys
+from datetime import date as _date
 from typing import Optional, Tuple
 
 # Number of components in the version scheme: FINAL.MAJOR.MINOR.PATCH.
@@ -79,6 +97,11 @@ DEFAULT_FINAL_GATE_MARKER = "docs/release/final-gate-approved.md"
 
 # The base version assumed when no prior VERSION exists (new repo / no remote).
 ABSENT_BASE_VERSION = (0, 0, 0, 0)
+
+# Marker line patterns: "Approved version: 1.0.0.0" / "Date: 2026-07-25".
+# Case-insensitive key, colon-separated, one non-blank token as the value.
+MARKER_VERSION_RE = re.compile(r"(?im)^\s*approved version\s*:\s*(\S+)\s*$")
+MARKER_DATE_RE = re.compile(r"(?im)^\s*date\s*:\s*(\S+)\s*$")
 
 Version = Tuple[int, int, int, int]
 
@@ -147,73 +170,102 @@ def parse_version(raw: str, source: str) -> Version:
     return (values[0], values[1], values[2], values[3])
 
 
-def read_head_version(head: str, root: str) -> Version:
-    """Read VERSION at HEAD.
+def read_ref_file(ref: str, rel_path: str, root: str) -> Optional[str]:
+    """Return the contents of ``rel_path`` at ``ref``, or ``None`` if absent.
 
-    For the default 'HEAD' we read the working-tree file so an uncommitted
-    bump is validated. For any other ref we read that ref's committed VERSION.
+    ``'HEAD'`` reads the working-tree file (so an uncommitted change is
+    validated); any other ref reads that ref's committed blob via
+    ``git show``. A missing file or unknown ref is reported as ``None``
+    rather than an error -- callers decide whether absence is fatal.
     """
-    if head == "HEAD":
-        path = os.path.join(root, "VERSION")
+    if ref == "HEAD":
+        path = os.path.join(root, rel_path)
         try:
             with open(path, "r", encoding="utf-8") as fh:
-                raw = fh.read()
-        except FileNotFoundError:
-            raise VersionError(
-                f"head ({head}): VERSION file not found at {path}"
-            )
-        except OSError as exc:
-            raise VersionError(f"head ({head}): cannot read VERSION: {exc}")
-        return parse_version(raw, f"head ({head})")
-
-    raw = git_show_version(head)
-    if raw is None:
-        raise VersionError(
-            f"head ({head}): VERSION not found at ref {head!r}"
-        )
-    return parse_version(raw, f"head ({head})")
+                return fh.read()
+        except OSError:
+            return None
+    return git_show_file(ref, rel_path)
 
 
-def git_show_version(ref: str) -> Optional[str]:
-    """Return the contents of ``<ref>:VERSION`` via ``git show``.
+def git_show_file(ref: str, rel_path: str) -> Optional[str]:
+    """Return the contents of ``<ref>:<rel_path>`` via ``git show``.
 
     Returns ``None`` if the ref is unknown or the file is absent on that ref
-    (e.g. a fresh repo with no ``origin/main`` yet). Any git failure is
-    treated as "no base version" rather than a hard error so the very first
-    commit is not rejected.
+    (e.g. a fresh repo with no ``origin/main`` yet, or a marker that simply
+    doesn't exist there). Any git failure is treated as "absent" rather than
+    a hard error so the very first commit is not rejected.
     """
     try:
         out = subprocess.run(
-            ["git", "show", f"{ref}:VERSION"],
+            ["git", "show", f"{ref}:{rel_path}"],
             capture_output=True,
             text=True,
         )
     except (FileNotFoundError, OSError):
-        # git not installed / not runnable -> behave as if no base exists.
+        # git not installed / not runnable -> behave as if absent.
         return None
     if out.returncode != 0:
         return None
     return out.stdout
 
 
-def read_base_version(base: str) -> Version:
+def read_head_version(head: str, root: str) -> Version:
+    """Read VERSION at ``head`` (working tree for 'HEAD', else the ref)."""
+    raw = read_ref_file(head, "VERSION", root)
+    if raw is None:
+        raise VersionError(f"head ({head}): VERSION not found")
+    return parse_version(raw, f"head ({head})")
+
+
+def read_base_version(base: str, root: str) -> Version:
     """Read VERSION at the base ref, defaulting to 0.0.0.0 when absent."""
-    raw = git_show_version(base)
+    raw = read_ref_file(base, "VERSION", root)
     if raw is None:
         return ABSENT_BASE_VERSION
     return parse_version(raw, f"base ({base})")
 
 
-def marker_present(root: str, marker_rel: str) -> bool:
-    """True if the maintainer FINAL-gate approval marker file exists."""
-    return os.path.isfile(os.path.join(root, marker_rel))
+def parse_marker(raw: str, source: str) -> Tuple[Version, str]:
+    """Parse a FINAL-gate approval marker's ``Approved version`` and ``Date``.
+
+    Raises ``VersionError`` if either field is missing or malformed. Returns
+    the approved version tuple and the raw (validated) date string.
+    """
+    version_match = MARKER_VERSION_RE.search(raw)
+    if not version_match:
+        raise VersionError(
+            f"{source}: FINAL-gate marker is missing an "
+            f"'Approved version: FINAL.MAJOR.MINOR.PATCH' line"
+        )
+    date_match = MARKER_DATE_RE.search(raw)
+    if not date_match:
+        raise VersionError(
+            f"{source}: FINAL-gate marker is missing a 'Date: YYYY-MM-DD' line"
+        )
+
+    approved_version = parse_version(
+        version_match.group(1), f"{source} (Approved version)"
+    )
+
+    date_text = date_match.group(1)
+    try:
+        _date.fromisoformat(date_text)
+    except ValueError:
+        raise VersionError(
+            f"{source}: FINAL-gate marker Date {date_text!r} is not a valid "
+            f"YYYY-MM-DD date"
+        )
+
+    return approved_version, date_text
 
 
 def check_transition(
     base: Version,
     head: Version,
     *,
-    marker_ok: bool,
+    marker_head: Optional[str],
+    marker_base: Optional[str],
     marker_rel: str,
 ) -> None:
     """Validate base -> head; raise VersionError on any disallowed move."""
@@ -224,14 +276,37 @@ def check_transition(
             f"{fmt(base)} (versions only move forward)"
         )
 
-    # 6. FINAL changes require the maintainer-approved override marker.
-    #    (Any change to FINAL -- not just an increase -- is gated.)
-    if head[0] != base[0] and not marker_ok:
-        raise VersionError(
-            f"FINAL changed {base[0]} -> {head[0]} without the maintainer "
-            f"approval marker. FINAL is maintainer-only; commit "
-            f"'{marker_rel}' to authorize this release."
-        )
+    # 6. FINAL changes require a maintainer-approved override marker that is
+    #    (a) present at head, (b) a valid, parseable approval, (c) naming
+    #    this exact proposed VERSION, and (d) actually introduced or edited
+    #    by this change -- an untouched marker inherited from base is not
+    #    evidence of review for *this* transition (any change to FINAL, not
+    #    just an increase, is gated).
+    if head[0] != base[0]:
+        if marker_head is None:
+            raise VersionError(
+                f"FINAL changed {base[0]} -> {head[0]} without the "
+                f"maintainer approval marker. FINAL is maintainer-only; "
+                f"commit '{marker_rel}' naming 'Approved version: "
+                f"{fmt(head)}' and a Date to authorize this release."
+            )
+
+        approved_version, _approved_date = parse_marker(marker_head, marker_rel)
+
+        if approved_version != head:
+            raise VersionError(
+                f"FINAL-gate marker '{marker_rel}' approves "
+                f"{fmt(approved_version)}, not the proposed {fmt(head)}; "
+                f"update the marker to name the exact target version"
+            )
+
+        if marker_head == marker_base:
+            raise VersionError(
+                f"FINAL-gate marker '{marker_rel}' is unchanged from the "
+                f"base revision; it must be added or updated to record "
+                f"approval of this specific {fmt(base)} -> {fmt(head)} "
+                f"transition, not carried over from an earlier approval"
+            )
 
     # 5. A MAJOR or MINOR bump must reset all lower components to 0.
     #    (FINAL itself is index 0; a FINAL bump is governed by the gate above,
@@ -316,12 +391,14 @@ def main(argv: Optional[list] = None) -> int:
 
     try:
         head_version = read_head_version(args.head, root)
-        base_version = read_base_version(args.base)
-        marker_ok = marker_present(root, args.final_gate_marker)
+        base_version = read_base_version(args.base, root)
+        marker_head = read_ref_file(args.head, args.final_gate_marker, root)
+        marker_base = read_ref_file(args.base, args.final_gate_marker, root)
         check_transition(
             base_version,
             head_version,
-            marker_ok=marker_ok,
+            marker_head=marker_head,
+            marker_base=marker_base,
             marker_rel=args.final_gate_marker,
         )
     except VersionError as exc:
