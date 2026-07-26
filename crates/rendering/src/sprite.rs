@@ -289,16 +289,22 @@ impl<'a> SpriteLayer<'a> {
     /// [`Texel::Opaque`] with the resolved color.
     ///
     /// A composition of [`footprint`](Self::footprint) (does the *raw*
-    /// coordinate land on the sprite, and where) and
-    /// [`sample_local`](Self::sample_local) (fetch the texel at a
-    /// footprint-local offset). For a mosaic-enabled entry the sampled texel
-    /// comes from the mosaic block origin, clamped back into the footprint
-    /// ([`MosaicSize::snap_local`]); keeping the footprint test on the raw
-    /// coordinate is what avoids the pre-fix transparent leading band when the
-    /// sprite's top/left edge is not block-aligned — the block straddling the
-    /// edge now replicates the edge column/row instead of being discarded
-    /// `(behavioral-fidelity)`. At [`MosaicSize::NONE`] (or a non-mosaic entry)
-    /// the snap is a no-op.
+    /// coordinate land on the sprite, or its mosaic-extended trailing block,
+    /// and where) and [`sample_local`](Self::sample_local) (fetch the texel
+    /// at a footprint-local offset). For a mosaic-enabled entry the sampled
+    /// texel comes from the mosaic block origin, clamped back into the
+    /// footprint ([`MosaicSize::snap_local`]); keeping the footprint test on
+    /// the raw coordinate (rather than a screen-space-snapped one) is what
+    /// avoids the pre-fix transparent leading band when the sprite's
+    /// top/left edge is not block-aligned — the block straddling the edge
+    /// now replicates the edge column/row instead of being discarded
+    /// `(behavioral-fidelity)`. Symmetrically, `footprint` extends the raw
+    /// *right* edge out to the next H mosaic boundary
+    /// ([`MosaicSize::round_trailing_edge`]) so the trailing partial block
+    /// also finishes instead of being cut short at the raw sprite edge. Only
+    /// an entry with its own OBJ mosaic bit set gets either extension — a
+    /// non-mosaic entry always uses [`MosaicSize::NONE`], at which both are a
+    /// no-op.
     fn sample_entry_mosaic(
         &self,
         entry: &OamEntry,
@@ -306,31 +312,44 @@ impl<'a> SpriteLayer<'a> {
         y: usize,
         mosaic: MosaicSize,
     ) -> Texel {
-        let Some((dx, dy)) = Self::footprint(entry, x, y) else {
+        let mosaic = if entry.mosaic() {
+            mosaic
+        } else {
+            MosaicSize::NONE
+        };
+        let Some((dx, dy)) = Self::footprint(entry, x, y, mosaic) else {
             return Texel::Outside;
         };
-        let (lx, ly) = if entry.mosaic() {
-            mosaic.snap_local((dx, dy), (x, y), entry.bounding_box())
-        } else {
-            (dx, dy)
-        };
+        let (lx, ly) = mosaic.snap_local((dx, dy), (x, y), entry.bounding_box());
         self.sample_local(entry, lx, ly)
     }
 
-    /// Whether framebuffer coordinate `(x, y)` lands on `entry`'s footprint,
-    /// and if so its footprint-local offset `(dx, dy)` (both `< bounding box`).
+    /// Whether framebuffer coordinate `(x, y)` lands on `entry`'s footprint —
+    /// its raw bounding box, extended past the raw right edge out to the next
+    /// H mosaic-block boundary when `mosaic` is not [`MosaicSize::NONE`] — and
+    /// if so its footprint-local offset `(dx, dy)`. `dx` is `< bounding box`
+    /// for a raw-footprint hit, but can run past it (up to the mosaic-block
+    /// boundary) for a trailing mosaic sample; [`MosaicSize::snap_local`]
+    /// clamps it back before it reaches [`sample_local`](Self::sample_local).
     ///
-    /// `x`/`y` are always framebuffer coordinates (`<240`, `<160`) and
-    /// sprite dimensions never exceed 64, so the `i32` round-trips below
-    /// never truncate, wrap, or lose their sign in practice — the
-    /// `#[allow]`s document that, rather than threading `TryFrom` through
-    /// arithmetic that cannot actually fail here.
+    /// `x`/`y` are always framebuffer coordinates (`<240`, `<160`), sprite
+    /// dimensions never exceed 64, and OBJ mosaic block sizes never exceed
+    /// 16 (`MosaicSize`'s 4-bit register field), so the `i32` round-trips
+    /// below — including the mosaic-extended `dx` — never truncate, wrap, or
+    /// lose their sign in practice; the `#[allow]`s document that, rather
+    /// than threading `TryFrom` through arithmetic that cannot actually fail
+    /// here.
     #[allow(
         clippy::cast_possible_truncation,
         clippy::cast_possible_wrap,
         clippy::cast_sign_loss
     )]
-    fn footprint(entry: &OamEntry, x: usize, y: usize) -> Option<(usize, usize)> {
+    fn footprint(
+        entry: &OamEntry,
+        x: usize,
+        y: usize,
+        mosaic: MosaicSize,
+    ) -> Option<(usize, usize)> {
         // Footprint clipping uses the *bounding box* — equal to
         // `entry.dimensions()` for a regular or plain-affine sprite, but
         // doubled for `AffineMode::AffineDoubleSize` (oam.rs's module docs)
@@ -340,10 +359,25 @@ impl<'a> SpriteLayer<'a> {
 
         // X: no positional wrap (the 9-bit field already decoded to a
         // signed screen position, see oam.rs's module docs) — just
-        // offset+clip.
-        let dx = x as i32 - i32::from(entry.x());
-        if dx < 0 || dx as usize >= width {
+        // offset+clip. A raw miss past the right edge (`dx >= width`) is not
+        // necessarily a footprint miss: OBJ mosaic draws through to the next
+        // H mosaic-block boundary past the raw edge (mgba's `SPRITE_MOSAIC_LOOP`
+        // `condition` rounding, software-obj.c:320-325), so accept it there
+        // too — `sample_entry_mosaic`'s `snap_local` clamps the oversized
+        // `dx` back to the edge column before it is ever used to index a
+        // tile. At `MosaicSize::NONE` (or a raw-footprint hit) this extension
+        // is a no-op: only an entry with its own mosaic bit set reaches this
+        // branch with a non-`NONE` `mosaic` (`sample_entry_mosaic`).
+        let entry_x = i32::from(entry.x());
+        let dx = x as i32 - entry_x;
+        if dx < 0 {
             return None;
+        }
+        if dx as usize >= width {
+            let raw_end = entry_x + width as i32;
+            if x as i32 >= mosaic.round_trailing_edge(raw_end) {
+                return None;
+            }
         }
 
         // Y: OBJ Y-space is 8-bit, but hardware does not clip each scanline
@@ -1064,6 +1098,48 @@ mod tests {
                 .resolve_pixel_with_mosaic(7, 0, mosaic)
                 .map(|p| p.color),
             Some(colors[2].to_rgb888()),
+        );
+    }
+
+    #[test]
+    fn mosaic_sprite_trailing_partial_block_extends_past_the_raw_edge() {
+        // Issue #132: an opaque regular 8x8 OBJ at decoded x = -4 (raw OAM
+        // field 0x1fc) with H mosaic size 3. The sprite's raw right edge sits
+        // at screen x = 4 (-4 + 8); mgba rounds that up to the next mosaic-H
+        // boundary (6) and keeps drawing through it, clamping every sample
+        // past the raw edge (screen x = 3, 4, 5) to the edge column (local
+        // col 7) — screen x = 6 falls outside the rounded block and must stay
+        // uncovered.
+        // Every texel -> index 1 (opaque), both nibbles.
+        let bytes = [0x11u8; 32];
+        let tileset = Tileset::decode(BitDepth::Bpp4, &bytes).unwrap();
+        let mut colors = [Bgr555::default(); Palette::LEN];
+        colors[1] = Bgr555::from_channels(0x1F, 0x1F, 0x1F); // opaque white
+        let palette = Palette::new(colors);
+
+        let entries = [entry(0x1fc, 0, true).with_mosaic(true)];
+        let layer = SpriteLayer::new(&entries, &tileset, &tileset, &palette);
+        let mosaic = MosaicSize::new(3, 1);
+
+        // Screen x = 0..=5 must all resolve opaque: 0..=2 sample the raw
+        // footprint directly (pre-fix behavior, unchanged), 3..=5 fall in the
+        // rounded trailing block and must now extend past the raw edge
+        // (screen x = 4) instead of the pre-fix `None`.
+        for x in 0..=5 {
+            assert_eq!(
+                layer
+                    .resolve_pixel_with_mosaic(x, 0, mosaic)
+                    .map(|p| p.color),
+                Some(colors[1].to_rgb888()),
+                "screen x = {x} must be covered by the trailing mosaic block"
+            );
+        }
+        // Screen x = 6 is past the rounded block boundary (6) and must stay
+        // outside the sprite's footprint entirely.
+        assert_eq!(
+            layer.resolve_pixel_with_mosaic(6, 0, mosaic),
+            None,
+            "screen x = 6 is past the rounded trailing block and must not be covered"
         );
     }
 
