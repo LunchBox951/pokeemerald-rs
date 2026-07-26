@@ -69,14 +69,23 @@
 //!   `BorderGrid`) that reads these bytes back out of the pack; this
 //!   pipeline only needs to get the bytes *into* the pack.
 //!
+//! - **Fonts** (S-4, issue #114): the five upstream Latin glyph sheets —
+//!   see [`fonts`]'s module docs for the sheet shape and what is
+//!   deliberately not extracted.
+//!
+//! - **Text window frames** (S-4, issue #114): every file under
+//!   `graphics/text_window/` — see [`text_window`]'s module docs for the
+//!   manifest and the image/palette pairing validation.
+//!
 //! Explicitly **not** extracted (deferred to future slices, not silently
 //! dropped): metatile-to-tile mapping beyond the raw `metatiles.bin` bytes
 //! (no decode/typed access yet — that's a rendering-layer concern once
 //! `crates/rendering` needs it), NPC-specific palette assignment (the
 //! `object_event_graphics_info` indirection table), any tileset outside the
 //! five above (every other `data/tilesets/*` directory stays `pending` in
-//! the ledger), and any map layout outside the Littleroot Town family above
-//! (every other `data/layouts/*` directory likewise stays `pending`).
+//! the ledger), any map layout outside the Littleroot Town family above
+//! (every other `data/layouts/*` directory likewise stays `pending`), and
+//! every non-Latin font sheet under `graphics/fonts/` (see above).
 //!
 //! # Asset id scheme
 //!
@@ -89,6 +98,15 @@
 //! - `sprite/palette/brendan`, `sprite/palette/may`
 //! - `layout/<name>/map`, `layout/<name>/border` (e.g.
 //!   `layout/littleroot_town/map`, `layout/littleroot_town/border`)
+//! - `font/<name>/glyphs` (e.g. `font/normal/glyphs` — `<name>` is the
+//!   upstream `FONT_*` id, lowercased: `small`, `normal`, `short`, `narrow`,
+//!   `small_narrow`; see [`FONTS`])
+//! - `text-window/image/<stem>`, `text-window/palette/<stem>` — `<stem>` is
+//!   the upstream filename's stem (e.g. `1` .. `20`, `message_box`,
+//!   `text_pal1` .. `text_pal4`), mirroring `title/image/<name>` above.
+//!   `text-window/palette/1`..`20`/`message_box` come from each PNG's own
+//!   `PLTE`; `text-window/palette/text_pal1`..`4` come from the sibling
+//!   `.pal` files.
 //!
 //! `<name>` is always a normalized, stable identifier (upstream's own
 //! directory/file naming, which is already `snake_case` and stable across
@@ -96,11 +114,13 @@
 //! [`pack`]'s module docs for why that matters.
 
 mod error;
+mod fonts;
 pub mod inflate;
 pub mod jasc_pal;
 mod layouts_json;
 pub mod pack;
 pub mod png;
+mod text_window;
 
 use std::path::{Path, PathBuf};
 
@@ -190,6 +210,8 @@ fn extract_to(output_path: &Path) -> Result<ExtractReport, ExtractError> {
     extract_title_screen(&upstream, &mut writer)?;
     extract_sprites(&upstream, &mut writer)?;
     extract_layouts(&upstream, &mut writer)?;
+    fonts::extract_fonts(&upstream, &mut writer)?;
+    text_window::extract_text_window(&upstream, &mut writer)?;
 
     let entry_count = writer.len();
     let bytes = writer.finish()?;
@@ -251,8 +273,16 @@ fn decode_palette_entry(
 ) -> Result<(), ExtractError> {
     let text = read_text(path)?;
     let colors = jasc_pal::parse(&text).map_err(|e| ExtractError::Pal(path.to_path_buf(), e))?;
+    push_palette_entry(&colors, id, writer);
+    Ok(())
+}
+
+/// Serialize already-decoded colours (from either a JASC `.pal` file or a
+/// PNG's own `PLTE` chunk — see [`text_window`]) into a
+/// [`PackKind::Palette`] entry.
+fn push_palette_entry(colors: &[jasc_pal::Rgb888], id: String, writer: &mut PackWriter) {
     let mut payload = Vec::with_capacity(colors.len() * 2);
-    for color in &colors {
+    for color in colors {
         payload.extend_from_slice(&color.to_gba555().to_le_bytes());
     }
     #[allow(clippy::cast_possible_truncation)]
@@ -263,7 +293,6 @@ fn decode_palette_entry(
         },
         payload,
     });
-    Ok(())
 }
 
 fn raw_entry(path: &Path, id: String, writer: &mut PackWriter) -> Result<(), ExtractError> {

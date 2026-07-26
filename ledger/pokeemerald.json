@@ -12258,6 +12258,14 @@
       "status": "pending"
     },
     "graphics/fonts": {
+      "artifacts": {
+        "latin": {
+          "reason": "The 5 Latin font glyph sheets (latin_{normal,narrow,short,small,small_narrow}.png) extracted into the local gitignored asset pack by crates/xtask/src/extract/fonts.rs (validated 256x512/2bpp at extraction) via the bit-depth-2 PNG decode path (crates/xtask/src/extract/png.rs), read back via AssetPack::font and typed per-glyph access in crates/assets/src/fonts.rs (FontGlyphSheet). The other 12 files (Japanese, braille, arrows, keypad icons) are not extracted -- v1 is English-only text -- so the directory's own status stays pending.",
+          "rust_target": "crates/xtask/src/extract/fonts.rs",
+          "spec": "S-4",
+          "status": "ported"
+        }
+      },
       "category": "graphics.font",
       "kind": "dir",
       "spec_owner": "02-rendering",
@@ -16090,8 +16098,10 @@
     "graphics/text_window": {
       "category": "graphics.ui",
       "kind": "dir",
-      "spec_owner": "05-assets",
-      "status": "pending"
+      "reason": "Full directory extracted into the local gitignored asset pack (Discussion #71 policy A) by crates/xtask/src/extract/text_window.rs: all 20 numbered border-frame tile sheets, the default message_box tile sheet, and the 4 extra text_pal*.pal textbox palettes, with the image+palette pair of each frame validated as a unit (exact 16-colour bank, every pixel mappable) before serialization. Frame/message-box palettes come from each PNG's own PLTE chunk (crates/xtask/src/extract/png.rs's decode_palette), decoded alongside the existing JASC-.pal path for text_pal*.pal. Read back with typed access via AssetPack::text_window_frame/message_box/text_window_extra_palette in crates/assets/src/pack.rs (WindowFrameHandle). Interpreting the 3x3 border-tile layout itself is future rendering-layer behavior, out of scope here.",
+      "rust_target": "crates/xtask/src/extract/text_window.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/title_screen": {
       "category": "graphics.scene",
@@ -17734,6 +17744,14 @@
       "status": "pending"
     },
     "include/fonts.h": {
+      "artifacts": {
+        "latin": {
+          "reason": "The 5 Latin gFont*LatinGlyphs/gFont*LatinGlyphWidths extern declarations this header carries have a real Rust counterpart: glyph sheets via AssetPack::font (crates/assets/src/pack.rs) and width tables via crates/assets/src/fonts.rs's FontId::glyph_widths. The header's Japanese glyph-table declarations (gFontNormalJapaneseGlyphs, gFontSmallJapaneseGlyphs, gFontShortJapaneseGlyphs/Widths) are not covered, so the file's own status stays pending.",
+          "rust_target": "crates/assets/src/fonts.rs",
+          "spec": "S-4",
+          "status": "ported"
+        }
+      },
       "category": "code.header",
       "kind": "file",
       "status": "pending"
@@ -18459,6 +18477,14 @@
       "status": "pending"
     },
     "include/text_window.h": {
+      "artifacts": {
+        "frame_data": {
+          "reason": "WINDOW_FRAMES_COUNT (20) and struct TilesPal's tiles+pal shape are mirrored by the WindowFrameHandle{tiles,palette} bundle (crates/assets/src/pack.rs). GetWindowFrameTilesPal's lookup behavior is tracked as the rewritten src/text_window.c#GetWindowFrameTilesPal artifact, not claimed here. The header's VRAM-loading/rendering prototypes (LoadWindowGfx, LoadUserWindowBorderGfx*, DrawTextBorderOuter/Inner, rbox_fill_rectangle, GetTextWindowPalette, GetOverworldTextboxPalettePtr) remain unimplemented, so the file's own status stays pending.",
+          "rust_target": "crates/assets/src/pack.rs",
+          "spec": "S-4",
+          "status": "ported"
+        }
+      },
       "category": "code.header",
       "kind": "file",
       "status": "pending"
@@ -25297,6 +25323,14 @@
       "status": "pending"
     },
     "src/fonts.c": {
+      "artifacts": {
+        "latin": {
+          "reason": "The 5 Latin glyph tables (gFontNormalLatinGlyphs and its 4 siblings) plus their gFont*LatinGlyphWidths width tables transcribed as Rust data / typed decode: glyph sheets extracted into the asset pack (crates/xtask/src/extract/fonts.rs), width tables ported verbatim as static arrays in crates/assets/src/fonts.rs (FontId::glyph_widths), per-glyph access via FontGlyphSheet::glyph. The Japanese/FRLG/braille/keypad glyph and width tables in this file are not covered, so the file's own status stays pending.",
+          "rust_target": "crates/assets/src/fonts.rs",
+          "spec": "S-4",
+          "status": "ported"
+        }
+      },
       "category": "code.source",
       "kind": "file",
       "status": "pending"
@@ -26480,6 +26514,20 @@
       "status": "pending"
     },
     "src/text_window.c": {
+      "artifacts": {
+        "GetWindowFrameTilesPal": {
+          "reason": "The zero-based 0..19 frame lookup with out-of-range fallback to frame 0 is re-implemented as code in AssetPack::text_window_frame (crates/assets/src/pack.rs), translating sWindowFrames indices to extracted source filenames 1.png..20.png -- a code re-implementation, distinct from the ported frame_data assets.",
+          "rust_target": "crates/assets/src/pack.rs",
+          "spec": "S-4",
+          "status": "rewritten"
+        },
+        "frame_data": {
+          "reason": "The gTextWindowFrame1_Gfx/sTextWindowFrame2_Gfx..20 tile sheets, their .gbapal-derived palettes, and the sWindowFrames/sTextWindowPalettes data tables are extracted into the asset pack (crates/xtask/src/extract/text_window.rs) and exposed via WindowFrameHandle (crates/assets/src/pack.rs). GetWindowFrameTilesPal's lookup behavior is tracked separately as the rewritten GetWindowFrameTilesPal artifact. The remaining VRAM-loading/tilemap-filling behavior (LoadWindowGfx, DrawTextBorderOuter/Inner, rbox_fill_rectangle, GetTextWindowPalette) is not implemented -- that is a future rendering/engine slice -- so the file's own status stays pending.",
+          "rust_target": "crates/assets/src/pack.rs",
+          "spec": "S-4",
+          "status": "ported"
+        }
+      },
       "category": "code.source",
       "kind": "file",
       "status": "pending"
