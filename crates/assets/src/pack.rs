@@ -37,7 +37,14 @@
 //! decoding handle: `crate::map_layouts`'s `LayoutGrid`/`BorderGrid` own the
 //! decode, this crate's pack loader stays decoupled from it (same rationale
 //! as `xtask::extract`/`crates::assets::pack` staying decoupled from each
-//! other — see this module's docs). The lower-level [`AssetPack::image`] /
+//! other — see this module's docs). [`AssetPack::font`] reaches a Latin
+//! font's glyph sheet (S-4, issue #114) as a
+//! [`FontImageRef`] bound to its [`FontId`], with
+//! [`crate::fonts::FontGlyphSheet`] owning the per-glyph decode.
+//! [`AssetPack::text_window_frame`] / [`AssetPack::message_box`] bundle a
+//! border frame's tile bitmap with its palette (see [`WindowFrameHandle`]);
+//! [`AssetPack::text_window_extra_palette`] reaches the four additional
+//! textbox colour palettes. The lower-level [`AssetPack::image`] /
 //! [`AssetPack::palette`] / [`AssetPack::raw`] accessors work over any entry
 //! by its full id (used directly for e.g. `title/image/*` entries, which
 //! have no bundling handle of their own).
@@ -66,9 +73,11 @@ mod handles;
 
 use std::path::{Path, PathBuf};
 
+use crate::fonts::{FontId, FontImageRef};
+
 pub use error::PackError;
 pub use format::{EntryKind, FORMAT_VERSION, MAGIC};
-pub use handles::{ImageRef, PaletteRef, TilesetHandle};
+pub use handles::{ImageRef, PaletteRef, TilesetHandle, WindowFrameHandle};
 
 use format::Entry;
 
@@ -76,6 +85,19 @@ use format::Entry;
 /// `xtask::extract::OUTPUT_RELATIVE_PATH` exactly (duplicated rather than
 /// shared, per this module's docs on why the two crates stay decoupled).
 const OUTPUT_RELATIVE_PATH: &str = "assets-pack/pokeemerald.pack";
+
+/// Every selectable text-window border frame is a 3x3 grid of 8x8 tiles —
+/// a 24x24 source sheet (upstream `sWindowFrames`,
+/// `graphics/text_window/1.png`..`20.png`).
+const FRAME_WIDTH: u32 = 24;
+/// See [`FRAME_WIDTH`].
+const FRAME_HEIGHT: u32 = 24;
+/// The default message-box sheet (upstream `gMessageBox_Gfx`,
+/// `graphics/text_window/message_box.png`) is a 56x16 (7x2-tile) strip,
+/// distinct from the border frames' 24x24 shape.
+const MESSAGE_BOX_WIDTH: u32 = 56;
+/// See [`MESSAGE_BOX_WIDTH`].
+const MESSAGE_BOX_HEIGHT: u32 = 16;
 
 /// A loaded asset pack: the whole file's bytes, plus a parsed, id-sorted
 /// directory for lookups.
@@ -301,6 +323,168 @@ impl AssetPack {
     /// Same as [`raw`](Self::raw).
     pub fn layout_border(&self, name: &str) -> Result<&[u8], PackError> {
         self.raw(&format!("layout/{name}/border"))
+    }
+
+    /// Look up a Latin font's glyph sheet by its typed identity. The returned
+    /// [`FontImageRef`] is bound to that identity, preventing a caller from
+    /// combining one font's pixels with another font's width table. Hand it to
+    /// [`FontGlyphSheet::new`](crate::fonts::FontGlyphSheet::new) to decode
+    /// individual glyphs — this crate's pack loader and its font decode
+    /// layer stay decoupled by design (see this module's docs), so this
+    /// method only fetches and identity-binds the raw sheet bitmap.
+    ///
+    /// # Errors
+    ///
+    /// Same as [`image`](Self::image).
+    pub fn font(&self, font: FontId) -> Result<FontImageRef<'_>, PackError> {
+        let image = self.image(&format!("font/{}/glyphs", font.pack_name()))?;
+        Ok(FontImageRef::new(font, image))
+    }
+
+    /// Bundle one text-window border frame's tile bitmap and palette.
+    /// `frame_id` is Emerald's zero-based `sWindowFrames` index (`0..=19`);
+    /// it is translated to the one-based source filenames
+    /// `1.png`..`20.png`. Like upstream `GetWindowFrameTilesPal`, an id at or
+    /// above `WINDOW_FRAMES_COUNT` falls back to frame id `0` (source file
+    /// `1.png`). The palette comes from the source PNG's own `PLTE` chunk,
+    /// not a sibling `.pal` file — see
+    /// `xtask::extract::png::decode_palette`'s docs.
+    ///
+    /// # Errors
+    ///
+    /// [`PackError::UnknownAsset`] if the selected frame is absent from the
+    /// pack (including when an older pack predates it); the same
+    /// [`PackError::WrongKind`] cases as [`image`](Self::image) /
+    /// [`palette`](Self::palette);
+    /// [`PackError::MalformedTextWindowPalette`] if the palette entry is
+    /// not the exact 16-colour/32-byte bank the handle documents;
+    /// [`PackError::TextWindowImageWrongDimensions`] if the tile bitmap
+    /// is not the exact shape this frame kind requires (24x24 here — a
+    /// 3x3 grid of 8x8 tiles, upstream's border layout);
+    /// [`PackError::MalformedTextWindowImage`] if the tile bitmap's
+    /// payload length disagrees with its declared `width * height`;
+    /// [`PackError::TextWindowPixelOutsidePalette`] if the tile bitmap
+    /// holds a pixel index its bundled palette cannot map.
+    pub fn text_window_frame(&self, frame_id: u8) -> Result<WindowFrameHandle<'_>, PackError> {
+        const WINDOW_FRAMES_COUNT: u8 = 20;
+        let source_number = if frame_id < WINDOW_FRAMES_COUNT {
+            frame_id + 1
+        } else {
+            1
+        };
+        self.window_frame(
+            &format!("text-window/image/{source_number}"),
+            &format!("text-window/palette/{source_number}"),
+            FRAME_WIDTH,
+            FRAME_HEIGHT,
+        )
+    }
+
+    /// Bundle the default message-box tile bitmap and palette (upstream
+    /// `gMessageBox_Gfx`/`gMessageBox_Pal`, `pokeemerald/src/graphics.c`) —
+    /// the frame every standard overworld/battle text box uses, distinct
+    /// from the 20 selectable [`text_window_frame`](Self::text_window_frame)
+    /// options menu frames.
+    ///
+    /// # Errors
+    ///
+    /// Same as [`text_window_frame`](Self::text_window_frame).
+    pub fn message_box(&self) -> Result<WindowFrameHandle<'_>, PackError> {
+        self.window_frame(
+            "text-window/image/message_box",
+            "text-window/palette/message_box",
+            MESSAGE_BOX_WIDTH,
+            MESSAGE_BOX_HEIGHT,
+        )
+    }
+
+    /// Look up one of the four additional textbox colour palettes (`n` is
+    /// `1..=4`, upstream `text_pal1.pal`..`text_pal4.pal`,
+    /// `sTextWindowPalettes[1..=4]` — slot `0` is
+    /// [`message_box`](Self::message_box)'s own palette, not reachable
+    /// through this accessor).
+    ///
+    /// # Errors
+    ///
+    /// Same as [`text_window_frame`](Self::text_window_frame)'s palette
+    /// cases.
+    pub fn text_window_extra_palette(&self, n: u8) -> Result<PaletteRef<'_>, PackError> {
+        self.text_window_palette(&format!("text-window/palette/text_pal{n}"))
+    }
+
+    /// Look up a text-window palette and enforce the exact one-GBA-bank
+    /// shape (16 declared colours, 32 payload bytes) every typed
+    /// text-window accessor documents. Extraction validates this on write
+    /// (`xtask::extract`'s text-window pairing checks), but the read side
+    /// must not trust pack metadata: a corrupt or hand-built pack could
+    /// otherwise hand out a [`WindowFrameHandle`] whose 16-colour
+    /// invariant is false.
+    fn text_window_palette(&self, id: &str) -> Result<PaletteRef<'_>, PackError> {
+        const TEXT_WINDOW_PALETTE_COLORS: u16 = 16;
+        const TEXT_WINDOW_PALETTE_BYTES: usize = 32;
+        let palette = self.palette(id)?;
+        if palette.color_count != TEXT_WINDOW_PALETTE_COLORS
+            || palette.raw.len() != TEXT_WINDOW_PALETTE_BYTES
+        {
+            return Err(PackError::MalformedTextWindowPalette {
+                id: id.to_owned(),
+                color_count: palette.color_count,
+                byte_len: palette.raw.len(),
+            });
+        }
+        Ok(palette)
+    }
+
+    /// Bundle a text-window frame's tile bitmap and palette, validating
+    /// the pair on read like [`text_window_palette`](Self::text_window_palette)
+    /// does for the palette alone: the read side must not trust pack
+    /// contents. A tile bitmap that is not the exact shape its frame kind
+    /// requires, whose payload length disagrees with its own declared
+    /// `width * height` (violating [`ImageRef`]'s documented pixel-count
+    /// invariant), or holding a pixel its 16-colour palette cannot map
+    /// (possible in a corrupt or hand-built pack carrying an
+    /// 8-bit-indexed image), is rejected here rather than handed to a
+    /// renderer to index out of bounds. Extraction enforces the same pair
+    /// rule on write (`xtask::extract`'s text-window pairing checks).
+    fn window_frame(
+        &self,
+        image_id: &str,
+        palette_id: &str,
+        expected_width: u32,
+        expected_height: u32,
+    ) -> Result<WindowFrameHandle<'_>, PackError> {
+        let tiles = self.image(image_id)?;
+        if tiles.width != expected_width || tiles.height != expected_height {
+            return Err(PackError::TextWindowImageWrongDimensions {
+                id: image_id.to_owned(),
+                width: tiles.width,
+                height: tiles.height,
+                expected_width,
+                expected_height,
+            });
+        }
+        let declared = u64::from(tiles.width) * u64::from(tiles.height);
+        if !u64::try_from(tiles.pixels.len()).is_ok_and(|len| len == declared) {
+            return Err(PackError::MalformedTextWindowImage {
+                id: image_id.to_owned(),
+                width: tiles.width,
+                height: tiles.height,
+                byte_len: tiles.pixels.len(),
+            });
+        }
+        let palette = self.text_window_palette(palette_id)?;
+        if let Some(&pixel) = tiles
+            .pixels
+            .iter()
+            .find(|&&pixel| u16::from(pixel) >= palette.color_count)
+        {
+            return Err(PackError::TextWindowPixelOutsidePalette {
+                id: image_id.to_owned(),
+                pixel,
+                palette_len: palette.color_count,
+            });
+        }
+        Ok(WindowFrameHandle { tiles, palette })
     }
 }
 
