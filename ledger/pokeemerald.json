@@ -12260,8 +12260,8 @@
     "graphics/fonts": {
       "artifacts": {
         "latin": {
-          "reason": "The 5 Latin font glyph sheets (latin_{normal,narrow,short,small,small_narrow}.png) extracted into the local gitignored asset pack via crates/xtask/src/extract/fonts.rs's bit-depth-2 PNG decode path (crates/xtask/src/extract/png.rs), read back via AssetPack::font and typed per-glyph access in crates/assets/src/fonts.rs (FontGlyphSheet). The other 12 files (Japanese, braille, arrows, keypad icons) are not extracted -- v1 is English-only text -- so the directory's own status stays pending.",
-          "rust_target": "crates/assets/src/fonts.rs",
+          "reason": "The 5 Latin font glyph sheets (latin_{normal,narrow,short,small,small_narrow}.png) extracted into the local gitignored asset pack by crates/xtask/src/extract/fonts.rs (validated 256x512/2bpp at extraction) via the bit-depth-2 PNG decode path (crates/xtask/src/extract/png.rs), read back via AssetPack::font and typed per-glyph access in crates/assets/src/fonts.rs (FontGlyphSheet). The other 12 files (Japanese, braille, arrows, keypad icons) are not extracted -- v1 is English-only text -- so the directory's own status stays pending.",
+          "rust_target": "crates/xtask/src/extract/fonts.rs",
           "spec": "S-4",
           "status": "ported"
         }

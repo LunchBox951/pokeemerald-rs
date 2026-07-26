@@ -15,8 +15,8 @@
 
 use std::path::Path;
 
-use super::pack::PackWriter;
-use super::{decode_png_entry, ExtractError};
+use super::pack::{PackEntry, PackKind, PackWriter};
+use super::{png, read_file, ExtractError};
 
 /// `(upstream `FONT_*` id, lowercased; `graphics/fonts/` filename)` — the
 /// five Latin glyph sheets this pipeline extracts. See the module docs for
@@ -30,21 +30,70 @@ const FONTS: [(&str, &str); 5] = [
     ("small_narrow", "latin_small_narrow.png"),
 ];
 
+/// Every Latin glyph sheet is 256 pixels wide (16 columns of 16x16 cells)
+/// — must match `crates/assets`' read-side `fonts::SHEET_WIDTH`.
+const FONT_SHEET_WIDTH: u32 = 256;
+/// Every Latin glyph sheet is 512 pixels tall (32 rows of 16x16 cells) —
+/// must match `crates/assets`' read-side `fonts::SHEET_HEIGHT`.
+const FONT_SHEET_HEIGHT: u32 = 512;
+/// Every Latin glyph sheet is 2bpp (`gbagfx`'s `SetFontPalette` shape —
+/// see the module docs). 2bpp decoding also bounds every pixel index to
+/// `0..=3` by construction, so no separate pixel-range check is needed.
+const FONT_SHEET_BIT_DEPTH: u8 = 2;
+
 /// Extract the five Latin font glyph sheets (see [`FONTS`] and the module
 /// docs). Per-glyph advance widths are not extracted here — they're ported
 /// as Rust data directly in `crates/assets::fonts`.
+///
+/// Each sheet is validated against the documented 256x512/2bpp shape
+/// before it is serialized: the upstream checkout is a moving, unpinned
+/// reference, and a reshaped sheet written silently here would only
+/// surface later when `crates/assets`' `FontGlyphSheet::new` rejects the
+/// generated pack — fail at extraction instead.
 pub(super) fn extract_fonts(upstream: &Path, writer: &mut PackWriter) -> Result<(), ExtractError> {
     let dir = upstream.join("graphics/fonts");
     for (name, filename) in FONTS {
-        decode_png_entry(&dir.join(filename), format!("font/{name}/glyphs"), writer)?;
+        let path = dir.join(filename);
+        let bytes = read_file(&path)?;
+        let image = png::decode(&bytes).map_err(|e| ExtractError::Png(path.clone(), e))?;
+        validate_font_sheet(&path, &image)?;
+        writer.push(PackEntry {
+            id: format!("font/{name}/glyphs"),
+            kind: PackKind::Image {
+                width: image.width,
+                height: image.height,
+                bit_depth: image.bit_depth,
+            },
+            payload: image.pixels,
+        });
+    }
+    Ok(())
+}
+
+/// Reject a glyph sheet that is not the exact 256x512/2bpp shape the
+/// documented font contract (and `crates/assets`' read side) requires.
+fn validate_font_sheet(path: &Path, image: &png::IndexedImage) -> Result<(), ExtractError> {
+    if image.width != FONT_SHEET_WIDTH
+        || image.height != FONT_SHEET_HEIGHT
+        || image.bit_depth != FONT_SHEET_BIT_DEPTH
+    {
+        return Err(ExtractError::FontSheetWrongShape {
+            path: path.to_path_buf(),
+            width: image.width,
+            height: image.height,
+            bit_depth: image.bit_depth,
+        });
     }
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
-    use super::super::{extract_to, upstream_present};
-    use super::FONTS;
+    use super::super::{extract_to, png, upstream_present};
+    use super::{
+        validate_font_sheet, ExtractError, FONTS, FONT_SHEET_BIT_DEPTH, FONT_SHEET_HEIGHT,
+        FONT_SHEET_WIDTH,
+    };
 
     fn scratch_path(name: &str) -> std::path::PathBuf {
         std::env::temp_dir().join(format!(
@@ -78,6 +127,48 @@ mod tests {
             assert!(std::path::Path::new(filename)
                 .extension()
                 .is_some_and(|ext| ext.eq_ignore_ascii_case("png")));
+        }
+    }
+
+    #[test]
+    fn font_sheets_must_match_the_documented_shape() {
+        let path = std::path::Path::new("graphics/fonts/latin_normal.png");
+        let sheet = |width: u32, height: u32, bit_depth: u8| png::IndexedImage {
+            width,
+            height,
+            bit_depth,
+            pixels: Vec::new(),
+        };
+
+        validate_font_sheet(
+            path,
+            &sheet(FONT_SHEET_WIDTH, FONT_SHEET_HEIGHT, FONT_SHEET_BIT_DEPTH),
+        )
+        .unwrap();
+
+        // A reshaped sheet from the unpinned upstream checkout must fail at
+        // extraction, not later at pack-read time.
+        for (width, height, bit_depth) in [
+            (128, FONT_SHEET_HEIGHT, FONT_SHEET_BIT_DEPTH),
+            (FONT_SHEET_WIDTH, 256, FONT_SHEET_BIT_DEPTH),
+            (FONT_SHEET_WIDTH, FONT_SHEET_HEIGHT, 4),
+        ] {
+            let err = validate_font_sheet(path, &sheet(width, height, bit_depth)).unwrap_err();
+            assert!(
+                matches!(
+                    &err,
+                    ExtractError::FontSheetWrongShape {
+                        path: error_path,
+                        width: error_width,
+                        height: error_height,
+                        bit_depth: error_bit_depth,
+                    } if error_path == path
+                        && *error_width == width
+                        && *error_height == height
+                        && *error_bit_depth == bit_depth
+                ),
+                "wrong error for a {width}x{height}/{bit_depth}bpp sheet"
+            );
         }
     }
 

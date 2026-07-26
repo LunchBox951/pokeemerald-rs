@@ -80,6 +80,21 @@ pub enum ExtractError {
     /// 16 colours promised by the typed asset handle. Carries the source path
     /// and actual colour count.
     TextWindowPaletteWrongColorCount(PathBuf, usize),
+    /// A Latin font glyph sheet was not the exact 256x512/2bpp shape the
+    /// documented font contract requires (`extract::fonts`'s docs) — the
+    /// unpinned upstream checkout changed shape, and writing the sheet
+    /// anyway would only fail later at pack-read time. Carries the source
+    /// path and the actual decoded shape.
+    FontSheetWrongShape {
+        /// The offending sheet's source path.
+        path: PathBuf,
+        /// The decoded width in pixels.
+        width: u32,
+        /// The decoded height in pixels.
+        height: u32,
+        /// The decoded bit depth.
+        bit_depth: u8,
+    },
     /// A text-window PNG contained a pixel index that cannot be mapped
     /// through its own bundled palette (an 8-bit-indexed PNG can carry
     /// indices at or above 16 while still holding the exactly-16-entry
@@ -135,6 +150,17 @@ impl fmt::Display for ExtractError {
             Self::TextWindowPaletteWrongColorCount(path, actual) => write!(
                 f,
                 "text-window palette `{}` has {actual} colours: expected exactly 16",
+                path.display()
+            ),
+            Self::FontSheetWrongShape {
+                path,
+                width,
+                height,
+                bit_depth,
+            } => write!(
+                f,
+                "font glyph sheet `{}` is {width}x{height} at {bit_depth}bpp: expected exactly \
+                 256x512 at 2bpp",
                 path.display()
             ),
             Self::TextWindowPixelOutsidePalette(path, pixel, palette_len) => write!(
