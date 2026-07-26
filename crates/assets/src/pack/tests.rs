@@ -178,6 +178,26 @@ fn synthetic_pack() -> Vec<u8> {
             meta: 16u16.to_le_bytes().to_vec(),
             payload: text_window_palette_payload(0x00BB, 0x00CC),
         },
+        // Frame source `5` declares a zero-area 0x2 bitmap with an empty
+        // payload — length and pixel checks would both pass vacuously.
+        Entry {
+            id: "text-window/image/5",
+            kind_tag: 0,
+            meta: {
+                let mut m = Vec::new();
+                m.extend_from_slice(&0u32.to_le_bytes());
+                m.extend_from_slice(&2u32.to_le_bytes());
+                m.push(4);
+                m
+            },
+            payload: vec![],
+        },
+        Entry {
+            id: "text-window/palette/5",
+            kind_tag: 1,
+            meta: 16u16.to_le_bytes().to_vec(),
+            payload: text_window_palette_payload(0x00DD, 0x00EE),
+        },
         Entry {
             id: "text-window/image/20",
             kind_tag: 0,
@@ -477,8 +497,8 @@ fn text_window_frame_bundles_tiles_and_its_own_plte_derived_palette() {
     assert_eq!(frame.palette.color(0), Some(0x0011));
     assert_eq!(frame.palette.color(1), Some(0x0022));
 
-    let err = pack.text_window_frame(4).unwrap_err();
-    assert!(matches!(err, PackError::UnknownAsset(id) if id == "text-window/image/5"));
+    let err = pack.text_window_frame(5).unwrap_err();
+    assert!(matches!(err, PackError::UnknownAsset(id) if id == "text-window/image/6"));
 
     let last = pack.text_window_frame(19).unwrap();
     assert_eq!(last.tiles.pixels, &[8, 9, 10, 11]);
@@ -571,6 +591,20 @@ fn malformed_text_window_palettes_are_rejected_on_read() {
             height: 2,
             byte_len: 3,
         } if id == "text-window/image/4"
+    ));
+
+    // Frame id 4 selects source `5`: a zero-area 0x2 bitmap whose empty
+    // payload would pass the length and pixel checks vacuously — the
+    // typed accessor rejects zero dimensions outright.
+    let err = pack.text_window_frame(4).unwrap_err();
+    assert!(matches!(
+        &err,
+        PackError::MalformedTextWindowImage {
+            id,
+            width: 0,
+            height: 2,
+            byte_len: 0,
+        } if id == "text-window/image/5"
     ));
 
     // The generic untyped accessors still expose the entries as-is; only

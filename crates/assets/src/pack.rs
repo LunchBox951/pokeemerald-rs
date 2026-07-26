@@ -431,8 +431,14 @@ impl AssetPack {
         palette_id: &str,
     ) -> Result<WindowFrameHandle<'_>, PackError> {
         let tiles = self.image(image_id)?;
+        // A frame is a real 3x3-tile border bitmap: zero-area dimensions
+        // are as malformed as a mismatched payload (and would otherwise
+        // vacuously pass both the length and pixel-range checks).
         let declared = u64::from(tiles.width) * u64::from(tiles.height);
-        if !u64::try_from(tiles.pixels.len()).is_ok_and(|len| len == declared) {
+        if tiles.width == 0
+            || tiles.height == 0
+            || !u64::try_from(tiles.pixels.len()).is_ok_and(|len| len == declared)
+        {
             return Err(PackError::MalformedTextWindowImage {
                 id: image_id.to_owned(),
                 width: tiles.width,
