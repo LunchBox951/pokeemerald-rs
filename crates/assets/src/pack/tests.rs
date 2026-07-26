@@ -138,6 +138,26 @@ fn synthetic_pack() -> Vec<u8> {
             meta: 2u16.to_le_bytes().to_vec(),
             payload: vec![0x11, 0x00, 0x22, 0x00],
         },
+        // Frame source `3` inverts it: a valid 16-colour palette, but an
+        // 8-bit-indexed image whose pixel 16 that palette cannot map.
+        Entry {
+            id: "text-window/image/3",
+            kind_tag: 0,
+            meta: {
+                let mut m = Vec::new();
+                m.extend_from_slice(&2u32.to_le_bytes());
+                m.extend_from_slice(&2u32.to_le_bytes());
+                m.push(8);
+                m
+            },
+            payload: vec![0, 15, 16, 3],
+        },
+        Entry {
+            id: "text-window/palette/3",
+            kind_tag: 1,
+            meta: 16u16.to_le_bytes().to_vec(),
+            payload: text_window_palette_payload(0x0099, 0x00AA),
+        },
         Entry {
             id: "text-window/image/20",
             kind_tag: 0,
@@ -437,8 +457,8 @@ fn text_window_frame_bundles_tiles_and_its_own_plte_derived_palette() {
     assert_eq!(frame.palette.color(0), Some(0x0011));
     assert_eq!(frame.palette.color(1), Some(0x0022));
 
-    let err = pack.text_window_frame(2).unwrap_err();
-    assert!(matches!(err, PackError::UnknownAsset(id) if id == "text-window/image/3"));
+    let err = pack.text_window_frame(3).unwrap_err();
+    assert!(matches!(err, PackError::UnknownAsset(id) if id == "text-window/image/4"));
 
     let last = pack.text_window_frame(19).unwrap();
     assert_eq!(last.tiles.pixels, &[8, 9, 10, 11]);
@@ -506,9 +526,23 @@ fn malformed_text_window_palettes_are_rejected_on_read() {
         } if id == "text-window/palette/text_pal2"
     ));
 
-    // The generic untyped accessor still exposes the entries as-is; only
-    // the typed text-window accessors enforce the bank shape.
+    // Frame id 2 selects source `3`: a valid 16-colour palette, but an
+    // 8-bit-indexed tile bitmap holding pixel 16 — the read side must
+    // reject the pair rather than hand a renderer an unmappable pixel.
+    let err = pack.text_window_frame(2).unwrap_err();
+    assert!(matches!(
+        &err,
+        PackError::TextWindowPixelOutsidePalette {
+            id,
+            pixel: 16,
+            palette_len: 16,
+        } if id == "text-window/image/3"
+    ));
+
+    // The generic untyped accessors still expose the entries as-is; only
+    // the typed text-window accessors enforce the pairing invariants.
     assert!(pack.palette("text-window/palette/2").is_ok());
+    assert!(pack.image("text-window/image/3").is_ok());
 
     let _ = std::fs::remove_file(path);
 }

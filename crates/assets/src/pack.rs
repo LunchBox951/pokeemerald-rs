@@ -344,7 +344,9 @@ impl AssetPack {
     /// [`PackError::WrongKind`] cases as [`image`](Self::image) /
     /// [`palette`](Self::palette);
     /// [`PackError::MalformedTextWindowPalette`] if the palette entry is
-    /// not the exact 16-colour/32-byte bank the handle documents.
+    /// not the exact 16-colour/32-byte bank the handle documents;
+    /// [`PackError::TextWindowPixelOutsidePalette`] if the tile bitmap
+    /// holds a pixel index its bundled palette cannot map.
     pub fn text_window_frame(&self, frame_id: u8) -> Result<WindowFrameHandle<'_>, PackError> {
         const WINDOW_FRAMES_COUNT: u8 = 20;
         let source_number = if frame_id < WINDOW_FRAMES_COUNT {
@@ -352,10 +354,10 @@ impl AssetPack {
         } else {
             1
         };
-        Ok(WindowFrameHandle {
-            tiles: self.image(&format!("text-window/image/{source_number}"))?,
-            palette: self.text_window_palette(&format!("text-window/palette/{source_number}"))?,
-        })
+        self.window_frame(
+            &format!("text-window/image/{source_number}"),
+            &format!("text-window/palette/{source_number}"),
+        )
     }
 
     /// Bundle the default message-box tile bitmap and palette (upstream
@@ -368,10 +370,10 @@ impl AssetPack {
     ///
     /// Same as [`text_window_frame`](Self::text_window_frame).
     pub fn message_box(&self) -> Result<WindowFrameHandle<'_>, PackError> {
-        Ok(WindowFrameHandle {
-            tiles: self.image("text-window/image/message_box")?,
-            palette: self.text_window_palette("text-window/palette/message_box")?,
-        })
+        self.window_frame(
+            "text-window/image/message_box",
+            "text-window/palette/message_box",
+        )
     }
 
     /// Look up one of the four additional textbox colour palettes (`n` is
@@ -409,6 +411,35 @@ impl AssetPack {
             });
         }
         Ok(palette)
+    }
+
+    /// Bundle a text-window frame's tile bitmap and palette, validating
+    /// the pair on read like [`text_window_palette`](Self::text_window_palette)
+    /// does for the palette alone: the read side must not trust pack
+    /// contents, so a tile pixel its own 16-colour palette cannot map
+    /// (possible in a corrupt or hand-built pack carrying an
+    /// 8-bit-indexed image) is rejected here rather than handed to a
+    /// renderer to index past the bank. Extraction enforces the same pair
+    /// rule on write (`xtask::extract`'s text-window pairing checks).
+    fn window_frame(
+        &self,
+        image_id: &str,
+        palette_id: &str,
+    ) -> Result<WindowFrameHandle<'_>, PackError> {
+        let tiles = self.image(image_id)?;
+        let palette = self.text_window_palette(palette_id)?;
+        if let Some(&pixel) = tiles
+            .pixels
+            .iter()
+            .find(|&&pixel| u16::from(pixel) >= palette.color_count)
+        {
+            return Err(PackError::TextWindowPixelOutsidePalette {
+                id: image_id.to_owned(),
+                pixel,
+                palette_len: palette.color_count,
+            });
+        }
+        Ok(WindowFrameHandle { tiles, palette })
     }
 }
 

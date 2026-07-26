@@ -9,7 +9,9 @@ pub struct ImageRef<'a> {
     pub width: u32,
     /// Height in pixels.
     pub height: u32,
-    /// The source PNG's bit depth (4 or 8) — informational.
+    /// The source PNG's bit depth (2, 4, or 8; 2 is the Latin font
+    /// sheets' `gbagfx` shape — see `xtask::extract::png`'s docs) —
+    /// informational.
     pub bit_depth: u8,
     /// `width * height` palette-index bytes, row-major.
     pub pixels: &'a [u8],

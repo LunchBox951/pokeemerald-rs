@@ -60,6 +60,19 @@ pub enum PackError {
         /// The entry's actual payload length in bytes.
         byte_len: usize,
     },
+    /// A text-window frame's tile bitmap holds a pixel index its bundled
+    /// palette cannot map (possible in a corrupt or hand-built pack
+    /// carrying an 8-bit-indexed image entry alongside a valid 16-colour
+    /// palette). Extraction rejects such a pair on write; this error
+    /// surfaces the same defect on read.
+    TextWindowPixelOutsidePalette {
+        /// The tile bitmap entry's id.
+        id: String,
+        /// The offending pixel value.
+        pixel: u8,
+        /// The bundled palette's colour count.
+        palette_len: u16,
+    },
 }
 
 impl fmt::Display for PackError {
@@ -99,6 +112,15 @@ impl fmt::Display for PackError {
                 f,
                 "asset pack: text-window palette `{id}` declares {color_count} colours in \
                  {byte_len} bytes: expected exactly 16 colours in 32 bytes"
+            ),
+            Self::TextWindowPixelOutsidePalette {
+                id,
+                pixel,
+                palette_len,
+            } => write!(
+                f,
+                "asset pack: text-window image `{id}` has pixel index {pixel}: its bundled \
+                 palette only has {palette_len} colours"
             ),
         }
     }

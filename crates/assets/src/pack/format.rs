@@ -30,7 +30,9 @@ pub enum EntryKind {
         width: u32,
         /// Height in pixels.
         height: u32,
-        /// The source PNG's bit depth (4 or 8) — informational.
+        /// The source PNG's bit depth (2, 4, or 8; 2 is the Latin font
+        /// sheets' `gbagfx` shape — see `xtask::extract::png`'s docs) —
+        /// informational.
         bit_depth: u8,
     },
     /// A packed GBA BGR555 colour array.
