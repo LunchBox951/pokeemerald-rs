@@ -37,7 +37,7 @@ USAGE
 Any <path> above may address a sub-file artifact as `<path>#<name>`, e.g.
 `src/battle_main.c#gTypeEffectiveness` (see SUB-ARTIFACTS below).
 
-    ledger.py verify                   check rust_target paths still exist
+    ledger.py verify                   validate entry shape, then rust_target paths
     ledger.py audit <spec-id>          suggest mappings from a merge commit
     ledger.py migrate                  upgrade an older ledger to current schema
     ledger.py init                     create empty ledgers (one-time)
@@ -851,6 +851,10 @@ def cmd_unmark(args):
 def cmd_verify(args):
     project = args.project
     ledger = load_ledger(project)
+    for path, entry in sorted(ledger["files"].items()):
+        err = validate_entry(entry)
+        if err:
+            sys.exit(f"ledger validation failed for {path}: {err}")
     stale = []
     for path, entry in sorted(ledger["files"].items()):
         target = entry.get("rust_target")
@@ -1131,7 +1135,8 @@ def main():
     p.add_argument("path", help="upstream path, or path#artifact for a "
                    "sub-file table (a missing artifact is created as pending)")
 
-    p = sub.add_parser("verify", help="Check all rust_target paths exist")
+    p = sub.add_parser(
+        "verify", help="Validate entry shape, then check rust_target paths exist")
     _add_project(p)
 
     p = sub.add_parser("audit", help="Suggest mappings from a merge commit")
