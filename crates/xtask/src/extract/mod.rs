@@ -40,7 +40,15 @@
 //!   files, and the 3 `.bin` files (`pokemon_logo.bin`, `clouds.bin`,
 //!   `rayquaza.bin` — tile-arrangement data this pipeline doesn't
 //!   interpret) as raw blobs. Again the whole directory, for the same
-//!   ledger reason.
+//!   ledger reason. Two of the six PNGs (`emerald_version.png`,
+//!   `press_start.png` — the version banner and Press Start/copyright OBJ
+//!   sprite sheets) additionally get a `title/palette/<name>` entry decoded
+//!   from their own embedded `PLTE` chunk ([`png::IndexedImage::palette`]):
+//!   unlike every other title-screen graphic, upstream's build derives
+//!   *their* in-game palette directly from the PNG
+//!   (`INCGFX_U16(...png", ".gbapal")` in `graphics.c`), not a sibling
+//!   `.pal` file, so this is the only way to recover it (see
+//!   [`TITLE_SCREEN_EMBEDDED_PALETTE_SHEETS`]).
 //! - **Player/NPC sprites** (`graphics/object_events/pics/people/`): every
 //!   PNG in the directory (133 files: Brendan's and May's own animation
 //!   sheets, plus the full upstream NPC roster — nurses, gym leaders,
@@ -382,6 +390,16 @@ fn extract_tileset(
     Ok(())
 }
 
+/// Title-screen OBJ sprite sheets whose in-game palette upstream's build
+/// derives directly from the PNG's own embedded colour table
+/// (`INCGFX_U16("graphics/title_screen/<name>.png", ".gbapal")` in
+/// `graphics.c`), rather than a sibling `.pal` file the way every other
+/// title-screen graphic works — see `sVersionBannerLeftSpriteTemplate` /
+/// `sSpritePalette_PressStart` in `title_screen.c`. Extracted as
+/// `title/palette/<name>` alongside the normal `title/image/<name>` entry
+/// (see [`extract_title_screen`]).
+const TITLE_SCREEN_EMBEDDED_PALETTE_SHEETS: [&str; 2] = ["emerald_version", "press_start"];
+
 /// Extract `graphics/title_screen/`'s full contents.
 fn extract_title_screen(upstream: &Path, writer: &mut PackWriter) -> Result<(), ExtractError> {
     let dir = upstream.join("graphics/title_screen");
@@ -399,7 +417,37 @@ fn extract_title_screen(upstream: &Path, writer: &mut PackWriter) -> Result<(), 
             continue;
         };
         match path.extension().and_then(|e| e.to_str()) {
-            Some("png") => decode_png_entry(&path, format!("title/image/{stem}"), writer)?,
+            Some("png") => {
+                let bytes = read_file(&path)?;
+                let image = png::decode(&bytes).map_err(|e| ExtractError::Png(path.clone(), e))?;
+                if TITLE_SCREEN_EMBEDDED_PALETTE_SHEETS.contains(&stem.as_str()) {
+                    if image.palette.is_empty() {
+                        return Err(ExtractError::MissingEmbeddedPalette(path.clone()));
+                    }
+                    let mut payload = Vec::with_capacity(image.palette.len() * 2);
+                    for &[r, g, b] in &image.palette {
+                        let color = jasc_pal::Rgb888 { r, g, b };
+                        payload.extend_from_slice(&color.to_gba555().to_le_bytes());
+                    }
+                    #[allow(clippy::cast_possible_truncation)]
+                    writer.push(PackEntry {
+                        id: format!("title/palette/{stem}"),
+                        kind: PackKind::Palette {
+                            color_count: image.palette.len() as u16,
+                        },
+                        payload,
+                    });
+                }
+                writer.push(PackEntry {
+                    id: format!("title/image/{stem}"),
+                    kind: PackKind::Image {
+                        width: image.width,
+                        height: image.height,
+                        bit_depth: image.bit_depth,
+                    },
+                    payload: image.pixels,
+                });
+            }
             Some("pal") => decode_palette_entry(&path, format!("title/palette/{stem}"), writer)?,
             Some("bin") => raw_entry(&path, format!("title/raw/{stem}"), writer)?,
             _ => {}
@@ -576,6 +624,30 @@ mod tests {
         let second = std::fs::read(extract_to(&path).unwrap().output_path).unwrap();
         assert_eq!(first, second);
         let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    #[ignore = "needs a local `./init.sh`-fetched pokeemerald/ checkout"]
+    fn embedded_palette_sheets_get_a_title_palette_entry() {
+        // The version banner / press-start sprite sheets have no sibling
+        // `.pal` file (module docs) -- confirm `title/palette/emerald_version`
+        // and `title/palette/press_start` made it into the pack, the same
+        // crude substring search `layout_grids_are_extracted` uses (no pack
+        // reader lives in this crate).
+        assert!(upstream_present(), "run ./init.sh first");
+        let path = scratch_path("embedded-palettes");
+        let report = extract_to(&path).expect("extraction should succeed against a real checkout");
+        let bytes = std::fs::read(&report.output_path).unwrap();
+        for name in super::TITLE_SCREEN_EMBEDDED_PALETTE_SHEETS {
+            let id = format!("title/palette/{name}");
+            assert!(
+                bytes
+                    .windows(id.len())
+                    .any(|window| window == id.as_bytes()),
+                "missing pack entry id `{id}`"
+            );
+        }
+        let _ = std::fs::remove_file(report.output_path);
     }
 
     #[test]

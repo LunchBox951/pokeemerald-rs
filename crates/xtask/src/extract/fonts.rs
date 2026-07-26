@@ -138,6 +138,7 @@ mod tests {
             height,
             bit_depth,
             pixels: Vec::new(),
+            palette: Vec::new(),
         };
 
         validate_font_sheet(

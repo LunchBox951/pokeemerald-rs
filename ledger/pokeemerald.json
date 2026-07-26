@@ -16106,7 +16106,7 @@
     "graphics/title_screen": {
       "category": "graphics.scene",
       "kind": "dir",
-      "reason": "Full directory extracted into the local gitignored asset pack (issue #81, Discussion #71 policy A, F-3's real cargo xtask extract): all 6 PNGs decoded via the std-only PNG/inflate decoder, all 3 .pal files decoded via the JASC-PAL parser, and the 3 .bin tile-arrangement files copied as opaque raw blobs (their internal layout is not decoded). Gates I-2 (title screen). Read back via AssetPack::image/palette/raw in crates/assets/src/pack.rs.",
+      "reason": "Full directory extracted into the local gitignored asset pack (issue #81, Discussion #71 policy A, F-3's real cargo xtask extract): all 6 PNGs decoded via the std-only PNG/inflate decoder, all 3 .pal files decoded via the JASC-PAL parser, and the 3 .bin tile-arrangement files copied as opaque raw blobs (their internal layout is not decoded). emerald_version.png and press_start.png additionally get a title/palette/<name> entry decoded straight from their own embedded PLTE chunk (issue #116) -- upstream's build derives their in-game palette that way (INCGFX_U16(...png\", \".gbapal\") in graphics.c), not from a sibling .pal file. Gates I-2 (title screen). Read back via AssetPack::image/palette/raw in crates/assets/src/pack.rs.",
       "rust_target": "crates/xtask/src/extract/mod.rs",
       "spec": "S-4",
       "status": "ported"
@@ -26674,6 +26674,31 @@
       "status": "pending"
     },
     "src/title_screen.c": {
+      "artifacts": {
+        "SpriteCB_PokemonLogoShine": {
+          "reason": "Not modeled (option b, documented fidelity delta). The shine is created with oam.objMode = ST_OAM_OBJ_WINDOW (title_screen.c:536): it never draws its own pixels but defines an OBJWIN region that, with WININ/WINOUT + BLDCNT_TGT1_BG2|BLDCNT_EFFECT_LIGHTEN + BLDY=12 (case 4, lines 646-660), lightens BG2 as the mask sweeps -- a Phase1-only effect running while only BG2 is displayed, before clouds/version/press-start exist and before the settled Phase3 cloud alpha blend (line 750) replaces that BLDCNT. The GBA runs one BLDCNT effect per frame and rendering's EffectsConfig mirrors that (one ColorEffect/frame), so the windowed BG2 lighten cannot be composited into the same settled frame whose color effect is already the alpha blend. Drawing it as an opaque OBJ would be visibly wrong; so it is omitted, along with its bg-color flash and the two later Phase1 re-triggers. See crates/pokeemerald-rs/src/title.rs module docs, 'Documented fidelity deltas'.",
+          "spec": "I-2",
+          "status": "dropped"
+        },
+        "SpriteCB_PressStartCopyrightBanner": {
+          "reason": "Blink cadence (visible 16 ticks, invisible 16, alternating forever) transcribed as the pure fn press_start_visible(frame) -- issue #116. The copyright banner's own sAnimate is never set upstream, so it stays always-visible, matching this callback's else branch; that half needs no port of its own.",
+          "rust_target": "crates/pokeemerald-rs/src/title.rs",
+          "spec": "I-2",
+          "status": "rewritten"
+        },
+        "alpha_blend_steady_state": {
+          "reason": "Task_TitleScreenPhase2's terminal BLDCNT_TGT1_BG1|EFFECT_BLEND|TGT2_BG0|TGT2_BD, BLDALPHA_BLEND(6,15) -- set once and never revisited by Phase3 -- wired as a constant EffectsConfig in TitleScene::compose (issue #116). Only this static steady-state config is covered, not the surrounding task state machine (input handling, phase transitions), which stays pending on the parent file.",
+          "rust_target": "crates/pokeemerald-rs/src/title.rs",
+          "spec": "I-2",
+          "status": "rewritten"
+        },
+        "cloud_scroll": {
+          "reason": "Task_TitleScreenPhase3's cloud vertical scroll (tCounter/tBg1Y/gBattle_BG1_Y -> BG1VOFS) transcribed as the pure fn cloud_scroll_y(frame) (issue #116); confirmed vertical, not horizontal, by reading the actual code (BG1HOFS is only ever set once, statically, by ScanlineEffect_InitWave during boot). The legendary-marking palette pulse (UpdateLegendaryMarkingColor) in the same function is out of scope and stays pending.",
+          "rust_target": "crates/pokeemerald-rs/src/title.rs",
+          "spec": "I-2",
+          "status": "rewritten"
+        }
+      },
       "category": "code.source",
       "kind": "file",
       "status": "pending"

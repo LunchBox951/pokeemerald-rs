@@ -1,14 +1,16 @@
-//! Unit tests for [`super::TitleScene`] and its private decoding helpers.
+//! Unit tests for [`super::TitleScene`] and its private decoding/animation
+//! helpers.
 //!
 //! Every test builds small **synthetic** fixtures rather than touching the
 //! real extracted pack, per `assets::pack::tests`' CI caveat (CI has no
 //! `pokeemerald/` checkout and no real pack). The one exception,
-//! [`real_pack_composes_a_non_blank_deterministic_title_frame`], is
+//! [`real_pack_composes_non_blank_deterministic_title_frames`], is
 //! `#[ignore]`d.
 
 use super::{
-    affine_tilemap_from_raw, image_to_tileset, regular_tilemap_from_raw, title_palette_from_refs,
-    TitleSceneError, LOGO_PALETTE_COLORS,
+    affine_tilemap_from_raw, cloud_scroll_y, crop_and_pack_tile_bytes, image_to_tileset,
+    press_start_visible, regular_tilemap_from_raw, sprite_entries, title_palette_from_refs,
+    TitleSceneError, LOGO_PALETTE_COLORS, NUM_COPYRIGHT_FRAMES, NUM_PRESS_START_FRAMES,
 };
 use assets::{AssetPack, ImageRef};
 use rendering::{BitDepth, RenderError};
@@ -283,6 +285,25 @@ fn is_pack_missing_is_true_only_for_not_found() {
 }
 
 #[test]
+fn stale_pack_reports_the_re_extract_remedy() {
+    // A pack that loads but predates this build (missing one of the
+    // `title/*` entries this module requires) must render an actionable
+    // "re-extract" message, not just the bare "no entry with id" symptom
+    // -- and be distinguishable via `is_pack_stale`.
+    let stale = TitleSceneError::from(assets::PackError::UnknownAsset(
+        "title/palette/emerald_version".to_owned(),
+    ));
+    assert!(stale.is_pack_stale());
+    assert!(!stale.is_pack_missing());
+    let rendered = stale.to_string();
+    assert!(rendered.contains("title/palette/emerald_version"));
+    assert!(rendered.contains("cargo xtask extract"));
+
+    let other = TitleSceneError::from(assets::PackError::BadMagic);
+    assert!(!other.is_pack_stale());
+}
+
+#[test]
 fn load_default_reports_pack_missing_when_no_pack_is_extracted() {
     // This crate's tests run with `cargo test`'s cwd set to
     // `crates/pokeemerald-rs`, which never has `assets-pack/` -- unlike
@@ -305,22 +326,253 @@ fn load_default_reports_pack_missing_when_no_pack_is_extracted() {
 /// extracted title-screen assets, not just synthetic fixtures. Needs a
 /// local pack: run `cargo xtask extract` first, then `cargo test -p
 /// pokeemerald-rs -- --ignored`.
+///
+/// Checks frames 0 and 20 specifically (I-2, issue #116): both must be
+/// non-blank and each deterministic (composing the same frame index twice
+/// is pixel-identical), and the two must *differ* from each other. Frame 20
+/// differs from frame 0 on two independent axes: the "Press Start" banner
+/// has toggled from invisible to visible (`press_start_visible(0)` is
+/// `false`, `press_start_visible(20)` is `true`) and the clouds have
+/// scrolled (`cloud_scroll_y(0) == 0`, `cloud_scroll_y(20) == 5`). The logo
+/// shine is deliberately not composed (see the module docs' "Documented
+/// fidelity deltas"), so it plays no part in this distinction.
 #[test]
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
-fn real_pack_composes_a_non_blank_deterministic_title_frame() {
+fn real_pack_composes_non_blank_deterministic_title_frames() {
     let scene = super::load_default().expect("run `cargo xtask extract` first");
-    let first = scene.compose();
-    let second = scene.compose();
+
+    let frame0_first = scene.compose(0);
+    let frame0_second = scene.compose(0);
     assert_eq!(
-        first.pixels(),
-        second.pixels(),
-        "composing must be deterministic"
+        frame0_first.pixels(),
+        frame0_second.pixels(),
+        "composing frame 0 twice must be deterministic"
     );
     assert!(
-        first
+        frame0_first
             .pixels()
             .iter()
             .any(|&p| p != rendering::Rgb888::BLACK),
-        "the real title screen must produce a non-blank frame"
+        "frame 0 must be a non-blank frame"
+    );
+
+    let moved_first = scene.compose(20);
+    let moved_second = scene.compose(20);
+    assert_eq!(
+        moved_first.pixels(),
+        moved_second.pixels(),
+        "composing frame 20 twice must be deterministic"
+    );
+    assert!(
+        moved_first
+            .pixels()
+            .iter()
+            .any(|&p| p != rendering::Rgb888::BLACK),
+        "frame 20 must be a non-blank frame"
+    );
+
+    assert_ne!(
+        frame0_first.pixels(),
+        moved_first.pixels(),
+        "frame 0 and frame 20 must differ (Press Start blink / cloud scroll)"
+    );
+}
+
+// -- OBJ sprite animation cadences (I-2, issue #116) -- all pure functions
+// of `frame`, so none of these need a pack at all. --------------------------
+
+#[test]
+fn press_start_blinks_every_16_ticks() {
+    // `sTimer` starts at 0 and is incremented *before* the bit-16 test
+    // (`SpriteCB_PressStartCopyrightBanner`), so frame 0 -> timer 1 (bit 4
+    // clear -> invisible), frames 15 and 16 straddle the flip to visible.
+    assert!(!press_start_visible(0));
+    assert!(!press_start_visible(14));
+    assert!(press_start_visible(15));
+    assert!(press_start_visible(30));
+    assert!(!press_start_visible(31));
+    assert!(!press_start_visible(46));
+    assert!(press_start_visible(47));
+}
+
+#[test]
+#[allow(clippy::cast_possible_truncation)] // `tb_g1_y` stays tiny over 20 ticks.
+fn cloud_scroll_advances_roughly_one_pixel_every_4_ticks() {
+    // Hand-simulated from `Task_TitleScreenPhase3`'s own per-tick update
+    // (module docs): `tCounter` increments every tick, `tBg1Y` only on odd
+    // `tCounter` values, and the applied scroll is `tBg1Y / 2`.
+    let mut counter: u32 = 0;
+    let mut tb_g1_y: u32 = 0;
+    let mut expected = Vec::new();
+    for _ in 0..20 {
+        counter += 1;
+        if counter & 1 != 0 {
+            tb_g1_y += 1;
+        }
+        expected.push((tb_g1_y / 2) as u16);
+    }
+    let actual: Vec<u16> = (0..20).map(cloud_scroll_y).collect();
+    assert_eq!(actual, expected);
+    // Confirms genuine (if slow) forward motion, not a stuck value.
+    assert!(actual[19] > actual[0]);
+}
+
+#[test]
+fn cloud_scroll_is_a_pure_function_of_frame() {
+    assert_eq!(cloud_scroll_y(37), cloud_scroll_y(37));
+}
+
+#[test]
+fn cloud_scroll_wraps_like_upstreams_signed_16_bit_accumulator() {
+    // Upstream's `tBg1Y` is a *signed* 16-bit task field: after 32,767
+    // increments it wraps to -32768, and `tBg1Y / 2` is then a signed
+    // truncate-toward-zero division. At frame 65,534 the accumulator's
+    // raw bits are 0x8000 (-32768), so the scroll must be -16384 as raw
+    // bits (0xC000) -- not the 0x4000 a plain u32 divide would give.
+    assert_eq!(cloud_scroll_y(65_532), 0x3FFF); // tb_g1_y = 32767 (last positive)
+    assert_eq!(cloud_scroll_y(65_534), 0xC000); // tb_g1_y = -32768
+                                                // -32767 / 2 truncates toward zero: -16383 = 0xC001.
+    assert_eq!(cloud_scroll_y(65_536), 0xC001); // tb_g1_y = -32767
+                                                // A full 16-bit lap later the sequence repeats exactly.
+    assert_eq!(cloud_scroll_y(131_070), cloud_scroll_y(0));
+}
+
+#[test]
+fn sprite_entries_always_includes_the_settled_version_banner() {
+    // The version banner is permanently visible/settled in this module's
+    // modeled idle state (module docs' "Documented fidelity deltas") --
+    // true at frame 0 and arbitrarily far into the future alike.
+    for frame in [0, 37, 10_000] {
+        let entries = sprite_entries(frame);
+        let version_banner_count = entries
+            .iter()
+            .filter(|e| e.bit_depth() == BitDepth::Bpp8)
+            .count();
+        assert_eq!(version_banner_count, 2, "frame {frame}");
+        assert!(
+            entries
+                .iter()
+                .filter(|e| e.bit_depth() == BitDepth::Bpp8)
+                .all(|e| e.enabled()),
+            "frame {frame}: both version banner halves must be visible"
+        );
+    }
+}
+
+#[test]
+fn sprite_entries_convert_upstream_centers_to_oam_origins() {
+    // pokeemerald's CreateSprite coordinates are centers. Its sprite runtime
+    // subtracts half the sprite dimensions before writing OAM; our renderer
+    // consumes those final top-left OAM coordinates directly.
+    let entries = sprite_entries(0);
+
+    assert_eq!((entries[0].x(), entries[0].y()), (66, 50));
+    assert_eq!((entries[1].x(), entries[1].y()), (130, 50));
+    assert_eq!(entries[0].dimensions(), (64, 32));
+    assert_eq!(entries[1].dimensions(), (64, 32));
+
+    let press_start = &entries[2..2 + NUM_PRESS_START_FRAMES];
+    let press_start_origins: Vec<_> = press_start.iter().map(|entry| entry.x()).collect();
+    assert_eq!(press_start_origins, [48, 80, 112, 144, 176]);
+    assert!(press_start.iter().all(|entry| entry.y() == 104));
+    assert!(press_start
+        .iter()
+        .all(|entry| entry.dimensions() == (32, 8)));
+
+    let copyright =
+        &entries[2 + NUM_PRESS_START_FRAMES..2 + NUM_PRESS_START_FRAMES + NUM_COPYRIGHT_FRAMES];
+    let copyright_origins: Vec<_> = copyright.iter().map(|entry| entry.x()).collect();
+    assert_eq!(copyright_origins, [48, 80, 112, 144, 176]);
+    assert!(copyright.iter().all(|entry| entry.y() == 144));
+}
+
+#[test]
+fn sprite_entries_always_includes_5_press_start_and_5_copyright_segments() {
+    for frame in [0, 15, 16, 37] {
+        let entries = sprite_entries(frame);
+        let four_bpp_count = entries
+            .iter()
+            .filter(|e| e.bit_depth() == BitDepth::Bpp4)
+            .count();
+        // Exactly 5 "Press Start" + 5 copyright, and never any more: the
+        // logo shine is not composed (module docs' "Documented fidelity
+        // deltas"), so this stays 10 at every frame.
+        assert_eq!(
+            four_bpp_count,
+            NUM_PRESS_START_FRAMES + NUM_COPYRIGHT_FRAMES,
+            "frame {frame}"
+        );
+    }
+}
+
+#[test]
+fn sprite_entries_never_includes_the_logo_shine() {
+    // The shine is an OBJ-window lighten belonging to an un-modeled boot
+    // phase (module docs' "Documented fidelity deltas"): it must never be
+    // composed as an opaque OBJ, at any frame -- including the ticks where
+    // upstream's sweep would have been on-screen (its old start, mid, and
+    // post-despawn frames) and arbitrarily far into the future.
+    let expected = 2 + NUM_PRESS_START_FRAMES + NUM_COPYRIGHT_FRAMES;
+    for frame in [0, 1, 36, 67, 1000] {
+        assert_eq!(sprite_entries(frame).len(), expected, "frame {frame}");
+    }
+}
+
+#[test]
+fn sprite_entries_press_start_visibility_tracks_the_blink_cadence_but_copyright_never_blinks() {
+    let entries_invisible_tick = sprite_entries(0); // press_start_visible(0) == false
+    let press_start: Vec<_> = entries_invisible_tick[2..2 + NUM_PRESS_START_FRAMES].to_vec();
+    let copyright: Vec<_> = entries_invisible_tick
+        [2 + NUM_PRESS_START_FRAMES..2 + NUM_PRESS_START_FRAMES + NUM_COPYRIGHT_FRAMES]
+        .to_vec();
+    assert!(press_start.iter().all(|e| !e.enabled()));
+    assert!(copyright.iter().all(|e| e.enabled()));
+
+    let entries_visible_tick = sprite_entries(15); // press_start_visible(15) == true
+    let press_start: Vec<_> = entries_visible_tick[2..2 + NUM_PRESS_START_FRAMES].to_vec();
+    assert!(press_start.iter().all(|e| e.enabled()));
+}
+
+#[test]
+fn crop_and_pack_tile_bytes_crops_the_requested_sub_rectangle() {
+    // A 16x8 (2x1 tile) source image: left tile all index 1, right tile all
+    // index 2 (same fixture style as `image_to_tileset`'s own tests above).
+    let pixels = tiled_image(16, 8, |col, _row| if col == 0 { 1 } else { 2 });
+    let image = ImageRef {
+        width: 16,
+        height: 8,
+        bit_depth: 4,
+        pixels: &pixels,
+    };
+    // Crop just the right 8x8 tile.
+    let packed = crop_and_pack_tile_bytes("test", image, 8, 0, 8, 8, BitDepth::Bpp4).unwrap();
+    let tileset = rendering::Tileset::decode(BitDepth::Bpp4, &packed).unwrap();
+    assert_eq!(tileset.len(), 1);
+    assert_eq!(tileset.tile(0).unwrap().index(0, 0), 2);
+}
+
+#[test]
+fn crop_and_pack_tile_bytes_rejects_a_short_payload_instead_of_panicking() {
+    // A sheet that *declares* 16x8 (2x1 tiles) but whose payload is one
+    // pixel short: cropping the second tile would slice past the end of
+    // `pixels`. The guard must turn that into a typed error, not a panic
+    // (mirrors `image_to_tileset`'s own BG-path guard).
+    let pixels = vec![0u8; 16 * 8 - 1];
+    let image = ImageRef {
+        width: 16,
+        height: 8,
+        bit_depth: 4,
+        pixels: &pixels,
+    };
+    let err =
+        crop_and_pack_tile_bytes("bogus/sheet", image, 8, 0, 8, 8, BitDepth::Bpp4).unwrap_err();
+    assert_eq!(
+        err,
+        TitleSceneError::ImagePixelCountMismatch {
+            id: "bogus/sheet",
+            width: 16,
+            height: 8,
+            actual: 16 * 8 - 1,
+        }
     );
 }

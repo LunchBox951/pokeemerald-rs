@@ -125,6 +125,16 @@ pub struct IndexedImage {
     pub bit_depth: u8,
     /// `width * height` palette-index bytes, row-major.
     pub pixels: Vec<u8>,
+    /// The PNG's own embedded `PLTE` chunk, as `[r, g, b]` triples in index
+    /// order — empty if the file had no `PLTE` chunk (every real source
+    /// this decoder reads is colour type 3, which requires one, but nothing
+    /// here treats a missing chunk as an error; see the module docs on why
+    /// this exists at all: this preview palette is normally *not* the
+    /// in-game one (a sibling JASC `.pal` file is), except for the couple
+    /// of `graphics/title_screen/*.png` sprite sheets upstream's own build
+    /// derives their `.gbapal` directly from the PNG for
+    /// (`crate::extract::extract_title_screen`).
+    pub palette: Vec<[u8; 3]>,
 }
 
 const SIGNATURE: [u8; 8] = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
@@ -240,13 +250,35 @@ pub fn decode(data: &[u8]) -> Result<IndexedImage, PngError> {
 
     let raw = inflate::inflate_zlib(&idat)?;
     let pixels = defilter_and_unpack(&raw, width, height, bit_depth)?;
+    let palette = match chunks.iter().find(|c| &c.kind == b"PLTE") {
+        Some(c) => parse_plte(c.data)?,
+        None => Vec::new(),
+    };
 
     Ok(IndexedImage {
         width,
         height,
         bit_depth,
         pixels,
+        palette,
     })
+}
+
+/// Parse a `PLTE` chunk's body into `[r, g, b]` triples (RFC 2083 §11.2.3:
+/// three one-byte samples per entry, no separate length field — the chunk
+/// length itself, divided by 3, gives the entry count).
+///
+/// # Errors
+///
+/// [`PngError::MissingOrBadPalette`] if the chunk is empty or its length
+/// is not a multiple of three — the same fail-closed treatment
+/// [`decode_palette`] applies, so a malformed source PNG fails extraction
+/// instead of silently producing a truncated palette in the pack.
+fn parse_plte(data: &[u8]) -> Result<Vec<[u8; 3]>, PngError> {
+    if data.is_empty() || !data.len().is_multiple_of(3) {
+        return Err(PngError::MissingOrBadPalette);
+    }
+    Ok(data.chunks_exact(3).map(|c| [c[0], c[1], c[2]]).collect())
 }
 
 /// Undo PNG's per-scanline filtering (RFC 2083 §6) and unpack sub-byte
@@ -623,6 +655,42 @@ mod tests {
         assert_eq!(paeth_predictor(13, 3, 8), 8, "above-left (c) wins");
     }
 
+    /// Like [`indexed_png_from_raw`], but with a `PLTE` chunk inserted
+    /// between `IHDR` and `IDAT` (RFC 2083 §11.2.3's required ordering) --
+    /// exercises [`super::parse_plte`] end to end through [`decode`].
+    fn indexed_png_from_raw_with_plte(
+        bit_depth: u8,
+        width: u32,
+        height: u32,
+        raw: &[u8],
+        plte: &[u8],
+    ) -> Vec<u8> {
+        let mut ihdr = Vec::new();
+        ihdr.extend_from_slice(&width.to_be_bytes());
+        ihdr.extend_from_slice(&height.to_be_bytes());
+        ihdr.push(bit_depth);
+        ihdr.push(3);
+        ihdr.push(0);
+        ihdr.push(0);
+        ihdr.push(0);
+
+        let mut zlib_body = vec![0x78, 0x01];
+        let len = u16::try_from(raw.len()).unwrap();
+        zlib_body.push(0b0000_0001);
+        zlib_body.extend_from_slice(&len.to_le_bytes());
+        zlib_body.extend_from_slice(&(!len).to_le_bytes());
+        zlib_body.extend_from_slice(raw);
+        zlib_body.extend_from_slice(&adler32(raw).to_be_bytes());
+
+        let mut png = Vec::new();
+        png.extend_from_slice(&super::SIGNATURE);
+        png.extend_from_slice(&chunk(*b"IHDR", &ihdr));
+        png.extend_from_slice(&chunk(*b"PLTE", plte));
+        png.extend_from_slice(&chunk(*b"IDAT", &zlib_body));
+        png.extend_from_slice(&chunk(*b"IEND", &[]));
+        png
+    }
+
     /// Build a minimal indexed PNG (bit depth 4, one pixel) with a `PLTE`
     /// chunk of `colors` spliced in right after `IHDR` (PNG's required
     /// chunk order) -- for [`decode_palette`] tests, which never look past
@@ -647,6 +715,19 @@ mod tests {
     }
 
     #[test]
+    fn decode_reads_an_embedded_plte_chunk() {
+        let raw = vec![0u8, 0, 1, 2]; // one row, filter type 0, pixels [1, 2]
+        let plte = [0xFFu8, 0x00, 0x00, 0x00, 0xFF, 0x00, 0x00, 0x00, 0xFF]; // red, green, blue
+        let png = indexed_png_from_raw_with_plte(8, 2, 1, &raw, &plte);
+        let image = decode(&png).unwrap();
+        assert_eq!(
+            image.palette,
+            vec![[255, 0, 0], [0, 255, 0], [0, 0, 255]],
+            "PLTE triples decode in index order"
+        );
+    }
+
+    #[test]
     fn decode_palette_reads_plte_entries_in_order() {
         let png = indexed_png_with_palette(&[(115, 205, 164), (255, 255, 255), (0, 0, 0)]);
         let colors = decode_palette(&png).unwrap();
@@ -665,6 +746,36 @@ mod tests {
                 },
                 Rgb888 { r: 0, g: 0, b: 0 },
             ]
+        );
+    }
+
+    #[test]
+    fn decode_without_a_plte_chunk_leaves_the_palette_empty() {
+        // Every other fixture in this module has no PLTE chunk -- this is
+        // just an explicit assertion of that default (see IndexedImage's
+        // docs: a missing PLTE is not an error here).
+        let png = tiny_indexed_png(8, 2, 2, &[1, 2, 3, 0]);
+        let image = decode(&png).unwrap();
+        assert!(image.palette.is_empty());
+    }
+
+    #[test]
+    fn parse_plte_rejects_a_trailing_partial_entry() {
+        // 3 full colours (9 bytes) plus 2 leftover bytes -- not divisible
+        // by 3, so the chunk is malformed and must fail closed (same
+        // treatment as `decode_palette`), never silently truncate.
+        let plte = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11];
+        assert_eq!(
+            super::parse_plte(&plte).unwrap_err(),
+            PngError::MissingOrBadPalette
+        );
+        assert_eq!(
+            super::parse_plte(&[]).unwrap_err(),
+            PngError::MissingOrBadPalette
+        );
+        assert_eq!(
+            super::parse_plte(&[1, 2, 3, 4, 5, 6, 7, 8, 9]).unwrap(),
+            vec![[1, 2, 3], [4, 5, 6], [7, 8, 9]]
         );
     }
 

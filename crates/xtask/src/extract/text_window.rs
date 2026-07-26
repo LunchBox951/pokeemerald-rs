@@ -353,6 +353,7 @@ mod tests {
             height,
             bit_depth: 4,
             pixels: Vec::new(),
+            palette: Vec::new(),
         };
 
         // Numbered border frames are 24x24; message_box is 56x16.

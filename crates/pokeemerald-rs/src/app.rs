@@ -15,12 +15,24 @@
 //! stays exactly as it was before I-2 -- see [`crate::title`]'s module docs
 //! for the real title screen, which only [`App::new`] (the real windowed
 //! entry point) composes.
+//!
+//! # Animating the real title screen (I-2, issue #116)
+//!
+//! [`crate::title::TitleScene::compose`] takes a `frame` counter (the same
+//! deterministic, wall-clock-free counter [`crate::title`]'s module docs
+//! describe): [`App::new`] keeps the loaded [`TitleScene`] alive alongside a
+//! running tick count, and every [`App::step`] recomposes the *next* tick's
+//! frame right after presenting the current one -- so the windowed title
+//! screen animates (cloud scroll, "Press Start" blink) using exactly the
+//! same [`TitleScene::compose`] calls this crate's
+//! tests and `xtask`'s smoke suite exercise headlessly, just one call per
+//! real frame instead of at two fixed indices.
 
 use platform::{ButtonState, Buttons, Frame, Platform, PlatformError};
 
 use crate::frame::to_platform_frame;
 use crate::scene::BootScene;
-use crate::title::{self, TitleSceneError};
+use crate::title::{self, TitleScene, TitleSceneError};
 
 /// Compose a fresh [`BootScene`] into a `platform`-ready frame.
 ///
@@ -93,14 +105,30 @@ const BUTTON_NAMES: [(Buttons, &str); 10] = [
 /// unchanged every frame.
 ///
 /// No engine/battle state yet (out of scope for this slice, see the crate
-/// root docs) -- the scene is a fixed placeholder; a future slice replaces
-/// `frame` with real per-frame recomposition once there is engine state to
-/// reflect. [`App::new`] composes the real title screen
-/// ([`compose_boot_frame`]'s synthetic scene is [`App::new_headless`]-only,
-/// see the module docs).
+/// root docs). [`App::new`] composes the real title screen and keeps it
+/// animating every frame (module docs' "Animating the real title screen"
+/// section); [`App::new_headless`]'s synthetic [`BootScene`] stays a fixed
+/// placeholder, unchanged from before I-2.
 pub struct App {
     platform: Platform,
     frame: Box<Frame>,
+    /// The real title screen's scene plus its running tick count, kept
+    /// alive so [`App::step`] can recompose it every frame -- `None` for a
+    /// headless `App` (module docs), whose [`BootScene`] frame never
+    /// changes.
+    title: Option<AnimatedTitle>,
+}
+
+/// [`App`]'s per-frame animation state for the real title screen (module
+/// docs): the loaded scene, the tick most recently composed into
+/// [`App`]'s cached `frame`, and whether that frame has been presented
+/// yet (so [`App::step`] advances the tick *before* presenting every
+/// frame after the first — keeping [`App::frame`]'s "most recently
+/// presented" contract true at all times).
+struct AnimatedTitle {
+    scene: TitleScene,
+    tick: u32,
+    presented: bool,
 }
 
 impl App {
@@ -120,9 +148,17 @@ impl App {
     /// platform's windowing event loop could not be created.
     pub fn new(title: impl Into<String>) -> Result<Self, AppError> {
         let scene = title::load_default()?;
-        let frame = to_platform_frame(&scene.compose());
+        let frame = to_platform_frame(&scene.compose(0));
         let platform = Platform::new(title)?;
-        Ok(Self { platform, frame })
+        Ok(Self {
+            platform,
+            frame,
+            title: Some(AnimatedTitle {
+                scene,
+                tick: 0,
+                presented: false,
+            }),
+        })
     }
 
     /// Build the I-1 synthetic placeholder scene against `platform`'s
@@ -141,6 +177,25 @@ impl App {
         Self {
             platform: Platform::new_headless(),
             frame: compose_boot_frame(),
+            title: None,
+        }
+    }
+
+    /// Test-only: pair the headless/null platform backend with a real
+    /// animated title scene, so the animated [`App::step`]/[`App::frame`]
+    /// path is drivable without a window or display server (the public
+    /// [`App::new`] always opens one).
+    #[cfg(test)]
+    fn new_headless_animated(scene: TitleScene) -> Self {
+        let frame = to_platform_frame(&scene.compose(0));
+        Self {
+            platform: Platform::new_headless(),
+            frame,
+            title: Some(AnimatedTitle {
+                scene,
+                tick: 0,
+                presented: false,
+            }),
         }
     }
 
@@ -160,9 +215,19 @@ impl App {
     }
 
     /// Run exactly one iteration of the frame loop body: pump input, log
-    /// any newly-pressed buttons, present the composed scene, and pace to
-    /// the next GBA vblank (a no-op for a headless `App`, see
-    /// `platform::Platform::wait_for_next_frame`).
+    /// any newly-pressed buttons, then -- for a real title screen
+    /// ([`App::new`]) whose current frame has already been presented --
+    /// advance to and compose the next tick's frame, pace to the next GBA
+    /// vblank (a no-op for a headless `App`, see
+    /// `platform::Platform::wait_for_next_frame`), and present the
+    /// composed scene (module docs' "Animating the real title screen"
+    /// section). Composing *before* presenting keeps [`App::frame`]'s
+    /// "most recently presented" contract true after every step, and
+    /// pacing *before* presenting spaces consecutive presents one GBA
+    /// frame apart -- including the first-to-second gap, which a
+    /// present-then-pace order would collapse to zero on backends whose
+    /// `present` doesn't block for vsync (the pacer's first tick
+    /// establishes the deadline and returns immediately).
     ///
     /// Returns whether the loop should keep going -- `false` once
     /// `platform::Platform::pump` reports a close request, at which point
@@ -181,8 +246,15 @@ impl App {
         if let Some(line) = describe_newly_pressed(*self.platform.buttons()) {
             eprintln!("{line}");
         }
-        self.platform.present(&self.frame)?;
+        if let Some(title) = &mut self.title {
+            if title.presented {
+                title.tick = title.tick.wrapping_add(1);
+                self.frame = to_platform_frame(&title.scene.compose(title.tick));
+            }
+            title.presented = true;
+        }
         self.platform.wait_for_next_frame();
+        self.platform.present(&self.frame)?;
         Ok(true)
     }
 
@@ -227,6 +299,34 @@ fn describe_newly_pressed(state: ButtonState) -> Option<String> {
 mod tests {
     use super::{describe_newly_pressed, App};
     use platform::{ButtonState, Buttons};
+
+    /// The animated path's `frame()` contract (I-2): after every step,
+    /// `frame()` is the frame that step actually presented — the first
+    /// step presents the initial tick-0 composition, the second tick 1's,
+    /// and so on. Needs the real pack, like
+    /// `title::tests::real_pack_composes_non_blank_deterministic_title_frames`.
+    #[test]
+    #[ignore = "needs a local pack: run `cargo xtask extract` first"]
+    fn animated_frame_returns_the_presented_tick() {
+        let scene = crate::title::load_default().expect("run `cargo xtask extract` first");
+        let expected0 = super::to_platform_frame(&scene.compose(0));
+        let expected1 = super::to_platform_frame(&scene.compose(1));
+        let mut app = App::new_headless_animated(scene);
+
+        assert_eq!(app.frame().to_vec(), expected0.to_vec());
+        app.step().expect("headless step never errors");
+        assert_eq!(
+            app.frame().to_vec(),
+            expected0.to_vec(),
+            "the first step presents tick 0; frame() must still be tick 0's composition"
+        );
+        app.step().expect("headless step never errors");
+        assert_eq!(
+            app.frame().to_vec(),
+            expected1.to_vec(),
+            "the second step advances to and presents tick 1"
+        );
+    }
 
     #[test]
     fn headless_frame_is_non_blank() {
