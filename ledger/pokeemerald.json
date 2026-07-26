@@ -12258,6 +12258,14 @@
       "status": "pending"
     },
     "graphics/fonts": {
+      "artifacts": {
+        "latin": {
+          "reason": "The 5 Latin font glyph sheets (latin_{normal,narrow,short,small,small_narrow}.png) extracted into the local gitignored asset pack by crates/xtask/src/extract/fonts.rs (validated 256x512/2bpp at extraction) via the bit-depth-2 PNG decode path (crates/xtask/src/extract/png.rs), read back via AssetPack::font and typed per-glyph access in crates/assets/src/fonts.rs (FontGlyphSheet). The other 12 files (Japanese, braille, arrows, keypad icons) are not extracted -- v1 is English-only text -- so the directory's own status stays pending.",
+          "rust_target": "crates/xtask/src/extract/fonts.rs",
+          "spec": "S-4",
+          "status": "ported"
+        }
+      },
       "category": "graphics.font",
       "kind": "dir",
       "spec_owner": "02-rendering",
@@ -16090,8 +16098,10 @@
     "graphics/text_window": {
       "category": "graphics.ui",
       "kind": "dir",
-      "spec_owner": "05-assets",
-      "status": "pending"
+      "reason": "Full directory extracted into the local gitignored asset pack (Discussion #71 policy A) by crates/xtask/src/extract/text_window.rs: all 20 numbered border-frame tile sheets, the default message_box tile sheet, and the 4 extra text_pal*.pal textbox palettes, with the image+palette pair of each frame validated as a unit (exact 16-colour bank, every pixel mappable) before serialization. Frame/message-box palettes come from each PNG's own PLTE chunk (crates/xtask/src/extract/png.rs's decode_palette), decoded alongside the existing JASC-.pal path for text_pal*.pal. Read back with typed access via AssetPack::text_window_frame/message_box/text_window_extra_palette in crates/assets/src/pack.rs (WindowFrameHandle). Interpreting the 3x3 border-tile layout itself is future rendering-layer behavior, out of scope here.",
+      "rust_target": "crates/xtask/src/extract/text_window.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "graphics/title_screen": {
       "category": "graphics.scene",
@@ -17734,6 +17744,14 @@
       "status": "pending"
     },
     "include/fonts.h": {
+      "artifacts": {
+        "latin": {
+          "reason": "The 5 Latin gFont*LatinGlyphs/gFont*LatinGlyphWidths extern declarations this header carries have a real Rust counterpart: glyph sheets via AssetPack::font (crates/assets/src/pack.rs) and width tables via crates/assets/src/fonts.rs's FontId::glyph_widths. The header's Japanese glyph-table declarations (gFontNormalJapaneseGlyphs, gFontSmallJapaneseGlyphs, gFontShortJapaneseGlyphs/Widths) are not covered, so the file's own status stays pending.",
+          "rust_target": "crates/assets/src/fonts.rs",
+          "spec": "S-4",
+          "status": "ported"
+        }
+      },
       "category": "code.header",
       "kind": "file",
       "status": "pending"
@@ -18459,6 +18477,14 @@
       "status": "pending"
     },
     "include/text_window.h": {
+      "artifacts": {
+        "frame_data": {
+          "reason": "WINDOW_FRAMES_COUNT (20) and struct TilesPal's tiles+pal shape are mirrored by the WindowFrameHandle{tiles,palette} bundle (crates/assets/src/pack.rs). GetWindowFrameTilesPal's lookup behavior is tracked as the rewritten src/text_window.c#GetWindowFrameTilesPal artifact, not claimed here. The header's VRAM-loading/rendering prototypes (LoadWindowGfx, LoadUserWindowBorderGfx*, DrawTextBorderOuter/Inner, rbox_fill_rectangle, GetTextWindowPalette, GetOverworldTextboxPalettePtr) remain unimplemented, so the file's own status stays pending.",
+          "rust_target": "crates/assets/src/pack.rs",
+          "spec": "S-4",
+          "status": "ported"
+        }
+      },
       "category": "code.header",
       "kind": "file",
       "status": "pending"
@@ -25197,6 +25223,62 @@
       "status": "pending"
     },
     "src/field_player_avatar.c": {
+      "artifacts": {
+        "CheckForPlayerAvatarCollision": {
+          "reason": "Destination-tile collision check re-implemented via MapRuntime::metatile_cell plus collision.rs's Collision/elevation_mismatch; only the grid collision-bit and elevation-mismatch cases are ported (object-event/ledge/boulder/rotating-gate/acro-bike sub-checks are out of v1 scope)",
+          "rust_target": "crates/engine/src/overworld/player.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "CheckMovementInputNotOnBike": {
+          "reason": "NOT_MOVING/TURN_DIRECTION/MOVING classification re-implemented as PlayerState::step's running-state branch, including the exact turn-vs-step rule (direction change only turns when not already mid-movement)",
+          "rust_target": "crates/engine/src/overworld/player.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "GetPlayerFacingDirection": {
+          "reason": "Facing-direction accessor re-implemented as PlayerState::facing",
+          "rust_target": "crates/engine/src/overworld/player.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "GetPlayerMovementDirection": {
+          "reason": "Folded into the same PlayerState::facing field as GetPlayerFacingDirection: upstream's facingDirection/movementDirection only diverge under facingDirectionLocked (bike wheelies/slides), which is out of v1 scope, so this port never needs to distinguish them",
+          "rust_target": "crates/engine/src/overworld/player.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "PlayerGetElevation": {
+          "reason": "Elevation accessor re-implemented as PlayerState::elevation",
+          "rust_target": "crates/engine/src/overworld/player.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "PlayerNotOnBikeMoving": {
+          "reason": "Ordinary-walk attempt-to-move re-implemented as PlayerState::step's Advanced/Blocked branch; surf/run/ledge-jump/boulder-push/rotating-gate/Faraway-Island-Mew special cases are out of v1 scope and not ported",
+          "rust_target": "crates/engine/src/overworld/player.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "PlayerNotOnBikeNotMoving": {
+          "reason": "No-input case re-implemented as PlayerState::step's None-input branch (StepOutcome::Idle, running state reset to NotMoving)",
+          "rust_target": "crates/engine/src/overworld/player.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "PlayerNotOnBikeTurningInPlace": {
+          "reason": "Turn-in-place (no tile movement, facing updated) re-implemented as PlayerState::step's StepOutcome::Turned branch",
+          "rust_target": "crates/engine/src/overworld/player.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "PlayerStep": {
+          "reason": "Per-input-poll orchestration (special-anim interrupt / bike branch / forced-movement dispatch stripped, on-foot-only v1 scope) re-implemented as PlayerState::step",
+          "rust_target": "crates/engine/src/overworld/player.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        }
+      },
       "category": "code.source",
       "kind": "file",
       "status": "pending"
@@ -25242,6 +25324,56 @@
       "status": "pending"
     },
     "src/fieldmap.c": {
+      "artifacts": {
+        "GetMetatileAttributesById": {
+          "reason": "Primary-vs-secondary tileset attribute table selection (NUM_METATILES_IN_PRIMARY split) re-implemented in MapRuntime::metatile_behavior",
+          "rust_target": "crates/engine/src/overworld/map_runtime.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "IsCoordInConnectingMap": {
+          "reason": "Single-axis in-range check re-implemented inline in map_runtime::landing_position's bounds test",
+          "rust_target": "crates/engine/src/overworld/map_runtime.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "IsPosInConnectingMap": {
+          "reason": "Perpendicular-axis bounds check for a connection crossing re-implemented in map_runtime::landing_position, called from MapRuntime::resolve_connection",
+          "rust_target": "crates/engine/src/overworld/map_runtime.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "MapGridGetCollisionAt": {
+          "reason": "Grid collision-bit lookup re-implemented as MapRuntime::metatile_cell (MetatileCell::collision), consumed by PlayerState::step's collision check",
+          "rust_target": "crates/engine/src/overworld/map_runtime.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "MapGridGetElevationAt": {
+          "reason": "Grid elevation lookup re-implemented as MapRuntime::metatile_cell (MetatileCell::elevation); MAPGRID_UNDEFINED's fallback-to-0 is superseded by this port's explicit out-of-bounds/connection-crossing handling instead",
+          "rust_target": "crates/engine/src/overworld/map_runtime.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "MapGridGetMetatileBehaviorAt": {
+          "reason": "Metatile-id-to-behavior lookup re-implemented as MapRuntime::metatile_behavior",
+          "rust_target": "crates/engine/src/overworld/map_runtime.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "MapGridGetMetatileIdAt": {
+          "reason": "Grid metatile-id lookup re-implemented as MapRuntime::metatile_cell (MetatileCell::metatile_id); the MAPGRID_UNDEFINED border-block fallback is not ported (no camera/backing-buffer border scheme in this slice)",
+          "rust_target": "crates/engine/src/overworld/map_runtime.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "SetPositionFromConnection": {
+          "reason": "Per-direction landing-position formula re-implemented in map_runtime::landing_position, simplified to land exactly at the crossed axis's tile-space edge rather than upstream's pixel-precision post-camera-swap position (no camera in this slice)",
+          "rust_target": "crates/engine/src/overworld/map_runtime.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        }
+      },
       "category": "code.source",
       "kind": "file",
       "status": "pending"
@@ -25297,6 +25429,14 @@
       "status": "pending"
     },
     "src/fonts.c": {
+      "artifacts": {
+        "latin": {
+          "reason": "The 5 Latin glyph tables (gFontNormalLatinGlyphs and its 4 siblings) plus their gFont*LatinGlyphWidths width tables transcribed as Rust data / typed decode: glyph sheets extracted into the asset pack (crates/xtask/src/extract/fonts.rs), width tables ported verbatim as static arrays in crates/assets/src/fonts.rs (FontId::glyph_widths), per-glyph access via FontGlyphSheet::glyph. The Japanese/FRLG/braille/keypad glyph and width tables in this file are not covered, so the file's own status stays pending.",
+          "rust_target": "crates/assets/src/fonts.rs",
+          "spec": "S-4",
+          "status": "ported"
+        }
+      },
       "category": "code.source",
       "kind": "file",
       "status": "pending"
@@ -25630,6 +25770,26 @@
       "status": "pending"
     },
     "src/metatile_behavior.c": {
+      "artifacts": {
+        "MetatileBehavior_IsDoor": {
+          "reason": "Re-implemented as metatile_behavior::is_door restricted to MB_ANIMATED_DOOR; MB_PETALBURG_GYM_DOOR is not ported (out of the v1 north-star path)",
+          "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "MetatileBehavior_IsNonAnimDoor": {
+          "reason": "Re-implemented as metatile_behavior::is_door restricted to MB_NON_ANIMATED_DOOR; MB_WATER_DOOR and MB_DEEP_SOUTH_WARP are not ported (out of the v1 north-star path)",
+          "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "MetatileBehavior_IsWarpDoor": {
+          "reason": "MB_ANIMATED_DOOR check re-implemented as metatile_behavior::is_door",
+          "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        }
+      },
       "category": "code.source",
       "kind": "file",
       "status": "pending"
@@ -26480,6 +26640,20 @@
       "status": "pending"
     },
     "src/text_window.c": {
+      "artifacts": {
+        "GetWindowFrameTilesPal": {
+          "reason": "The zero-based 0..19 frame lookup with out-of-range fallback to frame 0 is re-implemented as code in AssetPack::text_window_frame (crates/assets/src/pack.rs), translating sWindowFrames indices to extracted source filenames 1.png..20.png -- a code re-implementation, distinct from the ported frame_data assets.",
+          "rust_target": "crates/assets/src/pack.rs",
+          "spec": "S-4",
+          "status": "rewritten"
+        },
+        "frame_data": {
+          "reason": "The gTextWindowFrame1_Gfx/sTextWindowFrame2_Gfx..20 tile sheets, their .gbapal-derived palettes, and the sWindowFrames/sTextWindowPalettes data tables are extracted into the asset pack (crates/xtask/src/extract/text_window.rs) and exposed via WindowFrameHandle (crates/assets/src/pack.rs). GetWindowFrameTilesPal's lookup behavior is tracked separately as the rewritten GetWindowFrameTilesPal artifact. The remaining VRAM-loading/tilemap-filling behavior (LoadWindowGfx, DrawTextBorderOuter/Inner, rbox_fill_rectangle, GetTextWindowPalette) is not implemented -- that is a future rendering/engine slice -- so the file's own status stays pending.",
+          "rust_target": "crates/assets/src/pack.rs",
+          "spec": "S-4",
+          "status": "ported"
+        }
+      },
       "category": "code.source",
       "kind": "file",
       "status": "pending"

@@ -75,6 +75,57 @@ pub enum ExtractError {
         /// The buffer's actual length.
         actual: usize,
     },
+    /// One of the fixed text-window source files required by the extraction
+    /// manifest was missing or not a regular file. Carries the expected path.
+    MissingTextWindowAsset(PathBuf),
+    /// `graphics/text_window/` contained a path that is not part of the
+    /// extraction manifest. Carries the unexpected path so an upstream
+    /// addition cannot be silently ignored while the ledger claims the full
+    /// directory is ported.
+    UnexpectedTextWindowAsset(PathBuf),
+    /// A text-window PNG or standalone palette did not contain exactly the
+    /// 16 colours promised by the typed asset handle. Carries the source path
+    /// and actual colour count.
+    TextWindowPaletteWrongColorCount(PathBuf, usize),
+    /// A Latin font glyph sheet was not the exact 256x512/2bpp shape the
+    /// documented font contract requires (`extract::fonts`'s docs) — the
+    /// unpinned upstream checkout changed shape, and writing the sheet
+    /// anyway would only fail later at pack-read time. Carries the source
+    /// path and the actual decoded shape.
+    FontSheetWrongShape {
+        /// The offending sheet's source path.
+        path: PathBuf,
+        /// The decoded width in pixels.
+        width: u32,
+        /// The decoded height in pixels.
+        height: u32,
+        /// The decoded bit depth.
+        bit_depth: u8,
+    },
+    /// A text-window PNG was not the exact shape its kind requires (24x24
+    /// for the numbered border frames — a 3x3 grid of 8x8 tiles — or
+    /// 56x16 for `message_box.png`). The read side (`AssetPack`'s typed
+    /// accessors) rejects any other shape, so extraction must not produce
+    /// it. Carries the source path, the decoded dimensions, and the
+    /// required dimensions.
+    TextWindowImageWrongDimensions {
+        /// The offending image's source path.
+        path: PathBuf,
+        /// The decoded width in pixels.
+        width: u32,
+        /// The decoded height in pixels.
+        height: u32,
+        /// The width this kind of text-window image requires.
+        expected_width: u32,
+        /// The height this kind of text-window image requires.
+        expected_height: u32,
+    },
+    /// A text-window PNG contained a pixel index that cannot be mapped
+    /// through its own bundled palette (an 8-bit-indexed PNG can carry
+    /// indices at or above 16 while still holding the exactly-16-entry
+    /// `PLTE` required here). Carries the source path, the offending pixel
+    /// value, and the palette's length.
+    TextWindowPixelOutsidePalette(PathBuf, u8, usize),
 }
 
 impl fmt::Display for ExtractError {
@@ -115,6 +166,50 @@ impl fmt::Display for ExtractError {
             Self::LayoutBorderWrongSize { layout_id, actual } => write!(
                 f,
                 "layout `{layout_id}`: border.bin wrong size: expected exactly 8 bytes, got {actual}"
+            ),
+            Self::MissingTextWindowAsset(path) => write!(
+                f,
+                "required text-window asset `{}` is missing or is not a file",
+                path.display()
+            ),
+            Self::UnexpectedTextWindowAsset(path) => write!(
+                f,
+                "unexpected text-window asset `{}`: update the extraction manifest and coverage ledger before extracting",
+                path.display()
+            ),
+            Self::TextWindowPaletteWrongColorCount(path, actual) => write!(
+                f,
+                "text-window palette `{}` has {actual} colours: expected exactly 16",
+                path.display()
+            ),
+            Self::FontSheetWrongShape {
+                path,
+                width,
+                height,
+                bit_depth,
+            } => write!(
+                f,
+                "font glyph sheet `{}` is {width}x{height} at {bit_depth}bpp: expected exactly \
+                 256x512 at 2bpp",
+                path.display()
+            ),
+            Self::TextWindowImageWrongDimensions {
+                path,
+                width,
+                height,
+                expected_width,
+                expected_height,
+            } => write!(
+                f,
+                "text-window image `{}` is {width}x{height}: this kind requires exactly \
+                 {expected_width}x{expected_height}",
+                path.display()
+            ),
+            Self::TextWindowPixelOutsidePalette(path, pixel, palette_len) => write!(
+                f,
+                "text-window image `{}` has pixel index {pixel}: its bundled palette only has \
+                 {palette_len} colours",
+                path.display()
             ),
         }
     }
