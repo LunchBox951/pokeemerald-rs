@@ -60,6 +60,21 @@ pub enum PackError {
         /// The entry's actual payload length in bytes.
         byte_len: usize,
     },
+    /// A text-window frame's tile bitmap entry's payload length disagrees
+    /// with its own declared `width * height` pixel count — a corrupt or
+    /// hand-built pack whose [`ImageRef`](crate::pack::ImageRef)
+    /// pixel-count invariant would be false. Surfaced on read; the
+    /// extraction writer always emits matching lengths.
+    MalformedTextWindowImage {
+        /// The tile bitmap entry's id.
+        id: String,
+        /// The entry's declared width in pixels.
+        width: u32,
+        /// The entry's declared height in pixels.
+        height: u32,
+        /// The entry's actual payload length in bytes.
+        byte_len: usize,
+    },
     /// A text-window frame's tile bitmap holds a pixel index its bundled
     /// palette cannot map (possible in a corrupt or hand-built pack
     /// carrying an 8-bit-indexed image entry alongside a valid 16-colour
@@ -112,6 +127,16 @@ impl fmt::Display for PackError {
                 f,
                 "asset pack: text-window palette `{id}` declares {color_count} colours in \
                  {byte_len} bytes: expected exactly 16 colours in 32 bytes"
+            ),
+            Self::MalformedTextWindowImage {
+                id,
+                width,
+                height,
+                byte_len,
+            } => write!(
+                f,
+                "asset pack: text-window image `{id}` declares {width}x{height} pixels but \
+                 carries {byte_len} payload bytes"
             ),
             Self::TextWindowPixelOutsidePalette {
                 id,

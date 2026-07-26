@@ -345,6 +345,8 @@ impl AssetPack {
     /// [`palette`](Self::palette);
     /// [`PackError::MalformedTextWindowPalette`] if the palette entry is
     /// not the exact 16-colour/32-byte bank the handle documents;
+    /// [`PackError::MalformedTextWindowImage`] if the tile bitmap's
+    /// payload length disagrees with its declared `width * height`;
     /// [`PackError::TextWindowPixelOutsidePalette`] if the tile bitmap
     /// holds a pixel index its bundled palette cannot map.
     pub fn text_window_frame(&self, frame_id: u8) -> Result<WindowFrameHandle<'_>, PackError> {
@@ -416,10 +418,12 @@ impl AssetPack {
     /// Bundle a text-window frame's tile bitmap and palette, validating
     /// the pair on read like [`text_window_palette`](Self::text_window_palette)
     /// does for the palette alone: the read side must not trust pack
-    /// contents, so a tile pixel its own 16-colour palette cannot map
-    /// (possible in a corrupt or hand-built pack carrying an
-    /// 8-bit-indexed image) is rejected here rather than handed to a
-    /// renderer to index past the bank. Extraction enforces the same pair
+    /// contents. A tile bitmap whose payload length disagrees with its own
+    /// declared `width * height` (violating [`ImageRef`]'s documented
+    /// pixel-count invariant), or holding a pixel its 16-colour palette
+    /// cannot map (possible in a corrupt or hand-built pack carrying an
+    /// 8-bit-indexed image), is rejected here rather than handed to a
+    /// renderer to index out of bounds. Extraction enforces the same pair
     /// rule on write (`xtask::extract`'s text-window pairing checks).
     fn window_frame(
         &self,
@@ -427,6 +431,15 @@ impl AssetPack {
         palette_id: &str,
     ) -> Result<WindowFrameHandle<'_>, PackError> {
         let tiles = self.image(image_id)?;
+        let declared = u64::from(tiles.width) * u64::from(tiles.height);
+        if !u64::try_from(tiles.pixels.len()).is_ok_and(|len| len == declared) {
+            return Err(PackError::MalformedTextWindowImage {
+                id: image_id.to_owned(),
+                width: tiles.width,
+                height: tiles.height,
+                byte_len: tiles.pixels.len(),
+            });
+        }
         let palette = self.text_window_palette(palette_id)?;
         if let Some(&pixel) = tiles
             .pixels

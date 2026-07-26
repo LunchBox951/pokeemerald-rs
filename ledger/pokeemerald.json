@@ -12260,7 +12260,7 @@
     "graphics/fonts": {
       "artifacts": {
         "latin": {
-          "reason": "The 5 Latin font glyph sheets (latin_{normal,narrow,short,small,small_narrow}.png) extracted into the local gitignored asset pack via crates/xtask/src/extract/mod.rs's new bit-depth-2 PNG decode path (crates/xtask/src/extract/png.rs), read back via AssetPack::font and typed per-glyph access in crates/assets/src/fonts.rs (FontGlyphSheet). The other 12 files (Japanese, braille, arrows, keypad icons) are not extracted -- v1 is English-only text -- so the directory's own status stays pending.",
+          "reason": "The 5 Latin font glyph sheets (latin_{normal,narrow,short,small,small_narrow}.png) extracted into the local gitignored asset pack via crates/xtask/src/extract/fonts.rs's bit-depth-2 PNG decode path (crates/xtask/src/extract/png.rs), read back via AssetPack::font and typed per-glyph access in crates/assets/src/fonts.rs (FontGlyphSheet). The other 12 files (Japanese, braille, arrows, keypad icons) are not extracted -- v1 is English-only text -- so the directory's own status stays pending.",
           "rust_target": "crates/assets/src/fonts.rs",
           "spec": "S-4",
           "status": "ported"
@@ -16098,8 +16098,8 @@
     "graphics/text_window": {
       "category": "graphics.ui",
       "kind": "dir",
-      "reason": "Full directory extracted into the local gitignored asset pack (Discussion #71 policy A): all 20 numbered border-frame tile sheets, the default message_box tile sheet, and the 4 extra text_pal*.pal textbox palettes. Frame/message-box palettes come from each PNG's own PLTE chunk (crates/xtask/src/extract/png.rs's new decode_palette), decoded alongside the existing JASC-.pal path for text_pal*.pal. Read back with typed access via AssetPack::text_window_frame/message_box/text_window_extra_palette in crates/assets/src/pack.rs (WindowFrameHandle). Interpreting the 3x3 border-tile layout itself is future rendering-layer behavior, out of scope here.",
-      "rust_target": "crates/xtask/src/extract/mod.rs",
+      "reason": "Full directory extracted into the local gitignored asset pack (Discussion #71 policy A) by crates/xtask/src/extract/text_window.rs: all 20 numbered border-frame tile sheets, the default message_box tile sheet, and the 4 extra text_pal*.pal textbox palettes, with the image+palette pair of each frame validated as a unit (exact 16-colour bank, every pixel mappable) before serialization. Frame/message-box palettes come from each PNG's own PLTE chunk (crates/xtask/src/extract/png.rs's decode_palette), decoded alongside the existing JASC-.pal path for text_pal*.pal. Read back with typed access via AssetPack::text_window_frame/message_box/text_window_extra_palette in crates/assets/src/pack.rs (WindowFrameHandle). Interpreting the 3x3 border-tile layout itself is future rendering-layer behavior, out of scope here.",
+      "rust_target": "crates/xtask/src/extract/text_window.rs",
       "spec": "S-4",
       "status": "ported"
     },
@@ -25325,7 +25325,7 @@
     "src/fonts.c": {
       "artifacts": {
         "latin": {
-          "reason": "The 5 Latin glyph tables (gFontNormalLatinGlyphs and its 4 siblings) plus their gFont*LatinGlyphWidths width tables transcribed as Rust data / typed decode: glyph sheets extracted into the asset pack (crates/xtask/src/extract/mod.rs), width tables ported verbatim as static arrays in crates/assets/src/fonts.rs (FontId::glyph_widths), per-glyph access via FontGlyphSheet::glyph. The Japanese/FRLG/braille/keypad glyph and width tables in this file are not covered, so the file's own status stays pending.",
+          "reason": "The 5 Latin glyph tables (gFontNormalLatinGlyphs and its 4 siblings) plus their gFont*LatinGlyphWidths width tables transcribed as Rust data / typed decode: glyph sheets extracted into the asset pack (crates/xtask/src/extract/fonts.rs), width tables ported verbatim as static arrays in crates/assets/src/fonts.rs (FontId::glyph_widths), per-glyph access via FontGlyphSheet::glyph. The Japanese/FRLG/braille/keypad glyph and width tables in this file are not covered, so the file's own status stays pending.",
           "rust_target": "crates/assets/src/fonts.rs",
           "spec": "S-4",
           "status": "ported"
@@ -26522,7 +26522,7 @@
           "status": "rewritten"
         },
         "frame_data": {
-          "reason": "The gTextWindowFrame1_Gfx/sTextWindowFrame2_Gfx..20 tile sheets, their .gbapal-derived palettes, and the sWindowFrames/sTextWindowPalettes data tables are extracted into the asset pack (crates/xtask/src/extract/mod.rs) and exposed via WindowFrameHandle (crates/assets/src/pack.rs). GetWindowFrameTilesPal's lookup behavior is tracked separately as the rewritten GetWindowFrameTilesPal artifact. The remaining VRAM-loading/tilemap-filling behavior (LoadWindowGfx, DrawTextBorderOuter/Inner, rbox_fill_rectangle, GetTextWindowPalette) is not implemented -- that is a future rendering/engine slice -- so the file's own status stays pending.",
+          "reason": "The gTextWindowFrame1_Gfx/sTextWindowFrame2_Gfx..20 tile sheets, their .gbapal-derived palettes, and the sWindowFrames/sTextWindowPalettes data tables are extracted into the asset pack (crates/xtask/src/extract/text_window.rs) and exposed via WindowFrameHandle (crates/assets/src/pack.rs). GetWindowFrameTilesPal's lookup behavior is tracked separately as the rewritten GetWindowFrameTilesPal artifact. The remaining VRAM-loading/tilemap-filling behavior (LoadWindowGfx, DrawTextBorderOuter/Inner, rbox_fill_rectangle, GetTextWindowPalette) is not implemented -- that is a future rendering/engine slice -- so the file's own status stays pending.",
           "rust_target": "crates/assets/src/pack.rs",
           "spec": "S-4",
           "status": "ported"
