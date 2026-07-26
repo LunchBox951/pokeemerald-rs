@@ -89,16 +89,13 @@ jobs:
             stable)   target="main" ;;
             *) echo "no next rung for ${merged}"; exit 0 ;;
           esac
-          # Find the most-recent release/* branch that is now an ancestor of the
-          # channel we just pushed to (i.e. the vehicle that was promoted in).
-          release_branch=""
-          for ref in $(git for-each-ref --format='%(refname:short)' --sort=-committerdate 'refs/remotes/origin/release/*'); do
-            name="${ref#origin/}"
-            if git merge-base --is-ancestor "origin/${name}" "origin/${merged}"; then
-              release_branch="${name}"
-              break
-            fi
-          done
+          # Identify the release/* branch THIS push promoted, from the
+          # triggering merge commit's own ancestry -- not a namespace-wide
+          # committer-date scan, which can't tell a branch's activity apart
+          # from which branch was actually just merged (issue #135: a
+          # long-lived maintenance release/* line with a newer tip must
+          # never shadow the release branch this push named).
+          release_branch="$(scripts/select_promoted_release.sh "${GITHUB_SHA}")"
           if [ -z "${release_branch}" ]; then
             echo "No release/* branch merged into ${merged}; nothing to promote."
             exit 0
