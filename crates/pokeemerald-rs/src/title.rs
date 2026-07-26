@@ -362,6 +362,17 @@ pub enum TitleSceneError {
 impl fmt::Display for TitleSceneError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            // A missing entry means the pack itself loaded fine but
+            // predates this build (every id this module looks up is a
+            // fixed `title/*` name): the actionable fix is a re-extract,
+            // and without this hint the bare "no entry with id" message
+            // sends the developer bug-hunting instead (`no-silent-failure`
+            // in spirit -- fail with the remedy, not just the symptom).
+            Self::Pack(err @ PackError::UnknownAsset(_)) => write!(
+                f,
+                "title screen: {err}: the local asset pack predates this build -- re-run \
+                 `cargo xtask extract` to refresh it"
+            ),
             Self::Pack(err) => write!(f, "title screen: {err}"),
             Self::Render(err) => write!(f, "title screen: {err}"),
             Self::ImageNotTileAligned { id, width, height } => write!(
@@ -412,6 +423,18 @@ impl TitleSceneError {
     #[must_use]
     pub const fn is_pack_missing(&self) -> bool {
         matches!(self, Self::Pack(PackError::NotFound(_)))
+    }
+
+    /// Whether this is the "pack on disk predates this build" diagnostic:
+    /// the pack loaded, but an entry this module requires
+    /// ([`PackError::UnknownAsset`]) isn't in it — every id
+    /// [`TitleScene::from_pack`] looks up is a fixed `title/*` name, so a
+    /// missing one always means an out-of-date local pack, and the remedy
+    /// is re-running `cargo xtask extract` (which this error's
+    /// [`Display`](fmt::Display) message states).
+    #[must_use]
+    pub const fn is_pack_stale(&self) -> bool {
+        matches!(self, Self::Pack(PackError::UnknownAsset(_)))
     }
 }
 
