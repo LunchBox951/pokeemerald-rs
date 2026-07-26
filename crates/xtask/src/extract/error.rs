@@ -80,6 +80,12 @@ pub enum ExtractError {
     /// 16 colours promised by the typed asset handle. Carries the source path
     /// and actual colour count.
     TextWindowPaletteWrongColorCount(PathBuf, usize),
+    /// A text-window PNG contained a pixel index that cannot be mapped
+    /// through its own bundled palette (an 8-bit-indexed PNG can carry
+    /// indices at or above 16 while still holding the exactly-16-entry
+    /// `PLTE` required here). Carries the source path, the offending pixel
+    /// value, and the palette's length.
+    TextWindowPixelOutsidePalette(PathBuf, u8, usize),
 }
 
 impl fmt::Display for ExtractError {
@@ -129,6 +135,12 @@ impl fmt::Display for ExtractError {
             Self::TextWindowPaletteWrongColorCount(path, actual) => write!(
                 f,
                 "text-window palette `{}` has {actual} colours: expected exactly 16",
+                path.display()
+            ),
+            Self::TextWindowPixelOutsidePalette(path, pixel, palette_len) => write!(
+                f,
+                "text-window image `{}` has pixel index {pixel}: its bundled palette only has \
+                 {palette_len} colours",
                 path.display()
             ),
         }

@@ -8,6 +8,25 @@
 use super::{AssetPack, PackError, MAGIC};
 use crate::fonts::FontId;
 
+/// A valid one-GBA-bank text-window palette payload (16 colours, 32
+/// bytes — the shape the typed text-window accessors enforce), with the
+/// first two colours set so each fixture entry stays distinguishable.
+fn text_window_palette_payload(first: u16, second: u16) -> Vec<u8> {
+    let mut payload = Vec::with_capacity(32);
+    payload.extend_from_slice(&first.to_le_bytes());
+    payload.extend_from_slice(&second.to_le_bytes());
+    payload.resize(32, 0);
+    payload
+}
+
+/// The 16 colours of [`text_window_palette_payload`], as the values
+/// [`PaletteRef::colors`](super::PaletteRef::colors) should yield.
+fn text_window_palette_colors(first: u16, second: u16) -> Vec<u16> {
+    let mut colors = vec![first, second];
+    colors.resize(16, 0);
+    colors
+}
+
 /// Build a tiny, synthetic pack in memory (never real upstream art — per
 /// the issue's CI caveat, no test in this crate touches `pokeemerald/` or
 /// the real extracted pack) with one entry of each kind: an `Image`, a
@@ -96,6 +115,26 @@ fn synthetic_pack() -> Vec<u8> {
         Entry {
             id: "text-window/palette/1",
             kind_tag: 1,
+            meta: 16u16.to_le_bytes().to_vec(),
+            payload: text_window_palette_payload(0x0011, 0x0022),
+        },
+        // Frame source `2`'s image is fine, but its palette is malformed
+        // (2 declared colours in 4 bytes) — read-side validation fodder.
+        Entry {
+            id: "text-window/image/2",
+            kind_tag: 0,
+            meta: {
+                let mut m = Vec::new();
+                m.extend_from_slice(&2u32.to_le_bytes());
+                m.extend_from_slice(&2u32.to_le_bytes());
+                m.push(4);
+                m
+            },
+            payload: vec![12, 13, 14, 15],
+        },
+        Entry {
+            id: "text-window/palette/2",
+            kind_tag: 1,
             meta: 2u16.to_le_bytes().to_vec(),
             payload: vec![0x11, 0x00, 0x22, 0x00],
         },
@@ -114,8 +153,8 @@ fn synthetic_pack() -> Vec<u8> {
         Entry {
             id: "text-window/palette/20",
             kind_tag: 1,
-            meta: 2u16.to_le_bytes().to_vec(),
-            payload: vec![0x77, 0x00, 0x88, 0x00],
+            meta: 16u16.to_le_bytes().to_vec(),
+            payload: text_window_palette_payload(0x0077, 0x0088),
         },
         Entry {
             id: "text-window/image/message_box",
@@ -132,14 +171,22 @@ fn synthetic_pack() -> Vec<u8> {
         Entry {
             id: "text-window/palette/message_box",
             kind_tag: 1,
-            meta: 2u16.to_le_bytes().to_vec(),
-            payload: vec![0x33, 0x00, 0x44, 0x00],
+            meta: 16u16.to_le_bytes().to_vec(),
+            payload: text_window_palette_payload(0x0033, 0x0044),
         },
         Entry {
             id: "text-window/palette/text_pal1",
             kind_tag: 1,
-            meta: 2u16.to_le_bytes().to_vec(),
-            payload: vec![0x55, 0x00, 0x66, 0x00],
+            meta: 16u16.to_le_bytes().to_vec(),
+            payload: text_window_palette_payload(0x0055, 0x0066),
+        },
+        // Declares the right 16-colour metadata over a truncated 8-byte
+        // payload — metadata alone must not be trusted on read.
+        Entry {
+            id: "text-window/palette/text_pal2",
+            kind_tag: 1,
+            meta: 16u16.to_le_bytes().to_vec(),
+            payload: vec![0x55, 0x00, 0x66, 0x00, 0x77, 0x00, 0x88, 0x00],
         },
     ];
     // Directory entries must be written in id-sorted order, exactly like
@@ -386,25 +433,25 @@ fn text_window_frame_bundles_tiles_and_its_own_plte_derived_palette() {
 
     let frame = pack.text_window_frame(0).unwrap();
     assert_eq!(frame.tiles.pixels, &[0, 1, 2, 3]);
-    assert_eq!(frame.palette.color_count, 2);
+    assert_eq!(frame.palette.color_count, 16);
     assert_eq!(frame.palette.color(0), Some(0x0011));
     assert_eq!(frame.palette.color(1), Some(0x0022));
 
-    let err = pack.text_window_frame(1).unwrap_err();
-    assert!(matches!(err, PackError::UnknownAsset(id) if id == "text-window/image/2"));
+    let err = pack.text_window_frame(2).unwrap_err();
+    assert!(matches!(err, PackError::UnknownAsset(id) if id == "text-window/image/3"));
 
     let last = pack.text_window_frame(19).unwrap();
     assert_eq!(last.tiles.pixels, &[8, 9, 10, 11]);
     assert_eq!(
         last.palette.colors().collect::<Vec<_>>(),
-        vec![0x0077, 0x0088]
+        text_window_palette_colors(0x0077, 0x0088)
     );
 
     let fallback = pack.text_window_frame(20).unwrap();
     assert_eq!(fallback.tiles.pixels, frame.tiles.pixels);
     assert_eq!(
         fallback.palette.colors().collect::<Vec<_>>(),
-        vec![0x0011, 0x0022]
+        text_window_palette_colors(0x0011, 0x0022)
     );
 
     let far_out_of_range = pack.text_window_frame(u8::MAX).unwrap();
@@ -420,8 +467,48 @@ fn message_box_bundles_its_own_tiles_and_palette() {
 
     let handle = pack.message_box().unwrap();
     assert_eq!(handle.tiles.pixels, &[4, 5, 6, 7]);
+    assert_eq!(handle.palette.color_count, 16);
     assert_eq!(handle.palette.color(0), Some(0x0033));
     assert_eq!(handle.palette.color(1), Some(0x0044));
+
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn malformed_text_window_palettes_are_rejected_on_read() {
+    let path = write_synthetic_pack("malformed-text-window-palette");
+    let pack = AssetPack::load(&path).unwrap();
+
+    // Frame id 1 selects source `2`: its image entry is fine, but the
+    // palette declares 2 colours in 4 bytes — the typed handle's
+    // 16-colour invariant would be false.
+    let err = pack.text_window_frame(1).unwrap_err();
+    assert!(matches!(
+        &err,
+        PackError::MalformedTextWindowPalette {
+            id,
+            color_count: 2,
+            byte_len: 4,
+        } if id == "text-window/palette/2"
+    ));
+
+    // `text_pal2` declares the right 16-colour metadata over a truncated
+    // 8-byte payload — metadata alone must not be trusted, or
+    // `PaletteRef::colors()` (which walks the raw payload) would disagree
+    // with `color_count`.
+    let err = pack.text_window_extra_palette(2).unwrap_err();
+    assert!(matches!(
+        &err,
+        PackError::MalformedTextWindowPalette {
+            id,
+            color_count: 16,
+            byte_len: 8,
+        } if id == "text-window/palette/text_pal2"
+    ));
+
+    // The generic untyped accessor still exposes the entries as-is; only
+    // the typed text-window accessors enforce the bank shape.
+    assert!(pack.palette("text-window/palette/2").is_ok());
 
     let _ = std::fs::remove_file(path);
 }

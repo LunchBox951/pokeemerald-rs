@@ -622,9 +622,32 @@ fn extract_text_window(upstream: &Path, writer: &mut PackWriter) -> Result<(), E
 
     for stem in TEXT_WINDOW_IMAGE_STEMS {
         let path = dir.join(format!("{stem}.png"));
-        decode_png_entry(&path, format!("text-window/image/{stem}"), writer)?;
         let bytes = read_file(&path)?;
+        let image = png::decode(&bytes).map_err(|e| ExtractError::Png(path.clone(), e))?;
         let colors = png::decode_palette(&bytes).map_err(|e| ExtractError::Png(path.clone(), e))?;
+        // Validate the pair as a unit, before either entry is serialized:
+        // the palette must be the exact 16 colours the typed handles
+        // promise, and every pixel must be mappable through it (an
+        // 8-bit-indexed PNG can hold indices >= 16 alongside a valid
+        // 16-entry PLTE). The colour-count check runs first so an
+        // undersized palette reports as a palette problem, not as a
+        // pixel out of range.
+        if colors.len() != TEXT_WINDOW_PALETTE_COLORS {
+            return Err(ExtractError::TextWindowPaletteWrongColorCount(
+                path,
+                colors.len(),
+            ));
+        }
+        validate_text_window_pixels(&path, &image.pixels, colors.len())?;
+        writer.push(PackEntry {
+            id: format!("text-window/image/{stem}"),
+            kind: PackKind::Image {
+                width: image.width,
+                height: image.height,
+                bit_depth: image.bit_depth,
+            },
+            payload: image.pixels,
+        });
         push_text_window_palette_entry(
             &path,
             &colors,
@@ -644,6 +667,27 @@ fn extract_text_window(upstream: &Path, writer: &mut PackWriter) -> Result<(), E
         )?;
     }
     Ok(())
+}
+
+/// Reject any text-window pixel index that cannot be mapped through the
+/// frame's own bundled palette (see [`extract_text_window`]'s pairing
+/// validation).
+fn validate_text_window_pixels(
+    path: &Path,
+    pixels: &[u8],
+    palette_len: usize,
+) -> Result<(), ExtractError> {
+    match pixels
+        .iter()
+        .find(|&&pixel| usize::from(pixel) >= palette_len)
+    {
+        Some(&pixel) => Err(ExtractError::TextWindowPixelOutsidePalette(
+            path.to_path_buf(),
+            pixel,
+            palette_len,
+        )),
+        None => Ok(()),
+    }
 }
 
 fn push_text_window_palette_entry(
@@ -701,8 +745,8 @@ fn validate_text_window_manifest(dir: &Path) -> Result<(), ExtractError> {
 mod tests {
     use super::{
         collect_pngs_sorted, extract_to, push_text_window_palette_entry, upstream_present,
-        validate_text_window_manifest, ExtractError, FONTS, LAYOUTS, TEXT_WINDOW_IMAGE_STEMS,
-        TEXT_WINDOW_PALETTE_COLORS, TEXT_WINDOW_PALETTE_STEMS,
+        validate_text_window_manifest, validate_text_window_pixels, ExtractError, FONTS, LAYOUTS,
+        TEXT_WINDOW_IMAGE_STEMS, TEXT_WINDOW_PALETTE_COLORS, TEXT_WINDOW_PALETTE_STEMS,
     };
 
     // Real-checkout tests: `pokeemerald/` must be present locally
@@ -940,6 +984,33 @@ mod tests {
         )
         .unwrap();
         assert_eq!(writer.len(), 1);
+    }
+
+    #[test]
+    fn text_window_pixels_must_map_through_their_palette() {
+        let path = std::path::Path::new("graphics/text_window/example.png");
+
+        // Every index strictly below the palette length is fine, including
+        // the 4bpp maximum on a full 16-entry palette.
+        validate_text_window_pixels(path, &[0, 3, 15], TEXT_WINDOW_PALETTE_COLORS).unwrap();
+        validate_text_window_pixels(path, &[], TEXT_WINDOW_PALETTE_COLORS).unwrap();
+
+        // An 8-bit-indexed PNG can carry indices >= 16 alongside a valid
+        // 16-entry PLTE; the first offending pixel is reported.
+        for (pixels, expected_pixel) in [([0u8, 16, 3], 16u8), ([255, 16, 3], 255)] {
+            let err =
+                validate_text_window_pixels(path, &pixels, TEXT_WINDOW_PALETTE_COLORS).unwrap_err();
+            assert!(
+                matches!(
+                    err,
+                    ExtractError::TextWindowPixelOutsidePalette(error_path, pixel, palette_len)
+                        if error_path == path
+                            && pixel == expected_pixel
+                            && palette_len == TEXT_WINDOW_PALETTE_COLORS
+                ),
+                "wrong error for pixel {expected_pixel} outside a 16-colour palette"
+            );
+        }
     }
 
     #[test]

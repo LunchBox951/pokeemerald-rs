@@ -47,6 +47,19 @@ pub enum PackError {
         /// What kind the entry actually is.
         actual: &'static str,
     },
+    /// A text-window palette entry exists but is not the exact 16-colour,
+    /// 32-byte GBA palette bank the typed window handles document
+    /// ([`WindowFrameHandle`](crate::pack::WindowFrameHandle)). Extraction
+    /// enforces this shape on write; this error surfaces a corrupt or
+    /// hand-built pack whose metadata or payload disagrees on read.
+    MalformedTextWindowPalette {
+        /// The id that was looked up.
+        id: String,
+        /// The entry's declared colour count.
+        color_count: u16,
+        /// The entry's actual payload length in bytes.
+        byte_len: usize,
+    },
 }
 
 impl fmt::Display for PackError {
@@ -78,6 +91,15 @@ impl fmt::Display for PackError {
                     "asset pack: entry `{id}` is a {actual}, not a {expected}"
                 )
             }
+            Self::MalformedTextWindowPalette {
+                id,
+                color_count,
+                byte_len,
+            } => write!(
+                f,
+                "asset pack: text-window palette `{id}` declares {color_count} colours in \
+                 {byte_len} bytes: expected exactly 16 colours in 32 bytes"
+            ),
         }
     }
 }

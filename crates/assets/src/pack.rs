@@ -342,7 +342,9 @@ impl AssetPack {
     /// [`PackError::UnknownAsset`] if the selected frame is absent from the
     /// pack (including when an older pack predates it); the same
     /// [`PackError::WrongKind`] cases as [`image`](Self::image) /
-    /// [`palette`](Self::palette) otherwise.
+    /// [`palette`](Self::palette);
+    /// [`PackError::MalformedTextWindowPalette`] if the palette entry is
+    /// not the exact 16-colour/32-byte bank the handle documents.
     pub fn text_window_frame(&self, frame_id: u8) -> Result<WindowFrameHandle<'_>, PackError> {
         const WINDOW_FRAMES_COUNT: u8 = 20;
         let source_number = if frame_id < WINDOW_FRAMES_COUNT {
@@ -352,7 +354,7 @@ impl AssetPack {
         };
         Ok(WindowFrameHandle {
             tiles: self.image(&format!("text-window/image/{source_number}"))?,
-            palette: self.palette(&format!("text-window/palette/{source_number}"))?,
+            palette: self.text_window_palette(&format!("text-window/palette/{source_number}"))?,
         })
     }
 
@@ -368,7 +370,7 @@ impl AssetPack {
     pub fn message_box(&self) -> Result<WindowFrameHandle<'_>, PackError> {
         Ok(WindowFrameHandle {
             tiles: self.image("text-window/image/message_box")?,
-            palette: self.palette("text-window/palette/message_box")?,
+            palette: self.text_window_palette("text-window/palette/message_box")?,
         })
     }
 
@@ -380,9 +382,33 @@ impl AssetPack {
     ///
     /// # Errors
     ///
-    /// Same as [`palette`](Self::palette).
+    /// Same as [`text_window_frame`](Self::text_window_frame)'s palette
+    /// cases.
     pub fn text_window_extra_palette(&self, n: u8) -> Result<PaletteRef<'_>, PackError> {
-        self.palette(&format!("text-window/palette/text_pal{n}"))
+        self.text_window_palette(&format!("text-window/palette/text_pal{n}"))
+    }
+
+    /// Look up a text-window palette and enforce the exact one-GBA-bank
+    /// shape (16 declared colours, 32 payload bytes) every typed
+    /// text-window accessor documents. Extraction validates this on write
+    /// (`xtask::extract`'s text-window pairing checks), but the read side
+    /// must not trust pack metadata: a corrupt or hand-built pack could
+    /// otherwise hand out a [`WindowFrameHandle`] whose 16-colour
+    /// invariant is false.
+    fn text_window_palette(&self, id: &str) -> Result<PaletteRef<'_>, PackError> {
+        const TEXT_WINDOW_PALETTE_COLORS: u16 = 16;
+        const TEXT_WINDOW_PALETTE_BYTES: usize = 32;
+        let palette = self.palette(id)?;
+        if palette.color_count != TEXT_WINDOW_PALETTE_COLORS
+            || palette.raw.len() != TEXT_WINDOW_PALETTE_BYTES
+        {
+            return Err(PackError::MalformedTextWindowPalette {
+                id: id.to_owned(),
+                color_count: palette.color_count,
+                byte_len: palette.raw.len(),
+            });
+        }
+        Ok(palette)
     }
 }
 
