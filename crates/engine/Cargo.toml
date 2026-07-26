@@ -6,3 +6,12 @@ publish.workspace = true
 
 [lints]
 workspace = true
+
+[dependencies]
+# Workspace-local path dependency, not an external crate -- `minimal-deps`
+# owner approval does not apply (see `pokeemerald-rs`'s `Cargo.toml` for the
+# identical reasoning). `overworld` (issue #108) reuses `assets`' typed map
+# headers/connections/events and its `LayoutGrid`/`MetatileAttributeTable`
+# decode layer rather than redefining them; `assets` is itself dependency-free
+# (std-only), so this does not drag anything new into engine's build.
+assets = { path = "../assets" }
