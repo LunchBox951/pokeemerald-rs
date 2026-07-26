@@ -19,10 +19,15 @@ carries it.
 What this script checks:
 
 1. Read ``VERSION`` at HEAD (the current working tree).
-2. Read ``VERSION`` at the base ref (default ``origin/main``). If the ref or
-   the file is absent on the base -- e.g. a brand-new repository with no
-   remote yet -- the base is treated as ``0.0.0.0`` so the first commit is
-   never rejected as a "regression".
+2. Read ``VERSION`` at the base ref. When ``--base`` is not given, the base is
+   derived from the ``GITHUB_BASE_REF`` environment variable: on a GitHub
+   ``pull_request`` event the runner sets it to the PR's target branch, so the
+   base becomes ``origin/<target>`` and the guarantee holds against the actual
+   merge target rather than always ``origin/main`` (#128). For push events
+   (direct commits, promotions) ``GITHUB_BASE_REF`` is empty and the base falls
+   back to ``origin/main``. If the ref or the file is absent on the base --
+   e.g. a brand-new repository with no remote yet -- the base is treated as
+   ``0.0.0.0`` so the first commit is never rejected as a "regression".
 3. Parse both sides as exactly four dot-separated non-negative integers.
    A leading ``v`` or any malformed value is rejected.
 4. Reject a proposed version lower than the base (lexicographic compare over
@@ -79,6 +84,10 @@ DEFAULT_FINAL_GATE_MARKER = "docs/release/final-gate-approved.md"
 
 # The base version assumed when no prior VERSION exists (new repo / no remote).
 ABSENT_BASE_VERSION = (0, 0, 0, 0)
+
+# Fallback base ref when no --base is given and no PR target is in scope
+# (push events: direct commits, channel promotions).
+DEFAULT_BASE_REF = "origin/main"
 
 Version = Tuple[int, int, int, int]
 
@@ -196,6 +205,27 @@ def git_show_version(ref: str) -> Optional[str]:
     return out.stdout
 
 
+def resolve_base(explicit_base: Optional[str]) -> str:
+    """Resolve the base ref to compare HEAD against.
+
+    An explicit ``--base`` always wins. Otherwise the base is derived from the
+    ``GITHUB_BASE_REF`` environment variable, which GitHub Actions sets to the
+    target branch on ``pull_request`` events (and leaves empty on push events).
+    Reading it here -- rather than interpolating ``${{ github.base_ref }}`` into
+    a workflow shell -- keeps this selection logic testable and avoids feeding an
+    untrusted ref name through the shell (script-injection hardening). A PR
+    targeting a channel/release branch ahead of ``main`` is therefore validated
+    against that branch, not ``main`` (#128); push events fall back to
+    ``origin/main``.
+    """
+    if explicit_base is not None:
+        return explicit_base
+    base_ref = os.environ.get("GITHUB_BASE_REF", "").strip()
+    if base_ref:
+        return f"origin/{base_ref}"
+    return DEFAULT_BASE_REF
+
+
 def read_base_version(base: str) -> Version:
     """Read VERSION at the base ref, defaulting to 0.0.0.0 when absent."""
     raw = git_show_version(base)
@@ -285,10 +315,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--base",
-        default="origin/main",
+        default=None,
         help=(
-            "Base git ref to compare against (default: origin/main). "
-            "If the ref or its VERSION is absent, base is treated as 0.0.0.0."
+            "Base git ref to compare against. When omitted, it is derived from "
+            "the GITHUB_BASE_REF env var (origin/<PR-target> on pull_request "
+            "events), falling back to origin/main. If the ref or its VERSION is "
+            "absent, base is treated as 0.0.0.0."
         ),
     )
     parser.add_argument(
@@ -313,10 +345,11 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: Optional[list] = None) -> int:
     args = build_parser().parse_args(argv)
     root = repo_root()
+    base = resolve_base(args.base)
 
     try:
         head_version = read_head_version(args.head, root)
-        base_version = read_base_version(args.base)
+        base_version = read_base_version(base)
         marker_ok = marker_present(root, args.final_gate_marker)
         check_transition(
             base_version,

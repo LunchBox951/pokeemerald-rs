@@ -76,6 +76,27 @@ class VersionCheckTestBase(unittest.TestCase):
             code = version_check.main(["--base", base, "--head", head])
         return code, out.getvalue(), err.getvalue()
 
+    def run_check_with_base_ref(self, base_ref, head="HEAD"):
+        """Run main() with no --base, resolving the base from GITHUB_BASE_REF.
+
+        Mirrors the real CI invocation, where the workflow passes no --base and
+        the runner exports GITHUB_BASE_REF for pull_request events.
+        """
+        saved = os.environ.get("GITHUB_BASE_REF")
+        os.environ["GITHUB_BASE_REF"] = base_ref
+        out, err = io.StringIO(), io.StringIO()
+        try:
+            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(
+                err
+            ):
+                code = version_check.main(["--head", head])
+        finally:
+            if saved is None:
+                os.environ.pop("GITHUB_BASE_REF", None)
+            else:
+                os.environ["GITHUB_BASE_REF"] = saved
+        return code, out.getvalue(), err.getvalue()
+
 
 class DivergentTargetRegressionTests(VersionCheckTestBase):
     """Pins the exact scenario from issue #128."""
@@ -102,6 +123,20 @@ class DivergentTargetRegressionTests(VersionCheckTestBase):
         self.assertIn("0.0.1.0", err)
         self.assertIn("0.0.2.0", err)
 
+    def test_base_ref_env_drives_rejection_without_explicit_base(self):
+        # End-to-end down the real CI path: no --base flag, target selected
+        # purely from GITHUB_BASE_REF=dev. The regression against dev must be
+        # caught even though HEAD (0.0.1.0) is still above main (0.0.0.0).
+        self.commit_version("0.0.0.0", branch="origin/main")
+        self.commit_version("0.0.2.0", branch="origin/dev")
+        self.write_version("0.0.1.0")
+
+        code, _, err = self.run_check_with_base_ref("dev")
+        self.assertEqual(code, 1)
+        self.assertIn("version regression", err)
+        self.assertIn("0.0.1.0", err)
+        self.assertIn("0.0.2.0", err)
+
     def test_target_ahead_of_main_with_valid_forward_move_still_passes(self):
         self.commit_version("0.0.0.0", branch="origin/main")
         self.commit_version("0.0.2.0", branch="origin/dev")
@@ -111,6 +146,80 @@ class DivergentTargetRegressionTests(VersionCheckTestBase):
         code, out, _ = self.run_check("origin/dev")
         self.assertEqual(code, 0)
         self.assertIn("0.0.2.0 -> 0.0.3.0", out)
+
+
+class ResolveBaseTests(unittest.TestCase):
+    """Base-ref selection logic.
+
+    Issue #128's real fix moves the "which base ref does a PR compare against?"
+    decision out of inline CI YAML (where it was untestable) into
+    ``version_check.resolve_base``. These tests pin that decision directly: a PR
+    targeting a branch ahead of main must resolve to that branch, not main.
+    """
+
+    def setUp(self):
+        self._saved = os.environ.get("GITHUB_BASE_REF")
+        os.environ.pop("GITHUB_BASE_REF", None)
+
+    def tearDown(self):
+        if self._saved is None:
+            os.environ.pop("GITHUB_BASE_REF", None)
+        else:
+            os.environ["GITHUB_BASE_REF"] = self._saved
+
+    def test_explicit_base_always_wins_over_env(self):
+        os.environ["GITHUB_BASE_REF"] = "dev"
+        self.assertEqual(
+            version_check.resolve_base("origin/stable"), "origin/stable"
+        )
+
+    def test_pull_request_base_ref_selects_target_branch(self):
+        # pull_request event targeting dev -> compare against origin/dev,
+        # NOT origin/main. This is the #128 selection.
+        os.environ["GITHUB_BASE_REF"] = "dev"
+        self.assertEqual(version_check.resolve_base(None), "origin/dev")
+
+    def test_release_base_ref_selects_target_branch(self):
+        os.environ["GITHUB_BASE_REF"] = "release/1.2"
+        self.assertEqual(
+            version_check.resolve_base(None), "origin/release/1.2"
+        )
+
+    def test_push_event_without_base_ref_falls_back_to_main(self):
+        # GITHUB_BASE_REF unset (push event) -> origin/main.
+        self.assertEqual(version_check.resolve_base(None), "origin/main")
+
+    def test_blank_base_ref_falls_back_to_main(self):
+        os.environ["GITHUB_BASE_REF"] = ""
+        self.assertEqual(version_check.resolve_base(None), "origin/main")
+
+
+class WorkflowInvocationTests(unittest.TestCase):
+    """Guards the CI workflow itself against re-introducing #128.
+
+    The pre-fix workflow hard-coded ``--base origin/main``. If someone reverts
+    the fix, the version step would once again compare every PR against main and
+    the regression this slice closes would silently return. This test fails in
+    exactly that case, pinning the fix at the workflow level -- not only at the
+    ``version_check.py`` level.
+    """
+
+    _CI_YML = (
+        Path(__file__).resolve().parent.parent
+        / ".github"
+        / "workflows"
+        / "ci.yml"
+    )
+
+    def test_version_step_does_not_hardcode_main_as_base(self):
+        ci = self._CI_YML.read_text(encoding="utf-8")
+        self.assertNotIn("--base origin/main", ci)
+        self.assertNotIn('--base "origin/main"', ci)
+
+    def test_version_step_invokes_version_check(self):
+        # The gate must still actually run; a resolver with no caller is no gate.
+        ci = self._CI_YML.read_text(encoding="utf-8")
+        self.assertIn("scripts/version_check.py", ci)
 
 
 class UnchangedAndForwardTransitionTests(VersionCheckTestBase):

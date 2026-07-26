@@ -55,15 +55,13 @@ jobs:
         # The monotonic-version guarantee is against the actual merge target,
         # not always origin/main: a channel/release branch ahead of main must
         # not be allowed to regress just because it is still above main (#128).
-        # `github.base_ref` is only set for pull_request events; push events
-        # (direct commits, promotions) have no PR target and keep comparing
-        # against origin/main.
-        run: |
-          base="origin/main"
-          if [ -n "${{ github.base_ref }}" ]; then
-            base="origin/${{ github.base_ref }}"
-          fi
-          python3 scripts/version_check.py --base "$base" --head HEAD
+        # version_check.py derives the base from the GITHUB_BASE_REF env var,
+        # which the runner sets to the PR's target branch on pull_request events
+        # and leaves empty on push events (direct commits, promotions) -- those
+        # keep comparing against origin/main. The ref name is read inside Python
+        # rather than interpolated into this shell, so an untrusted branch name
+        # is never spliced into the command (GHA script-injection hardening).
+        run: python3 scripts/version_check.py --head HEAD
 
   # Policy gate (ubuntu-only): reject stale ledger targets once Rust targets exist.
   ledger:
