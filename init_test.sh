@@ -314,4 +314,73 @@ echo "$stderr_out" | grep -qF "planted.png" || fail "ignored-file error didn't n
 
 echo "ok: git-ignored planted file was rejected"
 
+echo "=== test 11: a reference tree without git metadata is a hard error ==="
+
+checkout11="$workdir/checkout11"
+make_main_checkout "$checkout11"
+mkdir -p "$checkout11/pokeemerald"
+echo "opaque" >"$checkout11/pokeemerald/VERSION"
+
+set +e
+stderr_out="$(cd "$checkout11" && POKEEMERALD_REMOTE="$fake_poke" MGBA_REMOTE="$fake_mgba" \
+    POKEEMERALD_REF="$sha_a_poke" MGBA_REF="$sha_a_mgba" \
+    ./init.sh 2>&1 >/dev/null)"
+status=$?
+set -e
+
+[[ "$status" -ne 0 ]] || fail "init.sh exited 0 on a reference tree with no git metadata"
+echo "$stderr_out" | grep -qi "no git metadata" || fail "no-metadata error missing; got: $stderr_out"
+
+echo "ok: unverifiable reference tree was rejected (fail closed)"
+
+echo "=== test 12: status.showUntrackedFiles=no cannot hide an injected file ==="
+
+checkout12="$workdir/checkout12"
+make_main_checkout "$checkout12"
+(
+    cd "$checkout12"
+    POKEEMERALD_REMOTE="$fake_poke" MGBA_REMOTE="$fake_mgba" \
+        POKEEMERALD_REF="$sha_a_poke" MGBA_REF="$sha_a_mgba" \
+        ./init.sh >/dev/null
+)
+git -C "$checkout12/pokeemerald" config status.showUntrackedFiles no
+echo "fake" >"$checkout12/pokeemerald/injected_asset.png"
+
+set +e
+stderr_out="$(cd "$checkout12" && POKEEMERALD_REMOTE="$fake_poke" MGBA_REMOTE="$fake_mgba" \
+    POKEEMERALD_REF="$sha_a_poke" MGBA_REF="$sha_a_mgba" \
+    ./init.sh 2>&1 >/dev/null)"
+status=$?
+set -e
+
+[[ "$status" -ne 0 ]] || fail "init.sh exited 0 with an injected file hidden by showUntrackedFiles=no"
+echo "$stderr_out" | grep -qF "injected_asset.png" || fail "injected-file error didn't name the file; got: $stderr_out"
+
+echo "ok: showUntrackedFiles=no could not hide the injected file"
+
+echo "=== test 13: assume-unchanged edits cannot evade the clean check ==="
+
+checkout13="$workdir/checkout13"
+make_main_checkout "$checkout13"
+(
+    cd "$checkout13"
+    POKEEMERALD_REMOTE="$fake_poke" MGBA_REMOTE="$fake_mgba" \
+        POKEEMERALD_REF="$sha_a_poke" MGBA_REF="$sha_a_mgba" \
+        ./init.sh >/dev/null
+)
+git -C "$checkout13/pokeemerald" update-index --assume-unchanged VERSION
+echo "TAMPERED" >>"$checkout13/pokeemerald/VERSION"
+
+set +e
+stderr_out="$(cd "$checkout13" && POKEEMERALD_REMOTE="$fake_poke" MGBA_REMOTE="$fake_mgba" \
+    POKEEMERALD_REF="$sha_a_poke" MGBA_REF="$sha_a_mgba" \
+    ./init.sh 2>&1 >/dev/null)"
+status=$?
+set -e
+
+[[ "$status" -ne 0 ]] || fail "init.sh exited 0 with an assume-unchanged tampered file"
+echo "$stderr_out" | grep -qi "index-hidden" || fail "index-hidden error missing; got: $stderr_out"
+
+echo "ok: assume-unchanged tampering was rejected"
+
 echo "all tests passed"

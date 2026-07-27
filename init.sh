@@ -51,8 +51,8 @@ git_common_dir_abs="$(cd "$(git rev-parse --git-common-dir)" && pwd)"
 # verify_pinned <dir> <ref> — assert an existing reference checkout really is
 # the pinned tree: HEAD at the pin AND a clean worktree/index (HEAD equality
 # alone says nothing about edited, staged, or untracked files feeding the
-# extraction pipeline). A tarball-extracted tree (no .git) cannot be
-# verified; warn loudly rather than guessing.
+# extraction pipeline). A tree without verifiable git metadata (tarball
+# extraction, removed .git) is a hard error: the gate fails closed.
 verify_pinned() {
     local dir="$1"
     local ref="$2"
@@ -61,14 +61,15 @@ verify_pinned() {
     # FILE (gitdir: pointer), so a `.git` directory test would misclassify
     # it as an unverifiable tarball and accept it unchecked. Requiring the
     # repo's toplevel to be $dir itself keeps a genuine tarball (which would
-    # resolve to the ENCLOSING product repo) on the warn path.
+    # resolve to the ENCLOSING product repo) on the fail-closed path.
     local top dir_abs
     top="$(git -C "$dir" rev-parse --show-toplevel 2>/dev/null || true)"
     dir_abs="$(cd "$dir" && pwd -P)"
     if [[ -z "$top" || "$(cd "$top" && pwd -P)" != "$dir_abs" ]]; then
-        echo "warning: $dir has no git metadata; cannot verify it matches pinned revision $ref" >&2
-        echo "  (byte-identical bootstraps are only guaranteed for git checkouts)" >&2
-        return 0
+        echo "error: $dir has no git metadata; cannot verify it matches pinned revision $ref" >&2
+        echo "  an unverifiable tree must not feed the extraction pipeline (fail closed)" >&2
+        echo "  to restore a verifiable pinned tree: rm -rf $dir && ./init.sh" >&2
+        exit 1
     fi
     local actual
     actual="$(git -C "$dir" rev-parse HEAD)"
@@ -86,15 +87,26 @@ verify_pinned() {
         echo "  to restore the full pinned tree: rm -rf $dir && ./init.sh" >&2
         exit 1
     fi
+    # assume-unchanged / skip-worktree index bits hide tracked-file edits
+    # from status entirely (and skip-worktree needs no sparse config).
+    local hidden
+    hidden="$(git -C "$dir" ls-files -v | grep -E '^[a-z]|^S' || true)"
+    if [[ -n "$hidden" ]]; then
+        echo "error: $dir has index-hidden paths (assume-unchanged/skip-worktree); edits there evade the clean check:" >&2
+        printf '%s\n' "$hidden" | head -10 >&2
+        echo "  to restore the pinned tree: rm -rf $dir && ./init.sh" >&2
+        exit 1
+    fi
     local dirty
     # autocrlf off for the comparison: a CRLF-converted tree must read as
     # dirty (not silently normalized clean) or platforms diverge on bytes.
     # --ignored + a neutralized excludes file: the extraction pipeline reads
     # the filesystem, not the index, so a git-ignored file (host-global
     # excludes, .git/info/exclude) diverges the pack while reading clean.
+    # --untracked-files=all overrides any status.showUntrackedFiles=no.
     dirty="$(git -C "$dir" \
         -c core.autocrlf=false -c core.eol=lf -c core.excludesFile=/dev/null \
-        status --porcelain --ignored)"
+        status --porcelain --ignored --untracked-files=all)"
     if [[ -n "$dirty" ]]; then
         echo "error: $dir is at the pinned revision but its tree is not clean:" >&2
         printf '%s\n' "$dirty" | head -20 >&2
@@ -104,9 +116,9 @@ verify_pinned() {
 }
 
 if [[ "$git_dir_abs" != "$git_common_dir_abs" ]]; then
-    # Worktree: symlink the main checkout's reference directories rather than
-    # re-cloning them. This works with both git-cloned and tarball-extracted
-    # sources and avoids duplicating gigabytes of read-only data per worktree.
+    # Worktree: symlink the main checkout's reference directories rather
+    # than re-cloning them — no extra disk per worktree. The linked trees
+    # must be verifiable git checkouts at the pins.
     # The main checkout's trees are verified against the pins first — an
     # unvalidated symlink would silently reintroduce the drift the pins
     # exist to prevent.
@@ -172,7 +184,10 @@ clone_and_pin() {
     # inherited core.autocrlf=true (git-for-windows default) would check the
     # tree out with CRLF while status still reports clean, giving two
     # platforms byte-different trees that both pass the pin gate.
-    git clone --quiet \
+    # --no-checkout: never materialize the remote's moving default-branch
+    # tip — only the pinned revision is ever checked out, so a broken tip
+    # cannot fail the bootstrap of a valid pin.
+    git clone --quiet --no-checkout \
         -c core.autocrlf=false -c core.eol=lf \
         "$source" "$target"
     echo "checking out pinned revision $ref in $target"
@@ -181,6 +196,9 @@ clone_and_pin() {
         echo "  the upstream repository may have rewritten history; update the *_REF constant in init.sh" >&2
         exit 1
     fi
+    # Re-verify the freshly materialized tree with the same gate an existing
+    # checkout gets — a hook or attribute filter could have dirtied it.
+    verify_pinned "$target" "$ref"
 }
 
 echo "main checkout detected; cloning from GitHub"
