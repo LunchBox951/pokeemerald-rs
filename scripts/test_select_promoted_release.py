@@ -26,6 +26,7 @@ _ENV = {
     "GIT_AUTHOR_EMAIL": "test@example.invalid",
     "GIT_COMMITTER_NAME": "Test",
     "GIT_COMMITTER_EMAIL": "test@example.invalid",
+    "GIT_MERGE_AUTOEDIT": "no",
 }
 
 
@@ -61,15 +62,15 @@ def commit(cwd, message, date, filename="file.txt", content="x"):
     return run(cwd, "git", "rev-parse", "HEAD").stdout.strip()
 
 
-def merge(cwd, branch, message, date):
+def merge(cwd, branch, date, message=None):
+    """Merge `branch` with git's default recorded subject (the identity the
+    selector reads), or an explicit `message` to simulate a rewritten one."""
+    args = ["git", "merge", "--no-ff", branch]
+    if message is not None:
+        args += ["-m", message]
     run(
         cwd,
-        "git",
-        "merge",
-        "--no-ff",
-        branch,
-        "-m",
-        message,
+        *args,
         env={"GIT_AUTHOR_DATE": date, "GIT_COMMITTER_DATE": date},
     )
     return run(cwd, "git", "rev-parse", "HEAD").stdout.strip()
@@ -119,8 +120,8 @@ class SelectPromotedReleaseTest(unittest.TestCase):
         # unstable: merge release/0.1 first (so it's an ancestor too), then
         # release/0.2 -- the push under test is the release/0.2 merge.
         run(self.work, "git", "checkout", "-b", "unstable", base)
-        self.m1 = merge(self.work, "release/0.1", "Merge release/0.1 into unstable", "2026-07-21T00:00:00")
-        self.m2 = merge(self.work, "release/0.2", "Merge release/0.2 into unstable", "2026-07-22T00:00:00")
+        self.m1 = merge(self.work, "release/0.1", "2026-07-21T00:00:00")
+        self.m2 = merge(self.work, "release/0.2", "2026-07-22T00:00:00")
 
         run(
             self.work,
@@ -137,10 +138,16 @@ class SelectPromotedReleaseTest(unittest.TestCase):
     def tearDown(self):
         self._tmp.cleanup()
 
-    def select(self, sha):
+    def select(self, sha, expect_rc=0):
         result = run(self.checkout, str(_SCRIPT), sha, check=False)
-        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        self.assertEqual(
+            result.returncode, expect_rc,
+            msg=f"stdout={result.stdout!r} stderr={result.stderr!r}",
+        )
         return result.stdout.strip()
+
+    def refetch(self):
+        run(self.checkout, "git", "fetch", "origin")
 
     def test_selects_the_branch_the_merge_actually_promoted(self):
         # The triggering push is the release/0.2 merge (m2). Even though
@@ -153,26 +160,7 @@ class SelectPromotedReleaseTest(unittest.TestCase):
         # release/0.1, not whichever branch happens to sort first.
         self.assertEqual(self.select(self.m1), "release/0.1")
 
-    def test_consolidated_line_still_resolves_to_the_promoted_branch(self):
-        # Consolidation (RELEASE.md §Consolidating) merges release/0.2 into
-        # release/0.1, so release/0.2's tip becomes an ancestor of BOTH
-        # lines. The promotion merge of release/0.2 must still resolve to
-        # release/0.2 (exact-tip identity), not whichever name sorts first.
-        run(self.work, "git", "checkout", "release/0.1")
-        merge(
-            self.work,
-            "release/0.2",
-            "Consolidate release/0.2 into release/0.1",
-            "2026-07-23T00:00:00",
-        )
-        run(self.work, "git", "push", "origin", "release/0.1")
-        run(self.checkout, "git", "fetch", "origin")
-        self.assertEqual(self.select(self.m2), "release/0.2")
-
-    def test_moved_branch_falls_back_to_ancestry(self):
-        # If the promoted branch gained commits after the merge, its tip no
-        # longer equals the merge's second parent; containment must still
-        # find it (and only it).
+    def _advance_r02(self):
         run(self.work, "git", "checkout", "release/0.2")
         commit(
             self.work,
@@ -182,16 +170,111 @@ class SelectPromotedReleaseTest(unittest.TestCase):
             content="r0.2b",
         )
         run(self.work, "git", "push", "origin", "release/0.2")
-        run(self.checkout, "git", "fetch", "origin")
+
+    def test_consolidated_line_still_resolves_to_the_promoted_branch(self):
+        # Consolidation (RELEASE.md §Consolidating) merges release/0.2 into
+        # release/0.1, so release/0.2's tip becomes an ancestor of BOTH
+        # lines. The promotion merge of release/0.2 must still resolve to
+        # release/0.2 (its recorded identity), not whichever name sorts first.
+        run(self.work, "git", "checkout", "release/0.1")
+        merge(self.work, "release/0.2", "2026-07-23T00:00:00")
+        run(self.work, "git", "push", "origin", "release/0.1")
+        self.refetch()
         self.assertEqual(self.select(self.m2), "release/0.2")
 
-    def test_two_refs_on_the_same_tip_fail_loudly(self):
-        # Two release/* refs pointing at the same commit cannot be told
-        # apart; the script must refuse (exit 3) rather than pick by name.
+    def test_advanced_branch_signals_reclear(self):
+        # If the promoted branch gained commits after the merge, its new tip
+        # has NOT cleared the current rung: the script must still name the
+        # branch but exit 4 so the caller re-clears instead of advancing an
+        # unvetted tip.
+        self._advance_r02()
+        self.refetch()
+        self.assertEqual(self.select(self.m2, expect_rc=4), "release/0.2")
+
+    def test_decoy_at_old_tip_of_advanced_branch(self):
+        # The confirmed round-2 repro: release/0.2 advances past the merged
+        # commit while a sibling ref still sits exactly on it. Current-ref
+        # topology alone would pick the stationary decoy; the recorded merge
+        # subject must win — and still signal re-clear (exit 4).
         run(self.work, "git", "branch", "release/0.3", self.r02_tip)
         run(self.work, "git", "push", "origin", "release/0.3")
-        run(self.checkout, "git", "fetch", "origin")
-        result = run(self.checkout, str(_SCRIPT), self.m2, check=False)
+        self._advance_r02()
+        self.refetch()
+        self.assertEqual(self.select(self.m2, expect_rc=4), "release/0.2")
+
+    def test_same_tip_decoy_resolves_via_recorded_subject(self):
+        # Two refs on the same commit are indistinguishable by topology, but
+        # the merge subject recorded which one was promoted.
+        run(self.work, "git", "branch", "release/0.3", self.r02_tip)
+        run(self.work, "git", "push", "origin", "release/0.3")
+        self.refetch()
+        self.assertEqual(self.select(self.m2), "release/0.2")
+
+    def test_pr_merge_subject_resolves(self):
+        # GitHub PR merges record "Merge pull request #N from owner/branch".
+        run(self.work, "git", "checkout", "release/0.2")
+        commit(
+            self.work,
+            "release/0.2 second fix",
+            "2026-07-25T00:00:00",
+            filename="release-0.2-second.txt",
+            content="r0.2c",
+        )
+        run(self.work, "git", "checkout", "unstable")
+        m3 = merge(
+            self.work,
+            "release/0.2",
+            "2026-07-25T01:00:00",
+            message="Merge pull request #99 from LunchBox951/release/0.2",
+        )
+        run(self.work, "git", "push", "origin", "release/0.2", "unstable")
+        self.refetch()
+        self.assertEqual(self.select(m3), "release/0.2")
+
+    def test_unparseable_subject_falls_back_to_topology(self):
+        # A rewritten subject loses the recorded identity; an unambiguous
+        # topology (one candidate, tip on the merged commit) still resolves.
+        run(self.work, "git", "checkout", "release/0.2")
+        commit(
+            self.work,
+            "release/0.2 third fix",
+            "2026-07-25T02:00:00",
+            filename="release-0.2-third.txt",
+            content="r0.2d",
+        )
+        run(self.work, "git", "checkout", "unstable")
+        m3 = merge(
+            self.work,
+            "release/0.2",
+            "2026-07-25T03:00:00",
+            message="promote the current release line",
+        )
+        run(self.work, "git", "push", "origin", "release/0.2", "unstable")
+        self.refetch()
+        self.assertEqual(self.select(m3), "release/0.2")
+
+    def test_unparseable_subject_with_same_tip_decoy_fails_loudly(self):
+        # No recorded identity AND two refs claim the merged commit: the
+        # script must refuse (exit 3) rather than pick by name order.
+        run(self.work, "git", "checkout", "release/0.2")
+        tip = commit(
+            self.work,
+            "release/0.2 fourth fix",
+            "2026-07-25T04:00:00",
+            filename="release-0.2-fourth.txt",
+            content="r0.2e",
+        )
+        run(self.work, "git", "checkout", "unstable")
+        m3 = merge(
+            self.work,
+            "release/0.2",
+            "2026-07-25T05:00:00",
+            message="promote the current release line",
+        )
+        run(self.work, "git", "branch", "release/0.4", tip)
+        run(self.work, "git", "push", "origin", "release/0.2", "release/0.4", "unstable")
+        self.refetch()
+        result = run(self.checkout, str(_SCRIPT), m3, check=False)
         self.assertEqual(result.returncode, 3, msg=result.stdout + result.stderr)
         self.assertIn("ambiguous", result.stderr)
 

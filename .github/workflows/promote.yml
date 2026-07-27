@@ -95,7 +95,20 @@ jobs:
           # from which branch was actually just merged (issue #135: a
           # long-lived maintenance release/* line with a newer tip must
           # never shadow the release branch this push named).
+          set +e
           release_branch="$(scripts/select_promoted_release.sh "${GITHUB_SHA}")"
+          select_rc=$?
+          set -e
+          if [ "${select_rc}" -eq 4 ]; then
+            # The promoted branch gained commits after this merge; those
+            # commits have not cleared the rung just pushed to. Re-open the
+            # CURRENT rung's PR instead of advancing an unvetted tip
+            # (RELEASE.md: a branch that moves after clearing a rung
+            # re-clears it).
+            target="${merged}"
+          elif [ "${select_rc}" -ne 0 ]; then
+            exit "${select_rc}"
+          fi
           if [ -z "${release_branch}" ]; then
             echo "No release/* branch merged into ${merged}; nothing to promote."
             exit 0
@@ -109,11 +122,18 @@ jobs:
             echo "Promotion PR ${release_branch} -> ${target} already open."
             exit 0
           fi
+          labels=(--label "release" --label "needs-review")
+          case "${target}" in
+            stable|main) labels+=(--label "needs-operator") ;;
+          esac
+          if [ "${target}" = "${merged}" ]; then
+            reason="Automated re-clear promotion opened by promote.yml: ${release_branch} advanced past the commit just merged into ${merged}, so its new tip must re-clear this rung."
+          else
+            reason="Automated next-rung promotion opened by promote.yml after ${release_branch} merged into ${merged}."
+          fi
           gh pr create \
             --head "${release_branch}" \
             --base "${target}" \
             --title "Promote ${release_branch} → ${target}" \
-            --body "$(printf 'Automated next-rung promotion opened by promote.yml after %s merged into %s.\n\nCandidate: `%s` @ %s\nGates for **%s** are in RELEASE.md. A maintainer with write access must select **Approve workflows to run** before the required checks start. Player channels (`stable`, `main`) require owner signoff (`needs-operator`) before merge.' "${release_branch}" "${merged}" "${release_branch}" "$(git rev-parse --short "origin/${release_branch}")" "${target}")" \
-            --label "release" \
-            --label "needs-review" \
-            --label "needs-operator"
+            --body "$(printf '%s\n\nCandidate: `%s` @ %s\nGates for **%s** are in RELEASE.md. A maintainer with write access must select **Approve workflows to run** before the required checks start. Player channels (`stable`, `main`) require owner signoff (`needs-operator`) before merge.' "${reason}" "${release_branch}" "$(git rev-parse --short "origin/${release_branch}")" "${target}")" \
+            "${labels[@]}"

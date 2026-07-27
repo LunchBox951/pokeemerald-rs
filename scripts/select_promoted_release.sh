@@ -22,9 +22,11 @@
 # Usage: select_promoted_release.sh <merge-commit-sha>
 # Prints the release/* branch name promoted by that merge commit to stdout,
 # or prints nothing (exit 0) if the commit is not a two-parent merge, or its
-# second parent is not reachable from any known release/* branch. Exits 3
-# (with a message on stderr) if the topology is genuinely ambiguous — more
-# than one release/* branch equally claims the merged commit.
+# second parent is not reachable from any known release/* branch. Exits 4
+# (name still printed) if the identified branch has advanced past the merged
+# commit — the caller must re-clear the current rung rather than promote the
+# unvetted tip. Exits 3 (message on stderr) if the topology is genuinely
+# ambiguous — more than one release/* branch equally claims the merged commit.
 #
 # Requires: a git checkout with full history and `origin/release/*` remote-
 # tracking refs present (as produced by `actions/checkout` with
@@ -47,20 +49,65 @@ if [ -z "${second_parent}" ]; then
   exit 0
 fi
 
-# Find the release/* branch this merge actually promoted. Consolidated
-# release lines (RELEASE.md §Consolidating) mean one line's commits can be
-# *contained* in another, so "first ref that contains the commit" is
-# ambiguous. Selection therefore binds to identity, not containment:
+# Once refs move, current ref state cannot recover which branch a past merge
+# named: a consolidated line that *contains* the commit and the true branch
+# that *advanced past* it look identical from topology alone. So identity
+# comes from what the merge itself recorded — its commit subject (GitHub PR
+# merges and plain `git merge` both name the merged branch) — and topology is
+# only a fallback for a rewritten or unparseable subject.
 #
-#   1. Exact tip: the branch whose current tip IS the merge's second parent —
-#      promote.yml runs on the push that created the merge, so the merged
-#      branch still points at exactly that commit.
-#   2. Only if no tip matches (the branch moved since the merge), fall back
-#      to ancestry containment.
-#
-# In either pass, more than one match is a genuinely ambiguous topology
-# (e.g. two release/* refs on the same commit); fail loudly rather than
-# silently promoting whichever name sorts first.
+# Exit contract:
+#   0 + name   branch identified, tip still at the merged commit — promote.
+#   0 + empty  nothing promoted (not a merge / no release/* involved).
+#   4 + name   branch identified but it ADVANCED past the merged commit; its
+#              new commits have not cleared the current rung — the caller
+#              must re-clear that rung, not advance the unvetted tip.
+#   3          genuinely ambiguous — refuse to guess.
+
+emit() { # <name> — classify by tip position and emit with the right exit code
+  local name="$1" tip
+  tip="$(git rev-parse --verify -q "origin/${name}")"
+  if [ "${tip}" = "${second_parent}" ]; then
+    printf '%s\n' "${name}"
+    exit 0
+  fi
+  echo "note: ${name} advanced past the promoted commit ${second_parent}; its tip must re-clear the current rung." >&2
+  printf '%s\n' "${name}"
+  exit 4
+}
+
+# --- Primary: the branch name the merge commit recorded. -------------------
+subject="$(git log -1 --format=%s "${merge_sha}")"
+candidate=""
+case "${subject}" in
+  "Merge pull request #"*" from "*)
+    rest="${subject##* from }"
+    if [[ "${rest}" == release/* ]]; then
+      candidate="${rest}"
+    else
+      candidate="${rest#*/}" # strip the head-repo owner segment
+    fi
+    ;;
+  "Merge branch '"*)
+    rest="${subject#Merge branch \'}"
+    candidate="${rest%%\'*}"
+    ;;
+  "Merge remote-tracking branch '"*)
+    rest="${subject#Merge remote-tracking branch \'}"
+    candidate="${rest%%\'*}"
+    candidate="${candidate#origin/}"
+    ;;
+esac
+
+if [[ "${candidate}" == release/* ]] \
+  && git rev-parse --verify -q "origin/${candidate}" >/dev/null \
+  && git merge-base --is-ancestor "${second_parent}" "origin/${candidate}"; then
+  emit "${candidate}"
+fi
+# A recorded branch that no longer exists or no longer contains the merged
+# commit (rewritten history) falls through to the topology fallback.
+
+# --- Fallback: topology. Only trustworthy when it is unambiguous. ----------
 exact=()
 containing=()
 for ref in $(git for-each-ref --format='%(refname:short)' 'refs/remotes/origin/release/*'); do
@@ -73,19 +120,21 @@ for ref in $(git for-each-ref --format='%(refname:short)' 'refs/remotes/origin/r
   fi
 done
 
-if [ "${#exact[@]}" -gt 0 ]; then
-  matches=("${exact[@]}")
-elif [ "${#containing[@]}" -gt 0 ]; then
-  matches=("${containing[@]}")
-else
+if [ "$(( ${#exact[@]} + ${#containing[@]} ))" -eq 0 ]; then
   exit 0
 fi
 
-if [ "${#matches[@]}" -eq 1 ]; then
-  printf '%s\n' "${matches[0]}"
-  exit 0
+# A lone candidate — stationary or advanced — is unambiguous. Anything else
+# (two refs on the commit, or a ref AT the commit plus a ref PAST it, which
+# is indistinguishable from a decoy at the old tip of an advanced branch)
+# is not decidable from topology: refuse to guess.
+if [ "${#exact[@]}" -eq 1 ] && [ "${#containing[@]}" -eq 0 ]; then
+  emit "${exact[0]}"
+fi
+if [ "${#exact[@]}" -eq 0 ] && [ "${#containing[@]}" -eq 1 ]; then
+  emit "${containing[0]}"
 fi
 
-echo "ambiguous promotion: ${merge_sha}^2 (${second_parent}) matches multiple release/* branches: ${matches[*]}" >&2
+echo "ambiguous promotion: ${merge_sha}^2 (${second_parent}) matches multiple release/* branches: ${exact[*]:-} ${containing[*]:-}" >&2
 echo "refusing to guess -- resolve the release/* topology, then re-run." >&2
 exit 3
