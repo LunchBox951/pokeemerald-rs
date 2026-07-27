@@ -100,8 +100,14 @@ ABSENT_BASE_VERSION = (0, 0, 0, 0)
 
 # Marker line patterns: "Approved version: 1.0.0.0" / "Date: 2026-07-25".
 # Case-insensitive key, colon-separated, one non-blank token as the value.
-MARKER_VERSION_RE = re.compile(r"(?im)^\s*approved version\s*:\s*(\S+)\s*$")
-MARKER_DATE_RE = re.compile(r"(?im)^\s*date\s*:\s*(\S+)\s*$")
+# Horizontal whitespace only ([ \t]) -- \s matches newlines under (?m), which
+# would let a field split across lines satisfy the documented one-line form.
+MARKER_VERSION_RE = re.compile(r"(?im)^[ \t]*approved version[ \t]*:[ \t]*(\S+)[ \t]*$")
+MARKER_DATE_RE = re.compile(r"(?im)^[ \t]*date[ \t]*:[ \t]*(\S+)[ \t]*$")
+
+# Strict Date shape; date.fromisoformat alone also accepts e.g. '20260725'
+# and week dates, which the documented format does not.
+MARKER_DATE_SHAPE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 Version = Tuple[int, int, int, int]
 
@@ -171,15 +177,23 @@ def parse_version(raw: str, source: str) -> Version:
 
 
 def read_ref_file(ref: str, rel_path: str, root: str) -> Optional[str]:
-    """Return the contents of ``rel_path`` at ``ref``, or ``None`` if absent.
+    """Return the head-side contents of ``rel_path`` at ``ref``.
 
     ``'HEAD'`` reads the working-tree file (so an uncommitted change is
     validated); any other ref reads that ref's committed blob via
     ``git show``. A missing file or unknown ref is reported as ``None``
     rather than an error -- callers decide whether absence is fatal.
+
+    A symlinked path is treated as absent: ``git show`` on the base side
+    returns a symlink's target *path text*, while ``open()`` here would
+    follow it -- an asymmetry that would let a symlinked marker read as
+    "changed" while its bytes never changed. Failing closed keeps the two
+    sides comparable.
     """
     if ref == "HEAD":
         path = os.path.join(root, rel_path)
+        if os.path.islink(path):
+            return None
         try:
             with open(path, "r", encoding="utf-8") as fh:
                 return fh.read()
@@ -219,8 +233,13 @@ def read_head_version(head: str, root: str) -> Version:
 
 
 def read_base_version(base: str, root: str) -> Version:
-    """Read VERSION at the base ref, defaulting to 0.0.0.0 when absent."""
-    raw = read_ref_file(base, "VERSION", root)
+    """Read VERSION at the base ref, defaulting to 0.0.0.0 when absent.
+
+    The base side always reads the committed blob -- never the working
+    tree -- so ``--base HEAD`` compares against the commit, not against
+    the same uncommitted file the head side is validating.
+    """
+    raw = git_show_file(base, "VERSION")
     if raw is None:
         return ABSENT_BASE_VERSION
     return parse_version(raw, f"base ({base})")
@@ -249,6 +268,11 @@ def parse_marker(raw: str, source: str) -> Tuple[Version, str]:
     )
 
     date_text = date_match.group(1)
+    if not MARKER_DATE_SHAPE_RE.match(date_text):
+        raise VersionError(
+            f"{source}: FINAL-gate marker Date {date_text!r} is not in "
+            f"YYYY-MM-DD form"
+        )
     try:
         _date.fromisoformat(date_text)
     except ValueError:
@@ -393,7 +417,8 @@ def main(argv: Optional[list] = None) -> int:
         head_version = read_head_version(args.head, root)
         base_version = read_base_version(args.base, root)
         marker_head = read_ref_file(args.head, args.final_gate_marker, root)
-        marker_base = read_ref_file(args.base, args.final_gate_marker, root)
+        # Base side always reads the committed blob (see read_base_version).
+        marker_base = git_show_file(args.base, args.final_gate_marker)
         check_transition(
             base_version,
             head_version,

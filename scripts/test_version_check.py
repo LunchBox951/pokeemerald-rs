@@ -278,6 +278,66 @@ class TestFinalGateIntegration(unittest.TestCase):
             self.repo.run_version_check(base="baseline", head="HEAD"), 0
         )
 
+    def test_base_head_reads_the_commit_not_the_working_tree(self):
+        # `--base HEAD` must compare against the committed VERSION. If both
+        # sides read the working tree, an uncommitted regression (or FINAL
+        # bump) validates against itself and always passes.
+        self.repo.write("VERSION", "0.9.9.9\n")
+        self.repo.commit("committed")
+
+        self.repo.write("VERSION", "0.9.9.8\n")  # uncommitted regression
+
+        self.assertNotEqual(
+            self.repo.run_version_check(base="HEAD", head="HEAD"), 0
+        )
+
+    def test_symlinked_marker_is_treated_as_absent(self):
+        # open() follows a symlink while `git show` returns its target path
+        # text, so a symlinked marker reads "changed" without its bytes ever
+        # changing. It must be treated as absent (fail closed).
+        self.repo.write("VERSION", "0.9.9.9\n")
+        self.repo.commit("baseline")
+
+        self.repo.write("VERSION", "1.0.0.0\n")
+        self.repo.write("docs/release/notes.md", marker("1.0.0.0"))
+        marker_path = self.repo.path / MARKER
+        marker_path.parent.mkdir(parents=True, exist_ok=True)
+        marker_path.symlink_to(self.repo.path / "docs/release/notes.md")
+        self.repo.commit("symlinked-marker")
+
+        self.assertNotEqual(
+            self.repo.run_version_check(base="baseline", head="HEAD"), 0
+        )
+
+
+class TestMarkerStrictness(unittest.TestCase):
+    """Field shape rules: one line per field, strict date form."""
+
+    def test_field_split_across_lines_is_rejected(self):
+        raw = "Approved version:\n1.0.0.0\nDate: 2026-07-25\n"
+        with self.assertRaises(version_check.VersionError):
+            version_check.parse_marker(raw, MARKER)
+
+    def test_key_split_across_lines_is_rejected(self):
+        raw = "Approved version\n: 1.0.0.0\nDate: 2026-07-25\n"
+        with self.assertRaises(version_check.VersionError):
+            version_check.parse_marker(raw, MARKER)
+
+    def test_compact_iso_date_is_rejected(self):
+        with self.assertRaises(version_check.VersionError):
+            version_check.parse_marker(marker("1.0.0.0", "20260725"), MARKER)
+
+    def test_week_date_is_rejected(self):
+        with self.assertRaises(version_check.VersionError):
+            version_check.parse_marker(marker("1.0.0.0", "2026-W30-6"), MARKER)
+
+    def test_plain_date_still_accepted(self):
+        approved, when = version_check.parse_marker(
+            marker("1.0.0.0", "2026-07-25"), MARKER
+        )
+        self.assertEqual(approved, (1, 0, 0, 0))
+        self.assertEqual(when, "2026-07-25")
+
 
 if __name__ == "__main__":
     unittest.main()
