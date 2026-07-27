@@ -424,11 +424,13 @@ impl SaveStore {
         // re-seed pass below fixes that.
         let mut block1_chunk_valid = [false; SAVE_BLOCK1_CHUNKS];
         // Whether the SaveBlock2 *sector* validated (signature + checksum),
-        // so its payload bytes were copied. Necessary but not sufficient for a
-        // usable key: `SaveBlock2::from_bytes` can still reject a checksum-
-        // valid payload (e.g. an out-of-range gender byte, which the additive
-        // checksum does not constrain), in which case no key is recovered —
-        // see the key-recovery decode below.
+        // so its payload bytes were copied and a usable key was recovered.
+        // `SaveBlock2::from_bytes` decodes every payload losslessly — an
+        // out-of-range `player_gender` byte becomes `PlayerGender::Other`
+        // rather than a decode error, mirroring `CopySaveSlotData` copying a
+        // checksum-valid sector through unexamined — so sector validity is
+        // both necessary and sufficient here; see the key-recovery step
+        // below.
         let mut block2_sector_valid = false;
 
         for i in 0..SECTORS_PER_SLOT_U16 {
@@ -471,16 +473,19 @@ impl SaveStore {
             }
         }
 
-        // A usable key is recovered only when the SaveBlock2 sector validated
-        // *and* its payload actually decodes. Keying off the checksum alone
-        // would miss a checksum-valid-but-decode-failing payload (the additive
-        // checksum doesn't constrain, say, the gender byte): decoding then
-        // falls back to `encryption_key == 0`, and — without this gate — the
-        // key-encrypted-field cleanup below would be skipped, leaking genuine
-        // SaveBlock1 ciphertext decrypted under key 0.
-        let (block2, key_recovered) = match SaveBlock2::from_bytes(&block2_bytes) {
-            Ok(block2) if block2_sector_valid => (block2, true),
-            _ => (SaveBlock2::default(), false),
+        // A usable key is recovered exactly when the SaveBlock2 sector
+        // validated: `from_bytes` only fails on `Truncated`, which the
+        // fixed-size `block2_bytes` above can never be, so decoding a
+        // validated sector's payload always succeeds and copies its raw
+        // encryption key — including a checksum-valid sector carrying an
+        // out-of-range gender byte, matching upstream `CopySaveSlotData`.
+        let (block2, key_recovered) = if block2_sector_valid {
+            (
+                SaveBlock2::from_bytes(&block2_bytes).unwrap_or_default(),
+                true,
+            )
+        } else {
+            (SaveBlock2::default(), false)
         };
 
         // Re-seed any SaveBlock1 chunk that did *not* validate with the
@@ -1014,12 +1019,13 @@ mod tests {
     }
 
     #[test]
-    fn checksum_valid_but_decode_failing_block2_recovers_no_key() {
-        // A SaveBlock2 sector whose checksum validates but whose payload fails
-        // to decode (an out-of-range gender byte, which the additive checksum
-        // doesn't constrain) must NOT count as a recovered key. Otherwise the
-        // key-encrypted-field cleanup is skipped and a validated SaveBlock1
-        // chunk's genuine ciphertext leaks, decrypted under the fallback key 0.
+    fn checksum_valid_out_of_range_gender_retains_key_and_decrypts_bag() {
+        // Regression for issue #130: a SaveBlock2 sector whose checksum
+        // validates but whose raw gender byte is out of range must NOT be
+        // treated as a decode failure. Canonical `CopySaveSlotData` copies a
+        // checksum-valid sector byte-for-byte with no semantic gender check,
+        // so the encryption key must still be recovered and used to decrypt
+        // the rest of the slot.
         const PLAYER_GENDER_OFFSET: usize = 0x08;
         let mut store = SaveStore::new();
         let block1 = sample_block1();
@@ -1030,41 +1036,112 @@ mod tests {
         store.save(&block1, &block2); // slot 0, counter 2 (current)
 
         // Replace slot 0's SaveBlock2 sector with one whose payload carries an
-        // invalid gender byte but a *freshly recomputed* checksum, so it still
-        // passes `is_valid` — only `SaveBlock2::from_bytes` rejects it. The
-        // counter matches the slot's (2) so slot 0 still scans as the winner.
+        // out-of-range gender byte but a *freshly recomputed* checksum, so it
+        // still passes `is_valid`. The counter matches the slot's (2) so
+        // slot 0 still scans as the winner. Slot 1 is left fully intact, so
+        // both slots validate — the newer slot must still win with
+        // `SaveStatus::Ok`, not fall back or downgrade to `Error`.
         let mut payload = block2.to_bytes();
         payload[PLAYER_GENDER_OFFSET] = 9; // neither MALE (0) nor FEMALE (1)
-        assert!(SaveBlock2::from_bytes(&payload).is_err());
-        let bad_sector = Sector::write(SECTOR_ID_SAVEBLOCK2, &payload, 2);
-        assert!(bad_sector.is_valid(SaveBlock2::PAYLOAD_LEN));
+        let mutated_sector = Sector::write(SECTOR_ID_SAVEBLOCK2, &payload, 2);
+        assert!(mutated_sector.is_valid(SaveBlock2::PAYLOAD_LEN));
         let slot0_block2 = store.find_sector_in_slot(0, SECTOR_ID_SAVEBLOCK2);
-        store.write_physical(0, slot0_block2, &bad_sector);
-
-        // Corrupt slot 1 so there is no clean fallback slot.
-        let slot1_block2 = store.find_sector_in_slot(1, SECTOR_ID_SAVEBLOCK2);
-        store.corrupt_byte(1, slot1_block2, 0);
+        store.write_physical(0, slot0_block2, &mutated_sector);
 
         let outcome = store.load();
-        // The checksum-valid SaveBlock2 sector still failed to decode, so no
-        // key was recovered and block2 is the default (encryption_key 0)...
-        assert_eq!(outcome.block2.encryption_key, 0);
-        // ...and the validated SaveBlock1 chunk's key-encrypted fields decode
-        // to plaintext defaults rather than leaking ciphertext under key 0.
-        assert_eq!(outcome.block1.money, 0);
-        let bag = &outcome.block1.bag;
-        for slot in bag
-            .items
-            .iter()
-            .chain(&bag.key_items)
-            .chain(&bag.poke_balls)
-            .chain(&bag.tms_hms)
-            .chain(&bag.berries)
-        {
-            assert_eq!(slot.quantity, 0, "bag quantities must decode to 0");
-        }
-        // Plaintext item_ids from the validated chunk still survive.
-        assert_eq!(bag.items[0].item_id, 1);
+        assert_eq!(outcome.status, SaveStatus::Ok);
+        assert_eq!(store.save_counter(), 2, "the newer slot stays selected");
+        // The raw out-of-range gender byte survives losslessly...
+        assert_eq!(outcome.block2.player_gender, PlayerGender::Other(9));
+        // ...identity fields and the real encryption key are retained...
+        assert_eq!(outcome.block2.player_trainer_id, block2.player_trainer_id);
+        assert_eq!(outcome.block2.encryption_key, block2.encryption_key);
+        // ...and money/bag decrypt to their saved plaintext, not zero.
+        assert_eq!(outcome.block1.money, block1.money);
+        assert_eq!(outcome.block1.bag, block1.bag);
+    }
+
+    #[test]
+    fn checksum_preserving_xor_mutation_keeps_newer_slot_selected() {
+        // Regression for issue #130's own reproduction: XOR two bytes that
+        // each sit at the low (least-significant) byte of a distinct
+        // little-endian u32 checksum word, one turning bit 0x08 on and the
+        // other turning the same bit off. `CalculateChecksum` sums whole
+        // little-endian u32 words, so the two +8/-8 deltas cancel and the
+        // *stored* footer checksum needs no recomputation at all — proving
+        // the corruption is checksum-invisible, not merely checksum-valid by
+        // construction.
+        let mut store = SaveStore::new();
+        let older_block1 = sample_block1();
+        let older_block2 = SaveBlock2 {
+            player_trainer_id: [0xAA; TRAINER_ID_LENGTH],
+            encryption_key: 0x1111_1111,
+            ..sample_block2()
+        };
+        let mut newer_block1 = sample_block1();
+        newer_block1.pos.x = 222;
+        let newer_block2 = SaveBlock2 {
+            // player_name[4] == 0x59 has bit 0x08 set, matching the issue's
+            // own repro constant, so XOR-ing it and the gender byte by 0x08
+            // moves the checksum by -8 and +8 respectively.
+            player_name: *b"RUST\x59\xFF\0\0",
+            player_gender: PlayerGender::Female, // raw byte 1: bit 0x08 clear
+            player_trainer_id: [0x22; TRAINER_ID_LENGTH],
+            encryption_key: 0xA1B2_C3D4,
+        };
+
+        store.save(&older_block1, &older_block2); // slot 1, counter 1
+        store.save(&newer_block1, &newer_block2); // slot 0, counter 2 (current)
+
+        let sector_in_slot = store.find_sector_in_slot(0, SECTOR_ID_SAVEBLOCK2);
+        let before = store.read_physical(0, sector_in_slot);
+        let mut bytes = *before.as_bytes();
+        bytes[0x08] ^= 0x08; // gender byte: FEMALE (1) -> out-of-range (9)
+        bytes[0x04] ^= 0x08; // player_name[4]: 0x59 -> 0x51, cancels the delta
+        let mutated = Sector::from_bytes(bytes);
+        assert_eq!(
+            mutated.stored_checksum(),
+            before.stored_checksum(),
+            "the mutation never touches the footer"
+        );
+        assert!(
+            mutated.is_valid(SaveBlock2::PAYLOAD_LEN),
+            "the two opposite-direction bit-3 flips cancel in the additive checksum"
+        );
+        store.write_physical(0, sector_in_slot, &mutated);
+
+        let outcome = store.load();
+        assert_eq!(outcome.status, SaveStatus::Ok);
+        assert_eq!(store.save_counter(), 2, "the newer counter stays selected");
+        assert_eq!(outcome.block2.player_gender, PlayerGender::Other(9));
+        assert_eq!(outcome.block2.encryption_key, newer_block2.encryption_key);
+        assert_eq!(
+            outcome.block2.player_trainer_id,
+            newer_block2.player_trainer_id
+        );
+        assert_eq!(outcome.block1.pos, newer_block1.pos);
+        assert_eq!(outcome.block1.money, newer_block1.money);
+        assert_eq!(outcome.block1.bag, newer_block1.bag);
+    }
+
+    #[test]
+    fn save_then_load_round_trips_male_gender() {
+        // Companion to `save_then_load_round_trips_identical_state` (which
+        // uses Female): an ordinary MALE (0) save must round-trip unchanged
+        // too, alongside the new `Other` gender coverage above.
+        let mut store = SaveStore::new();
+        let block1 = sample_block1();
+        let block2 = SaveBlock2 {
+            player_gender: PlayerGender::Male,
+            ..sample_block2()
+        };
+
+        store.save(&block1, &block2);
+        let outcome = store.load();
+
+        assert_eq!(outcome.status, SaveStatus::Ok);
+        assert_eq!(outcome.block2, block2);
+        assert_eq!(outcome.block1.money, block1.money);
     }
 
     #[test]
