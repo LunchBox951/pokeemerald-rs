@@ -136,7 +136,7 @@ worktree1="$workdir/worktree1"
 git_c -C "$checkout1" worktree add --quiet "$worktree1" -b wt-branch >/dev/null
 (
     cd "$worktree1"
-    ./init.sh >/dev/null
+    POKEEMERALD_REF="$sha_a_poke" MGBA_REF="$sha_a_mgba" ./init.sh >/dev/null
 )
 [[ -L "$worktree1/pokeemerald" ]] || fail "worktree pokeemerald is not a symlink"
 [[ -L "$worktree1/mgba" ]] || fail "worktree mgba is not a symlink"
@@ -144,5 +144,52 @@ linked_head="$(git -C "$worktree1/pokeemerald" rev-parse HEAD)"
 [[ "$linked_head" == "$sha_a_poke" ]] || fail "worktree symlink resolved to $linked_head, expected the main checkout's pinned $sha_a_poke"
 
 echo "ok: worktree symlinked the main checkout's validated pokeemerald/mgba"
+
+echo "=== test 4: a dirty-but-pinned checkout is a hard error ==="
+
+checkout4="$workdir/checkout4"
+make_main_checkout "$checkout4"
+(
+    cd "$checkout4"
+    POKEEMERALD_REMOTE="$fake_poke" MGBA_REMOTE="$fake_mgba" \
+        POKEEMERALD_REF="$sha_a_poke" MGBA_REF="$sha_a_mgba" \
+        ./init.sh >/dev/null
+)
+# HEAD stays at the pin, but the tree is tampered with: a tracked edit and
+# an untracked file. HEAD equality alone must not launder this.
+echo "MALICIOUS EDIT" >>"$checkout4/pokeemerald/VERSION"
+echo "planted" >"$checkout4/pokeemerald/EXTRA_ASSET"
+
+set +e
+stderr_out="$(cd "$checkout4" && POKEEMERALD_REMOTE="$fake_poke" MGBA_REMOTE="$fake_mgba" \
+    POKEEMERALD_REF="$sha_a_poke" MGBA_REF="$sha_a_mgba" \
+    ./init.sh 2>&1 >/dev/null)"
+status=$?
+set -e
+
+[[ "$status" -ne 0 ]] || fail "init.sh exited 0 on a dirty pinned checkout; expected a hard failure"
+echo "$stderr_out" | grep -qi "not clean" || fail "dirty-tree error missing; got: $stderr_out"
+echo "$stderr_out" | grep -qi "rm -rf" || fail "dirty-tree error didn't give recovery instructions; got: $stderr_out"
+
+echo "ok: dirty-but-pinned checkout was rejected"
+
+echo "=== test 5: a worktree over a mismatched main checkout is a hard error ==="
+
+# checkout3's pokeemerald sits at sha_b (not the pin); a worktree over it
+# must refuse to symlink the stale tree.
+worktree3="$workdir/worktree3"
+git_c -C "$checkout3" worktree add --quiet "$worktree3" -b wt-branch3 >/dev/null
+
+set +e
+stderr_out="$(cd "$worktree3" && POKEEMERALD_REF="$sha_a_poke" MGBA_REF="$sha_a_mgba" \
+    ./init.sh 2>&1 >/dev/null)"
+status=$?
+set -e
+
+[[ "$status" -ne 0 ]] || fail "worktree init.sh exited 0 over a mismatched main checkout; expected a hard failure"
+echo "$stderr_out" | grep -qF "$sha_b_poke" || fail "worktree mismatch error didn't name the actual SHA; got: $stderr_out"
+[[ ! -L "$worktree3/pokeemerald" ]] || fail "worktree symlinked a mismatched reference anyway"
+
+echo "ok: worktree refused to symlink a mismatched main checkout"
 
 echo "all tests passed"

@@ -48,10 +48,45 @@ fi
 git_dir_abs="$(cd "$(git rev-parse --git-dir)" && pwd)"
 git_common_dir_abs="$(cd "$(git rev-parse --git-common-dir)" && pwd)"
 
+# verify_pinned <dir> <ref> — assert an existing reference checkout really is
+# the pinned tree: HEAD at the pin AND a clean worktree/index (HEAD equality
+# alone says nothing about edited, staged, or untracked files feeding the
+# extraction pipeline). A tarball-extracted tree (no .git) cannot be
+# verified; warn loudly rather than guessing.
+verify_pinned() {
+    local dir="$1"
+    local ref="$2"
+
+    if [[ ! -d "$dir/.git" ]]; then
+        echo "warning: $dir has no git metadata; cannot verify it matches pinned revision $ref" >&2
+        echo "  (byte-identical bootstraps are only guaranteed for git checkouts)" >&2
+        return 0
+    fi
+    local actual
+    actual="$(git -C "$dir" rev-parse HEAD)"
+    if [[ "$actual" != "$ref" ]]; then
+        echo "error: $dir is at $actual, but init.sh pins it to $ref" >&2
+        echo "  to update: rm -rf $dir && ./init.sh" >&2
+        echo "  (if this pin should move, that is a deliberate change to the *_REF constant in init.sh, not a silent skip)" >&2
+        exit 1
+    fi
+    local dirty
+    dirty="$(git -C "$dir" status --porcelain)"
+    if [[ -n "$dirty" ]]; then
+        echo "error: $dir is at the pinned revision but its tree is not clean:" >&2
+        printf '%s\n' "$dirty" | head -20 >&2
+        echo "  to restore the pinned tree: rm -rf $dir && ./init.sh" >&2
+        exit 1
+    fi
+}
+
 if [[ "$git_dir_abs" != "$git_common_dir_abs" ]]; then
     # Worktree: symlink the main checkout's reference directories rather than
     # re-cloning them. This works with both git-cloned and tarball-extracted
     # sources and avoids duplicating gigabytes of read-only data per worktree.
+    # The main checkout's trees are verified against the pins first — an
+    # unvalidated symlink would silently reintroduce the drift the pins
+    # exist to prevent.
     main_repo="$(dirname "$git_common_dir_abs")"
     for name in pokeemerald mgba; do
         src="$main_repo/$name"
@@ -59,6 +94,10 @@ if [[ "$git_dir_abs" != "$git_common_dir_abs" ]]; then
             echo "error: $src missing; run init.sh in the main checkout ($main_repo) first." >&2
             exit 1
         fi
+        case "$name" in
+            pokeemerald) verify_pinned "$src" "$POKEEMERALD_REF" ;;
+            mgba)        verify_pinned "$src" "$MGBA_REF" ;;
+        esac
         if [[ -L "$name" || -d "$name" ]]; then
             echo "skip: $name already present"
         else
@@ -81,14 +120,7 @@ clone_and_pin() {
     local ref="$3"
 
     if [[ -d "$target/.git" ]]; then
-        local actual
-        actual="$(git -C "$target" rev-parse HEAD)"
-        if [[ "$actual" != "$ref" ]]; then
-            echo "error: $target is at $actual, but init.sh pins it to $ref" >&2
-            echo "  to update: rm -rf $target && ./init.sh" >&2
-            echo "  (if this pin should move, that is a deliberate change to the *_REF constant in init.sh, not a silent skip)" >&2
-            exit 1
-        fi
+        verify_pinned "$target" "$ref"
         echo "skip: $target already at pinned revision $ref"
         return
     fi
