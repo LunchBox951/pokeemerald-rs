@@ -23,8 +23,8 @@
 # required check (see below) -- R-4 registers it once the gate has proven
 # stable.
 #
-# Required status-check contexts for branch protection (R-4): `version` and
-# `ledger` report under their bare job names; the matrixed jobs report per OS —
+# Required status-check contexts for branch protection (R-4): `version`,
+# `ledger`, and `init-tests` report under their bare job names; the matrixed jobs report per OS —
 # `fmt (ubuntu-latest)`, `fmt (windows-latest)`, `clippy (ubuntu-latest)`,
 # `clippy (windows-latest)`, `build (ubuntu-latest)`, `build (windows-latest)`,
 # `test (ubuntu-latest)`, `test (windows-latest)`. Register those exact names.
@@ -52,7 +52,15 @@ jobs:
         with:
           fetch-depth: 0 # full history so version_check can reach origin/main
       - name: Validate VERSION
-        run: python3 scripts/version_check.py --base origin/main --head HEAD
+        env:
+          # The marker-staleness and monotonicity checks are base-relative:
+          # a PR must be compared against ITS base branch, not always main
+          # (a marker already merged to dev would read as freshly-changed
+          # against main). Push events keep the origin/main comparison.
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha || '' }}
+        run: |
+          base="${PR_BASE_SHA:-origin/main}"
+          python3 scripts/version_check.py --base "${base}" --head HEAD
 
   # Policy gate (ubuntu-only): reject stale ledger targets once Rust targets exist.
   ledger:
@@ -63,6 +71,17 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Verify ledger
         run: python3 scripts/ledger.py verify
+
+  # Shell regression suite for init.sh's pinned-revision bootstrap (#136).
+  # Without a CI job the harness ratchets nothing.
+  init-tests:
+    name: init-tests
+    runs-on: ubuntu-latest
+    needs: version
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Run init.sh regression tests
+        run: bash init_test.sh
 
   fmt:
     name: fmt
