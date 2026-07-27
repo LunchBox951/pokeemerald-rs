@@ -298,12 +298,20 @@ pub trait BattleRng {
 /// `100 - (Random() % 16)` gives a percentage in `85..=100`, then `damage =
 /// damage * percent / 100`, floored to `1` if `damage` was nonzero
 /// beforehand.
+///
+/// The RNG is drawn *unconditionally*, before the zero-damage guard, to match
+/// upstream's consumption count exactly: `ApplyRandomDmgMultiplier`
+/// (`pokeemerald/src/battle_script_commands.c:1639`) calls `Random()` on its
+/// first line, *then* checks `if (gBattleMoveDamage != 0)`. A 0-damage
+/// (immunity) hit therefore still advances the shared battle RNG by one draw,
+/// so downstream draws in the same turn stay in lockstep with upstream
+/// `(behavioral-fidelity)`.
 #[must_use]
 pub fn apply_damage_roll(damage: u32, rng: &mut impl BattleRng) -> u32 {
+    let percent = 100 - u32::from(rng.next_u16()) % 16;
     if damage == 0 {
         return 0;
     }
-    let percent = 100 - u32::from(rng.next_u16()) % 16;
     let rolled = damage * percent / 100;
     if rolled == 0 {
         1
@@ -315,6 +323,20 @@ pub fn apply_damage_roll(damage: u32, rng: &mut impl BattleRng) -> u32 {
 /// The full single-hit damage pipeline, in upstream's exact order:
 /// [`base_damage`], then [`apply_stab`], then [`apply_type_effectiveness`],
 /// then [`apply_damage_roll`].
+///
+/// `effectiveness` is applied exactly **once**: this models a single
+/// `ModulateDmgByType` step. Upstream `Cmd_typecalc`
+/// (`pokeemerald/src/battle_script_commands.c:1355`) instead calls
+/// `ModulateDmgByType` once *per matching defender type slot* — twice for a
+/// dual-type defender whose two types are distinct — and each call floors a
+/// truncated-to-zero result back to `1` before the next. That intermediate
+/// floor between the two `x(mult/10)` steps is observable (e.g. a hit that
+/// truncates to `0` after the first slot is bumped to `1`, then scaled again).
+/// This function does **not** reproduce that per-slot stacking; a caller
+/// modelling a dual-type defender composes it by folding the two slots'
+/// effectiveness through [`apply_type_effectiveness`] in turn (preserving the
+/// per-slot floor) and passing that path directly rather than through this
+/// convenience wrapper's single slot.
 #[must_use]
 pub fn calculate_damage(
     input: &DamageInput,
@@ -343,6 +365,24 @@ mod tests {
     impl BattleRng for FixedRng {
         fn next_u16(&mut self) -> u16 {
             self.0
+        }
+    }
+
+    /// A `BattleRng` that counts how many times it is drawn, for asserting the
+    /// roll's RNG-consumption count matches upstream regardless of the damage.
+    struct CountingRng {
+        value: u16,
+        draws: u32,
+    }
+    impl CountingRng {
+        fn new(value: u16) -> Self {
+            Self { value, draws: 0 }
+        }
+    }
+    impl BattleRng for CountingRng {
+        fn next_u16(&mut self) -> u16 {
+            self.draws += 1;
+            self.value
         }
     }
 
@@ -574,6 +614,24 @@ mod tests {
     fn apply_damage_roll_floors_a_nonzero_damage_to_one() {
         // damage=1 at the worst roll (85%): 1*85/100 = 0, floored to 1.
         assert_eq!(apply_damage_roll(1, &mut FixedRng(15)), 1);
+    }
+
+    #[test]
+    fn apply_damage_roll_draws_the_rng_even_for_zero_damage() {
+        // Upstream `ApplyRandomDmgMultiplier` calls `Random()` unconditionally,
+        // *before* the `if (gBattleMoveDamage != 0)` guard
+        // (`battle_script_commands.c:1641`), so a 0-damage (immunity) hit still
+        // advances the shared battle RNG by exactly one draw. Assert both the
+        // returned 0 and the single draw.
+        let mut rng = CountingRng::new(0);
+        assert_eq!(apply_damage_roll(0, &mut rng), 0);
+        assert_eq!(rng.draws, 1, "zero-damage roll must still draw once");
+
+        // A nonzero-damage roll also draws exactly once -- same count either
+        // way, which is the whole point of drawing before the guard.
+        let mut rng = CountingRng::new(0);
+        assert_eq!(apply_damage_roll(56, &mut rng), 56);
+        assert_eq!(rng.draws, 1);
     }
 
     #[test]
