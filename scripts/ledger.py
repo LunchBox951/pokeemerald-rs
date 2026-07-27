@@ -367,7 +367,9 @@ def validate_artifact(name, sub):
     if "artifacts" in sub:
         return f"artifact {name!r} must not itself carry 'artifacts' (no recursion)"
 
-    status = sub.get("status", "pending")
+    if "status" not in sub:
+        return f"artifact {name!r}: missing 'status'"
+    status = sub["status"]
     if status not in ALL_STATUSES:
         return f"artifact {name!r}: invalid status {status!r} (valid: {ALL_STATUSES})"
 
@@ -401,7 +403,9 @@ def validate_artifact(name, sub):
 
 
 def validate_entry(entry: dict):
-    status = entry.get("status", "pending")
+    if "status" not in entry:
+        return "missing 'status'"
+    status = entry["status"]
     if status not in ALL_STATUSES:
         return f"invalid status: {status!r} (valid: {ALL_STATUSES})"
 

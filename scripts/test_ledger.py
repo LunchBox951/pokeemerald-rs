@@ -414,6 +414,27 @@ class TestVerify(LedgerTestBase):
         self.assertIn("Makefile", str(cm.exception))
         self.assertIn("rust_target", str(cm.exception))
 
+    def test_entry_missing_status_fails(self):
+        # An entry that lost its `status` key entirely must fail verify, not
+        # silently default to pending.
+        self.write_ledger({"src/battle_main.c": {
+            "category": "code.source", "kind": "file"}})
+        with self.assertRaises(SystemExit) as cm:
+            ledger.cmd_verify(ns(project=PROJECT))
+        self.assertNotEqual(cm.exception.code, 0)
+        self.assertIn("src/battle_main.c", str(cm.exception))
+        self.assertIn("status", str(cm.exception))
+
+    def test_artifact_missing_status_fails(self):
+        self.write_ledger({"Makefile": {
+            "category": "meta.build", "kind": "file", "status": "pending",
+            "artifacts": {"tbl": {}}}})
+        with self.assertRaises(SystemExit) as cm:
+            ledger.cmd_verify(ns(project=PROJECT))
+        self.assertNotEqual(cm.exception.code, 0)
+        self.assertIn("Makefile", str(cm.exception))
+        self.assertIn("status", str(cm.exception))
+
     def test_valid_ledger_still_passes(self):
         self.touch_repo("crates/a/src/present.rs")
         self.write_ledger({"src/battle_main.c": {
