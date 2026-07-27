@@ -340,25 +340,36 @@ def parse_marker(raw: str, source: str) -> Tuple[Version, str]:
 
 
 def marker_changed(base: str, head: str, rel_path: str, root: str) -> bool:
-    """True if ``rel_path`` differs between ``base`` and ``head`` per git.
+    """True if ``rel_path``'s CONTENT differs between ``base`` and ``head``.
 
-    Delegating to ``git diff`` makes the comparison filter-aware: an
-    ``ident``/eol/smudge filter changes working-tree bytes without changing
-    the committed content, and a byte comparison of filtered text against
-    the raw base blob would read an untouched marker as "changed" (failing
-    the gate OPEN). ``head == 'HEAD'`` compares the working tree (git
-    re-cleans it first); any other head compares the two committed blobs.
-    Errors count as unchanged -- the gate fails closed.
+    Compares clean-filtered blob object IDs, which makes the check both
+    filter-aware (an ident/eol smudge changes working-tree bytes without
+    changing the committed content) and mode-blind (a chmod flips git
+    diff's verdict without touching a byte -- a blob ID never includes the
+    file mode, so a content-free mode change cannot launder a stale
+    marker). ``head == 'HEAD'`` hashes the working-tree file through the
+    clean filters; any other head reads the committed blob. Errors count
+    as unchanged -- the gate fails closed.
     """
-    cmd = ["git", "diff", "--quiet", base]
-    if head != "HEAD":
-        cmd.append(head)
-    cmd += ["--", rel_path]
-    try:
-        out = subprocess.run(cmd, capture_output=True, cwd=root)
-    except (FileNotFoundError, OSError):
+    base_oid = _git_stdout(["git", "rev-parse", f"{base}:{rel_path}"], root)
+    if head == "HEAD":
+        head_oid = _git_stdout(["git", "hash-object", "--", rel_path], root)
+    else:
+        head_oid = _git_stdout(["git", "rev-parse", f"{head}:{rel_path}"], root)
+    if base_oid is None or head_oid is None:
         return False
-    return out.returncode == 1
+    return base_oid != head_oid
+
+
+def _git_stdout(cmd: list, root: str) -> Optional[str]:
+    """Run a git command in ``root``; stripped stdout, or None on failure."""
+    try:
+        out = subprocess.run(cmd, capture_output=True, text=True, cwd=root)
+    except (FileNotFoundError, OSError):
+        return None
+    if out.returncode != 0:
+        return None
+    return out.stdout.strip()
 
 
 def check_transition(

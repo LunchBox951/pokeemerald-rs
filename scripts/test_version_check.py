@@ -374,6 +374,24 @@ class TestFinalGateIntegration(unittest.TestCase):
             0,
         )
 
+    def test_mode_only_flip_does_not_launder_a_stale_marker(self):
+        # `chmod +x` flips git diff's verdict without touching a byte; the
+        # staleness check must compare content, not tree metadata.
+        self.repo.write("VERSION", "0.9.9.9\n")
+        self.repo.write(MARKER, marker("1.0.0.0"))
+        self.repo.commit("baseline-with-stale-marker")
+
+        self.repo.write("VERSION", "1.0.0.0\n")
+        os.chmod(self.repo.path / MARKER, 0o755)
+        self.repo.commit("chmod-only-final-bump")
+
+        self.assertNotEqual(
+            self.repo.run_version_check(
+                base="baseline-with-stale-marker", head="HEAD"
+            ),
+            0,
+        )
+
     def test_version_with_surrounding_whitespace_fails(self):
         # ' 1.0.0.0 ' parses identically after strip() but release tooling
         # tags the raw text -- the exact spelling must be committed.
