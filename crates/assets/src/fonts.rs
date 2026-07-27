@@ -167,10 +167,14 @@ pub struct Glyph {
 
 /// A borrowed font image bound to the [`FontId`] used to fetch it.
 ///
-/// Only [`AssetPack::font`](crate::pack::AssetPack::font) constructs this
-/// handle outside this module. Keeping the identity and raw image together
+/// In production, only [`AssetPack::font`](crate::pack::AssetPack::font)
+/// constructs this handle: keeping the identity and raw image together
 /// prevents callers from pairing (for example) Normal pixels with Small
-/// advance widths when constructing a [`FontGlyphSheet`].
+/// advance widths when constructing a [`FontGlyphSheet`]. The constructor is
+/// otherwise public so downstream crates (e.g. `engine`'s glyph renderer,
+/// issue #124) can build a [`FontGlyphSheet`] over a synthetic in-memory
+/// sheet in their own unit tests, exactly as this module's own tests do,
+/// without needing a real asset pack on disk.
 #[derive(Debug, Clone, Copy)]
 pub struct FontImageRef<'a> {
     font: FontId,
@@ -178,7 +182,9 @@ pub struct FontImageRef<'a> {
 }
 
 impl<'a> FontImageRef<'a> {
-    pub(crate) const fn new(font: FontId, image: ImageRef<'a>) -> Self {
+    /// Bind `image` to `font`'s identity for [`FontGlyphSheet::new`].
+    #[must_use]
+    pub const fn new(font: FontId, image: ImageRef<'a>) -> Self {
         Self { font, image }
     }
 

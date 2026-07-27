@@ -25755,6 +25755,26 @@
       "status": "pending"
     },
     "src/menu.c": {
+      "artifacts": {
+        "WindowFunc_DrawDialogueFrame": {
+          "reason": "The standard overworld/battle dialogue box's frame-tile placement (the wing-notch top border, left/interior-fill/right column spanning height+1 rows, and the v-flipped bottom border reusing the top row's tiles) reimplemented as MessageBoxLayout::frame_tiles, against the message-box 7x2 tile sheet (assets::AssetPack::message_box).",
+          "rust_target": "crates/engine/src/text/window.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "sStandardTextBox_WindowTemplates": {
+          "reason": "Window 0's tilemap geometry for the standard field-message dialogue box (tilemapLeft/tilemapTop/width/height), transcribed as MessageBoxLayout::STANDARD and its STANDARD_* constants.",
+          "rust_target": "crates/engine/src/text/window.rs",
+          "spec": "S-5",
+          "status": "ported"
+        },
+        "sTextSpeedFrameDelays": {
+          "reason": "The SLOW/MID/FAST frames-per-character reveal cadence, transcribed as TextSpeed::frames_per_char.",
+          "rust_target": "crates/engine/src/text/render.rs",
+          "spec": "S-5",
+          "status": "ported"
+        }
+      },
       "category": "code.source",
       "kind": "file",
       "status": "pending"
@@ -26630,6 +26650,32 @@
       "status": "pending"
     },
     "src/text.c": {
+      "artifacts": {
+        "AddTextPrinter": {
+          "reason": "The speed-argument-to-delay-counter setup (the '--textSpeed' decrement before the first HANDLE_CHAR tick) as Printer::new plus TextSpeed::wait_frames; the TEXT_SKIP_DRAW/speed==0 one-shot render path is folded into the same tick()-per-frame API as TextSpeed::Instant rather than a separate code path.",
+          "rust_target": "crates/engine/src/text/render.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "RenderText": {
+          "reason": "The per-frame RENDER_STATE_HANDLE_CHAR loop -- newline (free, no frame cost), \\l/\\p prompt-scroll/prompt-clear wait-then-act states, glyph-id resolution via the decoded byte, and the reveal-delay countdown -- reimplemented as Printer::tick's frame-driven state machine (PrinterState). Colour/font/pause/audio extended control codes are consumed as documented no-ops; see the module's 'Deliberately out of scope' docs.",
+          "rust_target": "crates/engine/src/text/render.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "sFontInfos": {
+          "reason": "Only the maxLetterHeight column (the \\n line-advance metric) is transcribed, as max_letter_height; fontFunction/letterSpacing/lineSpacing/fgColor/bgColor/shadowColor are out of this slice's scope (glyph decompression lives in assets::fonts, colour is deliberately unmodelled here), so the file's own status stays pending.",
+          "rust_target": "crates/engine/src/text/render.rs",
+          "spec": "S-5",
+          "status": "ported"
+        },
+        "sWindowVerticalScrollSpeeds": {
+          "reason": "Per-text-speed \\l scroll animation rate (px/frame), transcribed as TextSpeed::scroll_px_per_frame.",
+          "rust_target": "crates/engine/src/text/render.rs",
+          "spec": "S-5",
+          "status": "ported"
+        }
+      },
       "category": "code.source",
       "kind": "file",
       "status": "pending"
@@ -26641,6 +26687,12 @@
     },
     "src/text_window.c": {
       "artifacts": {
+        "DrawTextBorderOuter": {
+          "reason": "The generic 3x3 selectable-frame border ring around a window's content rect (corners/edges at destination offsets +0..+8, centre +4 unused) reimplemented as border_tiles, against a text_window_frame 3x3 tile sheet. DrawTextBorderInner and rbox_fill_rectangle remain unimplemented (not needed by the v1 NPC-dialogue path), so the file's own status stays pending.",
+          "rust_target": "crates/engine/src/text/window.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
         "GetWindowFrameTilesPal": {
           "reason": "The zero-based 0..19 frame lookup with out-of-range fallback to frame 0 is re-implemented as code in AssetPack::text_window_frame (crates/assets/src/pack.rs), translating sWindowFrames indices to extracted source filenames 1.png..20.png -- a code re-implementation, distinct from the ported frame_data assets.",
           "rust_target": "crates/assets/src/pack.rs",

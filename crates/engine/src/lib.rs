@@ -4,7 +4,9 @@
 //! - [`rng`] — Emerald's deterministic PRNG (issue #22).
 //! - [`text`] — the Gen-3 text codec (issue #25), plus
 //!   [`text::format`] for number-to-text formatting and placeholder
-//!   expansion (issue #55).
+//!   expansion (issue #55), [`text::render`] for the frame-driven glyph
+//!   renderer, and [`text::window`] for the message-box tile compositor
+//!   (issue #124).
 //! - [`script`] — the script bytecode interpreter core: context state,
 //!   fetch/dispatch loop, call stack, and operand readers (issue #56), plus
 //!   [`script::commands`], the first batch of concrete script commands —
