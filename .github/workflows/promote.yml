@@ -152,14 +152,16 @@ jobs:
               --title "Promote ${release_branch} → ${target}" \
               --body "$(printf '%s\n\nCandidate: `%s` @ %s\nGates for **%s** are in RELEASE.md. A maintainer with write access must select **Approve workflows to run** before the required checks start. Player channels (`stable`, `main`) require owner signoff (`needs-operator`) before merge.' "${reason}" "${release_branch}" "$(git rev-parse --short "origin/${release_branch}")" "${target}")" \
               "${labels[@]}")"
+            routed_tip="$(git rev-parse "origin/${release_branch}")"
             created_head="$(gh pr view "${pr_url}" --json headRefOid --jq .headRefOid)"
-            if [ "${created_head}" = "$(git rev-parse "origin/${release_branch}")" ]; then
+            if [ "${created_head}" = "${routed_tip}" ]; then
               exit 0
             fi
-            # The branch advanced inside the routing->create window. Fetch
-            # the advanced history and re-route by the PR's actual head OID.
+            # The branch advanced inside the routing->create window. The PR
+            # follows the LIVE branch tip (created_head is already stale the
+            # moment it is read), so refetch and re-route from the live tip.
             git fetch origin "+refs/heads/${release_branch}:refs/remotes/origin/${release_branch}"
-            new_target="$(scripts/select_promotion_target.sh "${created_head}")"
+            new_target="$(scripts/select_promotion_target.sh "${release_branch}")"
             if [ "${new_target}" = "${target}" ]; then
               echo "${release_branch} advanced during PR creation but the routing is unchanged."
               exit 0
