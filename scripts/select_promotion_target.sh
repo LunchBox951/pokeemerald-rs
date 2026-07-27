@@ -17,13 +17,15 @@
 set -euo pipefail
 
 if [ "$#" -ne 1 ]; then
-  echo "usage: $0 <release-branch>" >&2
+  echo "usage: $0 <release-branch-or-commit>" >&2
   exit 2
 fi
 
-branch="$1"
-tip="$(git rev-parse --verify -q "origin/${branch}")" || {
-  echo "unknown branch: ${branch}" >&2
+# Accept a branch name (routed by its origin tip) or a raw commit OID —
+# promote.yml re-routes a created PR by the exact head OID it captured.
+tip="$(git rev-parse --verify -q "origin/$1" \
+  || git rev-parse --verify -q "$1^{commit}")" || {
+  echo "unknown branch or commit: $1" >&2
   exit 2
 }
 

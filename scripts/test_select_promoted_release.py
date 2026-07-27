@@ -404,6 +404,23 @@ class SelectPromotionTargetTest(unittest.TestCase):
         self.refetch()
         self.assertEqual(self.target("release/0.2"), "")
 
+    def test_routes_a_raw_commit_oid(self):
+        # promote.yml re-validates a created PR by its exact head OID (the
+        # branch may have advanced again since): a raw commit must route the
+        # same way a branch tip does.
+        self._advance_r02()
+        self.refetch()
+        advanced_oid = run(
+            self.checkout, "git", "rev-parse", "origin/release/0.2"
+        ).stdout.strip()
+        self.assertEqual(self.target(advanced_oid), "unstable")
+        # ...while the pre-advance commit (contained in unstable) still
+        # routes to the next rung up.
+        merged_oid = run(
+            self.checkout, "git", "rev-parse", f"{advanced_oid}~1"
+        ).stdout.strip()
+        self.assertEqual(self.target(merged_oid), "stable")
+
     def test_unknown_branch_fails(self):
         self.target("release/9.9", expect_rc=2)
 
