@@ -87,6 +87,29 @@ verify_pinned() {
         echo "  to restore the full pinned tree: rm -rf $dir && ./init.sh" >&2
         exit 1
     fi
+    # Reject repo-local machinery that can rewrite what status compares.
+    # (Boundary note: an attacker with write access to this .git can defeat
+    # any git-mediated check in principle; these guards close the known
+    # config-level evasions so accidental or drive-by divergence cannot
+    # hide, which is the pin gate's actual job.)
+    if [[ -n "$(git -C "$dir" for-each-ref refs/replace 2>/dev/null)" ]]; then
+        echo "error: $dir has git replacement refs (refs/replace); verification would see substituted objects" >&2
+        echo "  to restore the pinned tree: rm -rf $dir && ./init.sh" >&2
+        exit 1
+    fi
+    if [[ -n "$(git -C "$dir" config --local --get-regexp '^filter\.' 2>/dev/null || true)" ]]; then
+        echo "error: $dir configures content filters (filter.*); they can map tampered bytes back to the committed blob" >&2
+        echo "  to restore the pinned tree: rm -rf $dir && ./init.sh" >&2
+        exit 1
+    fi
+    local attrs
+    attrs="$(git -C "$dir" rev-parse --git-path info/attributes)"
+    [[ "$attrs" == /* ]] || attrs="$dir/$attrs"
+    if [[ -s "$attrs" ]]; then
+        echo "error: $dir has local attribute overrides ($attrs); they can alter content comparison" >&2
+        echo "  to restore the pinned tree: rm -rf $dir && ./init.sh" >&2
+        exit 1
+    fi
     # assume-unchanged / skip-worktree index bits hide tracked-file edits
     # from status entirely (and skip-worktree needs no sparse config).
     local hidden
@@ -103,9 +126,13 @@ verify_pinned() {
     # --ignored + a neutralized excludes file: the extraction pipeline reads
     # the filesystem, not the index, so a git-ignored file (host-global
     # excludes, .git/info/exclude) diverges the pack while reading clean.
-    # --untracked-files=all overrides any status.showUntrackedFiles=no.
-    dirty="$(git -C "$dir" \
+    # --untracked-files=all overrides any status.showUntrackedFiles=no;
+    # --no-replace-objects compares against the REAL blobs even if a
+    # replacement ref slipped past; fsmonitor off so no hook can assert
+    # "nothing changed" on git's behalf.
+    dirty="$(git --no-replace-objects -C "$dir" \
         -c core.autocrlf=false -c core.eol=lf -c core.excludesFile=/dev/null \
+        -c core.fsmonitor=false \
         status --porcelain --ignored --untracked-files=all)"
     if [[ -n "$dirty" ]]; then
         echo "error: $dir is at the pinned revision but its tree is not clean:" >&2

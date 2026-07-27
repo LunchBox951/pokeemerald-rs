@@ -383,4 +383,102 @@ echo "$stderr_out" | grep -qi "index-hidden" || fail "index-hidden error missing
 
 echo "ok: assume-unchanged tampering was rejected"
 
+echo "=== test 14: replacement refs are rejected ==="
+
+checkout14="$workdir/checkout14"
+make_main_checkout "$checkout14"
+(
+    cd "$checkout14"
+    POKEEMERALD_REMOTE="$fake_poke" MGBA_REMOTE="$fake_mgba" \
+        POKEEMERALD_REF="$sha_a_poke" MGBA_REF="$sha_a_mgba" \
+        ./init.sh >/dev/null
+)
+git -C "$checkout14/pokeemerald" fetch --quiet origin
+git_c -C "$checkout14/pokeemerald" replace -f "$sha_a_poke" "$sha_b_poke"
+
+set +e
+stderr_out="$(cd "$checkout14" && POKEEMERALD_REMOTE="$fake_poke" MGBA_REMOTE="$fake_mgba" \
+    POKEEMERALD_REF="$sha_a_poke" MGBA_REF="$sha_a_mgba" \
+    ./init.sh 2>&1 >/dev/null)"
+status=$?
+set -e
+
+[[ "$status" -ne 0 ]] || fail "init.sh exited 0 with a replacement ref shadowing the pin"
+echo "$stderr_out" | grep -qi "replace" || fail "replacement-ref error missing; got: $stderr_out"
+
+echo "ok: replacement refs were rejected"
+
+echo "=== test 15: local content-filter config is rejected ==="
+
+checkout15="$workdir/checkout15"
+make_main_checkout "$checkout15"
+(
+    cd "$checkout15"
+    POKEEMERALD_REMOTE="$fake_poke" MGBA_REMOTE="$fake_mgba" \
+        POKEEMERALD_REF="$sha_a_poke" MGBA_REF="$sha_a_mgba" \
+        ./init.sh >/dev/null
+)
+git -C "$checkout15/pokeemerald" config filter.launder.clean cat
+
+set +e
+stderr_out="$(cd "$checkout15" && POKEEMERALD_REMOTE="$fake_poke" MGBA_REMOTE="$fake_mgba" \
+    POKEEMERALD_REF="$sha_a_poke" MGBA_REF="$sha_a_mgba" \
+    ./init.sh 2>&1 >/dev/null)"
+status=$?
+set -e
+
+[[ "$status" -ne 0 ]] || fail "init.sh exited 0 with a local content filter configured"
+echo "$stderr_out" | grep -qi "filter" || fail "filter-config error missing; got: $stderr_out"
+
+echo "ok: local content-filter config was rejected"
+
+echo "=== test 16: a tamper is caught even with core.fsmonitor configured ==="
+
+checkout16="$workdir/checkout16"
+make_main_checkout "$checkout16"
+(
+    cd "$checkout16"
+    POKEEMERALD_REMOTE="$fake_poke" MGBA_REMOTE="$fake_mgba" \
+        POKEEMERALD_REF="$sha_a_poke" MGBA_REF="$sha_a_mgba" \
+        ./init.sh >/dev/null
+)
+git -C "$checkout16/pokeemerald" config core.fsmonitor /bin/true
+echo "TAMPERED" >>"$checkout16/pokeemerald/VERSION"
+
+set +e
+stderr_out="$(cd "$checkout16" && POKEEMERALD_REMOTE="$fake_poke" MGBA_REMOTE="$fake_mgba" \
+    POKEEMERALD_REF="$sha_a_poke" MGBA_REF="$sha_a_mgba" \
+    ./init.sh 2>&1 >/dev/null)"
+status=$?
+set -e
+
+[[ "$status" -ne 0 ]] || fail "init.sh exited 0 with a tampered file under core.fsmonitor"
+echo "$stderr_out" | grep -qi "not clean" || fail "fsmonitor-bypass tamper not caught; got: $stderr_out"
+
+echo "ok: tamper caught despite core.fsmonitor config"
+
+echo "=== test 17: local info/attributes overrides are rejected ==="
+
+checkout17="$workdir/checkout17"
+make_main_checkout "$checkout17"
+(
+    cd "$checkout17"
+    POKEEMERALD_REMOTE="$fake_poke" MGBA_REMOTE="$fake_mgba" \
+        POKEEMERALD_REF="$sha_a_poke" MGBA_REF="$sha_a_mgba" \
+        ./init.sh >/dev/null
+)
+echo "VERSION filter=launder" >"$checkout17/pokeemerald/.git/info/attributes"
+
+set +e
+stderr_out="$(cd "$checkout17" && POKEEMERALD_REMOTE="$fake_poke" MGBA_REMOTE="$fake_mgba" \
+    POKEEMERALD_REF="$sha_a_poke" MGBA_REF="$sha_a_mgba" \
+    ./init.sh 2>&1 >/dev/null)"
+status=$?
+set -e
+
+[[ "$status" -ne 0 ]] || fail "init.sh exited 0 with a local info/attributes override"
+echo "$stderr_out" | grep -qi "attribute" || fail "info/attributes error missing; got: $stderr_out"
+
+echo "ok: local info/attributes override was rejected"
+
 echo "all tests passed"
