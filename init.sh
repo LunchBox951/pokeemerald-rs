@@ -89,7 +89,12 @@ verify_pinned() {
     local dirty
     # autocrlf off for the comparison: a CRLF-converted tree must read as
     # dirty (not silently normalized clean) or platforms diverge on bytes.
-    dirty="$(git -C "$dir" -c core.autocrlf=false -c core.eol=lf status --porcelain)"
+    # --ignored + a neutralized excludes file: the extraction pipeline reads
+    # the filesystem, not the index, so a git-ignored file (host-global
+    # excludes, .git/info/exclude) diverges the pack while reading clean.
+    dirty="$(git -C "$dir" \
+        -c core.autocrlf=false -c core.eol=lf -c core.excludesFile=/dev/null \
+        status --porcelain --ignored)"
     if [[ -n "$dirty" ]]; then
         echo "error: $dir is at the pinned revision but its tree is not clean:" >&2
         printf '%s\n' "$dirty" | head -20 >&2

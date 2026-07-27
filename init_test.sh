@@ -286,4 +286,32 @@ echo "$stderr_out" | grep -qi "sparse" || fail "sparse-checkout error missing; g
 
 echo "ok: sparse reference checkout was rejected"
 
+echo "=== test 10: a git-ignored planted file is still a hard error ==="
+
+# The extraction pipeline reads the filesystem, not the index, so a file
+# hidden by an ignore rule (.git/info/exclude, host excludes) must still
+# read as dirt.
+checkout10="$workdir/checkout10"
+make_main_checkout "$checkout10"
+(
+    cd "$checkout10"
+    POKEEMERALD_REMOTE="$fake_poke" MGBA_REMOTE="$fake_mgba" \
+        POKEEMERALD_REF="$sha_a_poke" MGBA_REF="$sha_a_mgba" \
+        ./init.sh >/dev/null
+)
+echo "planted.png" >"$checkout10/pokeemerald/.git/info/exclude"
+echo "fake" >"$checkout10/pokeemerald/planted.png"
+
+set +e
+stderr_out="$(cd "$checkout10" && POKEEMERALD_REMOTE="$fake_poke" MGBA_REMOTE="$fake_mgba" \
+    POKEEMERALD_REF="$sha_a_poke" MGBA_REF="$sha_a_mgba" \
+    ./init.sh 2>&1 >/dev/null)"
+status=$?
+set -e
+
+[[ "$status" -ne 0 ]] || fail "init.sh exited 0 with a git-ignored planted file in the reference tree"
+echo "$stderr_out" | grep -qF "planted.png" || fail "ignored-file error didn't name the planted file; got: $stderr_out"
+
+echo "ok: git-ignored planted file was rejected"
+
 echo "all tests passed"
