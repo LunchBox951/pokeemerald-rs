@@ -13,7 +13,11 @@ workspace = true
 # reasoning). `assets` is the I-2 title-screen pack loader
 # (`crate::title::load_default`); it is itself dependency-free (std-only), so
 # adding it here does not drag anything new into `xtask`'s `smoke`-gated
-# `pokeemerald-rs` dependency either.
+# `pokeemerald-rs` dependency either. `engine` (I-3, issue #126) supplies
+# `overworld::PlayerState`/`Direction` -- the tile position/facing/step-progress
+# state `crate::overworld` reads to compose a frame; `engine` itself only
+# depends on `assets`, so this does not drag anything new in either.
 assets = { path = "../assets" }
+engine = { path = "../engine" }
 platform = { path = "../platform" }
 rendering = { path = "../rendering" }

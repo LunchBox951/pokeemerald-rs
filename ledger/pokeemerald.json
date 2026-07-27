@@ -24668,6 +24668,14 @@
       "status": "pending"
     },
     "src/data/object_events/base_oam.h": {
+      "artifacts": {
+        "gObjectEventBaseOam_16x32": {
+          "reason": "16x32 OAM shape/size/priority transcribed as avatar::{PLAYER_OBJ_SHAPE,PLAYER_OBJ_SIZE,PLAYER_OBJ_PRIORITY}.",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/avatar.rs",
+          "spec": "I-3",
+          "status": "rewritten"
+        }
+      },
       "category": "code.header",
       "kind": "file",
       "status": "pending"
@@ -24688,6 +24696,14 @@
       "status": "pending"
     },
     "src/data/object_events/object_event_anims.h": {
+      "artifacts": {
+        "sAnimTable_BrendanMayNormal": {
+          "reason": "Facing/step frame selection (sAnim_Face{South,North,West,East}/sAnim_Go{South,North,West,East}) ported into avatar::frame_for; documented fidelity delta: no left/right foot alternation across steps (PlayerState tracks only the current step's progress, not a cross-step parity counter -- see avatar.rs's module docs).",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/avatar.rs",
+          "spec": "I-3",
+          "status": "rewritten"
+        }
+      },
       "category": "code.header",
       "kind": "file",
       "status": "pending"
@@ -24708,6 +24724,14 @@
       "status": "pending"
     },
     "src/data/object_events/object_event_pic_tables.h": {
+      "artifacts": {
+        "sPicTable_BrendanNormal": {
+          "reason": "9-frame walking-sheet layout (2x4-tile frames, on-foot subset only) ported into avatar::build_sprite_tileset; sPicTable_MayNormal shares the identical frame layout/count and is covered by the same code path (PlayerCharacter::May), not a separate artifact. Running frames are out of v1 scope.",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/avatar.rs",
+          "spec": "I-3",
+          "status": "rewritten"
+        }
+      },
       "category": "code.header",
       "kind": "file",
       "status": "pending"
@@ -25173,6 +25197,14 @@
       "status": "pending"
     },
     "src/event_object_movement.c": {
+      "artifacts": {
+        "SetSpritePosToMapCoords": {
+          "reason": "Player-OBJ screen-position derivation: for the player's own object event mapX/mapY == gSaveBlock1Ptr->pos always, collapsing this to a per-frame-constant OAM origin (PLAYER_OBJ_X/PLAYER_OBJ_Y); the camera/BG scrolls instead (viewport::build_tilemaps). Bike pan-ahead (the only thing that would move dx/dy away from 0) is out of v1 scope.",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/avatar.rs",
+          "spec": "I-3",
+          "status": "rewritten"
+        }
+      },
       "category": "code.source",
       "kind": "file",
       "status": "pending"
@@ -25193,6 +25225,20 @@
       "status": "pending"
     },
     "src/field_camera.c": {
+      "artifacts": {
+        "DrawMetatile": {
+          "reason": "Per-METATILE_LAYER_TYPE bottom/middle/top BG-layer routing of a metatile's 8 raw tile entries, ported into viewport::route_layers; the NORMAL case's 'garbage' bottom-layer write is a documented fidelity delta (drawn transparent instead, since it is implementation-undefined and never reaches the screen behind the always-opaque middle layer in the common case).",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/viewport.rs",
+          "spec": "I-3",
+          "status": "rewritten"
+        },
+        "DrawMetatileAt": {
+          "reason": "Per-position metatile-id lookup plus primary/secondary tileset dispatch (NUM_METATILES_IN_PRIMARY threshold) feeding DrawMetatile, ported into viewport::metatile_layers/cell_at.",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/viewport.rs",
+          "spec": "I-3",
+          "status": "rewritten"
+        }
+      },
       "category": "code.source",
       "kind": "file",
       "status": "pending"
@@ -25325,6 +25371,12 @@
     },
     "src/fieldmap.c": {
       "artifacts": {
+        "GetBorderBlockAt": {
+          "reason": "Border-block fallback for any camera viewport position outside the current layout's own grid, ported into viewport::cell_at (rendering-only; movement's own border handling stays out of MapRuntime's scope per issue #108).",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/viewport.rs",
+          "spec": "I-3",
+          "status": "rewritten"
+        },
         "GetMetatileAttributesById": {
           "reason": "Primary-vs-secondary tileset attribute table selection (NUM_METATILES_IN_PRIMARY split) re-implemented in MapRuntime::metatile_behavior",
           "rust_target": "crates/engine/src/overworld/map_runtime.rs",
@@ -25903,6 +25955,14 @@
       "status": "pending"
     },
     "src/overworld.c": {
+      "artifacts": {
+        "sOverworldBgTemplates": {
+          "reason": "BG0-3 index/priority assignment for the overworld's bottom/middle/top metatile layers, transcribed as viewport::{TOP,MIDDLE,BOTTOM}_{BG_INDEX,PRIORITY} consts; BG0 (weather/other overlay effects) is out of this slice's scope and stays unbound.",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/viewport.rs",
+          "spec": "I-3",
+          "status": "rewritten"
+        }
+      },
       "category": "code.source",
       "kind": "file",
       "status": "pending"
