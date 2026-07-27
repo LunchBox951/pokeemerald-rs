@@ -73,7 +73,7 @@ class TestCheckTransition(unittest.TestCase):
                 (0, 9, 9, 9),
                 (1, 0, 0, 0),
                 marker_head=None,
-                marker_base=None,
+                marker_unchanged=False,
                 marker_rel=MARKER,
             )
         self.assertIn("without the", str(ctx.exception))
@@ -85,7 +85,7 @@ class TestCheckTransition(unittest.TestCase):
             (0, 9, 9, 9),
             (1, 0, 0, 0),
             marker_head=marker("1.0.0.0"),
-            marker_base=None,
+            marker_unchanged=False,
             marker_rel=MARKER,
         )
 
@@ -101,7 +101,7 @@ class TestCheckTransition(unittest.TestCase):
                 (0, 9, 9, 9),
                 (1, 0, 0, 0),
                 marker_head=stale,
-                marker_base=stale,
+                marker_unchanged=True,
                 marker_rel=MARKER,
             )
         self.assertIn("unchanged from the", str(ctx.exception))
@@ -112,7 +112,7 @@ class TestCheckTransition(unittest.TestCase):
                 (1, 0, 0, 0),
                 (2, 0, 0, 0),
                 marker_head=marker("1.0.0.0"),
-                marker_base=marker("1.0.0.0"),
+                marker_unchanged=True,
                 marker_rel=MARKER,
             )
         self.assertIn("approves", str(ctx.exception))
@@ -123,7 +123,7 @@ class TestCheckTransition(unittest.TestCase):
                 (0, 9, 9, 9),
                 (1, 0, 0, 0),
                 marker_head="not a marker at all",
-                marker_base=None,
+                marker_unchanged=False,
                 marker_rel=MARKER,
             )
 
@@ -133,7 +133,7 @@ class TestCheckTransition(unittest.TestCase):
             (0, 1, 2, 5),
             (0, 1, 3, 0),
             marker_head=None,
-            marker_base=None,
+            marker_unchanged=False,
             marker_rel=MARKER,
         )
 
@@ -143,7 +143,7 @@ class TestCheckTransition(unittest.TestCase):
                 (0, 1, 2, 5),
                 (0, 1, 1, 6),
                 marker_head=None,
-                marker_base=None,
+                marker_unchanged=False,
                 marker_rel=MARKER,
             )
 
@@ -349,6 +349,31 @@ class TestFinalGateIntegration(unittest.TestCase):
             0,
         )
 
+    def test_ident_filter_does_not_launder_a_stale_marker(self):
+        # With the `ident` attribute, checkout expands $Id$ so the working
+        # tree bytes differ from the committed blob even though the marker
+        # was never touched. Change detection must be filter-aware (git
+        # diff), or the stale marker reads as fresh and fails the gate open.
+        self.repo.write(".gitattributes", f"{MARKER} ident\n")
+        self.repo.write("VERSION", "0.9.9.9\n")
+        self.repo.write(MARKER, marker("1.0.0.0") + "$Id$\n")
+        self.repo.commit("baseline-with-ident-marker")
+
+        # Simulate the smudged checkout state: $Id$ expanded in the
+        # working tree while the committed blob still holds the bare $Id$.
+        self.repo.write(
+            MARKER,
+            marker("1.0.0.0") + "$Id: 0123456789abcdef0123456789abcdef01234567 $\n",
+        )
+        self.repo.write("VERSION", "1.0.0.0\n")
+
+        self.assertNotEqual(
+            self.repo.run_version_check(
+                base="baseline-with-ident-marker", head="HEAD"
+            ),
+            0,
+        )
+
     def test_version_with_surrounding_whitespace_fails(self):
         # ' 1.0.0.0 ' parses identically after strip() but release tooling
         # tags the raw text -- the exact spelling must be committed.
@@ -402,6 +427,24 @@ class TestMarkerStrictness(unittest.TestCase):
     def test_week_date_is_rejected(self):
         with self.assertRaises(version_check.VersionError):
             version_check.parse_marker(marker("1.0.0.0", "2026-W30-6"), MARKER)
+
+    def test_duplicate_approved_version_lines_rejected(self):
+        raw = (
+            "Approved version: 2.0.0.0\n"
+            "Approved version: 1.0.0.0\n"
+            "Date: 2026-07-25\n"
+        )
+        with self.assertRaises(version_check.VersionError):
+            version_check.parse_marker(raw, MARKER)
+
+    def test_duplicate_date_lines_rejected(self):
+        raw = (
+            "Approved version: 1.0.0.0\n"
+            "Date: 2026-07-25\n"
+            "Date: 2026-07-26\n"
+        )
+        with self.assertRaises(version_check.VersionError):
+            version_check.parse_marker(raw, MARKER)
 
     def test_plain_date_still_accepted(self):
         approved, when = version_check.parse_marker(

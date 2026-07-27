@@ -295,23 +295,34 @@ def parse_marker(raw: str, source: str) -> Tuple[Version, str]:
     Raises ``VersionError`` if either field is missing or malformed. Returns
     the approved version tuple and the raw (validated) date string.
     """
-    version_match = MARKER_VERSION_RE.search(raw)
-    if not version_match:
+    version_matches = MARKER_VERSION_RE.findall(raw)
+    if not version_matches:
         raise VersionError(
             f"{source}: FINAL-gate marker is missing an "
             f"'Approved version: FINAL.MAJOR.MINOR.PATCH' line"
         )
-    date_match = MARKER_DATE_RE.search(raw)
-    if not date_match:
+    if len(version_matches) > 1:
+        raise VersionError(
+            f"{source}: FINAL-gate marker has {len(version_matches)} "
+            f"'Approved version' lines; an approval must name exactly one "
+            f"version"
+        )
+    date_matches = MARKER_DATE_RE.findall(raw)
+    if not date_matches:
         raise VersionError(
             f"{source}: FINAL-gate marker is missing a 'Date: YYYY-MM-DD' line"
         )
+    if len(date_matches) > 1:
+        raise VersionError(
+            f"{source}: FINAL-gate marker has {len(date_matches)} 'Date' "
+            f"lines; an approval must carry exactly one"
+        )
 
     approved_version = parse_version(
-        version_match.group(1), f"{source} (Approved version)"
+        version_matches[0], f"{source} (Approved version)"
     )
 
-    date_text = date_match.group(1)
+    date_text = date_matches[0]
     if not MARKER_DATE_SHAPE_RE.match(date_text):
         raise VersionError(
             f"{source}: FINAL-gate marker Date {date_text!r} is not in "
@@ -328,12 +339,34 @@ def parse_marker(raw: str, source: str) -> Tuple[Version, str]:
     return approved_version, date_text
 
 
+def marker_changed(base: str, head: str, rel_path: str, root: str) -> bool:
+    """True if ``rel_path`` differs between ``base`` and ``head`` per git.
+
+    Delegating to ``git diff`` makes the comparison filter-aware: an
+    ``ident``/eol/smudge filter changes working-tree bytes without changing
+    the committed content, and a byte comparison of filtered text against
+    the raw base blob would read an untouched marker as "changed" (failing
+    the gate OPEN). ``head == 'HEAD'`` compares the working tree (git
+    re-cleans it first); any other head compares the two committed blobs.
+    Errors count as unchanged -- the gate fails closed.
+    """
+    cmd = ["git", "diff", "--quiet", base]
+    if head != "HEAD":
+        cmd.append(head)
+    cmd += ["--", rel_path]
+    try:
+        out = subprocess.run(cmd, capture_output=True, cwd=root)
+    except (FileNotFoundError, OSError):
+        return False
+    return out.returncode == 1
+
+
 def check_transition(
     base: Version,
     head: Version,
     *,
     marker_head: Optional[str],
-    marker_base: Optional[str],
+    marker_unchanged: bool,
     marker_rel: str,
 ) -> None:
     """Validate base -> head; raise VersionError on any disallowed move."""
@@ -368,7 +401,7 @@ def check_transition(
                 f"update the marker to name the exact target version"
             )
 
-        if marker_head == marker_base:
+        if marker_unchanged:
             raise VersionError(
                 f"FINAL-gate marker '{marker_rel}' is unchanged from the "
                 f"base revision; it must be added or updated to record "
@@ -463,11 +496,16 @@ def main(argv: Optional[list] = None) -> int:
         marker_head = read_ref_file(args.head, args.final_gate_marker, root)
         # Base side always reads the committed blob (see read_base_version).
         marker_base = git_show_file(args.base, args.final_gate_marker, root)
+        # Change detection is delegated to git (filter-aware, fails closed);
+        # a marker absent at base is trivially "changed" if present at head.
+        unchanged = marker_base is not None and not marker_changed(
+            args.base, args.head, args.final_gate_marker, root
+        )
         check_transition(
             base_version,
             head_version,
             marker_head=marker_head,
-            marker_base=marker_base,
+            marker_unchanged=unchanged,
             marker_rel=args.final_gate_marker,
         )
     except VersionError as exc:
