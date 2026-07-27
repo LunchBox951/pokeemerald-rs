@@ -240,4 +240,50 @@ fi
 
 echo "ok: autocrlf host config was overridden; checkout is LF byte-for-byte"
 
+echo "=== test 8: a linked-worktree reference at the wrong commit is a hard error ==="
+
+# .git is a FILE in a linked worktree; a `.git` directory test would
+# misclassify it as an unverifiable tarball and accept it unchecked.
+aux_clone="$workdir/aux-clone"
+git_c clone --quiet "$fake_poke" "$aux_clone"
+checkout8="$workdir/checkout8"
+make_main_checkout "$checkout8"
+git_c -C "$aux_clone" worktree add --quiet --detach "$checkout8/pokeemerald" "$sha_b_poke"
+
+set +e
+stderr_out="$(cd "$checkout8" && POKEEMERALD_REMOTE="$fake_poke" MGBA_REMOTE="$fake_mgba" \
+    POKEEMERALD_REF="$sha_a_poke" MGBA_REF="$sha_a_mgba" \
+    ./init.sh 2>&1 >/dev/null)"
+status=$?
+set -e
+
+[[ "$status" -ne 0 ]] || fail "init.sh exited 0 with a worktree-linked reference at the wrong commit"
+echo "$stderr_out" | grep -qF "$sha_b_poke" || fail "worktree-reference error didn't name the actual SHA; got: $stderr_out"
+
+echo "ok: linked-worktree reference at the wrong commit was rejected"
+
+echo "=== test 9: a sparse reference checkout is a hard error ==="
+
+checkout9="$workdir/checkout9"
+make_main_checkout "$checkout9"
+(
+    cd "$checkout9"
+    POKEEMERALD_REMOTE="$fake_poke" MGBA_REMOTE="$fake_mgba" \
+        POKEEMERALD_REF="$sha_a_poke" MGBA_REF="$sha_a_mgba" \
+        ./init.sh >/dev/null
+)
+git -C "$checkout9/pokeemerald" sparse-checkout init 2>/dev/null
+
+set +e
+stderr_out="$(cd "$checkout9" && POKEEMERALD_REMOTE="$fake_poke" MGBA_REMOTE="$fake_mgba" \
+    POKEEMERALD_REF="$sha_a_poke" MGBA_REF="$sha_a_mgba" \
+    ./init.sh 2>&1 >/dev/null)"
+status=$?
+set -e
+
+[[ "$status" -ne 0 ]] || fail "init.sh exited 0 on a sparse reference checkout"
+echo "$stderr_out" | grep -qi "sparse" || fail "sparse-checkout error missing; got: $stderr_out"
+
+echo "ok: sparse reference checkout was rejected"
+
 echo "all tests passed"

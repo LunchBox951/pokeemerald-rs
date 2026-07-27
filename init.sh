@@ -57,7 +57,15 @@ verify_pinned() {
     local dir="$1"
     local ref="$2"
 
-    if [[ ! -d "$dir/.git" ]]; then
+    # Detect real git metadata via git itself: a linked worktree's .git is a
+    # FILE (gitdir: pointer), so a `.git` directory test would misclassify
+    # it as an unverifiable tarball and accept it unchecked. Requiring the
+    # repo's toplevel to be $dir itself keeps a genuine tarball (which would
+    # resolve to the ENCLOSING product repo) on the warn path.
+    local top dir_abs
+    top="$(git -C "$dir" rev-parse --show-toplevel 2>/dev/null || true)"
+    dir_abs="$(cd "$dir" && pwd -P)"
+    if [[ -z "$top" || "$(cd "$top" && pwd -P)" != "$dir_abs" ]]; then
         echo "warning: $dir has no git metadata; cannot verify it matches pinned revision $ref" >&2
         echo "  (byte-identical bootstraps are only guaranteed for git checkouts)" >&2
         return 0
@@ -68,6 +76,14 @@ verify_pinned() {
         echo "error: $dir is at $actual, but init.sh pins it to $ref" >&2
         echo "  to update: rm -rf $dir && ./init.sh" >&2
         echo "  (if this pin should move, that is a deliberate change to the *_REF constant in init.sh, not a silent skip)" >&2
+        exit 1
+    fi
+    # A sparse checkout hides sparse-excluded tracked paths from status
+    # (skip-worktree), so HEAD + clean-status can both pass while required
+    # files are physically absent. Reject it outright.
+    if [[ "$(git -C "$dir" config --bool core.sparseCheckout 2>/dev/null || echo false)" == "true" ]]; then
+        echo "error: $dir is a sparse checkout; tracked paths may be missing from disk" >&2
+        echo "  to restore the full pinned tree: rm -rf $dir && ./init.sh" >&2
         exit 1
     fi
     local dirty
@@ -137,7 +153,10 @@ clone_and_pin() {
     local target="$2"
     local ref="$3"
 
-    if [[ -d "$target/.git" ]]; then
+    # Any existing directory is an existing checkout to validate — testing
+    # for a `.git` DIRECTORY would misroute a linked worktree (.git file)
+    # into the clone below, which fails on the non-empty destination.
+    if [[ -d "$target" ]]; then
         verify_pinned "$target" "$ref"
         echo "skip: $target already at pinned revision $ref"
         return
