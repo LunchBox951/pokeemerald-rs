@@ -45,6 +45,15 @@ if ! command -v git >/dev/null 2>&1; then
     exit 1
 fi
 
+if ! command -v python3 >/dev/null 2>&1; then
+    echo "error: python3 is required (byte-verifies the pinned reference trees)" >&2
+    exit 1
+fi
+
+# q <path> — shell-escape a path for the copy-pasteable recovery commands
+# (single-quote wrapping breaks on embedded apostrophes).
+q() { printf '%q' "$1"; }
+
 git_dir_abs="$(cd "$(git rev-parse --git-dir)" && pwd)"
 git_common_dir_abs="$(cd "$(git rev-parse --git-common-dir)" && pwd)"
 
@@ -68,14 +77,14 @@ verify_pinned() {
     if [[ -z "$top" || "$(cd "$top" && pwd -P)" != "$dir_abs" ]]; then
         echo "error: $dir has no git metadata; cannot verify it matches pinned revision $ref" >&2
         echo "  an unverifiable tree must not feed the extraction pipeline (fail closed)" >&2
-        echo "  to restore a verifiable pinned tree: rm -rf -- '$dir' && ./init.sh" >&2
+        echo "  to restore a verifiable pinned tree: rm -rf -- $(q "$dir") && ./init.sh" >&2
         exit 1
     fi
     local actual
     actual="$(git -C "$dir" rev-parse HEAD)"
     if [[ "$actual" != "$ref" ]]; then
         echo "error: $dir is at $actual, but init.sh pins it to $ref" >&2
-        echo "  to update: rm -rf -- '$dir' && ./init.sh" >&2
+        echo "  to update: rm -rf -- $(q "$dir") && ./init.sh" >&2
         echo "  (if this pin should move, that is a deliberate change to the *_REF constant in init.sh, not a silent skip)" >&2
         exit 1
     fi
@@ -84,7 +93,7 @@ verify_pinned() {
     # files are physically absent. Reject it outright.
     if [[ "$(git -C "$dir" config --bool core.sparseCheckout 2>/dev/null || echo false)" == "true" ]]; then
         echo "error: $dir is a sparse checkout; tracked paths may be missing from disk" >&2
-        echo "  to restore the full pinned tree: rm -rf -- '$dir' && ./init.sh" >&2
+        echo "  to restore the full pinned tree: rm -rf -- $(q "$dir") && ./init.sh" >&2
         exit 1
     fi
     # Reject repo-local machinery that can rewrite what status compares.
@@ -94,7 +103,7 @@ verify_pinned() {
     # hide, which is the pin gate's actual job.)
     if [[ -n "$(git -C "$dir" for-each-ref refs/replace 2>/dev/null)" ]]; then
         echo "error: $dir has git replacement refs (refs/replace); verification would see substituted objects" >&2
-        echo "  to restore the pinned tree: rm -rf -- '$dir' && ./init.sh" >&2
+        echo "  to restore the pinned tree: rm -rf -- $(q "$dir") && ./init.sh" >&2
         exit 1
     fi
     # Repo-LOCAL filter config only: a host-global filter (git-lfs is
@@ -104,7 +113,7 @@ verify_pinned() {
     # clean-tree check itself.
     if [[ -n "$(git -C "$dir" config --local --get-regexp '^filter\.' 2>/dev/null || true)" ]]; then
         echo "error: $dir configures content filters (filter.*); they can map tampered bytes back to the committed blob" >&2
-        echo "  to restore the pinned tree: rm -rf -- '$dir' && ./init.sh" >&2
+        echo "  to restore the pinned tree: rm -rf -- $(q "$dir") && ./init.sh" >&2
         exit 1
     fi
     local attrs
@@ -112,7 +121,7 @@ verify_pinned() {
     [[ "$attrs" == /* ]] || attrs="$dir/$attrs"
     if [[ -s "$attrs" ]]; then
         echo "error: $dir has local attribute overrides ($attrs); they can alter content comparison" >&2
-        echo "  to restore the pinned tree: rm -rf -- '$dir' && ./init.sh" >&2
+        echo "  to restore the pinned tree: rm -rf -- $(q "$dir") && ./init.sh" >&2
         exit 1
     fi
     # assume-unchanged / skip-worktree index bits hide tracked-file edits
@@ -122,7 +131,7 @@ verify_pinned() {
     if [[ -n "$hidden" ]]; then
         echo "error: $dir has index-hidden paths (assume-unchanged/skip-worktree); edits there evade the clean check:" >&2
         printf '%s\n' "$hidden" | head -10 >&2
-        echo "  to restore the pinned tree: rm -rf -- '$dir' && ./init.sh" >&2
+        echo "  to restore the pinned tree: rm -rf -- $(q "$dir") && ./init.sh" >&2
         exit 1
     fi
     local dirty
@@ -143,67 +152,129 @@ verify_pinned() {
     if [[ -n "$dirty" ]]; then
         echo "error: $dir is at the pinned revision but its tree is not clean:" >&2
         printf '%s\n' "$dirty" | head -20 >&2
-        echo "  to restore the pinned tree: rm -rf -- '$dir' && ./init.sh" >&2
+        echo "  to restore the pinned tree: rm -rf -- $(q "$dir") && ./init.sh" >&2
         exit 1
     fi
     verify_tree_bytes "$dir" "$ref"
 }
 
 # verify_tree_bytes <dir> <ref> — every tracked file's on-disk bytes must
-# equal its pinned blob. `git status` trusts machinery an attacker (or an
-# unlucky config) controls — clean filters, the stat cache, fsmonitor — so
-# tracked CONTENT is verified by hashing raw bytes against the pinned
-# tree's blob IDs. The only sanctioned divergence is the eol conversion
-# declared by the tracked .gitattributes: that file's own bytes are
-# verified by the same comparison (any tamper beyond a pure CRLF render of
-# its committed blob surfaces here), and an eol=crlf path is accepted only
-# when its bytes are exactly the CRLF rendering of the committed blob —
-# fully determined by the blob, so nothing can be laundered through it.
+# equal its pinned blob. `git status` trusts machinery a config controls —
+# clean filters, the stat cache, fsmonitor — so tracked CONTENT is verified
+# by hashing raw bytes against the pinned tree's blob IDs. The only
+# sanctioned divergence is an eol=crlf path (per the tracked .gitattributes,
+# itself byte-verified by the same pass) whose bytes are exactly the CRLF
+# rendering of the committed blob — git only converts existing LFs, so an
+# unterminated final line stays unterminated, and the rendering is fully
+# blob-determined (nothing can be laundered through it). Implemented in
+# python for byte-exact, quoting-proof path handling (ls-tree -z).
 verify_tree_bytes() {
     local dir="$1"
     local ref="$2"
-    local listing
-    listing="$(mktemp)"
-    # <oid>\t<mode>\t<path> for every blob in the pinned tree
-    git --no-replace-objects -C "$dir" ls-tree -r "$ref" \
-        | awk -F'\t' '{ split($1, a, " "); if (a[2] == "blob") print a[3] "\t" a[1] "\t" $2 }' \
-        >"$listing"
-    awk -F'\t' '$2 != "120000" { print $3 }' "$listing" >"$listing.paths"
-    awk -F'\t' '$2 != "120000" { print $1 }' "$listing" >"$listing.expected"
-    (cd "$dir" && git hash-object --no-filters --stdin-paths <"$listing.paths" 2>/dev/null || true) \
-        >"$listing.actual"
-    local bad path really_bad=""
-    bad="$(paste "$listing.expected" "$listing.actual" "$listing.paths" \
-        | awk -F'\t' '$1 != $2 { print $3 }')"
-    # A literal CR in the sed script keeps this portable: BSD sed reads the
-    # GNU-style '\r' escape as a literal 'r', which would reject every
-    # legitimate eol=crlf checkout on macOS.
-    local cr
-    cr="$(printf '\r')"
-    while IFS= read -r path; do
-        [[ -z "$path" ]] && continue
-        local eolattr oid
-        eolattr="$(git -C "$dir" check-attr eol -- "$path" | awk -F': ' '{ print $3 }')"
-        oid="$(git --no-replace-objects -C "$dir" rev-parse "$ref:$path")"
-        if [[ "$eolattr" == "crlf" ]] \
-            && cmp -s <(git --no-replace-objects -C "$dir" cat-file blob "$oid" | sed "s/\$/${cr}/") "$dir/$path"; then
+    if ! python3 - "$dir" "$ref" <<'PYEOF'
+import hashlib
+import os
+import subprocess
+import sys
+
+d, ref = sys.argv[1], sys.argv[2]
+
+
+def run(*args):
+    r = subprocess.run(
+        ["git", "--no-replace-objects", "-C", d, *args], capture_output=True
+    )
+    if r.returncode != 0:
+        sys.stderr.write("error: git %s failed in %s\n" % (args[0], d))
+        sys.exit(1)
+    return r.stdout
+
+
+entries = []
+for rec in run("ls-tree", "-r", "-z", ref).split(b"\x00"):
+    if not rec:
+        continue
+    meta, path = rec.split(b"\t", 1)
+    mode, typ, oid = meta.split(b" ")
+    if typ == b"blob":
+        entries.append((mode.decode(), oid.decode(), path))
+
+
+def blob_oid(data, want):
+    algo = hashlib.sha1 if len(want) == 40 else hashlib.sha256
+    h = algo(b"blob %d\x00" % len(data))
+    h.update(data)
+    return h.hexdigest()
+
+
+# eol attribute per path, batched, NUL-delimited (no quoting ambiguity)
+attr = subprocess.run(
+    ["git", "-C", d, "check-attr", "--stdin", "-z", "eol"],
+    input=b"\x00".join(p for _, _, p in entries) + b"\x00",
+    capture_output=True,
+)
+eol = {}
+fields = attr.stdout.split(b"\x00")
+for i in range(0, len(fields) - 2, 3):
+    eol[fields[i]] = fields[i + 2].decode(errors="replace")
+
+cat = subprocess.Popen(
+    ["git", "--no-replace-objects", "-C", d, "cat-file", "--batch"],
+    stdin=subprocess.PIPE,
+    stdout=subprocess.PIPE,
+)
+
+
+def blob_content(oid):
+    cat.stdin.write(oid.encode() + b"\n")
+    cat.stdin.flush()
+    header = cat.stdout.readline().split()
+    if len(header) < 3 or header[1] != b"blob":
+        sys.stderr.write("error: cannot read blob %s\n" % oid)
+        sys.exit(1)
+    data = cat.stdout.read(int(header[2]))
+    cat.stdout.read(1)  # record terminator
+    return data
+
+
+bad = []
+droot = d.encode()
+for mode, oid, path in entries:
+    fs = os.path.join(droot, path)
+    if mode == "120000":
+        try:
+            target = os.readlink(fs)
+        except OSError:
+            bad.append(path)
             continue
-        fi
-        really_bad+="$path"$'\n'
-    done <<<"$bad"
-    # symlink entries: the on-disk link target must equal the blob text
-    local oid mode
-    while IFS=$'\t' read -r oid mode path; do
-        [[ "$mode" == "120000" ]] || continue
-        if [[ "$(readlink "$dir/$path" 2>/dev/null || true)" != "$(git --no-replace-objects -C "$dir" cat-file blob "$oid")" ]]; then
-            really_bad+="$path"$'\n'
-        fi
-    done <"$listing"
-    rm -f "$listing" "$listing.paths" "$listing.expected" "$listing.actual"
-    if [[ -n "$really_bad" ]]; then
-        echo "error: $dir tracked content differs byte-for-byte from the pinned tree at $ref:" >&2
-        printf '%s' "$really_bad" | head -20 >&2
-        echo "  to restore the pinned tree: rm -rf -- '$dir' && ./init.sh" >&2
+        if target != blob_content(oid):
+            bad.append(path)
+        continue
+    try:
+        with open(fs, "rb") as fh:
+            data = fh.read()
+    except OSError:
+        bad.append(path)
+        continue
+    if blob_oid(data, oid) == oid:
+        continue
+    if eol.get(path) == "crlf" and data == blob_content(oid).replace(
+        b"\n", b"\r\n"
+    ):
+        continue
+    bad.append(path)
+
+if bad:
+    sys.stderr.write(
+        "error: %s tracked content differs byte-for-byte from the pinned tree at %s:\n"
+        % (d, ref)
+    )
+    for p in bad[:20]:
+        sys.stderr.write("  %s\n" % p.decode(errors="replace"))
+    sys.exit(1)
+PYEOF
+    then
+        echo "  to restore the pinned tree: rm -rf -- $(q "$dir") && ./init.sh" >&2
         exit 1
     fi
 }
@@ -235,7 +306,7 @@ if [[ "$git_dir_abs" != "$git_common_dir_abs" ]]; then
             expected="$(cd "$src" && pwd -P)"
             if [[ "$resolved" != "$expected" ]]; then
                 echo "error: $name is a symlink to '${resolved:-<broken>}', not the validated $src" >&2
-                echo "  to fix: rm -- '$name' && ./init.sh" >&2
+                echo "  to fix: rm -- $(q "$name") && ./init.sh" >&2
                 exit 1
             fi
             echo "skip: $name already linked to $src"

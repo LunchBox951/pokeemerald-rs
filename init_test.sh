@@ -596,7 +596,11 @@ fake_poke21="$workdir/remote-pokeemerald-21"
 sha21="$(make_fake_remote "$fake_poke21")"
 printf '*.pal text eol=crlf\n' >"$fake_poke21/.gitattributes"
 printf 'line one\nline two\n' >"$fake_poke21/colors.pal"
-git_c -C "$fake_poke21" add .gitattributes colors.pal
+# Unterminated final line: git converts only existing LFs, so the final
+# line must stay unterminated in the CRLF rendering.
+printf 'line one\nno final newline' >"$fake_poke21/tail.pal"
+ln -s colors.pal "$fake_poke21/lien vers palette"
+git_c -C "$fake_poke21" add -A
 git_c -C "$fake_poke21" commit --quiet -m "crlf-attributed palette"
 sha21="$(git -C "$fake_poke21" rev-parse HEAD)"
 
