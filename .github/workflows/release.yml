@@ -46,7 +46,17 @@ jobs:
           echo "tag=${tag}" >> "$GITHUB_OUTPUT"
           echo "final=${final}" >> "$GITHUB_OUTPUT"
       - name: Validate version before release
-        run: python3 scripts/version_check.py --base origin/main --head HEAD
+        env:
+          # Validate the transition THIS push made: compare against main's
+          # state before the push, not origin/main (which already includes
+          # the push and would make every check a self-comparison no-op).
+          BEFORE_SHA: ${{ github.event.before || '' }}
+        run: |
+          base="${BEFORE_SHA}"
+          if [ -z "${base}" ] || ! git cat-file -e "${base}" 2>/dev/null; then
+            base="HEAD^1"
+          fi
+          python3 scripts/version_check.py --base "${base}" --head HEAD
 
   # Linux build: `cargo build --release`, then package the binary (+ docs)
   # into a version-named tarball.

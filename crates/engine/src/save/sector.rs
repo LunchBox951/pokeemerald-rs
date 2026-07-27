@@ -150,9 +150,15 @@ impl Sector {
     /// `signature == SECTOR_SIGNATURE && checksum == CalculateChecksum(...)`
     /// check inlined at each of upstream's `CopySaveSlotData`,
     /// `GetSaveValidStatus`, and `TryLoadSaveSector`.
+    ///
+    /// `expected_len` greater than [`SECTOR_DATA_SIZE`] can never describe a
+    /// real sector's payload (upstream's `SaveSectorLocation::size` is
+    /// statically bounded by it too, see [`Sector::write`]), so such a
+    /// length simply reports `false` instead of panicking.
     #[must_use]
     pub fn is_valid(&self, expected_len: usize) -> bool {
-        self.signature() == SECTOR_SIGNATURE
+        expected_len <= SECTOR_DATA_SIZE
+            && self.signature() == SECTOR_SIGNATURE
             && self.stored_checksum() == checksum::checksum(&self.data()[..expected_len])
     }
 }
@@ -220,5 +226,18 @@ mod tests {
     fn write_panics_on_oversized_payload() {
         let data = vec![0u8; SECTOR_DATA_SIZE + 1];
         let _ = Sector::write(0, &data, 0);
+    }
+
+    #[test]
+    fn is_valid_accepts_expected_len_at_full_data_size() {
+        let data = [0xAAu8; SECTOR_DATA_SIZE];
+        let sector = Sector::write(1, &data, 7);
+        assert!(sector.is_valid(SECTOR_DATA_SIZE));
+    }
+
+    #[test]
+    fn is_valid_reports_false_instead_of_panicking_when_oversized() {
+        let sector = Sector::write(0, &[], 0);
+        assert!(!sector.is_valid(SECTOR_DATA_SIZE + 1));
     }
 }
