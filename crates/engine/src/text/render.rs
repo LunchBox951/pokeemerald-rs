@@ -15,13 +15,13 @@
 //! `DecompressGlyph_*`/`GetGlyphWidth_*` family index
 //! `gFont*LatinGlyphWidths[glyphId]` with the raw encoded byte, no
 //! translation). [`super::char_to_byte`] / [`super::byte_from_symbol`] are
-//! therefore the exact glyph-id lookup this module needs — see
-//! [`glyph_id_for_token`].
+//! therefore the exact glyph-id lookup this module needs — see the private
+//! `glyph_id_for_token` helper.
 //!
 //! # State machine
 //!
-//! [`PrinterState`] mirrors upstream's `RENDER_STATE_*` enum, reduced to the
-//! v1 path this slice covers:
+//! The printer's internal state mirrors upstream's `RENDER_STATE_*` enum,
+//! reduced to the v1 path this slice covers:
 //!
 //! * `HandleChar` (`RENDER_STATE_HANDLE_CHAR`) — the steady state. Consuming
 //!   a [`super::Token::Newline`] (`\n`), a colour/font/font-reset extended
@@ -32,8 +32,8 @@
 //! * `AwaitingScroll` / `Scrolling` (`RENDER_STATE_SCROLL_START` /
 //!   `RENDER_STATE_SCROLL`) — `\l` (`CHAR_PROMPT_SCROLL`): wait for
 //!   [`Printer::tick`]'s `confirm_pressed`, then scroll the box up one line
-//!   over multiple frames at [`TextSpeed::scroll_px_per_frame`] (upstream
-//!   `sWindowVerticalScrollSpeeds`).
+//!   over multiple frames at the private `TextSpeed::scroll_px_per_frame`
+//!   rate (upstream `sWindowVerticalScrollSpeeds`).
 //! * `AwaitingClear` (`RENDER_STATE_CLEAR`) — `\p` (`CHAR_PROMPT_CLEAR`):
 //!   wait for `confirm_pressed`, then reset the cursor to the box's origin
 //!   (a fresh "page") on the same tick — upstream combines the wait check
