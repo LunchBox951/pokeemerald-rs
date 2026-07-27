@@ -327,6 +327,42 @@ class TestFinalGateIntegration(unittest.TestCase):
             self.repo.run_version_check_from_outside(base="approved-final"), 0
         )
 
+    def test_symlinked_ancestor_directory_is_treated_as_absent(self):
+        # A symlinked ANCESTOR of the marker path (docs/release -> stash)
+        # lets open() read a pre-staged approval that `git show` cannot
+        # see, desynchronizing the two sides. Any symlinked component must
+        # fail closed.
+        self.repo.write("VERSION", "0.9.9.9\n")
+        self.repo.write("stash/final-gate-approved.md", marker("1.0.0.0"))
+        self.repo.commit("baseline-with-prestaged-blob")
+
+        self.repo.write("VERSION", "1.0.0.0\n")
+        release_dir = self.repo.path / "docs/release"
+        release_dir.parent.mkdir(parents=True, exist_ok=True)
+        release_dir.symlink_to(self.repo.path / "stash")
+        self.repo.commit("symlinked-ancestor")
+
+        self.assertNotEqual(
+            self.repo.run_version_check(
+                base="baseline-with-prestaged-blob", head="HEAD"
+            ),
+            0,
+        )
+
+    def test_version_with_surrounding_whitespace_fails(self):
+        # ' 1.0.0.0 ' parses identically after strip() but release tooling
+        # tags the raw text -- the exact spelling must be committed.
+        self.repo.write("VERSION", "0.9.9.9\n")
+        self.repo.commit("baseline")
+
+        self.repo.write("VERSION", " 1.0.0.0 \n")
+        self.repo.write(MARKER, marker("1.0.0.0"))
+        self.repo.commit("whitespace-version")
+
+        self.assertNotEqual(
+            self.repo.run_version_check(base="baseline", head="HEAD"), 0
+        )
+
     def test_symlinked_marker_is_treated_as_absent(self):
         # open() follows a symlink while `git show` returns its target path
         # text, so a symlinked marker reads "changed" without its bytes ever

@@ -151,7 +151,17 @@ def parse_version(raw: str, source: str) -> Version:
     Rejects a leading ``v`` prefix, extra/missing components, signs, blanks,
     and non-digit characters. ``source`` is used only for error messages.
     """
-    text = raw.strip()
+    # Strip only trailing newlines: the tag is built from the raw file text
+    # (`v$(cat VERSION)`), and command substitution strips trailing newlines
+    # too -- but any OTHER surrounding whitespace would ship in the tag
+    # name, so it is rejected rather than silently normalized away.
+    text = raw.rstrip("\n")
+    if text != text.strip():
+        raise VersionError(
+            f"{source}: VERSION has surrounding whitespace in {text!r}; "
+            f"release tooling tags the raw text, so the spelling must be "
+            f"exact"
+        )
     if not text:
         raise VersionError(f"{source}: VERSION is empty")
     if text[:1] in ("v", "V"):
@@ -206,15 +216,30 @@ def read_ref_file(ref: str, rel_path: str, root: str) -> Optional[str]:
     sides comparable.
     """
     if ref == "HEAD":
-        path = os.path.join(root, rel_path)
-        if os.path.islink(path):
+        if _any_component_is_symlink(root, rel_path):
             return None
+        path = os.path.join(root, rel_path)
         try:
             with open(path, "r", encoding="utf-8") as fh:
                 return fh.read()
         except OSError:
             return None
     return git_show_file(ref, rel_path, root)
+
+
+def _any_component_is_symlink(root: str, rel_path: str) -> bool:
+    """True if any path component of ``rel_path`` under ``root`` is a symlink.
+
+    Checking only the leaf is not enough: a symlinked ancestor directory
+    (e.g. ``docs/release`` -> elsewhere) makes ``open()`` read content that
+    ``git show`` cannot see, silently desynchronizing the two sides.
+    """
+    current = root
+    for part in rel_path.replace("\\", "/").split("/"):
+        current = os.path.join(current, part)
+        if os.path.islink(current):
+            return True
+    return False
 
 
 def git_show_file(ref: str, rel_path: str, root: str) -> Optional[str]:
