@@ -230,6 +230,17 @@ pub enum TextError {
     Truncated(u8),
     /// A `char` was requested for encoding but has no byte in the Gen-3 table.
     UnencodableChar(char),
+    /// A [`Token::ExtCtrl`] was given an `args` count that does not match the
+    /// canonical arity for its sub-code (per [`ext_ctrl_code_len`]). Carries the
+    /// sub-code, the expected argument count, and the number actually given.
+    ExtCtrlArity {
+        /// The sub-code byte whose arity was violated.
+        sub: u8,
+        /// The canonical argument count for `sub`, per [`ext_ctrl_code_len`].
+        expected: u8,
+        /// The argument count actually supplied.
+        got: usize,
+    },
 }
 
 impl fmt::Display for TextError {
@@ -241,6 +252,10 @@ impl fmt::Display for TextError {
             }
             Self::Truncated(b) => write!(f, "control code {b:#04x} truncated at end of input"),
             Self::UnencodableChar(c) => write!(f, "character {c:?} has no Gen-3 encoding"),
+            Self::ExtCtrlArity { sub, expected, got } => write!(
+                f,
+                "extended control {sub:#04x} takes {expected} argument byte(s), got {got}"
+            ),
         }
     }
 }
@@ -422,7 +437,10 @@ pub fn decode_to_string(bytes: &[u8]) -> Result<String, TextError> {
 ///
 /// # Errors
 /// Returns [`TextError::UnencodableChar`] if a [`Token::Char`] holds a glyph
-/// with no byte in the Gen-3 table.
+/// with no byte in the Gen-3 table, or [`TextError::ExtCtrlArity`] if a
+/// [`Token::ExtCtrl`]'s `args` count does not match the sub-code's canonical
+/// arity (per [`ext_ctrl_code_len`]) — the encoder must never emit a control
+/// code its own [`decode`] would reject or misparse.
 pub fn encode(tokens: &[Token]) -> Result<Vec<u8>, TextError> {
     let mut out = Vec::new();
     for tok in tokens {
@@ -450,6 +468,18 @@ pub fn encode(tokens: &[Token]) -> Result<Vec<u8>, TextError> {
                 out.push(*idx);
             }
             Token::ExtCtrl { sub, args } => {
+                // ext_ctrl_code_len includes the sub-code byte itself, so the
+                // canonical argument count is one less. Reject any mismatch
+                // rather than emit bytes decode() would reject (Truncated) or
+                // misparse (excess bytes reinterpreted as glyphs/controls).
+                let expected = ext_ctrl_code_len(*sub) - 1;
+                if args.len() != expected as usize {
+                    return Err(TextError::ExtCtrlArity {
+                        sub: *sub,
+                        expected,
+                        got: args.len(),
+                    });
+                }
                 out.push(EXT_CTRL_CODE_BEGIN);
                 out.push(*sub);
                 out.extend_from_slice(args);
@@ -917,6 +947,98 @@ mod tests {
     fn unencodable_char_is_an_error() {
         let err = encode_str("π").unwrap_err();
         assert_eq!(err, TextError::UnencodableChar('π'));
+    }
+
+    #[test]
+    fn encode_rejects_ext_ctrl_missing_args() {
+        // COLOR (0x01) requires exactly one arg byte; encode must not emit a
+        // truncated `[0xFC, 0x01]` that its own decode() rejects.
+        let tok = Token::ExtCtrl {
+            sub: 0x01,
+            args: vec![],
+        };
+        let err = encode(&[tok]).unwrap_err();
+        assert_eq!(
+            err,
+            TextError::ExtCtrlArity {
+                sub: 0x01,
+                expected: 1,
+                got: 0,
+            }
+        );
+    }
+
+    #[test]
+    fn encode_rejects_ext_ctrl_excess_args() {
+        // RESET_FONT (0x07) takes no arguments; encode must not accept an
+        // excess byte that would decode back as unrelated text.
+        let tok = Token::ExtCtrl {
+            sub: 0x07,
+            args: vec![0xBB],
+        };
+        let err = encode(&[tok]).unwrap_err();
+        assert_eq!(
+            err,
+            TextError::ExtCtrlArity {
+                sub: 0x07,
+                expected: 0,
+                got: 1,
+            }
+        );
+    }
+
+    #[test]
+    fn encode_rejects_ext_ctrl_wrong_multi_arg_count() {
+        // COLOR_HIGHLIGHT_SHADOW (0x04) takes exactly three arg bytes.
+        let too_few = Token::ExtCtrl {
+            sub: 0x04,
+            args: vec![0x01, 0x02],
+        };
+        assert_eq!(
+            encode(&[too_few]).unwrap_err(),
+            TextError::ExtCtrlArity {
+                sub: 0x04,
+                expected: 3,
+                got: 2,
+            }
+        );
+
+        let too_many = Token::ExtCtrl {
+            sub: 0x04,
+            args: vec![0x01, 0x02, 0x03, 0x04],
+        };
+        assert_eq!(
+            encode(&[too_many]).unwrap_err(),
+            TextError::ExtCtrlArity {
+                sub: 0x04,
+                expected: 3,
+                got: 4,
+            }
+        );
+    }
+
+    #[test]
+    fn encode_accepts_correct_ext_ctrl_arity_and_round_trips() {
+        // Valid extended controls at each arity (0, 1, 3 args) still encode
+        // and decode losslessly.
+        for tok in [
+            Token::ExtCtrl {
+                sub: 0x07, // RESET_FONT, 0 args
+                args: vec![],
+            },
+            Token::ExtCtrl {
+                sub: 0x01, // COLOR, 1 arg
+                args: vec![0x02],
+            },
+            Token::ExtCtrl {
+                sub: 0x04, // COLOR_HIGHLIGHT_SHADOW, 3 args
+                args: vec![0x01, 0x02, 0x03],
+            },
+        ] {
+            let bytes = encode(std::slice::from_ref(&tok)).unwrap();
+            let toks = decode(&bytes).unwrap();
+            assert_eq!(toks, vec![tok]);
+        }
     }
 
     #[test]
