@@ -20,6 +20,7 @@ import unittest
 from pathlib import Path
 
 _SCRIPT = Path(__file__).resolve().parent / "select_promoted_release.sh"
+_TARGET_SCRIPT = Path(__file__).resolve().parent / "select_promotion_target.sh"
 
 _ENV = {
     "GIT_AUTHOR_NAME": "Test",
@@ -123,6 +124,11 @@ class SelectPromotedReleaseTest(unittest.TestCase):
         self.m1 = merge(self.work, "release/0.1", "2026-07-21T00:00:00")
         self.m2 = merge(self.work, "release/0.2", "2026-07-22T00:00:00")
 
+        # The rest of the channel ladder, still at base: nothing promoted
+        # beyond unstable yet.
+        run(self.work, "git", "branch", "stable", base)
+        run(self.work, "git", "branch", "main", base)
+
         run(
             self.work,
             "git",
@@ -131,6 +137,8 @@ class SelectPromotedReleaseTest(unittest.TestCase):
             "release/0.1",
             "release/0.2",
             "unstable",
+            "stable",
+            "main",
         )
 
         run(root, "git", "clone", str(self.remote), str(self.checkout))
@@ -346,6 +354,58 @@ class SelectPromotedReleaseTest(unittest.TestCase):
             content="direct",
         )
         self.assertEqual(self.select(sha), "")
+
+
+class SelectPromotionTargetTest(unittest.TestCase):
+    """Rung routing: the promotion PR targets the lowest uncleared rung.
+
+    Reuses SelectPromotedReleaseTest's fixture via delegation (subclassing
+    would re-run every inherited test)."""
+
+    def setUp(self):
+        self._fixture = SelectPromotedReleaseTest("run")
+        self._fixture.setUp()
+        self.work = self._fixture.work
+        self.checkout = self._fixture.checkout
+        self.refetch = self._fixture.refetch
+        self._advance_r02 = self._fixture._advance_r02
+
+    def tearDown(self):
+        self._fixture.tearDown()
+
+    def target(self, branch, expect_rc=0):
+        result = run(self.checkout, str(_TARGET_SCRIPT), branch, check=False)
+        self.assertEqual(
+            result.returncode, expect_rc,
+            msg=f"stdout={result.stdout!r} stderr={result.stderr!r}",
+        )
+        return result.stdout.strip()
+
+    def test_stationary_tip_targets_the_next_rung(self):
+        # release/0.2 is contained in unstable but not stable: the normal
+        # next-rung promotion.
+        self.assertEqual(self.target("release/0.2"), "stable")
+
+    def test_advanced_tip_reclears_the_entry_rung(self):
+        # The round-5 confirmed defect: a tip that advanced past what
+        # unstable took must go back to unstable — never on toward a rung
+        # its new commits have not earned (target=merged routed a stable
+        # push's re-clear to stable, which require-rung-cleared then
+        # permanently blocks).
+        self._advance_r02()
+        self.refetch()
+        self.assertEqual(self.target("release/0.2"), "unstable")
+
+    def test_fully_promoted_tip_targets_nothing(self):
+        for rung in ("stable", "main"):
+            run(self.work, "git", "checkout", rung)
+            merge(self.work, "release/0.2", "2026-07-26T12:00:00")
+        run(self.work, "git", "push", "origin", "stable", "main")
+        self.refetch()
+        self.assertEqual(self.target("release/0.2"), "")
+
+    def test_unknown_branch_fails(self):
+        self.target("release/9.9", expect_rc=2)
 
 
 if __name__ == "__main__":

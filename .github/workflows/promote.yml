@@ -99,32 +99,27 @@ jobs:
           release_branch="$(scripts/select_promoted_release.sh "${GITHUB_SHA}")"
           select_rc=$?
           set -e
-          if [ "${select_rc}" -eq 4 ]; then
-            # The promoted branch gained commits after this merge; those
-            # commits have not cleared the rung just pushed to. Re-open the
-            # CURRENT rung's PR instead of advancing an unvetted tip
-            # (RELEASE.md: a branch that moves after clearing a rung
-            # re-clears it).
-            target="${merged}"
-          elif [ "${select_rc}" -ne 0 ]; then
+          # exit 4 = branch advanced past the merged commit; the rung walk
+          # below routes that to a re-clear. Anything else nonzero is an
+          # error (ambiguous topology etc.) — surface it.
+          if [ "${select_rc}" -ne 0 ] && [ "${select_rc}" -ne 4 ]; then
             exit "${select_rc}"
           fi
           if [ -z "${release_branch}" ]; then
             echo "No release/* branch merged into ${merged}; nothing to promote."
             exit 0
           fi
-          # Re-validate against the LIVE tip: `gh pr create --head` binds to
-          # the branch's server-side tip, not the checkout snapshot the
-          # selector classified. A branch that advanced since checkout must
-          # take the re-clear path, not ride a stale exit-0.
+          # Re-fetch the LIVE tip: `gh pr create --head` binds to the
+          # branch's server-side tip, not the checkout snapshot the selector
+          # classified — routing must use what the PR will actually carry.
           git fetch origin "+refs/heads/${release_branch}:refs/remotes/origin/${release_branch}"
-          second_parent="$(git rev-parse "${GITHUB_SHA}^2")"
-          if [ "${select_rc}" -eq 0 ] && [ "$(git rev-parse "origin/${release_branch}")" != "${second_parent}" ]; then
-            echo "${release_branch} advanced after checkout; its new tip must re-clear ${merged}."
-            target="${merged}"
-          fi
-          if git merge-base --is-ancestor "origin/${release_branch}" "origin/${target}"; then
-            echo "${release_branch} already contained in ${target}; nothing to open."
+          # Route to the LOWEST rung the live tip has not cleared: the rung
+          # above the one just pushed for a stationary tip, or a re-clear of
+          # an earlier rung for a tip that advanced (never a higher rung the
+          # new commits have not earned).
+          target="$(scripts/select_promotion_target.sh "${release_branch}")"
+          if [ -z "${target}" ]; then
+            echo "${release_branch} already contained in every channel; nothing to open."
             exit 0
           fi
           existing="$(gh pr list --head "${release_branch}" --base "${target}" --state open --json number --jq 'length')"
@@ -136,8 +131,9 @@ jobs:
           case "${target}" in
             stable|main) labels+=(--label "needs-operator") ;;
           esac
-          if [ "${target}" = "${merged}" ]; then
-            reason="Automated re-clear promotion opened by promote.yml: ${release_branch} advanced past the commit just merged into ${merged}, so its new tip must re-clear this rung."
+          second_parent="$(git rev-parse "${GITHUB_SHA}^2")"
+          if [ "$(git rev-parse "origin/${release_branch}")" != "${second_parent}" ]; then
+            reason="Automated re-clear promotion opened by promote.yml: ${release_branch} advanced past the commit just merged into ${merged}, so its new tip must re-clear ${target}."
           else
             reason="Automated next-rung promotion opened by promote.yml after ${release_branch} merged into ${merged}."
           fi
