@@ -104,6 +104,30 @@ impl MosaicSize {
             origin
         }
     }
+
+    /// Round a mosaic OBJ's raw horizontal screen-space right edge
+    /// (`entry_x + width`, may be negative) up to the *next* H mosaic-block
+    /// boundary — the trailing counterpart of [`snap_local`](Self::snap_local)'s
+    /// leading-edge clamp. mgba's `SPRITE_MOSAIC_LOOP` keeps drawing past the
+    /// sprite's raw edge until its `condition` (this same raw edge) lands on a
+    /// block boundary, sampling the clamped edge texel the rest of the way
+    /// (`software-obj.c:320-325`); this is what lets a partial trailing block
+    /// finish instead of stopping mid-block `(behavioral-fidelity)`. Uses
+    /// truncating (C-style) `%`, matching mgba bit-for-bit — including its
+    /// rounding of a negative `raw_end` past the mathematical next multiple,
+    /// since C's `%` keeps the dividend's sign rather than floor-dividing.
+    /// At [`MosaicSize::NONE`] (`h == 1`) `raw_end % 1` is always `0`, so this
+    /// is the identity and the trailing edge never extends.
+    #[must_use]
+    pub const fn round_trailing_edge(&self, raw_end: i32) -> i32 {
+        let h = self.h as i32;
+        let rem = raw_end % h;
+        if rem == 0 {
+            raw_end
+        } else {
+            raw_end + (h - rem)
+        }
+    }
 }
 
 impl Default for MosaicSize {
@@ -195,6 +219,25 @@ mod tests {
         // A 0-sized block would divide by zero in `snap`; it must clamp to 1.
         let size = MosaicSize::new(0, 0);
         assert_eq!(size.snap(5, 9), (5, 9));
+    }
+
+    #[test]
+    fn round_trailing_edge_extends_to_the_next_block_boundary() {
+        // Issue #132: raw edge 4, H mosaic size 3 -> rounds up to 6 (mgba's
+        // `condition` rounding, software-obj.c:320-325).
+        let size = MosaicSize::new(3, 1);
+        assert_eq!(size.round_trailing_edge(4), 6);
+        // Already on a block boundary: no-op.
+        assert_eq!(size.round_trailing_edge(6), 6);
+        assert_eq!(size.round_trailing_edge(0), 0);
+    }
+
+    #[test]
+    fn round_trailing_edge_is_identity_at_none() {
+        let none = MosaicSize::NONE;
+        for raw_end in [0, 4, -4, 240] {
+            assert_eq!(none.round_trailing_edge(raw_end), raw_end);
+        }
     }
 
     #[test]
