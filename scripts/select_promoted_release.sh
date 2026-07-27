@@ -22,7 +22,9 @@
 # Usage: select_promoted_release.sh <merge-commit-sha>
 # Prints the release/* branch name promoted by that merge commit to stdout,
 # or prints nothing (exit 0) if the commit is not a two-parent merge, or its
-# second parent is not reachable from any known release/* branch.
+# second parent is not reachable from any known release/* branch. Exits 3
+# (with a message on stderr) if the topology is genuinely ambiguous — more
+# than one release/* branch equally claims the merged commit.
 #
 # Requires: a git checkout with full history and `origin/release/*` remote-
 # tracking refs present (as produced by `actions/checkout` with
@@ -45,15 +47,45 @@ if [ -z "${second_parent}" ]; then
   exit 0
 fi
 
-# Find the release/* branch this merge actually promoted: the one for which
-# the merged commit is an ancestor of (or equal to) its current tip. This is
-# anchored to the triggering push's own ancestry, so neither another release
-# branch's newer tip commit date nor its open/closed PR state can change the
-# answer.
+# Find the release/* branch this merge actually promoted. Consolidated
+# release lines (RELEASE.md §Consolidating) mean one line's commits can be
+# *contained* in another, so "first ref that contains the commit" is
+# ambiguous. Selection therefore binds to identity, not containment:
+#
+#   1. Exact tip: the branch whose current tip IS the merge's second parent —
+#      promote.yml runs on the push that created the merge, so the merged
+#      branch still points at exactly that commit.
+#   2. Only if no tip matches (the branch moved since the merge), fall back
+#      to ancestry containment.
+#
+# In either pass, more than one match is a genuinely ambiguous topology
+# (e.g. two release/* refs on the same commit); fail loudly rather than
+# silently promoting whichever name sorts first.
+exact=()
+containing=()
 for ref in $(git for-each-ref --format='%(refname:short)' 'refs/remotes/origin/release/*'); do
   name="${ref#origin/}"
-  if git merge-base --is-ancestor "${second_parent}" "origin/${name}"; then
-    printf '%s\n' "${name}"
-    exit 0
+  tip="$(git rev-parse --verify -q "origin/${name}")"
+  if [ "${tip}" = "${second_parent}" ]; then
+    exact+=("${name}")
+  elif git merge-base --is-ancestor "${second_parent}" "origin/${name}"; then
+    containing+=("${name}")
   fi
 done
+
+if [ "${#exact[@]}" -gt 0 ]; then
+  matches=("${exact[@]}")
+elif [ "${#containing[@]}" -gt 0 ]; then
+  matches=("${containing[@]}")
+else
+  exit 0
+fi
+
+if [ "${#matches[@]}" -eq 1 ]; then
+  printf '%s\n' "${matches[0]}"
+  exit 0
+fi
+
+echo "ambiguous promotion: ${merge_sha}^2 (${second_parent}) matches multiple release/* branches: ${matches[*]}" >&2
+echo "refusing to guess -- resolve the release/* topology, then re-run." >&2
+exit 3

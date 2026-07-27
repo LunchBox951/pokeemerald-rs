@@ -153,6 +153,48 @@ class SelectPromotedReleaseTest(unittest.TestCase):
         # release/0.1, not whichever branch happens to sort first.
         self.assertEqual(self.select(self.m1), "release/0.1")
 
+    def test_consolidated_line_still_resolves_to_the_promoted_branch(self):
+        # Consolidation (RELEASE.md §Consolidating) merges release/0.2 into
+        # release/0.1, so release/0.2's tip becomes an ancestor of BOTH
+        # lines. The promotion merge of release/0.2 must still resolve to
+        # release/0.2 (exact-tip identity), not whichever name sorts first.
+        run(self.work, "git", "checkout", "release/0.1")
+        merge(
+            self.work,
+            "release/0.2",
+            "Consolidate release/0.2 into release/0.1",
+            "2026-07-23T00:00:00",
+        )
+        run(self.work, "git", "push", "origin", "release/0.1")
+        run(self.checkout, "git", "fetch", "origin")
+        self.assertEqual(self.select(self.m2), "release/0.2")
+
+    def test_moved_branch_falls_back_to_ancestry(self):
+        # If the promoted branch gained commits after the merge, its tip no
+        # longer equals the merge's second parent; containment must still
+        # find it (and only it).
+        run(self.work, "git", "checkout", "release/0.2")
+        commit(
+            self.work,
+            "release/0.2 follow-up",
+            "2026-07-24T00:00:00",
+            filename="release-0.2-followup.txt",
+            content="r0.2b",
+        )
+        run(self.work, "git", "push", "origin", "release/0.2")
+        run(self.checkout, "git", "fetch", "origin")
+        self.assertEqual(self.select(self.m2), "release/0.2")
+
+    def test_two_refs_on_the_same_tip_fail_loudly(self):
+        # Two release/* refs pointing at the same commit cannot be told
+        # apart; the script must refuse (exit 3) rather than pick by name.
+        run(self.work, "git", "branch", "release/0.3", self.r02_tip)
+        run(self.work, "git", "push", "origin", "release/0.3")
+        run(self.checkout, "git", "fetch", "origin")
+        result = run(self.checkout, str(_SCRIPT), self.m2, check=False)
+        self.assertEqual(result.returncode, 3, msg=result.stdout + result.stderr)
+        self.assertIn("ambiguous", result.stderr)
+
     def test_non_merge_push_selects_nothing(self):
         # A single-parent commit (no release/* merged in) is a no-op: e.g. a
         # direct commit made on the channel itself.
