@@ -38,6 +38,14 @@ permissions:
   contents: read
   pull-requests: write
 
+# Reconciliation is check-then-act over live PR state: overlapping runs could
+# clobber each other (a stale run closing a newer run's correctly-routed PR).
+# Serialize the whole workflow — promotion events are rare, and queued runs
+# re-read live state when they start.
+concurrency:
+  group: promote
+  cancel-in-progress: false
+
 jobs:
   promote:
     name: open-promotion-pr

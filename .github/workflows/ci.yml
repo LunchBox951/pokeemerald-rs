@@ -23,8 +23,9 @@
 # required check (see below) -- R-4 registers it once the gate has proven
 # stable.
 #
-# Required status-check contexts for branch protection (R-4): `version` and
-# `ledger` report under their bare job names; the matrixed jobs report per OS —
+# Required status-check contexts for branch protection (R-4): `version`,
+# `ledger`, and `scripts-tests` report under their bare job names; the
+# matrixed jobs report per OS —
 # `fmt (ubuntu-latest)`, `fmt (windows-latest)`, `clippy (ubuntu-latest)`,
 # `clippy (windows-latest)`, `build (ubuntu-latest)`, `build (windows-latest)`,
 # `test (ubuntu-latest)`, `test (windows-latest)`. Register those exact names.
