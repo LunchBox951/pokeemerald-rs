@@ -192,4 +192,52 @@ echo "$stderr_out" | grep -qF "$sha_b_poke" || fail "worktree mismatch error did
 
 echo "ok: worktree refused to symlink a mismatched main checkout"
 
+echo "=== test 6: a pre-existing rogue symlink in a worktree is a hard error ==="
+
+worktree6="$workdir/worktree6"
+git_c -C "$checkout1" worktree add --quiet "$worktree6" -b wt-branch6 >/dev/null
+mkdir -p "$workdir/rogue-tree"
+ln -s "$workdir/rogue-tree" "$worktree6/pokeemerald"
+
+set +e
+stderr_out="$(cd "$worktree6" && POKEEMERALD_REF="$sha_a_poke" MGBA_REF="$sha_a_mgba" \
+    ./init.sh 2>&1 >/dev/null)"
+status=$?
+set -e
+
+[[ "$status" -ne 0 ]] || fail "worktree init.sh exited 0 with a rogue pokeemerald symlink; expected a hard failure"
+echo "$stderr_out" | grep -qi "symlink" || fail "rogue-symlink error missing; got: $stderr_out"
+[[ "$(readlink "$worktree6/pokeemerald")" == "$workdir/rogue-tree" ]] || fail "init.sh mutated the rogue symlink instead of just failing"
+
+echo "ok: rogue pre-existing symlink was rejected"
+
+echo "=== test 7: an autocrlf host config cannot produce a CRLF checkout ==="
+
+fakehome="$workdir/fakehome"
+mkdir -p "$fakehome"
+HOME="$fakehome" git config --global core.autocrlf true
+HOME="$fakehome" git config --global user.name "init_test"
+HOME="$fakehome" git config --global user.email "init_test@example.invalid"
+
+checkout7="$workdir/checkout7"
+make_main_checkout "$checkout7"
+(
+    cd "$checkout7"
+    HOME="$fakehome" POKEEMERALD_REMOTE="$fake_poke" MGBA_REMOTE="$fake_mgba" \
+        POKEEMERALD_REF="$sha_a_poke" MGBA_REF="$sha_a_mgba" \
+        ./init.sh >/dev/null
+)
+if grep -q $'\r' "$checkout7/pokeemerald/VERSION"; then
+    fail "bootstrap under core.autocrlf=true produced CRLF bytes; trees are not byte-identical across platforms"
+fi
+# And the pinned checkout must still verify clean on a re-run.
+(
+    cd "$checkout7"
+    HOME="$fakehome" POKEEMERALD_REMOTE="$fake_poke" MGBA_REMOTE="$fake_mgba" \
+        POKEEMERALD_REF="$sha_a_poke" MGBA_REF="$sha_a_mgba" \
+        ./init.sh >/dev/null
+)
+
+echo "ok: autocrlf host config was overridden; checkout is LF byte-for-byte"
+
 echo "all tests passed"

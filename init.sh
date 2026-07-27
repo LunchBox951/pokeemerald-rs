@@ -71,7 +71,9 @@ verify_pinned() {
         exit 1
     fi
     local dirty
-    dirty="$(git -C "$dir" status --porcelain)"
+    # autocrlf off for the comparison: a CRLF-converted tree must read as
+    # dirty (not silently normalized clean) or platforms diverge on bytes.
+    dirty="$(git -C "$dir" -c core.autocrlf=false -c core.eol=lf status --porcelain)"
     if [[ -n "$dirty" ]]; then
         echo "error: $dir is at the pinned revision but its tree is not clean:" >&2
         printf '%s\n' "$dirty" | head -20 >&2
@@ -89,17 +91,33 @@ if [[ "$git_dir_abs" != "$git_common_dir_abs" ]]; then
     # exist to prevent.
     main_repo="$(dirname "$git_common_dir_abs")"
     for name in pokeemerald mgba; do
+        case "$name" in
+            pokeemerald) ref="$POKEEMERALD_REF" ;;
+            mgba)        ref="$MGBA_REF" ;;
+        esac
         src="$main_repo/$name"
         if [[ ! -d "$src" ]]; then
             echo "error: $src missing; run init.sh in the main checkout ($main_repo) first." >&2
             exit 1
         fi
-        case "$name" in
-            pokeemerald) verify_pinned "$src" "$POKEEMERALD_REF" ;;
-            mgba)        verify_pinned "$src" "$MGBA_REF" ;;
-        esac
-        if [[ -L "$name" || -d "$name" ]]; then
-            echo "skip: $name already present"
+        verify_pinned "$src" "$ref"
+        if [[ -L "$name" ]]; then
+            # A pre-existing link is only valid if it resolves to the tree
+            # just validated — a rogue or stale symlink must not be
+            # laundered by mere existence.
+            resolved="$(cd "$name" 2>/dev/null && pwd -P || true)"
+            expected="$(cd "$src" && pwd -P)"
+            if [[ "$resolved" != "$expected" ]]; then
+                echo "error: $name is a symlink to '${resolved:-<broken>}', not the validated $src" >&2
+                echo "  to fix: rm $name && ./init.sh" >&2
+                exit 1
+            fi
+            echo "skip: $name already linked to $src"
+        elif [[ -d "$name" ]]; then
+            # A real directory (e.g. its own clone) is acceptable only if it
+            # itself passes the pin check.
+            verify_pinned "$name" "$ref"
+            echo "skip: $name already present at the pinned revision"
         else
             ln -s "$src" "$name"
             echo "linked $name -> $src"
@@ -126,7 +144,13 @@ clone_and_pin() {
     fi
 
     echo "cloning $source -> $target"
-    git clone --quiet "$source" "$target"
+    # Persist LF-only conversion settings into the new repo's config: an
+    # inherited core.autocrlf=true (git-for-windows default) would check the
+    # tree out with CRLF while status still reports clean, giving two
+    # platforms byte-different trees that both pass the pin gate.
+    git clone --quiet \
+        -c core.autocrlf=false -c core.eol=lf \
+        "$source" "$target"
     echo "checking out pinned revision $ref in $target"
     if ! git -C "$target" -c advice.detachedHead=false checkout --quiet "$ref"; then
         echo "error: failed to check out pinned revision $ref in $target" >&2
