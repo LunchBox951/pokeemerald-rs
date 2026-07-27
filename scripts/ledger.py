@@ -37,7 +37,7 @@ USAGE
 Any <path> above may address a sub-file artifact as `<path>#<name>`, e.g.
 `src/battle_main.c#gTypeEffectiveness` (see SUB-ARTIFACTS below).
 
-    ledger.py verify                   check rust_target paths still exist
+    ledger.py verify                   validate entry shape, then rust_target paths
     ledger.py audit <spec-id>          suggest mappings from a merge commit
     ledger.py migrate                  upgrade an older ledger to current schema
     ledger.py init                     create empty ledgers (one-time)
@@ -367,7 +367,9 @@ def validate_artifact(name, sub):
     if "artifacts" in sub:
         return f"artifact {name!r} must not itself carry 'artifacts' (no recursion)"
 
-    status = sub.get("status", "pending")
+    if "status" not in sub:
+        return f"artifact {name!r}: missing 'status'"
+    status = sub["status"]
     if status not in ALL_STATUSES:
         return f"artifact {name!r}: invalid status {status!r} (valid: {ALL_STATUSES})"
 
@@ -401,7 +403,9 @@ def validate_artifact(name, sub):
 
 
 def validate_entry(entry: dict):
-    status = entry.get("status", "pending")
+    if "status" not in entry:
+        return "missing 'status'"
+    status = entry["status"]
     if status not in ALL_STATUSES:
         return f"invalid status: {status!r} (valid: {ALL_STATUSES})"
 
@@ -851,6 +855,10 @@ def cmd_unmark(args):
 def cmd_verify(args):
     project = args.project
     ledger = load_ledger(project)
+    for path, entry in sorted(ledger["files"].items()):
+        err = validate_entry(entry)
+        if err:
+            sys.exit(f"ledger validation failed for {path}: {err}")
     stale = []
     for path, entry in sorted(ledger["files"].items()):
         target = entry.get("rust_target")
@@ -1131,7 +1139,8 @@ def main():
     p.add_argument("path", help="upstream path, or path#artifact for a "
                    "sub-file table (a missing artifact is created as pending)")
 
-    p = sub.add_parser("verify", help="Check all rust_target paths exist")
+    p = sub.add_parser(
+        "verify", help="Validate entry shape, then check rust_target paths exist")
     _add_project(p)
 
     p = sub.add_parser("audit", help="Suggest mappings from a merge commit")
