@@ -147,6 +147,22 @@ impl Sweep {
         {
             self.frequency = new_freq as u16;
         }
+
+        // Hardware immediately re-runs the overflow calc from the
+        // just-updated shadow frequency for an additive sweep
+        // (`_updateSweep(ch, true)`, `mgba/src/gb/audio.c:980`..`:981`): if
+        // that second result would overflow `0x7FF`, the channel disables in
+        // this same step instead of ever emitting the first result. A
+        // subtract-direction sweep never runs this look-ahead — its result
+        // can only fall further from `0x7FF` (`audio.c:965`..`:972`).
+        if !self.subtract {
+            let lookahead_delta = self.frequency >> self.shift;
+            let lookahead = i32::from(self.frequency) + i32::from(lookahead_delta);
+            if lookahead > 0x7FF {
+                return SweepResult::Disable;
+            }
+        }
+
         SweepResult::Changed(self.frequency)
     }
 }
@@ -432,6 +448,33 @@ mod tests {
         // A large starting frequency plus an aggressive shift overflows 0x7FF.
         let mut sweep = Sweep::from_byte(0b0001_0001, 0x700); // add, shift 1
         assert_eq!(sweep.tick(), SweepResult::Disable);
+    }
+
+    #[test]
+    fn sweep_disables_on_post_update_lookahead_overflow() {
+        // Frequency 1046, sweep 0x11 (period 1, add, shift 1): the first
+        // scheduled result (1046 + 523 = 1569) is in range, but hardware
+        // immediately re-runs the overflow calc from that updated shadow
+        // frequency (`_updateSweep(ch, true)`, `mgba/src/gb/audio.c:980`..
+        // `:981`); the look-ahead (1569 + 784 = 2353) overflows `0x7FF`, so
+        // channel 1 must disable in this same sweep step rather than ever
+        // emitting 1569 (issue #134).
+        let mut sweep = Sweep::from_byte(0x11, 1046);
+        assert_eq!(sweep.tick(), SweepResult::Disable);
+    }
+
+    #[test]
+    fn sweep_square_channel_and_voice_retire_on_lookahead_overflow() {
+        // The public path from the issue's repro: a channel-1 voice at key
+        // 48 (frequency register 1046) with sweep byte 0x11 stays active
+        // through construction (the *trigger*-time check alone doesn't
+        // overflow), but the very first scheduled `step_sweep_frame` must
+        // retire it once the post-update look-ahead overflows.
+        let sweep = Sweep::from_byte(0x11, 1046);
+        assert!(!sweep.overflows_at_trigger());
+        let mut chan = SquareChannel::new(2, 1046, Some(sweep));
+        assert!(!chan.is_disabled());
+        assert!(!chan.step_sweep_frame());
     }
 
     #[test]

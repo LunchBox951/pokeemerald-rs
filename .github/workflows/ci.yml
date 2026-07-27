@@ -52,7 +52,15 @@ jobs:
         with:
           fetch-depth: 0 # full history so version_check can reach origin/main
       - name: Validate VERSION
-        run: python3 scripts/version_check.py --base origin/main --head HEAD
+        env:
+          # The marker-staleness and monotonicity checks are base-relative:
+          # a PR must be compared against ITS base branch, not always main
+          # (a marker already merged to dev would read as freshly-changed
+          # against main). Push events keep the origin/main comparison.
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha || '' }}
+        run: |
+          base="${PR_BASE_SHA:-origin/main}"
+          python3 scripts/version_check.py --base "${base}" --head HEAD
 
   # Policy gate (ubuntu-only): reject stale ledger targets once Rust targets exist.
   ledger:
