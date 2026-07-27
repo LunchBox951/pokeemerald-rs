@@ -248,6 +248,12 @@ impl Sequencer {
                     break;
                 }
                 if track.cursor >= events.len() {
+                    // A command-aligned stream with no trailing `FINE` is
+                    // accepted as a clean end (`decode_track` allows it), but
+                    // that acceptance must still honor `ply_fine`'s cleanup:
+                    // release every still-ON voice this track owns so tied
+                    // and looping notes don't sound forever.
+                    mixer.release_track(track_id);
                     track.ended = true;
                     break;
                 }
@@ -940,6 +946,35 @@ mod tests {
             frames += 1;
         }
         assert!(seq.is_finished(), "FINE must release the tied voice");
+    }
+
+    #[test]
+    fn eof_without_fine_releases_a_tied_voice_and_the_song_finishes() {
+        // Decode a real byte program with no trailing FINE: VOICE 0; TIE
+        // key60 vel127 (gate 0, tied); W02 -- then the stream simply runs
+        // out. `decode_track` accepts this as a clean end (no `Event::Fine`
+        // appears at all), so that acceptance must still release the tied
+        // voice the same way `Event::Fine` does. Before the fix, reaching
+        // `cursor == events.len()` only set `track.ended`, leaving the
+        // looping voice sounding forever.
+        let bytes = [0xBD, 0x00, 0xCF, 60, 127, 0x82];
+        let events = decode_track(&bytes).unwrap();
+        assert!(
+            !events.contains(&Event::Fine),
+            "this stream must end by falling off the end, not by FINE"
+        );
+
+        let wave = Arc::new(WaveData::looping(0, 0, vec![100]));
+        let voices = vec![Instrument::DirectSound(ToneData::new(wave, Adsr::flat()))];
+        let mut seq = Sequencer::new(Song::new(voices, vec![events], 150));
+        let mut out = vec![0.0; Sequencer::FRAME_SAMPLES];
+        let mut frames = 0;
+        while !seq.is_finished() && frames < 500 {
+            seq.render_frame(&mut out);
+            frames += 1;
+        }
+        assert_eq!(seq.voice_count(), 0);
+        assert!(seq.is_finished(), "EOF must release the tied voice");
     }
 
     #[test]
