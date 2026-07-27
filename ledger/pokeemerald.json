@@ -25983,11 +25983,29 @@
     },
     "src/pokemon.c": {
       "artifacts": {
+        "CalculateBaseDamage": {
+          "reason": "Gen-3 damage formula re-implemented idiomatically: level/power/atk-def core, burn/Reflect/Light-Screen/weather hooks, plus the surrounding STAB/type-effectiveness/random-roll battle-script steps as separate composable functions (issue #125).",
+          "rust_target": "crates/battle/src/damage.rs",
+          "spec": "S-6",
+          "status": "rewritten"
+        },
         "PokemonSubstructureSerialization": {
           "reason": "All 24 personality orders, personality-XOR-OT-id encryption, wrapping secure checksum validation, and checksum-aware substructure replacement re-implemented",
           "rust_target": "crates/engine/src/save/pokemon.rs",
           "spec": "S-5",
           "status": "rewritten"
+        },
+        "gNatureStatTable": {
+          "reason": "Nature stat modifier table ported as Rust data (Nature enum + Stat enum + MODIFIERS table), pinned to upstream via id/landmark/neutral-nature tests (issue #125).",
+          "rust_target": "crates/battle/src/nature.rs",
+          "spec": "S-6",
+          "status": "ported"
+        },
+        "gStatStageRatios": {
+          "reason": "Stat-stage numerator/denominator table ported as Rust data behind the StatStage newtype, with APPLY_STAT_MOD's multiply-then-divide order preserved exactly (issue #125).",
+          "rust_target": "crates/battle/src/stat_stage.rs",
+          "spec": "S-6",
+          "status": "ported"
         }
       },
       "category": "code.source",
