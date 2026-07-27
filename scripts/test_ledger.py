@@ -387,6 +387,63 @@ class TestVerify(LedgerTestBase):
         out = self.capture(ledger.cmd_verify, ns(project=PROJECT))
         self.assertIn("resolve", out)
 
+    def test_terminal_entry_missing_rust_target_fails(self):
+        # A hand-edited or merge-mangled ledger with a terminal entry that
+        # skipped `rust_target` must not slip past `verify` — it would
+        # otherwise count as done for L-1 coverage despite validate_entry
+        # rejecting the exact same object.
+        self.write_ledger({"src/battle_main.c": {
+            "category": "code.source", "kind": "file", "status": "rewritten",
+            "spec": "s", "reason": "r"}})
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            with self.assertRaises(SystemExit) as cm:
+                ledger.cmd_verify(ns(project=PROJECT))
+        self.assertNotEqual(cm.exception.code, 0)
+        self.assertIn("src/battle_main.c", str(cm.exception))
+        self.assertIn("rust_target", str(cm.exception))
+
+    def test_terminal_artifact_missing_rust_target_fails(self):
+        self.write_ledger({"Makefile": {
+            "category": "meta.build", "kind": "file", "status": "pending",
+            "artifacts": {"tbl": {"status": "ported", "spec": "s",
+                                  "reason": "r"}}}})
+        with self.assertRaises(SystemExit) as cm:
+            ledger.cmd_verify(ns(project=PROJECT))
+        self.assertNotEqual(cm.exception.code, 0)
+        self.assertIn("Makefile", str(cm.exception))
+        self.assertIn("rust_target", str(cm.exception))
+
+    def test_entry_missing_status_fails(self):
+        # An entry that lost its `status` key entirely must fail verify, not
+        # silently default to pending.
+        self.write_ledger({"src/battle_main.c": {
+            "category": "code.source", "kind": "file"}})
+        with self.assertRaises(SystemExit) as cm:
+            ledger.cmd_verify(ns(project=PROJECT))
+        self.assertNotEqual(cm.exception.code, 0)
+        self.assertIn("src/battle_main.c", str(cm.exception))
+        self.assertIn("status", str(cm.exception))
+
+    def test_artifact_missing_status_fails(self):
+        self.write_ledger({"Makefile": {
+            "category": "meta.build", "kind": "file", "status": "pending",
+            "artifacts": {"tbl": {}}}})
+        with self.assertRaises(SystemExit) as cm:
+            ledger.cmd_verify(ns(project=PROJECT))
+        self.assertNotEqual(cm.exception.code, 0)
+        self.assertIn("Makefile", str(cm.exception))
+        self.assertIn("status", str(cm.exception))
+
+    def test_valid_ledger_still_passes(self):
+        self.touch_repo("crates/a/src/present.rs")
+        self.write_ledger({"src/battle_main.c": {
+            "category": "code.source", "kind": "file", "status": "rewritten",
+            "spec": "s", "reason": "r",
+            "rust_target": "crates/a/src/present.rs"}})
+        out = self.capture(ledger.cmd_verify, ns(project=PROJECT))
+        self.assertIn("resolve", out)
+
 
 # ── 7. gaps / inspect ────────────────────────────────────────────────────────
 
