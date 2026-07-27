@@ -481,4 +481,40 @@ echo "$stderr_out" | grep -qi "attribute" || fail "info/attributes error missing
 
 echo "ok: local info/attributes override was rejected"
 
+echo "=== test 18: a host-global clean filter cannot launder tampered bytes ==="
+
+# Global attributesFile binds filter=launder to VERSION; the global filter's
+# clean command maps any bytes back to the committed content. Verification
+# neutralizes the global attributes file, so the tamper must still surface.
+fakehome18="$workdir/fakehome18"
+mkdir -p "$fakehome18"
+HOME="$fakehome18" git config --global user.name "init_test"
+HOME="$fakehome18" git config --global user.email "init_test@example.invalid"
+echo "VERSION filter=launder" >"$fakehome18/attributes"
+HOME="$fakehome18" git config --global core.attributesFile "$fakehome18/attributes"
+HOME="$fakehome18" git config --global filter.launder.clean "printf 'commit A\n'"
+
+checkout18="$workdir/checkout18"
+make_main_checkout "$checkout18"
+(
+    cd "$checkout18"
+    HOME="$fakehome18" POKEEMERALD_REMOTE="$fake_poke" MGBA_REMOTE="$fake_mgba" \
+        POKEEMERALD_REF="$sha_a_poke" MGBA_REF="$sha_a_mgba" \
+        ./init.sh >/dev/null
+)
+echo "TAMPERED" >>"$checkout18/pokeemerald/VERSION"
+
+set +e
+stderr_out="$(cd "$checkout18" && HOME="$fakehome18" \
+    POKEEMERALD_REMOTE="$fake_poke" MGBA_REMOTE="$fake_mgba" \
+    POKEEMERALD_REF="$sha_a_poke" MGBA_REF="$sha_a_mgba" \
+    ./init.sh 2>&1 >/dev/null)"
+status=$?
+set -e
+
+[[ "$status" -ne 0 ]] || fail "init.sh exited 0 with a tamper laundered by a global clean filter"
+echo "$stderr_out" | grep -qi "not clean" || fail "global-filter tamper not caught; got: $stderr_out"
+
+echo "ok: host-global clean filter could not launder the tamper"
+
 echo "all tests passed"

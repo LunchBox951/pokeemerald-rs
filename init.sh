@@ -68,14 +68,14 @@ verify_pinned() {
     if [[ -z "$top" || "$(cd "$top" && pwd -P)" != "$dir_abs" ]]; then
         echo "error: $dir has no git metadata; cannot verify it matches pinned revision $ref" >&2
         echo "  an unverifiable tree must not feed the extraction pipeline (fail closed)" >&2
-        echo "  to restore a verifiable pinned tree: rm -rf $dir && ./init.sh" >&2
+        echo "  to restore a verifiable pinned tree: rm -rf -- '$dir' && ./init.sh" >&2
         exit 1
     fi
     local actual
     actual="$(git -C "$dir" rev-parse HEAD)"
     if [[ "$actual" != "$ref" ]]; then
         echo "error: $dir is at $actual, but init.sh pins it to $ref" >&2
-        echo "  to update: rm -rf $dir && ./init.sh" >&2
+        echo "  to update: rm -rf -- '$dir' && ./init.sh" >&2
         echo "  (if this pin should move, that is a deliberate change to the *_REF constant in init.sh, not a silent skip)" >&2
         exit 1
     fi
@@ -84,7 +84,7 @@ verify_pinned() {
     # files are physically absent. Reject it outright.
     if [[ "$(git -C "$dir" config --bool core.sparseCheckout 2>/dev/null || echo false)" == "true" ]]; then
         echo "error: $dir is a sparse checkout; tracked paths may be missing from disk" >&2
-        echo "  to restore the full pinned tree: rm -rf $dir && ./init.sh" >&2
+        echo "  to restore the full pinned tree: rm -rf -- '$dir' && ./init.sh" >&2
         exit 1
     fi
     # Reject repo-local machinery that can rewrite what status compares.
@@ -94,12 +94,17 @@ verify_pinned() {
     # hide, which is the pin gate's actual job.)
     if [[ -n "$(git -C "$dir" for-each-ref refs/replace 2>/dev/null)" ]]; then
         echo "error: $dir has git replacement refs (refs/replace); verification would see substituted objects" >&2
-        echo "  to restore the pinned tree: rm -rf $dir && ./init.sh" >&2
+        echo "  to restore the pinned tree: rm -rf -- '$dir' && ./init.sh" >&2
         exit 1
     fi
+    # Repo-LOCAL filter config only: a host-global filter (git-lfs is
+    # ubiquitous) is harmless here because its only non-tracked attribute
+    # bindings — the global attributesFile and info/attributes — are
+    # neutralized/rejected, and tracked .gitattributes is covered by the
+    # clean-tree check itself.
     if [[ -n "$(git -C "$dir" config --local --get-regexp '^filter\.' 2>/dev/null || true)" ]]; then
         echo "error: $dir configures content filters (filter.*); they can map tampered bytes back to the committed blob" >&2
-        echo "  to restore the pinned tree: rm -rf $dir && ./init.sh" >&2
+        echo "  to restore the pinned tree: rm -rf -- '$dir' && ./init.sh" >&2
         exit 1
     fi
     local attrs
@@ -107,7 +112,7 @@ verify_pinned() {
     [[ "$attrs" == /* ]] || attrs="$dir/$attrs"
     if [[ -s "$attrs" ]]; then
         echo "error: $dir has local attribute overrides ($attrs); they can alter content comparison" >&2
-        echo "  to restore the pinned tree: rm -rf $dir && ./init.sh" >&2
+        echo "  to restore the pinned tree: rm -rf -- '$dir' && ./init.sh" >&2
         exit 1
     fi
     # assume-unchanged / skip-worktree index bits hide tracked-file edits
@@ -117,7 +122,7 @@ verify_pinned() {
     if [[ -n "$hidden" ]]; then
         echo "error: $dir has index-hidden paths (assume-unchanged/skip-worktree); edits there evade the clean check:" >&2
         printf '%s\n' "$hidden" | head -10 >&2
-        echo "  to restore the pinned tree: rm -rf $dir && ./init.sh" >&2
+        echo "  to restore the pinned tree: rm -rf -- '$dir' && ./init.sh" >&2
         exit 1
     fi
     local dirty
@@ -132,12 +137,12 @@ verify_pinned() {
     # "nothing changed" on git's behalf.
     dirty="$(git --no-replace-objects -C "$dir" \
         -c core.autocrlf=false -c core.eol=lf -c core.excludesFile=/dev/null \
-        -c core.fsmonitor=false \
+        -c core.fsmonitor=false -c core.attributesFile=/dev/null \
         status --porcelain --ignored --untracked-files=all)"
     if [[ -n "$dirty" ]]; then
         echo "error: $dir is at the pinned revision but its tree is not clean:" >&2
         printf '%s\n' "$dirty" | head -20 >&2
-        echo "  to restore the pinned tree: rm -rf $dir && ./init.sh" >&2
+        echo "  to restore the pinned tree: rm -rf -- '$dir' && ./init.sh" >&2
         exit 1
     fi
 }
@@ -169,7 +174,7 @@ if [[ "$git_dir_abs" != "$git_common_dir_abs" ]]; then
             expected="$(cd "$src" && pwd -P)"
             if [[ "$resolved" != "$expected" ]]; then
                 echo "error: $name is a symlink to '${resolved:-<broken>}', not the validated $src" >&2
-                echo "  to fix: rm $name && ./init.sh" >&2
+                echo "  to fix: rm -- '$name' && ./init.sh" >&2
                 exit 1
             fi
             echo "skip: $name already linked to $src"
