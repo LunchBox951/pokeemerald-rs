@@ -113,6 +113,16 @@ jobs:
             echo "No release/* branch merged into ${merged}; nothing to promote."
             exit 0
           fi
+          # Re-validate against the LIVE tip: `gh pr create --head` binds to
+          # the branch's server-side tip, not the checkout snapshot the
+          # selector classified. A branch that advanced since checkout must
+          # take the re-clear path, not ride a stale exit-0.
+          git fetch origin "+refs/heads/${release_branch}:refs/remotes/origin/${release_branch}"
+          second_parent="$(git rev-parse "${GITHUB_SHA}^2")"
+          if [ "${select_rc}" -eq 0 ] && [ "$(git rev-parse "origin/${release_branch}")" != "${second_parent}" ]; then
+            echo "${release_branch} advanced after checkout; its new tip must re-clear ${merged}."
+            target="${merged}"
+          fi
           if git merge-base --is-ancestor "origin/${release_branch}" "origin/${target}"; then
             echo "${release_branch} already contained in ${target}; nothing to open."
             exit 0

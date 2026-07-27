@@ -253,6 +253,62 @@ class SelectPromotedReleaseTest(unittest.TestCase):
         self.refetch()
         self.assertEqual(self.select(m3), "release/0.2")
 
+    def _stub_gh(self, head_ref):
+        """Put a fake `gh` first on PATH that answers the commit->PR
+        association query with `head_ref`, and return the env overrides that
+        activate the script's PR-metadata path."""
+        stub_dir = Path(self._tmp.name) / "stub-bin"
+        stub_dir.mkdir(exist_ok=True)
+        gh = stub_dir / "gh"
+        gh.write_text(f"#!/bin/sh\necho '{head_ref}'\n", encoding="utf-8")
+        gh.chmod(0o755)
+        import os
+        return {
+            "PATH": f"{stub_dir}:{os.environ.get('PATH', '/usr/bin:/bin')}",
+            "GH_TOKEN": "stub-token",
+        }
+
+    def _merge_with_opaque_subject_and_decoy(self):
+        """Unparseable subject + a decoy ref on the merged tip: without PR
+        metadata this topology is undecidable (exit 3)."""
+        run(self.work, "git", "checkout", "release/0.2")
+        tip = commit(
+            self.work,
+            "release/0.2 metadata fix",
+            "2026-07-26T00:00:00",
+            filename="release-0.2-metadata.txt",
+            content="r0.2f",
+        )
+        run(self.work, "git", "checkout", "unstable")
+        m = merge(
+            self.work,
+            "release/0.2",
+            "2026-07-26T01:00:00",
+            message="promote the current release line",
+        )
+        run(self.work, "git", "branch", "release/0.5", tip)
+        run(self.work, "git", "push", "origin", "release/0.2", "release/0.5", "unstable")
+        self.refetch()
+        return m
+
+    def test_pr_metadata_wins_over_undecidable_topology(self):
+        # The commit->PR association is the primary identity source: it must
+        # resolve a case the subject and topology cannot.
+        m = self._merge_with_opaque_subject_and_decoy()
+        env = self._stub_gh("release/0.2")
+        result = run(self.checkout, str(_SCRIPT), m, env=env, check=False)
+        self.assertEqual(result.returncode, 0, msg=result.stdout + result.stderr)
+        self.assertEqual(result.stdout.strip(), "release/0.2")
+
+    def test_pr_metadata_non_release_head_is_ignored(self):
+        # A PR association pointing outside release/* must not be trusted;
+        # the undecidable topology then still fails loudly.
+        m = self._merge_with_opaque_subject_and_decoy()
+        env = self._stub_gh("feature/not-a-release")
+        result = run(self.checkout, str(_SCRIPT), m, env=env, check=False)
+        self.assertEqual(result.returncode, 3, msg=result.stdout + result.stderr)
+        self.assertIn("ambiguous", result.stderr)
+
     def test_unparseable_subject_with_same_tip_decoy_fails_loudly(self):
         # No recorded identity AND two refs claim the merged commit: the
         # script must refuse (exit 3) rather than pick by name order.
