@@ -76,7 +76,22 @@ emit() { # <name> — classify by tip position and emit with the right exit code
   exit 4
 }
 
-# --- Primary: the branch name the merge commit recorded. -------------------
+# --- Primary: the head ref of the PR associated with the merge commit. ----
+# GitHub records the association server-side, so it survives edited or
+# PR-title-style merge subjects. Requires `gh` + a token; unavailable (e.g.
+# in the offline test suite) or empty results fall through to the subject.
+if command -v gh >/dev/null 2>&1 && [ -n "${GH_TOKEN:-}${GITHUB_TOKEN:-}" ]; then
+  pr_head="$(gh api "repos/{owner}/{repo}/commits/${merge_sha}/pulls" \
+    --jq '[.[] | select(.merge_commit_sha == "'"${merge_sha}"'") | .head.ref] | first // empty' \
+    2>/dev/null || true)"
+  if [[ "${pr_head}" == release/* ]] \
+    && git rev-parse --verify -q "origin/${pr_head}" >/dev/null \
+    && git merge-base --is-ancestor "${second_parent}" "origin/${pr_head}"; then
+    emit "${pr_head}"
+  fi
+fi
+
+# --- Secondary: the branch name the merge commit's subject recorded. -------
 subject="$(git log -1 --format=%s "${merge_sha}")"
 candidate=""
 case "${subject}" in
