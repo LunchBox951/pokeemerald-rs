@@ -588,4 +588,45 @@ echo "$stderr_out" | grep -qF "VERSION" || fail "committed-filter tamper error d
 
 echo "ok: committed filter binding could not launder the tamper"
 
+echo "=== test 21: a legitimate eol=crlf checkout re-verifies clean ==="
+
+# Tracked eol=crlf paths check out as CRLF (bytes != blob); the byte
+# verification's sanctioned-divergence branch must accept them.
+fake_poke21="$workdir/remote-pokeemerald-21"
+sha21="$(make_fake_remote "$fake_poke21")"
+printf '*.pal text eol=crlf\n' >"$fake_poke21/.gitattributes"
+printf 'line one\nline two\n' >"$fake_poke21/colors.pal"
+git_c -C "$fake_poke21" add .gitattributes colors.pal
+git_c -C "$fake_poke21" commit --quiet -m "crlf-attributed palette"
+sha21="$(git -C "$fake_poke21" rev-parse HEAD)"
+
+checkout21="$workdir/checkout21"
+make_main_checkout "$checkout21"
+(
+    cd "$checkout21"
+    POKEEMERALD_REMOTE="$fake_poke21" MGBA_REMOTE="$fake_mgba" \
+        POKEEMERALD_REF="$sha21" MGBA_REF="$sha_a_mgba" \
+        ./init.sh >/dev/null
+)
+grep -q $'\r' "$checkout21/pokeemerald/colors.pal" || fail "eol=crlf file did not check out as CRLF; test setup is wrong"
+# The re-run exercises verify_pinned + verify_tree_bytes on the CRLF file.
+(
+    cd "$checkout21"
+    POKEEMERALD_REMOTE="$fake_poke21" MGBA_REMOTE="$fake_mgba" \
+        POKEEMERALD_REF="$sha21" MGBA_REF="$sha_a_mgba" \
+        ./init.sh >/dev/null
+) || fail "clean eol=crlf checkout was rejected on re-verification"
+# And a tampered CRLF file must still be caught.
+printf 'line one\r\nline TWO\r\n' >"$checkout21/pokeemerald/colors.pal"
+set +e
+stderr_out="$(cd "$checkout21" && POKEEMERALD_REMOTE="$fake_poke21" MGBA_REMOTE="$fake_mgba" \
+    POKEEMERALD_REF="$sha21" MGBA_REF="$sha_a_mgba" \
+    ./init.sh 2>&1 >/dev/null)"
+status=$?
+set -e
+[[ "$status" -ne 0 ]] || fail "tampered eol=crlf file passed verification"
+echo "$stderr_out" | grep -qF "colors.pal" || fail "tampered CRLF file not named; got: $stderr_out"
+
+echo "ok: legitimate CRLF checkout accepted; tampered CRLF file rejected"
+
 echo "all tests passed"

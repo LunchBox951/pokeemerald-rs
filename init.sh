@@ -175,13 +175,18 @@ verify_tree_bytes() {
     local bad path really_bad=""
     bad="$(paste "$listing.expected" "$listing.actual" "$listing.paths" \
         | awk -F'\t' '$1 != $2 { print $3 }')"
+    # A literal CR in the sed script keeps this portable: BSD sed reads the
+    # GNU-style '\r' escape as a literal 'r', which would reject every
+    # legitimate eol=crlf checkout on macOS.
+    local cr
+    cr="$(printf '\r')"
     while IFS= read -r path; do
         [[ -z "$path" ]] && continue
         local eolattr oid
         eolattr="$(git -C "$dir" check-attr eol -- "$path" | awk -F': ' '{ print $3 }')"
         oid="$(git --no-replace-objects -C "$dir" rev-parse "$ref:$path")"
         if [[ "$eolattr" == "crlf" ]] \
-            && cmp -s <(git --no-replace-objects -C "$dir" cat-file blob "$oid" | sed 's/$/\r/') "$dir/$path"; then
+            && cmp -s <(git --no-replace-objects -C "$dir" cat-file blob "$oid" | sed "s/\$/${cr}/") "$dir/$path"; then
             continue
         fi
         really_bad+="$path"$'\n'
