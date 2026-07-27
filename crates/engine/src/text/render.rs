@@ -23,21 +23,35 @@
 //! The printer's internal state mirrors upstream's `RENDER_STATE_*` enum,
 //! reduced to the v1 path this slice covers:
 //!
-//! * `HandleChar` (`RENDER_STATE_HANDLE_CHAR`) — the steady state. Consuming
-//!   a [`super::Token::Newline`] (`\n`), a colour/font/font-reset extended
-//!   control code, or an unsupported placeholder/dynamic/keypad-icon token
-//!   costs no frame (upstream `RENDER_REPEAT`: `RenderFont`'s caller loops
-//!   `RenderText` again immediately); consuming a glyph costs exactly one
-//!   frame and starts the next glyph's reveal delay.
+//! * `HandleChar` (`RENDER_STATE_HANDLE_CHAR`) — the steady state. Upstream
+//!   reloads `delayCounter = textSpeed` *unconditionally* before consuming
+//!   each char, and the `if (delayCounter && textSpeed)` guard at the top of
+//!   the state burns it back down one frame at a time. A `RENDER_REPEAT`-class
+//!   token — a [`super::Token::Newline`] (`\n`), a colour/font/font-reset
+//!   extended control code, or an unsupported placeholder/dynamic/keypad-icon
+//!   token — reloads that counter and loops straight back to the guard, so at
+//!   Slow/Mid (`textSpeed != 0`) it costs one full reveal-delay period of
+//!   `TextSpeed::frames_per_char - 1` idle frames before the next glyph; at
+//!   Fast/Instant (`textSpeed == 0`) the counter stays 0 and such tokens
+//!   remain free. Consuming a glyph likewise reloads the counter, so the next
+//!   glyph's reveal delay follows. Concretely, `"A\nB"` at Mid draws `A` on
+//!   frame 0 and `B` on frame 7 (`A`, three idle frames for `A`'s reveal
+//!   delay, the `\n` consumed on frame 4 with three more idle frames, `B` on
+//!   frame 7) — the `\n` is *not* frame-free at Slow/Mid.
 //! * `AwaitingScroll` / `Scrolling` (`RENDER_STATE_SCROLL_START` /
 //!   `RENDER_STATE_SCROLL`) — `\l` (`CHAR_PROMPT_SCROLL`): wait for
 //!   [`Printer::tick`]'s `confirm_pressed`, then scroll the box up one line
 //!   over multiple frames at the private `TextSpeed::scroll_px_per_frame`
-//!   rate (upstream `sWindowVerticalScrollSpeeds`).
+//!   rate (upstream `sWindowVerticalScrollSpeeds`). The `\l` char reloaded
+//!   `delayCounter = textSpeed` when it was consumed and the scroll never
+//!   touches it, so at Slow/Mid the first glyph of the next page resumes
+//!   after a full reveal-delay period, not immediately.
 //! * `AwaitingClear` (`RENDER_STATE_CLEAR`) — `\p` (`CHAR_PROMPT_CLEAR`):
 //!   wait for `confirm_pressed`, then reset the cursor to the box's origin
 //!   (a fresh "page") on the same tick — upstream combines the wait check
-//!   and the clear in one `TextPrinterWaitWithDownArrow` branch.
+//!   and the clear in one `TextPrinterWaitWithDownArrow` branch. Like `\l`,
+//!   the `\p` char reloaded `delayCounter` when consumed, so the first glyph
+//!   after the clear resumes after a reveal-delay period at Slow/Mid.
 //! * `Finished` (`RENDER_FINISH`) — the `0xFF` terminator was consumed.
 //!
 //! # Deliberately out of scope
@@ -362,16 +376,33 @@ impl<'a> Printer<'a> {
     }
 
     /// `RENDER_STATE_HANDLE_CHAR`: the steady-state loop. Loops internally
-    /// over every zero-cost ("`RENDER_REPEAT`") token — newlines, no-op
-    /// extended control codes, unsupported placeholder-style tokens — until
-    /// it either reveals a glyph, transitions to a waiting state, or hits
-    /// the terminator; each of those ends the tick.
+    /// over every `RENDER_REPEAT`-class token — newlines, no-op extended
+    /// control codes, unsupported placeholder-style tokens — until it either
+    /// reveals a glyph, transitions to a waiting state, or hits the
+    /// terminator; each of those ends the tick.
+    ///
+    /// Faithful to upstream's `RENDER_STATE_HANDLE_CHAR` (`text.c`): the
+    /// reveal-delay counter is reloaded to [`TextSpeed::wait_frames`]
+    /// (`delayCounter = textSpeed`) *before* consuming each token, and the
+    /// `delay_counter > 0` guard at the top of the loop — upstream's
+    /// `if (delayCounter && textSpeed)` — burns it back down one frame per
+    /// tick. A `RENDER_REPEAT` token reloads the counter and loops back to
+    /// that guard, so at Slow/Mid (`wait_frames != 0`) it costs a full
+    /// reveal-delay period; at Fast/Instant (`wait_frames == 0`) the counter
+    /// stays 0 and those tokens remain free. The counter starts at 0, so the
+    /// very first glyph still reveals on frame 0.
     fn tick_handle_char(&mut self) -> TickEvent {
-        if self.delay_counter > 0 {
-            self.delay_counter -= 1;
-            return TickEvent::Idle;
-        }
         loop {
+            if self.delay_counter > 0 {
+                self.delay_counter -= 1;
+                return TickEvent::Idle;
+            }
+            // Upstream reloads `delayCounter = textSpeed` unconditionally here,
+            // before consuming the next char. For a glyph this becomes the
+            // reveal delay; for a RENDER_REPEAT token the `continue` returns to
+            // the guard above and drains it (one idle period at Slow/Mid).
+            self.delay_counter = self.speed.wait_frames();
+
             let Some(tok) = self.tokens.get(self.pos).cloned() else {
                 self.state = PrinterState::Finished;
                 return TickEvent::Finished;
@@ -411,7 +442,8 @@ impl<'a> Printer<'a> {
                 glyph,
             };
             self.cursor.0 += i32::from(glyph.advance_width);
-            self.delay_counter = self.speed.wait_frames();
+            // `delay_counter` was already reloaded above, so the next glyph's
+            // reveal delay is set; upstream leaves it untouched on this path.
             return TickEvent::Glyph(Box::new(placement));
         }
     }
@@ -504,10 +536,13 @@ mod tests {
     }
 
     #[test]
-    fn newline_resets_x_and_advances_y_by_line_height_for_free() {
+    fn newline_resets_x_and_advances_y_by_line_height_at_instant_speed() {
         let pixels = blank_sheet_pixels();
         let sheet = synthetic_sheet(&pixels, FontId::Normal);
-        // "A\nA" -- newline must not cost a tick of its own.
+        // "A\nA" -- at Instant (textSpeed == 0) the newline reloads a
+        // zero-frame reveal delay, so it stays free: it costs no tick of its
+        // own. (At Slow/Mid it would cost a reveal-delay period -- see
+        // `newline_costs_a_reveal_delay_period_at_mid_speed`.)
         let tokens = decode_tokens(&[0xBB, super::super::CHAR_NEWLINE, 0xBB, super::super::EOS]);
         let mut printer = Printer::new(tokens, sheet, TextSpeed::Instant, (0, 1));
 
@@ -517,11 +552,47 @@ mod tests {
         assert_eq!((first.x, first.y), (0, 1));
 
         // Second tick consumes the newline AND draws the next glyph in one
-        // frame (newline is RENDER_REPEAT upstream, not a frame of its own).
+        // frame (RENDER_REPEAT with a zero-frame reload at Instant).
         let TickEvent::Glyph(second) = printer.tick(false) else {
             panic!("expected a glyph after the free newline")
         };
         assert_eq!((second.x, second.y), (0, 1 + 16));
+    }
+
+    #[test]
+    fn newline_costs_a_reveal_delay_period_at_mid_speed() {
+        // Upstream reloads `delayCounter = textSpeed` before consuming the
+        // newline, then the RENDER_REPEAT re-entry burns it down. For "A\nB"
+        // at MID (textSpeed = 3): A on frame 0, then A's 3-frame reveal delay
+        // (frames 1-3), the newline consumed on frame 4 followed by 3 more
+        // idle frames (frames 4-6), and B on frame 7 -- NOT frame 4.
+        let pixels = blank_sheet_pixels();
+        let sheet = synthetic_sheet(&pixels, FontId::Normal);
+        let tokens = decode_tokens(&[0xBB, super::super::CHAR_NEWLINE, 0xBB, super::super::EOS]);
+        let mut printer = Printer::new(tokens, sheet, TextSpeed::Mid, (0, 0));
+
+        // Frame 0: A drawn immediately (first glyph, delay_counter starts 0).
+        let TickEvent::Glyph(a) = printer.tick(false) else {
+            panic!("expected 'A' on frame 0")
+        };
+        assert_eq!((a.x, a.y), (0, 0));
+
+        // Frames 1-6: six idle frames (A's reveal delay + the delay the
+        // newline reloads). The newline is consumed on frame 4 but yields no
+        // visible glyph and leaves the counter mid-drain.
+        for frame in 1..=6 {
+            assert_eq!(
+                printer.tick(false),
+                TickEvent::Idle,
+                "frame {frame} should be idle"
+            );
+        }
+
+        // Frame 7: B finally revealed, on the next line.
+        let TickEvent::Glyph(b) = printer.tick(false) else {
+            panic!("expected 'B' on frame 7")
+        };
+        assert_eq!((b.x, b.y), (0, 16));
     }
 
     #[test]
@@ -622,6 +693,93 @@ mod tests {
         assert_eq!(printer.cursor(), (0, 1));
         let TickEvent::Glyph(g) = printer.tick(false) else {
             panic!("expected printing to resume on the new page")
+        };
+        assert_eq!((g.x, g.y), (0, 1));
+    }
+
+    #[test]
+    fn page_clear_resumes_after_a_reveal_delay_at_mid_speed() {
+        // The `\p` char reloads `delayCounter = textSpeed` when consumed, and
+        // the clear/wait states never touch it, so at MID the first glyph of
+        // the new page resumes after a full 3-frame reveal delay (NOT frame 0).
+        let pixels = blank_sheet_pixels();
+        let sheet = synthetic_sheet(&pixels, FontId::Normal);
+        let tokens = decode_tokens(&[
+            0xBB,
+            super::super::CHAR_PROMPT_CLEAR,
+            0xBB,
+            super::super::EOS,
+        ]);
+        let mut printer = Printer::new(tokens, sheet, TextSpeed::Mid, (0, 0));
+
+        // Frame 0: 'A'. Frames 1-3: A's reveal delay.
+        assert!(matches!(printer.tick(false), TickEvent::Glyph(_)));
+        for frame in 1..=3 {
+            assert_eq!(
+                printer.tick(false),
+                TickEvent::Idle,
+                "frame {frame} should be idle"
+            );
+        }
+        // Frame 4: \p consumed -> AwaitingClear (reloads delay_counter = 3).
+        assert_eq!(printer.tick(false), TickEvent::AwaitingClear);
+        // Frame 5: still waiting for confirm.
+        assert_eq!(printer.tick(false), TickEvent::AwaitingClear);
+        // Frame 6: confirm clears the page on the same tick.
+        assert_eq!(printer.tick(true), TickEvent::Cleared);
+        assert_eq!(printer.cursor(), (0, 0));
+        // Frames 7-9: the reveal delay reloaded by \p drains -- resume is NOT
+        // immediate at MID.
+        for frame in 7..=9 {
+            assert_eq!(
+                printer.tick(false),
+                TickEvent::Idle,
+                "resume frame {frame} should be idle"
+            );
+        }
+        // Frame 10: the new page's first glyph.
+        let TickEvent::Glyph(b) = printer.tick(false) else {
+            panic!("expected the new page's glyph on frame 10")
+        };
+        assert_eq!((b.x, b.y), (0, 0));
+    }
+
+    #[test]
+    fn scroll_resumes_after_a_reveal_delay_at_mid_speed() {
+        // Same reload semantics for `\l`: the scroll animation leaves
+        // delay_counter at textSpeed, so the first glyph after the scroll
+        // waits out a reveal-delay period at MID.
+        let pixels = blank_sheet_pixels();
+        let sheet = synthetic_sheet(&pixels, FontId::Normal);
+        let tokens = decode_tokens(&[
+            0xBB,
+            super::super::CHAR_PROMPT_SCROLL,
+            0xBB,
+            super::super::EOS,
+        ]);
+        let mut printer = Printer::new(tokens, sheet, TextSpeed::Mid, (0, 1));
+
+        // 'A', then its 3-frame reveal delay.
+        assert!(matches!(printer.tick(false), TickEvent::Glyph(_)));
+        for _ in 0..3 {
+            assert_eq!(printer.tick(false), TickEvent::Idle);
+        }
+        // \l consumed -> AwaitingScroll (reloads delay_counter = 3).
+        assert_eq!(printer.tick(false), TickEvent::AwaitingScroll);
+        assert_eq!(printer.tick(false), TickEvent::AwaitingScroll);
+        assert_eq!(printer.tick(true), TickEvent::ScrollStarted);
+        // MID scrolls 2px/frame over the 16px line height -> 8 scroll frames.
+        for _ in 0..8 {
+            assert_eq!(printer.tick(false), TickEvent::Scrolling { dy: 2 });
+        }
+        assert_eq!(printer.tick(false), TickEvent::ScrollFinished);
+        // The reveal delay reloaded when \l was consumed still has to drain:
+        // 3 idle frames, THEN the next glyph.
+        for _ in 0..3 {
+            assert_eq!(printer.tick(false), TickEvent::Idle);
+        }
+        let TickEvent::Glyph(g) = printer.tick(false) else {
+            panic!("expected printing to resume after the scroll's reveal delay")
         };
         assert_eq!((g.x, g.y), (0, 1));
     }

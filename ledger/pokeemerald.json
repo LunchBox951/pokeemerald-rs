@@ -26658,7 +26658,7 @@
           "status": "rewritten"
         },
         "RenderText": {
-          "reason": "The per-frame RENDER_STATE_HANDLE_CHAR loop -- newline (free, no frame cost), \\l/\\p prompt-scroll/prompt-clear wait-then-act states, glyph-id resolution via the decoded byte, and the reveal-delay countdown -- reimplemented as Printer::tick's frame-driven state machine (PrinterState). Colour/font/pause/audio extended control codes are consumed as documented no-ops; see the module's 'Deliberately out of scope' docs.",
+          "reason": "The per-frame RENDER_STATE_HANDLE_CHAR loop -- newline, \\l/\\p prompt-scroll/prompt-clear wait-then-act states, glyph-id resolution via the decoded byte, and the reveal-delay countdown -- reimplemented as Printer::tick's frame-driven state machine (PrinterState). Faithful to upstream's unconditional 'delayCounter = textSpeed' reload before each consumed char: a RENDER_REPEAT-class token (newline, no-op control code, skipped placeholder) reloads the reveal-delay counter and re-enters HANDLE_CHAR, so at Slow/Mid (textSpeed != 0) it costs one full reveal-delay period rather than being frame-free, and the first glyph after a \\l scroll or \\p page clear resumes with delayCounter = textSpeed; at Fast/Instant (textSpeed == 0) those tokens stay free. Colour/font/pause/audio extended control codes are consumed as documented no-ops; see the module's 'Deliberately out of scope' docs.",
           "rust_target": "crates/engine/src/text/render.rs",
           "spec": "S-5",
           "status": "rewritten"
