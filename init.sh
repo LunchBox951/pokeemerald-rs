@@ -138,10 +138,66 @@ verify_pinned() {
     dirty="$(git --no-replace-objects -C "$dir" \
         -c core.autocrlf=false -c core.eol=lf -c core.excludesFile=/dev/null \
         -c core.fsmonitor=false -c core.attributesFile=/dev/null \
+        -c core.checkStat=default \
         status --porcelain --ignored --untracked-files=all)"
     if [[ -n "$dirty" ]]; then
         echo "error: $dir is at the pinned revision but its tree is not clean:" >&2
         printf '%s\n' "$dirty" | head -20 >&2
+        echo "  to restore the pinned tree: rm -rf -- '$dir' && ./init.sh" >&2
+        exit 1
+    fi
+    verify_tree_bytes "$dir" "$ref"
+}
+
+# verify_tree_bytes <dir> <ref> — every tracked file's on-disk bytes must
+# equal its pinned blob. `git status` trusts machinery an attacker (or an
+# unlucky config) controls — clean filters, the stat cache, fsmonitor — so
+# tracked CONTENT is verified by hashing raw bytes against the pinned
+# tree's blob IDs. The only sanctioned divergence is the eol conversion
+# declared by the tracked .gitattributes: that file's own bytes are
+# verified by the same comparison (any tamper beyond a pure CRLF render of
+# its committed blob surfaces here), and an eol=crlf path is accepted only
+# when its bytes are exactly the CRLF rendering of the committed blob —
+# fully determined by the blob, so nothing can be laundered through it.
+verify_tree_bytes() {
+    local dir="$1"
+    local ref="$2"
+    local listing
+    listing="$(mktemp)"
+    # <oid>\t<mode>\t<path> for every blob in the pinned tree
+    git --no-replace-objects -C "$dir" ls-tree -r "$ref" \
+        | awk -F'\t' '{ split($1, a, " "); if (a[2] == "blob") print a[3] "\t" a[1] "\t" $2 }' \
+        >"$listing"
+    awk -F'\t' '$2 != "120000" { print $3 }' "$listing" >"$listing.paths"
+    awk -F'\t' '$2 != "120000" { print $1 }' "$listing" >"$listing.expected"
+    (cd "$dir" && git hash-object --no-filters --stdin-paths <"$listing.paths" 2>/dev/null || true) \
+        >"$listing.actual"
+    local bad path really_bad=""
+    bad="$(paste "$listing.expected" "$listing.actual" "$listing.paths" \
+        | awk -F'\t' '$1 != $2 { print $3 }')"
+    while IFS= read -r path; do
+        [[ -z "$path" ]] && continue
+        local eolattr oid
+        eolattr="$(git -C "$dir" check-attr eol -- "$path" | awk -F': ' '{ print $3 }')"
+        oid="$(git --no-replace-objects -C "$dir" rev-parse "$ref:$path")"
+        if [[ "$eolattr" == "crlf" ]] \
+            && cmp -s <(git --no-replace-objects -C "$dir" cat-file blob "$oid" | sed 's/$/\r/') "$dir/$path"; then
+            continue
+        fi
+        really_bad+="$path"$'\n'
+    done <<<"$bad"
+    # symlink entries: the on-disk link target must equal the blob text
+    local oid mode
+    while IFS=$'\t' read -r oid mode path; do
+        [[ "$mode" == "120000" ]] || continue
+        if [[ "$(readlink "$dir/$path" 2>/dev/null || true)" != "$(git --no-replace-objects -C "$dir" cat-file blob "$oid")" ]]; then
+            really_bad+="$path"$'\n'
+        fi
+    done <"$listing"
+    rm -f "$listing" "$listing.paths" "$listing.expected" "$listing.actual"
+    if [[ -n "$really_bad" ]]; then
+        echo "error: $dir tracked content differs byte-for-byte from the pinned tree at $ref:" >&2
+        printf '%s' "$really_bad" | head -20 >&2
         echo "  to restore the pinned tree: rm -rf -- '$dir' && ./init.sh" >&2
         exit 1
     fi

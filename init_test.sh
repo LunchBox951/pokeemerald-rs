@@ -517,4 +517,75 @@ echo "$stderr_out" | grep -qi "not clean" || fail "global-filter tamper not caug
 
 echo "ok: host-global clean filter could not launder the tamper"
 
+echo "=== test 19: core.checkStat=minimal cannot hide a same-size tamper ==="
+
+checkout19="$workdir/checkout19"
+make_main_checkout "$checkout19"
+(
+    cd "$checkout19"
+    POKEEMERALD_REMOTE="$fake_poke" MGBA_REMOTE="$fake_mgba" \
+        POKEEMERALD_REF="$sha_a_poke" MGBA_REF="$sha_a_mgba" \
+        ./init.sh >/dev/null
+)
+git -C "$checkout19/pokeemerald" config core.checkStat minimal
+# Same-size content tamper with the original mtime restored: the stat
+# cache sees nothing, only a byte comparison can catch it.
+stamp="$workdir/stamp19"
+touch -r "$checkout19/pokeemerald/VERSION" "$stamp"
+printf 'commit B\n' >"$checkout19/pokeemerald/VERSION"
+touch -r "$stamp" "$checkout19/pokeemerald/VERSION"
+
+set +e
+stderr_out="$(cd "$checkout19" && POKEEMERALD_REMOTE="$fake_poke" MGBA_REMOTE="$fake_mgba" \
+    POKEEMERALD_REF="$sha_a_poke" MGBA_REF="$sha_a_mgba" \
+    ./init.sh 2>&1 >/dev/null)"
+status=$?
+set -e
+
+[[ "$status" -ne 0 ]] || fail "init.sh exited 0 on a same-size tamper under core.checkStat=minimal"
+echo "$stderr_out" | grep -qF "VERSION" || fail "checkStat tamper error didn't name the file; got: $stderr_out"
+
+echo "ok: stat-cache evasion could not hide the tamper"
+
+echo "=== test 20: a committed filter binding cannot launder tampered bytes ==="
+
+# The filter attribute lives in the TRACKED .gitattributes; the filter
+# command comes from host-global config. Status would read the laundered
+# bytes as clean; the byte comparison must not.
+fake_poke20="$workdir/remote-pokeemerald-20"
+sha20="$(make_fake_remote "$fake_poke20")"
+echo "VERSION filter=launder" >"$fake_poke20/.gitattributes"
+git_c -C "$fake_poke20" add .gitattributes
+git_c -C "$fake_poke20" commit --quiet -m "attributes"
+sha20="$(git -C "$fake_poke20" rev-parse HEAD)"
+
+fakehome20="$workdir/fakehome20"
+mkdir -p "$fakehome20"
+HOME="$fakehome20" git config --global user.name "init_test"
+HOME="$fakehome20" git config --global user.email "init_test@example.invalid"
+HOME="$fakehome20" git config --global filter.launder.clean "printf 'commit A\n'"
+
+checkout20="$workdir/checkout20"
+make_main_checkout "$checkout20"
+(
+    cd "$checkout20"
+    HOME="$fakehome20" POKEEMERALD_REMOTE="$fake_poke20" MGBA_REMOTE="$fake_mgba" \
+        POKEEMERALD_REF="$sha20" MGBA_REF="$sha_a_mgba" \
+        ./init.sh >/dev/null
+)
+printf 'commit B\n' >"$checkout20/pokeemerald/VERSION"
+
+set +e
+stderr_out="$(cd "$checkout20" && HOME="$fakehome20" \
+    POKEEMERALD_REMOTE="$fake_poke20" MGBA_REMOTE="$fake_mgba" \
+    POKEEMERALD_REF="$sha20" MGBA_REF="$sha_a_mgba" \
+    ./init.sh 2>&1 >/dev/null)"
+status=$?
+set -e
+
+[[ "$status" -ne 0 ]] || fail "init.sh exited 0 with a tamper laundered by a committed filter binding"
+echo "$stderr_out" | grep -qF "VERSION" || fail "committed-filter tamper error didn't name the file; got: $stderr_out"
+
+echo "ok: committed filter binding could not launder the tamper"
+
 echo "all tests passed"
