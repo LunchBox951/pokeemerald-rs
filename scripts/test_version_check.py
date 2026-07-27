@@ -185,6 +185,25 @@ class _TempGitRepo:
         finally:
             os.chdir(old_cwd)
 
+    def run_version_check_from_outside(self, base: str):
+        """Invoke main() from a non-repo cwd with root pinned to this repo.
+
+        Reproduces the fail-open scenario: if the base-side ``git show``
+        runs in the caller's cwd instead of the resolved root, the base
+        silently reads as absent and the gate passes when it must not.
+        """
+        outside = tempfile.TemporaryDirectory()
+        old_cwd = os.getcwd()
+        orig_repo_root = version_check.repo_root
+        os.chdir(outside.name)
+        version_check.repo_root = lambda: str(self.path)
+        try:
+            return version_check.main(["--base", base, "--head", "HEAD"])
+        finally:
+            version_check.repo_root = orig_repo_root
+            os.chdir(old_cwd)
+            outside.cleanup()
+
 
 class TestFinalGateIntegration(unittest.TestCase):
     """Reproduces issue #129's exact scratch-repo scenario against real git."""
@@ -291,6 +310,23 @@ class TestFinalGateIntegration(unittest.TestCase):
             self.repo.run_version_check(base="HEAD", head="HEAD"), 0
         )
 
+    def test_base_reads_follow_the_resolved_root_not_the_cwd(self):
+        # Stale-marker scenario, invoked from a directory outside any
+        # worktree: the base-side reads must still resolve against the
+        # repository root, or the stale marker reads as newly-added and
+        # the gate fails open.
+        self.repo.write("VERSION", "0.9.9.9\n")
+        self.repo.commit("baseline")
+        self.repo.write("VERSION", "1.0.0.0\n")
+        self.repo.write(MARKER, marker("1.0.0.0"))
+        self.repo.commit("approved-final")
+        self.repo.write("VERSION", "2.0.0.0\n")
+        self.repo.commit("unauthorized-bump")
+
+        self.assertNotEqual(
+            self.repo.run_version_check_from_outside(base="approved-final"), 0
+        )
+
     def test_symlinked_marker_is_treated_as_absent(self):
         # open() follows a symlink while `git show` returns its target path
         # text, so a symlinked marker reads "changed" without its bytes ever
@@ -337,6 +373,27 @@ class TestMarkerStrictness(unittest.TestCase):
         )
         self.assertEqual(approved, (1, 0, 0, 0))
         self.assertEqual(when, "2026-07-25")
+
+    def test_crlf_marker_still_parses(self):
+        # A marker committed with CRLF line endings is a legitimate
+        # approval; \r must not break the line anchors.
+        raw = "Approved version: 1.0.0.0\r\nDate: 2026-07-25\r\n"
+        approved, when = version_check.parse_marker(raw, MARKER)
+        self.assertEqual(approved, (1, 0, 0, 0))
+        self.assertEqual(when, "2026-07-25")
+
+    def test_leading_zero_version_component_rejected(self):
+        # '01.0.0.0' would compare equal to the approved '1.0.0.0' as
+        # integers while release tooling tags the raw text -- the spelling
+        # itself must be canonical.
+        with self.assertRaises(version_check.VersionError):
+            version_check.parse_version("01.0.0.0", "test")
+        with self.assertRaises(version_check.VersionError):
+            version_check.parse_version("1.0.00.0", "test")
+        # A lone zero component is fine.
+        self.assertEqual(
+            version_check.parse_version("0.1.0.0", "test"), (0, 1, 0, 0)
+        )
 
 
 if __name__ == "__main__":

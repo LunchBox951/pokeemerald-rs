@@ -102,8 +102,13 @@ ABSENT_BASE_VERSION = (0, 0, 0, 0)
 # Case-insensitive key, colon-separated, one non-blank token as the value.
 # Horizontal whitespace only ([ \t]) -- \s matches newlines under (?m), which
 # would let a field split across lines satisfy the documented one-line form.
-MARKER_VERSION_RE = re.compile(r"(?im)^[ \t]*approved version[ \t]*:[ \t]*(\S+)[ \t]*$")
-MARKER_DATE_RE = re.compile(r"(?im)^[ \t]*date[ \t]*:[ \t]*(\S+)[ \t]*$")
+# (\r? tolerates CRLF line endings: \r is neither \S nor [ \t], so without
+# it a CRLF marker would never match and a legitimate approval would be
+# rejected.)
+MARKER_VERSION_RE = re.compile(
+    r"(?im)^[ \t]*approved version[ \t]*:[ \t]*(\S+)[ \t]*\r?$"
+)
+MARKER_DATE_RE = re.compile(r"(?im)^[ \t]*date[ \t]*:[ \t]*(\S+)[ \t]*\r?$")
 
 # Strict Date shape; date.fromisoformat alone also accepts e.g. '20260725'
 # and week dates, which the documented format does not.
@@ -134,7 +139,9 @@ def repo_root() -> str:
             return root
     except (subprocess.CalledProcessError, FileNotFoundError, OSError):
         pass
-    # Fallback: parent of the scripts/ directory holding this file.
+    # Fallback: parent of the scripts/ directory holding this file. Every
+    # read -- including the base-side `git show` -- is then anchored to the
+    # resolved root, so head and base always describe the same repository.
     return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
@@ -171,6 +178,14 @@ def parse_version(raw: str, source: str) -> Version:
                 f"{source}: {name} component {part!r} in {text!r} is not a "
                 f"non-negative integer"
             )
+        # Reject leading zeroes: '01.0.0.0' would compare equal to the
+        # approved '1.0.0.0' as integers, yet release tooling builds tags
+        # from the raw text -- an approval must name the exact spelling.
+        if len(part) > 1 and part[0] == "0":
+            raise VersionError(
+                f"{source}: {name} component {part!r} in {text!r} has a "
+                f"leading zero; use the canonical spelling"
+            )
         values.append(int(part))
 
     return (values[0], values[1], values[2], values[3])
@@ -199,22 +214,26 @@ def read_ref_file(ref: str, rel_path: str, root: str) -> Optional[str]:
                 return fh.read()
         except OSError:
             return None
-    return git_show_file(ref, rel_path)
+    return git_show_file(ref, rel_path, root)
 
 
-def git_show_file(ref: str, rel_path: str) -> Optional[str]:
+def git_show_file(ref: str, rel_path: str, root: str) -> Optional[str]:
     """Return the contents of ``<ref>:<rel_path>`` via ``git show``.
 
-    Returns ``None`` if the ref is unknown or the file is absent on that ref
-    (e.g. a fresh repo with no ``origin/main`` yet, or a marker that simply
-    doesn't exist there). Any git failure is treated as "absent" rather than
-    a hard error so the very first commit is not rejected.
+    Runs git in ``root`` so the read is independent of the caller's working
+    directory (matching the head-side reads); otherwise an invocation from
+    outside the worktree would silently read the base as absent and fail
+    the gate OPEN. Returns ``None`` if the ref is unknown or the file is
+    absent on that ref (e.g. a fresh repo with no ``origin/main`` yet, or a
+    marker that simply doesn't exist there) -- callers decide whether
+    absence is fatal.
     """
     try:
         out = subprocess.run(
             ["git", "show", f"{ref}:{rel_path}"],
             capture_output=True,
             text=True,
+            cwd=root,
         )
     except (FileNotFoundError, OSError):
         # git not installed / not runnable -> behave as if absent.
@@ -239,7 +258,7 @@ def read_base_version(base: str, root: str) -> Version:
     tree -- so ``--base HEAD`` compares against the commit, not against
     the same uncommitted file the head side is validating.
     """
-    raw = git_show_file(base, "VERSION")
+    raw = git_show_file(base, "VERSION", root)
     if raw is None:
         return ABSENT_BASE_VERSION
     return parse_version(raw, f"base ({base})")
@@ -418,7 +437,7 @@ def main(argv: Optional[list] = None) -> int:
         base_version = read_base_version(args.base, root)
         marker_head = read_ref_file(args.head, args.final_gate_marker, root)
         # Base side always reads the committed blob (see read_base_version).
-        marker_base = git_show_file(args.base, args.final_gate_marker)
+        marker_base = git_show_file(args.base, args.final_gate_marker, root)
         check_transition(
             base_version,
             head_version,
