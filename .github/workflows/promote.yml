@@ -85,46 +85,6 @@ jobs:
             --label "release" \
             --label "needs-review"
 
-      # Reconciliation: any push to a release/* branch re-derives where that
-      # branch should be promoted and corrects its open promotion PRs. This
-      # is what makes routing eventually consistent: no matter when a branch
-      # advances relative to the steps below (every check-then-act sequence
-      # has a residual window), the advance itself triggers a fresh
-      # reconciliation, and require-rung-cleared fails closed in between.
-      - name: Reconcile promotion PRs (release/* moved)
-        if: github.event_name == 'push' && startsWith(github.ref_name, 'release/')
-        run: |
-          set -euo pipefail
-          release_branch="${GITHUB_REF_NAME}"
-          target="$(scripts/select_promotion_target.sh "${release_branch}")"
-          for base in unstable stable main; do
-            if [ "${base}" = "${target}" ]; then
-              continue
-            fi
-            for n in $(gh pr list --head "${release_branch}" --base "${base}" --state open --json number --jq '.[].number'); do
-              gh pr close "${n}" --comment "$(printf '%s moved and now routes to %s; closing this misrouted promotion PR (promote.yml reconciliation).' "${release_branch}" "${target:-no rung (contained in every channel)}")"
-            done
-          done
-          if [ -z "${target}" ]; then
-            echo "${release_branch} contained in every channel; nothing to open."
-            exit 0
-          fi
-          existing="$(gh pr list --head "${release_branch}" --base "${target}" --state open --json number --jq 'length')"
-          if [ "${existing}" != "0" ]; then
-            echo "Promotion PR ${release_branch} -> ${target} already open."
-            exit 0
-          fi
-          labels=(--label "release" --label "needs-review")
-          case "${target}" in
-            stable|main) labels+=(--label "needs-operator") ;;
-          esac
-          gh pr create \
-            --head "${release_branch}" \
-            --base "${target}" \
-            --title "Promote ${release_branch} → ${target}" \
-            --body "$(printf 'Automated promotion opened by promote.yml reconciliation after %s moved.\n\nCandidate: `%s` @ %s\nGates for **%s** are in RELEASE.md. A maintainer with write access must select **Approve workflows to run** before the required checks start. Player channels (`stable`, `main`) require owner signoff (`needs-operator`) before merge.' "${release_branch}" "${release_branch}" "$(git rev-parse --short "origin/${release_branch}")" "${target}")" \
-            "${labels[@]}"
-
       # Next rung: a release/* branch was merged into unstable/stable -> open the
       # PR to the rung above it.
       - name: Open next-rung PR (release/* -> next channel)
@@ -224,4 +184,47 @@ jobs:
               exit 1
             fi
             target="${new_target}"
+          done
+
+      # Reconciliation: every promote run re-derives where EVERY release/*
+      # line should be promoted and corrects its open promotion PRs. The
+      # full sweep is what makes routing eventually consistent under both
+      # races and run-coalescing: the concurrency group keeps at most one
+      # pending run (GitHub cancels an older pending run when a newer one
+      # queues), but since any surviving run repairs every line, a dropped
+      # event loses nothing. require-rung-cleared fails closed in between.
+      - name: Reconcile promotion PRs (all release/* lines)
+        if: github.event_name == 'push'
+        run: |
+          set -euo pipefail
+          for ref in $(git for-each-ref --format='%(refname:short)' 'refs/remotes/origin/release/*'); do
+            release_branch="${ref#origin/}"
+            target="$(scripts/select_promotion_target.sh "${release_branch}")"
+            for base in unstable stable main; do
+              if [ "${base}" = "${target}" ]; then
+                continue
+              fi
+              for n in $(gh pr list --head "${release_branch}" --base "${base}" --state open --json number --jq '.[].number'); do
+                gh pr close "${n}" --comment "$(printf '%s now routes to %s; closing this misrouted promotion PR (promote.yml reconciliation).' "${release_branch}" "${target:-no rung (contained in every channel)}")"
+              done
+            done
+            if [ -z "${target}" ]; then
+              echo "${release_branch} contained in every channel; nothing to open."
+              continue
+            fi
+            existing="$(gh pr list --head "${release_branch}" --base "${target}" --state open --json number --jq 'length')"
+            if [ "${existing}" != "0" ]; then
+              echo "Promotion PR ${release_branch} -> ${target} already open."
+              continue
+            fi
+            labels=(--label "release" --label "needs-review")
+            case "${target}" in
+              stable|main) labels+=(--label "needs-operator") ;;
+            esac
+            gh pr create \
+              --head "${release_branch}" \
+              --base "${target}" \
+              --title "Promote ${release_branch} → ${target}" \
+              --body "$(printf 'Automated promotion opened by promote.yml reconciliation.\n\nCandidate: `%s` @ %s\nGates for **%s** are in RELEASE.md. A maintainer with write access must select **Approve workflows to run** before the required checks start. Player channels (`stable`, `main`) require owner signoff (`needs-operator`) before merge.' "${release_branch}" "$(git rev-parse --short "origin/${release_branch}")" "${target}")" \
+              "${labels[@]}"
           done
