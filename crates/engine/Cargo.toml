@@ -15,3 +15,9 @@ workspace = true
 # decode layer rather than redefining them; `assets` is itself dependency-free
 # (std-only), so this does not drag anything new into engine's build.
 assets = { path = "../assets" }
+
+[dev-dependencies]
+# The same workspace-local crate with its test-only seam enabled: unit tests
+# build synthetic font sheets via FontImageRef::new_for_tests. The feature is
+# dev-only, so production builds keep the pack-mediated pairing guarantee.
+assets = { path = "../assets", features = ["test-support"] }

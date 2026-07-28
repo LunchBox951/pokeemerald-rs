@@ -42,9 +42,6 @@ pub enum SaveError {
         /// The number of bytes supplied.
         got: usize,
     },
-    /// The stored player-gender byte was neither `MALE` (0) nor `FEMALE`
-    /// (1).
-    InvalidGender(u8),
 }
 
 impl std::fmt::Display for SaveError {
@@ -53,7 +50,6 @@ impl std::fmt::Display for SaveError {
             Self::Truncated { expected, got } => {
                 write!(f, "expected at least {expected} bytes, got {got}")
             }
-            Self::InvalidGender(byte) => write!(f, "invalid player gender byte {byte:#04x}"),
         }
     }
 }
@@ -139,6 +135,13 @@ impl WarpData {
 }
 
 /// Player gender stored in `SaveBlock2`.
+///
+/// Canonical Emerald stores `playerGender` as an unconstrained `u8`
+/// (`include/global.h`) and never validates it while loading —
+/// `CopySaveSlotData` (`src/save.c`) copies a checksum-valid sector
+/// byte-for-byte regardless of its value. [`PlayerGender::Other`] preserves
+/// that: a raw byte outside `MALE`/`FEMALE` decodes losslessly instead of
+/// invalidating the whole [`SaveBlock2`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum PlayerGender {
     /// `MALE` (0).
@@ -146,6 +149,8 @@ pub enum PlayerGender {
     Male,
     /// `FEMALE` (1).
     Female,
+    /// Any raw byte other than `MALE`/`FEMALE`, preserved as-is.
+    Other(u8),
 }
 
 impl PlayerGender {
@@ -153,14 +158,15 @@ impl PlayerGender {
         match self {
             Self::Male => 0,
             Self::Female => 1,
+            Self::Other(byte) => byte,
         }
     }
 
-    fn from_byte(byte: u8) -> Result<Self, SaveError> {
+    fn from_byte(byte: u8) -> Self {
         match byte {
-            0 => Ok(Self::Male),
-            1 => Ok(Self::Female),
-            other => Err(SaveError::InvalidGender(other)),
+            0 => Self::Male,
+            1 => Self::Female,
+            other => Self::Other(other),
         }
     }
 }
@@ -200,14 +206,15 @@ impl SaveBlock2 {
     ///
     /// # Errors
     ///
-    /// Returns [`SaveError::Truncated`] for a short block or
-    /// [`SaveError::InvalidGender`] for a gender byte other than 0 or 1.
+    /// Returns [`SaveError::Truncated`] for a short block. Every byte value
+    /// decodes: an out-of-range `player_gender` byte becomes
+    /// [`PlayerGender::Other`] rather than an error (see its docs).
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, SaveError> {
         require_len(bytes, Self::PAYLOAD_LEN)?;
         let mut player_name = [0u8; PLAYER_NAME_BUF_LEN];
         player_name
             .copy_from_slice(&bytes[PLAYER_NAME_OFFSET..PLAYER_NAME_OFFSET + PLAYER_NAME_BUF_LEN]);
-        let player_gender = PlayerGender::from_byte(bytes[PLAYER_GENDER_OFFSET])?;
+        let player_gender = PlayerGender::from_byte(bytes[PLAYER_GENDER_OFFSET]);
         let mut player_trainer_id = [0u8; TRAINER_ID_LENGTH];
         player_trainer_id.copy_from_slice(
             &bytes[PLAYER_TRAINER_ID_OFFSET..PLAYER_TRAINER_ID_OFFSET + TRAINER_ID_LENGTH],
@@ -565,12 +572,15 @@ mod tests {
     }
 
     #[test]
-    fn save_block2_rejects_invalid_gender() {
+    fn save_block2_preserves_out_of_range_gender_byte_losslessly() {
+        // Regression for issue #130: canonical Emerald treats `playerGender`
+        // as an unconstrained u8 and never rejects a checksum-valid sector
+        // over it, so `from_bytes` must not either.
         let mut bytes = SaveBlock2::default().to_bytes();
         bytes[PLAYER_GENDER_OFFSET] = 9;
-        assert_eq!(
-            SaveBlock2::from_bytes(&bytes),
-            Err(SaveError::InvalidGender(9))
-        );
+        let decoded = SaveBlock2::from_bytes(&bytes).unwrap();
+        assert_eq!(decoded.player_gender, PlayerGender::Other(9));
+        // And it round-trips back to the exact same raw byte on encode.
+        assert_eq!(decoded.to_bytes()[PLAYER_GENDER_OFFSET], 9);
     }
 }

@@ -24036,6 +24036,26 @@
       "status": "pending"
     },
     "src/battle_script_commands.c": {
+      "artifacts": {
+        "ApplyRandomDmgMultiplier": {
+          "reason": "The 85..=100% roll rewritten as apply_damage_roll: unconditional RNG draw before the zero-damage guard (exact upstream consumption count) and the nonzero floor.",
+          "rust_target": "crates/battle/src/damage.rs",
+          "spec": "S-6",
+          "status": "rewritten"
+        },
+        "Cmd_typecalc": {
+          "reason": "Partial: STAB (has_stab/apply_stab, incl. the MOVE_STRUGGLE early-return), gTypeEffectiveness table-order per-slot modulation with terminal immunity (apply_dual_type_effectiveness), and the type1!=type2 dedup are rewritten as pure functions. Still pending: Levitate/Wonder Guard ability checks, Foresight handling, MOVE_RESULT_* flag accumulation, and battle-state wiring.",
+          "rust_target": "crates/battle/src/damage.rs",
+          "spec": "S-6",
+          "status": "stubbed"
+        },
+        "ModulateDmgByType": {
+          "reason": "Arithmetic (multiply/10 with the nonzero-multiplier floor) rewritten as apply_type_effectiveness; the MOVE_RESULT_* flag side effects are modelled only as apply_dual_type_effectiveness's terminal-immunity result, with the super/not-very-effective flag accumulation still pending.",
+          "rust_target": "crates/battle/src/damage.rs",
+          "spec": "S-6",
+          "status": "stubbed"
+        }
+      },
       "category": "code.source",
       "kind": "file",
       "status": "pending"
@@ -25807,6 +25827,26 @@
       "status": "pending"
     },
     "src/menu.c": {
+      "artifacts": {
+        "WindowFunc_DrawDialogueFrame": {
+          "reason": "The standard overworld/battle dialogue box's frame-tile placement (the wing-notch top border, left/interior-fill/right column spanning height+1 rows, and the v-flipped bottom border reusing the top row's tiles) reimplemented as MessageBoxLayout::frame_tiles, against the message-box 7x2 tile sheet (assets::AssetPack::message_box).",
+          "rust_target": "crates/engine/src/text/window.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "sStandardTextBox_WindowTemplates": {
+          "reason": "Window 0's tilemap geometry for the standard field-message dialogue box (tilemapLeft/tilemapTop/width/height), transcribed as MessageBoxLayout::STANDARD and its STANDARD_* constants.",
+          "rust_target": "crates/engine/src/text/window.rs",
+          "spec": "S-5",
+          "status": "ported"
+        },
+        "sTextSpeedFrameDelays": {
+          "reason": "The SLOW/MID/FAST frames-per-character reveal cadence, transcribed as TextSpeed::frames_per_char.",
+          "rust_target": "crates/engine/src/text/render.rs",
+          "spec": "S-5",
+          "status": "ported"
+        }
+      },
       "category": "code.source",
       "kind": "file",
       "status": "pending"
@@ -26043,11 +26083,29 @@
     },
     "src/pokemon.c": {
       "artifacts": {
+        "CalculateBaseDamage": {
+          "reason": "Partial: the level/power/atk-def core plus the in-function burn, Reflect/Light-Screen, and weather hooks are rewritten as base_damage. Still pending from the same upstream function: hold-item boosts, ability modifiers (Huge/Pure Power, Thick Fat, Hustle, Guts, Plus/Minus, Overgrow-family, Marvel Scale, Flash Fire), badge boosts, critical-hit stat-stage handling, Explosion defense-halving, field sports, and double-battle spread/screen variants (issue #125 scopes these to later slices). The surrounding STAB/type/roll battle-script steps are tracked under src/battle_script_commands.c.",
+          "rust_target": "crates/battle/src/damage.rs",
+          "spec": "S-6",
+          "status": "stubbed"
+        },
         "PokemonSubstructureSerialization": {
           "reason": "All 24 personality orders, personality-XOR-OT-id encryption, wrapping secure checksum validation, and checksum-aware substructure replacement re-implemented",
           "rust_target": "crates/engine/src/save/pokemon.rs",
           "spec": "S-5",
           "status": "rewritten"
+        },
+        "gNatureStatTable": {
+          "reason": "Nature stat modifier table ported as Rust data (Nature enum + Stat enum + MODIFIERS table), pinned to upstream via id/landmark/neutral-nature tests (issue #125).",
+          "rust_target": "crates/battle/src/nature.rs",
+          "spec": "S-6",
+          "status": "ported"
+        },
+        "gStatStageRatios": {
+          "reason": "Stat-stage numerator/denominator table ported as Rust data behind the StatStage newtype, with APPLY_STAT_MOD's multiply-then-divide order preserved exactly (issue #125).",
+          "rust_target": "crates/battle/src/stat_stage.rs",
+          "spec": "S-6",
+          "status": "ported"
         }
       },
       "category": "code.source",
@@ -26690,6 +26748,32 @@
       "status": "pending"
     },
     "src/text.c": {
+      "artifacts": {
+        "AddTextPrinter": {
+          "reason": "The speed-argument-to-delay-counter setup (the '--textSpeed' decrement before the first HANDLE_CHAR tick) as Printer::new plus TextSpeed::wait_frames; the TEXT_SKIP_DRAW/speed==0 one-shot render path is folded into the same tick()-per-frame API as TextSpeed::Instant rather than a separate code path.",
+          "rust_target": "crates/engine/src/text/render.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "RenderText": {
+          "reason": "The per-frame RENDER_STATE_HANDLE_CHAR loop -- newline, \\l/\\p prompt-scroll/prompt-clear wait-then-act states, glyph-id resolution via the decoded byte, and the reveal-delay countdown -- reimplemented as Printer::tick's frame-driven state machine (PrinterState). Faithful to upstream's unconditional 'delayCounter = textSpeed' reload before each consumed char: a RENDER_REPEAT-class token (newline, no-op control code, skipped placeholder) reloads the reveal-delay counter and re-enters HANDLE_CHAR, so at Slow/Mid (textSpeed != 0) it costs one full reveal-delay period rather than being frame-free, and the first glyph after a \\l scroll or \\p page clear resumes with delayCounter = textSpeed; at Fast/Instant (textSpeed == 0) those tokens stay free. Colour/font/pause/audio extended control codes are consumed as documented no-ops; see the module's 'Deliberately out of scope' docs.",
+          "rust_target": "crates/engine/src/text/render.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "sFontInfos": {
+          "reason": "Only the maxLetterHeight column (the \\n line-advance metric) is transcribed, as max_letter_height; fontFunction/letterSpacing/lineSpacing/fgColor/bgColor/shadowColor are out of this slice's scope (glyph decompression lives in assets::fonts, colour is deliberately unmodelled here), so the file's own status stays pending.",
+          "rust_target": "crates/engine/src/text/render.rs",
+          "spec": "S-5",
+          "status": "ported"
+        },
+        "sWindowVerticalScrollSpeeds": {
+          "reason": "Per-text-speed \\l scroll animation rate (px/frame), transcribed as TextSpeed::scroll_px_per_frame.",
+          "rust_target": "crates/engine/src/text/render.rs",
+          "spec": "S-5",
+          "status": "ported"
+        }
+      },
       "category": "code.source",
       "kind": "file",
       "status": "pending"
@@ -26701,6 +26785,12 @@
     },
     "src/text_window.c": {
       "artifacts": {
+        "DrawTextBorderOuter": {
+          "reason": "The generic 3x3 selectable-frame border ring around a window's content rect (corners/edges at destination offsets +0..+8, centre +4 unused) reimplemented as border_tiles, against a text_window_frame 3x3 tile sheet. DrawTextBorderInner and rbox_fill_rectangle remain unimplemented (not needed by the v1 NPC-dialogue path), so the file's own status stays pending.",
+          "rust_target": "crates/engine/src/text/window.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
         "GetWindowFrameTilesPal": {
           "reason": "The zero-based 0..19 frame lookup with out-of-range fallback to frame 0 is re-implemented as code in AssetPack::text_window_frame (crates/assets/src/pack.rs), translating sWindowFrames indices to extracted source filenames 1.png..20.png -- a code re-implementation, distinct from the ported frame_data assets.",
           "rust_target": "crates/assets/src/pack.rs",

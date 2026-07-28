@@ -46,10 +46,20 @@
 //! [`Token::Newline`], a name/buffer placeholder is [`Token::Placeholder`], and
 //! so on. Unknown or truncated input surfaces as a concrete [`TextError`]
 //! rather than being guessed at.
+//!
+//! Two further modules build on this codec (S-5, issue #124):
+//! [`render`] is the frame-driven glyph renderer ([`render::Printer`]) that
+//! turns a decoded token stream into per-frame glyph blits against an
+//! `assets::fonts::FontGlyphSheet`, with upstream's character-at-a-time
+//! reveal cadence and `\n`/`\l`/`\p` line-break/scroll/page semantics; and
+//! [`window`] is the message-box compositor that lays out a text window's
+//! frame tiles ([`window::MessageBoxLayout`], [`window::border_tiles`]).
 
 use std::fmt;
 
 pub mod format;
+pub mod render;
+pub mod window;
 
 /// End-of-string terminator byte (`EOS`, upstream `0xFF`).
 ///
