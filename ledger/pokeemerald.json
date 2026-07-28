@@ -24036,6 +24036,26 @@
       "status": "pending"
     },
     "src/battle_script_commands.c": {
+      "artifacts": {
+        "ApplyRandomDmgMultiplier": {
+          "reason": "The 85..=100% roll rewritten as apply_damage_roll: unconditional RNG draw before the zero-damage guard (exact upstream consumption count) and the nonzero floor.",
+          "rust_target": "crates/battle/src/damage.rs",
+          "spec": "S-6",
+          "status": "rewritten"
+        },
+        "Cmd_typecalc": {
+          "reason": "Partial: STAB (has_stab/apply_stab, incl. the MOVE_STRUGGLE early-return), gTypeEffectiveness table-order per-slot modulation with terminal immunity (apply_dual_type_effectiveness), and the type1!=type2 dedup are rewritten as pure functions. Still pending: Levitate/Wonder Guard ability checks, Foresight handling, MOVE_RESULT_* flag accumulation, and battle-state wiring.",
+          "rust_target": "crates/battle/src/damage.rs",
+          "spec": "S-6",
+          "status": "stubbed"
+        },
+        "ModulateDmgByType": {
+          "reason": "Arithmetic (multiply/10 with the nonzero-multiplier floor) rewritten as apply_type_effectiveness; the MOVE_RESULT_* flag side effects are modelled only as apply_dual_type_effectiveness's terminal-immunity result, with the super/not-very-effective flag accumulation still pending.",
+          "rust_target": "crates/battle/src/damage.rs",
+          "spec": "S-6",
+          "status": "stubbed"
+        }
+      },
       "category": "code.source",
       "kind": "file",
       "status": "pending"
@@ -25984,7 +26004,7 @@
     "src/pokemon.c": {
       "artifacts": {
         "CalculateBaseDamage": {
-          "reason": "Partial: level/power/atk-def core, burn/Reflect/Light-Screen/weather hooks, STAB/type-effectiveness (incl. terminal dual-type immunity)/random-roll steps rewritten in damage.rs. Still pending from the same upstream function: hold-item boosts, ability modifiers (Huge/Pure Power, Thick Fat, Hustle, Guts, Plus/Minus, Overgrow-family, Marvel Scale, Flash Fire), badge boosts, critical-hit stat-stage handling, Explosion defense-halving, field sports, and double-battle spread/screen variants (issue #125 scopes these to later slices).",
+          "reason": "Partial: the level/power/atk-def core plus the in-function burn, Reflect/Light-Screen, and weather hooks are rewritten as base_damage. Still pending from the same upstream function: hold-item boosts, ability modifiers (Huge/Pure Power, Thick Fat, Hustle, Guts, Plus/Minus, Overgrow-family, Marvel Scale, Flash Fire), badge boosts, critical-hit stat-stage handling, Explosion defense-halving, field sports, and double-battle spread/screen variants (issue #125 scopes these to later slices). The surrounding STAB/type/roll battle-script steps are tracked under src/battle_script_commands.c.",
           "rust_target": "crates/battle/src/damage.rs",
           "spec": "S-6",
           "status": "stubbed"

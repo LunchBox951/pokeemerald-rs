@@ -304,6 +304,26 @@ impl TypeChart {
     pub fn multiplier(&self, attacker: Type, defender: Type) -> Effectiveness {
         self.matrix[attacker.id() as usize][defender.id() as usize]
     }
+
+    /// The upstream `gTypeEffectiveness` rows, in **table order**
+    /// (`pokeemerald/src/battle_main.c`). Only non-neutral pairings appear —
+    /// a pairing absent here is `x1` and upstream never modulates it.
+    ///
+    /// The order is observable `(behavioral-fidelity)`: `Cmd_typecalc` scans
+    /// this table linearly and modulates damage at each matching row, and
+    /// because every step truncates then floors, applying `x0.5` before `x2`
+    /// can differ by one from the reverse. Callers reproducing upstream's
+    /// per-slot modulation must walk these rows in order rather than loop
+    /// over defender type slots.
+    ///
+    /// The final two rows (Normal/Fighting vs Ghost) sit past the upstream
+    /// `TYPE_FORESIGHT` sentinel: a scan *without* Foresight active
+    /// processes them (upstream skips only the sentinel row itself); a
+    /// Foresight-aware caller stops before them.
+    #[must_use]
+    pub fn rows() -> &'static [(Type, Type, Effectiveness)] {
+        OVERRIDES
+    }
 }
 
 impl Default for TypeChart {
