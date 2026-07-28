@@ -1,10 +1,11 @@
 //! Error types for the `battle` crate.
 //!
 //! A concrete per-crate enum `(oop-boundaries)` — no `anyhow` in library
-//! crates. Errors surfaced by the underlying `assets` tables (species/move
-//! lookups) are returned as `assets::AssetError` directly rather than
-//! wrapped into this type — see [`crate::dex::Dex`]'s doc comment for why.
+//! crates. Lookups that fail inside the underlying `assets` tables surface
+//! here as [`BattleError::UnknownSpecies`] / [`BattleError::UnknownMove`],
+//! so `battle` callers depend only on this crate's error type.
 
+use assets::{MoveId, SpeciesId};
 use std::error::Error;
 use std::fmt;
 
@@ -26,6 +27,18 @@ pub enum BattleError {
     /// Carries the offending id. Upstream defines ids `0..NUM_NATURES`
     /// (`0..25`, `pokeemerald/include/constants/pokemon.h`).
     UnknownNature(u8),
+
+    /// A [`SpeciesId`] fell outside the extracted `gSpeciesInfo` range
+    /// (see [`crate::dex::Dex::species`]).
+    ///
+    /// Carries the offending id.
+    UnknownSpecies(SpeciesId),
+
+    /// A [`MoveId`] fell outside the extracted `gBattleMoves` range
+    /// (see [`crate::dex::Dex::move_data`]).
+    ///
+    /// Carries the offending id.
+    UnknownMove(MoveId),
 }
 
 impl fmt::Display for BattleError {
@@ -35,6 +48,8 @@ impl fmt::Display for BattleError {
                 write!(f, "stat stage offset `{offset}` outside -6..=6")
             }
             Self::UnknownNature(id) => write!(f, "unknown nature id `{id}`"),
+            Self::UnknownSpecies(id) => write!(f, "unknown species id `{}`", id.0),
+            Self::UnknownMove(id) => write!(f, "unknown move id `{}`", id.0),
         }
     }
 }

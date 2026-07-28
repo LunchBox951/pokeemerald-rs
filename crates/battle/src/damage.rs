@@ -24,9 +24,18 @@
 //! battles (the "hits both targets" halving and Reflect/Light Screen's
 //! double-battle `2/3` variant), and non-v1 move effects.
 
-use assets::{Effectiveness, Type, TypeChart};
+use assets::{Effectiveness, MoveId, Type, TypeChart};
 
 use crate::stat_stage::StatStage;
+
+/// Upstream `MOVE_STRUGGLE` (`pokeemerald/include/constants/moves.h`).
+///
+/// Struggle is special-cased by `TypeCalc`/`Cmd_typecalc`
+/// (`pokeemerald/src/battle_script_commands.c`): the function returns before
+/// both the STAB multiply and every `ModulateDmgByType` call, so Struggle
+/// never receives STAB (despite being stored as a Normal-type move) and
+/// ignores type effectiveness entirely `(behavioral-fidelity)`.
+pub const STRUGGLE: MoveId = MoveId(165);
 
 /// Whether a move's type makes it physical or special — Gen 3 derives this
 /// from the type itself (`IS_TYPE_PHYSICAL`/`IS_TYPE_SPECIAL`,
@@ -254,10 +263,19 @@ pub fn apply_stab(damage: u32, has_stab: bool) -> u32 {
     }
 }
 
-/// Whether `move_type` grants STAB against `attacker_types` (a single-type
+/// Whether `mv` grants STAB against `attacker_types` (a single-type
 /// species repeats its type in both slots, matching [`assets::BaseStats`]).
+///
+/// [`STRUGGLE`] never gets STAB: upstream's `TypeCalc` returns before the
+/// STAB multiply for `MOVE_STRUGGLE`, even though the move is stored as
+/// Normal-type — a Normal-type attacker using Struggle deals unboosted
+/// damage. Callers must likewise skip type effectiveness for Struggle (pass
+/// [`Effectiveness::Normal`], or bypass the type step entirely).
 #[must_use]
-pub fn has_stab(attacker_types: [Type; 2], move_type: Type) -> bool {
+pub fn has_stab(attacker_types: [Type; 2], mv: MoveId, move_type: Type) -> bool {
+    if mv == STRUGGLE {
+        return false;
+    }
     attacker_types[0] == move_type || attacker_types[1] == move_type
 }
 
@@ -393,9 +411,10 @@ mod tests {
     use super::{
         apply_damage_roll, apply_dual_type_effectiveness, apply_stab, apply_type_effectiveness,
         base_damage, calculate_damage, has_stab, BattleRng, DamageInput, MoveCategory, Weather,
+        STRUGGLE,
     };
     use crate::stat_stage::StatStage;
-    use assets::{Effectiveness, Type, TypeChart};
+    use assets::{Effectiveness, MoveId, Type, TypeChart};
 
     /// A `BattleRng` that always returns a fixed draw, for deterministic
     /// tests of the random roll and full pipeline.
@@ -600,11 +619,31 @@ mod tests {
 
     #[test]
     fn has_stab_checks_both_type_slots() {
-        assert!(has_stab([Type::Fire, Type::Flying], Type::Fire));
-        assert!(has_stab([Type::Fire, Type::Flying], Type::Flying));
-        assert!(!has_stab([Type::Fire, Type::Flying], Type::Water));
+        // MOVE_TACKLE (33) as a representative ordinary move.
+        let tackle = MoveId(33);
+        assert!(has_stab([Type::Fire, Type::Flying], tackle, Type::Fire));
+        assert!(has_stab([Type::Fire, Type::Flying], tackle, Type::Flying));
+        assert!(!has_stab([Type::Fire, Type::Flying], tackle, Type::Water));
         // Single-type species repeat their type in both slots.
-        assert!(has_stab([Type::Water, Type::Water], Type::Water));
+        assert!(has_stab([Type::Water, Type::Water], tackle, Type::Water));
+    }
+
+    #[test]
+    fn has_stab_never_applies_to_struggle() {
+        // Upstream TypeCalc returns before the STAB multiply for
+        // MOVE_STRUGGLE, so even a Normal-type attacker gets no STAB from
+        // the Normal-typed Struggle.
+        assert!(!has_stab(
+            [Type::Normal, Type::Normal],
+            STRUGGLE,
+            Type::Normal
+        ));
+        // The same attacker DOES get STAB from an ordinary Normal move.
+        assert!(has_stab(
+            [Type::Normal, Type::Normal],
+            MoveId(33),
+            Type::Normal
+        ));
     }
 
     #[test]

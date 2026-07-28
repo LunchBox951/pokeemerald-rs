@@ -10,13 +10,15 @@
 //! modifiers and stat-stage multipliers, which had no upstream home in
 //! `assets` yet — see [`crate::nature`] and [`crate::stat_stage`].
 //!
-//! Errors from the underlying tables are returned as `assets::AssetError`
-//! directly rather than wrapped into [`crate::error::BattleError`]: they are
-//! exactly the errors those tables already define and documented, and
-//! wrapping them would just be a relabelling exercise for callers.
+//! Errors from the underlying tables are converted to
+//! [`crate::error::BattleError`] at this boundary (the crate's own concrete
+//! error enum), so `battle` callers are not coupled to the `assets` crate's
+//! error type `(oop-boundaries)`.
 
-use assets::{AssetError, BaseStats, Effectiveness, MoveData, MoveId, MoveTable, SpeciesId};
+use assets::{BaseStats, Effectiveness, MoveData, MoveId, MoveTable, SpeciesId};
 use assets::{SpeciesTable, Type, TypeChart};
+
+use crate::error::BattleError;
 
 /// Owned, read-only typed access to species base stats, move data, and the
 /// type-effectiveness chart `(oop-boundaries)`. Holds no mutable state;
@@ -43,20 +45,24 @@ impl Dex {
     ///
     /// # Errors
     ///
-    /// Returns [`AssetError::UnknownSpecies`] if `species` is outside the
+    /// Returns [`BattleError::UnknownSpecies`] if `species` is outside the
     /// extracted range. See [`SpeciesTable::base_stats`].
-    pub fn species(&self, species: SpeciesId) -> Result<&BaseStats, AssetError> {
-        self.species_table.base_stats(species)
+    pub fn species(&self, species: SpeciesId) -> Result<&BaseStats, BattleError> {
+        self.species_table
+            .base_stats(species)
+            .map_err(|_| BattleError::UnknownSpecies(species))
     }
 
     /// The battle data for `mv`.
     ///
     /// # Errors
     ///
-    /// Returns [`AssetError::UnknownMove`] if `mv` is outside `gBattleMoves`.
+    /// Returns [`BattleError::UnknownMove`] if `mv` is outside `gBattleMoves`.
     /// See [`MoveTable::get`].
-    pub fn move_data(&self, mv: MoveId) -> Result<&MoveData, AssetError> {
-        self.move_table.get(mv)
+    pub fn move_data(&self, mv: MoveId) -> Result<&MoveData, BattleError> {
+        self.move_table
+            .get(mv)
+            .map_err(|_| BattleError::UnknownMove(mv))
     }
 
     /// The effectiveness of an `attacker`-type move against a `defender`
@@ -76,7 +82,8 @@ impl Default for Dex {
 #[cfg(test)]
 mod tests {
     use super::Dex;
-    use assets::{AssetError, Effectiveness, MoveId, SpeciesId, SpeciesTable, Type};
+    use crate::error::BattleError;
+    use assets::{Effectiveness, MoveId, SpeciesId, SpeciesTable, Type};
 
     #[test]
     fn species_forwards_to_the_species_table() {
@@ -90,7 +97,7 @@ mod tests {
     fn species_reports_out_of_range_ids() {
         let dex = Dex::new();
         let bad = SpeciesId(SpeciesTable::LEN_U16);
-        assert_eq!(dex.species(bad), Err(AssetError::UnknownSpecies(bad.0)));
+        assert_eq!(dex.species(bad), Err(BattleError::UnknownSpecies(bad)));
     }
 
     #[test]
@@ -107,7 +114,7 @@ mod tests {
     fn move_data_reports_out_of_range_ids() {
         let dex = Dex::new();
         let bad = MoveId(60_000);
-        assert_eq!(dex.move_data(bad), Err(AssetError::UnknownMove(bad.0)));
+        assert_eq!(dex.move_data(bad), Err(BattleError::UnknownMove(bad)));
     }
 
     #[test]
