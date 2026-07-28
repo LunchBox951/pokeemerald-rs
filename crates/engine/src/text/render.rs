@@ -262,6 +262,12 @@ fn glyph_id_for_token(tok: &Token) -> Option<u16> {
         Token::Char(c) => super::char_to_byte(c).map(u16::from),
         Token::Symbol(s) => Some(u16::from(super::byte_from_symbol(s))),
         Token::ExtraSymbol(idx) => Some(u16::from(idx) | 0x100),
+        // Upstream `RenderText` has no case for `CHAR_BARD_WORD_DELIMIT`:
+        // the byte falls through to the glyph-draw path and advances by
+        // glyph `0x37`'s width (a blank 3px cell in the Latin sheets), so
+        // adjacent easy-chat words stay separated. Dropping it instead
+        // would concatenate them.
+        Token::BardWordDelimit => Some(u16::from(super::CHAR_BARD_WORD_DELIMIT)),
         _ => None,
     }
 }
@@ -339,6 +345,15 @@ impl<'a> Printer<'a> {
     /// `\l`/`\p` ([`TickEvent::AwaitingScroll`]/[`TickEvent::AwaitingClear`]);
     /// ignored otherwise, matching upstream (the equivalent upstream checks
     /// are gated on those same states).
+    ///
+    /// Upstream's *held*-A/B reveal speed-up (`RENDER_STATE_HANDLE_CHAR`
+    /// zeroing `delayCounter` under `gTextFlags.canABSpeedUpPrint`,
+    /// `pokeemerald/src/text.c`) is deliberately not modelled: the standard
+    /// field message box — this slice's target — sets `canABSpeedUpPrint =
+    /// FALSE` (`pokeemerald/src/field_message_box.c`), so field dialogue has
+    /// no such speed-up to reproduce. The contexts that enable it (battle,
+    /// menus) arrive with their own slices and will need a held-input model
+    /// here `(behavioral-fidelity)`.
     pub fn tick(&mut self, confirm_pressed: bool) -> TickEvent {
         match self.state {
             PrinterState::Finished => TickEvent::Finished,
@@ -496,7 +511,7 @@ mod tests {
             bit_depth: 2,
             pixels,
         };
-        FontGlyphSheet::new(FontImageRef::new(font, image)).unwrap()
+        FontGlyphSheet::new(FontImageRef::new_for_tests(font, image)).unwrap()
     }
 
     fn decode_tokens(bytes: &[u8]) -> Vec<Token> {
@@ -523,6 +538,34 @@ mod tests {
         };
         assert_eq!((second.x, second.y), (6, 1));
         assert_eq!(printer.cursor(), (12, 1));
+    }
+
+    #[test]
+    fn bard_word_delimiter_advances_by_the_blank_glyph_width() {
+        // CHAR_BARD_WORD_DELIMIT (0x37) has no RenderText case upstream: it
+        // falls through to the glyph-draw path and advances by glyph 0x37's
+        // width (3px blank cell in gFontNormalLatinGlyphWidths), keeping
+        // adjacent easy-chat words separated.
+        let pixels = blank_sheet_pixels();
+        let sheet = synthetic_sheet(&pixels, FontId::Normal);
+        let tokens = decode_tokens(&[0xBB, 0x37, 0xBB, super::super::EOS]); // "A<delim>A"
+        let mut printer = Printer::new(tokens, sheet, TextSpeed::Instant, (0, 1));
+
+        let TickEvent::Glyph(first) = printer.tick(false) else {
+            panic!("expected a glyph")
+        };
+        assert_eq!((first.x, first.y), (0, 1));
+
+        let TickEvent::Glyph(delim) = printer.tick(false) else {
+            panic!("expected the delimiter's blank glyph")
+        };
+        assert_eq!((delim.x, delim.y), (6, 1));
+        assert_eq!(delim.glyph.advance_width, 3);
+
+        let TickEvent::Glyph(second) = printer.tick(false) else {
+            panic!("expected a glyph")
+        };
+        assert_eq!((second.x, second.y), (9, 1), "words must stay separated");
     }
 
     #[test]

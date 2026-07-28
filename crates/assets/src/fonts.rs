@@ -170,11 +170,12 @@ pub struct Glyph {
 /// In production, only [`AssetPack::font`](crate::pack::AssetPack::font)
 /// constructs this handle: keeping the identity and raw image together
 /// prevents callers from pairing (for example) Normal pixels with Small
-/// advance widths when constructing a [`FontGlyphSheet`]. The constructor is
-/// otherwise public so downstream crates (e.g. `engine`'s glyph renderer,
-/// issue #124) can build a [`FontGlyphSheet`] over a synthetic in-memory
-/// sheet in their own unit tests, exactly as this module's own tests do,
-/// without needing a real asset pack on disk.
+/// advance widths when constructing a [`FontGlyphSheet`]. Downstream crates
+/// that need a synthetic in-memory sheet in their own unit tests (e.g.
+/// `engine`'s glyph renderer, issue #124) use
+/// [`FontImageRef::new_for_tests`] behind the `test-support` feature from
+/// their `[dev-dependencies]` — the pairing guarantee stays intact for
+/// production builds.
 #[derive(Debug, Clone, Copy)]
 pub struct FontImageRef<'a> {
     font: FontId,
@@ -184,8 +185,20 @@ pub struct FontImageRef<'a> {
 impl<'a> FontImageRef<'a> {
     /// Bind `image` to `font`'s identity for [`FontGlyphSheet::new`].
     #[must_use]
-    pub const fn new(font: FontId, image: ImageRef<'a>) -> Self {
+    pub(crate) const fn new(font: FontId, image: ImageRef<'a>) -> Self {
         Self { font, image }
+    }
+
+    /// Test-only seam: bind an arbitrary `image` to `font` for building
+    /// synthetic [`FontGlyphSheet`] fixtures.
+    ///
+    /// Bypasses the pack-mediated pairing guarantee documented on the type,
+    /// so it is gated behind the `test-support` feature — enable it only
+    /// from `[dev-dependencies]`, never in a production dependency edge.
+    #[cfg(feature = "test-support")]
+    #[must_use]
+    pub const fn new_for_tests(font: FontId, image: ImageRef<'a>) -> Self {
+        Self::new(font, image)
     }
 
     /// The identity this image was fetched under.
