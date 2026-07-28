@@ -62,30 +62,55 @@ impl Stat {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(u8)]
 pub enum Nature {
+    /// Neutral: no stat raised or lowered.
     Hardy = 0,
+    /// +Attack, -Defense.
     Lonely = 1,
+    /// +Attack, -Speed.
     Brave = 2,
+    /// +Attack, -Sp. Attack.
     Adamant = 3,
+    /// +Attack, -Sp. Defense.
     Naughty = 4,
+    /// +Defense, -Attack.
     Bold = 5,
+    /// Neutral: no stat raised or lowered.
     Docile = 6,
+    /// +Defense, -Speed.
     Relaxed = 7,
+    /// +Defense, -Sp. Attack.
     Impish = 8,
+    /// +Defense, -Sp. Defense.
     Lax = 9,
+    /// +Speed, -Attack.
     Timid = 10,
+    /// +Speed, -Defense.
     Hasty = 11,
+    /// Neutral: no stat raised or lowered.
     Serious = 12,
+    /// +Speed, -Sp. Attack.
     Jolly = 13,
+    /// +Speed, -Sp. Defense.
     Naive = 14,
+    /// +Sp. Attack, -Attack.
     Modest = 15,
+    /// +Sp. Attack, -Defense.
     Mild = 16,
+    /// +Sp. Attack, -Speed.
     Quiet = 17,
+    /// Neutral: no stat raised or lowered.
     Bashful = 18,
+    /// +Sp. Attack, -Sp. Defense.
     Rash = 19,
+    /// +Sp. Defense, -Attack.
     Calm = 20,
+    /// +Sp. Defense, -Defense.
     Gentle = 21,
+    /// +Sp. Defense, -Speed.
     Sassy = 22,
+    /// +Sp. Defense, -Sp. Attack.
     Careful = 23,
+    /// Neutral: no stat raised or lowered.
     Quirky = 24,
 }
 

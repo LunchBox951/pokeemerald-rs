@@ -3,17 +3,9 @@
 //! Ports the numerator/denominator table upstream applies to a Pokémon's
 //! Attack/Defense/Sp. Attack/Sp. Defense/Speed when it is raised or lowered
 //! in battle (`pokeemerald/src/pokemon.c`, `gStatStageRatios`), together with
-//! the `APPLY_STAT_MOD` macro (same file) that consumes it:
+//! the `APPLY_STAT_MOD` macro (same file) that consumes it.
 //!
-//! ```c
-//! #define APPLY_STAT_MOD(var, mon, stat, statIndex)                            \
-//! {                                                                             \
-//!     (var) = (stat) * (gStatStageRatios)[(mon)->statStages[(statIndex)]][0];   \
-//!     (var) /= (gStatStageRatios)[(mon)->statStages[(statIndex)]][1];           \
-//! }
-//! ```
-//!
-//! [`StatStage::apply`] re-expresses that as two Rust statements in the same
+//! [`StatStage::apply`] re-expresses that macro as two Rust statements in the same
 //! order — multiply by the numerator, *then* integer-divide by the
 //! denominator — rather than a single `numerator / denominator` fraction
 //! folded into one multiply. The two orders can disagree once the

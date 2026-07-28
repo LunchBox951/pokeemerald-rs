@@ -24,7 +24,7 @@
 //! battles (the "hits both targets" halving and Reflect/Light Screen's
 //! double-battle `2/3` variant), and non-v1 move effects.
 
-use assets::{Effectiveness, Type};
+use assets::{Effectiveness, Type, TypeChart};
 
 use crate::stat_stage::StatStage;
 
@@ -320,23 +320,61 @@ pub fn apply_damage_roll(damage: u32, rng: &mut impl BattleRng) -> u32 {
     }
 }
 
+/// Type effectiveness against a dual-type defender: both slots applied in
+/// order, with immunity kept **terminal**.
+///
+/// Upstream `Cmd_typecalc` (`pokeemerald/src/battle_script_commands.c:1355`)
+/// calls `ModulateDmgByType` once *per matching defender type slot* — twice
+/// for a dual-type defender whose two types are distinct — and each call
+/// floors a truncated-to-zero result back to `1` before the next; that
+/// intermediate floor is observable and preserved here. A `NoEffect` slot,
+/// however, does not merely multiply by zero upstream: it raises
+/// `MOVE_RESULT_DOESNT_AFFECT_FOE`, which ends the hit regardless of the
+/// other slot's multiplier (Electric vs Ground/Flying deals no damage even
+/// though the Flying slot alone would double it). This crate models no
+/// result-flag, so that terminality lives here instead: any `NoEffect` slot
+/// short-circuits to `0`, and only otherwise are the slots folded through
+/// [`apply_type_effectiveness`] `(behavioral-fidelity)`.
+///
+/// A single-type defender (both slots equal, matching [`assets::BaseStats`])
+/// applies its effectiveness once, mirroring upstream's `type1 != type2`
+/// guard on the second `ModulateDmgByType` call — the guard is on the
+/// defender's *types*, not their multipliers, so two distinct types that
+/// happen to share an effectiveness still both apply (e.g. Fighting vs
+/// Rock/Steel stacks to `x4`).
+#[must_use]
+pub fn apply_dual_type_effectiveness(
+    damage: u32,
+    chart: &TypeChart,
+    move_type: Type,
+    defender_types: [Type; 2],
+) -> u32 {
+    let first = chart.multiplier(move_type, defender_types[0]);
+    let second = (defender_types[1] != defender_types[0])
+        .then(|| chart.multiplier(move_type, defender_types[1]));
+    if first == Effectiveness::NoEffect || second == Some(Effectiveness::NoEffect) {
+        return 0;
+    }
+    let damage = apply_type_effectiveness(damage, first);
+    match second {
+        Some(effectiveness) => apply_type_effectiveness(damage, effectiveness),
+        None => damage,
+    }
+}
+
 /// The full single-hit damage pipeline, in upstream's exact order:
 /// [`base_damage`], then [`apply_stab`], then [`apply_type_effectiveness`],
 /// then [`apply_damage_roll`].
 ///
 /// `effectiveness` is applied exactly **once**: this models a single
-/// `ModulateDmgByType` step. Upstream `Cmd_typecalc`
-/// (`pokeemerald/src/battle_script_commands.c:1355`) instead calls
-/// `ModulateDmgByType` once *per matching defender type slot* — twice for a
-/// dual-type defender whose two types are distinct — and each call floors a
-/// truncated-to-zero result back to `1` before the next. That intermediate
-/// floor between the two `x(mult/10)` steps is observable (e.g. a hit that
-/// truncates to `0` after the first slot is bumped to `1`, then scaled again).
-/// This function does **not** reproduce that per-slot stacking; a caller
-/// modelling a dual-type defender composes it by folding the two slots'
-/// effectiveness through [`apply_type_effectiveness`] in turn (preserving the
-/// per-slot floor) and passing that path directly rather than through this
-/// convenience wrapper's single slot.
+/// `ModulateDmgByType` step, which is exact for a single-type defender (or a
+/// dual-type defender whose second slot repeats the first). A caller
+/// modelling a dual-type defender with two *distinct* slots must instead run
+/// [`base_damage`] → [`apply_stab`] → [`apply_dual_type_effectiveness`] →
+/// [`apply_damage_roll`]: that helper preserves upstream's per-slot
+/// intermediate floor **and** keeps a `NoEffect` slot terminal (a naive fold
+/// of [`apply_type_effectiveness`] would revive a `0x` immunity to `1`
+/// damage via the floor).
 #[must_use]
 pub fn calculate_damage(
     input: &DamageInput,
@@ -353,11 +391,11 @@ pub fn calculate_damage(
 #[cfg(test)]
 mod tests {
     use super::{
-        apply_damage_roll, apply_stab, apply_type_effectiveness, base_damage, calculate_damage,
-        has_stab, BattleRng, DamageInput, MoveCategory, Weather,
+        apply_damage_roll, apply_dual_type_effectiveness, apply_stab, apply_type_effectiveness,
+        base_damage, calculate_damage, has_stab, BattleRng, DamageInput, MoveCategory, Weather,
     };
     use crate::stat_stage::StatStage;
-    use assets::{Effectiveness, Type};
+    use assets::{Effectiveness, Type, TypeChart};
 
     /// A `BattleRng` that always returns a fixed draw, for deterministic
     /// tests of the random roll and full pipeline.
@@ -596,6 +634,55 @@ mod tests {
         );
         // A zero multiplier never floors, even from nonzero input.
         assert_eq!(apply_type_effectiveness(100, Effectiveness::NoEffect), 0);
+    }
+
+    #[test]
+    fn dual_type_immunity_is_terminal() {
+        // Electric vs Ground/Flying: the Ground slot is NoEffect, and the
+        // Flying slot's x2 must NOT revive the hit — upstream raises
+        // MOVE_RESULT_DOESNT_AFFECT_FOE and deals no damage. A naive
+        // per-slot fold would floor 0 -> 1 on the Flying slot.
+        let chart = TypeChart::new();
+        assert_eq!(
+            apply_dual_type_effectiveness(56, &chart, Type::Electric, [Type::Ground, Type::Flying]),
+            0
+        );
+        // Slot order must not matter.
+        assert_eq!(
+            apply_dual_type_effectiveness(56, &chart, Type::Electric, [Type::Flying, Type::Ground]),
+            0
+        );
+    }
+
+    #[test]
+    fn dual_type_distinct_slots_stack_and_keep_the_intermediate_floor() {
+        let chart = TypeChart::new();
+        // Fighting vs Rock/Steel: two DISTINCT types sharing x2 each — both
+        // apply (the upstream guard is type1 != type2, not on multipliers):
+        // 10 * 2 * 2 = 40.
+        assert_eq!(
+            apply_dual_type_effectiveness(10, &chart, Type::Fighting, [Type::Rock, Type::Steel]),
+            40
+        );
+        // Electric vs Grass/Dragon (x0.5 then x0.5): 3 -> 1 (15/10, no
+        // floor needed) -> 1 (5/10 truncates to 0, floored back to 1) —
+        // upstream's per-slot intermediate floor is observable.
+        assert_eq!(
+            apply_dual_type_effectiveness(3, &chart, Type::Electric, [Type::Grass, Type::Dragon]),
+            1
+        );
+    }
+
+    #[test]
+    fn dual_type_repeated_slot_applies_only_once() {
+        let chart = TypeChart::new();
+        // A single-type species repeats its type in both slots; upstream's
+        // `type1 != type2` guard modulates once: Water vs Fire/Fire is x2,
+        // not x4.
+        assert_eq!(
+            apply_dual_type_effectiveness(10, &chart, Type::Water, [Type::Fire, Type::Fire]),
+            20
+        );
     }
 
     #[test]

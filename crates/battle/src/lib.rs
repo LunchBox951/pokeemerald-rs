@@ -25,8 +25,8 @@ pub mod nature;
 pub mod stat_stage;
 
 pub use damage::{
-    apply_damage_roll, apply_stab, apply_type_effectiveness, base_damage, calculate_damage,
-    has_stab, BattleRng, DamageInput, MoveCategory, Weather,
+    apply_damage_roll, apply_dual_type_effectiveness, apply_stab, apply_type_effectiveness,
+    base_damage, calculate_damage, has_stab, BattleRng, DamageInput, MoveCategory, Weather,
 };
 pub use dex::Dex;
 pub use error::BattleError;
