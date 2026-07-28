@@ -11506,8 +11506,10 @@
     "data/text/birch_speech.inc": {
       "category": "data.text",
       "kind": "file",
-      "spec_owner": "06-engine",
-      "status": "pending"
+      "reason": "8 of 9 speech strings transcribed for the v1 intro (Welcome, MainSpeech, AndYouAre, WhatsYourName, SoItsPlayer, YourePlayer, AreYouReady; page 1's 'This is what we call a POKeMON.' correctly sourced from strings.c gText_ThisIsAPokemon per main_menu.c:1350). gText_Birch_BoyOrGirl is deliberately NOT transcribed: it belongs to the gender-select prompt, and the naming/gender UI is deferred to M8 with fixed v1 defaults — port it when that slice lands.",
+      "rust_target": "crates/pokeemerald-rs/src/intro/speech.rs",
+      "spec": "I-3",
+      "status": "stubbed"
     },
     "data/text/blend_master.inc": {
       "category": "data.text",
@@ -25797,6 +25799,20 @@
       "status": "pending"
     },
     "src/main_menu.c": {
+      "artifacts": {
+        "birch_speech": {
+          "reason": "Task_NewGameBirchSpeech_* task chain (main_menu.c:1279-1755) reduced to the real dialogue text, paged with upstream's \\p/\\l pacing; Birch/Lotad/player sprites, the platform background, palette fades/slides, gender-select menu, naming screen, and audio are not rendered (see intro module docs' 'Reduced cinematic' section)",
+          "rust_target": "crates/pokeemerald-rs/src/intro/mod.rs",
+          "spec": "I-3",
+          "status": "stubbed"
+        },
+        "no_save_menu": {
+          "reason": "HAS_NO_SAVED_GAME item list (Task_MainMenuCheckSaveFile/HandleMainMenuInput) reduced to the single NEW GAME item MainMenuScene renders and confirms; CONTINUE/OPTION/MYSTERY GIFT/MYSTERY EVENTS and every other save-status branch are not ported",
+          "rust_target": "crates/pokeemerald-rs/src/main_menu.rs",
+          "spec": "I-3",
+          "status": "stubbed"
+        }
+      },
       "category": "code.source",
       "kind": "file",
       "status": "pending"
@@ -25985,6 +26001,14 @@
       "status": "pending"
     },
     "src/new_game.c": {
+      "artifacts": {
+        "NewGameInitData": {
+          "reason": "NewGameInitData (new_game.c:149-207) re-implemented for the fields engine::save::block's SaveBlock1/SaveBlock2 model covers (encryption key, trainer id, party/count zeroing, starting money, bag, event data, fixed default player name/gender); WarpToTruck's truck-map warp is replaced by a direct spawn into the protagonist's bedroom (see new_game module docs), and every other NewGameInitData call (pokedex, TV, secret bases, PC items, etc.) has no typed home yet",
+          "rust_target": "crates/pokeemerald-rs/src/new_game.rs",
+          "spec": "I-3",
+          "status": "stubbed"
+        }
+      },
       "category": "code.source",
       "kind": "file",
       "status": "pending"

@@ -21,3 +21,11 @@ assets = { path = "../assets" }
 engine = { path = "../engine" }
 platform = { path = "../platform" }
 rendering = { path = "../rendering" }
+
+[dev-dependencies]
+# The same workspace-local `assets` crate with its test-only seam enabled
+# (mirrors `engine`'s `Cargo.toml`): `main_menu`/`intro`'s unit tests build
+# synthetic font sheets via `FontImageRef::new_for_tests` without a local
+# asset pack. Dev-only, so production builds keep the pack-mediated pairing
+# guarantee.
+assets = { path = "../assets", features = ["test-support"] }

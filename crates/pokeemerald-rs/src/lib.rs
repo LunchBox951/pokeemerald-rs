@@ -14,14 +14,25 @@
 //!
 //! [`overworld`] (I-3, issue #126) composes the map viewport + player OBJ
 //! presentation lane over the `engine` overworld runtime (S-5, PR #120) --
-//! see its module docs. Not yet wired into [`App`]'s own frame loop (a
-//! future integration slice); reachable today via
-//! [`overworld::OverworldScene`] directly.
+//! see its module docs.
+//!
+//! [`main_menu`], [`intro`], and [`new_game`] (I-3, issue #149) are the
+//! connective tissue between the title screen and the overworld: [`App`]'s
+//! real (windowed) path now drives title -> main menu -> intro -> overworld
+//! as one state machine (see `app`'s module docs' "Game flow" section).
+//! [`new_game`] holds the pure new-game state (spawn position, default
+//! player identity, fresh [`engine::save`] blocks) both [`main_menu`] and
+//! [`intro`] ultimately hand off to.
 
 pub mod app;
+mod flow;
 pub mod frame;
+pub mod intro;
+pub mod main_menu;
+pub mod new_game;
 pub mod overworld;
 pub mod scene;
+mod textbox;
 pub mod title;
 
 pub use app::App;

@@ -453,6 +453,42 @@ impl OverworldScene {
     pub fn compose_frame(&self, player: &PlayerState) -> Box<platform::Frame> {
         crate::frame::to_platform_frame(&self.compose(player))
     }
+
+    /// Build an [`engine::overworld::MapRuntime`] over this scene's
+    /// already-loaded layout grid and tileset attribute bytes (I-3, issue
+    /// #149) -- the movement/collision counterpart to [`Self::compose`],
+    /// which only *renders* the same underlying data. `map_id`/`header`/
+    /// `events` come from the caller's own `assets::MapHeaderTable`/
+    /// `assets::MapEventsTable` lookups (this scene owns pack-derived
+    /// tileset/layout bytes, not the separate map-header/event tables).
+    ///
+    /// # Panics
+    ///
+    /// Never in practice: re-decodes `grid_bytes` (owned, unchanged since
+    /// [`from_pack`](Self::from_pack) already validated it there) --
+    /// mirrors [`Self::compose`]'s identical `expect`.
+    #[must_use]
+    pub fn runtime<'s>(
+        &'s self,
+        map_id: assets::MapId,
+        header: &'s assets::MapHeader,
+        events: &'s assets::MapEvents,
+    ) -> engine::overworld::MapRuntime<'s> {
+        let grid = self
+            .layout
+            .grid(&self.grid_bytes)
+            .expect("grid_bytes validated in from_pack");
+        let primary_attrs = MetatileAttributeTable::new(&self.primary_attrs_bytes);
+        let secondary_attrs = MetatileAttributeTable::new(&self.secondary_attrs_bytes);
+        engine::overworld::MapRuntime::new(
+            map_id,
+            header,
+            events,
+            grid,
+            primary_attrs,
+            secondary_attrs,
+        )
+    }
 }
 
 /// Load the pack from its default location and decode
