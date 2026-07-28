@@ -6,3 +6,12 @@ publish.workspace = true
 
 [lints]
 workspace = true
+
+[dependencies]
+# Workspace-local path dependency, not an external crate -- `minimal-deps`
+# owner approval does not apply (see `pokeemerald-rs`'s `Cargo.toml` for the
+# identical reasoning, and `engine`'s `Cargo.toml` for the prior example of
+# this exact justification). `dex` (S-6) builds its typed species/move/type-
+# chart facade directly on `assets`' existing `SpeciesTable`/`MoveTable`/
+# `TypeChart` rather than re-extracting or re-porting that data.
+assets = { path = "../assets" }

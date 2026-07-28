@@ -149,7 +149,7 @@ claiming R-4 is complete:
    merge. Include administrators; disallow direct pushes, force pushes, and branch
    deletion.
 2. Require the CI contexts named in `.github/workflows/ci.yml`: `version`,
-   `ledger`, `init-tests`, `fmt (ubuntu-latest)`, `fmt (windows-latest)`,
+   `ledger`, `scripts-tests`, `init-tests`, `fmt (ubuntu-latest)`, `fmt (windows-latest)`,
    `clippy (ubuntu-latest)`, `clippy (windows-latest)`,
    `build (ubuntu-latest)`, `build (windows-latest)`, `test (ubuntu-latest)`, and
    `test (windows-latest)`. Require `dependency-review`, `codeql (actions)`,
