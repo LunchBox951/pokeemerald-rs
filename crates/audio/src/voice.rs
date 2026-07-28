@@ -6,9 +6,13 @@
 //! `:437`). The hardware packs four `s8` output samples per word with a rotate
 //! trick and lets adjacent lanes carry into one another; here each output
 //! sample accumulates independently into an `i32` `(no-verbatim)` — the
-//! packed cross-lane carry bleed is a deferred hardware quirk. Fixed-rate
-//! (`TONEDATA_TYPE_FIX`) and compressed voices are also out of scope for this
-//! slice; every voice interpolates.
+//! packed cross-lane carry bleed is a deferred hardware quirk. Compressed
+//! (`TONEDATA_TYPE_CMP`) and reversed (`TONEDATA_TYPE_REV`) voices remain out
+//! of scope; a fixed-rate (`TONEDATA_TYPE_FIX`) voice is modelled by forcing
+//! its phase step to exactly [`pitch::FRAC_ONE`] (see [`Self::render`]),
+//! which — since the step then carries no fractional remainder — also
+//! reproduces upstream's dedicated FIX loop reading raw, un-interpolated
+//! samples `(no-verbatim)`.
 
 use std::sync::Arc;
 
@@ -44,8 +48,23 @@ pub struct Voice {
     /// Note-off countdown in sequencer ticks; `0` means tied (never
     /// auto-releases).
     gate_time: u16,
-    /// The track command's MIDI key, for tie/end-of-tie matching.
+    /// The track command's MIDI key, for tie/end-of-tie matching. This is
+    /// always the *played* key, even for a rhythm indirection — matching
+    /// `ply_endtie`'s match against the track's own key, not any per-channel
+    /// translated one.
     midi_key: u8,
+    /// The key fed to `MidiKeyToFreq` when pitch is recomputed
+    /// (`o_SoundChannel_key`, "midi key as it was translated into final
+    /// pitch" — `m4a_internal.h:149`). Equal to [`Self::midi_key`] for a
+    /// plain or key-split note; a rhythm indirection substitutes its child's
+    /// own base key instead (`ply_note`, `m4a_1.s:1594`).
+    pitch_key: u8,
+    /// `ChnVolSetAsm`'s rhythm-pan override, folded into the pan term on
+    /// every volume re-run; `0` outside rhythm (`m4a_1.s:1505`..`:1512`).
+    rhythm_pan: i8,
+    /// `TONEDATA_TYPE_FIX`: forces [`Self::render`]'s phase step to exactly
+    /// [`pitch::FRAC_ONE`], ignoring [`Self::frequency`] entirely.
+    fixed_rate: bool,
     /// Owning track index, so per-track note-off can find its voices.
     track: usize,
     /// Monotonic note-on ordinal stamped by the mixer when the voice starts,
@@ -90,9 +109,37 @@ impl Voice {
             frac: 0,
             gate_time,
             midi_key,
+            pitch_key: midi_key,
+            rhythm_pan: 0,
+            fixed_rate: false,
             track,
             seq: 0,
         }
+    }
+
+    /// Override the key used for pitch resolution independently of
+    /// [`Self::midi_key`] — a rhythm indirection's child base key
+    /// (`ply_note`, `m4a_1.s:1594`). Chained onto [`Self::new`] so ordinary
+    /// (non-rhythm) notes need not thread an extra constructor parameter.
+    #[must_use]
+    pub(crate) fn with_pitch_key(mut self, pitch_key: u8) -> Self {
+        self.pitch_key = pitch_key;
+        self
+    }
+
+    /// Set the rhythm-pan override folded into every subsequent
+    /// [`Self::set_track_volume`] re-run (`0` outside rhythm).
+    #[must_use]
+    pub(crate) fn with_rhythm_pan(mut self, rhythm_pan: i8) -> Self {
+        self.rhythm_pan = rhythm_pan;
+        self
+    }
+
+    /// Mark this voice fixed-rate (`TONEDATA_TYPE_FIX`): see [`Self::render`].
+    #[must_use]
+    pub(crate) fn fixed_rate(mut self, fixed_rate: bool) -> Self {
+        self.fixed_rate = fixed_rate;
+        self
     }
 
     /// Stamp this voice's shared note-on ordinal (see [`Self::seq`]). Called by
@@ -156,20 +203,26 @@ impl Voice {
 
     /// Re-run `ChnVolSetAsm` (`m4a_1.s:1508`) against this live channel from
     /// updated track `volMR`/`volML`, folding in the channel's own retained
-    /// velocity. Applied when the owning track's volume/pan changes mid-note
-    /// (`MPT_FLG_VOLCHG`).
+    /// velocity and rhythm-pan override. Applied when the owning track's
+    /// volume/pan changes mid-note (`MPT_FLG_VOLCHG`).
     pub fn set_track_volume(&mut self, vol_mr: u8, vol_ml: u8) {
-        self.base_right = channel_volume(vol_mr, 0x80, self.velocity);
-        self.base_left = channel_volume(vol_ml, 0x7F, self.velocity);
+        let (pan_right, pan_left) = pan_terms(self.rhythm_pan);
+        self.base_right = channel_volume(vol_mr, pan_right, self.velocity);
+        self.base_left = channel_volume(vol_ml, pan_left, self.velocity);
     }
 
     /// Recompute this live channel's playback frequency from updated track
     /// `keyM`/`pitM`, mirroring `MidiKeyToFreq(wav, (key + keyM).max(0), pitM)`
     /// in `MPlayMain`'s per-tick pitch re-run (`m4a_1.s:1446`). Uses the
-    /// channel's stored key exactly as [`note_on`](crate::sequencer) did for the
-    /// initial pitch, so a mid-note bend tracks the same math.
+    /// channel's stored pitch key exactly as [`note_on`](crate::sequencer)
+    /// did for the initial pitch — the played key, or a rhythm child's own
+    /// base key — so a mid-note bend tracks the same math. A no-op frequency
+    /// wise for a [`Self::fixed_rate`] voice, since [`Self::render`] never
+    /// reads [`Self::frequency`] for one (matching upstream, which still
+    /// recomputes and stores it for a FIX channel even though the FIX mixer
+    /// branch never consults it).
     pub fn set_track_pitch(&mut self, key_m: i32, pit_m: u8) {
-        let note_key = u8::try_from((i32::from(self.midi_key) + key_m).max(0) & 0xFF).unwrap_or(0);
+        let note_key = u8::try_from((i32::from(self.pitch_key) + key_m).max(0) & 0xFF).unwrap_or(0);
         self.frequency = pitch::midi_key_to_freq(self.wave.freq(), note_key, pit_m);
     }
 
@@ -203,7 +256,16 @@ impl Voice {
     /// `acc` (one entry per output sample). [`Self::begin_frame`] must have run
     /// for this frame first.
     pub fn render(&mut self, acc: &mut [StereoAcc]) {
-        let step = pitch::phase_step(self.frequency);
+        // A fixed-rate voice's step carries no fractional remainder (`frac`
+        // stays `0` every sample), so the shared interpolating loop below
+        // naturally degenerates to reading each raw source sample once with
+        // no blend — exactly upstream's dedicated FIX loop's behaviour,
+        // reached without a second code path `(no-verbatim)`.
+        let step = if self.fixed_rate {
+            pitch::FRAC_ONE
+        } else {
+            pitch::phase_step(self.frequency)
+        };
         // Cheap Arc clone so the immutable sample borrow does not clash with
         // the `&mut self` cursor/envelope updates below.
         let wave = Arc::clone(&self.wave);
@@ -282,6 +344,21 @@ impl Voice {
 pub(crate) fn channel_volume(vol_side: u8, pan_term: u32, velocity: u8) -> u8 {
     let scaled = (u32::from(vol_side) * (pan_term * u32::from(velocity))) >> 14;
     u8::try_from(scaled.min(255)).unwrap_or(255)
+}
+
+/// `ChnVolSetAsm`'s per-side pan terms, folding in a rhythm-pan override:
+/// `0x80 + rhythmPan` for the right channel, `0x7F - rhythmPan` for the left
+/// (`m4a_1.s:1505`..`:1512`). `rhythm_pan` is `0` for every non-rhythm note,
+/// which reproduces the plain `0x80`/`0x7F` terms exactly.
+#[must_use]
+pub(crate) fn pan_terms(rhythm_pan: i8) -> (u32, u32) {
+    let rp = i32::from(rhythm_pan);
+    // `rp` is bounded to `-128..=127`, so `0x80 + rp` and `0x7F - rp` both
+    // land in `0..=255` -- never negative, so the `unwrap_or(0)` fallback is
+    // unreachable in practice, just a defensive floor.
+    let right = u32::try_from(0x80 + rp).unwrap_or(0);
+    let left = u32::try_from(0x7F - rp).unwrap_or(0);
+    (right, left)
 }
 
 #[cfg(test)]
@@ -532,6 +609,169 @@ mod tests {
         assert_eq!(v.frequency(), pitch::midi_key_to_freq(1 << 20, 60, 0));
         v.set_track_pitch(12, 0); // one octave up doubles the frequency
         assert_eq!(v.frequency(), pitch::midi_key_to_freq(1 << 20, 72, 0));
+    }
+
+    #[test]
+    fn with_pitch_key_overrides_the_base_used_for_mid_note_bend() {
+        // A rhythm child's own base key (72) differs from the played key
+        // (60, `midi_key`) used for tie matching. A mid-note pitch re-run
+        // must recompute frequency from the CHILD's base key, not the played
+        // key -- exactly `o_SoundChannel_key` vs `o_SoundChannel_midiKey`
+        // (`m4a_internal.h:149`).
+        let w = wave(1 << 20, vec![50; 16]);
+        let mut v = Voice::new(
+            w,
+            Adsr::flat(),
+            unity_freq(),
+            0xFF,
+            0xFF,
+            127,
+            0,
+            60,
+            0,
+            0,
+            0,
+        )
+        .with_pitch_key(72);
+        assert_eq!(v.midi_key(), 60, "EOT identity stays the played key");
+        v.set_track_pitch(0, 0);
+        assert_eq!(v.frequency(), pitch::midi_key_to_freq(1 << 20, 72, 0));
+    }
+
+    #[test]
+    fn with_rhythm_pan_shifts_the_stereo_split_on_volume_reruns() {
+        // A hard-right rhythm-pan override (child pan_sweep -> +63) must skew
+        // ChnVolSetAsm's pan terms even though the track itself is centred.
+        let w = wave(0, vec![50; 16]);
+        let mut v = Voice::new(w, Adsr::flat(), unity_freq(), 0, 0, 127, 0, 60, 0, 0, 0)
+            .with_rhythm_pan(63);
+        v.set_track_volume(0x40, 0x40);
+        let (right, left) = v.base_volume();
+        let (pan_r, pan_l) = pan_terms(63);
+        assert_eq!(right, channel_volume(0x40, pan_r, 127));
+        assert_eq!(left, channel_volume(0x40, pan_l, 127));
+        assert!(
+            right > left,
+            "a positive rhythm pan should favour the right channel"
+        );
+    }
+
+    #[test]
+    fn pan_terms_reduces_to_the_plain_split_when_rhythm_pan_is_zero() {
+        assert_eq!(pan_terms(0), (0x80, 0x7F));
+    }
+
+    #[test]
+    fn fixed_rate_voice_consumes_one_source_sample_per_output_sample() {
+        // A FIX voice's playback rate must not depend on `frequency` at all:
+        // both a "slow" and a "fast" frequency consume exactly the same
+        // number of source samples once `.fixed_rate(true)` is set, unlike
+        // the ordinary (non-fixed) case `faster_frequency_advances_further`
+        // already pins as differing.
+        let w = wave(0, vec![0; 512]);
+        let mut slow = Voice::new(
+            w.clone(),
+            Adsr::flat(),
+            unity_freq(),
+            0xFF,
+            0xFF,
+            127,
+            0,
+            60,
+            0,
+            0,
+            0,
+        )
+        .fixed_rate(true);
+        let mut fast = Voice::new(
+            w,
+            Adsr::flat(),
+            unity_freq() * 5,
+            0xFF,
+            0xFF,
+            127,
+            0,
+            60,
+            0,
+            0,
+            0,
+        )
+        .fixed_rate(true);
+        let mut acc = vec![(0, 0); 100];
+        slow.begin_frame(15);
+        slow.render(&mut acc);
+        fast.begin_frame(15);
+        fast.render(&mut acc);
+        assert_eq!(slow.source_index(), 100);
+        assert_eq!(fast.source_index(), 100);
+    }
+
+    #[test]
+    fn fixed_rate_voice_ignores_a_mid_note_bend() {
+        // BEND/KEYSH re-runs `set_track_pitch`, which still updates the
+        // stored `frequency` field (matching upstream, which recomputes and
+        // stores it unconditionally) -- but a FIX voice's actual playback
+        // rate must not move, since `render` never reads `frequency` for one.
+        let w = wave(0, vec![0; 512]);
+        let mut v = Voice::new(
+            w,
+            Adsr::flat(),
+            unity_freq(),
+            0xFF,
+            0xFF,
+            127,
+            0,
+            60,
+            0,
+            0,
+            0,
+        )
+        .fixed_rate(true);
+        let mut acc = vec![(0, 0); 50];
+        v.begin_frame(15);
+        v.render(&mut acc);
+        let unbent_index = v.source_index();
+
+        v.set_track_pitch(48, 0); // a large upward bend
+        let mut acc2 = vec![(0, 0); 50];
+        v.begin_frame(15);
+        v.render(&mut acc2);
+        assert_eq!(
+            v.source_index(),
+            unbent_index * 2,
+            "playback rate must stay exactly one sample per output sample after the bend"
+        );
+    }
+
+    #[test]
+    fn fixed_rate_voice_reads_raw_samples_with_no_interpolation() {
+        // At a step of exactly FRAC_ONE the fractional phase never
+        // accumulates, so every output sample is the raw source sample, not
+        // a blend -- contrast with `half_frequency_interpolates_between_samples`.
+        let w = wave(0, vec![0, 100, 0, 0]);
+        let mut v = Voice::new(
+            w,
+            Adsr::flat(),
+            unity_freq() / 2,
+            0xFF,
+            0xFF,
+            127,
+            0,
+            60,
+            0,
+            0,
+            0,
+        )
+        .fixed_rate(true);
+        let mut acc = vec![(0, 0); 2];
+        v.begin_frame(15);
+        v.render(&mut acc);
+        assert_eq!(acc[0].0, 0);
+        assert_eq!(
+            acc[1].0,
+            (254 * 100) >> 8,
+            "sample 1 exactly, no blend toward sample 2"
+        );
     }
 
     #[test]

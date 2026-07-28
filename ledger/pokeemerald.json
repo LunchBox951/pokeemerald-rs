@@ -25702,8 +25702,14 @@
           "status": "rewritten"
         },
         "CgbSound": {
-          "reason": "CgbSound's per-hardware-channel envelope/oscillator/pan loop re-implemented as cgb_voice::CgbVoice, driven from Mixer::mix_frame (S-3 slice 2).",
+          "reason": "CgbSound's per-hardware-channel envelope/oscillator/pan loop re-implemented as cgb_voice::CgbVoice, driven from Mixer::mix_frame (S-3 slice 2); slice 3 extends the CGB envelope with the envelope_pseudoecho_start/pseudoEchoLength tail (CgbEnvelope's echo state), matching the DirectSound pseudo-echo already modelled in slice 1/2.",
           "rust_target": "crates/audio/src/cgb_voice.rs",
+          "spec": "S-3",
+          "status": "rewritten"
+        },
+        "ChnVolSetAsm": {
+          "reason": "ChnVolSetAsm's right/left channel-volume formula reimplemented as voice::channel_volume + voice::pan_terms, including the rhythm-pan override (0x80+rhythmPan / 0x7F-rhythmPan) that a rhythm indirection's child pan_sweep byte can set (S-3 slice 3).",
+          "rust_target": "crates/audio/src/voice.rs",
           "spec": "S-3",
           "status": "rewritten"
         },
@@ -25719,8 +25725,32 @@
           "spec": "S-3",
           "status": "rewritten"
         },
+        "TONEDATA_TYPE_FIX": {
+          "reason": "SoundMainRAM's fixed-rate DirectSound branch (type & TONEDATA_TYPE_FIX skips the frequency-derived phase step entirely) reimplemented as Voice::fixed_rate forcing the phase step to pitch::FRAC_ONE, which also reproduces the branch's un-interpolated raw-sample reads as a side effect (S-3 slice 3).",
+          "rust_target": "crates/audio/src/voice.rs",
+          "spec": "S-3",
+          "status": "rewritten"
+        },
         "TrkVolPitSet": {
           "reason": "TrkVolPitSet vol/pan+pitch resolution re-implemented as sequencer::track_volume/track_pitch (S-3 slice 1); slice 2 extends both with the MOD/MODT modM folding (amplitude/pan/pitch vibrato).",
+          "rust_target": "crates/audio/src/sequencer.rs",
+          "spec": "S-3",
+          "status": "rewritten"
+        },
+        "ply_note": {
+          "reason": "ply_note's key-split (TONEDATA_TYPE_SPL) / rhythm (TONEDATA_TYPE_RHY) child resolution, the TONEDATA_TYPE_FIX dispatch bypass, and the pseudoEchoVolume/Length note-on snapshot are reimplemented as sequencer::resolve_instrument + note_on (S-3 slice 3). Priority-based channel-stealing search over the fixed DirectSound/CGB pools is still deferred (out of scope; Mixer uses a flat voice cap instead).",
+          "rust_target": "crates/audio/src/sequencer.rs",
+          "spec": "S-3",
+          "status": "stubbed"
+        },
+        "ply_xiecl": {
+          "reason": "ply_xiecl's pseudo-echo-length XCMD (kind 0x09) executed by sequencer::Sequencer::handle_event, alongside ply_xiecv (S-3 slice 3).",
+          "rust_target": "crates/audio/src/sequencer.rs",
+          "spec": "S-3",
+          "status": "rewritten"
+        },
+        "ply_xiecv": {
+          "reason": "ply_xiecv's pseudo-echo-volume XCMD (kind 0x08) executed by sequencer::Sequencer::handle_event, updating the track's captured echo state for subsequently started voices (S-3 slice 3).",
           "rust_target": "crates/audio/src/sequencer.rs",
           "spec": "S-3",
           "status": "rewritten"

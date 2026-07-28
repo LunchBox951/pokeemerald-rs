@@ -62,6 +62,14 @@ pub struct CgbEnvelope {
     /// Frames remaining until the next step.
     counter: u8,
     stop: bool,
+    /// In the pseudo-echo tail: volume is frozen at [`Self::echo_volume`]'s
+    /// resolved floor and [`Self::echo_length`] counts down.
+    echo: bool,
+    /// Raw `xIECV` byte: the numerator `envelope_pseudoecho_start` scales the
+    /// envelope goal by (`m4a.c:1091`). `0` disables the tail outright.
+    echo_volume: u8,
+    /// Raw `xIECL` byte: frames the tail holds before silencing.
+    echo_length: u8,
     active: bool,
 }
 
@@ -74,8 +82,11 @@ fn sustain_goal_of(goal: u8, sustain: u8) -> u8 {
 
 impl CgbEnvelope {
     /// Begin a fresh note ramping toward `goal` (see [`cgb_envelope_goal`]).
+    /// `echo_volume`/`echo_length` are the track's active pseudo-echo state
+    /// (`xIECV`/`xIECL`), captured once at note-on like the DirectSound
+    /// [`crate::envelope::Envelope`] (both `0` disables the tail).
     #[must_use]
-    pub fn new(adsr: CgbAdsr, goal: u8) -> Self {
+    pub fn new(adsr: CgbAdsr, goal: u8, echo_volume: u8, echo_length: u8) -> Self {
         let sustain_goal = sustain_goal_of(goal, adsr.sustain);
         Self {
             adsr,
@@ -95,6 +106,9 @@ impl CgbEnvelope {
             // the counter entirely (see [`Self::attack_step`]).
             counter: adsr.attack.saturating_add(1),
             stop: false,
+            echo: false,
+            echo_volume,
+            echo_length,
             active: true,
         }
     }
@@ -162,14 +176,18 @@ impl CgbEnvelope {
         if !self.active {
             return;
         }
+        if self.echo {
+            self.echo_step();
+            return;
+        }
         if self.stop {
-            // Release. `release == 0` silences the channel this same frame
-            // (`m4a.c:1071` goto `envelope_pseudoecho_start`; with no
-            // pseudo-echo volume that falls through to `oscillator_off`,
-            // `:1102`). A non-zero release paces one level per frame down to
-            // `0`, retiring on arrival.
+            // Release. `release == 0` reaches the pseudo-echo tail this same
+            // frame (`m4a.c:1071` goto `envelope_pseudoecho_start`); a
+            // non-zero release paces one level per frame down to `0` first,
+            // then also reaches the tail (`:1087`). Either way the tail
+            // itself silences outright when there is no echo floor (`:1102`).
             if self.adsr.release == 0 {
-                self.silence();
+                self.enter_echo_or_silence();
             } else {
                 self.release_step();
             }
@@ -286,9 +304,9 @@ impl CgbEnvelope {
         }
     }
 
-    /// The stop/release ramp: `-1` per `release` frames toward `0`, retiring
-    /// the voice once it arrives (`m4a.c:1087`, then `envelope_pseudoecho_start`
-    /// -> `oscillator_off`).
+    /// The stop/release ramp: `-1` per `release` frames toward `0`, then
+    /// entering the pseudo-echo tail (or silencing outright with no echo
+    /// floor) once it arrives (`m4a.c:1087`, `envelope_pseudoecho_start`).
     fn release_step(&mut self) {
         if !self.counter_reached_zero() {
             return;
@@ -297,9 +315,38 @@ impl CgbEnvelope {
             self.volume -= 1;
         }
         if self.volume == 0 {
-            self.active = false;
+            self.enter_echo_or_silence();
         } else {
             self.counter = self.adsr.release;
+        }
+    }
+
+    /// `envelope_pseudoecho_start` (`m4a.c:1090`..`:1102`): resolve the
+    /// echo floor as `(goal * echo_volume + 0xFF) >> 8`; a `0` floor
+    /// silences the channel outright (no tail), otherwise the tail holds at
+    /// that floor for [`Self::echo_length`] frames (see [`Self::echo_step`]).
+    /// Reused for both the paced release's arrival at `0` and the
+    /// `release == 0` immediate case ([`Self::step`]).
+    fn enter_echo_or_silence(&mut self) {
+        let floor = cgb_echo_floor(self.goal, self.echo_volume);
+        if floor == 0 {
+            self.silence();
+        } else {
+            self.echo = true;
+            self.volume = floor;
+        }
+    }
+
+    /// Pseudo-echo tail: hold [`Self::volume`] at its frozen floor and count
+    /// [`Self::echo_length`] down, retiring once it's exhausted. Structurally
+    /// the same decrement-then-check shape as the DirectSound
+    /// [`crate::envelope::Envelope`]'s echo tail, reused here for the CGB
+    /// side (`m4a.c:1050`..`:1051`).
+    fn echo_step(&mut self) {
+        let old = self.echo_length;
+        self.echo_length = old.wrapping_sub(1);
+        if old < 2 {
+            self.active = false;
         }
     }
 
@@ -309,6 +356,16 @@ impl CgbEnvelope {
         self.volume = 0;
         self.active = false;
     }
+}
+
+/// `envelope_pseudoecho_start`'s floor volume: `(goal * echo_volume + 0xFF)
+/// >> 8`, clamped into `u8` (`m4a.c:1091`). `goal` maxes at `31` (a centred
+/// note, [`cgb_envelope_goal`]) and `echo_volume` at `255`, so the raw
+/// product (`8160`) never approaches the clamp in practice — kept for
+/// defensive symmetry with [`sustain_goal_of`].
+fn cgb_echo_floor(goal: u8, echo_volume: u8) -> u8 {
+    let raw = (u32::from(goal) * u32::from(echo_volume) + 0xFF) >> 8;
+    u8::try_from(raw.min(255)).unwrap_or(255)
 }
 
 /// Which side(s) of the stereo field a CGB channel plays to.
@@ -373,6 +430,8 @@ mod tests {
                 release: 0,
             },
             10,
+            0,
+            0,
         );
         env.step();
         // sustain_goal = (10*8+15)>>4 = 5, reached on the first frame.
@@ -397,6 +456,8 @@ mod tests {
                 release: 0,
             },
             10,
+            0,
+            0,
         );
         env.step();
         assert_eq!(env.volume(), 10, "attack==0 lands on the goal, not ramped");
@@ -414,6 +475,8 @@ mod tests {
                 release: 0,
             },
             10,
+            0,
+            0,
         );
         env.step(); // attack==0 -> at goal
         assert_eq!(env.volume(), 10);
@@ -445,6 +508,8 @@ mod tests {
                 release: 0,
             },
             4,
+            0,
+            0,
         );
         env.step(); // frame 0 (note-on frame): still 0
         assert_eq!(env.volume(), 0);
@@ -472,6 +537,8 @@ mod tests {
                 release: 0,
             },
             8,
+            0,
+            0,
         );
         env.step();
         // sustain_goal = (8*15+15)>>4 = 8, reached instantly.
@@ -502,6 +569,8 @@ mod tests {
                 release: 1,
             },
             4,
+            0,
+            0,
         );
         env.step();
         // sustain_goal = (4*15+15)>>4 = 4.
@@ -533,7 +602,7 @@ mod tests {
             sustain: 8,
             release: 0,
         };
-        let mut env = CgbEnvelope::new(adsr, 10);
+        let mut env = CgbEnvelope::new(adsr, 10, 0, 0);
         env.step(); // lands on sustain_goal = (10*8+15)>>4 = 5, counter := 7
         assert_eq!(env.volume(), 5);
 
@@ -559,6 +628,106 @@ mod tests {
             10,
             "sustain re-snaps to the live sustain_goal on the 7th frame"
         );
+    }
+
+    // --- CGB pseudo-echo tail (`xIECV`/`xIECL`) -----------------------------
+
+    #[test]
+    fn cgb_echo_floor_pins_the_scaled_formula() {
+        // `(goal * echo_volume + 0xFF) >> 8` (`m4a.c:1091`).
+        assert_eq!(cgb_echo_floor(10, 128), 5); // (1280+255)>>8 = 5
+        assert_eq!(cgb_echo_floor(0, 255), 0);
+        assert_eq!(cgb_echo_floor(31, 255), 31); // (7905+255)>>8 = 31
+        assert_eq!(cgb_echo_floor(10, 0), 0); // no xIECV -> no floor
+    }
+
+    #[test]
+    fn nonzero_release_pseudo_echo_holds_then_retires() {
+        // A paced release that reaches 0 with a nonzero echo floor enters the
+        // tail instead of retiring outright, then holds for `echo_length`
+        // frames before finally silencing -- reusing the DirectSound
+        // envelope's decrement-then-check tail shape.
+        let adsr = CgbAdsr {
+            attack: 0,
+            decay: 0,
+            sustain: 15,
+            release: 1,
+        };
+        let mut env = CgbEnvelope::new(adsr, 20, 128, 3);
+        env.step(); // sustain_goal = (20*15+15)>>4 = 19
+        assert_eq!(env.volume(), 19);
+        env.note_off();
+        env.step(); // note-off frame: holds, no `-1` yet (release paces from 1)
+        assert_eq!(env.volume(), 19);
+        // Paced release: 19 -> 0 over 19 further steps (release period 1).
+        for _ in 0..19 {
+            env.step();
+        }
+        // floor = (20*128+255)>>8 = 10
+        assert_eq!(
+            env.volume(),
+            10,
+            "release arrival must land on the echo floor"
+        );
+        assert!(
+            env.is_active(),
+            "the tail must hold, not retire immediately"
+        );
+        env.step(); // echo_length 3 -> 2
+        assert!(env.is_active());
+        assert_eq!(env.volume(), 10, "volume stays frozen through the tail");
+        env.step(); // -> 1
+        assert!(env.is_active());
+        env.step(); // old==1 < 2 -> retire
+        assert!(!env.is_active());
+    }
+
+    #[test]
+    fn release_zero_with_pseudo_echo_holds_instead_of_silencing() {
+        // With echo configured, even an instant (release == 0) note-off must
+        // land in the tail rather than silencing on the same frame -- unlike
+        // `release_zero_silences_the_same_frame`, which pins the no-echo case.
+        let adsr = CgbAdsr {
+            attack: 0,
+            decay: 0,
+            sustain: 15,
+            release: 0,
+        };
+        let mut env = CgbEnvelope::new(adsr, 8, 128, 2);
+        env.step();
+        assert_eq!(env.volume(), 8);
+        env.note_off();
+        env.step();
+        // floor = (8*128+255)>>8 = 4
+        assert_eq!(env.volume(), 4);
+        assert!(
+            env.is_active(),
+            "an echo floor must hold, not silence outright"
+        );
+        env.step(); // echo_length 2 -> 1
+        assert!(env.is_active());
+        env.step(); // old==1 < 2 -> retire
+        assert!(!env.is_active());
+    }
+
+    #[test]
+    fn zero_echo_volume_still_silences_immediately_after_release() {
+        // The default (no xIECV) must reproduce the pre-echo behaviour
+        // exactly: a paced release reaching 0 retires outright.
+        let adsr = CgbAdsr {
+            attack: 0,
+            decay: 0,
+            sustain: 15,
+            release: 1,
+        };
+        let mut env = CgbEnvelope::new(adsr, 4, 0, 0);
+        env.step();
+        env.note_off();
+        for _ in 0..6 {
+            env.step();
+        }
+        assert!(!env.is_active());
+        assert_eq!(env.volume(), 0);
     }
 
     #[test]
