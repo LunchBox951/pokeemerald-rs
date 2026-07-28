@@ -85,6 +85,20 @@ pub enum E2eError {
     /// pixel-identical -- the "Press Start" blink and cloud scroll should
     /// have visibly moved on by frame 20 (I-2, issue #116).
     TitleFramesNotAnimated,
+    /// A local asset pack is present, but loading/decoding the default
+    /// overworld room from it failed for a reason other than "no pack"
+    /// (I-3, issue #126) -- carries
+    /// `pokeemerald_rs::overworld::OverworldSceneError`'s rendered message.
+    OverworldSceneFailed(String),
+    /// A local asset pack is present and the default overworld room
+    /// loaded, but composing the same player state twice produced two
+    /// different frames -- `compose` must be a pure function of the
+    /// player state and this scene's already-decoded data.
+    OverworldFrameNotDeterministic,
+    /// A local asset pack is present and the default overworld room
+    /// composed deterministically, but the frame was blank (every pixel
+    /// black).
+    OverworldFrameBlank,
 }
 
 impl fmt::Display for E2eError {
@@ -111,6 +125,17 @@ impl fmt::Display for E2eError {
             Self::TitleFramesNotAnimated => write!(
                 f,
                 "title screen frame 0 and frame 20 were pixel-identical -- expected the animation to have moved on by then"
+            ),
+            Self::OverworldSceneFailed(msg) => {
+                write!(f, "default overworld room failed to load: {msg}")
+            }
+            Self::OverworldFrameNotDeterministic => write!(
+                f,
+                "composing the default overworld room's frame twice produced different frames"
+            ),
+            Self::OverworldFrameBlank => write!(
+                f,
+                "composed default overworld room frame was blank (all black)"
             ),
         }
     }
@@ -142,7 +167,8 @@ pub fn run_smoke() -> Result<(), E2eError> {
         return Err(E2eError::BlankFrame);
     }
 
-    check_title_screen()
+    check_title_screen()?;
+    check_overworld_scene()
 }
 
 /// The I-2 smoke addition (issue #109, strengthened for issue #116): with a
@@ -202,9 +228,79 @@ fn check_title_screen() -> Result<(), E2eError> {
     Ok(())
 }
 
+/// The I-3 smoke addition (issue #126): with a local asset pack present,
+/// load the default overworld room (`pokeemerald_rs::overworld::load_default_room`)
+/// and assert the composed frame -- a standing player at a fixed room
+/// position -- is non-blank and deterministic across two `compose` calls;
+/// without a pack, do nothing.
+///
+/// Deliberately independent of `App`/`App::new_headless` and of
+/// [`check_title_screen`] -- it loads the overworld scene directly, so this
+/// check can never perturb (or depend on) either.
+///
+/// # Errors
+///
+/// [`E2eError::OverworldSceneFailed`] if a pack is present but fails to
+/// load or decode for any reason other than "no pack" (that case returns
+/// `Ok(())`, not an error -- see
+/// `pokeemerald_rs::overworld::OverworldSceneError::is_pack_missing`);
+/// [`E2eError::OverworldFrameNotDeterministic`] or
+/// [`E2eError::OverworldFrameBlank`] if a pack is present and loads, but
+/// composing fails either check.
+fn check_overworld_scene() -> Result<(), E2eError> {
+    let scene = match pokeemerald_rs::overworld::load_default_room() {
+        Ok(scene) => scene,
+        Err(err) if err.is_pack_missing() => return Ok(()),
+        Err(err) => return Err(E2eError::OverworldSceneFailed(err.to_string())),
+    };
+
+    // A standing player somewhere inside the room's 11x9 interior
+    // (`LAYOUT_LITTLEROOT_TOWN_BRENDANS_HOUSE_1F`). Reached through
+    // `pokeemerald_rs::overworld`'s re-export (module docs: this suite's
+    // only workspace dependency stays `pokeemerald-rs`, not `engine`
+    // directly).
+    let player = pokeemerald_rs::overworld::PlayerState::new(
+        (5, 5),
+        3,
+        pokeemerald_rs::overworld::Direction::South,
+    );
+
+    let frame_a = scene.compose_frame(&player);
+    let frame_b = scene.compose_frame(&player);
+    if frame_a != frame_b {
+        return Err(E2eError::OverworldFrameNotDeterministic);
+    }
+    if frame_a.iter().all(|&pixel| pixel == 0) {
+        return Err(E2eError::OverworldFrameBlank);
+    }
+    // "Any non-black pixel" alone would pass even if the map viewport
+    // regressed to nothing: the player sprite always supplies non-zero
+    // pixels, and the palette-0 backdrop can itself be non-black. Require
+    // real map variation *outside* the avatar's fixed 16x32 screen rect
+    // (x 112..128, y 64..96 -- `overworld::avatar`'s PLAYER_OBJ_X/Y): a
+    // missing viewport leaves that region a single flat backdrop color,
+    // while any real room supplies floor/wall/furniture variation.
+    const AVATAR_X: usize = 112;
+    const AVATAR_Y: usize = 64;
+    const SCREEN_W: usize = 240;
+    let mut outside_colors = std::collections::BTreeSet::new();
+    for (i, &pixel) in frame_a.iter().enumerate() {
+        let (x, y) = (i % SCREEN_W, i / SCREEN_W);
+        if (AVATAR_X..AVATAR_X + 16).contains(&x) && (AVATAR_Y..AVATAR_Y + 32).contains(&y) {
+            continue;
+        }
+        outside_colors.insert(pixel);
+    }
+    if outside_colors.len() < 4 {
+        return Err(E2eError::OverworldFrameBlank);
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{check_title_screen, run_smoke};
+    use super::{check_overworld_scene, check_title_screen, run_smoke};
 
     #[test]
     fn smoke_suite_boots_cleanly_headless() {
@@ -221,5 +317,15 @@ mod tests {
         // dedicated, always-runnable-with-`--ignored` version of this same
         // assertion).
         check_title_screen().expect("title screen check should never fail in a clean checkout");
+    }
+
+    #[test]
+    fn overworld_scene_check_is_a_no_op_or_succeeds() {
+        // Same no-pack-vs-real-pack reasoning as `title_screen_check_is_a_no_op_or_succeeds`
+        // (see `pokeemerald_rs::overworld::tests`'
+        // `real_pack_composes_non_blank_deterministic_overworld_frames` for the
+        // dedicated, always-runnable-with-`--ignored` version).
+        check_overworld_scene()
+            .expect("overworld scene check should never fail in a clean checkout");
     }
 }

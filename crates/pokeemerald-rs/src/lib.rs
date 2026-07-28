@@ -11,9 +11,16 @@
 //! (`assets::pack`, populated by `cargo xtask extract`); [`App::new`] uses
 //! it, falling back to no scene at all (a clean, no-panic diagnostic) when
 //! no pack has been extracted yet -- see [`title`]'s module docs.
+//!
+//! [`overworld`] (I-3, issue #126) composes the map viewport + player OBJ
+//! presentation lane over the `engine` overworld runtime (S-5, PR #120) --
+//! see its module docs. Not yet wired into [`App`]'s own frame loop (a
+//! future integration slice); reachable today via
+//! [`overworld::OverworldScene`] directly.
 
 pub mod app;
 pub mod frame;
+pub mod overworld;
 pub mod scene;
 pub mod title;
 
