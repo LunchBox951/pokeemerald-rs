@@ -149,7 +149,7 @@ claiming R-4 is complete:
    merge. Include administrators; disallow direct pushes, force pushes, and branch
    deletion.
 2. Require the CI contexts named in `.github/workflows/ci.yml`: `version`,
-   `ledger`, `scripts-tests`, `fmt (ubuntu-latest)`, `fmt (windows-latest)`,
+   `ledger`, `scripts-tests`, `init-tests`, `fmt (ubuntu-latest)`, `fmt (windows-latest)`,
    `clippy (ubuntu-latest)`, `clippy (windows-latest)`,
    `build (ubuntu-latest)`, `build (windows-latest)`, `test (ubuntu-latest)`, and
    `test (windows-latest)`. Require `dependency-review`, `codeql (actions)`,
@@ -207,11 +207,20 @@ bump per promotion.
 `FINAL` bump requires an explicit, auditable approval marker committed to the repo:
 
 - **`docs/release/final-gate-approved.md`** — present only for an approved `FINAL`
-  bump, naming the approved version and the date.
+  bump, naming the approved version and the date, e.g.:
 
-`scripts/version_check.py` fails any change to `FINAL` unless this marker is
-present, keeping the decision in git history rather than buried in a workflow
-click. v1 ships (and `FINAL` becomes `1`) only when every row in
+  ```
+  Approved version: 1.0.0.0
+  Date: 2026-07-25
+  ```
+
+`scripts/version_check.py` fails any change to `FINAL` unless, in the *same*
+proposed change, this marker is added or edited (a marker byte-identical to the
+base revision's does not count — a stale marker approves nothing), parses
+successfully, and its `Approved version` names the exact proposed `VERSION`.
+This keeps the decision in git history — tied to one specific transition —
+rather than a boolean file-exists check or a buried workflow click. v1 ships
+(and `FINAL` becomes `1`) only when every row in
 [`docs/acceptance/v1.md`](docs/acceptance/v1.md) is done or has a recorded waiver
 and the Operator's playtest (H-1) is signed.
 
