@@ -276,6 +276,37 @@ class SelectPromotedReleaseTest(unittest.TestCase):
             "GH_TOKEN": "stub-token",
         }
 
+    def _stub_gh_closed_pr_contract(self, merged_head):
+        """Model GitHub's real contract for promotion merges: the commit->PR
+        association (`gh api commits/{sha}/pulls`) answers EMPTY, because that
+        endpoint lists only OPEN PRs for commits off the default branch and a
+        promotion PR is closed by the time its merge lands. The merged-PR list
+        (`gh pr list --head <branch> --state merged`) still names the PR: the
+        stub answers the script's count query with 1 for `merged_head`, 0 for
+        any other head. Pass merged_head=None for a remote where no PR names
+        the merge at all."""
+        stub_dir = Path(self._tmp.name) / "stub-bin"
+        stub_dir.mkdir(exist_ok=True)
+        gh = stub_dir / "gh"
+        gh.write_text(
+            "#!/bin/sh\n"
+            'if [ "$1" = "api" ]; then exit 0; fi\n'
+            "head=\"\"; prev=\"\"\n"
+            'for a in "$@"; do\n'
+            '  if [ "$prev" = "--head" ]; then head="$a"; fi\n'
+            '  prev="$a"\n'
+            "done\n"
+            f'if [ "$head" = \'{merged_head or ""}\' ] && [ -n "$head" ]; then\n'
+            "  echo 1\nelse\n  echo 0\nfi\n",
+            encoding="utf-8",
+        )
+        gh.chmod(0o755)
+        import os
+        return {
+            "PATH": f"{stub_dir}:{os.environ.get('PATH', '/usr/bin:/bin')}",
+            "GH_TOKEN": "stub-token",
+        }
+
     def _merge_with_opaque_subject_and_decoy(self):
         """Unparseable subject + a decoy ref on the merged tip: without PR
         metadata this topology is undecidable (exit 3)."""
@@ -313,6 +344,27 @@ class SelectPromotedReleaseTest(unittest.TestCase):
         # the undecidable topology then still fails loudly.
         m = self._merge_with_opaque_subject_and_decoy()
         env = self._stub_gh("feature/not-a-release")
+        result = run(self.checkout, str(_SCRIPT), m, env=env, check=False)
+        self.assertEqual(result.returncode, 3, msg=result.stdout + result.stderr)
+        self.assertIn("ambiguous", result.stderr)
+
+    def test_closed_pr_association_recovers_via_merged_pr_list(self):
+        # The production shape of the primary path: commits/{sha}/pulls
+        # answers empty (the promotion PR is closed and the channel commit is
+        # not on the default branch), so the script must recover the identity
+        # from the merged-PR list of the release/* heads instead.
+        m = self._merge_with_opaque_subject_and_decoy()
+        env = self._stub_gh_closed_pr_contract("release/0.2")
+        result = run(self.checkout, str(_SCRIPT), m, env=env, check=False)
+        self.assertEqual(result.returncode, 0, msg=result.stdout + result.stderr)
+        self.assertEqual(result.stdout.strip(), "release/0.2")
+
+    def test_no_pr_names_the_merge_still_fails_loudly(self):
+        # gh is reachable but NO PR anywhere names this merge (plain
+        # `git merge` promotion): the undecidable topology must still refuse
+        # (exit 3), never guess by name order.
+        m = self._merge_with_opaque_subject_and_decoy()
+        env = self._stub_gh_closed_pr_contract(None)
         result = run(self.checkout, str(_SCRIPT), m, env=env, check=False)
         self.assertEqual(result.returncode, 3, msg=result.stdout + result.stderr)
         self.assertIn("ambiguous", result.stderr)

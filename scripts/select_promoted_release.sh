@@ -84,6 +84,24 @@ if command -v gh >/dev/null 2>&1 && [ -n "${GH_TOKEN:-}${GITHUB_TOKEN:-}" ]; the
   pr_head="$(gh api "repos/{owner}/{repo}/commits/${merge_sha}/pulls" \
     --jq '[.[] | select(.merge_commit_sha == "'"${merge_sha}"'") | .head.ref] | first // empty' \
     2>/dev/null || true)"
+  # commits/{sha}/pulls lists only OPEN PRs for commits that are not on the
+  # default branch, and a promotion PR is already closed once its merge
+  # lands on a channel — so an empty answer is the production norm here,
+  # not an edge case. Recover the association from the merged-PR list of
+  # each release/* head instead (bounded: one query per release/* line).
+  if [ -z "${pr_head}" ]; then
+    for ref in $(git for-each-ref --format='%(refname:short)' 'refs/remotes/origin/release/*'); do
+      name="${ref#origin/}"
+      hits="$(gh pr list --head "${name}" --state merged \
+        --json mergeCommit \
+        --jq '[.[] | select(.mergeCommit.oid == "'"${merge_sha}"'")] | length' \
+        2>/dev/null || true)"
+      if [ -n "${hits}" ] && [ "${hits}" != "0" ]; then
+        pr_head="${name}"
+        break
+      fi
+    done
+  fi
   if [[ "${pr_head}" == release/* ]] \
     && git rev-parse --verify -q "origin/${pr_head}" >/dev/null \
     && git merge-base --is-ancestor "${second_parent}" "origin/${pr_head}"; then

@@ -33,6 +33,14 @@ on:
   push:
     branches: [unstable, stable, "release/**"]
   create:
+  # Push events run the workflow file present ON THE PUSHED REF, so a
+  # release/* branch cut before this file gained its release/** trigger and
+  # reconcile sweep cannot self-heal from its own pushes. Scheduled and
+  # manual runs execute the DEFAULT branch's copy, sweeping every release/*
+  # line regardless of which workflow version those branches carry.
+  schedule:
+    - cron: "17 4 * * *"
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -193,8 +201,15 @@ jobs:
       # pending run (GitHub cancels an older pending run when a newer one
       # queues), but since any surviving run repairs every line, a dropped
       # event loses nothing. require-rung-cleared fails closed in between.
+      #
+      # `always()` is load-bearing: a bare `if:` expression is implicitly
+      # ANDed with success(), which would SKIP this sweep exactly when the
+      # next-rung step above fails (e.g. selector exit 3 on ambiguous
+      # topology) — and this sweep is the repair path for that failure. It
+      # runs on every trigger, including the scheduled/manual default-branch
+      # sweeps that cover release/* lines carrying older workflow copies.
       - name: Reconcile promotion PRs (all release/* lines)
-        if: github.event_name == 'push' || github.event_name == 'create'
+        if: always()
         run: |
           set -euo pipefail
           for ref in $(git for-each-ref --format='%(refname:short)' 'refs/remotes/origin/release/*'); do
