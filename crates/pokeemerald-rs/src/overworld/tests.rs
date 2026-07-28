@@ -374,17 +374,17 @@ fn overworld_scene_from_pack_composes_a_non_blank_deterministic_frame() {
 
 /// Loads the *real* local pack (`cargo xtask extract`'s output) and
 /// exercises the full `load_default_room` + `compose` pipeline against
-/// Brendan's house 1F -- proof this module's decoding agrees with the real
-/// extracted overworld assets, not just the synthetic fixture above. Needs
-/// a local pack: run `cargo xtask extract` first, then `cargo test -p
-/// pokeemerald-rs -- --ignored`.
+/// the protagonist's bedroom (Brendan's house 2F) -- proof this module's
+/// decoding agrees with the real extracted overworld assets, not just the
+/// synthetic fixture above. Needs a local pack: run `cargo xtask extract`
+/// first, then `cargo test -p pokeemerald-rs -- --ignored`.
 #[test]
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
 fn real_pack_composes_non_blank_deterministic_overworld_frames() {
     let scene = super::load_default_room().expect("run `cargo xtask extract` first");
 
-    // A couple of on-foot player states across the room's 11x9 interior
-    // (`LAYOUT_LITTLEROOT_TOWN_BRENDANS_HOUSE_1F`), including one mid-step,
+    // A couple of on-foot player states across the bedroom's 9x8 interior
+    // (`LAYOUT_LITTLEROOT_TOWN_BRENDANS_HOUSE_2F`), including one mid-step,
     // so the scroll-lag path is exercised too.
     let standing = PlayerState::new((5, 5), 3, Direction::South);
     let frame_a = scene.compose(&standing);

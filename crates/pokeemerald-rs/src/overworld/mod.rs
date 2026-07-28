@@ -59,7 +59,10 @@
 //! integration slices): NPC/object-event rendering, reflections and field
 //! effects, connection streaming (rendering a neighbouring map's own
 //! content near an edge, distinct from the border-block fallback above,
-//! which *is* modeled), and dialog UI. Acceptance ID **I-3** stays
+//! which *is* modeled), dialog UI, and **tileset tile animations**
+//! (`tileset_anims.c`'s per-tileset frame cadence over the extracted
+//! `tileset/<name>/anim/...` entries — this slice composes from the base
+//! `tiles.png` only, so animated tiles hold their base frame). Acceptance ID **I-3** stays
 //! whatever `docs/acceptance/v1.md` already has it at -- this slice does
 //! not flip acceptance markers.
 //!
@@ -124,11 +127,12 @@ const PLAYER_VIEW_ROW: i32 = VIEW_ROWS / 2;
 /// samples past the tilemap's own edge (see [`viewport::build_tilemaps`]).
 const PAD: i32 = 1;
 
-/// `LAYOUT_LITTLEROOT_TOWN_BRENDANS_HOUSE_1F` -- [`load_default_room`]'s
-/// fixed choice of "the protagonist's room" (issue #126's north star), the
-/// same room family `crates/xtask`'s extraction pipeline already ships
+/// `LAYOUT_LITTLEROOT_TOWN_BRENDANS_HOUSE_2F` -- [`load_default_room`]'s
+/// fixed choice: the protagonist's *bedroom* (the 2F room the north-star
+/// flow in `docs/acceptance/v1.md` starts in — 1F is the downstairs living
+/// area), already shipped by `crates/xtask`'s extraction pipeline
 /// (`crates/xtask/src/extract/mod.rs`'s `LAYOUTS`).
-const DEFAULT_ROOM_LAYOUT_ID: &str = "LAYOUT_LITTLEROOT_TOWN_BRENDANS_HOUSE_1F";
+const DEFAULT_ROOM_LAYOUT_ID: &str = "LAYOUT_LITTLEROOT_TOWN_BRENDANS_HOUSE_2F";
 
 /// Why building or composing an [`OverworldScene`] failed.
 ///

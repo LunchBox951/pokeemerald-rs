@@ -273,6 +273,27 @@ fn check_overworld_scene() -> Result<(), E2eError> {
     if frame_a.iter().all(|&pixel| pixel == 0) {
         return Err(E2eError::OverworldFrameBlank);
     }
+    // "Any non-black pixel" alone would pass even if the map viewport
+    // regressed to nothing: the player sprite always supplies non-zero
+    // pixels, and the palette-0 backdrop can itself be non-black. Require
+    // real map variation *outside* the avatar's fixed 16x32 screen rect
+    // (x 112..128, y 64..96 -- `overworld::avatar`'s PLAYER_OBJ_X/Y): a
+    // missing viewport leaves that region a single flat backdrop color,
+    // while any real room supplies floor/wall/furniture variation.
+    const AVATAR_X: usize = 112;
+    const AVATAR_Y: usize = 64;
+    const SCREEN_W: usize = 240;
+    let mut outside_colors = std::collections::BTreeSet::new();
+    for (i, &pixel) in frame_a.iter().enumerate() {
+        let (x, y) = (i % SCREEN_W, i / SCREEN_W);
+        if (AVATAR_X..AVATAR_X + 16).contains(&x) && (AVATAR_Y..AVATAR_Y + 32).contains(&y) {
+            continue;
+        }
+        outside_colors.insert(pixel);
+    }
+    if outside_colors.len() < 4 {
+        return Err(E2eError::OverworldFrameBlank);
+    }
 
     Ok(())
 }
