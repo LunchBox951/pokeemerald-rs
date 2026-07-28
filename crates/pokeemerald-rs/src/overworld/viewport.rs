@@ -185,18 +185,31 @@ fn copy_bank(colors: &mut [Bgr555; Palette::LEN], bank: usize, palette: PaletteR
     }
 }
 
+/// Upstream `MAP_OFFSET` (`pokeemerald/include/fieldmap.h`): the 7-tile
+/// border padding `gBackupMapLayout` adds around a layout, and therefore the
+/// coordinate shift between this module's layout-local positions and the
+/// backup-map coordinates upstream's grid macros consume.
+const MAP_OFFSET: i32 = 7;
+
 /// The decoded cell at world metatile position `(x, y)`: `grid`'s own cell
 /// if in bounds, else `border`'s fallback (upstream `GetBorderBlockAt`,
 /// reached through `MapGridGetMetatileIdAt`'s out-of-bounds branch) -- see
 /// the parent module's docs on why this, not a viewport-position clamp, is
 /// this port's "edge clamping".
+///
+/// `GetBorderBlockAt`'s `((x + 1) & 1) + (((y + 1) & 1) << 1)` index is
+/// evaluated in *backup-map* coordinates (layout-local + [`MAP_OFFSET`],
+/// `pokeemerald/src/fieldmap.c`). This module works layout-local, and the
+/// offset is odd, so the shift flips the parity of both axes — passing
+/// layout-local coords straight through would select the diagonally-opposite
+/// cell of a patterned 2x2 border `(behavioral-fidelity)`.
 fn cell_at(grid: &LayoutGrid<'_>, border: &BorderGrid<'_>, x: i32, y: i32) -> MetatileCell {
     if let (Ok(ux), Ok(uy)) = (u16::try_from(x), u16::try_from(y)) {
         if let Some(cell) = grid.cell_at(ux, uy) {
             return cell;
         }
     }
-    border.cell_at(x, y)
+    border.cell_at(x + MAP_OFFSET, y + MAP_OFFSET)
 }
 
 /// A metatile's 8 raw tile entries plus its layer type, or `None` if either
@@ -506,6 +519,40 @@ mod tests {
         assert_eq!(cell_at(&grid, &border, 4, 0).metatile_id, 1);
         assert_eq!(cell_at(&grid, &border, 0, 4).metatile_id, 1);
         assert_eq!(cell_at(&grid, &border, -50, 50).metatile_id, 1);
+    }
+
+    #[test]
+    fn border_cells_use_backup_map_parity_not_layout_local() {
+        // GetBorderBlockAt evaluates its 2x2 index in BACKUP-map coords
+        // (layout-local + MAP_OFFSET = 7, `pokeemerald/src/fieldmap.c`).
+        // The odd offset flips both parities, so a raw layout-local
+        // pass-through would pick the diagonally-opposite cell. Four
+        // DISTINCT cells make the index math observable (a uniform block
+        // cannot).
+        let grid_bytes = synthetic_grid_bytes(4, 4);
+        let layout = assets::MapLayout {
+            id: assets::LayoutId("MAP_TEST"),
+            name: "MapTest",
+            width: 4,
+            height: 4,
+            primary_tileset: "gTileset_General",
+            secondary_tileset: "gTileset_General",
+        };
+        let grid = layout.grid(&grid_bytes).unwrap();
+        let mut border_bytes = Vec::new();
+        for id in 10..14 {
+            border_bytes.extend_from_slice(&cell(id, 0, 3).to_le_bytes());
+        }
+        let border = BorderGrid::new(&border_bytes).unwrap();
+
+        // One tile WEST of the origin: backup (6, 7) -> index 1.
+        assert_eq!(cell_at(&grid, &border, -1, 0).metatile_id, 11);
+        // One tile NORTH: backup (7, 6) -> index 2.
+        assert_eq!(cell_at(&grid, &border, 0, -1).metatile_id, 12);
+        // Diagonal NW: backup (6, 6) -> index 3.
+        assert_eq!(cell_at(&grid, &border, -1, -1).metatile_id, 13);
+        // One past the SE corner: backup (11, 11) -> index 0.
+        assert_eq!(cell_at(&grid, &border, 4, 4).metatile_id, 10);
     }
 
     #[test]

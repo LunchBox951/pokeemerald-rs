@@ -87,8 +87,8 @@ use assets::{
     AssetError, AssetPack, BorderGrid, ImageRef, LayoutId, MapLayout, MetatileAttributeTable,
 };
 use rendering::{
-    compose_frame, BgLayer, BgSlot, BitDepth, Framebuffer, Palette, RenderError, SpriteLayer,
-    Tileset,
+    compose_frame_with_effects, BgLayer, BgSlot, BitDepth, FrameEffects, Framebuffer, Palette,
+    RenderError, SpriteLayer, Tileset,
 };
 
 pub use avatar::PlayerCharacter;
@@ -430,7 +430,14 @@ impl OverworldScene {
             &self.sprite_palette,
         );
 
-        compose_frame(&sprites, &slots)
+        // GBA hardware shows BG palette color 0 — not black — wherever every
+        // enabled layer is transparent (reachable here via the blank-tile
+        // fallback for undefined metatile ids).
+        let effects = FrameEffects {
+            backdrop: self.world_palette.color(0).to_rgb888(),
+            ..FrameEffects::default()
+        };
+        compose_frame_with_effects(&sprites, &slots, &effects)
     }
 
     /// [`compose`](Self::compose), converted to `platform`'s
