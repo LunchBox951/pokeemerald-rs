@@ -23,6 +23,24 @@
 # required check (see below) -- R-4 registers it once the gate has proven
 # stable.
 #
+# `real-pack` (V-1, I-2, ubuntu-only) is the real-asset E2E leg `smoke`
+# cannot cover: it needs `POKEEMERALD_REMOTE`/`pokeemerald` -- CI's checkout
+# has no upstream reference tree, so `smoke`'s pack-present branches
+# (`check_title_screen`/`check_overworld_scene` in crates/xtask/src/e2e.rs)
+# always no-op there, and the real-pack tests
+# (`real_pack_composes_non_blank_deterministic_title_frames` /
+# `..._overworld_frames`, plus `app::tests::animated_frame_returns_the_presented_tick`)
+# stay `#[ignore]`d. `real-pack` runs `./init.sh` to fetch the pinned
+# upstream checkouts (cached below, keyed on init.sh's pinned SHAs so a
+# fresh clone only happens when a pin moves), then `cargo run -p xtask --
+# extract` to build the local asset pack, then `cargo test -p pokeemerald-rs
+# -- --ignored` (selects exactly those real-pack tests) and `cargo run -p
+# xtask --features smoke -- e2e --suite smoke` again (this time with the
+# pack present, so its pack-present branches actually execute). It only
+# `needs: version`, the same cheap gate the other jobs fan out from, so a
+# slow upstream clone never blocks the required fmt/clippy/build/test chain.
+# Not yet a required check -- see below.
+#
 # Required status-check contexts for branch protection (R-4): `version`,
 # `ledger`, `scripts-tests`, and `init-tests` report under their bare job
 # names; the matrixed jobs report per OS —
@@ -30,7 +48,9 @@
 # `clippy (windows-latest)`, `build (ubuntu-latest)`, `build (windows-latest)`,
 # `test (ubuntu-latest)`, `test (windows-latest)`. Register those exact names.
 # `smoke (ubuntu-latest)` / `smoke (windows-latest)` are deliberately NOT on
-# this list yet.
+# this list yet, and neither is `real-pack` (see the job below) -- both wait
+# on the same "prove stable first" precedent; R-4 registers them once each
+# has proven stable.
 name: ci
 
 # Least-privilege GITHUB_TOKEN: every job here only checks out and reads the repo.
@@ -189,3 +209,46 @@ jobs:
       # `test` job's plain `cargo test --workspace` (see the header comment).
       - name: cargo test -p xtask --features smoke
         run: cargo test -p xtask --features smoke
+
+  # V-1 / I-2: the real-asset E2E leg `smoke` cannot cover (see the header
+  # comment) -- extracts the local pack from the pinned upstream checkouts
+  # and runs the real-pack verifications that stay `#[ignore]`d without one.
+  # ubuntu-only: the clone/extraction pipeline is not platform-sensitive, so
+  # a windows-latest leg would only add clone time, not coverage. Fans out
+  # from `version` (like `ledger`/`scripts-tests`/`init-tests` above), so a
+  # slow upstream clone can never block the required fmt/clippy/build/test
+  # chain. Not yet a required check (see the header comment) -- R-4 promotes
+  # it once it has proven stable in CI.
+  real-pack:
+    name: real-pack
+    needs: version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Install ALSA dev headers (crates/platform's cpal dependency links libasound at compile time)
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev
+      # Cache the pinned upstream clones (init.sh's POKEEMERALD_REF/MGBA_REF)
+      # so a normal run reuses them instead of re-cloning pret/pokeemerald
+      # and mgba-emu/mgba from scratch every time. Keyed on init.sh's own
+      # contents: the pins only ever move via a dedicated edit to that file
+      # (see its header comment), so that edit is exactly what should
+      # invalidate the cache and force a fresh, re-verified clone.
+      - uses: actions/cache@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
+        with:
+          path: |
+            pokeemerald
+            mgba
+          key: real-pack-upstream-${{ hashFiles('init.sh') }}
+      - name: ./init.sh (fetch the pinned upstream references)
+        run: ./init.sh
+      - name: cargo run -p xtask -- extract
+        run: cargo run -p xtask -- extract
+      - name: cargo test -p pokeemerald-rs -- --ignored (real-pack verifications)
+        run: cargo test -p pokeemerald-rs -- --ignored
+      # Re-run the smoke suite with the pack now present, so its
+      # pack-present branches (`check_title_screen`/`check_overworld_scene`
+      # in crates/xtask/src/e2e.rs) actually execute -- the `smoke` job
+      # above always sees a pack-less checkout, so those branches are
+      # otherwise dead in CI.
+      - name: cargo run -p xtask --features smoke -- e2e --suite smoke (pack present)
+        run: cargo run -p xtask --features smoke -- e2e --suite smoke
