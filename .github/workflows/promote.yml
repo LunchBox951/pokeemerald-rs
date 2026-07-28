@@ -31,12 +31,28 @@ name: promote
 
 on:
   push:
-    branches: [unstable, stable]
+    branches: [unstable, stable, "release/**"]
   create:
+  # Push events run the workflow file present ON THE PUSHED REF, so a
+  # release/* branch cut before this file gained its release/** trigger and
+  # reconcile sweep cannot self-heal from its own pushes. Scheduled and
+  # manual runs execute the DEFAULT branch's copy, sweeping every release/*
+  # line regardless of which workflow version those branches carry.
+  schedule:
+    - cron: "17 4 * * *"
+  workflow_dispatch:
 
 permissions:
   contents: read
   pull-requests: write
+
+# Reconciliation is check-then-act over live PR state: overlapping runs could
+# clobber each other (a stale run closing a newer run's correctly-routed PR).
+# Serialize the whole workflow — promotion events are rare, and queued runs
+# re-read live state when they start.
+concurrency:
+  group: promote
+  cancel-in-progress: false
 
 jobs:
   promote:
@@ -80,7 +96,7 @@ jobs:
       # Next rung: a release/* branch was merged into unstable/stable -> open the
       # PR to the rung above it.
       - name: Open next-rung PR (release/* -> next channel)
-        if: github.event_name == 'push'
+        if: github.event_name == 'push' && !startsWith(github.ref_name, 'release/')
         run: |
           set -euo pipefail
           merged="${GITHUB_REF_NAME}"   # the channel just pushed to
@@ -89,34 +105,141 @@ jobs:
             stable)   target="main" ;;
             *) echo "no next rung for ${merged}"; exit 0 ;;
           esac
-          # Find the most-recent release/* branch that is now an ancestor of the
-          # channel we just pushed to (i.e. the vehicle that was promoted in).
-          release_branch=""
-          for ref in $(git for-each-ref --format='%(refname:short)' --sort=-committerdate 'refs/remotes/origin/release/*'); do
-            name="${ref#origin/}"
-            if git merge-base --is-ancestor "origin/${name}" "origin/${merged}"; then
-              release_branch="${name}"
-              break
-            fi
-          done
+          # Identify the release/* branch THIS push promoted, from the
+          # triggering merge commit's own ancestry -- not a namespace-wide
+          # committer-date scan, which can't tell a branch's activity apart
+          # from which branch was actually just merged (issue #135: a
+          # long-lived maintenance release/* line with a newer tip must
+          # never shadow the release branch this push named).
+          set +e
+          release_branch="$(scripts/select_promoted_release.sh "${GITHUB_SHA}")"
+          select_rc=$?
+          set -e
+          # exit 4 = branch advanced past the merged commit; the rung walk
+          # below routes that to a re-clear. Anything else nonzero is an
+          # error (ambiguous topology etc.) — surface it.
+          if [ "${select_rc}" -ne 0 ] && [ "${select_rc}" -ne 4 ]; then
+            exit "${select_rc}"
+          fi
           if [ -z "${release_branch}" ]; then
             echo "No release/* branch merged into ${merged}; nothing to promote."
             exit 0
           fi
-          if git merge-base --is-ancestor "origin/${release_branch}" "origin/${target}"; then
-            echo "${release_branch} already contained in ${target}; nothing to open."
+          # Re-fetch the LIVE tip: `gh pr create --head` binds to the
+          # branch's server-side tip, not the checkout snapshot the selector
+          # classified — routing must use what the PR will actually carry.
+          git fetch origin "+refs/heads/${release_branch}:refs/remotes/origin/${release_branch}"
+          # Route to the LOWEST rung the live tip has not cleared: the rung
+          # above the one just pushed for a stationary tip, or a re-clear of
+          # an earlier rung for a tip that advanced (never a higher rung the
+          # new commits have not earned).
+          target="$(scripts/select_promotion_target.sh "${release_branch}")"
+          if [ -z "${target}" ]; then
+            echo "${release_branch} already contained in every channel; nothing to open."
             exit 0
           fi
-          existing="$(gh pr list --head "${release_branch}" --base "${target}" --state open --json number --jq 'length')"
-          if [ "${existing}" != "0" ]; then
-            echo "Promotion PR ${release_branch} -> ${target} already open."
-            exit 0
-          fi
-          gh pr create \
-            --head "${release_branch}" \
-            --base "${target}" \
-            --title "Promote ${release_branch} → ${target}" \
-            --body "$(printf 'Automated next-rung promotion opened by promote.yml after %s merged into %s.\n\nCandidate: `%s` @ %s\nGates for **%s** are in RELEASE.md. A maintainer with write access must select **Approve workflows to run** before the required checks start. Player channels (`stable`, `main`) require owner signoff (`needs-operator`) before merge.' "${release_branch}" "${merged}" "${release_branch}" "$(git rev-parse --short "origin/${release_branch}")" "${target}")" \
-            --label "release" \
-            --label "needs-review" \
-            --label "needs-operator"
+          second_parent="$(git rev-parse "${GITHUB_SHA}^2")"
+          # `gh pr create` binds the PR to the LIVE server-side tip, which
+          # can advance past the tip the routing above used. After creating,
+          # re-read the PR's actual head OID; if it moved AND that changes
+          # the routing, close the misrouted PR and re-open at the correct
+          # rung. Bounded retries — a branch that keeps advancing mid-run
+          # fails loudly rather than looping.
+          attempt=0
+          while :; do
+            attempt="$(( attempt + 1 ))"
+            existing="$(gh pr list --head "${release_branch}" --base "${target}" --state open --json number --jq 'length')"
+            if [ "${existing}" != "0" ]; then
+              echo "Promotion PR ${release_branch} -> ${target} already open."
+              exit 0
+            fi
+            labels=(--label "release" --label "needs-review")
+            case "${target}" in
+              stable|main) labels+=(--label "needs-operator") ;;
+            esac
+            if [ "$(git rev-parse "origin/${release_branch}")" != "${second_parent}" ]; then
+              reason="Automated re-clear promotion opened by promote.yml: ${release_branch} advanced past the commit just merged into ${merged}, so its new tip must re-clear ${target}."
+            else
+              reason="Automated next-rung promotion opened by promote.yml after ${release_branch} merged into ${merged}."
+            fi
+            pr_url="$(gh pr create \
+              --head "${release_branch}" \
+              --base "${target}" \
+              --title "Promote ${release_branch} → ${target}" \
+              --body "$(printf '%s\n\nCandidate: `%s` @ %s\nGates for **%s** are in RELEASE.md. A maintainer with write access must select **Approve workflows to run** before the required checks start. Player channels (`stable`, `main`) require owner signoff (`needs-operator`) before merge.' "${reason}" "${release_branch}" "$(git rev-parse --short "origin/${release_branch}")" "${target}")" \
+              "${labels[@]}")"
+            routed_tip="$(git rev-parse "origin/${release_branch}")"
+            created_head="$(gh pr view "${pr_url}" --json headRefOid --jq .headRefOid)"
+            if [ "${created_head}" = "${routed_tip}" ]; then
+              exit 0
+            fi
+            # The branch advanced inside the routing->create window. The PR
+            # follows the LIVE branch tip (created_head is already stale the
+            # moment it is read), so refetch and re-route from the live tip.
+            git fetch origin "+refs/heads/${release_branch}:refs/remotes/origin/${release_branch}"
+            new_target="$(scripts/select_promotion_target.sh "${release_branch}")"
+            if [ "${new_target}" = "${target}" ]; then
+              echo "${release_branch} advanced during PR creation but the routing is unchanged."
+              exit 0
+            fi
+            gh pr close "${pr_url}" --comment "Head advanced past the tip this PR was routed for; re-routing to ${new_target:-none (now contained in every channel)}."
+            if [ -z "${new_target}" ]; then
+              echo "${release_branch} now contained in every channel; nothing to open."
+              exit 0
+            fi
+            if [ "${attempt}" -ge 3 ]; then
+              echo "${release_branch} keeps advancing mid-run; giving up after ${attempt} attempts." >&2
+              exit 1
+            fi
+            target="${new_target}"
+          done
+
+      # Reconciliation: every promote run re-derives where EVERY release/*
+      # line should be promoted and corrects its open promotion PRs. The
+      # full sweep is what makes routing eventually consistent under both
+      # races and run-coalescing: the concurrency group keeps at most one
+      # pending run (GitHub cancels an older pending run when a newer one
+      # queues), but since any surviving run repairs every line, a dropped
+      # event loses nothing. require-rung-cleared fails closed in between.
+      #
+      # `always()` is load-bearing: a bare `if:` expression is implicitly
+      # ANDed with success(), which would SKIP this sweep exactly when the
+      # next-rung step above fails (e.g. selector exit 3 on ambiguous
+      # topology) — and this sweep is the repair path for that failure. It
+      # runs on every trigger, including the scheduled/manual default-branch
+      # sweeps that cover release/* lines carrying older workflow copies.
+      - name: Reconcile promotion PRs (all release/* lines)
+        if: always()
+        run: |
+          set -euo pipefail
+          for ref in $(git for-each-ref --format='%(refname:short)' 'refs/remotes/origin/release/*'); do
+            release_branch="${ref#origin/}"
+            target="$(scripts/select_promotion_target.sh "${release_branch}")"
+            for base in unstable stable main; do
+              if [ "${base}" = "${target}" ]; then
+                continue
+              fi
+              for n in $(gh pr list --head "${release_branch}" --base "${base}" --state open --json number --jq '.[].number'); do
+                gh pr close "${n}" --comment "$(printf '%s now routes to %s; closing this misrouted promotion PR (promote.yml reconciliation).' "${release_branch}" "${target:-no rung (contained in every channel)}")"
+              done
+            done
+            if [ -z "${target}" ]; then
+              echo "${release_branch} contained in every channel; nothing to open."
+              continue
+            fi
+            existing="$(gh pr list --head "${release_branch}" --base "${target}" --state open --json number --jq 'length')"
+            if [ "${existing}" != "0" ]; then
+              echo "Promotion PR ${release_branch} -> ${target} already open."
+              continue
+            fi
+            labels=(--label "release" --label "needs-review")
+            case "${target}" in
+              stable|main) labels+=(--label "needs-operator") ;;
+            esac
+            gh pr create \
+              --head "${release_branch}" \
+              --base "${target}" \
+              --title "Promote ${release_branch} → ${target}" \
+              --body "$(printf 'Automated promotion opened by promote.yml reconciliation.\n\nCandidate: `%s` @ %s\nGates for **%s** are in RELEASE.md. A maintainer with write access must select **Approve workflows to run** before the required checks start. Player channels (`stable`, `main`) require owner signoff (`needs-operator`) before merge.' "${release_branch}" "$(git rev-parse --short "origin/${release_branch}")" "${target}")" \
+              "${labels[@]}"
+          done
