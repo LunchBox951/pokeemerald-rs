@@ -202,6 +202,27 @@ impl Nature {
         let row = MODIFIERS[self as usize];
         row[0] == 0 && row[1] == 0 && row[2] == 0 && row[3] == 0 && row[4] == 0
     }
+
+    /// `ModifyStatByNature` (`pokeemerald/src/pokemon.c:5878`): `x1.10` if
+    /// this nature favours `stat`, `x0.90` if it disfavours it, unchanged
+    /// otherwise — computed as `value * 110 / 100` / `value * 90 / 100` to
+    /// match upstream's truncating integer arithmetic `(behavioral-fidelity)`.
+    ///
+    /// Upstream stores the intermediate in a `u16` unless built with
+    /// `#ifdef BUGFIX` (which widens it to `u32`); this crate always uses
+    /// `u32`, matching the `BUGFIX` build. No upstream base stat is close to
+    /// the ~596 threshold where the two builds would disagree (Shuckle's 230
+    /// Defense/Sp. Defense is the closest), so the choice is unobservable for
+    /// every real Gen-3 Pokémon and only matters for pathological synthetic
+    /// inputs — not worth reproducing a ROM overflow bug for.
+    #[must_use]
+    pub const fn modify_stat(self, stat: Stat, value: u32) -> u32 {
+        match self.modifier(stat) {
+            1 => value * 110 / 100,
+            -1 => value * 90 / 100,
+            _ => value,
+        }
+    }
 }
 
 /// `gNatureStatTable[NUM_NATURES][NUM_NATURE_STATS]`, transcribed as data
@@ -353,6 +374,29 @@ mod tests {
         // Careful: -Sp. Attack, +Sp. Defense.
         assert_eq!(Nature::Careful.modifier(Stat::SpAttack), -1);
         assert_eq!(Nature::Careful.modifier(Stat::SpDefense), 1);
+    }
+
+    #[test]
+    fn modify_stat_scales_by_ten_percent_in_the_favoured_direction() {
+        // Adamant: +Attack, -Sp. Attack.
+        assert_eq!(Nature::Adamant.modify_stat(Stat::Attack, 100), 110);
+        assert_eq!(Nature::Adamant.modify_stat(Stat::SpAttack, 100), 90);
+        // Unrelated stat is untouched.
+        assert_eq!(Nature::Adamant.modify_stat(Stat::Speed, 100), 100);
+    }
+
+    #[test]
+    fn modify_stat_truncates_like_upstream_integer_division() {
+        // 91 * 110 / 100 = 100.1 -> 100; 91 * 90 / 100 = 81.9 -> 81.
+        assert_eq!(Nature::Adamant.modify_stat(Stat::Attack, 91), 100);
+        assert_eq!(Nature::Adamant.modify_stat(Stat::SpAttack, 91), 81);
+    }
+
+    #[test]
+    fn neutral_nature_never_modifies_any_stat() {
+        for stat in Stat::ALL {
+            assert_eq!(Nature::Hardy.modify_stat(stat, 137), 137);
+        }
     }
 
     #[test]
