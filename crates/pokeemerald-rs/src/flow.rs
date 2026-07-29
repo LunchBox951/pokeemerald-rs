@@ -83,6 +83,10 @@ pub(crate) enum AppScene {
 /// counterpart to `player`'s in-memory position, kept alive here rather than
 /// built and discarded, since nothing yet writes it to disk
 /// (`engine::save::store::SaveStore`, out of this issue's scope).
+/// `save1.pos` is re-synced to the player's logical tile after every
+/// [`OverworldPhase::step`] (upstream keeps `gSaveBlock1Ptr->pos` current as
+/// the object-event system moves the player), so a future serialize/continue
+/// path reloads at the tile the player actually stands on, not the spawn.
 pub(crate) struct OverworldPhase {
     scene: OverworldScene,
     player: PlayerState,
@@ -156,6 +160,14 @@ impl OverworldPhase {
         } else {
             self.player.tick();
         }
+        // Mirror the logical tile into the retained save state every frame
+        // (upstream keeps `gSaveBlock1Ptr->pos` current as the player moves);
+        // map tiles are far inside i16, so the saturation never fires.
+        let (x, y) = self.player.position();
+        self.save1.pos = engine::save::Coords16 {
+            x: i16::try_from(x).unwrap_or(i16::MAX),
+            y: i16::try_from(y).unwrap_or(i16::MAX),
+        };
     }
 
     /// [`OverworldScene::compose_frame`] against this phase's current
@@ -793,6 +805,28 @@ mod tests {
             phase.player.facing(),
             Direction::North,
             "a fresh directional input first turns the player to face it"
+        );
+
+        // The retained save state mirrors the logical tile after every step
+        // (upstream keeps `gSaveBlock1Ptr->pos` current as the player moves).
+        // Walk south far enough to guarantee at least one accepted step in
+        // the open room, then assert the mirror holds wherever we ended up.
+        for _ in 0..40 {
+            phase.step(held(Buttons::DOWN));
+        }
+        let (x, y) = phase.player.position();
+        assert_eq!(
+            (
+                i32::from(phase.save1().pos.x),
+                i32::from(phase.save1().pos.y)
+            ),
+            (x, y),
+            "save1.pos must track the player's logical tile, not the spawn"
+        );
+        assert_ne!(
+            (x, y),
+            new_game::SPAWN_POSITION,
+            "walking south from the spawn must actually move the player"
         );
     }
 }
