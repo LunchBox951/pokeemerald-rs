@@ -303,6 +303,127 @@ impl<'a> FontGlyphSheet<'a> {
             pixels,
         })
     }
+
+    /// Copy this sheet's bytes out of the pack into an
+    /// [`OwnedFontGlyphSheet`], for a caller that must outlive the
+    /// [`AssetPack`](crate::pack::AssetPack) they came from.
+    #[must_use]
+    pub fn to_owned_sheet(&self) -> OwnedFontGlyphSheet {
+        OwnedFontGlyphSheet {
+            font: self.font,
+            bit_depth: self.image.bit_depth,
+            pixels: self.image.pixels.to_vec(),
+        }
+    }
+}
+
+/// Read access to one font's glyphs, however the sheet's bytes happen to be
+/// held — pack-borrowed ([`FontGlyphSheet`]) or owned
+/// ([`OwnedFontGlyphSheet`]).
+///
+/// The seam a renderer generic over sheet ownership needs: `engine`'s glyph
+/// printer keeps a sheet alive for as long as it is printing, which a
+/// caller whose sheet outlives no pack (see [`OwnedFontGlyphSheet`]'s docs)
+/// cannot satisfy with a borrowed one.
+pub trait GlyphSource {
+    /// The font these glyphs belong to.
+    fn font(&self) -> FontId;
+    /// The decoded glyph at `glyph_id`, or `None` if out of range — see
+    /// [`FontGlyphSheet::glyph`].
+    fn glyph(&self, glyph_id: u16) -> Option<Glyph>;
+}
+
+impl GlyphSource for FontGlyphSheet<'_> {
+    fn font(&self) -> FontId {
+        Self::font(self)
+    }
+
+    fn glyph(&self, glyph_id: u16) -> Option<Glyph> {
+        Self::glyph(self, glyph_id)
+    }
+}
+
+/// A validated glyph sheet that **owns** its bitmap bytes, rather than
+/// borrowing them from a live [`AssetPack`](crate::pack::AssetPack).
+///
+/// The pack's own accessors are zero-copy by design (see [`crate::pack`]'s
+/// module docs): every [`ImageRef`] borrows from the pack's buffer, so a
+/// [`FontGlyphSheet`] cannot outlive the pack it was fetched from. That
+/// suits a caller that decodes everything it needs in one pass and drops
+/// the pack. A caller that instead keeps a *live* printer across frames
+/// (`engine::text::render::Printer` holds its sheet for the duration of a
+/// message) would need the pack alive for exactly as long as itself —
+/// either a self-referential struct, a leak, or process-global state, none
+/// of which this workspace allows `(oop-boundaries)`. Copying the (128 KiB)
+/// sheet out once at load time, here, is the alternative: the owning scene
+/// then holds every byte it renders, the pack is dropped immediately, and a
+/// later reload picks up whatever is on disk *then*.
+///
+/// Built by [`FontGlyphSheet::to_owned_sheet`] or [`OwnedFontGlyphSheet::new`];
+/// both validate through [`FontGlyphSheet::new`] first, so an
+/// `OwnedFontGlyphSheet` is always the same well-formed shape a borrowed
+/// sheet is.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OwnedFontGlyphSheet {
+    font: FontId,
+    /// The source image's declared bit depth, carried through unchanged so
+    /// [`sheet`](Self::sheet)'s view is byte-for-byte the one that was
+    /// validated (the field is informational — see [`ImageRef::bit_depth`]).
+    bit_depth: u8,
+    pixels: Vec<u8>,
+}
+
+impl OwnedFontGlyphSheet {
+    /// Validate a font image fetched from the asset pack (exactly as
+    /// [`FontGlyphSheet::new`] does) and copy its bytes into an owned sheet.
+    ///
+    /// # Errors
+    ///
+    /// The same cases as [`FontGlyphSheet::new`].
+    pub fn new(source: FontImageRef<'_>) -> Result<Self, AssetError> {
+        Ok(FontGlyphSheet::new(source)?.to_owned_sheet())
+    }
+
+    /// This sheet's font id.
+    #[must_use]
+    pub const fn font(&self) -> FontId {
+        self.font
+    }
+
+    /// A borrowed [`FontGlyphSheet`] view over the owned bytes.
+    ///
+    /// Never re-validates: these bytes already passed
+    /// [`FontGlyphSheet::new`] when this sheet was built, and nothing can
+    /// mutate them afterwards (the field is private and there is no
+    /// mutating accessor).
+    #[must_use]
+    pub fn sheet(&self) -> FontGlyphSheet<'_> {
+        FontGlyphSheet {
+            font: self.font,
+            image: ImageRef {
+                width: SHEET_WIDTH,
+                height: SHEET_HEIGHT,
+                bit_depth: self.bit_depth,
+                pixels: &self.pixels,
+            },
+        }
+    }
+
+    /// The decoded glyph at `glyph_id` — see [`FontGlyphSheet::glyph`].
+    #[must_use]
+    pub fn glyph(&self, glyph_id: u16) -> Option<Glyph> {
+        self.sheet().glyph(glyph_id)
+    }
+}
+
+impl GlyphSource for OwnedFontGlyphSheet {
+    fn font(&self) -> FontId {
+        Self::font(self)
+    }
+
+    fn glyph(&self, glyph_id: u16) -> Option<Glyph> {
+        Self::glyph(self, glyph_id)
+    }
 }
 
 // --- GENERATED: transcribed from pokeemerald/src/fonts.c ---
@@ -417,7 +538,8 @@ static SMALL_NARROW_WIDTHS: [u8; GLYPH_COUNT] = [
 #[cfg(test)]
 mod tests {
     use super::{
-        FontGlyphSheet, FontId, FontImageRef, GLYPH_COUNT, GLYPH_PIXELS, SHEET_HEIGHT, SHEET_WIDTH,
+        FontGlyphSheet, FontId, FontImageRef, GlyphSource, OwnedFontGlyphSheet, GLYPH_COUNT,
+        GLYPH_PIXELS, SHEET_HEIGHT, SHEET_WIDTH,
     };
     use crate::error::AssetError;
     use crate::pack::ImageRef;
@@ -584,5 +706,74 @@ mod tests {
             let glyph = sheet.glyph(0).unwrap();
             assert_eq!(glyph.advance_width, font.glyph_width(0).unwrap());
         }
+    }
+
+    /// An owned sheet must decode exactly what the borrowed one it was
+    /// copied from does — same font id, same glyphs, same out-of-range
+    /// behaviour — so a caller can swap one for the other freely.
+    #[test]
+    fn an_owned_sheet_decodes_the_same_glyphs_as_the_borrowed_one_it_copied() {
+        let pixels = patterned_pixels();
+        let borrowed = FontGlyphSheet::new(synthetic_font_image(FontId::Normal, &pixels)).unwrap();
+        let owned = borrowed.to_owned_sheet();
+
+        assert_eq!(owned.font(), FontId::Normal);
+        for glyph_id in [0u16, 1, 17, 200, 511] {
+            assert_eq!(owned.glyph(glyph_id), borrowed.glyph(glyph_id));
+        }
+        assert_eq!(owned.glyph(u16::try_from(GLYPH_COUNT).unwrap()), None);
+    }
+
+    /// The owned sheet outliving the buffer it was built from is the whole
+    /// point (see its docs): dropping the source pixels must leave it
+    /// perfectly usable.
+    #[test]
+    fn an_owned_sheet_outlives_the_bytes_it_was_built_from() {
+        let owned = {
+            let pixels = patterned_pixels();
+            OwnedFontGlyphSheet::new(synthetic_font_image(FontId::Short, &pixels)).unwrap()
+        };
+        let glyph = owned.glyph(17).expect("in range");
+        assert_eq!(glyph.advance_width, FontId::Short.glyph_width(17).unwrap());
+        assert_eq!(glyph.pixels.len(), GLYPH_PIXELS);
+    }
+
+    /// [`OwnedFontGlyphSheet::new`] validates before copying, exactly as
+    /// [`FontGlyphSheet::new`] does — a malformed image must error, not
+    /// produce an owned sheet full of junk.
+    #[test]
+    fn building_an_owned_sheet_rejects_a_malformed_image() {
+        let pixels = vec![0u8; 16];
+        let image = FontImageRef::new(
+            FontId::Normal,
+            ImageRef {
+                width: 4,
+                height: 4,
+                bit_depth: 2,
+                pixels: &pixels,
+            },
+        );
+        assert!(matches!(
+            OwnedFontGlyphSheet::new(image),
+            Err(AssetError::FontSheetWrongShape(..))
+        ));
+    }
+
+    /// Both sheet kinds satisfy [`GlyphSource`], so a renderer generic over
+    /// it (`engine::text::render::Printer`) sees identical behaviour from
+    /// either.
+    #[test]
+    fn both_sheet_kinds_report_the_same_glyphs_through_the_glyph_source_trait() {
+        fn first_glyph_width<S: GlyphSource>(source: &S) -> (FontId, u8) {
+            (
+                source.font(),
+                source.glyph(1).expect("glyph 1 is in range").advance_width,
+            )
+        }
+
+        let pixels = patterned_pixels();
+        let borrowed = FontGlyphSheet::new(synthetic_font_image(FontId::Narrow, &pixels)).unwrap();
+        let owned = borrowed.to_owned_sheet();
+        assert_eq!(first_glyph_width(&borrowed), first_glyph_width(&owned));
     }
 }

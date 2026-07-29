@@ -27,12 +27,24 @@
 //! same [`TitleScene::compose`] calls this crate's
 //! tests and `xtask`'s smoke suite exercise headlessly, just one call per
 //! real frame instead of at two fixed indices.
+//!
+//! # Game flow: title -> main menu -> intro -> overworld (I-3, issue #149)
+//!
+//! [`App::new`]'s real (windowed) path is a small state machine owned by
+//! [`crate::flow`]: every [`App::step`] hands the current
+//! [`crate::flow::AppScene`] to [`crate::flow::advance_scene`], which
+//! advances it by one frame and returns the (possibly transitioned) next
+//! scene plus its composed frame. See [`crate::flow`]'s module docs for
+//! the full title -> main menu -> intro -> overworld transition diagram and
+//! its "log-or-ignore is fine" failure policy for a transition's own pack
+//! load.
 
 use platform::{ButtonState, Buttons, Frame, Platform, PlatformError};
 
+use crate::flow::{self, AnimatedTitle, AppScene};
 use crate::frame::to_platform_frame;
 use crate::scene::BootScene;
-use crate::title::{self, TitleScene, TitleSceneError};
+use crate::title::{self, TitleSceneError};
 
 /// Compose a fresh [`BootScene`] into a `platform`-ready frame.
 ///
@@ -112,23 +124,10 @@ const BUTTON_NAMES: [(Buttons, &str); 10] = [
 pub struct App {
     platform: Platform,
     frame: Box<Frame>,
-    /// The real title screen's scene plus its running tick count, kept
-    /// alive so [`App::step`] can recompose it every frame -- `None` for a
-    /// headless `App` (module docs), whose [`BootScene`] frame never
-    /// changes.
-    title: Option<AnimatedTitle>,
-}
-
-/// [`App`]'s per-frame animation state for the real title screen (module
-/// docs): the loaded scene, the tick most recently composed into
-/// [`App`]'s cached `frame`, and whether that frame has been presented
-/// yet (so [`App::step`] advances the tick *before* presenting every
-/// frame after the first — keeping [`App::frame`]'s "most recently
-/// presented" contract true at all times).
-struct AnimatedTitle {
-    scene: TitleScene,
-    tick: u32,
-    presented: bool,
+    /// The real game-flow state ([`crate::flow`], module docs' "Game flow"
+    /// section) -- `None` for a headless `App` (module docs), whose
+    /// [`BootScene`] frame never changes.
+    scene: Option<AppScene>,
 }
 
 impl App {
@@ -153,11 +152,11 @@ impl App {
         Ok(Self {
             platform,
             frame,
-            title: Some(AnimatedTitle {
+            scene: Some(AppScene::Title(Box::new(AnimatedTitle {
                 scene,
                 tick: 0,
                 presented: false,
-            }),
+            }))),
         })
     }
 
@@ -177,7 +176,7 @@ impl App {
         Self {
             platform: Platform::new_headless(),
             frame: compose_boot_frame(),
-            title: None,
+            scene: None,
         }
     }
 
@@ -186,16 +185,16 @@ impl App {
     /// path is drivable without a window or display server (the public
     /// [`App::new`] always opens one).
     #[cfg(test)]
-    fn new_headless_animated(scene: TitleScene) -> Self {
+    fn new_headless_animated(scene: title::TitleScene) -> Self {
         let frame = to_platform_frame(&scene.compose(0));
         Self {
             platform: Platform::new_headless(),
             frame,
-            title: Some(AnimatedTitle {
+            scene: Some(AppScene::Title(Box::new(AnimatedTitle {
                 scene,
                 tick: 0,
                 presented: false,
-            }),
+            }))),
         }
     }
 
@@ -215,13 +214,15 @@ impl App {
     }
 
     /// Run exactly one iteration of the frame loop body: pump input, log
-    /// any newly-pressed buttons, then -- for a real title screen
-    /// ([`App::new`]) whose current frame has already been presented --
-    /// advance to and compose the next tick's frame, pace to the next GBA
-    /// vblank (a no-op for a headless `App`, see
+    /// any newly-pressed buttons, then -- for a real game-flow `App`
+    /// ([`App::new`]) -- advance [`crate::flow::AppScene`] by one frame via
+    /// [`crate::flow::advance_scene`] (module docs' "Game flow" section;
+    /// for the title phase specifically this is "whose current frame has
+    /// already been presented, advance to and compose the next tick's
+    /// frame," exactly as before I-3), pace to the next GBA vblank (a
+    /// no-op for a headless `App`, see
     /// `platform::Platform::wait_for_next_frame`), and present the
-    /// composed scene (module docs' "Animating the real title screen"
-    /// section). Composing *before* presenting keeps [`App::frame`]'s
+    /// composed scene. Composing *before* presenting keeps [`App::frame`]'s
     /// "most recently presented" contract true after every step, and
     /// pacing *before* presenting spaces consecutive presents one GBA
     /// frame apart -- including the first-to-second gap, which a
@@ -243,15 +244,14 @@ impl App {
         if !self.platform.pump()? {
             return Ok(false);
         }
-        if let Some(line) = describe_newly_pressed(*self.platform.buttons()) {
+        let buttons = *self.platform.buttons();
+        if let Some(line) = describe_newly_pressed(buttons) {
             eprintln!("{line}");
         }
-        if let Some(title) = &mut self.title {
-            if title.presented {
-                title.tick = title.tick.wrapping_add(1);
-                self.frame = to_platform_frame(&title.scene.compose(title.tick));
-            }
-            title.presented = true;
+        if let Some(scene) = self.scene.take() {
+            let (next, frame) = flow::advance_scene(scene, buttons);
+            self.scene = Some(next);
+            self.frame = frame;
         }
         self.platform.wait_for_next_frame();
         self.platform.present(&self.frame)?;
