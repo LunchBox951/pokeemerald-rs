@@ -18,6 +18,16 @@
 //! | `SetMoney(&gSaveBlock1Ptr->money, 3000)`                    | [`SaveBlock1::money`] `= `[`STARTING_MONEY`] |
 //! | `ClearBag()`                                                | [`SaveBlock1::bag`] `= Bag::default()` |
 //! | `InitEventData()`                                           | [`SaveBlock1::event_data`] `= EventData::default()` |
+//!
+//! **Deferred (issue #164):** upstream additionally runs
+//! `RunScriptImmediately(EventScript_ResetAllMapFlags)`
+//! (`data/scripts/new_game.inc:115`, 159 `setflag`s), which sets the fresh
+//! game's object-hide progression flags (e.g.
+//! `FLAG_HIDE_LITTLEROOT_TOWN_BRENDANS_HOUSE_RIVAL_BEDROOM`,
+//! `new_game.inc:152`). This crate has no extracted event scripts or
+//! generated flag-id constants yet, so [`EventData`] starts all-clear; the
+//! gap is player-invisible until NPC object events render (#161, which must
+//! consume these flags when filtering object events).
 //! | (naming screen / `Task_NewGameBirchSpeech_ChooseGender`)    | [`SaveBlock2::player_name`]/`player_gender` `= `[`DEFAULT_PLAYER_NAME`]`/`[`DEFAULT_PLAYER_GENDER`] (deviation below) |
 //!
 //! Deliberately **not** mirrored (no typed model exists yet, or genuinely
