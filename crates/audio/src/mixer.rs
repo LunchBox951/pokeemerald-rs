@@ -343,6 +343,9 @@ mod tests {
             0,
             key,
             track,
+            0,
+            0,
+            0,
         )
     }
 
