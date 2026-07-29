@@ -70,7 +70,7 @@
 //! this slice, so they are skipped (zero-width, no visible glyph) rather
 //! than guessed at.
 
-use assets::fonts::{FontGlyphSheet, FontId, Glyph};
+use assets::fonts::{FontId, Glyph, GlyphSource};
 
 use super::Token;
 
@@ -275,19 +275,30 @@ fn glyph_id_for_token(tok: &Token) -> Option<u16> {
 /// A frame-driven glyph printer over a decoded [`Token`] stream (upstream
 /// `struct TextPrinter` + `RenderText`, `pokeemerald/src/text.c`).
 ///
-/// Owns no pixel buffer and no font-sheet asset — it borrows a
-/// [`FontGlyphSheet`] for the duration and emits [`RevealedGlyph`] blit
-/// commands via [`Printer::tick`]; composing those into an actual pixel
-/// buffer (upstream's window buffer + VRAM copy) is the platform present
-/// path, out of scope here (see the issue). No global mutable state
+/// Owns no pixel buffer — it emits [`RevealedGlyph`] blit commands via
+/// [`Printer::tick`]; composing those into an actual pixel buffer
+/// (upstream's window buffer + VRAM copy) is the platform present path, out
+/// of scope here (see the issue). No global mutable state
 /// `(oop-boundaries)`: every printer is an independent owned value, and the
 /// caller supplies the clock (one [`Printer::tick`] call == one frame) and
 /// the confirm-button edge (`confirm_pressed`) instead of this module
 /// reading input itself.
-pub struct Printer<'a> {
+///
+/// # Sheet ownership
+///
+/// A printer *holds* its glyph source `S` for as long as it is printing, so
+/// it is generic over [`GlyphSource`] rather than pinned to one sheet
+/// flavour. A caller that drives a throwaway printer to completion inside
+/// a single function, while the pack is still open, passes a borrowed
+/// `assets::fonts::FontGlyphSheet<'_>`; a caller that keeps a printer alive
+/// across frames — outliving the pack its glyphs came from — passes an
+/// owned `assets::fonts::OwnedFontGlyphSheet` instead, and needs no
+/// `'static` borrow, leak, or self-referential struct to do it.
+#[derive(Debug)]
+pub struct Printer<S> {
     tokens: Vec<Token>,
     pos: usize,
-    sheet: FontGlyphSheet<'a>,
+    sheet: S,
     speed: TextSpeed,
     delay_counter: u8,
     origin: PixelPos,
@@ -297,19 +308,14 @@ pub struct Printer<'a> {
     state: PrinterState,
 }
 
-impl<'a> Printer<'a> {
+impl<S: GlyphSource> Printer<S> {
     /// Build a printer over an already-decoded token stream (see
     /// [`super::decode`]), ready to print at `origin` (upstream
     /// `TextPrinterTemplate.x`/`.y` — e.g. `(0, 1)` for the standard
     /// overworld dialogue box, `AddTextPrinterForMessage`,
     /// `pokeemerald/src/menu.c`).
     #[must_use]
-    pub fn new(
-        tokens: Vec<Token>,
-        sheet: FontGlyphSheet<'a>,
-        speed: TextSpeed,
-        origin: PixelPos,
-    ) -> Self {
+    pub fn new(tokens: Vec<Token>, sheet: S, speed: TextSpeed, origin: PixelPos) -> Self {
         Self {
             tokens,
             pos: 0,
@@ -335,6 +341,26 @@ impl<'a> Printer<'a> {
     #[must_use]
     pub const fn is_finished(&self) -> bool {
         matches!(self.state, PrinterState::Finished)
+    }
+
+    /// Re-arm this printer over a fresh `tokens` stream, keeping its glyph
+    /// source, speed and origin — the same printer starting a new message,
+    /// exactly as upstream reuses one `struct TextPrinter` slot for
+    /// consecutive `AddTextPrinter` calls into the same window rather than
+    /// allocating a new one per message (`pokeemerald/src/text.c`).
+    ///
+    /// Resets every scrap of per-message state (stream position, reveal
+    /// delay, cursor, in-flight scroll, render state), so the result is
+    /// indistinguishable from [`Printer::new`] with the same arguments —
+    /// without needing to hand the sheet back in, which matters when the
+    /// sheet is an owned one the caller cannot cheaply duplicate.
+    pub fn restart(&mut self, tokens: Vec<Token>) {
+        self.tokens = tokens;
+        self.pos = 0;
+        self.delay_counter = 0;
+        self.cursor = self.origin;
+        self.scroll_remaining = 0;
+        self.state = PrinterState::HandleChar;
     }
 
     /// Advance the printer by exactly one frame.
@@ -898,6 +924,60 @@ mod tests {
             panic!("expected a glyph")
         };
         assert_eq!((g.x, g.y), (20, 1));
+    }
+
+    /// [`Printer::restart`] must leave the printer exactly as a freshly
+    /// built one over the new stream — same glyphs, same cursor, same
+    /// non-finished state — no leftover position, delay or scroll from the
+    /// message it just finished.
+    #[test]
+    fn restart_reprints_a_new_stream_from_the_top_keeping_the_sheet() {
+        let pixels = blank_sheet_pixels();
+        let sheet = synthetic_sheet(&pixels, FontId::Normal);
+        let tokens = decode_tokens(&[0xBB, super::super::EOS]); // "A"
+        let mut printer = Printer::new(tokens, sheet, TextSpeed::Instant, (3, 1));
+
+        assert!(matches!(printer.tick(false), TickEvent::Glyph(_)));
+        assert!(matches!(printer.tick(false), TickEvent::Finished));
+        assert!(printer.is_finished());
+
+        printer.restart(decode_tokens(&[0xBB, 0xBB, super::super::EOS])); // "AA"
+        assert!(!printer.is_finished(), "a restarted printer prints again");
+        assert_eq!(printer.cursor(), (3, 1), "the cursor is back at the origin");
+
+        let TickEvent::Glyph(first) = printer.tick(false) else {
+            panic!("expected the restarted stream's first glyph")
+        };
+        assert_eq!((first.x, first.y), (3, 1));
+        let TickEvent::Glyph(second) = printer.tick(false) else {
+            panic!("expected the restarted stream's second glyph")
+        };
+        assert_eq!((second.x, second.y), (9, 1), "advanced by 'A''s 6px width");
+        assert!(matches!(printer.tick(false), TickEvent::Finished));
+    }
+
+    /// An owned glyph source drives the printer identically to a borrowed
+    /// one (the whole point of the [`GlyphSource`] seam — see the
+    /// [`Printer`] docs' "Sheet ownership"): a printer over an owned sheet
+    /// stays usable after the buffer the sheet was copied from is gone.
+    #[test]
+    fn a_printer_over_an_owned_sheet_outlives_the_pack_bytes_it_came_from() {
+        let mut printer = {
+            let pixels = blank_sheet_pixels();
+            let owned = synthetic_sheet(&pixels, FontId::Normal).to_owned_sheet();
+            Printer::new(
+                decode_tokens(&[0xBB, super::super::EOS]),
+                owned,
+                TextSpeed::Instant,
+                (0, 1),
+            )
+        };
+
+        let TickEvent::Glyph(g) = printer.tick(false) else {
+            panic!("expected a glyph from the owned sheet")
+        };
+        assert_eq!((g.x, g.y), (0, 1));
+        assert_eq!(g.glyph.advance_width, 6);
     }
 
     #[test]

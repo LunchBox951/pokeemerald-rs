@@ -53,19 +53,20 @@ pub(crate) struct AnimatedTitle {
 /// [`OverworldScene`]'s) -- so the enum itself stays cheap to move around
 /// (`clippy::large_enum_variant`).
 pub(crate) enum AppScene {
-    /// The idle/animating title screen, waiting for Start.
+    /// The idle/animating title screen, waiting for A or Start
+    /// ([`title_advance_pressed`]).
     Title(Box<AnimatedTitle>),
     /// The no-save-present main menu, waiting for A to confirm `NEW GAME`.
     MainMenu(Box<MainMenuScene>),
     /// Birch's speech, paging through [`crate::intro::speech`]'s text.
-    Intro(Box<IntroScene<'static>>),
+    Intro(Box<IntroScene>),
     /// The intro finished, but [`OverworldPhase::load_default`] failed once
     /// already (module docs' "log-or-ignore is fine" policy, and
     /// [`advance_scene`]'s `Intro`/`OverworldLoadFailed` arms) -- kept
     /// distinct from [`AppScene::Intro`] so a still-failing pack load is
     /// retried only on a fresh confirm/skip edge, not re-attempted (and
     /// re-logged) every single frame while parked here.
-    OverworldLoadFailed(Box<IntroScene<'static>>),
+    OverworldLoadFailed(Box<IntroScene>),
     /// The overworld loop: the player, movable, in
     /// [`crate::new_game::SPAWN_MAP_ID`].
     Overworld(Box<OverworldPhase>),
@@ -227,6 +228,27 @@ fn advance_player_one_frame(
     player.tick();
 }
 
+/// Whether the idle title screen should advance to the main menu this
+/// frame.
+///
+/// Upstream's idle title-screen task accepts either button, newly pressed:
+/// `Task_TitleScreenPhase3` (`pokeemerald/src/title_screen.c:780-786`,
+/// the task that "processes main title screen input") opens with
+/// `if (JOY_NEW(A_BUTTON) || JOY_NEW(START_BUTTON))` before running
+/// `CB2_GoToMainMenu` `(behavioral-fidelity)`. Only *newly* pressed counts,
+/// exactly as `JOY_NEW` means: a button already held when the title screen
+/// took over (e.g. carried in from the preceding intro-skip press,
+/// `Task_TitleScreenPhase2`'s own `JOY_NEW(A_B_START_SELECT)` skip) must not
+/// immediately fall through to the menu.
+///
+/// The other `Task_TitleScreenPhase3` branches are held-combo cheats
+/// (`CLEAR_SAVE_BUTTON_COMBO`, `RESET_RTC_BUTTON_COMBO`,
+/// `BERRY_UPDATE_BUTTON_COMBO`) whose target screens this port has no
+/// equivalent of yet -- out of this slice's scope, not modelled here.
+fn title_advance_pressed(buttons: ButtonState) -> bool {
+    buttons.is_newly_pressed(Buttons::A) || buttons.is_newly_pressed(Buttons::START)
+}
+
 /// Whether [`AppScene::OverworldLoadFailed`]'s waiting state should retry
 /// [`OverworldPhase::load_default`] this frame -- only on a *fresh* confirm
 /// (A) or skip (B) edge, the same two buttons [`AppScene::Intro`] itself
@@ -279,7 +301,7 @@ pub(crate) fn advance_scene(scene: AppScene, buttons: ButtonState) -> (AppScene,
             }
             title.presented = true;
 
-            if buttons.is_newly_pressed(Buttons::START) {
+            if title_advance_pressed(buttons) {
                 match main_menu::load_default() {
                     Ok(menu) => {
                         let frame = menu.compose_frame();
@@ -360,7 +382,7 @@ pub(crate) fn advance_scene(scene: AppScene, buttons: ButtonState) -> (AppScene,
 mod tests {
     use super::{
         advance_player_one_frame, advance_scene, held_direction, should_retry_overworld_load,
-        AnimatedTitle, AppScene, OverworldPhase,
+        title_advance_pressed, AnimatedTitle, AppScene, OverworldPhase,
     };
     use crate::intro::{self, IntroStatus};
     use crate::new_game;
@@ -595,28 +617,53 @@ mod tests {
         assert!(matches!(after_retry, AppScene::OverworldLoadFailed(_)));
     }
 
-    /// I-3 scene-flow test: title screen, Start newly pressed -> main menu.
-    /// Needs the real pack (both `TitleScene` and
+    /// Finding 3 regression: the title screen advances on a freshly pressed
+    /// A *or* Start -- `Task_TitleScreenPhase3`'s own
+    /// `JOY_NEW(A_BUTTON) || JOY_NEW(START_BUTTON)`
+    /// (`pokeemerald/src/title_screen.c:782`), not Start alone -- and on
+    /// neither of them while merely held, nor on any other button.
+    #[test]
+    fn title_advances_on_a_freshly_pressed_a_or_start_only() {
+        assert!(title_advance_pressed(pressed(Buttons::START)));
+        assert!(
+            title_advance_pressed(pressed(Buttons::A)),
+            "upstream's idle title task accepts A as well as Start"
+        );
+        assert!(!title_advance_pressed(ButtonState::new()));
+        assert!(
+            !title_advance_pressed(held(Buttons::A)),
+            "JOY_NEW means a fresh edge -- an already-held A must not advance"
+        );
+        assert!(!title_advance_pressed(held(Buttons::START)));
+        assert!(!title_advance_pressed(pressed(Buttons::B)));
+        assert!(!title_advance_pressed(pressed(Buttons::SELECT)));
+    }
+
+    /// I-3 scene-flow test: title screen, A or Start newly pressed -> main
+    /// menu. Needs the real pack (both `TitleScene` and
     /// `main_menu::load_default` read from it).
     #[test]
     #[ignore = "needs a local pack: run `cargo xtask extract` first"]
-    fn title_start_button_transitions_to_main_menu() {
-        let title_scene = crate::title::load_default().expect("run `cargo xtask extract` first");
-        let scene = AppScene::Title(Box::new(AnimatedTitle {
-            scene: title_scene,
-            tick: 0,
-            presented: false,
-        }));
+    fn title_a_or_start_button_transitions_to_main_menu() {
+        for button in [Buttons::START, Buttons::A] {
+            let title_scene =
+                crate::title::load_default().expect("run `cargo xtask extract` first");
+            let scene = AppScene::Title(Box::new(AnimatedTitle {
+                scene: title_scene,
+                tick: 0,
+                presented: false,
+            }));
 
-        let (next, _frame) = advance_scene(scene, pressed(Buttons::START));
+            let (next, _frame) = advance_scene(scene, pressed(button));
 
-        assert!(
-            matches!(next, AppScene::MainMenu(_)),
-            "Start on the title screen must transition to the main menu"
-        );
+            assert!(
+                matches!(next, AppScene::MainMenu(_)),
+                "{button:?} on the title screen must transition to the main menu"
+            );
+        }
     }
 
-    /// I-3 scene-flow test: title screen, no Start press -> stays on title
+    /// I-3 scene-flow test: title screen, no advance press -> stays on title
     /// and keeps animating (the pre-I-3 animated-title behaviour must
     /// survive the state-machine refactor unchanged).
     #[test]

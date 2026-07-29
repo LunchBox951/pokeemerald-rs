@@ -4,7 +4,9 @@
 //!
 //! [`speech`] holds the actual dialogue text (module docs there for the
 //! exact upstream strings and the naming/gender-selection deviations);
-//! [`IntroScene`] drives it, one [`engine::text::render::Printer`] per page,
+//! [`IntroScene`] drives it through a single
+//! [`engine::text::render::Printer`], re-armed
+//! ([`engine::text::render::Printer::restart`]) once per page, and paints it
 //! through the same [`crate::textbox`] pixel-blit path
 //! [`crate::main_menu::MainMenuScene`] uses for its own text window.
 //!
@@ -39,6 +41,14 @@
 //!   stays up until *something* advances it -- without modeling that
 //!   animation) -- just with no gender-select menu or naming UI rendered
 //!   in between.
+//! - **No name-confirmation Yes/No menu.** [`speech::pages`]'s page 6
+//!   ("So it's ...?") is upstream's name confirmation prompt: it holds on
+//!   screen while `Task_NewGameBirchSpeech_ProcessNameYesNoMenu`
+//!   (`main_menu.c:1626`) waits on a real Yes/No menu. No menu is rendered
+//!   here, so that page too waits on a plain button press instead (see
+//!   `speech`'s `so_its_player` doc comment) -- answering "No" (which
+//!   upstream loops back to the naming step) has nothing to loop back to in
+//!   this slice.
 //! - **No music, no sound effects.** `PlayBGM(MUS_ROUTE122)` and every
 //!   `PlaySE` call in the task chain are silent here (no audio wiring in
 //!   this slice).
@@ -59,9 +69,7 @@
 
 mod speech;
 
-use std::sync::OnceLock;
-
-use assets::fonts::{FontGlyphSheet, FontId};
+use assets::fonts::{FontId, OwnedFontGlyphSheet};
 use assets::pack::{AssetPack, PackError};
 use engine::text::render::{Printer, RevealedGlyph, TextSpeed, TickEvent};
 use engine::text::window::MessageBoxLayout;
@@ -150,49 +158,80 @@ pub enum IntroStatus {
     Finished,
 }
 
-/// Birch's speech, one paged [`engine::text::render::Printer`] at a time
-/// (module docs).
-pub struct IntroScene<'a> {
+/// Birch's speech, one page at a time (module docs).
+///
+/// # Ownership
+///
+/// Owns every byte it renders -- the decoded glyph sheet
+/// ([`OwnedFontGlyphSheet`], held inside the [`Printer`]) and the dialogue
+/// frame ([`FrameAssets`]) -- exactly like
+/// [`crate::title::TitleScene`]/[`crate::overworld::OverworldScene`]/
+/// [`crate::main_menu::MainMenuScene`] do. Nothing here borrows from an
+/// [`AssetPack`], so the pack a scene was built from is dropped the moment
+/// [`from_pack`](Self::from_pack) returns and every fresh intro reads
+/// whatever is on disk *then* -- a regenerated pack (`cargo xtask extract`
+/// re-run mid-session, an embedding host restarting the game) is picked up
+/// like any other scene's, and there is no process-global state to make one
+/// session's pack outlive it `(oop-boundaries)`.
+///
+/// The intro is the one scene whose [`Printer`] stays alive *across* frames
+/// (the others drive a throwaway one to completion inside a single
+/// function), which is why the printer holds an owned glyph source rather
+/// than a pack-borrowed [`assets::fonts::FontGlyphSheet`]: see
+/// [`Printer`]'s own "Sheet ownership" docs.
+#[derive(Debug)]
+pub struct IntroScene {
     frame: FrameAssets,
-    sheet: FontGlyphSheet<'a>,
-    speed: TextSpeed,
     pages: [Vec<Token>; NUM_PAGES],
     page_index: usize,
-    printer: Printer<'a>,
+    printer: Printer<OwnedFontGlyphSheet>,
     revealed: Vec<RevealedGlyph>,
     finished: bool,
 }
 
-impl<'a> IntroScene<'a> {
+impl IntroScene {
     /// Build a fresh intro over an already-decoded font `sheet` and dialogue
     /// `frame`, printing at `speed`.
     ///
-    /// A plain constructor rather than `from_pack` (contrast
-    /// [`crate::main_menu::MainMenuScene::from_pack`]): `sheet` must
-    /// outlive every [`IntroScene::tick`] call (the printer persists across
-    /// frames, unlike [`crate::main_menu::MainMenuScene`]'s throwaway,
-    /// drive-to-completion-once printer), so [`load_default`] reads `sheet`
-    /// out of a `'static`, process-wide-cached [`AssetPack`] rather than
-    /// borrowing one transiently -- see [`load_default`]'s doc comment.
-    ///
     /// `pub(crate)`, not `pub`: [`FrameAssets`] (its `frame` parameter) is
     /// itself crate-private (see its own docs), and every real caller goes
-    /// through [`load_default`] anyway -- this constructor exists as a seam
-    /// for [`load_default`] and this crate's own synthetic-fixture tests.
+    /// through [`from_pack`](Self::from_pack)/[`load_default`] -- this
+    /// constructor exists as a seam for those and for this crate's own
+    /// synthetic-fixture tests.
     #[must_use]
-    pub(crate) fn new(sheet: FontGlyphSheet<'a>, frame: FrameAssets, speed: TextSpeed) -> Self {
+    pub(crate) fn new(sheet: OwnedFontGlyphSheet, frame: FrameAssets, speed: TextSpeed) -> Self {
         let pages = speech::pages();
         let printer = Printer::new(pages[0].clone(), sheet, speed, PRINTER_ORIGIN);
         Self {
             frame,
-            sheet,
-            speed,
             pages,
             page_index: 0,
             printer,
             revealed: Vec::new(),
             finished: false,
         }
+    }
+
+    /// Copy [`IntroScene`]'s two required entries -- the normal-weight font
+    /// sheet and the dialogue frame -- out of an already-loaded `pack` into
+    /// owned storage (struct docs), mirroring
+    /// [`crate::main_menu::MainMenuScene::from_pack`]. `pack` is only
+    /// borrowed for this call; the returned scene does not reference it.
+    ///
+    /// Prints at [`TextSpeed::Mid`], upstream's own new-game default
+    /// (`SetDefaultOptions`'s `optionsTextSpeed = OPTIONS_TEXT_SPEED_MID`,
+    /// `pokeemerald/src/new_game.c:91-93`) -- nothing yet models the
+    /// player-selectable text-speed option.
+    ///
+    /// # Errors
+    ///
+    /// [`IntroSceneError::Pack`] if `pack` is missing its
+    /// `font/normal/glyphs` or message-box entries (or either is malformed);
+    /// [`IntroSceneError::Font`] if the font sheet doesn't decode.
+    pub fn from_pack(pack: &AssetPack) -> Result<Self, IntroSceneError> {
+        let sheet = OwnedFontGlyphSheet::new(pack.font(FontId::Normal)?)?;
+        let frame = FrameAssets::from_handle(pack.message_box()?);
+        Ok(Self::new(sheet, frame, TextSpeed::Mid))
     }
 
     /// The current page index (`0..NUM_PAGES`), for tests/diagnostics.
@@ -257,18 +296,14 @@ impl<'a> IntroScene<'a> {
         }
     }
 
-    /// Move to the next page's fresh [`Printer`], or mark the intro
-    /// finished if [`Self::page_index`] was already the last page.
+    /// Re-arm the printer over the next page ([`Printer::restart`] -- same
+    /// printer, same owned glyph sheet, fresh token stream), or mark the
+    /// intro finished if [`Self::page_index`] was already the last page.
     fn advance_page(&mut self) {
         if self.page_index + 1 < NUM_PAGES {
             self.page_index += 1;
             self.revealed.clear();
-            self.printer = Printer::new(
-                self.pages[self.page_index].clone(),
-                self.sheet,
-                self.speed,
-                PRINTER_ORIGIN,
-            );
+            self.printer.restart(self.pages[self.page_index].clone());
         } else {
             self.finished = true;
         }
@@ -302,124 +337,47 @@ impl<'a> IntroScene<'a> {
     }
 }
 
-/// Fetch [`IntroScene`]'s two required entries -- the normal-weight font
-/// sheet and the dialogue frame -- out of an already-loaded `pack`, without
-/// leaking anything. Shared by [`cached_pack`]'s validate-before-caching
-/// pass and by [`load_default`]'s real, per-call build against the cached
-/// pack -- a borrowed `pack` here, never the `'static` one [`IntroScene`]
-/// itself ultimately needs, so this alone can never be the thing that
-/// leaks.
-///
-/// # Errors
-///
-/// [`IntroSceneError::Pack`] if `pack` is missing its `font/normal/glyphs`
-/// or message-box entries (or either is malformed); [`IntroSceneError::Font`]
-/// if the font sheet fetched doesn't decode.
-fn required_assets(pack: &AssetPack) -> Result<(FontGlyphSheet<'_>, FrameAssets), IntroSceneError> {
-    let font_image = pack.font(FontId::Normal)?;
-    let sheet = FontGlyphSheet::new(font_image)?;
-    let frame = FrameAssets::from_handle(pack.message_box()?);
-    Ok((sheet, frame))
-}
-
-/// This process's single, lazily-loaded [`AssetPack`] instance, shared by
-/// every [`load_default`] call -- see [`cached_pack`].
-///
-/// Why a cache, and not [`crate::title::TitleScene`]/
-/// [`crate::overworld::OverworldScene`]'s own "copy every pack byte into an
-/// owned buffer up front, no `'static` borrow needed" shape (this module's
-/// own earlier docs on that contrast): [`IntroScene`]'s live, per-frame
-/// [`engine::text::render::Printer`] holds a [`FontGlyphSheet`], which
-/// borrows its pixel bytes from `AssetPack`'s own storage
-/// (`assets::pack::ImageRef`'s zero-copy design, used pack-wide, not just
-/// here) rather than owning a copy -- so nothing short of `IntroScene`
-/// itself owning the whole pack alongside a printer that borrows from it (a
-/// self-referential struct Rust cannot express without `unsafe`, and this
-/// workspace's `unsafe` bar requires a stated invariant, not "the borrow
-/// checker was in the way") can give the printer a same-struct-owned
-/// buffer. A caller-owned buffer threaded down from `crate::flow` would
-/// just move that same self-reference into `AppScene::Intro` instead. A
-/// `'static` borrow is therefore genuinely forced by the `assets` crate's
-/// borrowing API, and reworking `ImageRef` to own its bytes workspace-wide
-/// is far outside this fix's scope (`assets::pack`'s module docs: every
-/// other pack accessor -- tilesets, sprites, layouts, every other font --
-/// leans on that same zero-copy shape).
-///
-/// A single process-wide cache, not a fresh [`Box::leak`] per call (this
-/// item's own prior shape): the pack is small (~150KiB) and immutable once
-/// loaded, so leaking it *once*, ever, and reusing that same instance by
-/// reference for the rest of the process is bounded and cheap -- unlike
-/// leaking a fresh copy on every call [`load_default`] makes (e.g. every
-/// time [`crate::flow::advance_scene`]'s `MainMenu` arm re-enters the intro
-/// on a fresh A press), which grows without bound over a long play session.
-static PACK_CACHE: OnceLock<AssetPack> = OnceLock::new();
-
-/// Load and validate this process's cached pack (module docs on
-/// [`PACK_CACHE`]) on the first call; every later call reuses the exact
-/// same instance, by reference, without touching disk again.
-///
-/// **Validate before caching.** [`OnceLock`] has no way to "unset" a value
-/// once written, so a load that fails, or a pack that fails
-/// [`required_assets`]' validation (module docs' own example: a missing
-/// `message_box` entry), must never reach [`OnceLock::get_or_init`] -- doing
-/// so would wedge every later call behind that same permanent failure for
-/// the rest of the process. Both run first, against a plain local `pack`
-/// nothing yet references `'static`, so a bad pack simply returns its error
-/// here and leaves the cache empty for the next attempt (e.g. after the
-/// player runs `cargo xtask extract` and retries from the main menu).
-///
-/// # Errors
-///
-/// [`IntroSceneError::Pack`] with [`IntroSceneError::is_pack_missing`] true
-/// if no pack has been extracted yet; see [`required_assets`] for the other
-/// (real-pack-only) error cases.
-fn cached_pack() -> Result<&'static AssetPack, IntroSceneError> {
-    if let Some(pack) = PACK_CACHE.get() {
-        return Ok(pack);
-    }
-    let pack = AssetPack::load_default()?;
-    required_assets(&pack)?;
-    Ok(PACK_CACHE.get_or_init(|| pack))
-}
-
-/// Load the pack from its default location (caching it process-wide -- see
-/// [`cached_pack`]) and build the intro out of it in one step -- mirrors
+/// Load the pack from its default location, build the intro out of it, and
+/// drop the pack again -- mirrors [`crate::main_menu::load_default`] /
 /// [`crate::title::load_default`].
 ///
+/// Reads from disk on every call, by design: an intro built here owns every
+/// byte it renders ([`IntroScene`]'s struct docs), so a second call after
+/// the pack on disk changed builds a scene from the *new* bytes. Nothing is
+/// cached process-wide and nothing is leaked.
+///
 /// # Errors
 ///
 /// [`IntroSceneError::Pack`] with [`IntroSceneError::is_pack_missing`] true
-/// if no pack has been extracted yet; see [`required_assets`] for the other
-/// (real-pack-only) error cases.
-pub fn load_default() -> Result<IntroScene<'static>, IntroSceneError> {
-    let pack = cached_pack()?;
-    let (sheet, frame) = required_assets(pack)?;
-    Ok(IntroScene::new(sheet, frame, TextSpeed::Mid))
+/// if no pack has been extracted yet; see [`IntroScene::from_pack`] for the
+/// other (real-pack-only) error cases.
+pub fn load_default() -> Result<IntroScene, IntroSceneError> {
+    let pack = AssetPack::load_default()?;
+    IntroScene::from_pack(&pack)
 }
 
 /// Test-only: an [`IntroScene`] already at [`IntroStatus::Finished`] (via
 /// the skip path), built the same synthetic way [`tests`]'s own fixtures
 /// are -- a blank glyph sheet plus a blank dialogue frame, no local pack
-/// needed -- but leaked to `'static` so [`crate::flow`]'s own tests can put
-/// one straight into an [`crate::flow::AppScene::Intro`], the same shape
-/// [`load_default`] would hand [`crate::flow::advance_scene`]. A tiny,
-/// one-time, `#[cfg(test)]`-only leak -- never reached in production.
+/// needed -- so [`crate::flow`]'s own tests can put one straight into an
+/// [`crate::flow::AppScene::Intro`], the same shape [`load_default`] would
+/// hand [`crate::flow::advance_scene`]. Fully owned, like every real scene
+/// ([`IntroScene`]'s struct docs): nothing leaked, nothing `'static`.
 #[cfg(test)]
-pub(crate) fn synthetic_finished_scene() -> IntroScene<'static> {
+pub(crate) fn synthetic_finished_scene() -> IntroScene {
     use assets::fonts::FontImageRef;
     use assets::pack::ImageRef;
 
     const SHEET_WIDTH: u32 = 256;
     const SHEET_HEIGHT: u32 = 512;
-    let pixels: &'static [u8] =
-        Box::leak(vec![0u8; (SHEET_WIDTH * SHEET_HEIGHT) as usize].into_boxed_slice());
+    let pixels = vec![0u8; (SHEET_WIDTH * SHEET_HEIGHT) as usize];
     let image = ImageRef {
         width: SHEET_WIDTH,
         height: SHEET_HEIGHT,
         bit_depth: 2,
-        pixels,
+        pixels: &pixels,
     };
-    let sheet = FontGlyphSheet::new(FontImageRef::new_for_tests(FontId::Normal, image))
+    let sheet = OwnedFontGlyphSheet::new(FontImageRef::new_for_tests(FontId::Normal, image))
         .expect("this is the exact real glyph-sheet shape");
     let frame = FrameAssets {
         pixels: vec![0u8; 56 * 16],

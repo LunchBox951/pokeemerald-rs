@@ -6,7 +6,7 @@
 //! bottom of this file, mirroring `main_menu::tests::
 //! real_pack_composes_a_non_blank_menu_frame`.
 
-use assets::fonts::{FontGlyphSheet, FontId, FontImageRef, GLYPH_COUNT};
+use assets::fonts::{FontId, FontImageRef, OwnedFontGlyphSheet, GLYPH_COUNT};
 use assets::pack::ImageRef;
 use engine::text::render::TextSpeed;
 use rendering::Rgb888;
@@ -18,7 +18,7 @@ const SHEET_WIDTH: u32 = 256;
 const SHEET_HEIGHT: u32 = 512;
 
 /// A uniformly-blank synthetic glyph sheet, the real shape (256x512, see
-/// `assets::fonts`' module docs) so [`FontGlyphSheet::new`] accepts it --
+/// `assets::fonts`' module docs) so [`OwnedFontGlyphSheet::new`] accepts it --
 /// mirrors `engine::text::render`'s own tests. Every pixel is palette index
 /// `0` (`textbox::GLYPH_COLORS[0] == None`, transparent), so a glyph
 /// revealed against this sheet never paints anything visible -- fine for
@@ -96,15 +96,21 @@ const GLYPH_COLOR: Rgb888 = Rgb888 {
     b: 24,
 };
 
-fn synthetic_scene(pixels: &[u8], speed: TextSpeed) -> IntroScene<'_> {
+/// An owned glyph sheet over `pixels`, the shape
+/// [`OwnedFontGlyphSheet::new`] accepts -- the same owned decode
+/// [`IntroScene::from_pack`] performs, minus the pack.
+fn synthetic_sheet(pixels: &[u8]) -> OwnedFontGlyphSheet {
     let image = ImageRef {
         width: SHEET_WIDTH,
         height: SHEET_HEIGHT,
         bit_depth: 2,
         pixels,
     };
-    let sheet = FontGlyphSheet::new(FontImageRef::new_for_tests(FontId::Normal, image)).unwrap();
-    IntroScene::new(sheet, synthetic_frame(), speed)
+    OwnedFontGlyphSheet::new(FontImageRef::new_for_tests(FontId::Normal, image)).unwrap()
+}
+
+fn synthetic_scene(pixels: &[u8], speed: TextSpeed) -> IntroScene {
+    IntroScene::new(synthetic_sheet(pixels), synthetic_frame(), speed)
 }
 
 #[test]
@@ -246,14 +252,11 @@ fn compose_paints_the_revealed_glyphs_pixel_not_just_the_frame_dimensions() {
 #[test]
 fn compose_draws_the_dialogue_box_border_even_before_any_glyph_reveals() {
     let pixels = blank_sheet_pixels();
-    let image = ImageRef {
-        width: SHEET_WIDTH,
-        height: SHEET_HEIGHT,
-        bit_depth: 2,
-        pixels: &pixels,
-    };
-    let sheet = FontGlyphSheet::new(FontImageRef::new_for_tests(FontId::Normal, image)).unwrap();
-    let scene = IntroScene::new(sheet, distinguishable_synthetic_frame(), TextSpeed::Mid);
+    let scene = IntroScene::new(
+        synthetic_sheet(&pixels),
+        distinguishable_synthetic_frame(),
+        TextSpeed::Mid,
+    );
 
     let fb = scene.compose();
     assert_eq!(fb.width(), 240);
@@ -279,60 +282,150 @@ fn compose_draws_the_dialogue_box_border_even_before_any_glyph_reveals() {
 // hand-picked `SHEET_WIDTH`/`SHEET_HEIGHT` from the real ones.
 const _: () = assert!(GLYPH_COUNT == 512);
 
-/// A hand-built pack, containing only a valid `font/normal/glyphs` entry --
-/// no `text-window/image/message_box` / `text-window/palette/message_box`
-/// entries at all -- written to a temp path, mirroring `assets::pack`'s own
-/// synthetic-pack test fixtures (`crates/assets/src/pack/tests.rs`'s
-/// `synthetic_pack`) at the exact byte layout `assets::pack`'s module docs
-/// specify. Regression fixture for the finding that `load_default` used to
-/// leak a fresh `AssetPack` on every call against a pack like this one
-/// (missing `message_box`) -- see `super::required_assets`'s doc comment.
-fn write_pack_without_message_box() -> std::path::PathBuf {
-    const SHEET_WIDTH: u32 = 256;
-    const SHEET_HEIGHT: u32 = 512;
-    let id = b"font/normal/glyphs";
-    let payload = vec![0u8; (SHEET_WIDTH * SHEET_HEIGHT) as usize];
+/// One entry of a hand-built pack: its id, its kind tag + kind-specific
+/// metadata bytes, and its payload -- the exact byte layout
+/// `assets::pack`'s module docs specify (mirrors `assets::pack`'s own
+/// `crates/assets/src/pack/tests.rs::synthetic_pack` fixtures and
+/// `xtask::extract::pack`'s write side).
+struct PackEntry {
+    id: &'static str,
+    tag: u8,
+    meta: Vec<u8>,
+    payload: Vec<u8>,
+}
 
+/// An [`EntryKind::Image`](assets::pack::EntryKind::Image) entry (tag `0`).
+fn image_entry(id: &'static str, width: u32, height: u32, bit_depth: u8, pixel: u8) -> PackEntry {
     let mut meta = Vec::new();
-    meta.extend_from_slice(&SHEET_WIDTH.to_le_bytes());
-    meta.extend_from_slice(&SHEET_HEIGHT.to_le_bytes());
-    meta.push(2); // bit_depth
+    meta.extend_from_slice(&width.to_le_bytes());
+    meta.extend_from_slice(&height.to_le_bytes());
+    meta.push(bit_depth);
+    PackEntry {
+        id,
+        tag: 0,
+        meta,
+        payload: vec![pixel; (width * height) as usize],
+    }
+}
+
+/// An [`EntryKind::Palette`](assets::pack::EntryKind::Palette) entry (tag
+/// `1`) of 16 packed BGR555 colours -- the one shape
+/// `AssetPack::message_box` accepts.
+fn palette_entry(id: &'static str) -> PackEntry {
+    PackEntry {
+        id,
+        tag: 1,
+        meta: 16u16.to_le_bytes().to_vec(),
+        payload: vec![0u8; 32],
+    }
+}
+
+/// Serialize `entries` into a version-1 pack file at `path`. Ids are sorted
+/// first, since `AssetPack` binary-searches its directory.
+fn write_pack(path: &std::path::Path, mut entries: Vec<PackEntry>) {
+    entries.sort_by_key(|e| e.id);
 
     let header_size = 8 + 4 + 4;
-    let directory_size = 2 + id.len() + 1 + 8 + 8 + meta.len();
-    let offset = header_size + directory_size;
+    let directory_size: usize = entries
+        .iter()
+        .map(|e| 2 + e.id.len() + 1 + 8 + 8 + e.meta.len())
+        .sum();
+
+    let mut directory = Vec::new();
+    let mut payloads = Vec::new();
+    let mut offset = header_size + directory_size;
+    for entry in &entries {
+        directory.extend_from_slice(&u16::try_from(entry.id.len()).unwrap().to_le_bytes());
+        directory.extend_from_slice(entry.id.as_bytes());
+        directory.push(entry.tag);
+        directory.extend_from_slice(&(offset as u64).to_le_bytes());
+        directory.extend_from_slice(&(entry.payload.len() as u64).to_le_bytes());
+        directory.extend_from_slice(&entry.meta);
+        payloads.extend_from_slice(&entry.payload);
+        offset += entry.payload.len();
+    }
 
     let mut out = Vec::new();
     out.extend_from_slice(&assets::pack::MAGIC);
     out.extend_from_slice(&assets::pack::FORMAT_VERSION.to_le_bytes());
-    out.extend_from_slice(&1u32.to_le_bytes()); // entry_count
-    out.extend_from_slice(&u16::try_from(id.len()).unwrap().to_le_bytes());
-    out.extend_from_slice(id);
-    out.push(0); // EntryKind::Image's tag (assets::pack's own test fixture convention)
-    out.extend_from_slice(&(offset as u64).to_le_bytes());
-    out.extend_from_slice(&(payload.len() as u64).to_le_bytes());
-    out.extend_from_slice(&meta);
-    out.extend_from_slice(&payload);
+    out.extend_from_slice(&u32::try_from(entries.len()).unwrap().to_le_bytes());
+    out.extend_from_slice(&directory);
+    out.extend_from_slice(&payloads);
 
-    let path = std::env::temp_dir().join(format!(
-        "pokeemerald-rs-intro-test-pack-no-message-box-{}.pack",
-        std::process::id()
-    ));
-    std::fs::write(&path, &out).unwrap();
-    path
+    std::fs::write(path, &out).unwrap();
 }
 
+/// The `font/normal/glyphs` entry, every glyph pixel set to `pixel` (a
+/// palette index `0..=3`, so it stays a sheet `FontGlyphSheet::new` accepts
+/// -- see `distinguishable_sheet_pixels`' docs for what each index paints).
+fn font_entry(pixel: u8) -> PackEntry {
+    image_entry("font/normal/glyphs", SHEET_WIDTH, SHEET_HEIGHT, 2, pixel)
+}
+
+/// The `message_box` image/palette pair, at `AssetPack::message_box`'s
+/// required 56x16 shape and 16-colour palette bank.
+fn message_box_entries() -> Vec<PackEntry> {
+    vec![
+        image_entry("text-window/image/message_box", 56, 16, 4, 1),
+        palette_entry("text-window/palette/message_box"),
+    ]
+}
+
+/// A unique temp path for one test's synthetic pack (`name` keeps
+/// concurrently-running tests off each other's files).
+fn temp_pack_path(name: &str) -> std::path::PathBuf {
+    std::env::temp_dir().join(format!(
+        "pokeemerald-rs-intro-test-pack-{name}-{}.pack",
+        std::process::id()
+    ))
+}
+
+/// `super::load_default`'s exact body, against an explicit `path` instead of
+/// `AssetPack::default_path()`: load the pack, build the scene from it, drop
+/// the pack. The seam the on-disk regeneration test below needs -- there is
+/// nothing else to stub, precisely because no pack state outlives this call.
+fn load_from(path: &std::path::Path) -> Result<IntroScene, super::IntroSceneError> {
+    let pack = assets::pack::AssetPack::load(path)?;
+    IntroScene::from_pack(&pack)
+}
+
+/// The composed frame's pixel well inside the first revealed glyph's cell
+/// (the printer's own origin, offset by the dialogue box's screen position
+/// -- same probe point as
+/// [`compose_paints_the_revealed_glyphs_pixel_not_just_the_frame_dimensions`]).
+/// Its colour is whichever `textbox::GLYPH_COLORS` entry the sheet's pixel
+/// index maps to -- mirrored here as
+/// [`GLYPH_COLOR`]/[`GLYPH_SHADOW_COLOR`], since that table is private to
+/// `crate::textbox`.
+fn first_glyph_pixel(scene: &IntroScene) -> Option<Rgb888> {
+    let fb = scene.compose();
+    fb.pixel(
+        usize::try_from(super::BOX_SCREEN_ORIGIN.0 + super::PRINTER_ORIGIN.0 + 4).unwrap(),
+        usize::try_from(super::BOX_SCREEN_ORIGIN.1 + super::PRINTER_ORIGIN.1 + 4).unwrap(),
+    )
+}
+
+/// `textbox::GLYPH_COLORS[2]`, the shadow colour -- the second
+/// distinguishable glyph colour this file needs (see `GLYPH_COLOR` for
+/// index 1), so a regenerated sheet's glyphs are visibly *different*, not
+/// merely present.
+const GLYPH_SHADOW_COLOR: Rgb888 = Rgb888 {
+    r: 160,
+    g: 160,
+    b: 160,
+};
+
 #[test]
-fn a_pack_missing_message_box_fails_validation_without_leaking() {
-    // Finding 4 regression: `required_assets` takes a *borrowed* `&AssetPack`
-    // and is what `load_default` runs before its `Box::leak` -- calling it
-    // directly here, against a pack that is never leaked or even made
-    // `'static`, is itself the structural proof that detecting this failure
-    // does not require (and therefore cannot cause) a leak.
-    let path = write_pack_without_message_box();
+fn a_pack_missing_message_box_fails_to_build_a_scene() {
+    // A pack with a valid font sheet but no `message_box` entry at all must
+    // fail with a `Pack` error rather than half-building a scene. `from_pack`
+    // takes a *borrowed* `&AssetPack` and returns a fully owned scene, so
+    // neither the success nor the failure path can retain (or leak) the pack.
+    let path = temp_pack_path("no-message-box");
+    write_pack(&path, vec![font_entry(0)]);
     let pack = assets::pack::AssetPack::load(&path).unwrap();
 
-    let err = super::required_assets(&pack).unwrap_err();
+    let err = IntroScene::from_pack(&pack).unwrap_err();
     assert!(
         matches!(err, super::IntroSceneError::Pack(_)),
         "a pack with no message_box entry at all must fail with a Pack error, got {err:?}"
@@ -341,43 +434,62 @@ fn a_pack_missing_message_box_fails_validation_without_leaking() {
     let _ = std::fs::remove_file(path);
 }
 
-/// Regression for the finding that `load_default` leaked a fresh
-/// `AssetPack` on every *successful* call, not just failed ones (see
-/// `a_pack_missing_message_box_fails_validation_without_leaking` above for
-/// that half): repeated calls into `cached_pack` -- and therefore
-/// `load_default`, which reads through it -- must reuse the exact same,
-/// single `'static` pack instance rather than loading and caching (or
-/// leaking) a new one each time. Needs the real pack (`cached_pack` reads
-/// from disk on a cache miss).
+/// The contract that replaced the process-global `OnceLock` pack cache
+/// (senior review finding 1): a scene owns every byte it renders, and a
+/// *later* load reads the pack that is on disk at that moment -- so
+/// regenerating the pack mid-session (`cargo xtask extract` re-run, or an
+/// embedding host restarting the game) is picked up by the intro exactly
+/// like it is by every other scene, and an already-running scene keeps
+/// rendering the bytes it was built from.
 #[test]
-#[ignore = "needs a local pack: run `cargo xtask extract` first"]
-fn cached_pack_reuses_the_same_pack_across_repeated_calls() {
-    let first = super::cached_pack().expect("run `cargo xtask extract` first");
-    let second = super::cached_pack().expect("run `cargo xtask extract` first");
-    assert!(
-        std::ptr::eq(first, second),
-        "a second `cached_pack` call must reuse the first call's pack instance, not load a new one"
+fn a_second_load_after_the_pack_is_regenerated_sees_the_new_bytes() {
+    let path = temp_pack_path("regenerated");
+
+    // Pack v1: every glyph pixel is palette index 1 (`GLYPH_COLOR`).
+    let mut entries = message_box_entries();
+    entries.push(font_entry(1));
+    write_pack(&path, entries);
+
+    let mut first = load_from(&path).expect("the synthetic pack has both required entries");
+    first.tick(false, false); // reveals page 0's first glyph.
+    assert_eq!(
+        first_glyph_pixel(&first),
+        Some(GLYPH_COLOR),
+        "the first load must render the pack that was on disk then"
     );
 
-    // The public entry point routes through the same cache -- building two
-    // full scenes must not disturb the cached pack's identity either.
-    let _scene_a = super::load_default().expect("run `cargo xtask extract` first");
-    let _scene_b = super::load_default().expect("run `cargo xtask extract` first");
-    let third = super::cached_pack().expect("run `cargo xtask extract` first");
-    assert!(
-        std::ptr::eq(first, third),
-        "building scenes through `load_default` must not disturb the cached pack identity"
+    // Regenerate the pack in place, with a visibly different glyph sheet
+    // (palette index 2, `GLYPH_SHADOW_COLOR`).
+    let mut entries = message_box_entries();
+    entries.push(font_entry(2));
+    write_pack(&path, entries);
+
+    let mut second = load_from(&path).expect("the regenerated pack is still well-formed");
+    second.tick(false, false);
+    assert_eq!(
+        first_glyph_pixel(&second),
+        Some(GLYPH_SHADOW_COLOR),
+        "a load after the pack changed must render the NEW bytes, not a cached first-load pack"
     );
+
+    // The scene built from v1 owns its own copy: a later load cannot
+    // retroactively change what it draws (and nothing is shared between
+    // them).
+    assert_eq!(
+        first_glyph_pixel(&first),
+        Some(GLYPH_COLOR),
+        "an already-built scene must keep rendering its own owned bytes"
+    );
+
+    let _ = std::fs::remove_file(path);
 }
 
-/// Companion to the test above, runnable without a local pack: a *failed*
-/// `cached_pack` call (module docs' "validate before caching") must not
-/// wedge the process-wide cache or panic on a second attempt -- it should
-/// keep reporting the same "missing pack" diagnostic every time, leaving
-/// room for a later attempt (e.g. after `cargo xtask extract` runs) to
-/// actually populate the cache.
+/// Companion to the test above: a *failed* load must stay cleanly
+/// repeatable -- the same "missing pack" diagnostic every time, no wedged
+/// state, no panic -- leaving room for a later attempt (e.g. after
+/// `cargo xtask extract` runs) to succeed.
 #[test]
-fn cached_pack_reports_pack_missing_repeatedly_without_panicking() {
+fn a_failed_load_default_keeps_reporting_pack_missing_without_panicking() {
     // This crate's own test environment never has a local pack (mirrors
     // `title::tests::load_default_reports_pack_missing_when_no_pack_is_extracted`'s
     // identical guard/rationale) -- step aside rather than asserting the
@@ -386,9 +498,9 @@ fn cached_pack_reports_pack_missing_repeatedly_without_panicking() {
         return;
     }
 
-    let first = super::cached_pack().unwrap_err();
+    let first = super::load_default().unwrap_err();
     assert!(first.is_pack_missing());
-    let second = super::cached_pack().unwrap_err();
+    let second = super::load_default().unwrap_err();
     assert!(second.is_pack_missing());
 }
 

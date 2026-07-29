@@ -110,9 +110,25 @@ const AND_YOU_ARE: &str = "And you are?{P}";
 const WHATS_YOUR_NAME: &str = "All right.\nWhat's your name?{P}";
 
 /// `gText_Birch_SoItsPlayer` (`birch_speech.inc:42-43`) with `{PLAYER}{KUN}`
-/// substituted for the fixed v1 default name (module docs).
+/// substituted for the fixed v1 default name (module docs), plus a trailing
+/// `{P}` this port adds on top of upstream's own raw string (which ends
+/// `"?$"` with no embedded `\p`) -- the same stand-in [`AND_YOU_ARE`] uses,
+/// for a different upstream mechanism.
+///
+/// Upstream holds this page on screen for the name confirmation:
+/// `Task_NewGameBirchSpeech_SoItsPlayerName` prints it and hands off to
+/// `Task_NewGameBirchSpeech_CreateNameYesNo` (`main_menu.c:1609-1623`),
+/// which waits for printing to finish and then opens a Yes/No menu;
+/// `Task_NewGameBirchSpeech_ProcessNameYesNoMenu` (`main_menu.c:1626`) sits
+/// there until the player actually answers -- Yes continues to
+/// "Ah, okay!...", No loops back to the naming step. This port renders no
+/// Yes/No menu (module docs' elided naming/gender UI), so without a `{P}`
+/// the page would auto-advance into the next one a few frames after its
+/// last glyph revealed, instead of waiting for the player the way upstream
+/// does. A button-wait is the closest available stand-in for that
+/// confirmation `(behavioral-fidelity)`.
 fn so_its_player() -> String {
-    format!("So it's {DEFAULT_PLAYER_NAME}?")
+    format!("So it's {DEFAULT_PLAYER_NAME}?{{P}}")
 }
 
 /// `gText_Birch_YourePlayer` (`birch_speech.inc:45-50`) with
@@ -229,21 +245,30 @@ mod tests {
     }
 
     #[test]
-    fn and_you_are_and_whats_your_name_both_wait_for_a_press_before_advancing() {
-        // Senior review round 3 regression: both pages used to end straight
-        // on `?` with no `PromptClear` before `End`, so each vanished a few
-        // frames after its last glyph revealed instead of holding on
-        // screen. Both must now end `?{P}` -- `Token::PromptClear`
-        // immediately before `Token::End` -- see `AND_YOU_ARE`'s and
-        // `WHATS_YOUR_NAME`'s own doc comments for the upstream mechanism
-        // each one stands in for.
+    fn every_question_page_waits_for_a_press_before_advancing() {
+        // Senior review regression (rounds 3 and 4): these pages used to end
+        // straight on `?` with no `PromptClear` before `End`, so each
+        // vanished a few frames after its last glyph revealed instead of
+        // holding on screen. All three must now end `?{P}` --
+        // `Token::PromptClear` immediately before `Token::End` -- see
+        // `AND_YOU_ARE`'s, `WHATS_YOUR_NAME`'s and `so_its_player`'s own doc
+        // comments for the upstream mechanism each one stands in for (a
+        // platform-fade sequence, an explicit button-wait task, and the
+        // name-confirmation Yes/No menu respectively).
         let pages = pages();
-        assert_eq!(pages[3][pages[3].len() - 3], Token::Char('?'));
-        assert_eq!(pages[3][pages[3].len() - 2], Token::PromptClear);
-        assert_eq!(pages[3].last(), Some(&Token::End));
-
-        assert_eq!(pages[4][pages[4].len() - 3], Token::Char('?'));
-        assert_eq!(pages[4][pages[4].len() - 2], Token::PromptClear);
-        assert_eq!(pages[4].last(), Some(&Token::End));
+        for page_index in [3, 4, 5] {
+            let page = &pages[page_index];
+            assert_eq!(
+                page[page.len() - 3],
+                Token::Char('?'),
+                "page {page_index} must end on its question mark"
+            );
+            assert_eq!(
+                page[page.len() - 2],
+                Token::PromptClear,
+                "page {page_index} must hold for a button press, not auto-advance"
+            );
+            assert_eq!(page.last(), Some(&Token::End));
+        }
     }
 }
