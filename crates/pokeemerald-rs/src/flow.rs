@@ -218,6 +218,17 @@ fn held_direction(buttons: ButtonState) -> Option<Direction> {
 /// of 16, plus duplicated a camera position at every tile boundary (a
 /// one-frame stutter of its own) -- see this function's own tests for the
 /// corrected contract.
+/// **Deferred (issue #163): warp processing.** The returned
+/// [`engine::overworld::StepOutcome`] is deliberately discarded, so landing
+/// on the bedroom's stair warp at `(7, 1)` (the map's only warp event, the
+/// same one [`crate::new_game`]'s `SPAWN_*` derives the spawn from) does not
+/// yet transition anywhere — this slice ends inside the bedroom, and
+/// honoring `StepOutcome::Crossed`'s "caller must rebind" obligation via
+/// [`engine::overworld::warp::trigger_warp`] is the next I-3 slice. The
+/// `no_connections` resolver is likewise unconditional: indoor maps have no
+/// edge connections, and connection-following only matters once warps can
+/// take the player outdoors `(behavioral-fidelity)` deviation documented at
+/// the deviation site.
 fn advance_player_one_frame(
     player: &mut PlayerState,
     direction: Option<Direction>,
