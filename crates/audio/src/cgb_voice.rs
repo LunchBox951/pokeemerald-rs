@@ -6,7 +6,7 @@
 use crate::cgb_envelope::{cgb_envelope_goal, cgb_pan, CgbAdsr, CgbEnvelope, Panning};
 use crate::cgb_pitch::{midi_key_to_cgb_freq_reg, midi_key_to_noise_control};
 use crate::psg::{NoiseChannel, SquareChannel, WaveChannel};
-use crate::voice::{channel_volume, StereoAcc};
+use crate::voice::{channel_volume, pan_terms, StereoAcc};
 
 /// Which of the four fixed CGB hardware channels a voice occupies.
 ///
@@ -104,7 +104,17 @@ pub struct CgbVoice {
     right_enabled: bool,
     env_gain: i32,
     gate_time: u16,
+    /// The played key, for tie/end-of-tie matching (always the played key,
+    /// even for a rhythm indirection — see [`crate::voice::Voice::midi_key`]).
     midi_key: u8,
+    /// The key fed to `MidiKeyToCgbFreq` on a mid-note pitch re-run. Equal to
+    /// [`Self::midi_key`] for a plain or key-split note; a rhythm
+    /// indirection substitutes its child's own base key instead
+    /// (`ply_note`, `m4a_1.s:1594`).
+    pitch_key: u8,
+    /// `ChnVolSetAsm`'s rhythm-pan override, folded into every
+    /// [`Self::set_track_volume`] re-run; `0` outside rhythm.
+    rhythm_pan: i8,
     track: usize,
     /// Monotonic note-on ordinal, shared with the DirectSound
     /// [`crate::voice::Voice`]s so an end-of-tie can pick the newest match
@@ -130,6 +140,9 @@ impl CgbVoice {
         gate_time: u16,
         midi_key: u8,
         track: usize,
+        rhythm_pan: i8,
+        echo_volume: u8,
+        echo_length: u8,
     ) -> Self {
         let freq_reg = midi_key_to_cgb_freq_reg(note_key, pit_m);
         let sweep = sweep_byte.map(|b| crate::psg::Sweep::from_byte(b, freq_reg));
@@ -142,7 +155,18 @@ impl CgbVoice {
         let born_dead = square.is_disabled();
         let oscillator = Oscillator::Square(square);
         let mut voice = Self::new(
-            channel, oscillator, adsr, vol_mr, vol_ml, velocity, gate_time, midi_key, track,
+            channel,
+            oscillator,
+            adsr,
+            vol_mr,
+            vol_ml,
+            velocity,
+            gate_time,
+            midi_key,
+            track,
+            rhythm_pan,
+            echo_volume,
+            echo_length,
         );
         if born_dead {
             voice.envelope.retire();
@@ -165,6 +189,9 @@ impl CgbVoice {
         gate_time: u16,
         midi_key: u8,
         track: usize,
+        rhythm_pan: i8,
+        echo_volume: u8,
+        echo_length: u8,
     ) -> Self {
         let freq_reg = midi_key_to_cgb_freq_reg(note_key, pit_m);
         let oscillator = Oscillator::Wave(WaveChannel::new(samples, freq_reg));
@@ -178,6 +205,9 @@ impl CgbVoice {
             gate_time,
             midi_key,
             track,
+            rhythm_pan,
+            echo_volume,
+            echo_length,
         )
     }
 
@@ -200,6 +230,9 @@ impl CgbVoice {
         gate_time: u16,
         midi_key: u8,
         track: usize,
+        rhythm_pan: i8,
+        echo_volume: u8,
+        echo_length: u8,
     ) -> Self {
         let control = noise_control_byte(note_key, period);
         let oscillator = Oscillator::Noise(NoiseChannel::from_control_byte(control));
@@ -213,6 +246,9 @@ impl CgbVoice {
             gate_time,
             midi_key,
             track,
+            rhythm_pan,
+            echo_volume,
+            echo_length,
         )
     }
 
@@ -227,15 +263,19 @@ impl CgbVoice {
         gate_time: u16,
         midi_key: u8,
         track: usize,
+        rhythm_pan: i8,
+        echo_volume: u8,
+        echo_length: u8,
     ) -> Self {
-        let base_right = channel_volume(vol_mr, 0x80, velocity);
-        let base_left = channel_volume(vol_ml, 0x7F, velocity);
+        let (pan_right, pan_left) = pan_terms(rhythm_pan);
+        let base_right = channel_volume(vol_mr, pan_right, velocity);
+        let base_left = channel_volume(vol_ml, pan_left, velocity);
         let panning = cgb_pan(base_right, base_left);
         let goal = cgb_envelope_goal(base_right, base_left, panning);
         Self {
             channel,
             oscillator,
-            envelope: CgbEnvelope::new(adsr, goal),
+            envelope: CgbEnvelope::new(adsr, goal, echo_volume, echo_length),
             adsr,
             base_right,
             base_left,
@@ -245,9 +285,21 @@ impl CgbVoice {
             env_gain: 0,
             gate_time,
             midi_key,
+            pitch_key: midi_key,
+            rhythm_pan,
             track,
             seq: 0,
         }
+    }
+
+    /// Override the key used for pitch resolution independently of
+    /// [`Self::midi_key`] — a rhythm indirection's child base key
+    /// (`ply_note`, `m4a_1.s:1594`). Chained onto a constructor so ordinary
+    /// (non-rhythm) notes need not thread an extra parameter.
+    #[must_use]
+    pub(crate) fn with_pitch_key(mut self, pitch_key: u8) -> Self {
+        self.pitch_key = pitch_key;
+        self
     }
 
     /// Stamp this voice's shared note-on ordinal (see [`Self::seq`]). Called by
@@ -311,8 +363,9 @@ impl CgbVoice {
     /// updated track `volMR`/`volML`: rewrites the base volumes, panning,
     /// and envelope goal (`MPT_FLG_VOLCHG`, `m4a_1.s:1394`..`:1401`).
     pub fn set_track_volume(&mut self, vol_mr: u8, vol_ml: u8) {
-        self.base_right = channel_volume(vol_mr, 0x80, self.velocity);
-        self.base_left = channel_volume(vol_ml, 0x7F, self.velocity);
+        let (pan_right, pan_left) = pan_terms(self.rhythm_pan);
+        self.base_right = channel_volume(vol_mr, pan_right, self.velocity);
+        self.base_left = channel_volume(vol_ml, pan_left, self.velocity);
         let panning = cgb_pan(self.base_right, self.base_left);
         self.left_enabled = matches!(panning, Panning::Left | Panning::Both);
         self.right_enabled = matches!(panning, Panning::Right | Panning::Both);
@@ -330,7 +383,7 @@ impl CgbVoice {
     /// mirroring `CgbSound`'s `*nrx3ptr = (*nrx3ptr & 0x08) | frequency`
     /// (`m4a.c:1200`).
     pub fn set_track_pitch(&mut self, key_m: i32, pit_m: u8) {
-        let note_key = u8::try_from((i32::from(self.midi_key) + key_m).max(0) & 0xFF).unwrap_or(0);
+        let note_key = u8::try_from((i32::from(self.pitch_key) + key_m).max(0) & 0xFF).unwrap_or(0);
         match &mut self.oscillator {
             Oscillator::Square(s) => s.set_frequency(midi_key_to_cgb_freq_reg(note_key, pit_m)),
             Oscillator::Wave(w) => w.set_frequency(midi_key_to_cgb_freq_reg(note_key, pit_m)),
@@ -412,9 +465,9 @@ mod tests {
         // channel; `period == 0` stays wide. Before the fix `NoiseTone`
         // carried no period, so narrow mode was unreachable and every
         // instrument played wide 15-bit noise.
-        let narrow = CgbVoice::noise(CgbAdsr::flat(), 60, 1, 0xFF, 0xFF, 127, 0, 60, 0);
+        let narrow = CgbVoice::noise(CgbAdsr::flat(), 60, 1, 0xFF, 0xFF, 127, 0, 60, 0, 0, 0, 0);
         assert_eq!(narrow.noise_is_narrow(), Some(true));
-        let wide = CgbVoice::noise(CgbAdsr::flat(), 60, 0, 0xFF, 0xFF, 127, 0, 60, 0);
+        let wide = CgbVoice::noise(CgbAdsr::flat(), 60, 0, 0xFF, 0xFF, 127, 0, 60, 0, 0, 0, 0);
         assert_eq!(wide.noise_is_narrow(), Some(false));
     }
 
@@ -422,7 +475,8 @@ mod tests {
     fn noise_retune_preserves_the_width_bit() {
         // `MidiKeyToCgbFreq`'s noise retune supplies only clock/divisor bits;
         // the width selector set at note-on survives (`m4a.c:1200`).
-        let mut narrow = CgbVoice::noise(CgbAdsr::flat(), 60, 1, 0xFF, 0xFF, 127, 0, 60, 0);
+        let mut narrow =
+            CgbVoice::noise(CgbAdsr::flat(), 60, 1, 0xFF, 0xFF, 127, 0, 60, 0, 0, 0, 0);
         narrow.set_track_pitch(12, 0);
         assert_eq!(narrow.noise_is_narrow(), Some(true));
     }
@@ -450,6 +504,9 @@ mod tests {
             127,
             0,
             60,
+            0,
+            0,
+            0,
             0,
         );
         let mut acc = vec![(0i32, 0i32); 8];
@@ -497,6 +554,9 @@ mod tests {
                 0,
                 120,
                 0,
+                0,
+                0,
+                0,
             );
             assert!(!dead.is_active(), "overflowing sweep note is born dead");
             let mut acc = vec![(0i32, 0i32); 8];
@@ -521,10 +581,127 @@ mod tests {
             0,
             48,
             0,
+            0,
+            0,
+            0,
         );
         assert!(
             normal.is_active(),
             "a normal-frequency sweep note keeps playing"
+        );
+    }
+
+    #[test]
+    fn with_pitch_key_overrides_the_base_used_for_mid_note_bend() {
+        // A rhythm child's own base key (72) diverges from the played key
+        // (60) used for tie matching; a mid-note pitch re-run must recompute
+        // from the CHILD's base key, not the played one.
+        assert_eq!(
+            CgbVoice::noise(CgbAdsr::flat(), 60, 0, 0xFF, 0xFF, 127, 0, 60, 0, 0, 0, 0)
+                .with_pitch_key(72)
+                .midi_key(),
+            60,
+            "EOT identity stays the played key"
+        );
+
+        // `set_track_pitch(0, 0)` re-derives the oscillator's frequency from
+        // `pitch_key` (72) rather than `midi_key` (60); a channel constructed
+        // straight at key 72 must render identically once re-pitched.
+        let mut square = CgbVoice::square(
+            CgbChannelNumber::Square1,
+            2,
+            None,
+            CgbAdsr::flat(),
+            60,
+            0,
+            0xFF,
+            0xFF,
+            127,
+            0,
+            60,
+            0,
+            0,
+            0,
+            0,
+        )
+        .with_pitch_key(72);
+        square.set_track_pitch(0, 0);
+        let mut expected = CgbVoice::square(
+            CgbChannelNumber::Square1,
+            2,
+            None,
+            CgbAdsr::flat(),
+            72,
+            0,
+            0xFF,
+            0xFF,
+            127,
+            0,
+            72,
+            0,
+            0,
+            0,
+            0,
+        );
+        let mut acc_a = vec![(0i32, 0i32); 16];
+        let mut acc_b = vec![(0i32, 0i32); 16];
+        square.begin_frame(15);
+        square.render(&mut acc_a);
+        expected.begin_frame(15);
+        expected.render(&mut acc_b);
+        assert_eq!(acc_a, acc_b);
+    }
+
+    #[test]
+    fn rhythm_pan_shifts_the_stereo_split_on_construction_and_reruns() {
+        // A positive rhythm-pan override must favour the right channel over
+        // an otherwise-centred track, both at note-on and after a VOL rerun.
+        let centred = CgbVoice::noise(CgbAdsr::flat(), 60, 0, 0x40, 0x40, 127, 0, 60, 0, 0, 0, 0);
+        let panned = CgbVoice::noise(CgbAdsr::flat(), 60, 0, 0x40, 0x40, 127, 0, 60, 0, 63, 0, 0);
+        assert!(
+            panned.base_right > centred.base_right,
+            "a positive rhythm pan should raise the right-channel base volume"
+        );
+
+        let mut voice =
+            CgbVoice::noise(CgbAdsr::flat(), 60, 0, 0xFF, 0xFF, 127, 0, 60, 0, 63, 0, 0);
+        voice.set_track_volume(0x40, 0x40);
+        assert!(
+            voice.base_right > voice.base_left,
+            "the rhythm-pan override must survive a mid-note VOL rerun"
+        );
+    }
+
+    #[test]
+    fn echo_volume_and_length_are_copied_into_the_envelope_at_construction() {
+        // A CGB voice's constructor must thread echo_volume/echo_length into
+        // its CgbEnvelope so a release with no ADSR release period still
+        // reaches the pseudo-echo tail instead of silencing immediately.
+        let mut voice = CgbVoice::noise(
+            CgbAdsr {
+                attack: 0,
+                decay: 0,
+                sustain: 15,
+                release: 0,
+            },
+            60,
+            0,
+            0xFF,
+            0xFF,
+            127,
+            0,
+            60,
+            0,
+            0,
+            128,
+            3,
+        );
+        voice.begin_frame(15);
+        voice.note_off();
+        voice.begin_frame(15);
+        assert!(
+            voice.is_active(),
+            "a nonzero echo_volume must hold the channel in its pseudo-echo tail"
         );
     }
 }

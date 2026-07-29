@@ -154,7 +154,10 @@ claiming R-4 is complete:
    `build (ubuntu-latest)`, `build (windows-latest)`, `test (ubuntu-latest)`, and
    `test (windows-latest)`. Require `dependency-review`, `codeql (actions)`,
    `codeql (python)`, and `codeql (rust)` after each has reported successfully
-   on the protected branch.
+   on the protected branch. `smoke (ubuntu-latest)` / `smoke (windows-latest)`
+   and `real-pack` are deliberately **not** on this list yet — same
+   "prove stable first" precedent for each (see `ci.yml`'s header comment);
+   R-4 registers them once each has proven stable.
 3. On `unstable`, `stable`, and `main`, also require `require-release-source` and
    `require-rung-cleared`. Follow the bootstrap order documented at the head of
    `channel-merge-policy.yml` before registering them, or the first promotion will
