@@ -242,3 +242,54 @@ fn a_pack_missing_message_box_fails_validation_without_leaking() {
 
     let _ = std::fs::remove_file(path);
 }
+
+/// Regression for the finding that `load_default` leaked a fresh
+/// `AssetPack` on every *successful* call, not just failed ones (see
+/// `a_pack_missing_message_box_fails_validation_without_leaking` above for
+/// that half): repeated calls into `cached_pack` -- and therefore
+/// `load_default`, which reads through it -- must reuse the exact same,
+/// single `'static` pack instance rather than loading and caching (or
+/// leaking) a new one each time. Needs the real pack (`cached_pack` reads
+/// from disk on a cache miss).
+#[test]
+#[ignore = "needs a local pack: run `cargo xtask extract` first"]
+fn cached_pack_reuses_the_same_pack_across_repeated_calls() {
+    let first = super::cached_pack().expect("run `cargo xtask extract` first");
+    let second = super::cached_pack().expect("run `cargo xtask extract` first");
+    assert!(
+        std::ptr::eq(first, second),
+        "a second `cached_pack` call must reuse the first call's pack instance, not load a new one"
+    );
+
+    // The public entry point routes through the same cache -- building two
+    // full scenes must not disturb the cached pack's identity either.
+    let _scene_a = super::load_default().expect("run `cargo xtask extract` first");
+    let _scene_b = super::load_default().expect("run `cargo xtask extract` first");
+    let third = super::cached_pack().expect("run `cargo xtask extract` first");
+    assert!(
+        std::ptr::eq(first, third),
+        "building scenes through `load_default` must not disturb the cached pack identity"
+    );
+}
+
+/// Companion to the test above, runnable without a local pack: a *failed*
+/// `cached_pack` call (module docs' "validate before caching") must not
+/// wedge the process-wide cache or panic on a second attempt -- it should
+/// keep reporting the same "missing pack" diagnostic every time, leaving
+/// room for a later attempt (e.g. after `cargo xtask extract` runs) to
+/// actually populate the cache.
+#[test]
+fn cached_pack_reports_pack_missing_repeatedly_without_panicking() {
+    // This crate's own test environment never has a local pack (mirrors
+    // `title::tests::load_default_reports_pack_missing_when_no_pack_is_extracted`'s
+    // identical guard/rationale) -- step aside rather than asserting the
+    // wrong thing if it ever does.
+    if assets::pack::AssetPack::default_path().is_file() {
+        return;
+    }
+
+    let first = super::cached_pack().unwrap_err();
+    assert!(first.is_pack_missing());
+    let second = super::cached_pack().unwrap_err();
+    assert!(second.is_pack_missing());
+}

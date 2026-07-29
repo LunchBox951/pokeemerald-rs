@@ -51,6 +51,8 @@
 
 mod speech;
 
+use std::sync::OnceLock;
+
 use assets::fonts::{FontGlyphSheet, FontId};
 use assets::pack::{AssetPack, PackError};
 use engine::text::render::{Printer, RevealedGlyph, TextSpeed, TickEvent};
@@ -161,9 +163,9 @@ impl<'a> IntroScene<'a> {
     /// [`crate::main_menu::MainMenuScene::from_pack`]): `sheet` must
     /// outlive every [`IntroScene::tick`] call (the printer persists across
     /// frames, unlike [`crate::main_menu::MainMenuScene`]'s throwaway,
-    /// drive-to-completion-once printer), so [`load_default`] leaks its
-    /// [`AssetPack`] to get a `'static` `sheet` rather than borrowing one
-    /// transiently -- see [`load_default`]'s doc comment.
+    /// drive-to-completion-once printer), so [`load_default`] reads `sheet`
+    /// out of a `'static`, process-wide-cached [`AssetPack`] rather than
+    /// borrowing one transiently -- see [`load_default`]'s doc comment.
     ///
     /// `pub(crate)`, not `pub`: [`FrameAssets`] (its `frame` parameter) is
     /// itself crate-private (see its own docs), and every real caller goes
@@ -294,11 +296,11 @@ impl<'a> IntroScene<'a> {
 
 /// Fetch [`IntroScene`]'s two required entries -- the normal-weight font
 /// sheet and the dialogue frame -- out of an already-loaded `pack`, without
-/// leaking anything. Shared by [`load_default`] for both its pre-leak
-/// validation pass and its real, post-leak build (that doc comment's
-/// "validate before leak" section) -- a borrowed `pack` here, not the
-/// `'static` one [`IntroScene`] itself ultimately needs, so this alone can
-/// never be the thing that leaks.
+/// leaking anything. Shared by [`cached_pack`]'s validate-before-caching
+/// pass and by [`load_default`]'s real, per-call build against the cached
+/// pack -- a borrowed `pack` here, never the `'static` one [`IntroScene`]
+/// itself ultimately needs, so this alone can never be the thing that
+/// leaks.
 ///
 /// # Errors
 ///
@@ -312,50 +314,78 @@ fn required_assets(pack: &AssetPack) -> Result<(FontGlyphSheet<'_>, FrameAssets)
     Ok((sheet, frame))
 }
 
-/// Load the pack from its default location and build the intro out of it in
-/// one step -- mirrors [`crate::title::load_default`].
+/// This process's single, lazily-loaded [`AssetPack`] instance, shared by
+/// every [`load_default`] call -- see [`cached_pack`].
 ///
-/// Leaks the loaded [`AssetPack`] (`Box::leak`) to obtain the `'static`
-/// [`FontGlyphSheet`] [`IntroScene`]'s persistent, per-frame
-/// [`engine::text::render::Printer`] needs to borrow across
-/// [`IntroScene::tick`] calls -- unlike [`crate::title::TitleScene`]/
-/// [`crate::overworld::OverworldScene`], which copy every pack byte they
-/// need into owned buffers up front, a live `Printer` cannot be rebuilt from
-/// scratch every frame without losing its mid-page position. A one-time
-/// leak of a single, small (~150KiB), load-once-per-process pack is the
-/// pragmatic tradeoff, not a per-frame or unbounded leak -- **provided** the
-/// pack is actually usable.
+/// Why a cache, and not [`crate::title::TitleScene`]/
+/// [`crate::overworld::OverworldScene`]'s own "copy every pack byte into an
+/// owned buffer up front, no `'static` borrow needed" shape (this module's
+/// own earlier docs on that contrast): [`IntroScene`]'s live, per-frame
+/// [`engine::text::render::Printer`] holds a [`FontGlyphSheet`], which
+/// borrows its pixel bytes from `AssetPack`'s own storage
+/// (`assets::pack::ImageRef`'s zero-copy design, used pack-wide, not just
+/// here) rather than owning a copy -- so nothing short of `IntroScene`
+/// itself owning the whole pack alongside a printer that borrows from it (a
+/// self-referential struct Rust cannot express without `unsafe`, and this
+/// workspace's `unsafe` bar requires a stated invariant, not "the borrow
+/// checker was in the way") can give the printer a same-struct-owned
+/// buffer. A caller-owned buffer threaded down from `crate::flow` would
+/// just move that same self-reference into `AppScene::Intro` instead. A
+/// `'static` borrow is therefore genuinely forced by the `assets` crate's
+/// borrowing API, and reworking `ImageRef` to own its bytes workspace-wide
+/// is far outside this fix's scope (`assets::pack`'s module docs: every
+/// other pack accessor -- tilesets, sprites, layouts, every other font --
+/// leans on that same zero-copy shape).
 ///
-/// **Validate before leak.** This function is `pub`, and
-/// [`crate::flow::advance_scene`]'s `MainMenu` arm calls it again on every
-/// fresh A press for as long as the player keeps retrying against a
-/// still-broken pack (its own "log-or-ignore" policy) -- so every required
-/// entry ([`required_assets`]) is fetched against the freshly loaded, *not
-/// yet* leaked `pack` first. Only once that succeeds does this commit `pack`
-/// to its `'static` leak; a malformed pack (module docs' own example, a
-/// missing `message_box` entry) returns an error here without ever leaking,
-/// instead of leaking a fresh, immediately unusable [`AssetPack`] on every
-/// such call.
+/// A single process-wide cache, not a fresh [`Box::leak`] per call (this
+/// item's own prior shape): the pack is small (~150KiB) and immutable once
+/// loaded, so leaking it *once*, ever, and reusing that same instance by
+/// reference for the rest of the process is bounded and cheap -- unlike
+/// leaking a fresh copy on every call [`load_default`] makes (e.g. every
+/// time [`crate::flow::advance_scene`]'s `MainMenu` arm re-enters the intro
+/// on a fresh A press), which grows without bound over a long play session.
+static PACK_CACHE: OnceLock<AssetPack> = OnceLock::new();
+
+/// Load and validate this process's cached pack (module docs on
+/// [`PACK_CACHE`]) on the first call; every later call reuses the exact
+/// same instance, by reference, without touching disk again.
+///
+/// **Validate before caching.** [`OnceLock`] has no way to "unset" a value
+/// once written, so a load that fails, or a pack that fails
+/// [`required_assets`]' validation (module docs' own example: a missing
+/// `message_box` entry), must never reach [`OnceLock::get_or_init`] -- doing
+/// so would wedge every later call behind that same permanent failure for
+/// the rest of the process. Both run first, against a plain local `pack`
+/// nothing yet references `'static`, so a bad pack simply returns its error
+/// here and leaves the cache empty for the next attempt (e.g. after the
+/// player runs `cargo xtask extract` and retries from the main menu).
 ///
 /// # Errors
 ///
 /// [`IntroSceneError::Pack`] with [`IntroSceneError::is_pack_missing`] true
 /// if no pack has been extracted yet; see [`required_assets`] for the other
 /// (real-pack-only) error cases.
-///
-/// # Panics
-///
-/// Never in practice: the second [`required_assets`] call re-reads the exact
-/// same, now-`'static`, bytes the first call (against the same pack, still
-/// owned locally at that point) already validated successfully -- nothing
-/// about leaking a value changes its contents.
-pub fn load_default() -> Result<IntroScene<'static>, IntroSceneError> {
+fn cached_pack() -> Result<&'static AssetPack, IntroSceneError> {
+    if let Some(pack) = PACK_CACHE.get() {
+        return Ok(pack);
+    }
     let pack = AssetPack::load_default()?;
     required_assets(&pack)?;
+    Ok(PACK_CACHE.get_or_init(|| pack))
+}
 
-    let pack: &'static AssetPack = Box::leak(Box::new(pack));
-    let (sheet, frame) =
-        required_assets(pack).expect("already validated identically against the same bytes above");
+/// Load the pack from its default location (caching it process-wide -- see
+/// [`cached_pack`]) and build the intro out of it in one step -- mirrors
+/// [`crate::title::load_default`].
+///
+/// # Errors
+///
+/// [`IntroSceneError::Pack`] with [`IntroSceneError::is_pack_missing`] true
+/// if no pack has been extracted yet; see [`required_assets`] for the other
+/// (real-pack-only) error cases.
+pub fn load_default() -> Result<IntroScene<'static>, IntroSceneError> {
+    let pack = cached_pack()?;
+    let (sheet, frame) = required_assets(pack)?;
     Ok(IntroScene::new(sheet, frame, TextSpeed::Mid))
 }
 
