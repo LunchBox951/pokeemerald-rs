@@ -17165,6 +17165,11 @@
       "kind": "file",
       "status": "pending"
     },
+    "include/constants/comparison_operators.h": {
+      "category": "code.constants",
+      "kind": "file",
+      "status": "pending"
+    },
     "include/constants/contest.h": {
       "category": "code.constants",
       "kind": "file",
@@ -17445,11 +17450,6 @@
       "status": "pending"
     },
     "include/constants/weather.h": {
-      "category": "code.constants",
-      "kind": "file",
-      "status": "pending"
-    },
-    "include/constants/wild_encounter.h": {
       "category": "code.constants",
       "kind": "file",
       "status": "pending"
@@ -24268,6 +24268,11 @@
       "kind": "file",
       "status": "pending"
     },
+    "src/crt0.s": {
+      "category": "code.source",
+      "kind": "file",
+      "status": "pending"
+    },
     "src/data.c": {
       "category": "code.source",
       "kind": "file",
@@ -25623,6 +25628,11 @@
       "kind": "file",
       "status": "pending"
     },
+    "src/libgcnmultiboot.s": {
+      "category": "code.source",
+      "kind": "file",
+      "status": "pending"
+    },
     "src/libisagbprn.c": {
       "category": "code.source",
       "kind": "file",
@@ -25704,7 +25714,7 @@
           "status": "rewritten"
         },
         "CgbSound": {
-          "reason": "CgbSound's per-hardware-channel envelope/oscillator/pan loop re-implemented as cgb_voice::CgbVoice, driven from Mixer::mix_frame (S-3 slice 2).",
+          "reason": "CgbSound's per-hardware-channel envelope/oscillator/pan loop re-implemented as cgb_voice::CgbVoice, driven from Mixer::mix_frame (S-3 slice 2); slice 3 extends the CGB envelope with the envelope_pseudoecho_start/pseudoEchoLength tail (CgbEnvelope's echo state), matching the DirectSound pseudo-echo already modelled in slice 1/2.",
           "rust_target": "crates/audio/src/cgb_voice.rs",
           "spec": "S-3",
           "status": "rewritten"
@@ -25721,8 +25731,23 @@
           "spec": "S-3",
           "status": "rewritten"
         },
+        "TONEDATA_TYPE_FIX": {
+          "status": "pending"
+        },
         "TrkVolPitSet": {
           "reason": "TrkVolPitSet vol/pan+pitch resolution re-implemented as sequencer::track_volume/track_pitch (S-3 slice 1); slice 2 extends both with the MOD/MODT modM folding (amplitude/pan/pitch vibrato).",
+          "rust_target": "crates/audio/src/sequencer.rs",
+          "spec": "S-3",
+          "status": "rewritten"
+        },
+        "ply_xiecl": {
+          "reason": "ply_xiecl's pseudo-echo-length XCMD (kind 0x09) executed by sequencer::Sequencer::handle_event, alongside ply_xiecv (S-3 slice 3).",
+          "rust_target": "crates/audio/src/sequencer.rs",
+          "spec": "S-3",
+          "status": "rewritten"
+        },
+        "ply_xiecv": {
+          "reason": "ply_xiecv's pseudo-echo-volume XCMD (kind 0x08) executed by sequencer::Sequencer::handle_event, updating the track's captured echo state for subsequently started voices (S-3 slice 3).",
           "rust_target": "crates/audio/src/sequencer.rs",
           "spec": "S-3",
           "status": "rewritten"
@@ -25730,6 +25755,32 @@
       },
       "category": "code.source",
       "kind": "file",
+      "status": "pending"
+    },
+    "src/m4a_1.s": {
+      "artifacts": {
+        "ChnVolSetAsm": {
+          "reason": "ChnVolSetAsm (m4a_1.s:1508) right/left channel-volume formula reimplemented as voice::channel_volume + voice::pan_terms, including the rhythm-pan override (0x80+rhythmPan / 0x7F-rhythmPan) that a rhythm indirection's child pan_sweep byte can set (S-3 slice 3).",
+          "rust_target": "crates/audio/src/voice.rs",
+          "spec": "S-3",
+          "status": "rewritten"
+        },
+        "TONEDATA_TYPE_FIX": {
+          "reason": "SoundMainRAM's fixed-rate DirectSound branch (m4a_1.s:498: tst TONEDATA_TYPE_FIX; movne r8, 0x800000 forces a 1:1 phase step) reimplemented as Voice::fixed_rate forcing the phase step to pitch::FRAC_ONE, which also reproduces the branch's un-interpolated raw-sample reads as a side effect (S-3 slice 3). Covers only this FIX branch, not the rest of SoundMainRAM. The separate CGB-side use of the flag (m4a.c:1187 SOUNDBIAS PWM-rate frequency rounding) is NOT implemented and stays pending on src/m4a.c.",
+          "rust_target": "crates/audio/src/voice.rs",
+          "spec": "S-3",
+          "status": "rewritten"
+        },
+        "ply_note": {
+          "reason": "ply_note (m4a_1.s:1538) key-split (TONEDATA_TYPE_SPL) / rhythm (TONEDATA_TYPE_RHY) child resolution, the TONEDATA_TYPE_FIX dispatch bypass, and the pseudoEchoVolume/Length note-on snapshot are reimplemented as sequencer::resolve_instrument + note_on (S-3 slice 3). Priority-based channel-stealing search over the fixed DirectSound/CGB pools is still deferred (out of scope; Mixer uses a flat voice cap instead).",
+          "rust_target": "crates/audio/src/sequencer.rs",
+          "spec": "S-3",
+          "status": "stubbed"
+        }
+      },
+      "category": "code.source",
+      "kind": "file",
+      "spec_owner": "03-audio",
       "status": "pending"
     },
     "src/m4a_tables.c": {
@@ -26285,6 +26336,11 @@
       "status": "pending"
     },
     "src/roamer.c": {
+      "category": "code.source",
+      "kind": "file",
+      "status": "pending"
+    },
+    "src/rom_header.s": {
       "category": "code.source",
       "kind": "file",
       "status": "pending"

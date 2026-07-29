@@ -11,19 +11,29 @@
 //! This slice also executes pattern control flow (`PATT`/`PEND`/`REPT`,
 //! `m4a_1.s:851`..`:910`) and per-tick LFO/vibrato (`MPlayMain`'s wait-tick
 //! tail, `m4a_1.s:1285`..`:1330`), and dispatches `VOICE` to either a
-//! DirectSound or a CGB PSG instrument.
+//! DirectSound or a CGB PSG instrument — resolving key-split/rhythm
+//! indirection first, and the `xIECV`/`xIECL` pseudo-echo `XCMD`s
+//! (`ply_note`, `m4a_1.s:1580`..`:1609`, `:1757`..`:1758`; `ply_xiecv`/
+//! `ply_xiecl`, `m4a.c:1591`..`:1600`).
 //!
 //! Out of scope for this slice (decoded but not executed): memory
-//! accumulator (`MEMACC`), extended commands (`XCMD`), priority-based voice
-//! stealing.
+//! accumulator (`MEMACC`), the remaining `XCMD` sub-commands (tone
+//! overrides, wave swap, portamento wait), priority-based voice stealing.
 
 use crate::cgb_voice::{CgbChannelNumber, CgbVoice};
 use crate::pitch::{self, SAMPLES_PER_FRAME};
 use crate::psg::WaveChannel;
 use crate::sequence::Event;
 use crate::song::{Instrument, Song};
-use crate::voice::{channel_volume, Voice};
+use crate::voice::{channel_volume, pan_terms, Voice};
 use crate::{Mixer, DEFAULT_MASTER_VOLUME, DEFAULT_MAX_VOICES};
+
+/// `XCMD` sub-command number for `xIECV` (pseudo-echo volume,
+/// `m4a_tables.c:252`).
+const XCMD_IECV: u8 = 0x08;
+/// `XCMD` sub-command number for `xIECL` (pseudo-echo length,
+/// `m4a_tables.c:253`).
+const XCMD_IECL: u8 = 0x09;
 
 /// Tempo units per tick; `MPlayMain` fires a tick each time `tempoC` crosses
 /// `150` (`subs r0, 150`).
@@ -82,6 +92,14 @@ struct TrackState {
     pattern_level: u8,
     /// `REPT`'s in-progress repeat counter (`track->repN`).
     rep_n: u8,
+    /// Active pseudo-echo volume (`xIECV`, `track->pseudoEchoVolume`),
+    /// copied into every subsequently started voice on this track
+    /// (`m4a_1.s:1757`..`:1758`). Voices already started keep whatever value
+    /// they captured at their own note-on.
+    pseudo_echo_volume: u8,
+    /// Active pseudo-echo length (`xIECL`, `track->pseudoEchoLength`); see
+    /// [`Self::pseudo_echo_volume`].
+    pseudo_echo_length: u8,
 }
 
 impl TrackState {
@@ -115,6 +133,8 @@ impl TrackState {
             pattern_stack: [0; 3],
             pattern_level: 0,
             rep_n: 0,
+            pseudo_echo_volume: 0,
+            pseudo_echo_length: 0,
         }
     }
 }
@@ -398,6 +418,23 @@ impl Sequencer {
                     track.cursor = track.pattern_stack[track.pattern_level as usize];
                 }
             }
+            Event::Xcmd {
+                kind: XCMD_IECV,
+                value,
+            } => {
+                // `ply_xiecv` (`m4a.c:1591`): stores the raw byte on the
+                // track; only subsequently started voices pick it up (see
+                // `note_on`), matching upstream's note-on-time copy
+                // (`m4a_1.s:1757`..`:1758`).
+                track.pseudo_echo_volume = u8::try_from(value).unwrap_or(0);
+            }
+            Event::Xcmd {
+                kind: XCMD_IECL,
+                value,
+            } => {
+                // `ply_xiecl` (`m4a.c:1597`).
+                track.pseudo_echo_length = u8::try_from(value).unwrap_or(0);
+            }
             Event::Repeat { count, target } => {
                 // `ply_rept`: `count == 0` is an unconditional, uncounted
                 // jump (`m4a_1.s:889`..`:893`); otherwise loop `count` times
@@ -491,9 +528,14 @@ impl Sequencer {
     }
 
     /// Allocate a voice for a note, resolving its stereo volume and pitch from
-    /// the track's current state (`TrkVolPitSet` + `ChnVolSetAsm`), and
-    /// dispatching to either a DirectSound or a CGB PSG voice depending on
-    /// the selected instrument's kind.
+    /// the track's current state (`TrkVolPitSet` + `ChnVolSetAsm`), resolving
+    /// any key-split/rhythm indirection to a concrete leaf instrument first,
+    /// and dispatching to either a DirectSound or a CGB PSG voice depending
+    /// on that leaf's kind.
+    // A flat per-instrument-kind dispatch: long by construction (five leaf
+    // kinds, each threading the same handful of resolved values), not
+    // logically complex -- mirrors `handle_event`'s same allowance.
+    #[allow(clippy::too_many_lines)]
     fn note_on(
         song: &Song,
         track: &TrackState,
@@ -506,23 +548,31 @@ impl Sequencer {
         let Some(instrument) = song.voice(track.voice) else {
             return;
         };
+        let Some((instrument, pitch_key, rhythm_pan)) = resolve_instrument(instrument, key) else {
+            return;
+        };
 
         let (vol_mr, vol_ml) = track_volume(track);
         let (key_m, pit_m) = track_pitch(track);
+        let (pan_right, pan_left) = pan_terms(rhythm_pan);
 
-        // key + keyM, floored at 0 (`bpl _081DDCA0; movs r3, 0`), then the sum
-        // is passed to `MidiKeyToFreq`'s `u8 key` param, truncating the register
-        // to its low byte — so a sum above 255 wraps modulo 256, it does not
-        // saturate (`ldrb r1, [key]; adds r3, r1, r0; ... bl MidiKeyToFreq`).
-        // The same clamp-then-truncate feeds `MidiKeyToCgbFreq` for CGB
-        // instruments (`m4a_1.s:1760`..`:1766`).
-        let note_key = u8::try_from((i32::from(key) + key_m).max(0) & 0xFF).unwrap_or(0);
+        // pitch_key + keyM, floored at 0 (`bpl _081DDCA0; movs r3, 0`), then
+        // the sum is passed to `MidiKeyToFreq`'s `u8 key` param, truncating
+        // the register to its low byte — so a sum above 255 wraps modulo
+        // 256, it does not saturate (`ldrb r1, [key]; adds r3, r1, r0; ...
+        // bl MidiKeyToFreq`). The same clamp-then-truncate feeds
+        // `MidiKeyToCgbFreq` for CGB instruments (`m4a_1.s:1760`..`:1766`).
+        // `pitch_key` is the played key for a plain/key-split note, or a
+        // rhythm child's own base key (`m4a_1.s:1594`..`:1598`).
+        let note_key = u8::try_from((i32::from(pitch_key) + key_m).max(0) & 0xFF).unwrap_or(0);
         let gate = u16::from(gate);
+        let echo_volume = track.pseudo_echo_volume;
+        let echo_length = track.pseudo_echo_length;
 
         match instrument {
             Instrument::DirectSound(tone) => {
-                let right = channel_volume(vol_mr, 0x80, velocity);
-                let left = channel_volume(vol_ml, 0x7F, velocity);
+                let right = channel_volume(vol_mr, pan_right, velocity);
+                let left = channel_volume(vol_ml, pan_left, velocity);
                 let freq = pitch::midi_key_to_freq(tone.wave.freq(), note_key, pit_m);
                 let voice = Voice::new(
                     tone.wave.clone(),
@@ -534,56 +584,140 @@ impl Sequencer {
                     gate,
                     key,
                     track_id,
-                    0,
-                    0,
-                );
+                    echo_volume,
+                    echo_length,
+                )
+                .with_pitch_key(pitch_key)
+                .with_rhythm_pan(rhythm_pan)
+                .fixed_rate(tone.is_fixed_rate());
                 mixer.add_voice(voice);
             }
             Instrument::CgbSquare1(sq) => {
-                mixer.add_cgb_voice(CgbVoice::square(
-                    CgbChannelNumber::Square1,
-                    sq.duty,
-                    Some(sq.sweep),
-                    sq.adsr,
-                    note_key,
-                    pit_m,
-                    vol_mr,
-                    vol_ml,
-                    velocity,
-                    gate,
-                    key,
-                    track_id,
-                ));
+                mixer.add_cgb_voice(
+                    CgbVoice::square(
+                        CgbChannelNumber::Square1,
+                        sq.duty,
+                        Some(sq.sweep),
+                        sq.adsr,
+                        note_key,
+                        pit_m,
+                        vol_mr,
+                        vol_ml,
+                        velocity,
+                        gate,
+                        key,
+                        track_id,
+                        rhythm_pan,
+                        echo_volume,
+                        echo_length,
+                    )
+                    .with_pitch_key(pitch_key),
+                );
             }
             Instrument::CgbSquare2(sq) => {
-                mixer.add_cgb_voice(CgbVoice::square(
-                    CgbChannelNumber::Square2,
-                    sq.duty,
-                    None,
-                    sq.adsr,
-                    note_key,
-                    pit_m,
-                    vol_mr,
-                    vol_ml,
-                    velocity,
-                    gate,
-                    key,
-                    track_id,
-                ));
+                mixer.add_cgb_voice(
+                    CgbVoice::square(
+                        CgbChannelNumber::Square2,
+                        sq.duty,
+                        None,
+                        sq.adsr,
+                        note_key,
+                        pit_m,
+                        vol_mr,
+                        vol_ml,
+                        velocity,
+                        gate,
+                        key,
+                        track_id,
+                        rhythm_pan,
+                        echo_volume,
+                        echo_length,
+                    )
+                    .with_pitch_key(pitch_key),
+                );
             }
             Instrument::CgbWave(w) => {
                 let samples = WaveChannel::decode_wave_ram(&w.table);
-                mixer.add_cgb_voice(CgbVoice::wave(
-                    samples, w.adsr, note_key, pit_m, vol_mr, vol_ml, velocity, gate, key, track_id,
-                ));
+                mixer.add_cgb_voice(
+                    CgbVoice::wave(
+                        samples,
+                        w.adsr,
+                        note_key,
+                        pit_m,
+                        vol_mr,
+                        vol_ml,
+                        velocity,
+                        gate,
+                        key,
+                        track_id,
+                        rhythm_pan,
+                        echo_volume,
+                        echo_length,
+                    )
+                    .with_pitch_key(pitch_key),
+                );
             }
             Instrument::CgbNoise(n) => {
-                mixer.add_cgb_voice(CgbVoice::noise(
-                    n.adsr, note_key, n.period, vol_mr, vol_ml, velocity, gate, key, track_id,
-                ));
+                mixer.add_cgb_voice(
+                    CgbVoice::noise(
+                        n.adsr,
+                        note_key,
+                        n.period,
+                        vol_mr,
+                        vol_ml,
+                        velocity,
+                        gate,
+                        key,
+                        track_id,
+                        rhythm_pan,
+                        echo_volume,
+                        echo_length,
+                    )
+                    .with_pitch_key(pitch_key),
+                );
             }
+            // `resolve_instrument` never returns an indirection as the leaf:
+            // a KeySplit/Rhythm slot whose own resolved child is itself an
+            // indirection is treated as "no note", exactly as upstream's
+            // `ply_note` aborts on nested indirection (`m4a_1.s:1604`..
+            // `:1609`) rather than recursing.
+            Instrument::KeySplit(_) | Instrument::Rhythm(_) => {}
         }
     }
+}
+
+/// Resolve `instrument` against the played `key` to a concrete leaf
+/// instrument plus its pitch/pan context, following MP2K's key-split
+/// (`TONEDATA_TYPE_SPL`) and rhythm (`TONEDATA_TYPE_RHY`) indirection exactly
+/// as `ply_note` does before allocating a channel (`m4a_1.s:1580`..`:1609`).
+///
+/// Returns the resolved `(leaf, pitch_key, rhythm_pan)`, or `None` when the
+/// table/rhythm slot has nothing for `key`, or when the resolved child is
+/// itself a key-split/rhythm instrument — upstream aborts the note rather
+/// than supporting nested indirection (`_081DDB80`..`b _081DDCEA`,
+/// `m4a_1.s:1604`..`:1609`).
+fn resolve_instrument(instrument: &Instrument, key: u8) -> Option<(&Instrument, u8, i8)> {
+    let resolved = match instrument {
+        Instrument::KeySplit(split) => {
+            // `keySplitTable[key]` selects the child; pitch/pan still use
+            // the played key untouched (`m4a_1.s:1589`, `:1598`).
+            let &child_index = split.table.get(usize::from(key))?;
+            let leaf = split.children.get(usize::from(child_index))?;
+            (leaf, key, 0)
+        }
+        Instrument::Rhythm(rhythm) => {
+            // The played key indexes `children` directly (no split table);
+            // the child's own base key/pan replace the played note's
+            // (`m4a_1.s:1580`..`:1609`).
+            let child = rhythm.children.get(usize::from(key))?.as_ref()?;
+            (&child.instrument, child.base_key, child.pan.unwrap_or(0))
+        }
+        leaf => (leaf, key, 0),
+    };
+    if matches!(resolved.0, Instrument::KeySplit(_) | Instrument::Rhythm(_)) {
+        return None;
+    }
+    Some(resolved)
 }
 
 /// `TrkVolPitSet`'s volume half: track vol/pan → right/left channel base
@@ -677,7 +811,10 @@ mod tests {
     use crate::envelope::Adsr;
     use crate::sample::WaveData;
     use crate::sequence::decode_track;
-    use crate::song::{NoiseTone, SquareTone, ToneData, WaveTone};
+    use crate::song::{
+        rhythm_pan_from_pan_sweep, KeySplit, NoiseTone, Rhythm, RhythmChild, SquareTone, ToneData,
+        WaveTone, KEY_SLOTS,
+    };
 
     fn unity_freq() -> u32 {
         (1 << pitch::FRAC_BITS) / pitch::DIV_FREQ
@@ -1538,5 +1675,507 @@ mod tests {
         let mut out = vec![0.0; Sequencer::FRAME_SAMPLES];
         seq.render_frame(&mut out);
         assert_eq!(seq.voice_count(), 1);
+    }
+
+    // --- Key-split / rhythm indirection (`TONEDATA_TYPE_SPL`/`_RHY`) -------
+
+    fn direct_sound(sample: i8) -> Instrument {
+        Instrument::DirectSound(ToneData::new(
+            Arc::new(WaveData::one_shot(
+                1 << 20,
+                vec![sample; SAMPLES_PER_FRAME * 4],
+            )),
+            Adsr::flat(),
+        ))
+    }
+
+    #[test]
+    fn key_split_boundary_selects_the_correct_child() {
+        // keySplitTable maps keys < 64 to child 0, >= 64 to child 1 -- two
+        // otherwise-identical DirectSound children distinguished only by
+        // their wave's constant sample value.
+        let mut table = [0u8; KEY_SLOTS];
+        for slot in table.iter_mut().skip(64) {
+            *slot = 1;
+        }
+        let split = Instrument::KeySplit(KeySplit {
+            table,
+            children: vec![direct_sound(40), direct_sound(100)],
+        });
+
+        let render = |key: u8| {
+            let track = vec![
+                Event::Voice(0),
+                Event::Note {
+                    key,
+                    velocity: 127,
+                    gate: 8,
+                },
+                Event::Wait(48),
+                Event::Fine,
+            ];
+            let song = Song::new(vec![split.clone()], vec![track], 150);
+            let mut seq = Sequencer::new(song);
+            let mut out = vec![0.0; Sequencer::FRAME_SAMPLES];
+            seq.render_frame(&mut out);
+            out
+        };
+
+        let low = render(30); // < 64 -> child 0 (sample 40)
+        let high = render(90); // >= 64 -> child 1 (sample 100)
+        assert_ne!(
+            low, high,
+            "the split boundary must select different children"
+        );
+        let magnitude = |buf: &[f32]| buf.iter().map(|s| s.abs()).sum::<f32>();
+        assert!(
+            magnitude(&high) > magnitude(&low),
+            "key 90 must select the louder (sample 100) child, not the quieter one"
+        );
+    }
+
+    #[test]
+    fn key_split_keeps_the_played_key_for_pitch() {
+        // Pitch resolution must keep using the PLAYED key even though the
+        // split table swaps the underlying instrument (`m4a_1.s:1589`,
+        // `:1598`): a key-split note's frequency is exactly
+        // `MidiKeyToFreq(child.wave.freq(), played_key, 0)`.
+        let mut table = [0u8; KEY_SLOTS];
+        for slot in table.iter_mut().skip(64) {
+            *slot = 1;
+        }
+        let split = Instrument::KeySplit(KeySplit {
+            table,
+            children: vec![direct_sound(40), direct_sound(100)],
+        });
+        for &key in &[30u8, 90u8] {
+            let track = vec![
+                Event::Voice(0),
+                Event::Note {
+                    key,
+                    velocity: 127,
+                    gate: 8,
+                },
+                Event::Wait(48),
+                Event::Fine,
+            ];
+            let song = Song::new(vec![split.clone()], vec![track], 150);
+            let mut seq = Sequencer::new(song);
+            let mut out = vec![0.0; Sequencer::FRAME_SAMPLES];
+            seq.render_frame(&mut out);
+            assert_eq!(
+                seq.mixer.voices()[0].frequency(),
+                pitch::midi_key_to_freq(1 << 20, key, 0),
+                "key-split pitch must use the played key {key}, not any child override"
+            );
+        }
+    }
+
+    #[test]
+    fn rhythm_indirection_selects_child_by_played_key_directly() {
+        // No split table: the played key indexes `children` directly. Key 36
+        // (a typical MP2K kick-drum trigger) is populated; an unpopulated key
+        // produces no note at all.
+        let mut children: Vec<Option<RhythmChild>> = vec![None; KEY_SLOTS];
+        children[36] = Some(RhythmChild {
+            instrument: direct_sound(90),
+            base_key: 72,
+            pan: None,
+        });
+        let rhythm = Instrument::Rhythm(Rhythm { children });
+
+        let track_for = |key: u8| {
+            vec![
+                Event::Voice(0),
+                Event::Note {
+                    key,
+                    velocity: 127,
+                    gate: 8,
+                },
+                Event::Wait(48),
+                Event::Fine,
+            ]
+        };
+
+        let song = Song::new(vec![rhythm.clone()], vec![track_for(36)], 150);
+        let mut seq = Sequencer::new(song);
+        let mut out = vec![0.0; Sequencer::FRAME_SAMPLES];
+        seq.render_frame(&mut out);
+        assert_eq!(seq.voice_count(), 1, "a populated rhythm slot must sound");
+
+        let song = Song::new(vec![rhythm], vec![track_for(37)], 150);
+        let mut seq = Sequencer::new(song);
+        seq.render_frame(&mut out);
+        assert_eq!(
+            seq.voice_count(),
+            0,
+            "an unpopulated rhythm slot must produce no note, not panic or fall back"
+        );
+    }
+
+    #[test]
+    fn rhythm_child_base_key_overrides_pitch() {
+        // The rhythm child's own base key (72) replaces the played key (36)
+        // for pitch resolution (`ply_note`, `m4a_1.s:1594`).
+        let mut children: Vec<Option<RhythmChild>> = vec![None; KEY_SLOTS];
+        children[36] = Some(RhythmChild {
+            instrument: direct_sound(90),
+            base_key: 72,
+            pan: None,
+        });
+        let rhythm = Instrument::Rhythm(Rhythm { children });
+        let track = vec![
+            Event::Voice(0),
+            Event::Note {
+                key: 36,
+                velocity: 127,
+                gate: 8,
+            },
+            Event::Wait(48),
+            Event::Fine,
+        ];
+        let song = Song::new(vec![rhythm], vec![track], 150);
+        let mut seq = Sequencer::new(song);
+        let mut out = vec![0.0; Sequencer::FRAME_SAMPLES];
+        seq.render_frame(&mut out);
+        assert_eq!(
+            seq.mixer.voices()[0].frequency(),
+            pitch::midi_key_to_freq(1 << 20, 72, 0),
+            "rhythm pitch must come from the child's base key, not the played key"
+        );
+    }
+
+    #[test]
+    fn rhythm_child_pan_override_is_applied_when_the_bit_is_set() {
+        let mut children: Vec<Option<RhythmChild>> = vec![None; KEY_SLOTS];
+        // pan_sweep 0xFF has the 0x80 override bit set -> a hard-right pan.
+        children[36] = Some(RhythmChild {
+            instrument: direct_sound(90),
+            base_key: 36,
+            pan: rhythm_pan_from_pan_sweep(0xFF),
+        });
+        let rhythm = Instrument::Rhythm(Rhythm { children });
+        let track = vec![
+            Event::Voice(0),
+            Event::Note {
+                key: 36,
+                velocity: 127,
+                gate: 8,
+            },
+            Event::Wait(48),
+            Event::Fine,
+        ];
+        let song = Song::new(vec![rhythm], vec![track], 150);
+        let mut seq = Sequencer::new(song);
+        let mut out = vec![0.0; Sequencer::FRAME_SAMPLES];
+        seq.render_frame(&mut out);
+        let (right, left) = seq.mixer.voices()[0].base_volume();
+        assert!(
+            right > left,
+            "a rhythm pan override toward the right must skew the channel volumes ({right} vs {left})"
+        );
+    }
+
+    #[test]
+    fn nested_key_split_or_rhythm_child_produces_no_note() {
+        // A child that is itself a KeySplit/Rhythm is unsupported nested
+        // indirection; upstream aborts the note rather than recursing
+        // (`m4a_1.s:1604`..`:1609`).
+        let inner_rhythm = Instrument::Rhythm(Rhythm {
+            children: vec![None; KEY_SLOTS],
+        });
+        let table = [0u8; KEY_SLOTS]; // every key -> child 0
+        let split = Instrument::KeySplit(KeySplit {
+            table,
+            children: vec![inner_rhythm],
+        });
+        let track = vec![
+            Event::Voice(0),
+            Event::Note {
+                key: 10,
+                velocity: 127,
+                gate: 8,
+            },
+            Event::Wait(48),
+            Event::Fine,
+        ];
+        let song = Song::new(vec![split], vec![track], 150);
+        let mut seq = Sequencer::new(song);
+        let mut out = vec![0.0; Sequencer::FRAME_SAMPLES];
+        seq.render_frame(&mut out);
+        assert_eq!(seq.voice_count(), 0, "nested indirection must not sound");
+    }
+
+    // --- Fixed-rate DirectSound (`TONEDATA_TYPE_FIX`) -----------------------
+
+    /// A short, varying, looping waveform: a constant wave can't distinguish
+    /// "sampled at a different rate" from "sampled at the same rate", since
+    /// every source sample reads back the same value regardless of pitch.
+    fn varying_wave() -> Arc<WaveData> {
+        Arc::new(WaveData::looping(
+            1 << 20,
+            0,
+            vec![100, -100, 50, -50, 30, -30, 10, -10],
+        ))
+    }
+
+    #[test]
+    fn fixed_rate_instrument_renders_identically_regardless_of_played_key() {
+        let render = |key: u8| {
+            let tone = ToneData::new(varying_wave(), Adsr::flat()).fixed();
+            let voices = vec![Instrument::DirectSound(tone)];
+            let track = vec![
+                Event::Voice(0),
+                Event::Note {
+                    key,
+                    velocity: 127,
+                    gate: 90,
+                },
+                Event::Wait(96),
+                Event::Fine,
+            ];
+            let song = Song::new(voices, vec![track], 150);
+            let mut seq = Sequencer::new(song);
+            let mut buf = vec![0.0; Sequencer::FRAME_SAMPLES * 3];
+            seq.mix_into(&mut buf);
+            buf
+        };
+        assert_eq!(
+            render(40),
+            render(90),
+            "a fixed-rate instrument must ignore the played note's pitch entirely"
+        );
+    }
+
+    #[test]
+    fn non_fixed_instrument_renders_differently_across_keys_for_contrast() {
+        // Isolates the previous test's guarantee: without `.fixed()`, the
+        // SAME song rendered at two different keys must actually diverge, so
+        // the equality assertion above is meaningful and not a vacuous no-op.
+        let render = |key: u8| {
+            let tone = ToneData::new(varying_wave(), Adsr::flat());
+            let voices = vec![Instrument::DirectSound(tone)];
+            let track = vec![
+                Event::Voice(0),
+                Event::Note {
+                    key,
+                    velocity: 127,
+                    gate: 90,
+                },
+                Event::Wait(96),
+                Event::Fine,
+            ];
+            let song = Song::new(voices, vec![track], 150);
+            let mut seq = Sequencer::new(song);
+            let mut buf = vec![0.0; Sequencer::FRAME_SAMPLES * 3];
+            seq.mix_into(&mut buf);
+            buf
+        };
+        assert_ne!(render(40), render(90));
+    }
+
+    // --- xIECV/xIECL pseudo-echo XCMDs --------------------------------------
+
+    #[test]
+    fn xcmd_iecv_and_iecl_only_affect_subsequently_started_voices() {
+        // A tied note (key 60) starts before any xIECV/xIECL; a second tied
+        // note (key 64) starts after they are set. Releasing both together
+        // must retire the pre-echo voice quickly while the post-xIECV one
+        // lingers in its pseudo-echo tail -- voices already started keep
+        // whatever they captured at their own note-on.
+        let wave = Arc::new(WaveData::one_shot(0, vec![100; SAMPLES_PER_FRAME]));
+        let voices = vec![Instrument::DirectSound(ToneData::new(wave, Adsr::flat()))];
+        let track = vec![
+            Event::Voice(0),
+            Event::Note {
+                key: 60,
+                velocity: 127,
+                gate: 0,
+            },
+            Event::Wait(2),
+            Event::Xcmd {
+                kind: 0x08,
+                value: 200,
+            }, // xIECV
+            Event::Xcmd {
+                kind: 0x09,
+                value: 5,
+            }, // xIECL
+            Event::Note {
+                key: 64,
+                velocity: 127,
+                gate: 0,
+            },
+            Event::Wait(2),
+            Event::EndOfTie { key: Some(60) },
+            Event::EndOfTie { key: Some(64) },
+            Event::Wait(64),
+            Event::Fine,
+        ];
+        let mut seq = Sequencer::new(Song::new(voices, vec![track], 150));
+        let mut out = vec![0.0; Sequencer::FRAME_SAMPLES];
+
+        let mut key60_seen = false;
+        let mut key64_seen = false;
+        let mut key60_gone_at = None;
+        let mut key64_gone_at = None;
+        for frame in 0..64 {
+            seq.render_frame(&mut out);
+            let has60 = seq.mixer.voices().iter().any(|v| v.midi_key() == 60);
+            let has64 = seq.mixer.voices().iter().any(|v| v.midi_key() == 64);
+            key60_seen |= has60;
+            key64_seen |= has64;
+            if key60_seen && !has60 && key60_gone_at.is_none() {
+                key60_gone_at = Some(frame);
+            }
+            if key64_seen && !has64 && key64_gone_at.is_none() {
+                key64_gone_at = Some(frame);
+            }
+        }
+        let g60 = key60_gone_at.expect("the pre-echo voice must eventually retire");
+        let g64 = key64_gone_at.expect("the post-xIECV voice must eventually retire");
+        assert!(
+            g64 > g60,
+            "the xIECV/xIECL voice must outlive the voice started before them ({g64} vs {g60})"
+        );
+    }
+
+    #[test]
+    fn xcmd_iecv_and_iecl_extend_a_directsound_voices_lifetime() {
+        let make_track = |with_echo: bool| {
+            let mut track = vec![Event::Voice(0)];
+            if with_echo {
+                track.push(Event::Xcmd {
+                    kind: 0x08,
+                    value: 200,
+                });
+                track.push(Event::Xcmd {
+                    kind: 0x09,
+                    value: 10,
+                });
+            }
+            track.push(Event::Note {
+                key: 60,
+                velocity: 127,
+                gate: 4,
+            });
+            track.push(Event::Wait(200));
+            track.push(Event::Fine);
+            track
+        };
+        let frames_to_silence = |with_echo: bool| {
+            let wave = Arc::new(WaveData::one_shot(0, vec![100; SAMPLES_PER_FRAME]));
+            let voices = vec![Instrument::DirectSound(ToneData::new(wave, Adsr::flat()))];
+            let song = Song::new(voices, vec![make_track(with_echo)], 150);
+            let mut seq = Sequencer::new(song);
+            let mut out = vec![0.0; Sequencer::FRAME_SAMPLES];
+            let mut frames = 0;
+            loop {
+                seq.render_frame(&mut out);
+                frames += 1;
+                if seq.voice_count() == 0 || frames >= 200 {
+                    break;
+                }
+            }
+            frames
+        };
+        assert!(
+            frames_to_silence(true) > frames_to_silence(false),
+            "xIECV/xIECL must extend the DirectSound voice's lifetime via its pseudo-echo tail"
+        );
+    }
+
+    #[test]
+    fn xcmd_iecv_and_iecl_extend_a_cgb_voices_lifetime() {
+        let make_track = |with_echo: bool| {
+            let mut track = vec![Event::Voice(0)];
+            if with_echo {
+                track.push(Event::Xcmd {
+                    kind: 0x08,
+                    value: 200,
+                });
+                track.push(Event::Xcmd {
+                    kind: 0x09,
+                    value: 10,
+                });
+            }
+            track.push(Event::Note {
+                key: 60,
+                velocity: 127,
+                gate: 4,
+            });
+            track.push(Event::Wait(200));
+            track.push(Event::Fine);
+            track
+        };
+        let frames_to_silence = |with_echo: bool| {
+            let voices = vec![Instrument::CgbSquare1(SquareTone {
+                duty: 2,
+                sweep: 0,
+                adsr: CgbAdsr {
+                    attack: 0,
+                    decay: 0,
+                    sustain: 15,
+                    release: 0,
+                },
+            })];
+            let song = Song::new(voices, vec![make_track(with_echo)], 150);
+            let mut seq = Sequencer::new(song);
+            let mut out = vec![0.0; Sequencer::FRAME_SAMPLES];
+            let mut frames = 0;
+            loop {
+                seq.render_frame(&mut out);
+                frames += 1;
+                if seq.voice_count() == 0 || frames >= 200 {
+                    break;
+                }
+            }
+            frames
+        };
+        assert!(
+            frames_to_silence(true) > frames_to_silence(false),
+            "xIECV/xIECL must extend the CGB voice's lifetime via its pseudo-echo tail"
+        );
+    }
+
+    // --- Normalized 128-slot voice banks -------------------------------------
+
+    #[test]
+    fn voice_slot_127_is_an_explicit_entry_not_an_adjacent_lookup() {
+        let build_voices = |slot127_sample: i8| {
+            let mut voices: Vec<Instrument> = (0..127).map(|_| direct_sound(10)).collect();
+            voices.push(direct_sound(slot127_sample));
+            voices
+        };
+        assert_eq!(build_voices(0).len(), KEY_SLOTS);
+
+        let render = |slot127_sample: i8| {
+            let voices = build_voices(slot127_sample);
+            let track = vec![
+                Event::Voice(127),
+                Event::Note {
+                    key: 60,
+                    velocity: 127,
+                    gate: 8,
+                },
+                Event::Wait(48),
+                Event::Fine,
+            ];
+            let song = Song::new(voices, vec![track], 150);
+            assert!(song.voice(127).is_some(), "slot 127 must be populated");
+            assert!(
+                song.voice(128).is_none(),
+                "index 128 must be out of range, not an adjacent wraparound"
+            );
+            let mut seq = Sequencer::new(song);
+            let mut out = vec![0.0; Sequencer::FRAME_SAMPLES];
+            seq.render_frame(&mut out);
+            out
+        };
+
+        // Two songs differing ONLY in slot 127's instrument must render
+        // differently -- proving `VOICE 127` reads slot 127's own explicit
+        // entry, not some other (adjacent, wrapped, or default) slot.
+        assert_ne!(render(10), render(120));
     }
 }

@@ -31,7 +31,13 @@ pub const SAMPLES_PER_FRAME: usize = 224;
 /// (`movs lr, r9, lsr 23`).
 pub const FRAC_BITS: u32 = 23;
 
-const FRAC_ONE: u32 = 1 << FRAC_BITS;
+/// One whole source sample in `.23` fixed point — the phase step a
+/// fixed-rate (`TONEDATA_TYPE_FIX`) voice uses unconditionally, bypassing
+/// [`phase_step`]'s frequency scaling entirely (`m4a_1.s`'s `type &
+/// TONEDATA_TYPE_FIX` branch, `_081DD07C`..`_081DD134`): it reads exactly one
+/// source sample per output sample, so the wave plays at its recorded rate
+/// regardless of the note key, pitch bend, or wave's own `freq` field.
+pub const FRAC_ONE: u32 = 1 << FRAC_BITS;
 
 /// Mask selecting the fractional part of a `.23` phase accumulator.
 pub const FRAC_MASK: u32 = FRAC_ONE - 1;

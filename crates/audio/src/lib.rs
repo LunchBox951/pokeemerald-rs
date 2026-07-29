@@ -26,15 +26,21 @@
 //!   an offline, device-free rendering path ([`Sequencer::mix_into`]).
 //! - [`pitch`] — the MIDI-key → frequency table and the fixed-point step math.
 //!
+//! Slice 3 adds key-split (`TONEDATA_TYPE_SPL`) and rhythm
+//! (`TONEDATA_TYPE_RHY`) voice indirection ([`song::KeySplit`],
+//! [`song::Rhythm`]), fixed-rate DirectSound (`TONEDATA_TYPE_FIX`,
+//! [`song::ToneData::fixed`]), and the `xIECV`/`xIECL` pseudo-echo `XCMD`s
+//! for both DirectSound and CGB voices.
+//!
 //! Everything renders at exactly [`pitch::MIXER_RATE`] (13379 Hz), the rate the
 //! `platform` producer expects; a unit test pins the two together.
 //!
 //! ## Out of scope for this slice
 //!
 //! Reverb, SFX priority/interruption and voice stealing, the M4A player
-//! command interface, compressed/fixed-rate DirectSound waves, and the CGB
-//! pseudo-echo tail. `MEMACC` and `XCMD` are still only *decoded*, not
-//! executed, so the byte stream stays in sync.
+//! command interface, compressed/reversed DirectSound waves. `MEMACC` and
+//! every other `XCMD` sub-command are still only *decoded*, not executed, so
+//! the byte stream stays in sync.
 
 // This crate's docs cite upstream C symbols and hardware names heavily
 // (DirectSound, MP2K, SongHeader, …); backticking every prose mention adds
@@ -63,7 +69,9 @@ pub use pitch::{MIXER_RATE, SAMPLES_PER_FRAME};
 pub use sample::WaveData;
 pub use sequence::{decode_track, DecodeError, Event};
 pub use sequencer::Sequencer;
-pub use song::{Instrument, Song, ToneData};
+pub use song::{
+    rhythm_pan_from_pan_sweep, Instrument, KeySplit, Rhythm, RhythmChild, Song, ToneData, KEY_SLOTS,
+};
 pub use voice::Voice;
 
 #[cfg(test)]
