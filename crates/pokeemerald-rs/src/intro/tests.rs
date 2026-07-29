@@ -180,3 +180,65 @@ fn compose_draws_the_dialogue_box_border_even_before_any_glyph_reveals() {
 // font sheet layout constants doesn't silently desync this test file's
 // hand-picked `SHEET_WIDTH`/`SHEET_HEIGHT` from the real ones.
 const _: () = assert!(GLYPH_COUNT == 512);
+
+/// A hand-built pack, containing only a valid `font/normal/glyphs` entry --
+/// no `text-window/image/message_box` / `text-window/palette/message_box`
+/// entries at all -- written to a temp path, mirroring `assets::pack`'s own
+/// synthetic-pack test fixtures (`crates/assets/src/pack/tests.rs`'s
+/// `synthetic_pack`) at the exact byte layout `assets::pack`'s module docs
+/// specify. Regression fixture for the finding that `load_default` used to
+/// leak a fresh `AssetPack` on every call against a pack like this one
+/// (missing `message_box`) -- see `super::required_assets`'s doc comment.
+fn write_pack_without_message_box() -> std::path::PathBuf {
+    const SHEET_WIDTH: u32 = 256;
+    const SHEET_HEIGHT: u32 = 512;
+    let id = b"font/normal/glyphs";
+    let payload = vec![0u8; (SHEET_WIDTH * SHEET_HEIGHT) as usize];
+
+    let mut meta = Vec::new();
+    meta.extend_from_slice(&SHEET_WIDTH.to_le_bytes());
+    meta.extend_from_slice(&SHEET_HEIGHT.to_le_bytes());
+    meta.push(2); // bit_depth
+
+    let header_size = 8 + 4 + 4;
+    let directory_size = 2 + id.len() + 1 + 8 + 8 + meta.len();
+    let offset = header_size + directory_size;
+
+    let mut out = Vec::new();
+    out.extend_from_slice(&assets::pack::MAGIC);
+    out.extend_from_slice(&assets::pack::FORMAT_VERSION.to_le_bytes());
+    out.extend_from_slice(&1u32.to_le_bytes()); // entry_count
+    out.extend_from_slice(&u16::try_from(id.len()).unwrap().to_le_bytes());
+    out.extend_from_slice(id);
+    out.push(0); // EntryKind::Image's tag (assets::pack's own test fixture convention)
+    out.extend_from_slice(&(offset as u64).to_le_bytes());
+    out.extend_from_slice(&(payload.len() as u64).to_le_bytes());
+    out.extend_from_slice(&meta);
+    out.extend_from_slice(&payload);
+
+    let path = std::env::temp_dir().join(format!(
+        "pokeemerald-rs-intro-test-pack-no-message-box-{}.pack",
+        std::process::id()
+    ));
+    std::fs::write(&path, &out).unwrap();
+    path
+}
+
+#[test]
+fn a_pack_missing_message_box_fails_validation_without_leaking() {
+    // Finding 4 regression: `required_assets` takes a *borrowed* `&AssetPack`
+    // and is what `load_default` runs before its `Box::leak` -- calling it
+    // directly here, against a pack that is never leaked or even made
+    // `'static`, is itself the structural proof that detecting this failure
+    // does not require (and therefore cannot cause) a leak.
+    let path = write_pack_without_message_box();
+    let pack = assets::pack::AssetPack::load(&path).unwrap();
+
+    let err = super::required_assets(&pack).unwrap_err();
+    assert!(
+        matches!(err, super::IntroSceneError::Pack(_)),
+        "a pack with no message_box entry at all must fail with a Pack error, got {err:?}"
+    );
+
+    let _ = std::fs::remove_file(path);
+}

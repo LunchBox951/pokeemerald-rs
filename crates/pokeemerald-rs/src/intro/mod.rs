@@ -278,6 +278,26 @@ impl<'a> IntroScene<'a> {
     }
 }
 
+/// Fetch [`IntroScene`]'s two required entries -- the normal-weight font
+/// sheet and the dialogue frame -- out of an already-loaded `pack`, without
+/// leaking anything. Shared by [`load_default`] for both its pre-leak
+/// validation pass and its real, post-leak build (that doc comment's
+/// "validate before leak" section) -- a borrowed `pack` here, not the
+/// `'static` one [`IntroScene`] itself ultimately needs, so this alone can
+/// never be the thing that leaks.
+///
+/// # Errors
+///
+/// [`IntroSceneError::Pack`] if `pack` is missing its `font/normal/glyphs`
+/// or message-box entries (or either is malformed); [`IntroSceneError::Font`]
+/// if the font sheet fetched doesn't decode.
+fn required_assets(pack: &AssetPack) -> Result<(FontGlyphSheet<'_>, FrameAssets), IntroSceneError> {
+    let font_image = pack.font(FontId::Normal)?;
+    let sheet = FontGlyphSheet::new(font_image)?;
+    let frame = FrameAssets::from_handle(pack.message_box()?);
+    Ok((sheet, frame))
+}
+
 /// Load the pack from its default location and build the intro out of it in
 /// one step -- mirrors [`crate::title::load_default`].
 ///
@@ -289,19 +309,76 @@ impl<'a> IntroScene<'a> {
 /// need into owned buffers up front, a live `Printer` cannot be rebuilt from
 /// scratch every frame without losing its mid-page position. A one-time
 /// leak of a single, small (~150KiB), load-once-per-process pack is the
-/// pragmatic tradeoff, not a per-frame or unbounded leak.
+/// pragmatic tradeoff, not a per-frame or unbounded leak -- **provided** the
+/// pack is actually usable.
+///
+/// **Validate before leak.** This function is `pub`, and
+/// [`crate::flow::advance_scene`]'s `MainMenu` arm calls it again on every
+/// fresh A press for as long as the player keeps retrying against a
+/// still-broken pack (its own "log-or-ignore" policy) -- so every required
+/// entry ([`required_assets`]) is fetched against the freshly loaded, *not
+/// yet* leaked `pack` first. Only once that succeeds does this commit `pack`
+/// to its `'static` leak; a malformed pack (module docs' own example, a
+/// missing `message_box` entry) returns an error here without ever leaking,
+/// instead of leaking a fresh, immediately unusable [`AssetPack`] on every
+/// such call.
 ///
 /// # Errors
 ///
 /// [`IntroSceneError::Pack`] with [`IntroSceneError::is_pack_missing`] true
-/// if no pack has been extracted yet; see [`IntroScene::new`]'s callers
-/// for the other (real-pack-only) error cases.
+/// if no pack has been extracted yet; see [`required_assets`] for the other
+/// (real-pack-only) error cases.
+///
+/// # Panics
+///
+/// Never in practice: the second [`required_assets`] call re-reads the exact
+/// same, now-`'static`, bytes the first call (against the same pack, still
+/// owned locally at that point) already validated successfully -- nothing
+/// about leaking a value changes its contents.
 pub fn load_default() -> Result<IntroScene<'static>, IntroSceneError> {
-    let pack: &'static AssetPack = Box::leak(Box::new(AssetPack::load_default()?));
-    let font_image = pack.font(FontId::Normal)?;
-    let sheet = FontGlyphSheet::new(font_image)?;
-    let frame = FrameAssets::from_handle(pack.message_box()?);
+    let pack = AssetPack::load_default()?;
+    required_assets(&pack)?;
+
+    let pack: &'static AssetPack = Box::leak(Box::new(pack));
+    let (sheet, frame) =
+        required_assets(pack).expect("already validated identically against the same bytes above");
     Ok(IntroScene::new(sheet, frame, TextSpeed::Mid))
+}
+
+/// Test-only: an [`IntroScene`] already at [`IntroStatus::Finished`] (via
+/// the skip path), built the same synthetic way [`tests`]'s own fixtures
+/// are -- a blank glyph sheet plus a blank dialogue frame, no local pack
+/// needed -- but leaked to `'static` so [`crate::flow`]'s own tests can put
+/// one straight into an [`crate::flow::AppScene::Intro`], the same shape
+/// [`load_default`] would hand [`crate::flow::advance_scene`]. A tiny,
+/// one-time, `#[cfg(test)]`-only leak -- never reached in production.
+#[cfg(test)]
+pub(crate) fn synthetic_finished_scene() -> IntroScene<'static> {
+    use assets::fonts::FontImageRef;
+    use assets::pack::ImageRef;
+
+    const SHEET_WIDTH: u32 = 256;
+    const SHEET_HEIGHT: u32 = 512;
+    let pixels: &'static [u8] =
+        Box::leak(vec![0u8; (SHEET_WIDTH * SHEET_HEIGHT) as usize].into_boxed_slice());
+    let image = ImageRef {
+        width: SHEET_WIDTH,
+        height: SHEET_HEIGHT,
+        bit_depth: 2,
+        pixels,
+    };
+    let sheet = FontGlyphSheet::new(FontImageRef::new_for_tests(FontId::Normal, image))
+        .expect("this is the exact real glyph-sheet shape");
+    let frame = FrameAssets {
+        pixels: vec![0u8; 56 * 16],
+        width: 56,
+        height: 16,
+        palette: vec![Rgb888::BLACK; 16],
+    };
+    let mut scene = IntroScene::new(sheet, frame, TextSpeed::Instant);
+    let status = scene.tick(false, true); // the skip path -> immediately Finished.
+    debug_assert_eq!(status, IntroStatus::Finished);
+    scene
 }
 
 #[cfg(test)]

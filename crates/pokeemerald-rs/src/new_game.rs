@@ -127,6 +127,27 @@ pub const SPAWN_FACING: Direction = Direction::South;
 /// overworld loop.
 pub const SPAWN_MAP_ID: assets::MapId = assets::MapId("MAP_LITTLEROOT_TOWN_BRENDANS_HOUSE_2F");
 
+/// [`SPAWN_MAP_ID`]'s `MAP_GROUP` index (`crates/assets/src/map_headers.rs`'s
+/// generated `HEADERS` table, cross-checked against upstream
+/// `map_groups.json`'s `group_order`): index `1`,
+/// `gMapGroup_IndoorLittleroot` -- the group every indoor Littleroot Town map
+/// (both houses, the lab) belongs to.
+///
+/// Was previously left at `0`/`0` (module docs' pre-fix history): group `0`
+/// is `gMapGroup_TownsAndRoutes`, whose own position `0` is
+/// `MAP_PETALBURG_CITY` -- a save's [`SaveBlock1::location`] pointing there
+/// instead of the bedroom would resolve through `MapHeaderTable` to the
+/// wrong map entirely. [`spawn_location_matches_the_bedrooms_map_header_position`]
+/// cross-checks this constant against the generated table directly, so a
+/// future `assets` regeneration can't silently desync it here.
+pub const SPAWN_MAP_GROUP: i8 = 1;
+
+/// [`SPAWN_MAP_ID`]'s `MAP_NUM` index within [`SPAWN_MAP_GROUP`] (module
+/// docs): position `1` in `gMapGroup_IndoorLittleroot`
+/// (`LittlerootTown_BrendansHouse_1F` is position `0`,
+/// `LittlerootTown_BrendansHouse_2F` -- this room -- is position `1`).
+pub const SPAWN_MAP_NUM: i8 = 1;
+
 /// Build a fresh [`SaveBlock1`]/[`SaveBlock2`] pair the way upstream
 /// `NewGameInitData` (`new_game.c:149-207`) does, for the fields this
 /// workspace's save model covers (module docs' table and deviations).
@@ -144,8 +165,8 @@ pub fn init_save_blocks(rng: &mut Rng) -> (SaveBlock1, SaveBlock2) {
     };
 
     let spawn = WarpData {
-        map_group: 0,
-        map_num: 0,
+        map_group: SPAWN_MAP_GROUP,
+        map_num: SPAWN_MAP_NUM,
         warp_id: -1, // WARP_ID_NONE: not arriving via a resolved warp event.
         x: i16::try_from(SPAWN_POSITION.0).unwrap_or(0),
         y: i16::try_from(SPAWN_POSITION.1).unwrap_or(0),
@@ -161,6 +182,26 @@ pub fn init_save_blocks(rng: &mut Rng) -> (SaveBlock1, SaveBlock2) {
     };
 
     (block1, block2)
+}
+
+/// Seed [`init_save_blocks`]'s [`Rng`] draws its trainer id from when the
+/// caller has no seed of its own to supply (module docs, "Trainer id has no
+/// link-cable lower half"): this workspace has no wall-clock/hardware
+/// entropy source wired into any runtime path yet, and reaching for
+/// `std::time` here just to look more "random" would make
+/// [`init_save_blocks_for_new_game`]'s output non-deterministic for no
+/// modeled behavioural gain -- fixed, like every other RNG seed this
+/// workspace's own tests use.
+pub const NEW_GAME_RNG_SEED: u32 = 0;
+
+/// [`init_save_blocks`], seeded with [`NEW_GAME_RNG_SEED`] -- the version
+/// [`crate::flow::OverworldPhase::load_default`] actually calls at the
+/// intro -> overworld handoff (I-3, issue #149's review pass), so that
+/// caller doesn't need its own [`Rng`] import just to start a new save.
+#[must_use]
+pub fn init_save_blocks_for_new_game() -> (SaveBlock1, SaveBlock2) {
+    let mut rng = Rng::new(NEW_GAME_RNG_SEED);
+    init_save_blocks(&mut rng)
 }
 
 /// Encode `name` into the fixed-size, `0xFF`-terminated buffer
@@ -229,6 +270,52 @@ mod tests {
         assert_eq!(block1.pos.x, 7);
         assert_eq!(block1.pos.y, 1);
         assert_eq!(block1.location.warp_id, -1);
+        // Regression: this used to be left at (0, 0), which
+        // `MapHeaderTable` resolves to Petalburg City, not the bedroom --
+        // see `spawn_location_matches_the_bedrooms_map_header_position`.
+        assert_eq!(block1.location.map_group, SPAWN_MAP_GROUP);
+        assert_eq!(block1.location.map_num, SPAWN_MAP_NUM);
+    }
+
+    /// Regression for the finding that a fresh save's
+    /// [`SaveBlock1::location`] stored `(map_group, map_num) == (0, 0)`,
+    /// which `assets::MapHeaderTable` resolves to `MAP_PETALBURG_CITY`, not
+    /// [`SPAWN_MAP_ID`]'s own bedroom. Cross-checks
+    /// [`SPAWN_MAP_GROUP`]/[`SPAWN_MAP_NUM`] against the *generated*
+    /// `assets::MapHeaderTable` entry for [`SPAWN_MAP_ID`] directly (rather
+    /// than only pinning the literal `1`/`1`), so a future `assets`
+    /// regeneration that ever renumbers Littleroot's indoor group can't
+    /// silently desync this module's own copy of the position.
+    #[test]
+    fn spawn_location_matches_the_bedrooms_map_header_position() {
+        let header = assets::MapHeaderTable::new()
+            .header(SPAWN_MAP_ID)
+            .expect("SPAWN_MAP_ID must resolve in the generated map-header table");
+        assert_eq!(i8::try_from(header.group).unwrap(), SPAWN_MAP_GROUP);
+        assert_eq!(i8::try_from(header.num).unwrap(), SPAWN_MAP_NUM);
+
+        let mut rng = Rng::new(0);
+        let (block1, _) = init_save_blocks(&mut rng);
+        assert_eq!(block1.location.map_group, SPAWN_MAP_GROUP);
+        assert_eq!(block1.location.map_num, SPAWN_MAP_NUM);
+
+        // And the group/num pair must *not* still be Petalburg City's own
+        // position (group 0, num 0) -- the exact wrong-map bug this
+        // regression guards against.
+        assert_ne!((block1.location.map_group, block1.location.map_num), (0, 0));
+    }
+
+    #[test]
+    fn init_save_blocks_for_new_game_uses_the_fixed_seed() {
+        // Matches calling `init_save_blocks` directly with
+        // `Rng::new(NEW_GAME_RNG_SEED)` -- proof the convenience wrapper
+        // `crate::flow::OverworldPhase::load_default` calls doesn't
+        // silently draw from a different sequence.
+        let mut rng = Rng::new(NEW_GAME_RNG_SEED);
+        let expected = init_save_blocks(&mut rng);
+        let actual = init_save_blocks_for_new_game();
+        assert_eq!(actual.0.money, expected.0.money);
+        assert_eq!(actual.1.player_trainer_id, expected.1.player_trainer_id);
     }
 
     #[test]

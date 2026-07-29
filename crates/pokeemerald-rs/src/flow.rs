@@ -7,7 +7,13 @@
 //! function [`crate::app::App::step`] delegates to. See [`crate::app`]'s
 //! module docs for the transition diagram (`Title` -> `MainMenu` -> `Intro`
 //! -> `Overworld`) and the "log-or-ignore is fine" failure policy for a
-//! transition's own pack load.
+//! transition's own pack load. The one exception is the `Intro` ->
+//! `Overworld` transition specifically: a failed load there moves to the
+//! distinct [`AppScene::OverworldLoadFailed`] waiting state rather than
+//! back to `Intro` unchanged, so a persistently missing/broken pack is
+//! retried (and re-logged) only on a fresh confirm/skip press, not every
+//! single frame -- see that variant's own doc comment and
+//! [`should_retry_overworld_load`].
 //!
 //! [`AnimatedTitle`] is the pre-I-3 per-frame title-animation state,
 //! unchanged in shape and behaviour from before this issue (see
@@ -17,6 +23,7 @@
 
 use assets::{MapEventsTable, MapHeaderTable};
 use engine::overworld::{Direction, PlayerState};
+use engine::save::{SaveBlock1, SaveBlock2};
 use platform::{ButtonState, Buttons, Frame};
 
 use crate::frame::to_platform_frame;
@@ -40,9 +47,9 @@ pub(crate) struct AnimatedTitle {
 }
 
 /// [`crate::app::App`]'s real (windowed) game-flow state (module docs):
-/// which of the four scenes is currently active. Every variant is boxed --
-/// their sizes vary wildly (an [`AnimatedTitle`] embeds a whole
-/// [`TitleScene`]'s tile/palette data; an [`OverworldPhase`] embeds a whole
+/// which scene is currently active. Every variant is boxed -- their sizes
+/// vary wildly (an [`AnimatedTitle`] embeds a whole [`TitleScene`]'s
+/// tile/palette data; an [`OverworldPhase`] embeds a whole
 /// [`OverworldScene`]'s) -- so the enum itself stays cheap to move around
 /// (`clippy::large_enum_variant`).
 pub(crate) enum AppScene {
@@ -52,6 +59,13 @@ pub(crate) enum AppScene {
     MainMenu(Box<MainMenuScene>),
     /// Birch's speech, paging through [`crate::intro::speech`]'s text.
     Intro(Box<IntroScene<'static>>),
+    /// The intro finished, but [`OverworldPhase::load_default`] failed once
+    /// already (module docs' "log-or-ignore is fine" policy, and
+    /// [`advance_scene`]'s `Intro`/`OverworldLoadFailed` arms) -- kept
+    /// distinct from [`AppScene::Intro`] so a still-failing pack load is
+    /// retried only on a fresh confirm/skip edge, not re-attempted (and
+    /// re-logged) every single frame while parked here.
+    OverworldLoadFailed(Box<IntroScene<'static>>),
     /// The overworld loop: the player, movable, in
     /// [`crate::new_game::SPAWN_MAP_ID`].
     Overworld(Box<OverworldPhase>),
@@ -61,17 +75,30 @@ pub(crate) enum AppScene {
 /// plus the [`PlayerState`] it renders, together with the map identity
 /// needed to re-look-up that map's header and event lists (from the
 /// `'static` [`MapHeaderTable`]/[`MapEventsTable`]) every frame -- see
-/// [`OverworldPhase::step`].
+/// [`OverworldPhase::step`]. Also carries the fresh [`SaveBlock1`]/
+/// [`SaveBlock2`] pair [`new_game::init_save_blocks_for_new_game`] built for
+/// this run (starting money, cleared party/bag/event data, default
+/// name/gender -- see that function's module docs) -- the actual save-state
+/// counterpart to `player`'s in-memory position, kept alive here rather than
+/// built and discarded, since nothing yet writes it to disk
+/// (`engine::save::store::SaveStore`, out of this issue's scope).
 pub(crate) struct OverworldPhase {
     scene: OverworldScene,
     player: PlayerState,
     map_id: assets::MapId,
+    save1: SaveBlock1,
+    save2: SaveBlock2,
 }
 
 impl OverworldPhase {
-    /// Load [`crate::overworld::load_default_room`] and place the player at
+    /// Load [`crate::overworld::load_default_room`], place the player at
     /// [`new_game::SPAWN_POSITION`] (module docs on why this, not upstream's
-    /// truck sequence, is the intro's handoff target).
+    /// truck sequence, is the intro's handoff target), and build this run's
+    /// fresh save state via [`new_game::init_save_blocks_for_new_game`] --
+    /// the actual `NewGameInitData` effects (starting money, cleared
+    /// party/bag/event data), not just the in-memory spawn position, so a
+    /// future save-write path has real state to persist instead of
+    /// re-deriving it from scratch.
     fn load_default() -> Result<Self, OverworldSceneError> {
         let scene = overworld::load_default_room()?;
         let player = PlayerState::new(
@@ -79,11 +106,32 @@ impl OverworldPhase {
             new_game::SPAWN_ELEVATION,
             new_game::SPAWN_FACING,
         );
+        let (save1, save2) = new_game::init_save_blocks_for_new_game();
         Ok(Self {
             scene,
             player,
             map_id: new_game::SPAWN_MAP_ID,
+            save1,
+            save2,
         })
+    }
+
+    /// This run's freshly initialized [`SaveBlock1`] (struct docs). Exposed
+    /// for [`advance_scene`]'s one-time "new game started" log line (proving
+    /// the wiring in [`load_default`](Self::load_default) is live end to
+    /// end, the same "log-or-ignore is fine" pipeline-liveness style
+    /// [`crate::app::describe_newly_pressed`] already uses) -- no save-file
+    /// writer consumes it yet (struct docs).
+    #[must_use]
+    pub(crate) const fn save1(&self) -> &SaveBlock1 {
+        &self.save1
+    }
+
+    /// This run's freshly initialized [`SaveBlock2`] -- see
+    /// [`Self::save1`].
+    #[must_use]
+    pub(crate) const fn save2(&self) -> &SaveBlock2 {
+        &self.save2
     }
 
     /// Advance the player by one frame: a held D-pad direction (module
@@ -138,6 +186,32 @@ fn held_direction(buttons: ButtonState) -> Option<Direction> {
     }
 }
 
+/// Whether [`AppScene::OverworldLoadFailed`]'s waiting state should retry
+/// [`OverworldPhase::load_default`] this frame -- only on a *fresh* confirm
+/// (A) or skip (B) edge, the same two buttons [`AppScene::Intro`] itself
+/// reads (module docs on the finding this guards against: the previous
+/// behaviour re-attempted, and re-logged, the load every single frame while
+/// stuck here, since `IntroStatus::Finished` is sticky and was the only
+/// condition gating the attempt).
+fn should_retry_overworld_load(buttons: ButtonState) -> bool {
+    buttons.is_newly_pressed(Buttons::A) || buttons.is_newly_pressed(Buttons::B)
+}
+
+/// Log the one-time proof that `phase`'s fresh save state
+/// ([`OverworldPhase::load_default`]'s own doc comment, finding 1 of this
+/// module's review pass) actually reached the `Intro` -> `Overworld`
+/// handoff -- the same "log-or-ignore is fine" pipeline-liveness style
+/// [`crate::app::describe_newly_pressed`] already uses for input, since no
+/// save-file writer exists yet to consume this state instead.
+fn log_new_game_started(phase: &OverworldPhase) {
+    eprintln!(
+        "new game: money={} trainer_id={:02x?} gender={:?}",
+        phase.save1().money,
+        phase.save2().player_trainer_id,
+        phase.save2().player_gender,
+    );
+}
+
 /// Advance `scene` by exactly one frame given this frame's `buttons`,
 /// returning the (possibly transitioned) next scene and the frame it
 /// composed -- the pure state-transition core of
@@ -151,7 +225,11 @@ fn held_direction(buttons: ButtonState) -> Option<Direction> {
 /// composes that scene's first frame immediately, so the returned frame is
 /// always the *new* scene's -- never a stale one from the scene being left.
 /// If a transition's pack load fails, this logs and returns the *original*
-/// scene unchanged instead (module docs).
+/// scene unchanged instead (module docs) -- except `Intro` -> `Overworld`
+/// specifically, whose failure instead moves to
+/// [`AppScene::OverworldLoadFailed`] (module docs' exception, and that
+/// variant's own doc comment) so the failed attempt isn't repeated every
+/// frame.
 pub(crate) fn advance_scene(scene: AppScene, buttons: ButtonState) -> (AppScene, Box<Frame>) {
     match scene {
         AppScene::Title(mut title) => {
@@ -194,15 +272,40 @@ pub(crate) fn advance_scene(scene: AppScene, buttons: ButtonState) -> (AppScene,
             if status == IntroStatus::Finished {
                 match OverworldPhase::load_default() {
                     Ok(phase) => {
+                        log_new_game_started(&phase);
+                        let frame = phase.compose_frame();
+                        return (AppScene::Overworld(Box::new(phase)), frame);
+                    }
+                    Err(err) => {
+                        // Log once, on the attempt itself, then move to the
+                        // explicit waiting state below -- not back into
+                        // `Intro`, which would just repeat this same
+                        // attempt (and this same log line) every following
+                        // frame, since `status` stays `Finished` forever
+                        // once reached (`IntroScene::tick`'s own contract).
+                        eprintln!("overworld: {err} -- staying on the intro");
+                        let frame = intro_scene.compose_frame();
+                        return (AppScene::OverworldLoadFailed(intro_scene), frame);
+                    }
+                }
+            }
+
+            let frame = intro_scene.compose_frame();
+            (AppScene::Intro(intro_scene), frame)
+        }
+        AppScene::OverworldLoadFailed(intro_scene) => {
+            if should_retry_overworld_load(buttons) {
+                match OverworldPhase::load_default() {
+                    Ok(phase) => {
+                        log_new_game_started(&phase);
                         let frame = phase.compose_frame();
                         return (AppScene::Overworld(Box::new(phase)), frame);
                     }
                     Err(err) => eprintln!("overworld: {err} -- staying on the intro"),
                 }
             }
-
             let frame = intro_scene.compose_frame();
-            (AppScene::Intro(intro_scene), frame)
+            (AppScene::OverworldLoadFailed(intro_scene), frame)
         }
         AppScene::Overworld(mut phase) => {
             phase.step(buttons);
@@ -214,8 +317,11 @@ pub(crate) fn advance_scene(scene: AppScene, buttons: ButtonState) -> (AppScene,
 
 #[cfg(test)]
 mod tests {
-    use super::{advance_scene, held_direction, AnimatedTitle, AppScene, OverworldPhase};
-    use crate::intro::IntroStatus;
+    use super::{
+        advance_scene, held_direction, should_retry_overworld_load, AnimatedTitle, AppScene,
+        OverworldPhase,
+    };
+    use crate::intro::{self, IntroStatus};
     use crate::new_game;
     use engine::overworld::Direction;
     use platform::{ButtonState, Buttons};
@@ -256,6 +362,61 @@ mod tests {
         );
         assert_eq!(held_direction(held(Buttons::RIGHT)), Some(Direction::East));
         assert_eq!(held_direction(ButtonState::new()), None);
+    }
+
+    /// Finding 3 regression: `AppScene::OverworldLoadFailed` must retry
+    /// `OverworldPhase::load_default` only on a fresh confirm/skip edge, not
+    /// merely because a frame elapsed -- an ordinary held button (already
+    /// pressed on a previous frame) must not count.
+    #[test]
+    fn should_retry_overworld_load_only_on_a_fresh_confirm_or_skip_edge() {
+        assert!(!should_retry_overworld_load(ButtonState::new()));
+        assert!(should_retry_overworld_load(pressed(Buttons::A)));
+        assert!(should_retry_overworld_load(pressed(Buttons::B)));
+        assert!(
+            !should_retry_overworld_load(held(Buttons::A)),
+            "an already-held A (not a fresh edge) must not trigger a retry"
+        );
+        assert!(!should_retry_overworld_load(pressed(Buttons::START)));
+    }
+
+    /// Finding 3 regression: a failed `Intro` -> `Overworld` transition must
+    /// leave `AppScene::Intro` for the explicit `AppScene::OverworldLoadFailed`
+    /// waiting state after exactly one attempt -- not loop retrying (and
+    /// re-logging) from inside `AppScene::Intro` every frame, which is what
+    /// happens if the transition is only ever gated on
+    /// `IntroStatus::Finished` (sticky forever once reached).
+    ///
+    /// No local pack is ever present in this crate's own `cargo test`
+    /// environment (`assets-pack/` isn't written by anything in this repo --
+    /// see `crate::title::tests::load_default_reports_pack_missing_when_no_pack_is_extracted`
+    /// for the identical guard/rationale), so `OverworldPhase::load_default`
+    /// reliably fails here, exercising the real failure path without
+    /// `#[ignore]`. If a local pack *is* present, this test steps aside
+    /// entirely rather than asserting the wrong thing.
+    #[test]
+    fn a_failed_overworld_load_waits_instead_of_retrying_every_frame() {
+        if assets::pack::AssetPack::default_path().is_file() {
+            return;
+        }
+
+        let scene = AppScene::Intro(Box::new(intro::synthetic_finished_scene()));
+
+        let (after_first, _frame) = advance_scene(scene, ButtonState::new());
+        assert!(
+            matches!(after_first, AppScene::OverworldLoadFailed(_)),
+            "a failed load must leave `Intro` for the explicit waiting state"
+        );
+
+        // No input edge across further frames -> stay waiting, not attempt
+        // the load again (nor bounce back to `Intro`).
+        let (after_second, _frame) = advance_scene(after_first, ButtonState::new());
+        assert!(matches!(after_second, AppScene::OverworldLoadFailed(_)));
+
+        // A fresh confirm edge retries the load -- still fails (no pack),
+        // but must land back in the same waiting state, not panic.
+        let (after_retry, _frame) = advance_scene(after_second, pressed(Buttons::A));
+        assert!(matches!(after_retry, AppScene::OverworldLoadFailed(_)));
     }
 
     /// I-3 scene-flow test: title screen, Start newly pressed -> main menu.
@@ -336,6 +497,19 @@ mod tests {
         assert_eq!(phase.player.elevation(), new_game::SPAWN_ELEVATION);
         assert_eq!(phase.player.facing(), new_game::SPAWN_FACING);
         assert_eq!(phase.map_id, new_game::SPAWN_MAP_ID);
+
+        // Finding 1: the transition must actually call
+        // `new_game::init_save_blocks_for_new_game` and retain its result,
+        // not just the player's in-memory position -- pin the same
+        // `NewGameInitData` effects `crate::new_game`'s own tests already
+        // check against `init_save_blocks` directly.
+        assert_eq!(phase.save1.money, new_game::STARTING_MONEY);
+        assert_eq!(phase.save1.player_party_count, 0);
+        assert_eq!(phase.save1.bag, engine::save::Bag::default());
+        assert_eq!(phase.save1.location.map_group, new_game::SPAWN_MAP_GROUP);
+        assert_eq!(phase.save1.location.map_num, new_game::SPAWN_MAP_NUM);
+        assert_eq!(phase.save2.player_gender, new_game::DEFAULT_PLAYER_GENDER);
+        assert_eq!(phase.save2.encryption_key, 0);
     }
 
     /// I-3 scene-flow test: the intro's own paged advance-on-confirm (not
@@ -369,18 +543,15 @@ mod tests {
     #[test]
     #[ignore = "needs a local pack: run `cargo xtask extract` first"]
     fn overworld_movement_input_turns_the_player() {
-        let scene = crate::overworld::load_default_room().expect("run `cargo xtask extract` first");
-        let player = engine::overworld::PlayerState::new(
-            new_game::SPAWN_POSITION,
-            new_game::SPAWN_ELEVATION,
-            new_game::SPAWN_FACING,
+        // `OverworldPhase::load_default` itself (not a hand-built struct
+        // literal) so this also exercises the save-state wiring (finding
+        // 1) the same way production reaches this state.
+        let mut phase = OverworldPhase::load_default().expect("run `cargo xtask extract` first");
+        assert_eq!(
+            phase.player.facing(),
+            Direction::South,
+            "starts facing south"
         );
-        assert_eq!(player.facing(), Direction::South, "starts facing south");
-        let mut phase = OverworldPhase {
-            scene,
-            player,
-            map_id: new_game::SPAWN_MAP_ID,
-        };
 
         phase.step(held(Buttons::UP));
 

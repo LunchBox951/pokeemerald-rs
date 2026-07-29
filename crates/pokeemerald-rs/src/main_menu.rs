@@ -20,8 +20,11 @@
 //!
 //! # Rendering
 //!
-//! A small text window, `AssetPack::text_window_frame(0)`'s selectable
-//! border (`window::border_tiles`, matching upstream's own
+//! A small text window: [`MainMenuScene::compose`] first fills the content
+//! rect with the window's own background colour (`content_fill_color`,
+//! upstream's `FillWindowPixelBuffer(windowId, PIXEL_FILL(1))`), then draws
+//! `AssetPack::text_window_frame(0)`'s selectable border
+//! (`window::border_tiles`, matching upstream's own
 //! `DrawTextBorderOuter`-shaped `STD_WINDOW` frames the item list sits in --
 //! see `engine::text::window`'s module docs) around the label glyphs,
 //! rendered once at construction time via a throwaway
@@ -146,6 +149,22 @@ impl MainMenuScene {
         let mut fb = Framebuffer::new();
         fb.fill(Rgb888::BLACK);
 
+        // Fill the content rect with the window's own background colour
+        // *before* the border/label (module docs on `textbox::fill_rect`:
+        // upstream's `FillWindowPixelBuffer(windowId, PIXEL_FILL(1))`).
+        // Without this the interior stays this function's own black
+        // backdrop, and the label's dark foreground colour
+        // (`textbox::GLYPH_COLORS`) becomes unreadably low-contrast against
+        // it.
+        let content_origin = (BOX_LEFT * TILE_PX, BOX_TOP * TILE_PX);
+        textbox::fill_rect(
+            &mut fb,
+            content_origin,
+            BOX_WIDTH * TILE_PX,
+            BOX_HEIGHT * TILE_PX,
+            content_fill_color(&self.frame),
+        );
+
         let tiles = msgwin::border_tiles(BOX_LEFT, BOX_TOP, BOX_WIDTH, BOX_HEIGHT);
         textbox::blit_frame_tiles(&mut fb, &tiles, self.frame.image(), &self.frame.palette);
 
@@ -178,6 +197,23 @@ impl MainMenuScene {
 pub fn load_default() -> Result<MainMenuScene, MainMenuSceneError> {
     let pack = AssetPack::load_default()?;
     MainMenuScene::from_pack(&pack)
+}
+
+/// The window-content fill colour [`MainMenuScene::compose`] paints the
+/// label's content rect with before drawing the border/label: upstream's
+/// `FillWindowPixelBuffer(windowId, PIXEL_FILL(1))`
+/// (`pokeemerald/src/main_menu.c:2231`/`2269`) fills with palette index `1`
+/// of the window's own frame palette, not an invented colour -- this reads
+/// that same index out of the real extracted [`FrameAssets::palette`]
+/// (already-converted [`Rgb888`], see that type's own docs) rather than
+/// hand-picking an RGB constant. Falls back to
+/// [`Rgb888::BLACK`](rendering::Rgb888::BLACK) only if `frame`'s palette is
+/// shorter than 2 entries -- unreachable against a real pack (every
+/// [`assets::pack::AssetPack::text_window_frame`] palette is exactly 16
+/// colours), kept only so this never panics against a hand-built test
+/// fixture.
+fn content_fill_color(frame: &FrameAssets) -> Rgb888 {
+    frame.palette.get(1).copied().unwrap_or(Rgb888::BLACK)
 }
 
 /// Drive a throwaway [`Printer`] at [`TextSpeed::Instant`] to completion over
@@ -234,6 +270,65 @@ mod tests {
         assert!(
             glyphs[1].x > glyphs[0].x,
             "glyphs must advance left to right"
+        );
+    }
+
+    /// Finding 5 regression: the content rect must be filled with the
+    /// window's own background colour (palette index 1, module docs on
+    /// `content_fill_color`) *before* the border/label draw, not left as
+    /// the framebuffer's own black backdrop -- otherwise the label's dark
+    /// foreground colour (`textbox::GLYPH_COLORS`) is unreadable against it.
+    #[test]
+    fn compose_fills_the_content_rect_with_the_window_background_color() {
+        let light_background = Rgb888 {
+            r: 248,
+            g: 248,
+            b: 248,
+        };
+        let mut palette = vec![Rgb888::BLACK; 16];
+        palette[1] = light_background;
+        let frame = FrameAssets {
+            pixels: vec![0u8; (24 * 24) as usize],
+            width: 24,
+            height: 24,
+            palette,
+        };
+        let scene = MainMenuScene {
+            frame,
+            glyphs: Vec::new(),
+        };
+
+        let fb = scene.compose();
+
+        // A pixel well inside the content rect, clear of the border ring
+        // (module docs: `msgwin::border_tiles` only draws the ring, never
+        // the interior) must be the window's own background colour.
+        let x = usize::try_from(BOX_LEFT * TILE_PX + 2).unwrap();
+        let y = usize::try_from(BOX_TOP * TILE_PX + 2).unwrap();
+        assert_eq!(fb.pixel(x, y), Some(light_background));
+    }
+
+    #[test]
+    fn content_fill_color_reads_palette_index_one() {
+        let mut palette = vec![Rgb888::BLACK; 16];
+        palette[1] = Rgb888 {
+            r: 10,
+            g: 20,
+            b: 30,
+        };
+        let frame = FrameAssets {
+            pixels: Vec::new(),
+            width: 0,
+            height: 0,
+            palette,
+        };
+        assert_eq!(
+            content_fill_color(&frame),
+            Rgb888 {
+                r: 10,
+                g: 20,
+                b: 30
+            }
         );
     }
 

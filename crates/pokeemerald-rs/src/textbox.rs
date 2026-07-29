@@ -192,6 +192,32 @@ pub(crate) fn palette_colors(raw: assets::pack::PaletteRef<'_>) -> Vec<Rgb888> {
         .collect()
 }
 
+/// Fill a `width`x`height` pixel rectangle at `origin` solid `color` --
+/// upstream's `FillWindowPixelBuffer(windowId, PIXEL_FILL(n))`
+/// (`pokeemerald/src/window.c`), the window-content fill every standard/
+/// selectable window performs *before* drawing its border/text
+/// (`pokeemerald/src/main_menu.c:2231`/`2269`,
+/// `WindowFunc_DrawStandardFrame`-style callers in `menu.c`). Needed because
+/// [`blit_frame_tiles`] only ever draws a window's border *ring*
+/// ([`window::border_tiles`](msgwin::border_tiles)'s own docs: "the
+/// content rect's own fill is a separate concern, left to the caller") --
+/// without this, a window's interior stays whatever the framebuffer already
+/// held beneath it, which for every caller in this crate is opaque black
+/// (each `compose`'s own `fb.fill(Rgb888::BLACK)`).
+pub(crate) fn fill_rect(
+    fb: &mut Framebuffer,
+    origin: (i32, i32),
+    width: i32,
+    height: i32,
+    color: Rgb888,
+) {
+    for dy in 0..height {
+        for dx in 0..width {
+            set_pixel_checked(fb, origin.0 + dx, origin.1 + dy, color);
+        }
+    }
+}
+
 /// [`Framebuffer::set_pixel`], skipping silently instead of panicking when
 /// `(x, y)` falls outside the visible 240x160 screen -- a scrolled dialogue
 /// box or an off-screen glyph column is expected, not a bug (mirrors
