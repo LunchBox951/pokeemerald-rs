@@ -25730,10 +25730,7 @@
           "status": "rewritten"
         },
         "TONEDATA_TYPE_FIX": {
-          "reason": "m4a.c's fixed-rate dispatch use of TONEDATA_TYPE_FIX (SampleFreqSet-driven, m4a.c:1187; the macro itself is m4a_internal.h:50) reimplemented as Voice::fixed_rate forcing the phase step to pitch::FRAC_ONE, which also reproduces the un-interpolated raw-sample reads as a side effect (S-3 slice 3). The assembly fast path lives in m4a_1.s (SoundMainRAM) and is tracked there.",
-          "rust_target": "crates/audio/src/voice.rs",
-          "spec": "S-3",
-          "status": "rewritten"
+          "status": "pending"
         },
         "TrkVolPitSet": {
           "reason": "TrkVolPitSet vol/pan+pitch resolution re-implemented as sequencer::track_volume/track_pitch (S-3 slice 1); slice 2 extends both with the MOD/MODT modM folding (amplitude/pan/pitch vibrato).",
@@ -25762,6 +25759,12 @@
       "artifacts": {
         "ChnVolSetAsm": {
           "reason": "ChnVolSetAsm (m4a_1.s:1508) right/left channel-volume formula reimplemented as voice::channel_volume + voice::pan_terms, including the rhythm-pan override (0x80+rhythmPan / 0x7F-rhythmPan) that a rhythm indirection's child pan_sweep byte can set (S-3 slice 3).",
+          "rust_target": "crates/audio/src/voice.rs",
+          "spec": "S-3",
+          "status": "rewritten"
+        },
+        "TONEDATA_TYPE_FIX": {
+          "reason": "SoundMainRAM's fixed-rate DirectSound branch (m4a_1.s:498: tst TONEDATA_TYPE_FIX; movne r8, 0x800000 forces a 1:1 phase step) reimplemented as Voice::fixed_rate forcing the phase step to pitch::FRAC_ONE, which also reproduces the branch's un-interpolated raw-sample reads as a side effect (S-3 slice 3). Covers only this FIX branch, not the rest of SoundMainRAM. The separate CGB-side use of the flag (m4a.c:1187 SOUNDBIAS PWM-rate frequency rounding) is NOT implemented and stays pending on src/m4a.c.",
           "rust_target": "crates/audio/src/voice.rs",
           "spec": "S-3",
           "status": "rewritten"
