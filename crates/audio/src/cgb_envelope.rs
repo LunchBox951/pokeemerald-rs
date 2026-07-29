@@ -277,7 +277,7 @@ impl CgbEnvelope {
     /// `sustain_goal` (`envelope_sustain`, `:1113`).
     fn enter_sustain_start(&mut self) {
         if self.adsr.sustain == 0 {
-            self.silence();
+            self.enter_echo_or_silence();
             return;
         }
         self.volume = self.sustain_goal;
@@ -708,6 +708,48 @@ mod tests {
         assert!(env.is_active());
         env.step(); // old==1 < 2 -> retire
         assert!(!env.is_active());
+    }
+
+    #[test]
+    fn zero_sustain_with_pseudo_echo_enters_the_tail() {
+        // `envelope_sustain_start` with `sustain == 0` routes through
+        // `envelope_pseudoecho_start` (`m4a.c:1129`), so a configured echo
+        // floor must hold there instead of the note vanishing on arrival —
+        // same tail contract the release paths pin above.
+        let adsr = CgbAdsr {
+            attack: 0,
+            decay: 0,
+            sustain: 0,
+            release: 0,
+        };
+        let mut env = CgbEnvelope::new(adsr, 8, 128, 2);
+        env.step(); // instant attack+decay -> sustain start with sustain == 0
+                    // floor = (8*128+255)>>8 = 4
+        assert_eq!(env.volume(), 4, "zero sustain must land on the echo floor");
+        assert!(
+            env.is_active(),
+            "an echo floor must hold, not silence outright"
+        );
+        env.step(); // echo_length 2 -> 1
+        assert!(env.is_active());
+        env.step(); // old==1 < 2 -> retire
+        assert!(!env.is_active());
+    }
+
+    #[test]
+    fn zero_sustain_with_no_echo_still_silences_at_sustain_start() {
+        // The no-echo (xIECV unset) zero-sustain note keeps its original
+        // fate: it retires the frame decay lands on the sustain start.
+        let adsr = CgbAdsr {
+            attack: 0,
+            decay: 0,
+            sustain: 0,
+            release: 0,
+        };
+        let mut env = CgbEnvelope::new(adsr, 8, 0, 0);
+        env.step();
+        assert!(!env.is_active());
+        assert_eq!(env.volume(), 0);
     }
 
     #[test]
