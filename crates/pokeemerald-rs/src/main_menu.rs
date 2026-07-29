@@ -172,7 +172,19 @@ impl MainMenuScene {
             BOX_LEFT * TILE_PX + LABEL_INSET_X,
             BOX_TOP * TILE_PX + LABEL_INSET_Y,
         );
-        textbox::blit_glyphs(&mut fb, &self.glyphs, origin);
+        // The content rect's remaining size *from `origin`* (already
+        // shifted in by the label inset), so a label glyph is still clipped
+        // to the true content rect rather than the inset origin's own,
+        // slightly larger, box (module docs on `textbox::blit_glyphs`'s
+        // `content_size`). This label never scrolls (module docs: menu
+        // labels print instantly, no `\l`/`\p` tokens), so the clip is
+        // inert today -- kept correct anyway rather than passing a
+        // deliberately loose bound.
+        let content_size = (
+            BOX_WIDTH * TILE_PX - LABEL_INSET_X,
+            BOX_HEIGHT * TILE_PX - LABEL_INSET_Y,
+        );
+        textbox::blit_glyphs(&mut fb, &self.glyphs, origin, content_size);
 
         fb
     }

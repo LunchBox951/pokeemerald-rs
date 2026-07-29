@@ -138,7 +138,8 @@ impl OverworldPhase {
     /// docs' [`held_direction`]) attempts a step/turn against a
     /// [`engine::overworld::MapRuntime`] rebuilt fresh this call (mirroring
     /// [`OverworldScene::compose`]'s own "no persisted borrow" pattern --
-    /// see the module docs), then the walk-animation timer always ticks.
+    /// see the module docs), then the walk-animation timer advances (module
+    /// docs on [`advance_player_one_frame`]'s "preserve progress 0" rule).
     /// Silently does nothing if this map's header/events can't be found in
     /// the `'static` tables (unreachable for [`new_game::SPAWN_MAP_ID`]
     /// against a real extraction).
@@ -149,10 +150,15 @@ impl OverworldPhase {
             MapEventsTable::new().resolve(self.map_id),
         ) {
             let runtime = self.scene.runtime(self.map_id, header, events);
-            let no_connections = |_: assets::MapId| -> Option<(u16, u16)> { None };
-            let _ = self.player.step(direction, &runtime, &no_connections);
+            advance_player_one_frame(&mut self.player, direction, &runtime);
+        } else if self.player.in_transit() {
+            // No runtime to step against this frame (unreachable for
+            // `new_game::SPAWN_MAP_ID` against a real extraction) -- still
+            // drain an already-in-progress walk animation rather than
+            // freezing it, matching [`advance_player_one_frame`]'s own
+            // "tick only when already mid-transit" rule.
+            self.player.tick();
         }
-        self.player.tick();
     }
 
     /// [`OverworldScene::compose_frame`] against this phase's current
@@ -183,6 +189,41 @@ fn held_direction(buttons: ButtonState) -> Option<Direction> {
         Some(Direction::East)
     } else {
         None
+    }
+}
+
+/// Feed one input poll to `player` against `runtime`, preserving
+/// `step_progress() == 0` through the first frame a new step is accepted.
+///
+/// [`PlayerState::step`] itself sets a freshly-started step's progress to
+/// `0` (`StepOutcome::Advanced` sets `transit_frames = Some(0)`), but
+/// [`PlayerState::tick`] must not also run within that same call -- doing
+/// so would advance progress to `1` before this frame's own composition
+/// ever sees it, so the very first rendered frame of a step already shows
+/// progress `1` instead of `0`. [`crate::overworld::viewport`]'s own
+/// scroll-lag math (`build_tilemaps`'s module docs) relies on exactly one
+/// composed frame at progress `0` to cancel [`PlayerState::position`]'s
+/// one-tile logical jump (`position` already holds the *destination* tile
+/// the instant a step is accepted); skipping that frame makes every step
+/// visibly jump one pixel instead of walking smoothly.
+///
+/// Ticking only when `player` was *already* mid-transit *before* this call
+/// reproduces the same "advance after presenting, not before" shape
+/// [`AnimatedTitle`]'s own per-frame handling already uses (module docs'
+/// "Animating the real title screen" section in [`crate::app`]) -- one call
+/// always composes the state it just produced, tick or no tick, and the
+/// timer only ever advances a state some earlier call already rendered
+/// once.
+fn advance_player_one_frame(
+    player: &mut PlayerState,
+    direction: Option<Direction>,
+    runtime: &engine::overworld::MapRuntime<'_>,
+) {
+    let was_in_transit = player.in_transit();
+    let no_connections = |_: assets::MapId| -> Option<(u16, u16)> { None };
+    let _ = player.step(direction, runtime, &no_connections);
+    if was_in_transit {
+        player.tick();
     }
 }
 
@@ -318,12 +359,13 @@ pub(crate) fn advance_scene(scene: AppScene, buttons: ButtonState) -> (AppScene,
 #[cfg(test)]
 mod tests {
     use super::{
-        advance_scene, held_direction, should_retry_overworld_load, AnimatedTitle, AppScene,
-        OverworldPhase,
+        advance_player_one_frame, advance_scene, held_direction, should_retry_overworld_load,
+        AnimatedTitle, AppScene, OverworldPhase,
     };
     use crate::intro::{self, IntroStatus};
     use crate::new_game;
-    use engine::overworld::Direction;
+    use assets::{MapEvents, MapHeader, MapId, MapLayout, MetatileCell};
+    use engine::overworld::{Direction, MapRuntime, PlayerState};
     use platform::{ButtonState, Buttons};
 
     fn pressed(button: Buttons) -> ButtonState {
@@ -339,6 +381,132 @@ mod tests {
         state.update(button);
         state.update(button);
         state
+    }
+
+    /// A small, open (no collision anywhere), leaked-`'static` flat map --
+    /// mirrors `engine::overworld::player::tests::flat_runtime` (that
+    /// module's own fixture, private to its crate) so
+    /// [`advance_player_one_frame`] is testable against a real
+    /// [`MapRuntime`] without needing a local asset pack (`OverworldScene`,
+    /// unlike `MapRuntime`, is pack-backed -- see [`OverworldPhase`]'s own
+    /// pack-dependent, `#[ignore]`d tests below).
+    fn flat_runtime(width: u16, height: u16) -> MapRuntime<'static> {
+        let mut bytes = Vec::with_capacity(usize::from(width) * usize::from(height) * 2);
+        for _ in 0..width * height {
+            let raw = MetatileCell {
+                metatile_id: 1,
+                collision: 0,
+                elevation: 3,
+            }
+            .pack();
+            bytes.extend_from_slice(&raw.to_le_bytes());
+        }
+        let bytes: &'static [u8] = Box::leak(bytes.into_boxed_slice());
+
+        let header: &'static MapHeader = Box::leak(Box::new(MapHeader {
+            id: MapId("MAP_TEST"),
+            group: 0,
+            num: 0,
+            name: "MapTest",
+            layout: assets::LayoutId("MAP_TEST"),
+            music: assets::MusicId(0),
+            region_map_section: assets::RegionMapSectionId("MAPSEC_NONE"),
+            requires_flash: false,
+            weather: assets::Weather::None,
+            map_type: assets::MapType::Route,
+            allow_bike: true,
+            allow_escape: true,
+            allow_run: true,
+            show_name: false,
+            battle_scene: assets::BattleScene::Normal,
+            connections: &[],
+        }));
+        let events: &'static MapEvents = Box::leak(Box::new(MapEvents {
+            id: MapId("MAP_TEST"),
+            shared_events_map: None,
+            object_events: &[],
+            warp_events: &[],
+            coord_events: &[],
+            bg_events: &[],
+        }));
+
+        let layout: &'static MapLayout = Box::leak(Box::new(MapLayout {
+            id: assets::LayoutId("MAP_TEST"),
+            name: "MapTest",
+            width,
+            height,
+            primary_tileset: "gTileset_General",
+            secondary_tileset: "gTileset_General",
+        }));
+        let grid = layout.grid(bytes).unwrap();
+
+        MapRuntime::new(
+            MapId("MAP_TEST"),
+            header,
+            events,
+            grid,
+            assets::MetatileAttributeTable::new(&[]),
+            assets::MetatileAttributeTable::new(&[]),
+        )
+    }
+
+    /// Finding 1 regression (Codex re-review): the first frame composed
+    /// after a step begins must see `step_progress() == 0` -- not `1` --
+    /// or `crate::overworld::viewport::build_tilemaps`'s scroll-lag math
+    /// (which relies on exactly one `0`-progress frame to cancel
+    /// `PlayerState::position`'s already-moved-to-the-destination-tile
+    /// jump) skips straight to a partially-scrolled frame, visibly
+    /// hopping the camera one pixel at the start of every step.
+    #[test]
+    fn advance_player_one_frame_preserves_step_progress_zero_on_the_frame_a_step_begins() {
+        let runtime = flat_runtime(5, 5);
+        let mut player = PlayerState::new((2, 2), 3, Direction::South);
+
+        // Facing South already; a held South poll steps immediately (no
+        // turn-in-place first, since the direction already matches facing).
+        advance_player_one_frame(&mut player, Some(Direction::South), &runtime);
+        assert_eq!(player.position(), (2, 3), "the step must have landed");
+        assert!(player.in_transit());
+        assert_eq!(
+            player.step_progress(),
+            0,
+            "the frame that just started a step must still render progress 0"
+        );
+
+        // The *next* frame is the one that should see the timer advance.
+        advance_player_one_frame(&mut player, Some(Direction::South), &runtime);
+        assert_eq!(
+            player.step_progress(),
+            1,
+            "the following frame is where the walk-animation timer first advances"
+        );
+
+        // Draining the rest of the transit reaches exactly
+        // `WALK_FRAMES_PER_TILE` composed progress values (0..=15) before
+        // settling, matching `engine::overworld::WALK_FRAMES_PER_TILE`.
+        for expected in 2..engine::overworld::WALK_FRAMES_PER_TILE {
+            advance_player_one_frame(&mut player, Some(Direction::South), &runtime);
+            assert_eq!(player.step_progress(), expected);
+        }
+        advance_player_one_frame(&mut player, Some(Direction::South), &runtime);
+        assert!(!player.in_transit(), "the transit must have settled by now");
+    }
+
+    /// A player that never moves (`Idle`/`Turned`/`Blocked`, never
+    /// `Advanced`) must never spuriously start ticking -- `tick` is a
+    /// documented no-op while `transit_frames` is `None`, but this pins
+    /// that the "only tick when already mid-transit" guard doesn't somehow
+    /// suppress movement or turning either.
+    #[test]
+    fn advance_player_one_frame_turning_in_place_never_enters_transit() {
+        let runtime = flat_runtime(5, 5);
+        let mut player = PlayerState::new((2, 2), 3, Direction::South);
+
+        advance_player_one_frame(&mut player, Some(Direction::East), &runtime);
+        assert_eq!(player.facing(), Direction::East, "must have turned");
+        assert_eq!(player.position(), (2, 2), "a turn must not move the tile");
+        assert!(!player.in_transit());
+        assert_eq!(player.step_progress(), 0);
     }
 
     #[test]

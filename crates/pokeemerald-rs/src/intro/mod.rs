@@ -75,6 +75,15 @@ const BOX_SCREEN_ORIGIN: (i32, i32) = (
     engine::text::window::STANDARD_TILEMAP_TOP * 8,
 );
 
+/// `MessageBoxLayout::STANDARD`'s content rect size, converted to pixels
+/// (tile -> 8px), for [`textbox::blit_glyphs`]'s `content_size` -- clips a
+/// scrolled-past-the-top-edge glyph (module docs there) to this box instead
+/// of letting it paint anywhere else in the framebuffer.
+const BOX_CONTENT_SIZE_PX: (i32, i32) = (
+    engine::text::window::STANDARD_CONTENT_WIDTH * 8,
+    engine::text::window::STANDARD_CONTENT_HEIGHT * 8,
+);
+
 /// Why building [`IntroScene`] failed.
 ///
 /// Concrete per-crate-boundary enum `(oop-boundaries)`, mirroring
@@ -264,7 +273,12 @@ impl<'a> IntroScene<'a> {
 
         let tiles = MessageBoxLayout::STANDARD.frame_tiles();
         textbox::blit_frame_tiles(&mut fb, &tiles, self.frame.image(), &self.frame.palette);
-        textbox::blit_glyphs(&mut fb, &self.revealed, BOX_SCREEN_ORIGIN);
+        textbox::blit_glyphs(
+            &mut fb,
+            &self.revealed,
+            BOX_SCREEN_ORIGIN,
+            BOX_CONTENT_SIZE_PX,
+        );
 
         fb
     }

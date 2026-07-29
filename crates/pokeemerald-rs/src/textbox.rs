@@ -89,7 +89,28 @@ pub(crate) fn blit_frame_tiles(
     sheet: ImageRef<'_>,
     palette: &[Rgb888],
 ) {
-    for tile in tiles {
+    for (tile_index, tile) in tiles.iter().enumerate() {
+        // Resolve final tile placement before blitting: some layouts (e.g.
+        // `MessageBoxLayout::frame_tiles`'s own documented "last write
+        // wins" bottom-border-over-fill overlap) deliberately list more
+        // than one `FrameTile` for the same `(col, row)` cell, mirroring
+        // upstream's own sequential `FillBgTilemapBufferRect` calls
+        // reassigning one tilemap cell to a different source tile. A GBA
+        // tilemap cell only ever shows its *most recently assigned* tile in
+        // full -- never a per-pixel blend of two -- so an earlier tile's
+        // opaque pixels must not keep showing through a later tile's own
+        // transparent (index 0) ones at a shared cell. Skipping every
+        // non-final write for a cell here (rather than blitting each tile
+        // in list order and merely skipping transparent pixels, which would
+        // leave exactly that stale-pixel artifact) reproduces the
+        // one-tile-per-cell rule directly.
+        let is_final_write_for_cell = !tiles[tile_index + 1..]
+            .iter()
+            .any(|later| later.col == tile.col && later.row == tile.row);
+        if !is_final_write_for_cell {
+            continue;
+        }
+
         let Some(pixels) = msgwin::tile_pixels_flipped(sheet, tile.tile, tile.v_flip) else {
             continue;
         };
@@ -97,11 +118,11 @@ pub(crate) fn blit_frame_tiles(
         let origin_y = tile.row * i32::try_from(TILE).unwrap_or(0);
         for local_y in 0..TILE {
             for local_x in 0..TILE {
-                let index = usize::from(pixels[local_y * TILE + local_x]);
-                if index == 0 {
+                let pixel_index = usize::from(pixels[local_y * TILE + local_x]);
+                if pixel_index == 0 {
                     continue;
                 }
-                let Some(&color) = palette.get(index) else {
+                let Some(&color) = palette.get(pixel_index) else {
                     continue;
                 };
                 let (Ok(dx), Ok(dy)) = (i32::try_from(local_x), i32::try_from(local_y)) else {
@@ -116,8 +137,31 @@ pub(crate) fn blit_frame_tiles(
 /// Blit every already-revealed glyph in `glyphs` into `fb`, offset by
 /// `origin` (the text window's own top-left pixel position on screen --
 /// [`engine::text::render::Printer`]'s coordinates are window-local, see its
-/// module docs). Uses the fixed [`GLYPH_COLORS`] mapping (module docs).
-pub(crate) fn blit_glyphs(fb: &mut Framebuffer, glyphs: &[RevealedGlyph], origin: (i32, i32)) {
+/// module docs) and clipped to `content_size` (`(width, height)` in pixels,
+/// window-local like `g.x`/`g.y` themselves -- the window's own content
+/// rect, e.g. [`engine::text::window::MessageBoxLayout::content_width`]/
+/// `content_height` converted to pixels).
+///
+/// This clip matters most during a `\l` prompt scroll
+/// ([`crate::intro::IntroScene::tick`]'s `TickEvent::Scrolling` arm, which
+/// shifts every already-revealed glyph's `g.y` upward): without it, a
+/// glyph's now-negative window-local `y` still lands on a valid
+/// *framebuffer* pixel (just above the window, e.g. over its own top
+/// border), so the outgoing line stays visible above the box instead of
+/// scrolling out of it. Mirrors upstream `CopyGlyphToWindow`
+/// (`pokeemerald/src/text.c`), which clamps `glyphWidth`/`glyphHeight`
+/// against `template->width * 8 - currentX` / `template->height * 8 -
+/// currentY` before ever copying a pixel -- a glyph can never draw outside
+/// its own window's pixel buffer there either, since `ScrollWindow`
+/// (`pokeemerald/src/window.c`) only ever shifts bytes *within* that
+/// same fixed-size buffer `(behavioral-fidelity)`. Uses the fixed
+/// [`GLYPH_COLORS`] mapping (module docs).
+pub(crate) fn blit_glyphs(
+    fb: &mut Framebuffer,
+    glyphs: &[RevealedGlyph],
+    origin: (i32, i32),
+    content_size: (i32, i32),
+) {
     for g in glyphs {
         for local_y in 0..GLYPH_DIM {
             for local_x in 0..GLYPH_DIM {
@@ -128,7 +172,12 @@ pub(crate) fn blit_glyphs(fb: &mut Framebuffer, glyphs: &[RevealedGlyph], origin
                 let (Ok(dx), Ok(dy)) = (i32::try_from(local_x), i32::try_from(local_y)) else {
                     continue;
                 };
-                set_pixel_checked(fb, origin.0 + g.x + dx, origin.1 + g.y + dy, *color);
+                let px = g.x + dx;
+                let py = g.y + dy;
+                if px < 0 || py < 0 || px >= content_size.0 || py >= content_size.1 {
+                    continue;
+                }
+                set_pixel_checked(fb, origin.0 + px, origin.1 + py, *color);
             }
         }
     }
@@ -227,5 +276,217 @@ fn set_pixel_checked(fb: &mut Framebuffer, x: i32, y: i32, color: Rgb888) {
     let Ok(y) = usize::try_from(y) else { return };
     if x < Framebuffer::WIDTH && y < Framebuffer::HEIGHT {
         fb.set_pixel(x, y, color);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use assets::{Glyph, GLYPH_PIXELS};
+    use engine::text::render::RevealedGlyph;
+
+    /// A fully opaque 16x16 [`RevealedGlyph`] (every pixel palette index 1,
+    /// [`GLYPH_COLORS`]' opaque foreground) at window-local `(x, y)` --
+    /// cheap to hand-verify pixel-by-pixel.
+    fn opaque_glyph_at(x: i32, y: i32) -> RevealedGlyph {
+        RevealedGlyph {
+            x,
+            y,
+            glyph: Glyph {
+                advance_width: 8,
+                pixels: [1u8; GLYPH_PIXELS],
+            },
+        }
+    }
+
+    // Finding 2 (Codex re-review): a glyph scrolled above a window's own
+    // content rect (`\l` prompt scroll, `IntroScene::tick`'s
+    // `TickEvent::Scrolling` arm shifting every revealed glyph's `y`
+    // upward) must not paint anywhere outside that rect, even though the
+    // resulting screen pixel would still fall inside the full 240x160
+    // framebuffer.
+
+    #[test]
+    fn blit_glyphs_draws_nothing_for_a_glyph_scrolled_entirely_above_the_content_rect() {
+        let mut fb = Framebuffer::new();
+        // Every window-local row (`-16..0`) is above the content rect's own
+        // `y == 0` top edge.
+        let glyph = opaque_glyph_at(4, -16);
+
+        blit_glyphs(&mut fb, &[glyph], (20, 30), (200, 32));
+
+        assert!(
+            fb.pixels().iter().all(|&p| p == Rgb888::BLACK),
+            "a glyph fully above the content rect must not touch the framebuffer at all"
+        );
+    }
+
+    #[test]
+    fn blit_glyphs_clips_a_glyph_straddling_the_content_rects_top_edge() {
+        let mut fb = Framebuffer::new();
+        let origin = (20, 30);
+        // Window-local y -8..8: rows 0..8 (window-local -8..0) are above the
+        // content rect and must not draw; rows 8..16 (window-local 0..8)
+        // are inside and must.
+        let glyph = opaque_glyph_at(0, -8);
+
+        blit_glyphs(&mut fb, &[glyph], origin, (200, 32));
+
+        // Screen row `origin.1 - 1` is window-local y == -1 -- just above
+        // the content rect (e.g. the window's own top border row in a real
+        // composition) -- and must stay untouched.
+        assert_eq!(fb.pixel(20, 29), Some(Rgb888::BLACK));
+        // Screen row `origin.1` is window-local y == 0 -- the content
+        // rect's own first row -- and must be painted.
+        assert_ne!(fb.pixel(20, 30), Some(Rgb888::BLACK));
+    }
+
+    #[test]
+    fn blit_glyphs_clips_a_glyph_past_the_content_rects_right_or_bottom_edge() {
+        let mut fb = Framebuffer::new();
+        let origin = (0, 0);
+        let content_size = (10, 10); // smaller than one 16x16 glyph cell.
+        let glyph = opaque_glyph_at(0, 0);
+
+        blit_glyphs(&mut fb, &[glyph], origin, content_size);
+
+        // Inside both axes: painted.
+        assert_ne!(fb.pixel(5, 5), Some(Rgb888::BLACK));
+        // Past the right edge (content_size.0 == 10) and past the bottom
+        // edge (content_size.1 == 10) respectively: not painted, even
+        // though both are well inside the 240x160 framebuffer.
+        assert_eq!(fb.pixel(12, 5), Some(Rgb888::BLACK));
+        assert_eq!(fb.pixel(5, 12), Some(Rgb888::BLACK));
+    }
+
+    #[test]
+    fn blit_glyphs_draws_a_fully_in_bounds_glyph_unclipped() {
+        let mut fb = Framebuffer::new();
+        let origin = (10, 10);
+        let glyph = opaque_glyph_at(0, 0);
+
+        blit_glyphs(&mut fb, &[glyph], origin, (200, 100));
+
+        for y in 10..26 {
+            for x in 10..26 {
+                assert_ne!(
+                    fb.pixel(x, y),
+                    Some(Rgb888::BLACK),
+                    "({x}, {y}) is within the fully-visible glyph and content rect"
+                );
+            }
+        }
+    }
+
+    // Finding 3 (Codex re-review): when two `FrameTile`s target the same
+    // `(col, row)` cell (`MessageBoxLayout::frame_tiles`'s own documented
+    // fill-then-bottom-border overlap), the earlier tile's opaque pixels
+    // must not keep showing through the later (final) tile's own
+    // transparent (index 0) pixels.
+
+    /// A synthetic 2-tile sheet (16x8px: tile 0 at columns 0..8, tile 1 at
+    /// columns 8..16): tile 0 is fully opaque (palette index 3, standing in
+    /// for a window's "interior fill" tile); tile 1 is opaque only on its
+    /// own top row (palette index 2, standing in for a "border" tile with a
+    /// transparent interior) and transparent (index 0) everywhere else.
+    fn fill_then_border_sheet() -> Vec<u8> {
+        let mut pixels = vec![0u8; 16 * 8];
+        for y in 0..8usize {
+            for x in 0..16usize {
+                pixels[y * 16 + x] = if x < 8 {
+                    3
+                } else if y == 0 {
+                    2
+                } else {
+                    0
+                };
+            }
+        }
+        pixels
+    }
+
+    #[test]
+    fn blit_frame_tiles_final_writes_transparent_pixels_show_the_true_backdrop_not_a_superseded_tile(
+    ) {
+        let pixels = fill_then_border_sheet();
+        let sheet = ImageRef {
+            width: 16,
+            height: 8,
+            bit_depth: 4,
+            pixels: &pixels,
+        };
+        let mut palette = vec![Rgb888::BLACK; 4];
+        palette[2] = Rgb888 { r: 200, g: 0, b: 0 };
+        palette[3] = Rgb888 { r: 0, g: 200, b: 0 };
+
+        // Same cell, tile 0 ("fill") listed first, tile 1 ("border") last --
+        // mirrors `MessageBoxLayout::frame_tiles`'s own documented draw
+        // order, where the later entry is meant to fully replace the cell.
+        let tiles = [
+            FrameTile {
+                col: 0,
+                row: 0,
+                tile: 0,
+                v_flip: false,
+            },
+            FrameTile {
+                col: 0,
+                row: 0,
+                tile: 1,
+                v_flip: false,
+            },
+        ];
+
+        let mut fb = Framebuffer::new(); // all-black backdrop by default.
+        blit_frame_tiles(&mut fb, &tiles, sheet, &palette);
+
+        // The final tile's own opaque top row draws its own colour.
+        assert_eq!(fb.pixel(0, 0), Some(Rgb888 { r: 200, g: 0, b: 0 }));
+        // Its transparent rows must show the true backdrop (black) -- not
+        // the earlier, superseded "fill" tile's now-stale opaque colour.
+        for y in 1..8 {
+            assert_eq!(
+                fb.pixel(0, y),
+                Some(Rgb888::BLACK),
+                "row {y} must not still show the superseded fill tile's pixel"
+            );
+        }
+    }
+
+    #[test]
+    fn blit_frame_tiles_draws_every_tile_when_no_two_share_a_cell() {
+        // Non-overlapping placement (`window::border_tiles`'s own shape,
+        // e.g.) must still draw every tile in full -- the "last write wins"
+        // resolution must never suppress a cell nothing else ever touches.
+        let pixels = fill_then_border_sheet();
+        let sheet = ImageRef {
+            width: 16,
+            height: 8,
+            bit_depth: 4,
+            pixels: &pixels,
+        };
+        let mut palette = vec![Rgb888::BLACK; 4];
+        palette[3] = Rgb888 { r: 0, g: 200, b: 0 };
+
+        let tiles = [
+            FrameTile {
+                col: 0,
+                row: 0,
+                tile: 0,
+                v_flip: false,
+            },
+            FrameTile {
+                col: 5,
+                row: 5,
+                tile: 0,
+                v_flip: false,
+            },
+        ];
+
+        let mut fb = Framebuffer::new();
+        blit_frame_tiles(&mut fb, &tiles, sheet, &palette);
+
+        assert_eq!(fb.pixel(0, 0), Some(Rgb888 { r: 0, g: 200, b: 0 }));
+        assert_eq!(fb.pixel(40, 40), Some(Rgb888 { r: 0, g: 200, b: 0 }));
     }
 }
