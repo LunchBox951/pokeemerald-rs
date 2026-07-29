@@ -11310,6 +11310,17 @@
       "status": "pending"
     },
     "data/scripts/new_game.inc": {
+      "artifacts": {
+        "EventScript_ResetAllBerries": {
+          "status": "pending"
+        },
+        "EventScript_ResetAllMapFlags": {
+          "reason": "The 159 setflag operands transcribed in upstream script order as assets::RESET_MAP_FLAGS (numeric ids resolved via include/constants/flags.h), applied at crates/pokeemerald-rs/src/new_game.rs's init_save_blocks via engine::event_data::EventData::flag_set. EventScript_ResetAllMapFlags's trailing 'call EventScript_ResetAllBerries' (setberrytree seeding) is NOT covered by this artifact -- no typed berry-tree save state exists yet (see data/scripts/berry_tree.inc, still pending); tracked separately.",
+          "rust_target": "crates/assets/src/new_game_flags.rs",
+          "spec": "I-3",
+          "status": "ported"
+        }
+      },
       "category": "data.script",
       "kind": "file",
       "spec_owner": "06-engine",

@@ -18,17 +18,22 @@
 //! | `SetMoney(&gSaveBlock1Ptr->money, 3000)`                    | [`SaveBlock1::money`] `= `[`STARTING_MONEY`] |
 //! | `ClearBag()`                                                | [`SaveBlock1::bag`] `= Bag::default()` |
 //! | `InitEventData()`                                           | [`SaveBlock1::event_data`] `= EventData::default()` |
-//!
-//! **Deferred (issue #164):** upstream additionally runs
-//! `RunScriptImmediately(EventScript_ResetAllMapFlags)`
-//! (`data/scripts/new_game.inc:115`, 159 `setflag`s), which sets the fresh
-//! game's object-hide progression flags (e.g.
-//! `FLAG_HIDE_LITTLEROOT_TOWN_BRENDANS_HOUSE_RIVAL_BEDROOM`,
-//! `new_game.inc:152`). This crate has no extracted event scripts or
-//! generated flag-id constants yet, so [`EventData`] starts all-clear; the
-//! gap is player-invisible until NPC object events render (#161, which must
-//! consume these flags when filtering object events).
+//! | `RunScriptImmediately(EventScript_ResetAllMapFlags)`'s 159 `setflag`s (`data/scripts/new_game.inc:116-274`) | [`SaveBlock1::event_data`]`.flag_set` for every id in [`assets::RESET_MAP_FLAGS`] (issue #164) |
 //! | (naming screen / `Task_NewGameBirchSpeech_ChooseGender`)    | [`SaveBlock2::player_name`]/`player_gender` `= `[`DEFAULT_PLAYER_NAME`]`/`[`DEFAULT_PLAYER_GENDER`] (deviation below) |
+//!
+//! **Partially deferred (issue #164):** `EventScript_ResetAllMapFlags` ends
+//! with `call EventScript_ResetAllBerries` (`new_game.inc:275`), which seeds
+//! every wild berry tree's starting species/stage via 80 `setberrytree`
+//! commands (`new_game.inc:1-113`). This workspace has no typed berry-tree
+//! save state yet -- `data/scripts/berry_tree.inc` is still `pending` in the
+//! coverage ledger, and no [`SaveBlock1`]/[`SaveBlock2`] field owns it (the
+//! same "no typed home yet" reasoning the module docs' "deliberately not
+//! mirrored" list below already applies to `ClearSecretBases`, `SetCoins`,
+//! etc.). [`init_save_blocks`] therefore applies exactly
+//! [`assets::RESET_MAP_FLAGS`] (the flag half) and leaves berry-tree state
+//! untouched; a future slice that gives berry trees a save-state home should
+//! extend this function to also run `ResetAllBerries`'s effect, at which
+//! point this paragraph should be deleted rather than left stale.
 //!
 //! Deliberately **not** mirrored (no typed model exists yet, or genuinely
 //! out of this issue's scope): `ResetPokedex`, `ClearFrontierRecord`,
@@ -165,6 +170,15 @@ pub const SPAWN_MAP_NUM: i8 = 1;
 /// `rng` supplies the trainer id's two halves (module docs, "Trainer id has
 /// no link-cable lower half") -- callers that don't care about a specific
 /// sequence can pass a freshly seeded [`Rng`].
+///
+/// # Panics
+///
+/// Never panics in practice: every id in [`assets::RESET_MAP_FLAGS`] is
+/// pinned (by `assets::new_game_flags`'s own tests) to be an ordinary flag
+/// id, which [`EventData::flag_set`](engine::event_data::EventData::flag_set)
+/// never rejects. The `expect` below exists only because that invariant
+/// lives in a different crate's test suite, not this function's own type
+/// signature.
 #[must_use]
 pub fn init_save_blocks(rng: &mut Rng) -> (SaveBlock1, SaveBlock2) {
     let block2 = SaveBlock2 {
@@ -181,7 +195,7 @@ pub fn init_save_blocks(rng: &mut Rng) -> (SaveBlock1, SaveBlock2) {
         x: i16::try_from(SPAWN_POSITION.0).unwrap_or(0),
         y: i16::try_from(SPAWN_POSITION.1).unwrap_or(0),
     };
-    let block1 = SaveBlock1 {
+    let mut block1 = SaveBlock1 {
         pos: Coords16 {
             x: spawn.x,
             y: spawn.y,
@@ -190,6 +204,19 @@ pub fn init_save_blocks(rng: &mut Rng) -> (SaveBlock1, SaveBlock2) {
         money: STARTING_MONEY,
         ..SaveBlock1::default()
     };
+
+    // RunScriptImmediately(EventScript_ResetAllMapFlags) (module docs'
+    // table): every id in `assets::RESET_MAP_FLAGS` is an ordinary flag id
+    // (pinned by `assets::new_game_flags`'s own
+    // `reset_map_flags_are_all_ordinary_ids` test), so `flag_set` cannot
+    // fail here; `expect` documents that invariant rather than threading an
+    // unreachable `Result` through this function's signature.
+    for &flag in assets::RESET_MAP_FLAGS {
+        block1
+            .event_data
+            .flag_set(flag)
+            .expect("RESET_MAP_FLAGS ids are all ordinary flag ids");
+    }
 
     (block1, block2)
 }
@@ -348,5 +375,70 @@ mod tests {
         assert_eq!(SPAWN_ELEVATION, 0);
         assert_eq!(SPAWN_FACING, Direction::South);
         assert_eq!(SPAWN_MAP_ID.0, "MAP_LITTLEROOT_TOWN_BRENDANS_HOUSE_2F");
+    }
+
+    /// Issue #164's `DoD`: a fresh save must have
+    /// `FLAG_HIDE_LITTLEROOT_TOWN_BRENDANS_HOUSE_RIVAL_BEDROOM`
+    /// (`new_game.inc:152`) set, so the rival object event this flag hides
+    /// (`data/maps/LittlerootTown_BrendansHouse_2F/map.json`) is absent from
+    /// its (7, 1) spawn tile the moment a new game starts -- matching
+    /// `RunScriptImmediately(EventScript_ResetAllMapFlags)`'s effect, not
+    /// `InitEventData`'s previous all-clear.
+    #[test]
+    fn fresh_save_hides_the_rival_bedroom_object_event() {
+        let mut rng = Rng::new(0);
+        let (block1, _) = init_save_blocks(&mut rng);
+        assert!(block1
+            .event_data
+            .flag_get(assets::FLAG_HIDE_LITTLEROOT_TOWN_BRENDANS_HOUSE_RIVAL_BEDROOM)
+            .unwrap());
+        // Tie the numeric id to the real map data: the spawn map's object
+        // events actually carry this hide flag (by its upstream name), so
+        // #161's flag-filtered object-event rendering has a pre-wired case.
+        let events = assets::MapEventsTable::new()
+            .resolve(SPAWN_MAP_ID)
+            .expect("spawn map has generated events");
+        assert!(
+            events
+                .object_events
+                .iter()
+                .any(|obj| obj.flag == "FLAG_HIDE_LITTLEROOT_TOWN_BRENDANS_HOUSE_RIVAL_BEDROOM"),
+            "the bedroom must have an object event hidden by the DoD-pinned flag"
+        );
+    }
+
+    /// Every one of `EventScript_ResetAllMapFlags`'s 159 `setflag`s
+    /// (`assets::RESET_MAP_FLAGS`, `data/scripts/new_game.inc:116-274`) must
+    /// land on the fresh save's `EventData`, not just the one `DoD`-pinned
+    /// flag above -- this is the "full effect", not a single spot check.
+    #[test]
+    fn fresh_save_applies_every_reset_map_flag() {
+        let mut rng = Rng::new(0);
+        let (block1, _) = init_save_blocks(&mut rng);
+        for &flag in assets::RESET_MAP_FLAGS {
+            assert!(
+                block1.event_data.flag_get(flag).unwrap(),
+                "flag {flag:#X} from RESET_MAP_FLAGS must be set on a fresh save"
+            );
+        }
+        // And nothing more: the fresh save's exact bit population is the 159
+        // script flags -- catches a future init step over-applying flags as
+        // well as this one under-applying them.
+        let set_bits: u32 = block1
+            .event_data
+            .flag_bytes()
+            .iter()
+            .map(|b| b.count_ones())
+            .sum();
+        assert_eq!(
+            set_bits, 159,
+            "a fresh save sets exactly the script's flags"
+        );
+        // Cross-crate range guard: `assets` can't depend on `engine`, so its
+        // own range test pins a literal; this is the reciprocal assertion
+        // against the real `FLAGS_COUNT`, where the dependency exists.
+        assert!(assets::RESET_MAP_FLAGS
+            .iter()
+            .all(|&f| f < engine::event_data::FLAGS_COUNT));
     }
 }
