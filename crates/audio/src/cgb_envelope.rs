@@ -338,14 +338,17 @@ impl CgbEnvelope {
     }
 
     /// Pseudo-echo tail: hold [`Self::volume`] at its frozen floor and count
-    /// [`Self::echo_length`] down, retiring once it's exhausted. Structurally
-    /// the same decrement-then-check shape as the DirectSound
-    /// [`crate::envelope::Envelope`]'s echo tail, reused here for the CGB
-    /// side (`m4a.c:1050`..`:1051`).
+    /// [`Self::echo_length`] down, retiring once it's exhausted. Unlike the
+    /// DirectSound [`crate::envelope::Envelope`]'s unsigned tail
+    /// (`m4a_1.s:_081DCFA0`, `subs`/`bhi`), the CGB side checks the
+    /// post-decrement length as a *signed* byte — `pseudoEchoLength--; if
+    /// ((s8)(pseudoEchoLength & 0xff) <= 0)` (`m4a.c:1050`..`:1051`) — so an
+    /// `xIECL` of `129..=255` (post-decrement bit 7 set) retires the channel
+    /// on the very first tail frame rather than holding for hundreds.
     fn echo_step(&mut self) {
-        let old = self.echo_length;
-        self.echo_length = old.wrapping_sub(1);
-        if old < 2 {
+        let post = self.echo_length.wrapping_sub(1);
+        self.echo_length = post;
+        if post == 0 || post >= 0x80 {
             self.active = false;
         }
     }
@@ -750,6 +753,43 @@ mod tests {
         env.step();
         assert!(!env.is_active());
         assert_eq!(env.volume(), 0);
+    }
+
+    #[test]
+    fn echo_length_signed_boundary_128_holds_129_retires_at_once() {
+        // The CGB tail checks the post-decrement length as a *signed* byte
+        // (`(s8)(pseudoEchoLength & 0xff) <= 0`, m4a.c:1050..:1051): 128 is
+        // the longest tail (post-decrement 127), while 129 lands on
+        // post-decrement 128 (s8 -128) and retires on the first tail frame.
+        let adsr = CgbAdsr {
+            attack: 0,
+            decay: 0,
+            sustain: 15,
+            release: 0,
+        };
+        let mut env = CgbEnvelope::new(adsr, 8, 128, 128);
+        env.step();
+        env.note_off();
+        env.step(); // lands on the echo floor
+        assert!(env.is_active());
+        // 127 further frames tick post-decrement 127..=1 down, all held.
+        for frame in 0..127 {
+            env.step();
+            assert!(env.is_active(), "tail must hold (frame {frame})");
+        }
+        env.step(); // post-decrement 0 -> retire
+        assert!(!env.is_active(), "128-frame tail exhausts");
+
+        let mut env = CgbEnvelope::new(adsr, 8, 128, 129);
+        env.step();
+        env.note_off();
+        env.step(); // lands on the echo floor
+        assert!(env.is_active());
+        env.step(); // post-decrement 128: signed-negative -> retire at once
+        assert!(
+            !env.is_active(),
+            "xIECL 129 must retire on the first tail frame, not hold ~130 frames"
+        );
     }
 
     #[test]

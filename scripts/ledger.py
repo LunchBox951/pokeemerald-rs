@@ -177,6 +177,11 @@ class Rule:
 POKEEMERALD_RULES = [
     # ─ CODE ────────────────────────────────────────────────────────────────
     Rule("code.source",    "files", ["src/**/*.c"]),
+    # Hand-written assembly sources under src/ that the *.c glob misses:
+    # the m4a mixer/sequencer core plus GBA boot glue.
+    Rule("code.source",    "files", ["src/m4a_1.s"], spec_owner="03-audio"),
+    Rule("code.source",    "files", ["src/crt0.s", "src/libgcnmultiboot.s",
+                                     "src/rom_header.s"]),
     Rule("code.header",    "files", ["src/**/*.h", "include/**/*.h"],
          exclude=["include/constants/*.h"]),
     Rule("code.constants", "files", ["include/constants/*.h"]),

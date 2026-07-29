@@ -17163,6 +17163,11 @@
       "kind": "file",
       "status": "pending"
     },
+    "include/constants/comparison_operators.h": {
+      "category": "code.constants",
+      "kind": "file",
+      "status": "pending"
+    },
     "include/constants/contest.h": {
       "category": "code.constants",
       "kind": "file",
@@ -17443,11 +17448,6 @@
       "status": "pending"
     },
     "include/constants/weather.h": {
-      "category": "code.constants",
-      "kind": "file",
-      "status": "pending"
-    },
-    "include/constants/wild_encounter.h": {
       "category": "code.constants",
       "kind": "file",
       "status": "pending"
@@ -24266,6 +24266,11 @@
       "kind": "file",
       "status": "pending"
     },
+    "src/crt0.s": {
+      "category": "code.source",
+      "kind": "file",
+      "status": "pending"
+    },
     "src/data.c": {
       "category": "code.source",
       "kind": "file",
@@ -25621,6 +25626,11 @@
       "kind": "file",
       "status": "pending"
     },
+    "src/libgcnmultiboot.s": {
+      "category": "code.source",
+      "kind": "file",
+      "status": "pending"
+    },
     "src/libisagbprn.c": {
       "category": "code.source",
       "kind": "file",
@@ -25707,12 +25717,6 @@
           "spec": "S-3",
           "status": "rewritten"
         },
-        "ChnVolSetAsm": {
-          "reason": "ChnVolSetAsm's right/left channel-volume formula reimplemented as voice::channel_volume + voice::pan_terms, including the rhythm-pan override (0x80+rhythmPan / 0x7F-rhythmPan) that a rhythm indirection's child pan_sweep byte can set (S-3 slice 3).",
-          "rust_target": "crates/audio/src/voice.rs",
-          "spec": "S-3",
-          "status": "rewritten"
-        },
         "MidiKeyToCgbFreq": {
           "reason": "MidiKeyToCgbFreq re-implemented behaviourally as cgb_pitch::midi_key_to_cgb_freq_reg/midi_key_to_noise_control (S-3 slice 2).",
           "rust_target": "crates/audio/src/cgb_pitch.rs",
@@ -25726,7 +25730,7 @@
           "status": "rewritten"
         },
         "TONEDATA_TYPE_FIX": {
-          "reason": "SoundMainRAM's fixed-rate DirectSound branch (type & TONEDATA_TYPE_FIX skips the frequency-derived phase step entirely) reimplemented as Voice::fixed_rate forcing the phase step to pitch::FRAC_ONE, which also reproduces the branch's un-interpolated raw-sample reads as a side effect (S-3 slice 3).",
+          "reason": "m4a.c's fixed-rate dispatch use of TONEDATA_TYPE_FIX (SampleFreqSet-driven, m4a.c:1187; the macro itself is m4a_internal.h:50) reimplemented as Voice::fixed_rate forcing the phase step to pitch::FRAC_ONE, which also reproduces the un-interpolated raw-sample reads as a side effect (S-3 slice 3). The assembly fast path lives in m4a_1.s (SoundMainRAM) and is tracked there.",
           "rust_target": "crates/audio/src/voice.rs",
           "spec": "S-3",
           "status": "rewritten"
@@ -25736,12 +25740,6 @@
           "rust_target": "crates/audio/src/sequencer.rs",
           "spec": "S-3",
           "status": "rewritten"
-        },
-        "ply_note": {
-          "reason": "ply_note's key-split (TONEDATA_TYPE_SPL) / rhythm (TONEDATA_TYPE_RHY) child resolution, the TONEDATA_TYPE_FIX dispatch bypass, and the pseudoEchoVolume/Length note-on snapshot are reimplemented as sequencer::resolve_instrument + note_on (S-3 slice 3). Priority-based channel-stealing search over the fixed DirectSound/CGB pools is still deferred (out of scope; Mixer uses a flat voice cap instead).",
-          "rust_target": "crates/audio/src/sequencer.rs",
-          "spec": "S-3",
-          "status": "stubbed"
         },
         "ply_xiecl": {
           "reason": "ply_xiecl's pseudo-echo-length XCMD (kind 0x09) executed by sequencer::Sequencer::handle_event, alongside ply_xiecv (S-3 slice 3).",
@@ -25758,6 +25756,26 @@
       },
       "category": "code.source",
       "kind": "file",
+      "status": "pending"
+    },
+    "src/m4a_1.s": {
+      "artifacts": {
+        "ChnVolSetAsm": {
+          "reason": "ChnVolSetAsm (m4a_1.s:1508) right/left channel-volume formula reimplemented as voice::channel_volume + voice::pan_terms, including the rhythm-pan override (0x80+rhythmPan / 0x7F-rhythmPan) that a rhythm indirection's child pan_sweep byte can set (S-3 slice 3).",
+          "rust_target": "crates/audio/src/voice.rs",
+          "spec": "S-3",
+          "status": "rewritten"
+        },
+        "ply_note": {
+          "reason": "ply_note (m4a_1.s:1538) key-split (TONEDATA_TYPE_SPL) / rhythm (TONEDATA_TYPE_RHY) child resolution, the TONEDATA_TYPE_FIX dispatch bypass, and the pseudoEchoVolume/Length note-on snapshot are reimplemented as sequencer::resolve_instrument + note_on (S-3 slice 3). Priority-based channel-stealing search over the fixed DirectSound/CGB pools is still deferred (out of scope; Mixer uses a flat voice cap instead).",
+          "rust_target": "crates/audio/src/sequencer.rs",
+          "spec": "S-3",
+          "status": "stubbed"
+        }
+      },
+      "category": "code.source",
+      "kind": "file",
+      "spec_owner": "03-audio",
       "status": "pending"
     },
     "src/m4a_tables.c": {
@@ -26291,6 +26309,11 @@
       "status": "pending"
     },
     "src/roamer.c": {
+      "category": "code.source",
+      "kind": "file",
+      "status": "pending"
+    },
+    "src/rom_header.s": {
       "category": "code.source",
       "kind": "file",
       "status": "pending"
