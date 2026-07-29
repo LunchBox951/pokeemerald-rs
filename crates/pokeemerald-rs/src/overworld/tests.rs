@@ -138,6 +138,19 @@ fn load_default_room_reports_pack_missing_when_no_pack_is_extracted() {
     assert!(err.is_pack_missing());
 }
 
+#[test]
+fn load_room_reports_pack_missing_when_no_pack_is_extracted() {
+    // Same reasoning as `load_default_room_reports_pack_missing_when_no_pack_is_extracted`
+    // (this function's own doc comment): `load_room` fails at the same
+    // `AssetPack::load_default` call, before it ever reaches the `map_id`
+    // lookup that's the only thing distinguishing it from `load_default_room`.
+    if AssetPack::default_path().is_file() {
+        return;
+    }
+    let err = super::load_room(assets::MapId("MAP_LITTLEROOT_TOWN_BRENDANS_HOUSE_1F")).unwrap_err();
+    assert!(err.is_pack_missing());
+}
+
 // -- End-to-end against a synthetic pack -------------------------------------
 
 /// One directory entry for [`write_synthetic_pack`], mirroring

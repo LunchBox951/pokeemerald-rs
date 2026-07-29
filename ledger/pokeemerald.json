@@ -26076,6 +26076,24 @@
     },
     "src/overworld.c": {
       "artifacts": {
+        "ApplyCurrentWarp": {
+          "reason": "gSaveBlock1Ptr->location = sWarpDestination transcribed as OverworldPhase::warp_to's save1.location assignment on a resolved warp landing; gLastUsedWarp (the previous location) and the dive/hole-warp resets are not modeled (no typed home / out of v1 scope).",
+          "rust_target": "crates/pokeemerald-rs/src/flow.rs",
+          "spec": "I-3",
+          "status": "rewritten"
+        },
+        "GetAdjustedInitialDirection": {
+          "reason": "Destination-tile branches rewritten as engine::overworld::warp::warp_in_facing, keyed on the arrival tile's metatile behavior exactly as upstream keys on GetCenterScreenMetatileBehavior after WarpIntoMap (flow::OverworldPhase::warp_to reads that behavior off the destination map's runtime and passes it in): deep-south-warp -> North (tested first, before the door arm that also matches it), non-anim-door/door -> South, south-arrow -> North, north-arrow -> South, west-arrow -> East, east-arrow -> West, else South. Three branches are NOT modelled and all collapse into that final else: the FLAG_SYS_CRUISE_MODE + MAP_TYPE_OCEAN_ROUTE branch (no event-flag state), the surfing<->underwater transition branch (no surf/dive avatar flags), and the MetatileBehavior_IsLadder branch that preserves the pre-warp facing (no StoreInitialPlayerAvatarState equivalent -- that function and GetAdjustedInitialTransitionFlags stay unported).",
+          "rust_target": "crates/engine/src/overworld/warp.rs",
+          "spec": "I-3",
+          "status": "rewritten"
+        },
+        "SetWarpData": {
+          "reason": "map_group/map_num/warp_id/x/y field assignment transcribed as the engine::save::WarpData literal OverworldPhase::warp_to builds for save1.location on a resolved warp; x/y are left at -1 matching SetWarpDestinationToMapWarp's own -1,-1 call shape for a map-warp-id destination (not fixed coordinates).",
+          "rust_target": "crates/pokeemerald-rs/src/flow.rs",
+          "spec": "I-3",
+          "status": "rewritten"
+        },
         "sOverworldBgTemplates": {
           "reason": "BG0-3 index/priority assignment for the overworld's bottom/middle/top metatile layers, transcribed as viewport::{TOP,MIDDLE,BOTTOM}_{BG_INDEX,PRIORITY} consts; BG0 (weather/other overlay effects) is out of this slice's scope and stays unbound.",
           "rust_target": "crates/pokeemerald-rs/src/overworld/viewport.rs",

@@ -22,8 +22,11 @@
 //! [`AppScene`] instead of its own dedicated `App` field.
 
 use assets::{MapEventsTable, MapHeaderTable};
-use engine::overworld::{Direction, PlayerState};
-use engine::save::{SaveBlock1, SaveBlock2};
+use engine::overworld::{
+    trigger_warp, warp_destination_position, warp_in_facing, Direction, PlayerState, StepOutcome,
+    TilePos, WarpTrigger,
+};
+use engine::save::{Coords16, SaveBlock1, SaveBlock2, WarpData};
 use platform::{ButtonState, Buttons, Frame};
 
 use crate::frame::to_platform_frame;
@@ -87,12 +90,19 @@ pub(crate) enum AppScene {
 /// [`OverworldPhase::step`] (upstream keeps `gSaveBlock1Ptr->pos` current as
 /// the object-event system moves the player), so a future serialize/continue
 /// path reloads at the tile the player actually stands on, not the spawn.
+/// `save1.location` is likewise re-synced on every warp landing (issue
+/// #163) -- see [`OverworldPhase::warp_to`].
 pub(crate) struct OverworldPhase {
     scene: OverworldScene,
     player: PlayerState,
     map_id: assets::MapId,
     save1: SaveBlock1,
     save2: SaveBlock2,
+    /// The tile a [`StepOutcome::Advanced`] step is currently walking the
+    /// player onto, latched at step *start* and checked for a warp trigger
+    /// at step *completion* -- see [`OverworldPhase::step`] for why the two
+    /// are different frames, and `None` between steps.
+    pending_landing: Option<TilePos>,
 }
 
 impl OverworldPhase {
@@ -118,6 +128,7 @@ impl OverworldPhase {
             map_id: new_game::SPAWN_MAP_ID,
             save1,
             save2,
+            pending_landing: None,
         })
     }
 
@@ -145,6 +156,33 @@ impl OverworldPhase {
     /// [`OverworldScene::compose`]'s own "no persisted borrow" pattern --
     /// see the module docs), then the walk-animation timer always ticks
     /// (module docs on [`advance_player_one_frame`]).
+    ///
+    /// # Warp timing
+    ///
+    /// A warp fires on the frame the step *finishes*, not the frame it
+    /// starts, mirroring upstream's own gate: `input->tookStep` is set only
+    /// when `gPlayerAvatar.tileTransitionState == T_TILE_CENTER &&
+    /// gPlayerAvatar.runningState == MOVING`
+    /// (`pokeemerald/src/field_control_avatar.c:117-119`), and every
+    /// `TryStartWarpEventScript` call site is guarded by that flag
+    /// (`:155-161`, plus `:483-488`/`:702` reaching it through
+    /// `TryDoorWarp`/`SetupWarp`). [`PlayerState::step`] instead reports
+    /// [`StepOutcome::Advanced`] at step *start* -- it commits the new tile
+    /// position immediately and only then runs 16 frames of walk animation
+    /// ([`engine::overworld::WALK_FRAMES_PER_TILE`]) -- so this method
+    /// latches that landing tile in `pending_landing` and evaluates
+    /// [`trigger_warp`] against it on the frame [`PlayerState::tick`] drains
+    /// the animation ([`PlayerState::in_transit`] goes false), i.e. 16
+    /// frames later. Latching (rather than re-deriving the tile from
+    /// [`PlayerState::position`]) also keeps the check honest about *what
+    /// changed*: only a tile the player actually stepped onto is ever
+    /// tested, never one they were already standing on.
+    ///
+    /// The `runtime` the trigger is evaluated against is this frame's,
+    /// which is correct: a warp is the only thing that changes `map_id`
+    /// here, and one can't fire mid-animation, so the map is necessarily
+    /// the same one the latched step happened on.
+    ///
     /// Silently does nothing but drain an already-in-progress walk
     /// animation if this map's header/events can't be found in the
     /// `'static` tables (unreachable for [`new_game::SPAWN_MAP_ID`] against
@@ -156,17 +194,133 @@ impl OverworldPhase {
             MapEventsTable::new().resolve(self.map_id),
         ) {
             let runtime = self.scene.runtime(self.map_id, header, events);
-            advance_player_one_frame(&mut self.player, direction, &runtime);
+            let outcome = advance_player_one_frame(&mut self.player, direction, &runtime);
+
+            match outcome {
+                StepOutcome::Advanced { to, .. } => self.pending_landing = Some(to),
+                StepOutcome::Crossed { .. } => debug_assert!(
+                    false,
+                    "StepOutcome::Crossed is unreachable here: `advance_player_one_frame` \
+                     passes a `no_connections` resolver, so `PlayerState::step` never takes \
+                     its connection-crossing branch. Wiring real connections in must also \
+                     handle rebinding `map_id`/`scene` and `save1.location` here, atomically \
+                     with the position `PlayerState::step` has already committed into the \
+                     entered map's coordinate space."
+                ),
+                StepOutcome::Idle | StepOutcome::Turned(_) | StepOutcome::Blocked { .. } => {}
+            }
+
+            // Upstream's `tookStep` gate, in this port's terms: the latched
+            // landing is only tested once its walk animation has drained
+            // (doc comment above).
+            let warp_trigger = if self.player.in_transit() {
+                None
+            } else {
+                self.pending_landing
+                    .take()
+                    .and_then(|(x, y)| trigger_warp(&runtime, x, y, self.player.elevation()))
+            };
+
+            match warp_trigger {
+                Some(WarpTrigger::Resolved { map, warp_id }) => self.warp_to(map, warp_id),
+                Some(WarpTrigger::Unsupported) => eprintln!(
+                    "warp: destination at the player's tile can't be resolved by this port \
+                     (dynamic map/warp id) -- staying put"
+                ),
+                None => {}
+            }
         } else {
             self.player.tick();
         }
         // Mirror the logical tile into the retained save state every frame
         // (upstream keeps `gSaveBlock1Ptr->pos` current as the player moves);
-        // map tiles are far inside i16, so the saturation never fires.
+        // map tiles are far inside i16, so the saturation never fires. Runs
+        // after any warp above, so this reflects the post-warp tile on the
+        // frame a warp lands.
         let (x, y) = self.player.position();
-        self.save1.pos = engine::save::Coords16 {
+        self.save1.pos = Coords16 {
             x: i16::try_from(x).unwrap_or(i16::MAX),
             y: i16::try_from(y).unwrap_or(i16::MAX),
+        };
+    }
+
+    /// Execute a [`WarpTrigger::Resolved`] warp: load `map`'s room
+    /// ([`overworld::load_room`]) and resolve its `warp_id`-th warp event's
+    /// arrival position/elevation ([`warp_destination_position`]), then
+    /// place `player` there facing whatever the *destination* tile's own
+    /// metatile behavior dictates ([`warp_in_facing`] -- upstream
+    /// `GetAdjustedInitialDirection`, `pokeemerald/src/overworld.c:929-951`)
+    /// and assign `map_id`/`scene` together.
+    ///
+    /// Those two fields move in lockstep on purpose:
+    /// [`OverworldScene::runtime`] stamps `map_id` onto a
+    /// [`MapRuntime`](engine::overworld::MapRuntime) built from `scene`'s own
+    /// decoded grid/tileset bytes, so updating one without the other would
+    /// render one map's layout against another map's collision/warp/event
+    /// data. Both are assigned here, after every fallible lookup has already
+    /// succeeded, so there is no window in which they disagree.
+    ///
+    /// Keeps `save1.location` coherent with the new map, mirroring upstream
+    /// `SetWarpData`/`ApplyCurrentWarp`
+    /// (`pokeemerald/src/overworld.c:554-560, 540-545`): `x`/`y` are left at
+    /// `-1` since the player arrives via a resolved warp id, not fixed
+    /// coordinates -- the exact shape `SetWarpDestinationToMapWarp`
+    /// (`overworld.c:638-641`) passes to `SetWarpDestination`.
+    ///
+    /// If the destination map's header/events/room data can't be loaded, or
+    /// it has no warp event at `warp_id` -- both unreachable against a real
+    /// pack for any warp this port's own tables reference -- logs and
+    /// leaves the player exactly where they stood before the warp
+    /// (module docs' "log-or-ignore is fine" policy), rather than
+    /// half-applying the transition.
+    ///
+    /// # Panics
+    ///
+    /// If the destination's generated `MAP_GROUP`/`MAP_NUM` index doesn't fit
+    /// the `i8` upstream's `struct WarpData` stores it in -- see
+    /// [`warp_data_index`], which no real extraction can trip.
+    fn warp_to(&mut self, map: assets::MapId, warp_id: u8) {
+        let Ok(header) = MapHeaderTable::new().header(map) else {
+            eprintln!("warp: unknown destination map {map:?} -- staying put");
+            return;
+        };
+        let Ok(events) = MapEventsTable::new().resolve(map) else {
+            eprintln!("warp: no event data for destination map {map:?} -- staying put");
+            return;
+        };
+        let Ok(scene) = overworld::load_room(map) else {
+            eprintln!("warp: failed to load destination map {map:?} -- staying put");
+            return;
+        };
+        let destination = {
+            let runtime = scene.runtime(map, header, events);
+            warp_destination_position(&runtime, warp_id).map(|(x, y, elevation)| {
+                // GetCenterScreenMetatileBehavior (overworld.c:954-957) reads
+                // the tile the player has just been placed on. An
+                // undecodable attribute entry can't happen for a cell
+                // `warp_destination_position` just resolved, but falling back
+                // to MB_NORMAL keeps that case on `GetAdjustedInitialDirection`'s
+                // own final-else path rather than inventing a facing.
+                let behavior = runtime
+                    .metatile_behavior(i32::from(x), i32::from(y))
+                    .unwrap_or(engine::overworld::metatile_behavior::MB_NORMAL);
+                (x, y, elevation, warp_in_facing(behavior))
+            })
+        };
+        let Some((x, y, elevation, facing)) = destination else {
+            eprintln!("warp: destination map {map:?} has no warp event #{warp_id} -- staying put");
+            return;
+        };
+
+        self.player = PlayerState::new((i32::from(x), i32::from(y)), elevation, facing);
+        self.scene = scene;
+        self.map_id = map;
+        self.save1.location = WarpData {
+            map_group: warp_data_index(header.group, "MAP_GROUP"),
+            map_num: warp_data_index(header.num, "MAP_NUM"),
+            warp_id: warp_data_index(warp_id, "warp id"),
+            x: -1,
+            y: -1,
         };
     }
 
@@ -175,6 +329,26 @@ impl OverworldPhase {
     fn compose_frame(&self) -> Box<Frame> {
         self.scene.compose_frame(&self.player)
     }
+}
+
+/// Narrow a generated map-table index (`MAP_GROUP`, `MAP_NUM`, or a warp
+/// event index) into the `i8` upstream's `struct WarpData`
+/// (`include/global.h`, transcribed as [`WarpData`]) stores it in.
+///
+/// # Panics
+///
+/// If `value` exceeds `i8::MAX`. Unreachable against any real extraction:
+/// upstream declares all three fields `s8`, and the generated
+/// [`MapHeaderTable`] tops out at 34 map groups of at most 108 maps each --
+/// same "the constants are cross-checked against the generated table"
+/// reasoning [`new_game::SPAWN_MAP_GROUP`]/[`new_game::SPAWN_MAP_NUM`] rest
+/// on. Panicking (rather than saturating to a fabricated `127`, which would
+/// silently write a *different, real* map's group/num into the save) is the
+/// honest failure mode if a future extraction ever breaks that assumption.
+fn warp_data_index(value: u8, what: &str) -> i8 {
+    i8::try_from(value).unwrap_or_else(|_| {
+        panic!("{what} {value} does not fit the i8 upstream's struct WarpData stores it in")
+    })
 }
 
 /// The held D-pad direction to feed [`PlayerState::step`] this frame, or
@@ -230,25 +404,29 @@ fn held_direction(buttons: ButtonState) -> Option<Direction> {
 /// of 16, plus duplicated a camera position at every tile boundary (a
 /// one-frame stutter of its own) -- see this function's own tests for the
 /// corrected contract.
-/// **Deferred (issue #163): warp processing.** The returned
-/// [`engine::overworld::StepOutcome`] is deliberately discarded, so landing
-/// on the bedroom's stair warp at `(7, 1)` (the map's only warp event, the
-/// same one [`crate::new_game`]'s `SPAWN_*` derives the spawn from) does not
-/// yet transition anywhere — this slice ends inside the bedroom, and
-/// honoring `StepOutcome::Crossed`'s "caller must rebind" obligation via
-/// [`engine::overworld::warp::trigger_warp`] is the next I-3 slice. The
-/// `no_connections` resolver is likewise unconditional: indoor maps have no
-/// edge connections, and connection-following only matters once warps can
-/// take the player outdoors `(behavioral-fidelity)` deviation documented at
-/// the deviation site.
+/// The returned [`StepOutcome`] is fed back to the caller (issue #163):
+/// [`OverworldPhase::step`] latches an `Advanced` step's landing tile and,
+/// once the 16-frame walk animation above has drained, checks it via
+/// [`trigger_warp`]/[`OverworldPhase::warp_to`] -- so walking onto the
+/// bedroom's stair warp at `(7, 1)` (the map's only warp event, the same one
+/// [`crate::new_game`]'s `SPAWN_*` derives the spawn from) transitions to
+/// `MAP_LITTLEROOT_TOWN_BRENDANS_HOUSE_1F` on the frame the step *finishes*,
+/// matching upstream's `tookStep` gate (that method's own doc comment). The
+/// `no_connections` resolver passed to [`PlayerState::step`] here is still
+/// unconditional, though: indoor maps have no edge connections, and
+/// connection-following (needed for the 1F<->outdoors door, and anywhere
+/// else a step would cross a map edge rather than land on an interior warp
+/// tile) is a follow-on `(behavioral-fidelity)` deviation, documented at the
+/// deviation site.
 fn advance_player_one_frame(
     player: &mut PlayerState,
     direction: Option<Direction>,
     runtime: &engine::overworld::MapRuntime<'_>,
-) {
+) -> StepOutcome {
     let no_connections = |_: assets::MapId| -> Option<(u16, u16)> { None };
-    let _ = player.step(direction, runtime, &no_connections);
+    let outcome = player.step(direction, runtime, &no_connections);
     player.tick();
+    outcome
 }
 
 /// Whether the idle title screen should advance to the main menu this
@@ -405,12 +583,17 @@ pub(crate) fn advance_scene(scene: AppScene, buttons: ButtonState) -> (AppScene,
 mod tests {
     use super::{
         advance_player_one_frame, advance_scene, held_direction, should_retry_overworld_load,
-        title_advance_pressed, AnimatedTitle, AppScene, OverworldPhase,
+        title_advance_pressed, warp_data_index, AnimatedTitle, AppScene, OverworldPhase,
     };
     use crate::intro::{self, IntroStatus};
     use crate::new_game;
     use assets::{MapEvents, MapHeader, MapId, MapLayout, MetatileCell};
-    use engine::overworld::{Direction, MapRuntime, PlayerState};
+    use engine::overworld::metatile_behavior::{
+        MB_ANIMATED_DOOR, MB_NON_ANIMATED_DOOR, MB_SOUTH_ARROW_WARP,
+    };
+    use engine::overworld::{
+        warp_in_facing, Direction, MapRuntime, PlayerState, WALK_FRAMES_PER_TILE,
+    };
     use platform::{ButtonState, Buttons};
 
     fn pressed(button: Buttons) -> ButtonState {
@@ -426,6 +609,27 @@ mod tests {
         state.update(button);
         state.update(button);
         state
+    }
+
+    /// The `((x, y), metatile behavior)` of `map`'s `warp_index`-th warp
+    /// event's own tile, read out of the extracted pack -- so the
+    /// warp-facing tests below assert against the real attribute data
+    /// `OverworldPhase::warp_to` reads at runtime, not a restatement of
+    /// their own expectations. Pack-dependent: `#[ignore]`d callers only.
+    fn warp_tile_behavior(map: assets::MapId, warp_index: usize) -> ((i16, i16), u8) {
+        let scene = crate::overworld::load_room(map).expect("run `cargo xtask extract` first");
+        let header = assets::MapHeaderTable::new()
+            .header(map)
+            .expect("map must resolve in the generated map-header table");
+        let events = assets::MapEventsTable::new()
+            .resolve(map)
+            .expect("map must resolve in the generated map-events table");
+        let warp = events.warp_events[warp_index];
+        let runtime = scene.runtime(map, header, events);
+        let behavior = runtime
+            .metatile_behavior(i32::from(warp.x), i32::from(warp.y))
+            .expect("a warp event's own tile must decode");
+        ((warp.x, warp.y), behavior)
     }
 
     /// A small, open (no collision anywhere), leaked-`'static` flat map --
@@ -827,6 +1031,225 @@ mod tests {
             (x, y),
             new_game::SPAWN_POSITION,
             "walking south from the spawn must actually move the player"
+        );
+    }
+
+    /// Flow-level test (the issue #163 acceptance test): stepping onto the bedroom's stair
+    /// warp tile at `(7, 1)` from below transitions the phase to
+    /// `MAP_LITTLEROOT_TOWN_BRENDANS_HOUSE_1F`, landing the player exactly at
+    /// that map's own warp-event #2 arrival position -- `crate::new_game`'s
+    /// module docs trace this exact warp chain (`(7, 1)` on 2F ->
+    /// `dest_warp_id: 2` on 1F -> `(8, 2)`, `warp.rs`'s
+    /// `warp_destination_position`) -- facing whatever that destination
+    /// tile's own behavior dictates (`engine::overworld::warp_in_facing`),
+    /// with `save1.location`/`save1.pos` kept coherent with the new map
+    /// ([`OverworldPhase::warp_to`]'s own doc comment).
+    ///
+    /// The transition is also asserted to happen on the frame the step
+    /// *finishes*, not the frame it starts: upstream gates
+    /// `TryStartWarpEventScript` on `input->tookStep`, set only at
+    /// `T_TILE_CENTER` while `runningState == MOVING`
+    /// (`pokeemerald/src/field_control_avatar.c:117-119, 155-161`). Here that
+    /// is [`WALK_FRAMES_PER_TILE`] (16) frames after the step began
+    /// ([`OverworldPhase::step`]'s "Warp timing" section).
+    #[test]
+    #[ignore = "needs a local pack: run `cargo xtask extract` first"]
+    fn stepping_onto_the_bedroom_stair_warp_transitions_to_the_1f_map() {
+        let mut phase = OverworldPhase::load_default().expect("run `cargo xtask extract` first");
+        let bedroom = phase.map_id;
+
+        // `new_game::SPAWN_POSITION` is the warp tile itself (module docs),
+        // so start one tile south of it instead and step north onto it --
+        // "stepping onto (7, 1) from below" (DoD).
+        phase.player = PlayerState::new((7, 2), new_game::SPAWN_ELEVATION, Direction::North);
+
+        // Frame 1: the step onto (7, 1) begins. `PlayerState` commits the
+        // tile immediately, but the warp must not fire yet.
+        phase.step(held(Buttons::UP));
+        assert_eq!(
+            phase.player.position(),
+            new_game::SPAWN_POSITION,
+            "the step commits the landing tile on the frame it begins"
+        );
+        assert_eq!(
+            phase.map_id, bedroom,
+            "the warp must not fire on the frame the step begins"
+        );
+
+        // Frames 2..=15: drain the walk animation with no input held. The
+        // map must stay put for every one of them.
+        for frame in 2..u32::from(WALK_FRAMES_PER_TILE) {
+            phase.step(ButtonState::new());
+            assert_eq!(
+                phase.map_id, bedroom,
+                "the warp must not fire mid-animation (frame {frame} of \
+                 {WALK_FRAMES_PER_TILE})"
+            );
+            assert!(
+                phase.player.in_transit(),
+                "the walk animation must still be draining on frame {frame}"
+            );
+        }
+
+        // Frame 16: `PlayerState::tick` drains the animation -- upstream's
+        // `tookStep` frame, and the one the warp fires on.
+        phase.step(ButtonState::new());
+
+        let destination = assets::MapId("MAP_LITTLEROOT_TOWN_BRENDANS_HOUSE_1F");
+        assert_eq!(
+            phase.map_id, destination,
+            "the completed step onto the stair warp must rebind to the 1F map \
+             on the 16th frame"
+        );
+        assert_eq!(
+            phase.player.position(),
+            (8, 2),
+            "the player must arrive at 1F's own warp #2 position"
+        );
+        // The facing is derived from the *destination* tile's own behavior,
+        // so pin that behavior down too -- otherwise `South` here would also
+        // be satisfied by `GetAdjustedInitialDirection`'s catch-all `else`.
+        let (dest_pos, dest_behavior) = warp_tile_behavior(destination, 2);
+        assert_eq!(dest_pos, (8, 2));
+        assert_eq!(
+            dest_behavior, MB_NON_ANIMATED_DOOR,
+            "1F's warp #2 is the staircase's own non-animated-door tile"
+        );
+        assert_eq!(
+            phase.player.facing(),
+            Direction::South,
+            "GetAdjustedInitialDirection's IsNonAnimDoor||IsDoor branch \
+             (overworld.c:935-936) applies to that tile"
+        );
+
+        let dest_header = assets::MapHeaderTable::new()
+            .header(destination)
+            .expect("1F must resolve in the generated map-header table");
+        assert_eq!(
+            phase.save1().location.map_group,
+            i8::try_from(dest_header.group).unwrap()
+        );
+        assert_eq!(
+            phase.save1().location.map_num,
+            i8::try_from(dest_header.num).unwrap()
+        );
+        assert_eq!(
+            phase.save1().location.warp_id,
+            2,
+            "arrived via 1F's own warp-event index 2 (new_game module docs)"
+        );
+        assert_eq!(
+            (phase.save1().location.x, phase.save1().location.y),
+            (-1, -1),
+            "SetWarpDestinationToMapWarp always passes -1, -1 for x/y (overworld.c:638-641)"
+        );
+        assert_eq!(
+            (
+                i32::from(phase.save1().pos.x),
+                i32::from(phase.save1().pos.y)
+            ),
+            (8, 2),
+            "save1.pos must mirror the post-warp tile, not the pre-warp one"
+        );
+    }
+
+    /// Regression (the issue #163 acceptance test): a completed landing on an *ordinary*
+    /// (non-warp) tile must not transition the map, even though every
+    /// completed landing is now checked for a warp trigger.
+    #[test]
+    #[ignore = "needs a local pack: run `cargo xtask extract` first"]
+    fn stepping_onto_an_ordinary_tile_does_not_warp() {
+        let mut phase = OverworldPhase::load_default().expect("run `cargo xtask extract` first");
+        let starting_map = phase.map_id;
+
+        // The spawn tile IS the warp tile; step south, away from it, onto
+        // ordinary bedroom floor (already exercised, collision-wise, by
+        // `overworld_movement_input_turns_the_player`). Drive the whole
+        // 16-frame walk animation, since the trigger check only runs on the
+        // frame it drains (`OverworldPhase::step`'s "Warp timing" section).
+        phase.step(held(Buttons::DOWN));
+        for _ in 1..WALK_FRAMES_PER_TILE {
+            phase.step(ButtonState::new());
+        }
+
+        assert_eq!(
+            phase.map_id, starting_map,
+            "stepping onto an ordinary floor tile must not transition maps"
+        );
+        assert_eq!(
+            phase.player.position(),
+            (7, 2),
+            "the step itself must still have landed"
+        );
+        assert!(
+            !phase.player.in_transit(),
+            "16 frames must fully drain the step this test relies on completing"
+        );
+    }
+
+    /// [`warp_data_index`] narrows the *generated* tables' real indices
+    /// (no pack needed -- `MapHeaderTable` is compiled in), cross-checked
+    /// against [`new_game`]'s own hand-maintained constants the same way
+    /// `new_game`'s `spawn_location_matches_the_generated_map_header` does.
+    #[test]
+    fn warp_data_index_narrows_the_generated_map_indices() {
+        let header = assets::MapHeaderTable::new()
+            .header(new_game::SPAWN_MAP_ID)
+            .expect("SPAWN_MAP_ID must resolve in the generated map-header table");
+        assert_eq!(
+            warp_data_index(header.group, "MAP_GROUP"),
+            new_game::SPAWN_MAP_GROUP
+        );
+        assert_eq!(
+            warp_data_index(header.num, "MAP_NUM"),
+            new_game::SPAWN_MAP_NUM
+        );
+        assert_eq!(warp_data_index(0, "warp id"), 0);
+        assert_eq!(warp_data_index(127, "warp id"), 127);
+    }
+
+    /// The out-of-range case panics rather than fabricating a plausible
+    /// index: saturating to `127` would have silently written a *different,
+    /// real* map's group/num into the save (that function's own doc).
+    #[test]
+    #[should_panic(expected = "does not fit the i8")]
+    fn warp_data_index_refuses_to_fabricate_an_out_of_range_index() {
+        let _ = warp_data_index(128, "MAP_GROUP");
+    }
+
+    /// Real-pack guard for the *destination*-tile rule
+    /// [`OverworldPhase::warp_to`] derives its arrival facing from
+    /// (`engine::overworld::warp_in_facing` <- upstream
+    /// `GetAdjustedInitialDirection`, `pokeemerald/src/overworld.c:929-951`).
+    ///
+    /// The I-3 path's own counterexample to a source-tile rule: Brendan's
+    /// house front door is `MAP_LITTLEROOT_TOWN`'s warp #1, sitting on an
+    /// `MB_ANIMATED_DOOR` tile -- whose *own* branch would say `DIR_SOUTH` --
+    /// but it lands on `..._BRENDANS_HOUSE_1F`'s warp #1, whose tile is
+    /// `MB_SOUTH_ARROW_WARP`, so upstream faces the arrival `DIR_NORTH`
+    /// (back into the house). Asserted against the extracted pack's real
+    /// metatile attributes, not a hand-built fixture.
+    #[test]
+    #[ignore = "needs a local pack: run `cargo xtask extract` first"]
+    fn the_front_door_warp_faces_north_from_the_destination_tiles_behavior() {
+        let (source_pos, source_behavior) =
+            warp_tile_behavior(assets::MapId("MAP_LITTLEROOT_TOWN"), 1);
+        assert_eq!(source_pos, (5, 8), "Littleroot's warp #1: the house door");
+        assert_eq!(source_behavior, MB_ANIMATED_DOOR);
+        assert_eq!(
+            warp_in_facing(source_behavior),
+            Direction::South,
+            "what a (wrong) source-tile rule would have produced"
+        );
+
+        let (dest_pos, dest_behavior) =
+            warp_tile_behavior(assets::MapId("MAP_LITTLEROOT_TOWN_BRENDANS_HOUSE_1F"), 1);
+        assert_eq!(dest_pos, (8, 8), "1F's warp #1: the doormat inside");
+        assert_eq!(dest_behavior, MB_SOUTH_ARROW_WARP);
+        assert_eq!(
+            warp_in_facing(dest_behavior),
+            Direction::North,
+            "GetAdjustedInitialDirection's IsSouthArrowWarp branch (overworld.c:937-938)"
         );
     }
 }

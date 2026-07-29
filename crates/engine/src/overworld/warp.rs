@@ -18,12 +18,23 @@
 //! trigger** ([`crate::overworld::metatile_behavior::is_warp_trigger`]) —
 //! matching upstream's post-step `TryStartWarpEventScript` path for both
 //! door kinds, without the extra one-tile-early door animation lead-in.
+//!
+//! The destination side of a warp lives here too: [`warp_destination_position`]
+//! (where the player lands) and [`warp_in_facing`] (which way they face on
+//! arrival, decided by the *destination* tile's behavior — upstream
+//! `GetAdjustedInitialDirection`, `src/overworld.c:929-951`).
 
 use assets::{MapId, WarpDestination, WarpEvent, WarpId};
 
 use super::collision::{ELEVATION_MULTI_LEVEL, ELEVATION_TRANSITION};
+use super::direction::Direction;
 use super::map_runtime::MapRuntime;
-use super::metatile_behavior::is_warp_trigger;
+use super::metatile_behavior::{
+    is_warp_trigger, MB_ANIMATED_DOOR, MB_DEEP_SOUTH_WARP, MB_EAST_ARROW_WARP,
+    MB_NON_ANIMATED_DOOR, MB_NORTH_ARROW_WARP, MB_PETALBURG_GYM_DOOR, MB_SHOAL_CAVE_ENTRANCE,
+    MB_SOUTH_ARROW_WARP, MB_STAIRS_OUTSIDE_ABANDONED_SHIP, MB_WATER_DOOR,
+    MB_WATER_SOUTH_ARROW_WARP, MB_WEST_ARROW_WARP,
+};
 
 /// A resolved (or explicitly unresolved) warp trigger, returned by
 /// [`trigger_warp`].
@@ -120,10 +131,74 @@ pub fn warp_destination_position(runtime: &MapRuntime<'_>, warp_id: u8) -> Optio
     Some((warp.x, warp.y, elevation))
 }
 
+/// The direction a player warping in faces, decided by the **destination**
+/// tile's metatile behavior — upstream `GetAdjustedInitialDirection`
+/// (`pokeemerald/src/overworld.c:929-951`), whose `metatileBehavior` argument
+/// comes from `GetCenterScreenMetatileBehavior` (`overworld.c:954-957`): the
+/// tile at `gSaveBlock1Ptr->pos` *after* `WarpIntoMap` has already applied
+/// the warp. The tile the player left has no say in it.
+///
+/// The branches ported here, in upstream's own test order (which matters:
+/// `MB_DEEP_SOUTH_WARP` satisfies both the first and the third predicate,
+/// and the first one wins):
+///
+/// | upstream predicate (`src/metatile_behavior.c`) | ids | result |
+/// |---|---|---|
+/// | `IsDeepSouthWarp` (`:272-278`) | `MB_DEEP_SOUTH_WARP` | [`Direction::North`] |
+/// | `IsNonAnimDoor` (`:262-269`) \|\| `IsDoor` (`:228-235`) | `MB_NON_ANIMATED_DOOR`, `MB_WATER_DOOR`, `MB_ANIMATED_DOOR`, `MB_PETALBURG_GYM_DOOR` | [`Direction::South`] |
+/// | `IsSouthArrowWarp` (`:313-319`) | `MB_SOUTH_ARROW_WARP`, `MB_WATER_SOUTH_ARROW_WARP`, `MB_SHOAL_CAVE_ENTRANCE` | [`Direction::North`] |
+/// | `IsNorthArrowWarp` (`:304-310`) | `MB_NORTH_ARROW_WARP`, `MB_STAIRS_OUTSIDE_ABANDONED_SHIP` | [`Direction::South`] |
+/// | `IsWestArrowWarp` (`:296-302`) | `MB_WEST_ARROW_WARP` | [`Direction::East`] |
+/// | `IsEastArrowWarp` (`:288-294`) | `MB_EAST_ARROW_WARP` | [`Direction::West`] |
+/// | final `else` | everything else | [`Direction::South`] |
+///
+/// # Not modelled
+///
+/// Upstream's three remaining branches all need avatar/world state this
+/// engine has no home for yet, and each of them collapses into the final
+/// `else`'s [`Direction::South`] here:
+///
+/// - the cruise-mode branch (`FLAG_SYS_CRUISE_MODE` + `MAP_TYPE_OCEAN_ROUTE`
+///   -> `DIR_EAST`, `overworld.c:931-932`) — no event-flag state;
+/// - the surfing<->underwater transition branch (`overworld.c:945-947`) — no
+///   [`PlayerState`](super::player::PlayerState) surf/dive avatar flags;
+/// - the `MetatileBehavior_IsLadder` branch (`overworld.c:948-949`), which
+///   keeps `playerStruct->direction` — the facing
+///   `StoreInitialPlayerAvatarState` (`overworld.c:883-898`) captured *before*
+///   the warp. Ladders are not [`is_warp_trigger`] ids here either (see
+///   [`crate::overworld::metatile_behavior`]'s scope note), so a ladder tile
+///   is only reachable as a destination, and this port faces such an arrival
+///   south rather than preserving the pre-warp facing
+///   `(behavioral-fidelity)` deviation.
+// Several arms share `Direction::South` with the final `_` arm, and that is
+// the point: each one is a distinct upstream branch (`IsDoor`,
+// `IsNorthArrowWarp`, the closing `else`) that happens to agree today. Folding
+// them into the wildcard would erase which upstream predicate a given behavior
+// matched, and silently change meaning if one of them is ever re-derived.
+#[allow(clippy::match_same_arms)]
+#[must_use]
+pub const fn warp_in_facing(destination_behavior: u8) -> Direction {
+    match destination_behavior {
+        // Tested before the door arm upstream, and `IsNonAnimDoor` matches
+        // this id too -- the order is the whole reason it faces north.
+        MB_DEEP_SOUTH_WARP => Direction::North,
+        MB_NON_ANIMATED_DOOR | MB_WATER_DOOR | MB_ANIMATED_DOOR | MB_PETALBURG_GYM_DOOR => {
+            Direction::South
+        }
+        MB_SOUTH_ARROW_WARP | MB_WATER_SOUTH_ARROW_WARP | MB_SHOAL_CAVE_ENTRANCE => {
+            Direction::North
+        }
+        MB_NORTH_ARROW_WARP | MB_STAIRS_OUTSIDE_ABANDONED_SHIP => Direction::South,
+        MB_WEST_ARROW_WARP => Direction::East,
+        MB_EAST_ARROW_WARP => Direction::West,
+        _ => Direction::South,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::overworld::metatile_behavior::{MB_ANIMATED_DOOR, MB_NON_ANIMATED_DOOR, MB_NORMAL};
+    use crate::overworld::metatile_behavior::MB_NORMAL;
     use assets::{MapConnection, MapEvents, MapHeader, MetatileAttributeTable, MetatileCell};
 
     fn cell_bytes(width: u16, height: u16, id_at: impl Fn(u16, u16) -> u16) -> Vec<u8> {
@@ -286,6 +361,55 @@ mod tests {
         };
         assert_eq!(resolve_warp_event(&dynamic), WarpTrigger::Unsupported);
         assert_eq!(resolve_warp_event(&secret_base), WarpTrigger::Unsupported);
+    }
+
+    /// Every ported [`warp_in_facing`] branch, keyed by the raw behavior
+    /// byte (upstream `constants/metatile_behaviors.h` enum position), in
+    /// upstream's own branch order (`src/overworld.c:929-951`).
+    #[test]
+    fn warp_in_facing_follows_the_destination_tiles_behavior() {
+        // IsDeepSouthWarp, tested before the door arm that also matches it.
+        assert_eq!(warp_in_facing(0x6E), Direction::North);
+        // IsNonAnimDoor || IsDoor.
+        assert_eq!(warp_in_facing(0x60), Direction::South);
+        assert_eq!(warp_in_facing(0x6C), Direction::South);
+        assert_eq!(warp_in_facing(0x69), Direction::South);
+        assert_eq!(warp_in_facing(0x8D), Direction::South);
+        // IsSouthArrowWarp -- the doormat a front door lands you on.
+        assert_eq!(warp_in_facing(0x65), Direction::North);
+        assert_eq!(warp_in_facing(0x6D), Direction::North);
+        assert_eq!(warp_in_facing(0x1C), Direction::North);
+        // IsNorthArrowWarp.
+        assert_eq!(warp_in_facing(0x64), Direction::South);
+        assert_eq!(warp_in_facing(0x1B), Direction::South);
+        // IsWestArrowWarp / IsEastArrowWarp: face *back out* of the arrow.
+        assert_eq!(warp_in_facing(0x63), Direction::East);
+        assert_eq!(warp_in_facing(0x62), Direction::West);
+    }
+
+    /// The final `else` (`overworld.c:950-951`): every behavior with no
+    /// branch of its own faces south, including the ones this port
+    /// deliberately does not model (the ladder branch -- see
+    /// [`warp_in_facing`]'s "Not modelled" section).
+    #[test]
+    fn unbranched_destination_behaviors_face_south() {
+        const MB_LADDER: u8 = 0x61;
+        const MB_UP_ESCALATOR: u8 = 0x6A;
+        assert_eq!(warp_in_facing(MB_NORMAL), Direction::South);
+        assert_eq!(warp_in_facing(MB_LADDER), Direction::South);
+        assert_eq!(warp_in_facing(MB_UP_ESCALATOR), Direction::South);
+    }
+
+    /// Reviewer-verified counterexample to a source-tile rule: on the I-3
+    /// path, `MAP_LITTLEROOT_TOWN`'s warp #1 sits on an `MB_ANIMATED_DOOR`
+    /// (`0x69`) tile, but lands on `..._BRENDANS_HOUSE_1F`'s warp #1, whose
+    /// tile is `MB_SOUTH_ARROW_WARP` (`0x65`) -- so the arrival faces
+    /// *north*, the opposite of what the source tile's own door branch would
+    /// have produced.
+    #[test]
+    fn a_door_source_tile_can_land_on_a_north_facing_destination() {
+        assert_eq!(warp_in_facing(MB_ANIMATED_DOOR), Direction::South);
+        assert_eq!(warp_in_facing(MB_SOUTH_ARROW_WARP), Direction::North);
     }
 
     #[test]
