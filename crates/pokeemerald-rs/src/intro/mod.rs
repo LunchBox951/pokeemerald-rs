@@ -29,7 +29,15 @@
 //! - **No gender-select menu, no naming screen.** See
 //!   `crate::new_game`'s module docs -- the speech pages that would
 //!   normally frame those UI steps ([`speech::pages`]'s pages 4/5, "And you
-//!   are?"/"What's your name?") still print, just with nothing interactive
+//!   are?"/"What's your name?") still print and still wait for a button
+//!   press before continuing (upstream holds both on screen too --
+//!   `Task_NewGameBirchSpeech_WaitPressBeforeNameChoice`,
+//!   `main_menu.c:1590`, for "What's your name?"; "And you are?" is
+//!   gated behind the unmodeled Birch/Lotad platform-fade sequence instead
+//!   of an explicit button-wait task state, `main_menu.c:1410-1501`, but a
+//!   press-wait reproduces upstream's actual observable pacing -- the page
+//!   stays up until *something* advances it -- without modeling that
+//!   animation) -- just with no gender-select menu or naming UI rendered
 //!   in between.
 //! - **No music, no sound effects.** `PlayBGM(MUS_ROUTE122)` and every
 //!   `PlaySE` call in the task chain are silent here (no audio wiring in

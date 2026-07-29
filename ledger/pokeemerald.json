@@ -11504,9 +11504,14 @@
       "status": "pending"
     },
     "data/text/birch_speech.inc": {
+      "artifacts": {
+        "gText_Birch_BoyOrGirl": {
+          "status": "pending"
+        }
+      },
       "category": "data.text",
       "kind": "file",
-      "reason": "8 of 9 speech strings transcribed for the v1 intro (Welcome, MainSpeech, AndYouAre, WhatsYourName, SoItsPlayer, YourePlayer, AreYouReady; page 1's 'This is what we call a POKeMON.' correctly sourced from strings.c gText_ThisIsAPokemon per main_menu.c:1350). gText_Birch_BoyOrGirl is deliberately NOT transcribed: it belongs to the gender-select prompt, and the naming/gender UI is deferred to M8 with fixed v1 defaults — port it when that slice lands.",
+      "reason": "7 of 9 speech strings transcribed for the v1 intro (Welcome, MainSpeech, AndYouAre, WhatsYourName, SoItsPlayer, YourePlayer, AreYouReady). gText_Birch_Pokemon is deliberately NOT transcribed: it is dead upstream code with zero references anywhere outside its own declaration in this file -- main_menu.c:1350's Task_NewGameBirchSpeech_ThisIsAPokemon instead prints gText_ThisIsAPokemon from src/strings.c:100 (that's what crates/pokeemerald-rs/src/intro/speech.rs's THIS_IS_A_POKEMON actually transcribes, cited there). gText_Birch_BoyOrGirl belongs to the gender-select prompt, deferred to M8 with fixed v1 defaults -- tracked as its own pending sub-artifact (data/text/birch_speech.inc#gText_Birch_BoyOrGirl) so the deferral stays visible in `ledger.py gaps` instead of being hidden by this file's own terminal status.",
       "rust_target": "crates/pokeemerald-rs/src/intro/speech.rs",
       "spec": "I-3",
       "status": "stubbed"

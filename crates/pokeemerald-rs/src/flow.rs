@@ -138,11 +138,12 @@ impl OverworldPhase {
     /// docs' [`held_direction`]) attempts a step/turn against a
     /// [`engine::overworld::MapRuntime`] rebuilt fresh this call (mirroring
     /// [`OverworldScene::compose`]'s own "no persisted borrow" pattern --
-    /// see the module docs), then the walk-animation timer advances (module
-    /// docs on [`advance_player_one_frame`]'s "preserve progress 0" rule).
-    /// Silently does nothing if this map's header/events can't be found in
-    /// the `'static` tables (unreachable for [`new_game::SPAWN_MAP_ID`]
-    /// against a real extraction).
+    /// see the module docs), then the walk-animation timer always ticks
+    /// (module docs on [`advance_player_one_frame`]).
+    /// Silently does nothing but drain an already-in-progress walk
+    /// animation if this map's header/events can't be found in the
+    /// `'static` tables (unreachable for [`new_game::SPAWN_MAP_ID`] against
+    /// a real extraction).
     fn step(&mut self, buttons: ButtonState) {
         let direction = held_direction(buttons);
         if let (Ok(header), Ok(events)) = (
@@ -151,12 +152,7 @@ impl OverworldPhase {
         ) {
             let runtime = self.scene.runtime(self.map_id, header, events);
             advance_player_one_frame(&mut self.player, direction, &runtime);
-        } else if self.player.in_transit() {
-            // No runtime to step against this frame (unreachable for
-            // `new_game::SPAWN_MAP_ID` against a real extraction) -- still
-            // drain an already-in-progress walk animation rather than
-            // freezing it, matching [`advance_player_one_frame`]'s own
-            // "tick only when already mid-transit" rule.
+        } else {
             self.player.tick();
         }
     }
@@ -192,39 +188,43 @@ fn held_direction(buttons: ButtonState) -> Option<Direction> {
     }
 }
 
-/// Feed one input poll to `player` against `runtime`, preserving
-/// `step_progress() == 0` through the first frame a new step is accepted.
+/// Feed one input poll to `player` against `runtime`, then unconditionally
+/// advance its walk-animation timer -- upstream's own per-frame shape,
+/// reproduced exactly `(behavioral-fidelity)`.
 ///
-/// [`PlayerState::step`] itself sets a freshly-started step's progress to
-/// `0` (`StepOutcome::Advanced` sets `transit_frames = Some(0)`), but
-/// [`PlayerState::tick`] must not also run within that same call -- doing
-/// so would advance progress to `1` before this frame's own composition
-/// ever sees it, so the very first rendered frame of a step already shows
-/// progress `1` instead of `0`. [`crate::overworld::viewport`]'s own
-/// scroll-lag math (`build_tilemaps`'s module docs) relies on exactly one
-/// composed frame at progress `0` to cancel [`PlayerState::position`]'s
-/// one-tile logical jump (`position` already holds the *destination* tile
-/// the instant a step is accepted); skipping that frame makes every step
-/// visibly jump one pixel instead of walking smoothly.
+/// Every `MOVE_SPEED_NORMAL` walk direction's `Step0` handler both starts
+/// *and* applies the first frame of movement in the same call: e.g.
+/// `MovementAction_WalkNormalDown_Step0`
+/// (`pokeemerald/src/event_object_movement.c:5354-5358`) calls
+/// `InitMovementNormal` (which zeroes the sprite's step timer,
+/// `sTimer = 0`) and then immediately falls through to
+/// `MovementAction_WalkNormalDown_Step1` -> `UpdateMovementNormal` ->
+/// `NpcTakeStep`, which applies `sStep1Funcs[0]`'s 1px offset and advances
+/// the timer to `1` -- all before that frame is ever drawn. So the very
+/// first rendered frame of a step is already 1px into the tile crossing
+/// (`step_progress() == 1`, not `0`), and a full tile crossing takes
+/// exactly [`engine::overworld::WALK_FRAMES_PER_TILE`] (16) *rendered*
+/// frames, matching `sStepTimes[MOVE_SPEED_NORMAL] ==
+/// ARRAY_COUNT(sStep1Funcs) == 16` (`event_object_movement.c`'s
+/// `sStep1Funcs`/`sStepTimes` tables).
 ///
-/// Ticking only when `player` was *already* mid-transit *before* this call
-/// reproduces the same "advance after presenting, not before" shape
-/// [`AnimatedTitle`]'s own per-frame handling already uses (module docs'
-/// "Animating the real title screen" section in [`crate::app`]) -- one call
-/// always composes the state it just produced, tick or no tick, and the
-/// timer only ever advances a state some earlier call already rendered
-/// once.
+/// A prior version of this function skipped the tick on the frame a step
+/// began, on the theory that [`crate::overworld::viewport::build_tilemaps`]'s
+/// scroll-lag math needed a `0`-progress frame rendered first to "cancel"
+/// [`PlayerState::position`]'s one-tile logical jump. Reviewed and reverted:
+/// that reasoning didn't match upstream (verified above) and, empirically,
+/// made a held direction take 17 rendered frames to cross one tile instead
+/// of 16, plus duplicated a camera position at every tile boundary (a
+/// one-frame stutter of its own) -- see this function's own tests for the
+/// corrected contract.
 fn advance_player_one_frame(
     player: &mut PlayerState,
     direction: Option<Direction>,
     runtime: &engine::overworld::MapRuntime<'_>,
 ) {
-    let was_in_transit = player.in_transit();
     let no_connections = |_: assets::MapId| -> Option<(u16, u16)> { None };
     let _ = player.step(direction, runtime, &no_connections);
-    if was_in_transit {
-        player.tick();
-    }
+    player.tick();
 }
 
 /// Whether [`AppScene::OverworldLoadFailed`]'s waiting state should retry
@@ -450,15 +450,19 @@ mod tests {
         )
     }
 
-    /// Finding 1 regression (Codex re-review): the first frame composed
-    /// after a step begins must see `step_progress() == 0` -- not `1` --
-    /// or `crate::overworld::viewport::build_tilemaps`'s scroll-lag math
-    /// (which relies on exactly one `0`-progress frame to cancel
-    /// `PlayerState::position`'s already-moved-to-the-destination-tile
-    /// jump) skips straight to a partially-scrolled frame, visibly
-    /// hopping the camera one pixel at the start of every step.
+    /// Senior review round 3 regression, correcting the prior (empirically
+    /// wrong -- see [`advance_player_one_frame`]'s own doc comment) "skip
+    /// the first tick" change: the first frame composed after a step begins
+    /// must see `step_progress() == 1`, not `0` -- upstream applies the
+    /// first walk-animation frame in the very call that starts the step
+    /// (`MovementAction_WalkNormalDown_Step0`'s `InitMovementNormal`
+    /// immediately followed by `Step1` -> `UpdateMovementNormal` ->
+    /// `NpcTakeStep`, `pokeemerald/src/event_object_movement.c:5354-5358`)
+    /// -- and a full tile crossing takes exactly
+    /// [`engine::overworld::WALK_FRAMES_PER_TILE`] (16) rendered frames.
     #[test]
-    fn advance_player_one_frame_preserves_step_progress_zero_on_the_frame_a_step_begins() {
+    fn advance_player_one_frame_shows_progress_1_on_the_frame_a_step_begins_and_takes_16_frames_per_tile(
+    ) {
         let runtime = flat_runtime(5, 5);
         let mut player = PlayerState::new((2, 2), 3, Direction::South);
 
@@ -469,34 +473,38 @@ mod tests {
         assert!(player.in_transit());
         assert_eq!(
             player.step_progress(),
-            0,
-            "the frame that just started a step must still render progress 0"
-        );
-
-        // The *next* frame is the one that should see the timer advance.
-        advance_player_one_frame(&mut player, Some(Direction::South), &runtime);
-        assert_eq!(
-            player.step_progress(),
             1,
-            "the following frame is where the walk-animation timer first advances"
+            "the frame that just started a step is already 1px into the \
+             walk animation, matching upstream's InitMovementNormal-then- \
+             immediately-Step1 shape"
         );
 
-        // Draining the rest of the transit reaches exactly
-        // `WALK_FRAMES_PER_TILE` composed progress values (0..=15) before
-        // settling, matching `engine::overworld::WALK_FRAMES_PER_TILE`.
+        // Every following frame advances the timer by exactly 1 while the
+        // input stays held.
         for expected in 2..engine::overworld::WALK_FRAMES_PER_TILE {
             advance_player_one_frame(&mut player, Some(Direction::South), &runtime);
             assert_eq!(player.step_progress(), expected);
         }
+        assert!(
+            player.in_transit(),
+            "still mid-transit one frame before settling"
+        );
+
+        // The 16th frame (this crossing's `WALK_FRAMES_PER_TILE`th) is the
+        // one where the transit settles -- 16 rendered frames total to
+        // cross one tile, not 17.
         advance_player_one_frame(&mut player, Some(Direction::South), &runtime);
-        assert!(!player.in_transit(), "the transit must have settled by now");
+        assert!(
+            !player.in_transit(),
+            "the transit must settle on exactly the 16th frame"
+        );
     }
 
-    /// A player that never moves (`Idle`/`Turned`/`Blocked`, never
-    /// `Advanced`) must never spuriously start ticking -- `tick` is a
-    /// documented no-op while `transit_frames` is `None`, but this pins
-    /// that the "only tick when already mid-transit" guard doesn't somehow
-    /// suppress movement or turning either.
+    /// A turn-in-place never enters transit -- `PlayerState::tick` is a
+    /// documented no-op while `transit_frames` is `None`
+    /// (`PlayerState::tick`'s own doc comment), so the unconditional tick
+    /// [`advance_player_one_frame`] always runs afterward must not somehow
+    /// start (or otherwise disturb) a transit a plain turn never begins.
     #[test]
     fn advance_player_one_frame_turning_in_place_never_enters_transit() {
         let runtime = flat_runtime(5, 5);

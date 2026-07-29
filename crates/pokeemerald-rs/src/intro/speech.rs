@@ -80,15 +80,34 @@ const THIS_IS_A_POKEMON: &str = "This is what we call a “POKéMON.”{P}";
 /// `gText_Birch_MainSpeech` (`birch_speech.inc:14-29`).
 const MAIN_SPEECH: &str = "This world is widely inhabited by\ncreatures known as POKéMON.{P}We humans live alongside POKéMON,\nat times as friendly playmates, and{L}at times as cooperative workmates.{P}And sometimes, we band together\nand battle others like us.{P}But despite our closeness, we don't\nknow everything about POKéMON.{P}In fact, there are many, many\nsecrets surrounding POKéMON.{P}To unravel POKéMON mysteries,\nI've been undertaking research.{L}That's what I do.{P}";
 
-/// `gText_Birch_AndYouAre` (`birch_speech.inc:31-32`). No trailing `\p` --
-/// upstream's own string ends "?$" directly, so the outer task chain (and
-/// this port's [`super::IntroScene`]) advances to the next page as soon as
-/// the last glyph is revealed, no button press needed in between.
-const AND_YOU_ARE: &str = "And you are?";
+/// `gText_Birch_AndYouAre` (`birch_speech.inc:31-32`) plus a trailing
+/// `{P}` this port adds on top of upstream's own raw string (which ends
+/// `"?$"` with no embedded `\p`).
+///
+/// Upstream doesn't need one: `Task_NewGameBirchSpeech_AndYouAre` prints
+/// this line, then *auto*-advances (no button wait) the instant printing
+/// finishes, straight into the Birch/Lotad platform-fade-and-slide
+/// sequence (`Task_NewGameBirchSpeech_StartBirchLotadPlatformFade` through
+/// `Task_NewGameBirchSpeech_WaitForPlayerFadeIn`, `main_menu.c:1410-1477`)
+/// that keeps this same text on screen for several real seconds before the
+/// gender-select page replaces it. This port renders none of that
+/// animation (module docs' "No Birch/Lotad/player sprites..." bullet), so
+/// without a `{P}` here the page would instead vanish the instant its own
+/// short reveal-delay after the last glyph expires -- legible for only a
+/// few frames, nothing like upstream's actual pacing. A button-wait is the
+/// closest available stand-in for "stays up until something else advances
+/// it" `(behavioral-fidelity)`.
+const AND_YOU_ARE: &str = "And you are?{P}";
 
-/// `gText_Birch_WhatsYourName` (`birch_speech.inc:38-40`). Same "no trailing
-/// `\p`" shape as [`AND_YOU_ARE`].
-const WHATS_YOUR_NAME: &str = "All right.\nWhat's your name?";
+/// `gText_Birch_WhatsYourName` (`birch_speech.inc:38-40`) plus a trailing
+/// `{P}`: unlike [`AND_YOU_ARE`]'s animation-gated pause, this one is a
+/// literal upstream button-wait --
+/// `Task_NewGameBirchSpeech_WaitPressBeforeNameChoice`
+/// (`main_menu.c:1590`), reached once
+/// `Task_NewGameBirchSpeech_WaitForWhatsYourNameToPrint` sees printing
+/// finish -- which does not advance to the (here, elided) naming screen
+/// until `JOY_NEW(A_BUTTON) || JOY_NEW(B_BUTTON)`.
+const WHATS_YOUR_NAME: &str = "All right.\nWhat's your name?{P}";
 
 /// `gText_Birch_SoItsPlayer` (`birch_speech.inc:42-43`) with `{PLAYER}{KUN}`
 /// substituted for the fixed v1 default name (module docs).
@@ -210,11 +229,21 @@ mod tests {
     }
 
     #[test]
-    fn and_you_are_and_whats_your_name_have_no_trailing_page_wait() {
-        // Neither ends with a PromptClear/PromptScroll before End -- see
-        // AND_YOU_ARE's doc comment.
+    fn and_you_are_and_whats_your_name_both_wait_for_a_press_before_advancing() {
+        // Senior review round 3 regression: both pages used to end straight
+        // on `?` with no `PromptClear` before `End`, so each vanished a few
+        // frames after its last glyph revealed instead of holding on
+        // screen. Both must now end `?{P}` -- `Token::PromptClear`
+        // immediately before `Token::End` -- see `AND_YOU_ARE`'s and
+        // `WHATS_YOUR_NAME`'s own doc comments for the upstream mechanism
+        // each one stands in for.
         let pages = pages();
-        assert_eq!(pages[3][pages[3].len() - 2], Token::Char('?'));
-        assert_eq!(pages[4][pages[4].len() - 2], Token::Char('?'));
+        assert_eq!(pages[3][pages[3].len() - 3], Token::Char('?'));
+        assert_eq!(pages[3][pages[3].len() - 2], Token::PromptClear);
+        assert_eq!(pages[3].last(), Some(&Token::End));
+
+        assert_eq!(pages[4][pages[4].len() - 3], Token::Char('?'));
+        assert_eq!(pages[4][pages[4].len() - 2], Token::PromptClear);
+        assert_eq!(pages[4].last(), Some(&Token::End));
     }
 }

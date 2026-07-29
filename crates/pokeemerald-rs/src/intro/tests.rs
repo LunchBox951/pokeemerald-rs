@@ -1,8 +1,10 @@
 //! [`IntroScene`] flow tests: page advance on confirm, the skip path, and
 //! headless composition -- all against a synthetic font sheet + dialogue
 //! frame (no local asset pack needed, mirroring `engine::text::render`'s own
-//! synthetic-sheet test pattern). A real-pack composition check lives
-//! alongside the other scenes' `#[ignore]` tests in `app.rs`.
+//! synthetic-sheet test pattern). A real-pack composition check
+//! (`real_pack_composes_a_non_blank_intro_frame`) lives right here, at the
+//! bottom of this file, mirroring `main_menu::tests::
+//! real_pack_composes_a_non_blank_menu_frame`.
 
 use assets::fonts::{FontGlyphSheet, FontId, FontImageRef, GLYPH_COUNT};
 use assets::pack::ImageRef;
@@ -17,9 +19,25 @@ const SHEET_HEIGHT: u32 = 512;
 
 /// A uniformly-blank synthetic glyph sheet, the real shape (256x512, see
 /// `assets::fonts`' module docs) so [`FontGlyphSheet::new`] accepts it --
-/// mirrors `engine::text::render`'s own tests.
+/// mirrors `engine::text::render`'s own tests. Every pixel is palette index
+/// `0` (`textbox::GLYPH_COLORS[0] == None`, transparent), so a glyph
+/// revealed against this sheet never paints anything visible -- fine for
+/// tests that only care about state (page index, finished-ness, revealed
+/// count), but see [`distinguishable_sheet_pixels`] for tests that need to
+/// see an actual painted pixel.
 fn blank_sheet_pixels() -> Vec<u8> {
     vec![0u8; (SHEET_WIDTH * SHEET_HEIGHT) as usize]
+}
+
+/// A synthetic glyph sheet where every glyph cell is uniformly palette
+/// index `1` (`textbox::GLYPH_COLORS[1]`'s opaque dark grey,
+/// `Rgb888 { r: 24, g: 24, b: 24 }`) -- unlike [`blank_sheet_pixels`]'s
+/// all-transparent fixture, a glyph revealed against this sheet actually
+/// paints a recognisable colour, so a test can assert a composed frame's
+/// pixels prove a glyph was drawn, not just that [`IntroScene::compose`]
+/// ran without panicking.
+fn distinguishable_sheet_pixels() -> Vec<u8> {
+    vec![1u8; (SHEET_WIDTH * SHEET_HEIGHT) as usize]
 }
 
 /// A synthetic dialogue frame the exact real shape
@@ -27,7 +45,11 @@ fn blank_sheet_pixels() -> Vec<u8> {
 /// 16-colour palette -- `FrameAssets`'s fields are `pub(crate)`, so a test
 /// in this crate can build one by hand without a real pack (see
 /// `FrameAssets`'s own docs on why the palette is already-converted
-/// `Rgb888`, not a pack-only `PaletteRef`).
+/// `Rgb888`, not a pack-only `PaletteRef`). Every tile pixel is index `0`
+/// (transparent) and the palette is all-black, so [`crate::textbox::blit_frame_tiles`]
+/// never actually paints anything distinguishable from the black backdrop
+/// against this fixture -- see [`distinguishable_synthetic_frame`] for a
+/// frame a test can use to prove the border/fill was actually drawn.
 fn synthetic_frame() -> FrameAssets {
     const WIDTH: u32 = 56;
     const HEIGHT: u32 = 16;
@@ -38,6 +60,41 @@ fn synthetic_frame() -> FrameAssets {
         palette: vec![Rgb888::BLACK; 16],
     }
 }
+
+/// A synthetic dialogue frame the same real shape as [`synthetic_frame`],
+/// but with every tile pixel set to opaque palette index `1` (a distinct
+/// colour from the black backdrop) -- so a test can assert a composed
+/// frame's border/fill pixels actually equal that colour, proving
+/// [`crate::textbox::blit_frame_tiles`] painted them rather than merely running
+/// without panicking.
+fn distinguishable_synthetic_frame() -> FrameAssets {
+    const WIDTH: u32 = 56;
+    const HEIGHT: u32 = 16;
+    let mut palette = vec![Rgb888::BLACK; 16];
+    palette[1] = FRAME_COLOR;
+    FrameAssets {
+        pixels: vec![1u8; (WIDTH * HEIGHT) as usize],
+        width: WIDTH,
+        height: HEIGHT,
+        palette,
+    }
+}
+
+/// [`distinguishable_synthetic_frame`]'s chosen non-black colour.
+const FRAME_COLOR: Rgb888 = Rgb888 {
+    r: 200,
+    g: 40,
+    b: 40,
+};
+
+/// [`distinguishable_sheet_pixels`]'s chosen colour --
+/// `textbox::GLYPH_COLORS[1]`, duplicated here since that table is private
+/// to `crate::textbox`.
+const GLYPH_COLOR: Rgb888 = Rgb888 {
+    r: 24,
+    g: 24,
+    b: 24,
+};
 
 fn synthetic_scene(pixels: &[u8], speed: TextSpeed) -> IntroScene<'_> {
     let image = ImageRef {
@@ -153,26 +210,67 @@ fn a_page_break_clears_the_revealed_glyph_accumulator() {
     );
 }
 
+/// Senior review round 3 regression: this test used to only assert
+/// `fb.width()`/`fb.height()` -- consts on [`rendering::Framebuffer`], true
+/// regardless of whether `compose` painted anything at all -- against
+/// [`blank_sheet_pixels`]'s all-transparent glyph sheet, which made real
+/// pixel colour assertions impossible. Uses [`distinguishable_sheet_pixels`]
+/// instead so the revealed glyph's own colour is actually checkable.
 #[test]
-fn compose_produces_a_full_240x160_framebuffer() {
-    let pixels = blank_sheet_pixels();
+fn compose_paints_the_revealed_glyphs_pixel_not_just_the_frame_dimensions() {
+    let pixels = distinguishable_sheet_pixels();
     let mut scene = synthetic_scene(&pixels, TextSpeed::Instant);
-    scene.tick(false, false);
+    scene.tick(false, false); // reveals the first glyph ('H' of page 0).
+
     let fb = scene.compose();
     assert_eq!(fb.width(), 240);
     assert_eq!(fb.height(), 160);
+
+    // The first revealed glyph sits at the printer's own origin
+    // (`super::PRINTER_ORIGIN`), offset by the dialogue box's screen
+    // position (`super::BOX_SCREEN_ORIGIN`) -- a pixel comfortably inside
+    // that 16x16 cell must be the glyph's own opaque colour, proving
+    // `compose` actually painted the revealed glyph rather than merely
+    // producing a correctly-sized, still-blank framebuffer.
+    let x = usize::try_from(super::BOX_SCREEN_ORIGIN.0 + super::PRINTER_ORIGIN.0 + 4).unwrap();
+    let y = usize::try_from(super::BOX_SCREEN_ORIGIN.1 + super::PRINTER_ORIGIN.1 + 4).unwrap();
+    assert_eq!(fb.pixel(x, y), Some(GLYPH_COLOR));
 }
 
+/// Senior review round 3 regression: this test used to only assert
+/// `fb.width() == 240` (module docs on the sibling test above) against
+/// [`synthetic_frame`]'s all-transparent-over-all-black fixture, which made
+/// it impossible for a border pixel to ever differ from the backdrop. Uses
+/// [`distinguishable_synthetic_frame`] instead so the border's own colour
+/// is actually checkable.
 #[test]
 fn compose_draws_the_dialogue_box_border_even_before_any_glyph_reveals() {
     let pixels = blank_sheet_pixels();
-    let scene = synthetic_scene(&pixels, TextSpeed::Mid);
+    let image = ImageRef {
+        width: SHEET_WIDTH,
+        height: SHEET_HEIGHT,
+        bit_depth: 2,
+        pixels: &pixels,
+    };
+    let sheet = FontGlyphSheet::new(FontImageRef::new_for_tests(FontId::Normal, image)).unwrap();
+    let scene = IntroScene::new(sheet, distinguishable_synthetic_frame(), TextSpeed::Mid);
+
     let fb = scene.compose();
-    // The border tiles use palette index 1+ (index 0 is transparent); the
-    // synthetic frame's tile bitmap is all-zero, so this only proves the
-    // blit path runs without panicking against a full page layout -- pixel
-    // colour fidelity is covered by the real-pack ignored test in `app.rs`.
     assert_eq!(fb.width(), 240);
+    assert_eq!(fb.height(), 160);
+
+    // The dialogue box's own top border row (one tile row above the
+    // content rect -- `MessageBoxLayout::frame_tiles`'s top-border push,
+    // which this port's `blit_frame_tiles` draws unconditionally, before
+    // any glyph is ever revealed) must be the frame's own opaque colour.
+    let border_x = usize::try_from(super::BOX_SCREEN_ORIGIN.0).unwrap();
+    let border_y = usize::try_from(super::BOX_SCREEN_ORIGIN.1 - 8).unwrap();
+    assert_eq!(fb.pixel(border_x, border_y), Some(FRAME_COLOR));
+
+    // A pixel clearly outside the box stays the untouched black backdrop --
+    // proof the border is a *distinct*, bounded shape, not a stray fill of
+    // the whole screen.
+    assert_eq!(fb.pixel(2, 2), Some(Rgb888::BLACK));
 }
 
 // Guards `GLYPH_COUNT`'s continued use as this module's synthetic sheet
@@ -292,4 +390,45 @@ fn cached_pack_reports_pack_missing_repeatedly_without_panicking() {
     assert!(first.is_pack_missing());
     let second = super::cached_pack().unwrap_err();
     assert!(second.is_pack_missing());
+}
+
+/// Senior review round 3: the one real-pack composition check this module
+/// was missing (the `A real-pack composition check lives alongside the
+/// other scenes' #[ignore] tests in app.rs` claim this file's own module
+/// docs used to make was false -- no such test exists in `app.rs`). Mirrors
+/// `main_menu::tests::real_pack_composes_a_non_blank_menu_frame`: build the
+/// real scene via [`super::load_default`], tick it forward a few frames (so
+/// more than one glyph has actually revealed), and confirm both that
+/// *something* painted (not an all-black frame) and that the dialogue box
+/// itself is visually distinct from the empty backdrop around it -- not
+/// just "some pixel somewhere is non-black," which a stray artifact could
+/// also satisfy.
+#[test]
+#[ignore = "needs a local pack: run `cargo xtask extract` first"]
+fn real_pack_composes_a_non_blank_intro_frame() {
+    let mut scene = super::load_default().expect("run `cargo xtask extract` first");
+    for _ in 0..5 {
+        scene.tick(false, false);
+    }
+
+    let fb = scene.compose();
+    assert!(
+        fb.pixels().iter().any(|&p| p != Rgb888::BLACK),
+        "a few ticks in, the real dialogue box and at least one glyph must have painted something"
+    );
+
+    // A pixel inside the dialogue box's own content rect must differ from
+    // one clearly outside it (near the top-left corner, well clear of the
+    // box -- this scene's own black backdrop, module docs).
+    let inside = fb
+        .pixel(
+            usize::try_from(super::BOX_SCREEN_ORIGIN.0 + 4).unwrap(),
+            usize::try_from(super::BOX_SCREEN_ORIGIN.1 + 4).unwrap(),
+        )
+        .expect("in bounds");
+    let outside = fb.pixel(2, 2).expect("in bounds");
+    assert_ne!(
+        inside, outside,
+        "the real dialogue box must look different from the empty backdrop around it"
+    );
 }
