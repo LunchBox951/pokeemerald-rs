@@ -33,7 +33,8 @@
 # plus `app::tests::real_pack_boots_to_the_title_screen_through_app_new` --
 # I-2's honest boot check, issue #168: builds an `App` through the exact
 # `App::new` construction wiring `main` uses, minus only the real OS window,
-# and asserts the presented frame is the real title screen)
+# then drives `App::step` and asserts the frames those steps actually
+# presented are the real title screen's, still animating)
 # stay `#[ignore]`d. `real-pack` runs `./init.sh` to fetch the pinned
 # upstream checkouts (cached below, keyed on init.sh's pinned SHAs so a
 # fresh clone only happens when a pin moves), then `cargo run -p xtask --
