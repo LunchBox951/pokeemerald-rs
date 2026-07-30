@@ -12,8 +12,10 @@
 //! growth curves (see [`experience`]), the per-map wild encounter tables (see
 //! [`wild_encounters`]), the trainer roster and parties (see [`trainers`]),
 //! the map layout geometry (see [`map_layouts`]), the map headers, groups,
-//! and connections (see [`map_headers`]), and the per-map object/warp/coord/
-//! bg events (see [`map_events`]); more data follows as the crate fills out.
+//! and connections (see [`map_headers`]), the per-map object/warp/coord/
+//! bg events (see [`map_events`]), and the fresh-save object-hide flag set
+//! `EventScript_ResetAllMapFlags` applies (see [`new_game_flags`]); more
+//! data follows as the crate fills out.
 //!
 //! Binary graphics (tileset tile graphics, palettes, player/NPC sprite
 //! sheets, font glyph sheets, text-window border frames) and map layout
@@ -44,6 +46,7 @@ pub mod map_headers;
 pub mod map_layouts;
 pub mod metatile_attributes;
 pub mod move_names;
+pub mod new_game_flags;
 pub mod pack;
 pub mod species;
 pub mod species_names;
@@ -82,6 +85,7 @@ pub use map_layouts::{
     BORDER_HEIGHT, BORDER_WIDTH, LAYOUT_COUNT,
 };
 pub use metatile_attributes::{MetatileAttribute, MetatileAttributeTable, MetatileLayerType};
+pub use new_game_flags::{FLAG_HIDE_LITTLEROOT_TOWN_BRENDANS_HOUSE_RIVAL_BEDROOM, RESET_MAP_FLAGS};
 
 // `items::ItemId` is the full item-table identifier; it is intentionally *not*
 // re-exported at the crate root to avoid clashing with `species::ItemId` (the
