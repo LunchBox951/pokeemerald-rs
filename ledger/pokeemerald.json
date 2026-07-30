@@ -11310,6 +11310,17 @@
       "status": "pending"
     },
     "data/scripts/new_game.inc": {
+      "artifacts": {
+        "EventScript_ResetAllBerries": {
+          "status": "pending"
+        },
+        "EventScript_ResetAllMapFlags": {
+          "reason": "The 159 setflag operands transcribed in upstream script order as assets::RESET_MAP_FLAGS (numeric ids resolved via include/constants/flags.h), applied at crates/pokeemerald-rs/src/new_game.rs's init_save_blocks via engine::event_data::EventData::flag_set. EventScript_ResetAllMapFlags's trailing 'call EventScript_ResetAllBerries' (setberrytree seeding) is NOT covered by this artifact -- no typed berry-tree save state exists yet (see data/scripts/berry_tree.inc, still pending); tracked separately.",
+          "rust_target": "crates/assets/src/new_game_flags.rs",
+          "spec": "I-3",
+          "status": "ported"
+        }
+      },
       "category": "data.script",
       "kind": "file",
       "spec_owner": "06-engine",
@@ -26005,23 +26016,53 @@
     },
     "src/metatile_behavior.c": {
       "artifacts": {
+        "MetatileBehavior_IsDeepSouthWarp": {
+          "fold_target": "crates/engine/src/overworld/warp.rs",
+          "reason": "Transcribed inline into engine::overworld::warp::warp_in_facing's match on the arrival tile's metatile behavior (exact upstream id membership, including multi-id arms); no standalone predicate exists because arrival-facing classification is its only v1 consumer.",
+          "spec": "I-3",
+          "status": "folded"
+        },
         "MetatileBehavior_IsDoor": {
-          "reason": "Re-implemented as metatile_behavior::is_door restricted to MB_ANIMATED_DOOR; MB_PETALBURG_GYM_DOOR is not ported (out of the v1 north-star path)",
+          "reason": "Re-implemented as metatile_behavior::is_door restricted to MB_ANIMATED_DOOR for the door/warp-trigger predicate; MB_PETALBURG_GYM_DOOR (the function's second id) is modeled as a constant and consumed only by engine::overworld::warp::warp_in_facing's arrival-facing classification — it stays outside is_door and is_warp_trigger (tested), so the predicate itself is a partial port.",
           "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
           "spec": "S-5",
-          "status": "rewritten"
+          "status": "stubbed"
+        },
+        "MetatileBehavior_IsEastArrowWarp": {
+          "fold_target": "crates/engine/src/overworld/warp.rs",
+          "reason": "Transcribed inline into engine::overworld::warp::warp_in_facing's match on the arrival tile's metatile behavior (exact upstream id membership) — the arrival-facing consumer ONLY. Upstream's warp-trigger consumer (TryArrowWarp/IsArrowWarpMetatileBehavior, src/field_control_avatar.c:688-699/767-780 under the same tookStep gate; also field_player_avatar.c:225-231/294-300, overworld.c:2737) is deliberately unported — these ids stay outside is_warp_trigger (pinned by test) — tracked as issue #174 (the Brendan's-house exit doormat depends on it).",
+          "spec": "I-3",
+          "status": "folded"
         },
         "MetatileBehavior_IsNonAnimDoor": {
-          "reason": "Re-implemented as metatile_behavior::is_door restricted to MB_NON_ANIMATED_DOOR; MB_WATER_DOOR and MB_DEEP_SOUTH_WARP are not ported (out of the v1 north-star path)",
+          "reason": "Re-implemented as metatile_behavior::is_door restricted to MB_NON_ANIMATED_DOOR for the door/warp-trigger predicate; MB_WATER_DOOR and MB_DEEP_SOUTH_WARP (the function's other ids) are modeled as constants and consumed only by engine::overworld::warp::warp_in_facing's arrival-facing classification — they stay outside is_door and is_warp_trigger (tested), so the predicate itself is a partial port.",
           "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
           "spec": "S-5",
-          "status": "rewritten"
+          "status": "stubbed"
+        },
+        "MetatileBehavior_IsNorthArrowWarp": {
+          "fold_target": "crates/engine/src/overworld/warp.rs",
+          "reason": "Transcribed inline into engine::overworld::warp::warp_in_facing's match on the arrival tile's metatile behavior (exact upstream id membership) — the arrival-facing consumer ONLY. Upstream's warp-trigger consumer (TryArrowWarp/IsArrowWarpMetatileBehavior, src/field_control_avatar.c:688-699/767-780 under the same tookStep gate; also field_player_avatar.c:225-231/294-300, overworld.c:2737) is deliberately unported — these ids stay outside is_warp_trigger (pinned by test) — tracked as issue #174 (the Brendan's-house exit doormat depends on it).",
+          "spec": "I-3",
+          "status": "folded"
+        },
+        "MetatileBehavior_IsSouthArrowWarp": {
+          "fold_target": "crates/engine/src/overworld/warp.rs",
+          "reason": "Transcribed inline into engine::overworld::warp::warp_in_facing's match on the arrival tile's metatile behavior (exact upstream id membership) — the arrival-facing consumer ONLY. Upstream's warp-trigger consumer (TryArrowWarp/IsArrowWarpMetatileBehavior, src/field_control_avatar.c:688-699/767-780 under the same tookStep gate; also field_player_avatar.c:225-231/294-300, overworld.c:2737) is deliberately unported — these ids stay outside is_warp_trigger (pinned by test) — tracked as issue #174 (the Brendan's-house exit doormat depends on it).",
+          "spec": "I-3",
+          "status": "folded"
         },
         "MetatileBehavior_IsWarpDoor": {
           "reason": "MB_ANIMATED_DOOR check re-implemented as metatile_behavior::is_door",
           "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
           "spec": "S-5",
           "status": "rewritten"
+        },
+        "MetatileBehavior_IsWestArrowWarp": {
+          "fold_target": "crates/engine/src/overworld/warp.rs",
+          "reason": "Transcribed inline into engine::overworld::warp::warp_in_facing's match on the arrival tile's metatile behavior (exact upstream id membership) — the arrival-facing consumer ONLY. Upstream's warp-trigger consumer (TryArrowWarp/IsArrowWarpMetatileBehavior, src/field_control_avatar.c:688-699/767-780 under the same tookStep gate; also field_player_avatar.c:225-231/294-300, overworld.c:2737) is deliberately unported — these ids stay outside is_warp_trigger (pinned by test) — tracked as issue #174 (the Brendan's-house exit doormat depends on it).",
+          "spec": "I-3",
+          "status": "folded"
         }
       },
       "category": "code.source",
@@ -26129,7 +26170,7 @@
     "src/new_game.c": {
       "artifacts": {
         "NewGameInitData": {
-          "reason": "NewGameInitData (new_game.c:149-207) re-implemented for the fields engine::save::block's SaveBlock1/SaveBlock2 model covers (encryption key, trainer id, party/count zeroing, starting money, bag, event data, fixed default player name/gender); WarpToTruck's truck-map warp is replaced by a direct spawn into the protagonist's bedroom (see new_game module docs), and every other NewGameInitData call (pokedex, TV, secret bases, PC items, etc.) has no typed home yet. Post-spawn warp processing is also deferred: the flow discards StepOutcome, so the bedroom's stair warp does not yet transition maps (issue #163). RunScriptImmediately(EventScript_ResetAllMapFlags) — the fresh game's object-hide flag set — is likewise deferred to issue #164 (needs extracted event scripts or generated flag constants; consumed by #161's object events).",
+          "reason": "NewGameInitData (new_game.c:149-207) re-implemented for the fields engine::save::block's SaveBlock1/SaveBlock2 model covers (encryption key, trainer id, party/count zeroing, starting money, bag, event data, fixed default player name/gender); WarpToTruck's truck-map warp is replaced by a direct spawn into the protagonist's bedroom (see new_game module docs), and every other NewGameInitData call (pokedex, TV, secret bases, PC items, etc.) has no typed home yet. RunScriptImmediately(EventScript_ResetAllMapFlags)'s 159 setflag ops are applied at init_save_blocks via assets::RESET_MAP_FLAGS (issue #164); only the trailing call EventScript_ResetAllBerries half remains deferred, tracked as data/scripts/new_game.inc#EventScript_ResetAllBerries pending typed berry-tree save state, and the flags themselves are stored save state with no consumer until #161's object-event filtering reads them. Post-spawn warp processing (the bedroom stair warp, issue #163) is handled by flow's OverworldPhase, which processes StepOutcome landings on step completion.",
           "rust_target": "crates/pokeemerald-rs/src/new_game.rs",
           "spec": "I-3",
           "status": "stubbed"
@@ -26146,6 +26187,24 @@
     },
     "src/overworld.c": {
       "artifacts": {
+        "ApplyCurrentWarp": {
+          "reason": "gSaveBlock1Ptr->location = sWarpDestination transcribed as OverworldPhase::warp_to's save1.location assignment on a resolved warp landing (flow/overworld_phase.rs); gLastUsedWarp (the previous location) and the dive/hole-warp resets are not modeled (no typed home / out of v1 scope) — stubbed until they are.",
+          "rust_target": "crates/pokeemerald-rs/src/flow/overworld_phase.rs",
+          "spec": "I-3",
+          "status": "stubbed"
+        },
+        "GetAdjustedInitialDirection": {
+          "reason": "Destination-tile branches rewritten as engine::overworld::warp::warp_in_facing, keyed on the arrival tile's metatile behavior exactly as upstream keys on GetCenterScreenMetatileBehavior after WarpIntoMap (flow::OverworldPhase::warp_to reads that behavior off the destination map's runtime and passes it in): deep-south-warp -> North (tested first, before the door arm that also matches it), non-anim-door/door -> South, south-arrow -> North, north-arrow -> South, west-arrow -> East, east-arrow -> West, else South. Three branches are NOT modelled and all collapse into that final else: the FLAG_SYS_CRUISE_MODE + MAP_TYPE_OCEAN_ROUTE branch (no event-flag state), the surfing<->underwater transition branch (no surf/dive avatar flags), and the MetatileBehavior_IsLadder branch that preserves the pre-warp facing (no StoreInitialPlayerAvatarState equivalent -- that function and GetAdjustedInitialTransitionFlags stay unported).",
+          "rust_target": "crates/engine/src/overworld/warp.rs",
+          "spec": "I-3",
+          "status": "stubbed"
+        },
+        "SetWarpData": {
+          "reason": "map_group/map_num/warp_id/x/y field assignment transcribed as the engine::save::WarpData literal OverworldPhase::warp_to builds for save1.location on a resolved warp (flow/overworld_phase.rs); x/y are left at -1 matching SetWarpDestinationToMapWarp's own -1,-1 call shape for a map-warp-id destination (not fixed coordinates).",
+          "rust_target": "crates/pokeemerald-rs/src/flow/overworld_phase.rs",
+          "spec": "I-3",
+          "status": "rewritten"
+        },
         "sOverworldBgTemplates": {
           "reason": "BG0-3 index/priority assignment for the overworld's bottom/middle/top metatile layers, transcribed as viewport::{TOP,MIDDLE,BOTTOM}_{BG_INDEX,PRIORITY} consts; BG0 (weather/other overlay effects) is out of this slice's scope and stays unbound.",
           "rust_target": "crates/pokeemerald-rs/src/overworld/viewport.rs",

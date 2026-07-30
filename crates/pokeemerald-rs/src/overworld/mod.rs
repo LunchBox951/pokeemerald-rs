@@ -507,6 +507,31 @@ pub fn load_default_room() -> Result<OverworldScene, OverworldSceneError> {
     OverworldScene::from_pack(&pack, layout, PlayerCharacter::Brendan)
 }
 
+/// Load the pack from its default location and decode `map_id`'s own room
+/// out of it, with [`PlayerCharacter::Brendan`]'s walking sprite -- the
+/// map-id-keyed counterpart to [`load_default_room`] (which always decodes
+/// the fixed [`DEFAULT_ROOM_LAYOUT_ID`]), added for warp processing (issue
+/// #163): [`crate::flow::OverworldPhase`] needs to rebind its rendered room
+/// to an arbitrary warp destination, not just the bedroom the intro hands
+/// off to. Resolves `map_id`'s layout via the generated
+/// [`assets::MapHeaderTable`] (`header.layout`), then decodes it exactly
+/// like [`load_default_room`] does its own fixed id.
+///
+/// # Errors
+///
+/// [`OverworldSceneError::Pack`] with [`OverworldSceneError::is_pack_missing`]
+/// true if no pack has been extracted yet; [`OverworldSceneError::Asset`] if
+/// `map_id` (or its layout) isn't in the generated tables -- unreachable for
+/// any [`assets::MapId`] this port's own warp-destination tables reference;
+/// see [`OverworldScene::from_pack`] for the other (real-pack-only) error
+/// cases.
+pub fn load_room(map_id: assets::MapId) -> Result<OverworldScene, OverworldSceneError> {
+    let pack = AssetPack::load_default()?;
+    let header = assets::MapHeaderTable::new().header(map_id)?;
+    let layout = assets::LayoutTable::new().layout(header.layout)?;
+    OverworldScene::from_pack(&pack, layout, PlayerCharacter::Brendan)
+}
+
 /// Translate a [`MapLayout`]'s `gTileset_*` symbol into the normalized pack
 /// name `AssetPack::tileset` expects (`crates/xtask/src/extract/mod.rs`'s
 /// `TILESETS` -- the five tilesets the pack currently bundles). An explicit
