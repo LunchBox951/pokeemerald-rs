@@ -25946,23 +25946,53 @@
     },
     "src/metatile_behavior.c": {
       "artifacts": {
+        "MetatileBehavior_IsDeepSouthWarp": {
+          "fold_target": "crates/engine/src/overworld/warp.rs",
+          "reason": "Transcribed inline into engine::overworld::warp::warp_in_facing's match on the arrival tile's metatile behavior (exact upstream id membership, including multi-id arms); no standalone predicate exists because arrival-facing classification is its only v1 consumer.",
+          "spec": "I-3",
+          "status": "folded"
+        },
         "MetatileBehavior_IsDoor": {
-          "reason": "Re-implemented as metatile_behavior::is_door restricted to MB_ANIMATED_DOOR; MB_PETALBURG_GYM_DOOR is not ported (out of the v1 north-star path)",
+          "reason": "Re-implemented as metatile_behavior::is_door restricted to MB_ANIMATED_DOOR for the door/warp-trigger predicate; MB_PETALBURG_GYM_DOOR (the function's second id) is now modeled as a constant and consumed only by engine::overworld::warp::warp_in_facing's arrival-facing classification — it stays outside is_door and is_warp_trigger (tested).",
           "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
           "spec": "S-5",
           "status": "rewritten"
         },
+        "MetatileBehavior_IsEastArrowWarp": {
+          "fold_target": "crates/engine/src/overworld/warp.rs",
+          "reason": "Transcribed inline into engine::overworld::warp::warp_in_facing's match on the arrival tile's metatile behavior (exact upstream id membership, including multi-id arms); no standalone predicate exists because arrival-facing classification is its only v1 consumer.",
+          "spec": "I-3",
+          "status": "folded"
+        },
         "MetatileBehavior_IsNonAnimDoor": {
-          "reason": "Re-implemented as metatile_behavior::is_door restricted to MB_NON_ANIMATED_DOOR; MB_WATER_DOOR and MB_DEEP_SOUTH_WARP are not ported (out of the v1 north-star path)",
+          "reason": "Re-implemented as metatile_behavior::is_door restricted to MB_NON_ANIMATED_DOOR for the door/warp-trigger predicate; MB_WATER_DOOR and MB_DEEP_SOUTH_WARP (the function's other ids) are now modeled as constants and consumed only by engine::overworld::warp::warp_in_facing's arrival-facing classification — they stay outside is_door and is_warp_trigger (tested).",
           "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
           "spec": "S-5",
           "status": "rewritten"
+        },
+        "MetatileBehavior_IsNorthArrowWarp": {
+          "fold_target": "crates/engine/src/overworld/warp.rs",
+          "reason": "Transcribed inline into engine::overworld::warp::warp_in_facing's match on the arrival tile's metatile behavior (exact upstream id membership, including multi-id arms); no standalone predicate exists because arrival-facing classification is its only v1 consumer.",
+          "spec": "I-3",
+          "status": "folded"
+        },
+        "MetatileBehavior_IsSouthArrowWarp": {
+          "fold_target": "crates/engine/src/overworld/warp.rs",
+          "reason": "Transcribed inline into engine::overworld::warp::warp_in_facing's match on the arrival tile's metatile behavior (exact upstream id membership, including multi-id arms); no standalone predicate exists because arrival-facing classification is its only v1 consumer.",
+          "spec": "I-3",
+          "status": "folded"
         },
         "MetatileBehavior_IsWarpDoor": {
           "reason": "MB_ANIMATED_DOOR check re-implemented as metatile_behavior::is_door",
           "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
           "spec": "S-5",
           "status": "rewritten"
+        },
+        "MetatileBehavior_IsWestArrowWarp": {
+          "fold_target": "crates/engine/src/overworld/warp.rs",
+          "reason": "Transcribed inline into engine::overworld::warp::warp_in_facing's match on the arrival tile's metatile behavior (exact upstream id membership, including multi-id arms); no standalone predicate exists because arrival-facing classification is its only v1 consumer.",
+          "spec": "I-3",
+          "status": "folded"
         }
       },
       "category": "code.source",

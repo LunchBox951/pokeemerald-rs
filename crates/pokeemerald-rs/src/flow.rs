@@ -1252,4 +1252,42 @@ mod tests {
             "GetAdjustedInitialDirection's IsSouthArrowWarp branch (overworld.c:937-938)"
         );
     }
+
+    /// Mutation guard for [`OverworldPhase::warp_to`] itself: the front-door
+    /// arrival from the test above, driven through `warp_to` rather than the
+    /// pure `warp_in_facing`. Landing on 1F's warp #1 (`(8, 8)`,
+    /// `MB_SOUTH_ARROW_WARP`) must face North — a facing distinguishable from
+    /// both `GetAdjustedInitialDirection`'s catch-all `else` and `warp_to`'s
+    /// own `MB_NORMAL` fallback (which would each say South, and which the
+    /// bedroom-stair test cannot tell apart) — and `scene` must rebind in
+    /// lockstep with `map_id` (`warp_to`'s documented invariant), observed by
+    /// composing the phase's frame against a freshly loaded 1F scene.
+    #[test]
+    #[ignore = "needs a local pack: run `cargo xtask extract` first"]
+    fn warping_to_the_front_doormat_faces_north_and_rebinds_the_scene() {
+        let mut phase = OverworldPhase::load_default().expect("run `cargo xtask extract` first");
+        let one_f = assets::MapId("MAP_LITTLEROOT_TOWN_BRENDANS_HOUSE_1F");
+
+        phase.warp_to(one_f, 1);
+
+        assert_eq!(phase.map_id, one_f);
+        assert_eq!(
+            phase.player.position(),
+            (8, 8),
+            "1F's warp #1: the doormat inside the front door"
+        );
+        assert_eq!(
+            phase.player.facing(),
+            Direction::North,
+            "the doormat's own MB_SOUTH_ARROW_WARP behavior must drive the \
+             facing (overworld.c:937-938) -- South would mean the destination \
+             behavior was never read"
+        );
+        let fresh =
+            crate::overworld::load_room(one_f).expect("1F must load from the extracted pack");
+        assert!(
+            phase.compose_frame()[..] == fresh.compose_frame(&phase.player)[..],
+            "warp_to must rebind `scene` to the destination map, not just `map_id`"
+        );
+    }
 }

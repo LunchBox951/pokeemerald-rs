@@ -43,9 +43,9 @@ pub const MB_NORMAL: u8 = 0;
 /// `MB_NON_ANIMATED_DOOR` (`0x60`): a warp tile with no open/close animation.
 /// Upstream uses this for interior staircases and other "just teleport"
 /// warps as well as literal unanimated doors (`MetatileBehavior_IsNonAnimDoor`
-/// also matches `MB_WATER_DOOR`/`MB_DEEP_SOUTH_WARP`, both out of v1 scope
-/// and not ported here). This is the behavior the v1 north-star path's
-/// house-interior stairs are assumed to use.
+/// also matches [`MB_WATER_DOOR`]/[`MB_DEEP_SOUTH_WARP`], modeled below only
+/// for arrival-facing classification — see [`is_door`]). This is the behavior
+/// the v1 north-star path's house-interior stairs are assumed to use.
 pub const MB_NON_ANIMATED_DOOR: u8 = 0x60;
 
 /// `MB_ANIMATED_DOOR` (`0x69`): a warp tile that plays an open/close animation
@@ -118,11 +118,15 @@ pub const MB_DEEP_SOUTH_WARP: u8 = 0x6E;
 /// [`MB_STAIRS_OUTSIDE_ABANDONED_SHIP`].
 pub const MB_PETALBURG_GYM_DOOR: u8 = 0x8D;
 
-/// Whether `behavior` is one of the two door ids this slice ports, mirroring
-/// the union of upstream `MetatileBehavior_IsNonAnimDoor` and
-/// `MetatileBehavior_IsWarpDoor`/`MetatileBehavior_IsDoor` restricted to the
-/// ids this module models (`MB_PETALBURG_GYM_DOOR`, `MB_WATER_DOOR`, and
-/// `MB_DEEP_SOUTH_WARP` are not ported — out of the v1 north-star path).
+/// Whether `behavior` is one of the two door ids that act as warp *triggers*
+/// in this slice, mirroring the union of upstream
+/// `MetatileBehavior_IsNonAnimDoor` and
+/// `MetatileBehavior_IsWarpDoor`/`MetatileBehavior_IsDoor` restricted to those
+/// trigger ids. The functions' remaining ids — [`MB_PETALBURG_GYM_DOOR`],
+/// [`MB_WATER_DOOR`], and [`MB_DEEP_SOUTH_WARP`] — are modeled as constants
+/// but deliberately excluded here: their only v1 consumer is
+/// [`crate::overworld::warp::warp_in_facing`]'s arrival-facing
+/// classification, and a test pins them outside [`is_warp_trigger`].
 #[must_use]
 pub const fn is_door(behavior: u8) -> bool {
     matches!(behavior, MB_NON_ANIMATED_DOOR | MB_ANIMATED_DOOR)
