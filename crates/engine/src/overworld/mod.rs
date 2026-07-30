@@ -26,6 +26,8 @@
 //! - [`warp`] — resolving a [`assets::WarpEvent`] into a typed
 //!   destination-map-and-warp-id transition, plus the arrival position and
 //!   facing that transition lands on.
+//! - [`object_event`] — object-event hide-flag visibility and the
+//!   player-facing interactive-object lookup (issue #161).
 //! - [`player`] — [`player::PlayerState`], the tile-position/facing/
 //!   sub-tile-step-progress state machine that ties the above together into
 //!   one input-poll-at-a-time `step()` call.
@@ -52,12 +54,16 @@ pub mod collision;
 pub mod direction;
 pub mod map_runtime;
 pub mod metatile_behavior;
+pub mod object_event;
 pub mod player;
 pub mod warp;
 
 pub use collision::{elevation_mismatch, Collision, ELEVATION_MULTI_LEVEL, ELEVATION_TRANSITION};
 pub use direction::Direction;
 pub use map_runtime::{ConnectedMapData, ConnectionCrossing, MapRuntime, NUM_METATILES_IN_PRIMARY};
+pub use object_event::{
+    facing_object_event, initial_facing_direction, object_event_is_visible, visible_object_events,
+};
 pub use player::{PlayerState, StepOutcome, TilePos, WALK_FRAMES_PER_TILE};
 pub use warp::{
     resolve_warp_event, trigger_warp, warp_destination_position, warp_in_facing, WarpTrigger,

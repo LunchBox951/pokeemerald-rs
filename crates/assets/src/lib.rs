@@ -47,6 +47,7 @@ pub mod map_layouts;
 pub mod metatile_attributes;
 pub mod move_names;
 pub mod new_game_flags;
+pub mod object_event_flags;
 pub mod pack;
 pub mod species;
 pub mod species_names;
