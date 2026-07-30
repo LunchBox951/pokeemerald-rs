@@ -38,6 +38,26 @@
 //! the full title -> main menu -> intro -> overworld transition diagram and
 //! its "log-or-ignore is fine" failure policy for a transition's own pack
 //! load.
+//!
+//! # The headless real-boot check (I-2, issue #168)
+//!
+//! [`App::new`]'s title-load wiring is factored into [`load_real_title`]
+//! precisely so it has a second, test-only caller:
+//! `tests::real_pack_boots_to_the_title_screen_through_app_new` builds an
+//! `App` through [`App::new_headless_real_title`] -- the same
+//! [`load_real_title`] call [`App::new`] itself makes, paired with
+//! `platform`'s null backend instead of a real window -- and asserts the
+//! resulting [`App::frame`] matches the real title screen composed
+//! independently via [`title::load_default`]. Before this, the only
+//! pack-backed coverage of the real title screen (this module's own
+//! `animated_frame_returns_the_presented_tick`, `xtask`'s
+//! `check_title_screen`, and [`crate::title`]'s own tests) called
+//! [`title::load_default`]/`compose` directly and never went through
+//! [`App::new`]'s construction at all -- so a regression in *that* wiring
+//! (forgetting to load the title, composing the wrong tick, dropping the
+//! `to_platform_frame` conversion) could stay green. This is the honest
+//! evidence for I-2 "boots to the title screen": the exact construction
+//! `main` uses, driven headlessly against real extracted assets.
 
 use platform::{ButtonState, Buttons, Frame, Platform, PlatformError};
 
@@ -130,13 +150,58 @@ pub struct App {
     scene: Option<AppScene>,
 }
 
+/// Compose an already-loaded [`title::TitleScene`] at tick 0 into the
+/// `(frame, scene)` pair [`App::new`] (and its headless test counterparts)
+/// store: the tick-0 composed frame, plus the fresh [`AppScene::Title`] /
+/// [`AnimatedTitle`] state [`App::step`] advances from there.
+///
+/// The one spot that builds an [`AnimatedTitle`], so [`App::load_real_title`]
+/// (which also loads the scene) and [`App::new_headless_animated`] (which
+/// takes an already-loaded scene, for tests that need their own reference
+/// copy to compare ticks against) never hand-write these same three lines
+/// twice `(oop-boundaries)`.
+fn compose_title_scene(scene: title::TitleScene) -> (Box<Frame>, AppScene) {
+    let frame = to_platform_frame(&scene.compose(0));
+    let app_scene = AppScene::Title(Box::new(AnimatedTitle {
+        scene,
+        tick: 0,
+        presented: false,
+    }));
+    (frame, app_scene)
+}
+
 impl App {
+    /// Load the real title screen (I-2) -- the exact wiring [`App::new`]
+    /// runs -- into a `(frame, scene)` pair ready to move into an `App`
+    /// alongside whichever `Platform` backend the caller opens.
+    ///
+    /// Factored out so [`App::new`] (a real window) and
+    /// [`App::new_headless_real_title`] (`platform`'s null backend, test-only)
+    /// share this exact code path (I-2, issue #168): before this split, the
+    /// headless test coverage for the real title screen called
+    /// [`title::load_default`] and composed the scene itself, a *separate*
+    /// hand-written copy of these same steps that a regression in `App::new`'s
+    /// own wiring could slip past. Deliberately returns before any `Platform`
+    /// exists, preserving [`App::new`]'s "surfaced cleanly without ever
+    /// flashing a window open first" contract for a missing/malformed pack.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AppError::Title`] if the asset pack has not been extracted
+    /// yet (check [`TitleSceneError::is_pack_missing`] -- its rendered
+    /// message names the exact `./init.sh`/`cargo xtask extract` commands to
+    /// run) or is otherwise malformed.
+    fn load_real_title() -> Result<(Box<Frame>, AppScene), AppError> {
+        let scene = title::load_default()?;
+        Ok(compose_title_scene(scene))
+    }
+
     /// Load the real title screen (I-2) from the local asset pack, then open
     /// a window titled `title` to present it.
     ///
-    /// Loads/decodes the scene *before* opening the platform window, so a
-    /// missing pack (or any other title-screen error) is surfaced cleanly
-    /// without ever flashing a window open first.
+    /// Loads/decodes the scene ([`App::load_real_title`]) *before* opening
+    /// the platform window, so a missing pack (or any other title-screen
+    /// error) is surfaced cleanly without ever flashing a window open first.
     ///
     /// # Errors
     ///
@@ -146,17 +211,34 @@ impl App {
     /// run) or is otherwise malformed; [`AppError::Platform`] if the
     /// platform's windowing event loop could not be created.
     pub fn new(title: impl Into<String>) -> Result<Self, AppError> {
-        let scene = title::load_default()?;
-        let frame = to_platform_frame(&scene.compose(0));
+        let (frame, scene) = Self::load_real_title()?;
         let platform = Platform::new(title)?;
         Ok(Self {
             platform,
             frame,
-            scene: Some(AppScene::Title(Box::new(AnimatedTitle {
-                scene,
-                tick: 0,
-                presented: false,
-            }))),
+            scene: Some(scene),
+        })
+    }
+
+    /// Test-only: [`App::new`]'s real title-load wiring
+    /// ([`App::load_real_title`]), paired with `platform`'s headless/null
+    /// backend instead of a real window -- the I-2 headless real-boot check
+    /// (issue #168): the same construction `main` uses via [`App::new`], up
+    /// to and including the first composed frame, minus only the one part
+    /// that categorically cannot run in CI (opening an actual OS window).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AppError::Title`] under the same conditions as
+    /// [`App::new`] -- most commonly [`TitleSceneError::is_pack_missing`]
+    /// when no local asset pack has been extracted yet.
+    #[cfg(test)]
+    fn new_headless_real_title() -> Result<Self, AppError> {
+        let (frame, scene) = Self::load_real_title()?;
+        Ok(Self {
+            platform: Platform::new_headless(),
+            frame,
+            scene: Some(scene),
         })
     }
 
@@ -186,15 +268,11 @@ impl App {
     /// [`App::new`] always opens one).
     #[cfg(test)]
     fn new_headless_animated(scene: title::TitleScene) -> Self {
-        let frame = to_platform_frame(&scene.compose(0));
+        let (frame, app_scene) = compose_title_scene(scene);
         Self {
             platform: Platform::new_headless(),
             frame,
-            scene: Some(AppScene::Title(Box::new(AnimatedTitle {
-                scene,
-                tick: 0,
-                presented: false,
-            }))),
+            scene: Some(app_scene),
         }
     }
 
@@ -325,6 +403,40 @@ mod tests {
             app.frame().to_vec(),
             expected1.to_vec(),
             "the second step advances to and presents tick 1"
+        );
+    }
+
+    /// The I-2 headless real-boot check (issue #168): builds an `App`
+    /// through [`App::new_headless_real_title`] -- [`App::load_real_title`],
+    /// the exact wiring `main` reaches via the public [`App::new`], paired
+    /// with `platform`'s null backend instead of a real window (see the
+    /// module docs' "The headless real-boot check" section) -- and asserts
+    /// the resulting [`App::frame`] is the real title screen's tick-0
+    /// composition, computed independently via `title::load_default` so
+    /// this assertion can never trivially pass by comparing a value against
+    /// itself. Unlike `animated_frame_returns_the_presented_tick` above
+    /// (which hands `App::new_headless_animated` an already-loaded scene),
+    /// this test never touches `title::load_default`/`compose` itself on
+    /// the `App`-construction side -- only [`App::new`]'s own wiring does,
+    /// which is the whole point: a regression there (the wrong tick, a
+    /// dropped `to_platform_frame` conversion, `App::new` never calling
+    /// [`title::load_default`] at all) fails *this* test even though every
+    /// other real-pack check in this crate composes the title screen
+    /// directly and would stay green. Needs the real pack, like
+    /// `animated_frame_returns_the_presented_tick`.
+    #[test]
+    #[ignore = "needs a local pack: run `cargo xtask extract` first"]
+    fn real_pack_boots_to_the_title_screen_through_app_new() {
+        let expected = crate::title::load_default()
+            .expect("run `cargo xtask extract` first")
+            .compose_frame(0);
+
+        let app = App::new_headless_real_title().expect("run `cargo xtask extract` first");
+
+        assert_eq!(
+            app.frame().to_vec(),
+            expected.to_vec(),
+            "App::new's real construction path must present the real title screen's tick-0 frame"
         );
     }
 

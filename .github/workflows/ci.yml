@@ -29,7 +29,11 @@
 # (`check_title_screen`/`check_overworld_scene` in crates/xtask/src/e2e.rs)
 # always no-op there, and the real-pack tests
 # (`real_pack_composes_non_blank_deterministic_title_frames` /
-# `..._overworld_frames`, plus `app::tests::animated_frame_returns_the_presented_tick`)
+# `..._overworld_frames`, `app::tests::animated_frame_returns_the_presented_tick`,
+# plus `app::tests::real_pack_boots_to_the_title_screen_through_app_new` --
+# I-2's honest boot check, issue #168: builds an `App` through the exact
+# `App::new` construction wiring `main` uses, minus only the real OS window,
+# and asserts the presented frame is the real title screen)
 # stay `#[ignore]`d. `real-pack` runs `./init.sh` to fetch the pinned
 # upstream checkouts (cached below, keyed on init.sh's pinned SHAs so a
 # fresh clone only happens when a pin moves), then `cargo run -p xtask --
