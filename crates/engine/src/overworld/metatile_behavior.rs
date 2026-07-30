@@ -8,9 +8,18 @@
 //! ...). Per the issue #108 scope, this module ports **only** the
 //! predicates the v1 north-star path needs (protagonist's room -> downstairs
 //! -> Littleroot outdoor -> Route 101): whether a tile is a door/warp
-//! trigger. Everything else this crate doesn't decode is deliberately left
-//! unclassified rather than guessed at — see [`is_warp_trigger`]'s doc for
-//! how that fail-closed policy plays out for warps specifically.
+//! trigger, plus the ids upstream `GetAdjustedInitialDirection`
+//! (`src/overworld.c:929-951`) branches on to pick the facing a warp *lands*
+//! the player in ([`crate::overworld::warp::warp_in_facing`]). Everything
+//! else this crate doesn't decode is deliberately left unclassified rather
+//! than guessed at — see [`is_warp_trigger`]'s doc for how that fail-closed
+//! policy plays out for warps specifically.
+//!
+//! **Naming an id is not making it triggerable.** The arrow-warp/door-alias
+//! ids below exist because a warp *destination* tile can carry them (a front
+//! door lands you on a `MB_SOUTH_ARROW_WARP` doormat), and the arrival facing
+//! depends on which one it is. [`is_warp_trigger`]'s own membership is
+//! unchanged by their presence: they still cannot *start* a warp here.
 //!
 //! **Ordinary walkability is not decided here.** Whether a tile can be
 //! stepped onto at all is the [`MetatileCell::collision`](assets::MetatileCell::collision)
@@ -34,9 +43,9 @@ pub const MB_NORMAL: u8 = 0;
 /// `MB_NON_ANIMATED_DOOR` (`0x60`): a warp tile with no open/close animation.
 /// Upstream uses this for interior staircases and other "just teleport"
 /// warps as well as literal unanimated doors (`MetatileBehavior_IsNonAnimDoor`
-/// also matches `MB_WATER_DOOR`/`MB_DEEP_SOUTH_WARP`, both out of v1 scope
-/// and not ported here). This is the behavior the v1 north-star path's
-/// house-interior stairs are assumed to use.
+/// also matches [`MB_WATER_DOOR`]/[`MB_DEEP_SOUTH_WARP`], modeled below only
+/// for arrival-facing classification — see [`is_door`]). This is the behavior
+/// the v1 north-star path's house-interior stairs are assumed to use.
 pub const MB_NON_ANIMATED_DOOR: u8 = 0x60;
 
 /// `MB_ANIMATED_DOOR` (`0x69`): a warp tile that plays an open/close animation
@@ -49,11 +58,75 @@ pub const MB_NON_ANIMATED_DOOR: u8 = 0x60;
 /// applies (see the module docs on that simplification in `crate::overworld::warp`).
 pub const MB_ANIMATED_DOOR: u8 = 0x69;
 
-/// Whether `behavior` is one of the two door ids this slice ports, mirroring
-/// the union of upstream `MetatileBehavior_IsNonAnimDoor` and
-/// `MetatileBehavior_IsWarpDoor`/`MetatileBehavior_IsDoor` restricted to the
-/// ids this module models (`MB_PETALBURG_GYM_DOOR`, `MB_WATER_DOOR`, and
-/// `MB_DEEP_SOUTH_WARP` are not ported — out of the v1 north-star path).
+/// `MB_STAIRS_OUTSIDE_ABANDONED_SHIP` (`0x1B`): the second id upstream
+/// `MetatileBehavior_IsNorthArrowWarp` matches
+/// (`metatile_behavior.c:304-310`). Named here only so
+/// [`crate::overworld::warp::warp_in_facing`] can reproduce that predicate's
+/// full membership; it is **not** a [`is_warp_trigger`] id (see that
+/// function's fail-closed policy).
+pub const MB_STAIRS_OUTSIDE_ABANDONED_SHIP: u8 = 0x1B;
+
+/// `MB_SHOAL_CAVE_ENTRANCE` (`0x1C`): the third id upstream
+/// `MetatileBehavior_IsSouthArrowWarp` matches
+/// (`metatile_behavior.c:313-319`) — see
+/// [`MB_STAIRS_OUTSIDE_ABANDONED_SHIP`] for why it is named but not
+/// triggerable here.
+pub const MB_SHOAL_CAVE_ENTRANCE: u8 = 0x1C;
+
+/// `MB_EAST_ARROW_WARP` (`0x62`): upstream `MetatileBehavior_IsEastArrowWarp`
+/// (`metatile_behavior.c:288-294`). Arrow warps are not ported as *triggers*
+/// (module docs; upstream's separate `TryArrowWarp` path), but they are
+/// reachable as warp *destinations*, so
+/// [`crate::overworld::warp::warp_in_facing`] must still classify them.
+pub const MB_EAST_ARROW_WARP: u8 = 0x62;
+
+/// `MB_WEST_ARROW_WARP` (`0x63`): upstream `MetatileBehavior_IsWestArrowWarp`
+/// (`metatile_behavior.c:296-302`) — see [`MB_EAST_ARROW_WARP`].
+pub const MB_WEST_ARROW_WARP: u8 = 0x63;
+
+/// `MB_NORTH_ARROW_WARP` (`0x64`): upstream
+/// `MetatileBehavior_IsNorthArrowWarp` (`metatile_behavior.c:304-310`) — see
+/// [`MB_EAST_ARROW_WARP`].
+pub const MB_NORTH_ARROW_WARP: u8 = 0x64;
+
+/// `MB_SOUTH_ARROW_WARP` (`0x65`): upstream
+/// `MetatileBehavior_IsSouthArrowWarp` (`metatile_behavior.c:313-319`) — the
+/// behavior of the doormat tile a house's front door warps *onto* (e.g.
+/// `MAP_LITTLEROOT_TOWN_BRENDANS_HOUSE_1F`'s warp #1 at `(8, 8)`) — see
+/// [`MB_EAST_ARROW_WARP`].
+pub const MB_SOUTH_ARROW_WARP: u8 = 0x65;
+
+/// `MB_WATER_DOOR` (`0x6C`): the second id upstream
+/// `MetatileBehavior_IsNonAnimDoor` matches (`metatile_behavior.c:262-269`) —
+/// see [`MB_STAIRS_OUTSIDE_ABANDONED_SHIP`].
+pub const MB_WATER_DOOR: u8 = 0x6C;
+
+/// `MB_WATER_SOUTH_ARROW_WARP` (`0x6D`): the second id upstream
+/// `MetatileBehavior_IsSouthArrowWarp` matches
+/// (`metatile_behavior.c:313-319`) — see [`MB_EAST_ARROW_WARP`].
+pub const MB_WATER_SOUTH_ARROW_WARP: u8 = 0x6D;
+
+/// `MB_DEEP_SOUTH_WARP` (`0x6E`): matched by *both*
+/// `MetatileBehavior_IsDeepSouthWarp` and `MetatileBehavior_IsNonAnimDoor`
+/// upstream (`metatile_behavior.c:262-269, 272-278`); the order those two
+/// are tested in is what decides its arrival facing — see
+/// [`crate::overworld::warp::warp_in_facing`].
+pub const MB_DEEP_SOUTH_WARP: u8 = 0x6E;
+
+/// `MB_PETALBURG_GYM_DOOR` (`0x8D`): the second id upstream
+/// `MetatileBehavior_IsDoor` matches (`metatile_behavior.c:228-235`) — see
+/// [`MB_STAIRS_OUTSIDE_ABANDONED_SHIP`].
+pub const MB_PETALBURG_GYM_DOOR: u8 = 0x8D;
+
+/// Whether `behavior` is one of the two door ids that act as warp *triggers*
+/// in this slice, mirroring the union of upstream
+/// `MetatileBehavior_IsNonAnimDoor` and
+/// `MetatileBehavior_IsWarpDoor`/`MetatileBehavior_IsDoor` restricted to those
+/// trigger ids. The functions' remaining ids — [`MB_PETALBURG_GYM_DOOR`],
+/// [`MB_WATER_DOOR`], and [`MB_DEEP_SOUTH_WARP`] — are modeled as constants
+/// but deliberately excluded here: their only v1 consumer is
+/// [`crate::overworld::warp::warp_in_facing`]'s arrival-facing
+/// classification, and a test pins them outside [`is_warp_trigger`].
 #[must_use]
 pub const fn is_door(behavior: u8) -> bool {
     matches!(behavior, MB_NON_ANIMATED_DOOR | MB_ANIMATED_DOOR)
@@ -109,5 +182,46 @@ mod tests {
     fn door_behaviors_are_warp_triggers() {
         assert!(is_warp_trigger(MB_NON_ANIMATED_DOOR));
         assert!(is_warp_trigger(MB_ANIMATED_DOOR));
+    }
+
+    /// The ids named only for arrival-facing classification
+    /// (`crate::overworld::warp::warp_in_facing`) must not widen the trigger
+    /// set: naming an id is not making it triggerable (module docs).
+    #[test]
+    fn arrival_facing_ids_are_not_warp_triggers() {
+        for behavior in [
+            MB_STAIRS_OUTSIDE_ABANDONED_SHIP,
+            MB_SHOAL_CAVE_ENTRANCE,
+            MB_EAST_ARROW_WARP,
+            MB_WEST_ARROW_WARP,
+            MB_NORTH_ARROW_WARP,
+            MB_SOUTH_ARROW_WARP,
+            MB_WATER_DOOR,
+            MB_WATER_SOUTH_ARROW_WARP,
+            MB_DEEP_SOUTH_WARP,
+            MB_PETALBURG_GYM_DOOR,
+        ] {
+            assert!(
+                !is_warp_trigger(behavior),
+                "{behavior:#04x} must stay outside this slice's trigger set"
+            );
+        }
+    }
+
+    /// The ids' numeric values, against their positions in upstream's
+    /// `constants/metatile_behaviors.h` enum (which assigns no explicit
+    /// values, so each id's number is its index).
+    #[test]
+    fn arrival_facing_ids_match_upstreams_enum_positions() {
+        assert_eq!(MB_STAIRS_OUTSIDE_ABANDONED_SHIP, 0x1B);
+        assert_eq!(MB_SHOAL_CAVE_ENTRANCE, 0x1C);
+        assert_eq!(MB_EAST_ARROW_WARP, 0x62);
+        assert_eq!(MB_WEST_ARROW_WARP, 0x63);
+        assert_eq!(MB_NORTH_ARROW_WARP, 0x64);
+        assert_eq!(MB_SOUTH_ARROW_WARP, 0x65);
+        assert_eq!(MB_WATER_DOOR, 0x6C);
+        assert_eq!(MB_WATER_SOUTH_ARROW_WARP, 0x6D);
+        assert_eq!(MB_DEEP_SOUTH_WARP, 0x6E);
+        assert_eq!(MB_PETALBURG_GYM_DOOR, 0x8D);
     }
 }

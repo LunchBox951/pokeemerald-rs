@@ -24,7 +24,8 @@
 //!   upstream `MB_*` behavior ids/predicates this slice ports (doors), with
 //!   an explicit fail-closed policy for everything it doesn't.
 //! - [`warp`] — resolving a [`assets::WarpEvent`] into a typed
-//!   destination-map-and-warp-id transition.
+//!   destination-map-and-warp-id transition, plus the arrival position and
+//!   facing that transition lands on.
 //! - [`player`] — [`player::PlayerState`], the tile-position/facing/
 //!   sub-tile-step-progress state machine that ties the above together into
 //!   one input-poll-at-a-time `step()` call.
@@ -58,4 +59,6 @@ pub use collision::{elevation_mismatch, Collision, ELEVATION_MULTI_LEVEL, ELEVAT
 pub use direction::Direction;
 pub use map_runtime::{ConnectedMapData, ConnectionCrossing, MapRuntime, NUM_METATILES_IN_PRIMARY};
 pub use player::{PlayerState, StepOutcome, TilePos, WALK_FRAMES_PER_TILE};
-pub use warp::{resolve_warp_event, trigger_warp, warp_destination_position, WarpTrigger};
+pub use warp::{
+    resolve_warp_event, trigger_warp, warp_destination_position, warp_in_facing, WarpTrigger,
+};
