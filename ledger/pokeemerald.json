@@ -25953,10 +25953,10 @@
           "status": "folded"
         },
         "MetatileBehavior_IsDoor": {
-          "reason": "Re-implemented as metatile_behavior::is_door restricted to MB_ANIMATED_DOOR for the door/warp-trigger predicate; MB_PETALBURG_GYM_DOOR (the function's second id) is now modeled as a constant and consumed only by engine::overworld::warp::warp_in_facing's arrival-facing classification — it stays outside is_door and is_warp_trigger (tested).",
+          "reason": "Re-implemented as metatile_behavior::is_door restricted to MB_ANIMATED_DOOR for the door/warp-trigger predicate; MB_PETALBURG_GYM_DOOR (the function's second id) is modeled as a constant and consumed only by engine::overworld::warp::warp_in_facing's arrival-facing classification — it stays outside is_door and is_warp_trigger (tested), so the predicate itself is a partial port.",
           "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
           "spec": "S-5",
-          "status": "rewritten"
+          "status": "stubbed"
         },
         "MetatileBehavior_IsEastArrowWarp": {
           "fold_target": "crates/engine/src/overworld/warp.rs",
@@ -25965,10 +25965,10 @@
           "status": "folded"
         },
         "MetatileBehavior_IsNonAnimDoor": {
-          "reason": "Re-implemented as metatile_behavior::is_door restricted to MB_NON_ANIMATED_DOOR for the door/warp-trigger predicate; MB_WATER_DOOR and MB_DEEP_SOUTH_WARP (the function's other ids) are now modeled as constants and consumed only by engine::overworld::warp::warp_in_facing's arrival-facing classification — they stay outside is_door and is_warp_trigger (tested).",
+          "reason": "Re-implemented as metatile_behavior::is_door restricted to MB_NON_ANIMATED_DOOR for the door/warp-trigger predicate; MB_WATER_DOOR and MB_DEEP_SOUTH_WARP (the function's other ids) are modeled as constants and consumed only by engine::overworld::warp::warp_in_facing's arrival-facing classification — they stay outside is_door and is_warp_trigger (tested), so the predicate itself is a partial port.",
           "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
           "spec": "S-5",
-          "status": "rewritten"
+          "status": "stubbed"
         },
         "MetatileBehavior_IsNorthArrowWarp": {
           "fold_target": "crates/engine/src/overworld/warp.rs",
@@ -26118,10 +26118,10 @@
     "src/overworld.c": {
       "artifacts": {
         "ApplyCurrentWarp": {
-          "reason": "gSaveBlock1Ptr->location = sWarpDestination transcribed as OverworldPhase::warp_to's save1.location assignment on a resolved warp landing; gLastUsedWarp (the previous location) and the dive/hole-warp resets are not modeled (no typed home / out of v1 scope).",
-          "rust_target": "crates/pokeemerald-rs/src/flow.rs",
+          "reason": "gSaveBlock1Ptr->location = sWarpDestination transcribed as OverworldPhase::warp_to's save1.location assignment on a resolved warp landing (flow/overworld_phase.rs); gLastUsedWarp (the previous location) and the dive/hole-warp resets are not modeled (no typed home / out of v1 scope) — stubbed until they are.",
+          "rust_target": "crates/pokeemerald-rs/src/flow/overworld_phase.rs",
           "spec": "I-3",
-          "status": "rewritten"
+          "status": "stubbed"
         },
         "GetAdjustedInitialDirection": {
           "reason": "Destination-tile branches rewritten as engine::overworld::warp::warp_in_facing, keyed on the arrival tile's metatile behavior exactly as upstream keys on GetCenterScreenMetatileBehavior after WarpIntoMap (flow::OverworldPhase::warp_to reads that behavior off the destination map's runtime and passes it in): deep-south-warp -> North (tested first, before the door arm that also matches it), non-anim-door/door -> South, south-arrow -> North, north-arrow -> South, west-arrow -> East, east-arrow -> West, else South. Three branches are NOT modelled and all collapse into that final else: the FLAG_SYS_CRUISE_MODE + MAP_TYPE_OCEAN_ROUTE branch (no event-flag state), the surfing<->underwater transition branch (no surf/dive avatar flags), and the MetatileBehavior_IsLadder branch that preserves the pre-warp facing (no StoreInitialPlayerAvatarState equivalent -- that function and GetAdjustedInitialTransitionFlags stay unported).",
@@ -26130,8 +26130,8 @@
           "status": "stubbed"
         },
         "SetWarpData": {
-          "reason": "map_group/map_num/warp_id/x/y field assignment transcribed as the engine::save::WarpData literal OverworldPhase::warp_to builds for save1.location on a resolved warp; x/y are left at -1 matching SetWarpDestinationToMapWarp's own -1,-1 call shape for a map-warp-id destination (not fixed coordinates).",
-          "rust_target": "crates/pokeemerald-rs/src/flow.rs",
+          "reason": "map_group/map_num/warp_id/x/y field assignment transcribed as the engine::save::WarpData literal OverworldPhase::warp_to builds for save1.location on a resolved warp (flow/overworld_phase.rs); x/y are left at -1 matching SetWarpDestinationToMapWarp's own -1,-1 call shape for a map-warp-id destination (not fixed coordinates).",
+          "rust_target": "crates/pokeemerald-rs/src/flow/overworld_phase.rs",
           "spec": "I-3",
           "status": "rewritten"
         },
