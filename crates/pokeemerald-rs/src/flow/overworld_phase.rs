@@ -234,11 +234,14 @@ impl OverworldPhase {
             // `self`, so it can be computed before the warp handling below
             // still needs that same `runtime`), but the dialog itself isn't
             // opened until after that borrow ends (opening needs `&mut
-            // self`) -- a borrow-checker consequence, not an
-            // upstream-observable ordering choice: module docs'
-            // warp/interaction inputs never actually overlap in practice (a
-            // completed step either lands on a warp tile or it doesn't, and
-            // a fresh A-press is a separate input edge).
+            // self`). The tokens are resolved against the PRE-warp map, so
+            // if this same frame also fires a warp below, they are dropped
+            // rather than opened -- opening the departed map's dialog on the
+            // destination map would be wrong. Unreachable with today's data
+            // (no bundled map has a scripted NPC adjacent to a warp tile,
+            // and the rivals next to warps are hidden and script-less), but
+            // guarded rather than assumed so a future map/script addition
+            // can't silently trip it.
             let interaction_tokens = self.interaction_tokens_this_frame(buttons, &runtime);
 
             // Upstream's `tookStep` gate, in this port's terms: the latched
@@ -252,6 +255,7 @@ impl OverworldPhase {
                     .and_then(|(x, y)| trigger_warp(&runtime, x, y, self.player.elevation()))
             };
 
+            let warp_fired = matches!(warp_trigger, Some(WarpTrigger::Resolved { .. }));
             match warp_trigger {
                 Some(WarpTrigger::Resolved { map, warp_id }) => self.warp_to(map, warp_id),
                 Some(WarpTrigger::Unsupported) => eprintln!(
@@ -261,7 +265,15 @@ impl OverworldPhase {
                 None => {}
             }
 
-            if let Some(tokens) = interaction_tokens {
+            // A fired warp wins over a same-frame interaction: the tokens
+            // were resolved against the pre-warp runtime (comment above).
+            if warp_fired {
+                if interaction_tokens.is_some() {
+                    eprintln!(
+                        "npc dialog: discarding a same-frame interaction with the departed                          map's NPC -- the warp takes precedence"
+                    );
+                }
+            } else if let Some(tokens) = interaction_tokens {
                 match NpcDialog::open_default(tokens) {
                     Ok(dialog) => self.dialog = Some(dialog),
                     Err(err) => eprintln!("npc dialog: {err} -- staying in the overworld"),
