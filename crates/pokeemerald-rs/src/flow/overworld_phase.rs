@@ -91,6 +91,32 @@ impl OverworldPhase {
         })
     }
 
+    /// A phase around an already-built `scene` -- the pack-free
+    /// counterpart to [`Self::load_default`], for this module's own
+    /// headless tests (`crate::overworld::tests::synthetic_scene` builds
+    /// the scene; `map_id` still names a *real* map so the `'static`
+    /// [`MapHeaderTable`]/[`MapEventsTable`] lookups [`Self::step`] does
+    /// every frame resolve). Never reachable from production: nothing
+    /// outside `#[cfg(test)]` can call it.
+    #[cfg(test)]
+    fn for_test(
+        scene: OverworldScene,
+        map_id: assets::MapId,
+        player: PlayerState,
+        dialog: Option<NpcDialog>,
+    ) -> Self {
+        let (save1, save2) = new_game::init_save_blocks_for_new_game();
+        Self {
+            scene,
+            player,
+            map_id,
+            save1,
+            save2,
+            pending_landing: None,
+            dialog,
+        }
+    }
+
     /// This run's freshly initialized [`SaveBlock1`] (struct docs). Exposed
     /// for [`advance_scene`]'s one-time "new game started" log line (proving
     /// the wiring in [`load_default`](Self::load_default) is live end to
@@ -170,7 +196,8 @@ impl OverworldPhase {
     /// (module docs on [`npc_scripts::script_text`]). Checked before the
     /// warp evaluation below (a borrow-checker consequence of sharing one
     /// `runtime`, not an upstream-observable ordering choice -- see that
-    /// code's own comment).
+    /// code's own comment), and gated on the player being between steps --
+    /// see [`Self::interaction_tokens_this_frame`].
     pub(super) fn step(&mut self, buttons: ButtonState) {
         if let Some(dialog) = &mut self.dialog {
             let confirm_pressed = buttons.is_newly_pressed(Buttons::A);
@@ -212,10 +239,7 @@ impl OverworldPhase {
             // warp/interaction inputs never actually overlap in practice (a
             // completed step either lands on a warp tile or it doesn't, and
             // a fresh A-press is a separate input edge).
-            let interaction_tokens = buttons
-                .is_newly_pressed(Buttons::A)
-                .then(|| self.find_interaction_tokens(&runtime))
-                .flatten();
+            let interaction_tokens = self.interaction_tokens_this_frame(buttons, &runtime);
 
             // Upstream's `tookStep` gate, in this port's terms: the latched
             // landing is only tested once its walk animation has drained
@@ -258,13 +282,50 @@ impl OverworldPhase {
         };
     }
 
-    /// The A-press half of [`Self::step`]'s "NPC dialog routing" section:
-    /// find the object event `self.player` currently faces
-    /// ([`facing_object_event`]) and, if this slice recognizes its script,
-    /// return the token stream a [`NpcDialog`] should open with. `&self`
-    /// (not `&mut self`): [`Self::step`] calls this while `runtime` still
-    /// borrows `self.scene`, and opening the dialog itself (which does need
-    /// `&mut self`) happens afterward, once that borrow has ended.
+    /// The token stream a [`NpcDialog`] should open with this frame, or
+    /// `None` -- [`Self::step`]'s whole A-press decision, in one place.
+    ///
+    /// Two gates, in upstream's own order:
+    ///
+    /// 1. **The player must be between steps.** `FieldGetPlayerInput` only
+    ///    ever sets `input->pressedAButton` while
+    ///    `gPlayerAvatar.tileTransitionState` is `T_TILE_CENTER` or
+    ///    `T_NOT_MOVING` (`pokeemerald/src/field_control_avatar.c:95-107`)
+    ///    -- an A press *during* a tile crossing is discarded outright,
+    ///    never queued -- and `ProcessPlayerFieldInput` reaches
+    ///    `TryStartInteractionScript` only through that flag (`:172`). This
+    ///    port's counterpart to that transition state is
+    ///    [`PlayerState::in_transit`], the same gate [`Self::step`]'s warp
+    ///    check already uses for `tookStep`.
+    /// 2. **The A press must be a fresh edge** (`newKeys`, not `heldKeys`).
+    ///
+    /// One-frame delta, documented rather than papered over: because this
+    /// port applies the frame's movement *before* reading input (see
+    /// [`Self::step`]), an A press on the same frame a step *starts* from
+    /// rest is discarded here, where upstream -- which samples
+    /// `tileTransitionState` before applying that frame's movement -- would
+    /// instead preempt the step with the interaction. Unreachable from a
+    /// standing A press (the common case, and the one the acceptance path
+    /// walks); it needs A and a direction pressed on the exact same frame.
+    ///
+    /// `&self` (not `&mut self`): [`Self::step`] calls this while `runtime`
+    /// still borrows `self.scene`, and opening the dialog itself (which does
+    /// need `&mut self`) happens afterward, once that borrow has ended.
+    fn interaction_tokens_this_frame(
+        &self,
+        buttons: ButtonState,
+        runtime: &engine::overworld::MapRuntime<'_>,
+    ) -> Option<Vec<engine::text::Token>> {
+        if self.player.in_transit() || !buttons.is_newly_pressed(Buttons::A) {
+            return None;
+        }
+        self.find_interaction_tokens(runtime)
+    }
+
+    /// The lookup half of [`Self::interaction_tokens_this_frame`]: find the
+    /// object event `self.player` currently faces ([`facing_object_event`])
+    /// and, if this slice recognizes its script, return the token stream a
+    /// [`NpcDialog`] should open with.
     fn find_interaction_tokens(
         &self,
         runtime: &engine::overworld::MapRuntime<'_>,

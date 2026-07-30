@@ -20,12 +20,21 @@
 //!   `super::load_default_room`'s own doc comment -- so the opposite-gender
 //!   rival graphic, reachable only by visiting the other protagonist's
 //!   house, is untracked here).
-//! - **`Standard`**: a dozen ordinary 16x32 "standing" NPCs (Mom, the twin,
-//!   Professor Birch, ...) that share the exact upstream
+//! - **`Standard`**: eight ordinary 16x32 "standing" NPCs (Mom, the twin,
+//!   the fat man, boy 2, Professor Birch, woman 4, Norman, scientist 1)
+//!   that share the exact upstream
 //!   `overworld_frame(<pic>, 2, 4, n)` 9-frame layout
 //!   [`super::avatar::pack_people_sheet_frames`] already knows how to pack,
 //!   drawn from one of the four generic `npc_1..4` palettes
 //!   (`OBJ_EVENT_PAL_TAG_NPC_1..4`).
+//!
+//! Ten [`resolve_sprite_source`] arms in total (those eight plus the two
+//! rival variants), of which nine ever resolve for a single
+//! [`PlayerCharacter`] -- covering nine of the **29** distinct
+//! `graphics_id`s the six bundled maps' object events actually reference
+//! (`resolve_sprite_source_covers_the_reachable_graphics_ids` pins that
+//! exact partition, so a newly reachable standard NPC cannot silently stop
+//! drawing).
 //!
 //! **Not drawn** (still hide-flag tracked, just no [`OamEntry`]):
 //! decorations (`OBJ_EVENT_GFX_VAR_*`, upstream's variable-graphics
@@ -55,13 +64,34 @@
 //! metatile (snapping to its final position instead of sliding smoothly).
 //! Never affects tile-position logic (hide-flag filtering, interaction) --
 //! only this module's own pixel placement.
+//!
+//! # Documented fidelity delta: no y-derived sprite subpriority
+//!
+//! Upstream orders overlapping object-event sprites by a *subpriority*
+//! derived from each sprite's own screen y, not by OAM index:
+//! `SetObjectSubpriorityByElevation`
+//! (`event_object_movement.c:7773-7779`) computes
+//! `y = (16 - (screenY >> 4)) << 1` and adds it to
+//! `sElevationToSubpriority[elevation]`, so a *lower* (further south)
+//! sprite gets a numerically smaller subpriority and therefore draws in
+//! front -- an NPC standing one tile south of the player overlaps and
+//! covers the player's head. `rendering::SpriteLayer` has no subpriority
+//! concept: same-priority ties go to the lower OAM index
+//! (`rendering::sprite`'s own docs), and
+//! [`super::OverworldScene::compose`] always puts the player at index 0,
+//! so **here the player always draws in front of every NPC**, whichever
+//! side of them it stands on. Only ever visible where the two 16x32
+//! sprites' pixels actually overlap (adjacent tiles); never affects
+//! tile-position logic. A future slice porting subpriority would also want
+//! `ObjectEventUpdateSubpriority`'s `previousElevation` input, which this
+//! port's stationary object events don't track yet.
 
 use std::collections::HashMap;
 
 use assets::pack::{AssetPack, PaletteRef};
 use assets::ObjectEvent;
 use engine::event_data::EventData;
-use engine::overworld::{initial_facing_direction, PlayerState};
+use engine::overworld::{initial_facing_direction, visible_object_events, PlayerState};
 use rendering::{Bgr555, BitDepth, OamEntry, Palette};
 
 use super::avatar::{self, PlayerCharacter};
@@ -351,22 +381,20 @@ pub(super) fn oam_entries(
 }
 
 /// The subset of `object_events` that is both currently visible
-/// ([`engine::overworld::object_event_is_visible`]) and has a
-/// [`SpriteBinding`] this module can actually draw, paired with that
-/// binding.
+/// ([`engine::overworld::visible_object_events`] -- the engine's own
+/// hide-flag filter, shared with [`engine::overworld::facing_object_event`]
+/// rather than re-implemented here) and has a [`SpriteBinding`] this module
+/// can actually draw, paired with that binding.
 fn visible_object_events_with_binding<'a>(
     object_events: &'a [ObjectEvent],
     bindings: &'a HashMap<&'static str, SpriteBinding>,
     event_data: &'a EventData,
 ) -> impl Iterator<Item = (&'a ObjectEvent, &'a SpriteBinding)> {
-    object_events
-        .iter()
-        .filter(move |event| engine::overworld::object_event_is_visible(event, event_data))
-        .filter_map(move |event| {
-            bindings
-                .get(event.graphics_id)
-                .map(|binding| (event, binding))
-        })
+    visible_object_events(object_events, event_data).filter_map(move |event| {
+        bindings
+            .get(event.graphics_id)
+            .map(|binding| (event, binding))
+    })
 }
 
 #[cfg(test)]
@@ -427,6 +455,114 @@ mod tests {
                 palette: NpcPaletteTag::Npc4,
             }
         );
+    }
+
+    /// The maps `crates/xtask/src/extract/mod.rs`'s `LAYOUTS` bundles --
+    /// every map whose object events this port can ever be asked to
+    /// render. Mirrored here (this crate cannot depend on `xtask`); that
+    /// module's own `the_bundled_layout_set_is_pinned_for_the_tables_derived_from_it`
+    /// is the tripwire that fails loudly when the list grows.
+    const BUNDLED_MAPS: [&str; 6] = [
+        "MAP_LITTLEROOT_TOWN",
+        "MAP_LITTLEROOT_TOWN_BRENDANS_HOUSE_1F",
+        "MAP_LITTLEROOT_TOWN_BRENDANS_HOUSE_2F",
+        "MAP_LITTLEROOT_TOWN_MAYS_HOUSE_1F",
+        "MAP_LITTLEROOT_TOWN_MAYS_HOUSE_2F",
+        "MAP_LITTLEROOT_TOWN_PROFESSOR_BIRCHS_LAB",
+    ];
+
+    /// Every distinct `graphics_id` referenced by an object event on one of
+    /// [`BUNDLED_MAPS`], sorted -- straight from the generated
+    /// [`assets::MapEventsTable`], no pack needed.
+    fn reachable_graphics_ids() -> Vec<&'static str> {
+        let table = assets::MapEventsTable::new();
+        let mut ids: Vec<&'static str> = Vec::new();
+        for map in BUNDLED_MAPS {
+            let events = table.resolve(assets::MapId(map)).unwrap();
+            for event in events.object_events {
+                if !ids.contains(&event.graphics_id) {
+                    ids.push(event.graphics_id);
+                }
+            }
+        }
+        ids.sort_unstable();
+        ids
+    }
+
+    /// The module docs' scope claim, pinned as an exact partition of the
+    /// *reachable* graphics-id set: which of the 29 distinct ids the six
+    /// bundled maps reference draw a sprite, and which are only hide-flag/
+    /// interaction tracked. Dropping an arm from
+    /// [`resolve_sprite_source`] -- or a map-data change making a new
+    /// standard NPC reachable -- fails here rather than silently making
+    /// that NPC invisible.
+    #[test]
+    fn resolve_sprite_source_covers_the_reachable_graphics_ids() {
+        let reachable = reachable_graphics_ids();
+        assert_eq!(
+            reachable.len(),
+            29,
+            "the six bundled maps reference 29 distinct graphics ids"
+        );
+
+        let (drawn, not_drawn): (Vec<&'static str>, Vec<&'static str>) = reachable
+            .iter()
+            .partition(|id| resolve_sprite_source(id, PlayerCharacter::Brendan).is_some());
+
+        assert_eq!(
+            drawn,
+            [
+                "OBJ_EVENT_GFX_BOY_2",
+                "OBJ_EVENT_GFX_FAT_MAN",
+                "OBJ_EVENT_GFX_MOM",
+                "OBJ_EVENT_GFX_NORMAN",
+                "OBJ_EVENT_GFX_PROF_BIRCH",
+                "OBJ_EVENT_GFX_RIVAL_BRENDAN_NORMAL",
+                "OBJ_EVENT_GFX_SCIENTIST_1",
+                "OBJ_EVENT_GFX_TWIN",
+                "OBJ_EVENT_GFX_WOMAN_4",
+            ],
+            "the eight `Standard` NPCs plus this run's own rival variant"
+        );
+        assert_eq!(
+            not_drawn,
+            [
+                "OBJ_EVENT_GFX_ITEM_BALL",
+                "OBJ_EVENT_GFX_NINJA_BOY",
+                "OBJ_EVENT_GFX_PICHU_DOLL",
+                "OBJ_EVENT_GFX_RIVAL_MAY_NORMAL",
+                "OBJ_EVENT_GFX_SWABLU_DOLL",
+                "OBJ_EVENT_GFX_TRUCK",
+                "OBJ_EVENT_GFX_VAR_0",
+                "OBJ_EVENT_GFX_VAR_1",
+                "OBJ_EVENT_GFX_VAR_2",
+                "OBJ_EVENT_GFX_VAR_3",
+                "OBJ_EVENT_GFX_VAR_4",
+                "OBJ_EVENT_GFX_VAR_5",
+                "OBJ_EVENT_GFX_VAR_6",
+                "OBJ_EVENT_GFX_VAR_7",
+                "OBJ_EVENT_GFX_VAR_8",
+                "OBJ_EVENT_GFX_VAR_9",
+                "OBJ_EVENT_GFX_VAR_A",
+                "OBJ_EVENT_GFX_VAR_B",
+                "OBJ_EVENT_GFX_VIGOROTH_CARRYING_BOX",
+                "OBJ_EVENT_GFX_VIGOROTH_FACING_AWAY",
+            ],
+            "module docs' own 'not drawn' list: decorations, props/dolls, \
+             the truck, the two non-16x32 NPCs, and the opposite-gender \
+             rival variant"
+        );
+
+        // Playing as May swaps exactly one arm -- the rival variant -- and
+        // nothing else.
+        let drawn_as_may: Vec<_> = reachable
+            .iter()
+            .filter(|id| resolve_sprite_source(id, PlayerCharacter::May).is_some())
+            .copied()
+            .collect();
+        assert_eq!(drawn_as_may.len(), drawn.len());
+        assert!(drawn_as_may.contains(&"OBJ_EVENT_GFX_RIVAL_MAY_NORMAL"));
+        assert!(!drawn_as_may.contains(&"OBJ_EVENT_GFX_RIVAL_BRENDAN_NORMAL"));
     }
 
     #[test]

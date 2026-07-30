@@ -94,8 +94,6 @@
 //!   "center row"; [`PLAYER_VIEW_ROW`]'s choice (more rows below the player
 //!   than above) is this module's own pick, not a transcribed constant.
 
-use std::collections::HashMap;
-
 use assets::{
     AssetError, AssetPack, BorderGrid, ImageRef, LayoutId, MapEventsTable, MapLayout,
     MetatileAttributeTable,
@@ -122,10 +120,11 @@ mod avatar;
 pub(crate) mod dialog;
 mod npc;
 pub(crate) mod npc_scripts;
+mod sprites;
 mod viewport;
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 
 /// A GBA metatile's pixel size: 16x16 (2x2 [`rendering::BitDepth::TILE_DIM`]
 /// tiles) -- shared by [`viewport`]'s camera/tilemap math and [`avatar`]'s
@@ -318,25 +317,10 @@ pub struct OverworldScene {
     world_palette: Palette,
     /// See [`viewport::combined_world_tileset`]'s docs.
     blank_tile_index: u16,
-    /// The player's own 9 walking frames at tile index `0`, followed by one
-    /// 9-frame block per distinct [`npc::resolve_bindings`]-recognized NPC
-    /// sheet this room's object events reference -- one combined
-    /// [`Tileset`], since [`SpriteLayer`] draws every sprite (player and
-    /// NPCs alike) from a single shared tileset (issue #161; see [`npc`]'s
-    /// module docs).
-    sprite_tiles: Tileset,
-    /// Bank 0: the player's own palette. Banks 1..=4: the four generic
-    /// `npc_1..4` palettes, always loaded (issue #161; see
-    /// [`npc::build_combined_palette`]).
-    sprite_palette: Palette,
-    /// This room's object events, straight from the generated
-    /// [`assets::MapEventsTable`] (`'static`) -- [`Self::compose`]'s NPC
-    /// rendering source; never mutated after [`from_pack`](Self::from_pack).
-    object_events: &'static [assets::ObjectEvent],
-    /// Each recognized `graphics_id`'s resolved sprite binding into
-    /// `sprite_tiles`/`sprite_palette` (issue #161; see
-    /// [`npc::resolve_bindings`]).
-    npc_bindings: HashMap<&'static str, npc::SpriteBinding>,
+    /// This room's whole OBJ layer -- the combined player+NPC sprite
+    /// tileset/palette and the object events drawn from it (issue #161; see
+    /// [`sprites`]'s module docs).
+    sprites: sprites::SceneSprites,
 }
 
 impl OverworldScene {
@@ -387,19 +371,10 @@ impl OverworldScene {
         let _ = layout.grid(&grid_bytes)?;
         let _ = BorderGrid::new(&border_bytes)?;
 
-        let sprite_image = pack.sprite(player.sprite_path())?;
-        let sprite_palette_ref = pack.sprite_palette(player.palette_name())?;
-        // The player's own 9 frames seed the scene's *combined* sprite
-        // tileset at base tile 0; every recognized NPC sheet
-        // `resolve_bindings` finds among `events.object_events` is appended
-        // after it (module docs on `sprite_tiles`; `avatar::build_sprite_tileset`
-        // stays the single-image convenience its own tests use, but this
-        // scene needs the raw, appendable bytes instead).
-        let mut sprite_bytes = avatar::pack_people_sheet_frames("sprite/*/walking", sprite_image)?;
-        let npc_bindings =
-            npc::resolve_bindings(pack, player, events.object_events, &mut sprite_bytes)?;
-        let sprite_tiles = Tileset::decode(BitDepth::Bpp4, &sprite_bytes)?;
-        let sprite_palette = npc::build_combined_palette(pack, sprite_palette_ref)?;
+        // The whole OBJ layer -- the player's own frames plus every NPC
+        // sheet this room's object events reference, decoded once into one
+        // combined tileset/palette (see `sprites`' module docs).
+        let sprites = sprites::SceneSprites::from_pack(pack, player, events)?;
 
         Ok(Self {
             layout: *layout,
@@ -412,10 +387,7 @@ impl OverworldScene {
             world_tiles,
             world_palette,
             blank_tile_index,
-            sprite_tiles,
-            sprite_palette,
-            object_events: events.object_events,
-            npc_bindings,
+            sprites,
         })
     }
 
@@ -497,22 +469,16 @@ impl OverworldScene {
             ),
         ];
 
-        // The player is always OAM index 0 (wins a same-priority tie against
-        // any NPC standing on the exact same pixel -- `npc::oam_entries`'s
-        // own doc comment); every recognized, currently-visible NPC object
-        // event follows it (issue #161).
-        let mut entries = vec![avatar::player_entry(player)];
-        entries.extend(npc::oam_entries(
-            self.object_events,
-            &self.npc_bindings,
-            player,
-            event_data,
-        ));
+        // The player at OAM index 0 followed by every recognized,
+        // currently-visible NPC object event (issue #161 --
+        // `sprites::SceneSprites::entries`' own doc comment on why index 0
+        // is load-bearing).
+        let entries = self.sprites.entries(player, event_data);
         let sprites = SpriteLayer::new(
             &entries,
-            &self.sprite_tiles,
-            &self.sprite_tiles,
-            &self.sprite_palette,
+            self.sprites.tiles(),
+            self.sprites.tiles(),
+            self.sprites.palette(),
         );
 
         // GBA hardware shows BG palette color 0 — not black — wherever every
@@ -659,8 +625,8 @@ fn layout_pack_name(id: LayoutId) -> String {
 /// `gbagfx` packs them (mirrors [`crate::title`]'s identical BG/OBJ tile
 /// packing -- duplicated rather than shared, since the two modules' error
 /// types differ `(no-verbatim)`). Shared by [`viewport::combined_world_tileset`]
-/// (whole-image regions) and [`avatar::build_sprite_tileset`] (per-frame
-/// crops).
+/// (whole-image regions) and [`avatar::pack_people_sheet_frames`] (per-frame
+/// crops, for the player's and every NPC's 9-frame sheet alike).
 ///
 /// # Errors
 ///

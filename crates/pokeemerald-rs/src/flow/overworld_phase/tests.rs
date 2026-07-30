@@ -108,6 +108,157 @@ fn flat_runtime(width: u16, height: u16) -> MapRuntime<'static> {
     )
 }
 
+// -- Headless phase fixtures -------------------------------------------------
+
+/// Brendan's House 1F: the map the headless interaction tests below drive,
+/// picked because its real object events include Mom at `(2, 6)` (script
+/// `PlayersHouse_1F_EventScript_Mom`, the one
+/// [`crate::overworld::npc_scripts::script_text`] recognizes) and the
+/// rival's mom at `(2, 7)`, both visible on a fresh save.
+const ONE_F: MapId = MapId("MAP_LITTLEROOT_TOWN_BRENDANS_HOUSE_1F");
+
+/// An [`OverworldPhase`] over a **synthetic** 10x10 open room
+/// (`crate::overworld::tests::synthetic_scene`) but a *real* `map_id`, so
+/// no local pack is needed while [`OverworldPhase::step`]'s per-frame
+/// `MapHeaderTable`/`MapEventsTable` lookups still resolve and its
+/// collision/interaction run against that map's real object events. The
+/// scene only supplies the layout grid the runtime walks -- flat, open, and
+/// large enough for every position these tests use.
+fn synthetic_phase(
+    player: PlayerState,
+    dialog: Option<crate::overworld::NpcDialog>,
+) -> OverworldPhase {
+    OverworldPhase::for_test(
+        crate::overworld::tests::synthetic_scene(10, 10),
+        ONE_F,
+        player,
+        dialog,
+    )
+}
+
+/// A [`MapRuntime`] over `phase`'s own scene and [`ONE_F`]'s real event
+/// data -- the exact runtime [`OverworldPhase::step`] rebuilds each frame.
+fn runtime_for(phase: &OverworldPhase) -> MapRuntime<'_> {
+    let header = assets::MapHeaderTable::new().header(ONE_F).unwrap();
+    let events = assets::MapEventsTable::new().resolve(ONE_F).unwrap();
+    phase.scene.runtime(ONE_F, header, events)
+}
+
+/// Senior review regression, headless: upstream discards an A press made
+/// *during* a tile crossing outright -- `FieldGetPlayerInput` only sets
+/// `input->pressedAButton` at `T_TILE_CENTER`/`T_NOT_MOVING`
+/// (`pokeemerald/src/field_control_avatar.c:95-107`), the gate every
+/// `TryStartInteractionScript` call site sits behind (`:172`). Same
+/// position, same facing, same fresh A edge, only
+/// [`PlayerState::in_transit`] differing: mid-step must find nothing, at
+/// rest must find Mom.
+#[test]
+fn a_pressed_mid_step_is_discarded_and_the_same_press_at_rest_interacts() {
+    // One tile south of the rival's mom, two south of Mom, facing north.
+    let mut phase = synthetic_phase(PlayerState::new((2, 8), 3, Direction::North), None);
+
+    // Already facing north, so a held Up steps immediately onto (2, 7) --
+    // the tile from which Mom, at (2, 6), is directly ahead.
+    phase.step(held(Buttons::UP));
+    assert_eq!(phase.player.position(), (2, 7));
+    assert_eq!(phase.player.facing(), Direction::North);
+    assert!(
+        phase.player.in_transit(),
+        "the step's walk animation must still be running"
+    );
+
+    {
+        let runtime = runtime_for(&phase);
+        assert!(
+            phase
+                .interaction_tokens_this_frame(pressed(Buttons::A), &runtime)
+                .is_none(),
+            "an A press during a tile crossing must be discarded"
+        );
+    }
+
+    // Drain the rest of the crossing with no input held.
+    for _ in 1..WALK_FRAMES_PER_TILE {
+        phase.step(ButtonState::new());
+    }
+    assert!(!phase.player.in_transit(), "the crossing must have settled");
+    assert_eq!(phase.player.position(), (2, 7), "same tile as above");
+    assert_eq!(phase.player.facing(), Direction::North, "same facing");
+
+    {
+        let runtime = runtime_for(&phase);
+        assert!(
+            phase
+                .interaction_tokens_this_frame(pressed(Buttons::A), &runtime)
+                .is_some(),
+            "at rest, the identical press must find Mom and her recognized \
+             script"
+        );
+        assert!(
+            phase
+                .interaction_tokens_this_frame(ButtonState::new(), &runtime)
+                .is_none(),
+            "and only a fresh A edge interacts at all"
+        );
+    }
+}
+
+/// Headless counterpart to the real-pack acceptance test: while a dialog is
+/// open, [`OverworldPhase::step`] must not feed movement to the player at
+/// all (module docs' "NPC dialog routing" section -- upstream's `lock`,
+/// which stops `RunFieldInput` being polled while a message box owns
+/// input). Dropping that early return lets the held direction through and
+/// fails here, with no local pack needed.
+#[test]
+fn an_open_dialog_freezes_movement_until_it_closes() {
+    use engine::text::Token;
+
+    let dialog = crate::overworld::dialog::synthetic_dialog(vec![
+        Token::Char('A'),
+        Token::PromptClear,
+        Token::End,
+    ]);
+    // Facing south already, so an un-frozen held Down would step
+    // immediately -- no turn-in-place frame to absorb it.
+    let mut phase = synthetic_phase(PlayerState::new((4, 4), 3, Direction::South), Some(dialog));
+
+    for _ in 0..WALK_FRAMES_PER_TILE {
+        phase.step(held(Buttons::DOWN));
+        assert_eq!(
+            phase.player.position(),
+            (4, 4),
+            "movement must be frozen while a dialog is open"
+        );
+        assert!(!phase.player.in_transit(), "no step may even have started");
+    }
+    assert_eq!(
+        phase.player.facing(),
+        Direction::South,
+        "and no turn either"
+    );
+    assert!(phase.dialog.is_some(), "the dialog must still be open");
+
+    // Confirm through the trailing prompt (same held-A-across-the-window
+    // reasoning as this module's real-pack dialog test) and let it close.
+    let mut closed = false;
+    for _ in 0..40 {
+        phase.step(pressed(Buttons::A));
+        if phase.dialog.is_none() {
+            closed = true;
+            break;
+        }
+    }
+    assert!(closed, "confirming must close the synthetic dialog");
+
+    // Control returns: the very next held Down steps.
+    phase.step(held(Buttons::DOWN));
+    assert_eq!(
+        phase.player.position(),
+        (4, 5),
+        "ordinary movement must resume once the box has closed"
+    );
+}
+
 /// Senior review round 3 regression, correcting the prior (empirically
 /// wrong -- see [`advance_player_one_frame`]'s own doc comment) "skip
 /// the first tick" change: the first frame composed after a step begins

@@ -17,9 +17,11 @@
 //! Littleroot Town layout family (the town itself, both player houses'
 //! floors, Professor Birch's lab), so [`resolve`] only ever needs to answer
 //! for a flag name actually reachable from one of *those* maps' own
-//! `object_events` -- every such name (35, spot-checked against every
-//! object event on all six maps, plus the twelve generic `FLAG_DECORATION_N`
-//! ids Littleroot's two player-house bedrooms also carry) is transcribed
+//! `object_events` -- every such name (**41**: the 29 distinct
+//! `FLAG_HIDE_*` ids carried by object events across all six maps, plus the
+//! twelve generic `FLAG_DECORATION_1..12` ids Littleroot's two
+//! player-house bedrooms also carry; the literal `"0"` no-flag sentinel is
+//! handled by [`resolve`] itself and is not a table entry) is transcribed
 //! below. A name outside this set can never occur for any map this port
 //! renders, so extending the table further would transcribe data no code
 //! here consumes -- the same bounded-scope reasoning
@@ -109,8 +111,33 @@ pub fn resolve(flag: &str) -> Option<u16> {
 mod tests {
     use super::*;
     use crate::map_events::MapEventsTable;
+    use crate::map_headers::MapHeaderTable;
     use crate::new_game_flags::RESET_MAP_FLAGS;
     use crate::wild_encounters::MapId;
+
+    /// This crate's mirror of `crates/xtask/src/extract/mod.rs`'s `LAYOUTS`
+    /// -- the layout family the extraction pipeline bundles, and so the
+    /// exact scope [`OBJECT_EVENT_FLAGS`] has to cover (module docs).
+    const BUNDLED_LAYOUTS: [&str; 7] = [
+        "LAYOUT_LITTLEROOT_TOWN",
+        "LAYOUT_LITTLEROOT_TOWN_BRENDANS_HOUSE_1F",
+        "LAYOUT_LITTLEROOT_TOWN_BRENDANS_HOUSE_2F",
+        "LAYOUT_LITTLEROOT_TOWN_MAYS_HOUSE_1F",
+        "LAYOUT_LITTLEROOT_TOWN_MAYS_HOUSE_2F",
+        "LAYOUT_LITTLEROOT_TOWN_PROFESSOR_BIRCHS_LAB",
+        "LAYOUT_LITTLEROOT_TOWN_PROFESSOR_BIRCHS_LAB_WITH_TABLE",
+    ];
+
+    /// Every map whose generated header names one of [`BUNDLED_LAYOUTS`] --
+    /// derived from the layout list rather than restated, so bundling a new
+    /// layout widens every test built on it automatically.
+    fn bundled_maps() -> Vec<MapId> {
+        MapHeaderTable::new()
+            .iter()
+            .filter(|header| BUNDLED_LAYOUTS.contains(&header.layout.name()))
+            .map(|header| header.id)
+            .collect()
+    }
 
     #[test]
     fn the_literal_no_flag_sentinel_resolves_to_the_tolerated_null_id() {
@@ -199,32 +226,78 @@ mod tests {
         }
     }
 
+    /// The module docs' own arithmetic, pinned so it can't drift: the table
+    /// is exactly 41 entries, 29 `FLAG_HIDE_*` plus 12
+    /// `FLAG_DECORATION_*`, and nothing else.
+    #[test]
+    fn the_table_is_the_documented_29_hide_plus_12_decoration_entries() {
+        let hide = OBJECT_EVENT_FLAGS
+            .iter()
+            .filter(|(name, _)| name.starts_with("FLAG_HIDE_"))
+            .count();
+        let decoration = OBJECT_EVENT_FLAGS
+            .iter()
+            .filter(|(name, _)| name.starts_with("FLAG_DECORATION_"))
+            .count();
+        assert_eq!((hide, decoration), (29, 12), "module docs' own counts");
+        assert_eq!(
+            hide + decoration,
+            OBJECT_EVENT_FLAGS.len(),
+            "every entry must be one of those two families"
+        );
+        assert_eq!(OBJECT_EVENT_FLAGS.len(), 41);
+    }
+
     /// Every object event on the six Littleroot-family maps this port's
     /// extraction pipeline loads must resolve -- the whole point of the
     /// bounded table (module docs). A `None` here would mean an object event
-    /// this port can actually render has an unresolvable hide flag.
+    /// this port can actually render has an unresolvable hide flag. The
+    /// table must also carry *nothing else*: that equality is what keeps
+    /// the module docs' "29 + 12" honest as map data changes.
+    ///
+    /// The map set is **derived**, not listed: every map whose header names
+    /// one of [`BUNDLED_LAYOUTS`] (this crate's mirror of
+    /// `crates/xtask/src/extract/mod.rs`'s `LAYOUTS` -- `assets` cannot
+    /// depend on `xtask`) is in scope, so extending that list here
+    /// automatically widens this test. `xtask`'s own
+    /// `the_bundled_layout_set_is_pinned_for_the_tables_derived_from_it`
+    /// is the tripwire that makes adding a layout *there* fail loudly and
+    /// point back here.
     #[test]
     fn every_littleroot_family_object_event_flag_resolves() {
         let table = MapEventsTable::new();
-        let maps = [
-            "MAP_LITTLEROOT_TOWN",
-            "MAP_LITTLEROOT_TOWN_BRENDANS_HOUSE_1F",
-            "MAP_LITTLEROOT_TOWN_BRENDANS_HOUSE_2F",
-            "MAP_LITTLEROOT_TOWN_MAYS_HOUSE_1F",
-            "MAP_LITTLEROOT_TOWN_MAYS_HOUSE_2F",
-            "MAP_LITTLEROOT_TOWN_PROFESSOR_BIRCHS_LAB",
-        ];
+        let maps = bundled_maps();
+        assert_eq!(
+            maps.len(),
+            6,
+            "the seven bundled layouts cover six maps (the lab's \
+             `_WITH_TABLE` variant is an alternate layout for a map already \
+             listed, not a map of its own)"
+        );
+        let mut reachable: Vec<&str> = Vec::new();
         for map in maps {
-            let events = table.resolve(MapId(map)).unwrap();
+            let events = table.resolve(map).unwrap();
             for object in events.object_events {
                 assert!(
                     resolve(object.flag).is_some(),
-                    "{map}: object event {:?} (local_id {}) has an unresolvable flag {:?}",
+                    "{map:?}: object event {:?} (local_id {}) has an unresolvable flag {:?}",
                     object.graphics_id,
                     object.local_id,
                     object.flag
                 );
+                if object.flag != "0" && !reachable.contains(&object.flag) {
+                    reachable.push(object.flag);
+                }
             }
         }
+
+        reachable.sort_unstable();
+        let mut listed: Vec<&str> = OBJECT_EVENT_FLAGS.iter().map(|(name, _)| *name).collect();
+        listed.sort_unstable();
+        assert_eq!(
+            listed, reachable,
+            "the table must be exactly the reachable set -- no unreachable \
+             entries transcribed, none missing"
+        );
     }
 }

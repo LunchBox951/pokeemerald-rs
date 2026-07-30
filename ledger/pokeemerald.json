@@ -17263,7 +17263,7 @@
           "status": "rewritten"
         },
         "object_event_hide_flags": {
-          "reason": "assets::object_event_flags::resolve transcribes the numeric FLAG_* id for every ObjectEvent::flag name reachable from a map this port's extraction pipeline bundles (the Littleroot Town layout family, 35 names spot-checked against every object event on all six maps, plus the twelve generic FLAG_DECORATION_N ids), cross-checked against the independently-transcribed new_game_flags::RESET_MAP_FLAGS table where the two overlap. Bounded, not a full flags.h name table: a FLAG_* outside this set can never occur for any map this port renders (see that module's own docs), so extending it further would transcribe data no code here consumes.",
+          "reason": "assets::object_event_flags::resolve transcribes the numeric FLAG_* id for every ObjectEvent::flag name reachable from a map this port's extraction pipeline bundles (the Littleroot Town layout family): 41 entries -- the 29 distinct FLAG_HIDE_* ids carried by object events across all six maps, plus the twelve generic FLAG_DECORATION_1..12 ids Littleroot's two player-house bedrooms also carry (the literal \"0\" no-flag sentinel is handled by resolve itself, not a table entry). The table is asserted to be exactly that reachable set -- no extra entries, none missing -- and cross-checked against the independently-transcribed new_game_flags::RESET_MAP_FLAGS table where the two overlap. Bounded, not a full flags.h name table: a FLAG_* outside this set can never occur for any map this port renders (see that module's own docs), so extending it further would transcribe data no code here consumes.",
           "rust_target": "crates/assets/src/object_event_flags.rs",
           "spec": "I-3",
           "status": "ported"
@@ -24778,7 +24778,7 @@
     "src/data/object_events/object_event_graphics_info_pointers.h": {
       "artifacts": {
         "OBJ_EVENT_GFX_to_graphics_info": {
-          "reason": "npc::resolve_sprite_source is a bounded, explicit re-derivation of this table's OBJ_EVENT_GFX_* -> gObjectEventGraphicsInfo_* mapping (plus each pointed-to struct's own .images/.paletteTag fields, object_event_pic_tables.h/object_event_graphics.h) for exactly the ~12 graphics ids reachable from the Littleroot Town layout family's object events -- the only maps this port's extraction pipeline bundles. The other ~240 OBJ_EVENT_GFX_* entries (the rest of the NPC roster, and non-16x32 shapes like Vigoroth/32x32 and the ninja boy/16x16 among the ones that are reachable) are untracked: resolve_sprite_source returns None for them, so their object events are still hide-flag-filtered and interaction-eligible but draw no sprite -- a follow-on slice's job to extend, not a silent mis-render.",
+          "reason": "npc::resolve_sprite_source is a bounded, explicit re-derivation of this table's OBJ_EVENT_GFX_* -> gObjectEventGraphicsInfo_* mapping (plus each pointed-to struct's own .images/.paletteTag fields, object_event_pic_tables.h/object_event_graphics.h). Partial coverage, stated exactly: it has 10 resolving arms -- 8 'standard' 16x32 NPCs plus the two rival variants, of which 9 ever resolve for a single PlayerCharacter (the opposite-gender rival never does) -- against the 29 distinct graphics ids the six bundled Littleroot-family maps' object events actually reference; a test pins that exact drawn/not-drawn partition so a newly reachable standard NPC cannot silently stop drawing. The remaining 20 reachable ids (the OBJ_EVENT_GFX_VAR_* decorations, item balls, dolls, the truck, and the non-16x32 shapes Vigoroth/32x32 and the ninja boy/16x16) and every one of this 239-entry table's other rows are untracked: resolve_sprite_source returns None for them, so their object events are still hide-flag-filtered and interaction-eligible but draw no sprite -- a follow-on slice's job to extend, not a silent mis-render.",
           "rust_target": "crates/pokeemerald-rs/src/overworld/npc.rs",
           "spec": "I-3",
           "status": "stubbed"
@@ -24797,7 +24797,7 @@
           "status": "rewritten"
         },
         "sPicTable_BrendanNormal": {
-          "reason": "9-frame walking-sheet layout (2x4-tile frames, on-foot subset only) ported into avatar::build_sprite_tileset; sPicTable_MayNormal shares the identical frame layout/count and is covered by the same code path (PlayerCharacter::May), not a separate artifact. Running frames are out of v1 scope.",
+          "reason": "9-frame walking-sheet layout (2x4-tile frames, on-foot subset only) ported into avatar::pack_people_sheet_frames, whose packed bytes seed the scene's combined sprite tileset (overworld::sprites::SceneSprites) at base tile 0; sPicTable_MayNormal shares the identical frame layout/count and is covered by the same code path (PlayerCharacter::May), not a separate artifact. Running frames are out of v1 scope.",
           "rust_target": "crates/pokeemerald-rs/src/overworld/avatar.rs",
           "spec": "I-3",
           "status": "rewritten"

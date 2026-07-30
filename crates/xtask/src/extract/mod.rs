@@ -628,6 +628,42 @@ mod tests {
         ))
     }
 
+    /// Tripwire for every *bounded* table elsewhere in the workspace whose
+    /// scope is "whatever [`LAYOUTS`] bundles" -- those tables can only be
+    /// derived from this list, and `xtask` is std-only (no `assets`
+    /// dependency) so they cannot import it. Adding a layout here must
+    /// therefore fail *loudly*, right next to the change, with the list of
+    /// what else has to grow with it:
+    ///
+    /// - `crates/assets/src/object_event_flags.rs`'s `OBJECT_EVENT_FLAGS`
+    ///   (every `ObjectEvent::flag` name reachable from a bundled map must
+    ///   resolve) and its own `BUNDLED_LAYOUTS` mirror, which derives the
+    ///   reachable map set from this one.
+    /// - `crates/pokeemerald-rs/src/overworld/npc.rs`'s
+    ///   `resolve_sprite_source` (its reachable-graphics-id test asserts the
+    ///   exact drawn/not-drawn partition over the same maps).
+    /// - `crates/pokeemerald-rs/src/overworld/mod.rs`'s
+    ///   `resolve_tileset_pack_name` (a new layout may name a sixth
+    ///   tileset).
+    #[test]
+    fn the_bundled_layout_set_is_pinned_for_the_tables_derived_from_it() {
+        let ids: Vec<&str> = LAYOUTS.iter().map(|(id, _)| *id).collect();
+        assert_eq!(
+            ids,
+            [
+                "LAYOUT_LITTLEROOT_TOWN",
+                "LAYOUT_LITTLEROOT_TOWN_BRENDANS_HOUSE_1F",
+                "LAYOUT_LITTLEROOT_TOWN_BRENDANS_HOUSE_2F",
+                "LAYOUT_LITTLEROOT_TOWN_MAYS_HOUSE_1F",
+                "LAYOUT_LITTLEROOT_TOWN_MAYS_HOUSE_2F",
+                "LAYOUT_LITTLEROOT_TOWN_PROFESSOR_BIRCHS_LAB",
+                "LAYOUT_LITTLEROOT_TOWN_PROFESSOR_BIRCHS_LAB_WITH_TABLE",
+            ],
+            "this list feeds bounded tables in other crates -- see this \
+             test's own doc comment for what must be extended alongside it"
+        );
+    }
+
     #[test]
     #[ignore = "needs a local `./init.sh`-fetched pokeemerald/ checkout"]
     fn full_extraction_round_trips_locally() {

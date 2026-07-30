@@ -223,10 +223,10 @@ fn image_meta(width: u32, height: u32, bit_depth: u8) -> Vec<u8> {
 
 /// A minimal pack covering exactly what [`super::OverworldScene::from_pack`]
 /// needs for one synthetic room: a single-tile "general" tileset (used as
-/// both primary and secondary), a 4x4 layout whose every cell -- and whose
-/// border block -- is that tileset's one opaque metatile, and Brendan's
-/// walking sheet/palette.
-fn synthetic_overworld_pack_bytes() -> Vec<u8> {
+/// both primary and secondary), a `width` x `height` layout whose every
+/// cell -- and whose border block -- is that tileset's one opaque metatile,
+/// and Brendan's walking sheet/palette.
+fn synthetic_overworld_pack_bytes(width: u16, height: u16) -> Vec<u8> {
     // A single opaque 8x8 tile, every pixel palette index 5.
     let tile_pixels = vec![5u8; 8 * 8];
 
@@ -242,7 +242,7 @@ fn synthetic_overworld_pack_bytes() -> Vec<u8> {
     // hidden by this fixture's otherwise-uniform world content.
     let metatile_attrs = (1u16 << 12).to_le_bytes().to_vec();
 
-    // A 4x4 grid, every cell metatile 0, elevation 3
+    // A `width` x `height` grid, every cell metatile 0, elevation 3
     // (`MetatileCell{metatile_id:0, collision:0, elevation:3}.pack()`).
     let grid_cell = assets::MetatileCell {
         metatile_id: 0,
@@ -250,7 +250,8 @@ fn synthetic_overworld_pack_bytes() -> Vec<u8> {
         elevation: 3,
     }
     .pack();
-    let grid: Vec<u8> = std::iter::repeat_n(grid_cell.to_le_bytes(), 16)
+    let cells = usize::from(width) * usize::from(height);
+    let grid: Vec<u8> = std::iter::repeat_n(grid_cell.to_le_bytes(), cells)
         .flatten()
         .collect();
     let border: Vec<u8> = std::iter::repeat_n(grid_cell.to_le_bytes(), 4)
@@ -367,24 +368,32 @@ static NO_OBJECT_EVENTS: assets::MapEvents = assets::MapEvents {
     bg_events: &[],
 };
 
-fn write_synthetic_overworld_pack() -> std::path::PathBuf {
+/// Distinguishes concurrently-running tests' scratch packs (same process
+/// id, so the pid alone is not enough).
+static NEXT_SYNTHETIC_PACK: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// An [`super::OverworldScene`] over a freshly written synthetic pack
+/// (no local `cargo xtask extract` output needed): a `width` x `height`
+/// room of one uniform opaque metatile, Brendan's sprite, and no object
+/// events. The scratch pack file is removed before returning -- the scene
+/// owns every byte it needs (that type's own docs).
+///
+/// `pub(crate)`: `crate::flow::overworld_phase`'s own headless tests build
+/// an `OverworldPhase` around one of these, so they can drive
+/// `OverworldPhase::step` without a real pack.
+pub(crate) fn synthetic_scene(width: u16, height: u16) -> super::OverworldScene {
+    let serial = NEXT_SYNTHETIC_PACK.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let path = std::env::temp_dir().join(format!(
-        "pokeemerald-rs-overworld-test-{}.pack",
+        "pokeemerald-rs-overworld-test-{}-{serial}.pack",
         std::process::id()
     ));
-    std::fs::write(&path, synthetic_overworld_pack_bytes()).unwrap();
-    path
-}
-
-#[test]
-fn overworld_scene_from_pack_composes_a_non_blank_deterministic_frame() {
-    let path = write_synthetic_overworld_pack();
+    std::fs::write(&path, synthetic_overworld_pack_bytes(width, height)).unwrap();
     let pack = AssetPack::load(&path).unwrap();
     let layout = MapLayout {
         id: LayoutId("LAYOUT_MAP_TEST"),
         name: "MapTest",
-        width: 4,
-        height: 4,
+        width,
+        height,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_General",
     };
@@ -395,6 +404,13 @@ fn overworld_scene_from_pack_composes_a_non_blank_deterministic_frame() {
         &NO_OBJECT_EVENTS,
     )
     .expect("synthetic pack should decode cleanly");
+    let _ = std::fs::remove_file(path);
+    scene
+}
+
+#[test]
+fn overworld_scene_from_pack_composes_a_non_blank_deterministic_frame() {
+    let scene = synthetic_scene(4, 4);
 
     let player = PlayerState::new((0, 0), 3, Direction::South);
     let event_data = engine::event_data::EventData::new();
@@ -430,8 +446,6 @@ fn overworld_scene_from_pack_composes_a_non_blank_deterministic_frame() {
         ),
         Some(rendering::Bgr555::from_raw(0x7C00).to_rgb888())
     );
-
-    let _ = std::fs::remove_file(path);
 }
 
 /// Loads the *real* local pack (`cargo xtask extract`'s output) and
@@ -485,4 +499,165 @@ fn real_pack_composes_non_blank_deterministic_overworld_frames() {
         frame_c.pixels(),
         "a different player position/facing must change the composed frame"
     );
+}
+
+// -- Real-pack NPC rendering (issue #161) ------------------------------------
+
+/// Brendan's House 1F: the only bundled map whose *fresh-save* object
+/// events include NPCs this module actually draws (Mom at `(2, 6)` and the
+/// rival's mom at `(2, 7)`); the bedroom's own two events both resolve to
+/// nothing renderable on a fresh save, which is why these tests use 1F.
+const ONE_F: assets::MapId = assets::MapId("MAP_LITTLEROOT_TOWN_BRENDANS_HOUSE_1F");
+
+/// `FLAG_HIDE_LITTLEROOT_TOWN_BRENDANS_HOUSE_MOM`
+/// (`include/constants/flags.h:809`) -- deliberately *not* one of
+/// [`assets::RESET_MAP_FLAGS`], so Mom is visible on a fresh save and
+/// setting this id is an observable change.
+const FLAG_HIDE_BRENDANS_HOUSE_MOM: u16 = 0x2F6;
+
+/// The fresh-save flag store `crate::new_game::init_save_blocks_for_new_game`
+/// builds, so these tests see exactly the object-event visibility a real
+/// new game would.
+fn fresh_save_event_data() -> engine::event_data::EventData {
+    let mut data = engine::event_data::EventData::new();
+    for &id in assets::RESET_MAP_FLAGS {
+        data.flag_set(id).unwrap();
+    }
+    data
+}
+
+/// The issue's own "NPCs actually reach the framebuffer" guard, and the
+/// mutation guard for [`super::sprites::SceneSprites::entries`]' NPC half:
+/// composing 1F with a fresh save must differ, pixel for pixel, from
+/// composing it with Mom's hide flag set. Both halves are load-bearing --
+/// it pins that Mom *draws* (a no-op NPC OAM step would make the two
+/// frames identical) and that the hide-flag gate reaches rendering (an
+/// unfiltered NPC list would too).
+#[test]
+#[ignore = "needs a local pack: run `cargo xtask extract` first"]
+fn real_pack_hiding_mom_changes_the_composed_1f_frame() {
+    let scene = super::load_room(ONE_F).expect("run `cargo xtask extract` first");
+    let player = PlayerState::new((2, 7), 3, Direction::North);
+
+    let mut data = fresh_save_event_data();
+    let mom = assets::MapEventsTable::new()
+        .resolve(ONE_F)
+        .unwrap()
+        .object_events
+        .iter()
+        .find(|o| o.graphics_id == "OBJ_EVENT_GFX_MOM")
+        .expect("1F's Mom object event");
+    assert!(
+        engine::overworld::object_event_is_visible(mom, &data),
+        "this test's own premise: Mom is visible on a fresh save"
+    );
+
+    let with_mom = scene.compose(&player, &data);
+    data.flag_set(FLAG_HIDE_BRENDANS_HOUSE_MOM).unwrap();
+    assert!(
+        !engine::overworld::object_event_is_visible(mom, &data),
+        "setting FLAG_HIDE_LITTLEROOT_TOWN_BRENDANS_HOUSE_MOM must hide her"
+    );
+    let without_mom = scene.compose(&player, &data);
+
+    assert_ne!(
+        with_mom.pixels(),
+        without_mom.pixels(),
+        "Mom must draw into the frame, and her hide flag must remove her \
+         from it"
+    );
+    assert_eq!(
+        without_mom.pixels(),
+        scene.compose(&player, &data).pixels(),
+        "composing the same state twice must still be deterministic"
+    );
+}
+
+/// The OAM half of the same guard, against the *real*
+/// [`assets::MapEventsTable`] entry rather than a hand-built fixture: the
+/// exact entries 1F yields on a fresh save, including each NPC's resolved
+/// frame block in the scene's combined sprite tileset and its generic
+/// palette bank.
+#[test]
+#[ignore = "needs a local pack: run `cargo xtask extract` first"]
+fn real_pack_1f_oam_entries_cover_every_drawn_fresh_save_npc() {
+    let scene = super::load_room(ONE_F).expect("run `cargo xtask extract` first");
+    let data = fresh_save_event_data();
+    let player = PlayerState::new((2, 7), 3, Direction::North);
+
+    let entries = scene.sprites.entries(&player, &data);
+    assert_eq!(
+        entries.len(),
+        3,
+        "the player, Mom, and the rival's mom -- 1F's other fresh-save \
+         visible object events (both Vigoroths, the ninja boy) resolve to \
+         no sprite, and its dad/rival are hidden by RESET_MAP_FLAGS"
+    );
+
+    // Entry 0 is always the player, at its fixed screen position.
+    assert_eq!(
+        entries[0].x(),
+        i16::try_from(super::avatar::PLAYER_OBJ_X).unwrap()
+    );
+    assert_eq!(entries[0].y(), super::avatar::PLAYER_OBJ_Y);
+    assert_eq!(entries[0].palette_bank(), 0);
+
+    // The two NPC entries, in the map's own `object_events` order. Both
+    // face east (`MOVEMENT_TYPE_FACE_RIGHT`), which reuses the west stand
+    // frame h-flipped (`avatar`'s frame table), and both sit in the
+    // combined sprite tileset at their own `FRAME_BLOCK_TILES` stride --
+    // Mom's sheet is packed first (she is `object_events[0]`), the rival's
+    // mom's second (`object_events[3]`; the two Vigoroths between them
+    // resolve to no sheet at all).
+    let block = super::avatar::FRAME_BLOCK_TILES;
+    let west_stand = super::avatar::FRAME_WEST_STAND * super::avatar::FRAME_TILES;
+    let metatile_px = u16::try_from(super::METATILE_PX).unwrap();
+
+    let mom = entries[1];
+    assert_eq!(mom.palette_bank(), 4, "OBJ_EVENT_PAL_TAG_NPC_4 (mom.pal)");
+    assert_eq!(mom.tile_index(), block + west_stand);
+    assert!(mom.h_flip(), "MOVEMENT_TYPE_FACE_RIGHT");
+    assert!(mom.enabled());
+    assert_eq!(mom.dimensions(), (16, 32));
+    assert_eq!(
+        mom.x(),
+        i16::try_from(super::avatar::PLAYER_OBJ_X).unwrap(),
+        "same column as the player at (2, 7)"
+    );
+    assert_eq!(
+        mom.y(),
+        super::avatar::PLAYER_OBJ_Y - u8::try_from(metatile_px).unwrap(),
+        "one metatile north of the player: Mom stands at (2, 6)"
+    );
+
+    let rival_mom = entries[2];
+    assert_eq!(
+        rival_mom.palette_bank(),
+        1,
+        "OBJ_EVENT_PAL_TAG_NPC_1 (woman_4.pal)"
+    );
+    assert_eq!(rival_mom.tile_index(), 2 * block + west_stand);
+    assert!(rival_mom.h_flip(), "MOVEMENT_TYPE_FACE_RIGHT");
+    assert_eq!(
+        (rival_mom.x(), rival_mom.y()),
+        (
+            i16::try_from(super::avatar::PLAYER_OBJ_X).unwrap(),
+            super::avatar::PLAYER_OBJ_Y
+        ),
+        "the rival's mom stands on (2, 7), the player's own tile in this \
+         fixture, so she draws at the player's own screen position"
+    );
+
+    // The bindings those tile indices address, cross-checked against the
+    // packing order `npc::resolve_bindings` walks.
+    let bindings = scene.sprites.bindings();
+    assert_eq!(bindings.len(), 4, "mom, woman_4, norman, and the rival");
+    assert!(
+        bindings.contains_key("OBJ_EVENT_GFX_RIVAL_BRENDAN_NORMAL"),
+        "the rival is bound (to the player's own sheet) even though \
+         RESET_MAP_FLAGS hides him: bindings are per-`graphics_id`, not \
+         per-visibility"
+    );
+    assert!(!bindings.contains_key("OBJ_EVENT_GFX_VIGOROTH_CARRYING_BOX"));
+    assert!(!bindings.contains_key("OBJ_EVENT_GFX_NINJA_BOY"));
 }

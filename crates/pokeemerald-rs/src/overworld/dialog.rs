@@ -214,9 +214,15 @@ impl NpcDialog {
     }
 }
 
+/// A dialog over a blank glyph sheet plus a blank dialogue frame, with no
+/// local pack needed -- mirrors [`crate::intro::synthetic_finished_scene`]'s
+/// identical fixture shape.
+///
+/// `pub(crate)`: `crate::flow::overworld_phase`'s own headless tests need an
+/// *open* dialog to prove `OverworldPhase::step` freezes movement while one
+/// is up, and [`NpcDialog::new`] is private to this module.
 #[cfg(test)]
-mod tests {
-    use super::*;
+pub(crate) fn synthetic_dialog(tokens: Vec<Token>) -> NpcDialog {
     use assets::fonts::FontImageRef;
     use assets::pack::ImageRef;
     use rendering::Rgb888;
@@ -224,27 +230,28 @@ mod tests {
     const SHEET_WIDTH: u32 = 256;
     const SHEET_HEIGHT: u32 = 512;
 
-    /// A blank glyph sheet plus a blank dialogue frame, no local pack needed
-    /// -- mirrors [`crate::intro::synthetic_finished_scene`]'s identical
-    /// fixture shape.
-    fn synthetic_dialog(tokens: Vec<Token>) -> NpcDialog {
-        let pixels = vec![0u8; (SHEET_WIDTH * SHEET_HEIGHT) as usize];
-        let image = ImageRef {
-            width: SHEET_WIDTH,
-            height: SHEET_HEIGHT,
-            bit_depth: 2,
-            pixels: &pixels,
-        };
-        let sheet = OwnedFontGlyphSheet::new(FontImageRef::new_for_tests(FontId::Normal, image))
-            .expect("this is the exact real glyph-sheet shape");
-        let frame = FrameAssets {
-            pixels: vec![0u8; 56 * 16],
-            width: 56,
-            height: 16,
-            palette: vec![Rgb888::BLACK; 16],
-        };
-        NpcDialog::new(sheet, frame, tokens)
-    }
+    let pixels = vec![0u8; (SHEET_WIDTH * SHEET_HEIGHT) as usize];
+    let image = ImageRef {
+        width: SHEET_WIDTH,
+        height: SHEET_HEIGHT,
+        bit_depth: 2,
+        pixels: &pixels,
+    };
+    let sheet = OwnedFontGlyphSheet::new(FontImageRef::new_for_tests(FontId::Normal, image))
+        .expect("this is the exact real glyph-sheet shape");
+    let frame = FrameAssets {
+        pixels: vec![0u8; 56 * 16],
+        width: 56,
+        height: 16,
+        palette: vec![Rgb888::BLACK; 16],
+    };
+    NpcDialog::new(sheet, frame, tokens)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rendering::Rgb888;
 
     #[test]
     fn tick_reveals_glyphs_and_stays_open_while_printing() {
