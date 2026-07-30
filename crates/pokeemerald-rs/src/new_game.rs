@@ -21,6 +21,12 @@
 //! | `RunScriptImmediately(EventScript_ResetAllMapFlags)`'s 159 `setflag`s (`data/scripts/new_game.inc:116-274`) | [`SaveBlock1::event_data`]`.flag_set` for every id in [`assets::RESET_MAP_FLAGS`] (issue #164) |
 //! | (naming screen / `Task_NewGameBirchSpeech_ChooseGender`)    | [`SaveBlock2::player_name`]/`player_gender` `= `[`DEFAULT_PLAYER_NAME`]`/`[`DEFAULT_PLAYER_GENDER`] (deviation below) |
 //!
+//! **Stored, not yet consumed (issue #161):** the `RESET_MAP_FLAGS` set
+//! written here is pure save state for now — nothing filters object events by
+//! [`assets::ObjectEvent::flag`] yet, so effects like
+//! hiding the rival from the spawn bedroom only materialize once issue #161's
+//! object-event rendering consumes these flags.
+//!
 //! **Partially deferred (issue #164):** `EventScript_ResetAllMapFlags` ends
 //! with `call EventScript_ResetAllBerries` (`new_game.inc:275`), which seeds
 //! every wild berry tree's starting species/stage via 80 `setberrytree`
