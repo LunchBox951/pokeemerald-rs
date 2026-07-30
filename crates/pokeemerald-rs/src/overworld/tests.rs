@@ -8,9 +8,23 @@
 //! exception, [`real_pack_composes_non_blank_deterministic_overworld_frames`],
 //! is `#[ignore]`d and needs a real local pack.
 
-use super::{layout_pack_name, pack_4bpp_region, resolve_tileset_pack_name, OverworldSceneError};
+use super::{
+    layout_pack_name, pack_4bpp_region, resolve_tileset_pack_name, OverworldSceneError,
+    DEFAULT_ROOM_MAP_ID,
+};
 use assets::{AssetPack, ImageRef, LayoutId, MapLayout};
 use engine::overworld::{Direction, PlayerState};
+
+// -- `DEFAULT_ROOM_MAP_ID` ----------------------------------------------------
+
+/// [`DEFAULT_ROOM_MAP_ID`]'s own doc comment: kept as an independent literal
+/// (rather than importing `crate::new_game::SPAWN_MAP_ID`, which would cycle
+/// this module's dependency on `new_game`) -- pin here that the two still
+/// agree, so a future edit to either can't silently drift the other.
+#[test]
+fn default_room_map_id_matches_new_games_spawn_map_id() {
+    assert_eq!(DEFAULT_ROOM_MAP_ID, crate::new_game::SPAWN_MAP_ID);
+}
 
 // -- `resolve_tileset_pack_name` / `layout_pack_name` -----------------------
 
@@ -321,8 +335,37 @@ fn synthetic_overworld_pack_bytes() -> Vec<u8> {
         bank0.payload = bank0_payload;
     }
 
+    // `OverworldScene::from_pack` always loads all four generic NPC
+    // palettes (`npc::build_combined_palette`'s own doc comment) regardless
+    // of whether this fixture's (empty) object events reference any of
+    // them -- empty (0-color) placeholders are enough for that lookup to
+    // succeed.
+    for n in 1..=4u8 {
+        let id: &'static str = &*Box::leak(format!("sprite/palette/npc_{n}").into_boxed_str());
+        entries.push(Entry {
+            id,
+            kind_tag: 1,
+            meta: 0u16.to_le_bytes().to_vec(),
+            payload: vec![],
+        });
+    }
+
     write_synthetic_pack(entries)
 }
+
+/// An object-event-free [`assets::MapEvents`] for
+/// [`super::OverworldScene::from_pack`]'s own tests, which don't exercise
+/// NPC rendering (the `npc` module's own tests and the real-pack tests
+/// below cover that) -- just need *a* `'static` events value to seed the
+/// scene.
+static NO_OBJECT_EVENTS: assets::MapEvents = assets::MapEvents {
+    id: assets::MapId("MAP_TEST"),
+    shared_events_map: None,
+    object_events: &[],
+    warp_events: &[],
+    coord_events: &[],
+    bg_events: &[],
+};
 
 fn write_synthetic_overworld_pack() -> std::path::PathBuf {
     let path = std::env::temp_dir().join(format!(
@@ -345,12 +388,18 @@ fn overworld_scene_from_pack_composes_a_non_blank_deterministic_frame() {
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_General",
     };
-    let scene = super::OverworldScene::from_pack(&pack, &layout, super::PlayerCharacter::Brendan)
-        .expect("synthetic pack should decode cleanly");
+    let scene = super::OverworldScene::from_pack(
+        &pack,
+        &layout,
+        super::PlayerCharacter::Brendan,
+        &NO_OBJECT_EVENTS,
+    )
+    .expect("synthetic pack should decode cleanly");
 
     let player = PlayerState::new((0, 0), 3, Direction::South);
-    let first = scene.compose(&player);
-    let second = scene.compose(&player);
+    let event_data = engine::event_data::EventData::new();
+    let first = scene.compose(&player, &event_data);
+    let second = scene.compose(&player, &event_data);
     assert_eq!(
         first.pixels(),
         second.pixels(),
@@ -395,13 +444,20 @@ fn overworld_scene_from_pack_composes_a_non_blank_deterministic_frame() {
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
 fn real_pack_composes_non_blank_deterministic_overworld_frames() {
     let scene = super::load_default_room().expect("run `cargo xtask extract` first");
+    // A fresh-save flag store (`assets::RESET_MAP_FLAGS`, matching
+    // `crate::new_game::init_save_blocks_for_new_game`), so the bedroom's
+    // rival renders exactly as hidden as it would for a real new game.
+    let mut event_data = engine::event_data::EventData::new();
+    for &id in assets::RESET_MAP_FLAGS {
+        event_data.flag_set(id).unwrap();
+    }
 
     // A couple of on-foot player states across the bedroom's 9x8 interior
     // (`LAYOUT_LITTLEROOT_TOWN_BRENDANS_HOUSE_2F`), including one mid-step,
     // so the scroll-lag path is exercised too.
     let standing = PlayerState::new((5, 5), 3, Direction::South);
-    let frame_a = scene.compose(&standing);
-    let frame_b = scene.compose(&standing);
+    let frame_a = scene.compose(&standing, &event_data);
+    let frame_b = scene.compose(&standing, &event_data);
     assert_eq!(
         frame_a.pixels(),
         frame_b.pixels(),
@@ -416,7 +472,7 @@ fn real_pack_composes_non_blank_deterministic_overworld_frames() {
     );
 
     let facing_north = PlayerState::new((5, 4), 3, Direction::North);
-    let frame_c = scene.compose(&facing_north);
+    let frame_c = scene.compose(&facing_north, &event_data);
     assert!(
         frame_c
             .pixels()
