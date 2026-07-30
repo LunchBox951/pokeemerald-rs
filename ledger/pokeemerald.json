@@ -25960,7 +25960,7 @@
         },
         "MetatileBehavior_IsEastArrowWarp": {
           "fold_target": "crates/engine/src/overworld/warp.rs",
-          "reason": "Transcribed inline into engine::overworld::warp::warp_in_facing's match on the arrival tile's metatile behavior (exact upstream id membership, including multi-id arms); no standalone predicate exists because arrival-facing classification is its only v1 consumer.",
+          "reason": "Transcribed inline into engine::overworld::warp::warp_in_facing's match on the arrival tile's metatile behavior (exact upstream id membership) — the arrival-facing consumer ONLY. Upstream's warp-trigger consumer (TryArrowWarp/IsArrowWarpMetatileBehavior, src/field_control_avatar.c:688-699/767-780 under the same tookStep gate; also field_player_avatar.c:225-231/294-300, overworld.c:2737) is deliberately unported — these ids stay outside is_warp_trigger (pinned by test) — tracked as issue #174 (the Brendan's-house exit doormat depends on it).",
           "spec": "I-3",
           "status": "folded"
         },
@@ -25972,13 +25972,13 @@
         },
         "MetatileBehavior_IsNorthArrowWarp": {
           "fold_target": "crates/engine/src/overworld/warp.rs",
-          "reason": "Transcribed inline into engine::overworld::warp::warp_in_facing's match on the arrival tile's metatile behavior (exact upstream id membership, including multi-id arms); no standalone predicate exists because arrival-facing classification is its only v1 consumer.",
+          "reason": "Transcribed inline into engine::overworld::warp::warp_in_facing's match on the arrival tile's metatile behavior (exact upstream id membership) — the arrival-facing consumer ONLY. Upstream's warp-trigger consumer (TryArrowWarp/IsArrowWarpMetatileBehavior, src/field_control_avatar.c:688-699/767-780 under the same tookStep gate; also field_player_avatar.c:225-231/294-300, overworld.c:2737) is deliberately unported — these ids stay outside is_warp_trigger (pinned by test) — tracked as issue #174 (the Brendan's-house exit doormat depends on it).",
           "spec": "I-3",
           "status": "folded"
         },
         "MetatileBehavior_IsSouthArrowWarp": {
           "fold_target": "crates/engine/src/overworld/warp.rs",
-          "reason": "Transcribed inline into engine::overworld::warp::warp_in_facing's match on the arrival tile's metatile behavior (exact upstream id membership, including multi-id arms); no standalone predicate exists because arrival-facing classification is its only v1 consumer.",
+          "reason": "Transcribed inline into engine::overworld::warp::warp_in_facing's match on the arrival tile's metatile behavior (exact upstream id membership) — the arrival-facing consumer ONLY. Upstream's warp-trigger consumer (TryArrowWarp/IsArrowWarpMetatileBehavior, src/field_control_avatar.c:688-699/767-780 under the same tookStep gate; also field_player_avatar.c:225-231/294-300, overworld.c:2737) is deliberately unported — these ids stay outside is_warp_trigger (pinned by test) — tracked as issue #174 (the Brendan's-house exit doormat depends on it).",
           "spec": "I-3",
           "status": "folded"
         },
@@ -25990,7 +25990,7 @@
         },
         "MetatileBehavior_IsWestArrowWarp": {
           "fold_target": "crates/engine/src/overworld/warp.rs",
-          "reason": "Transcribed inline into engine::overworld::warp::warp_in_facing's match on the arrival tile's metatile behavior (exact upstream id membership, including multi-id arms); no standalone predicate exists because arrival-facing classification is its only v1 consumer.",
+          "reason": "Transcribed inline into engine::overworld::warp::warp_in_facing's match on the arrival tile's metatile behavior (exact upstream id membership) — the arrival-facing consumer ONLY. Upstream's warp-trigger consumer (TryArrowWarp/IsArrowWarpMetatileBehavior, src/field_control_avatar.c:688-699/767-780 under the same tookStep gate; also field_player_avatar.c:225-231/294-300, overworld.c:2737) is deliberately unported — these ids stay outside is_warp_trigger (pinned by test) — tracked as issue #174 (the Brendan's-house exit doormat depends on it).",
           "spec": "I-3",
           "status": "folded"
         }
