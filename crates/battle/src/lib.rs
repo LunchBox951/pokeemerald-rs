@@ -23,6 +23,13 @@
 //! (`pokeemerald/src/pokemon.c`) and the STAB/type-effectiveness/random-roll
 //! battle-script steps around it.
 //!
+//! Move-effect breadth is the sharp edge of this slice, so it is enforced
+//! rather than assumed: only moves whose `EFFECT_*` runs upstream's plain
+//! `BattleScript_EffectHit` are executable ([`hit::is_ordinary_hit_effect`]),
+//! and [`battle::Battle::new`] rejects a battle in which either mon knows
+//! anything else — before any state exists or any RNG is drawn, so an
+//! unsupported configuration can never leave a half-played turn behind.
+//!
 //! Out of scope for this slice (see each module's own docs for exactly what
 //! is/isn't modelled): trainer/wild AI (`I-5`), battle UI/animations,
 //! overworld transition, abilities, held items, non-volatile status
@@ -45,7 +52,7 @@ pub mod stat_stage;
 pub mod turn_order;
 pub mod wild;
 
-pub use battle::{Battle, BattleEvent, BattleOutcome, PlayerAction};
+pub use battle::{Battle, BattleEvent, BattleOutcome, PlayerAction, TurnError};
 pub use damage::{
     apply_damage_roll, apply_dual_type_effectiveness, apply_stab, apply_type_effectiveness,
     base_damage, calculate_damage, has_stab, BattleRng, DamageInput, MoveCategory, Weather,
@@ -53,8 +60,11 @@ pub use damage::{
 };
 pub use dex::Dex;
 pub use error::BattleError;
-pub use hit::HitOutcome;
+pub use hit::{ensure_resolvable, is_ordinary_hit_effect, HitOutcome};
 pub use nature::{Nature, Stat};
-pub use pokemon::{BattlePokemon, Ivs, MoveSlot, StatStages, Stats};
+pub use pokemon::{
+    BattlePokemon, Ivs, MoveSlot, StatStages, Stats, MAX_IV, MAX_LEVEL, MAX_MON_MOVES, MIN_LEVEL,
+    MOVE_NONE,
+};
 pub use stat_stage::StatStage;
 pub use wild::build_wild_pokemon;

@@ -103,10 +103,20 @@ pub fn roll_ivs(rng: &mut impl BattleRng) -> Ivs {
 /// the caller supplies (`GiveBoxMonInitialMoveset` is not modelled — see the
 /// module docs).
 ///
+/// Every caller-supplied input is checked **before the first draw**
+/// ([`BattlePokemon::validate`]): a rejected request must leave the shared RNG
+/// stream exactly as it found it, the same rule
+/// [`crate::battle::Battle::new`] follows `(behavioral-fidelity)`. Only the
+/// rolled fields are validated afterwards, and [`roll_ivs`] cannot produce an
+/// out-of-range IV in the first place (it masks each to five bits).
+///
 /// # Errors
 ///
-/// Returns [`BattleError::UnknownSpecies`] or [`BattleError::UnknownMove`] if
-/// `species`/any of `moves` is not in `dex`.
+/// [`BattleError::InvalidLevel`] for a `level` outside `MIN_LEVEL..=MAX_LEVEL`
+/// (`1..=100`), [`BattleError::InvalidMoveCount`] /
+/// [`BattleError::PlaceholderMove`] for a moveset upstream cannot represent,
+/// or [`BattleError::UnknownSpecies`] / [`BattleError::UnknownMove`] if
+/// `species`/any of `moves` is not in `dex` — none of which draw.
 pub fn build_wild_pokemon(
     dex: &Dex,
     species: SpeciesId,
@@ -114,6 +124,10 @@ pub fn build_wild_pokemon(
     moves: Vec<MoveId>,
     rng: &mut impl BattleRng,
 ) -> Result<BattlePokemon, BattleError> {
+    // Before `roll_nature`, not after: an out-of-range level rejected on the
+    // way out of `BattlePokemon::new` would already have consumed the five
+    // encounter draws.
+    BattlePokemon::validate(dex, species, level, &moves)?;
     let nature = roll_nature(rng);
     let personality = roll_personality_for_nature(nature, rng);
     let ivs = roll_ivs(rng);
@@ -125,7 +139,9 @@ mod tests {
     use super::{build_wild_pokemon, roll_ivs, roll_nature, roll_personality_for_nature};
     use crate::damage::BattleRng;
     use crate::dex::Dex;
+    use crate::error::BattleError;
     use crate::nature::Nature;
+    use crate::pokemon::MOVE_NONE;
     use assets::{MoveId, SpeciesId};
 
     /// A `BattleRng` fed from a fixed sequence, panicking (loudly, not
@@ -238,12 +254,51 @@ mod tests {
             &mut rng,
         )
         .unwrap();
-        assert_eq!(mon.nature, Nature::Hardy);
-        assert_eq!(mon.personality, 0);
-        assert_eq!(mon.ivs.hp, 0);
+        assert_eq!(mon.nature(), Nature::Hardy);
+        assert_eq!(mon.personality(), 0);
+        assert_eq!(mon.ivs().hp, 0);
         assert_eq!(rng.draws(), 5);
-        assert_eq!(mon.level, 5);
-        assert_eq!(mon.species, SpeciesId(1));
+        assert_eq!(mon.level(), 5);
+        assert_eq!(mon.species(), SpeciesId(1));
         assert!(!mon.is_fainted());
+    }
+
+    #[test]
+    fn build_wild_pokemon_rejects_bad_inputs_before_drawing_anything() {
+        let dex = Dex::new();
+        // The level/species/moves are the caller's, not rolled, so they are
+        // checked ahead of `PickWildMonNature`'s draw: every script below is
+        // *empty*, so a single draw before the rejection would panic on an
+        // exhausted SequenceRng rather than quietly pass.
+        // (MIN_LEVEL..=MAX_LEVEL is 1..=100, `include/constants/pokemon.h:145`-`:146`.)
+        for (level, moves, expected) in [
+            (101, vec![MoveId(33)], BattleError::InvalidLevel(101)),
+            (0, vec![MoveId(33)], BattleError::InvalidLevel(0)),
+            (5, vec![], BattleError::InvalidMoveCount(0)),
+            (5, vec![MOVE_NONE], BattleError::PlaceholderMove(0)),
+            (
+                5,
+                vec![MoveId(60_000)],
+                BattleError::UnknownMove(MoveId(60_000)),
+            ),
+        ] {
+            let mut rng = SequenceRng::new([]);
+            assert_eq!(
+                build_wild_pokemon(&dex, SpeciesId(1), level, moves, &mut rng),
+                Err(expected)
+            );
+            assert_eq!(rng.draws(), 0, "a rejected request must not draw");
+        }
+    }
+
+    #[test]
+    fn rolled_ivs_are_always_within_the_upstream_range() {
+        // Every 16-bit draw splits into three 5-bit fields, so no roll can
+        // produce an out-of-range individual value (Gen-3 stat rolls -- see
+        // `Ivs` -- not cryptographic initialization vectors).
+        for value in [0u16, 1, 0x5A5A, 0xFFFF] {
+            let mut rng = SequenceRng::new([value, !value]);
+            assert!(roll_ivs(&mut rng).is_valid());
+        }
     }
 }

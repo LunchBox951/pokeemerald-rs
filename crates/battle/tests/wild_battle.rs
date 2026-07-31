@@ -13,8 +13,8 @@
 
 use assets::{MoveId, SpeciesId};
 use battle::{
-    build_wild_pokemon, Battle, BattleEvent, BattleOutcome, BattlePokemon, BattleRng, Dex, Ivs,
-    Nature, PlayerAction,
+    build_wild_pokemon, Battle, BattleError, BattleEvent, BattleOutcome, BattlePokemon, BattleRng,
+    Dex, Ivs, Nature, PlayerAction, MOVE_NONE,
 };
 
 /// A `BattleRng` fed from a fixed sequence, panicking loudly (never hanging)
@@ -53,6 +53,19 @@ impl BattleRng for ScriptedRng {
     }
 }
 
+/// The maximum Pokémon Gen-3 **individual values** — the per-stat genetic
+/// rolls that feed the stat formula (`MAX_IV_MASK` = 31,
+/// `pokeemerald/include/constants/pokemon.h:201`). Not a cryptographic
+/// initialization vector: nothing here is cryptographic.
+const MAX_IVS: Ivs = Ivs {
+    hp: 31,
+    attack: 31,
+    defense: 31,
+    speed: 31,
+    sp_attack: 31,
+    sp_defense: 31,
+};
+
 /// A max-IV, neutral-nature mon at `species`/`level`, known moves `moves` —
 /// deterministic stats so the scenarios below are reproducible without
 /// depending on this test's own RNG script for stat generation too.
@@ -62,14 +75,7 @@ fn fixed_mon(dex: &Dex, species: u16, level: u8, moves: Vec<MoveId>) -> BattlePo
         SpeciesId(species),
         level,
         Nature::Hardy,
-        Ivs {
-            hp: 31,
-            attack: 31,
-            defense: 31,
-            speed: 31,
-            sp_attack: 31,
-            sp_defense: 31,
-        },
+        MAX_IVS,
         0,
         moves,
     )
@@ -108,10 +114,10 @@ fn scripted_wild_battle_runs_move_vs_move_to_a_faint_and_reports_victory() {
 
     let enemy = build_wild_pokemon(&dex, SpeciesId(19), 5, vec![MoveId(33)], &mut rng)
         .expect("wild Rattata construction");
-    assert_eq!(enemy.nature, Nature::Hardy);
-    assert_eq!(enemy.ivs.hp, 0);
+    assert_eq!(enemy.nature(), Nature::Hardy);
+    assert_eq!(enemy.ivs().hp, 0);
 
-    let mut battle = Battle::new(dex, player, enemy, &mut rng);
+    let mut battle = Battle::new(dex, player, enemy, &mut rng).expect("Battle::new");
 
     // The level-50 attacker's Tackle one-shots a level-5 Rattata even at the
     // worst (85%) damage roll and without a crit, so one turn is enough.
@@ -124,10 +130,11 @@ fn scripted_wild_battle_runs_move_vs_move_to_a_faint_and_reports_victory() {
             e,
             BattleEvent::Hit {
                 by_player: true,
+                move_id: MoveId(33),
                 ..
             }
         )),
-        "expected the player's Tackle to land: {events:?}"
+        "expected the player's Tackle to land, named in the event: {events:?}"
     );
     assert!(
         events.contains(&BattleEvent::Fainted { by_player: false }),
@@ -144,10 +151,10 @@ fn scripted_wild_battle_runs_move_vs_move_to_a_faint_and_reports_victory() {
         Some(&BattleEvent::Ended(BattleOutcome::PlayerWon))
     );
     assert_eq!(battle.outcome(), Some(BattleOutcome::PlayerWon));
-    assert_eq!(battle.enemy().current_hp, 0);
+    assert_eq!(battle.enemy().current_hp(), 0);
     assert_eq!(
-        battle.player().current_hp,
-        battle.player().stats.max_hp,
+        battle.player().current_hp(),
+        battle.player().stats().max_hp,
         "the far-lower-level wild mon should never have gotten to act"
     );
     assert_eq!(
@@ -158,9 +165,14 @@ fn scripted_wild_battle_runs_move_vs_move_to_a_faint_and_reports_victory() {
 
     // The battle is over: no further turns are valid -- and the rejected call
     // must not draw either. The script is exhausted, so a stray draw panics.
-    assert!(battle
+    let rejected = battle
         .take_turn(PlayerAction::UseMove(0), &mut rng)
-        .is_err());
+        .unwrap_err();
+    assert_eq!(rejected.error(), BattleError::BattleAlreadyOver);
+    assert!(
+        rejected.events().is_empty(),
+        "a turn rejected before it began reports no events"
+    );
     assert_eq!(rng.draws(), 11);
 }
 
@@ -181,9 +193,9 @@ fn a_faster_player_always_escapes_a_wild_battle_successfully() {
     let enemy = build_wild_pokemon(&dex, SpeciesId(19), 5, vec![MoveId(33)], &mut rng)
         .expect("wild Rattata construction");
 
-    let player_hp_before = player.current_hp;
-    let enemy_hp_before = enemy.current_hp;
-    let mut battle = Battle::new(dex, player, enemy, &mut rng);
+    let player_hp_before = player.current_hp();
+    let enemy_hp_before = enemy.current_hp();
+    let mut battle = Battle::new(dex, player, enemy, &mut rng).expect("Battle::new");
 
     let events = battle
         .take_turn(PlayerAction::Run, &mut rng)
@@ -201,11 +213,81 @@ fn a_faster_player_always_escapes_a_wild_battle_successfully() {
     );
     assert_eq!(battle.outcome(), Some(BattleOutcome::PlayerRan));
     // Running away costs no HP on either side -- no move was ever used.
-    assert_eq!(battle.player().current_hp, player_hp_before);
-    assert_eq!(battle.enemy().current_hp, enemy_hp_before);
+    assert_eq!(battle.player().current_hp(), player_hp_before);
+    assert_eq!(battle.enemy().current_hp(), enemy_hp_before);
     assert_eq!(
         rng.draws(),
         8,
         "5 (wild construction) + 1 (battle start) + 2 (turn number, move pick)"
+    );
+}
+
+#[test]
+fn a_battle_with_a_move_outside_this_slice_is_refused_before_it_starts() {
+    let dex = Dex::new();
+    // Sonic Boom (move 49) has base *power 1* but EFFECT_SONICBOOM's flat
+    // 20 damage, so a power-only filter would have let it into the ordinary
+    // damage pipeline -- wrong damage and a desynchronised RNG stream.
+    let player = fixed_mon(&dex, 4, 50, vec![MoveId(33)]);
+    let enemy = fixed_mon(&dex, 19, 5, vec![MoveId(49)]);
+
+    // An empty script: a refused battle must not draw at all, so any draw
+    // here panics rather than quietly passing.
+    let mut rng = ScriptedRng::new([]);
+    assert_eq!(
+        Battle::new(dex, player, enemy, &mut rng).err(),
+        Some(BattleError::UnsupportedMoveEffect(MoveId(49)))
+    );
+    assert_eq!(rng.draws(), 0);
+}
+
+#[test]
+fn an_impossible_battler_cannot_be_built_at_all() {
+    let dex = Dex::new();
+    // Level and individual values are checked at the one construction
+    // boundary, so no out-of-range battler ever reaches the stat or damage
+    // formulas. (These are Pokémon IVs -- per-stat rolls capped at 31 by
+    // MAX_IV_MASK -- not cryptographic initialization vectors.)
+    assert_eq!(
+        BattlePokemon::new(
+            &dex,
+            SpeciesId(1),
+            101,
+            Nature::Hardy,
+            MAX_IVS,
+            0,
+            vec![MoveId(33)]
+        ),
+        Err(BattleError::InvalidLevel(101))
+    );
+    assert!(matches!(
+        BattlePokemon::new(
+            &dex,
+            SpeciesId(1),
+            5,
+            Nature::Hardy,
+            Ivs { hp: 99, ..MAX_IVS },
+            0,
+            vec![MoveId(33)]
+        ),
+        Err(BattleError::InvalidIv(99))
+    ));
+    // An empty moveset would make the wild opponent's rejection loop spin
+    // forever; MOVE_NONE is the placeholder for an *unfilled* slot.
+    assert_eq!(
+        BattlePokemon::new(&dex, SpeciesId(1), 5, Nature::Hardy, MAX_IVS, 0, vec![]),
+        Err(BattleError::InvalidMoveCount(0))
+    );
+    assert_eq!(
+        BattlePokemon::new(
+            &dex,
+            SpeciesId(1),
+            5,
+            Nature::Hardy,
+            MAX_IVS,
+            0,
+            vec![MOVE_NONE]
+        ),
+        Err(BattleError::PlaceholderMove(0))
     );
 }

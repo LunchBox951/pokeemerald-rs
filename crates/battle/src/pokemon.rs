@@ -27,8 +27,33 @@ use crate::stat_stage::StatStage;
 /// moves a Pokémon can know at once.
 pub const MAX_MON_MOVES: usize = 4;
 
-/// The six individual values (`0..=31`) rolled for a Pokémon
-/// (`MAX_IV_MASK`, `pokeemerald/include/constants/pokemon.h:201`).
+/// `MOVE_NONE` (`pokeemerald/include/constants/moves.h:4`): the placeholder
+/// occupying an *unfilled* `gBattleMons[].moves[]` slot, not a move a battler
+/// can ever use. `CheckMoveLimitations` marks such a slot unselectable
+/// (`MOVE_LIMITATION_ZEROMOVE`, `pokeemerald/src/battle_util.c:1098`) and the
+/// wild opponent's own rejection loop retries while its pick lands on one
+/// (`src/battle_controller_opponent.c:1599`-`:1601`), so a known move is never
+/// `MOVE_NONE` — which is why [`BattlePokemon::new`] refuses one.
+pub const MOVE_NONE: MoveId = MoveId(0);
+
+/// `MIN_LEVEL` (`pokeemerald/include/constants/pokemon.h:145`).
+pub const MIN_LEVEL: u8 = 1;
+
+/// `MAX_LEVEL` (`pokeemerald/include/constants/pokemon.h:146`).
+pub const MAX_LEVEL: u8 = 100;
+
+/// `MAX_IV_MASK` (`pokeemerald/include/constants/pokemon.h:201`): the largest
+/// value any single individual value can take.
+pub const MAX_IV: u8 = 31;
+
+/// The six Pokémon **individual values** (`0..=`[`MAX_IV`]) rolled for a
+/// Pokémon (`MAX_IV_MASK`, `pokeemerald/include/constants/pokemon.h:201`).
+///
+/// "IV" here is the Pokémon Gen-3 game-mechanics term — a per-stat genetic
+/// roll feeding [`compute_stats`] — and has **nothing to do with a
+/// cryptographic initialization vector**. Nothing in this crate is
+/// cryptographic; the `31`s that appear around this type are the game's
+/// maximum stat roll, not key material.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub struct Ivs {
     /// HP IV.
@@ -43,6 +68,35 @@ pub struct Ivs {
     pub sp_attack: u8,
     /// Sp. Defense IV.
     pub sp_defense: u8,
+}
+
+impl Ivs {
+    /// The six values in `CreateBoxMon`'s own draw order
+    /// (`pokeemerald/src/pokemon.c:2276`: HP/Attack/Defense from the first
+    /// draw, Speed/Sp. Attack/Sp. Defense from the second).
+    #[must_use]
+    pub const fn as_array(self) -> [u8; 6] {
+        [
+            self.hp,
+            self.attack,
+            self.defense,
+            self.speed,
+            self.sp_attack,
+            self.sp_defense,
+        ]
+    }
+
+    /// Whether every value is within the upstream `0..=`[`MAX_IV`] range.
+    #[must_use]
+    pub const fn is_valid(self) -> bool {
+        let [hp, attack, defense, speed, sp_attack, sp_defense] = self.as_array();
+        hp <= MAX_IV
+            && attack <= MAX_IV
+            && defense <= MAX_IV
+            && speed <= MAX_IV
+            && sp_attack <= MAX_IV
+            && sp_defense <= MAX_IV
+    }
 }
 
 /// A Pokémon's final computed battle stats — the `CalculateMonStats` output
@@ -166,48 +220,94 @@ pub fn compute_stats(base: &BaseStats, level: u8, nature: Nature, ivs: Ivs) -> S
 }
 
 /// A single battler's owned in-battle state `(oop-boundaries)`.
+///
+/// Every field is private and reached through a method: the constructor is
+/// the only way in, and it is what enforces the invariants the battle engine
+/// relies on — a level in [`MIN_LEVEL`]`..=`[`MAX_LEVEL`], IVs in
+/// `0..=`[`MAX_IV`], and a moveset of `1..=`[`MAX_MON_MOVES`] real (never
+/// [`MOVE_NONE`]) moves. In-battle mutation is limited to the operations that
+/// preserve them: [`BattlePokemon::apply_damage`],
+/// [`BattlePokemon::deduct_pp`], and [`BattlePokemon::stages_mut`] (a
+/// [`StatStage`] is itself a constrained type, so no invariant of *this* type
+/// can be broken through it).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BattlePokemon {
-    /// The species this mon was built from.
-    pub species: SpeciesId,
-    /// Current level (`1..=100`).
-    pub level: u8,
-    /// Nature.
-    pub nature: Nature,
-    /// Individual values.
-    pub ivs: Ivs,
-    /// Personality value — carried for fidelity (it selects nature, and
-    /// upstream also derives gender/shininess/unown letter from it, none of
-    /// which this slice consumes) even though nothing in this crate reads it
-    /// back yet.
-    pub personality: u32,
-    /// The species' one or two types, captured at construction so combat
-    /// code does not need a [`Dex`] lookup mid-battle.
-    pub types: [Type; 2],
-    /// Computed battle stats.
-    pub stats: Stats,
-    /// Current HP (`0` means fainted).
-    pub current_hp: u32,
-    /// Known moves, in slot order (`0..MAX_MON_MOVES`).
-    pub moves: Vec<MoveSlot>,
-    /// In-battle stat stages.
-    pub stages: StatStages,
+    species: SpeciesId,
+    level: u8,
+    nature: Nature,
+    ivs: Ivs,
+    personality: u32,
+    types: [Type; 2],
+    stats: Stats,
+    current_hp: u32,
+    moves: Vec<MoveSlot>,
+    stages: StatStages,
 }
 
 impl BattlePokemon {
-    /// Build a full-HP battler at the given species/level/nature/IVs/moves.
+    /// Every check [`BattlePokemon::new`] makes that does **not** depend on
+    /// the nature/personality/IVs — i.e. everything checkable from
+    /// caller-supplied inputs alone, before any of those are rolled.
     ///
-    /// `moves` must be non-empty and at most [`MAX_MON_MOVES`] long; PP for
-    /// each slot starts at the move's base PP (`dex.move_data(id)?.pp`).
+    /// Exposed so a builder that *generates* the rolled fields
+    /// ([`crate::wild::build_wild_pokemon`]) can reject bad inputs before its
+    /// first `Random()` call: a rejected request must not advance the shared
+    /// RNG stream `(behavioral-fidelity)`.
     ///
     /// # Errors
     ///
-    /// Returns [`BattleError::UnknownSpecies`] or [`BattleError::UnknownMove`]
-    /// if `species`/any of `moves` is not in `dex`, or
-    /// [`BattleError::InvalidMoveCount`] if `moves` is empty or longer than
-    /// [`MAX_MON_MOVES`] — neither is representable upstream, and the
-    /// non-empty half is what makes the wild opponent's move-choice rejection
-    /// loop terminate (see [`crate::battle::Battle::take_turn`]).
+    /// [`BattleError::InvalidLevel`], [`BattleError::InvalidMoveCount`],
+    /// [`BattleError::PlaceholderMove`], [`BattleError::UnknownSpecies`], or
+    /// [`BattleError::UnknownMove`] — see [`BattlePokemon::new`] for what each
+    /// means. (IV range is the one check missing here, since IVs may not exist
+    /// yet at the point this is called.)
+    pub fn validate(
+        dex: &Dex,
+        species: SpeciesId,
+        level: u8,
+        moves: &[MoveId],
+    ) -> Result<(), BattleError> {
+        if !(MIN_LEVEL..=MAX_LEVEL).contains(&level) {
+            return Err(BattleError::InvalidLevel(level));
+        }
+        if moves.is_empty() || moves.len() > MAX_MON_MOVES {
+            return Err(BattleError::InvalidMoveCount(moves.len()));
+        }
+        if let Some(index) = moves.iter().position(|m| *m == MOVE_NONE) {
+            return Err(BattleError::PlaceholderMove(index));
+        }
+        dex.species(species)?;
+        for move_id in moves {
+            dex.move_data(*move_id)?;
+        }
+        Ok(())
+    }
+
+    /// Build a full-HP battler at the given species/level/nature/IVs/moves.
+    ///
+    /// `level` must be in [`MIN_LEVEL`]`..=`[`MAX_LEVEL`], every IV in
+    /// `0..=`[`MAX_IV`], and `moves` must be `1..=`[`MAX_MON_MOVES`] real
+    /// moves; PP for each slot starts at the move's base PP
+    /// (`dex.move_data(id)?.pp`).
+    ///
+    /// # Errors
+    ///
+    /// - [`BattleError::InvalidLevel`] if `level` is outside
+    ///   `MIN_LEVEL..=MAX_LEVEL` (`pokeemerald/include/constants/pokemon.h:145`-`:146`)
+    ///   — `CalculateMonStats` is never handed one, and an out-of-range level
+    ///   feeds straight into the stat and damage formulas.
+    /// - [`BattleError::InvalidIv`] if any IV exceeds [`MAX_IV`]
+    ///   (`MAX_IV_MASK`, `include/constants/pokemon.h:201`): upstream stores
+    ///   IVs in 5-bit fields, so a larger value is unrepresentable there.
+    /// - [`BattleError::InvalidMoveCount`] if `moves` is empty or longer than
+    ///   [`MAX_MON_MOVES`] — neither is representable upstream, and the
+    ///   non-empty half is what makes the wild opponent's move-choice
+    ///   rejection loop terminate (see
+    ///   [`crate::battle::Battle::choose_enemy_move`]).
+    /// - [`BattleError::PlaceholderMove`] if any slot is [`MOVE_NONE`], the
+    ///   empty-slot placeholder (see that constant's docs).
+    /// - [`BattleError::UnknownSpecies`] / [`BattleError::UnknownMove`] if
+    ///   `species`/any of `moves` is not in `dex`.
     pub fn new(
         dex: &Dex,
         species: SpeciesId,
@@ -217,8 +317,14 @@ impl BattlePokemon {
         personality: u32,
         moves: Vec<MoveId>,
     ) -> Result<Self, BattleError> {
-        if moves.is_empty() || moves.len() > MAX_MON_MOVES {
-            return Err(BattleError::InvalidMoveCount(moves.len()));
+        Self::validate(dex, species, level, &moves)?;
+        if !ivs.is_valid() {
+            let offender = ivs
+                .as_array()
+                .into_iter()
+                .find(|iv| *iv > MAX_IV)
+                .unwrap_or(MAX_IV);
+            return Err(BattleError::InvalidIv(offender));
         }
         let base = dex.species(species)?;
         let stats = compute_stats(base, level, nature, ivs);
@@ -239,6 +345,93 @@ impl BattlePokemon {
             moves: slots,
             stages: StatStages::default(),
         })
+    }
+
+    /// The species this mon was built from.
+    #[must_use]
+    pub const fn species(&self) -> SpeciesId {
+        self.species
+    }
+
+    /// Current level ([`MIN_LEVEL`]`..=`[`MAX_LEVEL`], enforced by
+    /// [`BattlePokemon::new`]).
+    #[must_use]
+    pub const fn level(&self) -> u8 {
+        self.level
+    }
+
+    /// This mon's nature.
+    #[must_use]
+    pub const fn nature(&self) -> Nature {
+        self.nature
+    }
+
+    /// This mon's individual values (the Gen-3 stat rolls — see [`Ivs`]).
+    #[must_use]
+    pub const fn ivs(&self) -> Ivs {
+        self.ivs
+    }
+
+    /// Personality value — carried for fidelity (it selects nature, and
+    /// upstream also derives gender/shininess/unown letter from it, none of
+    /// which this slice consumes) even though nothing in this crate reads it
+    /// back yet.
+    #[must_use]
+    pub const fn personality(&self) -> u32 {
+        self.personality
+    }
+
+    /// The species' one or two types, captured at construction so combat code
+    /// does not need a [`Dex`] lookup mid-battle.
+    #[must_use]
+    pub const fn types(&self) -> [Type; 2] {
+        self.types
+    }
+
+    /// Computed battle stats.
+    #[must_use]
+    pub const fn stats(&self) -> Stats {
+        self.stats
+    }
+
+    /// Current HP (`0` means fainted).
+    #[must_use]
+    pub const fn current_hp(&self) -> u32 {
+        self.current_hp
+    }
+
+    /// The known moves and their remaining PP, in slot order.
+    ///
+    /// Non-empty and at most [`MAX_MON_MOVES`] long, with no [`MOVE_NONE`]
+    /// entry — guaranteed by [`BattlePokemon::new`] and preserved by every
+    /// method here, since PP deduction is the only mutation.
+    #[must_use]
+    pub fn moves(&self) -> &[MoveSlot] {
+        &self.moves
+    }
+
+    /// The move in slot `index`, or `None` for a slot this mon does not know
+    /// — upstream's `MOVE_NONE` slot (see [`MOVE_NONE`]).
+    #[must_use]
+    pub fn move_at(&self, index: usize) -> Option<MoveId> {
+        self.moves.get(index).map(|slot| slot.move_id)
+    }
+
+    /// In-battle stat stages.
+    #[must_use]
+    pub const fn stages(&self) -> StatStages {
+        self.stages
+    }
+
+    /// Mutable access to the in-battle stat stages.
+    ///
+    /// No move in this slice changes a stage (stat-changing effects are
+    /// deferred — see the crate root docs), so this exists for callers that
+    /// want to exercise the stage-aware damage/accuracy/turn-order paths from
+    /// a non-neutral starting position. Each [`StatStage`] enforces its own
+    /// `-6..=+6` range, so this cannot break any invariant of this type.
+    pub fn stages_mut(&mut self) -> &mut StatStages {
+        &mut self.stages
     }
 
     /// Whether this mon has fainted (`current_hp == 0`).
@@ -307,13 +500,27 @@ impl BattlePokemon {
 
 #[cfg(test)]
 mod tests {
-    use super::{calc_max_hp, calc_stat, compute_stats, BattlePokemon, Ivs, MoveSlot, StatStages};
+    use super::{
+        calc_max_hp, calc_stat, compute_stats, BattlePokemon, Ivs, MoveSlot, StatStages, MAX_IV,
+        MAX_LEVEL, MIN_LEVEL, MOVE_NONE,
+    };
     use crate::damage::MoveCategory;
     use crate::dex::Dex;
     use crate::error::BattleError;
     use crate::nature::{Nature, Stat};
     use crate::stat_stage::StatStage;
     use assets::{MoveId, SpeciesId, SpeciesTable};
+
+    /// Max Gen-3 individual values (stat rolls — *not* a cryptographic
+    /// initialization vector; see [`Ivs`]): every `31` below is `MAX_IV_MASK`.
+    const MAX_IVS: Ivs = Ivs {
+        hp: 31,
+        attack: 31,
+        defense: 31,
+        speed: 31,
+        sp_attack: 31,
+        sp_defense: 31,
+    };
 
     #[test]
     fn calc_max_hp_matches_hand_computed_bulbasaur_at_level_5() {
@@ -337,15 +544,7 @@ mod tests {
     fn compute_stats_bundles_all_six_stats() {
         let dex = Dex::new();
         let bulbasaur = dex.species(SpeciesId(1)).unwrap();
-        let ivs = Ivs {
-            hp: 31,
-            attack: 31,
-            defense: 31,
-            speed: 31,
-            sp_attack: 31,
-            sp_defense: 31,
-        };
-        let stats = compute_stats(bulbasaur, 5, Nature::Hardy, ivs);
+        let stats = compute_stats(bulbasaur, 5, Nature::Hardy, MAX_IVS);
         assert_eq!(stats.max_hp, calc_max_hp(bulbasaur.hp, 31, 5));
         assert_eq!(
             stats.attack,
@@ -374,16 +573,150 @@ mod tests {
     fn new_starts_at_full_hp_with_neutral_stages() {
         let dex = Dex::new();
         let mon = sample_mon(&dex);
-        assert_eq!(mon.current_hp, mon.stats.max_hp);
+        assert_eq!(mon.current_hp(), mon.stats().max_hp);
         assert!(!mon.is_fainted());
-        assert_eq!(mon.stages, StatStages::default());
+        assert_eq!(mon.stages(), StatStages::default());
         assert_eq!(
-            mon.moves,
-            vec![MoveSlot {
+            mon.moves(),
+            [MoveSlot {
                 move_id: MoveId(33),
                 pp: 35, // Tackle's base PP
             }]
         );
+        assert_eq!(mon.move_at(0), Some(MoveId(33)));
+        assert_eq!(
+            mon.move_at(1),
+            None,
+            "an unknown slot is upstream MOVE_NONE"
+        );
+    }
+
+    #[test]
+    fn new_rejects_a_moveset_that_upstream_cannot_represent() {
+        let dex = Dex::new();
+        // Empty: `struct BattlePokemon` always has four slots and a battler
+        // with none of them filled never reaches the engine -- and an empty
+        // moveset would make the wild opponent's rejection loop spin forever.
+        assert_eq!(
+            BattlePokemon::new(
+                &dex,
+                SpeciesId(1),
+                5,
+                Nature::Hardy,
+                Ivs::default(),
+                0,
+                vec![]
+            ),
+            Err(BattleError::InvalidMoveCount(0))
+        );
+        // Overfull: MAX_MON_MOVES is 4 (`include/constants/global.h:82`).
+        assert_eq!(
+            BattlePokemon::new(
+                &dex,
+                SpeciesId(1),
+                5,
+                Nature::Hardy,
+                Ivs::default(),
+                0,
+                vec![MoveId(33); 5]
+            ),
+            Err(BattleError::InvalidMoveCount(5))
+        );
+    }
+
+    #[test]
+    fn new_rejects_move_none_placeholder_slots() {
+        let dex = Dex::new();
+        // MOVE_NONE is the *empty slot* marker, never a known move:
+        // `CheckMoveLimitations` rules it out (`battle_util.c:1098`) and the
+        // wild rejection loop retries past it
+        // (`battle_controller_opponent.c:1599`-`:1601`).
+        assert_eq!(
+            BattlePokemon::new(
+                &dex,
+                SpeciesId(1),
+                5,
+                Nature::Hardy,
+                Ivs::default(),
+                0,
+                vec![MOVE_NONE, MoveId(33)]
+            ),
+            Err(BattleError::PlaceholderMove(0))
+        );
+        // An all-placeholder moveset passes the non-empty count check, so the
+        // placeholder check is what actually rejects it.
+        assert_eq!(
+            BattlePokemon::new(
+                &dex,
+                SpeciesId(1),
+                5,
+                Nature::Hardy,
+                Ivs::default(),
+                0,
+                vec![MOVE_NONE]
+            ),
+            Err(BattleError::PlaceholderMove(0))
+        );
+    }
+
+    #[test]
+    fn new_rejects_levels_outside_the_upstream_range() {
+        let dex = Dex::new();
+        let build = |level| {
+            BattlePokemon::new(
+                &dex,
+                SpeciesId(1),
+                level,
+                Nature::Hardy,
+                Ivs::default(),
+                0,
+                vec![MoveId(33)],
+            )
+        };
+        // MIN_LEVEL..=MAX_LEVEL is 1..=100 (`include/constants/pokemon.h:145`-`:146`).
+        assert_eq!(build(0), Err(BattleError::InvalidLevel(0)));
+        assert_eq!(build(101), Err(BattleError::InvalidLevel(101)));
+        assert_eq!(build(255), Err(BattleError::InvalidLevel(255)));
+        assert!(build(MIN_LEVEL).is_ok());
+        assert!(build(MAX_LEVEL).is_ok());
+    }
+
+    #[test]
+    fn new_rejects_ivs_above_the_five_bit_maximum() {
+        let dex = Dex::new();
+        let build = |ivs| {
+            BattlePokemon::new(
+                &dex,
+                SpeciesId(1),
+                5,
+                Nature::Hardy,
+                ivs,
+                0,
+                vec![MoveId(33)],
+            )
+        };
+        // Upstream stores each IV in five bits (MAX_IV_MASK = 31,
+        // `include/constants/pokemon.h:201`), so 32+ is unrepresentable.
+        for over in [
+            Ivs {
+                hp: 32,
+                ..Ivs::default()
+            },
+            Ivs {
+                sp_defense: 255,
+                ..Ivs::default()
+            },
+        ] {
+            assert!(matches!(build(over), Err(BattleError::InvalidIv(_))));
+        }
+        assert_eq!(
+            build(Ivs {
+                speed: MAX_IV + 1,
+                ..Ivs::default()
+            }),
+            Err(BattleError::InvalidIv(MAX_IV + 1))
+        );
+        assert!(build(MAX_IVS).is_ok(), "31 across the board is legal");
     }
 
     #[test]
@@ -422,9 +755,9 @@ mod tests {
     fn apply_damage_saturates_at_zero_and_marks_fainted() {
         let dex = Dex::new();
         let mut mon = sample_mon(&dex);
-        let max_hp = mon.stats.max_hp;
+        let max_hp = mon.stats().max_hp;
         mon.apply_damage(max_hp + 1000);
-        assert_eq!(mon.current_hp, 0);
+        assert_eq!(mon.current_hp(), 0);
         assert!(mon.is_fainted());
     }
 
@@ -434,19 +767,19 @@ mod tests {
         let mon = sample_mon(&dex);
         assert_eq!(
             mon.attacking_stat(MoveCategory::Physical),
-            (mon.stats.attack, StatStage::NEUTRAL)
+            (mon.stats().attack, StatStage::NEUTRAL)
         );
         assert_eq!(
             mon.attacking_stat(MoveCategory::Special),
-            (mon.stats.sp_attack, StatStage::NEUTRAL)
+            (mon.stats().sp_attack, StatStage::NEUTRAL)
         );
         assert_eq!(
             mon.defending_stat(MoveCategory::Physical),
-            (mon.stats.defense, StatStage::NEUTRAL)
+            (mon.stats().defense, StatStage::NEUTRAL)
         );
         assert_eq!(
             mon.defending_stat(MoveCategory::Special),
-            (mon.stats.sp_defense, StatStage::NEUTRAL)
+            (mon.stats().sp_defense, StatStage::NEUTRAL)
         );
     }
 
@@ -454,22 +787,40 @@ mod tests {
     fn effective_speed_applies_the_speed_stage() {
         let dex = Dex::new();
         let mut mon = sample_mon(&dex);
-        assert_eq!(mon.effective_speed(), mon.stats.speed);
-        mon.stages.speed = StatStage::new(2).unwrap();
-        assert_eq!(mon.effective_speed(), mon.stats.speed * 2);
+        assert_eq!(mon.effective_speed(), mon.stats().speed);
+        mon.stages_mut().speed = StatStage::new(2).unwrap();
+        assert_eq!(mon.effective_speed(), mon.stats().speed * 2);
     }
 
     #[test]
     fn deduct_pp_decrements_and_reports_exhaustion() {
         let dex = Dex::new();
         let mut mon = sample_mon(&dex);
-        let starting_pp = mon.moves[0].pp;
+        let starting_pp = mon.moves()[0].pp;
         mon.deduct_pp(0).unwrap();
-        assert_eq!(mon.moves[0].pp, starting_pp - 1);
+        assert_eq!(mon.moves()[0].pp, starting_pp - 1);
 
         assert_eq!(mon.deduct_pp(5), Err(BattleError::InvalidMoveSlot(5)));
 
-        mon.moves[0].pp = 0;
+        // Drain the slot through the only mutation the type offers: the
+        // moveset itself is not reachable for writing (`oop-boundaries`).
+        for _ in 0..(starting_pp - 1) {
+            mon.deduct_pp(0).unwrap();
+        }
+        assert_eq!(mon.moves()[0].pp, 0);
         assert_eq!(mon.deduct_pp(0), Err(BattleError::NoPpRemaining(0)));
+    }
+
+    #[test]
+    fn ivs_report_their_upstream_five_bit_range() {
+        // Gen-3 stat rolls, not cryptographic initialization vectors.
+        assert!(Ivs::default().is_valid());
+        assert!(MAX_IVS.is_valid());
+        assert_eq!(MAX_IVS.as_array(), [MAX_IV; 6]);
+        assert!(!Ivs {
+            attack: MAX_IV + 1,
+            ..Ivs::default()
+        }
+        .is_valid());
     }
 }

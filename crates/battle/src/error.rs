@@ -72,6 +72,39 @@ pub enum BattleError {
     /// Carries the offending move count.
     InvalidMoveCount(usize),
 
+    /// A moveset handed to [`crate::pokemon::BattlePokemon::new`] contained
+    /// [`crate::pokemon::MOVE_NONE`], the *empty slot* placeholder
+    /// (`pokeemerald/include/constants/moves.h:4`).
+    ///
+    /// A `MOVE_NONE` slot is never a legal selection upstream —
+    /// `CheckMoveLimitations` flags it (`MOVE_LIMITATION_ZEROMOVE`,
+    /// `src/battle_util.c:1098`) and the wild opponent's rejection loop
+    /// retries past it (`src/battle_controller_opponent.c:1599`-`:1601`) — so
+    /// a *known* move is never the placeholder. Rejecting it here is what
+    /// keeps that rejection loop from accepting a slot the game would have
+    /// redrawn.
+    ///
+    /// Carries the offending slot index.
+    PlaceholderMove(usize),
+
+    /// A level handed to [`crate::pokemon::BattlePokemon::new`] was outside
+    /// `MIN_LEVEL..=MAX_LEVEL` (`1..=100`,
+    /// `pokeemerald/include/constants/pokemon.h:145`-`:146`).
+    ///
+    /// Carries the offending level.
+    InvalidLevel(u8),
+
+    /// An individual value handed to [`crate::pokemon::BattlePokemon::new`]
+    /// exceeded `MAX_IV_MASK` (`31`,
+    /// `pokeemerald/include/constants/pokemon.h:201`) — upstream stores each
+    /// IV in a five-bit field, so a larger one cannot exist there.
+    ///
+    /// (Pokémon *individual values*, the Gen-3 stat rolls — nothing
+    /// cryptographic. See [`crate::pokemon::Ivs`].)
+    ///
+    /// Carries the offending value.
+    InvalidIv(u8),
+
     /// The move slot named in [`crate::battle::Battle::take_turn`] has no PP
     /// remaining.
     ///
@@ -81,6 +114,17 @@ pub enum BattleError {
     /// slice (`S-6`) — callers must supply movesets with enough PP for the
     /// scripted scenario, and exhausting a slot's PP is reported as an error
     /// rather than silently substituting Struggle.
+    ///
+    /// The player's chosen slot is checked ahead of the turn's first draw, so
+    /// that case costs nothing. The wild opponent's is not — upstream's
+    /// rejection loop tests `MOVE_NONE` and ignores PP — so a spent enemy slot
+    /// is only discovered when its PP is deducted, *after* the turn-number and
+    /// selection draws. [`crate::battle::Battle::take_turn`] therefore returns
+    /// this inside a [`crate::battle::TurnError`] carrying whatever events had
+    /// already occurred: the first mover's hit if the *second* mover's slot
+    /// was the empty one, and none at all if the *first* mover's was (the turn
+    /// stops before either acts, having consumed draws but changed no PP or
+    /// HP). See [`crate::battle::TurnError`] for the full breakdown.
     ///
     /// Carries the offending index.
     NoPpRemaining(usize),
@@ -96,6 +140,26 @@ pub enum BattleError {
     ///
     /// Carries the offending move id.
     NonDamagingMove(MoveId),
+
+    /// A move's `EFFECT_*` battle-effect script is not the ordinary
+    /// hit-shaped one this slice reproduces (see
+    /// [`crate::hit::is_ordinary_hit_effect`]).
+    ///
+    /// The damage pipeline in [`crate::hit::resolve_hit`] is
+    /// `BattleScript_EffectHit` step for step
+    /// (`pokeemerald/data/battle_scripts_1.s:21`). A move whose effect runs a
+    /// *different* script computes its damage differently and consumes a
+    /// different number of RNG draws — Sonic Boom's flat 20
+    /// (`EFFECT_SONICBOOM`, `:151`), a multi-hit move's 2..5 hits
+    /// (`EFFECT_MULTI_HIT`, `:50`), an OHKO move (`:59`), Counter (`:110`),
+    /// a fixed-level hit (`EFFECT_LEVEL_DAMAGE`, `:108`), and so on. Running
+    /// those through the ordinary formula would be silently wrong in both
+    /// damage and RNG position, so they are rejected instead
+    /// `(behavioral-fidelity)`; implementing them is deferred move-effect
+    /// breadth.
+    ///
+    /// Carries the offending move id.
+    UnsupportedMoveEffect(MoveId),
 
     /// [`crate::battle::Battle::take_turn`] was called after the battle
     /// already reached a terminal outcome (victory, defeat, or a successful
@@ -119,10 +183,20 @@ impl fmt::Display for BattleError {
             Self::InvalidMoveCount(count) => {
                 write!(f, "moveset of `{count}` moves outside 1..=4")
             }
+            Self::PlaceholderMove(index) => {
+                write!(f, "move slot `{index}` is the MOVE_NONE placeholder")
+            }
+            Self::InvalidLevel(level) => write!(f, "level `{level}` outside 1..=100"),
+            Self::InvalidIv(value) => write!(f, "individual value `{value}` outside 0..=31"),
             Self::NoPpRemaining(index) => write!(f, "move slot `{index}` has no PP remaining"),
             Self::NonDamagingMove(id) => {
                 write!(f, "move `{}` is a non-damaging move (unsupported)", id.0)
             }
+            Self::UnsupportedMoveEffect(id) => write!(
+                f,
+                "move `{}` has a battle effect this slice does not model",
+                id.0
+            ),
             Self::BattleAlreadyOver => write!(f, "the battle has already ended"),
         }
     }
