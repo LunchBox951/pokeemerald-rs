@@ -77,7 +77,8 @@ opens.
 
 ### `dev -> unstable` — nightly
 
-- exact same-repository source `dev`, enforced by `source-gate / unstable`;
+- promotion-App-authored PR from exact same-repository source `dev`, enforced by
+  `source-gate / unstable`;
 - SHA-bound `release-readiness` exists for the current `dev` tip;
 - `merge-gate / unstable`, dependency review, and all CodeQL languages pass;
 - every review thread is resolved;
@@ -86,8 +87,9 @@ opens.
 
 ### `unstable -> stable` — beta
 
-- exact same-repository source `unstable`, and that tip is the merge commit of
-  the preceding App-created `dev -> unstable` PR;
+- promotion-App-authored PR from exact same-repository source `unstable`, and
+  that tip is the merge commit of the preceding App-created `dev -> unstable`
+  PR, enforced by `source-gate / stable`;
 - `merge-gate / stable`, dependency review, and all CodeQL languages pass;
 - every review thread is resolved;
 - one current CODEOWNER approval and a manual merge commit are required.
@@ -98,8 +100,9 @@ are sufficient.
 
 ### `stable -> main` — official release
 
-- exact same-repository source `stable`, and that tip is the merge commit of the
-  preceding App-created `unstable -> stable` PR;
+- promotion-App-authored PR from exact same-repository source `stable`, and that
+  tip is the merge commit of the preceding App-created `unstable -> stable` PR,
+  enforced by `source-gate / main`;
 - `merge-gate / main`, dependency review, and all CodeQL languages pass;
 - every review thread is resolved;
 - one current CODEOWNER approval and a manual merge commit are required;
@@ -141,6 +144,10 @@ only on this repository and requests only Checks read, Commit statuses read,
 Contents write, Pull requests write, and Metadata read. Secret scanning and push
 protection remain enabled. CodeQL advanced setup scans Rust, Python, and Actions;
 critical alerts block every protected branch.
+
+`PROMOTION_APP_LOGIN` is a non-secret repository variable containing the exact
+App bot login. The required source gate uses it to reject user- or other-bot-
+created channel PRs and to authenticate preceding-rung provenance.
 
 The separate readiness trust boundary is the repository owner's local Birch
 credential. It is not an Actions secret. Promotion automation accepts only the
