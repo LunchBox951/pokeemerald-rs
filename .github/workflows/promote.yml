@@ -138,8 +138,8 @@ jobs:
               --state open \
               --base "${target}" \
               --head "${source}" \
-              --json number \
-              --jq 'length')"
+              --json headRepository,number \
+              --jq '[.[] | select(.headRepository.nameWithOwner == "'"${REPOSITORY}"'")] | length')"
             if [[ "${existing}" == "1" ]]; then
               echo "${source}->${target} promotion PR already open."
               return 0
@@ -172,8 +172,8 @@ jobs:
               --state open \
               --base unstable \
               --head dev \
-              --json number \
-              --jq 'length')"
+              --json headRepository,number \
+              --jq '[.[] | select(.headRepository.nameWithOwner == "'"${REPOSITORY}"'")] | length')"
             if [[ "${pr_count}" == "0" ]]; then
               echo "No dev->unstable promotion PR is open."
               return 0
@@ -183,7 +183,13 @@ jobs:
               return 1
             fi
 
-            pr_number="$(gh pr list --repo "${REPOSITORY}" --state open --base unstable --head dev --json number --jq '.[0].number')"
+            pr_number="$(gh pr list \
+              --repo "${REPOSITORY}" \
+              --state open \
+              --base unstable \
+              --head dev \
+              --json headRepository,number \
+              --jq '[.[] | select(.headRepository.nameWithOwner == "'"${REPOSITORY}"'")][0].number')"
             pr_json="$(gh pr view "${pr_number}" --repo "${REPOSITORY}" --json author,baseRefName,baseRefOid,headRefName,headRefOid,isDraft,mergeStateStatus,statusCheckRollup)"
 
             if [[ "$(jq -r '.author.login' <<<"${pr_json}")" != "${APP_LOGIN}" \

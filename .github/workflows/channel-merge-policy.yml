@@ -75,8 +75,8 @@ jobs:
             --state open \
             --base "${EVENT_BASE}" \
             --head "${EVENT_HEAD}" \
-            --json number \
-            --jq 'length')"
+            --json headRepository,number \
+            --jq '[.[] | select(.headRepository.nameWithOwner == "'"${REPOSITORY}"'")] | length')"
           if [[ "${duplicates}" != "1" ]]; then
             echo "::error::Expected exactly one open ${EVENT_HEAD}->${EVENT_BASE} promotion PR; found ${duplicates}."
             exit 1
