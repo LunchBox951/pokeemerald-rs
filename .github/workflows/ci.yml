@@ -51,10 +51,19 @@ jobs:
           # repository-wide origin/main monotonicity check, except release
           # pushes that stand in for token-created promotion PR events.
           PR_BASE_SHA: ${{ github.event.pull_request.base.sha || '' }}
+          PR_BASE_REF: ${{ github.event.pull_request.base.ref || '' }}
         run: |
           if [[ -n "${PR_BASE_SHA}" ]]; then
+            git fetch --no-tags origin \
+              "+refs/heads/${PR_BASE_REF}:refs/remotes/origin/${PR_BASE_REF}"
+            live_base="$(git rev-parse --verify \
+              "refs/remotes/origin/${PR_BASE_REF}^{commit}")"
+            if [[ "${live_base}" != "${PR_BASE_SHA}" ]]; then
+              echo "::error::PR base advanced from ${PR_BASE_SHA} to ${live_base}; refresh the branch and rerun CI."
+              exit 1
+            fi
             python3 scripts/version_check.py \
-              --base "${PR_BASE_SHA}" --head HEAD --require-bump
+              --base "${live_base}" --head HEAD --require-bump
           elif [[ "${GITHUB_REF_NAME}" == release/* ]]; then
             target="$(scripts/select_promotion_target.sh "${GITHUB_REF_NAME}")"
             if [[ -n "${target}" ]]; then
