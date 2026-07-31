@@ -41,32 +41,44 @@
 //!
 //! # The headless real-boot check (I-2, issue #168)
 //!
-//! [`App::new`]'s whole body is factored into two private helpers --
-//! `App::load_real_title` (load and compose the real title screen) and
-//! `App::assemble` (move that loaded pair into the struct alongside an
-//! already-opened `Platform`) -- precisely so they have a second, test-only
-//! caller: `tests::real_pack_boots_to_the_title_screen_through_app_new`
-//! builds an `App` through `App::new_headless_real_title`, which runs the
-//! *same* two helpers [`App::new`] runs, differing in nothing but
-//! `Platform::new_headless` in place of `Platform::new` -- so a regression
-//! in either helper, or in the assembly they share, fails the test. It then
-//! drives [`App::step`] (which pumps input, advances
+//! [`App::new`]'s whole body lives in the private `App::boot` (load and
+//! compose the real title screen, open a platform backend, `App::assemble`
+//! the two), which takes the window-opening call as a parameter -- so
+//! [`App::new`] is `Platform::new` handed to `boot`, and nothing else.
+//! `tests::real_pack_boots_to_the_title_screen_through_app_boot` builds an
+//! `App` through `App::new_headless_real_title`, which calls that *same*
+//! `boot` with `Platform::new_headless`: the test therefore executes
+//! [`App::new`]'s construction body itself, and the only line of booting it
+//! does not cover is the `Platform::new` call that opens a real OS window
+//! (categorically un-runnable in CI). A construction regression that has
+//! any effect on the frames a booted `App` shows -- never loading the
+//! title, composing the wrong tick, dropping the `to_platform_frame`
+//! conversion, dropping the scene -- therefore fails the test. (The
+//! load-before-open ordering is the one thing `boot` does that the test
+//! cannot judge: `Platform::new_headless` opens nothing and cannot fail.
+//! It is kept honest by being written exactly once, in `boot`.)
+//!
+//! The test then drives [`App::step`] (which pumps input, advances
 //! `flow::advance_scene`'s title arm, and *presents*) and asserts
 //! [`App::frame`] matches the real title screen composed independently via
-//! [`title::load_default`] -- at tick 0 for the first presented frame, and
-//! again at tick 2, the first tick whose composition actually differs, so
-//! the booted title screen is shown to keep animating rather than freeze.
+//! [`title::load_default`]: tick 0 for the first presented frame, tick 2
+//! after the third step, and tick 14 after the fifteenth. Tick 14 is the
+//! one that pins the tick counter to *exactly* zero offset, in both
+//! directions: [`crate::title`]'s animation is coarse (the clouds move once
+//! every four ticks, "Press Start" blinks every sixteen), so most adjacent
+//! ticks compose bit-identical frames, but tick 14 differs from tick 13
+//! (the cloud scroll steps 3 -> 4) *and* from tick 15 ("Press Start" blinks
+//! on) -- both asserted as `assert_ne!` guards. An `App` running one tick
+//! ahead or behind cannot pass, over 15 consecutive `step` calls.
 //!
 //! Before this, the only pack-backed coverage of the real title screen
 //! (this module's own `animated_frame_returns_the_presented_tick`, `xtask`'s
 //! `check_title_screen`, and [`crate::title`]'s own tests) called
 //! [`title::load_default`]/`compose` directly and never went through
-//! [`App::new`]'s construction at all -- so a regression in *that* wiring
-//! (forgetting to load the title, composing the wrong tick, dropping the
-//! `to_platform_frame` conversion) could stay green. This is the honest
-//! evidence for I-2 "boots to the title screen": the exact construction
-//! `main` uses, driven headlessly against real extracted assets and through
-//! a real present.
+//! [`App::new`]'s construction at all. This is the honest evidence for I-2
+//! "boots to the title screen": the construction `main` uses, minus only
+//! the window handle, driven headlessly against real extracted assets and
+//! through a real present.
 
 use platform::{ButtonState, Buttons, Frame, Platform, PlatformError};
 
@@ -165,11 +177,10 @@ pub struct App {
 /// [`AnimatedTitle`] state [`App::step`] advances from there.
 ///
 /// The one production spot that builds an [`AnimatedTitle`] (`flow`'s own
-/// tests build one directly), so [`App::load_real_title`]
-/// (which also loads the scene) and [`App::new_headless_animated`] (which
-/// takes an already-loaded scene, for tests that need their own reference
-/// copy to compare ticks against) never hand-write these same three lines
-/// twice `(oop-boundaries)`.
+/// tests build one directly), so [`App::boot`] (which also loads the scene)
+/// and [`App::new_headless_animated`] (which takes an already-loaded scene,
+/// for tests that need their own reference copy to compare ticks against)
+/// never hand-write these same three lines twice `(oop-boundaries)`.
 fn compose_title_scene(scene: title::TitleScene) -> (Box<Frame>, AppScene) {
     let frame = to_platform_frame(&scene.compose(0));
     let app_scene = AppScene::Title(Box::new(AnimatedTitle {
@@ -181,46 +192,15 @@ fn compose_title_scene(scene: title::TitleScene) -> (Box<Frame>, AppScene) {
 }
 
 impl App {
-    /// Load the real title screen (I-2) -- the exact wiring [`App::new`]
-    /// runs -- into a `(frame, scene)` pair ready to move into an `App`
-    /// alongside whichever `Platform` backend the caller opens.
+    /// Move an already-loaded `(frame, scene)` pair (from [`App::boot`] or
+    /// [`compose_title_scene`]) into a running `App` around `platform`.
     ///
-    /// Factored out so [`App::new`] (a real window) and
-    /// [`App::new_headless_real_title`] (`platform`'s null backend, test-only)
-    /// share this exact code path (I-2, issue #168): before this split, the
-    /// headless test coverage for the real title screen called
-    /// [`title::load_default`] and composed the scene itself, a *separate*
-    /// hand-written copy of these same steps that a regression in `App::new`'s
-    /// own wiring could slip past. Deliberately returns before any `Platform`
-    /// exists, preserving [`App::new`]'s "surfaced cleanly without ever
-    /// flashing a window open first" contract for a missing/malformed pack.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`AppError::Title`] if the asset pack has not been extracted
-    /// yet (check [`TitleSceneError::is_pack_missing`] -- its rendered
-    /// message names the exact `./init.sh`/`cargo xtask extract` commands to
-    /// run) or is otherwise malformed.
-    fn load_real_title() -> Result<(Box<Frame>, AppScene), AppError> {
-        let scene = title::load_default()?;
-        Ok(compose_title_scene(scene))
-    }
-
-    /// Move an already-loaded `(frame, scene)` pair (from
-    /// [`App::load_real_title`] or [`compose_title_scene`]) into a running
-    /// `App` around `platform`.
-    ///
-    /// The *only* place a real-game-flow `App` is assembled, so
-    /// [`App::new`] and its headless counterparts cannot drift apart in
-    /// what they store `(oop-boundaries)`: with the struct literal written
-    /// once here, the sole difference left between [`App::new`] and the
-    /// test-only [`App::new_headless_real_title`] is
-    /// `Platform::new_headless` in place of `Platform::new`. That is what
-    /// makes the I-2 headless real-boot check (module docs) honest
-    /// evidence about [`App::new`] itself -- while each constructor
-    /// hand-wrote this literal, a regression in `App::new`'s own assembly
-    /// (dropping the scene, say, so the title never animates) left every
-    /// test green.
+    /// The *only* place a real-game-flow `App` is assembled, so [`App::new`]
+    /// and its headless counterparts cannot drift apart in what they store
+    /// `(oop-boundaries)`: with the struct literal written once here, a
+    /// regression in what a booted `App` holds (dropping the scene, say, so
+    /// the title never animates) is a regression in code the I-2 headless
+    /// real-boot check (module docs) runs.
     fn assemble(platform: Platform, (frame, scene): (Box<Frame>, AppScene)) -> Self {
         Self {
             platform,
@@ -229,15 +209,50 @@ impl App {
         }
     }
 
+    /// The whole of [`App::new`]'s body: load and compose the real title
+    /// screen (I-2), open a platform backend via `open_platform`, and
+    /// assemble the two into a running `App`.
+    ///
+    /// The window-opening call is a parameter precisely because it is the
+    /// one step that categorically cannot run in CI -- everything else
+    /// [`App::new`] does happens here, so the test-only
+    /// [`App::new_headless_real_title`] (which passes
+    /// `Platform::new_headless`) executes this body *itself*, not a
+    /// hand-written copy of it (I-2, issue #168; PR #175 review). That
+    /// leaves [`App::new`] a bare `Platform::new` plus a call to this
+    /// function: nothing of its own left to regress.
+    ///
+    /// Loads and composes the scene *before* calling `open_platform`, so a
+    /// missing pack (or any other title-screen error) is surfaced cleanly
+    /// without ever flashing a window open first -- an ordering that,
+    /// written once here, holds for every constructor that boots the real
+    /// game flow.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AppError::Title`] if the asset pack has not been extracted
+    /// yet (check [`TitleSceneError::is_pack_missing`] -- its rendered
+    /// message names the exact `./init.sh`/`cargo xtask extract` commands to
+    /// run) or is otherwise malformed; whatever `open_platform` fails with
+    /// (for [`App::new`], [`AppError::Platform`] if the platform's windowing
+    /// event loop could not be created) otherwise.
+    fn boot(
+        open_platform: impl FnOnce() -> Result<Platform, PlatformError>,
+    ) -> Result<Self, AppError> {
+        // Load first: no window is opened if the pack is missing.
+        let loaded = compose_title_scene(title::load_default()?);
+        let platform = open_platform()?;
+        Ok(Self::assemble(platform, loaded))
+    }
+
     /// Load the real title screen (I-2) from the local asset pack, then open
     /// a window titled `title` to present it.
     ///
-    /// Loads/decodes the scene (`App::load_real_title`) *before* opening
-    /// the platform window, so a missing pack (or any other title-screen
-    /// error) is surfaced cleanly without ever flashing a window open first;
-    /// then hands both to the shared `App::assemble`, whose one struct
-    /// literal is what the I-2 headless real-boot check (module docs)
-    /// exercises on this constructor's behalf.
+    /// Deliberately nothing but `Platform::new` handed to [`App::boot`],
+    /// which holds the entire construction body -- and which the I-2
+    /// headless real-boot check (module docs) runs directly. Opening the
+    /// real OS window is therefore the only part of booting that this
+    /// constructor does not share with that test.
     ///
     /// # Errors
     ///
@@ -247,19 +262,16 @@ impl App {
     /// run) or is otherwise malformed; [`AppError::Platform`] if the
     /// platform's windowing event loop could not be created.
     pub fn new(title: impl Into<String>) -> Result<Self, AppError> {
-        // Load first: no window is opened if the pack is missing.
-        let loaded = Self::load_real_title()?;
-        let platform = Platform::new(title)?;
-        Ok(Self::assemble(platform, loaded))
+        Self::boot(|| Platform::new(title))
     }
 
-    /// Test-only: [`App::new`]'s own body -- [`App::load_real_title`] then
-    /// [`App::assemble`] -- with `platform`'s headless/null backend
-    /// substituted for a real window. This is the I-2 headless real-boot
-    /// check's constructor (issue #168): the same construction `main` uses
-    /// via [`App::new`], up to and including the first composed frame,
-    /// differing in nothing but the one part that categorically cannot run
-    /// in CI (opening an actual OS window).
+    /// Test-only: [`App::new`]'s own body -- [`App::boot`] -- with
+    /// `platform`'s headless/null backend substituted for a real window.
+    /// This is the I-2 headless real-boot check's constructor (issue #168):
+    /// the same construction `main` uses via [`App::new`], up to and
+    /// including the first composed frame, differing in nothing but the one
+    /// part that categorically cannot run in CI (opening an actual OS
+    /// window).
     ///
     /// # Errors
     ///
@@ -268,8 +280,7 @@ impl App {
     /// when no local asset pack has been extracted yet.
     #[cfg(test)]
     fn new_headless_real_title() -> Result<Self, AppError> {
-        let loaded = Self::load_real_title()?;
-        Ok(Self::assemble(Platform::new_headless(), loaded))
+        Self::boot(|| Ok(Platform::new_headless()))
     }
 
     /// Build the I-1 synthetic placeholder scene against `platform`'s
@@ -432,48 +443,71 @@ mod tests {
     }
 
     /// The I-2 headless real-boot check (issue #168): builds an `App`
-    /// through `App::new_headless_real_title` -- `App::load_real_title` plus
-    /// `App::assemble`, the exact pair `main` reaches via the public
-    /// `App::new`, differing only in `platform`'s null backend standing in
-    /// for a real window (see the module docs' "The headless real-boot
-    /// check" section) -- and asserts both the frame that construction
-    /// composes and the frame the first `App::step` actually *presents* are
-    /// the real title screen's tick-0 composition, computed independently
-    /// via `title::load_default` so these assertions can never trivially
-    /// pass by comparing a value against itself.
+    /// through `App::new_headless_real_title`, which calls the very
+    /// `App::boot` the public `App::new` calls -- so this test executes
+    /// `App::new`'s whole construction body, all but its `Platform::new`
+    /// call (see the module docs' "The headless real-boot check" section)
+    /// -- and asserts both the frame that construction composes and the
+    /// frame the first `App::step` actually *presents* are the real title
+    /// screen's tick-0 composition, computed independently via
+    /// `title::load_default` so these assertions can never trivially pass by
+    /// comparing a value against itself.
     ///
     /// Stepping (rather than only inspecting the constructed frame) is what
     /// makes "boots to the title screen" honest: it reaches
     /// `platform::Platform::present` and runs `flow::advance_scene`'s
     /// `Title` arm on the real path, whose "first step presents tick 0"
     /// contract is the same one `animated_frame_returns_the_presented_tick`
-    /// above pins down against a hand-loaded scene. It then keeps stepping
-    /// to tick 2 -- the first tick whose composition actually *differs* from
-    /// tick 0 (`title::cloud_scroll_y` only moves the clouds every other
-    /// tick, then halves again, so tick 1 is pixel-identical to tick 0) --
-    /// so a boot that presents a frozen first frame, e.g. because the
-    /// assembled `App` dropped its `AppScene`, cannot pass.
+    /// above pins down against a hand-loaded scene.
     ///
-    /// Unlike that test (which hands `App::new_headless_animated` an
-    /// already-loaded scene), this one never touches
-    /// `title::load_default`/`compose` on the `App`-construction side --
-    /// only `App::new`'s own wiring does, which is the whole point: a
-    /// regression there (the wrong tick, a dropped `to_platform_frame`
-    /// conversion, a dropped scene, `App::new` never calling
-    /// `title::load_default` at all) fails *this* test even though every
-    /// other real-pack check in this crate composes the title screen
+    /// Stepping on to tick 2 shows the boot keeps animating rather than
+    /// freezing (tick 2 is the first tick whose composition differs from
+    /// tick 0 at all: `title::cloud_scroll_y` moves the clouds only every
+    /// other tick, then halves that again). Stepping on to tick 14 is what
+    /// pins the counter to exactly the right tick: tick 14 differs from
+    /// *both* neighbours -- from 13 because the cloud scroll steps 3 -> 4,
+    /// and from 15 because "Press Start" blinks on
+    /// (`title::press_start_visible`) -- and both differences are asserted
+    /// below, so an `App` presenting one tick ahead of or behind the frame
+    /// it should (a dropped `AnimatedTitle::presented` guard, an extra
+    /// advance during construction) fails here. Every intermediate tick is
+    /// stepped through, so the count has to be exact for all 15 steps.
+    ///
+    /// Unlike `animated_frame_returns_the_presented_tick` (which hands
+    /// `App::new_headless_animated` an already-loaded scene), this test
+    /// never touches `title::load_default`/`compose` on the
+    /// `App`-construction side -- only `App::new`'s own shared body does,
+    /// which is the whole point: a regression there (the wrong tick, a
+    /// dropped `to_platform_frame` conversion, a dropped scene, never
+    /// calling `title::load_default` at all) fails *this* test even though
+    /// every other real-pack check in this crate composes the title screen
     /// directly and would stay green. Needs the real pack, like
     /// `animated_frame_returns_the_presented_tick`.
     #[test]
     #[ignore = "needs a local pack: run `cargo xtask extract` first"]
-    fn real_pack_boots_to_the_title_screen_through_app_new() {
+    fn real_pack_boots_to_the_title_screen_through_app_boot() {
         let reference = crate::title::load_default().expect("run `cargo xtask extract` first");
         let expected0 = reference.compose_frame(0);
         let expected2 = reference.compose_frame(2);
+        let expected13 = reference.compose_frame(13);
+        let expected14 = reference.compose_frame(14);
+        let expected15 = reference.compose_frame(15);
         assert_ne!(
             expected0.to_vec(),
             expected2.to_vec(),
             "tick 2 must differ from tick 0, or the animation check below proves nothing"
+        );
+        assert_ne!(
+            expected14.to_vec(),
+            expected13.to_vec(),
+            "tick 14 must differ from tick 13 (the clouds scroll), or the tick-14 check below \
+             would pass for an App running one tick behind"
+        );
+        assert_ne!(
+            expected14.to_vec(),
+            expected15.to_vec(),
+            "tick 14 must differ from tick 15 (\"Press Start\" blinks on), or the tick-14 check \
+             below would pass for an App running one tick ahead"
         );
 
         let mut app = App::new_headless_real_title().expect("run `cargo xtask extract` first");
@@ -501,6 +535,15 @@ mod tests {
             app.frame().to_vec(),
             expected2.to_vec(),
             "the booted App must keep animating: the third step presents tick 2"
+        );
+        for _ in 0..12 {
+            app.step().expect("headless step never errors");
+        }
+        assert_eq!(
+            app.frame().to_vec(),
+            expected14.to_vec(),
+            "the fifteenth step must present tick 14 exactly -- one tick either way composes a \
+             different frame (asserted above)"
         );
     }
 
