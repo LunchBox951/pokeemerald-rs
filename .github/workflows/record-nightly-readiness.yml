@@ -1,0 +1,87 @@
+# Birch runs the official-ROM command locally; the ROM never enters GitHub.
+# After a successful clean run, Birch dispatches this workflow for the exact
+# tested dev SHA. Advancing dev naturally invalidates the recorded status.
+name: record-nightly-readiness
+
+on:
+  workflow_dispatch:
+    inputs:
+      candidate_sha:
+        description: Full dev commit SHA that passed the official-ROM command
+        required: true
+        type: string
+      command:
+        description: Successful command description (never include the ROM path)
+        required: true
+        type: string
+
+permissions:
+  checks: read
+  contents: read
+  statuses: write
+
+jobs:
+  record:
+    name: record release-readiness
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Bind the evidence to the live dev head
+        env:
+          ACTOR: ${{ github.actor }}
+          CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+          REPOSITORY: ${{ github.repository }}
+          REPOSITORY_OWNER: ${{ github.repository_owner }}
+        run: |
+          set -euo pipefail
+          if [[ "${ACTOR}" != "${REPOSITORY_OWNER}" ]]; then
+            echo "::error::Only the repository owner may record Birch readiness."
+            exit 1
+          fi
+          if [[ ! "${CANDIDATE_SHA}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::candidate_sha must be a full lowercase commit SHA."
+            exit 1
+          fi
+
+          live_dev="$(gh api "repos/${REPOSITORY}/branches/dev" --jq '.commit.sha')"
+          if [[ "${CANDIDATE_SHA}" != "${live_dev}" ]]; then
+            echo "::error::Birch tested ${CANDIDATE_SHA}, but live dev is ${live_dev}; test the current candidate."
+            exit 1
+          fi
+
+          for required in \
+            "merge-gate / dev" \
+            "codeql (actions)" \
+            "codeql (python)" \
+            "codeql (rust)"; do
+            conclusion="$(gh api \
+              -H 'Accept: application/vnd.github+json' \
+              "repos/${REPOSITORY}/commits/${CANDIDATE_SHA}/check-runs" \
+              --jq '[.check_runs[] | select(.name == "'"${required}"'")][-1].conclusion // empty')"
+            if [[ "${conclusion}" != "success" ]]; then
+              echo "::error::${required} is ${conclusion:-missing} on ${CANDIDATE_SHA}; readiness cannot be recorded."
+              exit 1
+            fi
+          done
+
+      - name: Publish SHA-bound readiness
+        env:
+          CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+          COMMAND: ${{ inputs.command }}
+          REPOSITORY: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          description="Birch official-ROM command passed"
+          gh api \
+            --method POST \
+            "repos/${REPOSITORY}/statuses/${CANDIDATE_SHA}" \
+            -f state=success \
+            -f context=release-readiness \
+            -f description="${description}" \
+            -f target_url="${RUN_URL}"
+          # The backticks are Markdown, not shell expansion.
+          # shellcheck disable=SC2016
+          printf '### Nightly candidate ready\n\n- Commit: `%s`\n- Command: `%s`\n' \
+            "${CANDIDATE_SHA}" "${COMMAND}" >>"${GITHUB_STEP_SUMMARY}"

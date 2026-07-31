@@ -1,122 +1,270 @@
-# Release-channel promotion automation. See RELEASE.md (the `release/*` model).
+# Scheduled direct-channel promotion automation.
 #
-# A long-lived `release/X` branch is the vehicle that climbs the gated ladder
-# `dev → unstable → stable → main`. This workflow does the mechanical PR-opening
-# so the maintainer only has to review and gate:
-#
-#   * When a `release/*` branch is CREATED, open its `release/X → unstable` PR
-#     (the start of a promotion cycle).
-#   * When a `release/*` branch is MERGED into a rung (a push to `unstable` or
-#     `stable`), open the next-rung PR from the same `release/X`.
-#
-# Player channels (`stable`, `main`) still require human signoff before merge —
-# this only opens the PR; it never merges one.
-#
-# No rung-skipping: this only ever opens the NEXT rung (unstable -> stable ->
-# main), so nothing reaches `main` without clearing `unstable` and `stable` first
-# — there is no `dev -> main` shortcut, even for a consolidated release branch.
-#
-# ASSUMPTIONS (verify once live, R-4):
-#   * Promotions use a MERGE COMMIT, not squash — the ancestor checks below rely
-#     on `release/X` history being preserved in the channel branch.
-#   * Repo setting "Allow GitHub Actions to create and approve pull requests" is
-#     ON. A maintainer with write access approves the workflow runs that GitHub
-#     holds for each GITHUB_TOKEN-created PR (see docs go-live runbook).
-#   * Default workflow permissions are read-only; this workflow's explicit
-#     `pull-requests: write` grant is the narrow exception used to open PRs.
-#   * The labels `release`, `needs-review`, and `needs-operator` already exist
-#     (created from .github/labels.yml at go-live) — `gh pr create --label` fails
-#     on a missing label.
+# PRs always follow the exact ladder `dev -> unstable -> stable -> main`.
+# Opening is mechanical; only unstable may merge automatically, and only at
+# its scheduled merge window. Stable and main have no automated merge path.
 name: promote
 
 on:
-  push:
-    branches: [unstable, stable]
-  create:
+  schedule:
+    - cron: "17 0 * * *"
+      timezone: America/Toronto
+    - cron: "47 0 * * *"
+      timezone: America/Toronto
+    - cron: "17 1 * * *"
+      timezone: America/Toronto
+    - cron: "17 2 * * *"
+      timezone: America/Toronto
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: Promotion operation to run
+        required: true
+        default: open-unstable
+        type: choice
+        options:
+          - open-unstable
+          - open-stable
+          - open-main
+          - merge-unstable
+          - reconcile
 
 permissions:
   contents: read
-  pull-requests: write
+
+concurrency:
+  group: promote
+  cancel-in-progress: false
 
 jobs:
   promote:
-    name: open-promotion-pr
+    name: ${{ inputs.operation || github.event.schedule }}
     runs-on: ubuntu-latest
-    env:
-      GH_TOKEN: ${{ github.token }}
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Create least-privilege promotion App token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
-          fetch-depth: 0 # full history so the ancestor checks below can resolve
+          client-id: ${{ vars.PROMOTION_APP_CLIENT_ID }}
+          private-key: ${{ secrets.PROMOTION_APP_PRIVATE_KEY }}
+          permission-checks: read
+          permission-contents: write
+          permission-pull-requests: write
+          permission-statuses: read
 
-      # Cycle start: a new `release/*` branch was created -> open it into unstable.
-      - name: Open cycle-start PR (release/* -> unstable)
-        if: github.event_name == 'create' && github.event.ref_type == 'branch' && startsWith(github.event.ref, 'release/')
+      - name: Resolve scheduled operation
+        id: operation
         env:
-          # Bind the untrusted ref to an env var; never interpolate ${{ }} into
-          # the shell directly (branch names can carry shell metacharacters).
-          EVENT_REF: ${{ github.event.ref }}
+          DISPATCH_OPERATION: ${{ inputs.operation || '' }}
+          EVENT_SCHEDULE: ${{ github.event.schedule || '' }}
         run: |
           set -euo pipefail
-          release_branch="${EVENT_REF}"
-          target="unstable"
-          if git merge-base --is-ancestor "origin/${release_branch}" "origin/${target}"; then
-            echo "${release_branch} already contained in ${target}; nothing to open."
-            exit 0
+          if [[ -n "${DISPATCH_OPERATION}" ]]; then
+            operation="${DISPATCH_OPERATION}"
+          else
+            operation="$(python3 scripts/channel_ladder.py \
+              operation-for-schedule "${EVENT_SCHEDULE}")"
           fi
-          existing="$(gh pr list --head "${release_branch}" --base "${target}" --state open --json number --jq 'length')"
-          if [ "${existing}" != "0" ]; then
-            echo "Promotion PR ${release_branch} -> ${target} already open."
-            exit 0
-          fi
-          gh pr create \
-            --head "${release_branch}" \
-            --base "${target}" \
-            --title "Promote ${release_branch} → ${target}" \
-            --body "$(printf 'Automated cycle-start promotion opened by promote.yml when %s was created.\n\nCandidate: `%s` @ %s\nGates for **%s** are in RELEASE.md — attach evidence before merge. A maintainer with write access must select **Approve workflows to run** before the required checks start.' "${release_branch}" "${release_branch}" "$(git rev-parse --short "origin/${release_branch}")" "${target}")" \
-            --label "release" \
-            --label "needs-review"
+          echo "operation=${operation}" >>"${GITHUB_OUTPUT}"
 
-      # Next rung: a release/* branch was merged into unstable/stable -> open the
-      # PR to the rung above it.
-      - name: Open next-rung PR (release/* -> next channel)
-        if: github.event_name == 'push'
+      - name: Reconcile or merge promotion
+        env:
+          APP_LOGIN: ${{ steps.app-token.outputs.app-slug }}[bot]
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          OPERATION: ${{ steps.operation.outputs.operation }}
+          REPOSITORY: ${{ github.repository }}
+          REPOSITORY_OWNER: ${{ github.repository_owner }}
         run: |
           set -euo pipefail
-          merged="${GITHUB_REF_NAME}"   # the channel just pushed to
-          case "${merged}" in
-            unstable) target="stable" ;;
-            stable)   target="main" ;;
-            *) echo "no next rung for ${merged}"; exit 0 ;;
-          esac
-          # Find the most-recent release/* branch that is now an ancestor of the
-          # channel we just pushed to (i.e. the vehicle that was promoted in).
-          release_branch=""
-          for ref in $(git for-each-ref --format='%(refname:short)' --sort=-committerdate 'refs/remotes/origin/release/*'); do
-            name="${ref#origin/}"
-            if git merge-base --is-ancestor "origin/${name}" "origin/${merged}"; then
-              release_branch="${name}"
-              break
+
+          status_creator() {
+            local sha="$1" context="$2"
+            gh api "repos/${REPOSITORY}/commits/${sha}/status" \
+              --jq '[.statuses[] | select(.context == "'"${context}"'" and .state == "success")][0].creator.login // empty'
+          }
+
+          branch_sha() {
+            gh api "repos/${REPOSITORY}/branches/$1" --jq '.commit.sha'
+          }
+
+          require_preceding_promotion() {
+            local source="$1" source_sha="$2" preceding="$3"
+            gh pr list \
+              --repo "${REPOSITORY}" \
+              --state merged \
+              --base "${source}" \
+              --head "${preceding}" \
+              --limit 100 \
+              --json author,baseRefName,headRefName,mergeCommit \
+              --jq '[.[] | select(
+                .author.login == "'"${APP_LOGIN}"'" and
+                .baseRefName == "'"${source}"'" and
+                .headRefName == "'"${preceding}"'" and
+                .mergeCommit.oid == "'"${source_sha}"'"
+              )] | length'
+          }
+
+          open_promotion() {
+            local target="$1" source source_sha target_sha ahead existing labels body
+            source="$(python3 scripts/channel_ladder.py source-for "${target}")"
+            source_sha="$(branch_sha "${source}")"
+            target_sha="$(branch_sha "${target}")"
+
+            if [[ "${target}" == "unstable" ]]; then
+              creator="$(status_creator "${source_sha}" release-readiness)"
+              if [[ "${creator}" != "github-actions[bot]" ]]; then
+                echo "${source}@${source_sha} has no owner-recorded release-readiness success; unstable remains dormant."
+                return 0
+              fi
+            else
+              preceding="$(python3 scripts/channel_ladder.py source-for "${source}")"
+              provenance="$(require_preceding_promotion "${source}" "${source_sha}" "${preceding}")"
+              if [[ "${provenance}" != "1" ]]; then
+                echo "${source}@${source_sha} is not the merge commit of the preceding App-created ${preceding}->${source} promotion; refusing to skip a rung."
+                return 0
+              fi
             fi
-          done
-          if [ -z "${release_branch}" ]; then
-            echo "No release/* branch merged into ${merged}; nothing to promote."
-            exit 0
-          fi
-          if git merge-base --is-ancestor "origin/${release_branch}" "origin/${target}"; then
-            echo "${release_branch} already contained in ${target}; nothing to open."
-            exit 0
-          fi
-          existing="$(gh pr list --head "${release_branch}" --base "${target}" --state open --json number --jq 'length')"
-          if [ "${existing}" != "0" ]; then
-            echo "Promotion PR ${release_branch} -> ${target} already open."
-            exit 0
-          fi
-          gh pr create \
-            --head "${release_branch}" \
-            --base "${target}" \
-            --title "Promote ${release_branch} → ${target}" \
-            --body "$(printf 'Automated next-rung promotion opened by promote.yml after %s merged into %s.\n\nCandidate: `%s` @ %s\nGates for **%s** are in RELEASE.md. A maintainer with write access must select **Approve workflows to run** before the required checks start. Player channels (`stable`, `main`) require owner signoff (`needs-operator`) before merge.' "${release_branch}" "${merged}" "${release_branch}" "$(git rev-parse --short "origin/${release_branch}")" "${target}")" \
-            --label "release" \
-            --label "needs-review" \
-            --label "needs-operator"
+
+            ahead="$(gh api "repos/${REPOSITORY}/compare/${target}...${source}" --jq '.ahead_by')"
+            if [[ "${ahead}" == "0" ]]; then
+              echo "${source} has no commits to promote into ${target}."
+              return 0
+            fi
+
+            existing="$(gh pr list \
+              --repo "${REPOSITORY}" \
+              --state open \
+              --base "${target}" \
+              --head "${source}" \
+              --json number \
+              --jq 'length')"
+            if [[ "${existing}" == "1" ]]; then
+              echo "${source}->${target} promotion PR already open."
+              return 0
+            fi
+            if [[ "${existing}" != "0" ]]; then
+              echo "Expected at most one ${source}->${target} PR; found ${existing}." >&2
+              return 1
+            fi
+
+            labels=(--label release)
+            body="Automated direct-channel promotion opened on the repository schedule.\n\nCandidate: \`${source}\` @ \`${source_sha}\`\nTarget: \`${target}\` @ \`${target_sha}\`\n\nRequired gates and operator policy are defined in RELEASE.md."
+            if [[ "${target}" == "stable" || "${target}" == "main" ]]; then
+              labels+=(--label needs-review --label needs-operator)
+              body+="\n\nThis player-facing promotion never auto-merges; a current CODEOWNER approval and a manual merge are required."
+            fi
+
+            gh pr create \
+              --repo "${REPOSITORY}" \
+              --head "${source}" \
+              --base "${target}" \
+              --title "Promote ${source} → ${target}" \
+              --body "$(printf '%b' "${body}")" \
+              "${labels[@]}"
+          }
+
+          merge_unstable() {
+            local pr_count pr_number pr_json head_sha base_sha creator unresolved merge_state
+            pr_count="$(gh pr list \
+              --repo "${REPOSITORY}" \
+              --state open \
+              --base unstable \
+              --head dev \
+              --json number \
+              --jq 'length')"
+            if [[ "${pr_count}" == "0" ]]; then
+              echo "No dev->unstable promotion PR is open."
+              return 0
+            fi
+            if [[ "${pr_count}" != "1" ]]; then
+              echo "Expected one dev->unstable PR; found ${pr_count}." >&2
+              return 1
+            fi
+
+            pr_number="$(gh pr list --repo "${REPOSITORY}" --state open --base unstable --head dev --json number --jq '.[0].number')"
+            pr_json="$(gh pr view "${pr_number}" --repo "${REPOSITORY}" --json author,baseRefName,baseRefOid,headRefName,headRefOid,isDraft,mergeStateStatus,statusCheckRollup)"
+
+            if [[ "$(jq -r '.author.login' <<<"${pr_json}")" != "${APP_LOGIN}" \
+              || "$(jq -r '.baseRefName' <<<"${pr_json}")" != "unstable" \
+              || "$(jq -r '.headRefName' <<<"${pr_json}")" != "dev" \
+              || "$(jq -r '.isDraft' <<<"${pr_json}")" != "false" ]]; then
+              echo "PR #${pr_number} is not the expected App-created ready dev->unstable promotion." >&2
+              return 1
+            fi
+
+            head_sha="$(jq -r '.headRefOid' <<<"${pr_json}")"
+            base_sha="$(jq -r '.baseRefOid' <<<"${pr_json}")"
+            if [[ "${head_sha}" != "$(branch_sha dev)" || "${base_sha}" != "$(branch_sha unstable)" ]]; then
+              echo "PR #${pr_number} moved while being evaluated; wait for the next scheduled attempt."
+              return 0
+            fi
+
+            creator="$(status_creator "${head_sha}" release-readiness)"
+            if [[ "${creator}" != "github-actions[bot]" ]]; then
+              echo "Current dev head lacks owner-recorded release-readiness; not merging."
+              return 0
+            fi
+
+            for required in \
+              "merge-gate / unstable" \
+              "source-gate / unstable" \
+              dependency-review \
+              "codeql (actions)" \
+              "codeql (python)" \
+              "codeql (rust)"; do
+              # $name is a jq variable, not a shell expansion.
+              # shellcheck disable=SC2016
+              conclusion="$(jq -r --arg name "${required}" '[.statusCheckRollup[] | select(.name == $name)][-1].conclusion // empty' <<<"${pr_json}")"
+              if [[ "${conclusion}" != "SUCCESS" ]]; then
+                echo "Required check ${required} is ${conclusion:-missing}; not merging."
+                return 0
+              fi
+            done
+
+            # GraphQL variables are deliberately protected from the shell.
+            # shellcheck disable=SC2016
+            unresolved="$(gh api graphql \
+              -f owner="${REPOSITORY_OWNER}" \
+              -f name="${REPOSITORY#*/}" \
+              -F number="${pr_number}" \
+              -f query='query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){reviewThreads(first:100){nodes{isResolved}}}}}' \
+              --jq '[.data.repository.pullRequest.reviewThreads.nodes[] | select(.isResolved == false)] | length')"
+            if [[ "${unresolved}" != "0" ]]; then
+              echo "PR #${pr_number} has ${unresolved} unresolved review threads; not merging."
+              return 0
+            fi
+
+            merge_state="$(jq -r '.mergeStateStatus' <<<"${pr_json}")"
+            if [[ "${merge_state}" != "CLEAN" ]]; then
+              echo "PR #${pr_number} merge state is ${merge_state}; not merging."
+              return 0
+            fi
+
+            # The REST merge endpoint either merges this exact SHA now or
+            # rejects it; unlike a queued/native auto-merge request, it cannot
+            # remain armed and merge later outside the 02:17 window.
+            gh api \
+              --method PUT \
+              "repos/${REPOSITORY}/pulls/${pr_number}/merge" \
+              -f sha="${head_sha}" \
+              -f merge_method=merge \
+              --jq '.merged'
+          }
+
+          case "${OPERATION}" in
+            open-unstable) open_promotion unstable ;;
+            open-stable) open_promotion stable ;;
+            open-main) open_promotion main ;;
+            merge-unstable) merge_unstable ;;
+            reconcile)
+              open_promotion unstable
+              open_promotion stable
+              open_promotion main
+              ;;
+            *)
+              echo "Unknown promotion operation: ${OPERATION}" >&2
+              exit 2
+              ;;
+          esac
