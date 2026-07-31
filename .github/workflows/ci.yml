@@ -1,9 +1,12 @@
 # CI merge gate for pokeemerald-rs. See docs/acceptance/v1.md.
 #
-# Pull requests into channel or release branches run once here; feature-branch
-# pushes do not duplicate the pull_request run. Direct channel-branch pushes
-# still receive post-merge validation. Superseded runs for the same PR or ref
-# are cancelled by the concurrency group below.
+# Pull requests into channel or release branches run once here; ordinary
+# feature-branch pushes do not duplicate the pull_request run. Direct channel
+# pushes still receive post-merge validation. Release-branch pushes also run:
+# promotion PRs are opened by `promote.yml` with `GITHUB_TOKEN`, so GitHub
+# suppresses their pull_request workflow event and the push must provide the
+# required `merge-gate`. Superseded runs for the same PR or ref are cancelled
+# by the concurrency group below.
 #
 # `policy` owns the Ubuntu-only repository checks and the exact default format
 # command. `native` gives each supported OS one checkout and one shared Cargo
@@ -25,7 +28,7 @@ permissions:
 
 on:
   push:
-    branches: [dev, unstable, stable, main]
+    branches: [dev, unstable, stable, main, "release/**"]
   pull_request:
     branches: [dev, unstable, stable, main, "release/**"]
   workflow_dispatch:
