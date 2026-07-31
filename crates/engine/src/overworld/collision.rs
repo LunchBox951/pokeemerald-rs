@@ -5,11 +5,21 @@
 //! Upstream's `COLLISION_*` enum (`include/global.fieldmap.h`) has thirteen
 //! variants covering object-event traffic, ledges, boulder-pushing,
 //! rotating gates, and bike-specific rail/wheelie collisions on top of the
-//! ordinary "can I stand here" cases. None of the object/NPC/bike variants
-//! are reachable in this port yet (no NPCs, no bike, no scripted objects —
-//! see the crate-level scope in `crate::overworld`), so [`Collision`] only
-//! models the three that matter for a lone on-foot player against static
-//! map geometry: passable, blocked, and elevation mismatch.
+//! ordinary "can I stand here" cases. The ledge/boulder/gate/bike variants
+//! are still unreachable in this port (no bike, no scripted objects — see
+//! the crate-level scope in `crate::overworld`), so [`Collision`] models the
+//! four that matter for a lone on-foot player against static map geometry
+//! plus stationary NPCs: passable, blocked, elevation mismatch, and
+//! occupied-by-an-object-event.
+//!
+//! `GetCollisionAtCoords`' own test *order* (`event_object_movement.c:4658-4672`)
+//! is part of the ported behaviour, not an implementation detail: the grid's
+//! collision bits are tested first, then the elevation mismatch, and only
+//! then `DoesObjectCollideWithObjectAt`. A tile that is both walled off and
+//! occupied therefore reports [`Collision::Impassable`], never
+//! [`Collision::ObjectEvent`] — see
+//! [`crate::overworld::player::PlayerState::step`], which applies the checks
+//! in that same order.
 
 /// Upstream `ELEVATION_TRANSITION` (`include/global.fieldmap.h`): an
 /// elevation of `0` means "compatible with anything" in both directions —
@@ -55,6 +65,19 @@ pub enum Collision {
     /// elevation is incompatible with the mover's current elevation (see
     /// [`elevation_mismatch`]).
     ElevationMismatch,
+    /// `COLLISION_OBJECT_EVENT`: the tile's geometry is clear, but another
+    /// object event stands on it at a compatible elevation — upstream
+    /// `DoesObjectCollideWithObjectAt` (`event_object_movement.c:4724-4742`),
+    /// whose `AreElevationsCompatible` test (`:7789-7797`) is the same
+    /// transition-wildcard rule
+    /// [`crate::overworld::map_runtime::MapRuntime::object_events_at`]
+    /// applies.
+    ///
+    /// Upstream scans `gObjectEvents` — the *spawned* objects — so a
+    /// template whose hide flag is set never contributes one of these; this
+    /// port reproduces that by scanning only visible object events (see
+    /// [`crate::overworld::object_event::visible_object_event_at`]).
+    ObjectEvent,
 }
 
 #[cfg(test)]

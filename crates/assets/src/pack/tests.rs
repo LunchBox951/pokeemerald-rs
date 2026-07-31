@@ -260,7 +260,7 @@ fn synthetic_pack() -> Vec<u8> {
 
     let mut out = Vec::new();
     out.extend_from_slice(&MAGIC);
-    out.extend_from_slice(&1u32.to_le_bytes()); // format_version
+    out.extend_from_slice(&super::format::FORMAT_VERSION.to_le_bytes()); // format_version
     out.extend_from_slice(&u32::try_from(entries.len()).unwrap().to_le_bytes());
     for (e, &off) in entries.iter().zip(&offsets) {
         out.extend_from_slice(&u16::try_from(e.id.len()).unwrap().to_le_bytes());

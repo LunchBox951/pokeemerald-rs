@@ -61,6 +61,99 @@
 /// a magic `0x2F8`.
 pub const FLAG_HIDE_LITTLEROOT_TOWN_BRENDANS_HOUSE_RIVAL_BEDROOM: u16 = 0x2F8;
 
+/// The male branch of `InsideOfTruck_EventScript_SetIntroFlags`
+/// (`data/maps/InsideOfTruck/scripts.inc:24-35`) — the
+/// gender-selected player-house setup a fresh save gets on the way out of
+/// the moving truck.
+///
+/// # Why this exists as save-init data
+///
+/// Upstream never runs this from `NewGameInitData`. It is a **coord
+/// (trigger) event** sitting on all three of the truck's exit tiles
+/// `(3, 1)`/`(3, 2)`/`(3, 3)`, gated on `VAR_LITTLEROOT_INTRO_STATE == 0`
+/// (`data/maps/InsideOfTruck/map.json:85-112`), so it fires exactly once —
+/// the first time the player walks toward the truck door — and then sets
+/// that var so it can never fire again
+/// (`data/maps/InsideOfTruck/scripts.inc:16-48`). Every real playthrough
+/// therefore passes through it before reaching a house.
+///
+/// This port skips the truck sequence entirely and hands off straight into
+/// the bedroom (`crates/pokeemerald-rs/src/new_game.rs`'s module docs), so
+/// without reproducing the effect here a fresh save reaches the player's
+/// house with all ten of these flags clear — which upstream never does. The
+/// visible consequences on a male run are the ones this table fixes: the
+/// rival's Poké Ball object stays spawned in the player's own bedroom (an
+/// invisible collider at `(3, 4)`, since nothing in this port draws
+/// `OBJ_EVENT_GFX_ITEM_BALL`), and the rival's mother and sibling stay
+/// spawned in the player's own 1F — a second, duplicated mother beside the
+/// real one, plus another undrawn blocker.
+///
+/// # Shape
+///
+/// The two branches are exact mirror images with Brendan/May swapped, which
+/// is upstream's own structure (`:24-35` vs `:37-48`) and not a
+/// simplification: each house declares *both* families' object events and
+/// hides whichever set does not belong, so the flag set is chosen by who
+/// the player is, not by which house is being entered.
+///
+/// **Not modelled** (no save-state home in this workspace yet, so
+/// reproducing them would be inventing state rather than porting it):
+/// `setrespawn HEAL_LOCATION_LITTLEROOT_TOWN_{BRENDANS,MAYS}_HOUSE_2F`
+/// (`:25`/`:38` — no heal-location field exists), `setdynamicwarp
+/// MAP_LITTLEROOT_TOWN, 3|12, 10` (`:33`/`:46` — no dynamic-warp
+/// destination state), and `setflag FLAG_HIDE_MAP_NAME_POPUP` (`:18`, which
+/// is *outside* both gender branches and gates a map-name popup this port
+/// does not render).
+#[rustfmt::skip]
+pub const TRUCK_INTRO_FLAGS_MALE: &[u16] = &[
+    0x2F7, // FLAG_HIDE_LITTLEROOT_TOWN_MAYS_HOUSE_MOM
+    0x2FA, // FLAG_HIDE_LITTLEROOT_TOWN_MAYS_HOUSE_TRUCK
+    0x310, // FLAG_HIDE_LITTLEROOT_TOWN_BRENDANS_HOUSE_RIVAL_MOM
+    0x2DF, // FLAG_HIDE_LITTLEROOT_TOWN_BRENDANS_HOUSE_RIVAL_SIBLING
+    0x331, // FLAG_HIDE_LITTLEROOT_TOWN_BRENDANS_HOUSE_2F_POKE_BALL
+];
+
+/// The female branch of `InsideOfTruck_EventScript_SetIntroFlags`
+/// (`data/maps/InsideOfTruck/scripts.inc:37-48`) — [`TRUCK_INTRO_FLAGS_MALE`]'s
+/// mirror image with Brendan and May swapped. See that constant's docs.
+#[rustfmt::skip]
+pub const TRUCK_INTRO_FLAGS_FEMALE: &[u16] = &[
+    0x2F6, // FLAG_HIDE_LITTLEROOT_TOWN_BRENDANS_HOUSE_MOM
+    0x2F9, // FLAG_HIDE_LITTLEROOT_TOWN_BRENDANS_HOUSE_TRUCK
+    0x311, // FLAG_HIDE_LITTLEROOT_TOWN_MAYS_HOUSE_RIVAL_MOM
+    0x2E0, // FLAG_HIDE_LITTLEROOT_TOWN_MAYS_HOUSE_RIVAL_SIBLING
+    0x332, // FLAG_HIDE_LITTLEROOT_TOWN_MAYS_HOUSE_2F_POKE_BALL
+];
+
+/// The `(var id, value)` pairs the male branch of
+/// `InsideOfTruck_EventScript_SetIntroFlags` sets alongside
+/// [`TRUCK_INTRO_FLAGS_MALE`] (`data/maps/InsideOfTruck/scripts.inc:26`,
+/// `:32`).
+///
+/// `VAR_LITTLEROOT_INTRO_STATE` is the very var the trigger is gated on, so
+/// setting it is what makes the effect once-only. Both values are safely
+/// below every guard the scripts this port has already transcribed compare
+/// against — `PlayersHouse_1F_EventScript_Mom`
+/// (`data/scripts/players_house.inc:299-310`) branches away only on
+/// `VAR_LITTLEROOT_HOUSES_STATE_{MAY,BRENDAN} == 4` or
+/// `VAR_LITTLEROOT_INTRO_STATE == 7`, and these set `1`/`1` — so applying
+/// them does not move Mom off the message
+/// `crates/pokeemerald-rs/src/overworld/npc_scripts.rs` transcribes
+/// (pinned by that crate's own test).
+#[rustfmt::skip]
+pub const TRUCK_INTRO_VARS_MALE: &[(u16, u16)] = &[
+    (0x4092, 1), // VAR_LITTLEROOT_INTRO_STATE = 1
+    (0x408C, 1), // VAR_LITTLEROOT_HOUSES_STATE_BRENDAN = 1
+];
+
+/// The female branch's vars (`data/maps/InsideOfTruck/scripts.inc:39`,
+/// `:45`) — see [`TRUCK_INTRO_VARS_MALE`].
+#[rustfmt::skip]
+pub const TRUCK_INTRO_VARS_FEMALE: &[(u16, u16)] = &[
+    (0x4092, 2), // VAR_LITTLEROOT_INTRO_STATE = 2
+    (0x4082, 1), // VAR_LITTLEROOT_HOUSES_STATE_MAY = 1
+];
+
 /// The full effect of `EventScript_ResetAllMapFlags`'s 159 `setflag`
 /// commands (module docs), in upstream script order. Each id is an ordinary
 /// flag (`< engine::event_data::FLAGS_COUNT`), so every entry is valid for
@@ -300,5 +393,83 @@ mod tests {
     #[test]
     fn rival_bedroom_flag_is_in_the_reset_list() {
         assert!(RESET_MAP_FLAGS.contains(&FLAG_HIDE_LITTLEROOT_TOWN_BRENDANS_HOUSE_RIVAL_BEDROOM));
+    }
+
+    /// Every truck-intro flag id, cross-checked against
+    /// [`crate::object_event_flags`]'s independently-transcribed
+    /// name -> id table. That module looked each id up in
+    /// `include/constants/flags.h` on its own, so agreement here means two
+    /// independent transcriptions of the same header line -- the same
+    /// mutual check `object_event_flags_agree_with_reset_map_flags` already
+    /// applies to the reset list.
+    #[test]
+    fn truck_intro_flags_agree_with_the_object_event_flag_table() {
+        use crate::object_event_flags::resolve;
+        let male = [
+            "FLAG_HIDE_LITTLEROOT_TOWN_MAYS_HOUSE_MOM",
+            "FLAG_HIDE_LITTLEROOT_TOWN_MAYS_HOUSE_TRUCK",
+            "FLAG_HIDE_LITTLEROOT_TOWN_BRENDANS_HOUSE_RIVAL_MOM",
+            "FLAG_HIDE_LITTLEROOT_TOWN_BRENDANS_HOUSE_RIVAL_SIBLING",
+            "FLAG_HIDE_LITTLEROOT_TOWN_BRENDANS_HOUSE_2F_POKE_BALL",
+        ];
+        let female = [
+            "FLAG_HIDE_LITTLEROOT_TOWN_BRENDANS_HOUSE_MOM",
+            "FLAG_HIDE_LITTLEROOT_TOWN_BRENDANS_HOUSE_TRUCK",
+            "FLAG_HIDE_LITTLEROOT_TOWN_MAYS_HOUSE_RIVAL_MOM",
+            "FLAG_HIDE_LITTLEROOT_TOWN_MAYS_HOUSE_RIVAL_SIBLING",
+            "FLAG_HIDE_LITTLEROOT_TOWN_MAYS_HOUSE_2F_POKE_BALL",
+        ];
+        for (names, ids) in [
+            (male, TRUCK_INTRO_FLAGS_MALE),
+            (female, TRUCK_INTRO_FLAGS_FEMALE),
+        ] {
+            assert_eq!(names.len(), ids.len(), "one setflag per script line");
+            for (name, &id) in names.iter().zip(ids) {
+                assert_eq!(resolve(name), Some(id), "{name} disagrees, in script order");
+            }
+        }
+    }
+
+    /// The two branches are exact mirror images: same length, and disjoint
+    /// (no flag is set for both genders). A transcription slip that copied
+    /// a Brendan id into the female branch shows up here.
+    #[test]
+    fn the_two_truck_intro_branches_are_disjoint_mirrors() {
+        assert_eq!(TRUCK_INTRO_FLAGS_MALE.len(), TRUCK_INTRO_FLAGS_FEMALE.len());
+        for id in TRUCK_INTRO_FLAGS_MALE {
+            assert!(
+                !TRUCK_INTRO_FLAGS_FEMALE.contains(id),
+                "{id:#x} cannot belong to both gender branches"
+            );
+        }
+        for ids in [TRUCK_INTRO_FLAGS_MALE, TRUCK_INTRO_FLAGS_FEMALE] {
+            let mut sorted = ids.to_vec();
+            sorted.sort_unstable();
+            sorted.dedup();
+            assert_eq!(sorted.len(), ids.len(), "no duplicates within a branch");
+        }
+
+        // The vars mirror too -- same var count, and the shared
+        // VAR_LITTLEROOT_INTRO_STATE takes a different value per gender.
+        assert_eq!(TRUCK_INTRO_VARS_MALE.len(), TRUCK_INTRO_VARS_FEMALE.len());
+        assert_eq!(TRUCK_INTRO_VARS_MALE[0].0, TRUCK_INTRO_VARS_FEMALE[0].0);
+        assert_ne!(TRUCK_INTRO_VARS_MALE[0].1, TRUCK_INTRO_VARS_FEMALE[0].1);
+    }
+
+    /// None of the truck-intro flags is already in [`RESET_MAP_FLAGS`] --
+    /// they are a genuinely separate effect from a different script, not a
+    /// subset this port could have got for free. If one ever were, applying
+    /// it twice would still be harmless (`flag_set` is idempotent), but the
+    /// duplication would mean one of the two transcriptions is wrong.
+    #[test]
+    fn no_truck_intro_flag_is_already_a_reset_map_flag() {
+        for ids in [TRUCK_INTRO_FLAGS_MALE, TRUCK_INTRO_FLAGS_FEMALE] {
+            for id in ids {
+                assert!(
+                    !RESET_MAP_FLAGS.contains(id),
+                    "{id:#x} is in both EventScript_ResetAllMapFlags and the truck intro"
+                );
+            }
+        }
     }
 }
