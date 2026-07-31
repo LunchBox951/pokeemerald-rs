@@ -166,7 +166,16 @@ enum Backend {
     /// A real OS window — see [`WindowBackend`].
     Window(Box<WindowBackend>),
     /// No OS window, event loop, or surface — see [`Platform::new_headless`].
-    Null { buttons: ButtonState },
+    Null {
+        buttons: ButtonState,
+        /// The frame most recently handed to [`Platform::present`], read
+        /// back via [`Platform::last_presented`]: the null backend's only
+        /// observable effect, so a headless caller can check *what it
+        /// actually presented* rather than what it meant to. Boxed because
+        /// a [`Frame`] is 150 KiB — far too large to inline into every
+        /// [`Platform`].
+        last_presented: Option<Box<Frame>>,
+    },
 }
 
 /// An open native window (or, headlessly, `platform`'s null backend): input,
@@ -227,8 +236,9 @@ impl Platform {
     /// [`Platform::pump`] always reports "keep going" (there is no
     /// window-close event to simulate), [`Platform::buttons`] always reads
     /// as nothing held (there is no keyboard to inject from),
-    /// [`Platform::present`] is a no-op (there is no surface to draw into),
-    /// and [`Platform::wait_for_next_frame`] never sleeps (there is no real
+    /// [`Platform::present`] draws nothing (there is no surface to draw
+    /// into) but records its argument for [`Platform::last_presented`], and
+    /// [`Platform::wait_for_next_frame`] never sleeps (there is no real
     /// display to pace against) — a headless caller drives frames
     /// back-to-back instead.
     #[must_use]
@@ -236,6 +246,7 @@ impl Platform {
         Self {
             backend: Backend::Null {
                 buttons: ButtonState::new(),
+                last_presented: None,
             },
             pacer: FramePacer::new(),
         }
@@ -269,7 +280,7 @@ impl Platform {
                 window.app.buttons.update(window.app.frame_held);
                 Ok(!matches!(status, PumpStatus::Exit(_)))
             }
-            Backend::Null { buttons } => {
+            Backend::Null { buttons, .. } => {
                 // No OS event source to drain, so the held set never
                 // changes — but still folded through `ButtonState::update`
                 // each call so `newly_pressed` behaves identically to the
@@ -286,7 +297,7 @@ impl Platform {
     pub fn buttons(&self) -> &ButtonState {
         match &self.backend {
             Backend::Window(window) => &window.app.buttons,
-            Backend::Null { buttons } => buttons,
+            Backend::Null { buttons, .. } => buttons,
         }
     }
 
@@ -311,16 +322,27 @@ impl Platform {
     ///
     /// A no-op if the window/surface has not been created yet (i.e. before
     /// the first successful [`Platform::pump`]) or the window is currently
-    /// zero-sized (e.g. minimized) — and always a no-op for the null backend
-    /// (see [`Platform::new_headless`]), which has no surface to draw into.
+    /// zero-sized (e.g. minimized). The null backend (see
+    /// [`Platform::new_headless`]) has no surface to draw into, so it draws
+    /// nothing either — but it does *record* `frame`, readable back via
+    /// [`Platform::last_presented`].
     ///
     /// # Errors
     ///
     /// Returns [`PlatformError::SoftBuffer`] if the presentation surface
     /// could not be resized or presented. Never errors for the null backend.
     pub fn present(&mut self, frame: &Frame) -> Result<(), PlatformError> {
-        let Backend::Window(window) = &mut self.backend else {
-            return Ok(());
+        let window = match &mut self.backend {
+            Backend::Window(window) => window,
+            Backend::Null { last_presented, .. } => {
+                // Copy into the existing box rather than allocating a fresh
+                // 150 KiB one every headless frame.
+                match last_presented {
+                    Some(recorded) => **recorded = *frame,
+                    None => *last_presented = Some(Box::new(*frame)),
+                }
+                return Ok(());
+            }
         };
         let Some(inner) = window.app.inner.as_mut() else {
             return Ok(());
@@ -338,6 +360,28 @@ impl Platform {
         present::blit(frame, &letterbox, size.width, size.height, &mut buffer[..]);
         buffer.present()?;
         Ok(())
+    }
+
+    /// The frame most recently handed to [`Platform::present`] on the null
+    /// backend, or `None` if nothing has been presented yet.
+    ///
+    /// Always `None` for a windowed [`Platform`]: the pixels there are
+    /// blitted straight into `softbuffer`'s surface and handed to the
+    /// compositor, so this crate keeps no copy — nothing to hand back, and
+    /// no per-frame allocation added to the real path.
+    ///
+    /// The point of the null backend recording it (F-3, V-1): headless
+    /// callers — `pokeemerald_rs`'s I-2 real-boot check, `xtask`'s smoke
+    /// suite — can assert on the frame that *reached presentation*, not
+    /// merely the one their own scene state says they composed. Without it,
+    /// a caller that composed correctly and then never called `present` at
+    /// all would still look healthy.
+    #[must_use]
+    pub fn last_presented(&self) -> Option<&Frame> {
+        match &self.backend {
+            Backend::Window(_) => None,
+            Backend::Null { last_presented, .. } => last_presented.as_deref(),
+        }
     }
 }
 
@@ -368,6 +412,47 @@ mod tests {
         let mut platform = Platform::new_headless();
         let frame = test_pattern();
         platform.present(&frame).expect("null backend never errors");
+    }
+
+    #[test]
+    fn headless_last_presented_is_none_until_something_is_presented() {
+        let platform = Platform::new_headless();
+        assert!(platform.last_presented().is_none());
+    }
+
+    #[test]
+    fn headless_present_records_the_exact_frame_it_was_given() {
+        let mut platform = Platform::new_headless();
+        let frame = test_pattern();
+        platform.present(&frame).expect("null backend never errors");
+        assert_eq!(
+            platform
+                .last_presented()
+                .expect("recorded by present")
+                .to_vec(),
+            frame.to_vec(),
+            "the null backend must hand back exactly the frame it was presented"
+        );
+    }
+
+    #[test]
+    fn headless_last_presented_tracks_the_most_recent_present() {
+        let mut platform = Platform::new_headless();
+        let first = test_pattern();
+        let mut second = test_pattern();
+        second[0] ^= 0x00FF_FFFF; // any frame distinguishable from `first`.
+        platform.present(&first).expect("null backend never errors");
+        platform
+            .present(&second)
+            .expect("null backend never errors");
+        assert_eq!(
+            platform
+                .last_presented()
+                .expect("recorded by present")
+                .to_vec(),
+            second.to_vec(),
+            "the recording must be the latest present, not the first"
+        );
     }
 
     #[test]
