@@ -975,6 +975,7 @@ fn b_alone_advances_and_closes_a_dialog() {
 /// is A-only, matching `FieldInput::pressedAButton` --
 /// `field_control_avatar.c:172`).
 #[test]
+#[ignore = "needs a local pack: run `cargo xtask extract` first"]
 fn b_does_not_move_the_player_or_open_a_dialog() {
     use engine::text::Token;
 
