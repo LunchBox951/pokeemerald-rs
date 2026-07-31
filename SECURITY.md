@@ -44,10 +44,11 @@ Fixes flow down the release ladder. The supported player channels are:
 
 `dev` is the developer integration branch, not a player channel.
 
-Serious player-facing defects are hotfixed from `main` (fix only the minimal
-issue, merge to `main`, then back-merge into `stable`, `unstable`, `dev`, and the
-active `release/*`). Older prerelease tags are not separately maintained — upgrade
-to a current channel.
+Serious player-facing and security defects take the expedited direct ladder: land
+the minimal fix on `dev`, validate it, then promote `dev -> unstable -> stable ->
+main`. Stable/main still require their objective gates and CODEOWNER approval, but
+have no mandatory time delay. Older prerelease tags are not separately maintained
+— upgrade to a current channel.
 
 ## Scope notes
 

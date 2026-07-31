@@ -1,12 +1,11 @@
 # CI merge gate for pokeemerald-rs. See docs/acceptance/v1.md.
 #
-# Pull requests into channel or release branches run once here; ordinary
+# Pull requests into channel branches run once here; ordinary
 # feature-branch pushes do not duplicate the pull_request run. Direct channel
-# pushes still receive post-merge validation. Release-branch pushes also run:
-# promotion PRs are opened by `promote.yml` with `GITHUB_TOKEN`, so GitHub
-# suppresses their pull_request workflow event and the push must provide the
-# required `merge-gate`. Superseded runs for the same PR or ref are cancelled
-# by the concurrency group below.
+# pushes still receive post-merge validation. Promotion PRs are opened with a
+# dedicated GitHub App token, so their pull_request workflows run without the
+# approval hold applied to GITHUB_TOKEN-created pull requests. Superseded runs
+# for the same PR or ref are cancelled by the concurrency group below.
 #
 # `policy` owns the Ubuntu-only repository checks and the exact default format
 # command. `native` gives each supported OS one checkout and one shared Cargo
@@ -16,11 +15,11 @@
 # assertions, and repeats smoke with the pack present. No Cargo target cache is
 # used: reuse is deliberately limited to commands within one native runner.
 #
-# Branch protection requires only `merge-gate` from this workflow. Its
+# Branch rules require `merge-gate / <target>` from this workflow. The target
+# suffix is load-bearing: GitHub keys checks by head SHA, so distinct names keep
+# a green dev->unstable result from satisfying a PR retargeted to stable. The
 # `always()` condition makes policy failures and failed/cancelled matrix legs
-# visible through one stable context. Repository controls must replace the old
-# per-command contexts atomically only after all new jobs have reported once;
-# see RELEASE.md's "Repository controls go-live" section.
+# visible through that one target-specific aggregate context.
 name: ci
 
 permissions:
@@ -28,9 +27,9 @@ permissions:
 
 on:
   push:
-    branches: [dev, unstable, stable, main, "release/**"]
+    branches: [dev, unstable, stable, main]
   pull_request:
-    branches: [dev, unstable, stable, main, "release/**"]
+    branches: [dev, unstable, stable, main]
   workflow_dispatch:
 
 concurrency:
@@ -47,9 +46,8 @@ jobs:
           fetch-depth: 0 # version_check needs the comparison base.
       - name: Validate VERSION
         env:
-          # Compare a PR with its actual base. Push/manual runs retain the
-          # repository-wide origin/main monotonicity check, except release
-          # pushes that stand in for token-created promotion PR events.
+          # Compare a PR with its actual live base. Push/manual runs retain the
+          # repository-wide origin/main monotonicity check.
           PR_BASE_SHA: ${{ github.event.pull_request.base.sha || '' }}
           PR_BASE_REF: ${{ github.event.pull_request.base.ref || '' }}
         run: |
@@ -64,14 +62,6 @@ jobs:
             fi
             python3 scripts/version_check.py \
               --base "${live_base}" --head HEAD --require-bump
-          elif [[ "${GITHUB_REF_NAME}" == release/* ]]; then
-            target="$(scripts/select_promotion_target.sh "${GITHUB_REF_NAME}")"
-            if [[ -n "${target}" ]]; then
-              python3 scripts/version_check.py \
-                --base "origin/${target}" --head HEAD --require-bump
-            else
-              python3 scripts/version_check.py --base origin/main --head HEAD
-            fi
           else
             python3 scripts/version_check.py --base origin/main --head HEAD
           fi
@@ -139,7 +129,7 @@ jobs:
         run: cargo run -p xtask --features smoke -- e2e --suite smoke
 
   merge-gate:
-    name: merge-gate
+    name: merge-gate / ${{ github.event.pull_request.base.ref || github.ref_name }}
     if: ${{ always() }}
     needs: [policy, native]
     runs-on: ubuntu-latest
