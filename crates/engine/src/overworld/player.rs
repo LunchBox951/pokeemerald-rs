@@ -8,15 +8,21 @@
 //!   `PlayerNotOnBikeMoving` + `CheckForPlayerAvatarCollision` (collision
 //!   classification itself lives in `crate::overworld::collision`) and
 //!   `event_object_movement.c`'s `ObjectEventUpdateElevation`.
+//! - Object-event collision: `GetCollisionAtCoords`' `COLLISION_OBJECT_EVENT`
+//!   arm / `DoesObjectCollideWithObjectAt` — see [`PlayerState::step`].
 //! - Walk speed: `event_object_movement.c`'s `MOVE_SPEED_NORMAL` step table
 //!   (`sStep1Funcs`, 16 entries) — see [`WALK_FRAMES_PER_TILE`].
 //!
 //! **Scope: ordinary on-foot walking only.** No bike (`MovePlayerOnBike`),
 //! no running (`PlayerRun`/dash), no forced movement (currents, slopes, ice
 //! — `TryDoMetatileBehaviorForcedMovement` and its `ForcedMovement_*`
-//! table), no ledges (`ShouldJumpLedge`), no NPC/object-event collision
-//! (`DoesObjectCollideWithObjectAt` — there are no other object events to
-//! collide with yet). All of upstream's per-frame *animation* timing (the
+//! table), no ledges (`ShouldJumpLedge`), no movement-range clamp
+//! (`IsCoordOutsideObjectEventMovementRange`, which never constrains the
+//! player — its `range` is zero), no directional metatile impassability
+//! (`IsMetatileDirectionallyImpassable`), and no camera clamp
+//! (`CanCameraMoveInDirection`). Stationary object events *do* block
+//! movement (`DoesObjectCollideWithObjectAt`, added for issue #161 — see
+//! [`PlayerState::step`]). All of upstream's per-frame *animation* timing (the
 //! specific pixel offsets `Step1`/`Step2`/... apply) is also out of scope —
 //! there is no renderer yet to consume it — but the *pacing* it produces
 //! (16 frames to cross one tile at a walk, and no new turn/step decision
@@ -29,6 +35,8 @@ use assets::MapId;
 use super::collision::elevation_mismatch;
 use super::direction::Direction;
 use super::map_runtime::{ConnectedMapData, MapRuntime};
+use super::object_event::visible_object_event_at;
+use crate::event_data::EventData;
 
 /// Frames a normal (on-foot, not running) walk step takes to cross one
 /// tile. Mirrors upstream `MOVE_SPEED_NORMAL`'s per-frame step table
@@ -198,11 +206,53 @@ impl PlayerState {
     /// `CheckMovementInputNotOnBike` can reset `runningState`; preserving the
     /// state here retains the same corner-cut behavior at tile center. Call
     /// [`PlayerState::tick`] each frame to drain the transit timer.
+    ///
+    /// # Collision
+    ///
+    /// The destination tile is tested in `GetCollisionAtCoords`' own order
+    /// (`event_object_movement.c:4658-4672`): the grid's collision bits
+    /// (`MapGridGetCollisionAt`, plus the off-the-edge-with-no-connection
+    /// case that is `GetMapBorderIdAt(x, y) == CONNECTION_INVALID`), then
+    /// the elevation mismatch (`IsElevationMismatchAt`), then — new for
+    /// issue #161 — whether a visible object event stands there
+    /// (`DoesObjectCollideWithObjectAt`, reported as
+    /// [`Collision::ObjectEvent`](super::collision::Collision::ObjectEvent)).
+    /// `event_data` is what makes that last test honest: upstream scans the
+    /// *spawned* `gObjectEvents`, and a template with its hide flag set is
+    /// never spawned, so a hidden NPC must not block — see
+    /// [`visible_object_event_at`], which the interaction lookup
+    /// ([`facing_object_event`](super::object_event::facing_object_event))
+    /// shares, so movement and interaction can never disagree about which
+    /// object occupies a tile.
+    ///
+    /// A blocked step is *not* a no-op: `self.facing` has already been set
+    /// to `direction` above, matching `PlayerNotOnBikeCollide`
+    /// (`field_player_avatar.c:1011-1015`), which plays a walk-in-place
+    /// animation in the attempted direction — walking into an NPC turns the
+    /// avatar to face it, exactly as walking into a wall does.
+    ///
+    /// Two deliberate narrowings against upstream, both invisible here:
+    ///
+    /// - **The player never collides with itself.** Upstream's scan skips
+    ///   `curObject != objectEvent`; this port has no player entry to skip,
+    ///   because [`MapRuntime`]'s object events are the map's own
+    ///   `object_events` list (map.json NPCs and props), which never
+    ///   contains the player — the avatar is this `PlayerState`, held apart
+    ///   from the map's data entirely.
+    /// - **The connection-crossing branch below does not run the object
+    ///   test.** [`ConnectedMapData`] exposes a neighbour's dimensions and
+    ///   grid cells but no event data, so a neighbouring map's NPCs are not
+    ///   reachable from here; the current map's own object events all lie
+    ///   inside its own grid, so testing them against an off-grid landing
+    ///   tile would be vacuous anyway. Wiring cross-map object events in
+    ///   belongs with the rest of connection support (see
+    ///   `crate::overworld`'s scope notes), not with this slice.
     pub fn step(
         &mut self,
         input: Option<Direction>,
         runtime: &MapRuntime<'_>,
         maps: &impl ConnectedMapData,
+        event_data: &EventData,
     ) -> StepOutcome {
         if self.in_transit() {
             return StepOutcome::Idle;
@@ -236,6 +286,20 @@ impl PlayerState {
                 return StepOutcome::Blocked {
                     direction,
                     collision: super::collision::Collision::ElevationMismatch,
+                };
+            }
+            // GetCollisionAtCoords' last test: COLLISION_OBJECT_EVENT via
+            // DoesObjectCollideWithObjectAt. Queried at the *player's*
+            // current elevation -- upstream passes
+            // `objectEvent->currentElevation`, not the destination cell's --
+            // so `AreElevationsCompatible` compares the two movers, not the
+            // mover and the ground.
+            if visible_object_event_at(runtime, target.0, target.1, self.elevation, event_data)
+                .is_some()
+            {
+                return StepOutcome::Blocked {
+                    direction,
+                    collision: super::collision::Collision::ObjectEvent,
                 };
             }
 
@@ -300,8 +364,14 @@ mod tests {
     use crate::overworld::map_runtime::MapRuntime;
     use assets::{
         BattleScene, MapConnection, MapEvents, MapHeader, MapType, MetatileAttributeTable,
-        MetatileCell, RegionMapSectionId, Weather,
+        MetatileCell, ObjectEvent, RegionMapSectionId, Weather,
     };
+
+    /// A fresh event-flag store: nothing hidden. Every fixture below whose
+    /// map has no object events at all is indifferent to it; the
+    /// object-event collision tests at the end of this module build their
+    /// own stores with specific `FLAG_HIDE_*` bits set.
+    const NO_FLAGS: EventData = EventData::new();
 
     fn flat_runtime(
         width: u16,
@@ -421,7 +491,7 @@ mod tests {
         );
 
         let mut player = PlayerState::new((2, 2), 3, Direction::South);
-        let outcome = player.step(Some(Direction::South), &runtime, &no_connections);
+        let outcome = player.step(Some(Direction::South), &runtime, &no_connections, &NO_FLAGS);
         assert_eq!(
             outcome,
             StepOutcome::Advanced {
@@ -457,7 +527,7 @@ mod tests {
         let mut player = PlayerState::new((2, 2), 3, Direction::South);
         // Facing South, tap East: turn only, no step (CheckMovementInputNotOnBike:
         // direction != movementDirection && runningState != MOVING -> TURN_DIRECTION).
-        let outcome = player.step(Some(Direction::East), &runtime, &no_connections);
+        let outcome = player.step(Some(Direction::East), &runtime, &no_connections, &NO_FLAGS);
         assert_eq!(outcome, StepOutcome::Turned(Direction::East));
         assert_eq!(
             player.position(),
@@ -468,7 +538,7 @@ mod tests {
         assert!(!player.in_transit());
 
         // Holding the same (now-facing) direction next poll steps.
-        let outcome = player.step(Some(Direction::East), &runtime, &no_connections);
+        let outcome = player.step(Some(Direction::East), &runtime, &no_connections, &NO_FLAGS);
         assert_eq!(
             outcome,
             StepOutcome::Advanced {
@@ -502,7 +572,7 @@ mod tests {
         let mut player = PlayerState::new((2, 2), 3, Direction::South);
         // Start a south step, then let the walk animation finish.
         assert!(matches!(
-            player.step(Some(Direction::South), &runtime, &no_connections),
+            player.step(Some(Direction::South), &runtime, &no_connections, &NO_FLAGS),
             StepOutcome::Advanced { .. }
         ));
         for _ in 0..WALK_FRAMES_PER_TILE {
@@ -513,7 +583,7 @@ mod tests {
         // Still "moving" (held South continuously); now change to East. Per
         // CheckMovementInputNotOnBike, `runningState == MOVING` short-circuits the
         // turn-in-place branch, so this steps East immediately rather than turning.
-        let outcome = player.step(Some(Direction::East), &runtime, &no_connections);
+        let outcome = player.step(Some(Direction::East), &runtime, &no_connections, &NO_FLAGS);
         assert_eq!(
             outcome,
             StepOutcome::Advanced {
@@ -546,7 +616,7 @@ mod tests {
 
         let mut player = PlayerState::new((2, 2), 3, Direction::South);
         assert!(matches!(
-            player.step(Some(Direction::South), &runtime, &no_connections),
+            player.step(Some(Direction::South), &runtime, &no_connections, &NO_FLAGS),
             StepOutcome::Advanced { .. }
         ));
 
@@ -555,13 +625,13 @@ mod tests {
         // cannot reset runningState to NOT_MOVING during these polls.
         for _ in 0..WALK_FRAMES_PER_TILE {
             assert_eq!(
-                player.step(None, &runtime, &no_connections),
+                player.step(None, &runtime, &no_connections, &NO_FLAGS),
                 StepOutcome::Idle
             );
             player.tick();
         }
 
-        let outcome = player.step(Some(Direction::East), &runtime, &no_connections);
+        let outcome = player.step(Some(Direction::East), &runtime, &no_connections, &NO_FLAGS);
         assert_eq!(
             outcome,
             StepOutcome::Advanced {
@@ -594,7 +664,7 @@ mod tests {
 
         let mut player = PlayerState::new((2, 2), 3, Direction::South);
         assert!(matches!(
-            player.step(Some(Direction::South), &runtime, &no_connections),
+            player.step(Some(Direction::South), &runtime, &no_connections, &NO_FLAGS),
             StepOutcome::Advanced { .. }
         ));
         for _ in 0..WALK_FRAMES_PER_TILE {
@@ -602,11 +672,11 @@ mod tests {
         }
         // Release input for one poll.
         assert_eq!(
-            player.step(None, &runtime, &no_connections),
+            player.step(None, &runtime, &no_connections, &NO_FLAGS),
             StepOutcome::Idle
         );
         // A new direction now turns first rather than stepping immediately.
-        let outcome = player.step(Some(Direction::East), &runtime, &no_connections);
+        let outcome = player.step(Some(Direction::East), &runtime, &no_connections, &NO_FLAGS);
         assert_eq!(outcome, StepOutcome::Turned(Direction::East));
     }
 
@@ -633,12 +703,12 @@ mod tests {
 
         let mut player = PlayerState::new((2, 2), 3, Direction::South);
         assert!(matches!(
-            player.step(Some(Direction::South), &runtime, &no_connections),
+            player.step(Some(Direction::South), &runtime, &no_connections, &NO_FLAGS),
             StepOutcome::Advanced { .. }
         ));
         // Immediately try to step again before ticking: busy, no-op.
         assert_eq!(
-            player.step(Some(Direction::East), &runtime, &no_connections),
+            player.step(Some(Direction::East), &runtime, &no_connections, &NO_FLAGS),
             StepOutcome::Idle
         );
         assert_eq!(
@@ -671,7 +741,7 @@ mod tests {
         );
 
         let mut player = PlayerState::new((2, 2), 3, Direction::South);
-        let outcome = player.step(Some(Direction::South), &runtime, &no_connections);
+        let outcome = player.step(Some(Direction::South), &runtime, &no_connections, &NO_FLAGS);
         assert_eq!(
             outcome,
             StepOutcome::Blocked {
@@ -749,7 +819,7 @@ mod tests {
         );
 
         let mut player = PlayerState::new((2, 2), 3, Direction::South);
-        let outcome = player.step(Some(Direction::South), &runtime, &no_connections);
+        let outcome = player.step(Some(Direction::South), &runtime, &no_connections, &NO_FLAGS);
         assert_eq!(
             outcome,
             StepOutcome::Blocked {
@@ -834,7 +904,8 @@ mod tests {
         let mut player = PlayerState::new((2, 1), 3, Direction::South);
         // Step onto the transition tile: allowed, elevation becomes the
         // wildcard 0.
-        let onto_transition = player.step(Some(Direction::South), &runtime, &no_connections);
+        let onto_transition =
+            player.step(Some(Direction::South), &runtime, &no_connections, &NO_FLAGS);
         assert!(matches!(onto_transition, StepOutcome::Advanced { .. }));
         assert_eq!(player.elevation(), 0);
         for _ in 0..WALK_FRAMES_PER_TILE {
@@ -842,7 +913,7 @@ mod tests {
         }
         // Step from the transition tile onto elevation 5: the wildcard
         // permits it (upstream would block 3 → 5 directly).
-        let onto_upper = player.step(Some(Direction::South), &runtime, &no_connections);
+        let onto_upper = player.step(Some(Direction::South), &runtime, &no_connections, &NO_FLAGS);
         assert!(matches!(onto_upper, StepOutcome::Advanced { .. }));
         assert_eq!(player.position(), (2, 3));
         assert_eq!(player.elevation(), 5);
@@ -863,7 +934,7 @@ mod tests {
         };
 
         let mut player = PlayerState::new((2, 4), 3, Direction::South);
-        let outcome = player.step(Some(Direction::South), &runtime, &maps);
+        let outcome = player.step(Some(Direction::South), &runtime, &maps, &NO_FLAGS);
         assert_eq!(
             outcome,
             StepOutcome::Crossed {
@@ -891,7 +962,7 @@ mod tests {
         let mut player = PlayerState::new((2, 4), 3, Direction::South);
 
         assert_eq!(
-            player.step(Some(Direction::South), &runtime, &maps),
+            player.step(Some(Direction::South), &runtime, &maps, &NO_FLAGS),
             StepOutcome::Blocked {
                 direction: Direction::South,
                 collision: super::super::collision::Collision::Impassable,
@@ -917,7 +988,7 @@ mod tests {
         let mut player = PlayerState::new((2, 4), 3, Direction::South);
 
         assert_eq!(
-            player.step(Some(Direction::South), &runtime, &maps),
+            player.step(Some(Direction::South), &runtime, &maps, &NO_FLAGS),
             StepOutcome::Blocked {
                 direction: Direction::South,
                 collision: super::super::collision::Collision::ElevationMismatch,
@@ -949,7 +1020,7 @@ mod tests {
         );
 
         let mut player = PlayerState::new((2, 4), 3, Direction::South);
-        let outcome = player.step(Some(Direction::South), &runtime, &no_connections);
+        let outcome = player.step(Some(Direction::South), &runtime, &no_connections, &NO_FLAGS);
         assert_eq!(
             outcome,
             StepOutcome::Blocked {
@@ -958,5 +1029,347 @@ mod tests {
             }
         );
         assert_eq!(player.position(), (2, 4));
+    }
+
+    // -- Object-event collision (COLLISION_OBJECT_EVENT) ------------------
+    //
+    // Upstream `GetCollisionAtCoords`' last test,
+    // `DoesObjectCollideWithObjectAt` (`event_object_movement.c:4658-4672`,
+    // `:4724-4742`). See `PlayerState::step`'s own "# Collision" section.
+
+    /// A stationary object event at `(x, y, elevation)` with hide flag
+    /// `flag` (`"0"` for the never-hidden sentinel). Only the four fields
+    /// collision reads carry meaning; the rest are inert filler.
+    fn object(local_id: u8, x: i16, y: i16, elevation: u8, flag: &'static str) -> ObjectEvent {
+        ObjectEvent {
+            local_id,
+            graphics_id: "OBJ_EVENT_GFX_MOM",
+            x,
+            y,
+            elevation,
+            movement_type: assets::MovementType::FaceDown,
+            movement_range_x: 0,
+            movement_range_y: 0,
+            trainer_type: assets::TrainerType::None,
+            trainer_sight_or_berry_tree_id: "0",
+            script: "0x0",
+            flag,
+        }
+    }
+
+    /// A leaked-`'static` 10x10 flat (elevation 3) map carrying `events`,
+    /// with `collision_at` deciding each cell's collision bits.
+    fn runtime_with_events(
+        events: &'static MapEvents,
+        collision_at: impl Fn(u16, u16) -> u8,
+    ) -> MapRuntime<'static> {
+        let (bytes, header, _) = flat_runtime(10, 10, collision_at);
+        let bytes: &'static [u8] = Box::leak(bytes.into_boxed_slice());
+        let header: &'static MapHeader = Box::leak(Box::new(header));
+        let layout: &'static assets::MapLayout = Box::leak(Box::new(assets::MapLayout {
+            id: assets::LayoutId("MAP_TEST"),
+            name: "MapTest",
+            width: 10,
+            height: 10,
+            primary_tileset: "gTileset_General",
+            secondary_tileset: "gTileset_General",
+        }));
+        let grid = layout.grid(bytes).unwrap();
+        MapRuntime::new(
+            assets::MapId("MAP_TEST"),
+            header,
+            events,
+            grid,
+            MetatileAttributeTable::new(&[]),
+            MetatileAttributeTable::new(&[]),
+        )
+    }
+
+    /// [`runtime_with_events`] over a synthetic object-event list, on a map
+    /// with no walls anywhere.
+    fn runtime_with_objects(object_events: &'static [ObjectEvent]) -> MapRuntime<'static> {
+        let events: &'static MapEvents = Box::leak(Box::new(MapEvents {
+            id: assets::MapId("MAP_TEST"),
+            shared_events_map: None,
+            object_events,
+            warp_events: &[],
+            coord_events: &[],
+            bg_events: &[],
+        }));
+        runtime_with_events(events, |_, _| 0)
+    }
+
+    /// The headline regression: a visible object event occupies its tile,
+    /// so a step into it is denied. Before this, holding a direction walked
+    /// the avatar straight through an NPC.
+    ///
+    /// Also pins the *turn* half, mirroring
+    /// [`collision_bit_blocks_the_step_and_leaves_position_unchanged`]:
+    /// `PlayerNotOnBikeCollide` (`field_player_avatar.c:1011-1015`) plays a
+    /// walk-in-place animation in the attempted direction, so the avatar
+    /// ends up facing what it bumped into -- an NPC blocks exactly like a
+    /// wall does, no more and no less.
+    #[test]
+    fn a_visible_object_event_blocks_the_step_and_leaves_the_player_facing_it() {
+        let objects: &'static [ObjectEvent] = Box::leak(Box::new([object(1, 2, 3, 3, "0")]));
+        let runtime = runtime_with_objects(objects);
+
+        // Facing North, so a fresh South press turns first (the ordinary
+        // CheckMovementInputNotOnBike rule -- unchanged by this fix).
+        let mut player = PlayerState::new((2, 2), 3, Direction::North);
+        assert_eq!(
+            player.step(Some(Direction::South), &runtime, &no_connections, &NO_FLAGS),
+            StepOutcome::Turned(Direction::South)
+        );
+
+        // Now the step itself: denied, with the avatar left facing the NPC.
+        assert_eq!(
+            player.step(Some(Direction::South), &runtime, &no_connections, &NO_FLAGS),
+            StepOutcome::Blocked {
+                direction: Direction::South,
+                collision: super::super::collision::Collision::ObjectEvent,
+            }
+        );
+        assert_eq!(
+            player.position(),
+            (2, 2),
+            "a step into an occupied tile must not move the player"
+        );
+        assert_eq!(player.facing(), Direction::South);
+        assert!(
+            !player.in_transit(),
+            "a blocked step must not start a transition"
+        );
+
+        // And it stays blocked while the direction is held -- not a
+        // one-frame hiccup the next poll walks through.
+        for _ in 0..4 {
+            assert!(matches!(
+                player.step(Some(Direction::South), &runtime, &no_connections, &NO_FLAGS),
+                StepOutcome::Blocked {
+                    collision: super::super::collision::Collision::ObjectEvent,
+                    ..
+                }
+            ));
+            assert_eq!(player.position(), (2, 2));
+        }
+    }
+
+    /// The other half of the same rule: upstream scans *spawned* object
+    /// events, and `TrySpawnObjectEvents` skips any template whose hide
+    /// flag is set (`event_object_movement.c:1670-1672`) -- so a hidden NPC
+    /// is not there to collide with. Identical fixture to the test above,
+    /// only the flag differing.
+    #[test]
+    fn a_hidden_object_event_does_not_block_the_step() {
+        let objects: &'static [ObjectEvent] = Box::leak(Box::new([object(
+            1,
+            2,
+            3,
+            3,
+            "FLAG_HIDE_LITTLEROOT_TOWN_BRENDANS_HOUSE_RIVAL_BEDROOM",
+        )]));
+        let runtime = runtime_with_objects(objects);
+        let mut data = EventData::new();
+        // FLAG_HIDE_LITTLEROOT_TOWN_BRENDANS_HOUSE_RIVAL_BEDROOM (0x2F8).
+        data.flag_set(0x2F8).unwrap();
+
+        let mut player = PlayerState::new((2, 2), 3, Direction::South);
+        assert_eq!(
+            player.step(Some(Direction::South), &runtime, &no_connections, &data),
+            StepOutcome::Advanced {
+                from: (2, 2),
+                to: (2, 3),
+            },
+            "a hidden template was never spawned upstream, so it cannot block"
+        );
+        assert_eq!(player.position(), (2, 3));
+    }
+
+    /// `AreElevationsCompatible` (`event_object_movement.c:7789-7797`): two
+    /// objects at different, concrete elevations do not collide -- and the
+    /// `ELEVATION_TRANSITION` (0) wildcard on either side means they do.
+    /// Note the comparison is mover-elevation vs. object-elevation, *not*
+    /// against the destination cell's ground elevation (which this fixture
+    /// holds at 3 throughout).
+    #[test]
+    fn object_event_collision_respects_the_elevation_wildcard() {
+        // Concrete 5 vs. the player's 3: incompatible, no collision.
+        let upstairs: &'static [ObjectEvent] = Box::leak(Box::new([object(1, 2, 3, 5, "0")]));
+        let mut player = PlayerState::new((2, 2), 3, Direction::South);
+        assert!(matches!(
+            player.step(
+                Some(Direction::South),
+                &runtime_with_objects(upstairs),
+                &no_connections,
+                &NO_FLAGS
+            ),
+            StepOutcome::Advanced { .. }
+        ));
+
+        // The same object at ELEVATION_TRANSITION: the wildcard makes every
+        // elevation compatible, so it collides.
+        let transitional: &'static [ObjectEvent] = Box::leak(Box::new([object(
+            1,
+            2,
+            3,
+            super::super::collision::ELEVATION_TRANSITION,
+            "0",
+        )]));
+        let mut player = PlayerState::new((2, 2), 3, Direction::South);
+        assert_eq!(
+            player.step(
+                Some(Direction::South),
+                &runtime_with_objects(transitional),
+                &no_connections,
+                &NO_FLAGS
+            ),
+            StepOutcome::Blocked {
+                direction: Direction::South,
+                collision: super::super::collision::Collision::ObjectEvent,
+            }
+        );
+    }
+
+    /// `GetCollisionAtCoords` tests the grid's collision bits *before*
+    /// `DoesObjectCollideWithObjectAt` (`event_object_movement.c:4658-4672`),
+    /// so a tile that is both walled and occupied reports
+    /// `COLLISION_IMPASSABLE`. Reordering the checks in
+    /// [`PlayerState::step`] fails here.
+    #[test]
+    fn a_wall_outranks_an_object_event_on_the_same_tile() {
+        let objects: &'static [ObjectEvent] = Box::leak(Box::new([object(1, 2, 3, 3, "0")]));
+        let events: &'static MapEvents = Box::leak(Box::new(MapEvents {
+            id: assets::MapId("MAP_TEST"),
+            shared_events_map: None,
+            object_events: objects,
+            warp_events: &[],
+            coord_events: &[],
+            bg_events: &[],
+        }));
+        let runtime = runtime_with_events(events, |x, y| u8::from(x == 2 && y == 3));
+
+        let mut player = PlayerState::new((2, 2), 3, Direction::South);
+        assert_eq!(
+            player.step(Some(Direction::South), &runtime, &no_connections, &NO_FLAGS),
+            StepOutcome::Blocked {
+                direction: Direction::South,
+                collision: super::super::collision::Collision::Impassable,
+            }
+        );
+    }
+
+    /// The finding-1/finding-2 intersection: templates stacked on one tile
+    /// with independent hide flags (the Birch lab's three starter balls, all
+    /// at `(6, 8)`). Testing visibility *after* picking the first positional
+    /// match would read the hidden first template, conclude "nothing there",
+    /// and let the player walk through the ball that is actually on screen.
+    /// Whether the tile blocks must depend on whether *any* template there is
+    /// visible, not on the first one declared.
+    #[test]
+    fn a_hidden_first_stack_blocks_only_while_some_template_on_the_tile_is_visible() {
+        let objects: &'static [ObjectEvent] = Box::leak(Box::new([
+            object(
+                1,
+                2,
+                3,
+                3,
+                "FLAG_HIDE_LITTLEROOT_TOWN_BIRCHS_LAB_POKEBALL_CYNDAQUIL",
+            ),
+            object(
+                2,
+                2,
+                3,
+                3,
+                "FLAG_HIDE_LITTLEROOT_TOWN_BIRCHS_LAB_POKEBALL_TOTODILE",
+            ),
+        ]));
+        let runtime = runtime_with_objects(objects);
+
+        // Only the first is hidden: the second is on screen, so the tile is
+        // occupied.
+        let mut data = EventData::new();
+        let cyndaquil = assets::object_event_flags::resolve(
+            "FLAG_HIDE_LITTLEROOT_TOWN_BIRCHS_LAB_POKEBALL_CYNDAQUIL",
+        )
+        .expect("a real FLAG_HIDE_* name must resolve");
+        let totodile = assets::object_event_flags::resolve(
+            "FLAG_HIDE_LITTLEROOT_TOWN_BIRCHS_LAB_POKEBALL_TOTODILE",
+        )
+        .expect("a real FLAG_HIDE_* name must resolve");
+        data.flag_set(cyndaquil).unwrap();
+
+        let mut player = PlayerState::new((2, 2), 3, Direction::South);
+        assert_eq!(
+            player.step(Some(Direction::South), &runtime, &no_connections, &data),
+            StepOutcome::Blocked {
+                direction: Direction::South,
+                collision: super::super::collision::Collision::ObjectEvent,
+            },
+            "the visible second template occupies the tile even though the \
+             first one declared there is hidden"
+        );
+
+        // Hide the second one too and the tile frees up -- which is what
+        // makes the assertion above about *visibility*, not merely about
+        // scanning past the first entry.
+        data.flag_set(totodile).unwrap();
+        let mut player = PlayerState::new((2, 2), 3, Direction::South);
+        assert!(matches!(
+            player.step(Some(Direction::South), &runtime, &no_connections, &data),
+            StepOutcome::Advanced { .. }
+        ));
+    }
+
+    /// Real-data regression, no pack needed: the bundled
+    /// `MAP_LITTLEROOT_TOWN_BRENDANS_HOUSE_1F` event table places Mom
+    /// (`OBJ_EVENT_GFX_MOM`) at `(2, 6)`
+    /// (`data/maps/LittlerootTown_BrendansHouse_1F/map.json`), and
+    /// `EventScript_ResetAllMapFlags` does *not* hide her, so on a fresh
+    /// save she is standing there. Walking north into her tile must stop the
+    /// player on `(2, 7)`, facing her -- the exact "holding Up walks through
+    /// Mom" bug this fixes. Only the map's real *event* data is used; the
+    /// layout under it is a synthetic open grid, so no extracted pack is
+    /// involved.
+    #[test]
+    fn mom_blocks_a_step_into_her_tile_in_brendans_house_1f() {
+        let events = assets::MapEventsTable::new()
+            .resolve(assets::MapId("MAP_LITTLEROOT_TOWN_BRENDANS_HOUSE_1F"))
+            .expect("a bundled map must resolve in the generated table");
+        let mom = events
+            .object_events
+            .iter()
+            .find(|o| o.graphics_id == "OBJ_EVENT_GFX_MOM")
+            .expect("1F's object events include Mom");
+        assert_eq!(
+            (mom.x, mom.y, mom.elevation),
+            (2, 6, 3),
+            "fixture precondition: Mom's real map.json position"
+        );
+
+        let mut data = EventData::new();
+        for &id in assets::RESET_MAP_FLAGS {
+            data.flag_set(id).unwrap();
+        }
+        assert!(
+            super::super::object_event::object_event_is_visible(mom, &data),
+            "fixture precondition: a fresh save does not hide Mom"
+        );
+
+        let runtime = runtime_with_events(events, |_, _| 0);
+        let mut player = PlayerState::new((2, 7), 3, Direction::North);
+        assert_eq!(
+            player.step(Some(Direction::North), &runtime, &no_connections, &data),
+            StepOutcome::Blocked {
+                direction: Direction::North,
+                collision: super::super::collision::Collision::ObjectEvent,
+            }
+        );
+        assert_eq!(
+            player.position(),
+            (2, 7),
+            "the player must stop on the tile adjacent to Mom"
+        );
+        assert_eq!(player.facing(), Direction::North);
     }
 }

@@ -213,7 +213,12 @@ impl OverworldPhase {
             MapEventsTable::new().resolve(self.map_id),
         ) {
             let runtime = self.scene.runtime(self.map_id, header, events);
-            let outcome = advance_player_one_frame(&mut self.player, direction, &runtime);
+            let outcome = advance_player_one_frame(
+                &mut self.player,
+                direction,
+                &runtime,
+                &self.save1.event_data,
+            );
 
             match outcome {
                 StepOutcome::Advanced { to, .. } => self.pending_landing = Some(to),
@@ -530,9 +535,10 @@ fn advance_player_one_frame(
     player: &mut PlayerState,
     direction: Option<Direction>,
     runtime: &engine::overworld::MapRuntime<'_>,
+    event_data: &engine::event_data::EventData,
 ) -> StepOutcome {
     let no_connections = |_: assets::MapId| -> Option<(u16, u16)> { None };
-    let outcome = player.step(direction, runtime, &no_connections);
+    let outcome = player.step(direction, runtime, &no_connections, event_data);
     player.tick();
     outcome
 }

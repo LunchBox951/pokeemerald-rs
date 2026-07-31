@@ -4,11 +4,19 @@ use super::{advance_player_one_frame, held_direction, warp_data_index, Overworld
 use crate::flow::tests::held;
 use crate::new_game;
 use assets::{MapEvents, MapHeader, MapId, MapLayout, MetatileCell};
+use engine::event_data::EventData;
 use engine::overworld::metatile_behavior::{
     MB_ANIMATED_DOOR, MB_NON_ANIMATED_DOOR, MB_SOUTH_ARROW_WARP,
 };
 use engine::overworld::{warp_in_facing, Direction, MapRuntime, PlayerState, WALK_FRAMES_PER_TILE};
 use platform::{ButtonState, Buttons};
+
+/// A fresh event-flag store: nothing hidden. Used by the
+/// [`advance_player_one_frame`] tests below, whose fixture map
+/// ([`flat_runtime`]) has no object events at all -- the phase-level tests
+/// instead go through [`OverworldPhase::step`], which threads the phase's
+/// own real save state.
+const NO_FLAGS: EventData = EventData::new();
 
 /// A single freshly-pressed button this frame (`is_newly_pressed` true,
 /// unlike `crate::flow::tests::held`'s deliberately *not*-fresh two-frame
@@ -115,6 +123,18 @@ fn flat_runtime(width: u16, height: u16) -> MapRuntime<'static> {
 /// `PlayersHouse_1F_EventScript_Mom`, the one
 /// [`crate::overworld::npc_scripts::script_text`] recognizes) and the
 /// rival's mom at `(2, 7)`, both visible on a fresh save.
+///
+/// Those object events are *solid* (issue #161's collision fix — see
+/// [`engine::overworld::PlayerState::step`]'s "# Collision" section), so
+/// the routes below deliberately avoid occupied tiles. Under
+/// `EventScript_ResetAllMapFlags` (which
+/// [`OverworldPhase::for_test`]'s save state applies) exactly five of this
+/// map's seven object events are visible and therefore block:
+/// `(2, 6)` Mom, `(2, 7)` the rival's mom, `(1, 3)` and `(4, 5)` the two
+/// Vigoroth, and `(1, 5)` the rival's sibling. The remaining two — Dad at
+/// `(5, 6)` (`FLAG_HIDE_PLAYERS_HOUSE_DAD`) and the rival at `(8, 8)`
+/// (`FLAG_HIDE_LITTLEROOT_TOWN_BRENDANS_HOUSE_BRENDAN`) — are hidden by
+/// that script (`pokeemerald/data/scripts/new_game.inc`) and do not.
 const ONE_F: MapId = MapId("MAP_LITTLEROOT_TOWN_BRENDANS_HOUSE_1F");
 
 /// An [`OverworldPhase`] over a **synthetic** 10x10 open room
@@ -152,16 +172,22 @@ fn runtime_for(phase: &OverworldPhase) -> MapRuntime<'_> {
 /// position, same facing, same fresh A edge, only
 /// [`PlayerState::in_transit`] differing: mid-step must find nothing, at
 /// rest must find Mom.
+///
+/// Approaches Mom from the east rather than from the south: `(2, 7)`, the
+/// tile directly below her, is the rival's mom's own tile and is now solid
+/// ([`ONE_F`]'s docs), so a step onto it would be denied before the
+/// interaction under test could even be reached. `(3, 6)` and `(4, 6)` are
+/// both clear of visible object events.
 #[test]
 fn a_pressed_mid_step_is_discarded_and_the_same_press_at_rest_interacts() {
-    // One tile south of the rival's mom, two south of Mom, facing north.
-    let mut phase = synthetic_phase(PlayerState::new((2, 8), 3, Direction::North), None);
+    // Two tiles east of Mom, facing west.
+    let mut phase = synthetic_phase(PlayerState::new((4, 6), 3, Direction::West), None);
 
-    // Already facing north, so a held Up steps immediately onto (2, 7) --
+    // Already facing west, so a held Left steps immediately onto (3, 6) --
     // the tile from which Mom, at (2, 6), is directly ahead.
-    phase.step(held(Buttons::UP));
-    assert_eq!(phase.player.position(), (2, 7));
-    assert_eq!(phase.player.facing(), Direction::North);
+    phase.step(held(Buttons::LEFT));
+    assert_eq!(phase.player.position(), (3, 6));
+    assert_eq!(phase.player.facing(), Direction::West);
     assert!(
         phase.player.in_transit(),
         "the step's walk animation must still be running"
@@ -182,8 +208,8 @@ fn a_pressed_mid_step_is_discarded_and_the_same_press_at_rest_interacts() {
         phase.step(ButtonState::new());
     }
     assert!(!phase.player.in_transit(), "the crossing must have settled");
-    assert_eq!(phase.player.position(), (2, 7), "same tile as above");
-    assert_eq!(phase.player.facing(), Direction::North, "same facing");
+    assert_eq!(phase.player.position(), (3, 6), "same tile as above");
+    assert_eq!(phase.player.facing(), Direction::West, "same facing");
 
     {
         let runtime = runtime_for(&phase);
@@ -219,14 +245,17 @@ fn an_open_dialog_freezes_movement_until_it_closes() {
         Token::End,
     ]);
     // Facing south already, so an un-frozen held Down would step
-    // immediately -- no turn-in-place frame to absorb it.
-    let mut phase = synthetic_phase(PlayerState::new((4, 4), 3, Direction::South), Some(dialog));
+    // immediately -- no turn-in-place frame to absorb it. (7, 5), the tile
+    // below, is clear of visible object events, so this test measures the
+    // dialog freeze and nothing else -- unlike (4, 5), which a Vigoroth now
+    // occupies solidly; see [`ONE_F`]'s docs.
+    let mut phase = synthetic_phase(PlayerState::new((7, 4), 3, Direction::South), Some(dialog));
 
     for _ in 0..WALK_FRAMES_PER_TILE {
         phase.step(held(Buttons::DOWN));
         assert_eq!(
             phase.player.position(),
-            (4, 4),
+            (7, 4),
             "movement must be frozen while a dialog is open"
         );
         assert!(!phase.player.in_transit(), "no step may even have started");
@@ -254,8 +283,100 @@ fn an_open_dialog_freezes_movement_until_it_closes() {
     phase.step(held(Buttons::DOWN));
     assert_eq!(
         phase.player.position(),
-        (4, 5),
+        (7, 5),
         "ordinary movement must resume once the box has closed"
+    );
+}
+
+/// The finding-1 regression at the phase level, on real map data: holding a
+/// direction into a visible NPC must stop the player on the adjacent tile.
+/// Before object-event collision landed, [`OverworldPhase::step`] walked the
+/// avatar straight through Mom.
+///
+/// Uses [`ONE_F`]'s real object events (Mom at `(2, 6)`, visible on a fresh
+/// save) over a synthetic open layout, so no extracted pack is needed --
+/// every tile on the approach is walkable as far as the *grid* is
+/// concerned, which is what makes the stop attributable to Mom alone.
+#[test]
+fn holding_a_direction_into_a_visible_npc_stops_the_player_adjacent_to_it() {
+    // Two tiles below Mom, facing north; (2, 7) is the rival's mom's tile,
+    // so approach from the east instead: (4, 6) -> (3, 6) -> blocked by Mom.
+    let mut phase = synthetic_phase(PlayerState::new((4, 6), 3, Direction::West), None);
+
+    // First step lands on (3, 6), the tile east of Mom.
+    phase.step(held(Buttons::LEFT));
+    for _ in 1..WALK_FRAMES_PER_TILE {
+        phase.step(held(Buttons::LEFT));
+    }
+    assert_eq!(phase.player.position(), (3, 6));
+    assert!(!phase.player.in_transit());
+
+    // Keep holding: every further poll is denied, and the player never
+    // reaches (2, 6). A generous budget, so this fails on *any* frame that
+    // lets the step through, not just the first.
+    for _ in 0..(4 * u32::from(WALK_FRAMES_PER_TILE)) {
+        phase.step(held(Buttons::LEFT));
+        assert_eq!(
+            phase.player.position(),
+            (3, 6),
+            "the player must stop on the tile adjacent to Mom, never enter hers"
+        );
+        assert!(
+            !phase.player.in_transit(),
+            "a blocked step must not start a walk animation"
+        );
+    }
+    assert_eq!(
+        phase.player.facing(),
+        Direction::West,
+        "bumping into an NPC leaves the avatar facing it (PlayerNotOnBikeCollide)"
+    );
+
+    // And that same standing position interacts, proving the stop is
+    // adjacency rather than the interaction lookup and the collision check
+    // disagreeing about where Mom is.
+    let runtime = runtime_for(&phase);
+    assert!(
+        phase
+            .interaction_tokens_this_frame(pressed(Buttons::A), &runtime)
+            .is_some(),
+        "the tile the player was stopped on must be the tile Mom is \
+         interactable from"
+    );
+}
+
+/// The complement, same fixture shape: a *hidden* object event does not
+/// block. `MAP_LITTLEROOT_TOWN_BRENDANS_HOUSE_1F`'s Dad
+/// (`OBJ_EVENT_GFX_NORMAN` at `(5, 6)`) is hidden by
+/// `EventScript_ResetAllMapFlags`' `setflag FLAG_HIDE_PLAYERS_HOUSE_DAD`
+/// (`pokeemerald/data/scripts/new_game.inc`), and upstream never spawns a
+/// hidden template (`event_object_movement.c:1670-1672`) -- so the player
+/// walks over his tile exactly as if it were empty.
+#[test]
+fn a_hidden_npcs_tile_is_walkable() {
+    let mut phase = synthetic_phase(PlayerState::new((5, 7), 3, Direction::North), None);
+    let dad = assets::MapEventsTable::new()
+        .resolve(ONE_F)
+        .unwrap()
+        .object_events
+        .iter()
+        .find(|o| o.graphics_id == "OBJ_EVENT_GFX_NORMAN")
+        .expect("1F's object events include Dad");
+    assert_eq!(
+        (dad.x, dad.y),
+        (5, 6),
+        "fixture precondition: Dad's real map.json position"
+    );
+    assert!(
+        !engine::overworld::object_event_is_visible(dad, &phase.save1().event_data),
+        "fixture precondition: a fresh save hides Dad"
+    );
+
+    phase.step(held(Buttons::UP));
+    assert_eq!(
+        phase.player.position(),
+        (5, 6),
+        "a hidden object event's tile must be walkable"
     );
 }
 
@@ -277,7 +398,7 @@ fn advance_player_one_frame_shows_progress_1_on_the_frame_a_step_begins_and_take
 
     // Facing South already; a held South poll steps immediately (no
     // turn-in-place first, since the direction already matches facing).
-    advance_player_one_frame(&mut player, Some(Direction::South), &runtime);
+    advance_player_one_frame(&mut player, Some(Direction::South), &runtime, &NO_FLAGS);
     assert_eq!(player.position(), (2, 3), "the step must have landed");
     assert!(player.in_transit());
     assert_eq!(
@@ -291,7 +412,7 @@ fn advance_player_one_frame_shows_progress_1_on_the_frame_a_step_begins_and_take
     // Every following frame advances the timer by exactly 1 while the
     // input stays held.
     for expected in 2..engine::overworld::WALK_FRAMES_PER_TILE {
-        advance_player_one_frame(&mut player, Some(Direction::South), &runtime);
+        advance_player_one_frame(&mut player, Some(Direction::South), &runtime, &NO_FLAGS);
         assert_eq!(player.step_progress(), expected);
     }
     assert!(
@@ -302,7 +423,7 @@ fn advance_player_one_frame_shows_progress_1_on_the_frame_a_step_begins_and_take
     // The 16th frame (this crossing's `WALK_FRAMES_PER_TILE`th) is the
     // one where the transit settles -- 16 rendered frames total to
     // cross one tile, not 17.
-    advance_player_one_frame(&mut player, Some(Direction::South), &runtime);
+    advance_player_one_frame(&mut player, Some(Direction::South), &runtime, &NO_FLAGS);
     assert!(
         !player.in_transit(),
         "the transit must settle on exactly the 16th frame"
@@ -319,7 +440,7 @@ fn advance_player_one_frame_turning_in_place_never_enters_transit() {
     let runtime = flat_runtime(5, 5);
     let mut player = PlayerState::new((2, 2), 3, Direction::South);
 
-    advance_player_one_frame(&mut player, Some(Direction::East), &runtime);
+    advance_player_one_frame(&mut player, Some(Direction::East), &runtime, &NO_FLAGS);
     assert_eq!(player.facing(), Direction::East, "must have turned");
     assert_eq!(player.position(), (2, 2), "a turn must not move the tile");
     assert!(!player.in_transit());

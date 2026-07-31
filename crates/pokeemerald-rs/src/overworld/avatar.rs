@@ -276,7 +276,13 @@ pub(super) fn player_entry(player: &PlayerState) -> OamEntry {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use engine::event_data::EventData;
     use engine::overworld::TilePos;
+
+    /// A fresh event-flag store: nothing hidden. This module's fixture map
+    /// carries no object events, so `PlayerState::step`'s object-event
+    /// collision check never consults it.
+    const NO_FLAGS: EventData = EventData::new();
     use rendering::Tileset;
 
     fn walking_sheet_image(pixels: &[u8]) -> ImageRef<'_> {
@@ -396,7 +402,7 @@ mod tests {
 
         let mut player = player_at((2, 2), Direction::South);
         assert!(matches!(
-            player.step(Some(Direction::South), &runtime, &no_connections),
+            player.step(Some(Direction::South), &runtime, &no_connections, &NO_FLAGS),
             engine::overworld::StepOutcome::Advanced { .. }
         ));
         assert_eq!(frame_for(&player), (FRAME_SOUTH_STEP, false));

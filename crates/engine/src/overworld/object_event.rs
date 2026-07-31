@@ -18,10 +18,22 @@
 //!   `GetInFrontOfPlayerPosition` (the facing-tile position, with its
 //!   own-tile-elevation wildcard rule) composed with
 //!   `event_object_movement.c`'s `GetObjectEventIdByPosition` /
-//!   `ObjectEventDoesElevationMatch` (already ported as
-//!   [`MapRuntime::object_event_at`](super::map_runtime::MapRuntime::object_event_at)
-//!   — this module only adds the facing-tile derivation and the hide-flag
-//!   gate on top of that existing lookup).
+//!   `ObjectEventDoesElevationMatch` (whose positional/elevation half is
+//!   [`MapRuntime::object_events_at`](super::map_runtime::MapRuntime::object_events_at)
+//!   — this module adds the facing-tile derivation and folds the hide-flag
+//!   gate *into* that scan, see [`visible_object_event_at`]).
+//! - **Occupancy for movement collision.**
+//!   `event_object_movement.c`'s `DoesObjectCollideWithObjectAt`
+//!   (`COLLISION_OBJECT_EVENT` in `GetCollisionAtCoords`) — the same
+//!   visible-object-at-a-tile query [`visible_object_event_at`] answers,
+//!   consumed by
+//!   [`PlayerState::step`](super::player::PlayerState::step). Upstream also
+//!   collides against an object's `previousCoords` (the tile a *walking*
+//!   NPC is vacating, so the player can't swap places with it mid-step);
+//!   this slice's object events never move (module docs' "stationary +
+//!   look-around only" scope, below), so `previousCoords` is always equal to
+//!   `currentCoords` and the extra term is unobservable — it becomes
+//!   reachable only when NPC movement lands.
 //!
 //! **Not ported** (recorded honestly in the ledger, not silently dropped):
 //! `TryStartInteractionScript`'s full fallback chain past the object-event
@@ -100,6 +112,46 @@ pub fn visible_object_events<'a>(
         .filter(move |event| object_event_is_visible(event, event_data))
 }
 
+/// The first *visible* object event at `(x, y, elevation)` on `runtime`'s
+/// map, or `None` — this port's stand-in for a `gObjectEvents` scan
+/// (`GetObjectEventIdByPosition`, `event_object_movement.c:2192-2207`;
+/// `DoesObjectCollideWithObjectAt`, `:4724-4742`).
+///
+/// **The hide-flag filter runs inside the scan, not on its result.**
+/// Upstream's scans only ever see object events that were *spawned*, and
+/// `TrySpawnObjectEvents` skips any template whose hide flag is set
+/// (`event_object_movement.c:1670-1672`; likewise
+/// `Unref_TryInitLocalObjectEvent`, `:1351`) — a hidden template is simply
+/// not in the array being scanned, so the scan's "first match" is the first
+/// *visible* match. Templates do stack on one tile with independent hide
+/// flags: the Birch lab declares its Cyndaquil, Totodile and Chikorita balls
+/// all at `(6, 8)` (`data/maps/LittlerootTown_ProfessorBirchsLab/map.json`),
+/// exactly one of which is ever unhidden. Testing visibility *after*
+/// picking the first positional match would therefore report "nothing here"
+/// for a tile that visibly holds a ball, and — since
+/// [`crate::overworld::player::PlayerState::step`] uses this same search —
+/// would also let the player walk through it.
+///
+/// [`MapRuntime::object_events_at`] supplies the positional/elevation half
+/// (which is upstream's `ObjectEventDoesElevationMatch` /
+/// `AreElevationsCompatible`, the same predicate both scans use), in
+/// map.json declaration order — the order this port has in place of
+/// upstream's `gObjectEvents` slot order, which for a freshly loaded map is
+/// the order `TrySpawnObjectEvents` filled the slots in, i.e. template
+/// order.
+#[must_use]
+pub fn visible_object_event_at<'a>(
+    runtime: &MapRuntime<'a>,
+    x: i32,
+    y: i32,
+    elevation: u8,
+    event_data: &EventData,
+) -> Option<&'a ObjectEvent> {
+    runtime
+        .object_events_at(x, y, elevation)
+        .find(|event| object_event_is_visible(event, event_data))
+}
+
 /// The object event directly in front of `player` (facing tile, one step
 /// away), if one exists and is currently visible — the object-event half of
 /// upstream's `TryStartInteractionScript`/`GetInteractedObjectEventScript`
@@ -135,8 +187,7 @@ pub fn facing_object_event<'a>(
         _ => ELEVATION_TRANSITION,
     };
 
-    let event = runtime.object_event_at(fx, fy, query_elevation)?;
-    object_event_is_visible(event, event_data).then_some(event)
+    visible_object_event_at(runtime, fx, fy, query_elevation, event_data)
 }
 
 /// An object event's initial spawn facing, keyed by its
@@ -348,7 +399,18 @@ mod tests {
         grid_bytes_at_elevation(width, height, 3)
     }
 
+    /// A [`MapRuntime`] over a 5x5 synthetic grid — the size every
+    /// hand-built fixture in this module uses.
     fn runtime_with_object<'a>(grid_bytes: &'a [u8], events: &'a MapEvents) -> MapRuntime<'a> {
+        runtime_sized(grid_bytes, events, 5, 5)
+    }
+
+    fn runtime_sized<'a>(
+        grid_bytes: &'a [u8],
+        events: &'a MapEvents,
+        width: u16,
+        height: u16,
+    ) -> MapRuntime<'a> {
         static HEADER: MapHeader = MapHeader {
             id: MapId("MAP_TEST"),
             group: 0,
@@ -370,8 +432,8 @@ mod tests {
         let layout = MapLayout {
             id: assets::LayoutId("MAP_TEST"),
             name: "MapTest",
-            width: 5,
-            height: 5,
+            width,
+            height,
             primary_tileset: "gTileset_General",
             secondary_tileset: "gTileset_General",
         };
@@ -517,6 +579,93 @@ mod tests {
         let found = facing_object_event(&player, &runtime, &data)
             .expect("an off-grid tile resolves to the transition wildcard, matching any elevation");
         assert_eq!(found.local_id, 1);
+    }
+
+    /// The finding-2 regression, on the real stacked-template data that
+    /// motivated it: `MAP_LITTLEROOT_TOWN_PROFESSOR_BIRCHS_LAB` declares its
+    /// Cyndaquil, Totodile and Chikorita balls all at `(6, 8)`, in that
+    /// order, each behind its own `FLAG_HIDE_*`
+    /// (`data/maps/LittlerootTown_ProfessorBirchsLab/map.json`). Upstream
+    /// only ever scans object events that were *spawned*, and
+    /// `TrySpawnObjectEvents` skips a template whose hide flag is set
+    /// (`event_object_movement.c:1670-1672`), so the ball the player sees is
+    /// the ball the interaction finds -- whichever of the three it is.
+    ///
+    /// Selecting the first positional match and *then* testing visibility
+    /// (the shape this replaced) returns `None` for every case below except
+    /// the first, reporting an empty tile while a ball is drawn on it. Only
+    /// the map's real event data is used; no pack, no rendering.
+    #[test]
+    fn a_hidden_first_stack_selects_the_first_visible_template_not_the_first_declared() {
+        let events = assets::MapEventsTable::new()
+            .resolve(MapId("MAP_LITTLEROOT_TOWN_PROFESSOR_BIRCHS_LAB"))
+            .expect("a bundled map must resolve in the generated table");
+        let balls: Vec<&ObjectEvent> = events
+            .object_events
+            .iter()
+            .filter(|o| (o.x, o.y) == (6, 8))
+            .collect();
+        assert_eq!(
+            balls.iter().map(|o| o.script).collect::<Vec<_>>(),
+            vec![
+                "LittlerootTown_ProfessorBirchsLab_EventScript_Cyndaquil",
+                "LittlerootTown_ProfessorBirchsLab_EventScript_Totodile",
+                "LittlerootTown_ProfessorBirchsLab_EventScript_Chikorita",
+            ],
+            "fixture precondition: three starter balls stacked on (6, 8), in \
+             this declaration order"
+        );
+
+        let grid_bytes = flat_grid_bytes(10, 10);
+        let runtime = runtime_sized(&grid_bytes, events, 10, 10);
+        let flag = |name: &'static str| {
+            assets::object_event_flags::resolve(name).expect("a real FLAG_HIDE_* name must resolve")
+        };
+        let cyndaquil = flag("FLAG_HIDE_LITTLEROOT_TOWN_BIRCHS_LAB_POKEBALL_CYNDAQUIL");
+        let totodile = flag("FLAG_HIDE_LITTLEROOT_TOWN_BIRCHS_LAB_POKEBALL_TOTODILE");
+        let chikorita = flag("FLAG_HIDE_LITTLEROOT_TOWN_BIRCHS_LAB_POKEBALL_CHIKORITA");
+
+        // Nothing hidden: the first declared template is also the first
+        // visible one, so this case never distinguished the two orders.
+        let mut data = EventData::new();
+        assert_eq!(
+            visible_object_event_at(&runtime, 6, 8, 3, &data).map(|o| o.script),
+            Some("LittlerootTown_ProfessorBirchsLab_EventScript_Cyndaquil")
+        );
+
+        // Hide the first: the visible Totodile ball must be found.
+        data.flag_set(cyndaquil).unwrap();
+        assert_eq!(
+            visible_object_event_at(&runtime, 6, 8, 3, &data).map(|o| o.script),
+            Some("LittlerootTown_ProfessorBirchsLab_EventScript_Totodile"),
+            "a hidden first template must be scanned past, not returned and \
+             then rejected"
+        );
+
+        // Hide the first two: the visible Chikorita ball must be found --
+        // the deepest case, which a "skip only one" fix would still miss.
+        data.flag_set(totodile).unwrap();
+        assert_eq!(
+            visible_object_event_at(&runtime, 6, 8, 3, &data).map(|o| o.script),
+            Some("LittlerootTown_ProfessorBirchsLab_EventScript_Chikorita")
+        );
+
+        // All three hidden: genuinely nothing there. This is what keeps the
+        // assertions above about *visibility* rather than about returning
+        // some arbitrary later entry.
+        data.flag_set(chikorita).unwrap();
+        assert!(visible_object_event_at(&runtime, 6, 8, 3, &data).is_none());
+
+        // And the same order drives interaction: standing south of the
+        // stack facing north with only Cyndaquil hidden must face the
+        // Totodile ball.
+        let mut data = EventData::new();
+        data.flag_set(cyndaquil).unwrap();
+        let player = PlayerState::new((6, 9), 3, Direction::North);
+        assert_eq!(
+            facing_object_event(&player, &runtime, &data).map(|o| o.script),
+            Some("LittlerootTown_ProfessorBirchsLab_EventScript_Totodile")
+        );
     }
 
     /// Every id [`assets::object_event_flags::resolve`] can ever return --
