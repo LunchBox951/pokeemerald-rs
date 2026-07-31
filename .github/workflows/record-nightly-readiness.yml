@@ -10,10 +10,6 @@ on:
         description: Full dev commit SHA that passed the official-ROM command
         required: true
         type: string
-      command:
-        description: Successful command description (never include the ROM path)
-        required: true
-        type: string
 
 permissions:
   checks: read
@@ -68,7 +64,6 @@ jobs:
       - name: Publish SHA-bound readiness
         env:
           CANDIDATE_SHA: ${{ inputs.candidate_sha }}
-          COMMAND: ${{ inputs.command }}
           REPOSITORY: ${{ github.repository }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
@@ -83,5 +78,5 @@ jobs:
             -f target_url="${RUN_URL}"
           # The backticks are Markdown, not shell expansion.
           # shellcheck disable=SC2016
-          printf '### Nightly candidate ready\n\n- Commit: `%s`\n- Command: `%s`\n' \
-            "${CANDIDATE_SHA}" "${COMMAND}" >>"${GITHUB_STEP_SUMMARY}"
+          printf '### Nightly candidate ready\n\n- Commit: `%s`\n- Birch official-ROM validation passed.\n' \
+            "${CANDIDATE_SHA}" >>"${GITHUB_STEP_SUMMARY}"
