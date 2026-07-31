@@ -5241,6 +5241,12 @@
     },
     "data/maps/InsideOfTruck": {
       "artifacts": {
+        "InsideOfTruck_EventScript_SetIntroFlags": {
+          "reason": "The gender branch of the truck's exit-tile trigger, ported as its flag/var effect: assets::new_game_flags::TRUCK_INTRO_FLAGS_MALE/_FEMALE (5 setflags each) and TRUCK_INTRO_VARS_MALE/_FEMALE (VAR_LITTLEROOT_INTRO_STATE, VAR_LITTLEROOT_HOUSES_STATE_BRENDAN/_MAY), applied by crate::new_game::apply_truck_intro_flags at new-game init. Upstream this is a coord (trigger) event on all three truck exit tiles gated on VAR_LITTLEROOT_INTRO_STATE == 0 (data/maps/InsideOfTruck/map.json:85-112), so it fires exactly once on the way out of the truck and every real playthrough passes through it before reaching a house; this port skips the truck sequence entirely, so new-game init is the point the skipped flow would have produced the effect -- same 'the effect, without an interpreter' shape as the EventScript_ResetAllMapFlags application beside it. Load-bearing rather than cosmetic now that object-event visibility gates collision and rendering (issue #161): without it a fresh save reaches the player's house with the rival's Poke Ball spawned in the bedroom as an invisible collider and the rival's mother and sibling spawned in the player's own 1F (a duplicated mother plus another undrawn blocker). The two branches are exact Brendan/May mirrors, and a playerGender byte outside MALE/FEMALE applies neither, matching the script's own missing else. Not modelled: setrespawn HEAL_LOCATION_LITTLEROOT_TOWN_{BRENDANS,MAYS}_HOUSE_2F (no heal-location save state), setdynamicwarp MAP_LITTLEROOT_TOWN (no dynamic-warp destination state), the lockall/releaseall pair, and setflag FLAG_HIDE_MAP_NAME_POPUP (outside both gender branches; no map-name popup is rendered). The rest of this file -- InsideOfTruck_OnLoad's setmetatile calls, InsideOfTruck_OnResume's STEP_CB_TRUCK step callback, and the moving-box sign -- is untouched: the truck map itself is not bundled.",
+          "rust_target": "crates/assets/src/new_game_flags.rs",
+          "spec": "I-3",
+          "status": "stubbed"
+        },
         "header": {
           "reason": "map.json header fields (id, layout, music id, region_map_section, requires_flash, weather, map_type, allow_cycling/escaping/running, show_map_name, battle_scene) and connections transcribed to a typed MapHeader in crates/assets/src/map_headers.rs. object_events/warp_events/coord_events/bg_events (and shared_events_map/shared_scripts_map) are NOT covered here — issue #77 — so the file's own status stays pending and only this 'header' artifact is terminal.",
           "rust_target": "crates/assets/src/map_headers.rs",
@@ -26668,6 +26674,12 @@
           "rust_target": "crates/engine/src/script/commands.rs",
           "spec": "S-5",
           "status": "rewritten"
+        },
+        "ScrCmd_checkplayergender": {
+          "fold_target": "crates/pokeemerald-rs/src/new_game.rs",
+          "reason": "gSpecialVar_Result = gSaveBlock2Ptr->playerGender (src/scrcmd.c:2014-2018) has no standalone counterpart: this port has no script interpreter and no gSpecialVar_Result, so the one checkplayergender consumer it reproduces -- InsideOfTruck_EventScript_SetIntroFlags' goto_if_eq VAR_RESULT, MALE/FEMALE pair -- becomes a direct match on SaveBlock2::player_gender in new_game::apply_truck_intro_flags. The command's observable semantics are preserved exactly, including that it copies the RAW byte (so a gender outside MALE/FEMALE matches neither branch, which the PlayerGender::Other arm reproduces as a no-op).",
+          "spec": "I-3",
+          "status": "folded"
         },
         "ScrCmd_clearflag": {
           "reason": "FlagClear call re-implemented as commands::clearflag (SCR_OP_CLEARFLAG, 0x2a) over EventData::flag_clear",

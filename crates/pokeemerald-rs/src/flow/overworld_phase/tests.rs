@@ -119,22 +119,31 @@ fn flat_runtime(width: u16, height: u16) -> MapRuntime<'static> {
 // -- Headless phase fixtures -------------------------------------------------
 
 /// Brendan's House 1F: the map the headless interaction tests below drive,
-/// picked because its real object events include Mom at `(2, 6)` (script
+/// picked because its real object events include Mom at `(2, 6)` — script
 /// `PlayersHouse_1F_EventScript_Mom`, the one
-/// [`crate::overworld::npc_scripts::script_text`] recognizes) and the
-/// rival's mom at `(2, 7)`, both visible on a fresh save.
+/// [`crate::overworld::npc_scripts::script_text`] recognizes — visible on a
+/// fresh save.
 ///
 /// Those object events are *solid* (issue #161's collision fix — see
 /// [`engine::overworld::PlayerState::step`]'s "# Collision" section), so
-/// the routes below deliberately avoid occupied tiles. Under
-/// `EventScript_ResetAllMapFlags` (which
-/// [`OverworldPhase::for_test`]'s save state applies) exactly five of this
-/// map's seven object events are visible and therefore block:
-/// `(2, 6)` Mom, `(2, 7)` the rival's mom, `(1, 3)` and `(4, 5)` the two
-/// Vigoroth, and `(1, 5)` the rival's sibling. The remaining two — Dad at
-/// `(5, 6)` (`FLAG_HIDE_PLAYERS_HOUSE_DAD`) and the rival at `(8, 8)`
-/// (`FLAG_HIDE_LITTLEROOT_TOWN_BRENDANS_HOUSE_BRENDAN`) — are hidden by
-/// that script (`pokeemerald/data/scripts/new_game.inc`) and do not.
+/// the routes below deliberately avoid occupied tiles. Under the fresh-save
+/// state [`OverworldPhase::for_test`] builds, exactly **three** of this
+/// map's seven object events are visible and therefore block: `(2, 6)` Mom
+/// and the two Vigoroth at `(1, 3)` and `(4, 5)`. The other four are hidden,
+/// by two different scripts:
+///
+/// - `EventScript_ResetAllMapFlags` (`data/scripts/new_game.inc`) hides Dad
+///   at `(5, 6)` (`FLAG_HIDE_PLAYERS_HOUSE_DAD`) and the rival at `(8, 8)`
+///   (`FLAG_HIDE_LITTLEROOT_TOWN_BRENDANS_HOUSE_BRENDAN`).
+/// - The male branch of the skipped truck sequence
+///   (`data/maps/InsideOfTruck/scripts.inc:29-30`, applied by
+///   [`crate::new_game::init_save_blocks`]) hides the *rival's* mother at
+///   `(2, 7)` and the rival's sibling at `(1, 5)` — they belong in May's
+///   house, not this one.
+///
+/// Both of the latter two used to be visible here, which is why some routes
+/// below still avoid `(2, 7)`: harmless now, and left alone rather than
+/// re-routed for its own sake.
 const ONE_F: MapId = MapId("MAP_LITTLEROOT_TOWN_BRENDANS_HOUSE_1F");
 
 /// An [`OverworldPhase`] over a **synthetic** 10x10 open room
@@ -174,9 +183,9 @@ fn runtime_for(phase: &OverworldPhase) -> MapRuntime<'_> {
 /// rest must find Mom.
 ///
 /// Approaches Mom from the east rather than from the south: `(2, 7)`, the
-/// tile directly below her, is the rival's mom's own tile and is now solid
-/// ([`ONE_F`]'s docs), so a step onto it would be denied before the
-/// interaction under test could even be reached. `(3, 6)` and `(4, 6)` are
+/// tile directly below her, is the rival's mom's tile -- she is hidden on a
+/// fresh save since the truck-intro flags landed ([`ONE_F`]'s docs), so the
+/// route is kept only for stability, not necessity. `(3, 6)` and `(4, 6)` are
 /// both clear of visible object events.
 #[test]
 fn a_pressed_mid_step_is_discarded_and_the_same_press_at_rest_interacts() {
@@ -299,8 +308,8 @@ fn an_open_dialog_freezes_movement_until_it_closes() {
 /// concerned, which is what makes the stop attributable to Mom alone.
 #[test]
 fn holding_a_direction_into_a_visible_npc_stops_the_player_adjacent_to_it() {
-    // Two tiles below Mom, facing north; (2, 7) is the rival's mom's tile,
-    // so approach from the east instead: (4, 6) -> (3, 6) -> blocked by Mom.
+    // Two tiles below Mom, facing north; approach from the east ((4, 6) ->
+    // (3, 6) -> blocked by Mom) -- see ONE_F's note on the (2, 7) routes.
     let mut phase = synthetic_phase(PlayerState::new((4, 6), 3, Direction::West), None);
 
     // First step lands on (3, 6), the tile east of Mom.
@@ -1297,4 +1306,128 @@ fn warping_into_a_bedroom_hides_its_decoration_placeholders() {
     phase.player = PlayerState::new((1, 3), 3, Direction::North);
     phase.step(held(Buttons::UP));
     assert_eq!(phase.player.position(), (1, 2));
+}
+
+/// The reported regression on the **production** path: a fresh run spawned
+/// straight into the bedroom must not have the rival's Poké Ball staged
+/// there as an invisible collider.
+///
+/// `(3, 4)` is `OBJ_EVENT_GFX_ITEM_BALL` at elevation `0` -- the transition
+/// wildcard, so it collides with a player at *any* elevation -- on open
+/// floor in the real layout, and nothing in this port draws an item ball.
+/// Its `FLAG_HIDE_LITTLEROOT_TOWN_BRENDANS_HOUSE_2F_POKE_BALL` is set only
+/// by the male branch of the skipped truck sequence
+/// (`data/maps/InsideOfTruck/scripts.inc:31`), which
+/// [`crate::new_game::init_save_blocks`] now applies.
+///
+/// Real-pack and driven through [`OverworldPhase::load_default`] for the
+/// same reason as this module's other two production pins: the headless
+/// fixtures build their save through the same constructor, so only a test
+/// that walks the real spawn path proves the acceptance route is clear.
+#[test]
+#[ignore = "needs a local pack: run `cargo xtask extract` first"]
+fn the_spawn_bedroom_has_no_invisible_poke_ball_collider() {
+    let mut phase = OverworldPhase::load_default().expect("run `cargo xtask extract` first");
+
+    let ball = assets::MapEventsTable::new()
+        .resolve(new_game::SPAWN_MAP_ID)
+        .unwrap()
+        .object_events
+        .iter()
+        .find(|o| o.graphics_id == "OBJ_EVENT_GFX_ITEM_BALL")
+        .expect("the bedroom declares the rival's Poké Ball");
+    assert_eq!(
+        (ball.x, ball.y, ball.elevation),
+        (3, 4, 0),
+        "fixture precondition: its real map.json position, at the \
+         transition-wildcard elevation that collides with anything"
+    );
+    assert!(
+        !engine::overworld::object_event_is_visible(ball, &phase.save1().event_data),
+        "a fresh male save must not have the rival's Poké Ball spawned"
+    );
+
+    // The observable consequence: the tile is walkable. (3, 5) and (3, 4)
+    // are both open floor in the real layout, so only the object event
+    // could have blocked it.
+    phase.player = PlayerState::new((3, 5), 3, Direction::North);
+    phase.step(held(Buttons::UP));
+    assert_eq!(
+        phase.player.position(),
+        (3, 4),
+        "the Poké Ball's tile must be walkable on a fresh save"
+    );
+}
+
+/// The 1F half of the same regression, on the production path: after taking
+/// the stairs, the player's own house must not contain the *rival's* family
+/// -- no duplicated mother beside the real one, and no undrawn ninja-boy
+/// blocker.
+///
+/// Both flags come from the male truck branch
+/// (`data/maps/InsideOfTruck/scripts.inc:29-30`). Walks the real 2F -> 1F
+/// stair warp rather than assigning `map_id`, so the arrival goes through
+/// [`OverworldPhase::warp_to`] exactly as play would.
+#[test]
+#[ignore = "needs a local pack: run `cargo xtask extract` first"]
+fn taking_the_stairs_does_not_land_in_a_house_full_of_the_rivals_family() {
+    let mut phase = OverworldPhase::load_default().expect("run `cargo xtask extract` first");
+
+    // Step off the spawn tile (which *is* the stair warp) and back onto it,
+    // to generate a fresh landing -- the same shape as this module's other
+    // real-pack warp tests.
+    phase.step(held(Buttons::DOWN));
+    for _ in 1..WALK_FRAMES_PER_TILE {
+        phase.step(ButtonState::new());
+    }
+    phase.step(held(Buttons::UP));
+    for _ in 1..WALK_FRAMES_PER_TILE {
+        phase.step(ButtonState::new());
+    }
+    assert_eq!(phase.map_id, ONE_F, "the stairs must have landed on 1F");
+
+    let events = assets::MapEventsTable::new().resolve(ONE_F).unwrap();
+    let find = |gfx: &str| {
+        events
+            .object_events
+            .iter()
+            .find(|o| o.graphics_id == gfx)
+            .unwrap_or_else(|| panic!("1F must declare a {gfx}"))
+    };
+    let data = &phase.save1().event_data;
+
+    // The player's own mother is home, exactly once.
+    let mom = find("OBJ_EVENT_GFX_MOM");
+    assert!(
+        engine::overworld::object_event_is_visible(mom, data),
+        "the player's own mother must be home"
+    );
+    // The rival's mother is not -- this is the duplicated-mother bug.
+    let rival_mom = find("OBJ_EVENT_GFX_WOMAN_4");
+    assert!(
+        !engine::overworld::object_event_is_visible(rival_mom, data),
+        "the rival's mother must not be duplicated into the player's house"
+    );
+    // Nor the rival's sibling, whose sprite this port cannot draw at all --
+    // so a spawned one is a pure invisible blocker.
+    let sibling = find("OBJ_EVENT_GFX_NINJA_BOY");
+    assert!(
+        !engine::overworld::object_event_is_visible(sibling, data),
+        "the rival's sibling must not be an invisible blocker at ({}, {})",
+        sibling.x,
+        sibling.y
+    );
+
+    // Their tiles are walkable, which is what an invisible blocker would
+    // have broken. Both sit on open floor in the real 1F layout.
+    for tile in [(rival_mom.x, rival_mom.y), (sibling.x, sibling.y)] {
+        let (x, y) = (i32::from(tile.0), i32::from(tile.1));
+        phase.player = PlayerState::new((x, y + 1), 3, Direction::North);
+        phase.step(held(Buttons::UP));
+        assert_eq!(
+            phase.player.position(),
+            (x, y),
+            "({x}, {y}) must be walkable once its object event is hidden"
+        );
+    }
 }

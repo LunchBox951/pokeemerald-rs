@@ -470,13 +470,11 @@ fn overworld_scene_from_pack_composes_a_non_blank_deterministic_frame() {
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
 fn real_pack_composes_non_blank_deterministic_overworld_frames() {
     let scene = super::load_default_room().expect("run `cargo xtask extract` first");
-    // A fresh-save flag store (`assets::RESET_MAP_FLAGS`, matching
-    // `crate::new_game::init_save_blocks_for_new_game`), so the bedroom's
-    // rival renders exactly as hidden as it would for a real new game.
-    let mut event_data = engine::event_data::EventData::new();
-    for &id in assets::RESET_MAP_FLAGS {
-        event_data.flag_set(id).unwrap();
-    }
+    // The production fresh-save flag store, so the bedroom renders exactly
+    // as it would for a real new game -- same reasoning as
+    // `fresh_save_event_data` below: a fixture that claims to *be*
+    // production state has to come from production state.
+    let event_data = fresh_save_event_data();
 
     // A couple of on-foot player states across the bedroom's 9x8 interior
     // (`LAYOUT_LITTLEROOT_TOWN_BRENDANS_HOUSE_2F`), including one mid-step,
@@ -517,7 +515,7 @@ fn real_pack_composes_non_blank_deterministic_overworld_frames() {
 
 /// Brendan's House 1F: the only bundled map whose *fresh-save* object
 /// events include NPCs this module actually draws (Mom at `(2, 6)` and the
-/// rival's mom at `(2, 7)`); the bedroom's own two events both resolve to
+/// rival's mom at `(2, 7)`, hidden on a fresh male save); the bedroom's own two events both resolve to
 /// nothing renderable on a fresh save, which is why these tests use 1F.
 const ONE_F: assets::MapId = assets::MapId("MAP_LITTLEROOT_TOWN_BRENDANS_HOUSE_1F");
 
@@ -527,15 +525,20 @@ const ONE_F: assets::MapId = assets::MapId("MAP_LITTLEROOT_TOWN_BRENDANS_HOUSE_1
 /// setting this id is an observable change.
 const FLAG_HIDE_BRENDANS_HOUSE_MOM: u16 = 0x2F6;
 
-/// The fresh-save flag store `crate::new_game::init_save_blocks_for_new_game`
-/// builds, so these tests see exactly the object-event visibility a real
-/// new game would.
+/// The fresh-save flag store [`crate::new_game::init_save_blocks_for_new_game`]
+/// builds, so these tests see exactly the object-event visibility a real new
+/// game would.
+///
+/// **Delegates to the production constructor** rather than rebuilding the
+/// flag set from [`assets::RESET_MAP_FLAGS`]. It used to do the latter,
+/// which silently stopped matching its own doc comment the moment
+/// `init_save_blocks` grew a second effect (the skipped truck sequence's
+/// gender branch -- `crate::new_game::apply_truck_intro_flags`): the tests
+/// below kept passing against a flag set no real save ever has. A helper
+/// that claims to *be* production state has to come from production state.
 fn fresh_save_event_data() -> engine::event_data::EventData {
-    let mut data = engine::event_data::EventData::new();
-    for &id in assets::RESET_MAP_FLAGS {
-        data.flag_set(id).unwrap();
-    }
-    data
+    let (block1, _) = crate::new_game::init_save_blocks_for_new_game();
+    block1.event_data
 }
 
 /// The issue's own "NPCs actually reach the framebuffer" guard, and the
@@ -600,10 +603,15 @@ fn real_pack_1f_oam_entries_cover_every_drawn_fresh_save_npc() {
     let entries = scene.sprites.entries(&player, &data);
     assert_eq!(
         entries.len(),
-        3,
-        "the player, Mom, and the rival's mom -- 1F's other fresh-save \
-         visible object events (both Vigoroths, the ninja boy) resolve to \
-         no sprite, and its dad/rival are hidden by RESET_MAP_FLAGS"
+        2,
+        "the player and Mom, and nobody else. 1F's remaining fresh-save \
+         visible object events (both Vigoroths) resolve to no sprite; its \
+         dad and the rival are hidden by RESET_MAP_FLAGS; and the rival's \
+         *mom* and *sibling* are hidden by the male branch of the skipped \
+         truck sequence (`crate::new_game::apply_truck_intro_flags`). This \
+         assertion was `3` while that branch went unapplied -- a second, \
+         duplicated mother standing in the player's own house, which is \
+         exactly the bug it now guards"
     );
 
     // Entry 0 is always the player, at its fixed screen position.
@@ -614,13 +622,11 @@ fn real_pack_1f_oam_entries_cover_every_drawn_fresh_save_npc() {
     assert_eq!(entries[0].y(), super::avatar::PLAYER_OBJ_Y);
     assert_eq!(entries[0].palette_bank(), 0);
 
-    // The two NPC entries, in the map's own `object_events` order. Both
-    // face east (`MOVEMENT_TYPE_FACE_RIGHT`), which reuses the west stand
-    // frame h-flipped (`avatar`'s frame table), and both sit in the
-    // combined sprite tileset at their own `FRAME_BLOCK_TILES` stride --
-    // Mom's sheet is packed first (she is `object_events[0]`), the rival's
-    // mom's second (`object_events[3]`; the two Vigoroths between them
-    // resolve to no sheet at all).
+    // The one NPC entry. Mom faces east (`MOVEMENT_TYPE_FACE_RIGHT`), which
+    // reuses the west stand frame h-flipped (`avatar`'s frame table), and
+    // sits in the combined sprite tileset at the first `FRAME_BLOCK_TILES`
+    // stride after the player's own block -- her sheet is packed first, as
+    // `object_events[0]`.
     let block = super::avatar::FRAME_BLOCK_TILES;
     let west_stand = super::avatar::FRAME_WEST_STAND * super::avatar::FRAME_TILES;
     let metatile_px = u16::try_from(super::METATILE_PX).unwrap();
@@ -642,22 +648,21 @@ fn real_pack_1f_oam_entries_cover_every_drawn_fresh_save_npc() {
         "one metatile north of the player: Mom stands at (2, 6)"
     );
 
-    let rival_mom = entries[2];
-    assert_eq!(
-        rival_mom.palette_bank(),
-        1,
-        "OBJ_EVENT_PAL_TAG_NPC_1 (woman_4.pal)"
-    );
-    assert_eq!(rival_mom.tile_index(), 2 * block + west_stand);
-    assert!(rival_mom.h_flip(), "MOVEMENT_TYPE_FACE_RIGHT");
-    assert_eq!(
-        (rival_mom.x(), rival_mom.y()),
-        (
-            i16::try_from(super::avatar::PLAYER_OBJ_X).unwrap(),
-            super::avatar::PLAYER_OBJ_Y
-        ),
-        "the rival's mom stands on (2, 7), the player's own tile in this \
-         fixture, so she draws at the player's own screen position"
+    // The rival's mother is *not* drawn: her object event at (2, 7) --
+    // this fixture's own player tile, where she would have overlapped the
+    // player exactly -- is hidden by the truck sequence's male branch.
+    let rival_mom = assets::MapEventsTable::new()
+        .resolve(ONE_F)
+        .unwrap()
+        .object_events
+        .iter()
+        .find(|o| o.graphics_id == "OBJ_EVENT_GFX_WOMAN_4")
+        .expect("1F declares the rival's mother");
+    assert_eq!((rival_mom.x, rival_mom.y), (2, 7));
+    assert!(
+        !engine::overworld::object_event_is_visible(rival_mom, &data),
+        "FLAG_HIDE_LITTLEROOT_TOWN_BRENDANS_HOUSE_RIVAL_MOM is set for a \
+         male player (InsideOfTruck/scripts.inc:29)"
     );
 
     // The bindings those tile indices address, cross-checked against the

@@ -86,7 +86,11 @@ pub use map_layouts::{
     BORDER_HEIGHT, BORDER_WIDTH, LAYOUT_COUNT,
 };
 pub use metatile_attributes::{MetatileAttribute, MetatileAttributeTable, MetatileLayerType};
-pub use new_game_flags::{FLAG_HIDE_LITTLEROOT_TOWN_BRENDANS_HOUSE_RIVAL_BEDROOM, RESET_MAP_FLAGS};
+pub use new_game_flags::{
+    FLAG_HIDE_LITTLEROOT_TOWN_BRENDANS_HOUSE_RIVAL_BEDROOM, RESET_MAP_FLAGS,
+    TRUCK_INTRO_FLAGS_FEMALE, TRUCK_INTRO_FLAGS_MALE, TRUCK_INTRO_VARS_FEMALE,
+    TRUCK_INTRO_VARS_MALE,
+};
 
 // `items::ItemId` is the full item-table identifier; it is intentionally *not*
 // re-exported at the crate root to avoid clashing with `species::ItemId` (the
