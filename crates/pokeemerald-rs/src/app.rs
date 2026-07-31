@@ -38,6 +38,69 @@
 //! the full title -> main menu -> intro -> overworld transition diagram and
 //! its "log-or-ignore is fine" failure policy for a transition's own pack
 //! load.
+//!
+//! # The headless real-boot check (I-2, issues #168 and #175)
+//!
+//! The single home for this rationale: the items below cross-reference it
+//! rather than restating it `(lean-docs)`.
+//!
+//! ## Which code the tests actually run
+//!
+//! [`App::new`]'s whole body lives in the private `App::boot` -- load and
+//! compose the real title screen, open a platform backend (passed in as a
+//! closure), `App::assemble` the two -- leaving [`App::new`] itself that
+//! closure (`Platform::new`) and nothing else. What covers it, in this
+//! module's `tests` submodule:
+//!
+//! - `tests::real_pack_boots_to_the_title_screen_through_app_boot` reaches
+//!   `boot` via `App::new_headless_real_title`, i.e. with
+//!   `Platform::new_headless`, so every construction step [`App::new`]
+//!   performs runs under test. The one line it cannot run is `Platform::new`
+//!   itself: no CI job may open an OS window.
+//! - `tests::without_a_pack_app_new_fails_the_load_before_opening_a_window`
+//!   calls the real, production-compiled [`App::new`] -- the exact function
+//!   `main` calls -- where there is no extracted pack, so it must fail in
+//!   the load and never reach `Platform::new`. That is the wrapper's
+//!   *delegation* coverage: an [`App::new`] that stopped handing off to
+//!   `boot` fails it. Deliberately *not* a `#[cfg(test)]`-substituted
+//!   opener, which would make the [`App::new`] under test a different
+//!   compilation from the shipped one.
+//! - `tests::boot_opens_no_platform_when_the_title_screen_fails_to_load`
+//!   and `tests::real_pack_boot_propagates_a_platform_opener_error` are the
+//!   deterministic proof of the "no window is flashed open when the pack is
+//!   missing" ordering, passing `boot` openers that record whether they ran
+//!   (never, when the load fails) and that fail (surfacing as
+//!   [`AppError::Platform`], so the opener *is* reached once the load
+//!   succeeds). Ordering is checked here, at the seam, rather than through
+//!   [`App::new`], where a reordered open would only misbehave on a machine
+//!   with no display -- and where a `cfg(test)` headless opener would hide
+//!   it entirely, since such an opener cannot fail.
+//!
+//! ## What the boot check asserts
+//!
+//! It drives [`App::step`] (pump input, advance `flow::advance_scene`'s
+//! title arm, pace, present) and compares against title frames composed
+//! independently via [`title::load_default`], so no assertion can pass by
+//! comparing a value with itself. The presented-frame assertions read
+//! `platform::Platform::last_presented` -- the frame the null backend
+//! actually received -- rather than [`App::frame`], which `step` sets
+//! *before* presenting and which would therefore stay convincing even if
+//! `present` were never called at all.
+//!
+//! Ticks asserted: 0 (the first `step`), 2 (the third), 14 (the fifteenth).
+//! Tick 14 is what pins the tick counter to exactly zero offset in both
+//! directions. [`crate::title`]'s animation is coarse -- the clouds move
+//! once every four ticks, "Press Start" blinks every sixteen -- so most
+//! adjacent ticks compose bit-identical frames; tick 14 differs from tick 13
+//! (cloud scroll 3 -> 4) *and* from tick 15 ("Press Start" blinks on), and
+//! both differences are asserted as `assert_ne!` guards. Across 15
+//! consecutive steps an `App` running one tick ahead or behind cannot pass.
+//!
+//! This is the evidence for I-2 "boots to the title screen". Before it, the
+//! pack-backed title coverage (`animated_frame_returns_the_presented_tick`,
+//! `xtask`'s `check_title_screen`, [`crate::title`]'s own tests) all called
+//! [`title::load_default`]/`compose` directly, and went through neither
+//! construction nor presentation.
 
 use platform::{ButtonState, Buttons, Frame, Platform, PlatformError};
 
@@ -130,13 +193,75 @@ pub struct App {
     scene: Option<AppScene>,
 }
 
+/// Compose an already-loaded [`title::TitleScene`] at tick 0 into the
+/// `(frame, scene)` pair [`App::new`] (and its headless test counterparts)
+/// store: the tick-0 composed frame, plus the fresh [`AppScene::Title`] /
+/// [`AnimatedTitle`] state [`App::step`] advances from there.
+///
+/// The one production spot that builds an [`AnimatedTitle`] (`flow`'s own
+/// tests build one directly), so [`App::boot`] (which also loads the scene)
+/// and [`App::new_headless_animated`] (which takes an already-loaded scene,
+/// for tests that need their own reference copy to compare ticks against)
+/// never hand-write these same three lines twice `(oop-boundaries)`.
+fn compose_title_scene(scene: title::TitleScene) -> (Box<Frame>, AppScene) {
+    let frame = to_platform_frame(&scene.compose(0));
+    let app_scene = AppScene::Title(Box::new(AnimatedTitle {
+        scene,
+        tick: 0,
+        presented: false,
+    }));
+    (frame, app_scene)
+}
+
 impl App {
+    /// Move an already-loaded `(frame, scene)` pair (from [`App::boot`] or
+    /// [`compose_title_scene`]) into a running `App` around `platform`.
+    ///
+    /// The *only* place a real-game-flow `App` is assembled, so [`App::new`]
+    /// and its headless counterparts cannot drift apart in what they store
+    /// `(oop-boundaries)` -- and so this struct literal is code the I-2
+    /// real-boot check (module docs) runs.
+    fn assemble(platform: Platform, (frame, scene): (Box<Frame>, AppScene)) -> Self {
+        Self {
+            platform,
+            frame,
+            scene: Some(scene),
+        }
+    }
+
+    /// The whole of [`App::new`]'s body: load and compose the real title
+    /// screen (I-2), open a platform backend via `open_platform`, and
+    /// assemble the two into a running `App`.
+    ///
+    /// Loads *before* calling `open_platform`, so a missing pack (or any
+    /// other title-screen error) is surfaced cleanly without ever flashing a
+    /// window open first. Taking the opener as a parameter is what lets the
+    /// headless tests run this body itself rather than a copy -- see the
+    /// module docs' "The headless real-boot check".
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AppError::Title`] if the asset pack has not been extracted
+    /// yet (check [`TitleSceneError::is_pack_missing`] -- its rendered
+    /// message names the exact `./init.sh`/`cargo xtask extract` commands to
+    /// run) or is otherwise malformed; whatever `open_platform` fails with
+    /// (for [`App::new`], [`AppError::Platform`] if the platform's windowing
+    /// event loop could not be created) otherwise.
+    fn boot(
+        open_platform: impl FnOnce() -> Result<Platform, PlatformError>,
+    ) -> Result<Self, AppError> {
+        // Load first: no window is opened if the pack is missing.
+        let loaded = compose_title_scene(title::load_default()?);
+        let platform = open_platform()?;
+        Ok(Self::assemble(platform, loaded))
+    }
+
     /// Load the real title screen (I-2) from the local asset pack, then open
     /// a window titled `title` to present it.
     ///
-    /// Loads/decodes the scene *before* opening the platform window, so a
-    /// missing pack (or any other title-screen error) is surfaced cleanly
-    /// without ever flashing a window open first.
+    /// Deliberately nothing but `Platform::new` handed to [`App::boot`],
+    /// which holds the entire construction body -- see the module docs' "The
+    /// headless real-boot check" for how both halves are covered.
     ///
     /// # Errors
     ///
@@ -146,18 +271,21 @@ impl App {
     /// run) or is otherwise malformed; [`AppError::Platform`] if the
     /// platform's windowing event loop could not be created.
     pub fn new(title: impl Into<String>) -> Result<Self, AppError> {
-        let scene = title::load_default()?;
-        let frame = to_platform_frame(&scene.compose(0));
-        let platform = Platform::new(title)?;
-        Ok(Self {
-            platform,
-            frame,
-            scene: Some(AppScene::Title(Box::new(AnimatedTitle {
-                scene,
-                tick: 0,
-                presented: false,
-            }))),
-        })
+        Self::boot(|| Platform::new(title))
+    }
+
+    /// Test-only: [`App::boot`] -- [`App::new`]'s own body -- with
+    /// `platform`'s headless/null backend substituted for a real window, the
+    /// I-2 real-boot check's constructor (module docs).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AppError::Title`] under the same conditions as
+    /// [`App::new`] -- most commonly [`TitleSceneError::is_pack_missing`]
+    /// when no local asset pack has been extracted yet.
+    #[cfg(test)]
+    fn new_headless_real_title() -> Result<Self, AppError> {
+        Self::boot(|| Ok(Platform::new_headless()))
     }
 
     /// Build the I-1 synthetic placeholder scene against `platform`'s
@@ -186,16 +314,7 @@ impl App {
     /// [`App::new`] always opens one).
     #[cfg(test)]
     fn new_headless_animated(scene: title::TitleScene) -> Self {
-        let frame = to_platform_frame(&scene.compose(0));
-        Self {
-            platform: Platform::new_headless(),
-            frame,
-            scene: Some(AppScene::Title(Box::new(AnimatedTitle {
-                scene,
-                tick: 0,
-                presented: false,
-            }))),
-        }
+        Self::assemble(Platform::new_headless(), compose_title_scene(scene))
     }
 
     /// Run the frame loop until the window is closed or Escape is pressed
@@ -296,104 +415,4 @@ fn describe_newly_pressed(state: ButtonState) -> Option<String> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::{describe_newly_pressed, App};
-    use platform::{ButtonState, Buttons};
-
-    /// The animated path's `frame()` contract (I-2): after every step,
-    /// `frame()` is the frame that step actually presented — the first
-    /// step presents the initial tick-0 composition, the second tick 1's,
-    /// and so on. Needs the real pack, like
-    /// `title::tests::real_pack_composes_non_blank_deterministic_title_frames`.
-    #[test]
-    #[ignore = "needs a local pack: run `cargo xtask extract` first"]
-    fn animated_frame_returns_the_presented_tick() {
-        let scene = crate::title::load_default().expect("run `cargo xtask extract` first");
-        let expected0 = super::to_platform_frame(&scene.compose(0));
-        let expected1 = super::to_platform_frame(&scene.compose(1));
-        let mut app = App::new_headless_animated(scene);
-
-        assert_eq!(app.frame().to_vec(), expected0.to_vec());
-        app.step().expect("headless step never errors");
-        assert_eq!(
-            app.frame().to_vec(),
-            expected0.to_vec(),
-            "the first step presents tick 0; frame() must still be tick 0's composition"
-        );
-        app.step().expect("headless step never errors");
-        assert_eq!(
-            app.frame().to_vec(),
-            expected1.to_vec(),
-            "the second step advances to and presents tick 1"
-        );
-    }
-
-    #[test]
-    fn headless_frame_is_non_blank() {
-        let app = App::new_headless();
-        assert!(
-            app.frame().iter().any(|&pixel| pixel != 0),
-            "the composed boot scene must produce a non-blank frame"
-        );
-    }
-
-    #[test]
-    fn headless_step_keeps_going_and_never_errors() {
-        let mut app = App::new_headless();
-        for _ in 0..10 {
-            assert!(app.step().expect("headless step never errors"));
-        }
-    }
-
-    #[test]
-    fn headless_frame_is_stable_across_steps() {
-        // The scene is static for this slice (see the module docs), so the
-        // composed frame must not change between steps.
-        let mut app = App::new_headless();
-        let before = app.frame().to_vec();
-        for _ in 0..5 {
-            app.step().expect("headless step never errors");
-        }
-        assert_eq!(app.frame().to_vec(), before);
-    }
-
-    #[test]
-    fn no_input_yields_no_log_line() {
-        let state = ButtonState::new();
-        assert_eq!(describe_newly_pressed(state), None);
-    }
-
-    #[test]
-    fn single_button_press_is_named() {
-        let mut state = ButtonState::new();
-        state.update(Buttons::A);
-        assert_eq!(describe_newly_pressed(state).as_deref(), Some("input: A"));
-    }
-
-    #[test]
-    fn multiple_simultaneous_presses_are_all_named_in_bit_order() {
-        let mut state = ButtonState::new();
-        state.update(Buttons::UP | Buttons::A);
-        assert_eq!(
-            describe_newly_pressed(state).as_deref(),
-            Some("input: A+UP")
-        );
-    }
-
-    #[test]
-    fn holding_across_frames_is_not_logged_again() {
-        let mut state = ButtonState::new();
-        state.update(Buttons::A);
-        state.update(Buttons::A); // still held, not newly pressed this frame.
-        assert_eq!(describe_newly_pressed(state), None);
-    }
-
-    #[test]
-    fn release_then_repress_is_logged_again() {
-        let mut state = ButtonState::new();
-        state.update(Buttons::B);
-        state.update(Buttons::NONE);
-        state.update(Buttons::B);
-        assert_eq!(describe_newly_pressed(state).as_deref(), Some("input: B"));
-    }
-}
+mod tests;

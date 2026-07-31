@@ -29,7 +29,19 @@
 # (`check_title_screen`/`check_overworld_scene` in crates/xtask/src/e2e.rs)
 # always no-op there, and the real-pack tests
 # (`real_pack_composes_non_blank_deterministic_title_frames` /
-# `..._overworld_frames`, plus `app::tests::animated_frame_returns_the_presented_tick`)
+# `..._overworld_frames`, `app::tests::animated_frame_returns_the_presented_tick`,
+# plus `app::tests::real_pack_boots_to_the_title_screen_through_app_boot`
+# and `app::tests::real_pack_boot_propagates_a_platform_opener_error` --
+# I-2's boot check, issues #168/#175: builds an `App` by calling the same
+# private `App::boot` body `App::new` calls, so everything `main`'s
+# construction does except opening the real OS window runs under test, then
+# drives `App::step` and asserts the frames the null backend actually
+# received from `Platform::present` (`Platform::last_presented`, not the
+# `App`'s own cached frame) are the real title screen's, at exactly the
+# right animation tick. `App::new` itself -- the shipped wrapper around
+# `App::boot` -- is covered instead by the pack-less
+# `app::tests::without_a_pack_app_new_fails_the_load_before_opening_a_window`
+# in the required `test` job, which is where no pack exists)
 # stay `#[ignore]`d. `real-pack` runs `./init.sh` to fetch the pinned
 # upstream checkouts (cached below, keyed on init.sh's pinned SHAs so a
 # fresh clone only happens when a pin moves), then `cargo run -p xtask --
