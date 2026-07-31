@@ -126,10 +126,31 @@ class SourceGateWorkflowContractTest(unittest.TestCase):
             )
 
     def test_source_gate_rebinds_to_live_pull_request_state(self):
-        for live_field in ("live_base", "live_head", "live_head_sha", "live_head_repo"):
+        for live_field in (
+            "live_base",
+            "live_head",
+            "live_head_sha",
+            "live_head_repo",
+            "live_author",
+        ):
             self.assertIn(live_field, SOURCE_GATE_WORKFLOW)
         self.assertIn('if [[ "${duplicates}" != "1" ]]', SOURCE_GATE_WORKFLOW)
-        self.assertEqual(SOURCE_GATE_WORKFLOW.count(".headRepository.nameWithOwner"), 1)
+        self.assertEqual(SOURCE_GATE_WORKFLOW.count(".headRepository.nameWithOwner"), 2)
+
+    def test_source_gate_requires_app_author_and_preceding_provenance(self):
+        self.assertIn(
+            "PROMOTION_APP_LOGIN: ${{ vars.PROMOTION_APP_LOGIN }}",
+            SOURCE_GATE_WORKFLOW,
+        )
+        self.assertIn(
+            '"${live_author}" != "${PROMOTION_APP_LOGIN}"',
+            SOURCE_GATE_WORKFLOW,
+        )
+        self.assertIn('stable) preceding_head="dev"', SOURCE_GATE_WORKFLOW)
+        self.assertIn('main)   preceding_head="unstable"', SOURCE_GATE_WORKFLOW)
+        self.assertIn(".mergeCommit.oid ==", SOURCE_GATE_WORKFLOW)
+        self.assertIn("${EVENT_HEAD_SHA}", SOURCE_GATE_WORKFLOW)
+        self.assertIn('if [[ "${provenance}" != "1" ]]', SOURCE_GATE_WORKFLOW)
 
 
 class ReadinessRecorderContractTest(unittest.TestCase):
