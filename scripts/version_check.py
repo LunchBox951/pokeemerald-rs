@@ -27,8 +27,9 @@ What this script checks:
    A leading ``v`` or any malformed value is rejected.
 4. Reject a proposed version lower than the base (lexicographic compare over
    four unsigned ints: FINAL, then MAJOR, then MINOR, then PATCH).
-5. When ``--require-bump`` is passed (as it is for pull requests), reject a
-   proposed version equal to the base. Every PR must advance ``VERSION``.
+5. When ``--require-bump`` is passed (as it is for pull requests and active
+   release-promotion push checks), reject a proposed version equal to the base.
+   Every PR must advance ``VERSION``.
 6. Reject a MAJOR or MINOR bump that does not reset all lower components to 0.
 7. Reject a FINAL change unless the maintainer-approved override marker file
    (``docs/release/final-gate-approved.md`` by default) is present *at head*,
@@ -394,8 +395,8 @@ def check_transition(
 
     if require_bump and head == base:
         raise VersionError(
-            f"version unchanged at {fmt(head)}; pull requests must advance "
-            "VERSION by at least a PATCH bump"
+            f"version unchanged at {fmt(head)}; the proposed change must "
+            "advance VERSION by at least a PATCH bump"
         )
 
     # 6. FINAL changes require a maintainer-approved override marker that is
@@ -501,7 +502,8 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help=(
             "Reject an unchanged VERSION. CI enables this for pull requests "
-            "so every merged change advances the canonical version."
+            "and active release-promotion push checks so every merged change "
+            "advances the canonical version."
         ),
     )
     parser.add_argument(

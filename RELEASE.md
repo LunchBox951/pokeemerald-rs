@@ -148,15 +148,21 @@ claiming R-4 is complete:
    CODEOWNERS review, dismissal of stale approvals, and branches up to date before
    merge. Include administrators; disallow direct pushes, force pushes, and branch
    deletion.
-2. After `policy`, all three `native` matrix legs, and `merge-gate` have reported
-   successfully, atomically replace the obsolete per-command CI contexts on all
-   four channel branches with the single `merge-gate` context. Do not remove the
-   old contexts in a separate operation that could leave branch protection
-   deadlocked. `merge-gate` covers the exact default format, Clippy, release-build,
-   and test commands; Linux/macOS/Windows smoke; and Ubuntu real-pack validation.
-   Also require `dependency-review`, `codeql (actions)`, `codeql (python)`, and
-   `codeql (rust)` after each has reported successfully on the protected branch,
-   plus the rule that blocks merges on critical CodeQL alerts.
+2. Before switching required contexts, update every active long-lived `release/*`
+   branch so its tip contains the consolidated workflow and its `release/**` push
+   trigger, then push each branch and confirm `merge-gate` reports successfully.
+   A branch carrying the older workflow cannot self-update its check names, and
+   its `GITHUB_TOKEN`-created promotion PR does not trigger a replacement
+   `pull_request` run. After those release tips plus `policy`, all three `native`
+   matrix legs, and `merge-gate` have reported successfully, atomically replace
+   the obsolete per-command CI contexts on all four channel branches with the
+   single `merge-gate` context. Do not remove the old contexts in a separate
+   operation that could leave branch protection deadlocked. `merge-gate` covers
+   the exact default format, Clippy, release-build, and test commands;
+   Linux/macOS/Windows smoke; and Ubuntu real-pack validation. Also require
+   `dependency-review`, `codeql (actions)`, `codeql (python)`, and `codeql (rust)`
+   after each has reported successfully on the protected branch, plus the rule
+   that blocks merges on critical CodeQL alerts.
 3. On `unstable`, `stable`, and `main`, also require `require-release-source` and
    `require-rung-cleared`. Follow the bootstrap order documented at the head of
    `channel-merge-policy.yml` before registering them, or the first promotion will

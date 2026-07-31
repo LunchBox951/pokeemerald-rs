@@ -48,12 +48,21 @@ jobs:
       - name: Validate VERSION
         env:
           # Compare a PR with its actual base. Push/manual runs retain the
-          # repository-wide origin/main monotonicity check.
+          # repository-wide origin/main monotonicity check, except release
+          # pushes that stand in for token-created promotion PR events.
           PR_BASE_SHA: ${{ github.event.pull_request.base.sha || '' }}
         run: |
           if [[ -n "${PR_BASE_SHA}" ]]; then
             python3 scripts/version_check.py \
               --base "${PR_BASE_SHA}" --head HEAD --require-bump
+          elif [[ "${GITHUB_REF_NAME}" == release/* ]]; then
+            target="$(scripts/select_promotion_target.sh "${GITHUB_REF_NAME}")"
+            if [[ -n "${target}" ]]; then
+              python3 scripts/version_check.py \
+                --base "origin/${target}" --head HEAD --require-bump
+            else
+              python3 scripts/version_check.py --base origin/main --head HEAD
+            fi
           else
             python3 scripts/version_check.py --base origin/main --head HEAD
           fi
