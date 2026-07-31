@@ -25,6 +25,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       GH_TOKEN: ${{ github.token }}
+      PROMOTION_APP_LOGIN: ${{ vars.PROMOTION_APP_LOGIN }}
     steps:
       - name: Require the exact live channel pair
         env:
@@ -55,18 +56,27 @@ jobs:
             echo "::error::${EVENT_BASE} accepts only ${expected_head}, not ${EVENT_HEAD}."
             exit 1
           fi
+          if [[ -z "${PROMOTION_APP_LOGIN}" ]]; then
+            echo "::error::PROMOTION_APP_LOGIN is not configured."
+            exit 1
+          fi
 
           live="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}")"
           live_base="$(jq -r '.base.ref' <<<"${live}")"
           live_head="$(jq -r '.head.ref' <<<"${live}")"
           live_head_sha="$(jq -r '.head.sha' <<<"${live}")"
           live_head_repo="$(jq -r '.head.repo.full_name' <<<"${live}")"
+          live_author="$(jq -r '.user.login' <<<"${live}")"
 
           if [[ "${live_base}" != "${EVENT_BASE}" \
             || "${live_head}" != "${EVENT_HEAD}" \
             || "${live_head_sha}" != "${EVENT_HEAD_SHA}" \
             || "${live_head_repo}" != "${REPOSITORY}" ]]; then
             echo "::error::Pull request base/head changed during policy evaluation; rerun against the live state."
+            exit 1
+          fi
+          if [[ "${live_author}" != "${PROMOTION_APP_LOGIN}" ]]; then
+            echo "::error::Promotion PR must be opened by ${PROMOTION_APP_LOGIN}, not ${live_author}."
             exit 1
           fi
 
@@ -80,6 +90,32 @@ jobs:
           if [[ "${duplicates}" != "1" ]]; then
             echo "::error::Expected exactly one open ${EVENT_HEAD}->${EVENT_BASE} promotion PR; found ${duplicates}."
             exit 1
+          fi
+
+          case "${EVENT_BASE}" in
+            stable) preceding_head="dev" ;;
+            main)   preceding_head="unstable" ;;
+            *)      preceding_head="" ;;
+          esac
+          if [[ -n "${preceding_head}" ]]; then
+            provenance="$(gh pr list \
+              --repo "${REPOSITORY}" \
+              --state merged \
+              --base "${EVENT_HEAD}" \
+              --head "${preceding_head}" \
+              --limit 100 \
+              --json author,baseRefName,headRefName,headRepository,mergeCommit \
+              --jq '[.[] | select(
+                .author.login == "'"${PROMOTION_APP_LOGIN}"'" and
+                .headRepository.nameWithOwner == "'"${REPOSITORY}"'" and
+                .baseRefName == "'"${EVENT_HEAD}"'" and
+                .headRefName == "'"${preceding_head}"'" and
+                .mergeCommit.oid == "'"${EVENT_HEAD_SHA}"'"
+              )] | length')"
+            if [[ "${provenance}" != "1" ]]; then
+              echo "::error::${EVENT_HEAD}@${EVENT_HEAD_SHA} is not the merge commit of the preceding App-created ${preceding_head}->${EVENT_HEAD} promotion."
+              exit 1
+            fi
           fi
 
           echo "OK: live promotion pair is ${EVENT_HEAD}->${EVENT_BASE} at ${EVENT_HEAD_SHA}."
