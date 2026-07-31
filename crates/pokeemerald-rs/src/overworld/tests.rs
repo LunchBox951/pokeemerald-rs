@@ -8,9 +8,23 @@
 //! exception, [`real_pack_composes_non_blank_deterministic_overworld_frames`],
 //! is `#[ignore]`d and needs a real local pack.
 
-use super::{layout_pack_name, pack_4bpp_region, resolve_tileset_pack_name, OverworldSceneError};
+use super::{
+    layout_pack_name, pack_4bpp_region, resolve_tileset_pack_name, OverworldSceneError,
+    DEFAULT_ROOM_MAP_ID,
+};
 use assets::{AssetPack, ImageRef, LayoutId, MapLayout};
 use engine::overworld::{Direction, PlayerState};
+
+// -- `DEFAULT_ROOM_MAP_ID` ----------------------------------------------------
+
+/// [`DEFAULT_ROOM_MAP_ID`]'s own doc comment: kept as an independent literal
+/// (rather than importing `crate::new_game::SPAWN_MAP_ID`, which would cycle
+/// this module's dependency on `new_game`) -- pin here that the two still
+/// agree, so a future edit to either can't silently drift the other.
+#[test]
+fn default_room_map_id_matches_new_games_spawn_map_id() {
+    assert_eq!(DEFAULT_ROOM_MAP_ID, crate::new_game::SPAWN_MAP_ID);
+}
 
 // -- `resolve_tileset_pack_name` / `layout_pack_name` -----------------------
 
@@ -138,6 +152,19 @@ fn load_default_room_reports_pack_missing_when_no_pack_is_extracted() {
     assert!(err.is_pack_missing());
 }
 
+#[test]
+fn load_room_reports_pack_missing_when_no_pack_is_extracted() {
+    // Same reasoning as `load_default_room_reports_pack_missing_when_no_pack_is_extracted`
+    // (this function's own doc comment): `load_room` fails at the same
+    // `AssetPack::load_default` call, before it ever reaches the `map_id`
+    // lookup that's the only thing distinguishing it from `load_default_room`.
+    if AssetPack::default_path().is_file() {
+        return;
+    }
+    let err = super::load_room(assets::MapId("MAP_LITTLEROOT_TOWN_BRENDANS_HOUSE_1F")).unwrap_err();
+    assert!(err.is_pack_missing());
+}
+
 // -- End-to-end against a synthetic pack -------------------------------------
 
 /// One directory entry for [`write_synthetic_pack`], mirroring
@@ -196,10 +223,10 @@ fn image_meta(width: u32, height: u32, bit_depth: u8) -> Vec<u8> {
 
 /// A minimal pack covering exactly what [`super::OverworldScene::from_pack`]
 /// needs for one synthetic room: a single-tile "general" tileset (used as
-/// both primary and secondary), a 4x4 layout whose every cell -- and whose
-/// border block -- is that tileset's one opaque metatile, and Brendan's
-/// walking sheet/palette.
-fn synthetic_overworld_pack_bytes() -> Vec<u8> {
+/// both primary and secondary), a `width` x `height` layout whose every
+/// cell -- and whose border block -- is that tileset's one opaque metatile,
+/// and Brendan's walking sheet/palette.
+fn synthetic_overworld_pack_bytes(width: u16, height: u16) -> Vec<u8> {
     // A single opaque 8x8 tile, every pixel palette index 5.
     let tile_pixels = vec![5u8; 8 * 8];
 
@@ -215,7 +242,7 @@ fn synthetic_overworld_pack_bytes() -> Vec<u8> {
     // hidden by this fixture's otherwise-uniform world content.
     let metatile_attrs = (1u16 << 12).to_le_bytes().to_vec();
 
-    // A 4x4 grid, every cell metatile 0, elevation 3
+    // A `width` x `height` grid, every cell metatile 0, elevation 3
     // (`MetatileCell{metatile_id:0, collision:0, elevation:3}.pack()`).
     let grid_cell = assets::MetatileCell {
         metatile_id: 0,
@@ -223,7 +250,8 @@ fn synthetic_overworld_pack_bytes() -> Vec<u8> {
         elevation: 3,
     }
     .pack();
-    let grid: Vec<u8> = std::iter::repeat_n(grid_cell.to_le_bytes(), 16)
+    let cells = usize::from(width) * usize::from(height);
+    let grid: Vec<u8> = std::iter::repeat_n(grid_cell.to_le_bytes(), cells)
         .flatten()
         .collect();
     let border: Vec<u8> = std::iter::repeat_n(grid_cell.to_le_bytes(), 4)
@@ -308,36 +336,98 @@ fn synthetic_overworld_pack_bytes() -> Vec<u8> {
         bank0.payload = bank0_payload;
     }
 
+    push_unconditional_sprite_palettes(&mut entries);
+
     write_synthetic_pack(entries)
 }
 
-fn write_synthetic_overworld_pack() -> std::path::PathBuf {
-    let path = std::env::temp_dir().join(format!(
-        "pokeemerald-rs-overworld-test-{}.pack",
-        std::process::id()
-    ));
-    std::fs::write(&path, synthetic_overworld_pack_bytes()).unwrap();
-    path
+/// The sprite palettes `OverworldScene::from_pack` loads *unconditionally*
+/// -- the four generic `npc_1..4` banks and the other protagonist's own
+/// (`npc::build_combined_palette`'s own doc comment) -- as empty (0-color)
+/// placeholders, which is enough for those lookups to succeed regardless of
+/// whether a fixture's object events reference any of them.
+///
+/// This fixture's player is `PlayerCharacter::Brendan`, so the "other
+/// protagonist" bank reads May's palette.
+fn push_unconditional_sprite_palettes(entries: &mut Vec<Entry>) {
+    let mut placeholder = |id: &'static str| {
+        entries.push(Entry {
+            id,
+            kind_tag: 1,
+            meta: 0u16.to_le_bytes().to_vec(),
+            payload: vec![],
+        });
+    };
+    for n in 1..=4u8 {
+        placeholder(&*Box::leak(
+            format!("sprite/palette/npc_{n}").into_boxed_str(),
+        ));
+    }
+    placeholder("sprite/palette/may");
 }
 
-#[test]
-fn overworld_scene_from_pack_composes_a_non_blank_deterministic_frame() {
-    let path = write_synthetic_overworld_pack();
+/// An object-event-free [`assets::MapEvents`] for
+/// [`super::OverworldScene::from_pack`]'s own tests, which don't exercise
+/// NPC rendering (the `npc` module's own tests and the real-pack tests
+/// below cover that) -- just need *a* `'static` events value to seed the
+/// scene.
+static NO_OBJECT_EVENTS: assets::MapEvents = assets::MapEvents {
+    id: assets::MapId("MAP_TEST"),
+    shared_events_map: None,
+    object_events: &[],
+    warp_events: &[],
+    coord_events: &[],
+    bg_events: &[],
+};
+
+/// Distinguishes concurrently-running tests' scratch packs (same process
+/// id, so the pid alone is not enough).
+static NEXT_SYNTHETIC_PACK: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// An [`super::OverworldScene`] over a freshly written synthetic pack
+/// (no local `cargo xtask extract` output needed): a `width` x `height`
+/// room of one uniform opaque metatile, Brendan's sprite, and no object
+/// events. The scratch pack file is removed before returning -- the scene
+/// owns every byte it needs (that type's own docs).
+///
+/// `pub(crate)`: `crate::flow::overworld_phase`'s own headless tests build
+/// an `OverworldPhase` around one of these, so they can drive
+/// `OverworldPhase::step` without a real pack.
+pub(crate) fn synthetic_scene(width: u16, height: u16) -> super::OverworldScene {
+    let serial = NEXT_SYNTHETIC_PACK.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let path = std::env::temp_dir().join(format!(
+        "pokeemerald-rs-overworld-test-{}-{serial}.pack",
+        std::process::id()
+    ));
+    std::fs::write(&path, synthetic_overworld_pack_bytes(width, height)).unwrap();
     let pack = AssetPack::load(&path).unwrap();
     let layout = MapLayout {
         id: LayoutId("LAYOUT_MAP_TEST"),
         name: "MapTest",
-        width: 4,
-        height: 4,
+        width,
+        height,
         primary_tileset: "gTileset_General",
         secondary_tileset: "gTileset_General",
     };
-    let scene = super::OverworldScene::from_pack(&pack, &layout, super::PlayerCharacter::Brendan)
-        .expect("synthetic pack should decode cleanly");
+    let scene = super::OverworldScene::from_pack(
+        &pack,
+        &layout,
+        super::PlayerCharacter::Brendan,
+        &NO_OBJECT_EVENTS,
+    )
+    .expect("synthetic pack should decode cleanly");
+    let _ = std::fs::remove_file(path);
+    scene
+}
+
+#[test]
+fn overworld_scene_from_pack_composes_a_non_blank_deterministic_frame() {
+    let scene = synthetic_scene(4, 4);
 
     let player = PlayerState::new((0, 0), 3, Direction::South);
-    let first = scene.compose(&player);
-    let second = scene.compose(&player);
+    let event_data = engine::event_data::EventData::new();
+    let first = scene.compose(&player, &event_data);
+    let second = scene.compose(&player, &event_data);
     assert_eq!(
         first.pixels(),
         second.pixels(),
@@ -368,8 +458,6 @@ fn overworld_scene_from_pack_composes_a_non_blank_deterministic_frame() {
         ),
         Some(rendering::Bgr555::from_raw(0x7C00).to_rgb888())
     );
-
-    let _ = std::fs::remove_file(path);
 }
 
 /// Loads the *real* local pack (`cargo xtask extract`'s output) and
@@ -382,13 +470,18 @@ fn overworld_scene_from_pack_composes_a_non_blank_deterministic_frame() {
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
 fn real_pack_composes_non_blank_deterministic_overworld_frames() {
     let scene = super::load_default_room().expect("run `cargo xtask extract` first");
+    // The production fresh-save flag store, so the bedroom renders exactly
+    // as it would for a real new game -- same reasoning as
+    // `fresh_save_event_data` below: a fixture that claims to *be*
+    // production state has to come from production state.
+    let event_data = fresh_save_event_data();
 
     // A couple of on-foot player states across the bedroom's 9x8 interior
     // (`LAYOUT_LITTLEROOT_TOWN_BRENDANS_HOUSE_2F`), including one mid-step,
     // so the scroll-lag path is exercised too.
     let standing = PlayerState::new((5, 5), 3, Direction::South);
-    let frame_a = scene.compose(&standing);
-    let frame_b = scene.compose(&standing);
+    let frame_a = scene.compose(&standing, &event_data);
+    let frame_b = scene.compose(&standing, &event_data);
     assert_eq!(
         frame_a.pixels(),
         frame_b.pixels(),
@@ -403,7 +496,7 @@ fn real_pack_composes_non_blank_deterministic_overworld_frames() {
     );
 
     let facing_north = PlayerState::new((5, 4), 3, Direction::North);
-    let frame_c = scene.compose(&facing_north);
+    let frame_c = scene.compose(&facing_north, &event_data);
     assert!(
         frame_c
             .pixels()
@@ -416,4 +509,247 @@ fn real_pack_composes_non_blank_deterministic_overworld_frames() {
         frame_c.pixels(),
         "a different player position/facing must change the composed frame"
     );
+}
+
+// -- Real-pack NPC rendering (issue #161) ------------------------------------
+
+/// Brendan's House 1F: the only bundled map whose *fresh-save* object
+/// events include NPCs this module actually draws (Mom at `(2, 6)` and the
+/// rival's mom at `(2, 7)`, hidden on a fresh male save); the bedroom's own two events both resolve to
+/// nothing renderable on a fresh save, which is why these tests use 1F.
+const ONE_F: assets::MapId = assets::MapId("MAP_LITTLEROOT_TOWN_BRENDANS_HOUSE_1F");
+
+/// `FLAG_HIDE_LITTLEROOT_TOWN_BRENDANS_HOUSE_MOM`
+/// (`include/constants/flags.h:809`) -- deliberately *not* one of
+/// [`assets::RESET_MAP_FLAGS`], so Mom is visible on a fresh save and
+/// setting this id is an observable change.
+const FLAG_HIDE_BRENDANS_HOUSE_MOM: u16 = 0x2F6;
+
+/// The fresh-save flag store [`crate::new_game::init_save_blocks_for_new_game`]
+/// builds, so these tests see exactly the object-event visibility a real new
+/// game would.
+///
+/// **Delegates to the production constructor** rather than rebuilding the
+/// flag set from [`assets::RESET_MAP_FLAGS`]. It used to do the latter,
+/// which silently stopped matching its own doc comment the moment
+/// `init_save_blocks` grew a second effect (the skipped truck sequence's
+/// gender branch -- `crate::new_game::apply_truck_intro_flags`): the tests
+/// below kept passing against a flag set no real save ever has. A helper
+/// that claims to *be* production state has to come from production state.
+fn fresh_save_event_data() -> engine::event_data::EventData {
+    let (block1, _) = crate::new_game::init_save_blocks_for_new_game();
+    block1.event_data
+}
+
+/// The issue's own "NPCs actually reach the framebuffer" guard, and the
+/// mutation guard for [`super::sprites::SceneSprites::entries`]' NPC half:
+/// composing 1F with a fresh save must differ, pixel for pixel, from
+/// composing it with Mom's hide flag set. Both halves are load-bearing --
+/// it pins that Mom *draws* (a no-op NPC OAM step would make the two
+/// frames identical) and that the hide-flag gate reaches rendering (an
+/// unfiltered NPC list would too).
+#[test]
+#[ignore = "needs a local pack: run `cargo xtask extract` first"]
+fn real_pack_hiding_mom_changes_the_composed_1f_frame() {
+    let scene = super::load_room(ONE_F).expect("run `cargo xtask extract` first");
+    let player = PlayerState::new((2, 7), 3, Direction::North);
+
+    let mut data = fresh_save_event_data();
+    let mom = assets::MapEventsTable::new()
+        .resolve(ONE_F)
+        .unwrap()
+        .object_events
+        .iter()
+        .find(|o| o.graphics_id == "OBJ_EVENT_GFX_MOM")
+        .expect("1F's Mom object event");
+    assert!(
+        engine::overworld::object_event_is_visible(mom, &data),
+        "this test's own premise: Mom is visible on a fresh save"
+    );
+
+    let with_mom = scene.compose(&player, &data);
+    data.flag_set(FLAG_HIDE_BRENDANS_HOUSE_MOM).unwrap();
+    assert!(
+        !engine::overworld::object_event_is_visible(mom, &data),
+        "setting FLAG_HIDE_LITTLEROOT_TOWN_BRENDANS_HOUSE_MOM must hide her"
+    );
+    let without_mom = scene.compose(&player, &data);
+
+    assert_ne!(
+        with_mom.pixels(),
+        without_mom.pixels(),
+        "Mom must draw into the frame, and her hide flag must remove her \
+         from it"
+    );
+    assert_eq!(
+        without_mom.pixels(),
+        scene.compose(&player, &data).pixels(),
+        "composing the same state twice must still be deterministic"
+    );
+}
+
+/// The OAM half of the same guard, against the *real*
+/// [`assets::MapEventsTable`] entry rather than a hand-built fixture: the
+/// exact entries 1F yields on a fresh save, including each NPC's resolved
+/// frame block in the scene's combined sprite tileset and its generic
+/// palette bank.
+#[test]
+#[ignore = "needs a local pack: run `cargo xtask extract` first"]
+fn real_pack_1f_oam_entries_cover_every_drawn_fresh_save_npc() {
+    let scene = super::load_room(ONE_F).expect("run `cargo xtask extract` first");
+    let data = fresh_save_event_data();
+    let player = PlayerState::new((2, 7), 3, Direction::North);
+
+    let entries = scene.sprites.entries(&player, &data);
+    assert_eq!(
+        entries.len(),
+        2,
+        "the player and Mom, and nobody else. 1F's remaining fresh-save \
+         visible object events (both Vigoroths) resolve to no sprite; its \
+         dad and the rival are hidden by RESET_MAP_FLAGS; and the rival's \
+         *mom* and *sibling* are hidden by the male branch of the skipped \
+         truck sequence (`crate::new_game::apply_truck_intro_flags`). This \
+         assertion was `3` while that branch went unapplied -- a second, \
+         duplicated mother standing in the player's own house, which is \
+         exactly the bug it now guards"
+    );
+
+    // Entry 0 is always the player, at its fixed screen position.
+    assert_eq!(
+        entries[0].x(),
+        i16::try_from(super::avatar::PLAYER_OBJ_X).unwrap()
+    );
+    assert_eq!(entries[0].y(), super::avatar::PLAYER_OBJ_Y);
+    assert_eq!(entries[0].palette_bank(), 0);
+
+    // The one NPC entry. Mom faces east (`MOVEMENT_TYPE_FACE_RIGHT`), which
+    // reuses the west stand frame h-flipped (`avatar`'s frame table), and
+    // sits in the combined sprite tileset at the first `FRAME_BLOCK_TILES`
+    // stride after the player's own block -- her sheet is packed first, as
+    // `object_events[0]`.
+    let block = super::avatar::FRAME_BLOCK_TILES;
+    let west_stand = super::avatar::FRAME_WEST_STAND * super::avatar::FRAME_TILES;
+    let metatile_px = u16::try_from(super::METATILE_PX).unwrap();
+
+    let mom = entries[1];
+    assert_eq!(mom.palette_bank(), 4, "OBJ_EVENT_PAL_TAG_NPC_4 (mom.pal)");
+    assert_eq!(mom.tile_index(), block + west_stand);
+    assert!(mom.h_flip(), "MOVEMENT_TYPE_FACE_RIGHT");
+    assert!(mom.enabled());
+    assert_eq!(mom.dimensions(), (16, 32));
+    assert_eq!(
+        mom.x(),
+        i16::try_from(super::avatar::PLAYER_OBJ_X).unwrap(),
+        "same column as the player at (2, 7)"
+    );
+    assert_eq!(
+        mom.y(),
+        super::avatar::PLAYER_OBJ_Y - u8::try_from(metatile_px).unwrap(),
+        "one metatile north of the player: Mom stands at (2, 6)"
+    );
+
+    // The rival's mother is *not* drawn: her object event at (2, 7) --
+    // this fixture's own player tile, where she would have overlapped the
+    // player exactly -- is hidden by the truck sequence's male branch.
+    let rival_mom = assets::MapEventsTable::new()
+        .resolve(ONE_F)
+        .unwrap()
+        .object_events
+        .iter()
+        .find(|o| o.graphics_id == "OBJ_EVENT_GFX_WOMAN_4")
+        .expect("1F declares the rival's mother");
+    assert_eq!((rival_mom.x, rival_mom.y), (2, 7));
+    assert!(
+        !engine::overworld::object_event_is_visible(rival_mom, &data),
+        "FLAG_HIDE_LITTLEROOT_TOWN_BRENDANS_HOUSE_RIVAL_MOM is set for a \
+         male player (InsideOfTruck/scripts.inc:29)"
+    );
+
+    // The bindings those tile indices address, cross-checked against the
+    // packing order `npc::resolve_bindings` walks.
+    let bindings = scene.sprites.bindings();
+    assert_eq!(bindings.len(), 4, "mom, woman_4, norman, and the rival");
+    assert!(
+        bindings.contains_key("OBJ_EVENT_GFX_RIVAL_BRENDAN_NORMAL"),
+        "the rival is bound (to the player's own sheet) even though \
+         RESET_MAP_FLAGS hides him: bindings are per-`graphics_id`, not \
+         per-visibility"
+    );
+    assert!(!bindings.contains_key("OBJ_EVENT_GFX_VIGOROTH_CARRYING_BOX"));
+    assert!(!bindings.contains_key("OBJ_EVENT_GFX_NINJA_BOY"));
+}
+
+/// The opposite-gender rival regression against the *real* pack, both ways
+/// round: the rival object event a player can actually meet lives in the
+/// other protagonist's house and carries that protagonist's graphics id
+/// (`LittlerootTown_MaysHouse_2F/map.json:19` ->
+/// `OBJ_EVENT_GFX_RIVAL_MAY_NORMAL`, and vice versa), so a binding must
+/// resolve for it whichever gender this run is. Before the fix, playing as
+/// Brendan resolved a binding only for `..._RIVAL_BRENDAN_NORMAL` -- the id
+/// that stays hidden in his own house -- leaving the real rival undrawn
+/// once its hide flag cleared.
+///
+/// Real-pack, because the point is partly that both protagonists' walking
+/// sheets *and* palettes are actually extracted and decodable
+/// (`sprite/{brendan,may}/walking`, `sprite/palette/{brendan,may}`).
+#[test]
+#[ignore = "needs a local pack: run `cargo xtask extract` first"]
+fn real_pack_the_opposite_gender_rival_binds_for_either_player() {
+    const BRENDANS_2F: assets::MapId = assets::MapId("MAP_LITTLEROOT_TOWN_BRENDANS_HOUSE_2F");
+    const MAYS_2F: assets::MapId = assets::MapId("MAP_LITTLEROOT_TOWN_MAYS_HOUSE_2F");
+
+    let pack = assets::pack::AssetPack::load_default().expect("run `cargo xtask extract` first");
+    let scene_for = |map: assets::MapId, player: super::PlayerCharacter| {
+        let header = assets::MapHeaderTable::new().header(map).unwrap();
+        let layout = assets::LayoutTable::new().layout(header.layout).unwrap();
+        let events = assets::MapEventsTable::new().resolve(map).unwrap();
+        super::OverworldScene::from_pack(&pack, layout, player, events)
+            .expect("a bundled bedroom must decode against the real pack")
+    };
+
+    // Playing as Brendan, visiting May's house: her rival object must bind.
+    let brendan_in_mays_house = scene_for(MAYS_2F, super::PlayerCharacter::Brendan);
+    let binding = brendan_in_mays_house
+        .sprites
+        .bindings()
+        .get("OBJ_EVENT_GFX_RIVAL_MAY_NORMAL")
+        .copied()
+        .expect("the rival of a Brendan player is May, and she must bind");
+    assert_ne!(
+        binding.palette_bank(),
+        0,
+        "the rival draws from its own protagonist palette, not the player's \
+         bank 0 -- upstream PALSLOT_NPC_SPECIAL vs PALSLOT_PLAYER"
+    );
+    assert_ne!(
+        binding.base_tile(),
+        0,
+        "and from its own frame block, not the player's at base tile 0"
+    );
+
+    // The mirror image: playing as May, visiting Brendan's house.
+    let may_in_brendans_house = scene_for(BRENDANS_2F, super::PlayerCharacter::May);
+    let mirrored = may_in_brendans_house
+        .sprites
+        .bindings()
+        .get("OBJ_EVENT_GFX_RIVAL_BRENDAN_NORMAL")
+        .copied()
+        .expect("the rival of a May player is Brendan, and he must bind");
+    assert_eq!(
+        (mirrored.palette_bank(), mirrored.base_tile()),
+        (binding.palette_bank(), binding.base_tile()),
+        "the two configurations are mirror images -- same bank, same stride"
+    );
+
+    // And the *resident's own* id still binds, to the already-loaded player
+    // sheet at bank 0 / base tile 0 (it is hidden in play, but the binding
+    // is correct rather than absent).
+    let brendan_at_home = scene_for(BRENDANS_2F, super::PlayerCharacter::Brendan);
+    let own = brendan_at_home
+        .sprites
+        .bindings()
+        .get("OBJ_EVENT_GFX_RIVAL_BRENDAN_NORMAL")
+        .copied()
+        .expect("the same-gender variant reuses the player's own sheet");
+    assert_eq!((own.palette_bank(), own.base_tile()), (0, 0));
 }

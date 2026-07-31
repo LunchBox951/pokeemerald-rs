@@ -413,7 +413,13 @@ mod tests {
         BattleScene, MapConnection, MapEvents, MapHeader, MapId, MapType, MetatileCell,
         RegionMapSectionId, Weather,
     };
+    use engine::event_data::EventData;
     use engine::overworld::Direction as EngineDirection;
+
+    /// A fresh event-flag store: nothing hidden. This module's fixture maps
+    /// carry no object events, so `PlayerState::step`'s object-event
+    /// collision check never consults it.
+    const NO_FLAGS: EventData = EventData::new();
 
     fn cell(metatile_id: u16, collision: u8, elevation: u8) -> u16 {
         MetatileCell {
@@ -718,8 +724,9 @@ mod tests {
         );
 
         let mut player = PlayerState::new((5, 5), 3, EngineDirection::East);
+        let east = Some(EngineDirection::East);
         assert!(matches!(
-            player.step(Some(EngineDirection::East), &runtime, &no_connections),
+            player.step(east, &runtime, &no_connections, &NO_FLAGS),
             engine::overworld::StepOutcome::Advanced { .. }
         ));
 

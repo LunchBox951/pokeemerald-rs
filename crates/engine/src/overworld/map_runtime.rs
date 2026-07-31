@@ -194,14 +194,36 @@ impl<'a> MapRuntime<'a> {
         attribute.and_then(Result::ok).map(|a| a.behavior)
     }
 
-    /// The object event whose static position is `(x, y, elevation)`, or
-    /// `None`, mirroring upstream `GetObjectEventIdByPosition` /
-    /// `ObjectEventDoesElevationMatch` (`event_object_movement.c`). Position
-    /// must match exactly; elevation must match unless either the query or
-    /// object uses [`super::collision::ELEVATION_TRANSITION`] as a wildcard.
-    #[must_use]
-    pub fn object_event_at(&self, x: i32, y: i32, elevation: u8) -> Option<&'static ObjectEvent> {
-        self.events.object_events.iter().find(|o| {
+    /// Every object event whose static position is `(x, y, elevation)`, in
+    /// map.json declaration order — mirroring the *scan* upstream
+    /// `GetObjectEventIdByPosition` / `DoesObjectCollideWithObjectAt`
+    /// perform over `gObjectEvents` (`event_object_movement.c:2192-2215`,
+    /// `:4724-4742`), with `ObjectEventDoesElevationMatch` /
+    /// `AreElevationsCompatible` (`:7789-7797`, the same predicate spelled
+    /// twice upstream) as the elevation test: position must match exactly;
+    /// elevation must match unless either the query or the object uses
+    /// [`super::collision::ELEVATION_TRANSITION`] as a wildcard.
+    ///
+    /// **An iterator, not a single hit, on purpose.** Templates may stack on
+    /// one tile with independent hide flags — the Birch lab's three starter
+    /// balls all sit at `(6, 8)` — and upstream only ever scans object
+    /// events that were actually *spawned*, which a set hide flag prevents
+    /// (`TrySpawnObjectEvents`' `!FlagGet(template->flagId)` gate,
+    /// `event_object_movement.c:1670-1672`). This port has no spawn step, so
+    /// the hide-flag filter has to be applied *inside* the scan rather than
+    /// to its first hit; that composition lives one layer up, in
+    /// [`super::object_event::visible_object_event_at`], which is what
+    /// callers wanting "the object event upstream would find here" should
+    /// use. This method deliberately knows nothing about flags: it is the
+    /// pure map-data half.
+    pub fn object_events_at(
+        &self,
+        x: i32,
+        y: i32,
+        elevation: u8,
+    ) -> impl Iterator<Item = &'static ObjectEvent> {
+        let objects = self.events.object_events;
+        objects.iter().filter(move |o| {
             i32::from(o.x) == x
                 && i32::from(o.y) == y
                 && (o.elevation == elevation
@@ -553,7 +575,7 @@ mod tests {
     }
 
     #[test]
-    fn object_event_at_matches_static_position_and_elevation_wildcard() {
+    fn object_events_at_matches_static_position_and_elevation_wildcard() {
         let hdr = header("MAP_F", &[]);
         let objects: &'static [ObjectEvent] = Box::leak(Box::new([
             ObjectEvent {
@@ -626,23 +648,21 @@ mod tests {
             MetatileAttributeTable::new(&[]),
         );
 
-        assert_eq!(
-            runtime.object_event_at(6, 6, 4).map(|o| o.local_id),
-            Some(1)
-        );
-        assert_eq!(
-            runtime.object_event_at(6, 6, 3).map(|o| o.local_id),
-            Some(2)
-        );
-        assert_eq!(
-            runtime.object_event_at(6, 6, 0).map(|o| o.local_id),
-            Some(1)
-        );
-        assert_eq!(
-            runtime.object_event_at(7, 7, 9).map(|o| o.local_id),
-            Some(3)
-        );
-        assert!(runtime.object_event_at(0, 0, 0).is_none());
+        let ids_at = |x, y, elevation| -> Vec<u8> {
+            runtime
+                .object_events_at(x, y, elevation)
+                .map(|o| o.local_id)
+                .collect()
+        };
+
+        assert_eq!(ids_at(6, 6, 4), vec![1]);
+        assert_eq!(ids_at(6, 6, 3), vec![2]);
+        // The wildcard query matches *both* stacked objects at (6, 6), in
+        // declaration order -- the whole reason this returns an iterator
+        // (see the method's own docs).
+        assert_eq!(ids_at(6, 6, 0), vec![1, 2]);
+        assert_eq!(ids_at(7, 7, 9), vec![3]);
+        assert!(ids_at(0, 0, 0).is_empty());
     }
 
     /// Crossing south, matching Route 101 -> Littleroot Town's real

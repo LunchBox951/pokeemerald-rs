@@ -197,10 +197,11 @@ ints, and CI (`scripts/version_check.py`) rejects regressions and bad resets.
 | `MAJOR`   | a large project phase or breaking repository contract | `MINOR`, `PATCH → 0` | maintainer |
 | `FINAL`   | the project is agreed complete (`0` → `1`) | `MAJOR`, `MINOR`, `PATCH → 0` | **maintainer only — never automated** |
 
-A `MAJOR` or `MINOR` bump **must** reset the lower components to `0`, or CI rejects
-it. While `FINAL = 0`, every release is a **prerelease**; nightly/beta channel
-artifacts use channel + date + short-SHA names and do **not** require a `VERSION`
-bump per promotion.
+Every pull request must increase `VERSION`; an unchanged or lower version fails
+the CI policy gate. A `MAJOR` or `MINOR` bump **must** reset the lower components
+to `0`, or CI rejects it. While `FINAL = 0`, every release is a **prerelease**;
+nightly/beta channel artifacts use channel + date + short-SHA names and do **not**
+require an additional `VERSION` bump per promotion.
 
 ## The `FINAL` gate
 

@@ -54,23 +54,33 @@
 
 use assets::{ImageRef, PaletteRef};
 use engine::overworld::{Direction, PlayerState, WALK_FRAMES_PER_TILE};
-use rendering::{Bgr555, BitDepth, OamEntry, ObjShape, Palette, Tileset};
+use rendering::{Bgr555, BitDepth, OamEntry, ObjShape, Palette};
 
 use super::{OverworldSceneError, METATILE_PX, PLAYER_VIEW_COL, PLAYER_VIEW_ROW};
 
-/// One walking-sheet frame's pixel size (module docs' table).
-const FRAME_W: usize = 16;
-const FRAME_H: usize = 32;
+/// One walking-sheet frame's pixel size (module docs' table). `pub(super)`:
+/// [`super::npc`] packs NPC "standing" sheets against the same 9-frame,
+/// 16x32-per-frame layout.
+pub(super) const FRAME_W: usize = 16;
+pub(super) const FRAME_H: usize = 32;
 /// `sPicTable_BrendanNormal`/`MayNormal`'s first 9 entries -- the on-foot
 /// (not-running) frames this slice uses. `walking.png`'s remaining content
-/// (if any) is never referenced (no running in v1 scope).
-const NUM_WALK_FRAMES: usize = 9;
+/// (if any) is never referenced (no running in v1 scope). Also the frame
+/// count every NPC "people" sheet [`super::npc`] resolves shares (same
+/// `overworld_frame(..., 2, 4, n)` layout upstream's own pic tables use).
+pub(super) const NUM_WALK_FRAMES: usize = 9;
 /// Tiles per frame: `(FRAME_W / 8) * (FRAME_H / 8)`.
-const FRAME_TILES: u16 = 8;
+pub(super) const FRAME_TILES: u16 = 8;
+/// One frame block's byte length in the packed 4bpp tile stream
+/// (`NUM_WALK_FRAMES * FRAME_TILES` tiles, 32 bytes each) -- the stride
+/// [`super::npc::resolve_bindings`] advances by per distinct sprite it packs
+/// into the scene's combined sprite tileset.
+#[allow(clippy::cast_possible_truncation)] // NUM_WALK_FRAMES (9) always fits u16.
+pub(super) const FRAME_BLOCK_TILES: u16 = NUM_WALK_FRAMES as u16 * FRAME_TILES;
 
-const FRAME_SOUTH_STAND: u16 = 0;
-const FRAME_NORTH_STAND: u16 = 1;
-const FRAME_WEST_STAND: u16 = 2; // east reuses this, h-flipped.
+pub(super) const FRAME_SOUTH_STAND: u16 = 0;
+pub(super) const FRAME_NORTH_STAND: u16 = 1;
+pub(super) const FRAME_WEST_STAND: u16 = 2; // east reuses this, h-flipped.
 const FRAME_SOUTH_STEP: u16 = 3;
 const FRAME_NORTH_STEP: u16 = 5;
 const FRAME_WEST_STEP: u16 = 7; // east reuses this, h-flipped.
@@ -86,12 +96,15 @@ const STEP_FRAME_HALF: u8 = WALK_FRAMES_PER_TILE / 2;
 /// `rendering::oam::obj_dimensions`'s table) at `.priority = 2`, the same
 /// priority the middle BG layer uses (`super::viewport::MIDDLE_PRIORITY`) --
 /// a sprite wins same-priority ties against a BG (`rendering::compositor`'s
-/// rules), so the player draws in front of the middle/bottom layers but
+/// rules), so an object event draws in front of the middle/bottom layers but
 /// behind the top one, matching `DrawMetatile`'s own "covers object event
-/// sprites" comment on the top layer.
-const PLAYER_OBJ_SHAPE: ObjShape = ObjShape::Vertical;
-const PLAYER_OBJ_SIZE: u8 = 2;
-const PLAYER_OBJ_PRIORITY: u8 = 2;
+/// sprites" comment on the top layer. `gObjectEventBaseOam_16x32` is shared
+/// by every 16x32 object event, not just the player, so [`super::npc`]
+/// reuses these same three constants for its own "standard" NPC OAM entries
+/// rather than redeclaring them.
+pub(super) const PLAYER_OBJ_SHAPE: ObjShape = ObjShape::Vertical;
+pub(super) const PLAYER_OBJ_SIZE: u8 = 2;
+pub(super) const PLAYER_OBJ_PRIORITY: u8 = 2;
 
 /// The player OBJ's fixed screen position (module docs).
 #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)] // small, positive, compile-time.
@@ -134,26 +147,57 @@ impl PlayerCharacter {
             Self::May => "may",
         }
     }
+
+    /// The other protagonist — whoever *this* run's player is not.
+    ///
+    /// Upstream has no single "the rival" graphics id: the two Littleroot
+    /// houses are mirrored maps, each hardcoding its own resident's
+    /// `OBJ_EVENT_GFX_RIVAL_{BRENDAN,MAY}_NORMAL`
+    /// (`data/maps/LittlerootTown_BrendansHouse_2F/map.json:19` vs
+    /// `LittlerootTown_MaysHouse_2F/map.json:19`), and the intro warp decides
+    /// which one is home (`data/maps/LittlerootTown/scripts.inc:116` male ->
+    /// Brendan's house, `:127` female -> May's). So the object event the
+    /// player can actually meet as the rival is always the *other*
+    /// protagonist's — see [`super::npc::resolve_sprite_source`].
+    pub(super) const fn other(self) -> Self {
+        match self {
+            Self::Brendan => Self::May,
+            Self::May => Self::Brendan,
+        }
+    }
 }
 
-/// Build the player's combined 9-frame walking [`Tileset`] out of the pack's
-/// `sprite/{brendan,may}/walking` image (module docs' frame table).
+/// Validate and pack a 9-frame "people" sheet's raw pixels into the GBA's
+/// packed 4bpp tile byte stream (module docs' frame table): every one of
+/// upstream's `overworld_frame(<pic>, 2, 4, n)` walking-sheet pics --
+/// `sPicTable_BrendanNormal`/`MayNormal` and every "standard" NPC pic table
+/// [`super::npc`] resolves -- shares this exact 144x32 (9 frames of 16x32),
+/// tiled-left-to-right layout, so this one packer serves both.
+///
+/// Returns the raw concatenated bytes rather than a decoded [`Tileset`] so
+/// [`super::npc::resolve_bindings`] can concatenate several sheets'
+/// worth before decoding the scene's *one* combined sprite [`Tileset`]
+/// ([`SpriteLayer`](rendering::SpriteLayer) draws every sprite from a single
+/// shared tileset -- see that module's docs).
 ///
 /// # Errors
 ///
 /// [`OverworldSceneError::SpriteSheetWrongDimensions`] if `image`'s
-/// dimensions aren't exactly `NUM_WALK_FRAMES * FRAME_W` x `FRAME_H`
-/// (never true for the real upstream art); the same
-/// [`OverworldSceneError::ImagePixelCountMismatch`]/
+/// dimensions aren't exactly `NUM_WALK_FRAMES * FRAME_W` x `FRAME_H` (never
+/// true for the real upstream art, `label` identifies which pack entry
+/// failed); the same [`OverworldSceneError::ImagePixelCountMismatch`]/
 /// [`OverworldSceneError::ImageNotTileAligned`] cases as
 /// [`super::pack_4bpp_region`].
-pub(super) fn build_sprite_tileset(image: ImageRef<'_>) -> Result<Tileset, OverworldSceneError> {
+pub(super) fn pack_people_sheet_frames(
+    label: &'static str,
+    image: ImageRef<'_>,
+) -> Result<Vec<u8>, OverworldSceneError> {
     let expected_width = u32::try_from(NUM_WALK_FRAMES * FRAME_W).unwrap_or(u32::MAX);
     #[allow(clippy::cast_possible_truncation)] // FRAME_H (32) always fits u32.
     let expected_height = FRAME_H as u32;
     if image.width != expected_width || image.height != expected_height {
         return Err(OverworldSceneError::SpriteSheetWrongDimensions {
-            id: "sprite/*/walking",
+            id: label,
             expected: (expected_width, expected_height),
             actual: (image.width, image.height),
         });
@@ -162,7 +206,7 @@ pub(super) fn build_sprite_tileset(image: ImageRef<'_>) -> Result<Tileset, Overw
     let mut bytes = Vec::with_capacity(NUM_WALK_FRAMES * FRAME_TILES as usize * 32);
     for frame in 0..NUM_WALK_FRAMES {
         bytes.extend(super::pack_4bpp_region(
-            "sprite/*/walking",
+            label,
             image,
             frame * FRAME_W,
             0,
@@ -170,32 +214,54 @@ pub(super) fn build_sprite_tileset(image: ImageRef<'_>) -> Result<Tileset, Overw
             FRAME_H,
         )?);
     }
-    Tileset::decode(BitDepth::Bpp4, &bytes).map_err(OverworldSceneError::from)
+    Ok(bytes)
 }
 
-/// Build the player's dedicated sprite [`Palette`]: `raw`'s colors flat at
-/// bank 0 (the only bank [`player_entry`]'s OAM entries reference).
-pub(super) fn sprite_palette(raw: PaletteRef<'_>) -> Palette {
-    let mut colors = [Bgr555::default(); Palette::LEN];
+/// Fill one 16-color palette bank (upstream `PALSLOT_*`) from `raw`'s
+/// colors, leaving every other bank untouched -- the shared building block
+/// [`super::npc::build_combined_palette`] uses for every one of the scene's
+/// five sprite palette banks (bank 0, the player's own; banks 1..=4, the
+/// generic `npc_1..4` palettes).
+pub(super) fn fill_palette_bank(
+    colors: &mut [Bgr555; Palette::LEN],
+    bank: usize,
+    raw: PaletteRef<'_>,
+) {
     let count = usize::from(raw.color_count).min(Palette::BANK_LEN);
-    for (slot, color) in colors[..Palette::BANK_LEN]
+    let start = bank * Palette::BANK_LEN;
+    for (slot, color) in colors[start..start + Palette::BANK_LEN]
         .iter_mut()
         .zip(raw.colors())
         .take(count)
     {
         *slot = Bgr555::from_raw(color);
     }
-    Palette::new(colors)
+}
+
+/// The "standing" tile index for `facing`, plus whether it should be drawn
+/// h-flipped (module docs' table): frame 0/1/2 for south/north/west, with
+/// east reusing the west frame flipped. Shared by [`frame_for`] (the
+/// player, which additionally shows a walk-step frame mid-transit) and
+/// [`super::npc::oam_entries`] (every NPC this slice renders, which never
+/// walks -- v1's "stationary + look-around only" scope -- so it only ever
+/// needs this stand frame).
+pub(super) const fn stand_frame_for(facing: Direction) -> (u16, bool) {
+    match facing {
+        Direction::South => (FRAME_SOUTH_STAND, false),
+        Direction::North => (FRAME_NORTH_STAND, false),
+        Direction::West => (FRAME_WEST_STAND, false),
+        Direction::East => (FRAME_WEST_STAND, true),
+    }
 }
 
 /// `player`'s current tile index into the 9-frame walking tileset, plus
 /// whether it should be drawn h-flipped (module docs' table + cadence).
 fn frame_for(player: &PlayerState) -> (u16, bool) {
-    let (stand, step, h_flip) = match player.facing() {
-        Direction::South => (FRAME_SOUTH_STAND, FRAME_SOUTH_STEP, false),
-        Direction::North => (FRAME_NORTH_STAND, FRAME_NORTH_STEP, false),
-        Direction::West => (FRAME_WEST_STAND, FRAME_WEST_STEP, false),
-        Direction::East => (FRAME_WEST_STAND, FRAME_WEST_STEP, true),
+    let (stand, h_flip) = stand_frame_for(player.facing());
+    let step = match player.facing() {
+        Direction::South => FRAME_SOUTH_STEP,
+        Direction::North => FRAME_NORTH_STEP,
+        Direction::West | Direction::East => FRAME_WEST_STEP,
     };
     let frame = if player.in_transit() && player.step_progress() < STEP_FRAME_HALF {
         step
@@ -228,7 +294,14 @@ pub(super) fn player_entry(player: &PlayerState) -> OamEntry {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use engine::event_data::EventData;
     use engine::overworld::TilePos;
+
+    /// A fresh event-flag store: nothing hidden. This module's fixture map
+    /// carries no object events, so `PlayerState::step`'s object-event
+    /// collision check never consults it.
+    const NO_FLAGS: EventData = EventData::new();
+    use rendering::Tileset;
 
     fn walking_sheet_image(pixels: &[u8]) -> ImageRef<'_> {
         #[allow(clippy::cast_possible_truncation)]
@@ -257,7 +330,7 @@ mod tests {
     }
 
     #[test]
-    fn build_sprite_tileset_rejects_the_wrong_sheet_size() {
+    fn pack_people_sheet_frames_rejects_the_wrong_sheet_size() {
         let pixels = vec![0u8; 8 * 8];
         let image = ImageRef {
             width: 8,
@@ -265,7 +338,7 @@ mod tests {
             bit_depth: 8,
             pixels: &pixels,
         };
-        let err = build_sprite_tileset(image).unwrap_err();
+        let err = pack_people_sheet_frames("sprite/*/walking", image).unwrap_err();
         #[allow(clippy::cast_possible_truncation)]
         let expected = OverworldSceneError::SpriteSheetWrongDimensions {
             id: "sprite/*/walking",
@@ -276,10 +349,11 @@ mod tests {
     }
 
     #[test]
-    fn build_sprite_tileset_packs_each_frame_into_its_own_tile_range() {
+    fn pack_people_sheet_frames_packs_each_frame_into_its_own_tile_range() {
         let pixels = synthetic_walking_sheet();
         let image = walking_sheet_image(&pixels);
-        let tileset = build_sprite_tileset(image).unwrap();
+        let bytes = pack_people_sheet_frames("sprite/*/walking", image).unwrap();
+        let tileset = Tileset::decode(BitDepth::Bpp4, &bytes).unwrap();
         assert_eq!(tileset.len(), NUM_WALK_FRAMES * usize::from(FRAME_TILES));
 
         // Frame 3's first tile (index 3 * FRAME_TILES) must read frame 3's
@@ -288,6 +362,14 @@ mod tests {
         assert_eq!(tile.index(0, 0), 3);
         assert_eq!(tile.index(7, 7), 3);
     }
+
+    // `fill_palette_bank`'s own per-bank placement is exercised end-to-end by
+    // `OverworldScene::from_pack`'s real-pack test (`crate::overworld::tests`)
+    // rather than a dedicated unit test here: `assets::PaletteRef`'s payload
+    // field is private outside the `assets` crate (only constructible by
+    // loading a real pack), so this module cannot hand-build one -- the same
+    // limitation `viewport::combined_world_palette`'s own tests already
+    // document.
 
     fn player_at(position: TilePos, facing: Direction) -> PlayerState {
         PlayerState::new(position, 3, facing)
@@ -338,7 +420,7 @@ mod tests {
 
         let mut player = player_at((2, 2), Direction::South);
         assert!(matches!(
-            player.step(Some(Direction::South), &runtime, &no_connections),
+            player.step(Some(Direction::South), &runtime, &no_connections, &NO_FLAGS),
             engine::overworld::StepOutcome::Advanced { .. }
         ));
         assert_eq!(frame_for(&player), (FRAME_SOUTH_STEP, false));

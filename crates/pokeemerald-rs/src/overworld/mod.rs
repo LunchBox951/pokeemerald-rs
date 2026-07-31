@@ -54,17 +54,25 @@
 //! # Scope
 //!
 //! In scope: the current map's layout grid + border fill, primary/secondary
-//! tileset BG composition, camera-follow scroll, and the player OBJ's
-//! facing/step animation. Out of scope (per issue #126, tracked as future
-//! integration slices): NPC/object-event rendering, reflections and field
-//! effects, connection streaming (rendering a neighbouring map's own
+//! tileset BG composition, camera-follow scroll, the player OBJ's
+//! facing/step animation, and (issue #161) a bounded set of the current
+//! map's *other* object events — [`npc`] renders the ones it recognizes a
+//! sprite for, hide-flag filtered via
+//! [`engine::overworld::object_event_is_visible`], and
+//! [`crate::flow::OverworldPhase`] drives the facing-tile interaction lookup
+//! ([`engine::overworld::facing_object_event`]) and the resulting
+//! [`dialog::NpcDialog`] over this module's own composed frame. Out of scope
+//! (per issue #126, tracked as future integration slices): reflections and
+//! field effects, connection streaming (rendering a neighbouring map's own
 //! content near an edge, distinct from the border-block fallback above,
-//! which *is* modeled), dialog UI, and **tileset tile animations**
-//! (`tileset_anims.c`'s per-tileset frame cadence over the extracted
-//! `tileset/<name>/anim/...` entries — this slice composes from the base
-//! `tiles.png` only, so animated tiles hold their base frame). Acceptance ID **I-3** stays
-//! whatever `docs/acceptance/v1.md` already has it at -- this slice does
-//! not flip acceptance markers.
+//! which *is* modeled), and **tileset tile animations** (`tileset_anims.c`'s
+//! per-tileset frame cadence over the extracted `tileset/<name>/anim/...`
+//! entries — this slice composes from the base `tiles.png` only, so
+//! animated tiles hold their base frame). See [`npc`]'s own module docs for
+//! exactly which object-event graphics ids render a sprite vs. are only
+//! hide-flag/interaction tracked. Acceptance ID **I-3** stays whatever
+//! `docs/acceptance/v1.md` already has it at -- this slice does not flip
+//! acceptance markers.
 //!
 //! # Documented fidelity deltas
 //!
@@ -87,7 +95,8 @@
 //!   than above) is this module's own pick, not a transcribed constant.
 
 use assets::{
-    AssetError, AssetPack, BorderGrid, ImageRef, LayoutId, MapLayout, MetatileAttributeTable,
+    AssetError, AssetPack, BorderGrid, ImageRef, LayoutId, MapEventsTable, MapLayout,
+    MetatileAttributeTable,
 };
 use rendering::{
     compose_frame_with_effects, BgLayer, BgSlot, BitDepth, FrameEffects, Framebuffer, Palette,
@@ -95,18 +104,27 @@ use rendering::{
 };
 
 pub use avatar::PlayerCharacter;
+pub(crate) use dialog::{DialogOutcome, NpcDialog};
 // Re-exported so callers outside this crate (namely `xtask`'s smoke e2e
 // check, which deliberately depends only on `pokeemerald-rs` -- see that
 // crate's `Cargo.toml` docs -- not `engine` directly) can build a
 // [`PlayerState`] to pass to [`OverworldScene::compose`] without adding
 // their own `engine` dependency.
 pub use engine::overworld::{Direction, PlayerState};
+// Re-exported for the same reason as `Direction`/`PlayerState` above: the
+// current map's flag store [`OverworldScene::compose`] needs for object-event
+// hide-flag filtering (issue #161), without pulling in `engine` directly.
+pub use engine::event_data::EventData;
 
 mod avatar;
+pub(crate) mod dialog;
+mod npc;
+pub(crate) mod npc_scripts;
+mod sprites;
 mod viewport;
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 
 /// A GBA metatile's pixel size: 16x16 (2x2 [`rendering::BitDepth::TILE_DIM`]
 /// tiles) -- shared by [`viewport`]'s camera/tilemap math and [`avatar`]'s
@@ -133,6 +151,16 @@ const PAD: i32 = 1;
 /// area), already shipped by `crates/xtask`'s extraction pipeline
 /// (`crates/xtask/src/extract/mod.rs`'s `LAYOUTS`).
 const DEFAULT_ROOM_LAYOUT_ID: &str = "LAYOUT_LITTLEROOT_TOWN_BRENDANS_HOUSE_2F";
+
+/// `MAP_LITTLEROOT_TOWN_BRENDANS_HOUSE_2F` -- [`DEFAULT_ROOM_LAYOUT_ID`]'s
+/// own map id, needed (issue #161) so [`load_default_room`] can resolve this
+/// room's own [`assets::MapEvents`] to seed [`OverworldScene::from_pack`]'s
+/// NPC rendering. Kept as its own literal (mirroring
+/// [`DEFAULT_ROOM_LAYOUT_ID`]'s own hardcoded string) rather than importing
+/// `crate::new_game::SPAWN_MAP_ID` -- `new_game` already depends on this
+/// module (`PlayerCharacter`), so the reverse dependency would cycle; a test
+/// in `tests` cross-checks the two stay in agreement.
+const DEFAULT_ROOM_MAP_ID: assets::MapId = assets::MapId("MAP_LITTLEROOT_TOWN_BRENDANS_HOUSE_2F");
 
 /// Why building or composing an [`OverworldScene`] failed.
 ///
@@ -289,13 +317,22 @@ pub struct OverworldScene {
     world_palette: Palette,
     /// See [`viewport::combined_world_tileset`]'s docs.
     blank_tile_index: u16,
-    sprite_tiles: Tileset,
-    sprite_palette: Palette,
+    /// This room's whole OBJ layer -- the combined player+NPC sprite
+    /// tileset/palette and the object events drawn from it (issue #161; see
+    /// [`sprites`]'s module docs).
+    sprites: sprites::SceneSprites,
 }
 
 impl OverworldScene {
     /// Decode `layout`'s map viewport and `player`'s walking sprite out of
     /// an already-loaded `pack`.
+    ///
+    /// `events` is this room's own map's object/warp/coord/bg events (issue
+    /// #161: needed here, not just at [`Self::runtime`] time, so the NPC
+    /// sprites [`Self::compose`] can draw are decoded once up front rather
+    /// than every frame) -- typically a `'static`
+    /// [`assets::MapEventsTable::resolve`] entry, matching `layout`'s own
+    /// map (see [`load_default_room`]/[`load_room`]).
     ///
     /// # Errors
     ///
@@ -313,6 +350,7 @@ impl OverworldScene {
         pack: &AssetPack,
         layout: &MapLayout,
         player: PlayerCharacter,
+        events: &'static assets::MapEvents,
     ) -> Result<Self, OverworldSceneError> {
         let primary_name = resolve_tileset_pack_name(layout.primary_tileset)?;
         let secondary_name = resolve_tileset_pack_name(layout.secondary_tileset)?;
@@ -333,10 +371,10 @@ impl OverworldScene {
         let _ = layout.grid(&grid_bytes)?;
         let _ = BorderGrid::new(&border_bytes)?;
 
-        let sprite_image = pack.sprite(player.sprite_path())?;
-        let sprite_palette_ref = pack.sprite_palette(player.palette_name())?;
-        let sprite_tiles = avatar::build_sprite_tileset(sprite_image)?;
-        let sprite_palette = avatar::sprite_palette(sprite_palette_ref);
+        // The whole OBJ layer -- the player's own frames plus every NPC
+        // sheet this room's object events reference, decoded once into one
+        // combined tileset/palette (see `sprites`' module docs).
+        let sprites = sprites::SceneSprites::from_pack(pack, player, events)?;
 
         Ok(Self {
             layout: *layout,
@@ -349,18 +387,23 @@ impl OverworldScene {
             world_tiles,
             world_palette,
             blank_tile_index,
-            sprite_tiles,
-            sprite_palette,
+            sprites,
         })
     }
 
-    /// Composite the current map viewport plus the player OBJ, centered on
+    /// Composite the current map viewport plus the player OBJ and this
+    /// room's own currently-visible NPC object events, centered on
     /// `player`'s current tile with edge clamping via the border-block
     /// fallback (module docs), into a fresh [`Framebuffer`].
     ///
+    /// `event_data` gates which object events are visible
+    /// ([`engine::overworld::object_event_is_visible`]) -- the same flag
+    /// store [`crate::flow::OverworldPhase`] retains in its own
+    /// `SaveBlock1::event_data`.
+    ///
     /// Deterministic: a pure function of `player`'s already-computed
-    /// position/facing/step-progress and this scene's already-decoded data
-    /// -- no wall-clock time, no RNG.
+    /// position/facing/step-progress, `event_data`'s current flags, and this
+    /// scene's already-decoded data -- no wall-clock time, no RNG.
     ///
     /// # Panics
     ///
@@ -368,7 +411,7 @@ impl OverworldScene {
     /// unchanged since [`from_pack`](Self::from_pack) already validated
     /// them there).
     #[must_use]
-    pub fn compose(&self, player: &PlayerState) -> Framebuffer {
+    pub fn compose(&self, player: &PlayerState, event_data: &EventData) -> Framebuffer {
         let grid = self
             .layout
             .grid(&self.grid_bytes)
@@ -426,12 +469,16 @@ impl OverworldScene {
             ),
         ];
 
-        let entries = [avatar::player_entry(player)];
+        // The player at OAM index 0 followed by every recognized,
+        // currently-visible NPC object event (issue #161 --
+        // `sprites::SceneSprites::entries`' own doc comment on why index 0
+        // is load-bearing).
+        let entries = self.sprites.entries(player, event_data);
         let sprites = SpriteLayer::new(
             &entries,
-            &self.sprite_tiles,
-            &self.sprite_tiles,
-            &self.sprite_palette,
+            self.sprites.tiles(),
+            self.sprites.tiles(),
+            self.sprites.palette(),
         );
 
         // GBA hardware shows BG palette color 0 — not black — wherever every
@@ -450,8 +497,12 @@ impl OverworldScene {
     /// this crate (namely `xtask`'s smoke e2e check) inspect/compare
     /// composed frames without depending on `rendering` directly.
     #[must_use]
-    pub fn compose_frame(&self, player: &PlayerState) -> Box<platform::Frame> {
-        crate::frame::to_platform_frame(&self.compose(player))
+    pub fn compose_frame(
+        &self,
+        player: &PlayerState,
+        event_data: &EventData,
+    ) -> Box<platform::Frame> {
+        crate::frame::to_platform_frame(&self.compose(player, event_data))
     }
 
     /// Build an [`engine::overworld::MapRuntime`] over this scene's
@@ -493,7 +544,8 @@ impl OverworldScene {
 
 /// Load the pack from its default location and decode
 /// [`DEFAULT_ROOM_LAYOUT_ID`] out of it, with [`PlayerCharacter::Brendan`]'s
-/// walking sprite -- the entry point `xtask`'s smoke e2e check uses.
+/// walking sprite and [`DEFAULT_ROOM_MAP_ID`]'s own object events (issue
+/// #161) -- the entry point `xtask`'s smoke e2e check uses.
 ///
 /// # Errors
 ///
@@ -504,7 +556,34 @@ impl OverworldScene {
 pub fn load_default_room() -> Result<OverworldScene, OverworldSceneError> {
     let pack = AssetPack::load_default()?;
     let layout = assets::LayoutTable::new().layout(LayoutId(DEFAULT_ROOM_LAYOUT_ID))?;
-    OverworldScene::from_pack(&pack, layout, PlayerCharacter::Brendan)
+    let events = MapEventsTable::new().resolve(DEFAULT_ROOM_MAP_ID)?;
+    OverworldScene::from_pack(&pack, layout, PlayerCharacter::Brendan, events)
+}
+
+/// Load the pack from its default location and decode `map_id`'s own room
+/// out of it, with [`PlayerCharacter::Brendan`]'s walking sprite -- the
+/// map-id-keyed counterpart to [`load_default_room`] (which always decodes
+/// the fixed [`DEFAULT_ROOM_LAYOUT_ID`]), added for warp processing (issue
+/// #163): [`crate::flow::OverworldPhase`] needs to rebind its rendered room
+/// to an arbitrary warp destination, not just the bedroom the intro hands
+/// off to. Resolves `map_id`'s layout via the generated
+/// [`assets::MapHeaderTable`] (`header.layout`), then decodes it exactly
+/// like [`load_default_room`] does its own fixed id.
+///
+/// # Errors
+///
+/// [`OverworldSceneError::Pack`] with [`OverworldSceneError::is_pack_missing`]
+/// true if no pack has been extracted yet; [`OverworldSceneError::Asset`] if
+/// `map_id` (or its layout) isn't in the generated tables -- unreachable for
+/// any [`assets::MapId`] this port's own warp-destination tables reference;
+/// see [`OverworldScene::from_pack`] for the other (real-pack-only) error
+/// cases.
+pub fn load_room(map_id: assets::MapId) -> Result<OverworldScene, OverworldSceneError> {
+    let pack = AssetPack::load_default()?;
+    let header = assets::MapHeaderTable::new().header(map_id)?;
+    let layout = assets::LayoutTable::new().layout(header.layout)?;
+    let events = MapEventsTable::new().resolve(map_id)?;
+    OverworldScene::from_pack(&pack, layout, PlayerCharacter::Brendan, events)
 }
 
 /// Translate a [`MapLayout`]'s `gTileset_*` symbol into the normalized pack
@@ -546,8 +625,8 @@ fn layout_pack_name(id: LayoutId) -> String {
 /// `gbagfx` packs them (mirrors [`crate::title`]'s identical BG/OBJ tile
 /// packing -- duplicated rather than shared, since the two modules' error
 /// types differ `(no-verbatim)`). Shared by [`viewport::combined_world_tileset`]
-/// (whole-image regions) and [`avatar::build_sprite_tileset`] (per-frame
-/// crops).
+/// (whole-image regions) and [`avatar::pack_people_sheet_frames`] (per-frame
+/// crops, for the player's and every NPC's 9-frame sheet alike).
 ///
 /// # Errors
 ///

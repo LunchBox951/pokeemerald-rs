@@ -282,10 +282,12 @@ impl AssetPack {
         self.image(&format!("sprite/{path}"))
     }
 
-    /// Look up a player character's real in-game palette (`who` is
-    /// `"brendan"` or `"may"` — the only two the pack extracts; see
-    /// `xtask::extract::mod`'s module docs for why NPC palettes are not
-    /// extracted).
+    /// Look up a sprite palette by name: `"brendan"`/`"may"` (the two player
+    /// characters' own in-game palettes) or `"npc_1"`..`"npc_4"` (the four
+    /// generic NPC palette banks issue #161's object-event rendering draws
+    /// from) — see `xtask::extract::mod`'s module docs for exactly which
+    /// palettes the pack extracts and why the rest of the NPC roster's own
+    /// per-character palettes are not among them.
     ///
     /// # Errors
     ///

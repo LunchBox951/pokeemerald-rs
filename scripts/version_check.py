@@ -27,8 +27,10 @@ What this script checks:
    A leading ``v`` or any malformed value is rejected.
 4. Reject a proposed version lower than the base (lexicographic compare over
    four unsigned ints: FINAL, then MAJOR, then MINOR, then PATCH).
-5. Reject a MAJOR or MINOR bump that does not reset all lower components to 0.
-6. Reject a FINAL change unless the maintainer-approved override marker file
+5. When ``--require-bump`` is passed (as it is for pull requests), reject a
+   proposed version equal to the base. Every PR must advance ``VERSION``.
+6. Reject a MAJOR or MINOR bump that does not reset all lower components to 0.
+7. Reject a FINAL change unless the maintainer-approved override marker file
    (``docs/release/final-gate-approved.md`` by default) is present *at head*,
    parses as an explicit approval of the exact proposed VERSION, and differs
    from whatever that same path contained at the base ref. ``FINAL`` is
@@ -60,6 +62,7 @@ Self-test notes -- example version transitions.
                          # naming "Approved version: 1.0.0.0" plus a Date
 
   Rejected:
+    0.1.2.5 -> 0.1.2.5   # unchanged when --require-bump is active
     0.1.2.5 -> 0.1.1.6   # regression (MINOR moved backward)
     0.1.2.5 -> 0.1.2     # malformed (only three components)
     0.1.2.5 -> v0.1.2.6  # malformed (VERSION must omit the tag prefix)
@@ -379,6 +382,7 @@ def check_transition(
     marker_head: Optional[str],
     marker_unchanged: bool,
     marker_rel: str,
+    require_bump: bool = False,
 ) -> None:
     """Validate base -> head; raise VersionError on any disallowed move."""
     # 4. No regressions: proposed must be >= base lexicographically.
@@ -386,6 +390,12 @@ def check_transition(
         raise VersionError(
             f"version regression: {fmt(head)} is lower than base "
             f"{fmt(base)} (versions only move forward)"
+        )
+
+    if require_bump and head == base:
+        raise VersionError(
+            f"version unchanged at {fmt(head)}; pull requests must advance "
+            "VERSION by at least a PATCH bump"
         )
 
     # 6. FINAL changes require a maintainer-approved override marker that is
@@ -487,6 +497,14 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--require-bump",
+        action="store_true",
+        help=(
+            "Reject an unchanged VERSION. CI enables this for pull requests "
+            "so every merged change advances the canonical version."
+        ),
+    )
+    parser.add_argument(
         "--final-gate-marker",
         default=DEFAULT_FINAL_GATE_MARKER,
         help=(
@@ -518,6 +536,7 @@ def main(argv: Optional[list] = None) -> int:
             marker_head=marker_head,
             marker_unchanged=unchanged,
             marker_rel=args.final_gate_marker,
+            require_bump=args.require_bump,
         )
     except VersionError as exc:
         print(f"version_check: FAIL: {exc}", file=sys.stderr)

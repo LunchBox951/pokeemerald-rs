@@ -19,13 +19,17 @@
 //! | `ClearBag()`                                                | [`SaveBlock1::bag`] `= Bag::default()` |
 //! | `InitEventData()`                                           | [`SaveBlock1::event_data`] `= EventData::default()` |
 //! | `RunScriptImmediately(EventScript_ResetAllMapFlags)`'s 159 `setflag`s (`data/scripts/new_game.inc:116-274`) | [`SaveBlock1::event_data`]`.flag_set` for every id in [`assets::RESET_MAP_FLAGS`] (issue #164) |
+//! | (skipped truck sequence) `InsideOfTruck_EventScript_SetIntroFlags`'s gender branch (`data/maps/InsideOfTruck/scripts.inc:16-48`) | [`apply_truck_intro_flags`] — [`assets::TRUCK_INTRO_FLAGS_MALE`]/`_FEMALE` plus their vars (issue #161 review) |
 //! | (naming screen / `Task_NewGameBirchSpeech_ChooseGender`)    | [`SaveBlock2::player_name`]/`player_gender` `= `[`DEFAULT_PLAYER_NAME`]`/`[`DEFAULT_PLAYER_GENDER`] (deviation below) |
 //!
-//! **Stored, not yet consumed (issue #161):** the `RESET_MAP_FLAGS` set
-//! written here is pure save state for now — nothing filters object events by
-//! [`assets::ObjectEvent::flag`] yet, so effects like
-//! hiding the rival from the spawn bedroom only materialize once issue #161's
-//! object-event rendering consumes these flags.
+//! **Consumed as of issue #161:** the flag set written here is no longer
+//! inert save state. `engine::overworld::object_event_is_visible` gates
+//! every object-event query on it, so these flags now decide what renders,
+//! what can be talked to, and what blocks movement — which is why the
+//! skipped truck sequence's own gender branch had to be reproduced
+//! alongside `EventScript_ResetAllMapFlags` (table row above,
+//! [`apply_truck_intro_flags`]): with it missing, a fresh save reached the
+//! player's house with the *rival's* family and Poké Ball still spawned.
 //!
 //! **Partially deferred (issue #164):** `EventScript_ResetAllMapFlags` ends
 //! with `call EventScript_ResetAllBerries` (`new_game.inc:275`), which seeds
@@ -67,7 +71,11 @@
 //!   already treats as the v1 north-star's starting point (issue #126). This
 //!   slice skips the truck entirely rather than modeling a cutscene with no
 //!   consumer; [`SaveBlock1::location`] is set to the bedroom directly
-//!   instead of `MAP_INSIDE_OF_TRUCK`.
+//!   instead of `MAP_INSIDE_OF_TRUCK`. Its one *observable* side effect is
+//!   reproduced rather than skipped with it: the exit-tile trigger
+//!   `InsideOfTruck_EventScript_SetIntroFlags`, which every real
+//!   playthrough passes through before reaching a house — see
+//!   [`apply_truck_intro_flags`].
 //! - **Fixed player name/gender, no naming screen.** Upstream's Birch-speech
 //!   task chain runs a gender-select menu
 //!   (`Task_NewGameBirchSpeech_ChooseGender`) and the real naming screen
@@ -224,7 +232,84 @@ pub fn init_save_blocks(rng: &mut Rng) -> (SaveBlock1, SaveBlock2) {
             .expect("RESET_MAP_FLAGS ids are all ordinary flag ids");
     }
 
+    apply_truck_intro_flags(&mut block1, block2.player_gender);
+
     (block1, block2)
+}
+
+/// Apply the gender-selected half of the skipped truck sequence:
+/// `InsideOfTruck_EventScript_SetIntroFlags`
+/// (`data/maps/InsideOfTruck/scripts.inc:16-48`), branching on
+/// `checkplayergender` exactly as upstream does at `:19-21`.
+///
+/// # Why this belongs at new-game init
+///
+/// Upstream does not run it from `NewGameInitData` — it is a coord (trigger)
+/// event on the truck's three exit tiles, gated on
+/// `VAR_LITTLEROOT_INTRO_STATE == 0`
+/// (`data/maps/InsideOfTruck/map.json:85-112`), so it fires once on the way
+/// out of the truck and then sets that var so it cannot fire again. Every
+/// real playthrough passes through it before reaching a house.
+///
+/// This port skips the truck and hands off straight into the bedroom
+/// (module docs' "Deliberately not mirrored" section on the intro), so the
+/// *only* honest place to reproduce the effect is here, at the point the
+/// skipped flow would have produced it — the same reasoning that puts
+/// `EventScript_ResetAllMapFlags` in this function rather than in a script
+/// engine.
+///
+/// Without it a fresh save reaches the player's house with all ten of these
+/// flags clear, which upstream never does, and the consequences are visible
+/// rather than cosmetic — see [`assets::TRUCK_INTRO_FLAGS_MALE`]'s own docs
+/// for the invisible-collider and duplicated-mother cases this prevents.
+/// The two branches are exact mirror images (Brendan/May swapped), because
+/// each Littleroot house declares *both* families' object events and hides
+/// whichever set does not belong.
+///
+/// # Panics
+///
+/// Never in practice: every id in
+/// [`assets::TRUCK_INTRO_FLAGS_MALE`]/[`assets::TRUCK_INTRO_FLAGS_FEMALE`]
+/// is an ordinary `FLAG_HIDE_*` id and every
+/// [`assets::TRUCK_INTRO_VARS_MALE`]/`_FEMALE` id an ordinary `VAR_*` id,
+/// both pinned by `assets::new_game_flags`' own tests and by this module's
+/// `truck_intro_ids_are_all_settable` — the same
+/// invariant-lives-in-another-crate's-tests reasoning as the
+/// `RESET_MAP_FLAGS` loop above.
+fn apply_truck_intro_flags(block1: &mut SaveBlock1, gender: PlayerGender) {
+    let (flags, vars) = match gender {
+        PlayerGender::Male => (
+            assets::TRUCK_INTRO_FLAGS_MALE,
+            assets::TRUCK_INTRO_VARS_MALE,
+        ),
+        PlayerGender::Female => (
+            assets::TRUCK_INTRO_FLAGS_FEMALE,
+            assets::TRUCK_INTRO_VARS_FEMALE,
+        ),
+        // Upstream's script has no `else`: `checkplayergender` copies the
+        // raw `gSaveBlock2Ptr->playerGender` byte into `VAR_RESULT`
+        // (`src/scrcmd.c:2014-2018`) and the two `goto_if_eq`s fall through
+        // to a bare `end` (`data/maps/InsideOfTruck/scripts.inc:19-22`), so
+        // a byte that is neither `MALE` nor `FEMALE` sets nothing at all.
+        // [`PlayerGender::Other`] exists only because the save model
+        // decodes such a byte losslessly; matching upstream's no-op here
+        // keeps that a save-fidelity concern rather than inventing a third
+        // house layout. Unreachable from this function anyway --
+        // [`DEFAULT_PLAYER_GENDER`] is `Male` and nothing else writes it yet.
+        PlayerGender::Other(_) => return,
+    };
+    for &flag in flags {
+        block1
+            .event_data
+            .flag_set(flag)
+            .expect("truck-intro ids are all ordinary flag ids");
+    }
+    for &(var, value) in vars {
+        block1
+            .event_data
+            .var_set(var, value)
+            .expect("truck-intro var ids are all ordinary var ids");
+    }
 }
 
 /// Seed [`init_save_blocks`]'s [`Rng`] draws its trainer id from when the
@@ -428,23 +513,256 @@ mod tests {
             );
         }
         // And nothing more: the fresh save's exact bit population is the 159
-        // script flags -- catches a future init step over-applying flags as
-        // well as this one under-applying them.
-        let set_bits: u32 = block1
+        // script flags plus the five its gender branch of the skipped truck
+        // sequence adds ([`apply_truck_intro_flags`]) -- catches a future
+        // init step over-applying flags as well as this one under-applying
+        // them. The sum is exact rather than an upper bound because the two
+        // sets are disjoint (pinned by `assets`'
+        // `no_truck_intro_flag_is_already_a_reset_map_flag`).
+        let set_bits: usize = block1
             .event_data
             .flag_bytes()
             .iter()
-            .map(|b| b.count_ones())
+            .map(|b| b.count_ones() as usize)
             .sum();
         assert_eq!(
-            set_bits, 159,
-            "a fresh save sets exactly the script's flags"
+            set_bits,
+            assets::RESET_MAP_FLAGS.len() + assets::TRUCK_INTRO_FLAGS_MALE.len(),
+            "a fresh save sets exactly the reset script's flags plus the \
+             male truck-intro branch's"
         );
+        assert_eq!(set_bits, 159 + 5, "the same counts, spelled literally");
         // Cross-crate range guard: `assets` can't depend on `engine`, so its
         // own range test pins a literal; this is the reciprocal assertion
         // against the real `FLAGS_COUNT`, where the dependency exists.
         assert!(assets::RESET_MAP_FLAGS
             .iter()
             .all(|&f| f < engine::event_data::FLAGS_COUNT));
+    }
+
+    /// Every truck-intro id must actually be settable through
+    /// `EventData` -- what makes `apply_truck_intro_flags`' two `expect`s
+    /// unreachable rather than latent panics. `assets` cannot depend on
+    /// `engine`, so this reciprocal check lives here, where the dependency
+    /// exists (same shape as the `FLAGS_COUNT` guard above).
+    #[test]
+    fn truck_intro_ids_are_all_settable() {
+        let mut data = engine::event_data::EventData::new();
+        for ids in [
+            assets::TRUCK_INTRO_FLAGS_MALE,
+            assets::TRUCK_INTRO_FLAGS_FEMALE,
+        ] {
+            for &flag in ids {
+                assert!(data.flag_set(flag).is_ok(), "{flag:#X} must be settable");
+            }
+        }
+        for vars in [
+            assets::TRUCK_INTRO_VARS_MALE,
+            assets::TRUCK_INTRO_VARS_FEMALE,
+        ] {
+            for &(var, value) in vars {
+                assert!(
+                    data.var_set(var, value).is_ok(),
+                    "{var:#X} must be settable"
+                );
+            }
+        }
+    }
+
+    /// `InsideOfTruck_EventScript_SetIntroFlags`, both branches
+    /// (`data/maps/InsideOfTruck/scripts.inc:24-35` and `:37-48`): a fresh
+    /// save must carry exactly its own gender's five flags and neither of
+    /// the other gender's -- the mirror-image structure is the whole point,
+    /// so applying the wrong branch (or both) has to fail here.
+    #[test]
+    fn a_fresh_save_applies_its_own_gender_truck_intro_branch_only() {
+        for (gender, mine, theirs, vars) in [
+            (
+                PlayerGender::Male,
+                assets::TRUCK_INTRO_FLAGS_MALE,
+                assets::TRUCK_INTRO_FLAGS_FEMALE,
+                assets::TRUCK_INTRO_VARS_MALE,
+            ),
+            (
+                PlayerGender::Female,
+                assets::TRUCK_INTRO_FLAGS_FEMALE,
+                assets::TRUCK_INTRO_FLAGS_MALE,
+                assets::TRUCK_INTRO_VARS_FEMALE,
+            ),
+        ] {
+            let mut block1 = SaveBlock1::default();
+            apply_truck_intro_flags(&mut block1, gender);
+
+            for &flag in mine {
+                assert!(
+                    block1.event_data.flag_get(flag).unwrap(),
+                    "{gender:?}: {flag:#X} must be set"
+                );
+            }
+            for &flag in theirs {
+                assert!(
+                    !block1.event_data.flag_get(flag).unwrap(),
+                    "{gender:?}: {flag:#X} belongs to the other gender's branch"
+                );
+            }
+            for &(var, value) in vars {
+                assert_eq!(
+                    block1.event_data.var_get(var).unwrap(),
+                    value,
+                    "{gender:?}: {var:#X}"
+                );
+            }
+        }
+    }
+
+    /// A gender byte outside `MALE`/`FEMALE` sets nothing, matching
+    /// upstream's own missing `else`: `checkplayergender` copies the raw
+    /// byte into `VAR_RESULT` (`src/scrcmd.c:2014-2018`) and both
+    /// `goto_if_eq`s fall through to a bare `end`
+    /// (`data/maps/InsideOfTruck/scripts.inc:19-22`).
+    #[test]
+    fn an_unrecognized_gender_byte_applies_no_truck_intro_branch() {
+        let mut block1 = SaveBlock1::default();
+        apply_truck_intro_flags(&mut block1, PlayerGender::Other(7));
+        let set_bits: u32 = block1
+            .event_data
+            .flag_bytes()
+            .iter()
+            .map(|b| b.count_ones())
+            .sum();
+        assert_eq!(set_bits, 0, "upstream's script has no else branch");
+    }
+
+    /// The reported regression, over the real bundled map data and for
+    /// **both** genders: a fresh save must leave the player's own house
+    /// free of the *rival's* family and of the rival's Poké Ball, and must
+    /// leave the rival's house free of the player's own mother.
+    ///
+    /// Each Littleroot house declares both families' object events and
+    /// hides whichever set does not belong
+    /// (`data/maps/LittlerootTown_{Brendans,Mays}House_{1F,2F}/map.json`),
+    /// and the choice is made by
+    /// `InsideOfTruck_EventScript_SetIntroFlags`' gender branch. Without
+    /// it every one of these reads as spawned: the Poké Ball is an
+    /// invisible collider (nothing in this port draws
+    /// `OBJ_EVENT_GFX_ITEM_BALL`), the rival's mother is a second mother
+    /// standing in the player's own living room, and the rival's sibling is
+    /// another undrawn blocker.
+    ///
+    /// Pure generated-table plus flag-store data -- no pack needed.
+    #[test]
+    fn a_fresh_save_puts_each_familys_object_events_in_the_right_house() {
+        /// `(own house 2F, own house 1F, rival's house 1F)`.
+        struct Houses {
+            own_2f: &'static str,
+            own_1f: &'static str,
+            rivals_1f: &'static str,
+        }
+        let brendans = Houses {
+            own_2f: "MAP_LITTLEROOT_TOWN_BRENDANS_HOUSE_2F",
+            own_1f: "MAP_LITTLEROOT_TOWN_BRENDANS_HOUSE_1F",
+            rivals_1f: "MAP_LITTLEROOT_TOWN_MAYS_HOUSE_1F",
+        };
+        let mays = Houses {
+            own_2f: "MAP_LITTLEROOT_TOWN_MAYS_HOUSE_2F",
+            own_1f: "MAP_LITTLEROOT_TOWN_MAYS_HOUSE_1F",
+            rivals_1f: "MAP_LITTLEROOT_TOWN_BRENDANS_HOUSE_1F",
+        };
+
+        let table = assets::MapEventsTable::new();
+        let find = |map: &'static str, gfx: &str| -> &'static assets::ObjectEvent {
+            table
+                .resolve(assets::MapId(map))
+                .unwrap_or_else(|_| panic!("{map} must resolve"))
+                .object_events
+                .iter()
+                .find(|o| o.graphics_id == gfx)
+                .unwrap_or_else(|| panic!("{map} must declare a {gfx}"))
+        };
+
+        for (gender, houses) in [
+            (PlayerGender::Male, &brendans),
+            (PlayerGender::Female, &mays),
+        ] {
+            let mut block1 = SaveBlock1::default();
+            for &flag in assets::RESET_MAP_FLAGS {
+                block1.event_data.flag_set(flag).unwrap();
+            }
+            apply_truck_intro_flags(&mut block1, gender);
+            let data = &block1.event_data;
+            let visible = |o| engine::overworld::object_event_is_visible(o, data);
+
+            // The rival's Poké Ball is not staged in the player's own
+            // bedroom -- the invisible collider this fixes.
+            assert!(
+                !visible(find(houses.own_2f, "OBJ_EVENT_GFX_ITEM_BALL")),
+                "{gender:?}: the rival's Poké Ball must not be spawned in \
+                 the player's own bedroom ({})",
+                houses.own_2f
+            );
+
+            // The player's own mother *is* home...
+            assert!(
+                visible(find(houses.own_1f, "OBJ_EVENT_GFX_MOM")),
+                "{gender:?}: the player's own mother must be home",
+            );
+            // ...and the rival's mother and sibling are not.
+            assert!(
+                !visible(find(houses.own_1f, "OBJ_EVENT_GFX_WOMAN_4")),
+                "{gender:?}: the rival's mother must not be duplicated into \
+                 the player's own house ({})",
+                houses.own_1f
+            );
+            assert!(
+                !visible(find(houses.own_1f, "OBJ_EVENT_GFX_NINJA_BOY")),
+                "{gender:?}: the rival's sibling must not be in the \
+                 player's own house ({})",
+                houses.own_1f
+            );
+
+            // The mirror image next door: the rival's own family is home in
+            // the rival's house, and the player's mother is not there.
+            assert!(
+                visible(find(houses.rivals_1f, "OBJ_EVENT_GFX_WOMAN_4")),
+                "{gender:?}: the rival's mother belongs in the rival's house ({})",
+                houses.rivals_1f
+            );
+            assert!(
+                !visible(find(houses.rivals_1f, "OBJ_EVENT_GFX_MOM")),
+                "{gender:?}: the player's own mother must not also be in the \
+                 rival's house ({})",
+                houses.rivals_1f
+            );
+        }
+    }
+
+    /// The vars this now writes must not move Mom off the branch
+    /// `crate::overworld::npc_scripts` transcribes:
+    /// `PlayersHouse_1F_EventScript_Mom`
+    /// (`data/scripts/players_house.inc:299-310`) branches away only on
+    /// `VAR_LITTLEROOT_HOUSES_STATE_{MAY,BRENDAN} == 4` or
+    /// `VAR_LITTLEROOT_INTRO_STATE == 7`, and the truck sets `1`/`1`
+    /// (male) or `2`/`1` (female). Pinned, because setting a var that
+    /// *did* cross one of those guards would silently invalidate the
+    /// transcribed dialog rather than fail anything.
+    #[test]
+    fn the_truck_intro_vars_stay_below_moms_script_guards() {
+        const INTRO_STATE: u16 = 0x4092;
+        const HOUSES_STATE_MAY: u16 = 0x4082;
+        const HOUSES_STATE_BRENDAN: u16 = 0x408C;
+        for vars in [
+            assets::TRUCK_INTRO_VARS_MALE,
+            assets::TRUCK_INTRO_VARS_FEMALE,
+        ] {
+            for &(var, value) in vars {
+                match var {
+                    INTRO_STATE => assert_ne!(value, 7, "would take DidYouMeetProfBirch"),
+                    HOUSES_STATE_MAY | HOUSES_STATE_BRENDAN => {
+                        assert_ne!(value, 4, "would take DontPushYourselfTooHard");
+                    }
+                    other => panic!("unexpected truck-intro var {other:#X}"),
+                }
+            }
+        }
     }
 }
