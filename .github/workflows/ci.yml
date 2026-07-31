@@ -1,106 +1,143 @@
-# CI gate for pokeemerald-rs. See docs/acceptance/v1.md.
+# CI merge gate for pokeemerald-rs. See docs/acceptance/v1.md.
 #
-# Runs on every push, and on pull requests targeting any channel branch
-# (dev, unstable, stable, main) or a release/* branch; blocks merges on failure.
-# The Rust workspace is not scaffolded yet, so the fmt/clippy/build/
-# test steps are PLACEHOLDERS that echo the eventual cargo command and exit 0.
-# When Cargo.toml lands at the workspace root, swap each placeholder for the
-# real command shown alongside it.
+# Pull requests into channel branches run once here; ordinary
+# feature-branch pushes do not duplicate the pull_request run. Direct channel
+# pushes still receive post-merge validation. Promotion PRs are opened with a
+# dedicated GitHub App token, so their pull_request workflows run without the
+# approval hold applied to GITHUB_TOKEN-created pull requests. Superseded runs
+# for the same PR or ref are cancelled by the concurrency group below.
 #
-# Jobs run sequentially via a needs: chain so a failure short-circuits the rest
-# of that matrix leg: version -> ledger -> fmt -> clippy -> build -> test.
+# `policy` owns the Ubuntu-only repository checks and the exact default format
+# command. `native` gives each supported OS one checkout and one shared Cargo
+# target directory for the exact default Clippy/build/test commands plus smoke
+# validation. On Ubuntu, that same workspace also restores the pinned upstream
+# references, extracts the real asset pack, runs the ignored real-pack
+# assertions, and repeats smoke with the pack present. No Cargo target cache is
+# used: reuse is deliberately limited to commands within one native runner.
 #
-# Required status-check contexts for branch protection (R-4): `version` and
-# `ledger` report under their bare job names; the matrixed jobs report per OS —
-# `fmt (ubuntu-latest)`, `fmt (windows-latest)`, `clippy (ubuntu-latest)`,
-# `clippy (windows-latest)`, `build (ubuntu-latest)`, `build (windows-latest)`,
-# `test (ubuntu-latest)`, `test (windows-latest)`. Register those exact names.
+# Branch rules require `merge-gate / <target>` from this workflow. The target
+# suffix is load-bearing: GitHub keys checks by head SHA, so distinct names keep
+# a green dev->unstable result from satisfying a PR retargeted to stable. The
+# `always()` condition makes policy failures and failed/cancelled matrix legs
+# visible through that one target-specific aggregate context.
 name: ci
+
+permissions:
+  contents: read
 
 on:
   push:
-    branches: ["**"]
+    branches: [dev, unstable, stable, main]
   pull_request:
-    branches: [dev, unstable, stable, main, "release/**"]
+    branches: [dev, unstable, stable, main]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  # Policy gate (ubuntu-only): reject malformed versions and version regressions.
-  version:
-    name: version
+  policy:
+    name: policy
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
-          fetch-depth: 0 # full history so version_check can reach origin/main
+          fetch-depth: 0 # version_check needs the comparison base.
       - name: Validate VERSION
-        run: python3 scripts/version_check.py --base origin/main --head HEAD
-
-  # Policy gate (ubuntu-only): reject stale ledger targets once Rust targets exist.
-  ledger:
-    name: ledger
-    runs-on: ubuntu-latest
-    needs: version
-    steps:
-      - uses: actions/checkout@v4
+        env:
+          # Compare a PR with its actual live base. Push/manual runs retain the
+          # repository-wide origin/main monotonicity check.
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha || '' }}
+          PR_BASE_REF: ${{ github.event.pull_request.base.ref || '' }}
+        run: |
+          if [[ -n "${PR_BASE_SHA}" ]]; then
+            git fetch --no-tags origin \
+              "+refs/heads/${PR_BASE_REF}:refs/remotes/origin/${PR_BASE_REF}"
+            live_base="$(git rev-parse --verify \
+              "refs/remotes/origin/${PR_BASE_REF}^{commit}")"
+            if [[ "${live_base}" != "${PR_BASE_SHA}" ]]; then
+              echo "::error::PR base advanced from ${PR_BASE_SHA} to ${live_base}; refresh the branch and rerun CI."
+              exit 1
+            fi
+            python3 scripts/version_check.py \
+              --base "${live_base}" --head HEAD --require-bump
+          else
+            python3 scripts/version_check.py --base origin/main --head HEAD
+          fi
       - name: Verify ledger
         run: python3 scripts/ledger.py verify
-
-  fmt:
-    name: fmt
-    needs: ledger
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, windows-latest]
-    steps:
-      - uses: actions/checkout@v4
+      - name: Run script test suites
+        run: python3 -m unittest discover -s scripts -p "test_*.py"
+      - name: Run init.sh regression tests
+        run: bash init_test.sh
+      - name: Ensure rustfmt component
+        run: rustup component add rustfmt
       - name: cargo fmt --check
-        # TODO: replace with `cargo fmt --check` once the workspace exists.
-        run: |
-          echo "TODO: cargo fmt --check"
+        run: cargo fmt --check
 
-  clippy:
-    name: clippy
-    needs: fmt
+  native:
+    name: native (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        os: [ubuntu-latest, windows-latest, macos-latest]
     steps:
-      - uses: actions/checkout@v4
-      - name: cargo clippy --all-targets -- -D warnings
-        # TODO: replace with `cargo clippy --all-targets -- -D warnings`.
-        run: |
-          echo "TODO: cargo clippy"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Install ALSA dev headers (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev
+      - name: Ensure clippy component (Linux)
+        if: runner.os == 'Linux'
+        run: rustup component add clippy
+      - name: cargo clippy --all-targets --workspace -- -D warnings
+        if: runner.os == 'Linux'
+        run: cargo clippy --all-targets --workspace -- -D warnings
+      - name: cargo build --release --workspace
+        run: cargo build --release --workspace
+      - name: cargo test --workspace
+        run: cargo test --workspace
+      # The default workspace test above covers xtask without `smoke`; keep
+      # this separate invocation so the optional smoke feature is also tested.
+      - name: cargo test -p xtask --features smoke
+        run: cargo test -p xtask --features smoke
+      - name: Smoke E2E (packless)
+        run: cargo run -p xtask --features smoke -- e2e --suite smoke
 
-  build:
-    name: build
-    needs: clippy
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, windows-latest]
-    steps:
-      - uses: actions/checkout@v4
-      - name: cargo build --release
-        # TODO: replace with `cargo build --release` once the workspace exists.
-        run: |
-          echo "TODO: cargo build --release"
+      # The clone/extraction pipeline is platform-independent. One Ubuntu leg
+      # supplies real-asset coverage without tripling upstream clone work.
+      - name: Restore pinned upstream references
+        if: runner.os == 'Linux'
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            pokeemerald
+            mgba
+          key: real-pack-upstream-${{ hashFiles('init.sh') }}
+      - name: Fetch pinned upstream references
+        if: runner.os == 'Linux'
+        run: ./init.sh
+      - name: Extract real asset pack
+        if: runner.os == 'Linux'
+        run: cargo run -p xtask -- extract
+      - name: Run ignored real-pack assertions
+        if: runner.os == 'Linux'
+        run: cargo test -p pokeemerald-rs -- --ignored
+      - name: Smoke E2E (pack present)
+        if: runner.os == 'Linux'
+        run: cargo run -p xtask --features smoke -- e2e --suite smoke
 
-  test:
-    name: test
-    needs: build
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, windows-latest]
+  merge-gate:
+    name: merge-gate / ${{ github.event.pull_request.base.ref || github.ref_name }}
+    if: ${{ always() }}
+    needs: [policy, native]
+    runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - name: cargo test
-        # TODO: replace with `cargo test` once the workspace exists.
+      - name: Require every gate to succeed
+        env:
+          POLICY_RESULT: ${{ needs.policy.result }}
+          NATIVE_RESULT: ${{ needs.native.result }}
         run: |
-          echo "TODO: cargo test"
+          test "${POLICY_RESULT}" = success
+          test "${NATIVE_RESULT}" = success

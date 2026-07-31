@@ -1,0 +1,21 @@
+# Prevent known-vulnerable dependency changes from entering through a pull
+# request. This complements (rather than replaces) owner approval under
+# minimal-deps: a clean advisory result is not dependency approval.
+name: dependency-review
+
+on:
+  pull_request:
+    branches: [dev, unstable, stable, main]
+
+permissions:
+  contents: read
+
+jobs:
+  dependency-review:
+    name: dependency-review
+    runs-on: ubuntu-latest
+    steps:
+      - name: Review dependency changes
+        uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
+        with:
+          fail-on-scopes: runtime, development, unknown

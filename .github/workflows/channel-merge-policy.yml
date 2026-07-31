@@ -1,61 +1,13 @@
-# Hard enforcement of the gated release ladder for pokeemerald-rs.
-# See RELEASE.md (the release/* promotion model) and promote.yml.
+# Structural enforcement for the direct release ladder.
 #
-# Branch protection has no "restrict PR source branch" setting, so this REQUIRED
-# CI check enforces the structural ladder invariants that must NEVER be bypassed:
+# Each protected player channel accepts exactly one same-repository source:
 #
-#   * Channel branches (unstable, stable, main) accept ONLY promotion PRs whose
-#     source is a release/* branch in THIS repo — never a fork, never an arbitrary
-#     branch, never a direct dev->channel shortcut.
-#   * No rung-skipping: to reach stable a release/* must already be contained in
-#     unstable; to reach main it must already be contained in stable. A branch that
-#     gained commits after clearing the rung below is no longer contained there and
-#     must re-clear it — this is what makes "a merge never grants a rung" hold.
+#   dev -> unstable -> stable -> main
 #
-# What this deliberately does NOT enforce: the time-based soak, playtest (H-1),
-# perf, and waiver gates for stable/main are OWNER decisions parked on
-# needs-operator (RELEASE.md, "owner may expedite") — a hard CI clock would fight
-# that human gate. And release branches MAY contain merge commits / release-only
-# stabilization fixes (RELEASE.md allows consolidating release/* branches and
-# landing fixes directly on them), so no linearity / dev-provenance rule is applied.
-#
-# ASSUMPTION (shared with promote.yml): promotions merge with a MERGE COMMIT, not
-# squash/rebase — the containment checks rely on release/* history being preserved
-# in the channel branch. On unstable, stable, and main you MUST keep "Allow merge
-# commits" enabled and DISABLE "Allow squash merging" and "Allow rebase merging",
-# so a merge commit is the only available promotion mechanism. If a promotion is
-# ever squashed, release/X's tip stops being an ancestor of the channel and the
-# NEXT rung's require-rung-cleared will FALSE-NEGATIVE (block a legitimately
-# promoted release); the diagnostic below hints when that has happened.
-#
-# ----------------------------------------------------------------------------
-# GO-LIVE RUNBOOK (order is mandatory — get it wrong and the first promotion
-# deadlocks). For pull_request, GitHub runs the workflow as it exists on the BASE
-# branch, so this file must LIVE on unstable, stable, AND main (not just dev),
-# and a required status context that has never reported on a base branch blocks
-# every PR into that base forever ("Expected — waiting for status").
-#
-#   1. Land this file on dev, then SEED it onto unstable, stable, and main via an
-#      owner/admin bootstrap commit (or promote it up the ladder) BEFORE marking
-#      any context required. Bootstrapping it through a normal promotion PR is a
-#      chicken-and-egg: that PR is gated by checks that cannot run until the file
-#      is already present on the base.
-#   2. Open ONE throwaway release/* PR into each channel so both contexts report
-#      at least once on each base.
-#   3. ONLY THEN register both contexts as required (see below). Registering a
-#      context that has never reported hard-blocks the first promotion.
-#
-# Register BOTH job names as required status checks on unstable, stable, AND main
-# (R-4): `require-release-source` and `require-rung-cleared`. BOTH are load-bearing
-# and neither is redundant — require-release-source restricts the SOURCE (release/*
-# in this repo, no forks), require-rung-cleared restricts the POSITION (contained
-# in the rung below). Registering only one leaves a distinct bypass: source-only
-# lets a rung-skip through; position-only lets a fork/arbitrary branch through.
-# Also enable "Require branches to be up to date before merging" so required
-# checks re-run on the current head, and verify auto-merge cannot fire on a stale
-# context. The file must be present and BOTH contexts required on all THREE
-# channels before this policy can be trusted.
-# ----------------------------------------------------------------------------
+# The target suffix in the check name is security-sensitive. Required checks
+# are associated with a head SHA, so a shared context could stay green if a PR
+# were retargeted. `source-gate / <base>` makes every rung require a distinct
+# result and re-binds both refs to the live pull request before succeeding.
 name: channel-merge-policy
 
 on:
@@ -68,135 +20,66 @@ permissions:
   pull-requests: read
 
 jobs:
-  require-release-source:
-    name: require-release-source
-    runs-on: ubuntu-latest
-    steps:
-      - name: Source must be a release/* branch in this repo
-        env:
-          BASE_REF: ${{ github.base_ref }}
-          HEAD_REF: ${{ github.head_ref }}
-          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
-          REPOSITORY: ${{ github.repository }}
-        run: |
-          set -euo pipefail
-          echo "base=${BASE_REF}  head=${HEAD_REPO}:${HEAD_REF}"
-
-          case "${BASE_REF}" in
-            unstable|stable|main) ;;
-            *) echo "::error::This policy only evaluates PRs into unstable/stable/main."; exit 1 ;;
-          esac
-
-          if [ "${HEAD_REPO}" != "${REPOSITORY}" ]; then
-            echo "::error::Channel branches accept promotions only from a release/* branch in ${REPOSITORY}, not from a fork (${HEAD_REPO})."
-            exit 1
-          fi
-
-          case "${HEAD_REF}" in
-            release/*) echo "OK: source ${HEAD_REF} is a release branch."; exit 0 ;;
-            *)
-              echo "::error::PRs into ${BASE_REF} must come from a release/* branch, not ${HEAD_REF}. Normal work targets dev; promotions ride a release/* branch up the ladder (RELEASE.md)."
-              exit 1
-              ;;
-          esac
-
-  require-rung-cleared:
-    name: require-rung-cleared
+  source-gate:
+    name: source-gate / ${{ github.base_ref }}
     runs-on: ubuntu-latest
     env:
       GH_TOKEN: ${{ github.token }}
     steps:
-      # Re-validate against the LIVE PR before trusting anything. Branch
-      # protection keys a required status by (context-name, head-SHA), NOT by
-      # base branch, and a base-edit does not change the head SHA — so a SUCCESS
-      # recorded for base=stable on SHA T would otherwise keep satisfying
-      # protection after the base is retargeted to main, promoting T to main
-      # though it never cleared stable (a rung-skip). It also closes the
-      # synchronize TOCTOU window where the event payload head lags the live tip.
-      # We mirror the reference workflow's live_head_sha guard and EXTEND it to
-      # the base: fail closed if the live base/head differ from the event we ran
-      # for, forcing a fresh, correct run to be the result recorded on this head.
-      - name: Re-bind to live PR state (defeat base-retarget / stale-head reuse)
+      - name: Require the exact live channel pair
         env:
-          BASE_REF: ${{ github.base_ref }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
-          REPOSITORY: ${{ github.repository }}
+          EVENT_BASE: ${{ github.base_ref }}
+          EVENT_HEAD: ${{ github.head_ref }}
+          EVENT_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          EVENT_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPOSITORY: ${{ github.repository }}
         run: |
           set -euo pipefail
 
-          # Fork PRs are rejected by require-release-source; short-circuit here too
-          # so untrusted fork content is never checked out by the steps below.
-          if [ "${HEAD_REPO}" != "${REPOSITORY}" ]; then
-            echo "::error::PR head ${HEAD_REPO} is not ${REPOSITORY}; forks are rejected (see require-release-source)."
-            exit 1
-          fi
-
-          live_base="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.base.ref')"
-          live_head="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.head.sha')"
-          echo "event base=${BASE_REF} head=${HEAD_SHA}"
-          echo "live  base=${live_base} head=${live_head}"
-
-          if [ "${live_base}" != "${BASE_REF}" ]; then
-            echo "::error::PR base moved (event=${BASE_REF}, live=${live_base}) after this run started. A green result recorded for the old base must not satisfy the new one — re-run required checks against the current base."
-            exit 1
-          fi
-          if [ "${live_head}" != "${HEAD_SHA}" ]; then
-            echo "::error::PR head moved (event=${HEAD_SHA}, live=${live_head}) after this run started. Re-run required checks against the current head."
-            exit 1
-          fi
-
-      - uses: actions/checkout@v4
-        # No containment check on the entry rung, so skip the full-history
-        # checkout entirely for base=unstable.
-        if: github.base_ref != 'unstable'
-        with:
-          ref: ${{ github.event.pull_request.head.sha }}
-          fetch-depth: 0
-
-      - name: Release branch must have cleared the rung below (no rung-skipping)
-        env:
-          BASE_REF: ${{ github.base_ref }}
-          HEAD_REF: ${{ github.head_ref }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: |
-          set -euo pipefail
-
-          # unstable is the ladder entry (a release/* is cut from dev and enters
-          # here), so there is no channel-containment requirement — the source
-          # check is the gate. stable/main must show the candidate already cleared
-          # the rung directly below.
-          case "${BASE_REF}" in
-            unstable) echo "unstable is the ladder entry; source check is sufficient."; exit 0 ;;
-            stable)   rung_below="unstable" ;;
-            main)     rung_below="stable" ;;
-            *) echo "::error::Unexpected base ${BASE_REF}."; exit 1 ;;
+          case "${EVENT_BASE}" in
+            unstable) expected_head="dev" ;;
+            stable)   expected_head="unstable" ;;
+            main)     expected_head="stable" ;;
+            *)
+              echo "::error::Unexpected channel target ${EVENT_BASE}."
+              exit 1
+              ;;
           esac
 
-          # Single-ref fetch; read the remote-tracking ref it updates (immune to
-          # FETCH_HEAD ambiguity if a future edit ever fetches more than one ref).
-          git fetch --quiet origin "${rung_below}"
-          rung_sha="$(git rev-parse "origin/${rung_below}")"
-
-          # The candidate is the PR head (the release/* tip). It may advance to
-          # ${BASE_REF} only if it is already contained in ${rung_below}: i.e. it
-          # was promoted into, and re-merged with, the rung below at its CURRENT
-          # tip. Gaining commits after clearing ${rung_below} breaks containment
-          # and forces a re-clear — blocking rung-skipping and merge-grants-a-rung.
-          if git merge-base --is-ancestor "${HEAD_SHA}" "${rung_sha}"; then
-            echo "OK: ${HEAD_REF} (${HEAD_SHA}) is contained in origin/${rung_below} (${rung_sha})."
-            exit 0
+          if [[ "${EVENT_HEAD_REPO}" != "${REPOSITORY}" ]]; then
+            echo "::error::${EVENT_BASE} accepts only ${REPOSITORY}:${expected_head}; forks are not promotion sources."
+            exit 1
           fi
-
-          # Distinguish "never promoted" from "promoted but squashed": if the rung
-          # below carries a commit whose message references this release branch yet
-          # the tip is not an ancestor, the promotion was likely squash/rebase
-          # merged (which the assumption above forbids) rather than merge-committed.
-          if git log --oneline "origin/${rung_below}" 2>/dev/null | grep -qiF "${HEAD_REF}"; then
-            echo "::error::${HEAD_REF}'s tip ${HEAD_SHA} is NOT an ancestor of origin/${rung_below}, but ${rung_below} references ${HEAD_REF} — the promotion into ${rung_below} was likely SQUASH/REBASE merged. Promotions must be MERGE COMMITS; disable squash/rebase merging on ${rung_below} (see header) and re-promote."
+          if [[ "${EVENT_HEAD}" != "${expected_head}" ]]; then
+            echo "::error::${EVENT_BASE} accepts only ${expected_head}, not ${EVENT_HEAD}."
             exit 1
           fi
 
-          echo "::error::${HEAD_REF} has not cleared ${rung_below} (its tip ${HEAD_SHA} is not contained in origin/${rung_below}). Promote it through ${rung_below} first; nothing skips a rung on the way to main (RELEASE.md)."
-          exit 1
+          live="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}")"
+          live_base="$(jq -r '.base.ref' <<<"${live}")"
+          live_head="$(jq -r '.head.ref' <<<"${live}")"
+          live_head_sha="$(jq -r '.head.sha' <<<"${live}")"
+          live_head_repo="$(jq -r '.head.repo.full_name' <<<"${live}")"
+
+          if [[ "${live_base}" != "${EVENT_BASE}" \
+            || "${live_head}" != "${EVENT_HEAD}" \
+            || "${live_head_sha}" != "${EVENT_HEAD_SHA}" \
+            || "${live_head_repo}" != "${REPOSITORY}" ]]; then
+            echo "::error::Pull request base/head changed during policy evaluation; rerun against the live state."
+            exit 1
+          fi
+
+          duplicates="$(gh pr list \
+            --repo "${REPOSITORY}" \
+            --state open \
+            --base "${EVENT_BASE}" \
+            --head "${EVENT_HEAD}" \
+            --json number \
+            --jq 'length')"
+          if [[ "${duplicates}" != "1" ]]; then
+            echo "::error::Expected exactly one open ${EVENT_HEAD}->${EVENT_BASE} promotion PR; found ${duplicates}."
+            exit 1
+          fi
+
+          echo "OK: live promotion pair is ${EVENT_HEAD}->${EVENT_BASE} at ${EVENT_HEAD_SHA}."
