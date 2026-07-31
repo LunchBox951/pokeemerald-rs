@@ -42,6 +42,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
 
       - name: Create least-privilege promotion App token
         id: app-token
@@ -82,7 +84,7 @@ jobs:
           status_creator() {
             local sha="$1" context="$2"
             gh api "repos/${REPOSITORY}/commits/${sha}/status" \
-              --jq '[.statuses[] | select(.context == "'"${context}"'" and .state == "success")][0].creator.login // empty'
+              --jq '[.statuses[] | select(.context == "'"${context}"'")] | sort_by(.created_at) | last | select(.state == "success") | .creator.login // empty'
           }
 
           branch_sha() {
@@ -107,14 +109,15 @@ jobs:
           }
 
           open_promotion() {
-            local target="$1" source source_sha target_sha ahead existing labels body
+            local target="$1" source source_sha target_sha ahead existing_json
+            local existing existing_author labels body creator preceding provenance
             source="$(python3 scripts/channel_ladder.py source-for "${target}")"
             source_sha="$(branch_sha "${source}")"
             target_sha="$(branch_sha "${target}")"
 
             if [[ "${target}" == "unstable" ]]; then
               creator="$(status_creator "${source_sha}" release-readiness)"
-              if [[ "${creator}" != "github-actions[bot]" ]]; then
+              if [[ "${creator}" != "${REPOSITORY_OWNER}" ]]; then
                 echo "${source}@${source_sha} has no owner-recorded release-readiness success; unstable remains dormant."
                 return 0
               fi
@@ -133,14 +136,20 @@ jobs:
               return 0
             fi
 
-            existing="$(gh pr list \
+            existing_json="$(gh pr list \
               --repo "${REPOSITORY}" \
               --state open \
               --base "${target}" \
               --head "${source}" \
-              --json headRepository,number \
-              --jq '[.[] | select(.headRepository.nameWithOwner == "'"${REPOSITORY}"'")] | length')"
+              --json author,headRepository,number \
+              --jq '[.[] | select(.headRepository.nameWithOwner == "'"${REPOSITORY}"'")]')"
+            existing="$(jq -r 'length' <<<"${existing_json}")"
             if [[ "${existing}" == "1" ]]; then
+              existing_author="$(jq -r '.[0].author.login' <<<"${existing_json}")"
+              if [[ "${existing_author}" != "${APP_LOGIN}" ]]; then
+                echo "Existing ${source}->${target} PR is owned by ${existing_author}, not ${APP_LOGIN}; refusing to adopt it." >&2
+                return 1
+              fi
               echo "${source}->${target} promotion PR already open."
               return 0
             fi
@@ -208,7 +217,7 @@ jobs:
             fi
 
             creator="$(status_creator "${head_sha}" release-readiness)"
-            if [[ "${creator}" != "github-actions[bot]" ]]; then
+            if [[ "${creator}" != "${REPOSITORY_OWNER}" ]]; then
               echo "Current dev head lacks owner-recorded release-readiness; not merging."
               return 0
             fi

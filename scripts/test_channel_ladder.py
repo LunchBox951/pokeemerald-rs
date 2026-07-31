@@ -2,6 +2,7 @@
 """Regression tests for the direct channel ladder and its workflow contract."""
 
 from pathlib import Path
+import re
 import unittest
 
 import channel_ladder
@@ -12,8 +13,8 @@ PROMOTE_WORKFLOW = (REPOSITORY_ROOT / ".github/workflows/promote.yml").read_text
 SOURCE_GATE_WORKFLOW = (
     REPOSITORY_ROOT / ".github/workflows/channel-merge-policy.yml"
 ).read_text()
-READINESS_WORKFLOW = (
-    REPOSITORY_ROOT / ".github/workflows/record-nightly-readiness.yml"
+READINESS_RECORDER = (
+    REPOSITORY_ROOT / "scripts/record_nightly_readiness.py"
 ).read_text()
 
 
@@ -74,6 +75,7 @@ class PromotionWorkflowContractTest(unittest.TestCase):
             self.assertIn(permission, PROMOTE_WORKFLOW)
         self.assertNotIn("permission-administration:", PROMOTE_WORKFLOW)
         self.assertNotIn("permission-workflows:", PROMOTE_WORKFLOW)
+        self.assertIn("persist-credentials: false", PROMOTE_WORKFLOW)
 
     def test_only_unstable_calls_the_merge_function(self):
         self.assertIn("merge-unstable) merge_unstable ;;", PROMOTE_WORKFLOW)
@@ -84,6 +86,11 @@ class PromotionWorkflowContractTest(unittest.TestCase):
 
     def test_promotion_pr_lookups_exclude_same_named_fork_branches(self):
         self.assertEqual(PROMOTE_WORKFLOW.count(".headRepository.nameWithOwner"), 3)
+
+    def test_existing_promotion_must_have_been_opened_by_the_app(self):
+        self.assertIn("--json author,headRepository,number", PROMOTE_WORKFLOW)
+        self.assertIn('"${existing_author}" != "${APP_LOGIN}"', PROMOTE_WORKFLOW)
+        self.assertIn("refusing to adopt it", PROMOTE_WORKFLOW)
 
     def test_merge_is_immediate_and_bound_to_the_evaluated_sha(self):
         self.assertIn('"repos/${REPOSITORY}/pulls/${pr_number}/merge"', PROMOTE_WORKFLOW)
@@ -102,13 +109,21 @@ class PromotionWorkflowContractTest(unittest.TestCase):
             + PROMOTE_WORKFLOW.count('status_creator "${head_sha}" release-readiness'),
             2,
         )
+        self.assertEqual(
+            PROMOTE_WORKFLOW.count('"${creator}" != "${REPOSITORY_OWNER}"'),
+            2,
+        )
+        self.assertIn("sort_by(.created_at) | last", PROMOTE_WORKFLOW)
+        self.assertNotIn('"github-actions[bot]"', PROMOTE_WORKFLOW)
 
 
 class SourceGateWorkflowContractTest(unittest.TestCase):
     def test_exact_direct_sources_are_embedded_in_the_base_workflow(self):
-        self.assertIn('unstable) expected_head="dev"', SOURCE_GATE_WORKFLOW)
-        self.assertIn('stable)   expected_head="unstable"', SOURCE_GATE_WORKFLOW)
-        self.assertIn('main)     expected_head="stable"', SOURCE_GATE_WORKFLOW)
+        for target, source in channel_ladder.SOURCE_FOR_TARGET.items():
+            self.assertRegex(
+                SOURCE_GATE_WORKFLOW,
+                rf'{re.escape(target)}\)\s+expected_head="{re.escape(source)}"',
+            )
 
     def test_source_gate_rebinds_to_live_pull_request_state(self):
         for live_field in ("live_base", "live_head", "live_head_sha", "live_head_repo"):
@@ -117,28 +132,31 @@ class SourceGateWorkflowContractTest(unittest.TestCase):
         self.assertEqual(SOURCE_GATE_WORKFLOW.count(".headRepository.nameWithOwner"), 1)
 
 
-class ReadinessWorkflowContractTest(unittest.TestCase):
-    def test_only_owner_can_record_readiness_for_live_dev(self):
-        self.assertIn('"${ACTOR}" != "${REPOSITORY_OWNER}"', READINESS_WORKFLOW)
-        self.assertIn('"${CANDIDATE_SHA}" != "${live_dev}"', READINESS_WORKFLOW)
+class ReadinessRecorderContractTest(unittest.TestCase):
+    def test_readiness_is_local_and_owner_authenticated(self):
+        self.assertIn("authenticated_login", READINESS_RECORDER)
+        self.assertIn("login != client.owner", READINESS_RECORDER)
+        self.assertNotIn("github.token", READINESS_RECORDER)
+        self.assertFalse(
+            (REPOSITORY_ROOT / ".github/workflows/record-nightly-readiness.yml").exists()
+        )
 
     def test_readiness_is_full_sha_bound_and_ci_gated(self):
-        self.assertIn("^[0-9a-f]{40}$", READINESS_WORKFLOW)
+        self.assertIn('FULL_SHA = re.compile(r"[0-9a-f]{40}")', READINESS_RECORDER)
+        self.assertIn("candidate_sha != live_dev", READINESS_RECORDER)
         for required in (
             "merge-gate / dev",
             "codeql (actions)",
             "codeql (python)",
             "codeql (rust)",
         ):
-            self.assertIn(required, READINESS_WORKFLOW)
-        self.assertIn('"repos/${REPOSITORY}/statuses/${CANDIDATE_SHA}"', READINESS_WORKFLOW)
+            self.assertIn(required, READINESS_RECORDER)
+        self.assertIn('f"repos/{self.repository}/statuses/{sha}"', READINESS_RECORDER)
 
     def test_readiness_never_accepts_or_uploads_a_rom(self):
-        self.assertNotIn("rom_path", READINESS_WORKFLOW.lower())
-        self.assertNotIn("command:", READINESS_WORKFLOW.lower())
-        self.assertNotIn("inputs.command", READINESS_WORKFLOW)
-        self.assertNotIn("upload-artifact", READINESS_WORKFLOW)
-        self.assertNotIn("actions/checkout", READINESS_WORKFLOW)
+        self.assertNotIn("rom_path", READINESS_RECORDER.lower())
+        self.assertNotIn("upload-artifact", READINESS_RECORDER)
+        self.assertNotIn("actions/checkout", READINESS_RECORDER)
 
 
 if __name__ == "__main__":

@@ -50,12 +50,15 @@ logs, or releases.
 
 Birch validates the exact current `dev` SHA from a clean checkout during its
 10:00-20:00 local operating window by running the canonical ROM load/extract
-command. After a zero exit, Birch dispatches
-`.github/workflows/record-nightly-readiness.yml`, which rechecks that the tested
-SHA is still the live `dev` tip and that its ordinary CI and CodeQL checks passed,
-then records `release-readiness` on that SHA. If `dev` advances, the result does
-not follow it: the new tip must be validated during a later Birch run, and the
-next off-hours promotion waits.
+command. After a zero exit, Birch runs the local
+`scripts/record_nightly_readiness.py <tested-dev-sha>` command. The recorder
+requires the local `gh` credential to authenticate as the repository owner,
+rechecks that the tested SHA is still the live `dev` tip and that its ordinary CI
+and CodeQL checks passed, then records `release-readiness` on that SHA. The owner
+credential must never be stored in Actions; ordinary workflows therefore cannot
+impersonate the readiness publisher. If `dev` advances, the result does not
+follow it: the new tip must be validated during a later Birch run, and the next
+off-hours promotion waits.
 
 The exact product command belongs to the extraction implementation tracked in
 GitHub issue #122 `(constitution-vs-roadmap)`. Until it exists and Birch can run
@@ -138,6 +141,11 @@ only on this repository and requests only Checks read, Commit statuses read,
 Contents write, Pull requests write, and Metadata read. Secret scanning and push
 protection remain enabled. CodeQL advanced setup scans Rust, Python, and Actions;
 critical alerts block every protected branch.
+
+The separate readiness trust boundary is the repository owner's local Birch
+credential. It is not an Actions secret. Promotion automation accepts only the
+latest successful `release-readiness` status created by that owner identity, so a
+repository workflow cannot forge official-ROM evidence.
 
 ### Control-plane bootstrap
 
