@@ -47,8 +47,10 @@ Fixes flow down the release ladder. The supported player channels are:
 Serious player-facing and security defects take the expedited direct ladder: land
 the minimal fix on `dev`, validate it, then promote `dev -> unstable -> stable ->
 main`. Stable/main still require their objective gates and CODEOWNER approval, but
-have no mandatory time delay. Older prerelease tags are not separately maintained
-— upgrade to a current channel.
+have no mandatory time delay. For an urgent candidate, an owner may manually
+dispatch `promote` with `merge-unstable` once every nightly gate is green; prefer
+the normal off-hours window when urgency permits. Older prerelease tags are not
+separately maintained — upgrade to a current channel.
 
 ## Scope notes
 

@@ -82,6 +82,9 @@ class PromotionWorkflowContractTest(unittest.TestCase):
         self.assertNotIn("--auto", PROMOTE_WORKFLOW)
         self.assertNotIn("--admin", PROMOTE_WORKFLOW)
 
+    def test_promotion_pr_lookups_exclude_same_named_fork_branches(self):
+        self.assertEqual(PROMOTE_WORKFLOW.count(".headRepository.nameWithOwner"), 3)
+
     def test_merge_is_immediate_and_bound_to_the_evaluated_sha(self):
         self.assertIn('"repos/${REPOSITORY}/pulls/${pr_number}/merge"', PROMOTE_WORKFLOW)
         self.assertIn('-f sha="${head_sha}"', PROMOTE_WORKFLOW)
@@ -111,6 +114,7 @@ class SourceGateWorkflowContractTest(unittest.TestCase):
         for live_field in ("live_base", "live_head", "live_head_sha", "live_head_repo"):
             self.assertIn(live_field, SOURCE_GATE_WORKFLOW)
         self.assertIn('if [[ "${duplicates}" != "1" ]]', SOURCE_GATE_WORKFLOW)
+        self.assertEqual(SOURCE_GATE_WORKFLOW.count(".headRepository.nameWithOwner"), 1)
 
 
 class ReadinessWorkflowContractTest(unittest.TestCase):
@@ -131,6 +135,8 @@ class ReadinessWorkflowContractTest(unittest.TestCase):
 
     def test_readiness_never_accepts_or_uploads_a_rom(self):
         self.assertNotIn("rom_path", READINESS_WORKFLOW.lower())
+        self.assertNotIn("command:", READINESS_WORKFLOW.lower())
+        self.assertNotIn("inputs.command", READINESS_WORKFLOW)
         self.assertNotIn("upload-artifact", READINESS_WORKFLOW)
         self.assertNotIn("actions/checkout", READINESS_WORKFLOW)
 
