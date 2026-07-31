@@ -167,9 +167,13 @@ impl NpcDialog {
     }
 
     /// Advance the dialog by exactly one frame. `confirm_pressed` is the
-    /// A-button just-pressed edge, forwarded straight to the current
-    /// [`Printer::tick`] (only consulted while awaiting a scroll/clear --
-    /// that method's own doc comment).
+    /// just-pressed edge of *either* confirm button -- upstream's message
+    /// box waits on `JOY_NEW(A_BUTTON | B_BUTTON)`
+    /// (`TextPrinterWaitWithDownArrow`, `src/text.c:865-882`), not A alone;
+    /// combining the two edges is the caller's job
+    /// (`crate::flow::overworld_phase::OverworldPhase::step`). Forwarded
+    /// straight to the current [`Printer::tick`] (only consulted while
+    /// awaiting a scroll/clear -- that method's own doc comment).
     pub(crate) fn tick(&mut self, confirm_pressed: bool) -> DialogOutcome {
         if self.finished {
             return DialogOutcome::Closed;

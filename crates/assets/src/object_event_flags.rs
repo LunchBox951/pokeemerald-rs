@@ -107,6 +107,35 @@ pub fn resolve(flag: &str) -> Option<u16> {
         .map(|(_, id)| *id)
 }
 
+/// `FLAG_DECORATION_1` .. `FLAG_DECORATION_14`
+/// (`include/constants/flags.h:196-209`), in the order upstream's
+/// `SecretBase_EventScript_SetDecorationFlags` sets them
+/// (`data/scripts/secret_base.inc:233-248`).
+///
+/// **Why this is a table of its own.** Every decoration object event is a
+/// *placeholder*: a slot in the player's bedroom (or a secret base) that
+/// only becomes a real object once a decoration is placed there. The flag
+/// polarity is inverted from every other `FLAG_HIDE_*` in
+/// [`OBJECT_EVENT_FLAGS`]: an *unused* slot has its flag **set** (hidden),
+/// and placing a decoration **clears** it. Nothing sets these at new-game
+/// time — `InitEventData` (`src/event_data.c:32-37`) zeroes the whole flag
+/// array and `EventScript_ResetAllMapFlags` never mentions them — so the
+/// "all slots empty" state is established per map entry instead, by the
+/// bedroom's own `MAP_SCRIPT_ON_TRANSITION`
+/// (`data/maps/LittlerootTown_BrendansHouse_2F/scripts.inc:6-12`, and
+/// May's counterpart), which calls the script above.
+///
+/// All fourteen are listed even though only `1..=12` are reachable from a
+/// bundled map's object events ([`OBJECT_EVENT_FLAGS`]' own bound,
+/// `DECOR_MAX_PLAYERS_HOUSE == 12`): the upstream script sets all fourteen
+/// unconditionally, and `13`/`14` exist for secret bases
+/// (`DECOR_MAX_SECRET_BASE == 16`, `include/constants/global.h:57-58`).
+/// Transcribing what the script actually does keeps this a transcription
+/// rather than an inference.
+pub const DECORATION_FLAGS: &[u16] = &[
+    0xAE, 0xAF, 0xB0, 0xB1, 0xB2, 0xB3, 0xB4, 0xB5, 0xB6, 0xB7, 0xB8, 0xB9, 0xBA, 0xBB,
+];
+
 #[cfg(test)]
 mod tests {
     use super::*;

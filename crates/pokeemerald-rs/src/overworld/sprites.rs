@@ -22,7 +22,9 @@
 //! than per object event: the player's 9 walking frames occupy base tile
 //! `0` and palette bank `0`, each distinct NPC sheet the room references
 //! is appended after them at its own [`avatar::FRAME_BLOCK_TILES`] stride,
-//! and the four generic `npc_1..4` banks sit at banks 1..=4.
+//! the four generic `npc_1..4` banks sit at banks 1..=4, and the *other*
+//! protagonist's own palette -- what a rival object event draws from --
+//! sits at `npc::OTHER_PROTAGONIST_BANK`.
 
 use std::collections::HashMap;
 
@@ -46,8 +48,9 @@ pub(super) struct SceneSprites {
     /// sheet this room's object events reference (module docs).
     tiles: Tileset,
     /// Bank 0: the player's own palette. Banks 1..=4: the four generic
-    /// `npc_1..4` palettes, always loaded (see
-    /// [`npc::build_combined_palette`]).
+    /// `npc_1..4` palettes. Bank `npc::OTHER_PROTAGONIST_BANK`: the other
+    /// protagonist's own, for a rival object event. All of the non-player
+    /// banks are always loaded (see [`npc::build_combined_palette`]).
     palette: Palette,
     /// This room's object events, straight from the generated
     /// [`assets::MapEventsTable`] (`'static`) -- the NPC-rendering source;
@@ -89,7 +92,7 @@ impl SceneSprites {
         let bindings = npc::resolve_bindings(pack, player, events.object_events, &mut bytes)?;
         Ok(Self {
             tiles: Tileset::decode(BitDepth::Bpp4, &bytes)?,
-            palette: npc::build_combined_palette(pack, palette_ref)?,
+            palette: npc::build_combined_palette(pack, player, palette_ref)?,
             object_events: events.object_events,
             bindings,
         })

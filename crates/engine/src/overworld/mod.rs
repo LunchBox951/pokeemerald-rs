@@ -65,8 +65,8 @@ pub use collision::{elevation_mismatch, Collision, ELEVATION_MULTI_LEVEL, ELEVAT
 pub use direction::Direction;
 pub use map_runtime::{ConnectedMapData, ConnectionCrossing, MapRuntime, NUM_METATILES_IN_PRIMARY};
 pub use object_event::{
-    facing_object_event, initial_facing_direction, object_event_is_visible,
-    visible_object_event_at, visible_object_events,
+    facing_object_event, initial_facing_direction, object_event_is_in_view,
+    object_event_is_visible, visible_object_event_at, visible_object_events,
 };
 pub use player::{PlayerState, StepOutcome, TilePos, WALK_FRAMES_PER_TILE};
 pub use warp::{

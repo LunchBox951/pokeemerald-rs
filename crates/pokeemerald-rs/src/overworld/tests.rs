@@ -336,22 +336,34 @@ fn synthetic_overworld_pack_bytes(width: u16, height: u16) -> Vec<u8> {
         bank0.payload = bank0_payload;
     }
 
-    // `OverworldScene::from_pack` always loads all four generic NPC
-    // palettes (`npc::build_combined_palette`'s own doc comment) regardless
-    // of whether this fixture's (empty) object events reference any of
-    // them -- empty (0-color) placeholders are enough for that lookup to
-    // succeed.
-    for n in 1..=4u8 {
-        let id: &'static str = &*Box::leak(format!("sprite/palette/npc_{n}").into_boxed_str());
+    push_unconditional_sprite_palettes(&mut entries);
+
+    write_synthetic_pack(entries)
+}
+
+/// The sprite palettes `OverworldScene::from_pack` loads *unconditionally*
+/// -- the four generic `npc_1..4` banks and the other protagonist's own
+/// (`npc::build_combined_palette`'s own doc comment) -- as empty (0-color)
+/// placeholders, which is enough for those lookups to succeed regardless of
+/// whether a fixture's object events reference any of them.
+///
+/// This fixture's player is `PlayerCharacter::Brendan`, so the "other
+/// protagonist" bank reads May's palette.
+fn push_unconditional_sprite_palettes(entries: &mut Vec<Entry>) {
+    let mut placeholder = |id: &'static str| {
         entries.push(Entry {
             id,
             kind_tag: 1,
             meta: 0u16.to_le_bytes().to_vec(),
             payload: vec![],
         });
+    };
+    for n in 1..=4u8 {
+        placeholder(&*Box::leak(
+            format!("sprite/palette/npc_{n}").into_boxed_str(),
+        ));
     }
-
-    write_synthetic_pack(entries)
+    placeholder("sprite/palette/may");
 }
 
 /// An object-event-free [`assets::MapEvents`] for
@@ -660,4 +672,79 @@ fn real_pack_1f_oam_entries_cover_every_drawn_fresh_save_npc() {
     );
     assert!(!bindings.contains_key("OBJ_EVENT_GFX_VIGOROTH_CARRYING_BOX"));
     assert!(!bindings.contains_key("OBJ_EVENT_GFX_NINJA_BOY"));
+}
+
+/// The opposite-gender rival regression against the *real* pack, both ways
+/// round: the rival object event a player can actually meet lives in the
+/// other protagonist's house and carries that protagonist's graphics id
+/// (`LittlerootTown_MaysHouse_2F/map.json:19` ->
+/// `OBJ_EVENT_GFX_RIVAL_MAY_NORMAL`, and vice versa), so a binding must
+/// resolve for it whichever gender this run is. Before the fix, playing as
+/// Brendan resolved a binding only for `..._RIVAL_BRENDAN_NORMAL` -- the id
+/// that stays hidden in his own house -- leaving the real rival undrawn
+/// once its hide flag cleared.
+///
+/// Real-pack, because the point is partly that both protagonists' walking
+/// sheets *and* palettes are actually extracted and decodable
+/// (`sprite/{brendan,may}/walking`, `sprite/palette/{brendan,may}`).
+#[test]
+#[ignore = "needs a local pack: run `cargo xtask extract` first"]
+fn real_pack_the_opposite_gender_rival_binds_for_either_player() {
+    const BRENDANS_2F: assets::MapId = assets::MapId("MAP_LITTLEROOT_TOWN_BRENDANS_HOUSE_2F");
+    const MAYS_2F: assets::MapId = assets::MapId("MAP_LITTLEROOT_TOWN_MAYS_HOUSE_2F");
+
+    let pack = assets::pack::AssetPack::load_default().expect("run `cargo xtask extract` first");
+    let scene_for = |map: assets::MapId, player: super::PlayerCharacter| {
+        let header = assets::MapHeaderTable::new().header(map).unwrap();
+        let layout = assets::LayoutTable::new().layout(header.layout).unwrap();
+        let events = assets::MapEventsTable::new().resolve(map).unwrap();
+        super::OverworldScene::from_pack(&pack, layout, player, events)
+            .expect("a bundled bedroom must decode against the real pack")
+    };
+
+    // Playing as Brendan, visiting May's house: her rival object must bind.
+    let brendan_in_mays_house = scene_for(MAYS_2F, super::PlayerCharacter::Brendan);
+    let binding = brendan_in_mays_house
+        .sprites
+        .bindings()
+        .get("OBJ_EVENT_GFX_RIVAL_MAY_NORMAL")
+        .copied()
+        .expect("the rival of a Brendan player is May, and she must bind");
+    assert_ne!(
+        binding.palette_bank(),
+        0,
+        "the rival draws from its own protagonist palette, not the player's \
+         bank 0 -- upstream PALSLOT_NPC_SPECIAL vs PALSLOT_PLAYER"
+    );
+    assert_ne!(
+        binding.base_tile(),
+        0,
+        "and from its own frame block, not the player's at base tile 0"
+    );
+
+    // The mirror image: playing as May, visiting Brendan's house.
+    let may_in_brendans_house = scene_for(BRENDANS_2F, super::PlayerCharacter::May);
+    let mirrored = may_in_brendans_house
+        .sprites
+        .bindings()
+        .get("OBJ_EVENT_GFX_RIVAL_BRENDAN_NORMAL")
+        .copied()
+        .expect("the rival of a May player is Brendan, and he must bind");
+    assert_eq!(
+        (mirrored.palette_bank(), mirrored.base_tile()),
+        (binding.palette_bank(), binding.base_tile()),
+        "the two configurations are mirror images -- same bank, same stride"
+    );
+
+    // And the *resident's own* id still binds, to the already-loaded player
+    // sheet at bank 0 / base tile 0 (it is hidden in play, but the binding
+    // is correct rather than absent).
+    let brendan_at_home = scene_for(BRENDANS_2F, super::PlayerCharacter::Brendan);
+    let own = brendan_at_home
+        .sprites
+        .bindings()
+        .get("OBJ_EVENT_GFX_RIVAL_BRENDAN_NORMAL")
+        .copied()
+        .expect("the same-gender variant reuses the player's own sheet");
+    assert_eq!((own.palette_bank(), own.base_tile()), (0, 0));
 }

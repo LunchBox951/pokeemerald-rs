@@ -23,6 +23,103 @@ use crate::overworld::{
     self, npc_scripts, DialogOutcome, NpcDialog, OverworldScene, OverworldSceneError,
 };
 
+/// The maps whose `MAP_SCRIPT_ON_TRANSITION` calls
+/// `SecretBase_EventScript_SetDecorationFlags` -- transcribed from those
+/// maps' own `scripts.inc`
+/// (`data/maps/LittlerootTown_BrendansHouse_2F/scripts.inc:6-12`,
+/// `data/maps/LittlerootTown_MaysHouse_2F/scripts.inc:6-12`), restricted to
+/// the maps this port bundles. Secret-base maps run the same script via
+/// `data/scripts/shared_secret_base.inc:12-16` and are out of scope.
+///
+/// See [`run_on_transition_map_script`] for what this is for and why it
+/// matters for collision.
+const MAPS_THAT_SET_DECORATION_FLAGS: [assets::MapId; 2] = [
+    assets::MapId("MAP_LITTLEROOT_TOWN_BRENDANS_HOUSE_2F"),
+    assets::MapId("MAP_LITTLEROOT_TOWN_MAYS_HOUSE_2F"),
+];
+
+/// Apply `map`'s `MAP_SCRIPT_ON_TRANSITION` effects to `event_data`, on
+/// entering it.
+///
+/// This port has no script engine, so this is a targeted port of the one
+/// on-transition effect that is *observable* for the maps it bundles:
+/// `SecretBase_EventScript_SetDecorationFlags`
+/// (`data/scripts/secret_base.inc:233-248`), which sets every
+/// [`assets::object_event_flags::DECORATION_FLAGS`] id. Same shape as
+/// [`new_game`]'s partial port of `EventScript_ResetAllMapFlags` — the
+/// effect, without the interpreter.
+///
+/// # Why this is load-bearing, not cosmetic
+///
+/// The two player bedrooms declare twelve `OBJ_EVENT_GFX_VAR_*` decoration
+/// *placeholders* at staging coordinates (`map.json:32-175` in each), each
+/// behind its own `FLAG_DECORATION_*`. Their polarity is inverted from an
+/// ordinary `FLAG_HIDE_*`: an empty slot is the *set* state. Nothing sets
+/// them at new-game time — `InitEventData` (`src/event_data.c:32-37`)
+/// zeroes the flag array and `EventScript_ResetAllMapFlags` never mentions
+/// them — so without this, a fresh save reads all twelve as *visible*.
+///
+/// Upstream avoids that purely by ordering: `RunOnTransitionMapScript`
+/// (`src/overworld.c:860`, in `LoadMapFromWarp`) runs this script *before*
+/// `InitObjectEventsLocal` reaches `TrySpawnObjectEvents`
+/// (`src/overworld.c:2163-2178`), whose `!FlagGet(template->flagId)` gate
+/// (`src/event_object_movement.c:1670-1672`) then skips all twelve. The
+/// occupied slots are re-cleared afterwards, one at a time, by
+/// `InitSecretBaseDecorationSprites` (`src/secret_base.c:552-632`) from the
+/// `MAP_SCRIPT_ON_WARP_INTO_MAP_TABLE` script — and on a fresh save
+/// `playerRoomDecorations[]` is all `DECOR_NONE` (`ClearSav1`,
+/// `src/load_save.c:64-67`), so none are.
+///
+/// Two consequences if this is skipped, both real:
+/// - **Collision.** A spawned placeholder is a hard blocker. Nothing
+///   upstream exempts it: `DoesObjectCollideWithObjectAt`
+///   (`src/event_object_movement.c:4724-4742`) consults only `active`,
+///   coordinates and elevation — never `invisible` — so even
+///   `MOVEMENT_TYPE_INVISIBLE` would still block (and these use
+///   `MOVEMENT_TYPE_LOOK_AROUND` anyway). Seven of Brendan's bedroom's
+///   twelve sit on walkable floor down the room's left column, `(1, 2)`
+///   among them; all twelve of May's do.
+/// - **Rendering.** `GetObjectEventGraphicsInfo`
+///   (`src/event_object_movement.c:1914-1931`) resolves
+///   `OBJ_EVENT_GFX_VAR_n` through `VAR_OBJ_GFX_ID_0 + n`, which is `0` on a
+///   fresh save — i.e. `OBJ_EVENT_GFX_BRENDAN_NORMAL`. Twelve Brendan
+///   clones, not invisible markers.
+///
+/// # Not ported
+///
+/// The `ON_WARP_INTO_MAP` half (`InitSecretBaseDecorationSprites`) that
+/// *clears* a flag per placed decoration, since this port has no
+/// `playerRoomDecorations` save state for anything to be placed in — a
+/// fresh save's slots are all empty, which is exactly the state this
+/// produces. A future decoration slice adds that half; it needs no change
+/// here. The other on-transition effects of these maps
+/// (`VAR_LITTLEROOT_RIVAL_STATE`/`VAR_LITTLEROOT_INTRO_STATE` branches,
+/// `setvar VAR_SECRET_BASE_INITIALIZED`) drive story progression this port
+/// does not model yet.
+///
+/// # Panics
+///
+/// Never in practice: every
+/// [`assets::object_event_flags::DECORATION_FLAGS`] id is a transcribed
+/// `include/constants/flags.h` literal (`0xAE..=0xBB`) well inside the
+/// ordinary flag range `flag_set` accepts — the same reasoning
+/// [`new_game::init_save_blocks`]'s own `RESET_MAP_FLAGS` application rests
+/// on, and pinned by this module's
+/// `every_decoration_flag_id_is_settable` test.
+fn run_on_transition_map_script(
+    map: assets::MapId,
+    event_data: &mut engine::event_data::EventData,
+) {
+    if !MAPS_THAT_SET_DECORATION_FLAGS.contains(&map) {
+        return;
+    }
+    for &id in assets::object_event_flags::DECORATION_FLAGS {
+        event_data
+            .flag_set(id)
+            .expect("every DECORATION_FLAGS id is an ordinary flag id");
+    }
+}
+
 /// The overworld-loop state (module docs): an [`OverworldScene`] to render
 /// plus the [`PlayerState`] it renders, together with the map identity
 /// needed to re-look-up that map's header and event lists (from the
@@ -79,7 +176,11 @@ impl OverworldPhase {
             new_game::SPAWN_ELEVATION,
             new_game::SPAWN_FACING,
         );
-        let (save1, save2) = new_game::init_save_blocks_for_new_game();
+        let (mut save1, save2) = new_game::init_save_blocks_for_new_game();
+        // Entering the spawn map is a map transition like any other -- and
+        // the spawn map is a *bedroom*, so this is exactly the entry that
+        // hides its twelve decoration placeholders.
+        run_on_transition_map_script(new_game::SPAWN_MAP_ID, &mut save1.event_data);
         Ok(Self {
             scene,
             player,
@@ -105,7 +206,8 @@ impl OverworldPhase {
         player: PlayerState,
         dialog: Option<NpcDialog>,
     ) -> Self {
-        let (save1, save2) = new_game::init_save_blocks_for_new_game();
+        let (mut save1, save2) = new_game::init_save_blocks_for_new_game();
+        run_on_transition_map_script(map_id, &mut save1.event_data);
         Self {
             scene,
             player,
@@ -176,13 +278,26 @@ impl OverworldPhase {
     /// # NPC dialog routing (issue #161)
     ///
     /// While [`Self::dialog`] is `Some`, this method does nothing else:
-    /// `buttons`' A-press edge is forwarded straight to
+    /// `buttons`' confirm edge is forwarded straight to
     /// [`NpcDialog::tick`], and the dialog is dropped once that reports
     /// [`DialogOutcome::Closed`] -- freezing ordinary movement/warp
     /// processing for as long as the box is open, mirroring upstream's own
     /// `lock` script command (the player's `RunFieldInput` stops being
     /// polled while a message box owns input) and restoring it the instant
     /// the box closes.
+    ///
+    /// **A *or* B advances the box.** The down-arrow wait prompt is
+    /// `TextPrinterWaitWithDownArrow` (`src/text.c:865-882`), which takes
+    /// `JOY_NEW(A_BUTTON | B_BUTTON)`; the mid-page wait
+    /// (`TextPrinterWait`, `:884-900`) and the hold-to-speed-up path
+    /// (`RunTextPrinter`'s `RENDER_STATE_HANDLE_CHAR`, `:944` and `:950`)
+    /// read the same pair. So both edges are combined here rather than only
+    /// A. Nothing else in this method consumes B -- the interaction lookup
+    /// below is A-only, matching `FieldInput::pressedAButton`
+    /// (`field_control_avatar.c:172`, which is the sole gate on
+    /// `TryStartInteractionScript`) -- and the dialog branch returns before
+    /// any of it, so a B press that closes a box cannot also do something
+    /// else on the same frame.
     ///
     /// Otherwise, after this frame's movement is applied (so a same-frame
     /// turn-to-face is already reflected), a fresh A-press checks
@@ -200,7 +315,9 @@ impl OverworldPhase {
     /// see [`Self::interaction_tokens_this_frame`].
     pub(super) fn step(&mut self, buttons: ButtonState) {
         if let Some(dialog) = &mut self.dialog {
-            let confirm_pressed = buttons.is_newly_pressed(Buttons::A);
+            // `JOY_NEW(A_BUTTON | B_BUTTON)` (doc comment above).
+            let confirm_pressed =
+                buttons.is_newly_pressed(Buttons::A) || buttons.is_newly_pressed(Buttons::B);
             if dialog.tick(confirm_pressed) == DialogOutcome::Closed {
                 self.dialog = None;
             }
@@ -422,6 +539,11 @@ impl OverworldPhase {
         self.player = PlayerState::new((i32::from(x), i32::from(y)), elevation, facing);
         self.scene = scene;
         self.map_id = map;
+        // `RunOnTransitionMapScript` (`src/overworld.c:860`, in
+        // `LoadMapFromWarp`) -- run on arrival, before anything reads the
+        // destination map's object events, mirroring upstream's ordering
+        // against `TrySpawnObjectEvents`.
+        run_on_transition_map_script(map, &mut self.save1.event_data);
         self.save1.location = WarpData {
             map_group: warp_data_index(header.group, "MAP_GROUP"),
             map_num: warp_data_index(header.num, "MAP_NUM"),

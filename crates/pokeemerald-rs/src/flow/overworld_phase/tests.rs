@@ -926,3 +926,374 @@ fn walking_downstairs_and_talking_to_mom_opens_and_closes_her_dialog() {
         "movement must resume normally once the dialog has closed"
     );
 }
+
+// -- Message-box confirm input: A *or* B ------------------------------------
+
+/// Upstream's down-arrow wait prompt takes `JOY_NEW(A_BUTTON | B_BUTTON)`
+/// (`TextPrinterWaitWithDownArrow`, `pokeemerald/src/text.c:865-882`), not A
+/// alone -- as do the mid-page wait (`TextPrinterWait`, `:884-900`) and the
+/// hold-to-speed-up path (`RunTextPrinter`, `:944`/`:950`). Before this,
+/// only a fresh A edge reached [`crate::overworld::NpcDialog::tick`], so a
+/// player pressing B at the prompt was stuck with the box open forever.
+///
+/// Headless, on a synthetic dialog: B alone must drive it to close.
+#[test]
+fn b_alone_advances_and_closes_a_dialog() {
+    use engine::text::Token;
+
+    let dialog = crate::overworld::dialog::synthetic_dialog(vec![
+        Token::Char('A'),
+        Token::PromptClear,
+        Token::End,
+    ]);
+    let mut phase = synthetic_phase(PlayerState::new((7, 4), 3, Direction::South), Some(dialog));
+
+    // Never press A: only B. Same held-across-the-window shape as this
+    // module's other dialog tests (the exact frame the prompt becomes
+    // receptive is printer-timing-dependent); the loop stops the instant
+    // the box closes.
+    let mut closed = false;
+    for _ in 0..40 {
+        phase.step(pressed(Buttons::B));
+        if phase.dialog.is_none() {
+            closed = true;
+            break;
+        }
+    }
+    assert!(
+        closed,
+        "a fresh B edge must advance the trailing prompt and close the box"
+    );
+}
+
+/// The complement: neither confirm button is special-cased away, and B does
+/// not leak into anything else on the frame it closes a box.
+///
+/// The dialog branch of [`OverworldPhase::step`] returns before movement and
+/// interaction are reached, so a B press that closes the box cannot also
+/// move the player; and with no box open, B is not read at all (interaction
+/// is A-only, matching `FieldInput::pressedAButton` --
+/// `field_control_avatar.c:172`).
+#[test]
+fn b_does_not_move_the_player_or_open_a_dialog() {
+    use engine::text::Token;
+
+    let dialog = crate::overworld::dialog::synthetic_dialog(vec![
+        Token::Char('A'),
+        Token::PromptClear,
+        Token::End,
+    ]);
+    // Facing south with a clear tile below, so an un-frozen step would show.
+    let mut phase = synthetic_phase(PlayerState::new((7, 4), 3, Direction::South), Some(dialog));
+    // Bounded, like this module's other dialog loops: a regression that
+    // stops B closing the box must *fail* here, not spin forever.
+    let mut closed = false;
+    for _ in 0..40 {
+        phase.step(pressed(Buttons::B));
+        if phase.dialog.is_none() {
+            closed = true;
+            break;
+        }
+    }
+    assert!(closed, "B must close the box within the frame budget");
+    assert_eq!(
+        phase.player.position(),
+        (7, 4),
+        "the B press that closed the box must not also have moved the player"
+    );
+
+    // With no dialog open, B facing Mom must not open one -- only A
+    // interacts. (2, 6) is Mom's tile; stand east of her facing west.
+    let mut phase = synthetic_phase(PlayerState::new((3, 6), 3, Direction::West), None);
+    phase.step(pressed(Buttons::B));
+    assert!(
+        phase.dialog.is_none(),
+        "B is not an interaction button -- upstream gates \
+         TryStartInteractionScript on pressedAButton alone"
+    );
+    // ...and the identical press with A does open one, so the check above is
+    // about the button rather than the position.
+    phase.step(pressed(Buttons::A));
+    assert!(phase.dialog.is_some(), "A still interacts");
+}
+
+// -- ON_TRANSITION decoration flags -----------------------------------------
+
+/// Every [`assets::object_event_flags::DECORATION_FLAGS`] id must be one
+/// [`EventData::flag_set`] accepts -- what makes
+/// [`super::run_on_transition_map_script`]'s `expect` unreachable rather
+/// than a latent panic.
+#[test]
+fn every_decoration_flag_id_is_settable() {
+    let mut data = EventData::new();
+    for &id in assets::object_event_flags::DECORATION_FLAGS {
+        assert!(
+            data.flag_set(id).is_ok(),
+            "{id:#x} must be an ordinary flag id"
+        );
+    }
+    assert_eq!(
+        assets::object_event_flags::DECORATION_FLAGS.len(),
+        14,
+        "SecretBase_EventScript_SetDecorationFlags sets FLAG_DECORATION_1..14"
+    );
+}
+
+/// The transcribed [`super::MAPS_THAT_SET_DECORATION_FLAGS`] list must be
+/// exactly the set of bundled maps that actually carry decoration
+/// placeholders -- the tripwire against the list going stale if the
+/// extraction pipeline ever bundles another bedroom or secret base.
+#[test]
+fn the_decoration_flag_map_list_covers_every_bundled_map_with_placeholders() {
+    /// The maps `crates/xtask/src/extract/mod.rs`'s `LAYOUTS` bundles --
+    /// mirrored here as `crate::overworld::npc`'s own tests mirror it (this
+    /// crate cannot depend on `xtask`; that module's
+    /// `the_bundled_layout_set_is_pinned_for_the_tables_derived_from_it` is
+    /// the tripwire for the list itself growing).
+    const BUNDLED_MAPS: [&str; 6] = [
+        "MAP_LITTLEROOT_TOWN",
+        "MAP_LITTLEROOT_TOWN_BRENDANS_HOUSE_1F",
+        "MAP_LITTLEROOT_TOWN_BRENDANS_HOUSE_2F",
+        "MAP_LITTLEROOT_TOWN_MAYS_HOUSE_1F",
+        "MAP_LITTLEROOT_TOWN_MAYS_HOUSE_2F",
+        "MAP_LITTLEROOT_TOWN_PROFESSOR_BIRCHS_LAB",
+    ];
+
+    let table = assets::MapEventsTable::new();
+    let mut with_placeholders: Vec<MapId> = BUNDLED_MAPS
+        .iter()
+        .map(|m| MapId(m))
+        .filter(|map| {
+            table.resolve(*map).is_ok_and(|events| {
+                events
+                    .object_events
+                    .iter()
+                    .any(|o| o.flag.starts_with("FLAG_DECORATION_"))
+            })
+        })
+        .collect();
+    with_placeholders.sort_unstable_by_key(|m| m.0);
+
+    let mut listed = super::MAPS_THAT_SET_DECORATION_FLAGS.to_vec();
+    listed.sort_unstable_by_key(|m| m.0);
+    assert_eq!(
+        with_placeholders, listed,
+        "every bundled map declaring FLAG_DECORATION_* object events must run \
+         SecretBase_EventScript_SetDecorationFlags on transition, and no other"
+    );
+}
+
+/// The finding-5 regression: on a fresh save the player's bedroom must be
+/// walkable, not fenced in by its own decoration placeholders.
+///
+/// `MAP_LITTLEROOT_TOWN_BRENDANS_HOUSE_2F` declares twelve
+/// `OBJ_EVENT_GFX_VAR_*` placeholders down the room's left column
+/// (`map.json:32-175`), `(1, 2)` among them. Nothing sets
+/// `FLAG_DECORATION_*` at new-game time, so once object events became solid
+/// these turned into invisible walls. Upstream hides them from the map's own
+/// `MAP_SCRIPT_ON_TRANSITION` (see
+/// [`super::run_on_transition_map_script`]), which
+/// [`OverworldPhase::load_default`] now mirrors.
+#[test]
+fn the_bedrooms_decoration_placeholders_do_not_block_a_fresh_save() {
+    const BEDROOM: MapId = MapId("MAP_LITTLEROOT_TOWN_BRENDANS_HOUSE_2F");
+    let events = assets::MapEventsTable::new().resolve(BEDROOM).unwrap();
+
+    let placeholder = events
+        .object_events
+        .iter()
+        .find(|o| (o.x, o.y) == (1, 2))
+        .expect("the bedroom declares a decoration placeholder at (1, 2)");
+    assert_eq!(
+        (placeholder.graphics_id, placeholder.flag),
+        ("OBJ_EVENT_GFX_VAR_8", "FLAG_DECORATION_9"),
+        "fixture precondition: its real map.json graphics id and flag"
+    );
+
+    // A phase entering the bedroom -- the same path `load_default` takes,
+    // minus the pack.
+    let phase = OverworldPhase::for_test(
+        crate::overworld::tests::synthetic_scene(10, 10),
+        BEDROOM,
+        PlayerState::new((1, 3), 3, Direction::North),
+        None,
+    );
+    assert!(
+        !engine::overworld::object_event_is_visible(placeholder, &phase.save1().event_data),
+        "an empty decoration slot is the flag-SET state; entering the map \
+         must have set it"
+    );
+
+    // And the tile is genuinely walkable: step north onto it.
+    let mut phase = phase;
+    phase.step(held(Buttons::UP));
+    assert_eq!(
+        phase.player.position(),
+        (1, 2),
+        "the placeholder's tile must be walkable on a fresh save"
+    );
+}
+
+/// The same map entered *without* the on-transition script would block --
+/// pinning that the test above measures the fix rather than some unrelated
+/// property of the fixture (e.g. the placeholder being unreachable anyway).
+#[test]
+fn a_decoration_placeholder_would_block_if_its_flag_were_clear() {
+    const BEDROOM: MapId = MapId("MAP_LITTLEROOT_TOWN_BRENDANS_HOUSE_2F");
+    let events = assets::MapEventsTable::new().resolve(BEDROOM).unwrap();
+    let placeholder = events
+        .object_events
+        .iter()
+        .find(|o| (o.x, o.y) == (1, 2))
+        .expect("the bedroom declares a decoration placeholder at (1, 2)");
+
+    // A store with the decoration flags deliberately left clear -- i.e. the
+    // pre-fix state, and also the state upstream reaches for a slot that
+    // really does hold a decoration.
+    let data = EventData::new();
+    assert!(
+        engine::overworld::object_event_is_visible(placeholder, &data),
+        "with its flag clear the placeholder is spawned -- upstream would \
+         resolve OBJ_EVENT_GFX_VAR_8 through VAR_OBJ_GFX_ID_8 and draw a real \
+         decoration there"
+    );
+
+    let header = assets::MapHeaderTable::new().header(BEDROOM).unwrap();
+    let scene = crate::overworld::tests::synthetic_scene(10, 10);
+    let runtime = scene.runtime(BEDROOM, header, events);
+    let mut player = PlayerState::new((1, 3), 3, Direction::North);
+    let no_connections = |_: MapId| -> Option<(u16, u16)> { None };
+    assert!(
+        matches!(
+            player.step(Some(Direction::North), &runtime, &no_connections, &data),
+            engine::overworld::StepOutcome::Blocked { .. }
+        ),
+        "a spawned decoration is a solid object event -- upstream never \
+         exempts one from DoesObjectCollideWithObjectAt, so a future \
+         decoration-placement slice inherits this blocking behaviour"
+    );
+}
+
+/// The **production** pin for the decoration-flag fix, on the acceptance
+/// path itself: [`OverworldPhase::load_default`] spawns the player into
+/// `MAP_LITTLEROOT_TOWN_BRENDANS_HOUSE_2F` -- the very room carrying the
+/// twelve `OBJ_EVENT_GFX_VAR_*` placeholders -- so that constructor's own
+/// `run_on_transition_map_script` call is what makes the room walkable in
+/// the real game, not just in the `for_test` fixtures above.
+///
+/// Deleting that call from `load_default` must fail *here*: the headless
+/// tests all build their phase through `for_test`, which has its own call,
+/// so none of them can catch it.
+///
+/// Real-pack, because `load_default` is the pack-loading constructor.
+#[test]
+#[ignore = "needs a local pack: run `cargo xtask extract` first"]
+fn load_default_hides_the_spawn_bedrooms_decoration_placeholders() {
+    let mut phase = OverworldPhase::load_default().expect("run `cargo xtask extract` first");
+    assert_eq!(
+        phase.map_id,
+        new_game::SPAWN_MAP_ID,
+        "fixture precondition: the spawn map is the bedroom with the placeholders"
+    );
+
+    // Every flag the map's own ON_TRANSITION script sets.
+    for &id in assets::object_event_flags::DECORATION_FLAGS {
+        assert_eq!(
+            phase.save1().event_data.flag_get(id),
+            Ok(true),
+            "{id:#x} must be set on entering the bedroom"
+        );
+    }
+
+    // ...and therefore every placeholder is absent, by the engine's own
+    // visibility query rather than by restating the flag check.
+    let events = assets::MapEventsTable::new()
+        .resolve(new_game::SPAWN_MAP_ID)
+        .unwrap();
+    let placeholders: Vec<_> = events
+        .object_events
+        .iter()
+        .filter(|o| o.graphics_id.starts_with("OBJ_EVENT_GFX_VAR_"))
+        .collect();
+    assert_eq!(
+        placeholders.len(),
+        12,
+        "the bedroom declares twelve decoration slots (DECOR_MAX_PLAYERS_HOUSE)"
+    );
+    for placeholder in &placeholders {
+        assert!(
+            !engine::overworld::object_event_is_visible(placeholder, &phase.save1().event_data),
+            "{} at ({}, {}) must be absent on a fresh save",
+            placeholder.graphics_id,
+            placeholder.x,
+            placeholder.y
+        );
+    }
+
+    // And the observable consequence: the tile a placeholder stages on is
+    // walkable. `(1, 2)` is `OBJ_EVENT_GFX_VAR_8`/`FLAG_DECORATION_9` at
+    // elevation 3, on open floor in the real layout -- so nothing but the
+    // object event could block it.
+    //
+    // Placed directly rather than walked from the spawn tile (which is the
+    // stair warp at `SPAWN_POSITION`, so stepping off it and back would
+    // leave the room): the same direct-placement shape, for the same
+    // reason, as this module's real-pack Mom dialog test.
+    phase.player = PlayerState::new((1, 3), 3, Direction::North);
+    phase.step(held(Buttons::UP));
+    assert_eq!(
+        phase.player.position(),
+        (1, 2),
+        "an empty decoration slot's tile must be walkable in the real room"
+    );
+}
+
+/// The same pin for the *other* production call site,
+/// [`OverworldPhase::warp_to`] -- every subsequent entry into a bedroom,
+/// not just the first.
+///
+/// Calls `warp_to` directly rather than walking the 1F stairs: it is the
+/// production method (the one `step` invokes on a resolved warp), and
+/// driving it straight makes the assertion about the transition itself
+/// rather than about the route taken to reach it. The flags are cleared
+/// first so the assertion cannot pass on the state `load_default` already
+/// left behind.
+#[test]
+#[ignore = "needs a local pack: run `cargo xtask extract` first"]
+fn warping_into_a_bedroom_hides_its_decoration_placeholders() {
+    let mut phase = OverworldPhase::load_default().expect("run `cargo xtask extract` first");
+
+    // Clear what `load_default` set, so only `warp_to` can restore it.
+    for &id in assets::object_event_flags::DECORATION_FLAGS {
+        phase.save1.event_data.flag_clear(id).unwrap();
+    }
+    assert_eq!(
+        phase
+            .save1()
+            .event_data
+            .flag_get(assets::object_event_flags::DECORATION_FLAGS[0]),
+        Ok(false),
+        "fixture precondition: the flags start clear for this transition"
+    );
+
+    // Warp into the bedroom (its only warp event, id 0, is the stair tile).
+    phase.warp_to(new_game::SPAWN_MAP_ID, 0);
+    assert_eq!(
+        phase.map_id,
+        new_game::SPAWN_MAP_ID,
+        "the warp must have landed"
+    );
+
+    for &id in assets::object_event_flags::DECORATION_FLAGS {
+        assert_eq!(
+            phase.save1().event_data.flag_get(id),
+            Ok(true),
+            "{id:#x} must be set again by the arrival transition"
+        );
+    }
+
+    // Same walkability consequence as the spawn case.
+    phase.player = PlayerState::new((1, 3), 3, Direction::North);
+    phase.step(held(Buttons::UP));
+    assert_eq!(phase.player.position(), (1, 2));
+}

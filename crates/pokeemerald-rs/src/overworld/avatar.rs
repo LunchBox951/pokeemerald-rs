@@ -147,6 +147,24 @@ impl PlayerCharacter {
             Self::May => "may",
         }
     }
+
+    /// The other protagonist — whoever *this* run's player is not.
+    ///
+    /// Upstream has no single "the rival" graphics id: the two Littleroot
+    /// houses are mirrored maps, each hardcoding its own resident's
+    /// `OBJ_EVENT_GFX_RIVAL_{BRENDAN,MAY}_NORMAL`
+    /// (`data/maps/LittlerootTown_BrendansHouse_2F/map.json:19` vs
+    /// `LittlerootTown_MaysHouse_2F/map.json:19`), and the intro warp decides
+    /// which one is home (`data/maps/LittlerootTown/scripts.inc:116` male ->
+    /// Brendan's house, `:127` female -> May's). So the object event the
+    /// player can actually meet as the rival is always the *other*
+    /// protagonist's — see [`super::npc::resolve_sprite_source`].
+    pub(super) const fn other(self) -> Self {
+        match self {
+            Self::Brendan => Self::May,
+            Self::May => Self::Brendan,
+        }
+    }
 }
 
 /// Validate and pack a 9-frame "people" sheet's raw pixels into the GBA's

@@ -112,6 +112,59 @@ pub fn visible_object_events<'a>(
         .filter(move |event| object_event_is_visible(event, event_data))
 }
 
+/// Upstream `MAP_OFFSET` (`include/fieldmap.h:18`): the padding, in
+/// metatiles, between the unpadded map coordinate space object-event
+/// *templates* (and `gSaveBlock1Ptr->pos`) live in and the padded backup
+/// layout space a spawned `gObjectEvents` entry's `currentCoords` live in.
+const MAP_OFFSET: i32 = 7;
+/// Upstream `MAP_OFFSET_W`/`MAP_OFFSET_H` (`include/fieldmap.h:19-20`):
+/// `MAP_OFFSET * 2 + 1` (15) and `MAP_OFFSET * 2` (14).
+const MAP_OFFSET_W: i32 = MAP_OFFSET * 2 + 1;
+const MAP_OFFSET_H: i32 = MAP_OFFSET * 2;
+
+/// Whether `event` is close enough to a player standing at `player_position`
+/// for upstream to have it spawned — `TrySpawnObjectEvents`'
+/// in-range rectangle (`event_object_movement.c:1645-1673`), which
+/// `RemoveObjectEventIfOutsideView` (`:1699-1713`) mirrors as the
+/// *despawn* test with the same bounds.
+///
+/// Transcribed in upstream's own two coordinate spaces rather than
+/// pre-simplified, so it reads against the C directly: the window is built
+/// around `gSaveBlock1Ptr->pos` (the unpadded player/camera tile, which this
+/// port mirrors as [`PlayerState::position`]), while each candidate is
+/// tested as `template->{x,y} + MAP_OFFSET` — the padded coordinate a
+/// spawned object event would occupy. Reduced, that is
+/// `player.x - 9 ..= player.x + 10` by `player.y - 7 ..= player.y + 9`:
+/// deliberately wider than the 15x10-metatile screen, because upstream
+/// spawns an object event slightly *before* it scrolls into view so it can
+/// slide in rather than pop.
+///
+/// # Why the render path needs this and the collision path does not
+///
+/// This port has no persistent spawned-object-event list (see
+/// [`object_event_is_visible`]'s docs and the ledger's
+/// `TrySpawnObjectEventTemplate` entry), so distance-based spawning is
+/// otherwise unmodelled. That is unobservable for
+/// [`visible_object_event_at`]'s two consumers — the interaction lookup and
+/// [`PlayerState::step`]'s collision check only ever query a tile *adjacent*
+/// to the player, always deep inside this window — but it is very much
+/// observable for rendering: the GBA's OAM `y` field is 8 bits, so an object
+/// event 16 metatiles (256px) away wraps to exactly the player's own screen
+/// row and draws on top of them. `MAP_LITTLEROOT_TOWN`'s boy at `(14, 17)`
+/// has no hide flag at all, so with the player at the map's north edge
+/// (`y = 1`) that is precisely what happened before this gate. Reproducing
+/// upstream's spawn window is the faithful fix, and it is also sufficient:
+/// every position it admits lands, unwrapped, in `-48 ..= 208`, whose only
+/// aliasing pair (`-48` and `208`) is off-screen at both ends.
+#[must_use]
+pub fn object_event_is_in_view(event: &ObjectEvent, player_position: (i32, i32)) -> bool {
+    let (left, right) = (player_position.0 - 2, player_position.0 + MAP_OFFSET_W + 2);
+    let (top, bottom) = (player_position.1, player_position.1 + MAP_OFFSET_H + 2);
+    let x = i32::from(event.x) + MAP_OFFSET;
+    let y = i32::from(event.y) + MAP_OFFSET;
+    left <= x && x <= right && top <= y && y <= bottom
+}
+
 /// The first *visible* object event at `(x, y, elevation)` on `runtime`'s
 /// map, or `None` — this port's stand-in for a `gObjectEvents` scan
 /// (`GetObjectEventIdByPosition`, `event_object_movement.c:2192-2207`;
@@ -530,13 +583,147 @@ mod tests {
         assert!(facing_object_event(&player, &runtime, &data).is_none());
     }
 
+    /// `TrySpawnObjectEvents`' rectangle (`event_object_movement.c:1652-1655`),
+    /// reduced to offsets from the player: `-9 ..= +10` in x, `-7 ..= +9` in
+    /// y. Each boundary is pinned on both sides, so widening or narrowing
+    /// any edge fails here.
+    #[test]
+    fn the_in_view_window_matches_upstreams_spawn_rectangle() {
+        let player = (20, 20);
+        let at = |x: i16, y: i16| object_event_is_in_view(&object(1, x, y, 3, "0"), player);
+
+        assert!(at(20, 20), "the player's own tile is trivially in view");
+
+        // x: player.x - 9 ..= player.x + 10.
+        assert!(at(11, 20));
+        assert!(!at(10, 20));
+        assert!(at(30, 20));
+        assert!(!at(31, 20));
+
+        // y: player.y - 7 ..= player.y + 9.
+        assert!(at(20, 13));
+        assert!(!at(20, 12));
+        assert!(at(20, 29));
+        assert!(!at(20, 30));
+
+        // The window is a rectangle, not a radius: a corner inside both
+        // ranges is in view, one outside either is not.
+        assert!(at(11, 13));
+        assert!(!at(10, 13));
+        assert!(!at(11, 12));
+    }
+
+    /// The regression this gate exists for, on the real bundled data:
+    /// `MAP_LITTLEROOT_TOWN`'s boy at `(14, 17)` carries the `"0"` no-flag
+    /// sentinel, so he is visible on every save. With the player at the
+    /// map's north edge he is 16 metatiles south -- exactly 256px, which an
+    /// 8-bit OAM `y` field aliases onto the player's own row. He must be out
+    /// of view long before that.
+    #[test]
+    fn the_littleroot_boy_is_out_of_view_from_the_maps_north_edge() {
+        let events = assets::MapEventsTable::new()
+            .resolve(MapId("MAP_LITTLEROOT_TOWN"))
+            .expect("a bundled map must resolve in the generated table");
+        let boy = events
+            .object_events
+            .iter()
+            .find(|o| o.graphics_id == "OBJ_EVENT_GFX_BOY_2")
+            .expect("Littleroot Town's object events include the boy");
+        assert_eq!(
+            (boy.x, boy.y, boy.flag),
+            (14, 17, "0"),
+            "fixture precondition: his real map.json position, and no hide flag"
+        );
+        assert!(
+            object_event_is_visible(boy, &EventData::new()),
+            "fixture precondition: nothing can hide him"
+        );
+
+        // 16 metatiles apart in y -- the exact 256px aliasing distance.
+        assert!(!object_event_is_in_view(boy, (14, 1)));
+        // And he comes into view again as the player walks south toward him,
+        // so this is a distance gate rather than a blanket exclusion.
+        assert!(object_event_is_in_view(boy, (14, 8)));
+    }
+
+    /// The converse of the two wildcard tests below, and the tripwire for a
+    /// review finding that has now been raised twice: **the transition test
+    /// reads the player's own tile, not the facing tile.**
+    ///
+    /// It looks inverted, because upstream's two locals shadow the
+    /// intuition. `GetInFrontOfPlayerPosition`
+    /// (`field_control_avatar.c:200-210`) is:
+    ///
+    /// ```c
+    /// GetXYCoordsOneStepInFrontOfPlayer(&position->x, &position->y);  // facing tile
+    /// PlayerGetDestCoords(&x, &y);                                    // the PLAYER's own tile
+    /// if (MapGridGetElevationAt(x, y) != ELEVATION_TRANSITION)
+    ///     position->elevation = PlayerGetElevation();
+    /// else
+    ///     position->elevation = ELEVATION_TRANSITION;
+    /// ```
+    ///
+    /// `position->x/y` is the facing tile
+    /// (`GetXYCoordsOneStepInFrontOfPlayer`, `field_player_avatar.c:1134-1139`),
+    /// but the locals `x, y` fed to `MapGridGetElevationAt` come from
+    /// `PlayerGetDestCoords` (`:1141-1145`), which is
+    /// `gObjectEvents[gPlayerAvatar.objectEventId].currentCoords` -- the
+    /// player's own tile. So: a *facing* tile that is a transition does
+    /// **not** widen the query.
+    ///
+    /// Here the player stands on an ordinary elevation-3 tile facing a
+    /// transition tile that holds an elevation-5 object. Querying `(fx, fy)`
+    /// instead would wildcard and wrongly find it.
+    #[test]
+    fn facing_object_event_does_not_wildcard_when_only_the_facing_tile_is_a_transition() {
+        // Flat elevation-3 grid, except the tile north of the player, which
+        // is the transition.
+        let mut grid_bytes = flat_grid_bytes(5, 5);
+        // The tile north of the player, at 2 bytes per cell on a 5-wide grid.
+        let (fx, fy) = (2usize, 1usize);
+        let facing_index = (fy * 5 + fx) * 2;
+        let transition = MetatileCell {
+            metatile_id: 0,
+            collision: 0,
+            elevation: ELEVATION_TRANSITION,
+        }
+        .pack()
+        .to_le_bytes();
+        grid_bytes[facing_index..facing_index + 2].copy_from_slice(&transition);
+
+        let object_events: &'static [ObjectEvent] = Box::leak(Box::new([object(1, 2, 1, 5, "0")]));
+        let events = events_with(object_events);
+        let runtime = runtime_with_object(&grid_bytes, &events);
+        let data = EventData::new();
+
+        let player = PlayerState::new((2, 2), 3, Direction::North);
+        assert_eq!(
+            runtime.metatile_cell(2, 1).unwrap().elevation,
+            ELEVATION_TRANSITION,
+            "fixture precondition: the FACING tile is the transition"
+        );
+        assert_ne!(
+            runtime.metatile_cell(2, 2).unwrap().elevation,
+            ELEVATION_TRANSITION,
+            "fixture precondition: the player's OWN tile is not"
+        );
+        assert!(
+            facing_object_event(&player, &runtime, &data).is_none(),
+            "only the player's own tile widens the query to the wildcard; \
+             reading the facing tile's elevation here would wrongly match \
+             the elevation-5 object"
+        );
+    }
+
     /// The own-tile elevation wildcard (`GetInFrontOfPlayerPosition`,
     /// `field_control_avatar.c:200-210`): when the player's *grid cell* is
     /// `ELEVATION_TRANSITION`, the facing-tile query uses the wildcard --
     /// not `PlayerGetElevation()` -- so an object at a different concrete
     /// elevation is still found. Reading `player.elevation()`
     /// unconditionally instead (the whole `match` collapsed away) would
-    /// miss this object.
+    /// miss this object. Paired with
+    /// [`facing_object_event_does_not_wildcard_when_only_the_facing_tile_is_a_transition`],
+    /// which pins *which* tile is read.
     #[test]
     fn facing_object_event_queries_with_the_wildcard_when_the_players_own_tile_is_a_transition() {
         let grid_bytes = grid_bytes_at_elevation(5, 5, ELEVATION_TRANSITION);
