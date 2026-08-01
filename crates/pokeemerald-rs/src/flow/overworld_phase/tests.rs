@@ -1,0 +1,1433 @@
+//! Unit tests for [`super::OverworldPhase`] and its private helpers.
+
+use super::{advance_player_one_frame, held_direction, warp_data_index, OverworldPhase};
+use crate::flow::tests::held;
+use crate::new_game;
+use assets::{MapEvents, MapHeader, MapId, MapLayout, MetatileCell};
+use engine::event_data::EventData;
+use engine::overworld::metatile_behavior::{
+    MB_ANIMATED_DOOR, MB_NON_ANIMATED_DOOR, MB_SOUTH_ARROW_WARP,
+};
+use engine::overworld::{warp_in_facing, Direction, MapRuntime, PlayerState, WALK_FRAMES_PER_TILE};
+use platform::{ButtonState, Buttons};
+
+/// A fresh event-flag store: nothing hidden. Used by the
+/// [`advance_player_one_frame`] tests below, whose fixture map
+/// ([`flat_runtime`]) has no object events at all -- the phase-level tests
+/// instead go through [`OverworldPhase::step`], which threads the phase's
+/// own real save state.
+const NO_FLAGS: EventData = EventData::new();
+
+/// A single freshly-pressed button this frame (`is_newly_pressed` true,
+/// unlike `crate::flow::tests::held`'s deliberately *not*-fresh two-frame
+/// hold) -- mirrors that module's own private `pressed` helper, needed
+/// here too for the A-button edges the NPC dialog tests below drive.
+fn pressed(button: Buttons) -> ButtonState {
+    let mut state = ButtonState::new();
+    state.update(button);
+    state
+}
+
+/// The `((x, y), metatile behavior)` of `map`'s `warp_index`-th warp
+/// event's own tile, read out of the extracted pack -- so the
+/// warp-facing tests below assert against the real attribute data
+/// `OverworldPhase::warp_to` reads at runtime, not a restatement of
+/// their own expectations. Pack-dependent: `#[ignore]`d callers only.
+fn warp_tile_behavior(map: assets::MapId, warp_index: usize) -> ((i16, i16), u8) {
+    let scene = crate::overworld::load_room(map).expect("run `cargo xtask extract` first");
+    let header = assets::MapHeaderTable::new()
+        .header(map)
+        .expect("map must resolve in the generated map-header table");
+    let events = assets::MapEventsTable::new()
+        .resolve(map)
+        .expect("map must resolve in the generated map-events table");
+    let warp = events.warp_events[warp_index];
+    let runtime = scene.runtime(map, header, events);
+    let behavior = runtime
+        .metatile_behavior(i32::from(warp.x), i32::from(warp.y))
+        .expect("a warp event's own tile must decode");
+    ((warp.x, warp.y), behavior)
+}
+
+/// A small, open (no collision anywhere), leaked-`'static` flat map --
+/// mirrors `engine::overworld::player::tests::flat_runtime` (that
+/// module's own fixture, private to its crate) so
+/// [`advance_player_one_frame`] is testable against a real
+/// [`MapRuntime`] without needing a local asset pack (`OverworldScene`,
+/// unlike `MapRuntime`, is pack-backed -- see [`OverworldPhase`]'s own
+/// pack-dependent, `#[ignore]`d tests below).
+fn flat_runtime(width: u16, height: u16) -> MapRuntime<'static> {
+    let mut bytes = Vec::with_capacity(usize::from(width) * usize::from(height) * 2);
+    for _ in 0..width * height {
+        let raw = MetatileCell {
+            metatile_id: 1,
+            collision: 0,
+            elevation: 3,
+        }
+        .pack();
+        bytes.extend_from_slice(&raw.to_le_bytes());
+    }
+    let bytes: &'static [u8] = Box::leak(bytes.into_boxed_slice());
+
+    let header: &'static MapHeader = Box::leak(Box::new(MapHeader {
+        id: MapId("MAP_TEST"),
+        group: 0,
+        num: 0,
+        name: "MapTest",
+        layout: assets::LayoutId("MAP_TEST"),
+        music: assets::MusicId(0),
+        region_map_section: assets::RegionMapSectionId("MAPSEC_NONE"),
+        requires_flash: false,
+        weather: assets::Weather::None,
+        map_type: assets::MapType::Route,
+        allow_bike: true,
+        allow_escape: true,
+        allow_run: true,
+        show_name: false,
+        battle_scene: assets::BattleScene::Normal,
+        connections: &[],
+    }));
+    let events: &'static MapEvents = Box::leak(Box::new(MapEvents {
+        id: MapId("MAP_TEST"),
+        shared_events_map: None,
+        object_events: &[],
+        warp_events: &[],
+        coord_events: &[],
+        bg_events: &[],
+    }));
+
+    let layout: &'static MapLayout = Box::leak(Box::new(MapLayout {
+        id: assets::LayoutId("MAP_TEST"),
+        name: "MapTest",
+        width,
+        height,
+        primary_tileset: "gTileset_General",
+        secondary_tileset: "gTileset_General",
+    }));
+    let grid = layout.grid(bytes).unwrap();
+
+    MapRuntime::new(
+        MapId("MAP_TEST"),
+        header,
+        events,
+        grid,
+        assets::MetatileAttributeTable::new(&[]),
+        assets::MetatileAttributeTable::new(&[]),
+    )
+}
+
+// -- Headless phase fixtures -------------------------------------------------
+
+/// Brendan's House 1F: the map the headless interaction tests below drive,
+/// picked because its real object events include Mom at `(2, 6)` — script
+/// `PlayersHouse_1F_EventScript_Mom`, the one
+/// [`crate::overworld::npc_scripts::script_text`] recognizes — visible on a
+/// fresh save.
+///
+/// Those object events are *solid* (issue #161's collision fix — see
+/// [`engine::overworld::PlayerState::step`]'s "# Collision" section), so
+/// the routes below deliberately avoid occupied tiles. Under the fresh-save
+/// state [`OverworldPhase::for_test`] builds, exactly **three** of this
+/// map's seven object events are visible and therefore block: `(2, 6)` Mom
+/// and the two Vigoroth at `(1, 3)` and `(4, 5)`. The other four are hidden,
+/// by two different scripts:
+///
+/// - `EventScript_ResetAllMapFlags` (`data/scripts/new_game.inc`) hides Dad
+///   at `(5, 6)` (`FLAG_HIDE_PLAYERS_HOUSE_DAD`) and the rival at `(8, 8)`
+///   (`FLAG_HIDE_LITTLEROOT_TOWN_BRENDANS_HOUSE_BRENDAN`).
+/// - The male branch of the skipped truck sequence
+///   (`data/maps/InsideOfTruck/scripts.inc:29-30`, applied by
+///   [`crate::new_game::init_save_blocks`]) hides the *rival's* mother at
+///   `(2, 7)` and the rival's sibling at `(1, 5)` — they belong in May's
+///   house, not this one.
+///
+/// Both of the latter two used to be visible here, which is why some routes
+/// below still avoid `(2, 7)`: harmless now, and left alone rather than
+/// re-routed for its own sake.
+const ONE_F: MapId = MapId("MAP_LITTLEROOT_TOWN_BRENDANS_HOUSE_1F");
+
+/// An [`OverworldPhase`] over a **synthetic** 10x10 open room
+/// (`crate::overworld::tests::synthetic_scene`) but a *real* `map_id`, so
+/// no local pack is needed while [`OverworldPhase::step`]'s per-frame
+/// `MapHeaderTable`/`MapEventsTable` lookups still resolve and its
+/// collision/interaction run against that map's real object events. The
+/// scene only supplies the layout grid the runtime walks -- flat, open, and
+/// large enough for every position these tests use.
+fn synthetic_phase(
+    player: PlayerState,
+    dialog: Option<crate::overworld::NpcDialog>,
+) -> OverworldPhase {
+    OverworldPhase::for_test(
+        crate::overworld::tests::synthetic_scene(10, 10),
+        ONE_F,
+        player,
+        dialog,
+    )
+}
+
+/// A [`MapRuntime`] over `phase`'s own scene and [`ONE_F`]'s real event
+/// data -- the exact runtime [`OverworldPhase::step`] rebuilds each frame.
+fn runtime_for(phase: &OverworldPhase) -> MapRuntime<'_> {
+    let header = assets::MapHeaderTable::new().header(ONE_F).unwrap();
+    let events = assets::MapEventsTable::new().resolve(ONE_F).unwrap();
+    phase.scene.runtime(ONE_F, header, events)
+}
+
+/// Senior review regression, headless: upstream discards an A press made
+/// *during* a tile crossing outright -- `FieldGetPlayerInput` only sets
+/// `input->pressedAButton` at `T_TILE_CENTER`/`T_NOT_MOVING`
+/// (`pokeemerald/src/field_control_avatar.c:95-107`), the gate every
+/// `TryStartInteractionScript` call site sits behind (`:172`). Same
+/// position, same facing, same fresh A edge, only
+/// [`PlayerState::in_transit`] differing: mid-step must find nothing, at
+/// rest must find Mom.
+///
+/// Approaches Mom from the east rather than from the south: `(2, 7)`, the
+/// tile directly below her, is the rival's mom's tile -- she is hidden on a
+/// fresh save since the truck-intro flags landed ([`ONE_F`]'s docs), so the
+/// route is kept only for stability, not necessity. `(3, 6)` and `(4, 6)` are
+/// both clear of visible object events.
+#[test]
+fn a_pressed_mid_step_is_discarded_and_the_same_press_at_rest_interacts() {
+    // Two tiles east of Mom, facing west.
+    let mut phase = synthetic_phase(PlayerState::new((4, 6), 3, Direction::West), None);
+
+    // Already facing west, so a held Left steps immediately onto (3, 6) --
+    // the tile from which Mom, at (2, 6), is directly ahead.
+    phase.step(held(Buttons::LEFT));
+    assert_eq!(phase.player.position(), (3, 6));
+    assert_eq!(phase.player.facing(), Direction::West);
+    assert!(
+        phase.player.in_transit(),
+        "the step's walk animation must still be running"
+    );
+
+    {
+        let runtime = runtime_for(&phase);
+        assert!(
+            phase
+                .interaction_tokens_this_frame(pressed(Buttons::A), &runtime)
+                .is_none(),
+            "an A press during a tile crossing must be discarded"
+        );
+    }
+
+    // Drain the rest of the crossing with no input held.
+    for _ in 1..WALK_FRAMES_PER_TILE {
+        phase.step(ButtonState::new());
+    }
+    assert!(!phase.player.in_transit(), "the crossing must have settled");
+    assert_eq!(phase.player.position(), (3, 6), "same tile as above");
+    assert_eq!(phase.player.facing(), Direction::West, "same facing");
+
+    {
+        let runtime = runtime_for(&phase);
+        assert!(
+            phase
+                .interaction_tokens_this_frame(pressed(Buttons::A), &runtime)
+                .is_some(),
+            "at rest, the identical press must find Mom and her recognized \
+             script"
+        );
+        assert!(
+            phase
+                .interaction_tokens_this_frame(ButtonState::new(), &runtime)
+                .is_none(),
+            "and only a fresh A edge interacts at all"
+        );
+    }
+}
+
+/// Headless counterpart to the real-pack acceptance test: while a dialog is
+/// open, [`OverworldPhase::step`] must not feed movement to the player at
+/// all (module docs' "NPC dialog routing" section -- upstream's `lock`,
+/// which stops `RunFieldInput` being polled while a message box owns
+/// input). Dropping that early return lets the held direction through and
+/// fails here, with no local pack needed.
+#[test]
+fn an_open_dialog_freezes_movement_until_it_closes() {
+    use engine::text::Token;
+
+    let dialog = crate::overworld::dialog::synthetic_dialog(vec![
+        Token::Char('A'),
+        Token::PromptClear,
+        Token::End,
+    ]);
+    // Facing south already, so an un-frozen held Down would step
+    // immediately -- no turn-in-place frame to absorb it. (7, 5), the tile
+    // below, is clear of visible object events, so this test measures the
+    // dialog freeze and nothing else -- unlike (4, 5), which a Vigoroth now
+    // occupies solidly; see [`ONE_F`]'s docs.
+    let mut phase = synthetic_phase(PlayerState::new((7, 4), 3, Direction::South), Some(dialog));
+
+    for _ in 0..WALK_FRAMES_PER_TILE {
+        phase.step(held(Buttons::DOWN));
+        assert_eq!(
+            phase.player.position(),
+            (7, 4),
+            "movement must be frozen while a dialog is open"
+        );
+        assert!(!phase.player.in_transit(), "no step may even have started");
+    }
+    assert_eq!(
+        phase.player.facing(),
+        Direction::South,
+        "and no turn either"
+    );
+    assert!(phase.dialog.is_some(), "the dialog must still be open");
+
+    // Confirm through the trailing prompt (same held-A-across-the-window
+    // reasoning as this module's real-pack dialog test) and let it close.
+    let mut closed = false;
+    for _ in 0..40 {
+        phase.step(pressed(Buttons::A));
+        if phase.dialog.is_none() {
+            closed = true;
+            break;
+        }
+    }
+    assert!(closed, "confirming must close the synthetic dialog");
+
+    // Control returns: the very next held Down steps.
+    phase.step(held(Buttons::DOWN));
+    assert_eq!(
+        phase.player.position(),
+        (7, 5),
+        "ordinary movement must resume once the box has closed"
+    );
+}
+
+/// The finding-1 regression at the phase level, on real map data: holding a
+/// direction into a visible NPC must stop the player on the adjacent tile.
+/// Before object-event collision landed, [`OverworldPhase::step`] walked the
+/// avatar straight through Mom.
+///
+/// Uses [`ONE_F`]'s real object events (Mom at `(2, 6)`, visible on a fresh
+/// save) over a synthetic open layout, so no extracted pack is needed --
+/// every tile on the approach is walkable as far as the *grid* is
+/// concerned, which is what makes the stop attributable to Mom alone.
+#[test]
+fn holding_a_direction_into_a_visible_npc_stops_the_player_adjacent_to_it() {
+    // Two tiles below Mom, facing north; approach from the east ((4, 6) ->
+    // (3, 6) -> blocked by Mom) -- see ONE_F's note on the (2, 7) routes.
+    let mut phase = synthetic_phase(PlayerState::new((4, 6), 3, Direction::West), None);
+
+    // First step lands on (3, 6), the tile east of Mom.
+    phase.step(held(Buttons::LEFT));
+    for _ in 1..WALK_FRAMES_PER_TILE {
+        phase.step(held(Buttons::LEFT));
+    }
+    assert_eq!(phase.player.position(), (3, 6));
+    assert!(!phase.player.in_transit());
+
+    // Keep holding: every further poll is denied, and the player never
+    // reaches (2, 6). A generous budget, so this fails on *any* frame that
+    // lets the step through, not just the first.
+    for _ in 0..(4 * u32::from(WALK_FRAMES_PER_TILE)) {
+        phase.step(held(Buttons::LEFT));
+        assert_eq!(
+            phase.player.position(),
+            (3, 6),
+            "the player must stop on the tile adjacent to Mom, never enter hers"
+        );
+        assert!(
+            !phase.player.in_transit(),
+            "a blocked step must not start a walk animation"
+        );
+    }
+    assert_eq!(
+        phase.player.facing(),
+        Direction::West,
+        "bumping into an NPC leaves the avatar facing it (PlayerNotOnBikeCollide)"
+    );
+
+    // And that same standing position interacts, proving the stop is
+    // adjacency rather than the interaction lookup and the collision check
+    // disagreeing about where Mom is.
+    let runtime = runtime_for(&phase);
+    assert!(
+        phase
+            .interaction_tokens_this_frame(pressed(Buttons::A), &runtime)
+            .is_some(),
+        "the tile the player was stopped on must be the tile Mom is \
+         interactable from"
+    );
+}
+
+/// The complement, same fixture shape: a *hidden* object event does not
+/// block. `MAP_LITTLEROOT_TOWN_BRENDANS_HOUSE_1F`'s Dad
+/// (`OBJ_EVENT_GFX_NORMAN` at `(5, 6)`) is hidden by
+/// `EventScript_ResetAllMapFlags`' `setflag FLAG_HIDE_PLAYERS_HOUSE_DAD`
+/// (`pokeemerald/data/scripts/new_game.inc`), and upstream never spawns a
+/// hidden template (`event_object_movement.c:1670-1672`) -- so the player
+/// walks over his tile exactly as if it were empty.
+#[test]
+fn a_hidden_npcs_tile_is_walkable() {
+    let mut phase = synthetic_phase(PlayerState::new((5, 7), 3, Direction::North), None);
+    let dad = assets::MapEventsTable::new()
+        .resolve(ONE_F)
+        .unwrap()
+        .object_events
+        .iter()
+        .find(|o| o.graphics_id == "OBJ_EVENT_GFX_NORMAN")
+        .expect("1F's object events include Dad");
+    assert_eq!(
+        (dad.x, dad.y),
+        (5, 6),
+        "fixture precondition: Dad's real map.json position"
+    );
+    assert!(
+        !engine::overworld::object_event_is_visible(dad, &phase.save1().event_data),
+        "fixture precondition: a fresh save hides Dad"
+    );
+
+    phase.step(held(Buttons::UP));
+    assert_eq!(
+        phase.player.position(),
+        (5, 6),
+        "a hidden object event's tile must be walkable"
+    );
+}
+
+/// Senior review round 3 regression, correcting the prior (empirically
+/// wrong -- see [`advance_player_one_frame`]'s own doc comment) "skip
+/// the first tick" change: the first frame composed after a step begins
+/// must see `step_progress() == 1`, not `0` -- upstream applies the
+/// first walk-animation frame in the very call that starts the step
+/// (`MovementAction_WalkNormalDown_Step0`'s `InitMovementNormal`
+/// immediately followed by `Step1` -> `UpdateMovementNormal` ->
+/// `NpcTakeStep`, `pokeemerald/src/event_object_movement.c:5354-5358`)
+/// -- and a full tile crossing takes exactly
+/// [`engine::overworld::WALK_FRAMES_PER_TILE`] (16) rendered frames.
+#[test]
+fn advance_player_one_frame_shows_progress_1_on_the_frame_a_step_begins_and_takes_16_frames_per_tile(
+) {
+    let runtime = flat_runtime(5, 5);
+    let mut player = PlayerState::new((2, 2), 3, Direction::South);
+
+    // Facing South already; a held South poll steps immediately (no
+    // turn-in-place first, since the direction already matches facing).
+    advance_player_one_frame(&mut player, Some(Direction::South), &runtime, &NO_FLAGS);
+    assert_eq!(player.position(), (2, 3), "the step must have landed");
+    assert!(player.in_transit());
+    assert_eq!(
+        player.step_progress(),
+        1,
+        "the frame that just started a step is already 1px into the \
+         walk animation, matching upstream's InitMovementNormal-then- \
+         immediately-Step1 shape"
+    );
+
+    // Every following frame advances the timer by exactly 1 while the
+    // input stays held.
+    for expected in 2..engine::overworld::WALK_FRAMES_PER_TILE {
+        advance_player_one_frame(&mut player, Some(Direction::South), &runtime, &NO_FLAGS);
+        assert_eq!(player.step_progress(), expected);
+    }
+    assert!(
+        player.in_transit(),
+        "still mid-transit one frame before settling"
+    );
+
+    // The 16th frame (this crossing's `WALK_FRAMES_PER_TILE`th) is the
+    // one where the transit settles -- 16 rendered frames total to
+    // cross one tile, not 17.
+    advance_player_one_frame(&mut player, Some(Direction::South), &runtime, &NO_FLAGS);
+    assert!(
+        !player.in_transit(),
+        "the transit must settle on exactly the 16th frame"
+    );
+}
+
+/// A turn-in-place never enters transit -- `PlayerState::tick` is a
+/// documented no-op while `transit_frames` is `None`
+/// (`PlayerState::tick`'s own doc comment), so the unconditional tick
+/// [`advance_player_one_frame`] always runs afterward must not somehow
+/// start (or otherwise disturb) a transit a plain turn never begins.
+#[test]
+fn advance_player_one_frame_turning_in_place_never_enters_transit() {
+    let runtime = flat_runtime(5, 5);
+    let mut player = PlayerState::new((2, 2), 3, Direction::South);
+
+    advance_player_one_frame(&mut player, Some(Direction::East), &runtime, &NO_FLAGS);
+    assert_eq!(player.facing(), Direction::East, "must have turned");
+    assert_eq!(player.position(), (2, 2), "a turn must not move the tile");
+    assert!(!player.in_transit());
+    assert_eq!(player.step_progress(), 0);
+}
+
+#[test]
+fn held_direction_prioritizes_up_over_every_other_direction() {
+    // field_control_avatar.c's own if/else-if chain order (see
+    // `held_direction`'s doc comment): up beats every simultaneous
+    // combination.
+    assert_eq!(
+        held_direction(held(
+            Buttons::UP | Buttons::DOWN | Buttons::LEFT | Buttons::RIGHT
+        )),
+        Some(Direction::North)
+    );
+    assert_eq!(
+        held_direction(held(Buttons::DOWN | Buttons::LEFT | Buttons::RIGHT)),
+        Some(Direction::South)
+    );
+    assert_eq!(
+        held_direction(held(Buttons::LEFT | Buttons::RIGHT)),
+        Some(Direction::West)
+    );
+    assert_eq!(held_direction(held(Buttons::RIGHT)), Some(Direction::East));
+    assert_eq!(held_direction(ButtonState::new()), None);
+}
+
+/// I-3 scene-flow test: once in the overworld, a held direction is fed
+/// to the player every frame -- "the player movable" (issue #149's own
+/// scope item 4). A turn always succeeds regardless of the room's
+/// collision layout (only a *step* can be blocked), so this is a safe
+/// assertion without depending on the real map's exact geometry.
+#[test]
+#[ignore = "needs a local pack: run `cargo xtask extract` first"]
+fn overworld_movement_input_turns_the_player() {
+    // `OverworldPhase::load_default` itself (not a hand-built struct
+    // literal) so this also exercises the save-state wiring (finding
+    // 1) the same way production reaches this state.
+    let mut phase = OverworldPhase::load_default().expect("run `cargo xtask extract` first");
+    assert_eq!(
+        phase.player.facing(),
+        Direction::South,
+        "starts facing south"
+    );
+
+    phase.step(held(Buttons::UP));
+
+    assert_eq!(
+        phase.player.facing(),
+        Direction::North,
+        "a fresh directional input first turns the player to face it"
+    );
+
+    // The retained save state mirrors the logical tile after every step
+    // (upstream keeps `gSaveBlock1Ptr->pos` current as the player moves).
+    // Walk south far enough to guarantee at least one accepted step in
+    // the open room, then assert the mirror holds wherever we ended up.
+    for _ in 0..40 {
+        phase.step(held(Buttons::DOWN));
+    }
+    let (x, y) = phase.player.position();
+    assert_eq!(
+        (
+            i32::from(phase.save1().pos.x),
+            i32::from(phase.save1().pos.y)
+        ),
+        (x, y),
+        "save1.pos must track the player's logical tile, not the spawn"
+    );
+    assert_ne!(
+        (x, y),
+        new_game::SPAWN_POSITION,
+        "walking south from the spawn must actually move the player"
+    );
+}
+
+/// Flow-level test (the issue #163 acceptance test): stepping onto the bedroom's stair
+/// warp tile at `(7, 1)` from below transitions the phase to
+/// `MAP_LITTLEROOT_TOWN_BRENDANS_HOUSE_1F`, landing the player exactly at
+/// that map's own warp-event #2 arrival position -- `crate::new_game`'s
+/// module docs trace this exact warp chain (`(7, 1)` on 2F ->
+/// `dest_warp_id: 2` on 1F -> `(8, 2)`, `warp.rs`'s
+/// `warp_destination_position`) -- facing whatever that destination
+/// tile's own behavior dictates (`engine::overworld::warp_in_facing`),
+/// with `save1.location`/`save1.pos` kept coherent with the new map
+/// ([`OverworldPhase::warp_to`]'s own doc comment).
+///
+/// The transition is also asserted to happen on the frame the step
+/// *finishes*, not the frame it starts: upstream gates
+/// `TryStartWarpEventScript` on `input->tookStep`, set only at
+/// `T_TILE_CENTER` while `runningState == MOVING`
+/// (`pokeemerald/src/field_control_avatar.c:117-119, 155-161`). Here that
+/// is [`WALK_FRAMES_PER_TILE`] (16) frames after the step began
+/// ([`OverworldPhase::step`]'s "Warp timing" section).
+#[test]
+#[ignore = "needs a local pack: run `cargo xtask extract` first"]
+fn stepping_onto_the_bedroom_stair_warp_transitions_to_the_1f_map() {
+    let mut phase = OverworldPhase::load_default().expect("run `cargo xtask extract` first");
+    let bedroom = phase.map_id;
+
+    // `new_game::SPAWN_POSITION` is the warp tile itself (module docs),
+    // so start one tile south of it instead and step north onto it --
+    // "stepping onto (7, 1) from below" (DoD).
+    phase.player = PlayerState::new((7, 2), new_game::SPAWN_ELEVATION, Direction::North);
+
+    // Frame 1: the step onto (7, 1) begins. `PlayerState` commits the
+    // tile immediately, but the warp must not fire yet.
+    phase.step(held(Buttons::UP));
+    assert_eq!(
+        phase.player.position(),
+        new_game::SPAWN_POSITION,
+        "the step commits the landing tile on the frame it begins"
+    );
+    assert_eq!(
+        phase.map_id, bedroom,
+        "the warp must not fire on the frame the step begins"
+    );
+
+    // Frames 2..=15: drain the walk animation with no input held. The
+    // map must stay put for every one of them.
+    for frame in 2..u32::from(WALK_FRAMES_PER_TILE) {
+        phase.step(ButtonState::new());
+        assert_eq!(
+            phase.map_id, bedroom,
+            "the warp must not fire mid-animation (frame {frame} of \
+             {WALK_FRAMES_PER_TILE})"
+        );
+        assert!(
+            phase.player.in_transit(),
+            "the walk animation must still be draining on frame {frame}"
+        );
+    }
+
+    // Frame 16: `PlayerState::tick` drains the animation -- upstream's
+    // `tookStep` frame, and the one the warp fires on.
+    phase.step(ButtonState::new());
+
+    let destination = assets::MapId("MAP_LITTLEROOT_TOWN_BRENDANS_HOUSE_1F");
+    assert_eq!(
+        phase.map_id, destination,
+        "the completed step onto the stair warp must rebind to the 1F map \
+         on the 16th frame"
+    );
+    assert_eq!(
+        phase.player.position(),
+        (8, 2),
+        "the player must arrive at 1F's own warp #2 position"
+    );
+    // The facing is derived from the *destination* tile's own behavior,
+    // so pin that behavior down too -- otherwise `South` here would also
+    // be satisfied by `GetAdjustedInitialDirection`'s catch-all `else`.
+    let (dest_pos, dest_behavior) = warp_tile_behavior(destination, 2);
+    assert_eq!(dest_pos, (8, 2));
+    assert_eq!(
+        dest_behavior, MB_NON_ANIMATED_DOOR,
+        "1F's warp #2 is the staircase's own non-animated-door tile"
+    );
+    assert_eq!(
+        phase.player.facing(),
+        Direction::South,
+        "GetAdjustedInitialDirection's IsNonAnimDoor||IsDoor branch \
+         (overworld.c:935-936) applies to that tile"
+    );
+
+    let dest_header = assets::MapHeaderTable::new()
+        .header(destination)
+        .expect("1F must resolve in the generated map-header table");
+    assert_eq!(
+        phase.save1().location.map_group,
+        i8::try_from(dest_header.group).unwrap()
+    );
+    assert_eq!(
+        phase.save1().location.map_num,
+        i8::try_from(dest_header.num).unwrap()
+    );
+    assert_eq!(
+        phase.save1().location.warp_id,
+        2,
+        "arrived via 1F's own warp-event index 2 (new_game module docs)"
+    );
+    assert_eq!(
+        (phase.save1().location.x, phase.save1().location.y),
+        (-1, -1),
+        "SetWarpDestinationToMapWarp always passes -1, -1 for x/y (overworld.c:638-641)"
+    );
+    assert_eq!(
+        (
+            i32::from(phase.save1().pos.x),
+            i32::from(phase.save1().pos.y)
+        ),
+        (8, 2),
+        "save1.pos must mirror the post-warp tile, not the pre-warp one"
+    );
+}
+
+/// Regression (the issue #163 acceptance test): a completed landing on an *ordinary*
+/// (non-warp) tile must not transition the map, even though every
+/// completed landing is now checked for a warp trigger.
+#[test]
+#[ignore = "needs a local pack: run `cargo xtask extract` first"]
+fn stepping_onto_an_ordinary_tile_does_not_warp() {
+    let mut phase = OverworldPhase::load_default().expect("run `cargo xtask extract` first");
+    let starting_map = phase.map_id;
+
+    // The spawn tile IS the warp tile; step south, away from it, onto
+    // ordinary bedroom floor (already exercised, collision-wise, by
+    // `overworld_movement_input_turns_the_player`). Drive the whole
+    // 16-frame walk animation, since the trigger check only runs on the
+    // frame it drains (`OverworldPhase::step`'s "Warp timing" section).
+    phase.step(held(Buttons::DOWN));
+    for _ in 1..WALK_FRAMES_PER_TILE {
+        phase.step(ButtonState::new());
+    }
+
+    assert_eq!(
+        phase.map_id, starting_map,
+        "stepping onto an ordinary floor tile must not transition maps"
+    );
+    assert_eq!(
+        phase.player.position(),
+        (7, 2),
+        "the step itself must still have landed"
+    );
+    assert!(
+        !phase.player.in_transit(),
+        "16 frames must fully drain the step this test relies on completing"
+    );
+}
+
+/// [`warp_data_index`] narrows the *generated* tables' real indices
+/// (no pack needed -- `MapHeaderTable` is compiled in), cross-checked
+/// against [`new_game`]'s own hand-maintained constants the same way
+/// `new_game`'s `spawn_location_matches_the_generated_map_header` does.
+#[test]
+fn warp_data_index_narrows_the_generated_map_indices() {
+    let header = assets::MapHeaderTable::new()
+        .header(new_game::SPAWN_MAP_ID)
+        .expect("SPAWN_MAP_ID must resolve in the generated map-header table");
+    assert_eq!(
+        warp_data_index(header.group, "MAP_GROUP"),
+        new_game::SPAWN_MAP_GROUP
+    );
+    assert_eq!(
+        warp_data_index(header.num, "MAP_NUM"),
+        new_game::SPAWN_MAP_NUM
+    );
+    assert_eq!(warp_data_index(0, "warp id"), 0);
+    assert_eq!(warp_data_index(127, "warp id"), 127);
+}
+
+/// The out-of-range case panics rather than fabricating a plausible
+/// index: saturating to `127` would have silently written a *different,
+/// real* map's group/num into the save (that function's own doc).
+#[test]
+#[should_panic(expected = "does not fit the i8")]
+fn warp_data_index_refuses_to_fabricate_an_out_of_range_index() {
+    let _ = warp_data_index(128, "MAP_GROUP");
+}
+
+/// Real-pack guard for the *destination*-tile rule
+/// [`OverworldPhase::warp_to`] derives its arrival facing from
+/// (`engine::overworld::warp_in_facing` <- upstream
+/// `GetAdjustedInitialDirection`, `pokeemerald/src/overworld.c:929-951`).
+///
+/// The I-3 path's own counterexample to a source-tile rule: Brendan's
+/// house front door is `MAP_LITTLEROOT_TOWN`'s warp #1, sitting on an
+/// `MB_ANIMATED_DOOR` tile -- whose *own* branch would say `DIR_SOUTH` --
+/// but it lands on `..._BRENDANS_HOUSE_1F`'s warp #1, whose tile is
+/// `MB_SOUTH_ARROW_WARP`, so upstream faces the arrival `DIR_NORTH`
+/// (back into the house). Asserted against the extracted pack's real
+/// metatile attributes, not a hand-built fixture.
+#[test]
+#[ignore = "needs a local pack: run `cargo xtask extract` first"]
+fn the_front_door_warp_faces_north_from_the_destination_tiles_behavior() {
+    let (source_pos, source_behavior) = warp_tile_behavior(assets::MapId("MAP_LITTLEROOT_TOWN"), 1);
+    assert_eq!(source_pos, (5, 8), "Littleroot's warp #1: the house door");
+    assert_eq!(source_behavior, MB_ANIMATED_DOOR);
+    assert_eq!(
+        warp_in_facing(source_behavior),
+        Direction::South,
+        "what a (wrong) source-tile rule would have produced"
+    );
+
+    let (dest_pos, dest_behavior) =
+        warp_tile_behavior(assets::MapId("MAP_LITTLEROOT_TOWN_BRENDANS_HOUSE_1F"), 1);
+    assert_eq!(dest_pos, (8, 8), "1F's warp #1: the doormat inside");
+    assert_eq!(dest_behavior, MB_SOUTH_ARROW_WARP);
+    assert_eq!(
+        warp_in_facing(dest_behavior),
+        Direction::North,
+        "GetAdjustedInitialDirection's IsSouthArrowWarp branch (overworld.c:937-938)"
+    );
+}
+
+/// Mutation guard for [`OverworldPhase::warp_to`] itself: the front-door
+/// arrival from the test above, driven through `warp_to` rather than the
+/// pure `warp_in_facing`. Landing on 1F's warp #1 (`(8, 8)`,
+/// `MB_SOUTH_ARROW_WARP`) must face North — a facing distinguishable from
+/// both `GetAdjustedInitialDirection`'s catch-all `else` and `warp_to`'s
+/// own `MB_NORMAL` fallback (which would each say South, and which the
+/// bedroom-stair test cannot tell apart) — and `scene` must rebind in
+/// lockstep with `map_id` (`warp_to`'s documented invariant), observed by
+/// composing the phase's frame against a freshly loaded 1F scene.
+#[test]
+#[ignore = "needs a local pack: run `cargo xtask extract` first"]
+fn warping_to_the_front_doormat_faces_north_and_rebinds_the_scene() {
+    let mut phase = OverworldPhase::load_default().expect("run `cargo xtask extract` first");
+    let one_f = assets::MapId("MAP_LITTLEROOT_TOWN_BRENDANS_HOUSE_1F");
+
+    phase.warp_to(one_f, 1);
+
+    assert_eq!(phase.map_id, one_f);
+    assert_eq!(
+        phase.player.position(),
+        (8, 8),
+        "1F's warp #1: the doormat inside the front door"
+    );
+    assert_eq!(
+        phase.player.facing(),
+        Direction::North,
+        "the doormat's own MB_SOUTH_ARROW_WARP behavior must drive the \
+         facing (overworld.c:937-938) -- South would mean the destination \
+         behavior was never read"
+    );
+    let fresh = crate::overworld::load_room(one_f).expect("1F must load from the extracted pack");
+    assert!(
+        phase.compose_frame()[..]
+            == fresh.compose_frame(&phase.player, &phase.save1.event_data)[..],
+        "warp_to must rebind `scene` to the destination map, not just `map_id`"
+    );
+}
+
+/// The issue #161 acceptance test: spawn (post-#158 intro handoff) ->
+/// walk down the stairs to Brendan's House 1F (the real #163 warp path,
+/// already pinned by [`stepping_onto_the_bedroom_stair_warp_transitions_to_the_1f_map`])
+/// -> face Mom (the real, pack-loaded `OBJ_EVENT_GFX_MOM` object event at
+/// `(2, 6)`, script `PlayersHouse_1F_EventScript_Mom`) -> A opens her
+/// dialog with the real upstream text (`crate::overworld::npc_scripts::script_text`'s
+/// own transcription of `PlayersHouse_1F_Text_IsntItNiceInHere`) -> A
+/// confirms through the trailing prompt -> the dialog closes and control
+/// returns cleanly to ordinary overworld movement.
+#[test]
+#[ignore = "needs a local pack: run `cargo xtask extract` first"]
+fn walking_downstairs_and_talking_to_mom_opens_and_closes_her_dialog() {
+    let mut phase = OverworldPhase::load_default().expect("run `cargo xtask extract` first");
+    assert!(phase.dialog.is_none(), "no dialog is open at spawn");
+
+    // Trigger the already-pinned 2F -> 1F stair warp: the player spawns
+    // standing exactly on the warp tile (`new_game::SPAWN_POSITION`), so
+    // step away from it and back onto it to generate a fresh
+    // `StepOutcome::Advanced` landing (mirrors this module's own
+    // `stepping_onto_the_bedroom_stair_warp_transitions_to_the_1f_map`).
+    let bedroom = phase.map_id;
+    phase.step(held(Buttons::DOWN));
+    for _ in 1..WALK_FRAMES_PER_TILE {
+        phase.step(ButtonState::new());
+    }
+    assert_eq!(phase.map_id, bedroom, "still upstairs after stepping south");
+    phase.step(held(Buttons::UP));
+    for _ in 1..WALK_FRAMES_PER_TILE {
+        phase.step(ButtonState::new());
+    }
+    let one_f = assets::MapId("MAP_LITTLEROOT_TOWN_BRENDANS_HOUSE_1F");
+    assert_eq!(
+        phase.map_id, one_f,
+        "stepping back onto the stair warp must land on 1F"
+    );
+
+    // Walk over to Mom and face her: she stands at (2, 6)
+    // (`OBJ_EVENT_GFX_MOM`'s real map.json position); this test directly
+    // places the player on the adjacent tile facing her rather than
+    // simulating every intervening step across the room's own furniture
+    // layout -- ordinary walking/collision is already covered by
+    // `engine::overworld::player`'s own tests, and the front-door/stair
+    // warp path is covered above and by this module's other real-pack
+    // tests. What this test alone proves is the interaction + dialog
+    // wiring against the *real* extracted Mom object.
+    phase.player = PlayerState::new((2, 7), 3, Direction::North);
+
+    // Press A: must find Mom, recognize her script, and open a dialog.
+    phase.step(pressed(Buttons::A));
+    assert!(
+        phase.dialog.is_some(),
+        "a fresh A-press facing Mom must open her dialog"
+    );
+    assert_eq!(
+        phase.map_id, one_f,
+        "opening a dialog must not itself change the room"
+    );
+
+    // While the dialog is open, movement input is frozen (module docs'
+    // "NPC dialog routing" section): a held direction must not move the
+    // player.
+    let position_before_printing = phase.player.position();
+    phase.step(held(Buttons::DOWN));
+    assert_eq!(
+        phase.player.position(),
+        position_before_printing,
+        "movement must be frozen while a dialog is open"
+    );
+
+    // Drive the dialog to completion: print every glyph of the real
+    // upstream text (`Mid` speed -- confirm not held, since only the
+    // trailing prompt needs one), then confirm through the trailing
+    // prompt, then let it close. Generous frame budgets throughout: the
+    // exact per-glyph cadence is `engine::text::render::Printer`'s own,
+    // already pinned by that module's tests -- this test only cares that
+    // the *dialog* (not the printer internals) reaches each milestone.
+    let expected_tokens =
+        crate::overworld::npc_scripts::script_text("PlayersHouse_1F_EventScript_Mom")
+            .expect("Mom's script must be recognized against the real map data");
+    let expected_glyph_count = expected_tokens
+        .iter()
+        .filter(|t| matches!(t, engine::text::Token::Char(_)))
+        .count();
+    assert!(
+        expected_glyph_count > 0,
+        "the real upstream message must contain visible text"
+    );
+
+    let mut fully_printed = false;
+    for _ in 0..400 {
+        phase.step(ButtonState::new());
+        let Some(dialog) = &phase.dialog else {
+            panic!("the dialog must not close on its own before the trailing prompt confirms");
+        };
+        if dialog.revealed_glyph_count() == expected_glyph_count {
+            fully_printed = true;
+            break;
+        }
+    }
+    assert!(
+        fully_printed,
+        "every glyph of the real upstream text must print within the frame budget"
+    );
+
+    // Confirm through the trailing prompt, then let the box finish
+    // closing (module docs on `NpcDialog::tick`'s `Cleared` -> `Closed`
+    // gap: a few post-clear reveal-delay frames drain first). Pressing A
+    // fresh every frame (rather than once) is deliberate and still
+    // exactly matches a single real button press's effect:
+    // `engine::text::render::Printer::tick` only ever consults
+    // `confirm_pressed` while awaiting the trailing prompt -- the exact
+    // frame that's true on is otherwise timing-sensitive (the printer
+    // must first finish draining the last glyph's own reveal delay
+    // before it even reaches `AwaitingClear`), so this holds the
+    // "button" down across that whole window instead of guessing the
+    // one frame a single press would need to land on; the loop stops
+    // the instant the dialog closes, so no press after that could
+    // re-open a new one against Mom, still facing.
+    let mut closed = false;
+    for _ in 0..30 {
+        phase.step(pressed(Buttons::A));
+        if phase.dialog.is_none() {
+            closed = true;
+            break;
+        }
+    }
+    assert!(
+        closed,
+        "confirming through the trailing prompt must close the dialog"
+    );
+
+    // Control returns cleanly: ordinary movement input works again.
+    // `phase.player` is still facing North (from facing Mom above), so
+    // the first held-Down press only turns it to face South (a turn
+    // never moves the tile -- `advance_player_one_frame`'s own doc
+    // comment); the second commits the step immediately.
+    assert_eq!(phase.player.facing(), Direction::North);
+    phase.step(held(Buttons::DOWN));
+    assert_eq!(phase.player.facing(), Direction::South, "must turn first");
+    assert_eq!(
+        phase.player.position(),
+        (2, 7),
+        "a turn must not move the tile"
+    );
+    phase.step(held(Buttons::DOWN));
+    assert_eq!(
+        phase.player.position(),
+        (2, 8),
+        "movement must resume normally once the dialog has closed"
+    );
+}
+
+// -- Message-box confirm input: A *or* B ------------------------------------
+
+/// Upstream's down-arrow wait prompt takes `JOY_NEW(A_BUTTON | B_BUTTON)`
+/// (`TextPrinterWaitWithDownArrow`, `pokeemerald/src/text.c:865-882`), not A
+/// alone -- as do the mid-page wait (`TextPrinterWait`, `:884-900`) and the
+/// hold-to-speed-up path (`RunTextPrinter`, `:944`/`:950`). Before this,
+/// only a fresh A edge reached [`crate::overworld::NpcDialog::tick`], so a
+/// player pressing B at the prompt was stuck with the box open forever.
+///
+/// Headless, on a synthetic dialog: B alone must drive it to close.
+#[test]
+fn b_alone_advances_and_closes_a_dialog() {
+    use engine::text::Token;
+
+    let dialog = crate::overworld::dialog::synthetic_dialog(vec![
+        Token::Char('A'),
+        Token::PromptClear,
+        Token::End,
+    ]);
+    let mut phase = synthetic_phase(PlayerState::new((7, 4), 3, Direction::South), Some(dialog));
+
+    // Never press A: only B. Same held-across-the-window shape as this
+    // module's other dialog tests (the exact frame the prompt becomes
+    // receptive is printer-timing-dependent); the loop stops the instant
+    // the box closes.
+    let mut closed = false;
+    for _ in 0..40 {
+        phase.step(pressed(Buttons::B));
+        if phase.dialog.is_none() {
+            closed = true;
+            break;
+        }
+    }
+    assert!(
+        closed,
+        "a fresh B edge must advance the trailing prompt and close the box"
+    );
+}
+
+/// The complement: neither confirm button is special-cased away, and B does
+/// not leak into anything else on the frame it closes a box.
+///
+/// The dialog branch of [`OverworldPhase::step`] returns before movement and
+/// interaction are reached, so a B press that closes the box cannot also
+/// move the player; and with no box open, B is not read at all (interaction
+/// is A-only, matching `FieldInput::pressedAButton` --
+/// `field_control_avatar.c:172`).
+#[test]
+#[ignore = "needs a local pack: run `cargo xtask extract` first"]
+fn b_does_not_move_the_player_or_open_a_dialog() {
+    use engine::text::Token;
+
+    let dialog = crate::overworld::dialog::synthetic_dialog(vec![
+        Token::Char('A'),
+        Token::PromptClear,
+        Token::End,
+    ]);
+    // Facing south with a clear tile below, so an un-frozen step would show.
+    let mut phase = synthetic_phase(PlayerState::new((7, 4), 3, Direction::South), Some(dialog));
+    // Bounded, like this module's other dialog loops: a regression that
+    // stops B closing the box must *fail* here, not spin forever.
+    let mut closed = false;
+    for _ in 0..40 {
+        phase.step(pressed(Buttons::B));
+        if phase.dialog.is_none() {
+            closed = true;
+            break;
+        }
+    }
+    assert!(closed, "B must close the box within the frame budget");
+    assert_eq!(
+        phase.player.position(),
+        (7, 4),
+        "the B press that closed the box must not also have moved the player"
+    );
+
+    // With no dialog open, B facing Mom must not open one -- only A
+    // interacts. (2, 6) is Mom's tile; stand east of her facing west.
+    let mut phase = synthetic_phase(PlayerState::new((3, 6), 3, Direction::West), None);
+    phase.step(pressed(Buttons::B));
+    assert!(
+        phase.dialog.is_none(),
+        "B is not an interaction button -- upstream gates \
+         TryStartInteractionScript on pressedAButton alone"
+    );
+    // ...and the identical press with A does open one, so the check above is
+    // about the button rather than the position.
+    phase.step(pressed(Buttons::A));
+    assert!(phase.dialog.is_some(), "A still interacts");
+}
+
+// -- ON_TRANSITION decoration flags -----------------------------------------
+
+/// Every [`assets::object_event_flags::DECORATION_FLAGS`] id must be one
+/// [`EventData::flag_set`] accepts -- what makes
+/// [`super::run_on_transition_map_script`]'s `expect` unreachable rather
+/// than a latent panic.
+#[test]
+fn every_decoration_flag_id_is_settable() {
+    let mut data = EventData::new();
+    for &id in assets::object_event_flags::DECORATION_FLAGS {
+        assert!(
+            data.flag_set(id).is_ok(),
+            "{id:#x} must be an ordinary flag id"
+        );
+    }
+    assert_eq!(
+        assets::object_event_flags::DECORATION_FLAGS.len(),
+        14,
+        "SecretBase_EventScript_SetDecorationFlags sets FLAG_DECORATION_1..14"
+    );
+}
+
+/// The transcribed [`super::MAPS_THAT_SET_DECORATION_FLAGS`] list must be
+/// exactly the set of bundled maps that actually carry decoration
+/// placeholders -- the tripwire against the list going stale if the
+/// extraction pipeline ever bundles another bedroom or secret base.
+#[test]
+fn the_decoration_flag_map_list_covers_every_bundled_map_with_placeholders() {
+    /// The maps `crates/xtask/src/extract/mod.rs`'s `LAYOUTS` bundles --
+    /// mirrored here as `crate::overworld::npc`'s own tests mirror it (this
+    /// crate cannot depend on `xtask`; that module's
+    /// `the_bundled_layout_set_is_pinned_for_the_tables_derived_from_it` is
+    /// the tripwire for the list itself growing).
+    const BUNDLED_MAPS: [&str; 6] = [
+        "MAP_LITTLEROOT_TOWN",
+        "MAP_LITTLEROOT_TOWN_BRENDANS_HOUSE_1F",
+        "MAP_LITTLEROOT_TOWN_BRENDANS_HOUSE_2F",
+        "MAP_LITTLEROOT_TOWN_MAYS_HOUSE_1F",
+        "MAP_LITTLEROOT_TOWN_MAYS_HOUSE_2F",
+        "MAP_LITTLEROOT_TOWN_PROFESSOR_BIRCHS_LAB",
+    ];
+
+    let table = assets::MapEventsTable::new();
+    let mut with_placeholders: Vec<MapId> = BUNDLED_MAPS
+        .iter()
+        .map(|m| MapId(m))
+        .filter(|map| {
+            table.resolve(*map).is_ok_and(|events| {
+                events
+                    .object_events
+                    .iter()
+                    .any(|o| o.flag.starts_with("FLAG_DECORATION_"))
+            })
+        })
+        .collect();
+    with_placeholders.sort_unstable_by_key(|m| m.0);
+
+    let mut listed = super::MAPS_THAT_SET_DECORATION_FLAGS.to_vec();
+    listed.sort_unstable_by_key(|m| m.0);
+    assert_eq!(
+        with_placeholders, listed,
+        "every bundled map declaring FLAG_DECORATION_* object events must run \
+         SecretBase_EventScript_SetDecorationFlags on transition, and no other"
+    );
+}
+
+/// The finding-5 regression: on a fresh save the player's bedroom must be
+/// walkable, not fenced in by its own decoration placeholders.
+///
+/// `MAP_LITTLEROOT_TOWN_BRENDANS_HOUSE_2F` declares twelve
+/// `OBJ_EVENT_GFX_VAR_*` placeholders down the room's left column
+/// (`map.json:32-175`), `(1, 2)` among them. Nothing sets
+/// `FLAG_DECORATION_*` at new-game time, so once object events became solid
+/// these turned into invisible walls. Upstream hides them from the map's own
+/// `MAP_SCRIPT_ON_TRANSITION` (see
+/// [`super::run_on_transition_map_script`]), which
+/// [`OverworldPhase::load_default`] now mirrors.
+#[test]
+fn the_bedrooms_decoration_placeholders_do_not_block_a_fresh_save() {
+    const BEDROOM: MapId = MapId("MAP_LITTLEROOT_TOWN_BRENDANS_HOUSE_2F");
+    let events = assets::MapEventsTable::new().resolve(BEDROOM).unwrap();
+
+    let placeholder = events
+        .object_events
+        .iter()
+        .find(|o| (o.x, o.y) == (1, 2))
+        .expect("the bedroom declares a decoration placeholder at (1, 2)");
+    assert_eq!(
+        (placeholder.graphics_id, placeholder.flag),
+        ("OBJ_EVENT_GFX_VAR_8", "FLAG_DECORATION_9"),
+        "fixture precondition: its real map.json graphics id and flag"
+    );
+
+    // A phase entering the bedroom -- the same path `load_default` takes,
+    // minus the pack.
+    let phase = OverworldPhase::for_test(
+        crate::overworld::tests::synthetic_scene(10, 10),
+        BEDROOM,
+        PlayerState::new((1, 3), 3, Direction::North),
+        None,
+    );
+    assert!(
+        !engine::overworld::object_event_is_visible(placeholder, &phase.save1().event_data),
+        "an empty decoration slot is the flag-SET state; entering the map \
+         must have set it"
+    );
+
+    // And the tile is genuinely walkable: step north onto it.
+    let mut phase = phase;
+    phase.step(held(Buttons::UP));
+    assert_eq!(
+        phase.player.position(),
+        (1, 2),
+        "the placeholder's tile must be walkable on a fresh save"
+    );
+}
+
+/// The same map entered *without* the on-transition script would block --
+/// pinning that the test above measures the fix rather than some unrelated
+/// property of the fixture (e.g. the placeholder being unreachable anyway).
+#[test]
+fn a_decoration_placeholder_would_block_if_its_flag_were_clear() {
+    const BEDROOM: MapId = MapId("MAP_LITTLEROOT_TOWN_BRENDANS_HOUSE_2F");
+    let events = assets::MapEventsTable::new().resolve(BEDROOM).unwrap();
+    let placeholder = events
+        .object_events
+        .iter()
+        .find(|o| (o.x, o.y) == (1, 2))
+        .expect("the bedroom declares a decoration placeholder at (1, 2)");
+
+    // A store with the decoration flags deliberately left clear -- i.e. the
+    // pre-fix state, and also the state upstream reaches for a slot that
+    // really does hold a decoration.
+    let data = EventData::new();
+    assert!(
+        engine::overworld::object_event_is_visible(placeholder, &data),
+        "with its flag clear the placeholder is spawned -- upstream would \
+         resolve OBJ_EVENT_GFX_VAR_8 through VAR_OBJ_GFX_ID_8 and draw a real \
+         decoration there"
+    );
+
+    let header = assets::MapHeaderTable::new().header(BEDROOM).unwrap();
+    let scene = crate::overworld::tests::synthetic_scene(10, 10);
+    let runtime = scene.runtime(BEDROOM, header, events);
+    let mut player = PlayerState::new((1, 3), 3, Direction::North);
+    let no_connections = |_: MapId| -> Option<(u16, u16)> { None };
+    assert!(
+        matches!(
+            player.step(Some(Direction::North), &runtime, &no_connections, &data),
+            engine::overworld::StepOutcome::Blocked { .. }
+        ),
+        "a spawned decoration is a solid object event -- upstream never \
+         exempts one from DoesObjectCollideWithObjectAt, so a future \
+         decoration-placement slice inherits this blocking behaviour"
+    );
+}
+
+/// The **production** pin for the decoration-flag fix, on the acceptance
+/// path itself: [`OverworldPhase::load_default`] spawns the player into
+/// `MAP_LITTLEROOT_TOWN_BRENDANS_HOUSE_2F` -- the very room carrying the
+/// twelve `OBJ_EVENT_GFX_VAR_*` placeholders -- so that constructor's own
+/// `run_on_transition_map_script` call is what makes the room walkable in
+/// the real game, not just in the `for_test` fixtures above.
+///
+/// Deleting that call from `load_default` must fail *here*: the headless
+/// tests all build their phase through `for_test`, which has its own call,
+/// so none of them can catch it.
+///
+/// Real-pack, because `load_default` is the pack-loading constructor.
+#[test]
+#[ignore = "needs a local pack: run `cargo xtask extract` first"]
+fn load_default_hides_the_spawn_bedrooms_decoration_placeholders() {
+    let mut phase = OverworldPhase::load_default().expect("run `cargo xtask extract` first");
+    assert_eq!(
+        phase.map_id,
+        new_game::SPAWN_MAP_ID,
+        "fixture precondition: the spawn map is the bedroom with the placeholders"
+    );
+
+    // Every flag the map's own ON_TRANSITION script sets.
+    for &id in assets::object_event_flags::DECORATION_FLAGS {
+        assert_eq!(
+            phase.save1().event_data.flag_get(id),
+            Ok(true),
+            "{id:#x} must be set on entering the bedroom"
+        );
+    }
+
+    // ...and therefore every placeholder is absent, by the engine's own
+    // visibility query rather than by restating the flag check.
+    let events = assets::MapEventsTable::new()
+        .resolve(new_game::SPAWN_MAP_ID)
+        .unwrap();
+    let placeholders: Vec<_> = events
+        .object_events
+        .iter()
+        .filter(|o| o.graphics_id.starts_with("OBJ_EVENT_GFX_VAR_"))
+        .collect();
+    assert_eq!(
+        placeholders.len(),
+        12,
+        "the bedroom declares twelve decoration slots (DECOR_MAX_PLAYERS_HOUSE)"
+    );
+    for placeholder in &placeholders {
+        assert!(
+            !engine::overworld::object_event_is_visible(placeholder, &phase.save1().event_data),
+            "{} at ({}, {}) must be absent on a fresh save",
+            placeholder.graphics_id,
+            placeholder.x,
+            placeholder.y
+        );
+    }
+
+    // And the observable consequence: the tile a placeholder stages on is
+    // walkable. `(1, 2)` is `OBJ_EVENT_GFX_VAR_8`/`FLAG_DECORATION_9` at
+    // elevation 3, on open floor in the real layout -- so nothing but the
+    // object event could block it.
+    //
+    // Placed directly rather than walked from the spawn tile (which is the
+    // stair warp at `SPAWN_POSITION`, so stepping off it and back would
+    // leave the room): the same direct-placement shape, for the same
+    // reason, as this module's real-pack Mom dialog test.
+    phase.player = PlayerState::new((1, 3), 3, Direction::North);
+    phase.step(held(Buttons::UP));
+    assert_eq!(
+        phase.player.position(),
+        (1, 2),
+        "an empty decoration slot's tile must be walkable in the real room"
+    );
+}
+
+/// The same pin for the *other* production call site,
+/// [`OverworldPhase::warp_to`] -- every subsequent entry into a bedroom,
+/// not just the first.
+///
+/// Calls `warp_to` directly rather than walking the 1F stairs: it is the
+/// production method (the one `step` invokes on a resolved warp), and
+/// driving it straight makes the assertion about the transition itself
+/// rather than about the route taken to reach it. The flags are cleared
+/// first so the assertion cannot pass on the state `load_default` already
+/// left behind.
+#[test]
+#[ignore = "needs a local pack: run `cargo xtask extract` first"]
+fn warping_into_a_bedroom_hides_its_decoration_placeholders() {
+    let mut phase = OverworldPhase::load_default().expect("run `cargo xtask extract` first");
+
+    // Clear what `load_default` set, so only `warp_to` can restore it.
+    for &id in assets::object_event_flags::DECORATION_FLAGS {
+        phase.save1.event_data.flag_clear(id).unwrap();
+    }
+    assert_eq!(
+        phase
+            .save1()
+            .event_data
+            .flag_get(assets::object_event_flags::DECORATION_FLAGS[0]),
+        Ok(false),
+        "fixture precondition: the flags start clear for this transition"
+    );
+
+    // Warp into the bedroom (its only warp event, id 0, is the stair tile).
+    phase.warp_to(new_game::SPAWN_MAP_ID, 0);
+    assert_eq!(
+        phase.map_id,
+        new_game::SPAWN_MAP_ID,
+        "the warp must have landed"
+    );
+
+    for &id in assets::object_event_flags::DECORATION_FLAGS {
+        assert_eq!(
+            phase.save1().event_data.flag_get(id),
+            Ok(true),
+            "{id:#x} must be set again by the arrival transition"
+        );
+    }
+
+    // Same walkability consequence as the spawn case.
+    phase.player = PlayerState::new((1, 3), 3, Direction::North);
+    phase.step(held(Buttons::UP));
+    assert_eq!(phase.player.position(), (1, 2));
+}
+
+/// The reported regression on the **production** path: a fresh run spawned
+/// straight into the bedroom must not have the rival's Poké Ball staged
+/// there as an invisible collider.
+///
+/// `(3, 4)` is `OBJ_EVENT_GFX_ITEM_BALL` at elevation `0` -- the transition
+/// wildcard, so it collides with a player at *any* elevation -- on open
+/// floor in the real layout, and nothing in this port draws an item ball.
+/// Its `FLAG_HIDE_LITTLEROOT_TOWN_BRENDANS_HOUSE_2F_POKE_BALL` is set only
+/// by the male branch of the skipped truck sequence
+/// (`data/maps/InsideOfTruck/scripts.inc:31`), which
+/// [`crate::new_game::init_save_blocks`] now applies.
+///
+/// Real-pack and driven through [`OverworldPhase::load_default`] for the
+/// same reason as this module's other two production pins: the headless
+/// fixtures build their save through the same constructor, so only a test
+/// that walks the real spawn path proves the acceptance route is clear.
+#[test]
+#[ignore = "needs a local pack: run `cargo xtask extract` first"]
+fn the_spawn_bedroom_has_no_invisible_poke_ball_collider() {
+    let mut phase = OverworldPhase::load_default().expect("run `cargo xtask extract` first");
+
+    let ball = assets::MapEventsTable::new()
+        .resolve(new_game::SPAWN_MAP_ID)
+        .unwrap()
+        .object_events
+        .iter()
+        .find(|o| o.graphics_id == "OBJ_EVENT_GFX_ITEM_BALL")
+        .expect("the bedroom declares the rival's Poké Ball");
+    assert_eq!(
+        (ball.x, ball.y, ball.elevation),
+        (3, 4, 0),
+        "fixture precondition: its real map.json position, at the \
+         transition-wildcard elevation that collides with anything"
+    );
+    assert!(
+        !engine::overworld::object_event_is_visible(ball, &phase.save1().event_data),
+        "a fresh male save must not have the rival's Poké Ball spawned"
+    );
+
+    // The observable consequence: the tile is walkable. (3, 5) and (3, 4)
+    // are both open floor in the real layout, so only the object event
+    // could have blocked it.
+    phase.player = PlayerState::new((3, 5), 3, Direction::North);
+    phase.step(held(Buttons::UP));
+    assert_eq!(
+        phase.player.position(),
+        (3, 4),
+        "the Poké Ball's tile must be walkable on a fresh save"
+    );
+}
+
+/// The 1F half of the same regression, on the production path: after taking
+/// the stairs, the player's own house must not contain the *rival's* family
+/// -- no duplicated mother beside the real one, and no undrawn ninja-boy
+/// blocker.
+///
+/// Both flags come from the male truck branch
+/// (`data/maps/InsideOfTruck/scripts.inc:29-30`). Walks the real 2F -> 1F
+/// stair warp rather than assigning `map_id`, so the arrival goes through
+/// [`OverworldPhase::warp_to`] exactly as play would.
+#[test]
+#[ignore = "needs a local pack: run `cargo xtask extract` first"]
+fn taking_the_stairs_does_not_land_in_a_house_full_of_the_rivals_family() {
+    let mut phase = OverworldPhase::load_default().expect("run `cargo xtask extract` first");
+
+    // Step off the spawn tile (which *is* the stair warp) and back onto it,
+    // to generate a fresh landing -- the same shape as this module's other
+    // real-pack warp tests.
+    phase.step(held(Buttons::DOWN));
+    for _ in 1..WALK_FRAMES_PER_TILE {
+        phase.step(ButtonState::new());
+    }
+    phase.step(held(Buttons::UP));
+    for _ in 1..WALK_FRAMES_PER_TILE {
+        phase.step(ButtonState::new());
+    }
+    assert_eq!(phase.map_id, ONE_F, "the stairs must have landed on 1F");
+
+    let events = assets::MapEventsTable::new().resolve(ONE_F).unwrap();
+    let find = |gfx: &str| {
+        events
+            .object_events
+            .iter()
+            .find(|o| o.graphics_id == gfx)
+            .unwrap_or_else(|| panic!("1F must declare a {gfx}"))
+    };
+    let data = &phase.save1().event_data;
+
+    // The player's own mother is home, exactly once.
+    let mom = find("OBJ_EVENT_GFX_MOM");
+    assert!(
+        engine::overworld::object_event_is_visible(mom, data),
+        "the player's own mother must be home"
+    );
+    // The rival's mother is not -- this is the duplicated-mother bug.
+    let rival_mom = find("OBJ_EVENT_GFX_WOMAN_4");
+    assert!(
+        !engine::overworld::object_event_is_visible(rival_mom, data),
+        "the rival's mother must not be duplicated into the player's house"
+    );
+    // Nor the rival's sibling, whose sprite this port cannot draw at all --
+    // so a spawned one is a pure invisible blocker.
+    let sibling = find("OBJ_EVENT_GFX_NINJA_BOY");
+    assert!(
+        !engine::overworld::object_event_is_visible(sibling, data),
+        "the rival's sibling must not be an invisible blocker at ({}, {})",
+        sibling.x,
+        sibling.y
+    );
+
+    // Their tiles are walkable, which is what an invisible blocker would
+    // have broken. Both sit on open floor in the real 1F layout.
+    for tile in [(rival_mom.x, rival_mom.y), (sibling.x, sibling.y)] {
+        let (x, y) = (i32::from(tile.0), i32::from(tile.1));
+        phase.player = PlayerState::new((x, y + 1), 3, Direction::North);
+        phase.step(held(Buttons::UP));
+        assert_eq!(
+            phase.player.position(),
+            (x, y),
+            "({x}, {y}) must be walkable once its object event is hidden"
+        );
+    }
+}

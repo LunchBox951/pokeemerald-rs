@@ -122,7 +122,12 @@ impl fmt::Display for PackError {
             }
             Self::BadMagic => write!(f, "asset pack: bad magic (not a pokeemerald-rs pack file)"),
             Self::UnsupportedVersion(version) => {
-                write!(f, "asset pack: unsupported format version `{version}`")
+                write!(
+                    f,
+                    "asset pack: unsupported format version `{version}` -- \
+                     the pack predates this build's format; regenerate it \
+                     with `cargo xtask extract`"
+                )
             }
             Self::Truncated => write!(f, "asset pack: truncated or corrupt"),
             Self::BadEntryKind(byte) => write!(f, "asset pack: invalid entry kind byte `{byte}`"),

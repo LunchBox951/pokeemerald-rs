@@ -74,7 +74,7 @@ pub const MAGIC: [u8; 8] = *b"PKMRPACK";
 
 /// The format version this writer emits (and the only version
 /// `crates/assets`'s reader accepts).
-pub const FORMAT_VERSION: u32 = 1;
+pub const FORMAT_VERSION: u32 = 2;
 
 /// What kind of content an entry's payload holds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
