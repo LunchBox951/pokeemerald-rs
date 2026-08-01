@@ -158,6 +158,20 @@ pub(crate) struct OverworldPhase {
     /// [`OverworldPhase::compose_frame`] draws it over the composed
     /// overworld frame.
     dialog: Option<NpcDialog>,
+    /// This room's own elapsed-frame counter (issue #160), fed to
+    /// [`OverworldScene::compose`]'s `tick` for tileset tile animation
+    /// cadence -- this port's counterpart to
+    /// [`crate::flow::AnimatedTitle`]'s own `tick` field. Incremented once
+    /// per [`Self::step`] call (module docs on why that, not
+    /// [`Self::compose_frame`], is the right place -- background tile
+    /// animation keeps running even while [`Self::dialog`] freezes movement,
+    /// mirroring upstream's `UpdateTilesetAnimations` running every `VBlank`
+    /// regardless of message-box state) and reset to 0 in
+    /// [`Self::load_default`]/[`Self::warp_to`], matching upstream's own
+    /// `InitTilesetAnimations` reset points (every map load,
+    /// `pokeemerald/src/overworld.c`'s `InitTilesetAnimations` call sites --
+    /// `tileset_anims`'s own module docs).
+    tick: u32,
 }
 
 impl OverworldPhase {
@@ -189,6 +203,7 @@ impl OverworldPhase {
             save2,
             pending_landing: None,
             dialog: None,
+            tick: 0,
         })
     }
 
@@ -216,6 +231,7 @@ impl OverworldPhase {
             save2,
             pending_landing: None,
             dialog,
+            tick: 0,
         }
     }
 
@@ -314,6 +330,11 @@ impl OverworldPhase {
     /// code's own comment), and gated on the player being between steps --
     /// see [`Self::interaction_tokens_this_frame`].
     pub(super) fn step(&mut self, buttons: ButtonState) {
+        // Tileset tile animation keeps advancing even while a dialog box
+        // freezes movement (struct docs on `tick`), so this runs
+        // unconditionally, before the dialog early-return below.
+        self.tick = self.tick.wrapping_add(1);
+
         if let Some(dialog) = &mut self.dialog {
             // `JOY_NEW(A_BUTTON | B_BUTTON)` (doc comment above).
             let confirm_pressed =
@@ -539,6 +560,10 @@ impl OverworldPhase {
         self.player = PlayerState::new((i32::from(x), i32::from(y)), elevation, facing);
         self.scene = scene;
         self.map_id = map;
+        // Upstream's own `InitTilesetAnimations` reset (struct docs on
+        // `tick`): the destination map's animated tiles start over from
+        // their own tick 0, not wherever the departed map's counter was.
+        self.tick = 0;
         // `RunOnTransitionMapScript` (`src/overworld.c:860`, in
         // `LoadMapFromWarp`) -- run on arrival, before anything reads the
         // destination map's object events, mirroring upstream's ordering
@@ -557,7 +582,9 @@ impl OverworldPhase {
     /// and event-flag store, then (issue #161) [`NpcDialog::compose_over`]
     /// on top if [`Self::dialog`] is open.
     pub(super) fn compose_frame(&self) -> Box<Frame> {
-        let base = self.scene.compose(&self.player, &self.save1.event_data);
+        let base = self
+            .scene
+            .compose(&self.player, &self.save1.event_data, self.tick);
         let composed = match &self.dialog {
             Some(dialog) => dialog.compose_over(base),
             None => base,

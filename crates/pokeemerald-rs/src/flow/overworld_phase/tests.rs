@@ -779,8 +779,9 @@ fn warping_to_the_front_doormat_faces_north_and_rebinds_the_scene() {
     let fresh = crate::overworld::load_room(one_f).expect("1F must load from the extracted pack");
     assert!(
         phase.compose_frame()[..]
-            == fresh.compose_frame(&phase.player, &phase.save1.event_data)[..],
-        "warp_to must rebind `scene` to the destination map, not just `map_id`"
+            == fresh.compose_frame(&phase.player, &phase.save1.event_data, 0)[..],
+        "warp_to must rebind `scene` to the destination map, not just `map_id` -- `tick` is 0 \
+         on both sides since `warp_to` resets `phase.tick` and `fresh` has never `step`ped"
     );
 }
 

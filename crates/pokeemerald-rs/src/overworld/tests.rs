@@ -222,10 +222,14 @@ fn image_meta(width: u32, height: u32, bit_depth: u8) -> Vec<u8> {
 }
 
 /// A minimal pack covering exactly what [`super::OverworldScene::from_pack`]
-/// needs for one synthetic room: a single-tile "general" tileset (used as
+/// needs for one synthetic room: a single-tile "petalburg" tileset (used as
 /// both primary and secondary), a `width` x `height` layout whose every
 /// cell -- and whose border block -- is that tileset's one opaque metatile,
-/// and Brendan's walking sheet/palette.
+/// and Brendan's walking sheet/palette. Deliberately a tileset
+/// [`super::tileset_anims`] doesn't recognize (issue #160: `petalburg` is a
+/// real bundled tileset with no animated tile ranges of its own -- that
+/// module's own scope docs), so `from_pack` doesn't need this fixture to
+/// also fabricate `tileset/<name>/anim/...` entries.
 fn synthetic_overworld_pack_bytes(width: u16, height: u16) -> Vec<u8> {
     // A single opaque 8x8 tile, every pixel palette index 5.
     let tile_pixels = vec![5u8; 8 * 8];
@@ -268,19 +272,19 @@ fn synthetic_overworld_pack_bytes(width: u16, height: u16) -> Vec<u8> {
 
     let mut entries = vec![
         Entry {
-            id: "tileset/general/tiles",
+            id: "tileset/petalburg/tiles",
             kind_tag: 0,
             meta: image_meta(8, 8, 4),
             payload: tile_pixels,
         },
         Entry {
-            id: "tileset/general/metatiles",
+            id: "tileset/petalburg/metatiles",
             kind_tag: 2,
             meta: vec![],
             payload: metatiles,
         },
         Entry {
-            id: "tileset/general/metatile-attributes",
+            id: "tileset/petalburg/metatile-attributes",
             kind_tag: 2,
             meta: vec![],
             payload: metatile_attrs,
@@ -319,7 +323,7 @@ fn synthetic_overworld_pack_bytes(width: u16, height: u16) -> Vec<u8> {
     ];
     for slot in 0..16u8 {
         let id: &'static str =
-            &*Box::leak(format!("tileset/general/palette/{slot:02}").into_boxed_str());
+            &*Box::leak(format!("tileset/petalburg/palette/{slot:02}").into_boxed_str());
         entries.push(Entry {
             id,
             kind_tag: 1,
@@ -330,7 +334,7 @@ fn synthetic_overworld_pack_bytes(width: u16, height: u16) -> Vec<u8> {
     // Overwrite the bank-0 placeholder with the real payload above.
     if let Some(bank0) = entries
         .iter_mut()
-        .find(|e| e.id == "tileset/general/palette/00")
+        .find(|e| e.id == "tileset/petalburg/palette/00")
     {
         bank0.meta = 6u16.to_le_bytes().to_vec();
         bank0.payload = bank0_payload;
@@ -406,8 +410,8 @@ pub(crate) fn synthetic_scene(width: u16, height: u16) -> super::OverworldScene 
         name: "MapTest",
         width,
         height,
-        primary_tileset: "gTileset_General",
-        secondary_tileset: "gTileset_General",
+        primary_tileset: "gTileset_Petalburg",
+        secondary_tileset: "gTileset_Petalburg",
     };
     let scene = super::OverworldScene::from_pack(
         &pack,
@@ -426,8 +430,8 @@ fn overworld_scene_from_pack_composes_a_non_blank_deterministic_frame() {
 
     let player = PlayerState::new((0, 0), 3, Direction::South);
     let event_data = engine::event_data::EventData::new();
-    let first = scene.compose(&player, &event_data);
-    let second = scene.compose(&player, &event_data);
+    let first = scene.compose(&player, &event_data, 0);
+    let second = scene.compose(&player, &event_data, 0);
     assert_eq!(
         first.pixels(),
         second.pixels(),
@@ -480,8 +484,8 @@ fn real_pack_composes_non_blank_deterministic_overworld_frames() {
     // (`LAYOUT_LITTLEROOT_TOWN_BRENDANS_HOUSE_2F`), including one mid-step,
     // so the scroll-lag path is exercised too.
     let standing = PlayerState::new((5, 5), 3, Direction::South);
-    let frame_a = scene.compose(&standing, &event_data);
-    let frame_b = scene.compose(&standing, &event_data);
+    let frame_a = scene.compose(&standing, &event_data, 0);
+    let frame_b = scene.compose(&standing, &event_data, 0);
     assert_eq!(
         frame_a.pixels(),
         frame_b.pixels(),
@@ -496,7 +500,7 @@ fn real_pack_composes_non_blank_deterministic_overworld_frames() {
     );
 
     let facing_north = PlayerState::new((5, 4), 3, Direction::North);
-    let frame_c = scene.compose(&facing_north, &event_data);
+    let frame_c = scene.compose(&facing_north, &event_data, 0);
     assert!(
         frame_c
             .pixels()
@@ -567,13 +571,13 @@ fn real_pack_hiding_mom_changes_the_composed_1f_frame() {
         "this test's own premise: Mom is visible on a fresh save"
     );
 
-    let with_mom = scene.compose(&player, &data);
+    let with_mom = scene.compose(&player, &data, 0);
     data.flag_set(FLAG_HIDE_BRENDANS_HOUSE_MOM).unwrap();
     assert!(
         !engine::overworld::object_event_is_visible(mom, &data),
         "setting FLAG_HIDE_LITTLEROOT_TOWN_BRENDANS_HOUSE_MOM must hide her"
     );
-    let without_mom = scene.compose(&player, &data);
+    let without_mom = scene.compose(&player, &data, 0);
 
     assert_ne!(
         with_mom.pixels(),
@@ -583,7 +587,7 @@ fn real_pack_hiding_mom_changes_the_composed_1f_frame() {
     );
     assert_eq!(
         without_mom.pixels(),
-        scene.compose(&player, &data).pixels(),
+        scene.compose(&player, &data, 0).pixels(),
         "composing the same state twice must still be deterministic"
     );
 }
@@ -752,4 +756,172 @@ fn real_pack_the_opposite_gender_rival_binds_for_either_player() {
         .copied()
         .expect("the same-gender variant reuses the player's own sheet");
     assert_eq!((own.palette_bank(), own.base_tile()), (0, 0));
+}
+
+// -- Real-pack tileset tile animation (issue #160) ---------------------------
+
+/// Upstream `tileset_anims.c`'s General primary-tileset animated tile
+/// ranges -- the same literals `crate::overworld::tileset_anims`'s own
+/// module docs table pins, transcribed independently here rather than
+/// imported, so this test doesn't just check that module agrees with
+/// itself.
+const GENERAL_ANIMATED_TILE_RANGES: [std::ops::Range<u16>; 5] = [
+    508..512, // flower (4 tiles)
+    432..462, // water (30 tiles)
+    464..474, // sand/water edge (10 tiles)
+    496..502, // waterfall (6 tiles)
+    480..490, // land/water edge (10 tiles)
+];
+
+/// A player position inside `MAP_LITTLEROOT_TOWN` -- the only bundled map on
+/// the animated "general" primary tileset (`tileset_anims`'s own scope
+/// docs: every bundled interior uses "building", whose one animated
+/// metatile, the TV, no bundled interior's own `map.bin` actually places) --
+/// whose standing (not-in-transit, so zero-scroll/unpadded -- module docs'
+/// camera model) viewport draws this town's southern shore water on screen.
+/// Found empirically against the real pack (`overworld::tests` has no
+/// typed access to `map.json`'s authored content otherwise).
+const LITTLEROOT_TOWN_WATER_VIEW: (i32, i32) = (10, 17);
+
+/// The screen-pixel rectangles [`GENERAL_ANIMATED_TILE_RANGES`] paints for
+/// `scene`/`player`'s current viewport: every 8x8 BG tile cell whose
+/// bottom, middle, or top sub-layer entry names a tile index in one of
+/// those ranges, as its `(x0, y0, x1, y1)` on-screen rect. Reaches into
+/// [`super::OverworldScene`]'s private fields directly (this module is one
+/// of its descendants) to rebuild the same tilemaps [`super::OverworldScene::compose`]
+/// would, the same way [`super::viewport`]'s own tests do.
+///
+/// # Panics
+///
+/// If `player` [`PlayerState::in_transit`] -- the padded/scrolled viewport
+/// that produces doesn't map tile `(col, row)` to screen pixel `(col * 8,
+/// row * 8)` in general, and no test here needs it.
+fn animated_tile_screen_rects(
+    scene: &super::OverworldScene,
+    player: &PlayerState,
+) -> Vec<(usize, usize, usize, usize)> {
+    assert!(
+        !player.in_transit(),
+        "helper assumes a zero-scroll, unpadded viewport (doc comment)"
+    );
+    let grid = scene
+        .layout
+        .grid(&scene.grid_bytes)
+        .expect("grid_bytes validated in from_pack");
+    let border =
+        assets::BorderGrid::new(&scene.border_bytes).expect("border_bytes validated in from_pack");
+    let primary_attrs = assets::MetatileAttributeTable::new(&scene.primary_attrs_bytes);
+    let secondary_attrs = assets::MetatileAttributeTable::new(&scene.secondary_attrs_bytes);
+    let viewport = super::viewport::build_tilemaps(
+        player,
+        &grid,
+        &border,
+        &scene.primary_metatiles,
+        &scene.secondary_metatiles,
+        &primary_attrs,
+        &secondary_attrs,
+        scene.blank_tile_index,
+    );
+
+    let is_animated = |entry: rendering::ScreenEntry| {
+        GENERAL_ANIMATED_TILE_RANGES
+            .iter()
+            .any(|range| range.contains(&entry.tile_index()))
+    };
+    let mut rects = Vec::new();
+    for row in 0..viewport.bottom.height_tiles() {
+        for col in 0..viewport.bottom.width_tiles() {
+            let animated = [&viewport.bottom, &viewport.middle, &viewport.top]
+                .into_iter()
+                .filter_map(|tilemap| tilemap.entry(col, row))
+                .any(is_animated);
+            if animated {
+                rects.push((col * 8, row * 8, col * 8 + 8, row * 8 + 8));
+            }
+        }
+    }
+    rects
+}
+
+/// The issue #160 acceptance test's "differs" half: composing
+/// `MAP_LITTLEROOT_TOWN` at two different ticks changes pixels only inside
+/// the on-screen rects [`animated_tile_screen_rects`] identifies -- proving
+/// [`super::OverworldScene::compose`]'s `tick` parameter actually reaches
+/// rendered pixels, and only the pixels its own animated tile ranges own,
+/// for a real map/pack. `tick` 60 is arbitrary but deliberate: General
+/// water's first fire is at tick 1 (`tileset_anims`'s `latched_frame` doc
+/// comment), so by tick 60 several regions have already latched a
+/// non-base frame.
+#[test]
+#[ignore = "needs a local pack: run `cargo xtask extract` first"]
+fn real_pack_tick_changes_only_the_animated_tile_screen_regions() {
+    let scene = super::load_room(assets::MapId("MAP_LITTLEROOT_TOWN"))
+        .expect("run `cargo xtask extract` first");
+    let (x, y) = LITTLEROOT_TOWN_WATER_VIEW;
+    let player = PlayerState::new((x, y), 3, Direction::South);
+    let event_data = engine::event_data::EventData::new();
+
+    let rects = animated_tile_screen_rects(&scene, &player);
+    assert!(
+        !rects.is_empty(),
+        "this fixture position's own premise: at least one on-screen tile must \
+         reference one of GENERAL_ANIMATED_TILE_RANGES"
+    );
+    let in_any_rect = |px: usize, py: usize| {
+        rects
+            .iter()
+            .any(|&(x0, y0, x1, y1)| px >= x0 && px < x1 && py >= y0 && py < y1)
+    };
+
+    let base = scene.compose(&player, &event_data, 0);
+    let animated = scene.compose(&player, &event_data, 60);
+
+    let mut any_diff_inside = false;
+    for py in 0..160usize {
+        for px in 0..240usize {
+            if base.pixel(px, py) != animated.pixel(px, py) {
+                assert!(
+                    in_any_rect(px, py),
+                    "pixel ({px}, {py}) changed between tick 0 and tick 60 outside every \
+                     animated tile's own screen rect"
+                );
+                any_diff_inside = true;
+            }
+        }
+    }
+    assert!(
+        any_diff_inside,
+        "tick 60 must actually change at least one pixel inside an animated rect -- \
+         otherwise the rect-containment check above would be vacuous"
+    );
+}
+
+/// The issue #160 acceptance test's "repeats" half: two ticks a full
+/// cadence period apart compose pixel-identically. 128 is not specific to
+/// this map/position -- it is the LCM of every region
+/// [`crate::overworld::tileset_anims`] ports (General water/sand-water-edge
+/// at 128, every other region's own cycle a divisor of it -- that module's
+/// own doc comment), so this holds for any tick, any map, any position.
+#[test]
+#[ignore = "needs a local pack: run `cargo xtask extract` first"]
+fn real_pack_tileset_animation_repeats_after_a_full_cadence_period() {
+    const FULL_CADENCE_PERIOD: u32 = 128;
+
+    let scene = super::load_room(assets::MapId("MAP_LITTLEROOT_TOWN"))
+        .expect("run `cargo xtask extract` first");
+    let (x, y) = LITTLEROOT_TOWN_WATER_VIEW;
+    let player = PlayerState::new((x, y), 3, Direction::South);
+    let event_data = engine::event_data::EventData::new();
+
+    for tick in [0, 1, 8, 60, 127] {
+        let a = scene.compose(&player, &event_data, tick);
+        let b = scene.compose(&player, &event_data, tick + FULL_CADENCE_PERIOD);
+        assert_eq!(
+            a.pixels(),
+            b.pixels(),
+            "tick {tick} and tick {} (a full cadence period later) must compose \
+             pixel-identically",
+            tick + FULL_CADENCE_PERIOD
+        );
+    }
 }

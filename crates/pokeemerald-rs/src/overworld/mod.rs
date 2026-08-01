@@ -54,7 +54,9 @@
 //! # Scope
 //!
 //! In scope: the current map's layout grid + border fill, primary/secondary
-//! tileset BG composition, camera-follow scroll, the player OBJ's
+//! tileset BG composition -- including (issue #160) the primary tileset's
+//! own animated tile ranges (water, flowers, the bedroom's TV screen; see
+//! [`tileset_anims`]) -- camera-follow scroll, the player OBJ's
 //! facing/step animation, and (issue #161) a bounded set of the current
 //! map's *other* object events — [`npc`] renders the ones it recognizes a
 //! sprite for, hide-flag filtered via
@@ -65,14 +67,13 @@
 //! (per issue #126, tracked as future integration slices): reflections and
 //! field effects, connection streaming (rendering a neighbouring map's own
 //! content near an edge, distinct from the border-block fallback above,
-//! which *is* modeled), and **tileset tile animations** (`tileset_anims.c`'s
-//! per-tileset frame cadence over the extracted `tileset/<name>/anim/...`
-//! entries — this slice composes from the base `tiles.png` only, so
-//! animated tiles hold their base frame). See [`npc`]'s own module docs for
-//! exactly which object-event graphics ids render a sprite vs. are only
-//! hide-flag/interaction tracked. Acceptance ID **I-3** stays whatever
-//! `docs/acceptance/v1.md` already has it at -- this slice does not flip
-//! acceptance markers.
+//! which *is* modeled), and every `tileset_anims.c` effect outside
+//! [`tileset_anims`]'s own scope (that module's docs: palette-rotation
+//! effects and every tileset this port doesn't bundle). See [`npc`]'s own
+//! module docs for exactly which object-event graphics ids render a sprite
+//! vs. are only hide-flag/interaction tracked. Acceptance ID **I-3** stays
+//! whatever `docs/acceptance/v1.md` already has it at -- this slice does
+//! not flip acceptance markers.
 //!
 //! # Documented fidelity deltas
 //!
@@ -121,6 +122,7 @@ pub(crate) mod dialog;
 mod npc;
 pub(crate) mod npc_scripts;
 mod sprites;
+mod tileset_anims;
 mod viewport;
 
 #[cfg(test)]
@@ -313,10 +315,21 @@ pub struct OverworldScene {
     secondary_metatiles: Vec<u8>,
     primary_attrs_bytes: Vec<u8>,
     secondary_attrs_bytes: Vec<u8>,
-    world_tiles: Tileset,
+    /// The combined primary+secondary tile bitmap, still packed (not
+    /// decoded into a [`Tileset`]): [`Self::compose`] decodes a fresh copy
+    /// every call, after [`tile_anims`](Self::tile_anims) has patched in
+    /// that call's own animated tile frames (issue #160) -- mirrors this
+    /// module's existing "no persisted borrow, rebuild fresh every frame"
+    /// pattern for `grid`/`border`/the attribute tables above.
+    world_tile_bytes: Vec<u8>,
     world_palette: Palette,
     /// See [`viewport::combined_world_tileset`]'s docs.
     blank_tile_index: u16,
+    /// This room's primary-tileset animated tile ranges (issue #160) --
+    /// empty for a primary tileset `tileset_anims` doesn't recognize (every
+    /// secondary tileset this port bundles). See [`tileset_anims`]'s module
+    /// docs.
+    tile_anims: tileset_anims::AnimatedTileset,
     /// This room's whole OBJ layer -- the combined player+NPC sprite
     /// tileset/palette and the object events drawn from it (issue #161; see
     /// [`sprites`]'s module docs).
@@ -357,10 +370,15 @@ impl OverworldScene {
         let primary = pack.tileset(primary_name)?;
         let secondary = pack.tileset(secondary_name)?;
 
-        let (world_tiles, blank_tile_index) =
+        let (world_tile_bytes, blank_tile_index) =
             viewport::combined_world_tileset(primary.tiles, secondary.tiles)?;
         let world_palette =
             viewport::combined_world_palette(&primary.palettes, &secondary.palettes);
+        // Issue #160: the room's own primary-tileset animated tile ranges,
+        // decoded once here (module docs on `tile_anims`) -- `primary_name`
+        // is the same normalized tileset name `AnimatedTileset::load`
+        // matches against (`tileset_anims`'s own scope docs).
+        let tile_anims = tileset_anims::AnimatedTileset::load(pack, primary_name)?;
 
         let layout_name = layout_pack_name(layout.id);
         let grid_bytes = pack.layout_map(&layout_name)?.to_vec();
@@ -384,9 +402,10 @@ impl OverworldScene {
             secondary_metatiles: secondary.metatiles.to_vec(),
             primary_attrs_bytes: primary.metatile_attributes.to_vec(),
             secondary_attrs_bytes: secondary.metatile_attributes.to_vec(),
-            world_tiles,
+            world_tile_bytes,
             world_palette,
             blank_tile_index,
+            tile_anims,
             sprites,
         })
     }
@@ -401,17 +420,30 @@ impl OverworldScene {
     /// store [`crate::flow::OverworldPhase`] retains in its own
     /// `SaveBlock1::event_data`.
     ///
+    /// `tick` (issue #160) selects this frame's animated tile frames --
+    /// [`tileset_anims`]'s own module docs for the cadence and for why
+    /// `tick == 0` reproduces this scene's un-animated base art exactly
+    /// (every region's own `latched_frame` is `None` there). Mirrors
+    /// [`crate::title::TitleScene::compose`]'s identical `frame` parameter;
+    /// [`crate::flow::OverworldPhase`] is this port's counterpart to
+    /// `AnimatedTitle`'s own tick field, reset to 0 on every fresh room load
+    /// or warp (`tileset_anims`'s docs on why that matches upstream's own
+    /// `InitTilesetAnimations` reset points).
+    ///
     /// Deterministic: a pure function of `player`'s already-computed
-    /// position/facing/step-progress, `event_data`'s current flags, and this
-    /// scene's already-decoded data -- no wall-clock time, no RNG.
+    /// position/facing/step-progress, `event_data`'s current flags, `tick`,
+    /// and this scene's already-decoded data -- no wall-clock time, no RNG.
     ///
     /// # Panics
     ///
-    /// Never in practice: re-decodes `grid_bytes`/`border_bytes` (owned,
-    /// unchanged since [`from_pack`](Self::from_pack) already validated
-    /// them there).
+    /// Never in practice: re-decodes `grid_bytes`/`border_bytes`/
+    /// `world_tile_bytes` (owned, unchanged since
+    /// [`from_pack`](Self::from_pack) already validated the first two there,
+    /// and [`tileset_anims::AnimatedTileset::patch`] only ever overwrites
+    /// existing tile-sized ranges within the third, never changing its
+    /// length).
     #[must_use]
-    pub fn compose(&self, player: &PlayerState, event_data: &EventData) -> Framebuffer {
+    pub fn compose(&self, player: &PlayerState, event_data: &EventData, tick: u32) -> Framebuffer {
         let grid = self
             .layout
             .grid(&self.grid_bytes)
@@ -438,9 +470,17 @@ impl OverworldScene {
             self.blank_tile_index,
         );
 
-        let bottom_layer = BgLayer::new(&self.world_tiles, &self.world_palette, &bottom);
-        let middle_layer = BgLayer::new(&self.world_tiles, &self.world_palette, &middle);
-        let top_layer = BgLayer::new(&self.world_tiles, &self.world_palette, &top);
+        // This frame's animated tile ranges, patched into a fresh copy of
+        // the base bytes and decoded fresh (issue #160) -- see
+        // `world_tile_bytes`'s own doc comment for why this isn't cached.
+        let mut world_tile_bytes = self.world_tile_bytes.clone();
+        self.tile_anims.patch(&mut world_tile_bytes, tick);
+        let world_tiles = Tileset::decode(BitDepth::Bpp4, &world_tile_bytes)
+            .expect("world_tile_bytes' length is unchanged from from_pack's validated build");
+
+        let bottom_layer = BgLayer::new(&world_tiles, &self.world_palette, &bottom);
+        let middle_layer = BgLayer::new(&world_tiles, &self.world_palette, &middle);
+        let top_layer = BgLayer::new(&world_tiles, &self.world_palette, &top);
 
         let slots = [
             BgSlot::new(
@@ -501,8 +541,9 @@ impl OverworldScene {
         &self,
         player: &PlayerState,
         event_data: &EventData,
+        tick: u32,
     ) -> Box<platform::Frame> {
-        crate::frame::to_platform_frame(&self.compose(player, event_data))
+        crate::frame::to_platform_frame(&self.compose(player, event_data, tick))
     }
 
     /// Build an [`engine::overworld::MapRuntime`] over this scene's

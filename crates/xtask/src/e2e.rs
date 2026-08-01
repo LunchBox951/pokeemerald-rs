@@ -269,8 +269,8 @@ fn check_overworld_scene() -> Result<(), E2eError> {
     // particular object event's hide-flag state.
     let event_data = pokeemerald_rs::overworld::EventData::default();
 
-    let frame_a = scene.compose_frame(&player, &event_data);
-    let frame_b = scene.compose_frame(&player, &event_data);
+    let frame_a = scene.compose_frame(&player, &event_data, 0);
+    let frame_b = scene.compose_frame(&player, &event_data, 0);
     if frame_a != frame_b {
         return Err(E2eError::OverworldFrameNotDeterministic);
     }

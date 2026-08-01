@@ -31,7 +31,7 @@ use assets::{
     PaletteRef,
 };
 use engine::overworld::{PlayerState, NUM_METATILES_IN_PRIMARY, WALK_FRAMES_PER_TILE};
-use rendering::{Bgr555, BitDepth, Palette, ScreenEntry, Tilemap, Tileset};
+use rendering::{Bgr555, BitDepth, Palette, ScreenEntry, Tilemap};
 
 use super::{
     pack_4bpp_region, OverworldSceneError, METATILE_PX, PAD, PLAYER_VIEW_COL, PLAYER_VIEW_ROW,
@@ -93,6 +93,12 @@ pub(super) const BOTTOM_PRIORITY: u8 = 3;
 /// addressing" section) -- `metatiles.bin`'s raw tile indices resolve
 /// correctly against the combined tileset with no further re-basing.
 ///
+/// Returns the combined bytes still packed (not yet
+/// [`Tileset::decode`]d), not a decoded [`Tileset`]: [`super::tileset_anims`]
+/// needs to overwrite the primary block's own animated tile ranges in place,
+/// once per [`super::OverworldScene::compose`] call, before the caller
+/// decodes -- see that module's docs.
+///
 /// Also returns a "blank" tile index: one spare all-transparent tile
 /// appended past the combined tiles when there's room left in the
 /// 1024-tile hardware tile-index space (10 bits, [`ScreenEntry`]'s own
@@ -113,7 +119,7 @@ pub(super) const BOTTOM_PRIORITY: u8 = 3;
 pub(super) fn combined_world_tileset(
     primary: ImageRef<'_>,
     secondary: ImageRef<'_>,
-) -> Result<(Tileset, u16), OverworldSceneError> {
+) -> Result<(Vec<u8>, u16), OverworldSceneError> {
     let tile_bytes = BitDepth::Bpp4.tile_byte_len();
 
     let mut bytes = pack_4bpp_region(
@@ -143,8 +149,7 @@ pub(super) fn combined_world_tileset(
         0
     };
 
-    let tileset = Tileset::decode(BitDepth::Bpp4, &bytes)?;
-    Ok((tileset, blank_tile_index))
+    Ok((bytes, blank_tile_index))
 }
 
 /// Build the combined BG [`Palette`] every overworld BG layer draws
@@ -415,6 +420,7 @@ mod tests {
     };
     use engine::event_data::EventData;
     use engine::overworld::Direction as EngineDirection;
+    use rendering::Tileset;
 
     /// A fresh event-flag store: nothing hidden. This module's fixture maps
     /// carry no object events, so `PlayerState::step`'s object-event
