@@ -12,8 +12,8 @@
 
 use assets::{MapEventsTable, MapHeaderTable};
 use engine::overworld::{
-    facing_object_event, trigger_warp, warp_destination_position, warp_in_facing, Direction,
-    PlayerState, StepOutcome, TilePos, WarpTrigger,
+    facing_object_event, trigger_arrow_warp, trigger_door_warp, warp_destination_position,
+    warp_in_facing, Direction, PlayerState, StepOutcome, TilePos, WarpTrigger,
 };
 use engine::save::{Coords16, SaveBlock1, SaveBlock2, WarpData};
 use platform::{ButtonState, Buttons, Frame};
@@ -246,11 +246,15 @@ impl OverworldPhase {
     ///
     /// # Warp timing
     ///
-    /// A warp fires on the frame the step *finishes*, not the frame it
-    /// starts, mirroring upstream's own gate: `input->tookStep` is set only
-    /// when `gPlayerAvatar.tileTransitionState == T_TILE_CENTER &&
+    /// Upstream gates its two ported warp paths on two *different* things,
+    /// and so does this method — one entry point each, so the timings can't
+    /// drift back together (see `engine::overworld::warp`'s module docs).
+    ///
+    /// **Door-shaped warps: on the frame the step finishes.** That mirrors
+    /// upstream's own gate: `input->tookStep` is set only when
+    /// `gPlayerAvatar.tileTransitionState == T_TILE_CENTER &&
     /// gPlayerAvatar.runningState == MOVING`
-    /// (`pokeemerald/src/field_control_avatar.c:117-119`), and every
+    /// (`pokeemerald/src/field_control_avatar.c:118-119`), and every
     /// `TryStartWarpEventScript` call site is guarded by that flag
     /// (`:155-161`, plus `:483-488`/`:702` reaching it through
     /// `TryDoorWarp`/`SetupWarp`). [`PlayerState::step`] instead reports
@@ -258,34 +262,54 @@ impl OverworldPhase {
     /// position immediately and only then runs 16 frames of walk animation
     /// ([`engine::overworld::WALK_FRAMES_PER_TILE`]) -- so this method
     /// latches that landing tile in `pending_landing` and evaluates
-    /// [`trigger_warp`] against it on the frame [`PlayerState::tick`] drains
-    /// the animation ([`PlayerState::in_transit`] goes false), i.e. 16
+    /// [`trigger_door_warp`] against it on the frame [`PlayerState::tick`]
+    /// drains the animation ([`PlayerState::in_transit`] goes false), i.e. 16
     /// frames later. Latching (rather than re-deriving the tile from
     /// [`PlayerState::position`]) also keeps the check honest about *what
     /// changed*: only a tile the player actually stepped onto is ever
     /// tested, never one they were already standing on.
     ///
-    /// The `runtime` the trigger is evaluated against is this frame's,
-    /// which is correct: a warp is the only thing that changes `map_id`
-    /// here, and one can't fire mid-animation, so the map is necessarily
-    /// the same one the latched step happened on.
+    /// **Arrow warps (issue #174): polled every frame, at the tile the
+    /// player currently stands on.** `TryArrowWarp` is *not* behind
+    /// `tookStep` upstream; its gate is `input->heldDirection &&
+    /// input->dpadDirection == playerDirection` (`:164-168`), re-evaluated
+    /// every frame — so it fires both for a step taken onto an arrow tile
+    /// while still holding its direction *and* for a turn in place, no step
+    /// taken, while already standing on one. This method reproduces that
+    /// literally: `arrow_direction` below is this frame's
+    /// [`held_direction`], required to equal [`PlayerState::facing`] after
+    /// this frame's movement has been applied, and it feeds
+    /// [`trigger_arrow_warp`] at [`PlayerState::position`] rather than at
+    /// `pending_landing`. Two consequences worth naming, because an earlier
+    /// revision of this method got both wrong by routing arrows through the
+    /// door path: merely *tapping* a direction and releasing it during the
+    /// crossing does **not** warp (`heldDirection` is false on the frame that
+    /// matters), and standing on the doormat a warp-in landed you on then
+    /// holding its direction **does** — the latter being the only way out of
+    /// Brendan's house, since the tile south of that doormat is off-map and
+    /// the step itself is blocked forever.
     ///
-    /// [`trigger_warp`] also takes `self.player.facing()` at this same
-    /// check frame (issue #174, arrow warps): since `PlayerState::step` is a
-    /// no-op while [`PlayerState::in_transit`], `facing` cannot have changed
-    /// since the step that produced this landing began, so this is the same
-    /// direction that step was taken in -- exactly the case upstream's own
-    /// `TryArrowWarp` covers when the player holds a direction all the way
-    /// through a step onto an arrow tile. Not covered: upstream also fires
-    /// `TryArrowWarp` on a frame the player merely *turns* to face an arrow
-    /// tile's direction while already standing on it, with no step taken
-    /// (`input->heldDirection && input->dpadDirection == playerDirection`
-    /// is polled every frame, independent of `tookStep` --
-    /// `field_control_avatar.c:163-167`); this port only ever re-evaluates a
-    /// landing once, right after the step that produced it completes, so
-    /// that standing-still case does not retrigger here
-    /// `(behavioral-fidelity)` -- see `engine::overworld::warp`'s module
-    /// docs for the full citation.
+    /// The one gate this port adds is `!`[`PlayerState::in_transit`], which
+    /// is not an extra: upstream only sets `heldDirection` at all while
+    /// `tileTransitionState` is `T_TILE_CENTER` or `T_NOT_MOVING`
+    /// (`:95-112`), the same "between steps" condition.
+    ///
+    /// Door before arrow, matching upstream's own order within
+    /// `ProcessPlayerFieldInput` (`:155-168`); at most one warp fires per
+    /// frame.
+    ///
+    /// The `runtime` both are evaluated against is this frame's, which is
+    /// correct: a warp is the only thing that changes `map_id` here, and one
+    /// can't fire mid-animation, so the map is necessarily the same one the
+    /// latched step happened on.
+    ///
+    /// No warp loop is possible from the arrow path's every-frame poll:
+    /// [`warp_in_facing`] lands an arrival on an arrow tile facing *out* of
+    /// that arrow (upstream `GetAdjustedInitialDirection`,
+    /// `overworld.c:937-943`), so the held direction that fired the warp
+    /// cannot equal the arrival facing, and re-firing needs a deliberate
+    /// turn first. Pinned by this module's
+    /// `warping_to_the_front_doormat_faces_north_and_rebinds_the_scene`.
     ///
     /// Silently does nothing but drain an already-in-progress walk
     /// animation if this map's header/events can't be found in the
@@ -383,21 +407,39 @@ impl OverworldPhase {
             // can't silently trip it.
             let interaction_tokens = self.interaction_tokens_this_frame(buttons, &runtime);
 
+            // Upstream `input->heldDirection && input->dpadDirection ==
+            // playerDirection` (`field_control_avatar.c:164-168`) -- polled
+            // every frame, independent of `tookStep`, and *not* the door
+            // path's gate. `!in_transit` is this port's counterpart to the
+            // `T_TILE_CENTER`/`T_NOT_MOVING` test that sets `heldDirection`
+            // in the first place (`:95-112`). See the "Warp timing" section
+            // of this method's docs.
+            let arrow_direction = (!self.player.in_transit())
+                .then_some(direction)
+                .flatten()
+                .filter(|held| *held == self.player.facing());
+
             // Upstream's `tookStep` gate, in this port's terms: the latched
             // landing is only tested once its walk animation has drained
-            // (doc comment above).
+            // (doc comment above). Door first, then arrow, as upstream
+            // orders them (`:155-168`) -- `or_else` makes that at most one
+            // warp per frame.
             let warp_trigger = if self.player.in_transit() {
                 None
             } else {
-                self.pending_landing.take().and_then(|(x, y)| {
-                    trigger_warp(
-                        &runtime,
-                        x,
-                        y,
-                        self.player.elevation(),
-                        self.player.facing(),
-                    )
-                })
+                self.pending_landing
+                    .take()
+                    .and_then(|(x, y)| trigger_door_warp(&runtime, x, y, self.player.elevation()))
+                    .or_else(|| {
+                        let (x, y) = self.player.position();
+                        trigger_arrow_warp(
+                            &runtime,
+                            x,
+                            y,
+                            self.player.elevation(),
+                            arrow_direction?,
+                        )
+                    })
             };
 
             let warp_fired = matches!(warp_trigger, Some(WarpTrigger::Resolved { .. }));
@@ -665,7 +707,7 @@ fn held_direction(buttons: ButtonState) -> Option<Direction> {
 /// The returned [`StepOutcome`] is fed back to the caller (issue #163):
 /// [`OverworldPhase::step`] latches an `Advanced` step's landing tile and,
 /// once the 16-frame walk animation above has drained, checks it via
-/// [`trigger_warp`]/[`OverworldPhase::warp_to`] -- so walking onto the
+/// [`trigger_door_warp`]/[`OverworldPhase::warp_to`] -- so walking onto the
 /// bedroom's stair warp at `(7, 1)` (the map's only warp event, the same one
 /// [`crate::new_game`]'s `SPAWN_*` derives the spawn from) transitions to
 /// `MAP_LITTLEROOT_TOWN_BRENDANS_HOUSE_1F` on the frame the step *finishes*,

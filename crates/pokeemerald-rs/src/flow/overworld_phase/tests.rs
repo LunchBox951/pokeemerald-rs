@@ -784,19 +784,37 @@ fn warping_to_the_front_doormat_faces_north_and_rebinds_the_scene() {
     );
 }
 
+/// A phase standing on 1F's own floor, for the doormat tests below: a real
+/// pack-loaded [`ONE_F`] scene with the player placed at `position` facing
+/// `facing`, at rest.
+fn one_f_phase(position: (i32, i32), facing: Direction) -> OverworldPhase {
+    OverworldPhase::for_test(
+        crate::overworld::load_room(ONE_F).expect("run `cargo xtask extract` first"),
+        ONE_F,
+        PlayerState::new(position, 3, facing),
+        None,
+    )
+}
+
 /// The issue #174 acceptance test: from inside 1F, walking onto the
 /// doormat (warp #1, `(8, 8)`, `MB_SOUTH_ARROW_WARP`) while holding South
 /// fires the arrow-warp trigger -- upstream `TryArrowWarp`/
 /// `IsArrowWarpMetatileBehavior` (`field_control_avatar.c:688-699, 767-780`,
-/// under the same `tookStep`-timed check this port's [`trigger_warp`] call
-/// site uses -- `OverworldPhase::step`'s "Warp timing" section) -- and
-/// exits through the front door to `MAP_LITTLEROOT_TOWN`'s own warp #1
-/// (`(5, 8)`, `MB_ANIMATED_DOOR`, already pinned by
+/// polled every frame `input->heldDirection && input->dpadDirection ==
+/// playerDirection` holds, `:164-168` -- `OverworldPhase::step`'s "Warp
+/// timing" section) -- and exits through the front door to
+/// `MAP_LITTLEROOT_TOWN`'s own warp #1 (`(5, 8)`, `MB_ANIMATED_DOOR`,
+/// already pinned by
 /// [`the_front_door_warp_faces_north_from_the_destination_tiles_behavior`]),
 /// landing facing South per that tile's own `IsNonAnimDoor||IsDoor` branch
 /// (`overworld.c:935-936`). This is the doormat this port's whole warp
 /// stack exists to fire: without it, the player can walk down into
 /// Brendan's house but never back out through the front door.
+///
+/// Down is held for the **whole** crossing, which is what upstream's gate
+/// actually requires -- see
+/// [`releasing_south_mid_step_does_not_exit_through_the_doormat`] for the
+/// sibling that releases it and must therefore *not* warp.
 #[test]
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
 fn walking_onto_the_doormat_holding_south_exits_through_the_front_door() {
@@ -804,19 +822,15 @@ fn walking_onto_the_doormat_holding_south_exits_through_the_front_door() {
     assert_eq!(doormat_pos, (8, 8), "1F's warp #1: the doormat inside");
     assert_eq!(doormat_behavior, MB_SOUTH_ARROW_WARP);
 
-    let mut phase = OverworldPhase::for_test(
-        crate::overworld::load_room(ONE_F).expect("run `cargo xtask extract` first"),
-        ONE_F,
-        // One tile north of the doormat, already facing South -- so the
-        // very first held-Down frame steps directly onto it with no turn
-        // frame needed first.
-        PlayerState::new((8, 7), 3, Direction::South),
-        None,
-    );
+    // One tile north of the doormat, already facing South -- so the very
+    // first held-Down frame steps directly onto it with no turn frame
+    // needed first.
+    let mut phase = one_f_phase((8, 7), Direction::South);
 
     // Frame 1: the step onto the doormat begins. `PlayerState` commits the
-    // tile immediately, but the arrow-warp trigger must not fire yet --
-    // same step-completion timing the door path uses.
+    // tile immediately, but no warp may fire while the crossing is still
+    // animating -- upstream's `heldDirection` is only ever set at
+    // `T_TILE_CENTER`/`T_NOT_MOVING` (`field_control_avatar.c:95-112`).
     phase.step(held(Buttons::DOWN));
     assert_eq!(
         phase.player.position(),
@@ -828,28 +842,29 @@ fn walking_onto_the_doormat_holding_south_exits_through_the_front_door() {
         "the arrow warp must not fire on the frame the step begins"
     );
 
-    // Frames 2..16: drain the walk animation with no input held. The
-    // doormat's own behavior is direction-gated, not tookStep-gated, but
-    // this port only (re-)evaluates a landing once, at step completion
-    // (`trigger_warp`'s module docs) -- so the map must stay put until then.
+    // Frames 2..16: keep Down held (upstream polls the *currently held*
+    // direction, so releasing it would be a different test) while the walk
+    // animation drains. The player is mid-crossing throughout, so the poll
+    // stays closed and the map must not change.
     for frame in 2..u32::from(WALK_FRAMES_PER_TILE) {
-        phase.step(ButtonState::new());
+        phase.step(held(Buttons::DOWN));
         assert_eq!(
             phase.map_id, ONE_F,
             "the warp must not fire mid-animation (frame {frame} of {WALK_FRAMES_PER_TILE})"
         );
     }
 
-    // Frame 16: the walk animation drains and the trigger check runs,
-    // using the facing frozen since the step began (South) -- the doormat's
-    // own MB_SOUTH_ARROW_WARP behavior matches it.
-    phase.step(ButtonState::new());
+    // Frame 16: the walk animation drains, the player is at rest on the
+    // doormat, Down is still held and still equals their facing -- so
+    // `TryArrowWarp`'s gate opens and the doormat's own
+    // MB_SOUTH_ARROW_WARP behavior matches it.
+    phase.step(held(Buttons::DOWN));
 
     let destination = assets::MapId("MAP_LITTLEROOT_TOWN");
     assert_eq!(
         phase.map_id, destination,
-        "the doormat's arrow-warp trigger must fire once the step completes, \
-         facing South"
+        "the doormat's arrow-warp trigger must fire on the first at-rest \
+         frame with South still held"
     );
     assert_eq!(
         phase.player.position(),
@@ -868,30 +883,157 @@ fn walking_onto_the_doormat_holding_south_exits_through_the_front_door() {
     );
 }
 
+/// Senior-review regression (#174 finding 1b, the over-trigger half):
+/// upstream's arrow-warp gate reads the direction **currently held**
+/// (`input->heldDirection && input->dpadDirection == playerDirection`,
+/// `field_control_avatar.c:164-168`), not the direction some earlier step
+/// happened to be taken in. So tapping Down for one frame and releasing it
+/// during the crossing walks the player onto the doormat and leaves them
+/// there -- `tookStep` would be true, but `heldDirection` is false.
+///
+/// Identical setup and frame count to
+/// [`walking_onto_the_doormat_holding_south_exits_through_the_front_door`];
+/// the only difference is the released button, so a regression that keys
+/// arrow warps off the landing rather than the held keys fails here.
+#[test]
+#[ignore = "needs a local pack: run `cargo xtask extract` first"]
+fn releasing_south_mid_step_does_not_exit_through_the_doormat() {
+    let mut phase = one_f_phase((8, 7), Direction::South);
+
+    phase.step(held(Buttons::DOWN));
+    assert_eq!(
+        phase.player.position(),
+        (8, 8),
+        "the step onto the doormat must still commit"
+    );
+
+    // Down released from frame 2 onward, including the frame the crossing
+    // completes.
+    for _ in 1..=u32::from(WALK_FRAMES_PER_TILE) {
+        phase.step(ButtonState::new());
+    }
+
+    assert!(
+        !phase.player.in_transit(),
+        "the crossing must have fully drained -- otherwise this test proves nothing"
+    );
+    assert_eq!(
+        phase.map_id, ONE_F,
+        "a released direction must not warp: upstream needs heldDirection on \
+         the frame the check runs, not merely a completed step"
+    );
+    assert_eq!(
+        phase.player.position(),
+        (8, 8),
+        "the player stays standing on the doormat"
+    );
+}
+
+/// Senior-review regression (#174 finding 1a, the under-trigger half, and
+/// the v1 north-star doormat interaction): the state a warp *into* the
+/// house leaves the player in -- standing on the doormat at `(8, 8)`,
+/// facing North, because the mat's own `MB_SOUTH_ARROW_WARP` drives
+/// `GetAdjustedInitialDirection` that way (`overworld.c:937-938`, pinned by
+/// [`warping_to_the_front_doormat_faces_north_and_rebinds_the_scene`]).
+///
+/// From there, holding Down must exit. Upstream gets this from the
+/// every-frame `heldDirection` poll: the turn-in-place makes
+/// `playerDirection` South, the poll matches, `TryArrowWarp` fires. It
+/// cannot come from a step, because `(8, 9)` is off-map -- the step is
+/// blocked forever, so a landing-gated arrow warp makes the front door a
+/// permanent one-way trip into the house.
+///
+/// This port's turn-in-place is a single frame and its input poll runs
+/// *after* the frame's movement is applied (see
+/// [`OverworldPhase::interaction_tokens_this_frame`]'s note on that same
+/// one-frame delta), so the exit lands on the very first held-Down frame
+/// rather than the one after it.
+#[test]
+#[ignore = "needs a local pack: run `cargo xtask extract` first"]
+fn standing_on_the_doormat_facing_north_and_holding_south_exits() {
+    let mut phase = one_f_phase((0, 0), Direction::South);
+
+    // Arrive the way the front door actually arrives, rather than asserting
+    // the post-warp state by hand.
+    phase.warp_to(ONE_F, 1);
+    assert_eq!(phase.player.position(), (8, 8), "1F's warp #1: the doormat");
+    assert_eq!(
+        phase.player.facing(),
+        Direction::North,
+        "a warp-in onto a south-arrow tile faces back out of it"
+    );
+
+    // Hold Down: frame 1 turns in place (South) and the poll, running after
+    // that turn, already matches.
+    phase.step(held(Buttons::DOWN));
+
+    assert_eq!(
+        phase.map_id,
+        assets::MapId("MAP_LITTLEROOT_TOWN"),
+        "holding Down while standing on the doormat must exit the house -- \
+         the step south is blocked (off-map), so only the every-frame \
+         heldDirection poll can ever fire this"
+    );
+    assert_eq!(
+        phase.player.position(),
+        (5, 8),
+        "Littleroot's own warp #1: the front door"
+    );
+    assert_eq!(phase.player.facing(), Direction::South);
+}
+
+/// The companion to the test above: a warp-in alone must *not* warp back
+/// out, however many frames pass with nothing held. This is what makes the
+/// every-frame poll safe -- [`warp_in_facing`] lands the arrival facing out
+/// of the arrow, so its direction can never match a held one without a
+/// deliberate turn first.
+#[test]
+#[ignore = "needs a local pack: run `cargo xtask extract` first"]
+fn arriving_on_the_doormat_does_not_immediately_warp_back_out() {
+    let mut phase = one_f_phase((0, 0), Direction::South);
+    phase.warp_to(ONE_F, 1);
+
+    for _ in 0..u32::from(WALK_FRAMES_PER_TILE) * 2 {
+        phase.step(ButtonState::new());
+        assert_eq!(
+            phase.map_id, ONE_F,
+            "an arrival on an arrow tile must not re-fire it"
+        );
+    }
+    assert_eq!(phase.player.position(), (8, 8));
+    assert_eq!(phase.player.facing(), Direction::North);
+}
+
 /// Regression: the same doormat, same position, but facing/holding a
 /// direction other than South must not fire the arrow-warp trigger --
 /// `IsArrowWarpMetatileBehavior` only matches the one direction its id
 /// belongs to (`engine::overworld::warp::is_arrow_warp_trigger`'s own unit
 /// tests cover the predicate directly; this is the phase-level version:
 /// landing on the doormat by walking sideways past it must not exit).
+///
+/// Right is held for the whole crossing *and* past it, so the every-frame
+/// poll really does run with a direction held that equals the player's
+/// facing -- only the id-vs-direction match denies it.
 #[test]
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
 fn walking_onto_the_doormat_facing_east_does_not_exit() {
-    let mut phase = OverworldPhase::for_test(
-        crate::overworld::load_room(ONE_F).expect("run `cargo xtask extract` first"),
-        ONE_F,
-        // One tile west of the doormat, already facing East, so the first
-        // held-Right frame steps directly onto (8, 8) facing East instead
-        // of South.
-        PlayerState::new((7, 8), 3, Direction::East),
-        None,
-    );
+    // One tile west of the doormat, already facing East, so the first
+    // held-Right frame steps directly onto (8, 8) facing East instead of
+    // South.
+    let mut phase = one_f_phase((7, 8), Direction::East);
 
     phase.step(held(Buttons::RIGHT));
     assert_eq!(phase.player.position(), (8, 8));
+    // 15 more frames: the crossing drains on the last of them, and Right is
+    // still held on that frame -- so the arrow poll really does run, with a
+    // held direction that equals the player's facing.
     for _ in 1..WALK_FRAMES_PER_TILE {
-        phase.step(ButtonState::new());
+        phase.step(held(Buttons::RIGHT));
     }
+    assert!(
+        !phase.player.in_transit(),
+        "the crossing must have fully drained on the last frame Right was polled"
+    );
 
     assert_eq!(
         phase.map_id, ONE_F,
