@@ -55,9 +55,9 @@
 //!
 //! In scope: the current map's layout grid + border fill, primary/secondary
 //! tileset BG composition -- including (issue #160) the primary tileset's
-//! own animated tile ranges (water, flowers, the bedroom's TV screen; see
-//! [`tileset_anims`]) -- camera-follow scroll, the player OBJ's
-//! facing/step animation, and (issue #161) a bounded set of the current
+//! own animated tile ranges (flowers, water, the `building` tileset's
+//! turned-on TV screen; see [`tileset_anims`]) -- camera-follow scroll,
+//! the player OBJ's facing/step animation, and (issue #161) a bounded set of the current
 //! map's *other* object events — [`npc`] renders the ones it recognizes a
 //! sprite for, hide-flag filtered via
 //! [`engine::overworld::object_event_is_visible`], and
@@ -320,8 +320,20 @@ pub struct OverworldScene {
     /// every call, after [`tile_anims`](Self::tile_anims) has patched in
     /// that call's own animated tile frames (issue #160) -- mirrors this
     /// module's existing "no persisted borrow, rebuild fresh every frame"
-    /// pattern for `grid`/`border`/the attribute tables above.
+    /// pattern for `grid`/`border`/the attribute tables above. Unused (and
+    /// the per-frame copy/decode skipped entirely) when
+    /// [`unanimated_world_tiles`](Self::unanimated_world_tiles) is `Some`.
     world_tile_bytes: Vec<u8>,
+    /// [`world_tile_bytes`](Self::world_tile_bytes), decoded once here
+    /// instead of on every [`Self::compose`] -- but **only** for a room
+    /// whose [`tile_anims`](Self::tile_anims) is empty, where nothing ever
+    /// patches those bytes and so every frame would otherwise re-derive the
+    /// exact same [`Tileset`] from an exact copy of the same bytes. `None`
+    /// for a room with animated ranges, which genuinely does need a fresh
+    /// patch+decode per tick; the two fields are set together in
+    /// [`Self::from_pack`] and this one is `Some` exactly when `tile_anims`
+    /// is empty.
+    unanimated_world_tiles: Option<Tileset>,
     world_palette: Palette,
     /// See [`viewport::combined_world_tileset`]'s docs.
     blank_tile_index: u16,
@@ -379,6 +391,14 @@ impl OverworldScene {
         // is the same normalized tileset name `AnimatedTileset::load`
         // matches against (`tileset_anims`'s own scope docs).
         let tile_anims = tileset_anims::AnimatedTileset::load(pack, primary_name)?;
+        // A room with no animated ranges at all renders the same decoded
+        // tileset on every frame, so decode it once here rather than per
+        // `compose` call (docs on `unanimated_world_tiles`).
+        let unanimated_world_tiles = if tile_anims.is_empty() {
+            Some(Tileset::decode(BitDepth::Bpp4, &world_tile_bytes)?)
+        } else {
+            None
+        };
 
         let layout_name = layout_pack_name(layout.id);
         let grid_bytes = pack.layout_map(&layout_name)?.to_vec();
@@ -403,6 +423,7 @@ impl OverworldScene {
             primary_attrs_bytes: primary.metatile_attributes.to_vec(),
             secondary_attrs_bytes: secondary.metatile_attributes.to_vec(),
             world_tile_bytes,
+            unanimated_world_tiles,
             world_palette,
             blank_tile_index,
             tile_anims,
@@ -472,15 +493,25 @@ impl OverworldScene {
 
         // This frame's animated tile ranges, patched into a fresh copy of
         // the base bytes and decoded fresh (issue #160) -- see
-        // `world_tile_bytes`'s own doc comment for why this isn't cached.
-        let mut world_tile_bytes = self.world_tile_bytes.clone();
-        self.tile_anims.patch(&mut world_tile_bytes, tick);
-        let world_tiles = Tileset::decode(BitDepth::Bpp4, &world_tile_bytes)
-            .expect("world_tile_bytes' length is unchanged from from_pack's validated build");
+        // `world_tile_bytes`'s own doc comment for why an *animated* room's
+        // tileset can't be cached across ticks. A room with no animated
+        // ranges at all skips that copy/patch/decode entirely and reuses the
+        // tileset `from_pack` already decoded (docs on
+        // `unanimated_world_tiles`).
+        let patched_world_tiles;
+        let world_tiles = if let Some(tiles) = &self.unanimated_world_tiles {
+            tiles
+        } else {
+            let mut world_tile_bytes = self.world_tile_bytes.clone();
+            self.tile_anims.patch(&mut world_tile_bytes, tick);
+            patched_world_tiles = Tileset::decode(BitDepth::Bpp4, &world_tile_bytes)
+                .expect("world_tile_bytes' length is unchanged from from_pack's validated build");
+            &patched_world_tiles
+        };
 
-        let bottom_layer = BgLayer::new(&world_tiles, &self.world_palette, &bottom);
-        let middle_layer = BgLayer::new(&world_tiles, &self.world_palette, &middle);
-        let top_layer = BgLayer::new(&world_tiles, &self.world_palette, &top);
+        let bottom_layer = BgLayer::new(world_tiles, &self.world_palette, &bottom);
+        let middle_layer = BgLayer::new(world_tiles, &self.world_palette, &middle);
+        let top_layer = BgLayer::new(world_tiles, &self.world_palette, &top);
 
         let slots = [
             BgSlot::new(

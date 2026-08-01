@@ -778,10 +778,21 @@ const GENERAL_ANIMATED_TILE_RANGES: [std::ops::Range<u16>; 5] = [
 /// docs: every bundled interior uses "building", whose one animated
 /// metatile, the TV, no bundled interior's own `map.bin` actually places) --
 /// whose standing (not-in-transit, so zero-scroll/unpadded -- module docs'
-/// camera model) viewport draws this town's southern shore water on screen.
-/// Found empirically against the real pack (`overworld::tests` has no
-/// typed access to `map.json`'s authored content otherwise).
-const LITTLEROOT_TOWN_WATER_VIEW: (i32, i32) = (10, 17);
+/// camera model) viewport draws animated tiles on screen.
+///
+/// **Flower is the only animated region any bundled map ever puts on
+/// screen.** Measured against the real pack, at this position 24 on-screen
+/// BG tile cells reference the flower range and *zero* reference
+/// `water`/`sand_water_edge`/`waterfall`/`land_water_edge`; sweeping every
+/// cell of `MAP_LITTLEROOT_TOWN` at every standing position, flower peaks at
+/// 36 cells (at `(0, 14)`) and the other four regions stay at 0 everywhere
+/// -- Littleroot has no water in its own layout, and no other bundled map
+/// uses the "general" tileset at all. So [`GENERAL_ANIMATED_TILE_RANGES`]'s
+/// other four ranges are pinned by `tileset_anims`' own unit tests, not by
+/// any rendered pixel here. Found empirically against the real pack
+/// (`overworld::tests` has no typed access to `map.json`'s authored content
+/// otherwise).
+const LITTLEROOT_TOWN_FLOWER_VIEW: (i32, i32) = (10, 17);
 
 /// The screen-pixel rectangles [`GENERAL_ANIMATED_TILE_RANGES`] paints for
 /// `scene`/`player`'s current viewport: every 8x8 BG tile cell whose
@@ -849,15 +860,17 @@ fn animated_tile_screen_rects(
 /// [`super::OverworldScene::compose`]'s `tick` parameter actually reaches
 /// rendered pixels, and only the pixels its own animated tile ranges own,
 /// for a real map/pack. `tick` 60 is arbitrary but deliberate: General
-/// water's first fire is at tick 1 (`tileset_anims`'s `latched_frame` doc
-/// comment), so by tick 60 several regions have already latched a
-/// non-base frame.
+/// flower -- the one region this map puts on screen at all
+/// ([`LITTLEROOT_TOWN_FLOWER_VIEW`]'s docs) -- fires at ticks 16, 32, 48,
+/// and 64, so at tick 60 it has latched sequence position 3 (`Frame2`), a
+/// frame distinct from the base art tick 0 shows
+/// (`tileset_anims::latched_frame`'s doc comment and its own unit tests).
 #[test]
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
 fn real_pack_tick_changes_only_the_animated_tile_screen_regions() {
     let scene = super::load_room(assets::MapId("MAP_LITTLEROOT_TOWN"))
         .expect("run `cargo xtask extract` first");
-    let (x, y) = LITTLEROOT_TOWN_WATER_VIEW;
+    let (x, y) = LITTLEROOT_TOWN_FLOWER_VIEW;
     let player = PlayerState::new((x, y), 3, Direction::South);
     let event_data = engine::event_data::EventData::new();
 
@@ -897,11 +910,28 @@ fn real_pack_tick_changes_only_the_animated_tile_screen_regions() {
 }
 
 /// The issue #160 acceptance test's "repeats" half: two ticks a full
-/// cadence period apart compose pixel-identically. 128 is not specific to
-/// this map/position -- it is the LCM of every region
-/// [`crate::overworld::tileset_anims`] ports (General water/sand-water-edge
-/// at 128, every other region's own cycle a divisor of it -- that module's
-/// own doc comment), so this holds for any tick, any map, any position.
+/// cadence period apart compose pixel-identically. 128 is the LCM of every
+/// region [`crate::overworld::tileset_anims`] ports (General
+/// water/sand-water-edge at 128, every other region's own cycle a divisor of
+/// it -- that module's own doc comment).
+///
+/// **The invariant is "for every tick >= 16", not "for any tick".** Below a
+/// region's own first fire it shows the *base* art rather than any frame of
+/// its sequence, and the base art is not in general equal to the frame the
+/// same region shows 128 ticks later: on a map with water on screen,
+/// `compose(0)` and `compose(128)` would genuinely differ (water latches
+/// sequence position 0 at tick 128, and `water/0` is not the base tile art).
+/// 16 is the largest `first_fire` over every region this slice ports (the
+/// `phase == 0` regions' `interval`), so from tick 16 on every region has
+/// latched and the period is exact everywhere.
+///
+/// Ticks 0, 1, and 8 are still exercised below, but only because *this*
+/// map/position happens to make them true: General flower is the sole
+/// animated region on screen here ([`LITTLEROOT_TOWN_FLOWER_VIEW`]'s docs)
+/// and its `sequence[0]` frame is pixel-identical to the base art it
+/// overwrites, so "pre-first-fire" and "latched frame 0" render the same.
+/// They are not evidence for the general invariant -- the ticks from 16 up
+/// are.
 #[test]
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
 fn real_pack_tileset_animation_repeats_after_a_full_cadence_period() {
@@ -909,11 +939,13 @@ fn real_pack_tileset_animation_repeats_after_a_full_cadence_period() {
 
     let scene = super::load_room(assets::MapId("MAP_LITTLEROOT_TOWN"))
         .expect("run `cargo xtask extract` first");
-    let (x, y) = LITTLEROOT_TOWN_WATER_VIEW;
+    let (x, y) = LITTLEROOT_TOWN_FLOWER_VIEW;
     let player = PlayerState::new((x, y), 3, Direction::South);
     let event_data = engine::event_data::EventData::new();
 
-    for tick in [0, 1, 8, 60, 127] {
+    // 0/1/8: this map/position only (doc comment). 16/60/127: the real,
+    // map-independent invariant -- every region has fired by tick 16.
+    for tick in [0, 1, 8, 16, 60, 127] {
         let a = scene.compose(&player, &event_data, tick);
         let b = scene.compose(&player, &event_data, tick + FULL_CADENCE_PERIOD);
         assert_eq!(

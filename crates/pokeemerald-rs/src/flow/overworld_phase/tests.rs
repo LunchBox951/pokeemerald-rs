@@ -297,6 +297,91 @@ fn an_open_dialog_freezes_movement_until_it_closes() {
     );
 }
 
+/// Mutation guard for [`OverworldPhase::step`]'s tileset-animation tick
+/// (issue #160): `self.tick` must advance by exactly one per `step` call,
+/// and must keep advancing while a dialog box is open -- an explicit
+/// fidelity claim in the field's own docs (upstream's
+/// `UpdateTilesetAnimations` runs every `VBlank` regardless of message-box
+/// state, so background tiles keep animating behind a frozen player).
+/// Nothing else in the suite observes `tick` on a headless phase: deleting
+/// the increment, moving it below `step`'s dialog early-return, or making it
+/// conditional must all fail here.
+#[test]
+fn step_advances_the_tileset_animation_tick_once_per_frame_even_behind_a_dialog() {
+    use engine::text::Token;
+
+    // No dialog: one tick per frame, moving or not.
+    let mut phase = synthetic_phase(PlayerState::new((7, 4), 3, Direction::South), None);
+    assert_eq!(phase.tick, 0, "a freshly built phase starts at tick 0");
+    phase.step(ButtonState::new());
+    assert_eq!(phase.tick, 1, "an idle frame still advances the animation");
+    for expected in 2..=WALK_FRAMES_PER_TILE {
+        phase.step(held(Buttons::DOWN));
+        assert_eq!(
+            phase.tick,
+            u32::from(expected),
+            "every frame of a walk step advances the tick exactly once"
+        );
+    }
+
+    // Dialog open: movement is frozen (see
+    // `an_open_dialog_freezes_movement_until_it_closes`), the tick is not.
+    let dialog = crate::overworld::dialog::synthetic_dialog(vec![
+        Token::Char('A'),
+        Token::PromptClear,
+        Token::End,
+    ]);
+    let mut frozen = synthetic_phase(PlayerState::new((7, 4), 3, Direction::South), Some(dialog));
+    for expected in 1..=10u32 {
+        frozen.step(held(Buttons::DOWN));
+        assert_eq!(
+            frozen.tick, expected,
+            "tileset animation must keep running while a dialog freezes movement"
+        );
+    }
+    assert!(
+        frozen.dialog.is_some(),
+        "the dialog must still be open -- otherwise the frames above weren't frozen ones"
+    );
+    assert_eq!(
+        frozen.player.position(),
+        (7, 4),
+        "and movement really was frozen for all of them"
+    );
+}
+
+/// The other half of the [`OverworldPhase`] tick wiring (issue #160): every
+/// map (re)load restarts the room's animation counter at 0, mirroring
+/// upstream's `InitTilesetAnimations` call sites
+/// (`pokeemerald/src/overworld.c`). Real-pack, because both constructors
+/// under test load rooms: [`OverworldPhase::load_default`] must hand back a
+/// phase at tick 0, and [`OverworldPhase::warp_to`] must reset a
+/// *already-advanced* counter -- deleting `self.tick = 0` from `warp_to`
+/// leaves the destination map's flowers/water mid-cycle and must fail here.
+#[test]
+#[ignore = "needs a local pack: run `cargo xtask extract` first"]
+fn loading_a_room_and_warping_both_restart_the_tileset_animation_tick() {
+    let mut phase = OverworldPhase::load_default().expect("run `cargo xtask extract` first");
+    assert_eq!(
+        phase.tick, 0,
+        "a freshly loaded room starts its animation counter at 0"
+    );
+
+    // Advance the counter well past 0 (idle frames: the spawn tile is the
+    // stair warp, so this deliberately holds nothing).
+    for _ in 0..37 {
+        phase.step(ButtonState::new());
+    }
+    assert_eq!(phase.tick, 37, "37 steps, 37 ticks");
+
+    phase.warp_to(assets::MapId("MAP_LITTLEROOT_TOWN_BRENDANS_HOUSE_1F"), 1);
+    assert_eq!(
+        phase.tick, 0,
+        "a warp is a map load: the destination map's animated tiles must start \
+         from their own tick 0, not from the departed map's counter"
+    );
+}
+
 /// The finding-1 regression at the phase level, on real map data: holding a
 /// direction into a visible NPC must stop the player on the adjacent tile.
 /// Before object-event collision landed, [`OverworldPhase::step`] walked the

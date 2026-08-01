@@ -14,7 +14,8 @@
 //! secondary tilesets this port bundles (`petalburg`, `brendans_mays_house`,
 //! `lab`) either have no `anim/` directory at all or a `NULL` callback --
 //! `gTileset_Petalburg`'s `InitTilesetAnim_Petalburg` only syncs the
-//! secondary counter, it never assigns `sSecondaryTilesetAnimCallback`
+//! secondary counter and then assigns `sSecondaryTilesetAnimCallback =
+//! NULL`, so no secondary callback ever runs for it
 //! (`tileset_anims.c:676-681`) -- so neither has any observable animation.
 //! Every animated range this slice ports therefore targets the room's
 //! *primary* tile block -- combined-tileset indices `0..512`
@@ -191,6 +192,17 @@ impl AnimatedTileset {
         };
         let mut regions = Vec::with_capacity(specs.len());
         for spec in specs {
+            // `latched_frame`'s own derivation assumes upstream's dispatch
+            // shape (`timer % interval == phase`), which is only ever
+            // satisfiable for `phase < interval`; a table typo the other way
+            // round would silently produce a region that never fires.
+            debug_assert!(
+                spec.phase < spec.interval,
+                "{}: phase {} must be less than interval {} (module docs' table)",
+                spec.anim_name,
+                spec.phase,
+                spec.interval
+            );
             let mut frames = Vec::with_capacity(spec.sequence.len());
             for &n in spec.sequence {
                 let id = format!("tileset/{primary_tileset_name}/anim/{}/{n}", spec.anim_name);
@@ -213,6 +225,15 @@ impl AnimatedTileset {
             });
         }
         Ok(Self { regions })
+    }
+
+    /// Whether this room has no animated regions at all -- true for every
+    /// primary tileset outside [`GENERAL_REGIONS`]/[`BUILDING_REGIONS`]
+    /// (module docs), where [`Self::patch`] is a guaranteed no-op and
+    /// [`super::OverworldScene::compose`] can skip its whole per-frame
+    /// copy/patch/decode pass.
+    pub(super) fn is_empty(&self) -> bool {
+        self.regions.is_empty()
     }
 
     /// Overwrite every animated region's tile range in `bytes` (a combined
@@ -289,7 +310,65 @@ fn latched_frame(tick: u64, phase: u64, interval: u64, frame_count: usize) -> Op
 mod tests {
     use super::*;
 
+    // -- The cadence tables themselves ---------------------------------------
+
+    /// Every field of every [`AnimRegionSpec`] this module ships, against
+    /// literals transcribed straight out of `tileset_anims.c` (module docs'
+    /// table names the exact source lines for each row) rather than read
+    /// back out of the constants under test. Without this, only
+    /// `flower.start_tile` was load-bearing anywhere -- a typo in any other
+    /// region's start tile, phase, interval, or frame order would render
+    /// wrong pixels with every test still green, since no bundled map puts
+    /// those regions on screen (`super::super::tests`' own real-pack
+    /// coverage notes).
+    #[test]
+    fn every_region_spec_matches_the_transcribed_tileset_anims_c_table() {
+        /// `(anim_name, start_tile, phase, interval, sequence)`.
+        type Row = (&'static str, u16, u16, u16, &'static [u8]);
+
+        // `QueueAnimTiles_General_*`'s own `TILE_OFFSET_4BPP(N)` literals and
+        // `gTilesetAnims_General_*` array contents, plus `TilesetAnim_General`'s
+        // per-phase dispatch arms (`:632-644`); Building's are `:646-650`.
+        let expected: [Row; 5] = [
+            ("flower", 508, 0, 16, &[0, 1, 0, 2]),
+            ("water", 432, 1, 16, &[0, 1, 2, 3, 4, 5, 6, 7]),
+            ("sand_water_edge", 464, 2, 16, &[0, 1, 2, 3, 4, 5, 6, 0]),
+            ("waterfall", 496, 3, 16, &[0, 1, 2, 3]),
+            ("land_water_edge", 480, 4, 16, &[0, 1, 2, 3]),
+        ];
+        let building_expected: [Row; 1] = [("tv_turned_on", 496, 0, 8, &[0, 1])];
+
+        for (spec, row) in GENERAL_REGIONS
+            .iter()
+            .zip(expected)
+            .chain(BUILDING_REGIONS.iter().zip(building_expected))
+        {
+            let (anim_name, start_tile, phase, interval, sequence) = row;
+            assert_eq!(spec.anim_name, anim_name);
+            assert_eq!(spec.start_tile, start_tile, "{anim_name}: start tile");
+            assert_eq!(spec.phase, phase, "{anim_name}: phase");
+            assert_eq!(spec.interval, interval, "{anim_name}: interval");
+            assert_eq!(spec.sequence, sequence, "{anim_name}: frame sequence");
+        }
+        // `zip` truncates, so pin the table lengths too: a dropped or added
+        // region must fail here rather than go unchecked.
+        assert_eq!(GENERAL_REGIONS.len(), expected.len());
+        assert_eq!(BUILDING_REGIONS.len(), building_expected.len());
+    }
+
     // -- `latched_frame` (module docs' derivation) --------------------------
+
+    /// `(phase, interval, frame_count)` -- [`latched_frame`]'s own cadence
+    /// arguments, taken from the shipped spec rather than re-typed, so the
+    /// hand-traced expectations below are pinned to the table this module
+    /// actually loads.
+    fn cadence(spec: &AnimRegionSpec) -> (u64, u64, usize) {
+        (
+            u64::from(spec.phase),
+            u64::from(spec.interval),
+            spec.sequence.len(),
+        )
+    }
 
     #[test]
     fn latched_frame_is_none_before_the_first_fire() {
@@ -297,11 +376,13 @@ mod tests {
         // tick 0 (module docs: upstream's callback argument starts at 1, so
         // a `phase == 0` region's first `n` with `n % interval == 0` is
         // `interval` itself).
-        assert_eq!(latched_frame(0, 0, 16, 4), None);
-        assert_eq!(latched_frame(15, 0, 16, 4), None);
+        let (phase, interval, frames) = cadence(&GENERAL_REGIONS[0]);
+        assert_eq!(latched_frame(0, phase, interval, frames), None);
+        assert_eq!(latched_frame(15, phase, interval, frames), None);
 
         // Water: phase 1, interval 16 -- fires on the very first tick.
-        assert_eq!(latched_frame(0, 1, 16, 8), None);
+        let (phase, interval, frames) = cadence(&GENERAL_REGIONS[1]);
+        assert_eq!(latched_frame(0, phase, interval, frames), None);
     }
 
     #[test]
@@ -310,33 +391,37 @@ mod tests {
         // (`tileset_anims.c:82-87`), phase 0, interval 16: fires at tick 16,
         // 32, 48, 64, ... queuing sequence positions 1, 2, 3, 0, ... in turn
         // (`QueueAnimTiles_General_Flower(timer / 16)`, `:652-656`).
-        assert_eq!(latched_frame(16, 0, 16, 4), Some(1)); // Frame1
-        assert_eq!(latched_frame(31, 0, 16, 4), Some(1)); // holds until the next fire
-        assert_eq!(latched_frame(32, 0, 16, 4), Some(2)); // Frame0 (sequence[2])
-        assert_eq!(latched_frame(48, 0, 16, 4), Some(3)); // Frame2
-        assert_eq!(latched_frame(64, 0, 16, 4), Some(0)); // wraps: Frame0 (sequence[0])
+        let (phase, interval, frames) = cadence(&GENERAL_REGIONS[0]);
+        assert_eq!(latched_frame(16, phase, interval, frames), Some(1)); // Frame1
+        assert_eq!(latched_frame(31, phase, interval, frames), Some(1)); // holds until the next fire
+        assert_eq!(latched_frame(32, phase, interval, frames), Some(2)); // Frame0 (sequence[2])
+        assert_eq!(latched_frame(48, phase, interval, frames), Some(3)); // Frame2
+        assert_eq!(latched_frame(64, phase, interval, frames), Some(0)); // wraps: Frame0 (sequence[0])
     }
 
     #[test]
     fn latched_frame_matches_general_waters_hand_traced_cadence() {
         // Phase 1, interval 16, 8 frames (`tileset_anims.c:89-107,658-662`):
         // fires at tick 1, 17, 33, ..., one array position per fire.
-        assert_eq!(latched_frame(1, 1, 16, 8), Some(0));
-        assert_eq!(latched_frame(16, 1, 16, 8), Some(0)); // still holding frame 0
-        assert_eq!(latched_frame(17, 1, 16, 8), Some(1));
-        assert_eq!(latched_frame(1 + 16 * 8, 1, 16, 8), Some(0)); // one full 8-frame cycle later
+        let (phase, interval, frames) = cadence(&GENERAL_REGIONS[1]);
+        assert_eq!(latched_frame(1, phase, interval, frames), Some(0));
+        assert_eq!(latched_frame(16, phase, interval, frames), Some(0)); // still holding frame 0
+        assert_eq!(latched_frame(17, phase, interval, frames), Some(1));
+        // One full 8-frame cycle later.
+        assert_eq!(latched_frame(1 + 16 * 8, phase, interval, frames), Some(0));
     }
 
     #[test]
     fn latched_frame_matches_building_tv_turned_ons_hand_traced_cadence() {
         // Phase 0, interval 8, 2 frames (`tileset_anims.c:424-428,1113-1117`):
         // fires at tick 8, 16, 24, ..., alternating.
-        assert_eq!(latched_frame(0, 0, 8, 2), None);
-        assert_eq!(latched_frame(7, 0, 8, 2), None);
-        assert_eq!(latched_frame(8, 0, 8, 2), Some(1));
-        assert_eq!(latched_frame(15, 0, 8, 2), Some(1));
-        assert_eq!(latched_frame(16, 0, 8, 2), Some(0));
-        assert_eq!(latched_frame(24, 0, 8, 2), Some(1));
+        let (phase, interval, frames) = cadence(&BUILDING_REGIONS[0]);
+        assert_eq!(latched_frame(0, phase, interval, frames), None);
+        assert_eq!(latched_frame(7, phase, interval, frames), None);
+        assert_eq!(latched_frame(8, phase, interval, frames), Some(1));
+        assert_eq!(latched_frame(15, phase, interval, frames), Some(1));
+        assert_eq!(latched_frame(16, phase, interval, frames), Some(0));
+        assert_eq!(latched_frame(24, phase, interval, frames), Some(1));
     }
 
     #[test]
@@ -345,11 +430,16 @@ mod tests {
         // (module docs), so a tick far past 256 still lands on exactly the
         // frame upstream's wrapped counter would show. General flower's
         // cycle is 64: tick 64 + 256 = 320 must match tick 64.
-        assert_eq!(latched_frame(320, 0, 16, 4), latched_frame(64, 0, 16, 4));
-        // Building TV's cycle is 16: tick 8 + 5*256 must match tick 8.
+        let (phase, interval, frames) = cadence(&GENERAL_REGIONS[0]);
         assert_eq!(
-            latched_frame(8 + 5 * 256, 0, 8, 2),
-            latched_frame(8, 0, 8, 2)
+            latched_frame(320, phase, interval, frames),
+            latched_frame(64, phase, interval, frames)
+        );
+        // Building TV's cycle is 16: tick 8 + 5*256 must match tick 8.
+        let (phase, interval, frames) = cadence(&BUILDING_REGIONS[0]);
+        assert_eq!(
+            latched_frame(8 + 5 * 256, phase, interval, frames),
+            latched_frame(8, phase, interval, frames)
         );
     }
 
