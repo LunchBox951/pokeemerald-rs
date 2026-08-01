@@ -102,7 +102,7 @@ pub enum SongEvent {
     /// CGB via `CgbSound` (`pokeemerald/src/m4a.c:925`). The channel carries
     /// the pair for either family: `pseudoEchoVolume`/`pseudoEchoLength` are
     /// `struct SoundChannel` fields
-    /// (`pokeemerald/include/gba/m4a_internal.h:101-102`), not CGB-only
+    /// (`pokeemerald/include/gba/m4a_internal.h:144-145`), not CGB-only
     /// state. That tail is audible musical content, not a compression
     /// artifact, which is why this pair is modelled while the rest of `XCMD`
     /// is not (see `super`'s "Deliberately deferred"). `tools/mid2agb` emits
