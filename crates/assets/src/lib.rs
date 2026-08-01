@@ -67,8 +67,8 @@ pub use abilities::{Abilities, AbilityData, ABILITIES_COUNT};
 pub use audio::{
     AudioError, DirectSoundMode, DirectSoundSample, DirectSoundVoice, Envelope, KeySplitVoice,
     NoiseVoice, ProgrammableWave, ProgrammableWaveVoice, RhythmVoice, Sample, SampleId, Song,
-    SongEvent, Square1Voice, Square2Voice, VoiceEntry, VoiceGroup, VoiceGroupId,
-    AUDIO_SCHEMA_VERSION, VOICE_SLOT_COUNT,
+    SongEvent, Square1Voice, Square2Voice, VoiceEntry, VoiceGroup, VoiceGroupId, MAX_TRACKS,
+    VOICE_SLOT_COUNT,
 };
 pub use battle_moves::{
     MoveData, MoveEffect, MoveFlags, MoveId, MoveTable, MoveTarget, MoveType, MOVES_COUNT,

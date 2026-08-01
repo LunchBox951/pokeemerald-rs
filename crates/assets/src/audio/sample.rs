@@ -19,7 +19,6 @@
 
 use super::cursor::{Reader, Writer};
 use super::error::AudioError;
-use super::AUDIO_SCHEMA_VERSION;
 
 /// A sample's stable pack id — the normalized asset id a
 /// [`super::voicegroup::VoiceGroup`] slot references (e.g.
@@ -48,8 +47,21 @@ pub enum Sample {
 /// A `DirectSound` instrument sample: signed 8-bit PCM, optionally looping.
 ///
 /// Mirrors upstream `struct WaveData`'s fields (`freq`, `loopStart`,
-/// `size`/`data`) minus its `type`/`status` bookkeeping fields, which are
-/// GBA BIOS/engine runtime state rather than sample content.
+/// `size`/`data`) minus `status` — engine runtime state, not sample content
+/// — and minus `type`.
+///
+/// `type` is not runtime state, and dropping it is a deliberate content
+/// decision rather than a bookkeeping one: a non-zero `WaveData::type` means
+/// the payload is DPCM-compressed (`tools/wav2agb -c`; every Pokémon cry is
+/// stored this way), and `SoundMainRAM_Unk1` branches on it
+/// (`pokeemerald/src/m4a_1.s`) to expand the nibble-delta stream while
+/// mixing. Samples in this schema are always stored *decompressed*: a
+/// backend reading DPCM-compressed `WaveData` (`type == 1`, e.g. all cries)
+/// must expand it during extraction, and [`data`](Self::data) is the
+/// expanded signed 8-bit PCM. There is deliberately no way to represent a
+/// still-compressed payload — the pack is a local build artifact, so a
+/// smaller on-disk form is worth less than a mixer that never has to
+/// decompress.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DirectSoundSample {
     /// The wave's pre-scaled base pitch constant (upstream `WaveData::freq`)
@@ -76,8 +88,9 @@ pub struct ProgrammableWave {
 }
 
 impl Sample {
-    /// Encode to this schema's versioned binary form (see `super`'s module
-    /// docs, "Versioning").
+    /// Encode to this schema's binary form. Staleness is gated by
+    /// [`crate::pack::FORMAT_VERSION`] — see `super`'s module docs,
+    /// "Versioning".
     ///
     /// # Panics
     ///
@@ -87,7 +100,6 @@ impl Sample {
     #[must_use]
     pub fn encode(&self) -> Vec<u8> {
         let mut w = Writer::new();
-        w.u32(AUDIO_SCHEMA_VERSION);
         match self {
             Self::DirectSound(sample) => {
                 w.u8(KIND_DIRECT_SOUND);
@@ -111,21 +123,21 @@ impl Sample {
 
     /// Decode from [`encode`](Self::encode)'s binary form.
     ///
+    /// Structural decode only: a decoded [`DirectSoundSample::loop_start`]
+    /// is *not* validated against [`DirectSoundSample::data`]'s length, so a
+    /// loop point past the end of the wave decodes cleanly. Validating that
+    /// (and the [`SampleId`]/[`super::voicegroup::VoiceGroupId`] cross
+    /// references, which this module equally does not resolve) belongs to
+    /// the later `#115` child that loads a whole pack's audio entries
+    /// together and can see all of them at once.
+    ///
     /// # Errors
     ///
     /// [`AudioError::Truncated`] if `bytes` is shorter than the format
-    /// requires; [`AudioError::UnsupportedVersion`] if the leading version
-    /// field doesn't match [`AUDIO_SCHEMA_VERSION`]; [`AudioError::UnknownSampleKind`]
-    /// for an unrecognized kind tag.
+    /// requires; [`AudioError::UnknownSampleKind`] for an unrecognized kind
+    /// tag.
     pub fn decode(bytes: &[u8]) -> Result<Self, AudioError> {
         let mut r = Reader::new(bytes);
-        let version = r.u32()?;
-        if version != AUDIO_SCHEMA_VERSION {
-            return Err(AudioError::UnsupportedVersion {
-                schema: "sample",
-                found: version,
-            });
-        }
         match r.u8()? {
             KIND_DIRECT_SOUND => {
                 let base_frequency = r.u32()?;
@@ -207,26 +219,26 @@ mod tests {
     }
 
     #[test]
-    fn unsupported_version_is_rejected() {
-        let mut bytes = Sample::ProgrammableWave(ProgrammableWave { table: [0; 16] }).encode();
-        bytes[0] = 0xFF; // corrupt the low byte of the version field
-        assert_eq!(
-            Sample::decode(&bytes),
-            Err(AudioError::UnsupportedVersion {
-                schema: "sample",
-                found: u32::from_le_bytes([0xFF, 0, 0, 0]),
-            })
-        );
-    }
-
-    #[test]
     fn unknown_kind_byte_is_rejected() {
         let mut bytes = Sample::ProgrammableWave(ProgrammableWave { table: [0; 16] }).encode();
-        bytes[4] = 0xFF; // the kind tag, right after the 4-byte version
+        bytes[0] = 0xFF; // the leading kind tag
         assert_eq!(
             Sample::decode(&bytes),
             Err(AudioError::UnknownSampleKind(0xFF))
         );
+    }
+
+    #[test]
+    fn a_loop_start_past_the_end_of_the_data_still_decodes() {
+        // Documented non-validation: `decode` is structural, and cross-field
+        // validation is a later `#115` child's job. Pin the current
+        // behaviour so a future change to it is a deliberate one.
+        let sample = Sample::DirectSound(DirectSoundSample {
+            base_frequency: 1,
+            loop_start: Some(9_999),
+            data: vec![0, 1, 2],
+        });
+        assert_eq!(Sample::decode(&sample.encode()).unwrap(), sample);
     }
 
     #[test]

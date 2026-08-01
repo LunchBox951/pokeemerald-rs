@@ -14,6 +14,24 @@
 
 use super::error::AudioError;
 
+/// The longest pack id [`Writer::string`] can length-prefix — the `u16`
+/// length field's ceiling.
+pub(super) const MAX_ID_LEN: usize = u16::MAX as usize;
+
+/// Reject a pack id too long for [`Writer::string`]'s `u16` length prefix.
+///
+/// Called by the schemas' checked constructors
+/// ([`super::voicegroup::VoiceGroup::new`], [`super::song::Song::new`]) so
+/// that an over-long id surfaces as [`AudioError::IdTooLong`] at
+/// construction instead of as a panic inside `encode`. Every id that
+/// reaches [`Writer::string`] has passed through one of those.
+pub(super) fn check_id_len(id: &str) -> Result<(), AudioError> {
+    if id.len() > MAX_ID_LEN {
+        return Err(AudioError::IdTooLong(id.len()));
+    }
+    Ok(())
+}
+
 /// A minimal cursor over `&[u8]`, erroring (never panicking) on truncation
 /// or malformed content.
 pub(super) struct Reader<'a> {
@@ -119,10 +137,17 @@ impl Writer {
     ///
     /// # Panics
     ///
-    /// Never for any id this crate itself produces (normalized pack ids are
-    /// short ASCII strings); would panic only on a caller-supplied string
-    /// longer than 65535 bytes, which no real asset id is.
+    /// Unreachable from this crate's public API: the only way to reach an
+    /// `encode` is through a checked constructor
+    /// ([`super::voicegroup::VoiceGroup::new`], [`super::song::Song::new`]),
+    /// and each one runs [`check_id_len`] over every id it will later write,
+    /// returning [`AudioError::IdTooLong`] rather than deferring the failure
+    /// to here.
     pub(super) fn string(&mut self, value: &str) {
+        debug_assert!(
+            value.len() <= MAX_ID_LEN,
+            "id length checked at construction"
+        );
         let len = u16::try_from(value.len()).expect("audio-pack string id fits in a u16 length");
         self.u16(len);
         self.bytes.extend_from_slice(value.as_bytes());

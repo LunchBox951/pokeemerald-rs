@@ -41,9 +41,21 @@
 //! - [`song::Song`]: one or more normalized, MIDI-semantic event streams —
 //!   note/wait/controller commands, not raw standard-MIDI bytes and not
 //!   upstream's own compiled MP2K byte-code — plus the song-level metadata
-//!   (which [`voicegroup::VoiceGroup`] it plays through, priority, reverb,
-//!   initial tempo) upstream's `struct SongHeader` carries alongside the
-//!   per-track data.
+//!   (which [`voicegroup::VoiceGroup`] it plays through, priority, reverb)
+//!   upstream's `struct SongHeader` carries alongside the per-track data.
+//!   Tempo is *not* header metadata upstream and is not modelled as such
+//!   here — it is a [`song::SongEvent::Tempo`] inside a track's own stream.
+//!
+//! # Cries are out of scope
+//!
+//! Pokémon cries are deliberately not modelled by these three schemas.
+//! Upstream plays them from `gCryTable`/`gCryTable_Reverse`
+//! (`pokeemerald/sound/cry_tables.inc`) — flat arrays of bare `ToneData`
+//! entries indexed by species, driven by `PlayCry`'s own
+//! `struct PokemonCrySong` synthetic song rather than by a `SongHeader` and
+//! a voicegroup. Modelling that path is its own concern (species-indexed
+//! table + a synthesized playback song), not a shape any of the three types
+//! here should be stretched to cover; it belongs to a later `#115` child.
 //!
 //! # All 128 voice slots
 //!
@@ -57,33 +69,60 @@
 //! and [`voicegroup::VoiceGroup`] both round-trip it (see each module's
 //! tests).
 //!
-//! # Versioning
+//! # Versioning: [`crate::pack::FORMAT_VERSION`], and nothing else
 //!
-//! Every encoded payload — [`song::Song::encode`],
-//! [`voicegroup::VoiceGroup::encode`], [`sample::Sample::encode`] — begins
-//! with a 4-byte little-endian [`AUDIO_SCHEMA_VERSION`] field, decoded and
-//! checked first by the matching `decode`. This is a second, independent
-//! version from [`crate::pack::FORMAT_VERSION`] (which only versions the
-//! *outer* pack directory's shape): these three payload shapes are new and
-//! still settling, so they get their own version to bump without forcing an
-//! unrelated outer-format bump, the same layering
-//! [`crate::pack::EntryKind::Raw`] already gives every other typed decode
-//! layer in this crate (`map_layouts`, `metatile_attributes`, `fonts`) —
-//! those simply haven't needed a self-describing version yet because their
-//! shapes have been stable since introduction.
+//! These payloads carry no version field of their own.
+//! [`crate::pack::FORMAT_VERSION`] is this project's single staleness gate,
+//! and it already versions entry *content*, not just the outer directory's
+//! shape: it went to `2` when NPC sprite-sheet and palette entries were
+//! added (issue #161), precisely so a pack missing new entry content is
+//! rejected at load rather than failing later with a confusing per-asset
+//! error. Audio entries do not exist in the pack yet; the `#115` child that
+//! first writes them bumps `FORMAT_VERSION` to `3`, and any later change to
+//! the shapes here bumps it again.
+//!
+//! A second, per-payload version would be a redundant axis: two gates to
+//! keep in sync, and a failure mode (outer version accepted, inner version
+//! rejected) that reports staleness at asset-load time instead of at pack
+//! load, which is the opposite of what the `FORMAT_VERSION` gate exists to
+//! do. It would also make these three the only typed decode layers in the
+//! crate that are self-describing — `map_layouts`, `metatile_attributes`,
+//! and `fonts` all read [`crate::pack::EntryKind::Raw`] payloads with no
+//! embedded version. The pack is a local build artifact, never shipped and
+//! always regenerable with `cargo xtask extract`, so "regenerate the pack"
+//! is the only remedy any version mismatch has ever had.
 //!
 //! # Deliberately deferred
 //!
-//! [`song::SongEvent`] covers the note/timing/controller commands every
-//! song audibly needs (`(behavioral-fidelity)`), but not upstream's
-//! loop-compression forms (`PATT`/`PEND`/`REPT`), the `MEMACC`
-//! conditional-jump mini-language, `XCMD`, or `PORT` — all rare, and none
-//! needed to represent a song's *musical* content, only its on-disk
-//! compression. A later slice can extend the enum under a new
-//! [`AUDIO_SCHEMA_VERSION`] if a concrete song turns out to need one
-//! `(test-ratchet` note: that would be an additive change, not a breaking
-//! one, since decoders already reject an unknown version rather than
-//! silently misreading newer data`)`.
+//! [`song::SongEvent`] covers the note/timing/controller commands songs
+//! actually carry (`(behavioral-fidelity)`), including the pseudo-echo
+//! pair — see [`song::SongEvent::PseudoEchoVolume`]. What it does not cover,
+//! and why:
+//!
+//! - `PATT`/`PEND`: `tools/mid2agb`'s loop compression — a repeated block
+//!   emitted once and "called" from each occurrence. Expanding the pattern
+//!   inline into the event stream reproduces every audible note, so this is
+//!   an on-disk size representation, not musical content.
+//! - `REPT` and `PORT`: defined by the sound engine (`sound/MPlayDef.s`,
+//!   `PORT` = portamento) but never emitted by `tools/mid2agb` — no
+//!   `.mid`-sourced song can contain one. A ROM backend decompiling
+//!   hand-written sequence data is the only way either could appear.
+//! - `MEMACC`: the engine's conditional-jump mini-language (`mem_set`,
+//!   `mem_bne`, …, `tools/mid2agb/agb.cpp`). Exactly one song uses it
+//!   (`mus_vs_trainer`), for a jump this schema's [`song::SongEvent::Goto`]
+//!   cannot express unconditionally; representing it needs the whole
+//!   memory-cell model, which one song does not justify in a schema slice.
+//! - `XCMD` sub-commands other than `xIECV`/`xIECL` (ext cmds `8`/`9`):
+//!   `mid2agb`'s `PrintExtendedOp` handles only those two and drops the
+//!   rest (`// TODO: support for other extended commands`), so no other
+//!   `XCMD` reaches a compiled song.
+//!
+//! A later slice can add variants for any of these; that is an additive
+//! change to [`song::SongEvent`]'s tag space (the tag byte is the
+//! discriminator, and unknown tags are already rejected with
+//! [`AudioError::UnknownSongEvent`] rather than silently misread), gated
+//! like every other content change by a [`crate::pack::FORMAT_VERSION`]
+//! bump.
 
 mod cursor;
 mod error;
@@ -93,14 +132,9 @@ mod voicegroup;
 
 pub use error::AudioError;
 pub use sample::{DirectSoundSample, ProgrammableWave, Sample, SampleId};
-pub use song::{Song, SongEvent};
+pub use song::{Song, SongEvent, MAX_TRACKS};
 pub use voicegroup::{
     DirectSoundMode, DirectSoundVoice, Envelope, KeySplitVoice, NoiseVoice, ProgrammableWaveVoice,
     RhythmVoice, Square1Voice, Square2Voice, VoiceEntry, VoiceGroup, VoiceGroupId,
     VOICE_SLOT_COUNT,
 };
-
-/// The shared payload-format version every [`song::Song`], [`voicegroup::VoiceGroup`],
-/// and [`sample::Sample`] encoding is prefixed with. See the module docs'
-/// "Versioning" section.
-pub const AUDIO_SCHEMA_VERSION: u32 = 1;

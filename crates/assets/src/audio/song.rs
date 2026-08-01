@@ -25,16 +25,29 @@
 //! matching how a compiled form must ultimately resolve loop targets
 //! anyway.
 //!
+//! # Tempo is a track event, not header metadata
+//!
+//! [`Song`] carries no starting-tempo field, because upstream's
+//! `struct SongHeader` has none: its fields are `trackCount`, `blockCount`,
+//! `priority`, `reverb`, `tone`, and the per-track pointers. Tempo reaches
+//! the engine as a `TEMPO` command inside a track's own event stream
+//! (`ply_tempo`, `pokeemerald/src/m4a.c`), conventionally as one of track
+//! 0's first events, and is modelled here as exactly that:
+//! [`SongEvent::Tempo`]. A song with no `Tempo` event simply never sets one,
+//! same as upstream — there is no separate default for this schema to
+//! record.
+//!
 //! # Deliberately out of scope
 //!
-//! See `super`'s module docs, "Deliberately deferred": upstream's
-//! loop-compression commands (`PATT`/`PEND`/`REPT`), `MEMACC`, `XCMD`, and
-//! `PORT` have no [`SongEvent`] variant in this slice.
+//! See `super`'s module docs, "Deliberately deferred", for the full list
+//! with per-command rationale: `PATT`/`PEND` (on-disk loop compression),
+//! `REPT` and `PORT` (never emitted by `tools/mid2agb`), `MEMACC` (one
+//! song), and the `XCMD` sub-commands other than `xIECV`/`xIECL` (never
+//! emitted either) have no [`SongEvent`] variant in this slice.
 
-use super::cursor::{Reader, Writer};
+use super::cursor::{check_id_len, Reader, Writer};
 use super::error::AudioError;
 use super::voicegroup::VoiceGroupId;
-use super::AUDIO_SCHEMA_VERSION;
 
 /// One normalized track command. See the module docs.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -75,6 +88,25 @@ pub enum SongEvent {
     Modulation(u8),
     /// Modulation type.
     ModType(u8),
+    /// Pseudo-echo volume, as a percentage of the note's own volume
+    /// (upstream `XCMD xIECV` — extended command `8`, `sound/MPlayDef.s`).
+    ///
+    /// `ply_xiecv` (`pokeemerald/src/m4a.c`) stores it in
+    /// `MusicPlayerTrack::pseudoEchoVolume`, which `ply_note` copies onto
+    /// each note's channel; the CGB channels then use it to sound the note's
+    /// decay tail after the envelope's release completes. That tail is
+    /// audible musical content, not a compression artifact, which is why
+    /// this pair is modelled while the rest of `XCMD` is not (see `super`'s
+    /// "Deliberately deferred"). `tools/mid2agb` emits it — and it is one of
+    /// only two extended commands it emits at all — for a large minority of
+    /// upstream's MIDIs, so a song stream that dropped it would play a
+    /// noticeably drier version of those tracks.
+    PseudoEchoVolume(u8),
+    /// Pseudo-echo length in ticks — how long the
+    /// [`PseudoEchoVolume`](Self::PseudoEchoVolume) tail sounds for
+    /// (upstream `XCMD xIECL`, extended command `9`; `ply_xiecl` →
+    /// `MusicPlayerTrack::pseudoEchoLength`).
+    PseudoEchoLength(u8),
     /// Jump to another event index in this same track's event list — the
     /// loop primitive (see the module docs).
     Goto(u32),
@@ -100,6 +132,10 @@ const TAG_MODULATION: u8 = 14;
 const TAG_MOD_TYPE: u8 = 15;
 const TAG_GOTO: u8 = 16;
 const TAG_FINE: u8 = 17;
+// Appended, not renumbered: tag bytes are the wire discriminator, so new
+// variants take the next free values rather than disturbing existing ones.
+const TAG_PSEUDO_ECHO_VOLUME: u8 = 18;
+const TAG_PSEUDO_ECHO_LENGTH: u8 = 19;
 
 impl SongEvent {
     fn write(&self, w: &mut Writer) {
@@ -175,6 +211,14 @@ impl SongEvent {
                 w.u8(TAG_MOD_TYPE);
                 w.u8(v);
             }
+            Self::PseudoEchoVolume(v) => {
+                w.u8(TAG_PSEUDO_ECHO_VOLUME);
+                w.u8(v);
+            }
+            Self::PseudoEchoLength(v) => {
+                w.u8(TAG_PSEUDO_ECHO_LENGTH);
+                w.u8(v);
+            }
             Self::Goto(target) => {
                 w.u8(TAG_GOTO);
                 w.u32(target);
@@ -216,6 +260,8 @@ impl SongEvent {
             TAG_LFO_DELAY => Ok(Self::LfoDelay(r.u8()?)),
             TAG_MODULATION => Ok(Self::Modulation(r.u8()?)),
             TAG_MOD_TYPE => Ok(Self::ModType(r.u8()?)),
+            TAG_PSEUDO_ECHO_VOLUME => Ok(Self::PseudoEchoVolume(r.u8()?)),
+            TAG_PSEUDO_ECHO_LENGTH => Ok(Self::PseudoEchoLength(r.u8()?)),
             TAG_GOTO => Ok(Self::Goto(r.u32()?)),
             TAG_FINE => Ok(Self::Fine),
             other => Err(AudioError::UnknownSongEvent(other)),
@@ -223,52 +269,129 @@ impl SongEvent {
     }
 }
 
+/// The most tracks a [`Song`] may hold: the encoding's `u8` track-count
+/// field's ceiling. Upstream's own engine caps a playing song at
+/// `MAX_MUSICPLAYER_TRACKS` (16, `pokeemerald/include/gba/m4a_internal.h`),
+/// so this is a wire-format bound with a wide margin over anything a real
+/// song uses, not a limit the schema imposes on musical content.
+pub const MAX_TRACKS: usize = u8::MAX as usize;
+
+/// Cap on how many events [`Song::decode`] pre-reserves per track from the
+/// untrusted per-track event count, mirroring
+/// [`super::sample`]'s `MAX_PREALLOC_SAMPLES` and `crate::pack::format`'s
+/// `MAX_PREALLOC_ENTRIES` (same rationale: a corrupt count near `u32::MAX`
+/// must not speculatively allocate gigabytes before the first short read
+/// fails the decode). The `Vec` still grows to whatever the input holds.
+const MAX_PREALLOC_EVENTS: usize = 1 << 16;
+
 /// A song: which [`super::VoiceGroup`] it plays through, its
-/// priority/reverb/initial tempo (upstream `struct SongHeader`'s
-/// non-track-pointer fields), and one normalized event stream per track.
+/// priority/reverb (upstream `struct SongHeader`'s non-track-pointer
+/// fields), and one normalized event stream per track. Build one with
+/// [`Song::new`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Song {
-    /// The [`super::VoiceGroup`] pack entry this song's `VOICE` commands
-    /// select instruments from (upstream `SongHeader::tone`).
-    pub voicegroup: VoiceGroupId,
-    /// Upstream `SongHeader::priority`.
-    pub priority: u8,
-    /// Upstream `SongHeader::reverb`: `None` when the song does not
-    /// override the master reverb setting, `Some(value)` otherwise
-    /// (mirrors `mid2agb`'s own `g_reverb >= 0` sentinel check,
-    /// `tools/mid2agb/agb.cpp`).
-    pub reverb: Option<u8>,
-    /// The song's starting tempo in BPM.
-    pub initial_tempo: u16,
-    /// One normalized event stream per track, `MusicPlayerTrack`-order.
-    pub tracks: Vec<Vec<SongEvent>>,
+    voicegroup: VoiceGroupId,
+    priority: u8,
+    reverb: Option<u8>,
+    tracks: Vec<Vec<SongEvent>>,
 }
 
 impl Song {
-    /// Encode to this schema's versioned binary form (see `super`'s module
-    /// docs, "Versioning").
+    /// Build a song from its header metadata and per-track event streams.
+    ///
+    /// Checked rather than a plain struct literal, for the same reason
+    /// [`super::VoiceGroup::new`] is: the bounds below are what make
+    /// [`Self::encode`] total, so they are enforced where they can still be
+    /// reported as an error instead of at encode time as a panic.
+    ///
+    /// * `voicegroup` — the [`super::VoiceGroup`] pack entry this song's
+    ///   `VOICE` commands select instruments from (upstream
+    ///   `SongHeader::tone`).
+    /// * `priority` — upstream `SongHeader::priority`.
+    /// * `reverb` — upstream `SongHeader::reverb`: `None` when the song does
+    ///   not override the master reverb setting, `Some(value)` otherwise
+    ///   (mirrors `mid2agb`'s own `g_reverb >= 0` sentinel check,
+    ///   `tools/mid2agb/agb.cpp`).
+    /// * `tracks` — one normalized event stream per track,
+    ///   `MusicPlayerTrack`-order.
+    ///
+    /// # Errors
+    ///
+    /// [`AudioError::TooManyTracks`] if `tracks.len() > `[`MAX_TRACKS`];
+    /// [`AudioError::TooManyEvents`] if any one track holds more than
+    /// `u32::MAX` events; [`AudioError::IdTooLong`] if `voicegroup`'s id
+    /// does not fit the `u16` length prefix the encoding writes for it.
+    pub fn new(
+        voicegroup: VoiceGroupId,
+        priority: u8,
+        reverb: Option<u8>,
+        tracks: Vec<Vec<SongEvent>>,
+    ) -> Result<Self, AudioError> {
+        check_id_len(&voicegroup.0)?;
+        if tracks.len() > MAX_TRACKS {
+            return Err(AudioError::TooManyTracks(tracks.len()));
+        }
+        for track in &tracks {
+            if u32::try_from(track.len()).is_err() {
+                return Err(AudioError::TooManyEvents(track.len()));
+            }
+        }
+        Ok(Self {
+            voicegroup,
+            priority,
+            reverb,
+            tracks,
+        })
+    }
+
+    /// The [`super::VoiceGroup`] pack entry this song plays through.
+    #[must_use]
+    pub fn voicegroup(&self) -> &VoiceGroupId {
+        &self.voicegroup
+    }
+
+    /// Upstream `SongHeader::priority`.
+    #[must_use]
+    pub fn priority(&self) -> u8 {
+        self.priority
+    }
+
+    /// Upstream `SongHeader::reverb`, or `None` for no override.
+    #[must_use]
+    pub fn reverb(&self) -> Option<u8> {
+        self.reverb
+    }
+
+    /// Every track's event stream, `MusicPlayerTrack`-order.
+    #[must_use]
+    pub fn tracks(&self) -> &[Vec<SongEvent>] {
+        &self.tracks
+    }
+
+    /// Encode to this schema's binary form. Staleness is gated by
+    /// [`crate::pack::FORMAT_VERSION`] — see `super`'s module docs,
+    /// "Versioning".
     ///
     /// # Panics
     ///
-    /// Never in practice: only if `tracks` holds 256 or more tracks
-    /// (upstream caps `MAX_MUSICPLAYER_TRACKS` at 16) or a single track
-    /// holds `u32::MAX` or more events, neither of which any real song
-    /// approaches.
+    /// Unreachable: [`Self::new`] is the only way to build a `Song`, and it
+    /// rejects a track list longer than [`MAX_TRACKS`] and any track whose
+    /// event count overflows a `u32` — returning [`AudioError`] where a
+    /// caller can see it. Every field here is private, so neither count can
+    /// grow after construction.
     #[must_use]
     pub fn encode(&self) -> Vec<u8> {
         let mut w = Writer::new();
-        w.u32(AUDIO_SCHEMA_VERSION);
         w.string(&self.voicegroup.0);
         w.u8(self.priority);
         w.bool(self.reverb.is_some());
         w.u8(self.reverb.unwrap_or(0));
-        w.u16(self.initial_tempo);
         let track_count =
-            u8::try_from(self.tracks.len()).expect("a song has well under 256 tracks");
+            u8::try_from(self.tracks.len()).expect("Song::new enforces tracks.len() <= MAX_TRACKS");
         w.u8(track_count);
         for track in &self.tracks {
-            let event_count =
-                u32::try_from(track.len()).expect("a track has well under 2^32 events");
+            let event_count = u32::try_from(track.len())
+                .expect("Song::new enforces every track's event count fits a u32");
             w.u32(event_count);
             for event in track {
                 event.write(&mut w);
@@ -279,33 +402,33 @@ impl Song {
 
     /// Decode from [`encode`](Self::encode)'s binary form.
     ///
+    /// Structural decode only: a [`SongEvent::Goto`] target is not validated
+    /// against the length of the track it appears in, the same way
+    /// [`super::Sample::decode`] does not validate a loop point against its
+    /// sample data. Cross-field and cross-entry validation belongs to the
+    /// later `#115` child that loads a pack's audio entries together.
+    ///
     /// # Errors
     ///
     /// [`AudioError::Truncated`] if `bytes` is shorter than the format
-    /// requires; [`AudioError::UnsupportedVersion`] if the leading version
-    /// field doesn't match [`AUDIO_SCHEMA_VERSION`]; [`AudioError::InvalidString`]
-    /// if the voicegroup id is not valid UTF-8; [`AudioError::UnknownSongEvent`]
-    /// for an unrecognized event tag byte.
+    /// requires; [`AudioError::InvalidString`] if the voicegroup id is not
+    /// valid UTF-8; [`AudioError::UnknownSongEvent`] for an unrecognized
+    /// event tag byte.
     pub fn decode(bytes: &[u8]) -> Result<Self, AudioError> {
         let mut r = Reader::new(bytes);
-        let version = r.u32()?;
-        if version != AUDIO_SCHEMA_VERSION {
-            return Err(AudioError::UnsupportedVersion {
-                schema: "song",
-                found: version,
-            });
-        }
         let voicegroup = VoiceGroupId(r.string()?);
         let priority = r.u8()?;
         let has_reverb = r.bool()?;
         let reverb_value = r.u8()?;
         let reverb = has_reverb.then_some(reverb_value);
-        let initial_tempo = r.u16()?;
+        // The encoded count is a `u8`, so it cannot exceed `MAX_TRACKS` --
+        // no decode-side bound check is reachable here, unlike
+        // `VoiceGroup::decode`, whose `u8` count can overrun its 128 slots.
         let track_count = usize::from(r.u8()?);
         let mut tracks = Vec::with_capacity(track_count);
         for _ in 0..track_count {
             let event_count = usize::try_from(r.u32()?).map_err(|_| AudioError::Truncated)?;
-            let mut events = Vec::with_capacity(event_count.min(1 << 16));
+            let mut events = Vec::with_capacity(event_count.min(MAX_PREALLOC_EVENTS));
             for _ in 0..event_count {
                 events.push(SongEvent::read(&mut r)?);
             }
@@ -315,179 +438,10 @@ impl Song {
             voicegroup,
             priority,
             reverb,
-            initial_tempo,
             tracks,
         })
     }
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn sample_track() -> Vec<SongEvent> {
-        vec![
-            SongEvent::Voice(0),
-            SongEvent::Volume(127),
-            SongEvent::Note {
-                key: 60,
-                velocity: 127,
-                gate: 24,
-            },
-            SongEvent::Wait(24),
-            SongEvent::Note {
-                key: 62,
-                velocity: 100,
-                gate: 0,
-            },
-            SongEvent::EndOfTie { key: None },
-            SongEvent::Fine,
-        ]
-    }
-
-    #[test]
-    fn a_typical_song_round_trips() {
-        let song = Song {
-            voicegroup: VoiceGroupId("audio/voicegroup/title".to_owned()),
-            priority: 0,
-            reverb: Some(80),
-            initial_tempo: 144,
-            tracks: vec![sample_track(), sample_track()],
-        };
-        let bytes = song.encode();
-        assert_eq!(Song::decode(&bytes).unwrap(), song);
-    }
-
-    #[test]
-    fn no_reverb_override_round_trips() {
-        let song = Song {
-            voicegroup: VoiceGroupId("audio/voicegroup/dummy".to_owned()),
-            priority: 5,
-            reverb: None,
-            initial_tempo: 120,
-            tracks: vec![vec![SongEvent::Fine]],
-        };
-        let bytes = song.encode();
-        assert_eq!(Song::decode(&bytes).unwrap(), song);
-    }
-
-    #[test]
-    fn every_controller_and_note_event_kind_round_trips() {
-        let track = vec![
-            SongEvent::Wait(96),
-            SongEvent::Note {
-                key: 0,
-                velocity: 0,
-                gate: 0,
-            },
-            SongEvent::EndOfTie { key: Some(72) },
-            SongEvent::Voice(127),
-            SongEvent::Volume(0),
-            SongEvent::Pan(-64),
-            SongEvent::Pan(63),
-            SongEvent::Bend(0),
-            SongEvent::BendRange(2),
-            SongEvent::Tune(-64),
-            SongEvent::KeyShift(12),
-            SongEvent::Tempo(300),
-            SongEvent::Priority(255),
-            SongEvent::LfoSpeed(16),
-            SongEvent::LfoDelay(0),
-            SongEvent::Modulation(127),
-            SongEvent::ModType(1),
-            SongEvent::Goto(0),
-            SongEvent::Fine,
-        ];
-        let song = Song {
-            voicegroup: VoiceGroupId("audio/voicegroup/vs_rayquaza".to_owned()),
-            priority: 1,
-            reverb: Some(0),
-            initial_tempo: 1,
-            tracks: vec![track],
-        };
-        let bytes = song.encode();
-        assert_eq!(Song::decode(&bytes).unwrap(), song);
-    }
-
-    #[test]
-    fn voice_command_selects_the_highest_slot_127() {
-        // MUS_TITLE's own MIDI source selects instrument 127 on one channel
-        // -- pin that a `Voice` event carrying that value round-trips.
-        let song = Song {
-            voicegroup: VoiceGroupId("audio/voicegroup/title".to_owned()),
-            priority: 0,
-            reverb: None,
-            initial_tempo: 144,
-            tracks: vec![vec![SongEvent::Voice(127), SongEvent::Fine]],
-        };
-        let bytes = song.encode();
-        let decoded = Song::decode(&bytes).unwrap();
-        assert_eq!(decoded.tracks[0][0], SongEvent::Voice(127));
-    }
-
-    #[test]
-    fn empty_track_list_round_trips() {
-        let song = Song {
-            voicegroup: VoiceGroupId("audio/voicegroup/dummy".to_owned()),
-            priority: 0,
-            reverb: None,
-            initial_tempo: 120,
-            tracks: vec![],
-        };
-        let bytes = song.encode();
-        assert_eq!(Song::decode(&bytes).unwrap(), song);
-    }
-
-    #[test]
-    fn unsupported_version_is_rejected() {
-        let mut bytes = Song {
-            voicegroup: VoiceGroupId("x".to_owned()),
-            priority: 0,
-            reverb: None,
-            initial_tempo: 1,
-            tracks: vec![],
-        }
-        .encode();
-        bytes[0] = 0xFF;
-        assert_eq!(
-            Song::decode(&bytes),
-            Err(AudioError::UnsupportedVersion {
-                schema: "song",
-                found: u32::from_le_bytes([0xFF, 0, 0, 0]),
-            })
-        );
-    }
-
-    #[test]
-    fn unknown_event_tag_is_rejected() {
-        let mut bytes = Song {
-            voicegroup: VoiceGroupId("x".to_owned()),
-            priority: 0,
-            reverb: None,
-            initial_tempo: 1,
-            tracks: vec![vec![SongEvent::Fine]],
-        }
-        .encode();
-        let last = bytes.len() - 1;
-        bytes[last] = 0xFF; // the lone event's tag byte
-        assert_eq!(
-            Song::decode(&bytes),
-            Err(AudioError::UnknownSongEvent(0xFF))
-        );
-    }
-
-    #[test]
-    fn truncated_input_is_rejected() {
-        let bytes = Song {
-            voicegroup: VoiceGroupId("audio/voicegroup/title".to_owned()),
-            priority: 3,
-            reverb: Some(10),
-            initial_tempo: 120,
-            tracks: vec![sample_track()],
-        }
-        .encode();
-        for cut in 0..bytes.len() {
-            assert!(Song::decode(&bytes[..cut]).is_err());
-        }
-    }
-}
+mod tests;
