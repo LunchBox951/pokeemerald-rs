@@ -5241,6 +5241,12 @@
     },
     "data/maps/InsideOfTruck": {
       "artifacts": {
+        "InsideOfTruck_EventScript_SetIntroFlags": {
+          "reason": "The gender branch of the truck's exit-tile trigger, ported as its flag/var effect: assets::new_game_flags::TRUCK_INTRO_FLAGS_MALE/_FEMALE (5 setflags each) and TRUCK_INTRO_VARS_MALE/_FEMALE (VAR_LITTLEROOT_INTRO_STATE, VAR_LITTLEROOT_HOUSES_STATE_BRENDAN/_MAY), applied by crate::new_game::apply_truck_intro_flags at new-game init. Upstream this is a coord (trigger) event on all three truck exit tiles gated on VAR_LITTLEROOT_INTRO_STATE == 0 (data/maps/InsideOfTruck/map.json:85-112), so it fires exactly once on the way out of the truck and every real playthrough passes through it before reaching a house; this port skips the truck sequence entirely, so new-game init is the point the skipped flow would have produced the effect -- same 'the effect, without an interpreter' shape as the EventScript_ResetAllMapFlags application beside it. Load-bearing rather than cosmetic now that object-event visibility gates collision and rendering (issue #161): without it a fresh save reaches the player's house with the rival's Poke Ball spawned in the bedroom as an invisible collider and the rival's mother and sibling spawned in the player's own 1F (a duplicated mother plus another undrawn blocker). The two branches are exact Brendan/May mirrors, and a playerGender byte outside MALE/FEMALE applies neither, matching the script's own missing else. Not modelled: setrespawn HEAL_LOCATION_LITTLEROOT_TOWN_{BRENDANS,MAYS}_HOUSE_2F (no heal-location save state), setdynamicwarp MAP_LITTLEROOT_TOWN (no dynamic-warp destination state), the lockall/releaseall pair, and setflag FLAG_HIDE_MAP_NAME_POPUP (outside both gender branches; no map-name popup is rendered). The rest of this file -- InsideOfTruck_OnLoad's setmetatile calls, InsideOfTruck_OnResume's STEP_CB_TRUCK step callback, and the moving-box sign -- is untouched: the truck map itself is not bundled.",
+          "rust_target": "crates/assets/src/new_game_flags.rs",
+          "spec": "I-3",
+          "status": "stubbed"
+        },
         "header": {
           "reason": "map.json header fields (id, layout, music id, region_map_section, requires_flash, weather, map_type, allow_cycling/escaping/running, show_map_name, battle_scene) and connections transcribed to a typed MapHeader in crates/assets/src/map_headers.rs. object_events/warp_events/coord_events/bg_events (and shared_events_map/shared_scripts_map) are NOT covered here — issue #77 — so the file's own status stays pending and only this 'header' artifact is terminal.",
           "rust_target": "crates/assets/src/map_headers.rs",
@@ -11351,6 +11357,14 @@
       "status": "pending"
     },
     "data/scripts/players_house.inc": {
+      "artifacts": {
+        "PlayersHouse_1F_EventScript_Mom": {
+          "reason": "Only the fresh-save default branch is transcribed (npc_scripts::script_text's mom_text, the real PlayersHouse_1F_Text_IsntItNiceInHere line reached when every earlier goto_if_set/goto_if_eq guard -- FLAG_HAS_MATCH_CALL, FLAG_RESCUED_BIRCH, VAR_TEMP_1, VAR_LITTLEROOT_INTRO_STATE, VAR_LITTLEROOT_HOUSES_STATE_MAY/_BRENDAN -- reads false/0, which is exactly a brand-new save's state). Not modelled: PlayersHouse_1F_EventScript_DontPushYourselfTooHard, _TryRegisterMom/_CheckGiveAmuletCoin/_TryGiveAmuletCoin (the match-call registration and Amulet Coin gift), _MomHealsParty, _SeeYouHoney, and _DidYouMeetProfBirch -- every branch reachable only after story-progression flags/vars this port doesn't yet set change from their fresh-save defaults.",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/npc_scripts.rs",
+          "spec": "I-3",
+          "status": "stubbed"
+        }
+      },
       "category": "data.script",
       "kind": "file",
       "spec_owner": "06-engine",
@@ -11405,6 +11419,14 @@
       "status": "pending"
     },
     "data/scripts/secret_base.inc": {
+      "artifacts": {
+        "SecretBase_EventScript_SetDecorationFlags": {
+          "reason": "The 14 setflag FLAG_DECORATION_1..14 commands, ported as their effect: crate::flow::overworld_phase::run_on_transition_map_script applies assets::object_event_flags::DECORATION_FLAGS on entering either bundled player bedroom, the two maps whose own MAP_SCRIPT_ON_TRANSITION calls this script (LittlerootTown_{Brendans,Mays}House_2F/scripts.inc:6-12). Same 'the effect, without an interpreter' shape as new_game's partial port of EventScript_ResetAllMapFlags. Required for correctness, not cosmetics: decoration placeholders invert the usual polarity (an EMPTY slot is the flag-SET state), nothing sets these at new-game time (InitEventData zeroes all flags; EventScript_ResetAllMapFlags never mentions them), and upstream relies purely on ordering -- RunOnTransitionMapScript (overworld.c:860) precedes TrySpawnObjectEvents (overworld.c:2163-2178) -- so without it a fresh save reads all twelve bedroom placeholders as spawned, i.e. as invisible blockers (DoesObjectCollideWithObjectAt consults only active, coordinates and elevation, never the invisible flag, so even MOVEMENT_TYPE_INVISIBLE would still block). Stubbed, not rewritten: no script interpreter runs this, and the maps that call it are a transcribed list rather than a parsed map-script table. Not modelled: the secret-base callers (data/scripts/shared_secret_base.inc:12-16) and flags 13/14's secret-base-only slots.",
+          "rust_target": "crates/pokeemerald-rs/src/flow/overworld_phase.rs",
+          "spec": "I-3",
+          "status": "stubbed"
+        }
+      },
       "category": "data.script",
       "kind": "file",
       "spec_owner": "06-engine",
@@ -13672,9 +13694,9 @@
     "graphics/object_events/pics/people": {
       "category": "graphics.object_event",
       "kind": "dir",
-      "reason": "Every PNG in the directory (133 files: Brendan's and May's own animation sheets plus the full upstream NPC roster) decoded via the std-only PNG/inflate decoder into the local gitignored asset pack (issue #81, Discussion #71 policy A, F-3's real cargo xtask extract). Brendan's and May's real in-game palettes (object_events/palettes/{brendan,may}.pal) are extracted alongside as the two unambiguous player-character palette matches; the broader NPC roster's per-character palette assignment (the object_event_graphics_info indirection table) is not modelled and remains a future slice. Read back via AssetPack::sprite/sprite_palette in crates/assets/src/pack.rs.",
+      "reason": "Every PNG in the directory (133 files) decoded via the std-only PNG/inflate decoder into the local gitignored asset pack (issue #81, Discussion #71 policy A, F-3's real cargo xtask extract). Brendan's and May's real in-game palettes (object_events/palettes/{brendan,may}.pal) are extracted alongside as the two unambiguous player-character palette matches. Issue #161's NPC object-event rendering slice additionally extracts the four generic NPC palette banks (object_events/palettes/npc_{1,2,3,4}.pal, OBJ_EVENT_PAL_TAG_NPC_1..4) that every 'standard' 16x32 NPC graphics id it resolves (Mom, the twin, Professor Birch, ...) draws from -- crates/pokeemerald-rs/src/overworld/npc.rs's own bounded graphics-id table. The broader NPC roster's remaining per-character palettes (truck.pal, vigoroth.pal, every *_reflection.pal) and the full object_event_graphics_info indirection table are still not modelled, remaining a future slice. Read back via AssetPack::sprite/sprite_palette in crates/assets/src/pack.rs.",
       "rust_target": "crates/xtask/src/extract/mod.rs",
-      "spec": "S-4",
+      "spec": "I-3",
       "status": "ported"
     },
     "graphics/object_events/pics/pokemon": {
@@ -17253,6 +17275,12 @@
           "rust_target": "crates/engine/src/event_data.rs",
           "spec": "S-5",
           "status": "rewritten"
+        },
+        "object_event_hide_flags": {
+          "reason": "assets::object_event_flags::resolve transcribes the numeric FLAG_* id for every ObjectEvent::flag name reachable from a map this port's extraction pipeline bundles (the Littleroot Town layout family): 41 entries -- the 29 distinct FLAG_HIDE_* ids carried by object events across all six maps, plus the twelve generic FLAG_DECORATION_1..12 ids Littleroot's two player-house bedrooms also carry (the literal \"0\" no-flag sentinel is handled by resolve itself, not a table entry). The table is asserted to be exactly that reachable set -- no extra entries, none missing -- and cross-checked against the independently-transcribed new_game_flags::RESET_MAP_FLAGS table where the two overlap. Bounded, not a full flags.h name table: a FLAG_* outside this set can never occur for any map this port renders (see that module's own docs), so extending it further would transcribe data no code here consumes.",
+          "rust_target": "crates/assets/src/object_event_flags.rs",
+          "spec": "I-3",
+          "status": "ported"
         }
       },
       "category": "code.constants",
@@ -24832,15 +24860,71 @@
       "status": "pending"
     },
     "src/data/object_events/object_event_graphics_info_pointers.h": {
+      "artifacts": {
+        "OBJ_EVENT_GFX_to_graphics_info": {
+          "reason": "npc::resolve_sprite_source is a bounded, explicit re-derivation of this table's OBJ_EVENT_GFX_* -> gObjectEventGraphicsInfo_* mapping (plus each pointed-to struct's own .images/.paletteTag fields, object_event_pic_tables.h/object_event_graphics.h). Partial coverage, stated exactly: it has 10 resolving arms -- 8 'standard' 16x32 NPCs plus the two rival variants -- and ALL TEN resolve for either PlayerCharacter, against the 29 distinct graphics ids the six bundled Littleroot-family maps' object events actually reference; a test pins that exact drawn/not-drawn partition, and that it is gender-independent, so a newly reachable standard NPC cannot silently stop drawing. The rival pair is deliberately NOT gender-filtered (issue #161 review): gObjectEventGraphicsInfo_RivalBrendanNormal/_RivalMayNormal (object_event_graphics_info.h:1920-1937, :2015-2032) simply reuse the corresponding protagonist's own sPicTable_* and OBJ_EVENT_PAL_TAG_*, with no rival-specific art existing at all -- and the rival a player can actually meet is always the OPPOSITE protagonist's object event, since the two Littleroot houses are mirrored maps hardcoding their own resident's id and the intro warp picks which is home (LittlerootTown/scripts.inc:116/:127). The port keeps upstream's PALSLOT_NPC_SPECIAL vs PALSLOT_PLAYER distinction as a separate palette bank, so a rival and the player can be on screen together. The remaining 19 reachable ids (the OBJ_EVENT_GFX_VAR_* decorations, item balls, dolls, the truck, and the non-16x32 shapes Vigoroth/32x32 and the ninja boy/16x16) and every one of this 239-entry table's other rows are untracked: resolve_sprite_source returns None for them, so their object events are still hide-flag-filtered and interaction-eligible but draw no sprite -- a follow-on slice's job to extend, not a silent mis-render. Also not modelled: GetObjectEventGraphicsInfo's own OBJ_EVENT_GFX_VARS -> VarGetObjectEventGraphicsId indirection (event_object_movement.c:1914-1931), which is what would give a decoration placeholder its real graphics id.",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/npc.rs",
+          "spec": "I-3",
+          "status": "stubbed"
+        }
+      },
       "category": "code.header",
       "kind": "file",
       "status": "pending"
     },
     "src/data/object_events/object_event_pic_tables.h": {
       "artifacts": {
+        "sPicTable_Boy2": {
+          "reason": "This pic table's 9-frame overworld_frame(<pic>, 2, 4, n) layout is the same one crates/pokeemerald-rs/src/overworld/avatar.rs::pack_people_sheet_frames already packs for the player's own walking sheet; npc::resolve_sprite_source resolves the matching OBJ_EVENT_GFX_* id to this pic's own sprite/<name> pack entry, sharing that one packer rather than needing a per-table decode.",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/npc.rs",
+          "spec": "I-3",
+          "status": "rewritten"
+        },
         "sPicTable_BrendanNormal": {
-          "reason": "9-frame walking-sheet layout (2x4-tile frames, on-foot subset only) ported into avatar::build_sprite_tileset; sPicTable_MayNormal shares the identical frame layout/count and is covered by the same code path (PlayerCharacter::May), not a separate artifact. Running frames are out of v1 scope.",
+          "reason": "9-frame walking-sheet layout (2x4-tile frames, on-foot subset only) ported into avatar::pack_people_sheet_frames, whose packed bytes seed the scene's combined sprite tileset (overworld::sprites::SceneSprites) at base tile 0. sPicTable_MayNormal is now reached by two code paths, not one: as this run's own PlayerCharacter::May walking sheet, and (issue #161 review) as the sheet an OBJ_EVENT_GFX_RIVAL_MAY_NORMAL object event draws from when the player is Brendan -- upstream's gObjectEventGraphicsInfo_RivalMayNormal points .images at this very table (object_event_graphics_info.h:2015-2032); there is no rival-specific pic table or PNG. Both paths go through the same avatar::pack_people_sheet_frames packer; the rival case appends its own frame block after the player's rather than reusing base tile 0, and draws from its own palette bank (upstream PALSLOT_NPC_SPECIAL). Same for sPicTable_BrendanNormal with the genders swapped. Running frames remain out of v1 scope.",
           "rust_target": "crates/pokeemerald-rs/src/overworld/avatar.rs",
+          "spec": "I-3",
+          "status": "rewritten"
+        },
+        "sPicTable_FatMan": {
+          "reason": "This pic table's 9-frame overworld_frame(<pic>, 2, 4, n) layout is the same one crates/pokeemerald-rs/src/overworld/avatar.rs::pack_people_sheet_frames already packs for the player's own walking sheet; npc::resolve_sprite_source resolves the matching OBJ_EVENT_GFX_* id to this pic's own sprite/<name> pack entry, sharing that one packer rather than needing a per-table decode.",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/npc.rs",
+          "spec": "I-3",
+          "status": "rewritten"
+        },
+        "sPicTable_Mom": {
+          "reason": "This pic table's 9-frame overworld_frame(<pic>, 2, 4, n) layout is the same one crates/pokeemerald-rs/src/overworld/avatar.rs::pack_people_sheet_frames already packs for the player's own walking sheet; npc::resolve_sprite_source resolves the matching OBJ_EVENT_GFX_* id to this pic's own sprite/<name> pack entry, sharing that one packer rather than needing a per-table decode.",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/npc.rs",
+          "spec": "I-3",
+          "status": "rewritten"
+        },
+        "sPicTable_Norman": {
+          "reason": "This pic table's 9-frame overworld_frame(<pic>, 2, 4, n) layout is the same one crates/pokeemerald-rs/src/overworld/avatar.rs::pack_people_sheet_frames already packs for the player's own walking sheet; npc::resolve_sprite_source resolves the matching OBJ_EVENT_GFX_* id to this pic's own sprite/<name> pack entry, sharing that one packer rather than needing a per-table decode.",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/npc.rs",
+          "spec": "I-3",
+          "status": "rewritten"
+        },
+        "sPicTable_ProfBirch": {
+          "reason": "This pic table's 9-frame overworld_frame(<pic>, 2, 4, n) layout is the same one crates/pokeemerald-rs/src/overworld/avatar.rs::pack_people_sheet_frames already packs for the player's own walking sheet; npc::resolve_sprite_source resolves the matching OBJ_EVENT_GFX_* id to this pic's own sprite/<name> pack entry, sharing that one packer rather than needing a per-table decode.",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/npc.rs",
+          "spec": "I-3",
+          "status": "rewritten"
+        },
+        "sPicTable_Scientist1": {
+          "reason": "This pic table's 9-frame overworld_frame(<pic>, 2, 4, n) layout is the same one crates/pokeemerald-rs/src/overworld/avatar.rs::pack_people_sheet_frames already packs for the player's own walking sheet; npc::resolve_sprite_source resolves the matching OBJ_EVENT_GFX_* id to this pic's own sprite/<name> pack entry, sharing that one packer rather than needing a per-table decode.",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/npc.rs",
+          "spec": "I-3",
+          "status": "rewritten"
+        },
+        "sPicTable_Twin": {
+          "reason": "This pic table's 9-frame overworld_frame(<pic>, 2, 4, n) layout is the same one crates/pokeemerald-rs/src/overworld/avatar.rs::pack_people_sheet_frames already packs for the player's own walking sheet; npc::resolve_sprite_source resolves the matching OBJ_EVENT_GFX_* id to this pic's own sprite/<name> pack entry, sharing that one packer rather than needing a per-table decode.",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/npc.rs",
+          "spec": "I-3",
+          "status": "rewritten"
+        },
+        "sPicTable_Woman4": {
+          "reason": "This pic table's 9-frame overworld_frame(<pic>, 2, 4, n) layout is the same one crates/pokeemerald-rs/src/overworld/avatar.rs::pack_people_sheet_frames already packs for the player's own walking sheet; npc::resolve_sprite_source resolves the matching OBJ_EVENT_GFX_* id to this pic's own sprite/<name> pack entry, sharing that one packer rather than needing a per-table decode.",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/npc.rs",
           "spec": "I-3",
           "status": "rewritten"
         }
@@ -25311,9 +25395,39 @@
     },
     "src/event_object_movement.c": {
       "artifacts": {
+        "DoesObjectCollideWithObjectAt": {
+          "reason": "COLLISION_OBJECT_EVENT: the destination-tile occupancy test, re-implemented as PlayerState::step's third and last collision check (after the grid collision bits and the elevation mismatch, matching GetCollisionAtCoords' own test order), via engine::overworld::object_event::visible_object_event_at. AreElevationsCompatible is the same either-side-ELEVATION_TRANSITION wildcard predicate MapRuntime::object_events_at already applies. Narrowed, all invisible in this slice: upstream's curObject != objectEvent self-skip has no counterpart (the player is a PlayerState, never an entry in the map's own object_events list), upstream's second previousCoords term is unobservable while every object event is stationary, and a connection-crossing step does not run the test at all because ConnectedMapData exposes no neighbouring-map event data.",
+          "rust_target": "crates/engine/src/overworld/player.rs",
+          "spec": "I-3",
+          "status": "rewritten"
+        },
+        "GetObjectEventIdByPosition": {
+          "reason": "Position-plus-elevation-wildcard object-event scan rewritten as MapRuntime::object_events_at (issue #108/#149/#161). ObjectEventDoesElevationMatch's rule (either side's ELEVATION_TRANSITION is a wildcard) is folded into that method's own filter predicate. It returns an *iterator* over every match on the tile, not a single hit, because upstream only ever scans spawned object events (a set hide flag prevents the spawn -- see TrySpawnObjectEventTemplate below) while this port scans templates: the hide-flag filter therefore has to run inside the scan, which engine::overworld::object_event::visible_object_event_at does. Both consumers -- the player-interaction lookup (facing_object_event) and the player's own movement collision (PlayerState::step's COLLISION_OBJECT_EVENT check) -- go through that one composed search, so they can never disagree about which object event occupies a tile. Templates really do stack per tile with independent flags (the Birch lab's three starter balls at (6, 8)). Known narrowing: the scan matches the template's map.json elevation, whereas upstream compares currentElevation, which ObjectEventUpdateElevation overwrites from the ground on the spawn frame (event_object_movement.c:1758-1770, :8089); the two agree for every bundled map and cannot diverge while all object events are stationary, but this now governs movement as well as interaction.",
+          "rust_target": "crates/engine/src/overworld/map_runtime.rs",
+          "spec": "I-3",
+          "status": "rewritten"
+        },
         "SetSpritePosToMapCoords": {
           "reason": "Player-OBJ screen-position derivation: for the player's own object event mapX/mapY == gSaveBlock1Ptr->pos always, collapsing this to a per-frame-constant OAM origin (PLAYER_OBJ_X/PLAYER_OBJ_Y); the camera/BG scrolls instead (viewport::build_tilemaps). Bike pan-ahead (the only thing that would move dx/dy away from 0) is out of v1 scope.",
           "rust_target": "crates/pokeemerald-rs/src/overworld/avatar.rs",
+          "spec": "I-3",
+          "status": "rewritten"
+        },
+        "TrySpawnObjectEventTemplate": {
+          "reason": "The hide-flag gate (!FlagGet(template->flagId)) is reproduced at query time -- object_event_is_visible, and the visible_object_events/visible_object_event_at searches built on it, treat a hidden object event as absent everywhere (rendering, the facing-tile interaction lookup, and movement collision alike), behaviourally identical to it never having been spawned -- rather than by modelling a persistent active-object-event instance list. Because the filter is applied at query time rather than at spawn time, every such search applies it *inside* its scan, so a tile carrying several stacked templates with independent hide flags resolves to the first visible one, exactly as scanning a spawned-only gObjectEvents would. Not modelled: the camera-radius spawn/despawn this function and RemoveObjectEventsOutsideView perform (every visible object event is always 'spawned', unconditional on distance from the player), the persistent gObjectEvents slot table, link-player object events, and the Trainer Hill/Battle Pyramid dynamic object-event-count special cases.",
+          "rust_target": "crates/engine/src/overworld/object_event.rs",
+          "spec": "I-3",
+          "status": "stubbed"
+        },
+        "TrySpawnObjectEvents": {
+          "reason": "The in-range rectangle that decides whether a template spawns, rewritten as engine::overworld::object_event_is_in_view (issue #161 review): transcribed in upstream's own two coordinate spaces (the window around gSaveBlock1Ptr->pos, each candidate tested as template->{x,y} + MAP_OFFSET), which reduces to player.x - 9 ..= player.x + 10 by player.y - 7 ..= player.y + 9. RemoveObjectEventIfOutsideView spells the same bounds as the despawn test. Consumed by the NPC render path (crate::overworld::npc::oam_entries) only, and load-bearing there rather than an optimization: the GBA OAM y field is 8 bits, so without this gate an object event exactly 16 metatiles away wraps onto the player's own screen row (MAP_LITTLEROOT_TOWN's unhideable boy at (14, 17) did). Deliberately NOT applied to the collision/interaction path, where it is unobservable -- those only ever query a tile adjacent to the player. The flag-gate half of this function stays recorded under TrySpawnObjectEventTemplate; not modelled here: the camera-radius spawn/despawn lifecycle itself, RemoveObjectEvent, and the Trainer Hill/Battle Pyramid object-count special cases.",
+          "rust_target": "crates/engine/src/overworld/object_event.rs",
+          "spec": "I-3",
+          "status": "stubbed"
+        },
+        "gInitialMovementTypeFacingDirections": {
+          "reason": "Transcribed in full: engine::overworld::initial_facing_direction covers all 81 MOVEMENT_TYPE_* entries, mirroring InitObjectEventStateFromTemplate's initial-spawn-facing table. This port has no per-object movement-type task simulation yet (v1 scope: stationary + look-around only), so this is also the facing an object renders at forever, not just at spawn -- a MOVEMENT_TYPE_LOOK_AROUND/WANDER_* object's own random-turn cycling (MovementType_LookAround et al.) is not modelled.",
+          "rust_target": "crates/engine/src/overworld/object_event.rs",
           "spec": "I-3",
           "status": "rewritten"
         }
@@ -25357,6 +25471,20 @@
       "status": "pending"
     },
     "src/field_control_avatar.c": {
+      "artifacts": {
+        "GetInFrontOfPlayerPosition": {
+          "reason": "The facing-tile position (GetXYCoordsOneStepInFrontOfPlayer, player position + facing delta) plus the own-tile-elevation wildcard rule rewritten as engine::overworld::facing_object_event's query-elevation derivation: the player's own grid cell's elevation, unless it is itself ELEVATION_TRANSITION, in which case the query elevation is the wildcard too.",
+          "rust_target": "crates/engine/src/overworld/object_event.rs",
+          "spec": "I-3",
+          "status": "rewritten"
+        },
+        "TryStartInteractionScript": {
+          "reason": "OverworldPhase::step's A-press handling covers only the object-event branch of GetInteractionScript (GetInteractedObjectEventScript, via engine::overworld::facing_object_event), routed to a NpcDialog through crate::overworld::npc_scripts::script_text's own small, hardcoded msgbox-style script-text table (issue's own DoD: 'a direct msgbox-style script subset is enough'). Not modelled: GetInteractedBackgroundEventScript/GetInteractedMetatileScript/GetInteractedWaterScript's fallback chain (sign posts, counters, water-adjacent interactions), GetInteractedLinkPlayerScript, RamScript, and the interaction sound effect (PlaySE(SE_SELECT)). A found-but-unrecognized-script object event (including the literal NULL/'0x0' sentinel) is selected but opens no dialog, matching upstream's own NULL-script no-op.",
+          "rust_target": "crates/pokeemerald-rs/src/flow/overworld_phase.rs",
+          "spec": "I-3",
+          "status": "stubbed"
+        }
+      },
       "category": "code.source",
       "kind": "file",
       "status": "pending"
@@ -25384,7 +25512,7 @@
     "src/field_player_avatar.c": {
       "artifacts": {
         "CheckForPlayerAvatarCollision": {
-          "reason": "Destination-tile collision check re-implemented via MapRuntime::metatile_cell plus collision.rs's Collision/elevation_mismatch; only the grid collision-bit and elevation-mismatch cases are ported (object-event/ledge/boulder/rotating-gate/acro-bike sub-checks are out of v1 scope)",
+          "reason": "Destination-tile collision check re-implemented via MapRuntime::metatile_cell plus collision.rs's Collision/elevation_mismatch, and (issue #161, I-3 lane) the object-event occupancy test -- the grid collision-bit, elevation-mismatch and object-event cases, applied in GetCollisionAtCoords' own order. Still out of v1 scope: the ledge, boulder-push, rotating-gate and acro-bike sub-checks, plus IsCoordOutsideObjectEventMovementRange (never constrains the player), IsMetatileDirectionallyImpassable and CanCameraMoveInDirection.",
           "rust_target": "crates/engine/src/overworld/player.rs",
           "spec": "S-5",
           "status": "rewritten"
@@ -26641,6 +26769,12 @@
           "spec": "S-5",
           "status": "rewritten"
         },
+        "ScrCmd_checkplayergender": {
+          "fold_target": "crates/pokeemerald-rs/src/new_game.rs",
+          "reason": "gSpecialVar_Result = gSaveBlock2Ptr->playerGender (src/scrcmd.c:2014-2018) has no standalone counterpart: this port has no script interpreter and no gSpecialVar_Result, so the one checkplayergender consumer it reproduces -- InsideOfTruck_EventScript_SetIntroFlags' goto_if_eq VAR_RESULT, MALE/FEMALE pair -- becomes a direct match on SaveBlock2::player_gender in new_game::apply_truck_intro_flags. The command's observable semantics are preserved exactly, including that it copies the RAW byte (so a gender outside MALE/FEMALE matches neither branch, which the PlayerGender::Other arm reproduces as a no-op).",
+          "spec": "I-3",
+          "status": "folded"
+        },
         "ScrCmd_clearflag": {
           "reason": "FlagClear call re-implemented as commands::clearflag (SCR_OP_CLEARFLAG, 0x2a) over EventData::flag_clear",
           "rust_target": "crates/engine/src/script/commands.rs",
@@ -26867,6 +27001,14 @@
       "status": "pending"
     },
     "src/secret_base.c": {
+      "artifacts": {
+        "InitSecretBaseDecorationSprites": {
+          "reason": "The ON_WARP_INTO_MAP half of the decoration lifecycle: per placed decoration it sets VAR_OBJ_GFX_ID_n, clears that slot's FLAG_DECORATION_*, spawns the object event and moves it to the saved position. Only its fresh-save *outcome* is reproduced -- gSaveBlock1Ptr->playerRoomDecorations[] is all DECOR_NONE after ClearSav1 (src/load_save.c:64-67), so the loop places nothing and every decoration flag stays set, which is exactly the state run_on_transition_map_script leaves. This port has no playerRoomDecorations/playerRoomDecorationPositions save state, no gDecorations table, and no OBJ_EVENT_GFX_VAR_* -> VAR_OBJ_GFX_ID_n graphics resolution, so nothing can be placed for it to spawn; a future decoration slice needs all three plus HideSecretBaseDecorationSprites' inverse. Recorded here rather than left silent because the not-yet-ported half is what a reader would otherwise assume was missing from the on-transition port above.",
+          "rust_target": "crates/pokeemerald-rs/src/flow/overworld_phase.rs",
+          "spec": "I-3",
+          "status": "stubbed"
+        }
+      },
       "category": "code.source",
       "kind": "file",
       "status": "pending"
@@ -26998,6 +27140,12 @@
           "rust_target": "crates/engine/src/text/render.rs",
           "spec": "S-5",
           "status": "rewritten"
+        },
+        "TextPrinterWaitWithDownArrow": {
+          "reason": "The message box's down-arrow wait prompt takes JOY_NEW(A_BUTTON | B_BUTTON) -- a fresh A *or* B edge -- which OverworldPhase::step now transcribes as the confirm edge it forwards to NpcDialog::tick (issue #161 review; previously A only, leaving a player who pressed B stuck with the box open). TextPrinterWait (src/text.c:884-900, the mid-page wait) and RunTextPrinter's hold-to-speed-up path (:944, :950) read the same button pair. Stubbed rather than rewritten: only the input predicate is ported. Not modelled -- gTextFlags.autoScroll / TextPrinterWaitAutoMode, the down-arrow sprite itself (TextPrinterDrawDownArrow) and its bob animation, and PlaySE(SE_SELECT).",
+          "rust_target": "crates/pokeemerald-rs/src/flow/overworld_phase.rs",
+          "spec": "I-3",
+          "status": "stubbed"
         },
         "sFontInfos": {
           "reason": "Only the maxLetterHeight column (the \\n line-advance metric) is transcribed, as max_letter_height; fontFunction/letterSpacing/lineSpacing/fgColor/bgColor/shadowColor are out of this slice's scope (glyph decompression lives in assets::fonts, colour is deliberately unmodelled here), so the file's own status stays pending.",

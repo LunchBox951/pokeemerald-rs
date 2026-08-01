@@ -147,6 +147,27 @@ class TestCheckTransition(unittest.TestCase):
                 marker_rel=MARKER,
             )
 
+    def test_required_bump_rejects_unchanged_version(self):
+        with self.assertRaises(version_check.VersionError) as ctx:
+            version_check.check_transition(
+                (0, 1, 2, 5),
+                (0, 1, 2, 5),
+                marker_head=None,
+                marker_unchanged=False,
+                marker_rel=MARKER,
+                require_bump=True,
+            )
+        self.assertIn("must advance VERSION", str(ctx.exception))
+
+    def test_unchanged_version_remains_valid_without_required_bump(self):
+        version_check.check_transition(
+            (0, 1, 2, 5),
+            (0, 1, 2, 5),
+            marker_head=None,
+            marker_unchanged=False,
+            marker_rel=MARKER,
+        )
+
 
 class _TempGitRepo:
     """A throwaway git repo for driving version_check.main() end to end."""
@@ -176,12 +197,17 @@ class _TempGitRepo:
         self._run("commit", "-q", "-m", message)
         self._run("tag", tag)
 
-    def run_version_check(self, base: str, head: str = "HEAD"):
+    def run_version_check(
+        self, base: str, head: str = "HEAD", *, require_bump: bool = False
+    ):
         """Invoke version_check.main() with cwd set to the repo (like CI)."""
         old_cwd = os.getcwd()
         os.chdir(self.path)
         try:
-            return version_check.main(["--base", base, "--head", head])
+            args = ["--base", base, "--head", head]
+            if require_bump:
+                args.append("--require-bump")
+            return version_check.main(args)
         finally:
             os.chdir(old_cwd)
 
@@ -308,6 +334,28 @@ class TestFinalGateIntegration(unittest.TestCase):
 
         self.assertNotEqual(
             self.repo.run_version_check(base="HEAD", head="HEAD"), 0
+        )
+
+    def test_pull_request_mode_requires_a_strict_version_increase(self):
+        self.repo.write("VERSION", "0.1.2.5\n")
+        self.repo.commit("baseline")
+
+        self.assertEqual(
+            self.repo.run_version_check(base="baseline", head="HEAD"), 0
+        )
+        self.assertNotEqual(
+            self.repo.run_version_check(
+                base="baseline", head="HEAD", require_bump=True
+            ),
+            0,
+        )
+
+        self.repo.write("VERSION", "0.1.2.6\n")
+        self.assertEqual(
+            self.repo.run_version_check(
+                base="baseline", head="HEAD", require_bump=True
+            ),
+            0,
         )
 
     def test_base_reads_follow_the_resolved_root_not_the_cwd(self):

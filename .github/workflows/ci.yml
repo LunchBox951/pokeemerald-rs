@@ -1,254 +1,143 @@
-# CI gate for pokeemerald-rs. See docs/acceptance/v1.md.
+# CI merge gate for pokeemerald-rs. See docs/acceptance/v1.md.
 #
-# Runs on every push, and on pull requests targeting any channel branch
-# (dev, unstable, stable, main) or a release/* branch; blocks merges on failure.
-# The fmt/clippy/build/test jobs run the real cargo commands against the
-# workspace. GitHub-hosted runners ship a stable toolchain via rustup; the fmt
-# and clippy jobs defensively `rustup component add` their component first so the
-# required checks stay green across `ubuntu-latest`/`windows-latest` image drift
-# (the rolling alias). rustup is preinstalled, so no new action/dep (minimal-deps).
+# Pull requests into channel branches run once here; ordinary
+# feature-branch pushes do not duplicate the pull_request run. Direct channel
+# pushes still receive post-merge validation. Promotion PRs are opened with a
+# dedicated GitHub App token, so their pull_request workflows run without the
+# approval hold applied to GITHUB_TOKEN-created pull requests. Superseded runs
+# for the same PR or ref are cancelled by the concurrency group below.
 #
-# Jobs run sequentially via a needs: chain so a failure short-circuits the rest
-# of that matrix leg: version -> ledger -> fmt -> clippy -> build -> test ->
-# smoke. `smoke` runs `cargo run -p xtask --features smoke -- e2e --suite
-# smoke` plus `cargo test -p xtask --features smoke` (F-3): a headless,
-# in-process boot of the `pokeemerald-rs` shell (see crates/xtask/src/e2e.rs
-# and crates/platform's `Platform::new_headless`) proving V-1's smoke-E2E
-# leg. `pokeemerald-rs` is an optional dependency of `xtask` gated behind the
-# `smoke` cargo feature (see crates/xtask/Cargo.toml), so it must be passed
-# explicitly here -- the plain `cargo xtask` alias (.cargo/config.toml) does
-# not enable it, and the required `build`/`test` jobs above deliberately
-# build without it so they stay dependency-free of `platform`'s
-# cpal/winit/softbuffer (ALSA dev headers included). It is not yet a
-# required check (see below) -- R-4 registers it once the gate has proven
-# stable.
+# `policy` owns the Ubuntu-only repository checks and the exact default format
+# command. `native` gives each supported OS one checkout and one shared Cargo
+# target directory for the exact default Clippy/build/test commands plus smoke
+# validation. On Ubuntu, that same workspace also restores the pinned upstream
+# references, extracts the real asset pack, runs the ignored real-pack
+# assertions, and repeats smoke with the pack present. No Cargo target cache is
+# used: reuse is deliberately limited to commands within one native runner.
 #
-# `real-pack` (V-1, I-2, ubuntu-only) is the real-asset E2E leg `smoke`
-# cannot cover: it needs `POKEEMERALD_REMOTE`/`pokeemerald` -- CI's checkout
-# has no upstream reference tree, so `smoke`'s pack-present branches
-# (`check_title_screen`/`check_overworld_scene` in crates/xtask/src/e2e.rs)
-# always no-op there, and the real-pack tests
-# (`real_pack_composes_non_blank_deterministic_title_frames` /
-# `..._overworld_frames`, plus `app::tests::animated_frame_returns_the_presented_tick`)
-# stay `#[ignore]`d. `real-pack` runs `./init.sh` to fetch the pinned
-# upstream checkouts (cached below, keyed on init.sh's pinned SHAs so a
-# fresh clone only happens when a pin moves), then `cargo run -p xtask --
-# extract` to build the local asset pack, then `cargo test -p pokeemerald-rs
-# -- --ignored` (selects exactly those real-pack tests) and `cargo run -p
-# xtask --features smoke -- e2e --suite smoke` again (this time with the
-# pack present, so its pack-present branches actually execute). It only
-# `needs: version`, the same cheap gate the other jobs fan out from, so a
-# slow upstream clone never blocks the required fmt/clippy/build/test chain.
-# Not yet a required check -- see below.
-#
-# Required status-check contexts for branch protection (R-4): `version`,
-# `ledger`, `scripts-tests`, and `init-tests` report under their bare job
-# names; the matrixed jobs report per OS —
-# `fmt (ubuntu-latest)`, `fmt (windows-latest)`, `clippy (ubuntu-latest)`,
-# `clippy (windows-latest)`, `build (ubuntu-latest)`, `build (windows-latest)`,
-# `test (ubuntu-latest)`, `test (windows-latest)`. Register those exact names.
-# `smoke (ubuntu-latest)` / `smoke (windows-latest)` are deliberately NOT on
-# this list yet, and neither is `real-pack` (see the job below) -- both wait
-# on the same "prove stable first" precedent; R-4 registers them once each
-# has proven stable.
+# Branch rules require `merge-gate / <target>` from this workflow. The target
+# suffix is load-bearing: GitHub keys checks by head SHA, so distinct names keep
+# a green dev->unstable result from satisfying a PR retargeted to stable. The
+# `always()` condition makes policy failures and failed/cancelled matrix legs
+# visible through that one target-specific aggregate context.
 name: ci
 
-# Least-privilege GITHUB_TOKEN: every job here only checks out and reads the repo.
 permissions:
   contents: read
 
 on:
   push:
-    branches: ["**"]
+    branches: [dev, unstable, stable, main]
   pull_request:
-    branches: [dev, unstable, stable, main, "release/**"]
+    branches: [dev, unstable, stable, main]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  # Policy gate (ubuntu-only): reject malformed versions and version regressions.
-  version:
-    name: version
+  policy:
+    name: policy
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
-          fetch-depth: 0 # full history so version_check can reach origin/main
+          fetch-depth: 0 # version_check needs the comparison base.
       - name: Validate VERSION
         env:
-          # The marker-staleness and monotonicity checks are base-relative:
-          # a PR must be compared against ITS base branch, not always main
-          # (a marker already merged to dev would read as freshly-changed
-          # against main). Push events keep the origin/main comparison.
+          # Compare a PR with its actual live base. Push/manual runs retain the
+          # repository-wide origin/main monotonicity check.
           PR_BASE_SHA: ${{ github.event.pull_request.base.sha || '' }}
+          PR_BASE_REF: ${{ github.event.pull_request.base.ref || '' }}
         run: |
-          base="${PR_BASE_SHA:-origin/main}"
-          python3 scripts/version_check.py --base "${base}" --head HEAD
-
-  # Policy gate (ubuntu-only): reject stale ledger targets once Rust targets exist.
-  ledger:
-    name: ledger
-    runs-on: ubuntu-latest
-    needs: version
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+          if [[ -n "${PR_BASE_SHA}" ]]; then
+            git fetch --no-tags origin \
+              "+refs/heads/${PR_BASE_REF}:refs/remotes/origin/${PR_BASE_REF}"
+            live_base="$(git rev-parse --verify \
+              "refs/remotes/origin/${PR_BASE_REF}^{commit}")"
+            if [[ "${live_base}" != "${PR_BASE_SHA}" ]]; then
+              echo "::error::PR base advanced from ${PR_BASE_SHA} to ${live_base}; refresh the branch and rerun CI."
+              exit 1
+            fi
+            python3 scripts/version_check.py \
+              --base "${live_base}" --head HEAD --require-bump
+          else
+            python3 scripts/version_check.py --base origin/main --head HEAD
+          fi
       - name: Verify ledger
         run: python3 scripts/ledger.py verify
-
-  # The stdlib unittest suites guarding the repo tooling (ledger, release
-  # promotion selection). Without this job they ratchet nothing.
-  scripts-tests:
-    name: scripts-tests
-    runs-on: ubuntu-latest
-    needs: version
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Run script test suites
         run: python3 -m unittest discover -s scripts -p "test_*.py"
-
-  # Shell regression suite for init.sh's pinned-revision bootstrap (#136).
-  # Without a CI job the harness ratchets nothing.
-  init-tests:
-    name: init-tests
-    runs-on: ubuntu-latest
-    needs: version
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Run init.sh regression tests
         run: bash init_test.sh
-
-  fmt:
-    name: fmt
-    needs: ledger
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, windows-latest]
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Ensure rustfmt component
         run: rustup component add rustfmt
       - name: cargo fmt --check
         run: cargo fmt --check
 
-  clippy:
-    name: clippy
-    needs: fmt
+  native:
+    name: native (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        os: [ubuntu-latest, windows-latest, macos-latest]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - name: Install ALSA dev headers (Linux; crates/platform's cpal dependency links libasound at compile time)
+      - name: Install ALSA dev headers (Linux)
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libasound2-dev
-      - name: Ensure clippy component
+      - name: Ensure clippy component (Linux)
+        if: runner.os == 'Linux'
         run: rustup component add clippy
       - name: cargo clippy --all-targets --workspace -- -D warnings
-        run: cargo clippy --all-targets --workspace -- -D warnings
-
-  build:
-    name: build
-    needs: clippy
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, windows-latest]
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - name: Install ALSA dev headers (Linux; crates/platform's cpal dependency links libasound at compile time)
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libasound2-dev
+        run: cargo clippy --all-targets --workspace -- -D warnings
       - name: cargo build --release --workspace
         run: cargo build --release --workspace
-
-  test:
-    name: test
-    needs: build
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, windows-latest]
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - name: Install ALSA dev headers (Linux; crates/platform's cpal dependency links libasound at compile time)
-        if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libasound2-dev
       - name: cargo test --workspace
         run: cargo test --workspace
-
-  # V-1: the smoke leg of the E2E acceptance criterion. Not yet a required
-  # check (see the header comment) -- R-4 promotes it once it has proven
-  # stable in CI.
-  smoke:
-    name: smoke
-    needs: test
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, windows-latest]
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - name: Install ALSA dev headers (Linux; crates/platform's cpal dependency links libasound at compile time)
-        if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libasound2-dev
-      # `--features smoke` is required: it's what pulls the optional
-      # `pokeemerald-rs` dependency (and `mod e2e`) into this build at all
-      # (see crates/xtask/Cargo.toml and crates/xtask/src/main.rs). The bare
-      # `cargo xtask` alias does not pass it, so this bypasses the alias.
-      - name: cargo run -p xtask --features smoke -- e2e --suite smoke
-        run: cargo run -p xtask --features smoke -- e2e --suite smoke
-      # Also run xtask's own test suite with the feature enabled, so the
-      # smoke-run unit tests (compiled in only under `--features smoke`,
-      # e.g. `crate::e2e::tests::smoke_suite_boots_cleanly_headless`) get
-      # exercised somewhere in CI -- deliberately not under the required
-      # `test` job's plain `cargo test --workspace` (see the header comment).
+      # The default workspace test above covers xtask without `smoke`; keep
+      # this separate invocation so the optional smoke feature is also tested.
       - name: cargo test -p xtask --features smoke
         run: cargo test -p xtask --features smoke
+      - name: Smoke E2E (packless)
+        run: cargo run -p xtask --features smoke -- e2e --suite smoke
 
-  # V-1 / I-2: the real-asset E2E leg `smoke` cannot cover (see the header
-  # comment) -- extracts the local pack from the pinned upstream checkouts
-  # and runs the real-pack verifications that stay `#[ignore]`d without one.
-  # ubuntu-only: the clone/extraction pipeline is not platform-sensitive, so
-  # a windows-latest leg would only add clone time, not coverage. Fans out
-  # from `version` (like `ledger`/`scripts-tests`/`init-tests` above), so a
-  # slow upstream clone can never block the required fmt/clippy/build/test
-  # chain. Not yet a required check (see the header comment) -- R-4 promotes
-  # it once it has proven stable in CI.
-  real-pack:
-    name: real-pack
-    needs: version
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - name: Install ALSA dev headers (crates/platform's cpal dependency links libasound at compile time)
-        run: sudo apt-get update && sudo apt-get install -y libasound2-dev
-      # Cache the pinned upstream clones (init.sh's POKEEMERALD_REF/MGBA_REF)
-      # so a normal run reuses them instead of re-cloning pret/pokeemerald
-      # and mgba-emu/mgba from scratch every time. Keyed on init.sh's own
-      # contents: the pins only ever move via a dedicated edit to that file
-      # (see its header comment), so that edit is exactly what should
-      # invalidate the cache and force a fresh, re-verified clone.
-      - uses: actions/cache@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
+      # The clone/extraction pipeline is platform-independent. One Ubuntu leg
+      # supplies real-asset coverage without tripling upstream clone work.
+      - name: Restore pinned upstream references
+        if: runner.os == 'Linux'
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             pokeemerald
             mgba
           key: real-pack-upstream-${{ hashFiles('init.sh') }}
-      - name: ./init.sh (fetch the pinned upstream references)
+      - name: Fetch pinned upstream references
+        if: runner.os == 'Linux'
         run: ./init.sh
-      - name: cargo run -p xtask -- extract
+      - name: Extract real asset pack
+        if: runner.os == 'Linux'
         run: cargo run -p xtask -- extract
-      - name: cargo test -p pokeemerald-rs -- --ignored (real-pack verifications)
+      - name: Run ignored real-pack assertions
+        if: runner.os == 'Linux'
         run: cargo test -p pokeemerald-rs -- --ignored
-      # Re-run the smoke suite with the pack now present, so its
-      # pack-present branches (`check_title_screen`/`check_overworld_scene`
-      # in crates/xtask/src/e2e.rs) actually execute -- the `smoke` job
-      # above always sees a pack-less checkout, so those branches are
-      # otherwise dead in CI.
-      - name: cargo run -p xtask --features smoke -- e2e --suite smoke (pack present)
+      - name: Smoke E2E (pack present)
+        if: runner.os == 'Linux'
         run: cargo run -p xtask --features smoke -- e2e --suite smoke
+
+  merge-gate:
+    name: merge-gate / ${{ github.event.pull_request.base.ref || github.ref_name }}
+    if: ${{ always() }}
+    needs: [policy, native]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require every gate to succeed
+        env:
+          POLICY_RESULT: ${{ needs.policy.result }}
+          NATIVE_RESULT: ${{ needs.native.result }}
+        run: |
+          test "${POLICY_RESULT}" = success
+          test "${NATIVE_RESULT}" = success

@@ -20,7 +20,7 @@
 | 6 | `oop-boundaries` | Subsystems are owned types with methods and traits; explicit boundaries; no global mutable state. |
 | 7 | `lean-docs` | Docs state principles and rules, not step-by-step prose. One concept per file; link, don't duplicate. |
 | 8 | `constitution-vs-roadmap` | The goals, principles, and acceptance criteria are fixed and small; the roadmap is dynamic and lives in GitHub issues/PRs/discussions — not in committed plan or spec docs. |
-| 9 | `gated-by-default` | Nothing reaches a protected branch without green objective CI plus review. Strictness tightens toward `main`. |
+| 9 | `gated-by-default` | Nothing reaches a protected branch without green objective CI; stable and main additionally require human review. Strictness tightens toward `main`. |
 | 10 | `test-ratchet` | Never delete, skip, or weaken a test to pass a gate. Tests only get stronger. |
 
 ## The port
@@ -67,10 +67,11 @@ freeze the path into documents; let it adapt. Look for "what to do next" in
 GitHub, not in a static plan.
 
 **9. Gated by default (`gated-by-default`).** Nothing reaches a protected branch
-without green objective CI **and** review. The bar tightens toward production:
-`dev` takes reviewed, CI-green work; `unstable` adds smoke validation; `stable`
-adds full release-mode validation; `main` adds soak validation and a human
-playtest. Your PR will not merge on assertion alone — it merges on evidence.
+without green objective CI. `dev` is developer-facing and `unstable` is the
+mechanical nightly, so neither requires an approval; both still require a pull
+request, current checks, and resolved review threads. `stable` and `main` add a
+current CODEOWNER approval and manual merge. The bar tightens toward production,
+and every merge rests on evidence rather than assertion.
 
 **10. Test ratchet (`test-ratchet`).** It is never acceptable to delete, skip, or
 weaken a test to make a gate pass. If a test is wrong, fix the test with a

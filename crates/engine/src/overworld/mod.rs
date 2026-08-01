@@ -26,6 +26,9 @@
 //! - [`warp`] — resolving a [`assets::WarpEvent`] into a typed
 //!   destination-map-and-warp-id transition, plus the arrival position and
 //!   facing that transition lands on.
+//! - [`object_event`] — object-event hide-flag visibility, the
+//!   player-facing interactive-object lookup, and the visible-object-at-a-tile
+//!   query movement collision consults (issue #161).
 //! - [`player`] — [`player::PlayerState`], the tile-position/facing/
 //!   sub-tile-step-progress state machine that ties the above together into
 //!   one input-poll-at-a-time `step()` call.
@@ -34,11 +37,13 @@
 //!
 //! In scope: a single on-foot player avatar's tile position, facing, walk
 //! pacing, collision against static map geometry (grid collision bits +
-//! elevation), map-connection crossing, and warp triggering.
+//! elevation) and against visible, stationary object events,
+//! map-connection crossing, warp triggering, and the facing-tile
+//! interactive-object lookup.
 //!
 //! Out of scope (tracked as future overworld slices, not silently
-//! approximated): rendering/camera, NPC/object-event AI and scripts, script
-//! binding of any kind, the bike and running, forced movement (currents,
+//! approximated): rendering/camera, NPC/object-event *movement* and AI,
+//! script binding of any kind, the bike and running, forced movement (currents,
 //! conveyor slopes, ice sliding), ledges, directional metatile impassability
 //! (`IsMetatileDirectionallyImpassable` — one-way rails and the like, absent
 //! from the v1 path), and every `MB_*` behavior this
@@ -52,12 +57,17 @@ pub mod collision;
 pub mod direction;
 pub mod map_runtime;
 pub mod metatile_behavior;
+pub mod object_event;
 pub mod player;
 pub mod warp;
 
 pub use collision::{elevation_mismatch, Collision, ELEVATION_MULTI_LEVEL, ELEVATION_TRANSITION};
 pub use direction::Direction;
 pub use map_runtime::{ConnectedMapData, ConnectionCrossing, MapRuntime, NUM_METATILES_IN_PRIMARY};
+pub use object_event::{
+    facing_object_event, initial_facing_direction, object_event_is_in_view,
+    object_event_is_visible, visible_object_event_at, visible_object_events,
+};
 pub use player::{PlayerState, StepOutcome, TilePos, WALK_FRAMES_PER_TILE};
 pub use warp::{
     resolve_warp_event, trigger_warp, warp_destination_position, warp_in_facing, WarpTrigger,

@@ -64,9 +64,10 @@ diff-friendly. Statuses: `pending`, `rewritten` (code), `ported` (data/asset),
 ## Release channels
 
 Four channel branches: `dev → unstable → stable → main` (developer → nightly →
-beta → stable). Normal work targets `dev`; a long-lived `release/*` branch carries
-work up the ladder, with CI auto-opening each next-rung promotion PR. The release
-policy and per-rung gates are in **`RELEASE.md`**.
+beta → stable). Normal work targets `dev`; scheduled CI opens direct
+next-rung promotion PRs. Only the nightly may auto-merge; beta and stable require
+CODEOWNER review and a manual merge. The release policy and per-rung gates are
+in **`RELEASE.md`**.
 
 ## Hard rules — do not
 
