@@ -270,6 +270,23 @@ impl OverworldPhase {
     /// here, and one can't fire mid-animation, so the map is necessarily
     /// the same one the latched step happened on.
     ///
+    /// [`trigger_warp`] also takes `self.player.facing()` at this same
+    /// check frame (issue #174, arrow warps): since `PlayerState::step` is a
+    /// no-op while [`PlayerState::in_transit`], `facing` cannot have changed
+    /// since the step that produced this landing began, so this is the same
+    /// direction that step was taken in -- exactly the case upstream's own
+    /// `TryArrowWarp` covers when the player holds a direction all the way
+    /// through a step onto an arrow tile. Not covered: upstream also fires
+    /// `TryArrowWarp` on a frame the player merely *turns* to face an arrow
+    /// tile's direction while already standing on it, with no step taken
+    /// (`input->heldDirection && input->dpadDirection == playerDirection`
+    /// is polled every frame, independent of `tookStep` --
+    /// `field_control_avatar.c:163-167`); this port only ever re-evaluates a
+    /// landing once, right after the step that produced it completes, so
+    /// that standing-still case does not retrigger here
+    /// `(behavioral-fidelity)` -- see `engine::overworld::warp`'s module
+    /// docs for the full citation.
+    ///
     /// Silently does nothing but drain an already-in-progress walk
     /// animation if this map's header/events can't be found in the
     /// `'static` tables (unreachable for [`new_game::SPAWN_MAP_ID`] against
@@ -372,9 +389,15 @@ impl OverworldPhase {
             let warp_trigger = if self.player.in_transit() {
                 None
             } else {
-                self.pending_landing
-                    .take()
-                    .and_then(|(x, y)| trigger_warp(&runtime, x, y, self.player.elevation()))
+                self.pending_landing.take().and_then(|(x, y)| {
+                    trigger_warp(
+                        &runtime,
+                        x,
+                        y,
+                        self.player.elevation(),
+                        self.player.facing(),
+                    )
+                })
             };
 
             let warp_fired = matches!(warp_trigger, Some(WarpTrigger::Resolved { .. }));

@@ -784,6 +784,123 @@ fn warping_to_the_front_doormat_faces_north_and_rebinds_the_scene() {
     );
 }
 
+/// The issue #174 acceptance test: from inside 1F, walking onto the
+/// doormat (warp #1, `(8, 8)`, `MB_SOUTH_ARROW_WARP`) while holding South
+/// fires the arrow-warp trigger -- upstream `TryArrowWarp`/
+/// `IsArrowWarpMetatileBehavior` (`field_control_avatar.c:688-699, 767-780`,
+/// under the same `tookStep`-timed check this port's [`trigger_warp`] call
+/// site uses -- `OverworldPhase::step`'s "Warp timing" section) -- and
+/// exits through the front door to `MAP_LITTLEROOT_TOWN`'s own warp #1
+/// (`(5, 8)`, `MB_ANIMATED_DOOR`, already pinned by
+/// [`the_front_door_warp_faces_north_from_the_destination_tiles_behavior`]),
+/// landing facing South per that tile's own `IsNonAnimDoor||IsDoor` branch
+/// (`overworld.c:935-936`). This is the doormat this port's whole warp
+/// stack exists to fire: without it, the player can walk down into
+/// Brendan's house but never back out through the front door.
+#[test]
+#[ignore = "needs a local pack: run `cargo xtask extract` first"]
+fn walking_onto_the_doormat_holding_south_exits_through_the_front_door() {
+    let (doormat_pos, doormat_behavior) = warp_tile_behavior(ONE_F, 1);
+    assert_eq!(doormat_pos, (8, 8), "1F's warp #1: the doormat inside");
+    assert_eq!(doormat_behavior, MB_SOUTH_ARROW_WARP);
+
+    let mut phase = OverworldPhase::for_test(
+        crate::overworld::load_room(ONE_F).expect("run `cargo xtask extract` first"),
+        ONE_F,
+        // One tile north of the doormat, already facing South -- so the
+        // very first held-Down frame steps directly onto it with no turn
+        // frame needed first.
+        PlayerState::new((8, 7), 3, Direction::South),
+        None,
+    );
+
+    // Frame 1: the step onto the doormat begins. `PlayerState` commits the
+    // tile immediately, but the arrow-warp trigger must not fire yet --
+    // same step-completion timing the door path uses.
+    phase.step(held(Buttons::DOWN));
+    assert_eq!(
+        phase.player.position(),
+        (8, 8),
+        "the step onto the doormat must commit on the frame it begins"
+    );
+    assert_eq!(
+        phase.map_id, ONE_F,
+        "the arrow warp must not fire on the frame the step begins"
+    );
+
+    // Frames 2..16: drain the walk animation with no input held. The
+    // doormat's own behavior is direction-gated, not tookStep-gated, but
+    // this port only (re-)evaluates a landing once, at step completion
+    // (`trigger_warp`'s module docs) -- so the map must stay put until then.
+    for frame in 2..u32::from(WALK_FRAMES_PER_TILE) {
+        phase.step(ButtonState::new());
+        assert_eq!(
+            phase.map_id, ONE_F,
+            "the warp must not fire mid-animation (frame {frame} of {WALK_FRAMES_PER_TILE})"
+        );
+    }
+
+    // Frame 16: the walk animation drains and the trigger check runs,
+    // using the facing frozen since the step began (South) -- the doormat's
+    // own MB_SOUTH_ARROW_WARP behavior matches it.
+    phase.step(ButtonState::new());
+
+    let destination = assets::MapId("MAP_LITTLEROOT_TOWN");
+    assert_eq!(
+        phase.map_id, destination,
+        "the doormat's arrow-warp trigger must fire once the step completes, \
+         facing South"
+    );
+    assert_eq!(
+        phase.player.position(),
+        (5, 8),
+        "Littleroot's own warp #1: the front door"
+    );
+    assert_eq!(
+        phase.player.facing(),
+        Direction::South,
+        "the front door's MB_ANIMATED_DOOR behavior drives the arrival \
+         facing (overworld.c:935-936)"
+    );
+    assert!(
+        !phase.player.in_transit(),
+        "the warp lands the player at rest, not mid-step"
+    );
+}
+
+/// Regression: the same doormat, same position, but facing/holding a
+/// direction other than South must not fire the arrow-warp trigger --
+/// `IsArrowWarpMetatileBehavior` only matches the one direction its id
+/// belongs to (`engine::overworld::warp::is_arrow_warp_trigger`'s own unit
+/// tests cover the predicate directly; this is the phase-level version:
+/// landing on the doormat by walking sideways past it must not exit).
+#[test]
+#[ignore = "needs a local pack: run `cargo xtask extract` first"]
+fn walking_onto_the_doormat_facing_east_does_not_exit() {
+    let mut phase = OverworldPhase::for_test(
+        crate::overworld::load_room(ONE_F).expect("run `cargo xtask extract` first"),
+        ONE_F,
+        // One tile west of the doormat, already facing East, so the first
+        // held-Right frame steps directly onto (8, 8) facing East instead
+        // of South.
+        PlayerState::new((7, 8), 3, Direction::East),
+        None,
+    );
+
+    phase.step(held(Buttons::RIGHT));
+    assert_eq!(phase.player.position(), (8, 8));
+    for _ in 1..WALK_FRAMES_PER_TILE {
+        phase.step(ButtonState::new());
+    }
+
+    assert_eq!(
+        phase.map_id, ONE_F,
+        "the doormat must not fire while facing East -- only South matches \
+         its MB_SOUTH_ARROW_WARP behavior"
+    );
+    assert_eq!(phase.player.position(), (8, 8));
+}
+
 /// The issue #161 acceptance test: spawn (post-#158 intro handoff) ->
 /// walk down the stairs to Brendan's House 1F (the real #163 warp path,
 /// already pinned by [`stepping_onto_the_bedroom_stair_warp_transitions_to_the_1f_map`])

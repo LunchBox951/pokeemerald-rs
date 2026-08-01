@@ -4,20 +4,39 @@
 //!
 //! **Simplification against upstream's door/arrow-warp split.** Upstream
 //! distinguishes three warp-trigger paths: `TryArrowWarp` (holding a
-//! direction into an arrow-warp tile, e.g. some cave-mouth ledges),
+//! direction into an arrow-warp tile, e.g. a house's doormat or some
+//! cave-mouth ledges — `field_control_avatar.c:688-699, 767-780`),
 //! `TryDoorWarp` (facing north into an `MB_ANIMATED_DOOR` tile *before*
 //! stepping onto it, so the door can visually swing open first), and
 //! `TryStartWarpEventScript` (standing on any other warp tile after a
-//! completed step). Arrow warps are not on the v1 north-star path and are
-//! not ported (see `crate::overworld::metatile_behavior`'s scope note).
-//! Doors and non-animated warps *are* on the path (a house's front door, an
-//! interior staircase), but this port has no rendering/animation to time a
-//! pre-step "door opening" against, so both collapse into one rule: **a warp
-//! triggers once the player's own tile position matches a
-//! [`WarpEvent`](assets::WarpEvent) whose metatile behavior is a recognized
-//! trigger** ([`crate::overworld::metatile_behavior::is_warp_trigger`]) —
-//! matching upstream's post-step `TryStartWarpEventScript` path for both
-//! door kinds, without the extra one-tile-early door animation lead-in.
+//! completed step). Doors and non-animated warps are on the v1 north-star
+//! path (a house's front door, an interior staircase), but this port has no
+//! rendering/animation to time a pre-step "door opening" against, so both
+//! collapse into one rule: **a door-shaped warp triggers once the player's
+//! own tile position matches a [`WarpEvent`](assets::WarpEvent) whose
+//! metatile behavior is a recognized trigger**
+//! ([`crate::overworld::metatile_behavior::is_warp_trigger`]) — matching
+//! upstream's post-step `TryStartWarpEventScript` path for both door kinds,
+//! without the extra one-tile-early door animation lead-in.
+//!
+//! Arrow warps (issue #174) are ported too, as the separate direction-gated
+//! predicate [`is_arrow_warp_trigger`] mirroring
+//! `IsArrowWarpMetatileBehavior` — [`trigger_warp`] checks both predicates.
+//! **Timing deviation, documented rather than hidden:** upstream's
+//! `TryArrowWarp` is polled every frame the player holds a direction that
+//! matches their current facing (`input->heldDirection && input->dpadDirection
+//! == playerDirection`, `field_control_avatar.c:163-167`), independent of
+//! `tookStep` — so turning to face an arrow tile's direction while already
+//! standing on it (no step taken) fires it too. This port only evaluates
+//! [`trigger_warp`] at step *completion*, the same
+//! [`crate::overworld::warp`]-module "Warp timing" gate the door path uses
+//! (see `crate::flow::overworld_phase::OverworldPhase::step`'s doc), using
+//! the direction the just-completed step was taken in (frozen as
+//! [`crate::overworld::player::PlayerState::facing`] for the whole
+//! transition). This covers the common and DoD-required case — walking onto
+//! an arrow tile while holding its direction — but not the "already standing
+//! there, then turn to face it" edge case, which does not retrigger a check
+//! here `(behavioral-fidelity)`.
 //!
 //! The destination side of a warp lives here too: [`warp_destination_position`]
 //! (where the player lands) and [`warp_in_facing`] (which way they face on
@@ -30,7 +49,8 @@ use super::collision::{ELEVATION_MULTI_LEVEL, ELEVATION_TRANSITION};
 use super::direction::Direction;
 use super::map_runtime::MapRuntime;
 use super::metatile_behavior::{
-    is_warp_trigger, MB_ANIMATED_DOOR, MB_DEEP_SOUTH_WARP, MB_EAST_ARROW_WARP,
+    is_east_arrow_warp, is_north_arrow_warp, is_south_arrow_warp, is_warp_trigger,
+    is_west_arrow_warp, MB_ANIMATED_DOOR, MB_DEEP_SOUTH_WARP, MB_EAST_ARROW_WARP,
     MB_NON_ANIMATED_DOOR, MB_NORTH_ARROW_WARP, MB_PETALBURG_GYM_DOOR, MB_SHOAL_CAVE_ENTRANCE,
     MB_SOUTH_ARROW_WARP, MB_STAIRS_OUTSIDE_ABANDONED_SHIP, MB_WATER_DOOR,
     MB_WATER_SOUTH_ARROW_WARP, MB_WEST_ARROW_WARP,
@@ -62,13 +82,29 @@ pub enum WarpTrigger {
     Unsupported,
 }
 
-/// Check whether standing at `(x, y, elevation)` on `runtime`'s bound map
-/// triggers a warp.
+/// Whether standing on a tile with `behavior`, while facing/holding
+/// `direction`, triggers an arrow warp — upstream `IsArrowWarpMetatileBehavior`
+/// (`field_control_avatar.c:767-780`), dispatched by direction exactly as
+/// upstream's own `sArrowWarpMetatileBehaviorChecks` table does
+/// (`field_player_avatar.c:225-231`).
+#[must_use]
+pub const fn is_arrow_warp_trigger(behavior: u8, direction: Direction) -> bool {
+    match direction {
+        Direction::North => is_north_arrow_warp(behavior),
+        Direction::South => is_south_arrow_warp(behavior),
+        Direction::West => is_west_arrow_warp(behavior),
+        Direction::East => is_east_arrow_warp(behavior),
+    }
+}
+
+/// Check whether standing at `(x, y, elevation)` on `runtime`'s bound map,
+/// facing/holding `direction`, triggers a warp.
 ///
 /// Returns `None` if there is no warp event at that position at all, or if
-/// one exists but its metatile behavior isn't a recognized trigger (fail
-/// closed — see the module docs and
-/// [`crate::overworld::metatile_behavior::is_warp_trigger`]). Returns
+/// one exists but its metatile behavior isn't a recognized trigger for
+/// `direction` (fail closed — see the module docs,
+/// [`crate::overworld::metatile_behavior::is_warp_trigger`], and
+/// [`is_arrow_warp_trigger`]). Returns
 /// `Some(`[`WarpTrigger::Unsupported`]`)` if a triggering warp exists but its
 /// destination can't be resolved by this port.
 #[must_use]
@@ -77,9 +113,10 @@ pub fn trigger_warp(
     x: i32,
     y: i32,
     elevation: u8,
+    direction: Direction,
 ) -> Option<WarpTrigger> {
     let behavior = runtime.metatile_behavior(x, y)?;
-    if !is_warp_trigger(behavior) {
+    if !is_warp_trigger(behavior) && !is_arrow_warp_trigger(behavior, direction) {
         return None;
     }
     let warp = runtime.warp_event_at(x, y, elevation)?;
@@ -288,8 +325,10 @@ mod tests {
     #[test]
     fn non_animated_door_triggers_a_resolved_warp() {
         let runtime = runtime_with_door(MB_NON_ANIMATED_DOOR, sample_warp());
+        // Direction is irrelevant to a door-shaped trigger -- any of the
+        // four still fires it.
         assert_eq!(
-            trigger_warp(&runtime, 1, 0, 0),
+            trigger_warp(&runtime, 1, 0, 0, Direction::West),
             Some(WarpTrigger::Resolved {
                 map: MapId("MAP_DEST"),
                 warp_id: 2,
@@ -301,12 +340,44 @@ mod tests {
     fn animated_door_triggers_a_resolved_warp() {
         let runtime = runtime_with_door(MB_ANIMATED_DOOR, sample_warp());
         assert_eq!(
-            trigger_warp(&runtime, 1, 0, 0),
+            trigger_warp(&runtime, 1, 0, 0, Direction::South),
             Some(WarpTrigger::Resolved {
                 map: MapId("MAP_DEST"),
                 warp_id: 2,
             })
         );
+    }
+
+    /// Issue #174's whole point: a south arrow-warp tile (the doormat a
+    /// house's front door lands on) fires when stepped onto while
+    /// facing/holding South -- upstream `TryArrowWarp`.
+    #[test]
+    fn south_arrow_warp_triggers_a_resolved_warp_when_facing_south() {
+        let runtime = runtime_with_door(MB_SOUTH_ARROW_WARP, sample_warp());
+        assert_eq!(
+            trigger_warp(&runtime, 1, 0, 0, Direction::South),
+            Some(WarpTrigger::Resolved {
+                map: MapId("MAP_DEST"),
+                warp_id: 2,
+            })
+        );
+    }
+
+    /// The direction gate is real, not decorative: the very same tile and
+    /// warp event does not trigger for any other facing -- upstream
+    /// `IsArrowWarpMetatileBehavior` dispatches on direction and only one of
+    /// the four `MetatileBehavior_Is*ArrowWarp` checks can ever match a
+    /// given id.
+    #[test]
+    fn south_arrow_warp_does_not_trigger_facing_any_other_direction() {
+        let runtime = runtime_with_door(MB_SOUTH_ARROW_WARP, sample_warp());
+        for direction in [Direction::North, Direction::East, Direction::West] {
+            assert_eq!(
+                trigger_warp(&runtime, 1, 0, 0, direction),
+                None,
+                "MB_SOUTH_ARROW_WARP must not trigger while facing {direction:?}"
+            );
+        }
     }
 
     #[test]
@@ -315,17 +386,26 @@ mod tests {
         // either, but the behavior gate alone is enough to deny it even if
         // one did (fail-closed).
         let runtime = runtime_with_door(MB_NON_ANIMATED_DOOR, sample_warp());
-        assert_eq!(trigger_warp(&runtime, 0, 0, 0), None);
+        assert_eq!(trigger_warp(&runtime, 0, 0, 0, Direction::South), None);
     }
 
     #[test]
     fn unrecognized_warp_behavior_fails_closed_even_with_a_matching_warp_event() {
         // MB_LADDER (0x61): a real upstream warp trigger this slice does not
         // port. Even though a WarpEvent sits exactly at this position, the
-        // unsupported behavior must suppress the trigger.
+        // unsupported behavior must suppress the trigger, in every
+        // direction -- it is neither a door-shaped nor an arrow-shaped
+        // trigger id.
         const MB_LADDER: u8 = 0x61;
         let runtime = runtime_with_door(MB_LADDER, sample_warp());
-        assert_eq!(trigger_warp(&runtime, 1, 0, 0), None);
+        for direction in [
+            Direction::North,
+            Direction::South,
+            Direction::East,
+            Direction::West,
+        ] {
+            assert_eq!(trigger_warp(&runtime, 1, 0, 0, direction), None);
+        }
     }
 
     #[test]
@@ -337,7 +417,52 @@ mod tests {
                 ..sample_warp()
             },
         );
-        assert_eq!(trigger_warp(&runtime, 1, 0, 5), None);
+        assert_eq!(trigger_warp(&runtime, 1, 0, 5, Direction::South), None);
+    }
+
+    /// Mirrors the door-fixture test above but for an arrow-warp tile whose
+    /// direction *does* match: elevation is still checked after the
+    /// behavior gate passes.
+    #[test]
+    fn wrong_elevation_does_not_trigger_an_arrow_warp_either() {
+        let runtime = runtime_with_door(
+            MB_SOUTH_ARROW_WARP,
+            assets::WarpEvent {
+                elevation: 3,
+                ..sample_warp()
+            },
+        );
+        assert_eq!(trigger_warp(&runtime, 1, 0, 5, Direction::South), None);
+    }
+
+    /// [`is_arrow_warp_trigger`] itself, direction by direction, including
+    /// the North/South aliases
+    /// ([`crate::overworld::metatile_behavior::MB_STAIRS_OUTSIDE_ABANDONED_SHIP`]/
+    /// [`crate::overworld::metatile_behavior::MB_SHOAL_CAVE_ENTRANCE`]).
+    #[test]
+    fn is_arrow_warp_trigger_dispatches_by_direction() {
+        assert!(is_arrow_warp_trigger(MB_NORTH_ARROW_WARP, Direction::North));
+        assert!(is_arrow_warp_trigger(
+            MB_STAIRS_OUTSIDE_ABANDONED_SHIP,
+            Direction::North
+        ));
+        assert!(is_arrow_warp_trigger(MB_SOUTH_ARROW_WARP, Direction::South));
+        assert!(is_arrow_warp_trigger(
+            MB_SHOAL_CAVE_ENTRANCE,
+            Direction::South
+        ));
+        assert!(is_arrow_warp_trigger(MB_WEST_ARROW_WARP, Direction::West));
+        assert!(is_arrow_warp_trigger(MB_EAST_ARROW_WARP, Direction::East));
+
+        assert!(!is_arrow_warp_trigger(
+            MB_NORTH_ARROW_WARP,
+            Direction::South
+        ));
+        assert!(!is_arrow_warp_trigger(MB_ANIMATED_DOOR, Direction::North));
+        assert!(!is_arrow_warp_trigger(
+            MB_NON_ANIMATED_DOOR,
+            Direction::South
+        ));
     }
 
     #[test]
