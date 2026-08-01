@@ -17,6 +17,9 @@
 //! `EventScript_ResetAllMapFlags` applies (see [`new_game_flags`]); more
 //! data follows as the crate fills out.
 //!
+//! The backend-neutral song/voicegroup/sample pack schemas both
+//! audio-extraction backends emit into (S-4, issue #180) live in [`audio`].
+//!
 //! Binary graphics (tileset tile graphics, palettes, player/NPC sprite
 //! sheets, font glyph sheets, text-window border frames) and map layout
 //! grid/border bytes are not compiled into this crate as Rust source,
@@ -33,6 +36,7 @@
 //! see that module's docs).
 
 pub mod abilities;
+pub mod audio;
 pub mod battle_moves;
 pub mod egg_moves;
 pub mod error;
@@ -57,6 +61,15 @@ pub mod type_chart;
 pub mod wild_encounters;
 
 pub use abilities::{Abilities, AbilityData, ABILITIES_COUNT};
+// `audio::VoiceGroupId`/`audio::SampleId` are re-exported here alongside the
+// three schema types they identify; `audio`'s own internal cross-references
+// between them stay reachable through the `audio` module path too.
+pub use audio::{
+    AudioError, DirectSoundMode, DirectSoundSample, DirectSoundVoice, Envelope, KeySplitVoice,
+    NoiseVoice, ProgrammableWave, ProgrammableWaveVoice, RhythmVoice, Sample, SampleId, Song,
+    SongEvent, Square1Voice, Square2Voice, VoiceEntry, VoiceGroup, VoiceGroupId,
+    AUDIO_SCHEMA_VERSION, VOICE_SLOT_COUNT,
+};
 pub use battle_moves::{
     MoveData, MoveEffect, MoveFlags, MoveId, MoveTable, MoveTarget, MoveType, MOVES_COUNT,
 };
