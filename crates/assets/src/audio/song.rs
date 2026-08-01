@@ -28,7 +28,10 @@
 //! # Tempo is a track event, not header metadata
 //!
 //! [`Song`] carries no starting-tempo field, because upstream's
-//! `struct SongHeader` has none: its fields are `trackCount`, `blockCount`,
+//! `struct SongHeader` has none: its fields are `trackCount`, `blockCount`
+//! (dropped here because the engine never reads it —
+//! `pokeemerald/src/m4a_tables.c:262` sets it to `0` for the cry song, and
+//! `tools/mid2agb` uses its `s_blockCount` purely as an asm-label counter),
 //! `priority`, `reverb`, `tone`, and the per-track pointers. Tempo reaches
 //! the engine as a `TEMPO` command inside a track's own event stream
 //! (`ply_tempo`, `pokeemerald/src/m4a.c`), conventionally as one of track
@@ -93,14 +96,19 @@ pub enum SongEvent {
     ///
     /// `ply_xiecv` (`pokeemerald/src/m4a.c`) stores it in
     /// `MusicPlayerTrack::pseudoEchoVolume`, which `ply_note` copies onto
-    /// each note's channel; the CGB channels then use it to sound the note's
-    /// decay tail after the envelope's release completes. That tail is
-    /// audible musical content, not a compression artifact, which is why
-    /// this pair is modelled while the rest of `XCMD` is not (see `super`'s
-    /// "Deliberately deferred"). `tools/mid2agb` emits it — and it is one of
-    /// only two extended commands it emits at all — for a large minority of
-    /// upstream's MIDIs, so a song stream that dropped it would play a
-    /// noticeably drier version of those tracks.
+    /// each note's channel, where both families sound the decay tail once
+    /// the envelope's release completes — `DirectSound` via `SoundMainRAM`'s
+    /// `SOUND_CHANNEL_SF_IEC` branch (`pokeemerald/src/m4a_1.s:206-232`) and
+    /// CGB via `CgbSound` (`pokeemerald/src/m4a.c:925`). The channel carries
+    /// the pair for either family: `pseudoEchoVolume`/`pseudoEchoLength` are
+    /// `struct SoundChannel` fields
+    /// (`pokeemerald/include/gba/m4a_internal.h:101-102`), not CGB-only
+    /// state. That tail is audible musical content, not a compression
+    /// artifact, which is why this pair is modelled while the rest of `XCMD`
+    /// is not (see `super`'s "Deliberately deferred"). `tools/mid2agb` emits
+    /// it — and it is one of only two extended commands it emits at all —
+    /// for a large minority of upstream's MIDIs, so a song stream that
+    /// dropped it would play a noticeably drier version of those tracks.
     PseudoEchoVolume(u8),
     /// Pseudo-echo length in ticks — how long the
     /// [`PseudoEchoVolume`](Self::PseudoEchoVolume) tail sounds for
@@ -285,9 +293,10 @@ pub const MAX_TRACKS: usize = u8::MAX as usize;
 const MAX_PREALLOC_EVENTS: usize = 1 << 16;
 
 /// A song: which [`super::VoiceGroup`] it plays through, its
-/// priority/reverb (upstream `struct SongHeader`'s non-track-pointer
-/// fields), and one normalized event stream per track. Build one with
-/// [`Song::new`].
+/// priority/reverb (the upstream `struct SongHeader` fields this schema
+/// carries — `trackCount` is implicit in [`tracks`](Self::tracks) and
+/// `blockCount` is dropped, see the module docs), and one normalized event
+/// stream per track. Build one with [`Song::new`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Song {
     voicegroup: VoiceGroupId,

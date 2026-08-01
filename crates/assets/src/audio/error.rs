@@ -56,6 +56,11 @@ pub enum AudioError {
     /// encoding's `u32` per-track event count can describe. Carries the
     /// event count found.
     TooManyEvents(usize),
+    /// A [`super::sample::DirectSoundSample`] was built
+    /// ([`super::sample::DirectSoundSample::new`]) with more samples than the
+    /// encoding's `u32` length field can describe. Carries the sample count
+    /// found.
+    SampleTooLong(usize),
 }
 
 impl fmt::Display for AudioError {
@@ -103,6 +108,11 @@ impl fmt::Display for AudioError {
                 f,
                 "audio-pack song: a track of {count} events exceeds the \
                  maximum of {}",
+                u32::MAX
+            ),
+            Self::SampleTooLong(len) => write!(
+                f,
+                "audio-pack sample: {len} samples exceeds the maximum of {}",
                 u32::MAX
             ),
         }

@@ -5,10 +5,10 @@
 //! (`pokeemerald/include/gba/m4a_internal.h`) — one slot per instrument,
 //! `type` discriminating a concrete leaf channel kind from the two
 //! indirection kinds. Every `.inc` source under
-//! `pokeemerald/sound/voicegroups/` (182 files in the reference checkout)
-//! assembles to this same 12-byte-per-slot shape via the
-//! `voice_directsound`/`voice_square_1`/`voice_square_2`/
-//! `voice_programmable_wave`/`voice_noise`/`voice_keysplit`/
+//! `pokeemerald/sound/voicegroups/` (195 in the reference checkout: 180 at
+//! top level plus 15 under `drumsets/` and `keysplits/`) assembles to this
+//! same 12-byte-per-slot shape via the `voice_directsound`/`voice_square_1`/
+//! `voice_square_2`/`voice_programmable_wave`/`voice_noise`/`voice_keysplit`/
 //! `voice_keysplit_all` macros (`pokeemerald/asm/macros/music_voice.inc`) —
 //! cited here for provenance, not depended on: this schema is what a
 //! backend *produces* from that source, not a re-implementation of the
@@ -228,9 +228,11 @@ pub struct NoiseVoice {
 /// `table[key - starting_note]` to select a slot in the [`VoiceGroupId`]
 /// group; the played key otherwise keeps being used for pitch (upstream
 /// `ply_note`, `m4a_1.s`). Notes outside that range have no defined mapping
-/// in this slot — see the module docs on this being a real, honestly
-/// transcribed range limit of the upstream keysplit-table format, not an
-/// invented one.
+/// in this slot — a real limit of the upstream format, not an invented one:
+/// `sound/keysplit_tables.inc:1-11` documents mks4agb biasing a table's label
+/// backwards by its starting note because tables cover only a subrange, and
+/// `src/m4a_1.s:1589-1591` indexes `table[raw key]` with no offset — so
+/// [`starting_note`](Self::starting_note) honestly un-biases that format.
 ///
 /// Build one with [`KeySplitVoice::new`]: the table's `0..=`[`VOICE_SLOT_COUNT`]
 /// length bound is what makes [`VoiceGroup::encode`]'s `u8` table-length
