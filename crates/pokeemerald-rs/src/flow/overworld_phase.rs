@@ -280,19 +280,39 @@ impl OverworldPhase {
     /// [`held_direction`], required to equal [`PlayerState::facing`] after
     /// this frame's movement has been applied, and it feeds
     /// [`trigger_arrow_warp`] at [`PlayerState::position`] rather than at
-    /// `pending_landing`. Two consequences worth naming, because an earlier
-    /// revision of this method got both wrong by routing arrows through the
-    /// door path: merely *tapping* a direction and releasing it during the
-    /// crossing does **not** warp (`heldDirection` is false on the frame that
-    /// matters), and standing on the doormat a warp-in landed you on then
-    /// holding its direction **does** — the latter being the only way out of
-    /// Brendan's house, since the tile south of that doormat is off-map and
-    /// the step itself is blocked forever.
+    /// `pending_landing`. Three consequences worth naming — an earlier
+    /// revision of this method got the first two wrong by routing arrows
+    /// through the door path, and the third is a real divergence from
+    /// upstream rather than a property shared with it:
     ///
-    /// The one gate this port adds is `!`[`PlayerState::in_transit`], which
-    /// is not an extra: upstream only sets `heldDirection` at all while
-    /// `tileTransitionState` is `T_TILE_CENTER` or `T_NOT_MOVING`
-    /// (`:95-112`), the same "between steps" condition.
+    /// - Merely *tapping* a direction and releasing it during the crossing
+    ///   does **not** warp (`heldDirection` is false on the frame that
+    ///   matters).
+    /// - Standing on the doormat a warp-in landed you on and then holding
+    ///   its direction **does** — the only way out of Brendan's house, since
+    ///   the tile south of that doormat is off-map and the step itself is
+    ///   blocked forever.
+    /// - **A legal step in the arrow direction preempts the warp here, where
+    ///   upstream's warp preempts the step** `(behavioral-fidelity)`.
+    ///   Upstream runs `ProcessPlayerFieldInput` *before* `PlayerStep` and
+    ///   skips the step entirely on the frame a warp fires
+    ///   (`pokeemerald/src/overworld.c:1444-1455`); this method applies the
+    ///   frame's movement *first* and polls the arrow afterwards, so if the
+    ///   tile in the held direction is walkable the player steps off the
+    ///   arrow tile and the poll finds ordinary ground. Unlike the one-frame
+    ///   deltas elsewhere in this type, that is a permanent no-warp, not a
+    ///   timing shift. Unreachable on today's data: every arrow tile this
+    ///   port can reach has its arrow direction impassable — the doormat's
+    ///   `(8, 9)` is off-map — so the step is always blocked and the poll
+    ///   always gets its turn. Naming it anyway, because a future map with a
+    ///   walkable tile in front of an arrow would make it observable.
+    ///
+    /// The one *explicit* gate this port adds is
+    /// `!`[`PlayerState::in_transit`], which is not an extra: upstream only
+    /// sets `heldDirection` at all while `tileTransitionState` is
+    /// `T_TILE_CENTER` or `T_NOT_MOVING` (`:95-112`), the same "between
+    /// steps" condition. (The movement-then-poll ordering above is the
+    /// implicit one.)
     ///
     /// Door before arrow, matching upstream's own order within
     /// `ProcessPlayerFieldInput` (`:155-168`); at most one warp fires per
@@ -407,18 +427,6 @@ impl OverworldPhase {
             // can't silently trip it.
             let interaction_tokens = self.interaction_tokens_this_frame(buttons, &runtime);
 
-            // Upstream `input->heldDirection && input->dpadDirection ==
-            // playerDirection` (`field_control_avatar.c:164-168`) -- polled
-            // every frame, independent of `tookStep`, and *not* the door
-            // path's gate. `!in_transit` is this port's counterpart to the
-            // `T_TILE_CENTER`/`T_NOT_MOVING` test that sets `heldDirection`
-            // in the first place (`:95-112`). See the "Warp timing" section
-            // of this method's docs.
-            let arrow_direction = (!self.player.in_transit())
-                .then_some(direction)
-                .flatten()
-                .filter(|held| *held == self.player.facing());
-
             // Upstream's `tookStep` gate, in this port's terms: the latched
             // landing is only tested once its walk animation has drained
             // (doc comment above). Door first, then arrow, as upstream
@@ -427,6 +435,17 @@ impl OverworldPhase {
             let warp_trigger = if self.player.in_transit() {
                 None
             } else {
+                // Upstream `input->heldDirection && input->dpadDirection ==
+                // playerDirection` (`field_control_avatar.c:164-168`) --
+                // polled every frame, independent of `tookStep`, and *not*
+                // the door path's gate. Reaching this arm at all is already
+                // this port's counterpart to the
+                // `T_TILE_CENTER`/`T_NOT_MOVING` test that sets
+                // `heldDirection` in the first place (`:95-112`), so the
+                // poll needs no `in_transit` test of its own. See the "Warp
+                // timing" section of this method's docs.
+                let arrow_direction = direction.filter(|held| *held == self.player.facing());
+
                 self.pending_landing
                     .take()
                     .and_then(|(x, y)| trigger_door_warp(&runtime, x, y, self.player.elevation()))

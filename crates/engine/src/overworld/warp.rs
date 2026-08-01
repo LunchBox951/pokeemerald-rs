@@ -41,11 +41,14 @@
 //! standing on one, merely turns in place to face that direction — the
 //! doormat case a warp-in lands you in. Callers must reproduce that poll;
 //! this port's own does (`pokeemerald_rs::flow::overworld_phase::
-//! OverworldPhase::step`'s arrow-warp poll), and the only gate it adds is
-//! this port's counterpart to the `tileTransitionState ==
+//! OverworldPhase::step`'s arrow-warp poll), and the one *explicit* gate it
+//! adds is this port's counterpart to the `tileTransitionState ==
 //! T_TILE_CENTER || T_NOT_MOVING` test that sets `heldDirection` in the first
 //! place (`:95-112`): the player must be at rest between steps, not
-//! mid-crossing.
+//! mid-crossing. That caller also polls *after* applying the frame's
+//! movement, where upstream polls before it and skips the step when a warp
+//! fires (`overworld.c:1444-1455`) — an implicit third divergence, written up
+//! in full on `OverworldPhase::step`.
 //!
 //! The destination side of a warp lives here too: [`warp_destination_position`]
 //! (where the player lands) and [`warp_in_facing`] (which way they face on
@@ -57,12 +60,15 @@ use assets::{MapId, WarpDestination, WarpEvent, WarpId};
 use super::collision::{ELEVATION_MULTI_LEVEL, ELEVATION_TRANSITION};
 use super::direction::Direction;
 use super::map_runtime::MapRuntime;
+// The arrow-warp id *sets* deliberately aren't imported here: `warp_in_facing`
+// reaches them only through the `is_*_arrow_warp` predicates, exactly as
+// upstream's `GetAdjustedInitialDirection` reaches them only through
+// `MetatileBehavior_Is*ArrowWarp`. The door ids below have no such predicate
+// ported yet, so they are still matched literally.
 use super::metatile_behavior::{
     is_east_arrow_warp, is_north_arrow_warp, is_south_arrow_warp, is_warp_trigger,
-    is_west_arrow_warp, MB_ANIMATED_DOOR, MB_DEEP_SOUTH_WARP, MB_EAST_ARROW_WARP,
-    MB_NON_ANIMATED_DOOR, MB_NORTH_ARROW_WARP, MB_PETALBURG_GYM_DOOR, MB_SHOAL_CAVE_ENTRANCE,
-    MB_SOUTH_ARROW_WARP, MB_STAIRS_OUTSIDE_ABANDONED_SHIP, MB_WATER_DOOR,
-    MB_WATER_SOUTH_ARROW_WARP, MB_WEST_ARROW_WARP,
+    is_west_arrow_warp, MB_ANIMATED_DOOR, MB_DEEP_SOUTH_WARP, MB_NON_ANIMATED_DOOR,
+    MB_PETALBURG_GYM_DOOR, MB_WATER_DOOR,
 };
 
 /// A resolved (or explicitly unresolved) warp trigger, returned by
@@ -95,7 +101,7 @@ pub enum WarpTrigger {
 /// `direction`, triggers an arrow warp — upstream `IsArrowWarpMetatileBehavior`
 /// (`field_control_avatar.c:767-780`), dispatched by direction exactly as
 /// upstream's own `sArrowWarpMetatileBehaviorChecks` table does
-/// (`field_player_avatar.c:225-231`).
+/// (`field_player_avatar.c:226-232`).
 #[must_use]
 pub const fn is_arrow_warp_trigger(behavior: u8, direction: Direction) -> bool {
     match direction {
@@ -270,12 +276,15 @@ pub const fn warp_in_facing(destination_behavior: u8) -> Direction {
         MB_NON_ANIMATED_DOOR | MB_WATER_DOOR | MB_ANIMATED_DOOR | MB_PETALBURG_GYM_DOOR => {
             Direction::South
         }
-        MB_SOUTH_ARROW_WARP | MB_WATER_SOUTH_ARROW_WARP | MB_SHOAL_CAVE_ENTRANCE => {
-            Direction::North
-        }
-        MB_NORTH_ARROW_WARP | MB_STAIRS_OUTSIDE_ABANDONED_SHIP => Direction::South,
-        MB_WEST_ARROW_WARP => Direction::East,
-        MB_EAST_ARROW_WARP => Direction::West,
+        // The four arrow arms defer to the same predicates upstream's
+        // `GetAdjustedInitialDirection` calls (`MetatileBehavior_Is*ArrowWarp`),
+        // rather than re-listing their ids here -- one membership definition,
+        // in `metatile_behavior`, shared with the trigger side
+        // (`is_arrow_warp_trigger`).
+        b if is_south_arrow_warp(b) => Direction::North,
+        b if is_north_arrow_warp(b) => Direction::South,
+        b if is_west_arrow_warp(b) => Direction::East,
+        b if is_east_arrow_warp(b) => Direction::West,
         _ => Direction::South,
     }
 }
@@ -283,7 +292,10 @@ pub const fn warp_in_facing(destination_behavior: u8) -> Direction {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::overworld::metatile_behavior::MB_NORMAL;
+    use crate::overworld::metatile_behavior::{
+        MB_EAST_ARROW_WARP, MB_NORMAL, MB_NORTH_ARROW_WARP, MB_SHOAL_CAVE_ENTRANCE,
+        MB_SOUTH_ARROW_WARP, MB_STAIRS_OUTSIDE_ABANDONED_SHIP, MB_WEST_ARROW_WARP,
+    };
     use assets::{MapConnection, MapEvents, MapHeader, MetatileAttributeTable, MetatileCell};
 
     fn cell_bytes(width: u16, height: u16, id_at: impl Fn(u16, u16) -> u16) -> Vec<u8> {

@@ -947,7 +947,12 @@ fn releasing_south_mid_step_does_not_exit_through_the_doormat() {
 /// *after* the frame's movement is applied (see
 /// [`OverworldPhase::interaction_tokens_this_frame`]'s note on that same
 /// one-frame delta), so the exit lands on the very first held-Down frame
-/// rather than the one after it.
+/// rather than the one after it. The same delta means a *one-frame tap* of
+/// the arrow direction, while standing on an arrow tile facing some other
+/// way, warps here where upstream would only have turned — practically
+/// unreachable at 60 Hz by a human, the same argument as
+/// [`OverworldPhase::interaction_tokens_this_frame`]'s "A + direction on the
+/// same frame" note.
 #[test]
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
 fn standing_on_the_doormat_facing_north_and_holding_south_exits() {
