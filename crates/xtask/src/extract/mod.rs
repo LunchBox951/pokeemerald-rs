@@ -60,9 +60,14 @@
 //!   (`graphics/object_events/palettes/{brendan,may}.pal`) extracted
 //!   alongside, since I-3 (protagonist's room) needs a paletted player
 //!   sprite and those two files are an unambiguous, direct match (no
-//!   NPC-to-palette table lookup needed, unlike the generic NPC roster,
-//!   which is why the other ~130 NPC palettes are *not* extracted here —
-//!   documented as a deferred item).
+//!   NPC-to-palette table lookup needed, unlike the generic NPC roster).
+//!   Issue #161 (NPC object-event rendering) additionally extracts the four
+//!   generic `npc_1..4.pal` banks (`OBJ_EVENT_PAL_TAG_NPC_1..4`) every
+//!   "standard" NPC that slice renders resolves to
+//!   (`pokeemerald-rs::overworld::npc`'s own bounded graphics-id table) —
+//!   the remaining ~30 palette files in that directory (per-character
+//!   palettes like `truck.pal`/`vigoroth.pal`, and every `*_reflection.pal`)
+//!   are still *not* extracted here, documented as a deferred item.
 //!
 //! - **Map layout grids** (S-4): the Littleroot Town layout family's
 //!   `map.bin` / `border.bin` grid files — the town itself plus every
@@ -88,8 +93,10 @@
 //! Explicitly **not** extracted (deferred to future slices, not silently
 //! dropped): metatile-to-tile mapping beyond the raw `metatiles.bin` bytes
 //! (no decode/typed access yet — that's a rendering-layer concern once
-//! `crates/rendering` needs it), NPC-specific palette assignment (the
-//! `object_event_graphics_info` indirection table), any tileset outside the
+//! `crates/rendering` needs it), the *full* `object_event_graphics_info`
+//! palette-tag indirection (only the four generic `npc_1..4` banks above are
+//! extracted; every per-character palette it also names — `truck.pal`,
+//! `vigoroth.pal`, the `*_reflection.pal` set — stays unextracted), any tileset outside the
 //! five above (every other `data/tilesets/*` directory stays `pending` in
 //! the ledger), any map layout outside the Littleroot Town family above
 //! (every other `data/layouts/*` directory likewise stays `pending`), and
@@ -456,7 +463,8 @@ fn extract_title_screen(upstream: &Path, writer: &mut PackWriter) -> Result<(), 
     Ok(())
 }
 
-/// Extract every player/NPC sprite sheet plus the two player palettes.
+/// Extract every player/NPC sprite sheet plus the player and generic-NPC
+/// palettes.
 fn extract_sprites(upstream: &Path, writer: &mut PackWriter) -> Result<(), ExtractError> {
     let people_dir = upstream.join("graphics/object_events/pics/people");
     for png_path in collect_pngs_sorted(&people_dir)? {
@@ -473,6 +481,23 @@ fn extract_sprites(upstream: &Path, writer: &mut PackWriter) -> Result<(), Extra
         decode_palette_entry(
             &palettes_dir.join(format!("{who}.pal")),
             format!("sprite/palette/{who}"),
+            writer,
+        )?;
+    }
+    // The four generic NPC palette banks (`OBJ_EVENT_PAL_TAG_NPC_1..4`,
+    // issue #161's own NPC object-event rendering slice): every "standard"
+    // 16x32 NPC this port renders a sprite for (Mom, the twin, Professor
+    // Birch, ...) draws from one of these four, resolved by
+    // `pokeemerald-rs::overworld::npc`'s own graphics-id table. The
+    // remaining ~30 palette files in this directory (per-character
+    // palettes like `truck.pal`/`vigoroth.pal`, and every `*_reflection.pal`)
+    // stay unextracted -- no graphics id this port renders resolves to one
+    // yet (see that module's own "not drawn" scope list).
+    for n in 1..=4 {
+        let name = format!("npc_{n}");
+        decode_palette_entry(
+            &palettes_dir.join(format!("{name}.pal")),
+            format!("sprite/palette/{name}"),
             writer,
         )?;
     }
@@ -601,6 +626,42 @@ mod tests {
             "pokeemerald-rs-extract-test-{name}-{}.pack",
             std::process::id()
         ))
+    }
+
+    /// Tripwire for every *bounded* table elsewhere in the workspace whose
+    /// scope is "whatever [`LAYOUTS`] bundles" -- those tables can only be
+    /// derived from this list, and `xtask` is std-only (no `assets`
+    /// dependency) so they cannot import it. Adding a layout here must
+    /// therefore fail *loudly*, right next to the change, with the list of
+    /// what else has to grow with it:
+    ///
+    /// - `crates/assets/src/object_event_flags.rs`'s `OBJECT_EVENT_FLAGS`
+    ///   (every `ObjectEvent::flag` name reachable from a bundled map must
+    ///   resolve) and its own `BUNDLED_LAYOUTS` mirror, which derives the
+    ///   reachable map set from this one.
+    /// - `crates/pokeemerald-rs/src/overworld/npc.rs`'s
+    ///   `resolve_sprite_source` (its reachable-graphics-id test asserts the
+    ///   exact drawn/not-drawn partition over the same maps).
+    /// - `crates/pokeemerald-rs/src/overworld/mod.rs`'s
+    ///   `resolve_tileset_pack_name` (a new layout may name a sixth
+    ///   tileset).
+    #[test]
+    fn the_bundled_layout_set_is_pinned_for_the_tables_derived_from_it() {
+        let ids: Vec<&str> = LAYOUTS.iter().map(|(id, _)| *id).collect();
+        assert_eq!(
+            ids,
+            [
+                "LAYOUT_LITTLEROOT_TOWN",
+                "LAYOUT_LITTLEROOT_TOWN_BRENDANS_HOUSE_1F",
+                "LAYOUT_LITTLEROOT_TOWN_BRENDANS_HOUSE_2F",
+                "LAYOUT_LITTLEROOT_TOWN_MAYS_HOUSE_1F",
+                "LAYOUT_LITTLEROOT_TOWN_MAYS_HOUSE_2F",
+                "LAYOUT_LITTLEROOT_TOWN_PROFESSOR_BIRCHS_LAB",
+                "LAYOUT_LITTLEROOT_TOWN_PROFESSOR_BIRCHS_LAB_WITH_TABLE",
+            ],
+            "this list feeds bounded tables in other crates -- see this \
+             test's own doc comment for what must be extended alongside it"
+        );
     }
 
     #[test]
