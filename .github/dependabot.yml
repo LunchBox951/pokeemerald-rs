@@ -10,6 +10,13 @@ updates:
     labels:
       - "ci"
       - "needs-review"
+    # The codeql-action monorepo's init/analyze steps must move in lockstep:
+    # split bumps fail with "Loaded a configuration file for version X, but
+    # running version Y" (see PRs #170/#171). Group them into one PR.
+    groups:
+      codeql-action:
+        patterns:
+          - "github/codeql-action*"
 
   # Cargo dependencies. The workspace is not scaffolded yet; this entry activates
   # once a root Cargo.toml exists. Until then Dependabot finds no
