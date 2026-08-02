@@ -70,5 +70,6 @@ pub use object_event::{
 };
 pub use player::{PlayerState, StepOutcome, TilePos, WALK_FRAMES_PER_TILE};
 pub use warp::{
-    resolve_warp_event, trigger_warp, warp_destination_position, warp_in_facing, WarpTrigger,
+    resolve_warp_event, trigger_arrow_warp, trigger_door_warp, warp_destination_position,
+    warp_in_facing, WarpTrigger,
 };
