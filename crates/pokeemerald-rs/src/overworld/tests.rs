@@ -438,10 +438,6 @@ static NO_OBJECT_EVENTS: assets::MapEvents = assets::MapEvents {
     bg_events: &[],
 };
 
-/// Distinguishes concurrently-running tests' scratch packs (same process
-/// id, so the pid alone is not enough).
-static NEXT_SYNTHETIC_PACK: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-
 /// An [`super::OverworldScene`] over a freshly written synthetic pack
 /// (no local `cargo xtask extract` output needed): a `width` x `height`
 /// room of one uniform opaque metatile, Brendan's sprite, and no object
@@ -471,10 +467,14 @@ fn synthetic_scene_result(
     width: u16,
     height: u16,
 ) -> Result<super::OverworldScene, OverworldSceneError> {
-    let serial = NEXT_SYNTHETIC_PACK.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    // pid + thread id distinguish concurrently-running tests' scratch
+    // packs with no shared mutable state `(oop-boundaries)`: the test
+    // harness runs each test on its own thread, and this function removes
+    // the file before returning, so one thread never has two packs alive.
     let path = std::env::temp_dir().join(format!(
-        "pokeemerald-rs-overworld-test-{}-{serial}.pack",
-        std::process::id()
+        "pokeemerald-rs-overworld-test-{}-{:?}.pack",
+        std::process::id(),
+        std::thread::current().id()
     ));
     std::fs::write(&path, pack_bytes).unwrap();
     let pack = AssetPack::load(&path).unwrap();
