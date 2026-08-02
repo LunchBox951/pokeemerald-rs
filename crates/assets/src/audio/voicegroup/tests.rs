@@ -65,6 +65,7 @@ fn one_of_every_kind() -> Vec<VoiceEntry> {
         VoiceEntry::Rhythm(RhythmVoice {
             children: VoiceGroupId("audio/voicegroup/emerald_drumset_1".to_owned()),
         }),
+        VoiceEntry::Empty,
     ]
 }
 
@@ -333,13 +334,13 @@ fn an_unknown_slot_kind_byte_is_rejected() {
 
 #[test]
 fn a_kind_byte_just_past_the_last_defined_one_is_rejected() {
-    // `KIND_RHYTHM` (6) is the highest defined slot kind; 7 must not be
+    // `KIND_EMPTY` (7) is the highest defined slot kind; 8 must not be
     // read as some neighbouring kind.
     let mut bytes = VoiceGroup::new(one_of_every_kind()).unwrap().encode();
-    bytes[1] = KIND_RHYTHM + 1;
+    bytes[1] = KIND_EMPTY + 1;
     assert_eq!(
         VoiceGroup::decode(&bytes),
-        Err(AudioError::UnknownVoiceKind(KIND_RHYTHM + 1))
+        Err(AudioError::UnknownVoiceKind(KIND_EMPTY + 1))
     );
 }
 
@@ -415,6 +416,41 @@ fn pan_zero_is_rejected_at_construction() {
         err.to_string().contains("Some(0)"),
         "Display must explain the sentinel collision: {err}"
     );
+}
+
+/// Review finding on #193: an unused slot in the middle of a group — the
+/// normal state of a rhythm child table, where most raw keys have no drum
+/// — must keep its position across a round trip, because a slot's index
+/// *is* its meaning (the played key). Omitting it would shift every later
+/// slot; a zeroed `DirectSound` stand-in would invent a sample id.
+#[test]
+fn an_empty_mid_table_slot_keeps_its_position() {
+    let drum = |sample: &str| {
+        VoiceEntry::DirectSound(DirectSoundVoice {
+            base_key: 60,
+            pan: None,
+            sample: SampleId(sample.to_owned()),
+            envelope: sample_envelope(),
+            mode: DirectSoundMode::Fixed,
+        })
+    };
+    let group = VoiceGroup::new(vec![
+        drum("audio/sample/bass_drum"),
+        VoiceEntry::Empty,
+        drum("audio/sample/snare"),
+    ])
+    .unwrap();
+    let decoded = VoiceGroup::decode(&group.encode()).unwrap();
+    assert_eq!(decoded, group);
+    assert_eq!(
+        decoded.slots()[1],
+        VoiceEntry::Empty,
+        "the unused slot must stay at index 1 -- its index is the played key"
+    );
+    match &decoded.slots()[2] {
+        VoiceEntry::DirectSound(v) => assert_eq!(v.sample.0, "audio/sample/snare"),
+        other => panic!("the slot after the empty one shifted: {other:?}"),
+    }
 }
 
 /// Review finding on #193: a decoder that ignores trailing bytes validates

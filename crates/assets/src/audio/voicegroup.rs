@@ -307,6 +307,15 @@ pub enum VoiceEntry {
     Noise(NoiseVoice),
     KeySplit(KeySplitVoice),
     Rhythm(RhythmVoice),
+    /// An unused slot, preserved positionally (review finding on #193): a
+    /// slot's *index* is its meaning — a song's `VOICE` operand, a
+    /// key-split table entry, or a rhythm child's raw played key — so an
+    /// unused `ToneData` in the middle of an upstream group (common in
+    /// rhythm child tables, where most keys have no drum) must keep its
+    /// place. Omitting it would shift every later slot to the wrong key,
+    /// and encoding it as a zeroed [`DirectSoundVoice`] would invent a
+    /// sample id that names no pack entry.
+    Empty,
 }
 
 const KIND_DIRECT_SOUND: u8 = 0;
@@ -316,6 +325,7 @@ const KIND_PROGRAMMABLE_WAVE: u8 = 3;
 const KIND_NOISE: u8 = 4;
 const KIND_KEY_SPLIT: u8 = 5;
 const KIND_RHYTHM: u8 = 6;
+const KIND_EMPTY: u8 = 7;
 
 const MODE_RESAMPLED: u8 = 0;
 const MODE_FIXED: u8 = 1;
@@ -396,6 +406,7 @@ impl VoiceEntry {
                 w.u8(KIND_RHYTHM);
                 w.string(&v.children.0);
             }
+            Self::Empty => w.u8(KIND_EMPTY),
         }
     }
 
@@ -499,6 +510,7 @@ impl VoiceEntry {
                 let children = VoiceGroupId(r.string()?);
                 Ok(Self::Rhythm(RhythmVoice { children }))
             }
+            KIND_EMPTY => Ok(Self::Empty),
             other => Err(AudioError::UnknownVoiceKind(other)),
         }
     }
@@ -541,7 +553,10 @@ impl VoiceGroup {
                 VoiceEntry::ProgrammableWave(v) => check_id_len(&v.wave.0)?,
                 VoiceEntry::KeySplit(v) => check_id_len(&v.children.0)?,
                 VoiceEntry::Rhythm(v) => check_id_len(&v.children.0)?,
-                VoiceEntry::Square1(_) | VoiceEntry::Square2(_) | VoiceEntry::Noise(_) => {}
+                VoiceEntry::Square1(_)
+                | VoiceEntry::Square2(_)
+                | VoiceEntry::Noise(_)
+                | VoiceEntry::Empty => {}
             }
         }
         Ok(Self { slots })

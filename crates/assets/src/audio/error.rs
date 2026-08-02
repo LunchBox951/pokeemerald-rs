@@ -29,7 +29,7 @@ pub enum AudioError {
     /// defines (0 = `DirectSound`, 1 = programmable wave). Carries the
     /// offending byte.
     UnknownSampleKind(u8),
-    /// A voicegroup slot's `kind` tag byte was not one of the seven this
+    /// A voicegroup slot's `kind` tag byte was not one of the eight this
     /// format defines. Carries the offending byte.
     UnknownVoiceKind(u8),
     /// A `DirectSound` voice's `mode` tag byte was not one of the three this
