@@ -7,6 +7,7 @@ use super::jasc_pal::JascPalError;
 use super::layouts_json::LayoutsJsonError;
 use super::pack::PackWriteError;
 use super::png::PngError;
+use super::wav::WavError;
 
 /// An error produced while extracting the local asset pack.
 ///
@@ -126,6 +127,13 @@ pub enum ExtractError {
     /// `PLTE` required here). Carries the source path, the offending pixel
     /// value, and the palette's length.
     TextWindowPixelOutsidePalette(PathBuf, u8, usize),
+    /// A `sound/direct_sound_samples/*.wav` source failed to decode. Carries
+    /// its path and the decoder error.
+    Wav(PathBuf, WavError),
+    /// A `sound/programmable_wave_samples/*.pcm` source was not exactly the
+    /// 16 bytes a CGB programmable-wave table requires. Carries the path
+    /// and the actual length.
+    ProgrammableWaveWrongSize { path: PathBuf, actual: usize },
 }
 
 impl fmt::Display for ExtractError {
@@ -209,6 +217,12 @@ impl fmt::Display for ExtractError {
                 f,
                 "text-window image `{}` has pixel index {pixel}: its bundled palette only has \
                  {palette_len} colours",
+                path.display()
+            ),
+            Self::Wav(path, err) => write!(f, "decoding `{}` failed: {err}", path.display()),
+            Self::ProgrammableWaveWrongSize { path, actual } => write!(
+                f,
+                "programmable-wave source `{}` is {actual} bytes: expected exactly 16",
                 path.display()
             ),
         }

@@ -90,6 +90,17 @@
 //!   `graphics/text_window/` — see [`text_window`]'s module docs for the
 //!   manifest and the image/palette pairing validation.
 //!
+//! - **Audio samples** (S-4, issue #183, `#115` child 4): every
+//!   `DirectSound` instrument sample and CGB programmable-wave table
+//!   `mus_title`'s voicegroup references, transitively through its
+//!   key-split sub-groups — see [`audio_samples`]'s module docs for exactly
+//!   how that set was traced and for the wire format each entry's payload
+//!   carries (`crates/assets::audio::sample::Sample`'s encoding, duplicated
+//!   here per this module's crate-decoupling policy — see [`pack`]'s
+//!   docs). [`wav`] is the `.wav`-source decoder this needs; see its module
+//!   docs for the field-by-field derivation, cited into
+//!   `tools/wav2agb`.
+//!
 //! Explicitly **not** extracted (deferred to future slices, not silently
 //! dropped): metatile-to-tile mapping beyond the raw `metatiles.bin` bytes
 //! (no decode/typed access yet — that's a rendering-layer concern once
@@ -122,12 +133,16 @@
 //!   `text-window/palette/1`..`20`/`message_box` come from each PNG's own
 //!   `PLTE`; `text-window/palette/text_pal1`..`4` come from the sibling
 //!   `.pal` files.
+//! - `audio/sample/direct-sound/<basename>`, `audio/sample/programmable-wave/<NN>`
+//!   — see [`audio_samples`]'s module docs for the exact derivation and why
+//!   the two live under separate sub-namespaces.
 //!
 //! `<name>` is always a normalized, stable identifier (upstream's own
 //! directory/file naming, which is already `snake_case` and stable across
 //! decomp revisions) — never a `gTileset_*`-style linker symbol. See
 //! [`pack`]'s module docs for why that matters.
 
+mod audio_samples;
 mod error;
 mod fonts;
 pub mod inflate;
@@ -136,6 +151,7 @@ mod layouts_json;
 pub mod pack;
 pub mod png;
 mod text_window;
+mod wav;
 
 use std::path::{Path, PathBuf};
 
@@ -227,6 +243,7 @@ fn extract_to(output_path: &Path) -> Result<ExtractReport, ExtractError> {
     extract_layouts(&upstream, &mut writer)?;
     fonts::extract_fonts(&upstream, &mut writer)?;
     text_window::extract_text_window(&upstream, &mut writer)?;
+    audio_samples::extract_audio_samples(&upstream, &mut writer)?;
 
     let entry_count = writer.len();
     let bytes = writer.finish()?;

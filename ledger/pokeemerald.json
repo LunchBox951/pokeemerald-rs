@@ -18797,20 +18797,26 @@
     "sound/direct_sound_samples/sc88pro_flute.wav": {
       "category": "audio.sample",
       "kind": "file",
-      "spec_owner": "03-audio",
-      "status": "pending"
+      "reason": "DirectSound instrument sample mus_title's voicegroup (title.inc, traced through its key-split sub-groups) references as DirectSoundWaveData_sc88pro_flute. Decoded by a hand-rolled .wav chunk parser (fmt/smpl/agbp/agbl/data -- see crates/xtask/src/extract/wav.rs's module docs for the field-by-field derivation cited into tools/wav2agb's wav_file.cpp/converter.cpp) into the audio/sample::Sample schema's DirectSound shape (base_frequency, optional loop_start, signed 8-bit PCM -- crates/assets/src/audio/sample.rs), emitted via cargo xtask extract as pack id audio/sample/direct-sound/sc88pro_flute (issue #183, S-4, #115 child 4).",
+      "rust_target": "crates/xtask/src/extract/wav.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "sound/direct_sound_samples/sc88pro_french_horn_60.wav": {
       "category": "audio.sample",
       "kind": "file",
-      "spec_owner": "03-audio",
-      "status": "pending"
+      "reason": "DirectSound instrument sample mus_title's voicegroup (title.inc, traced through its key-split sub-groups) references as DirectSoundWaveData_sc88pro_french_horn_60. Decoded by a hand-rolled .wav chunk parser (fmt/smpl/agbp/agbl/data -- see crates/xtask/src/extract/wav.rs's module docs for the field-by-field derivation cited into tools/wav2agb's wav_file.cpp/converter.cpp) into the audio/sample::Sample schema's DirectSound shape (base_frequency, optional loop_start, signed 8-bit PCM -- crates/assets/src/audio/sample.rs), emitted via cargo xtask extract as pack id audio/sample/direct-sound/sc88pro_french_horn_60 (issue #183, S-4, #115 child 4).",
+      "rust_target": "crates/xtask/src/extract/wav.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "sound/direct_sound_samples/sc88pro_french_horn_72.wav": {
       "category": "audio.sample",
       "kind": "file",
-      "spec_owner": "03-audio",
-      "status": "pending"
+      "reason": "DirectSound instrument sample mus_title's voicegroup (title.inc, traced through its key-split sub-groups) references as DirectSoundWaveData_sc88pro_french_horn_72. Decoded by a hand-rolled .wav chunk parser (fmt/smpl/agbp/agbl/data -- see crates/xtask/src/extract/wav.rs's module docs for the field-by-field derivation cited into tools/wav2agb's wav_file.cpp/converter.cpp) into the audio/sample::Sample schema's DirectSound shape (base_frequency, optional loop_start, signed 8-bit PCM -- crates/assets/src/audio/sample.rs), emitted via cargo xtask extract as pack id audio/sample/direct-sound/sc88pro_french_horn_72 (issue #183, S-4, #115 child 4).",
+      "rust_target": "crates/xtask/src/extract/wav.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "sound/direct_sound_samples/sc88pro_fretless_bass.wav": {
       "category": "audio.sample",
@@ -18821,14 +18827,18 @@
     "sound/direct_sound_samples/sc88pro_glockenspiel.wav": {
       "category": "audio.sample",
       "kind": "file",
-      "spec_owner": "03-audio",
-      "status": "pending"
+      "reason": "DirectSound instrument sample mus_title's voicegroup (title.inc, traced through its key-split sub-groups) references as DirectSoundWaveData_sc88pro_glockenspiel. Decoded by a hand-rolled .wav chunk parser (fmt/smpl/agbp/agbl/data -- see crates/xtask/src/extract/wav.rs's module docs for the field-by-field derivation cited into tools/wav2agb's wav_file.cpp/converter.cpp) into the audio/sample::Sample schema's DirectSound shape (base_frequency, optional loop_start, signed 8-bit PCM -- crates/assets/src/audio/sample.rs), emitted via cargo xtask extract as pack id audio/sample/direct-sound/sc88pro_glockenspiel (issue #183, S-4, #115 child 4).",
+      "rust_target": "crates/xtask/src/extract/wav.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "sound/direct_sound_samples/sc88pro_harp.wav": {
       "category": "audio.sample",
       "kind": "file",
-      "spec_owner": "03-audio",
-      "status": "pending"
+      "reason": "DirectSound instrument sample mus_title's voicegroup (title.inc, traced through its key-split sub-groups) references as DirectSoundWaveData_sc88pro_harp. Decoded by a hand-rolled .wav chunk parser (fmt/smpl/agbp/agbl/data -- see crates/xtask/src/extract/wav.rs's module docs for the field-by-field derivation cited into tools/wav2agb's wav_file.cpp/converter.cpp) into the audio/sample::Sample schema's DirectSound shape (base_frequency, optional loop_start, signed 8-bit PCM -- crates/assets/src/audio/sample.rs), emitted via cargo xtask extract as pack id audio/sample/direct-sound/sc88pro_harp (issue #183, S-4, #115 child 4).",
+      "rust_target": "crates/xtask/src/extract/wav.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "sound/direct_sound_samples/sc88pro_jingle_bell.wav": {
       "category": "audio.sample",
@@ -18839,8 +18849,10 @@
     "sound/direct_sound_samples/sc88pro_mute_high_conga.wav": {
       "category": "audio.sample",
       "kind": "file",
-      "spec_owner": "03-audio",
-      "status": "pending"
+      "reason": "DirectSound instrument sample mus_title's voicegroup (title.inc, traced through its key-split sub-groups) references as DirectSoundWaveData_sc88pro_mute_high_conga. Decoded by a hand-rolled .wav chunk parser (fmt/smpl/agbp/agbl/data -- see crates/xtask/src/extract/wav.rs's module docs for the field-by-field derivation cited into tools/wav2agb's wav_file.cpp/converter.cpp) into the audio/sample::Sample schema's DirectSound shape (base_frequency, optional loop_start, signed 8-bit PCM -- crates/assets/src/audio/sample.rs), emitted via cargo xtask extract as pack id audio/sample/direct-sound/sc88pro_mute_high_conga (issue #183, S-4, #115 child 4).",
+      "rust_target": "crates/xtask/src/extract/wav.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "sound/direct_sound_samples/sc88pro_nylon_str_guitar.wav": {
       "category": "audio.sample",
@@ -18851,20 +18863,26 @@
     "sound/direct_sound_samples/sc88pro_open_low_conga.wav": {
       "category": "audio.sample",
       "kind": "file",
-      "spec_owner": "03-audio",
-      "status": "pending"
+      "reason": "DirectSound instrument sample mus_title's voicegroup (title.inc, traced through its key-split sub-groups) references as DirectSoundWaveData_sc88pro_open_low_conga. Decoded by a hand-rolled .wav chunk parser (fmt/smpl/agbp/agbl/data -- see crates/xtask/src/extract/wav.rs's module docs for the field-by-field derivation cited into tools/wav2agb's wav_file.cpp/converter.cpp) into the audio/sample::Sample schema's DirectSound shape (base_frequency, optional loop_start, signed 8-bit PCM -- crates/assets/src/audio/sample.rs), emitted via cargo xtask extract as pack id audio/sample/direct-sound/sc88pro_open_low_conga (issue #183, S-4, #115 child 4).",
+      "rust_target": "crates/xtask/src/extract/wav.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "sound/direct_sound_samples/sc88pro_orchestra_cymbal_crash.wav": {
       "category": "audio.sample",
       "kind": "file",
-      "spec_owner": "03-audio",
-      "status": "pending"
+      "reason": "DirectSound instrument sample mus_title's voicegroup (title.inc, traced through its key-split sub-groups) references as DirectSoundWaveData_sc88pro_orchestra_cymbal_crash. Decoded by a hand-rolled .wav chunk parser (fmt/smpl/agbp/agbl/data -- see crates/xtask/src/extract/wav.rs's module docs for the field-by-field derivation cited into tools/wav2agb's wav_file.cpp/converter.cpp) into the audio/sample::Sample schema's DirectSound shape (base_frequency, optional loop_start, signed 8-bit PCM -- crates/assets/src/audio/sample.rs), emitted via cargo xtask extract as pack id audio/sample/direct-sound/sc88pro_orchestra_cymbal_crash (issue #183, S-4, #115 child 4).",
+      "rust_target": "crates/xtask/src/extract/wav.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "sound/direct_sound_samples/sc88pro_orchestra_snare.wav": {
       "category": "audio.sample",
       "kind": "file",
-      "spec_owner": "03-audio",
-      "status": "pending"
+      "reason": "DirectSound instrument sample mus_title's voicegroup (title.inc, traced through its key-split sub-groups) references as DirectSoundWaveData_sc88pro_orchestra_snare. Decoded by a hand-rolled .wav chunk parser (fmt/smpl/agbp/agbl/data -- see crates/xtask/src/extract/wav.rs's module docs for the field-by-field derivation cited into tools/wav2agb's wav_file.cpp/converter.cpp) into the audio/sample::Sample schema's DirectSound shape (base_frequency, optional loop_start, signed 8-bit PCM -- crates/assets/src/audio/sample.rs), emitted via cargo xtask extract as pack id audio/sample/direct-sound/sc88pro_orchestra_snare (issue #183, S-4, #115 child 4).",
+      "rust_target": "crates/xtask/src/extract/wav.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "sound/direct_sound_samples/sc88pro_organ2.wav": {
       "category": "audio.sample",
@@ -18875,26 +18893,34 @@
     "sound/direct_sound_samples/sc88pro_piano1_48.wav": {
       "category": "audio.sample",
       "kind": "file",
-      "spec_owner": "03-audio",
-      "status": "pending"
+      "reason": "DirectSound instrument sample mus_title's voicegroup (title.inc, traced through its key-split sub-groups) references as DirectSoundWaveData_sc88pro_piano1_48. Decoded by a hand-rolled .wav chunk parser (fmt/smpl/agbp/agbl/data -- see crates/xtask/src/extract/wav.rs's module docs for the field-by-field derivation cited into tools/wav2agb's wav_file.cpp/converter.cpp) into the audio/sample::Sample schema's DirectSound shape (base_frequency, optional loop_start, signed 8-bit PCM -- crates/assets/src/audio/sample.rs), emitted via cargo xtask extract as pack id audio/sample/direct-sound/sc88pro_piano1_48 (issue #183, S-4, #115 child 4).",
+      "rust_target": "crates/xtask/src/extract/wav.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "sound/direct_sound_samples/sc88pro_piano1_60.wav": {
       "category": "audio.sample",
       "kind": "file",
-      "spec_owner": "03-audio",
-      "status": "pending"
+      "reason": "DirectSound instrument sample mus_title's voicegroup (title.inc, traced through its key-split sub-groups) references as DirectSoundWaveData_sc88pro_piano1_60. Decoded by a hand-rolled .wav chunk parser (fmt/smpl/agbp/agbl/data -- see crates/xtask/src/extract/wav.rs's module docs for the field-by-field derivation cited into tools/wav2agb's wav_file.cpp/converter.cpp) into the audio/sample::Sample schema's DirectSound shape (base_frequency, optional loop_start, signed 8-bit PCM -- crates/assets/src/audio/sample.rs), emitted via cargo xtask extract as pack id audio/sample/direct-sound/sc88pro_piano1_60 (issue #183, S-4, #115 child 4).",
+      "rust_target": "crates/xtask/src/extract/wav.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "sound/direct_sound_samples/sc88pro_piano1_72.wav": {
       "category": "audio.sample",
       "kind": "file",
-      "spec_owner": "03-audio",
-      "status": "pending"
+      "reason": "DirectSound instrument sample mus_title's voicegroup (title.inc, traced through its key-split sub-groups) references as DirectSoundWaveData_sc88pro_piano1_72. Decoded by a hand-rolled .wav chunk parser (fmt/smpl/agbp/agbl/data -- see crates/xtask/src/extract/wav.rs's module docs for the field-by-field derivation cited into tools/wav2agb's wav_file.cpp/converter.cpp) into the audio/sample::Sample schema's DirectSound shape (base_frequency, optional loop_start, signed 8-bit PCM -- crates/assets/src/audio/sample.rs), emitted via cargo xtask extract as pack id audio/sample/direct-sound/sc88pro_piano1_72 (issue #183, S-4, #115 child 4).",
+      "rust_target": "crates/xtask/src/extract/wav.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "sound/direct_sound_samples/sc88pro_piano1_84.wav": {
       "category": "audio.sample",
       "kind": "file",
-      "spec_owner": "03-audio",
-      "status": "pending"
+      "reason": "DirectSound instrument sample mus_title's voicegroup (title.inc, traced through its key-split sub-groups) references as DirectSoundWaveData_sc88pro_piano1_84. Decoded by a hand-rolled .wav chunk parser (fmt/smpl/agbp/agbl/data -- see crates/xtask/src/extract/wav.rs's module docs for the field-by-field derivation cited into tools/wav2agb's wav_file.cpp/converter.cpp) into the audio/sample::Sample schema's DirectSound shape (base_frequency, optional loop_start, signed 8-bit PCM -- crates/assets/src/audio/sample.rs), emitted via cargo xtask extract as pack id audio/sample/direct-sound/sc88pro_piano1_84 (issue #183, S-4, #115 child 4).",
+      "rust_target": "crates/xtask/src/extract/wav.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "sound/direct_sound_samples/sc88pro_pizzicato_strings.wav": {
       "category": "audio.sample",
@@ -18905,14 +18931,18 @@
     "sound/direct_sound_samples/sc88pro_rnd_kick.wav": {
       "category": "audio.sample",
       "kind": "file",
-      "spec_owner": "03-audio",
-      "status": "pending"
+      "reason": "DirectSound instrument sample mus_title's voicegroup (title.inc, traced through its key-split sub-groups) references as DirectSoundWaveData_sc88pro_rnd_kick. Decoded by a hand-rolled .wav chunk parser (fmt/smpl/agbp/agbl/data -- see crates/xtask/src/extract/wav.rs's module docs for the field-by-field derivation cited into tools/wav2agb's wav_file.cpp/converter.cpp) into the audio/sample::Sample schema's DirectSound shape (base_frequency, optional loop_start, signed 8-bit PCM -- crates/assets/src/audio/sample.rs), emitted via cargo xtask extract as pack id audio/sample/direct-sound/sc88pro_rnd_kick (issue #183, S-4, #115 child 4).",
+      "rust_target": "crates/xtask/src/extract/wav.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "sound/direct_sound_samples/sc88pro_rnd_snare.wav": {
       "category": "audio.sample",
       "kind": "file",
-      "spec_owner": "03-audio",
-      "status": "pending"
+      "reason": "DirectSound instrument sample mus_title's voicegroup (title.inc, traced through its key-split sub-groups) references as DirectSoundWaveData_sc88pro_rnd_snare. Decoded by a hand-rolled .wav chunk parser (fmt/smpl/agbp/agbl/data -- see crates/xtask/src/extract/wav.rs's module docs for the field-by-field derivation cited into tools/wav2agb's wav_file.cpp/converter.cpp) into the audio/sample::Sample schema's DirectSound shape (base_frequency, optional loop_start, signed 8-bit PCM -- crates/assets/src/audio/sample.rs), emitted via cargo xtask extract as pack id audio/sample/direct-sound/sc88pro_rnd_snare (issue #183, S-4, #115 child 4).",
+      "rust_target": "crates/xtask/src/extract/wav.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "sound/direct_sound_samples/sc88pro_slap_bass.wav": {
       "category": "audio.sample",
@@ -18929,20 +18959,26 @@
     "sound/direct_sound_samples/sc88pro_string_ensemble_60.wav": {
       "category": "audio.sample",
       "kind": "file",
-      "spec_owner": "03-audio",
-      "status": "pending"
+      "reason": "DirectSound instrument sample mus_title's voicegroup (title.inc, traced through its key-split sub-groups) references as DirectSoundWaveData_sc88pro_string_ensemble_60. Decoded by a hand-rolled .wav chunk parser (fmt/smpl/agbp/agbl/data -- see crates/xtask/src/extract/wav.rs's module docs for the field-by-field derivation cited into tools/wav2agb's wav_file.cpp/converter.cpp) into the audio/sample::Sample schema's DirectSound shape (base_frequency, optional loop_start, signed 8-bit PCM -- crates/assets/src/audio/sample.rs), emitted via cargo xtask extract as pack id audio/sample/direct-sound/sc88pro_string_ensemble_60 (issue #183, S-4, #115 child 4).",
+      "rust_target": "crates/xtask/src/extract/wav.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "sound/direct_sound_samples/sc88pro_string_ensemble_72.wav": {
       "category": "audio.sample",
       "kind": "file",
-      "spec_owner": "03-audio",
-      "status": "pending"
+      "reason": "DirectSound instrument sample mus_title's voicegroup (title.inc, traced through its key-split sub-groups) references as DirectSoundWaveData_sc88pro_string_ensemble_72. Decoded by a hand-rolled .wav chunk parser (fmt/smpl/agbp/agbl/data -- see crates/xtask/src/extract/wav.rs's module docs for the field-by-field derivation cited into tools/wav2agb's wav_file.cpp/converter.cpp) into the audio/sample::Sample schema's DirectSound shape (base_frequency, optional loop_start, signed 8-bit PCM -- crates/assets/src/audio/sample.rs), emitted via cargo xtask extract as pack id audio/sample/direct-sound/sc88pro_string_ensemble_72 (issue #183, S-4, #115 child 4).",
+      "rust_target": "crates/xtask/src/extract/wav.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "sound/direct_sound_samples/sc88pro_string_ensemble_84.wav": {
       "category": "audio.sample",
       "kind": "file",
-      "spec_owner": "03-audio",
-      "status": "pending"
+      "reason": "DirectSound instrument sample mus_title's voicegroup (title.inc, traced through its key-split sub-groups) references as DirectSoundWaveData_sc88pro_string_ensemble_84. Decoded by a hand-rolled .wav chunk parser (fmt/smpl/agbp/agbl/data -- see crates/xtask/src/extract/wav.rs's module docs for the field-by-field derivation cited into tools/wav2agb's wav_file.cpp/converter.cpp) into the audio/sample::Sample schema's DirectSound shape (base_frequency, optional loop_start, signed 8-bit PCM -- crates/assets/src/audio/sample.rs), emitted via cargo xtask extract as pack id audio/sample/direct-sound/sc88pro_string_ensemble_84 (issue #183, S-4, #115 child 4).",
+      "rust_target": "crates/xtask/src/extract/wav.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "sound/direct_sound_samples/sc88pro_synth_bass.wav": {
       "category": "audio.sample",
@@ -18959,14 +18995,18 @@
     "sound/direct_sound_samples/sc88pro_tambourine.wav": {
       "category": "audio.sample",
       "kind": "file",
-      "spec_owner": "03-audio",
-      "status": "pending"
+      "reason": "DirectSound instrument sample mus_title's voicegroup (title.inc, traced through its key-split sub-groups) references as DirectSoundWaveData_sc88pro_tambourine. Decoded by a hand-rolled .wav chunk parser (fmt/smpl/agbp/agbl/data -- see crates/xtask/src/extract/wav.rs's module docs for the field-by-field derivation cited into tools/wav2agb's wav_file.cpp/converter.cpp) into the audio/sample::Sample schema's DirectSound shape (base_frequency, optional loop_start, signed 8-bit PCM -- crates/assets/src/audio/sample.rs), emitted via cargo xtask extract as pack id audio/sample/direct-sound/sc88pro_tambourine (issue #183, S-4, #115 child 4).",
+      "rust_target": "crates/xtask/src/extract/wav.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "sound/direct_sound_samples/sc88pro_timpani.wav": {
       "category": "audio.sample",
       "kind": "file",
-      "spec_owner": "03-audio",
-      "status": "pending"
+      "reason": "DirectSound instrument sample mus_title's voicegroup (title.inc, traced through its key-split sub-groups) references as DirectSoundWaveData_sc88pro_timpani. Decoded by a hand-rolled .wav chunk parser (fmt/smpl/agbp/agbl/data -- see crates/xtask/src/extract/wav.rs's module docs for the field-by-field derivation cited into tools/wav2agb's wav_file.cpp/converter.cpp) into the audio/sample::Sample schema's DirectSound shape (base_frequency, optional loop_start, signed 8-bit PCM -- crates/assets/src/audio/sample.rs), emitted via cargo xtask extract as pack id audio/sample/direct-sound/sc88pro_timpani (issue #183, S-4, #115 child 4).",
+      "rust_target": "crates/xtask/src/extract/wav.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "sound/direct_sound_samples/sc88pro_timpani_with_snare.wav": {
       "category": "audio.sample",
@@ -18977,44 +19017,58 @@
     "sound/direct_sound_samples/sc88pro_tr909_hand_clap.wav": {
       "category": "audio.sample",
       "kind": "file",
-      "spec_owner": "03-audio",
-      "status": "pending"
+      "reason": "DirectSound instrument sample mus_title's voicegroup (title.inc, traced through its key-split sub-groups) references as DirectSoundWaveData_sc88pro_tr909_hand_clap. Decoded by a hand-rolled .wav chunk parser (fmt/smpl/agbp/agbl/data -- see crates/xtask/src/extract/wav.rs's module docs for the field-by-field derivation cited into tools/wav2agb's wav_file.cpp/converter.cpp) into the audio/sample::Sample schema's DirectSound shape (base_frequency, optional loop_start, signed 8-bit PCM -- crates/assets/src/audio/sample.rs), emitted via cargo xtask extract as pack id audio/sample/direct-sound/sc88pro_tr909_hand_clap (issue #183, S-4, #115 child 4).",
+      "rust_target": "crates/xtask/src/extract/wav.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "sound/direct_sound_samples/sc88pro_trumpet_60.wav": {
       "category": "audio.sample",
       "kind": "file",
-      "spec_owner": "03-audio",
-      "status": "pending"
+      "reason": "DirectSound instrument sample mus_title's voicegroup (title.inc, traced through its key-split sub-groups) references as DirectSoundWaveData_sc88pro_trumpet_60. Decoded by a hand-rolled .wav chunk parser (fmt/smpl/agbp/agbl/data -- see crates/xtask/src/extract/wav.rs's module docs for the field-by-field derivation cited into tools/wav2agb's wav_file.cpp/converter.cpp) into the audio/sample::Sample schema's DirectSound shape (base_frequency, optional loop_start, signed 8-bit PCM -- crates/assets/src/audio/sample.rs), emitted via cargo xtask extract as pack id audio/sample/direct-sound/sc88pro_trumpet_60 (issue #183, S-4, #115 child 4).",
+      "rust_target": "crates/xtask/src/extract/wav.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "sound/direct_sound_samples/sc88pro_trumpet_72.wav": {
       "category": "audio.sample",
       "kind": "file",
-      "spec_owner": "03-audio",
-      "status": "pending"
+      "reason": "DirectSound instrument sample mus_title's voicegroup (title.inc, traced through its key-split sub-groups) references as DirectSoundWaveData_sc88pro_trumpet_72. Decoded by a hand-rolled .wav chunk parser (fmt/smpl/agbp/agbl/data -- see crates/xtask/src/extract/wav.rs's module docs for the field-by-field derivation cited into tools/wav2agb's wav_file.cpp/converter.cpp) into the audio/sample::Sample schema's DirectSound shape (base_frequency, optional loop_start, signed 8-bit PCM -- crates/assets/src/audio/sample.rs), emitted via cargo xtask extract as pack id audio/sample/direct-sound/sc88pro_trumpet_72 (issue #183, S-4, #115 child 4).",
+      "rust_target": "crates/xtask/src/extract/wav.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "sound/direct_sound_samples/sc88pro_trumpet_84.wav": {
       "category": "audio.sample",
       "kind": "file",
-      "spec_owner": "03-audio",
-      "status": "pending"
+      "reason": "DirectSound instrument sample mus_title's voicegroup (title.inc, traced through its key-split sub-groups) references as DirectSoundWaveData_sc88pro_trumpet_84. Decoded by a hand-rolled .wav chunk parser (fmt/smpl/agbp/agbl/data -- see crates/xtask/src/extract/wav.rs's module docs for the field-by-field derivation cited into tools/wav2agb's wav_file.cpp/converter.cpp) into the audio/sample::Sample schema's DirectSound shape (base_frequency, optional loop_start, signed 8-bit PCM -- crates/assets/src/audio/sample.rs), emitted via cargo xtask extract as pack id audio/sample/direct-sound/sc88pro_trumpet_84 (issue #183, S-4, #115 child 4).",
+      "rust_target": "crates/xtask/src/extract/wav.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "sound/direct_sound_samples/sc88pro_tuba_39.wav": {
       "category": "audio.sample",
       "kind": "file",
-      "spec_owner": "03-audio",
-      "status": "pending"
+      "reason": "DirectSound instrument sample mus_title's voicegroup (title.inc, traced through its key-split sub-groups) references as DirectSoundWaveData_sc88pro_tuba_39. Decoded by a hand-rolled .wav chunk parser (fmt/smpl/agbp/agbl/data -- see crates/xtask/src/extract/wav.rs's module docs for the field-by-field derivation cited into tools/wav2agb's wav_file.cpp/converter.cpp) into the audio/sample::Sample schema's DirectSound shape (base_frequency, optional loop_start, signed 8-bit PCM -- crates/assets/src/audio/sample.rs), emitted via cargo xtask extract as pack id audio/sample/direct-sound/sc88pro_tuba_39 (issue #183, S-4, #115 child 4).",
+      "rust_target": "crates/xtask/src/extract/wav.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "sound/direct_sound_samples/sc88pro_tuba_51.wav": {
       "category": "audio.sample",
       "kind": "file",
-      "spec_owner": "03-audio",
-      "status": "pending"
+      "reason": "DirectSound instrument sample mus_title's voicegroup (title.inc, traced through its key-split sub-groups) references as DirectSoundWaveData_sc88pro_tuba_51. Decoded by a hand-rolled .wav chunk parser (fmt/smpl/agbp/agbl/data -- see crates/xtask/src/extract/wav.rs's module docs for the field-by-field derivation cited into tools/wav2agb's wav_file.cpp/converter.cpp) into the audio/sample::Sample schema's DirectSound shape (base_frequency, optional loop_start, signed 8-bit PCM -- crates/assets/src/audio/sample.rs), emitted via cargo xtask extract as pack id audio/sample/direct-sound/sc88pro_tuba_51 (issue #183, S-4, #115 child 4).",
+      "rust_target": "crates/xtask/src/extract/wav.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "sound/direct_sound_samples/sc88pro_tubular_bell.wav": {
       "category": "audio.sample",
       "kind": "file",
-      "spec_owner": "03-audio",
-      "status": "pending"
+      "reason": "DirectSound instrument sample mus_title's voicegroup (title.inc, traced through its key-split sub-groups) references as DirectSoundWaveData_sc88pro_tubular_bell. Decoded by a hand-rolled .wav chunk parser (fmt/smpl/agbp/agbl/data -- see crates/xtask/src/extract/wav.rs's module docs for the field-by-field derivation cited into tools/wav2agb's wav_file.cpp/converter.cpp) into the audio/sample::Sample schema's DirectSound shape (base_frequency, optional loop_start, signed 8-bit PCM -- crates/assets/src/audio/sample.rs), emitted via cargo xtask extract as pack id audio/sample/direct-sound/sc88pro_tubular_bell (issue #183, S-4, #115 child 4).",
+      "rust_target": "crates/xtask/src/extract/wav.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "sound/direct_sound_samples/sc88pro_wind.wav": {
       "category": "audio.sample",
@@ -19133,8 +19187,10 @@
     "sound/direct_sound_samples/trinity_cymbal_crash.wav": {
       "category": "audio.sample",
       "kind": "file",
-      "spec_owner": "03-audio",
-      "status": "pending"
+      "reason": "DirectSound instrument sample mus_title's voicegroup (title.inc, traced through its key-split sub-groups) references as DirectSoundWaveData_trinity_cymbal_crash. Decoded by a hand-rolled .wav chunk parser (fmt/smpl/agbp/agbl/data -- see crates/xtask/src/extract/wav.rs's module docs for the field-by-field derivation cited into tools/wav2agb's wav_file.cpp/converter.cpp) into the audio/sample::Sample schema's DirectSound shape (base_frequency, optional loop_start, signed 8-bit PCM -- crates/assets/src/audio/sample.rs), emitted via cargo xtask extract as pack id audio/sample/direct-sound/trinity_cymbal_crash (issue #183, S-4, #115 child 4).",
+      "rust_target": "crates/xtask/src/extract/wav.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "sound/direct_sound_samples/unknown_01.wav": {
       "category": "audio.sample",
@@ -19247,14 +19303,18 @@
     "sound/direct_sound_samples/unknown_bell.wav": {
       "category": "audio.sample",
       "kind": "file",
-      "spec_owner": "03-audio",
-      "status": "pending"
+      "reason": "DirectSound instrument sample mus_title's voicegroup (title.inc, traced through its key-split sub-groups) references as DirectSoundWaveData_unknown_bell. Decoded by a hand-rolled .wav chunk parser (fmt/smpl/agbp/agbl/data -- see crates/xtask/src/extract/wav.rs's module docs for the field-by-field derivation cited into tools/wav2agb's wav_file.cpp/converter.cpp) into the audio/sample::Sample schema's DirectSound shape (base_frequency, optional loop_start, signed 8-bit PCM -- crates/assets/src/audio/sample.rs), emitted via cargo xtask extract as pack id audio/sample/direct-sound/unknown_bell (issue #183, S-4, #115 child 4).",
+      "rust_target": "crates/xtask/src/extract/wav.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "sound/direct_sound_samples/unknown_close_hihat.wav": {
       "category": "audio.sample",
       "kind": "file",
-      "spec_owner": "03-audio",
-      "status": "pending"
+      "reason": "DirectSound instrument sample mus_title's voicegroup (title.inc, traced through its key-split sub-groups) references as DirectSoundWaveData_unknown_close_hihat. Decoded by a hand-rolled .wav chunk parser (fmt/smpl/agbp/agbl/data -- see crates/xtask/src/extract/wav.rs's module docs for the field-by-field derivation cited into tools/wav2agb's wav_file.cpp/converter.cpp) into the audio/sample::Sample schema's DirectSound shape (base_frequency, optional loop_start, signed 8-bit PCM -- crates/assets/src/audio/sample.rs), emitted via cargo xtask extract as pack id audio/sample/direct-sound/unknown_close_hihat (issue #183, S-4, #115 child 4).",
+      "rust_target": "crates/xtask/src/extract/wav.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "sound/direct_sound_samples/unknown_female_voice.wav": {
       "category": "audio.sample",
@@ -19277,8 +19337,10 @@
     "sound/direct_sound_samples/unknown_open_hihat.wav": {
       "category": "audio.sample",
       "kind": "file",
-      "spec_owner": "03-audio",
-      "status": "pending"
+      "reason": "DirectSound instrument sample mus_title's voicegroup (title.inc, traced through its key-split sub-groups) references as DirectSoundWaveData_unknown_open_hihat. Decoded by a hand-rolled .wav chunk parser (fmt/smpl/agbp/agbl/data -- see crates/xtask/src/extract/wav.rs's module docs for the field-by-field derivation cited into tools/wav2agb's wav_file.cpp/converter.cpp) into the audio/sample::Sample schema's DirectSound shape (base_frequency, optional loop_start, signed 8-bit PCM -- crates/assets/src/audio/sample.rs), emitted via cargo xtask extract as pack id audio/sample/direct-sound/unknown_open_hihat (issue #183, S-4, #115 child 4).",
+      "rust_target": "crates/xtask/src/extract/wav.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "sound/direct_sound_samples/unknown_snare.wav": {
       "category": "audio.sample",
@@ -19307,8 +19369,10 @@
     "sound/direct_sound_samples/unused_sc55_tom.wav": {
       "category": "audio.sample",
       "kind": "file",
-      "spec_owner": "03-audio",
-      "status": "pending"
+      "reason": "DirectSound instrument sample mus_title's voicegroup (title.inc, traced through its key-split sub-groups) references as DirectSoundWaveData_unused_sc55_tom. Decoded by a hand-rolled .wav chunk parser (fmt/smpl/agbp/agbl/data -- see crates/xtask/src/extract/wav.rs's module docs for the field-by-field derivation cited into tools/wav2agb's wav_file.cpp/converter.cpp) into the audio/sample::Sample schema's DirectSound shape (base_frequency, optional loop_start, signed 8-bit PCM -- crates/assets/src/audio/sample.rs), emitted via cargo xtask extract as pack id audio/sample/direct-sound/unused_sc55_tom (issue #183, S-4, #115 child 4).",
+      "rust_target": "crates/xtask/src/extract/wav.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "sound/direct_sound_samples/unused_sc88pro_unison_slap.wav": {
       "category": "audio.sample",
@@ -19349,14 +19413,18 @@
     "sound/programmable_wave_samples/01.pcm": {
       "category": "audio.sample",
       "kind": "file",
-      "spec_owner": "03-audio",
-      "status": "pending"
+      "reason": "CGB programmable-wave table mus_title's voicegroup (title.inc) references as ProgrammableWaveData_1. Already the raw 16-byte wave table upstream's WaveData/wave RAM format expects (confirmed by inspection: exactly 16 bytes), so it is copied in directly by crates/xtask/src/extract/audio_samples.rs into the audio/sample::Sample schema's ProgrammableWave shape (crates/assets/src/audio/sample.rs), emitted via cargo xtask extract as pack id audio/sample/programmable-wave/01 (issue #183, S-4, #115 child 4).",
+      "rust_target": "crates/xtask/src/extract/audio_samples.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "sound/programmable_wave_samples/02.pcm": {
       "category": "audio.sample",
       "kind": "file",
-      "spec_owner": "03-audio",
-      "status": "pending"
+      "reason": "CGB programmable-wave table mus_title's voicegroup (title.inc) references as ProgrammableWaveData_2. Already the raw 16-byte wave table upstream's WaveData/wave RAM format expects (confirmed by inspection: exactly 16 bytes), so it is copied in directly by crates/xtask/src/extract/audio_samples.rs into the audio/sample::Sample schema's ProgrammableWave shape (crates/assets/src/audio/sample.rs), emitted via cargo xtask extract as pack id audio/sample/programmable-wave/02 (issue #183, S-4, #115 child 4).",
+      "rust_target": "crates/xtask/src/extract/audio_samples.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "sound/programmable_wave_samples/03.pcm": {
       "category": "audio.sample",
@@ -19373,14 +19441,18 @@
     "sound/programmable_wave_samples/05.pcm": {
       "category": "audio.sample",
       "kind": "file",
-      "spec_owner": "03-audio",
-      "status": "pending"
+      "reason": "CGB programmable-wave table mus_title's voicegroup (title.inc) references as ProgrammableWaveData_5. Already the raw 16-byte wave table upstream's WaveData/wave RAM format expects (confirmed by inspection: exactly 16 bytes), so it is copied in directly by crates/xtask/src/extract/audio_samples.rs into the audio/sample::Sample schema's ProgrammableWave shape (crates/assets/src/audio/sample.rs), emitted via cargo xtask extract as pack id audio/sample/programmable-wave/05 (issue #183, S-4, #115 child 4).",
+      "rust_target": "crates/xtask/src/extract/audio_samples.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "sound/programmable_wave_samples/06.pcm": {
       "category": "audio.sample",
       "kind": "file",
-      "spec_owner": "03-audio",
-      "status": "pending"
+      "reason": "CGB programmable-wave table mus_title's voicegroup (title.inc) references as ProgrammableWaveData_6. Already the raw 16-byte wave table upstream's WaveData/wave RAM format expects (confirmed by inspection: exactly 16 bytes), so it is copied in directly by crates/xtask/src/extract/audio_samples.rs into the audio/sample::Sample schema's ProgrammableWave shape (crates/assets/src/audio/sample.rs), emitted via cargo xtask extract as pack id audio/sample/programmable-wave/06 (issue #183, S-4, #115 child 4).",
+      "rust_target": "crates/xtask/src/extract/audio_samples.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "sound/programmable_wave_samples/07.pcm": {
       "category": "audio.sample",

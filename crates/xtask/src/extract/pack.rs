@@ -74,7 +74,14 @@ pub const MAGIC: [u8; 8] = *b"PKMRPACK";
 
 /// The format version this writer emits (and the only version
 /// `crates/assets`'s reader accepts).
-pub const FORMAT_VERSION: u32 = 2;
+///
+/// History: `1` was the original layout; `2` added the NPC sprite-sheet and
+/// palette entries issue #161 needs; `3` added the `audio/sample/*` entries
+/// issue #183 needs (S-4, `#115` child 4) — see `crate::extract::audio_samples`'s
+/// module docs. Each bump is a pure content addition under the existing
+/// [`PackKind`] tags (`audio/sample/*` entries are [`PackKind::Raw`]); the
+/// wire layout above hasn't changed since `1`.
+pub const FORMAT_VERSION: u32 = 3;
 
 /// What kind of content an entry's payload holds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
