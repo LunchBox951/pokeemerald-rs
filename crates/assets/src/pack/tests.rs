@@ -946,7 +946,13 @@ fn real_pack_audio_samples_decode_through_the_sample_schema() {
         };
         decoded += 1;
     }
-    assert_eq!(decoded, 36, "every expected audio/sample id should decode");
+    // Both loops iterate fixed const arrays and count unconditionally, so
+    // this pins the expected-id lists' lengths (32 + 4), not decoding --
+    // the decode coverage is the loop bodies above.
+    assert_eq!(
+        decoded, 36,
+        "the expected-id lists must cover all 36 samples"
+    );
 
     let flute_bytes = pack
         .raw("audio/sample/direct-sound/sc88pro_flute")

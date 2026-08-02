@@ -35,8 +35,11 @@
 //! - `smpl`: the standard MIDI sampler chunk. `MIDIUnityNote` (offset 12)
 //!   and `MIDIPitchFraction` (offset 16) feed the pitch formula below;
 //!   `MIDIPitchFraction` converts to cents the same way
-//!   `wav_file.cpp:170` does (`fraction / (2^32 * 100)`, `0..2^32` mapping
-//!   to `0.0..100.0` cents). `NumSampleLoops` (offset 28) must be `0` or
+//!   `wav_file.cpp:170` does (`fraction / (2^32 * 100)`; upstream's own
+//!   comment at `:169` glosses that as `0.0..100.0` cents, though the
+//!   expression actually maps to `0.0..0.01` -- mirrored as-is for
+//!   fidelity, and moot in practice: every shipped sample has pitch
+//!   fraction `0` and an `agbp` override besides). `NumSampleLoops` (offset 28) must be `0` or
 //!   `1` — more than one loop is [`WavError::TooManySampleLoops`],
 //!   matching `wav_file.cpp:172-173`'s own rejection. When one loop is
 //!   present, its `Type` (offset 40 relative to the chunk start; `0` is
