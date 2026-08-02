@@ -366,6 +366,68 @@ fn synthetic_overworld_pack_entries_for(tileset: &str, width: u16, height: u16) 
     entries
 }
 
+/// [`synthetic_overworld_pack_entries_for`]'s `"general"` entries, with a
+/// second metatile (id 1, behavior `special_behavior`) appended to
+/// `metatiles`/`metatile-attributes` and `special_pos`'s own grid cell
+/// switched to reference it -- everything else (collision, elevation,
+/// tile/palette bytes) stays exactly as the uniform fixture built it, so the
+/// special cell renders identically and differs only in the one byte
+/// `MapRuntime::metatile_behavior` reads. See
+/// [`synthetic_scene_with_special_tile`], which wraps this into a scene.
+fn synthetic_overworld_pack_entries_with_special_tile(
+    width: u16,
+    height: u16,
+    special_pos: (u16, u16),
+    special_behavior: u8,
+) -> Vec<Entry> {
+    let mut entries = synthetic_overworld_pack_entries_for("general", width, height);
+
+    // metatiles.bin: metatile 1's raw entries are identical to metatile 0's
+    // (same combined tile index 0) -- only the *attribute* table below tells
+    // the two apart, which is all `metatile_behavior` consults.
+    let metatile_1: Vec<u8> = std::iter::repeat_n(0u16.to_le_bytes(), 8)
+        .flatten()
+        .collect();
+    let metatiles = entries
+        .iter_mut()
+        .find(|e| e.id == "tileset/general/metatiles")
+        .expect("the general fixture always fabricates its own metatiles entry");
+    metatiles.payload.extend_from_slice(&metatile_1);
+
+    // metatile_attributes.bin: metatile 1 keeps the same COVERED layer type
+    // as metatile 0 (fixture docs on why COVERED -- the player OBJ must
+    // never be hidden by it), only `behavior` differs.
+    let attr_1 = ((1u16 << 12) | u16::from(special_behavior)).to_le_bytes();
+    let attrs = entries
+        .iter_mut()
+        .find(|e| e.id == "tileset/general/metatile-attributes")
+        .expect("the general fixture always fabricates its own metatile-attributes entry");
+    attrs.payload.extend_from_slice(&attr_1);
+
+    // layout/map_test/map: retarget `special_pos`'s own cell to metatile id
+    // 1 -- same collision (0, walkable) and elevation (3) as every other
+    // cell in the uniform fixture, so only its behavior differs.
+    let (sx, sy) = special_pos;
+    assert!(
+        sx < width && sy < height,
+        "special_pos must lie inside the {width}x{height} fixture"
+    );
+    let cell = assets::MetatileCell {
+        metatile_id: 1,
+        collision: 0,
+        elevation: 3,
+    }
+    .pack();
+    let grid = entries
+        .iter_mut()
+        .find(|e| e.id == "layout/map_test/map")
+        .expect("the general fixture always fabricates its own layout entry");
+    let idx = (usize::from(sy) * usize::from(width) + usize::from(sx)) * 2;
+    grid.payload[idx..idx + 2].copy_from_slice(&cell.to_le_bytes());
+
+    entries
+}
+
 /// One frame per numbered entry of every animated region
 /// [`super::tileset_anims`] declares for `general` (that module's own
 /// cadence table), so `AnimatedTileset::load` resolves real entries in the
@@ -455,6 +517,38 @@ pub(crate) fn synthetic_scene(width: u16, height: u16) -> super::OverworldScene 
         height,
     )
     .expect("synthetic pack should decode cleanly")
+}
+
+/// [`synthetic_scene`], but the single cell at `special_pos` is a second,
+/// distinct metatile (id 1) whose behavior is `special_behavior` instead of
+/// ordinary ground (id 0, behavior `MB_NORMAL`) -- otherwise identical:
+/// fully walkable (no collision anywhere, including `special_pos`'s own
+/// neighbors), elevation 3 throughout.
+///
+/// `crate::flow::overworld_phase`'s own headless tests (issue #194) use this
+/// to prove that a *legal, walkable* step in an arrow-warp tile's own
+/// direction warps instead of stepping -- something no bundled real map can
+/// exercise, since every arrow tile this port's own data reaches has its
+/// arrow direction impassable (`OverworldPhase::step`'s "Warp timing" docs;
+/// the Brendan's-house doormat's own `(8, 9)` is off-map).
+pub(crate) fn synthetic_scene_with_special_tile(
+    width: u16,
+    height: u16,
+    special_pos: (u16, u16),
+    special_behavior: u8,
+) -> super::OverworldScene {
+    synthetic_scene_result(
+        write_synthetic_pack(synthetic_overworld_pack_entries_with_special_tile(
+            width,
+            height,
+            special_pos,
+            special_behavior,
+        )),
+        "gTileset_General",
+        width,
+        height,
+    )
+    .expect("synthetic pack with a special tile should decode cleanly")
 }
 
 /// [`synthetic_scene`]'s fallible core, parameterized on the pack bytes and
