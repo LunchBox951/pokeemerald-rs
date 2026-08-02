@@ -19,8 +19,10 @@
 //!    voicegroup named `title`.
 //! 4. `sound/voice_groups.inc:66`: `.include "sound/voicegroups/title.inc"`.
 //!
-//! `sound/voicegroups/title.inc` itself has 4 `DirectSoundWaveData_*`
-//! slots and 4 `ProgrammableWaveData_*` slots directly, plus 6
+//! `sound/voicegroups/title.inc` itself has 5 `DirectSoundWaveData_*`
+//! slots (`sc88pro_glockenspiel`, `sc88pro_tubular_bell`, `sc88pro_harp`,
+//! `sc88pro_timpani`, `sc88pro_flute`) and 4 `ProgrammableWaveData_*`
+//! slots directly, plus 6
 //! `voice_keysplit`/`voice_keysplit_all` indirections to further voicegroups
 //! (`rs_drumset`, and the `piano`/`strings`/`trumpet`/`tuba`/`french_horn`
 //! keysplits under `sound/voicegroups/keysplits/`) that themselves resolve
@@ -58,8 +60,16 @@
 //! [`PackKind::Raw`] entry (this pipeline never depends on `crates/assets`,
 //! and vice versa — see `crate::extract::pack`'s module docs — so
 //! [`encode_direct_sound`]/[`encode_programmable_wave`] below are this
-//! crate's own copy of that wire format, not a shared abstraction; pinned
-//! by this module's own tests rather than a cross-crate round trip).
+//! crate's own copy of that wire format, not a shared abstraction).
+//!
+//! Because they *are* a copy, this module's own tests can only pin this
+//! side's understanding of the layout. The cross-crate half of the pin —
+//! decoding the real extracted pack's `audio/sample/*` payloads back
+//! through `Sample::decode` and asserting concrete field values — lives in
+//! `crates/assets/src/pack/tests.rs`'s
+//! `real_pack_audio_samples_decode_through_the_sample_schema`, which CI
+//! runs (`cargo test -p assets -- --ignored`, after the extract step). That
+//! is what would catch the two encoders drifting apart.
 //!
 //! # Field derivation: see [`super::wav`]
 //!
@@ -214,7 +224,7 @@ pub(super) fn extract_audio_samples(
 #[cfg(test)]
 mod tests {
     use super::{
-        encode_direct_sound, encode_programmable_wave, DIRECT_SOUND_SAMPLES,
+        encode_direct_sound, encode_programmable_wave, read_file, wav, DIRECT_SOUND_SAMPLES,
         PROGRAMMABLE_WAVE_SAMPLES, PROGRAMMABLE_WAVE_SIZE,
     };
 
@@ -225,13 +235,22 @@ mod tests {
         ))
     }
 
+    /// Every expected id reaches the pack, *and* at least one real payload
+    /// is pinned at the byte level rather than only by its id: an id search
+    /// alone would pass even if [`encode_direct_sound`] wrote garbage. The
+    /// consumer half of that pin (the same concrete triple, read back out
+    /// of the real pack through `crates/assets::audio::Sample::decode`)
+    /// lives in `crates/assets/src/pack/tests.rs`'s
+    /// `real_pack_audio_samples_decode_through_the_sample_schema`, which CI
+    /// runs via `cargo test -p assets -- --ignored` -- this crate's own
+    /// `--ignored` lane is not part of the CI gate.
     #[test]
     #[ignore = "needs a local `./init.sh`-fetched pokeemerald/ checkout"]
     fn direct_sound_and_programmable_wave_samples_are_extracted() {
         // Same crude substring-search strategy as
         // `extract::tests::layout_grids_are_extracted` (no pack reader
         // lives in this crate -- see its comment).
-        use super::super::{extract_to, upstream_present};
+        use super::super::{extract_to, repo_root, upstream_present};
         assert!(upstream_present(), "run ./init.sh first");
         let path = scratch_path("audio-samples");
         let report = extract_to(&path).expect("extraction should succeed against a real checkout");
@@ -254,6 +273,51 @@ mod tests {
                 "missing pack entry id `{id}`"
             );
         }
+
+        // Payload-level pin, on this crate's own representation. Concrete
+        // values read off `sound/direct_sound_samples/sc88pro_flute.wav`'s
+        // own chunks: `agbp` = 3425024 (so the pitch word is that override,
+        // deliberately not `sample_rate * 1024` = 3424256), `smpl` loop
+        // start = 1312, `agbl` = 1874 (one less than the naive loop end
+        // 1875 = the inclusive `smpl` loop end 1874, plus one). See
+        // `super::wav`'s module docs for why each of those is the derived
+        // field.
+        let flute_path =
+            repo_root().join("pokeemerald/sound/direct_sound_samples/sc88pro_flute.wav");
+        let flute =
+            read_file(&flute_path).expect("the flute sample source exists in a real checkout");
+        let sample = wav::decode(&flute).expect("the flute sample source should decode");
+        assert_eq!(sample.base_frequency, 3_425_024);
+        assert_eq!(sample.loop_start, Some(1312));
+        assert_eq!(sample.data.len(), 1874);
+
+        // ...and that exact payload is what actually reached the pack.
+        let payload = encode_direct_sound(sample.base_frequency, sample.loop_start, &sample.data);
+        assert!(
+            bytes.windows(payload.len()).any(|window| window == payload),
+            "the flute sample's encoded payload is not present in the pack"
+        );
+
+        let wave_path = repo_root().join("pokeemerald/sound/programmable_wave_samples/01.pcm");
+        let table =
+            read_file(&wave_path).expect("the programmable-wave 01 source exists in a checkout");
+        assert_eq!(
+            table,
+            vec![
+                0x01, 0x25, 0x8a, 0xde, 0xfe, 0xc9, 0x63, 0x10, 0x01, 0x25, 0x8a, 0xde, 0xfe, 0xc9,
+                0x63, 0x10
+            ]
+        );
+        let wave_payload = encode_programmable_wave(
+            &<[u8; PROGRAMMABLE_WAVE_SIZE]>::try_from(table.as_slice()).unwrap(),
+        );
+        assert!(
+            bytes
+                .windows(wave_payload.len())
+                .any(|window| window == wave_payload),
+            "programmable-wave 01's encoded payload is not present in the pack"
+        );
+
         let _ = std::fs::remove_file(report.output_path);
     }
 

@@ -49,9 +49,13 @@
 //!   (`wav_file.cpp:208`).
 //! - `agbp` / `agbl`: two non-standard chunks this decomp's fork of
 //!   `wav2agb` adds (`README.md:6-11`, `:9-11`), each a single little-endian
-//!   `u32`. `agbp` is an *exact* override for the compiled pitch word,
-//!   needed because recomputing it from the sample rate/MIDI key can lose
-//!   precision the original build didn't (`README.md:7`) — see
+//!   `u32`. A *zero* word in either chunk means "no override", not "override
+//!   with zero": upstream stores both in fields that default to `0` and
+//!   consults them only when non-zero (`converter.cpp:392-397` for `agbp`,
+//!   `:399-402` for `agbl`), so a present-but-zero chunk falls back to the
+//!   derived value here too. `agbp` is an *exact* override for the compiled
+//!   pitch word, needed because recomputing it from the sample rate/MIDI key
+//!   can lose precision the original build didn't (`README.md:7`) — see
 //!   [`derive_pitch`]. `agbl` is an exact override for the compiled
 //!   `WaveData::size` word, correcting a genuine upstream-tool quirk:
 //!   every shipped direct-sound sample's compiled data is one sample
@@ -78,8 +82,13 @@
 //! ```text
 //! pitch = sr                                         if key == 60 && tuning == 0.0
 //!       = sr * 2^((60 - key) / 12 + tuning / 1200)    otherwise
-//! base_frequency = agbp, if present, else round(pitch * 1024) truncated to a u32
+//! base_frequency = agbp, if non-zero, else (pitch * 1024) truncated to a u32
 //! ```
+//!
+//! The truncation is deliberate and not a rounding: `converter.cpp:396`
+//! writes `static_cast<uint32_t>(pitch * 1024.0)`, which discards the
+//! fractional part rather than rounding to nearest, and this reader has to
+//! agree with the word the real cartridge ships.
 //!
 //! The `* 1024` fixed-point scale is what
 //! `crates/assets/src/audio/sample.rs`'s [`base_frequency`
@@ -88,27 +97,41 @@
 //!
 //! # Sample count / loop-point derivation ([`WavSample::data`], [`WavSample::loop_start`])
 //!
-//! The compiled `WaveData::size` word (`agbl`, if present, else the naive
-//! loop end above) is this schema's `data.len()`: `crates/assets`'s
-//! `Sample::decode` and
+//! The compiled `WaveData::size` word (`agbl`, if present and non-zero,
+//! else the naive loop end above) is this schema's `data.len()`:
+//! `crates/assets`'s `Sample::decode` and
 //! this reader agree that a `DirectSoundSample`'s `data` is exactly the
 //! samples the real mixer would ever read, nothing more. This deliberately
 //! excludes two artifacts of the *compiled binary*'s own physical layout
 //! that carry no additional waveform content:
 //!
-//! - The guard sample `convert_uncompressed` appends after the declared
-//!   loop end (`converter.cpp:58-75`) — a copy of the sample at
-//!   `loop_start` (or silence, for a one-shot), there purely so the
-//!   original hardware mixer's linear interpolation has a defined value to
-//!   read one sample past the wrap point. A future mixer over this schema
-//!   wraps its own read index back to `loop_start` instead, so it never
-//!   needs a physically-duplicated guard byte.
-//! - Any bytes beyond `agbl` when the naive loop end (which is what
-//!   actually bounds `convert_uncompressed`'s sample loop,
-//!   `converter.cpp:399-422` and `:456-461`) exceeds it: the real compiled
-//!   binary carries them, but `WaveData::size` — the field the real mixer
-//!   reads to know how many samples exist — is `agbl`, so they are dead
-//!   padding no playback path ever reaches.
+//! - The zero bytes the shipped layout pads with. This tree builds these
+//!   sources with `wav2agb -b` (`audio_rules.mk:26`), i.e. binary output,
+//!   whose sample region is written by `convert_uncompressed_bin`
+//!   (`converter.cpp:77-92`, called from the binary-output branch at
+//!   `:426`): exactly `loopEnd` samples, then zero bytes until the emitted
+//!   `.bin`'s total length is a multiple of 4 (`:88-91`). That path appends
+//!   **no** guard sample — the padding is physical 4-byte alignment
+//!   carrying no waveform, so this schema drops it.
+//!
+//!   The `.s`-output variant, `convert_uncompressed` (`converter.cpp:56-75`,
+//!   called at `:457`), is *not* what this tree builds, but it is worth
+//!   naming: it appends one extra sample after the declared loop end
+//!   (`:74`) — a copy of the sample at `loop_start`, or silence for a
+//!   one-shot — purely so the original hardware mixer's linear
+//!   interpolation has a defined value to read one sample past the wrap
+//!   point. That is the motivation for the consumer discipline this schema
+//!   assumes either way: a mixer over these samples wraps its own read
+//!   index back to `loop_start`, so it never needs a physically-duplicated
+//!   guard sample and neither layout has to supply one.
+//! - Any bytes beyond `agbl` when the naive loop end exceeds it. The naive
+//!   end (`wf.loopEnd`) is what bounds the sample loop that actually writes
+//!   payload bytes (`converter.cpp:79`); the `agbl` override applies only
+//!   to the `loop_end` word written into the compiled header (`:399-402`,
+//!   written at `:422`), never to how many samples get emitted. So the real
+//!   compiled binary can carry samples past `agbl` — but `WaveData::size`,
+//!   the field the real mixer reads to know how many samples exist, is
+//!   `agbl`, making them dead payload no playback path ever reaches.
 //!
 //! `loop_start` is `Some(smpl loop Start)` when the sampler chunk declares
 //! exactly one loop, `None` otherwise (matching
@@ -160,9 +183,9 @@ pub(crate) enum WavError {
     /// A `smpl` chunk's loop type was not `0` (forward-only, the only type
     /// any upstream sample uses).
     UnsupportedLoopType { loop_type: u32 },
-    /// The derived sample count (`agbl`, if present, else the naive loop
-    /// end) exceeds the number of samples actually present in the `data`
-    /// chunk.
+    /// The derived sample count (`agbl`, if present and non-zero, else the
+    /// naive loop end) exceeds the number of samples actually present in
+    /// the `data` chunk.
     SizeOutOfRange { size: u32, num_samples: u32 },
     /// A `smpl` loop's start point falls at or past the derived sample
     /// count.
@@ -441,7 +464,9 @@ fn parse_smpl_chunk(
 }
 
 /// `(sample rate, MIDI unity note, tuning in cents, optional exact `agbp`
-/// override)` -> the compiled pitch word. See the module docs.
+/// override — already filtered to a non-zero word by [`decode`], matching
+/// `converter.cpp:392-397`)` -> the compiled pitch word. See the module
+/// docs.
 fn derive_pitch(sample_rate: u32, midi_key: u8, tuning_cents: f64, agb_pitch: Option<u32>) -> u32 {
     if let Some(exact) = agb_pitch {
         return exact;
@@ -499,14 +524,22 @@ pub(super) fn decode(bytes: &[u8]) -> Result<WavSample, WavError> {
         None => (60u8, 0.0, None, num_samples),
     };
 
+    // Both overrides are gated on the *value*, not just on the chunk being
+    // present: upstream keeps them in `wav_file` fields that default to `0`
+    // and applies them only `if (wf.agbPitch != 0)` / `if (wf.agbLoopEnd
+    // != 0)` (`converter.cpp:392-397`, `:399-402`). So a present-but-zero
+    // chunk has to fall back to the derived value here as well, rather than
+    // compiling a zero pitch word or a zero-length sample.
     let agb_pitch = find_chunk(&chunks, *b"agbp")
         .filter(|c| c.len() >= 4)
         .map(|c| read_u32(c, 0))
-        .transpose()?;
+        .transpose()?
+        .filter(|&pitch| pitch != 0);
     let agb_loop_end = find_chunk(&chunks, *b"agbl")
         .filter(|c| c.len() >= 4)
         .map(|c| read_u32(c, 0))
-        .transpose()?;
+        .transpose()?
+        .filter(|&size| size != 0);
 
     let base_frequency = derive_pitch(sample_rate, midi_key, tuning_cents, agb_pitch);
     let size = agb_loop_end.unwrap_or(naive_size);

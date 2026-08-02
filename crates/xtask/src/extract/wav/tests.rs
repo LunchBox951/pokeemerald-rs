@@ -115,6 +115,37 @@ fn agbp_override_replaces_the_computed_pitch() {
     assert_eq!(sample.base_frequency, 0x0034_2000);
 }
 
+/// Upstream reads `agbp` out of a field that defaults to `0` and applies it
+/// only when non-zero (`converter.cpp:392-397`), so a present-but-zero
+/// `agbp` chunk must fall back to the computed pitch rather than compiling
+/// a zero pitch word. No shipped sample carries one -- hence the crafted
+/// fixture.
+#[test]
+fn a_zero_agbp_chunk_falls_back_to_the_computed_pitch() {
+    let data = [128u8, 129];
+    let agbp = u32_chunk(0);
+    let bytes = build_wav(1, 1, 8, 3344, &[(b"agbp", &agbp)], &data);
+    let sample = decode(&bytes).unwrap();
+    assert_eq!(sample.base_frequency, 3344 * 1024);
+}
+
+/// The `agbl` half of the same upstream rule (`converter.cpp:399-402`): a
+/// zero override leaves the naive loop end in place instead of shrinking
+/// the decoded sample to zero length.
+#[test]
+fn a_zero_agbl_chunk_falls_back_to_the_naive_loop_end() {
+    let data = [128u8, 129, 130, 131, 132, 133];
+    let smpl = smpl_chunk(60, 0, 1, 3);
+    let agbl = u32_chunk(0);
+    let bytes = build_wav(1, 1, 8, 8000, &[(b"smpl", &smpl), (b"agbl", &agbl)], &data);
+    let sample = decode(&bytes).unwrap();
+    // Same result as
+    // `looped_sample_uses_naive_loop_end_plus_one_when_no_agbl_override`:
+    // naive end = loop_end(3) + 1 = 4 samples, not 0.
+    assert_eq!(sample.data, vec![0, 1, 2, 3]);
+    assert_eq!(sample.loop_start, Some(1));
+}
+
 #[test]
 fn non_default_midi_key_shifts_the_computed_pitch() {
     // One octave down (key 72 vs unity 60) halves the naive pitch.
