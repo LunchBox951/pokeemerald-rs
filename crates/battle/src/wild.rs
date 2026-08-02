@@ -61,18 +61,11 @@ pub fn roll_nature(rng: &mut impl BattleRng) -> Nature {
 /// `CreateMonWithNature`'s personality loop (`pokeemerald/src/pokemon.c:2305`):
 /// draw `Random32()` until its nature (`personality % NUM_NATURES`) matches
 /// `nature`.
-///
-/// # Panics
-///
-/// Never in practice, for the same reason as [`roll_nature`]: `personality %
-/// 25` is always a valid `NATURE_*` id.
 #[must_use]
 pub fn roll_personality_for_nature(nature: Nature, rng: &mut impl BattleRng) -> u32 {
     loop {
         let personality = rng.next_u32();
-        let rolled = Nature::from_id((personality % 25) as u8)
-            .expect("value % 25 is always a valid NATURE_* id");
-        if rolled == nature {
+        if Nature::from_personality(personality) == nature {
             return personality;
         }
     }
@@ -131,7 +124,9 @@ pub fn build_wild_pokemon(
     let nature = roll_nature(rng);
     let personality = roll_personality_for_nature(nature, rng);
     let ivs = roll_ivs(rng);
-    BattlePokemon::new(dex, species, level, nature, ivs, personality, moves)
+    // `BattlePokemon::new` re-derives the nature from `personality`; the
+    // rejection loop above guarantees it comes out as `nature`.
+    BattlePokemon::new(dex, species, level, ivs, personality, moves)
 }
 
 #[cfg(test)]

@@ -64,7 +64,7 @@ pub use hit::{ensure_resolvable, is_ordinary_hit_effect, HitOutcome};
 pub use nature::{Nature, Stat};
 pub use pokemon::{
     BattlePokemon, Ivs, MoveSlot, StatStages, Stats, MAX_IV, MAX_LEVEL, MAX_MON_MOVES, MIN_LEVEL,
-    MOVE_NONE,
+    MOVE_NONE, SPECIES_NONE,
 };
 pub use stat_stage::StatStage;
 pub use wild::build_wild_pokemon;

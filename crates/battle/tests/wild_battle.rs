@@ -70,16 +70,8 @@ const MAX_IVS: Ivs = Ivs {
 /// deterministic stats so the scenarios below are reproducible without
 /// depending on this test's own RNG script for stat generation too.
 fn fixed_mon(dex: &Dex, species: u16, level: u8, moves: Vec<MoveId>) -> BattlePokemon {
-    BattlePokemon::new(
-        dex,
-        SpeciesId(species),
-        level,
-        Nature::Hardy,
-        MAX_IVS,
-        0,
-        moves,
-    )
-    .expect("fixed_mon: species/moves must be in the dex")
+    BattlePokemon::new(dex, SpeciesId(species), level, MAX_IVS, 0, moves)
+        .expect("fixed_mon: species/moves must be in the dex")
 }
 
 #[test]
@@ -249,15 +241,7 @@ fn an_impossible_battler_cannot_be_built_at_all() {
     // formulas. (These are Pokémon IVs -- per-stat rolls capped at 31 by
     // MAX_IV_MASK -- not cryptographic initialization vectors.)
     assert_eq!(
-        BattlePokemon::new(
-            &dex,
-            SpeciesId(1),
-            101,
-            Nature::Hardy,
-            MAX_IVS,
-            0,
-            vec![MoveId(33)]
-        ),
+        BattlePokemon::new(&dex, SpeciesId(1), 101, MAX_IVS, 0, vec![MoveId(33)]),
         Err(BattleError::InvalidLevel(101))
     );
     assert!(matches!(
@@ -265,7 +249,6 @@ fn an_impossible_battler_cannot_be_built_at_all() {
             &dex,
             SpeciesId(1),
             5,
-            Nature::Hardy,
             Ivs { hp: 99, ..MAX_IVS },
             0,
             vec![MoveId(33)]
@@ -275,19 +258,11 @@ fn an_impossible_battler_cannot_be_built_at_all() {
     // An empty moveset would make the wild opponent's rejection loop spin
     // forever; MOVE_NONE is the placeholder for an *unfilled* slot.
     assert_eq!(
-        BattlePokemon::new(&dex, SpeciesId(1), 5, Nature::Hardy, MAX_IVS, 0, vec![]),
+        BattlePokemon::new(&dex, SpeciesId(1), 5, MAX_IVS, 0, vec![]),
         Err(BattleError::InvalidMoveCount(0))
     );
     assert_eq!(
-        BattlePokemon::new(
-            &dex,
-            SpeciesId(1),
-            5,
-            Nature::Hardy,
-            MAX_IVS,
-            0,
-            vec![MOVE_NONE]
-        ),
+        BattlePokemon::new(&dex, SpeciesId(1), 5, MAX_IVS, 0, vec![MOVE_NONE]),
         Err(BattleError::PlaceholderMove(0))
     );
 }

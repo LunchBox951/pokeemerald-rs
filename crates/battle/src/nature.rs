@@ -187,6 +187,21 @@ impl Nature {
         }
     }
 
+    /// `GetNatureFromPersonality` (`pokeemerald/src/pokemon.c:5498`):
+    /// `personality % NUM_NATURES`. This is the *only* way upstream ever
+    /// produces a mon's nature — it is derived, never stored — which is why
+    /// [`crate::pokemon::BattlePokemon::new`] derives it here instead of
+    /// accepting a separate (possibly contradictory) nature argument.
+    #[must_use]
+    pub const fn from_personality(personality: u32) -> Self {
+        match Self::from_id((personality % 25) as u8) {
+            Ok(nature) => nature,
+            // `personality % 25` is always `0..25`, every one of which
+            // `from_id` accepts.
+            Err(_) => unreachable!(),
+        }
+    }
+
     /// This nature's modifier for `stat`: `+1` (favoured), `-1`
     /// (disfavoured), or `0` (neutral nature, or a favoured/disfavoured
     /// nature queried on a stat it doesn't touch).
@@ -312,6 +327,21 @@ mod tests {
     fn from_id_rejects_out_of_range() {
         assert_eq!(Nature::from_id(25), Err(BattleError::UnknownNature(25)));
         assert_eq!(Nature::from_id(255), Err(BattleError::UnknownNature(255)));
+    }
+
+    #[test]
+    fn from_personality_is_modulo_twenty_five() {
+        // GetNatureFromPersonality (`pokemon.c:5498`).
+        assert_eq!(Nature::from_personality(0), Nature::Hardy);
+        assert_eq!(Nature::from_personality(24), Nature::Quirky);
+        assert_eq!(Nature::from_personality(25), Nature::Hardy);
+        assert_eq!(Nature::from_personality(u32::MAX), {
+            // 4294967295 % 25 == 20 -> Calm.
+            Nature::Calm
+        });
+        for nature in Nature::ALL {
+            assert_eq!(Nature::from_personality(u32::from(nature.id())), nature);
+        }
     }
 
     #[test]

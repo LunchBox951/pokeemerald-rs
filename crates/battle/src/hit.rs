@@ -298,7 +298,6 @@ mod tests {
     use crate::damage::{BattleRng, STRUGGLE};
     use crate::dex::Dex;
     use crate::error::BattleError;
-    use crate::nature::Nature;
     use crate::pokemon::{BattlePokemon, Ivs};
     use assets::{MoveId, SpeciesId};
 
@@ -343,16 +342,7 @@ mod tests {
     };
 
     fn mon(dex: &Dex, species: u16, level: u8, moves: Vec<MoveId>) -> BattlePokemon {
-        BattlePokemon::new(
-            dex,
-            SpeciesId(species),
-            level,
-            Nature::Hardy,
-            MAX_IVS,
-            0,
-            moves,
-        )
-        .unwrap()
+        BattlePokemon::new(dex, SpeciesId(species), level, MAX_IVS, 0, moves).unwrap()
     }
 
     #[test]

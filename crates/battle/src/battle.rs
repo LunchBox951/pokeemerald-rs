@@ -183,7 +183,9 @@ pub enum BattleEvent {
         by_player: bool,
         /// The move that was used.
         move_id: MoveId,
-        /// HP of damage dealt.
+        /// HP of damage actually dealt: the formula result capped at the
+        /// target's remaining HP, so an overkill KO reports the HP the
+        /// target really lost, never more.
         damage: u32,
         /// Whether this was a critical hit.
         is_critical: bool,
@@ -337,7 +339,9 @@ impl Battle {
     ///
     /// # Errors
     ///
-    /// Whatever [`crate::hit::ensure_resolvable`] reports for the first
+    /// [`BattleError::FaintedBattler`] if either mon is already at `0` HP
+    /// (see that variant's docs), or whatever
+    /// [`crate::hit::ensure_resolvable`] reports for the first
     /// unsupported move, player's moveset first — a `0`-power status move
     /// ([`BattleError::NonDamagingMove`]) or a move whose effect runs some
     /// other battle script ([`BattleError::UnsupportedMoveEffect`]), which
@@ -350,7 +354,15 @@ impl Battle {
         enemy: BattlePokemon,
         rng: &mut impl BattleRng,
     ) -> Result<Self, BattleError> {
-        for mon in [&player, &enemy] {
+        for (is_player, mon) in [(true, &player), (false, &enemy)] {
+            // Upstream never starts a wild battle around a fainted
+            // participant (the sent-out mon has HP; a wild mon spawns at
+            // full HP), and `take_turn` checks HP only *after* a hit lands
+            // — so a 0-HP battler (reachable via `apply_damage`) is
+            // rejected here, before any draw.
+            if mon.is_fainted() {
+                return Err(BattleError::FaintedBattler(is_player));
+            }
             for slot in mon.moves() {
                 ensure_resolvable(&dex, slot.move_id)?;
                 if slot.move_id == STRUGGLE {
@@ -660,16 +672,25 @@ impl Battle {
                 damage,
                 is_critical,
             } => {
+                // Report the HP the defender actually loses, not the raw
+                // formula result — upstream's `Cmd_datahpupdate` records the
+                // same cap on a lethal hit (`gHpDealt = gBattleMons[].hp`,
+                // `battle_script_commands.c:1920`-`:1929`).
+                let dealt = damage.min(if attacker_is_player {
+                    self.enemy.current_hp()
+                } else {
+                    self.player.current_hp()
+                });
                 events.push(BattleEvent::Hit {
                     by_player: attacker_is_player,
                     move_id,
-                    damage,
+                    damage: dealt,
                     is_critical,
                 });
                 if attacker_is_player {
-                    self.enemy.apply_damage(damage);
+                    self.enemy.apply_damage(dealt);
                 } else {
-                    self.player.apply_damage(damage);
+                    self.player.apply_damage(dealt);
                 }
 
                 let defender_fainted = if attacker_is_player {
@@ -707,7 +728,6 @@ mod tests {
     use crate::damage::{BattleRng, STRUGGLE};
     use crate::dex::Dex;
     use crate::error::BattleError;
-    use crate::nature::Nature;
     use crate::pokemon::{BattlePokemon, Ivs, MOVE_NONE};
     use assets::{MoveId, SpeciesId};
 
@@ -753,16 +773,7 @@ mod tests {
     };
 
     fn max_iv_mon(dex: &Dex, species: u16, level: u8, moves: Vec<MoveId>) -> BattlePokemon {
-        BattlePokemon::new(
-            dex,
-            SpeciesId(species),
-            level,
-            Nature::Hardy,
-            MAX_IVS,
-            0,
-            moves,
-        )
-        .unwrap()
+        BattlePokemon::new(dex, SpeciesId(species), level, MAX_IVS, 0, moves).unwrap()
     }
 
     #[test]
@@ -1371,5 +1382,69 @@ mod tests {
         assert!(rejected.events().is_empty());
         assert_eq!(rng.draws(), 1, "a PP-less slot draws nothing");
         assert_eq!(battle.enemy().moves()[0].pp, enemy_pp);
+    }
+
+    #[test]
+    fn a_fainted_battler_is_rejected_before_the_battle_start_draw() {
+        let dex = Dex::new();
+        // `apply_damage` is public, so a 0-HP mon is constructible — but
+        // upstream never starts a wild battle around one, and `take_turn`
+        // checks HP only after a hit, so `Battle::new` refuses it.
+        let mut fainted = max_iv_mon(&dex, 4, 50, vec![MoveId(33)]);
+        fainted.apply_damage(fainted.stats().max_hp);
+        let healthy = max_iv_mon(&dex, 19, 5, vec![MoveId(33)]);
+
+        // Empty scripts: a draw before the rejection panics the SequenceRng
+        // rather than silently passing.
+        let mut rng = SequenceRng::new([]);
+        assert_eq!(
+            Battle::new(dex.clone(), fainted.clone(), healthy.clone(), &mut rng).unwrap_err(),
+            BattleError::FaintedBattler(true)
+        );
+        assert_eq!(rng.draws(), 0, "a rejected configuration draws nothing");
+
+        let mut rng = SequenceRng::new([]);
+        assert_eq!(
+            Battle::new(dex, healthy, fainted, &mut rng).unwrap_err(),
+            BattleError::FaintedBattler(false)
+        );
+        assert_eq!(rng.draws(), 0, "a rejected configuration draws nothing");
+    }
+
+    #[test]
+    fn an_overkill_hit_reports_only_the_hp_actually_lost() {
+        let dex = Dex::new();
+        // Level 50 Charmander's Tackle against a level 2 Rattata computes
+        // far more damage than the Rattata's max HP; the Hit event must
+        // report the HP actually lost (the cap), not the raw formula result.
+        let player = max_iv_mon(&dex, 4, 50, vec![MoveId(33)]);
+        let enemy = max_iv_mon(&dex, 19, 2, vec![MoveId(33)]);
+        let enemy_max_hp = enemy.stats().max_hp;
+
+        // Battle-start turn number; turn's turn number; opponent's move
+        // pick; player's hit (accuracy pass / no crit / best damage roll).
+        let mut rng = SequenceRng::new([0, 0, 0, 0, 1, 0]);
+        let mut battle = Battle::new(dex, player, enemy, &mut rng).unwrap();
+        let events = battle
+            .take_turn(PlayerAction::UseMove(0), &mut rng)
+            .unwrap();
+
+        let hit_damage = events
+            .iter()
+            .find_map(|event| match event {
+                BattleEvent::Hit {
+                    by_player: true,
+                    damage,
+                    ..
+                } => Some(*damage),
+                _ => None,
+            })
+            .expect("the player's one-shot hit must be reported");
+        assert_eq!(
+            hit_damage, enemy_max_hp,
+            "an overkill KO reports the defender's whole HP bar, never more"
+        );
+        assert_eq!(battle.enemy().current_hp(), 0);
+        assert_eq!(battle.outcome(), Some(BattleOutcome::PlayerWon));
     }
 }

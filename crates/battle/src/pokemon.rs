@@ -36,6 +36,13 @@ pub const MAX_MON_MOVES: usize = 4;
 /// `MOVE_NONE` — which is why [`BattlePokemon::new`] refuses one.
 pub const MOVE_NONE: MoveId = MoveId(0);
 
+/// `SPECIES_NONE` (`pokeemerald/include/constants/species.h:4`): the reserved
+/// zero id whose `gSpeciesInfo` row is an all-zero placeholder, not a real
+/// species. Upstream never builds a mon from it, so [`BattlePokemon::new`]
+/// refuses it ([`BattleError::PlaceholderSpecies`]) rather than turning the
+/// empty row's zero base stats into a fightable battler.
+pub const SPECIES_NONE: SpeciesId = SpeciesId(0);
+
 /// `MIN_LEVEL` (`pokeemerald/include/constants/pokemon.h:145`).
 pub const MIN_LEVEL: u8 = 1;
 
@@ -184,8 +191,8 @@ pub struct MoveSlot {
 /// cannot change the value or the division order `(behavioral-fidelity)`.
 /// Whenever EV tracking arrives, the term has to come back at that exact
 /// position — inside the parenthesised sum, not folded into `n`.
-fn calc_stat(base: u8, iv: u8, level: u8, nature: Nature, stat: Stat) -> u32 {
-    let n = (2 * u32::from(base) + u32::from(iv)) * u32::from(level) / 100 + 5;
+fn calc_stat(base: u8, individual_value: u8, level: u8, nature: Nature, stat: Stat) -> u32 {
+    let n = (2 * u32::from(base) + u32::from(individual_value)) * u32::from(level) / 100 + 5;
     nature.modify_stat(stat, n)
 }
 
@@ -193,8 +200,8 @@ fn calc_stat(base: u8, iv: u8, level: u8, nature: Nature, stat: Stat) -> u32 {
 /// `(((2*base + iv) * level) / 100) + level + 10`. HP is never nature-modified
 /// (`ModifyStatByNature` special-cases `statIndex <= STAT_HP`). The Shedinja
 /// 1-HP special case (`species == SPECIES_SHEDINJA`) is not modelled.
-fn calc_max_hp(base: u8, iv: u8, level: u8) -> u32 {
-    let n = 2 * u32::from(base) + u32::from(iv);
+fn calc_max_hp(base: u8, individual_value: u8, level: u8) -> u32 {
+    let n = 2 * u32::from(base) + u32::from(individual_value);
     (n * u32::from(level)) / 100 + u32::from(level) + 10
 }
 
@@ -257,10 +264,10 @@ impl BattlePokemon {
     /// # Errors
     ///
     /// [`BattleError::InvalidLevel`], [`BattleError::InvalidMoveCount`],
-    /// [`BattleError::PlaceholderMove`], [`BattleError::UnknownSpecies`], or
-    /// [`BattleError::UnknownMove`] — see [`BattlePokemon::new`] for what each
-    /// means. (IV range is the one check missing here, since IVs may not exist
-    /// yet at the point this is called.)
+    /// [`BattleError::PlaceholderMove`], [`BattleError::PlaceholderSpecies`],
+    /// [`BattleError::UnknownSpecies`], or [`BattleError::UnknownMove`] — see
+    /// [`BattlePokemon::new`] for what each means. (IV range is the one check
+    /// missing here, since IVs may not exist yet at the point this is called.)
     pub fn validate(
         dex: &Dex,
         species: SpeciesId,
@@ -276,6 +283,9 @@ impl BattlePokemon {
         if let Some(index) = moves.iter().position(|m| *m == MOVE_NONE) {
             return Err(BattleError::PlaceholderMove(index));
         }
+        if species == SPECIES_NONE {
+            return Err(BattleError::PlaceholderSpecies);
+        }
         dex.species(species)?;
         for move_id in moves {
             dex.move_data(*move_id)?;
@@ -283,7 +293,16 @@ impl BattlePokemon {
         Ok(())
     }
 
-    /// Build a full-HP battler at the given species/level/nature/IVs/moves.
+    /// Build a full-HP battler at the given species/level/IVs/moves.
+    ///
+    /// The nature is **derived from `personality`**
+    /// ([`Nature::from_personality`], upstream `GetNatureFromPersonality` —
+    /// `personality % NUM_NATURES`, `pokeemerald/src/pokemon.c:5498`) rather
+    /// than accepted separately: upstream never stores a nature, so a
+    /// battler whose nature contradicts its personality cannot exist there
+    /// and is unrepresentable here too. Callers that want a *specific*
+    /// nature supply a personality that derives it, exactly as upstream's
+    /// `CreateMonWithNature` does ([`crate::wild::roll_personality_for_nature`]).
     ///
     /// `level` must be in [`MIN_LEVEL`]`..=`[`MAX_LEVEL`], every IV in
     /// `0..=`[`MAX_IV`], and `moves` must be `1..=`[`MAX_MON_MOVES`] real
@@ -306,23 +325,25 @@ impl BattlePokemon {
     ///   [`crate::battle::Battle::choose_enemy_move`]).
     /// - [`BattleError::PlaceholderMove`] if any slot is [`MOVE_NONE`], the
     ///   empty-slot placeholder (see that constant's docs).
+    /// - [`BattleError::PlaceholderSpecies`] if `species` is [`SPECIES_NONE`],
+    ///   the reserved all-zero `gSpeciesInfo` row (see that constant's docs).
     /// - [`BattleError::UnknownSpecies`] / [`BattleError::UnknownMove`] if
     ///   `species`/any of `moves` is not in `dex`.
     pub fn new(
         dex: &Dex,
         species: SpeciesId,
         level: u8,
-        nature: Nature,
         ivs: Ivs,
         personality: u32,
         moves: Vec<MoveId>,
     ) -> Result<Self, BattleError> {
         Self::validate(dex, species, level, &moves)?;
+        let nature = Nature::from_personality(personality);
         if !ivs.is_valid() {
             let offender = ivs
                 .as_array()
                 .into_iter()
-                .find(|iv| *iv > MAX_IV)
+                .find(|individual_value| *individual_value > MAX_IV)
                 .unwrap_or(MAX_IV);
             return Err(BattleError::InvalidIv(offender));
         }
@@ -360,7 +381,8 @@ impl BattlePokemon {
         self.level
     }
 
-    /// This mon's nature.
+    /// This mon's nature — always `personality % 25`
+    /// ([`Nature::from_personality`]), derived at construction.
     #[must_use]
     pub const fn nature(&self) -> Nature {
         self.nature
@@ -372,10 +394,9 @@ impl BattlePokemon {
         self.ivs
     }
 
-    /// Personality value — carried for fidelity (it selects nature, and
-    /// upstream also derives gender/shininess/unown letter from it, none of
-    /// which this slice consumes) even though nothing in this crate reads it
-    /// back yet.
+    /// Personality value. [`BattlePokemon::nature`] is derived from it at
+    /// construction; upstream also derives gender/shininess/unown letter
+    /// from it, none of which this slice consumes.
     #[must_use]
     pub const fn personality(&self) -> u32 {
         self.personality
@@ -502,7 +523,7 @@ impl BattlePokemon {
 mod tests {
     use super::{
         calc_max_hp, calc_stat, compute_stats, BattlePokemon, Ivs, MoveSlot, StatStages, MAX_IV,
-        MAX_LEVEL, MIN_LEVEL, MOVE_NONE,
+        MAX_LEVEL, MIN_LEVEL, MOVE_NONE, SPECIES_NONE,
     };
     use crate::damage::MoveCategory;
     use crate::dex::Dex;
@@ -561,9 +582,8 @@ mod tests {
             dex,
             SpeciesId(1), // Bulbasaur
             5,
-            Nature::Hardy,
             Ivs::default(),
-            0x1234_5678,
+            0x1234_5663,      // % 25 == 0, so the derived nature is neutral Hardy
             vec![MoveId(33)], // Tackle
         )
         .unwrap()
@@ -598,15 +618,7 @@ mod tests {
         // with none of them filled never reaches the engine -- and an empty
         // moveset would make the wild opponent's rejection loop spin forever.
         assert_eq!(
-            BattlePokemon::new(
-                &dex,
-                SpeciesId(1),
-                5,
-                Nature::Hardy,
-                Ivs::default(),
-                0,
-                vec![]
-            ),
+            BattlePokemon::new(&dex, SpeciesId(1), 5, Ivs::default(), 0, vec![]),
             Err(BattleError::InvalidMoveCount(0))
         );
         // Overfull: MAX_MON_MOVES is 4 (`include/constants/global.h:82`).
@@ -615,7 +627,6 @@ mod tests {
                 &dex,
                 SpeciesId(1),
                 5,
-                Nature::Hardy,
                 Ivs::default(),
                 0,
                 vec![MoveId(33); 5]
@@ -636,7 +647,6 @@ mod tests {
                 &dex,
                 SpeciesId(1),
                 5,
-                Nature::Hardy,
                 Ivs::default(),
                 0,
                 vec![MOVE_NONE, MoveId(33)]
@@ -646,15 +656,7 @@ mod tests {
         // An all-placeholder moveset passes the non-empty count check, so the
         // placeholder check is what actually rejects it.
         assert_eq!(
-            BattlePokemon::new(
-                &dex,
-                SpeciesId(1),
-                5,
-                Nature::Hardy,
-                Ivs::default(),
-                0,
-                vec![MOVE_NONE]
-            ),
+            BattlePokemon::new(&dex, SpeciesId(1), 5, Ivs::default(), 0, vec![MOVE_NONE]),
             Err(BattleError::PlaceholderMove(0))
         );
     }
@@ -667,7 +669,6 @@ mod tests {
                 &dex,
                 SpeciesId(1),
                 level,
-                Nature::Hardy,
                 Ivs::default(),
                 0,
                 vec![MoveId(33)],
@@ -684,17 +685,7 @@ mod tests {
     #[test]
     fn new_rejects_ivs_above_the_five_bit_maximum() {
         let dex = Dex::new();
-        let build = |ivs| {
-            BattlePokemon::new(
-                &dex,
-                SpeciesId(1),
-                5,
-                Nature::Hardy,
-                ivs,
-                0,
-                vec![MoveId(33)],
-            )
-        };
+        let build = |ivs| BattlePokemon::new(&dex, SpeciesId(1), 5, ivs, 0, vec![MoveId(33)]);
         // Upstream stores each IV in five bits (MAX_IV_MASK = 31,
         // `include/constants/pokemon.h:201`), so 32+ is unrepresentable.
         for over in [
@@ -724,31 +715,57 @@ mod tests {
         let dex = Dex::new();
         let bad_species = SpeciesId(SpeciesTable::LEN_U16);
         assert_eq!(
-            BattlePokemon::new(
-                &dex,
-                bad_species,
-                5,
-                Nature::Hardy,
-                Ivs::default(),
-                0,
-                vec![MoveId(33)]
-            ),
+            BattlePokemon::new(&dex, bad_species, 5, Ivs::default(), 0, vec![MoveId(33)]),
             Err(BattleError::UnknownSpecies(bad_species))
         );
 
         let bad_move = MoveId(60_000);
         assert_eq!(
+            BattlePokemon::new(&dex, SpeciesId(1), 5, Ivs::default(), 0, vec![bad_move]),
+            Err(BattleError::UnknownMove(bad_move))
+        );
+    }
+
+    #[test]
+    fn new_rejects_the_species_none_placeholder() {
+        let dex = Dex::new();
+        // Slot 0 of `gSpeciesInfo` exists but is the all-zero SPECIES_NONE
+        // placeholder: addressable is not the same as real, so construction
+        // refuses it rather than building a fightable mon from zeroes.
+        assert_eq!(
+            BattlePokemon::new(&dex, SPECIES_NONE, 5, Ivs::default(), 0, vec![MoveId(33)]),
+            Err(BattleError::PlaceholderSpecies)
+        );
+    }
+
+    #[test]
+    fn nature_is_derived_from_the_personality_value() {
+        let dex = Dex::new();
+        let build = |personality| {
             BattlePokemon::new(
                 &dex,
                 SpeciesId(1),
                 5,
-                Nature::Hardy,
-                Ivs::default(),
-                0,
-                vec![bad_move]
-            ),
-            Err(BattleError::UnknownMove(bad_move))
+                MAX_IVS,
+                personality,
+                vec![MoveId(33)],
+            )
+            .unwrap()
+        };
+        // GetNatureFromPersonality (`pokemon.c:5498`): personality % 25.
+        // Nature id 3 is Adamant (+Atk), so a mon built at personality 3
+        // carries Adamant *and* Adamant-modified stats — a contradictory
+        // nature/personality pair is unrepresentable by construction.
+        let adamant = build(3);
+        assert_eq!(adamant.nature(), Nature::Adamant);
+        let bulbasaur = dex.species(SpeciesId(1)).unwrap();
+        assert_eq!(
+            adamant.stats(),
+            compute_stats(bulbasaur, 5, Nature::Adamant, MAX_IVS)
         );
+        // 28 % 25 == 3 wraps to the same nature.
+        assert_eq!(build(28).nature(), Nature::Adamant);
+        assert_eq!(build(0).nature(), Nature::Hardy);
     }
 
     #[test]

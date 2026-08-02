@@ -161,6 +161,30 @@ pub enum BattleError {
     /// Carries the offending move id.
     UnsupportedMoveEffect(MoveId),
 
+    /// A species handed to [`crate::pokemon::BattlePokemon::new`] was
+    /// [`crate::pokemon::SPECIES_NONE`], the *empty slot* placeholder
+    /// (`pokeemerald/include/constants/species.h:4`).
+    ///
+    /// Its `gSpeciesInfo` row exists but is all zeroes — no real mon is ever
+    /// built from it upstream, and constructing a battler over it would turn
+    /// the placeholder's zero base stats into a fightable `level + 10`-HP
+    /// battler. Rejected for the same reason as [`Self::PlaceholderMove`]:
+    /// addressable is not the same as real.
+    PlaceholderSpecies,
+
+    /// A battler handed to [`crate::battle::Battle::new`] was already
+    /// fainted (`0` HP, reachable through
+    /// [`crate::pokemon::BattlePokemon::apply_damage`]).
+    ///
+    /// Upstream never starts a wild battle with a fainted participant — the
+    /// player's first non-fainted party mon is sent out and a wild mon is
+    /// created at full HP — and [`crate::battle::Battle::take_turn`] assumes
+    /// live battlers (it checks HP only *after* a hit). Rejected before the
+    /// battle-start draw, so a refused configuration consumes no RNG.
+    ///
+    /// Carries `true` if the offending battler was the player's.
+    FaintedBattler(bool),
+
     /// [`crate::battle::Battle::take_turn`] was called after the battle
     /// already reached a terminal outcome (victory, defeat, or a successful
     /// run).
@@ -197,6 +221,13 @@ impl fmt::Display for BattleError {
                 "move `{}` has a battle effect this slice does not model",
                 id.0
             ),
+            Self::PlaceholderSpecies => {
+                write!(f, "species is the SPECIES_NONE placeholder")
+            }
+            Self::FaintedBattler(is_player) => {
+                let side = if *is_player { "player" } else { "enemy" };
+                write!(f, "the {side} battler is already fainted")
+            }
             Self::BattleAlreadyOver => write!(f, "the battle has already ended"),
         }
     }
