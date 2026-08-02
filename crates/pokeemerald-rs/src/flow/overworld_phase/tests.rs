@@ -1224,12 +1224,91 @@ fn walking_onto_the_doormat_facing_east_does_not_exit() {
 /// walkable-exit counterpart: before issue #194, `advance_player_one_frame`
 /// ran first here, the (now legal) step to `(8, 9)` landed, `in_transit`
 /// closed the poll for the whole crossing, and by the time it reopened the
-/// player was standing on `(8, 9)` -- ordinary ground, no warp, ever. No
-/// local pack is needed to observe the fix: whether or not `warp_to` can
-/// finish loading the real `MAP_LITTLEROOT_TOWN` destination, the one thing
-/// that must never happen either way is the player reaching `(8, 9)`.
+/// player was standing on `(8, 9)` -- ordinary ground, no warp, ever.
+///
+/// # What this test does and does not prove (pack-free ratchet)
+///
+/// This one runs in a plain `cargo test --workspace`, with no extracted
+/// pack, and that is the point: it is the *ratchet* that keeps the #194
+/// ordering from regressing in the default gate. But `warp_to` finishes
+/// through [`crate::overworld::load_room`], which needs a local pack for
+/// the real `MAP_LITTLEROOT_TOWN` destination, so with no pack the warp
+/// resolves, bails out at the load, and leaves the player where they were.
+/// Hence the assertions here are deliberately only the *negative* half --
+/// the player must never reach `(8, 9)`, and must never be left
+/// mid-crossing -- which is exactly and only what the pre-#194
+/// movement-first ordering violated.
+///
+/// What it therefore does **not** prove is that a warp actually fired: a
+/// regression that skipped the step while producing no warp at all (a
+/// soft-lock -- input consumed, nothing happening) would still satisfy both
+/// assertions. That positive half is pinned by the pack-gated sibling
+/// [`a_legal_step_in_the_arrow_direction_lands_the_warp`], which runs this
+/// same synthetic scene and asserts the destination map and tile.
 #[test]
 fn a_legal_step_in_the_arrow_direction_warps_instead_of_stepping() {
+    let mut phase = walkable_south_arrow_phase();
+
+    phase.step(held(Buttons::DOWN));
+
+    assert_ne!(
+        phase.player.position(),
+        (8, 9),
+        "a legal step in the arrow direction must never happen -- the warp preempts it \
+         (overworld.c:1444-1455); the pre-#194 movement-first ordering would have stepped \
+         the player onto (8, 9) here, before the poll ever got a chance to fire"
+    );
+    assert!(
+        !phase.player.in_transit(),
+        "no walk animation was ever started -- the step never ran"
+    );
+}
+
+/// The positive half of
+/// [`a_legal_step_in_the_arrow_direction_warps_instead_of_stepping`]: the
+/// same synthetic scene and the same single held-South frame, but asserting
+/// that the preempting warp actually *landed* rather than only that the
+/// step never happened -- so a regression that skips movement without
+/// warping (a soft-lock) fails here even though it passes the pack-free
+/// ratchet.
+///
+/// Needs a local pack because `warp_to` loads the real destination room
+/// ([`crate::overworld::load_room`] over extracted tileset/map data). The
+/// destination pins are the same ones
+/// [`standing_on_the_doormat_facing_north_and_holding_south_exits`] uses
+/// for the real front door: `MAP_LITTLEROOT_TOWN`, warp #1 at `(5, 8)`.
+#[test]
+#[ignore = "needs a local pack: run `cargo xtask extract` first"]
+fn a_legal_step_in_the_arrow_direction_lands_the_warp() {
+    let mut phase = walkable_south_arrow_phase();
+
+    phase.step(held(Buttons::DOWN));
+
+    assert_eq!(
+        phase.map_id,
+        assets::MapId("MAP_LITTLEROOT_TOWN"),
+        "the preempting arrow warp must actually land, not merely eat the step"
+    );
+    assert_eq!(
+        phase.player.position(),
+        (5, 8),
+        "Littleroot's own warp #1: the front door"
+    );
+    assert_ne!(
+        phase.player.position(),
+        (8, 9),
+        "and the step in the arrow direction still never happened"
+    );
+}
+
+/// The shared fixture behind the two tests above: the doormat's own real,
+/// static warp-event data on a **synthetic** scene where the tile south of
+/// it is walkable (see
+/// [`a_legal_step_in_the_arrow_direction_warps_instead_of_stepping`]'s doc
+/// comment for why no real map can stand in). Asserts its own
+/// preconditions, so a fixture that stopped describing the intended scene
+/// fails loudly rather than passing vacuously.
+fn walkable_south_arrow_phase() -> OverworldPhase {
     // `MapEventsTable` is generated at build time from checked-in map data
     // (`warp_tile_behavior`'s own doc comment), so this real warp event is
     // available with no `cargo xtask extract` pack.
@@ -1249,7 +1328,7 @@ fn a_legal_step_in_the_arrow_direction_warps_instead_of_stepping() {
         (8, 8),
         MB_SOUTH_ARROW_WARP,
     );
-    let mut phase = OverworldPhase::for_test(
+    let phase = OverworldPhase::for_test(
         scene,
         ONE_F,
         PlayerState::new((8, 8), 3, Direction::South),
@@ -1257,7 +1336,7 @@ fn a_legal_step_in_the_arrow_direction_warps_instead_of_stepping() {
     );
 
     // Fixture preconditions: the fabricated tile really is the arrow
-    // behavior this test means to exercise, and the tile south of it --
+    // behavior these tests mean to exercise, and the tile south of it --
     // unlike the real doormat's off-map `(8, 9)` -- really is walkable.
     let runtime = runtime_for(&phase);
     assert_eq!(runtime.metatile_behavior(8, 8), Some(MB_SOUTH_ARROW_WARP));
@@ -1268,19 +1347,7 @@ fn a_legal_step_in_the_arrow_direction_warps_instead_of_stepping() {
         "fixture precondition: (8, 9) must be walkable, unlike the real doormat's off-map tile"
     );
 
-    phase.step(held(Buttons::DOWN));
-
-    assert_ne!(
-        phase.player.position(),
-        (8, 9),
-        "a legal step in the arrow direction must never happen -- the warp preempts it \
-         (overworld.c:1444-1455); the pre-#194 movement-first ordering would have stepped \
-         the player onto (8, 9) here, before the poll ever got a chance to fire"
-    );
-    assert!(
-        !phase.player.in_transit(),
-        "no walk animation was ever started -- the step never ran"
-    );
+    phase
 }
 
 /// The issue #161 acceptance test: spawn (post-#158 intro handoff) ->

@@ -317,7 +317,8 @@ impl OverworldPhase {
     /// sets `heldDirection` at all while `tileTransitionState` is
     /// `T_TILE_CENTER` or `T_NOT_MOVING` (`:95-112`), the same "between
     /// steps" condition. (The movement-then-poll ordering below is the
-    /// implicit one.)
+    /// implicit one for that poll; see *Field input before movement* for
+    /// the at-rest arrow case that runs ahead of movement.)
     ///
     /// Door before arrow, matching upstream's own order within
     /// `ProcessPlayerFieldInput` (`:155-168`); at most one warp fires per
@@ -348,8 +349,8 @@ impl OverworldPhase {
     /// (`pokeemerald/src/overworld.c:1444-1455`). This method applies a
     /// frame's movement in one call ([`advance_player_one_frame`]), so the
     /// equivalent is narrower than swapping the whole method around:
-    /// `preempting_arrow_trigger` (a local below, not a separate item) re-checks the *same* pre-movement
-    /// facing/position/held-direction the ordinary poll above uses, but
+    /// `preempting_arrow_trigger` re-checks the *same* pre-movement
+    /// facing/position/held-direction the ordinary poll below uses, but
     /// gated on the player being at rest **before** this frame's movement
     /// (not after), and runs before [`advance_player_one_frame`] is even
     /// called. If it fires, movement is skipped outright this frame — a
@@ -380,9 +381,12 @@ impl OverworldPhase {
     /// ahead of [`advance_player_one_frame`]; the door path, and the arrow
     /// path's other two cases above, keep running where they always have.
     /// Exercised by this module's
-    /// `a_legal_step_in_the_arrow_direction_warps_instead_of_stepping`, a
-    /// synthetic scene (no bundled real map has a walkable arrow direction —
-    /// the doormat's `(8, 9)` is off-map, as the "Arrow warps" section notes).
+    /// `a_legal_step_in_the_arrow_direction_warps_instead_of_stepping` (the
+    /// pack-free ratchet: the step never happens) and its pack-gated
+    /// sibling `a_legal_step_in_the_arrow_direction_lands_the_warp` (the
+    /// warp really lands), both over a synthetic scene — no bundled real
+    /// map has a walkable arrow direction, the doormat's `(8, 9)` being
+    /// off-map, as the "Arrow warps" section notes.
     ///
     /// # NPC dialog routing (issue #161)
     ///
@@ -488,20 +492,7 @@ impl OverworldPhase {
                     &runtime,
                     &self.save1.event_data,
                 );
-
-                match outcome {
-                    StepOutcome::Advanced { to, .. } => self.pending_landing = Some(to),
-                    StepOutcome::Crossed { .. } => debug_assert!(
-                        false,
-                        "StepOutcome::Crossed is unreachable here: `advance_player_one_frame` \
-                         passes a `no_connections` resolver, so `PlayerState::step` never takes \
-                         its connection-crossing branch. Wiring real connections in must also \
-                         handle rebinding `map_id`/`scene` and `save1.location` here, atomically \
-                         with the position `PlayerState::step` has already committed into the \
-                         entered map's coordinate space."
-                    ),
-                    StepOutcome::Idle | StepOutcome::Turned(_) | StepOutcome::Blocked { .. } => {}
-                }
+                latch_landing(&mut self.pending_landing, outcome);
             } else {
                 // The walk-animation tick still advances every frame, even
                 // one a warp preempts movement on (module docs on
@@ -509,6 +500,17 @@ impl OverworldPhase {
                 // `pre_step_at_rest` already means nothing was draining, but
                 // called anyway so that contract stays unconditional rather
                 // than silently skipped on this one path.
+                //
+                // This path also skips the `pending_landing.take()` below
+                // (the preempting warp short-circuits it), so the "at rest
+                // => no latched landing" invariant has to hold on its own
+                // here rather than being restored by that take.
+                debug_assert!(
+                    self.pending_landing.is_none(),
+                    "at rest implies `pending_landing` is None: this preempt path never runs \
+                     the `take()` below, so a landing latched here would survive into a later \
+                     frame's door check"
+                );
                 self.player.tick();
             }
 
@@ -581,7 +583,8 @@ impl OverworldPhase {
             if warp_fired {
                 if interaction_tokens.is_some() {
                     eprintln!(
-                        "npc dialog: discarding a same-frame interaction with the departed                          map's NPC -- the warp takes precedence"
+                        "npc dialog: discarding a same-frame interaction with the departed \
+                         map's NPC -- the warp takes precedence"
                     );
                 }
             } else if let Some(tokens) = interaction_tokens {
@@ -726,6 +729,10 @@ impl OverworldPhase {
         };
 
         self.player = PlayerState::new((i32::from(x), i32::from(y)), elevation, facing);
+        // The departed map's latched landing tile must not survive into the
+        // destination map, where its coordinates would name an unrelated
+        // tile in the next frame's door check.
+        self.pending_landing = None;
         self.scene = scene;
         self.map_id = map;
         // Upstream's own `InitTilesetAnimations` reset (struct docs on
@@ -802,6 +809,30 @@ fn held_direction(buttons: ButtonState) -> Option<Direction> {
         Some(Direction::East)
     } else {
         None
+    }
+}
+
+/// Latch the tile a just-applied frame of movement started walking onto, if
+/// any -- the `pending_landing` half of [`OverworldPhase::step`]'s
+/// `tookStep` bookkeeping, factored out of that method's movement branch
+/// (which is at clippy's `too_many_lines` limit) rather than inlined there.
+///
+/// See [`OverworldPhase::step`]'s "Warp timing" section for why the landing
+/// is latched at step *start* and only tested for a warp once its walk
+/// animation has drained, a later frame.
+fn latch_landing(pending_landing: &mut Option<TilePos>, outcome: StepOutcome) {
+    match outcome {
+        StepOutcome::Advanced { to, .. } => *pending_landing = Some(to),
+        StepOutcome::Crossed { .. } => debug_assert!(
+            false,
+            "StepOutcome::Crossed is unreachable here: `advance_player_one_frame` passes a \
+             `no_connections` resolver, so `PlayerState::step` never takes its \
+             connection-crossing branch. Wiring real connections in must also handle rebinding \
+             `map_id`/`scene` and `save1.location` in `OverworldPhase::step`, atomically with \
+             the position `PlayerState::step` has already committed into the entered map's \
+             coordinate space."
+        ),
+        StepOutcome::Idle | StepOutcome::Turned(_) | StepOutcome::Blocked { .. } => {}
     }
 }
 
