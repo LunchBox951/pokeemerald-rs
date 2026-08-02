@@ -25408,6 +25408,18 @@
           "spec": "I-3",
           "status": "rewritten"
         },
+        "IsArrowWarpMetatileBehavior": {
+          "reason": "engine::overworld::warp::is_arrow_warp_trigger: dispatches by direction to metatile_behavior::is_{north,south,west,east}_arrow_warp exactly as upstream's sArrowWarpMetatileBehaviorChecks table does (field_player_avatar.c:226-232). Issue #174.",
+          "rust_target": "crates/engine/src/overworld/warp.rs",
+          "spec": "I-3",
+          "status": "rewritten"
+        },
+        "TryArrowWarp": {
+          "fold_target": "crates/engine/src/overworld/warp.rs",
+          "reason": "GetWarpEventAtMapPosition + IsArrowWarpMetatileBehavior + SetupWarp/DoWarp's warp-resolution shape absorbed into engine::overworld::warp::trigger_arrow_warp, a separate entry point from the door-shaped trigger_door_warp precisely because the two are gated differently upstream. Called from crates/pokeemerald-rs/src/flow/overworld_phase.rs's OverworldPhase::step as a per-frame poll, upstream's own gating: the direction currently held must equal the direction the player currently faces (input->heldDirection && input->dpadDirection == playerDirection, field_control_avatar.c:164-168), evaluated at the tile the player is standing on, independent of tookStep -- so it fires both for a step taken onto an arrow tile while still holding its direction and for a turn in place while already standing on one. The only added gate is that the player be at rest between steps, which is this port's counterpart to the T_TILE_CENTER/T_NOT_MOVING test that sets heldDirection upstream in the first place (:95-112). Issue #174 (the Brendan's-house exit doormat, MAP_LITTLEROOT_TOWN_BRENDANS_HOUSE_1F warp #1 at (8, 8)). Not modelled: StoreInitialPlayerAvatarState's pre-warp avatar snapshot, and SetupWarp's escape-warp/Trainer Hill bookkeeping.",
+          "spec": "I-3",
+          "status": "folded"
+        },
         "TryStartInteractionScript": {
           "reason": "OverworldPhase::step's A-press handling covers only the object-event branch of GetInteractionScript (GetInteractedObjectEventScript, via engine::overworld::facing_object_event), routed to a NpcDialog through crate::overworld::npc_scripts::script_text's own small, hardcoded msgbox-style script-text table (issue's own DoD: 'a direct msgbox-style script subset is enough'). Not modelled: GetInteractedBackgroundEventScript/GetInteractedMetatileScript/GetInteractedWaterScript's fallback chain (sign posts, counters, water-adjacent interactions), GetInteractedLinkPlayerScript, RamScript, and the interaction sound effect (PlaySE(SE_SELECT)). A found-but-unrecognized-script object event (including the literal NULL/'0x0' sentinel) is selected but opens no dialog, matching upstream's own NULL-script no-op.",
           "rust_target": "crates/pokeemerald-rs/src/flow/overworld_phase.rs",
@@ -26087,10 +26099,10 @@
           "status": "stubbed"
         },
         "MetatileBehavior_IsEastArrowWarp": {
-          "fold_target": "crates/engine/src/overworld/warp.rs",
-          "reason": "Transcribed inline into engine::overworld::warp::warp_in_facing's match on the arrival tile's metatile behavior (exact upstream id membership) — the arrival-facing consumer ONLY. Upstream's warp-trigger consumer (TryArrowWarp/IsArrowWarpMetatileBehavior, src/field_control_avatar.c:688-699/767-780 under the same tookStep gate; also field_player_avatar.c:225-231/294-300, overworld.c:2737) is deliberately unported — these ids stay outside is_warp_trigger (pinned by test) — tracked as issue #174 (the Brendan's-house exit doormat depends on it).",
+          "reason": "Now a direct, dedicated Rust counterpart: engine::overworld::metatile_behavior::is_east_arrow_warp, consumed two ways -- engine::overworld::warp::is_arrow_warp_trigger for the warp-trigger path (upstream TryArrowWarp/IsArrowWarpMetatileBehavior, field_control_avatar.c:688-699/767-780; also field_player_avatar.c:226-232/294-300, overworld.c:2737) and warp_in_facing's match guard for the arrival-facing path (GetAdjustedInitialDirection, overworld.c:929-951). The trigger side landed under issue #174 (the Brendan's-house exit doormat).",
+          "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
           "spec": "I-3",
-          "status": "folded"
+          "status": "rewritten"
         },
         "MetatileBehavior_IsNonAnimDoor": {
           "reason": "Re-implemented as metatile_behavior::is_door restricted to MB_NON_ANIMATED_DOOR for the door/warp-trigger predicate; MB_WATER_DOOR and MB_DEEP_SOUTH_WARP (the function's other ids) are modeled as constants and consumed only by engine::overworld::warp::warp_in_facing's arrival-facing classification — they stay outside is_door and is_warp_trigger (tested), so the predicate itself is a partial port.",
@@ -26099,16 +26111,16 @@
           "status": "stubbed"
         },
         "MetatileBehavior_IsNorthArrowWarp": {
-          "fold_target": "crates/engine/src/overworld/warp.rs",
-          "reason": "Transcribed inline into engine::overworld::warp::warp_in_facing's match on the arrival tile's metatile behavior (exact upstream id membership) — the arrival-facing consumer ONLY. Upstream's warp-trigger consumer (TryArrowWarp/IsArrowWarpMetatileBehavior, src/field_control_avatar.c:688-699/767-780 under the same tookStep gate; also field_player_avatar.c:225-231/294-300, overworld.c:2737) is deliberately unported — these ids stay outside is_warp_trigger (pinned by test) — tracked as issue #174 (the Brendan's-house exit doormat depends on it).",
+          "reason": "Now a direct, dedicated Rust counterpart: engine::overworld::metatile_behavior::is_north_arrow_warp (exact upstream id membership incl. the MB_STAIRS_OUTSIDE_ABANDONED_SHIP alias), consumed two ways -- engine::overworld::warp::is_arrow_warp_trigger for the warp-trigger path (upstream TryArrowWarp/IsArrowWarpMetatileBehavior, field_control_avatar.c:688-699/767-780; also field_player_avatar.c:226-232/294-300, overworld.c:2737) and warp_in_facing's match guard for the arrival-facing path (GetAdjustedInitialDirection, overworld.c:929-951). The trigger side landed under issue #174 (the Brendan's-house exit doormat).",
+          "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
           "spec": "I-3",
-          "status": "folded"
+          "status": "rewritten"
         },
         "MetatileBehavior_IsSouthArrowWarp": {
-          "fold_target": "crates/engine/src/overworld/warp.rs",
-          "reason": "Transcribed inline into engine::overworld::warp::warp_in_facing's match on the arrival tile's metatile behavior (exact upstream id membership) — the arrival-facing consumer ONLY. Upstream's warp-trigger consumer (TryArrowWarp/IsArrowWarpMetatileBehavior, src/field_control_avatar.c:688-699/767-780 under the same tookStep gate; also field_player_avatar.c:225-231/294-300, overworld.c:2737) is deliberately unported — these ids stay outside is_warp_trigger (pinned by test) — tracked as issue #174 (the Brendan's-house exit doormat depends on it).",
+          "reason": "Now a direct, dedicated Rust counterpart: engine::overworld::metatile_behavior::is_south_arrow_warp (exact upstream id membership incl. the MB_WATER_SOUTH_ARROW_WARP/MB_SHOAL_CAVE_ENTRANCE aliases), consumed two ways -- engine::overworld::warp::is_arrow_warp_trigger for the warp-trigger path (upstream TryArrowWarp/IsArrowWarpMetatileBehavior, field_control_avatar.c:688-699/767-780; also field_player_avatar.c:226-232/294-300, overworld.c:2737) and warp_in_facing's match guard for the arrival-facing path (GetAdjustedInitialDirection, overworld.c:929-951). The trigger side landed under issue #174 (the Brendan's-house exit doormat).",
+          "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
           "spec": "I-3",
-          "status": "folded"
+          "status": "rewritten"
         },
         "MetatileBehavior_IsWarpDoor": {
           "reason": "MB_ANIMATED_DOOR check re-implemented as metatile_behavior::is_door",
@@ -26117,10 +26129,10 @@
           "status": "rewritten"
         },
         "MetatileBehavior_IsWestArrowWarp": {
-          "fold_target": "crates/engine/src/overworld/warp.rs",
-          "reason": "Transcribed inline into engine::overworld::warp::warp_in_facing's match on the arrival tile's metatile behavior (exact upstream id membership) — the arrival-facing consumer ONLY. Upstream's warp-trigger consumer (TryArrowWarp/IsArrowWarpMetatileBehavior, src/field_control_avatar.c:688-699/767-780 under the same tookStep gate; also field_player_avatar.c:225-231/294-300, overworld.c:2737) is deliberately unported — these ids stay outside is_warp_trigger (pinned by test) — tracked as issue #174 (the Brendan's-house exit doormat depends on it).",
+          "reason": "Now a direct, dedicated Rust counterpart: engine::overworld::metatile_behavior::is_west_arrow_warp, consumed two ways -- engine::overworld::warp::is_arrow_warp_trigger for the warp-trigger path (upstream TryArrowWarp/IsArrowWarpMetatileBehavior, field_control_avatar.c:688-699/767-780; also field_player_avatar.c:226-232/294-300, overworld.c:2737) and warp_in_facing's match guard for the arrival-facing path (GetAdjustedInitialDirection, overworld.c:929-951). The trigger side landed under issue #174 (the Brendan's-house exit doormat).",
+          "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
           "spec": "I-3",
-          "status": "folded"
+          "status": "rewritten"
         }
       },
       "category": "code.source",
@@ -27101,6 +27113,20 @@
       "status": "pending"
     },
     "src/tileset_anims.c": {
+      "artifacts": {
+        "TilesetAnim_Building": {
+          "reason": "Building primary tileset's TV-turned-on VRAM tile animation cadence (InitTilesetAnim_Building/TilesetAnim_Building dispatch + QueueAnimTiles_Building_TVTurnedOn, tileset_anims.c:625-650,1113-1117) ported as a pure tick->frame-index function alongside the General artifact above -- this is the bedroom's game-console screen the overworld module's docs previously listed as deferred. Same tick-parameter wiring and same pure-function approach (no-verbatim) as TilesetAnim_General.",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/tileset_anims.rs",
+          "spec": "I-3",
+          "status": "rewritten"
+        },
+        "TilesetAnim_General": {
+          "reason": "General primary tileset's per-frame VRAM tile animation cadence (InitTilesetAnim_General/TilesetAnim_General dispatch + QueueAnimTiles_General_{Flower,Water,SandWaterEdge,Waterfall,LandWaterEdge}, tileset_anims.c:618-644,652-674,958-962) ported as a pure tick->frame-index function (latched_frame) rather than transcribing the stateful DMA-queue/callback machinery (no-verbatim); threaded through OverworldScene::compose's new tick parameter (issue #160). Every other tileset this file's TilesetAnim_* dispatch table covers (Rustboro, Dewford, Slateport, Mauville, Lavaridge, EverGrande, Pacifidlog, Sootopolis, the Battle Frontier pair, Underwater, SootopolisGym, Cave, EliteFour, MauvilleGym, BikeShop, BattlePyramid, BattleDome) is out of scope -- none of those tilesets are among the five cargo xtask extract bundles -- so the file's own status stays pending.",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/tileset_anims.rs",
+          "spec": "I-3",
+          "status": "rewritten"
+        }
+      },
       "category": "code.source",
       "kind": "file",
       "status": "pending"

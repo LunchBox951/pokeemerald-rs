@@ -5,21 +5,35 @@
 //! ids, and `metatile_behavior.c` has a matching `MetatileBehavior_Is*`
 //! predicate for most of them (tall grass, ice, currents, ladders,
 //! escalators, a dozen map-specific warp variants, secret-base furniture,
-//! ...). Per the issue #108 scope, this module ports **only** the
-//! predicates the v1 north-star path needs (protagonist's room -> downstairs
-//! -> Littleroot outdoor -> Route 101): whether a tile is a door/warp
-//! trigger, plus the ids upstream `GetAdjustedInitialDirection`
-//! (`src/overworld.c:929-951`) branches on to pick the facing a warp *lands*
-//! the player in ([`crate::overworld::warp::warp_in_facing`]). Everything
-//! else this crate doesn't decode is deliberately left unclassified rather
-//! than guessed at — see [`is_warp_trigger`]'s doc for how that fail-closed
-//! policy plays out for warps specifically.
+//! ...). Per the issue #108 scope (extended by issue #174 for arrow warps),
+//! this module ports **only** the predicates the v1 north-star path needs
+//! (protagonist's room -> downstairs -> Littleroot outdoor -> Route 101):
+//! whether a tile is a door/warp trigger, the direction-gated arrow-warp
+//! trigger predicates (upstream `TryArrowWarp`/`IsArrowWarpMetatileBehavior`,
+//! `crate::overworld::warp::is_arrow_warp_trigger`), plus the ids upstream
+//! `GetAdjustedInitialDirection` (`src/overworld.c:929-951`) branches on to
+//! pick the facing a warp *lands* the player in
+//! ([`crate::overworld::warp::warp_in_facing`]). Everything else this crate
+//! doesn't decode is deliberately left unclassified rather than guessed at —
+//! see [`is_warp_trigger`]'s doc for how that fail-closed policy plays out
+//! for warps specifically.
 //!
-//! **Naming an id is not making it triggerable.** The arrow-warp/door-alias
-//! ids below exist because a warp *destination* tile can carry them (a front
-//! door lands you on a `MB_SOUTH_ARROW_WARP` doormat), and the arrival facing
-//! depends on which one it is. [`is_warp_trigger`]'s own membership is
-//! unchanged by their presence: they still cannot *start* a warp here.
+//! **Naming an id is not automatically a door-shaped trigger.** The
+//! door-alias ids below ([`MB_WATER_DOOR`], [`MB_DEEP_SOUTH_WARP`],
+//! [`MB_PETALBURG_GYM_DOOR`]) exist only because a warp *destination* tile
+//! can carry them (a front door lands you on a `MB_SOUTH_ARROW_WARP`
+//! doormat), and the arrival facing depends on which one it is —
+//! [`is_warp_trigger`]'s membership is unchanged by their presence: they
+//! still cannot *start* a door-shaped warp here. The arrow-warp ids
+//! ([`MB_NORTH_ARROW_WARP`], [`MB_SOUTH_ARROW_WARP`],
+//! [`MB_WEST_ARROW_WARP`], [`MB_EAST_ARROW_WARP`], and their
+//! [`MB_STAIRS_OUTSIDE_ABANDONED_SHIP`]/[`MB_SHOAL_CAVE_ENTRANCE`]/
+//! [`MB_WATER_SOUTH_ARROW_WARP`] aliases) are different: they *are* warp
+//! triggers, just gated on facing/holding the matching direction rather than
+//! [`is_warp_trigger`]'s unconditional membership test — see
+//! [`is_north_arrow_warp`] and its siblings, and
+//! [`crate::overworld::warp::is_arrow_warp_trigger`] which dispatches
+//! between them by direction.
 //!
 //! **Ordinary walkability is not decided here.** Whether a tile can be
 //! stepped onto at all is the [`MetatileCell::collision`](assets::MetatileCell::collision)
@@ -60,24 +74,25 @@ pub const MB_ANIMATED_DOOR: u8 = 0x69;
 
 /// `MB_STAIRS_OUTSIDE_ABANDONED_SHIP` (`0x1B`): the second id upstream
 /// `MetatileBehavior_IsNorthArrowWarp` matches
-/// (`metatile_behavior.c:304-310`). Named here only so
-/// [`crate::overworld::warp::warp_in_facing`] can reproduce that predicate's
-/// full membership; it is **not** a [`is_warp_trigger`] id (see that
-/// function's fail-closed policy).
+/// (`metatile_behavior.c:304-310`) — so [`is_north_arrow_warp`] matches it
+/// too, and it is a warp *trigger* when facing/holding North (issue #174),
+/// even though it is **not** a [`is_warp_trigger`] id (that predicate is
+/// door-shaped only; see its own doc).
 pub const MB_STAIRS_OUTSIDE_ABANDONED_SHIP: u8 = 0x1B;
 
 /// `MB_SHOAL_CAVE_ENTRANCE` (`0x1C`): the third id upstream
 /// `MetatileBehavior_IsSouthArrowWarp` matches
-/// (`metatile_behavior.c:313-319`) — see
-/// [`MB_STAIRS_OUTSIDE_ABANDONED_SHIP`] for why it is named but not
-/// triggerable here.
+/// (`metatile_behavior.c:313-319`) — see [`MB_STAIRS_OUTSIDE_ABANDONED_SHIP`]
+/// for the North/South-arrow-alias shape; this one is [`is_south_arrow_warp`]'s.
 pub const MB_SHOAL_CAVE_ENTRANCE: u8 = 0x1C;
 
 /// `MB_EAST_ARROW_WARP` (`0x62`): upstream `MetatileBehavior_IsEastArrowWarp`
-/// (`metatile_behavior.c:288-294`). Arrow warps are not ported as *triggers*
-/// (module docs; upstream's separate `TryArrowWarp` path), but they are
-/// reachable as warp *destinations*, so
-/// [`crate::overworld::warp::warp_in_facing`] must still classify them.
+/// (`metatile_behavior.c:288-294`). A direction-gated warp trigger
+/// ([`is_east_arrow_warp`], consumed by
+/// [`crate::overworld::warp::is_arrow_warp_trigger`] — upstream
+/// `TryArrowWarp`/`IsArrowWarpMetatileBehavior`, issue #174) and, independent
+/// of that, still reachable as a warp *destination*, so
+/// [`crate::overworld::warp::warp_in_facing`] classifies it too.
 pub const MB_EAST_ARROW_WARP: u8 = 0x62;
 
 /// `MB_WEST_ARROW_WARP` (`0x63`): upstream `MetatileBehavior_IsWestArrowWarp`
@@ -92,30 +107,35 @@ pub const MB_NORTH_ARROW_WARP: u8 = 0x64;
 /// `MB_SOUTH_ARROW_WARP` (`0x65`): upstream
 /// `MetatileBehavior_IsSouthArrowWarp` (`metatile_behavior.c:313-319`) — the
 /// behavior of the doormat tile a house's front door warps *onto* (e.g.
-/// `MAP_LITTLEROOT_TOWN_BRENDANS_HOUSE_1F`'s warp #1 at `(8, 8)`) — see
-/// [`MB_EAST_ARROW_WARP`].
+/// `MAP_LITTLEROOT_TOWN_BRENDANS_HOUSE_1F`'s warp #1 at `(8, 8)`, whose
+/// arrow trigger is what lets the player leave through the front door again
+/// — issue #174) — see [`MB_EAST_ARROW_WARP`].
 pub const MB_SOUTH_ARROW_WARP: u8 = 0x65;
 
 /// `MB_WATER_DOOR` (`0x6C`): the second id upstream
 /// `MetatileBehavior_IsNonAnimDoor` matches (`metatile_behavior.c:262-269`) —
-/// see [`MB_STAIRS_OUTSIDE_ABANDONED_SHIP`].
+/// a door-alias only, matched by neither [`is_warp_trigger`] nor any
+/// arrow-warp predicate; its only v1 consumer is
+/// [`crate::overworld::warp::warp_in_facing`].
 pub const MB_WATER_DOOR: u8 = 0x6C;
 
 /// `MB_WATER_SOUTH_ARROW_WARP` (`0x6D`): the second id upstream
 /// `MetatileBehavior_IsSouthArrowWarp` matches
-/// (`metatile_behavior.c:313-319`) — see [`MB_EAST_ARROW_WARP`].
+/// (`metatile_behavior.c:313-319`) — see [`MB_EAST_ARROW_WARP`]; matched by
+/// [`is_south_arrow_warp`] like [`MB_SOUTH_ARROW_WARP`] itself.
 pub const MB_WATER_SOUTH_ARROW_WARP: u8 = 0x6D;
 
 /// `MB_DEEP_SOUTH_WARP` (`0x6E`): matched by *both*
 /// `MetatileBehavior_IsDeepSouthWarp` and `MetatileBehavior_IsNonAnimDoor`
 /// upstream (`metatile_behavior.c:262-269, 272-278`); the order those two
 /// are tested in is what decides its arrival facing — see
-/// [`crate::overworld::warp::warp_in_facing`].
+/// [`crate::overworld::warp::warp_in_facing`]. A door-alias only, like
+/// [`MB_WATER_DOOR`] — not matched by any arrow-warp predicate.
 pub const MB_DEEP_SOUTH_WARP: u8 = 0x6E;
 
 /// `MB_PETALBURG_GYM_DOOR` (`0x8D`): the second id upstream
-/// `MetatileBehavior_IsDoor` matches (`metatile_behavior.c:228-235`) — see
-/// [`MB_STAIRS_OUTSIDE_ABANDONED_SHIP`].
+/// `MetatileBehavior_IsDoor` matches (`metatile_behavior.c:228-235`) — a
+/// door-alias only, like [`MB_WATER_DOOR`].
 pub const MB_PETALBURG_GYM_DOOR: u8 = 0x8D;
 
 /// Whether `behavior` is one of the two door ids that act as warp *triggers*
@@ -133,8 +153,10 @@ pub const fn is_door(behavior: u8) -> bool {
 }
 
 /// Whether stepping onto/standing on a tile with this behavior can trigger a
-/// warp at all, mirroring the *shape* of upstream `IsWarpMetatileBehavior`
-/// (`field_control_avatar.c`) restricted to the behaviors this slice ports.
+/// **door-shaped** warp (i.e. one that fires regardless of the player's
+/// facing/held direction), mirroring the *shape* of upstream
+/// `IsWarpMetatileBehavior` (`field_control_avatar.c`) restricted to the
+/// behaviors this slice ports.
 ///
 /// Upstream's real `IsWarpMetatileBehavior` also accepts ladders,
 /// escalators, and half a dozen map-specific warp ids (Lavaridge gym,
@@ -142,11 +164,62 @@ pub const fn is_door(behavior: u8) -> bool {
 /// on the v1 north-star path, and none are modelled by this module. A
 /// [`WarpEvent`](assets::WarpEvent) that exists at a position whose metatile
 /// behavior isn't recognized here **fails closed**: [`is_warp_trigger`]
-/// returns `false` and the warp does not fire, rather than assuming every
-/// `WarpEvent` is reachable regardless of the tile it sits on.
+/// returns `false` and the door-shaped warp does not fire, rather than
+/// assuming every `WarpEvent` is reachable regardless of the tile it sits
+/// on.
+///
+/// **Arrow warps are a separate predicate, not a subset of this one.**
+/// Upstream keeps `IsWarpMetatileBehavior` (this function's model, consumed
+/// by `TryStartWarpEventScript`) and `IsArrowWarpMetatileBehavior` (consumed
+/// by `TryArrowWarp`) as two independent checks with disjoint id sets and
+/// different gating (unconditional here vs. direction-matched there) — see
+/// [`is_north_arrow_warp`]/[`is_south_arrow_warp`]/[`is_west_arrow_warp`]/
+/// [`is_east_arrow_warp`] and [`crate::overworld::warp::is_arrow_warp_trigger`],
+/// which callers must check in addition to this function to reproduce
+/// upstream's full warp-trigger surface (issue #174).
 #[must_use]
 pub const fn is_warp_trigger(behavior: u8) -> bool {
     is_door(behavior)
+}
+
+/// Whether `behavior` is a tile upstream `TryArrowWarp` treats as an
+/// east-facing arrow warp — `MetatileBehavior_IsEastArrowWarp`
+/// (`metatile_behavior.c:288-294`).
+#[must_use]
+pub const fn is_east_arrow_warp(behavior: u8) -> bool {
+    behavior == MB_EAST_ARROW_WARP
+}
+
+/// `MetatileBehavior_IsWestArrowWarp` (`metatile_behavior.c:296-302`) — see
+/// [`is_east_arrow_warp`].
+#[must_use]
+pub const fn is_west_arrow_warp(behavior: u8) -> bool {
+    behavior == MB_WEST_ARROW_WARP
+}
+
+/// `MetatileBehavior_IsNorthArrowWarp` (`metatile_behavior.c:304-310`) — see
+/// [`is_east_arrow_warp`]. Matches [`MB_NORTH_ARROW_WARP`] and its
+/// [`MB_STAIRS_OUTSIDE_ABANDONED_SHIP`] alias, exactly as upstream does.
+#[must_use]
+pub const fn is_north_arrow_warp(behavior: u8) -> bool {
+    matches!(
+        behavior,
+        MB_NORTH_ARROW_WARP | MB_STAIRS_OUTSIDE_ABANDONED_SHIP
+    )
+}
+
+/// `MetatileBehavior_IsSouthArrowWarp` (`metatile_behavior.c:313-319`) — see
+/// [`is_east_arrow_warp`]. Matches [`MB_SOUTH_ARROW_WARP`] and its
+/// [`MB_WATER_SOUTH_ARROW_WARP`]/[`MB_SHOAL_CAVE_ENTRANCE`] aliases, exactly
+/// as upstream does — the doormat a house's front door lands on
+/// (`MB_SOUTH_ARROW_WARP`'s own doc) is a south arrow warp under this
+/// predicate.
+#[must_use]
+pub const fn is_south_arrow_warp(behavior: u8) -> bool {
+    matches!(
+        behavior,
+        MB_SOUTH_ARROW_WARP | MB_WATER_SOUTH_ARROW_WARP | MB_SHOAL_CAVE_ENTRANCE
+    )
 }
 
 #[cfg(test)]
@@ -184,11 +257,17 @@ mod tests {
         assert!(is_warp_trigger(MB_ANIMATED_DOOR));
     }
 
-    /// The ids named only for arrival-facing classification
-    /// (`crate::overworld::warp::warp_in_facing`) must not widen the trigger
-    /// set: naming an id is not making it triggerable (module docs).
+    /// `is_warp_trigger` is the **door-shaped** trigger predicate only
+    /// (upstream `IsWarpMetatileBehavior`) — none of the arrow-warp ids (nor
+    /// their door-alias siblings) widen it, even though the arrow ids among
+    /// them *are* triggers under the separate direction-gated
+    /// `is_north_arrow_warp`-family predicates (updated for issue #174: this
+    /// test used to pin the whole list outside *any* warp trigger, back when
+    /// arrow warps were not ported at all — see
+    /// `arrow_warp_predicates_match_only_their_own_direction` below for what
+    /// replaced that claim for the arrow ids specifically).
     #[test]
-    fn arrival_facing_ids_are_not_warp_triggers() {
+    fn arrival_facing_only_ids_are_not_door_shaped_warp_triggers() {
         for behavior in [
             MB_STAIRS_OUTSIDE_ABANDONED_SHIP,
             MB_SHOAL_CAVE_ENTRANCE,
@@ -203,9 +282,54 @@ mod tests {
         ] {
             assert!(
                 !is_warp_trigger(behavior),
-                "{behavior:#04x} must stay outside this slice's trigger set"
+                "{behavior:#04x} must stay outside is_warp_trigger's door-shaped set"
             );
         }
+    }
+
+    /// The door-alias-only ids ([`MB_WATER_DOOR`], [`MB_DEEP_SOUTH_WARP`],
+    /// [`MB_PETALBURG_GYM_DOOR`]) must also stay outside every arrow-warp
+    /// predicate in every direction — unlike [`MB_STAIRS_OUTSIDE_ABANDONED_SHIP`]
+    /// and [`MB_SHOAL_CAVE_ENTRANCE`], which alias into the North/South arrow
+    /// predicates respectively (the next test).
+    #[test]
+    fn door_alias_ids_match_no_arrow_warp_predicate() {
+        for behavior in [MB_WATER_DOOR, MB_DEEP_SOUTH_WARP, MB_PETALBURG_GYM_DOOR] {
+            assert!(!is_north_arrow_warp(behavior));
+            assert!(!is_south_arrow_warp(behavior));
+            assert!(!is_west_arrow_warp(behavior));
+            assert!(!is_east_arrow_warp(behavior));
+        }
+    }
+
+    /// Each arrow-warp predicate matches only its own direction's ids
+    /// (including the North/South aliases), mirroring upstream's four
+    /// separate `MetatileBehavior_Is*ArrowWarp` functions
+    /// (`metatile_behavior.c:288-319`) — issue #174.
+    #[test]
+    fn arrow_warp_predicates_match_only_their_own_direction() {
+        assert!(is_east_arrow_warp(MB_EAST_ARROW_WARP));
+        assert!(is_west_arrow_warp(MB_WEST_ARROW_WARP));
+        assert!(is_north_arrow_warp(MB_NORTH_ARROW_WARP));
+        assert!(is_north_arrow_warp(MB_STAIRS_OUTSIDE_ABANDONED_SHIP));
+        assert!(is_south_arrow_warp(MB_SOUTH_ARROW_WARP));
+        assert!(is_south_arrow_warp(MB_WATER_SOUTH_ARROW_WARP));
+        assert!(is_south_arrow_warp(MB_SHOAL_CAVE_ENTRANCE));
+
+        // Cross-direction: none of the four id groups match a predicate
+        // that isn't theirs.
+        assert!(!is_west_arrow_warp(MB_EAST_ARROW_WARP));
+        assert!(!is_north_arrow_warp(MB_EAST_ARROW_WARP));
+        assert!(!is_south_arrow_warp(MB_EAST_ARROW_WARP));
+        assert!(!is_east_arrow_warp(MB_WEST_ARROW_WARP));
+        assert!(!is_south_arrow_warp(MB_NORTH_ARROW_WARP));
+        assert!(!is_north_arrow_warp(MB_SOUTH_ARROW_WARP));
+
+        // Ordinary ground and an unported warp behavior match nothing.
+        assert!(!is_east_arrow_warp(MB_NORMAL));
+        assert!(!is_north_arrow_warp(MB_NORMAL));
+        assert!(!is_south_arrow_warp(MB_NORMAL));
+        assert!(!is_west_arrow_warp(MB_NORMAL));
     }
 
     /// The ids' numeric values, against their positions in upstream's

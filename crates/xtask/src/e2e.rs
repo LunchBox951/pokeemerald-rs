@@ -231,8 +231,9 @@ fn check_title_screen() -> Result<(), E2eError> {
 /// The I-3 smoke addition (issue #126): with a local asset pack present,
 /// load the default overworld room (`pokeemerald_rs::overworld::load_default_room`)
 /// and assert the composed frame -- a standing player at a fixed room
-/// position -- is non-blank and deterministic across two `compose` calls;
-/// without a pack, do nothing.
+/// position -- is non-blank and deterministic across two `compose` calls, at
+/// each of two different animation ticks (issue #160; see the tick comment
+/// in the body); without a pack, do nothing.
 ///
 /// Deliberately independent of `App`/`App::new_headless` and of
 /// [`check_title_screen`] -- it loads the overworld scene directly, so this
@@ -269,9 +270,26 @@ fn check_overworld_scene() -> Result<(), E2eError> {
     // particular object event's hide-flag state.
     let event_data = pokeemerald_rs::overworld::EventData::default();
 
-    let frame_a = scene.compose_frame(&player, &event_data);
-    let frame_b = scene.compose_frame(&player, &event_data);
+    // Determinism at *two different* ticks (issue #160), not just at tick 0:
+    // a `tick` argument that never reached `compose` at all would leave this
+    // check passing on a single hardcoded value forever. The two ticks'
+    // frames are deliberately *not* required to differ -- the smoke room is
+    // an interior on the `building` primary tileset, whose one animated
+    // metatile (the TV) no bundled interior's own map data places, so
+    // nothing on this screen animates and requiring a difference would be a
+    // flaky assertion about map content. The "tick really reaches pixels"
+    // half is pinned properly, on a map that does show animated tiles, by
+    // `pokeemerald_rs::overworld::tests`'
+    // `real_pack_tick_changes_only_the_animated_tile_screen_regions`.
+    const LATER_TICK: u32 = 17;
+    let frame_a = scene.compose_frame(&player, &event_data, 0);
+    let frame_b = scene.compose_frame(&player, &event_data, 0);
     if frame_a != frame_b {
+        return Err(E2eError::OverworldFrameNotDeterministic);
+    }
+    let later_a = scene.compose_frame(&player, &event_data, LATER_TICK);
+    let later_b = scene.compose_frame(&player, &event_data, LATER_TICK);
+    if later_a != later_b {
         return Err(E2eError::OverworldFrameNotDeterministic);
     }
     if frame_a.iter().all(|&pixel| pixel == 0) {
