@@ -44,7 +44,7 @@ use super::{
 /// [`NUM_METATILES_IN_PRIMARY`](engine::overworld::NUM_METATILES_IN_PRIMARY)
 /// but a distinct concept (raw tile slots vs. metatile ids) -- upstream
 /// just happens to size both at 512.
-const NUM_TILES_IN_PRIMARY: usize = 512;
+pub(super) const NUM_TILES_IN_PRIMARY: usize = 512;
 
 /// Upstream `NUM_TILES_PER_METATILE` (`include/fieldmap.h`): each
 /// `metatiles.bin` entry is 8 raw tile entries -- 4 for a metatile's bottom
@@ -94,7 +94,8 @@ pub(super) const BOTTOM_PRIORITY: u8 = 3;
 /// correctly against the combined tileset with no further re-basing.
 ///
 /// Returns the combined bytes still packed (not yet
-/// [`Tileset::decode`]d), not a decoded [`Tileset`]: [`super::tileset_anims`]
+/// [`rendering::Tileset::decode`]d), not a decoded [`rendering::Tileset`]:
+/// [`super::tileset_anims`]
 /// needs to overwrite the primary block's own animated tile ranges in place,
 /// once per [`super::OverworldScene::compose`] call, before the caller
 /// decodes -- see that module's docs.

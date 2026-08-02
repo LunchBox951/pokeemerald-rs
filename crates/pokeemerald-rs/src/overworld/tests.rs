@@ -222,14 +222,17 @@ fn image_meta(width: u32, height: u32, bit_depth: u8) -> Vec<u8> {
 }
 
 /// A minimal pack covering exactly what [`super::OverworldScene::from_pack`]
-/// needs for one synthetic room: a single-tile "petalburg" tileset (used as
+/// needs for one synthetic room: a single-tile "general" tileset (used as
 /// both primary and secondary), a `width` x `height` layout whose every
 /// cell -- and whose border block -- is that tileset's one opaque metatile,
-/// and Brendan's walking sheet/palette. Deliberately a tileset
-/// [`super::tileset_anims`] doesn't recognize (issue #160: `petalburg` is a
-/// real bundled tileset with no animated tile ranges of its own -- that
-/// module's own scope docs), so `from_pack` doesn't need this fixture to
-/// also fabricate `tileset/<name>/anim/...` entries.
+/// and Brendan's walking sheet/palette. Deliberately the tileset
+/// [`super::tileset_anims`] animates most (issue #160 review): with the
+/// fabricated `tileset/general/anim/...` entries below, every ordinary
+/// `from_pack` test keeps exercising the animated copy/patch/decode
+/// compose path in default CI, not just in the ignored real-pack tests.
+/// The animated regions all land in the primary block's padding here
+/// (this fixture's single metatile only references tile 0), so patched
+/// frames never change a composed pixel.
 fn synthetic_overworld_pack_bytes(width: u16, height: u16) -> Vec<u8> {
     // A single opaque 8x8 tile, every pixel palette index 5.
     let tile_pixels = vec![5u8; 8 * 8];
@@ -272,19 +275,19 @@ fn synthetic_overworld_pack_bytes(width: u16, height: u16) -> Vec<u8> {
 
     let mut entries = vec![
         Entry {
-            id: "tileset/petalburg/tiles",
+            id: "tileset/general/tiles",
             kind_tag: 0,
             meta: image_meta(8, 8, 4),
             payload: tile_pixels,
         },
         Entry {
-            id: "tileset/petalburg/metatiles",
+            id: "tileset/general/metatiles",
             kind_tag: 2,
             meta: vec![],
             payload: metatiles,
         },
         Entry {
-            id: "tileset/petalburg/metatile-attributes",
+            id: "tileset/general/metatile-attributes",
             kind_tag: 2,
             meta: vec![],
             payload: metatile_attrs,
@@ -323,7 +326,7 @@ fn synthetic_overworld_pack_bytes(width: u16, height: u16) -> Vec<u8> {
     ];
     for slot in 0..16u8 {
         let id: &'static str =
-            &*Box::leak(format!("tileset/petalburg/palette/{slot:02}").into_boxed_str());
+            &*Box::leak(format!("tileset/general/palette/{slot:02}").into_boxed_str());
         entries.push(Entry {
             id,
             kind_tag: 1,
@@ -334,15 +337,42 @@ fn synthetic_overworld_pack_bytes(width: u16, height: u16) -> Vec<u8> {
     // Overwrite the bank-0 placeholder with the real payload above.
     if let Some(bank0) = entries
         .iter_mut()
-        .find(|e| e.id == "tileset/petalburg/palette/00")
+        .find(|e| e.id == "tileset/general/palette/00")
     {
         bank0.meta = 6u16.to_le_bytes().to_vec();
         bank0.payload = bank0_payload;
     }
 
+    push_general_anim_frames(&mut entries);
     push_unconditional_sprite_palettes(&mut entries);
 
     write_synthetic_pack(entries)
+}
+
+/// One single-tile frame per numbered entry of every animated region
+/// [`super::tileset_anims`] declares for `general` (that module's own
+/// cadence table), so `AnimatedTileset::load` resolves real entries in the
+/// synthetic fixture and the animated compose path stays on in default CI
+/// ([`synthetic_overworld_pack_bytes`]'s doc comment). A lone 8x8 tile
+/// trivially fits every region's destination range inside the padded
+/// primary block.
+fn push_general_anim_frames(entries: &mut Vec<Entry>) {
+    for (anim, frame_count) in [
+        ("flower", 3u8),
+        ("water", 8),
+        ("sand_water_edge", 7),
+        ("waterfall", 4),
+        ("land_water_edge", 4),
+    ] {
+        for n in 0..frame_count {
+            entries.push(Entry {
+                id: &*Box::leak(format!("tileset/general/anim/{anim}/{n}").into_boxed_str()),
+                kind_tag: 0,
+                meta: image_meta(8, 8, 4),
+                payload: vec![5u8; 8 * 8],
+            });
+        }
+    }
 }
 
 /// The sprite palettes `OverworldScene::from_pack` loads *unconditionally*
@@ -410,8 +440,8 @@ pub(crate) fn synthetic_scene(width: u16, height: u16) -> super::OverworldScene 
         name: "MapTest",
         width,
         height,
-        primary_tileset: "gTileset_Petalburg",
-        secondary_tileset: "gTileset_Petalburg",
+        primary_tileset: "gTileset_General",
+        secondary_tileset: "gTileset_General",
     };
     let scene = super::OverworldScene::from_pack(
         &pack,

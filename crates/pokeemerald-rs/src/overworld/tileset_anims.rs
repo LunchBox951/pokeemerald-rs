@@ -178,9 +178,14 @@ impl AnimatedTileset {
     /// # Errors
     ///
     /// Whatever [`AssetPack::image`]/[`pack_4bpp_region`] returns for a
-    /// missing or malformed frame entry -- never reachable against a real
-    /// pack built by `cargo xtask extract` (module docs' table is pinned
-    /// against the same `tileset_anims.c` the extraction pipeline reads).
+    /// missing or malformed frame entry, plus
+    /// [`OverworldSceneError::AnimFrameOutOfBounds`] for a frame whose
+    /// packed bytes would overflow its region's destination range inside
+    /// the primary tile block -- rejected here so [`Self::patch`]'s
+    /// in-place writes can never slice out of bounds mid-compose. Neither
+    /// is reachable against a real pack built by `cargo xtask extract`
+    /// (module docs' table is pinned against the same `tileset_anims.c`
+    /// the extraction pipeline reads).
     pub(super) fn load(
         pack: &AssetPack,
         primary_tileset_name: &str,
@@ -215,6 +220,25 @@ impl AnimatedTileset {
                     image.width as usize,
                     image.height as usize,
                 )?;
+                // A corrupt or hand-built pack can supply a tile-aligned
+                // frame whose dimensions and payload agree with each other
+                // but not with the region: reject it here rather than let
+                // `patch`'s in-place write slice past the combined
+                // tileset's primary block (review finding on #192). The
+                // combined buffer is always at least
+                // `NUM_TILES_IN_PRIMARY` tiles long (`viewport`'s
+                // `combined_world_tileset` pads the primary to exactly
+                // that), so this bound is the tight one.
+                let start = usize::from(spec.start_tile) * BitDepth::Bpp4.tile_byte_len();
+                let primary_block_len =
+                    super::viewport::NUM_TILES_IN_PRIMARY * BitDepth::Bpp4.tile_byte_len();
+                if start + packed.len() > primary_block_len {
+                    return Err(OverworldSceneError::AnimFrameOutOfBounds {
+                        anim_name: spec.anim_name,
+                        start_tile: spec.start_tile,
+                        frame_bytes: packed.len(),
+                    });
+                }
                 frames.push(packed);
             }
             regions.push(Region {
@@ -245,10 +269,11 @@ impl AnimatedTileset {
     ///
     /// # Panics
     ///
-    /// Never in practice: every region's `start_tile`/frame byte length is
-    /// pinned against the real pack's own extracted image dimensions
-    /// (module docs' table), always within `bytes`' combined-tileset
-    /// bounds.
+    /// Never: [`Self::load`] rejects any frame whose bytes would overflow
+    /// its region's destination range inside the primary tile block
+    /// ([`OverworldSceneError::AnimFrameOutOfBounds`]), and `bytes` is
+    /// always at least that long (`viewport`'s `combined_world_tileset`
+    /// pads the primary block to exactly `NUM_TILES_IN_PRIMARY` tiles).
     pub(super) fn patch(&self, bytes: &mut [u8], tick: u32) {
         let tile_len = BitDepth::Bpp4.tile_byte_len();
         for region in &self.regions {
