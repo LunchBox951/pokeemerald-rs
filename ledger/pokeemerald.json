@@ -27113,6 +27113,20 @@
       "status": "pending"
     },
     "src/tileset_anims.c": {
+      "artifacts": {
+        "TilesetAnim_Building": {
+          "reason": "Building primary tileset's TV-turned-on VRAM tile animation cadence (InitTilesetAnim_Building/TilesetAnim_Building dispatch + QueueAnimTiles_Building_TVTurnedOn, tileset_anims.c:625-650,1113-1117) ported as a pure tick->frame-index function alongside the General artifact above -- this is the bedroom's game-console screen the overworld module's docs previously listed as deferred. Same tick-parameter wiring and same pure-function approach (no-verbatim) as TilesetAnim_General.",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/tileset_anims.rs",
+          "spec": "I-3",
+          "status": "rewritten"
+        },
+        "TilesetAnim_General": {
+          "reason": "General primary tileset's per-frame VRAM tile animation cadence (InitTilesetAnim_General/TilesetAnim_General dispatch + QueueAnimTiles_General_{Flower,Water,SandWaterEdge,Waterfall,LandWaterEdge}, tileset_anims.c:618-644,652-674,958-962) ported as a pure tick->frame-index function (latched_frame) rather than transcribing the stateful DMA-queue/callback machinery (no-verbatim); threaded through OverworldScene::compose's new tick parameter (issue #160). Every other tileset this file's TilesetAnim_* dispatch table covers (Rustboro, Dewford, Slateport, Mauville, Lavaridge, EverGrande, Pacifidlog, Sootopolis, the Battle Frontier pair, Underwater, SootopolisGym, Cave, EliteFour, MauvilleGym, BikeShop, BattlePyramid, BattleDome) is out of scope -- none of those tilesets are among the five cargo xtask extract bundles -- so the file's own status stays pending.",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/tileset_anims.rs",
+          "spec": "I-3",
+          "status": "rewritten"
+        }
+      },
       "category": "code.source",
       "kind": "file",
       "status": "pending"
