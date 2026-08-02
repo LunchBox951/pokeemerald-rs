@@ -36,3 +36,14 @@ mod textbox;
 pub mod title;
 
 pub use app::App;
+
+/// Real-pack pinning tests for extraction pipelines that don't yet have a
+/// runtime consumer of their own in this crate (currently just
+/// `xtask::extract::voicegroups`, S-4 issue #182) -- see that module's own
+/// docs for why these live here rather than in `crates/xtask`/`crates/assets`
+/// directly: this is the one crate whose `#[ignore]`d real-pack tests CI
+/// actually runs (`.github/workflows/ci.yml`'s "Run ignored real-pack
+/// assertions" step is `cargo test -p pokeemerald-rs -- --ignored`), and it
+/// already depends on `assets` to decode the pack's typed entries.
+#[cfg(test)]
+mod voicegroup_pack_tests;

@@ -74,7 +74,12 @@ pub const MAGIC: [u8; 8] = *b"PKMRPACK";
 
 /// The format version this writer emits (and the only version
 /// `crates/assets`'s reader accepts).
-pub const FORMAT_VERSION: u32 = 2;
+///
+/// History: `1` was the original layout; `2` added the NPC sprite-sheet and
+/// palette entries the overworld renderer requires (issue #161); `3` added
+/// the first audio entries (`audio/voicegroup/*`, issue #182, `#115` child
+/// 3) — see `crates/assets/src/audio.rs`'s module docs, "Versioning".
+pub const FORMAT_VERSION: u32 = 3;
 
 /// What kind of content an entry's payload holds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -90,6 +90,19 @@
 //!   `graphics/text_window/` — see [`text_window`]'s module docs for the
 //!   manifest and the image/palette pairing validation.
 //!
+//! - **`MUS_TITLE`'s voicegroup dependency tree** (S-4, issue #182, `#115`
+//!   child 3): `MUS_TITLE`'s own voicegroup (`sound/voicegroups/title.inc`)
+//!   plus every key-split/rhythm child it transitively references (the
+//!   drum kit `sound/voicegroups/drumsets/rs.inc` and the five instrument
+//!   key-splits under `sound/voicegroups/keysplits/`), normalized to
+//!   `crates/assets/src/audio/voicegroup.rs`'s backend-neutral schema and
+//!   emitted as `audio/voicegroup/<label>` raw entries — see
+//!   [`voicegroups`]'s module docs for the resolver, the 128-slot
+//!   normalization, and why the other ~188 `.inc` files under
+//!   `sound/voicegroups/` stay `pending`. Sample payloads are not part of
+//!   this slice (`#183`); voicegroup entries carry only stable
+//!   `audio/sample/*` ids for a future extraction pass to fill in.
+//!
 //! Explicitly **not** extracted (deferred to future slices, not silently
 //! dropped): metatile-to-tile mapping beyond the raw `metatiles.bin` bytes
 //! (no decode/typed access yet — that's a rendering-layer concern once
@@ -99,8 +112,12 @@
 //! `vigoroth.pal`, the `*_reflection.pal` set — stays unextracted), any tileset outside the
 //! five above (every other `data/tilesets/*` directory stays `pending` in
 //! the ledger), any map layout outside the Littleroot Town family above
-//! (every other `data/layouts/*` directory likewise stays `pending`), and
-//! every non-Latin font sheet under `graphics/fonts/` (see above).
+//! (every other `data/layouts/*` directory likewise stays `pending`),
+//! every non-Latin font sheet under `graphics/fonts/` (see above), every
+//! voicegroup outside `MUS_TITLE`'s own dependency tree (the other ~188
+//! `.inc` files under `sound/voicegroups/` stay `pending` — see
+//! [`voicegroups`]'s module docs), and every sample payload a voicegroup
+//! entry's `audio/sample/*` ids reference (`#183`'s job).
 //!
 //! # Asset id scheme
 //!
@@ -122,6 +139,12 @@
 //!   `text-window/palette/1`..`20`/`message_box` come from each PNG's own
 //!   `PLTE`; `text-window/palette/text_pal1`..`4` come from the sibling
 //!   `.pal` files.
+//! - `audio/voicegroup/<label>` (e.g. `audio/voicegroup/title`,
+//!   `audio/voicegroup/rs_drumset`) — `<label>` is the upstream
+//!   `voice_group`/`voicegroup_*` symbol name verbatim (see [`voicegroups`]'s
+//!   module docs). A [`voicegroups`] entry's own payload additionally
+//!   references `audio/sample/<name>` / `audio/sample/programmable_wave_<n>`
+//!   ids — no pack entry with those ids exists yet (`#183`'s job).
 //!
 //! `<name>` is always a normalized, stable identifier (upstream's own
 //! directory/file naming, which is already `snake_case` and stable across
@@ -136,6 +159,7 @@ mod layouts_json;
 pub mod pack;
 pub mod png;
 mod text_window;
+mod voicegroups;
 
 use std::path::{Path, PathBuf};
 
@@ -227,6 +251,7 @@ fn extract_to(output_path: &Path) -> Result<ExtractReport, ExtractError> {
     extract_layouts(&upstream, &mut writer)?;
     fonts::extract_fonts(&upstream, &mut writer)?;
     text_window::extract_text_window(&upstream, &mut writer)?;
+    voicegroups::extract_voicegroups(&upstream, &mut writer)?;
 
     let entry_count = writer.len();
     let bytes = writer.finish()?;

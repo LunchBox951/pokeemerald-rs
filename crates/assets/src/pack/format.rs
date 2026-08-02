@@ -13,8 +13,10 @@ pub const MAGIC: [u8; 8] = *b"PKMRPACK";
 /// History: `1` was the original layout; `2` added the NPC sprite-sheet and
 /// palette entries the overworld renderer requires (issue #161) -- a v1 pack
 /// would pass validation but fail later at scene load with `UnknownAsset`,
-/// so the version gate rejects it up front instead.
-pub const FORMAT_VERSION: u32 = 2;
+/// so the version gate rejects it up front instead. `3` added the first
+/// audio entries (`audio/voicegroup/*`, issue #182, `#115` child 3) -- see
+/// `crate::audio`'s module docs, "Versioning".
+pub const FORMAT_VERSION: u32 = 3;
 
 /// Cap on how many directory entries [`parse_directory`] pre-reserves from
 /// the untrusted `entry_count` header field. A corrupt count near `u32::MAX`
