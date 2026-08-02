@@ -908,8 +908,9 @@ fn releasing_south_mid_step_does_not_exit_through_the_doormat() {
     );
 
     // Down released from frame 2 onward, including the frame the crossing
-    // completes.
-    for _ in 1..=u32::from(WALK_FRAMES_PER_TILE) {
+    // completes -- the same 16-step count as the holding sibling, so the
+    // released-button case lands exactly on the drain frame.
+    for _ in 2..=u32::from(WALK_FRAMES_PER_TILE) {
         phase.step(ButtonState::new());
     }
 
@@ -929,6 +930,62 @@ fn releasing_south_mid_step_does_not_exit_through_the_doormat() {
     );
 }
 
+/// Review regression (#191, Codex P2): upstream evaluates `TryArrowWarp`
+/// *before* `PlayerStep` mutates the player, so the gate compares the held
+/// direction against the facing the frame *started* with. A player who just
+/// warped onto the doormat facing North and taps Down for a single frame is
+/// only *turned* South by that frame (`field_control_avatar.c:164-168` reads
+/// the pre-movement `playerDirection`); the warp may not fire until a later
+/// frame still holds Down against the now-South facing. Reading the
+/// post-turn facing instead would exit the house on the tap frame itself.
+#[test]
+#[ignore = "needs a local pack: run `cargo xtask extract` first"]
+fn a_one_frame_down_tap_on_the_doormat_facing_north_turns_without_warping() {
+    let (doormat_pos, doormat_behavior) = warp_tile_behavior(ONE_F, 1);
+    assert_eq!(doormat_pos, (8, 8), "1F's warp #1: the doormat inside");
+    assert_eq!(doormat_behavior, MB_SOUTH_ARROW_WARP);
+
+    // The state a warp *into* the house leaves the player in: standing on
+    // the doormat, facing North (see
+    // `warping_to_the_front_doormat_faces_north_and_rebinds_the_scene`).
+    let mut phase = one_f_phase((8, 8), Direction::North);
+
+    // The tap frame: Down is held against a North facing, so upstream's
+    // pre-movement gate stays closed and the frame only turns the player.
+    phase.step(held(Buttons::DOWN));
+    assert_eq!(
+        phase.map_id, ONE_F,
+        "the tap frame must only turn the player, not fire the arrow warp"
+    );
+    assert_eq!(
+        phase.player.facing(),
+        Direction::South,
+        "the tap turned the player"
+    );
+    assert_eq!(
+        phase.player.position(),
+        (8, 8),
+        "still standing on the doormat"
+    );
+
+    // Down released before the next frame: the gate reads the *currently*
+    // held direction, so nothing fires and the player stays put.
+    phase.step(ButtonState::new());
+    assert_eq!(
+        phase.map_id, ONE_F,
+        "a released tap leaves the player standing on the doormat, as upstream does"
+    );
+
+    // Holding Down again -- now against the already-South facing -- is the
+    // ordinary arrow-warp case: the gate opens and the doormat fires.
+    phase.step(held(Buttons::DOWN));
+    assert_eq!(
+        phase.map_id,
+        assets::MapId("MAP_LITTLEROOT_TOWN"),
+        "holding Down against the South facing fires the doormat normally"
+    );
+}
+
 /// Senior-review regression (#174 finding 1a, the under-trigger half, and
 /// the v1 north-star doormat interaction): the state a warp *into* the
 /// house leaves the player in -- standing on the doormat at `(8, 8)`,
@@ -943,16 +1000,13 @@ fn releasing_south_mid_step_does_not_exit_through_the_doormat() {
 /// blocked forever, so a landing-gated arrow warp makes the front door a
 /// permanent one-way trip into the house.
 ///
-/// This port's turn-in-place is a single frame and its input poll runs
-/// *after* the frame's movement is applied (see
-/// [`OverworldPhase::interaction_tokens_this_frame`]'s note on that same
-/// one-frame delta), so the exit lands on the very first held-Down frame
-/// rather than the one after it. The same delta means a *one-frame tap* of
-/// the arrow direction, while standing on an arrow tile facing some other
-/// way, warps here where upstream would only have turned — practically
-/// unreachable at 60 Hz by a human, the same argument as
-/// [`OverworldPhase::interaction_tokens_this_frame`]'s "A + direction on the
-/// same frame" note.
+/// The poll reads the frame's *pre-movement* facing (review finding on
+/// #191, matching upstream's `TryArrowWarp`-before-`PlayerStep` order), so
+/// the first held-Down frame only turns the player and the exit fires on
+/// the second, when the held direction meets the already-South facing --
+/// exactly upstream's frame anatomy. The released-tap half of the same
+/// finding is pinned by
+/// [`a_one_frame_down_tap_on_the_doormat_facing_north_turns_without_warping`].
 #[test]
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
 fn standing_on_the_doormat_facing_north_and_holding_south_exits() {
@@ -968,8 +1022,22 @@ fn standing_on_the_doormat_facing_north_and_holding_south_exits() {
         "a warp-in onto a south-arrow tile faces back out of it"
     );
 
-    // Hold Down: frame 1 turns in place (South) and the poll, running after
-    // that turn, already matches.
+    // Hold Down. Frame 1 only turns in place: the poll compares against the
+    // pre-movement (still-North) facing, so it stays closed while the turn
+    // happens -- upstream's `TryArrowWarp` runs before `PlayerStep`.
+    phase.step(held(Buttons::DOWN));
+    assert_eq!(
+        phase.map_id, ONE_F,
+        "the turn frame must not warp: the poll reads the pre-turn facing"
+    );
+    assert_eq!(
+        phase.player.facing(),
+        Direction::South,
+        "frame 1 turned the player to face the held direction"
+    );
+
+    // Frame 2: Down is still held and now meets the already-South facing,
+    // so the every-frame poll fires the doormat.
     phase.step(held(Buttons::DOWN));
 
     assert_eq!(

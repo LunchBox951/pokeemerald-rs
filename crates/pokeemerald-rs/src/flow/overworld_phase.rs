@@ -274,20 +274,24 @@ impl OverworldPhase {
     /// `tookStep` upstream; its gate is `input->heldDirection &&
     /// input->dpadDirection == playerDirection` (`:164-168`), re-evaluated
     /// every frame — so it fires both for a step taken onto an arrow tile
-    /// while still holding its direction *and* for a turn in place, no step
-    /// taken, while already standing on one. This method reproduces that
-    /// literally: `arrow_direction` below is this frame's
-    /// [`held_direction`], required to equal [`PlayerState::facing`] after
-    /// this frame's movement has been applied, and it feeds
-    /// [`trigger_arrow_warp`] at [`PlayerState::position`] rather than at
+    /// while still holding its direction *and* for holding that direction
+    /// while already standing on one (the turn in place happens on the
+    /// first held frame, the warp on the next). This method reproduces
+    /// that: `arrow_direction` below is this frame's [`held_direction`],
+    /// required to equal the *pre-movement* [`PlayerState::facing`] —
+    /// upstream reads `playerDirection` before `PlayerStep` has turned the
+    /// player, so a held frame that only turns can never satisfy the gate
+    /// it is itself creating (review finding on #191) — and it feeds
+    /// [`trigger_arrow_warp`] at the pre-movement position rather than at
     /// `pending_landing`. Three consequences worth naming — an earlier
     /// revision of this method got the first two wrong by routing arrows
     /// through the door path, and the third is a real divergence from
     /// upstream rather than a property shared with it:
     ///
-    /// - Merely *tapping* a direction and releasing it during the crossing
-    ///   does **not** warp (`heldDirection` is false on the frame that
-    ///   matters).
+    /// - Merely *tapping* a direction and releasing it — during the
+    ///   crossing, or standing on the tile facing another way — does
+    ///   **not** warp (`heldDirection` is false, or the pre-movement facing
+    ///   does not match, on the frame that matters).
     /// - Standing on the doormat a warp-in landed you on and then holding
     ///   its direction **does** — the only way out of Brendan's house, since
     ///   the tile south of that doormat is off-map and the step itself is
@@ -391,6 +395,20 @@ impl OverworldPhase {
             MapEventsTable::new().resolve(self.map_id),
         ) {
             let runtime = self.scene.runtime(self.map_id, header, events);
+
+            // Upstream polls `TryArrowWarp` *before* `PlayerStep` mutates the
+            // player (`field_control_avatar.c:164-168` runs ahead of
+            // movement), so the gate below must read this frame's
+            // pre-movement facing: a one-frame Down tap on the doormat while
+            // facing North only *turns* the player upstream, and reading the
+            // post-turn facing here would warp on that same tap frame. The
+            // position is captured alongside for the same reason, though it
+            // cannot differ by the time the poll is reachable -- every frame
+            // that commits a new tile leaves the player `in_transit`, which
+            // closes the poll (review finding on #191).
+            let pre_step_facing = self.player.facing();
+            let pre_step_position = self.player.position();
+
             let outcome = advance_player_one_frame(
                 &mut self.player,
                 direction,
@@ -444,13 +462,13 @@ impl OverworldPhase {
                 // `heldDirection` in the first place (`:95-112`), so the
                 // poll needs no `in_transit` test of its own. See the "Warp
                 // timing" section of this method's docs.
-                let arrow_direction = direction.filter(|held| *held == self.player.facing());
+                let arrow_direction = direction.filter(|held| *held == pre_step_facing);
 
                 self.pending_landing
                     .take()
                     .and_then(|(x, y)| trigger_door_warp(&runtime, x, y, self.player.elevation()))
                     .or_else(|| {
-                        let (x, y) = self.player.position();
+                        let (x, y) = pre_step_position;
                         trigger_arrow_warp(
                             &runtime,
                             x,
