@@ -1849,3 +1849,38 @@ fn taking_the_stairs_does_not_land_in_a_house_full_of_the_rivals_family() {
         );
     }
 }
+
+/// Review regression (#192): the last link of the tick wiring -- the
+/// phase's own counter must actually reach
+/// [`crate::overworld::OverworldScene::compose`]. The three other links
+/// (increment per step, reset on load/warp, `compose(tick)` reaching
+/// pixels) each have their own mutation guard above and in
+/// `crate::overworld::tests`, but hard-coding tick 0 in
+/// [`OverworldPhase::compose_frame`] left the whole suite green: nothing
+/// joined the counter to the composition. This does -- Littleroot Town's
+/// flower view (`crate::overworld::tests`' own real-pack fixture position)
+/// composes different pixels at tick 60 than at tick 0, so 60 idle frames
+/// must change the phase's composed output.
+#[test]
+#[ignore = "needs a local pack: run `cargo xtask extract` first"]
+fn idle_frames_animate_the_composed_tileset_pixels() {
+    let town = assets::MapId("MAP_LITTLEROOT_TOWN");
+    let mut phase = OverworldPhase::for_test(
+        crate::overworld::load_room(town).expect("run `cargo xtask extract` first"),
+        town,
+        PlayerState::new((10, 17), 3, Direction::South),
+        None,
+    );
+
+    let base = phase.compose_frame();
+    for _ in 0..60 {
+        phase.step(ButtonState::new());
+    }
+    assert_eq!(phase.tick, 60, "60 idle frames, 60 ticks");
+    let animated = phase.compose_frame();
+    assert_ne!(
+        &*base, &*animated,
+        "60 idle frames must animate the flower tiles through the phase's own \
+         tick -- if this fails, `compose_frame` is not passing `self.tick`"
+    );
+}

@@ -58,14 +58,19 @@
 //!
 //! # Data pinned against `tileset_anims.c`
 //!
-//! | region | `anim_name` | start tile | phase | interval | sequence | source lines |
-//! |---|---|---|---|---|---|---|
-//! | General flower | `flower` | 508 | 0 | 16 | `[0,1,0,2]` | `:82-87,634-635,652-656` |
-//! | General water | `water` | 432 | 1 | 16 | `[0,1,2,3,4,5,6,7]` | `:89-107,636-637,658-662` |
-//! | General sand/water edge | `sand_water_edge` | 464 | 2 | 16 | `[0,1,2,3,4,5,6,0]` | `:109-126,638-639,664-668` |
-//! | General waterfall | `waterfall` | 496 | 3 | 16 | `[0,1,2,3]` | `:128-138,640-641,670-674` |
-//! | General land/water edge | `land_water_edge` | 480 | 4 | 16 | `[0,1,2,3]` | `:140-150,642-643,958-962` |
-//! | Building TV turned on | `tv_turned_on` | 496 | 0 | 8 | `[0,1]` | `:424-428,648-649,1113-1117` |
+//! | region | `anim_name` | start tile | tiles | phase | interval | sequence | source lines |
+//! |---|---|---|---|---|---|---|---|
+//! | General flower | `flower` | 508 | 4 | 0 | 16 | `[0,1,0,2]` | `:82-87,634-635,652-656` |
+//! | General water | `water` | 432 | 30 | 1 | 16 | `[0,1,2,3,4,5,6,7]` | `:89-107,636-637,658-662` |
+//! | General sand/water edge | `sand_water_edge` | 464 | 10 | 2 | 16 | `[0,1,2,3,4,5,6,0]` | `:109-126,638-639,664-668` |
+//! | General waterfall | `waterfall` | 496 | 6 | 3 | 16 | `[0,1,2,3]` | `:128-138,640-641,670-674` |
+//! | General land/water edge | `land_water_edge` | 480 | 10 | 4 | 16 | `[0,1,2,3]` | `:140-150,642-643,958-962` |
+//! | Building TV turned on | `tv_turned_on` | 496 | 4 | 0 | 8 | `[0,1]` | `:424-428,648-649,1113-1117` |
+//!
+//! The `tiles` column is each region's own upstream copy length -- the `N`
+//! in `QueueAnimTiles_*`'s `... , N * TILE_SIZE_4BPP)` call -- the one
+//! constant the DMA transfer sizes itself by, so [`AnimatedTileset::load`]
+//! requires every extracted frame to be exactly that many tiles.
 //!
 //! (`General`'s own per-tick dispatch: `tileset_anims.c:632-644`;
 //! `Building`'s: `:646-650`. Line numbers above are relative to that same
@@ -93,6 +98,11 @@ struct AnimRegionSpec {
     phase: u16,
     /// See [`AnimRegionSpec::phase`].
     interval: u16,
+    /// Upstream's copy length for this region in 8x8 tiles -- the `N` in
+    /// `QueueAnimTiles_*`'s `N * TILE_SIZE_4BPP` argument (module docs'
+    /// table). Every frame must be exactly this many tiles, or
+    /// [`AnimatedTileset::load`] rejects the pack.
+    tiles: u16,
     /// Upstream's own frame-pointer array, transcribed as the numbered
     /// `anim_name` pack entry each array slot names (module docs' table) --
     /// e.g. General's flower array repeats frame 0 between frames 1 and 2.
@@ -105,6 +115,7 @@ const GENERAL_REGIONS: [AnimRegionSpec; 5] = [
         start_tile: 508,
         phase: 0,
         interval: 16,
+        tiles: 4,
         sequence: &[0, 1, 0, 2],
     },
     AnimRegionSpec {
@@ -112,6 +123,7 @@ const GENERAL_REGIONS: [AnimRegionSpec; 5] = [
         start_tile: 432,
         phase: 1,
         interval: 16,
+        tiles: 30,
         sequence: &[0, 1, 2, 3, 4, 5, 6, 7],
     },
     AnimRegionSpec {
@@ -119,6 +131,7 @@ const GENERAL_REGIONS: [AnimRegionSpec; 5] = [
         start_tile: 464,
         phase: 2,
         interval: 16,
+        tiles: 10,
         sequence: &[0, 1, 2, 3, 4, 5, 6, 0],
     },
     AnimRegionSpec {
@@ -126,6 +139,7 @@ const GENERAL_REGIONS: [AnimRegionSpec; 5] = [
         start_tile: 496,
         phase: 3,
         interval: 16,
+        tiles: 6,
         sequence: &[0, 1, 2, 3],
     },
     AnimRegionSpec {
@@ -133,6 +147,7 @@ const GENERAL_REGIONS: [AnimRegionSpec; 5] = [
         start_tile: 480,
         phase: 4,
         interval: 16,
+        tiles: 10,
         sequence: &[0, 1, 2, 3],
     },
 ];
@@ -142,6 +157,7 @@ const BUILDING_REGIONS: [AnimRegionSpec; 1] = [AnimRegionSpec {
     start_tile: 496,
     phase: 0,
     interval: 8,
+    tiles: 4,
     sequence: &[0, 1],
 }];
 
@@ -179,13 +195,13 @@ impl AnimatedTileset {
     ///
     /// Whatever [`AssetPack::image`]/[`pack_4bpp_region`] returns for a
     /// missing or malformed frame entry, plus
-    /// [`OverworldSceneError::AnimFrameOutOfBounds`] for a frame whose
-    /// packed bytes would overflow its region's destination range inside
-    /// the primary tile block -- rejected here so [`Self::patch`]'s
-    /// in-place writes can never slice out of bounds mid-compose. Neither
-    /// is reachable against a real pack built by `cargo xtask extract`
-    /// (module docs' table is pinned against the same `tileset_anims.c`
-    /// the extraction pipeline reads).
+    /// [`OverworldSceneError::AnimFrameSizeMismatch`] for a frame whose
+    /// packed bytes are not exactly its region's upstream copy length
+    /// (module docs' `tiles` column) -- rejected here so [`Self::patch`]'s
+    /// in-place writes can never slice out of bounds or leave a region
+    /// partially stale mid-compose. Neither is reachable against a real
+    /// pack built by `cargo xtask extract` (module docs' table is pinned
+    /// against the same `tileset_anims.c` the extraction pipeline reads).
     pub(super) fn load(
         pack: &AssetPack,
         primary_tileset_name: &str,
@@ -208,6 +224,17 @@ impl AnimatedTileset {
                 spec.phase,
                 spec.interval
             );
+            // With frame sizes pinned to `tiles` below, this is the only
+            // remaining way a table typo could send `patch` out of the
+            // primary block `viewport::combined_world_tileset` pads to.
+            debug_assert!(
+                usize::from(spec.start_tile) + usize::from(spec.tiles)
+                    <= super::viewport::NUM_TILES_IN_PRIMARY,
+                "{}: tiles {}..{} must stay inside the primary block",
+                spec.anim_name,
+                spec.start_tile,
+                spec.start_tile + spec.tiles
+            );
             let mut frames = Vec::with_capacity(spec.sequence.len());
             for &n in spec.sequence {
                 let id = format!("tileset/{primary_tileset_name}/anim/{}/{n}", spec.anim_name);
@@ -222,20 +249,18 @@ impl AnimatedTileset {
                 )?;
                 // A corrupt or hand-built pack can supply a tile-aligned
                 // frame whose dimensions and payload agree with each other
-                // but not with the region: reject it here rather than let
-                // `patch`'s in-place write slice past the combined
-                // tileset's primary block (review finding on #192). The
-                // combined buffer is always at least
-                // `NUM_TILES_IN_PRIMARY` tiles long (`viewport`'s
-                // `combined_world_tileset` pads the primary to exactly
-                // that), so this bound is the tight one.
-                let start = usize::from(spec.start_tile) * BitDepth::Bpp4.tile_byte_len();
-                let primary_block_len =
-                    super::viewport::NUM_TILES_IN_PRIMARY * BitDepth::Bpp4.tile_byte_len();
-                if start + packed.len() > primary_block_len {
-                    return Err(OverworldSceneError::AnimFrameOutOfBounds {
+                // but not with the region: reject anything that isn't
+                // exactly upstream's own copy length (the spec's `tiles`
+                // column) rather than let `patch` write a wrong-size
+                // region -- oversized frames would spill into a
+                // neighboring region's tiles (or past the primary block,
+                // panicking mid-compose), undersized ones would leave part
+                // of the region stale (review findings on #192).
+                let expected = usize::from(spec.tiles) * BitDepth::Bpp4.tile_byte_len();
+                if packed.len() != expected {
+                    return Err(OverworldSceneError::AnimFrameSizeMismatch {
                         anim_name: spec.anim_name,
-                        start_tile: spec.start_tile,
+                        expected_tiles: spec.tiles,
                         frame_bytes: packed.len(),
                     });
                 }
@@ -269,11 +294,13 @@ impl AnimatedTileset {
     ///
     /// # Panics
     ///
-    /// Never: [`Self::load`] rejects any frame whose bytes would overflow
-    /// its region's destination range inside the primary tile block
-    /// ([`OverworldSceneError::AnimFrameOutOfBounds`]), and `bytes` is
-    /// always at least that long (`viewport`'s `combined_world_tileset`
-    /// pads the primary block to exactly `NUM_TILES_IN_PRIMARY` tiles).
+    /// Never: [`Self::load`] pins every frame to exactly its region's
+    /// `tiles * `[`BitDepth::Bpp4.tile_byte_len()`](BitDepth::tile_byte_len)
+    /// bytes ([`OverworldSceneError::AnimFrameSizeMismatch`]), every
+    /// region's `start_tile + tiles` stays inside the primary block
+    /// (`load`'s own debug assertion), and `bytes` is always at least that
+    /// long (`viewport`'s `combined_world_tileset` pads the primary block
+    /// to exactly `NUM_TILES_IN_PRIMARY` tiles).
     pub(super) fn patch(&self, bytes: &mut [u8], tick: u32) {
         let tile_len = BitDepth::Bpp4.tile_byte_len();
         for region in &self.regions {
@@ -348,29 +375,31 @@ mod tests {
     /// coverage notes).
     #[test]
     fn every_region_spec_matches_the_transcribed_tileset_anims_c_table() {
-        /// `(anim_name, start_tile, phase, interval, sequence)`.
-        type Row = (&'static str, u16, u16, u16, &'static [u8]);
+        /// `(anim_name, start_tile, tiles, phase, interval, sequence)`.
+        type Row = (&'static str, u16, u16, u16, u16, &'static [u8]);
 
-        // `QueueAnimTiles_General_*`'s own `TILE_OFFSET_4BPP(N)` literals and
+        // `QueueAnimTiles_General_*`'s own `TILE_OFFSET_4BPP(N)` literals,
+        // their `N * TILE_SIZE_4BPP` copy lengths, and
         // `gTilesetAnims_General_*` array contents, plus `TilesetAnim_General`'s
         // per-phase dispatch arms (`:632-644`); Building's are `:646-650`.
         let expected: [Row; 5] = [
-            ("flower", 508, 0, 16, &[0, 1, 0, 2]),
-            ("water", 432, 1, 16, &[0, 1, 2, 3, 4, 5, 6, 7]),
-            ("sand_water_edge", 464, 2, 16, &[0, 1, 2, 3, 4, 5, 6, 0]),
-            ("waterfall", 496, 3, 16, &[0, 1, 2, 3]),
-            ("land_water_edge", 480, 4, 16, &[0, 1, 2, 3]),
+            ("flower", 508, 4, 0, 16, &[0, 1, 0, 2]),
+            ("water", 432, 30, 1, 16, &[0, 1, 2, 3, 4, 5, 6, 7]),
+            ("sand_water_edge", 464, 10, 2, 16, &[0, 1, 2, 3, 4, 5, 6, 0]),
+            ("waterfall", 496, 6, 3, 16, &[0, 1, 2, 3]),
+            ("land_water_edge", 480, 10, 4, 16, &[0, 1, 2, 3]),
         ];
-        let building_expected: [Row; 1] = [("tv_turned_on", 496, 0, 8, &[0, 1])];
+        let building_expected: [Row; 1] = [("tv_turned_on", 496, 4, 0, 8, &[0, 1])];
 
         for (spec, row) in GENERAL_REGIONS
             .iter()
             .zip(expected)
             .chain(BUILDING_REGIONS.iter().zip(building_expected))
         {
-            let (anim_name, start_tile, phase, interval, sequence) = row;
+            let (anim_name, start_tile, tiles, phase, interval, sequence) = row;
             assert_eq!(spec.anim_name, anim_name);
             assert_eq!(spec.start_tile, start_tile, "{anim_name}: start tile");
+            assert_eq!(spec.tiles, tiles, "{anim_name}: copy length in tiles");
             assert_eq!(spec.phase, phase, "{anim_name}: phase");
             assert_eq!(spec.interval, interval, "{anim_name}: interval");
             assert_eq!(spec.sequence, sequence, "{anim_name}: frame sequence");

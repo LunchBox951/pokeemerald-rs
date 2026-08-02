@@ -234,6 +234,22 @@ fn image_meta(width: u32, height: u32, bit_depth: u8) -> Vec<u8> {
 /// (this fixture's single metatile only references tile 0), so patched
 /// frames never change a composed pixel.
 fn synthetic_overworld_pack_bytes(width: u16, height: u16) -> Vec<u8> {
+    synthetic_overworld_pack_bytes_for("general", width, height)
+}
+
+/// [`synthetic_overworld_pack_bytes`], parameterized on the tileset pack
+/// name so a test can also build the *unanimated*-primary shape (e.g.
+/// `petalburg` -- a real bundled secondary tileset [`super::tileset_anims`]
+/// declares no regions for). Animation frame entries are fabricated only
+/// for `general`, the animated case.
+fn synthetic_overworld_pack_bytes_for(tileset: &str, width: u16, height: u16) -> Vec<u8> {
+    write_synthetic_pack(synthetic_overworld_pack_entries_for(tileset, width, height))
+}
+
+/// The entries behind [`synthetic_overworld_pack_bytes_for`], exposed so a
+/// test can corrupt one deliberately before writing the pack (e.g. the
+/// wrong-size animation-frame rejection test below).
+fn synthetic_overworld_pack_entries_for(tileset: &str, width: u16, height: u16) -> Vec<Entry> {
     // A single opaque 8x8 tile, every pixel palette index 5.
     let tile_pixels = vec![5u8; 8 * 8];
 
@@ -275,19 +291,19 @@ fn synthetic_overworld_pack_bytes(width: u16, height: u16) -> Vec<u8> {
 
     let mut entries = vec![
         Entry {
-            id: "tileset/general/tiles",
+            id: leaked(format!("tileset/{tileset}/tiles")),
             kind_tag: 0,
             meta: image_meta(8, 8, 4),
             payload: tile_pixels,
         },
         Entry {
-            id: "tileset/general/metatiles",
+            id: leaked(format!("tileset/{tileset}/metatiles")),
             kind_tag: 2,
             meta: vec![],
             payload: metatiles,
         },
         Entry {
-            id: "tileset/general/metatile-attributes",
+            id: leaked(format!("tileset/{tileset}/metatile-attributes")),
             kind_tag: 2,
             meta: vec![],
             payload: metatile_attrs,
@@ -325,8 +341,7 @@ fn synthetic_overworld_pack_bytes(width: u16, height: u16) -> Vec<u8> {
         },
     ];
     for slot in 0..16u8 {
-        let id: &'static str =
-            &*Box::leak(format!("tileset/general/palette/{slot:02}").into_boxed_str());
+        let id: &'static str = leaked(format!("tileset/{tileset}/palette/{slot:02}"));
         entries.push(Entry {
             id,
             kind_tag: 1,
@@ -337,42 +352,51 @@ fn synthetic_overworld_pack_bytes(width: u16, height: u16) -> Vec<u8> {
     // Overwrite the bank-0 placeholder with the real payload above.
     if let Some(bank0) = entries
         .iter_mut()
-        .find(|e| e.id == "tileset/general/palette/00")
+        .find(|e| e.id == format!("tileset/{tileset}/palette/00"))
     {
         bank0.meta = 6u16.to_le_bytes().to_vec();
         bank0.payload = bank0_payload;
     }
 
-    push_general_anim_frames(&mut entries);
+    if tileset == "general" {
+        push_general_anim_frames(&mut entries);
+    }
     push_unconditional_sprite_palettes(&mut entries);
 
-    write_synthetic_pack(entries)
+    entries
 }
 
-/// One single-tile frame per numbered entry of every animated region
+/// One frame per numbered entry of every animated region
 /// [`super::tileset_anims`] declares for `general` (that module's own
 /// cadence table), so `AnimatedTileset::load` resolves real entries in the
 /// synthetic fixture and the animated compose path stays on in default CI
-/// ([`synthetic_overworld_pack_bytes`]'s doc comment). A lone 8x8 tile
-/// trivially fits every region's destination range inside the padded
-/// primary block.
+/// ([`synthetic_overworld_pack_bytes`]'s doc comment). Each frame is
+/// exactly its region's transcribed upstream copy length (the table's
+/// `tiles` column) -- `load` rejects any other size -- shaped as an
+/// 8px-wide column of that many tiles.
 fn push_general_anim_frames(entries: &mut Vec<Entry>) {
-    for (anim, frame_count) in [
-        ("flower", 3u8),
-        ("water", 8),
-        ("sand_water_edge", 7),
-        ("waterfall", 4),
-        ("land_water_edge", 4),
+    for (anim, frame_count, tiles) in [
+        ("flower", 3u8, 4u32),
+        ("water", 8, 30),
+        ("sand_water_edge", 7, 10),
+        ("waterfall", 4, 6),
+        ("land_water_edge", 4, 10),
     ] {
         for n in 0..frame_count {
             entries.push(Entry {
-                id: &*Box::leak(format!("tileset/general/anim/{anim}/{n}").into_boxed_str()),
+                id: leaked(format!("tileset/general/anim/{anim}/{n}")),
                 kind_tag: 0,
-                meta: image_meta(8, 8, 4),
-                payload: vec![5u8; 8 * 8],
+                meta: image_meta(8, 8 * tiles, 4),
+                payload: vec![5u8; 8 * 8 * tiles as usize],
             });
         }
     }
+}
+
+/// Interns a formatted pack id for the synthetic [`Entry`]'s `&'static
+/// str` id field -- test-only, so the leak is bounded and deliberate.
+fn leaked(id: String) -> &'static str {
+    Box::leak(id.into_boxed_str())
 }
 
 /// The sprite palettes `OverworldScene::from_pack` loads *unconditionally*
@@ -428,30 +452,119 @@ static NEXT_SYNTHETIC_PACK: std::sync::atomic::AtomicUsize = std::sync::atomic::
 /// an `OverworldPhase` around one of these, so they can drive
 /// `OverworldPhase::step` without a real pack.
 pub(crate) fn synthetic_scene(width: u16, height: u16) -> super::OverworldScene {
+    synthetic_scene_result(
+        synthetic_overworld_pack_bytes(width, height),
+        "gTileset_General",
+        width,
+        height,
+    )
+    .expect("synthetic pack should decode cleanly")
+}
+
+/// [`synthetic_scene`]'s fallible core, parameterized on the pack bytes and
+/// the layout's tileset symbol: writes the scratch pack, runs
+/// [`super::OverworldScene::from_pack`], and returns its result -- so
+/// tests can assert on rejection errors and on non-`general` fixtures too.
+fn synthetic_scene_result(
+    pack_bytes: Vec<u8>,
+    tileset_symbol: &'static str,
+    width: u16,
+    height: u16,
+) -> Result<super::OverworldScene, OverworldSceneError> {
     let serial = NEXT_SYNTHETIC_PACK.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let path = std::env::temp_dir().join(format!(
         "pokeemerald-rs-overworld-test-{}-{serial}.pack",
         std::process::id()
     ));
-    std::fs::write(&path, synthetic_overworld_pack_bytes(width, height)).unwrap();
+    std::fs::write(&path, pack_bytes).unwrap();
     let pack = AssetPack::load(&path).unwrap();
     let layout = MapLayout {
         id: LayoutId("LAYOUT_MAP_TEST"),
         name: "MapTest",
         width,
         height,
-        primary_tileset: "gTileset_General",
-        secondary_tileset: "gTileset_General",
+        primary_tileset: tileset_symbol,
+        secondary_tileset: tileset_symbol,
     };
     let scene = super::OverworldScene::from_pack(
         &pack,
         &layout,
         super::PlayerCharacter::Brendan,
         &NO_OBJECT_EVENTS,
-    )
-    .expect("synthetic pack should decode cleanly");
+    );
     let _ = std::fs::remove_file(path);
     scene
+}
+
+/// Review regression (#192): [`super::tileset_anims`]' load-time size gate
+/// must reject a frame whose packed bytes disagree with its region's
+/// transcribed upstream copy length -- an oversized frame would silently
+/// overwrite a neighboring region's tiles (flower's own 508..512 sits
+/// right past waterfall's), an undersized one would leave the region
+/// partially stale. Mirrors this module's other malformed-entry pins
+/// (`UnknownTileset`, `ImagePixelCountMismatch`, `ImageNotTileAligned`).
+#[test]
+fn from_pack_rejects_an_anim_frame_of_the_wrong_size() {
+    let mut entries = synthetic_overworld_pack_entries_for("general", 4, 4);
+    // Swap flower/0 (upstream copies exactly 4 tiles) for a 6-tile 8x48
+    // column -- tile-aligned, dimensions and payload in agreement, so only
+    // the new exact-size gate can catch it.
+    let frame = entries
+        .iter_mut()
+        .find(|e| e.id == "tileset/general/anim/flower/0")
+        .expect("the general fixture fabricates flower/0");
+    frame.meta = image_meta(8, 48, 4);
+    frame.payload = vec![5u8; 8 * 48];
+
+    let err = synthetic_scene_result(write_synthetic_pack(entries), "gTileset_General", 4, 4)
+        .expect_err("a wrong-size anim frame must not load");
+    assert_eq!(
+        err,
+        OverworldSceneError::AnimFrameSizeMismatch {
+            anim_name: "flower",
+            expected_tiles: 4,
+            frame_bytes: 8 * 48 / 2,
+        }
+    );
+    let shown = err.to_string();
+    assert!(
+        shown.contains("flower") && shown.contains("4 8x8 tiles"),
+        "Display must name the region and the expected tile count: {shown}"
+    );
+}
+
+/// Review regression (#192): a primary tileset [`super::tileset_anims`]
+/// declares no regions for takes `from_pack`'s cached-decode branch, whose
+/// observable contract is tick-invariance -- the same scene composes
+/// pixel-identical frames at any two ticks. Before this test, that branch
+/// was exercised by nothing (`petalburg` is only ever a *secondary*
+/// tileset on bundled maps).
+#[test]
+fn an_unanimated_primary_tileset_composes_tick_invariant_frames() {
+    let scene = synthetic_scene_result(
+        synthetic_overworld_pack_bytes_for("petalburg", 4, 4),
+        "gTileset_Petalburg",
+        4,
+        4,
+    )
+    .expect("the unanimated synthetic pack should decode cleanly");
+
+    let player = PlayerState::new((0, 0), 3, Direction::South);
+    let event_data = engine::event_data::EventData::new();
+    let tick0 = scene.compose(&player, &event_data, 0);
+    let tick77 = scene.compose(&player, &event_data, 77);
+    assert_eq!(
+        tick0.pixels(),
+        tick77.pixels(),
+        "an unanimated primary tileset must compose tick-invariant frames"
+    );
+    assert!(
+        tick0
+            .pixels()
+            .iter()
+            .any(|&p| p != rendering::Rgb888::BLACK),
+        "the composed viewport must be non-blank"
+    );
 }
 
 #[test]

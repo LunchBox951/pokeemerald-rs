@@ -220,19 +220,19 @@ pub enum OverworldSceneError {
     /// `cargo xtask extract` bundles (`crates/xtask/src/extract/mod.rs`'s
     /// `TILESETS`) -- carries the offending symbol.
     UnknownTileset(&'static str),
-    /// A tileset-animation frame's packed bytes would overflow its region's
-    /// destination range inside the primary tile block
-    /// ([`tileset_anims`]'s module docs). Never true for a real pack built
-    /// by `cargo xtask extract`; guards the per-compose in-place patch
-    /// against a corrupt or hand-built pack's oversized frame, which would
-    /// otherwise panic mid-compose.
-    AnimFrameOutOfBounds {
+    /// A tileset-animation frame's packed bytes are not exactly its
+    /// region's upstream copy length ([`tileset_anims`]'s module docs'
+    /// `tiles` column). Never true for a real pack built by `cargo xtask
+    /// extract`; guards the per-compose in-place patch against a corrupt
+    /// or hand-built pack's wrong-size frame -- oversized would overwrite
+    /// a neighboring region (or panic past the primary block), undersized
+    /// would leave the region partially stale.
+    AnimFrameSizeMismatch {
         /// The region's `anim/<anim_name>` pack id segment.
         anim_name: &'static str,
-        /// The region's first destination tile
-        /// (`tileset_anims`' module docs' table).
-        start_tile: u16,
-        /// The oversized frame's packed byte length.
+        /// The region's transcribed upstream copy length, in 8x8 tiles.
+        expected_tiles: u16,
+        /// The rejected frame's packed byte length.
         frame_bytes: usize,
     },
 }
@@ -275,14 +275,14 @@ impl std::fmt::Display for OverworldSceneError {
                 "overworld scene: tileset `{symbol}` is not one of the tilesets `cargo xtask \
                  extract` bundles"
             ),
-            Self::AnimFrameOutOfBounds {
+            Self::AnimFrameSizeMismatch {
                 anim_name,
-                start_tile,
+                expected_tiles,
                 frame_bytes,
             } => write!(
                 f,
-                "overworld scene: tileset animation `{anim_name}` frame ({frame_bytes} packed \
-                 bytes) overflows the primary tile block from its start tile {start_tile}"
+                "overworld scene: tileset animation `{anim_name}` frame is {frame_bytes} packed \
+                 bytes, expected exactly {expected_tiles} 8x8 tiles"
             ),
         }
     }
