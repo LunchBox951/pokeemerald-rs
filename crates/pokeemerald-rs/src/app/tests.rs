@@ -13,14 +13,28 @@ use platform::{ButtonState, Buttons};
 /// The animated path's `frame()` contract (I-2): after every step,
 /// `frame()` is the frame that step actually presented — the first
 /// step presents the initial tick-0 composition, the second tick 1's,
-/// and so on. Needs the real pack, like
-/// `title::tests::real_pack_composes_non_blank_deterministic_title_frames`.
+/// the third tick 2's, and so on. Ticks 0 and 1 compose pixel-identically
+/// for the real title (the clouds scroll once every four ticks, "Press
+/// Start" blinks every sixteen -- see `title`'s module docs), so a
+/// tick-1 check alone would pass even for a frozen-tick `advance_scene`
+/// regression; the tick-2 check below is what actually exercises the
+/// tick counter, behind an `assert_ne!` non-vacuity guard exactly like
+/// `real_pack_boots_to_the_title_screen_through_app_boot`'s tick checks,
+/// so it cannot silently become vacuous again. Needs the real pack, like
+/// `real_pack_boots_to_the_title_screen_through_app_boot`.
 #[test]
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
 fn animated_frame_returns_the_presented_tick() {
     let scene = crate::title::load_default().expect("run `cargo xtask extract` first");
     let expected0 = super::to_platform_frame(&scene.compose(0));
     let expected1 = super::to_platform_frame(&scene.compose(1));
+    let expected2 = super::to_platform_frame(&scene.compose(2));
+    assert_ne!(
+        expected2.to_vec(),
+        expected0.to_vec(),
+        "tick 2 must differ from tick 0, or the third-step check below proves nothing -- ticks \
+         0 and 1 compose pixel-identically and so cannot guard it themselves"
+    );
     let mut app = App::new_headless_animated(scene);
 
     assert_eq!(app.frame().to_vec(), expected0.to_vec());
@@ -35,6 +49,13 @@ fn animated_frame_returns_the_presented_tick() {
         app.frame().to_vec(),
         expected1.to_vec(),
         "the second step advances to and presents tick 1"
+    );
+    app.step().expect("headless step never errors");
+    assert_eq!(
+        app.frame().to_vec(),
+        expected2.to_vec(),
+        "the third step advances to and presents tick 2 -- pixel-distinguishable from tick 0 \
+         (asserted above), so this step's tick tracking is not vacuous"
     );
 }
 
