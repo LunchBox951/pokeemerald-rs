@@ -191,6 +191,8 @@ impl Sample {
     /// [`AudioError::Truncated`] if `bytes` is shorter than the format
     /// requires; [`AudioError::UnknownSampleKind`] for an unrecognized kind
     /// tag.
+    /// [`AudioError::TrailingBytes`] if unread bytes remain after the
+    /// payload.
     pub fn decode(bytes: &[u8]) -> Result<Self, AudioError> {
         let mut r = Reader::new(bytes);
         match r.u8()? {
@@ -207,6 +209,7 @@ impl Sample {
                 // The encoded count is a `u32`, so a successfully-read
                 // payload always satisfies `DirectSoundSample::new`'s bound;
                 // no decode-side length check is reachable here.
+                r.expect_eof()?;
                 Ok(Self::DirectSound(DirectSoundSample {
                     base_frequency,
                     loop_start,
@@ -218,6 +221,7 @@ impl Sample {
                 for b in &mut table {
                     *b = r.u8()?;
                 }
+                r.expect_eof()?;
                 Ok(Self::ProgrammableWave(ProgrammableWave { table }))
             }
             other => Err(AudioError::UnknownSampleKind(other)),
@@ -228,6 +232,23 @@ impl Sample {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Review finding on #193: a decoder that ignores trailing bytes
+    /// validates a corrupt (or newer-producer) payload as its own prefix.
+    #[test]
+    fn decode_rejects_trailing_bytes_after_either_kind() {
+        let ds = Sample::DirectSound(DirectSoundSample::new(13379, None, vec![0, 1, -1]).unwrap());
+        let wave = Sample::ProgrammableWave(ProgrammableWave { table: [7; 16] });
+        for sample in [ds, wave] {
+            let mut bytes = sample.encode();
+            bytes.push(0);
+            assert_eq!(
+                Sample::decode(&bytes),
+                Err(AudioError::TrailingBytes(1)),
+                "{sample:?}"
+            );
+        }
+    }
 
     #[test]
     fn direct_sound_one_shot_round_trips() {

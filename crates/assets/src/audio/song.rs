@@ -44,9 +44,15 @@
 //!
 //! See `super`'s module docs, "Deliberately deferred", for the full list
 //! with per-command rationale: `PATT`/`PEND` (on-disk loop compression),
-//! `REPT` and `PORT` (never emitted by `tools/mid2agb`), `MEMACC` (one
-//! song), and the `XCMD` sub-commands other than `xIECV`/`xIECL` (never
-//! emitted either) have no [`SongEvent`] variant in this slice.
+//! `REPT` and `PORT` (never emitted by `tools/mid2agb`), and the `XCMD`
+//! sub-commands other than `xIECV`/`xIECL` (never emitted either) have no
+//! [`SongEvent`] variant in this slice. `MEMACC` *is* modelled
+//! ([`SongEvent::MemAcc`]/[`SongEvent::MemAccBranch`]): exactly one
+//! canonical song needs it (`mus_vs_trainer`'s conditional jump), but a
+//! schema that cannot represent a canonical song is not a shared contract
+//! — dropping the branch would lose it and lowering it to
+//! [`SongEvent::Goto`] would make it unconditional, audibly changing the
+//! trainer theme.
 
 use super::cursor::{check_id_len, Reader, Writer};
 use super::error::AudioError;
@@ -118,8 +124,115 @@ pub enum SongEvent {
     /// Jump to another event index in this same track's event list — the
     /// loop primitive (see the module docs).
     Goto(u32),
+    /// Write to one of the music player's memory cells — upstream `MEMACC`
+    /// with a non-branching operation (`ply_memacc`,
+    /// `pokeemerald/src/m4a.c`; op values `mem_set..=mem_mem_sub`,
+    /// `sound/MPlayDef.s`). `address` selects the cell
+    /// (`MusicPlayerInfo::memAccArea[address]`), and `data` is either the
+    /// literal operand or, for the `Mem*` ops, the address of the cell
+    /// holding it.
+    MemAcc { op: MemAccOp, address: u8, data: u8 },
+    /// Conditionally jump to `target` (an event index, like
+    /// [`SongEvent::Goto`]'s) — upstream `MEMACC` with a branching
+    /// operation (`mem_beq..=mem_mem_blo`): compare cell `address` against
+    /// `data` (a literal, or a cell address for the `Mem*` conditions) and
+    /// jump when the condition holds. `mus_vs_trainer` is the one canonical
+    /// song that carries this (module docs).
+    MemAccBranch {
+        condition: MemAccCondition,
+        address: u8,
+        data: u8,
+        target: u32,
+    },
     /// End of track.
     Fine,
+}
+
+/// A non-branching [`SongEvent::MemAcc`] operation. Discriminants are
+/// upstream's own `mem_*` op values (`sound/MPlayDef.s:410-415`), which is
+/// also how the wire encodes them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum MemAccOp {
+    /// `mem_set`: `cell = data`.
+    Set = 0,
+    /// `mem_add`: `cell += data`.
+    Add = 1,
+    /// `mem_sub`: `cell -= data`.
+    Sub = 2,
+    /// `mem_mem_set`: `cell = cells[data]`.
+    MemSet = 3,
+    /// `mem_mem_add`: `cell += cells[data]`.
+    MemAdd = 4,
+    /// `mem_mem_sub`: `cell -= cells[data]`.
+    MemSub = 5,
+}
+
+impl MemAccOp {
+    fn from_byte(byte: u8) -> Result<Self, AudioError> {
+        Ok(match byte {
+            0 => Self::Set,
+            1 => Self::Add,
+            2 => Self::Sub,
+            3 => Self::MemSet,
+            4 => Self::MemAdd,
+            5 => Self::MemSub,
+            other => return Err(AudioError::UnknownMemAccOp(other)),
+        })
+    }
+}
+
+/// A [`SongEvent::MemAccBranch`] condition. Discriminants are upstream's
+/// own `mem_b*` op values (`sound/MPlayDef.s:416-427`), which is also how
+/// the wire encodes them. The `Mem*` half compares against another cell's
+/// value rather than a literal (see [`SongEvent::MemAccBranch`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum MemAccCondition {
+    /// `mem_beq`: jump if `cell == data`.
+    Eq = 6,
+    /// `mem_bne`: jump if `cell != data`.
+    Ne = 7,
+    /// `mem_bhi`: jump if `cell > data`.
+    Hi = 8,
+    /// `mem_bhs`: jump if `cell >= data`.
+    Hs = 9,
+    /// `mem_bls`: jump if `cell <= data`.
+    Ls = 10,
+    /// `mem_blo`: jump if `cell < data`.
+    Lo = 11,
+    /// `mem_mem_beq`: jump if `cell == cells[data]`.
+    MemEq = 12,
+    /// `mem_mem_bne`: jump if `cell != cells[data]`.
+    MemNe = 13,
+    /// `mem_mem_bhi`: jump if `cell > cells[data]`.
+    MemHi = 14,
+    /// `mem_mem_bhs`: jump if `cell >= cells[data]`.
+    MemHs = 15,
+    /// `mem_mem_bls`: jump if `cell <= cells[data]`.
+    MemLs = 16,
+    /// `mem_mem_blo`: jump if `cell < cells[data]`.
+    MemLo = 17,
+}
+
+impl MemAccCondition {
+    fn from_byte(byte: u8) -> Result<Self, AudioError> {
+        Ok(match byte {
+            6 => Self::Eq,
+            7 => Self::Ne,
+            8 => Self::Hi,
+            9 => Self::Hs,
+            10 => Self::Ls,
+            11 => Self::Lo,
+            12 => Self::MemEq,
+            13 => Self::MemNe,
+            14 => Self::MemHi,
+            15 => Self::MemHs,
+            16 => Self::MemLs,
+            17 => Self::MemLo,
+            other => return Err(AudioError::UnknownMemAccOp(other)),
+        })
+    }
 }
 
 const TAG_WAIT: u8 = 0;
@@ -144,14 +257,25 @@ const TAG_FINE: u8 = 17;
 // variants take the next free values rather than disturbing existing ones.
 const TAG_PSEUDO_ECHO_VOLUME: u8 = 18;
 const TAG_PSEUDO_ECHO_LENGTH: u8 = 19;
+const TAG_MEM_ACC: u8 = 20;
+const TAG_MEM_ACC_BRANCH: u8 = 21;
+
+/// [`SongEvent::write`]'s helper for the plain `tag, u8-operand` commands.
+fn tag_u8(w: &mut Writer, tag: u8, value: u8) {
+    w.u8(tag);
+    w.u8(value);
+}
+
+/// [`SongEvent::write`]'s helper for the plain `tag, i8-operand` commands.
+fn tag_i8(w: &mut Writer, tag: u8, value: i8) {
+    w.u8(tag);
+    w.i8(value);
+}
 
 impl SongEvent {
     fn write(&self, w: &mut Writer) {
         match *self {
-            Self::Wait(ticks) => {
-                w.u8(TAG_WAIT);
-                w.u8(ticks);
-            }
+            Self::Wait(ticks) => tag_u8(w, TAG_WAIT, ticks),
             Self::Note {
                 key,
                 velocity,
@@ -167,68 +291,44 @@ impl SongEvent {
                 w.bool(key.is_some());
                 w.u8(key.unwrap_or(0));
             }
-            Self::Voice(index) => {
-                w.u8(TAG_VOICE);
-                w.u8(index);
-            }
-            Self::Volume(v) => {
-                w.u8(TAG_VOLUME);
-                w.u8(v);
-            }
-            Self::Pan(v) => {
-                w.u8(TAG_PAN);
-                w.i8(v);
-            }
-            Self::Bend(v) => {
-                w.u8(TAG_BEND);
-                w.i8(v);
-            }
-            Self::BendRange(v) => {
-                w.u8(TAG_BEND_RANGE);
-                w.u8(v);
-            }
-            Self::Tune(v) => {
-                w.u8(TAG_TUNE);
-                w.i8(v);
-            }
-            Self::KeyShift(v) => {
-                w.u8(TAG_KEY_SHIFT);
-                w.i8(v);
-            }
+            Self::Voice(index) => tag_u8(w, TAG_VOICE, index),
+            Self::Volume(v) => tag_u8(w, TAG_VOLUME, v),
+            Self::Pan(v) => tag_i8(w, TAG_PAN, v),
+            Self::Bend(v) => tag_i8(w, TAG_BEND, v),
+            Self::BendRange(v) => tag_u8(w, TAG_BEND_RANGE, v),
+            Self::Tune(v) => tag_i8(w, TAG_TUNE, v),
+            Self::KeyShift(v) => tag_i8(w, TAG_KEY_SHIFT, v),
             Self::Tempo(v) => {
                 w.u8(TAG_TEMPO);
                 w.u16(v);
             }
-            Self::Priority(v) => {
-                w.u8(TAG_PRIORITY);
-                w.u8(v);
-            }
-            Self::LfoSpeed(v) => {
-                w.u8(TAG_LFO_SPEED);
-                w.u8(v);
-            }
-            Self::LfoDelay(v) => {
-                w.u8(TAG_LFO_DELAY);
-                w.u8(v);
-            }
-            Self::Modulation(v) => {
-                w.u8(TAG_MODULATION);
-                w.u8(v);
-            }
-            Self::ModType(v) => {
-                w.u8(TAG_MOD_TYPE);
-                w.u8(v);
-            }
-            Self::PseudoEchoVolume(v) => {
-                w.u8(TAG_PSEUDO_ECHO_VOLUME);
-                w.u8(v);
-            }
-            Self::PseudoEchoLength(v) => {
-                w.u8(TAG_PSEUDO_ECHO_LENGTH);
-                w.u8(v);
-            }
+            Self::Priority(v) => tag_u8(w, TAG_PRIORITY, v),
+            Self::LfoSpeed(v) => tag_u8(w, TAG_LFO_SPEED, v),
+            Self::LfoDelay(v) => tag_u8(w, TAG_LFO_DELAY, v),
+            Self::Modulation(v) => tag_u8(w, TAG_MODULATION, v),
+            Self::ModType(v) => tag_u8(w, TAG_MOD_TYPE, v),
+            Self::PseudoEchoVolume(v) => tag_u8(w, TAG_PSEUDO_ECHO_VOLUME, v),
+            Self::PseudoEchoLength(v) => tag_u8(w, TAG_PSEUDO_ECHO_LENGTH, v),
             Self::Goto(target) => {
                 w.u8(TAG_GOTO);
+                w.u32(target);
+            }
+            Self::MemAcc { op, address, data } => {
+                w.u8(TAG_MEM_ACC);
+                w.u8(op as u8);
+                w.u8(address);
+                w.u8(data);
+            }
+            Self::MemAccBranch {
+                condition,
+                address,
+                data,
+                target,
+            } => {
+                w.u8(TAG_MEM_ACC_BRANCH);
+                w.u8(condition as u8);
+                w.u8(address);
+                w.u8(data);
                 w.u32(target);
             }
             Self::Fine => w.u8(TAG_FINE),
@@ -271,6 +371,24 @@ impl SongEvent {
             TAG_PSEUDO_ECHO_VOLUME => Ok(Self::PseudoEchoVolume(r.u8()?)),
             TAG_PSEUDO_ECHO_LENGTH => Ok(Self::PseudoEchoLength(r.u8()?)),
             TAG_GOTO => Ok(Self::Goto(r.u32()?)),
+            TAG_MEM_ACC => {
+                let op = MemAccOp::from_byte(r.u8()?)?;
+                let address = r.u8()?;
+                let data = r.u8()?;
+                Ok(Self::MemAcc { op, address, data })
+            }
+            TAG_MEM_ACC_BRANCH => {
+                let condition = MemAccCondition::from_byte(r.u8()?)?;
+                let address = r.u8()?;
+                let data = r.u8()?;
+                let target = r.u32()?;
+                Ok(Self::MemAccBranch {
+                    condition,
+                    address,
+                    data,
+                    target,
+                })
+            }
             TAG_FINE => Ok(Self::Fine),
             other => Err(AudioError::UnknownSongEvent(other)),
         }
@@ -422,7 +540,10 @@ impl Song {
     /// [`AudioError::Truncated`] if `bytes` is shorter than the format
     /// requires; [`AudioError::InvalidString`] if the voicegroup id is not
     /// valid UTF-8; [`AudioError::UnknownSongEvent`] for an unrecognized
-    /// event tag byte.
+    /// event tag byte; [`AudioError::UnknownMemAccOp`] for a MEMACC
+    /// op/condition byte outside its range;
+    /// [`AudioError::TrailingBytes`] if unread bytes remain after the last
+    /// track.
     pub fn decode(bytes: &[u8]) -> Result<Self, AudioError> {
         let mut r = Reader::new(bytes);
         let voicegroup = VoiceGroupId(r.string()?);
@@ -443,6 +564,7 @@ impl Song {
             }
             tracks.push(events);
         }
+        r.expect_eof()?;
         Ok(Self {
             voicegroup,
             priority,

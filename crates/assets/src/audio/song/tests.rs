@@ -230,16 +230,129 @@ fn unknown_event_tag_is_rejected() {
 
 #[test]
 fn a_tag_just_past_the_last_defined_one_is_rejected() {
-    // Guards the additive tag space: `TAG_PSEUDO_ECHO_LENGTH` (19) is the
-    // highest defined tag, so 20 must still be rejected rather than read as
+    // Guards the additive tag space: `TAG_MEM_ACC_BRANCH` (21) is the
+    // highest defined tag, so 22 must still be rejected rather than read as
     // some neighbouring variant.
     let mut bytes = song(vec![vec![SongEvent::Fine]]).encode();
     let last = bytes.len() - 1;
-    bytes[last] = TAG_PSEUDO_ECHO_LENGTH + 1;
+    bytes[last] = TAG_MEM_ACC_BRANCH + 1;
     assert_eq!(
         Song::decode(&bytes),
-        Err(AudioError::UnknownSongEvent(TAG_PSEUDO_ECHO_LENGTH + 1))
+        Err(AudioError::UnknownSongEvent(TAG_MEM_ACC_BRANCH + 1))
     );
+}
+
+/// `mus_vs_trainer`'s own conditional-loop shape (review finding on #193):
+/// mid2agb's generated loop sets a memory cell, plays the body, and
+/// conditionally jumps on the cell's value -- the one canonical song the
+/// [`SongEvent::MemAcc`]/[`SongEvent::MemAccBranch`] pair exists for.
+#[test]
+fn the_memacc_conditional_loop_round_trips() {
+    let track = vec![
+        SongEvent::MemAcc {
+            op: MemAccOp::Set,
+            address: 0,
+            data: 0,
+        },
+        SongEvent::Note {
+            key: 60,
+            velocity: 100,
+            gate: 24,
+        },
+        SongEvent::MemAccBranch {
+            condition: MemAccCondition::Eq,
+            address: 0,
+            data: 1,
+            target: 5,
+        },
+        SongEvent::Goto(1),
+        SongEvent::Fine,
+    ];
+    let song = Song::new(
+        VoiceGroupId("audio/voicegroup/vs_trainer".to_owned()),
+        0,
+        Some(50),
+        vec![track],
+    )
+    .unwrap();
+    assert_eq!(Song::decode(&song.encode()).unwrap(), song);
+}
+
+/// Every [`MemAccOp`]/[`MemAccCondition`] discriminant round-trips, and
+/// each wire byte is upstream's own `mem_*` value (`sound/MPlayDef.s`) --
+/// transcribed literals, not read back from the enums under test.
+#[test]
+fn every_memacc_op_and_condition_round_trips_on_its_upstream_byte() {
+    let ops = [
+        (MemAccOp::Set, 0u8),
+        (MemAccOp::Add, 1),
+        (MemAccOp::Sub, 2),
+        (MemAccOp::MemSet, 3),
+        (MemAccOp::MemAdd, 4),
+        (MemAccOp::MemSub, 5),
+    ];
+    let conditions = [
+        (MemAccCondition::Eq, 6u8),
+        (MemAccCondition::Ne, 7),
+        (MemAccCondition::Hi, 8),
+        (MemAccCondition::Hs, 9),
+        (MemAccCondition::Ls, 10),
+        (MemAccCondition::Lo, 11),
+        (MemAccCondition::MemEq, 12),
+        (MemAccCondition::MemNe, 13),
+        (MemAccCondition::MemHi, 14),
+        (MemAccCondition::MemHs, 15),
+        (MemAccCondition::MemLs, 16),
+        (MemAccCondition::MemLo, 17),
+    ];
+    let mut track = Vec::new();
+    for (op, byte) in ops {
+        assert_eq!(op as u8, byte, "{op:?}: upstream mem_* value");
+        track.push(SongEvent::MemAcc {
+            op,
+            address: byte,
+            data: byte.wrapping_add(1),
+        });
+    }
+    for (condition, byte) in conditions {
+        assert_eq!(condition as u8, byte, "{condition:?}: upstream mem_* value");
+        track.push(SongEvent::MemAccBranch {
+            condition,
+            address: byte,
+            data: byte.wrapping_add(1),
+            target: u32::from(byte),
+        });
+    }
+    track.push(SongEvent::Fine);
+    let song = song(vec![track]);
+    assert_eq!(Song::decode(&song.encode()).unwrap(), song);
+}
+
+/// A MEMACC op byte outside `0..=5` (or a branch condition outside
+/// `6..=17`) is structurally invalid, not a neighbouring variant.
+#[test]
+fn an_out_of_range_memacc_op_byte_is_rejected() {
+    // A track of exactly one MemAcc event: corrupt its op byte (the byte
+    // right after the event tag, which is the last-but-2 byte: tag, op,
+    // address, data).
+    let mut bytes = song(vec![vec![SongEvent::MemAcc {
+        op: MemAccOp::Set,
+        address: 0,
+        data: 0,
+    }]])
+    .encode();
+    let op_at = bytes.len() - 3;
+    bytes[op_at] = 18; // first byte past mem_mem_blo -- valid for neither.
+    assert_eq!(Song::decode(&bytes), Err(AudioError::UnknownMemAccOp(18)));
+}
+
+/// Review finding on #193: a decoder that ignores trailing bytes validates
+/// a corrupt (or newer-producer) payload as its own prefix.
+#[test]
+fn decode_rejects_trailing_bytes() {
+    let mut bytes = song(vec![sample_track()]).encode();
+    bytes.push(0);
+    assert_eq!(Song::decode(&bytes), Err(AudioError::TrailingBytes(1)));
 }
 
 #[test]

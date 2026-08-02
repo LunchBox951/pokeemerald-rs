@@ -395,3 +395,45 @@ fn pan_zero_is_never_produced_by_decode() {
         other => panic!("expected a DirectSound slot, got {other:?}"),
     }
 }
+
+/// The construction half of the sentinel contract
+/// ([`pan_zero_is_never_produced_by_decode`]'s doc comment): `Some(0)`
+/// would silently decay to `None` across a round trip, so
+/// [`VoiceGroup::new`] must reject it outright (review finding on #193).
+#[test]
+fn pan_zero_is_rejected_at_construction() {
+    let err = VoiceGroup::new(vec![VoiceEntry::DirectSound(DirectSoundVoice {
+        base_key: 60,
+        pan: Some(0),
+        sample: SampleId("audio/sample/x".to_owned()),
+        envelope: sample_envelope(),
+        mode: DirectSoundMode::Resampled,
+    })])
+    .unwrap_err();
+    assert_eq!(err, AudioError::PanOverrideZero);
+    assert!(
+        err.to_string().contains("Some(0)"),
+        "Display must explain the sentinel collision: {err}"
+    );
+}
+
+/// Review finding on #193: a decoder that ignores trailing bytes validates
+/// a corrupt (or newer-producer) payload as its own prefix. The reader
+/// must be exhausted when decoding succeeds.
+#[test]
+fn decode_rejects_trailing_bytes() {
+    let group = VoiceGroup::new(vec![VoiceEntry::DirectSound(DirectSoundVoice {
+        base_key: 60,
+        pan: Some(64),
+        sample: SampleId("audio/sample/x".to_owned()),
+        envelope: sample_envelope(),
+        mode: DirectSoundMode::Resampled,
+    })])
+    .unwrap();
+    let mut bytes = group.encode();
+    bytes.push(0);
+    assert_eq!(
+        VoiceGroup::decode(&bytes).unwrap_err(),
+        AudioError::TrailingBytes(1)
+    );
+}

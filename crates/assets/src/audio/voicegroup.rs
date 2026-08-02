@@ -162,6 +162,12 @@ pub struct DirectSoundVoice {
     /// `None` to inherit the track's pan. The only voice kind with a pan at
     /// all — see the module docs, including the note that upstream honours
     /// it via the rhythm indirection's `rhythmPan`.
+    ///
+    /// `Some(0)` is invalid: the wire's `0` byte is the no-override
+    /// sentinel (as it is upstream — mid2agb writes `0` for none and
+    /// `0x80 | pan` otherwise), so [`VoiceGroup::new`] rejects it with
+    /// [`AudioError::PanOverrideZero`] rather than let it silently decay
+    /// to `None` across a round trip.
     pub pan: Option<u8>,
     /// The [`super::sample::Sample::DirectSound`] this voice plays.
     pub sample: SampleId,
@@ -520,7 +526,18 @@ impl VoiceGroup {
         }
         for slot in &slots {
             match slot {
-                VoiceEntry::DirectSound(v) => check_id_len(&v.sample.0)?,
+                VoiceEntry::DirectSound(v) => {
+                    check_id_len(&v.sample.0)?;
+                    // The wire's `0` byte is the no-override sentinel
+                    // (`write_pan`/`read_pan`), so `Some(0)` would silently
+                    // decay to `None` across a round trip -- rejected here,
+                    // where it is still reportable (review finding on
+                    // #193). Upstream cannot express it either: mid2agb's
+                    // pan operand is `0` for none, `0x80 | pan` otherwise.
+                    if v.pan == Some(0) {
+                        return Err(AudioError::PanOverrideZero);
+                    }
+                }
                 VoiceEntry::ProgrammableWave(v) => check_id_len(&v.wave.0)?,
                 VoiceEntry::KeySplit(v) => check_id_len(&v.children.0)?,
                 VoiceEntry::Rhythm(v) => check_id_len(&v.children.0)?,
@@ -592,6 +609,7 @@ impl VoiceGroup {
         for _ in 0..count {
             slots.push(VoiceEntry::read(&mut r)?);
         }
+        r.expect_eof()?;
         Ok(Self { slots })
     }
 }

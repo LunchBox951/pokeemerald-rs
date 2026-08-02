@@ -61,6 +61,26 @@ pub enum AudioError {
     /// encoding's `u32` length field can describe. Carries the sample count
     /// found.
     SampleTooLong(usize),
+    /// A [`super::voicegroup::DirectSoundVoice`]'s pan override was
+    /// `Some(0)`, which the wire format cannot distinguish from `None` (the
+    /// `0` byte is the no-override sentinel, mirroring upstream's own `0`
+    /// vs `0x80 | pan` operand encoding — see
+    /// [`super::voicegroup::DirectSoundVoice::pan`]). Rejected at
+    /// [`super::voicegroup::VoiceGroup::new`] so the value cannot silently
+    /// decay to `None` across a round trip.
+    PanOverrideZero,
+    /// A MEMACC song event's operation byte was not one this format
+    /// defines ([`super::song::MemAccOp`] `0..=5` for
+    /// [`super::song::SongEvent::MemAcc`],
+    /// [`super::song::MemAccCondition`] `6..=17` for
+    /// [`super::song::SongEvent::MemAccBranch`]). Carries the offending
+    /// byte.
+    UnknownMemAccOp(u8),
+    /// Decoding finished with unread bytes still in the buffer — a corrupt
+    /// payload, or one written by a newer producer whose extra fields this
+    /// reader would otherwise silently ignore. Carries the number of
+    /// trailing bytes.
+    TrailingBytes(usize),
 }
 
 impl fmt::Display for AudioError {
@@ -114,6 +134,18 @@ impl fmt::Display for AudioError {
                 f,
                 "audio-pack sample: {len} samples exceeds the maximum of {}",
                 u32::MAX
+            ),
+            Self::PanOverrideZero => write!(
+                f,
+                "audio-pack voicegroup: a DirectSound pan override of Some(0) is \
+                 indistinguishable from no override on the wire; use None"
+            ),
+            Self::UnknownMemAccOp(byte) => {
+                write!(f, "audio-pack song: invalid MEMACC op byte `{byte}`")
+            }
+            Self::TrailingBytes(count) => write!(
+                f,
+                "audio-pack entry: {count} trailing byte(s) after the decoded payload"
             ),
         }
     }

@@ -107,11 +107,13 @@
 //!   `PORT` = portamento) but never emitted by `tools/mid2agb` — no
 //!   `.mid`-sourced song can contain one. A ROM backend decompiling
 //!   hand-written sequence data is the only way either could appear.
-//! - `MEMACC`: the engine's conditional-jump mini-language (`mem_set`,
-//!   `mem_bne`, …, `tools/mid2agb/agb.cpp`). Exactly one song uses it
-//!   (`mus_vs_trainer`), for a jump this schema's [`song::SongEvent::Goto`]
-//!   cannot express unconditionally; representing it needs the whole
-//!   memory-cell model, which one song does not justify in a schema slice.
+//! - `MEMACC` is *not* deferred (review finding on #193): exactly one
+//!   canonical song carries it (`mus_vs_trainer`'s conditional jump), but a
+//!   shared pack contract that cannot represent a canonical song would
+//!   force that backend to drop the branch or lower it to an unconditional
+//!   [`song::SongEvent::Goto`] — either audibly changes the trainer theme.
+//!   [`song::SongEvent::MemAcc`]/[`song::SongEvent::MemAccBranch`] model
+//!   the full `mem_*` op table (`sound/MPlayDef.s:410-427`).
 //! - `XCMD` sub-commands other than `xIECV`/`xIECL` (ext cmds `8`/`9`):
 //!   `mid2agb`'s `PrintExtendedOp` handles only those two and drops the
 //!   rest (`// TODO: support for other extended commands`), so no other
@@ -132,7 +134,7 @@ mod voicegroup;
 
 pub use error::AudioError;
 pub use sample::{DirectSoundSample, ProgrammableWave, Sample, SampleId};
-pub use song::{Song, SongEvent, MAX_TRACKS};
+pub use song::{MemAccCondition, MemAccOp, Song, SongEvent, MAX_TRACKS};
 pub use voicegroup::{
     DirectSoundMode, DirectSoundVoice, Envelope, KeySplitVoice, NoiseVoice, ProgrammableWaveVoice,
     RhythmVoice, Square1Voice, Square2Voice, VoiceEntry, VoiceGroup, VoiceGroupId,

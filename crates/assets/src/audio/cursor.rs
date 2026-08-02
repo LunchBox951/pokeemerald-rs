@@ -55,6 +55,18 @@ impl<'a> Reader<'a> {
         Ok(self.take(1)?[0])
     }
 
+    /// Require every input byte to have been consumed — the schemas'
+    /// decoders call this before returning success, so a corrupt payload
+    /// with appended bytes (or one written by a newer producer) errors
+    /// instead of silently validating as its own prefix.
+    pub(super) fn expect_eof(&self) -> Result<(), AudioError> {
+        let remaining = self.bytes.len() - self.pos;
+        if remaining != 0 {
+            return Err(AudioError::TrailingBytes(remaining));
+        }
+        Ok(())
+    }
+
     /// A byte reinterpreted as signed (the C `(s8)` cast).
     pub(super) fn i8(&mut self) -> Result<i8, AudioError> {
         Ok(i8::from_ne_bytes([self.u8()?]))
