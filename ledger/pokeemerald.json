@@ -22891,7 +22891,7 @@
     "sound/voicegroups/drumsets/rs.inc": {
       "category": "audio.voicegroup",
       "kind": "file",
-      "reason": "Rhythm (drum-kit) voicegroup MUS_TITLE's voicegroup references via voice_keysplit_all voicegroup_rs_drumset (title.inc slot 0). Parsed by xtask::extract::voicegroups (voice_group rs_drumset, 36 -- the starting_note bias aligns real MIDI note 36 = General MIDI bass drum), normalized to the 128-slot VoiceGroup schema (36 leading Empty slots for the bias, 30 real entries, trailing Empty padding) and emitted as audio/voicegroup/rs_drumset (issue #182, S-4 #115 child 3).",
+      "reason": "Rhythm (drum-kit) voicegroup MUS_TITLE's voicegroup references via voice_keysplit_all voicegroup_rs_drumset (title.inc slot 0). Parsed by xtask::extract::voicegroups (voice_group rs_drumset, 36 -- the starting_note bias aligns real MIDI note 36 = General MIDI bass drum), normalized to the 128-slot VoiceGroup schema (36 leading Empty slots for the bias, 29 real entries filling slots 36..=64, trailing Empty padding) and emitted as audio/voicegroup/rs_drumset (issue #182, S-4 #115 child 3).",
       "rust_target": "crates/xtask/src/extract/voicegroups/mod.rs",
       "spec": "S-4",
       "status": "ported"
@@ -23719,7 +23719,7 @@
     "sound/voicegroups/title.inc": {
       "category": "audio.voicegroup",
       "kind": "file",
-      "reason": "Voicegroup resolver + 128-slot normalization (issue #182, S-4 #115 child 3): parsed by xtask::extract::voicegroups (parser.rs/resolve.rs/encode.rs), resolving MUS_TITLE's own voicegroup (voice_group title -> voicegroup_title, per sound/songs/midi/midi.cfg mus_title.mid: -G_title) plus every key-split/rhythm child it transitively references, cycle-safe and rejecting a second level of indirection (upstream ply_note single-level limit). Normalized to crates/assets/src/audio/voicegroup.rs's VoiceGroup schema (all 128 slots explicit, including the trailing Empty slots this source only declares 90 of) and emitted as audio/voicegroup/title in the local asset pack (FORMAT_VERSION 3). Read back and decoded with VoiceGroup::decode (crates/pokeemerald-rs/src/voicegroup_pack_tests.rs pins the real pack's slot 127 and dependency-tree shape). Sample payloads are not extracted here (issue #183).",
+      "reason": "Voicegroup resolver + 128-slot normalization (issue #182, S-4 #115 child 3): parsed by xtask::extract::voicegroups (parser.rs/resolve.rs/encode.rs), resolving MUS_TITLE's own voicegroup (voice_group title -> voicegroup_title, per sound/songs/midi/midi.cfg mus_title.mid: -G_title) plus every key-split/rhythm child it transitively references, cycle-safe and rejecting a second level of indirection (upstream ply_note single-level limit). Normalized to crates/assets/src/audio/voicegroup.rs's VoiceGroup schema (all 128 slots explicit, including the trailing Empty slots this source only declares 89 of) and emitted as audio/voicegroup/title in the local asset pack (FORMAT_VERSION 4). Read back and decoded with VoiceGroup::decode (crates/pokeemerald-rs/src/voicegroup_pack_tests.rs pins the real pack's slot 127 and dependency-tree shape). Sample payloads are not extracted here (issue #183).",
       "rust_target": "crates/xtask/src/extract/voicegroups/mod.rs",
       "spec": "S-4",
       "status": "ported"

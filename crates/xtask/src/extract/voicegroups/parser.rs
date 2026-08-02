@@ -410,7 +410,13 @@ pub(super) fn parse_keysplit_tables(
                 builder.table.extend(std::iter::repeat_n(index, count));
                 builder.last_note = ending_note;
             }
-            _ => {}
+            // Fail closed rather than skipping, exactly as `parse_slot_line`
+            // does: a macro this parser doesn't recognize is a table entry
+            // it would silently drop, and a keysplit table's contents *are*
+            // its note-to-slot mapping. Only `keysplit`/`split` appear in
+            // the real `keysplit_tables.inc`, so this is not expected to
+            // fire against the pinned reference checkout.
+            other => return Err(VoiceGroupError::UnknownKeySplitMacro(other.to_owned())),
         }
     }
     finish_keysplit_block(current, &mut out)?;

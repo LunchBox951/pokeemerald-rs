@@ -52,7 +52,7 @@ fn every_expected_voicegroup_is_present_and_decodes() {
 fn slot_127_is_the_effective_slot_mus_titles_own_midi_selects() {
     // `mus_title.mid` selects instrument 127 on one channel
     // (`crates/assets/src/audio.rs`'s module docs), but `title.inc` itself
-    // only declares 90 of the 128 addressable slots -- slot 127 has no
+    // only declares 89 of the 128 addressable slots -- slot 127 has no
     // `ToneData` in the source at all. The pipeline represents that
     // honestly as `VoiceEntry::Empty` rather than inventing content for
     // it (issue #182's "128-slot normalization").

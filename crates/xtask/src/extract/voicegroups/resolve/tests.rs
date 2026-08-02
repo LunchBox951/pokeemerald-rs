@@ -50,7 +50,7 @@ fn a_leaf_only_top_level_group_resolves_to_one_group_padded_to_128() {
         VoiceSlot::DirectSound {
             base_key: 60,
             pan: None,
-            sample_id: "audio/sample/a".to_owned(),
+            sample_id: "audio/sample/direct-sound/a".to_owned(),
             envelope: envelope(),
             mode: DirectSoundMode::Resampled,
         }
@@ -136,7 +136,7 @@ fn a_rhythm_slot_resolves_its_child_group_with_the_starting_note_bias_padded_as_
         VoiceSlot::DirectSound {
             base_key: 60,
             pan: None,
-            sample_id: "audio/sample/kick".to_owned(),
+            sample_id: "audio/sample/direct-sound/kick".to_owned(),
             envelope: envelope(),
             mode: DirectSoundMode::Resampled,
         }
@@ -314,19 +314,55 @@ fn a_malformed_sample_symbol_is_a_hard_error() {
     );
 }
 
+/// The ids here must match `xtask::extract::audio_samples`'s (issue `#183`)
+/// byte for byte, or every reference a voicegroup entry carries dangles --
+/// see the module docs' "Sample id scheme".
 #[test]
 fn direct_sound_sample_ids_strip_the_upstream_symbol_prefix() {
     assert_eq!(
         direct_sound_sample_id("DirectSoundWaveData_sc88pro_flute", "g").unwrap(),
-        "audio/sample/sc88pro_flute"
+        "audio/sample/direct-sound/sc88pro_flute"
     );
 }
 
 #[test]
-fn programmable_wave_sample_ids_follow_the_documented_convention() {
+fn programmable_wave_sample_ids_zero_pad_the_symbols_number_to_two_digits() {
     assert_eq!(
         programmable_wave_sample_id("ProgrammableWaveData_2", "g").unwrap(),
-        "audio/sample/programmable_wave_2"
+        "audio/sample/programmable-wave/02"
+    );
+    // Already two digits: re-formatting is a no-op, not a second pad.
+    assert_eq!(
+        programmable_wave_sample_id("ProgrammableWaveData_12", "g").unwrap(),
+        "audio/sample/programmable-wave/12"
+    );
+}
+
+#[test]
+fn a_non_numeric_programmable_wave_suffix_is_a_hard_error() {
+    // The prefix is right, so `MalformedReference` doesn't fire -- but
+    // there is no `<nn>.pcm` source such a symbol could name, so pasting
+    // the suffix through would emit an id `#183` never writes.
+    let err = programmable_wave_sample_id("ProgrammableWaveData_flute", "g").unwrap_err();
+    assert_eq!(
+        err,
+        VoiceGroupError::MalformedProgrammableWaveIndex {
+            group: "g".to_owned(),
+            reference: "ProgrammableWaveData_flute".to_owned(),
+        }
+    );
+}
+
+#[test]
+fn a_programmable_wave_symbol_without_the_prefix_is_a_hard_error() {
+    let err = programmable_wave_sample_id("WaveData_2", "g").unwrap_err();
+    assert_eq!(
+        err,
+        VoiceGroupError::MalformedReference {
+            group: "g".to_owned(),
+            reference: "WaveData_2".to_owned(),
+            expected_prefix: "ProgrammableWaveData_",
+        }
     );
 }
 

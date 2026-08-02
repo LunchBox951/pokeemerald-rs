@@ -11,15 +11,25 @@
 //! A [`super::parser::RawSlot::DirectSound`]/[`super::parser::RawSlot::ProgrammableWave`]
 //! slot names its sample by the upstream linker symbol
 //! (`DirectSoundWaveData_sc88pro_flute`, `ProgrammableWaveData_1`) --
-//! neither payload is extracted here (that's `#183`'s job), only a stable
-//! id a future sample-extraction pass is expected to produce:
+//! neither payload is extracted here (that's `#183`'s job), only the id
+//! `#183`'s own extraction pass emits for that payload. The two schemes
+//! must agree exactly or every reference here dangles, so this module
+//! mirrors `xtask::extract::audio_samples`'s ids verbatim:
 //!
-//! - `DirectSoundWaveData_<name>` -> `audio/sample/<name>` (the symbol's own
-//!   suffix, already a stable, `snake_case` name -- e.g.
-//!   `DirectSoundWaveData_sc88pro_flute` -> `audio/sample/sc88pro_flute`).
-//! - `ProgrammableWaveData_<n>` -> `audio/sample/programmable_wave_<n>`
-//!   (matches the naming `crates/assets/src/audio/voicegroup.rs`'s own
-//!   test fixtures already use, e.g. `audio/sample/programmable_wave_2`).
+//! - `DirectSoundWaveData_<name>` -> `audio/sample/direct-sound/<name>`
+//!   (the symbol's own suffix, already a stable, `snake_case` name that
+//!   matches the `sound/direct_sound_samples/<name>.wav` source file --
+//!   e.g. `DirectSoundWaveData_sc88pro_flute` ->
+//!   `audio/sample/direct-sound/sc88pro_flute`).
+//! - `ProgrammableWaveData_<n>` -> `audio/sample/programmable-wave/<nn>`,
+//!   where `<nn>` is `<n>` re-formatted zero-padded to two digits, matching
+//!   the `sound/programmable_wave_samples/<nn>.pcm` source file `#183`
+//!   reads (e.g. `ProgrammableWaveData_1` ->
+//!   `audio/sample/programmable-wave/01`). A suffix that is not a number
+//!   fails closed as
+//!   [`super::parser::VoiceGroupError::MalformedProgrammableWaveIndex`]
+//!   rather than being pasted verbatim into an id no sample entry will
+//!   ever carry.
 //!
 //! # Voicegroup id scheme
 //!
@@ -115,7 +125,7 @@ fn direct_sound_sample_id(symbol: &str, group: &str) -> Result<String, VoiceGrou
     symbol
         .strip_prefix(DIRECT_SOUND_SAMPLE_PREFIX)
         .filter(|name| !name.is_empty())
-        .map(|name| format!("audio/sample/{name}"))
+        .map(|name| format!("audio/sample/direct-sound/{name}"))
         .ok_or_else(|| VoiceGroupError::MalformedReference {
             group: group.to_owned(),
             reference: symbol.to_owned(),
@@ -126,15 +136,25 @@ fn direct_sound_sample_id(symbol: &str, group: &str) -> Result<String, VoiceGrou
 /// The stable pack id a [`super::parser::RawSlot::ProgrammableWave`] wave
 /// symbol maps to. See the module docs' "Sample id scheme".
 fn programmable_wave_sample_id(symbol: &str, group: &str) -> Result<String, VoiceGroupError> {
-    symbol
+    let suffix = symbol
         .strip_prefix(PROGRAMMABLE_WAVE_SAMPLE_PREFIX)
         .filter(|name| !name.is_empty())
-        .map(|name| format!("audio/sample/programmable_wave_{name}"))
         .ok_or_else(|| VoiceGroupError::MalformedReference {
             group: group.to_owned(),
             reference: symbol.to_owned(),
             expected_prefix: PROGRAMMABLE_WAVE_SAMPLE_PREFIX,
-        })
+        })?;
+    // The suffix is a sample *number*, not a name: `#183` writes the entry
+    // under the zero-padded two-digit form its `<nn>.pcm` source file uses,
+    // so re-format rather than pasting the symbol's own spelling through.
+    let index: u32 =
+        suffix
+            .parse()
+            .map_err(|_| VoiceGroupError::MalformedProgrammableWaveIndex {
+                group: group.to_owned(),
+                reference: symbol.to_owned(),
+            })?;
+    Ok(format!("audio/sample/programmable-wave/{index:02}"))
 }
 
 /// The stable pack id a resolved voicegroup is emitted under. See the

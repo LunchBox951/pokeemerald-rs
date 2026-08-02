@@ -101,7 +101,9 @@
 //!   normalization, and why the other ~188 `.inc` files under
 //!   `sound/voicegroups/` stay `pending`. Sample payloads are not part of
 //!   this slice (`#183`); voicegroup entries carry only stable
-//!   `audio/sample/*` ids for a future extraction pass to fill in.
+//!   `audio/sample/direct-sound/<name>` /
+//!   `audio/sample/programmable-wave/<nn>` ids, matching that pass's own
+//!   scheme (`xtask::extract::audio_samples`) verbatim, for it to fill in.
 //!
 //! Explicitly **not** extracted (deferred to future slices, not silently
 //! dropped): metatile-to-tile mapping beyond the raw `metatiles.bin` bytes
@@ -143,8 +145,9 @@
 //!   `audio/voicegroup/rs_drumset`) — `<label>` is the upstream
 //!   `voice_group`/`voicegroup_*` symbol name verbatim (see [`voicegroups`]'s
 //!   module docs). A [`voicegroups`] entry's own payload additionally
-//!   references `audio/sample/<name>` / `audio/sample/programmable_wave_<n>`
-//!   ids — no pack entry with those ids exists yet (`#183`'s job).
+//!   references `audio/sample/direct-sound/<name>` /
+//!   `audio/sample/programmable-wave/<nn>` ids — no pack entry with those
+//!   ids exists yet (`#183`'s job, whose scheme these mirror verbatim).
 //!
 //! `<name>` is always a normalized, stable identifier (upstream's own
 //! directory/file naming, which is already `snake_case` and stable across

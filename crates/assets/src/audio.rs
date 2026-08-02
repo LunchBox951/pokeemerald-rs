@@ -77,10 +77,11 @@
 //! shape: it went to `2` when NPC sprite-sheet and palette entries were
 //! added (issue #161), precisely so a pack missing new entry content is
 //! rejected at load rather than failing later with a confusing per-asset
-//! error. It went to `3` when the first audio entries
-//! (`audio/voicegroup/*`, `xtask::extract::voicegroups`) were written
-//! (issue #182, `#115` child 3); any later change to the shapes here bumps
-//! it again.
+//! error. It went to `3` when the first audio entries (`audio/sample/*`,
+//! `xtask::extract::audio_samples`) were written (issue #183, `#115` child
+//! 4), and to `4` when the `audio/voicegroup/*` entries those samples back
+//! (`xtask::extract::voicegroups`) followed (issue #182, `#115` child 3);
+//! any later change to the shapes here bumps it again.
 //!
 //! A second, per-payload version would be a redundant axis: two gates to
 //! keep in sync, and a failure mode (outer version accepted, inner version

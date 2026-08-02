@@ -13,8 +13,9 @@
 //! `voicegroup_title` -- matching `pokeemerald/sound/voicegroups/title.inc`'s
 //! own `voice_group title` declaration), *not* a numbered
 //! `voicegroup127` -- no such symbol exists anywhere in the reference
-//! checkout. `voicegroup_title` itself declares only 90 of the 128
-//! addressable slots; slot 127 (the one `mus_title.mid`'s own MIDI source
+//! checkout. `voicegroup_title` itself declares only 89 of the 128
+//! addressable slots (89 `voice_*` body lines under `title.inc`'s
+//! `voice_group title` header); slot 127 (the one `mus_title.mid`'s own MIDI source
 //! selects on one channel -- see `crates/assets/src/audio.rs`'s module
 //! docs) has no `ToneData` in the source at all. This pipeline represents
 //! that honestly as `assets::audio::voicegroup::VoiceEntry::Empty`
@@ -60,9 +61,12 @@
 //!
 //! # Samples: ids only, no payload
 //!
-//! [`resolve`]'s module docs cover the `SampleId` derivation scheme. No
-//! `audio/sample/*` pack entry exists yet -- normalizing the actual sample
-//! payloads is issue `#183`, a separate `#115` child.
+//! [`resolve`]'s module docs cover the `SampleId` derivation scheme: an
+//! `audio/sample/direct-sound/<name>` / `audio/sample/programmable-wave/<nn>`
+//! id per referenced sample, mirroring `xtask::extract::audio_samples`'s
+//! own ids verbatim so the two halves link up. Extracting those payloads is
+//! issue `#183`, a separate `#115` child -- this module writes only the
+//! references.
 
 mod encode;
 mod error;
@@ -233,7 +237,7 @@ mod tests {
 
         let title = groups.iter().find(|g| g.label == "title").unwrap();
         assert_eq!(title.slots.len(), super::VOICE_SLOT_COUNT);
-        // `title.inc` declares only 90 of the 128 slots (see the module
+        // `title.inc` declares only 89 of the 128 slots (see the module
         // docs' "Why MUS_TITLE") -- slot 127 is trailing padding, not
         // invented content.
         assert_eq!(
@@ -243,12 +247,19 @@ mod tests {
 
         let rs_drumset = groups.iter().find(|g| g.label == "rs_drumset").unwrap();
         assert_eq!(rs_drumset.slots.len(), super::VOICE_SLOT_COUNT);
-        // `drumsets/rs.inc` declares `voice_group rs_drumset, 36` -- the
-        // first 36 slots are the `starting_note` bias, not real content.
+        // `drumsets/rs.inc` declares `voice_group rs_drumset, 36` with 29
+        // body lines -- the first 36 slots are the `starting_note` bias,
+        // slots 36..=64 are the real entries, and everything past 64 is
+        // trailing padding.
         for slot in &rs_drumset.slots[0..36] {
             assert_eq!(*slot, super::resolve::VoiceSlot::Empty);
         }
-        assert_ne!(rs_drumset.slots[36], super::resolve::VoiceSlot::Empty);
+        for slot in &rs_drumset.slots[36..=64] {
+            assert_ne!(*slot, super::resolve::VoiceSlot::Empty);
+        }
+        for slot in &rs_drumset.slots[65..] {
+            assert_eq!(*slot, super::resolve::VoiceSlot::Empty);
+        }
     }
 
     #[test]
@@ -266,5 +277,42 @@ mod tests {
     fn collect_inc_files_sorted_rejects_missing_dir() {
         let err = collect_inc_files_sorted(std::path::Path::new("/does/not/exist")).unwrap_err();
         assert!(matches!(err, crate::extract::ExtractError::ReadFailed(..)));
+    }
+
+    /// Crafted fixture (the real checkout has no such collision): two
+    /// `.inc` files declaring the same label would make
+    /// [`build_label_index`]'s map -- and so every `voice_keysplit`
+    /// reference resolved through it -- depend on which file `read_dir`
+    /// happened to yield last. That fails closed instead.
+    #[test]
+    fn two_inc_files_declaring_the_same_label_are_rejected() {
+        let root = std::env::temp_dir().join(format!(
+            "pokeemerald-rs-voicegroup-duplicate-label-test-{}",
+            std::process::id()
+        ));
+        let dir = root.join("sound/voicegroups");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&dir).unwrap();
+        let body = "voice_group demo\n\tvoice_square_1 60, 0, 0, 2, 0, 0, 15, 0\n";
+        std::fs::write(dir.join("a.inc"), body).unwrap();
+        std::fs::write(dir.join("b.inc"), body).unwrap();
+
+        let err = build_label_index(&root).unwrap_err();
+        std::fs::remove_dir_all(&root).unwrap();
+
+        // `collect_inc_files_sorted` sorts by full path, so `a.inc` is
+        // always the first-discovered file and `b.inc` the collision.
+        match err {
+            crate::extract::ExtractError::DuplicateVoiceGroupLabel {
+                label,
+                first_path,
+                second_path,
+            } => {
+                assert_eq!(label, "demo");
+                assert_eq!(first_path, dir.join("a.inc"));
+                assert_eq!(second_path, dir.join("b.inc"));
+            }
+            other => panic!("expected DuplicateVoiceGroupLabel, got {other:?}"),
+        }
     }
 }

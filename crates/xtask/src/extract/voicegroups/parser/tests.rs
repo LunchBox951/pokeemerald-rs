@@ -321,3 +321,32 @@ fn a_keysplit_header_missing_its_label_is_rejected() {
         Err(VoiceGroupError::MalformedKeySplitTableHeader)
     );
 }
+
+#[test]
+fn an_unrecognized_keysplit_macro_is_rejected() {
+    // Crafted fixture: the real `keysplit_tables.inc` contains only
+    // `keysplit`/`split` lines, but a silently-skipped third macro would be
+    // a silently-truncated table, so this fails closed the same way
+    // `parse_slot_line`'s `UnknownMacro` does.
+    let text = "keysplit demo, 0\n\tsplit 0, 4\n\tsplit_all 1\n";
+    assert_eq!(
+        parse_keysplit_tables(text),
+        Err(VoiceGroupError::UnknownKeySplitMacro(
+            "split_all".to_owned()
+        ))
+    );
+}
+
+#[test]
+fn a_keysplit_table_longer_than_128_entries_is_rejected() {
+    // One `split` spanning notes 0..200 expands to 200 table entries, past
+    // the 128 slots any table entry can address (`VOICE_SLOT_COUNT`).
+    let text = "keysplit demo, 0\n\tsplit 0, 200\n";
+    assert_eq!(
+        parse_keysplit_tables(text),
+        Err(VoiceGroupError::KeySplitTableTooLong {
+            label: "demo".to_owned(),
+            len: 200,
+        })
+    );
+}

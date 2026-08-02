@@ -32,6 +32,14 @@ pub(crate) enum VoiceGroupError {
         reference: String,
         expected_prefix: &'static str,
     },
+    /// A `ProgrammableWaveData_<n>` symbol carried the expected prefix but
+    /// a suffix that is not a number, so no
+    /// `audio/sample/programmable-wave/<nn>` id can be derived from it --
+    /// the numeric half of the same fail-closed check
+    /// [`Self::MalformedReference`] covers the prefix half of (see
+    /// [`super::resolve`]'s "Sample id scheme"). Carries the owning group's
+    /// label and the raw symbol.
+    MalformedProgrammableWaveIndex { group: String, reference: String },
     /// A `keysplit` declaration line in `keysplit_tables.inc` was missing
     /// its label operand.
     MalformedKeySplitTableHeader,
@@ -48,6 +56,12 @@ pub(crate) enum VoiceGroupError {
     /// own `starting_note` for the first `split`). Carries the owning
     /// keysplit table's label.
     SplitOutOfOrder(String),
+    /// A `keysplit_tables.inc` line invoked a macro name this parser does
+    /// not recognize (only `keysplit`/`split` are). Fails closed for the
+    /// same reason [`Self::UnknownMacro`] does on the voicegroup side: a
+    /// silently-skipped line is a silently-wrong table. Carries the macro
+    /// name.
+    UnknownKeySplitMacro(String),
     /// Two `keysplit` blocks in `keysplit_tables.inc` declared the same
     /// label.
     DuplicateKeySplitTable(String),
@@ -114,6 +128,11 @@ impl fmt::Display for VoiceGroupError {
                 "voicegroup `{group}`: reference `{reference}` does not start with expected \
                  prefix `{expected_prefix}`"
             ),
+            Self::MalformedProgrammableWaveIndex { group, reference } => write!(
+                f,
+                "voicegroup `{group}`: programmable-wave symbol `{reference}` does not end in a \
+                 sample number"
+            ),
             Self::MalformedKeySplitTableHeader => {
                 write!(
                     f,
@@ -139,6 +158,9 @@ impl fmt::Display for VoiceGroupError {
                 "keysplit table `{label}`: a `split` line's ending_note is earlier than the \
                  running note cursor"
             ),
+            Self::UnknownKeySplitMacro(macro_name) => {
+                write!(f, "keysplit_tables.inc: unrecognized macro `{macro_name}`")
+            }
             Self::DuplicateKeySplitTable(label) => write!(
                 f,
                 "keysplit_tables.inc: duplicate `keysplit` label `{label}`"

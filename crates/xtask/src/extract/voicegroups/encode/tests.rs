@@ -21,7 +21,7 @@ fn a_direct_sound_slot_with_a_pan_override_matches_the_documented_wire_shape() {
         slots: vec![VoiceSlot::DirectSound {
             base_key: 60,
             pan: Some(100),
-            sample_id: "audio/sample/x".to_owned(),
+            sample_id: "audio/sample/direct-sound/x".to_owned(),
             envelope: envelope(255, 0, 255, 0),
             mode: DirectSoundMode::Resampled,
         }],
@@ -32,8 +32,9 @@ fn a_direct_sound_slot_with_a_pan_override_matches_the_documented_wire_shape() {
     expected.push(KIND_DIRECT_SOUND);
     expected.push(60); // base_key
     expected.push(100); // pan override, written verbatim (no OR-0x80 -- see module docs)
-    expected.extend_from_slice(&14u16.to_le_bytes()); // "audio/sample/x".len()
-    expected.extend_from_slice(b"audio/sample/x");
+                        // "audio/sample/direct-sound/x".len()
+    expected.extend_from_slice(&27u16.to_le_bytes());
+    expected.extend_from_slice(b"audio/sample/direct-sound/x");
     expected.extend_from_slice(&[255, 0, 255, 0]); // envelope
     expected.push(MODE_RESAMPLED);
 
@@ -123,7 +124,7 @@ fn square_and_wave_and_noise_slots_carry_fixed_rate_as_a_single_bool_byte() {
             VoiceSlot::ProgrammableWave {
                 base_key: 60,
                 length: 0,
-                wave_id: "audio/sample/programmable_wave_1".to_owned(),
+                wave_id: "audio/sample/programmable-wave/01".to_owned(),
                 envelope: envelope(0, 7, 15, 1),
                 fixed_rate: true,
             },
