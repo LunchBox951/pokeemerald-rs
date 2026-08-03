@@ -1952,6 +1952,49 @@ mod tests {
     }
 
     #[test]
+    fn an_equal_speed_run_turn_never_consumes_the_tie_draw() {
+        let dex = Dex::new();
+        // The same mirror match as the test above (Rattata L5 both sides,
+        // effective Speed 13), but the player runs. A chosen Run makes
+        // SetActionsAndBattlersTurnOrder short-circuit to `turnOrderId = 5`
+        // (`battle_main.c:4784`-`:4813`), seating the runner first without
+        // ever reaching GetWhoStrikesFirst -- so even with tied speeds the
+        // turn must not consume the mid-turn tie draw. The escape roll is
+        // skipped too (player_speed >= enemy_speed succeeds
+        // unconditionally), leaving exactly the turn number and the wild
+        // mon's selection pick.
+        let player = max_iv_mon(&dex, 19, 5, vec![MoveId(33)]);
+        let enemy = max_iv_mon(&dex, 19, 5, vec![MoveId(33)]);
+        let mut rng = SequenceRng::new([
+            0, 0, // Battle::new: battle-start turn number + initial-seeding tie
+            0, // the turn's own turn number
+            0, // selection: 0 % 4 -> slot 0, the wild mon's only move
+        ]);
+        let mut battle = Battle::new(dex, player, enemy, &mut rng).unwrap();
+        assert_eq!(
+            rng.draws(),
+            2,
+            "mirror match: Battle::new takes the seeding tie draw"
+        );
+        let events = battle.take_turn(PlayerAction::Run, &mut rng).unwrap();
+        assert_eq!(
+            events,
+            vec![
+                BattleEvent::RunAttempt {
+                    by_player: true,
+                    success: true,
+                },
+                BattleEvent::Ended(BattleOutcome::PlayerRan),
+            ]
+        );
+        assert_eq!(
+            rng.draws(),
+            4,
+            "2 (battle start) + 2 (turn number, pick): no tie draw, no escape roll"
+        );
+    }
+
+    #[test]
     fn an_always_hit_move_makes_a_full_turn_cost_ten_draws_not_eleven() {
         let dex = Dex::new();
         // Swift (EFFECT_ALWAYS_HIT) skips `AccuracyCalcHelper`'s roll
