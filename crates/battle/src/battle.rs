@@ -361,15 +361,16 @@ impl Battle {
     /// Start a new battle. See the module docs for why there is no separate
     /// "intro" step to advance through.
     ///
-    /// Both movesets are checked here, before any state exists and before the
-    /// first draw: every move either mon knows must be one
-    /// [`crate::hit::resolve_hit`] can execute. That is the only honest place
-    /// for the check — a battler picks its move mid-turn (the player from its
-    /// own menu, the wild mon from its rejection loop), so discovering an
-    /// unsupported move *then* would mean a turn that has already deducted PP
-    /// and consumed shared-RNG draws failing with no events to show for it.
-    /// Rejecting the configuration up front means a constructed [`Battle`] can
-    /// always play every move both battlers know.
+    /// The *wild* moveset is checked here, before any state exists and
+    /// before the first draw: every move the wild mon knows must be one
+    /// [`crate::hit::resolve_hit`] can execute, because its rejection loop
+    /// picks mid-turn and can land on any slot — discovering an unsupported
+    /// move *then* would mean a turn that has already consumed shared-RNG
+    /// draws failing with no events to show for it. The player's moveset is
+    /// deliberately *not* screened (real starters all carry a status move);
+    /// each chosen slot is validated per turn instead, before any draw, so
+    /// [`Battle::take_turn`] can still reject a player pick with
+    /// [`BattleError::NonDamagingMove`] / [`BattleError::UnsupportedMoveEffect`].
     ///
     /// Draws from `rng` exactly once (after validation): the
     /// `BattleStartClearSetData` `gRandomTurnNumber = Random()`
