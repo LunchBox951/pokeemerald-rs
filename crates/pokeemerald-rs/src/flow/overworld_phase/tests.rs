@@ -1202,6 +1202,154 @@ fn walking_onto_the_doormat_facing_east_does_not_exit() {
     assert_eq!(phase.player.position(), (8, 8));
 }
 
+/// The issue #194 acceptance test: upstream runs `ProcessPlayerFieldInput`
+/// *before* `PlayerStep` and skips the step entirely once it consumes the
+/// input (`pokeemerald/src/overworld.c:1444-1455`), so a *legal, walkable*
+/// step in an arrow-warp tile's own direction warps instead of stepping.
+/// No bundled real map can exercise this -- every arrow tile this port's own
+/// data reaches has its arrow direction impassable, the doormat's `(8, 9)`
+/// off-map among them (`OverworldPhase::step`'s "Warp timing" docs) -- so
+/// this borrows the doormat's own real, static warp-event data (`ONE_F`'s
+/// warp #1, `(8, 8)` -> `MAP_LITTLEROOT_TOWN` warp #1; needs no pack, see
+/// [`warp_tile_behavior`]'s own doc comment on why `MapEventsTable` is
+/// always available) but drops it onto a **synthetic** scene
+/// ([`crate::overworld::tests::synthetic_scene_with_special_tile`]) where
+/// `(8, 9)` -- unlike the real off-map tile -- is ordinary, walkable ground.
+///
+/// The player starts already standing on the doormat, facing and holding
+/// South -- the same state
+/// [`standing_on_the_doormat_facing_north_and_holding_south_exits`]'s second
+/// frame reaches, which already proves the ordinary (post-movement) poll
+/// fires when the step south is *blocked*. This test is that one's
+/// walkable-exit counterpart: before issue #194, `advance_player_one_frame`
+/// ran first here, the (now legal) step to `(8, 9)` landed, `in_transit`
+/// closed the poll for the whole crossing, and by the time it reopened the
+/// player was standing on `(8, 9)` -- ordinary ground, no warp, ever.
+///
+/// # What this test does and does not prove (pack-free ratchet)
+///
+/// This one runs in a plain `cargo test --workspace`, with no extracted
+/// pack, and that is the point: it is the *ratchet* that keeps the #194
+/// ordering from regressing in the default gate. But `warp_to` finishes
+/// through [`crate::overworld::load_room`], which needs a local pack for
+/// the real `MAP_LITTLEROOT_TOWN` destination, so with no pack the warp
+/// resolves, bails out at the load, and leaves the player where they were.
+/// Hence the assertions here are deliberately only the *negative* half --
+/// the player must never reach `(8, 9)`, and must never be left
+/// mid-crossing -- which is exactly and only what the pre-#194
+/// movement-first ordering violated.
+///
+/// What it therefore does **not** prove is that a warp actually fired: a
+/// regression that skipped the step while producing no warp at all (a
+/// soft-lock -- input consumed, nothing happening) would still satisfy both
+/// assertions. That positive half is pinned by the pack-gated sibling
+/// [`a_legal_step_in_the_arrow_direction_lands_the_warp`], which runs this
+/// same synthetic scene and asserts the destination map and tile.
+#[test]
+fn a_legal_step_in_the_arrow_direction_warps_instead_of_stepping() {
+    let mut phase = walkable_south_arrow_phase();
+
+    phase.step(held(Buttons::DOWN));
+
+    assert_ne!(
+        phase.player.position(),
+        (8, 9),
+        "a legal step in the arrow direction must never happen -- the warp preempts it \
+         (overworld.c:1444-1455); the pre-#194 movement-first ordering would have stepped \
+         the player onto (8, 9) here, before the poll ever got a chance to fire"
+    );
+    assert!(
+        !phase.player.in_transit(),
+        "no walk animation was ever started -- the step never ran"
+    );
+}
+
+/// The positive half of
+/// [`a_legal_step_in_the_arrow_direction_warps_instead_of_stepping`]: the
+/// same synthetic scene and the same single held-South frame, but asserting
+/// that the preempting warp actually *landed* rather than only that the
+/// step never happened -- so a regression that skips movement without
+/// warping (a soft-lock) fails here even though it passes the pack-free
+/// ratchet.
+///
+/// Needs a local pack because `warp_to` loads the real destination room
+/// ([`crate::overworld::load_room`] over extracted tileset/map data). The
+/// destination pins are the same ones
+/// [`standing_on_the_doormat_facing_north_and_holding_south_exits`] uses
+/// for the real front door: `MAP_LITTLEROOT_TOWN`, warp #1 at `(5, 8)`.
+#[test]
+#[ignore = "needs a local pack: run `cargo xtask extract` first"]
+fn a_legal_step_in_the_arrow_direction_lands_the_warp() {
+    let mut phase = walkable_south_arrow_phase();
+
+    phase.step(held(Buttons::DOWN));
+
+    assert_eq!(
+        phase.map_id,
+        assets::MapId("MAP_LITTLEROOT_TOWN"),
+        "the preempting arrow warp must actually land, not merely eat the step"
+    );
+    assert_eq!(
+        phase.player.position(),
+        (5, 8),
+        "Littleroot's own warp #1: the front door"
+    );
+    assert_ne!(
+        phase.player.position(),
+        (8, 9),
+        "and the step in the arrow direction still never happened"
+    );
+}
+
+/// The shared fixture behind the two tests above: the doormat's own real,
+/// static warp-event data on a **synthetic** scene where the tile south of
+/// it is walkable (see
+/// [`a_legal_step_in_the_arrow_direction_warps_instead_of_stepping`]'s doc
+/// comment for why no real map can stand in). Asserts its own
+/// preconditions, so a fixture that stopped describing the intended scene
+/// fails loudly rather than passing vacuously.
+fn walkable_south_arrow_phase() -> OverworldPhase {
+    // `MapEventsTable` is generated at build time from checked-in map data
+    // (`warp_tile_behavior`'s own doc comment), so this real warp event is
+    // available with no `cargo xtask extract` pack.
+    let events = assets::MapEventsTable::new()
+        .resolve(ONE_F)
+        .expect("ONE_F must resolve in the generated map-events table");
+    let doormat = events.warp_events[1];
+    assert_eq!(
+        (doormat.x, doormat.y),
+        (8, 8),
+        "1F's warp #1: the doormat inside"
+    );
+
+    let scene = crate::overworld::tests::synthetic_scene_with_special_tile(
+        10,
+        10,
+        (8, 8),
+        MB_SOUTH_ARROW_WARP,
+    );
+    let phase = OverworldPhase::for_test(
+        scene,
+        ONE_F,
+        PlayerState::new((8, 8), 3, Direction::South),
+        None,
+    );
+
+    // Fixture preconditions: the fabricated tile really is the arrow
+    // behavior these tests mean to exercise, and the tile south of it --
+    // unlike the real doormat's off-map `(8, 9)` -- really is walkable.
+    let runtime = runtime_for(&phase);
+    assert_eq!(runtime.metatile_behavior(8, 8), Some(MB_SOUTH_ARROW_WARP));
+    assert!(
+        runtime
+            .metatile_cell(8, 9)
+            .is_some_and(|cell| cell.collision == 0),
+        "fixture precondition: (8, 9) must be walkable, unlike the real doormat's off-map tile"
+    );
+
+    phase
+}
+
 /// The issue #161 acceptance test: spawn (post-#158 intro handoff) ->
 /// walk down the stairs to Brendan's House 1F (the real #163 warp path,
 /// already pinned by [`stepping_onto_the_bedroom_stair_warp_transitions_to_the_1f_map`])
