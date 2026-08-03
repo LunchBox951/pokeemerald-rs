@@ -1109,6 +1109,12 @@ mod tests {
         );
         assert_eq!(battle.outcome(), Some(BattleOutcome::PlayerRan));
         assert_eq!(rng.draws(), 3, "no escape draw, but selection still drew");
+        assert_eq!(
+            battle.run_tries(),
+            1,
+            "upstream increments runTries outside the roll branch, so even \
+             the no-roll fast-path success counts the attempt"
+        );
         // Neither mon took any action/damage.
         assert_eq!(battle.player().current_hp(), player_hp);
         assert_eq!(battle.enemy().current_hp(), enemy_hp);

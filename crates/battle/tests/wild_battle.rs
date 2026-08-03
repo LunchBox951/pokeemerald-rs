@@ -205,6 +205,12 @@ fn a_faster_player_always_escapes_a_wild_battle_successfully() {
         ]
     );
     assert_eq!(battle.outcome(), Some(BattleOutcome::PlayerRan));
+    assert_eq!(
+        battle.run_tries(),
+        1,
+        "TryRunFromBattle increments runTries after the unconditional \
+         same-speed-or-faster success too (battle_util.c:475)"
+    );
     // Running away costs no HP on either side -- no move was ever used.
     assert_eq!(battle.player().current_hp(), player_hp_before);
     assert_eq!(battle.enemy().current_hp(), enemy_hp_before);
