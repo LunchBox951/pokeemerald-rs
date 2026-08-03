@@ -163,15 +163,19 @@ pub enum BattleError {
     /// Carries the offending move id.
     UnsupportedMoveEffect(MoveId),
 
-    /// A species handed to [`crate::pokemon::BattlePokemon::new`] was
-    /// [`crate::pokemon::SPECIES_NONE`], the *empty slot* placeholder
-    /// (`pokeemerald/include/constants/species.h:4`).
+    /// A species handed to [`crate::pokemon::BattlePokemon::new`] was a
+    /// reserved placeholder id: [`crate::pokemon::SPECIES_NONE`], the *empty
+    /// slot* placeholder (`pokeemerald/include/constants/species.h:4`), or
+    /// the old-Unown compatibility range
+    /// [`crate::pokemon::SPECIES_OLD_UNOWN_B`]`..=`
+    /// [`crate::pokemon::SPECIES_OLD_UNOWN_Z`] (`:257`-`:281`).
     ///
-    /// Its `gSpeciesInfo` row exists but is all zeroes — no real mon is ever
-    /// built from it upstream, and constructing a battler over it would turn
-    /// the placeholder's zero base stats into a fightable `level + 10`-HP
-    /// battler. Rejected for the same reason as [`Self::PlaceholderMove`]:
-    /// addressable is not the same as real.
+    /// Those `gSpeciesInfo` rows exist — slot 0 all zeroes, the old-Unown
+    /// slots the leftover `OLD_UNOWN_SPECIES_INFO` dummy — but no upstream
+    /// path ever builds a mon from them, and constructing a battler over one
+    /// would turn dummy stats into a fightable battler. Rejected for the
+    /// same reason as [`Self::PlaceholderMove`]: addressable is not the same
+    /// as real.
     PlaceholderSpecies,
 
     /// A battler handed to [`crate::battle::Battle::new`] was already
@@ -224,7 +228,10 @@ impl fmt::Display for BattleError {
                 id.0
             ),
             Self::PlaceholderSpecies => {
-                write!(f, "species is the SPECIES_NONE placeholder")
+                write!(
+                    f,
+                    "species is a reserved placeholder slot (SPECIES_NONE or old-Unown)"
+                )
             }
             Self::FaintedBattler(is_player) => {
                 let side = if *is_player { "player" } else { "enemy" };

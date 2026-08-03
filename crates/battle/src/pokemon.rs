@@ -43,6 +43,19 @@ pub const MOVE_NONE: MoveId = MoveId(0);
 /// empty row's zero base stats into a fightable battler.
 pub const SPECIES_NONE: SpeciesId = SpeciesId(0);
 
+/// `SPECIES_OLD_UNOWN_B` (`pokeemerald/include/constants/species.h:257`):
+/// first id of the reserved Gen-2 compatibility hole between Celebi and
+/// Treecko. The 25 old-Unown rows (`..=`[`SPECIES_OLD_UNOWN_Z`]) hold the
+/// leftover dummy stat block (`OLD_UNOWN_SPECIES_INFO`,
+/// `src/data/pokemon/species_info.h:5`), and no upstream path — encounter
+/// table, gift, or trade — ever produces one, so [`BattlePokemon::new`]
+/// refuses the whole range like [`SPECIES_NONE`].
+pub const SPECIES_OLD_UNOWN_B: SpeciesId = SpeciesId(252);
+
+/// `SPECIES_OLD_UNOWN_Z` (`pokeemerald/include/constants/species.h:281`):
+/// last id of the reserved old-Unown range — see [`SPECIES_OLD_UNOWN_B`].
+pub const SPECIES_OLD_UNOWN_Z: SpeciesId = SpeciesId(276);
+
 /// `MIN_LEVEL` (`pokeemerald/include/constants/pokemon.h:145`).
 pub const MIN_LEVEL: u8 = 1;
 
@@ -283,7 +296,9 @@ impl BattlePokemon {
         if let Some(index) = moves.iter().position(|m| *m == MOVE_NONE) {
             return Err(BattleError::PlaceholderMove(index));
         }
-        if species == SPECIES_NONE {
+        if species == SPECIES_NONE
+            || (SPECIES_OLD_UNOWN_B.0..=SPECIES_OLD_UNOWN_Z.0).contains(&species.0)
+        {
             return Err(BattleError::PlaceholderSpecies);
         }
         dex.species(species)?;
@@ -325,8 +340,10 @@ impl BattlePokemon {
     ///   [`crate::battle::Battle::choose_enemy_move`]).
     /// - [`BattleError::PlaceholderMove`] if any slot is [`MOVE_NONE`], the
     ///   empty-slot placeholder (see that constant's docs).
-    /// - [`BattleError::PlaceholderSpecies`] if `species` is [`SPECIES_NONE`],
-    ///   the reserved all-zero `gSpeciesInfo` row (see that constant's docs).
+    /// - [`BattleError::PlaceholderSpecies`] if `species` is [`SPECIES_NONE`]
+    ///   (the reserved all-zero `gSpeciesInfo` row) or falls in the reserved
+    ///   old-Unown range [`SPECIES_OLD_UNOWN_B`]`..=`[`SPECIES_OLD_UNOWN_Z`]
+    ///   (see those constants' docs).
     /// - [`BattleError::UnknownSpecies`] / [`BattleError::UnknownMove`] if
     ///   `species`/any of `moves` is not in `dex`.
     pub fn new(
@@ -536,7 +553,7 @@ impl BattlePokemon {
 mod tests {
     use super::{
         calc_max_hp, calc_stat, compute_stats, BattlePokemon, Ivs, MoveSlot, StatStages, MAX_IV,
-        MAX_LEVEL, MIN_LEVEL, MOVE_NONE, SPECIES_NONE,
+        MAX_LEVEL, MIN_LEVEL, MOVE_NONE, SPECIES_NONE, SPECIES_OLD_UNOWN_B, SPECIES_OLD_UNOWN_Z,
     };
     use crate::damage::MoveCategory;
     use crate::dex::Dex;
@@ -749,6 +766,29 @@ mod tests {
             BattlePokemon::new(&dex, SPECIES_NONE, 5, Ivs::default(), 0, vec![MoveId(33)]),
             Err(BattleError::PlaceholderSpecies)
         );
+    }
+
+    #[test]
+    fn new_rejects_the_old_unown_reserved_range_but_not_its_neighbours() {
+        let dex = Dex::new();
+        // 252..=276 are the Gen-2 compatibility holes carrying the dummy
+        // OLD_UNOWN_SPECIES_INFO row; the ids on either side are Celebi
+        // (251) and Treecko (277), which must keep working.
+        for species in [SPECIES_OLD_UNOWN_B, SpeciesId(260), SPECIES_OLD_UNOWN_Z] {
+            assert_eq!(
+                BattlePokemon::new(&dex, species, 5, Ivs::default(), 0, vec![MoveId(33)]),
+                Err(BattleError::PlaceholderSpecies),
+                "reserved id {} must be refused",
+                species.0
+            );
+        }
+        for species in [SpeciesId(251), SpeciesId(277)] {
+            assert!(
+                BattlePokemon::new(&dex, species, 5, Ivs::default(), 0, vec![MoveId(33)]).is_ok(),
+                "real neighbour id {} must construct",
+                species.0
+            );
+        }
     }
 
     #[test]
