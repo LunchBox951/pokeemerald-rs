@@ -26,9 +26,13 @@
 //! Move-effect breadth is the sharp edge of this slice, so it is enforced
 //! rather than assumed: only moves whose `EFFECT_*` runs upstream's plain
 //! `BattleScript_EffectHit` are executable ([`hit::is_ordinary_hit_effect`]),
-//! and [`battle::Battle::new`] rejects a battle in which either mon knows
-//! anything else — before any state exists or any RNG is drawn, so an
-//! unsupported configuration can never leave a half-played turn behind.
+//! guarded at a two-sided boundary. [`battle::Battle::new`] rejects a battle
+//! whose **wild** mon knows anything else (its rejection loop can land on
+//! any slot), while the **player's** moveset may carry unsupported moves —
+//! every real starter knows a status move — and each *chosen* slot is
+//! validated per turn instead. Both checks run before any RNG is drawn, so
+//! an unsupported configuration or pick can never leave a half-played turn
+//! behind.
 //!
 //! Out of scope for this slice (see each module's own docs for exactly what
 //! is/isn't modelled): trainer/wild AI (`I-5`), battle UI/animations,

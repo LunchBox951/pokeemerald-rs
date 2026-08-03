@@ -246,10 +246,15 @@ pub enum BattleEvent {
 /// untouched. Two different situations produce it:
 ///
 /// - **Rejected before the turn began.** [`BattleError::BattleAlreadyOver`],
-///   and [`BattleError::InvalidMoveSlot`] / [`BattleError::NoPpRemaining`] /
-///   [`BattleError::PlaceholderMove`] for the *player's* chosen slot, which is
-///   validated ahead of the first draw. These, and only these, leave the
-///   battle and the shared RNG stream exactly as they were.
+///   and — for the *player's* chosen slot, validated ahead of the first
+///   draw — [`BattleError::InvalidMoveSlot`] /
+///   [`BattleError::NoPpRemaining`] / [`BattleError::PlaceholderMove`],
+///   plus [`crate::hit::ensure_resolvable`]'s rejections of an unsupported
+///   pick ([`BattleError::NonDamagingMove`],
+///   [`BattleError::UnsupportedMoveEffect`],
+///   [`BattleError::UnsupportedMoveType`], [`BattleError::UnknownMove`]).
+///   These, and only these, leave the battle and the shared RNG stream
+///   exactly as they were.
 /// - **Stopped after the turn started but before either mon acted.** A wild
 ///   opponent with *every* slot spent is upstream's forced-Struggle case
 ///   ([`Battle::choose_enemy_move`]), and this slice cannot execute Struggle
@@ -261,8 +266,11 @@ pub enum BattleEvent {
 ///   acting.
 ///
 /// So: empty events plus [`BattleError::UnsupportedMoveEffect`] is the one
-/// combination that may have consumed draws. Anything else with empty events
-/// consumed none.
+/// combination that *may* have consumed draws — the wild forced-Struggle
+/// fallback consumes the turn-number draw (and a tie draw, if any), while
+/// the player's rejected pick consumes none, and the two are not
+/// distinguishable from the error value alone. Anything else with empty
+/// events consumed none.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TurnError {
     events: Vec<BattleEvent>,

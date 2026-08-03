@@ -24232,6 +24232,12 @@
     },
     "src/battle_util.c": {
       "artifacts": {
+        "AreAllMovesUnusable": {
+          "reason": "battle_util.c:1125 (with CheckMoveLimitations :1090). Modelled: the all-slots-unusable divert -- Battle::choose_enemy_move returns the forced-Struggle fallback WITHOUT running the wild rejection loop, suppressing its RNG draw (an RNG-observable behaviour), with MOVE_LIMITATION_ZEROMOVE (:1098) and MOVE_LIMITATION_PP (:1104) as the modelled limitation rules (selectable_slot / the pp==0 screen; the same rules back validate_player_move's pre-draw pick checks). NOT modelled: Struggle execution itself (the fallback having to act stops the turn with UnsupportedMoveEffect), gSelectionBattleScripts / BattleScript_NoMovesLeft presentation, and the Disable/Taunt/Torment/Imprison/Encore limitation bits (none of those systems exist this slice).",
+          "rust_target": "crates/battle/src/battle.rs",
+          "spec": "S-6",
+          "status": "stubbed"
+        },
         "HandleAction_Run": {
           "reason": "battle_util.c:487. The player-side half only (:514-:523): Battle::take_turn calls try_run_from_battle for a chosen PlayerAction::Run and, on failure, burns the player's turn while the wild mon still acts (upstream sets BattleScript_PrintFailedToRunString and gCurrentActionFuncId = B_ACTION_EXEC_SCRIPT rather than ending the turn). Link/recorded-link multi-battler run handling (:491-:511) and the opponent-side branch (:524-:537, a wild mon fleeing with B_OUTCOME_MON_FLED) are not modelled. Where a run lands in the turn order is not this artifact's claim -- see src/battle_main.c#SetActionsAndBattlersTurnOrder.",
           "rust_target": "crates/battle/src/battle.rs",
