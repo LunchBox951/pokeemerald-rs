@@ -507,8 +507,11 @@ impl Battle {
     /// with no items/Disable/Taunt/Torment modelled, exactly "every known
     /// slot has 0 PP" (unfilled slots are `MOVE_NONE`, always unusable). The
     /// forced pick draws nothing. Note the loop itself ignores PP: a spent
-    /// slot with a real move is picked and *executed* upstream (see
-    /// [`Battle::act`]); only the all-spent case diverts to Struggle.
+    /// slot with a real move is picked upstream and then *fails* at
+    /// `Cmd_attackcanceler` — no draws, no damage, no deduction, and the
+    /// turn continues (see [`Battle::act`] and
+    /// [`BattleEvent::FailedNoPp`]); only the all-spent case diverts to
+    /// Struggle.
     fn choose_enemy_move(&self, rng: &mut impl BattleRng) -> Option<usize> {
         if self.enemy.moves().iter().all(|slot| slot.pp == 0) {
             return None;

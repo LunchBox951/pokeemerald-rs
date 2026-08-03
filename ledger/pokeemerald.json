@@ -24124,7 +24124,7 @@
     "src/battle_script_commands.c": {
       "artifacts": {
         "AccuracyCalcHelper": {
-          "reason": "battle_script_commands.c:1054. Only the EFFECT_ALWAYS_HIT/EFFECT_VITAL_THROW accuracy-roll bypass modelled (always_hits). Protect, on-air/underground/underwater semi-invulnerability, and sunny-weather EFFECT_THUNDER are not modelled (issue #159 scopes weather/status out).",
+          "reason": "battle_script_commands.c:1054. Only the EFFECT_ALWAYS_HIT/EFFECT_VITAL_THROW accuracy-roll bypass is modelled (always_hits, the :1089-:1094 arm's non-weather half). NOT modelled: the STATUS3_ALWAYS_HITS Lock-On/Mind Reader bypass at :1056-:1060 (the function's first branch; no status3), rain-boosted EFFECT_THUNDER's never-miss half of the same :1089 condition (no weather), and the on-air/underground/underwater semi-invulnerability misses (no status3). Protect is NOT this function -- it is JumpIfMoveAffectedByProtect at :1123 in Cmd_accuracycheck (see that artifact).",
           "rust_target": "crates/battle/src/accuracy.rs",
           "spec": "S-6",
           "status": "stubbed"
@@ -24136,7 +24136,7 @@
           "status": "rewritten"
         },
         "Cmd_accuracycheck": {
-          "reason": "battle_script_commands.c:1099. The accuracy-stage-ratio roll (sAccuracyStageRatios, combined accuracy/evasion stage, unconditional RNG draw) modelled exactly (accuracy_check). Compound Eyes/Sand Veil/Hustle/evasion-up-item modifiers and Foresight's ignore-evasion branch are not modelled (abilities/items out of scope).",
+          "reason": "battle_script_commands.c:1099. The accuracy-stage-ratio roll (sAccuracyStageRatios, combined accuracy/evasion stage, unconditional RNG draw) modelled exactly (accuracy_check). NOT modelled: JumpIfMoveAffectedByProtect at :1123 (no Protect), sunny-weather EFFECT_THUNDER's moveAcc = 50 override at :1146 (no weather), Compound Eyes/Sand Veil/Hustle/evasion-up-item modifiers, and Foresight's ignore-evasion branch (abilities/items/status2 out of scope).",
           "rust_target": "crates/battle/src/accuracy.rs",
           "spec": "S-6",
           "status": "stubbed"
@@ -24233,7 +24233,7 @@
     "src/battle_util.c": {
       "artifacts": {
         "AreAllMovesUnusable": {
-          "reason": "battle_util.c:1125 (with CheckMoveLimitations :1090). Modelled: the all-slots-unusable divert -- Battle::choose_enemy_move returns the forced-Struggle fallback WITHOUT running the wild rejection loop, suppressing its RNG draw (an RNG-observable behaviour), with MOVE_LIMITATION_ZEROMOVE (:1098) and MOVE_LIMITATION_PP (:1104) as the modelled limitation rules (selectable_slot / the pp==0 screen; the same rules back validate_player_move's pre-draw pick checks). NOT modelled: Struggle execution itself (the fallback having to act stops the turn with UnsupportedMoveEffect), gSelectionBattleScripts / BattleScript_NoMovesLeft presentation, and the Disable/Taunt/Torment/Imprison/Encore limitation bits (none of those systems exist this slice).",
+          "reason": "battle_util.c:1125 (with CheckMoveLimitations, declared :1082). Modelled: the all-slots-unusable divert -- Battle::choose_enemy_move returns the forced-Struggle fallback WITHOUT running the wild rejection loop, suppressing its RNG draw (an RNG-observable behaviour), with MOVE_LIMITATION_ZEROMOVE (:1098) and MOVE_LIMITATION_PP (:1101) as the modelled limitation rules (selectable_slot / the pp==0 screen; the same rules back validate_player_move's pre-draw pick checks). NOT modelled: Struggle execution itself (the fallback having to act stops the turn with UnsupportedMoveEffect), gSelectionBattleScripts / BattleScript_NoMovesLeft presentation, and the Disable (:1104) / Torment / Taunt / Imprison / Encore / Choice-item limitation bits (none of those systems exist this slice).",
           "rust_target": "crates/battle/src/battle.rs",
           "spec": "S-6",
           "status": "stubbed"
