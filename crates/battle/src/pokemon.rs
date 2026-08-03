@@ -499,8 +499,17 @@ impl BattlePokemon {
         self.stages.speed.apply(self.stats.speed)
     }
 
-    /// Deduct one PP from move slot `index` (`Cmd_ppreduce`'s common case —
-    /// Pressure's PP-doubling is not modelled).
+    /// Deduct one PP from move slot `index` — the deducting arm of
+    /// `Cmd_ppreduce` (`battle_script_commands.c:1205`; Pressure's
+    /// PP-doubling and the `HITMARKER_NO_PPDEDUCT` guard are not modelled).
+    ///
+    /// Upstream never errors here: its deduction is guarded by
+    /// `&& gBattleMons[gBattlerAttacker].pp[gCurrMovePos]` (`:1230`), so a
+    /// 0-PP slot is simply left unchanged and the move still executes. The
+    /// turn engine reproduces that guard on the wild side
+    /// ([`crate::battle::Battle`]); this method's `NoPpRemaining` error is a
+    /// *caller* boundary — the player path pre-validates its slot, so
+    /// draining a slot below zero is a bug, not a battle event.
     ///
     /// # Errors
     ///

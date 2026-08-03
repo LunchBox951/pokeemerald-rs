@@ -134,10 +134,10 @@ fn scripted_wild_battle_runs_move_vs_move_to_a_faint_and_reports_victory() {
         "expected the wild Rattata to faint: {events:?}"
     );
     assert!(
-        events
-            .iter()
-            .any(|e| matches!(e, BattleEvent::ExpGained(amount) if *amount > 0)),
-        "expected exp gain on faint: {events:?}"
+        events.contains(&BattleEvent::ExpGained(40)),
+        "expected exactly Cmd_getexp's award -- Rattata expYield 57 \
+         (species_info.h) at level 5: 57*5/7 = 40 -- pinning that the engine \
+         feeds wild_faint_exp the *enemy's* base_exp and level: {events:?}"
     );
     assert_eq!(
         events.last(),

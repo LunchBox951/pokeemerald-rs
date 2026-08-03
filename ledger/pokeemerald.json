@@ -24146,13 +24146,13 @@
           "status": "stubbed"
         },
         "Cmd_getexp": {
-          "reason": "battle_script_commands.c:3255. Only the v1 single-eligible-recipient case (calculatedExp = expYield*enemyLevel/7, floored to 1, no redistribution) modelled (wild_faint_exp). Party-wide redistribution, Exp Share, Lucky Egg, and the traded-mon/trainer-battle x1.5 bonus are not modelled.",
+          "reason": "battle_script_commands.c:3255. The v1 single-eligible-recipient case (calculatedExp = expYield*enemyLevel/7, floored to 1, no redistribution) is modelled (wild_faint_exp), and the MAX_LEVEL exclusion (case 2, :3351-:3356: a level-100 recipient gets no exp and no 'gained EXP' string) is modelled at the turn-engine level (Battle emits no ExpGained event). Party-wide redistribution, Exp Share, Lucky Egg, and the traded-mon/trainer-battle x1.5 bonus are not modelled.",
           "rust_target": "crates/battle/src/exp.rs",
           "spec": "S-6",
           "status": "stubbed"
         },
         "Cmd_ppreduce": {
-          "reason": "battle_script_commands.c:1205. BattlePokemon::deduct_pp models the common case: one PP off the used slot. NOT modelled: Pressure's ppToDeduct++ (no abilities this slice), the HITMARKER_NO_PPDEDUCT / no-attackstring guards, and upstream's silent clamp at 0 -- the Rust boundary instead reports NoPpRemaining, a deliberate divergence while the Struggle fallback is out of scope (see crate::battle docs).",
+          "reason": "battle_script_commands.c:1205. Both arms of the PP handling are modelled: BattlePokemon::deduct_pp is the deducting arm, and the ':1230' guard ('&& gBattleMons[gBattlerAttacker].pp[gCurrMovePos]' -- a 0-PP slot skips the deduction and the move still executes) is reproduced by Battle::deduct_slot for the wild side. NOT modelled: Pressure's ppToDeduct++ (no abilities this slice) and the HITMARKER_NO_PPDEDUCT / no-attackstring guards. deduct_pp's NoPpRemaining error is a caller boundary (the player path pre-validates), not an upstream behaviour: upstream never clamps or errors here. The all-slots-unusable Struggle fallback is AreAllMovesUnusable's (battle_util.c:1125), tracked as out of scope on Battle (UnsupportedMoveEffect at the moment the fallback would act).",
           "rust_target": "crates/battle/src/pokemon.rs",
           "spec": "S-6",
           "status": "stubbed"

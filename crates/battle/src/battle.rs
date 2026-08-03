@@ -102,9 +102,16 @@
 //!
 //! That is what [`Battle::choose_enemy_move`] models, draw for draw. Note the
 //! loop ignores PP entirely — a wild mon can and does pick a move it has no
-//! PP for; upstream then falls back to Struggle, which this slice does not
-//! model (see [`crate::error::BattleError::NoPpRemaining`]), so callers must
-//! give the wild mon enough PP for the scripted scenario. `BATTLE_TYPE_
+//! PP for, and upstream **executes it anyway**: `Cmd_ppreduce` only deducts
+//! when the slot's PP is nonzero (`... && gBattleMons[gBattlerAttacker]
+//! .pp[gCurrMovePos]`, `battle_script_commands.c:1230`), so a spent slot is
+//! left at 0 and the move resolves normally. Struggle enters only when
+//! **every** slot is unusable: `AreAllMovesUnusable`
+//! (`battle_util.c:1125`-`:1140`) then forces it at selection time — before
+//! the rejection loop, drawing nothing. This slice models the guard and the
+//! loop but not Struggle execution, so the all-spent case stops the turn
+//! with [`crate::error::BattleError::UnsupportedMoveEffect`] exactly when
+//! the fallback would act (see [`Battle::take_turn`]). `BATTLE_TYPE_
 //! FIRST_BATTLE` taking the *AI* branch at `:1563` is one more reason this
 //! port models the ordinary **post-first-battle** wild encounter rather than
 //! the scripted Route 101 one (`src/battle_setup.c:937`) — see
@@ -125,7 +132,7 @@ use crate::error::BattleError;
 use crate::escape::try_run_from_battle;
 use crate::exp::wild_faint_exp;
 use crate::hit::{ensure_resolvable, resolve_hit, HitOutcome};
-use crate::pokemon::{BattlePokemon, MAX_MON_MOVES, MOVE_NONE};
+use crate::pokemon::{BattlePokemon, MAX_LEVEL, MAX_MON_MOVES, MOVE_NONE};
 use crate::turn_order::{resolve_order, Order};
 
 /// The action the player commits to for a turn.
@@ -223,15 +230,17 @@ pub enum BattleEvent {
 ///   [`BattleError::PlaceholderMove`] for the *player's* chosen slot, which is
 ///   validated ahead of the first draw. These, and only these, leave the
 ///   battle and the shared RNG stream exactly as they were.
-/// - **Stopped after the turn started but before either mon acted.** The wild
-///   opponent's pick is never pre-validated — upstream's rejection loop tests
-///   only `MOVE_NONE`, not PP — so when the *enemy moves first* and its chosen
-///   slot is spent, the turn stops at that PP deduction with nothing to
-///   report. By then the turn-number draw and the selection draws have
-///   happened and [`Battle::random_turn_number`] has advanced; no PP or HP has
-///   changed, because neither mon got as far as acting.
+/// - **Stopped after the turn started but before either mon acted.** A wild
+///   opponent with *every* slot spent is upstream's forced-Struggle case
+///   ([`Battle::choose_enemy_move`]), and this slice cannot execute Struggle
+///   — so when that fallback is the *first mover*, the turn stops with
+///   nothing to report ([`BattleError::UnsupportedMoveEffect`] carrying
+///   Struggle). By then the turn-number draw (plus a Speed-tie draw, if the
+///   speeds tied) has happened and [`Battle::random_turn_number`] has
+///   advanced; no PP or HP has changed, because neither mon got as far as
+///   acting.
 ///
-/// So: empty events plus [`BattleError::NoPpRemaining`] is the one
+/// So: empty events plus [`BattleError::UnsupportedMoveEffect`] is the one
 /// combination that may have consumed draws. Anything else with empty events
 /// consumed none.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -451,11 +460,24 @@ impl Battle {
     /// empty moveset ([`BattleError::InvalidMoveCount`]) and a `MOVE_NONE`
     /// slot ([`BattleError::PlaceholderMove`]), so at least one of the four
     /// residues always accepts.
-    fn choose_enemy_move(&self, rng: &mut impl BattleRng) -> usize {
+    ///
+    /// Returns `None` for the one case upstream never reaches this loop at
+    /// all: `AreAllMovesUnusable` (`battle_util.c:1125`-`:1140`, checked at
+    /// `battle_main.c:4184` before `ChooseMove` is ever emitted) forces
+    /// Struggle through a selection script when **every** slot is unusable —
+    /// with no items/Disable/Taunt/Torment modelled, exactly "every known
+    /// slot has 0 PP" (unfilled slots are `MOVE_NONE`, always unusable). The
+    /// forced pick draws nothing. Note the loop itself ignores PP: a spent
+    /// slot with a real move is picked and *executed* upstream (see
+    /// [`Battle::deduct_slot`]); only the all-spent case diverts to Struggle.
+    fn choose_enemy_move(&self, rng: &mut impl BattleRng) -> Option<usize> {
+        if self.enemy.moves().iter().all(|slot| slot.pp == 0) {
+            return None;
+        }
         loop {
             let slot = usize::from(rng.next_u16()) % MAX_MON_MOVES;
             if selectable_slot(self.enemy.move_at(slot)) {
-                return slot;
+                return Some(slot);
             }
         }
     }
@@ -499,29 +521,37 @@ impl Battle {
     /// RNG stream exactly as they were, with no events.
     ///
     /// **Partway through the turn, after draws.** Only
-    /// [`BattleError::NoPpRemaining`], and only for a *battler whose chosen
-    /// slot turns out to be spent*. The wild opponent's pick cannot be
-    /// pre-validated: upstream's rejection loop tests `MOVE_NONE` and ignores
-    /// PP entirely, so a spent slot is discovered when its PP is deducted.
-    /// Which side and how much has committed by then depends on move order:
+    /// [`BattleError::UnsupportedMoveEffect`] (carrying
+    /// [`crate::damage::STRUGGLE`]), and only when the wild opponent has
+    /// **every** slot spent *and* actually has to act. Upstream's
+    /// `AreAllMovesUnusable` (`battle_util.c:1125`) forces Struggle at
+    /// selection time — drawing nothing — and this slice cannot execute
+    /// Struggle, so the turn stops at the moment the forced fallback would
+    /// move. How much has committed by then depends on what came first:
     ///
-    /// - the **first mover's** slot is spent → the turn stops before either
+    /// - the player **ran successfully** → the battle simply ends
+    ///   ([`BattleOutcome::PlayerRan`]), no error: upstream's forced Struggle
+    ///   never executes either;
+    /// - the player acted first and **won** → the battle ends
+    ///   ([`BattleOutcome::PlayerWon`]), no error, same reasoning;
+    /// - the fallback is the **first mover** → the turn stops before either
     ///   mon acts, so [`TurnError::events`] is empty even though the
-    ///   turn-number and selection draws have happened and
+    ///   turn-number draw (and a Speed-tie draw, if any) has happened and
     ///   [`Battle::random_turn_number`] has advanced (no PP or HP changed);
-    /// - the **second mover's** slot is spent → the first mover has already
-    ///   acted, so its hit is real and comes back in [`TurnError::events`]
-    ///   rather than being discarded.
+    /// - the fallback is the **second mover** after a surviving first move
+    ///   (or after a failed run) → everything already committed comes back
+    ///   in [`TurnError::events`] rather than being discarded.
     ///
-    /// Upstream substitutes Struggle in both cases
-    /// (`gProtectStructs[].noValidMoves`); this slice does not model Struggle
-    /// execution, so it stops the turn and reports instead. Callers must give
-    /// both mons enough PP for the scripted scenario (see
-    /// [`BattleError::NoPpRemaining`]).
+    /// A *partially* spent wild moveset is **not** an error: the rejection
+    /// loop ignores PP, and a picked 0-PP slot still executes its move —
+    /// upstream's `Cmd_ppreduce` merely skips the deduction (see
+    /// [`Battle::deduct_slot`]). [`BattleError::NoPpRemaining`] is only ever
+    /// returned by the pre-draw player validation above.
     ///
-    /// It cannot report an unsupported move: [`Battle::new`] has already
-    /// rejected any battle in which either mon knows one, so every move
-    /// reachable from here is executable `(behavioral-fidelity)`.
+    /// Other than the Struggle fallback, it cannot report an unsupported
+    /// move: [`Battle::new`] has already rejected any battle in which either
+    /// mon knows one, so every *known* move reachable from here is
+    /// executable `(behavioral-fidelity)`.
     pub fn take_turn(
         &mut self,
         player_action: PlayerAction,
@@ -567,9 +597,15 @@ impl Battle {
         // human input and draws nothing; the wild opponent's rejection loop
         // runs here even when the player is about to run, because
         // HandleTurnActionSelectionState completes for every battler before
-        // SetActionsAndBattlersTurnOrder looks at any of the choices.
-        let enemy_index = self.choose_enemy_move(rng);
-        let enemy_move = self.enemy.moves()[enemy_index].move_id;
+        // SetActionsAndBattlersTurnOrder looks at any of the choices. `None`
+        // is the all-slots-spent forced-Struggle fallback (no draw); its
+        // move id is Struggle for ordering purposes (priority 0), and it
+        // errors only if it actually has to act (`deduct_slot`).
+        let enemy_choice = self.choose_enemy_move(rng);
+        let enemy_move = match enemy_choice {
+            Some(index) => self.enemy.moves()[index].move_id,
+            None => STRUGGLE,
+        };
 
         let Some((index, player_move)) = player_move else {
             let success = try_run_from_battle(
@@ -593,7 +629,7 @@ impl Battle {
             // Failed run: the turn is burned, but the wild mon still acts on
             // the move it already selected above. The RunAttempt event above
             // survives a failure here -- `take_turn` returns it either way.
-            self.enemy.deduct_pp(enemy_index)?;
+            self.deduct_slot(false, enemy_choice)?;
             self.execute_move(false, enemy_move, rng, events)?;
             return Ok(());
         };
@@ -611,10 +647,26 @@ impl Battle {
         // (is_player, move, pp-slot-owner) for the mover in each position --
         // PP is deducted only for a mover that actually acts (see the module
         // docs: a fainted target's own move never runs upstream either, so
-        // its PP is untouched).
+        // its PP is untouched). The player's slot is always `Some` (it was
+        // validated above); the enemy's `None` is the forced-Struggle
+        // fallback, which errors in `deduct_slot` if it has to act.
         let (first, first_move, first_slot, second, second_move, second_slot) = match order {
-            Order::AttackerFirst => (true, player_move, index, false, enemy_move, enemy_index),
-            Order::DefenderFirst => (false, enemy_move, enemy_index, true, player_move, index),
+            Order::AttackerFirst => (
+                true,
+                player_move,
+                Some(index),
+                false,
+                enemy_move,
+                enemy_choice,
+            ),
+            Order::DefenderFirst => (
+                false,
+                enemy_move,
+                enemy_choice,
+                true,
+                player_move,
+                Some(index),
+            ),
         };
 
         self.deduct_slot(first, first_slot)?;
@@ -622,20 +674,41 @@ impl Battle {
         if self.outcome.is_some() {
             return Ok(());
         }
-        // If the second mover's slot is spent, the first mover's events are
-        // already in `events` and stay there: `take_turn` returns them with
-        // the error rather than throwing away a hit that really landed.
+        // If the second mover turns out to be the unexecutable Struggle
+        // fallback, the first mover's events are already in `events` and
+        // stay there: `take_turn` returns them with the error rather than
+        // throwing away a hit that really landed.
         self.deduct_slot(second, second_slot)?;
         self.execute_move(second, second_move, rng, events)?;
         Ok(())
     }
 
-    /// Deduct PP from `slot` on the player's or enemy's mon.
-    fn deduct_slot(&mut self, is_player: bool, slot: usize) -> Result<(), BattleError> {
+    /// PP bookkeeping for the mover about to act.
+    ///
+    /// The player's slot was validated ahead of the turn's first draw, so
+    /// its deduction cannot fail. The enemy's mirrors `Cmd_ppreduce`'s guard
+    /// — `... && gBattleMons[gBattlerAttacker].pp[gCurrMovePos]`
+    /// (`battle_script_commands.c:1230`) — a picked 0-PP slot skips the
+    /// deduction and the move still executes; upstream never clamps or
+    /// errors here.
+    ///
+    /// # Errors
+    ///
+    /// [`BattleError::UnsupportedMoveEffect`] carrying [`STRUGGLE`] when
+    /// `slot` is `None`: the all-slots-spent wild fallback
+    /// ([`Battle::choose_enemy_move`]) has to act, and this slice cannot
+    /// execute Struggle — the honest stop, at the same point upstream's
+    /// forced Struggle would begin executing.
+    fn deduct_slot(&mut self, is_player: bool, slot: Option<usize>) -> Result<(), BattleError> {
+        let Some(slot) = slot else {
+            return Err(BattleError::UnsupportedMoveEffect(STRUGGLE));
+        };
         if is_player {
             self.player.deduct_pp(slot)
-        } else {
+        } else if self.enemy.moves()[slot].pp > 0 {
             self.enemy.deduct_pp(slot)
+        } else {
+            Ok(())
         }
     }
 
@@ -706,9 +779,16 @@ impl Battle {
                         by_player: !attacker_is_player,
                     });
                     if attacker_is_player {
-                        let base_exp = self.dex.species(self.enemy.species())?.base_exp;
-                        let exp = wild_faint_exp(base_exp, self.enemy.level());
-                        events.push(BattleEvent::ExpGained(exp));
+                        // A MAX_LEVEL recipient gains nothing and gets no
+                        // "gained EXP" message: Cmd_getexp case 2 zeroes the
+                        // award and jumps past the string
+                        // (`battle_script_commands.c:3351`-`:3356`), so no
+                        // event is emitted either.
+                        if self.player.level() < MAX_LEVEL {
+                            let base_exp = self.dex.species(self.enemy.species())?.base_exp;
+                            let exp = wild_faint_exp(base_exp, self.enemy.level());
+                            events.push(BattleEvent::ExpGained(exp));
+                        }
                         self.finish(events, BattleOutcome::PlayerWon);
                     } else {
                         self.finish(events, BattleOutcome::PlayerLost);
@@ -1134,12 +1214,24 @@ mod tests {
         );
     }
 
+    // The three tests below previously pinned a NoPpRemaining error at the
+    // enemy's PP deduction. That pinned a misreading of upstream
+    // (`test-ratchet`: recorded reason): `Cmd_ppreduce` only *skips* the
+    // deduction for a 0-PP slot (battle_script_commands.c:1230) -- the move
+    // still executes -- and Struggle is forced only when EVERY slot is
+    // unusable (`AreAllMovesUnusable`, battle_util.c:1125), at selection
+    // time, drawing nothing. They now pin that corrected behaviour; the
+    // replacement error for the all-spent fallback having to act is
+    // UnsupportedMoveEffect(STRUGGLE).
+
     #[test]
     fn a_turn_that_stops_partway_still_reports_what_already_happened() {
         let dex = Dex::new();
         // Rattata (speed 13) moves first; Bulbasaur (speed 11) second, with
-        // its only slot already spent -- the case upstream answers with
-        // Struggle and this slice does not model.
+        // every slot spent -- upstream forces Struggle for it at selection
+        // time (drawing nothing), and this slice cannot execute Struggle, so
+        // the turn stops when that fallback would act: after the player's
+        // hit has already committed.
         let player = max_iv_mon(&dex, 19, 5, vec![MoveId(33)]);
         let mut enemy = max_iv_mon(&dex, 1, 5, vec![MoveId(33)]);
         let enemy_hp = enemy.current_hp();
@@ -1147,16 +1239,19 @@ mod tests {
             enemy.deduct_pp(0).unwrap();
         }
 
-        // 1 (battle start) + turn number + enemy pick + 4 (the player's hit).
-        // The turn then stops on the second mover's empty slot, drawing no
-        // more -- the script is exhausted, so a stray draw would panic.
-        let mut rng = SequenceRng::new([0, 0, 0, 0, 1, 0, 0]);
+        // 1 (battle start) + turn number + 4 (the player's hit). No
+        // selection draw: the forced-Struggle pick bypasses the rejection
+        // loop. The script is exhausted, so a stray draw would panic.
+        let mut rng = SequenceRng::new([0, 0, 0, 1, 0, 0]);
         let mut battle = Battle::new(dex, player, enemy, &mut rng).unwrap();
         let failure = battle
             .take_turn(PlayerAction::UseMove(0), &mut rng)
             .unwrap_err();
 
-        assert_eq!(failure.error(), BattleError::NoPpRemaining(0));
+        assert_eq!(
+            failure.error(),
+            BattleError::UnsupportedMoveEffect(STRUGGLE)
+        );
         assert_eq!(
             failure.events(),
             [BattleEvent::Hit {
@@ -1171,20 +1266,20 @@ mod tests {
         // would have left the caller unable to explain the new state.
         assert_eq!(battle.enemy().current_hp(), enemy_hp - 7);
         assert_eq!(battle.player().moves()[0].pp, 34);
-        assert_eq!(rng.draws(), 7);
+        assert_eq!(rng.draws(), 6);
         assert!(battle.outcome().is_none());
     }
 
     #[test]
-    fn an_enemy_first_empty_slot_stops_the_turn_with_no_events_but_after_draws() {
+    fn an_all_spent_enemy_moving_first_stops_the_turn_with_no_events_but_after_draws() {
         let dex = Dex::new();
         // Rattata L50 (speed 92) outspeeds Charmander L50 (speed 85), so the
-        // *enemy* is the first mover -- and its slot is spent. The enemy's
-        // pick is never pre-validated (upstream's rejection loop tests
-        // MOVE_NONE, not PP), so this is only discovered at its PP deduction,
-        // which is before either mon acts. Empty events therefore does NOT
-        // mean "nothing happened": the turn-number and selection draws are
-        // already gone. This is the exact case TurnError's docs carve out.
+        // *enemy* is the first mover -- and every slot is spent, upstream's
+        // forced-Struggle case. The forced pick bypasses the rejection loop
+        // (no selection draw), and the turn stops the moment the fallback
+        // would act: before either mon does anything. Empty events therefore
+        // does NOT mean "nothing happened": the turn-number draw is already
+        // gone. This is the exact case TurnError's docs carve out.
         let player = max_iv_mon(&dex, 4, 50, vec![MoveId(33)]);
         let mut enemy = max_iv_mon(&dex, 19, 50, vec![MoveId(33)]);
         for _ in 0..enemy.moves()[0].pp {
@@ -1195,25 +1290,32 @@ mod tests {
         let enemy_hp_before = enemy.current_hp();
 
         // Distinguishable turn numbers so the second draw is provably the
-        // turn's own. Nothing after the enemy's pick: the script is exhausted,
-        // so a third turn draw (a speed-tie roll, or any move draw) panics.
-        let mut rng = SequenceRng::new([0x1234, 0xABCD, 0]);
+        // turn's own. Nothing after it: the script is exhausted, so any
+        // further draw (a selection draw, a speed-tie roll, a move draw)
+        // panics.
+        let mut rng = SequenceRng::new([0x1234, 0xABCD]);
         let mut battle = Battle::new(dex, player, enemy, &mut rng).unwrap();
         assert_eq!(rng.draws(), 1, "battle start: no tie draw, speeds differ");
 
         let failure = battle
             .take_turn(PlayerAction::UseMove(0), &mut rng)
             .unwrap_err();
-        assert_eq!(failure.error(), BattleError::NoPpRemaining(0));
+        assert_eq!(
+            failure.error(),
+            BattleError::UnsupportedMoveEffect(STRUGGLE)
+        );
         assert!(
             failure.events().is_empty(),
             "the turn stopped before either mon acted: {:?}",
             failure.events()
         );
 
-        // Draws were consumed all the same -- 2 of them, turn number then the
-        // enemy's rejection-loop pick -- and the turn number really advanced.
-        assert_eq!(rng.draws(), 3, "1 (battle start) + 2 (turn number, pick)");
+        // The turn-number draw was consumed all the same, and committed.
+        assert_eq!(
+            rng.draws(),
+            2,
+            "1 (battle start) + 1 (turn number); the forced pick draws nothing"
+        );
         assert_eq!(
             battle.random_turn_number(),
             0xABCD,
@@ -1237,13 +1339,17 @@ mod tests {
             enemy.deduct_pp(0).unwrap();
         }
 
-        // battle start, turn number, enemy pick, escape roll (fails). The
-        // enemy's PP deduction then stops the turn.
-        let mut rng = SequenceRng::new([0, 0, 0, 65000]);
+        // battle start, turn number, escape roll (fails) -- no selection
+        // draw, the all-spent enemy's forced-Struggle pick bypasses the
+        // rejection loop. The fallback then has to act, which stops the turn.
+        let mut rng = SequenceRng::new([0, 0, 65000]);
         let mut battle = Battle::new(dex, player, enemy, &mut rng).unwrap();
         let failure = battle.take_turn(PlayerAction::Run, &mut rng).unwrap_err();
 
-        assert_eq!(failure.error(), BattleError::NoPpRemaining(0));
+        assert_eq!(
+            failure.error(),
+            BattleError::UnsupportedMoveEffect(STRUGGLE)
+        );
         assert_eq!(
             failure.events(),
             [BattleEvent::RunAttempt {
@@ -1253,7 +1359,219 @@ mod tests {
             "the run was attempted and burned the turn; that must be reported"
         );
         assert_eq!(battle.run_tries(), 1, "the attempt committed");
-        assert_eq!(rng.draws(), 4);
+        assert_eq!(rng.draws(), 3);
+    }
+
+    #[test]
+    fn an_all_spent_enemy_still_lets_a_successful_run_end_the_battle() {
+        let dex = Dex::new();
+        // Upstream fidelity for the same all-spent enemy when the fallback
+        // never has to act: the player's run resolves first and succeeds, so
+        // the battle ends PlayerRan -- upstream's forced Struggle never
+        // executes either, and no error is reported.
+        let player = max_iv_mon(&dex, 4, 50, vec![MoveId(33)]); // fast: run succeeds
+        let mut enemy = max_iv_mon(&dex, 19, 5, vec![MoveId(33)]);
+        for _ in 0..enemy.moves()[0].pp {
+            enemy.deduct_pp(0).unwrap();
+        }
+
+        // battle start + turn number only: no selection draw (forced pick),
+        // no escape draw (raw speed >= raw speed succeeds unconditionally).
+        let mut rng = SequenceRng::new([0, 0]);
+        let mut battle = Battle::new(dex, player, enemy, &mut rng).unwrap();
+        let events = battle.take_turn(PlayerAction::Run, &mut rng).unwrap();
+        assert_eq!(
+            events,
+            vec![
+                BattleEvent::RunAttempt {
+                    by_player: true,
+                    success: true,
+                },
+                BattleEvent::Ended(BattleOutcome::PlayerRan),
+            ]
+        );
+        assert_eq!(battle.outcome(), Some(BattleOutcome::PlayerRan));
+        assert_eq!(rng.draws(), 2);
+    }
+
+    #[test]
+    fn a_spent_wild_slot_still_executes_its_move_without_deducting_pp() {
+        let dex = Dex::new();
+        // Upstream's rejection loop ignores PP, and Cmd_ppreduce's guard
+        // (`&& gBattleMons[gBattlerAttacker].pp[gCurrMovePos]`,
+        // battle_script_commands.c:1230) skips the deduction for a 0-PP slot
+        // -- the move still executes, with all of its draws. Only an
+        // all-spent moveset diverts to Struggle.
+        let player = max_iv_mon(&dex, 19, 5, vec![MoveId(33)]); // slow: the run fails
+        let mut enemy = max_iv_mon(&dex, 4, 10, vec![MoveId(33), MoveId(10)]); // fast
+        for _ in 0..enemy.moves()[0].pp {
+            enemy.deduct_pp(0).unwrap();
+        }
+        let player_hp_before = player.current_hp();
+
+        // battle start, turn number, selection (draw 0 -> slot 0: Tackle,
+        // spent -- selectable regardless, only MOVE_NONE is rejected),
+        // escape roll (fails), then the enemy's full 4-draw hit.
+        let mut rng = SequenceRng::new([0, 0, 0, 65000, 0, 1, 0, 0]);
+        let mut battle = Battle::new(dex, player, enemy, &mut rng).unwrap();
+        let events = battle.take_turn(PlayerAction::Run, &mut rng).unwrap();
+
+        // Charmander L10 Tackle into Rattata L5, hand computed: attack
+        // (2*52+31)*10/100+5 = 18; defense (2*35+31)*5/100+5 = 10;
+        // 18*35 = 630, *(2*10/5+2 = 6) = 3780, /10 = 378, /50 = 7, +2 = 9;
+        // no STAB (Charmander is Fire, Tackle Normal), neutral into a pure
+        // Normal defender, 100% roll -> 9.
+        assert_eq!(
+            events,
+            vec![
+                BattleEvent::RunAttempt {
+                    by_player: true,
+                    success: false,
+                },
+                BattleEvent::Hit {
+                    by_player: false,
+                    move_id: MoveId(33),
+                    damage: 9,
+                    is_critical: false,
+                },
+            ]
+        );
+        assert_eq!(battle.player().current_hp(), player_hp_before - 9);
+        assert_eq!(
+            battle.enemy().moves()[0].pp,
+            0,
+            "the spent slot is left at 0, never clamped or underflowed"
+        );
+        assert_eq!(
+            battle.enemy().moves()[1].pp,
+            35,
+            "the unpicked slot is untouched"
+        );
+        assert_eq!(rng.draws(), 8);
+        assert!(battle.outcome().is_none());
+    }
+
+    #[test]
+    fn losing_the_battle_reports_defeat_and_awards_no_exp() {
+        let dex = Dex::new();
+        // Slow L5 Rattata against a fast L50 Charmander: the enemy moves
+        // first and its Tackle overkills the 19-HP player, so the battle
+        // ends in defeat before the player's own queued move ever executes.
+        let player = max_iv_mon(&dex, 19, 5, vec![MoveId(33)]);
+        let enemy = max_iv_mon(&dex, 4, 50, vec![MoveId(33)]);
+        let player_max_hp = player.stats().max_hp;
+
+        // battle start, turn number, enemy pick, enemy hit (accuracy / no
+        // crit / best roll / effect chance). The script is exhausted: the
+        // player's move drawing anything after the loss would panic.
+        let mut rng = SequenceRng::new([0, 0, 0, 0, 1, 0, 0]);
+        let mut battle = Battle::new(dex, player, enemy, &mut rng).unwrap();
+        let events = battle
+            .take_turn(PlayerAction::UseMove(0), &mut rng)
+            .unwrap();
+
+        assert_eq!(
+            events,
+            vec![
+                BattleEvent::Hit {
+                    by_player: false,
+                    move_id: MoveId(33),
+                    damage: player_max_hp, // overkill capped at the HP bar
+                    is_critical: false,
+                },
+                BattleEvent::Fainted { by_player: true },
+                BattleEvent::Ended(BattleOutcome::PlayerLost),
+            ],
+            "defeat reports the faint and the loss -- and no ExpGained: \
+             exp is the winner's, and the player lost"
+        );
+        assert_eq!(battle.outcome(), Some(BattleOutcome::PlayerLost));
+        assert_eq!(battle.player().current_hp(), 0);
+        assert_eq!(
+            battle.player().moves()[0].pp,
+            35,
+            "the fainted player's queued move never executed, so no PP moved"
+        );
+        assert_eq!(rng.draws(), 7);
+    }
+
+    #[test]
+    fn an_immune_first_hit_reports_no_effect_and_the_turn_continues() {
+        let dex = Dex::new();
+        // Rattata L10 (speed 22) outspeeds Gastly L5 (speed 14). The
+        // player's Tackle cannot touch the Ghost (NoEffect), but the turn
+        // does not end there: the second mover still acts.
+        let player = max_iv_mon(&dex, 19, 10, vec![MoveId(33)]);
+        let enemy = max_iv_mon(&dex, 92, 5, vec![MoveId(33)]);
+        let player_hp_before = player.current_hp();
+        let enemy_hp_before = enemy.current_hp();
+
+        // battle start, turn number, enemy pick, the player's immune hit
+        // (still 4 draws -- see crate::hit), the enemy's ordinary hit (4).
+        let mut rng = SequenceRng::new([0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0]);
+        let mut battle = Battle::new(dex, player, enemy, &mut rng).unwrap();
+        let events = battle
+            .take_turn(PlayerAction::UseMove(0), &mut rng)
+            .unwrap();
+
+        // Gastly L5 Tackle into Rattata L10, hand computed: attack
+        // (2*35+31)*5/100+5 = 10; defense (2*35+31)*10/100+5 = 15;
+        // 10*35 = 350, *(2*5/5+2 = 4) = 1400, /15 = 93, /50 = 1, +2 = 3;
+        // no STAB (Gastly is Ghost/Poison, Tackle Normal), neutral, 100%.
+        assert_eq!(
+            events,
+            vec![
+                BattleEvent::NoEffect {
+                    by_player: true,
+                    move_id: MoveId(33),
+                },
+                BattleEvent::Hit {
+                    by_player: false,
+                    move_id: MoveId(33),
+                    damage: 3,
+                    is_critical: false,
+                },
+            ]
+        );
+        assert_eq!(battle.player().current_hp(), player_hp_before - 3);
+        assert_eq!(
+            battle.enemy().current_hp(),
+            enemy_hp_before,
+            "an immune hit deals nothing"
+        );
+        assert_eq!(rng.draws(), 11);
+        assert!(battle.outcome().is_none(), "nobody fainted; no Ended event");
+    }
+
+    #[test]
+    fn a_max_level_player_gains_no_exp_and_no_exp_event_on_victory() {
+        let dex = Dex::new();
+        // Cmd_getexp case 2 (battle_script_commands.c:3351-:3356): a
+        // MAX_LEVEL recipient gets gBattleMoveDamage = 0 and the state
+        // machine jumps past the "gained EXP" string -- no exp, no message,
+        // so no ExpGained event here either.
+        let player = max_iv_mon(&dex, 4, 100, vec![MoveId(33)]);
+        let enemy = max_iv_mon(&dex, 19, 2, vec![MoveId(33)]);
+
+        // battle start, turn number, enemy pick, the player's one-shot hit.
+        let mut rng = SequenceRng::new([0, 0, 0, 0, 1, 0, 0]);
+        let mut battle = Battle::new(dex, player, enemy, &mut rng).unwrap();
+        let events = battle
+            .take_turn(PlayerAction::UseMove(0), &mut rng)
+            .unwrap();
+
+        assert_eq!(battle.outcome(), Some(BattleOutcome::PlayerWon));
+        assert!(
+            events.contains(&BattleEvent::Fainted { by_player: false }),
+            "the win itself is unchanged: {events:?}"
+        );
+        assert!(
+            !events
+                .iter()
+                .any(|e| matches!(e, BattleEvent::ExpGained(_))),
+            "a level-100 player gains no exp and sees no exp event: {events:?}"
+        );
+        assert_eq!(rng.draws(), 7);
     }
 
     #[test]

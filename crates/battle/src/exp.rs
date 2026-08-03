@@ -12,6 +12,12 @@
 //! (`SAFE_DIV(calculatedExp, viaSentIn=1)`, `:3311`) is a no-op and none of
 //! the `x1.5` bonuses apply. Party-wide redistribution, Exp Share, Lucky
 //! Egg, and the traded/trainer-battle bonus are deferred.
+//!
+//! One exclusion **is** modelled, at the turn-engine level rather than here:
+//! a `MAX_LEVEL` recipient gains no experience and sees no "gained EXP"
+//! message — `Cmd_getexp` case 2 zeroes the award and jumps past the string
+//! (`:3351`-`:3356`) — so [`crate::battle::Battle`] never calls this
+//! function (and emits no `ExpGained` event) for a level-100 player mon.
 
 /// The experience a single player mon gains for fainting an opponent of
 /// `enemy_base_exp` (`gSpeciesInfo[].expYield`,

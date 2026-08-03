@@ -105,26 +105,25 @@ pub enum BattleError {
     /// Carries the offending value.
     InvalidIv(u8),
 
-    /// The move slot named in [`crate::battle::Battle::take_turn`] has no PP
-    /// remaining.
+    /// The *player's* chosen move slot has no PP remaining.
     ///
-    /// Upstream falls back to a forced Struggle
-    /// (`gProtectStructs[].noValidMoves`, `pokeemerald/src/battle_main.c`)
-    /// when every move is out of PP; that fallback is not modelled this
-    /// slice (`S-6`) — callers must supply movesets with enough PP for the
-    /// scripted scenario, and exhausting a slot's PP is reported as an error
-    /// rather than silently substituting Struggle.
+    /// Upstream's selection menu cannot offer a spent slot
+    /// (`MOVE_LIMITATION_PP`, `CheckMoveLimitations`,
+    /// `pokeemerald/src/battle_util.c:1104`), so this is a caller bug, not a
+    /// battle event: [`crate::battle::Battle::take_turn`] rejects it ahead
+    /// of the turn's first draw, leaving the battle and the shared RNG
+    /// stream untouched. [`crate::pokemon::BattlePokemon::deduct_pp`]
+    /// reports it for the same caller-boundary reason.
     ///
-    /// The player's chosen slot is checked ahead of the turn's first draw, so
-    /// that case costs nothing. The wild opponent's is not — upstream's
-    /// rejection loop tests `MOVE_NONE` and ignores PP — so a spent enemy slot
-    /// is only discovered when its PP is deducted, *after* the turn-number and
-    /// selection draws. [`crate::battle::Battle::take_turn`] therefore returns
-    /// this inside a [`crate::battle::TurnError`] carrying whatever events had
-    /// already occurred: the first mover's hit if the *second* mover's slot
-    /// was the empty one, and none at all if the *first* mover's was (the turn
-    /// stops before either acts, having consumed draws but changed no PP or
-    /// HP). See [`crate::battle::TurnError`] for the full breakdown.
+    /// A spent slot on the *wild* side is not an error at all: upstream's
+    /// rejection loop ignores PP and `Cmd_ppreduce` merely skips the
+    /// deduction (`battle_script_commands.c:1230`), so the picked move still
+    /// executes. When every wild slot is spent, upstream forces Struggle
+    /// (`AreAllMovesUnusable`, `battle_util.c:1125`), which this slice
+    /// cannot execute — that case surfaces as
+    /// [`BattleError::UnsupportedMoveEffect`] carrying Struggle, at the
+    /// moment the fallback would act. See [`crate::battle::TurnError`] for
+    /// the full breakdown.
     ///
     /// Carries the offending index.
     NoPpRemaining(usize),
