@@ -17,28 +17,49 @@
 //! 3. damage core + crit's stat-stage override ([`crate::critical`]) and
 //!    `x2` multiply (no draw).
 //! 4. STAB (no draw) — skipped for `MOVE_STRUGGLE`.
-//! 5. dual-type effectiveness (no draw); a `NoEffect` row is terminal —
-//!    also skipped entirely for `MOVE_STRUGGLE`.
+//! 5. dual-type effectiveness (no draw); a `NoEffect` row is terminal for
+//!    the *outcome* but *not* for the RNG — see step 7 — and the type step
+//!    is skipped entirely for `MOVE_STRUGGLE`.
 //! 6. the `85..=100%` random roll (always 1 draw, even at `0` damage).
+//! 7. the secondary-effect-chance roll (1 draw on every landed hit,
+//!    `MOVE_STRUGGLE` excepted). `seteffectwithchance` runs between
+//!    `resultmessage` and `tryfaintmon` in the hit script
+//!    (`BattleScript_HitFromAtkAnimation`, `data/battle_scripts_1.s:265`),
+//!    and `Cmd_seteffectwithchance` (`battle_script_commands.c:2908`) puts
+//!    `Random() % 100 < percentChance` as the **leading** operand of its
+//!    `else if` `&&` chain (`:2923`) — so for every allow-listed move
+//!    (`gBattleCommunication[MOVE_EFFECT_BYTE]` is `0`: the plain hit script
+//!    never runs `setmoveeffect`) the draw happens unconditionally and its
+//!    value is discarded. A miss never gets here
+//!    (`BattleScript_PrintMoveMissed` exits via `goto BattleScript_MoveEnd`,
+//!    `:273`), but a type-immune hit does: `Cmd_typecalc` records
+//!    `MOVE_RESULT_DOESNT_AFFECT_FOE` and falls through rather than jumping,
+//!    and the `NO_EFFECT` test is only the *third* `&&` operand, too late to
+//!    suppress the draw. Struggle is the exception the other way: its script
+//!    (`BattleScript_EffectRecoil`, `:897`) runs `setmoveeffect ... |
+//!    MOVE_EFFECT_CERTAIN` before jumping into the hit script, so
+//!    `Cmd_seteffectwithchance` takes its *first* branch (`:2917`), which
+//!    contains no `Random()` at all (the recoil is applied deterministically).
 //!
 //! So, **in the world this slice models**, one move resolution costs:
 //!
 //! | move | draws | which |
 //! |------|-------|-------|
 //! | ordinary move, missed | **1** | accuracy |
-//! | ordinary move, hit | **3** | accuracy, crit, damage roll |
-//! | accuracy-bypassing move | **2** | crit, damage roll (never misses) |
+//! | ordinary move, hit (or type-immune) | **4** | accuracy, crit, damage roll, effect chance |
+//! | accuracy-bypassing move | **3** | crit, damage roll, effect chance (never misses) |
+//! | Struggle, hit | **3** | accuracy, crit, damage roll (no effect-chance draw) |
 //!
 //! The third row is `AccuracyCalcHelper`'s early `return TRUE`
 //! (`battle_script_commands.c:1089`-`:1094`): for `EFFECT_ALWAYS_HIT` (Swift,
 //! Shock Wave, Faint Attack, ...) and `EFFECT_VITAL_THROW`, step 1 is skipped
 //! outright, so no accuracy draw is made and the move cannot miss — see
 //! [`crate::accuracy::always_hits`]. Both effects are on this pipeline's
-//! allow-list ([`is_ordinary_hit_effect`]), so the 2-draw shape is reachable
+//! allow-list ([`is_ordinary_hit_effect`]), so the 3-draw shape is reachable
 //! and is pinned by this module's tests; a caller scripting an RNG sequence
 //! must budget for it.
 //!
-//! Neither "3" nor "2" is a universal upstream property, because the crit
+//! Neither "4" nor "3" is a universal upstream property, because the crit
 //! draw is itself conditional: `Cmd_critcalc`'s `Random()` is the last
 //! operand of a short-circuiting `&&` chain
 //! (`battle_script_commands.c:1279`-`:1283`), so a defender with Battle Armor
@@ -47,7 +68,9 @@
 //! step 2 draw **nothing** as well. None of those three exist here (no
 //! abilities, no status3, ordinary post-first-battle wild encounter) — see
 //! [`crate::critical`]'s module docs — so the table above is exact for every
-//! hit [`resolve_hit`] can currently produce.
+//! hit [`resolve_hit`] can currently produce. (Serene Grace doubling
+//! `percentChance` in step 7 similarly cannot matter: no abilities, and the
+//! draw's value is discarded for every allow-listed move regardless.)
 //!
 //! # Which moves this pipeline may be handed
 //!
@@ -59,8 +82,10 @@
 //! times: Sonic Boom's flat 20 damage (`EFFECT_SONICBOOM`, `:151`),
 //! multi-hit's 2..5 hits (`EFFECT_MULTI_HIT`, `:50`), OHKO (`:59`),
 //! `EFFECT_LEVEL_DAMAGE` (`:108`), Counter (`:110`), every
-//! secondary-effect-on-hit script (an extra `Random()` for the effect
-//! chance), and so on. Feeding one of those to [`resolve_hit`] would be
+//! secondary-effect-on-hit script (whose `setmoveeffect` makes step 7's
+//! discarded draw *land*, applying a status and possibly drawing again
+//! inside `SetMoveEffect` — e.g. a sleep-turn roll), and so on. Feeding one
+//! of those to [`resolve_hit`] would be
 //! silently wrong twice over — wrong damage *and* a desynchronised shared RNG
 //! stream — so [`ensure_resolvable`] rejects it up front
 //! `(behavioral-fidelity)`. Base power `0` alone is **not** a sufficient
@@ -281,6 +306,17 @@ pub fn resolve_hit(
     };
     let damage = apply_damage_roll(damage, rng);
 
+    // Step 7 (module docs): `Cmd_seteffectwithchance` draws one `Random()`
+    // on every landed hit — type-immune included — and discards it for every
+    // move this pipeline admits (`MOVE_EFFECT_BYTE` is 0, so the `&&` chain
+    // at `battle_script_commands.c:2923` fails after the leading `Random()`
+    // operand). Struggle's `MOVE_EFFECT_CERTAIN` takes the draw-free first
+    // branch instead (`:2917`), so it must not consume a draw here
+    // `(behavioral-fidelity)`.
+    if move_id != STRUGGLE {
+        let _ = rng.next_u16();
+    }
+
     if damage == 0 {
         Ok(HitOutcome::NoEffect)
     } else {
@@ -358,17 +394,37 @@ mod tests {
     }
 
     #[test]
-    fn a_hit_draws_exactly_three_times() {
+    fn a_hit_draws_exactly_four_times() {
         let dex = Dex::new();
         let attacker = mon(&dex, 1, 5, vec![MoveId(33)]);
         let defender = mon(&dex, 7, 5, vec![MoveId(33)]);
         // draw0: accuracy roll 0 -> roll=1 <= 95 -> hit.
         // draw1: crit roll 1 -> 1%16 != 0 -> no crit.
         // draw2: damage roll 0 -> best (100%) roll.
-        let mut rng = SequenceRng::new([0, 1, 0]);
+        // draw3: seteffectwithchance's discarded effect-chance roll.
+        let mut rng = SequenceRng::new([0, 1, 0, 0]);
         let outcome = resolve_hit(&dex, MoveId(33), &attacker, &defender, &mut rng).unwrap();
         assert!(matches!(outcome, HitOutcome::Hit { .. }));
-        assert_eq!(rng.draws(), 3);
+        assert_eq!(rng.draws(), 4);
+    }
+
+    #[test]
+    fn the_effect_chance_draw_value_never_changes_the_outcome() {
+        // The step-7 draw is consumed and discarded: for a plain EFFECT_HIT
+        // move `MOVE_EFFECT_BYTE` is 0 upstream, so no value the roll takes
+        // can fire an effect. Pin that the extreme values leave the outcome
+        // identical (only the stream position moves).
+        let dex = Dex::new();
+        let attacker = mon(&dex, 1, 5, vec![MoveId(33)]);
+        let defender = mon(&dex, 7, 5, vec![MoveId(33)]);
+        let mut outcomes = Vec::new();
+        for effect_roll in [0u16, 99, u16::MAX] {
+            let mut rng = SequenceRng::new([0, 1, 0, effect_roll]);
+            outcomes.push(resolve_hit(&dex, MoveId(33), &attacker, &defender, &mut rng).unwrap());
+            assert_eq!(rng.draws(), 4);
+        }
+        assert_eq!(outcomes[0], outcomes[1]);
+        assert_eq!(outcomes[1], outcomes[2]);
     }
 
     /// The reference scenario both damage pins below are derived from, hand
@@ -405,7 +461,8 @@ mod tests {
         // draw0: accuracy roll 1 <= 95 -> hit.
         // draw1: crit roll 1 -> 1%16 != 0 -> no crit.
         // draw2: damage roll 0 -> 100%.
-        let mut rng = SequenceRng::new([0, 1, 0]);
+        // draw3: the discarded effect-chance roll.
+        let mut rng = SequenceRng::new([0, 1, 0, 0]);
         let outcome = resolve_hit(&dex, MoveId(33), &attacker, &defender, &mut rng).unwrap();
         assert_eq!(
             outcome,
@@ -414,7 +471,7 @@ mod tests {
                 is_critical: false,
             }
         );
-        assert_eq!(rng.draws(), 3);
+        assert_eq!(rng.draws(), 4);
     }
 
     #[test]
@@ -424,7 +481,7 @@ mod tests {
         let defender = mon(&dex, 7, 5, vec![MoveId(33)]);
         // Same scenario and same draws as the test above, except draw1: crit
         // roll 0 -> 0%16 == 0 -> crit.
-        let mut rng = SequenceRng::new([0, 0, 0]);
+        let mut rng = SequenceRng::new([0, 0, 0, 0]);
         let outcome = resolve_hit(&dex, MoveId(33), &attacker, &defender, &mut rng).unwrap();
         assert_eq!(
             outcome,
@@ -434,7 +491,57 @@ mod tests {
             }
         );
         assert_eq!(PINNED_CRIT_DAMAGE, 2 * PINNED_NON_CRIT_DAMAGE);
-        assert_eq!(rng.draws(), 3);
+        assert_eq!(rng.draws(), 4);
+    }
+
+    /// The special-category mirror of the physical pin above, with
+    /// **non-neutral natures on both sides** so the `Stat` routing inside
+    /// `compute_stats` is load-bearing: a mutation that fed
+    /// `base.sp_defense` (or the wrong `Stat` to the nature scaler) into
+    /// `sp_attack` would change this damage value.
+    ///
+    /// Squirtle (species 7) level 10, max IVs, **Modest** (personality 15:
+    /// `15 % 25` -> nature 15, +SpAtk/-Atk), using Water Gun (move 55, power
+    /// 40, accuracy 100, Water/special, plain `EFFECT_HIT`) against Rattata
+    /// (species 19) level 10, max IVs, **Calm** (personality 20, +SpDef/-Atk).
+    ///
+    /// - `sp_attack` = `CALC_STAT(base 50, iv 31, lvl 10)` =
+    ///   `(2*50+31)*10/100 + 5` = `1310/100 = 13`, `+5` = 18; Modest favours
+    ///   Sp. Attack: `18*110/100` = **19**.
+    /// - `sp_defense` = `CALC_STAT(base 35, iv 31, lvl 10)` =
+    ///   `(2*35+31)*10/100 + 5` = `1010/100 = 10`, `+5` = 15; Calm favours
+    ///   Sp. Defense: `15*110/100` = **16**.
+    /// - `CalculateBaseDamage` (special branch): `19 * 40` = 760;
+    ///   `* (2*10/5 + 2 = 6)` = 4560; `/ 16` = 285; `/ 50` = 5; `+ 2` = **7**.
+    /// - Squirtle is pure Water and Water Gun is Water: STAB `7*15/10` = 10.
+    ///   Rattata is pure Normal: Water is neutral into it, an identity step.
+    /// - Best damage roll (100%) leaves it at **10**.
+    #[test]
+    fn a_special_move_with_non_neutral_natures_matches_the_hand_computed_pin() {
+        let dex = Dex::new();
+        let attacker =
+            BattlePokemon::new(&dex, SpeciesId(7), 10, MAX_IVS, 15, vec![MoveId(55)]).unwrap();
+        let defender =
+            BattlePokemon::new(&dex, SpeciesId(19), 10, MAX_IVS, 20, vec![MoveId(33)]).unwrap();
+        // The stat legs of the hand computation, pinned separately so a
+        // failure points at stats vs. the damage formula.
+        assert_eq!(attacker.stats().sp_attack, 19, "Modest-boosted SpAtk");
+        assert_eq!(defender.stats().sp_defense, 16, "Calm-boosted SpDef");
+
+        // draw0: accuracy roll 0 -> 1 <= 100 -> hit.
+        // draw1: crit roll 1 -> no crit.
+        // draw2: damage roll 0 -> 100%.
+        // draw3: the discarded effect-chance roll.
+        let mut rng = SequenceRng::new([0, 1, 0, 0]);
+        let outcome = resolve_hit(&dex, MoveId(55), &attacker, &defender, &mut rng).unwrap();
+        assert_eq!(
+            outcome,
+            HitOutcome::Hit {
+                damage: 10,
+                is_critical: false,
+            }
+        );
+        assert_eq!(rng.draws(), 4);
     }
 
     #[test]
@@ -450,6 +557,10 @@ mod tests {
         // (2*30+31)*5/100 + 5 = 455/100 = 4, +5 = 9.
         // 11*50 = 550; *4 = 2200; /9 = 244; /50 = 4; +2 = 6.
         // No STAB (Struggle is exempt), no type step, 100% roll -> 6.
+        // And no effect-chance draw: Struggle's MOVE_EFFECT_CERTAIN takes
+        // Cmd_seteffectwithchance's draw-free first branch (module docs,
+        // step 7), so a landed Struggle costs 3 draws, not 4. The sequence
+        // is exactly 3 long: a stray fourth draw would panic.
         let mut rng = SequenceRng::new([0, 1, 0]);
         let outcome = resolve_hit(&dex, STRUGGLE, &attacker, &defender, &mut rng).unwrap();
         assert_eq!(
@@ -459,11 +570,13 @@ mod tests {
                 is_critical: false,
             }
         );
+        assert_eq!(rng.draws(), 3, "no seteffectwithchance draw for Struggle");
 
         // The control: an ordinary Normal move from the same attacker against
-        // the same Ghost defender *is* nullified.
+        // the same Ghost defender *is* nullified (and, being an ordinary
+        // move, it does take the effect-chance draw).
         let tackler = mon(&dex, 1, 5, vec![MoveId(33)]);
-        let mut rng = SequenceRng::new([0, 1, 0]);
+        let mut rng = SequenceRng::new([0, 1, 0, 0]);
         let outcome = resolve_hit(&dex, MoveId(33), &tackler, &defender, &mut rng).unwrap();
         assert_eq!(outcome, HitOutcome::NoEffect);
     }
@@ -479,47 +592,50 @@ mod tests {
         // EFFECT_ALWAYS_HIT, so it skips the accuracy draw and costs 2.)
         let attacker = mon(&dex, 1, 20, vec![MoveId(33)]); // Bulbasaur/Tackle
         let defender = mon(&dex, 92, 20, vec![MoveId(33)]);
-        let mut rng = SequenceRng::new([0, 1, 0]);
+        let mut rng = SequenceRng::new([0, 1, 0, 0]);
         let outcome = resolve_hit(&dex, MoveId(33), &attacker, &defender, &mut rng).unwrap();
         assert_eq!(outcome, HitOutcome::NoEffect);
         assert_eq!(
             rng.draws(),
-            3,
-            "immunity still draws crit + damage-roll RNG"
+            4,
+            "immunity still draws crit + damage-roll + effect-chance RNG \
+             (Cmd_typecalc falls through; the NO_EFFECT flag is too late in \
+             Cmd_seteffectwithchance's && chain to suppress its draw)"
         );
     }
 
     #[test]
-    fn an_accuracy_bypassing_hit_draws_exactly_twice() {
+    fn an_accuracy_bypassing_hit_draws_exactly_three_times() {
         let dex = Dex::new();
         // Swift (move 129) is EFFECT_ALWAYS_HIT, which `AccuracyCalcHelper`
         // short-circuits (`battle_script_commands.c:1089`-`:1094`): step 1 of
-        // the pipeline makes no draw at all, so a hit costs 2 rather than 3.
+        // the pipeline makes no draw at all, so a hit costs 3 rather than 4.
         let attacker = mon(&dex, 1, 5, vec![MoveId(129)]); // Bulbasaur/Swift
         let defender = mon(&dex, 7, 5, vec![MoveId(33)]); // Squirtle
         assert!(always_hits(dex.move_data(MoveId(129)).unwrap().effect));
 
         // draw0: crit roll 1 -> 1 % 16 != 0 -> no crit.
         // draw1: damage roll 0 -> 100%.  No accuracy draw ahead of them.
-        let mut rng = SequenceRng::new([1, 0]);
+        // draw2: the discarded effect-chance roll.
+        let mut rng = SequenceRng::new([1, 0, 0]);
         let outcome = resolve_hit(&dex, MoveId(129), &attacker, &defender, &mut rng).unwrap();
         assert!(matches!(outcome, HitOutcome::Hit { .. }));
         assert_eq!(
             rng.draws(),
-            2,
+            3,
             "an always-hit move skips the accuracy draw entirely"
         );
 
         // And it cannot miss: the value that would have missed an ordinary
         // 95-accuracy move is simply never consumed as an accuracy roll, so
         // feeding it first would desynchronise a caller's script.
-        let mut rng = SequenceRng::new([95, 0]);
+        let mut rng = SequenceRng::new([95, 0, 0]);
         let outcome = resolve_hit(&dex, MoveId(129), &attacker, &defender, &mut rng).unwrap();
         assert!(
             matches!(outcome, HitOutcome::Hit { .. }),
             "95 was consumed as the crit roll, not an accuracy roll"
         );
-        assert_eq!(rng.draws(), 2);
+        assert_eq!(rng.draws(), 3);
     }
 
     #[test]

@@ -95,13 +95,14 @@ fn scripted_wild_battle_runs_move_vs_move_to_a_faint_and_reports_victory() {
         0, 0, // CreateBoxMon IVs: both draws 0 -> all IVs 0
         // Battle::new (1 draw):
         0, // BattleStartClearSetData's gRandomTurnNumber
-        // the turn (5 draws):
+        // the turn (6 draws):
         0, // TryDoEventsBeforeFirstTurn's gRandomTurnNumber
         0, // the wild mon's move pick: 0 % 4 = slot 0, accepted first try
         // no turn-order draw: the player is far faster, so no speed tie
         0,  // accuracy: roll 1 <= 95 -> hits
         1,  // crit: 1 % 16 != 0 -> no crit
         15, // damage roll: worst case, 85%
+        0,  // seteffectwithchance's discarded effect-chance roll
     ]);
 
     let enemy = build_wild_pokemon(&dex, SpeciesId(19), 5, vec![MoveId(33)], &mut rng)
@@ -151,8 +152,8 @@ fn scripted_wild_battle_runs_move_vs_move_to_a_faint_and_reports_victory() {
     );
     assert_eq!(
         rng.draws(),
-        11,
-        "5 (wild construction) + 1 (battle start) + 5 (the turn)"
+        12,
+        "5 (wild construction) + 1 (battle start) + 6 (the turn)"
     );
 
     // The battle is over: no further turns are valid -- and the rejected call
@@ -165,7 +166,7 @@ fn scripted_wild_battle_runs_move_vs_move_to_a_faint_and_reports_victory() {
         rejected.events().is_empty(),
         "a turn rejected before it began reports no events"
     );
-    assert_eq!(rng.draws(), 11);
+    assert_eq!(rng.draws(), 12);
 }
 
 #[test]

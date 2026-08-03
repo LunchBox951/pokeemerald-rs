@@ -74,12 +74,15 @@
 //!
 //! **Turn order** draws 0 or 1 (a genuine Speed tie only —
 //! [`crate::turn_order`]), and **each executed move** draws 1 (an ordinary
-//! move that missed), 3 (an ordinary move that hit), or 2 — a move whose
-//! effect bypasses the accuracy roll entirely (`EFFECT_ALWAYS_HIT` /
-//! `EFFECT_VITAL_THROW`, `AccuracyCalcHelper`'s early return at
+//! move that missed), 4 (an ordinary move that hit — accuracy, crit, damage
+//! roll, plus `Cmd_seteffectwithchance`'s discarded effect-chance roll on
+//! every landed hit), or 3 — a move whose effect bypasses the accuracy roll
+//! entirely (`EFFECT_ALWAYS_HIT` / `EFFECT_VITAL_THROW`,
+//! `AccuracyCalcHelper`'s early return at
 //! `battle_script_commands.c:1089`-`:1094`) skips the accuracy draw and can
-//! never miss, so a Swift turn where both sides act costs 8 draws rather than
-//! 9. See [`crate::hit`]'s draw table for all three shapes.
+//! never miss, so a Swift turn where both sides act costs 10 draws rather
+//! than 11. See [`crate::hit`]'s draw table for all the shapes (including
+//! Struggle's no-effect-chance-draw exception).
 //!
 //! # What the wild opponent chooses
 //!
@@ -786,14 +789,15 @@ mod tests {
 
         // One RNG for the whole battle: battle-start turn number, then the
         // turn's own turn number, the opponent's move pick, and the player's
-        // hit (accuracy / no crit / best roll). No speed-tie draw at this gap.
-        let mut rng = SequenceRng::new([0, 0, 0, 0, 1, 0]);
+        // hit (accuracy / no crit / best roll / effect chance). No speed-tie
+        // draw at this gap.
+        let mut rng = SequenceRng::new([0, 0, 0, 0, 1, 0, 0]);
         let mut battle = Battle::new(dex, player, enemy, &mut rng).unwrap();
         let _ = battle
             .take_turn(PlayerAction::UseMove(0), &mut rng)
             .unwrap();
         assert!(battle.outcome().is_some());
-        assert_eq!(rng.draws(), 6);
+        assert_eq!(rng.draws(), 7);
         // The rejected call must not draw: the sequence is exhausted, so a
         // stray draw would panic rather than silently pass.
         let rejected = battle
@@ -804,7 +808,7 @@ mod tests {
             rejected.events().is_empty(),
             "a call rejected before the turn began has no events to report"
         );
-        assert_eq!(rng.draws(), 6, "an already-over battle draws nothing");
+        assert_eq!(rng.draws(), 7, "an already-over battle draws nothing");
     }
 
     #[test]
@@ -831,8 +835,8 @@ mod tests {
         let player = max_iv_mon(&dex, 4, 50, vec![MoveId(33)]);
         let enemy = max_iv_mon(&dex, 19, 5, vec![MoveId(33)]);
         // Distinguishable turn-number values, then the ordinary tail of the
-        // turn (opponent's move pick + the player's hit).
-        let mut rng = SequenceRng::new([0x1234, 0xABCD, 0, 0, 1, 0]);
+        // turn (opponent's move pick + the player's 4-draw hit).
+        let mut rng = SequenceRng::new([0x1234, 0xABCD, 0, 0, 1, 0, 0]);
         let mut battle = Battle::new(dex, player, enemy, &mut rng).unwrap();
         assert_eq!(
             battle.random_turn_number(),
@@ -875,14 +879,15 @@ mod tests {
 
         // One scripted RNG for the entire battle, in the module docs' order.
         // Per full turn: turn number, opponent's move pick, then two hits of
-        // (accuracy / no crit / best roll) -- no speed-tie draw, the speeds
-        // differ. The last turn stops after the player's hit: the enemy
-        // faints, so the second mover never acts and never draws.
+        // (accuracy / no crit / best roll / effect chance) -- no speed-tie
+        // draw, the speeds differ. The last turn stops after the player's
+        // hit: the enemy faints, so the second mover never acts and never
+        // draws (the effect-chance draw still lands, ahead of tryfaintmon).
         let mut rng = SequenceRng::new([
             0, // Battle::new: battle-start turn number
-            0, 0, 0, 1, 0, 0, 1, 0, // turn 1
-            0, 0, 0, 1, 0, 0, 1, 0, // turn 2
-            0, 0, 0, 1, 0, // turn 3: player's hit faints the enemy
+            0, 0, 0, 1, 0, 0, 0, 1, 0, 0, // turn 1
+            0, 0, 0, 1, 0, 0, 0, 1, 0, 0, // turn 2
+            0, 0, 0, 1, 0, 0, // turn 3: player's hit faints the enemy
         ]);
         let mut battle = Battle::new(dex, player, enemy, &mut rng).unwrap();
 
@@ -911,8 +916,8 @@ mod tests {
         );
         assert_eq!(
             rng.draws(),
-            22,
-            "1 (battle start) + 8 + 8 (full turns) + 5 (final turn)"
+            27,
+            "1 (battle start) + 10 + 10 (full turns) + 6 (final turn)"
         );
     }
 
@@ -960,8 +965,8 @@ mod tests {
 
         // draws: battle-start turn number, turn number, opponent's move pick,
         // escape roll (65000 & 0xFF = 232 >= speedVar 19 -> failure), then
-        // the enemy's hit (accuracy / no crit / best roll).
-        let mut rng = SequenceRng::new([0, 0, 0, 65000, 0, 1, 0]);
+        // the enemy's hit (accuracy / no crit / best roll / effect chance).
+        let mut rng = SequenceRng::new([0, 0, 0, 65000, 0, 1, 0, 0]);
         let mut battle = Battle::new(dex, player, enemy, &mut rng).unwrap();
         let events = battle.take_turn(PlayerAction::Run, &mut rng).unwrap();
         assert_eq!(
@@ -980,7 +985,7 @@ mod tests {
             }
         )));
         assert_eq!(battle.run_tries(), 1);
-        assert_eq!(rng.draws(), 7);
+        assert_eq!(rng.draws(), 8);
     }
 
     #[test]
@@ -1012,7 +1017,7 @@ mod tests {
         let enemy = max_iv_mon(&dex, 4, 50, vec![MoveId(33), MoveId(10)]); // Tackle, Scratch
 
         // draw 1 -> 1 % 4 = 1, a slot this mon knows: Scratch, first try.
-        let mut rng = SequenceRng::new([0, 0, 1, 65000, 0, 1, 0]);
+        let mut rng = SequenceRng::new([0, 0, 1, 65000, 0, 1, 0, 0]);
         let mut battle = Battle::new(dex, player, enemy, &mut rng).unwrap();
         let _ = battle.take_turn(PlayerAction::Run, &mut rng).unwrap();
         assert_eq!(
@@ -1025,7 +1030,7 @@ mod tests {
             34,
             "Scratch (slot 1) was chosen and spent a PP"
         );
-        assert_eq!(rng.draws(), 7);
+        assert_eq!(rng.draws(), 8);
     }
 
     #[test]
@@ -1096,7 +1101,7 @@ mod tests {
         // rejection loop rather than from the caller.
         let player = max_iv_mon(&dex, 19, 5, vec![MoveId(33)]);
         let enemy = max_iv_mon(&dex, 4, 50, vec![MoveId(33), MoveId(10)]); // Tackle, Scratch
-        let mut rng = SequenceRng::new([0, 0, 1, 65000, 0, 1, 0]);
+        let mut rng = SequenceRng::new([0, 0, 1, 65000, 0, 1, 0, 0]);
         let mut battle = Battle::new(dex, player, enemy, &mut rng).unwrap();
         let events = battle.take_turn(PlayerAction::Run, &mut rng).unwrap();
         assert!(
@@ -1142,10 +1147,10 @@ mod tests {
             enemy.deduct_pp(0).unwrap();
         }
 
-        // 1 (battle start) + turn number + enemy pick + 3 (the player's hit).
+        // 1 (battle start) + turn number + enemy pick + 4 (the player's hit).
         // The turn then stops on the second mover's empty slot, drawing no
         // more -- the script is exhausted, so a stray draw would panic.
-        let mut rng = SequenceRng::new([0, 0, 0, 0, 1, 0]);
+        let mut rng = SequenceRng::new([0, 0, 0, 0, 1, 0, 0]);
         let mut battle = Battle::new(dex, player, enemy, &mut rng).unwrap();
         let failure = battle
             .take_turn(PlayerAction::UseMove(0), &mut rng)
@@ -1166,7 +1171,7 @@ mod tests {
         // would have left the caller unable to explain the new state.
         assert_eq!(battle.enemy().current_hp(), enemy_hp - 7);
         assert_eq!(battle.player().moves()[0].pp, 34);
-        assert_eq!(rng.draws(), 6);
+        assert_eq!(rng.draws(), 7);
         assert!(battle.outcome().is_none());
     }
 
@@ -1252,11 +1257,11 @@ mod tests {
     }
 
     #[test]
-    fn an_always_hit_move_makes_a_full_turn_cost_eight_draws_not_nine() {
+    fn an_always_hit_move_makes_a_full_turn_cost_ten_draws_not_eleven() {
         let dex = Dex::new();
         // Swift (EFFECT_ALWAYS_HIT) skips `AccuracyCalcHelper`'s roll
         // entirely (`battle_script_commands.c:1089`-`:1094`), so the player's
-        // move costs 2 draws where an ordinary move costs 3.
+        // move costs 3 draws where an ordinary move costs 4.
         let player = max_iv_mon(&dex, 19, 5, vec![MoveId(129)]); // Rattata/Swift
         let enemy = max_iv_mon(&dex, 1, 5, vec![MoveId(33)]); // Bulbasaur/Tackle
 
@@ -1264,8 +1269,9 @@ mod tests {
             0, // battle start turn number (Rattata is faster: no tie draw)
             0, // the turn's own turn number
             0, // the wild mon's move pick
-            1, 0, // the player's Swift: crit, damage roll -- no accuracy draw
-            0, 1, 0, // the enemy's Tackle: accuracy, crit, damage roll
+            1, 0,
+            0, // the player's Swift: crit, damage roll, effect chance -- no accuracy draw
+            0, 1, 0, 0, // the enemy's Tackle: accuracy, crit, damage roll, effect chance
         ]);
         let mut battle = Battle::new(dex, player, enemy, &mut rng).unwrap();
         let events = battle
@@ -1291,8 +1297,8 @@ mod tests {
         );
         assert_eq!(
             rng.draws(),
-            8,
-            "1 (battle start) + 2 (turn number, pick) + 2 (Swift) + 3 (Tackle)"
+            10,
+            "1 (battle start) + 2 (turn number, pick) + 3 (Swift) + 4 (Tackle)"
         );
     }
 
@@ -1422,8 +1428,9 @@ mod tests {
         let enemy_max_hp = enemy.stats().max_hp;
 
         // Battle-start turn number; turn's turn number; opponent's move
-        // pick; player's hit (accuracy pass / no crit / best damage roll).
-        let mut rng = SequenceRng::new([0, 0, 0, 0, 1, 0]);
+        // pick; player's hit (accuracy pass / no crit / best damage roll /
+        // effect chance).
+        let mut rng = SequenceRng::new([0, 0, 0, 0, 1, 0, 0]);
         let mut battle = Battle::new(dex, player, enemy, &mut rng).unwrap();
         let events = battle
             .take_turn(PlayerAction::UseMove(0), &mut rng)

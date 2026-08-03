@@ -24139,9 +24139,27 @@
           "spec": "S-6",
           "status": "stubbed"
         },
+        "Cmd_datahpupdate": {
+          "reason": "battle_script_commands.c:1844 (lethal cap :1920-:1929). The gHpDealt mirror is modelled: a lethal hit records only the HP actually lost (Battle's overkill cap on the Hit event). NOT modelled: Substitute damage routing, the special-vs-physical last-damage bookkeeping (gProtectStructs / gSpecialStatuses) consumed by Counter/Mirror Coat/Bide, and HITMARKER_IGNORE_SUBSTITUTE -- none of those systems exist this slice.",
+          "rust_target": "crates/battle/src/battle.rs",
+          "spec": "S-6",
+          "status": "stubbed"
+        },
         "Cmd_getexp": {
           "reason": "battle_script_commands.c:3255. Only the v1 single-eligible-recipient case (calculatedExp = expYield*enemyLevel/7, floored to 1, no redistribution) modelled (wild_faint_exp). Party-wide redistribution, Exp Share, Lucky Egg, and the traded-mon/trainer-battle x1.5 bonus are not modelled.",
           "rust_target": "crates/battle/src/exp.rs",
+          "spec": "S-6",
+          "status": "stubbed"
+        },
+        "Cmd_ppreduce": {
+          "reason": "battle_script_commands.c:1205. BattlePokemon::deduct_pp models the common case: one PP off the used slot. NOT modelled: Pressure's ppToDeduct++ (no abilities this slice), the HITMARKER_NO_PPDEDUCT / no-attackstring guards, and upstream's silent clamp at 0 -- the Rust boundary instead reports NoPpRemaining, a deliberate divergence while the Struggle fallback is out of scope (see crate::battle docs).",
+          "rust_target": "crates/battle/src/pokemon.rs",
+          "spec": "S-6",
+          "status": "stubbed"
+        },
+        "Cmd_seteffectwithchance": {
+          "reason": "battle_script_commands.c:2908. The unconditional Random() draw on every landed hit is modelled (resolve_hit step 7): for plain-hit scripts MOVE_EFFECT_BYTE is 0, so the leading 'Random() % 100 < percentChance' operand at :2923 draws once and the chain fails -- the value is discarded. Struggle's MOVE_EFFECT_CERTAIN first branch (:2917, draw-free) is modelled as the no-draw exception. NOT modelled: actually firing a secondary effect via SetMoveEffect (no allow-listed move can: the plain hit script never runs setmoveeffect), Serene Grace's percentChance doubling (no abilities this slice), and the certain-effect application path.",
+          "rust_target": "crates/battle/src/hit.rs",
           "spec": "S-6",
           "status": "stubbed"
         },
