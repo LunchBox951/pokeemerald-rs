@@ -57,7 +57,7 @@ fn build_wav(
 }
 
 fn smpl_chunk(midi_key: u32, tuning_fraction: u32, loop_start: u32, loop_end: u32) -> Vec<u8> {
-    let mut body = vec![0u8; 32 + 24];
+    let mut body = vec![0u8; 36 + 24];
     body[12..16].copy_from_slice(&midi_key.to_le_bytes());
     body[16..20].copy_from_slice(&tuning_fraction.to_le_bytes());
     body[28..32].copy_from_slice(&1u32.to_le_bytes()); // num loops
@@ -127,6 +127,33 @@ fn a_zero_agbp_chunk_falls_back_to_the_computed_pitch() {
     let bytes = build_wav(1, 1, 8, 3344, &[(b"agbp", &agbp)], &data);
     let sample = decode(&bytes).unwrap();
     assert_eq!(sample.base_frequency, 3344 * 1024);
+}
+
+/// A 1-7-byte remnant after the last complete sub-chunk is a truncated
+/// chunk header, and a well-formed file ends exactly at the RIFF body's
+/// declared end -- fail closed rather than silently dropping the tail.
+#[test]
+fn a_trailing_partial_chunk_header_is_rejected() {
+    let data = [128u8, 129];
+    let mut bytes = build_wav(1, 1, 8, 8000, &[], &data);
+    // Extend the RIFF body with a 5-byte fragment: a would-be chunk id
+    // plus one length byte, too short to be a header.
+    bytes.extend_from_slice(b"junk");
+    let riff_len = (bytes.len() - 8) as u32;
+    bytes[4..8].copy_from_slice(&riff_len.to_le_bytes());
+    assert_eq!(decode(&bytes).unwrap_err(), WavError::ChunkTruncated);
+}
+
+/// The fixed `smpl` header is 36 bytes and a declared loop record 24 more;
+/// a 56-byte chunk that declares one loop is missing the record's tail
+/// (fraction/play count) and must be refused, even though every field the
+/// parser reads sits below the cut.
+#[test]
+fn a_short_smpl_loop_record_is_rejected() {
+    let data = [128u8, 129, 130, 131, 132];
+    let smpl = &smpl_chunk(60, 0, 1, 3)[..56];
+    let bytes = build_wav(1, 1, 8, 8000, &[(b"smpl", smpl)], &data);
+    assert_eq!(decode(&bytes).unwrap_err(), WavError::TruncatedSmplChunk);
 }
 
 /// A truncated override chunk is malformed input, not an absent override:
@@ -331,7 +358,7 @@ fn misaligned_data_length_is_rejected() {
 
 #[test]
 fn too_many_sample_loops_is_rejected() {
-    let mut smpl = vec![0u8; 32];
+    let mut smpl = vec![0u8; 36];
     smpl[28..32].copy_from_slice(&2u32.to_le_bytes());
     let bytes = build_wav(1, 1, 8, 8000, &[(b"smpl", &smpl)], &[128, 128]);
     assert_eq!(

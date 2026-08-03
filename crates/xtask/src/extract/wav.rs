@@ -132,9 +132,17 @@
 //!   payload bytes (`converter.cpp:79`); the `agbl` override applies only
 //!   to the `loop_end` word written into the compiled header (`:399-402`,
 //!   written at `:422`), never to how many samples get emitted. So the real
-//!   compiled binary can carry samples past `agbl` — but `WaveData::size`,
-//!   the field the real mixer reads to know how many samples exist, is
-//!   `agbl`, making them dead payload no playback path ever reaches.
+//!   compiled binary can carry samples past `agbl`. One of those bytes *is*
+//!   reachable on hardware: the interpolating type-0 `DirectSound` mixer
+//!   loads the sample one past the current index (`m4a_1.s:400-401`,
+//!   `:424-425`), so while rendering index `size - 1` it blends with the
+//!   physical byte at offset `size`. Dropping it is still lossless for
+//!   every shipped source, because that byte is `pcm[loop_start]` for a
+//!   looped sample and `0` for a one-shot (`wav2agb -b` output, verified
+//!   across the tree) — exactly the values a consumer reconstructs by
+//!   wrapping to `loop_start` or extending silence. Whether the pack
+//!   should carry the guard byte physically instead is tracked in
+//!   issue #200.
 //!
 //! `loop_start` is `Some(smpl loop Start)` when the sampler chunk declares
 //! exactly one loop, `None` otherwise (matching
@@ -293,6 +301,12 @@ fn read_chunks(bytes: &[u8]) -> Result<Vec<Chunk<'_>>, WavError> {
         // isn't part of any chunk's declared length.
         pos = body_end + (len % 2);
     }
+    // Fail closed on a malformed tail: a 1-7-byte remnant is a truncated
+    // chunk header, and `pos > bytes.len()` means the final odd-length
+    // chunk's required pad byte is missing.
+    if pos != bytes.len() {
+        return Err(WavError::ChunkTruncated);
+    }
     Ok(chunks)
 }
 
@@ -438,7 +452,11 @@ fn parse_smpl_chunk(
     smpl: &[u8],
     num_samples: u32,
 ) -> Result<(u8, f64, Option<u32>, u32), WavError> {
-    if smpl.len() < 32 {
+    // The fixed `smpl` header is 36 bytes (through samplerData); each
+    // declared loop record is a further 24. Anything shorter is a
+    // truncated record, even if every field this parser *reads* happens
+    // to sit below the cut.
+    if smpl.len() < 36 {
         return Err(WavError::TruncatedSmplChunk);
     }
     let midi_unity_note = read_u32(smpl, 12)?;
@@ -453,7 +471,7 @@ fn parse_smpl_chunk(
     if num_loops == 0 {
         return Ok((midi_key, tuning_cents, None, num_samples));
     }
-    if smpl.len() < 32 + 24 {
+    if smpl.len() < 36 + 24 {
         return Err(WavError::TruncatedSmplChunk);
     }
     let loop_type = read_u32(smpl, 40)?;
