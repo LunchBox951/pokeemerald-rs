@@ -238,9 +238,17 @@ mod tests {
     #[test]
     fn build_wild_pokemon_draws_nature_then_personality_then_ivs_in_order() {
         let dex = Dex::new();
-        // nature draw: 0 -> Hardy; personality draws: (0,0) -> 0 (matches
-        // Hardy on the first try); IV draws: (0, 0) -> all-zero IVs.
-        let mut rng = SequenceRng::new([0, 0, 0, 0, 0]);
+        // Distinct, position-revealing values -- an all-zeros script cannot
+        // pin the order, because every permutation of the three roll phases
+        // would build the same mon from it. Each phase below only reads its
+        // own values correctly in the documented order:
+        // - nature draw: 24 % 25 -> Quirky;
+        // - personality draws (low then high): (24, 0) -> 24, whose 24 % 25
+        //   matches Quirky on the first try -- a reordered phase feeds the
+        //   wrong values into the rejection loop and exhausts the script;
+        // - IV draws: 0x001F -> hp 31 / attack 0 / defense 0, then
+        //   0x03E0 -> speed 0 / sp_attack 31 / sp_defense 0.
+        let mut rng = SequenceRng::new([24, 24, 0, 0x001F, 0x03E0]);
         let mon = build_wild_pokemon(
             &dex,
             SpeciesId(1), // Bulbasaur
@@ -249,9 +257,14 @@ mod tests {
             &mut rng,
         )
         .unwrap();
-        assert_eq!(mon.nature(), Nature::Hardy);
-        assert_eq!(mon.personality(), 0);
-        assert_eq!(mon.ivs().hp, 0);
+        assert_eq!(mon.nature(), Nature::Quirky);
+        assert_eq!(mon.personality(), 24);
+        assert_eq!(mon.ivs().hp, 31);
+        assert_eq!(mon.ivs().attack, 0);
+        assert_eq!(mon.ivs().defense, 0);
+        assert_eq!(mon.ivs().speed, 0);
+        assert_eq!(mon.ivs().sp_attack, 31);
+        assert_eq!(mon.ivs().sp_defense, 0);
         assert_eq!(rng.draws(), 5);
         assert_eq!(mon.level(), 5);
         assert_eq!(mon.species(), SpeciesId(1));

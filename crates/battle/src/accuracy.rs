@@ -205,7 +205,9 @@ mod tests {
     fn accuracy_check_hits_iff_the_roll_is_within_calc() {
         // 100 accuracy, neutral stages: calc = 100*1/1 = 100.
         // Random()%100+1 ranges 1..=100; every roll is <= 100 -> always hits.
-        for draw in [0u16, 50, 99, 65535] {
+        // Draw 100 pins the modulus itself: % 100 wraps it to roll 1 (hit),
+        // while an off-by-one % 101 would give roll 101 and a miss.
+        for draw in [0u16, 50, 99, 100, 65535] {
             let mut rng = FixedRng(draw);
             assert!(accuracy_check(
                 100,
