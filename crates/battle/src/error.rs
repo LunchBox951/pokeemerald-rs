@@ -116,9 +116,12 @@ pub enum BattleError {
     /// reports it for the same caller-boundary reason.
     ///
     /// A spent slot on the *wild* side is not an error at all: upstream's
-    /// rejection loop ignores PP and `Cmd_ppreduce` merely skips the
-    /// deduction (`battle_script_commands.c:1230`), so the picked move still
-    /// executes. When every wild slot is spent, upstream forces Struggle
+    /// rejection loop ignores PP, and the picked move then fails at
+    /// `Cmd_attackcanceler` — the first command of the hit script — which
+    /// jumps to `BattleScript_NoPPForMove`
+    /// (`battle_script_commands.c:934`-`:939`): no RNG draw, no damage, no
+    /// deduction, surfaced as [`crate::battle::BattleEvent::FailedNoPp`].
+    /// When every wild slot is spent, upstream instead forces Struggle
     /// (`AreAllMovesUnusable`, `battle_util.c:1125`), which this slice
     /// cannot execute — that case surfaces as
     /// [`BattleError::UnsupportedMoveEffect`] carrying Struggle, at the

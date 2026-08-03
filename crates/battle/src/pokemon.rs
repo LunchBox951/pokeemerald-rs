@@ -503,13 +503,17 @@ impl BattlePokemon {
     /// `Cmd_ppreduce` (`battle_script_commands.c:1205`; Pressure's
     /// PP-doubling and the `HITMARKER_NO_PPDEDUCT` guard are not modelled).
     ///
-    /// Upstream never errors here: its deduction is guarded by
-    /// `&& gBattleMons[gBattlerAttacker].pp[gCurrMovePos]` (`:1230`), so a
-    /// 0-PP slot is simply left unchanged and the move still executes. The
-    /// turn engine reproduces that guard on the wild side
-    /// ([`crate::battle::Battle`]); this method's `NoPpRemaining` error is a
-    /// *caller* boundary — the player path pre-validates its slot, so
-    /// draining a slot below zero is a bug, not a battle event.
+    /// Upstream never errors here, but not because a 0-PP move proceeds:
+    /// `Cmd_attackcanceler` — the first command of the hit script — aborts
+    /// a 0-PP move to `BattleScript_NoPPForMove` (`:934`-`:939`) before
+    /// `ppreduce` ever runs, so on the ordinary path this function is only
+    /// reached with PP to spend. (`ppreduce`'s own `:1230` guard covers the
+    /// Struggle/multi-turn continuations that legitimately reach it at 0 —
+    /// none modelled this slice.) The turn engine reproduces the abort on
+    /// the wild side ([`crate::battle::BattleEvent::FailedNoPp`]); this
+    /// method's `NoPpRemaining` error is a *caller* boundary — the player
+    /// path pre-validates its slot, so draining a slot below zero is a bug,
+    /// not a battle event.
     ///
     /// # Errors
     ///
