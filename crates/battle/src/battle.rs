@@ -1297,6 +1297,10 @@ mod tests {
                 move_id: MoveId(33),
             }
         );
+        // A miss still spends PP: BattleScript_PrintMoveMissed re-runs
+        // attackstring/ppreduce (`battle_scripts_1.s:273`-`:275`), so the
+        // deduction survives the failed accuracycheck at `:244`.
+        assert_eq!(battle.player().moves()[0].pp, 34);
     }
 
     // The tests below have been re-pinned twice, each with a recorded
@@ -1667,6 +1671,9 @@ mod tests {
         );
         assert_eq!(rng.draws(), 11);
         assert!(battle.outcome().is_none(), "nobody fainted; no Ended event");
+        // A type-immune hit still spends PP: ppreduce (`battle_scripts_1.s:247`)
+        // runs before typecalc (`:251`) decides the immunity.
+        assert_eq!(battle.player().moves()[0].pp, 34);
     }
 
     #[test]
