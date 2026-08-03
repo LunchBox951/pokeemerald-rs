@@ -533,13 +533,13 @@ pub(super) fn decode(bytes: &[u8]) -> Result<WavSample, WavError> {
     // != 0)` (`converter.cpp:392-397`, `:399-402`). So a present-but-zero
     // chunk has to fall back to the derived value here as well, rather than
     // compiling a zero pitch word or a zero-length sample.
+    // A *truncated* chunk (under 4 bytes) is malformed input, not an
+    // absent override: `read_u32` fails it closed as `ChunkTruncated`.
     let agb_pitch = find_chunk(&chunks, *b"agbp")
-        .filter(|c| c.len() >= 4)
         .map(|c| read_u32(c, 0))
         .transpose()?
         .filter(|&pitch| pitch != 0);
     let agb_loop_end = find_chunk(&chunks, *b"agbl")
-        .filter(|c| c.len() >= 4)
         .map(|c| read_u32(c, 0))
         .transpose()?
         .filter(|&size| size != 0);

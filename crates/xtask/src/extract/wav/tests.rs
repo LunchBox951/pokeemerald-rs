@@ -129,6 +129,18 @@ fn a_zero_agbp_chunk_falls_back_to_the_computed_pitch() {
     assert_eq!(sample.base_frequency, 3344 * 1024);
 }
 
+/// A truncated override chunk is malformed input, not an absent override:
+/// both `agbp` and `agbl` must fail closed as `ChunkTruncated` rather than
+/// silently falling back to the derived value.
+#[test]
+fn a_truncated_override_chunk_is_rejected_not_ignored() {
+    let data = [128u8, 129];
+    for id in [b"agbp", b"agbl"] {
+        let bytes = build_wav(1, 1, 8, 3344, &[(id, &[0u8, 0])], &data);
+        assert_eq!(decode(&bytes).unwrap_err(), WavError::ChunkTruncated);
+    }
+}
+
 /// The `agbl` half of the same upstream rule (`converter.cpp:399-402`): a
 /// zero override leaves the naive loop end in place instead of shrinking
 /// the decoded sample to zero length.
