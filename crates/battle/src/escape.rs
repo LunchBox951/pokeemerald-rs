@@ -54,18 +54,22 @@ use crate::damage::BattleRng;
 /// `run_tries` is the number of *previous* attempts this battle (upstream
 /// `gBattleStruct->runTries`, owned by [`crate::battle::Battle`] and
 /// incremented by the caller after this call — see the module docs for why
-/// that increment is unconditional).
+/// that increment is unconditional). It is a byte, exactly as upstream
+/// stores it: the counter itself wraps at 256 (the caller increments with
+/// wrapping semantics), while the `* 30` product is computed at full width
+/// before the `speedVar` byte truncation below, matching C's integer
+/// promotion.
 #[must_use]
 pub fn try_run_from_battle(
     player_speed: u32,
     enemy_speed: u32,
-    run_tries: u32,
+    run_tries: u8,
     rng: &mut impl BattleRng,
 ) -> bool {
     if player_speed >= enemy_speed {
         return true;
     }
-    let raw = (player_speed * 128) / enemy_speed + run_tries * 30;
+    let raw = (player_speed * 128) / enemy_speed + u32::from(run_tries) * 30;
     #[allow(clippy::cast_possible_truncation)]
     let speed_var = raw as u8;
     let roll = (rng.next_u16() & 0xFF) as u8;

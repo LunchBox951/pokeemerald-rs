@@ -344,7 +344,7 @@ pub struct Battle {
     dex: Dex,
     player: BattlePokemon,
     enemy: BattlePokemon,
-    run_tries: u32,
+    run_tries: u8,
     random_turn_number: u16,
     outcome: Option<BattleOutcome>,
 }
@@ -373,13 +373,16 @@ impl Battle {
     ///
     /// [`BattleError::FaintedBattler`] if either mon is already at `0` HP
     /// (see that variant's docs), or whatever
-    /// [`crate::hit::ensure_resolvable`] reports for the first
-    /// unsupported move, player's moveset first — a `0`-power status move
+    /// [`crate::hit::ensure_resolvable`] reports for the first unsupported
+    /// move in the **wild mon's** moveset — a `0`-power status move
     /// ([`BattleError::NonDamagingMove`]) or a move whose effect runs some
     /// other battle script ([`BattleError::UnsupportedMoveEffect`]), which
     /// includes [`crate::damage::STRUGGLE`]: the turn engine never applies
-    /// its `EFFECT_RECOIL` half, so a mon that knows Struggle is not a battle
-    /// this slice can play (see [`crate::hit`]'s module docs).
+    /// its `EFFECT_RECOIL` half. Only the wild moveset is screened here,
+    /// because its rejection loop can land on any slot; the *player's*
+    /// moveset may hold unsupported moves (real starters all know a status
+    /// move) — each chosen slot is checked per turn instead, before any
+    /// draw ([`Battle::take_turn`]).
     pub fn new(
         dex: Dex,
         player: BattlePokemon,
@@ -395,11 +398,19 @@ impl Battle {
             if mon.is_fainted() {
                 return Err(BattleError::FaintedBattler(is_player));
             }
-            for slot in mon.moves() {
-                ensure_resolvable(&dex, slot.move_id)?;
-                if slot.move_id == STRUGGLE {
-                    return Err(BattleError::UnsupportedMoveEffect(slot.move_id));
-                }
+        }
+        // Only the *wild* side needs every slot executable up front: its
+        // rejection loop ignores everything but `MOVE_NONE`, so any slot
+        // can come up mid-turn, after draws. The player's moveset may
+        // carry unsupported moves (every real starter knows a status move
+        // — Treecko's Leer, Torchic's and Mudkip's Growl); the player's
+        // *chosen* slot is validated per turn, before any draw
+        // (`validate_player_move`), so an unsupported pick is rejected
+        // without disturbing the stream and another action can be chosen.
+        for slot in enemy.moves() {
+            ensure_resolvable(&dex, slot.move_id)?;
+            if slot.move_id == STRUGGLE {
+                return Err(BattleError::UnsupportedMoveEffect(slot.move_id));
             }
         }
         let random_turn_number = rng.next_u16();
@@ -441,7 +452,7 @@ impl Battle {
     /// The number of previous run attempts this battle (upstream
     /// `gBattleStruct->runTries`).
     #[must_use]
-    pub const fn run_tries(&self) -> u32 {
+    pub const fn run_tries(&self) -> u8 {
         self.run_tries
     }
 
@@ -505,7 +516,14 @@ impl Battle {
     /// The player's chosen move id, rejecting a slot no upstream selection
     /// menu could have offered (out of range, out of PP, or the `MOVE_NONE`
     /// placeholder that `CheckMoveLimitations` rules out —
-    /// `MOVE_LIMITATION_ZEROMOVE`, `battle_util.c:1098`).
+    /// `MOVE_LIMITATION_ZEROMOVE`, `battle_util.c:1098`) — and, this
+    /// slice's own boundary, a known move the engine cannot execute
+    /// ([`crate::hit::ensure_resolvable`], plus Struggle's unmodelled
+    /// recoil). Construction deliberately allows such moves in unselected
+    /// player slots (real starters all know a status move); the check moves
+    /// here, still ahead of the turn's first draw, so a rejected pick
+    /// leaves the battle and the shared stream untouched and the caller
+    /// can choose another action.
     fn validate_player_move(&self, index: usize) -> Result<MoveId, BattleError> {
         let slot = self
             .player
@@ -517,6 +535,10 @@ impl Battle {
         }
         if slot.pp == 0 {
             return Err(BattleError::NoPpRemaining(index));
+        }
+        ensure_resolvable(&self.dex, slot.move_id)?;
+        if slot.move_id == STRUGGLE {
+            return Err(BattleError::UnsupportedMoveEffect(slot.move_id));
         }
         Ok(slot.move_id)
     }
@@ -534,8 +556,10 @@ impl Battle {
     /// **Before the turn begins, drawing nothing.**
     /// [`BattleError::BattleAlreadyOver`] if [`Battle::outcome`] is already
     /// `Some`, or [`BattleError::InvalidMoveSlot`] /
-    /// [`BattleError::NoPpRemaining`] / [`BattleError::PlaceholderMove`] for
-    /// an unusable [`PlayerAction::UseMove`] slot. The player's action is the
+    /// [`BattleError::NoPpRemaining`] / [`BattleError::PlaceholderMove`] /
+    /// the [`crate::hit::ensure_resolvable`] errors (and Struggle's
+    /// [`BattleError::UnsupportedMoveEffect`]) for an unusable or
+    /// unsupported [`PlayerAction::UseMove`] slot. The player's action is the
     /// only one that can be validated this early — it is the caller's input,
     /// available before any draw — so these leave the battle *and* the shared
     /// RNG stream exactly as they were, with no events.
@@ -569,10 +593,11 @@ impl Battle {
     /// [`BattleError::NoPpRemaining`] is only ever returned by the pre-draw
     /// player validation above.
     ///
-    /// Other than the Struggle fallback, it cannot report an unsupported
-    /// move: [`Battle::new`] has already rejected any battle in which either
-    /// mon knows one, so every *known* move reachable from here is
-    /// executable `(behavioral-fidelity)`.
+    /// Other than the Struggle fallback, no unsupported move survives to
+    /// mid-turn: the wild moveset was screened at [`Battle::new`], and an
+    /// unsupported *player* pick (a status move, say — every real starter
+    /// knows one) is rejected by the pre-draw validation above, so the
+    /// caller can simply choose another action `(behavioral-fidelity)`.
     pub fn take_turn(
         &mut self,
         player_action: PlayerAction,
@@ -638,7 +663,10 @@ impl Battle {
                 self.run_tries,
                 rng,
             );
-            self.run_tries += 1;
+            // Upstream's `gBattleStruct->runTries` is a byte: the 256th
+            // failed attempt wraps it to 0, resetting the +30-per-try
+            // escape bonus `(behavioral-fidelity)`.
+            self.run_tries = self.run_tries.wrapping_add(1);
             events.push(BattleEvent::RunAttempt {
                 by_player: true,
                 success,
@@ -1959,7 +1987,7 @@ mod tests {
     }
 
     #[test]
-    fn a_battle_cannot_be_built_with_a_move_this_slice_cannot_execute() {
+    fn unsupported_moves_are_rejected_at_the_right_boundary_for_each_side() {
         let dex = Dex::new();
         let healthy = |dex: &Dex| max_iv_mon(dex, 4, 50, vec![MoveId(33)]);
 
@@ -1972,21 +2000,9 @@ mod tests {
             (MoveId(49), BattleError::UnsupportedMoveEffect(MoveId(49))),
             (STRUGGLE, BattleError::UnsupportedMoveEffect(STRUGGLE)),
         ] {
-            // On the player's side...
-            let mut rng = SequenceRng::new([]);
-            assert_eq!(
-                Battle::new(
-                    Dex::new(),
-                    max_iv_mon(&dex, 4, 50, vec![bad_move]),
-                    healthy(&dex),
-                    &mut rng
-                )
-                .err(),
-                Some(expected),
-                "move {} on the player's side",
-                bad_move.0
-            );
-            // ...and on the wild mon's, which the caller never selects from.
+            // The wild mon's moveset is screened at construction: the
+            // rejection loop can land on any slot, so an unsupported one
+            // must never survive to mid-turn.
             let mut rng = SequenceRng::new([]);
             assert_eq!(
                 Battle::new(
@@ -2000,9 +2016,148 @@ mod tests {
                 "move {} on the wild mon's side",
                 bad_move.0
             );
-            // The SequenceRng is empty in both cases: a rejected battle draws
-            // nothing, so no partly-consumed shared stream is left behind.
+
+            // The player's side constructs fine with the same move in an
+            // unselected slot (every real starter knows a status move) --
+            // and *choosing* it is rejected before any draw, leaving the
+            // battle usable and the stream untouched.
+            let mut rng = SequenceRng::new([0]); // battle start only
+            let mut battle = Battle::new(
+                Dex::new(),
+                max_iv_mon(&dex, 4, 50, vec![MoveId(33), bad_move]),
+                // A slower, different mon: a mirror match would add a
+                // speed-tie seeding draw this script does not budget.
+                max_iv_mon(&dex, 19, 5, vec![MoveId(33)]),
+                &mut rng,
+            )
+            .unwrap_or_else(|e| {
+                panic!(
+                    "move {} in an unselected player slot must construct: {e:?}",
+                    bad_move.0
+                )
+            });
+            assert_eq!(rng.draws(), 1);
+            let rejected = battle
+                .take_turn(PlayerAction::UseMove(1), &mut rng)
+                .unwrap_err();
+            assert_eq!(rejected.error(), expected, "choosing move {}", bad_move.0);
+            assert!(rejected.events().is_empty());
+            assert_eq!(
+                rng.draws(),
+                1,
+                "a rejected player pick draws nothing (move {})",
+                bad_move.0
+            );
         }
+    }
+
+    #[test]
+    fn a_real_starter_moveset_can_fight_with_its_damaging_move() {
+        let dex = Dex::new();
+        // Treecko's actual level-5 learnset is Pound (1) + Leer (43) -- the
+        // Codex P1 case: a construction-wide resolvability screen would
+        // reject Leer (NonDamagingMove) and no authentic starter could
+        // enter any wild battle. Wild Poochyena (286) with Tackle is the
+        // Route 101 shape.
+        let player = max_iv_mon(&dex, 277, 5, vec![MoveId(1), MoveId(43)]);
+        let enemy = max_iv_mon(&dex, 286, 2, vec![MoveId(33)]);
+
+        // battle start, turn number, pick, the player's 4-draw Pound
+        // (Treecko L5, speed 13, moves first), then the slower L2
+        // Poochyena's 4-draw Tackle back.
+        let mut rng = SequenceRng::new([0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0]);
+        let mut battle = Battle::new(dex, player, enemy, &mut rng).unwrap();
+        let events = battle
+            .take_turn(PlayerAction::UseMove(0), &mut rng)
+            .unwrap();
+        assert!(
+            events.iter().any(|e| matches!(
+                e,
+                BattleEvent::Hit {
+                    by_player: true,
+                    move_id: MoveId(1),
+                    ..
+                }
+            )),
+            "Pound must land: {events:?}"
+        );
+        assert_eq!(rng.draws(), 11);
+
+        // And picking Leer (slot 1) on a fresh battle is rejected pre-draw
+        // with the battle left usable.
+        let dex = Dex::new();
+        let player = max_iv_mon(&dex, 277, 5, vec![MoveId(1), MoveId(43)]);
+        let enemy = max_iv_mon(&dex, 286, 2, vec![MoveId(33)]);
+        let mut rng = SequenceRng::new([0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0]);
+        let mut battle = Battle::new(dex, player, enemy, &mut rng).unwrap();
+        let rejected = battle
+            .take_turn(PlayerAction::UseMove(1), &mut rng)
+            .unwrap_err();
+        assert_eq!(rejected.error(), BattleError::NonDamagingMove(MoveId(43)));
+        assert!(rejected.events().is_empty());
+        assert_eq!(rng.draws(), 1, "only the battle-start draw so far");
+        // The same battle then proceeds normally with Pound.
+        let events = battle
+            .take_turn(PlayerAction::UseMove(0), &mut rng)
+            .unwrap();
+        assert!(
+            events.iter().any(|e| matches!(
+                e,
+                BattleEvent::Hit {
+                    by_player: true,
+                    ..
+                }
+            )),
+            "the battle stayed usable after the rejected pick: {events:?}"
+        );
+    }
+
+    #[test]
+    fn run_tries_wraps_at_256_like_upstreams_byte_counter() {
+        let dex = Dex::new();
+        // gBattleStruct->runTries is a byte: the 256th failed attempt wraps
+        // it to 0, resetting the +30 escape bonus. 256 failed runs are
+        // reachable: the enemy's Tackle slot is drained up front, so every
+        // turn its pick (draw 0 -> slot 0) fails via FailedNoPp -- no
+        // damage, no PP change -- while Scratch in slot 1 keeps the moveset
+        // only *partially* spent (an all-spent moveset would divert to the
+        // forced-Struggle fallback instead).
+        let player = max_iv_mon(&dex, 19, 5, vec![MoveId(33)]); // slow: runs can fail
+        let mut enemy = max_iv_mon(&dex, 4, 50, vec![MoveId(33), MoveId(10)]); // fast
+        for _ in 0..enemy.moves()[0].pp {
+            enemy.deduct_pp(0).unwrap();
+        }
+
+        // Escape roll 255 always fails: speedVar is a byte, so
+        // `speed_var > 255` is false for every possible speedVar.
+        // Per turn: turn number, pick, escape roll -- 3 draws, no move draws.
+        let script = std::iter::once(0u16)
+            .chain((0..256).flat_map(|_| [0u16, 0, 255]))
+            .collect::<Vec<_>>();
+        let mut rng = SequenceRng::new(script);
+        let mut battle = Battle::new(dex, player, enemy, &mut rng).unwrap();
+        for turn in 0u16..256 {
+            assert_eq!(
+                battle.run_tries(),
+                u8::try_from(turn % 256).unwrap(),
+                "before failed attempt {turn}"
+            );
+            let events = battle.take_turn(PlayerAction::Run, &mut rng).unwrap();
+            assert_eq!(
+                events[0],
+                BattleEvent::RunAttempt {
+                    by_player: true,
+                    success: false,
+                }
+            );
+        }
+        assert_eq!(
+            battle.run_tries(),
+            0,
+            "the 256th failed attempt wraps the byte counter to 0"
+        );
+        assert!(battle.outcome().is_none());
+        assert_eq!(rng.draws(), 1 + 256 * 3);
     }
 
     #[test]
