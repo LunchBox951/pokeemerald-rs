@@ -258,4 +258,63 @@ mod tests {
             ));
         }
     }
+
+    #[test]
+    fn every_accuracy_stage_ratio_is_pinned_at_its_own_boundary() {
+        // Per-row boundary pins for the sAccuracyStageRatios transcription
+        // (battle_script_commands.c:588-:603): for each stage, `calc` is
+        // hand computed from the upstream pair, and the draws `calc - 1`
+        // (roll == calc, the last hit) and `calc` (roll == calc + 1, the
+        // first miss) bracket it. Every row's calc differs from both of its
+        // neighbours' at the chosen base accuracy, so no row can silently
+        // take a neighbour's value or drift without failing here. The high
+        // stages use base 30, since at base 50 the +3..+6 rows all clear
+        // 100 and stop being distinguishable.
+        //
+        //   base 50: -6 -> 50*33/100 = 16   -5 -> 18   -4 -> 21   -3 -> 25
+        //            -2 -> 30               -1 -> 37    0 -> 50   +1 -> 66
+        //            +2 -> 83
+        //   base 30: +3 -> 30*2/1 = 60      +4 -> 30*233/100 = 69
+        //            +5 -> 30*133/50 = 79   +6 -> 30*3/1 = 90
+        for (offset, base_accuracy, calc) in [
+            (-6i8, 50u8, 16u16),
+            (-5, 50, 18),
+            (-4, 50, 21),
+            (-3, 50, 25),
+            (-2, 50, 30),
+            (-1, 50, 37),
+            (0, 50, 50),
+            (1, 50, 66),
+            (2, 50, 83),
+            (3, 30, 60),
+            (4, 30, 69),
+            (5, 30, 79),
+            (6, 30, 90),
+        ] {
+            let stage = StatStage::new(offset).unwrap();
+            let mut rng = FixedRng(calc - 1); // roll == calc -> hit
+            assert!(
+                accuracy_check(
+                    base_accuracy,
+                    MoveEffect(0),
+                    stage,
+                    StatStage::NEUTRAL,
+                    &mut rng,
+                ),
+                "stage {offset:+}: roll {calc} must hit"
+            );
+            let mut rng = FixedRng(calc); // roll == calc + 1 -> miss
+            assert!(
+                !accuracy_check(
+                    base_accuracy,
+                    MoveEffect(0),
+                    stage,
+                    StatStage::NEUTRAL,
+                    &mut rng,
+                ),
+                "stage {offset:+}: roll {} must miss",
+                calc + 1
+            );
+        }
+    }
 }

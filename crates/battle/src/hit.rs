@@ -711,6 +711,21 @@ mod tests {
             (MoveId(68), "Counter: EFFECT_COUNTER"),
             (MoveId(69), "Seismic Toss: EFFECT_LEVEL_DAMAGE"),
             (MoveId(71), "Absorb: EFFECT_ABSORB (drains)"),
+            // These two DO point at BattleScript_EffectHit, but the engine
+            // special-cases them outside the script, so they are
+            // deliberately absent from ORDINARY_HIT_EFFECTS (module docs) --
+            // a contributor completing the allowlist from the C table alone
+            // would wrongly admit both.
+            (
+                MoveId(206),
+                "False Swipe: EFFECT_FALSE_SWIPE, damage clamped to leave 1 HP \
+                 (battle_script_commands.c:1683)",
+            ),
+            (
+                MoveId(228),
+                "Pursuit: EFFECT_PURSUIT, re-targeted/re-powered on switch \
+                 (battle_script_commands.c:8745/:9854)",
+            ),
         ] {
             assert!(
                 dex.move_data(move_id).unwrap().power > 0,
