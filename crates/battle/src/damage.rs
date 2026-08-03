@@ -23,6 +23,13 @@
 //! ignores — a battle-state-machine concern), item/ability modifiers, double
 //! battles (the "hits both targets" halving and Reflect/Light Screen's
 //! double-battle `2/3` variant), and non-v1 move effects.
+//!
+//! Critical hits are added on top of this module, without changing it, by
+//! issue #159 (`S-6`)'s [`crate::critical`]: it derives the
+//! crit-adjusted `attack_stage`/`defense_stage`/`reflect`/`light_screen`
+//! [`DamageInput`] fields this module already accepts, and doubles
+//! [`base_damage`]'s result before [`apply_stab`] runs — see
+//! [`crate::hit::resolve_hit`] for the full assembled pipeline.
 
 use assets::{Effectiveness, MoveId, Type, TypeChart};
 
@@ -310,6 +317,21 @@ pub fn apply_type_effectiveness(damage: u32, effectiveness: Effectiveness) -> u3
 pub trait BattleRng {
     /// Draw the next 16-bit value from the generator's sequence.
     fn next_u16(&mut self) -> u16;
+
+    /// Draw the next 32-bit value — upstream `Random32()`, `Random() |
+    /// (Random() << 16)`.
+    ///
+    /// A default method built on two [`BattleRng::next_u16`] draws, low half
+    /// first, matching `engine::rng::Rng::next_u32`'s documented draw order
+    /// exactly (`crates/engine/src/rng.rs`) so a `BattleRng` implementation
+    /// backed by that generator agrees with it call-for-call. Used by
+    /// [`crate::wild`]'s personality generation
+    /// (`CreateBoxMon`/`CreateMonWithNature`, `pokeemerald/src/pokemon.c`).
+    fn next_u32(&mut self) -> u32 {
+        let low = u32::from(self.next_u16());
+        let high = u32::from(self.next_u16());
+        low | (high << 16)
+    }
 }
 
 /// The `85..=100%` random damage roll (`ApplyRandomDmgMultiplier`):
@@ -458,6 +480,27 @@ mod tests {
             self.draws += 1;
             self.value
         }
+    }
+
+    /// A `BattleRng` that yields a fixed sequence of draws, for pinning
+    /// multi-draw composition order (e.g. [`BattleRng::next_u32`]).
+    struct SequenceRng(std::vec::IntoIter<u16>);
+    impl SequenceRng {
+        fn new(values: impl IntoIterator<Item = u16>) -> Self {
+            Self(values.into_iter().collect::<Vec<_>>().into_iter())
+        }
+    }
+    impl BattleRng for SequenceRng {
+        fn next_u16(&mut self) -> u16 {
+            self.0.next().expect("SequenceRng exhausted")
+        }
+    }
+
+    #[test]
+    fn next_u32_default_method_composes_low_then_high_half() {
+        // Random32() = Random() | (Random() << 16): first draw is the low half.
+        let mut rng = SequenceRng::new([0x1234, 0xABCD]);
+        assert_eq!(rng.next_u32(), 0xABCD_1234);
     }
 
     fn neutral_input(

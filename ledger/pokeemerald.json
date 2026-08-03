@@ -57,6 +57,20 @@
       "status": "pending"
     },
     "data/battle_scripts_1.s": {
+      "artifacts": {
+        "BattleScript_EffectHit": {
+          "reason": "data/battle_scripts_1.s:236-:266 (EffectHit -> HitFromAtkCanceler -> AtkString -> CritCalc -> AtkAnimation -> MoveEnd) plus the :273 miss exit and :3556 BattleScript_NoPPForMove. resolve_hit reproduces the RNG-relevant step order: attackcanceler's no-PP abort (Battle::act), accuracycheck, critcalc, damagecalc, typecalc, adjustnormaldamage's 85-100% roll, and seteffectwithchance's discarded draw at :265; ppreduce is handled by the turn engine. The Surf/underwater prelude at :237-:240, animation/message steps, and every other BattleScript_* in this file are not modelled.",
+          "rust_target": "crates/battle/src/hit.rs",
+          "spec": "S-6",
+          "status": "stubbed"
+        },
+        "gBattleScriptsForMoveEffects": {
+          "reason": "data/battle_scripts_1.s:21-:184, the per-EFFECT_* script dispatch table. Reproduced as the construction-boundary allowlist ORDINARY_HIT_EFFECTS / is_ordinary_hit_effect: exactly the 21 effect ids whose entry is BattleScript_EffectHit itself, minus EFFECT_FALSE_SWIPE (101) and EFFECT_PURSUIT (128), which point at the same script but are engine-special-cased outside it (battle_script_commands.c:1683, :8745/:9854). Every other entry dispatches a different script with different damage and RNG shape and is rejected at Battle::new / ensure_resolvable.",
+          "rust_target": "crates/battle/src/hit.rs",
+          "spec": "S-6",
+          "status": "stubbed"
+        }
+      },
       "category": "data.script",
       "kind": "file",
       "spec_owner": "07-battle",
@@ -23969,6 +23983,14 @@
       "status": "pending"
     },
     "src/battle_controller_opponent.c": {
+      "artifacts": {
+        "OpponentHandleChooseMove": {
+          "reason": "battle_controller_opponent.c:1551. Only the plain-wild else branch (:1594-:1601) is modelled: the do/while rejection loop chosenMoveId = MOD(Random(), MAX_MON_MOVES) retried while the slot holds MOVE_NONE, reproduced draw for draw by Battle::choose_enemy_move. The AI branch taken for BATTLE_TYPE_TRAINER | FIRST_BATTLE | SAFARI | ROAMER (:1563, BattleAI_SetupAIData/BattleAI_ChooseMoveOrAction) is issue I-5's, not this slice's; the double-battle random-target draw (:1607) and MOVE_TARGET_USER retargeting are not modelled (single wild battles only).",
+          "rust_target": "crates/battle/src/battle.rs",
+          "spec": "S-6",
+          "status": "stubbed"
+        }
+      },
       "category": "code.source",
       "kind": "file",
       "status": "pending"
@@ -24040,6 +24062,24 @@
     },
     "src/battle_main.c": {
       "artifacts": {
+        "GetWhoStrikesFirst": {
+          "reason": "battle_main.c:4595. Priority then Speed with the short-circuited speed-tie RNG draw modelled exactly (resolve_order). Weather-linked ability speed doubling (Swift Swim/Chlorophyll), badge boosts, Macho Brace, paralysis, and Quick Claw are not modelled (issue #159 scopes abilities/items/status out); callers pass each battler's already-final effective speed.",
+          "rust_target": "crates/battle/src/turn_order.rs",
+          "spec": "S-6",
+          "status": "stubbed"
+        },
+        "SetActionsAndBattlersTurnOrder": {
+          "reason": "battle_main.c:4756. Only the plain two-battler pairwise GetWhoStrikesFirst-based ordering is modelled (issue #159 deliberately mirrors the upstream battle loop's observable order, not its task/array structure, per the pokeemerald-rs behavioral-fidelity principle), plus the run-goes-first rule this function owns: the non-link branch's gChosenActionByBattler[0] == B_ACTION_RUN test (:4784-:4794) sets turnOrderId = 5, and the block guarded by it (:4797) reseats the running battler at gBattlerByTurnOrder[0] ahead of every move. The link-battle variant of that test (:4778), item/switch-action prioritization, and the Safari Zone branch are not modelled.",
+          "rust_target": "crates/battle/src/battle.rs",
+          "spec": "S-6",
+          "status": "stubbed"
+        },
+        "gRandomTurnNumber": {
+          "reason": "battle_main.c:208 (the global) and its three assignment sites: BattleStartClearSetData :3140 (once per battle), TryDoEventsBeforeFirstTurn :3923 (once, ahead of turn 1's action selection), and BattleTurnPassed :4013 (once per later turn). All three draws are modelled for their RNG-stream position -- Battle::new takes :3140, and take_turn's top-of-turn draw takes :3923 or :4013 -- so turn 1 is preceded by two draws and each later turn by one, as upstream. The value is retained in Battle::random_turn_number but nothing reads it yet: its only upstream consumers are the two Quick Claw checks in GetWhoStrikesFirst (:4653, :4687), and held items are out of scope this slice.",
+          "rust_target": "crates/battle/src/battle.rs",
+          "spec": "S-6",
+          "status": "stubbed"
+        },
         "gTypeEffectiveness": {
           "reason": "gTypeEffectiveness (const u8[336] at src/battle_main.c:335) transcribed to a typed TypeChart in crates/assets, pinned to upstream by an exhaustive 289-matchup golden-grid test (#19). Registered as a sub-file artifact now that #21 landed; battle_main.c itself stays pending (rest of the file unported).",
           "rust_target": "crates/assets/src/type_chart.rs",
@@ -24083,11 +24123,65 @@
     },
     "src/battle_script_commands.c": {
       "artifacts": {
+        "AccuracyCalcHelper": {
+          "reason": "battle_script_commands.c:1054. Only the EFFECT_ALWAYS_HIT/EFFECT_VITAL_THROW accuracy-roll bypass is modelled (always_hits, the :1089-:1094 arm's non-weather half). NOT modelled: the STATUS3_ALWAYS_HITS Lock-On/Mind Reader bypass at :1056-:1060 (the function's first branch; no status3), rain-boosted EFFECT_THUNDER's never-miss half of the same :1089 condition (no weather), and the on-air/underground/underwater semi-invulnerability misses (no status3). Protect is NOT this function -- it is JumpIfMoveAffectedByProtect at :1123 in Cmd_accuracycheck (see that artifact).",
+          "rust_target": "crates/battle/src/accuracy.rs",
+          "spec": "S-6",
+          "status": "stubbed"
+        },
         "ApplyRandomDmgMultiplier": {
           "reason": "The 85..=100% roll rewritten as apply_damage_roll: unconditional RNG draw before the zero-damage guard (exact upstream consumption count) and the nonzero floor.",
           "rust_target": "crates/battle/src/damage.rs",
           "spec": "S-6",
           "status": "rewritten"
+        },
+        "Cmd_accuracycheck": {
+          "reason": "battle_script_commands.c:1099. The accuracy-stage-ratio roll (sAccuracyStageRatios, combined accuracy/evasion stage, unconditional RNG draw) modelled exactly (accuracy_check). NOT modelled: JumpIfMoveAffectedByProtect at :1123 (no Protect), sunny-weather EFFECT_THUNDER's moveAcc = 50 override at :1146 (no weather), Compound Eyes/Sand Veil/Hustle/evasion-up-item modifiers, and Foresight's ignore-evasion branch (abilities/items/status2 out of scope).",
+          "rust_target": "crates/battle/src/accuracy.rs",
+          "spec": "S-6",
+          "status": "stubbed"
+        },
+        "Cmd_attackcanceler": {
+          "reason": "battle_script_commands.c:915. The no-PP abort is modelled (Battle::act -> BattleEvent::FailedNoPp): a 0-PP slot jumps to BattleScript_NoPPForMove at :934-:939 -- attack string, STRINGID_BUTNOPPLEFT, MoveEnd -- consuming no RNG and dealing no damage; HITMARKER_ALLOW_NO_PP is never set upstream (tested :934, cleared :942 only) and the HITMARKER_NO_ATTACKSTRING / STATUS2_MULTIPLETURNS escapes are multi-turn machinery this slice does not model. NOT modelled: the battle-outcome/fainted-attacker early-outs (the engine's own outcome short-circuit covers the modelled cases), AtkCanceler_UnableToUseMove's sleep/freeze/confusion/etc. cascade (no status), ability move-blocks, disobedience, and the MOVE_RESULT_MISSED flag consumers.",
+          "rust_target": "crates/battle/src/battle.rs",
+          "spec": "S-6",
+          "status": "stubbed"
+        },
+        "Cmd_critcalc": {
+          "reason": "battle_script_commands.c:1253. sCriticalHitChance table and the four high-crit move-effect ids modelled (crit_stage_for_effect, crit_roll). Focus Energy, Scope Lens, Lucky Punch/Chansey, and Stick/Farfetch'd stage contributions are not modelled (status2/items out of scope). Nor are the three suppressors that short-circuit the crit Random() away entirely in the :1279-:1283 && chain -- Battle Armor/Shell Armor on the target (:1279), STATUS3_CANT_SCORE_A_CRIT on the attacker (:1280), and BATTLE_TYPE_WALLY_TUTORIAL | BATTLE_TYPE_FIRST_BATTLE (:1281): each makes the hit consume one fewer RNG draw. crit_roll models only the all-three-pass case, which is the ordinary post-first-battle wild encounter this slice targets -- BATTLE_TYPE_FIRST_BATTLE is set solely for the scripted Route 101 Poochyena battle (src/battle_setup.c:937), which is therefore crit-proof upstream.",
+          "rust_target": "crates/battle/src/critical.rs",
+          "spec": "S-6",
+          "status": "stubbed"
+        },
+        "Cmd_damagecalc": {
+          "reason": "battle_script_commands.c:1290 (crit multiply :1296). The gCritMultiplier x2 multiply modelled (resolve_hit). dynamicMoveType, Helping Hand, and the charged-up-Electric double are not modelled.",
+          "rust_target": "crates/battle/src/hit.rs",
+          "spec": "S-6",
+          "status": "stubbed"
+        },
+        "Cmd_datahpupdate": {
+          "reason": "battle_script_commands.c:1844 (lethal cap :1920-:1929). The gHpDealt mirror is modelled: a lethal hit records only the HP actually lost (Battle's overkill cap on the Hit event). NOT modelled: Substitute damage routing, the special-vs-physical last-damage bookkeeping (gProtectStructs / gSpecialStatuses) consumed by Counter/Mirror Coat/Bide, and HITMARKER_IGNORE_SUBSTITUTE -- none of those systems exist this slice.",
+          "rust_target": "crates/battle/src/battle.rs",
+          "spec": "S-6",
+          "status": "stubbed"
+        },
+        "Cmd_getexp": {
+          "reason": "battle_script_commands.c:3255. The v1 single-eligible-recipient case (calculatedExp = expYield*enemyLevel/7, floored to 1, no redistribution) is modelled (wild_faint_exp), and the MAX_LEVEL exclusion (case 2, :3351-:3356: a level-100 recipient gets no exp and no 'gained EXP' string) is modelled at the turn-engine level (Battle emits no ExpGained event). Party-wide redistribution, Exp Share, Lucky Egg, and the traded-mon/trainer-battle x1.5 bonus are not modelled.",
+          "rust_target": "crates/battle/src/exp.rs",
+          "spec": "S-6",
+          "status": "stubbed"
+        },
+        "Cmd_ppreduce": {
+          "reason": "battle_script_commands.c:1205. BattlePokemon::deduct_pp is the deducting arm. The :1230 0-PP guard ('&& gBattleMons[gBattlerAttacker].pp[gCurrMovePos]') is real but UNREACHABLE for an ordinary pick: Cmd_attackcanceler aborts a 0-PP move first (see the Cmd_attackcanceler artifact), so the guard only matters for Struggle and multi-turn continuations that legitimately reach ppreduce at 0 PP -- none modelled this slice. NOT modelled: Pressure's ppToDeduct++ (no abilities) and the HITMARKER_NO_PPDEDUCT guard. deduct_pp's NoPpRemaining error is a caller boundary (the player path pre-validates), not an upstream behaviour.",
+          "rust_target": "crates/battle/src/pokemon.rs",
+          "spec": "S-6",
+          "status": "stubbed"
+        },
+        "Cmd_seteffectwithchance": {
+          "reason": "battle_script_commands.c:2908. The unconditional Random() draw on every landed hit is modelled (resolve_hit step 7): for plain-hit scripts MOVE_EFFECT_BYTE is 0, so the leading 'Random() % 100 < percentChance' operand at :2923 draws once and the chain fails -- the value is discarded. Struggle's MOVE_EFFECT_CERTAIN first branch (:2917, draw-free) is modelled as the no-draw exception. NOT modelled: actually firing a secondary effect via SetMoveEffect (no allow-listed move can: the plain hit script never runs setmoveeffect), Serene Grace's percentChance doubling (no abilities this slice), and the certain-effect application path.",
+          "rust_target": "crates/battle/src/hit.rs",
+          "spec": "S-6",
+          "status": "stubbed"
         },
         "Cmd_typecalc": {
           "reason": "Partial: STAB (has_stab/apply_stab, incl. the MOVE_STRUGGLE early-return), gTypeEffectiveness table-order per-slot modulation with terminal immunity (apply_dual_type_effectiveness), and the type1!=type2 dedup are rewritten as pure functions. Still pending: Levitate/Wonder Guard ability checks, Foresight handling, MOVE_RESULT_* flag accumulation, and battle-state wiring.",
@@ -24137,6 +24231,26 @@
       "status": "pending"
     },
     "src/battle_util.c": {
+      "artifacts": {
+        "AreAllMovesUnusable": {
+          "reason": "battle_util.c:1125 (with CheckMoveLimitations, declared :1082). Modelled: the all-slots-unusable divert -- Battle::choose_enemy_move returns the forced-Struggle fallback WITHOUT running the wild rejection loop, suppressing its RNG draw (an RNG-observable behaviour), with MOVE_LIMITATION_ZEROMOVE (:1098) and MOVE_LIMITATION_PP (:1101) as the modelled limitation rules (selectable_slot / the pp==0 screen; the same rules back validate_player_move's pre-draw pick checks). NOT modelled: Struggle execution itself (the fallback having to act stops the turn with UnsupportedMoveEffect), gSelectionBattleScripts / BattleScript_NoMovesLeft presentation, and the Disable (:1104) / Torment / Taunt / Imprison / Encore / Choice-item limitation bits (none of those systems exist this slice).",
+          "rust_target": "crates/battle/src/battle.rs",
+          "spec": "S-6",
+          "status": "stubbed"
+        },
+        "HandleAction_Run": {
+          "reason": "battle_util.c:487. The player-side half only (:514-:523): Battle::take_turn calls try_run_from_battle for a chosen PlayerAction::Run and, on failure, burns the player's turn while the wild mon still acts (upstream sets BattleScript_PrintFailedToRunString and gCurrentActionFuncId = B_ACTION_EXEC_SCRIPT rather than ending the turn). Link/recorded-link multi-battler run handling (:491-:511) and the opponent-side branch (:524-:537, a wild mon fleeing with B_OUTCOME_MON_FLED) are not modelled. Where a run lands in the turn order is not this artifact's claim -- see src/battle_main.c#SetActionsAndBattlersTurnOrder.",
+          "rust_target": "crates/battle/src/battle.rs",
+          "spec": "S-6",
+          "status": "stubbed"
+        },
+        "TryRunFromBattle": {
+          "reason": "battle_util.c:407. The plain single-battle path (:452, non-Pyramid sub-branch :463-:468) modelled exactly, including that it reads RAW gBattleMons[].speed rather than any stat-stage-modified Speed, and the u8 speedVar wraparound-not-saturation on assignment (try_run_from_battle). Held-item (HOLD_EFFECT_CAN_ALWAYS_RUN), ability (RUN_AWAY), Frontier/Trainer Hill auto-success, and Battle Pyramid multiplier branches are not modelled (issue #159 scopes abilities/items out). The caller-side gate is also out of scope: IsRunningFromBattleImpossible (src/battle_main.c:4021) returns BATTLE_RUN_FORBIDDEN for BATTLE_TYPE_FIRST_BATTLE (:4078-:4082), so the scripted Route 101 battle (src/battle_setup.c:937) can never run and never reaches this function -- escape.rs models the ordinary post-first-battle wild encounter.",
+          "rust_target": "crates/battle/src/escape.rs",
+          "spec": "S-6",
+          "status": "stubbed"
+        }
+      },
       "category": "code.source",
       "kind": "file",
       "status": "pending"
@@ -26363,10 +26477,34 @@
     "src/pokemon.c": {
       "artifacts": {
         "CalculateBaseDamage": {
-          "reason": "Partial: the level/power/atk-def core plus the in-function burn, Reflect/Light-Screen, and weather hooks are rewritten as base_damage. Still pending from the same upstream function: hold-item boosts, ability modifiers (Huge/Pure Power, Thick Fat, Hustle, Guts, Plus/Minus, Overgrow-family, Marvel Scale, Flash Fire), badge boosts, critical-hit stat-stage handling, Explosion defense-halving, field sports, and double-battle spread/screen variants (issue #125 scopes these to later slices). The surrounding STAB/type/roll battle-script steps are tracked under src/battle_script_commands.c.",
+          "reason": "Partial: the level/power/atk-def core plus the in-function burn, Reflect/Light-Screen, and weather hooks are rewritten as base_damage. Still pending from the same upstream function: hold-item boosts, ability modifiers (Huge/Pure Power, Thick Fat, Hustle, Guts, Plus/Minus, Overgrow-family, Marvel Scale, Flash Fire), badge boosts, Explosion defense-halving, field sports, and double-battle spread/screen variants (issue #125 scopes these to later slices). Critical-hit stat-stage handling is now covered separately by issue #159's src/pokemon.c#CalculateBaseDamage_CriticalStageOverride artifact. The surrounding STAB/type/roll battle-script steps are tracked under src/battle_script_commands.c.",
           "rust_target": "crates/battle/src/damage.rs",
           "spec": "S-6",
           "status": "stubbed"
+        },
+        "CalculateBaseDamage_CriticalStageOverride": {
+          "reason": "pokemon.c:3234,3249,3290,3305. The crit-only stat-stage override (a crit ignores a stage change that would help the defender) and the crit disabling Reflect/Light Screen (gCritMultiplier==1 guards) modelled as a wrapper around base_damage's existing inputs (crit_adjusted_stages, wired in crates/battle/src/hit.rs) rather than changing base_damage itself. The x2 multiplier is a separate step, tracked under src/battle_script_commands.c#Cmd_damagecalc.",
+          "rust_target": "crates/battle/src/critical.rs",
+          "spec": "S-6",
+          "status": "stubbed"
+        },
+        "CalculateMonStats": {
+          "reason": "pokemon.c:2814 (CALC_STAT macro), 2823 (CalculateMonStats). The max-HP and CALC_STAT formulas modelled (compute_stats/calc_stat/calc_max_hp) with EVs fixed at 0 (EV tracking/MonGainEVs not modelled this slice) and no Shedinja 1-HP special case.",
+          "rust_target": "crates/battle/src/pokemon.rs",
+          "spec": "S-6",
+          "status": "stubbed"
+        },
+        "CreateMonWithNature": {
+          "reason": "pokemon.c:2195 (CreateMon), 2206 (CreateBoxMon), 2305 (CreateMonWithNature), 5498 (GetNatureFromPersonality). The RNG-observable USE_RANDOM_IVS path modelled exactly: the personality rejection loop against a target nature (roll_personality_for_nature) and the two-draw five-bit-field IV rolls (roll_ivs). Fixed-IV, the OT_ID_RANDOM_NO_SHINY reroll loop (a wild mon always takes the player's OT id here, matching CreateWildMon's OT_ID_PLAYER_ID argument), and GiveBoxMonInitialMoveset are not modelled.",
+          "rust_target": "crates/battle/src/wild.rs",
+          "spec": "S-6",
+          "status": "stubbed"
+        },
+        "ModifyStatByNature": {
+          "reason": "pokemon.c:5878. Full x1.10/x0.90 favoured/disfavoured scaling re-implemented (Nature::modify_stat), including the HP/accuracy/evasion no-op guard. Always uses u32 (the #ifdef BUGFIX build's arithmetic); unobservable for every real Gen-3 base stat (closest is Shuckle at 230, well under the ~596 threshold where the two builds would diverge).",
+          "rust_target": "crates/battle/src/nature.rs",
+          "spec": "S-6",
+          "status": "rewritten"
         },
         "PokemonSubstructureSerialization": {
           "reason": "All 24 personality orders, personality-XOR-OT-id encryption, wrapping secure checksum validation, and checksum-aware substructure replacement re-implemented",
@@ -27253,6 +27391,18 @@
     },
     "src/wild_encounter.c": {
       "artifacts": {
+        "CreateWildMon": {
+          "reason": "wild_encounter.c:379. The plain (no Cute Charm) nature-then-personality-then-IV construction order modelled (build_wild_pokemon), reusing src/pokemon.c#CreateMonWithNature's RNG path. Cute Charm's gender-flip branch and CreateMonWithGenderNatureLetter are not modelled (abilities out of scope).",
+          "rust_target": "crates/battle/src/wild.rs",
+          "spec": "S-6",
+          "status": "stubbed"
+        },
+        "PickWildMonNature": {
+          "reason": "wild_encounter.c:335. Only the plain random-nature tail (Random() % NUM_NATURES, roll_nature) modelled. Safari Zone Pokéblock-weighted nature selection and the leading party mon's Synchronize check are not modelled (abilities/game-mode out of scope).",
+          "rust_target": "crates/battle/src/wild.rs",
+          "spec": "S-6",
+          "status": "stubbed"
+        },
         "gWildMonHeaders": {
           "reason": "gWildMonHeaders (per-map wild encounter tables, generated from src/data/wild_encounters.json) transcribed to a typed table in crates/assets, pinned to upstream by sampled-entry + slot-count tests; wild_encounter.c itself stays pending (runtime encounter-roll unported).",
           "rust_target": "crates/assets/src/wild_encounters.rs",
