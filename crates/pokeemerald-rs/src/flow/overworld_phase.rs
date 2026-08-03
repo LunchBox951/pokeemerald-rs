@@ -299,10 +299,9 @@ impl OverworldPhase {
     /// player, so a held frame that only turns can never satisfy the gate
     /// it is itself creating (review finding on #191) — and it feeds
     /// [`trigger_arrow_warp`] at the pre-movement position rather than at
-    /// `pending_landing`. Three consequences worth naming — an earlier
-    /// revision of this method got the first two wrong by routing arrows
-    /// through the door path, and the third is a real divergence from
-    /// upstream rather than a property shared with it:
+    /// `pending_landing`. Two consequences worth naming, both properties an
+    /// earlier revision of this method got wrong by routing arrows through
+    /// the door path:
     ///
     /// - Merely *tapping* a direction and releasing it — during the
     ///   crossing, or standing on the tile facing another way — does
@@ -312,27 +311,14 @@ impl OverworldPhase {
     ///   its direction **does** — the only way out of Brendan's house, since
     ///   the tile south of that doormat is off-map and the step itself is
     ///   blocked forever.
-    /// - **A legal step in the arrow direction preempts the warp here, where
-    ///   upstream's warp preempts the step** `(behavioral-fidelity)`.
-    ///   Upstream runs `ProcessPlayerFieldInput` *before* `PlayerStep` and
-    ///   skips the step entirely on the frame a warp fires
-    ///   (`pokeemerald/src/overworld.c:1444-1455`); this method applies the
-    ///   frame's movement *first* and polls the arrow afterwards, so if the
-    ///   tile in the held direction is walkable the player steps off the
-    ///   arrow tile and the poll finds ordinary ground. Unlike the one-frame
-    ///   deltas elsewhere in this type, that is a permanent no-warp, not a
-    ///   timing shift. Unreachable on today's data: every arrow tile this
-    ///   port can reach has its arrow direction impassable — the doormat's
-    ///   `(8, 9)` is off-map — so the step is always blocked and the poll
-    ///   always gets its turn. Naming it anyway, because a future map with a
-    ///   walkable tile in front of an arrow would make it observable.
     ///
     /// The one *explicit* gate this port adds is
     /// `!`[`PlayerState::in_transit`], which is not an extra: upstream only
     /// sets `heldDirection` at all while `tileTransitionState` is
     /// `T_TILE_CENTER` or `T_NOT_MOVING` (`:95-112`), the same "between
-    /// steps" condition. (The movement-then-poll ordering above is the
-    /// implicit one.)
+    /// steps" condition. (The movement-then-poll ordering below is the
+    /// implicit one for that poll; see *Field input before movement* for
+    /// the at-rest arrow case that runs ahead of movement.)
     ///
     /// Door before arrow, matching upstream's own order within
     /// `ProcessPlayerFieldInput` (`:155-168`); at most one warp fires per
@@ -355,6 +341,52 @@ impl OverworldPhase {
     /// animation if this map's header/events can't be found in the
     /// `'static` tables (unreachable for [`new_game::SPAWN_MAP_ID`] against
     /// a real extraction).
+    ///
+    /// # Field input before movement (issue #194)
+    ///
+    /// Upstream runs `ProcessPlayerFieldInput` *before* `PlayerStep` every
+    /// frame and skips the step entirely once it consumes the input
+    /// (`pokeemerald/src/overworld.c:1444-1455`). This method applies a
+    /// frame's movement in one call ([`advance_player_one_frame`]), so the
+    /// equivalent is narrower than swapping the whole method around:
+    /// `preempting_arrow_trigger` re-checks the *same* pre-movement
+    /// facing/position/held-direction the ordinary poll below uses, but
+    /// gated on the player being at rest **before** this frame's movement
+    /// (not after), and runs before [`advance_player_one_frame`] is even
+    /// called. If it fires, movement is skipped outright this frame — a
+    /// legal, walkable step in the arrow direction is caught before
+    /// [`PlayerState::step`] ever runs, matching upstream: the warp fires
+    /// and the step never happens, rather than the step landing first and
+    /// the poll finding ordinary ground once the walk animation drains.
+    /// [`PlayerState::tick`] still runs on a frame movement is skipped this
+    /// way (module docs on [`advance_player_one_frame`]) — a no-op here,
+    /// since the player was at rest — rather than special-cased away, so the
+    /// "the walk-animation timer always advances" contract stays
+    /// unconditional.
+    ///
+    /// This is deliberately narrow, not a shortcut around the ordering fix:
+    /// the door-shaped path's own gate inherently needs a step to have
+    /// already landed (`tookStep`, the door-warp section above) — upstream
+    /// itself only ever reaches `TryStartWarpEventScript` on the frame
+    /// *after* `PlayerStep` committed that landing, and this port compresses
+    /// "the frame after" into "the same frame the walk animation drains"
+    /// specifically because [`PlayerState::step`] commits a landing
+    /// immediately rather than over upstream's own multi-frame sprite
+    /// sequence. Moving *every* check ahead of movement, unconditionally,
+    /// would push that drain-frame check one frame later than the pinned
+    /// doormat behavior requires (`walking_onto_the_doormat_holding_south_exits_through_the_front_door`
+    /// and its siblings). So only the one case upstream would actually
+    /// pre-empt — a fresh, legal step whose direction already satisfies the
+    /// arrow gate against the tile the player already stands on — moves
+    /// ahead of [`advance_player_one_frame`]; the door path, and the arrow
+    /// path's other two cases above, keep running where they always have.
+    /// Exercised by this module's
+    /// `a_legal_step_in_the_arrow_direction_warps_instead_of_stepping` (the
+    /// pack-free ratchet: the step never happens) and its pack-gated
+    /// sibling `a_legal_step_in_the_arrow_direction_lands_the_warp` (the
+    /// warp really lands), both over a synthetic scene — no bundled real
+    /// map has a walkable arrow direction, the doormat's `(8, 9)` being
+    /// off-map, as the "Arrow warps" section notes.
     ///
     /// # NPC dialog routing (issue #161)
     ///
@@ -424,31 +456,62 @@ impl OverworldPhase {
             // facing North only *turns* the player upstream, and reading the
             // post-turn facing here would warp on that same tap frame. The
             // position is captured alongside for the same reason, though it
-            // cannot differ by the time the poll is reachable -- every frame
-            // that commits a new tile leaves the player `in_transit`, which
-            // closes the poll (review finding on #191).
+            // cannot differ by the time the ordinary (post-movement) poll
+            // below is reachable -- every frame that commits a new tile
+            // leaves the player `in_transit`, which closes that poll (review
+            // finding on #191). `pre_step_at_rest`, captured before movement
+            // too, is what lets `preempting_arrow_trigger` below tell "was
+            // already between steps when this frame started" apart from
+            // "the drain frame of a step that started earlier" -- the two
+            // cases `self.player.in_transit()` alone can't distinguish once
+            // movement has run.
             let pre_step_facing = self.player.facing();
             let pre_step_position = self.player.position();
+            let pre_step_at_rest = !self.player.in_transit();
+            let arrow_direction = direction.filter(|held| *held == pre_step_facing);
 
-            let outcome = advance_player_one_frame(
-                &mut self.player,
-                direction,
-                &runtime,
-                &self.save1.event_data,
-            );
+            // Field input before movement (issue #194, module docs' "Field
+            // input before movement" section): if this frame's pre-movement
+            // state already satisfies the arrow-warp gate, upstream would
+            // have consumed the input in `ProcessPlayerFieldInput` and never
+            // called `PlayerStep` at all -- so movement is skipped outright
+            // below, rather than run and then found to have walked the
+            // player off the arrow tile before the poll got a look.
+            let preempting_arrow_trigger = pre_step_at_rest
+                .then_some(arrow_direction)
+                .flatten()
+                .and_then(|d| {
+                    let (x, y) = pre_step_position;
+                    trigger_arrow_warp(&runtime, x, y, self.player.elevation(), d)
+                });
 
-            match outcome {
-                StepOutcome::Advanced { to, .. } => self.pending_landing = Some(to),
-                StepOutcome::Crossed { .. } => debug_assert!(
-                    false,
-                    "StepOutcome::Crossed is unreachable here: `advance_player_one_frame` \
-                     passes a `no_connections` resolver, so `PlayerState::step` never takes \
-                     its connection-crossing branch. Wiring real connections in must also \
-                     handle rebinding `map_id`/`scene` and `save1.location` here, atomically \
-                     with the position `PlayerState::step` has already committed into the \
-                     entered map's coordinate space."
-                ),
-                StepOutcome::Idle | StepOutcome::Turned(_) | StepOutcome::Blocked { .. } => {}
+            if preempting_arrow_trigger.is_none() {
+                let outcome = advance_player_one_frame(
+                    &mut self.player,
+                    direction,
+                    &runtime,
+                    &self.save1.event_data,
+                );
+                latch_landing(&mut self.pending_landing, outcome);
+            } else {
+                // The walk-animation tick still advances every frame, even
+                // one a warp preempts movement on (module docs on
+                // `advance_player_one_frame`) -- a no-op here since
+                // `pre_step_at_rest` already means nothing was draining, but
+                // called anyway so that contract stays unconditional rather
+                // than silently skipped on this one path.
+                //
+                // This path also skips the `pending_landing.take()` below
+                // (the preempting warp short-circuits it), so the "at rest
+                // => no latched landing" invariant has to hold on its own
+                // here rather than being restored by that take.
+                debug_assert!(
+                    self.pending_landing.is_none(),
+                    "at rest implies `pending_landing` is None: this preempt path never runs \
+                     the `take()` below, so a landing latched here would survive into a later \
+                     frame's door check"
+                );
+                self.player.tick();
             }
 
             // NPC interaction (module docs' "NPC dialog routing" section):
@@ -470,35 +533,40 @@ impl OverworldPhase {
             // landing is only tested once its walk animation has drained
             // (doc comment above). Door first, then arrow, as upstream
             // orders them (`:155-168`) -- `or_else` makes that at most one
-            // warp per frame.
-            let warp_trigger = if self.player.in_transit() {
-                None
-            } else {
-                // Upstream `input->heldDirection && input->dpadDirection ==
-                // playerDirection` (`field_control_avatar.c:164-168`) --
-                // polled every frame, independent of `tookStep`, and *not*
-                // the door path's gate. Reaching this arm at all is already
-                // this port's counterpart to the
-                // `T_TILE_CENTER`/`T_NOT_MOVING` test that sets
-                // `heldDirection` in the first place (`:95-112`), so the
-                // poll needs no `in_transit` test of its own. See the "Warp
-                // timing" section of this method's docs.
-                let arrow_direction = direction.filter(|held| *held == pre_step_facing);
-
-                self.pending_landing
-                    .take()
-                    .and_then(|(x, y)| trigger_door_warp(&runtime, x, y, self.player.elevation()))
-                    .or_else(|| {
-                        let (x, y) = pre_step_position;
-                        trigger_arrow_warp(
-                            &runtime,
-                            x,
-                            y,
-                            self.player.elevation(),
-                            arrow_direction?,
-                        )
-                    })
-            };
+            // warp per frame. `preempting_arrow_trigger` (computed before
+            // movement above) short-circuits this whole thing when it
+            // already fired -- the frame's one warp, decided before
+            // `PlayerState::step` ever ran.
+            let warp_trigger = preempting_arrow_trigger.or_else(|| {
+                if self.player.in_transit() {
+                    None
+                } else {
+                    // Upstream `input->heldDirection && input->dpadDirection
+                    // == playerDirection` (`field_control_avatar.c:164-168`)
+                    // -- polled every frame, independent of `tookStep`, and
+                    // *not* the door path's gate. Reaching this arm at all is
+                    // already this port's counterpart to the
+                    // `T_TILE_CENTER`/`T_NOT_MOVING` test that sets
+                    // `heldDirection` in the first place (`:95-112`), so the
+                    // poll needs no `in_transit` test of its own. See the
+                    // "Warp timing" section of this method's docs.
+                    self.pending_landing
+                        .take()
+                        .and_then(|(x, y)| {
+                            trigger_door_warp(&runtime, x, y, self.player.elevation())
+                        })
+                        .or_else(|| {
+                            let (x, y) = pre_step_position;
+                            trigger_arrow_warp(
+                                &runtime,
+                                x,
+                                y,
+                                self.player.elevation(),
+                                arrow_direction?,
+                            )
+                        })
+                }
+            });
 
             let warp_fired = matches!(warp_trigger, Some(WarpTrigger::Resolved { .. }));
             match warp_trigger {
@@ -515,7 +583,8 @@ impl OverworldPhase {
             if warp_fired {
                 if interaction_tokens.is_some() {
                     eprintln!(
-                        "npc dialog: discarding a same-frame interaction with the departed                          map's NPC -- the warp takes precedence"
+                        "npc dialog: discarding a same-frame interaction with the departed \
+                         map's NPC -- the warp takes precedence"
                     );
                 }
             } else if let Some(tokens) = interaction_tokens {
@@ -660,6 +729,10 @@ impl OverworldPhase {
         };
 
         self.player = PlayerState::new((i32::from(x), i32::from(y)), elevation, facing);
+        // The departed map's latched landing tile must not survive into the
+        // destination map, where its coordinates would name an unrelated
+        // tile in the next frame's door check.
+        self.pending_landing = None;
         self.scene = scene;
         self.map_id = map;
         // Upstream's own `InitTilesetAnimations` reset (struct docs on
@@ -736,6 +809,30 @@ fn held_direction(buttons: ButtonState) -> Option<Direction> {
         Some(Direction::East)
     } else {
         None
+    }
+}
+
+/// Latch the tile a just-applied frame of movement started walking onto, if
+/// any -- the `pending_landing` half of [`OverworldPhase::step`]'s
+/// `tookStep` bookkeeping, factored out of that method's movement branch
+/// (which is at clippy's `too_many_lines` limit) rather than inlined there.
+///
+/// See [`OverworldPhase::step`]'s "Warp timing" section for why the landing
+/// is latched at step *start* and only tested for a warp once its walk
+/// animation has drained, a later frame.
+fn latch_landing(pending_landing: &mut Option<TilePos>, outcome: StepOutcome) {
+    match outcome {
+        StepOutcome::Advanced { to, .. } => *pending_landing = Some(to),
+        StepOutcome::Crossed { .. } => debug_assert!(
+            false,
+            "StepOutcome::Crossed is unreachable here: `advance_player_one_frame` passes a \
+             `no_connections` resolver, so `PlayerState::step` never takes its \
+             connection-crossing branch. Wiring real connections in must also handle rebinding \
+             `map_id`/`scene` and `save1.location` in `OverworldPhase::step`, atomically with \
+             the position `PlayerState::step` has already committed into the entered map's \
+             coordinate space."
+        ),
+        StepOutcome::Idle | StepOutcome::Turned(_) | StepOutcome::Blocked { .. } => {}
     }
 }
 
