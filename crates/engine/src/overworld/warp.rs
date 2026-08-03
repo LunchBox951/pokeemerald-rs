@@ -45,10 +45,13 @@
 //! adds is this port's counterpart to the `tileTransitionState ==
 //! T_TILE_CENTER || T_NOT_MOVING` test that sets `heldDirection` in the first
 //! place (`:95-112`): the player must be at rest between steps, not
-//! mid-crossing. That caller also polls *after* applying the frame's
-//! movement, where upstream polls before it and skips the step when a warp
-//! fires (`overworld.c:1444-1455`) — an implicit third divergence, written up
-//! in full on `OverworldPhase::step`.
+//! mid-crossing. Timing matches upstream too: `ProcessPlayerFieldInput` runs
+//! *before* `PlayerStep` and skips the frame's step when the at-rest poll
+//! fires (`overworld.c:1444-1455`), so that caller evaluates the at-rest
+//! arrow gate ahead of movement and preempts the step; only the
+//! walked-onto-the-tile case still resolves on the post-movement drain
+//! frame. The split is written up in full in `OverworldPhase::step`'s
+//! *Field input before movement* section.
 //!
 //! The destination side of a warp lives here too: [`warp_destination_position`]
 //! (where the player lands) and [`warp_in_facing`] (which way they face on
