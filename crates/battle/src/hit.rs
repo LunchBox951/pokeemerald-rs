@@ -639,6 +639,48 @@ mod tests {
     }
 
     #[test]
+    fn a_high_crit_move_crits_on_a_draw_a_plain_move_would_not() {
+        let dex = Dex::new();
+        // Slash (move 163) is EFFECT_HIGH_CRITICAL: crit stage 1, odds 1/8
+        // (`sCriticalHitChance[1]`), where a plain move rolls 1/16. Draw 8
+        // is the separating value -- 8 % 8 == 0 crits at stage 1, while
+        // 8 % 16 != 0 does not at stage 0 -- so this pins both that
+        // `resolve_hit` feeds the move's effect into `crit_stage_for_effect`
+        // and that stage 1 really means shorter odds.
+        let attacker = mon(&dex, 1, 5, vec![MoveId(163), MoveId(33)]); // Slash, Tackle
+        let defender = mon(&dex, 7, 5, vec![MoveId(33)]); // Squirtle
+
+        // draws: accuracy 0 (hit), crit 8, damage roll 0, effect chance 0.
+        let mut rng = SequenceRng::new([0, 8, 0, 0]);
+        let outcome = resolve_hit(&dex, MoveId(163), &attacker, &defender, &mut rng).unwrap();
+        assert!(
+            matches!(
+                outcome,
+                HitOutcome::Hit {
+                    is_critical: true,
+                    ..
+                }
+            ),
+            "Slash crits on draw 8 at stage 1: {outcome:?}"
+        );
+
+        // The control: identical draws through the plain-crit pipeline stay
+        // non-critical, so the assertion above cannot pass by accident.
+        let mut rng = SequenceRng::new([0, 8, 0, 0]);
+        let outcome = resolve_hit(&dex, MoveId(33), &attacker, &defender, &mut rng).unwrap();
+        assert!(
+            matches!(
+                outcome,
+                HitOutcome::Hit {
+                    is_critical: false,
+                    ..
+                }
+            ),
+            "Tackle does not crit on draw 8 at stage 0: {outcome:?}"
+        );
+    }
+
+    #[test]
     fn zero_power_moves_are_reported_as_unsupported() {
         let dex = Dex::new();
         let attacker = mon(&dex, 1, 5, vec![MoveId(45)]); // Growl (status move)

@@ -812,6 +812,7 @@ mod tests {
     use crate::dex::Dex;
     use crate::error::BattleError;
     use crate::pokemon::{BattlePokemon, Ivs, MOVE_NONE};
+    use crate::stat_stage::StatStage;
     use assets::{MoveId, SpeciesId};
 
     struct SequenceRng {
@@ -1572,6 +1573,127 @@ mod tests {
             "a level-100 player gains no exp and sees no exp event: {events:?}"
         );
         assert_eq!(rng.draws(), 7);
+    }
+
+    #[test]
+    fn escape_uses_raw_speed_while_turn_order_uses_effective_speed() {
+        // The same +6 Speed stage must change turn order but NOT escape
+        // odds: TryRunFromBattle reads raw gBattleMons speed
+        // (battle_util.c:463-:465) while GetWhoStrikesFirst reads the
+        // stage-modified effective Speed. Bulbasaur L10 (raw 17, +6 stage ->
+        // effective 68) vs Rattata L20 (raw 40, neutral) puts the two on
+        // opposite sides of the comparison, so each leg pins its accessor.
+        let dex = Dex::new();
+        let stage_boosted = |dex: &Dex| {
+            let mut mon = max_iv_mon(dex, 1, 10, vec![MoveId(33)]); // Bulbasaur
+            mon.stages_mut().speed = StatStage::new(6).unwrap();
+            mon
+        };
+
+        // Leg 1 -- escape: raw 17 < raw 40, so the run takes the RNG branch
+        // and draws (speedVar = 17*128/40 = 54; roll 10 < 54 -> success).
+        // Were escape fed the effective 68 >= 40, it would succeed
+        // *unconditionally*, consume no escape draw, and leave the script's
+        // last value unread.
+        let enemy = max_iv_mon(&dex, 19, 20, vec![MoveId(33)]); // Rattata L20
+        let mut rng = SequenceRng::new([0, 0, 0, 10]);
+        let mut battle = Battle::new(dex.clone(), stage_boosted(&dex), enemy, &mut rng).unwrap();
+        let events = battle.take_turn(PlayerAction::Run, &mut rng).unwrap();
+        assert_eq!(
+            events.last(),
+            Some(&BattleEvent::Ended(BattleOutcome::PlayerRan))
+        );
+        assert_eq!(
+            rng.draws(),
+            4,
+            "1 (battle start) + 2 (turn number, pick) + 1 (the escape roll \
+             a raw-speed comparison must make)"
+        );
+
+        // Leg 2 -- turn order: effective 68 > 40, so the boosted Bulbasaur
+        // moves first despite its raw 17 < 40. Were turn order fed raw
+        // speeds, the enemy's hit would come first.
+        //
+        // Damage pins, hand computed: Bulbasaur L10 Tackle (atk 17) into
+        // Rattata L20 (def 25): 17*35 = 595, *(2*10/5+2 = 6) = 3570, /25 =
+        // 142, /50 = 2, +2 = 4 (no STAB, neutral). Rattata L20 Tackle (atk
+        // 33) into Bulbasaur L10 (def 17): 33*35 = 1155, *(2*20/5+2 = 10) =
+        // 11550, /17 = 679, /50 = 13, +2 = 15, STAB -> 22. Both survive
+        // (48-hp Rattata, 32-hp Bulbasaur).
+        let enemy = max_iv_mon(&dex, 19, 20, vec![MoveId(33)]);
+        let mut rng = SequenceRng::new([0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0]);
+        let mut battle = Battle::new(dex.clone(), stage_boosted(&dex), enemy, &mut rng).unwrap();
+        let events = battle
+            .take_turn(PlayerAction::UseMove(0), &mut rng)
+            .unwrap();
+        assert_eq!(
+            events,
+            vec![
+                BattleEvent::Hit {
+                    by_player: true,
+                    move_id: MoveId(33),
+                    damage: 4,
+                    is_critical: false,
+                },
+                BattleEvent::Hit {
+                    by_player: false,
+                    move_id: MoveId(33),
+                    damage: 22,
+                    is_critical: false,
+                },
+            ],
+            "the +6-stage mon moves first only if turn order reads \
+             effective speed"
+        );
+        assert_eq!(rng.draws(), 11);
+    }
+
+    #[test]
+    fn each_failed_run_raises_the_next_attempts_odds_through_run_tries() {
+        // The +30-per-previous-attempt term (TryRunFromBattle's
+        // `gBattleStruct->runTries * 30`): one roll value fails on turn 1
+        // and succeeds on turn 2 *only* because the counter fed the formula.
+        // Rattata L5 (speed 13) vs Charmander L10 (speed 21): speedVar =
+        // 13*128/21 = 79 on the first try, 109 on the second. Roll 90 sits
+        // between them: 90 >= 79 fails, 90 < 109 escapes. An engine that
+        // tracked run_tries but fed the formula 0 would fail turn 2 as well
+        // and panic this script by drawing for the enemy's move.
+        let dex = Dex::new();
+        let player = max_iv_mon(&dex, 19, 5, vec![MoveId(33)]);
+        let enemy = max_iv_mon(&dex, 4, 10, vec![MoveId(33)]);
+
+        let mut rng = SequenceRng::new([
+            0, // battle start
+            0, 0, 90, // turn 1: turn number, pick, escape roll -> fail
+            0, 1, 0, 0, // ...so the enemy acts: its 4-draw hit (9 damage)
+            0, 0, 90, // turn 2: same roll now beats 79+30 -> escape
+        ]);
+        let mut battle = Battle::new(dex, player, enemy, &mut rng).unwrap();
+
+        let turn1 = battle.take_turn(PlayerAction::Run, &mut rng).unwrap();
+        assert_eq!(
+            turn1[0],
+            BattleEvent::RunAttempt {
+                by_player: true,
+                success: false,
+            }
+        );
+        assert!(battle.outcome().is_none());
+
+        let turn2 = battle.take_turn(PlayerAction::Run, &mut rng).unwrap();
+        assert_eq!(
+            turn2,
+            vec![
+                BattleEvent::RunAttempt {
+                    by_player: true,
+                    success: true,
+                },
+                BattleEvent::Ended(BattleOutcome::PlayerRan),
+            ],
+            "the identical roll escapes only via the run_tries bonus"
+        );
+        assert_eq!(battle.run_tries(), 2);
+        assert_eq!(rng.draws(), 11);
     }
 
     #[test]

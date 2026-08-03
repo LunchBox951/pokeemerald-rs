@@ -197,6 +197,29 @@ mod tests {
     }
 
     #[test]
+    fn every_crit_table_entry_is_pinned_at_its_own_boundary() {
+        // sCriticalHitChance = [16, 8, 4, 3, 2]: each middle stage gets a
+        // draw that crits at that stage but NOT at the stage below, so no
+        // entry can silently degrade to a neighbour's odds. (Stages 2 and 3
+        // need Focus Energy / held items and are unreachable through
+        // `crit_stage_for_effect` this slice, but the transcribed table is
+        // upstream data and is pinned as such.)
+        //
+        // stage 1 (1/8): 8 % 8 == 0 crits; 8 % 16 != 0 does not at stage 0.
+        assert!(crit_roll(1, &mut FixedRng(8)));
+        assert!(!crit_roll(0, &mut FixedRng(8)));
+        // stage 2 (1/4): 4 % 4 == 0 crits; 4 % 8 != 0 does not at stage 1.
+        assert!(crit_roll(2, &mut FixedRng(4)));
+        assert!(!crit_roll(1, &mut FixedRng(4)));
+        // stage 3 (1/3): 3 % 3 == 0 crits; 3 % 4 != 0 does not at stage 2 --
+        // and 4 % 3 != 0 misses at stage 3 where 4 % 4 == 0 crits at stage
+        // 2, so 3 and 4 cannot be swapped either.
+        assert!(crit_roll(3, &mut FixedRng(3)));
+        assert!(!crit_roll(2, &mut FixedRng(3)));
+        assert!(!crit_roll(3, &mut FixedRng(4)));
+    }
+
+    #[test]
     fn crit_roll_clamps_stages_above_the_table() {
         // Stage 4 and stage 99 must behave identically (both clamp to index 4).
         for draw in [0u16, 1, 2, 3] {
