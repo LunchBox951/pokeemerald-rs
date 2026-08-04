@@ -32,6 +32,10 @@
 //! - [`player`] — [`player::PlayerState`], the tile-position/facing/
 //!   sub-tile-step-progress state machine that ties the above together into
 //!   one input-poll-at-a-time `step()` call.
+//! - [`wild_encounter`] — the per-step wild-encounter roll (issue #169):
+//!   upstream's encounter-rate/slot/level draws against the extracted
+//!   `gWildMonHeaders` tables, plus the post-transition immunity-step
+//!   bookkeeping around them.
 //!
 //! # Scope
 //!
@@ -60,6 +64,7 @@ pub mod metatile_behavior;
 pub mod object_event;
 pub mod player;
 pub mod warp;
+pub mod wild_encounter;
 
 pub use collision::{elevation_mismatch, Collision, ELEVATION_MULTI_LEVEL, ELEVATION_TRANSITION};
 pub use direction::Direction;
@@ -72,4 +77,7 @@ pub use player::{PlayerState, StepOutcome, TilePos, WALK_FRAMES_PER_TILE};
 pub use warp::{
     resolve_warp_event, trigger_arrow_warp, trigger_door_warp, warp_destination_position,
     warp_in_facing, WarpTrigger,
+};
+pub use wild_encounter::{
+    standard_wild_encounter, WildEncounter, WildEncounterState, WILD_ENCOUNTER_IMMUNITY_STEPS,
 };
