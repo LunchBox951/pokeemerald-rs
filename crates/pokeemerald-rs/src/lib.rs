@@ -41,9 +41,9 @@ pub use app::App;
 /// runtime consumer of their own in this crate (currently just
 /// `xtask::extract::voicegroups`, S-4 issue #182) -- see that module's own
 /// docs for why these live here rather than in `crates/xtask`/`crates/assets`
-/// directly: this is the one crate whose `#[ignore]`d real-pack tests CI
-/// actually runs (`.github/workflows/ci.yml`'s "Run ignored real-pack
-/// assertions" step is `cargo test -p pokeemerald-rs -- --ignored`), and it
-/// already depends on `assets` to decode the pack's typed entries.
+/// directly: when they were placed, this was the one crate whose `#[ignore]`d
+/// real-pack tests CI ran (`.github/workflows/ci.yml` now gates the
+/// `pokeemerald-rs`, `assets`, and `xtask` ignored lanes), and it already
+/// depends on `assets` to decode the pack's typed entries.
 #[cfg(test)]
 mod voicegroup_pack_tests;

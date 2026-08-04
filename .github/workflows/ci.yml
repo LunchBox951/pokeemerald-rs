@@ -127,6 +127,10 @@ jobs:
       - name: Run ignored real-pack assertions (assets)
         if: runner.os == 'Linux'
         run: cargo test -p assets -- --ignored
+      # `extract_dispatch_succeeds_with_local_checkout` rewrites the shared
+      # assets-pack/ output (deterministically — extraction is byte-identical
+      # across runs), so this step must stay between "Extract real asset pack"
+      # and the smoke step that reads the pack.
       - name: Run ignored real-checkout assertions (xtask)
         if: runner.os == 'Linux'
         run: cargo test -p xtask -- --ignored
