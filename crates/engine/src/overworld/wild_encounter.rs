@@ -33,7 +33,7 @@
 //! 7. `DoMassOutbreakEncounterTest()` (`:615`, `:481-491`) — no draw on a
 //!    fresh save either: its `Random() % 100` sits behind
 //!    `outbreakPokemonSpecies != SPECIES_NONE`, and a new game has none.
-//! 8. `TryGenerateWildMon(..., WILD_AREA_LAND, ...)` (`:622`, `:422-455`) —
+//! 8. `TryGenerateWildMon(..., WILD_AREA_LAND, ...)` (`:622`, `:422-456`) —
 //!    **two draws**: `ChooseWildMonIndex_Land` (`:182-210`) then
 //!    `ChooseWildMonLevel` (`:268-303`).
 //!
@@ -128,7 +128,7 @@ pub const LAND_SLOT_TOTAL: u16 = {
 pub const WILD_ENCOUNTER_IMMUNITY_STEPS: u8 = 4;
 
 /// A rolled land encounter: everything `TryGenerateWildMon`
-/// (`wild_encounter.c:422-455`) decides before handing off to `CreateWildMon`.
+/// (`wild_encounter.c:422-456`) decides before handing off to `CreateWildMon`.
 ///
 /// Upstream writes the result straight into `gEnemyParty[0]`; here it is a
 /// value the caller builds a battle mon from, so the roll stays free of
@@ -237,7 +237,7 @@ pub fn allow_wild_check_on_new_metatile(rng: &mut impl RandomSource) -> bool {
     rng.next_u16() % 100 < 60
 }
 
-/// `TryGenerateWildMon(..., WILD_AREA_LAND, ...)` (`wild_encounter.c:422-455`)
+/// `TryGenerateWildMon(..., WILD_AREA_LAND, ...)` (`wild_encounter.c:422-456`)
 /// down to its slot and level picks: two draws, slot then level.
 ///
 /// The ability-influenced slot pick before them and the repel / Keen Eye

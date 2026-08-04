@@ -214,9 +214,14 @@ pub(super) const fn field_input_consumed(
 /// [`crate::flow::overworld_phase::OverworldPhase::begin_wild_battle`] logs
 /// the encounter it cannot fight.
 ///
-/// A *fainted* lead is the state upstream cannot be in: losing routes through
-/// `CB2_WhiteOut`, which heals the party before the player ever takes another
-/// step (module docs). Rolling here would draw a wild mon's five
+/// A *fainted* lead here means a fainted-**only** party, a state upstream
+/// cannot be in: losing routes through `CB2_WhiteOut`, which heals the party
+/// before the player ever takes another step (module docs). (Upstream's
+/// `gPlayerParty[0]` can be fainted with a *live* party behind it and rolls
+/// normally — `IsWildLevelAllowedByRepel`, `wild_encounter.c:878-887`, skips
+/// zero-HP mons rather than bailing — but this port models a one-mon party,
+/// so lead-fainted and party-fainted coincide; a future multi-slot party
+/// slice must revisit this guard.) Rolling here would draw a wild mon's five
 /// nature/personality/IV values plus `Battle::new`'s `gRandomTurnNumber` on
 /// every grass step, only to reject the battle afterwards — repeatable draws
 /// with no upstream counterpart. So the roll is refused before it draws
