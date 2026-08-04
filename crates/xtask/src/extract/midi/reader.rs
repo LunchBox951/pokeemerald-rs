@@ -87,13 +87,13 @@ impl<'a> MidiReader<'a> {
     /// gone and upstream's tolerance is pinned by test
     /// (`over_long_vlq_wraps_like_upstreams_shift`).
     ///
-    /// This fixes the module's fail-open/fail-closed line: the *reader*
-    /// mirrors upstream's tolerance, and the tick arithmetic downstream
-    /// ([`super::translate::convert_ticks`], which evaluates in `u64` and
-    /// returns [`MidiError::TickOverflow`]) is where an out-of-range tick
-    /// becomes a real error instead of a silent wrap. A hostile file can
-    /// make this reader return a nonsense `u32`; it cannot make the
-    /// compiler panic, and it cannot make it emit silently-wrapped timing.
+    /// The *reader* mirrors upstream's tolerance, including timing that has
+    /// already wrapped before downstream code sees it: for example,
+    /// `90 80 80 80 00` decodes to zero and therefore preserves the prior
+    /// absolute tick. [`super::translate::convert_ticks`] only prevents a
+    /// second silent wrap while scaling the decoded `u32`; it cannot recover
+    /// high bits discarded here. The end-to-end compiler behavior is pinned
+    /// by `an_over_long_zero_delta_preserves_the_prior_absolute_tick`.
     ///
     /// # Errors
     ///

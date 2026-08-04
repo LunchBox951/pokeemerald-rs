@@ -60,7 +60,9 @@ pub(super) fn centre_relative(raw: u8) -> i8 {
 
 /// `24 * clocks_per_beat * raw / division` (`midi.cpp:635`/`:641`'s
 /// `ConvertTimes`), with `clocks_per_beat` pinned to `1` by
-/// [`super::compile::compile`]'s own guard.
+/// [`super::compile::compile`]'s own guard. `division` is nonzero because
+/// that entry point rejects a zero header division before calling this
+/// private helper.
 ///
 /// Evaluated in `u64`, unlike upstream's `std::uint32_t` expression: a
 /// legal 4-byte VLQ reaches `0x0FFF_FFFF`, and `24 * 0x0FFF_FFFF` is
@@ -84,9 +86,11 @@ pub(super) fn convert_ticks(raw: u32, division: u16) -> Result<u32, MidiError> {
 }
 
 /// `round(60_000_000.0f32 / microseconds)` (`agb.cpp:506`) — an `f32`
-/// division and round, not `f64`; see [`super::compile`]'s module docs on
-/// why this compiler stores this real BPM value directly rather than the
-/// further `*tbs/2`-scaled wire byte the compiled ROM actually carries.
+/// division and round, not `f64`. `microseconds` is nonzero because
+/// [`super::parse::parse_track`] rejects zero-tempo payloads before this
+/// private helper is reached. See [`super::compile`]'s module docs on why
+/// this compiler stores this real BPM value directly rather than the further
+/// `*tbs/2`-scaled wire byte the compiled ROM actually carries.
 pub(super) fn bpm_from_microseconds(microseconds: u32) -> u16 {
     #[allow(clippy::cast_precision_loss)]
     let microseconds = microseconds as f32;

@@ -96,6 +96,18 @@ fn tempo_meta_event_reads_the_24_bit_microseconds_value() {
 }
 
 #[test]
+fn zero_tempo_is_rejected() {
+    let err = parse_track(&track(vec![0x00, 0xFF, 0x51, 0x03, 0x00, 0x00, 0x00])).unwrap_err();
+    assert_eq!(err, super::super::error::MidiError::ZeroTempo);
+}
+
+#[test]
+fn channel_voice_data_bytes_must_be_seven_bit() {
+    let err = parse_track(&track(vec![0x00, 0x90, 60, 128])).unwrap_err();
+    assert_eq!(err, super::super::error::MidiError::InvalidDataByte(128));
+}
+
+#[test]
 fn all_four_loop_marker_texts_are_recognized() {
     let mut body = Vec::new();
     for (delta, text) in [(0u32, "["), (1, "]["), (1, "]"), (1, ":")] {

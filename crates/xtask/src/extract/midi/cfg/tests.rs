@@ -33,7 +33,7 @@ fn priority_flag_is_parsed() {
 
 #[test]
 fn leading_zeros_parse_as_decimal_not_octal() {
-    // `-V090` must be 90, matching `std::stoi`'s base-10 default (mid2agb
+    // `-V056` must be 56, not octal 46, matching `std::stoi`'s base-10 default (mid2agb
     // never passes an explicit base, so no `0`-prefix octal interpretation
     // applies) -- see the module docs.
     let entry = parse_entry_for(SAMPLE_CFG, "mus_b_dome_lobby.mid").unwrap();

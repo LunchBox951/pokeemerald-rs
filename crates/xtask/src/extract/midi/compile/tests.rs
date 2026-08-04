@@ -250,7 +250,7 @@ fn xcmd_pseudo_echo_volume_round_trips_and_unknown_subcommands_are_silent() {
     body.extend(vlq(0));
     body.extend([0xB0, 0x1D, 10]); // trigger with value 10
     body.extend(vlq(0));
-    body.extend([0xB0, 0x1E, 200]); // an unrecognized sub-command
+    body.extend([0xB0, 0x1E, 10]); // an unrecognized sub-command
     body.extend(vlq(0));
     body.extend([0xB0, 0x1F, 5]); // triggering it is a silent no-op
     body.extend(vlq(4));
@@ -469,5 +469,116 @@ fn a_tick_that_overflows_once_scaled_is_an_error_not_a_panic() {
     assert_eq!(
         compile(&midi, &cfg()).unwrap_err(),
         MidiError::TickOverflow(0x0FFF_FFFF)
+    );
+}
+
+#[test]
+fn malformed_tempo_and_velocity_are_errors_at_the_compile_boundary() {
+    let zero_tempo = single_track_midi(
+        24,
+        vec![
+            0x00, 0xFF, 0x51, 0x03, 0x00, 0x00, 0x00, // zero microseconds/qn
+            0x00, 0x90, 60, 100, // note-on
+            0x01, 0x80, 60, 0, // note-off
+        ],
+    );
+    assert_eq!(
+        compile(&zero_tempo, &cfg()).unwrap_err(),
+        MidiError::ZeroTempo
+    );
+
+    let invalid_velocity = single_track_midi(
+        24,
+        vec![
+            0x00, 0x90, 60, 128, // velocity has its status bit set
+            0x01, 0x80, 60, 0,
+        ],
+    );
+    assert_eq!(
+        compile(&invalid_velocity, &cfg()).unwrap_err(),
+        MidiError::InvalidDataByte(128)
+    );
+}
+
+#[test]
+fn channel_events_are_scaled_to_the_output_timebase() {
+    let mut body = Vec::new();
+    body.extend(vlq(0));
+    body.extend([0x90, 60, 100]); // note at output tick 0
+    body.extend(vlq(12));
+    body.extend([0xC0, 3]); // program change at output tick 6
+    body.extend(vlq(12));
+    body.extend([0xB0, 1, 7]); // modulation at output tick 12
+    body.extend(vlq(12));
+    body.extend([0xE0, 0, 80]); // bend +16 at output tick 18
+    body.extend(vlq(12));
+    body.extend([0x80, 60, 0]); // note-off/final boundary at output tick 24
+    let midi = single_track_midi(48, body);
+
+    let compiled = compile(&midi, &cfg()).unwrap();
+    assert_eq!(
+        compiled.tracks[0],
+        vec![
+            SongEvent::Volume(127),
+            SongEvent::KeyShift(0),
+            SongEvent::Note {
+                key: 60,
+                velocity: 100,
+                gate: 24,
+            },
+            SongEvent::Wait(6),
+            SongEvent::Voice(3),
+            SongEvent::Wait(6),
+            SongEvent::Modulation(7),
+            SongEvent::Wait(6),
+            SongEvent::Bend(16),
+            SongEvent::Wait(6),
+            SongEvent::Fine,
+        ]
+    );
+}
+
+#[test]
+fn an_over_long_zero_delta_preserves_the_prior_absolute_tick() {
+    use crate::extract::midi::parse::{parse_track, RawEvent};
+
+    let mut body = Vec::new();
+    body.extend(vlq(1));
+    body.extend([0x90, 60, 100]);
+    body.extend([0x90, 0x80, 0x80, 0x80, 0x00]);
+    body.extend([0xC0, 5]);
+    body.extend(vlq(24));
+    body.extend([0x80, 60, 0]);
+
+    let mut parse_body = body.clone();
+    parse_body.extend([0x00, 0xFF, 0x2F, 0x00]);
+    let parsed = parse_track(&parse_body).unwrap();
+    assert_eq!(
+        parsed.events[1],
+        (
+            1,
+            RawEvent::ProgramChange {
+                channel: 0,
+                program: 5,
+            },
+        )
+    );
+
+    let compiled = compile(&single_track_midi(24, body), &cfg()).unwrap();
+    assert_eq!(
+        compiled.tracks[0],
+        vec![
+            SongEvent::Volume(127),
+            SongEvent::Wait(1),
+            SongEvent::KeyShift(0),
+            SongEvent::Voice(5),
+            SongEvent::Note {
+                key: 60,
+                velocity: 100,
+                gate: 24,
+            },
+            SongEvent::Wait(24),
+            SongEvent::Fine,
+        ]
     );
 }

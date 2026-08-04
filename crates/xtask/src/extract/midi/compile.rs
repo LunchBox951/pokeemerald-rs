@@ -358,10 +358,12 @@ fn compile_track(
     for &(time, event) in channel_events {
         match event {
             RawEvent::ProgramChange { program, .. } => {
-                items.push((time, ItemKind::ProgramChange(program)));
+                let converted = convert_ticks(time, division)?;
+                items.push((converted, ItemKind::ProgramChange(program)));
             }
             RawEvent::PitchBend { msb, .. } => {
-                items.push((time, ItemKind::PitchBend(centre_relative(msb))));
+                let converted = convert_ticks(time, division)?;
+                items.push((converted, ItemKind::PitchBend(centre_relative(msb))));
             }
             RawEvent::Controller {
                 controller, value, ..
@@ -369,7 +371,8 @@ fn compile_track(
                 if let Some(song_event) =
                     translate_controller(controller, value, master_volume, &mut extended_command)?
                 {
-                    items.push((time, ItemKind::Command(song_event)));
+                    let converted = convert_ticks(time, division)?;
+                    items.push((converted, ItemKind::Command(song_event)));
                 }
             }
             _ => {}

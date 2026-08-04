@@ -158,6 +158,16 @@ fn marker_event(text: [u8; 2], len: usize) -> Option<RawEvent> {
     }
 }
 
+/// Read one 7-bit channel-voice operand, rejecting bytes whose status bit
+/// is set instead of allowing malformed input to reach translation tables.
+fn read_data_byte(r: &mut MidiReader<'_>) -> Result<u8, MidiError> {
+    let byte = r.u8()?;
+    if byte > 0x7F {
+        return Err(MidiError::InvalidDataByte(byte));
+    }
+    Ok(byte)
+}
+
 /// Read one channel-voice message's operand bytes (the status byte itself
 /// is already consumed/resolved by the caller) and push whatever
 /// [`RawEvent`] it produces, if any (`0xA0` poly aftertouch and `0xD0`
@@ -172,13 +182,13 @@ fn read_channel_voice_event(
     let channel = status & 0x0F;
     match status & 0xF0 {
         0x80 => {
-            let key = r.u8()?;
-            let _velocity = r.u8()?;
+            let key = read_data_byte(r)?;
+            let _velocity = read_data_byte(r)?;
             events.push((abs_time, RawEvent::NoteOff { channel, key }));
         }
         0x90 => {
-            let key = r.u8()?;
-            let velocity = r.u8()?;
+            let key = read_data_byte(r)?;
+            let velocity = read_data_byte(r)?;
             let event = if velocity == 0 {
                 RawEvent::NoteOff { channel, key }
             } else {
@@ -191,12 +201,12 @@ fn read_channel_voice_event(
             events.push((abs_time, event));
         }
         0xA0 => {
-            r.u8()?;
-            r.u8()?;
+            read_data_byte(r)?;
+            read_data_byte(r)?;
         }
         0xB0 => {
-            let controller = r.u8()?;
-            let value = r.u8()?;
+            let controller = read_data_byte(r)?;
+            let value = read_data_byte(r)?;
             events.push((
                 abs_time,
                 RawEvent::Controller {
@@ -207,15 +217,15 @@ fn read_channel_voice_event(
             ));
         }
         0xC0 => {
-            let program = r.u8()?;
+            let program = read_data_byte(r)?;
             events.push((abs_time, RawEvent::ProgramChange { channel, program }));
         }
         0xD0 => {
-            r.u8()?;
+            read_data_byte(r)?;
         }
         0xE0 => {
-            let _lsb = r.u8()?;
-            let msb = r.u8()?;
+            let _lsb = read_data_byte(r)?;
+            let msb = read_data_byte(r)?;
             events.push((abs_time, RawEvent::PitchBend { channel, msb }));
         }
         _ => unreachable!("0x80..0xF0 masked by 0xF0 always lands on a handled nibble"),
@@ -259,6 +269,9 @@ fn read_meta_event(
             return Err(MidiError::BadTempoLength(len));
         }
         let microseconds = r.u24_be()?;
+        if microseconds == 0 {
+            return Err(MidiError::ZeroTempo);
+        }
         events.push((abs_time, RawEvent::Tempo(microseconds)));
         return Ok(MetaOutcome::Continue);
     }

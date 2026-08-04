@@ -51,10 +51,17 @@ pub(crate) enum MidiError {
     /// (unreachable in practice: every nibble in that range is a defined
     /// message type).
     InvalidStatusByte(u8),
+    /// A channel-voice operand had its status bit set. Standard MIDI data
+    /// bytes are restricted to 7 bits (`0..=127`); carries the offending
+    /// byte.
+    InvalidDataByte(u8),
     /// A tempo (`0xFF 0x51`) meta event's declared length was not the fixed
     /// `3` bytes every tempo event carries
     /// (`tools/mid2agb/midi.cpp:309-310`).
     BadTempoLength(u32),
+    /// A tempo (`0xFF 0x51`) meta event declared zero microseconds per
+    /// quarter note, which would make the BPM conversion divide by zero.
+    ZeroTempo,
     /// A `NoteOn` (velocity != 0) on this channel had no later matching
     /// `NoteOff`/`NoteOn`-velocity-`0` for the same key before the track's
     /// `EndOfTrack` — `tools/mid2agb/midi.cpp:425-426`'s own
@@ -129,7 +136,9 @@ impl fmt::Display for MidiError {
             ),
             Self::BadTrackMagic => write!(f, "expected an MTrk chunk"),
             Self::InvalidStatusByte(byte) => write!(f, "invalid MIDI status byte 0x{byte:02X}"),
+            Self::InvalidDataByte(byte) => write!(f, "invalid MIDI data byte 0x{byte:02X}"),
             Self::BadTempoLength(len) => write!(f, "tempo meta event length {len} is not 3"),
+            Self::ZeroTempo => write!(f, "tempo meta event is 0 microseconds per quarter note"),
             Self::UnterminatedNote { channel, key } => write!(
                 f,
                 "note {key} on channel {channel} has no matching note-off before end of track"
