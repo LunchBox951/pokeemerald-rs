@@ -77,9 +77,12 @@
 //! shape: it went to `2` when NPC sprite-sheet and palette entries were
 //! added (issue #161), precisely so a pack missing new entry content is
 //! rejected at load rather than failing later with a confusing per-asset
-//! error. It went to `3` when the first audio entries (`audio/sample/*`,
-//! `xtask::extract::audio_samples`) were written (issue #183, `#115` child
-//! 4), and to `4` when the `audio/voicegroup/*` entries those samples back
+//! error. It went to `3` when issue #183 (`#115` child 4) first wrote
+//! [`sample::Sample`] entries (`audio/sample/direct-sound/*`,
+//! `audio/sample/programmable-wave/*` -- see
+//! `xtask::extract::audio_samples`'s module docs for the id scheme and
+//! exactly which samples are extracted), and to `4` when the
+//! `audio/voicegroup/*` entries those samples back
 //! (`xtask::extract::voicegroups`) followed (issue #182, `#115` child 3);
 //! any later change to the shapes here bumps it again.
 //!

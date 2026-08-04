@@ -830,3 +830,155 @@ fn real_pack_loads_and_every_typed_accessor_works() {
         assert_eq!(palette.color_count, 16);
     }
 }
+
+/// The `DirectSound` sample basenames `xtask::extract::audio_samples`
+/// writes for `mus_title`'s voicegroup, as
+/// `audio/sample/direct-sound/<basename>` pack ids. Spelled out here rather
+/// than imported: `crates/assets` deliberately does not depend on
+/// `crates/xtask`, and that independence is exactly what makes the test
+/// below a real producer/consumer pin rather than a self-consistency check.
+const REAL_PACK_DIRECT_SOUND_SAMPLES: [&str; 32] = [
+    "sc88pro_flute",
+    "sc88pro_french_horn_60",
+    "sc88pro_french_horn_72",
+    "sc88pro_glockenspiel",
+    "sc88pro_harp",
+    "sc88pro_mute_high_conga",
+    "sc88pro_open_low_conga",
+    "sc88pro_orchestra_cymbal_crash",
+    "sc88pro_orchestra_snare",
+    "sc88pro_piano1_48",
+    "sc88pro_piano1_60",
+    "sc88pro_piano1_72",
+    "sc88pro_piano1_84",
+    "sc88pro_rnd_kick",
+    "sc88pro_rnd_snare",
+    "sc88pro_string_ensemble_60",
+    "sc88pro_string_ensemble_72",
+    "sc88pro_string_ensemble_84",
+    "sc88pro_tambourine",
+    "sc88pro_timpani",
+    "sc88pro_tr909_hand_clap",
+    "sc88pro_trumpet_60",
+    "sc88pro_trumpet_72",
+    "sc88pro_trumpet_84",
+    "sc88pro_tuba_39",
+    "sc88pro_tuba_51",
+    "sc88pro_tubular_bell",
+    "trinity_cymbal_crash",
+    "unknown_bell",
+    "unknown_close_hihat",
+    "unknown_open_hihat",
+    "unused_sc55_tom",
+];
+
+/// The programmable-wave table numbers the same pipeline writes, as
+/// `audio/sample/programmable-wave/<NN>` pack ids.
+const REAL_PACK_PROGRAMMABLE_WAVES: [u32; 4] = [1, 2, 5, 6];
+
+/// The producer/consumer round-trip pin for `audio/sample/*`.
+///
+/// The extractor encodes these payloads with its *own* copy of this
+/// schema's wire format (`xtask::extract::audio_samples`'s
+/// `encode_direct_sound`/`encode_programmable_wave`, deliberately duplicated
+/// rather than shared — see that module's docs), so nothing short of
+/// decoding a real pack proves the two sides still agree: each side's unit
+/// tests only pin its own understanding of the layout, and this is what
+/// catches them drifting apart.
+///
+/// Beyond "all 36 ids present and structurally decodable", two entries are
+/// pinned to concrete values, so a silent change in the *derivation* — not
+/// just in the framing — fails here too:
+///
+/// - `sc88pro_flute` — `base_frequency` `3_425_024` is that sample's `agbp`
+///   override verbatim, deliberately *not* `sample_rate * 1024`
+///   (3344 * 1024 = `3_424_256`); `loop_start` 1312 is its `smpl` loop
+///   start; `data.len()` 1874 is its `agbl` override, one less than the
+///   naive loop end (inclusive `smpl` end 1874, plus one, = 1875). All read
+///   straight off `sound/direct_sound_samples/sc88pro_flute.wav`'s own
+///   chunks and match `tools/wav2agb`'s `converter.cpp:392-402` arithmetic.
+/// - `programmable-wave/01` — the 16 bytes of
+///   `sound/programmable_wave_samples/01.pcm`, copied through unchanged.
+///
+/// Needs a local pack: run `cargo xtask extract` first, then
+/// `cargo test -p assets -- --ignored` (CI's Ubuntu `native` leg does
+/// exactly this).
+#[test]
+#[ignore = "needs a local pack: run `cargo xtask extract` first"]
+fn real_pack_audio_samples_decode_through_the_sample_schema() {
+    use crate::audio::Sample;
+
+    let pack = AssetPack::load_default().expect("run `cargo xtask extract` first");
+
+    let mut decoded = 0usize;
+    for name in REAL_PACK_DIRECT_SOUND_SAMPLES {
+        let id = format!("audio/sample/direct-sound/{name}");
+        let bytes = pack
+            .raw(&id)
+            .unwrap_or_else(|e| panic!("`{id}` should be in the pack: {e}"));
+        let Sample::DirectSound(sample) =
+            Sample::decode(bytes).unwrap_or_else(|e| panic!("`{id}` should decode: {e}"))
+        else {
+            panic!("`{id}` should decode as a DirectSound sample, not a wave table");
+        };
+        assert!(!sample.data().is_empty(), "`{id}` should carry PCM");
+        assert_ne!(sample.base_frequency, 0, "`{id}` should carry a pitch word");
+        if let Some(start) = sample.loop_start {
+            let start = usize::try_from(start).expect("a real loop start fits a usize");
+            assert!(
+                start < sample.data().len(),
+                "`{id}`'s loop start {start} is past its {} samples",
+                sample.data().len()
+            );
+        }
+        decoded += 1;
+    }
+
+    for n in REAL_PACK_PROGRAMMABLE_WAVES {
+        let id = format!("audio/sample/programmable-wave/{n:02}");
+        let bytes = pack
+            .raw(&id)
+            .unwrap_or_else(|e| panic!("`{id}` should be in the pack: {e}"));
+        let Sample::ProgrammableWave(_) =
+            Sample::decode(bytes).unwrap_or_else(|e| panic!("`{id}` should decode: {e}"))
+        else {
+            panic!("`{id}` should decode as a programmable-wave table, not PCM");
+        };
+        decoded += 1;
+    }
+    // Both loops iterate fixed const arrays and count unconditionally, so
+    // this pins the expected-id lists' lengths (32 + 4), not decoding --
+    // the decode coverage is the loop bodies above.
+    assert_eq!(
+        decoded, 36,
+        "the expected-id lists must cover all 36 samples"
+    );
+
+    let flute_bytes = pack
+        .raw("audio/sample/direct-sound/sc88pro_flute")
+        .expect("the flute sample should be in the pack");
+    let Sample::DirectSound(flute) =
+        Sample::decode(flute_bytes).expect("the flute sample should decode")
+    else {
+        panic!("the flute sample should decode as a DirectSound sample");
+    };
+    assert_eq!(flute.base_frequency, 3_425_024);
+    assert_eq!(flute.loop_start, Some(1312));
+    assert_eq!(flute.data().len(), 1874);
+
+    let wave_bytes = pack
+        .raw("audio/sample/programmable-wave/01")
+        .expect("programmable-wave 01 should be in the pack");
+    let Sample::ProgrammableWave(wave) =
+        Sample::decode(wave_bytes).expect("programmable-wave 01 should decode")
+    else {
+        panic!("programmable-wave 01 should decode as a wave table");
+    };
+    assert_eq!(
+        wave.table,
+        [
+            0x01, 0x25, 0x8a, 0xde, 0xfe, 0xc9, 0x63, 0x10, 0x01, 0x25, 0x8a, 0xde, 0xfe, 0xc9,
+            0x63, 0x10
+        ]
+    );
+}

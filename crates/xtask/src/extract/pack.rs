@@ -76,11 +76,14 @@ pub const MAGIC: [u8; 8] = *b"PKMRPACK";
 /// `crates/assets`'s reader accepts).
 ///
 /// History: `1` was the original layout; `2` added the NPC sprite-sheet and
-/// palette entries the overworld renderer requires (issue #161); `3` added
-/// the first audio entries (`audio/sample/*`, issue #183, `#115` child 4);
-/// `4` added the `audio/voicegroup/*` entries those samples back (issue
-/// #182, `#115` child 3) — see `crates/assets/src/audio.rs`'s module docs,
-/// "Versioning".
+/// palette entries issue #161 needs; `3` added the `audio/sample/*` entries
+/// issue #183 needs (S-4, `#115` child 4) — see `crate::extract::audio_samples`'s
+/// module docs; `4` added the `audio/voicegroup/*` entries those samples
+/// back (issue #182, `#115` child 3) — see `crates/assets/src/audio.rs`'s
+/// module docs, "Versioning". Each bump is a pure content addition under
+/// the existing [`PackKind`] tags (`audio/sample/*` and
+/// `audio/voicegroup/*` entries are [`PackKind::Raw`]); the wire layout
+/// above hasn't changed since `1`.
 pub const FORMAT_VERSION: u32 = 4;
 
 /// What kind of content an entry's payload holds.
