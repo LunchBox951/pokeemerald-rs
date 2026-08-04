@@ -22,7 +22,9 @@ use super::error::AudioError;
 
 /// A sample's stable pack id — the normalized asset id a
 /// [`super::voicegroup::VoiceGroup`] slot references (e.g.
-/// `"audio/sample/sc88pro_trumpet_60"`), not the sample's payload itself.
+/// `"audio/sample/direct-sound/sc88pro_flute"`), not the sample's payload
+/// itself — the extraction pipeline's id scheme, see
+/// `xtask::extract::audio_samples`'s module docs.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct SampleId(pub String);
 

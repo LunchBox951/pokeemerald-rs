@@ -124,6 +124,9 @@ jobs:
       - name: Run ignored real-pack assertions
         if: runner.os == 'Linux'
         run: cargo test -p pokeemerald-rs -- --ignored
+      - name: Run ignored real-pack assertions (assets)
+        if: runner.os == 'Linux'
+        run: cargo test -p assets -- --ignored
       - name: Smoke E2E (pack present)
         if: runner.os == 'Linux'
         run: cargo run -p xtask --features smoke -- e2e --suite smoke
