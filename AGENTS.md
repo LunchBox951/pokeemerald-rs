@@ -49,10 +49,13 @@ formulas); `mgba/` clarifies hardware behaviour. Both are read-only `(reference-
 - **Change freely, in scope** — code or doc edits laddered to one
   `docs/acceptance/v1.md` ID, validated with the commands above.
 - **Confirm first** — a new Cargo dependency `(minimal-deps)`, or a change to
-  `.github/workflows/`, `RELEASE.md`, `CODEOWNERS`, or a version/release file.
-  `pokeemerald/` and `mgba/` are never edited, confirmation or not
-  `(reference-only)`; neither is `ledger/pokeemerald.json` outside
-  `scripts/ledger.py`, confirmation or not — see Coverage ledger below.
+  `.github/workflows/`, `RELEASE.md`, `CODEOWNERS`, or a release-process
+  file. Exception: the routine per-PR PATCH bump of `VERSION` is *required*
+  by `RELEASE.md`'s policy gate (every PR must increase `VERSION`) and needs
+  no confirmation; MINOR/MAJOR/FINAL bumps still do. `pokeemerald/` and
+  `mgba/` are never edited, confirmation or not `(reference-only)`; neither
+  is `ledger/pokeemerald.json` outside `scripts/ledger.py`, confirmation or
+  not — see Coverage ledger below.
 
 ## Conventions `(oop-boundaries)`
 
