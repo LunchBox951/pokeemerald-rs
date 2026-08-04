@@ -315,17 +315,19 @@ fn apply_truck_intro_flags(block1: &mut SaveBlock1, gender: PlayerGender) {
 /// Seed [`init_save_blocks`]'s [`Rng`] draws its trainer id from when the
 /// caller has no seed of its own to supply (module docs, "Trainer id has no
 /// link-cable lower half"): this workspace has no wall-clock/hardware
-/// entropy source wired into any runtime path yet, and reaching for
-/// `std::time` here just to look more "random" would make
-/// [`init_save_blocks_for_new_game`]'s output non-deterministic for no
-/// modeled behavioural gain -- fixed, like every other RNG seed this
-/// workspace's own tests use.
+/// entropy source wired into any runtime path yet. The overworld runtime
+/// creates its owned generator from this seed, passes it through
+/// [`init_save_blocks`], and retains the resulting advanced stream. Reaching
+/// for `std::time` here just to look more "random" would make that stream
+/// non-deterministic for no modeled behavioural gain -- fixed, like every
+/// other RNG seed this workspace's own tests use.
 pub const NEW_GAME_RNG_SEED: u32 = 0;
 
-/// [`init_save_blocks`], seeded with [`NEW_GAME_RNG_SEED`] -- the version
-/// [`crate::flow::OverworldPhase::load_default`] actually calls at the
-/// intro -> overworld handoff (I-3, issue #149's review pass), so that
-/// caller doesn't need its own [`Rng`] import just to start a new save.
+/// [`init_save_blocks`], seeded with [`NEW_GAME_RNG_SEED`], for callers that
+/// need only the initialized save blocks and do not own the continuing
+/// runtime RNG stream. The overworld handoff instead seeds its owned [`Rng`]
+/// directly and passes it to [`init_save_blocks`] so later gameplay keeps
+/// the state after the trainer-ID draws.
 #[must_use]
 pub fn init_save_blocks_for_new_game() -> (SaveBlock1, SaveBlock2) {
     let mut rng = Rng::new(NEW_GAME_RNG_SEED);

@@ -203,6 +203,23 @@ fn synthetic_phase(
     )
 }
 
+/// Regression for the new-game-to-overworld RNG handoff: trainer-ID
+/// initialization consumes the first two `Random()` draws, and encounters
+/// must continue from that advanced state rather than restarting at seed 0.
+#[test]
+fn new_game_rng_stream_continues_after_trainer_id_draws() {
+    let phase = synthetic_phase(PlayerState::new((4, 6), 3, Direction::West), None);
+    let mut expected = Rng::new(new_game::NEW_GAME_RNG_SEED);
+    expected.next_u16();
+    expected.next_u16();
+
+    assert_eq!(
+        phase.rng.state(),
+        expected.state(),
+        "the phase must retain the RNG state after both trainer-ID draws"
+    );
+}
+
 /// A [`MapRuntime`] over `phase`'s own scene and [`ONE_F`]'s real event
 /// data -- the exact runtime [`OverworldPhase::step`] rebuilds each frame.
 fn runtime_for(phase: &OverworldPhase) -> MapRuntime<'_> {

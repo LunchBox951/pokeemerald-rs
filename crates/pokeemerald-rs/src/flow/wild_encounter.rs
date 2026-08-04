@@ -295,9 +295,10 @@ pub(super) fn start_wild_battle(
 /// A turn that *errors* is not survivable here — there is no action menu to
 /// choose differently with — so it ends the battle too: the error is logged,
 /// the mon is still written back, and `None` is returned rather than an
-/// outcome the engine never reported. Unreachable in practice, since the
-/// only action this driver takes is a run attempt and
-/// [`battle::Battle::take_turn`] rejects no run.
+/// outcome the engine never reported. The player's Run action is valid, but
+/// an unsuccessful escape still gives the wild side a turn; if all of its
+/// moves are spent, forced Struggle can reach the currently unsupported move
+/// effect and return [`BattleError::UnsupportedMoveEffect`].
 pub(super) fn advance_wild_battle(
     slot: &mut Option<Battle>,
     lead: &mut Option<BattlePokemon>,

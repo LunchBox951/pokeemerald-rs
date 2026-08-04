@@ -193,8 +193,8 @@ fn run_on_transition_map_script(
 /// needed to re-look-up that map's header and event lists (from the
 /// `'static` [`MapHeaderTable`]/[`MapEventsTable`]) every frame -- see
 /// [`OverworldPhase::step`]. Also carries the fresh [`SaveBlock1`]/
-/// [`SaveBlock2`] pair [`new_game::init_save_blocks_for_new_game`] built for
-/// this run (starting money, cleared party/bag/event data, default
+/// [`SaveBlock2`] pair [`new_game::init_save_blocks`] built for this run
+/// (starting money, cleared party/bag/event data, default
 /// name/gender -- see that function's module docs) -- the actual save-state
 /// counterpart to `player`'s in-memory position, kept alive here rather than
 /// built and discarded, since nothing yet writes it to disk
@@ -255,7 +255,9 @@ pub(crate) struct OverworldPhase {
     /// turn, so the sequence is the one upstream would produce
     /// (`crate::flow::wild_encounter`'s module docs).
     ///
-    /// Seeded to `0`, which is upstream's real boot state: retail Emerald
+    /// Seeded to `0`, then advanced by new-game initialization's two trainer-ID
+    /// draws before overworld play begins. Zero is upstream's real boot state:
+    /// retail Emerald
     /// compiles `SeedRngWithRtc` out (`pokeemerald/src/main.c:229-236` is
     /// `#ifdef BUGFIX`), so `gRngValue` stays zero until
     /// `SeedRngAndSetTrainerId` (`:208-214`) reseeds it from the `TM1CNT_L`
@@ -294,7 +296,7 @@ impl OverworldPhase {
     /// Load [`crate::overworld::load_default_room`], place the player at
     /// [`new_game::SPAWN_POSITION`] (module docs on why this, not upstream's
     /// truck sequence, is the intro's handoff target), and build this run's
-    /// fresh save state via [`new_game::init_save_blocks_for_new_game`] --
+    /// fresh save state via [`new_game::init_save_blocks`] --
     /// the actual `NewGameInitData` effects (starting money, cleared
     /// party/bag/event data), not just the in-memory spawn position, so a
     /// future save-write path has real state to persist instead of
@@ -306,26 +308,7 @@ impl OverworldPhase {
             new_game::SPAWN_ELEVATION,
             new_game::SPAWN_FACING,
         );
-        let (mut save1, save2) = new_game::init_save_blocks_for_new_game();
-        // Entering the spawn map is a map transition like any other -- and
-        // the spawn map is a *bedroom*, so this is exactly the entry that
-        // hides its twelve decoration placeholders.
-        run_on_transition_map_script(new_game::SPAWN_MAP_ID, &mut save1.event_data);
-        Ok(Self {
-            scene,
-            player,
-            map_id: new_game::SPAWN_MAP_ID,
-            save1,
-            save2,
-            pending_landing: None,
-            dialog: None,
-            tick: 0,
-            connection_pack: OnceCell::new(),
-            rng: engine::rng::Rng::new(0),
-            wild: WildEncounterState::new(),
-            party_lead: None,
-            wild_battle: None,
-        })
+        Ok(Self::new(scene, new_game::SPAWN_MAP_ID, player, None))
     }
 
     /// A phase around an already-built `scene` -- the pack-free
@@ -342,7 +325,24 @@ impl OverworldPhase {
         player: PlayerState,
         dialog: Option<NpcDialog>,
     ) -> Self {
-        let (mut save1, save2) = new_game::init_save_blocks_for_new_game();
+        Self::new(scene, map_id, player, dialog)
+    }
+
+    /// Build a new overworld run while preserving its single RNG stream.
+    /// New-game initialization consumes the first two draws for the trainer
+    /// ID; the advanced generator then remains owned by the phase for all
+    /// subsequent encounter and battle draws.
+    fn new(
+        scene: OverworldScene,
+        map_id: assets::MapId,
+        player: PlayerState,
+        dialog: Option<NpcDialog>,
+    ) -> Self {
+        let mut rng = engine::rng::Rng::new(new_game::NEW_GAME_RNG_SEED);
+        let (mut save1, save2) = new_game::init_save_blocks(&mut rng);
+        // Entering the initial map is a map transition like any other. For
+        // the production spawn bedroom, this hides its twelve decoration
+        // placeholders; test maps receive their own transition effects.
         run_on_transition_map_script(map_id, &mut save1.event_data);
         Self {
             scene,
@@ -354,7 +354,7 @@ impl OverworldPhase {
             dialog,
             tick: 0,
             connection_pack: OnceCell::new(),
-            rng: engine::rng::Rng::new(0),
+            rng,
             wild: WildEncounterState::new(),
             party_lead: None,
             wild_battle: None,
