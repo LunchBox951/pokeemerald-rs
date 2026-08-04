@@ -242,8 +242,8 @@ mod tests {
     /// of the real pack through `crates/assets::audio::Sample::decode`)
     /// lives in `crates/assets/src/pack/tests.rs`'s
     /// `real_pack_audio_samples_decode_through_the_sample_schema`, which CI
-    /// runs via `cargo test -p assets -- --ignored` -- this crate's own
-    /// `--ignored` lane is not part of the CI gate.
+    /// runs via `cargo test -p assets -- --ignored`; this crate's own
+    /// `--ignored` lane is gated too, via `cargo test -p xtask -- --ignored`.
     #[test]
     #[ignore = "needs a local `./init.sh`-fetched pokeemerald/ checkout"]
     fn direct_sound_and_programmable_wave_samples_are_extracted() {
