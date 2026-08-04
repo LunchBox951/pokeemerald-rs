@@ -19093,8 +19093,10 @@
     "sound/direct_sound_samples/sc88pro_xylophone.wav": {
       "category": "audio.sample",
       "kind": "file",
-      "spec_owner": "03-audio",
-      "status": "pending"
+      "reason": "DirectSound sample extraction (issues #183 + #201): referenced by voicegroup_title's borrowed link-adjacency slot 102 (= voicegroup_intro entry 13, sound/voicegroups/intro.inc:15), so it joins DIRECT_SOUND_SAMPLES and is decoded via extract::wav (wav2agb -b semantics) into audio/sample/direct-sound/sc88pro_xylophone. Round-tripped by the assets real-pack decode test and the voicegroup referential-closure test.",
+      "rust_target": "crates/xtask/src/extract/audio_samples.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "sound/direct_sound_samples/sd90_ambient_tom.wav": {
       "category": "audio.sample",
@@ -22773,7 +22775,7 @@
     "sound/voice_groups.inc": {
       "category": "audio.misc",
       "kind": "file",
-      "reason": "Not extracted as its own asset -- this is the mks4agb linker script that concatenates every sound/voicegroups/*.inc file's byte table (plus sound/cry_tables.inc and the FRLG-era groups) into one contiguous section, addressed only by the tools/mid2agb-generated .4byte/label offsets it emits, nothing this pipeline reads structurally. Parsed narrowly and honestly for one fact only (issue #201): the linked order of sound/voicegroups/*.inc .include lines (parser::parse_link_order + mod.rs's link_order_successors), so xtask::extract::voicegroups can learn which voicegroup file the linker places immediately after title.inc (intro.inc, sound/voice_groups.inc:66-67) and model title's undeclared tail slots (89..=127) from that successor's own entries instead of inventing Empty silence -- see sound/voicegroups/title.inc's own ledger entry for the full mechanism. No other content of this file (the ~190 other .include lines, the interleaved sound/cry_tables.inc include, the FRLG section) is read or modeled.",
+      "reason": "Parsed for link order only (issue #201): this is the assembler include list consumed by data/sound_data.s that concatenates every sound/voicegroups/*.inc byte table (plus sound/cry_tables.inc and the FRLG-era groups) into one contiguous .rodata section. parser::parse_link_order + mod.rs's link_order_successors read its .include lines -- voicegroup includes in file order, foreign includes kept as adjacency barriers -- so xtask::extract::voicegroups can learn which voicegroup file the assembler places immediately after title.inc (intro.inc, sound/voice_groups.inc:66-67) and model title's undeclared tail slots (89..=127) from that successor's own entries instead of inventing Empty silence; see sound/voicegroups/title.inc's ledger entry for the full mechanism. No other content of this file is read or modeled.",
       "rust_target": "crates/xtask/src/extract/voicegroups/mod.rs",
       "spec": "S-4",
       "status": "ported"
@@ -23171,6 +23173,14 @@
       "status": "pending"
     },
     "sound/voicegroups/intro.inc": {
+      "artifacts": {
+        "entries-0-38": {
+          "reason": "Link-adjacency overflow source (issue #201): entries 0..=38 are physically read by the modeled voicegroup+voice*12 fetch for voicegroup_title's undeclared slots 89..=127 (sound/voice_groups.inc:66-67 lays intro.inc contiguously after title.inc), materialized through the same slot-resolution machinery as declared entries into audio/voicegroup/title. The file's own group (entries 39..=127 and its emission as audio/voicegroup/intro) remains pending.",
+          "rust_target": "crates/xtask/src/extract/voicegroups/resolve.rs",
+          "spec": "S-4",
+          "status": "ported"
+        }
+      },
       "category": "audio.voicegroup",
       "kind": "file",
       "spec_owner": "03-audio",

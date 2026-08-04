@@ -478,13 +478,28 @@ fn resolve_indirection_slot(
 /// Each pulled entry goes through the exact same leaf/indirection dispatch
 /// [`resolve_one`]'s own loop uses, so a key-split/rhythm entry borrowed
 /// this way resolves (and, if new, emits) its child exactly as a declared
-/// slot's reference would -- the pack stays dangling-reference-free either
-/// way. If every successor's entries run out before `needed` is met (or
-/// `link_successors` is empty -- the group is last in the linker's own
-/// order), the shortfall is left for [`pad_to_128`]'s ordinary trailing
-/// `Empty` pad: this pipeline cannot know what bytes, if any, truly follow
-/// in the real linked binary, so silence is the fail-closed choice, not a
-/// guess.
+/// slot's reference would. A borrowed *sample* reference is different: the
+/// sample pass (`crate::extract::audio_samples`) runs first, from its own
+/// hand-maintained list, so a borrowed `DirectSound` slot can name a
+/// sample that pass never extracted -- which is why that list carries the
+/// overflow's additions (currently `sc88pro_xylophone`, borrowed slot 102)
+/// and the real-pack closure test
+/// (`crates/pokeemerald-rs/src/voicegroup_pack_tests.rs`) walks every
+/// referenced id against the pack. If every successor's entries run out
+/// before `needed` is met (or `link_successors` is empty -- the group is
+/// last in the linker's own order, or its physical neighbour is a foreign
+/// table, see `parser::LinkOrderItem::Foreign`), the shortfall is left for
+/// [`pad_to_128`]'s ordinary trailing `Empty` pad: this pipeline cannot
+/// know what bytes truly follow in the real linked binary, so silence is
+/// the fail-closed choice, not a guess.
+///
+/// Two latent edges, unmodeled by design: a borrowed entry referencing the
+/// borrower's own label would trip the shared `resolving` cycle guard and
+/// abort extraction where the hardware would just read bytes (no upstream
+/// group does this); and a top-level group with a nonzero `starting_note`
+/// gets no *predecessor*-adjacency modeling for its leading bias slots,
+/// which physically overlap the previous file's tail (moot upstream: every
+/// biased group is a drumset reached only as a child).
 ///
 /// # Errors
 ///

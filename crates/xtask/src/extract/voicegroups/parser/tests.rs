@@ -352,10 +352,13 @@ fn a_keysplit_table_longer_than_128_entries_is_rejected() {
 }
 
 #[test]
-fn parse_link_order_keeps_only_voicegroups_includes_in_file_order() {
+fn parse_link_order_marks_foreign_includes_as_barriers_in_file_order() {
     // Mirrors `sound/voice_groups.inc:66-67,136`'s own shape: a comment
     // line, two voicegroup includes back to back, then an unrelated
-    // `sound/cry_tables.inc` include that must not appear in the output.
+    // `sound/cry_tables.inc` include -- which must survive as a `Foreign`
+    // adjacency barrier, not vanish (physical adjacency is bytes: the
+    // group before it is followed in memory by cry-table data, not by the
+    // next voicegroup file).
     let text = "\
 @ drumsets
 .include \"sound/voicegroups/title.inc\"
@@ -366,14 +369,15 @@ fn parse_link_order_keeps_only_voicegroups_includes_in_file_order() {
     assert_eq!(
         parse_link_order(text),
         vec![
-            "title.inc".to_owned(),
-            "intro.inc".to_owned(),
-            "drumsets/rs.inc".to_owned(),
+            LinkOrderItem::VoiceGroup("title.inc".to_owned()),
+            LinkOrderItem::VoiceGroup("intro.inc".to_owned()),
+            LinkOrderItem::Foreign,
+            LinkOrderItem::VoiceGroup("drumsets/rs.inc".to_owned()),
         ]
     );
 }
 
 #[test]
 fn parse_link_order_on_empty_text_is_empty() {
-    assert_eq!(parse_link_order(""), Vec::<String>::new());
+    assert_eq!(parse_link_order(""), Vec::<LinkOrderItem>::new());
 }

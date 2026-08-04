@@ -433,23 +433,42 @@ pub(super) fn parse_keysplit_tables(
 /// declares (a `voice_group` label need not match its filename -- e.g.
 /// `drumsets/rs.inc` declares `rs_drumset`, not `rs`).
 ///
-/// Any `.include` line naming a path outside `sound/voicegroups/` (e.g.
-/// `sound/voice_groups.inc:136`'s `sound/cry_tables.inc`) is silently
-/// skipped: a different table format entirely, never a voicegroup this
-/// pipeline could pull overflow slots from. Likewise for a non-`.include`
-/// line (blank, an `@` comment) -- this reads a linker script, not a
-/// voicegroup source, so it has no macro grammar of its own to fail closed
-/// on.
-pub(super) fn parse_link_order(text: &str) -> Vec<String> {
+/// An `.include` line naming a path outside `sound/voicegroups/` (e.g.
+/// `sound/voice_groups.inc:136`'s `sound/cry_tables.inc`) becomes
+/// [`LinkOrderItem::Foreign`] rather than being dropped: physical
+/// adjacency is *bytes*, so the group preceding a foreign include is
+/// followed in memory by that table's data, not by the next voicegroup
+/// file -- collapsing the two would fabricate a successor
+/// ([`super::link_order_successors`] stops at the barrier and fail-closes
+/// to the same `Empty` padding as a last-in-order group). A non-`.include`
+/// line (blank, an `@` comment) contributes nothing -- this reads an
+/// assembler include list, not a voicegroup source, so it has no macro
+/// grammar of its own to fail closed on.
+pub(super) fn parse_link_order(text: &str) -> Vec<LinkOrderItem> {
     const PREFIX: &str = "sound/voicegroups/";
     text.lines()
         .filter_map(|line| {
             let rest = line.trim().strip_prefix(".include")?.trim_start();
             let quoted = rest.strip_prefix('"')?;
             let end = quoted.find('"')?;
-            quoted[..end].strip_prefix(PREFIX).map(str::to_owned)
+            let path = &quoted[..end];
+            Some(match path.strip_prefix(PREFIX) {
+                Some(relative) => LinkOrderItem::VoiceGroup(relative.to_owned()),
+                None => LinkOrderItem::Foreign,
+            })
         })
         .collect()
+}
+
+/// One `.include` line of `sound/voice_groups.inc`, in file order.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum LinkOrderItem {
+    /// A `sound/voicegroups/<relative>` include -- carries `<relative>`.
+    VoiceGroup(String),
+    /// Any other include (e.g. `sound/cry_tables.inc`): an adjacency
+    /// barrier -- the preceding group's overflow bytes are this table's
+    /// data, which this pipeline cannot (and must not) model as voices.
+    Foreign,
 }
 
 #[cfg(test)]

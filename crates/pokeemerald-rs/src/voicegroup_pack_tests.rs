@@ -64,7 +64,7 @@ fn overflow_slots_resolve_through_the_linked_successors_own_entries() {
     // voicegroup_rs_drumset` -- already one of `title`'s own rhythm
     // children, so it resolves to the same `rs_drumset` group rather than a
     // new one), and slot 127 is intro's entry 38
-    // (`sound/voicegroups/intro.inc:87`, `voice_square_1 60, 0, 0, 2, 0, 0,
+    // (`sound/voicegroups/intro.inc:40`, `voice_square_1 60, 0, 0, 2, 0, 0,
     // 15, 0` -- a real, playable CGB square-1 voice, not fixed-rate).
     let pack = AssetPack::load_default().expect("run `cargo xtask extract` first");
     let title = decode(&pack, "title");
@@ -142,4 +142,36 @@ fn titles_key_split_slots_resolve_their_tables_and_children() {
         piano_keysplit.slot(0),
         Some(VoiceEntry::DirectSound(_))
     ));
+}
+
+#[test]
+#[ignore = "needs a local pack: run `cargo xtask extract` first"]
+fn every_id_a_voicegroup_references_resolves_to_a_pack_entry() {
+    // The sample lists in `xtask::extract::audio_samples` are
+    // hand-maintained while that pass runs *before* the voicegroup pass,
+    // and `VoiceGroup::decode` is deliberately structural-only -- so
+    // nothing else fails when a resolver change (say, a new borrowed
+    // link-adjacency slot, issue #201) starts referencing a sample the
+    // lists miss. This walks every slot of every emitted group and
+    // requires each referenced id to name a real pack entry.
+    let pack = AssetPack::load_default().expect("run `cargo xtask extract` first");
+    let mut dangling = Vec::new();
+    for label in EXPECTED_GROUPS {
+        let group = decode(&pack, label);
+        for (index, slot) in group.slots().iter().enumerate() {
+            let id = match slot {
+                VoiceEntry::DirectSound(voice) => Some(&voice.sample.0),
+                VoiceEntry::ProgrammableWave(voice) => Some(&voice.wave.0),
+                VoiceEntry::KeySplit(voice) => Some(&voice.children.0),
+                VoiceEntry::Rhythm(voice) => Some(&voice.children.0),
+                _ => None,
+            };
+            if let Some(id) = id {
+                if pack.raw(id).is_err() {
+                    dangling.push(format!("{label}[{index}] -> {id}"));
+                }
+            }
+        }
+    }
+    assert!(dangling.is_empty(), "dangling references: {dangling:?}");
 }

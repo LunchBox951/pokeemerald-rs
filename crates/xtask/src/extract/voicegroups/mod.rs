@@ -222,18 +222,33 @@ fn link_order_successors(
     let path = upstream.join("sound/voice_groups.inc");
     let text = read_text(&path)?;
 
-    let mut ordered_labels = Vec::new();
-    for relative in parser::parse_link_order(&text) {
-        let label = path_labels.get(&relative).ok_or_else(|| {
-            ExtractError::VoiceGroup(VoiceGroupError::UnindexedLinkOrderFile(relative.clone()))
-        })?;
-        ordered_labels.push(label.clone());
+    let mut ordered = Vec::new();
+    for item in parser::parse_link_order(&text) {
+        match item {
+            parser::LinkOrderItem::VoiceGroup(relative) => {
+                let label = path_labels.get(&relative).ok_or_else(|| {
+                    ExtractError::VoiceGroup(VoiceGroupError::UnindexedLinkOrderFile(
+                        relative.clone(),
+                    ))
+                })?;
+                ordered.push(Some(label.clone()));
+            }
+            // A non-voicegroup include is an adjacency barrier (see
+            // `parser::LinkOrderItem::Foreign`): successors stop there.
+            parser::LinkOrderItem::Foreign => ordered.push(None),
+        }
     }
 
-    let Some(index) = ordered_labels.iter().position(|label| label == top_label) else {
+    let Some(index) = ordered
+        .iter()
+        .position(|label| label.as_deref() == Some(top_label))
+    else {
         return Ok(Vec::new());
     };
-    Ok(ordered_labels[index + 1..].to_vec())
+    Ok(ordered[index + 1..]
+        .iter()
+        .map_while(Clone::clone)
+        .collect())
 }
 
 /// Extract `MUS_TITLE`'s voicegroup and every group it transitively
@@ -373,7 +388,7 @@ mod tests {
         // (`sound/voicegroups/intro.inc:2`) -- already one of `title`'s own
         // rhythm children, so no new group is emitted for it. Slot 127 ==
         // intro's entry 38, `voice_square_1 60, 0, 0, 2, 0, 0, 15, 0`
-        // (`sound/voicegroups/intro.inc:87`) -- a real playable CGB voice.
+        // (`sound/voicegroups/intro.inc:40`) -- a real playable CGB voice.
         assert_eq!(
             title.slots[89],
             super::resolve::VoiceSlot::Rhythm {
@@ -532,6 +547,37 @@ mod tests {
         std::fs::remove_dir_all(&root).unwrap();
 
         assert_eq!(successors, Vec::<String>::new());
+    }
+
+    /// A foreign include (e.g. `sound/cry_tables.inc`) is an adjacency
+    /// *barrier*: the group before it is followed in memory by that
+    /// table's bytes, so the successor list must stop there -- same
+    /// fail-closed `Empty` padding as being last -- and a group *after*
+    /// the barrier still gets its own onward successors.
+    #[test]
+    fn link_order_successors_stop_at_a_foreign_include_barrier() {
+        let mut path_labels = std::collections::HashMap::new();
+        path_labels.insert("a.inc".to_owned(), "a".to_owned());
+        path_labels.insert("b.inc".to_owned(), "b".to_owned());
+        path_labels.insert("c.inc".to_owned(), "c".to_owned());
+        let root = std::env::temp_dir().join(format!(
+            "pokeemerald-rs-voicegroup-link-order-barrier-test-{}-{}",
+            std::process::id(),
+            line!()
+        ));
+        std::fs::create_dir_all(root.join("sound")).unwrap();
+        std::fs::write(
+            root.join("sound/voice_groups.inc"),
+            ".include \"sound/voicegroups/a.inc\"\n.include \"sound/cry_tables.inc\"\n.include \"sound/voicegroups/b.inc\"\n.include \"sound/voicegroups/c.inc\"\n",
+        )
+        .unwrap();
+
+        let before_barrier = link_order_successors(&root, "a", &path_labels).unwrap();
+        let after_barrier = link_order_successors(&root, "b", &path_labels).unwrap();
+        std::fs::remove_dir_all(&root).unwrap();
+
+        assert_eq!(before_barrier, Vec::<String>::new());
+        assert_eq!(after_barrier, vec!["c".to_owned()]);
     }
 
     /// Also fail-closed, not an error: `top_label` never appearing in the

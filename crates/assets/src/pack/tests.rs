@@ -837,7 +837,7 @@ fn real_pack_loads_and_every_typed_accessor_works() {
 /// than imported: `crates/assets` deliberately does not depend on
 /// `crates/xtask`, and that independence is exactly what makes the test
 /// below a real producer/consumer pin rather than a self-consistency check.
-const REAL_PACK_DIRECT_SOUND_SAMPLES: [&str; 32] = [
+const REAL_PACK_DIRECT_SOUND_SAMPLES: [&str; 33] = [
     "sc88pro_flute",
     "sc88pro_french_horn_60",
     "sc88pro_french_horn_72",
@@ -863,6 +863,7 @@ const REAL_PACK_DIRECT_SOUND_SAMPLES: [&str; 32] = [
     "sc88pro_trumpet_72",
     "sc88pro_trumpet_84",
     "sc88pro_tuba_39",
+    "sc88pro_xylophone",
     "sc88pro_tuba_51",
     "sc88pro_tubular_bell",
     "trinity_cymbal_crash",
@@ -886,7 +887,7 @@ const REAL_PACK_PROGRAMMABLE_WAVES: [u32; 4] = [1, 2, 5, 6];
 /// tests only pin its own understanding of the layout, and this is what
 /// catches them drifting apart.
 ///
-/// Beyond "all 36 ids present and structurally decodable", two entries are
+/// Beyond "all 37 ids present and structurally decodable", two entries are
 /// pinned to concrete values, so a silent change in the *derivation* — not
 /// just in the framing — fails here too:
 ///
@@ -947,11 +948,11 @@ fn real_pack_audio_samples_decode_through_the_sample_schema() {
         decoded += 1;
     }
     // Both loops iterate fixed const arrays and count unconditionally, so
-    // this pins the expected-id lists' lengths (32 + 4), not decoding --
+    // this pins the expected-id lists' lengths (33 + 4), not decoding --
     // the decode coverage is the loop bodies above.
     assert_eq!(
-        decoded, 36,
-        "the expected-id lists must cover all 36 samples"
+        decoded, 37,
+        "the expected-id lists must cover all 37 samples"
     );
 
     let flute_bytes = pack
