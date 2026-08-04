@@ -18,6 +18,12 @@ workspace = true
 # state `crate::overworld` reads to compose a frame; `engine` itself only
 # depends on `assets`, so this does not drag anything new in either.
 assets = { path = "../assets" }
+# `battle` (I-4, issue #169) is the wild-battle turn engine the overworld's
+# per-step encounter roll hands off to (`crate::flow::wild_encounter`): a
+# rolled species/level becomes a `battle::BattlePokemon` and then a
+# `battle::Battle`. Workspace-local as well, and `battle` itself depends only
+# on `assets`, so nothing new enters the build.
+battle = { path = "../battle" }
 engine = { path = "../engine" }
 platform = { path = "../platform" }
 rendering = { path = "../rendering" }
