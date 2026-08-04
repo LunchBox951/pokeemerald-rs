@@ -4,6 +4,33 @@
 //! pipeline needs — split out of that module to keep it under this crate's
 //! ~600-line-per-file guideline (`oop-boundaries`), mirroring
 //! `xtask::extract::voicegroups`'s own file-per-concern split.
+//!
+//! # Known divergence: the trailing wait after CC `0x1E`
+//!
+//! `agb.cpp:402-405`'s `case 0x1E:` records the extended-command selector
+//! (`s_extendedCommand = event.param2;`) and `break`s **without** the
+//! `PrintWait(event.time)` every other arm of that switch ends with. Since
+//! `event.time` is that event's gap to the *next* event (`CalculateWaits`,
+//! `midi.cpp:758-773`), upstream silently swallows that gap: a CC `0x1E`
+//! followed by, say, 24 ticks of rest shifts everything after it on that
+//! track 24 ticks early. That looks like an oversight next to the `// TODO:
+//! loop op` comment sitting on the same arm, not an intended musical
+//! effect.
+//!
+//! This compiler does **not** reproduce it. [`translate_controller`] returns
+//! `None` for CC `0x1E` (no [`SongEvent`] is emitted, exactly as upstream
+//! emits no byte), but `super::compile`'s `emit_track` still pushes the gap
+//! that follows it, so the rest of the track keeps its original timing.
+//! That is a real, deliberate behavioural divergence from `tools/mid2agb`,
+//! recorded here and in the ledger's own reason rather than buried: it is
+//! *unobservable for `mus_title.mid`*, whose three CC `0x1E` occurrences all
+//! sit at tick `0` with a zero gap to the `0x1D`/`0x1F` that consumes them
+//! (confirmed against a locally built `tools/mid2agb` oracle — all ten
+//! compiled tracks are byte-identical either way), but a different song
+//! with a rest after a CC `0x1E` would compile to a track this compiler
+//! times differently from upstream. Time-preserving is the defensible
+//! reading of a desync bug, so the divergence stands; if a future slice
+//! ever needs upstream's exact desync, this is the note to revisit.
 
 use super::error::MidiError;
 use super::event::SongEvent;
@@ -33,8 +60,26 @@ pub(super) fn centre_relative(raw: u8) -> i8 {
 /// `24 * clocks_per_beat * raw / division` (`midi.cpp:635`/`:641`'s
 /// `ConvertTimes`), with `clocks_per_beat` pinned to `1` by
 /// [`super::compile::compile`]'s own guard.
-pub(super) fn convert_ticks(raw: u32, division: u16) -> u32 {
-    (24 * raw) / u32::from(division)
+///
+/// Evaluated in `u64`, unlike upstream's `std::uint32_t` expression: a
+/// legal 4-byte VLQ reaches `0x0FFF_FFFF`, and `24 * 0x0FFF_FFFF` is
+/// already past `u32::MAX`, so doing this multiply in `u32` would wrap
+/// (release) or panic (debug) on a tick a hostile — or merely
+/// weird — `.mid` file may legitimately encode. Widening keeps the answer
+/// exact for every input whose *result* still fits, which is every input
+/// with a sane `division`; only the quotient is range-checked
+/// ([`MidiError::TickOverflow`]), so the never-panic contract this module
+/// and [`super::reader`] share holds for arbitrary bytes.
+///
+/// # Errors
+///
+/// [`MidiError::TickOverflow`] if the scaled tick does not fit a `u32` —
+/// where upstream would silently wrap. Unreachable for any real file: with
+/// the standard `division` of 24 or more the quotient is at most `raw`
+/// itself, so this needs both a past-4-byte-VLQ tick and a tiny `division`.
+pub(super) fn convert_ticks(raw: u32, division: u16) -> Result<u32, MidiError> {
+    let scaled = (24 * u64::from(raw)) / u64::from(division);
+    u32::try_from(scaled).map_err(|_| MidiError::TickOverflow(raw))
 }
 
 /// `round(60_000_000.0f32 / microseconds)` (`agb.cpp:506`) — an `f32`
@@ -89,6 +134,9 @@ pub(super) fn translate_controller(
         0x18 => Some(SongEvent::Tune(centre_relative(value))),
         0x1A => Some(SongEvent::LfoDelay(value)),
         0x1D | 0x1F => translate_extended_command(*extended_command, value),
+        // No event, matching upstream's own no-byte `case 0x1E:` -- but
+        // this compiler keeps the wait that follows it, which upstream
+        // drops. See the module docs, "Known divergence".
         0x1E => {
             *extended_command = Some(value);
             None

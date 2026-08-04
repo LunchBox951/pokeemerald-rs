@@ -15,9 +15,21 @@ pub(crate) enum MidiError {
     /// The file ran out of bytes where a fixed-size field or declared
     /// chunk/event body was expected.
     Truncated,
-    /// A variable-length quantity's continuation bits never terminated
-    /// within a `u32`'s worth of 7-bit groups.
-    MalformedVlq,
+    /// Scaling a raw MIDI tick onto this compiler's 24-clocks-per-beat
+    /// timebase (`24 * raw / division` — `tools/mid2agb/midi.cpp:635`/`:641`'s
+    /// `ConvertTimes`) produced a value a `u32` cannot hold. Upstream runs
+    /// that multiply in a `std::uint32_t` and silently wraps; this compiler
+    /// evaluates it in `u64` and fails closed instead
+    /// ([`super::translate::convert_ticks`]'s docs). Only reachable for a
+    /// tick count no real `.mid` file carries (`raw > u32::MAX / 24` at a
+    /// small `division`). Carries the offending raw tick.
+    TickOverflow(u32),
+    /// The compiled song had more playable tracks than the song schema's
+    /// `u8` track-count field can describe — this side's mirror of
+    /// `crates/assets::audio::AudioError::TooManyTracks`, duplicated the
+    /// same way the encoder itself is (`super::encode`'s module docs).
+    /// Carries the track count found.
+    TooManyTracks(usize),
     /// The file did not start with the 4-byte `MThd` signature.
     BadHeaderMagic,
     /// `MThd`'s declared header length was not the fixed value `6` every
@@ -96,7 +108,14 @@ impl fmt::Display for MidiError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Truncated => write!(f, "unexpected end of file"),
-            Self::MalformedVlq => write!(f, "variable-length quantity never terminated"),
+            Self::TickOverflow(raw) => write!(
+                f,
+                "MIDI tick {raw} overflows a u32 once scaled to 24 clocks per beat"
+            ),
+            Self::TooManyTracks(count) => write!(
+                f,
+                "compiled song has {count} tracks, more than the schema's u8 track count allows"
+            ),
             Self::BadHeaderMagic => write!(f, "not a standard MIDI file (missing MThd magic)"),
             Self::HeaderLengthMismatch(len) => {
                 write!(f, "MThd header length {len} is not the standard 6")

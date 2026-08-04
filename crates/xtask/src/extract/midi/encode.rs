@@ -44,6 +44,7 @@
 //! | 19 | `PseudoEchoLength` | `length: u8` |
 
 use super::compile::CompiledSong;
+use super::error::MidiError;
 use super::event::SongEvent;
 
 const TAG_WAIT: u8 = 0;
@@ -165,13 +166,26 @@ fn write_event(out: &mut Vec<u8>, event: &SongEvent) {
 
 /// Encode a [`CompiledSong`] to the wire shape documented above.
 ///
+/// # Errors
+///
+/// [`MidiError::TooManyTracks`] if the song holds more tracks than the
+/// `u8` track-count field can describe. Sixteen channels per `MTrk` chunk
+/// keeps a single-chunk file well inside that, but a format-1 file with
+/// seventeen or more note-carrying chunks would pass 255 — a bound on the
+/// *wire format*, not on anything upstream rejects, so this returns an
+/// error the caller can attach a path to rather than aborting the whole
+/// extraction. Mirrors `crates/assets::audio::AudioError::TooManyTracks`,
+/// which `Song::new` raises for the same reason on the read side.
+///
 /// # Panics
 ///
-/// Unreachable in practice: [`super::compile::compile`] never produces more
-/// than 16 tracks (a real MIDI file has at most 16 channels per `MTrk`
-/// chunk) or event counts anywhere near a `u32`'s range.
-#[must_use]
-pub(super) fn encode_song(song: &CompiledSong) -> Vec<u8> {
+/// If a single track holds more than `u32::MAX` events. Unreachable by
+/// construction: every event costs at least one byte of `.mid` input, so a
+/// file that could do it would not fit in the address space this pipeline
+/// reads it into.
+pub(super) fn encode_song(song: &CompiledSong) -> Result<Vec<u8>, MidiError> {
+    let track_count =
+        u8::try_from(song.tracks.len()).map_err(|_| MidiError::TooManyTracks(song.tracks.len()))?;
     let mut out = Vec::new();
     write_string(
         &mut out,
@@ -180,8 +194,6 @@ pub(super) fn encode_song(song: &CompiledSong) -> Vec<u8> {
     out.push(song.priority);
     out.push(u8::from(song.reverb.is_some()));
     out.push(song.reverb.unwrap_or(0));
-    let track_count = u8::try_from(song.tracks.len())
-        .expect("a real MIDI file has far fewer than 256 playable channels");
     out.push(track_count);
     for track in &song.tracks {
         let event_count = u32::try_from(track.len())
@@ -191,7 +203,7 @@ pub(super) fn encode_song(song: &CompiledSong) -> Vec<u8> {
             write_event(&mut out, event);
         }
     }
-    out
+    Ok(out)
 }
 
 #[cfg(test)]

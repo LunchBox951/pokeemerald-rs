@@ -18,10 +18,27 @@
 //!    a disjoint event set, so one parse serves both purposes — see
 //!    `super::parse`'s module docs, "One pass, not sixteen").
 //! 3. For every `(MTrk chunk, MIDI channel)` pair that carries at least one
-//!    note-on, [`compile_track`] builds that channel's own [`event::SongEvent`]
-//!    stream, reproducing `midi.cpp:916-964`'s nested loop order exactly
-//!    (`MTrk` chunk outer, ascending; channel inner, ascending `0..16`) so
-//!    output track order matches upstream's `g_agbTrack` numbering.
+//!    *playable* note-on ([`channel_is_playable`]), [`compile_track`] builds
+//!    that channel's own [`event::SongEvent`] stream, reproducing
+//!    `midi.cpp:916-964`'s nested loop order exactly (`MTrk` chunk outer,
+//!    ascending; channel inner, ascending `0..16`) so output track order
+//!    matches upstream's `g_agbTrack` numbering.
+//!
+//! # Which channels become tracks
+//!
+//! Upstream's gate is `s_minNote != 0xFF` (`midi.cpp:933`), and `s_minNote`
+//! is only ever touched inside `ReadTrackEvents`'s note-on arm *under*
+//! `if (event.param2 > 0)` (`:484-490`) — `param2` there being the raw MIDI
+//! tick duration `FindNoteEnd` has just computed, before any scaling. A
+//! channel is therefore playable to upstream when it carries at least one
+//! note-on whose note-off lands strictly later than it; a channel whose
+//! every note-on is cancelled at the same tick emits no track at all.
+//! [`channel_is_playable`] reproduces that gate exactly, rather than the
+//! looser "any note-on at all" test an earlier revision of this file used.
+//! The difference is unobservable for `mus_title.mid` (10 tracks either
+//! way), but it is not cosmetic: an extra emitted track would also shift
+//! which track counts as the first one, and so which track receives the
+//! song's `Tempo` (`include_tempo`, [`compile_track`]).
 //!
 //! # Note pairing, not upstream's seek-and-rewind
 //!
@@ -121,6 +138,22 @@
 //! its own `// TODO: support for other extended commands` comment) — this
 //! is upstream's *actual*, exercised behaviour, not a scope cut.
 //!
+//! # Track preamble order: volume, wait, `KEYSH`
+//!
+//! [`emit_track`] opens every track with the optional synthetic
+//! full-volume byte, then the initial wait, then `KeyShift(0)` — which is
+//! `PrintAgbTrack`'s own order: `agb.cpp:441-442`'s conditional
+//! `PrintByte("VOL ...")`, then `:444`'s `PrintWait(g_initialWait)`, then
+//! `:445`'s `PrintByte("KEYSH ...")`. Reviewed against upstream directly
+//! (the wait precedes `KEYSH` there too, and `g_initialWait` is
+//! `events[0].time` captured before `CalculateWaits` rewrites each event's
+//! time into a gap — `midi.cpp:758-763`), so this is a match, not a latent
+//! divergence. It is called out because the ordering *looks* arbitrary: a
+//! `KEYSH` is a state write with no duration, so hoisting it ahead of the
+//! initial rest would be inaudible, and a reader comparing the two files
+//! could reasonably wonder which way round upstream had it. It is this way
+//! round.
+//!
 //! # Sort order
 //!
 //! [`ItemKind::sort_key`] reproduces `midi.cpp:565-598`'s `EventCompare`
@@ -195,6 +228,12 @@ pub(super) struct CompiledSong {
 /// matching entry after it, ignoring everything else (module docs, "Note
 /// pairing").
 ///
+/// `channel` is not part of the search — `channel_events` is already one
+/// channel's slice — and is carried purely to label the error, so a
+/// "note doesn't end" diagnostic names the offending channel the way
+/// upstream's own `RaiseError` context does. That is deliberate, not a
+/// leftover parameter.
+///
 /// # Errors
 ///
 /// [`MidiError::UnterminatedNote`] if no match is found before the track's
@@ -208,6 +247,33 @@ fn find_note_end(
         .iter()
         .find_map(|&(t, e)| matches!(e, RawEvent::NoteOff { key: k, .. } if k == key).then_some(t))
         .ok_or(MidiError::UnterminatedNote { channel, key })
+}
+
+/// Whether this channel becomes one of the compiled song's tracks:
+/// `true` when it carries at least one note-on with a strictly positive
+/// *raw* tick duration, reproducing `midi.cpp:484-490`'s `if
+/// (event.param2 > 0)` guard around `s_minNote` and `:933`'s
+/// `if (s_minNote != 0xFF)` test on it (module docs, "Which channels become
+/// tracks").
+///
+/// # Errors
+///
+/// [`MidiError::UnterminatedNote`] if a note-on on this channel never ends
+/// — the same failure [`push_notes`] would raise, surfaced here because
+/// upstream's `FindNoteEnd` likewise runs (and can `RaiseError`) for every
+/// note-on before the gate is consulted.
+fn channel_is_playable(channel_events: &[(u32, RawEvent)], channel: u8) -> Result<bool, MidiError> {
+    for index in 0..channel_events.len() {
+        let (time, event) = channel_events[index];
+        let RawEvent::NoteOn { key, .. } = event else {
+            continue;
+        };
+        let off_time = find_note_end(&channel_events[index + 1..], channel, key)?;
+        if off_time > time {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 /// Pair every note-on in `channel_events` with its ending tick, apply the
@@ -233,8 +299,8 @@ fn push_notes(
         let off_time = find_note_end(&channel_events[index + 1..], channel, key)?;
         let raw_duration = off_time.checked_sub(time).ok_or(MidiError::Truncated)?;
 
-        let start = convert_ticks(time, division);
-        let mut duration = convert_ticks(raw_duration, division);
+        let start = convert_ticks(time, division)?;
+        let mut duration = convert_ticks(raw_duration, division)?;
         if duration == 0 {
             duration = 1; // midi.cpp:643-644
         }
@@ -249,7 +315,10 @@ fn push_notes(
                     gate: 0,
                 },
             ));
-            items.push((start + duration, ItemKind::EndOfTie { key }));
+            let end = start
+                .checked_add(duration)
+                .ok_or(MidiError::TickOverflow(off_time))?;
+            items.push((end, ItemKind::EndOfTie { key }));
         } else {
             #[allow(clippy::cast_possible_truncation)] // duration <= 96 here
             let gate = duration as u8;
@@ -308,7 +377,7 @@ fn compile_track(
     }
 
     for &(time, event) in seq_events {
-        let converted = convert_ticks(time, division);
+        let converted = convert_ticks(time, division)?;
         match event {
             RawEvent::Tempo(microseconds) => {
                 if include_tempo {
@@ -482,17 +551,17 @@ pub(super) fn compile(midi_bytes: &[u8], cfg: &MidiCfgEntry) -> Result<CompiledS
                 .copied()
                 .filter(|(_, e)| e.channel() == Some(channel))
                 .collect();
-            let has_note = channel_events
-                .iter()
-                .any(|(_, e)| matches!(e, RawEvent::NoteOn { .. }));
-            if !has_note {
+            // Upstream's own `s_minNote != 0xFF` gate, which only a note-on
+            // of raw duration > 0 can clear (module docs, "Which channels
+            // become tracks").
+            if !channel_is_playable(&channel_events, channel)? {
                 continue;
             }
 
             let final_boundary = convert_ticks(
                 seq_track.end_of_track.max(parsed.end_of_track),
                 header.division,
-            );
+            )?;
             let track = compile_track(
                 channel,
                 &channel_events,

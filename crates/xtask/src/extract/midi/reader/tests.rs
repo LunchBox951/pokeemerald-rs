@@ -31,6 +31,35 @@ fn vlq_reads_a_single_byte_value() {
     assert_eq!(r.vlq().unwrap(), 0x40);
 }
 
+/// The largest quantity a standard MIDI file can legally encode: four
+/// bytes, 28 bits, all ones.
+#[test]
+fn vlq_reads_the_largest_legal_four_byte_value() {
+    let mut r = MidiReader::new(&[0xFF, 0xFF, 0xFF, 0x7F]);
+    assert_eq!(r.vlq().unwrap(), 0x0FFF_FFFF);
+}
+
+/// Pins `MidiReader::vlq`'s documented decision to reproduce
+/// `tools/mid2agb/midi.cpp:124`'s `val <<= 7` rather than reject an
+/// over-long quantity. Five 7-bit groups is 35 bits; the top three fall off
+/// a `u32` exactly as they do in upstream's C++, leaving `0x7F` shifted up
+/// by 28 and truncated, i.e. `0xF000_0000`. Neither side errors, and
+/// neither side panics — a debug-build `<<` traps only on an out-of-range
+/// *shift amount*, never on discarded bits.
+#[test]
+fn over_long_vlq_wraps_like_upstreams_shift() {
+    let mut r = MidiReader::new(&[0xFF, 0x80, 0x80, 0x80, 0x00]);
+    assert_eq!(r.vlq().unwrap(), 0xF000_0000);
+}
+
+/// A quantity whose continuation bit never clears before the chunk ends is
+/// the reader's *only* VLQ failure mode (`MidiReader::vlq`'s docs).
+#[test]
+fn unterminated_vlq_runs_out_of_bytes() {
+    let mut r = MidiReader::new(&[0x80, 0x80, 0x80]);
+    assert_eq!(r.vlq().unwrap_err(), MidiError::Truncated);
+}
+
 #[test]
 fn header_reports_format_track_count_and_division() {
     let bytes = mthd(1, 11, 24);

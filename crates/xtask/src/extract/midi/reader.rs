@@ -67,17 +67,43 @@ impl<'a> MidiReader<'a> {
     /// continuation signalled by the top bit, big-endian bit order
     /// (`tools/mid2agb/midi.cpp:116-129`'s `ReadVLQ`).
     ///
+    /// # Over-long quantities: upstream's tolerance, on purpose
+    ///
+    /// A standard MIDI file's VLQs are at most 4 bytes (28 bits) by
+    /// construction, but nothing in the byte stream enforces that, and
+    /// `ReadVLQ` carries no malformed-VLQ diagnostic at all: it accumulates
+    /// with a plain `val <<= 7` (`midi.cpp:124`) into a `std::uint32_t`, so
+    /// a fifth-or-later continuation byte silently pushes the high bits off
+    /// the top. This reader does the same — Rust's shift-overflow check is
+    /// on the shift *amount* (`7` is always in range for a `u32`), not on
+    /// discarded bits, so `<<` drops them in debug and release alike, byte
+    /// for byte as the C++ does.
+    ///
+    /// An earlier revision claimed to reject ">5 continuation bytes" via
+    /// [`u32::checked_shl`]. That guard never existed (`checked_shl` only
+    /// fails for a shift `>= 32`, never for lost bits), so rather than
+    /// inventing a rejection upstream does not perform — behavioural
+    /// fidelity is the tie-breaker for the real pipeline — the claim is
+    /// gone and upstream's tolerance is pinned by test
+    /// (`over_long_vlq_wraps_like_upstreams_shift`).
+    ///
+    /// This fixes the module's fail-open/fail-closed line: the *reader*
+    /// mirrors upstream's tolerance, and the tick arithmetic downstream
+    /// ([`super::translate::convert_ticks`], which evaluates in `u64` and
+    /// returns [`MidiError::TickOverflow`]) is where an out-of-range tick
+    /// becomes a real error instead of a silent wrap. A hostile file can
+    /// make this reader return a nonsense `u32`; it cannot make the
+    /// compiler panic, and it cannot make it emit silently-wrapped timing.
+    ///
     /// # Errors
     ///
-    /// [`MidiError::MalformedVlq`] if more than 5 continuation bytes appear
-    /// (5*7 = 35 bits would overflow a `u32`) without terminating —
-    /// unreachable for any real MIDI file, whose VLQs never exceed 4 bytes
-    /// by construction, but this reader is over untrusted bytes.
+    /// [`MidiError::Truncated`] if the chunk's bytes run out before a byte
+    /// with its continuation bit clear — the only way this can fail.
     pub(super) fn vlq(&mut self) -> Result<u32, MidiError> {
         let mut val: u32 = 0;
         loop {
             let c = self.u8()?;
-            val = val.checked_shl(7).ok_or(MidiError::MalformedVlq)? | u32::from(c & 0x7F);
+            val = (val << 7) | u32::from(c & 0x7F); // midi.cpp:124's `val <<= 7`
             if c & 0x80 == 0 {
                 return Ok(val);
             }

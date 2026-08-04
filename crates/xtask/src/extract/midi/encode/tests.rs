@@ -1,5 +1,6 @@
 use super::encode_song;
 use crate::extract::midi::compile::CompiledSong;
+use crate::extract::midi::error::MidiError;
 use crate::extract::midi::event::SongEvent;
 
 fn sample_track() -> Vec<SongEvent> {
@@ -50,7 +51,8 @@ fn encode_song_matches_the_documented_wire_format() {
         reverb: Some(50),
         tracks: vec![sample_track()],
     };
-    let bytes = encode_song(&song);
+    let bytes =
+        encode_song(&song).expect("the sample song is well inside the u8 track-count bound");
 
     let mut expected = Vec::new();
     let id = "audio/voicegroup/title";
@@ -97,7 +99,8 @@ fn no_reverb_writes_a_false_flag_and_zero_byte() {
         reverb: None,
         tracks: vec![vec![SongEvent::Fine]],
     };
-    let bytes = encode_song(&song);
+    let bytes =
+        encode_song(&song).expect("the sample song is well inside the u8 track-count bound");
     let id_len = "audio/voicegroup/title".len();
     // id (2 + id_len bytes), priority (1), has_reverb (1), reverb (1)
     let reverb_flag_offset = 2 + id_len + 1;
@@ -116,8 +119,30 @@ fn multiple_tracks_each_carry_their_own_event_count() {
             vec![SongEvent::Wait(1), SongEvent::Fine],
         ],
     };
-    let bytes = encode_song(&song);
+    let bytes =
+        encode_song(&song).expect("the sample song is well inside the u8 track-count bound");
     let id_len = "audio/voicegroup/title".len();
     let track_count_offset = 2 + id_len + 1 + 1 + 1;
     assert_eq!(bytes[track_count_offset], 2);
+}
+
+/// More tracks than the `u8` track-count field can describe is a returned
+/// error, not a panic. 255 tracks is the last encodable count; 256 is the
+/// first that is not. Reachable only from a format-1 file with seventeen or
+/// more note-carrying `MTrk` chunks (16 channels each), which is why the
+/// bound is the *wire format's*, not one upstream imposes — but the caller
+/// still gets a diagnostic it can attach a path to.
+#[test]
+fn more_tracks_than_the_u8_count_can_describe_is_an_error() {
+    let song = |count: usize| CompiledSong {
+        voicegroup_label: "title".to_owned(),
+        priority: 0,
+        reverb: None,
+        tracks: vec![vec![SongEvent::Fine]; count],
+    };
+    assert!(encode_song(&song(255)).is_ok());
+    assert_eq!(
+        encode_song(&song(256)).unwrap_err(),
+        MidiError::TooManyTracks(256)
+    );
 }

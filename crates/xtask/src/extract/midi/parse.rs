@@ -38,6 +38,24 @@
 //! skipped by declared length. Anything not listed here that still consumes
 //! bytes (e.g. a text meta event whose payload doesn't match `[`/`]`/`][`/`:`)
 //! is parsed far enough to skip correctly but yields no [`RawEvent`].
+//!
+//! ## System-common/real-time status bytes: rejected, not skipped
+//!
+//! One deliberate narrowing: [`parse_track`] accepts only `0xF0`/`0xF7` out
+//! of the `0xF_` range (plus `0xFF`, the meta-event escape) and rejects
+//! `0xF1`..=`0xF6` and `0xF8`..=`0xFE` as
+//! [`MidiError::InvalidStatusByte`]. `DetermineEventCategory`
+//! (`midi.cpp:199-204`) instead lumps *every* `typeChan >= 0xF0` into
+//! `MidiEventCategory::SysEx` and skips it by a VLQ length — right for
+//! `0xF0`/`0xF7`, wrong for the rest: song position (`0xF2`) carries two
+//! fixed data bytes and the real-time bytes (`0xF8`..=`0xFE`) carry none,
+//! so reading a length there consumes the wrong bytes and desynchronizes
+//! the scan from that point on. No standard MIDI *file* stores those (they
+//! are wire-protocol messages), so upstream's mis-framing is unreachable in
+//! practice and this rejection costs no real input; failing closed on a
+//! byte whose correct handling upstream gets wrong is the safer of the two.
+//! Recorded because it is a genuine difference in what each side accepts,
+//! not just in diagnostics.
 
 use super::error::MidiError;
 use super::reader::MidiReader;

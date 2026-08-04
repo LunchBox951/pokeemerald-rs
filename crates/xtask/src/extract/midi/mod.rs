@@ -93,8 +93,9 @@ const SONG_PACK_ID: &str = "audio/song/mus_title";
 /// [`ExtractError::ReadFailed`] if `midi.cfg` or the `.mid` source is
 /// missing; [`ExtractError::MidiCfg`] if `midi.cfg` has no entry for
 /// [`SONG_MIDI_FILENAME`] or that entry is malformed; [`ExtractError::Midi`]
-/// if compiling the `.mid` source itself fails (see [`error::MidiError`]'s
-/// variants).
+/// if compiling the `.mid` source itself fails, or if the compiled song
+/// carries more tracks than the wire format's `u8` count can describe (see
+/// [`error::MidiError`]'s variants).
 pub(super) fn extract_song(upstream: &Path, writer: &mut PackWriter) -> Result<(), ExtractError> {
     let cfg_path = upstream.join("sound/songs/midi/midi.cfg");
     let cfg_text = read_text(&cfg_path)?;
@@ -105,11 +106,13 @@ pub(super) fn extract_song(upstream: &Path, writer: &mut PackWriter) -> Result<(
     let midi_bytes = read_file(&midi_path)?;
     let song = compile::compile(&midi_bytes, &entry)
         .map_err(|e| ExtractError::Midi(midi_path.clone(), e))?;
+    let payload =
+        encode::encode_song(&song).map_err(|e| ExtractError::Midi(midi_path.clone(), e))?;
 
     writer.push(PackEntry {
         id: SONG_PACK_ID.to_owned(),
         kind: PackKind::Raw,
-        payload: encode::encode_song(&song),
+        payload,
     });
     Ok(())
 }
@@ -211,10 +214,14 @@ mod tests {
             .count();
         assert_eq!(goto_count, 0);
 
-        // Three `XCMD xIECV`/`xIECL` pairs total (confirmed against the
-        // oracle: `mus_title_6`/`mus_title_7`/`mus_title_9` each carry
-        // exactly one), pseudo-echo volumes 10, 10, 16 and length 12 each
-        // time.
+        // Three `XCMD xIECV`/`xIECL` pairs total, pseudo-echo volumes 10,
+        // 10, 16 and length 12 each time. Confirmed against the oracle:
+        // its `mus_title_7`/`mus_title_8`/`mus_title_10` blocks each carry
+        // exactly one. Those are upstream's own 1-based `g_agbTrack`
+        // labels, i.e. this compiler's `song.tracks[6]`/`[7]`/`[9]` -- an
+        // earlier revision of this comment printed the 0-based indices
+        // against the `mus_title_` label prefix, naming three blocks that
+        // are not the ones carrying the pairs.
         let volumes: Vec<u8> = song
             .tracks
             .iter()

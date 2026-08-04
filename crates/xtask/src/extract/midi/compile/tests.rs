@@ -382,3 +382,92 @@ fn song_level_metadata_is_carried_from_cfg() {
     assert_eq!(compiled.priority, 3);
     assert_eq!(compiled.reverb, Some(50));
 }
+
+/// A channel whose every note-on is cancelled at the very same tick is not
+/// playable and emits no track at all — `midi.cpp:484-490` only lets a
+/// note-on touch `s_minNote` `if (event.param2 > 0)` (raw tick duration),
+/// and `:933` gates the whole track on `s_minNote != 0xFF` (module docs,
+/// "Which channels become tracks").
+///
+/// The consequence this pins is not just the missing track: channel 0's
+/// phantom track would have been the *first* one, and so would have taken
+/// the song's `Tempo` with it (`include_tempo`), leaving the one real track
+/// tempo-less. Both halves are asserted.
+#[test]
+fn a_channel_of_zero_duration_notes_emits_no_track() {
+    let mut body = Vec::new();
+    body.extend(vlq(0));
+    body.extend([0xFF, 0x51, 0x03, 0x07, 0xA1, 0x20]); // 500_000 us/qn = 120 BPM
+    body.extend(vlq(0));
+    body.extend([0x90, 60, 100]); // channel 0 note-on ...
+    body.extend(vlq(0));
+    body.extend([0x80, 60, 0]); // ... cancelled at the same tick
+    body.extend(vlq(0));
+    body.extend([0x91, 64, 100]); // channel 1, a real note
+    body.extend(vlq(4));
+    body.extend([0x81, 64, 0]);
+    let midi = single_track_midi(24, body);
+
+    let compiled = compile(&midi, &cfg()).unwrap();
+    assert_eq!(compiled.tracks.len(), 1);
+    assert!(compiled.tracks[0].contains(&SongEvent::Tempo(120)));
+    assert!(compiled.tracks[0].contains(&SongEvent::Note {
+        key: 64,
+        velocity: 100,
+        gate: 4,
+    }));
+}
+
+/// A channel that carries only controllers and no note-on at all is not a
+/// track either — the same gate, from the other direction.
+#[test]
+fn a_channel_with_no_notes_emits_no_track() {
+    let mut body = Vec::new();
+    body.extend(vlq(0));
+    body.extend([0xB0, 7, 100]); // channel 0: a volume controller, no notes
+    body.extend(vlq(0));
+    body.extend([0x91, 64, 100]);
+    body.extend(vlq(4));
+    body.extend([0x81, 64, 0]);
+    let midi = single_track_midi(24, body);
+
+    assert_eq!(compile(&midi, &cfg()).unwrap().tracks.len(), 1);
+}
+
+/// `convert_ticks` evaluates `24 * raw` in `u64`: `24 * 0x0FFF_FFFF` is
+/// `0x1_7FFF_FFE8`, past `u32::MAX`, so the old `u32` expression panicked
+/// in debug and wrapped in release on a tick a *legal* four-byte VLQ can
+/// carry. Widened, the quotient is exact whenever it fits, and a
+/// [`MidiError::TickOverflow`] when it does not — never a panic, never a
+/// silent wrap (`super::super::translate::convert_ticks`'s docs).
+#[test]
+fn convert_ticks_evaluates_the_multiply_in_u64() {
+    use crate::extract::midi::translate::convert_ticks;
+
+    assert_eq!(convert_ticks(0x0FFF_FFFF, 24).unwrap(), 0x0FFF_FFFF);
+    assert_eq!(
+        convert_ticks(0x0FFF_FFFF, 1).unwrap_err(),
+        MidiError::TickOverflow(0x0FFF_FFFF)
+    );
+}
+
+/// The end-to-end regression for the same overflow: a crafted `.mid` whose
+/// note-off sits a full four-byte VLQ (`0x0FFF_FFFF` ticks, the largest a
+/// standard MIDI file can encode) after its note-on, at a `division` of `1`
+/// so the scaled result cannot fit a `u32`. This must be a returned error,
+/// not a panic — the never-panic contract `super::super::reader` and
+/// `super::super::translate` share.
+#[test]
+fn a_tick_that_overflows_once_scaled_is_an_error_not_a_panic() {
+    let mut body = Vec::new();
+    body.extend(vlq(0));
+    body.extend([0x90, 60, 100]);
+    body.extend(vlq(0x0FFF_FFFF));
+    body.extend([0x80, 60, 0]);
+    let midi = single_track_midi(1, body);
+
+    assert_eq!(
+        compile(&midi, &cfg()).unwrap_err(),
+        MidiError::TickOverflow(0x0FFF_FFFF)
+    );
+}
