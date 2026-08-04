@@ -1,79 +1,22 @@
 # pokeemerald-rs
 
-Project memory: what this repository is and how to work in it. The *why* lives in
-**`docs/principles.md`** (cite invariants by their `handle`). The definition of
-"done" is **`docs/acceptance/v1.md`**.
+@AGENTS.md
 
-This file is read by every Claude session that works on the project. Keep it
-compact `(lean-docs)`: durable detail belongs in the doc that owns it, linked here.
+The imported `AGENTS.md` above is the full project memory, loaded the same as
+anything written directly in this file. What follows is Claude-only and
+additive — nothing here restates a default the system prompt already covers.
 
-## What this is
+## Claude-specific notes
 
-`pokeemerald-rs` — a single native binary, built from one Cargo workspace, that
-plays Pokémon Emerald on Linux/macOS/Windows with **no GBA emulation**. We port
-the *behaviour* of `pret/pokeemerald`, not its structure `(behavioral-fidelity)`.
-`pokeemerald/` is the canonical game specification (data, scripts, text,
-formulas); `mgba/` clarifies hardware behaviour. Both are read-only `(reference-only)`.
-
-## Layout
-
-- `docs/principles.md` — the invariants. Cite by handle.
-- `docs/acceptance/v1.md` — v1 criteria with stable IDs (`F-1`, `I-4`, …). The
-  roadmap to reach them lives in GitHub issues/PRs/discussions `(constitution-vs-roadmap)`.
-  Issues are grouped by area milestones (M1–M7 = v1, M8 = deferred); each
-  milestone description is that area's briefing — read it via
-  `gh api repos/:owner/:repo/milestones/<n>` and list its issues with
-  `gh issue list --milestone "<title>"`. Conventions: `CONTRIBUTING.md` §Milestones.
-- `ledger/pokeemerald.json` + `scripts/ledger.py` — the coverage ledger.
-- `init.sh` — clones the read-only upstream references into `pokeemerald/` and `mgba/`.
-- `pokeemerald/`, `mgba/` — gitignored upstream references. Never edit or commit.
-
-## Commands
-
-| Purpose | Command |
-|---------|---------|
-| Bootstrap upstream refs | `./init.sh` |
-| Build | `cargo build --workspace` (release: add `--release`) |
-| Test | `cargo test --workspace` |
-| Lint | `cargo clippy --all-targets --workspace -- -D warnings` |
-| Format | `cargo fmt --check` |
-| Ledger | `python3 scripts/ledger.py status \| verify \| gaps \| report` |
-
-> The Rust workspace is not scaffolded yet. Until then the
-> cargo commands are the contract, not yet runnable.
-
-## Conventions `(oop-boundaries)`
-
-- Rust 2021+, stable toolchain. Nightly only with owner sign-off.
-- Subsystems are owned types with methods; traits for polymorphism; explicit
-  module boundaries; **no global mutable state**.
-- One module = one concept. A file over ~600 lines is a smell — ask why.
-- `unsafe` requires a `// SAFETY:` block stating the invariant.
-- Errors are concrete per-crate enums (no `anyhow` in library crates).
-- Public surface documented with `///`. Unit tests alongside code; integration
-  tests under `<crate>/tests/`.
-
-## Coverage ledger
-
-Every upstream artifact needs a tracked Rust home in `ledger/pokeemerald.json`.
-Update **only** via `scripts/ledger.py` (stdlib-only) so the JSON stays
-diff-friendly. Statuses: `pending`, `rewritten` (code), `ported` (data/asset),
-`stubbed`, `folded`, `dropped`. `pending=0` is a v1 gate (`L-1`). Run
-`python3 scripts/ledger.py --help` for the full workflow.
-
-## Release channels
-
-Four channel branches: `dev → unstable → stable → main` (developer → nightly →
-beta → stable). Normal work targets `dev`; scheduled CI opens direct
-next-rung promotion PRs. Only the nightly may auto-merge; beta and stable require
-CODEOWNER review and a manual merge. The release policy and per-rung gates are
-in **`RELEASE.md`**.
-
-## Hard rules — do not
-
-- Edit or commit anything under `pokeemerald/` or `mgba/` `(reference-only)`.
-- Copy upstream code verbatim `(no-verbatim)` — re-implement idiomatically.
-- Add FFI / `bindgen` / linkage to the upstream C `(no-ffi)`.
-- Add a dependency without owner approval `(minimal-deps)`.
-- Weaken `.gitignore`'s exclusion of `pokeemerald/`, `mgba/`, `target/`.
-- Weaken, skip, or delete a test to make a gate pass `(test-ratchet)`.
+- Don't stack extra verification on top of what `cargo test`/`clippy`/`fmt`
+  and CI already gate — re-checking work those commands already checked
+  spends tokens without catching more.
+- Make the routine call yourself. Pause only when two honest readings of an
+  acceptance ID's scope would produce materially different work.
+- Reserve Explore or subagent delegation for genuinely broad sweeps — a
+  multi-crate consistency check, a `ledger.py gaps` survey across many
+  entries — not a scoped, single-file change.
+- Running long or unattended here (`/loop`, a background agent)? Ground
+  progress claims in actual command output (`cargo test`, `ledger.py
+  verify`) — this repo's own maintenance loop already works that way (see
+  README's "How this project is built").

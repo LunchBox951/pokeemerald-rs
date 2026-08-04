@@ -12,3 +12,9 @@ There are no design-spec or plan docs: the roadmap is dynamic and lives in GitHu
 issues, PRs, and discussions `(constitution-vs-roadmap)`. Docs hold the durable
 constitution; GitHub holds the dynamic plan, and the path to each acceptance
 criterion is planned there, not frozen into a file.
+
+Agents: start at [`AGENTS.md`](../AGENTS.md) (Claude Code also reads
+[`CLAUDE.md`](../CLAUDE.md), which imports it) for the operational rules —
+commands, autonomy boundaries, hard rules. For a subsystem's current
+implementation state, prefer its crate's `//!` doc (`crates/*/src/lib.rs`)
+over any hand-written status summary.

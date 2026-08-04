@@ -1,31 +1,34 @@
 # pokeemerald-rs
 
-Project instructions for GPT agents working in this repository. This file should
-stay compact (`lean-docs`): keep durable detail in the document that owns it and
-link to that document from here. The *why* lives in **`docs/principles.md`**
-(cite invariants by their `handle`). The definition of "done" is
-**`docs/acceptance/v1.md`**.
+Project instructions for agents working in this repository. Keep this file
+compact `(lean-docs)`: durable detail belongs in the doc that owns it, linked
+here, not restated. Read [`docs/README.md`](docs/README.md) for the full doc
+reading order. The *why* lives in **`docs/principles.md`** (cite invariants by
+their `handle`). The definition of "done" is **`docs/acceptance/v1.md`**.
 
 ## What this is
 
 `pokeemerald-rs` — a single native binary, built from one Cargo workspace, that
 plays Pokémon Emerald on Linux/macOS/Windows with **no GBA emulation**. We port
-the *behaviour* of `pret/pokeemerald`, not its structure (`behavioral-fidelity`).
+the *behaviour* of `pret/pokeemerald`, not its structure `(behavioral-fidelity)`.
 `pokeemerald/` is the canonical game specification (data, scripts, text,
-formulas); `mgba/` clarifies hardware behaviour. Both are read-only
-(`reference-only`).
+formulas); `mgba/` clarifies hardware behaviour. Both are read-only `(reference-only)`.
 
 ## Layout
 
 - `docs/principles.md` — the invariants. Cite by handle.
 - `docs/acceptance/v1.md` — v1 criteria with stable IDs (`F-1`, `I-4`, …). The
-  roadmap to reach them lives in GitHub issues/PRs/discussions
-  (`constitution-vs-roadmap`).
+  roadmap to reach them lives in GitHub issues/PRs/discussions `(constitution-vs-roadmap)`.
+  Issues are grouped by area milestones (M1–M7 = v1, M8 = deferred); each
+  milestone description is that area's briefing — read it via
+  `gh api repos/:owner/:repo/milestones/<n>` and list its issues with
+  `gh issue list --milestone "<title>"`. Conventions: `CONTRIBUTING.md` §Milestones.
+- `crates/*/src/lib.rs` — each crate's `//!` doc is the live per-subsystem
+  status write-up (what's implemented, what's next). Prefer it over
+  hand-describing subsystem state anywhere else.
 - `ledger/pokeemerald.json` + `scripts/ledger.py` — the coverage ledger.
-- `init.sh` — clones the read-only upstream references into `pokeemerald/` and
-  `mgba/`.
-- `pokeemerald/`, `mgba/` — gitignored upstream references. Never edit or
-  commit.
+- `init.sh` — clones the read-only upstream references into `pokeemerald/` and `mgba/`.
+- `pokeemerald/`, `mgba/` — gitignored upstream references. Never edit or commit.
 
 ## Commands
 
@@ -38,22 +41,19 @@ formulas); `mgba/` clarifies hardware behaviour. Both are read-only
 | Format | `cargo fmt --check` |
 | Ledger | `python3 scripts/ledger.py status \| verify \| gaps \| report` |
 
-> The Rust workspace is not scaffolded yet. Until then the cargo commands are
-> the contract, not yet runnable.
+## Autonomy boundaries
 
-## GPT agent workflow
+- **Investigate freely** — read code, run the commands above, `git
+  log`/`diff`/`status`. No confirmation needed.
+- **Change freely, in scope** — code or doc edits laddered to one
+  `docs/acceptance/v1.md` ID, validated with the commands above.
+- **Confirm first** — a new Cargo dependency `(minimal-deps)`, an edit to
+  `ledger/pokeemerald.json` outside `scripts/ledger.py`, or a change to
+  `.github/workflows/`, `RELEASE.md`, `CODEOWNERS`, or a version/release file.
+  `pokeemerald/` and `mgba/` are never edited, confirmation or not
+  `(reference-only)`.
 
-- Read this file before editing, then inspect the smallest relevant set of files.
-- Prefer targeted searches with `rg`; do not rely on broad recursive shell scans.
-- Keep changes focused on the user request. Do not opportunistically refactor.
-- Preserve existing project wording and handles when translating guidance between
-  agent-specific instruction files.
-- If you change runnable code, run the narrowest useful check first, then broader
-  checks when practical. Report commands and outcomes exactly.
-- When citing repository files in final responses, use line-cited file references
-  such as `【F:path/to/file†L1-L3】`.
-
-## Conventions (`oop-boundaries`)
+## Conventions `(oop-boundaries)`
 
 - Rust 2021+, stable toolchain. Nightly only with owner sign-off.
 - Subsystems are owned types with methods; traits for polymorphism; explicit
@@ -82,9 +82,9 @@ in **`RELEASE.md`**.
 
 ## Hard rules — do not
 
-- Edit or commit anything under `pokeemerald/` or `mgba/` (`reference-only`).
-- Copy upstream code verbatim (`no-verbatim`) — re-implement idiomatically.
-- Add FFI / `bindgen` / linkage to the upstream C (`no-ffi`).
-- Add a dependency without owner approval (`minimal-deps`).
+- Edit or commit anything under `pokeemerald/` or `mgba/` `(reference-only)`.
+- Copy upstream code verbatim `(no-verbatim)` — re-implement idiomatically.
+- Add FFI / `bindgen` / linkage to the upstream C `(no-ffi)`.
+- Add a dependency without owner approval `(minimal-deps)`.
 - Weaken `.gitignore`'s exclusion of `pokeemerald/`, `mgba/`, `target/`.
-- Weaken, skip, or delete a test to make a gate pass (`test-ratchet`).
+- Weaken, skip, or delete a test to make a gate pass `(test-ratchet)`.

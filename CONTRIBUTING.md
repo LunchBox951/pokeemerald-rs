@@ -84,10 +84,7 @@ upstream code, stop and ask in an issue.
 - **Test ratchet `(test-ratchet)`** — never delete, skip, or weaken a test to make
   a gate pass. Fix the code, or fix the test with a recorded reason.
 
-> The Rust workspace isn't scaffolded yet. Until it lands, the `cargo`
-> commands below are the contract, and CI runs them as placeholders that echo
-> `TODO` and exit 0. Once the workspace exists they become real with no change to
-> the release model.
+CI enforces all four on every PR:
 
 ```bash
 cargo build --release --workspace
@@ -114,7 +111,7 @@ python3 scripts/ledger.py verify                          # CI runs this too
 
 Don't hand-edit the JSON — it will desync and fail validation. Full workflow and
 the meaning of each status (`pending`, `rewritten`, `ported`, `stubbed`,
-`folded`, `dropped`) are in [`CLAUDE.md`](CLAUDE.md).
+`folded`, `dropped`) are in [`AGENTS.md`](AGENTS.md).
 
 ## Opening a pull request
 
@@ -123,8 +120,7 @@ honestly:
 
 - **Linked issue** — what roadmap issue this advances, and the acceptance ID(s)
   it ladders to.
-- **Test evidence** — what you ran and what it showed (a placeholder CI pass is
-  acceptable while the workspace is still stubbed, but say so).
+- **Test evidence** — what you ran and what it showed.
 - **Ledger impact** — `none`, `verify-only`, or the list of touched entries.
 - **Dependency impact** — `none`, or the explicit owner-approved dependency with
   its justification `(minimal-deps)`.
