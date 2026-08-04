@@ -1,16 +1,16 @@
 # pokeemerald-rs
 
-A from-scratch **native Rust port of Pokémon Emerald** — a single binary, built
-from one Cargo workspace, that plays the game on Linux/macOS/Windows with **no GBA
-emulation**. We reproduce the game's *observable behaviour* — the same dialog,
-trainers, encounters, music, and damage outcomes — in idiomatic Rust, not its
-internal structure `(behavioral-fidelity)`.
+A from-scratch **native Rust port of Pokémon Emerald** — a single binary, being
+built from one Cargo workspace, to play the game on Linux/macOS/Windows with
+**no GBA emulation**. We reproduce the game's *observable behaviour* — the same
+dialog, trainers, encounters, music, and damage outcomes — in idiomatic Rust,
+not its internal structure `(behavioral-fidelity)`.
 
-> **Status: pre-alpha.** The Rust workspace is not scaffolded yet. This repository
-> currently holds the constitution — goals, principles, and acceptance criteria —
-> and the scaffolding (CI, versioning, the coverage ledger) that the build grows
-> from. See [`docs/acceptance/v1.md`](docs/acceptance/v1.md) for exactly what "v1"
-> means and how far along we are.
+> **Status: pre-alpha.** The Cargo workspace is scaffolded and its crates build,
+> lint, and test clean in CI, but no subsystem is complete and the binary
+> doesn't yet play through a battle. See
+> [`docs/acceptance/v1.md`](docs/acceptance/v1.md) for exactly what "v1" means
+> and how far along we are.
 
 ## How this project is built
 
@@ -47,8 +47,6 @@ The authoritative per-criterion status lives in
 repository's [Projects tab](../../projects).
 
 ## Building
-
-Once the workspace lands, the flow will be:
 
 ```bash
 ./init.sh                  # clone the read-only upstream references

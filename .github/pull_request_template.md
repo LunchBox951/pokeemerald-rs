@@ -20,8 +20,7 @@ Cite the v1 acceptance ID this ladders up to (docs/acceptance/v1.md), e.g. F-7.
 ## Test evidence
 
 <!--
-How this was verified. A placeholder CI pass is acceptable while the Rust
-workspace is unscaffolded, but say so explicitly (test-ratchet).
+How this was verified — commands run and their outcome (test-ratchet).
 -->
 
 ## Ledger impact

@@ -18,9 +18,7 @@ updates:
         patterns:
           - "github/codeql-action*"
 
-  # Cargo dependencies. The workspace is not scaffolded yet; this entry activates
-  # once a root Cargo.toml exists. Until then Dependabot finds no
-  # manifest here and simply no-ops.
+  # Cargo dependencies (root Cargo.toml workspace manifest).
   - package-ecosystem: "cargo"
     directory: "/"
     schedule:

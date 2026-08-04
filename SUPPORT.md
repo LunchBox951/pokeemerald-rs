@@ -15,8 +15,8 @@ and no SLA — but the channels below are watched, and good reports help.
 
 ## What to expect
 
-- This is **experimental software**. The Rust workspace isn't even scaffolded yet
-  — see [`docs/acceptance/v1.md`](docs/acceptance/v1.md) for what "done" means and
+- This is **experimental software**; no subsystem is complete yet — see
+  [`docs/acceptance/v1.md`](docs/acceptance/v1.md) for what "done" means and
   how far along things are. Expect missing features, rough edges, and breaking
   changes.
 - Issues and Discussions are triaged when the automated maintenance routine next
