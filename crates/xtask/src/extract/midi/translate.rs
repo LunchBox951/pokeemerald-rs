@@ -23,7 +23,8 @@
 //! that follows it, so the rest of the track keeps its original timing.
 //! That is a real, deliberate behavioural divergence from `tools/mid2agb`,
 //! recorded here and in the ledger's own reason rather than buried: it is
-//! *unobservable for `mus_title.mid`*, whose three CC `0x1E` occurrences all
+//! *unobservable for `mus_title.mid`*, whose six CC `0x1E` occurrences (two
+//! each on the three pseudo-echo tracks, `mus_title_7`/`_8`/`_10`) all
 //! sit at tick `0` with a zero gap to the `0x1D`/`0x1F` that consumes them
 //! (confirmed against a locally built `tools/mid2agb` oracle — all ten
 //! compiled tracks are byte-identical either way), but a different song
