@@ -223,7 +223,7 @@ pub const fn is_warp_trigger(behavior: u8) -> bool {
 /// Whether standing on a tile with `behavior` can roll a **land** wild
 /// encounter — upstream `MetatileBehavior_IsLandWildEncounter`
 /// (`metatile_behavior.c:819-826`), the gate `StandardWildEncounter`
-/// (`wild_encounter.c:596`) checks before anything else on the land path
+/// (`wild_encounter.c:595`) checks before anything else on the land path
 /// (issue #169).
 ///
 /// Upstream composes it from two table lookups:

@@ -124,7 +124,7 @@ fn choosing_a_land_slot_costs_exactly_one_draw_taken_modulo_one_hundred() {
     assert_eq!(rng.draws(), 5, "one draw per slot pick, no more");
 }
 
-/// `ChooseWildMonLevel` (`wild_encounter.c:268-297`): `min + Random() % (max -
+/// `ChooseWildMonLevel` (`wild_encounter.c:268-303`): `min + Random() % (max -
 /// min + 1)`, one draw, uniform over the closed band.
 #[test]
 fn a_level_is_drawn_uniformly_across_the_closed_band() {
@@ -140,7 +140,7 @@ fn a_level_is_drawn_uniformly_across_the_closed_band() {
     }
 }
 
-/// The "make sure minimum level is less than maximum level" swap (`:277-286`):
+/// The "make sure minimum level is less than maximum level" swap (`:275-285`):
 /// an inverted band still yields a level inside it.
 #[test]
 fn an_inverted_level_band_is_ordered_before_the_draw() {
@@ -325,7 +325,7 @@ fn the_pre_draw_gates_never_touch_the_rng() {
 }
 
 /// A map with a wild table but no *land* table rolls nothing on foot, before
-/// any draw -- upstream's `landMonsInfo == NULL` gate (`:598`).
+/// any draw -- upstream's `landMonsInfo == NULL` gate (`:597`).
 #[test]
 fn a_map_without_a_land_table_rolls_nothing_on_foot() {
     // Route 108 is open sea: water + fishing, no land block.
@@ -375,7 +375,7 @@ fn the_first_four_steps_after_a_transition_never_draw() {
     assert_eq!(state.immunity_steps(), 0);
 }
 
-/// A suppressed step still updates `sPrevMetatileBehavior` (`:672`), so the
+/// A suppressed step still updates `sPrevMetatileBehavior` (`:673`), so the
 /// first *rolled* step out of the immunity window is not spuriously treated
 /// as a metatile change.
 #[test]
