@@ -127,9 +127,9 @@ const DIRECT_SOUND_SAMPLES: [&str; 33] = [
     "sc88pro_trumpet_72",
     "sc88pro_trumpet_84",
     "sc88pro_tuba_39",
-    "sc88pro_xylophone",
     "sc88pro_tuba_51",
     "sc88pro_tubular_bell",
+    "sc88pro_xylophone",
     "trinity_cymbal_crash",
     "unknown_bell",
     "unknown_close_hihat",
@@ -334,6 +334,10 @@ mod tests {
     fn direct_sound_sample_list_has_no_duplicates() {
         let unique: std::collections::HashSet<_> = DIRECT_SOUND_SAMPLES.iter().collect();
         assert_eq!(unique.len(), DIRECT_SOUND_SAMPLES.len());
+        assert!(
+            DIRECT_SOUND_SAMPLES.is_sorted(),
+            "the list documents itself as sorted -- keep it that way"
+        );
         for name in DIRECT_SOUND_SAMPLES {
             assert!(name
                 .chars()

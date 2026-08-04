@@ -156,6 +156,7 @@ fn every_id_a_voicegroup_references_resolves_to_a_pack_entry() {
     // requires each referenced id to name a real pack entry.
     let pack = AssetPack::load_default().expect("run `cargo xtask extract` first");
     let mut dangling = Vec::new();
+    let mut checked = 0usize;
     for label in EXPECTED_GROUPS {
         let group = decode(&pack, label);
         for (index, slot) in group.slots().iter().enumerate() {
@@ -167,6 +168,7 @@ fn every_id_a_voicegroup_references_resolves_to_a_pack_entry() {
                 _ => None,
             };
             if let Some(id) = id {
+                checked += 1;
                 if pack.raw(id).is_err() {
                     dangling.push(format!("{label}[{index}] -> {id}"));
                 }
@@ -174,4 +176,8 @@ fn every_id_a_voicegroup_references_resolves_to_a_pack_entry() {
         }
     }
     assert!(dangling.is_empty(), "dangling references: {dangling:?}");
+    assert!(
+        checked > 0,
+        "the walk checked nothing -- the group set or slots went empty"
+    );
 }
