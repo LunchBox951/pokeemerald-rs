@@ -409,12 +409,20 @@ const fn selectable_slot(slot_move: Option<MoveId>) -> bool {
 ///
 /// # Errors
 ///
-/// The hit-pipeline's error if `move_id` is a genuinely unsupported move
+/// [`BattleError::UnsupportedMoveEffect`] for [`STRUGGLE`], rejected here —
+/// not left to the pipelines — because the hit pipeline *would* accept it
+/// while this slice never applies its `EFFECT_RECOIL` half; keeping the
+/// guard inside the composed check means no future call site can admit
+/// Struggle by forgetting a follow-up test. Otherwise the hit-pipeline's
+/// error if `move_id` is a genuinely unsupported move
 /// (neither pipeline accepts it — [`stat_change::ensure_resolvable`]'s
 /// [`BattleError::UnsupportedMoveEffect`] would be strictly less
 /// informative for, say, an unknown move type), or `Ok(())` if either
 /// pipeline accepts it.
 fn ensure_executable(dex: &Dex, move_id: MoveId) -> Result<(), BattleError> {
+    if move_id == STRUGGLE {
+        return Err(BattleError::UnsupportedMoveEffect(move_id));
+    }
     match crate::hit::ensure_resolvable(dex, move_id) {
         Ok(()) => Ok(()),
         Err(hit_error) => {
@@ -502,9 +510,6 @@ impl Battle {
         // without disturbing the stream and another action can be chosen.
         for slot in enemy.moves() {
             ensure_executable(&dex, slot.move_id)?;
-            if slot.move_id == STRUGGLE {
-                return Err(BattleError::UnsupportedMoveEffect(slot.move_id));
-            }
         }
         let random_turn_number = rng.next_u16();
         // `TryDoEventsBeforeFirstTurn` seeds the initial turn order with
@@ -614,7 +619,8 @@ impl Battle {
     /// placeholder that `CheckMoveLimitations` rules out —
     /// `MOVE_LIMITATION_ZEROMOVE`, `battle_util.c:1098`) — and, this
     /// slice's own boundary, a known move neither pipeline can execute
-    /// ([`ensure_executable`], plus Struggle's unmodelled recoil).
+    /// ([`ensure_executable`], which also rejects Struggle for its
+    /// unmodelled recoil).
     /// Construction deliberately allows such moves in unselected player
     /// slots; the check moves here, still ahead of the turn's first draw,
     /// so a rejected pick leaves the battle and the shared stream untouched
@@ -632,9 +638,6 @@ impl Battle {
             return Err(BattleError::NoPpRemaining(index));
         }
         ensure_executable(&self.dex, slot.move_id)?;
-        if slot.move_id == STRUGGLE {
-            return Err(BattleError::UnsupportedMoveEffect(slot.move_id));
-        }
         Ok(slot.move_id)
     }
 
