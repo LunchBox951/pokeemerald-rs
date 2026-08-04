@@ -39,19 +39,24 @@
 //! `setstatchanger STAT_*, 1, TRUE` (`asm/macros/battle_script.inc:1366`)
 //! writes `gBattleScripting.statChanger = STAT_* | (1 << 4) | (TRUE << 7)`;
 //! the `TRUE` third argument sets `STAT_BUFF_NEGATIVE` (`0x80`,
-//! `include/battle.h:481`), so every move here is a `-1`-stage move, never a
+//! `include/battle.h:483`), so every move here is a `-1`-stage move, never a
 //! raise — there is no caller-supplied magnitude to model.
 //!
 //! # What this module deliberately does not model
 //!
-//! `jumpifstatus2 BS_TARGET, STATUS2_SUBSTITUTE` and `ChangeStatBuffs`'s
+//! `jumpifstatus2 BS_TARGET, STATUS2_SUBSTITUTE`, `ChangeStatBuffs`'s own
+//! Protect gate (`JumpIfMoveAffectedByProtect(0)` at
+//! `pokeemerald/src/battle_script_commands.c:6981`-`:6986` — a *second*
+//! Protect check, distinct from `Cmd_accuracycheck`'s, taken when the
+//! non-`CERTAIN` path finds the target protected; all four moves here are
+//! `FLAG_PROTECT_AFFECTED`), and `ChangeStatBuffs`'s
 //! Mist-timer/ability-immunity branches (Clear Body, White Smoke, Keen Eye,
-//! Hyper Cutter, Shield Dust — `pokeemerald/src/battle_script_commands.c:6960`-
-//! `:7038`) are real upstream branches this module skips outright rather than
-//! reproducing as dead code: this slice tracks no Substitute status, no Mist
-//! side-timer, and no abilities anywhere (see the crate root docs), so every
-//! one of those guards is always false for a battle this crate can construct
-//! — there is no reachable state that would take them. If abilities or Mist
+//! Hyper Cutter, Shield Dust — `:6960`-`:7038`) are real upstream branches
+//! this module skips outright rather than reproducing as dead code: this
+//! slice tracks no Substitute status, no Protect, no Mist side-timer, and no
+//! abilities anywhere (see the crate root docs), so every one of those
+//! guards is always false for a battle this crate can construct — there is
+//! no reachable state that would take them. If Protect, abilities, or Mist
 //! are ever modelled, [`resolve_stat_lowering_move`] must gain the
 //! corresponding branch *and* the RNG draw table below must be re-derived
 //! (none of those branches draw, but the-caller-visible outcome would need to

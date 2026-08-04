@@ -885,9 +885,9 @@ impl Battle {
     /// [`crate::stat_change::is_stat_lowering_effect`]). Every move that
     /// reaches here already passed [`ensure_executable`] (at [`Battle::new`]
     /// for the wild side, at `validate_player_move` for the player's), so
-    /// exactly one of the two `is_*` checks holds; [`STRUGGLE`] is the one
-    /// further exception, routed to the hit pipeline like
-    /// [`crate::hit::resolve_hit`] itself accepts it.
+    /// exactly one of the two `is_*` checks holds. ([`STRUGGLE`] needs no
+    /// case of its own: its `EFFECT_RECOIL` is not a stat-lowering effect,
+    /// so it falls through to the hit pipeline, which accepts it.)
     fn execute_move(
         &mut self,
         attacker_is_player: bool,
@@ -896,7 +896,7 @@ impl Battle {
         events: &mut Vec<BattleEvent>,
     ) -> Result<(), BattleError> {
         let effect = self.dex.move_data(move_id)?.effect;
-        if move_id != STRUGGLE && is_stat_lowering_effect(effect) {
+        if is_stat_lowering_effect(effect) {
             self.execute_stat_lowering_move(attacker_is_player, move_id, rng, events)
         } else {
             self.execute_hit_move(attacker_is_player, move_id, rng, events)
@@ -2242,8 +2242,8 @@ mod tests {
         // are modelled; Growl and Leer, which used to stand in for this
         // case, are executable now -- see
         // `a_real_starter_moveset_can_fight_with_its_damaging_move` and
-        // `stat_lowering_moves_execute_in_a_full_wild_battle` for their new
-        // coverage). Sonic Boom: power 1 but EFFECT_SONICBOOM's flat 20
+        // `wild_zigzagoon_growl_executes_when_the_rejection_loop_lands_on_it`
+        // for their new coverage). Sonic Boom: power 1 but EFFECT_SONICBOOM's flat 20
         // damage, which the ordinary pipeline gets wrong in both damage and
         // draw count. Struggle: its EFFECT_RECOIL half is not applied by this
         // engine (see crate::hit's module docs).
@@ -2351,14 +2351,27 @@ mod tests {
         let events = battle
             .take_turn(PlayerAction::UseMove(1), &mut rng)
             .unwrap();
+        // Poochyena L2's Tackle back, hand computed: atk (2*55+31)*2/100+5
+        // = 7 into Treecko L5's def (2*35+31)*5/100+5 = 10 (Leer lowered
+        // the *enemy's* Defense, not Treecko's): 7*35 = 245, *(2*2/5+2 =
+        // 2) = 490, /10 = 49, /50 = 0 -> physical floor to 1, +2 = 3; no
+        // STAB (Dark using Normal), neutral into Grass, best roll keeps 3.
         assert_eq!(
-            events[0],
-            BattleEvent::StatFell {
-                by_player: true,
-                move_id: MoveId(43),
-                stat: LoweredStat::Defense,
-                new_stage: StatStage::new(-1).unwrap(),
-            }
+            events,
+            vec![
+                BattleEvent::StatFell {
+                    by_player: true,
+                    move_id: MoveId(43),
+                    stat: LoweredStat::Defense,
+                    new_stage: StatStage::new(-1).unwrap(),
+                },
+                BattleEvent::Hit {
+                    by_player: false,
+                    move_id: MoveId(33),
+                    damage: 3,
+                    is_critical: false,
+                },
+            ]
         );
         assert_eq!(
             battle.enemy().stages().defense,

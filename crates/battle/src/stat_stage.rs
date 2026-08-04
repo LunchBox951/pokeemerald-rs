@@ -99,7 +99,7 @@ impl StatStage {
     /// Add a signed `delta` to this stage, clamping to
     /// [`StatStage::MIN`]`..=`[`StatStage::MAX`] rather than panicking or
     /// wrapping — `ChangeStatBuffs`'s own clamp after the raw addition
-    /// (`pokeemerald/src/battle_script_commands.c:7091`-`:7094`):
+    /// (`pokeemerald/src/battle_script_commands.c:7085`-`:7089`):
     /// `gBattleMons[].statStages[statId] += statValue;` followed by two
     /// `if` clamps to `MIN_STAT_STAGE`/`MAX_STAT_STAGE`. Used by
     /// [`crate::stat_change`] for the `-1` step every
@@ -263,7 +263,7 @@ mod tests {
     #[test]
     fn saturating_add_clamps_at_the_floor_and_ceiling() {
         // ChangeStatBuffs still performs the addition and then clamps
-        // (`battle_script_commands.c:7091`-`:7094`) rather than skipping it
+        // (`battle_script_commands.c:7085`-`:7089`) rather than skipping it
         // once already at a limit -- the observable result is identical
         // either way, since clamping after a redundant step is a no-op.
         assert_eq!(StatStage::MIN.saturating_add(-1), StatStage::MIN);
