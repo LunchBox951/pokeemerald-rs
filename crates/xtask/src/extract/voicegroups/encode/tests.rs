@@ -145,4 +145,15 @@ fn square_and_wave_and_noise_slots_carry_fixed_rate_as_a_single_bool_byte() {
                               // Square2: [kind, base_key, length, duty, env x4, fixed_rate] = 8 bytes.
     assert_eq!(&bytes[11..19], &[KIND_SQUARE_2, 60, 0, 3, 0, 0, 15, 0]);
     assert_eq!(bytes[19], 0); // fixed_rate = false
+                              // ProgrammableWave: [kind, base_key, length, wave_id string, env x4,
+                              // fixed_rate] -- the string is a u16 LE length prefix + bytes.
+    assert_eq!(&bytes[20..23], &[KIND_PROGRAMMABLE_WAVE, 60, 0]);
+    assert_eq!(&bytes[23..25], &33u16.to_le_bytes());
+    assert_eq!(&bytes[25..58], b"audio/sample/programmable-wave/01");
+    assert_eq!(&bytes[58..62], &[0, 7, 15, 1]); // envelope
+    assert_eq!(bytes[62], 1); // fixed_rate = true
+                              // Noise: [kind, base_key, length, period, env x4, fixed_rate] = 9 bytes.
+    assert_eq!(&bytes[63..71], &[KIND_NOISE, 60, 0, 1, 0, 0, 15, 0]);
+    assert_eq!(bytes[71], 0); // fixed_rate = false
+    assert_eq!(bytes.len(), 72, "no trailing bytes past the last slot");
 }
