@@ -24,22 +24,29 @@
 //! battle-script steps around it.
 //!
 //! Move-effect breadth is the sharp edge of this slice, so it is enforced
-//! rather than assumed: only moves whose `EFFECT_*` runs upstream's plain
-//! `BattleScript_EffectHit` are executable ([`hit::is_ordinary_hit_effect`]),
-//! guarded at a two-sided boundary. [`battle::Battle::new`] rejects a battle
-//! whose **wild** mon knows anything else (its rejection loop can land on
-//! any slot), while the **player's** moveset may carry unsupported moves —
-//! every real starter knows a status move — and each *chosen* slot is
-//! validated per turn instead. Both checks run before any RNG is drawn, so
-//! an unsupported configuration or pick can never leave a half-played turn
-//! behind.
+//! rather than assumed: a move is only executable if its `EFFECT_*` runs
+//! upstream's plain `BattleScript_EffectHit`
+//! ([`hit::is_ordinary_hit_effect`]) or is one of the three
+//! `BattleScript_EffectStatDown`-family stat-lowering effects
+//! ([`stat_change::is_stat_lowering_effect`], added by issue #199 so real
+//! Route 101 wild movesets — Zigzagoon's Growl, Wurmple's String Shot — and
+//! real starter movesets — Treecko's Leer — construct and play), guarded at
+//! a two-sided boundary. [`battle::Battle::new`] rejects a battle whose
+//! **wild** mon knows anything else (its rejection loop can land on any
+//! slot), while the **player's** moveset may carry unsupported moves and
+//! each *chosen* slot is validated per turn instead. Both checks run before
+//! any RNG is drawn, so an unsupported configuration or pick can never leave
+//! a half-played turn behind.
 //!
 //! Out of scope for this slice (see each module's own docs for exactly what
 //! is/isn't modelled): trainer/wild AI (`I-5`), battle UI/animations,
 //! overworld transition, abilities, held items, non-volatile status
-//! conditions, weather, multi/double battles, and move-effect breadth beyond
-//! the v1 first-encounter damaging-move path (status moves, stat-changing
-//! moves' actual execution, multi-hit/recoil/drain, ...).
+//! conditions, weather, multi/double battles, Mist/Substitute (see
+//! [`stat_change`]'s module docs for why those two are a documented boundary
+//! rather than dead code), and move-effect breadth beyond the v1
+//! first-encounter damaging-move path plus the three stat-lowering effects
+//! above (other status moves, stat-raising moves, multi-hit/recoil/drain,
+//! ...).
 
 pub mod accuracy;
 pub mod battle;
@@ -52,6 +59,7 @@ pub mod exp;
 pub mod hit;
 pub mod nature;
 pub mod pokemon;
+pub mod stat_change;
 pub mod stat_stage;
 pub mod turn_order;
 pub mod wild;
@@ -70,5 +78,6 @@ pub use pokemon::{
     BattlePokemon, Ivs, MoveSlot, StatStages, Stats, MAX_IV, MAX_LEVEL, MAX_MON_MOVES, MIN_LEVEL,
     MOVE_NONE, SPECIES_NONE,
 };
+pub use stat_change::{is_stat_lowering_effect, LoweredStat, StatChangeOutcome};
 pub use stat_stage::StatStage;
 pub use wild::build_wild_pokemon;
