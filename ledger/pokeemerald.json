@@ -1469,8 +1469,10 @@
     "data/layouts/Route101": {
       "category": "data.layout",
       "kind": "dir",
-      "spec_owner": "05-assets",
-      "status": "pending"
+      "reason": "map.bin/border.bin extracted as opaque raw blobs into the local gitignored asset pack (issue #177), id layout/route101/map and layout/route101/border (crates/xtask/src/extract/mod.rs::extract_layouts's LAYOUTS table, resolved via data/layouts/layouts.json) -- Littleroot Town's own north map connection targets it, and it is I-4's traversal prerequisite. Read back with AssetPack::layout_map/layout_border and decoded into typed grids via crates/assets/src/map_layouts.rs's existing MapLayout::grid/LayoutGrid/BorderGrid, same as the Littleroot Town family.",
+      "rust_target": "crates/xtask/src/extract/mod.rs",
+      "spec": "I-4",
+      "status": "ported"
     },
     "data/layouts/Route102": {
       "category": "data.layout",
@@ -26560,6 +26562,12 @@
           "rust_target": "crates/engine/src/overworld/warp.rs",
           "spec": "I-3",
           "status": "stubbed"
+        },
+        "LoadMapFromCameraTransition": {
+          "reason": "The map-swap half of a map-edge connection crossing (issue #177) -- SetWarpDestination(mapGroup, mapNum, WARP_ID_NONE, -1, -1) then ApplyCurrentWarp's gSaveBlock1Ptr->location = sWarpDestination -- transcribed as OverworldPhase::cross_connection's save1.location assignment and map_id/scene rebind, called once PlayerState::step (crates/engine/src/overworld/player.rs) reports StepOutcome::Crossed. The position itself is not re-derived here (unlike a warp): PlayerState::step already committed it via SetPositionFromConnection's own math (src/fieldmap.c, already rewritten). CameraMove's pixel-precision incoming-connection lookup (src/fieldmap.c:603-624) is not modeled -- this port resolves a crossing the instant a step would leave the current grid, not through a camera-scroll trigger (engine::overworld::MapRuntime::resolve_connection's own module docs).",
+          "rust_target": "crates/pokeemerald-rs/src/flow/overworld_phase.rs",
+          "spec": "I-4",
+          "status": "rewritten"
         },
         "SetWarpData": {
           "reason": "map_group/map_num/warp_id/x/y field assignment transcribed as the engine::save::WarpData literal OverworldPhase::warp_to builds for save1.location on a resolved warp (flow/overworld_phase.rs); x/y are left at -1 matching SetWarpDestinationToMapWarp's own -1,-1 call shape for a map-warp-id destination (not fixed coordinates).",

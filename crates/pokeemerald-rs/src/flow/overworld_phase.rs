@@ -6,14 +6,15 @@
 //! module owns everything the `Overworld` scene state itself does per frame:
 //! input -> player step ([`advance_player_one_frame`]), warp latching and
 //! execution ([`OverworldPhase::step`]'s "Warp timing" section and
-//! `OverworldPhase::warp_to`), save-state mirroring, and frame composition.
-//! See [`crate::flow`]'s module docs for the transition diagram this phase
-//! slots into.
+//! `OverworldPhase::warp_to`), map-edge connection crossing
+//! ([`OverworldPhase::cross_connection`], issue #177), save-state mirroring,
+//! and frame composition. See [`crate::flow`]'s module docs for the
+//! transition diagram this phase slots into.
 
 use assets::{MapEventsTable, MapHeaderTable};
 use engine::overworld::{
     facing_object_event, trigger_arrow_warp, trigger_door_warp, warp_destination_position,
-    warp_in_facing, Direction, PlayerState, StepOutcome, TilePos, WarpTrigger,
+    warp_in_facing, ConnectedMapData, Direction, PlayerState, StepOutcome, TilePos, WarpTrigger,
 };
 use engine::save::{Coords16, SaveBlock1, SaveBlock2, WarpData};
 use platform::{ButtonState, Buttons, Frame};
@@ -22,6 +23,48 @@ use crate::new_game;
 use crate::overworld::{
     self, npc_scripts, DialogOutcome, NpcDialog, OverworldScene, OverworldSceneError,
 };
+
+/// Resolves map-edge connection-crossing geometry (issue #177) against the
+/// real generated map tables and, only once a candidate connection's own
+/// bounds already match, the extracted asset pack -- the
+/// [`ConnectedMapData`] this integration lane feeds
+/// [`PlayerState::step`] (via [`advance_player_one_frame`]), replacing the
+/// `no_connections` stub an earlier revision of this module passed
+/// unconditionally (see [`OverworldPhase::cross_connection`]'s doc comment
+/// for what happens once a step actually resolves against it).
+///
+/// [`ConnectedMapData::dimensions`] never touches the pack: a map's layout
+/// `width`/`height` are metadata baked into the generated, `'static`
+/// `assets::LayoutTable` (`crates/assets/src/map_layouts.rs`'s own module
+/// docs: "Grid/border bytes are not in this crate"), so every candidate
+/// connection [`engine::overworld::MapRuntime::resolve_connection`]'s own
+/// perpendicular-bounds check considers costs nothing -- no disk I/O merely
+/// for walking near an edge with no matching connection.
+/// [`ConnectedMapData::metatile_cell`] does need the pack -- the landing
+/// tile's actual collision/elevation, upstream's `IsPosInConnectingMap`
+/// (`pokeemerald/src/fieldmap.c:699-712`) having already passed -- so it
+/// loads one fresh only there, at the same rare cadence
+/// [`OverworldPhase::warp_to`] already loads a destination room's pack data:
+/// once per attempted transition, never on an idle frame away from one.
+struct MapConnections;
+
+impl ConnectedMapData for MapConnections {
+    fn dimensions(&self, map: assets::MapId) -> Option<(u16, u16)> {
+        let header = MapHeaderTable::new().header(map).ok()?;
+        let layout = assets::LayoutTable::new().layout(header.layout).ok()?;
+        Some((layout.width, layout.height))
+    }
+
+    fn metatile_cell(&self, map: assets::MapId, x: i32, y: i32) -> Option<assets::MetatileCell> {
+        let header = MapHeaderTable::new().header(map).ok()?;
+        let layout = assets::LayoutTable::new().layout(header.layout).ok()?;
+        let pack = assets::AssetPack::load_default().ok()?;
+        let name = overworld::layout_pack_name(header.layout);
+        let bytes = pack.layout_map(&name).ok()?;
+        let grid = layout.grid(bytes).ok()?;
+        grid.cell_at(u16::try_from(x).ok()?, u16::try_from(y).ok()?)
+    }
+}
 
 /// The maps whose `MAP_SCRIPT_ON_TRANSITION` calls
 /// `SecretBase_EventScript_SetDecorationFlags` -- transcribed from those
@@ -426,6 +469,18 @@ impl OverworldPhase {
     /// `runtime`, not an upstream-observable ordering choice -- see that
     /// code's own comment), and gated on the player being between steps --
     /// see [`Self::interaction_tokens_this_frame`].
+    ///
+    /// # Map-edge connection crossing (issue #177)
+    ///
+    /// [`advance_player_one_frame`] feeds [`PlayerState::step`] a real
+    /// [`MapConnections`] resolver, so a step off the current map's own grid
+    /// can return [`StepOutcome::Crossed`] instead of [`StepOutcome::Blocked`]
+    /// -- [`Self::cross_connection`] is what rebinds `map_id`/`scene`/
+    /// `save1.location` to match the position [`PlayerState::step`] already
+    /// committed. That call is deliberately the *last* thing this method
+    /// does, after `runtime` (an immutable borrow of `self.scene`, still
+    /// used by the interaction/warp checks below the movement branch) has
+    /// gone out of use -- `crossed_to` carries the outcome that far.
     pub(super) fn step(&mut self, buttons: ButtonState) {
         // Tileset tile animation keeps advancing even while a dialog box
         // freezes movement (struct docs on `tick`), so this runs
@@ -485,34 +540,22 @@ impl OverworldPhase {
                     trigger_arrow_warp(&runtime, x, y, self.player.elevation(), d)
                 });
 
-            if preempting_arrow_trigger.is_none() {
-                let outcome = advance_player_one_frame(
-                    &mut self.player,
-                    direction,
-                    &runtime,
-                    &self.save1.event_data,
-                );
-                latch_landing(&mut self.pending_landing, outcome);
-            } else {
-                // The walk-animation tick still advances every frame, even
-                // one a warp preempts movement on (module docs on
-                // `advance_player_one_frame`) -- a no-op here since
-                // `pre_step_at_rest` already means nothing was draining, but
-                // called anyway so that contract stays unconditional rather
-                // than silently skipped on this one path.
-                //
-                // This path also skips the `pending_landing.take()` below
-                // (the preempting warp short-circuits it), so the "at rest
-                // => no latched landing" invariant has to hold on its own
-                // here rather than being restored by that take.
-                debug_assert!(
-                    self.pending_landing.is_none(),
-                    "at rest implies `pending_landing` is None: this preempt path never runs \
-                     the `take()` below, so a landing latched here would survive into a later \
-                     frame's door check"
-                );
-                self.player.tick();
-            }
+            // Latched here (issue #177), tested only after `runtime`'s last
+            // borrow below -- see `advance_or_skip_for_preempt`'s own doc
+            // comment for why a crossing can't be applied to `self` right
+            // away. A free function, not a method, so this call only takes
+            // disjoint borrows of `self.player`/`self.pending_landing`/
+            // `self.save1.event_data` rather than all of `self` -- `runtime`
+            // (an immutable borrow of `self.scene`) is still needed below.
+            let crossed_to = advance_or_skip_for_preempt(
+                &mut self.player,
+                &mut self.pending_landing,
+                direction,
+                &runtime,
+                &MapConnections,
+                &self.save1.event_data,
+                preempting_arrow_trigger,
+            );
 
             // NPC interaction (module docs' "NPC dialog routing" section):
             // found against this frame's `runtime` here (immutable borrow of
@@ -592,6 +635,15 @@ impl OverworldPhase {
                     Ok(dialog) => self.dialog = Some(dialog),
                     Err(err) => eprintln!("npc dialog: {err} -- staying in the overworld"),
                 }
+            }
+
+            // Map-edge connection crossing (issue #177): deferred to here,
+            // `runtime`'s last use above (method docs' own section on this).
+            // Never coincides with `warp_fired`: a crossing leaves
+            // `self.player.in_transit()` true, the same gate that already
+            // makes the `warp_trigger` closure above return `None`.
+            if let Some((to_map, to_position)) = crossed_to {
+                self.cross_connection(to_map, to_position);
             }
         } else {
             self.player.tick();
@@ -753,6 +805,92 @@ impl OverworldPhase {
         };
     }
 
+    /// Rebind `map_id`/`scene`/`save1.location` (issue #177) after
+    /// `self.player` has already stepped across a map-edge connection into
+    /// `to_map`'s own coordinate space -- [`StepOutcome::Crossed`], resolved
+    /// against [`MapConnections`] by [`advance_player_one_frame`]'s call
+    /// into [`PlayerState::step`], and deferred to here by [`Self::step`]
+    /// (its own "Map-edge connection crossing" comment) so this mutable
+    /// borrow of `self.scene` never overlaps the frame's still-live
+    /// `runtime`.
+    ///
+    /// **Same atomic-rebind discipline as [`Self::warp_to`], one field
+    /// different.** `map_id` and `scene` move together, exactly as there --
+    /// so a later frame's `self.scene.runtime(self.map_id, ...)` never
+    /// renders one map's layout against another map's collision/event data
+    /// -- `pending_landing` is re-latched onto `to_position` so the
+    /// door-warp drain-frame check (`Self::step`'s "Warp timing" section)
+    /// evaluates against the *entered* map once this step's walk animation
+    /// finishes, and `tick` resets exactly like a warp landing
+    /// (`tileset_anims`' `InitTilesetAnimations` reset points). Unlike
+    /// [`Self::warp_to`], `self.player` itself is left entirely alone:
+    /// [`PlayerState::step`] already committed its position/elevation into
+    /// `to_map`'s coordinate space before ever returning
+    /// [`StepOutcome::Crossed`] (that variant's own doc comment) --
+    /// rebuilding a fresh [`PlayerState`] here, the way a warp does, would
+    /// discard the facing and in-progress walk animation an ordinary step
+    /// must keep.
+    ///
+    /// `save1.location` mirrors upstream's own connection-crossing
+    /// bookkeeping, not a warp's: `CameraMove` (`pokeemerald/src/fieldmap.c:603-624`)
+    /// calls `LoadMapFromCameraTransition(connection->mapGroup,
+    /// connection->mapNum)` (`src/overworld.c:784-786`), which itself calls
+    /// `SetWarpDestination(mapGroup, mapNum, WARP_ID_NONE, -1, -1)`
+    /// (`:633`) then `ApplyCurrentWarp`
+    /// (`:540-546`, `gSaveBlock1Ptr->location = sWarpDestination`) --
+    /// `warp_id` is the `WARP_ID_NONE` sentinel (`-1`), not a resolved warp
+    /// index, because a connection crossing names only the destination map,
+    /// never a warp event; `x`/`y` stay `-1` for the same reason
+    /// [`Self::warp_to`]'s own do (a resolved landing tile, not fixed
+    /// coordinates -- here, the tile [`PlayerState::step`] already computed
+    /// via [`MapConnections`], rather than a warp id).
+    ///
+    /// If `to_map`'s header can't be resolved or its room can't be loaded --
+    /// both unreachable against a real pack for any connection this port's
+    /// own generated tables reference, since [`MapConnections`] already
+    /// proved both resolvable before [`PlayerState::step`] ever committed
+    /// the crossing -- logs and leaves `self.map_id`/`self.scene` on the
+    /// *departed* map while `self.player` stands at the already-committed
+    /// `to_position`. That is a real, if unreachable, inconsistency
+    /// (rendering the old map at a position that may not even exist in it)
+    /// -- accepted rather than reverting the position, which
+    /// [`PlayerState::step`] has no way to be told to undo from here, mirroring
+    /// [`Self::warp_to`]'s own "log-or-ignore is fine" policy for its
+    /// equally unreachable failure cases.
+    fn cross_connection(&mut self, to_map: assets::MapId, to_position: TilePos) {
+        let Ok(header) = MapHeaderTable::new().header(to_map) else {
+            eprintln!(
+                "connection: unknown destination map {to_map:?} -- staying on the departed \
+                 map's data"
+            );
+            return;
+        };
+        let Ok(scene) = overworld::load_room(to_map) else {
+            eprintln!(
+                "connection: failed to load destination map {to_map:?} -- staying on the \
+                 departed map's data"
+            );
+            return;
+        };
+
+        self.scene = scene;
+        self.map_id = to_map;
+        // Re-latch onto the entered map's own coordinate space (doc comment
+        // above) -- the crossing step's landing tile, in the same role
+        // `Self::step`'s ordinary `Advanced` branch already latches for a
+        // door check 16 frames from now, once the walk animation drains.
+        self.pending_landing = Some(to_position);
+        self.tick = 0;
+        run_on_transition_map_script(to_map, &mut self.save1.event_data);
+        self.save1.location = WarpData {
+            map_group: warp_data_index(header.group, "MAP_GROUP"),
+            map_num: warp_data_index(header.num, "MAP_NUM"),
+            warp_id: -1,
+            x: -1,
+            y: -1,
+        };
+    }
+
     /// [`OverworldScene::compose`] against this phase's current player state
     /// and event-flag store, then (issue #161) [`NpcDialog::compose_over`]
     /// on top if [`Self::dialog`] is open.
@@ -812,6 +950,57 @@ fn held_direction(buttons: ButtonState) -> Option<Direction> {
     }
 }
 
+/// Apply this frame's movement, unless `preempting_arrow_trigger` already
+/// consumed it -- [`OverworldPhase::step`]'s movement branch, pulled out
+/// (as its own free function, disjointly borrowing `player`/
+/// `pending_landing`/`event_data` rather than all of `self` -- see that
+/// call site's own comment) to keep that method under clippy's
+/// `too_many_lines` limit. Returns a [`StepOutcome::Crossed`] landing (issue
+/// #177) for [`OverworldPhase::step`] to hand to
+/// [`OverworldPhase::cross_connection`] once `runtime`'s borrow there has
+/// ended: that rebind needs `&mut self.scene`, which can't happen while
+/// `runtime` -- an immutable borrow of the same field -- is still in use for
+/// this frame's interaction/warp checks, so it can't be applied directly
+/// from here either.
+fn advance_or_skip_for_preempt(
+    player: &mut PlayerState,
+    pending_landing: &mut Option<TilePos>,
+    direction: Option<Direction>,
+    runtime: &engine::overworld::MapRuntime<'_>,
+    maps: &impl ConnectedMapData,
+    event_data: &engine::event_data::EventData,
+    preempting_arrow_trigger: Option<WarpTrigger>,
+) -> Option<(assets::MapId, TilePos)> {
+    if preempting_arrow_trigger.is_some() {
+        // The walk-animation tick still advances every frame, even one a
+        // warp preempts movement on (module docs on
+        // `advance_player_one_frame`) -- a no-op here since the caller only
+        // reaches this arm when the player was already at rest, but called
+        // anyway so that contract stays unconditional. This path also skips
+        // `pending_landing`'s own `take()` (the preempting warp
+        // short-circuits it), so "at rest => no latched landing" has to hold
+        // on its own here rather than being restored by that take.
+        debug_assert!(
+            pending_landing.is_none(),
+            "at rest implies `pending_landing` is None: this preempt path never runs the \
+             `take()` below, so a landing latched here would survive into a later frame's door \
+             check"
+        );
+        player.tick();
+        return None;
+    }
+
+    let outcome = advance_player_one_frame(player, direction, runtime, maps, event_data);
+    latch_landing(pending_landing, outcome);
+    match outcome {
+        StepOutcome::Crossed {
+            to_map,
+            to_position,
+        } => Some((to_map, to_position)),
+        _ => None,
+    }
+}
+
 /// Latch the tile a just-applied frame of movement started walking onto, if
 /// any -- the `pending_landing` half of [`OverworldPhase::step`]'s
 /// `tookStep` bookkeeping, factored out of that method's movement branch
@@ -820,19 +1009,24 @@ fn held_direction(buttons: ButtonState) -> Option<Direction> {
 /// See [`OverworldPhase::step`]'s "Warp timing" section for why the landing
 /// is latched at step *start* and only tested for a warp once its walk
 /// animation has drained, a later frame.
+///
+/// [`StepOutcome::Crossed`] (issue #177) is deliberately *not* latched
+/// here, unlike [`StepOutcome::Advanced`]: its landing tile is expressed in
+/// the map the crossing entered, not whichever map `pending_landing` still
+/// means at this point, and this function has no way to confirm that map's
+/// data actually loaded before committing to it.
+/// [`OverworldPhase::cross_connection`] (called separately, after this
+/// function returns -- see [`OverworldPhase::step`]'s own "Map-edge
+/// connection crossing" comment for why it can't happen here) does that
+/// check and latches `pending_landing` onto the entered map's coordinate
+/// space only once it has passed.
 fn latch_landing(pending_landing: &mut Option<TilePos>, outcome: StepOutcome) {
     match outcome {
         StepOutcome::Advanced { to, .. } => *pending_landing = Some(to),
-        StepOutcome::Crossed { .. } => debug_assert!(
-            false,
-            "StepOutcome::Crossed is unreachable here: `advance_player_one_frame` passes a \
-             `no_connections` resolver, so `PlayerState::step` never takes its \
-             connection-crossing branch. Wiring real connections in must also handle rebinding \
-             `map_id`/`scene` and `save1.location` in `OverworldPhase::step`, atomically with \
-             the position `PlayerState::step` has already committed into the entered map's \
-             coordinate space."
-        ),
-        StepOutcome::Idle | StepOutcome::Turned(_) | StepOutcome::Blocked { .. } => {}
+        StepOutcome::Crossed { .. }
+        | StepOutcome::Idle
+        | StepOutcome::Turned(_)
+        | StepOutcome::Blocked { .. } => {}
     }
 }
 
@@ -872,21 +1066,27 @@ fn latch_landing(pending_landing: &mut Option<TilePos>, outcome: StepOutcome) {
 /// bedroom's stair warp at `(7, 1)` (the map's only warp event, the same one
 /// [`crate::new_game`]'s `SPAWN_*` derives the spawn from) transitions to
 /// `MAP_LITTLEROOT_TOWN_BRENDANS_HOUSE_1F` on the frame the step *finishes*,
-/// matching upstream's `tookStep` gate (that method's own doc comment). The
-/// `no_connections` resolver passed to [`PlayerState::step`] here is still
-/// unconditional, though: indoor maps have no edge connections, and
-/// connection-following (needed for the 1F<->outdoors door, and anywhere
-/// else a step would cross a map edge rather than land on an interior warp
-/// tile) is a follow-on `(behavioral-fidelity)` deviation, documented at the
-/// deviation site.
+/// matching upstream's `tookStep` gate (that method's own doc comment).
+///
+/// `maps` (issue #177) is generic, not hardcoded to [`MapConnections`], so
+/// this function stays directly unit-testable against a small synthetic map
+/// graph the way [`engine::overworld::player`]'s own tests already are (this
+/// module's own tests do exactly that for the coordinate-translation edge
+/// cases); [`OverworldPhase::step`] is the only production call site, and it
+/// always passes `&`[`MapConnections`]. Indoor maps carry no edge
+/// connections in the generated [`assets::MapHeaderTable`] at all, so
+/// `resolve_connection` never finds a candidate there regardless of which
+/// `maps` is passed; an outdoor map's own connections (Littleroot Town's
+/// north edge to Route 101, the v1 north-star instance) resolve for real
+/// against [`MapConnections`].
 fn advance_player_one_frame(
     player: &mut PlayerState,
     direction: Option<Direction>,
     runtime: &engine::overworld::MapRuntime<'_>,
+    maps: &impl ConnectedMapData,
     event_data: &engine::event_data::EventData,
 ) -> StepOutcome {
-    let no_connections = |_: assets::MapId| -> Option<(u16, u16)> { None };
-    let outcome = player.step(direction, runtime, &no_connections, event_data);
+    let outcome = player.step(direction, runtime, maps, event_data);
     player.tick();
     outcome
 }

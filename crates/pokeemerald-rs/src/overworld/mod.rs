@@ -703,11 +703,17 @@ fn resolve_tileset_pack_name(symbol: &'static str) -> Result<&'static str, Overw
 /// `AssetPack::layout_map`/`layout_border` expect
 /// (`crates/xtask/src/extract/mod.rs`'s `LAYOUTS`): strip the `LAYOUT_`
 /// prefix and lowercase the rest -- a mechanical rule confirmed against
-/// every one of that table's 7 entries (e.g.
+/// every one of that table's 8 entries (e.g.
 /// `LAYOUT_LITTLEROOT_TOWN_PROFESSOR_BIRCHS_LAB_WITH_TABLE` ->
 /// `littleroot_town_professor_birchs_lab_with_table`), unlike the tileset
 /// symbols above.
-fn layout_pack_name(id: LayoutId) -> String {
+///
+/// `pub(crate)` (issue #177): also called from
+/// `crate::flow::overworld_phase`'s `MapConnections`, which needs it to
+/// resolve a connection target's own `layout/<name>/map` pack id -- the
+/// same translation this module's own [`load_room`] uses for the *current*
+/// map.
+pub(crate) fn layout_pack_name(id: LayoutId) -> String {
     id.name()
         .strip_prefix("LAYOUT_")
         .unwrap_or(id.name())
