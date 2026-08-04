@@ -74,9 +74,16 @@
 //!   abort and PP deduction for every move effect, this one included).
 //! - `ChangeStatBuffs` (`battle_script_commands.c:6937`-`:7098`) has no
 //!   `Random()` call anywhere in its body — read start to end, it is pure
-//!   bookkeeping (message-buffer prep, the stage add-then-clamp, and the
-//!   `MOVE_RESULT_MISSED` flag toggle for the caller-supplied `BS_ptr` jump
-//!   path, none of which this slice's callers use).
+//!   bookkeeping: message-buffer prep, the stage add-then-clamp, and the
+//!   `MOVE_RESULT_MISSED` flag toggle at `:7091`. That toggle *does* fire on
+//!   this slice's floored path — `BattleScript_EffectStatDown` passes
+//!   `STAT_CHANGE_ALLOW_PTR`, and `B_MSG_STAT_WONT_INCREASE` /
+//!   `B_MSG_STAT_WONT_DECREASE` alias to the same value (2,
+//!   `battle_string_ids.h:397`/`:405`) so the tail's "won't increase" test
+//!   also matches a floored *decrease* — but this crate models no
+//!   `gMoveResultFlags` consumer at all (no MoveEnd/resultmessage/King's
+//!   Rock), so the flag has no observable effect here; it draws nothing
+//!   either way. See the ledger's `ChangeStatBuffs` NOT-modelled list.
 //! - There is no `Cmd_seteffectwithchance` step in this script at all (unlike
 //!   [`crate::hit`]'s `BattleScript_EffectHit`), so there is no analogue of
 //!   that pipeline's discarded step-7 draw here.
