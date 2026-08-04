@@ -15,16 +15,18 @@
 //! whole game; this port's own extraction pipeline
 //! (`crates/xtask/src/extract/mod.rs`'s `LAYOUTS`) only ever bundles the
 //! Littleroot Town layout family (the town itself, both player houses'
-//! floors, Professor Birch's lab), so [`resolve`] only ever needs to answer
-//! for a flag name actually reachable from one of *those* maps' own
-//! `object_events` -- every such name (**41**: the 29 distinct
-//! `FLAG_HIDE_*` ids carried by object events across all six maps, plus the
-//! twelve generic `FLAG_DECORATION_1..12` ids Littleroot's two
-//! player-house bedrooms also carry; the literal `"0"` no-flag sentinel is
-//! handled by [`resolve`] itself and is not a table entry) is transcribed
-//! below. A name outside this set can never occur for any map this port
-//! renders, so extending the table further would transcribe data no code
-//! here consumes -- the same bounded-scope reasoning
+//! floors, Professor Birch's lab) plus, since issue #177, `LAYOUT_ROUTE101`
+//! (Littleroot's own north map connection, and I-4's traversal
+//! prerequisite), so [`resolve`] only ever needs to answer for a flag name
+//! actually reachable from one of *those* maps' own `object_events` --
+//! every such name (**46**: the 34 distinct `FLAG_HIDE_*` ids carried by
+//! object events across all seven maps, plus the twelve generic
+//! `FLAG_DECORATION_1..12` ids Littleroot's two player-house bedrooms also
+//! carry; the literal `"0"` no-flag sentinel is handled by [`resolve`]
+//! itself and is not a table entry) is transcribed below. A name outside
+//! this set can never occur for any map this port renders, so extending the
+//! table further would transcribe data no code here consumes -- the same
+//! bounded-scope reasoning
 //! `crates/pokeemerald-rs/src/overworld/mod.rs`'s `resolve_tileset_pack_name`
 //! already applies to the five tilesets that pipeline bundles.
 //!
@@ -82,6 +84,13 @@ const OBJECT_EVENT_FLAGS: &[(&str, u16)] = &[
     ("FLAG_HIDE_LITTLEROOT_TOWN_PLAYERS_HOUSE_VIGOROTH_2", 0x2F3),
     ("FLAG_HIDE_LITTLEROOT_TOWN_RIVAL", 0x31A),
     ("FLAG_HIDE_PLAYERS_HOUSE_DAD", 0x2DE),
+    // Route 101 (issue #177, `data/maps/Route101/map.json`'s own
+    // `object_events`) -- I-4's traversal prerequisite.
+    ("FLAG_HIDE_ROUTE_101_BIRCH", 0x381),
+    ("FLAG_HIDE_ROUTE_101_BIRCH_STARTERS_BAG", 0x2BC),
+    ("FLAG_HIDE_ROUTE_101_BIRCH_ZIGZAGOON_BATTLE", 0x2D0),
+    ("FLAG_HIDE_ROUTE_101_BOY", 0x3DF),
+    ("FLAG_HIDE_ROUTE_101_ZIGZAGOON", 0x2EE),
 ];
 
 /// Resolve an `ObjectEvent::flag` string into the numeric id
@@ -147,7 +156,7 @@ mod tests {
     /// This crate's mirror of `crates/xtask/src/extract/mod.rs`'s `LAYOUTS`
     /// -- the layout family the extraction pipeline bundles, and so the
     /// exact scope [`OBJECT_EVENT_FLAGS`] has to cover (module docs).
-    const BUNDLED_LAYOUTS: [&str; 7] = [
+    const BUNDLED_LAYOUTS: [&str; 8] = [
         "LAYOUT_LITTLEROOT_TOWN",
         "LAYOUT_LITTLEROOT_TOWN_BRENDANS_HOUSE_1F",
         "LAYOUT_LITTLEROOT_TOWN_BRENDANS_HOUSE_2F",
@@ -155,6 +164,7 @@ mod tests {
         "LAYOUT_LITTLEROOT_TOWN_MAYS_HOUSE_2F",
         "LAYOUT_LITTLEROOT_TOWN_PROFESSOR_BIRCHS_LAB",
         "LAYOUT_LITTLEROOT_TOWN_PROFESSOR_BIRCHS_LAB_WITH_TABLE",
+        "LAYOUT_ROUTE101",
     ];
 
     /// Every map whose generated header names one of [`BUNDLED_LAYOUTS`] --
@@ -256,10 +266,10 @@ mod tests {
     }
 
     /// The module docs' own arithmetic, pinned so it can't drift: the table
-    /// is exactly 41 entries, 29 `FLAG_HIDE_*` plus 12
+    /// is exactly 46 entries, 34 `FLAG_HIDE_*` plus 12
     /// `FLAG_DECORATION_*`, and nothing else.
     #[test]
-    fn the_table_is_the_documented_29_hide_plus_12_decoration_entries() {
+    fn the_table_is_the_documented_34_hide_plus_12_decoration_entries() {
         let hide = OBJECT_EVENT_FLAGS
             .iter()
             .filter(|(name, _)| name.starts_with("FLAG_HIDE_"))
@@ -268,21 +278,21 @@ mod tests {
             .iter()
             .filter(|(name, _)| name.starts_with("FLAG_DECORATION_"))
             .count();
-        assert_eq!((hide, decoration), (29, 12), "module docs' own counts");
+        assert_eq!((hide, decoration), (34, 12), "module docs' own counts");
         assert_eq!(
             hide + decoration,
             OBJECT_EVENT_FLAGS.len(),
             "every entry must be one of those two families"
         );
-        assert_eq!(OBJECT_EVENT_FLAGS.len(), 41);
+        assert_eq!(OBJECT_EVENT_FLAGS.len(), 46);
     }
 
-    /// Every object event on the six Littleroot-family maps this port's
-    /// extraction pipeline loads must resolve -- the whole point of the
-    /// bounded table (module docs). A `None` here would mean an object event
-    /// this port can actually render has an unresolvable hide flag. The
-    /// table must also carry *nothing else*: that equality is what keeps
-    /// the module docs' "29 + 12" honest as map data changes.
+    /// Every object event on the seven Littleroot-family-plus-Route-101
+    /// maps this port's extraction pipeline loads must resolve -- the whole
+    /// point of the bounded table (module docs). A `None` here would mean
+    /// an object event this port can actually render has an unresolvable
+    /// hide flag. The table must also carry *nothing else*: that equality
+    /// is what keeps the module docs' "34 + 12" honest as map data changes.
     ///
     /// The map set is **derived**, not listed: every map whose header names
     /// one of [`BUNDLED_LAYOUTS`] (this crate's mirror of
@@ -298,10 +308,10 @@ mod tests {
         let maps = bundled_maps();
         assert_eq!(
             maps.len(),
-            6,
-            "the seven bundled layouts cover six maps (the lab's \
+            7,
+            "the eight bundled layouts cover seven maps (the lab's \
              `_WITH_TABLE` variant is an alternate layout for a map already \
-             listed, not a map of its own)"
+             listed, not a map of its own; Route 101 -- issue #177 -- is)"
         );
         let mut reachable: Vec<&str> = Vec::new();
         for map in maps {

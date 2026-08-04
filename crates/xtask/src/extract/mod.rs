@@ -72,15 +72,19 @@
 //! - **Map layout grids** (S-4): the Littleroot Town layout family's
 //!   `map.bin` / `border.bin` grid files — the town itself plus every
 //!   interior it contains (both player houses' floors, Professor Birch's
-//!   lab, and its rarely-referenced "with table" variant; see [`LAYOUTS`]).
-//!   Resolved via `data/layouts/layouts.json` ([`layouts_json`]) rather than
-//!   hardcoded upstream paths, and extracted as opaque
-//!   [`pack::PackKind::Raw`] blobs — same rationale as `metatiles.bin` /
-//!   `metatile_attributes.bin` above: these are upstream's own flat binary
-//!   files, not compiled from another source. `crates/assets::map_layouts`
-//!   already ships the typed decode layer (`MetatileCell`, `LayoutGrid`,
-//!   `BorderGrid`) that reads these bytes back out of the pack; this
-//!   pipeline only needs to get the bytes *into* the pack.
+//!   lab, and its rarely-referenced "with table" variant) — **plus, since
+//!   issue #177, `LAYOUT_ROUTE101`**: Littleroot's own north map connection
+//!   (`data/maps/LittlerootTown/map.json`'s `connections`) targets it, and
+//!   it is the traversal prerequisite for I-4's first wild encounter (see
+//!   [`LAYOUTS`]). Resolved via `data/layouts/layouts.json`
+//!   ([`layouts_json`]) rather than hardcoded upstream paths, and extracted
+//!   as opaque [`pack::PackKind::Raw`] blobs — same rationale as
+//!   `metatiles.bin` / `metatile_attributes.bin` above: these are upstream's
+//!   own flat binary files, not compiled from another source.
+//!   `crates/assets::map_layouts` already ships the typed decode layer
+//!   (`MetatileCell`, `LayoutGrid`, `BorderGrid`) that reads these bytes
+//!   back out of the pack; this pipeline only needs to get the bytes *into*
+//!   the pack.
 //!
 //! - **Fonts** (S-4, issue #114): the five upstream Latin glyph sheets —
 //!   see [`fonts`]'s module docs for the sheet shape and what is
@@ -549,15 +553,17 @@ fn extract_sprites(upstream: &Path, writer: &mut PackWriter) -> Result<(), Extra
 }
 
 /// `(LAYOUT_* id, normalized pack name)` — the Littleroot Town layout
-/// family this pipeline extracts: the town itself plus every interior it
-/// contains. See the module docs for why this list, not the full
-/// `data/layouts/` tree, is in scope.
+/// family this pipeline extracts (the town itself plus every interior it
+/// contains), **plus `LAYOUT_ROUTE101`** (issue #177): Littleroot's own
+/// north map connection targets it, and walking across that edge is the
+/// traversal prerequisite for I-4's first wild encounter. See the module
+/// docs for why this list, not the full `data/layouts/` tree, is in scope.
 ///
 /// Every id here is looked up in `layouts.json` at extract time
 /// ([`extract_layouts`]) rather than the directory name being derived
 /// mechanically from it, so a typo here surfaces as a clear
 /// [`ExtractError::UnknownLayoutInJson`] instead of a silently-wrong path.
-const LAYOUTS: [(&str, &str); 7] = [
+const LAYOUTS: [(&str, &str); 8] = [
     ("LAYOUT_LITTLEROOT_TOWN", "littleroot_town"),
     (
         "LAYOUT_LITTLEROOT_TOWN_BRENDANS_HOUSE_1F",
@@ -591,6 +597,13 @@ const LAYOUTS: [(&str, &str); 7] = [
         "LAYOUT_LITTLEROOT_TOWN_PROFESSOR_BIRCHS_LAB_WITH_TABLE",
         "littleroot_town_professor_birchs_lab_with_table",
     ),
+    // Not part of the Littleroot Town directory family (its own top-level
+    // `data/layouts/Route101/`), bundled anyway: Littleroot's north
+    // connection (`data/maps/LittlerootTown/map.json:15-21`) targets it, and
+    // Route101's own south connection (`data/maps/Route101/map.json`)
+    // targets Littleroot right back -- the one connection pair this port's
+    // v1 north-star instance needs to cross.
+    ("LAYOUT_ROUTE101", "route101"),
 ];
 
 /// Every upstream `border.bin` is a fixed 2x2 grid of `u16` cells (see
@@ -702,6 +715,7 @@ mod tests {
                 "LAYOUT_LITTLEROOT_TOWN_MAYS_HOUSE_2F",
                 "LAYOUT_LITTLEROOT_TOWN_PROFESSOR_BIRCHS_LAB",
                 "LAYOUT_LITTLEROOT_TOWN_PROFESSOR_BIRCHS_LAB_WITH_TABLE",
+                "LAYOUT_ROUTE101",
             ],
             "this list feeds bounded tables in other crates -- see this \
              test's own doc comment for what must be extended alongside it"
@@ -780,11 +794,14 @@ mod tests {
         let unique_names: std::collections::HashSet<_> = names.iter().collect();
         assert_eq!(ids.len(), unique_ids.len(), "duplicate LAYOUT_* id");
         assert_eq!(names.len(), unique_names.len(), "duplicate pack name");
+        // Every entry is either the Littleroot Town directory family or
+        // `LAYOUT_ROUTE101` (issue #177) -- the one connection target
+        // outside that family this pipeline bundles (module docs).
         for id in &ids {
-            assert!(id.starts_with("LAYOUT_LITTLEROOT_TOWN"));
+            assert!(id.starts_with("LAYOUT_LITTLEROOT_TOWN") || *id == "LAYOUT_ROUTE101");
         }
         for name in &names {
-            assert!(name.starts_with("littleroot_town"));
+            assert!(name.starts_with("littleroot_town") || *name == "route101");
             // Pack ids are ASCII lowercase + digits + underscores + `/` only
             // (see `crate::extract`'s "Asset id scheme" docs).
             assert!(name

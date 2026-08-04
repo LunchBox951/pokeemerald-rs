@@ -8,7 +8,10 @@ use engine::event_data::EventData;
 use engine::overworld::metatile_behavior::{
     MB_ANIMATED_DOOR, MB_NON_ANIMATED_DOOR, MB_SOUTH_ARROW_WARP,
 };
-use engine::overworld::{warp_in_facing, Direction, MapRuntime, PlayerState, WALK_FRAMES_PER_TILE};
+use engine::overworld::{
+    warp_in_facing, ConnectedMapData, Direction, MapRuntime, PlayerState, StepOutcome,
+    WALK_FRAMES_PER_TILE,
+};
 use platform::{ButtonState, Buttons};
 
 /// A fresh event-flag store: nothing hidden. Used by the
@@ -17,6 +20,40 @@ use platform::{ButtonState, Buttons};
 /// instead go through [`OverworldPhase::step`], which threads the phase's
 /// own real save state.
 const NO_FLAGS: EventData = EventData::new();
+
+/// No map is ever connected -- mirrors
+/// `engine::overworld::player::tests::no_connections` (that module's own
+/// private fixture), needed here too now that [`advance_player_one_frame`]
+/// takes its `maps` resolver generically (issue #177) rather than
+/// hardcoding [`super::MapConnections`].
+fn no_connections(_: MapId) -> Option<(u16, u16)> {
+    None
+}
+
+/// A single connected neighbour map, keyed by id -- the coordinate-
+/// translation fixture for the headless crossing tests below. Mirrors
+/// `engine::overworld::player::tests::SingleConnectedMap` (that module's own
+/// private fixture): this crate can't import it directly (private to
+/// `engine`), but the shape this issue's [`ConnectedMapData`] consumers
+/// need is identical -- a neighbour's dimensions plus one decoded landing
+/// cell.
+#[derive(Debug, Clone, Copy)]
+struct SingleConnectedMap {
+    id: MapId,
+    dimensions: (u16, u16),
+    landing_position: (i32, i32),
+    landing_cell: MetatileCell,
+}
+
+impl ConnectedMapData for SingleConnectedMap {
+    fn dimensions(&self, map: MapId) -> Option<(u16, u16)> {
+        (map == self.id).then_some(self.dimensions)
+    }
+
+    fn metatile_cell(&self, map: MapId, x: i32, y: i32) -> Option<MetatileCell> {
+        (map == self.id && (x, y) == self.landing_position).then_some(self.landing_cell)
+    }
+}
 
 /// A single freshly-pressed button this frame (`is_newly_pressed` true,
 /// unlike `crate::flow::tests::held`'s deliberately *not*-fresh two-frame
@@ -492,7 +529,13 @@ fn advance_player_one_frame_shows_progress_1_on_the_frame_a_step_begins_and_take
 
     // Facing South already; a held South poll steps immediately (no
     // turn-in-place first, since the direction already matches facing).
-    advance_player_one_frame(&mut player, Some(Direction::South), &runtime, &NO_FLAGS);
+    advance_player_one_frame(
+        &mut player,
+        Some(Direction::South),
+        &runtime,
+        &no_connections,
+        &NO_FLAGS,
+    );
     assert_eq!(player.position(), (2, 3), "the step must have landed");
     assert!(player.in_transit());
     assert_eq!(
@@ -506,7 +549,13 @@ fn advance_player_one_frame_shows_progress_1_on_the_frame_a_step_begins_and_take
     // Every following frame advances the timer by exactly 1 while the
     // input stays held.
     for expected in 2..engine::overworld::WALK_FRAMES_PER_TILE {
-        advance_player_one_frame(&mut player, Some(Direction::South), &runtime, &NO_FLAGS);
+        advance_player_one_frame(
+            &mut player,
+            Some(Direction::South),
+            &runtime,
+            &no_connections,
+            &NO_FLAGS,
+        );
         assert_eq!(player.step_progress(), expected);
     }
     assert!(
@@ -517,7 +566,13 @@ fn advance_player_one_frame_shows_progress_1_on_the_frame_a_step_begins_and_take
     // The 16th frame (this crossing's `WALK_FRAMES_PER_TILE`th) is the
     // one where the transit settles -- 16 rendered frames total to
     // cross one tile, not 17.
-    advance_player_one_frame(&mut player, Some(Direction::South), &runtime, &NO_FLAGS);
+    advance_player_one_frame(
+        &mut player,
+        Some(Direction::South),
+        &runtime,
+        &no_connections,
+        &NO_FLAGS,
+    );
     assert!(
         !player.in_transit(),
         "the transit must settle on exactly the 16th frame"
@@ -534,11 +589,457 @@ fn advance_player_one_frame_turning_in_place_never_enters_transit() {
     let runtime = flat_runtime(5, 5);
     let mut player = PlayerState::new((2, 2), 3, Direction::South);
 
-    advance_player_one_frame(&mut player, Some(Direction::East), &runtime, &NO_FLAGS);
+    advance_player_one_frame(
+        &mut player,
+        Some(Direction::East),
+        &runtime,
+        &no_connections,
+        &NO_FLAGS,
+    );
     assert_eq!(player.facing(), Direction::East, "must have turned");
     assert_eq!(player.position(), (2, 2), "a turn must not move the tile");
     assert!(!player.in_transit());
     assert_eq!(player.step_progress(), 0);
+}
+
+// -- Map-edge connection crossing (issue #177): coordinate translation -----
+//
+// Headless, pack-free: `advance_player_one_frame`'s `maps` parameter is
+// generic (this module's own doc comment on why), so these exercise the
+// exact integration function `OverworldPhase::step` calls, over a synthetic
+// two-map graph, without needing a local asset pack. The real
+// Littleroot Town <-> Route 101 crossing (offset 0 in both directions) is
+// additionally pinned end to end, through the whole `OverworldPhase`, by
+// the `#[ignore]`d `real_pack_*` tests further down this file.
+
+/// A small flat map whose header carries one connection in `direction`, to
+/// `target` with `offset` -- the fixture the coordinate-translation tests
+/// below step off the edge of. Mirrors [`flat_runtime`] plus
+/// `engine::overworld::map_runtime::tests::south_connected_runtime`'s own
+/// shape (that fixture is private to `engine`, so this is a small
+/// reimplementation, not a shared helper).
+fn connected_runtime(
+    width: u16,
+    height: u16,
+    direction: assets::Direction,
+    offset: i32,
+    target: MapId,
+) -> MapRuntime<'static> {
+    let mut bytes = Vec::with_capacity(usize::from(width) * usize::from(height) * 2);
+    for _ in 0..width * height {
+        let raw = MetatileCell {
+            metatile_id: 1,
+            collision: 0,
+            elevation: 3,
+        }
+        .pack();
+        bytes.extend_from_slice(&raw.to_le_bytes());
+    }
+    let bytes: &'static [u8] = Box::leak(bytes.into_boxed_slice());
+
+    let connections: &'static [assets::MapConnection] =
+        Box::leak(Box::new([assets::MapConnection {
+            direction,
+            offset,
+            target,
+        }]));
+    let header: &'static MapHeader = Box::leak(Box::new(MapHeader {
+        id: MapId("MAP_TEST"),
+        group: 0,
+        num: 0,
+        name: "MapTest",
+        layout: assets::LayoutId("MAP_TEST"),
+        music: assets::MusicId(0),
+        region_map_section: assets::RegionMapSectionId("MAPSEC_NONE"),
+        requires_flash: false,
+        weather: assets::Weather::None,
+        map_type: assets::MapType::Route,
+        allow_bike: true,
+        allow_escape: true,
+        allow_run: true,
+        show_name: false,
+        battle_scene: assets::BattleScene::Normal,
+        connections,
+    }));
+    let events: &'static MapEvents = Box::leak(Box::new(MapEvents {
+        id: MapId("MAP_TEST"),
+        shared_events_map: None,
+        object_events: &[],
+        warp_events: &[],
+        coord_events: &[],
+        bg_events: &[],
+    }));
+
+    let layout: &'static MapLayout = Box::leak(Box::new(MapLayout {
+        id: assets::LayoutId("MAP_TEST"),
+        name: "MapTest",
+        width,
+        height,
+        primary_tileset: "gTileset_General",
+        secondary_tileset: "gTileset_General",
+    }));
+    let grid = layout.grid(bytes).unwrap();
+
+    MapRuntime::new(
+        MapId("MAP_TEST"),
+        header,
+        events,
+        grid,
+        assets::MetatileAttributeTable::new(&[]),
+        assets::MetatileAttributeTable::new(&[]),
+    )
+}
+
+/// The straight case: an `offset: 0` south connection (Route 101's own
+/// south connection to Littleroot Town, per `data/maps/Route101/map.json`,
+/// is exactly this shape) carries the stepped-off x coordinate straight
+/// across unchanged, landing on the neighbour's opposite (north) edge.
+#[test]
+fn advance_player_one_frame_crosses_a_zero_offset_connection_unchanged() {
+    let runtime = connected_runtime(5, 5, assets::Direction::South, 0, MapId("MAP_SOUTH"));
+    let maps = SingleConnectedMap {
+        id: MapId("MAP_SOUTH"),
+        dimensions: (5, 5),
+        landing_position: (3, 0),
+        landing_cell: MetatileCell {
+            metatile_id: 1,
+            collision: 0,
+            elevation: 3,
+        },
+    };
+    let mut player = PlayerState::new((3, 4), 3, Direction::South);
+
+    let outcome = advance_player_one_frame(
+        &mut player,
+        Some(Direction::South),
+        &runtime,
+        &maps,
+        &NO_FLAGS,
+    );
+    assert_eq!(
+        outcome,
+        StepOutcome::Crossed {
+            to_map: MapId("MAP_SOUTH"),
+            to_position: (3, 0),
+        }
+    );
+    assert_eq!(player.position(), (3, 0));
+    assert!(player.in_transit(), "a crossing is a step like any other");
+}
+
+/// The offset case: a nonzero `offset` on an east/west connection shifts
+/// the *cross axis* (`y`, for an east/west edge) coordinate by
+/// `-offset` when carrying it into the neighbour's own space -- upstream
+/// `IsPosInConnectingMap`/`SetPositionFromConnection`
+/// (`pokeemerald/src/fieldmap.c:578-598, 699-712`), already exercised at the
+/// engine layer (`engine::overworld::map_runtime::tests::
+/// resolve_connection_applies_perpendicular_offset`) -- pinned again here at
+/// the actual integration entry point [`OverworldPhase`] wires
+/// [`engine::overworld::PlayerState::step`] through
+/// ([`advance_player_one_frame`]), not just the engine function underneath
+/// it.
+#[test]
+fn advance_player_one_frame_crosses_an_offset_connection_shifting_the_cross_axis() {
+    let runtime = connected_runtime(6, 6, assets::Direction::East, -2, MapId("MAP_EAST"));
+    let maps = SingleConnectedMap {
+        id: MapId("MAP_EAST"),
+        dimensions: (10, 10),
+        // Stepping east off x=5 (width) at y=5: target_y = y - offset =
+        // 5 - (-2) = 7, landing at the neighbour's west edge (x=0).
+        landing_position: (0, 7),
+        landing_cell: MetatileCell {
+            metatile_id: 1,
+            collision: 0,
+            elevation: 3,
+        },
+    };
+    let mut player = PlayerState::new((5, 5), 3, Direction::East);
+
+    let outcome = advance_player_one_frame(
+        &mut player,
+        Some(Direction::East),
+        &runtime,
+        &maps,
+        &NO_FLAGS,
+    );
+    assert_eq!(
+        outcome,
+        StepOutcome::Crossed {
+            to_map: MapId("MAP_EAST"),
+            to_position: (0, 7),
+        }
+    );
+    assert_eq!(player.position(), (0, 7));
+}
+
+/// The same offset rule on the *north/south* axis -- the axis the
+/// Littleroot -> Route 101 north-star crossing actually uses (both its real
+/// connections happen to carry `offset: 0`, which is exactly why a sign
+/// regression in `target_x = x - offset` would survive every real-map
+/// test; this synthetic pin is the guard).
+#[test]
+fn advance_player_one_frame_crosses_an_offset_north_connection_shifting_x() {
+    let runtime = connected_runtime(6, 6, assets::Direction::North, -2, MapId("MAP_NORTH"));
+    let maps = SingleConnectedMap {
+        id: MapId("MAP_NORTH"),
+        dimensions: (10, 10),
+        // Stepping north off y=0 at x=5: target_x = x - offset =
+        // 5 - (-2) = 7, landing at the neighbour's south edge (y = 9).
+        landing_position: (7, 9),
+        landing_cell: MetatileCell {
+            metatile_id: 1,
+            collision: 0,
+            elevation: 3,
+        },
+    };
+    let mut player = PlayerState::new((5, 0), 3, Direction::North);
+
+    let outcome = advance_player_one_frame(
+        &mut player,
+        Some(Direction::North),
+        &runtime,
+        &maps,
+        &NO_FLAGS,
+    );
+    assert_eq!(
+        outcome,
+        StepOutcome::Crossed {
+            to_map: MapId("MAP_NORTH"),
+            to_position: (7, 9),
+        }
+    );
+    assert_eq!(player.position(), (7, 9));
+}
+
+/// Different lateral positions along the *same* edge each translate to
+/// their own distinct landing tile (not, say, a single hardcoded landing
+/// position regardless of where the player actually crossed) -- the
+/// property that makes walking along Littleroot's whole north edge land on
+/// the matching column of Route 101, not just one fixed spot.
+#[test]
+fn advance_player_one_frame_crossing_at_different_lateral_positions_lands_at_the_matching_column() {
+    let runtime = connected_runtime(8, 8, assets::Direction::North, 0, MapId("MAP_NORTH"));
+
+    for x in [0_i32, 3, 7] {
+        let maps = SingleConnectedMap {
+            id: MapId("MAP_NORTH"),
+            dimensions: (8, 8),
+            landing_position: (x, 7),
+            landing_cell: MetatileCell {
+                metatile_id: 1,
+                collision: 0,
+                elevation: 3,
+            },
+        };
+        let mut player = PlayerState::new((x, 0), 3, Direction::North);
+        let outcome = advance_player_one_frame(
+            &mut player,
+            Some(Direction::North),
+            &runtime,
+            &maps,
+            &NO_FLAGS,
+        );
+        assert_eq!(
+            outcome,
+            StepOutcome::Crossed {
+                to_map: MapId("MAP_NORTH"),
+                to_position: (x, 7),
+            },
+            "column x={x} must land at the neighbour's matching column, not a fixed spot"
+        );
+    }
+}
+
+/// A candidate connection whose perpendicular bounds don't cover the
+/// stepped-off position at all is rejected outright -- the step is simply
+/// blocked, exactly as if there were no connection there (mirrors
+/// `engine::overworld::map_runtime::tests::
+/// resolve_connection_rejects_position_outside_target_bounds`, again pinned
+/// through this module's own integration entry point).
+#[test]
+fn advance_player_one_frame_rejects_a_crossing_outside_the_neighbours_bounds() {
+    // The neighbour is much narrower than this map: only x in 0..3 lands.
+    let runtime = connected_runtime(10, 3, assets::Direction::South, 0, MapId("MAP_NARROW"));
+    let maps = SingleConnectedMap {
+        id: MapId("MAP_NARROW"),
+        dimensions: (3, 3),
+        landing_position: (8, 0),
+        landing_cell: MetatileCell {
+            metatile_id: 1,
+            collision: 0,
+            elevation: 3,
+        },
+    };
+    let mut player = PlayerState::new((8, 2), 3, Direction::South);
+
+    let outcome = advance_player_one_frame(
+        &mut player,
+        Some(Direction::South),
+        &runtime,
+        &maps,
+        &NO_FLAGS,
+    );
+    assert_eq!(
+        outcome,
+        StepOutcome::Blocked {
+            direction: Direction::South,
+            collision: engine::overworld::Collision::Impassable,
+        },
+        "x=8 is outside the 3-wide neighbour's bounds, so the crossing must fail closed"
+    );
+    assert_eq!(
+        player.position(),
+        (8, 2),
+        "a rejected crossing must not move the player"
+    );
+}
+
+/// The real-pack acceptance test for issue #177: Littleroot Town's actual
+/// north connection to Route 101 (`offset: 0` in both directions --
+/// `data/maps/LittlerootTown/map.json:15-21`,
+/// `data/maps/Route101/map.json`'s own south connection back), crossed both
+/// ways through the whole [`OverworldPhase`].
+///
+/// `x = 10` is real map data's own walkable path column: Littleroot's row
+/// `y = 0` and Route 101's row `y = 19` (both maps are `20x20`, so `19` is
+/// Route 101's own last row) are each open ground at `x` in `{10, 11}` --
+/// confirmed by hand against `data/layouts/LittlerootTown/map.bin` and
+/// `data/layouts/Route101/map.bin` -- flanked by collision-1 fence tiles
+/// everywhere else along both edges, and no object event sits anywhere near
+/// either row (both maps' own `map.json`).
+#[test]
+#[ignore = "needs a local pack: run `cargo xtask extract` first"]
+#[allow(clippy::too_many_lines)] // one continuous two-crossing walk; splitting would re-set-up the pack scene
+fn walking_off_littlerootss_north_edge_crosses_into_route_101_and_back() {
+    let littleroot = assets::MapId("MAP_LITTLEROOT_TOWN");
+    let route101 = assets::MapId("MAP_ROUTE101");
+    let scene = crate::overworld::load_room(littleroot).expect("run `cargo xtask extract` first");
+
+    // Two ordinary tiles south of the north edge, already facing the
+    // direction that will carry it there.
+    let player = PlayerState::new((10, 2), 3, Direction::North);
+    let mut phase = OverworldPhase::for_test(scene, littleroot, player, None);
+
+    // Two ordinary steps north, each draining its own walk animation, land
+    // on the map's own last interior row (y = 0).
+    for _ in 0..2 {
+        phase.step(held(Buttons::UP));
+        for _ in 1..WALK_FRAMES_PER_TILE {
+            phase.step(ButtonState::new());
+        }
+        assert_eq!(phase.map_id, littleroot, "still on Littleroot's own grid");
+    }
+    assert_eq!(phase.player.position(), (10, 0));
+
+    // The third step walks off the grid's own top edge -- the crossing.
+    phase.step(held(Buttons::UP));
+    assert_eq!(
+        phase.tick, 33,
+        "a crossing is NOT a map load: upstream's LoadMapFromCameraTransition re-inits only \
+         the secondary tileset counter (InitSecondaryTilesetAnimation, overworld.c:815), so \
+         the primary counter this port models keeps running -- 32 walk frames plus the \
+         crossing step's own increment, with no reset (contrast the warp test above)"
+    );
+    assert_eq!(
+        phase.pending_landing,
+        Some((10, 19)),
+        "the crossing step's landing tile re-latches in the *entered* map's coordinate \
+         space, so the drain-frame door check evaluates against Route 101"
+    );
+    for _ in 1..WALK_FRAMES_PER_TILE {
+        phase.step(ButtonState::new());
+    }
+    assert_eq!(
+        phase.pending_landing, None,
+        "the drain frame consumed the latched landing (Route 101's south edge is no door)"
+    );
+
+    assert_eq!(
+        phase.map_id, route101,
+        "walking off Littleroot's north edge must rebind to Route 101"
+    );
+    assert_eq!(
+        phase.player.position(),
+        (10, 19),
+        "offset 0 carries x straight across, landing on Route 101's own south edge \
+         (height 20, so y = 19)"
+    );
+    assert_eq!(
+        phase.player.elevation(),
+        3,
+        "the landing cell's own elevation, adopted the same way an ordinary step's is"
+    );
+    assert_eq!(
+        phase.player.facing(),
+        Direction::North,
+        "a plain connection crossing does not alter facing -- the player was already \
+         walking north when it fired"
+    );
+    assert!(
+        !phase.player.in_transit(),
+        "the walk animation the crossing step started has already fully drained by now"
+    );
+
+    let route101_header = assets::MapHeaderTable::new()
+        .header(route101)
+        .expect("Route 101 must resolve in the generated map-header table");
+    assert_eq!(
+        phase.save1().location.map_group,
+        i8::try_from(route101_header.group).unwrap()
+    );
+    assert_eq!(
+        phase.save1().location.map_num,
+        i8::try_from(route101_header.num).unwrap()
+    );
+    assert_eq!(
+        phase.save1().location.warp_id,
+        -1,
+        "a connection crossing names no warp event -- WARP_ID_NONE (overworld.c:633)"
+    );
+    assert_eq!(
+        (phase.save1().location.x, phase.save1().location.y),
+        (-1, -1),
+        "LoadMapFromCameraTransition's own SetWarpDestination call shape (overworld.c:786)"
+    );
+    assert_eq!(
+        (
+            i32::from(phase.save1().pos.x),
+            i32::from(phase.save1().pos.y)
+        ),
+        (10, 19),
+        "save1.pos must mirror the post-crossing tile"
+    );
+
+    // Cross right back south: (10, 19) is already Route 101's own last row,
+    // so a single south step walks straight off that edge too.
+    phase.step(held(Buttons::DOWN));
+    for _ in 1..WALK_FRAMES_PER_TILE {
+        phase.step(ButtonState::new());
+    }
+
+    assert_eq!(
+        phase.map_id, littleroot,
+        "walking south off Route 101's own south edge must cross back into Littleroot"
+    );
+    assert_eq!(
+        phase.player.position(),
+        (10, 0),
+        "landing back on Littleroot's own north edge, same x"
+    );
+    assert_eq!(phase.player.elevation(), 3);
+
+    let littleroot_header = assets::MapHeaderTable::new()
+        .header(littleroot)
+        .expect("Littleroot Town must resolve in the generated map-header table");
+    assert_eq!(
+        phase.save1().location.map_group,
+        i8::try_from(littleroot_header.group).unwrap()
+    );
+    assert_eq!(
+        phase.save1().location.map_num,
+        i8::try_from(littleroot_header.num).unwrap()
+    );
+    assert_eq!(phase.save1().location.warp_id, -1);
 }
 
 #[test]

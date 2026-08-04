@@ -1475,8 +1475,10 @@
     "data/layouts/Route101": {
       "category": "data.layout",
       "kind": "dir",
-      "spec_owner": "05-assets",
-      "status": "pending"
+      "reason": "map.bin/border.bin extracted as opaque raw blobs into the local gitignored asset pack (issue #177), id layout/route101/map and layout/route101/border (crates/xtask/src/extract/mod.rs::extract_layouts's LAYOUTS table, resolved via data/layouts/layouts.json) -- Littleroot Town's own north map connection targets it, and it is I-4's traversal prerequisite. Read back with AssetPack::layout_map/layout_border and decoded into typed grids via crates/assets/src/map_layouts.rs's existing MapLayout::grid/LayoutGrid/BorderGrid, same as the Littleroot Town family.",
+      "rust_target": "crates/xtask/src/extract/mod.rs",
+      "spec": "I-4",
+      "status": "ported"
     },
     "data/layouts/Route102": {
       "category": "data.layout",
@@ -26589,6 +26591,12 @@
           "reason": "Destination-tile branches rewritten as engine::overworld::warp::warp_in_facing, keyed on the arrival tile's metatile behavior exactly as upstream keys on GetCenterScreenMetatileBehavior after WarpIntoMap (flow::OverworldPhase::warp_to reads that behavior off the destination map's runtime and passes it in): deep-south-warp -> North (tested first, before the door arm that also matches it), non-anim-door/door -> South, south-arrow -> North, north-arrow -> South, west-arrow -> East, east-arrow -> West, else South. Three branches are NOT modelled and all collapse into that final else: the FLAG_SYS_CRUISE_MODE + MAP_TYPE_OCEAN_ROUTE branch (no event-flag state), the surfing<->underwater transition branch (no surf/dive avatar flags), and the MetatileBehavior_IsLadder branch that preserves the pre-warp facing (no StoreInitialPlayerAvatarState equivalent -- that function and GetAdjustedInitialTransitionFlags stay unported).",
           "rust_target": "crates/engine/src/overworld/warp.rs",
           "spec": "I-3",
+          "status": "stubbed"
+        },
+        "LoadMapFromCameraTransition": {
+          "reason": "Connection-crossing map switch (issue #177): OverworldPhase::cross_connection models the location/scene core -- SetWarpDestination(mapGroup, mapNum, WARP_ID_NONE, -1, -1) + ApplyCurrentWarp (overworld.c:633, :540-:546, save1.location's exact shape), LoadCurrentMapData (scene/map_id rebind), and RunOnTransitionMapScript (:807, the bounded 2-map transcription in run_on_transition_map_script) -- atomically after PlayerState::step commits the translated position, with a fail-closed restore of the pre-step stance if the rebind is refused. InitSecondaryTilesetAnimation (:815) is modelled as a deliberate no-op: it resets only sSecondaryTilesetAnimCounter (tileset_anims.c:581-583), and this port animates only the primary counter (OverworldPhase::tick), which therefore keeps running across a crossing -- LoadMapFromCameraTransition never calls InitTilesetAnimations (that function's call sites are the full map-load paths: InitMapView overworld.c:529 and the stepped loaders :1867/:1942/:2039). The pixel-precision CameraMove/GetIncomingConnection trigger (:603-:624) is deliberately simplified to grid-step resolution (documented on resolve_connection). NOT modelled, deferred with the systems they belong to: TransitionMapMusic, ResetCyclingRoadChallengeData (:799), RestartWildEncounterImmunitySteps (needed by I-4's first-encounter roll), TryUpdateRandomTrainerRematches, DoTimeBasedEvents, SetSavedWeatherFromCurrMapHeader, ChooseAmbientCrySpecies (:804), SetDefaultFlashLevel, Overworld_ClearSavedMusic (:806), LoadObjEventTemplatesFromHeader, TrySetMapSaveWarpStatus, ClearTempFieldEventData, InitMap, the secondary tileset/palette copy path (CopySecondaryTilesetToVramUsingHeap/CopySecondaryTilesetPaletteUsingHeap and the ApplyWeatherColorMapToPal(NUM_PALS_IN_PRIMARY..NUM_PALS_TOTAL) loop), DoCurrentWeather (:818), ResetFieldTasksArgs (:819), roamer updates, RunOnResumeMapScript, and ShowMapNamePopup. Stubbed until those land.",
+          "rust_target": "crates/pokeemerald-rs/src/flow/overworld_phase.rs",
+          "spec": "I-4",
           "status": "stubbed"
         },
         "SetWarpData": {

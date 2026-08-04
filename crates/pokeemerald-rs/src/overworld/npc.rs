@@ -31,11 +31,13 @@
 //!   you can actually meet is always the *opposite* protagonist.
 //!
 //! Ten [`resolve_sprite_source`] arms in total, **all ten of which resolve
-//! for either [`PlayerCharacter`]** -- covering ten of the **29** distinct
-//! `graphics_id`s the six bundled maps' object events actually reference
-//! (`resolve_sprite_source_covers_the_reachable_graphics_ids` pins that
-//! exact partition, and that it is gender-independent, so a newly reachable
-//! standard NPC cannot silently stop drawing).
+//! for either [`PlayerCharacter`]** -- covering ten of the **32** distinct
+//! `graphics_id`s the seven bundled maps' object events actually reference
+//! (Route 101, since issue #177, adds three unresolved ids -- the
+//! youngster, Birch's starter bag, and the wild Zigzagoon -- to the six
+//! Littleroot-family maps' own 29; `resolve_sprite_source_covers_the_reachable_graphics_ids`
+//! pins that exact partition, and that it is gender-independent, so a newly
+//! reachable standard NPC cannot silently stop drawing).
 //!
 //! **Not drawn** (still hide-flag tracked, just no [`OamEntry`]):
 //! decorations (`OBJ_EVENT_GFX_VAR_*`, upstream's variable-graphics
@@ -606,13 +608,14 @@ mod tests {
     /// render. Mirrored here (this crate cannot depend on `xtask`); that
     /// module's own `the_bundled_layout_set_is_pinned_for_the_tables_derived_from_it`
     /// is the tripwire that fails loudly when the list grows.
-    const BUNDLED_MAPS: [&str; 6] = [
+    const BUNDLED_MAPS: [&str; 7] = [
         "MAP_LITTLEROOT_TOWN",
         "MAP_LITTLEROOT_TOWN_BRENDANS_HOUSE_1F",
         "MAP_LITTLEROOT_TOWN_BRENDANS_HOUSE_2F",
         "MAP_LITTLEROOT_TOWN_MAYS_HOUSE_1F",
         "MAP_LITTLEROOT_TOWN_MAYS_HOUSE_2F",
         "MAP_LITTLEROOT_TOWN_PROFESSOR_BIRCHS_LAB",
+        "MAP_ROUTE101",
     ];
 
     /// Every distinct `graphics_id` referenced by an object event on one of
@@ -634,7 +637,7 @@ mod tests {
     }
 
     /// The module docs' scope claim, pinned as an exact partition of the
-    /// *reachable* graphics-id set: which of the 29 distinct ids the six
+    /// *reachable* graphics-id set: which of the 32 distinct ids the seven
     /// bundled maps reference draw a sprite, and which are only hide-flag/
     /// interaction tracked. Dropping an arm from
     /// [`resolve_sprite_source`] -- or a map-data change making a new
@@ -645,8 +648,8 @@ mod tests {
         let reachable = reachable_graphics_ids();
         assert_eq!(
             reachable.len(),
-            29,
-            "the six bundled maps reference 29 distinct graphics ids"
+            32,
+            "the seven bundled maps reference 32 distinct graphics ids"
         );
 
         let (drawn, not_drawn): (Vec<&'static str>, Vec<&'static str>) = reachable
@@ -675,6 +678,7 @@ mod tests {
         assert_eq!(
             not_drawn,
             [
+                "OBJ_EVENT_GFX_BIRCHS_BAG",
                 "OBJ_EVENT_GFX_ITEM_BALL",
                 "OBJ_EVENT_GFX_NINJA_BOY",
                 "OBJ_EVENT_GFX_PICHU_DOLL",
@@ -694,9 +698,12 @@ mod tests {
                 "OBJ_EVENT_GFX_VAR_B",
                 "OBJ_EVENT_GFX_VIGOROTH_CARRYING_BOX",
                 "OBJ_EVENT_GFX_VIGOROTH_FACING_AWAY",
+                "OBJ_EVENT_GFX_YOUNGSTER",
+                "OBJ_EVENT_GFX_ZIGZAGOON_1",
             ],
             "module docs' own 'not drawn' list: decorations, props/dolls, \
-             the truck, and the two non-16x32 NPCs"
+             the truck, the two non-16x32 NPCs, and (issue #177) Route 101's \
+             own unresolved youngster/bag/Zigzagoon ids"
         );
 
         // The *partition* is gender-independent -- every id that draws for a
