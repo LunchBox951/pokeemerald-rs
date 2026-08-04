@@ -49,13 +49,17 @@ fn every_expected_voicegroup_is_present_and_decodes() {
 
 #[test]
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
-fn slot_127_is_the_effective_slot_mus_titles_own_midi_selects() {
+fn slot_127_is_currently_empty_a_recorded_divergence_tracked_by_issue_201() {
     // `mus_title.mid` selects instrument 127 on one channel
-    // (`crates/assets/src/audio.rs`'s module docs), but `title.inc` itself
-    // only declares 89 of the 128 addressable slots -- slot 127 has no
-    // `ToneData` in the source at all. The pipeline represents that
-    // honestly as `VoiceEntry::Empty` rather than inventing content for
-    // it (issue #182's "128-slot normalization").
+    // (`crates/assets/src/audio.rs`'s module docs), and `title.inc` only
+    // declares 89 of the 128 addressable slots. Upstream this is NOT
+    // silence: the linker lays `intro.inc` contiguously after `title.inc`
+    // and the mixer's unchecked `voice * 12` fetch resolves slot 127 into
+    // `voicegroup_intro`'s entry 38, a real square-wave voice (see
+    // `xtask::extract::voicegroups`'s "Known divergence" docs). This test
+    // is a ratchet on the *current* pipeline output -- `Empty`, i.e. the
+    // divergent silent rendering -- not an assertion of fidelity; issue
+    // #201 owns the decision that retires it.
     let pack = AssetPack::load_default().expect("run `cargo xtask extract` first");
     let title = decode(&pack, "title");
     assert_eq!(title.slot(127), Some(&VoiceEntry::Empty));

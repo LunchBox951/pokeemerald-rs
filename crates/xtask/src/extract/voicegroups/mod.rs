@@ -15,11 +15,21 @@
 //! `voicegroup127` -- no such symbol exists anywhere in the reference
 //! checkout. `voicegroup_title` itself declares only 89 of the 128
 //! addressable slots (89 `voice_*` body lines under `title.inc`'s
-//! `voice_group title` header); slot 127 (the one `mus_title.mid`'s own MIDI source
-//! selects on one channel -- see `crates/assets/src/audio.rs`'s module
-//! docs) has no `ToneData` in the source at all. This pipeline represents
-//! that honestly as `assets::audio::voicegroup::VoiceEntry::Empty`
-//! rather than inventing content for it -- see `resolve::pad_to_128`.
+//! `voice_group title` header), and this pipeline materializes the
+//! undeclared tail as `assets::audio::voicegroup::VoiceEntry::Empty`
+//! (`resolve::pad_to_128`).
+//!
+//! **Known divergence (issue #201):** slot 127 -- the one `mus_title.mid`'s
+//! own MIDI source selects on one channel (see
+//! `crates/assets/src/audio.rs`'s module docs) -- is undeclared *in
+//! `title.inc`*, but not silent upstream. `sound/voice_groups.inc:66-67`
+//! links `intro.inc` contiguously after `title.inc` (whose 89 entries are
+//! 1068 bytes, already 4-aligned), and the mixer's unchecked
+//! `voicegroup + voice * 12` fetch (`src/m4a_1.s`, `ply_voice`) resolves
+//! slot 127 to offset 1524 = byte 456 of `voicegroup_intro` = its entry 38,
+//! `voice_square_1 60, 0, 0, 2, 0, 0, 15, 0` -- a real playable CGB voice.
+//! Until #201 decides how to model that link-adjacency read, the `Empty`
+//! this pass emits renders those notes silent `(behavioral-fidelity)`.
 //!
 //! # Pipeline
 //!
