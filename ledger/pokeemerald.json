@@ -19099,8 +19099,10 @@
     "sound/direct_sound_samples/sc88pro_xylophone.wav": {
       "category": "audio.sample",
       "kind": "file",
-      "spec_owner": "03-audio",
-      "status": "pending"
+      "reason": "DirectSound sample extraction (issues #183 + #201): referenced by voicegroup_title's borrowed link-adjacency slot 102 (= voicegroup_intro entry 13, sound/voicegroups/intro.inc:15), so it joins DIRECT_SOUND_SAMPLES and is decoded via extract::wav (wav2agb -b semantics) into audio/sample/direct-sound/sc88pro_xylophone. Round-tripped by the assets real-pack decode test and the voicegroup referential-closure test.",
+      "rust_target": "crates/xtask/src/extract/audio_samples.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "sound/direct_sound_samples/sd90_ambient_tom.wav": {
       "category": "audio.sample",
@@ -22779,8 +22781,10 @@
     "sound/voice_groups.inc": {
       "category": "audio.misc",
       "kind": "file",
-      "spec_owner": "03-audio",
-      "status": "pending"
+      "reason": "Parsed for link order only (issue #201): this is the assembler include list consumed by data/sound_data.s that concatenates every sound/voicegroups/*.inc byte table (plus sound/cry_tables.inc and the FRLG-era groups) into one contiguous .rodata section. parser::parse_link_order + mod.rs's link_order_successors read its .include lines -- voicegroup includes in file order, foreign includes kept as adjacency barriers -- so xtask::extract::voicegroups can learn which voicegroup file the assembler places immediately after title.inc (intro.inc, sound/voice_groups.inc:66-67) and model title's undeclared tail slots (89..=127) from that successor's own entries instead of inventing Empty silence; see sound/voicegroups/title.inc's ledger entry for the full mechanism. No other content of this file is read or modeled.",
+      "rust_target": "crates/xtask/src/extract/voicegroups/mod.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "sound/voicegroups/abandoned_ship.inc": {
       "category": "audio.voicegroup",
@@ -23175,6 +23179,14 @@
       "status": "pending"
     },
     "sound/voicegroups/intro.inc": {
+      "artifacts": {
+        "entries-0-38": {
+          "reason": "Link-adjacency overflow source (issue #201): entries 0..=38 are physically read by the modeled voicegroup+voice*12 fetch for voicegroup_title's undeclared slots 89..=127 (sound/voice_groups.inc:66-67 lays intro.inc contiguously after title.inc), materialized through the same slot-resolution machinery as declared entries into audio/voicegroup/title. The file's own group (entries 39..=127 and its emission as audio/voicegroup/intro) remains pending.",
+          "rust_target": "crates/xtask/src/extract/voicegroups/resolve.rs",
+          "spec": "S-4",
+          "status": "ported"
+        }
+      },
       "category": "audio.voicegroup",
       "kind": "file",
       "spec_owner": "03-audio",
@@ -23811,7 +23823,7 @@
     "sound/voicegroups/title.inc": {
       "category": "audio.voicegroup",
       "kind": "file",
-      "reason": "Voicegroup resolver + 128-slot normalization (issue #182, S-4 #115 child 3): parsed by xtask::extract::voicegroups (parser.rs/resolve.rs/encode.rs), resolving MUS_TITLE's own voicegroup (voice_group title -> voicegroup_title, per sound/songs/midi/midi.cfg mus_title.mid: -G_title) plus every key-split/rhythm child it transitively references, cycle-safe and rejecting a second level of indirection (upstream ply_note single-level limit). Normalized to crates/assets/src/audio/voicegroup.rs's VoiceGroup schema (all 128 slots explicit; the 39 slots this source does not declare materialize as Empty) and emitted as audio/voicegroup/title in the local asset pack (FORMAT_VERSION 4). KNOWN DIVERGENCE (issue #201): slot 127, which mus_title.mid selects, is not silent upstream -- the linker lays intro.inc contiguously after title.inc and m4a_1.s's unchecked voice*12 fetch resolves it to voicegroup_intro entry 38 (voice_square_1 60,0,0,2,0,0,15,0); the Empty emitted here renders those notes silent until #201 decides whether to model the link-adjacency read. Read back and decoded with VoiceGroup::decode (crates/pokeemerald-rs/src/voicegroup_pack_tests.rs ratchets the real pack's slot 127 as the recorded divergence). Sample payloads are not extracted here (issue #183).",
+      "reason": "Voicegroup resolver + 128-slot normalization (issue #182, S-4 #115 child 3): parsed by xtask::extract::voicegroups (parser.rs/resolve.rs/encode.rs), resolving MUS_TITLE's own voicegroup (voice_group title -> voicegroup_title, per sound/songs/midi/midi.cfg mus_title.mid: -G_title) plus every key-split/rhythm child it transitively references, cycle-safe and rejecting a second level of indirection (upstream ply_note single-level limit). Normalized to crates/assets/src/audio/voicegroup.rs's VoiceGroup schema and emitted as audio/voicegroup/title in the local asset pack (FORMAT_VERSION 4). MODELED LINK-ADJACENCY READ (issue #201): title.inc declares only 89 of the 128 addressable slots; sound/voice_groups.inc:66-67 links intro.inc contiguously after title.inc, and m4a_1.s's unchecked voice*12 fetch (ply_voice) resolves an undeclared slot (e.g. 127, which mus_title.mid selects) into voicegroup_intro's own entries. link_order_successors parses sound/voice_groups.inc's linked order and resolve_voice_groups_with_link_successors materializes title's slots 89..=127 from voicegroup_intro's entries 0..=38 (through the same leaf/indirection resolution as a declared slot), instead of Empty -- fail-closed to Empty only if a top-level group is last in the linked order or its successors run out first. A key-split/rhythm child's own under/over-range access (e.g. rs_drumset's starting_note bias) is a different mechanism (the keysplit table itself) and stays Empty-padded, out of scope. Read back and decoded with VoiceGroup::decode (crates/pokeemerald-rs/src/voicegroup_pack_tests.rs pins the adjacency mapping itself: slot 89 = intro entry 0, a Rhythm to rs_drumset; slot 127 = intro entry 38, a real Square1 voice). Sample payloads are not extracted here (issue #183).",
       "rust_target": "crates/xtask/src/extract/voicegroups/mod.rs",
       "spec": "S-4",
       "status": "ported"

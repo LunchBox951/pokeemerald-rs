@@ -396,3 +396,188 @@ fn each_resolved_group_is_only_emitted_once_even_if_referenced_twice() {
     assert_eq!(resolved.len(), 2);
     assert_eq!(resolved.iter().filter(|g| g.label == "shared").count(), 1);
 }
+
+// Issue #201: link-adjacency overflow for the single top-level group
+// (`resolve_voice_groups_with_link_successors`'s own reason for existing --
+// see the module docs' "Link adjacency" section). Mirrors
+// `sound/voice_groups.inc:66-67`'s `title.inc`/`intro.inc` shape at a small,
+// synthetic scale.
+
+#[test]
+fn a_link_successor_fills_the_top_level_groups_undeclared_tail() {
+    // "top" declares one real slot -- 127 slots are undeclared. "next" is
+    // the file `sound/voice_groups.inc` links right after "top"'s own file:
+    // its first two entries (only, here) get pulled in as "top"'s slots
+    // 1 and 2, and everything past that stays the ordinary trailing Empty.
+    let raw = groups(vec![
+        raw_group("top", 0, vec![direct_sound("top_own")]),
+        raw_group(
+            "next",
+            0,
+            vec![direct_sound("borrowed"), direct_sound("also_borrowed")],
+        ),
+    ]);
+    let link_successors = vec!["next".to_owned()];
+    let resolved = resolve_voice_groups_with_link_successors(
+        "top",
+        &raw,
+        &no_keysplit_tables(),
+        &link_successors,
+    )
+    .unwrap();
+
+    // "next" itself is never emitted as its own group -- only a couple of
+    // its entries are borrowed into "top"'s tail.
+    assert_eq!(resolved.len(), 1);
+    let top = &resolved[0];
+    assert_eq!(
+        top.slots[1],
+        VoiceSlot::DirectSound {
+            base_key: 60,
+            pan: None,
+            sample_id: "audio/sample/direct-sound/borrowed".to_owned(),
+            envelope: envelope(),
+            mode: DirectSoundMode::Resampled,
+        }
+    );
+    assert_eq!(
+        top.slots[2],
+        VoiceSlot::DirectSound {
+            base_key: 60,
+            pan: None,
+            sample_id: "audio/sample/direct-sound/also_borrowed".to_owned(),
+            envelope: envelope(),
+            mode: DirectSoundMode::Resampled,
+        }
+    );
+    for slot in &top.slots[3..] {
+        assert_eq!(*slot, VoiceSlot::Empty);
+    }
+}
+
+#[test]
+fn a_borrowed_indirection_entry_resolves_and_emits_its_child_exactly_like_a_declared_one() {
+    // "top" declares nothing of its own; its entire 128 slots come from
+    // "next", whose own first entry is itself a rhythm indirection to a
+    // brand-new child group "next"'s own body never otherwise references.
+    // That child must still be resolved and emitted, the same as if "top"
+    // had declared the `voice_keysplit_all` line itself.
+    let raw = groups(vec![
+        raw_group("top", 0, vec![]),
+        raw_group(
+            "next",
+            0,
+            vec![RawSlot::Rhythm {
+                child_label: "borrowed_child".to_owned(),
+            }],
+        ),
+        raw_group("borrowed_child", 0, vec![direct_sound("hit")]),
+    ]);
+    let link_successors = vec!["next".to_owned()];
+    let resolved = resolve_voice_groups_with_link_successors(
+        "top",
+        &raw,
+        &no_keysplit_tables(),
+        &link_successors,
+    )
+    .unwrap();
+
+    let top = resolved.iter().find(|g| g.label == "top").unwrap();
+    assert_eq!(
+        top.slots[0],
+        VoiceSlot::Rhythm {
+            children_id: "audio/voicegroup/borrowed_child".to_owned(),
+        }
+    );
+    assert!(
+        resolved.iter().any(|g| g.label == "borrowed_child"),
+        "a child referenced only through a borrowed overflow slot must still be emitted"
+    );
+    assert!(
+        !resolved.iter().any(|g| g.label == "next"),
+        "the successor file itself is never emitted as its own group"
+    );
+}
+
+#[test]
+fn link_successors_are_walked_in_order_continuing_into_a_second_file_if_the_first_runs_out() {
+    // "top" needs 2 overflow slots; "first" (the immediate link successor)
+    // supplies only 1, so the walk must continue into "second".
+    let raw = groups(vec![
+        raw_group("top", 0, vec![direct_sound("x"); 126]),
+        raw_group("first", 0, vec![direct_sound("from_first")]),
+        raw_group("second", 0, vec![direct_sound("from_second")]),
+    ]);
+    let link_successors = vec!["first".to_owned(), "second".to_owned()];
+    let resolved = resolve_voice_groups_with_link_successors(
+        "top",
+        &raw,
+        &no_keysplit_tables(),
+        &link_successors,
+    )
+    .unwrap();
+    let top = resolved.iter().find(|g| g.label == "top").unwrap();
+    match &top.slots[126] {
+        VoiceSlot::DirectSound { sample_id, .. } => {
+            assert_eq!(sample_id, "audio/sample/direct-sound/from_first");
+        }
+        other => panic!("expected DirectSound, got {other:?}"),
+    }
+    match &top.slots[127] {
+        VoiceSlot::DirectSound { sample_id, .. } => {
+            assert_eq!(sample_id, "audio/sample/direct-sound/from_second");
+        }
+        other => panic!("expected DirectSound, got {other:?}"),
+    }
+}
+
+#[test]
+fn an_empty_link_successor_list_leaves_the_overflow_tail_empty() {
+    // The fail-closed case: `top_label` is last in `sound/voice_groups.inc`'s
+    // own linked order (or isn't linked at all), so `super::link_order_successors`
+    // hands back an empty list. Upstream's real unchecked fetch would read
+    // whatever bytes happen to follow in the linked binary, but this
+    // pipeline has no way to know what those are, so the ordinary trailing
+    // `Empty` pad is the honest answer, not a guess.
+    let raw = groups(vec![raw_group("top", 0, vec![direct_sound("only_slot")])]);
+    let resolved =
+        resolve_voice_groups_with_link_successors("top", &raw, &no_keysplit_tables(), &[]).unwrap();
+    let top = &resolved[0];
+    for slot in &top.slots[1..] {
+        assert_eq!(*slot, VoiceSlot::Empty);
+    }
+}
+
+#[test]
+fn a_key_split_rhythm_child_never_gets_link_adjacency_overflow_even_if_under_declared() {
+    // "top" references "kid" as a rhythm child; "kid" declares only one
+    // slot of its own. Even though "successor" is a real link successor in
+    // this call, it must never bleed into "kid"'s tail -- only the single
+    // top-level group a song references directly is ever borrowed into
+    // (`resolve_one`'s `is_indirection_target` gate; see `resolve`'s "Link
+    // adjacency" module docs). A child's own under/over-range access is a
+    // different (out-of-scope) mechanism, so it keeps the plain Empty pad.
+    let raw = groups(vec![
+        raw_group(
+            "top",
+            0,
+            vec![RawSlot::Rhythm {
+                child_label: "kid".to_owned(),
+            }],
+        ),
+        raw_group("kid", 0, vec![direct_sound("kid_only_slot")]),
+        raw_group("successor", 0, vec![direct_sound("must_not_leak_into_kid")]),
+    ]);
+    let link_successors = vec!["successor".to_owned()];
+    let resolved = resolve_voice_groups_with_link_successors(
+        "top",
+        &raw,
+        &no_keysplit_tables(),
+        &link_successors,
+    )
+    .unwrap();
+    let kid = resolved.iter().find(|g| g.label == "kid").unwrap();
+    for slot in &kid.slots[1..] {
+        assert_eq!(*slot, VoiceSlot::Empty);
+    }
+}
