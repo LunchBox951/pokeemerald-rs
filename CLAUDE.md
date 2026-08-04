@@ -11,8 +11,11 @@ additive — nothing here restates a default the system prompt already covers.
 - Don't stack extra verification on top of what `cargo test`/`clippy`/`fmt`
   and CI already gate — re-checking work those commands already checked
   spends tokens without catching more.
-- Make the routine call yourself. Pause only when two honest readings of an
-  acceptance ID's scope would produce materially different work.
+- Within `AGENTS.md`'s autonomy boundaries, make the routine call yourself;
+  pause only when two honest readings of an acceptance ID's scope would
+  produce materially different work. This never overrides the **Confirm
+  first** list above — a new dependency or a workflow/release-file edit
+  still waits for confirmation, however unambiguous the call.
 - Reserve Explore or subagent delegation for genuinely broad sweeps — a
   multi-crate consistency check, a `ledger.py gaps` survey across many
   entries — not a scoped, single-file change.
