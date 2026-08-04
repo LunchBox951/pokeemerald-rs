@@ -1,0 +1,144 @@
+//! [`MidiError`]: every way parsing `mus_title.mid` (or its
+//! `sound/songs/midi/midi.cfg` compile-flag entry) can fail. Split out of
+//! [`super`] to keep that file under this crate's ~600-line-per-file
+//! guideline (`oop-boundaries`), mirroring `super::super::voicegroups::error`'s
+//! own split.
+
+use std::fmt;
+
+/// An error compiling a `.mid` source into the normalized [`super::event::SongEvent`]
+/// stream, or reading its `midi.cfg` compile-flag entry. The outer
+/// `ExtractError::Midi`/`ExtractError::MidiCfg` wrap a value of this type
+/// with the offending path (see `super`'s module docs).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum MidiError {
+    /// The file ran out of bytes where a fixed-size field or declared
+    /// chunk/event body was expected.
+    Truncated,
+    /// A variable-length quantity's continuation bits never terminated
+    /// within a `u32`'s worth of 7-bit groups.
+    MalformedVlq,
+    /// The file did not start with the 4-byte `MThd` signature.
+    BadHeaderMagic,
+    /// `MThd`'s declared header length was not the fixed value `6` every
+    /// standard MIDI file uses.
+    HeaderLengthMismatch(u32),
+    /// `MThd`'s format field was `2` or greater (`tools/mid2agb/midi.cpp:145-146`
+    /// only accepts format `0`/`1`, and `mus_title.mid` is format `1` — see
+    /// `super`'s module docs).
+    UnsupportedFormat(u16),
+    /// `MThd`'s division field had its top bit set (SMPTE frame-rate
+    /// division), which `tools/mid2agb/midi.cpp:152-153` also rejects. This
+    /// compiler only understands ticks-per-quarter-note division.
+    NegativeDivision(i16),
+    /// A chunk this parser expected to be `MTrk` was not.
+    BadTrackMagic,
+    /// A channel-voice status byte (running or explicit) was not a
+    /// recognized MIDI status — either a bare data byte with no running
+    /// status in effect, or a channel-voice nibble outside `0x8`..`0xE`
+    /// (unreachable in practice: every nibble in that range is a defined
+    /// message type).
+    InvalidStatusByte(u8),
+    /// A tempo (`0xFF 0x51`) meta event's declared length was not the fixed
+    /// `3` bytes every tempo event carries
+    /// (`tools/mid2agb/midi.cpp:309-310`).
+    BadTempoLength(u32),
+    /// A `NoteOn` (velocity != 0) on this channel had no later matching
+    /// `NoteOff`/`NoteOn`-velocity-`0` for the same key before the track's
+    /// `EndOfTrack` — `tools/mid2agb/midi.cpp:425-426`'s own
+    /// `RaiseError("note doesn't end")`, translated to a recoverable error
+    /// here rather than a process abort. Carries the channel and key.
+    UnterminatedNote { channel: u8, key: u8 },
+    /// A `LoopEnd`/`LoopEndBegin` text marker (`]`/`][`) appeared with no
+    /// preceding `LoopBegin`/`LoopEndBegin` (`[`/`][`) open on this track —
+    /// `tools/mid2agb` has no such guard (`s_blockNum`/`loopEndBlockNum`
+    /// start at `0`, so a stray `]` would emit `GOTO <label>_<n>_B0`, a
+    /// dangling reference the assembler itself would then reject); this
+    /// compiler fails closed at compile time instead.
+    DanglingLoopEnd,
+    /// A `MEMACC`-family controller (CC `0x0C`/`0x0D`/`0x0E`/`0x0F`/`0x10`/`0x11`
+    /// — `tools/mid2agb/agb.cpp:349-415`'s `PrintMemAcc` family and its
+    /// `_L<n>:` branch-target label) appeared. Deliberately unimplemented —
+    /// see `super`'s module docs, "Deliberately out of scope: `MEMACC`".
+    /// Carries the raw controller number.
+    UnsupportedMemAccController(u8),
+    /// `midi.cfg` requested something other than the default 24
+    /// clocks-per-beat (`tools/mid2agb`'s `-X` flag, 48 clocks/beat).
+    /// Deliberately unimplemented — see `super`'s module docs, "Pinned to
+    /// `mus_title`'s own compile flags". Carries the requested value.
+    UnsupportedClocksPerBeat(u8),
+    /// `midi.cfg` did not request exact gate time (`tools/mid2agb`'s `-E`
+    /// flag). Deliberately unimplemented — see `super`'s module docs,
+    /// "Pinned to `mus_title`'s own compile flags".
+    NonExactGateTime,
+    /// No `MTrk` chunk was present at all.
+    NoTracks,
+    /// `MThd`'s division field was `0` (zero ticks per quarter note), which
+    /// would make every tick-scaling division in [`super::compile`]
+    /// undefined. Not a case `tools/mid2agb` itself guards explicitly, but
+    /// nonsensical for any real file — a fail-closed check rather than a
+    /// silent divide-by-zero.
+    ZeroTimeDivision,
+    /// `midi.cfg` had no entry for the requested filename. Carries the
+    /// filename.
+    CfgEntryMissing(String),
+    /// `midi.cfg`'s entry for the requested filename carried a flag this
+    /// parser does not recognize, or a recognized flag with a malformed
+    /// operand. Carries the offending token.
+    CfgMalformedFlag(String),
+    /// `midi.cfg`'s entry for the requested filename had no `-G` (voice
+    /// group) flag — every real entry does, but a hand-edited or corrupt
+    /// checkout could omit it.
+    CfgMissingVoiceGroup,
+}
+
+impl fmt::Display for MidiError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Truncated => write!(f, "unexpected end of file"),
+            Self::MalformedVlq => write!(f, "variable-length quantity never terminated"),
+            Self::BadHeaderMagic => write!(f, "not a standard MIDI file (missing MThd magic)"),
+            Self::HeaderLengthMismatch(len) => {
+                write!(f, "MThd header length {len} is not the standard 6")
+            }
+            Self::UnsupportedFormat(fmt_id) => {
+                write!(f, "unsupported MIDI format {fmt_id} (only 0 and 1 supported)")
+            }
+            Self::NegativeDivision(div) => write!(
+                f,
+                "unsupported MIDI time division {div} (SMPTE frame-rate division not supported)"
+            ),
+            Self::BadTrackMagic => write!(f, "expected an MTrk chunk"),
+            Self::InvalidStatusByte(byte) => write!(f, "invalid MIDI status byte 0x{byte:02X}"),
+            Self::BadTempoLength(len) => write!(f, "tempo meta event length {len} is not 3"),
+            Self::UnterminatedNote { channel, key } => write!(
+                f,
+                "note {key} on channel {channel} has no matching note-off before end of track"
+            ),
+            Self::DanglingLoopEnd => {
+                write!(f, "loop-end marker (`]`/`][`) with no preceding loop-begin (`[`/`][`)")
+            }
+            Self::UnsupportedMemAccController(cc) => write!(
+                f,
+                "controller {cc} is part of the MEMACC family, which this compiler does not support"
+            ),
+            Self::UnsupportedClocksPerBeat(value) => write!(
+                f,
+                "clocks-per-beat {value} is not supported (only the default, 1, is)"
+            ),
+            Self::NonExactGateTime => write!(
+                f,
+                "midi.cfg entry does not request exact gate time (`-E`), which this compiler requires"
+            ),
+            Self::NoTracks => write!(f, "MIDI file has no MTrk chunks"),
+            Self::ZeroTimeDivision => write!(f, "MThd time division is 0"),
+            Self::CfgEntryMissing(name) => write!(f, "midi.cfg has no entry for `{name}`"),
+            Self::CfgMalformedFlag(token) => write!(f, "midi.cfg entry has a malformed flag `{token}`"),
+            Self::CfgMissingVoiceGroup => {
+                write!(f, "midi.cfg entry has no `-G` (voice group) flag")
+            }
+        }
+    }
+}
+
+impl std::error::Error for MidiError {}
