@@ -934,10 +934,11 @@ fn walking_off_littlerootss_north_edge_crosses_into_route_101_and_back() {
     // The third step walks off the grid's own top edge -- the crossing.
     phase.step(held(Buttons::UP));
     assert_eq!(
-        phase.tick, 0,
-        "a crossing is a map load: Route 101's animated tiles must start from their own \
-         tick 0, the same contract the warp test above pins (cross_connection resets after \
-         step's own increment)"
+        phase.tick, 33,
+        "a crossing is NOT a map load: upstream's LoadMapFromCameraTransition re-inits only \
+         the secondary tileset counter (InitSecondaryTilesetAnimation, overworld.c:815), so \
+         the primary counter this port models keeps running -- 32 walk frames plus the \
+         crossing step's own increment, with no reset (contrast the warp test above)"
     );
     assert_eq!(
         phase.pending_landing,

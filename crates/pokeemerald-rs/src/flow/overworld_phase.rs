@@ -233,10 +233,13 @@ pub(crate) struct OverworldPhase {
     /// animation keeps running even while [`Self::dialog`] freezes movement,
     /// mirroring upstream's `UpdateTilesetAnimations` running every `VBlank`
     /// regardless of message-box state) and reset to 0 in
-    /// [`Self::load_default`]/[`Self::warp_to`]/[`Self::cross_connection`],
-    /// matching upstream's own `InitTilesetAnimations` reset points (every
-    /// map load, `pokeemerald/src/overworld.c`'s `InitTilesetAnimations`
-    /// call sites -- `tileset_anims`'s own module docs).
+    /// [`Self::load_default`]/[`Self::warp_to`] only, matching upstream's
+    /// own `InitTilesetAnimations` reset points (full map loads,
+    /// `pokeemerald/src/overworld.c`'s `InitTilesetAnimations` call sites --
+    /// `tileset_anims`'s own module docs). A connection crossing
+    /// ([`Self::cross_connection`]) deliberately does *not* reset it:
+    /// upstream's seamless camera transition re-inits only the secondary
+    /// tileset counter, which this port does not model.
     tick: u32,
     /// The memoized asset pack [`MapConnections`] reads landing-tile
     /// collision from (issue #177) -- see that resolver's docs for why a
@@ -864,8 +867,10 @@ impl OverworldPhase {
     /// -- `pending_landing` is re-latched onto `to_position` so the
     /// door-warp drain-frame check (`Self::step`'s "Warp timing" section)
     /// evaluates against the *entered* map once this step's walk animation
-    /// finishes, and `tick` resets exactly like a warp landing
-    /// (`tileset_anims`' `InitTilesetAnimations` reset points). Unlike
+    /// finishes, and `tick` keeps running -- upstream's
+    /// `LoadMapFromCameraTransition` re-inits only the secondary tileset
+    /// counter (`InitSecondaryTilesetAnimation`, `overworld.c:815`), never
+    /// the primary one `tick` models (see the body comment). Unlike
     /// [`Self::warp_to`], `self.player` itself is left entirely alone:
     /// [`PlayerState::step`] already committed its position/elevation into
     /// `to_map`'s coordinate space before ever returning
@@ -921,7 +926,16 @@ impl OverworldPhase {
         // `Self::step`'s ordinary `Advanced` branch already latches for a
         // door check 16 frames from now, once the walk animation drains.
         self.pending_landing = Some(to_position);
-        self.tick = 0;
+        // Deliberately no `self.tick = 0` here: `LoadMapFromCameraTransition`
+        // (`src/overworld.c:784-825`) never calls `InitTilesetAnimations` --
+        // it calls `InitSecondaryTilesetAnimation` (`:815`), which resets
+        // only `sSecondaryTilesetAnimCounter` (`tileset_anims.c:581-583`)
+        // and leaves the primary counter running. `tick` models the
+        // *primary* counter (the only one this port animates -- see
+        // `crate::overworld::tileset_anims`), so the faithful counterpart
+        // of that secondary-only re-init is a no-op: the shared
+        // water/flower animation continues uninterrupted across a seamless
+        // crossing, unlike a warp's full map load.
         run_on_transition_map_script(to_map, &mut self.save1.event_data);
         self.save1.location = WarpData {
             map_group: warp_data_index(header.group, "MAP_GROUP"),
