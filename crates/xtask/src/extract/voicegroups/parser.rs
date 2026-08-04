@@ -423,5 +423,34 @@ pub(super) fn parse_keysplit_tables(
     Ok(out)
 }
 
+/// Parse `sound/voice_groups.inc`'s own `.include "sound/voicegroups/<relative>"`
+/// lines, in file order -- the assembler's actual concatenation order for
+/// every voicegroup `.inc` file's byte table (see `super`'s "Modeled
+/// link-adjacency read" module docs). Returns each line's `<relative>` path
+/// (e.g. `"title.inc"`, `"drumsets/rs.inc"`), unresolved to a label -- that's
+/// [`super::link_order_successors`]'s job, once filesystem access is
+/// available to match a path back to the label its `.inc` file actually
+/// declares (a `voice_group` label need not match its filename -- e.g.
+/// `drumsets/rs.inc` declares `rs_drumset`, not `rs`).
+///
+/// Any `.include` line naming a path outside `sound/voicegroups/` (e.g.
+/// `sound/voice_groups.inc:136`'s `sound/cry_tables.inc`) is silently
+/// skipped: a different table format entirely, never a voicegroup this
+/// pipeline could pull overflow slots from. Likewise for a non-`.include`
+/// line (blank, an `@` comment) -- this reads a linker script, not a
+/// voicegroup source, so it has no macro grammar of its own to fail closed
+/// on.
+pub(super) fn parse_link_order(text: &str) -> Vec<String> {
+    const PREFIX: &str = "sound/voicegroups/";
+    text.lines()
+        .filter_map(|line| {
+            let rest = line.trim().strip_prefix(".include")?.trim_start();
+            let quoted = rest.strip_prefix('"')?;
+            let end = quoted.find('"')?;
+            quoted[..end].strip_prefix(PREFIX).map(str::to_owned)
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests;

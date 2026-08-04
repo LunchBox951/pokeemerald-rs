@@ -350,3 +350,30 @@ fn a_keysplit_table_longer_than_128_entries_is_rejected() {
         })
     );
 }
+
+#[test]
+fn parse_link_order_keeps_only_voicegroups_includes_in_file_order() {
+    // Mirrors `sound/voice_groups.inc:66-67,136`'s own shape: a comment
+    // line, two voicegroup includes back to back, then an unrelated
+    // `sound/cry_tables.inc` include that must not appear in the output.
+    let text = "\
+@ drumsets
+.include \"sound/voicegroups/title.inc\"
+.include \"sound/voicegroups/intro.inc\"
+.include \"sound/cry_tables.inc\"
+.include \"sound/voicegroups/drumsets/rs.inc\" @ trailing comment
+";
+    assert_eq!(
+        parse_link_order(text),
+        vec![
+            "title.inc".to_owned(),
+            "intro.inc".to_owned(),
+            "drumsets/rs.inc".to_owned(),
+        ]
+    );
+}
+
+#[test]
+fn parse_link_order_on_empty_text_is_empty() {
+    assert_eq!(parse_link_order(""), Vec::<String>::new());
+}

@@ -1,7 +1,7 @@
 //! Links parsed voicegroups together: resolves every `voice_keysplit`/
 //! `voice_keysplit_all` reference a top-level group carries into another
 //! [`ResolvedVoiceGroup`] (cycle-safe, and rejecting a second level of
-//! indirection -- see [`resolve_voice_groups`]), derives stable
+//! indirection -- see [`resolve_voice_groups_with_link_successors`]), derives stable
 //! [`crate::extract::pack`] ids for the samples and child groups each slot
 //! references, and normalizes every group to exactly
 //! [`super::VOICE_SLOT_COUNT`] (128) slots (see [`pad_to_128`]).
@@ -40,6 +40,43 @@
 //! transformation -- already a stable, `snake_case` name). Matches the
 //! scheme `crates/assets/src/audio/voicegroup.rs`'s own tests already use
 //! (e.g. `audio/voicegroup/trumpet_keysplit`).
+//!
+//! # Link adjacency (issue #201)
+//!
+//! A `.inc` source under `sound/voicegroups/` need not declare all 128
+//! addressable slots -- `title.inc` declares only 89. Upstream's mixer
+//! (`ply_voice`, `src/m4a_1.s`) fetches `voicegroup + voice * 12` with no
+//! bounds check at all, so a song that selects an undeclared slot (e.g.
+//! `mus_title.mid` selecting 127 on one channel -- see `super`'s module
+//! docs) does not read silence: it reads whatever bytes the assembler
+//! happened to place right after `voicegroup_title`'s own table.
+//! `sound/voice_groups.inc:66-67` links `intro.inc` immediately after
+//! `title.inc` (89 entries = 1068 bytes, already 4-aligned, so no `.align 2`
+//! padding intervenes -- see `asm/macros/m4a.inc`'s `voice_group` macro),
+//! and `intro.inc` alone declares all 128 of its own slots, so slot 127
+//! resolves to `voicegroup_intro`'s entry 38: a real, playable
+//! `voice_square_1 60, 0, 0, 2, 0, 0, 15, 0`.
+//!
+//! [`resolve_one`] models this for the single top-level group a song
+//! references directly (never for a key-split/rhythm child -- see its
+//! `is_indirection_target` gate): [`collect_link_adjacency_overflow`] pulls
+//! the group's undeclared tail from `super::link_order_successors`'s own
+//! answer for "what does `sound/voice_groups.inc` link right after this
+//! file", running each pulled entry through the exact same conversion
+//! [`resolve_one`]'s own declared-slot loop uses (so a borrowed
+//! key-split/rhythm entry resolves and, if new, emits its child exactly as
+//! a declared one would). If the top-level group is last in that linked
+//! order, or its successors run out before the tail is filled, the
+//! shortfall stays [`VoiceSlot::Empty`] -- this pipeline has no way to know
+//! what bytes, if any, genuinely follow in the real linked binary, so
+//! silence is the fail-closed choice there, not a guess.
+//!
+//! A key-split/rhythm child's *own* under/over-range access (e.g. a
+//! rhythm's raw played key falling outside its child group's declared
+//! entries, or a key-split table index past its target's declared count) is
+//! a different mechanism -- the keysplit table itself, not file-adjacency --
+//! and stays out of scope here: those slots keep the plain
+//! [`pad_to_128`] `Empty` padding they always had.
 
 use std::collections::HashMap;
 
@@ -204,6 +241,43 @@ fn pad_to_128(
 /// `keysplit_tables.inc` respectively (see `super`'s `build_label_index`) --
 /// this function does no filesystem access of its own.
 ///
+/// No link-adjacency modeling: `top_label`'s tail is padded straight to
+/// [`VOICE_SLOT_COUNT`] with [`VoiceSlot::Empty`], the same as any other
+/// group. Callers that want issue #201's modeled overflow read (see
+/// [`resolve_voice_groups_with_link_successors`]) must go through that
+/// function instead; this one stays the plain entry point every synthetic
+/// fixture in this module's tests already uses.
+///
+/// # Errors
+///
+/// See [`resolve_voice_groups_with_link_successors`].
+#[cfg(test)]
+pub(super) fn resolve_voice_groups(
+    top_label: &str,
+    raw_groups: &HashMap<String, RawVoiceGroup>,
+    keysplit_tables: &HashMap<String, RawKeySplitTable>,
+) -> Result<Vec<ResolvedVoiceGroup>, VoiceGroupError> {
+    resolve_voice_groups_with_link_successors(top_label, raw_groups, keysplit_tables, &[])
+}
+
+/// Resolve `top_label` and every key-split/rhythm child it transitively
+/// references, returning one [`ResolvedVoiceGroup`] per distinct label
+/// reached (`top_label` itself included).
+///
+/// `raw_groups` and `keysplit_tables` are the already-parsed contents of
+/// every `.inc` file under `sound/voicegroups/` and of
+/// `keysplit_tables.inc` respectively (see `super`'s `build_label_index`) --
+/// this function does no filesystem access of its own.
+///
+/// `link_successors` is `super::link_order_successors`'s own output: the
+/// labels `sound/voice_groups.inc` links immediately after `top_label`'s own
+/// file, in order (empty if `top_label` is last in that order, or isn't
+/// linked at all). Only `top_label` itself -- never a key-split/rhythm
+/// child reached through it -- has its undeclared tail materialized from
+/// these successors instead of left `Empty`; see [`resolve_one`]'s
+/// `is_indirection_target` gate and the module docs' "Link adjacency"
+/// section.
+///
 /// # Errors
 ///
 /// [`VoiceGroupError::DanglingVoiceGroupReference`] /
@@ -219,10 +293,11 @@ fn pad_to_128(
 /// would exceed [`VOICE_SLOT_COUNT`]; any [`VoiceGroupError`] variant
 /// [`direct_sound_sample_id`]/[`programmable_wave_sample_id`] can return
 /// for a malformed sample symbol.
-pub(super) fn resolve_voice_groups(
+pub(super) fn resolve_voice_groups_with_link_successors(
     top_label: &str,
     raw_groups: &HashMap<String, RawVoiceGroup>,
     keysplit_tables: &HashMap<String, RawKeySplitTable>,
+    link_successors: &[String],
 ) -> Result<Vec<ResolvedVoiceGroup>, VoiceGroupError> {
     let mut resolving: Vec<String> = Vec::new();
     let mut order: Vec<String> = Vec::new();
@@ -231,6 +306,7 @@ pub(super) fn resolve_voice_groups(
         top_label,
         raw_groups,
         keysplit_tables,
+        link_successors,
         &mut resolving,
         &mut order,
         &mut resolved,
@@ -340,6 +416,7 @@ fn resolve_indirection_slot(
     table_label: Option<&str>,
     raw_groups: &HashMap<String, RawVoiceGroup>,
     keysplit_tables: &HashMap<String, RawKeySplitTable>,
+    link_successors: &[String],
     resolving: &mut Vec<String>,
     order: &mut Vec<String>,
     resolved: &mut HashMap<String, ResolvedVoiceGroup>,
@@ -365,6 +442,7 @@ fn resolve_indirection_slot(
         child_label,
         raw_groups,
         keysplit_tables,
+        link_successors,
         resolving,
         order,
         resolved,
@@ -380,11 +458,116 @@ fn resolve_indirection_slot(
     })
 }
 
+/// Materializes the tail of the single top-level group a song references
+/// directly (`resolve_one`'s `!is_indirection_target` branch only) from the
+/// linker's own contiguous concatenation, instead of leaving it
+/// [`VoiceSlot::Empty`] -- issue #201's modeled link-adjacency read. See the
+/// module docs' "Link adjacency" section for the upstream mechanism this
+/// mirrors.
+///
+/// Walks `link_successors` (already in the linker's own order -- see
+/// `super::link_order_successors`) in turn, taking each successor's raw
+/// slots from its own index `0` until `needed` entries have been collected
+/// or every successor is exhausted. Continuing into a second successor if
+/// the first runs out first is exactly what the real unchecked byte fetch
+/// would do -- it has no notion of a file boundary, only of "the next
+/// `.4byte`/`.byte`s in the section" -- though the pinned reference
+/// checkout never needs more than one (`intro.inc` alone declares all 128
+/// of its own slots, far more than `title`'s 39-slot gap).
+///
+/// Each pulled entry goes through the exact same leaf/indirection dispatch
+/// [`resolve_one`]'s own loop uses, so a key-split/rhythm entry borrowed
+/// this way resolves (and, if new, emits) its child exactly as a declared
+/// slot's reference would -- the pack stays dangling-reference-free either
+/// way. If every successor's entries run out before `needed` is met (or
+/// `link_successors` is empty -- the group is last in the linker's own
+/// order), the shortfall is left for [`pad_to_128`]'s ordinary trailing
+/// `Empty` pad: this pipeline cannot know what bytes, if any, truly follow
+/// in the real linked binary, so silence is the fail-closed choice, not a
+/// guess.
+///
+/// # Errors
+///
+/// [`VoiceGroupError::DanglingVoiceGroupReference`] if `link_successors`
+/// names a label `raw_groups` has no entry for (would only fire on a bug in
+/// `super::link_order_successors`' own path-to-label mapping, since every
+/// real linked file is already indexed); any error
+/// [`resolve_indirection_slot`]/[`convert_leaf_slot`] can return for the
+/// successor's own borrowed slot content.
+#[allow(clippy::too_many_arguments)]
+fn collect_link_adjacency_overflow(
+    borrower_label: &str,
+    needed: usize,
+    link_successors: &[String],
+    raw_groups: &HashMap<String, RawVoiceGroup>,
+    keysplit_tables: &HashMap<String, RawKeySplitTable>,
+    resolving: &mut Vec<String>,
+    order: &mut Vec<String>,
+    resolved: &mut HashMap<String, ResolvedVoiceGroup>,
+) -> Result<Vec<VoiceSlot>, VoiceGroupError> {
+    let mut out = Vec::with_capacity(needed);
+    for successor_label in link_successors {
+        if out.len() >= needed {
+            break;
+        }
+        let successor = raw_groups.get(successor_label).ok_or_else(|| {
+            VoiceGroupError::DanglingVoiceGroupReference {
+                referrer: borrower_label.to_owned(),
+                target: successor_label.clone(),
+            }
+        })?;
+        for raw_slot in &successor.slots {
+            if out.len() >= needed {
+                break;
+            }
+            // These entries occupy `borrower_label`'s own depth (they are,
+            // physically, part of what upstream reads as `borrower_label`'s
+            // table), never a nested indirection target -- `false` mirrors
+            // `resolve_one`'s `is_indirection_target` for the borrower
+            // itself. Errors attribute to `successor_label`, the file the
+            // bytes actually come from, not the borrower.
+            let resolved_slot = match raw_slot {
+                RawSlot::KeySplit {
+                    child_label,
+                    table_label,
+                } => resolve_indirection_slot(
+                    successor_label,
+                    false,
+                    child_label,
+                    Some(table_label),
+                    raw_groups,
+                    keysplit_tables,
+                    link_successors,
+                    resolving,
+                    order,
+                    resolved,
+                )?,
+                RawSlot::Rhythm { child_label } => resolve_indirection_slot(
+                    successor_label,
+                    false,
+                    child_label,
+                    None,
+                    raw_groups,
+                    keysplit_tables,
+                    link_successors,
+                    resolving,
+                    order,
+                    resolved,
+                )?,
+                leaf => convert_leaf_slot(leaf, successor_label)?,
+            };
+            out.push(resolved_slot);
+        }
+    }
+    Ok(out)
+}
+
 #[allow(clippy::too_many_arguments)]
 fn resolve_one(
     label: &str,
     raw_groups: &HashMap<String, RawVoiceGroup>,
     keysplit_tables: &HashMap<String, RawKeySplitTable>,
+    link_successors: &[String],
     resolving: &mut Vec<String>,
     order: &mut Vec<String>,
     resolved: &mut HashMap<String, ResolvedVoiceGroup>,
@@ -412,7 +595,10 @@ fn resolve_one(
     // Depth 1 (just this push) is the top-level group a song references
     // directly -- it may carry key-split/rhythm slots. Any deeper level is
     // a group already reached *as* a key-split/rhythm child, which upstream's
-    // `ply_note` never recurses through (see `VoiceSlot`'s module docs).
+    // `ply_note` never recurses through (see `VoiceSlot`'s module docs). The
+    // same depth-1 test also gates link-adjacency overflow below: only the
+    // one group a song references directly is ever borrowed into by the
+    // linker's own contiguous layout (see `collect_link_adjacency_overflow`).
     let is_indirection_target = resolving.len() > 1;
 
     let mut slots = Vec::with_capacity(raw.slots.len());
@@ -428,6 +614,7 @@ fn resolve_one(
                 Some(table_label),
                 raw_groups,
                 keysplit_tables,
+                link_successors,
                 resolving,
                 order,
                 resolved,
@@ -439,6 +626,7 @@ fn resolve_one(
                 None,
                 raw_groups,
                 keysplit_tables,
+                link_successors,
                 resolving,
                 order,
                 resolved,
@@ -446,6 +634,24 @@ fn resolve_one(
             leaf => convert_leaf_slot(leaf, &raw.label)?,
         };
         slots.push(resolved_slot);
+    }
+
+    if !is_indirection_target {
+        let leading = usize::from(raw.starting_note);
+        let needed = VOICE_SLOT_COUNT.saturating_sub(leading + slots.len());
+        if needed > 0 && !link_successors.is_empty() {
+            let overflow = collect_link_adjacency_overflow(
+                &raw.label,
+                needed,
+                link_successors,
+                raw_groups,
+                keysplit_tables,
+                resolving,
+                order,
+                resolved,
+            )?;
+            slots.extend(overflow);
+        }
     }
 
     let padded = pad_to_128(&raw.label, raw.starting_note, slots)?;
