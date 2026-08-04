@@ -64,8 +64,14 @@
           "spec": "S-6",
           "status": "stubbed"
         },
+        "BattleScript_EffectStatDown": {
+          "reason": "data/battle_scripts_1.s:516-:553 (BattleScript_EffectAttackDown/EffectDefenseDown/EffectSpeedDown's one-line setstatchanger thunks, sharing the tail at :534 through :553). resolve_stat_lowering_move reproduces the RNG-relevant step order: attackcanceler's no-PP abort (shared generically with crate::battle::Battle::act), accuracycheck (crate::accuracy::accuracy_check, the same roll every move uses), ppreduce (PP deduction, shared generically), and statbuffchange/ChangeStatBuffs's stage change with its floored-vs-applied distinct outcomes. NOT modelled: jumpifstatus2 BS_TARGET STATUS2_SUBSTITUTE at :536 (no Substitute status tracked -- always false, so accuracycheck always runs), every animation/message step (attackanimation, printfromtable, pause, waitmessage), and the two sibling thunks inside this same range -- BattleScript_EffectAccuracyDown (:528) and BattleScript_EffectEvasionDown (:532), which goto the identical shared tail at :534 with the same 1-draw RNG shape but whose effect ids (23/24) are deliberately excluded from is_stat_lowering_effect (accuracy/evasion stages are not tracked this slice), so their moves are rejected at the construction boundary.",
+          "rust_target": "crates/battle/src/stat_change.rs",
+          "spec": "S-6",
+          "status": "stubbed"
+        },
         "gBattleScriptsForMoveEffects": {
-          "reason": "data/battle_scripts_1.s:21-:184, the per-EFFECT_* script dispatch table. Reproduced as the construction-boundary allowlist ORDINARY_HIT_EFFECTS / is_ordinary_hit_effect: exactly the 21 effect ids whose entry is BattleScript_EffectHit itself, minus EFFECT_FALSE_SWIPE (101) and EFFECT_PURSUIT (128), which point at the same script but are engine-special-cased outside it (battle_script_commands.c:1683, :8745/:9854). Every other entry dispatches a different script with different damage and RNG shape and is rejected at Battle::new / ensure_resolvable.",
+          "reason": "data/battle_scripts_1.s:21-:184, the per-EFFECT_* script dispatch table. Reproduced as the construction-boundary allowlist ORDINARY_HIT_EFFECTS / is_ordinary_hit_effect: exactly the 21 effect ids whose entry is BattleScript_EffectHit itself, minus EFFECT_FALSE_SWIPE (101) and EFFECT_PURSUIT (128), which point at the same script but are engine-special-cased outside it (battle_script_commands.c:1683, :8745/:9854). Three more ids -- EFFECT_ATTACK_DOWN (18), EFFECT_DEFENSE_DOWN (19), EFFECT_SPEED_DOWN (20) -- dispatch to the separate BattleScript_EffectStatDown family and are executed by crate::stat_change (issue #199), not this allowlist. EFFECT_ACCURACY_DOWN (23) and EFFECT_EVASION_DOWN (24) dispatch into that same shared tail with the identical 1-draw RNG shape (battle_scripts_1.s:528/:532 goto :534) but are deliberately excluded from is_stat_lowering_effect -- accuracy/evasion stages are not tracked this slice -- so they are rejected at Battle::new / ensure_resolvable like every other entry, each of which dispatches some other script.",
           "rust_target": "crates/battle/src/hit.rs",
           "spec": "S-6",
           "status": "stubbed"
@@ -24325,6 +24331,12 @@
           "spec": "S-6",
           "status": "rewritten"
         },
+        "ChangeStatBuffs": {
+          "reason": "battle_script_commands.c:6937-:7098. The stat-decrease branch (statValue <= -1) modelled exactly for the reachable case (issue #199, EFFECT_ATTACK_DOWN/EFFECT_DEFENSE_DOWN/EFFECT_SPEED_DOWN): the -1 stage delta, the add-then-clamp to MIN_STAT_STAGE/MAX_STAT_STAGE (StatStage::saturating_add, crates/battle/src/stat_stage.rs), and the two distinct outcomes (B_MSG_DEFENDER_STAT_FELL vs the already-at-MIN B_MSG_STAT_WONT_DECREASE, StatChangeOutcome::Applied's floored flag). Confirmed by inspection: this function makes no Random() call anywhere, so resolve_stat_lowering_move draws only the accuracy roll ahead of it. NOT modelled: the gMoveResultFlags |= MOVE_RESULT_MISSED toggle at :7091, which DOES fire on the modelled floored-decrease path (BattleScript_EffectStatDown passes STAT_CHANGE_ALLOW_PTR, and B_MSG_STAT_WONT_INCREASE / B_MSG_STAT_WONT_DECREASE alias to the same value 2 -- battle_string_ids.h:397/:405 -- so the tail's won't-increase test also matches a floored decrease); this crate tracks no gMoveResultFlags consumer (MoveEnd/resultmessage/King's Rock/Rage), so the flag is currently unobservable, but any future consumer must model it. Also NOT modelled: the stat-increase branch, the function's own Protect gate (JumpIfMoveAffectedByProtect(0) at :6981-:6986, a second check distinct from Cmd_accuracycheck's -- all four modelled moves are FLAG_PROTECT_AFFECTED, but no Protect state is tracked this slice), the Mist-timer/Clear Body/White Smoke/Keen Eye/Hyper Cutter/Shield Dust immunity branches at :6960-:7038 (no Mist side-timer or abilities tracked anywhere this slice), and MOVE_EFFECT_AFFECTS_USER/MOVE_EFFECT_CERTAIN flag handling (every move this crate executes targets the opponent, never itself, and none is a certain-hit move).",
+          "rust_target": "crates/battle/src/stat_change.rs",
+          "spec": "S-6",
+          "status": "stubbed"
+        },
         "Cmd_accuracycheck": {
           "reason": "battle_script_commands.c:1099. The accuracy-stage-ratio roll (sAccuracyStageRatios, combined accuracy/evasion stage, unconditional RNG draw) modelled exactly (accuracy_check). NOT modelled: JumpIfMoveAffectedByProtect at :1123 (no Protect), sunny-weather EFFECT_THUNDER's moveAcc = 50 override at :1146 (no weather), Compound Eyes/Sand Veil/Hustle/evasion-up-item modifiers, and Foresight's ignore-evasion branch (abilities/items/status2 out of scope).",
           "rust_target": "crates/battle/src/accuracy.rs",
@@ -24370,6 +24382,12 @@
         "Cmd_seteffectwithchance": {
           "reason": "battle_script_commands.c:2908. The unconditional Random() draw on every landed hit is modelled (resolve_hit step 7): for plain-hit scripts MOVE_EFFECT_BYTE is 0, so the leading 'Random() % 100 < percentChance' operand at :2923 draws once and the chain fails -- the value is discarded. Struggle's MOVE_EFFECT_CERTAIN first branch (:2917, draw-free) is modelled as the no-draw exception. NOT modelled: actually firing a secondary effect via SetMoveEffect (no allow-listed move can: the plain hit script never runs setmoveeffect), Serene Grace's percentChance doubling (no abilities this slice), and the certain-effect application path.",
           "rust_target": "crates/battle/src/hit.rs",
+          "spec": "S-6",
+          "status": "stubbed"
+        },
+        "Cmd_statbuffchange": {
+          "reason": "battle_script_commands.c:7100-:7104. resolve_stat_lowering_move folds this command's whole observable effect into one call rather than modelling its jumpPtr/gBattlescriptCurrInstr redirect literally: this crate has no battle-script bytecode VM to jump within, and ChangeStatBuffs's STAT_CHANGE_WORKED/DIDNT_WORK return only ever redirects gBattlescriptCurrInstr for the Mist/ability branches this slice does not model (see the ChangeStatBuffs entry), so the plain case this crate reaches always continues past this command, matching StatChangeOutcome::Applied's fall-through.",
+          "rust_target": "crates/battle/src/stat_change.rs",
           "spec": "S-6",
           "status": "stubbed"
         },

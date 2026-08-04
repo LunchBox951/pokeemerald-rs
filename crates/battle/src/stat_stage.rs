@@ -95,6 +95,38 @@ impl StatStage {
         let (num, den) = self.ratio();
         stat * num / den
     }
+
+    /// Add a signed `delta` to this stage, clamping to
+    /// [`StatStage::MIN`]`..=`[`StatStage::MAX`] rather than panicking or
+    /// wrapping — `ChangeStatBuffs`'s own clamp after the raw addition
+    /// (`pokeemerald/src/battle_script_commands.c:7085`-`:7089`):
+    /// `gBattleMons[].statStages[statId] += statValue;` followed by two
+    /// `if` clamps to `MIN_STAT_STAGE`/`MAX_STAT_STAGE`. Used by
+    /// [`crate::stat_change`] for the `-1` step every
+    /// `EFFECT_ATTACK_DOWN`/`EFFECT_DEFENSE_DOWN`/`EFFECT_SPEED_DOWN` move
+    /// applies to its target.
+    ///
+    /// Not `const` (unlike this type's other methods): the widening
+    /// `i32::from` conversion it needs to add without overflow is not yet
+    /// usable inside a `const fn` on stable.
+    #[must_use]
+    pub fn saturating_add(self, delta: i8) -> Self {
+        let sum = i32::from(self.0) + i32::from(delta);
+        let clamped = if sum < i32::from(Self::MIN.0) {
+            Self::MIN.0
+        } else if sum > i32::from(Self::MAX.0) {
+            Self::MAX.0
+        } else {
+            // Narrowing back to `i8` never truncates: the two branches above
+            // already ruled out anything outside `Self::MIN.0..=Self::MAX.0`
+            // (`-6..=6`), which fits comfortably in `i8`.
+            #[allow(clippy::cast_possible_truncation)]
+            {
+                sum as i8
+            }
+        };
+        Self(clamped)
+    }
 }
 
 impl Default for StatStage {
@@ -214,5 +246,32 @@ mod tests {
     #[test]
     fn default_is_neutral() {
         assert_eq!(StatStage::default(), StatStage::NEUTRAL);
+    }
+
+    #[test]
+    fn saturating_add_steps_within_range() {
+        assert_eq!(
+            StatStage::NEUTRAL.saturating_add(-1),
+            StatStage::new(-1).unwrap()
+        );
+        assert_eq!(
+            StatStage::new(2).unwrap().saturating_add(1),
+            StatStage::new(3).unwrap()
+        );
+    }
+
+    #[test]
+    fn saturating_add_clamps_at_the_floor_and_ceiling() {
+        // ChangeStatBuffs still performs the addition and then clamps
+        // (`battle_script_commands.c:7085`-`:7089`) rather than skipping it
+        // once already at a limit -- the observable result is identical
+        // either way, since clamping after a redundant step is a no-op.
+        assert_eq!(StatStage::MIN.saturating_add(-1), StatStage::MIN);
+        assert_eq!(StatStage::MIN.saturating_add(-6), StatStage::MIN);
+        assert_eq!(StatStage::MAX.saturating_add(1), StatStage::MAX);
+        assert_eq!(
+            StatStage::new(-5).unwrap().saturating_add(-1),
+            StatStage::MIN
+        );
     }
 }
