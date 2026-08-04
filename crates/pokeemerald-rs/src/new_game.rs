@@ -438,9 +438,9 @@ mod tests {
     #[test]
     fn init_save_blocks_for_new_game_uses_the_fixed_seed() {
         // Matches calling `init_save_blocks` directly with
-        // `Rng::new(NEW_GAME_RNG_SEED)` -- proof the convenience wrapper
-        // `crate::flow::OverworldPhase::load_default` calls doesn't
-        // silently draw from a different sequence.
+        // `Rng::new(NEW_GAME_RNG_SEED)` -- proof this fixed-seed convenience
+        // helper for save-only callers doesn't silently draw from a different
+        // sequence.
         let mut rng = Rng::new(NEW_GAME_RNG_SEED);
         let expected = init_save_blocks(&mut rng);
         let actual = init_save_blocks_for_new_game();
