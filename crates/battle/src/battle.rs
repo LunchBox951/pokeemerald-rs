@@ -81,7 +81,13 @@
 //! `AccuracyCalcHelper`'s early return at
 //! `battle_script_commands.c:1089`-`:1094`) skips the accuracy draw and can
 //! never miss, so a Swift turn where both sides act costs 10 draws rather
-//! than 11. See [`crate::hit`]'s draw table for all the shapes (including
+//! than 11. A fourth shape, added by issue #199: a stat-lowering move
+//! (Growl/Tail Whip/Leer/String Shot, `EFFECT_ATTACK_DOWN`/
+//! `EFFECT_DEFENSE_DOWN`/`EFFECT_SPEED_DOWN`) always draws exactly **1** —
+//! the accuracy roll, hit or miss, floored or not — because
+//! `BattleScript_EffectStatDown` has no crit/damage-roll/effect-chance step
+//! at all; see [`crate::stat_change`]'s module docs for the full derivation.
+//! See [`crate::hit`]'s draw table for the ordinary-hit shapes (including
 //! Struggle's no-effect-chance-draw exception).
 //!
 //! # What the wild opponent chooses
@@ -135,8 +141,12 @@ use crate::dex::Dex;
 use crate::error::BattleError;
 use crate::escape::try_run_from_battle;
 use crate::exp::wild_faint_exp;
-use crate::hit::{ensure_resolvable, resolve_hit, HitOutcome};
+use crate::hit::{resolve_hit, HitOutcome};
 use crate::pokemon::{BattlePokemon, MAX_LEVEL, MAX_MON_MOVES, MOVE_NONE};
+use crate::stat_change::{
+    self, is_stat_lowering_effect, resolve_stat_lowering_move, LoweredStat, StatChangeOutcome,
+};
+use crate::stat_stage::StatStage;
 use crate::turn_order::{resolve_order, Order};
 
 /// The action the player commits to for a turn.
@@ -224,6 +234,44 @@ pub enum BattleEvent {
     Fainted {
         /// Whether it was the player's mon that fainted.
         by_player: bool,
+    },
+    /// A stat-lowering move (Growl/Tail Whip/Leer/String Shot —
+    /// `EFFECT_ATTACK_DOWN`/`EFFECT_DEFENSE_DOWN`/`EFFECT_SPEED_DOWN`)
+    /// connected and actually lowered its target's stage — upstream's
+    /// `B_MSG_DEFENDER_STAT_FELL` message
+    /// (`ChangeStatBuffs`, `battle_script_commands.c:7058`-`:7059`).
+    ///
+    /// A miss is reported as [`BattleEvent::Missed`] instead (the accuracy
+    /// check is the same [`crate::accuracy::accuracy_check`] every other
+    /// move uses); the target already sitting at [`crate::StatStage::MIN`]
+    /// is [`BattleEvent::StatWontGoLower`] instead — upstream treats the two
+    /// "connected" outcomes as distinct messages, so this crate keeps them
+    /// as distinct events rather than folding "won't go lower" into this
+    /// variant with a no-op stage delta.
+    StatFell {
+        /// Whether the player's mon was the one using the move.
+        by_player: bool,
+        /// The move that was used.
+        move_id: MoveId,
+        /// Which of the target's stats fell.
+        stat: LoweredStat,
+        /// The target's stage for `stat` after this move.
+        new_stage: StatStage,
+    },
+    /// A stat-lowering move connected, but its target's stage for that stat
+    /// was already [`crate::StatStage::MIN`] — upstream's distinct
+    /// `B_MSG_STAT_WONT_DECREASE` ("Pokémon's stat won't go any lower!")
+    /// message (`gStatDownStringIds[B_MSG_STAT_WONT_DECREASE]`,
+    /// `src/battle_message.c:1020`; `ChangeStatBuffs`,
+    /// `battle_script_commands.c:7056`-`:7057`). The stage does not change:
+    /// it was already at the floor.
+    StatWontGoLower {
+        /// Whether the player's mon was the one using the move.
+        by_player: bool,
+        /// The move that was used.
+        move_id: MoveId,
+        /// Which stat the move targeted.
+        stat: LoweredStat,
     },
     /// The player's mon gained experience for fainting the wild mon.
     ExpGained(u32),
@@ -344,6 +392,49 @@ const fn selectable_slot(slot_move: Option<MoveId>) -> bool {
     }
 }
 
+/// Whether the turn engine can execute `move_id` at all: either
+/// [`crate::hit`]'s ordinary damaging-move pipeline
+/// ([`crate::hit::ensure_resolvable`]) or [`crate::stat_change`]'s
+/// stat-lowering pipeline ([`crate::stat_change::ensure_resolvable`], added
+/// by issue #199) — the two-sided boundary the module docs describe.
+/// Checked *before* any state or RNG is touched, exactly like each of the
+/// two checks it composes.
+///
+/// Every real `EFFECT_ATTACK_DOWN`/`EFFECT_DEFENSE_DOWN`/`EFFECT_SPEED_DOWN`
+/// move is `0` base power, so `crate::hit::ensure_resolvable` always rejects
+/// it first with [`BattleError::NonDamagingMove`] (that check runs before
+/// its own effect check) — this falls through to
+/// [`stat_change::ensure_resolvable`] on *any* hit-pipeline rejection, not
+/// just [`BattleError::UnsupportedMoveEffect`], to cover that ordering.
+///
+/// # Errors
+///
+/// [`BattleError::UnsupportedMoveEffect`] for [`STRUGGLE`], rejected here —
+/// not left to the pipelines — because the hit pipeline *would* accept it
+/// while this slice never applies its `EFFECT_RECOIL` half; keeping the
+/// guard inside the composed check means no future call site can admit
+/// Struggle by forgetting a follow-up test. Otherwise the hit-pipeline's
+/// error if `move_id` is a genuinely unsupported move
+/// (neither pipeline accepts it — [`stat_change::ensure_resolvable`]'s
+/// [`BattleError::UnsupportedMoveEffect`] would be strictly less
+/// informative for, say, an unknown move type), or `Ok(())` if either
+/// pipeline accepts it.
+fn ensure_executable(dex: &Dex, move_id: MoveId) -> Result<(), BattleError> {
+    if move_id == STRUGGLE {
+        return Err(BattleError::UnsupportedMoveEffect(move_id));
+    }
+    match crate::hit::ensure_resolvable(dex, move_id) {
+        Ok(()) => Ok(()),
+        Err(hit_error) => {
+            if stat_change::ensure_resolvable(dex, move_id).is_ok() {
+                Ok(())
+            } else {
+                Err(hit_error)
+            }
+        }
+    }
+}
+
 /// An owned single wild battle `(oop-boundaries)`: one player
 /// [`BattlePokemon`] against one wild [`BattlePokemon`], driven one turn at
 /// a time via [`Battle::take_turn`].
@@ -363,14 +454,16 @@ impl Battle {
     ///
     /// The *wild* moveset is checked here, before any state exists and
     /// before the first draw: every move the wild mon knows must be one
-    /// [`crate::hit::resolve_hit`] can execute, because its rejection loop
+    /// [`ensure_executable`] accepts — either [`crate::hit::resolve_hit`]'s
+    /// ordinary damaging pipeline or [`crate::stat_change`]'s stat-lowering
+    /// one (Growl/Tail Whip/Leer/String Shot) — because its rejection loop
     /// picks mid-turn and can land on any slot — discovering an unsupported
     /// move *then* would mean a turn that has already consumed shared-RNG
     /// draws failing with no events to show for it. The player's moveset is
-    /// deliberately *not* screened (real starters all carry a status move);
-    /// each chosen slot is validated per turn instead, before any draw, so
-    /// [`Battle::take_turn`] can still reject a player pick with
-    /// [`BattleError::NonDamagingMove`] / [`BattleError::UnsupportedMoveEffect`].
+    /// deliberately *not* screened; each chosen slot is validated per turn
+    /// instead, before any draw, so [`Battle::take_turn`] can still reject a
+    /// player pick with [`BattleError::NonDamagingMove`] /
+    /// [`BattleError::UnsupportedMoveEffect`].
     ///
     /// Draws from `rng` exactly once (after validation): the
     /// `BattleStartClearSetData` `gRandomTurnNumber = Random()`
@@ -381,17 +474,16 @@ impl Battle {
     /// # Errors
     ///
     /// [`BattleError::FaintedBattler`] if either mon is already at `0` HP
-    /// (see that variant's docs), or whatever
-    /// [`crate::hit::ensure_resolvable`] reports for the first unsupported
-    /// move in the **wild mon's** moveset — a `0`-power status move
-    /// ([`BattleError::NonDamagingMove`]) or a move whose effect runs some
-    /// other battle script ([`BattleError::UnsupportedMoveEffect`]), which
-    /// includes [`crate::damage::STRUGGLE`]: the turn engine never applies
-    /// its `EFFECT_RECOIL` half. Only the wild moveset is screened here,
-    /// because its rejection loop can land on any slot; the *player's*
-    /// moveset may hold unsupported moves (real starters all know a status
-    /// move) — each chosen slot is checked per turn instead, before any
-    /// draw ([`Battle::take_turn`]).
+    /// (see that variant's docs), or whatever [`ensure_executable`] reports
+    /// for the first unsupported move in the **wild mon's** moveset — a
+    /// `0`-power status move outside the three modelled stat-lowering
+    /// effects ([`BattleError::NonDamagingMove`]) or a move whose effect
+    /// runs some other battle script ([`BattleError::UnsupportedMoveEffect`]),
+    /// which includes [`crate::damage::STRUGGLE`]: the turn engine never
+    /// applies its `EFFECT_RECOIL` half. Only the wild moveset is screened
+    /// here, because its rejection loop can land on any slot; the *player's*
+    /// moveset may hold unsupported moves — each chosen slot is checked per
+    /// turn instead, before any draw ([`Battle::take_turn`]).
     pub fn new(
         dex: Dex,
         player: BattlePokemon,
@@ -410,17 +502,14 @@ impl Battle {
         }
         // Only the *wild* side needs every slot executable up front: its
         // rejection loop ignores everything but `MOVE_NONE`, so any slot
-        // can come up mid-turn, after draws. The player's moveset may
-        // carry unsupported moves (every real starter knows a status move
-        // — Treecko's Leer, Torchic's and Mudkip's Growl); the player's
-        // *chosen* slot is validated per turn, before any draw
+        // can come up mid-turn, after draws. The player's moveset may still
+        // carry a move neither pipeline covers (a status move beyond the
+        // three stat-lowering effects, say); the player's *chosen* slot is
+        // validated per turn instead, before any draw
         // (`validate_player_move`), so an unsupported pick is rejected
         // without disturbing the stream and another action can be chosen.
         for slot in enemy.moves() {
-            ensure_resolvable(&dex, slot.move_id)?;
-            if slot.move_id == STRUGGLE {
-                return Err(BattleError::UnsupportedMoveEffect(slot.move_id));
-            }
+            ensure_executable(&dex, slot.move_id)?;
         }
         let random_turn_number = rng.next_u16();
         // `TryDoEventsBeforeFirstTurn` seeds the initial turn order with
@@ -529,13 +618,13 @@ impl Battle {
     /// menu could have offered (out of range, out of PP, or the `MOVE_NONE`
     /// placeholder that `CheckMoveLimitations` rules out —
     /// `MOVE_LIMITATION_ZEROMOVE`, `battle_util.c:1098`) — and, this
-    /// slice's own boundary, a known move the engine cannot execute
-    /// ([`crate::hit::ensure_resolvable`], plus Struggle's unmodelled
-    /// recoil). Construction deliberately allows such moves in unselected
-    /// player slots (real starters all know a status move); the check moves
-    /// here, still ahead of the turn's first draw, so a rejected pick
-    /// leaves the battle and the shared stream untouched and the caller
-    /// can choose another action.
+    /// slice's own boundary, a known move neither pipeline can execute
+    /// ([`ensure_executable`], which also rejects Struggle for its
+    /// unmodelled recoil).
+    /// Construction deliberately allows such moves in unselected player
+    /// slots; the check moves here, still ahead of the turn's first draw,
+    /// so a rejected pick leaves the battle and the shared stream untouched
+    /// and the caller can choose another action.
     fn validate_player_move(&self, index: usize) -> Result<MoveId, BattleError> {
         let slot = self
             .player
@@ -548,10 +637,7 @@ impl Battle {
         if slot.pp == 0 {
             return Err(BattleError::NoPpRemaining(index));
         }
-        ensure_resolvable(&self.dex, slot.move_id)?;
-        if slot.move_id == STRUGGLE {
-            return Err(BattleError::UnsupportedMoveEffect(slot.move_id));
-        }
+        ensure_executable(&self.dex, slot.move_id)?;
         Ok(slot.move_id)
     }
 
@@ -793,7 +879,37 @@ impl Battle {
     /// Resolve `attacker_is_player`'s use of `move_id` against the other
     /// mon, pushing the resulting events and ending the battle if the
     /// target faints.
+    ///
+    /// Dispatches on the move's `EFFECT_*` to one of two pipelines — this
+    /// crate's two-sided execution boundary (crate root docs): the ordinary
+    /// hit-shaped path (`execute_hit_move`,
+    /// [`crate::hit::is_ordinary_hit_effect`]) or the stat-lowering path
+    /// (`execute_stat_lowering_move`,
+    /// [`crate::stat_change::is_stat_lowering_effect`]). Every move that
+    /// reaches here already passed [`ensure_executable`] (at [`Battle::new`]
+    /// for the wild side, at `validate_player_move` for the player's), so
+    /// exactly one of the two `is_*` checks holds. ([`STRUGGLE`] needs no
+    /// case of its own: its `EFFECT_RECOIL` is not a stat-lowering effect,
+    /// so it falls through to the hit pipeline, which accepts it.)
     fn execute_move(
+        &mut self,
+        attacker_is_player: bool,
+        move_id: MoveId,
+        rng: &mut impl BattleRng,
+        events: &mut Vec<BattleEvent>,
+    ) -> Result<(), BattleError> {
+        let effect = self.dex.move_data(move_id)?.effect;
+        if is_stat_lowering_effect(effect) {
+            self.execute_stat_lowering_move(attacker_is_player, move_id, rng, events)
+        } else {
+            self.execute_hit_move(attacker_is_player, move_id, rng, events)
+        }
+    }
+
+    /// The ordinary damaging-move half of [`Self::execute_move`]'s dispatch —
+    /// [`crate::hit::resolve_hit`]'s pipeline, unchanged from before issue
+    /// #199.
+    fn execute_hit_move(
         &mut self,
         attacker_is_player: bool,
         move_id: MoveId,
@@ -877,6 +993,70 @@ impl Battle {
         Ok(())
     }
 
+    /// The stat-lowering half of [`Self::execute_move`]'s dispatch (issue
+    /// #199) — [`crate::stat_change::resolve_stat_lowering_move`]'s
+    /// pipeline: Growl/Tail Whip/Leer/String Shot always target the other
+    /// mon (upstream's `MOVE_TARGET_BOTH`/`MOVE_TARGET_SELECTED` both
+    /// resolve to the single opposing battler in a one-on-one wild battle;
+    /// none of these four is `MOVE_EFFECT_AFFECTS_USER`), so `defender` here
+    /// is always the mon *not* using the move — never the attacker itself.
+    fn execute_stat_lowering_move(
+        &mut self,
+        attacker_is_player: bool,
+        move_id: MoveId,
+        rng: &mut impl BattleRng,
+        events: &mut Vec<BattleEvent>,
+    ) -> Result<(), BattleError> {
+        let outcome = {
+            let (attacker, defender) = if attacker_is_player {
+                (&self.player, &self.enemy)
+            } else {
+                (&self.enemy, &self.player)
+            };
+            resolve_stat_lowering_move(&self.dex, move_id, attacker, defender, rng)?
+        };
+
+        match outcome {
+            StatChangeOutcome::Miss => {
+                events.push(BattleEvent::Missed {
+                    by_player: attacker_is_player,
+                    move_id,
+                });
+            }
+            StatChangeOutcome::Applied {
+                stat,
+                new_stage,
+                floored,
+            } => {
+                let defender = if attacker_is_player {
+                    &mut self.enemy
+                } else {
+                    &mut self.player
+                };
+                match stat {
+                    LoweredStat::Attack => defender.stages_mut().attack = new_stage,
+                    LoweredStat::Defense => defender.stages_mut().defense = new_stage,
+                    LoweredStat::Speed => defender.stages_mut().speed = new_stage,
+                }
+                events.push(if floored {
+                    BattleEvent::StatWontGoLower {
+                        by_player: attacker_is_player,
+                        move_id,
+                        stat,
+                    }
+                } else {
+                    BattleEvent::StatFell {
+                        by_player: attacker_is_player,
+                        move_id,
+                        stat,
+                        new_stage,
+                    }
+                });
+            }
+        }
+        Ok(())
+    }
+
     fn finish(&mut self, events: &mut Vec<BattleEvent>, outcome: BattleOutcome) {
         self.outcome = Some(outcome);
         events.push(BattleEvent::Ended(outcome));
@@ -890,6 +1070,7 @@ mod tests {
     use crate::dex::Dex;
     use crate::error::BattleError;
     use crate::pokemon::{BattlePokemon, Ivs, MOVE_NONE};
+    use crate::stat_change::LoweredStat;
     use crate::stat_stage::StatStage;
     use assets::{MoveId, SpeciesId};
 
@@ -2059,12 +2240,18 @@ mod tests {
         let dex = Dex::new();
         let healthy = |dex: &Dex| max_iv_mon(dex, 4, 50, vec![MoveId(33)]);
 
-        // Growl: 0 power. Sonic Boom: power 1 but EFFECT_SONICBOOM's flat 20
+        // Sand Attack: 0 power, EFFECT_ACCURACY_DOWN -- a stat-lowering
+        // effect issue #199 does *not* cover (only ATTACK/DEFENSE/SPEED_DOWN
+        // are modelled; Growl and Leer, which used to stand in for this
+        // case, are executable now -- see
+        // `a_real_starter_moveset_can_fight_with_its_damaging_move` and
+        // `wild_zigzagoon_growl_executes_when_the_rejection_loop_lands_on_it`
+        // for their new coverage). Sonic Boom: power 1 but EFFECT_SONICBOOM's flat 20
         // damage, which the ordinary pipeline gets wrong in both damage and
         // draw count. Struggle: its EFFECT_RECOIL half is not applied by this
         // engine (see crate::hit's module docs).
         for (bad_move, expected) in [
-            (MoveId(45), BattleError::NonDamagingMove(MoveId(45))),
+            (MoveId(28), BattleError::NonDamagingMove(MoveId(28))),
             (MoveId(49), BattleError::UnsupportedMoveEffect(MoveId(49))),
             (STRUGGLE, BattleError::UnsupportedMoveEffect(STRUGGLE)),
         ] {
@@ -2086,9 +2273,9 @@ mod tests {
             );
 
             // The player's side constructs fine with the same move in an
-            // unselected slot (every real starter knows a status move) --
-            // and *choosing* it is rejected before any draw, leaving the
-            // battle usable and the stream untouched.
+            // unselected slot (construction never screens the player's
+            // moveset) -- and *choosing* it is rejected before any draw,
+            // leaving the battle usable and the stream untouched.
             let mut rng = SequenceRng::new([0]); // battle start only
             let mut battle = Battle::new(
                 Dex::new(),
@@ -2122,11 +2309,8 @@ mod tests {
     #[test]
     fn a_real_starter_moveset_can_fight_with_its_damaging_move() {
         let dex = Dex::new();
-        // Treecko's actual level-5 learnset is Pound (1) + Leer (43) -- the
-        // Codex P1 case: a construction-wide resolvability screen would
-        // reject Leer (NonDamagingMove) and no authentic starter could
-        // enter any wild battle. Wild Poochyena (286) with Tackle is the
-        // Route 101 shape.
+        // Treecko's actual level-5 learnset is Pound (1) + Leer (43). Wild
+        // Poochyena (286) with Tackle is the Route 101 shape.
         let player = max_iv_mon(&dex, 277, 5, vec![MoveId(1), MoveId(43)]);
         let enemy = max_iv_mon(&dex, 286, 2, vec![MoveId(33)]);
 
@@ -2151,33 +2335,383 @@ mod tests {
         );
         assert_eq!(rng.draws(), 11);
 
-        // And picking Leer (slot 1) on a fresh battle is rejected pre-draw
-        // with the battle left usable.
+        // And picking Leer (slot 1) on a fresh battle now *executes* rather
+        // than being rejected: before issue #199, a construction-wide
+        // resolvability screen would have rejected it (NonDamagingMove) and
+        // no authentic Treecko could enter any wild battle. Leer is
+        // EFFECT_DEFENSE_DOWN (`pokeemerald/src/data/battle_moves.h:562`-
+        // `:564`), one of the three stat-lowering effects this issue adds.
+        // It costs exactly one draw -- the accuracy check, and Leer's 100
+        // accuracy means it cannot miss -- and lowers the wild Poochyena's
+        // Defense by one stage.
         let dex = Dex::new();
         let player = max_iv_mon(&dex, 277, 5, vec![MoveId(1), MoveId(43)]);
         let enemy = max_iv_mon(&dex, 286, 2, vec![MoveId(33)]);
-        let mut rng = SequenceRng::new([0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0]);
+        // battle start, turn number, pick, Leer's 1-draw accuracy check,
+        // then the enemy's 4-draw Tackle back.
+        let mut rng = SequenceRng::new([0, 0, 0, 0, 0, 1, 0, 0]);
         let mut battle = Battle::new(dex, player, enemy, &mut rng).unwrap();
-        let rejected = battle
+        let events = battle
             .take_turn(PlayerAction::UseMove(1), &mut rng)
-            .unwrap_err();
-        assert_eq!(rejected.error(), BattleError::NonDamagingMove(MoveId(43)));
-        assert!(rejected.events().is_empty());
-        assert_eq!(rng.draws(), 1, "only the battle-start draw so far");
-        // The same battle then proceeds normally with Pound.
+            .unwrap();
+        // Poochyena L2's Tackle back, hand computed: atk (2*55+31)*2/100+5
+        // = 7 into Treecko L5's def (2*35+31)*5/100+5 = 10 (Leer lowered
+        // the *enemy's* Defense, not Treecko's): 7*35 = 245, *(2*2/5+2 =
+        // 2) = 490, /10 = 49, /50 = 0 -> physical floor to 1, +2 = 3; no
+        // STAB (Dark using Normal), neutral into Grass, best roll keeps 3.
+        assert_eq!(
+            events,
+            vec![
+                BattleEvent::StatFell {
+                    by_player: true,
+                    move_id: MoveId(43),
+                    stat: LoweredStat::Defense,
+                    new_stage: StatStage::new(-1).unwrap(),
+                },
+                BattleEvent::Hit {
+                    by_player: false,
+                    move_id: MoveId(33),
+                    damage: 3,
+                    is_critical: false,
+                },
+            ]
+        );
+        assert_eq!(
+            battle.enemy().stages().defense,
+            StatStage::new(-1).unwrap(),
+            "the applied stage must actually land on the defender"
+        );
+        assert_eq!(
+            rng.draws(),
+            8,
+            "1 (battle start) + 1 (turn number) + 1 (pick) + 1 (Leer) + 4 (Tackle)"
+        );
+        assert!(battle.outcome().is_none());
+    }
+
+    #[test]
+    fn wild_zigzagoon_growl_executes_when_the_rejection_loop_lands_on_it() {
+        let dex = Dex::new();
+        // A wild Zigzagoon's real level-1 learnset is Tackle + Growl
+        // (`sZigzagoonLevelUpLearnset`, `src/data/pokemon/level_up_learnsets.h:3765`-
+        // `:3767`), so a Route 101 L2-3 Zigzagoon (`src/data/wild_encounters.json`)
+        // knows both -- construction must accept the whole moveset, and the
+        // rejection loop can land on either slot.
+        //
+        // Stats (max IV, Hardy/neutral), hand computed from CALC_STAT:
+        //   Rattata L5: atk 12, def 10, speed 13 (established elsewhere).
+        //   Zigzagoon L3 (base atk 30/def 41/spd 60/hp 38):
+        //     def  = (2*41+31)*3/100+5 = 339/100=3, +5 = 8.
+        //     speed= (2*60+31)*3/100+5 = 453/100=4, +5 = 9.
+        //     hp   = (2*38+31)*3/100+3+10 = 321/100=3, +13 = 16.
+        // Rattata (13) is faster than Zigzagoon (9): Rattata's Tackle
+        // resolves first every turn.
+        let player = max_iv_mon(&dex, 19, 5, vec![MoveId(33)]); // Rattata/Tackle
+        let enemy = max_iv_mon(&dex, 288, 3, vec![MoveId(33), MoveId(45)]); // Zigzagoon: Tackle, Growl
+
+        // battle start (no tie, speeds differ), turn number, the rejection
+        // loop landing on slot 1 (Growl: draw 1 % 4 == 1), the player's
+        // 4-draw Tackle, then Growl's 1-draw accuracy check (100 accuracy:
+        // cannot miss).
+        let mut rng = SequenceRng::new([0, 0, 1, 0, 1, 0, 0, 0]);
+        let mut battle = Battle::new(dex, player, enemy, &mut rng).unwrap();
+        assert_eq!(rng.draws(), 1);
         let events = battle
             .take_turn(PlayerAction::UseMove(0), &mut rng)
             .unwrap();
-        assert!(
-            events.iter().any(|e| matches!(
-                e,
+
+        // Rattata's Tackle: 12*35=420, *4=1680, /8=210, /50=4, +2=6, STAB
+        // (Normal on Normal) *15/10 = 9.
+        assert_eq!(
+            events,
+            vec![
                 BattleEvent::Hit {
                     by_player: true,
-                    ..
-                }
-            )),
-            "the battle stayed usable after the rejected pick: {events:?}"
+                    move_id: MoveId(33),
+                    damage: 9,
+                    is_critical: false,
+                },
+                BattleEvent::StatFell {
+                    by_player: false,
+                    move_id: MoveId(45),
+                    stat: LoweredStat::Attack,
+                    new_stage: StatStage::new(-1).unwrap(),
+                },
+            ]
         );
+        assert_eq!(battle.player().stages().attack, StatStage::new(-1).unwrap());
+        assert_eq!(battle.enemy().current_hp(), 16 - 9);
+        assert_eq!(
+            rng.draws(),
+            8,
+            "1 (battle start) + 1 (turn number) + 1 (rejection loop) + 4 (Tackle) + 1 (Growl)"
+        );
+    }
+
+    #[test]
+    fn wild_wurmple_string_shot_misses_when_the_rejection_loop_lands_on_it() {
+        let dex = Dex::new();
+        // A wild Wurmple's real level-1 learnset is Tackle + String Shot
+        // (`sWurmpleLevelUpLearnset`, `src/data/pokemon/level_up_learnsets.h:3799`-
+        // `:3801`), the other Route 101 stat-lowering shape.
+        //
+        // Stats (max IV, neutral), hand computed:
+        //   Wurmple L3 (base atk 45/def 35/spd 20/hp 45):
+        //     def  = (2*35+31)*3/100+5 = 303/100=3, +5 = 8.
+        //     speed= (2*20+31)*3/100+5 = 213/100=2, +5 = 7.
+        //     hp   = (2*45+31)*3/100+3+10 = 363/100=3, +13 = 16.
+        // Rattata L5 (speed 13) is faster than Wurmple L3 (speed 7).
+        let player = max_iv_mon(&dex, 19, 5, vec![MoveId(33)]); // Rattata/Tackle
+        let enemy = max_iv_mon(&dex, 290, 3, vec![MoveId(33), MoveId(81)]); // Wurmple: Tackle, String Shot
+
+        // battle start, turn number, the rejection loop landing on slot 1
+        // (String Shot: draw 1 % 4 == 1), the player's 4-draw Tackle, then
+        // String Shot's accuracy roll: draw 95 -> roll 96 > 95 (95
+        // accuracy) -> miss, the same arithmetic crate::hit's Tackle-miss
+        // test pins.
+        let mut rng = SequenceRng::new([0, 0, 1, 0, 1, 0, 0, 95]);
+        let mut battle = Battle::new(dex, player, enemy, &mut rng).unwrap();
+        let events = battle
+            .take_turn(PlayerAction::UseMove(0), &mut rng)
+            .unwrap();
+
+        // Rattata's Tackle into Wurmple (def 8): identical arithmetic to the
+        // Zigzagoon case above (same attacker, same defense stat) -> 9.
+        assert_eq!(
+            events,
+            vec![
+                BattleEvent::Hit {
+                    by_player: true,
+                    move_id: MoveId(33),
+                    damage: 9,
+                    is_critical: false,
+                },
+                BattleEvent::Missed {
+                    by_player: false,
+                    move_id: MoveId(81),
+                },
+            ]
+        );
+        assert_eq!(
+            battle.player().stages().speed,
+            StatStage::NEUTRAL,
+            "a miss must not change any stage"
+        );
+        assert_eq!(battle.enemy().current_hp(), 16 - 9);
+        assert_eq!(
+            rng.draws(),
+            8,
+            "1 (battle start) + 1 (turn number) + 1 (rejection loop) + 4 (Tackle) + 1 (String Shot)"
+        );
+    }
+
+    #[test]
+    fn a_stat_already_at_the_floor_reports_wont_go_lower_and_stays_put() {
+        let dex = Dex::new();
+        // Rattata L5 (speed 13, faster) uses Growl against a Bulbasaur L5
+        // (speed 11) whose Attack stage is *already* at MIN_STAT_STAGE --
+        // upstream's `gBattleMons[].statStages[statId] == MIN_STAT_STAGE`
+        // check inside `ChangeStatBuffs` (`battle_script_commands.c:7056`),
+        // reached even though the move still "connects" (the accuracy
+        // check has nothing to do with the stage floor).
+        let player = max_iv_mon(&dex, 19, 5, vec![MoveId(45)]); // Rattata/Growl
+        let mut enemy = max_iv_mon(&dex, 1, 5, vec![MoveId(33)]); // Bulbasaur/Tackle
+        enemy.stages_mut().attack = StatStage::MIN;
+
+        // battle start, turn number, enemy pick (its only move), Growl's
+        // 1-draw accuracy check (100 accuracy: cannot miss), then the
+        // enemy's ordinary 4-draw Tackle.
+        let mut rng = SequenceRng::new([0, 0, 0, 0, 0, 1, 0, 0]);
+        let mut battle = Battle::new(dex, player, enemy, &mut rng).unwrap();
+        let events = battle
+            .take_turn(PlayerAction::UseMove(0), &mut rng)
+            .unwrap();
+
+        // Bulbasaur's Tackle into Rattata (def 10) is *also* affected here,
+        // because it is the very same mon/stat Growl just found already
+        // floored: stage-adjusted attack = 11*10/40 = 2 (110/40 truncated,
+        // gStatStageRatios' MIN_STAT_STAGE ratio); 2*35=70, *4=280,
+        // /10=28, /50=0 (truncated), floored to 1 (physical moves always
+        // deal at least 1), +2 = 3 -- far below the neutral-Attack pin of
+        // 5 (`full_wild_battle_runs_to_a_faint_and_reports_victory`).
+        assert_eq!(
+            events,
+            vec![
+                BattleEvent::StatWontGoLower {
+                    by_player: true,
+                    move_id: MoveId(45),
+                    stat: LoweredStat::Attack,
+                },
+                BattleEvent::Hit {
+                    by_player: false,
+                    move_id: MoveId(33),
+                    damage: 3,
+                    is_critical: false,
+                },
+            ]
+        );
+        assert_eq!(
+            battle.enemy().stages().attack,
+            StatStage::MIN,
+            "already at the floor: the stage must not move"
+        );
+        assert_eq!(
+            rng.draws(),
+            8,
+            "1 (battle start) + 1 (turn number) + 1 (pick) + 1 (Growl) + 4 (Tackle)"
+        );
+    }
+
+    #[test]
+    fn growl_lowers_the_players_subsequent_tackle_damage() {
+        let dex = Dex::new();
+        // A faster wild Rattata (speed 13) Growls the player's Bulbasaur
+        // (speed 11) before Bulbasaur's own Tackle resolves *in the same
+        // turn* -- stat stages take effect immediately, so the damage
+        // formula reads the already-lowered Attack stage.
+        //
+        // Baseline (neutral Attack, hand computed elsewhere in this file):
+        // Bulbasaur's Tackle into Rattata (def 10) deals 5. With Attack at
+        // -1 (gStatStageRatios (10, 15)): stage-adjusted attack =
+        // 11*10/15 = 7 (110/15 truncated); 7*35=245, *4=980, /10=98, /50=1
+        // (98/50 truncated), +2 = 3 -- strictly less than the neutral 5.
+        let enemy = max_iv_mon(&dex, 19, 5, vec![MoveId(45)]); // Rattata/Growl
+        let player = max_iv_mon(&dex, 1, 5, vec![MoveId(33)]); // Bulbasaur/Tackle
+
+        // battle start, turn number, enemy pick (its only move), Growl's
+        // 1-draw accuracy check (100 accuracy: cannot miss), then the
+        // player's ordinary 4-draw Tackle.
+        let mut rng = SequenceRng::new([0, 0, 0, 0, 0, 1, 0, 0]);
+        let mut battle = Battle::new(dex, player, enemy, &mut rng).unwrap();
+        let events = battle
+            .take_turn(PlayerAction::UseMove(0), &mut rng)
+            .unwrap();
+
+        assert_eq!(
+            events,
+            vec![
+                BattleEvent::StatFell {
+                    by_player: false,
+                    move_id: MoveId(45),
+                    stat: LoweredStat::Attack,
+                    new_stage: StatStage::new(-1).unwrap(),
+                },
+                BattleEvent::Hit {
+                    by_player: true,
+                    move_id: MoveId(33),
+                    damage: 3,
+                    is_critical: false,
+                },
+            ],
+            "the player's Tackle must reflect the -1 Attack stage Growl \
+             just applied, not the neutral baseline of 5"
+        );
+        assert_eq!(battle.player().stages().attack, StatStage::new(-1).unwrap());
+    }
+
+    #[test]
+    fn string_shot_flips_turn_order_once_the_targets_effective_speed_drops_below_the_threshold() {
+        let dex = Dex::new();
+        // Poochyena L5 (speed 10) is faster than Wurmple L5 (speed 8), so
+        // Poochyena moves first in turn 1. Wurmple's String Shot that same
+        // turn lowers Poochyena's Speed stage to -1: gStatStageRatios'
+        // (10, 15) ratio makes its effective Speed 10*10/15 = 6 (integer
+        // division) from turn 2 on -- which drops *below* Wurmple's
+        // untouched 8, flipping who moves first despite Wurmple being the
+        // "slower" mon by raw stats.
+        //
+        // Stats (max IV, neutral), hand computed:
+        //   Poochyena L5 (base atk 55/def 35/spd 35/hp 35): atk
+        //     (2*55+31)*5/100+5=705/100=7,+5=12; def (2*35+31)*5/100+5=
+        //     505/100=5,+5=10; speed same formula = 10; hp
+        //     (2*35+31)*5/100+5+10=505/100=5,+15=20.
+        //   Wurmple L5 (base atk 45/def 35/spd 20/hp 45): atk
+        //     (2*45+31)*5/100+5=605/100=6,+5=11; def = 10 (same numbers as
+        //     Poochyena's); speed (2*20+31)*5/100+5=355/100=3,+5=8; hp
+        //     (2*45+31)*5/100+5+10=605/100=6,+15=21.
+        // Neither Tackle gets STAB here (Poochyena is Dark, Wurmple is
+        // Bug); Normal is neutral into both.
+        let player = max_iv_mon(&dex, 290, 5, vec![MoveId(81), MoveId(33)]); // Wurmple: String Shot, Tackle
+        let enemy = max_iv_mon(&dex, 286, 5, vec![MoveId(33)]); // Poochyena: Tackle
+
+        // battle start (no tie, 8 vs 10), then:
+        // turn 1: turn number, enemy pick (its only move), Poochyena's
+        //   4-draw Tackle (it is still faster this turn), Wurmple's 1-draw
+        //   String Shot accuracy check (draw 0 -> roll 1 <= 95 -> hit) --
+        //   7 draws in all.
+        // turn 2: turn number, enemy pick, Wurmple's 4-draw Tackle (now
+        //   first -- the flip), Poochyena's 4-draw Tackle -- 10 draws.
+        let mut rng = SequenceRng::new([
+            0, // battle start
+            0, 0, // turn 1: turn number, enemy pick
+            0, 1, 0, 0, // turn 1: Poochyena's Tackle
+            0, // turn 1: Wurmple's String Shot (hits)
+            0, 0, // turn 2: turn number, enemy pick
+            0, 1, 0, 0, // turn 2: Wurmple's Tackle (now first)
+            0, 1, 0, 0, // turn 2: Poochyena's Tackle
+        ]);
+        let mut battle = Battle::new(dex, player, enemy, &mut rng).unwrap();
+        assert_eq!(rng.draws(), 1, "no speed-tie draw: 8 and 10 differ");
+
+        // Turn 1: Poochyena moves first (10 > 8).
+        // Poochyena's Tackle into Wurmple (def 10): 12*35=420, *4=1680,
+        // /10=168, /50=3, +2=5.
+        let turn1 = battle
+            .take_turn(PlayerAction::UseMove(0), &mut rng)
+            .unwrap();
+        assert_eq!(
+            turn1,
+            vec![
+                BattleEvent::Hit {
+                    by_player: false,
+                    move_id: MoveId(33),
+                    damage: 5,
+                    is_critical: false,
+                },
+                BattleEvent::StatFell {
+                    by_player: true,
+                    move_id: MoveId(81),
+                    stat: LoweredStat::Speed,
+                    new_stage: StatStage::new(-1).unwrap(),
+                },
+            ],
+            "turn 1: Poochyena (faster) moves first"
+        );
+        assert_eq!(battle.enemy().stages().speed, StatStage::new(-1).unwrap());
+        assert_eq!(rng.draws(), 8);
+
+        // Turn 2: Wurmple's raw 8 now beats Poochyena's debuffed effective
+        // 6 -- the order has flipped from turn 1, purely from the stage
+        // change String Shot committed.
+        // Wurmple's Tackle into Poochyena (def 10): 11*35=385, *4=1540,
+        // /10=154, /50=3, +2=5 (same numbers as turn 1's Tackle, different
+        // attacker).
+        let turn2 = battle
+            .take_turn(PlayerAction::UseMove(1), &mut rng)
+            .unwrap();
+        assert_eq!(
+            turn2,
+            vec![
+                BattleEvent::Hit {
+                    by_player: true,
+                    move_id: MoveId(33),
+                    damage: 5,
+                    is_critical: false,
+                },
+                BattleEvent::Hit {
+                    by_player: false,
+                    move_id: MoveId(33),
+                    damage: 5,
+                    is_critical: false,
+                },
+            ],
+            "turn 2: the player now moves FIRST despite being the \
+             raw-slower mon -- only explicable by the Speed debuff \
+             turn 1 committed"
+        );
+        assert_eq!(battle.player().current_hp(), 21 - 5 - 5);
+        assert_eq!(battle.enemy().current_hp(), 20 - 5);
+        assert_eq!(rng.draws(), 18);
     }
 
     #[test]

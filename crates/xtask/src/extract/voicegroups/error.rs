@@ -99,9 +99,22 @@ pub(crate) enum VoiceGroupError {
         starting_note: u8,
         slot_count: usize,
     },
+    /// `sound/voice_groups.inc`'s own `.include "sound/voicegroups/<path>"`
+    /// line named a path with no corresponding parsed voicegroup label (see
+    /// `super::build_label_index`'s directory walk vs.
+    /// `super::link_order_successors`'s linker-order parse). Would only fire
+    /// if that linker script named a source the directory walk never
+    /// visited -- a mismatch between the two, not an upstream data problem
+    /// in the pinned reference checkout. Carries the offending relative
+    /// path.
+    UnindexedLinkOrderFile(String),
 }
 
 impl fmt::Display for VoiceGroupError {
+    // One arm per variant of an exhaustive error enum; splitting the match
+    // would only scatter the catalogue (mirrors `extract::error::ExtractError`'s
+    // own `Display` impl).
+    #[allow(clippy::too_many_lines)]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::MissingDeclaration => {
@@ -200,6 +213,11 @@ impl fmt::Display for VoiceGroupError {
                 "voicegroup `{group}`: starting_note {starting_note} + {slot_count} slots \
                  exceeds the maximum of {}",
                 super::VOICE_SLOT_COUNT
+            ),
+            Self::UnindexedLinkOrderFile(path) => write!(
+                f,
+                "sound/voice_groups.inc links `sound/voicegroups/{path}`, but no parsed \
+                 voicegroup declares that file (directory walk vs. linker order mismatch)"
             ),
         }
     }
