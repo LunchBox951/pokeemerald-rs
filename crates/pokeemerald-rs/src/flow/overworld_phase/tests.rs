@@ -6,12 +6,13 @@ use crate::new_game;
 use assets::{MapEvents, MapHeader, MapId, MapLayout, MetatileCell};
 use engine::event_data::EventData;
 use engine::overworld::metatile_behavior::{
-    MB_ANIMATED_DOOR, MB_NON_ANIMATED_DOOR, MB_SOUTH_ARROW_WARP,
+    MB_ANIMATED_DOOR, MB_NON_ANIMATED_DOOR, MB_SOUTH_ARROW_WARP, MB_TALL_GRASS,
 };
 use engine::overworld::{
     warp_in_facing, ConnectedMapData, Direction, MapRuntime, PlayerState, StepOutcome,
-    WALK_FRAMES_PER_TILE,
+    WALK_FRAMES_PER_TILE, WILD_ENCOUNTER_IMMUNITY_STEPS,
 };
+use engine::rng::Rng;
 use platform::{ButtonState, Buttons};
 
 /// A fresh event-flag store: nothing hidden. Used by the
@@ -2531,5 +2532,215 @@ fn idle_frames_animate_the_composed_tileset_pixels() {
         &*base, &*animated,
         "60 idle frames must animate the flower tiles through the phase's own \
          tick -- if this fails, `compose_frame` is not passing `self.tick`"
+    );
+}
+
+/// The tile row Route 101's own extracted layout makes solid tall grass:
+/// `y == 4`, `x` in `0..=5` (the same real data
+/// [`crate::flow::wild_encounter::tests`]' own real-pack lane walks, one row
+/// over). Six tiles in a straight line is exactly what the two
+/// immunity-window tests below need -- four immune steps and then a fifth
+/// that really rolls, with no direction change to complicate the frame
+/// counting.
+const ROUTE_101_GRASS_ROW: [(i32, i32); 6] = [(0, 4), (1, 4), (2, 4), (3, 4), (4, 4), (5, 4)];
+
+/// Route 101's own elevation on [`ROUTE_101_GRASS_ROW`].
+const ROUTE_101_GRASS_ELEVATION: u8 = 3;
+
+/// A seed whose first four draws are all non-zero, so "the stream never
+/// moved" and "the stream moved" are distinguishable by state alone. Any
+/// seed would do; this is [`crate::flow::wild_encounter::tests`]' own
+/// `ENCOUNTER_SEED`, reused so the two files' scenarios stay comparable.
+const IMMUNITY_SEED: u32 = 17;
+
+/// Walk one whole tile east and let its walk animation drain, so the frame
+/// the encounter roll happens on (the drain frame -- `OverworldPhase::step`'s
+/// "Warp timing" docs) is included.
+fn walk_one_tile_east(phase: &mut OverworldPhase) {
+    for _ in 0..WALK_FRAMES_PER_TILE {
+        phase.step(held(Buttons::RIGHT));
+    }
+}
+
+/// Drive `state` through one more step onto tall grass against Route 101's
+/// *real* wild table, reporting whether that step touched `rng`.
+///
+/// The two tests below use this to assert the shape of the window a map
+/// transition restarts: four steps that draw nothing at all, then one that
+/// does. It goes through [`super::OverworldPhase::wild`] rather than a fresh
+/// [`engine::overworld::wild_encounter::WildEncounterState`] precisely
+/// because the claim under test is about *the phase's own* state after the
+/// transition, not about the counter in the abstract.
+fn grass_step_draws(
+    state: &mut engine::overworld::wild_encounter::WildEncounterState,
+    rng: &mut Rng,
+) -> bool {
+    let header = assets::WildEncounterTable::new().get_by_map(MapId("MAP_ROUTE101"));
+    let before = rng.state();
+    state.check_standard_wild_encounter(MB_TALL_GRASS, header, rng);
+    rng.state() != before
+}
+
+/// `RestartWildEncounterImmunitySteps` at upstream's `LoadMapFromWarp` call
+/// site (`src/overworld.c:850`), pinned through the whole phase: a warp must
+/// buy four fresh encounter-free steps, however many the player had already
+/// spent before taking it.
+///
+/// Deleting `self.wild.restart_immunity_steps()` from
+/// [`OverworldPhase::warp_to`] fails here -- the counter stays at
+/// [`WILD_ENCOUNTER_IMMUNITY_STEPS`] and the very first grass step after the
+/// warp draws.
+///
+/// The four-silent-steps tail is driven against Route 101's table through
+/// the phase's own [`OverworldPhase::wild`] rather than walked, because no
+/// warp this port can resolve lands anywhere with a wild table at all: the
+/// destination is Brendan's house, whose `gWildMonHeaders` entry does not
+/// exist, so walking it would assert nothing.
+#[test]
+#[ignore = "needs a local pack: run `cargo xtask extract` first"]
+fn warping_restarts_the_wild_encounter_immunity_window() {
+    // A real `map_id` with a real wild table over a synthetic open room, so
+    // the pre-warp steps are ordinary walking on ordinary ground.
+    let mut phase = OverworldPhase::for_test(
+        crate::overworld::tests::synthetic_scene(10, 10),
+        MapId("MAP_ROUTE101"),
+        PlayerState::new((2, 5), 3, Direction::East),
+        None,
+    );
+    phase.rng = Rng::new(IMMUNITY_SEED);
+
+    // Spend the window the phase started with.
+    for _ in 0..WILD_ENCOUNTER_IMMUNITY_STEPS {
+        walk_one_tile_east(&mut phase);
+    }
+    assert_eq!(
+        phase.wild.immunity_steps(),
+        WILD_ENCOUNTER_IMMUNITY_STEPS,
+        "four ordinary steps must exhaust the post-transition window"
+    );
+
+    phase.warp_to(ONE_F, 1);
+    assert_eq!(
+        phase.wild.immunity_steps(),
+        0,
+        "a warp is a full map load -- LoadMapFromWarp calls \
+         RestartWildEncounterImmunitySteps (overworld.c:850)"
+    );
+
+    // And the window it just granted really is four RNG-silent steps.
+    let mut rng = Rng::new(IMMUNITY_SEED);
+    for step in 1..=WILD_ENCOUNTER_IMMUNITY_STEPS {
+        assert!(
+            !grass_step_draws(&mut phase.wild, &mut rng),
+            "grass step {step} after a warp must be immune, and immune means RNG-silent"
+        );
+    }
+    assert!(
+        grass_step_draws(&mut phase.wild, &mut rng),
+        "the fifth step is out of the window and rolls for real"
+    );
+}
+
+/// The same claim at upstream's *other* map-transition call site,
+/// `LoadMapFromCameraTransition` (`src/overworld.c:800`) -- and this one is
+/// walked end to end, because a connection crossing really can land the
+/// player in grass.
+///
+/// Deleting `self.wild.restart_immunity_steps()` from
+/// [`OverworldPhase::cross_connection`] fails here: the counter is still
+/// exhausted on arrival and the very first grass step draws.
+///
+/// The player is repositioned onto [`ROUTE_101_GRASS_ROW`] after the real
+/// crossing rather than walked there: the crossing lands at `(10, 19)` on
+/// Route 101's south edge and the nearest tall grass is eleven tiles away,
+/// which would spend the whole window before reaching it. Everything the
+/// test actually asserts -- the counter at the crossing, and the four silent
+/// steps after it -- is untouched by where the player is standing.
+#[test]
+#[ignore = "needs a local pack: run `cargo xtask extract` first"]
+fn crossing_a_map_connection_restarts_the_wild_encounter_immunity_window() {
+    let littleroot = MapId("MAP_LITTLEROOT_TOWN");
+    let route101 = MapId("MAP_ROUTE101");
+    let scene = crate::overworld::load_room(littleroot).expect("run `cargo xtask extract` first");
+    let mut phase = OverworldPhase::for_test(
+        scene,
+        littleroot,
+        PlayerState::new((10, 4), 3, Direction::North),
+        None,
+    );
+    phase.rng = Rng::new(IMMUNITY_SEED);
+
+    // Four ordinary steps north up Littleroot's own walkable column. Its map
+    // has no wild table, so they draw nothing -- but upstream's
+    // sWildEncounterImmunitySteps counts steps, not encounters, so the
+    // window is spent all the same.
+    for _ in 0..WILD_ENCOUNTER_IMMUNITY_STEPS {
+        phase.step(held(Buttons::UP));
+        for _ in 1..WALK_FRAMES_PER_TILE {
+            phase.step(ButtonState::new());
+        }
+    }
+    assert_eq!(phase.player.position(), (10, 0));
+    assert_eq!(phase.wild.immunity_steps(), WILD_ENCOUNTER_IMMUNITY_STEPS);
+    assert_eq!(
+        phase.rng.state(),
+        Rng::new(IMMUNITY_SEED).state(),
+        "a map with no wild table draws nothing, window or no window"
+    );
+
+    // The fifth step walks off Littleroot's north edge into Route 101 -- the
+    // real crossing, through `PlayerState::step` and `cross_connection`.
+    phase.step(held(Buttons::UP));
+    assert_eq!(phase.map_id, route101, "the crossing must have landed");
+    assert_eq!(
+        phase.wild.immunity_steps(),
+        0,
+        "a connection crossing calls RestartWildEncounterImmunitySteps too \
+         (LoadMapFromCameraTransition, overworld.c:800)"
+    );
+    for _ in 1..WALK_FRAMES_PER_TILE {
+        phase.step(ButtonState::new());
+    }
+    assert_eq!(
+        phase.wild.immunity_steps(),
+        1,
+        "the crossing step's own landing then spends the first of the four it was just \
+         granted -- upstream reaches CheckStandardWildEncounter for that step too, the \
+         crossing having happened inside it"
+    );
+
+    // Stand in Route 101's own tall grass (doc comment) and walk it: three
+    // immune steps are left, and the fourth rolls.
+    phase.player = PlayerState::new(
+        ROUTE_101_GRASS_ROW[0],
+        ROUTE_101_GRASS_ELEVATION,
+        Direction::East,
+    );
+    phase.pending_landing = None;
+    let remaining = usize::from(WILD_ENCOUNTER_IMMUNITY_STEPS - phase.wild.immunity_steps());
+    for (index, tile) in ROUTE_101_GRASS_ROW
+        .iter()
+        .copied()
+        .enumerate()
+        .take(remaining + 1)
+        .skip(1)
+    {
+        walk_one_tile_east(&mut phase);
+        assert_eq!(phase.player.position(), tile);
+        assert_eq!(
+            phase.rng.state(),
+            Rng::new(IMMUNITY_SEED).state(),
+            "grass step {index} is inside the window the crossing restarted, so it must not \
+             draw at all"
+        );
+        assert!(phase.wild_battle.is_none());
+    }
+    assert_eq!(phase.wild.immunity_steps(), WILD_ENCOUNTER_IMMUNITY_STEPS);
+
+    walk_one_tile_east(&mut phase);
+    assert_ne!(
+        phase.rng.state(),
+        Rng::new(IMMUNITY_SEED).state(),
+        "the step past the window's end rolls for real"
     );
 }

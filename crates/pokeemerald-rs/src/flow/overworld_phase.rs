@@ -713,17 +713,20 @@ impl OverworldPhase {
             let door_warp = landed
                 .and_then(|(x, y)| trigger_door_warp(&runtime, x, y, self.player.elevation()));
             // The roll happens only on a completed step that neither warp
-            // path has already claimed -- upstream returns TRUE out of
-            // `ProcessPlayerFieldInput` the moment one of those fires, so
-            // `CheckStandardWildEncounter` is never reached on such a frame.
-            // The landed tile is the player's own tile on a drain frame, and
-            // it is what `GetPlayerPosition` would report there.
+            // path has already claimed (`wild_encounter::roll_eligible_landing`,
+            // which carries upstream's precedence and its rationale), and only
+            // while the party's lead mon can actually fight
+            // (`wild_encounter::lead_can_fight` -- the fail-closed stand-in for
+            // the white-out this port does not model). The landed tile is the
+            // player's own tile on a drain frame, and it is what
+            // `GetPlayerPosition` would report there.
             let encounter = wild_encounter::roll_for_step(
                 &mut self.wild,
                 &mut self.rng,
                 self.map_id,
                 &runtime,
-                landed.filter(|_| preempting_arrow_trigger.is_none() && door_warp.is_none()),
+                wild_encounter::roll_eligible_landing(landed, preempting_arrow_trigger, door_warp)
+                    .filter(|_| wild_encounter::lead_can_fight(self.party_lead.as_ref())),
             );
             // Upstream `input->heldDirection && input->dpadDirection ==
             // playerDirection` (`field_control_avatar.c:164-168`) -- polled
@@ -733,9 +736,11 @@ impl OverworldPhase {
             // sets `heldDirection` in the first place (`:95-112`), so the
             // poll needs no `in_transit` test of its own beyond `landed`'s.
             // A fired encounter suppresses it, as upstream's early return
-            // does. See the "Warp timing" section of this method's docs.
+            // does (`wild_encounter::arrow_poll_open`, which owns both gates
+            // and their upstream citations). See the "Warp timing" section of
+            // this method's docs.
             let warp_trigger = preempting_arrow_trigger.or(door_warp).or_else(|| {
-                if self.player.in_transit() || encounter.is_some() {
+                if !wild_encounter::arrow_poll_open(self.player.in_transit(), encounter.is_some()) {
                     return None;
                 }
                 let (x, y) = pre_step_position;
@@ -745,9 +750,10 @@ impl OverworldPhase {
             // A fired encounter consumes the frame's field input exactly as a
             // resolved warp does -- upstream returns TRUE out of
             // `ProcessPlayerFieldInput` at `:162`, before
-            // `TryStartInteractionScript` (`:172`) is ever reached.
+            // `TryStartInteractionScript` (`:172`) is ever reached
+            // (`wild_encounter::field_input_consumed`).
             let input_consumed =
-                encounter.is_some() || matches!(warp_trigger, Some(WarpTrigger::Resolved { .. }));
+                wild_encounter::field_input_consumed(encounter.is_some(), warp_trigger);
             match warp_trigger {
                 Some(WarpTrigger::Resolved { map, warp_id }) => self.warp_to(map, warp_id),
                 Some(WarpTrigger::Unsupported) => eprintln!(
@@ -1101,6 +1107,13 @@ impl OverworldPhase {
     /// standing in the grass rather than stuck in a half-built battle. The
     /// lead mon is only handed over once the battle is really built, so a
     /// rejection cannot swallow it.
+    ///
+    /// The lead mon reaching here is never *fainted*: the roll upstream of
+    /// this call is refused outright while it is
+    /// ([`wild_encounter::lead_can_fight`], the fail-closed stand-in for the
+    /// white-out this port does not model), so no encounter exists to hand
+    /// over. Guarded there rather than again here, where a second check could
+    /// only ever be dead code.
     fn begin_wild_battle(&mut self, encounter: Option<engine::overworld::WildEncounter>) {
         let Some(encounter) = encounter else {
             return;

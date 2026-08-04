@@ -33,6 +33,30 @@
 //! the choice of action, and only that; it is enumerated as NOT-modelled on
 //! this slice's ledger entry for `src/battle_setup.c`.
 //!
+//! # The unmodelled gate *behind* all this: losing
+//!
+//! Upstream never leaves the overworld holding a fainted party. Losing a wild
+//! battle sets `gBattleOutcome` to a defeat, `CB2_EndWildBattle`
+//! (`src/battle_setup.c:602-616`) routes to `CB2_WhiteOut`
+//! (`src/overworld.c:1550-1570`) instead of `CB2_ReturnToField`, and
+//! `DoWhiteOut` (`:358-366`) runs the white-out script, halves the player's
+//! money, **heals the whole party** (`HealPlayerParty`), and warps to the last
+//! heal location. None of that is modelled here `(no script engine, no money,
+//! no heal locations, no warp-to-Pokémon-Center)`, so
+//! [`advance_wild_battle`] writes the player's mon back unconditionally —
+//! fainted included — and the player is left standing in the grass where
+//! upstream would already be waking up in a Pokémon Center.
+//!
+//! Rather than invent a white-out, this port **fails closed** at the only
+//! place the gap is RNG-observable: [`lead_can_fight`] refuses the encounter
+//! roll while the lead mon is fainted, so a grass step in that state draws
+//! nothing at all instead of spending a wild-mon construction and
+//! `Battle::new`'s turn-number draw on a battle that can only error out. That
+//! is a state upstream cannot reach, so suppressing it costs no fidelity and
+//! keeps the stream where a real playthrough would have it. The white-out
+//! itself is enumerated as NOT-modelled on this slice's ledger entry for
+//! `src/battle_setup.c#BattleSetup_StartWildBattle`.
+//!
 //! # The unmodelled gate ahead of all this
 //!
 //! Route 101's grass is fenced off at the start of a real playthrough by
@@ -47,6 +71,7 @@
 //! papered over.
 
 use battle::{Battle, BattleError, BattleOutcome, BattlePokemon, BattleRng, Dex, PlayerAction};
+use engine::overworld::warp::WarpTrigger;
 use engine::overworld::wild_encounter::{WildEncounter, WildEncounterState};
 use engine::overworld::{MapRuntime, TilePos};
 use engine::rng::Rng;
@@ -108,10 +133,111 @@ pub(super) fn roll_for_step(
     state.check_standard_wild_encounter(behavior, header, rng)
 }
 
+/// Which completed step, if any, [`roll_for_step`] is allowed to see this
+/// frame — upstream's `ProcessPlayerFieldInput` precedence
+/// (`field_control_avatar.c:155-172`), as a value.
+///
+/// Upstream reaches `CheckStandardWildEncounter` (`:162`) only by falling
+/// *through* the step-based script/warp block at `:155-161`; a warp there
+/// returns `TRUE` out of `ProcessPlayerFieldInput` and the encounter check
+/// never runs. That matters even though a door tile can never itself roll an
+/// encounter (no behavior is both `IsWarpMetatileBehavior` and
+/// `MetatileBehavior_IsLandWildEncounter`): `CheckStandardWildEncounter`
+/// *always* writes `sPrevMetatileBehavior` and consumes an immunity step
+/// (`:668-686`), so letting it see a warp frame would corrupt the very
+/// bookkeeping the next real grass step draws against.
+///
+/// `preempting` is this port's own #194 addition — an arrow warp that fired
+/// *before* movement, consuming the frame the way upstream's pre-`PlayerStep`
+/// `ProcessPlayerFieldInput` does. It cannot coincide with a `landed` step
+/// (a preempted frame requires the player to have been at rest, and
+/// `pending_landing` is empty at rest — see `advance_or_skip_for_preempt`'s
+/// own `debug_assert`), so that arm is defensive rather than reachable; it is
+/// spelled out anyway so the precedence stays correct if a future slice makes
+/// the two coincide.
+pub(super) fn roll_eligible_landing(
+    landed: Option<TilePos>,
+    preempting: Option<WarpTrigger>,
+    door_warp: Option<WarpTrigger>,
+) -> Option<TilePos> {
+    if preempting.is_some() || door_warp.is_some() {
+        return None;
+    }
+    landed
+}
+
+/// Whether the every-frame `TryArrowWarp` poll (`field_control_avatar.c:164-168`)
+/// is still open this frame.
+///
+/// Two gates, and they are not the same gate. `in_transit` is this port's
+/// counterpart to the `T_TILE_CENTER`/`T_NOT_MOVING` test that sets
+/// `input->heldDirection` upstream in the first place (`:95-112`).
+/// `encounter_fired` is the precedence one: `CheckStandardWildEncounter` at
+/// `:162` returns `TRUE` when a wild Pokémon appears, and
+/// `ProcessPlayerFieldInput` returns with it — so the arrow poll two lines
+/// below never runs on the frame an encounter fires.
+///
+/// Like [`roll_eligible_landing`]'s `preempting` arm, the `encounter_fired`
+/// half is presently unreachable rather than merely untaken: the arrow poll
+/// reads the tile the player already stands on, which on the drain frame is
+/// the same tile the roll read, and no metatile behavior is both an
+/// arrow-warp id and a land-encounter id. It encodes upstream's ordering all
+/// the same, so a future slice that widens either id set inherits the right
+/// precedence instead of a silent double-fire.
+pub(super) const fn arrow_poll_open(in_transit: bool, encounter_fired: bool) -> bool {
+    !in_transit && !encounter_fired
+}
+
+/// Whether this frame's field input has already been consumed by the time
+/// `ProcessPlayerFieldInput` reaches `TryStartInteractionScript` (`:172`).
+///
+/// A resolved warp and a fired encounter consume it identically upstream —
+/// both return `TRUE` from `ProcessPlayerFieldInput` before `:172` is reached
+/// (`:155-161` and `:162` respectively) — so a same-frame A press finds
+/// nothing to talk to. [`WarpTrigger::Unsupported`] deliberately does *not*
+/// count: this port could not resolve that warp, nothing happened, and
+/// swallowing the player's A press on top of that would compound one
+/// unmodelled destination into a second missing behaviour.
+pub(super) const fn field_input_consumed(
+    encounter_fired: bool,
+    warp_trigger: Option<WarpTrigger>,
+) -> bool {
+    encounter_fired || matches!(warp_trigger, Some(WarpTrigger::Resolved { .. }))
+}
+
+/// Whether an encounter may be rolled at all with `lead` as the party's lead
+/// mon — the fail-closed half of the unmodelled white-out (module docs).
+///
+/// `None` (a fresh save with no party at all) is **allowed**: that is exactly
+/// upstream's own state before Birch's bag, where the roll happens for real
+/// and only the battle is missing, so the stream stays upstream's and
+/// [`crate::flow::overworld_phase::OverworldPhase::begin_wild_battle`] logs
+/// the encounter it cannot fight.
+///
+/// A *fainted* lead is the state upstream cannot be in: losing routes through
+/// `CB2_WhiteOut`, which heals the party before the player ever takes another
+/// step (module docs). Rolling here would draw a wild mon's five
+/// nature/personality/IV values plus `Battle::new`'s `gRandomTurnNumber` on
+/// every grass step, only to reject the battle afterwards — repeatable draws
+/// with no upstream counterpart. So the roll is refused before it draws
+/// anything, and the refusal is logged rather than silent.
+pub(super) fn lead_can_fight(lead: Option<&BattlePokemon>) -> bool {
+    if lead.is_some_and(BattlePokemon::is_fainted) {
+        eprintln!(
+            "wild encounter: the lead mon has fainted -- no roll until it is healed \
+             (upstream would have whited out; see flow::wild_encounter's module docs)"
+        );
+        return false;
+    }
+    true
+}
+
 /// Build the wild mon a [`WildEncounter`] describes and start a
 /// [`battle::Battle`] around it — `CreateWildMon` (`wild_encounter.c:379`)
-/// followed by `BattleSetup_StartWildBattle` (`src/battle_setup.c:265`),
-/// minus the battle *transition* the latter schedules.
+/// followed by `BattleSetup_StartWildBattle` (`src/battle_setup.c:389-395`,
+/// whose non-Safari arm is `DoStandardWildBattle`, `:402-419`), minus the
+/// battle *transition* the latter schedules (`CreateBattleStartTask` `:414`
+/// and its `Task_BattleStart`, `:351-376`).
 ///
 /// Draws in upstream's order off the shared stream: the wild mon's
 /// nature/personality/IVs ([`battle::build_wild_pokemon`], five draws for a
@@ -154,6 +280,12 @@ pub(super) fn start_wild_battle(
 /// overworld keeps the state the battle left it in, the way upstream's
 /// `gPlayerParty[0]` persists. Returns the outcome on exactly that frame and
 /// `None` on every other.
+///
+/// That write-back is unconditional, [`BattleOutcome::PlayerLost`] included,
+/// so a lost battle really does leave a fainted mon in `lead` — upstream
+/// instead white-outs and heals the party, which this port does not model
+/// (module docs). [`lead_can_fight`] is the guard that keeps that state from
+/// becoming RNG-observable.
 ///
 /// A turn that *errors* is not survivable here — there is no action menu to
 /// choose differently with — so it ends the battle too: the error is logged,
