@@ -13,11 +13,12 @@ pub const MAGIC: [u8; 8] = *b"PKMRPACK";
 /// History: `1` was the original layout; `2` added the NPC sprite-sheet and
 /// palette entries the overworld renderer requires (issue #161); `3` added
 /// the `audio/sample/*` entries `cargo xtask extract` now writes (issue
-/// #183, S-4, `#115` child 4 -- see `crate::audio`'s "Versioning" docs) --
-/// each time, an older pack would pass validation but fail later (at scene
-/// load, or at audio-pack lookup, with `UnknownAsset`), so the version gate
-/// rejects it up front instead.
-pub const FORMAT_VERSION: u32 = 3;
+/// #183, S-4, `#115` child 4); `4` added the `audio/voicegroup/*` entries
+/// those samples back (issue #182, `#115` child 3 -- see `crate::audio`'s
+/// "Versioning" docs) -- each time, an older pack would pass validation but
+/// fail later (at scene load, or at audio-pack lookup, with
+/// `UnknownAsset`), so the version gate rejects it up front instead.
+pub const FORMAT_VERSION: u32 = 4;
 
 /// Cap on how many directory entries [`parse_directory`] pre-reserves from
 /// the untrusted `entry_count` header field. A corrupt count near `u32::MAX`

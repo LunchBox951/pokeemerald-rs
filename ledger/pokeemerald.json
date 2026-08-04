@@ -19409,8 +19409,10 @@
     "sound/keysplit_tables.inc": {
       "category": "audio.misc",
       "kind": "file",
-      "spec_owner": "03-audio",
-      "status": "pending"
+      "reason": "All five keysplit blocks (piano, strings, trumpet, tuba, french_horn) are parsed by xtask::extract::voicegroups::parser::parse_keysplit_tables and used to resolve MUS_TITLE's voicegroup key-split slots (issue #182, S-4 #115 child 3); every block this file declares is reachable from MUS_TITLE's own dependency tree, so the file is fully covered.",
+      "rust_target": "crates/xtask/src/extract/voicegroups/parser.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "sound/music_player_table.inc": {
       "category": "audio.misc",
@@ -22918,6 +22920,68 @@
       "spec_owner": "03-audio",
       "status": "pending"
     },
+    "sound/voicegroups/drumsets/emerald_1.inc": {
+      "category": "audio.voicegroup",
+      "kind": "file",
+      "spec_owner": "03-audio",
+      "status": "pending"
+    },
+    "sound/voicegroups/drumsets/emerald_2.inc": {
+      "category": "audio.voicegroup",
+      "kind": "file",
+      "spec_owner": "03-audio",
+      "status": "pending"
+    },
+    "sound/voicegroups/drumsets/frlg.inc": {
+      "category": "audio.voicegroup",
+      "kind": "file",
+      "spec_owner": "03-audio",
+      "status": "pending"
+    },
+    "sound/voicegroups/drumsets/frlg_fanfare_1.inc": {
+      "category": "audio.voicegroup",
+      "kind": "file",
+      "spec_owner": "03-audio",
+      "status": "pending"
+    },
+    "sound/voicegroups/drumsets/frlg_fanfare_2.inc": {
+      "category": "audio.voicegroup",
+      "kind": "file",
+      "spec_owner": "03-audio",
+      "status": "pending"
+    },
+    "sound/voicegroups/drumsets/petalburg.inc": {
+      "category": "audio.voicegroup",
+      "kind": "file",
+      "spec_owner": "03-audio",
+      "status": "pending"
+    },
+    "sound/voicegroups/drumsets/rg_credits.inc": {
+      "category": "audio.voicegroup",
+      "kind": "file",
+      "spec_owner": "03-audio",
+      "status": "pending"
+    },
+    "sound/voicegroups/drumsets/route101.inc": {
+      "category": "audio.voicegroup",
+      "kind": "file",
+      "spec_owner": "03-audio",
+      "status": "pending"
+    },
+    "sound/voicegroups/drumsets/route110.inc": {
+      "category": "audio.voicegroup",
+      "kind": "file",
+      "spec_owner": "03-audio",
+      "status": "pending"
+    },
+    "sound/voicegroups/drumsets/rs.inc": {
+      "category": "audio.voicegroup",
+      "kind": "file",
+      "reason": "Rhythm (drum-kit) voicegroup MUS_TITLE's voicegroup references via voice_keysplit_all voicegroup_rs_drumset (title.inc slot 0). Parsed by xtask::extract::voicegroups (voice_group rs_drumset, 36 -- the starting_note bias aligns real MIDI note 36 = General MIDI bass drum), normalized to the 128-slot VoiceGroup schema (36 leading Empty slots for the bias, 29 real entries filling slots 36..=64, trailing Empty padding) and emitted as audio/voicegroup/rs_drumset (issue #182, S-4 #115 child 3).",
+      "rust_target": "crates/xtask/src/extract/voicegroups/mod.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
     "sound/voicegroups/dummy.inc": {
       "category": "audio.voicegroup",
       "kind": "file",
@@ -23115,6 +23179,46 @@
       "kind": "file",
       "spec_owner": "03-audio",
       "status": "pending"
+    },
+    "sound/voicegroups/keysplits/french_horn.inc": {
+      "category": "audio.voicegroup",
+      "kind": "file",
+      "reason": "Key-split instrument voicegroup MUS_TITLE's voicegroup references via voice_keysplit (title.inc), resolved through its keysplit_french_horn table in sound/keysplit_tables.inc. Parsed by xtask::extract::voicegroups, normalized to the 128-slot VoiceGroup schema and emitted as audio/voicegroup/french_horn_keysplit (issue #182, S-4 #115 child 3).",
+      "rust_target": "crates/xtask/src/extract/voicegroups/mod.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "sound/voicegroups/keysplits/piano.inc": {
+      "category": "audio.voicegroup",
+      "kind": "file",
+      "reason": "Key-split instrument voicegroup MUS_TITLE's voicegroup references via voice_keysplit (title.inc), resolved through its keysplit_piano table in sound/keysplit_tables.inc. Parsed by xtask::extract::voicegroups, normalized to the 128-slot VoiceGroup schema and emitted as audio/voicegroup/piano_keysplit (issue #182, S-4 #115 child 3).",
+      "rust_target": "crates/xtask/src/extract/voicegroups/mod.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "sound/voicegroups/keysplits/strings.inc": {
+      "category": "audio.voicegroup",
+      "kind": "file",
+      "reason": "Key-split instrument voicegroup MUS_TITLE's voicegroup references via voice_keysplit (title.inc), resolved through its keysplit_strings table in sound/keysplit_tables.inc. Parsed by xtask::extract::voicegroups, normalized to the 128-slot VoiceGroup schema and emitted as audio/voicegroup/strings_keysplit (issue #182, S-4 #115 child 3).",
+      "rust_target": "crates/xtask/src/extract/voicegroups/mod.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "sound/voicegroups/keysplits/trumpet.inc": {
+      "category": "audio.voicegroup",
+      "kind": "file",
+      "reason": "Key-split instrument voicegroup MUS_TITLE's voicegroup references via voice_keysplit (title.inc), resolved through its keysplit_trumpet table in sound/keysplit_tables.inc. Parsed by xtask::extract::voicegroups, normalized to the 128-slot VoiceGroup schema and emitted as audio/voicegroup/trumpet_keysplit (issue #182, S-4 #115 child 3).",
+      "rust_target": "crates/xtask/src/extract/voicegroups/mod.rs",
+      "spec": "S-4",
+      "status": "ported"
+    },
+    "sound/voicegroups/keysplits/tuba.inc": {
+      "category": "audio.voicegroup",
+      "kind": "file",
+      "reason": "Key-split instrument voicegroup MUS_TITLE's voicegroup references via voice_keysplit (title.inc), resolved through its keysplit_tuba table in sound/keysplit_tables.inc. Parsed by xtask::extract::voicegroups, normalized to the 128-slot VoiceGroup schema and emitted as audio/voicegroup/tuba_keysplit (issue #182, S-4 #115 child 3).",
+      "rust_target": "crates/xtask/src/extract/voicegroups/mod.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "sound/voicegroups/lilycove.inc": {
       "category": "audio.voicegroup",
@@ -23701,8 +23805,10 @@
     "sound/voicegroups/title.inc": {
       "category": "audio.voicegroup",
       "kind": "file",
-      "spec_owner": "03-audio",
-      "status": "pending"
+      "reason": "Voicegroup resolver + 128-slot normalization (issue #182, S-4 #115 child 3): parsed by xtask::extract::voicegroups (parser.rs/resolve.rs/encode.rs), resolving MUS_TITLE's own voicegroup (voice_group title -> voicegroup_title, per sound/songs/midi/midi.cfg mus_title.mid: -G_title) plus every key-split/rhythm child it transitively references, cycle-safe and rejecting a second level of indirection (upstream ply_note single-level limit). Normalized to crates/assets/src/audio/voicegroup.rs's VoiceGroup schema (all 128 slots explicit; the 39 slots this source does not declare materialize as Empty) and emitted as audio/voicegroup/title in the local asset pack (FORMAT_VERSION 4). KNOWN DIVERGENCE (issue #201): slot 127, which mus_title.mid selects, is not silent upstream -- the linker lays intro.inc contiguously after title.inc and m4a_1.s's unchecked voice*12 fetch resolves it to voicegroup_intro entry 38 (voice_square_1 60,0,0,2,0,0,15,0); the Empty emitted here renders those notes silent until #201 decides whether to model the link-adjacency read. Read back and decoded with VoiceGroup::decode (crates/pokeemerald-rs/src/voicegroup_pack_tests.rs ratchets the real pack's slot 127 as the recorded divergence). Sample payloads are not extracted here (issue #183).",
+      "rust_target": "crates/xtask/src/extract/voicegroups/mod.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "sound/voicegroups/trick_house.inc": {
       "category": "audio.voicegroup",

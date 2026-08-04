@@ -81,8 +81,10 @@
 //! [`sample::Sample`] entries (`audio/sample/direct-sound/*`,
 //! `audio/sample/programmable-wave/*` -- see
 //! `xtask::extract::audio_samples`'s module docs for the id scheme and
-//! exactly which samples are extracted); any later change to the shapes
-//! here bumps it again.
+//! exactly which samples are extracted), and to `4` when the
+//! `audio/voicegroup/*` entries those samples back
+//! (`xtask::extract::voicegroups`) followed (issue #182, `#115` child 3);
+//! any later change to the shapes here bumps it again.
 //!
 //! A second, per-payload version would be a redundant axis: two gates to
 //! keep in sync, and a failure mode (outer version accepted, inner version

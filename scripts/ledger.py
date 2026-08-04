@@ -273,7 +273,10 @@ POKEEMERALD_RULES = [
     # ─ AUDIO ───────────────────────────────────────────────────────────────
     Rule("audio.song",       "files", ["sound/songs/midi/*.mid"],
          spec_owner="03-audio"),
-    Rule("audio.voicegroup", "files", ["sound/voicegroups/*.inc"],
+    # `**` so the `drumsets/`/`keysplits/` subdirectories (issue #182's own
+    # voicegroup resolver reaches both) are tracked too, not just the ~180
+    # top-level files -- `*` alone does not cross `/`.
+    Rule("audio.voicegroup", "files", ["sound/voicegroups/**/*.inc"],
          spec_owner="03-audio"),
     Rule("audio.sample",     "files", ["sound/direct_sound_samples/*",
                                        "sound/programmable_wave_samples/*"],

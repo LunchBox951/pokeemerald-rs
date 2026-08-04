@@ -7,6 +7,7 @@ use super::jasc_pal::JascPalError;
 use super::layouts_json::LayoutsJsonError;
 use super::pack::PackWriteError;
 use super::png::PngError;
+use super::voicegroups::VoiceGroupError;
 use super::wav::WavError;
 
 /// An error produced while extracting the local asset pack.
@@ -134,9 +135,31 @@ pub enum ExtractError {
     /// 16 bytes a CGB programmable-wave table requires. Carries the path
     /// and the actual length.
     ProgrammableWaveWrongSize { path: PathBuf, actual: usize },
+    /// A voicegroup `.inc` source under `sound/voicegroups/` (or
+    /// `sound/keysplit_tables.inc`) failed to parse. Carries its path and
+    /// the parser error.
+    VoiceGroupFile(PathBuf, VoiceGroupError),
+    /// Two voicegroup `.inc` files under `sound/voicegroups/` declared the
+    /// same `voice_group` label. Carries the label and both source paths.
+    DuplicateVoiceGroupLabel {
+        /// The label both files declared.
+        label: String,
+        /// The first file discovered with this label.
+        first_path: PathBuf,
+        /// The second file discovered with this label.
+        second_path: PathBuf,
+    },
+    /// Resolving `MUS_TITLE`'s voicegroup dependency tree failed (a
+    /// dangling reference, a reference cycle, a key-split/rhythm child
+    /// that itself carries further indirection, or an over-long
+    /// group/table). Carries the resolver error.
+    VoiceGroup(VoiceGroupError),
 }
 
 impl fmt::Display for ExtractError {
+    // One arm per variant of an exhaustive error enum; splitting the match
+    // would only scatter the catalogue.
+    #[allow(clippy::too_many_lines)]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::MissingUpstreamCheckout(path) => write!(
@@ -225,6 +248,20 @@ impl fmt::Display for ExtractError {
                 "programmable-wave source `{}` is {actual} bytes: expected exactly 16",
                 path.display()
             ),
+            Self::VoiceGroupFile(path, err) => {
+                write!(f, "voicegroup source `{}`: {err}", path.display())
+            }
+            Self::DuplicateVoiceGroupLabel {
+                label,
+                first_path,
+                second_path,
+            } => write!(
+                f,
+                "duplicate voicegroup label `{label}`: declared by both `{}` and `{}`",
+                first_path.display(),
+                second_path.display()
+            ),
+            Self::VoiceGroup(err) => write!(f, "{err}"),
         }
     }
 }
