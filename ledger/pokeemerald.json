@@ -20713,8 +20713,10 @@
     "sound/songs/midi/mus_title.mid": {
       "category": "audio.song",
       "kind": "file",
-      "spec_owner": "03-audio",
-      "status": "pending"
+      "reason": "Compiled the way tools/mid2agb interprets it at its real midi.cfg flags (-E -R50 -G_title -V090): notes/ties (velocity-LUT quantized, exact -E gate length, >96-tick tie-splitting), tempo (round(60e6/us-per-quarter), reaching only the first compiled track same as upstream's own Tempo-stripping), program change, pan/volume(master-volume-scaled)/modulation/LFO-speed/bend/bend-range/tune/priority controllers, the pseudo-echo XCMD pair, and loop markers ([/]/][/: -> Goto, unexercised by mus_title itself but pinned on crafted fragments) into crates/assets::audio::song::SongEvent streams (one per real MIDI channel, 10 total), emitted via cargo xtask extract as pack id audio/song/mus_title (issue #181, S-4, #115 child 2). Deliberately NOT modelled, each an honest scope cut (crates/xtask/src/extract/midi/compile.rs's module docs): the note-duration LUT quantization path (only reachable without -E, which mus_title never omits), -X/48-clocks-per-beat (this schema has no ticks-per-quarter-note field to record it), tools/mid2agb's WAIT-opcode-legal-value bucketing and whole-note pattern-compression bookkeeping (SplitTime/WholeNoteMark/PATT/PEND -- on-disk artifacts with zero audible effect), operand elision (EOT's omitted key, compressed note/velocity mnemonics -- this compiler's stream is always fully explicit), and the MEMACC controller family (0x0C/0x0D/0x0E/0x0F/0x10/0x11 -- mus_title carries zero, confirmed against a locally built tools/mid2agb oracle; the schema's one canonical MEMACC user, mus_vs_trainer, is a different song out of this issue's scope).",
+      "rust_target": "crates/xtask/src/extract/midi/mod.rs",
+      "spec": "S-4",
+      "status": "ported"
     },
     "sound/songs/midi/mus_too_bad.mid": {
       "category": "audio.song",
