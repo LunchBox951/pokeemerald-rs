@@ -11,8 +11,8 @@
 # command. `native` gives each supported OS one checkout and one shared Cargo
 # target directory for the exact default Clippy/build/test commands plus smoke
 # validation. On Ubuntu, that same workspace also restores the pinned upstream
-# references, extracts the real asset pack, runs the ignored real-pack
-# assertions, and repeats smoke with the pack present. No Cargo target cache is
+# references, extracts the real asset pack, runs the ignored real-pack and
+# real-checkout assertions, and repeats smoke with the pack present. No Cargo target cache is
 # used: reuse is deliberately limited to commands within one native runner.
 #
 # Branch rules require `merge-gate / <target>` from this workflow. The target
@@ -127,6 +127,9 @@ jobs:
       - name: Run ignored real-pack assertions (assets)
         if: runner.os == 'Linux'
         run: cargo test -p assets -- --ignored
+      - name: Run ignored real-checkout assertions (xtask)
+        if: runner.os == 'Linux'
+        run: cargo test -p xtask -- --ignored
       - name: Smoke E2E (pack present)
         if: runner.os == 'Linux'
         run: cargo run -p xtask --features smoke -- e2e --suite smoke
