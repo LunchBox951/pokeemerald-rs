@@ -19,8 +19,8 @@
 //! undeclared tail as `assets::audio::voicegroup::VoiceEntry::Empty`
 //! (`resolve::pad_to_128`).
 //!
-//! **Known divergence (issue #201):** slot 127 -- the one `mus_title.mid`'s
-//! own MIDI source selects on one channel (see
+//! **Modeled link-adjacency read (issue #201):** slot 127 -- the one
+//! `mus_title.mid`'s own MIDI source selects on one channel (see
 //! `crates/assets/src/audio.rs`'s module docs) -- is undeclared *in
 //! `title.inc`*, but not silent upstream. `sound/voice_groups.inc:66-67`
 //! links `intro.inc` contiguously after `title.inc` (whose 89 entries are
@@ -28,8 +28,20 @@
 //! `voicegroup + voice * 12` fetch (`src/m4a_1.s`, `ply_voice`) resolves
 //! slot 127 to offset 1524 = byte 456 of `voicegroup_intro` = its entry 38,
 //! `voice_square_1 60, 0, 0, 2, 0, 0, 15, 0` -- a real playable CGB voice.
-//! Until #201 decides how to model that link-adjacency read, the `Empty`
-//! this pass emits renders those notes silent `(behavioral-fidelity)`.
+//! [`link_order_successors`] parses `sound/voice_groups.inc`'s own linked
+//! order to learn what follows `title`'s file, and
+//! `resolve::resolve_voice_groups_with_link_successors` materializes
+//! `title`'s undeclared tail (slots 89..=127) from that successor's own
+//! entries instead of [`resolve::VoiceSlot::Empty`] -- see that function's
+//! module docs' "Link adjacency" section for the full mechanism, including
+//! the fail-closed case (a top-level group last in the linked order, or
+//! whose successors run out first, still gets `Empty` padding: this
+//! pipeline cannot know what bytes, if any, genuinely follow, so silence is
+//! the honest fallback, not a guess). This is modeled only for `title`
+//! itself, never for a key-split/rhythm child it references (e.g.
+//! `rs_drumset`'s own `starting_note` under-range and any child's trailing
+//! over-range stay `Empty` -- a different mechanism, the keysplit table
+//! itself, not file adjacency, and out of scope here) `(behavioral-fidelity)`.
 //!
 //! # Pipeline
 //!
@@ -43,13 +55,19 @@
 //!    rather than silently doing nothing.
 //! 2. `sound/keysplit_tables.inc` is parsed once
 //!    ([`parser::parse_keysplit_tables`]) into every `keysplit` block.
-//! 3. [`resolve::resolve_voice_groups`] walks from `"title"`, cycle-safe
-//!    (a currently-being-resolved stack, checked before any recursive
-//!    call) and rejecting a key-split/rhythm child that itself carries
-//!    further indirection (upstream's own single-level limit -- see that
-//!    module's docs), producing one fully-linked
-//!    [`resolve::ResolvedVoiceGroup`] per distinct label reached.
-//! 4. Each resolved group is [`encode::encode_voice_group`]d to
+//! 3. [`link_order_successors`] parses `sound/voice_groups.inc`
+//!    ([`parser::parse_link_order`]) and, using step 1's own path-to-label
+//!    map, returns the labels linked immediately after `"title"`'s file --
+//!    empty if none (see the "Modeled link-adjacency read" section above).
+//! 4. [`resolve::resolve_voice_groups_with_link_successors`] walks from
+//!    `"title"`, cycle-safe (a currently-being-resolved stack, checked
+//!    before any recursive call) and rejecting a key-split/rhythm child
+//!    that itself carries further indirection (upstream's own single-level
+//!    limit -- see that module's docs), producing one fully-linked
+//!    [`resolve::ResolvedVoiceGroup`] per distinct label reached --
+//!    `"title"`'s own undeclared tail filled from step 3's successors first
+//!    (issue #201), any remainder left `Empty`.
+//! 5. Each resolved group is [`encode::encode_voice_group`]d to
 //!    `crates/assets/src/audio/voicegroup.rs`'s exact wire shape (this
 //!    crate cannot depend on that one -- see `encode`'s module docs) and
 //!    pushed as a [`crate::extract::pack::PackKind::Raw`] entry under
@@ -103,6 +121,12 @@ pub(super) const VOICE_SLOT_COUNT: usize = 128;
 /// `MUS_TITLE`".
 const TOP_LEVEL_LABEL: &str = "title";
 
+/// [`build_label_index`]'s return shape: every parsed group keyed by its
+/// declared label, alongside the path (relative to `sound/voicegroups/`,
+/// forward-slashed) each one was parsed from, keyed the same way --
+/// see that function's own docs for why both maps are needed.
+type LabelIndex = (HashMap<String, RawVoiceGroup>, HashMap<String, String>);
+
 /// Recursively collect every `*.inc` file under `dir`, sorted by full path
 /// (deterministic regardless of `read_dir`'s unspecified order -- mirrors
 /// `super::collect_pngs_sorted`, duplicated rather than shared since that
@@ -133,10 +157,20 @@ fn collect_inc_files_sorted(dir: &Path) -> Result<Vec<PathBuf>, ExtractError> {
 /// `sound/voicegroups/`, keyed by each file's own declared label. See the
 /// module docs' "Scope" section for why this reads the whole tree rather
 /// than only `title`'s reachable set.
-fn build_label_index(upstream: &Path) -> Result<HashMap<String, RawVoiceGroup>, ExtractError> {
+///
+/// Also returns each file's path *relative to `sound/voicegroups/`*
+/// (forward-slashed regardless of host path separator), keyed to its
+/// declared label -- what [`link_order_successors`] needs to turn
+/// `sound/voice_groups.inc`'s own `.include` targets (paths, not labels)
+/// into the label sequence [`resolve::resolve_voice_groups_with_link_successors`]
+/// walks. A label need not match its filename (e.g. `drumsets/rs.inc`
+/// declares `rs_drumset`), so this mapping can't be reconstructed from
+/// `raw_groups` alone.
+fn build_label_index(upstream: &Path) -> Result<LabelIndex, ExtractError> {
     let dir = upstream.join("sound/voicegroups");
     let mut raw_groups: HashMap<String, RawVoiceGroup> = HashMap::new();
     let mut label_paths: HashMap<String, PathBuf> = HashMap::new();
+    let mut path_labels: HashMap<String, String> = HashMap::new();
 
     for path in collect_inc_files_sorted(&dir)? {
         let text = read_text(&path)?;
@@ -149,9 +183,72 @@ fn build_label_index(upstream: &Path) -> Result<HashMap<String, RawVoiceGroup>, 
                 second_path: path,
             });
         }
+        let relative = path
+            .strip_prefix(&dir)
+            .expect("collect_inc_files_sorted only yields paths under dir")
+            .components()
+            .map(|c| c.as_os_str().to_string_lossy().into_owned())
+            .collect::<Vec<_>>()
+            .join("/");
+        path_labels.insert(relative, raw.label.clone());
         raw_groups.insert(raw.label.clone(), raw);
     }
-    Ok(raw_groups)
+    Ok((raw_groups, path_labels))
+}
+
+/// Learn `sound/voice_groups.inc`'s own concatenation order for every
+/// voicegroup `.inc` file it links (see [`parser::parse_link_order`]), and
+/// return the labels immediately following `top_label` in that order.
+///
+/// Empty if `top_label` isn't linked at all, or is the last voicegroup file
+/// linked -- both fail closed to `resolve::pad_to_128`'s ordinary trailing
+/// `Empty` pad (see `resolve`'s "Link adjacency" module docs): this
+/// pipeline has no way to know what, if anything, follows in the real
+/// linked binary in either case.
+///
+/// # Errors
+///
+/// [`ExtractError::ReadFailed`] if `sound/voice_groups.inc` can't be read;
+/// [`ExtractError::VoiceGroup`] wrapping
+/// [`VoiceGroupError::UnindexedLinkOrderFile`] if a linked path names a file
+/// `path_labels` (i.e. `build_label_index`'s own directory walk) never saw
+/// -- an internal mismatch, not expected against the pinned reference
+/// checkout.
+fn link_order_successors(
+    upstream: &Path,
+    top_label: &str,
+    path_labels: &HashMap<String, String>,
+) -> Result<Vec<String>, ExtractError> {
+    let path = upstream.join("sound/voice_groups.inc");
+    let text = read_text(&path)?;
+
+    let mut ordered = Vec::new();
+    for item in parser::parse_link_order(&text) {
+        match item {
+            parser::LinkOrderItem::VoiceGroup(relative) => {
+                let label = path_labels.get(&relative).ok_or_else(|| {
+                    ExtractError::VoiceGroup(VoiceGroupError::UnindexedLinkOrderFile(
+                        relative.clone(),
+                    ))
+                })?;
+                ordered.push(Some(label.clone()));
+            }
+            // A non-voicegroup include is an adjacency barrier (see
+            // `parser::LinkOrderItem::Foreign`): successors stop there.
+            parser::LinkOrderItem::Foreign => ordered.push(None),
+        }
+    }
+
+    let Some(index) = ordered
+        .iter()
+        .position(|label| label.as_deref() == Some(top_label))
+    else {
+        return Ok(Vec::new());
+    };
+    Ok(ordered[index + 1..]
+        .iter()
+        .map_while(Clone::clone)
+        .collect())
 }
 
 /// Extract `MUS_TITLE`'s voicegroup and every group it transitively
@@ -164,23 +261,30 @@ fn build_label_index(upstream: &Path) -> Result<HashMap<String, RawVoiceGroup>, 
 /// [`ExtractError::DuplicateVoiceGroupLabel`] if two `.inc` files declare
 /// the same label; [`ExtractError::VoiceGroup`] for any resolution failure
 /// (dangling reference, cycle, nested indirection, an over-long group/table
-/// -- see [`parser::VoiceGroupError`]'s variants); [`ExtractError::ReadFailed`]
-/// if a source file can't be read; [`ExtractError::Pack`] if assembling the
-/// pack entries fails (an internal-bug case, since every id here is
-/// generated by this module).
+/// -- see [`parser::VoiceGroupError`]'s variants) or an unindexed
+/// link-order file (see [`link_order_successors`]);
+/// [`ExtractError::ReadFailed`] if a source file can't be read;
+/// [`ExtractError::Pack`] if assembling the pack entries fails (an
+/// internal-bug case, since every id here is generated by this module).
 pub(super) fn extract_voicegroups(
     upstream: &Path,
     writer: &mut PackWriter,
 ) -> Result<(), ExtractError> {
-    let raw_groups = build_label_index(upstream)?;
+    let (raw_groups, path_labels) = build_label_index(upstream)?;
+    let link_successors = link_order_successors(upstream, TOP_LEVEL_LABEL, &path_labels)?;
 
     let keysplit_path = upstream.join("sound/keysplit_tables.inc");
     let keysplit_text = read_text(&keysplit_path)?;
     let keysplit_tables = parser::parse_keysplit_tables(&keysplit_text)
         .map_err(|e| ExtractError::VoiceGroupFile(keysplit_path, e))?;
 
-    let groups = resolve::resolve_voice_groups(TOP_LEVEL_LABEL, &raw_groups, &keysplit_tables)
-        .map_err(ExtractError::VoiceGroup)?;
+    let groups = resolve::resolve_voice_groups_with_link_successors(
+        TOP_LEVEL_LABEL,
+        &raw_groups,
+        &keysplit_tables,
+        &link_successors,
+    )
+    .map_err(ExtractError::VoiceGroup)?;
 
     for group in &groups {
         writer.push(PackEntry {
@@ -195,7 +299,8 @@ pub(super) fn extract_voicegroups(
 #[cfg(test)]
 mod tests {
     use super::{
-        build_label_index, collect_inc_files_sorted, extract_voicegroups, TOP_LEVEL_LABEL,
+        build_label_index, collect_inc_files_sorted, extract_voicegroups, link_order_successors,
+        TOP_LEVEL_LABEL,
     };
     use crate::extract::pack::PackWriter;
 
@@ -207,13 +312,35 @@ mod tests {
     fn every_voicegroups_inc_file_parses() {
         assert!(super::super::upstream_present(), "run ./init.sh first");
         let upstream = super::super::repo_root().join("pokeemerald");
-        let index = build_label_index(&upstream).expect("every real .inc file should parse");
+        let (index, path_labels) =
+            build_label_index(&upstream).expect("every real .inc file should parse");
         // 180 top-level + 10 drumsets + 5 keysplits (see
         // `crates/assets/src/audio/voicegroup.rs`'s module docs, "195 in
         // the reference checkout: 180 at top level plus 15 under
         // `drumsets/`/`keysplits/`").
         assert_eq!(index.len(), 195);
+        assert_eq!(path_labels.len(), 195);
         assert!(index.contains_key(TOP_LEVEL_LABEL));
+        assert_eq!(
+            path_labels.get("title.inc").map(String::as_str),
+            Some("title")
+        );
+        assert_eq!(
+            path_labels.get("drumsets/rs.inc").map(String::as_str),
+            Some("rs_drumset")
+        );
+    }
+
+    #[test]
+    #[ignore = "needs a local `./init.sh`-fetched pokeemerald/ checkout"]
+    fn title_is_immediately_followed_by_intro_in_the_real_link_order() {
+        assert!(super::super::upstream_present(), "run ./init.sh first");
+        let upstream = super::super::repo_root().join("pokeemerald");
+        let (_raw_groups, path_labels) = build_label_index(&upstream).unwrap();
+        let successors = link_order_successors(&upstream, TOP_LEVEL_LABEL, &path_labels).unwrap();
+        // `sound/voice_groups.inc:66-67` -- see the module docs' "Modeled
+        // link-adjacency read".
+        assert_eq!(successors.first().map(String::as_str), Some("intro"));
     }
 
     #[test]
@@ -221,14 +348,20 @@ mod tests {
     fn mus_titles_full_dependency_tree_resolves_to_seven_groups() {
         assert!(super::super::upstream_present(), "run ./init.sh first");
         let upstream = super::super::repo_root().join("pokeemerald");
-        let raw_groups = build_label_index(&upstream).unwrap();
+        let (raw_groups, path_labels) = build_label_index(&upstream).unwrap();
+        let link_successors =
+            link_order_successors(&upstream, TOP_LEVEL_LABEL, &path_labels).unwrap();
         let keysplit_text =
             std::fs::read_to_string(upstream.join("sound/keysplit_tables.inc")).unwrap();
         let keysplit_tables = super::parser::parse_keysplit_tables(&keysplit_text).unwrap();
 
-        let groups =
-            super::resolve::resolve_voice_groups(TOP_LEVEL_LABEL, &raw_groups, &keysplit_tables)
-                .expect("MUS_TITLE's real dependency tree should resolve cleanly");
+        let groups = super::resolve::resolve_voice_groups_with_link_successors(
+            TOP_LEVEL_LABEL,
+            &raw_groups,
+            &keysplit_tables,
+            &link_successors,
+        )
+        .expect("MUS_TITLE's real dependency tree should resolve cleanly");
 
         let mut labels: Vec<&str> = groups.iter().map(|g| g.label.as_str()).collect();
         labels.sort_unstable();
@@ -248,11 +381,35 @@ mod tests {
         let title = groups.iter().find(|g| g.label == "title").unwrap();
         assert_eq!(title.slots.len(), super::VOICE_SLOT_COUNT);
         // `title.inc` declares only 89 of the 128 slots (see the module
-        // docs' "Why MUS_TITLE") -- slot 127 is trailing padding, not
-        // invented content.
+        // docs' "Why MUS_TITLE"), but slots 89..=127 are no longer invented
+        // silence: they are `voicegroup_intro`'s own entries 0..=38, read
+        // through the modeled link-adjacency (issue #201). Slot 89 ==
+        // intro's entry 0, `voice_keysplit_all voicegroup_rs_drumset`
+        // (`sound/voicegroups/intro.inc:2`) -- already one of `title`'s own
+        // rhythm children, so no new group is emitted for it. Slot 127 ==
+        // intro's entry 38, `voice_square_1 60, 0, 0, 2, 0, 0, 15, 0`
+        // (`sound/voicegroups/intro.inc:40`) -- a real playable CGB voice.
+        assert_eq!(
+            title.slots[89],
+            super::resolve::VoiceSlot::Rhythm {
+                children_id: "audio/voicegroup/rs_drumset".to_owned(),
+            }
+        );
         assert_eq!(
             *title.slots.last().unwrap(),
-            super::resolve::VoiceSlot::Empty
+            super::resolve::VoiceSlot::Square1 {
+                base_key: 60,
+                length: 0,
+                sweep: 0,
+                duty: 2,
+                envelope: super::parser::Envelope {
+                    attack: 0,
+                    decay: 0,
+                    sustain: 15,
+                    release: 0,
+                },
+                fixed_rate: false,
+            }
         );
 
         let rs_drumset = groups.iter().find(|g| g.label == "rs_drumset").unwrap();
@@ -260,7 +417,10 @@ mod tests {
         // `drumsets/rs.inc` declares `voice_group rs_drumset, 36` with 29
         // body lines -- the first 36 slots are the `starting_note` bias,
         // slots 36..=64 are the real entries, and everything past 64 is
-        // trailing padding.
+        // trailing padding. `rs_drumset` is reached only as a key-split/
+        // rhythm child, never a top-level group itself, so it keeps this
+        // plain padding regardless of link order (see `resolve`'s "Link
+        // adjacency" module docs).
         for slot in &rs_drumset.slots[0..36] {
             assert_eq!(*slot, super::resolve::VoiceSlot::Empty);
         }
@@ -280,6 +440,10 @@ mod tests {
         let mut writer = PackWriter::new();
         extract_voicegroups(&upstream, &mut writer)
             .expect("extraction should succeed against a real checkout");
+        // Still exactly `title` plus its six key-split/rhythm children --
+        // `intro` itself is never emitted as its own pack entry: only a
+        // handful of its entries are borrowed into `title`'s overflow tail
+        // (see the module docs' "Modeled link-adjacency read").
         assert_eq!(writer.len(), 7);
     }
 
@@ -323,6 +487,148 @@ mod tests {
                 assert_eq!(second_path, dir.join("b.inc"));
             }
             other => panic!("expected DuplicateVoiceGroupLabel, got {other:?}"),
+        }
+    }
+
+    /// Synthetic fixture (no real `./init.sh` checkout needed --
+    /// [`link_order_successors`] only reads `sound/voice_groups.inc` and
+    /// consults an already-built `path_labels` map): a group followed by
+    /// another in a hand-written link order, mirroring
+    /// `sound/voice_groups.inc:66-67`'s `title.inc`/`intro.inc` shape at
+    /// arm's length.
+    #[test]
+    fn link_order_successors_returns_every_file_after_top_label_in_order() {
+        let mut path_labels = std::collections::HashMap::new();
+        path_labels.insert("a.inc".to_owned(), "a".to_owned());
+        path_labels.insert("b.inc".to_owned(), "b".to_owned());
+        path_labels.insert("c.inc".to_owned(), "c".to_owned());
+        let root = std::env::temp_dir().join(format!(
+            "pokeemerald-rs-voicegroup-link-order-test-{}-{}",
+            std::process::id(),
+            line!()
+        ));
+        std::fs::create_dir_all(root.join("sound")).unwrap();
+        std::fs::write(
+            root.join("sound/voice_groups.inc"),
+            ".include \"sound/voicegroups/a.inc\"\n.include \"sound/voicegroups/b.inc\"\n.include \"sound/voicegroups/c.inc\"\n",
+        )
+        .unwrap();
+
+        let successors = link_order_successors(&root, "a", &path_labels).unwrap();
+        std::fs::remove_dir_all(&root).unwrap();
+
+        assert_eq!(successors, vec!["b".to_owned(), "c".to_owned()]);
+    }
+
+    /// The fail-closed case the module docs promise: a top-level group last
+    /// in the linker's own order has no successor at all -- upstream would
+    /// read into whatever bytes follow `sound/voice_groups.inc`'s very last
+    /// linked file, which this pipeline cannot know, so an empty list (and
+    /// so `resolve`'s ordinary `Empty` trailing pad) is the honest answer,
+    /// not an error.
+    #[test]
+    fn link_order_successors_is_empty_when_top_label_is_last() {
+        let mut path_labels = std::collections::HashMap::new();
+        path_labels.insert("a.inc".to_owned(), "a".to_owned());
+        path_labels.insert("b.inc".to_owned(), "b".to_owned());
+        let root = std::env::temp_dir().join(format!(
+            "pokeemerald-rs-voicegroup-link-order-last-test-{}-{}",
+            std::process::id(),
+            line!()
+        ));
+        std::fs::create_dir_all(root.join("sound")).unwrap();
+        std::fs::write(
+            root.join("sound/voice_groups.inc"),
+            ".include \"sound/voicegroups/a.inc\"\n.include \"sound/voicegroups/b.inc\"\n",
+        )
+        .unwrap();
+
+        let successors = link_order_successors(&root, "b", &path_labels).unwrap();
+        std::fs::remove_dir_all(&root).unwrap();
+
+        assert_eq!(successors, Vec::<String>::new());
+    }
+
+    /// A foreign include (e.g. `sound/cry_tables.inc`) is an adjacency
+    /// *barrier*: the group before it is followed in memory by that
+    /// table's bytes, so the successor list must stop there -- same
+    /// fail-closed `Empty` padding as being last -- and a group *after*
+    /// the barrier still gets its own onward successors.
+    #[test]
+    fn link_order_successors_stop_at_a_foreign_include_barrier() {
+        let mut path_labels = std::collections::HashMap::new();
+        path_labels.insert("a.inc".to_owned(), "a".to_owned());
+        path_labels.insert("b.inc".to_owned(), "b".to_owned());
+        path_labels.insert("c.inc".to_owned(), "c".to_owned());
+        let root = std::env::temp_dir().join(format!(
+            "pokeemerald-rs-voicegroup-link-order-barrier-test-{}-{}",
+            std::process::id(),
+            line!()
+        ));
+        std::fs::create_dir_all(root.join("sound")).unwrap();
+        std::fs::write(
+            root.join("sound/voice_groups.inc"),
+            ".include \"sound/voicegroups/a.inc\"\n.include \"sound/cry_tables.inc\"\n.include \"sound/voicegroups/b.inc\"\n.include \"sound/voicegroups/c.inc\"\n",
+        )
+        .unwrap();
+
+        let before_barrier = link_order_successors(&root, "a", &path_labels).unwrap();
+        let after_barrier = link_order_successors(&root, "b", &path_labels).unwrap();
+        std::fs::remove_dir_all(&root).unwrap();
+
+        assert_eq!(before_barrier, Vec::<String>::new());
+        assert_eq!(after_barrier, vec!["c".to_owned()]);
+    }
+
+    /// Also fail-closed, not an error: `top_label` never appearing in the
+    /// linked order at all (e.g. a synthetic top-level group with no
+    /// corresponding `.include` line) gets the same empty answer as being
+    /// last -- there is no "next file" to read from either way.
+    #[test]
+    fn link_order_successors_is_empty_when_top_label_is_unlinked() {
+        let path_labels = std::collections::HashMap::new();
+        let root = std::env::temp_dir().join(format!(
+            "pokeemerald-rs-voicegroup-link-order-unlinked-test-{}-{}",
+            std::process::id(),
+            line!()
+        ));
+        std::fs::create_dir_all(root.join("sound")).unwrap();
+        std::fs::write(root.join("sound/voice_groups.inc"), "").unwrap();
+
+        let successors = link_order_successors(&root, "solo", &path_labels).unwrap();
+        std::fs::remove_dir_all(&root).unwrap();
+
+        assert_eq!(successors, Vec::<String>::new());
+    }
+
+    /// A linked path with no matching parsed label -- a mismatch between
+    /// `sound/voice_groups.inc`'s own `.include` list and
+    /// [`build_label_index`]'s directory walk that should never happen
+    /// against the pinned reference checkout, but fails closed rather than
+    /// silently dropping the file from the link order.
+    #[test]
+    fn link_order_successors_rejects_an_unindexed_linked_file() {
+        let path_labels = std::collections::HashMap::new();
+        let root = std::env::temp_dir().join(format!(
+            "pokeemerald-rs-voicegroup-link-order-unindexed-test-{}-{}",
+            std::process::id(),
+            line!()
+        ));
+        std::fs::create_dir_all(root.join("sound")).unwrap();
+        std::fs::write(
+            root.join("sound/voice_groups.inc"),
+            ".include \"sound/voicegroups/ghost.inc\"\n",
+        )
+        .unwrap();
+
+        let err = link_order_successors(&root, "ghost", &path_labels).unwrap_err();
+        std::fs::remove_dir_all(&root).unwrap();
+
+        match err {
+            crate::extract::ExtractError::VoiceGroup(
+                super::VoiceGroupError::UnindexedLinkOrderFile(path),
+            ) => assert_eq!(path, "ghost.inc"),
+            other => panic!("expected UnindexedLinkOrderFile, got {other:?}"),
         }
     }
 }

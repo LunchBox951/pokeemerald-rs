@@ -27,11 +27,19 @@
 //! (`rs_drumset`, and the `piano`/`strings`/`trumpet`/`tuba`/`french_horn`
 //! keysplits under `sound/voicegroups/keysplits/`) that themselves resolve
 //! to `DirectSoundWaveData_*` slots — no nested `voice_rhythm` indirection is
-//! present in this tree. Flattening all of it gives the exact,
-//! hand-verified sets below ([`DIRECT_SOUND_SAMPLES`],
+//! present in this tree. One more sample enters through the link-adjacency
+//! overflow modeled for issue #201: `title`'s borrowed slot 102 (=
+//! `voicegroup_intro` entry 13) references
+//! `DirectSoundWaveData_sc88pro_xylophone`
+//! (`sound/voicegroups/intro.inc:15`). Flattening all of it gives the
+//! exact, hand-verified sets below ([`DIRECT_SOUND_SAMPLES`],
 //! [`PROGRAMMABLE_WAVE_SAMPLES`]); each symbol's upstream `.wav`/`.pcm`
 //! source is confirmed against `sound/direct_sound_data.inc` /
-//! `sound/programmable_wave_data.inc`'s own `.incbin` lines.
+//! `sound/programmable_wave_data.inc`'s own `.incbin` lines. The lists are
+//! hand-maintained while the sample pass runs *before* the voicegroup
+//! pass; the real-pack closure test
+//! (`crates/pokeemerald-rs/src/voicegroup_pack_tests.rs`) fails the build
+//! if a resolver change ever references a sample this list misses.
 //!
 //! # Asset id scheme
 //!
@@ -93,7 +101,7 @@ use super::{read_file, ExtractError};
 /// docs for how this list was traced. Kept sorted for readability (pack
 /// output order is independent of this list's order — [`PackWriter::finish`]
 /// sorts by id regardless).
-const DIRECT_SOUND_SAMPLES: [&str; 32] = [
+const DIRECT_SOUND_SAMPLES: [&str; 33] = [
     "sc88pro_flute",
     "sc88pro_french_horn_60",
     "sc88pro_french_horn_72",
@@ -121,6 +129,7 @@ const DIRECT_SOUND_SAMPLES: [&str; 32] = [
     "sc88pro_tuba_39",
     "sc88pro_tuba_51",
     "sc88pro_tubular_bell",
+    "sc88pro_xylophone",
     "trinity_cymbal_crash",
     "unknown_bell",
     "unknown_close_hihat",
@@ -325,6 +334,10 @@ mod tests {
     fn direct_sound_sample_list_has_no_duplicates() {
         let unique: std::collections::HashSet<_> = DIRECT_SOUND_SAMPLES.iter().collect();
         assert_eq!(unique.len(), DIRECT_SOUND_SAMPLES.len());
+        assert!(
+            DIRECT_SOUND_SAMPLES.is_sorted(),
+            "the list documents itself as sorted -- keep it that way"
+        );
         for name in DIRECT_SOUND_SAMPLES {
             assert!(name
                 .chars()
