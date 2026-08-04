@@ -11,7 +11,10 @@
 //! [`turn_order`] (priority/speed/speed-tie), [`escape`] (the run-away
 //! formula), [`exp`] (faint exp gain), [`pokemon::BattlePokemon`] (computed
 //! battle stats), and [`wild`] (wild-encounter construction from species +
-//! level via the upstream personality/nature/IV RNG draws).
+//! level via the upstream personality/nature/IV RNG draws, plus
+//! [`wild::initial_moveset`] — `GiveBoxMonInitialMoveset`, added by issue
+//! #169 so an overworld encounter can derive the *real* wild moveset for a
+//! rolled species/level instead of being handed one).
 //!
 //! Species base stats, move data, and the type-effectiveness chart are
 //! already extracted upstream data living in [`assets`] `(no-verbatim)`;
@@ -80,4 +83,4 @@ pub use pokemon::{
 };
 pub use stat_change::{is_stat_lowering_effect, LoweredStat, StatChangeOutcome};
 pub use stat_stage::StatStage;
-pub use wild::build_wild_pokemon;
+pub use wild::{build_wild_pokemon, initial_moveset};
