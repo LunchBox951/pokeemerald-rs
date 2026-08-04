@@ -8,9 +8,9 @@ their `handle`). The definition of "done" is **`docs/acceptance/v1.md`**.
 
 ## What this is
 
-`pokeemerald-rs` — a single native binary, built from one Cargo workspace, that
-plays Pokémon Emerald on Linux/macOS/Windows with **no GBA emulation**. We port
-the *behaviour* of `pret/pokeemerald`, not its structure `(behavioral-fidelity)`.
+`pokeemerald-rs` — a single native binary being built from one Cargo workspace
+to play Pokémon Emerald on Linux/macOS/Windows with **no GBA emulation**. We
+port the *behaviour* of `pret/pokeemerald`, not its structure `(behavioral-fidelity)`.
 `pokeemerald/` is the canonical game specification (data, scripts, text,
 formulas); `mgba/` clarifies hardware behaviour. Both are read-only `(reference-only)`.
 
@@ -21,8 +21,9 @@ formulas); `mgba/` clarifies hardware behaviour. Both are read-only `(reference-
   roadmap to reach them lives in GitHub issues/PRs/discussions `(constitution-vs-roadmap)`.
   Issues are grouped by area milestones (M1–M7 = v1, M8 = deferred); each
   milestone description is that area's briefing — read it via
-  `gh api repos/:owner/:repo/milestones/<n>` and list its issues with
-  `gh issue list --milestone "<title>"`. Conventions: `CONTRIBUTING.md` §Milestones.
+  `gh api repos/{owner}/{repo}/milestones/7` (swap `7` for the milestone
+  number) and list its issues with `gh issue list --milestone "<title>"`.
+  Conventions: `CONTRIBUTING.md` §Milestones.
 - `crates/*/src/lib.rs` — each crate's `//!` doc is the live per-subsystem
   status write-up (what's implemented, what's next). Prefer it over
   hand-describing subsystem state anywhere else.
@@ -47,11 +48,11 @@ formulas); `mgba/` clarifies hardware behaviour. Both are read-only `(reference-
   log`/`diff`/`status`. No confirmation needed.
 - **Change freely, in scope** — code or doc edits laddered to one
   `docs/acceptance/v1.md` ID, validated with the commands above.
-- **Confirm first** — a new Cargo dependency `(minimal-deps)`, an edit to
-  `ledger/pokeemerald.json` outside `scripts/ledger.py`, or a change to
+- **Confirm first** — a new Cargo dependency `(minimal-deps)`, or a change to
   `.github/workflows/`, `RELEASE.md`, `CODEOWNERS`, or a version/release file.
   `pokeemerald/` and `mgba/` are never edited, confirmation or not
-  `(reference-only)`.
+  `(reference-only)`; neither is `ledger/pokeemerald.json` outside
+  `scripts/ledger.py`, confirmation or not — see Coverage ledger below.
 
 ## Conventions `(oop-boundaries)`
 

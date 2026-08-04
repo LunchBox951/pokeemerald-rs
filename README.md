@@ -1,10 +1,10 @@
 # pokeemerald-rs
 
-A from-scratch **native Rust port of Pokémon Emerald** — a single binary, built
-from one Cargo workspace, that plays the game on Linux/macOS/Windows with **no GBA
-emulation**. We reproduce the game's *observable behaviour* — the same dialog,
-trainers, encounters, music, and damage outcomes — in idiomatic Rust, not its
-internal structure `(behavioral-fidelity)`.
+A from-scratch **native Rust port of Pokémon Emerald** — a single binary, being
+built from one Cargo workspace, to play the game on Linux/macOS/Windows with
+**no GBA emulation**. We reproduce the game's *observable behaviour* — the same
+dialog, trainers, encounters, music, and damage outcomes — in idiomatic Rust,
+not its internal structure `(behavioral-fidelity)`.
 
 > **Status: pre-alpha.** The Cargo workspace is scaffolded and its crates build,
 > lint, and test clean in CI, but no subsystem is complete and the binary
