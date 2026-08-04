@@ -24411,6 +24411,14 @@
       "status": "pending"
     },
     "src/battle_setup.c": {
+      "artifacts": {
+        "BattleSetup_StartWildBattle": {
+          "reason": "battle_setup.c:265-276 (and the DoStandardWildBattle transition task at :356-376). What is modelled is the handoff itself: flow::wild_encounter::start_wild_battle builds the rolled wild mon through CreateWildMon's RNG path (battle::build_wild_pokemon) with GiveBoxMonInitialMoveset's real level-up moveset, then constructs a battle::Battle around the player's lead mon -- all off the same single Random() stream the encounter roll drew from, so the draw order across the overworld/battle boundary is upstream's. NOT modelled: gBattleTypeFlags / BATTLE_TYPE_FIRST_BATTLE, ScriptContext_SetupScript(EventScript_StartWildBattle) and the whole script-driven entry, LockPlayerFieldControls, the battle transition (BattleTransition_StartOnField / IsBattleTransitionDone) and CleanupOverworldWindowsAndTilemaps, SetMainCallback2(CB2_InitBattle) and CB2_EndWildBattle's return path, ClearPoisonStepCounter, IncrementGameStat(GAME_STAT_TOTAL_BATTLES / GAME_STAT_WILD_BATTLES) and IncrementDailyWildBattles, and the whole battle presentation (backdrop, sprites, message box, and the action menu). With no action menu, OverworldPhase drives the encounter headlessly with a run attempt every turn -- a stand-in for the player's choice, not a modelled behaviour; every rule it exercises (turn order, the wild mon's move pick, escape odds, damage, fainting) is the real crates/battle engine.",
+          "rust_target": "crates/pokeemerald-rs/src/flow/wild_encounter.rs",
+          "spec": "I-4",
+          "status": "stubbed"
+        }
+      },
       "category": "code.source",
       "kind": "file",
       "status": "pending"
@@ -25726,6 +25734,12 @@
     },
     "src/field_control_avatar.c": {
       "artifacts": {
+        "CheckStandardWildEncounter": {
+          "reason": "field_control_avatar.c:668-686. Fully modelled as WildEncounterState::check_standard_wild_encounter, including the four-step post-transition immunity window (which returns before StandardWildEncounter is reached, so it is invisible to the RNG stream, not merely to the player), the reset on a fired encounter (:679), and sPrevMetatileBehavior being updated on every step including suppressed ones (:672). Stubbed rather than rewritten because its caller's gating is only partially ported: FieldGetPlayerInput sets input->checkStandardWildEncounter at every T_TILE_CENTER regardless of runningState (:117-120), while OverworldPhase::step ties the roll to a landing a step actually committed. The two differ only on a frame where the player reaches a tile centre without having moved, which this port's PlayerState cannot produce for any bundled map. The forced-movement gate around that flag (:95, MetatileBehavior_IsForcedMovementTile) is not modelled either -- forced movement is out of v1 scope.",
+          "rust_target": "crates/engine/src/overworld/wild_encounter.rs",
+          "spec": "I-4",
+          "status": "stubbed"
+        },
         "GetInFrontOfPlayerPosition": {
           "reason": "The facing-tile position (GetXYCoordsOneStepInFrontOfPlayer, player position + facing delta) plus the own-tile-elevation wildcard rule rewritten as engine::overworld::facing_object_event's query-elevation derivation: the player's own grid cell's elevation, unless it is itself ELEVATION_TRANSITION, in which case the query elevation is the wildcard too.",
           "rust_target": "crates/engine/src/overworld/object_event.rs",
@@ -25736,6 +25750,12 @@
           "reason": "engine::overworld::warp::is_arrow_warp_trigger: dispatches by direction to metatile_behavior::is_{north,south,west,east}_arrow_warp exactly as upstream's sArrowWarpMetatileBehaviorChecks table does (field_player_avatar.c:226-232). Issue #174.",
           "rust_target": "crates/engine/src/overworld/warp.rs",
           "spec": "I-3",
+          "status": "rewritten"
+        },
+        "RestartWildEncounterImmunitySteps": {
+          "reason": "field_control_avatar.c:662-666. Fully modelled as WildEncounterState::restart_immunity_steps -- zeroes the step counter only, deliberately leaving sPrevMetatileBehavior alone as upstream does (they are two separate statics). Wired at this port's counterparts of upstream's map-load call sites: OverworldPhase::warp_to (LoadMapFromWarp, overworld.c:850) and OverworldPhase::cross_connection (LoadMapFromCameraTransition, overworld.c:800 -- the piece issue #177 explicitly deferred to this slice). The battle-start call sites (battle_setup.c:370, :941) are covered by CheckStandardWildEncounter's own reset on a fired encounter, which upstream also performs (:679).",
+          "rust_target": "crates/engine/src/overworld/wild_encounter.rs",
+          "spec": "I-4",
           "status": "rewritten"
         },
         "TryArrowWarp": {
@@ -26428,6 +26448,12 @@
           "spec": "I-3",
           "status": "rewritten"
         },
+        "MetatileBehavior_IsLandWildEncounter": {
+          "reason": "metatile_behavior.c:819-826. Fully modelled as is_land_wild_encounter, the gate StandardWildEncounter checks first on its land path. Upstream composes it from MetatileBehavior_IsEncounterTile (:135-142, TILE_FLAG_HAS_ENCOUNTERS) AND NOT MetatileBehavior_IsSurfableWaterOrUnderwater (:280-287, TILE_FLAG_SURFABLE), both indexing the ~200-entry sTileBitAttributes array (:9); re-expressed here as the derived id set rather than transcribing that array for one predicate -- exactly the eight ids flagged HAS_ENCOUNTERS without SURFABLE (MB_TALL_GRASS, MB_LONG_GRASS, MB_UNUSED_05, MB_DEEP_SAND, MB_CAVE, MB_INDOOR_ENCOUNTER, MB_ASHGRASS, MB_FOOTPRINTS; :12-20, :40-41), pinned by an exhaustive test over the whole u8 id space. The set is complete for the whole game, not a v1 subset. MetatileBehavior_IsWaterWildEncounter (:828-835) and the surfable half of the table are separately NOT modelled: surfing does not exist in this port, so a water encounter is unreachable and a predicate for it would be an untested claim.",
+          "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
+          "spec": "I-4",
+          "status": "rewritten"
+        },
         "MetatileBehavior_IsNonAnimDoor": {
           "reason": "Re-implemented as metatile_behavior::is_door restricted to MB_NON_ANIMATED_DOOR for the door/warp-trigger predicate; MB_WATER_DOOR and MB_DEEP_SOUTH_WARP (the function's other ids) are modeled as constants and consumed only by engine::overworld::warp::warp_in_facing's arrival-facing classification — they stay outside is_door and is_warp_trigger (tested), so the predicate itself is a partial port.",
           "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
@@ -26594,7 +26620,7 @@
           "status": "stubbed"
         },
         "LoadMapFromCameraTransition": {
-          "reason": "Connection-crossing map switch (issue #177): OverworldPhase::cross_connection models the location/scene core -- SetWarpDestination(mapGroup, mapNum, WARP_ID_NONE, -1, -1) + ApplyCurrentWarp (overworld.c:633, :540-:546, save1.location's exact shape), LoadCurrentMapData (scene/map_id rebind), and RunOnTransitionMapScript (:807, the bounded 2-map transcription in run_on_transition_map_script) -- atomically after PlayerState::step commits the translated position, with a fail-closed restore of the pre-step stance if the rebind is refused. InitSecondaryTilesetAnimation (:815) is modelled as a deliberate no-op: it resets only sSecondaryTilesetAnimCounter (tileset_anims.c:581-583), and this port animates only the primary counter (OverworldPhase::tick), which therefore keeps running across a crossing -- LoadMapFromCameraTransition never calls InitTilesetAnimations (that function's call sites are the full map-load paths: InitMapView overworld.c:529 and the stepped loaders :1867/:1942/:2039). The pixel-precision CameraMove/GetIncomingConnection trigger (:603-:624) is deliberately simplified to grid-step resolution (documented on resolve_connection). NOT modelled, deferred with the systems they belong to: TransitionMapMusic, ResetCyclingRoadChallengeData (:799), RestartWildEncounterImmunitySteps (needed by I-4's first-encounter roll), TryUpdateRandomTrainerRematches, DoTimeBasedEvents, SetSavedWeatherFromCurrMapHeader, ChooseAmbientCrySpecies (:804), SetDefaultFlashLevel, Overworld_ClearSavedMusic (:806), LoadObjEventTemplatesFromHeader, TrySetMapSaveWarpStatus, ClearTempFieldEventData, InitMap, the secondary tileset/palette copy path (CopySecondaryTilesetToVramUsingHeap/CopySecondaryTilesetPaletteUsingHeap and the ApplyWeatherColorMapToPal(NUM_PALS_IN_PRIMARY..NUM_PALS_TOTAL) loop), DoCurrentWeather (:818), ResetFieldTasksArgs (:819), roamer updates, RunOnResumeMapScript, and ShowMapNamePopup. Stubbed until those land.",
+          "reason": "Connection-crossing map switch (issue #177): OverworldPhase::cross_connection models the location/scene core -- SetWarpDestination(mapGroup, mapNum, WARP_ID_NONE, -1, -1) + ApplyCurrentWarp (overworld.c:633, :540-:546, save1.location's exact shape), LoadCurrentMapData (scene/map_id rebind), and RunOnTransitionMapScript (:807, the bounded 2-map transcription in run_on_transition_map_script) -- atomically after PlayerState::step commits the translated position, with a fail-closed restore of the pre-step stance if the rebind is refused. InitSecondaryTilesetAnimation (:815) is modelled as a deliberate no-op: it resets only sSecondaryTilesetAnimCounter (tileset_anims.c:581-583), and this port animates only the primary counter (OverworldPhase::tick), which therefore keeps running across a crossing -- LoadMapFromCameraTransition never calls InitTilesetAnimations (that function's call sites are the full map-load paths: InitMapView overworld.c:529 and the stepped loaders :1867/:1942/:2039). The pixel-precision CameraMove/GetIncomingConnection trigger (:603-:624) is deliberately simplified to grid-step resolution (documented on resolve_connection). NOT modelled, deferred with the systems they belong to: TransitionMapMusic, ResetCyclingRoadChallengeData (:799), TryUpdateRandomTrainerRematches, DoTimeBasedEvents, SetSavedWeatherFromCurrMapHeader, ChooseAmbientCrySpecies (:804), SetDefaultFlashLevel, Overworld_ClearSavedMusic (:806), LoadObjEventTemplatesFromHeader, TrySetMapSaveWarpStatus, ClearTempFieldEventData, InitMap, the secondary tileset/palette copy path (CopySecondaryTilesetToVramUsingHeap/CopySecondaryTilesetPaletteUsingHeap and the ApplyWeatherColorMapToPal(NUM_PALS_IN_PRIMARY..NUM_PALS_TOTAL) loop), DoCurrentWeather (:818), ResetFieldTasksArgs (:819), roamer updates, RunOnResumeMapScript, and ShowMapNamePopup. Stubbed until those land. RestartWildEncounterImmunitySteps (:800) is no longer deferred: issue #169 wires it into cross_connection, so crossing Littleroot's north edge into Route 101 buys the same four encounter-free steps upstream grants.",
           "rust_target": "crates/pokeemerald-rs/src/flow/overworld_phase.rs",
           "spec": "I-4",
           "status": "stubbed"
@@ -26711,10 +26737,16 @@
           "status": "stubbed"
         },
         "CreateMonWithNature": {
-          "reason": "pokemon.c:2195 (CreateMon), 2206 (CreateBoxMon), 2305 (CreateMonWithNature), 5498 (GetNatureFromPersonality). The RNG-observable USE_RANDOM_IVS path modelled exactly: the personality rejection loop against a target nature (roll_personality_for_nature) and the two-draw five-bit-field IV rolls (roll_ivs). Fixed-IV, the OT_ID_RANDOM_NO_SHINY reroll loop (a wild mon always takes the player's OT id here, matching CreateWildMon's OT_ID_PLAYER_ID argument), and GiveBoxMonInitialMoveset are not modelled.",
+          "reason": "pokemon.c:2195 (CreateMon), 2206 (CreateBoxMon), 2305 (CreateMonWithNature), 5498 (GetNatureFromPersonality). The RNG-observable USE_RANDOM_IVS path modelled exactly: the personality rejection loop against a target nature (roll_personality_for_nature) and the two-draw five-bit-field IV rolls (roll_ivs). Fixed-IV, the OT_ID_RANDOM_NO_SHINY reroll loop (a wild mon always takes the player's OT id here, matching CreateWildMon's OT_ID_PLAYER_ID argument), are not modelled. GiveBoxMonInitialMoveset is modelled separately (src/pokemon.c#GiveBoxMonInitialMoveset, battle::wild::initial_moveset) and composed by callers rather than folded into build_wild_pokemon, which still takes an explicit moveset.",
           "rust_target": "crates/battle/src/wild.rs",
           "spec": "S-6",
           "status": "stubbed"
+        },
+        "GiveBoxMonInitialMoveset": {
+          "reason": "pokemon.c:2991-3012. Fully modelled as battle::wild::initial_moveset: walks gLevelUpLearnsets[species] (extracted as assets::LevelUpLearnsets) in table order, breaks at the first entry above the mon's level (upstream's packed moveLevel > (level << 9) is the same comparison on the decoded level), and reproduces both GiveMoveToBoxMon outcomes (:2939-2955) -- MON_ALREADY_KNOWS_MOVE skips without costing a slot, MON_HAS_MAX_MOVES triggers DeleteFirstMoveAndGiveMoveToBoxMon's oldest-first drop (:3010). Draws nothing. PP initialisation is not carried here because crates/battle's MoveSlot derives PP from the move's own data rather than storing a written-through copy; an unknown species yields an empty moveset and fails closed at BattlePokemon::new instead of fabricating one.",
+          "rust_target": "crates/battle/src/wild.rs",
+          "spec": "I-4",
+          "status": "rewritten"
         },
         "ModifyStatByNature": {
           "reason": "pokemon.c:5878. Full x1.10/x0.90 favoured/disfavoured scaling re-implemented (Nature::modify_stat), including the HP/accuracy/evasion no-op guard. Always uses u32 (the #ifdef BUGFIX build's arithmetic); unobservable for every real Gen-3 base stat (closest is Shuckle at 230, well under the ~596 threshold where the two builds would diverge).",
@@ -27607,6 +27639,24 @@
     },
     "src/wild_encounter.c": {
       "artifacts": {
+        "AllowWildCheckOnNewMetatile": {
+          "reason": "wild_encounter.c:531-539. The whole function: one Random() % 100 draw, the check skipped when the result is >= 60 (a 40% chance of no encounter roll at all on the first step onto a differently-behaved metatile). Modelled as allow_wild_check_on_new_metatile, called only when the behavior actually changed, exactly as each StandardWildEncounter call site gates it.",
+          "rust_target": "crates/engine/src/overworld/wild_encounter.rs",
+          "spec": "I-4",
+          "status": "rewritten"
+        },
+        "ChooseWildMonIndex_Land": {
+          "reason": "wild_encounter.c:182-210. The full twelve-slot threshold chain re-expressed as a cumulative scan over LAND_SLOT_CHANCES (land_slot_for_roll) plus its single Random() % ENCOUNTER_CHANCE_LAND_MONS_TOTAL draw (choose_land_mon_index). The per-slot chances (20/20/10/10/10/10/5/5/4/4/1/1) are transcribed from src/data/wild_encounters.json's fields[0].encounter_rates, the source the generated constants/wild_encounter.h thresholds come from -- that header is build-generated and absent from the reference checkout, the same situation assets::wild_encounters documents for the slot counts. Upstream's unguarded final 'else return 11' is reproduced for an out-of-band roll.",
+          "rust_target": "crates/engine/src/overworld/wild_encounter.rs",
+          "spec": "I-4",
+          "status": "rewritten"
+        },
+        "ChooseWildMonLevel": {
+          "reason": "wild_encounter.c:268-297. The bound-ordering swap (:277-286), the range computation, and the single Random() % range draw modelled (level_for_roll / choose_wild_mon_level). NOT modelled: the leading party mon's Hustle / Vital Spirit / Pressure branch (:288-303), which takes a further Random() % 2 and biases the result toward the band's maximum -- abilities are out of scope and no starter has one of the three, so upstream skips it on the v1 first-encounter path too.",
+          "rust_target": "crates/engine/src/overworld/wild_encounter.rs",
+          "spec": "I-4",
+          "status": "stubbed"
+        },
         "CreateWildMon": {
           "reason": "wild_encounter.c:379. The plain (no Cute Charm) nature-then-personality-then-IV construction order modelled (build_wild_pokemon), reusing src/pokemon.c#CreateMonWithNature's RNG path. Cute Charm's gender-flip branch and CreateMonWithGenderNatureLetter are not modelled (abilities out of scope).",
           "rust_target": "crates/battle/src/wild.rs",
@@ -27617,6 +27667,24 @@
           "reason": "wild_encounter.c:335. Only the plain random-nature tail (Random() % NUM_NATURES, roll_nature) modelled. Safari Zone Pokéblock-weighted nature selection and the leading party mon's Synchronize check are not modelled (abilities/game-mode out of scope).",
           "rust_target": "crates/battle/src/wild.rs",
           "spec": "S-6",
+          "status": "stubbed"
+        },
+        "StandardWildEncounter": {
+          "reason": "wild_encounter.c:552-628. The land branch modelled end to end (standard_wild_encounter): the GetCurrentMapWildMonHeaderId/HEADER_NONE gate (header resolution is the caller's, keyed by MAP_* name via assets::WildEncounterTable), MetatileBehavior_IsLandWildEncounter (:596), the landMonsInfo == NULL gate (:598), AllowWildCheckOnNewMetatile's behavior-change skip (:599), WildEncounterCheck (:601), and TryGenerateWildMon's slot+level picks (:622) -- in upstream's exact draw order, pinned by draw-count tests (3 draws for a same-behavior hit, 4 across a behavior change, 1 for a failed rate check, 0 before the metatile gate). NOT modelled: sWildEncountersDisabled (:562, only settable from a script and there is no script engine); the Battle Pike (:564-576) and Battle Pyramid (:577-590) header branches; the water/surf branch (:630-660) and with it MetatileBehavior_IsWaterWildEncounter, MetatileBehavior_IsBridgeOverWater, PLAYER_AVATAR_FLAG_SURFING and AreLegendariesInSootopolisPreventingEncounters (surfing does not exist in this port); TryStartRoamerEncounter (:604) and BattleSetup_StartRoamerBattle; DoMassOutbreakEncounterTest/SetUpMassOutbreakEncounter (:612); and Altering Cave's VAR_ALTERING_CAVE_WILD_SET header offset (:308-315). The two omitted post-rate branches draw nothing on a fresh save (both are gated on state a new game does not have: no roamer released, outbreakPokemonSpecies == SPECIES_NONE), so the modelled draw order is upstream's exactly, not approximately. Known gap outside this function, recorded here because it gates when the roll is first reachable in a real playthrough: Route 101's own scripted fence (data/maps/Route101/scripts.inc's coord events and VAR_ROUTE101_STATE, which turn the player back until Birch has been rescued) is not modelled -- there is no script engine, so nothing sets or reads that var and nothing runs a coord-event script. The port therefore lets the player walk into the grass immediately, where the real game would first play the 'it's unsafe' scene. Tracked with the script engine, not simulated here.",
+          "rust_target": "crates/engine/src/overworld/wild_encounter.rs",
+          "spec": "I-4",
+          "status": "stubbed"
+        },
+        "TryGenerateWildMon": {
+          "reason": "wild_encounter.c:422-455. The WILD_AREA_LAND path's two draws modelled in order (try_generate_wild_mon_land: ChooseWildMonIndex_Land then ChooseWildMonLevel); CreateWildMon itself is a separate artifact (crates/battle/src/wild.rs). NOT modelled: TryGetAbilityInfluencedWildMonIndex for Magnet Pull/Steel and Static/Electric (:430-434, :938-953 -- draws Random() % 2, but only once the lead mon's ability matches, which no starter's does); the WILD_AREA_WATER and WILD_AREA_ROCKS arms (:436-444); the WILD_CHECK_REPEL gate (:450, IsWildLevelAllowedByRepel :873-894, inert with VAR_REPEL_STEP_COUNT == 0 and draws nothing); and the WILD_CHECK_KEEN_EYE gate (:452, IsAbilityAllowingEncounter :896-911, which does draw but only for a Keen Eye / Intimidate lead mon that out-levels the wild mon by five). With those gates unmodelled the port's version cannot fail, so it returns a WildEncounter rather than upstream's bool8.",
+          "rust_target": "crates/engine/src/overworld/wild_encounter.rs",
+          "spec": "I-4",
+          "status": "stubbed"
+        },
+        "WildEncounterCheck": {
+          "reason": "wild_encounter.c:493-529. wild_encounter_check + encounter_odds_check model the whole RNG-observable shape: encounterRate * 16, the MAX_ENCOUNTER_RATE (2880) clamp, and EncounterOddsCheck's single unconditional Random() % 2880 < rate draw. NOT modelled, none of which draws and all of which are inert for a player on foot with an empty bag and no ability: the Mach/Acro bike * 80 / 100 (:505-506), ApplyFluteEncounterRateMod (:507, FLAG_SYS_ENC_UP_ITEM / FLAG_SYS_ENC_DOWN_ITEM), ApplyCleanseTagEncounterRateMod (:508, a held Cleanse Tag), and the ignoreAbility branch's Stench / Illuminate / White Smoke / Arena Trap / Sand Veil scaling (:509-525). Because the omissions are all multiplicative rate tweaks rather than draws, the draw count and stream position match upstream unconditionally.",
+          "rust_target": "crates/engine/src/overworld/wild_encounter.rs",
+          "spec": "I-4",
           "status": "stubbed"
         },
         "gWildMonHeaders": {
