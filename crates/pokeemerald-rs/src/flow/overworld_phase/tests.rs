@@ -772,6 +772,45 @@ fn advance_player_one_frame_crosses_an_offset_connection_shifting_the_cross_axis
     assert_eq!(player.position(), (0, 7));
 }
 
+/// The same offset rule on the *north/south* axis -- the axis the
+/// Littleroot -> Route 101 north-star crossing actually uses (both its real
+/// connections happen to carry `offset: 0`, which is exactly why a sign
+/// regression in `target_x = x - offset` would survive every real-map
+/// test; this synthetic pin is the guard).
+#[test]
+fn advance_player_one_frame_crosses_an_offset_north_connection_shifting_x() {
+    let runtime = connected_runtime(6, 6, assets::Direction::North, -2, MapId("MAP_NORTH"));
+    let maps = SingleConnectedMap {
+        id: MapId("MAP_NORTH"),
+        dimensions: (10, 10),
+        // Stepping north off y=0 at x=5: target_x = x - offset =
+        // 5 - (-2) = 7, landing at the neighbour's south edge (y = 9).
+        landing_position: (7, 9),
+        landing_cell: MetatileCell {
+            metatile_id: 1,
+            collision: 0,
+            elevation: 3,
+        },
+    };
+    let mut player = PlayerState::new((5, 0), 3, Direction::North);
+
+    let outcome = advance_player_one_frame(
+        &mut player,
+        Some(Direction::North),
+        &runtime,
+        &maps,
+        &NO_FLAGS,
+    );
+    assert_eq!(
+        outcome,
+        StepOutcome::Crossed {
+            to_map: MapId("MAP_NORTH"),
+            to_position: (7, 9),
+        }
+    );
+    assert_eq!(player.position(), (7, 9));
+}
+
 /// Different lateral positions along the *same* edge each translate to
 /// their own distinct landing tile (not, say, a single hardcoded landing
 /// position regardless of where the player actually crossed) -- the
@@ -870,6 +909,7 @@ fn advance_player_one_frame_rejects_a_crossing_outside_the_neighbours_bounds() {
 /// either row (both maps' own `map.json`).
 #[test]
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
+#[allow(clippy::too_many_lines)] // one continuous two-crossing walk; splitting would re-set-up the pack scene
 fn walking_off_littlerootss_north_edge_crosses_into_route_101_and_back() {
     let littleroot = assets::MapId("MAP_LITTLEROOT_TOWN");
     let route101 = assets::MapId("MAP_ROUTE101");
@@ -893,9 +933,25 @@ fn walking_off_littlerootss_north_edge_crosses_into_route_101_and_back() {
 
     // The third step walks off the grid's own top edge -- the crossing.
     phase.step(held(Buttons::UP));
+    assert_eq!(
+        phase.tick, 0,
+        "a crossing is a map load: Route 101's animated tiles must start from their own \
+         tick 0, the same contract the warp test above pins (cross_connection resets after \
+         step's own increment)"
+    );
+    assert_eq!(
+        phase.pending_landing,
+        Some((10, 19)),
+        "the crossing step's landing tile re-latches in the *entered* map's coordinate \
+         space, so the drain-frame door check evaluates against Route 101"
+    );
     for _ in 1..WALK_FRAMES_PER_TILE {
         phase.step(ButtonState::new());
     }
+    assert_eq!(
+        phase.pending_landing, None,
+        "the drain frame consumed the latched landing (Route 101's south edge is no door)"
+    );
 
     assert_eq!(
         phase.map_id, route101,

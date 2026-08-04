@@ -18,6 +18,7 @@ use engine::overworld::{
 };
 use engine::save::{Coords16, SaveBlock1, SaveBlock2, WarpData};
 use platform::{ButtonState, Buttons, Frame};
+use std::cell::OnceCell;
 
 use crate::new_game;
 use crate::overworld::{
@@ -42,13 +43,35 @@ use crate::overworld::{
 /// for walking near an edge with no matching connection.
 /// [`ConnectedMapData::metatile_cell`] does need the pack -- the landing
 /// tile's actual collision/elevation, upstream's `IsPosInConnectingMap`
-/// (`pokeemerald/src/fieldmap.c:699-712`) having already passed -- so it
-/// loads one fresh only there, at the same rare cadence
-/// [`OverworldPhase::warp_to`] already loads a destination room's pack data:
-/// once per attempted transition, never on an idle frame away from one.
-struct MapConnections;
+/// (`pokeemerald/src/fieldmap.c:699-712`) having already passed -- and,
+/// unlike [`OverworldPhase::warp_to`]'s once-per-resolved-warp load, it
+/// runs *per attempted crossing*: holding a direction into an edge whose
+/// crossing is refused retries every frame, so an uncached load here would
+/// re-read the whole pack at frame rate. The pack is therefore memoized in
+/// the [`OnceCell`] the owning [`OverworldPhase`] carries for exactly this
+/// resolver ([`OverworldPhase::connection_pack`]); a *failed* load is not
+/// cached (the no-pack case already fails every frame today, and caching
+/// the failure would pin a session to it).
+struct MapConnections<'a> {
+    pack: &'a OnceCell<assets::pack::AssetPack>,
+}
 
-impl ConnectedMapData for MapConnections {
+impl MapConnections<'_> {
+    /// The memoized pack, loading it on the first successful call.
+    fn pack(&self) -> Option<&assets::pack::AssetPack> {
+        if let Some(pack) = self.pack.get() {
+            return Some(pack);
+        }
+        let loaded = assets::AssetPack::load_default().ok()?;
+        // A racing set cannot happen (single-threaded phase); if the cell
+        // were somehow filled between the check and here, the existing
+        // value wins, which is equally correct.
+        let _ = self.pack.set(loaded);
+        self.pack.get()
+    }
+}
+
+impl ConnectedMapData for MapConnections<'_> {
     fn dimensions(&self, map: assets::MapId) -> Option<(u16, u16)> {
         let header = MapHeaderTable::new().header(map).ok()?;
         let layout = assets::LayoutTable::new().layout(header.layout).ok()?;
@@ -58,8 +81,8 @@ impl ConnectedMapData for MapConnections {
     fn metatile_cell(&self, map: assets::MapId, x: i32, y: i32) -> Option<assets::MetatileCell> {
         let header = MapHeaderTable::new().header(map).ok()?;
         let layout = assets::LayoutTable::new().layout(header.layout).ok()?;
-        let pack = assets::AssetPack::load_default().ok()?;
         let name = overworld::layout_pack_name(header.layout);
+        let pack = self.pack()?;
         let bytes = pack.layout_map(&name).ok()?;
         let grid = layout.grid(bytes).ok()?;
         grid.cell_at(u16::try_from(x).ok()?, u16::try_from(y).ok()?)
@@ -210,11 +233,17 @@ pub(crate) struct OverworldPhase {
     /// animation keeps running even while [`Self::dialog`] freezes movement,
     /// mirroring upstream's `UpdateTilesetAnimations` running every `VBlank`
     /// regardless of message-box state) and reset to 0 in
-    /// [`Self::load_default`]/[`Self::warp_to`], matching upstream's own
-    /// `InitTilesetAnimations` reset points (every map load,
-    /// `pokeemerald/src/overworld.c`'s `InitTilesetAnimations` call sites --
-    /// `tileset_anims`'s own module docs).
+    /// [`Self::load_default`]/[`Self::warp_to`]/[`Self::cross_connection`],
+    /// matching upstream's own `InitTilesetAnimations` reset points (every
+    /// map load, `pokeemerald/src/overworld.c`'s `InitTilesetAnimations`
+    /// call sites -- `tileset_anims`'s own module docs).
     tick: u32,
+    /// The memoized asset pack [`MapConnections`] reads landing-tile
+    /// collision from (issue #177) -- see that resolver's docs for why a
+    /// per-attempt load would run at frame rate against a refused edge.
+    /// Never consulted by anything else; warps keep their own
+    /// per-transition loads.
+    connection_pack: OnceCell<assets::pack::AssetPack>,
 }
 
 impl OverworldPhase {
@@ -247,6 +276,7 @@ impl OverworldPhase {
             pending_landing: None,
             dialog: None,
             tick: 0,
+            connection_pack: OnceCell::new(),
         })
     }
 
@@ -275,6 +305,7 @@ impl OverworldPhase {
             pending_landing: None,
             dialog,
             tick: 0,
+            connection_pack: OnceCell::new(),
         }
     }
 
@@ -522,6 +553,7 @@ impl OverworldPhase {
             // movement has run.
             let pre_step_facing = self.player.facing();
             let pre_step_position = self.player.position();
+            let pre_step_elevation = self.player.elevation();
             let pre_step_at_rest = !self.player.in_transit();
             let arrow_direction = direction.filter(|held| *held == pre_step_facing);
 
@@ -552,7 +584,9 @@ impl OverworldPhase {
                 &mut self.pending_landing,
                 direction,
                 &runtime,
-                &MapConnections,
+                &MapConnections {
+                    pack: &self.connection_pack,
+                },
                 &self.save1.event_data,
                 preempting_arrow_trigger,
             );
@@ -643,7 +677,16 @@ impl OverworldPhase {
             // `self.player.in_transit()` true, the same gate that already
             // makes the `warp_trigger` closure above return `None`.
             if let Some((to_map, to_position)) = crossed_to {
-                self.cross_connection(to_map, to_position);
+                if !self.cross_connection(to_map, to_position) {
+                    // A refused rebind must not leave the player standing at
+                    // a position expressed in the *entered* map's coordinate
+                    // space while `map_id`/`scene` still name the departed
+                    // map -- restore the pre-step stance instead, the same
+                    // "leaves the player exactly where they stood" contract
+                    // `warp_to` documents for its own failure cases.
+                    self.player =
+                        PlayerState::new(pre_step_position, pre_step_elevation, pre_step_facing);
+                }
             }
         } else {
             self.player.tick();
@@ -849,28 +892,26 @@ impl OverworldPhase {
     /// both unreachable against a real pack for any connection this port's
     /// own generated tables reference, since [`MapConnections`] already
     /// proved both resolvable before [`PlayerState::step`] ever committed
-    /// the crossing -- logs and leaves `self.map_id`/`self.scene` on the
-    /// *departed* map while `self.player` stands at the already-committed
-    /// `to_position`. That is a real, if unreachable, inconsistency
-    /// (rendering the old map at a position that may not even exist in it)
-    /// -- accepted rather than reverting the position, which
-    /// [`PlayerState::step`] has no way to be told to undo from here, mirroring
-    /// [`Self::warp_to`]'s own "log-or-ignore is fine" policy for its
-    /// equally unreachable failure cases.
-    fn cross_connection(&mut self, to_map: assets::MapId, to_position: TilePos) {
+    /// the crossing -- logs, touches nothing, and returns `false` so the
+    /// caller can restore the pre-step stance ([`Self::step`]'s crossing
+    /// branch does exactly that): the player stays put on the departed map,
+    /// the same "leaves the player exactly where they stood" contract
+    /// [`Self::warp_to`] documents for its own unreachable failure cases.
+    /// Returns `true` on a completed rebind.
+    fn cross_connection(&mut self, to_map: assets::MapId, to_position: TilePos) -> bool {
         let Ok(header) = MapHeaderTable::new().header(to_map) else {
             eprintln!(
                 "connection: unknown destination map {to_map:?} -- staying on the departed \
                  map's data"
             );
-            return;
+            return false;
         };
         let Ok(scene) = overworld::load_room(to_map) else {
             eprintln!(
                 "connection: failed to load destination map {to_map:?} -- staying on the \
                  departed map's data"
             );
-            return;
+            return false;
         };
 
         self.scene = scene;
@@ -889,6 +930,7 @@ impl OverworldPhase {
             x: -1,
             y: -1,
         };
+        true
     }
 
     /// [`OverworldScene::compose`] against this phase's current player state
@@ -978,13 +1020,15 @@ fn advance_or_skip_for_preempt(
         // reaches this arm when the player was already at rest, but called
         // anyway so that contract stays unconditional. This path also skips
         // `pending_landing`'s own `take()` (the preempting warp
-        // short-circuits it), so "at rest => no latched landing" has to hold
-        // on its own here rather than being restored by that take.
+        // short-circuits it; the take itself lives in `step`'s warp
+        // closure, not in this extracted function), so "at rest => no
+        // latched landing" has to hold on its own here rather than being
+        // restored by that take.
         debug_assert!(
             pending_landing.is_none(),
-            "at rest implies `pending_landing` is None: this preempt path never runs the \
-             `take()` below, so a landing latched here would survive into a later frame's door \
-             check"
+            "at rest implies `pending_landing` is None: the preempt path skips the drain-frame \
+             take in `step`'s warp closure, so a landing latched here would survive into a \
+             later frame's door check"
         );
         player.tick();
         return None;
