@@ -19,8 +19,8 @@ fn mtrk(body: &[u8]) -> Vec<u8> {
 }
 
 #[test]
-fn vlq_round_trips_multi_byte_values() {
-    // 0x80 0x00 encodes 128 (7-bit groups, top bit = continuation).
+fn vlq_decodes_multi_byte_values() {
+    // 0x81 0x00 encodes 128 (7-bit groups, top bit = continuation).
     let mut r = MidiReader::new(&[0x81, 0x00]);
     assert_eq!(r.vlq().unwrap(), 128);
 }
