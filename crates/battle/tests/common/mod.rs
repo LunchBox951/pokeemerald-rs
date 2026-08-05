@@ -1,9 +1,9 @@
 //! Fixtures shared by every integration test under `crates/battle/tests/`:
 //! a scripted RNG and a deterministic max-IV mon builder. Pulled out here
-//! (issue #209) so `wild_battle.rs` and `turn_engine.rs` don't each carry
-//! their own copy of the same plumbing -- both exercise [`battle::Battle`]
-//! through its public surface only, exactly as an external caller would, so
-//! both can drive it with the same two building blocks.
+//! (issue #209) so `wild_battle.rs` and the focused `turn_engine/` modules
+//! don't each carry their own copy of the same plumbing -- all exercise
+//! [`battle::Battle`] through its public surface only, exactly as an external
+//! caller would, so all can drive it with the same two building blocks.
 
 use assets::{MoveId, SpeciesId};
 use battle::{BattlePokemon, BattleRng, Dex, Ivs};
