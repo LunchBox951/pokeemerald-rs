@@ -274,14 +274,12 @@ pub(crate) struct OverworldPhase {
     /// ([`Self::warp_to`], [`Self::cross_connection`]) exactly as upstream's
     /// `RestartWildEncounterImmunitySteps` is.
     pub(super) wild: WildEncounterState,
-    /// Whether the current map's land table only rolls wild mons the battle
-    /// engine can fight ([`wild_encounter::map_wild_table_fightable`], issue
-    /// #207 review). Computed once per map — at construction and on every
-    /// [`Self::warp_to`]/[`Self::cross_connection`] — because the screen
-    /// walks the whole table; `false` disables the encounter roll outright
-    /// (no draws, no bookkeeping), the same fail-closed shape as the
-    /// fainted-lead guard.
-    pub(super) wild_table_fightable: bool,
+    /// [`Self::wild_table_fightable`]'s memo: the last map screened and its
+    /// verdict. Keyed on the map itself rather than refreshed at each
+    /// transition call site, so no present or future map-change path can
+    /// forget to re-screen — the map change *is* the invalidation (issue
+    /// #207 review, rounds 3/5).
+    pub(super) wild_table_screen: Option<(assets::MapId, bool)>,
     /// The player's lead party mon, in battle-ready form -- what a fired
     /// encounter is fought with.
     ///
@@ -374,9 +372,28 @@ impl OverworldPhase {
             connection_pack: OnceCell::new(),
             rng,
             wild: WildEncounterState::new(),
-            wild_table_fightable: wild_encounter::map_wild_table_fightable(map_id),
+            wild_table_screen: None,
             party_lead: None,
             wild_battle: None,
+        }
+    }
+
+    /// Whether the current map's land table only rolls wild mons the battle
+    /// engine can fight ([`wild_encounter::map_wild_table_fightable`], issue
+    /// #207 review). Memoised on [`Self::map_id`] itself
+    /// ([`Self::wild_table_screen`]) because the screen walks the whole
+    /// table; a map change invalidates the memo by construction, with no
+    /// per-transition update to forget. `false` disables the encounter roll
+    /// outright (no draws, no bookkeeping), the same fail-closed shape as
+    /// the fainted-lead guard.
+    pub(super) fn wild_table_fightable(&mut self) -> bool {
+        match self.wild_table_screen {
+            Some((map, fightable)) if map == self.map_id => fightable,
+            _ => {
+                let fightable = wild_encounter::map_wild_table_fightable(self.map_id);
+                self.wild_table_screen = Some((self.map_id, fightable));
+                fightable
+            }
         }
     }
 
@@ -621,17 +638,14 @@ impl OverworldPhase {
             return;
         }
 
-        if let Some(dialog) = &mut self.dialog {
-            // `JOY_NEW(A_BUTTON | B_BUTTON)` (doc comment above).
-            let confirm_pressed =
-                buttons.is_newly_pressed(Buttons::A) || buttons.is_newly_pressed(Buttons::B);
-            if dialog.tick(confirm_pressed) == DialogOutcome::Closed {
-                self.dialog = None;
-            }
+        if self.advance_dialog_frame(buttons) {
             return;
         }
 
         let direction = held_direction(buttons);
+        // Ahead of `runtime`'s scene borrow: the memoised screen needs
+        // `&mut self`; a memo hit is a map-id comparison.
+        let wild_table_fightable = self.wild_table_fightable();
         if let (Ok(header), Ok(events)) = (
             MapHeaderTable::new().header(self.map_id),
             MapEventsTable::new().resolve(self.map_id),
@@ -735,8 +749,8 @@ impl OverworldPhase {
             // path has already claimed (`wild_encounter::roll_eligible_landing`,
             // which carries upstream's precedence and its rationale), only on
             // a map whose whole land table the battle engine can fight
-            // (`Self::wild_table_fightable`, screened at the transition that
-            // entered it), and only while the party's lead mon can actually
+            // (`Self::wild_table_fightable`, memoised per map above), and
+            // only while the party's lead mon can actually
             // fight (`wild_encounter::lead_can_fight` -- the fail-closed
             // stand-in for the white-out this port does not model). The
             // landed tile is the player's own tile on a drain frame, and it
@@ -747,7 +761,7 @@ impl OverworldPhase {
                 self.map_id,
                 &runtime,
                 wild_encounter::roll_eligible_landing(landed, preempting_arrow_trigger, door_warp)
-                    .filter(|_| self.wild_table_fightable)
+                    .filter(|_| wild_table_fightable)
                     .filter(|_| wild_encounter::lead_can_fight(self.party_lead.as_ref())),
             );
             // Upstream `input->heldDirection && input->dpadDirection ==
@@ -964,9 +978,6 @@ impl OverworldPhase {
         self.pending_landing = None;
         self.scene = scene;
         self.map_id = map;
-        // A map change re-screens the destination's wild table (struct docs
-        // on `wild_table_fightable`).
-        self.wild_table_fightable = wild_encounter::map_wild_table_fightable(map);
         // Upstream's own `InitTilesetAnimations` reset (struct docs on
         // `tick`): the destination map's animated tiles start over from
         // their own tick 0, not wherever the departed map's counter was.
@@ -1060,9 +1071,6 @@ impl OverworldPhase {
 
         self.scene = scene;
         self.map_id = to_map;
-        // A map change re-screens the destination's wild table (struct docs
-        // on `wild_table_fightable`).
-        self.wild_table_fightable = wild_encounter::map_wild_table_fightable(to_map);
         // Re-latch onto the entered map's own coordinate space (doc comment
         // above) -- the crossing step's landing tile, in the same role
         // `Self::step`'s ordinary `Advanced` branch already latches for a
@@ -1092,6 +1100,24 @@ impl OverworldPhase {
             x: -1,
             y: -1,
         };
+        true
+    }
+
+    /// Tick an open [`NpcDialog`], if any. Returns whether a dialog owned
+    /// this frame -- `true` freezes movement for it exactly as
+    /// [`Self::advance_wild_battle_frame`] does for a battle, and closing it
+    /// consumes the same frame. Split from [`Self::step`] purely along that
+    /// existing frame-ownership seam.
+    fn advance_dialog_frame(&mut self, buttons: ButtonState) -> bool {
+        let Some(dialog) = &mut self.dialog else {
+            return false;
+        };
+        // `JOY_NEW(A_BUTTON | B_BUTTON)` (`Self::step`'s doc comment).
+        let confirm_pressed =
+            buttons.is_newly_pressed(Buttons::A) || buttons.is_newly_pressed(Buttons::B);
+        if dialog.tick(confirm_pressed) == DialogOutcome::Closed {
+            self.dialog = None;
+        }
         true
     }
 

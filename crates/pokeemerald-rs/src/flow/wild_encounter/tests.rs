@@ -174,6 +174,30 @@ fn walking_in_route_101s_grass_fires_an_encounter_and_runs_a_battle() {
     // String Shot (81).
     let known: Vec<MoveId> = battle.enemy().moves().iter().map(|m| m.move_id).collect();
     assert_eq!(known, vec![MoveId(33), MoveId(81)]);
+    // The one-stream invariant itself (issue #207 review, round 5): the
+    // wild mon's nature/personality/IV draws must continue the SAME stream
+    // the four roll draws came from. Reproduce `CreateWildMon`'s sequence
+    // on a reference generator advanced past the roll, and the built mon's
+    // rolled identity must match draw for draw -- a handoff that built the
+    // wild side off any private stream fails here.
+    let mut reference = Rng::new(ENCOUNTER_SEED);
+    for _ in 0..4 {
+        reference.next_u16();
+    }
+    let nature = battle::wild::roll_nature(&mut ScriptedTurns(&mut reference));
+    let personality =
+        battle::wild::roll_personality_for_nature(nature, &mut ScriptedTurns(&mut reference));
+    let ivs = battle::wild::roll_ivs(&mut ScriptedTurns(&mut reference));
+    assert_eq!(
+        battle.enemy().personality(),
+        personality,
+        "the wild mon's personality must come off the shared stream"
+    );
+    assert_eq!(
+        battle.enemy().ivs(),
+        ivs,
+        "and its IVs off the draws right after"
+    );
     // The lead mon moved into the battle, so it can't be fought with twice.
     assert!(phase.party_lead.is_none());
     // A fired encounter restarts the immunity window (`:679`).
@@ -352,7 +376,7 @@ fn an_unfightable_map_table_disables_the_roll_without_drawing() {
     phase.rng = Rng::new(ENCOUNTER_SEED);
     phase.party_lead = Some(player_mon(277, 50, vec![MoveId(1)]));
     assert!(
-        !phase.wild_table_fightable,
+        !phase.wild_table_fightable(),
         "Route 102 must fail the screen"
     );
     let immunity_before = phase.wild.immunity_steps();
@@ -376,10 +400,35 @@ fn an_unfightable_map_table_disables_the_roll_without_drawing() {
     assert_eq!(phase.wild.prev_metatile_behavior(), behavior_before);
 }
 
+/// The screen's memo is keyed on the map itself (issue #207 review, round
+/// 5): *any* path that changes `map_id` re-screens the new map's table,
+/// with no per-transition update to forget. Pinned by changing the map out
+/// from under the phase -- the exact stale-cache shape a forgotten
+/// transition call site would have produced under the old eager design --
+/// and asserting the verdict flips both ways.
+#[test]
+fn changing_maps_rescreens_the_wild_table_in_both_directions() {
+    let mut phase = route_101_phase(PlayerState::new((2, 5), 3, Direction::East), (7, 5));
+    assert!(phase.wild_table_fightable(), "Route 101 passes the screen");
+
+    phase.map_id = assets::MapId("MAP_ROUTE102");
+    assert!(
+        !phase.wild_table_fightable(),
+        "the map change alone must invalidate the memo and re-screen"
+    );
+
+    phase.map_id = ROUTE_101;
+    assert!(
+        phase.wild_table_fightable(),
+        "and the way back re-screens again"
+    );
+}
+
 /// Issue #207 review, finding 2: an in-battle stat-stage change (String
 /// Shot, Growl, Tail Whip) must not leak back into the overworld party lead
 /// when the battle ends -- upstream keeps stages in `gBattleMons` only,
-/// seeded fresh by `BattleStartClearSetData` each battle, and the party
+/// set to `DEFAULT_STAT_STAGE` when each battler's entry is built at battle
+/// entry (`battle_main.c:3423-3424`), and the party
 /// struct has no stage field to persist them in. A leaked stage would give
 /// the *next* encounter wrong turn order, damage, and accuracy.
 ///
@@ -648,7 +697,7 @@ fn a_door_warp_frame_never_reaches_the_encounter_roll() {
     // pins. Force the table on: this test is about the warp-vs-roll
     // *precedence* -- the state a fightable version of this map would keep
     // -- and the screen has its own tests.
-    phase.wild_table_fightable = true;
+    phase.wild_table_screen = Some((GRANITE_CAVE_B1F, true));
 
     // Four steps east: (4, 5), (5, 5), (6, 5), then the cave floor at
     // (7, 5). All four are inside the post-transition immunity window, so
