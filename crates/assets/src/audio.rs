@@ -81,10 +81,14 @@
 //! [`sample::Sample`] entries (`audio/sample/direct-sound/*`,
 //! `audio/sample/programmable-wave/*` -- see
 //! `xtask::extract::audio_samples`'s module docs for the id scheme and
-//! exactly which samples are extracted), and to `4` when the
+//! exactly which samples are extracted), to `4` when the
 //! `audio/voicegroup/*` entries those samples back
-//! (`xtask::extract::voicegroups`) followed (issue #182, `#115` child 3);
-//! any later change to the shapes here bumps it again.
+//! (`xtask::extract::voicegroups`) followed (issue #182, `#115` child 3),
+//! and to `5` when the first [`song::Song`] entry, `audio/song/mus_title`,
+//! followed (issue #181, `#115` child 2 -- see `xtask::extract::midi`'s
+//! module docs for the compiler and exactly which of `mus_title`'s MIDI
+//! semantics it models); any later change to the shapes here bumps it
+//! again.
 //!
 //! A second, per-payload version would be a redundant axis: two gates to
 //! keep in sync, and a failure mode (outer version accepted, inner version
