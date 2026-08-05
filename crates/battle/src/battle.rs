@@ -419,7 +419,7 @@ const fn selectable_slot(slot_move: Option<MoveId>) -> bool {
 /// [`BattleError::UnsupportedMoveEffect`] would be strictly less
 /// informative for, say, an unknown move type), or `Ok(())` if either
 /// pipeline accepts it.
-fn ensure_executable(dex: &Dex, move_id: MoveId) -> Result<(), BattleError> {
+pub(crate) fn ensure_executable(dex: &Dex, move_id: MoveId) -> Result<(), BattleError> {
     if move_id == STRUGGLE {
         return Err(BattleError::UnsupportedMoveEffect(move_id));
     }

@@ -83,4 +83,4 @@ pub use pokemon::{
 };
 pub use stat_change::{is_stat_lowering_effect, LoweredStat, StatChangeOutcome};
 pub use stat_stage::StatStage;
-pub use wild::{build_wild_pokemon, initial_moveset};
+pub use wild::{build_wild_pokemon, ensure_wild_startable, initial_moveset};

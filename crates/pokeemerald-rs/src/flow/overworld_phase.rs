@@ -274,6 +274,14 @@ pub(crate) struct OverworldPhase {
     /// ([`Self::warp_to`], [`Self::cross_connection`]) exactly as upstream's
     /// `RestartWildEncounterImmunitySteps` is.
     pub(super) wild: WildEncounterState,
+    /// Whether the current map's land table only rolls wild mons the battle
+    /// engine can fight ([`wild_encounter::map_wild_table_fightable`], issue
+    /// #207 review). Computed once per map — at construction and on every
+    /// [`Self::warp_to`]/[`Self::cross_connection`] — because the screen
+    /// walks the whole table; `false` disables the encounter roll outright
+    /// (no draws, no bookkeeping), the same fail-closed shape as the
+    /// fainted-lead guard.
+    pub(super) wild_table_fightable: bool,
     /// The player's lead party mon, in battle-ready form -- what a fired
     /// encounter is fought with.
     ///
@@ -366,6 +374,7 @@ impl OverworldPhase {
             connection_pack: OnceCell::new(),
             rng,
             wild: WildEncounterState::new(),
+            wild_table_fightable: wild_encounter::map_wild_table_fightable(map_id),
             party_lead: None,
             wild_battle: None,
         }
@@ -724,18 +733,21 @@ impl OverworldPhase {
                 .and_then(|(x, y)| trigger_door_warp(&runtime, x, y, self.player.elevation()));
             // The roll happens only on a completed step that neither warp
             // path has already claimed (`wild_encounter::roll_eligible_landing`,
-            // which carries upstream's precedence and its rationale), and only
-            // while the party's lead mon can actually fight
-            // (`wild_encounter::lead_can_fight` -- the fail-closed stand-in for
-            // the white-out this port does not model). The landed tile is the
-            // player's own tile on a drain frame, and it is what
-            // `GetPlayerPosition` would report there.
+            // which carries upstream's precedence and its rationale), only on
+            // a map whose whole land table the battle engine can fight
+            // (`Self::wild_table_fightable`, screened at the transition that
+            // entered it), and only while the party's lead mon can actually
+            // fight (`wild_encounter::lead_can_fight` -- the fail-closed
+            // stand-in for the white-out this port does not model). The
+            // landed tile is the player's own tile on a drain frame, and it
+            // is what `GetPlayerPosition` would report there.
             let encounter = wild_encounter::roll_for_step(
                 &mut self.wild,
                 &mut self.rng,
                 self.map_id,
                 &runtime,
                 wild_encounter::roll_eligible_landing(landed, preempting_arrow_trigger, door_warp)
+                    .filter(|_| self.wild_table_fightable)
                     .filter(|_| wild_encounter::lead_can_fight(self.party_lead.as_ref())),
             );
             // Upstream `input->heldDirection && input->dpadDirection ==
@@ -952,6 +964,9 @@ impl OverworldPhase {
         self.pending_landing = None;
         self.scene = scene;
         self.map_id = map;
+        // A map change re-screens the destination's wild table (struct docs
+        // on `wild_table_fightable`).
+        self.wild_table_fightable = wild_encounter::map_wild_table_fightable(map);
         // Upstream's own `InitTilesetAnimations` reset (struct docs on
         // `tick`): the destination map's animated tiles start over from
         // their own tick 0, not wherever the departed map's counter was.
@@ -1045,6 +1060,9 @@ impl OverworldPhase {
 
         self.scene = scene;
         self.map_id = to_map;
+        // A map change re-screens the destination's wild table (struct docs
+        // on `wild_table_fightable`).
+        self.wild_table_fightable = wild_encounter::map_wild_table_fightable(to_map);
         // Re-latch onto the entered map's own coordinate space (doc comment
         // above) -- the crossing step's landing tile, in the same role
         // `Self::step`'s ordinary `Advanced` branch already latches for a
@@ -1117,7 +1135,10 @@ impl OverworldPhase {
     /// engine can't execute) is logged and dropped too, leaving the player
     /// standing in the grass rather than stuck in a half-built battle. The
     /// lead mon is only handed over once the battle is really built, so a
-    /// rejection cannot swallow it.
+    /// rejection cannot swallow it. Since the per-map table screen
+    /// ([`Self::wild_table_fightable`]) refuses the roll before any draw on
+    /// a map that could produce such a moveset, this arm is defensive: no
+    /// table-rolled encounter reaches it today.
     ///
     /// The lead mon reaching here is never *fainted*: the roll upstream of
     /// this call is refused outright while it is

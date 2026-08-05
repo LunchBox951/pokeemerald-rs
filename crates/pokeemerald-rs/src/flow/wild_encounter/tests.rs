@@ -313,6 +313,69 @@ fn walking_on_ordinary_ground_never_rolls_an_encounter() {
     );
 }
 
+/// The per-map table screen (issue #207 review, round 3), both ways: Route
+/// 101's land table is entirely fightable, Route 102's is not -- its
+/// level-3 Seedot knows Bide and Harden, neither of which the turn engine
+/// executes yet. The rejection half is a deliberate ratchet: when those
+/// moves gain support this flips, and the map gate widens with it.
+#[test]
+fn route_101s_table_is_fightable_and_route_102s_is_not_yet() {
+    assert!(super::map_wild_table_fightable(ROUTE_101));
+    assert!(!super::map_wild_table_fightable(assets::MapId(
+        "MAP_ROUTE102"
+    )));
+    // A map with no wild header at all is trivially fightable: nothing can
+    // roll there, so nothing needs screening.
+    assert!(super::map_wild_table_fightable(assets::MapId(
+        "MAP_LITTLEROOT_TOWN_BRENDANS_HOUSE_2F"
+    )));
+}
+
+/// On a map whose table fails the screen, a grass step must draw **nothing
+/// at all** -- not roll-and-reject, which would spend `CreateWildMon`'s draws
+/// on a battle that cannot start (upstream never rejects one, so those
+/// draws would have no upstream counterpart). Same state-based assertions
+/// as the fainted-lead guard: the stream, the immunity counter, and
+/// `sPrevMetatileBehavior` all stay frozen.
+#[test]
+fn an_unfightable_map_table_disables_the_roll_without_drawing() {
+    let specials: Vec<((u16, u16), u8)> = [(5u16, 5u16), (6, 5), (7, 5)]
+        .iter()
+        .map(|&pos| (pos, MB_TALL_GRASS))
+        .collect();
+    let mut phase = OverworldPhase::for_test(
+        crate::overworld::tests::synthetic_scene_with_special_tiles(10, 10, &specials),
+        assets::MapId("MAP_ROUTE102"),
+        PlayerState::new((2, 5), 3, Direction::East),
+        None,
+    );
+    phase.rng = Rng::new(ENCOUNTER_SEED);
+    phase.party_lead = Some(player_mon(277, 50, vec![MoveId(1)]));
+    assert!(
+        !phase.wild_table_fightable,
+        "Route 102 must fail the screen"
+    );
+    let immunity_before = phase.wild.immunity_steps();
+    let behavior_before = phase.wild.prev_metatile_behavior();
+
+    for _ in 0..(6 * FRAMES_PER_STEP) {
+        phase.step(held(Buttons::RIGHT));
+    }
+    assert_eq!(
+        phase.player.position(),
+        (8, 5),
+        "three of them through grass"
+    );
+    assert!(phase.wild_battle.is_none(), "no battle may start");
+    assert_eq!(
+        phase.rng.state(),
+        Rng::new(ENCOUNTER_SEED).state(),
+        "a disabled table must not draw at all"
+    );
+    assert_eq!(phase.wild.immunity_steps(), immunity_before);
+    assert_eq!(phase.wild.prev_metatile_behavior(), behavior_before);
+}
+
 /// Issue #207 review, finding 2: an in-battle stat-stage change (String
 /// Shot, Growl, Tail Whip) must not leak back into the overworld party lead
 /// when the battle ends -- upstream keeps stages in `gBattleMons` only,
@@ -580,6 +643,12 @@ fn a_door_warp_frame_never_reaches_the_encounter_roll() {
     );
     phase.rng = Rng::new(ENCOUNTER_SEED);
     phase.party_lead = Some(player_mon(277, 50, vec![MoveId(1)]));
+    // Granite Cave's table fails today's executability screen (its Zubat
+    // knows Leech Life), which would freeze the very bookkeeping this test
+    // pins. Force the table on: this test is about the warp-vs-roll
+    // *precedence* -- the state a fightable version of this map would keep
+    // -- and the screen has its own tests.
+    phase.wild_table_fightable = true;
 
     // Four steps east: (4, 5), (5, 5), (6, 5), then the cave floor at
     // (7, 5). All four are inside the post-transition immunity window, so

@@ -96,6 +96,36 @@ pub fn initial_moveset(species: SpeciesId, level: u8) -> Vec<MoveId> {
     moves
 }
 
+/// Whether the whole `CreateWildMon` → [`crate::Battle::new`] handoff would
+/// accept a wild `(species, level)` — every check both make, composed, with
+/// **no state built and no RNG drawn** (issue #207 review): the real
+/// [`initial_moveset`] the wild side would know, [`BattlePokemon::validate`]'s
+/// species/level/moveset screens, and [`crate::Battle::new`]'s
+/// per-move executability screen (the same `ensure_executable` it runs,
+/// since the wild rejection loop can land on any slot).
+///
+/// This is the *pre-flight* an integration layer can run over an encounter
+/// table before enabling rolls on a map: upstream never rejects a wild
+/// battle, so the only stream-faithful way to handle a moveset this engine
+/// cannot execute yet is to find out **before** any encounter draw happens,
+/// not after `CreateWildMon`'s five draws are already spent.
+///
+/// # Errors
+///
+/// Whatever the first failing screen reports — e.g.
+/// [`BattleError::InvalidMoveCount`] for a species outside the learnset
+/// table, or [`BattleError::UnsupportedMoveEffect`] /
+/// [`BattleError::NonDamagingMove`] for a moveset the turn engine cannot
+/// execute (a level-3 Seedot's Bide/Harden, as of this slice).
+pub fn ensure_wild_startable(dex: &Dex, species: SpeciesId, level: u8) -> Result<(), BattleError> {
+    let moves = initial_moveset(species, level);
+    BattlePokemon::validate(dex, species, level, &moves)?;
+    for move_id in &moves {
+        crate::battle::ensure_executable(dex, *move_id)?;
+    }
+    Ok(())
+}
+
 /// `PickWildMonNature`'s v1 path (`pokeemerald/src/wild_encounter.c:335`):
 /// `Random() % NUM_NATURES`. The Safari Zone and Synchronize branches ahead
 /// of this in upstream are both ability/mode-gated (see the module docs) and
@@ -185,7 +215,8 @@ pub fn build_wild_pokemon(
 #[cfg(test)]
 mod tests {
     use super::{
-        build_wild_pokemon, initial_moveset, roll_ivs, roll_nature, roll_personality_for_nature,
+        build_wild_pokemon, ensure_wild_startable, initial_moveset, roll_ivs, roll_nature,
+        roll_personality_for_nature,
     };
     use crate::damage::BattleRng;
     use crate::dex::Dex;
@@ -445,6 +476,31 @@ mod tests {
                 all[all.len().saturating_sub(MAX_MON_MOVES)..].to_vec()
             );
         }
+    }
+
+    /// [`ensure_wild_startable`] must agree with the real handoff, both ways
+    /// (issue #207 review): Route 101's rollable wild mons all pass, and the
+    /// first reachable moveset the turn engine cannot execute -- a level-3
+    /// Seedot's Bide/Harden, Route 102 slot data -- is rejected. The
+    /// rejection arm is a deliberate ratchet: when Bide/Harden gain engine
+    /// support, this assertion flips and must be updated alongside the
+    /// map-table gate that consumes it.
+    #[test]
+    fn ensure_wild_startable_accepts_route_101_mons_and_rejects_a_bide_harden_seedot() {
+        let dex = Dex::new();
+        // Route 101's land table: Wurmple, Poochyena, Zigzagoon at 2..=3.
+        for species in [290, 286, 288] {
+            for level in 2..=3 {
+                assert_eq!(
+                    ensure_wild_startable(&dex, SpeciesId(species), level),
+                    Ok(()),
+                    "species {species} at level {level} must be startable"
+                );
+            }
+        }
+        // SPECIES_SEEDOT at Route 102's level 3: Bide (level 1) and Harden
+        // (level 3), neither in the damaging nor the stat-lowering pipeline.
+        assert!(ensure_wild_startable(&dex, SpeciesId(298), 3).is_err());
     }
 
     /// An unknown species fails closed with an empty moveset -- rejected

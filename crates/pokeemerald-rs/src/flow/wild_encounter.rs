@@ -211,6 +211,54 @@ pub(super) const fn field_input_consumed(
     encounter_fired || matches!(warp_trigger, Some(WarpTrigger::Resolved { .. }))
 }
 
+/// Whether every wild mon `map`'s land table can roll is one the battle
+/// engine can actually fight — the pre-flight over
+/// [`battle::ensure_wild_startable`] that decides, **before any draw ever
+/// happens**, whether encounter rolls are enabled on this map at all (issue
+/// #207 review).
+///
+/// Upstream never rejects a wild battle, so a moveset this engine cannot
+/// execute yet (Route 102's level-3 Seedot knows Bide and Harden, neither in
+/// the damaging nor the stat-lowering pipeline) has no stream-faithful
+/// failure mode once the roll has happened: `CreateWildMon`'s five draws are
+/// already spent by the time [`battle::Battle::new`] screens the moveset,
+/// and dropping the battle there leaves draws with no upstream counterpart.
+/// So the whole table is screened *up front*, the same fail-closed
+/// no-draw-at-all policy [`lead_can_fight`] applies to the unmodelled
+/// white-out: on a map that fails, a grass step draws nothing and moves no
+/// encounter bookkeeping, and the refusal is logged once here (at the map
+/// transition that computes it) rather than per step.
+///
+/// A map with no wild header, or no land table, is trivially fightable —
+/// there is nothing to roll, and [`roll_for_step`] already resolves that to
+/// a no-op. The gate widens automatically as the turn engine gains move
+/// support, and the ratchet tests pinning today's boundary (Route 101 in,
+/// Route 102 out) must be updated alongside it.
+pub(super) fn map_wild_table_fightable(map: assets::MapId) -> bool {
+    let Some(land) = assets::WildEncounterTable::new()
+        .get_by_map(map)
+        .and_then(|header| header.land)
+    else {
+        return true;
+    };
+    let dex = Dex::new();
+    for slot in &land.mons {
+        for level in slot.min_level..=slot.max_level {
+            if let Err(error) = battle::ensure_wild_startable(&dex, slot.species, level) {
+                eprintln!(
+                    "wild encounter: {}'s land table can roll species {:?} at level {level}, \
+                     which the battle engine can't fight yet ({error:?}) -- \
+                     no encounters will roll on this map",
+                    map.name(),
+                    slot.species,
+                );
+                return false;
+            }
+        }
+    }
+    true
+}
+
 /// Whether an encounter may be rolled at all with `lead` as the party's lead
 /// mon — the fail-closed half of the unmodelled white-out (module docs).
 ///
