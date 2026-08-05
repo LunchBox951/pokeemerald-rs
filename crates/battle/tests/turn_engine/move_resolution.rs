@@ -49,19 +49,11 @@ fn every_move_event_names_the_move_that_was_used() {
     assert_eq!(battle.player().moves()[0].pp, 34);
 }
 
-// The tests below have been re-pinned twice, each with a recorded
-// reason (`test-ratchet`). Originally they pinned a NoPpRemaining error
-// at the enemy's PP deduction -- a misreading of upstream. The first
-// correction (that a picked 0-PP slot "executes anyway" per
-// Cmd_ppreduce's :1230 guard) was itself a misreading: the guard is
-// real but unreachable on the ordinary path, because
-// `Cmd_attackcanceler`, the FIRST command of the hit script, aborts a
-// 0-PP move to BattleScript_NoPPForMove (battle_script_commands.c:934-
-// :939) -- no draws, no damage, no deduction. What is pinned now:
-// a picked spent slot fails via FailedNoPp; Struggle is forced only
-// when EVERY slot is unusable (`AreAllMovesUnusable`,
-// battle_util.c:1125), at selection time, drawing nothing; the
-// all-spent fallback having to act is UnsupportedMoveEffect(STRUGGLE).
+// This test was re-pinned after upstream showed that an all-spent moveset
+// forces Struggle at selection time rather than failing at PP deduction
+// (`test-ratchet`). Because this slice cannot execute Struggle, the turn
+// stops only when that fallback would act; an earlier mover's events and
+// state changes must remain committed.
 
 #[test]
 fn a_turn_that_stops_partway_still_reports_what_already_happened() {

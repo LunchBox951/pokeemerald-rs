@@ -97,6 +97,20 @@ fn the_rejection_loop_draw_count_matches_the_number_of_unknown_slots() {
     }
 }
 
+// The next two tests have been re-pinned twice, each with a recorded
+// reason (`test-ratchet`). Originally they pinned a NoPpRemaining error
+// at the enemy's PP deduction -- a misreading of upstream. The first
+// correction (that a picked 0-PP slot "executes anyway" per
+// Cmd_ppreduce's :1230 guard) was itself a misreading: the guard is
+// real but unreachable on the ordinary path, because
+// `Cmd_attackcanceler`, the FIRST command of the hit script, aborts a
+// 0-PP move to BattleScript_NoPPForMove (battle_script_commands.c:934-
+// :939) -- no draws, no damage, no deduction. What is pinned now:
+// a picked spent slot fails via FailedNoPp; Struggle is forced only
+// when EVERY slot is unusable (`AreAllMovesUnusable`,
+// battle_util.c:1125), at selection time, drawing nothing; the
+// all-spent fallback having to act is UnsupportedMoveEffect(STRUGGLE).
+
 #[test]
 fn an_all_spent_enemy_moving_first_stops_the_turn_with_no_events_but_after_draws() {
     let dex = Dex::new();
