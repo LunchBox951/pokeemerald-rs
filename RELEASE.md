@@ -172,9 +172,9 @@ and Releases add it. Versions compare lexicographically as four unsigned ints.
 | Component | Bump when | Resets | Authority |
 |---|---|---|---|
 | `PATCH` | small maintenance or narrow behavior change | — | normal PR flow |
-| `MINOR` | meaningful capability, including a substantial unfinished slice or smaller completed acceptance criterion | `PATCH -> 0` | maintainer / owner |
-| `MAJOR` | large completed acceptance criterion or project phase; breaking repository contract | `MINOR`, `PATCH -> 0` | maintainer |
-| `FINAL` | project agreed complete (`0 -> 1`) | `MAJOR`, `MINOR`, `PATCH -> 0` | maintainer only |
+| `MINOR` | meaningful capability, including a substantial unfinished slice or smaller completed acceptance criterion | `PATCH -> 0` | normal PR flow |
+| `MAJOR` | large completed acceptance criterion or project phase; breaking repository contract | `MINOR`, `PATCH -> 0` | normal PR flow |
+| `FINAL` | project agreed complete (`0 -> 1`) | `MAJOR`, `MINOR`, `PATCH -> 0` | owner only |
 
 Every pull request must increase `VERSION`; an unchanged or lower version fails
 the policy gate. Choose the highest applicable component from delivered behavior,
