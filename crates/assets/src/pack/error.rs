@@ -209,9 +209,23 @@ impl fmt::Display for PackError {
 
 impl std::error::Error for PackError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        // Every variant is spelled out (the `crates/platform` `source()`
+        // precedent): a future source-carrying variant then fails to compile
+        // here instead of silently reporting an empty cause chain.
         match self {
             Self::AudioDecode { source, .. } => Some(source),
-            _ => None,
+            Self::NotFound(_)
+            | Self::ReadFailed(..)
+            | Self::BadMagic
+            | Self::UnsupportedVersion(_)
+            | Self::Truncated
+            | Self::BadEntryKind(_)
+            | Self::UnknownAsset(_)
+            | Self::WrongKind { .. }
+            | Self::MalformedTextWindowPalette { .. }
+            | Self::TextWindowImageWrongDimensions { .. }
+            | Self::MalformedTextWindowImage { .. }
+            | Self::TextWindowPixelOutsidePalette { .. } => None,
         }
     }
 }

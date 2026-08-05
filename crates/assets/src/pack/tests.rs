@@ -858,6 +858,33 @@ fn voicegroup_accessor_reports_a_missing_entry() {
     let _ = std::fs::remove_file(path);
 }
 
+/// The `WrongKind` arm, per accessor: `voicegroup` and `sample` take a full
+/// pack id, so pointing each at the fixture's `Image` entry exercises the
+/// same `raw()` kind check [`song_accessor_reports_the_wrong_kind`] pins for
+/// the name-formatting accessor.
+#[test]
+fn voicegroup_and_sample_accessors_report_the_wrong_kind() {
+    let path = write_synthetic_pack("audio-wrong-kind");
+    let pack = AssetPack::load(&path).unwrap();
+    assert!(matches!(
+        pack.voicegroup(&VoiceGroupId("audio/song/not_raw".to_owned())),
+        Err(PackError::WrongKind {
+            expected: "raw blob",
+            actual: "image",
+            ..
+        })
+    ));
+    assert!(matches!(
+        pack.sample(&SampleId("audio/song/not_raw".to_owned())),
+        Err(PackError::WrongKind {
+            expected: "raw blob",
+            actual: "image",
+            ..
+        })
+    ));
+    let _ = std::fs::remove_file(path);
+}
+
 #[test]
 fn voicegroup_accessor_reports_a_malformed_payload() {
     let path = write_synthetic_pack("voicegroup-malformed");
@@ -1481,17 +1508,25 @@ fn real_pack_mus_title_data_chain_round_trips_through_the_typed_accessors() {
          `xtask::extract::audio_samples` documents (33 DirectSound + 4 programmable-wave)"
     );
 
-    // Every VOICE index `mus_title.mid` actually selects should have a slot
-    // in the top-level `title` group -- including slot 127, resolved only
-    // through the link-adjacency overflow mechanism issue #201 modeled (see
-    // `xtask::extract::voicegroups`'s module docs).
+    // Every VOICE index `mus_title.mid` actually selects should resolve to a
+    // real (non-[`VoiceEntry::Empty`]) voice in the top-level `title` group
+    // -- including slot 127, which is populated only through the
+    // link-adjacency overflow mechanism issue #201 modeled (see
+    // `xtask::extract::voicegroups`'s module docs). Pinned on the *entry*,
+    // not mere slot presence: every visited group already carries all
+    // `VOICE_SLOT_COUNT` slots, so `is_some()` alone could not catch that
+    // overflow fill regressing to an empty placeholder.
     let title = pack
         .voicegroup(song.voicegroup())
         .expect("the top-level `title` group should already be in `visited_groups`");
     for index in selected_voices {
+        let entry = title
+            .slot(usize::from(index))
+            .unwrap_or_else(|| panic!("VOICE {index} has no slot in `title`"));
         assert!(
-            title.slot(usize::from(index)).is_some(),
-            "VOICE {index}, selected by mus_title's own event stream, has no slot in `title`"
+            !matches!(entry, VoiceEntry::Empty),
+            "VOICE {index}, selected by mus_title's own event stream, resolves to an \
+             empty placeholder in `title`"
         );
     }
 }

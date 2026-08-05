@@ -51,8 +51,8 @@
 //! `xtask::extract::audio_samples` write and decode them through
 //! [`crate::audio::Song`]/[`crate::audio::VoiceGroup`]/[`crate::audio::Sample`]'s
 //! own `decode` — unlike [`layout_map`](AssetPack::layout_map)/
-//! [`font`](AssetPack::font), which hand back raw bytes for a sibling module
-//! to decode, these three schemas' `decode` already lives in [`crate::audio`]
+//! [`font`](AssetPack::font), which hand back undecoded views for a sibling
+//! module to interpret, these three schemas' `decode` already lives in [`crate::audio`]
 //! itself, so there is no separate decode layer for this crate's pack loader
 //! to stay decoupled from. The lower-level [`AssetPack::image`] /
 //! [`AssetPack::palette`] / [`AssetPack::raw`] accessors work over any entry
