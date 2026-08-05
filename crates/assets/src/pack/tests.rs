@@ -6,6 +6,10 @@
 //! [`real_pack_loads_and_every_typed_accessor_works`], is `#[ignore]`d.
 
 use super::{AssetPack, PackError, MAGIC};
+use crate::audio::{
+    DirectSoundMode, DirectSoundSample, DirectSoundVoice, Envelope, ProgrammableWave, Sample,
+    SampleId, Song, SongEvent, VoiceEntry, VoiceGroup, VoiceGroupId,
+};
 use crate::fonts::FontId;
 
 /// A valid one-GBA-bank text-window palette payload (16 colours, 32
@@ -237,6 +241,100 @@ fn synthetic_pack() -> Vec<u8> {
             kind_tag: 1,
             meta: 16u16.to_le_bytes().to_vec(),
             payload: vec![0x55, 0x00, 0x66, 0x00, 0x77, 0x00, 0x88, 0x00],
+        },
+        // `AssetPack::song`/`voicegroup`/`sample` fixtures (issue #184):
+        // one well-formed entry per accessor, referencing each other the
+        // same way a real extracted pack's `audio/song/mus_title` chain
+        // does (song -> voicegroup -> sample), plus one malformed entry per
+        // schema for the accessors' decode-error path, and one `not_raw`
+        // entry (an `Image`, not `Raw`) for the `WrongKind` path shared by
+        // all three.
+        Entry {
+            id: "audio/song/test_song",
+            kind_tag: 2,
+            meta: vec![],
+            payload: Song::new(
+                VoiceGroupId("audio/voicegroup/test_group".to_owned()),
+                5,
+                Some(30),
+                vec![vec![
+                    SongEvent::Voice(2),
+                    SongEvent::Wait(4),
+                    SongEvent::Fine,
+                ]],
+            )
+            .unwrap()
+            .encode(),
+        },
+        Entry {
+            id: "audio/song/not_raw",
+            kind_tag: 0,
+            meta: image_meta(1, 1, 8),
+            payload: vec![0],
+        },
+        // A `u16` string-length prefix (`0xFFFF`) with no bytes behind it:
+        // `Song::decode` fails reading the leading `voicegroup` id, before
+        // any other field, so this is a minimal, deterministic
+        // `AudioError::Truncated`.
+        Entry {
+            id: "audio/song/malformed",
+            kind_tag: 2,
+            meta: vec![],
+            payload: vec![0xFF, 0xFF],
+        },
+        Entry {
+            id: "audio/voicegroup/test_group",
+            kind_tag: 2,
+            meta: vec![],
+            payload: VoiceGroup::new(vec![
+                VoiceEntry::DirectSound(DirectSoundVoice {
+                    base_key: 60,
+                    pan: None,
+                    sample: SampleId("audio/sample/direct-sound/test_sample".to_owned()),
+                    envelope: Envelope {
+                        attack: 0,
+                        decay: 0,
+                        sustain: 15,
+                        release: 0,
+                    },
+                    mode: DirectSoundMode::Resampled,
+                }),
+                VoiceEntry::Empty,
+            ])
+            .unwrap()
+            .encode(),
+        },
+        // A declared slot count (`200`) over `VOICE_SLOT_COUNT` (128) is
+        // rejected before any slot body is read -- a minimal, deterministic
+        // `AudioError::TooManyVoiceSlots`.
+        Entry {
+            id: "audio/voicegroup/malformed",
+            kind_tag: 2,
+            meta: vec![],
+            payload: vec![200],
+        },
+        Entry {
+            id: "audio/sample/direct-sound/test_sample",
+            kind_tag: 2,
+            meta: vec![],
+            payload: Sample::DirectSound(
+                DirectSoundSample::new(12345, Some(2), vec![-1, 0, 1, 2]).unwrap(),
+            )
+            .encode(),
+        },
+        Entry {
+            id: "audio/sample/programmable-wave/01",
+            kind_tag: 2,
+            meta: vec![],
+            payload: Sample::ProgrammableWave(ProgrammableWave { table: [7; 16] }).encode(),
+        },
+        // An unrecognized kind tag (`0xFF`) is rejected reading the very
+        // first byte -- a minimal, deterministic `AudioError::UnknownSampleKind`.
+        Entry {
+            id: "audio/sample/malformed",
+            kind_tag: 2,
+            meta: vec![],
+            payload: vec![0xFF],
         },
     ];
     // Directory entries must be written in id-sorted order, exactly like
@@ -670,6 +768,157 @@ fn default_path_ends_with_expected_relative_path() {
     assert!(path.ends_with("assets-pack/pokeemerald.pack"));
 }
 
+#[test]
+fn song_accessor_decodes_the_named_entry_through_the_song_schema() {
+    let path = write_synthetic_pack("song-ok");
+    let pack = AssetPack::load(&path).unwrap();
+    let song = pack.song("test_song").unwrap();
+    assert_eq!(
+        song.voicegroup(),
+        &VoiceGroupId("audio/voicegroup/test_group".to_owned())
+    );
+    assert_eq!(song.priority(), 5);
+    assert_eq!(song.reverb(), Some(30));
+    assert_eq!(
+        song.tracks(),
+        [[SongEvent::Voice(2), SongEvent::Wait(4), SongEvent::Fine]]
+    );
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn song_accessor_reports_a_missing_entry() {
+    let path = write_synthetic_pack("song-missing");
+    let pack = AssetPack::load(&path).unwrap();
+    assert_eq!(
+        pack.song("does_not_exist"),
+        Err(PackError::UnknownAsset(
+            "audio/song/does_not_exist".to_owned()
+        ))
+    );
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn song_accessor_reports_the_wrong_kind() {
+    let path = write_synthetic_pack("song-wrong-kind");
+    let pack = AssetPack::load(&path).unwrap();
+    assert!(matches!(
+        pack.song("not_raw"),
+        Err(PackError::WrongKind {
+            expected: "raw blob",
+            actual: "image",
+            ..
+        })
+    ));
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn song_accessor_reports_a_malformed_payload() {
+    let path = write_synthetic_pack("song-malformed");
+    let pack = AssetPack::load(&path).unwrap();
+    assert!(matches!(
+        pack.song("malformed"),
+        Err(PackError::AudioDecode { id, source: crate::audio::AudioError::Truncated })
+            if id == "audio/song/malformed"
+    ));
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn voicegroup_accessor_decodes_the_referenced_entry_through_the_voicegroup_schema() {
+    let path = write_synthetic_pack("voicegroup-ok");
+    let pack = AssetPack::load(&path).unwrap();
+    let id = VoiceGroupId("audio/voicegroup/test_group".to_owned());
+    let group = pack.voicegroup(&id).unwrap();
+    assert_eq!(group.slots().len(), 2);
+    match group.slot(0) {
+        Some(VoiceEntry::DirectSound(voice)) => {
+            assert_eq!(
+                voice.sample,
+                SampleId("audio/sample/direct-sound/test_sample".to_owned())
+            );
+        }
+        other => panic!("expected slot 0 to be a DirectSound voice, got {other:?}"),
+    }
+    assert_eq!(group.slot(1), Some(&VoiceEntry::Empty));
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn voicegroup_accessor_reports_a_missing_entry() {
+    let path = write_synthetic_pack("voicegroup-missing");
+    let pack = AssetPack::load(&path).unwrap();
+    let id = VoiceGroupId("audio/voicegroup/does_not_exist".to_owned());
+    assert_eq!(
+        pack.voicegroup(&id),
+        Err(PackError::UnknownAsset(id.0.clone()))
+    );
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn voicegroup_accessor_reports_a_malformed_payload() {
+    let path = write_synthetic_pack("voicegroup-malformed");
+    let pack = AssetPack::load(&path).unwrap();
+    let id = VoiceGroupId("audio/voicegroup/malformed".to_owned());
+    assert!(matches!(
+        pack.voicegroup(&id),
+        Err(PackError::AudioDecode {
+            id: ref got,
+            source: crate::audio::AudioError::TooManyVoiceSlots(200),
+        }) if got == &id.0
+    ));
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn sample_accessor_decodes_direct_sound_and_programmable_wave_entries() {
+    let path = write_synthetic_pack("sample-ok");
+    let pack = AssetPack::load(&path).unwrap();
+
+    let direct_sound_id = SampleId("audio/sample/direct-sound/test_sample".to_owned());
+    let Sample::DirectSound(sample) = pack.sample(&direct_sound_id).unwrap() else {
+        panic!("expected a DirectSound sample");
+    };
+    assert_eq!(sample.base_frequency, 12345);
+    assert_eq!(sample.loop_start, Some(2));
+    assert_eq!(sample.data(), &[-1, 0, 1, 2]);
+
+    let wave_id = SampleId("audio/sample/programmable-wave/01".to_owned());
+    let Sample::ProgrammableWave(wave) = pack.sample(&wave_id).unwrap() else {
+        panic!("expected a ProgrammableWave sample");
+    };
+    assert_eq!(wave.table, [7; 16]);
+
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn sample_accessor_reports_a_missing_entry() {
+    let path = write_synthetic_pack("sample-missing");
+    let pack = AssetPack::load(&path).unwrap();
+    let id = SampleId("audio/sample/direct-sound/does_not_exist".to_owned());
+    assert_eq!(pack.sample(&id), Err(PackError::UnknownAsset(id.0.clone())));
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn sample_accessor_reports_a_malformed_payload() {
+    let path = write_synthetic_pack("sample-malformed");
+    let pack = AssetPack::load(&path).unwrap();
+    let id = SampleId("audio/sample/malformed".to_owned());
+    assert!(matches!(
+        pack.sample(&id),
+        Err(PackError::AudioDecode {
+            id: ref got,
+            source: crate::audio::AudioError::UnknownSampleKind(0xFF),
+        }) if got == &id.0
+    ));
+    let _ = std::fs::remove_file(path);
+}
+
 /// Loads the *real* local pack (`cargo xtask extract`'s output) and
 /// exercises every typed accessor against it -- proof the writer
 /// (`xtask::extract::pack`) and this reader agree byte-for-byte on the
@@ -1065,4 +1314,184 @@ fn real_pack_audio_song_decodes_through_the_song_schema() {
         })
         .collect();
     assert_eq!(volumes, vec![10, 10, 16]);
+}
+
+/// The full `MUS_TITLE` data-chain round-trip through the typed accessors
+/// this module adds (S-4, issue #184, `#115` child 5): load
+/// `audio/song/mus_title` through [`AssetPack::song`], resolve every
+/// voicegroup [`AssetPack::voicegroup`] can reach from the song's own
+/// [`Song::voicegroup`] -- transitively, through every
+/// [`VoiceEntry::KeySplit`]/[`VoiceEntry::Rhythm`] indirection a resolved
+/// group carries -- and decode every sample
+/// [`VoiceEntry::DirectSound`]/[`VoiceEntry::ProgrammableWave`] leaf
+/// references through [`AssetPack::sample`]. Where
+/// [`real_pack_audio_song_decodes_through_the_song_schema`] and
+/// [`real_pack_audio_samples_decode_through_the_sample_schema`] each pin one
+/// schema's own producer/consumer agreement in isolation (`pack.raw` + a
+/// manual `decode` call), and
+/// `crates/pokeemerald-rs/src/voicegroup_pack_tests.rs`'s
+/// `every_id_a_voicegroup_references_resolves_to_a_pack_entry` walks the
+/// voicegroup graph checking only that referenced ids are *present*
+/// (`pack.raw(id).is_err()`), this test is the thing none of them are: proof
+/// that the *typed* accessors this module adds chain together end to end --
+/// a caller reaching for `pack.song(..)` can walk straight through
+/// `pack.voicegroup(..)`/`pack.sample(..)` without ever touching `pack.raw`
+/// or a schema's `decode` directly, and every step of that chain, for this
+/// one real song, actually holds together.
+///
+/// **Not a playability claim.** This is data-chain integrity only: every
+/// reference resolves and every payload decodes to its schema's structural
+/// shape. It does not sequence events, mix a waveform, or produce audio --
+/// that is issue #185 (`#115` child 6), a separate slice.
+///
+/// The expected voicegroup label set (7: `title` plus its 6 keysplit/rhythm
+/// children) and sample count (37: 33 `DirectSound` + 4 programmable-wave)
+/// mirror `xtask::extract::voicegroups`'s and
+/// `xtask::extract::audio_samples`'s own module docs, which hand-traced and
+/// hand-verified exactly this same closure from the upstream sources -- see
+/// [`REAL_PACK_DIRECT_SOUND_SAMPLES`]/[`REAL_PACK_PROGRAMMABLE_WAVES`]'s docs
+/// for that trail. This test does not re-derive the set; it walks the real
+/// pack's own data and checks the walk lands on the same numbers, which is
+/// what would catch the resolver and the sample-extraction list drifting
+/// apart from each other via this crate's own read side.
+///
+/// Needs a local pack: run `cargo xtask extract` first, then
+/// `cargo test -p assets -- --ignored` (CI's Ubuntu `native` leg does
+/// exactly this).
+// Long for the same reason `real_pack_loads_and_every_typed_accessor_works`
+// is: one end-to-end walk (song -> every reachable voicegroup -> every
+// referenced sample) that would only get scattered across several
+// `#[ignore]`d tests sharing the same `cargo xtask extract` precondition if
+// split up, without reducing what it actually checks.
+#[allow(clippy::too_many_lines)]
+#[test]
+#[ignore = "needs a local pack: run `cargo xtask extract` first"]
+fn real_pack_mus_title_data_chain_round_trips_through_the_typed_accessors() {
+    use std::collections::HashSet;
+
+    use crate::audio::VoiceEntry;
+
+    let pack = AssetPack::load_default().expect("run `cargo xtask extract` first");
+
+    // 1. The song, through the typed accessor.
+    let song = pack
+        .song("mus_title")
+        .expect("`audio/song/mus_title` should load through `AssetPack::song`");
+
+    // Every distinct VOICE index `mus_title`'s own event streams select, so
+    // the closure below can confirm the top-level group actually has a slot
+    // for each one -- not just that the group as a whole decodes.
+    let mut selected_voices: Vec<u8> = song
+        .tracks()
+        .iter()
+        .flatten()
+        .filter_map(|event| match event {
+            SongEvent::Voice(index) => Some(*index),
+            _ => None,
+        })
+        .collect();
+    selected_voices.sort_unstable();
+    selected_voices.dedup();
+    assert!(
+        !selected_voices.is_empty(),
+        "mus_title should select at least one VOICE"
+    );
+
+    // 2. Every voicegroup slot the song references, resolved transitively
+    // through `AssetPack::voicegroup` -- a worklist walk starting at the
+    // song's own top-level group, following every KeySplit/Rhythm child
+    // reference outward, decoding each group exactly once.
+    let mut visited_groups: HashSet<VoiceGroupId> = HashSet::new();
+    let mut pending_groups = vec![song.voicegroup().clone()];
+    let mut visited_samples: HashSet<SampleId> = HashSet::new();
+    let mut leaf_voice_count = 0usize;
+
+    while let Some(group_id) = pending_groups.pop() {
+        if !visited_groups.insert(group_id.clone()) {
+            continue; // already resolved (e.g. `rs_drumset`, reached twice).
+        }
+        let group = pack
+            .voicegroup(&group_id)
+            .unwrap_or_else(|e| panic!("`{}` should resolve: {e}", group_id.0));
+        assert_eq!(
+            group.slots().len(),
+            crate::audio::VOICE_SLOT_COUNT,
+            "`{}` should carry the full 128-slot normalization",
+            group_id.0
+        );
+        for slot in group.slots() {
+            match slot {
+                // 3. Every sample a concrete leaf voice references, decoded
+                // through `AssetPack::sample`.
+                VoiceEntry::DirectSound(voice) => {
+                    if visited_samples.insert(voice.sample.clone()) {
+                        pack.sample(&voice.sample)
+                            .unwrap_or_else(|e| panic!("`{}` should decode: {e}", voice.sample.0));
+                    }
+                    leaf_voice_count += 1;
+                }
+                VoiceEntry::ProgrammableWave(voice) => {
+                    if visited_samples.insert(voice.wave.clone()) {
+                        pack.sample(&voice.wave)
+                            .unwrap_or_else(|e| panic!("`{}` should decode: {e}", voice.wave.0));
+                    }
+                    leaf_voice_count += 1;
+                }
+                VoiceEntry::Square1(_) | VoiceEntry::Square2(_) | VoiceEntry::Noise(_) => {
+                    leaf_voice_count += 1; // concrete CGB voices, no sample to resolve.
+                }
+                VoiceEntry::KeySplit(voice) => pending_groups.push(voice.children.clone()),
+                VoiceEntry::Rhythm(voice) => pending_groups.push(voice.children.clone()),
+                VoiceEntry::Empty => {}
+            }
+        }
+    }
+
+    let mut visited_labels: Vec<&str> = visited_groups
+        .iter()
+        .map(|id| {
+            id.0.strip_prefix("audio/voicegroup/")
+                .unwrap_or_else(|| panic!("`{}` should carry the audio/voicegroup/ prefix", id.0))
+        })
+        .collect();
+    visited_labels.sort_unstable();
+    let mut expected_labels = [
+        "french_horn_keysplit",
+        "piano_keysplit",
+        "rs_drumset",
+        "strings_keysplit",
+        "title",
+        "trumpet_keysplit",
+        "tuba_keysplit",
+    ];
+    expected_labels.sort_unstable();
+    assert_eq!(
+        visited_labels, expected_labels,
+        "the voicegroup closure reached from mus_title's own song entry should be exactly \
+         the 7 groups `xtask::extract::voicegroups` documents"
+    );
+    assert!(
+        leaf_voice_count > 0,
+        "the walk should have resolved at least one concrete (non-indirection) voice"
+    );
+    assert_eq!(
+        visited_samples.len(),
+        37,
+        "the voicegroup closure should reference exactly the 37 samples \
+         `xtask::extract::audio_samples` documents (33 DirectSound + 4 programmable-wave)"
+    );
+
+    // Every VOICE index `mus_title.mid` actually selects should have a slot
+    // in the top-level `title` group -- including slot 127, resolved only
+    // through the link-adjacency overflow mechanism issue #201 modeled (see
+    // `xtask::extract::voicegroups`'s module docs).
+    let title = pack
+        .voicegroup(song.voicegroup())
+        .expect("the top-level `title` group should already be in `visited_groups`");
+    for index in selected_voices {
+        assert!(
+            title.slot(usize::from(index)).is_some(),
+            "VOICE {index}, selected by mus_title's own event stream, has no slot in `title`"
+        );
+    }
 }
