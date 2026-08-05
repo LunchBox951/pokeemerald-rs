@@ -401,6 +401,15 @@ mod tests {
     /// (issue #169). These are the movesets the overworld handoff feeds
     /// `Battle::new`, so they double as the pin that the wild side of that
     /// battle is *executable* by this crate's turn engine.
+    ///
+    /// Poochyena's rows previously asserted on `SpeciesId(261)` --
+    /// `SPECIES_OLD_UNOWN_K`, whose placeholder learnset happens to be
+    /// Tackle-only -- so they passed while pinning nothing (issue #207
+    /// review, round 4). `SPECIES_POOCHYENA` is `286`
+    /// (`include/constants/species.h:292`); its level-4/5 rows below are the
+    /// boundary pin that `entry.level > level` is the *exclusive* break
+    /// upstream's `moveLevel > (level << 9)` is -- Howl arrives exactly at
+    /// 5, so flipping the comparison to `>=` fails here and nowhere else.
     #[test]
     fn route_101_wild_movesets_match_their_level_up_learnsets() {
         // Learnsets from `src/data/pokemon/level_up_learnsets.h`:
@@ -408,10 +417,12 @@ mod tests {
         // Zigzagoon (`:3765`) TACKLE + GROWL both at 1, TAIL_WHIP at 5;
         // Wurmple (`:3799`) TACKLE + STRING_SHOT both at 1, POISON_STING at
         // 5. So nothing new is learned between the table's levels 2 and 3.
-        // Move ids: Tackle 33, Growl 45, String Shot 81.
+        // Move ids: Tackle 33, Growl 45, String Shot 81, Howl 336.
         for (species, level, expected) in [
-            (261, 2, vec![MoveId(33)]),             // Poochyena: Tackle
-            (261, 3, vec![MoveId(33)]),             // Howl is still two levels away
+            (286, 2, vec![MoveId(33)]), // Poochyena: Tackle
+            (286, 3, vec![MoveId(33)]), // Howl is still two levels away
+            (286, 4, vec![MoveId(33)]), // ...one level away...
+            (286, 5, vec![MoveId(33), MoveId(336)]), // ...and arrives exactly at 5
             (288, 2, vec![MoveId(33), MoveId(45)]), // Zigzagoon: Tackle, Growl
             (288, 3, vec![MoveId(33), MoveId(45)]),
             (290, 2, vec![MoveId(33), MoveId(81)]), // Wurmple: Tackle, String Shot
@@ -449,7 +460,11 @@ mod tests {
     #[test]
     fn a_full_moveset_drops_the_oldest_move_first() {
         let learnsets = assets::LevelUpLearnsets::new();
-        for species in [261u16, 288, 290, 1, 252] {
+        // Real species only: 261/252 previously in this list are Old Unown
+        // placeholders with one-move learnsets that exercise nothing (issue
+        // #207 review, round 4). Bulbasaur (1) and Treecko (277) both learn
+        // more than four moves by 100, so the drop path really runs.
+        for species in [286u16, 288, 290, 1, 277] {
             let moves = initial_moveset(SpeciesId(species), 100);
             assert!(
                 moves.len() <= MAX_MON_MOVES,
