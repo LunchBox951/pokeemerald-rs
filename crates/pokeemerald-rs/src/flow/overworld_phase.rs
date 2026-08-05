@@ -263,9 +263,10 @@ pub(crate) struct OverworldPhase {
     /// `SeedRngAndSetTrainerId` (`:208-214`) reseeds it from the `TM1CNT_L`
     /// hardware timer at new-game time. That timer read is **not** modelled
     /// -- there is no such register here -- so a fresh run is deterministic
-    /// where the real game is not. Recorded as a NOT-modelled branch on this
-    /// slice's ledger entry rather than substituted with a wall-clock seed,
-    /// which would make the headless `xtask e2e` lanes non-reproducible.
+    /// where the real game is not. Recorded as the ledger's NOT-modelled
+    /// `src/main.c#SeedRngAndSetTrainerId` artifact rather than substituted
+    /// with a wall-clock seed, which would make the headless `xtask e2e`
+    /// lanes non-reproducible.
     pub(super) rng: engine::rng::Rng,
     /// The per-step encounter bookkeeping (issue #169): upstream's
     /// `sWildEncounterImmunitySteps`/`sPrevMetatileBehavior`

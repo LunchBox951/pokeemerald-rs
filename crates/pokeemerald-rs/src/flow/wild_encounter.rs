@@ -290,11 +290,14 @@ pub(super) fn start_wild_battle(
 /// PP included — is written back into `lead`, so the overworld keeps the
 /// state the battle left it in, the way upstream's `gPlayerParty[0]`
 /// persists. In-battle stat stages are **reset to neutral** first: upstream
-/// keeps them in `gBattleMons[].statStages`, seeded fresh each battle by
-/// `BattleStartClearSetData` (`battle_main.c:3117`), and the party's
-/// `struct Pokemon` has no stat-stage field at all — so a String Shot taken
-/// this battle can never slow the *next* one. Returns the outcome on exactly
-/// that frame and `None` on every other.
+/// keeps them in `gBattleMons[].statStages` only — set to
+/// `DEFAULT_STAT_STAGE` when each battler's `gBattleMons` entry is built at
+/// battle entry (`BattleIntroDrawTrainersOrMonsSprites`,
+/// `battle_main.c:3423-3424`) and again at switch-in
+/// (`SwitchInClearSetData`, `:3161`) — and the party's `struct Pokemon` has
+/// no stat-stage field at all, so a String Shot taken this battle can never
+/// slow the *next* one. Returns the outcome on exactly that frame and
+/// `None` on every other.
 ///
 /// That write-back is unconditional, [`BattleOutcome::PlayerLost`] included,
 /// so a lost battle really does leave a fainted mon in `lead` — upstream

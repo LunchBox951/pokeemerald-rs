@@ -437,6 +437,26 @@ fn loading_a_room_and_warping_both_restart_the_tileset_animation_tick() {
     );
 }
 
+/// Issue #207 review, round 2: the production starter *wiring*, not just the
+/// starter constructor -- [`OverworldPhase::load_default`] must hand back a
+/// phase whose party lead is the provisional starter, or a real playthrough
+/// rolls I-4 encounters it can never fight. Mutation-pinned: deleting
+/// `load_default`'s `party_lead` assignment fails only here, because every
+/// pack-free test builds its phase through `for_test`, which deliberately
+/// leaves the lead `None`.
+#[test]
+#[ignore = "needs a local pack: run `cargo xtask extract` first"]
+fn load_default_hands_back_a_fightable_provisional_starter() {
+    let phase = OverworldPhase::load_default().expect("run `cargo xtask extract` first");
+    let lead = phase
+        .party_lead
+        .as_ref()
+        .expect("a fresh game starts with the provisional starter (issue #207 review)");
+    assert_eq!(lead.species(), new_game::PROVISIONAL_STARTER_SPECIES);
+    assert_eq!(lead.level(), new_game::PROVISIONAL_STARTER_LEVEL);
+    assert!(!lead.is_fainted(), "the lead must be able to fight");
+}
+
 /// The finding-1 regression at the phase level, on real map data: holding a
 /// direction into a visible NPC must stop the player on the adjacent tile.
 /// Before object-event collision landed, [`OverworldPhase::step`] walked the
