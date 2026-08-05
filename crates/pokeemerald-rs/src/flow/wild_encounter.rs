@@ -62,15 +62,21 @@
 //! Route 101's grass is fenced off at the start of a real playthrough by
 //! `Route101_EventScript_...`'s coord events and `VAR_ROUTE101_STATE` (the
 //! "wait, don't go out — it's unsafe" gate), and the player has no Pokémon
-//! until Birch's bag script hands one over. This port has no script engine,
-//! so neither exists: the encounter roll here is reachable the moment the
-//! player walks into grass, and [`crate::flow::overworld_phase`]'s party
-//! lead is `None` on a fresh save exactly as upstream's party is — which is
-//! why the production path logs the encounter and starts no battle until a
-//! party mon exists. Both gaps are recorded on the ledger rather than
+//! until the rescue chain's `CB2_GiveStarter` hands one over. This port has
+//! no script engine, so neither exists: the encounter roll here is reachable
+//! the moment the player walks into grass, and the starter handout is stood
+//! in for by [`crate::new_game::provisional_starter`] — a deterministic
+//! level-5 Treecko assigned at
+//! [`crate::flow::overworld_phase::OverworldPhase::load_default`] (issue
+//! #207 review), so a fresh game really fights the encounter it rolls. A
+//! phase whose party lead is `None` (a bare test phase, or a driver that
+//! clears it) still logs the encounter and starts no battle. The script-gate
+//! gap and the stood-in handout are recorded on the ledger rather than
 //! papered over.
 
-use battle::{Battle, BattleError, BattleOutcome, BattlePokemon, BattleRng, Dex, PlayerAction};
+use battle::{
+    Battle, BattleError, BattleOutcome, BattlePokemon, BattleRng, Dex, PlayerAction, StatStages,
+};
 use engine::overworld::warp::WarpTrigger;
 use engine::overworld::wild_encounter::{WildEncounter, WildEncounterState};
 use engine::overworld::{MapRuntime, TilePos};
@@ -280,11 +286,15 @@ pub(super) fn start_wild_battle(
 /// Play one turn of the in-progress wild battle in `slot`, headlessly
 /// (module docs). A no-op if `slot` is empty.
 ///
-/// When the battle ends, `slot` is emptied and the player's mon — damage,
-/// PP, and stat stages included — is written back into `lead`, so the
-/// overworld keeps the state the battle left it in, the way upstream's
-/// `gPlayerParty[0]` persists. Returns the outcome on exactly that frame and
-/// `None` on every other.
+/// When the battle ends, `slot` is emptied and the player's mon — damage and
+/// PP included — is written back into `lead`, so the overworld keeps the
+/// state the battle left it in, the way upstream's `gPlayerParty[0]`
+/// persists. In-battle stat stages are **reset to neutral** first: upstream
+/// keeps them in `gBattleMons[].statStages`, seeded fresh each battle by
+/// `BattleStartClearSetData` (`battle_main.c:3117`), and the party's
+/// `struct Pokemon` has no stat-stage field at all — so a String Shot taken
+/// this battle can never slow the *next* one. Returns the outcome on exactly
+/// that frame and `None` on every other.
 ///
 /// That write-back is unconditional, [`BattleOutcome::PlayerLost`] included,
 /// so a lost battle really does leave a fainted mon in `lead` — upstream
@@ -316,7 +326,12 @@ pub(super) fn advance_wild_battle(
     if !failed && outcome.is_none() {
         return None;
     }
-    *lead = Some(battle.player().clone());
+    let mut mon = battle.player().clone();
+    // Stat stages are battle-local upstream (`gBattleMons[].statStages`;
+    // the party struct has no such field), so they never survive into the
+    // overworld copy.
+    *mon.stages_mut() = StatStages::default();
+    *lead = Some(mon);
     *slot = None;
     outcome
 }

@@ -276,10 +276,13 @@ pub(crate) struct OverworldPhase {
     /// The player's lead party mon, in battle-ready form -- what a fired
     /// encounter is fought with.
     ///
-    /// `None` on a fresh save, exactly as upstream's `gPlayerParty` is empty
-    /// until Birch's bag hands over a starter: this port has no script
-    /// engine, so nothing can put one there yet and the production path logs
-    /// the encounter instead of starting a battle
+    /// The production path ([`Self::load_default`]) starts it as
+    /// [`new_game::provisional_starter`] -- the stand-in for the un-ported
+    /// Birch-bag handout, so a fresh game really can fight the I-4
+    /// encounter (issue #207 review). `None` means no party at all: the
+    /// state a bare [`Self::new`] (and so every `for_test` phase) starts
+    /// in, and the state a battle borrows the mon into while it runs; a
+    /// fired encounter is logged and dropped in it
     /// (`crate::flow::wild_encounter`'s module docs). The battle writes the
     /// mon back here when it ends, so damage taken persists into the
     /// overworld the way `gPlayerParty[0]` does.
@@ -308,7 +311,13 @@ impl OverworldPhase {
             new_game::SPAWN_ELEVATION,
             new_game::SPAWN_FACING,
         );
-        Ok(Self::new(scene, new_game::SPAWN_MAP_ID, player, None))
+        let mut phase = Self::new(scene, new_game::SPAWN_MAP_ID, player, None);
+        // The stand-in for the un-ported starter handout (issue #207
+        // review): without a lead, every I-4 encounter would be rolled and
+        // dropped. Deliberately drawing nothing from `phase.rng` — see
+        // `new_game::provisional_starter`'s docs.
+        phase.party_lead = Some(new_game::provisional_starter());
+        Ok(phase)
     }
 
     /// A phase around an already-built `scene` -- the pack-free
@@ -1094,13 +1103,14 @@ impl OverworldPhase {
     /// [`battle::Battle`] (issue #169) -- upstream's `CreateWildMon` +
     /// `BattleSetup_StartWildBattle` pair, minus the battle transition.
     ///
-    /// Nothing starts without a party mon to fight with: on a fresh save
-    /// [`Self::party_lead`] is `None`, exactly as upstream's `gPlayerParty`
-    /// is empty before Birch's bag, and this port has no script engine to
-    /// hand a starter over (`crate::flow::wild_encounter`'s module docs).
-    /// The encounter is logged and dropped in that case -- the roll itself
-    /// already happened and already consumed its draws, so the RNG stream
-    /// stays where the roll left it either way.
+    /// Nothing starts without a party mon to fight with. Production play
+    /// always has one -- [`Self::load_default`] assigns
+    /// [`new_game::provisional_starter`], the stand-in for the un-ported
+    /// Birch-bag handout -- so the `None` arm is the defensive fallback for
+    /// a bare [`Self::new`] phase (`crate::flow::wild_encounter`'s module
+    /// docs). The encounter is logged and dropped in that case -- the roll
+    /// itself already happened and already consumed its draws, so the RNG
+    /// stream stays where the roll left it either way.
     ///
     /// A rejected battle (an unknown species, or a wild moveset the turn
     /// engine can't execute) is logged and dropped too, leaving the player

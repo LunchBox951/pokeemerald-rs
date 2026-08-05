@@ -16,7 +16,7 @@
 //!   move-vs-move path too.
 
 use assets::{MoveId, SpeciesId};
-use battle::{Battle, BattleOutcome, BattlePokemon, Dex, Ivs, PlayerAction, MAX_IV};
+use battle::{Battle, BattleOutcome, BattlePokemon, Dex, Ivs, PlayerAction, StatStage, MAX_IV};
 use engine::overworld::metatile_behavior::{MB_ANIMATED_DOOR, MB_CAVE, MB_TALL_GRASS};
 use engine::overworld::warp::{trigger_door_warp, WarpTrigger};
 use engine::overworld::{wild_encounter::WildEncounter, Direction, PlayerState};
@@ -262,14 +262,16 @@ impl battle::BattleRng for ScriptedTurns<'_> {
 }
 
 /// With no party mon there is nothing to fight with, so the encounter is
-/// logged and dropped -- the state a fresh save is really in, since no
-/// script engine hands over a starter (module docs). The roll still
-/// happened, so the player keeps walking rather than being wedged.
+/// logged and dropped. Production play never reaches this state --
+/// `load_default` assigns `new_game::provisional_starter` (issue #207
+/// review) -- so this pins the defensive arm a bare test phase exercises.
+/// The roll still happened, so the player keeps walking rather than being
+/// wedged.
 #[test]
 fn an_encounter_without_a_party_mon_starts_no_battle_and_does_not_wedge_the_player() {
     let mut phase = route_101_phase(PlayerState::new((2, 5), 3, Direction::East), (7, 5));
     phase.rng = Rng::new(ENCOUNTER_SEED);
-    assert!(phase.party_lead.is_none(), "a fresh phase has no party");
+    assert!(phase.party_lead.is_none(), "a bare test phase has no party");
 
     for _ in 0..(5 * FRAMES_PER_STEP) {
         phase.step(held(Buttons::RIGHT));
@@ -308,6 +310,61 @@ fn walking_on_ordinary_ground_never_rolls_an_encounter() {
         phase.rng.state(),
         Rng::new(ENCOUNTER_SEED).state(),
         "a walk on ordinary ground must not draw at all"
+    );
+}
+
+/// Issue #207 review, finding 2: an in-battle stat-stage change (String
+/// Shot, Growl, Tail Whip) must not leak back into the overworld party lead
+/// when the battle ends -- upstream keeps stages in `gBattleMons` only,
+/// seeded fresh by `BattleStartClearSetData` each battle, and the party
+/// struct has no stage field to persist them in. A leaked stage would give
+/// the *next* encounter wrong turn order, damage, and accuracy.
+///
+/// The non-neutral stage is planted on the lead before the handoff (the
+/// write-back path cannot tell when a stage moved, only that it is
+/// non-neutral at the end), and the battle ends via the production driver's
+/// own successful run attempt.
+#[test]
+fn ending_a_battle_writes_the_lead_back_with_neutral_stat_stages() {
+    let mut rng = Rng::new(ENCOUNTER_SEED);
+    // Skip the four overworld roll draws, as the full-battle scenario above
+    // does: the encounter they produce is the slot-0 level-2 Wurmple.
+    for _ in 0..4 {
+        rng.next_u16();
+    }
+    let encounter = WildEncounter {
+        species: WURMPLE,
+        level: 2,
+        slot: 0,
+    };
+
+    // A level-50 Treecko whose Speed stage is already at -2: even halved it
+    // outruns a level-2 Wurmple, so the driver's run succeeds immediately
+    // and the battle ends with the stage still non-neutral.
+    let mut lead = player_mon(277, 50, vec![MoveId(1)]);
+    lead.stages_mut().speed = StatStage::new(-2).unwrap();
+
+    let battle = start_wild_battle(lead, encounter, &mut rng)
+        .expect("a Route 101 Wurmple must be fightable");
+    assert_eq!(
+        battle.player().stages().speed,
+        StatStage::new(-2).unwrap(),
+        "Battle::new must carry the planted stage in, or this pins nothing"
+    );
+
+    let mut slot = Some(battle);
+    let mut written_back: Option<BattlePokemon> = None;
+    let mut frames = 0;
+    while slot.is_some() {
+        advance_wild_battle(&mut slot, &mut written_back, &mut rng);
+        frames += 1;
+        assert!(frames < 200, "the headless driver must terminate");
+    }
+    let lead = written_back.expect("the battle writes the lead mon back when it ends");
+    assert_eq!(
+        lead.stages(),
+        battle::StatStages::default(),
+        "in-battle stat stages are battle-local and must be reset on the write-back"
     );
 }
 

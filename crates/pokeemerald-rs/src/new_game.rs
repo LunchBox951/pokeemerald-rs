@@ -125,6 +125,65 @@ pub const DEFAULT_PLAYER_CHARACTER: PlayerCharacter = PlayerCharacter::Brendan;
 /// starting money every new save begins with.
 pub const STARTING_MONEY: u32 = 3000;
 
+/// `SPECIES_TREECKO` — `sStarterMon[0]`
+/// (`pokeemerald/src/starter_choose.c:113-118`), the first of Birch's three
+/// bag options. The fixed pick standing in for the deferred starter-choose
+/// UI, on the same first-listed-default reasoning as [`DEFAULT_PLAYER_NAME`].
+pub const PROVISIONAL_STARTER_SPECIES: assets::SpeciesId = assets::SpeciesId(277);
+
+/// The level every starter is handed over at: `CB2_GiveStarter`'s
+/// `ScriptGiveMon(starterMon, 5, ITEM_NONE, 0, 0, 0)`
+/// (`pokeemerald/src/battle_setup.c:917-929`).
+pub const PROVISIONAL_STARTER_LEVEL: u8 = 5;
+
+/// The battle-ready party lead a fresh game starts with — the stand-in for
+/// the un-ported starter handout (issue #207 review, finding 1).
+///
+/// Upstream's party stays empty until the Route 101 rescue chain reaches
+/// `CB2_GiveStarter` (`pokeemerald/src/battle_setup.c:917-929`), which runs
+/// the starter-choose UI and `ScriptGiveMon`. This port has no script engine
+/// to run any of that, so without a lead assigned at new-game time every
+/// I-4 encounter would be rolled and then dropped — the acceptance path
+/// would be reachable only from tests. Until the Birch-bag slice replaces
+/// it, a fresh game therefore starts with the species/level upstream's
+/// handout produces ([`PROVISIONAL_STARTER_SPECIES`] at
+/// [`PROVISIONAL_STARTER_LEVEL`]), knowing its real
+/// `GiveBoxMonInitialMoveset` level-up moves.
+///
+/// **Deliberately deterministic, drawing nothing.** Upstream's
+/// `ScriptGiveMon` → `CreateMon` rolls personality and IVs off the global
+/// stream, but those draws belong to the script sequence that is not
+/// modelled yet; taking them here would shift every seed-pinned encounter
+/// test and ledger-verified draw sequence for no behavioural gain. Fixed
+/// personality `0` (nature `0 % 25` = Hardy, the neutral one) and all-zero
+/// IVs instead — the future Birch-bag slice inherits the job of rolling
+/// these for real, and should delete this function when it does.
+///
+/// The lead lives on the overworld phase, not in [`SaveBlock1`]:
+/// `player_party_count` stays `0` exactly as [`init_save_blocks`] leaves it,
+/// because this workspace's save model has no typed party-mon encoding yet
+/// and no save writer consumes one (upstream's `gPlayerParty` is likewise
+/// EWRAM state apart from the save block, synced only at save/load).
+///
+/// # Panics
+///
+/// Never in practice: [`PROVISIONAL_STARTER_SPECIES`] and its level-5
+/// learnset are in the generated dex tables, pinned by this module's
+/// `provisional_starter_is_a_fightable_lead` test.
+#[must_use]
+pub fn provisional_starter() -> battle::BattlePokemon {
+    let moves = battle::initial_moveset(PROVISIONAL_STARTER_SPECIES, PROVISIONAL_STARTER_LEVEL);
+    battle::BattlePokemon::new(
+        &battle::Dex::new(),
+        PROVISIONAL_STARTER_SPECIES,
+        PROVISIONAL_STARTER_LEVEL,
+        battle::Ivs::default(),
+        0,
+        moves,
+    )
+    .expect("the provisional starter's species and level-up moves are in the dex")
+}
+
 /// Where the intro hands control to the overworld loop (module docs, "No
 /// truck sequence"): `LittlerootTown_BrendansHouse_1F`'s stairs warp lands
 /// on `LittlerootTown_BrendansHouse_2F`'s own warp event index 0
@@ -375,6 +434,30 @@ mod tests {
         // `encode_str` appends the EOS terminator, so this is glyph count + 1.
         assert!(encoded.len() <= engine::save::block::PLAYER_NAME_BUF_LEN);
         assert_eq!(DEFAULT_PLAYER_NAME, "STU");
+    }
+
+    /// Issue #207 review, finding 1: a fresh game must start with a lead
+    /// that can actually fight the I-4 encounter. Pins the species/level to
+    /// upstream's handout (`CB2_GiveStarter`, `battle_setup.c:917-929`) and
+    /// the construction to be deterministic and draw-free — what makes
+    /// [`provisional_starter`]'s `expect` unreachable rather than latent.
+    #[test]
+    fn provisional_starter_is_a_fightable_lead() {
+        let starter = provisional_starter();
+        assert_eq!(starter.species(), PROVISIONAL_STARTER_SPECIES);
+        assert_eq!(starter.species(), assets::SpeciesId(277), "SPECIES_TREECKO");
+        assert_eq!(starter.level(), PROVISIONAL_STARTER_LEVEL);
+        assert!(!starter.is_fainted());
+        assert_eq!(starter.current_hp(), starter.stats().max_hp);
+        assert!(
+            !starter.moves().is_empty(),
+            "GiveBoxMonInitialMoveset gives a level-5 Treecko at least one move"
+        );
+        assert_eq!(starter.stages(), battle::StatStages::default());
+        // Two calls agree exactly: nothing about the construction reads a
+        // stream, so assigning it at new-game init can never shift the
+        // seed-pinned draw sequences the encounter tests rely on.
+        assert_eq!(starter, provisional_starter());
     }
 
     #[test]
