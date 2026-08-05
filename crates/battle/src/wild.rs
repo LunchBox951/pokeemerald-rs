@@ -419,11 +419,11 @@ mod tests {
         // 5. So nothing new is learned between the table's levels 2 and 3.
         // Move ids: Tackle 33, Growl 45, String Shot 81, Howl 336.
         for (species, level, expected) in [
-            (286, 2, vec![MoveId(33)]), // Poochyena: Tackle
-            (286, 3, vec![MoveId(33)]), // Howl is still two levels away
-            (286, 4, vec![MoveId(33)]), // ...one level away...
+            (286, 2, vec![MoveId(33)]),              // Poochyena: Tackle
+            (286, 3, vec![MoveId(33)]),              // Howl is still two levels away
+            (286, 4, vec![MoveId(33)]),              // ...one level away...
             (286, 5, vec![MoveId(33), MoveId(336)]), // ...and arrives exactly at 5
-            (288, 2, vec![MoveId(33), MoveId(45)]), // Zigzagoon: Tackle, Growl
+            (288, 2, vec![MoveId(33), MoveId(45)]),  // Zigzagoon: Tackle, Growl
             (288, 3, vec![MoveId(33), MoveId(45)]),
             (290, 2, vec![MoveId(33), MoveId(81)]), // Wurmple: Tackle, String Shot
             (290, 3, vec![MoveId(33), MoveId(81)]),
