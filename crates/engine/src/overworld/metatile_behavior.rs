@@ -42,7 +42,16 @@
 //! bit's job (`crate::overworld::collision`), independent of behavior — this
 //! matches upstream, where `MB_TALL_GRASS`/`MB_ICE`/etc. are all ordinarily
 //! passable and only *behavior-specific* systems (forced movement, warps)
-//! branch on the `MB_*` id. Forced movement (currents, slopes, ice sliding)
+//! branch on the `MB_*` id. The one exception upstream itself carves out is
+//! **directional** impassability — the `MB_IMPASSABLE_*` family and the four
+//! `MetatileBehavior_Is{North,South,East,West}Blocked` predicates
+//! (`metatile_behavior.c:933-977`) that `IsMetatileDirectionallyImpassable`
+//! (`event_object_movement.c:4715-4722`) consults *inside*
+//! `GetCollisionAtCoords`. Those predicates live here (see
+//! [`is_north_blocked`] and its siblings); the direction-to-predicate
+//! pairing that turns them into a collision verdict is
+//! [`crate::overworld::collision::directionally_impassable`]'s job.
+//! Forced movement (currents, slopes, ice sliding)
 //! is out of v1 scope entirely: this port does not special-case those
 //! behaviors, so stepping onto e.g. an ice tile is currently indistinguishable
 //! from stepping onto ordinary ground. That is a deliberate, documented gap,
@@ -91,6 +100,52 @@ pub const MB_ASHGRASS: u8 = 0x24;
 /// `MB_FOOTPRINTS` (`0x25`): the soft desert ground that records footprints —
 /// a land-encounter tile (`metatile_behavior.c:41`).
 pub const MB_FOOTPRINTS: u8 = 0x25;
+
+/// `MB_IMPASSABLE_EAST` (`0x30`): the first of upstream's ten
+/// **directionally impassable** behavior ids — a tile carrying an invisible
+/// one-sided wall that blocks movement across the named edge(s) while
+/// leaving the tile itself perfectly walkable (its
+/// [`MetatileCell::collision`](assets::MetatileCell::collision) bits are
+/// `0`). Upstream reads them only through the four
+/// `MetatileBehavior_Is{East,West,North,South}Blocked` predicates
+/// (`metatile_behavior.c:933-977`) modeled below as [`is_east_blocked`],
+/// [`is_west_blocked`], [`is_north_blocked`], [`is_south_blocked`], which
+/// `IsMetatileDirectionallyImpassable` (`event_object_movement.c:4715-4722`)
+/// applies to *both* the tile the mover stands on and the tile it is
+/// stepping onto — see
+/// [`crate::overworld::collision::directionally_impassable`].
+///
+/// The eight single/diagonal ids (`0x30`-`0x37`) are contiguous in
+/// `constants/metatile_behaviors.h`; the two both-sides ids
+/// ([`MB_IMPASSABLE_SOUTH_AND_NORTH`], [`MB_IMPASSABLE_WEST_AND_EAST`]) sit
+/// far away at `0xC0`/`0xC1` among the secret-base behaviors, and
+/// [`MB_SECRET_BASE_BREAKABLE_DOOR`] (`0xBE`) joins the east/west pair.
+/// All eleven are modeled together because the four predicates' id sets are
+/// what define the family — porting a subset would silently under-block.
+pub const MB_IMPASSABLE_EAST: u8 = 0x30;
+
+/// `MB_IMPASSABLE_WEST` (`0x31`) — see [`MB_IMPASSABLE_EAST`].
+pub const MB_IMPASSABLE_WEST: u8 = 0x31;
+
+/// `MB_IMPASSABLE_NORTH` (`0x32`) — see [`MB_IMPASSABLE_EAST`].
+pub const MB_IMPASSABLE_NORTH: u8 = 0x32;
+
+/// `MB_IMPASSABLE_SOUTH` (`0x33`) — see [`MB_IMPASSABLE_EAST`].
+pub const MB_IMPASSABLE_SOUTH: u8 = 0x33;
+
+/// `MB_IMPASSABLE_NORTHEAST` (`0x34`): blocks *both* the north and east
+/// edges (it is in [`is_north_blocked`]'s and [`is_east_blocked`]'s id sets
+/// alike) — see [`MB_IMPASSABLE_EAST`].
+pub const MB_IMPASSABLE_NORTHEAST: u8 = 0x34;
+
+/// `MB_IMPASSABLE_NORTHWEST` (`0x35`) — see [`MB_IMPASSABLE_NORTHEAST`].
+pub const MB_IMPASSABLE_NORTHWEST: u8 = 0x35;
+
+/// `MB_IMPASSABLE_SOUTHEAST` (`0x36`) — see [`MB_IMPASSABLE_NORTHEAST`].
+pub const MB_IMPASSABLE_SOUTHEAST: u8 = 0x36;
+
+/// `MB_IMPASSABLE_SOUTHWEST` (`0x37`) — see [`MB_IMPASSABLE_NORTHEAST`].
+pub const MB_IMPASSABLE_SOUTHWEST: u8 = 0x37;
 
 /// `MB_NON_ANIMATED_DOOR` (`0x60`): a warp tile with no open/close animation.
 /// Upstream uses this for interior staircases and other "just teleport"
@@ -175,6 +230,93 @@ pub const MB_DEEP_SOUTH_WARP: u8 = 0x6E;
 /// `MetatileBehavior_IsDoor` matches (`metatile_behavior.c:228-235`) — a
 /// door-alias only, like [`MB_WATER_DOOR`].
 pub const MB_PETALBURG_GYM_DOOR: u8 = 0x8D;
+
+/// `MB_SECRET_BASE_BREAKABLE_DOOR` (`0xBE`): a secret base's breakable wall
+/// tile, which upstream lists in *both*
+/// `MetatileBehavior_IsEastBlocked` and `MetatileBehavior_IsWestBlocked`
+/// (`metatile_behavior.c:933-955`) — so it is carried here even though
+/// secret bases themselves are entirely out of this port's scope. Dropping
+/// it would make [`is_east_blocked`]/[`is_west_blocked`] narrower than the
+/// upstream functions they claim to be; it costs one arm and no bundled map
+/// can reach it. See [`MB_IMPASSABLE_EAST`].
+pub const MB_SECRET_BASE_BREAKABLE_DOOR: u8 = 0xBE;
+
+/// `MB_IMPASSABLE_SOUTH_AND_NORTH` (`0xC0`): blocks travel across *both* the
+/// south and north edges, leaving only east/west traffic — the behavior the
+/// protagonist's bed carries on its center pillow tile
+/// (`LAYOUT_LITTLEROOT_TOWN_BRENDANS_HOUSE_2F` metatile `0x284` at layout
+/// coordinate `(1, 4)`, attribute `0x00C0` in
+/// `data/tilesets/secondary/brendans_mays_house/metatile_attributes.bin`),
+/// which is what stops the player walking lengthwise off the bed and out
+/// through its headboard (issue #218). See [`MB_IMPASSABLE_EAST`].
+pub const MB_IMPASSABLE_SOUTH_AND_NORTH: u8 = 0xC0;
+
+/// `MB_IMPASSABLE_WEST_AND_EAST` (`0xC1`): the east/west mirror of
+/// [`MB_IMPASSABLE_SOUTH_AND_NORTH`] — see [`MB_IMPASSABLE_EAST`].
+pub const MB_IMPASSABLE_WEST_AND_EAST: u8 = 0xC1;
+
+/// Whether a tile with `behavior` has an invisible wall along its **east**
+/// edge — upstream `MetatileBehavior_IsEastBlocked`
+/// (`metatile_behavior.c:933-943`).
+///
+/// The predicate says nothing on its own about which *move* it blocks: a
+/// mover standing on an east-blocked tile cannot leave eastward, and a mover
+/// stepping westward cannot enter one. That pairing is
+/// [`crate::overworld::collision::directionally_impassable`]'s, mirroring
+/// upstream's two function tables — see [`MB_IMPASSABLE_EAST`].
+#[must_use]
+pub const fn is_east_blocked(behavior: u8) -> bool {
+    matches!(
+        behavior,
+        MB_IMPASSABLE_EAST
+            | MB_IMPASSABLE_NORTHEAST
+            | MB_IMPASSABLE_SOUTHEAST
+            | MB_IMPASSABLE_WEST_AND_EAST
+            | MB_SECRET_BASE_BREAKABLE_DOOR
+    )
+}
+
+/// `MetatileBehavior_IsWestBlocked` (`metatile_behavior.c:945-955`) — see
+/// [`is_east_blocked`].
+#[must_use]
+pub const fn is_west_blocked(behavior: u8) -> bool {
+    matches!(
+        behavior,
+        MB_IMPASSABLE_WEST
+            | MB_IMPASSABLE_NORTHWEST
+            | MB_IMPASSABLE_SOUTHWEST
+            | MB_IMPASSABLE_WEST_AND_EAST
+            | MB_SECRET_BASE_BREAKABLE_DOOR
+    )
+}
+
+/// `MetatileBehavior_IsNorthBlocked` (`metatile_behavior.c:957-966`) — see
+/// [`is_east_blocked`]. Note the north/south pair does **not** include
+/// [`MB_SECRET_BASE_BREAKABLE_DOOR`]; only the east/west pair does, exactly
+/// as upstream has it.
+#[must_use]
+pub const fn is_north_blocked(behavior: u8) -> bool {
+    matches!(
+        behavior,
+        MB_IMPASSABLE_NORTH
+            | MB_IMPASSABLE_NORTHEAST
+            | MB_IMPASSABLE_NORTHWEST
+            | MB_IMPASSABLE_SOUTH_AND_NORTH
+    )
+}
+
+/// `MetatileBehavior_IsSouthBlocked` (`metatile_behavior.c:968-977`) — see
+/// [`is_east_blocked`] and [`is_north_blocked`].
+#[must_use]
+pub const fn is_south_blocked(behavior: u8) -> bool {
+    matches!(
+        behavior,
+        MB_IMPASSABLE_SOUTH
+            | MB_IMPASSABLE_SOUTHEAST
+            | MB_IMPASSABLE_SOUTHWEST
+            | MB_IMPASSABLE_SOUTH_AND_NORTH
+    )
+}
 
 /// Whether `behavior` is one of the two door ids that act as warp *triggers*
 /// in this slice, mirroring the union of upstream
@@ -463,6 +605,101 @@ mod tests {
             .filter(|b| is_land_wild_encounter(*b))
             .collect();
         assert_eq!(matching, expected);
+    }
+
+    /// The directional-impassability ids' numeric values, against their
+    /// positions in upstream's `constants/metatile_behaviors.h` enum — the
+    /// same index-is-the-value reasoning as the tests above. The two
+    /// both-sides ids and the breakable door sit far from the contiguous
+    /// `0x30..=0x37` run, so getting them wrong would silently disable the
+    /// only behavior any bundled map actually uses (`0xC0`, the bed).
+    #[test]
+    fn directional_impassability_ids_match_upstreams_enum_positions() {
+        assert_eq!(MB_IMPASSABLE_EAST, 0x30);
+        assert_eq!(MB_IMPASSABLE_WEST, 0x31);
+        assert_eq!(MB_IMPASSABLE_NORTH, 0x32);
+        assert_eq!(MB_IMPASSABLE_SOUTH, 0x33);
+        assert_eq!(MB_IMPASSABLE_NORTHEAST, 0x34);
+        assert_eq!(MB_IMPASSABLE_NORTHWEST, 0x35);
+        assert_eq!(MB_IMPASSABLE_SOUTHEAST, 0x36);
+        assert_eq!(MB_IMPASSABLE_SOUTHWEST, 0x37);
+        assert_eq!(MB_SECRET_BASE_BREAKABLE_DOOR, 0xBE);
+        assert_eq!(MB_IMPASSABLE_SOUTH_AND_NORTH, 0xC0);
+        assert_eq!(MB_IMPASSABLE_WEST_AND_EAST, 0xC1);
+    }
+
+    /// The four `MetatileBehavior_Is*Blocked` predicates
+    /// (`metatile_behavior.c:933-977`) over the *whole* `u8` id space —
+    /// exhaustive rather than sampled, so neither a missing arm nor an extra
+    /// one can slip through. Each expected set is transcribed straight from
+    /// the matching upstream function's `||` chain, in upstream's own order.
+    #[test]
+    fn blocked_predicates_match_upstreams_id_sets_exactly() {
+        let matching = |p: fn(u8) -> bool| (0..=u8::MAX).filter(|b| p(*b)).collect::<Vec<u8>>();
+
+        assert_eq!(
+            matching(is_east_blocked),
+            vec![
+                MB_IMPASSABLE_EAST,
+                MB_IMPASSABLE_NORTHEAST,
+                MB_IMPASSABLE_SOUTHEAST,
+                MB_SECRET_BASE_BREAKABLE_DOOR,
+                MB_IMPASSABLE_WEST_AND_EAST,
+            ]
+        );
+        assert_eq!(
+            matching(is_west_blocked),
+            vec![
+                MB_IMPASSABLE_WEST,
+                MB_IMPASSABLE_NORTHWEST,
+                MB_IMPASSABLE_SOUTHWEST,
+                MB_SECRET_BASE_BREAKABLE_DOOR,
+                MB_IMPASSABLE_WEST_AND_EAST,
+            ]
+        );
+        assert_eq!(
+            matching(is_north_blocked),
+            vec![
+                MB_IMPASSABLE_NORTH,
+                MB_IMPASSABLE_NORTHEAST,
+                MB_IMPASSABLE_NORTHWEST,
+                MB_IMPASSABLE_SOUTH_AND_NORTH,
+            ]
+        );
+        assert_eq!(
+            matching(is_south_blocked),
+            vec![
+                MB_IMPASSABLE_SOUTH,
+                MB_IMPASSABLE_SOUTHEAST,
+                MB_IMPASSABLE_SOUTHWEST,
+                MB_IMPASSABLE_SOUTH_AND_NORTH,
+            ]
+        );
+    }
+
+    /// The bed's own behavior id, the one issue #218 turns on: `0xC0` blocks
+    /// the north **and** south edges and nothing else, so a mover on it can
+    /// still leave east or west (which is how the bed's pillow tile stays
+    /// reachable from the side columns at all).
+    #[test]
+    fn the_beds_pillow_behavior_blocks_only_north_and_south() {
+        assert!(is_north_blocked(MB_IMPASSABLE_SOUTH_AND_NORTH));
+        assert!(is_south_blocked(MB_IMPASSABLE_SOUTH_AND_NORTH));
+        assert!(!is_east_blocked(MB_IMPASSABLE_SOUTH_AND_NORTH));
+        assert!(!is_west_blocked(MB_IMPASSABLE_SOUTH_AND_NORTH));
+    }
+
+    /// Ordinary ground blocks no edge — the other half of every
+    /// `IsMetatileDirectionallyImpassable` call, since one of the two tiles
+    /// it inspects is almost always plain floor.
+    #[test]
+    fn ordinary_ground_blocks_no_edge() {
+        for behavior in [MB_NORMAL, MB_TALL_GRASS, MB_NON_ANIMATED_DOOR] {
+            assert!(!is_north_blocked(behavior));
+            assert!(!is_south_blocked(behavior));
+            assert!(!is_east_blocked(behavior));
+            assert!(!is_west_blocked(behavior));
+        }
     }
 
     /// The two neighbours most likely to be confused with grass: ordinary

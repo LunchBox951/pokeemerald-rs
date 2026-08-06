@@ -100,33 +100,63 @@ const STEP_FRAME_HALF: u8 = WALK_FRAMES_PER_TILE / 2;
 /// behind the top one, matching `DrawMetatile`'s own "covers object event
 /// sprites" comment on the top layer. `gObjectEventBaseOam_16x32` is shared
 /// by every 16x32 object event, not just the player, so [`super::npc`]
-/// reuses these same three constants for its own "standard" NPC OAM entries
-/// (always at [`PLAYER_OBJ_PRIORITY`]: this port's NPCs are stationary --
-/// `overworld`'s module docs -- so they never stand on a tile whose
-/// elevation would move them off it).
+/// reuses the shape/size constants for its own "standard" NPC OAM entries.
+/// [`PLAYER_OBJ_PRIORITY`] itself is only the OAM template's *default*
+/// value, not a claim about any drawn object: both the player
+/// ([`player_entry`]) and NPCs ([`super::npc::oam_entries`]) select their
+/// real priority from an elevation via [`priority_for_elevation`], and this
+/// constant survives as that function's out-of-range fallback and as the
+/// name for "the default an unelevated object lands on anyway".
 pub(super) const PLAYER_OBJ_SHAPE: ObjShape = ObjShape::Vertical;
 pub(super) const PLAYER_OBJ_SIZE: u8 = 2;
 pub(super) const PLAYER_OBJ_PRIORITY: u8 = 2;
 
-/// `sElevationToPriority` (`event_object_movement.c`):
-/// `UpdateObjectEventElevationAndPriority` selects the object's OAM priority
-/// from its *retained* elevation (upstream `objEvent->previousElevation` --
-/// this port's [`PlayerState::previous_elevation`](engine::overworld::PlayerState::previous_elevation)),
-/// not the raw current elevation collision consults. Ordinary floor levels
-/// (0-3, 5, 7, 9, 11) resolve to the same default [`PLAYER_OBJ_PRIORITY`]
-/// (2) this OAM entry always used before issue #218; the "raised" odd
-/// elevations upstream uses for counters, stair landings, and the
-/// protagonist's own bed edges (4, 6, 8, 10, 12) resolve one step higher
-/// (numerically lower = more in front, `rendering::compositor`'s rules) --
-/// level with [`super::viewport::TOP_PRIORITY`], which the
-/// same-priority-favors-the-sprite tie rule (module docs above) then draws
-/// the sprite *in front of* rather than behind, matching a raised surface
-/// visually standing above whatever the top BG layer would otherwise
-/// occlude it with. `ELEVATION_MULTI_LEVEL` (13/14) shares priority `0`
-/// (frontmost of all); transcribed complete against the real upstream table
-/// even though no bundled map's player-reachable tile uses those two
-/// indices, so a future one that does inherits a correct value rather than
-/// a gap.
+/// `sElevationToPriority` (`event_object_movement.c:7729-7731`):
+/// `UpdateObjectEventElevationAndPriority` (`:7737-7746`) selects an object
+/// event's OAM priority from its *retained* elevation (upstream
+/// `objEvent->previousElevation` -- this port's
+/// [`PlayerState::previous_elevation`](engine::overworld::PlayerState::previous_elevation)),
+/// not the raw current elevation collision consults. Used for the player
+/// here ([`player_entry`]) and, via each template's own elevation, for
+/// stationary NPCs in [`super::npc::oam_entries`].
+///
+/// Ordinary floor levels (0-3, 5, 7, 9, 11, and 15 =
+/// `ELEVATION_MULTI_LEVEL`) resolve to the same default
+/// [`PLAYER_OBJ_PRIORITY`] (2) this OAM entry always used before issue
+/// #218; the "raised" **even** elevations upstream uses for counters, stair
+/// landings, and the protagonist's own bed edges (4, 6, 8, 10, 12) resolve
+/// one step higher (numerically lower = more in front,
+/// `rendering::compositor`'s rules) -- level with
+/// [`super::viewport::TOP_PRIORITY`], which the same-priority-favors-the-
+/// sprite tie rule (module docs above) then draws the sprite *in front of*
+/// rather than behind, matching a raised surface visually standing above
+/// whatever the top BG layer would otherwise occlude it with. Indices 13
+/// and 14 -- unnamed upstream, with no `ELEVATION_*` constant and no
+/// bundled map's cell using them -- are the only ones that resolve to `0`
+/// (frontmost of all). The table is transcribed complete rather than
+/// truncated to the reachable indices, so a future map that does use one
+/// inherits a correct value rather than a gap.
+///
+/// **A whole-sprite priority swap is the *complete* model here, not a
+/// partial one.** `UpdateObjectEventElevationAndPriority` also assigns
+/// `sprite->subspriteTableNum = sElevationToSubspriteTableNum[previousElevation]`
+/// (`:7733-7735, 7744`), which this port has no equivalent for --
+/// [`OamEntry`] is a single hardware OBJ with one priority field. That
+/// costs nothing for a 16x32 object event: the table's values (`1` for
+/// every flat elevation, `2` for the raised ones, `0` for indices 13/14)
+/// index `sOamTables_16x32` (`object_event_subsprites.h:176-183`), whose
+/// entry 1 is `sOamTable_16x32_0` -- *one* full-size 16x32 subsprite at
+/// priority 2 -- entry 2 is `sOamTable_16x32_1` -- one full-size 16x32 at
+/// priority 1 -- and entry 0 is the empty table, which
+/// `AddSubspritesToOamBuffer` (`sprite.c:1690-1695`) copies through as the
+/// plain OBJ at `sprite->oam.priority`. Every selected table is therefore a
+/// single OBJ covering the same 16x32 area at exactly the priority this
+/// array already gives, so emitting one OBJ at
+/// [`priority_for_elevation`]'s value reproduces the hardware result
+/// pixel for pixel. The multi-piece split tables that *would* need a real
+/// subsprite model are only ever selected by
+/// `SetObjectEventSpriteOamTableForLongGrass` (`:7690-7705`, table nums
+/// 4/5) -- a separate, unported ground effect, not this array.
 const ELEVATION_TO_PRIORITY: [u8; 16] = [2, 2, 2, 2, 1, 2, 1, 2, 1, 2, 1, 2, 1, 0, 0, 2];
 
 /// [`ELEVATION_TO_PRIORITY`]`[elevation]`, defaulting to

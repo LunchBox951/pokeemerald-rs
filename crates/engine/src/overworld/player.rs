@@ -24,11 +24,13 @@
 //! — `TryDoMetatileBehaviorForcedMovement` and its `ForcedMovement_*`
 //! table), no ledges (`ShouldJumpLedge`), no movement-range clamp
 //! (`IsCoordOutsideObjectEventMovementRange`, which never constrains the
-//! player — its `range` is zero), no directional metatile impassability
-//! (`IsMetatileDirectionallyImpassable`), and no camera clamp
+//! player — its `range` is zero), and no camera clamp
 //! (`CanCameraMoveInDirection`). Stationary object events *do* block
 //! movement (`DoesObjectCollideWithObjectAt`, added for issue #161 — see
-//! [`PlayerState::step`]). All of upstream's per-frame *animation* timing (the
+//! [`PlayerState::step`]), and so does behavior-driven **directional**
+//! impassability (`IsMetatileDirectionallyImpassable`, added for issue #218 —
+//! see [`crate::overworld::collision::directionally_impassable`]). All of
+//! upstream's per-frame *animation* timing (the
 //! specific pixel offsets `Step1`/`Step2`/... apply) is also out of scope —
 //! there is no renderer yet to consume it — but the *pacing* it produces
 //! (16 frames to cross one tile at a walk, and no new turn/step decision
@@ -38,9 +40,10 @@
 
 use assets::MapId;
 
-use super::collision::elevation_mismatch;
+use super::collision::{directionally_impassable, elevation_mismatch};
 use super::direction::Direction;
 use super::map_runtime::{ConnectedMapData, MapRuntime};
+use super::metatile_behavior::MB_NORMAL;
 use super::object_event::visible_object_event_at;
 use crate::event_data::EventData;
 
@@ -264,11 +267,16 @@ impl PlayerState {
     /// # Collision
     ///
     /// The destination tile is tested in `GetCollisionAtCoords`' own order
-    /// (`event_object_movement.c:4658-4672`): the grid's collision bits
-    /// (`MapGridGetCollisionAt`, plus the off-the-edge-with-no-connection
-    /// case that is `GetMapBorderIdAt(x, y) == CONNECTION_INVALID`), then
-    /// the elevation mismatch (`IsElevationMismatchAt`), then — new for
-    /// issue #161 — whether a visible object event stands there
+    /// (`event_object_movement.c:4658-4672`): first the whole
+    /// `COLLISION_IMPASSABLE` arm — the grid's collision bits
+    /// (`MapGridGetCollisionAt`), the off-the-edge-with-no-connection case
+    /// (`GetMapBorderIdAt(x, y) == CONNECTION_INVALID`), and — new for issue
+    /// #218 — behavior-driven directional impassability
+    /// (`IsMetatileDirectionallyImpassable`, `:4715-4722`), which upstream
+    /// `||`s into that *same* `else if` so all three report
+    /// [`Collision::Impassable`](super::collision::Collision::Impassable) —
+    /// then the elevation mismatch (`IsElevationMismatchAt`, `:7707-7723`),
+    /// then — added for issue #161 — whether a visible object event stands there
     /// (`DoesObjectCollideWithObjectAt`, reported as
     /// [`Collision::ObjectEvent`](super::collision::Collision::ObjectEvent)).
     /// `event_data` is what makes that last test honest: upstream scans the
@@ -285,7 +293,7 @@ impl PlayerState {
     /// animation in the attempted direction — walking into an NPC turns the
     /// avatar to face it, exactly as walking into a wall does.
     ///
-    /// Two deliberate narrowings against upstream, both invisible here:
+    /// Three deliberate narrowings against upstream, all invisible here:
     ///
     /// - **The player never collides with itself.** Upstream's scan skips
     ///   `curObject != objectEvent`; this port has no player entry to skip,
@@ -301,6 +309,24 @@ impl PlayerState {
     ///   tile would be vacuous anyway. Wiring cross-map object events in
     ///   belongs with the rest of connection support (see
     ///   `crate::overworld`'s scope notes), not with this slice.
+    /// - **The connection-crossing branch runs only the *standing* half of
+    ///   the directional-impassability test.** That half needs only this
+    ///   map's own behavior, which [`MapRuntime`] has; the target half would
+    ///   need the *neighbouring* map's tileset attribute tables, and
+    ///   [`ConnectedMapData`] hands out decoded cells only. The landing tile
+    ///   is therefore evaluated as [`MB_NORMAL`] — the same "unrecognized
+    ///   behavior is ordinary ground" convention
+    ///   [`MapRuntime::metatile_behavior`]'s `None` already carries (see
+    ///   `crate::overworld::metatile_behavior`'s module docs). No bundled
+    ///   map puts an `MB_IMPASSABLE_*` tile on a connection edge, so this
+    ///   narrowing is unobservable today; it is listed rather than hidden.
+    ///
+    /// The directional test's *standing*-side input is upstream's
+    /// `objectEvent->currentMetatileBehavior`, which
+    /// `ObjectEventUpdateMetatileBehaviors` (`:7428-7432`) keeps equal to
+    /// `MapGridGetMetatileBehaviorAt(currentCoords)`. This port re-reads the
+    /// grid at [`Self::position`] instead of caching a field — the same
+    /// value by construction, and one fewer piece of state to keep in sync.
     ///
     /// # Elevation adoption
     ///
@@ -318,28 +344,43 @@ impl PlayerState {
     /// against `ELEVATION_TRANSITION` (0) tiles on both the north and south
     /// sides.
     ///
-    /// **That bed is also this method's pin for issue #218's collision
-    /// claim.** The bed's authored cells (`x=0..2, y=4..6` in the room's own
-    /// local space) decode to a `0 → 4 → 0` run down each side column and a
-    /// `COLLISION_IMPASSABLE` center tile at `y=5` (pinned against the real
-    /// pack by `crates/pokeemerald-rs`'s
-    /// `bedroom_bed_side_column_is_walkable_and_retains_the_raised_previous_elevation`
-    /// real-pack test, which walks that exact column through
-    /// `OverworldPhase`). [`elevation_mismatch`] already matches
-    /// `IsElevationMismatchAt` field for field (checked directly against
-    /// `pokeemerald/src/event_object_movement.c:7707-7719`), and that
-    /// function's *only* parameter drawn from the mover is
-    /// `objectEvent->currentElevation` — never `previousElevation`. So the
-    /// current-vs-previous split this method adds does not, and must not,
-    /// change any step's collision outcome along that side column: every
-    /// step from the room's south doorway, up through the bed's raised
-    /// edge, and out its north side is `COLLISION_NONE` in both this port
-    /// and upstream alike, because both run the identical wildcard formula
-    /// against the identical authored data. The real, fixable divergence
-    /// this issue reports is what [`Self::previous_elevation`] now feeds —
-    /// the player OBJ's render priority (`avatar::priority_for_elevation` in
-    /// `pokeemerald-rs`) — not this method's collision gate, which upstream
-    /// never routes through `previousElevation` in the first place.
+    /// **That bed is also where issue #218's reported escape actually
+    /// lives — and elevation is not what closes it.** The bed's authored
+    /// cells (`x=0..2, y=4..6` in the room's own local space) decode to a
+    /// `0 → 4 → 0` elevation run down each *side* column and a
+    /// collision-bit-blocked center tile at `(1, 5)`. Those side columns are
+    /// walkable end to end in this port **and in upstream alike**, and that
+    /// is faithful, not a bug: [`elevation_mismatch`] matches
+    /// `IsElevationMismatchAt` field for field
+    /// (`event_object_movement.c:7707-7723`), both sides run the identical
+    /// transition-wildcard formula over the identical authored data, and
+    /// that function's only mover-side input is
+    /// `objectEvent->currentElevation` — never `previousElevation`, so the
+    /// current-vs-previous split does not and must not move any of those
+    /// verdicts. Tightening the wildcard to "fix" the side columns would
+    /// break the bedroom's own stair warp (issue #163) and every
+    /// bridge/staircase landing built on the same rule.
+    ///
+    /// The step that was genuinely blocked upstream and permitted here is a
+    /// different one: the bed's **center pillow tile** `(1, 4)`, elevation
+    /// `3`, whose metatile `0x284` carries behavior `0xC0`
+    /// ([`MB_IMPASSABLE_SOUTH_AND_NORTH`](super::metatile_behavior::MB_IMPASSABLE_SOUTH_AND_NORTH))
+    /// in `data/tilesets/secondary/brendans_mays_house/metatile_attributes.bin`.
+    /// Its collision bits are `0` and its elevation matches the floor above
+    /// it, so neither of the two tests this port used to run said anything
+    /// about it — the avatar could walk straight through the pillow and out
+    /// the bed's north side. Upstream refuses both halves of that crossing
+    /// in `IsMetatileDirectionallyImpassable`: standing on `(1, 4)` and
+    /// moving north is stopped by the *standing*-tile predicate, and
+    /// standing on `(1, 3)` and moving south by the *target*-tile one. That
+    /// check is now modeled (see the "# Collision" section above and
+    /// [`directionally_impassable`]), and pinned both as a unit test on this
+    /// method and by `crates/pokeemerald-rs`'s
+    /// `bedroom_bed_center_pillow_cannot_be_crossed_lengthwise` real-pack
+    /// regression, which walks the real route onto the pillow and asserts
+    /// the north-side exit does not complete. The side-column parity test
+    /// alongside it stays exactly as it was — those columns *are* walkable
+    /// in both.
     pub fn step(
         &mut self,
         input: Option<Direction>,
@@ -368,8 +409,28 @@ impl PlayerState {
         let (dx, dy) = direction.delta();
         let target = (self.position.0 + dx, self.position.1 + dy);
 
+        // `objectEvent->currentMetatileBehavior` (kept fresh by
+        // ObjectEventUpdateMetatileBehaviors, `:7428-7432`), re-read from the
+        // grid rather than cached -- see this method's "# Collision" doc.
+        // An unclassifiable attribute entry reads as ordinary ground, the
+        // same convention `MapRuntime::metatile_behavior`'s `None` carries
+        // everywhere else.
+        let standing_behavior = runtime
+            .metatile_behavior(self.position.0, self.position.1)
+            .unwrap_or(MB_NORMAL);
+
         if let Some(cell) = runtime.metatile_cell(target.0, target.1) {
-            if cell.collision != 0 {
+            // GetCollisionAtCoords' COLLISION_IMPASSABLE arm, in full: the
+            // grid's collision bits `||` IsMetatileDirectionallyImpassable
+            // (`:4663`). One arm upstream, so one arm here -- and both ahead
+            // of the elevation mismatch below, which is a *different*
+            // COLLISION_* value.
+            let target_behavior = runtime
+                .metatile_behavior(target.0, target.1)
+                .unwrap_or(MB_NORMAL);
+            if cell.collision != 0
+                || directionally_impassable(standing_behavior, target_behavior, direction)
+            {
                 return StepOutcome::Blocked {
                     direction,
                     collision: super::collision::Collision::Impassable,
@@ -419,7 +480,14 @@ impl PlayerState {
                     collision: super::collision::Collision::Impassable,
                 };
             };
-            if cell.collision != 0 {
+            // Same arm as above, minus the target half: a neighbouring map's
+            // tileset attributes are not reachable through `ConnectedMapData`,
+            // so the landing tile reads as MB_NORMAL (documented narrowing in
+            // this method's "# Collision" section). The standing half is this
+            // map's own tile and is evaluated for real.
+            if cell.collision != 0
+                || directionally_impassable(standing_behavior, MB_NORMAL, direction)
+            {
                 return StepOutcome::Blocked {
                     direction,
                     collision: super::collision::Collision::Impassable,
@@ -455,6 +523,7 @@ impl PlayerState {
 mod tests {
     use super::*;
     use crate::overworld::map_runtime::MapRuntime;
+    use crate::overworld::metatile_behavior::MB_IMPASSABLE_SOUTH_AND_NORTH;
     use assets::{
         BattleScene, MapConnection, MapEvents, MapHeader, MapType, MetatileAttributeTable,
         MetatileCell, ObjectEvent, RegionMapSectionId, Weather,
@@ -921,6 +990,177 @@ mod tests {
             }
         );
         assert_eq!(player.position(), (2, 2));
+    }
+
+    // -- Directional metatile impassability (S-5, issue #218) --------------
+
+    /// A 3x8 grid laid out in the protagonist bedroom's *own* local
+    /// coordinate space (`LAYOUT_LITTLEROOT_TOWN_BRENDANS_HOUSE_2F`), so the
+    /// coordinates below are literally the ones issue #218 cites. Every
+    /// cell is plain, walkable, elevation-3 floor with clear collision bits
+    /// — including `(1, 5)`, which the real map walls off — *except* that
+    /// `(1, 4)`, the bed's center pillow tile, carries behavior
+    /// [`MB_IMPASSABLE_SOUTH_AND_NORTH`] (upstream metatile `0x284`'s
+    /// attribute `0x00C0`). Stripping every other obstruction is the point:
+    /// whatever blocks a step in these tests can only be the behavior.
+    ///
+    /// `pillow_elevation` lets one test additionally make the pillow
+    /// elevation-mismatched, to pin `GetCollisionAtCoords`' ordering.
+    fn bed_pillow_runtime(pillow_elevation: u8) -> MapRuntime<'static> {
+        const WIDTH: u16 = 3;
+        const HEIGHT: u16 = 8;
+        const PILLOW: (u16, u16) = (1, 4);
+
+        let mut bytes = Vec::with_capacity(usize::from(WIDTH) * usize::from(HEIGHT) * 2);
+        for y in 0..HEIGHT {
+            for x in 0..WIDTH {
+                let is_pillow = (x, y) == PILLOW;
+                let raw = MetatileCell {
+                    // Metatile id 1 is the pillow, id 0 is everything else;
+                    // both index the primary attribute table below.
+                    metatile_id: u16::from(is_pillow),
+                    collision: 0,
+                    elevation: if is_pillow { pillow_elevation } else { 3 },
+                }
+                .pack();
+                bytes.extend_from_slice(&raw.to_le_bytes());
+            }
+        }
+
+        // A `metatile_attributes.bin`-shaped buffer: one little-endian u16
+        // per metatile, behavior in bits 0-7 (`METATILE_ATTR_BEHAVIOR_MASK`)
+        // and layer type in bits 12-15 (0 == `METATILE_LAYER_TYPE_NORMAL`).
+        let attrs = vec![MB_NORMAL, 0x00, MB_IMPASSABLE_SOUTH_AND_NORTH, 0x00];
+
+        let layout = assets::MapLayout {
+            id: assets::LayoutId("MAP_TEST"),
+            name: "MapTest",
+            width: WIDTH,
+            height: HEIGHT,
+            primary_tileset: "gTileset_Building",
+            secondary_tileset: "gTileset_BrendansMaysHouse",
+        };
+        let (_, header, events) = flat_runtime(1, 1, |_, _| 0);
+        let bytes = Box::leak(bytes.into_boxed_slice());
+        let attrs = Box::leak(attrs.into_boxed_slice());
+        let header = Box::leak(Box::new(header));
+        let events = Box::leak(Box::new(events));
+        MapRuntime::new(
+            assets::MapId("MAP_TEST"),
+            header,
+            events,
+            layout.grid(bytes).unwrap(),
+            MetatileAttributeTable::new(attrs),
+            MetatileAttributeTable::new(&[]),
+        )
+    }
+
+    /// Issue #218's AC#1, standing-tile half: the avatar on the bed's center
+    /// pillow `(1, 4)` at elevation 3, pressing North, must get
+    /// `COLLISION_IMPASSABLE`. Upstream reaches that verdict through
+    /// `IsMetatileDirectionallyImpassable`'s
+    /// `gOppositeDirectionBlockedMetatileFuncs[DIR_NORTH - 1]` —
+    /// `MetatileBehavior_IsNorthBlocked` applied to
+    /// `objectEvent->currentMetatileBehavior` (`event_object_movement.c:4717`)
+    /// — which matches `MB_IMPASSABLE_SOUTH_AND_NORTH`
+    /// (`metatile_behavior.c:957-966`). This port returned
+    /// `Collision::None` here before the fix, which is the escape the issue
+    /// reports: the avatar walked straight off the bed through its
+    /// headboard.
+    #[test]
+    fn the_beds_pillow_tile_cannot_be_left_northward() {
+        let runtime = bed_pillow_runtime(3);
+        let mut player = PlayerState::new((1, 4), 3, Direction::North);
+
+        let outcome = player.step(Some(Direction::North), &runtime, &no_connections, &NO_FLAGS);
+        assert_eq!(
+            outcome,
+            StepOutcome::Blocked {
+                direction: Direction::North,
+                collision: super::super::collision::Collision::Impassable,
+            }
+        );
+        assert_eq!(player.position(), (1, 4));
+        assert!(
+            !player.in_transit(),
+            "a blocked step must not start a transition"
+        );
+    }
+
+    /// Issue #218's AC#1, target-tile half — the mirror of the test above:
+    /// standing on the ordinary floor tile `(1, 3)` directly north of the
+    /// pillow and pressing South is `COLLISION_IMPASSABLE` too, this time
+    /// via `gDirectionBlockedMetatileFuncs[DIR_SOUTH - 1]` —
+    /// `MetatileBehavior_IsNorthBlocked` applied to the *destination's*
+    /// behavior (`event_object_movement.c:4718`). The standing tile here is
+    /// plain floor, so only the target half can be responsible.
+    #[test]
+    fn the_beds_pillow_tile_cannot_be_entered_from_the_north() {
+        let runtime = bed_pillow_runtime(3);
+        let mut player = PlayerState::new((1, 3), 3, Direction::South);
+
+        let outcome = player.step(Some(Direction::South), &runtime, &no_connections, &NO_FLAGS);
+        assert_eq!(
+            outcome,
+            StepOutcome::Blocked {
+                direction: Direction::South,
+                collision: super::super::collision::Collision::Impassable,
+            }
+        );
+        assert_eq!(player.position(), (1, 3));
+    }
+
+    /// The other half of the bed's shape, and the reason
+    /// `MB_IMPASSABLE_SOUTH_AND_NORTH` is not just "impassable": east/west
+    /// traffic across the pillow is untouched, which is how the tile stays
+    /// reachable from the bed's side columns at all. A directional block
+    /// that leaked into the perpendicular axis would silently wall the bed
+    /// off entirely.
+    #[test]
+    fn the_beds_pillow_tile_stays_crossable_east_to_west() {
+        let runtime = bed_pillow_runtime(3);
+
+        let mut player = PlayerState::new((0, 4), 3, Direction::East);
+        assert_eq!(
+            player.step(Some(Direction::East), &runtime, &no_connections, &NO_FLAGS),
+            StepOutcome::Advanced {
+                from: (0, 4),
+                to: (1, 4),
+            }
+        );
+
+        let mut player = PlayerState::new((1, 4), 3, Direction::East);
+        assert_eq!(
+            player.step(Some(Direction::East), &runtime, &no_connections, &NO_FLAGS),
+            StepOutcome::Advanced {
+                from: (1, 4),
+                to: (2, 4),
+            }
+        );
+    }
+
+    /// `GetCollisionAtCoords`' ordering (`event_object_movement.c:4663-4668`):
+    /// `IsMetatileDirectionallyImpassable` shares the `COLLISION_IMPASSABLE`
+    /// arm with the grid's collision bits, *ahead* of
+    /// `IsElevationMismatchAt`'s separate `COLLISION_ELEVATION_MISMATCH`
+    /// arm. A tile that is both directionally blocked and elevation-
+    /// mismatched must therefore report `Impassable`, never
+    /// `ElevationMismatch` — the one place the two new checks' relative
+    /// position is observable in the returned value.
+    #[test]
+    fn directional_impassability_outranks_the_elevation_mismatch() {
+        // Pillow at elevation 7 against a player at elevation 3: mismatched
+        // *and* north-blocked.
+        let runtime = bed_pillow_runtime(7);
+        let mut player = PlayerState::new((1, 3), 3, Direction::South);
+
+        assert_eq!(
+            player.step(Some(Direction::South), &runtime, &no_connections, &NO_FLAGS),
+            StepOutcome::Blocked {
+                direction: Direction::South,
+                collision: super::super::collision::Collision::Impassable,
+            }
+        );
     }
 
     /// `ObjectEventUpdateElevation` adopts `currentElevation` from the

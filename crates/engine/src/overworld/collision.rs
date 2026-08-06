@@ -14,12 +14,19 @@
 //!
 //! `GetCollisionAtCoords`' own test *order* (`event_object_movement.c:4658-4672`)
 //! is part of the ported behaviour, not an implementation detail: the grid's
-//! collision bits are tested first, then the elevation mismatch, and only
-//! then `DoesObjectCollideWithObjectAt`. A tile that is both walled off and
+//! collision bits and [`directionally_impassable`] are tested first — they
+//! share a single `else if` arm upstream, so both report
+//! [`Collision::Impassable`] — then the elevation mismatch, and only then
+//! `DoesObjectCollideWithObjectAt`. A tile that is both walled off and
 //! occupied therefore reports [`Collision::Impassable`], never
 //! [`Collision::ObjectEvent`] — see
 //! [`crate::overworld::player::PlayerState::step`], which applies the checks
 //! in that same order.
+
+use super::direction::Direction;
+use super::metatile_behavior::{
+    is_east_blocked, is_north_blocked, is_south_blocked, is_west_blocked,
+};
 
 /// Upstream `ELEVATION_TRANSITION` (`include/global.fieldmap.h`): an
 /// elevation of `0` means "compatible with anything" in both directions —
@@ -47,6 +54,64 @@ pub const fn elevation_mismatch(current_elevation: u8, target_elevation: u8) -> 
         return false;
     }
     current_elevation != target_elevation
+}
+
+/// Whether a step in `direction` is blocked by an invisible one-sided wall
+/// carried by either tile's *behavior*, mirroring upstream
+/// `IsMetatileDirectionallyImpassable` (`event_object_movement.c:4715-4722`)
+/// exactly (that function's own grid lookups are
+/// `crate::overworld::map_runtime`'s job — this is the behavior-vs-behavior
+/// decision at its core).
+///
+/// `standing_behavior` is the behavior of the tile the mover currently
+/// occupies (upstream `objectEvent->currentMetatileBehavior`, kept fresh by
+/// `ObjectEventUpdateMetatileBehaviors`, `:7428-7432`, from
+/// `MapGridGetMetatileBehaviorAt(currentCoords)` — this port re-reads the
+/// grid at the mover's position instead of caching a field, which is the
+/// same value by construction). `target_behavior` is the behavior of the
+/// tile being stepped onto (upstream's own `MapGridGetMetatileBehaviorAt(x, y)`).
+///
+/// **Both sides are checked, with different pairings** — this is the part
+/// that is easy to get backwards, so it is spelled out here. Upstream keeps
+/// two function tables (`:893-905`), both indexed by `direction - 1`:
+///
+/// - `gOppositeDirectionBlockedMetatileFuncs` is applied to the **standing**
+///   tile and pairs each direction with its *own* predicate: moving north
+///   consults [`is_north_blocked`], south [`is_south_blocked`], and so on.
+///   A mover standing on a north-blocked tile cannot leave northward.
+/// - `gDirectionBlockedMetatileFuncs` is applied to the **target** tile and
+///   pairs each direction with the *opposite* predicate: moving north
+///   consults [`is_south_blocked`], south [`is_north_blocked`], west
+///   [`is_east_blocked`], east [`is_west_blocked`]. A mover cannot enter a
+///   tile through an edge that tile walls off.
+///
+/// (Upstream's two array *names* read the other way round from the pairings
+/// they hold; the pairings above are what the arrays literally contain.)
+///
+/// Worked example, the issue #218 defect: the protagonist's bed carries
+/// [`MB_IMPASSABLE_SOUTH_AND_NORTH`](super::metatile_behavior::MB_IMPASSABLE_SOUTH_AND_NORTH)
+/// on its center pillow tile. Standing on the pillow and pressing north is
+/// blocked by the *standing*-side test (`is_north_blocked(0xC0)`); standing
+/// on the plain floor tile above it and pressing south is blocked by the
+/// *target*-side test (`is_north_blocked(0xC0)` again, the opposite pairing
+/// for a southward move). Either way the player cannot cross the bed
+/// lengthwise, while east/west traffic across it stays free.
+#[must_use]
+pub const fn directionally_impassable(
+    standing_behavior: u8,
+    target_behavior: u8,
+    direction: Direction,
+) -> bool {
+    match direction {
+        Direction::South => {
+            is_south_blocked(standing_behavior) || is_north_blocked(target_behavior)
+        }
+        Direction::North => {
+            is_north_blocked(standing_behavior) || is_south_blocked(target_behavior)
+        }
+        Direction::West => is_west_blocked(standing_behavior) || is_east_blocked(target_behavior),
+        Direction::East => is_east_blocked(standing_behavior) || is_west_blocked(target_behavior),
+    }
 }
 
 /// The outcome of checking whether an on-foot object can move onto a tile —
@@ -110,5 +175,141 @@ mod tests {
     fn differing_ordinary_elevations_mismatch() {
         assert!(elevation_mismatch(3, 4));
         assert!(elevation_mismatch(1, 2));
+    }
+
+    use super::super::metatile_behavior::{
+        MB_IMPASSABLE_NORTH, MB_IMPASSABLE_NORTHEAST, MB_IMPASSABLE_SOUTH,
+        MB_IMPASSABLE_SOUTH_AND_NORTH, MB_IMPASSABLE_WEST, MB_IMPASSABLE_WEST_AND_EAST, MB_NORMAL,
+    };
+
+    /// Two ordinary-ground tiles are never directionally impassable, in any
+    /// direction — the overwhelmingly common case, and the one that would
+    /// break every other movement test in the workspace if the pairing were
+    /// wrong.
+    #[test]
+    fn plain_ground_is_directionally_passable_in_every_direction() {
+        for direction in [
+            Direction::North,
+            Direction::South,
+            Direction::East,
+            Direction::West,
+        ] {
+            assert!(!directionally_impassable(MB_NORMAL, MB_NORMAL, direction));
+        }
+    }
+
+    /// The **standing**-tile half (upstream
+    /// `gOppositeDirectionBlockedMetatileFuncs[direction - 1]` applied to
+    /// `currentMetatileBehavior`): each direction consults its *own*
+    /// predicate, so a mover on the bed's pillow cannot leave north or
+    /// south but can still leave east or west.
+    #[test]
+    fn the_standing_tile_blocks_its_own_direction() {
+        assert!(directionally_impassable(
+            MB_IMPASSABLE_SOUTH_AND_NORTH,
+            MB_NORMAL,
+            Direction::North
+        ));
+        assert!(directionally_impassable(
+            MB_IMPASSABLE_SOUTH_AND_NORTH,
+            MB_NORMAL,
+            Direction::South
+        ));
+        assert!(!directionally_impassable(
+            MB_IMPASSABLE_SOUTH_AND_NORTH,
+            MB_NORMAL,
+            Direction::East
+        ));
+        assert!(!directionally_impassable(
+            MB_IMPASSABLE_SOUTH_AND_NORTH,
+            MB_NORMAL,
+            Direction::West
+        ));
+    }
+
+    /// The **target**-tile half (upstream
+    /// `gDirectionBlockedMetatileFuncs[direction - 1]` applied to
+    /// `MapGridGetMetatileBehaviorAt(x, y)`): each direction consults the
+    /// *opposite* predicate, so the same `0xC0` pillow tile blocks entry
+    /// from the north (a southward move) and from the south (a northward
+    /// move) while staying enterable from either side.
+    #[test]
+    fn the_target_tile_blocks_the_opposite_direction() {
+        assert!(directionally_impassable(
+            MB_NORMAL,
+            MB_IMPASSABLE_SOUTH_AND_NORTH,
+            Direction::South
+        ));
+        assert!(directionally_impassable(
+            MB_NORMAL,
+            MB_IMPASSABLE_SOUTH_AND_NORTH,
+            Direction::North
+        ));
+        assert!(!directionally_impassable(
+            MB_NORMAL,
+            MB_IMPASSABLE_SOUTH_AND_NORTH,
+            Direction::East
+        ));
+        assert!(!directionally_impassable(
+            MB_NORMAL,
+            MB_IMPASSABLE_SOUTH_AND_NORTH,
+            Direction::West
+        ));
+    }
+
+    /// A one-sided id is one-sided in *both* halves, and the two halves do
+    /// not leak into each other: `MB_IMPASSABLE_NORTH` on the standing tile
+    /// blocks only a northward exit, and on the target tile blocks only a
+    /// southward entry (never the reverse, which is the mistake a swapped
+    /// pairing would produce).
+    #[test]
+    fn one_sided_ids_block_exactly_one_move_per_side() {
+        assert!(directionally_impassable(
+            MB_IMPASSABLE_NORTH,
+            MB_NORMAL,
+            Direction::North
+        ));
+        assert!(!directionally_impassable(
+            MB_IMPASSABLE_NORTH,
+            MB_NORMAL,
+            Direction::South
+        ));
+        assert!(directionally_impassable(
+            MB_NORMAL,
+            MB_IMPASSABLE_NORTH,
+            Direction::South
+        ));
+        assert!(!directionally_impassable(
+            MB_NORMAL,
+            MB_IMPASSABLE_NORTH,
+            Direction::North
+        ));
+
+        // The east/west axis, and a diagonal id that belongs to two sets.
+        assert!(directionally_impassable(
+            MB_IMPASSABLE_WEST,
+            MB_NORMAL,
+            Direction::West
+        ));
+        assert!(directionally_impassable(
+            MB_NORMAL,
+            MB_IMPASSABLE_WEST_AND_EAST,
+            Direction::East
+        ));
+        assert!(directionally_impassable(
+            MB_IMPASSABLE_NORTHEAST,
+            MB_NORMAL,
+            Direction::North
+        ));
+        assert!(directionally_impassable(
+            MB_IMPASSABLE_NORTHEAST,
+            MB_NORMAL,
+            Direction::East
+        ));
+        assert!(!directionally_impassable(
+            MB_IMPASSABLE_NORTHEAST,
+            MB_IMPASSABLE_SOUTH,
+            Direction::West
+        ));
     }
 }
