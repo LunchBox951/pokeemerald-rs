@@ -92,8 +92,11 @@ const _: () = assert!(assets::fonts::GLYPH_SIZE == 16);
 /// [`crate::main_menu`]'s `darken_outside`).
 ///
 /// [`Coverage::disabled`] is the do-nothing form, for the callers that
-/// don't need it: it records nothing and allocates nothing.
-#[derive(Debug, Clone, Default)]
+/// don't need it: it records nothing and allocates nothing. There is no
+/// `Default` on purpose: `default()` would silently be the disabled form
+/// where a caller meant [`Coverage::recording`] -- the two constructors
+/// force the choice to be spelled out.
+#[derive(Debug, Clone)]
 pub(crate) struct Coverage {
     /// One flag per framebuffer pixel, row-major -- or empty when disabled.
     painted: Vec<bool>,

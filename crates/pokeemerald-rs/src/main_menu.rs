@@ -86,7 +86,7 @@
 //! *not* `BLDCNT_TGT1_BD` (`include/gba/io_reg.h:595`), so the darken only
 //! ever applies where BG0's own pixel is the topmost non-transparent one.
 //! Outside the two menu windows BG0 is fully transparent -- `InitMainMenu`
-//! `DmaFill16`s all of VRAM to zero (`main_menu.c:560`) and only those two
+//! `DmaFill16`s all of VRAM to zero (`main_menu.c:572`) and only those two
 //! windows' tiles are ever written back -- so everywhere no window covers,
 //! the *backdrop* colour is what shows, at full brightness, both inside and
 //! outside `WIN0` (confirmed against issue #216's own mGBA capture: the
@@ -424,10 +424,11 @@ fn draw_item(
     // `y` offset, so the last glyph row a printer can reach is the content
     // rect's own last row and never the border row below it: upstream's
     // `CopyGlyphToWindow` clamps a glyph to `template->height * 8 -
-    // currentY` rows, which for `FONT_NORMAL`'s 15-row glyphs
-    // (`gCurGlyph.height = 15`, `src/text.c:1863`) in a 16px-tall window at
-    // `currentY == 1` is exactly the 15 rows below the offset
-    // `(behavioral-fidelity)`.
+    // currentY` rows (`src/text.c:611-612`). The binding constraint is the
+    // glyph's own height -- `FONT_NORMAL`'s Latin glyphs are 15 rows
+    // (`gCurGlyph.height = 15`, `src/text.c:1883`) -- and in this 16px-tall
+    // window at `currentY == 1` the window clamp lands on the same 15, so
+    // the subtraction below encodes both `(behavioral-fidelity)`.
     let label_origin = (content_origin.0, content_origin.1 + 1);
     let label_clip = (content_size.0, content_size.1 - 1);
     textbox::blit_glyphs_colored_tracked(
