@@ -6,6 +6,8 @@
 use std::fmt;
 use std::path::PathBuf;
 
+use crate::audio::AudioError;
+
 /// An error produced while loading or querying an [`AssetPack`](crate::pack::AssetPack).
 ///
 /// A concrete, dedicated enum, separate from [`crate::error::AssetError`]
@@ -106,6 +108,20 @@ pub enum PackError {
         /// The bundled palette's colour count.
         palette_len: u16,
     },
+    /// An `audio/song/*`, `audio/voicegroup/*`, or `audio/sample/*` entry
+    /// exists as [`super::EntryKind::Raw`] (so [`super::AssetPack::raw`]
+    /// itself succeeded) but its bytes failed the schema's own structural
+    /// decode ([`AudioError`], from [`crate::audio::Song::decode`],
+    /// [`crate::audio::VoiceGroup::decode`], or
+    /// [`crate::audio::Sample::decode`]) — a corrupt or stale pack, since
+    /// extraction always writes a schema's own `encode` output. Carries the
+    /// id that was looked up and the underlying decode error.
+    AudioDecode {
+        /// The id that was looked up.
+        id: String,
+        /// The schema decode failure.
+        source: AudioError,
+    },
 }
 
 impl fmt::Display for PackError {
@@ -181,8 +197,35 @@ impl fmt::Display for PackError {
                 "asset pack: text-window image `{id}` has pixel index {pixel}: its bundled \
                  palette only has {palette_len} colours"
             ),
+            Self::AudioDecode { id, source } => {
+                write!(
+                    f,
+                    "asset pack: audio entry `{id}` failed to decode: {source}"
+                )
+            }
         }
     }
 }
 
-impl std::error::Error for PackError {}
+impl std::error::Error for PackError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        // Every variant is spelled out (the `crates/platform` `source()`
+        // precedent): a future source-carrying variant then fails to compile
+        // here instead of silently reporting an empty cause chain.
+        match self {
+            Self::AudioDecode { source, .. } => Some(source),
+            Self::NotFound(_)
+            | Self::ReadFailed(..)
+            | Self::BadMagic
+            | Self::UnsupportedVersion(_)
+            | Self::Truncated
+            | Self::BadEntryKind(_)
+            | Self::UnknownAsset(_)
+            | Self::WrongKind { .. }
+            | Self::MalformedTextWindowPalette { .. }
+            | Self::TextWindowImageWrongDimensions { .. }
+            | Self::MalformedTextWindowImage { .. }
+            | Self::TextWindowPixelOutsidePalette { .. } => None,
+        }
+    }
+}

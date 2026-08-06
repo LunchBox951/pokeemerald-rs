@@ -44,7 +44,17 @@
 //! [`AssetPack::text_window_frame`] / [`AssetPack::message_box`] bundle a
 //! border frame's tile bitmap with its palette (see [`WindowFrameHandle`]);
 //! [`AssetPack::text_window_extra_palette`] reaches the four additional
-//! textbox colour palettes. The lower-level [`AssetPack::image`] /
+//! textbox colour palettes. [`AssetPack::song`], [`AssetPack::voicegroup`],
+//! and [`AssetPack::sample`] (S-4, issue #184, `#115` child 5) look up the
+//! `audio/song/*`, `audio/voicegroup/*`, and `audio/sample/*` entries
+//! `xtask::extract::midi` / `xtask::extract::voicegroups` /
+//! `xtask::extract::audio_samples` write and decode them through
+//! [`crate::audio::Song`]/[`crate::audio::VoiceGroup`]/[`crate::audio::Sample`]'s
+//! own `decode` — unlike [`layout_map`](AssetPack::layout_map)/
+//! [`font`](AssetPack::font), which hand back undecoded views for a sibling
+//! module to interpret, these three schemas' `decode` already lives in [`crate::audio`]
+//! itself, so there is no separate decode layer for this crate's pack loader
+//! to stay decoupled from. The lower-level [`AssetPack::image`] /
 //! [`AssetPack::palette`] / [`AssetPack::raw`] accessors work over any entry
 //! by its full id (used directly for e.g. `title/image/*` entries, which
 //! have no bundling handle of their own).
@@ -73,6 +83,7 @@ mod handles;
 
 use std::path::{Path, PathBuf};
 
+use crate::audio::{Sample, SampleId, Song, VoiceGroup, VoiceGroupId};
 use crate::fonts::{FontId, FontImageRef};
 
 pub use error::PackError;
@@ -236,6 +247,75 @@ impl AssetPack {
             EntryKind::Raw => Ok(self.payload(entry)),
             other => Err(wrong_kind(id, "raw blob", other)),
         }
+    }
+
+    /// Look up an `audio/song/*` entry by its normalized pack name (e.g.
+    /// `"mus_title"` — see `xtask::extract::midi`'s module docs for the id
+    /// scheme and which song the pack currently ships) and decode it
+    /// through [`crate::audio::Song::decode`].
+    ///
+    /// # Errors
+    ///
+    /// [`PackError::UnknownAsset`] if no song with this name is in the
+    /// pack; [`PackError::WrongKind`] if an entry exists under that id but
+    /// isn't [`EntryKind::Raw`]; [`PackError::AudioDecode`] if the entry is
+    /// [`EntryKind::Raw`] but its bytes are not a well-formed
+    /// [`crate::audio::Song`] — structural decode only, see
+    /// [`Song::decode`]'s own docs on what is (and is not) validated, in
+    /// particular that a [`crate::audio::SongEvent::Goto`] target and the
+    /// song's own [`Song::voicegroup`] reference are not resolved here.
+    pub fn song(&self, name: &str) -> Result<Song, PackError> {
+        let id = format!("audio/song/{name}");
+        let bytes = self.raw(&id)?;
+        Song::decode(bytes).map_err(|source| PackError::AudioDecode { id, source })
+    }
+
+    /// Look up an `audio/voicegroup/*` entry by its stable pack id (e.g. a
+    /// [`Song::voicegroup`] reference, or a
+    /// [`crate::audio::KeySplitVoice`]/[`crate::audio::RhythmVoice`] child
+    /// reference — see `xtask::extract::voicegroups`'s module docs for the
+    /// id scheme and which groups the pack currently ships) and decode it
+    /// through [`crate::audio::VoiceGroup::decode`]. `id`'s own string is
+    /// already the full pack id (e.g. `"audio/voicegroup/title"`), matching
+    /// how every [`VoiceGroupId`] in this crate is stored — no separate
+    /// `name`-to-id formatting step, unlike [`song`](Self::song).
+    ///
+    /// # Errors
+    ///
+    /// Same as [`song`](Self::song), with [`VoiceGroup`] in place of
+    /// [`Song`]; in particular, a slot's own
+    /// [`crate::audio::KeySplitVoice::children`]/
+    /// [`crate::audio::RhythmVoice::children`] or
+    /// [`crate::audio::DirectSoundVoice::sample`]/
+    /// [`crate::audio::ProgrammableWaveVoice::wave`] reference is not
+    /// resolved here — walk the returned [`VoiceGroup`]'s own slots and call
+    /// this method (or [`sample`](Self::sample)) again for each reference a
+    /// caller needs to follow.
+    pub fn voicegroup(&self, id: &VoiceGroupId) -> Result<VoiceGroup, PackError> {
+        let bytes = self.raw(&id.0)?;
+        VoiceGroup::decode(bytes).map_err(|source| PackError::AudioDecode {
+            id: id.0.clone(),
+            source,
+        })
+    }
+
+    /// Look up an `audio/sample/*` entry by its stable pack id (e.g. a
+    /// [`crate::audio::DirectSoundVoice::sample`]/
+    /// [`crate::audio::ProgrammableWaveVoice::wave`] reference — see
+    /// `xtask::extract::audio_samples`'s module docs for the id scheme and
+    /// which samples the pack currently ships) and decode it through
+    /// [`crate::audio::Sample::decode`]. `id`'s own string is already the
+    /// full pack id, same as [`voicegroup`](Self::voicegroup)'s `id`.
+    ///
+    /// # Errors
+    ///
+    /// Same as [`song`](Self::song), with [`Sample`] in place of [`Song`].
+    pub fn sample(&self, id: &SampleId) -> Result<Sample, PackError> {
+        let bytes = self.raw(&id.0)?;
+        Sample::decode(bytes).map_err(|source| PackError::AudioDecode {
+            id: id.0.clone(),
+            source,
+        })
     }
 
     /// Bundle one tileset's tile bitmap, 16 palettes, and raw metatile
