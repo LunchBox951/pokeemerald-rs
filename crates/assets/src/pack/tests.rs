@@ -983,3 +983,86 @@ fn real_pack_audio_samples_decode_through_the_sample_schema() {
         ]
     );
 }
+
+/// The producer/consumer round-trip pin for `audio/song/mus_title` (issue
+/// #181, S-4, `#115` child 2): `xtask::extract::midi` encodes this payload
+/// with its own copy of `crate::audio::song::Song`'s wire format
+/// (`xtask::extract::midi::encode`, deliberately duplicated rather than
+/// shared -- see that module's docs), so nothing short of decoding a real
+/// pack proves the two sides still agree.
+///
+/// Values are hand-verified against a locally built `tools/mid2agb` oracle
+/// (`xtask::extract::midi::compile`'s module docs cite the exact citations);
+/// the same concrete values are independently pinned on the producer side by
+/// `xtask::extract::midi`'s own
+/// `mus_title_compiles_to_hand_verified_values` test, which is what would
+/// catch the two encoders drifting apart from either direction.
+///
+/// Needs a local pack: run `cargo xtask extract` first, then
+/// `cargo test -p assets -- --ignored` (CI's Ubuntu `native` leg does
+/// exactly this).
+#[test]
+#[ignore = "needs a local pack: run `cargo xtask extract` first"]
+fn real_pack_audio_song_decodes_through_the_song_schema() {
+    use crate::audio::{Song, SongEvent, VoiceGroupId};
+
+    let pack = AssetPack::load_default().expect("run `cargo xtask extract` first");
+    let bytes = pack
+        .raw("audio/song/mus_title")
+        .expect("`audio/song/mus_title` should be in the pack");
+    let song = Song::decode(bytes).expect("`audio/song/mus_title` should decode");
+
+    assert_eq!(
+        song.voicegroup(),
+        &VoiceGroupId("audio/voicegroup/title".to_owned())
+    );
+    assert_eq!(song.priority(), 0);
+    assert_eq!(song.reverb(), Some(50));
+    assert_eq!(song.tracks().len(), 10);
+
+    let track0 = &song.tracks()[0];
+    assert_eq!(
+        &track0[..6],
+        [
+            SongEvent::KeyShift(0),
+            SongEvent::Tempo(144),
+            SongEvent::Voice(14),
+            SongEvent::Pan(40),
+            SongEvent::LfoSpeed(44),
+            SongEvent::Volume(86),
+        ]
+    );
+    let last = track0.len();
+    assert_eq!(
+        &track0[last - 5..],
+        [
+            SongEvent::Volume(9),
+            SongEvent::Wait(4),
+            SongEvent::Volume(8),
+            SongEvent::Wait(4),
+            SongEvent::Fine,
+        ]
+    );
+
+    // No loop markers anywhere in mus_title.mid.
+    let goto_count = song
+        .tracks()
+        .iter()
+        .flatten()
+        .filter(|e| matches!(e, SongEvent::Goto(_)))
+        .count();
+    assert_eq!(goto_count, 0);
+
+    // Three `XCMD xIECV`/`xIECL` pairs total (pseudo-echo volumes 10, 10,
+    // 16; length 12 each time).
+    let volumes: Vec<u8> = song
+        .tracks()
+        .iter()
+        .flatten()
+        .filter_map(|e| match e {
+            SongEvent::PseudoEchoVolume(v) => Some(*v),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(volumes, vec![10, 10, 16]);
+}

@@ -118,6 +118,17 @@
 //!   `audio/sample/programmable-wave/<nn>` ids, matching
 //!   [`audio_samples`]'s scheme verbatim; that pass writes the entries
 //!   those ids name.
+//! - **`MUS_TITLE`'s own MIDI semantics** (S-4, issue #181, `#115` child 2):
+//!   `sound/songs/midi/mus_title.mid`, compiled the way
+//!   `tools/mid2agb`/`midi.cfg`'s own `-E -R50 -G_title -V090` flags
+//!   interpret it, into `crates/assets::audio::song::SongEvent` streams (one
+//!   per playable MIDI channel) and emitted as a single
+//!   `audio/song/mus_title` raw entry — see [`midi`]'s module docs for the
+//!   compiler pipeline and every deliberate scope cut. References
+//!   `voicegroup_title`'s `audio/voicegroup/title` id, matching
+//!   [`voicegroups`]'s scheme verbatim; that pass writes the entry that id
+//!   names. Every other song under `sound/songs/midi/` (530 total) stays
+//!   `pending`.
 //!
 //! Explicitly **not** extracted (deferred to future slices, not silently
 //! dropped): metatile-to-tile mapping beyond the raw `metatiles.bin` bytes
@@ -132,8 +143,12 @@
 //! every non-Latin font sheet under `graphics/fonts/` (see above), every
 //! voicegroup outside `MUS_TITLE`'s own dependency tree (the other ~188
 //! `.inc` files under `sound/voicegroups/` stay `pending` — see
-//! [`voicegroups`]'s module docs), and every sample payload a voicegroup
-//! entry's `audio/sample/*` ids reference (`#183`'s job).
+//! [`voicegroups`]'s module docs), every sample payload a voicegroup
+//! entry's `audio/sample/*` ids reference (`#183`'s job), and every song
+//! under `sound/songs/midi/` other than `mus_title.mid` (529 of the 530
+//! `.mid` sources stay `pending` — see [`midi`]'s module docs for exactly
+//! which of `mus_title.mid`'s own MIDI features are modelled and which are
+//! deliberately not, independent of the other songs).
 //!
 //! # Asset id scheme
 //!
@@ -165,6 +180,10 @@
 //!   references the `audio/sample/direct-sound/<name>` /
 //!   `audio/sample/programmable-wave/<nn>` ids above, mirroring
 //!   [`audio_samples`]'s scheme verbatim.
+//! - `audio/song/<name>` (currently only `audio/song/mus_title`) —
+//!   `<name>` is the upstream `.mid` source's filename stem; see [`midi`]'s
+//!   module docs. The entry's payload references its voicegroup by the
+//!   `audio/voicegroup/<label>` id above.
 //!
 //! `<name>` is always a normalized, stable identifier (upstream's own
 //! directory/file naming, which is already `snake_case` and stable across
@@ -177,6 +196,7 @@ mod fonts;
 pub mod inflate;
 pub mod jasc_pal;
 mod layouts_json;
+mod midi;
 pub mod pack;
 pub mod png;
 mod text_window;
@@ -275,6 +295,7 @@ fn extract_to(output_path: &Path) -> Result<ExtractReport, ExtractError> {
     text_window::extract_text_window(&upstream, &mut writer)?;
     audio_samples::extract_audio_samples(&upstream, &mut writer)?;
     voicegroups::extract_voicegroups(&upstream, &mut writer)?;
+    midi::extract_song(&upstream, &mut writer)?;
 
     let entry_count = writer.len();
     let bytes = writer.finish()?;

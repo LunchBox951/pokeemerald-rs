@@ -5,6 +5,7 @@ use std::path::PathBuf;
 
 use super::jasc_pal::JascPalError;
 use super::layouts_json::LayoutsJsonError;
+use super::midi::MidiError;
 use super::pack::PackWriteError;
 use super::png::PngError;
 use super::voicegroups::VoiceGroupError;
@@ -154,6 +155,13 @@ pub enum ExtractError {
     /// that itself carries further indirection, or an over-long
     /// group/table). Carries the resolver error.
     VoiceGroup(VoiceGroupError),
+    /// `sound/songs/midi/midi.cfg` had no entry for the requested song, or
+    /// that entry was malformed. Carries the manifest's path and the parse
+    /// error.
+    MidiCfg(PathBuf, MidiError),
+    /// Compiling a `.mid` source into the normalized song schema failed.
+    /// Carries the source's path and the compiler error.
+    Midi(PathBuf, MidiError),
 }
 
 impl fmt::Display for ExtractError {
@@ -262,6 +270,10 @@ impl fmt::Display for ExtractError {
                 second_path.display()
             ),
             Self::VoiceGroup(err) => write!(f, "{err}"),
+            Self::MidiCfg(path, err) => {
+                write!(f, "midi.cfg `{}`: {err}", path.display())
+            }
+            Self::Midi(path, err) => write!(f, "compiling `{}` failed: {err}", path.display()),
         }
     }
 }
