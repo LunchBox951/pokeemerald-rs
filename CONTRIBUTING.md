@@ -38,8 +38,9 @@ definition of done.
 - A milestone **closes only when its acceptance IDs are all ☑ or a recorded ⊘**
   in `docs/acceptance/v1.md` — the issue bar can hit 100% while criteria are
   still in progress; the markers gate closure, not the count.
-- Closing a milestone is the "completed milestone" trigger for a `MINOR`
-  version bump in [`RELEASE.md`](RELEASE.md).
+- Closing a milestone triggers at least a `MINOR` version bump; a large
+  completed win escalates to `MAJOR`. [`RELEASE.md`](RELEASE.md) is the
+  authority on which tier applies.
 
 `docs/acceptance/v1.md` stays the source of truth for *status*; milestones are
 the grouping and scoping layer over the issues that get there.

@@ -15,11 +15,13 @@ use assets::{MapEventsTable, MapHeaderTable};
 use engine::overworld::{
     facing_object_event, trigger_arrow_warp, trigger_door_warp, warp_destination_position,
     warp_in_facing, ConnectedMapData, Direction, PlayerState, StepOutcome, TilePos, WarpTrigger,
+    WildEncounterState,
 };
 use engine::save::{Coords16, SaveBlock1, SaveBlock2, WarpData};
 use platform::{ButtonState, Buttons, Frame};
 use std::cell::OnceCell;
 
+use crate::flow::wild_encounter;
 use crate::new_game;
 use crate::overworld::{
     self, npc_scripts, DialogOutcome, NpcDialog, OverworldScene, OverworldSceneError,
@@ -191,8 +193,8 @@ fn run_on_transition_map_script(
 /// needed to re-look-up that map's header and event lists (from the
 /// `'static` [`MapHeaderTable`]/[`MapEventsTable`]) every frame -- see
 /// [`OverworldPhase::step`]. Also carries the fresh [`SaveBlock1`]/
-/// [`SaveBlock2`] pair [`new_game::init_save_blocks_for_new_game`] built for
-/// this run (starting money, cleared party/bag/event data, default
+/// [`SaveBlock2`] pair [`new_game::init_save_blocks`] built for this run
+/// (starting money, cleared party/bag/event data, default
 /// name/gender -- see that function's module docs) -- the actual save-state
 /// counterpart to `player`'s in-memory position, kept alive here rather than
 /// built and discarded, since nothing yet writes it to disk
@@ -247,13 +249,64 @@ pub(crate) struct OverworldPhase {
     /// Never consulted by anything else; warps keep their own
     /// per-transition loads.
     connection_pack: OnceCell<assets::pack::AssetPack>,
+    /// This run's single `Random()` stream (issue #169) -- upstream's
+    /// `gRngValue`, owned rather than global `(oop-boundaries)`. Every
+    /// encounter roll *and* the wild battle it hands off to draw from it in
+    /// turn, so the sequence is the one upstream would produce
+    /// (`crate::flow::wild_encounter`'s module docs).
+    ///
+    /// Seeded to `0`, then advanced by new-game initialization's two trainer-ID
+    /// draws before overworld play begins. Zero is upstream's real boot state:
+    /// retail Emerald
+    /// compiles `SeedRngWithRtc` out (`pokeemerald/src/main.c:229-236` is
+    /// `#ifdef BUGFIX`), so `gRngValue` stays zero until
+    /// `SeedRngAndSetTrainerId` (`:208-214`) reseeds it from the `TM1CNT_L`
+    /// hardware timer at new-game time. That timer read is **not** modelled
+    /// -- there is no such register here -- so a fresh run is deterministic
+    /// where the real game is not. Recorded as the ledger's NOT-modelled
+    /// `src/main.c#SeedRngAndSetTrainerId` artifact rather than substituted
+    /// with a wall-clock seed, which would make the headless `xtask e2e`
+    /// lanes non-reproducible.
+    pub(super) rng: engine::rng::Rng,
+    /// The per-step encounter bookkeeping (issue #169): upstream's
+    /// `sWildEncounterImmunitySteps`/`sPrevMetatileBehavior`
+    /// (`field_control_avatar.c:38-39`). Restarted on every map transition
+    /// ([`Self::warp_to`], [`Self::cross_connection`]) exactly as upstream's
+    /// `RestartWildEncounterImmunitySteps` is.
+    pub(super) wild: WildEncounterState,
+    /// [`Self::wild_table_fightable`]'s memo: the last map screened and its
+    /// verdict. Keyed on the map itself rather than refreshed at each
+    /// transition call site, so no present or future map-change path can
+    /// forget to re-screen — the map change *is* the invalidation (issue
+    /// #207 review, rounds 3/5).
+    pub(super) wild_table_screen: Option<(assets::MapId, bool)>,
+    /// The player's lead party mon, in battle-ready form -- what a fired
+    /// encounter is fought with.
+    ///
+    /// The production path ([`Self::load_default`]) starts it as
+    /// [`new_game::provisional_starter`] -- the stand-in for the un-ported
+    /// Birch-bag handout, so a fresh game really can fight the I-4
+    /// encounter (issue #207 review). `None` means no party at all: the
+    /// state a bare [`Self::new`] (and so every `for_test` phase) starts
+    /// in, and the state a battle borrows the mon into while it runs; a
+    /// fired encounter is logged and dropped in it
+    /// (`crate::flow::wild_encounter`'s module docs). The battle writes the
+    /// mon back here when it ends, so damage taken persists into the
+    /// overworld the way `gPlayerParty[0]` does.
+    pub(super) party_lead: Option<battle::BattlePokemon>,
+    /// The wild battle currently being played out, if any (issue #169).
+    /// `Some` freezes the overworld for the frame -- the same shape
+    /// [`Self::dialog`] uses -- while
+    /// [`crate::flow::wild_encounter::advance_wild_battle`] drives one turn
+    /// per frame. See that module's docs for what "headless" means here.
+    pub(super) wild_battle: Option<battle::Battle>,
 }
 
 impl OverworldPhase {
     /// Load [`crate::overworld::load_default_room`], place the player at
     /// [`new_game::SPAWN_POSITION`] (module docs on why this, not upstream's
     /// truck sequence, is the intro's handoff target), and build this run's
-    /// fresh save state via [`new_game::init_save_blocks_for_new_game`] --
+    /// fresh save state via [`new_game::init_save_blocks`] --
     /// the actual `NewGameInitData` effects (starting money, cleared
     /// party/bag/event data), not just the in-memory spawn position, so a
     /// future save-write path has real state to persist instead of
@@ -265,22 +318,13 @@ impl OverworldPhase {
             new_game::SPAWN_ELEVATION,
             new_game::SPAWN_FACING,
         );
-        let (mut save1, save2) = new_game::init_save_blocks_for_new_game();
-        // Entering the spawn map is a map transition like any other -- and
-        // the spawn map is a *bedroom*, so this is exactly the entry that
-        // hides its twelve decoration placeholders.
-        run_on_transition_map_script(new_game::SPAWN_MAP_ID, &mut save1.event_data);
-        Ok(Self {
-            scene,
-            player,
-            map_id: new_game::SPAWN_MAP_ID,
-            save1,
-            save2,
-            pending_landing: None,
-            dialog: None,
-            tick: 0,
-            connection_pack: OnceCell::new(),
-        })
+        let mut phase = Self::new(scene, new_game::SPAWN_MAP_ID, player, None);
+        // The stand-in for the un-ported starter handout (issue #207
+        // review): without a lead, every I-4 encounter would be rolled and
+        // dropped. Deliberately drawing nothing from `phase.rng` — see
+        // `new_game::provisional_starter`'s docs.
+        phase.party_lead = Some(new_game::provisional_starter());
+        Ok(phase)
     }
 
     /// A phase around an already-built `scene` -- the pack-free
@@ -291,13 +335,30 @@ impl OverworldPhase {
     /// every frame resolve). Never reachable from production: nothing
     /// outside `#[cfg(test)]` can call it.
     #[cfg(test)]
-    fn for_test(
+    pub(super) fn for_test(
         scene: OverworldScene,
         map_id: assets::MapId,
         player: PlayerState,
         dialog: Option<NpcDialog>,
     ) -> Self {
-        let (mut save1, save2) = new_game::init_save_blocks_for_new_game();
+        Self::new(scene, map_id, player, dialog)
+    }
+
+    /// Build a new overworld run while preserving its single RNG stream.
+    /// New-game initialization consumes the first two draws for the trainer
+    /// ID; the advanced generator then remains owned by the phase for all
+    /// subsequent encounter and battle draws.
+    fn new(
+        scene: OverworldScene,
+        map_id: assets::MapId,
+        player: PlayerState,
+        dialog: Option<NpcDialog>,
+    ) -> Self {
+        let mut rng = engine::rng::Rng::new(new_game::NEW_GAME_RNG_SEED);
+        let (mut save1, save2) = new_game::init_save_blocks(&mut rng);
+        // Entering the initial map is a map transition like any other. For
+        // the production spawn bedroom, this hides its twelve decoration
+        // placeholders; test maps receive their own transition effects.
         run_on_transition_map_script(map_id, &mut save1.event_data);
         Self {
             scene,
@@ -309,6 +370,30 @@ impl OverworldPhase {
             dialog,
             tick: 0,
             connection_pack: OnceCell::new(),
+            rng,
+            wild: WildEncounterState::new(),
+            wild_table_screen: None,
+            party_lead: None,
+            wild_battle: None,
+        }
+    }
+
+    /// Whether the current map's land table only rolls wild mons the battle
+    /// engine can fight ([`wild_encounter::map_wild_table_fightable`], issue
+    /// #207 review). Memoised on [`Self::map_id`] itself
+    /// ([`Self::wild_table_screen`]) because the screen walks the whole
+    /// table; a map change invalidates the memo by construction, with no
+    /// per-transition update to forget. `false` disables the encounter roll
+    /// outright (no draws, no bookkeeping), the same fail-closed shape as
+    /// the fainted-lead guard.
+    pub(super) fn wild_table_fightable(&mut self) -> bool {
+        match self.wild_table_screen {
+            Some((map, fightable)) if map == self.map_id => fightable,
+            _ => {
+                let fightable = wild_encounter::map_wild_table_fightable(self.map_id);
+                self.wild_table_screen = Some((self.map_id, fightable));
+                fightable
+            }
         }
     }
 
@@ -504,6 +589,29 @@ impl OverworldPhase {
     /// code's own comment), and gated on the player being between steps --
     /// see [`Self::interaction_tokens_this_frame`].
     ///
+    /// # Wild encounters (issue #169)
+    ///
+    /// A completed step — the same drained landing the door-warp check
+    /// consumes — is this port's counterpart to upstream's
+    /// `input->checkStandardWildEncounter`, and the roll sits exactly where
+    /// upstream puts it: after `TryStartStepBasedScript`'s door-shaped warp
+    /// (`field_control_avatar.c:155-161`), before `TryArrowWarp`
+    /// (`:164-168`). A fired encounter therefore suppresses the arrow poll
+    /// for that frame, matching `ProcessPlayerFieldInput` returning `TRUE`
+    /// out of `CheckStandardWildEncounter` (`:162`). The roll itself lives
+    /// in [`engine::overworld::wild_encounter`]; the battle it hands off to,
+    /// in [`crate::flow::wild_encounter`] via [`Self::begin_wild_battle`].
+    /// An in-progress battle owns the whole frame ahead of everything above
+    /// — see [`Self::advance_wild_battle_frame`].
+    ///
+    /// The frame `preempting_arrow_trigger` fires is the one case upstream
+    /// would still have polled `checkStandardWildEncounter` on and this port
+    /// does not: upstream sets that flag at `T_TILE_CENTER` regardless of
+    /// whether the player was moving (`:117-120`), while here the roll is
+    /// tied to a landing a step actually committed. Unreachable in practice
+    /// — the preempt path needs the player at rest on an arrow-warp tile
+    /// with the matching direction held, which no bundled map's grass is.
+    ///
     /// # Map-edge connection crossing (issue #177)
     ///
     /// [`advance_player_one_frame`] feeds [`PlayerState::step`] a real
@@ -521,17 +629,23 @@ impl OverworldPhase {
         // unconditionally, before the dialog early-return below.
         self.tick = self.tick.wrapping_add(1);
 
-        if let Some(dialog) = &mut self.dialog {
-            // `JOY_NEW(A_BUTTON | B_BUTTON)` (doc comment above).
-            let confirm_pressed =
-                buttons.is_newly_pressed(Buttons::A) || buttons.is_newly_pressed(Buttons::B);
-            if dialog.tick(confirm_pressed) == DialogOutcome::Closed {
-                self.dialog = None;
-            }
+        // A wild battle owns the frame outright (issue #169), ahead of the
+        // dialog check for the same reason upstream's battle callback owns
+        // `CB2_Overworld` outright once `SetMainCallback2(CB2_InitBattle)`
+        // has run (`src/battle_setup.c:369`): field input, movement, warps,
+        // and message boxes all stop until it ends.
+        if self.advance_wild_battle_frame() {
+            return;
+        }
+
+        if self.advance_dialog_frame(buttons) {
             return;
         }
 
         let direction = held_direction(buttons);
+        // Ahead of `runtime`'s scene borrow: the memoised screen needs
+        // `&mut self`; a memo hit is a map-id comparison.
+        let wild_table_fightable = self.wild_table_fightable();
         if let (Ok(header), Ok(events)) = (
             MapHeaderTable::new().header(self.map_id),
             MapEventsTable::new().resolve(self.map_id),
@@ -582,14 +696,15 @@ impl OverworldPhase {
             // disjoint borrows of `self.player`/`self.pending_landing`/
             // `self.save1.event_data` rather than all of `self` -- `runtime`
             // (an immutable borrow of `self.scene`) is still needed below.
+            let maps = MapConnections {
+                pack: &self.connection_pack,
+            };
             let crossed_to = advance_or_skip_for_preempt(
                 &mut self.player,
                 &mut self.pending_landing,
                 direction,
                 &runtime,
-                &MapConnections {
-                    pack: &self.connection_pack,
-                },
+                &maps,
                 &self.save1.event_data,
                 preempting_arrow_trigger,
             );
@@ -617,38 +732,64 @@ impl OverworldPhase {
             // movement above) short-circuits this whole thing when it
             // already fired -- the frame's one warp, decided before
             // `PlayerState::step` ever ran.
-            let warp_trigger = preempting_arrow_trigger.or_else(|| {
-                if self.player.in_transit() {
-                    None
-                } else {
-                    // Upstream `input->heldDirection && input->dpadDirection
-                    // == playerDirection` (`field_control_avatar.c:164-168`)
-                    // -- polled every frame, independent of `tookStep`, and
-                    // *not* the door path's gate. Reaching this arm at all is
-                    // already this port's counterpart to the
-                    // `T_TILE_CENTER`/`T_NOT_MOVING` test that sets
-                    // `heldDirection` in the first place (`:95-112`), so the
-                    // poll needs no `in_transit` test of its own. See the
-                    // "Warp timing" section of this method's docs.
-                    self.pending_landing
-                        .take()
-                        .and_then(|(x, y)| {
-                            trigger_door_warp(&runtime, x, y, self.player.elevation())
-                        })
-                        .or_else(|| {
-                            let (x, y) = pre_step_position;
-                            trigger_arrow_warp(
-                                &runtime,
-                                x,
-                                y,
-                                self.player.elevation(),
-                                arrow_direction?,
-                            )
-                        })
+            //
+            // The wild-encounter roll (issue #169) sits *inside* that same
+            // ordering, between the two warp checks: upstream's
+            // `ProcessPlayerFieldInput` runs `TryStartStepBasedScript` (the
+            // door-shaped warp, under `tookStep`) at `:155-161`, then
+            // `CheckStandardWildEncounter` at `:162`, then `TryArrowWarp` at
+            // `:164-168` -- and a fired encounter returns TRUE, so the arrow
+            // poll never happens on the frame a wild Pokémon appears. It is
+            // gated on the same drained landing the door check consumes: a
+            // completed step is this port's `checkStandardWildEncounter`.
+            let landed = self.pending_landing.take_if(|_| !self.player.in_transit());
+            let door_warp = landed
+                .and_then(|(x, y)| trigger_door_warp(&runtime, x, y, self.player.elevation()));
+            // The roll happens only on a completed step that neither warp
+            // path has already claimed (`wild_encounter::roll_eligible_landing`,
+            // which carries upstream's precedence and its rationale), only on
+            // a map whose whole land table the battle engine can fight
+            // (`Self::wild_table_fightable`, memoised per map above), and
+            // only while the party's lead mon can actually
+            // fight (`wild_encounter::lead_can_fight` -- the fail-closed
+            // stand-in for the white-out this port does not model). The
+            // landed tile is the player's own tile on a drain frame, and it
+            // is what `GetPlayerPosition` would report there.
+            let encounter = wild_encounter::roll_for_step(
+                &mut self.wild,
+                &mut self.rng,
+                self.map_id,
+                &runtime,
+                wild_encounter::roll_eligible_landing(landed, preempting_arrow_trigger, door_warp)
+                    .filter(|_| wild_table_fightable)
+                    .filter(|_| wild_encounter::lead_can_fight(self.party_lead.as_ref())),
+            );
+            // Upstream `input->heldDirection && input->dpadDirection ==
+            // playerDirection` (`field_control_avatar.c:164-168`) -- polled
+            // every frame, independent of `tookStep`, and *not* the door
+            // path's gate. Reaching this arm at all is already this port's
+            // counterpart to the `T_TILE_CENTER`/`T_NOT_MOVING` test that
+            // sets `heldDirection` in the first place (`:95-112`), so the
+            // poll needs no `in_transit` test of its own beyond `landed`'s.
+            // A fired encounter suppresses it, as upstream's early return
+            // does (`wild_encounter::arrow_poll_open`, which owns both gates
+            // and their upstream citations). See the "Warp timing" section of
+            // this method's docs.
+            let warp_trigger = preempting_arrow_trigger.or(door_warp).or_else(|| {
+                if !wild_encounter::arrow_poll_open(self.player.in_transit(), encounter.is_some()) {
+                    return None;
                 }
+                let (x, y) = pre_step_position;
+                trigger_arrow_warp(&runtime, x, y, self.player.elevation(), arrow_direction?)
             });
 
-            let warp_fired = matches!(warp_trigger, Some(WarpTrigger::Resolved { .. }));
+            // A fired encounter consumes the frame's field input exactly as a
+            // resolved warp does -- upstream returns TRUE out of
+            // `ProcessPlayerFieldInput` at `:162`, before
+            // `TryStartInteractionScript` (`:172`) is ever reached
+            // (`wild_encounter::field_input_consumed`).
+            let input_consumed =
+                wild_encounter::field_input_consumed(encounter.is_some(), warp_trigger);
             match warp_trigger {
                 Some(WarpTrigger::Resolved { map, warp_id }) => self.warp_to(map, warp_id),
                 Some(WarpTrigger::Unsupported) => eprintln!(
@@ -658,13 +799,15 @@ impl OverworldPhase {
                 None => {}
             }
 
-            // A fired warp wins over a same-frame interaction: the tokens
-            // were resolved against the pre-warp runtime (comment above).
-            if warp_fired {
+            // A fired warp or encounter wins over a same-frame interaction:
+            // the tokens were resolved against the pre-warp runtime (comment
+            // above), and upstream never looks for an interaction on a frame
+            // either of those already claimed.
+            if input_consumed {
                 if interaction_tokens.is_some() {
                     eprintln!(
-                        "npc dialog: discarding a same-frame interaction with the departed \
-                         map's NPC -- the warp takes precedence"
+                        "npc dialog: discarding a same-frame interaction the warp or wild \
+                         encounter takes precedence over"
                     );
                 }
             } else if let Some(tokens) = interaction_tokens {
@@ -679,6 +822,8 @@ impl OverworldPhase {
             // Never coincides with `warp_fired`: a crossing leaves
             // `self.player.in_transit()` true, the same gate that already
             // makes the `warp_trigger` closure above return `None`.
+            self.begin_wild_battle(encounter);
+
             if let Some((to_map, to_position)) = crossed_to {
                 if !self.cross_connection(to_map, to_position) {
                     // A refused rebind must not leave the player standing at
@@ -842,6 +987,11 @@ impl OverworldPhase {
         // destination map's object events, mirroring upstream's ordering
         // against `TrySpawnObjectEvents`.
         run_on_transition_map_script(map, &mut self.save1.event_data);
+        // `RestartWildEncounterImmunitySteps` (`LoadMapFromWarp`,
+        // `src/overworld.c:850`): the first four steps on the destination
+        // map roll nothing, so stepping out of a door never drops the
+        // player straight into a battle (issue #169).
+        self.wild.restart_immunity_steps();
         self.save1.location = WarpData {
             map_group: warp_data_index(header.group, "MAP_GROUP"),
             map_num: warp_data_index(header.num, "MAP_NUM"),
@@ -937,6 +1087,12 @@ impl OverworldPhase {
         // water/flower animation continues uninterrupted across a seamless
         // crossing, unlike a warp's full map load.
         run_on_transition_map_script(to_map, &mut self.save1.event_data);
+        // `RestartWildEncounterImmunitySteps` (`LoadMapFromCameraTransition`,
+        // `src/overworld.c:800`) -- the piece of that function issue #177
+        // deferred to this slice. Crossing Littleroot's north edge into
+        // Route 101 therefore buys four encounter-free steps before the
+        // grass can roll (issue #169).
+        self.wild.restart_immunity_steps();
         self.save1.location = WarpData {
             map_group: warp_data_index(header.group, "MAP_GROUP"),
             map_num: warp_data_index(header.num, "MAP_NUM"),
@@ -945,6 +1101,96 @@ impl OverworldPhase {
             y: -1,
         };
         true
+    }
+
+    /// Tick an open [`NpcDialog`], if any. Returns whether a dialog owned
+    /// this frame -- `true` freezes movement for it exactly as
+    /// [`Self::advance_wild_battle_frame`] does for a battle, and closing it
+    /// consumes the same frame. Split from [`Self::step`] purely along that
+    /// existing frame-ownership seam.
+    fn advance_dialog_frame(&mut self, buttons: ButtonState) -> bool {
+        let Some(dialog) = &mut self.dialog else {
+            return false;
+        };
+        // `JOY_NEW(A_BUTTON | B_BUTTON)` (`Self::step`'s doc comment).
+        let confirm_pressed =
+            buttons.is_newly_pressed(Buttons::A) || buttons.is_newly_pressed(Buttons::B);
+        if dialog.tick(confirm_pressed) == DialogOutcome::Closed {
+            self.dialog = None;
+        }
+        true
+    }
+
+    /// Play one frame of an in-progress wild battle, if there is one
+    /// (issue #169). Returns whether the battle owned this frame -- `true`
+    /// means [`Self::step`] must do nothing else, the way upstream's
+    /// `CB2_InitBattle` callback owns the frame outright once
+    /// `BattleSetup_StartWildBattle` has scheduled it.
+    ///
+    /// The turn itself, and writing the player's mon back when the battle
+    /// ends, are [`wild_encounter::advance_wild_battle`]'s; this is only the
+    /// frame-ownership gate and the outcome log.
+    fn advance_wild_battle_frame(&mut self) -> bool {
+        if self.wild_battle.is_none() {
+            return false;
+        }
+        if let Some(outcome) = wild_encounter::advance_wild_battle(
+            &mut self.wild_battle,
+            &mut self.party_lead,
+            &mut self.rng,
+        ) {
+            eprintln!("wild battle: ended -- {outcome:?}");
+        }
+        true
+    }
+
+    /// Turn a fired [`engine::overworld::WildEncounter`] into an in-progress
+    /// [`battle::Battle`] (issue #169) -- upstream's `CreateWildMon` +
+    /// `BattleSetup_StartWildBattle` pair, minus the battle transition.
+    ///
+    /// Nothing starts without a party mon to fight with. Production play
+    /// always has one -- [`Self::load_default`] assigns
+    /// [`new_game::provisional_starter`], the stand-in for the un-ported
+    /// Birch-bag handout -- so the `None` arm is the defensive fallback for
+    /// a bare [`Self::new`] phase (`crate::flow::wild_encounter`'s module
+    /// docs). The encounter is logged and dropped in that case -- the roll
+    /// itself already happened and already consumed its draws, so the RNG
+    /// stream stays where the roll left it either way.
+    ///
+    /// A rejected battle (an unknown species, or a wild moveset the turn
+    /// engine can't execute) is logged and dropped too, leaving the player
+    /// standing in the grass rather than stuck in a half-built battle. The
+    /// lead mon is only handed over once the battle is really built, so a
+    /// rejection cannot swallow it. Since the per-map table screen
+    /// ([`Self::wild_table_fightable`]) refuses the roll before any draw on
+    /// a map that could produce such a moveset, this arm is defensive: no
+    /// table-rolled encounter reaches it today.
+    ///
+    /// The lead mon reaching here is never *fainted*: the roll upstream of
+    /// this call is refused outright while it is
+    /// ([`wild_encounter::lead_can_fight`], the fail-closed stand-in for the
+    /// white-out this port does not model), so no encounter exists to hand
+    /// over. Guarded there rather than again here, where a second check could
+    /// only ever be dead code.
+    fn begin_wild_battle(&mut self, encounter: Option<engine::overworld::WildEncounter>) {
+        let Some(encounter) = encounter else {
+            return;
+        };
+        eprintln!(
+            "wild encounter: slot {} -- species {:?} at level {}",
+            encounter.slot, encounter.species, encounter.level
+        );
+        let Some(lead) = self.party_lead.clone() else {
+            eprintln!("wild encounter: no party mon yet -- no battle to start");
+            return;
+        };
+        match wild_encounter::start_wild_battle(lead, encounter, &mut self.rng) {
+            Ok(battle) => {
+                self.party_lead = None;
+                self.wild_battle = Some(battle);
+            }
+            Err(error) => eprintln!("wild encounter: can't start a battle ({error:?})"),
+        }
     }
 
     /// [`OverworldScene::compose`] against this phase's current player state
@@ -1032,17 +1278,18 @@ fn advance_or_skip_for_preempt(
         // warp preempts movement on (module docs on
         // `advance_player_one_frame`) -- a no-op here since the caller only
         // reaches this arm when the player was already at rest, but called
-        // anyway so that contract stays unconditional. This path also skips
-        // `pending_landing`'s own `take()` (the preempting warp
-        // short-circuits it; the take itself lives in `step`'s warp
-        // closure, not in this extracted function), so "at rest => no
-        // latched landing" has to hold on its own here rather than being
-        // restored by that take.
+        // anyway so that contract stays unconditional. This path latches
+        // nothing of its own, so "at rest => no latched landing" has to hold
+        // on its own here rather than being restored by anything downstream:
+        // `step`'s own drain-frame `take_if` does run on a preempted frame
+        // (the player is at rest, so its `in_transit` guard passes), but the
+        // preempting warp claims the frame before either the door check or
+        // the wild-encounter roll can look at what it returned.
         debug_assert!(
             pending_landing.is_none(),
-            "at rest implies `pending_landing` is None: the preempt path skips the drain-frame \
-             take in `step`'s warp closure, so a landing latched here would survive into a \
-             later frame's door check"
+            "at rest implies `pending_landing` is None: a landing latched here would be taken \
+             on a frame the preempting warp has already claimed, and so would never reach a \
+             door check or an encounter roll"
         );
         player.tick();
         return None;

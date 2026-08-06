@@ -11,68 +11,14 @@
 //! for the individual formulas (accuracy/crit/damage/turn-order/escape) live
 //! alongside each module in `src/`.
 
+mod common;
+
 use assets::{MoveId, SpeciesId};
 use battle::{
-    build_wild_pokemon, Battle, BattleError, BattleEvent, BattleOutcome, BattlePokemon, BattleRng,
-    Dex, Ivs, Nature, PlayerAction, MOVE_NONE,
+    build_wild_pokemon, Battle, BattleError, BattleEvent, BattleOutcome, BattlePokemon, Dex, Ivs,
+    Nature, PlayerAction, MOVE_NONE,
 };
-
-/// A `BattleRng` fed from a fixed sequence, panicking loudly (never hanging)
-/// if a test's script under-provisions draws.
-struct ScriptedRng {
-    values: Vec<u16>,
-    index: usize,
-}
-
-impl ScriptedRng {
-    fn new(values: impl IntoIterator<Item = u16>) -> Self {
-        Self {
-            values: values.into_iter().collect(),
-            index: 0,
-        }
-    }
-
-    /// Draws taken so far. Each scenario below runs one `ScriptedRng` for the
-    /// whole battle — construction, battle start, and every turn — so this
-    /// pins the battle's total RNG consumption the way upstream's single
-    /// shared stream makes observable.
-    fn draws(&self) -> usize {
-        self.index
-    }
-}
-
-impl BattleRng for ScriptedRng {
-    fn next_u16(&mut self) -> u16 {
-        let v = self
-            .values
-            .get(self.index)
-            .copied()
-            .unwrap_or_else(|| panic!("ScriptedRng exhausted after {} draws", self.index));
-        self.index += 1;
-        v
-    }
-}
-
-/// The maximum Pokémon Gen-3 **individual values** — the per-stat genetic
-/// rolls that feed the stat formula (`MAX_IV_MASK` = 31,
-/// `pokeemerald/include/constants/pokemon.h:201`). Not a cryptographic
-/// initialization vector: nothing here is cryptographic.
-const MAX_IVS: Ivs = Ivs {
-    hp: 31,
-    attack: 31,
-    defense: 31,
-    speed: 31,
-    sp_attack: 31,
-    sp_defense: 31,
-};
-
-/// A max-IV, neutral-nature mon at `species`/`level`, known moves `moves` —
-/// deterministic stats so the scenarios below are reproducible without
-/// depending on this test's own RNG script for stat generation too.
-fn fixed_mon(dex: &Dex, species: u16, level: u8, moves: Vec<MoveId>) -> BattlePokemon {
-    BattlePokemon::new(dex, SpeciesId(species), level, MAX_IVS, 0, moves)
-        .expect("fixed_mon: species/moves must be in the dex")
-}
+use common::{max_iv_mon as fixed_mon, SequenceRng as ScriptedRng, MAX_IVS};
 
 #[test]
 fn scripted_wild_battle_runs_move_vs_move_to_a_faint_and_reports_victory() {

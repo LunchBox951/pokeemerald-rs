@@ -23,6 +23,11 @@
 //! [`new_game`] holds the pure new-game state (spawn position, default
 //! player identity, fresh [`engine::save`] blocks) both [`main_menu`] and
 //! [`intro`] ultimately hand off to.
+//!
+//! The overworld phase also owns this run's single `Random()` stream and
+//! rolls a wild encounter on every completed step (I-4, issue #169); the
+//! handoff from a rolled species/level to a real `battle::Battle` lives in
+//! `flow::wild_encounter`, headless for now — there is no battle scene yet.
 
 pub mod app;
 mod flow;

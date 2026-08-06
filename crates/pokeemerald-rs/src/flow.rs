@@ -29,6 +29,7 @@ use crate::main_menu::{self, MainMenuScene};
 use crate::title::TitleScene;
 
 mod overworld_phase;
+mod wild_encounter;
 pub(crate) use overworld_phase::OverworldPhase;
 
 /// [`crate::app::App`]'s per-frame animation state for the real title screen

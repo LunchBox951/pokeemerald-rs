@@ -23,7 +23,11 @@
 //!   data binding, connection-edge crossing, object/warp/coord event
 //!   lookup) and the on-foot player movement state machine
 //!   ([`overworld::PlayerState`]): turn/step semantics, collision against
-//!   grid geometry, and warp triggering (issue #108).
+//!   grid geometry, and warp triggering (issue #108), plus the per-step
+//!   wild-encounter roll ([`overworld::wild_encounter`], issue #169):
+//!   upstream's encounter-rate/slot/level draw order against the extracted
+//!   `gWildMonHeaders` tables, and the post-transition immunity window
+//!   around it.
 
 pub mod event_data;
 pub mod overworld;
