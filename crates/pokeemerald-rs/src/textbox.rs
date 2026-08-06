@@ -162,11 +162,30 @@ pub(crate) fn blit_glyphs(
     origin: (i32, i32),
     content_size: (i32, i32),
 ) {
+    blit_glyphs_colored(fb, glyphs, origin, content_size, &GLYPH_COLORS);
+}
+
+/// [`blit_glyphs`], parameterized over the glyph-index -> colour mapping
+/// instead of the fixed, invented [`GLYPH_COLORS`] scheme -- for callers
+/// that *do* have a real, upstream-accurate 4-colour scheme to use instead
+/// (e.g. [`crate::main_menu::MainMenuScene`]'s header text, whose bg/fg/
+/// shadow colours are upstream's own runtime-patched `sTextColor_Headers`
+/// palette entries, not [`blit_glyphs`]'s generic "always legible" stand-in
+/// -- see that module's own docs). `colors` uses the same index order as
+/// [`GLYPH_COLORS`] (upstream's fixed bg/fg/shadow/box font palette,
+/// `assets::fonts`' module docs): `None` means transparent.
+pub(crate) fn blit_glyphs_colored(
+    fb: &mut Framebuffer,
+    glyphs: &[RevealedGlyph],
+    origin: (i32, i32),
+    content_size: (i32, i32),
+    colors: &[Option<Rgb888>; 4],
+) {
     for g in glyphs {
         for local_y in 0..GLYPH_DIM {
             for local_x in 0..GLYPH_DIM {
                 let index = usize::from(g.glyph.pixels[local_y * GLYPH_DIM + local_x]);
-                let Some(Some(color)) = GLYPH_COLORS.get(index) else {
+                let Some(Some(color)) = colors.get(index) else {
                     continue;
                 };
                 let (Ok(dx), Ok(dy)) = (i32::try_from(local_x), i32::try_from(local_y)) else {

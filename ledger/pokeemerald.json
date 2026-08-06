@@ -12340,6 +12340,14 @@
       "status": "pending"
     },
     "graphics/interface": {
+      "artifacts": {
+        "main_menu_bg_palette": {
+          "reason": "graphics/interface/main_menu_bg.pal extracted as interface/palette/main_menu_bg (xtask::extract::extract_interface_palettes, issue #216); MainMenuScene::from_pack reads its index 0 for the BG0 backdrop colour. Every other file under graphics/interface (icons, badges, pokedex chrome, etc.) and the sibling main_menu_text.pal stay unextracted -- see xtask::extract's module docs for why main_menu_text.pal specifically is deferred.",
+          "rust_target": "crates/pokeemerald-rs/src/main_menu.rs",
+          "spec": "I-3",
+          "status": "ported"
+        }
+      },
       "category": "graphics.ui",
       "kind": "dir",
       "spec_owner": "05-assets",
@@ -26372,10 +26380,10 @@
           "status": "stubbed"
         },
         "no_save_menu": {
-          "reason": "HAS_NO_SAVED_GAME item list (Task_MainMenuCheckSaveFile/HandleMainMenuInput) reduced to the single NEW GAME item MainMenuScene renders and confirms; CONTINUE/OPTION/MYSTERY GIFT/MYSTERY EVENTS and every other save-status branch are not ported",
+          "reason": "HAS_NO_SAVED_GAME now renders both items at upstream's real geometry/palette/window frame (main_menu.c:259-309, 755-793) with Up/Down selection and the WIN0+BLDCNT+BLDY(7) darkened-background highlight (main_menu.c:745-753, 903-925, 1170-1187), issue #216. Still not ported: CONTINUE/MYSTERY GIFT/MYSTERY EVENTS and every other gSaveFileStatus branch (no save-file load path exists yet), and OPTION's own destination screen (ACTION_OPTION, main_menu.c:963) -- crate::flow::advance_scene swallows an A press on it instead of launching a screen that doesn't exist.",
           "rust_target": "crates/pokeemerald-rs/src/main_menu.rs",
           "spec": "I-3",
-          "status": "stubbed"
+          "status": "rewritten"
         }
       },
       "category": "code.source",

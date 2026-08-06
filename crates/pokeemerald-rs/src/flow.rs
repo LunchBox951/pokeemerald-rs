@@ -25,7 +25,7 @@ use platform::{ButtonState, Buttons, Frame};
 
 use crate::frame::to_platform_frame;
 use crate::intro::{self, IntroScene, IntroStatus};
-use crate::main_menu::{self, MainMenuScene};
+use crate::main_menu::{self, MainMenuItem, MainMenuScene};
 use crate::title::TitleScene;
 
 mod overworld_phase;
@@ -56,7 +56,9 @@ pub(crate) enum AppScene {
     /// The idle/animating title screen, waiting for A or Start
     /// ([`title_advance_pressed`]).
     Title(Box<AnimatedTitle>),
-    /// The no-save-present main menu, waiting for A to confirm `NEW GAME`.
+    /// The no-save-present main menu (I-3, issue #216): Up/Down move the
+    /// `NEW GAME`/`OPTION` selection, A confirms it (module docs on
+    /// [`advance_scene`]'s `MainMenu` arm for what each item does).
     MainMenu(Box<MainMenuScene>),
     /// Birch's speech, paging through [`crate::intro::speech`]'s text.
     Intro(Box<IntroScene>),
@@ -159,15 +161,27 @@ pub(crate) fn advance_scene(scene: AppScene, buttons: ButtonState) -> (AppScene,
             let frame = to_platform_frame(&title.scene.compose(title.tick));
             (AppScene::Title(title), frame)
         }
-        AppScene::MainMenu(menu) => {
+        AppScene::MainMenu(mut menu) => {
             if buttons.is_newly_pressed(Buttons::A) {
-                match intro::load_default() {
-                    Ok(intro_scene) => {
-                        let frame = intro_scene.compose_frame();
-                        return (AppScene::Intro(Box::new(intro_scene)), frame);
-                    }
-                    Err(err) => eprintln!("intro: {err} -- staying on the main menu"),
+                match menu.selected() {
+                    MainMenuItem::NewGame => match intro::load_default() {
+                        Ok(intro_scene) => {
+                            let frame = intro_scene.compose_frame();
+                            return (AppScene::Intro(Box::new(intro_scene)), frame);
+                        }
+                        Err(err) => eprintln!("intro: {err} -- staying on the main menu"),
+                    },
+                    // Upstream's `ACTION_OPTION` destination
+                    // (`main_menu.c:963`) is a separate settings screen this
+                    // port doesn't model yet (issue #216 scope notes) --
+                    // swallow the press instead of incorrectly launching
+                    // the intro.
+                    MainMenuItem::Option => {}
                 }
+            } else if buttons.is_newly_pressed(Buttons::UP) {
+                menu.move_up();
+            } else if buttons.is_newly_pressed(Buttons::DOWN) {
+                menu.move_down();
             }
             let frame = menu.compose_frame();
             (AppScene::MainMenu(menu), frame)
@@ -369,11 +383,11 @@ mod tests {
         assert_eq!(title.tick, 1, "the tick must still advance every frame");
     }
 
-    /// I-3 scene-flow test: main menu, A newly pressed -> intro (the menu's
-    /// only item, `NEW GAME`, per `crate::main_menu`'s module docs).
+    /// I-3 scene-flow test: main menu, `NEW GAME` selected (the default,
+    /// per `crate::main_menu`'s module docs) and A newly pressed -> intro.
     #[test]
     #[ignore = "needs a local pack: run `cargo xtask extract` first"]
-    fn main_menu_confirm_transitions_to_intro() {
+    fn main_menu_confirm_on_new_game_transitions_to_intro() {
         let menu = crate::main_menu::load_default().expect("run `cargo xtask extract` first");
         let scene = AppScene::MainMenu(Box::new(menu));
 
@@ -381,8 +395,51 @@ mod tests {
 
         assert!(
             matches!(next, AppScene::Intro(_)),
-            "A on the main menu must transition to the intro"
+            "A on NEW GAME must transition to the intro"
         );
+    }
+
+    /// Issue #216 regression: A on `OPTION` must stay on the main menu, not
+    /// incorrectly launch the intro -- its own destination screen is a
+    /// separate, not-yet-built slice (`crate::flow::advance_scene`'s
+    /// `MainMenuItem::Option` arm). No local pack needed: this never
+    /// reaches a pack-loading call at all (`crate::main_menu::synthetic_scene`'s
+    /// own doc comment).
+    #[test]
+    fn main_menu_confirm_on_option_stays_on_the_main_menu() {
+        let mut menu = crate::main_menu::synthetic_scene();
+        menu.move_down();
+        assert_eq!(menu.selected(), crate::main_menu::MainMenuItem::Option);
+        let scene = AppScene::MainMenu(Box::new(menu));
+
+        let (next, _frame) = advance_scene(scene, pressed(Buttons::A));
+
+        let AppScene::MainMenu(menu) = next else {
+            panic!("A on OPTION must not leave the main menu");
+        };
+        assert_eq!(menu.selected(), crate::main_menu::MainMenuItem::Option);
+    }
+
+    /// Issue #216 regression: `DPAD_UP`/`DPAD_DOWN`, newly pressed, move the
+    /// main menu's selection -- no pack needed (module docs on the test
+    /// above).
+    #[test]
+    fn main_menu_up_and_down_move_the_selection() {
+        let menu = crate::main_menu::synthetic_scene();
+        let scene = AppScene::MainMenu(Box::new(menu));
+
+        let (after_down, _frame) = advance_scene(scene, pressed(Buttons::DOWN));
+        let AppScene::MainMenu(menu) = after_down else {
+            panic!("expected to stay on the main menu");
+        };
+        assert_eq!(menu.selected(), crate::main_menu::MainMenuItem::Option);
+
+        let scene = AppScene::MainMenu(menu);
+        let (after_up, _frame) = advance_scene(scene, pressed(Buttons::UP));
+        let AppScene::MainMenu(menu) = after_up else {
+            panic!("expected to stay on the main menu");
+        };
+        assert_eq!(menu.selected(), crate::main_menu::MainMenuItem::NewGame);
     }
 
     /// I-3 scene-flow test: intro finishing (here, via the skip path --
