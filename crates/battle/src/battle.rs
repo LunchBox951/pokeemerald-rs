@@ -63,6 +63,14 @@
 //!
 //! Every other rule (turn order, damage, fainting, exp, PP) is unchanged.
 //!
+//! Only those *rules* live here: no caller passes `first_battle = true` yet,
+//! because the scripted intro's own construction and trigger
+//! (`SetUpBattleVarsAndBirchZigzagoon`, `src/battle_controllers.c:66`-`:69`,
+//! and the "don't leave Prof. Birch!" narrative gate) are a separate
+//! overworld hookup, deferred to and tracked by issue #221. Every ordinary
+//! Route 101 grass encounter still constructs with `first_battle = false`
+//! (`crates/pokeemerald-rs/src/flow/wild_encounter.rs`).
+//!
 //! # RNG draw order
 //!
 //! The battle RNG is a single shared stream upstream, so *where* draws happen

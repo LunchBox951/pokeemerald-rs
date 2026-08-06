@@ -7,9 +7,15 @@
 //! (`crate::critical`, `crate::hit`, `crate::battle`'s own doc-comment
 //! derivations).
 //!
-//! Zigzagoon (species 288, Tackle + Growl) is the actual scripted first-battle
-//! moveset (`pokeemerald/src/battle_controllers.c:66`-`:69`), reused here
-//! rather than inventing a stand-in species.
+//! Zigzagoon (species 288) is the actual scripted first-battle opponent
+//! (`pokeemerald/src/battle_controllers.c:66`-`:69` creates it at level 2 --
+//! species and level only). Tackle + Growl is the moveset that construction
+//! implies: `CreateMon` (`pokeemerald/src/pokemon.c:2195`) delegates to
+//! `CreateBoxMon` (`:2206`), which ends in `GiveBoxMonInitialMoveset`
+//! (`:2302`, defined at `:2991`-`:3012`) -- and that walks
+//! `sZigzagoonLevelUpLearnset` (`src/data/pokemon/level_up_learnsets.h:3765`)
+//! up to the mon's level -- at level 2 exactly the two level-1 entries,
+//! Tackle and Growl. Reused here rather than inventing a stand-in species.
 
 use crate::common::{max_iv_mon, SequenceRng};
 use assets::MoveId;
@@ -320,4 +326,11 @@ fn first_battle_ai_does_not_flee_above_the_hp_threshold() {
         "a healthy player must not trigger the flee branch"
     );
     assert_ne!(battle.outcome(), Some(BattleOutcome::WildFled));
+    assert_eq!(
+        rng.draws(),
+        9,
+        "battle-start + turn number + 4 simulatedRNG + the tie-break the \
+         flee path skips + both Growls' accuracy rolls -- an extra draw \
+         already panics on the exhausted sequence, this pins a lost one"
+    );
 }

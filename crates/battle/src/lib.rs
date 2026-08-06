@@ -51,8 +51,9 @@
 //! `I-5`). Only the *rules* are modelled — the scripted intro's
 //! own construction (`SetUpBattleVarsAndBirchZigzagoon`, the Zigzagoon
 //! opponent, the "don't leave Prof. Birch!" narrative trigger) is a
-//! separate, not-yet-modelled overworld hookup; every ordinary Route 101
-//! grass encounter still constructs with `first_battle = false`
+//! separate, not-yet-modelled overworld hookup, deferred to and tracked by
+//! issue #221; every ordinary Route 101 grass encounter still constructs
+//! with `first_battle = false`
 //! (`crates/pokeemerald-rs/src/flow/wild_encounter.rs`).
 //!
 //! Out of scope for this slice (see each module's own docs for exactly what
