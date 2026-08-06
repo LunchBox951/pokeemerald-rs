@@ -105,8 +105,7 @@ impl OverworldPhase {
     /// latched step happened on.
     ///
     /// No warp loop is possible from the arrow path's every-frame poll:
-    /// [`crate::overworld::npc_scripts`]'s companion,
-    /// [`engine::overworld::warp_in_facing`], lands an arrival on an arrow
+    /// [`engine::overworld::warp_in_facing`] lands an arrival on an arrow
     /// tile facing *out* of that arrow (upstream
     /// `GetAdjustedInitialDirection`, `overworld.c:937-943`), so the held
     /// direction that fired the warp cannot equal the arrival facing, and

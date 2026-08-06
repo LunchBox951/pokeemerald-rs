@@ -17,7 +17,7 @@ use super::OverworldPhase;
 impl OverworldPhase {
     /// Whether the current map's land table only rolls wild mons the battle
     /// engine can fight ([`wild_encounter::map_wild_table_fightable`], issue
-    /// #207 review). Memoised on `map_id` itself
+    /// #207 review). Memoised on [`OverworldPhase::map_id`] itself
     /// ([`OverworldPhase::wild_table_screen`]) because the screen walks the
     /// whole table; a map change invalidates the memo by construction, with
     /// no per-transition update to forget. `false` disables the encounter

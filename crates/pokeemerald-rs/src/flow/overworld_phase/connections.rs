@@ -21,8 +21,8 @@ use super::OverworldPhase;
 /// real generated map tables and, only once a candidate connection's own
 /// bounds already match, the extracted asset pack -- the
 /// [`ConnectedMapData`] this integration lane feeds
-/// [`super::input::advance_player_one_frame`] (via
-/// [`engine::overworld::PlayerState::step`]), replacing the
+/// [`engine::overworld::PlayerState::step`] (via
+/// [`super::input::advance_player_one_frame`]), replacing the
 /// `no_connections` stub an earlier revision of this module passed
 /// unconditionally (see [`OverworldPhase::cross_connection`]'s doc comment
 /// for what happens once a step actually resolves against it).

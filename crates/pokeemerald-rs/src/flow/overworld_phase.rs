@@ -41,10 +41,10 @@ mod wild_battle;
 /// The overworld-loop state (module docs): an [`OverworldScene`] to render
 /// plus the [`PlayerState`] it renders, together with the map identity
 /// needed to re-look-up that map's header and event lists (from the
-/// `'static` `MapHeaderTable`/`MapEventsTable`) every frame -- see
-/// [`OverworldPhase::step`]. Also carries the fresh [`SaveBlock1`]/
-/// [`SaveBlock2`] pair [`new_game::init_save_blocks`] built for this run
-/// (starting money, cleared party/bag/event data, default
+/// `'static` [`assets::MapHeaderTable`]/[`assets::MapEventsTable`]) every
+/// frame -- see [`OverworldPhase::step`]. Also carries the fresh
+/// [`SaveBlock1`]/[`SaveBlock2`] pair [`new_game::init_save_blocks`] built
+/// for this run (starting money, cleared party/bag/event data, default
 /// name/gender -- see that function's module docs) -- the actual save-state
 /// counterpart to `player`'s in-memory position, kept alive here rather than
 /// built and discarded, since nothing yet writes it to disk
