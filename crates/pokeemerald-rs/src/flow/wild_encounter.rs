@@ -333,7 +333,7 @@ pub(super) fn start_wild_battle(
     // `battle::Battle` for exactly what `BATTLE_TYPE_FIRST_BATTLE` changes.
     // That one-time narrative event (its own `gBattleTypeFlags` assignment
     // and scripted opponent, `SetUpBattleVarsAndBirchZigzagoon`,
-    // `src/battle_controllers.c:66`-`:69`) is a separate, not-yet-modelled
+    // `src/battle_controllers.c:67`-`:72`) is a separate, not-yet-modelled
     // trigger; wiring it up is tracked by issue #221, not a change to how an
     // ordinary grass step behaves. [`advance_wild_battle`]'s "always try to run"
     // driver policy depends on running staying legal here, which

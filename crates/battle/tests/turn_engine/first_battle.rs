@@ -8,7 +8,7 @@
 //! derivations).
 //!
 //! Zigzagoon (species 288) is the actual scripted first-battle opponent
-//! (`pokeemerald/src/battle_controllers.c:66`-`:69` creates it at level 2 --
+//! (`pokeemerald/src/battle_controllers.c:67`-`:72` creates it at level 2 --
 //! species and level only). Tackle + Growl is the moveset that construction
 //! implies: `CreateMon` (`pokeemerald/src/pokemon.c:2195`) delegates to
 //! `CreateBoxMon` (`:2206`), which ends in `GiveBoxMonInitialMoveset`

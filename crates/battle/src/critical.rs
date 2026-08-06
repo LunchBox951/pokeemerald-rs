@@ -33,7 +33,7 @@
 //! `STATUS3_CANT_SCORE_A_CRIT` is only ever set by Future Sight/Doom Desire.
 //! The third, `BATTLE_TYPE_FIRST_BATTLE`, belongs to a scripted one-off
 //! battle (set for the Route 101 intro Zigzagoon fight and nothing else,
-//! `SetUpBattleVarsAndBirchZigzagoon`, `src/battle_controllers.c:66`-`:69`,
+//! `SetUpBattleVarsAndBirchZigzagoon`, `src/battle_controllers.c:67`-`:72`,
 //! triggered from `src/battle_setup.c:937`; `BATTLE_TYPE_WALLY_TUTORIAL`
 //! covers the sibling Wally's-catching-tutorial case, also unmodelled) — as
 //! of issue #187, [`crate::battle::Battle`]'s `first_battle` flag *does*

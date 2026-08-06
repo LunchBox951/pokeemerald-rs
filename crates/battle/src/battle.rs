@@ -35,7 +35,7 @@
 //!    (`first_battle` only) → the battle ends immediately in
 //!    [`BattleOutcome::WildFled`], no RNG draw, and the second mover never
 //!    acts either (`HandleAction_Run`'s non-player branch,
-//!    `battle_util.c:522`-`:528`).
+//!    `battle_util.c:524`-`:537`).
 //! 4. Otherwise the second mover's action resolves the same way.
 //!
 //! End-of-turn residual effects (weather/status ticks) are not modelled —
@@ -65,7 +65,7 @@
 //!
 //! Only those *rules* live here: no caller passes `first_battle = true` yet,
 //! because the scripted intro's own construction and trigger
-//! (`SetUpBattleVarsAndBirchZigzagoon`, `src/battle_controllers.c:66`-`:69`,
+//! (`SetUpBattleVarsAndBirchZigzagoon`, `src/battle_controllers.c:67`-`:72`,
 //! and the "don't leave Prof. Birch!" narrative gate) are a separate
 //! overworld hookup, deferred to and tracked by issue #221. Every ordinary
 //! Route 101 grass encounter still constructs with `first_battle = false`
@@ -218,7 +218,7 @@ pub enum BattleOutcome {
     /// player's mon drops to `<=20%` HP, and a non-player battler's
     /// `B_ACTION_RUN` unconditionally ends the battle
     /// (`HandleAction_Run`'s `B_OUTCOME_MON_FLED`,
-    /// `src/battle_util.c:522`-`:528`) rather than rolling
+    /// `src/battle_util.c:524`-`:537`) rather than rolling
     /// [`crate::escape::try_run_from_battle`] the way the player's own Run
     /// does.
     WildFled,
@@ -927,8 +927,8 @@ impl Battle {
                 self.act(false, self.enemy.moves()[slot].move_id, slot, rng, events)
             }
             EnemyAction::Struggle => Err(BattleError::UnsupportedMoveEffect(STRUGGLE)),
-            // HandleAction_Run's non-player branch (`battle_util.c:522`-
-            // `:528`): no escape formula, no RNG draw, no PP touched --
+            // HandleAction_Run's non-player branch (`battle_util.c:524`-
+            // `:537`): no escape formula, no RNG draw, no PP touched --
             // fleeing simply ends the battle.
             EnemyAction::Flee => {
                 events.push(BattleEvent::WildFled);
