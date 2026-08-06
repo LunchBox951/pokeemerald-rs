@@ -13,7 +13,9 @@
 //! `crate::overworld::warp::is_arrow_warp_trigger`), plus the ids upstream
 //! `GetAdjustedInitialDirection` (`src/overworld.c:929-951`) branches on to
 //! pick the facing a warp *lands* the player in
-//! ([`crate::overworld::warp::warp_in_facing`]). Everything else this crate
+//! ([`crate::overworld::warp::warp_in_facing`]), plus (issue #169) the
+//! land-wild-encounter predicate [`is_land_wild_encounter`] that gates
+//! [`crate::overworld::wild_encounter`]'s per-step roll. Everything else this crate
 //! doesn't decode is deliberately left unclassified rather than guessed at —
 //! see [`is_warp_trigger`]'s doc for how that fail-closed policy plays out
 //! for warps specifically.
@@ -53,6 +55,42 @@
 /// and tests can spell out "this tile is plain ground" instead of a bare
 /// `0`.
 pub const MB_NORMAL: u8 = 0;
+
+/// `MB_TALL_GRASS` (`0x02`): the grass a wild encounter is rolled in — the
+/// tile the v1 north-star path's first encounter happens on (issue #169).
+/// See [`is_land_wild_encounter`].
+pub const MB_TALL_GRASS: u8 = 0x02;
+
+/// `MB_LONG_GRASS` (`0x03`): the taller grass variant (Routes 119/120), also
+/// a land-encounter tile — see [`is_land_wild_encounter`].
+pub const MB_LONG_GRASS: u8 = 0x03;
+
+/// `MB_UNUSED_05` (`0x05`): an id upstream still flags
+/// `TILE_FLAG_HAS_ENCOUNTERS` in `sTileBitAttributes`
+/// (`metatile_behavior.c:14`) despite its name — carried so
+/// [`is_land_wild_encounter`] reproduces upstream's id set exactly rather
+/// than a tidied-up version of it.
+pub const MB_UNUSED_05: u8 = 0x05;
+
+/// `MB_DEEP_SAND` (`0x06`): the deep desert sand wild Pokémon appear in — a
+/// land-encounter tile (`metatile_behavior.c:15`).
+pub const MB_DEEP_SAND: u8 = 0x06;
+
+/// `MB_CAVE` (`0x08`): cave floor — a land-encounter tile
+/// (`metatile_behavior.c:17`).
+pub const MB_CAVE: u8 = 0x08;
+
+/// `MB_INDOOR_ENCOUNTER` (`0x0B`): indoor floor that still rolls encounters
+/// (`metatile_behavior.c:20`) — the Battle Pyramid's rooms.
+pub const MB_INDOOR_ENCOUNTER: u8 = 0x0B;
+
+/// `MB_ASHGRASS` (`0x24`): Route 113's ash-covered grass — a land-encounter
+/// tile (`metatile_behavior.c:40`).
+pub const MB_ASHGRASS: u8 = 0x24;
+
+/// `MB_FOOTPRINTS` (`0x25`): the soft desert ground that records footprints —
+/// a land-encounter tile (`metatile_behavior.c:41`).
+pub const MB_FOOTPRINTS: u8 = 0x25;
 
 /// `MB_NON_ANIMATED_DOOR` (`0x60`): a warp tile with no open/close animation.
 /// Upstream uses this for interior staircases and other "just teleport"
@@ -180,6 +218,46 @@ pub const fn is_door(behavior: u8) -> bool {
 #[must_use]
 pub const fn is_warp_trigger(behavior: u8) -> bool {
     is_door(behavior)
+}
+
+/// Whether standing on a tile with `behavior` can roll a **land** wild
+/// encounter — upstream `MetatileBehavior_IsLandWildEncounter`
+/// (`metatile_behavior.c:819-826`), the gate `StandardWildEncounter`
+/// (`wild_encounter.c:595`) checks before anything else on the land path
+/// (issue #169).
+///
+/// Upstream composes it from two table lookups:
+/// `MetatileBehavior_IsEncounterTile` (`:135-142`, `TILE_FLAG_HAS_ENCOUNTERS`)
+/// AND NOT `MetatileBehavior_IsSurfableWaterOrUnderwater` (`:280-287`,
+/// `TILE_FLAG_SURFABLE`), both indexing the ~200-entry `sTileBitAttributes`
+/// array (`:9`). Re-expressed here as the *derived* id set `(no-verbatim)`
+/// rather than transcribing that whole array for one predicate: exactly the
+/// eight ids upstream flags `TILE_FLAG_HAS_ENCOUNTERS` without also flagging
+/// `TILE_FLAG_SURFABLE` — [`MB_TALL_GRASS`], [`MB_LONG_GRASS`],
+/// [`MB_UNUSED_05`], [`MB_DEEP_SAND`], [`MB_CAVE`], [`MB_INDOOR_ENCOUNTER`],
+/// [`MB_ASHGRASS`], [`MB_FOOTPRINTS`] (`:12-20`, `:40-41`). The set is
+/// complete, not a v1 subset: every land-encounter behavior in the game is
+/// here, so a future map needs no change to this predicate.
+///
+/// The *surfable* half of that table — `MetatileBehavior_IsWaterWildEncounter`
+/// (`:828-835`) and its six encounter-flagged water ids — is deliberately not
+/// modelled: surfing does not exist in this port, so a water encounter is
+/// unreachable and a predicate for it would be an untested claim. Water
+/// encounters are enumerated as NOT-modelled on this slice's ledger entry
+/// rather than approximated here.
+#[must_use]
+pub const fn is_land_wild_encounter(behavior: u8) -> bool {
+    matches!(
+        behavior,
+        MB_TALL_GRASS
+            | MB_LONG_GRASS
+            | MB_UNUSED_05
+            | MB_DEEP_SAND
+            | MB_CAVE
+            | MB_INDOOR_ENCOUNTER
+            | MB_ASHGRASS
+            | MB_FOOTPRINTS
+    )
 }
 
 /// Whether `behavior` is a tile upstream `TryArrowWarp` treats as an
@@ -347,5 +425,59 @@ mod tests {
         assert_eq!(MB_WATER_SOUTH_ARROW_WARP, 0x6D);
         assert_eq!(MB_DEEP_SOUTH_WARP, 0x6E);
         assert_eq!(MB_PETALBURG_GYM_DOOR, 0x8D);
+    }
+
+    /// The land-encounter ids' numeric values, against their positions in
+    /// upstream's `constants/metatile_behaviors.h` enum — the same
+    /// index-is-the-value reasoning as the test above.
+    #[test]
+    fn land_encounter_ids_match_upstreams_enum_positions() {
+        assert_eq!(MB_TALL_GRASS, 0x02);
+        assert_eq!(MB_LONG_GRASS, 0x03);
+        assert_eq!(MB_UNUSED_05, 0x05);
+        assert_eq!(MB_DEEP_SAND, 0x06);
+        assert_eq!(MB_CAVE, 0x08);
+        assert_eq!(MB_INDOOR_ENCOUNTER, 0x0B);
+        assert_eq!(MB_ASHGRASS, 0x24);
+        assert_eq!(MB_FOOTPRINTS, 0x25);
+    }
+
+    /// `MetatileBehavior_IsLandWildEncounter` (`metatile_behavior.c:819-826`)
+    /// over the *whole* `u8` id space: exactly the eight ids upstream flags
+    /// `TILE_FLAG_HAS_ENCOUNTERS` without `TILE_FLAG_SURFABLE` match, and
+    /// nothing else does. Exhaustive rather than sampled, so a future id
+    /// added to the set cannot slip in unnoticed.
+    #[test]
+    fn only_upstreams_eight_non_surfable_encounter_ids_are_land_encounters() {
+        let expected = [
+            MB_TALL_GRASS,
+            MB_LONG_GRASS,
+            MB_UNUSED_05,
+            MB_DEEP_SAND,
+            MB_CAVE,
+            MB_INDOOR_ENCOUNTER,
+            MB_ASHGRASS,
+            MB_FOOTPRINTS,
+        ];
+        let matching: Vec<u8> = (0..=u8::MAX)
+            .filter(|b| is_land_wild_encounter(*b))
+            .collect();
+        assert_eq!(matching, expected);
+    }
+
+    /// The two neighbours most likely to be confused with grass: ordinary
+    /// ground, `MB_SHORT_GRASS` (`0x07`, decorative — upstream gives it
+    /// `TILE_FLAG_UNUSED` only, `metatile_behavior.c:16`), and
+    /// `MB_LONG_GRASS_SOUTH_EDGE` (`0x09`, the long-grass border tile, also
+    /// encounter-free at `:18`). None of the three rolls an encounter.
+    #[test]
+    fn decorative_grass_neighbours_do_not_roll_encounters() {
+        assert!(!is_land_wild_encounter(MB_NORMAL));
+        assert!(!is_land_wild_encounter(0x07), "MB_SHORT_GRASS");
+        assert!(!is_land_wild_encounter(0x09), "MB_LONG_GRASS_SOUTH_EDGE");
+        // Surfable water is encounter-flagged upstream but excluded by the
+        // `IsSurfableWaterOrUnderwater` half of the predicate.
+        assert!(!is_land_wild_encounter(0x10), "MB_POND_WATER");
+        assert!(!is_land_wild_encounter(0x12), "MB_DEEP_WATER");
     }
 }

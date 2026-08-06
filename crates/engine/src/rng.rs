@@ -31,6 +31,43 @@ pub const fn iso_randomize2(val: u32) -> u32 {
     ISO_MULT.wrapping_mul(val).wrapping_add(ISO_INCREMENT_2)
 }
 
+/// The one `Random()` stream, as a trait — the seam a system that *draws*
+/// takes, so its draw order and count can be pinned exactly.
+///
+/// Upstream reaches its generator through a single global entry point
+/// (`Random()` / `Random32()`, `pokeemerald/include/random.h`), so every system
+/// that draws shares one stream and one draw order; reproducing that order is
+/// the whole point of `(behavioral-fidelity)` for anything RNG-observable.
+/// [`Rng`] *is* that generator — this trait adds no second scheme, only a way
+/// for a test to substitute a scripted sequence and assert "these draws, in
+/// this order, and no others" without reverse-engineering an LCG seed that
+/// happens to produce them.
+///
+/// It deliberately mirrors `battle::BattleRng` rather than replacing it: the
+/// `battle` crate does not depend on `engine` (see `crates/battle/src/wild.rs`'s
+/// module docs for why), so each crate names its own view of the same single
+/// stream `(oop-boundaries)`. An integration layer that owns one [`Rng`] can
+/// satisfy both — `crates/pokeemerald-rs/src/flow/wild_encounter.rs` does
+/// exactly that, so the overworld encounter roll and the battle it hands off to
+/// draw from one uninterrupted sequence, the way upstream's single `gRngValue`
+/// does.
+pub trait RandomSource {
+    /// Draw the next 16-bit value — upstream `Random()`.
+    fn next_u16(&mut self) -> u16;
+
+    /// Draw the next 32-bit value — upstream `Random32()`, `Random() |
+    /// (Random() << 16)`.
+    ///
+    /// A default method built on two [`RandomSource::next_u16`] draws, low
+    /// half first, matching [`Rng::next_u32`]'s own documented order so a
+    /// scripted implementation agrees with the real generator call for call.
+    fn next_u32(&mut self) -> u32 {
+        let low = u32::from(self.next_u16());
+        let high = u32::from(self.next_u16());
+        low | (high << 16)
+    }
+}
+
 /// Emerald's deterministic linear-congruential generator.
 ///
 /// Given a seed, the output sequence is exact to the original bit-for-bit. One
@@ -104,6 +141,19 @@ impl Rng {
         let low = u32::from(self.next_u16());
         let high = u32::from(self.next_u16());
         low | (high << 16)
+    }
+}
+
+/// The real generator satisfies the seam it defines: production callers pass
+/// `&mut Rng` straight into any [`RandomSource`]-generic function, so nothing
+/// in the shipping path goes through a substitute.
+impl RandomSource for Rng {
+    fn next_u16(&mut self) -> u16 {
+        Self::next_u16(self)
+    }
+
+    fn next_u32(&mut self) -> u32 {
+        Self::next_u32(self)
     }
 }
 
@@ -183,6 +233,21 @@ mod tests {
     #[test]
     fn default_seeds_zero() {
         assert_eq!(Rng::default().state(), Rng::new(0).state());
+    }
+
+    #[test]
+    fn the_trait_seam_forwards_to_the_real_generator() {
+        // `RandomSource` must be a view of the same stream, not a second
+        // scheme: the trait methods have to agree with the inherent ones
+        // draw for draw.
+        fn take_two(rng: &mut impl RandomSource) -> (u16, u32) {
+            (rng.next_u16(), rng.next_u32())
+        }
+        let mut direct = Rng::new(0x1234);
+        let expected = (direct.next_u16(), direct.next_u32());
+        let mut through_trait = Rng::new(0x1234);
+        assert_eq!(take_two(&mut through_trait), expected);
+        assert_eq!(through_trait.state(), direct.state());
     }
 
     #[test]
