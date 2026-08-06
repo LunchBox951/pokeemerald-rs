@@ -77,10 +77,28 @@
 //! rectangle's `WIN0V` to the selected item on every selection change. This
 //! crate already ports that exact hardware colour-math formula --
 //! [`rendering::darken`], verified against `mgba`'s own `_darken` (see
-//! `rendering::effects`' module docs) -- so [`MainMenuScene::compose`]
-//! reuses it directly on the fully composited frame outside
-//! [`highlight_rect`]'s pixel rectangle, rather than re-deriving the
-//! coefficient math here `(oop-boundaries)`. [`highlight_rect`] itself
+//! `rendering::effects`' module docs) -- so [`darken_outside`] reuses it
+//! directly rather than re-deriving the coefficient math here
+//! `(oop-boundaries)`.
+//!
+//! **The backdrop is never darkened.** `BLDCNT`'s first-target set is
+//! `BLDCNT_EFFECT_DARKEN | BLDCNT_TGT1_BG0` (`main_menu.c:751`): BG0 alone,
+//! *not* `BLDCNT_TGT1_BD` (`include/gba/io_reg.h:595`), so the darken only
+//! ever applies where BG0's own pixel is the topmost non-transparent one.
+//! Outside the two menu windows BG0 is fully transparent -- `InitMainMenu`
+//! `DmaFill16`s all of VRAM to zero (`main_menu.c:560`) and only those two
+//! windows' tiles are ever written back -- so everywhere no window covers,
+//! the *backdrop* colour is what shows, at full brightness, both inside and
+//! outside `WIN0` (confirmed against issue #216's own mGBA capture: the
+//! lavender backdrop between and below the boxes reads identically to the
+//! backdrop inside the highlight). [`draw_item`] therefore records which
+//! pixels its window draws actually painted, in a [`textbox::Coverage`]
+//! map, and [`darken_outside`] darkens only those -- mirroring the
+//! BG-vs-backdrop blend-target distinction this workspace's own compositor
+//! already models (`LayerKind::Backdrop` gated on
+//! `LayerTargets::backdrop`, `crates/rendering/src/compositor.rs`).
+//!
+//! [`highlight_rect`] itself
 //! mirrors `MENU_WIN_HCOORDS`/`MENU_WIN_VCOORDS(n)` (`main_menu.c:283-284`)
 //! pixel-for-pixel, not the `WindowRange`-wrap-semantics hardware register
 //! encoding those macros compile to -- this scene never needs a wrapped
@@ -171,7 +189,8 @@ const HEADER_TEXT_SHADOW: Rgb888 = Bgr555::from_channels(26, 26, 25).to_rgb888()
 /// [`HEADER_TEXT_BG`]/[`HEADER_TEXT_FG`]/[`HEADER_TEXT_SHADOW`]. Index 0
 /// (bg) is `None` (transparent) rather than an explicit
 /// [`HEADER_TEXT_BG`] paint: [`draw_item`] already fills the whole content
-/// rect that colour first (`textbox::fill_rect`, mirroring upstream's own
+/// rect that colour first (`textbox::fill_rect_tracked`, mirroring
+/// upstream's own
 /// `FillWindowPixelBuffer` call *before* `AddTextPrinterParameterized3`,
 /// `main_menu.c:784-787`), so painting it again per-glyph would be
 /// redundant, not incorrect. Index 3 (box) is likewise `None`: no
@@ -349,11 +368,14 @@ impl MainMenuScene {
         let mut fb = Framebuffer::new();
         fb.fill(self.background);
 
+        // BG0's own painted pixels -- the only ones `BLDCNT_TGT1_BG0`
+        // darkens (module docs' "Selection highlight" section).
+        let mut bg0 = textbox::Coverage::recording();
         for item in &self.items {
-            draw_item(&mut fb, &self.frame, item);
+            draw_item(&mut fb, &mut bg0, &self.frame, item);
         }
 
-        darken_outside(&mut fb, highlight_rect(self.selected.top_tile()));
+        darken_outside(&mut fb, &bg0, highlight_rect(self.selected.top_tile()));
 
         fb
     }
@@ -371,14 +393,22 @@ impl MainMenuScene {
 /// "Geometry" and "Rendering pipeline" sections) -- `main_menu.c`'s
 /// `FillWindowPixelBuffer` + `AddTextPrinterParameterized3` +
 /// `DrawMainMenuWindowBorder` sequence for that item's window
-/// (`main_menu.c:784-793`).
-fn draw_item(fb: &mut Framebuffer, frame: &FrameAssets, item: &ItemGlyphs) {
+/// (`main_menu.c:784-793`) -- recording every pixel it paints into `bg0`,
+/// this scene's stand-in for BG0's own non-transparent pixels (module docs'
+/// "Selection highlight" section).
+fn draw_item(
+    fb: &mut Framebuffer,
+    bg0: &mut textbox::Coverage,
+    frame: &FrameAssets,
+    item: &ItemGlyphs,
+) {
     let top = item.item.top_tile();
     let content_origin = (MENU_LEFT * TILE_PX, top * TILE_PX);
     let content_size = (MENU_WIDTH * TILE_PX, MENU_HEIGHT * TILE_PX);
 
-    textbox::fill_rect(
+    textbox::fill_rect_tracked(
         fb,
+        bg0,
         content_origin,
         content_size.0,
         content_size.1,
@@ -386,17 +416,26 @@ fn draw_item(fb: &mut Framebuffer, frame: &FrameAssets, item: &ItemGlyphs) {
     );
 
     let tiles = msgwin::border_tiles(MENU_LEFT, top, MENU_WIDTH, MENU_HEIGHT);
-    textbox::blit_frame_tiles(fb, &tiles, frame.image(), &frame.palette);
+    textbox::blit_frame_tiles_tracked(fb, bg0, &tiles, frame.image(), &frame.palette);
 
     // `AddTextPrinterParameterized3(_, FONT_NORMAL, 0, 1, ...)`
     // (`main_menu.c:786-787`): window-local pixel origin `(0, 1)`, not a
-    // hand-picked inset.
+    // hand-picked inset. The clip is the content rect minus that same 1px
+    // `y` offset, so the last glyph row a printer can reach is the content
+    // rect's own last row and never the border row below it: upstream's
+    // `CopyGlyphToWindow` clamps a glyph to `template->height * 8 -
+    // currentY` rows, which for `FONT_NORMAL`'s 15-row glyphs
+    // (`gCurGlyph.height = 15`, `src/text.c:1863`) in a 16px-tall window at
+    // `currentY == 1` is exactly the 15 rows below the offset
+    // `(behavioral-fidelity)`.
     let label_origin = (content_origin.0, content_origin.1 + 1);
-    textbox::blit_glyphs_colored(
+    let label_clip = (content_size.0, content_size.1 - 1);
+    textbox::blit_glyphs_colored_tracked(
         fb,
+        bg0,
         &item.glyphs,
         label_origin,
-        content_size,
+        label_clip,
         &HEADER_GLYPH_COLORS,
     );
 }
@@ -416,16 +455,27 @@ const fn highlight_rect(top_tile: i32) -> (i32, i32, i32, i32) {
     (x0, y0, x1, y1)
 }
 
-/// Darken every pixel of `fb` outside `rect` by [`DARKEN_EVY`] sixteenths
-/// via [`rendering::darken`] (module docs' "Selection highlight" section) --
-/// the observable result of upstream's `WIN0`/`WINOUT`/`BLDCNT`/`BLDY`
-/// register combination, applied directly to the already-composited frame
-/// rather than re-deriving a per-layer hardware window pass this
-/// pixel-blit scene has no BG/OBJ layers to run one over.
-fn darken_outside(fb: &mut Framebuffer, rect: (i32, i32, i32, i32)) {
+/// Darken every *`bg0`-painted* pixel of `fb` outside `rect` by
+/// [`DARKEN_EVY`] sixteenths via [`rendering::darken`] -- the observable
+/// result of upstream's `WIN0`/`WINOUT`/`BLDCNT`/`BLDY` register
+/// combination, applied directly to the already-composited frame rather
+/// than re-deriving a per-layer hardware window pass (this pixel-blit scene
+/// has no [`rendering::BgLayer`]/[`rendering::SpriteLayer`] values to run
+/// one over -- see [`crate::textbox`]'s module docs for why menu/text
+/// chrome is blitted rather than composited).
+///
+/// Skipping the pixels `bg0` did *not* record is the whole point, not an
+/// optimisation: `BLDCNT`'s first-target set names BG0 only, never
+/// `BLDCNT_TGT1_BD`, so the backdrop showing through everywhere BG0 is
+/// transparent stays at full brightness even outside `rect` (module docs'
+/// "Selection highlight" section).
+fn darken_outside(fb: &mut Framebuffer, bg0: &textbox::Coverage, rect: (i32, i32, i32, i32)) {
     let (x0, y0, x1, y1) = rect;
     for y in 0..Framebuffer::HEIGHT {
         for x in 0..Framebuffer::WIDTH {
+            if !bg0.is_painted(x, y) {
+                continue;
+            }
             let (Ok(xi), Ok(yi)) = (i32::try_from(x), i32::try_from(y)) else {
                 continue;
             };

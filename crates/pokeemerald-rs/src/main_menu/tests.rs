@@ -11,6 +11,7 @@ use super::{
     darken_outside, highlight_rect, render_label, MainMenuItem, MainMenuScene, MainMenuSceneError,
     HEADER_TEXT_BG,
 };
+use crate::textbox::{self, Coverage};
 use assets::pack::{AssetPack, ImageRef, PackError};
 use rendering::{Framebuffer, Rgb888};
 
@@ -114,24 +115,34 @@ fn selection_starts_on_new_game_and_moves_without_wrapping() {
 
 // -- `darken_outside` (main_menu.c:745-753's WIN0+BLDCNT+BLDY) ------------
 
+/// A framebuffer filled `bright` everywhere, with `bg0` recording the
+/// `0..40 x 0..40` square as the only BG0-painted region -- so the rest of
+/// the frame stands in for the backdrop showing through transparent BG0.
+fn darken_fixture(bright: Rgb888) -> (Framebuffer, Coverage) {
+    let mut fb = Framebuffer::new();
+    fb.fill(bright);
+    let mut bg0 = Coverage::recording();
+    textbox::fill_rect_tracked(&mut fb, &mut bg0, (0, 0), 40, 40, bright);
+    (fb, bg0)
+}
+
 #[test]
-fn darken_outside_leaves_the_rect_untouched_and_darkens_everything_else() {
+fn darken_outside_leaves_the_rect_untouched_and_darkens_painted_pixels_outside_it() {
     let bright = Rgb888 {
         r: 200,
         g: 200,
         b: 200,
     };
-    let mut fb = Framebuffer::new();
-    fb.fill(bright);
+    let (mut fb, bg0) = darken_fixture(bright);
 
-    darken_outside(&mut fb, (10, 10, 20, 20));
+    darken_outside(&mut fb, &bg0, (10, 10, 20, 20));
 
     // Inside the rect: untouched.
     assert_eq!(fb.pixel(10, 10), Some(bright));
     assert_eq!(fb.pixel(19, 19), Some(bright));
 
-    // Outside the rect: darkened by the exact `rendering::darken` formula
-    // this module cites (`BLDY` EVY=7).
+    // Outside the rect but painted by BG0: darkened by the exact
+    // `rendering::darken` formula this module cites (`BLDY` EVY=7).
     let darkened = rendering::darken(bright, 7);
     assert_ne!(
         darkened, bright,
@@ -142,6 +153,112 @@ fn darken_outside_leaves_the_rect_untouched_and_darkens_everything_else() {
         fb.pixel(20, 20),
         Some(darkened),
         "the rect's own far edge is excluded (half-open)"
+    );
+}
+
+#[test]
+fn darken_outside_leaves_unpainted_backdrop_pixels_alone() {
+    // `BLDCNT_EFFECT_DARKEN | BLDCNT_TGT1_BG0` (`main_menu.c:751`) names BG0
+    // alone as the first target -- never `BLDCNT_TGT1_BD`
+    // (`include/gba/io_reg.h:595`) -- so a pixel BG0 never painted keeps the
+    // backdrop's own full-brightness colour even outside `WIN0`.
+    let bright = Rgb888 {
+        r: 200,
+        g: 200,
+        b: 200,
+    };
+    let (mut fb, bg0) = darken_fixture(bright);
+
+    darken_outside(&mut fb, &bg0, (10, 10, 20, 20));
+
+    assert_eq!(
+        fb.pixel(100, 100),
+        Some(bright),
+        "an unpainted (transparent-BG0) pixel outside WIN0 must not darken"
+    );
+    assert_eq!(
+        fb.pixel(45, 5),
+        Some(bright),
+        "an unpainted pixel level with the painted region must not darken either"
+    );
+}
+
+// -- Header text colours (main_menu.c:758/761/764) -----------------------
+
+/// Render `"A"` from a synthetic `FONT_NORMAL` sheet whose every pixel
+/// carries palette `index` -- a known, non-zero glyph pattern -- and blit it
+/// through [`super::HEADER_GLYPH_COLORS`] at `(0, 0)` onto an all-black
+/// framebuffer, so any painted pixel is unambiguous.
+fn blit_header_glyph_of_index(index: u8) -> Framebuffer {
+    let pixels = vec![index; (assets::fonts::SHEET_WIDTH * assets::fonts::SHEET_HEIGHT) as usize];
+    let image = ImageRef {
+        width: assets::fonts::SHEET_WIDTH,
+        height: assets::fonts::SHEET_HEIGHT,
+        bit_depth: 2,
+        pixels: &pixels,
+    };
+    let sheet = assets::fonts::FontGlyphSheet::new(assets::fonts::FontImageRef::new_for_tests(
+        assets::fonts::FontId::Normal,
+        image,
+    ))
+    .unwrap();
+
+    let glyphs = render_label("A", sheet);
+    assert_eq!(glyphs.len(), 1, "one character reveals exactly one glyph");
+    let mut fb = Framebuffer::new();
+    textbox::blit_glyphs_colored(
+        &mut fb,
+        &glyphs,
+        (0, 0),
+        (
+            i32::try_from(Framebuffer::WIDTH).unwrap(),
+            i32::try_from(Framebuffer::HEIGHT).unwrap(),
+        ),
+        &super::HEADER_GLYPH_COLORS,
+    );
+    fb
+}
+
+#[test]
+fn header_glyph_colors_map_each_font_index_to_the_upstream_patched_palette() {
+    // The three colours `Task_DisplayMainMenu` patches into bank 15 before
+    // the first frame draws, as raw 5-bit `RGB()` literals -- deliberately
+    // spelled out here rather than imported from the constants under test:
+    // `RGB_WHITE` at 0xA (`main_menu.c:758`), `RGB(12, 12, 12)` at 0xB
+    // (`main_menu.c:761`), `RGB(26, 26, 25)` at 0xC (`main_menu.c:764`),
+    // read through `sTextColor_Headers`' bg/fg/shadow order
+    // (`main_menu.c:409`).
+    let fg = rendering::Bgr555::from_channels(12, 12, 12).to_rgb888();
+    let shadow = rendering::Bgr555::from_channels(26, 26, 25).to_rgb888();
+    assert_ne!(fg, shadow, "the two literals must be distinguishable");
+
+    // Font index 1 (`col[1]`) -> foreground.
+    let fb = blit_header_glyph_of_index(1);
+    assert_eq!(fb.pixel(0, 0), Some(fg));
+    assert_eq!(fb.pixel(7, 7), Some(fg));
+
+    // Font index 2 (`col[2]`) -> shadow.
+    let fb = blit_header_glyph_of_index(2);
+    assert_eq!(fb.pixel(0, 0), Some(shadow));
+    assert_eq!(fb.pixel(7, 7), Some(shadow));
+
+    // Font index 0 (`col[0]`, the glyph cell's own background) and index 3
+    // (the unused box colour) are transparent: `draw_item` has already
+    // filled the whole content rect `RGB_WHITE`
+    // (`FillWindowPixelBuffer(PIXEL_FILL(0xA))`, `main_menu.c:784`) before
+    // any glyph draws, so neither may paint anything.
+    for transparent_index in [0u8, 3] {
+        let fb = blit_header_glyph_of_index(transparent_index);
+        assert!(
+            fb.pixels().iter().all(|&p| p == Rgb888::BLACK),
+            "font index {transparent_index} must paint nothing"
+        );
+    }
+
+    // ...and the fill it relies on is that same `RGB_WHITE` literal.
+    assert_eq!(
+        HEADER_TEXT_BG,
+        rendering::Bgr555::from_channels(31, 31, 31).to_rgb888()
     );
 }
 
@@ -206,11 +323,13 @@ fn palette_meta(color_count: u16) -> Vec<u8> {
 /// A minimal pack covering exactly what [`super::MainMenuScene::from_pack`]
 /// needs: a 24x24 (3x3-tile) selectable window frame (every ring tile
 /// opaque, palette index 1, so the border is trivially distinguishable from
-/// both the content fill and the darkened backdrop), a blank
+/// both the content fill and the backdrop), a blank
 /// `font/normal/glyphs` sheet (transparent everywhere -- this fixture only
-/// needs the label glyphs to *exist*, not to be visually legible; label
-/// colour mapping is pinned directly against `textbox::blit_glyphs_colored`
-/// instead), and a `interface/palette/main_menu_bg` whose index 0 is a
+/// needs the label glyphs to *exist*, not to be visually legible; the label
+/// colour mapping is pinned separately by
+/// [`header_glyph_colors_map_each_font_index_to_the_upstream_patched_palette`],
+/// which drives `textbox::blit_glyphs_colored` directly), and a
+/// `interface/palette/main_menu_bg` whose index 0 is a
 /// colour distinct from both the content fill white and the border colour.
 fn synthetic_main_menu_pack_bytes() -> Vec<u8> {
     // 24x24 frame sheet: every ring tile (the 8 border cells `border_tiles`
@@ -277,17 +396,33 @@ fn load_synthetic_scene() -> MainMenuScene {
 }
 
 #[test]
-fn compose_from_synthetic_pack_fills_the_backdrop_from_the_extracted_bg_palette() {
+fn compose_from_synthetic_pack_shows_the_extracted_bg_palette_backdrop_undarkened() {
     let scene = load_synthetic_scene();
     let fb = scene.compose();
 
     let dark_blue = rendering::Bgr555::from_channels(4, 4, 16).to_rgb888();
     // A pixel below both item windows (tile row 8, well past OPTION's own
     // bordered box which ends at tile row 8 -- `MENU_TOP_WIN1` (5) +
-    // `MENU_HEIGHT_WIN1` (2) + the border's own 1 tile) must still show the
-    // raw backdrop colour, darkened (it's outside the selection highlight).
-    let expected = rendering::darken(dark_blue, 7);
-    assert_eq!(fb.pixel(5, 130), Some(expected));
+    // `MENU_HEIGHT_WIN1` (2) + the border's own 1 tile) shows the raw
+    // backdrop colour at *full brightness*, even though it lies outside the
+    // selection highlight: BG0 is transparent there (nothing but the two
+    // windows is ever drawn into it) and `BLDCNT`'s first-target set is
+    // `BLDCNT_TGT1_BG0` without `BLDCNT_TGT1_BD` (`main_menu.c:751`,
+    // `include/gba/io_reg.h:595`), so the darken never reaches the backdrop.
+    assert_eq!(fb.pixel(5, 130), Some(dark_blue));
+    assert_ne!(
+        fb.pixel(5, 130),
+        Some(rendering::darken(dark_blue, 7)),
+        "the backdrop is not a blend first target and must never darken"
+    );
+
+    // Contrast: a pixel the *windows* painted outside WIN0 -- OPTION's own
+    // content fill, unselected -- is darkened by the same pass.
+    assert_eq!(
+        fb.pixel(18, 42),
+        Some(rendering::darken(HEADER_TEXT_BG, 7)),
+        "BG0's own pixels outside WIN0 are the first target and must darken"
+    );
 }
 
 #[test]

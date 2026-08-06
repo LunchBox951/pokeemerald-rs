@@ -65,15 +65,6 @@ const GLYPH_COLORS: [Option<Rgb888>; 4] = [
     None,
 ];
 
-/// Blit one [`window::FrameTile`](msgwin::FrameTile) list -- the chrome
-/// around a menu or dialogue box ([`engine::text::window::border_tiles`] /
-/// [`engine::text::window::MessageBoxLayout::frame_tiles`]) -- into `fb`,
-/// reading each tile's pixels out of `sheet` (a
-/// [`assets::pack::WindowFrameHandle::tiles`] image) and mapping them
-/// through `palette`'s real extracted colours
-/// ([`assets::pack::WindowFrameHandle::palette`]). Palette index 0 is
-/// transparent (GBA convention, matching every other layer this workspace
-/// composites), so it is skipped rather than painted.
 // `engine::text::window::TILE_SIZE` (8): a plain `usize` literal avoids any
 // narrowing/sign-loss cast ambiguity from the `u32` const.
 const TILE: usize = 8;
@@ -83,8 +74,94 @@ const _: () = assert!(msgwin::TILE_SIZE == 8);
 const GLYPH_DIM: usize = 16;
 const _: () = assert!(assets::fonts::GLYPH_SIZE == 16);
 
+/// Which framebuffer pixels a blit actually painted.
+///
+/// The pixel-blit path's stand-in for the per-pixel opacity the BG/OBJ
+/// compositor gets for free: `rendering::compose_frame_with_effects` knows
+/// at every pixel whether *any* layer drew there, and falls back to
+/// `LayerKind::Backdrop` -- gated on its own `LayerTargets::backdrop`
+/// blend-target bit, separate from every BG's --  when none did
+/// (`crates/rendering/src/compositor.rs`). Blitting straight into an
+/// already-filled [`Framebuffer`] destroys that distinction: an unpainted
+/// pixel is indistinguishable from a painted one that happens to match
+/// whatever was underneath. Callers that must apply a colour effect to
+/// their *own* drawn pixels only -- leaving the backdrop they were
+/// composited over untouched, exactly as a `BLDCNT` first-target set that
+/// names BG layers but not `BLDCNT_TGT1_BD` does on hardware -- pass one of
+/// these to the `*_tracked` blit variants and read it back afterwards (see
+/// [`crate::main_menu`]'s `darken_outside`).
+///
+/// [`Coverage::disabled`] is the do-nothing form, for the callers that
+/// don't need it: it records nothing and allocates nothing.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct Coverage {
+    /// One flag per framebuffer pixel, row-major -- or empty when disabled.
+    painted: Vec<bool>,
+}
+
+impl Coverage {
+    /// A coverage map that records every pixel a `*_tracked` blit paints.
+    pub(crate) fn recording() -> Self {
+        Self {
+            painted: vec![false; Framebuffer::WIDTH * Framebuffer::HEIGHT],
+        }
+    }
+
+    /// A coverage map that records nothing, for callers that don't read one
+    /// back (module-internal: every untracked blit entry point passes this).
+    const fn disabled() -> Self {
+        Self {
+            painted: Vec::new(),
+        }
+    }
+
+    /// Whether a tracked blit painted the pixel at `(x, y)`. Always false
+    /// for a [`Coverage::disabled`] map, and for out-of-range coordinates
+    /// (mirroring [`Framebuffer::pixel`]'s own bounds contract).
+    pub(crate) fn is_painted(&self, x: usize, y: usize) -> bool {
+        x < Framebuffer::WIDTH
+            && self
+                .painted
+                .get(y * Framebuffer::WIDTH + x)
+                .copied()
+                .unwrap_or(false)
+    }
+
+    /// Record that `(x, y)` was painted. Silently ignores out-of-range
+    /// coordinates, like [`set_pixel_checked`] itself.
+    fn mark(&mut self, x: usize, y: usize) {
+        if x >= Framebuffer::WIDTH {
+            return;
+        }
+        if let Some(slot) = self.painted.get_mut(y * Framebuffer::WIDTH + x) {
+            *slot = true;
+        }
+    }
+}
+
+/// Blit one [`window::FrameTile`](msgwin::FrameTile) list -- the chrome
+/// around a menu or dialogue box ([`engine::text::window::border_tiles`] /
+/// [`engine::text::window::MessageBoxLayout::frame_tiles`]) -- into `fb`,
+/// reading each tile's pixels out of `sheet` (a
+/// [`assets::pack::WindowFrameHandle::tiles`] image) and mapping them
+/// through `palette`'s real extracted colours
+/// ([`assets::pack::WindowFrameHandle::palette`]). Palette index 0 is
+/// transparent (GBA convention, matching every other layer this workspace
+/// composites), so it is skipped rather than painted.
 pub(crate) fn blit_frame_tiles(
     fb: &mut Framebuffer,
+    tiles: &[FrameTile],
+    sheet: ImageRef<'_>,
+    palette: &[Rgb888],
+) {
+    blit_frame_tiles_tracked(fb, &mut Coverage::disabled(), tiles, sheet, palette);
+}
+
+/// [`blit_frame_tiles`], additionally recording every painted pixel into
+/// `coverage` (see [`Coverage`]).
+pub(crate) fn blit_frame_tiles_tracked(
+    fb: &mut Framebuffer,
+    coverage: &mut Coverage,
     tiles: &[FrameTile],
     sheet: ImageRef<'_>,
     palette: &[Rgb888],
@@ -128,7 +205,7 @@ pub(crate) fn blit_frame_tiles(
                 let (Ok(dx), Ok(dy)) = (i32::try_from(local_x), i32::try_from(local_y)) else {
                     continue;
                 };
-                set_pixel_checked(fb, origin_x + dx, origin_y + dy, color);
+                set_pixel_checked(fb, coverage, origin_x + dx, origin_y + dy, color);
             }
         }
     }
@@ -181,6 +258,26 @@ pub(crate) fn blit_glyphs_colored(
     content_size: (i32, i32),
     colors: &[Option<Rgb888>; 4],
 ) {
+    blit_glyphs_colored_tracked(
+        fb,
+        &mut Coverage::disabled(),
+        glyphs,
+        origin,
+        content_size,
+        colors,
+    );
+}
+
+/// [`blit_glyphs_colored`], additionally recording every painted pixel into
+/// `coverage` (see [`Coverage`]).
+pub(crate) fn blit_glyphs_colored_tracked(
+    fb: &mut Framebuffer,
+    coverage: &mut Coverage,
+    glyphs: &[RevealedGlyph],
+    origin: (i32, i32),
+    content_size: (i32, i32),
+    colors: &[Option<Rgb888>; 4],
+) {
     for g in glyphs {
         for local_y in 0..GLYPH_DIM {
             for local_x in 0..GLYPH_DIM {
@@ -196,7 +293,7 @@ pub(crate) fn blit_glyphs_colored(
                 if px < 0 || py < 0 || px >= content_size.0 || py >= content_size.1 {
                     continue;
                 }
-                set_pixel_checked(fb, origin.0 + px, origin.1 + py, *color);
+                set_pixel_checked(fb, coverage, origin.0 + px, origin.1 + py, *color);
             }
         }
     }
@@ -272,8 +369,14 @@ pub(crate) fn palette_colors(raw: assets::pack::PaletteRef<'_>) -> Vec<Rgb888> {
 /// without this, a window's interior stays whatever the framebuffer already
 /// held beneath it, which for every caller in this crate is opaque black
 /// (each `compose`'s own `fb.fill(Rgb888::BLACK)`).
-pub(crate) fn fill_rect(
+///
+/// Records every painted pixel into `coverage` (see [`Coverage`]). Unlike
+/// [`blit_frame_tiles`]/[`blit_glyphs`] there is no untracked twin: a fill
+/// is opaque by definition, and this crate's only caller
+/// ([`crate::main_menu`]) needs the coverage.
+pub(crate) fn fill_rect_tracked(
     fb: &mut Framebuffer,
+    coverage: &mut Coverage,
     origin: (i32, i32),
     width: i32,
     height: i32,
@@ -281,20 +384,22 @@ pub(crate) fn fill_rect(
 ) {
     for dy in 0..height {
         for dx in 0..width {
-            set_pixel_checked(fb, origin.0 + dx, origin.1 + dy, color);
+            set_pixel_checked(fb, coverage, origin.0 + dx, origin.1 + dy, color);
         }
     }
 }
 
-/// [`Framebuffer::set_pixel`], skipping silently instead of panicking when
-/// `(x, y)` falls outside the visible 240x160 screen -- a scrolled dialogue
-/// box or an off-screen glyph column is expected, not a bug (mirrors
-/// [`Framebuffer::pixel`]'s own `None`-on-out-of-range contract).
-fn set_pixel_checked(fb: &mut Framebuffer, x: i32, y: i32, color: Rgb888) {
+/// [`Framebuffer::set_pixel`] plus a [`Coverage::mark`], skipping silently
+/// instead of panicking when `(x, y)` falls outside the visible 240x160
+/// screen -- a scrolled dialogue box or an off-screen glyph column is
+/// expected, not a bug (mirrors [`Framebuffer::pixel`]'s own
+/// `None`-on-out-of-range contract).
+fn set_pixel_checked(fb: &mut Framebuffer, coverage: &mut Coverage, x: i32, y: i32, color: Rgb888) {
     let Ok(x) = usize::try_from(x) else { return };
     let Ok(y) = usize::try_from(y) else { return };
     if x < Framebuffer::WIDTH && y < Framebuffer::HEIGHT {
         fb.set_pixel(x, y, color);
+        coverage.mark(x, y);
     }
 }
 
