@@ -11444,7 +11444,7 @@
       "artifacts": {
         "SecretBase_EventScript_SetDecorationFlags": {
           "reason": "The 14 setflag FLAG_DECORATION_1..14 commands, ported as their effect: crate::flow::overworld_phase::run_on_transition_map_script applies assets::object_event_flags::DECORATION_FLAGS on entering either bundled player bedroom, the two maps whose own MAP_SCRIPT_ON_TRANSITION calls this script (LittlerootTown_{Brendans,Mays}House_2F/scripts.inc:6-12). Same 'the effect, without an interpreter' shape as new_game's partial port of EventScript_ResetAllMapFlags. Required for correctness, not cosmetics: decoration placeholders invert the usual polarity (an EMPTY slot is the flag-SET state), nothing sets these at new-game time (InitEventData zeroes all flags; EventScript_ResetAllMapFlags never mentions them), and upstream relies purely on ordering -- RunOnTransitionMapScript (overworld.c:860) precedes TrySpawnObjectEvents (overworld.c:2163-2178) -- so without it a fresh save reads all twelve bedroom placeholders as spawned, i.e. as invisible blockers (DoesObjectCollideWithObjectAt consults only active, coordinates and elevation, never the invisible flag, so even MOVEMENT_TYPE_INVISIBLE would still block). Stubbed, not rewritten: no script interpreter runs this, and the maps that call it are a transcribed list rather than a parsed map-script table. Not modelled: the secret-base callers (data/scripts/shared_secret_base.inc:12-16) and flags 13/14's secret-base-only slots.",
-          "rust_target": "crates/pokeemerald-rs/src/flow/overworld_phase.rs",
+          "rust_target": "crates/pokeemerald-rs/src/flow/overworld_phase/connections.rs",
           "spec": "I-3",
           "status": "stubbed"
         }
@@ -25774,7 +25774,7 @@
         },
         "TryStartInteractionScript": {
           "reason": "OverworldPhase::step's A-press handling covers only the object-event branch of GetInteractionScript (GetInteractedObjectEventScript, via engine::overworld::facing_object_event), routed to a NpcDialog through crate::overworld::npc_scripts::script_text's own small, hardcoded msgbox-style script-text table (issue's own DoD: 'a direct msgbox-style script subset is enough'). Not modelled: GetInteractedBackgroundEventScript/GetInteractedMetatileScript/GetInteractedWaterScript's fallback chain (sign posts, counters, water-adjacent interactions), GetInteractedLinkPlayerScript, RamScript, and the interaction sound effect (PlaySE(SE_SELECT)). A found-but-unrecognized-script object event (including the literal NULL/'0x0' sentinel) is selected but opens no dialog, matching upstream's own NULL-script no-op.",
-          "rust_target": "crates/pokeemerald-rs/src/flow/overworld_phase.rs",
+          "rust_target": "crates/pokeemerald-rs/src/flow/overworld_phase/step.rs",
           "spec": "I-3",
           "status": "stubbed"
         }
@@ -26623,7 +26623,7 @@
       "artifacts": {
         "ApplyCurrentWarp": {
           "reason": "gSaveBlock1Ptr->location = sWarpDestination transcribed as OverworldPhase::warp_to's save1.location assignment on a resolved warp landing (flow/overworld_phase.rs); gLastUsedWarp (the previous location) and the dive/hole-warp resets are not modeled (no typed home / out of v1 scope) — stubbed until they are.",
-          "rust_target": "crates/pokeemerald-rs/src/flow/overworld_phase.rs",
+          "rust_target": "crates/pokeemerald-rs/src/flow/overworld_phase/connections.rs",
           "spec": "I-3",
           "status": "stubbed"
         },
@@ -26635,13 +26635,13 @@
         },
         "LoadMapFromCameraTransition": {
           "reason": "Connection-crossing map switch (issue #177): OverworldPhase::cross_connection models the location/scene core -- SetWarpDestination(mapGroup, mapNum, WARP_ID_NONE, -1, -1) + ApplyCurrentWarp (overworld.c:633, :540-:546, save1.location's exact shape), LoadCurrentMapData (scene/map_id rebind), and RunOnTransitionMapScript (:807, the bounded 2-map transcription in run_on_transition_map_script) -- atomically after PlayerState::step commits the translated position, with a fail-closed restore of the pre-step stance if the rebind is refused. InitSecondaryTilesetAnimation (:815) is modelled as a deliberate no-op: it resets only sSecondaryTilesetAnimCounter (tileset_anims.c:581-583), and this port animates only the primary counter (OverworldPhase::tick), which therefore keeps running across a crossing -- LoadMapFromCameraTransition never calls InitTilesetAnimations (that function's call sites are the full map-load paths: InitMapView overworld.c:529 and the stepped loaders :1867/:1942/:2039). The pixel-precision CameraMove/GetIncomingConnection trigger (:603-:624) is deliberately simplified to grid-step resolution (documented on resolve_connection). NOT modelled, deferred with the systems they belong to: TransitionMapMusic, ResetCyclingRoadChallengeData (:799), TryUpdateRandomTrainerRematches, DoTimeBasedEvents, SetSavedWeatherFromCurrMapHeader, ChooseAmbientCrySpecies (:804), SetDefaultFlashLevel, Overworld_ClearSavedMusic (:806), LoadObjEventTemplatesFromHeader, TrySetMapSaveWarpStatus, ClearTempFieldEventData, InitMap, the secondary tileset/palette copy path (CopySecondaryTilesetToVramUsingHeap/CopySecondaryTilesetPaletteUsingHeap and the ApplyWeatherColorMapToPal(NUM_PALS_IN_PRIMARY..NUM_PALS_TOTAL) loop), DoCurrentWeather (:818), ResetFieldTasksArgs (:819), roamer updates, RunOnResumeMapScript, and ShowMapNamePopup. Stubbed until those land. RestartWildEncounterImmunitySteps (:800) is no longer deferred: issue #169 wires it into cross_connection, so crossing Littleroot's north edge into Route 101 buys the same four encounter-free steps upstream grants.",
-          "rust_target": "crates/pokeemerald-rs/src/flow/overworld_phase.rs",
+          "rust_target": "crates/pokeemerald-rs/src/flow/overworld_phase/connections.rs",
           "spec": "I-4",
           "status": "stubbed"
         },
         "SetWarpData": {
           "reason": "map_group/map_num/warp_id/x/y field assignment transcribed as the engine::save::WarpData literal OverworldPhase::warp_to builds for save1.location on a resolved warp (flow/overworld_phase.rs); x/y are left at -1 matching SetWarpDestinationToMapWarp's own -1,-1 call shape for a map-warp-id destination (not fixed coordinates).",
-          "rust_target": "crates/pokeemerald-rs/src/flow/overworld_phase.rs",
+          "rust_target": "crates/pokeemerald-rs/src/flow/overworld_phase/connections.rs",
           "spec": "I-3",
           "status": "rewritten"
         },
@@ -27322,7 +27322,7 @@
       "artifacts": {
         "InitSecretBaseDecorationSprites": {
           "reason": "The ON_WARP_INTO_MAP half of the decoration lifecycle: per placed decoration it sets VAR_OBJ_GFX_ID_n, clears that slot's FLAG_DECORATION_*, spawns the object event and moves it to the saved position. Only its fresh-save *outcome* is reproduced -- gSaveBlock1Ptr->playerRoomDecorations[] is all DECOR_NONE after ClearSav1 (src/load_save.c:64-67), so the loop places nothing and every decoration flag stays set, which is exactly the state run_on_transition_map_script leaves. This port has no playerRoomDecorations/playerRoomDecorationPositions save state, no gDecorations table, and no OBJ_EVENT_GFX_VAR_* -> VAR_OBJ_GFX_ID_n graphics resolution, so nothing can be placed for it to spawn; a future decoration slice needs all three plus HideSecretBaseDecorationSprites' inverse. Recorded here rather than left silent because the not-yet-ported half is what a reader would otherwise assume was missing from the on-transition port above.",
-          "rust_target": "crates/pokeemerald-rs/src/flow/overworld_phase.rs",
+          "rust_target": "crates/pokeemerald-rs/src/flow/overworld_phase/connections.rs",
           "spec": "I-3",
           "status": "stubbed"
         }
@@ -27461,7 +27461,7 @@
         },
         "TextPrinterWaitWithDownArrow": {
           "reason": "The message box's down-arrow wait prompt takes JOY_NEW(A_BUTTON | B_BUTTON) -- a fresh A *or* B edge -- which OverworldPhase::step now transcribes as the confirm edge it forwards to NpcDialog::tick (issue #161 review; previously A only, leaving a player who pressed B stuck with the box open). TextPrinterWait (src/text.c:884-900, the mid-page wait) and RunTextPrinter's hold-to-speed-up path (:944, :950) read the same button pair. Stubbed rather than rewritten: only the input predicate is ported. Not modelled -- gTextFlags.autoScroll / TextPrinterWaitAutoMode, the down-arrow sprite itself (TextPrinterDrawDownArrow) and its bob animation, and PlaySE(SE_SELECT).",
-          "rust_target": "crates/pokeemerald-rs/src/flow/overworld_phase.rs",
+          "rust_target": "crates/pokeemerald-rs/src/flow/overworld_phase/frame.rs",
           "spec": "I-3",
           "status": "stubbed"
         },
