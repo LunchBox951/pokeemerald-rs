@@ -285,6 +285,39 @@ fn write_quad(map: &mut [ScreenEntry], stride: usize, col: usize, row: usize, qu
     map[index(col + 1, row + 1)] = quad[3];
 }
 
+/// The signed pixel lag a mid-step `player` introduces this frame, shared by
+/// [`build_tilemaps`]'s BG scroll and [`super::npc::oam_entries`]'s NPC OAM
+/// placement (I-3, issue #217) -- the fix for the "NPC sprites glide instead
+/// of staying glued to the map" bug: both callers need the exact same signed
+/// value so a stationary object's on-screen displacement always equals the
+/// background's own, at every frame of the 16-frame walk animation, not just
+/// at rest.
+///
+/// `(0, 0)` when `player` is not [`PlayerState::in_transit`]. Mid-step,
+/// `WALK_FRAMES_PER_TILE - player.step_progress()` pixels of lag, signed by
+/// the direction of travel -- upstream's per-frame `gTotalCameraPixelOffsetX/Y`
+/// pan (`CameraUpdate`, `field_camera.c`) collapsed to the one derived value
+/// this port's frame-counter-free model needs, applied identically to BG
+/// scroll (`gSpriteCoordOffsetX/Y`'s BG-side counterpart) and to every
+/// non-player object-event sprite (`UpdateOamCoords`, `sprite.c:340-350`).
+///
+/// Deliberately *not* [`build_tilemaps`]'s own padded `scroll_x`/`scroll_y`:
+/// that value additionally bakes in [`PAD`]'s direction-dependent tilemap
+/// padding, a sampling detail of this port's own tilemap-widening scheme
+/// with no OAM counterpart -- see [`build_tilemaps`]'s docs. This is the
+/// signed visual lag *before* that padding (and before [`super::npc`]'s own
+/// OAM wrapping), the quantity upstream's `gSpriteCoordOffsetX/Y` actually
+/// is.
+#[must_use]
+pub(super) fn camera_lag_px(player: &PlayerState) -> (i32, i32) {
+    if !player.in_transit() {
+        return (0, 0);
+    }
+    let (dx, dy) = player.facing().delta();
+    let lag = i32::from(WALK_FRAMES_PER_TILE) - i32::from(player.step_progress());
+    (dx * lag, dy * lag)
+}
+
 /// This frame's composed bottom/middle/top BG tilemaps plus the shared
 /// scroll offset every [`rendering::BgSlot`] applies -- see
 /// [`build_tilemaps`].
@@ -396,12 +429,16 @@ pub(super) fn build_tilemaps(
     let top = Tilemap::new(cols_tiles, rows_tiles, top)
         .expect("entries.len() == cols_tiles * rows_tiles by construction");
 
-    let lag = i32::from(WALK_FRAMES_PER_TILE) - i32::from(player.step_progress());
+    // The shared signed lag term (module docs on `camera_lag_px`) -- also
+    // what `super::npc::oam_entries` adds to every non-player object's OAM
+    // placement, so a stationary NPC's screen displacement matches this BG
+    // scroll exactly, frame for frame (I-3, issue #217).
+    let (lag_x, lag_y) = camera_lag_px(player);
     #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
     // always in 0..=PAD*METATILE_PX.
-    let scroll_x = (pad_before_x * METATILE_PX - lag * dx) as u16;
+    let scroll_x = (pad_before_x * METATILE_PX - lag_x) as u16;
     #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
-    let scroll_y = (pad_before_y * METATILE_PX - lag * dy) as u16;
+    let scroll_y = (pad_before_y * METATILE_PX - lag_y) as u16;
 
     FrameViewport {
         bottom,

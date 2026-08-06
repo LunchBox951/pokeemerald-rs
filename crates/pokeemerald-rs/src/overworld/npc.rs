@@ -50,23 +50,27 @@
 //! module's OAM building to cover them; nothing here silently mis-renders
 //! them as 16x32.
 //!
-//! # Screen position: resting only
+//! # Screen position: glued to the camera through a step (I-3, issue #217)
 //!
-//! [`resting_screen_position`] generalizes [`super::avatar::PLAYER_OBJ_X`]/
+//! [`object_screen_position`] generalizes [`super::avatar::PLAYER_OBJ_X`]/
 //! `PLAYER_OBJ_Y`'s derivation (upstream `SetSpritePosToMapCoords`) from the
 //! player's own always-zero `mapX - gSaveBlock1Ptr->pos.x` identity to the
-//! general case, where an NPC's map position differs from the player's own.
-//! It deliberately does **not** additionally apply
-//! [`super::viewport::build_tilemaps`]'s own mid-step `scroll_x`/`scroll_y`
-//! lag term the way upstream's `gSpriteCoordOffsetX`/`Y` would (every real
-//! object event sprite -- not just the player's -- is nudged by that shared
-//! camera-pixel offset, so a stationary NPC visibly slides in sync with the
-//! background as the player walks past it) -- documented fidelity delta:
-//! an NPC's on-screen position here is only exactly correct while the player
-//! is **at rest** (between steps); mid-transit it can be off by up to one
-//! metatile (snapping to its final position instead of sliding smoothly).
-//! Never affects tile-position logic (hide-flag filtering, interaction) --
-//! only this module's own pixel placement.
+//! general case, where an NPC's map position differs from the player's own
+//! -- **and** applies [`super::viewport::camera_lag_px`]'s shared mid-step
+//! lag term, the way upstream's `gSpriteCoordOffsetX`/`Y` does for every
+//! real object-event sprite, not just the player's
+//! (`UpdateOamCoords`, `pokeemerald/src/sprite.c:340-350`). Without it, a
+//! stationary NPC's OAM position would jump to its destination-relative
+//! offset the instant a step starts (`PlayerState::step` commits the tile
+//! position immediately) while the BG scroll still lags smoothly behind,
+//! producing a one-metatile snap followed by an apparent glide relative to
+//! the map -- the bug this module previously documented as a fidelity
+//! delta and issue #217 fixed. `oam_entries` now adds the exact same signed
+//! lag [`super::viewport::build_tilemaps`] feeds its BG scroll, so a
+//! stationary object's screen displacement matches the background's own at
+//! every frame of the walk animation, not just at rest. Never affects
+//! tile-position logic (hide-flag filtering, interaction) -- only this
+//! module's own pixel placement.
 //!
 //! # Documented fidelity delta: no y-derived sprite subpriority
 //!
@@ -417,11 +421,19 @@ fn wrap_oam_y(y: i32) -> u8 {
 }
 
 /// The screen position an object event standing at `npc` (map tile
-/// coordinates) draws at while `player` is at rest at `player_pos` -- module
-/// docs' generalization of [`avatar::PLAYER_OBJ_X`]/`PLAYER_OBJ_Y`.
-fn resting_screen_position(npc: (i32, i32), player_pos: (i32, i32)) -> (u16, u8) {
-    let dx = (npc.0 - player_pos.0) * METATILE_PX;
-    let dy = (npc.1 - player_pos.1) * METATILE_PX;
+/// coordinates) draws at, given `player`'s current tile `player_pos` and
+/// this frame's shared [`super::viewport::camera_lag_px`] `camera_lag` --
+/// module docs' generalization of [`avatar::PLAYER_OBJ_X`]/`PLAYER_OBJ_Y`
+/// to a stationary object whose map position differs from the player's own,
+/// glued to the same camera lag the BG scroll applies mid-step.
+/// `camera_lag == (0, 0)` at rest, reducing to plain map-relative placement.
+fn object_screen_position(
+    npc: (i32, i32),
+    player_pos: (i32, i32),
+    camera_lag: (i32, i32),
+) -> (u16, u8) {
+    let dx = (npc.0 - player_pos.0) * METATILE_PX + camera_lag.0;
+    let dy = (npc.1 - player_pos.1) * METATILE_PX + camera_lag.1;
     let x = i32::from(avatar::PLAYER_OBJ_X) + dx;
     let y = i32::from(avatar::PLAYER_OBJ_Y) + dy;
     (wrap_oam_x(x), wrap_oam_y(y))
@@ -449,6 +461,11 @@ pub(super) fn oam_entries(
     event_data: &EventData,
 ) -> Vec<OamEntry> {
     let player_pos = player.position();
+    // Shared with `viewport::build_tilemaps`'s BG scroll (module docs) --
+    // `(0, 0)` at rest, the signed mid-step pixel lag otherwise, so a
+    // stationary NPC's screen position stays glued to the background
+    // through every frame of the player's walk animation.
+    let camera_lag = super::viewport::camera_lag_px(player);
     visible_object_events_with_binding(object_events, bindings, event_data)
         // Upstream's spawn window (`engine::overworld::object_event_is_in_view`
         // -- `TrySpawnObjectEvents`/`RemoveObjectEventIfOutsideView`), applied
@@ -462,8 +479,11 @@ pub(super) fn oam_entries(
             let facing = initial_facing_direction(event.movement_type);
             let (frame, h_flip) = avatar::stand_frame_for(facing);
             let tile_index = binding.base_tile + frame * avatar::FRAME_TILES;
-            let (x, y) =
-                resting_screen_position((i32::from(event.x), i32::from(event.y)), player_pos);
+            let (x, y) = object_screen_position(
+                (i32::from(event.x), i32::from(event.y)),
+                player_pos,
+                camera_lag,
+            );
             OamEntry::new(
                 x,
                 y,
@@ -745,24 +765,41 @@ mod tests {
     }
 
     #[test]
-    fn resting_screen_position_matches_the_player_obj_position_when_colocated() {
-        let (x, y) = resting_screen_position((5, 5), (5, 5));
+    fn object_screen_position_matches_the_player_obj_position_when_colocated_and_at_rest() {
+        let (x, y) = object_screen_position((5, 5), (5, 5), (0, 0));
         assert_eq!(x, avatar::PLAYER_OBJ_X);
         assert_eq!(y, avatar::PLAYER_OBJ_Y);
     }
 
     #[test]
-    fn resting_screen_position_offsets_by_one_metatile_per_tile_of_distance() {
+    fn object_screen_position_offsets_by_one_metatile_per_tile_of_distance_at_rest() {
         let metatile_px = u16::try_from(super::METATILE_PX).unwrap();
 
-        let (x, y) = resting_screen_position((6, 5), (5, 5));
+        let (x, y) = object_screen_position((6, 5), (5, 5), (0, 0));
         assert_eq!(x, avatar::PLAYER_OBJ_X + metatile_px);
         assert_eq!(y, avatar::PLAYER_OBJ_Y);
 
-        let (x2, y2) = resting_screen_position((5, 4), (5, 5));
+        let (x2, y2) = object_screen_position((5, 4), (5, 5), (0, 0));
         assert_eq!(x2, avatar::PLAYER_OBJ_X);
         let expected_y = avatar::PLAYER_OBJ_Y - u8::try_from(metatile_px).unwrap();
         assert_eq!(y2, expected_y);
+    }
+
+    #[test]
+    fn object_screen_position_applies_the_camera_lag_before_wrapping() {
+        // A stationary NPC one tile east of the player, with a full 16px of
+        // west-signed camera lag still owed (as at the very start of a west
+        // step, `camera_lag_px`'s own docs): the lag term shifts the NPC's
+        // screen x left by 16px on top of the plain distance offset,
+        // exactly cancelling what would otherwise be a one-metatile snap.
+        let metatile_px = i32::from(u16::try_from(super::METATILE_PX).unwrap());
+        let (x, _) = object_screen_position((6, 5), (5, 5), (-metatile_px, 0));
+        assert_eq!(
+            x,
+            avatar::PLAYER_OBJ_X,
+            "one metatile of distance offset by one metatile of opposite-signed lag \
+             must cancel back to the player's own screen column"
+        );
     }
 
     #[test]
@@ -838,7 +875,7 @@ mod tests {
     /// must produce no entry at all.
     ///
     /// The test first *demonstrates* the alias rather than asserting around
-    /// it: `resting_screen_position` for that offset really does return
+    /// it: `object_screen_position` for that offset really does return
     /// [`avatar::PLAYER_OBJ_Y`], so without the in-view gate the boy would
     /// have been drawn standing on the player. Then it checks he walks back
     /// into view as the player approaches, so the gate is a distance test
@@ -856,7 +893,7 @@ mod tests {
         assert_eq!((boy.x, boy.y), (14, 17), "his real map.json position");
 
         // The alias this gate exists to prevent, shown explicitly.
-        let (_, wrapped_y) = resting_screen_position((14, 17), (14, 1));
+        let (_, wrapped_y) = object_screen_position((14, 17), (14, 1), (0, 0));
         assert_eq!(
             wrapped_y,
             avatar::PLAYER_OBJ_Y,
@@ -893,5 +930,199 @@ mod tests {
         assert_eq!(entries.len(), 1, "in view from five tiles away");
         let expected_y = avatar::PLAYER_OBJ_Y + u8::try_from(5 * super::METATILE_PX).unwrap();
         assert_eq!(entries[0].y(), expected_y);
+    }
+
+    // -- Camera alignment during a step (I-3, issue #217) -------------------
+
+    /// A flat, fully walkable `width`x`height`
+    /// [`engine::overworld::MapRuntime`], elevation 3 throughout, no object
+    /// events of its own -- just enough to drive `PlayerState::step`/`tick`
+    /// through a full ordinary walk transit for the camera-lag test below
+    /// (mirrors `super::viewport::tests`' own scroll-lag fixture).
+    fn open_runtime(width: u16, height: u16) -> engine::overworld::MapRuntime<'static> {
+        let mut bytes = Vec::with_capacity(usize::from(width) * usize::from(height) * 2);
+        for _ in 0..(u32::from(width) * u32::from(height)) {
+            let raw = assets::MetatileCell {
+                metatile_id: 0,
+                collision: 0,
+                elevation: 3,
+            }
+            .pack();
+            bytes.extend_from_slice(&raw.to_le_bytes());
+        }
+        let bytes: &'static [u8] = Box::leak(bytes.into_boxed_slice());
+        let header: &'static assets::MapHeader = Box::leak(Box::new(assets::MapHeader {
+            id: assets::MapId("MAP_TEST"),
+            group: 0,
+            num: 0,
+            name: "MapTest",
+            layout: assets::LayoutId("MAP_TEST"),
+            music: assets::MusicId(0),
+            region_map_section: assets::RegionMapSectionId("MAPSEC_NONE"),
+            requires_flash: false,
+            weather: assets::Weather::None,
+            map_type: assets::MapType::Route,
+            allow_bike: true,
+            allow_escape: true,
+            allow_run: true,
+            show_name: false,
+            battle_scene: assets::BattleScene::Normal,
+            connections: &[] as &'static [assets::MapConnection],
+        }));
+        let events: &'static assets::MapEvents = Box::leak(Box::new(assets::MapEvents {
+            id: assets::MapId("MAP_TEST"),
+            shared_events_map: None,
+            object_events: &[],
+            warp_events: &[],
+            coord_events: &[],
+            bg_events: &[],
+        }));
+        let layout: &'static assets::MapLayout = Box::leak(Box::new(assets::MapLayout {
+            id: assets::LayoutId("MAP_TEST"),
+            name: "MapTest",
+            width,
+            height,
+            primary_tileset: "gTileset_General",
+            secondary_tileset: "gTileset_General",
+        }));
+        let grid = layout.grid(bytes).unwrap();
+        engine::overworld::MapRuntime::new(
+            assets::MapId("MAP_TEST"),
+            header,
+            events,
+            grid,
+            assets::MetatileAttributeTable::new(&[]),
+            assets::MetatileAttributeTable::new(&[]),
+        )
+    }
+
+    /// The issue #217 acceptance test: during every ordinary 16-frame player
+    /// step, a stationary NPC's OAM position must stay glued to the camera
+    /// -- no snap the instant the step starts, no glide relative to the
+    /// background, and the total displacement across the transit is exactly
+    /// one metatile, applied one pixel per frame. Checked at all four
+    /// checkpoints the issue names (progress 0, an intermediate frame, the
+    /// last transit frame, and the first resting frame) in all four
+    /// cardinal directions.
+    #[test]
+    fn oam_entries_glues_a_stationary_npc_to_the_camera_through_every_direction_of_a_step() {
+        let data = EventData::new();
+        let no_connections = |_: assets::MapId| -> Option<(u16, u16)> { None };
+
+        let mut bindings = HashMap::new();
+        bindings.insert(
+            "OBJ_EVENT_GFX_MOM",
+            SpriteBinding {
+                base_tile: avatar::FRAME_BLOCK_TILES,
+                palette_bank: NpcPaletteTag::Npc4.bank(),
+            },
+        );
+
+        for direction in [
+            Direction::North,
+            Direction::South,
+            Direction::East,
+            Direction::West,
+        ] {
+            let runtime = open_runtime(10, 10);
+            let start = (5, 5);
+            // Two tiles east of the player's start: clear of every
+            // direction's single-tile step, and still comfortably in view
+            // afterward.
+            let mom = object("OBJ_EVENT_GFX_MOM", 7, 5, MovementType::FaceDown);
+            let events: &'static [ObjectEvent] = Box::leak(Box::new([mom]));
+
+            let mut player = PlayerState::new(start, 3, direction);
+            let at_rest = oam_entries(events, &bindings, &player, &data);
+            assert_eq!(
+                at_rest.len(),
+                1,
+                "{direction:?}: Mom must be in view at rest"
+            );
+            let (rest_x, rest_y) = (at_rest[0].x(), at_rest[0].y());
+
+            let outcome = player.step(Some(direction), &runtime, &no_connections, &data);
+            assert!(
+                matches!(outcome, engine::overworld::StepOutcome::Advanced { .. }),
+                "{direction:?}: an open runtime must let the step through"
+            );
+
+            // Progress 0: no snap -- identical to the pre-step, at-rest
+            // entry (the exact bug report: Mom must not jump the instant a
+            // step starts).
+            let progress0 = oam_entries(events, &bindings, &player, &data);
+            assert_eq!(
+                (progress0[0].x(), progress0[0].y()),
+                (rest_x, rest_y),
+                "{direction:?}: a stationary NPC must not jump when a step starts"
+            );
+
+            for _ in 0..8 {
+                player.tick();
+            }
+            assert!(
+                player.in_transit(),
+                "{direction:?}: 8 frames elapsed, still mid-transit"
+            );
+            let mid = oam_entries(events, &bindings, &player, &data);
+
+            for _ in 0..7 {
+                player.tick();
+            }
+            assert!(
+                player.in_transit(),
+                "{direction:?}: 15 frames elapsed, still mid-transit"
+            );
+            let last = oam_entries(events, &bindings, &player, &data);
+
+            player.tick();
+            assert!(
+                !player.in_transit(),
+                "{direction:?}: the 16th tick ends the transit"
+            );
+            let settled = oam_entries(events, &bindings, &player, &data);
+
+            // Continuous, one pixel per frame, *opposite* the direction of
+            // travel -- same as any fixed BG content: walking east slides
+            // the world (and every stationary NPC in it) left on screen, not
+            // right (`camera_lag_px`'s own docs; ported and cross-checked
+            // against `viewport::build_tilemaps`'s identical per-frame BG
+            // delta below). Never a multi-pixel jump, totalling exactly one
+            // metatile (8 + 7 + 1 = 16) across the whole transit.
+            let (dx, dy) = direction.delta();
+            let step = |a: rendering::OamEntry, b: rendering::OamEntry| {
+                (
+                    i32::from(b.x()) - i32::from(a.x()),
+                    i32::from(b.y()) - i32::from(a.y()),
+                )
+            };
+            assert_eq!(
+                step(progress0[0], mid[0]),
+                (-dx * 8, -dy * 8),
+                "{direction:?}: frames 0-8"
+            );
+            assert_eq!(
+                step(mid[0], last[0]),
+                (-dx * 7, -dy * 7),
+                "{direction:?}: frames 8-15"
+            );
+            assert_eq!(
+                step(last[0], settled[0]),
+                (-dx, -dy),
+                "{direction:?}: frame 15 to the first resting frame"
+            );
+
+            // The settled position matches a fresh, never-transited player
+            // already standing at the destination -- the "first resting
+            // frame" is exactly the plain at-rest placement, not an
+            // approximation of it.
+            let fresh_at_destination = PlayerState::new(player.position(), 3, direction);
+            let fresh = oam_entries(events, &bindings, &fresh_at_destination, &data);
+            assert_eq!(
+                (settled[0].x(), settled[0].y()),
+                (fresh[0].x(), fresh[0].y()),
+                "{direction:?}: the settled position must match a fresh player already there"
+            );
+        }
     }
 }

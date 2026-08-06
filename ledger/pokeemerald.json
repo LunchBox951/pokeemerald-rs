@@ -25723,6 +25723,12 @@
     },
     "src/field_camera.c": {
       "artifacts": {
+        "CameraUpdate": {
+          "reason": "Per-frame gFieldCamera pixel-offset accumulator (movementSpeedX/Y ramping gTotalCameraPixelOffsetX/Y by 1px/frame toward a full metatile) collapsed to the analytic camera_lag_px, which derives the same net signed pixel lag directly from PlayerState::step_progress/WALK_FRAMES_PER_TILE rather than replicating the accumulator -- the same 'collapse a per-frame state machine to a per-frame-constant formula' move SetSpritePosToMapCoords' own ledger entry already documents for the player's own OBJ position. Issue #217 (I-3): this shared value is what fixed the NPC-camera desync bug (a stationary NPC snapping to its destination tile at step start while the BG still lagged smoothly behind), used identically by build_tilemaps' BG scroll and npc::oam_entries' NPC placement. UpdateObjectEventsForCameraUpdate's own spawn/despawn side effect (TrySpawnObjectEvents/RemoveObjectEventsOutsideView at camera tile boundaries) stays under its own existing event_object_movement.c ledger entries -- not re-claimed here.",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/viewport.rs",
+          "spec": "I-3",
+          "status": "rewritten"
+        },
         "DrawMetatile": {
           "reason": "Per-METATILE_LAYER_TYPE bottom/middle/top BG-layer routing of a metatile's 8 raw tile entries, ported into viewport::route_layers; the NORMAL case's 'garbage' bottom-layer write is a documented fidelity delta (drawn transparent instead, since it is implementation-undefined and never reaches the screen behind the always-opaque middle layer in the common case).",
           "rust_target": "crates/pokeemerald-rs/src/overworld/viewport.rs",
@@ -25731,6 +25737,12 @@
         },
         "DrawMetatileAt": {
           "reason": "Per-position metatile-id lookup plus primary/secondary tileset dispatch (NUM_METATILES_IN_PRIMARY threshold) feeding DrawMetatile, ported into viewport::metatile_layers/cell_at.",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/viewport.rs",
+          "spec": "I-3",
+          "status": "rewritten"
+        },
+        "UpdateCameraPanning": {
+          "reason": "gSpriteCoordOffsetX/Y's per-frame derivation from the camera's own pixel state, ported as the shared viewport::camera_lag_px this port's two camera-driven consumers both read (issue #217, I-3): build_tilemaps subtracts it from the BG scroll (mirroring gSpriteCoordOffsetX/Y being the camera-locked complement to the world-locked BG scroll) and npc::oam_entries adds it to every stationary NPC's placement (mirroring UpdateOamCoords -- see src/sprite.c#UpdateOamCoords). sHorizontalCameraPan/sVerticalCameraPan's bike pan-ahead terms are out of v1 scope (no bike).",
           "rust_target": "crates/pokeemerald-rs/src/overworld/viewport.rs",
           "spec": "I-3",
           "status": "rewritten"
@@ -27353,6 +27365,12 @@
     },
     "src/sprite.c": {
       "artifacts": {
+        "UpdateOamCoords": {
+          "reason": "The coordOffsetEnabled branch (gSpriteCoordOffsetX/Y added to every enabled non-camera-locked sprite's OAM position) ported as npc::oam_entries' own camera_lag addition in object_screen_position (issue #217, I-3) -- the fix for NPC sprites snapping to their destination tile at step start instead of staying glued to the camera through the walk animation, same as upstream's own object-event sprites (which enable this offset; the player's own sprite does not, matching this port's fixed avatar::PLAYER_OBJ_X/Y -- see SetSpritePosToMapCoords' own ledger entry). The coordOffsetEnabled branch selection itself (which sprites opt in) is not separately modelled: every sprite this module draws is an object event, so the branch is unconditional here.",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/npc.rs",
+          "spec": "I-3",
+          "status": "rewritten"
+        },
         "affine_oam": {
           "reason": "sprite_affine::sample_texel (paired with OamEntry::AffineMode/with_affine/bounding_box in oam.rs) ports affine and affine-double-size OBJ sampling: matrix-group selection by matrixNum (0..=31, gOamMatrices), the double-size bounding box (CalcCenterToCornerVec's ST_OAM_AFFINE_DOUBLE doubling), and center-relative texture-space sampling biased onto the nominal (undoubled) texture, verified pixel-for-pixel against mgba's GBAObjAttributesAIsTransformed branch and xAccum/yAccum setup (software-obj.c:215-316) including the outside-texture-vs-transparent-hole distinction that feeds SpriteLayer::resolve_pixel's priority-upgrade rule. h/v flip are correctly ignored once affine (hardware reuses those bits as matrixNum bits 3-4). The rotation/scale-to-matrix computation (ObjAffineSet/SetOamMatrix trig side) is not modelled — only matrix selection and consumption are. Windows/blending/mosaic remain out of scope (issue #98).",
           "rust_target": "crates/rendering/src/sprite_affine.rs",
