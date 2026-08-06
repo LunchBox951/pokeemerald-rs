@@ -305,9 +305,29 @@ fn write_quad(map: &mut [ScreenEntry], stride: usize, col: usize, row: usize, qu
 /// that value additionally bakes in [`PAD`]'s direction-dependent tilemap
 /// padding, a sampling detail of this port's own tilemap-widening scheme
 /// with no OAM counterpart -- see [`build_tilemaps`]'s docs. This is the
-/// signed visual lag *before* that padding (and before [`super::npc`]'s own
-/// OAM wrapping), the quantity upstream's `gSpriteCoordOffsetX/Y` actually
-/// is.
+/// signed visual lag *before* that padding and before [`super::npc`]'s own
+/// OAM wrapping.
+///
+/// # Equivalent to `gSpriteCoordOffsetX/Y` after collapse, not equal to it
+///
+/// Upstream builds those two globals as an accumulator *plus a constant*
+/// (`UpdateCameraPanning`, `pokeemerald/src/field_camera.c:456-463`):
+/// `gSpriteCoordOffsetX` is `gTotalCameraPixelOffsetX - sHorizontalCameraPan`
+/// and `gSpriteCoordOffsetY` is
+/// `gTotalCameraPixelOffsetY - sVerticalCameraPan - 8`, where with no
+/// bike/field-effect pan running `sHorizontalCameraPan` is 0 and
+/// `sVerticalCameraPan` is 32 (`:452-453`). This function reproduces only
+/// the *varying* half, the `gTotalCameraPixelOffset` ramp, in closed form.
+/// The constant half (that `sVerticalCameraPan`/8 term, together with the
+/// `+ 8` and `+ 16 + centerToCornerVecY` sprite-origin biases upstream
+/// applies alongside it in
+/// `GetMapCoordsFromSpritePos`/`TrySetupObjectEventSprite`) is already
+/// folded into this port's fixed
+/// [`super::avatar::PLAYER_OBJ_X`]/`PLAYER_OBJ_Y` screen origin, which
+/// every caller here adds. So the two are equal *up to that folded
+/// constant*: they agree exactly on the frame-to-frame difference, which is
+/// the whole observable content of the offset, and that agreement -- not
+/// numeric identity -- is what this port's tests pin.
 #[must_use]
 pub(super) fn camera_lag_px(player: &PlayerState) -> (i32, i32) {
     if !player.in_transit() {
@@ -549,6 +569,117 @@ mod tests {
         Palette::new(colors)
     }
 
+    /// A [`PlayerState`] standing at `(5, 5)` on a flat, fully walkable
+    /// 10x10 map, `elapsed` frames into an ordinary step in `direction`
+    /// -- `elapsed == 0` is the frame the step commits, and
+    /// `elapsed == WALK_FRAMES_PER_TILE` is already back at rest on the
+    /// destination tile. The whole fixture (bytes, grid, runtime) is local:
+    /// only the owned [`PlayerState`] escapes.
+    fn stepping_player(direction: EngineDirection, elapsed: u8) -> PlayerState {
+        let grid_bytes = synthetic_grid_bytes(10, 10);
+        let layout = assets::MapLayout {
+            id: assets::LayoutId("MAP_TEST"),
+            name: "MapTest",
+            width: 10,
+            height: 10,
+            primary_tileset: "gTileset_General",
+            secondary_tileset: "gTileset_General",
+        };
+        let grid = layout.grid(&grid_bytes).unwrap();
+        let header = MapHeader {
+            id: MapId("MAP_TEST"),
+            group: 0,
+            num: 0,
+            name: "MapTest",
+            layout: assets::LayoutId("MAP_TEST"),
+            music: assets::MusicId(0),
+            region_map_section: RegionMapSectionId("MAPSEC_NONE"),
+            requires_flash: false,
+            weather: Weather::None,
+            map_type: MapType::Route,
+            allow_bike: true,
+            allow_escape: true,
+            allow_run: true,
+            show_name: false,
+            battle_scene: BattleScene::Normal,
+            connections: &[] as &'static [MapConnection],
+        };
+        let events = MapEvents {
+            id: MapId("MAP_TEST"),
+            shared_events_map: None,
+            object_events: &[],
+            warp_events: &[],
+            coord_events: &[],
+            bg_events: &[],
+        };
+        let runtime = engine::overworld::MapRuntime::new(
+            MapId("MAP_TEST"),
+            &header,
+            &events,
+            grid,
+            assets::MetatileAttributeTable::new(&[]),
+            assets::MetatileAttributeTable::new(&[]),
+        );
+        let no_connections = |_: MapId| -> Option<(u16, u16)> { None };
+
+        let mut player = PlayerState::new((5, 5), 3, direction);
+        assert!(
+            matches!(
+                player.step(Some(direction), &runtime, &no_connections, &NO_FLAGS),
+                engine::overworld::StepOutcome::Advanced { .. }
+            ),
+            "an open map must let a {direction:?} step from (5, 5) through"
+        );
+        for _ in 0..elapsed {
+            player.tick();
+        }
+        player
+    }
+
+    /// [`camera_lag_px`] on its own, without a tilemap or an OAM entry in
+    /// the way (issue #217): nothing owed at rest, and mid-step exactly the
+    /// pixels still owed, signed along the direction of travel.
+    #[test]
+    fn camera_lag_px_is_zero_at_rest_and_the_remaining_signed_pixels_mid_step() {
+        let at_rest = PlayerState::new((5, 5), 3, EngineDirection::West);
+        assert!(!at_rest.in_transit());
+        assert_eq!(
+            camera_lag_px(&at_rest),
+            (0, 0),
+            "a player who is not stepping owes no lag on either axis"
+        );
+
+        // Six of sixteen frames into a *west* step: 10 px still owed, and
+        // `Direction::West::delta()` is `(-1, 0)`, so the term is `-10`.
+        // Read physically: the player's tile committed to the destination
+        // the instant the step began, but the camera is still 10 px east of
+        // it, so every stationary sprite draws 10 px west of where it will
+        // settle -- and `build_tilemaps` subtracts the same `-10` from its
+        // scroll, sliding the background the matching 10 px the other way.
+        let west = stepping_player(EngineDirection::West, 6);
+        assert!(west.in_transit());
+        assert_eq!(west.step_progress(), 6);
+        assert_eq!(camera_lag_px(&west), (-10, 0));
+
+        // The boundary frames the 1px/frame cadence hangs on: the last
+        // transit frame still owes exactly one pixel, and the frame after
+        // it owes none.
+        let last = stepping_player(EngineDirection::West, WALK_FRAMES_PER_TILE - 1);
+        assert!(last.in_transit());
+        assert_eq!(camera_lag_px(&last), (-1, 0));
+        let settled = stepping_player(EngineDirection::West, WALK_FRAMES_PER_TILE);
+        assert!(!settled.in_transit());
+        assert_eq!(camera_lag_px(&settled), (0, 0));
+
+        // The other axis is signed the same way and never leaks into x.
+        let north = stepping_player(EngineDirection::North, 6);
+        assert_eq!(camera_lag_px(&north), (0, -10));
+        let south = stepping_player(EngineDirection::South, 6);
+        assert_eq!(camera_lag_px(&south), (0, 10));
+        let east = stepping_player(EngineDirection::East, 6);
+        assert_eq!(camera_lag_px(&east), (10, 0));
+    }
+
     #[test]
     fn cell_at_reads_the_grid_in_bounds_and_the_border_outside() {
         let grid_bytes = synthetic_grid_bytes(4, 4);
@@ -730,49 +861,27 @@ mod tests {
         let (metatiles, attrs) = synthetic_metatiles_and_attrs();
         let attrs = MetatileAttributeTable::new(&attrs);
         let no_secondary = MetatileAttributeTable::new(&[]);
-        let no_connections = |_: MapId| -> Option<(u16, u16)> { None };
 
-        let header = MapHeader {
-            id: MapId("MAP_TEST"),
-            group: 0,
-            num: 0,
-            name: "MapTest",
-            layout: assets::LayoutId("MAP_TEST"),
-            music: assets::MusicId(0),
-            region_map_section: RegionMapSectionId("MAPSEC_NONE"),
-            requires_flash: false,
-            weather: Weather::None,
-            map_type: MapType::Route,
-            allow_bike: true,
-            allow_escape: true,
-            allow_run: true,
-            show_name: false,
-            battle_scene: BattleScene::Normal,
-            connections: &[] as &'static [MapConnection],
+        // This fixture's only varying input is the player, so bind the rest
+        // once.
+        let compose = |player: &PlayerState| {
+            build_tilemaps(
+                player,
+                &grid,
+                &border,
+                &metatiles,
+                &[],
+                &attrs,
+                &no_secondary,
+                0,
+            )
         };
-        let events = MapEvents {
-            id: MapId("MAP_TEST"),
-            shared_events_map: None,
-            object_events: &[],
-            warp_events: &[],
-            coord_events: &[],
-            bg_events: &[],
-        };
-        let runtime = engine::overworld::MapRuntime::new(
-            MapId("MAP_TEST"),
-            &header,
-            &events,
-            grid,
-            assets::MetatileAttributeTable::new(&[]),
-            assets::MetatileAttributeTable::new(&[]),
-        );
 
-        let mut player = PlayerState::new((5, 5), 3, EngineDirection::East);
-        let east = Some(EngineDirection::East);
-        assert!(matches!(
-            player.step(east, &runtime, &no_connections, &NO_FLAGS),
-            engine::overworld::StepOutcome::Advanced { .. }
-        ));
+        // [`stepping_player`]'s own 10x10 open map matches this one cell for
+        // cell (same [`synthetic_grid_bytes`], same start tile), so the
+        // player it hands back is mid-step over *this* grid.
+        let mut player = stepping_player(EngineDirection::East, 0);
+        assert_eq!(player.position(), (6, 5), "the tile commits at once");
 
         // Just started (`step_progress() == 0`), moving east: the built-up
         // lag (a full `WALK_FRAMES_PER_TILE`) exactly cancels the one
@@ -780,16 +889,7 @@ mod tests {
         // scroll is 0 -- the viewport still shows the *old* (pre-step)
         // resting position. Y stays at rest (0; no vertical movement, no Y
         // padding).
-        let viewport = build_tilemaps(
-            &player,
-            &grid,
-            &border,
-            &metatiles,
-            &[],
-            &attrs,
-            &no_secondary,
-            0,
-        );
+        let viewport = compose(&player);
         assert_eq!(viewport.scroll_x, 0);
         assert_eq!(viewport.scroll_y, 0);
         #[allow(clippy::cast_sign_loss)]
@@ -800,20 +900,42 @@ mod tests {
             "moving east pads the west edge by one metatile"
         );
 
-        for _ in 0..WALK_FRAMES_PER_TILE {
+        // Halfway through the transit (`step_progress() == 8`): the lag has
+        // drained to `WALK_FRAMES_PER_TILE - 8 == 8` px, so
+        // `scroll_x == PAD * METATILE_PX - 8 == 8` -- the viewport has
+        // travelled exactly 8 of its 16 px, one per elapsed frame.
+        //
+        // This is the BG half of the cross-check
+        // `super::super::npc::tests::oam_entries_glues_a_stationary_npc_to_the_camera_through_every_direction_of_a_step`
+        // makes on the OAM side (issue #217): a stationary NPC's screen x
+        // over the same 8 frames moves by `-8` (its `camera_lag_px` term
+        // shrinks from `+16` to `+8`), while this scroll grows by `+8`.
+        // Scrolling the background right by 8 and moving the sprite left by
+        // 8 are the *same* on-screen displacement, so the NPC stays glued
+        // to the map -- if either side alone changed, the two numbers would
+        // stop being equal and opposite here.
+        for _ in 0..8 {
+            player.tick();
+        }
+        assert!(player.in_transit(), "8 of 16 frames elapsed");
+        assert_eq!(player.step_progress(), 8);
+        let viewport = compose(&player);
+        assert_eq!(
+            viewport.scroll_x, 8,
+            "halfway east: 8 px of the 16-px metatile travelled"
+        );
+        assert_eq!(viewport.scroll_y, 0, "no vertical movement");
+        assert_eq!(
+            viewport.bottom.width_tiles(),
+            padded_cols,
+            "still padded while still in transit"
+        );
+
+        for _ in 8..WALK_FRAMES_PER_TILE {
             player.tick();
         }
         assert!(!player.in_transit());
-        let viewport = build_tilemaps(
-            &player,
-            &grid,
-            &border,
-            &metatiles,
-            &[],
-            &attrs,
-            &no_secondary,
-            0,
-        );
+        let viewport = compose(&player);
         assert_eq!(viewport.scroll_x, 0);
         assert_eq!(viewport.scroll_y, 0);
         #[allow(clippy::cast_sign_loss)]

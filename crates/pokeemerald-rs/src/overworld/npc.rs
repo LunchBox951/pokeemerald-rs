@@ -802,6 +802,129 @@ mod tests {
         );
     }
 
+    /// The wrap-safety invariant
+    /// [`engine::overworld::object_event_is_in_view`]'s own docs rest on,
+    /// asserted rather than left as prose -- and asserted against the
+    /// *actual drawn sprite height*, because that is the term with no
+    /// headroom left.
+    ///
+    /// The spawn window admits `event.y - player.y` in `-7 ..= +9`; the
+    /// mid-step [`super::viewport::camera_lag_px`] term adds another
+    /// `-16 ..= +16` (issue #217). Unwrapped screen `y` therefore spans
+    /// `-64 ..= 224`, and `rendering::sprite`'s OAM-clean placement rule
+    /// (`y0 = y; if y0 + height > 256 { y0 -= 256 }`) leaves the top end
+    /// alone only while `224 + height <= 256`. With today's uniform 16x32
+    /// object-event sprites that is `256 <= 256` -- true by exactly zero
+    /// pixels. Draw a 48px-tall object event (upstream's `48x48`
+    /// props/truck, which module docs deliberately leave unresolved) and
+    /// the topmost admitted NPC would be yanked up by 256 and painted
+    /// across the visible rows. This test is the tripwire for that.
+    #[test]
+    fn the_spawn_window_keeps_every_admitted_sprite_clear_of_the_oam_y_wrap() {
+        /// The OAM `y` field's modulus, and the modulus
+        /// `rendering::sprite`'s placement rule compares against.
+        const OAM_Y_SPACE: i32 = 256;
+        /// `rendering::Framebuffer::HEIGHT` -- the visible row count.
+        const SCREEN_ROWS: i32 = 160;
+
+        let player = (40, 40);
+        let max_lag = i32::from(engine::overworld::WALK_FRAMES_PER_TILE);
+
+        // The one drawn sprite's real height, straight off the OAM entry
+        // the production path builds -- not a restated `32`.
+        let mut bindings = HashMap::new();
+        bindings.insert(
+            "OBJ_EVENT_GFX_MOM",
+            SpriteBinding {
+                base_tile: avatar::FRAME_BLOCK_TILES,
+                palette_bank: NpcPaletteTag::Npc4.bank(),
+            },
+        );
+        let data = EventData::new();
+        let here: &'static [ObjectEvent] = Box::leak(Box::new([object(
+            "OBJ_EVENT_GFX_MOM",
+            40,
+            40,
+            MovementType::FaceDown,
+        )]));
+        let drawn = oam_entries(
+            here,
+            &bindings,
+            &PlayerState::new(player, 3, Direction::South),
+            &data,
+        );
+        let sprite_height = i32::try_from(drawn[0].dimensions().1).unwrap();
+
+        // Every candidate row in a band far wider than the window, kept
+        // only if the window admits it, crossed with every reachable lag.
+        let mut admitted = 0_usize;
+        let mut min_y = i32::MAX;
+        let mut max_y = i32::MIN;
+        for event_y in (player.1 - 32)..=(player.1 + 32) {
+            let event = object(
+                "OBJ_EVENT_GFX_MOM",
+                i16::try_from(player.0).unwrap(),
+                i16::try_from(event_y).unwrap(),
+                MovementType::FaceDown,
+            );
+            if !engine::overworld::object_event_is_in_view(&event, player) {
+                continue;
+            }
+            admitted += 1;
+            for lag_y in -max_lag..=max_lag {
+                let unwrapped = i32::from(avatar::PLAYER_OBJ_Y)
+                    + (event_y - player.1) * super::METATILE_PX
+                    + lag_y;
+                min_y = min_y.min(unwrapped);
+                max_y = max_y.max(unwrapped);
+
+                // The production helper really does place it there (its
+                // only extra step is the 8-bit field's own wrap).
+                let (_, wrapped) = object_screen_position((player.0, event_y), player, (0, lag_y));
+                assert_eq!(
+                    i32::from(wrapped),
+                    unwrapped.rem_euclid(OAM_Y_SPACE),
+                    "object_screen_position must be the wrapped unwrapped position"
+                );
+            }
+        }
+
+        assert_eq!(
+            admitted, 17,
+            "the window admits `event.y - player.y` in -7..=+9"
+        );
+        assert_eq!(
+            (min_y, max_y),
+            (-64, 224),
+            "the admitted band, camera lag included -- it was -48..=208 \
+             before issue #217 added the lag term"
+        );
+
+        // Top end: never pulled up into the visible rows. Zero headroom.
+        assert!(
+            max_y + sprite_height <= OAM_Y_SPACE,
+            "a {sprite_height}px-tall object event at the bottom of the spawn \
+             window ({max_y}) would be wrapped up by {OAM_Y_SPACE} and painted \
+             across the top of the screen. What bounds this is the spawn \
+             window in `engine::overworld::object_event_is_in_view`: narrow \
+             that window before drawing taller object events"
+        );
+
+        // Bottom end: a negative position aliases to a row below the
+        // screen, and its true position is above it -- invisible either
+        // way, so the aliasing is unobservable.
+        assert!(
+            OAM_Y_SPACE + min_y >= SCREEN_ROWS,
+            "the top of the spawn window ({min_y}) aliases to row {}, which \
+             must stay off the bottom of the {SCREEN_ROWS}-row screen",
+            OAM_Y_SPACE + min_y
+        );
+        assert!(
+            min_y + sprite_height <= 0,
+            "and its true position must be entirely above row 0"
+        );
+    }
+
     #[test]
     fn oam_entries_skips_a_hidden_object_and_one_with_no_binding() {
         let mut data = EventData::new();
@@ -1085,10 +1208,18 @@ mod tests {
             // Continuous, one pixel per frame, *opposite* the direction of
             // travel -- same as any fixed BG content: walking east slides
             // the world (and every stationary NPC in it) left on screen, not
-            // right (`camera_lag_px`'s own docs; ported and cross-checked
-            // against `viewport::build_tilemaps`'s identical per-frame BG
-            // delta below). Never a multi-pixel jump, totalling exactly one
-            // metatile (8 + 7 + 1 = 16) across the whole transit.
+            // right (`camera_lag_px`'s own docs). Never a multi-pixel jump,
+            // totalling exactly one metatile (8 + 7 + 1 = 16) across the
+            // whole transit.
+            //
+            // The BG half of the same property is pinned by
+            // `super::super::viewport::tests`'
+            // `build_tilemaps_scroll_lags_behind_during_a_transit_and_settles_at_rest`,
+            // at these same checkpoints: 8 frames into an east step this
+            // NPC has moved `-8` px while that test's `scroll_x` has grown
+            // by `+8`. Equal and opposite is exactly what "glued to the
+            // background" means -- scrolling the map right by 8 and moving
+            // the sprite left by 8 are the same displacement.
             let (dx, dy) = direction.delta();
             let step = |a: rendering::OamEntry, b: rendering::OamEntry| {
                 (

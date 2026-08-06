@@ -2041,6 +2041,147 @@ fn walking_downstairs_and_talking_to_mom_opens_and_closes_her_dialog() {
     );
 }
 
+/// The issue #217 acceptance test's real-pack half: the *bundled* Mom
+/// object event (`OBJ_EVENT_GFX_MOM` at `(2, 6)` on the real
+/// `MAP_LITTLEROOT_TOWN_BRENDANS_HOUSE_1F`, the same NPC
+/// [`walking_downstairs_and_talking_to_mom_opens_and_closes_her_dialog`]
+/// walks up to) must stay glued to the scrolling background through every
+/// frame of a real player step driven through the real
+/// [`OverworldPhase::step`] loop -- pack-loaded art, real map data, real
+/// button input, no synthetic fixture anywhere.
+///
+/// The bug this pins (`npc`'s module docs): `PlayerState::step` commits the
+/// destination tile on frame one, so before the shared
+/// `viewport::camera_lag_px` term existed, Mom's OAM position jumped a full
+/// metatile the instant the player pressed a direction and then sat still
+/// for 16 frames while the background slid smoothly under her. The
+/// signature is therefore *per-frame*: a 16 px first-frame jump instead of
+/// 1 px, and an OAM delta that stops matching the BG scroll's.
+///
+/// Checked at the boundary frames (at rest, the first transit frame, the
+/// last transit frame, and the first resting frame) and at an intermediate
+/// one (`step_progress() == 8`), against **both** halves of the composed
+/// frame at once: Mom's OAM `y` and the BG `scroll_y` every layer shares.
+/// The unit-level counterparts -- progress 0 in all four directions, and
+/// the BG scroll's own intermediate value -- live in
+/// `crate::overworld::npc::tests` and `crate::overworld::viewport::tests`.
+#[test]
+#[ignore = "needs a local pack: run `cargo xtask extract` first"]
+fn walking_past_mom_keeps_her_oam_glued_to_the_scrolling_background() {
+    /// Mom's OAM `y` and this frame's shared BG `scroll_y`, read off the
+    /// same half-composed frame [`OverworldPhase::compose_frame`] would
+    /// rasterize. Entry 0 is always the player; entry 1 is Mom (pinned by
+    /// `crate::overworld::tests::real_pack_1f_oam_entries_cover_every_drawn_fresh_save_npc`,
+    /// which also proves nobody else on 1F draws on a fresh save).
+    fn mom_and_scroll(phase: &OverworldPhase) -> (i32, i32) {
+        let (entries, (_, scroll_y)) = phase
+            .scene
+            .oam_entries_and_bg_scroll(&phase.player, &phase.save1().event_data);
+        assert_eq!(entries.len(), 2, "1F draws the player and Mom, nobody else");
+        (i32::from(entries[1].y()), i32::from(scroll_y))
+    }
+
+    let mut phase = OverworldPhase::load_default().expect("run `cargo xtask extract` first");
+
+    // Down to 1F through the real stair warp -- same step-off/step-back
+    // sequence the dialog test above uses.
+    phase.step(held(Buttons::DOWN));
+    for _ in 1..WALK_FRAMES_PER_TILE {
+        phase.step(ButtonState::new());
+    }
+    phase.step(held(Buttons::UP));
+    for _ in 1..WALK_FRAMES_PER_TILE {
+        phase.step(ButtonState::new());
+    }
+    let one_f = assets::MapId("MAP_LITTLEROOT_TOWN_BRENDANS_HOUSE_1F");
+    assert_eq!(phase.map_id, one_f, "the stair warp must land on 1F");
+
+    // One tile south of Mom, *already facing south* so the first held Down
+    // commits a step rather than spending a frame turning.
+    phase.player = PlayerState::new((2, 7), 3, Direction::South);
+    let (rest_y, rest_scroll) = mom_and_scroll(&phase);
+    assert_eq!(rest_scroll, 0, "at rest the BG scroll is 0");
+
+    // Frame 1 of a real south step. The regression: this must be a *one
+    // pixel* move, not the one-metatile snap the old code produced.
+    phase.step(held(Buttons::DOWN));
+    assert_eq!(phase.player.position(), (2, 8), "the tile commits at once");
+    assert_eq!(phase.player.step_progress(), 1);
+    let (frame1_y, frame1_scroll) = mom_and_scroll(&phase);
+    assert_eq!(
+        frame1_y - rest_y,
+        -1,
+        "walking south slides Mom one pixel *up* the screen on the first \
+         frame -- a jump of -16 here is exactly the bug issue #217 fixed"
+    );
+
+    // Seven more frames to the midpoint, then to the last transit frame.
+    for _ in 0..7 {
+        phase.step(ButtonState::new());
+    }
+    assert_eq!(phase.player.step_progress(), 8, "halfway through the step");
+    let (mid_y, mid_scroll) = mom_and_scroll(&phase);
+
+    for _ in 0..7 {
+        phase.step(ButtonState::new());
+    }
+    assert_eq!(phase.player.step_progress(), 15);
+    assert!(phase.player.in_transit(), "frame 15 is still mid-step");
+    let (last_y, last_scroll) = mom_and_scroll(&phase);
+
+    phase.step(ButtonState::new());
+    assert!(!phase.player.in_transit(), "frame 16 settles the step");
+    let (settled_y, settled_scroll) = mom_and_scroll(&phase);
+
+    // Lockstep, between transit frames: Mom's OAM moves up by exactly as
+    // many pixels as the background scrolls down. (The at-rest frames are
+    // compared on OAM alone -- `build_tilemaps` adds a metatile of
+    // direction-dependent tilemap padding for the duration of a transit,
+    // which shifts `scroll_y`'s origin by a constant that cancels only
+    // between two frames on the same side of that boundary.)
+    assert_eq!(
+        (mid_y - frame1_y, mid_scroll - frame1_scroll),
+        (-7, 7),
+        "frames 1-8: 7 px of NPC travel up, 7 px of BG scroll down"
+    );
+    assert_eq!(
+        (last_y - mid_y, last_scroll - mid_scroll),
+        (-7, 7),
+        "frames 8-15: the same, with no drift"
+    );
+    assert_eq!(
+        (mid_scroll, last_scroll),
+        (8, 15),
+        "and in absolute terms the scroll is just the elapsed frame count"
+    );
+
+    // The boundary frames, and the total.
+    assert_eq!(
+        last_y - settled_y,
+        1,
+        "frame 15 owes exactly one last pixel"
+    );
+    assert_eq!(settled_scroll, 0, "back at rest, the BG scroll is 0 again");
+    assert_eq!(
+        rest_y - settled_y,
+        16,
+        "one whole metatile of travel across the step, and no more"
+    );
+
+    // The settled frame is the plain resting placement, not an
+    // approximation of it: a fresh player standing on the destination
+    // composes identically.
+    let fresh = PlayerState::new((2, 8), 3, Direction::South);
+    let (fresh_entries, fresh_scroll) = phase
+        .scene
+        .oam_entries_and_bg_scroll(&fresh, &phase.save1().event_data);
+    assert_eq!(
+        (i32::from(fresh_entries[1].y()), i32::from(fresh_scroll.1)),
+        (settled_y, settled_scroll),
+        "the first resting frame must equal a never-transited player's"
+    );
+}
+
 // -- Message-box confirm input: A *or* B ------------------------------------
 
 /// Upstream's down-arrow wait prompt takes `JOY_NEW(A_BUTTON | B_BUTTON)`

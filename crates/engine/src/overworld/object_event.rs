@@ -153,9 +153,39 @@ const MAP_OFFSET_H: i32 = MAP_OFFSET * 2;
 /// row and draws on top of them. `MAP_LITTLEROOT_TOWN`'s boy at `(14, 17)`
 /// has no hide flag at all, so with the player at the map's north edge
 /// (`y = 1`) that is precisely what happened before this gate. Reproducing
-/// upstream's spawn window is the faithful fix, and it is also sufficient:
-/// every position it admits lands, unwrapped, in `-48 ..= 208`, whose only
-/// aliasing pair (`-48` and `208`) is off-screen at both ends.
+/// upstream's spawn window is the faithful fix, and it is also sufficient
+/// — but only just, and the margin depends on a number that lives in
+/// another crate, so it is spelled out here.
+///
+/// # The wrap-safety bound (load-bearing, and exactly zero headroom)
+///
+/// The window admits `event.y - player.y` in `-7 ..= +9`. The render path
+/// (`pokeemerald_rs::overworld::npc::object_screen_position`) turns that
+/// into an unwrapped screen `y` of
+/// `PLAYER_OBJ_Y (64) + 16 * (event.y - player.y) + camera_lag_y`, where
+/// the mid-step camera lag (`viewport::camera_lag_px`, issue #217) is
+/// `-16 ..= +16`. So admitted positions land, unwrapped, in
+/// **`-64 ..= 224`** — *not* the `-48 ..= 208` this said before the camera
+/// lag existed; the lag widens the band by a full metatile on each side.
+///
+/// That is still safe, for two separate reasons, both of which have to
+/// hold:
+///
+/// * **Top end.** The rasterizer places a box once, pulling it up by 256
+///   iff `y + height > 256` (`rendering::sprite`'s OAM-clean rule). With
+///   every object event drawn 32 px tall, the worst admitted case is
+///   `224 + 32 == 256`, which is *not* `> 256` — so it is never pulled up
+///   into the visible rows. **Zero headroom**: a future object event
+///   drawn 48 px tall (upstream's `48x48` truck/props, which this port
+///   deliberately does not draw yet — see `npc`'s module docs) would give
+///   `224 + 48 == 272 > 256` and be yanked to `-32`, painting a wrapped
+///   sprite across the top of the screen. That is why
+///   `npc::tests::the_spawn_window_keeps_every_admitted_sprite_clear_of_the_oam_y_wrap`
+///   asserts this bound against the real sprite height rather than leaving
+///   it as prose.
+/// * **Bottom end.** A negative position wraps to `256 + y >= 192`, which
+///   is below the 160-row screen, and its true position is above row 0 —
+///   off-screen either way, so the aliasing is unobservable.
 #[must_use]
 pub fn object_event_is_in_view(event: &ObjectEvent, player_position: (i32, i32)) -> bool {
     let (left, right) = (player_position.0 - 2, player_position.0 + MAP_OFFSET_W + 2);
