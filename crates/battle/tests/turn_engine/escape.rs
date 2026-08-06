@@ -21,7 +21,7 @@ fn a_successful_run_ends_the_battle_immediately_without_either_mon_acting() {
     // because action selection completes for both battlers before the
     // run is resolved.
     let mut rng = SequenceRng::new([0, 0, 0]);
-    let mut battle = Battle::new(dex, player, enemy, &mut rng).unwrap();
+    let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
     let events = battle.take_turn(PlayerAction::Run, &mut rng).unwrap();
     assert_eq!(
         events,
@@ -58,7 +58,7 @@ fn a_failed_run_burns_the_turn_and_the_enemy_still_acts() {
     // escape roll (65000 & 0xFF = 232 >= speedVar 19 -> failure), then
     // the enemy's hit (accuracy / no crit / best roll / effect chance).
     let mut rng = SequenceRng::new([0, 0, 0, 65000, 0, 1, 0, 0]);
-    let mut battle = Battle::new(dex, player, enemy, &mut rng).unwrap();
+    let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
     let events = battle.take_turn(PlayerAction::Run, &mut rng).unwrap();
     assert_eq!(
         events[0],
@@ -92,7 +92,7 @@ fn a_failed_run_reports_the_attempt_even_when_the_enemy_cannot_act() {
     // draw, the all-spent enemy's forced-Struggle pick bypasses the
     // rejection loop. The fallback then has to act, which stops the turn.
     let mut rng = SequenceRng::new([0, 0, 65000]);
-    let mut battle = Battle::new(dex, player, enemy, &mut rng).unwrap();
+    let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
     let failure = battle.take_turn(PlayerAction::Run, &mut rng).unwrap_err();
 
     assert_eq!(
@@ -127,7 +127,7 @@ fn an_all_spent_enemy_still_lets_a_successful_run_end_the_battle() {
     // battle start + turn number only: no selection draw (forced pick),
     // no escape draw (raw speed >= raw speed succeeds unconditionally).
     let mut rng = SequenceRng::new([0, 0]);
-    let mut battle = Battle::new(dex, player, enemy, &mut rng).unwrap();
+    let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
     let events = battle.take_turn(PlayerAction::Run, &mut rng).unwrap();
     assert_eq!(
         events,
@@ -165,7 +165,7 @@ fn escape_uses_raw_speed_while_turn_order_uses_effective_speed() {
     // last value unread.
     let enemy = max_iv_mon(&dex, 19, 20, vec![MoveId(33)]); // Rattata L20
     let mut rng = SequenceRng::new([0, 0, 0, 10]);
-    let mut battle = Battle::new(dex.clone(), stage_boosted(&dex), enemy, &mut rng).unwrap();
+    let mut battle = Battle::new(dex.clone(), stage_boosted(&dex), enemy, false, &mut rng).unwrap();
     let events = battle.take_turn(PlayerAction::Run, &mut rng).unwrap();
     assert_eq!(
         events.last(),
@@ -190,7 +190,7 @@ fn escape_uses_raw_speed_while_turn_order_uses_effective_speed() {
     // (48-hp Rattata, 32-hp Bulbasaur).
     let enemy = max_iv_mon(&dex, 19, 20, vec![MoveId(33)]);
     let mut rng = SequenceRng::new([0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0]);
-    let mut battle = Battle::new(dex.clone(), stage_boosted(&dex), enemy, &mut rng).unwrap();
+    let mut battle = Battle::new(dex.clone(), stage_boosted(&dex), enemy, false, &mut rng).unwrap();
     let events = battle
         .take_turn(PlayerAction::UseMove(0), &mut rng)
         .unwrap();
@@ -236,7 +236,7 @@ fn each_failed_run_raises_the_next_attempts_odds_through_run_tries() {
         0, 1, 0, 0, // ...so the enemy acts: its 4-draw hit (9 damage)
         0, 0, 90, // turn 2: same roll now beats 79+30 -> escape
     ]);
-    let mut battle = Battle::new(dex, player, enemy, &mut rng).unwrap();
+    let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
 
     let turn1 = battle.take_turn(PlayerAction::Run, &mut rng).unwrap();
     assert_eq!(
@@ -283,7 +283,7 @@ fn an_equal_speed_run_turn_never_consumes_the_tie_draw() {
         0, // the turn's own turn number
         0, // selection: 0 % 4 -> slot 0, the wild mon's only move
     ]);
-    let mut battle = Battle::new(dex, player, enemy, &mut rng).unwrap();
+    let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
     assert_eq!(
         rng.draws(),
         2,
@@ -330,7 +330,7 @@ fn run_tries_wraps_at_256_like_upstreams_byte_counter() {
         .chain((0..256).flat_map(|_| [0u16, 0, 255]))
         .collect::<Vec<_>>();
     let mut rng = SequenceRng::new(script);
-    let mut battle = Battle::new(dex, player, enemy, &mut rng).unwrap();
+    let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
     for turn in 0u16..256 {
         assert_eq!(
             battle.run_tries(),

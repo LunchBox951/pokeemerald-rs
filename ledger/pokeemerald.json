@@ -45,6 +45,14 @@
       "status": "pending"
     },
     "data/battle_ai_scripts.s": {
+      "artifacts": {
+        "AI_FirstBattle": {
+          "reason": "data/battle_ai_scripts.s:3233-3239. The two if_hp_equal/if_hp_less_than AI_TARGET, 20 checks (Cmd_if_hp_equal/Cmd_if_hp_less_than compute 100 * hp / maxHP, battle_ai_script_commands.c:713-758) modelled as one <=20%-of-max-HP threshold against the player's raw current HP (choose_enemy_action_first_battle's FIRST_BATTLE_FLEE_HP_PERCENT), triggering EnemyAction::Flee -> BattleOutcome::WildFled when it holds. No RNG draw either way, matching the script (Cmd_flee sets aiAction bits only).",
+          "rust_target": "crates/battle/src/battle.rs",
+          "spec": "S-6",
+          "status": "stubbed"
+        }
+      },
       "category": "data.script",
       "kind": "file",
       "spec_owner": "07-battle",
@@ -17106,6 +17114,14 @@
       "status": "pending"
     },
     "include/constants/battle.h": {
+      "artifacts": {
+        "BATTLE_TYPE_FIRST_BATTLE": {
+          "reason": "include/constants/battle.h:63 (1 << 4). Modelled as Battle::new's first_battle constructor parameter / the stored first_battle_flag field (issue #187), gating the three deltas from an ordinary wild encounter this issue implements: crit suppression, running forbidden, and the AI-branch opponent move choice. No other BATTLE_TYPE_* flag is modelled; gBattleTypeFlags itself is not represented as a bitset anywhere in this crate.",
+          "rust_target": "crates/battle/src/battle.rs",
+          "spec": "S-6",
+          "status": "stubbed"
+        }
+      },
       "category": "code.constants",
       "kind": "file",
       "status": "pending"
@@ -24023,6 +24039,20 @@
       "status": "pending"
     },
     "src/battle_ai_script_commands.c": {
+      "artifacts": {
+        "BattleAI_SetupAIData": {
+          "reason": "battle_ai_script_commands.c:311. Modelled only for the single call site issue #187 reaches (OpponentHandleChooseMove's BattleAI_SetupAIData(ALL_MOVES_MASK) for BATTLE_TYPE_FIRST_BATTLE): every real move slot seeded at score 100, CheckMoveLimitations zeroing a spent (0-PP) slot's score with no RNG cost (matching the same PP-only limitation rule validate_player_move already applies), and the unconditional four-draw simulatedRNG fill (100 - Random() % 16, :338) reproduced draw-for-draw in choose_enemy_action_first_battle even though the values themselves are never read (no AI_TryToFaint/AI_HPAware scripts run for this battle type). NOT modelled: Disable/Torment/Taunt/Imprison/Encore/choice-item move limitations, held-item/trainer-item setup (:270-:309), and any call site other than the first-battle one (issue I-5's general trainer AI).",
+          "rust_target": "crates/battle/src/battle.rs",
+          "spec": "S-6",
+          "status": "stubbed"
+        },
+        "ChooseMoveOrAction_Singles": {
+          "reason": "battle_ai_script_commands.c:396. Modelled only for BATTLE_TYPE_FIRST_BATTLE, where AI_SCRIPT_FIRST_BATTLE is the sole aiFlags bit ever set: since no script ever moves a score away from its seeded 100 except the flee check (data/battle_ai_scripts.s#AI_FirstBattle), the tie-break reduces exactly to 'pick uniformly among the still-has-PP real move slots' (Random() % numOfBestMoves, drawn unconditionally even with one candidate, :444) -- choose_enemy_action_first_battle's usable-slot filter plus one final draw. AI_ACTION_WATCH (Safari) is not reachable for this battle type and is not modelled. NOT modelled: the general per-move AI_SCRIPT_CHECK_BAD_MOVE/TRY_TO_FAINT/CHECK_VIABILITY/... scoring pipeline that runs for BATTLE_TYPE_TRAINER (issue I-5).",
+          "rust_target": "crates/battle/src/battle.rs",
+          "spec": "S-6",
+          "status": "stubbed"
+        }
+      },
       "category": "code.source",
       "kind": "file",
       "status": "pending"
@@ -24185,7 +24215,7 @@
     "src/battle_controller_opponent.c": {
       "artifacts": {
         "OpponentHandleChooseMove": {
-          "reason": "battle_controller_opponent.c:1551. Only the plain-wild else branch (:1594-:1601) is modelled: the do/while rejection loop chosenMoveId = MOD(Random(), MAX_MON_MOVES) retried while the slot holds MOVE_NONE, reproduced draw for draw by Battle::choose_enemy_move. The AI branch taken for BATTLE_TYPE_TRAINER | FIRST_BATTLE | SAFARI | ROAMER (:1563, BattleAI_SetupAIData/BattleAI_ChooseMoveOrAction) is issue I-5's, not this slice's; the double-battle random-target draw (:1607) and MOVE_TARGET_USER retargeting are not modelled (single wild battles only).",
+          "reason": "battle_controller_opponent.c:1551. The plain-wild else branch (:1594-:1601) is modelled: the do/while rejection loop chosenMoveId = MOD(Random(), MAX_MON_MOVES) retried while the slot holds MOVE_NONE, reproduced draw for draw by Battle::choose_enemy_move. As of issue #187, the AI branch (:1563, BATTLE_TYPE_TRAINER | FIRST_BATTLE | SAFARI | ROAMER) is now also modelled, but only for BATTLE_TYPE_FIRST_BATTLE: Battle::choose_enemy_action_first_battle narrows BattleAI_SetupAIData/BattleAI_ChooseMoveOrAction to exactly the one AI script (AI_SCRIPT_FIRST_BATTLE) this specific gBattleTypeFlags value ever sets -- see src/battle_ai_script_commands.c#BattleAI_SetupAIData, #ChooseMoveOrAction_Singles, and data/battle_ai_scripts.s#AI_FirstBattle. The general BATTLE_TYPE_TRAINER/SAFARI/ROAMER AI (arbitrary AI_SCRIPT_* combinations, real move scoring) is issue I-5's, not modelled. The double-battle random-target draw (:1607) and MOVE_TARGET_USER retargeting are not modelled (single wild battles only).",
           "rust_target": "crates/battle/src/battle.rs",
           "spec": "S-6",
           "status": "stubbed"
@@ -24265,6 +24295,12 @@
         "GetWhoStrikesFirst": {
           "reason": "battle_main.c:4595. Priority then Speed with the short-circuited speed-tie RNG draw modelled exactly (resolve_order). Weather-linked ability speed doubling (Swift Swim/Chlorophyll), badge boosts, Macho Brace, paralysis, and Quick Claw are not modelled (issue #159 scopes abilities/items/status out); callers pass each battler's already-final effective speed.",
           "rust_target": "crates/battle/src/turn_order.rs",
+          "spec": "S-6",
+          "status": "stubbed"
+        },
+        "IsRunningFromBattleImpossible": {
+          "reason": "battle_main.c:4021. Only the BATTLE_TYPE_FIRST_BATTLE branch is modelled (:4078-:4082, BATTLE_RUN_FORBIDDEN, the B_MSG_DONT_LEAVE_BIRCH message): Battle::take_turn rejects PlayerAction::Run with BattleError::RunForbidden before any draw when first_battle is set (issue #187), matching that this gate is actually checked at action-*selection* time (src/battle_main.c:4339-:4344), before Run is ever a chosen action for the turn -- upstream just re-prompts the player's menu. NOT modelled: Enigma Berry/HOLD_EFFECT_CAN_ALWAYS_RUN (:4048), BATTLE_TYPE_LINK auto-success (:4050), ABILITY_RUN_AWAY (:4052), the opposing Shadow Tag/Arena Trap/Magnet Pull escape-prevention checks (:4056-:4076), and STATUS2_ESCAPE_PREVENTION/STATUS2_WRAPPED/STATUS3_ROOTED (:4073-:4077) -- no abilities, items, status2, or status3 tracked this slice.",
+          "rust_target": "crates/battle/src/battle.rs",
           "spec": "S-6",
           "status": "stubbed"
         },
@@ -24354,7 +24390,7 @@
           "status": "stubbed"
         },
         "Cmd_critcalc": {
-          "reason": "battle_script_commands.c:1253. sCriticalHitChance table and the four high-crit move-effect ids modelled (crit_stage_for_effect, crit_roll). Focus Energy, Scope Lens, Lucky Punch/Chansey, and Stick/Farfetch'd stage contributions are not modelled (status2/items out of scope). Nor are the three suppressors that short-circuit the crit Random() away entirely in the :1279-:1283 && chain -- Battle Armor/Shell Armor on the target (:1279), STATUS3_CANT_SCORE_A_CRIT on the attacker (:1280), and BATTLE_TYPE_WALLY_TUTORIAL | BATTLE_TYPE_FIRST_BATTLE (:1281): each makes the hit consume one fewer RNG draw. crit_roll models only the all-three-pass case, which is the ordinary post-first-battle wild encounter this slice targets -- BATTLE_TYPE_FIRST_BATTLE is set solely for the scripted Route 101 Poochyena battle (src/battle_setup.c:937), which is therefore crit-proof upstream.",
+          "reason": "battle_script_commands.c:1253. sCriticalHitChance table and the four high-crit move-effect ids modelled (crit_stage_for_effect, crit_roll). Of the three suppressors that short-circuit the crit Random() away in the :1279-:1283 && chain, BATTLE_TYPE_FIRST_BATTLE (:1281) is now modelled end to end (issue #187): crate::hit::resolve_hit takes a suppress_crit flag that skips crit_roll and its draw entirely, threaded from Battle's first_battle flag (crit-proof for the whole battle, matching upstream's scripted Route 101 Zigzagoon fight, src/battle_setup.c:937). Still not modelled: Battle Armor/Shell Armor on the target (:1279), STATUS3_CANT_SCORE_A_CRIT (:1280), BATTLE_TYPE_WALLY_TUTORIAL (the other half of :1281), and Focus Energy/Scope Lens/Lucky Punch/Stick stage contributions (status2/items out of scope).",
           "rust_target": "crates/battle/src/critical.rs",
           "spec": "S-6",
           "status": "stubbed"
@@ -24465,13 +24501,13 @@
           "status": "stubbed"
         },
         "HandleAction_Run": {
-          "reason": "battle_util.c:487. The player-side half only (:514-:523): Battle::take_turn calls try_run_from_battle for a chosen PlayerAction::Run and, on failure, burns the player's turn while the wild mon still acts (upstream sets BattleScript_PrintFailedToRunString and gCurrentActionFuncId = B_ACTION_EXEC_SCRIPT rather than ending the turn). Link/recorded-link multi-battler run handling (:491-:511) and the opponent-side branch (:524-:537, a wild mon fleeing with B_OUTCOME_MON_FLED) are not modelled. Where a run lands in the turn order is not this artifact's claim -- see src/battle_main.c#SetActionsAndBattlersTurnOrder.",
+          "reason": "battle_util.c:487. The player-side half (:514-:523) is modelled: Battle::take_turn calls try_run_from_battle for a chosen PlayerAction::Run and, on failure, burns the player's turn while the wild mon still acts. As of issue #187, the non-player half (:524-:537) is now also modelled: a first_battle wild opponent that chooses to flee (EnemyAction::Flee, from choose_enemy_action_first_battle) ends the battle unconditionally in BattleOutcome::WildFled/BattleEvent::WildFled, no RNG draw, no PP touched -- matching B_OUTCOME_MON_FLED. The STATUS2_WRAPPED/STATUS2_ESCAPE_PREVENTION guard on that branch (:526) is not modelled (no binding moves tracked). Link/recorded-link multi-battler run handling (:491-:511) is not modelled. Where a run/flee lands in the turn order is not this artifact's claim -- see src/battle_main.c#SetActionsAndBattlersTurnOrder and src/battle_main.c#GetWhoStrikesFirst.",
           "rust_target": "crates/battle/src/battle.rs",
           "spec": "S-6",
           "status": "stubbed"
         },
         "TryRunFromBattle": {
-          "reason": "battle_util.c:407. The plain single-battle path (:452, non-Pyramid sub-branch :463-:468) modelled exactly, including that it reads RAW gBattleMons[].speed rather than any stat-stage-modified Speed, and the u8 speedVar wraparound-not-saturation on assignment (try_run_from_battle). Held-item (HOLD_EFFECT_CAN_ALWAYS_RUN), ability (RUN_AWAY), Frontier/Trainer Hill auto-success, and Battle Pyramid multiplier branches are not modelled (issue #159 scopes abilities/items out). The caller-side gate is also out of scope: IsRunningFromBattleImpossible (src/battle_main.c:4021) returns BATTLE_RUN_FORBIDDEN for BATTLE_TYPE_FIRST_BATTLE (:4078-:4082), so the scripted Route 101 battle (src/battle_setup.c:937) can never run and never reaches this function -- escape.rs models the ordinary post-first-battle wild encounter.",
+          "reason": "battle_util.c:407. The plain single-battle path (:452, non-Pyramid sub-branch :463-:468) modelled exactly, including that it reads RAW gBattleMons[].speed rather than any stat-stage-modified Speed, and the u8 speedVar wraparound-not-saturation on assignment (try_run_from_battle). Held-item (HOLD_EFFECT_CAN_ALWAYS_RUN), ability (RUN_AWAY), Frontier/Trainer Hill auto-success, and Battle Pyramid multiplier branches are not modelled (issue #159 scopes abilities/items out). The caller-side gate is modelled separately, not here: IsRunningFromBattleImpossible's BATTLE_TYPE_FIRST_BATTLE branch (src/battle_main.c#IsRunningFromBattleImpossible, issue #187) now rejects PlayerAction::Run at Battle::take_turn before this function is ever reached, matching upstream's scripted Route 101 Zigzagoon battle never reaching TryRunFromBattle at all.",
           "rust_target": "crates/battle/src/escape.rs",
           "spec": "S-6",
           "status": "stubbed"

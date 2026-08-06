@@ -41,8 +41,22 @@
 //! any RNG is drawn, so an unsupported configuration or pick can never leave
 //! a half-played turn behind.
 //!
+//! Issue #187 adds `BATTLE_TYPE_FIRST_BATTLE` — the Route 101 intro
+//! Zigzagoon fight's rules — as [`battle::Battle::new`]'s `first_battle`
+//! flag: crit suppression ([`hit::resolve_hit`]'s `suppress_crit`, see
+//! [`critical`]'s module docs), running forbidden
+//! ([`BattleError::RunForbidden`], see `escape`'s module docs), and the
+//! wild opponent's narrow AI-branch move choice (`battle`'s private
+//! `opponent_ai` submodule, not upstream's general trainer AI, which stays
+//! `I-5`). Only the *rules* are modelled — the scripted intro's
+//! own construction (`SetUpBattleVarsAndBirchZigzagoon`, the Zigzagoon
+//! opponent, the "don't leave Prof. Birch!" narrative trigger) is a
+//! separate, not-yet-modelled overworld hookup; every ordinary Route 101
+//! grass encounter still constructs with `first_battle = false`
+//! (`crates/pokeemerald-rs/src/flow/wild_encounter.rs`).
+//!
 //! Out of scope for this slice (see each module's own docs for exactly what
-//! is/isn't modelled): trainer/wild AI (`I-5`), battle UI/animations,
+//! is/isn't modelled): general trainer/wild AI (`I-5`), battle UI/animations,
 //! overworld transition, abilities, held items, non-volatile status
 //! conditions, weather, multi/double battles, Mist/Substitute (see
 //! [`stat_change`]'s module docs for why those two are a documented boundary
