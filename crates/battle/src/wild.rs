@@ -25,9 +25,15 @@
 //! Synchronize/Cute Charm influence on nature/gender, and the OT-id shiny
 //! reroll loop (`OT_ID_RANDOM_NO_SHINY`) — a wild mon here always takes the
 //! player's OT id with **no** extra `Random32()` draws, matching
-//! `CreateMonWithNature`'s `OT_ID_PLAYER_ID` argument. `GiveBoxMonInitialMoveset`
-//! (deriving a level-up moveset) is not modelled either: callers supply the
-//! wild mon's moves directly.
+//! `CreateMonWithNature`'s `OT_ID_PLAYER_ID` argument.
+//!
+//! [`build_wild_pokemon`] still takes the moveset from its caller rather than
+//! deriving it, because a caller may want a fixed one (every test in this
+//! crate does). [`initial_moveset`] is the derivation upstream actually
+//! performs on the way — `GiveBoxMonInitialMoveset`
+//! (`pokeemerald/src/pokemon.c:2991-3012`), which draws nothing — so an
+//! integration layer that wants the *real* wild moveset for a species/level
+//! can compose the two (issue #169's overworld handoff does exactly that).
 //!
 //! [`roll_personality_for_nature`]'s rejection loop is upstream's own
 //! design — a real 32-bit LCG visits every residue class mod
@@ -35,13 +41,90 @@
 //! the loop always terminates for a real generator; it is not artificially
 //! bounded here, matching upstream having no bound either.
 
-use assets::{MoveId, SpeciesId};
+use assets::{LevelUpLearnsets, MoveId, SpeciesId};
 
 use crate::damage::BattleRng;
 use crate::dex::Dex;
 use crate::error::BattleError;
 use crate::nature::Nature;
-use crate::pokemon::{BattlePokemon, Ivs};
+use crate::pokemon::{BattlePokemon, Ivs, MAX_MON_MOVES};
+
+/// `GiveBoxMonInitialMoveset` (`pokeemerald/src/pokemon.c:2991-3012`): the
+/// moves a mon created at `level` starts with, in the order it learned them.
+///
+/// Walks `gLevelUpLearnsets[species]` (already extracted as
+/// [`assets::LevelUpLearnsets`]) in table order, stopping at the first entry
+/// above `level` — upstream compares the packed `moveLevel > (level << 9)`,
+/// which is the same comparison on the decoded level. Each move is offered to
+/// `GiveMoveToBoxMon` (`:2939-2955`), whose two outcomes are reproduced here
+/// `(no-verbatim)`:
+///
+/// - a move the mon already knows is skipped (`MON_ALREADY_KNOWS_MOVE`) —
+///   without costing a slot, which matters for the handful of species whose
+///   learnset repeats a move;
+/// - once all four slots are full (`MON_HAS_MAX_MOVES`), upstream calls
+///   `DeleteFirstMoveAndGiveMoveToBoxMon` (`:3010`), which shifts slots 1..4
+///   down and appends the new move — so a high-level mon keeps its *last*
+///   four learnable moves, oldest dropped first.
+///
+/// Draws nothing: the whole function is table-driven, which is why it can sit
+/// outside [`build_wild_pokemon`]'s RNG sequence without perturbing it.
+///
+/// An unknown `species` (outside the extracted table) yields an empty
+/// moveset rather than a panic; [`BattlePokemon::new`] rejects that
+/// downstream with [`BattleError::InvalidMoveCount`], so it fails closed at
+/// the boundary that already validates movesets instead of inventing a
+/// Struggle-only mon here.
+#[must_use]
+pub fn initial_moveset(species: SpeciesId, level: u8) -> Vec<MoveId> {
+    let Some(learnset) = LevelUpLearnsets::new().get(species) else {
+        return Vec::new();
+    };
+    let mut moves: Vec<MoveId> = Vec::with_capacity(MAX_MON_MOVES);
+    for entry in learnset {
+        if entry.level > level {
+            break;
+        }
+        if moves.contains(&entry.move_id) {
+            continue;
+        }
+        if moves.len() == MAX_MON_MOVES {
+            moves.remove(0);
+        }
+        moves.push(entry.move_id);
+    }
+    moves
+}
+
+/// Whether the whole `CreateWildMon` → [`crate::Battle::new`] handoff would
+/// accept a wild `(species, level)` — every check both make, composed, with
+/// **no state built and no RNG drawn** (issue #207 review): the real
+/// [`initial_moveset`] the wild side would know, [`BattlePokemon::validate`]'s
+/// species/level/moveset screens, and [`crate::Battle::new`]'s
+/// per-move executability screen (the same `ensure_executable` it runs,
+/// since the wild rejection loop can land on any slot).
+///
+/// This is the *pre-flight* an integration layer can run over an encounter
+/// table before enabling rolls on a map: upstream never rejects a wild
+/// battle, so the only stream-faithful way to handle a moveset this engine
+/// cannot execute yet is to find out **before** any encounter draw happens,
+/// not after `CreateWildMon`'s five draws are already spent.
+///
+/// # Errors
+///
+/// Whatever the first failing screen reports — e.g.
+/// [`BattleError::InvalidMoveCount`] for a species outside the learnset
+/// table, or [`BattleError::UnsupportedMoveEffect`] /
+/// [`BattleError::NonDamagingMove`] for a moveset the turn engine cannot
+/// execute (a level-3 Seedot's Bide/Harden, as of this slice).
+pub fn ensure_wild_startable(dex: &Dex, species: SpeciesId, level: u8) -> Result<(), BattleError> {
+    let moves = initial_moveset(species, level);
+    BattlePokemon::validate(dex, species, level, &moves)?;
+    for move_id in &moves {
+        crate::battle::ensure_executable(dex, *move_id)?;
+    }
+    Ok(())
+}
 
 /// `PickWildMonNature`'s v1 path (`pokeemerald/src/wild_encounter.c:335`):
 /// `Random() % NUM_NATURES`. The Safari Zone and Synchronize branches ahead
@@ -131,12 +214,15 @@ pub fn build_wild_pokemon(
 
 #[cfg(test)]
 mod tests {
-    use super::{build_wild_pokemon, roll_ivs, roll_nature, roll_personality_for_nature};
+    use super::{
+        build_wild_pokemon, ensure_wild_startable, initial_moveset, roll_ivs, roll_nature,
+        roll_personality_for_nature,
+    };
     use crate::damage::BattleRng;
     use crate::dex::Dex;
     use crate::error::BattleError;
     use crate::nature::Nature;
-    use crate::pokemon::MOVE_NONE;
+    use crate::pokemon::{MAX_MON_MOVES, MOVE_NONE};
     use assets::{MoveId, SpeciesId};
 
     /// A `BattleRng` fed from a fixed sequence, panicking (loudly, not
@@ -308,5 +394,142 @@ mod tests {
             let mut rng = SequenceRng::new([value, !value]);
             assert!(roll_ivs(&mut rng).is_valid());
         }
+    }
+
+    /// `GiveBoxMonInitialMoveset` against the three species a Route 101
+    /// encounter can actually produce, at the two levels their table allows
+    /// (issue #169). These are the movesets the overworld handoff feeds
+    /// `Battle::new`, so they double as the pin that the wild side of that
+    /// battle is *executable* by this crate's turn engine.
+    ///
+    /// Poochyena's rows previously asserted on `SpeciesId(261)` --
+    /// `SPECIES_OLD_UNOWN_K`, whose placeholder learnset happens to be
+    /// Tackle-only -- so they passed while pinning nothing (issue #207
+    /// review, round 4). `SPECIES_POOCHYENA` is `286`
+    /// (`include/constants/species.h:292`); its level-4/5 rows below are the
+    /// boundary pin that `entry.level > level` is the *exclusive* break
+    /// upstream's `moveLevel > (level << 9)` is -- Howl arrives exactly at
+    /// 5, so flipping the comparison to `>=` fails here and nowhere else.
+    #[test]
+    fn route_101_wild_movesets_match_their_level_up_learnsets() {
+        // Learnsets from `src/data/pokemon/level_up_learnsets.h`:
+        // Poochyena (`:3730`) LEVEL_UP_MOVE(1, TACKLE) then HOWL at 5;
+        // Zigzagoon (`:3765`) TACKLE + GROWL both at 1, TAIL_WHIP at 5;
+        // Wurmple (`:3799`) TACKLE + STRING_SHOT both at 1, POISON_STING at
+        // 5. So nothing new is learned between the table's levels 2 and 3.
+        // Move ids: Tackle 33, Growl 45, String Shot 81, Howl 336.
+        for (species, level, expected) in [
+            (286, 2, vec![MoveId(33)]),              // Poochyena: Tackle
+            (286, 3, vec![MoveId(33)]),              // Howl is still two levels away
+            (286, 4, vec![MoveId(33)]),              // ...one level away...
+            (286, 5, vec![MoveId(33), MoveId(336)]), // ...and arrives exactly at 5
+            (288, 2, vec![MoveId(33), MoveId(45)]),  // Zigzagoon: Tackle, Growl
+            (288, 3, vec![MoveId(33), MoveId(45)]),
+            (290, 2, vec![MoveId(33), MoveId(81)]), // Wurmple: Tackle, String Shot
+            (290, 3, vec![MoveId(33), MoveId(81)]),
+        ] {
+            assert_eq!(
+                initial_moveset(SpeciesId(species), level),
+                expected,
+                "species {species} at level {level}"
+            );
+        }
+    }
+
+    /// Learning order is preserved, and the moveset grows as the level does
+    /// -- Zigzagoon picks up Tail Whip at 5 and Headbutt at 9
+    /// (`level_up_learnsets.h:3765-3769`).
+    #[test]
+    fn a_higher_level_mon_knows_the_moves_it_has_reached() {
+        let at_five = initial_moveset(SpeciesId(288), 5);
+        let at_nine = initial_moveset(SpeciesId(288), 9);
+        assert!(
+            at_five.len() < at_nine.len(),
+            "Zigzagoon learns more by level 9: {at_five:?} vs {at_nine:?}"
+        );
+        assert!(
+            at_nine.starts_with(&at_five),
+            "learning order must be preserved: {at_nine:?} does not extend {at_five:?}"
+        );
+    }
+
+    /// `MON_HAS_MAX_MOVES` -> `DeleteFirstMoveAndGiveMoveToBoxMon`
+    /// (`pokemon.c:3009-3010`): past four moves the oldest is dropped, so a
+    /// level-100 mon holds its last four learnable moves in learning order,
+    /// with no duplicates.
+    #[test]
+    fn a_full_moveset_drops_the_oldest_move_first() {
+        let learnsets = assets::LevelUpLearnsets::new();
+        // Real species only: 261/252 previously in this list are Old Unown
+        // placeholders with one-move learnsets that exercise nothing (issue
+        // #207 review, round 4). Bulbasaur (1) and Treecko (277) both learn
+        // more than four moves by 100, so the drop path really runs.
+        for species in [286u16, 288, 290, 1, 277] {
+            let moves = initial_moveset(SpeciesId(species), 100);
+            assert!(
+                moves.len() <= MAX_MON_MOVES,
+                "species {species} kept {} moves",
+                moves.len()
+            );
+            let mut deduped = moves.clone();
+            deduped.dedup();
+            assert_eq!(deduped, moves, "species {species} repeated a move");
+
+            // The retained moves are the tail of the (de-duplicated)
+            // learnset, oldest dropped first.
+            let learnset = learnsets
+                .get(SpeciesId(species))
+                .expect("species is in the extracted learnset table");
+            let mut all: Vec<MoveId> = Vec::new();
+            for entry in learnset {
+                if entry.level <= 100 && !all.contains(&entry.move_id) {
+                    all.push(entry.move_id);
+                }
+            }
+            assert_eq!(
+                moves,
+                all[all.len().saturating_sub(MAX_MON_MOVES)..].to_vec()
+            );
+        }
+    }
+
+    /// [`ensure_wild_startable`] must agree with the real handoff, both ways
+    /// (issue #207 review): Route 101's rollable wild mons all pass, and the
+    /// first reachable moveset the turn engine cannot execute -- a level-3
+    /// Seedot's Bide/Harden, Route 102 slot data -- is rejected. The
+    /// rejection arm is a deliberate ratchet: when Bide/Harden gain engine
+    /// support, this assertion flips and must be updated alongside the
+    /// map-table gate that consumes it.
+    #[test]
+    fn ensure_wild_startable_accepts_route_101_mons_and_rejects_a_bide_harden_seedot() {
+        let dex = Dex::new();
+        // Route 101's land table: Wurmple, Poochyena, Zigzagoon at 2..=3.
+        for species in [290, 286, 288] {
+            for level in 2..=3 {
+                assert_eq!(
+                    ensure_wild_startable(&dex, SpeciesId(species), level),
+                    Ok(()),
+                    "species {species} at level {level} must be startable"
+                );
+            }
+        }
+        // SPECIES_SEEDOT at Route 102's level 3: Bide (level 1) and Harden
+        // (level 3), neither in the damaging nor the stat-lowering pipeline.
+        assert!(ensure_wild_startable(&dex, SpeciesId(298), 3).is_err());
+    }
+
+    /// An unknown species fails closed with an empty moveset -- rejected
+    /// downstream by `BattlePokemon::new`, never silently turned into a
+    /// move-less mon.
+    #[test]
+    fn an_unknown_species_yields_no_moves_and_is_rejected_downstream() {
+        assert!(initial_moveset(SpeciesId(60_000), 5).is_empty());
+        let dex = Dex::new();
+        let mut rng = SequenceRng::new([]);
+        assert_eq!(
+            build_wild_pokemon(&dex, SpeciesId(60_000), 5, Vec::new(), &mut rng),
+            Err(BattleError::InvalidMoveCount(0))
+        );
+        assert_eq!(rng.draws(), 0);
     }
 }

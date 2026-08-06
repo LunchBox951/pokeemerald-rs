@@ -171,15 +171,18 @@ and Releases add it. Versions compare lexicographically as four unsigned ints.
 
 | Component | Bump when | Resets | Authority |
 |---|---|---|---|
-| `PATCH` | fixes, docs, CI, ledger, packaging — normal flow | — | normal PR flow |
-| `MINOR` | completed milestone / user-visible capability | `PATCH -> 0` | maintainer / owner |
-| `MAJOR` | large project phase or breaking repository contract | `MINOR`, `PATCH -> 0` | maintainer |
-| `FINAL` | project agreed complete (`0 -> 1`) | `MAJOR`, `MINOR`, `PATCH -> 0` | maintainer only |
+| `PATCH` | small maintenance or narrow behavior change | — | normal PR flow |
+| `MINOR` | meaningful capability, including a substantial unfinished slice or smaller completed acceptance criterion | `PATCH -> 0` | normal PR flow |
+| `MAJOR` | large completed acceptance criterion or project phase; breaking repository contract | `MINOR`, `PATCH -> 0` | normal PR flow |
+| `FINAL` | project agreed complete (`0 -> 1`) | `MAJOR`, `MINOR`, `PATCH -> 0` | owner only |
 
 Every pull request must increase `VERSION`; an unchanged or lower version fails
-the policy gate. A `MAJOR` or `MINOR` bump must reset lower components to zero.
-Promotion does not create a new product change, so its source version need only be
-strictly newer than the target channel's current version.
+the policy gate. Choose the highest applicable component from delivered behavior,
+not diff size or parent completion. A closed milestone is at least `MINOR`, and is
+`MAJOR` when it represents a large completed win. A `MAJOR` or `MINOR` bump must
+reset lower components to zero. Promotion does not create a new product change,
+so its source version need only be strictly newer than the target channel's
+current version.
 
 ## The `FINAL` gate
 
