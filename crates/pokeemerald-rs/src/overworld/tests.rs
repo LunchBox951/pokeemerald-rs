@@ -1014,6 +1014,54 @@ fn real_pack_the_opposite_gender_rival_binds_for_either_player() {
     assert_eq!((own.palette_bank(), own.base_tile()), (0, 0));
 }
 
+// -- Real-pack elevation-driven OBJ priority (S-5, issue #218) ---------------
+
+/// The visual counterpart to
+/// `flow::overworld_phase::tests::bedroom_bed_side_column_is_walkable_and_retains_the_raised_previous_elevation`
+/// (this crate's collision-side pin for the same issue): standing on the
+/// protagonist bedroom bed's raised elevation-4 edge tile must draw the
+/// player OBJ at the raised OAM priority
+/// ([`super::avatar::priority_for_elevation`]), not the flat default every
+/// position drew before this fix. Real-pack, because the point is that this
+/// flows all the way through the production [`super::sprites::SceneSprites::entries`]
+/// list built from the real bedroom's own layout, not just
+/// [`super::avatar::player_entry`] in isolation (already unit-tested
+/// directly in `avatar`'s own module against synthetic elevations).
+#[test]
+#[ignore = "needs a local pack: run `cargo xtask extract` first"]
+fn real_pack_the_bed_side_edge_draws_the_player_obj_at_the_raised_priority() {
+    const BEDROOM: assets::MapId = assets::MapId("MAP_LITTLEROOT_TOWN_BRENDANS_HOUSE_2F");
+    let scene = super::load_room(BEDROOM).expect("run `cargo xtask extract` first");
+    let data = fresh_save_event_data();
+
+    // (0, 7): ordinary floor south of the bed, elevation 3.
+    let on_the_floor = PlayerState::new((0, 7), 3, Direction::North);
+    let floor_entries = scene.sprites.entries(&on_the_floor, &data);
+    assert_eq!(
+        floor_entries[0].priority(),
+        super::avatar::PLAYER_OBJ_PRIORITY,
+        "entry 0 is always the player (this module's other real-pack OAM \
+         tests); ordinary floor elevation (3) draws at the default priority"
+    );
+
+    // (0, 5): the bed's own raised west-edge tile, elevation 4 -- real
+    // authored data, not a synthetic fixture (cross-checked against
+    // `pokeemerald/data/layouts/LittlerootTown_BrendansHouse_2F/map.bin` by
+    // this crate's `bedroom_bed_side_column_is_walkable_and_retains_the_raised_previous_elevation`).
+    let on_the_bed_edge = PlayerState::new((0, 5), 4, Direction::North);
+    let bed_entries = scene.sprites.entries(&on_the_bed_edge, &data);
+    assert_eq!(
+        bed_entries[0].priority(),
+        1,
+        "the bed's raised elevation-4 edge must draw the player OBJ at the \
+         raised priority (sElevationToPriority[4] == 1) -- the same-priority-\
+         favors-the-sprite tie rule (`rendering::compositor`) then draws it \
+         in front of the top BG layer instead of behind, matching a raised \
+         surface visually standing above whatever would otherwise occlude \
+         a player on ordinary floor"
+    );
+}
+
 // -- Real-pack tileset tile animation (issue #160) ---------------------------
 
 /// Upstream `tileset_anims.c`'s General primary-tileset animated tile

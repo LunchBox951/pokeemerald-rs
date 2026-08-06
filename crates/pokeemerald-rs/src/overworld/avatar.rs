@@ -93,18 +93,56 @@ const STEP_FRAME_HALF: u8 = WALK_FRAMES_PER_TILE / 2;
 
 /// `gObjectEventBaseOam_16x32` (`src/data/object_events/base_oam.h`): shape
 /// `SPRITE_SHAPE(16x32)` (`ObjShape::Vertical`, size 2 --
-/// `rendering::oam::obj_dimensions`'s table) at `.priority = 2`, the same
-/// priority the middle BG layer uses (`super::viewport::MIDDLE_PRIORITY`) --
-/// a sprite wins same-priority ties against a BG (`rendering::compositor`'s
+/// `rendering::oam::obj_dimensions`'s table) at a *default* `.priority = 2`,
+/// the same priority the middle BG layer uses (`super::viewport::MIDDLE_PRIORITY`)
+/// -- a sprite wins same-priority ties against a BG (`rendering::compositor`'s
 /// rules), so an object event draws in front of the middle/bottom layers but
 /// behind the top one, matching `DrawMetatile`'s own "covers object event
 /// sprites" comment on the top layer. `gObjectEventBaseOam_16x32` is shared
 /// by every 16x32 object event, not just the player, so [`super::npc`]
 /// reuses these same three constants for its own "standard" NPC OAM entries
-/// rather than redeclaring them.
+/// (always at [`PLAYER_OBJ_PRIORITY`]: this port's NPCs are stationary --
+/// `overworld`'s module docs -- so they never stand on a tile whose
+/// elevation would move them off it).
 pub(super) const PLAYER_OBJ_SHAPE: ObjShape = ObjShape::Vertical;
 pub(super) const PLAYER_OBJ_SIZE: u8 = 2;
 pub(super) const PLAYER_OBJ_PRIORITY: u8 = 2;
+
+/// `sElevationToPriority` (`event_object_movement.c`):
+/// `UpdateObjectEventElevationAndPriority` selects the object's OAM priority
+/// from its *retained* elevation (upstream `objEvent->previousElevation` --
+/// this port's [`PlayerState::previous_elevation`](engine::overworld::PlayerState::previous_elevation)),
+/// not the raw current elevation collision consults. Ordinary floor levels
+/// (0-3, 5, 7, 9, 11) resolve to the same default [`PLAYER_OBJ_PRIORITY`]
+/// (2) this OAM entry always used before issue #218; the "raised" odd
+/// elevations upstream uses for counters, stair landings, and the
+/// protagonist's own bed edges (4, 6, 8, 10, 12) resolve one step higher
+/// (numerically lower = more in front, `rendering::compositor`'s rules) --
+/// level with [`super::viewport::TOP_PRIORITY`], which the
+/// same-priority-favors-the-sprite tie rule (module docs above) then draws
+/// the sprite *in front of* rather than behind, matching a raised surface
+/// visually standing above whatever the top BG layer would otherwise
+/// occlude it with. `ELEVATION_MULTI_LEVEL` (13/14) shares priority `0`
+/// (frontmost of all); transcribed complete against the real upstream table
+/// even though no bundled map's player-reachable tile uses those two
+/// indices, so a future one that does inherits a correct value rather than
+/// a gap.
+const ELEVATION_TO_PRIORITY: [u8; 16] = [2, 2, 2, 2, 1, 2, 1, 2, 1, 2, 1, 2, 1, 0, 0, 2];
+
+/// [`ELEVATION_TO_PRIORITY`]`[elevation]`, defaulting to
+/// [`PLAYER_OBJ_PRIORITY`] for any index past the table's end -- never
+/// reachable from a real [`MetatileCell`](assets::MetatileCell) (its own
+/// elevation field is a packed 4-bit value, always `0..=15`), but
+/// `PlayerState::new`'s `elevation` parameter is a bare `u8` with no such
+/// invariant enforced at the type level, so this stays a total function
+/// rather than an indexing panic waiting on a future caller.
+#[must_use]
+pub(super) fn priority_for_elevation(elevation: u8) -> u8 {
+    ELEVATION_TO_PRIORITY
+        .get(usize::from(elevation))
+        .copied()
+        .unwrap_or(PLAYER_OBJ_PRIORITY)
+}
 
 /// The player OBJ's fixed screen position (module docs).
 #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)] // small, positive, compile-time.
@@ -273,7 +311,9 @@ fn frame_for(player: &PlayerState) -> (u16, bool) {
 
 /// Build the player's OBJ entry for this frame: [`PLAYER_OBJ_X`]/
 /// [`PLAYER_OBJ_Y`] (fixed, module docs), the current facing/step frame
-/// ([`frame_for`]), always enabled.
+/// ([`frame_for`]), always enabled, and an OAM priority selected from the
+/// player's retained elevation ([`priority_for_elevation`], issue #218) --
+/// not the fixed [`PLAYER_OBJ_PRIORITY`] this entry used before that fix.
 pub(super) fn player_entry(player: &PlayerState) -> OamEntry {
     let (frame, h_flip) = frame_for(player);
     OamEntry::new(
@@ -286,7 +326,7 @@ pub(super) fn player_entry(player: &PlayerState) -> OamEntry {
         false,
         PLAYER_OBJ_SHAPE,
         PLAYER_OBJ_SIZE,
-        PLAYER_OBJ_PRIORITY,
+        priority_for_elevation(player.previous_elevation()),
         true,
     )
 }
@@ -485,5 +525,53 @@ mod tests {
         assert_eq!(entry.dimensions(), (16, 32));
         assert_eq!(entry.priority(), PLAYER_OBJ_PRIORITY);
         assert!(entry.enabled());
+    }
+
+    /// `sElevationToPriority` transcribed independently from
+    /// `event_object_movement.c` (not copy-pasted from
+    /// [`ELEVATION_TO_PRIORITY`]'s own module-doc table): every index the
+    /// upstream array declares, pinned against this port's own.
+    #[test]
+    fn priority_for_elevation_matches_the_upstream_selevationtopriority_table() {
+        const UPSTREAM: [u8; 16] = [2, 2, 2, 2, 1, 2, 1, 2, 1, 2, 1, 2, 1, 0, 0, 2];
+        for (elevation, &expected) in UPSTREAM.iter().enumerate() {
+            assert_eq!(
+                priority_for_elevation(u8::try_from(elevation).unwrap()),
+                expected,
+                "elevation {elevation}"
+            );
+        }
+    }
+
+    /// Out-of-range input (never produced by a real
+    /// [`assets::MetatileCell`], whose elevation is a packed 4-bit field,
+    /// but not statically excluded by `PlayerState::new`'s bare `u8`
+    /// parameter) falls back to the ordinary default rather than panicking.
+    #[test]
+    fn priority_for_elevation_defaults_out_of_range_input_to_the_ordinary_priority() {
+        assert_eq!(priority_for_elevation(16), PLAYER_OBJ_PRIORITY);
+        assert_eq!(priority_for_elevation(u8::MAX), PLAYER_OBJ_PRIORITY);
+    }
+
+    /// The issue #218 regression: the OAM entry's priority follows the
+    /// player's *retained* ([`PlayerState::previous_elevation`]) elevation,
+    /// not a fixed constant. `player_at`/`PlayerState::new` set both
+    /// `elevation` and `previous_elevation` to the same starting value, so
+    /// constructing at 4 alone is enough to exercise the raised case (a
+    /// `previous_elevation` that has since drifted from `elevation` across
+    /// a transition tile is [`engine::overworld::player`]'s own coverage,
+    /// not this OAM-selection layer's).
+    #[test]
+    fn player_entry_raises_the_oam_priority_on_a_raised_elevation_tile() {
+        let on_the_floor = PlayerState::new((0, 0), 3, Direction::South);
+        assert_eq!(player_entry(&on_the_floor).priority(), PLAYER_OBJ_PRIORITY);
+
+        let on_the_bed_edge = PlayerState::new((0, 0), 4, Direction::South);
+        assert_eq!(
+            player_entry(&on_the_bed_edge).priority(),
+            1,
+            "elevation 4 (the protagonist bedroom bed's raised edge tiles) \
+             must draw at the raised priority, not the flat default"
+        );
     }
 }

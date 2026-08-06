@@ -25677,6 +25677,12 @@
           "spec": "I-3",
           "status": "rewritten"
         },
+        "ObjectEventUpdateElevation": {
+          "reason": "Current-vs-previous elevation split (issue #218): PlayerState::adopt_elevation reproduces the early-return-on-either-side-ELEVATION_MULTI_LEVEL guard and the unconditional currentElevation adopt / non-transition-only previousElevation adopt, called from both of PlayerState::step's arrival sites (same-map and connection-crossing). previousElevation now exposed as PlayerState::previous_elevation, feeding the player OBJ's elevation-driven render priority.",
+          "rust_target": "crates/engine/src/overworld/player.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
         "SetSpritePosToMapCoords": {
           "reason": "Player-OBJ screen-position derivation: for the player's own object event mapX/mapY == gSaveBlock1Ptr->pos always, collapsing this to a per-frame-constant OAM origin (PLAYER_OBJ_X/PLAYER_OBJ_Y); the camera/BG scrolls instead (viewport::build_tilemaps). Bike pan-ahead (the only thing that would move dx/dy away from 0) is out of v1 scope.",
           "rust_target": "crates/pokeemerald-rs/src/overworld/avatar.rs",
@@ -25694,6 +25700,12 @@
           "rust_target": "crates/engine/src/overworld/object_event.rs",
           "spec": "I-3",
           "status": "stubbed"
+        },
+        "UpdateObjectEventElevationAndPriority": {
+          "reason": "sElevationToPriority transcribed as avatar::ELEVATION_TO_PRIORITY / priority_for_elevation, selecting the player OBJ's OAM priority from PlayerState::previous_elevation (issue #218), replacing the fixed PLAYER_OBJ_PRIORITY every position drew before. sElevationToSubspriteTableNum and the subsprite-table split itself are not modelled: rendering::OamEntry has no per-sprite subsprite/split-priority mechanism, only a single whole-sprite priority, so the achievable-in-this-renderer fidelity is the full-sprite priority swap alone (see avatar.rs's own module docs on ELEVATION_TO_PRIORITY).",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/avatar.rs",
+          "spec": "S-5",
+          "status": "rewritten"
         },
         "gInitialMovementTypeFacingDirections": {
           "reason": "Transcribed in full: engine::overworld::initial_facing_direction covers all 81 MOVEMENT_TYPE_* entries, mirroring InitObjectEventStateFromTemplate's initial-spawn-facing table. This port has no per-object movement-type task simulation yet (v1 scope: stationary + look-around only), so this is also the facing an object renders at forever, not just at spawn -- a MOVEMENT_TYPE_LOOK_AROUND/WANDER_* object's own random-turn cycling (MovementType_LookAround et al.) is not modelled.",

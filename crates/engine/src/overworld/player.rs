@@ -7,7 +7,13 @@
 //! - Collision handling and elevation-adopt-on-arrival:
 //!   `PlayerNotOnBikeMoving` + `CheckForPlayerAvatarCollision` (collision
 //!   classification itself lives in `crate::overworld::collision`) and
-//!   `event_object_movement.c`'s `ObjectEventUpdateElevation`.
+//!   `event_object_movement.c`'s `ObjectEventUpdateElevation` — including its
+//!   current-vs-previous elevation split (S-5, issue #218): `currentElevation`
+//!   (this port's [`PlayerState::elevation`]) adopts every arrival including
+//!   the `ELEVATION_TRANSITION` wildcard, while `previousElevation` (this
+//!   port's [`PlayerState::previous_elevation`]) retains the last
+//!   *non*-transition arrival — see [`PlayerState::step`]'s "# Elevation
+//!   adoption" section.
 //! - Object-event collision: `GetCollisionAtCoords`' `COLLISION_OBJECT_EVENT`
 //!   arm / `DoesObjectCollideWithObjectAt` — see [`PlayerState::step`].
 //! - Walk speed: `event_object_movement.c`'s `MOVE_SPEED_NORMAL` step table
@@ -69,6 +75,8 @@ enum RunningState {
 pub struct PlayerState {
     position: TilePos,
     elevation: u8,
+    /// Upstream `objEvent->previousElevation` — see [`PlayerState::previous_elevation`].
+    previous_elevation: u8,
     facing: Direction,
     running: RunningState,
     /// Frames elapsed of the current step's walk animation, or `None` when
@@ -121,12 +129,16 @@ pub enum StepOutcome {
 
 impl PlayerState {
     /// A freshly placed player: not moving, facing `facing`, standing at
-    /// `position` on a tile at `elevation`.
+    /// `position` on a tile at `elevation`. Upstream's own spawn init
+    /// (`event_object_movement.c:1313-1314`) sets `currentElevation` and
+    /// `previousElevation` to the same starting value, so
+    /// [`PlayerState::previous_elevation`] starts equal to `elevation` too.
     #[must_use]
     pub const fn new(position: TilePos, elevation: u8, facing: Direction) -> Self {
         Self {
             position,
             elevation,
+            previous_elevation: elevation,
             facing,
             running: RunningState::NotMoving,
             transit_frames: None,
@@ -140,10 +152,28 @@ impl PlayerState {
     }
 
     /// The avatar's current elevation (adopted from the tile last arrived
-    /// at — see [`PlayerState::step`]).
+    /// at — see [`PlayerState::step`]). Upstream `objEvent->currentElevation`:
+    /// the field the elevation-mismatch collision check consults, which
+    /// adopts *every* arrival, including the `ELEVATION_TRANSITION` wildcard.
     #[must_use]
     pub const fn elevation(&self) -> u8 {
         self.elevation
+    }
+
+    /// The last *non-transition* elevation the avatar arrived at — upstream
+    /// `objEvent->previousElevation`, which
+    /// [`ObjectEventUpdateElevation`](https://github.com/pret/pokeemerald/blob/master/src/event_object_movement.c)
+    /// retains across `ELEVATION_TRANSITION` crossings rather than
+    /// overwriting with the wildcard. `UpdateObjectEventElevationAndPriority`
+    /// selects the sprite's OAM priority/subsprite table from *this* field,
+    /// not [`PlayerState::elevation`] — a raised tile's render state stays
+    /// pinned to its own elevation while the avatar crosses a transition
+    /// tile onto or off of it, rather than flickering back to the default
+    /// priority for the one frame it stands on the wildcard (S-5, issue
+    /// #218). See [`crate::overworld::player`]'s module docs.
+    #[must_use]
+    pub const fn previous_elevation(&self) -> u8 {
+        self.previous_elevation
     }
 
     /// The direction the avatar currently faces.
@@ -178,6 +208,30 @@ impl PlayerState {
             if *frames >= WALK_FRAMES_PER_TILE {
                 self.transit_frames = None;
             }
+        }
+    }
+
+    /// `ObjectEventUpdateElevation` (`event_object_movement.c`), called by
+    /// [`PlayerState::step`] once a step onto `dest`'s elevation from a tile
+    /// at `origin`'s elevation has already been accepted — see that
+    /// method's "# Elevation adoption" section for what each field means
+    /// and why the split exists.
+    ///
+    /// [`Self::elevation`] adopts `dest` unconditionally; [`Self::previous_elevation`]
+    /// adopts `dest` only when it is not [`super::collision::ELEVATION_TRANSITION`].
+    /// Both are left untouched if *either* `origin` or `dest` is
+    /// [`super::collision::ELEVATION_MULTI_LEVEL`] — upstream's own early
+    /// return, guarding the sentinel some multi-level bridge overlaps use
+    /// for "this cell doesn't have one well-defined elevation".
+    fn adopt_elevation(&mut self, origin: u8, dest: u8) {
+        if origin == super::collision::ELEVATION_MULTI_LEVEL
+            || dest == super::collision::ELEVATION_MULTI_LEVEL
+        {
+            return;
+        }
+        self.elevation = dest;
+        if dest != super::collision::ELEVATION_TRANSITION {
+            self.previous_elevation = dest;
         }
     }
 
@@ -247,6 +301,45 @@ impl PlayerState {
     ///   tile would be vacuous anyway. Wiring cross-map object events in
     ///   belongs with the rest of connection support (see
     ///   `crate::overworld`'s scope notes), not with this slice.
+    ///
+    /// # Elevation adoption
+    ///
+    /// [`Self::adopt_elevation`] is `ObjectEventUpdateElevation` in full:
+    /// [`Self::elevation`] (upstream `currentElevation`, what the collision
+    /// check above consults) adopts *every* arrival elevation, including the
+    /// `ELEVATION_TRANSITION` wildcard; [`Self::previous_elevation`]
+    /// (upstream `previousElevation`) only overwrites on a *non*-transition
+    /// arrival, so it retains the last "real" elevation across however many
+    /// transition tiles the avatar crosses in between. This is what a
+    /// renderer needs to select OAM priority/subsprite table correctly for
+    /// a raised tile that neighbours a transition wildcard — e.g. the
+    /// protagonist's bedroom bed (`LAYOUT_LITTLEROOT_TOWN_BRENDANS_HOUSE_2F`,
+    /// S-5 issue #218), whose raised elevation-4 edge tiles sit directly
+    /// against `ELEVATION_TRANSITION` (0) tiles on both the north and south
+    /// sides.
+    ///
+    /// **That bed is also this method's pin for issue #218's collision
+    /// claim.** The bed's authored cells (`x=0..2, y=4..6` in the room's own
+    /// local space) decode to a `0 → 4 → 0` run down each side column and a
+    /// `COLLISION_IMPASSABLE` center tile at `y=5` (pinned against the real
+    /// pack by `crates/pokeemerald-rs`'s
+    /// `bedroom_bed_side_column_is_walkable_and_retains_the_raised_previous_elevation`
+    /// real-pack test, which walks that exact column through
+    /// `OverworldPhase`). [`elevation_mismatch`] already matches
+    /// `IsElevationMismatchAt` field for field (checked directly against
+    /// `pokeemerald/src/event_object_movement.c:7707-7719`), and that
+    /// function's *only* parameter drawn from the mover is
+    /// `objectEvent->currentElevation` — never `previousElevation`. So the
+    /// current-vs-previous split this method adds does not, and must not,
+    /// change any step's collision outcome along that side column: every
+    /// step from the room's south doorway, up through the bed's raised
+    /// edge, and out its north side is `COLLISION_NONE` in both this port
+    /// and upstream alike, because both run the identical wildcard formula
+    /// against the identical authored data. The real, fixable divergence
+    /// this issue reports is what [`Self::previous_elevation`] now feeds —
+    /// the player OBJ's render priority (`avatar::priority_for_elevation` in
+    /// `pokeemerald-rs`) — not this method's collision gate, which upstream
+    /// never routes through `previousElevation` in the first place.
     pub fn step(
         &mut self,
         input: Option<Direction>,
@@ -304,16 +397,15 @@ impl PlayerState {
             }
 
             let from = self.position;
+            // Read before `self.position` moves: `adopt_elevation`'s
+            // `origin` argument is `ObjectEventUpdateElevation`'s own fresh
+            // `MapGridGetElevationAt(previousCoords)` read, not a cached
+            // field (see that method's doc).
+            let origin_elevation = runtime
+                .metatile_cell(from.0, from.1)
+                .map_or(self.elevation, |origin_cell| origin_cell.elevation);
             self.position = target;
-            // ObjectEventUpdateElevation (event_object_movement.c):
-            // `currentElevation` — the field the collision mismatch check
-            // consumes — adopts the arrival tile's elevation, including
-            // ELEVATION_TRANSITION (0). That 0 is the wildcard that lets
-            // the next step cross between levels (stairs/bridge landings).
-            // Only multi-level tiles are skipped, mirroring upstream.
-            if cell.elevation != super::collision::ELEVATION_MULTI_LEVEL {
-                self.elevation = cell.elevation;
-            }
+            self.adopt_elevation(origin_elevation, cell.elevation);
             self.transit_frames = Some(0);
             return StepOutcome::Advanced { from, to: target };
         }
@@ -340,10 +432,11 @@ impl PlayerState {
                 };
             }
 
+            let origin_elevation = runtime
+                .metatile_cell(self.position.0, self.position.1)
+                .map_or(self.elevation, |origin_cell| origin_cell.elevation);
             self.position = crossing.position;
-            if cell.elevation != super::collision::ELEVATION_MULTI_LEVEL {
-                self.elevation = cell.elevation;
-            }
+            self.adopt_elevation(origin_elevation, cell.elevation);
             self.transit_frames = Some(0);
             return StepOutcome::Crossed {
                 to_map: crossing.target,
@@ -902,12 +995,27 @@ mod tests {
         );
 
         let mut player = PlayerState::new((2, 1), 3, Direction::South);
+        assert_eq!(
+            player.previous_elevation(),
+            3,
+            "fixture precondition: a fresh player's previous_elevation starts \
+             equal to its spawn elevation, matching upstream's own spawn init"
+        );
         // Step onto the transition tile: allowed, elevation becomes the
         // wildcard 0.
         let onto_transition =
             player.step(Some(Direction::South), &runtime, &no_connections, &NO_FLAGS);
         assert!(matches!(onto_transition, StepOutcome::Advanced { .. }));
         assert_eq!(player.elevation(), 0);
+        // issue #218: `previousElevation` is *not* overwritten by a
+        // transition arrival -- it retains the last real elevation (3)
+        // across however many transition tiles the avatar crosses.
+        assert_eq!(
+            player.previous_elevation(),
+            3,
+            "previous_elevation must retain the last non-transition elevation \
+             while standing on the transition wildcard"
+        );
         for _ in 0..WALK_FRAMES_PER_TILE {
             player.tick();
         }
@@ -917,6 +1025,210 @@ mod tests {
         assert!(matches!(onto_upper, StepOutcome::Advanced { .. }));
         assert_eq!(player.position(), (2, 3));
         assert_eq!(player.elevation(), 5);
+        assert_eq!(
+            player.previous_elevation(),
+            5,
+            "landing on a real (non-transition) elevation updates \
+             previous_elevation too"
+        );
+    }
+
+    /// The exact bed-adjacent shape issue #218 reports: a raised elevation
+    /// sitting directly against the transition wildcard on *both* sides
+    /// (`3 → 0 → 4 → 0 → 3`), pinning that `previous_elevation` survives
+    /// two separate transition crossings without ever resetting to the
+    /// wildcard itself, and lands on the *second* real elevation (3) after
+    /// leaving the raised tile, not getting stuck on the first (4).
+    #[test]
+    fn previous_elevation_survives_a_raised_tile_flanked_by_transitions_on_both_sides() {
+        fn step_south(player: &mut PlayerState, runtime: &MapRuntime<'_>) {
+            let outcome = player.step(Some(Direction::South), runtime, &no_connections, &NO_FLAGS);
+            assert!(
+                matches!(outcome, StepOutcome::Advanced { .. }),
+                "every step down this column is collision-legal: {outcome:?}"
+            );
+            for _ in 0..WALK_FRAMES_PER_TILE {
+                player.tick();
+            }
+        }
+
+        let width = 5u16;
+        let height = 6u16;
+        let mut bytes = Vec::with_capacity(usize::from(width) * usize::from(height) * 2);
+        for y in 0..height {
+            for x in 0..width {
+                // Column x=2, north to south: 3 (y=1), 0 (y=2), 4 (y=3),
+                // 0 (y=4), 3 (y=5) -- the bed's own 0 -> 4 -> 0 shape.
+                let elevation = match (x, y) {
+                    (2, 2 | 4) => 0,
+                    (2, 3) => 4,
+                    _ => 3,
+                };
+                let raw = MetatileCell {
+                    metatile_id: 1,
+                    collision: 0,
+                    elevation,
+                }
+                .pack();
+                bytes.extend_from_slice(&raw.to_le_bytes());
+            }
+        }
+        let layout = assets::MapLayout {
+            id: assets::LayoutId("MAP_TEST"),
+            name: "MapTest",
+            width,
+            height,
+            primary_tileset: "gTileset_General",
+            secondary_tileset: "gTileset_General",
+        };
+        let grid = layout.grid(&bytes).unwrap();
+        let header = MapHeader {
+            id: assets::MapId("MAP_TEST"),
+            group: 0,
+            num: 0,
+            name: "MapTest",
+            layout: assets::LayoutId("MAP_TEST"),
+            music: assets::MusicId(0),
+            region_map_section: RegionMapSectionId("MAPSEC_NONE"),
+            requires_flash: false,
+            weather: Weather::None,
+            map_type: MapType::Route,
+            allow_bike: true,
+            allow_escape: true,
+            allow_run: true,
+            show_name: false,
+            battle_scene: BattleScene::Normal,
+            connections: &[] as &'static [MapConnection],
+        };
+        let events = MapEvents {
+            id: assets::MapId("MAP_TEST"),
+            shared_events_map: None,
+            object_events: &[],
+            warp_events: &[],
+            coord_events: &[],
+            bg_events: &[],
+        };
+        let runtime = MapRuntime::new(
+            assets::MapId("MAP_TEST"),
+            &header,
+            &events,
+            grid,
+            MetatileAttributeTable::new(&[]),
+            MetatileAttributeTable::new(&[]),
+        );
+
+        let mut player = PlayerState::new((2, 1), 3, Direction::South);
+
+        step_south(&mut player, &runtime); // (2,1) -> (2,2): onto the north transition tile.
+        assert_eq!((player.elevation(), player.previous_elevation()), (0, 3));
+
+        step_south(&mut player, &runtime); // (2,2) -> (2,3): onto the raised tile.
+        assert_eq!((player.elevation(), player.previous_elevation()), (4, 4));
+
+        step_south(&mut player, &runtime); // (2,3) -> (2,4): onto the south transition tile.
+        assert_eq!(
+            (player.elevation(), player.previous_elevation()),
+            (0, 4),
+            "previous_elevation must still read the raised tile's 4, not \
+             reset by standing on the wildcard"
+        );
+
+        step_south(&mut player, &runtime); // (2,4) -> (2,5): back onto ordinary elevation 3.
+        assert_eq!((player.elevation(), player.previous_elevation()), (3, 3));
+    }
+
+    /// `ObjectEventUpdateElevation`'s early return: a multi-level tile on
+    /// *either* side of a step (not just the destination) leaves both
+    /// elevation fields untouched. Before this fix, [`PlayerState::step`]
+    /// only ever checked the *destination* cell for
+    /// [`super::super::collision::ELEVATION_MULTI_LEVEL`], so a step off a
+    /// multi-level origin onto an ordinary tile would have wrongly adopted
+    /// that tile's elevation.
+    #[test]
+    fn a_multi_level_origin_tile_skips_the_elevation_update_even_though_the_destination_is_ordinary(
+    ) {
+        let width = 5u16;
+        let height = 5u16;
+        let mut bytes = Vec::with_capacity(usize::from(width) * usize::from(height) * 2);
+        for y in 0..height {
+            for x in 0..width {
+                // (2,2): multi-level (15), the tile the player starts on.
+                // (2,3): ordinary elevation 7, the step's destination.
+                let elevation = if (x, y) == (2, 2) {
+                    super::super::collision::ELEVATION_MULTI_LEVEL
+                } else {
+                    7
+                };
+                let raw = MetatileCell {
+                    metatile_id: 1,
+                    collision: 0,
+                    elevation,
+                }
+                .pack();
+                bytes.extend_from_slice(&raw.to_le_bytes());
+            }
+        }
+        let layout = assets::MapLayout {
+            id: assets::LayoutId("MAP_TEST"),
+            name: "MapTest",
+            width,
+            height,
+            primary_tileset: "gTileset_General",
+            secondary_tileset: "gTileset_General",
+        };
+        let grid = layout.grid(&bytes).unwrap();
+        let header = MapHeader {
+            id: assets::MapId("MAP_TEST"),
+            group: 0,
+            num: 0,
+            name: "MapTest",
+            layout: assets::LayoutId("MAP_TEST"),
+            music: assets::MusicId(0),
+            region_map_section: RegionMapSectionId("MAPSEC_NONE"),
+            requires_flash: false,
+            weather: Weather::None,
+            map_type: MapType::Route,
+            allow_bike: true,
+            allow_escape: true,
+            allow_run: true,
+            show_name: false,
+            battle_scene: BattleScene::Normal,
+            connections: &[] as &'static [MapConnection],
+        };
+        let events = MapEvents {
+            id: assets::MapId("MAP_TEST"),
+            shared_events_map: None,
+            object_events: &[],
+            warp_events: &[],
+            coord_events: &[],
+            bg_events: &[],
+        };
+        let runtime = MapRuntime::new(
+            assets::MapId("MAP_TEST"),
+            &header,
+            &events,
+            grid,
+            MetatileAttributeTable::new(&[]),
+            MetatileAttributeTable::new(&[]),
+        );
+
+        // Standing on the multi-level tile itself, at the transition
+        // wildcard (so the mismatch check ahead of adoption can never be
+        // what blocks this step, regardless of the destination's elevation).
+        let mut player = PlayerState::new((2, 2), 0, Direction::South);
+        let outcome = player.step(Some(Direction::South), &runtime, &no_connections, &NO_FLAGS);
+        assert!(
+            matches!(outcome, StepOutcome::Advanced { .. }),
+            "a multi-level tile is never itself a mismatch source: {outcome:?}"
+        );
+        assert_eq!(
+            (player.elevation(), player.previous_elevation()),
+            (0, 0),
+            "the origin tile's ELEVATION_MULTI_LEVEL must skip the whole \
+             adoption -- both fields stay exactly as they were before this \
+             step, even though the destination (7) is perfectly ordinary \
+             and would otherwise have been adopted into both"
+        );
     }
 
     #[test]

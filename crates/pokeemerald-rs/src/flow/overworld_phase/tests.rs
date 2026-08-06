@@ -2464,6 +2464,110 @@ fn the_spawn_bedroom_has_no_invisible_poke_ball_collider() {
     );
 }
 
+// -- The bedroom bed's elevation/layer mismatch (S-5, issue #218) -----------
+
+/// The issue #218 regression: the bedroom's bed sits at layout-local
+/// `x=0..2, y=4..6` with an authored `0 -> 4 -> 0` elevation run down each
+/// side column (`assets::MetatileCell::from_raw`'s decode of
+/// `pokeemerald/data/layouts/LittlerootTown_BrendansHouse_2F/map.bin`,
+/// cross-checked directly against the real pack here). Walking straight up
+/// the west column from the room's south wall, across the bed's raised
+/// edge, and out its north side is `COLLISION_NONE` at *every* step, in
+/// both this port and upstream: [`engine::overworld::elevation_mismatch`]
+/// is byte-for-byte upstream `IsElevationMismatchAt`
+/// (`event_object_movement.c:7707-7719`), and that function's only
+/// mover-side input is `currentElevation` -- never `previousElevation` --
+/// so the current-vs-previous split this issue also asks for cannot change
+/// this outcome (full derivation:
+/// `engine::overworld::player::PlayerState::step`'s "Elevation adoption"
+/// doc section). This test pins that finding against the *real* map, not
+/// just the shape of the rule in the abstract: the reported "avatar escapes
+/// through the bed's north side" must not be "fixed" by tightening the
+/// transition wildcard globally, which would also break the bedroom's own
+/// stair warp (issue #163) and every bridge/staircase landing built on the
+/// identical rule.
+///
+/// It also pins the other half of issue #218's ask directly: `previous_elevation`
+/// retains the bed's raised `4` across the transition tile on its far side
+/// rather than resetting to the wildcard -- the exact render-selection input
+/// `crate::overworld::avatar::priority_for_elevation` consumes (unit-tested
+/// there; this is the real-map source of the values it's fed).
+#[test]
+#[ignore = "needs a local pack: run `cargo xtask extract` first"]
+fn bedroom_bed_side_column_is_walkable_and_retains_the_raised_previous_elevation() {
+    let mut phase = OverworldPhase::load_default().expect("run `cargo xtask extract` first");
+    assert_eq!(
+        phase.map_id,
+        new_game::SPAWN_MAP_ID,
+        "fixture precondition: the spawn map is the bedroom carrying the bed"
+    );
+
+    // South of the bed, on open floor, already facing its west column.
+    phase.player = PlayerState::new((0, 7), 3, Direction::North);
+
+    // Each segment: the first `step` call of a fresh (non-transit) poll
+    // commits the tile move immediately (StepOutcome::Advanced sets
+    // position synchronously); the drain loop matches this module's other
+    // multi-tile real-pack walks (e.g. `taking_the_stairs_does_not_land_...`).
+    let walk_one_tile_north = |phase: &mut OverworldPhase| {
+        phase.step(held(Buttons::UP));
+        for _ in 1..WALK_FRAMES_PER_TILE {
+            phase.step(ButtonState::new());
+        }
+    };
+
+    // (0,7) -> (0,6): onto the bed's south-edge transition tile.
+    walk_one_tile_north(&mut phase);
+    assert_eq!(phase.player.position(), (0, 6));
+    assert_eq!(
+        (phase.player.elevation(), phase.player.previous_elevation()),
+        (0, 3),
+        "transition wildcard adopted into elevation; previous_elevation \
+         still reads the floor behind"
+    );
+
+    // (0,6) -> (0,5): onto the bed's raised elevation-4 edge itself --
+    // COLLISION_NONE, not COLLISION_ELEVATION_MISMATCH: the transition
+    // wildcard on the *mover's* side (elevation 0) is compatible with any
+    // destination.
+    walk_one_tile_north(&mut phase);
+    assert_eq!(phase.player.position(), (0, 5));
+    assert_eq!(
+        (phase.player.elevation(), phase.player.previous_elevation()),
+        (4, 4),
+        "the raised edge is real, non-transition elevation: both fields \
+         adopt it"
+    );
+
+    // (0,5) -> (0,4): onto the bed's north-edge transition tile -- again
+    // COLLISION_NONE: the *destination* being the wildcard is unconditionally
+    // compatible, regardless of the mover's concrete elevation (4).
+    walk_one_tile_north(&mut phase);
+    assert_eq!(phase.player.position(), (0, 4));
+    assert_eq!(
+        (phase.player.elevation(), phase.player.previous_elevation()),
+        (0, 4),
+        "previous_elevation must still read the raised edge's 4 while \
+         standing on the wildcard, not reset by it"
+    );
+
+    // (0,4) -> (0,3): out the bed's north side onto ordinary floor --
+    // COLLISION_NONE, matching upstream exactly (see this test's own doc
+    // comment for why this step is not, and must not become, the "fix").
+    walk_one_tile_north(&mut phase);
+    assert_eq!(
+        phase.player.position(),
+        (0, 3),
+        "the full side-column crossing succeeds in both this port and \
+         upstream -- the issue's reported divergence is a render defect \
+         (player OBJ priority), not a collision one"
+    );
+    assert_eq!(
+        (phase.player.elevation(), phase.player.previous_elevation()),
+        (3, 3)
+    );
+}
+
 /// The 1F half of the same regression, on the production path: after taking
 /// the stairs, the player's own house must not contain the *rival's* family
 /// -- no duplicated mother beside the real one, and no undrawn ninja-boy
