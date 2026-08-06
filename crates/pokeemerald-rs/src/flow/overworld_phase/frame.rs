@@ -1,11 +1,11 @@
 //! Dialog ticking and frame composition (module split of
-//! [`crate::flow::overworld_phase`], issue #210, `oop-boundaries`): the two
-//! places [`OverworldPhase::step`] hands a frame's *output* off
-//! to -- an open [`crate::overworld::NpcDialog`] getting its own input edge
-//! ([`OverworldPhase::advance_dialog_frame`]) -- and the one place a
-//! finished frame is actually drawn ([`OverworldPhase::compose_frame`]),
-//! [`crate::overworld::NpcDialog`] composited over the base scene when one
-//! is open.
+//! [`crate::flow::overworld_phase`], issue #210, `oop-boundaries`): an open
+//! [`crate::overworld::NpcDialog`] getting its own input edge
+//! ([`OverworldPhase::advance_dialog_frame`], called from
+//! [`OverworldPhase::step`]), and the one place a finished frame is
+//! actually drawn ([`OverworldPhase::compose_frame`], called by
+//! [`crate::flow`]'s scene dispatch), with the open dialog composited over
+//! the base scene.
 
 use platform::{ButtonState, Buttons, Frame};
 
