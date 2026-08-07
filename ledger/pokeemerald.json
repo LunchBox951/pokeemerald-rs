@@ -25721,6 +25721,18 @@
           "spec": "I-3",
           "status": "rewritten"
         },
+        "IsMetatileDirectionallyImpassable": {
+          "reason": "Rewritten as engine::overworld::collision::directionally_impassable (issue #218), wired into PlayerState::step at GetCollisionAtCoords' own position -- ||'d into the same COLLISION_IMPASSABLE arm as the grid collision bits (:4663), ahead of IsElevationMismatchAt. Both of upstream's function tables are modelled: gOppositeDirectionBlockedMetatileFuncs against the tile the mover stands on (same-direction predicate) and gDirectionBlockedMetatileFuncs against the destination (opposite-direction predicate), :893-905. The standing tile's behavior is re-read from the grid at the mover's position rather than cached in an objectEvent field, which ObjectEventUpdateMetatileBehaviors (:7428-7432) keeps equal to that same read. NOT modelled: the destination half across a map connection -- ConnectedMapData exposes decoded cells but not the neighbouring map's tileset attribute tables, so a connection landing tile reads as MB_NORMAL (no bundled map places an MB_IMPASSABLE_* tile on a connection edge); and this port only calls it for the player, since NPCs do not move.",
+          "rust_target": "crates/engine/src/overworld/collision.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
+        "ObjectEventUpdateElevation": {
+          "reason": "Current-vs-previous elevation split (issue #218): PlayerState::adopt_elevation reproduces the early-return-on-either-side-ELEVATION_MULTI_LEVEL guard and the unconditional currentElevation adopt / non-transition-only previousElevation adopt, called from both of PlayerState::step's arrival sites (same-map and connection-crossing). previousElevation now exposed as PlayerState::previous_elevation, feeding the player OBJ's elevation-driven render priority.",
+          "rust_target": "crates/engine/src/overworld/player.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
         "SetSpritePosToMapCoords": {
           "reason": "Player-OBJ screen-position derivation: for the player's own object event mapX/mapY == gSaveBlock1Ptr->pos always, collapsing this to a per-frame-constant OAM origin (PLAYER_OBJ_X/PLAYER_OBJ_Y); the camera/BG scrolls instead (viewport::build_tilemaps). Bike pan-ahead (the only thing that would move dx/dy away from 0) is out of v1 scope.",
           "rust_target": "crates/pokeemerald-rs/src/overworld/avatar.rs",
@@ -25739,10 +25751,28 @@
           "spec": "I-3",
           "status": "stubbed"
         },
+        "UpdateObjectEventElevationAndPriority": {
+          "reason": "sElevationToPriority transcribed as avatar::ELEVATION_TO_PRIORITY / priority_for_elevation, now driving BOTH the player OBJ's OAM priority (from PlayerState::previous_elevation) and every stationary NPC/object event's (from its template elevation, npc::oam_entries) -- replacing the fixed PLAYER_OBJ_PRIORITY both used to draw at. sElevationToSubspriteTableNum (:7733-7735) has no counterpart, and for 16x32 object events it costs nothing: its values index sOamTables_16x32 (object_event_subsprites.h:176-183) entries 1/2/0, which are a single full-size 16x32 subsprite at priority 2, a single full-size 16x32 at priority 1, and the empty table AddSubspritesToOamBuffer copies through as the plain OBJ at oam.priority -- exactly the values sElevationToPriority already gives, so one OBJ at priority_for_elevation's value is pixel-identical. The genuinely multi-piece tables are reached only by SetObjectEventSpriteOamTableForLongGrass (:7690-7705, table nums 4/5), an unported ground effect. Stubbed, not rewritten: the fixedPriority branch is NOT modelled -- the Rust render path unconditionally derives an elevation priority, so a fixed-priority object event would diverge once one is bundled. Also NOT modelled: subpriority (sElevationToSubpriority/SetObjectSubpriorityByElevation) and the grid re-derivation of an object's previousElevation on its first DoGroundEffects_OnSpawn pass (SceneSprites has no layout grid; see npc::oam_entries' comment for the one bundled object it would move, an unbound doll).",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/avatar.rs",
+          "spec": "S-5",
+          "status": "stubbed"
+        },
+        "gDirectionBlockedMetatileFuncs": {
+          "reason": "See gOppositeDirectionBlockedMetatileFuncs: same fold into collision::directionally_impassable. This table pairs each direction with the OPPOSITE predicate (north -> IsSouthBlocked, west -> IsEastBlocked, ...) and is applied to MapGridGetMetatileBehaviorAt(x, y), the destination tile (:4718).",
+          "rust_target": "crates/engine/src/overworld/collision.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
         "gInitialMovementTypeFacingDirections": {
           "reason": "Transcribed in full: engine::overworld::initial_facing_direction covers all 81 MOVEMENT_TYPE_* entries, mirroring InitObjectEventStateFromTemplate's initial-spawn-facing table. This port has no per-object movement-type task simulation yet (v1 scope: stationary + look-around only), so this is also the facing an object renders at forever, not just at spawn -- a MOVEMENT_TYPE_LOOK_AROUND/WANDER_* object's own random-turn cycling (MovementType_LookAround et al.) is not modelled.",
           "rust_target": "crates/engine/src/overworld/object_event.rs",
           "spec": "I-3",
+          "status": "rewritten"
+        },
+        "gOppositeDirectionBlockedMetatileFuncs": {
+          "reason": "The direction-to-predicate pairing is folded into collision::directionally_impassable's match rather than transcribed as a function-pointer array (no-verbatim; Rust has no DIR_* index to key on -- Direction is an enum). This table pairs each direction with its own predicate and is applied to objectEvent->currentMetatileBehavior, the tile the mover stands on (:4717); its sibling gDirectionBlockedMetatileFuncs supplies the opposite pairing for the destination. Both pairings are pinned by their own tests in collision.rs, since swapping them is the failure mode this table's name invites.",
+          "rust_target": "crates/engine/src/overworld/collision.rs",
+          "spec": "S-5",
           "status": "rewritten"
         }
       },
@@ -26518,6 +26548,12 @@
           "spec": "I-3",
           "status": "rewritten"
         },
+        "MetatileBehavior_IsEastBlocked": {
+          "reason": "Transcribed as metatile_behavior::is_east_blocked, id set complete against upstream's own || chain (MB_IMPASSABLE_EAST/_NORTHEAST/_SOUTHEAST/_WEST_AND_EAST plus MB_SECRET_BASE_BREAKABLE_DOOR (carried verbatim even though secret bases are out of scope, so the predicate is not narrower than upstream's)) and pinned exhaustively over the whole u8 space. Consumed by collision::directionally_impassable (issue #218) as the standing-tile predicate for an eastward move and the destination predicate for a westward one.",
+          "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
         "MetatileBehavior_IsLandWildEncounter": {
           "reason": "metatile_behavior.c:819-826. Fully modelled as is_land_wild_encounter, the gate StandardWildEncounter checks first on its land path. Upstream composes it from MetatileBehavior_IsEncounterTile (:135-142, TILE_FLAG_HAS_ENCOUNTERS) AND NOT MetatileBehavior_IsSurfableWaterOrUnderwater (:280-287, TILE_FLAG_SURFABLE), both indexing the ~200-entry sTileBitAttributes array (:9); re-expressed here as the derived id set rather than transcribing that array for one predicate -- exactly the eight ids flagged HAS_ENCOUNTERS without SURFABLE (MB_TALL_GRASS, MB_LONG_GRASS, MB_UNUSED_05, MB_DEEP_SAND, MB_CAVE, MB_INDOOR_ENCOUNTER, MB_ASHGRASS, MB_FOOTPRINTS; :12-20, :40-41), pinned by an exhaustive test over the whole u8 id space. The set is complete for the whole game, not a v1 subset. MetatileBehavior_IsWaterWildEncounter (:828-835) and the surfable half of the table are separately NOT modelled: surfing does not exist in this port, so a water encounter is unreachable and a predicate for it would be an untested claim.",
           "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
@@ -26536,10 +26572,22 @@
           "spec": "I-3",
           "status": "rewritten"
         },
+        "MetatileBehavior_IsNorthBlocked": {
+          "reason": "Transcribed as metatile_behavior::is_north_blocked, id set complete against upstream's own || chain (MB_IMPASSABLE_NORTH/_NORTHEAST/_NORTHWEST/_SOUTH_AND_NORTH) and pinned exhaustively over the whole u8 space. Consumed by collision::directionally_impassable (issue #218) as both the standing-tile predicate for a northward move and the destination predicate for a southward one.",
+          "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
+          "spec": "S-5",
+          "status": "rewritten"
+        },
         "MetatileBehavior_IsSouthArrowWarp": {
           "reason": "Now a direct, dedicated Rust counterpart: engine::overworld::metatile_behavior::is_south_arrow_warp (exact upstream id membership incl. the MB_WATER_SOUTH_ARROW_WARP/MB_SHOAL_CAVE_ENTRANCE aliases), consumed two ways -- engine::overworld::warp::is_arrow_warp_trigger for the warp-trigger path (upstream TryArrowWarp/IsArrowWarpMetatileBehavior, field_control_avatar.c:688-699/767-780; also field_player_avatar.c:226-232/294-300, overworld.c:2737) and warp_in_facing's match guard for the arrival-facing path (GetAdjustedInitialDirection, overworld.c:929-951). The trigger side landed under issue #174 (the Brendan's-house exit doormat).",
           "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
           "spec": "I-3",
+          "status": "rewritten"
+        },
+        "MetatileBehavior_IsSouthBlocked": {
+          "reason": "Transcribed as metatile_behavior::is_south_blocked, id set complete against upstream's own || chain (MB_IMPASSABLE_SOUTH/_SOUTHEAST/_SOUTHWEST/_SOUTH_AND_NORTH) and pinned exhaustively over the whole u8 space. Consumed by collision::directionally_impassable (issue #218) as the standing-tile predicate for a southward move and the destination predicate for a northward one.",
+          "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
+          "spec": "S-5",
           "status": "rewritten"
         },
         "MetatileBehavior_IsWarpDoor": {
@@ -26552,6 +26600,12 @@
           "reason": "Now a direct, dedicated Rust counterpart: engine::overworld::metatile_behavior::is_west_arrow_warp, consumed two ways -- engine::overworld::warp::is_arrow_warp_trigger for the warp-trigger path (upstream TryArrowWarp/IsArrowWarpMetatileBehavior, field_control_avatar.c:688-699/767-780; also field_player_avatar.c:226-232/294-300, overworld.c:2737) and warp_in_facing's match guard for the arrival-facing path (GetAdjustedInitialDirection, overworld.c:929-951). The trigger side landed under issue #174 (the Brendan's-house exit doormat).",
           "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
           "spec": "I-3",
+          "status": "rewritten"
+        },
+        "MetatileBehavior_IsWestBlocked": {
+          "reason": "Transcribed as metatile_behavior::is_west_blocked, id set complete against upstream's own || chain (MB_IMPASSABLE_WEST/_NORTHWEST/_SOUTHWEST/_WEST_AND_EAST plus MB_SECRET_BASE_BREAKABLE_DOOR (carried verbatim even though secret bases are out of scope, so the predicate is not narrower than upstream's)) and pinned exhaustively over the whole u8 space. Consumed by collision::directionally_impassable (issue #218) as the standing-tile predicate for a westward move and the destination predicate for an eastward one.",
+          "rust_target": "crates/engine/src/overworld/metatile_behavior.rs",
+          "spec": "S-5",
           "status": "rewritten"
         }
       },

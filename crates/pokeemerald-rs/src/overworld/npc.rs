@@ -494,7 +494,35 @@ pub(super) fn oam_entries(
                 false,
                 avatar::PLAYER_OBJ_SHAPE,
                 avatar::PLAYER_OBJ_SIZE,
-                avatar::PLAYER_OBJ_PRIORITY,
+                // An object event's OAM priority is elevation-derived
+                // upstream too, not a constant: spawning one seeds both
+                // elevation fields from the *template*
+                // (`event_object_movement.c:1313-1314`), and
+                // `UpdateObjectEventElevationAndPriority` (`:7737-7746`,
+                // the same function driving the player's --
+                // `avatar::priority_for_elevation`) then sets
+                // `oam.priority = sElevationToPriority[previousElevation]`.
+                // This port has no per-object movement simulation
+                // (`super`'s module docs), so an object's spawn-time
+                // elevation is its elevation forever.
+                //
+                // Residual gap, deliberate: upstream's first
+                // `DoGroundEffects_OnSpawn` pass runs
+                // `ObjectEventUpdateElevation` (`:7759-7771`) before reading
+                // the table, which overwrites `previousElevation` with the
+                // *map grid's* elevation under the object unless that cell
+                // is `ELEVATION_TRANSITION`/`ELEVATION_MULTI_LEVEL`. Only
+                // the template elevation is reachable here -- `SceneSprites`
+                // holds this room's object events, not its layout grid --
+                // so a template whose authored elevation disagrees with the
+                // tile beneath it would resolve one step off. Across every
+                // bundled map, exactly one object event both disagrees *and*
+                // would change priority (`MAP_LITTLEROOT_TOWN_MAYS_HOUSE_2F`'s
+                // `OBJ_EVENT_GFX_PICHU_DOLL`: template 4, grid 3), and it is
+                // one of the prop/doll graphics `resolve_sprite_source`
+                // doesn't bind, so nothing this module actually draws is
+                // affected today.
+                avatar::priority_for_elevation(event.elevation),
                 true,
             )
         })
@@ -988,6 +1016,50 @@ mod tests {
         assert_eq!(
             entry.tile_index(),
             avatar::FRAME_BLOCK_TILES + frame_west_stand * avatar::FRAME_TILES
+        );
+    }
+
+    /// An object event's OAM priority comes from its *own* elevation
+    /// (`sElevationToPriority[template->elevation]` -- see
+    /// [`oam_entries`]' own comment and
+    /// [`avatar::priority_for_elevation`]), not from a constant shared with
+    /// the player. A template on ordinary elevation-3 floor keeps the
+    /// default `2`; the same object authored on a raised elevation-4 tile
+    /// (upstream's counters, stair landings, and the props Littleroot's
+    /// TRUCKs and this bedroom's `VAR_5` doll sit on) draws one step in
+    /// front, at `1`.
+    #[test]
+    fn oam_entries_take_their_priority_from_the_templates_elevation() {
+        let data = EventData::new();
+        let mut bindings = HashMap::new();
+        bindings.insert(
+            "OBJ_EVENT_GFX_MOM",
+            SpriteBinding {
+                base_tile: avatar::FRAME_BLOCK_TILES,
+                palette_bank: NpcPaletteTag::Npc4.bank(),
+            },
+        );
+        let player = PlayerState::new((2, 6), 3, Direction::South);
+
+        let flat = object("OBJ_EVENT_GFX_MOM", 2, 6, MovementType::FaceDown);
+        assert_eq!(flat.elevation, 3, "fixture precondition: ordinary floor");
+        let flat: &'static [ObjectEvent] = Box::leak(Box::new([flat]));
+        assert_eq!(
+            oam_entries(flat, &bindings, &player, &data)[0].priority(),
+            avatar::PLAYER_OBJ_PRIORITY,
+        );
+
+        let raised = {
+            let mut o = object("OBJ_EVENT_GFX_MOM", 2, 6, MovementType::FaceDown);
+            o.elevation = 4;
+            o
+        };
+        let raised: &'static [ObjectEvent] = Box::leak(Box::new([raised]));
+        assert_eq!(
+            oam_entries(raised, &bindings, &player, &data)[0].priority(),
+            1,
+            "sElevationToPriority[4] == 1 -- a raised object must not draw \
+             at the flat default"
         );
     }
 

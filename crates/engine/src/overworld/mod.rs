@@ -19,10 +19,13 @@
 //!   header/events/layout-grid/tileset-attribute data together for tile
 //!   lookup, event lookup, and connection-edge crossing.
 //! - [`collision`] — the passable/impassable/elevation-mismatch
-//!   classification a step checks against.
+//!   classification a step checks against, including behavior-driven
+//!   directional impassability ([`collision::directionally_impassable`],
+//!   issue #218).
 //! - [`metatile_behavior`] — the small, deliberately incomplete subset of
-//!   upstream `MB_*` behavior ids/predicates this slice ports (doors), with
-//!   an explicit fail-closed policy for everything it doesn't.
+//!   upstream `MB_*` behavior ids/predicates this slice ports (doors, arrow
+//!   warps, land encounters, and the `MB_IMPASSABLE_*` directional family),
+//!   with an explicit fail-closed policy for everything it doesn't.
 //! - [`warp`] — resolving a [`assets::WarpEvent`] into a typed
 //!   destination-map-and-warp-id transition, plus the arrival position and
 //!   facing that transition lands on.
@@ -41,16 +44,15 @@
 //!
 //! In scope: a single on-foot player avatar's tile position, facing, walk
 //! pacing, collision against static map geometry (grid collision bits +
-//! elevation) and against visible, stationary object events,
-//! map-connection crossing, warp triggering, and the facing-tile
-//! interactive-object lookup.
+//! elevation + the `MB_IMPASSABLE_*` behaviors'
+//! `IsMetatileDirectionallyImpassable` one-sided walls) and against visible,
+//! stationary object events, map-connection crossing, warp triggering, and
+//! the facing-tile interactive-object lookup.
 //!
 //! Out of scope (tracked as future overworld slices, not silently
 //! approximated): rendering/camera, NPC/object-event *movement* and AI,
 //! script binding of any kind, the bike and running, forced movement (currents,
-//! conveyor slopes, ice sliding), ledges, directional metatile impassability
-//! (`IsMetatileDirectionallyImpassable` — one-way rails and the like, absent
-//! from the v1 path), and every `MB_*` behavior this
+//! conveyor slopes, ice sliding), ledges, and every `MB_*` behavior this
 //! module doesn't explicitly name. Where an unported behavior could
 //! otherwise be silently treated as passable/normal, this crate fails
 //! closed instead (denies the action) rather than guessing — see
@@ -66,7 +68,10 @@ pub mod player;
 pub mod warp;
 pub mod wild_encounter;
 
-pub use collision::{elevation_mismatch, Collision, ELEVATION_MULTI_LEVEL, ELEVATION_TRANSITION};
+pub use collision::{
+    directionally_impassable, elevation_mismatch, Collision, ELEVATION_MULTI_LEVEL,
+    ELEVATION_TRANSITION,
+};
 pub use direction::Direction;
 pub use map_runtime::{ConnectedMapData, ConnectionCrossing, MapRuntime, NUM_METATILES_IN_PRIMARY};
 pub use object_event::{
