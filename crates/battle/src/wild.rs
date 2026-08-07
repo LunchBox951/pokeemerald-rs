@@ -40,6 +40,13 @@
 //! [`crate::nature::Nature::ALL`]'s length `25` within its full period, so
 //! the loop always terminates for a real generator; it is not artificially
 //! bounded here, matching upstream having no bound either.
+//!
+//! [`build_pokemon_with_random_personality`] (issue #221) is the module's
+//! second construction path, for a mon `CreateMon` builds with
+//! `hasFixedPersonality == FALSE` directly rather than through
+//! `CreateWildMon`/`CreateMonWithNature`'s nature-first sequence above — the
+//! scripted `BATTLE_TYPE_FIRST_BATTLE` Zigzagoon is the only caller today.
+//! Its own doc comment has the exact draw-order difference.
 
 use assets::{LevelUpLearnsets, MoveId, SpeciesId};
 
@@ -212,11 +219,49 @@ pub fn build_wild_pokemon(
     BattlePokemon::new(dex, species, level, ivs, personality, moves)
 }
 
+/// `CreateMon`'s free-nature personality path
+/// (`pokeemerald/src/pokemon.c:2206`-`:2296`, the `hasFixedPersonality ==
+/// FALSE` branch of `CreateBoxMon`): personality is a single unconditional
+/// `Random32()` draw, with no forced nature ahead of it and therefore no
+/// [`roll_personality_for_nature`]-style rejection loop. IVs still come from
+/// the same `USE_RANDOM_IVS` two-draw path as [`build_wild_pokemon`]
+/// ([`roll_ivs`], reused rather than reimplemented `(no-verbatim)`).
+///
+/// Distinct from [`build_wild_pokemon`]'s `CreateMonWithNature` path
+/// (`PickWildMonNature` then a nature-matching rejection loop): upstream
+/// itself uses two different construction functions for these two cases —
+/// a wild encounter forces a nature ahead of personality; a mon built
+/// through plain `CreateMon` (nothing wild-table-specific about it) does
+/// not. The scripted `BATTLE_TYPE_FIRST_BATTLE` Zigzagoon is built this way
+/// (`SetUpBattleVarsAndBirchZigzagoon`, `pokeemerald/src/battle_controllers.c:69`,
+/// issue #221) — `CreateMon(&gEnemyParty[0], SPECIES_ZIGZAGOON, 2,
+/// USE_RANDOM_IVS, 0, 0, OT_ID_PLAYER_ID, 0)` — but nothing here is
+/// Zigzagoon-specific, so species/level/moves stay the caller's, the same
+/// division of labour [`build_wild_pokemon`] follows
+/// (`crates/pokeemerald-rs/src/flow/first_battle.rs` supplies them).
+///
+/// # Errors
+///
+/// See [`build_wild_pokemon`] — the same pre-draw validation over the same
+/// error set.
+pub fn build_pokemon_with_random_personality(
+    dex: &Dex,
+    species: SpeciesId,
+    level: u8,
+    moves: Vec<MoveId>,
+    rng: &mut impl BattleRng,
+) -> Result<BattlePokemon, BattleError> {
+    BattlePokemon::validate(dex, species, level, &moves)?;
+    let personality = rng.next_u32();
+    let ivs = roll_ivs(rng);
+    BattlePokemon::new(dex, species, level, ivs, personality, moves)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        build_wild_pokemon, ensure_wild_startable, initial_moveset, roll_ivs, roll_nature,
-        roll_personality_for_nature,
+        build_pokemon_with_random_personality, build_wild_pokemon, ensure_wild_startable,
+        initial_moveset, roll_ivs, roll_nature, roll_personality_for_nature,
     };
     use crate::damage::BattleRng;
     use crate::dex::Dex;
@@ -379,6 +424,65 @@ mod tests {
             let mut rng = SequenceRng::new([]);
             assert_eq!(
                 build_wild_pokemon(&dex, SpeciesId(1), level, moves, &mut rng),
+                Err(expected)
+            );
+            assert_eq!(rng.draws(), 0, "a rejected request must not draw");
+        }
+    }
+
+    #[test]
+    fn build_pokemon_with_random_personality_draws_only_personality_then_ivs() {
+        let dex = Dex::new();
+        // Personality (low then high half): (1, 0) -> 1 -- whatever nature
+        // `1 % 25` (Lonely) implies, taken as-is with no rejection loop
+        // reading it back. IVs: 0x001F -> hp 31/attack 0/defense 0, then
+        // 0x03E0 -> speed 0/sp_attack 31/sp_defense 0 (same split as
+        // `build_wild_pokemon`'s equivalent pin).
+        let mut rng = SequenceRng::new([1, 0, 0x001F, 0x03E0]);
+        let mon = build_pokemon_with_random_personality(
+            &dex,
+            SpeciesId(1), // Bulbasaur
+            5,
+            vec![MoveId(33)], // Tackle
+            &mut rng,
+        )
+        .unwrap();
+        assert_eq!(
+            mon.personality(),
+            1,
+            "no forced nature means no rejection loop to consume extra draws"
+        );
+        assert_eq!(mon.ivs().hp, 31);
+        assert_eq!(mon.ivs().attack, 0);
+        assert_eq!(mon.ivs().defense, 0);
+        assert_eq!(mon.ivs().speed, 0);
+        assert_eq!(mon.ivs().sp_attack, 31);
+        assert_eq!(mon.ivs().sp_defense, 0);
+        assert_eq!(
+            rng.draws(),
+            4,
+            "exactly one Random32 (2 draws) plus roll_ivs's 2 draws -- never more, since \
+             there is no nature to match"
+        );
+    }
+
+    #[test]
+    fn build_pokemon_with_random_personality_rejects_bad_inputs_before_drawing_anything() {
+        let dex = Dex::new();
+        for (level, moves, expected) in [
+            (101, vec![MoveId(33)], BattleError::InvalidLevel(101)),
+            (0, vec![MoveId(33)], BattleError::InvalidLevel(0)),
+            (5, vec![], BattleError::InvalidMoveCount(0)),
+            (5, vec![MOVE_NONE], BattleError::PlaceholderMove(0)),
+            (
+                5,
+                vec![MoveId(60_000)],
+                BattleError::UnknownMove(MoveId(60_000)),
+            ),
+        ] {
+            let mut rng = SequenceRng::new([]);
+            assert_eq!(
+                build_pokemon_with_random_personality(&dex, SpeciesId(1), level, moves, &mut rng),
                 Err(expected)
             );
             assert_eq!(rng.draws(), 0, "a rejected request must not draw");

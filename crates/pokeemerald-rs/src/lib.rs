@@ -28,6 +28,17 @@
 //! rolls a wild encounter on every completed step (I-4, issue #169); the
 //! handoff from a rolled species/level to a real `battle::Battle` lives in
 //! `flow::wild_encounter`, headless for now — there is no battle scene yet.
+//!
+//! [`start_first_battle`]/[`advance_first_battle`] (`flow::first_battle`,
+//! issue #221) are the scripted `BATTLE_TYPE_FIRST_BATTLE` Zigzagoon fight's
+//! own construction and headless driver — see that module's docs for the
+//! full account, including what upstream trigger this slice does not reach
+//! it through yet (no script engine). Re-exported at the crate root, the
+//! same way [`App::new_headless`] is, for exactly the same reason (module
+//! docs above): nothing in `App`'s own real game-flow state machine calls
+//! it today, so a headless `xtask` scenario or a future script-engine
+//! hookup is this slice's only caller, in-process rather than through the
+//! compiled binary.
 
 pub mod app;
 mod flow;
@@ -41,6 +52,10 @@ mod textbox;
 pub mod title;
 
 pub use app::App;
+pub use flow::first_battle::{
+    advance_first_battle, start_first_battle, FIRST_BATTLE_OPPONENT_LEVEL,
+    FIRST_BATTLE_OPPONENT_SPECIES,
+};
 
 /// Real-pack pinning tests for extraction pipelines that don't yet have a
 /// runtime consumer of their own in this crate (currently just
