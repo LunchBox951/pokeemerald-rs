@@ -166,12 +166,14 @@ fn first_battle_ai_never_picks_a_spent_move_slot() {
         enemy.deduct_pp(0).unwrap();
     }
 
-    // The tie-break draw is a large value: with only one usable slot,
-    // `999 % 1 == 0` always selects it regardless of the value -- unlike
-    // the ordinary rejection loop, this path is PP-aware *before* the draw,
-    // so it can never land on the spent Tackle slot the way a plain wild
-    // mon's redraw loop (which ignores PP) could.
-    let mut rng = SequenceRng::new([0, 0, 0, 0, 0, 0, 999, 0, 0]);
+    // The tie-break draw is deliberately an *even* value: with the PP
+    // screen in place there is one usable slot and `998 % 1 == 0` selects
+    // Growl, but if the screen were dropped both slots would be candidates
+    // and `998 % 2 == 0` would land on the spent Tackle slot -- so this
+    // draw value actually distinguishes the PP-aware pre-draw filter from
+    // a plain wild mon's PP-ignoring redraw loop (an odd value like 999
+    // would pick Growl either way and pin nothing).
+    let mut rng = SequenceRng::new([0, 0, 0, 0, 0, 0, 998, 0, 0]);
     let mut battle = Battle::new(dex, player, enemy, true, &mut rng).unwrap();
     let events = battle
         .take_turn(PlayerAction::UseMove(0), &mut rng)

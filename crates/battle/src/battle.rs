@@ -18,7 +18,7 @@
 //!    move (`turnOrderId = 5` early-out — the non-link branch's
 //!    `gChosenActionByBattler[0] == B_ACTION_RUN` test at
 //!    `battle_main.c:4784`-`:4794`, then the reordering block guarded by
-//!    `if (turnOrderId == 5)` at `:4797`; `:4778` is the link-battle variant,
+//!    `if (turnOrderId == 5)` at `:4797`; `:4776` is the link-battle variant,
 //!    which this slice does not model): success ends the battle immediately;
 //!    failure burns the player's turn and the opponent still acts. In a
 //!    `first_battle` ([`Battle::new`]), Run is rejected outright before this

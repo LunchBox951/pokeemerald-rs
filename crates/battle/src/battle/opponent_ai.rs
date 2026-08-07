@@ -125,8 +125,8 @@ pub(crate) const FIRST_BATTLE_FLEE_HP_PERCENT: u32 = 20;
 /// `battle_controller_opponent.c:1563`), narrowed to exactly what
 /// `AI_SCRIPT_FIRST_BATTLE` (`assets::trainers::AiFlags::FIRST_BATTLE`,
 /// bit 31) can produce — the *only* aiFlags bit this battle type ever
-/// sets (`BattleAI_SetupAIData`, `battle_ai_script_commands.c:311`-
-/// `:338`), so this is the complete algorithm for this battle type, not
+/// sets (`BattleAI_SetupAIData`, `battle_ai_script_commands.c:312`-
+/// `:341`), so this is the complete algorithm for this battle type, not
 /// a narrowed one:
 ///
 /// 1. `AreAllMovesUnusable` (`battle_util.c:1125`, checked at
@@ -138,7 +138,7 @@ pub(crate) const FIRST_BATTLE_FLEE_HP_PERCENT: u32 = 20;
 ///    move slot's score at 100 (a spent slot's score is zeroed by
 ///    `CheckMoveLimitations`, no RNG involved) and then *unconditionally*
 ///    draws `Random()` **four** times filling `simulatedRNG[0..4]`
-///    (`100 - (Random() % 16)`, `:338`) — read only by AI scripts this
+///    (`100 - (Random() % 16)`, `:341`) — read only by AI scripts this
 ///    battle type never runs (`AI_TryToFaint`/`AI_HPAware`), so the
 ///    values themselves go unused, but the draws still happen and still
 ///    cost RNG stream position `(behavioral-fidelity)`.
@@ -314,9 +314,12 @@ mod tests {
         }
         let player = mon(1, 50, vec![MoveId(33)]); // full HP: no flee
 
-        // 4 discarded simulatedRNG draws, then a large tie-break value:
-        // with only Growl usable, `999 % 1 == 0` always selects it.
-        let mut rng = SequenceRng::new([0, 0, 0, 0, 999]);
+        // 4 discarded simulatedRNG draws, then a deliberately *even*
+        // tie-break value: with the PP screen, only Growl is a candidate
+        // (`998 % 1 == 0`); without it, both slots would be and
+        // `998 % 2 == 0` would select the spent Tackle -- so this value
+        // fails if the screen is ever dropped (999 would pass either way).
+        let mut rng = SequenceRng::new([0, 0, 0, 0, 998]);
         assert_eq!(
             choose_enemy_action_first_battle(&enemy, &player, &mut rng),
             EnemyAction::Move(1),
