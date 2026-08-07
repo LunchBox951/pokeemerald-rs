@@ -33,12 +33,12 @@
 //! issue #221) are the scripted `BATTLE_TYPE_FIRST_BATTLE` Zigzagoon fight's
 //! own construction and headless driver — see that module's docs for the
 //! full account, including what upstream trigger this slice does not reach
-//! it through yet (no script engine). Re-exported at the crate root, the
-//! same way [`App::new_headless`] is, for exactly the same reason (module
-//! docs above): nothing in `App`'s own real game-flow state machine calls
-//! it today, so a headless `xtask` scenario or a future script-engine
-//! hookup is this slice's only caller, in-process rather than through the
-//! compiled binary.
+//! it through yet (no script engine). They are re-exported at the crate root
+//! **ahead of** any caller: as of this slice nothing calls either of them
+//! outside `flow::first_battle`'s own unit tests — not `App`'s game-flow
+//! state machine, not `xtask`. The intended caller is a future script-engine
+//! hookup (or a headless `xtask` scenario standing in for one), and it will
+//! need them reachable from outside this crate when it arrives.
 
 pub mod app;
 mod flow;

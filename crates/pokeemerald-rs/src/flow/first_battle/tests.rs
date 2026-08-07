@@ -154,6 +154,54 @@ fn advance_first_battle_plays_to_a_terminal_outcome_without_ever_running() {
     );
 }
 
+/// The abort contract [`advance_first_battle`]'s doc comment spells out, and
+/// the reason it needs spelling out: unlike the Run driver's, this driver's
+/// [`PlayerAction::UseMove`] policy spends PP, so a lead that reaches the
+/// battle with slot 0 already drained fails `Battle::take_turn`'s *pre-draw*
+/// validation with [`BattleError::NoPpRemaining`]`(0)` -- a genuinely
+/// reachable error arm, not a defensive one. On that frame the driver empties
+/// the slot, writes the lead back (drained PP included), and returns `None`
+/// -- indistinguishable from an ongoing turn by the return value alone, which
+/// is exactly why a caller looping for `Some(outcome)` must watch `slot` too.
+#[test]
+fn advance_first_battle_aborts_and_writes_back_when_the_lead_has_no_pp() {
+    let mut rng = Rng::new(1);
+    let mut lead = player_mon(277, 50, vec![POUND]);
+    // Drain slot 0 the way turns would have, rather than reaching in: `Pound`
+    // starts at its dex PP, and `deduct_pp` is the same accessor the turn
+    // engine spends it through.
+    let starting_pp = lead.moves()[0].pp;
+    assert!(starting_pp > 0, "a freshly built mon starts with PP");
+    for _ in 0..starting_pp {
+        lead.deduct_pp(0)
+            .expect("draining a slot that still has PP");
+    }
+    assert_eq!(lead.moves()[0].pp, 0);
+
+    let battle = start_first_battle(lead, &mut rng).expect("construction must succeed");
+    let mut slot = Some(battle);
+    let mut written_back: Option<BattlePokemon> = None;
+
+    let outcome = advance_first_battle(&mut slot, &mut written_back, &mut rng);
+
+    assert!(
+        outcome.is_none(),
+        "an aborted turn reports no outcome -- the engine never produced one: {outcome:?}"
+    );
+    assert!(
+        slot.is_none(),
+        "the abort arm must empty the slot, or the caller loops forever on a dead battle"
+    );
+    let lead = written_back.expect("the lead is written back on the abort frame too");
+    assert_eq!(lead.species(), SpeciesId(277));
+    assert_eq!(
+        lead.moves()[0].pp,
+        0,
+        "the drained PP persists into the overworld copy"
+    );
+    assert_eq!(lead.stages(), battle::StatStages::default());
+}
+
 /// `advance_first_battle` is a no-op on an empty slot -- the same guard
 /// `wild_encounter::advance_wild_battle` gives the per-frame caller.
 #[test]

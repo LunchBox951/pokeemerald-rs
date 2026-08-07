@@ -67,11 +67,32 @@
 //! [`battle::build_wild_pokemon`]'s nature-forced path; see that function's
 //! docs for exactly why `CreateMon`'s draw order differs from
 //! `CreateWildMon`'s), then [`battle::Battle::new`]'s turn-number draw (and
-//! its conditional speed-tie draw). That is upstream's own order too:
-//! `SetUpBattleVarsAndBirchZigzagoon` (`:684`) runs before `BeginBattleIntro`
-//! reaches `BattleStartClearSetData`'s `gRandomTurnNumber = Random()`
-//! (`battle_main.c:3140`, `:3019` calls it) — construction draws first, the
-//! turn-number draw after, exactly as [`start_first_battle`] orders them.
+//! its conditional speed-tie draw).
+//!
+//! The *order* is upstream's own: `SetUpBattleVarsAndBirchZigzagoon`
+//! (`battle_main.c:684`) runs before `BeginBattleIntro` reaches
+//! `BattleStartClearSetData`'s `gRandomTurnNumber = Random()`
+//! (`battle_main.c:3140`, called from `:3021`) — construction draws first,
+//! the turn-number draw after, exactly as [`start_first_battle`] orders
+//! them.
+//!
+//! The *count* is one short of upstream's, and knowingly so.
+//! `CB2_InitBattleInternal` interposes `SetWildMonHeldItem`
+//! (`battle_main.c:700`) between those two, and its `u16 rnd = Random() %
+//! 100` (`src/pokemon.c:6682`) is gated only on `!(gBattleTypeFlags &
+//! (LEGENDARY | TRAINER | PYRAMID | PIKE))` — a gate
+//! `BATTLE_TYPE_FIRST_BATTLE` passes, since `CB2_StartFirstBattle` sets that
+//! flag *alone* (`src/battle_setup.c:937`). Upstream therefore spends six
+//! draws reaching turn one (personality 2 + IVs 2 + held item 1 + turn
+//! number 1) where this port spends five. Held items are unmodelled here
+//! outright — [`battle::BattlePokemon`] has no such field, so there is no
+//! value for that draw to produce — and the gap is neither new to this
+//! battle type nor this slice's to close: an ordinary wild encounter skips
+//! exactly the same draw, `DoStandardWildBattle` setting `gBattleTypeFlags =
+//! 0` (`src/battle_setup.c:408`) so the same gate passes there too (see
+//! [`crate::flow::wild_encounter::start_wild_battle`]). It is enumerated as
+//! NOT-modelled on the `src/battle_setup.c#CB2_StartFirstBattle` ledger
+//! entry rather than papered over.
 
 use battle::{Battle, BattleError, BattleOutcome, BattlePokemon, Dex, PlayerAction, StatStages};
 use engine::rng::Rng;
@@ -79,11 +100,11 @@ use engine::rng::Rng;
 use super::wild_encounter::SharedRng;
 
 /// `SPECIES_ZIGZAGOON` (`include/constants/species.h`) — Emerald's scripted
-/// first-battle opponent (`pokeemerald/src/battle_controllers.c:69`), not
+/// first-battle opponent (`pokeemerald/src/battle_controllers.c:70`), not
 /// R/S's Poochyena.
 pub const FIRST_BATTLE_OPPONENT_SPECIES: assets::SpeciesId = assets::SpeciesId(288);
 
-/// The scripted opponent's fixed level (`battle_controllers.c:69`).
+/// The scripted opponent's fixed level (`battle_controllers.c:70`).
 pub const FIRST_BATTLE_OPPONENT_LEVEL: u8 = 2;
 
 /// Build the scripted `BATTLE_TYPE_FIRST_BATTLE` opponent and start the
@@ -126,14 +147,41 @@ pub fn start_first_battle(
 /// Play one turn of the in-progress first battle in `slot`, headlessly
 /// (module docs). A no-op if `slot` is empty.
 ///
-/// Mirrors `crate::flow::wild_encounter::advance_wild_battle`'s shape
-/// exactly (turn, write-back, neutral stat-stage reset, error-ends-the-
-/// battle-too) with one deliberate difference: the action chosen every turn
-/// is [`PlayerAction::UseMove`]`(0)`, never [`PlayerAction::Run`], because
+/// Mirrors `crate::flow::wild_encounter::advance_wild_battle`'s shape (turn,
+/// write-back, neutral stat-stage reset, error-ends-the-battle-too) with one
+/// deliberate difference: the action chosen every turn is
+/// [`PlayerAction::UseMove`]`(0)`, never [`PlayerAction::Run`], because
 /// `first_battle` makes running an instant [`BattleError::RunForbidden`]
-/// rather than a legal (if often futile) attempt (module docs). See
-/// `advance_wild_battle`'s own doc comment for the write-back and
-/// stat-stage-reset rationale — it is identical here.
+/// rather than a legal (if often futile) attempt (module docs).
+///
+/// The stat-stage reset is `advance_wild_battle`'s verbatim — stat stages
+/// live in `gBattleMons[].statStages` only and never reach the party struct;
+/// see that function's doc comment for the citations. The **unconditional**
+/// write-back is shaped the same but justified differently: for an ordinary
+/// wild battle it is a knowing deviation (upstream white-outs and heals on a
+/// loss), while here it is upstream's own behaviour. `CB2_EndFirstBattle`
+/// (`pokeemerald/src/battle_setup.c:950`-`:954`) runs
+/// `Overworld_ClearSavedMusic` and goes straight to
+/// `CB2_ReturnToFieldContinueScriptPlayMapMusic` with no `IsPlayerDefeated`
+/// branch at all, unlike `CB2_EndWildBattle` (`:602`-`:616`) — losing the
+/// scripted Zigzagoon fight really does leave the player standing on Route
+/// 101 with a fainted lead, so writing one back is fidelity, not a gap.
+///
+/// Choosing a move instead of running has one consequence the Run driver
+/// does not: [`PlayerAction::UseMove`] **spends PP**, and this driver
+/// persists it (the write-back copies the battle's player mon, PP included).
+/// The error arm is therefore genuinely reachable here rather than merely
+/// defensive — a lead whose slot 0 has been drained to zero PP fails
+/// [`Battle::take_turn`]'s pre-draw validation with
+/// [`BattleError::NoPpRemaining`]`(0)`, and a wild side with every slot spent
+/// forces Struggle, whose effect this slice cannot execute
+/// ([`BattleError::UnsupportedMoveEffect`]). Neither is survivable without an
+/// action menu to choose differently with, so either ends the battle: the
+/// error is logged, the mon is still written back (drained PP and all),
+/// `slot` is emptied, and `None` is returned rather than an outcome the
+/// engine never reported. A caller looping until `Some(outcome)` cannot tell
+/// that abort from an ordinary ongoing turn by the return value alone and
+/// must check `slot` as well — this module's tests pin exactly that contract.
 pub fn advance_first_battle(
     slot: &mut Option<Battle>,
     lead: &mut Option<BattlePokemon>,

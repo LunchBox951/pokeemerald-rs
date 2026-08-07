@@ -99,10 +99,11 @@ use engine::rng::Rng;
 /// lockstep — but `next_u32` is forwarded explicitly anyway so a future
 /// change to either default cannot silently desynchronise them.
 ///
-/// The type stays private to this module; [`SharedRng::new`] is
-/// `pub(super)` so [`crate::flow::first_battle`] (issue #221) can borrow the
-/// same adapter for its own construction/driver pair without a second
-/// newtype duplicating this one's `BattleRng` impl.
+/// The type stays inside `crate::flow` — it is `pub(super)`, not `pub`, so
+/// no crate-external caller can hold one — and [`SharedRng::new`] is
+/// `pub(super)` for the same reach, so [`crate::flow::first_battle`] (issue
+/// #221) can borrow the same adapter for its own construction/driver pair
+/// without a second newtype duplicating this one's `BattleRng` impl.
 pub(super) struct SharedRng<'a>(&'a mut Rng);
 
 impl<'a> SharedRng<'a> {
@@ -324,6 +325,21 @@ pub(super) fn lead_can_fight(lead: Option<&BattlePokemon>) -> bool {
 /// `GiveBoxMonInitialMoveset`, which draws nothing — so a Route 101 Wurmple
 /// really knows Tackle and String Shot.
 ///
+/// The order is upstream's; the *count* is one short of it. Between those
+/// two, `CB2_InitBattleInternal` calls `SetWildMonHeldItem`
+/// (`src/battle_main.c:700`), whose `u16 rnd = Random() % 100`
+/// (`src/pokemon.c:6682`) is gated only on `!(gBattleTypeFlags & (LEGENDARY |
+/// TRAINER | PYRAMID | PIKE))` — and `DoStandardWildBattle` sets
+/// `gBattleTypeFlags = 0` (`src/battle_setup.c:408`), so the gate passes and
+/// upstream draws it. This port models no held items at all
+/// ([`battle::BattlePokemon`] has no such field), so that draw produces
+/// nothing here and is simply absent: from the turn-number draw onward this
+/// handoff has consumed one fewer value than upstream would have. The gap is
+/// pre-existing and uniform — [`crate::flow::first_battle`]'s scripted fight
+/// skips the identical draw for the identical reason (its module docs' "RNG
+/// stream" section), and it is enumerated as NOT-modelled on the
+/// `src/battle_setup.c#CB2_StartFirstBattle` ledger entry.
+///
 /// # Errors
 ///
 /// Whatever [`battle::build_wild_pokemon`] or [`battle::Battle::new`]
@@ -344,7 +360,7 @@ pub(super) fn start_wild_battle(
         encounter.species,
         encounter.level,
         moves,
-        &mut SharedRng(rng),
+        &mut SharedRng::new(rng),
     )?;
     // `false`: this handoff is #169's ongoing Route 101 grass encounter, not
     // the scripted intro Zigzagoon fight -- see issue #187's module docs on
@@ -359,7 +375,7 @@ pub(super) fn start_wild_battle(
     // `first_battle = true` would break -- exactly why
     // `crate::flow::first_battle` needs its own driver rather than reusing
     // this one.
-    Battle::new(dex, player_lead, wild, false, &mut SharedRng(rng))
+    Battle::new(dex, player_lead, wild, false, &mut SharedRng::new(rng))
 }
 
 /// Play one turn of the in-progress wild battle in `slot`, headlessly
@@ -397,7 +413,7 @@ pub(super) fn advance_wild_battle(
     rng: &mut Rng,
 ) -> Option<BattleOutcome> {
     let battle = slot.as_mut()?;
-    let failed = match battle.take_turn(PlayerAction::Run, &mut SharedRng(rng)) {
+    let failed = match battle.take_turn(PlayerAction::Run, &mut SharedRng::new(rng)) {
         Ok(_) => false,
         Err(error) => {
             eprintln!("wild battle: turn failed ({error:?}) -- ending the encounter");
