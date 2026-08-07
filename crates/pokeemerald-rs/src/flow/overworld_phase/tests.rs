@@ -1,6 +1,8 @@
 //! Unit tests for [`super::OverworldPhase`] and its private helpers.
 
-use super::{advance_player_one_frame, held_direction, warp_data_index, OverworldPhase};
+use super::connections::warp_data_index;
+use super::input::{advance_player_one_frame, held_direction};
+use super::OverworldPhase;
 use crate::flow::tests::held;
 use crate::new_game;
 use assets::{MapEvents, MapHeader, MapId, MapLayout, MetatileCell};
@@ -26,7 +28,7 @@ const NO_FLAGS: EventData = EventData::new();
 /// `engine::overworld::player::tests::no_connections` (that module's own
 /// private fixture), needed here too now that [`advance_player_one_frame`]
 /// takes its `maps` resolver generically (issue #177) rather than
-/// hardcoding [`super::MapConnections`].
+/// hardcoding [`super::connections::MapConnections`].
 fn no_connections(_: MapId) -> Option<(u16, u16)> {
     None
 }
@@ -2136,7 +2138,7 @@ fn b_does_not_move_the_player_or_open_a_dialog() {
 
 /// Every [`assets::object_event_flags::DECORATION_FLAGS`] id must be one
 /// [`EventData::flag_set`] accepts -- what makes
-/// [`super::run_on_transition_map_script`]'s `expect` unreachable rather
+/// [`super::connections::run_on_transition_map_script`]'s `expect` unreachable rather
 /// than a latent panic.
 #[test]
 fn every_decoration_flag_id_is_settable() {
@@ -2154,7 +2156,7 @@ fn every_decoration_flag_id_is_settable() {
     );
 }
 
-/// The transcribed [`super::MAPS_THAT_SET_DECORATION_FLAGS`] list must be
+/// The transcribed [`super::connections::MAPS_THAT_SET_DECORATION_FLAGS`] list must be
 /// exactly the set of bundled maps that actually carry decoration
 /// placeholders -- the tripwire against the list going stale if the
 /// extraction pipeline ever bundles another bedroom or secret base.
@@ -2189,7 +2191,7 @@ fn the_decoration_flag_map_list_covers_every_bundled_map_with_placeholders() {
         .collect();
     with_placeholders.sort_unstable_by_key(|m| m.0);
 
-    let mut listed = super::MAPS_THAT_SET_DECORATION_FLAGS.to_vec();
+    let mut listed = super::connections::MAPS_THAT_SET_DECORATION_FLAGS.to_vec();
     listed.sort_unstable_by_key(|m| m.0);
     assert_eq!(
         with_placeholders, listed,
@@ -2207,7 +2209,7 @@ fn the_decoration_flag_map_list_covers_every_bundled_map_with_placeholders() {
 /// `FLAG_DECORATION_*` at new-game time, so once object events became solid
 /// these turned into invisible walls. Upstream hides them from the map's own
 /// `MAP_SCRIPT_ON_TRANSITION` (see
-/// [`super::run_on_transition_map_script`]), which
+/// [`super::connections::run_on_transition_map_script`]), which
 /// [`OverworldPhase::load_default`] now mirrors.
 #[test]
 fn the_bedrooms_decoration_placeholders_do_not_block_a_fresh_save() {
