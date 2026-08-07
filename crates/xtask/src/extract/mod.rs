@@ -94,6 +94,17 @@
 //!   `graphics/text_window/` — see [`text_window`]'s module docs for the
 //!   manifest and the image/palette pairing validation.
 //!
+//! - **Main menu background palette** (I-3, issue #216): just
+//!   `graphics/interface/main_menu_bg.pal`, as `interface/palette/main_menu_bg`
+//!   — the one real per-pixel colour `pokeemerald-rs::main_menu::MainMenuScene`
+//!   needs (its content-fill/border/glyph colours are upstream's own
+//!   runtime-patched `LoadPalette` literals, not sourced from any file — see
+//!   that module's docs). The sibling `main_menu_text.pal` is deliberately
+//!   *not* extracted yet: every colour that no-save slice draws from bank 15
+//!   is one of those same hardcoded runtime patches, and the file's own
+//!   colours (indices `0..=9`) belong to the `CONTINUE`/Mystery Gift/Mystery
+//!   Events variants this issue's scope notes explicitly exclude.
+//!
 //! - **Audio samples** (S-4, issue #183, `#115` child 4): every
 //!   `DirectSound` instrument sample and CGB programmable-wave table
 //!   `mus_title`'s voicegroup references, transitively through its
@@ -170,6 +181,7 @@
 //!   `text-window/palette/1`..`20`/`message_box` come from each PNG's own
 //!   `PLTE`; `text-window/palette/text_pal1`..`4` come from the sibling
 //!   `.pal` files.
+//! - `interface/palette/main_menu_bg` — see the main menu bullet above.
 //! - `audio/sample/direct-sound/<basename>`, `audio/sample/programmable-wave/<NN>`
 //!   — see [`audio_samples`]'s module docs for the exact derivation and why
 //!   the two live under separate sub-namespaces.
@@ -293,6 +305,7 @@ fn extract_to(output_path: &Path) -> Result<ExtractReport, ExtractError> {
     extract_layouts(&upstream, &mut writer)?;
     fonts::extract_fonts(&upstream, &mut writer)?;
     text_window::extract_text_window(&upstream, &mut writer)?;
+    extract_interface_palettes(&upstream, &mut writer)?;
     audio_samples::extract_audio_samples(&upstream, &mut writer)?;
     voicegroups::extract_voicegroups(&upstream, &mut writer)?;
     midi::extract_song(&upstream, &mut writer)?;
@@ -530,6 +543,20 @@ fn extract_title_screen(upstream: &Path, writer: &mut PackWriter) -> Result<(), 
         }
     }
     Ok(())
+}
+
+/// Extract the one interface palette the no-save main menu needs (module
+/// docs' main-menu bullet): `graphics/interface/main_menu_bg.pal`, as
+/// `interface/palette/main_menu_bg`.
+fn extract_interface_palettes(
+    upstream: &Path,
+    writer: &mut PackWriter,
+) -> Result<(), ExtractError> {
+    decode_palette_entry(
+        &upstream.join("graphics/interface/main_menu_bg.pal"),
+        "interface/palette/main_menu_bg".to_owned(),
+        writer,
+    )
 }
 
 /// Extract every player/NPC sprite sheet plus the player and generic-NPC
@@ -787,6 +814,26 @@ mod tests {
                 "missing pack entry id `{id}`"
             );
         }
+        let _ = std::fs::remove_file(report.output_path);
+    }
+
+    #[test]
+    #[ignore = "needs a local `./init.sh`-fetched pokeemerald/ checkout"]
+    fn main_menu_bg_palette_gets_an_interface_palette_entry() {
+        // Same crude substring search `embedded_palette_sheets_get_a_title_palette_entry`
+        // uses (no pack reader lives in this crate) -- confirms issue #216's
+        // new `extract_interface_palettes` pass actually reached the pack.
+        assert!(upstream_present(), "run ./init.sh first");
+        let path = scratch_path("interface-palette");
+        let report = extract_to(&path).expect("extraction should succeed against a real checkout");
+        let bytes = std::fs::read(&report.output_path).unwrap();
+        let id = "interface/palette/main_menu_bg";
+        assert!(
+            bytes
+                .windows(id.len())
+                .any(|window| window == id.as_bytes()),
+            "missing pack entry id `{id}`"
+        );
         let _ = std::fs::remove_file(report.output_path);
     }
 

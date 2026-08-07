@@ -489,31 +489,13 @@ impl OverworldScene {
     /// length).
     #[must_use]
     pub fn compose(&self, player: &PlayerState, event_data: &EventData, tick: u32) -> Framebuffer {
-        let grid = self
-            .layout
-            .grid(&self.grid_bytes)
-            .expect("grid_bytes validated in from_pack");
-        let border =
-            BorderGrid::new(&self.border_bytes).expect("border_bytes validated in from_pack");
-        let primary_attrs = MetatileAttributeTable::new(&self.primary_attrs_bytes);
-        let secondary_attrs = MetatileAttributeTable::new(&self.secondary_attrs_bytes);
-
         let viewport::FrameViewport {
             bottom,
             middle,
             top,
             scroll_x,
             scroll_y,
-        } = viewport::build_tilemaps(
-            player,
-            &grid,
-            &border,
-            &self.primary_metatiles,
-            &self.secondary_metatiles,
-            &primary_attrs,
-            &secondary_attrs,
-            self.blank_tile_index,
-        );
+        } = self.frame_viewport(player);
 
         // This frame's animated tile ranges, patched into a fresh copy of
         // the base bytes and decoded fresh (issue #160) -- see
@@ -584,6 +566,61 @@ impl OverworldScene {
             ..FrameEffects::default()
         };
         compose_frame_with_effects(&sprites, &slots, &effects)
+    }
+
+    /// This frame's composed BG tilemaps and their shared scroll --
+    /// [`Self::compose`]'s first step, split out so
+    /// [`Self::oam_entries_and_bg_scroll`] reads the *same* scroll
+    /// `compose` hands the rasterizer rather than re-deriving it.
+    ///
+    /// # Panics
+    ///
+    /// Never in practice -- see [`Self::compose`]'s own note (this is the
+    /// `grid_bytes`/`border_bytes` half of it).
+    fn frame_viewport(&self, player: &PlayerState) -> viewport::FrameViewport {
+        let grid = self
+            .layout
+            .grid(&self.grid_bytes)
+            .expect("grid_bytes validated in from_pack");
+        let border =
+            BorderGrid::new(&self.border_bytes).expect("border_bytes validated in from_pack");
+        let primary_attrs = MetatileAttributeTable::new(&self.primary_attrs_bytes);
+        let secondary_attrs = MetatileAttributeTable::new(&self.secondary_attrs_bytes);
+
+        viewport::build_tilemaps(
+            player,
+            &grid,
+            &border,
+            &self.primary_metatiles,
+            &self.secondary_metatiles,
+            &primary_attrs,
+            &secondary_attrs,
+            self.blank_tile_index,
+        )
+    }
+
+    /// This frame's OAM entries (player at index 0, then each drawn NPC)
+    /// and the BG scroll every layer shares -- the two halves of
+    /// [`Self::compose`] that issue #217's camera-alignment regression
+    /// tests have to compare *against each other*, since "the NPC stays
+    /// glued to the background" is a statement about both at once and
+    /// neither alone.
+    ///
+    /// Test-only, and deliberately so: production has no reason to want
+    /// half-composed frames, and the alternative -- asserting on composed
+    /// pixels -- would pin the whole rasterizer instead of the one number
+    /// under test.
+    #[cfg(test)]
+    pub(crate) fn oam_entries_and_bg_scroll(
+        &self,
+        player: &PlayerState,
+        event_data: &EventData,
+    ) -> (Vec<rendering::OamEntry>, (u16, u16)) {
+        let viewport = self.frame_viewport(player);
+        (
+            self.sprites.entries(player, event_data),
+            (viewport.scroll_x, viewport.scroll_y),
+        )
     }
 
     /// [`compose`](Self::compose), converted to `platform`'s

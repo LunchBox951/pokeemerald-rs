@@ -87,8 +87,9 @@
 //! and to `5` when the first [`song::Song`] entry, `audio/song/mus_title`,
 //! followed (issue #181, `#115` child 2 -- see `xtask::extract::midi`'s
 //! module docs for the compiler and exactly which of `mus_title`'s MIDI
-//! semantics it models); any later change to the shapes here bumps it
-//! again.
+//! semantics it models), and to `6` when the `interface/palette/main_menu_bg`
+//! entry the no-save main menu requires followed (issue #216, I-3); any
+//! later change to the shapes here bumps it again.
 //!
 //! A second, per-payload version would be a redundant axis: two gates to
 //! keep in sync, and a failure mode (outer version accepted, inner version
