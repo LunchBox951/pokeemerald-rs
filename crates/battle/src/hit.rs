@@ -41,7 +41,8 @@
 //!    `Cmd_seteffectwithchance` takes its *first* branch (`:2917`), which
 //!    contains no `Random()` at all (the recoil is applied deterministically).
 //!
-//! So, **in the world this slice models**, one move resolution costs:
+//! So, **when `suppress_crit` is `false`** (every battle but a first
+//! battle — see below), one move resolution costs:
 //!
 //! | move | draws | which |
 //! |------|-------|-------|
@@ -65,12 +66,18 @@
 //! (`battle_script_commands.c:1279`-`:1283`), so a defender with Battle Armor
 //! / Shell Armor, an attacker under `STATUS3_CANT_SCORE_A_CRIT`, or a
 //! `BATTLE_TYPE_WALLY_TUTORIAL` / `BATTLE_TYPE_FIRST_BATTLE` battle makes
-//! step 2 draw **nothing** as well. None of those three exist here (no
-//! abilities, no status3, ordinary post-first-battle wild encounter) — see
-//! [`crate::critical`]'s module docs — so the table above is exact for every
-//! hit [`resolve_hit`] can currently produce. (Serene Grace doubling
-//! `percentChance` in step 7 similarly cannot matter: no abilities, and the
-//! draw's value is discarded for every allow-listed move regardless.)
+//! step 2 draw **nothing** as well. The first two of those three still don't
+//! exist anywhere in this crate (no abilities, no status3), but the third
+//! does, as of issue #187: [`crate::battle::Battle`]'s `first_battle` flag
+//! passes `suppress_crit = true` into every [`resolve_hit`] call for the
+//! whole battle, dropping every row above by exactly one draw (accuracy-only
+//! on a miss, unaffected; **3** for an ordinary hit, **2** for an
+//! accuracy-bypassing hit, **2** for a landed Struggle) and forcing
+//! [`HitOutcome::Hit`]'s `is_critical` field to `false` regardless of what
+//! the dropped roll would have produced — see [`crate::critical`]'s module
+//! docs. (Serene Grace doubling `percentChance` in step 7 similarly cannot
+//! matter: no abilities, and the draw's value is discarded for every
+//! allow-listed move regardless.)
 //!
 //! # Which moves this pipeline may be handed
 //!
@@ -227,6 +234,15 @@ pub fn ensure_resolvable(dex: &Dex, move_id: MoveId) -> Result<(), BattleError> 
 /// modelled this slice: [`crate::damage::DamageInput`]'s corresponding
 /// fields are always the "no effect" value here (`false`/[`Weather::None`]).
 ///
+/// `suppress_crit` reproduces `Cmd_critcalc`'s short-circuiting `&&` chain
+/// (`battle_script_commands.c:1279`-`:1283`, [`crate::critical`]'s module
+/// docs): pass `true` when any of its three suppressors is in play —
+/// currently just `BATTLE_TYPE_WALLY_TUTORIAL | BATTLE_TYPE_FIRST_BATTLE`
+/// (`:1281`), which [`crate::battle::Battle`] does via its `first_battle`
+/// flag — to skip the crit roll **and its RNG draw** entirely, exactly as
+/// [`crate::critical::crit_roll`]'s own docs require of a caller that gains
+/// one of the suppressors, rather than drawing and discarding.
+///
 /// # Errors
 ///
 /// Whatever [`ensure_resolvable`] reports for `move_id` — the same check, run
@@ -237,6 +253,7 @@ pub fn resolve_hit(
     move_id: MoveId,
     attacker: &BattlePokemon,
     defender: &BattlePokemon,
+    suppress_crit: bool,
     rng: &mut impl BattleRng,
 ) -> Result<HitOutcome, BattleError> {
     ensure_resolvable(dex, move_id)?;
@@ -257,8 +274,14 @@ pub fn resolve_hit(
         return Ok(HitOutcome::Miss);
     }
 
-    let crit_stage = crit_stage_for_effect(mv.effect);
-    let is_critical = crit_roll(crit_stage, rng);
+    // No crit stage is even computed when suppressed: nothing downstream
+    // reads it, and computing it would falsely imply the draw still mattered.
+    let is_critical = if suppress_crit {
+        false
+    } else {
+        let crit_stage = crit_stage_for_effect(mv.effect);
+        crit_roll(crit_stage, rng)
+    };
 
     let (attack_stat, attack_stage) = attacker.attacking_stat(category);
     let (defense_stat, defense_stage) = defender.defending_stat(category);
@@ -388,7 +411,7 @@ mod tests {
         let defender = mon(&dex, 7, 5, vec![MoveId(33)]); // Squirtle
                                                           // Tackle accuracy 95: roll = draw%100+1. draw=95 -> roll=96 > 95 -> miss.
         let mut rng = SequenceRng::new([95]);
-        let outcome = resolve_hit(&dex, MoveId(33), &attacker, &defender, &mut rng).unwrap();
+        let outcome = resolve_hit(&dex, MoveId(33), &attacker, &defender, false, &mut rng).unwrap();
         assert_eq!(outcome, HitOutcome::Miss);
         assert_eq!(rng.draws(), 1);
     }
@@ -403,7 +426,7 @@ mod tests {
         // draw2: damage roll 0 -> best (100%) roll.
         // draw3: seteffectwithchance's discarded effect-chance roll.
         let mut rng = SequenceRng::new([0, 1, 0, 0]);
-        let outcome = resolve_hit(&dex, MoveId(33), &attacker, &defender, &mut rng).unwrap();
+        let outcome = resolve_hit(&dex, MoveId(33), &attacker, &defender, false, &mut rng).unwrap();
         assert!(matches!(outcome, HitOutcome::Hit { .. }));
         assert_eq!(rng.draws(), 4);
     }
@@ -420,7 +443,9 @@ mod tests {
         let mut outcomes = Vec::new();
         for effect_roll in [0u16, 99, u16::MAX] {
             let mut rng = SequenceRng::new([0, 1, 0, effect_roll]);
-            outcomes.push(resolve_hit(&dex, MoveId(33), &attacker, &defender, &mut rng).unwrap());
+            outcomes.push(
+                resolve_hit(&dex, MoveId(33), &attacker, &defender, false, &mut rng).unwrap(),
+            );
             assert_eq!(rng.draws(), 4);
         }
         assert_eq!(outcomes[0], outcomes[1]);
@@ -463,7 +488,7 @@ mod tests {
         // draw2: damage roll 0 -> 100%.
         // draw3: the discarded effect-chance roll.
         let mut rng = SequenceRng::new([0, 1, 0, 0]);
-        let outcome = resolve_hit(&dex, MoveId(33), &attacker, &defender, &mut rng).unwrap();
+        let outcome = resolve_hit(&dex, MoveId(33), &attacker, &defender, false, &mut rng).unwrap();
         assert_eq!(
             outcome,
             HitOutcome::Hit {
@@ -482,7 +507,7 @@ mod tests {
         // Same scenario and same draws as the test above, except draw1: crit
         // roll 0 -> 0%16 == 0 -> crit.
         let mut rng = SequenceRng::new([0, 0, 0, 0]);
-        let outcome = resolve_hit(&dex, MoveId(33), &attacker, &defender, &mut rng).unwrap();
+        let outcome = resolve_hit(&dex, MoveId(33), &attacker, &defender, false, &mut rng).unwrap();
         assert_eq!(
             outcome,
             HitOutcome::Hit {
@@ -533,7 +558,7 @@ mod tests {
         // draw2: damage roll 0 -> 100%.
         // draw3: the discarded effect-chance roll.
         let mut rng = SequenceRng::new([0, 1, 0, 0]);
-        let outcome = resolve_hit(&dex, MoveId(55), &attacker, &defender, &mut rng).unwrap();
+        let outcome = resolve_hit(&dex, MoveId(55), &attacker, &defender, false, &mut rng).unwrap();
         assert_eq!(
             outcome,
             HitOutcome::Hit {
@@ -562,7 +587,7 @@ mod tests {
         // step 7), so a landed Struggle costs 3 draws, not 4. The sequence
         // is exactly 3 long: a stray fourth draw would panic.
         let mut rng = SequenceRng::new([0, 1, 0]);
-        let outcome = resolve_hit(&dex, STRUGGLE, &attacker, &defender, &mut rng).unwrap();
+        let outcome = resolve_hit(&dex, STRUGGLE, &attacker, &defender, false, &mut rng).unwrap();
         assert_eq!(
             outcome,
             HitOutcome::Hit {
@@ -577,7 +602,7 @@ mod tests {
         // move, it does take the effect-chance draw).
         let tackler = mon(&dex, 1, 5, vec![MoveId(33)]);
         let mut rng = SequenceRng::new([0, 1, 0, 0]);
-        let outcome = resolve_hit(&dex, MoveId(33), &tackler, &defender, &mut rng).unwrap();
+        let outcome = resolve_hit(&dex, MoveId(33), &tackler, &defender, false, &mut rng).unwrap();
         assert_eq!(outcome, HitOutcome::NoEffect);
     }
 
@@ -593,7 +618,7 @@ mod tests {
         let attacker = mon(&dex, 1, 20, vec![MoveId(33)]); // Bulbasaur/Tackle
         let defender = mon(&dex, 92, 20, vec![MoveId(33)]);
         let mut rng = SequenceRng::new([0, 1, 0, 0]);
-        let outcome = resolve_hit(&dex, MoveId(33), &attacker, &defender, &mut rng).unwrap();
+        let outcome = resolve_hit(&dex, MoveId(33), &attacker, &defender, false, &mut rng).unwrap();
         assert_eq!(outcome, HitOutcome::NoEffect);
         assert_eq!(
             rng.draws(),
@@ -618,7 +643,8 @@ mod tests {
         // draw1: damage roll 0 -> 100%.  No accuracy draw ahead of them.
         // draw2: the discarded effect-chance roll.
         let mut rng = SequenceRng::new([1, 0, 0]);
-        let outcome = resolve_hit(&dex, MoveId(129), &attacker, &defender, &mut rng).unwrap();
+        let outcome =
+            resolve_hit(&dex, MoveId(129), &attacker, &defender, false, &mut rng).unwrap();
         assert!(matches!(outcome, HitOutcome::Hit { .. }));
         assert_eq!(
             rng.draws(),
@@ -630,7 +656,8 @@ mod tests {
         // 95-accuracy move is simply never consumed as an accuracy roll, so
         // feeding it first would desynchronise a caller's script.
         let mut rng = SequenceRng::new([95, 0, 0]);
-        let outcome = resolve_hit(&dex, MoveId(129), &attacker, &defender, &mut rng).unwrap();
+        let outcome =
+            resolve_hit(&dex, MoveId(129), &attacker, &defender, false, &mut rng).unwrap();
         assert!(
             matches!(outcome, HitOutcome::Hit { .. }),
             "95 was consumed as the crit roll, not an accuracy roll"
@@ -652,7 +679,8 @@ mod tests {
 
         // draws: accuracy 0 (hit), crit 8, damage roll 0, effect chance 0.
         let mut rng = SequenceRng::new([0, 8, 0, 0]);
-        let outcome = resolve_hit(&dex, MoveId(163), &attacker, &defender, &mut rng).unwrap();
+        let outcome =
+            resolve_hit(&dex, MoveId(163), &attacker, &defender, false, &mut rng).unwrap();
         assert!(
             matches!(
                 outcome,
@@ -667,7 +695,7 @@ mod tests {
         // The control: identical draws through the plain-crit pipeline stay
         // non-critical, so the assertion above cannot pass by accident.
         let mut rng = SequenceRng::new([0, 8, 0, 0]);
-        let outcome = resolve_hit(&dex, MoveId(33), &attacker, &defender, &mut rng).unwrap();
+        let outcome = resolve_hit(&dex, MoveId(33), &attacker, &defender, false, &mut rng).unwrap();
         assert!(
             matches!(
                 outcome,
@@ -681,13 +709,68 @@ mod tests {
     }
 
     #[test]
+    fn suppress_crit_skips_the_crit_draw_entirely_and_never_crits() {
+        let dex = Dex::new();
+        // Slash again: draw 8 would crit at stage 1 (the test above), so a
+        // crit surviving here would mean the suppression forgot to skip the
+        // *decision*, not just its consequence.
+        let attacker = mon(&dex, 1, 5, vec![MoveId(163)]); // Slash
+        let defender = mon(&dex, 7, 5, vec![MoveId(33)]);
+
+        // Only 3 values: accuracy, damage roll, effect chance -- the crit
+        // slot (upstream's `battle_script_commands.c:1279`-`:1283` chain
+        // failing its `BATTLE_TYPE_FIRST_BATTLE` operand) is never drawn, so
+        // a stray 4th value would panic `SequenceRng` if resolve_hit still
+        // consumed one.
+        let mut rng = SequenceRng::new([0, 0, 0]);
+        let outcome = resolve_hit(&dex, MoveId(163), &attacker, &defender, true, &mut rng).unwrap();
+        assert!(
+            matches!(
+                outcome,
+                HitOutcome::Hit {
+                    is_critical: false,
+                    ..
+                }
+            ),
+            "suppressed crit must report non-critical even on a would-crit draw: {outcome:?}"
+        );
+        assert_eq!(rng.draws(), 3, "no crit draw when suppressed");
+    }
+
+    #[test]
+    fn suppress_crit_drops_every_draw_count_in_the_module_docs_table_by_one() {
+        let dex = Dex::new();
+        let attacker = mon(&dex, 1, 5, vec![MoveId(33), MoveId(129)]); // Tackle, Swift
+        let defender = mon(&dex, 7, 5, vec![MoveId(33)]);
+
+        // Ordinary hit: 4 -> 3 (accuracy, damage roll, effect chance).
+        let mut rng = SequenceRng::new([0, 0, 0]);
+        let outcome = resolve_hit(&dex, MoveId(33), &attacker, &defender, true, &mut rng).unwrap();
+        assert!(matches!(outcome, HitOutcome::Hit { .. }));
+        assert_eq!(rng.draws(), 3);
+
+        // Accuracy-bypassing hit (Swift): 3 -> 2 (damage roll, effect chance).
+        let mut rng = SequenceRng::new([0, 0]);
+        let outcome = resolve_hit(&dex, MoveId(129), &attacker, &defender, true, &mut rng).unwrap();
+        assert!(matches!(outcome, HitOutcome::Hit { .. }));
+        assert_eq!(rng.draws(), 2);
+
+        // A miss is unaffected: the crit draw never happens after a miss
+        // either way, suppressed or not.
+        let mut rng = SequenceRng::new([95]);
+        let outcome = resolve_hit(&dex, MoveId(33), &attacker, &defender, true, &mut rng).unwrap();
+        assert_eq!(outcome, HitOutcome::Miss);
+        assert_eq!(rng.draws(), 1);
+    }
+
+    #[test]
     fn zero_power_moves_are_reported_as_unsupported() {
         let dex = Dex::new();
         let attacker = mon(&dex, 1, 5, vec![MoveId(45)]); // Growl (status move)
         let defender = mon(&dex, 7, 5, vec![MoveId(33)]);
         let mut rng = SequenceRng::new([]);
         assert_eq!(
-            resolve_hit(&dex, MoveId(45), &attacker, &defender, &mut rng),
+            resolve_hit(&dex, MoveId(45), &attacker, &defender, false, &mut rng),
             Err(BattleError::NonDamagingMove(MoveId(45)))
         );
     }
@@ -733,7 +816,7 @@ mod tests {
             );
             let mut rng = SequenceRng::new([]);
             assert_eq!(
-                resolve_hit(&dex, move_id, &attacker, &defender, &mut rng),
+                resolve_hit(&dex, move_id, &attacker, &defender, false, &mut rng),
                 Err(BattleError::UnsupportedMoveEffect(move_id)),
                 "{what}"
             );

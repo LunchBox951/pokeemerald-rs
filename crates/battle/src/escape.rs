@@ -24,13 +24,22 @@
 //! ```
 //!
 //! One gate sits *upstream of* this function and is deliberately not modelled
-//! here: `IsRunningFromBattleImpossible` (`src/battle_main.c:4021`) returns
+//! here, in this module — it belongs to the caller instead:
+//! `IsRunningFromBattleImpossible` (`src/battle_main.c:4021`) returns
 //! `BATTLE_RUN_FORBIDDEN` for `BATTLE_TYPE_FIRST_BATTLE` (`:4078`-`:4082`,
-//! the "don't leave Prof. Birch!" message), so the scripted Route 101
-//! Poochyena battle — the only battle that flag is ever set for
+//! the "You mustn't run away from Prof. Birch's Pokémon!" /
+//! `B_MSG_DONT_LEAVE_BIRCH` message), so the scripted Route 101 intro
+//! Zigzagoon battle — the only battle that flag is ever set for
 //! (`src/battle_setup.c:937`) — can never run at all and never reaches
-//! `TryRunFromBattle`. This module models the ordinary **post-first-battle**
-//! wild encounter, where that flag is clear.
+//! `TryRunFromBattle`. Unlike the other two `BATTLE_TYPE_FIRST_BATTLE`
+//! deltas ([`crate::critical`], the wild opponent's AI-branch move choice in
+//! [`crate::battle`]'s module docs), this one is checked at action-*selection*
+//! time upstream (`:4339`-`:4344`), before Run is ever a chosen action for
+//! the turn — so [`crate::battle::Battle::take_turn`] rejects it the same way
+//! it rejects an unusable player move slot: before any draw, with
+//! [`crate::error::BattleError::RunForbidden`], rather than by calling into
+//! this module at all. `try_run_from_battle` itself stays exactly the
+//! ordinary-battle formula either way.
 //!
 //! `speedVar` is upstream `u8`: the right-hand expression is computed then
 //! **truncated** (silently wraps, does not saturate) on assignment — modelled
