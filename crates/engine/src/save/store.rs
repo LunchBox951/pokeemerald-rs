@@ -58,6 +58,18 @@ pub const SAVE_BLOCK1_CHUNKS: usize = 4;
 /// docs for why this is smaller than upstream's `NUM_SECTORS_PER_SLOT`).
 pub const SECTORS_PER_SLOT: usize = 1 + SAVE_BLOCK1_CHUNKS;
 
+/// The exact byte length of a [`SaveStore`]'s backing flash image
+/// ([`SaveStore::flash_image`]): every sector of both slots, laid out
+/// slot-major.
+///
+/// This is the *whole* addressable surface this port models, and it is
+/// smaller than a real AGB cart's 128 KiB flash for exactly the reason
+/// [`SECTORS_PER_SLOT`] is smaller than upstream's `NUM_SECTORS_PER_SLOT`
+/// (module docs): the nine PC-storage sectors and the special
+/// Hall-of-Fame/Trainer-Hill/recorded-battle sectors have no model here
+/// yet. A persisted image is therefore this length, not 131072.
+pub const FLASH_IMAGE_LEN: usize = NUM_SAVE_SLOTS * SECTORS_PER_SLOT * SECTOR_SIZE;
+
 // Typed views of the small constants above, for the `u16`/`u32` contexts
 // upstream's sector ids, `gLastWrittenSector`, and `gSaveCounter % NUM_SAVE_SLOTS`
 // arithmetic need. Each constant here is small and known at compile time
@@ -229,10 +241,49 @@ impl SaveStore {
     #[must_use]
     pub fn new() -> Self {
         Self {
-            buffer: vec![0xFFu8; NUM_SAVE_SLOTS * SECTORS_PER_SLOT * SECTOR_SIZE],
+            buffer: vec![0xFFu8; FLASH_IMAGE_LEN],
             last_written_sector: 0,
             save_counter: 0,
         }
+    }
+
+    /// The backing flash image: [`FLASH_IMAGE_LEN`] bytes, every sector of
+    /// both slots in physical (slot-major) order.
+    ///
+    /// This is the whole of the store's persistent state. The two counters
+    /// [`SaveStore::last_written_sector`] and [`SaveStore::save_counter`]
+    /// are deliberately *not* part of it: upstream keeps them in RAM
+    /// (`gLastWrittenSector`/`gSaveCounter`), zeroes them at boot
+    /// (`Save_ResetSaveCounters`, `pokeemerald/src/save.c:110-115`), and
+    /// re-derives both from the image's own footers on the next load —
+    /// `GetSaveValidStatus` adopts the winning slot's counter and
+    /// `CopySaveSlotData`'s `if (id == 0)` arm recovers the rotation offset.
+    /// A persisted image is therefore self-describing, exactly as real
+    /// flash is `(behavioral-fidelity)`.
+    #[must_use]
+    pub fn flash_image(&self) -> &[u8] {
+        &self.buffer
+    }
+
+    /// Rebuild a store over an existing flash `image`, or `None` if `image`
+    /// is not exactly [`FLASH_IMAGE_LEN`] bytes.
+    ///
+    /// The counters start at zero — this is `Save_ResetSaveCounters`
+    /// (`pokeemerald/src/save.c:110-115`), which upstream runs at boot
+    /// immediately before `LoadGameSave` (`src/intro.c:1153-1154`). Callers
+    /// that want the counters the image was last written with must call
+    /// [`SaveStore::load`], the same way upstream only ever learns them from
+    /// `LoadGameSave` `(behavioral-fidelity)`.
+    #[must_use]
+    pub fn from_flash_image(image: &[u8]) -> Option<Self> {
+        if image.len() != FLASH_IMAGE_LEN {
+            return None;
+        }
+        Some(Self {
+            buffer: image.to_vec(),
+            last_written_sector: 0,
+            save_counter: 0,
+        })
     }
 
     /// `gLastWrittenSector`'s current value, for tests/observability.

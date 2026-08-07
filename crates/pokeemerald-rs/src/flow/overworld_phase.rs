@@ -25,7 +25,10 @@
 //! [`OverworldPhase::advance_wild_battle_frame`]), and [`frame`] (dialog
 //! ticking and frame composition, [`OverworldPhase::compose_frame`]).
 
-use engine::overworld::{PlayerState, TilePos, WildEncounterState};
+use engine::overworld::{
+    warp_in_facing, PlayerState, TilePos, WildEncounterState, ELEVATION_MULTI_LEVEL,
+    ELEVATION_TRANSITION,
+};
 use engine::save::{SaveBlock1, SaveBlock2};
 use std::cell::OnceCell;
 
@@ -38,6 +41,53 @@ mod input;
 mod step;
 mod wild_battle;
 
+/// Why resuming a loaded save into an overworld phase failed
+/// ([`OverworldPhase::continue_saved_game`]).
+///
+/// Concrete per-crate-boundary enum `(oop-boundaries)`, alongside
+/// [`OverworldSceneError`] rather than folded into it: "this save names a map
+/// that does not exist" is a *save-data* failure, not a scene-loading one,
+/// and only the continue path can produce it.
+#[derive(Debug)]
+pub(crate) enum ContinueError {
+    /// The save's `SaveBlock1::location` does not name any map in the
+    /// generated [`assets::MapHeaderTable`]. Upstream cannot hit this:
+    /// `Overworld_GetMapHeaderByGroupAndId` (`src/overworld.c:591`) indexes
+    /// `gMapGroups` unchecked, so a bad group/num is undefined behaviour
+    /// there. Failing closed with a named error is this port's honest
+    /// equivalent -- the caller falls back to the main menu rather than
+    /// loading an arbitrary map.
+    UnknownLocation {
+        /// The save's `mapGroup`.
+        map_group: i8,
+        /// The save's `mapNum`.
+        map_num: i8,
+    },
+    /// Loading that map's scene out of the asset pack failed.
+    Scene(OverworldSceneError),
+}
+
+impl std::fmt::Display for ContinueError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::UnknownLocation { map_group, map_num } => write!(
+                f,
+                "continue: the save names map group {map_group}, number {map_num}, \
+                 which is not in the map-header table"
+            ),
+            Self::Scene(err) => write!(f, "continue: {err}"),
+        }
+    }
+}
+
+impl std::error::Error for ContinueError {}
+
+impl From<OverworldSceneError> for ContinueError {
+    fn from(err: OverworldSceneError) -> Self {
+        Self::Scene(err)
+    }
+}
+
 /// The overworld-loop state (module docs): an [`OverworldScene`] to render
 /// plus the [`PlayerState`] it renders, together with the map identity
 /// needed to re-look-up that map's header and event lists (from the
@@ -45,14 +95,15 @@ mod wild_battle;
 /// frame -- see [`OverworldPhase::step`]. Also carries the fresh
 /// [`SaveBlock1`]/[`SaveBlock2`] pair [`new_game::init_save_blocks`] built
 /// for this run (starting money, cleared party/bag/event data, default
-/// name/gender -- see that function's module docs) -- the actual save-state
-/// counterpart to `player`'s in-memory position, kept alive here rather than
-/// built and discarded, since nothing yet writes it to disk
-/// (`engine::save::store::SaveStore`, out of this issue's scope).
+/// name/gender -- see that function's module docs), or, for a resumed
+/// session, the pair [`OverworldPhase::continue_saved_game`] loaded off disk
+/// -- the actual save-state counterpart to `player`'s in-memory position.
+/// This pair *is* what gets written back: [`crate::flow::save_on_exit`]
+/// hands it to [`crate::game_save::SaveSlot::store`] (I-6, issue #214).
 /// `save1.pos` is re-synced to the player's logical tile after every
 /// [`OverworldPhase::step`] (upstream keeps `gSaveBlock1Ptr->pos` current as
-/// the object-event system moves the player), so a future serialize/continue
-/// path reloads at the tile the player actually stands on, not the spawn.
+/// the object-event system moves the player), so the save/continue path
+/// reloads at the tile the player actually stands on, not the spawn.
 /// `save1.location` is likewise re-synced on every warp landing (issue
 /// #163) -- see [`OverworldPhase::warp_to`].
 ///
@@ -178,6 +229,119 @@ impl OverworldPhase {
         Ok(phase)
     }
 
+    /// `CB2_ContinueSavedGame` (`pokeemerald/src/overworld.c:1705-1754`):
+    /// resume play from an already-loaded save pair.
+    ///
+    /// Resolves the map from the save (`LoadSaveblockMapHeader`,
+    /// `src/overworld.c:597-601`, which reads
+    /// `gSaveBlock1Ptr->location.mapGroup`/`.mapNum`), loads that map's
+    /// scene, and places the player at `gSaveBlock1Ptr->pos` --
+    /// `InitObjectEventsLocal`'s `GetCameraFocusCoords` + `InitPlayerAvatar`
+    /// (`src/overworld.c:2163-2177`). See [`Self::from_saved`] for the
+    /// facing and elevation that placement derives, and for everything a
+    /// continue deliberately does *not* restore.
+    ///
+    /// # Errors
+    ///
+    /// [`ContinueError::UnknownLocation`] if the save's location names no
+    /// known map; [`ContinueError::Scene`] if that map's scene will not load
+    /// (most commonly: no extracted pack).
+    pub(super) fn continue_saved_game(
+        block1: SaveBlock1,
+        block2: SaveBlock2,
+    ) -> Result<Self, ContinueError> {
+        let map_id = saved_map_id(&block1).ok_or(ContinueError::UnknownLocation {
+            map_group: block1.location.map_group,
+            map_num: block1.location.map_num,
+        })?;
+        let scene = overworld::load_room(map_id)?;
+        Ok(Self::from_saved(scene, map_id, block1, block2))
+    }
+
+    /// [`Self::continue_saved_game`]'s pack-free core: build the resumed
+    /// phase around an already-loaded `scene` for `map_id`.
+    ///
+    /// # What a continue restores
+    ///
+    /// * **Map** -- `map_id`, resolved from `block1.location` by the caller.
+    /// * **Position** -- `block1.pos`, upstream's `GetCameraFocusCoords`
+    ///   source.
+    /// * **Facing** -- `GetAdjustedInitialDirection`
+    ///   (`src/overworld.c:929-951`), already ported as
+    ///   [`engine::overworld::warp_in_facing`] and reused here rather than
+    ///   re-derived. Note what that means: a continue does **not** restore
+    ///   the direction the player was facing when they saved. Upstream's
+    ///   `sInitialPlayerAvatarState` is zeroed EWRAM at boot and nothing on
+    ///   the `CB2_ContinueSavedGame` path calls
+    ///   `StoreInitialPlayerAvatarState` (`:883-897`, only
+    ///   `field_control_avatar.c`'s warp paths do), so the decision falls to
+    ///   the *saved tile's own* metatile behavior -- `DIR_SOUTH` for any
+    ///   ordinary tile (`:951`). Loading a save facing south is upstream
+    ///   behaviour, not a gap `(behavioral-fidelity)`.
+    /// * **Elevation** -- the saved tile's own grid cell, with the
+    ///   multi-level -> transition substitution
+    ///   `ObjectEventUpdateElevation` applies, exactly as
+    ///   [`engine::overworld::warp_destination_position`] does on the warp
+    ///   path. A tile whose cell will not decode (a save pointing outside
+    ///   the map) falls back to [`new_game::SPAWN_ELEVATION`] rather than
+    ///   panicking.
+    /// * **Event flags and vars, money, bag, party, player identity** --
+    ///   carried wholesale in `block1`/`block2`, which become this phase's
+    ///   own save state. Nothing is re-initialized: in particular
+    ///   `run_on_transition_map_script` is deliberately *not* run here.
+    ///   Upstream agrees -- `CB2_ContinueSavedGame` runs
+    ///   `InitMapFromSavedGame` -> `RunOnLoadMapScript`
+    ///   (`src/fieldmap.c:69-76`), never `RunOnTransitionMapScript`, because
+    ///   the flags that script would set are already in the save file.
+    ///
+    /// # What it does not
+    ///
+    /// [`Self::party_lead`], the battle-facing lead a wild encounter is
+    /// fought with, is re-derived from [`new_game::provisional_starter`]
+    /// rather than decoded from `block1.player_party[0]`. There is no
+    /// encoder between `battle::BattlePokemon` and
+    /// [`engine::save::Pokemon`]'s encrypted substructures yet (upstream's
+    /// `CreateMon`/`GetMonData` surface, explicitly deferred in
+    /// `engine::save::pokemon`'s module docs), so the saved party's *modelled*
+    /// bytes round-trip faithfully while the battler built from them does
+    /// not. The observable cost: damage taken before saving is not carried
+    /// back into a continued session's lead. Recorded as a NOT-modelled
+    /// artifact in the coverage ledger rather than papered over.
+    pub(super) fn from_saved(
+        scene: OverworldScene,
+        map_id: assets::MapId,
+        block1: SaveBlock1,
+        block2: SaveBlock2,
+    ) -> Self {
+        let position = (i32::from(block1.pos.x), i32::from(block1.pos.y));
+        let (elevation, facing) = saved_tile_placement(&scene, map_id, position);
+        let mut phase = Self {
+            scene,
+            player: PlayerState::new(position, elevation, facing),
+            map_id,
+            save1: block1,
+            save2: block2,
+            pending_landing: None,
+            dialog: None,
+            tick: 0,
+            connection_pack: OnceCell::new(),
+            // `gRngValue` is zero at boot and `SeedRngAndSetTrainerId` runs
+            // only for a *new* game (`pokeemerald/src/new_game.c:158`), so a
+            // continued session starts the stream where a fresh boot leaves
+            // it -- without new-game initialization's two trainer-ID draws.
+            rng: engine::rng::Rng::new(new_game::NEW_GAME_RNG_SEED),
+            // `sWildEncounterImmunitySteps`/`sPrevMetatileBehavior` are
+            // EWRAM statics, zero at boot; `CB2_ContinueSavedGame` grants no
+            // immunity window of its own.
+            wild: WildEncounterState::new(),
+            wild_table_screen: None,
+            party_lead: None,
+            wild_battle: None,
+        };
+        phase.party_lead = Some(new_game::provisional_starter());
+        phase
+    }
+
     /// A phase around an already-built `scene` -- the pack-free
     /// counterpart to [`Self::load_default`], for this module's own
     /// headless tests (`crate::overworld::tests::synthetic_scene` builds
@@ -229,12 +393,12 @@ impl OverworldPhase {
         }
     }
 
-    /// This run's freshly initialized [`SaveBlock1`] (struct docs). Exposed
-    /// for [`advance_scene`]'s one-time "new game started" log line (proving
-    /// the wiring in [`load_default`](Self::load_default) is live end to
-    /// end, the same "log-or-ignore is fine" pipeline-liveness style
-    /// [`crate::app::describe_newly_pressed`] already uses) -- no save-file
-    /// writer consumes it yet (struct docs).
+    /// This run's live [`SaveBlock1`] (struct docs). Exposed for
+    /// [`advance_scene`]'s one-time "new game started" log line (proving the
+    /// wiring in [`load_default`](Self::load_default) is live end to end,
+    /// the same "log-or-ignore is fine" pipeline-liveness style
+    /// [`crate::app::describe_newly_pressed`] already uses); the save writer
+    /// itself reads the field directly.
     #[must_use]
     pub(crate) const fn save1(&self) -> &SaveBlock1 {
         &self.save1
@@ -246,6 +410,65 @@ impl OverworldPhase {
     pub(crate) const fn save2(&self) -> &SaveBlock2 {
         &self.save2
     }
+}
+
+/// The map `block1.location` names -- `Overworld_GetMapHeaderByGroupAndId(
+/// gSaveBlock1Ptr->location.mapGroup, gSaveBlock1Ptr->location.mapNum)`
+/// (`pokeemerald/src/overworld.c:591`), resolved through the generated
+/// [`assets::MapHeaderTable`] instead of upstream's unchecked `gMapGroups`
+/// double index.
+///
+/// `None` for a negative or unknown group/num. Upstream stores both as `s8`
+/// and its own `MAP_GROUP`/`MAP_NUM` values are never negative, so a
+/// negative here can only come from corrupt save data -- exactly the case
+/// this must not resolve to some arbitrary map.
+pub(super) fn saved_map_id(block1: &SaveBlock1) -> Option<assets::MapId> {
+    let group = u8::try_from(block1.location.map_group).ok()?;
+    let num = u8::try_from(block1.location.map_num).ok()?;
+    Some(
+        assets::MapHeaderTable::new()
+            .get_by_position(group, num)?
+            .id,
+    )
+}
+
+/// The `(elevation, facing)` a continued save's player is placed with at
+/// `position` on `map_id` -- see
+/// [`OverworldPhase::from_saved`]'s "What a continue restores".
+///
+/// Both come from the saved tile's own map data, never from the save file:
+/// upstream reads the destination grid cell for elevation
+/// (`ObjectEventUpdateElevation`) and the destination metatile's behavior
+/// for direction (`GetAdjustedInitialDirection`). A tile that will not
+/// decode -- the map's header/events missing from the generated tables, or
+/// coordinates outside the grid -- yields the new-game spawn elevation and
+/// `DIR_SOUTH`, which is `GetAdjustedInitialDirection`'s own fallthrough
+/// (`src/overworld.c:951`) rather than an invented default.
+fn saved_tile_placement(
+    scene: &OverworldScene,
+    map_id: assets::MapId,
+    position: TilePos,
+) -> (u8, engine::overworld::Direction) {
+    let fallback = (new_game::SPAWN_ELEVATION, new_game::SPAWN_FACING);
+    let Ok(header) = assets::MapHeaderTable::new().header(map_id) else {
+        return fallback;
+    };
+    let Ok(events) = assets::MapEventsTable::new().resolve(map_id) else {
+        return fallback;
+    };
+    let runtime = scene.runtime(map_id, header, events);
+    let Some(cell) = runtime.metatile_cell(position.0, position.1) else {
+        return fallback;
+    };
+    let elevation = if cell.elevation == ELEVATION_MULTI_LEVEL {
+        ELEVATION_TRANSITION
+    } else {
+        cell.elevation
+    };
+    let facing = runtime
+        .metatile_behavior(position.0, position.1)
+        .map_or(new_game::SPAWN_FACING, warp_in_facing);
+    (elevation, facing)
 }
 
 #[cfg(test)]

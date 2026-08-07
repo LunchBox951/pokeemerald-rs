@@ -20,17 +20,43 @@
 //! [`advance_scene`]'s `Title` arm and `crate::app`'s "Animating the real
 //! title screen" docs) -- only its ownership moved here, into one variant of
 //! [`AppScene`] instead of its own dedicated `App` field.
+//!
+//! # Where the save file enters the machine (I-6, issue #214)
+//!
+//! Two points, both taking the session's [`SaveSlot`] as an argument rather
+//! than reaching for a global `(oop-boundaries)`:
+//!
+//! * **Read**, on `Title` -> `MainMenu`: [`advance_scene`] loads the save and
+//!   [`menu_type_for`] turns its `gSaveFileStatus` into the item list to
+//!   show, so a valid save produces upstream's `HAS_SAVED_GAME` menu with
+//!   `CONTINUE` on it while anything else falls back to `HAS_NO_SAVED_GAME`.
+//!   The loaded blocks ride along in [`MainMenuState`] until
+//!   [`MainMenuAction::Continue`] hands them to
+//!   [`OverworldPhase::continue_saved_game`].
+//! * **Write**, on shutdown: [`save_on_exit`], called from
+//!   [`crate::app::App::step`] when the window closes. That trigger is a
+//!   documented stand-in for upstream's start-menu SAVE flow -- see its own
+//!   doc comment.
 
+use engine::save::SaveFileError;
 use platform::{ButtonState, Buttons, Frame};
 
 use crate::frame::to_platform_frame;
+use crate::game_save::{SaveSlot, SavedGame};
 use crate::intro::{self, IntroScene, IntroStatus};
-use crate::main_menu::{self, MainMenuItem, MainMenuScene};
+use crate::main_menu::{self, MainMenuItem, MainMenuScene, MainMenuType};
 use crate::title::TitleScene;
 
-mod overworld_phase;
+pub(crate) mod overworld_phase;
 mod wild_encounter;
 pub(crate) use overworld_phase::OverworldPhase;
+
+/// I-6 (issue #214) save/exit/reload round-trip tests -- their own file
+/// rather than more cases in `tests` below, because they exercise the whole
+/// `overworld -> file -> main menu -> overworld` loop rather than one scene
+/// transition (`one module = one concept` `(oop-boundaries)`).
+#[cfg(test)]
+mod save_continue_tests;
 
 /// [`crate::app::App`]'s per-frame animation state for the real title screen
 /// (`crate::app`'s "Animating the real title screen" docs): the loaded
@@ -56,10 +82,10 @@ pub(crate) enum AppScene {
     /// The idle/animating title screen, waiting for A or Start
     /// ([`title_advance_pressed`]).
     Title(Box<AnimatedTitle>),
-    /// The no-save-present main menu (I-3, issue #216): Up/Down move the
-    /// `NEW GAME`/`OPTION` selection, A confirms it (module docs on
-    /// [`advance_scene`]'s `MainMenu` arm for what each item does).
-    MainMenu(Box<MainMenuScene>),
+    /// The main menu (I-3, issue #216; I-6, issue #214): Up/Down move the
+    /// selection, A confirms it (module docs on [`advance_scene`]'s
+    /// `MainMenu` arm for what each item does).
+    MainMenu(Box<MainMenuState>),
     /// Birch's speech, paging through [`crate::intro::speech`]'s text.
     Intro(Box<IntroScene>),
     /// The intro finished, but [`OverworldPhase::load_default`] failed once
@@ -72,6 +98,108 @@ pub(crate) enum AppScene {
     /// The overworld loop: the player, movable, in
     /// [`crate::new_game::SPAWN_MAP_ID`].
     Overworld(Box<OverworldPhase>),
+}
+
+/// [`AppScene::MainMenu`]'s state: the rendered menu, plus the save the boot
+/// load recovered (I-6, issue #214).
+///
+/// The two travel together because upstream keeps them together in globals
+/// it can reach from anywhere: `Task_MainMenuCheckSaveFile` picks
+/// `tMenuType` from `gSaveFileStatus` (`main_menu.c:641-670`) and
+/// `CB2_ContinueSavedGame` then resumes from `gSaveBlock1Ptr`/`gSaveBlock2Ptr`
+/// (`overworld.c:1705-1754`). This port has no globals `(oop-boundaries)`,
+/// so the loaded blocks are owned by the scene that will hand them on.
+pub(crate) struct MainMenuState {
+    /// The composed menu, showing whichever [`MainMenuType`] `saved`'s
+    /// status selected.
+    pub(crate) scene: MainMenuScene,
+    /// What the boot load recovered -- `gSaveFileStatus` plus the blocks
+    /// [`MainMenuItem::Continue`] resumes from.
+    pub(crate) saved: SavedGame,
+}
+
+/// `Task_MainMenuCheckSaveFile`'s `tMenuType` assignment
+/// (`main_menu.c:641-670`), as a pure decision the `Title` -> `MainMenu`
+/// transition acts on -- so which menu a given boot verdict produces is
+/// pinned by a pack-less test rather than being observable only through a
+/// composed frame.
+const fn menu_type_for(saved: &SavedGame) -> MainMenuType {
+    if saved.status.menu_shows_continue() {
+        MainMenuType::SavedGame
+    } else {
+        MainMenuType::NoSavedGame
+    }
+}
+
+/// Which of upstream's `ACTION_*` values confirming `item` maps to
+/// (`HandleMainMenuInput`'s per-menu-type action switch,
+/// `main_menu.c:955-983`), restricted to the actions this port can perform.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MainMenuAction {
+    /// `ACTION_CONTINUE` (`main_menu.c:1064-1069`): resume the loaded save.
+    Continue,
+    /// `ACTION_NEW_GAME` (`:1055-1063`): start the Birch-speech intro.
+    NewGame,
+    /// No action this port performs -- `ACTION_OPTION` (`:1070`), whose
+    /// settings screen is not built (see [`crate::main_menu`]'s scope
+    /// notes). The press is swallowed rather than incorrectly launching
+    /// something else.
+    None,
+}
+
+/// What confirming (A) `item` on the main menu does, as a pure decision
+/// [`advance_scene`]'s `AppScene::MainMenu` arm acts on.
+///
+/// Split out of the scene arm so the mapping is testable without a pack:
+/// inside the arm, a swallowed press, a failed [`intro::load_default`], and
+/// a failed [`OverworldPhase::continue_saved_game`] all fall through to
+/// "stay on the main menu", which no pack-less test can tell apart.
+const fn menu_action(item: MainMenuItem) -> MainMenuAction {
+    match item {
+        MainMenuItem::Continue => MainMenuAction::Continue,
+        MainMenuItem::NewGame => MainMenuAction::NewGame,
+        MainMenuItem::Option => MainMenuAction::None,
+    }
+}
+
+/// Persist the overworld's live save blocks if `scene` is one that has any,
+/// or `None` if there is nothing to save (I-6, issue #214).
+///
+/// # This trigger is a stand-in, and a deliberate deviation
+///
+/// Upstream has no "save on quit" at all: saving is the player's explicit
+/// `START` -> `SAVE` -> "there is already a saved file, overwrite?" chain in
+/// `src/start_menu.c`, and closing the lid writes nothing. None of that menu
+/// exists in this port yet, so this slice writes the save on the way out of
+/// the application instead -- the smallest trigger that makes "save, exit,
+/// and reload cleanly" (I-6) actually reachable by a player, and one that is
+/// callable headlessly with no UI. It is recorded as a deferral, not as
+/// fidelity: `src/start_menu.c`'s save flow is a NOT-modelled artifact in
+/// the coverage ledger, and this function should be reduced to whatever that
+/// flow needs (or deleted) when it lands.
+///
+/// Only [`AppScene::Overworld`] carries save state; every other scene
+/// returns `None` rather than writing the blocks a not-yet-started game
+/// would have, which would clobber a real save with a fresh one.
+///
+/// **The known cost of the stand-in, stated rather than hidden:** starting a
+/// `NEW GAME` over an existing save and then quitting *does* overwrite that
+/// save, because reaching the overworld at all is enough to arm this write.
+/// Upstream cannot do that -- overwriting is gated on the player answering
+/// `gDifferentSaveFile`'s "there is already a saved file, is it okay to
+/// overwrite it?" prompt (`src/start_menu.c`) -- and neither should this
+/// port once the start-menu flow lands and makes saving explicit again.
+pub(crate) fn save_on_exit(
+    scene: &AppScene,
+    save_slot: &SaveSlot,
+) -> Option<Result<(), SaveFileError>> {
+    match scene {
+        AppScene::Overworld(phase) => Some(save_slot.store(phase.save1(), phase.save2())),
+        AppScene::Title(_)
+        | AppScene::MainMenu(_)
+        | AppScene::Intro(_)
+        | AppScene::OverworldLoadFailed(_) => None,
+    }
 }
 
 /// Whether the idle title screen should advance to the main menu this
@@ -106,37 +234,31 @@ fn should_retry_overworld_load(buttons: ButtonState) -> bool {
     buttons.is_newly_pressed(Buttons::A) || buttons.is_newly_pressed(Buttons::B)
 }
 
-/// Whether confirming (A) `item` on the main menu launches the new-game
-/// intro -- upstream `HandleMainMenuInput`'s `ACTION_NEW_GAME` vs
-/// `ACTION_OPTION` dispatch (`main_menu.c:952-963`), as a pure decision
-/// [`advance_scene`]'s `AppScene::MainMenu` arm acts on. `ACTION_OPTION`'s
-/// destination screen isn't built yet (issue #216 scope notes), so
-/// [`MainMenuItem::Option`] maps to no transition at all -- the press is
-/// swallowed rather than incorrectly launching the intro.
-///
-/// Split out of the scene arm so the mapping is testable without a pack:
-/// inside the arm, both a swallowed press and a failed
-/// [`intro::load_default`] fall through to "stay on the main menu", which
-/// no pack-less test can tell apart.
-const fn confirm_starts_new_game(item: MainMenuItem) -> bool {
-    match item {
-        MainMenuItem::NewGame => true,
-        MainMenuItem::Option => false,
-    }
-}
-
 /// Log the one-time proof that `phase`'s fresh save state
 /// ([`OverworldPhase::load_default`]'s own doc comment, finding 1 of this
 /// module's review pass) actually reached the `Intro` -> `Overworld`
 /// handoff -- the same "log-or-ignore is fine" pipeline-liveness style
-/// [`crate::app::describe_newly_pressed`] already uses for input, since no
-/// save-file writer exists yet to consume this state instead.
+/// [`crate::app::describe_newly_pressed`] already uses for input.
 fn log_new_game_started(phase: &OverworldPhase) {
     eprintln!(
         "new game: money={} trainer_id={:02x?} gender={:?}",
         phase.save1().money,
         phase.save2().player_trainer_id,
         phase.save2().player_gender,
+    );
+}
+
+/// [`log_new_game_started`]'s counterpart for a resumed session (I-6): the
+/// one-time proof that a `CONTINUE` really restored the *saved* location and
+/// money rather than silently re-running new-game initialization.
+fn log_game_continued(phase: &OverworldPhase) {
+    eprintln!(
+        "continue: map={:?} pos=({}, {}) facing={:?} money={}",
+        phase.map_id,
+        phase.save1().pos.x,
+        phase.save1().pos.y,
+        phase.player.facing(),
+        phase.save1().money,
     );
 }
 
@@ -159,7 +281,18 @@ fn log_new_game_started(phase: &OverworldPhase) {
 /// [`AppScene::OverworldLoadFailed`] (module docs' exception, and that
 /// variant's own doc comment) so the failed attempt isn't repeated every
 /// frame.
-pub(crate) fn advance_scene(scene: AppScene, buttons: ButtonState) -> (AppScene, Box<Frame>) {
+///
+/// `save_slot` is this session's save medium ([`SaveSlot`]). The `Title` ->
+/// `MainMenu` transition reads it (upstream's boot-time
+/// `LoadGameSave(SAVE_NORMAL)`, deferred to here because this port has no
+/// pre-title copyright screen to run it on -- see the `MainMenu` arm), and
+/// nothing else in this function touches it: the *write* side is
+/// [`save_on_exit`], driven from [`crate::app::App::step`]'s shutdown path.
+pub(crate) fn advance_scene(
+    scene: AppScene,
+    buttons: ButtonState,
+    save_slot: &SaveSlot,
+) -> (AppScene, Box<Frame>) {
     match scene {
         AppScene::Title(mut title) => {
             if title.presented {
@@ -168,10 +301,22 @@ pub(crate) fn advance_scene(scene: AppScene, buttons: ButtonState) -> (AppScene,
             title.presented = true;
 
             if title_advance_pressed(buttons) {
-                match main_menu::load_default() {
+                // Upstream reads the save before the title screen ever
+                // draws, in `CB2_InitCopyrightScreenAfterBootup`
+                // (`src/intro.c:1147-1159`), and parks the verdict in
+                // `gSaveFileStatus` for `Task_MainMenuCheckSaveFile` to
+                // branch on later. This port has no copyright screen and no
+                // globals `(oop-boundaries)`, so the load happens at the one
+                // moment its result is first needed -- building the menu --
+                // and travels onward as a value in `MainMenuState`. The
+                // observable result is identical: the menu shown is the one
+                // the save on disk selects.
+                let saved = save_slot.load();
+                match main_menu::load_default(menu_type_for(&saved)) {
                     Ok(menu) => {
-                        let frame = menu.compose_frame();
-                        return (AppScene::MainMenu(Box::new(menu)), frame);
+                        let state = MainMenuState { scene: menu, saved };
+                        let frame = state.scene.compose_frame();
+                        return (AppScene::MainMenu(Box::new(state)), frame);
                     }
                     // The hint covers both failure shapes operators actually
                     // hit: no pack extracted at all (`PackError::NotFound`),
@@ -191,27 +336,46 @@ pub(crate) fn advance_scene(scene: AppScene, buttons: ButtonState) -> (AppScene,
             let frame = to_platform_frame(&title.scene.compose(title.tick));
             (AppScene::Title(title), frame)
         }
-        AppScene::MainMenu(mut menu) => {
+        AppScene::MainMenu(mut state) => {
             if buttons.is_newly_pressed(Buttons::A) {
-                // A pure decision, not an inline match, so the
-                // NEW-GAME-only mapping is pinned by a pack-less test --
-                // see `confirm_starts_new_game`'s own doc comment.
-                if confirm_starts_new_game(menu.selected()) {
-                    match intro::load_default() {
+                // A pure decision, not an inline match, so the item ->
+                // action mapping is pinned by a pack-less test -- see
+                // `menu_action`'s own doc comment.
+                match menu_action(state.scene.selected()) {
+                    MainMenuAction::NewGame => match intro::load_default() {
                         Ok(intro_scene) => {
                             let frame = intro_scene.compose_frame();
                             return (AppScene::Intro(Box::new(intro_scene)), frame);
                         }
                         Err(err) => eprintln!("intro: {err} -- staying on the main menu"),
+                    },
+                    // `ACTION_CONTINUE` (`main_menu.c:1064-1069`) ->
+                    // `CB2_ContinueSavedGame`. The blocks are moved out of
+                    // the menu state by cloning rather than by consuming it,
+                    // because a failed continue must leave the menu exactly
+                    // as it was -- still offering `CONTINUE`, still holding
+                    // the save it could not resume.
+                    MainMenuAction::Continue => {
+                        let (block1, block2) =
+                            (state.saved.block1.clone(), state.saved.block2.clone());
+                        match OverworldPhase::continue_saved_game(block1, block2) {
+                            Ok(phase) => {
+                                log_game_continued(&phase);
+                                let frame = phase.compose_frame();
+                                return (AppScene::Overworld(Box::new(phase)), frame);
+                            }
+                            Err(err) => eprintln!("{err} -- staying on the main menu"),
+                        }
                     }
+                    MainMenuAction::None => {}
                 }
             } else if buttons.is_newly_pressed(Buttons::UP) {
-                menu.move_up();
+                state.scene.move_up();
             } else if buttons.is_newly_pressed(Buttons::DOWN) {
-                menu.move_down();
+                state.scene.move_down();
             }
-            let frame = menu.compose_frame();
-            (AppScene::MainMenu(menu), frame)
+            let frame = state.scene.compose_frame();
+            (AppScene::MainMenu(state), frame)
         }
         AppScene::Intro(mut intro_scene) => {
             let confirm_pressed = buttons.is_newly_pressed(Buttons::A);
@@ -265,309 +429,4 @@ pub(crate) fn advance_scene(scene: AppScene, buttons: ButtonState) -> (AppScene,
 }
 
 #[cfg(test)]
-mod tests {
-    use super::{
-        advance_scene, confirm_starts_new_game, should_retry_overworld_load, title_advance_pressed,
-        AnimatedTitle, AppScene,
-    };
-    use crate::intro::{self, IntroStatus};
-    use crate::new_game;
-    use platform::{ButtonState, Buttons};
-
-    fn pressed(button: Buttons) -> ButtonState {
-        let mut state = ButtonState::new();
-        state.update(button);
-        state
-    }
-
-    pub(super) fn held(button: Buttons) -> ButtonState {
-        // Two updates: the first makes it newly-pressed, the second makes
-        // it merely held (matching a real multi-frame hold).
-        let mut state = ButtonState::new();
-        state.update(button);
-        state.update(button);
-        state
-    }
-
-    /// Finding 3 regression: `AppScene::OverworldLoadFailed` must retry
-    /// `OverworldPhase::load_default` only on a fresh confirm/skip edge, not
-    /// merely because a frame elapsed -- an ordinary held button (already
-    /// pressed on a previous frame) must not count.
-    #[test]
-    fn should_retry_overworld_load_only_on_a_fresh_confirm_or_skip_edge() {
-        assert!(!should_retry_overworld_load(ButtonState::new()));
-        assert!(should_retry_overworld_load(pressed(Buttons::A)));
-        assert!(should_retry_overworld_load(pressed(Buttons::B)));
-        assert!(
-            !should_retry_overworld_load(held(Buttons::A)),
-            "an already-held A (not a fresh edge) must not trigger a retry"
-        );
-        assert!(!should_retry_overworld_load(pressed(Buttons::START)));
-    }
-
-    /// Finding 3 regression: a failed `Intro` -> `Overworld` transition must
-    /// leave `AppScene::Intro` for the explicit `AppScene::OverworldLoadFailed`
-    /// waiting state after exactly one attempt -- not loop retrying (and
-    /// re-logging) from inside `AppScene::Intro` every frame, which is what
-    /// happens if the transition is only ever gated on
-    /// `IntroStatus::Finished` (sticky forever once reached).
-    ///
-    /// No local pack is ever present in this crate's own `cargo test`
-    /// environment (`assets-pack/` isn't written by anything in this repo --
-    /// see `crate::title::tests::load_default_reports_pack_missing_when_no_pack_is_extracted`
-    /// for the identical guard/rationale), so `OverworldPhase::load_default`
-    /// reliably fails here, exercising the real failure path without
-    /// `#[ignore]`. If a local pack *is* present, this test steps aside
-    /// entirely rather than asserting the wrong thing.
-    #[test]
-    fn a_failed_overworld_load_waits_instead_of_retrying_every_frame() {
-        if assets::pack::AssetPack::default_path().is_file() {
-            return;
-        }
-
-        let scene = AppScene::Intro(Box::new(intro::synthetic_finished_scene()));
-
-        let (after_first, _frame) = advance_scene(scene, ButtonState::new());
-        assert!(
-            matches!(after_first, AppScene::OverworldLoadFailed(_)),
-            "a failed load must leave `Intro` for the explicit waiting state"
-        );
-
-        // No input edge across further frames -> stay waiting, not attempt
-        // the load again (nor bounce back to `Intro`).
-        let (after_second, _frame) = advance_scene(after_first, ButtonState::new());
-        assert!(matches!(after_second, AppScene::OverworldLoadFailed(_)));
-
-        // A fresh confirm edge retries the load -- still fails (no pack),
-        // but must land back in the same waiting state, not panic.
-        let (after_retry, _frame) = advance_scene(after_second, pressed(Buttons::A));
-        assert!(matches!(after_retry, AppScene::OverworldLoadFailed(_)));
-    }
-
-    /// Finding 3 regression: the title screen advances on a freshly pressed
-    /// A *or* Start -- `Task_TitleScreenPhase3`'s own
-    /// `JOY_NEW(A_BUTTON) || JOY_NEW(START_BUTTON)`
-    /// (`pokeemerald/src/title_screen.c:782`), not Start alone -- and on
-    /// neither of them while merely held, nor on any other button.
-    #[test]
-    fn title_advances_on_a_freshly_pressed_a_or_start_only() {
-        assert!(title_advance_pressed(pressed(Buttons::START)));
-        assert!(
-            title_advance_pressed(pressed(Buttons::A)),
-            "upstream's idle title task accepts A as well as Start"
-        );
-        assert!(!title_advance_pressed(ButtonState::new()));
-        assert!(
-            !title_advance_pressed(held(Buttons::A)),
-            "JOY_NEW means a fresh edge -- an already-held A must not advance"
-        );
-        assert!(!title_advance_pressed(held(Buttons::START)));
-        assert!(!title_advance_pressed(pressed(Buttons::B)));
-        assert!(!title_advance_pressed(pressed(Buttons::SELECT)));
-    }
-
-    /// I-3 scene-flow test: title screen, A or Start newly pressed -> main
-    /// menu. Needs the real pack (both `TitleScene` and
-    /// `main_menu::load_default` read from it).
-    #[test]
-    #[ignore = "needs a local pack: run `cargo xtask extract` first"]
-    fn title_a_or_start_button_transitions_to_main_menu() {
-        for button in [Buttons::START, Buttons::A] {
-            let title_scene =
-                crate::title::load_default().expect("run `cargo xtask extract` first");
-            let scene = AppScene::Title(Box::new(AnimatedTitle {
-                scene: title_scene,
-                tick: 0,
-                presented: false,
-            }));
-
-            let (next, _frame) = advance_scene(scene, pressed(button));
-
-            assert!(
-                matches!(next, AppScene::MainMenu(_)),
-                "{button:?} on the title screen must transition to the main menu"
-            );
-        }
-    }
-
-    /// I-3 scene-flow test: title screen, no advance press -> stays on title
-    /// and keeps animating (the pre-I-3 animated-title behaviour must
-    /// survive the state-machine refactor unchanged).
-    #[test]
-    #[ignore = "needs a local pack: run `cargo xtask extract` first"]
-    fn title_without_start_stays_on_title_and_keeps_animating() {
-        let title_scene = crate::title::load_default().expect("run `cargo xtask extract` first");
-        let scene = AppScene::Title(Box::new(AnimatedTitle {
-            scene: title_scene,
-            tick: 0,
-            presented: true, // as if this were the second frame onward.
-        }));
-
-        let (next, _frame) = advance_scene(scene, ButtonState::new());
-
-        let AppScene::Title(title) = next else {
-            panic!("expected to stay on the title screen");
-        };
-        assert_eq!(title.tick, 1, "the tick must still advance every frame");
-    }
-
-    /// I-3 scene-flow test: main menu, `NEW GAME` selected (the default,
-    /// per `crate::main_menu`'s module docs) and A newly pressed -> intro.
-    #[test]
-    #[ignore = "needs a local pack: run `cargo xtask extract` first"]
-    fn main_menu_confirm_on_new_game_transitions_to_intro() {
-        let menu = crate::main_menu::load_default().expect("run `cargo xtask extract` first");
-        let scene = AppScene::MainMenu(Box::new(menu));
-
-        let (next, _frame) = advance_scene(scene, pressed(Buttons::A));
-
-        assert!(
-            matches!(next, AppScene::Intro(_)),
-            "A on NEW GAME must transition to the intro"
-        );
-    }
-
-    /// Issue #216 regression: A on `OPTION` must stay on the main menu, not
-    /// incorrectly launch the intro -- its own destination screen is a
-    /// separate, not-yet-built slice (`crate::flow::advance_scene`'s
-    /// `MainMenuItem::Option` arm). No local pack needed: this never
-    /// reaches a pack-loading call at all (`crate::main_menu::synthetic_scene`'s
-    /// own doc comment).
-    #[test]
-    fn main_menu_confirm_on_option_stays_on_the_main_menu() {
-        let mut menu = crate::main_menu::synthetic_scene();
-        menu.move_down();
-        assert_eq!(menu.selected(), crate::main_menu::MainMenuItem::Option);
-        let scene = AppScene::MainMenu(Box::new(menu));
-
-        let (next, _frame) = advance_scene(scene, pressed(Buttons::A));
-
-        let AppScene::MainMenu(menu) = next else {
-            panic!("A on OPTION must not leave the main menu");
-        };
-        assert_eq!(menu.selected(), crate::main_menu::MainMenuItem::Option);
-    }
-
-    /// Issue #216 regression, the half the scene-level test above cannot
-    /// see: with no pack, a failed `intro::load_default` and a swallowed
-    /// OPTION press both land back on the main menu, so the item -> action
-    /// mapping itself is pinned here on the pure decision function instead
-    /// (`confirm_starts_new_game`'s own doc comment).
-    #[test]
-    fn confirm_starts_new_game_maps_new_game_only() {
-        assert!(
-            confirm_starts_new_game(crate::main_menu::MainMenuItem::NewGame),
-            "A on NEW GAME is upstream's ACTION_NEW_GAME (main_menu.c:952-957)"
-        );
-        assert!(
-            !confirm_starts_new_game(crate::main_menu::MainMenuItem::Option),
-            "A on OPTION must not launch the intro -- ACTION_OPTION's screen \
-             is not built yet (issue #216 scope notes)"
-        );
-    }
-
-    /// Upstream `Task_HandleMainMenuInput` reads A before the D-pad
-    /// (`main_menu.c:888` before `903`/`915` -- an if/else-if chain), so a
-    /// same-frame A + direction press acts on A and never moves the
-    /// selection. Pinned on OPTION (whose A press is pack-independently
-    /// inert) with UP alongside: the swallowed A must still win, leaving
-    /// the selection exactly where it was.
-    #[test]
-    fn main_menu_a_wins_over_a_same_frame_direction_press() {
-        let mut menu = crate::main_menu::synthetic_scene();
-        menu.move_down();
-        assert_eq!(menu.selected(), crate::main_menu::MainMenuItem::Option);
-        let scene = AppScene::MainMenu(Box::new(menu));
-
-        let (next, _frame) = advance_scene(scene, pressed(Buttons::A | Buttons::UP));
-
-        let AppScene::MainMenu(menu) = next else {
-            panic!("a swallowed A press must stay on the main menu");
-        };
-        assert_eq!(
-            menu.selected(),
-            crate::main_menu::MainMenuItem::Option,
-            "A must win over a same-frame UP press (upstream's else-if chain)"
-        );
-    }
-
-    /// Issue #216 regression: `DPAD_UP`/`DPAD_DOWN`, newly pressed, move the
-    /// main menu's selection -- no pack needed (module docs on the test
-    /// above).
-    #[test]
-    fn main_menu_up_and_down_move_the_selection() {
-        let menu = crate::main_menu::synthetic_scene();
-        let scene = AppScene::MainMenu(Box::new(menu));
-
-        let (after_down, _frame) = advance_scene(scene, pressed(Buttons::DOWN));
-        let AppScene::MainMenu(menu) = after_down else {
-            panic!("expected to stay on the main menu");
-        };
-        assert_eq!(menu.selected(), crate::main_menu::MainMenuItem::Option);
-
-        let scene = AppScene::MainMenu(menu);
-        let (after_up, _frame) = advance_scene(scene, pressed(Buttons::UP));
-        let AppScene::MainMenu(menu) = after_up else {
-            panic!("expected to stay on the main menu");
-        };
-        assert_eq!(menu.selected(), crate::main_menu::MainMenuItem::NewGame);
-    }
-
-    /// I-3 scene-flow test: intro finishing (here, via the skip path --
-    /// `crate::intro`'s module docs on why B skips the whole intro) hands
-    /// off to the overworld with the player placed at the upstream spawn
-    /// tile (`crate::new_game::SPAWN_POSITION`), not left at `(0, 0)` or
-    /// wherever the intro's own defaults would otherwise leave it.
-    #[test]
-    #[ignore = "needs a local pack: run `cargo xtask extract` first"]
-    fn intro_skip_transitions_to_overworld_with_the_player_at_the_spawn_tile() {
-        let intro_scene = crate::intro::load_default().expect("run `cargo xtask extract` first");
-        let scene = AppScene::Intro(Box::new(intro_scene));
-
-        let (next, _frame) = advance_scene(scene, pressed(Buttons::B));
-
-        let AppScene::Overworld(phase) = next else {
-            panic!("expected the skipped intro to hand off to the overworld");
-        };
-        assert_eq!(phase.player.position(), new_game::SPAWN_POSITION);
-        assert_eq!(phase.player.elevation(), new_game::SPAWN_ELEVATION);
-        assert_eq!(phase.player.facing(), new_game::SPAWN_FACING);
-        assert_eq!(phase.map_id, new_game::SPAWN_MAP_ID);
-
-        // Finding 1: the transition must actually call
-        // `new_game::init_save_blocks_for_new_game` and retain its result,
-        // not just the player's in-memory position -- pin the same
-        // `NewGameInitData` effects `crate::new_game`'s own tests already
-        // check against `init_save_blocks` directly.
-        assert_eq!(phase.save1.money, new_game::STARTING_MONEY);
-        assert_eq!(phase.save1.player_party_count, 0);
-        assert_eq!(phase.save1.bag, engine::save::Bag::default());
-        assert_eq!(phase.save1.location.map_group, new_game::SPAWN_MAP_GROUP);
-        assert_eq!(phase.save1.location.map_num, new_game::SPAWN_MAP_NUM);
-        assert_eq!(phase.save2.player_gender, new_game::DEFAULT_PLAYER_GENDER);
-        assert_eq!(phase.save2.encryption_key, 0);
-    }
-
-    /// I-3 scene-flow test: the intro's own paged advance-on-confirm (not
-    /// just the skip shortcut) also reaches the overworld once every page
-    /// is read. Confirms every tick; `IntroScene`'s own headless tests
-    /// (`crate::intro::tests`) already cover the finer per-page timing.
-    #[test]
-    #[ignore = "needs a local pack: run `cargo xtask extract` first"]
-    fn intro_finishing_every_page_also_transitions_to_the_overworld() {
-        let mut intro_scene =
-            crate::intro::load_default().expect("run `cargo xtask extract` first");
-        let mut status = IntroStatus::Continue;
-        for _ in 0..20_000 {
-            status = intro_scene.tick(true, false);
-            if status == IntroStatus::Finished {
-                break;
-            }
-        }
-        assert_eq!(status, IntroStatus::Finished, "the intro must terminate");
-
-        let scene = AppScene::Intro(Box::new(intro_scene));
-        let (next, _frame) = advance_scene(scene, ButtonState::new());
-        assert!(matches!(next, AppScene::Overworld(_)));
-    }
-}
+mod tests;

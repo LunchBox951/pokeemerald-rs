@@ -28,10 +28,17 @@
 //! rolls a wild encounter on every completed step (I-4, issue #169); the
 //! handoff from a rolled species/level to a real `battle::Battle` lives in
 //! `flow::wild_encounter`, headless for now — there is no battle scene yet.
+//!
+//! [`game_save`](crate::game_save) closes the loop (I-6, issue #214): the
+//! overworld's live `SaveBlock1`/`SaveBlock2` are written to a real save
+//! file on the way out, and read back at boot so the main menu can offer
+//! `CONTINUE` — upstream's `LoadGameSave`/`TrySavingData` pair, over
+//! `engine::save`'s existing sector serialization.
 
 pub mod app;
 mod flow;
 pub mod frame;
+mod game_save;
 pub mod intro;
 pub mod main_menu;
 pub mod new_game;

@@ -39,6 +39,12 @@
 //! its "log-or-ignore is fine" failure policy for a transition's own pack
 //! load.
 //!
+//! [`App`] also owns the session's save medium (I-6, issue #214): the
+//! [`SaveSlot`] it hands to every [`crate::flow::advance_scene`] call, and to
+//! [`crate::flow::save_on_exit`] on the one frame [`App::step`] observes a
+//! close request. That shutdown write is the only place this shell touches
+//! save state directly -- see [`crate::flow`]'s module docs for both ends.
+//!
 //! # The headless real-boot check (I-2, issues #168 and #175)
 //!
 //! The single home for this rationale: the items below cross-reference it
@@ -106,6 +112,7 @@ use platform::{ButtonState, Buttons, Frame, Platform, PlatformError};
 
 use crate::flow::{self, AnimatedTitle, AppScene};
 use crate::frame::to_platform_frame;
+use crate::game_save::SaveSlot;
 use crate::scene::BootScene;
 use crate::title::{self, TitleSceneError};
 
@@ -191,6 +198,12 @@ pub struct App {
     /// section) -- `None` for a headless `App` (module docs), whose
     /// [`BootScene`] frame never changes.
     scene: Option<AppScene>,
+    /// This session's save medium (I-6, issue #214): read by the `Title` ->
+    /// `MainMenu` transition, written by [`flow::save_on_exit`] on the way
+    /// out. Owned here, at the one place with a whole-session lifetime, and
+    /// passed down `(oop-boundaries)` -- upstream's equivalent is flash plus
+    /// the `gSaveCounter`/`gLastWrittenSector` globals.
+    save_slot: SaveSlot,
 }
 
 /// Compose an already-loaded [`title::TitleScene`] at tick 0 into the
@@ -226,6 +239,7 @@ impl App {
             platform,
             frame,
             scene: Some(scene),
+            save_slot: SaveSlot::default_location(),
         }
     }
 
@@ -305,6 +319,7 @@ impl App {
             platform: Platform::new_headless(),
             frame: compose_boot_frame(),
             scene: None,
+            save_slot: SaveSlot::default_location(),
         }
     }
 
@@ -361,6 +376,19 @@ impl App {
     /// fails.
     pub fn step(&mut self) -> Result<bool, AppError> {
         if !self.platform.pump()? {
+            // I-6's write trigger, and the only one this slice ships: on the
+            // way out, persist whatever save state the current scene holds.
+            // See `flow::save_on_exit` for why this stands in for upstream's
+            // start-menu SAVE flow, and why a failure here is logged rather
+            // than turned into an `AppError` -- the window is already
+            // closing, and there is nothing left to show a diagnostic on.
+            if let Some(Err(err)) = self
+                .scene
+                .as_ref()
+                .and_then(|scene| flow::save_on_exit(scene, &self.save_slot))
+            {
+                eprintln!("save: {err} -- the game was not saved on exit");
+            }
             return Ok(false);
         }
         let buttons = *self.platform.buttons();
@@ -368,7 +396,7 @@ impl App {
             eprintln!("{line}");
         }
         if let Some(scene) = self.scene.take() {
-            let (next, frame) = flow::advance_scene(scene, buttons);
+            let (next, frame) = flow::advance_scene(scene, buttons, &self.save_slot);
             self.scene = Some(next);
             self.frame = frame;
         }
