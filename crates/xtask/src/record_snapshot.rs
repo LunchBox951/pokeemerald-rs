@@ -58,8 +58,12 @@
 //! # Determinism
 //!
 //! Both files' bytes are a pure function of the pack's own bytes and the
-//! selected [`Scene`], plus the ambient git SHA — no timestamp, no RNG, no
-//! wall-clock read anywhere in this module. `rgb_hash`/`pack_hash` are both
+//! selected [`Scene`], plus the ambient git SHA (with a `-dirty` marker when
+//! the worktree has uncommitted changes — [`git_sha`]) — no timestamp, no
+//! RNG, no wall-clock read anywhere in this module. The `.rgb`/`.meta` pair
+//! is staged through `.tmp` siblings and renamed into place, so a partial
+//! failure never publishes a `.rgb` the blessing workflow would pair with a
+//! stale `.meta` ([`run_with_paths`]). `rgb_hash`/`pack_hash` are both
 //! [`fnv1a64`] (a small, owned, `std`-only hash — not a `sha2` dependency
 //! this module has no cryptographic need for); `pack_hash` covers the whole
 //! pack file's bytes, not just the entries this scene reads: two packs that
@@ -173,9 +177,10 @@ pub struct Report {
     pub rgb_hash: String,
     /// [`fnv1a64`] of the whole pack file's bytes, lowercase hex.
     pub pack_hash: String,
-    /// The current `git rev-parse HEAD`, or `"unknown"` if it could not be
-    /// determined (module docs: never a stand-in for wall-clock data, just
-    /// a best-effort provenance string).
+    /// The current `git rev-parse HEAD`, suffixed `-dirty` when the
+    /// worktree has uncommitted changes (see [`git_sha`]), or `"unknown"`
+    /// if it could not be determined (module docs: never a stand-in for
+    /// wall-clock data, just a best-effort provenance string).
     pub git_sha: String,
 }
 
@@ -225,13 +230,32 @@ pub fn run_with_paths(
         .map_err(|e| RecordSnapshotError::Write(output_dir.to_path_buf(), e.to_string()))?;
 
     let rgb_path = output_dir.join(format!("{}.rgb", scene.name()));
-    std::fs::write(&rgb_path, &rgb_bytes)
-        .map_err(|e| RecordSnapshotError::Write(rgb_path.clone(), e.to_string()))?;
-
     let meta_path = output_dir.join(format!("{}.meta", scene.name()));
     let meta = render_meta(scene, &inputs, &rgb_hash, &pack_hash, &git_sha);
-    std::fs::write(&meta_path, &meta)
-        .map_err(|e| RecordSnapshotError::Write(meta_path.clone(), e.to_string()))?;
+
+    // Write both files to `.tmp` siblings first and only then rename them
+    // into place, so a capture that fails part-way can never leave a
+    // *valid-looking* half-capture behind. The blessing workflow
+    // (`docs/snapshots.md`) reads the pair — a `.rgb` whose companion
+    // `.meta` write failed would otherwise sit next to the *previous*
+    // run's stale `.meta`, and an operator diffing hashes would be
+    // blessing pixels against metadata that never described them. Both
+    // temporaries are written before either rename, and the `.meta`
+    // rename lands last, so the window in which `.rgb` is new and `.meta`
+    // is stale is one `rename(2)` wide rather than one whole frame
+    // composition + file write wide. (Same-directory renames are atomic
+    // on every platform this project targets; `write_then_rename` cleans
+    // up its own temporary on failure.)
+    let rgb_tmp = tmp_sibling(&rgb_path);
+    let meta_tmp = tmp_sibling(&meta_path);
+    let staged = write_temporaries(&rgb_tmp, &rgb_bytes, &meta_tmp, meta.as_bytes());
+    if let Err(err) = staged {
+        let _ = std::fs::remove_file(&rgb_tmp);
+        let _ = std::fs::remove_file(&meta_tmp);
+        return Err(err);
+    }
+    rename_into_place(&rgb_tmp, &rgb_path)?;
+    rename_into_place(&meta_tmp, &meta_path)?;
 
     Ok(Report {
         rgb_path,
@@ -240,6 +264,46 @@ pub fn run_with_paths(
         rgb_hash,
         pack_hash,
         git_sha,
+    })
+}
+
+/// The staging path [`run_with_paths`] writes before renaming into place:
+/// `path` with `.tmp` appended (`main-menu-new-game.rgb.tmp`), so the
+/// temporary is a sibling in the same directory — a cross-directory rename
+/// is not guaranteed atomic (it may not even stay on one filesystem),
+/// which would defeat the whole point.
+///
+/// The suffix is appended to the *whole* file name rather than replacing
+/// the extension: `<scene>.tmp` for both files would have the two writes
+/// racing each other over one path.
+fn tmp_sibling(path: &Path) -> PathBuf {
+    let mut name = path.as_os_str().to_os_string();
+    name.push(".tmp");
+    PathBuf::from(name)
+}
+
+/// Write both staging files (see [`run_with_paths`]'s atomicity note).
+/// Split out so its caller can clean up *both* temporaries on the first
+/// failure with one error path.
+fn write_temporaries(
+    rgb_tmp: &Path,
+    rgb_bytes: &[u8],
+    meta_tmp: &Path,
+    meta_bytes: &[u8],
+) -> Result<(), RecordSnapshotError> {
+    std::fs::write(rgb_tmp, rgb_bytes)
+        .map_err(|e| RecordSnapshotError::Write(rgb_tmp.to_path_buf(), e.to_string()))?;
+    std::fs::write(meta_tmp, meta_bytes)
+        .map_err(|e| RecordSnapshotError::Write(meta_tmp.to_path_buf(), e.to_string()))
+}
+
+/// Move a staged temporary onto its final path, reporting the *final* path
+/// in any error (that is the path the caller asked for and the one
+/// `docs/snapshots.md` names).
+fn rename_into_place(tmp: &Path, final_path: &Path) -> Result<(), RecordSnapshotError> {
+    std::fs::rename(tmp, final_path).map_err(|e| {
+        let _ = std::fs::remove_file(tmp);
+        RecordSnapshotError::Write(final_path.to_path_buf(), e.to_string())
     })
 }
 
@@ -330,28 +394,53 @@ fn fnv1a64(bytes: &[u8]) -> u64 {
     hash
 }
 
-/// Best-effort `git rev-parse HEAD` against `repo_root`, trimmed. `None` on
+/// Best-effort `git rev-parse HEAD` against `repo_root`, trimmed, with
+/// `-dirty` appended when the worktree has uncommitted changes. `None` on
 /// any failure (git missing from `PATH`, `repo_root` not a git checkout,
 /// non-UTF8 output) — [`run_with_paths`] falls back to the literal string
 /// `"unknown"` rather than propagating an error: a missing SHA should never
 /// block a capture a developer is actively trying to record.
+///
+/// The `-dirty` suffix is load-bearing for the blessing workflow, not
+/// cosmetic. A bare SHA claims "these pixels are what commit `abc123`
+/// produces", and `docs/snapshots.md`'s table is blessed on exactly that
+/// claim — but the overwhelmingly common way to *record* a capture is
+/// mid-slice, with edits in the tree. Without the suffix, a capture of
+/// uncommitted work is indistinguishable from a capture of the commit it
+/// sits on, and a reviewer could bless a hash no one can reproduce from
+/// the recorded SHA.
 fn git_sha(repo_root: &Path) -> Option<String> {
+    let sha = git_output(repo_root, &["rev-parse", "HEAD"])?;
+    let sha = sha.trim();
+    if sha.is_empty() {
+        return None;
+    }
+    // A failed/unavailable `status` must not lose the SHA we already have:
+    // fall back to reporting it clean rather than to `"unknown"`. `git`
+    // just answered `rev-parse`, so this is close to unreachable.
+    let dirty = git_output(repo_root, &["status", "--porcelain"])
+        .is_some_and(|status| !status.trim().is_empty());
+    if dirty {
+        Some(format!("{sha}-dirty"))
+    } else {
+        Some(sha.to_owned())
+    }
+}
+
+/// Run one `git -C <repo_root> <args…>`, returning its stdout as UTF-8.
+/// `None` if git is missing, exits non-zero, or emits non-UTF-8 — every
+/// caller in [`git_sha`] treats those identically.
+fn git_output(repo_root: &Path, args: &[&str]) -> Option<String> {
     let output = std::process::Command::new("git")
         .arg("-C")
         .arg(repo_root)
-        .args(["rev-parse", "HEAD"])
+        .args(args)
         .output()
         .ok()?;
     if !output.status.success() {
         return None;
     }
-    let sha = String::from_utf8(output.stdout).ok()?;
-    let sha = sha.trim();
-    if sha.is_empty() {
-        None
-    } else {
-        Some(sha.to_owned())
-    }
+    String::from_utf8(output.stdout).ok()
 }
 
 #[cfg(test)]

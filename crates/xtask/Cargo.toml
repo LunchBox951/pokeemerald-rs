@@ -33,7 +33,10 @@ assets = { path = "../assets", optional = true }
 [features]
 # Pulls in the workspace-local scene drivers both `smoke` and
 # `record-snapshot` need. Not selected directly by a caller -- always
-# reached through one of those two subcommand features.
+# reached through one of those two subcommand features. `mod
+# record_snapshot` is `#[cfg]`d on *this* feature rather than on
+# `record-snapshot`, so CI's `cargo test -p xtask --features smoke` leg
+# compiles and runs its synthetic-pack tests (see `main.rs`'s crate docs).
 scenes = ["dep:pokeemerald-rs", "dep:assets"]
 smoke = ["scenes"]
 record-snapshot = ["scenes"]

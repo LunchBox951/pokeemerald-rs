@@ -1,30 +1,38 @@
 # Snapshots
 
-`cargo xtask record-snapshot --scene <name>` (F-3, V-4) drives one of the
-real headless scenes `pokeemerald-rs` exposes and writes a deterministic
-capture to `snapshots/` (gitignored, like `assets-pack/` — see
+```
+cargo run -p xtask --features record-snapshot -- record-snapshot --scene <name>
+```
+
+That command (F-3, V-4) drives one of the real headless scenes
+`pokeemerald-rs` exposes and writes a deterministic capture to `snapshots/`
+(gitignored, like `assets-pack/` — see
 `crates/xtask/src/record_snapshot.rs`'s module docs for the exact mechanism
-and error cases). Two files per scene:
+and error cases). The full `cargo run` form is the working one: the scene
+drivers sit behind an optional cargo feature (below), and the `cargo xtask`
+alias has no way to pass `--features`. Two files per scene:
 
 - `<scene>.rgb` — raw `240x160`, 3-byte-per-pixel (R, G, B) row-major pixels.
   No PNG encoder: that would be a new Cargo dependency `(minimal-deps)`.
 - `<scene>.meta` — plain text: `scene`, `width`, `height`, `pixel_format`,
   `inputs` (the scripted button presses the scene's state implies, or
   `none`), `rgb_hash`, `pack_hash` (both `fnv1a64`, a small owned hash — no
-  `sha2` dependency), and `git_sha`.
+  `sha2` dependency), and `git_sha` — suffixed `-dirty` when the capture was
+  recorded with uncommitted changes in the worktree, so a hash that cannot
+  be reproduced from the recorded commit says so.
 
 Both files are a pure function of the pack's bytes, the scene, and the
 current commit — no timestamp, no RNG — so two captures of the same pack on
-the same commit are byte-identical. Available scene names: `title`,
+the same commit are byte-identical. They are staged through `.tmp` siblings
+and renamed into place, so a failed capture leaves neither file rather than
+an orphaned `.rgb` beside a stale `.meta`. Available scene names: `title`,
 `main-menu-new-game`, `main-menu-option`.
 
-Requires the `record-snapshot` cargo feature (kept optional so a default
-`cargo build -p xtask` stays dependency-free — `crate::record_snapshot`'s
-module docs):
-
-```
-cargo run -p xtask --features record-snapshot -- record-snapshot --scene title
-```
+The `record-snapshot` feature is kept optional so a default `cargo build -p
+xtask` stays dependency-free (`crate::record_snapshot`'s module docs); it is
+an alias for the shared `scenes` feature, which is what the module itself is
+gated on so CI's `cargo test -p xtask --features smoke` leg compiles and runs
+its tests.
 
 ## Blessing workflow `(gated-by-default)`
 
@@ -35,7 +43,9 @@ alone. The mechanism:
 1. A developer runs `record-snapshot` against a real local pack
    (`cargo xtask extract` first) for every scene their change could have
    affected, and includes the printed `rgb_hash`/`pack_hash`/`git_sha` in
-   the PR's test evidence.
+   the PR's test evidence. A `-dirty` `git_sha` is fine as evidence during
+   review, but a row is only ever blessed at a clean SHA — nobody else can
+   reproduce the hash otherwise.
 2. An operator (a human decision, in the spirit of `docs/acceptance/v1.md`'s
    `H-1` playtest signoff — never automated) visually inspects the `.rgb`
    capture — e.g. against a real mGBA run of the same scene — and either

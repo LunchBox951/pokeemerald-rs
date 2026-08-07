@@ -20,15 +20,28 @@
 //!
 //! `mod e2e` and `mod record_snapshot` both need the workspace-local
 //! `pokeemerald-rs` (and, for `record_snapshot`, `assets`) dependency to
-//! drive a real scene; both are gated behind cargo features (`smoke` and
-//! `record-snapshot` respectively, both implying the shared `scenes`
-//! feature — see `Cargo.toml`) so a default `cargo build -p xtask` (every
-//! other subcommand) stays dependency-free, matching pre-PR `xtask`.
-//! Without the matching feature, each subcommand still fails *closed* —
+//! drive a real scene, so both sit behind the shared `scenes` cargo feature
+//! (`Cargo.toml`) — a default `cargo build -p xtask` (every other
+//! subcommand) stays dependency-free, matching pre-PR `xtask`. Without
+//! `scenes`, each subcommand still fails *closed* —
 //! [`XtaskError::SmokeUnavailable`] / [`XtaskError::RecordSnapshotUnavailable`],
 //! not a silent no-op — telling the caller which feature to rebuild with.
 //! `mod extract` needs no such gate: it depends on nothing beyond `std`, so
 //! it is always compiled in.
+//!
+//! The two `#[cfg]`s are deliberately *asymmetric*. `mod e2e` is gated on
+//! `smoke` (the caller-facing feature that names its subcommand), because
+//! `e2e::run_smoke` boots a real windowless app that CI runs as its own
+//! separate step. `mod record_snapshot` is gated on `scenes` — the shared
+//! *implied* feature — one rung wider than the `record-snapshot` feature
+//! that names its subcommand: `record_snapshot`'s tests are pure
+//! synthetic-pack unit tests (`crate::record_snapshot::tests`, no real pack,
+//! no window, no upstream checkout), and gating the module on
+//! `record-snapshot` would have left them compiled out of every command CI
+//! actually runs — invisible to every merge gate. Gating on `scenes` means
+//! CI's existing `cargo test -p xtask --features smoke` leg compiles and
+//! runs them, while `--features record-snapshot` (which implies `scenes`)
+//! still builds the subcommand for a developer.
 //!
 //! Run via the workspace alias: `cargo xtask <subcommand>` for
 //! feature-free subcommands (`extract`, `scenario`); a gated subcommand
@@ -44,7 +57,7 @@ use std::process::ExitCode;
 #[cfg(feature = "smoke")]
 mod e2e;
 mod extract;
-#[cfg(feature = "record-snapshot")]
+#[cfg(feature = "scenes")]
 mod record_snapshot;
 
 /// Usage text shown on stderr for any parse error.
@@ -379,7 +392,8 @@ fn parse_e2e(rest: &[String]) -> Result<(Suite, bool), XtaskError> {
 /// asset-pack pipeline it drives. `e2e --suite smoke` is also real (F-3,
 /// V-1) when built with `--features smoke`: see [`e2e::run_smoke`].
 /// `record-snapshot` is also real (F-3, V-4) when built with `--features
-/// record-snapshot`: see [`record_snapshot::run`]. Without the matching
+/// record-snapshot` (or anything else implying `scenes` — crate docs):
+/// see [`record_snapshot::run`]. Without the matching
 /// feature, each of those two still fails *closed* —
 /// [`XtaskError::SmokeUnavailable`] / [`XtaskError::RecordSnapshotUnavailable`]
 /// — rather than silently no-opping. Every other subcommand — `scenario`
@@ -413,7 +427,7 @@ fn dispatch(cmd: &Command) -> Result<(), XtaskError> {
             );
             Ok(())
         }
-        #[cfg(feature = "record-snapshot")]
+        #[cfg(feature = "scenes")]
         Command::RecordSnapshot { scene } => {
             let report = record_snapshot::run(*scene)
                 .map_err(|err| XtaskError::RecordSnapshotFailed(err.to_string()))?;
@@ -429,7 +443,7 @@ fn dispatch(cmd: &Command) -> Result<(), XtaskError> {
             );
             Ok(())
         }
-        #[cfg(not(feature = "record-snapshot"))]
+        #[cfg(not(feature = "scenes"))]
         Command::RecordSnapshot { .. } => Err(XtaskError::RecordSnapshotUnavailable),
         Command::Scenario => Err(XtaskError::NotImplemented("scenario")),
         #[cfg(feature = "smoke")]
@@ -778,13 +792,17 @@ mod tests {
     }
 
     // Identical reasoning to `e2e_smoke_without_feature_fails_closed`, for
-    // `record-snapshot`/`--features record-snapshot`: without the feature,
+    // `record-snapshot`: in a build with neither `scenes`-implying feature,
     // `mod record_snapshot` is not compiled in, so this must fail *closed*
     // rather than silently no-opping `(gated-by-default)` `(test-ratchet)`.
-    // The determinism/metadata behaviour with the feature present lives in
-    // `crate::record_snapshot::tests` instead.
+    // Gated on `scenes`, not `record-snapshot`, to match the module's own
+    // `#[cfg]` (crate docs' "asymmetric" note): under `--features smoke` the
+    // subcommand *is* compiled in and dispatch really runs it, so asserting
+    // `RecordSnapshotUnavailable` there would be asserting the opposite of
+    // the truth. The determinism/metadata behaviour with the module present
+    // lives in `crate::record_snapshot::tests` instead.
     #[test]
-    #[cfg(not(feature = "record-snapshot"))]
+    #[cfg(not(feature = "scenes"))]
     fn record_snapshot_without_feature_fails_closed() {
         let err = run(&args(&["record-snapshot", "--scene", "title"])).unwrap_err();
         assert!(matches!(err, XtaskError::RecordSnapshotUnavailable));

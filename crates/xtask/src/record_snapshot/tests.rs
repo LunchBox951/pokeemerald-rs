@@ -169,11 +169,65 @@ fn git_sha_of_this_checkout_is_a_40_char_hex_string() {
     // `crate::extract::repo_root()` walks back to the repo root
     // regardless) -- a real git repo, so this must succeed, not fall back
     // to "unknown".
+    //
+    // The worktree's cleanliness is not this test's to control (CI's is
+    // clean, a developer mid-slice is not), so accept either form and
+    // assert the exact shape of each: a bare 40-hex SHA, or that same SHA
+    // with the literal `-dirty` marker `git_sha` appends -- never some
+    // other suffix, and never a truncated/`describe`-style SHA.
     let sha = git_sha(&crate::extract::repo_root()).expect("this checkout is a real git repo");
-    assert_eq!(sha.len(), 40, "a git SHA-1 is 40 hex characters: {sha}");
+    let hex = sha.strip_suffix("-dirty").unwrap_or(&sha);
+    assert_eq!(hex.len(), 40, "a git SHA-1 is 40 hex characters: {sha}");
     assert!(
-        sha.chars().all(|c| c.is_ascii_hexdigit()),
+        hex.chars().all(|c| c.is_ascii_hexdigit()),
         "a git SHA must be all hex digits: {sha}"
+    );
+}
+
+#[test]
+fn git_sha_marks_a_dirty_worktree_and_leaves_a_clean_one_bare() {
+    // A scratch repo this test fully controls, so it can assert *both*
+    // states -- the ambient checkout can only ever show one of them, and
+    // which one is not this suite's to decide (see
+    // `git_sha_of_this_checkout_is_a_40_char_hex_string`). Without this,
+    // deleting the `--porcelain` check would still pass the whole suite on
+    // a clean CI checkout.
+    let repo = scratch_path("dirty-marker-repo");
+    let _guard = ScratchGuard(repo.clone());
+    std::fs::create_dir_all(&repo).unwrap();
+
+    let git = |args: &[&str]| {
+        let ok = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&repo)
+            .args(args)
+            .output()
+            .expect("git must be on PATH")
+            .status
+            .success();
+        assert!(ok, "git {args:?} failed");
+    };
+    git(&["init", "--quiet"]);
+    // Committing needs an identity, and this scratch repo has no config of
+    // its own to inherit one from in a sandboxed CI environment.
+    git(&["config", "user.email", "test@example.invalid"]);
+    git(&["config", "user.name", "test"]);
+    std::fs::write(repo.join("tracked.txt"), b"one").unwrap();
+    git(&["add", "tracked.txt"]);
+    git(&["commit", "--quiet", "-m", "initial"]);
+
+    let clean = git_sha(&repo).expect("a freshly committed repo has a HEAD");
+    assert!(
+        !clean.ends_with("-dirty"),
+        "a clean worktree must report a bare SHA: {clean}"
+    );
+
+    std::fs::write(repo.join("tracked.txt"), b"two").unwrap();
+    let dirty = git_sha(&repo).expect("HEAD is unchanged by an uncommitted edit");
+    assert_eq!(
+        dirty,
+        format!("{clean}-dirty"),
+        "an uncommitted change must mark the SHA dirty"
     );
 }
 
@@ -260,6 +314,29 @@ fn main_menu_new_game_writes_a_full_frame_of_rgb_bytes_and_correct_metadata() {
     let rgb_bytes = std::fs::read(&report.rgb_path).unwrap();
     assert_eq!(rgb_bytes.len(), report.payload_len);
 
+    // Channel order, pinned positionally against a known pixel.
+    //
+    // `MainMenuScene::compose` fills the whole framebuffer with the
+    // backdrop colour before drawing either item window, and the backdrop
+    // is never darkened (`main_menu.rs`' "Selection highlight" section), so
+    // pixel (0, 0) -- the top-left corner, far outside both windows -- is
+    // exactly `interface/palette/main_menu_bg` entry 0. This fixture sets
+    // that entry to bgr555 `0x4104` (see `synthetic_main_menu_pack_bytes`).
+    //
+    // `rendering::Bgr555::from_raw(0x4104)` decodes to 5-bit channels
+    // r=4, g=8, b=16 (red in bits 0-4, green 5-9, blue 10-14), and
+    // `to_rgb888` expands each with `(c << 3) | (c >> 2)`:
+    //   r = (4  << 3) | (4  >> 2) = 33
+    //   g = (8  << 3) | (8  >> 2) = 66
+    //   b = (16 << 3) | (16 >> 2) = 132
+    // Spelled as literals rather than recomputed through `rendering` (not a
+    // dependency of this crate, and recomputing would only re-derive the
+    // value, never pin the *order*). All three differ, so any channel swap
+    // in `frame_to_rgb_bytes` -- BGR, GRB, anything -- fails here.
+    assert_eq!(rgb_bytes[0], 33, "byte 0 of a pixel must be red");
+    assert_eq!(rgb_bytes[1], 66, "byte 1 of a pixel must be green");
+    assert_eq!(rgb_bytes[2], 132, "byte 2 of a pixel must be blue");
+
     let meta = std::fs::read_to_string(&report.meta_path).unwrap();
     assert!(meta.contains("scene: main-menu-new-game\n"));
     assert!(meta.contains("width: 240\n"));
@@ -276,6 +353,56 @@ fn main_menu_new_game_writes_a_full_frame_of_rgb_bytes_and_correct_metadata() {
     assert_eq!(report.rgb_hash, format!("{:016x}", fnv1a64(&rgb_bytes)));
     let pack_bytes = std::fs::read(&pack_path).unwrap();
     assert_eq!(report.pack_hash, format!("{:016x}", fnv1a64(&pack_bytes)));
+
+    // The `.tmp` siblings the write stages through must not survive a
+    // successful capture (`run_with_paths`' atomicity note).
+    let leftovers: Vec<PathBuf> = std::fs::read_dir(&output_dir)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| {
+            path.extension()
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("tmp"))
+        })
+        .collect();
+    assert!(
+        leftovers.is_empty(),
+        "staging temporaries must be renamed away, not left behind: {leftovers:?}"
+    );
+
+    drop(out_guard);
+}
+
+#[test]
+fn a_failed_meta_write_publishes_no_orphaned_rgb() {
+    // The blessing workflow (`docs/snapshots.md`) reads the `.rgb`/`.meta`
+    // pair together, so a half-written capture must publish *neither*
+    // file: an orphaned `.rgb` next to a previous run's stale `.meta`
+    // would be blessed as if the metadata described those pixels
+    // `(gated-by-default)`.
+    //
+    // Forced by pre-creating a *directory* where the `.meta` staging file
+    // wants to go -- `fs::write` cannot truncate a directory, so the
+    // second staged write fails after the first has already succeeded,
+    // which is exactly the interleaving the two-file write has to survive.
+    let (pack_path, _pack_guard) = write_pack("failed-meta-write");
+    let output_dir = scratch_path("failed-meta-write-out");
+    let out_guard = ScratchGuard(output_dir.clone());
+    std::fs::create_dir_all(output_dir.join("main-menu-new-game.meta.tmp")).unwrap();
+
+    let err = run_with_paths(Scene::MainMenuNewGame, &pack_path, &output_dir).unwrap_err();
+    assert!(matches!(err, RecordSnapshotError::Write(_, _)), "{err}");
+    assert!(
+        !output_dir.join("main-menu-new-game.rgb").exists(),
+        "a failed capture must not publish a `.rgb` its `.meta` never described"
+    );
+    assert!(
+        !output_dir.join("main-menu-new-game.meta").exists(),
+        "a failed capture must not publish a `.meta`"
+    );
+    assert!(
+        !output_dir.join("main-menu-new-game.rgb.tmp").exists(),
+        "the already-written staging file must be cleaned up on failure"
+    );
 
     drop(out_guard);
 }
@@ -343,23 +470,56 @@ fn capturing_the_same_scene_twice_is_byte_identical() {
 
 #[test]
 fn run_writes_under_the_default_repo_snapshots_directory() {
-    // `run` (not `run_with_paths`) against the real default pack path,
-    // which does not exist in this synthetic-pack test environment --
-    // must fail closed with a `Pack` error, exactly like
-    // `missing_pack_fails_closed_with_pack_error` above, proving `run`
-    // really does default to `crate::extract::repo_root()`'s pack path
-    // rather than silently succeeding against nothing.
-    if assets::pack::AssetPack::default_path().is_file() {
-        // A real pack is present in this environment (e.g. a developer
-        // machine after `cargo xtask extract`) -- this test only checks
-        // the *no-pack* fail-closed path, so skip rather than assert
-        // something about real pack content here (covered by
+    // `run` (not `run_with_paths`) must derive *both* of its default paths
+    // from `crate::extract::repo_root()`: the pack it reads
+    // (`assets-pack/pokeemerald.pack`) and the directory it writes
+    // (`snapshots/`). Which of the two this run can prove depends on
+    // whether a local pack exists -- but every environment proves one of
+    // them, and both branches name the directory/file literally, so
+    // renaming either default breaks this test rather than sliding
+    // through.
+    let repo_root = crate::extract::repo_root();
+    let expected_pack = repo_root.join(crate::extract::OUTPUT_RELATIVE_PATH);
+    let expected_dir = repo_root.join("snapshots");
+
+    match super::run(Scene::MainMenuNewGame) {
+        // A real pack is present (e.g. a developer machine after `cargo
+        // xtask extract`): the capture succeeded, so pin where it landed.
+        // Pixel content is deliberately not asserted here -- that needs a
+        // real pack and lives in
         // `real_pack_scene_round_trips_the_capture_and_matches_a_second_run`
-        // below).
-        return;
+        // below.
+        Ok(report) => {
+            assert_eq!(
+                report.rgb_path,
+                expected_dir.join("main-menu-new-game.rgb"),
+                "`run` must write `<repo root>/snapshots/<scene>.rgb`"
+            );
+            assert_eq!(
+                report.meta_path,
+                expected_dir.join("main-menu-new-game.meta"),
+                "`run` must write `<repo root>/snapshots/<scene>.meta`"
+            );
+            assert!(report.rgb_path.is_file(), "the `.rgb` must really exist");
+            assert!(report.meta_path.is_file(), "the `.meta` must really exist");
+        }
+        // No local pack (CI, or a fresh clone before `cargo xtask
+        // extract`): must fail closed, and the error must name the exact
+        // default pack path -- proving `run` really did look there rather
+        // than at some other (or empty) path.
+        Err(RecordSnapshotError::Pack(assets::pack::PackError::NotFound(path))) => {
+            assert_eq!(
+                path, expected_pack,
+                "`run` must default to `<repo root>/assets-pack/pokeemerald.pack`"
+            );
+            // That a failed capture writes nothing at all is
+            // `missing_pack_fails_closed_with_pack_error`'s job -- asserted
+            // there against a scratch directory, where "empty" is
+            // unambiguous, rather than here against a shared repo-root
+            // directory a developer may have left captures in.
+        }
+        Err(other) => panic!("unexpected `run` failure: {other}"),
     }
-    let err = super::run(Scene::MainMenuNewGame).unwrap_err();
-    assert!(matches!(err, RecordSnapshotError::Pack(_)));
 }
 
 #[test]
