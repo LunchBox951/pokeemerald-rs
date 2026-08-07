@@ -382,17 +382,55 @@ fn synthetic_main_menu_pack_bytes() -> Vec<u8> {
     ])
 }
 
+struct TempPackGuard {
+    path: std::path::PathBuf,
+}
+
+impl TempPackGuard {
+    fn new(path: std::path::PathBuf) -> Self {
+        Self { path }
+    }
+
+    fn path(&self) -> &std::path::Path {
+        &self.path
+    }
+}
+
+impl Drop for TempPackGuard {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.path);
+    }
+}
+
 fn load_synthetic_scene() -> MainMenuScene {
     let path = std::env::temp_dir().join(format!(
         "pokeemerald-rs-main-menu-test-{}-{:?}.pack",
         std::process::id(),
         std::thread::current().id()
     ));
-    std::fs::write(&path, synthetic_main_menu_pack_bytes()).unwrap();
-    let pack = AssetPack::load(&path).unwrap();
-    let scene = MainMenuScene::from_pack(&pack).unwrap();
-    let _ = std::fs::remove_file(path);
-    scene
+    let temp_pack = TempPackGuard::new(path);
+    std::fs::write(temp_pack.path(), synthetic_main_menu_pack_bytes()).unwrap();
+    let pack = AssetPack::load(temp_pack.path()).unwrap();
+    MainMenuScene::from_pack(&pack).unwrap()
+}
+
+#[test]
+fn temp_pack_cleanup_is_unwind_safe() {
+    let path = std::env::temp_dir().join(format!(
+        "pokeemerald-rs-main-menu-unwind-test-{}-{:?}.pack",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+
+    let result = std::panic::catch_unwind(|| {
+        let temp_pack = TempPackGuard::new(path.clone());
+        std::fs::write(temp_pack.path(), synthetic_main_menu_pack_bytes()).unwrap();
+        assert!(temp_pack.path().exists());
+        panic!("deliberate panic to exercise temporary pack cleanup");
+    });
+
+    assert!(result.is_err(), "the deliberate panic must be observed");
+    assert!(!path.exists(), "temporary pack must be removed on unwind");
 }
 
 #[test]
