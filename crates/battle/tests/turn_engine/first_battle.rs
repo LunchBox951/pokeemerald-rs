@@ -336,3 +336,86 @@ fn first_battle_ai_does_not_flee_above_the_hp_threshold() {
          already panics on the exhausted sequence, this pins a lost one"
     );
 }
+
+#[test]
+fn first_battle_ai_does_not_flee_just_above_the_hp_threshold() {
+    let dex = Dex::new();
+    // Same shape as the full-HP no-flee test above, but the player sits at
+    // the *smallest* HP whose truncating percentage still exceeds the
+    // threshold -- one integer percent above 20. The opponent_ai unit test
+    // pins the inclusive edge (exactly 20% flees); this pins the exclusive
+    // one from the other side, so a threshold drifting upward (which a
+    // full-HP player can never notice) flees here and fails.
+    let mut player = max_iv_mon(&dex, 1, 5, vec![GROWL]); // slow
+    let enemy = max_iv_mon(&dex, 288, 50, vec![GROWL]); // fast
+
+    let max_hp = player.stats().max_hp;
+    let just_above = (21 * max_hp).div_ceil(100);
+    player.apply_damage(max_hp - just_above);
+    assert!(
+        100 * player.current_hp() / max_hp > 20,
+        "test setup must sit strictly above AI_FirstBattle's flee threshold"
+    );
+
+    // battle start, turn number, 4 simulatedRNG, tie-break, both Growls'
+    // accuracy rolls -- a flee would end the turn 3 draws short of this
+    // script and fail the draw-count pin even before the event assert.
+    let mut rng = SequenceRng::new([0, 0, 0, 0, 0, 0, 0, 0, 0]);
+    let mut battle = Battle::new(dex, player, enemy, true, &mut rng).unwrap();
+    let events = battle
+        .take_turn(PlayerAction::UseMove(0), &mut rng)
+        .unwrap();
+
+    assert!(
+        !events.contains(&BattleEvent::WildFled),
+        "just above the threshold must not trigger the flee branch"
+    );
+    assert_ne!(battle.outcome(), Some(BattleOutcome::WildFled));
+    assert_eq!(rng.draws(), 9);
+}
+
+#[test]
+fn first_battle_suppresses_the_wild_opponents_crit_draw_too() {
+    let dex = Dex::new();
+    // Wild-side mirror of `first_battle_suppresses_the_crit_draw_and_never_crits`:
+    // this time the *enemy* is faster and its Tackle actually lands on a
+    // surviving player -- the single most-executed path once #221 wires the
+    // scripted Route 101 encounter, whose L2 Zigzagoon spams Tackle.
+    let player = max_iv_mon(&dex, 1, 50, vec![GROWL]); // slower
+    let enemy = max_iv_mon(&dex, 288, 50, vec![TACKLE, GROWL]); // faster
+
+    // draws: battle start (0, unequal speed), turn number (0), 4 discarded
+    // simulatedRNG, tie-break (0 % 2 -> Tackle), the enemy's
+    // suppressed-crit Tackle (accuracy, damage roll, effect chance -- 3
+    // draws, not the ordinary hit's 4), then the player's own Growl
+    // (accuracy). If the wild side's crit suppression regressed, the
+    // reintroduced crit draw would exhaust this exact-sized 11-value
+    // script and panic -- and its 0 value would also *be* a crit, failing
+    // the assertion below first.
+    let mut rng = SequenceRng::new([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+    let mut battle = Battle::new(dex, player, enemy, true, &mut rng).unwrap();
+    let events = battle
+        .take_turn(PlayerAction::UseMove(0), &mut rng)
+        .unwrap();
+
+    let is_critical = events
+        .iter()
+        .find_map(|e| match e {
+            BattleEvent::Hit {
+                by_player: false,
+                is_critical,
+                ..
+            } => Some(*is_critical),
+            _ => None,
+        })
+        .expect("the wild Tackle must land on the surviving player");
+    assert!(
+        !is_critical,
+        "first_battle must suppress the wild side's crit roll too"
+    );
+    assert!(
+        battle.outcome().is_none(),
+        "both sides survive this exchange"
+    );
+    assert_eq!(rng.draws(), 11);
+}

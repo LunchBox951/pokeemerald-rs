@@ -56,9 +56,9 @@
 //!   [`crate::escape::try_run_from_battle`] at all — see `crate::escape`'s
 //!   module docs.
 //! - **Opponent selection.** The wild opponent's action comes from
-//!   [`opponent_ai::choose_enemy_action_first_battle`] (upstream's AI branch,
+//!   `opponent_ai::choose_enemy_action_first_battle` (upstream's AI branch,
 //!   narrowed to the one AI script this battle type ever runs) instead of
-//!   [`opponent_ai::choose_enemy_move`]'s rejection loop — see that function's docs,
+//!   `opponent_ai::choose_enemy_move`'s rejection loop — see that function's docs,
 //!   and "What the wild opponent chooses" below.
 //!
 //! Every other rule (turn order, damage, fainting, exp, PP) is unchanged.
@@ -143,7 +143,7 @@
 //! } while (move == MOVE_NONE);
 //! ```
 //!
-//! That is what [`opponent_ai::choose_enemy_move`] models, draw for draw. Note the
+//! That is what `opponent_ai::choose_enemy_move` models, draw for draw. Note the
 //! loop ignores PP entirely — a wild mon can and does pick a move it has no
 //! PP for, and upstream then **fails the move at `Cmd_attackcanceler`**, the
 //! first command of the hit script (`battle_script_commands.c:934`-`:939`):
@@ -158,7 +158,7 @@
 //! the rejection loop, drawing nothing.
 //!
 //! `first_battle` takes the AI branch at `:1563` instead —
-//! [`opponent_ai::choose_enemy_action_first_battle`], **not** upstream's general
+//! `opponent_ai::choose_enemy_action_first_battle`, **not** upstream's general
 //! trainer AI (`I-5`, still explicitly out of scope): the branch is narrowed
 //! to exactly the one AI script `AI_SCRIPT_FIRST_BATTLE` ever runs, because
 //! that is the *only* `aiFlags` bit this specific `gBattleTypeFlags` value
@@ -244,7 +244,7 @@ pub enum BattleEvent {
         by_player: bool,
         /// The move that was used. Carried on every move event because only
         /// the player's choice is caller-known: the wild opponent's comes out
-        /// of [`opponent_ai::choose_enemy_move`]'s rejection loop, so without this
+        /// of `opponent_ai::choose_enemy_move`'s rejection loop, so without this
         /// a presentation layer could not name the move the wild mon used.
         move_id: MoveId,
     },
@@ -367,7 +367,7 @@ pub enum BattleEvent {
 ///   exactly as they were.
 /// - **Stopped after the turn started but before either mon acted.** A wild
 ///   opponent with *every* slot spent is upstream's forced-Struggle case
-///   ([`opponent_ai::choose_enemy_move`]), and this slice cannot execute Struggle
+///   (`opponent_ai::choose_enemy_move`), and this slice cannot execute Struggle
 ///   — so when that fallback is the *first mover*, the turn stops with
 ///   nothing to report ([`BattleError::UnsupportedMoveEffect`] carrying
 ///   Struggle). By then the turn-number draw (plus a Speed-tie draw, if the
@@ -488,7 +488,7 @@ pub struct Battle {
     /// Route 101 intro Zigzagoon fight's three deltas from an ordinary wild
     /// encounter — crit suppression ([`crate::critical`]/[`crate::hit`]),
     /// running forbidden ([`crate::escape`]'s module docs), and the wild
-    /// opponent's AI-branch move choice ([`opponent_ai::choose_enemy_action_first_battle`])
+    /// opponent's AI-branch move choice (`opponent_ai::choose_enemy_action_first_battle`)
     /// — all gated on this one flag, matching upstream's single
     /// `gBattleTypeFlags` bit.
     ///
@@ -544,7 +544,7 @@ impl Battle {
     /// module docs), [`PlayerAction::Run`] is rejected outright with
     /// [`BattleError::RunForbidden`] before any draw
     /// ([`crate::escape`]'s module docs), and the wild opponent picks its
-    /// action via [`opponent_ai::choose_enemy_action_first_battle`] instead of the
+    /// action via `opponent_ai::choose_enemy_action_first_battle` instead of the
     /// ordinary rejection loop. Every other rule — turn order, damage,
     /// fainting, exp — is unchanged.
     pub fn new(
@@ -907,8 +907,8 @@ impl Battle {
     }
 
     /// The wild opponent's whole action, whichever of [`EnemyAction`]'s
-    /// three shapes [`opponent_ai::choose_enemy_move`] or
-    /// [`opponent_ai::choose_enemy_action_first_battle`] produced.
+    /// three shapes `opponent_ai::choose_enemy_move` or
+    /// `opponent_ai::choose_enemy_action_first_battle` produced.
     ///
     /// # Errors
     ///
