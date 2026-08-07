@@ -2781,8 +2781,17 @@ fn bedroom_bed_center_pillow_cannot_be_crossed_lengthwise() {
 
     // North, out through the headboard: the escape this issue reports.
     // Blocked by the standing tile's own behavior. Before the fix this
-    // landed on (1, 3).
-    walk(&mut phase, Buttons::UP);
+    // landed on (1, 3). The first held frame is stepped explicitly so the
+    // collision *outcome* is pinned too: a blocked step must cancel before
+    // transit ever starts, not start-then-snap-back to the same tile.
+    phase.step(held(Buttons::UP));
+    assert!(
+        !phase.player.in_transit(),
+        "a blocked northward exit must never enter transit"
+    );
+    for _ in 1..WALK_FRAMES_PER_TILE {
+        phase.step(ButtonState::new());
+    }
     assert_eq!(
         phase.player.position(),
         (1, 4),
@@ -2797,9 +2806,17 @@ fn bedroom_bed_center_pillow_cannot_be_crossed_lengthwise() {
     );
 
     // The mirror: stepping *onto* the pillow from the floor north of it is
-    // blocked by the destination tile's behavior instead.
+    // blocked by the destination tile's behavior instead -- same
+    // no-transit collision outcome, opposite function table.
     phase.player = PlayerState::new((1, 3), 3, Direction::South);
-    walk(&mut phase, Buttons::DOWN);
+    phase.step(held(Buttons::DOWN));
+    assert!(
+        !phase.player.in_transit(),
+        "a blocked southward entry must never enter transit"
+    );
+    for _ in 1..WALK_FRAMES_PER_TILE {
+        phase.step(ButtonState::new());
+    }
     assert_eq!(
         phase.player.position(),
         (1, 3),
