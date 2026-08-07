@@ -17,7 +17,7 @@ fn take_turn_after_the_battle_ended_is_an_error() {
     // hit (accuracy / no crit / best roll / effect chance). No speed-tie
     // draw at this gap.
     let mut rng = SequenceRng::new([0, 0, 0, 0, 1, 0, 0]);
-    let mut battle = Battle::new(dex, player, enemy, &mut rng).unwrap();
+    let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
     let _ = battle
         .take_turn(PlayerAction::UseMove(0), &mut rng)
         .unwrap();
@@ -67,7 +67,7 @@ fn full_wild_battle_runs_to_a_faint_and_reports_victory() {
         0, 0, 0, 1, 0, 0, 0, 1, 0, 0, // turn 2
         0, 0, 0, 1, 0, 0, // turn 3: player's hit faints the enemy
     ]);
-    let mut battle = Battle::new(dex, player, enemy, &mut rng).unwrap();
+    let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
 
     let mut turns = 0;
     let mut won = false;
@@ -113,7 +113,7 @@ fn losing_the_battle_reports_defeat_and_awards_no_exp() {
     // crit / best roll / effect chance). The script is exhausted: the
     // player's move drawing anything after the loss would panic.
     let mut rng = SequenceRng::new([0, 0, 0, 0, 1, 0, 0]);
-    let mut battle = Battle::new(dex, player, enemy, &mut rng).unwrap();
+    let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
     let events = battle
         .take_turn(PlayerAction::UseMove(0), &mut rng)
         .unwrap();
@@ -155,7 +155,7 @@ fn a_max_level_player_gains_no_exp_and_no_exp_event_on_victory() {
 
     // battle start, turn number, enemy pick, the player's one-shot hit.
     let mut rng = SequenceRng::new([0, 0, 0, 0, 1, 0, 0]);
-    let mut battle = Battle::new(dex, player, enemy, &mut rng).unwrap();
+    let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
     let events = battle
         .take_turn(PlayerAction::UseMove(0), &mut rng)
         .unwrap();
@@ -188,14 +188,21 @@ fn a_fainted_battler_is_rejected_before_the_battle_start_draw() {
     // rather than silently passing.
     let mut rng = SequenceRng::new([]);
     assert_eq!(
-        Battle::new(dex.clone(), fainted.clone(), healthy.clone(), &mut rng).unwrap_err(),
+        Battle::new(
+            dex.clone(),
+            fainted.clone(),
+            healthy.clone(),
+            false,
+            &mut rng
+        )
+        .unwrap_err(),
         BattleError::FaintedBattler(true)
     );
     assert_eq!(rng.draws(), 0, "a rejected configuration draws nothing");
 
     let mut rng = SequenceRng::new([]);
     assert_eq!(
-        Battle::new(dex, healthy, fainted, &mut rng).unwrap_err(),
+        Battle::new(dex, healthy, fainted, false, &mut rng).unwrap_err(),
         BattleError::FaintedBattler(false)
     );
     assert_eq!(rng.draws(), 0, "a rejected configuration draws nothing");

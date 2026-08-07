@@ -18,20 +18,58 @@
 //!    move (`turnOrderId = 5` early-out — the non-link branch's
 //!    `gChosenActionByBattler[0] == B_ACTION_RUN` test at
 //!    `battle_main.c:4784`-`:4794`, then the reordering block guarded by
-//!    `if (turnOrderId == 5)` at `:4797`; `:4778` is the link-battle variant,
+//!    `if (turnOrderId == 5)` at `:4797`; `:4776` is the link-battle variant,
 //!    which this slice does not model): success ends the battle immediately;
-//!    failure burns the player's turn and the opponent still acts.
+//!    failure burns the player's turn and the opponent still acts. In a
+//!    `first_battle` ([`Battle::new`]), Run is rejected outright before this
+//!    step is ever reached — see "`first_battle`" below.
 //! 2. Otherwise, [`crate::turn_order::resolve_order`] decides who moves
-//!    first from each side's chosen move priority and effective Speed.
-//! 3. The first mover's move resolves via [`crate::hit::resolve_hit`]; if it
-//!    faints the target, the battle ends immediately (win → exp gain via
-//!    [`crate::exp::wild_faint_exp`]; loss otherwise) and the second mover
+//!    first from each side's chosen action's priority and effective Speed —
+//!    the wild opponent fleeing (`first_battle` only) counts as priority `0`,
+//!    the same as `MOVE_NONE` (`battle_main.c:4700`-`:4707`).
+//! 3. The first mover's action resolves: a move via [`crate::hit::resolve_hit`]
+//!    (faints the target → battle ends immediately, win → exp gain via
+//!    [`crate::exp::wild_faint_exp`], loss otherwise, and the second mover
 //!    never acts — a fainted battler is skipped when its turn in
-//!    `gBattlerByTurnOrder` comes up.
-//! 4. Otherwise the second mover's move resolves the same way.
+//!    `gBattlerByTurnOrder` comes up), or the wild opponent fleeing
+//!    (`first_battle` only) → the battle ends immediately in
+//!    [`BattleOutcome::WildFled`], no RNG draw, and the second mover never
+//!    acts either (`HandleAction_Run`'s non-player branch,
+//!    `battle_util.c:524`-`:537`).
+//! 4. Otherwise the second mover's action resolves the same way.
 //!
 //! End-of-turn residual effects (weather/status ticks) are not modelled —
 //! none are modelled anywhere in this slice, so there is nothing to tick.
+//!
+//! # `first_battle`
+//!
+//! [`Battle::new`]'s `first_battle` parameter is `gBattleTypeFlags &
+//! BATTLE_TYPE_FIRST_BATTLE` — the Route 101 intro Zigzagoon fight (issue
+//! #187). Upstream's differences from an ordinary wild encounter, and where
+//! each lives in this crate:
+//!
+//! - **Crit suppression.** [`crate::hit::resolve_hit`]'s crit roll (and its
+//!   RNG draw) is skipped outright — see [`crate::critical`]'s module docs
+//!   and [`crate::hit`]'s draw-count table.
+//! - **Running forbidden.** [`PlayerAction::Run`] is rejected with
+//!   [`BattleError::RunForbidden`] before any draw, rather than reaching
+//!   [`crate::escape::try_run_from_battle`] at all — see `crate::escape`'s
+//!   module docs.
+//! - **Opponent selection.** The wild opponent's action comes from
+//!   `opponent_ai::choose_enemy_action_first_battle` (upstream's AI branch,
+//!   narrowed to the one AI script this battle type ever runs) instead of
+//!   `opponent_ai::choose_enemy_move`'s rejection loop — see that function's docs,
+//!   and "What the wild opponent chooses" below.
+//!
+//! Every other rule (turn order, damage, fainting, exp, PP) is unchanged.
+//!
+//! Only those *rules* live here: no caller passes `first_battle = true` yet,
+//! because the scripted intro's own construction and trigger
+//! (`SetUpBattleVarsAndBirchZigzagoon`, `src/battle_controllers.c:67`-`:72`,
+//! and the "don't leave Prof. Birch!" narrative gate) are a separate
+//! overworld hookup, deferred to and tracked by issue #221. Every ordinary
+//! Route 101 grass encounter still constructs with `first_battle = false`
+//! (`crates/pokeemerald-rs/src/flow/wild_encounter.rs`).
 //!
 //! # RNG draw order
 //!
@@ -92,12 +130,11 @@
 //!
 //! # What the wild opponent chooses
 //!
-//! Not upstream's trainer AI (`I-5`, explicitly out of scope): a plain wild
-//! battle never reaches `BattleAI_ChooseMoveOrAction` at all.
 //! `OpponentHandleChooseMove` (`src/battle_controller_opponent.c:1551`) takes
-//! the AI branch only for `BATTLE_TYPE_TRAINER | BATTLE_TYPE_FIRST_BATTLE |
-//! SAFARI | ROAMER` (`:1563`); an ordinary wild mon falls into the `else` at
-//! `:1594`-`:1601`, a plain rejection loop:
+//! upstream's trainer-AI branch only for `BATTLE_TYPE_TRAINER |
+//! BATTLE_TYPE_FIRST_BATTLE | SAFARI | ROAMER` (`:1563`); a plain (not
+//! `first_battle`) wild mon falls into the `else` at `:1594`-`:1601`, a
+//! plain rejection loop:
 //!
 //! ```text
 //! do {
@@ -106,7 +143,7 @@
 //! } while (move == MOVE_NONE);
 //! ```
 //!
-//! That is what [`Battle::choose_enemy_move`] models, draw for draw. Note the
+//! That is what `opponent_ai::choose_enemy_move` models, draw for draw. Note the
 //! loop ignores PP entirely — a wild mon can and does pick a move it has no
 //! PP for, and upstream then **fails the move at `Cmd_attackcanceler`**, the
 //! first command of the hit script (`battle_script_commands.c:934`-`:939`):
@@ -118,14 +155,16 @@
 //! [`BattleEvent::FailedNoPp`] reproduces the abort. Struggle enters only
 //! when **every** slot is unusable: `AreAllMovesUnusable`
 //! (`battle_util.c:1125`-`:1140`) then forces it at selection time — before
-//! the rejection loop, drawing nothing. This slice models the abort, the
-//! guard, and the loop, but not Struggle execution, so the all-spent case
-//! stops the turn with [`crate::error::BattleError::UnsupportedMoveEffect`]
-//! exactly when the fallback would act (see [`Battle::take_turn`]).
-//! `BATTLE_TYPE_FIRST_BATTLE` taking the *AI* branch at `:1563` is one more
-//! reason this port models the ordinary **post-first-battle** wild encounter
-//! rather than the scripted Route 101 one (`src/battle_setup.c:937`) — see
-//! [`crate::critical`] and [`crate::escape`] for the other two.
+//! the rejection loop, drawing nothing.
+//!
+//! `first_battle` takes the AI branch at `:1563` instead —
+//! `opponent_ai::choose_enemy_action_first_battle`, **not** upstream's general
+//! trainer AI (`I-5`, still explicitly out of scope): the branch is narrowed
+//! to exactly the one AI script `AI_SCRIPT_FIRST_BATTLE` ever runs, because
+//! that is the *only* `aiFlags` bit this specific `gBattleTypeFlags` value
+//! ever sets. See that method's own docs for the full derivation, and
+//! [`crate::critical`] and `crate::escape` for the other two `first_battle`
+//! deltas.
 //!
 //! Only single wild battles (one player mon, one wild mon, no switching, no
 //! doubles) are modelled: a player-mon faint ends the battle in defeat
@@ -142,12 +181,17 @@ use crate::error::BattleError;
 use crate::escape::try_run_from_battle;
 use crate::exp::wild_faint_exp;
 use crate::hit::{resolve_hit, HitOutcome};
-use crate::pokemon::{BattlePokemon, MAX_LEVEL, MAX_MON_MOVES, MOVE_NONE};
+use crate::pokemon::{BattlePokemon, MAX_LEVEL};
 use crate::stat_change::{
     self, is_stat_lowering_effect, resolve_stat_lowering_move, LoweredStat, StatChangeOutcome,
 };
 use crate::stat_stage::StatStage;
 use crate::turn_order::{resolve_order, Order};
+
+pub(crate) mod opponent_ai;
+use opponent_ai::{
+    choose_enemy_action_first_battle, choose_enemy_move, selectable_slot, EnemyAction,
+};
 
 /// The action the player commits to for a turn.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -168,6 +212,16 @@ pub enum BattleOutcome {
     PlayerLost,
     /// The player successfully ran away.
     PlayerRan,
+    /// The wild Pokémon fled — only reachable in a `first_battle`
+    /// ([`Battle::new`]): upstream's `AI_FirstBattle` AI script
+    /// (`data/battle_ai_scripts.s:3233`-`:3239`) chooses to flee once the
+    /// player's mon drops to `<=20%` HP, and a non-player battler's
+    /// `B_ACTION_RUN` unconditionally ends the battle
+    /// (`HandleAction_Run`'s `B_OUTCOME_MON_FLED`,
+    /// `src/battle_util.c:524`-`:537`) rather than rolling
+    /// [`crate::escape::try_run_from_battle`] the way the player's own Run
+    /// does.
+    WildFled,
 }
 
 /// A single observable event within a turn, in the order they occurred —
@@ -190,7 +244,7 @@ pub enum BattleEvent {
         by_player: bool,
         /// The move that was used. Carried on every move event because only
         /// the player's choice is caller-known: the wild opponent's comes out
-        /// of [`Battle::choose_enemy_move`]'s rejection loop, so without this
+        /// of `opponent_ai::choose_enemy_move`'s rejection loop, so without this
         /// a presentation layer could not name the move the wild mon used.
         move_id: MoveId,
     },
@@ -235,6 +289,13 @@ pub enum BattleEvent {
         /// Whether it was the player's mon that fainted.
         by_player: bool,
     },
+    /// The wild Pokémon chose to flee instead of acting — always the enemy
+    /// side (only [`Battle::new`]'s `first_battle` AI path can ever produce
+    /// this choice; see [`BattleOutcome::WildFled`]). No fields: unlike
+    /// [`BattleEvent::RunAttempt`] this can never fail once chosen —
+    /// upstream's non-player `HandleAction_Run` has no escape formula to
+    /// roll (module docs) — so there is nothing but the fact of it to carry.
+    WildFled,
     /// A stat-lowering move (Growl/Tail Whip/Leer/String Shot —
     /// `EFFECT_ATTACK_DOWN`/`EFFECT_DEFENSE_DOWN`/`EFFECT_SPEED_DOWN`)
     /// connected and actually lowered its target's stage — upstream's
@@ -294,8 +355,9 @@ pub enum BattleEvent {
 /// untouched. Two different situations produce it:
 ///
 /// - **Rejected before the turn began.** [`BattleError::BattleAlreadyOver`],
-///   and — for the *player's* chosen slot, validated ahead of the first
-///   draw — [`BattleError::InvalidMoveSlot`] /
+///   [`BattleError::RunForbidden`] (`first_battle` only — [`Battle::new`]'s
+///   docs), and — for the *player's* chosen slot, validated ahead of the
+///   first draw — [`BattleError::InvalidMoveSlot`] /
 ///   [`BattleError::NoPpRemaining`] / [`BattleError::PlaceholderMove`],
 ///   plus [`crate::hit::ensure_resolvable`]'s rejections of an unsupported
 ///   pick ([`BattleError::NonDamagingMove`],
@@ -305,7 +367,7 @@ pub enum BattleEvent {
 ///   exactly as they were.
 /// - **Stopped after the turn started but before either mon acted.** A wild
 ///   opponent with *every* slot spent is upstream's forced-Struggle case
-///   ([`Battle::choose_enemy_move`]), and this slice cannot execute Struggle
+///   (`opponent_ai::choose_enemy_move`), and this slice cannot execute Struggle
 ///   — so when that fallback is the *first mover*, the turn stops with
 ///   nothing to report ([`BattleError::UnsupportedMoveEffect`] carrying
 ///   Struggle). By then the turn-number draw (plus a Speed-tie draw, if the
@@ -368,30 +430,6 @@ impl Error for TurnError {
     }
 }
 
-/// Upstream's move-selection legality test, in one place: a slot is a legal
-/// pick only if it holds a real move.
-///
-/// `slot_move` is `None` for an index past the mon's known moves — upstream's
-/// `moves[i] == MOVE_NONE` for an unfilled slot — and `Some(MOVE_NONE)` for a
-/// slot explicitly holding the placeholder. Both are rejected, which is both
-/// halves of upstream's rule: the wild opponent's rejection loop redraws while
-/// `move == MOVE_NONE` (`battle_controller_opponent.c:1599`-`:1601`) and
-/// `CheckMoveLimitations` marks such a slot unselectable for the player's menu
-/// (`MOVE_LIMITATION_ZEROMOVE`, `battle_util.c:1098`).
-///
-/// [`BattlePokemon::new`] already refuses to store a [`MOVE_NONE`] slot, so
-/// the `Some(MOVE_NONE)` arm is belt-and-braces for this crate's own types —
-/// it is upstream's actual loop condition, kept so the rule lives here rather
-/// than being implied by a length comparison.
-const fn selectable_slot(slot_move: Option<MoveId>) -> bool {
-    match slot_move {
-        // Compared field-wise rather than with `!=`: `PartialEq` is not
-        // callable from a `const fn` on stable.
-        Some(move_id) => move_id.0 != MOVE_NONE.0,
-        None => false,
-    }
-}
-
 /// Whether the turn engine can execute `move_id` at all: either
 /// [`crate::hit`]'s ordinary damaging-move pipeline
 /// ([`crate::hit::ensure_resolvable`]) or [`crate::stat_change`]'s
@@ -446,6 +484,19 @@ pub struct Battle {
     run_tries: u8,
     random_turn_number: u16,
     outcome: Option<BattleOutcome>,
+    /// `gBattleTypeFlags & BATTLE_TYPE_FIRST_BATTLE` (issue #187): the
+    /// Route 101 intro Zigzagoon fight's three deltas from an ordinary wild
+    /// encounter — crit suppression ([`crate::critical`]/[`crate::hit`]),
+    /// running forbidden ([`crate::escape`]'s module docs), and the wild
+    /// opponent's AI-branch move choice (`opponent_ai::choose_enemy_action_first_battle`)
+    /// — all gated on this one flag, matching upstream's single
+    /// `gBattleTypeFlags` bit.
+    ///
+    /// Named `first_battle_flag`, not `first_battle`, only to satisfy
+    /// `clippy::struct_field_names` (a field ending in the struct's own
+    /// name); [`Battle::new`]'s parameter — the name that matters to a
+    /// caller — is still plain `first_battle`.
+    first_battle_flag: bool,
 }
 
 impl Battle {
@@ -484,10 +535,23 @@ impl Battle {
     /// here, because its rejection loop can land on any slot; the *player's*
     /// moveset may hold unsupported moves — each chosen slot is checked per
     /// turn instead, before any draw ([`Battle::take_turn`]).
+    ///
+    /// `first_battle` is `gBattleTypeFlags & BATTLE_TYPE_FIRST_BATTLE` —
+    /// the Route 101 intro Zigzagoon fight. Pass `true` and every turn this
+    /// battle plays picks up its three upstream deltas from an ordinary wild
+    /// encounter: [`crate::hit::resolve_hit`]'s crit roll is suppressed
+    /// (never crits, one fewer RNG draw per hit — [`crate::critical`]'s
+    /// module docs), [`PlayerAction::Run`] is rejected outright with
+    /// [`BattleError::RunForbidden`] before any draw
+    /// ([`crate::escape`]'s module docs), and the wild opponent picks its
+    /// action via `opponent_ai::choose_enemy_action_first_battle` instead of the
+    /// ordinary rejection loop. Every other rule — turn order, damage,
+    /// fainting, exp — is unchanged.
     pub fn new(
         dex: Dex,
         player: BattlePokemon,
         enemy: BattlePokemon,
+        first_battle: bool,
         rng: &mut impl BattleRng,
     ) -> Result<Self, BattleError> {
         for (is_player, mon) in [(true, &player), (false, &enemy)] {
@@ -526,6 +590,7 @@ impl Battle {
             run_tries: 0,
             random_turn_number,
             outcome: None,
+            first_battle_flag: first_battle,
         })
     }
 
@@ -566,52 +631,6 @@ impl Battle {
     #[must_use]
     pub const fn random_turn_number(&self) -> u16 {
         self.random_turn_number
-    }
-
-    /// The wild opponent's move choice: upstream's plain-wild rejection loop
-    /// (`battle_controller_opponent.c:1594`-`:1601`), reproduced draw for
-    /// draw —
-    ///
-    /// ```text
-    /// do { chosenMoveId = MOD(Random(), MAX_MON_MOVES); } while (move == MOVE_NONE);
-    /// ```
-    ///
-    /// — where `MOD(a, 4)` is `a & 3` (`include/global.h:97`), i.e. plain
-    /// `% 4` for an unsigned draw. The loop's test is on the *move*, not the
-    /// slot index: it retries while `moveInfo->moves[chosenMoveId]` is
-    /// `MOVE_NONE` (`battle_controller_opponent.c:1601`), which is what
-    /// [`selectable_slot`] reproduces. A slot past the end of this mon's known
-    /// moves is exactly one of those `MOVE_NONE` slots, so it is rejected and
-    /// redrawn: a one-move wild mon consumes one draw per `0`-mod-4 value and
-    /// spins otherwise, exactly as upstream does.
-    ///
-    /// The loop terminates because [`BattlePokemon::new`] rejects both an
-    /// empty moveset ([`BattleError::InvalidMoveCount`]) and a `MOVE_NONE`
-    /// slot ([`BattleError::PlaceholderMove`]), so at least one of the four
-    /// residues always accepts.
-    ///
-    /// Returns `None` for the one case upstream never reaches this loop at
-    /// all: `AreAllMovesUnusable` (`battle_util.c:1125`-`:1140`, checked at
-    /// `battle_main.c:4184` before `ChooseMove` is ever emitted) forces
-    /// Struggle through a selection script when **every** slot is unusable —
-    /// with no items/Disable/Taunt/Torment modelled, exactly "every known
-    /// slot has 0 PP" (unfilled slots are `MOVE_NONE`, always unusable). The
-    /// forced pick draws nothing. Note the loop itself ignores PP: a spent
-    /// slot with a real move is picked upstream and then *fails* at
-    /// `Cmd_attackcanceler` — no draws, no damage, no deduction, and the
-    /// turn continues (see [`Battle::act`] and
-    /// [`BattleEvent::FailedNoPp`]); only the all-spent case diverts to
-    /// Struggle.
-    fn choose_enemy_move(&self, rng: &mut impl BattleRng) -> Option<usize> {
-        if self.enemy.moves().iter().all(|slot| slot.pp == 0) {
-            return None;
-        }
-        loop {
-            let slot = usize::from(rng.next_u16()) % MAX_MON_MOVES;
-            if selectable_slot(self.enemy.move_at(slot)) {
-                return Some(slot);
-            }
-        }
     }
 
     /// The player's chosen move id, rejecting a slot no upstream selection
@@ -722,6 +741,17 @@ impl Battle {
             return Err(BattleError::BattleAlreadyOver);
         }
 
+        // `first_battle`'s run-forbidding delta is checked here, ahead of
+        // even the player-move validation below: upstream's
+        // `IsRunningFromBattleImpossible` runs at action-*selection* time
+        // (`battle_main.c:4339`-`:4344`), before Run is ever a chosen action
+        // for the turn, so it leaves the battle and the shared RNG stream
+        // exactly as they were -- see `crate::escape`'s module docs and
+        // [`BattleError::RunForbidden`].
+        if self.first_battle_flag && matches!(player_action, PlayerAction::Run) {
+            return Err(BattleError::RunForbidden);
+        }
+
         // Validated before any draw. An out-of-range or PP-less slot has no
         // upstream counterpart (the selection menu cannot offer one), so it
         // is a caller bug rather than a battle event -- a rejected call must
@@ -738,20 +768,26 @@ impl Battle {
         self.random_turn_number = rng.next_u16();
 
         // Action selection, in upstream's battler order: the player's is
-        // human input and draws nothing; the wild opponent's rejection loop
-        // runs here even when the player is about to run, because
+        // human input and draws nothing; the wild opponent's happens here
+        // even when the player is about to run, because
         // HandleTurnActionSelectionState completes for every battler before
-        // SetActionsAndBattlersTurnOrder looks at any of the choices. `None`
-        // is the all-slots-spent forced-Struggle fallback (no draw); its
-        // move id is Struggle for ordering purposes (priority 0), and it
-        // errors only if it actually has to act (`act`).
-        let enemy_choice = self.choose_enemy_move(rng);
-        let enemy_move = match enemy_choice {
-            Some(index) => self.enemy.moves()[index].move_id,
-            None => STRUGGLE,
+        // SetActionsAndBattlersTurnOrder looks at any of the choices --
+        // true of both the ordinary rejection loop and the `first_battle`
+        // AI branch alike.
+        let enemy_action = if self.first_battle_flag {
+            choose_enemy_action_first_battle(&self.enemy, &self.player, rng)
+        } else {
+            match choose_enemy_move(&self.enemy, rng) {
+                Some(index) => EnemyAction::Move(index),
+                None => EnemyAction::Struggle,
+            }
         };
 
         let Some((index, player_move)) = player_move else {
+            // `first_battle` already rejected `PlayerAction::Run` above, so
+            // reaching here means the ordinary escape formula applies and
+            // `enemy_action` can never be `EnemyAction::Flee` (only the
+            // `first_battle` path ever produces it).
             let success = try_run_from_battle(
                 // Raw gBattleMons speed on both sides, not the stage-modified
                 // effective Speed -- see `crate::escape`'s parameter docs
@@ -774,14 +810,27 @@ impl Battle {
                 return Ok(());
             }
             // Failed run: the turn is burned, but the wild mon still acts on
-            // the move it already selected above. The RunAttempt event above
-            // survives a failure here -- `take_turn` returns it either way.
-            self.act(false, enemy_move, enemy_choice, rng, events)?;
+            // the action it already selected above. The RunAttempt event
+            // above survives a failure here -- `take_turn` returns it either
+            // way.
+            self.enemy_acts(enemy_action, rng, events)?;
             return Ok(());
         };
 
         let player_priority = self.dex.move_data(player_move)?.priority;
-        let enemy_priority = self.dex.move_data(enemy_move)?.priority;
+        let enemy_priority = match enemy_action {
+            EnemyAction::Move(slot) => {
+                self.dex
+                    .move_data(self.enemy.moves()[slot].move_id)?
+                    .priority
+            }
+            EnemyAction::Struggle => self.dex.move_data(STRUGGLE)?.priority,
+            // `gChosenActionByBattler[battler] != B_ACTION_USE_MOVE` reads as
+            // `MOVE_NONE` (priority 0) in `GetWhoStrikesFirst`
+            // (`battle_main.c:4700`-`:4707`): fleeing has no move of its own
+            // and is ordered exactly like one at priority 0.
+            EnemyAction::Flee => 0,
+        };
         let order = resolve_order(
             player_priority,
             enemy_priority,
@@ -790,40 +839,27 @@ impl Battle {
             rng,
         );
 
-        // (is_player, move, pp-slot-owner) for the mover in each position --
-        // PP is deducted only for a mover that actually acts (see the module
-        // docs: a fainted target's own move never runs upstream either, so
-        // its PP is untouched). The player's slot is always `Some` (it was
-        // validated above); the enemy's `None` is the forced-Struggle
-        // fallback, which errors in `act` if it has to act.
-        let (first, first_move, first_slot, second, second_move, second_slot) = match order {
-            Order::AttackerFirst => (
-                true,
-                player_move,
-                Some(index),
-                false,
-                enemy_move,
-                enemy_choice,
-            ),
-            Order::DefenderFirst => (
-                false,
-                enemy_move,
-                enemy_choice,
-                true,
-                player_move,
-                Some(index),
-            ),
-        };
-
-        self.act(first, first_move, first_slot, rng, events)?;
-        if self.outcome.is_some() {
-            return Ok(());
+        match order {
+            Order::AttackerFirst => {
+                self.act(true, player_move, index, rng, events)?;
+                if self.outcome.is_some() {
+                    return Ok(());
+                }
+                // If the enemy's action turns out to be the unexecutable
+                // Struggle fallback, the player's events above are already
+                // in `events` and stay there -- `take_turn` returns them
+                // with the error rather than throwing away a hit that
+                // really landed.
+                self.enemy_acts(enemy_action, rng, events)?;
+            }
+            Order::DefenderFirst => {
+                self.enemy_acts(enemy_action, rng, events)?;
+                if self.outcome.is_some() {
+                    return Ok(());
+                }
+                self.act(true, player_move, index, rng, events)?;
+            }
         }
-        // If the second mover turns out to be the unexecutable Struggle
-        // fallback, the first mover's events are already in `events` and
-        // stay there: `take_turn` returns them with the error rather than
-        // throwing away a hit that really landed.
-        self.act(second, second_move, second_slot, rng, events)?;
         Ok(())
     }
 
@@ -844,24 +880,18 @@ impl Battle {
     /// the player's slot is pre-validated against upstream's selection menu
     /// — and it emits [`BattleEvent::FailedNoPp`] `(behavioral-fidelity)`.
     ///
-    /// # Errors
-    ///
-    /// [`BattleError::UnsupportedMoveEffect`] carrying [`STRUGGLE`] when
-    /// `slot` is `None`: the all-slots-spent wild fallback
-    /// ([`Battle::choose_enemy_move`]) has to act, and this slice cannot
-    /// execute Struggle — the honest stop, at the same point upstream's
-    /// forced Struggle would begin executing.
+    /// Always called with a real move slot: the two cases that are *not* a
+    /// real move — the forced-Struggle fallback and (`first_battle` only)
+    /// fleeing — never reach here, [`Battle::enemy_acts`] handles both
+    /// itself before it would call this.
     fn act(
         &mut self,
         is_player: bool,
         move_id: MoveId,
-        slot: Option<usize>,
+        slot: usize,
         rng: &mut impl BattleRng,
         events: &mut Vec<BattleEvent>,
     ) -> Result<(), BattleError> {
-        let Some(slot) = slot else {
-            return Err(BattleError::UnsupportedMoveEffect(STRUGGLE));
-        };
         if is_player {
             self.player.deduct_pp(slot)?;
         } else if self.enemy.moves()[slot].pp == 0 {
@@ -874,6 +904,38 @@ impl Battle {
             self.enemy.deduct_pp(slot)?;
         }
         self.execute_move(is_player, move_id, rng, events)
+    }
+
+    /// The wild opponent's whole action, whichever of [`EnemyAction`]'s
+    /// three shapes `opponent_ai::choose_enemy_move` or
+    /// `opponent_ai::choose_enemy_action_first_battle` produced.
+    ///
+    /// # Errors
+    ///
+    /// [`BattleError::UnsupportedMoveEffect`] carrying [`STRUGGLE`] for
+    /// [`EnemyAction::Struggle`]: the all-slots-spent forced fallback has to
+    /// act, and this slice cannot execute Struggle — the honest stop, at the
+    /// same point upstream's forced Struggle would begin executing.
+    fn enemy_acts(
+        &mut self,
+        action: EnemyAction,
+        rng: &mut impl BattleRng,
+        events: &mut Vec<BattleEvent>,
+    ) -> Result<(), BattleError> {
+        match action {
+            EnemyAction::Move(slot) => {
+                self.act(false, self.enemy.moves()[slot].move_id, slot, rng, events)
+            }
+            EnemyAction::Struggle => Err(BattleError::UnsupportedMoveEffect(STRUGGLE)),
+            // HandleAction_Run's non-player branch (`battle_util.c:524`-
+            // `:537`): no escape formula, no RNG draw, no PP touched --
+            // fleeing simply ends the battle.
+            EnemyAction::Flee => {
+                events.push(BattleEvent::WildFled);
+                self.finish(events, BattleOutcome::WildFled);
+                Ok(())
+            }
+        }
     }
 
     /// Resolve `attacker_is_player`'s use of `move_id` against the other
@@ -908,7 +970,8 @@ impl Battle {
 
     /// The ordinary damaging-move half of [`Self::execute_move`]'s dispatch —
     /// [`crate::hit::resolve_hit`]'s pipeline, unchanged from before issue
-    /// #199.
+    /// #199 except for threading `self.first_battle_flag` through as
+    /// `suppress_crit` (issue #187).
     fn execute_hit_move(
         &mut self,
         attacker_is_player: bool,
@@ -922,7 +985,14 @@ impl Battle {
             } else {
                 (&self.enemy, &self.player)
             };
-            resolve_hit(&self.dex, move_id, attacker, defender, rng)?
+            resolve_hit(
+                &self.dex,
+                move_id,
+                attacker,
+                defender,
+                self.first_battle_flag,
+                rng,
+            )?
         };
 
         match outcome {
@@ -1060,27 +1130,5 @@ impl Battle {
     fn finish(&mut self, events: &mut Vec<BattleEvent>, outcome: BattleOutcome) {
         self.outcome = Some(outcome);
         events.push(BattleEvent::Ended(outcome));
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::selectable_slot;
-    use crate::pokemon::MOVE_NONE;
-    use assets::MoveId;
-
-    #[test]
-    fn the_rejection_loop_only_accepts_slots_holding_a_real_move() {
-        // Upstream's loop condition is on the *move*, not the index:
-        // `while (move == MOVE_NONE)` (battle_controller_opponent.c:1601).
-        assert!(selectable_slot(Some(MoveId(33))));
-        assert!(
-            !selectable_slot(Some(MOVE_NONE)),
-            "an explicit MOVE_NONE slot is what upstream redraws past"
-        );
-        assert!(
-            !selectable_slot(None),
-            "a slot past the known moves is upstream's unfilled MOVE_NONE slot"
-        );
     }
 }

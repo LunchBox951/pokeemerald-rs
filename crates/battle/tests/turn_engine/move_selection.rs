@@ -16,7 +16,7 @@ fn the_wild_opponent_rejects_move_slots_it_does_not_know() {
     let player = max_iv_mon(&dex, 4, 50, vec![MoveId(33)]); // fast: run succeeds
     let enemy = max_iv_mon(&dex, 19, 5, vec![MoveId(33)]);
     let mut rng = SequenceRng::new([0, 0, 1, 2, 3, 4]);
-    let mut battle = Battle::new(dex, player, enemy, &mut rng).unwrap();
+    let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
     let events = battle.take_turn(PlayerAction::Run, &mut rng).unwrap();
     assert_eq!(
         events.last(),
@@ -37,7 +37,7 @@ fn the_wild_opponent_uses_the_slot_the_rejection_loop_landed_on() {
 
     // draw 1 -> 1 % 4 = 1, a slot this mon knows: Scratch, first try.
     let mut rng = SequenceRng::new([0, 0, 1, 65000, 0, 1, 0, 0]);
-    let mut battle = Battle::new(dex, player, enemy, &mut rng).unwrap();
+    let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
     let _ = battle.take_turn(PlayerAction::Run, &mut rng).unwrap();
     assert_eq!(
         battle.enemy().moves()[0].pp,
@@ -77,7 +77,7 @@ fn the_rejection_loop_draw_count_matches_the_number_of_unknown_slots() {
         let pp_before: Vec<u8> = enemy.moves().iter().map(|slot| slot.pp).collect();
         // battle start + turn number, then the scripted selection draws.
         let mut rng = SequenceRng::new([0, 0].into_iter().chain(script));
-        let mut battle = Battle::new(dex, player, enemy, &mut rng).unwrap();
+        let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
         let events = battle.take_turn(PlayerAction::Run, &mut rng).unwrap();
         assert_eq!(
             events.last(),
@@ -135,7 +135,7 @@ fn an_all_spent_enemy_moving_first_stops_the_turn_with_no_events_but_after_draws
     // further draw (a selection draw, a speed-tie roll, a move draw)
     // panics.
     let mut rng = SequenceRng::new([0x1234, 0xABCD]);
-    let mut battle = Battle::new(dex, player, enemy, &mut rng).unwrap();
+    let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
     assert_eq!(rng.draws(), 1, "battle start: no tie draw, speeds differ");
 
     let failure = battle
@@ -193,7 +193,7 @@ fn a_spent_wild_slot_fails_its_move_with_no_draws_no_damage_no_deduction() {
     // escape roll (fails). NOTHING after that: the failed move draws
     // zero, so any move draw would panic this exactly-4-value script.
     let mut rng = SequenceRng::new([0, 0, 0, 65000]);
-    let mut battle = Battle::new(dex.clone(), player, enemy, &mut rng).unwrap();
+    let mut battle = Battle::new(dex.clone(), player, enemy, false, &mut rng).unwrap();
     let events = battle.take_turn(PlayerAction::Run, &mut rng).unwrap();
 
     assert_eq!(
@@ -242,7 +242,7 @@ fn a_spent_wild_slot_fails_its_move_with_no_draws_no_damage_no_deduction() {
     // battle start, turn number, selection (0 -> spent slot 0), the
     // player's 4-draw hit; the enemy's failed move draws nothing.
     let mut rng = SequenceRng::new([0, 0, 0, 0, 1, 0, 0]);
-    let mut battle = Battle::new(dex, player, enemy, &mut rng).unwrap();
+    let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
     let events = battle
         .take_turn(PlayerAction::UseMove(0), &mut rng)
         .unwrap();
@@ -294,6 +294,7 @@ fn unsupported_moves_are_rejected_at_the_right_boundary_for_each_side() {
                 Dex::new(),
                 healthy(&dex),
                 max_iv_mon(&dex, 19, 5, vec![MoveId(33), bad_move]),
+                false,
                 &mut rng
             )
             .err(),
@@ -313,6 +314,7 @@ fn unsupported_moves_are_rejected_at_the_right_boundary_for_each_side() {
             // A slower, different mon: a mirror match would add a
             // speed-tie seeding draw this script does not budget.
             max_iv_mon(&dex, 19, 5, vec![MoveId(33)]),
+            false,
             &mut rng,
         )
         .unwrap_or_else(|e| {
@@ -348,7 +350,7 @@ fn a_real_starter_moveset_can_fight_with_its_damaging_move() {
     // (Treecko L5, speed 13, moves first), then the slower L2
     // Poochyena's 4-draw Tackle back.
     let mut rng = SequenceRng::new([0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0]);
-    let mut battle = Battle::new(dex, player, enemy, &mut rng).unwrap();
+    let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
     let events = battle
         .take_turn(PlayerAction::UseMove(0), &mut rng)
         .unwrap();
@@ -380,7 +382,7 @@ fn a_real_starter_moveset_can_fight_with_its_damaging_move() {
     // battle start, turn number, pick, Leer's 1-draw accuracy check,
     // then the enemy's 4-draw Tackle back.
     let mut rng = SequenceRng::new([0, 0, 0, 0, 0, 1, 0, 0]);
-    let mut battle = Battle::new(dex, player, enemy, &mut rng).unwrap();
+    let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
     let events = battle
         .take_turn(PlayerAction::UseMove(1), &mut rng)
         .unwrap();
@@ -434,7 +436,7 @@ fn a_rejected_action_mutates_neither_pp_nor_the_rng_stream() {
     let enemy_pp = enemy.moves()[0].pp;
 
     let mut rng = SequenceRng::new([0]); // only the battle-start draw
-    let mut battle = Battle::new(dex, player, enemy, &mut rng).unwrap();
+    let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
     assert_eq!(rng.draws(), 1);
     let rejected = battle
         .take_turn(PlayerAction::UseMove(4), &mut rng)
@@ -450,7 +452,7 @@ fn a_rejected_action_mutates_neither_pp_nor_the_rng_stream() {
     let dex = Dex::new();
     let enemy = max_iv_mon(&dex, 19, 5, vec![MoveId(33)]);
     let mut rng = SequenceRng::new([0]);
-    let mut battle = Battle::new(dex, drained, enemy, &mut rng).unwrap();
+    let mut battle = Battle::new(dex, drained, enemy, false, &mut rng).unwrap();
     let rejected = battle
         .take_turn(PlayerAction::UseMove(0), &mut rng)
         .unwrap_err();

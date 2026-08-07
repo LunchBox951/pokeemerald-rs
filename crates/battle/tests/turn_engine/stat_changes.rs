@@ -29,7 +29,7 @@ fn wild_zigzagoon_growl_executes_when_the_rejection_loop_lands_on_it() {
     // 4-draw Tackle, then Growl's 1-draw accuracy check (100 accuracy:
     // cannot miss).
     let mut rng = SequenceRng::new([0, 0, 1, 0, 1, 0, 0, 0]);
-    let mut battle = Battle::new(dex, player, enemy, &mut rng).unwrap();
+    let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
     assert_eq!(rng.draws(), 1);
     let events = battle
         .take_turn(PlayerAction::UseMove(0), &mut rng)
@@ -85,7 +85,7 @@ fn wild_wurmple_string_shot_misses_when_the_rejection_loop_lands_on_it() {
     // accuracy) -> miss, the same arithmetic crate::hit's Tackle-miss
     // test pins.
     let mut rng = SequenceRng::new([0, 0, 1, 0, 1, 0, 0, 95]);
-    let mut battle = Battle::new(dex, player, enemy, &mut rng).unwrap();
+    let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
     let events = battle
         .take_turn(PlayerAction::UseMove(0), &mut rng)
         .unwrap();
@@ -137,7 +137,7 @@ fn a_stat_already_at_the_floor_reports_wont_go_lower_and_stays_put() {
     // 1-draw accuracy check (100 accuracy: cannot miss), then the
     // enemy's ordinary 4-draw Tackle.
     let mut rng = SequenceRng::new([0, 0, 0, 0, 0, 1, 0, 0]);
-    let mut battle = Battle::new(dex, player, enemy, &mut rng).unwrap();
+    let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
     let events = battle
         .take_turn(PlayerAction::UseMove(0), &mut rng)
         .unwrap();
@@ -197,7 +197,7 @@ fn growl_lowers_the_players_subsequent_tackle_damage() {
     // 1-draw accuracy check (100 accuracy: cannot miss), then the
     // player's ordinary 4-draw Tackle.
     let mut rng = SequenceRng::new([0, 0, 0, 0, 0, 1, 0, 0]);
-    let mut battle = Battle::new(dex, player, enemy, &mut rng).unwrap();
+    let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
     let events = battle
         .take_turn(PlayerAction::UseMove(0), &mut rng)
         .unwrap();
@@ -265,7 +265,7 @@ fn string_shot_flips_turn_order_once_the_targets_effective_speed_drops_below_the
         0, 1, 0, 0, // turn 2: Wurmple's Tackle (now first)
         0, 1, 0, 0, // turn 2: Poochyena's Tackle
     ]);
-    let mut battle = Battle::new(dex, player, enemy, &mut rng).unwrap();
+    let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
     assert_eq!(rng.draws(), 1, "no speed-tie draw: 8 and 10 differ");
 
     // Turn 1: Poochyena moves first (10 > 8).

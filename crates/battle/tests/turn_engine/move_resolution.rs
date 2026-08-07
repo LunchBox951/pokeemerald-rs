@@ -13,7 +13,7 @@ fn every_move_event_names_the_move_that_was_used() {
     let player = max_iv_mon(&dex, 19, 5, vec![MoveId(33)]);
     let enemy = max_iv_mon(&dex, 4, 50, vec![MoveId(33), MoveId(10)]); // Tackle, Scratch
     let mut rng = SequenceRng::new([0, 0, 1, 65000, 0, 1, 0, 0]);
-    let mut battle = Battle::new(dex, player, enemy, &mut rng).unwrap();
+    let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
     let events = battle.take_turn(PlayerAction::Run, &mut rng).unwrap();
     assert!(
         events.iter().any(|e| matches!(
@@ -32,7 +32,7 @@ fn every_move_event_names_the_move_that_was_used() {
     let player = max_iv_mon(&dex, 4, 50, vec![MoveId(33)]);
     let enemy = max_iv_mon(&dex, 19, 5, vec![MoveId(33)]);
     let mut rng = SequenceRng::new([0, 0, 0, 95, 95]);
-    let mut battle = Battle::new(dex, player, enemy, &mut rng).unwrap();
+    let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
     let events = battle
         .take_turn(PlayerAction::UseMove(0), &mut rng)
         .unwrap();
@@ -74,7 +74,7 @@ fn a_turn_that_stops_partway_still_reports_what_already_happened() {
     // selection draw: the forced-Struggle pick bypasses the rejection
     // loop. The script is exhausted, so a stray draw would panic.
     let mut rng = SequenceRng::new([0, 0, 0, 1, 0, 0]);
-    let mut battle = Battle::new(dex, player, enemy, &mut rng).unwrap();
+    let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
     let failure = battle
         .take_turn(PlayerAction::UseMove(0), &mut rng)
         .unwrap_err();
@@ -115,7 +115,7 @@ fn an_immune_first_hit_reports_no_effect_and_the_turn_continues() {
     // battle start, turn number, enemy pick, the player's immune hit
     // (still 4 draws -- see crate::hit), the enemy's ordinary hit (4).
     let mut rng = SequenceRng::new([0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0]);
-    let mut battle = Battle::new(dex, player, enemy, &mut rng).unwrap();
+    let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
     let events = battle
         .take_turn(PlayerAction::UseMove(0), &mut rng)
         .unwrap();
@@ -166,7 +166,7 @@ fn an_overkill_hit_reports_only_the_hp_actually_lost() {
     // pick; player's hit (accuracy pass / no crit / best damage roll /
     // effect chance).
     let mut rng = SequenceRng::new([0, 0, 0, 0, 1, 0, 0]);
-    let mut battle = Battle::new(dex, player, enemy, &mut rng).unwrap();
+    let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
     let events = battle
         .take_turn(PlayerAction::UseMove(0), &mut rng)
         .unwrap();

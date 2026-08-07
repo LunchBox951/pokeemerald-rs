@@ -28,16 +28,19 @@
 //! C's `&&` short-circuits, so any of the first three conditions failing
 //! means **no crit draw is made** and the hit consumes one fewer RNG value
 //! than an ordinary hit does `(behavioral-fidelity)`. [`crit_roll`] models
-//! only the case where all three pass — none of the three suppressors exist
-//! in this slice's world: abilities are not modelled at all,
-//! `STATUS3_CANT_SCORE_A_CRIT` is only ever set by Future Sight/Doom Desire,
-//! and both battle-type flags belong to scripted one-off battles
-//! (`BATTLE_TYPE_FIRST_BATTLE` is set for the Route 101 Poochyena battle and
-//! nothing else, `src/battle_setup.c:937`; `BATTLE_TYPE_WALLY_TUTORIAL` for
-//! Wally's catching tutorial). This port therefore models the **ordinary
-//! post-first-battle wild encounter**, in which the draw is unconditional —
-//! callers that ever gain any of the three suppressors must skip
-//! [`crit_roll`] entirely rather than call it and discard the result.
+//! only the case where all three pass — the first two suppressors do not
+//! exist in this slice's world: abilities are not modelled at all, and
+//! `STATUS3_CANT_SCORE_A_CRIT` is only ever set by Future Sight/Doom Desire.
+//! The third, `BATTLE_TYPE_FIRST_BATTLE`, belongs to a scripted one-off
+//! battle (set for the Route 101 intro Zigzagoon fight and nothing else,
+//! `SetUpBattleVarsAndBirchZigzagoon`, `src/battle_controllers.c:67`-`:72`,
+//! triggered from `src/battle_setup.c:937`; `BATTLE_TYPE_WALLY_TUTORIAL`
+//! covers the sibling Wally's-catching-tutorial case, also unmodelled) — as
+//! of issue #187, [`crate::battle::Battle`]'s `first_battle` flag *does*
+//! exist, and it is exactly this suppressor: [`crate::hit::resolve_hit`]'s
+//! `suppress_crit` parameter is the caller skipping [`crit_roll`] entirely
+//! (rather than calling it and discarding the result) that this paragraph
+//! used to describe only as a requirement for a future caller.
 //!
 //! A confirmed crit changes two things elsewhere in the pipeline, both from
 //! `CalculateBaseDamage` (`pokeemerald/src/pokemon.c:3106`), reproduced here

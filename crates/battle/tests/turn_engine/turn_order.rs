@@ -14,7 +14,7 @@ fn battle_start_draws_the_initial_turn_order_tie_on_equal_speeds() {
     let player = max_iv_mon(&dex, 19, 5, vec![MoveId(33)]);
     let enemy = max_iv_mon(&dex, 19, 5, vec![MoveId(33)]);
     let mut rng = SequenceRng::new([0x1234, 0]);
-    let _battle = Battle::new(dex, player, enemy, &mut rng).unwrap();
+    let _battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
     assert_eq!(
         rng.draws(),
         2,
@@ -30,7 +30,7 @@ fn battle_start_and_every_turn_each_refresh_the_turn_number() {
     // Distinguishable turn-number values, then the ordinary tail of the
     // turn (opponent's move pick + the player's 4-draw hit).
     let mut rng = SequenceRng::new([0x1234, 0xABCD, 0, 0, 1, 0, 0]);
-    let mut battle = Battle::new(dex, player, enemy, &mut rng).unwrap();
+    let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
     assert_eq!(
         battle.random_turn_number(),
         0x1234,
@@ -66,7 +66,7 @@ fn move_priority_beats_speed_for_either_side() {
     let player = max_iv_mon(&dex, 19, 5, vec![MoveId(98)]); // slow, +1 priority
     let enemy = max_iv_mon(&dex, 4, 10, vec![MoveId(33)]); // fast, priority 0
     let mut rng = SequenceRng::new([0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0]);
-    let mut battle = Battle::new(dex.clone(), player, enemy, &mut rng).unwrap();
+    let mut battle = Battle::new(dex.clone(), player, enemy, false, &mut rng).unwrap();
     let events = battle
         .take_turn(PlayerAction::UseMove(0), &mut rng)
         .unwrap();
@@ -98,7 +98,7 @@ fn move_priority_beats_speed_for_either_side() {
     let player = max_iv_mon(&dex, 4, 10, vec![MoveId(33)]); // fast, priority 0
     let enemy = max_iv_mon(&dex, 19, 5, vec![MoveId(33), MoveId(98)]); // slow
     let mut rng = SequenceRng::new([0, 0, 1, 0, 1, 0, 0, 0, 1, 0, 0]);
-    let mut battle = Battle::new(dex, player, enemy, &mut rng).unwrap();
+    let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
     let events = battle
         .take_turn(PlayerAction::UseMove(0), &mut rng)
         .unwrap();
@@ -154,7 +154,7 @@ fn a_mid_turn_speed_tie_draws_once_between_selection_and_the_first_hit() {
         0, 1, 0, 0, // the player's Tackle
         0, 1, 0, 0, // the enemy's Scratch
     ]);
-    let mut battle = Battle::new(dex, player, enemy, &mut rng).unwrap();
+    let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
     assert_eq!(
         rng.draws(),
         2,
@@ -204,7 +204,7 @@ fn an_always_hit_move_makes_a_full_turn_cost_ten_draws_not_eleven() {
         1, 0, 0, // the player's Swift: crit, damage roll, effect chance -- no accuracy draw
         0, 1, 0, 0, // the enemy's Tackle: accuracy, crit, damage roll, effect chance
     ]);
-    let mut battle = Battle::new(dex, player, enemy, &mut rng).unwrap();
+    let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
     let events = battle
         .take_turn(PlayerAction::UseMove(0), &mut rng)
         .unwrap();

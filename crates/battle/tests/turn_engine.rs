@@ -6,6 +6,8 @@ mod common;
 
 #[path = "turn_engine/escape.rs"]
 mod escape;
+#[path = "turn_engine/first_battle.rs"]
+mod first_battle;
 #[path = "turn_engine/lifecycle.rs"]
 mod lifecycle;
 #[path = "turn_engine/move_resolution.rs"]

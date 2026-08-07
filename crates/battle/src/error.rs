@@ -195,6 +195,22 @@ pub enum BattleError {
     /// already reached a terminal outcome (victory, defeat, or a successful
     /// run).
     BattleAlreadyOver,
+
+    /// [`crate::battle::PlayerAction::Run`] was chosen in a battle
+    /// constructed with `first_battle = true`
+    /// ([`crate::battle::Battle::new`]).
+    ///
+    /// Upstream's `IsRunningFromBattleImpossible` returns
+    /// `BATTLE_RUN_FORBIDDEN` unconditionally under `BATTLE_TYPE_FIRST_BATTLE`
+    /// (`pokeemerald/src/battle_main.c:4078`-`:4082`, the "You mustn't run
+    /// away from Prof. Birch's Pokémon!" / `B_MSG_DONT_LEAVE_BIRCH` message)
+    /// — checked at action-*selection* time (`:4339`-`:4344`), before Run
+    /// ever becomes a chosen action for the turn, so upstream just re-prompts
+    /// the player's menu rather than starting a turn. That is exactly the
+    /// shape of the other pre-draw player-input rejections above
+    /// ([`Self::InvalidMoveSlot`] and friends): the battle and the shared RNG
+    /// stream are left exactly as they were.
+    RunForbidden,
 }
 
 impl fmt::Display for BattleError {
@@ -238,6 +254,12 @@ impl fmt::Display for BattleError {
                 write!(f, "the {side} battler is already fainted")
             }
             Self::BattleAlreadyOver => write!(f, "the battle has already ended"),
+            Self::RunForbidden => {
+                write!(
+                    f,
+                    "running is forbidden this battle (BATTLE_TYPE_FIRST_BATTLE)"
+                )
+            }
         }
     }
 }

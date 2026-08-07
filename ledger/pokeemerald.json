@@ -45,6 +45,14 @@
       "status": "pending"
     },
     "data/battle_ai_scripts.s": {
+      "artifacts": {
+        "AI_FirstBattle": {
+          "reason": "data/battle_ai_scripts.s:3233-3239. The two if_hp_equal/if_hp_less_than AI_TARGET, 20 checks (Cmd_if_hp_equal/Cmd_if_hp_less_than compute 100 * hp / maxHP, battle_ai_script_commands.c:713-758) modelled as one <=20%-of-max-HP threshold against the player's raw current HP -- battle::opponent_ai::choose_enemy_action_first_battle's FIRST_BATTLE_FLEE_HP_PERCENT, a free function in crates/battle/src/battle/opponent_ai.rs, not a Battle method -- returning EnemyAction::Flee when it holds. Turning that choice into BattleOutcome::WildFled is the caller's (Battle::enemy_acts, crates/battle/src/battle.rs; see src/battle_util.c#HandleAction_Run). No RNG draw either way, matching the script (Cmd_flee sets aiAction bits only).",
+          "rust_target": "crates/battle/src/battle/opponent_ai.rs",
+          "spec": "S-6",
+          "status": "stubbed"
+        }
+      },
       "category": "data.script",
       "kind": "file",
       "spec_owner": "07-battle",
@@ -11444,7 +11452,7 @@
       "artifacts": {
         "SecretBase_EventScript_SetDecorationFlags": {
           "reason": "The 14 setflag FLAG_DECORATION_1..14 commands, ported as their effect: crate::flow::overworld_phase::run_on_transition_map_script applies assets::object_event_flags::DECORATION_FLAGS on entering either bundled player bedroom, the two maps whose own MAP_SCRIPT_ON_TRANSITION calls this script (LittlerootTown_{Brendans,Mays}House_2F/scripts.inc:6-12). Same 'the effect, without an interpreter' shape as new_game's partial port of EventScript_ResetAllMapFlags. Required for correctness, not cosmetics: decoration placeholders invert the usual polarity (an EMPTY slot is the flag-SET state), nothing sets these at new-game time (InitEventData zeroes all flags; EventScript_ResetAllMapFlags never mentions them), and upstream relies purely on ordering -- RunOnTransitionMapScript (overworld.c:860) precedes TrySpawnObjectEvents (overworld.c:2163-2178) -- so without it a fresh save reads all twelve bedroom placeholders as spawned, i.e. as invisible blockers (DoesObjectCollideWithObjectAt consults only active, coordinates and elevation, never the invisible flag, so even MOVEMENT_TYPE_INVISIBLE would still block). Stubbed, not rewritten: no script interpreter runs this, and the maps that call it are a transcribed list rather than a parsed map-script table. Not modelled: the secret-base callers (data/scripts/shared_secret_base.inc:12-16) and flags 13/14's secret-base-only slots.",
-          "rust_target": "crates/pokeemerald-rs/src/flow/overworld_phase.rs",
+          "rust_target": "crates/pokeemerald-rs/src/flow/overworld_phase/connections.rs",
           "spec": "I-3",
           "status": "stubbed"
         }
@@ -12340,6 +12348,14 @@
       "status": "pending"
     },
     "graphics/interface": {
+      "artifacts": {
+        "main_menu_bg_palette": {
+          "reason": "graphics/interface/main_menu_bg.pal extracted as interface/palette/main_menu_bg (xtask::extract::extract_interface_palettes, issue #216); MainMenuScene::from_pack reads its index 0 for the BG0 backdrop colour. Every other file under graphics/interface (icons, badges, pokedex chrome, etc.) and the sibling main_menu_text.pal stay unextracted -- see xtask::extract's module docs for why main_menu_text.pal specifically is deferred.",
+          "rust_target": "crates/pokeemerald-rs/src/main_menu.rs",
+          "spec": "I-3",
+          "status": "ported"
+        }
+      },
       "category": "graphics.ui",
       "kind": "dir",
       "spec_owner": "05-assets",
@@ -17106,6 +17122,14 @@
       "status": "pending"
     },
     "include/constants/battle.h": {
+      "artifacts": {
+        "BATTLE_TYPE_FIRST_BATTLE": {
+          "reason": "include/constants/battle.h:63 (1 << 4). Modelled as Battle::new's first_battle constructor parameter / the stored first_battle_flag field (issue #187), gating the three deltas from an ordinary wild encounter this issue implements: crit suppression, running forbidden, and the AI-branch opponent move choice. No other BATTLE_TYPE_* flag is modelled; gBattleTypeFlags itself is not represented as a bitset anywhere in this crate.",
+          "rust_target": "crates/battle/src/battle.rs",
+          "spec": "S-6",
+          "status": "stubbed"
+        }
+      },
       "category": "code.constants",
       "kind": "file",
       "status": "pending"
@@ -24023,6 +24047,20 @@
       "status": "pending"
     },
     "src/battle_ai_script_commands.c": {
+      "artifacts": {
+        "BattleAI_SetupAIData": {
+          "reason": "battle_ai_script_commands.c:312. Modelled only for the single call site issue #187 reaches (OpponentHandleChooseMove's BattleAI_SetupAIData(ALL_MOVES_MASK) for BATTLE_TYPE_FIRST_BATTLE): every real move slot seeded at score 100, CheckMoveLimitations zeroing a spent (0-PP) slot's score with no RNG cost (matching the same PP-only limitation rule validate_player_move already applies), and the unconditional four-draw simulatedRNG fill (100 - Random() % 16, :341) reproduced draw-for-draw in battle::opponent_ai::choose_enemy_action_first_battle (a free function in crates/battle/src/battle/opponent_ai.rs, not a Battle method) even though the values themselves are never read (no AI_TryToFaint/AI_HPAware scripts run for this battle type). NOT modelled: Disable/Torment/Taunt/Imprison/Encore/choice-item move limitations, held-item/trainer-item setup (:270-:309), and any call site other than the first-battle one (issue I-5's general trainer AI).",
+          "rust_target": "crates/battle/src/battle/opponent_ai.rs",
+          "spec": "S-6",
+          "status": "stubbed"
+        },
+        "ChooseMoveOrAction_Singles": {
+          "reason": "battle_ai_script_commands.c:396. Modelled only for BATTLE_TYPE_FIRST_BATTLE, where AI_SCRIPT_FIRST_BATTLE is the sole aiFlags bit ever set: since no script ever moves a score away from its seeded 100 except the flee check (data/battle_ai_scripts.s#AI_FirstBattle), the tie-break reduces exactly to 'pick uniformly among the still-has-PP real move slots' (Random() % numOfBestMoves, drawn unconditionally even with one candidate, :445) -- the usable-slot filter plus one final draw in battle::opponent_ai::choose_enemy_action_first_battle, a free function in crates/battle/src/battle/opponent_ai.rs, not a Battle method. AI_ACTION_WATCH (Safari) is not reachable for this battle type and is not modelled. NOT modelled: the general per-move AI_SCRIPT_CHECK_BAD_MOVE/TRY_TO_FAINT/CHECK_VIABILITY/... scoring pipeline that runs for BATTLE_TYPE_TRAINER (issue I-5).",
+          "rust_target": "crates/battle/src/battle/opponent_ai.rs",
+          "spec": "S-6",
+          "status": "stubbed"
+        }
+      },
       "category": "code.source",
       "kind": "file",
       "status": "pending"
@@ -24185,8 +24223,8 @@
     "src/battle_controller_opponent.c": {
       "artifacts": {
         "OpponentHandleChooseMove": {
-          "reason": "battle_controller_opponent.c:1551. Only the plain-wild else branch (:1594-:1601) is modelled: the do/while rejection loop chosenMoveId = MOD(Random(), MAX_MON_MOVES) retried while the slot holds MOVE_NONE, reproduced draw for draw by Battle::choose_enemy_move. The AI branch taken for BATTLE_TYPE_TRAINER | FIRST_BATTLE | SAFARI | ROAMER (:1563, BattleAI_SetupAIData/BattleAI_ChooseMoveOrAction) is issue I-5's, not this slice's; the double-battle random-target draw (:1607) and MOVE_TARGET_USER retargeting are not modelled (single wild battles only).",
-          "rust_target": "crates/battle/src/battle.rs",
+          "reason": "battle_controller_opponent.c:1551. Both branches live in crates/battle/src/battle/opponent_ai.rs as free functions (split out of Battle, which only consumes their EnemyAction result). The plain-wild else branch (:1594-:1601) is modelled: the do/while rejection loop chosenMoveId = MOD(Random(), MAX_MON_MOVES) retried while the slot holds MOVE_NONE, reproduced draw for draw by battle::opponent_ai::choose_enemy_move. As of issue #187, the AI branch (:1563, BATTLE_TYPE_TRAINER | FIRST_BATTLE | SAFARI | ROAMER) is now also modelled, but only for BATTLE_TYPE_FIRST_BATTLE: battle::opponent_ai::choose_enemy_action_first_battle narrows BattleAI_SetupAIData/BattleAI_ChooseMoveOrAction to exactly the one AI script (AI_SCRIPT_FIRST_BATTLE) this specific gBattleTypeFlags value ever sets -- see src/battle_ai_script_commands.c#BattleAI_SetupAIData, #ChooseMoveOrAction_Singles, and data/battle_ai_scripts.s#AI_FirstBattle. The general BATTLE_TYPE_TRAINER/SAFARI/ROAMER AI (arbitrary AI_SCRIPT_* combinations, real move scoring) is issue I-5's, not modelled. The double-battle random-target draw (:1607) and MOVE_TARGET_USER retargeting are not modelled (single wild battles only).",
+          "rust_target": "crates/battle/src/battle/opponent_ai.rs",
           "spec": "S-6",
           "status": "stubbed"
         }
@@ -24268,8 +24306,14 @@
           "spec": "S-6",
           "status": "stubbed"
         },
+        "IsRunningFromBattleImpossible": {
+          "reason": "battle_main.c:4021. Only the BATTLE_TYPE_FIRST_BATTLE branch is modelled (:4078-:4082, BATTLE_RUN_FORBIDDEN, the B_MSG_DONT_LEAVE_BIRCH message): Battle::take_turn rejects PlayerAction::Run with BattleError::RunForbidden before any draw when first_battle is set (issue #187), matching that this gate is actually checked at action-*selection* time (src/battle_main.c:4339-:4344), before Run is ever a chosen action for the turn -- upstream just re-prompts the player's menu. NOT modelled: Enigma Berry/HOLD_EFFECT_CAN_ALWAYS_RUN (:4034), BATTLE_TYPE_LINK auto-success (:4036), ABILITY_RUN_AWAY (:4038), the opposing Shadow Tag/Arena Trap/Magnet Pull escape-prevention checks (:4045-:4071), and STATUS2_ESCAPE_PREVENTION/STATUS2_WRAPPED/STATUS3_ROOTED (:4072-:4076) -- no abilities, items, status2, or status3 tracked this slice.",
+          "rust_target": "crates/battle/src/battle.rs",
+          "spec": "S-6",
+          "status": "stubbed"
+        },
         "SetActionsAndBattlersTurnOrder": {
-          "reason": "battle_main.c:4756. Only the plain two-battler pairwise GetWhoStrikesFirst-based ordering is modelled (issue #159 deliberately mirrors the upstream battle loop's observable order, not its task/array structure, per the pokeemerald-rs behavioral-fidelity principle), plus the run-goes-first rule this function owns: the non-link branch's gChosenActionByBattler[0] == B_ACTION_RUN test (:4784-:4794) sets turnOrderId = 5, and the block guarded by it (:4797) reseats the running battler at gBattlerByTurnOrder[0] ahead of every move. The link-battle variant of that test (:4778), item/switch-action prioritization, and the Safari Zone branch are not modelled.",
+          "reason": "battle_main.c:4756. Only the plain two-battler pairwise GetWhoStrikesFirst-based ordering is modelled (issue #159 deliberately mirrors the upstream battle loop's observable order, not its task/array structure, per the pokeemerald-rs behavioral-fidelity principle), plus the run-goes-first rule this function owns: the non-link branch's gChosenActionByBattler[0] == B_ACTION_RUN test (:4784-:4794) sets turnOrderId = 5, and the block guarded by it (:4797) reseats the running battler at gBattlerByTurnOrder[0] ahead of every move. That fast path tests only gChosenActionByBattler[0] and [2] -- the two *player*-side positions (B_POSITION_PLAYER_LEFT/RIGHT) -- so it never fires for an opponent battler: a wild mon's own B_ACTION_RUN (the first_battle flee, src/battle_util.c#HandleAction_Run) gets no such reseat and is ordered by ordinary priority/Speed through GetWhoStrikesFirst, which is why EnemyAction::Flee is given priority 0 (MOVE_NONE's) rather than jumping the queue. The link-battle variant of that test (:4776), item/switch-action prioritization, and the Safari Zone branch are not modelled.",
           "rust_target": "crates/battle/src/battle.rs",
           "spec": "S-6",
           "status": "stubbed"
@@ -24354,7 +24398,7 @@
           "status": "stubbed"
         },
         "Cmd_critcalc": {
-          "reason": "battle_script_commands.c:1253. sCriticalHitChance table and the four high-crit move-effect ids modelled (crit_stage_for_effect, crit_roll). Focus Energy, Scope Lens, Lucky Punch/Chansey, and Stick/Farfetch'd stage contributions are not modelled (status2/items out of scope). Nor are the three suppressors that short-circuit the crit Random() away entirely in the :1279-:1283 && chain -- Battle Armor/Shell Armor on the target (:1279), STATUS3_CANT_SCORE_A_CRIT on the attacker (:1280), and BATTLE_TYPE_WALLY_TUTORIAL | BATTLE_TYPE_FIRST_BATTLE (:1281): each makes the hit consume one fewer RNG draw. crit_roll models only the all-three-pass case, which is the ordinary post-first-battle wild encounter this slice targets -- BATTLE_TYPE_FIRST_BATTLE is set solely for the scripted Route 101 Poochyena battle (src/battle_setup.c:937), which is therefore crit-proof upstream.",
+          "reason": "battle_script_commands.c:1253. sCriticalHitChance table and the four high-crit move-effect ids modelled (crit_stage_for_effect, crit_roll). Of the three suppressors that short-circuit the crit Random() away in the :1279-:1283 && chain, BATTLE_TYPE_FIRST_BATTLE (:1281) is now modelled end to end (issue #187): crate::hit::resolve_hit takes a suppress_crit flag that skips crit_roll and its draw entirely, threaded from Battle's first_battle flag (crit-proof for the whole battle, matching upstream's scripted Route 101 Zigzagoon fight, src/battle_setup.c:937). Still not modelled: Battle Armor/Shell Armor on the target (:1279), STATUS3_CANT_SCORE_A_CRIT (:1280), BATTLE_TYPE_WALLY_TUTORIAL (the other half of :1281), and Focus Energy/Scope Lens/Lucky Punch/Stick stage contributions (status2/items out of scope).",
           "rust_target": "crates/battle/src/critical.rs",
           "spec": "S-6",
           "status": "stubbed"
@@ -24459,19 +24503,19 @@
     "src/battle_util.c": {
       "artifacts": {
         "AreAllMovesUnusable": {
-          "reason": "battle_util.c:1125 (with CheckMoveLimitations, declared :1082). Modelled: the all-slots-unusable divert -- Battle::choose_enemy_move returns the forced-Struggle fallback WITHOUT running the wild rejection loop, suppressing its RNG draw (an RNG-observable behaviour), with MOVE_LIMITATION_ZEROMOVE (:1098) and MOVE_LIMITATION_PP (:1101) as the modelled limitation rules (selectable_slot / the pp==0 screen; the same rules back validate_player_move's pre-draw pick checks). NOT modelled: Struggle execution itself (the fallback having to act stops the turn with UnsupportedMoveEffect), gSelectionBattleScripts / BattleScript_NoMovesLeft presentation, and the Disable (:1104) / Torment / Taunt / Imprison / Encore / Choice-item limitation bits (none of those systems exist this slice).",
-          "rust_target": "crates/battle/src/battle.rs",
+          "reason": "battle_util.c:1125 (with CheckMoveLimitations, declared :1082). Modelled: the all-slots-unusable divert -- battle::opponent_ai::choose_enemy_move (a free function in crates/battle/src/battle/opponent_ai.rs, not a Battle method) returns the forced-Struggle fallback WITHOUT running the wild rejection loop, suppressing its RNG draw (an RNG-observable behaviour), with MOVE_LIMITATION_ZEROMOVE (:1098) and MOVE_LIMITATION_PP (:1101) as the modelled limitation rules (opponent_ai's selectable_slot / the pp==0 screen; the same rules back validate_player_move's pre-draw pick checks). NOT modelled: Struggle execution itself (the fallback having to act stops the turn with UnsupportedMoveEffect), gSelectionBattleScripts / BattleScript_NoMovesLeft presentation, and the Disable (:1104) / Torment / Taunt / Imprison / Encore / Choice-item limitation bits (none of those systems exist this slice).",
+          "rust_target": "crates/battle/src/battle/opponent_ai.rs",
           "spec": "S-6",
           "status": "stubbed"
         },
         "HandleAction_Run": {
-          "reason": "battle_util.c:487. The player-side half only (:514-:523): Battle::take_turn calls try_run_from_battle for a chosen PlayerAction::Run and, on failure, burns the player's turn while the wild mon still acts (upstream sets BattleScript_PrintFailedToRunString and gCurrentActionFuncId = B_ACTION_EXEC_SCRIPT rather than ending the turn). Link/recorded-link multi-battler run handling (:491-:511) and the opponent-side branch (:524-:537, a wild mon fleeing with B_OUTCOME_MON_FLED) are not modelled. Where a run lands in the turn order is not this artifact's claim -- see src/battle_main.c#SetActionsAndBattlersTurnOrder.",
+          "reason": "battle_util.c:487. Both halves are *handled* here, in Battle::take_turn / Battle::enemy_acts. The player-side half (:514-:523) is modelled: Battle::take_turn calls try_run_from_battle for a chosen PlayerAction::Run and, on failure, burns the player's turn while the wild mon still acts. As of issue #187, the non-player half (:524-:537) is now also modelled: a first_battle wild opponent that chooses to flee ends the battle unconditionally in BattleOutcome::WildFled/BattleEvent::WildFled, no RNG draw, no PP touched -- matching B_OUTCOME_MON_FLED. The choice itself is not this artifact's: EnemyAction::Flee comes from the free function battle::opponent_ai::choose_enemy_action_first_battle (crates/battle/src/battle/opponent_ai.rs, see src/battle_controller_opponent.c#OpponentHandleChooseMove and data/battle_ai_scripts.s#AI_FirstBattle). The STATUS2_WRAPPED/STATUS2_ESCAPE_PREVENTION guard on that branch (:526) is not modelled (no binding moves tracked). Link/recorded-link multi-battler run handling (:491-:511) is not modelled. Where a run/flee lands in the turn order is not this artifact's claim either -- see src/battle_main.c#SetActionsAndBattlersTurnOrder and src/battle_main.c#GetWhoStrikesFirst.",
           "rust_target": "crates/battle/src/battle.rs",
           "spec": "S-6",
           "status": "stubbed"
         },
         "TryRunFromBattle": {
-          "reason": "battle_util.c:407. The plain single-battle path (:452, non-Pyramid sub-branch :463-:468) modelled exactly, including that it reads RAW gBattleMons[].speed rather than any stat-stage-modified Speed, and the u8 speedVar wraparound-not-saturation on assignment (try_run_from_battle). Held-item (HOLD_EFFECT_CAN_ALWAYS_RUN), ability (RUN_AWAY), Frontier/Trainer Hill auto-success, and Battle Pyramid multiplier branches are not modelled (issue #159 scopes abilities/items out). The caller-side gate is also out of scope: IsRunningFromBattleImpossible (src/battle_main.c:4021) returns BATTLE_RUN_FORBIDDEN for BATTLE_TYPE_FIRST_BATTLE (:4078-:4082), so the scripted Route 101 battle (src/battle_setup.c:937) can never run and never reaches this function -- escape.rs models the ordinary post-first-battle wild encounter.",
+          "reason": "battle_util.c:407. The plain single-battle path (:452, non-Pyramid sub-branch :463-:468) modelled exactly, including that it reads RAW gBattleMons[].speed rather than any stat-stage-modified Speed, and the u8 speedVar wraparound-not-saturation on assignment (try_run_from_battle). Held-item (HOLD_EFFECT_CAN_ALWAYS_RUN), ability (RUN_AWAY), Frontier/Trainer Hill auto-success, and Battle Pyramid multiplier branches are not modelled (issue #159 scopes abilities/items out). The caller-side gate is modelled separately, not here: IsRunningFromBattleImpossible's BATTLE_TYPE_FIRST_BATTLE branch (src/battle_main.c#IsRunningFromBattleImpossible, issue #187) now rejects PlayerAction::Run at Battle::take_turn before this function is ever reached, matching upstream's scripted Route 101 Zigzagoon battle never reaching TryRunFromBattle at all.",
           "rust_target": "crates/battle/src/escape.rs",
           "spec": "S-6",
           "status": "stubbed"
@@ -25753,6 +25797,12 @@
     },
     "src/field_camera.c": {
       "artifacts": {
+        "CameraUpdate": {
+          "reason": "Per-frame gFieldCamera pixel-offset accumulator (movementSpeedX/Y ramping gTotalCameraPixelOffsetX/Y by 1px/frame toward a full metatile) collapsed to the analytic viewport::camera_lag_px, which derives the same net signed pixel lag directly from PlayerState::step_progress/WALK_FRAMES_PER_TILE rather than replicating the accumulator. Related to, but a strictly bigger step than, SetSpritePosToMapCoords' own ledger entry: that one collapses a compile-time *constant* (the player's own mapX - gSaveBlock1Ptr->pos.x is identically 0), while this collapses a per-frame *accumulator* into a closed form -- and only up to the constant term already folded into PLAYER_OBJ_X/Y, so it equals upstream's own value on frame-to-frame differences rather than absolutely (see camera_lag_px's docs). Issue #217 (I-3): this shared value is what fixed the NPC-camera desync bug (a stationary NPC snapping to its destination tile at step start while the BG still lagged smoothly behind), used identically by build_tilemaps' BG scroll and npc::oam_entries' NPC placement. UpdateObjectEventsForCameraUpdate's own spawn/despawn side effect (TrySpawnObjectEvents/RemoveObjectEventsOutsideView at camera tile boundaries) stays under its own existing event_object_movement.c ledger entries -- not re-claimed here.",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/viewport.rs",
+          "spec": "I-3",
+          "status": "rewritten"
+        },
         "DrawMetatile": {
           "reason": "Per-METATILE_LAYER_TYPE bottom/middle/top BG-layer routing of a metatile's 8 raw tile entries, ported into viewport::route_layers; the NORMAL case's 'garbage' bottom-layer write is a documented fidelity delta (drawn transparent instead, since it is implementation-undefined and never reaches the screen behind the always-opaque middle layer in the common case).",
           "rust_target": "crates/pokeemerald-rs/src/overworld/viewport.rs",
@@ -25761,6 +25811,12 @@
         },
         "DrawMetatileAt": {
           "reason": "Per-position metatile-id lookup plus primary/secondary tileset dispatch (NUM_METATILES_IN_PRIMARY threshold) feeding DrawMetatile, ported into viewport::metatile_layers/cell_at.",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/viewport.rs",
+          "spec": "I-3",
+          "status": "rewritten"
+        },
+        "UpdateCameraPanning": {
+          "reason": "gSpriteCoordOffsetX/Y's per-frame derivation from the camera's own pixel state, ported as the shared viewport::camera_lag_px this port's two camera-driven consumers both read (issue #217, I-3): build_tilemaps subtracts it from the BG scroll (mirroring gSpriteCoordOffsetX/Y being the camera-locked complement to the world-locked BG scroll) and npc::oam_entries adds it to every stationary NPC's placement (mirroring UpdateOamCoords -- see src/sprite.c#UpdateOamCoords). sHorizontalCameraPan/sVerticalCameraPan's bike pan-ahead terms are out of v1 scope (no bike).",
           "rust_target": "crates/pokeemerald-rs/src/overworld/viewport.rs",
           "spec": "I-3",
           "status": "rewritten"
@@ -25798,13 +25854,13 @@
         },
         "TryArrowWarp": {
           "fold_target": "crates/engine/src/overworld/warp.rs",
-          "reason": "GetWarpEventAtMapPosition + IsArrowWarpMetatileBehavior + SetupWarp/DoWarp's warp-resolution shape absorbed into engine::overworld::warp::trigger_arrow_warp, a separate entry point from the door-shaped trigger_door_warp precisely because the two are gated differently upstream. Called from crates/pokeemerald-rs/src/flow/overworld_phase.rs's OverworldPhase::step as a per-frame poll, upstream's own gating: the direction currently held must equal the direction the player currently faces (input->heldDirection && input->dpadDirection == playerDirection, field_control_avatar.c:164-168), evaluated at the tile the player is standing on, independent of tookStep -- so it fires both for a step taken onto an arrow tile while still holding its direction and for a turn in place while already standing on one. The only added gate is that the player be at rest between steps, which is this port's counterpart to the T_TILE_CENTER/T_NOT_MOVING test that sets heldDirection upstream in the first place (:95-112). Issue #174 (the Brendan's-house exit doormat, MAP_LITTLEROOT_TOWN_BRENDANS_HOUSE_1F warp #1 at (8, 8)). Issue #194 corrected the frame ordering against ProcessPlayerFieldInput (overworld.c:1444-1455), which runs this check *before* PlayerStep and skips the step outright when it fires: OverworldPhase::step now re-evaluates this same pre-movement gate ahead of its own movement call and, when it already fires, skips movement for the frame entirely instead of running it and polling afterward -- so a legal, walkable step in the arrow direction warps rather than stepping (previously a permanent no-warp, unreachable on bundled data since every arrow tile's own direction is impassable there, and pinned now by a synthetic scene in flow/overworld_phase/tests.rs). The door-shaped path is unaffected: its own tookStep-style gate inherently needs the step to have already landed, so it still runs after movement. Not modelled: StoreInitialPlayerAvatarState's pre-warp avatar snapshot, and SetupWarp's escape-warp/Trainer Hill bookkeeping.",
+          "reason": "GetWarpEventAtMapPosition + IsArrowWarpMetatileBehavior + SetupWarp/DoWarp's warp-resolution shape absorbed into engine::overworld::warp::trigger_arrow_warp, a separate entry point from the door-shaped trigger_door_warp precisely because the two are gated differently upstream. Called from crates/pokeemerald-rs/src/flow/overworld_phase/step.rs's OverworldPhase::step as a per-frame poll, upstream's own gating: the direction currently held must equal the direction the player currently faces (input->heldDirection && input->dpadDirection == playerDirection, field_control_avatar.c:164-168), evaluated at the tile the player is standing on, independent of tookStep -- so it fires both for a step taken onto an arrow tile while still holding its direction and for a turn in place while already standing on one. The only added gate is that the player be at rest between steps, which is this port's counterpart to the T_TILE_CENTER/T_NOT_MOVING test that sets heldDirection upstream in the first place (:95-112). Issue #174 (the Brendan's-house exit doormat, MAP_LITTLEROOT_TOWN_BRENDANS_HOUSE_1F warp #1 at (8, 8)). Issue #194 corrected the frame ordering against ProcessPlayerFieldInput (overworld.c:1444-1455), which runs this check *before* PlayerStep and skips the step outright when it fires: OverworldPhase::step now re-evaluates this same pre-movement gate ahead of its own movement call and, when it already fires, skips movement for the frame entirely instead of running it and polling afterward -- so a legal, walkable step in the arrow direction warps rather than stepping (previously a permanent no-warp, unreachable on bundled data since every arrow tile's own direction is impassable there, and pinned now by a synthetic scene in flow/overworld_phase/tests.rs). The door-shaped path is unaffected: its own tookStep-style gate inherently needs the step to have already landed, so it still runs after movement. Not modelled: StoreInitialPlayerAvatarState's pre-warp avatar snapshot, and SetupWarp's escape-warp/Trainer Hill bookkeeping.",
           "spec": "I-3",
           "status": "folded"
         },
         "TryStartInteractionScript": {
           "reason": "OverworldPhase::step's A-press handling covers only the object-event branch of GetInteractionScript (GetInteractedObjectEventScript, via engine::overworld::facing_object_event), routed to a NpcDialog through crate::overworld::npc_scripts::script_text's own small, hardcoded msgbox-style script-text table (issue's own DoD: 'a direct msgbox-style script subset is enough'). Not modelled: GetInteractedBackgroundEventScript/GetInteractedMetatileScript/GetInteractedWaterScript's fallback chain (sign posts, counters, water-adjacent interactions), GetInteractedLinkPlayerScript, RamScript, and the interaction sound effect (PlaySE(SE_SELECT)). A found-but-unrecognized-script object event (including the literal NULL/'0x0' sentinel) is selected but opens no dialog, matching upstream's own NULL-script no-op.",
-          "rust_target": "crates/pokeemerald-rs/src/flow/overworld_phase.rs",
+          "rust_target": "crates/pokeemerald-rs/src/flow/overworld_phase/step.rs",
           "spec": "I-3",
           "status": "stubbed"
         }
@@ -26402,10 +26458,10 @@
           "status": "stubbed"
         },
         "no_save_menu": {
-          "reason": "HAS_NO_SAVED_GAME item list (Task_MainMenuCheckSaveFile/HandleMainMenuInput) reduced to the single NEW GAME item MainMenuScene renders and confirms; CONTINUE/OPTION/MYSTERY GIFT/MYSTERY EVENTS and every other save-status branch are not ported",
+          "reason": "HAS_NO_SAVED_GAME now renders both items at upstream's real geometry/palette/window frame (main_menu.c:259-309, 755-793) with Up/Down selection and the WIN0+BLDCNT+BLDY(7) highlight, whose BLDCNT first-target set is BG0 only (main_menu.c:751) so the darken reaches the two windows' own pixels and never the backdrop (main_menu.c:745-753, 903-925, 1170-1187), issue #216. Still not ported: CONTINUE/MYSTERY GIFT/MYSTERY EVENTS and every other gSaveFileStatus branch (no save-file load path exists yet), OPTION's own destination screen (ACTION_OPTION, main_menu.c:963) -- crate::flow::advance_scene swallows an A press on it instead of launching a screen that doesn't exist -- and HandleMainMenuInput's B-button return to the title screen (JOY_NEW(B_BUTTON), main_menu.c:895-901, Task_HandleMainMenuBPressed's white fade and full-screen WIN0 open), which this port leaves inert.",
           "rust_target": "crates/pokeemerald-rs/src/main_menu.rs",
           "spec": "I-3",
-          "status": "stubbed"
+          "status": "rewritten"
         }
       },
       "category": "code.source",
@@ -26676,8 +26732,8 @@
     "src/overworld.c": {
       "artifacts": {
         "ApplyCurrentWarp": {
-          "reason": "gSaveBlock1Ptr->location = sWarpDestination transcribed as OverworldPhase::warp_to's save1.location assignment on a resolved warp landing (flow/overworld_phase.rs); gLastUsedWarp (the previous location) and the dive/hole-warp resets are not modeled (no typed home / out of v1 scope) — stubbed until they are.",
-          "rust_target": "crates/pokeemerald-rs/src/flow/overworld_phase.rs",
+          "reason": "gSaveBlock1Ptr->location = sWarpDestination transcribed as OverworldPhase::warp_to's save1.location assignment on a resolved warp landing (flow/overworld_phase/connections.rs); gLastUsedWarp (the previous location) and the dive/hole-warp resets are not modeled (no typed home / out of v1 scope) — stubbed until they are.",
+          "rust_target": "crates/pokeemerald-rs/src/flow/overworld_phase/connections.rs",
           "spec": "I-3",
           "status": "stubbed"
         },
@@ -26689,13 +26745,13 @@
         },
         "LoadMapFromCameraTransition": {
           "reason": "Connection-crossing map switch (issue #177): OverworldPhase::cross_connection models the location/scene core -- SetWarpDestination(mapGroup, mapNum, WARP_ID_NONE, -1, -1) + ApplyCurrentWarp (overworld.c:633, :540-:546, save1.location's exact shape), LoadCurrentMapData (scene/map_id rebind), and RunOnTransitionMapScript (:807, the bounded 2-map transcription in run_on_transition_map_script) -- atomically after PlayerState::step commits the translated position, with a fail-closed restore of the pre-step stance if the rebind is refused. InitSecondaryTilesetAnimation (:815) is modelled as a deliberate no-op: it resets only sSecondaryTilesetAnimCounter (tileset_anims.c:581-583), and this port animates only the primary counter (OverworldPhase::tick), which therefore keeps running across a crossing -- LoadMapFromCameraTransition never calls InitTilesetAnimations (that function's call sites are the full map-load paths: InitMapView overworld.c:529 and the stepped loaders :1867/:1942/:2039). The pixel-precision CameraMove/GetIncomingConnection trigger (:603-:624) is deliberately simplified to grid-step resolution (documented on resolve_connection). NOT modelled, deferred with the systems they belong to: TransitionMapMusic, ResetCyclingRoadChallengeData (:799), TryUpdateRandomTrainerRematches, DoTimeBasedEvents, SetSavedWeatherFromCurrMapHeader, ChooseAmbientCrySpecies (:804), SetDefaultFlashLevel, Overworld_ClearSavedMusic (:806), LoadObjEventTemplatesFromHeader, TrySetMapSaveWarpStatus, ClearTempFieldEventData, InitMap, the secondary tileset/palette copy path (CopySecondaryTilesetToVramUsingHeap/CopySecondaryTilesetPaletteUsingHeap and the ApplyWeatherColorMapToPal(NUM_PALS_IN_PRIMARY..NUM_PALS_TOTAL) loop), DoCurrentWeather (:818), ResetFieldTasksArgs (:819), roamer updates, RunOnResumeMapScript, and ShowMapNamePopup. Stubbed until those land. RestartWildEncounterImmunitySteps (:800) is no longer deferred: issue #169 wires it into cross_connection, so crossing Littleroot's north edge into Route 101 buys the same four encounter-free steps upstream grants.",
-          "rust_target": "crates/pokeemerald-rs/src/flow/overworld_phase.rs",
+          "rust_target": "crates/pokeemerald-rs/src/flow/overworld_phase/connections.rs",
           "spec": "I-4",
           "status": "stubbed"
         },
         "SetWarpData": {
-          "reason": "map_group/map_num/warp_id/x/y field assignment transcribed as the engine::save::WarpData literal OverworldPhase::warp_to builds for save1.location on a resolved warp (flow/overworld_phase.rs); x/y are left at -1 matching SetWarpDestinationToMapWarp's own -1,-1 call shape for a map-warp-id destination (not fixed coordinates).",
-          "rust_target": "crates/pokeemerald-rs/src/flow/overworld_phase.rs",
+          "reason": "map_group/map_num/warp_id/x/y field assignment transcribed as the engine::save::WarpData literal OverworldPhase::warp_to builds for save1.location on a resolved warp (flow/overworld_phase/connections.rs); x/y are left at -1 matching SetWarpDestinationToMapWarp's own -1,-1 call shape for a map-warp-id destination (not fixed coordinates).",
+          "rust_target": "crates/pokeemerald-rs/src/flow/overworld_phase/connections.rs",
           "spec": "I-3",
           "status": "rewritten"
         },
@@ -27376,7 +27432,7 @@
       "artifacts": {
         "InitSecretBaseDecorationSprites": {
           "reason": "The ON_WARP_INTO_MAP half of the decoration lifecycle: per placed decoration it sets VAR_OBJ_GFX_ID_n, clears that slot's FLAG_DECORATION_*, spawns the object event and moves it to the saved position. Only its fresh-save *outcome* is reproduced -- gSaveBlock1Ptr->playerRoomDecorations[] is all DECOR_NONE after ClearSav1 (src/load_save.c:64-67), so the loop places nothing and every decoration flag stays set, which is exactly the state run_on_transition_map_script leaves. This port has no playerRoomDecorations/playerRoomDecorationPositions save state, no gDecorations table, and no OBJ_EVENT_GFX_VAR_* -> VAR_OBJ_GFX_ID_n graphics resolution, so nothing can be placed for it to spawn; a future decoration slice needs all three plus HideSecretBaseDecorationSprites' inverse. Recorded here rather than left silent because the not-yet-ported half is what a reader would otherwise assume was missing from the on-transition port above.",
-          "rust_target": "crates/pokeemerald-rs/src/flow/overworld_phase.rs",
+          "rust_target": "crates/pokeemerald-rs/src/flow/overworld_phase/connections.rs",
           "spec": "I-3",
           "status": "stubbed"
         }
@@ -27407,6 +27463,12 @@
     },
     "src/sprite.c": {
       "artifacts": {
+        "UpdateOamCoords": {
+          "reason": "The coordOffsetEnabled branch (gSpriteCoordOffsetX/Y added to an enabled sprite's OAM position) ported as npc::oam_entries' own camera_lag addition inside object_screen_position (issue #217, I-3) -- the fix for NPC sprites snapping to their destination tile at step start instead of staying glued to the camera through the walk animation. The branch *selection* (which sprites opt in) is not modelled, and honestly cannot be split by sprite: upstream sets coordOffsetEnabled = TRUE unconditionally in TrySetupObjectEventSprite (src/event_object_movement.c:1466), which every object event reaches -- the player's own included (InitPlayerAvatar -> SpawnSpecialObjectEvent -> TrySpawnObjectEventTemplate -> TrySetupObjectEventSprite; src/field_player_avatar.c:1399, src/event_object_movement.c:1490,1507). So the offset is on for every sprite this module draws and the branch is unconditional here. The player nevertheless looks screen-fixed upstream (and is drawn at the fixed avatar::PLAYER_OBJ_X/Y here) for a different reason than 'no offset': its own walk animation advances sprite->x/y by 1px/frame along travel (Step1, src/event_object_movement.c:8191), cancelling the coord offset frame for frame. This port collapses that cancellation to a constant rather than reproducing both halves -- see SetSpritePosToMapCoords' own ledger entry.",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/npc.rs",
+          "spec": "I-3",
+          "status": "rewritten"
+        },
         "affine_oam": {
           "reason": "sprite_affine::sample_texel (paired with OamEntry::AffineMode/with_affine/bounding_box in oam.rs) ports affine and affine-double-size OBJ sampling: matrix-group selection by matrixNum (0..=31, gOamMatrices), the double-size bounding box (CalcCenterToCornerVec's ST_OAM_AFFINE_DOUBLE doubling), and center-relative texture-space sampling biased onto the nominal (undoubled) texture, verified pixel-for-pixel against mgba's GBAObjAttributesAIsTransformed branch and xAccum/yAccum setup (software-obj.c:215-316) including the outside-texture-vs-transparent-hole distinction that feeds SpriteLayer::resolve_pixel's priority-upgrade rule. h/v flip are correctly ignored once affine (hardware reuses those bits as matrixNum bits 3-4). The rotation/scale-to-matrix computation (ObjAffineSet/SetOamMatrix trig side) is not modelled — only matrix selection and consumption are. Windows/blending/mosaic remain out of scope (issue #98).",
           "rust_target": "crates/rendering/src/sprite_affine.rs",
@@ -27515,7 +27577,7 @@
         },
         "TextPrinterWaitWithDownArrow": {
           "reason": "The message box's down-arrow wait prompt takes JOY_NEW(A_BUTTON | B_BUTTON) -- a fresh A *or* B edge -- which OverworldPhase::step now transcribes as the confirm edge it forwards to NpcDialog::tick (issue #161 review; previously A only, leaving a player who pressed B stuck with the box open). TextPrinterWait (src/text.c:884-900, the mid-page wait) and RunTextPrinter's hold-to-speed-up path (:944, :950) read the same button pair. Stubbed rather than rewritten: only the input predicate is ported. Not modelled -- gTextFlags.autoScroll / TextPrinterWaitAutoMode, the down-arrow sprite itself (TextPrinterDrawDownArrow) and its bob animation, and PlaySE(SE_SELECT).",
-          "rust_target": "crates/pokeemerald-rs/src/flow/overworld_phase.rs",
+          "rust_target": "crates/pokeemerald-rs/src/flow/overworld_phase/frame.rs",
           "spec": "I-3",
           "status": "stubbed"
         },

@@ -337,7 +337,7 @@ impl BattlePokemon {
     ///   [`MAX_MON_MOVES`] — neither is representable upstream, and the
     ///   non-empty half is what makes the wild opponent's move-choice
     ///   rejection loop terminate (see
-    ///   [`crate::battle::Battle::choose_enemy_move`]).
+    ///   `crate::battle::opponent_ai::choose_enemy_move`).
     /// - [`BattleError::PlaceholderMove`] if any slot is [`MOVE_NONE`], the
     ///   empty-slot placeholder (see that constant's docs).
     /// - [`BattleError::PlaceholderSpecies`] if `species` is [`SPECIES_NONE`]

@@ -56,7 +56,7 @@ fn scripted_wild_battle_runs_move_vs_move_to_a_faint_and_reports_victory() {
     assert_eq!(enemy.nature(), Nature::Hardy);
     assert_eq!(enemy.ivs().hp, 0);
 
-    let mut battle = Battle::new(dex, player, enemy, &mut rng).expect("Battle::new");
+    let mut battle = Battle::new(dex, player, enemy, false, &mut rng).expect("Battle::new");
 
     // The level-50 attacker's Tackle one-shots a level-5 Rattata even at the
     // worst (85%) damage roll and without a crit, so one turn is enough.
@@ -134,7 +134,7 @@ fn a_faster_player_always_escapes_a_wild_battle_successfully() {
 
     let player_hp_before = player.current_hp();
     let enemy_hp_before = enemy.current_hp();
-    let mut battle = Battle::new(dex, player, enemy, &mut rng).expect("Battle::new");
+    let mut battle = Battle::new(dex, player, enemy, false, &mut rng).expect("Battle::new");
 
     let events = battle
         .take_turn(PlayerAction::Run, &mut rng)
@@ -180,7 +180,7 @@ fn a_battle_with_a_move_outside_this_slice_is_refused_before_it_starts() {
     // here panics rather than quietly passing.
     let mut rng = ScriptedRng::new([]);
     assert_eq!(
-        Battle::new(dex, player, enemy, &mut rng).err(),
+        Battle::new(dex, player, enemy, false, &mut rng).err(),
         Some(BattleError::UnsupportedMoveEffect(MoveId(49)))
     );
     assert_eq!(rng.draws(), 0);

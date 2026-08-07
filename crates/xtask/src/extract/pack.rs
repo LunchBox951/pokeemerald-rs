@@ -81,11 +81,13 @@ pub const MAGIC: [u8; 8] = *b"PKMRPACK";
 /// module docs; `4` added the `audio/voicegroup/*` entries those samples
 /// back (issue #182, `#115` child 3); `5` added the `audio/song/mus_title`
 /// entry (issue #181, `#115` child 2) — see `crates/assets/src/audio.rs`'s
-/// module docs, "Versioning". Each bump is a pure content addition under
-/// the existing [`PackKind`] tags (`audio/sample/*`, `audio/voicegroup/*`,
-/// and `audio/song/*` entries are all [`PackKind::Raw`]); the wire layout
-/// above hasn't changed since `1`.
-pub const FORMAT_VERSION: u32 = 5;
+/// module docs, "Versioning"; `6` added the `interface/palette/main_menu_bg`
+/// entry the no-save main menu requires (issue #216, I-3). Each bump is a
+/// pure content addition under the existing [`PackKind`] tags
+/// (`audio/sample/*`, `audio/voicegroup/*`, and `audio/song/*` entries are
+/// all [`PackKind::Raw`]; `interface/palette/*` is [`PackKind::Palette`]);
+/// the wire layout above hasn't changed since `1`.
+pub const FORMAT_VERSION: u32 = 6;
 
 /// What kind of content an entry's payload holds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
