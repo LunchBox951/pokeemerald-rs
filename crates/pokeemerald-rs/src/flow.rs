@@ -106,6 +106,25 @@ fn should_retry_overworld_load(buttons: ButtonState) -> bool {
     buttons.is_newly_pressed(Buttons::A) || buttons.is_newly_pressed(Buttons::B)
 }
 
+/// Whether confirming (A) `item` on the main menu launches the new-game
+/// intro -- upstream `HandleMainMenuInput`'s `ACTION_NEW_GAME` vs
+/// `ACTION_OPTION` dispatch (`main_menu.c:952-963`), as a pure decision
+/// [`advance_scene`]'s `AppScene::MainMenu` arm acts on. `ACTION_OPTION`'s
+/// destination screen isn't built yet (issue #216 scope notes), so
+/// [`MainMenuItem::Option`] maps to no transition at all -- the press is
+/// swallowed rather than incorrectly launching the intro.
+///
+/// Split out of the scene arm so the mapping is testable without a pack:
+/// inside the arm, both a swallowed press and a failed
+/// [`intro::load_default`] fall through to "stay on the main menu", which
+/// no pack-less test can tell apart.
+const fn confirm_starts_new_game(item: MainMenuItem) -> bool {
+    match item {
+        MainMenuItem::NewGame => true,
+        MainMenuItem::Option => false,
+    }
+}
+
 /// Log the one-time proof that `phase`'s fresh save state
 /// ([`OverworldPhase::load_default`]'s own doc comment, finding 1 of this
 /// module's review pass) actually reached the `Intro` -> `Overworld`
@@ -174,20 +193,17 @@ pub(crate) fn advance_scene(scene: AppScene, buttons: ButtonState) -> (AppScene,
         }
         AppScene::MainMenu(mut menu) => {
             if buttons.is_newly_pressed(Buttons::A) {
-                match menu.selected() {
-                    MainMenuItem::NewGame => match intro::load_default() {
+                // A pure decision, not an inline match, so the
+                // NEW-GAME-only mapping is pinned by a pack-less test --
+                // see `confirm_starts_new_game`'s own doc comment.
+                if confirm_starts_new_game(menu.selected()) {
+                    match intro::load_default() {
                         Ok(intro_scene) => {
                             let frame = intro_scene.compose_frame();
                             return (AppScene::Intro(Box::new(intro_scene)), frame);
                         }
                         Err(err) => eprintln!("intro: {err} -- staying on the main menu"),
-                    },
-                    // Upstream's `ACTION_OPTION` destination
-                    // (`main_menu.c:963`) is a separate settings screen this
-                    // port doesn't model yet (issue #216 scope notes) --
-                    // swallow the press instead of incorrectly launching
-                    // the intro.
-                    MainMenuItem::Option => {}
+                    }
                 }
             } else if buttons.is_newly_pressed(Buttons::UP) {
                 menu.move_up();
@@ -251,7 +267,8 @@ pub(crate) fn advance_scene(scene: AppScene, buttons: ButtonState) -> (AppScene,
 #[cfg(test)]
 mod tests {
     use super::{
-        advance_scene, should_retry_overworld_load, title_advance_pressed, AnimatedTitle, AppScene,
+        advance_scene, confirm_starts_new_game, should_retry_overworld_load, title_advance_pressed,
+        AnimatedTitle, AppScene,
     };
     use crate::intro::{self, IntroStatus};
     use crate::new_game;
@@ -429,6 +446,49 @@ mod tests {
             panic!("A on OPTION must not leave the main menu");
         };
         assert_eq!(menu.selected(), crate::main_menu::MainMenuItem::Option);
+    }
+
+    /// Issue #216 regression, the half the scene-level test above cannot
+    /// see: with no pack, a failed `intro::load_default` and a swallowed
+    /// OPTION press both land back on the main menu, so the item -> action
+    /// mapping itself is pinned here on the pure decision function instead
+    /// (`confirm_starts_new_game`'s own doc comment).
+    #[test]
+    fn confirm_starts_new_game_maps_new_game_only() {
+        assert!(
+            confirm_starts_new_game(crate::main_menu::MainMenuItem::NewGame),
+            "A on NEW GAME is upstream's ACTION_NEW_GAME (main_menu.c:952-957)"
+        );
+        assert!(
+            !confirm_starts_new_game(crate::main_menu::MainMenuItem::Option),
+            "A on OPTION must not launch the intro -- ACTION_OPTION's screen \
+             is not built yet (issue #216 scope notes)"
+        );
+    }
+
+    /// Upstream `Task_HandleMainMenuInput` reads A before the D-pad
+    /// (`main_menu.c:888` before `903`/`915` -- an if/else-if chain), so a
+    /// same-frame A + direction press acts on A and never moves the
+    /// selection. Pinned on OPTION (whose A press is pack-independently
+    /// inert) with UP alongside: the swallowed A must still win, leaving
+    /// the selection exactly where it was.
+    #[test]
+    fn main_menu_a_wins_over_a_same_frame_direction_press() {
+        let mut menu = crate::main_menu::synthetic_scene();
+        menu.move_down();
+        assert_eq!(menu.selected(), crate::main_menu::MainMenuItem::Option);
+        let scene = AppScene::MainMenu(Box::new(menu));
+
+        let (next, _frame) = advance_scene(scene, pressed(Buttons::A | Buttons::UP));
+
+        let AppScene::MainMenu(menu) = next else {
+            panic!("a swallowed A press must stay on the main menu");
+        };
+        assert_eq!(
+            menu.selected(),
+            crate::main_menu::MainMenuItem::Option,
+            "A must win over a same-frame UP press (upstream's else-if chain)"
+        );
     }
 
     /// Issue #216 regression: `DPAD_UP`/`DPAD_DOWN`, newly pressed, move the
