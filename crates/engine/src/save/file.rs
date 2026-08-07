@@ -48,14 +48,24 @@
 //!
 //! # Writes are atomic
 //!
-//! [`SaveFile::write`] writes a sibling temporary file and renames it over
-//! the destination, so an interrupted write can never leave a truncated
-//! image behind. This has no upstream counterpart — it is the file-system
-//! analogue of the guarantee upstream gets from writing whole 4 KiB flash
-//! sectors and verifying each one (`ProgramFlashSectorAndVerify`), and it
-//! matters more here than there: a half-written *file* would fail the length
-//! check and lose **both** rotating slots at once, defeating the very
-//! fallback [`SaveStore::load`] exists to provide.
+//! [`SaveFile::write`] writes a sibling temporary file, **`sync_all`s it to
+//! the storage device**, and only then renames it over the destination, so
+//! an interrupted write can never leave a truncated image behind. Both
+//! halves are load-bearing: the rename is what makes the swap atomic against
+//! the process dying mid-write, and the `sync_all` before it is what keeps a
+//! *power* loss from renaming a file whose bytes never reached the disk. The
+//! parent directory is `sync_all`ed afterwards too, best-effort — that one
+//! is what makes the rename itself durable, but not every platform lets a
+//! directory be opened as a file, so its failure is ignored rather than
+//! reported.
+//!
+//! This has no upstream counterpart — it is the file-system analogue of the
+//! guarantee upstream gets from writing whole 4 KiB flash sectors and
+//! verifying each one (`ProgramFlashSectorAndVerify`), and it matters more
+//! here than there: a half-written *file* would fail the length check and
+//! lose **both** rotating slots at once, where a torn flash write costs at
+//! most the one sector being programmed — defeating the very fallback
+//! [`SaveStore::load`] exists to provide.
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -324,24 +334,25 @@ impl SaveFile {
     /// Write `store`'s flash image out, creating the parent directory if
     /// needed.
     ///
-    /// Atomic: the bytes go to a sibling temporary file that is then renamed
-    /// over the destination (module docs' "Writes are atomic").
+    /// Atomic and durable: the bytes go to a sibling temporary file that is
+    /// flushed and `sync_all`ed before being renamed over the destination
+    /// (module docs' "Writes are atomic").
     ///
     /// # Errors
     ///
     /// [`SaveFileError::CreateDirectory`] if the parent directory could not
     /// be created; [`SaveFileError::Write`] if the temporary file could not
-    /// be written or renamed into place.
+    /// be written, synced, or renamed into place.
     pub fn write(&self, store: &SaveStore) -> Result<(), SaveFileError> {
-        if let Some(parent) = self.path.parent() {
-            if !parent.as_os_str().is_empty() {
-                std::fs::create_dir_all(parent).map_err(|source| {
-                    SaveFileError::CreateDirectory {
-                        path: parent.to_path_buf(),
-                        source,
-                    }
-                })?;
-            }
+        let parent = self
+            .path
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty());
+        if let Some(parent) = parent {
+            std::fs::create_dir_all(parent).map_err(|source| SaveFileError::CreateDirectory {
+                path: parent.to_path_buf(),
+                source,
+            })?;
         }
 
         let temporary = self.temporary_path();
@@ -349,7 +360,7 @@ impl SaveFile {
             path: self.path.clone(),
             source,
         };
-        std::fs::write(&temporary, store.flash_image()).map_err(write_error)?;
+        Self::stage(&temporary, store.flash_image()).map_err(write_error)?;
         std::fs::rename(&temporary, &self.path).map_err(|source| {
             // The rename is the only step that can leave the temporary file
             // behind; a best-effort cleanup keeps a failed save from
@@ -357,7 +368,31 @@ impl SaveFile {
             // reporting over the rename failure that caused it.
             drop(std::fs::remove_file(&temporary));
             write_error(source)
-        })
+        })?;
+        if let Some(parent) = parent {
+            // The staged bytes are already durable; this is what makes the
+            // *rename* durable too. Best-effort by design (module docs):
+            // Windows will not open a directory as a file, and a save that
+            // is on disk but whose directory entry is only in the page cache
+            // is not worth failing an otherwise complete write over.
+            drop(std::fs::File::open(parent).and_then(|dir| dir.sync_all()));
+        }
+        Ok(())
+    }
+
+    /// Write `bytes` to `path` and get them onto the storage device: the
+    /// staging half of [`SaveFile::write`]'s durability guarantee.
+    ///
+    /// `flush` alone only empties the user-space buffer into the kernel;
+    /// `sync_all` is what the rename below it needs to be able to assume.
+    fn stage(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+        use std::io::Write as _;
+
+        let file = std::fs::File::create(path)?;
+        let mut staged = std::io::BufWriter::new(file);
+        staged.write_all(bytes)?;
+        staged.flush()?;
+        staged.get_ref().sync_all()
     }
 
     /// The sibling path [`SaveFile::write`] stages bytes at.

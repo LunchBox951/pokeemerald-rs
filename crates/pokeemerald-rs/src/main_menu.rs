@@ -18,7 +18,7 @@
 //! | `HAS_MYSTERY_GIFT` / `HAS_MYSTERY_EVENTS` | + `MYSTERY GIFT`/`MYSTERY EVENTS` | no -- both need a wireless adapter this workspace's `platform` crate does not model, and `IsMysteryGiftEnabled()` (`main_menu.c:645`) reads save state with no typed home here |
 //!
 //! Which of the two this port shows is decided by the real boot load:
-//! [`crate::game_save::load_saved_game`] resolves upstream's
+//! [`crate::game_save::SaveSlot::load`] resolves upstream's
 //! `gSaveFileStatus`, and
 //! [`crate::game_save::SaveFileStatus::menu_shows_continue`] maps it onto
 //! `tMenuType` exactly as `Task_MainMenuCheckSaveFile` does. A corrupt or
@@ -41,7 +41,7 @@
 //! [`crate::flow::advance_scene`] swallows an A press on
 //! [`MainMenuItem::Option`], so selecting it is inert rather than wrong.
 //!
-//! # Geometry (`main_menu.c:259-309`)
+//! # Geometry (`main_menu.c:259-340`)
 //!
 //! Every item's content rect is `MENU_WIDTH` (26) tiles wide, left-aligned
 //! at `MENU_LEFT` (tile 2). The top row and height come from that item's
@@ -347,7 +347,7 @@ impl MainMenuScene {
             items,
             // `sCurrItemAndOptionMenuCheck` starts at 0 for a fresh boot, so
             // the first item of whichever list is shown is selected
-            // (`main_menu.c:688`'s `tCurrItem = sCurrItemAndOptionMenuCheck`).
+            // (`main_menu.c:689`'s `tCurrItem = sCurrItemAndOptionMenuCheck`).
             selected: 0,
         }
     }
@@ -593,5 +593,7 @@ pub(crate) fn synthetic_scene(menu_type: MainMenuType) -> MainMenuScene {
     MainMenuScene::assemble(frame, Rgb888::BLACK, menu_type, sheet)
 }
 
+#[cfg(test)]
+mod saved_game_tests;
 #[cfg(test)]
 mod tests;

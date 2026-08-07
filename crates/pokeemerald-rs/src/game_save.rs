@@ -61,7 +61,7 @@
 //!   not.
 //! - **`CopyPartyAndObjectsToSave`/`FromSave`.** Upstream syncs
 //!   `gPlayerParty` and `gObjectEvents` into the save block around every
-//!   save/load (`src/save.c:663-672`). This port has no `gObjectEvents`
+//!   save/load (`src/load_save.c:196-206`). This port has no `gObjectEvents`
 //!   model, and no encoder between `battle::BattlePokemon` and
 //!   [`engine::save::Pokemon`]'s encrypted substructures — see
 //!   [`crate::flow::overworld_phase::OverworldPhase::continue_saved_game`]
@@ -234,7 +234,7 @@ impl SaveSlot {
     }
 
     /// `TrySavingData(SAVE_NORMAL)` into `HandleSavingData`'s `SAVE_NORMAL`
-    /// arm (`pokeemerald/src/save.c:735-739, 765-783`): write the whole save
+    /// arm (`pokeemerald/src/save.c:736-740, 765-783`): write the whole save
     /// slot and persist the resulting image.
     ///
     /// The rotation is upstream's, unchanged: the current image is read back

@@ -35,9 +35,10 @@
 //! exist to handle *write* failures a `Vec<u8>` cannot experience, so they
 //! have no counterpart here. What upstream calls "corruption" — a sector
 //! whose signature or checksum fails to validate on *load* — is fully
-//! modeled; see [`SaveStore::load`]. File I/O (persisting the buffer to
-//! disk) is intentionally left for a later slice; the issue's scope treats
-//! it as optional.
+//! modeled; see [`SaveStore::load`]. File I/O — moving this buffer between
+//! memory and an actual file, with the failures only a file system can
+//! produce — lives in [`super::file`], which owns the whole disk side and
+//! deliberately re-validates none of what this module decides.
 
 use super::block::{SaveBlock1, SaveBlock2};
 use super::sector::{Sector, SECTOR_DATA_SIZE, SECTOR_SIGNATURE, SECTOR_SIZE};

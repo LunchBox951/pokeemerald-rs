@@ -224,15 +224,20 @@ fn a_saved_game_reloads_into_an_overworld_phase_that_matches_it() {
     assert_eq!(after.trainer_id, before.trainer_id);
     assert_eq!(after.encryption_key, 0x0BAD_F00D);
 
-    // Facing is the one field a continue deliberately does *not* restore:
-    // `GetAdjustedInitialDirection` (`src/overworld.c:929-951`) decides it
-    // from the tile the player is standing on, and an ordinary tile falls
-    // through to `DIR_SOUTH` (`:951`). See `OverworldPhase::from_saved`.
+    // Facing is the one field this continue does *not* restore, and the
+    // assertion pins the stand-in rather than upstream: with no object-event
+    // model there is nothing to read the saved direction out of, so the
+    // continue-game *warp* branch's `GetAdjustedInitialDirection`
+    // (`src/overworld.c:929-951`) decides it from the tile instead, and an
+    // ordinary tile falls through to `DIR_SOUTH` (`:951`). Upstream's own
+    // ordinary continue path restores the saved facing -- see the deferral
+    // written up in `OverworldPhase::from_saved`. Change this expectation
+    // when object events land; do not read it as fidelity.
     assert_eq!(
         after.facing,
         Direction::South,
-        "upstream always faces the player south when continuing on an \
-         ordinary tile"
+        "the tile-derived stand-in must be what a continue places, until a \
+         saved facing exists to restore"
     );
 }
 

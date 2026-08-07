@@ -52,7 +52,7 @@ mod wild_battle;
 pub(crate) enum ContinueError {
     /// The save's `SaveBlock1::location` does not name any map in the
     /// generated [`assets::MapHeaderTable`]. Upstream cannot hit this:
-    /// `Overworld_GetMapHeaderByGroupAndId` (`src/overworld.c:591`) indexes
+    /// `Overworld_GetMapHeaderByGroupAndId` (`src/overworld.c:579-582`) indexes
     /// `gMapGroups` unchecked, so a bad group/num is undefined behaviour
     /// there. Failing closed with a named error is this port's honest
     /// equivalent -- the caller falls back to the main menu rather than
@@ -235,11 +235,14 @@ impl OverworldPhase {
     /// Resolves the map from the save (`LoadSaveblockMapHeader`,
     /// `src/overworld.c:597-601`, which reads
     /// `gSaveBlock1Ptr->location.mapGroup`/`.mapNum`), loads that map's
-    /// scene, and places the player at `gSaveBlock1Ptr->pos` --
-    /// `InitObjectEventsLocal`'s `GetCameraFocusCoords` + `InitPlayerAvatar`
-    /// (`src/overworld.c:2163-2177`). See [`Self::from_saved`] for the
-    /// facing and elevation that placement derives, and for everything a
-    /// continue deliberately does *not* restore.
+    /// scene, and places the player at `gSaveBlock1Ptr->pos` -- the
+    /// coordinates every arrival path agrees on, whether it reaches them
+    /// through `GetCameraFocusCoords` (`InitObjectEventsLocal`,
+    /// `src/overworld.c:2163-2177`) or through the restored object event
+    /// (`InitObjectEventsReturnToField`, `:2180-2185`). See
+    /// [`Self::from_saved`] for the facing and elevation that placement
+    /// derives, and for everything a continue deliberately does *not*
+    /// restore.
     ///
     /// # Errors
     ///
@@ -266,18 +269,30 @@ impl OverworldPhase {
     /// * **Map** -- `map_id`, resolved from `block1.location` by the caller.
     /// * **Position** -- `block1.pos`, upstream's `GetCameraFocusCoords`
     ///   source.
-    /// * **Facing** -- `GetAdjustedInitialDirection`
-    ///   (`src/overworld.c:929-951`), already ported as
-    ///   [`engine::overworld::warp_in_facing`] and reused here rather than
-    ///   re-derived. Note what that means: a continue does **not** restore
-    ///   the direction the player was facing when they saved. Upstream's
-    ///   `sInitialPlayerAvatarState` is zeroed EWRAM at boot and nothing on
-    ///   the `CB2_ContinueSavedGame` path calls
-    ///   `StoreInitialPlayerAvatarState` (`:883-897`, only
-    ///   `field_control_avatar.c`'s warp paths do), so the decision falls to
-    ///   the *saved tile's own* metatile behavior -- `DIR_SOUTH` for any
-    ///   ordinary tile (`:951`). Loading a save facing south is upstream
-    ///   behaviour, not a gap `(behavioral-fidelity)`.
+    /// * **Facing** -- `DIR_SOUTH` on an ordinary tile, from
+    ///   `GetAdjustedInitialDirection` (`src/overworld.c:929-951`) already
+    ///   ported as [`engine::overworld::warp_in_facing`]. **This is a
+    ///   deferral, not fidelity.** Upstream *does* restore the direction the
+    ///   player was facing when they saved, on the ordinary continue path:
+    ///   the boot load runs `LoadGameSave` ->
+    ///   `CopyPartyAndObjectsFromSave` (`src/save.c:887`) ->
+    ///   `LoadObjectEvents` (`src/load_save.c:188-194`), which copies
+    ///   `gSaveBlock1Ptr->objectEvents` -- the player's among them, facing
+    ///   included -- back into `gObjectEvents`; `CB2_ContinueSavedGame`
+    ///   (`:1747-1753`) then reaches the field through `CB2_ReturnToField`
+    ///   -> `ReturnToFieldLocal` (`:1961-1972`) ->
+    ///   `InitObjectEventsReturnToField` (`:2180-2185`) ->
+    ///   `SpawnObjectEventsOnReturnToField`
+    ///   (`src/event_object_movement.c:1715-1726`), which respawns from
+    ///   those restored object events rather than deriving anything from the
+    ///   destination tile. `GetAdjustedInitialDirection`'s `DIR_SOUTH`
+    ///   belongs to the *other* branch, the continue-game warp
+    ///   (`UseContinueGameWarp`, `:1739-1745`), which reaches
+    ///   `InitObjectEventsLocal` via `CB2_LoadMap`. This port models no
+    ///   object events at all, so there is nowhere to restore a saved facing
+    ///   *from*; the warp branch's tile-derived direction is the stand-in
+    ///   until one exists. Recorded as NOT modelled on
+    ///   `CB2_ContinueSavedGame` in the coverage ledger.
     /// * **Elevation** -- the saved tile's own grid cell, with the
     ///   multi-level -> transition substitution
     ///   `ObjectEventUpdateElevation` applies, exactly as
@@ -325,10 +340,16 @@ impl OverworldPhase {
             dialog: None,
             tick: 0,
             connection_pack: OnceCell::new(),
-            // `gRngValue` is zero at boot and `SeedRngAndSetTrainerId` runs
-            // only for a *new* game (`pokeemerald/src/new_game.c:158`), so a
-            // continued session starts the stream where a fresh boot leaves
-            // it -- without new-game initialization's two trainer-ID draws.
+            // Seeded exactly as `Self::new` seeds a new game's stream:
+            // `gRngValue` is zero at boot, and the only reseed upstream
+            // performs on the way to the field is `SeedRngAndSetTrainerId`
+            // (`pokeemerald/src/main.c:208`), reached from the *player
+            // naming screen* (`src/naming_screen.c:701`) -- which a continue
+            // never visits. What differs between the two paths is spending,
+            // not seeding: a new game draws from the stream for
+            // `InitPlayerTrainerId` (`src/new_game.c:84-88`) before play
+            // starts, while a continue reads its trainer ID out of the save
+            // and so reaches the field with the stream untouched.
             rng: engine::rng::Rng::new(new_game::NEW_GAME_RNG_SEED),
             // `sWildEncounterImmunitySteps`/`sPrevMetatileBehavior` are
             // EWRAM statics, zero at boot; `CB2_ContinueSavedGame` grants no
@@ -413,8 +434,9 @@ impl OverworldPhase {
 }
 
 /// The map `block1.location` names -- `Overworld_GetMapHeaderByGroupAndId(
-/// gSaveBlock1Ptr->location.mapGroup, gSaveBlock1Ptr->location.mapNum)`
-/// (`pokeemerald/src/overworld.c:591`), resolved through the generated
+/// gSaveBlock1Ptr->location.mapGroup, gSaveBlock1Ptr->location.mapNum)`, as
+/// `LoadSaveblockMapHeader` calls it (cited on
+/// [`OverworldPhase::continue_saved_game`]), resolved through the generated
 /// [`assets::MapHeaderTable`] instead of upstream's unchecked `gMapGroups`
 /// double index.
 ///

@@ -173,10 +173,10 @@ const fn menu_action(item: MainMenuItem) -> MainMenuAction {
 /// exists in this port yet, so this slice writes the save on the way out of
 /// the application instead -- the smallest trigger that makes "save, exit,
 /// and reload cleanly" (I-6) actually reachable by a player, and one that is
-/// callable headlessly with no UI. It is recorded as a deferral, not as
-/// fidelity: `src/start_menu.c`'s save flow is a NOT-modelled artifact in
-/// the coverage ledger, and this function should be reduced to whatever that
-/// flow needs (or deleted) when it lands.
+/// callable headlessly with no UI. It is a deferral, not fidelity:
+/// `src/start_menu.c` -- the whole file, save flow included -- is still
+/// tracked as `pending` in the coverage ledger, and this function should be
+/// reduced to whatever that flow needs (or deleted) when it lands.
 ///
 /// Only [`AppScene::Overworld`] carries save state; every other scene
 /// returns `None` rather than writing the blocks a not-yet-started game

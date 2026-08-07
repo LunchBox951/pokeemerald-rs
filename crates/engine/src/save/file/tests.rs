@@ -239,6 +239,49 @@ fn writing_leaves_no_temporary_file_behind() {
 }
 
 #[test]
+fn a_write_that_cannot_be_staged_leaves_the_previous_save_byte_identical() {
+    let dir = TempDir::new("staging");
+    let path = dir.join(SAVE_FILE_NAME);
+    let file = SaveFile::at(&path);
+
+    // A good save is already on disk...
+    let (first, _, block2) = saved_store();
+    file.write(&first).unwrap();
+    let original = std::fs::read(&path).expect("the first save must be readable");
+
+    // ...and the staging path is made unusable by putting a *directory*
+    // where the temporary file belongs. Every platform refuses to open a
+    // directory for writing, so this fails the staged write without needing
+    // permission bits or a full disk.
+    let mut temporary = path.clone().into_os_string();
+    temporary.push(".tmp");
+    std::fs::create_dir_all(PathBuf::from(&temporary)).unwrap();
+
+    let mut second = first.clone();
+    second.save(
+        &SaveBlock1 {
+            money: 777_777,
+            ..SaveBlock1::default()
+        },
+        &block2,
+    );
+    let err = file
+        .write(&second)
+        .expect_err("staging into a directory cannot succeed");
+    assert!(
+        matches!(err, SaveFileError::Write { .. }),
+        "a failed staged write must surface as a write failure: {err:?}"
+    );
+    assert_eq!(
+        std::fs::read(&path).expect("the previous save must still be there"),
+        original,
+        "a write that never got staged must not touch the image already on \
+         disk -- writing straight to the destination would lose both \
+         rotating slots at once"
+    );
+}
+
+#[test]
 fn overwriting_an_existing_save_replaces_it_whole() {
     let dir = TempDir::new("overwrite");
     let file = SaveFile::at(dir.join(SAVE_FILE_NAME));
