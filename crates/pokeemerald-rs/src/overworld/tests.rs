@@ -1060,6 +1060,45 @@ fn real_pack_the_bed_side_edge_draws_the_player_obj_at_the_raised_priority() {
          surface visually standing above whatever would otherwise occlude \
          a player on ordinary floor"
     );
+
+    // (0, 6): the bed's south-edge ELEVATION_TRANSITION tile, *stepped
+    // onto* from the raised edge. `PlayerState::new` seeds both elevation
+    // fields identically, so the drifted stance this issue is about --
+    // standing on the elevation-0 wildcard while `previous_elevation()`
+    // still reads the raised 4 -- is only reachable through the real
+    // movement path, exactly as
+    // `bedroom_bed_side_column_is_walkable_and_retains_the_raised_previous_elevation`
+    // walks it on the collision side. (The south edge rather than the
+    // north one: with no on-transition script run here, the fresh event
+    // data leaves the bedroom's decoration placeholder object standing on
+    // the north-edge tile, and that same walk test proves the south edge
+    // object-free.)
+    let no_connections = |_: assets::MapId| -> Option<(u16, u16)> { None };
+    let header = assets::MapHeaderTable::new().header(BEDROOM).unwrap();
+    let events = assets::MapEventsTable::new().resolve(BEDROOM).unwrap();
+    let runtime = scene.runtime(BEDROOM, header, events);
+    let mut walker = PlayerState::new((0, 5), 4, Direction::South);
+    walker.step(Some(Direction::South), &runtime, &no_connections, &data);
+    while walker.in_transit() {
+        walker.tick();
+    }
+    assert_eq!(walker.position(), (0, 6));
+    assert_eq!(
+        (walker.elevation(), walker.previous_elevation()),
+        (0, 4),
+        "fixture precondition: the wildcard tile drifts the two fields apart"
+    );
+    let drifted_entries = scene.sprites.entries(&walker, &data);
+    assert_eq!(
+        drifted_entries[0].priority(),
+        1,
+        "the player OBJ's priority must follow previous_elevation (the \
+         raised 4), not the wildcard tile's own 0 -- \
+         ObjectEventUpdateElevation leaves currentElevation's *rendering* \
+         consequence on the last concrete elevation, so the sprite keeps \
+         the raised priority instead of flickering to the default for the \
+         frames it stands on the transition tile"
+    );
 }
 
 // -- Real-pack tileset tile animation (issue #160) ---------------------------
