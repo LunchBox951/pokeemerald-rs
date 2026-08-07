@@ -16,10 +16,12 @@ pub const MAGIC: [u8; 8] = *b"PKMRPACK";
 /// #183, S-4, `#115` child 4); `4` added the `audio/voicegroup/*` entries
 /// those samples back (issue #182, `#115` child 3); `5` added the
 /// `audio/song/mus_title` entry (issue #181, `#115` child 2 -- see
-/// `crate::audio`'s "Versioning" docs) -- each time, an older pack would
+/// `crate::audio`'s "Versioning" docs); `6` added the
+/// `interface/palette/main_menu_bg` entry the no-save main menu requires
+/// (issue #216, I-3) -- each time, an older pack would
 /// pass validation but fail later (at scene load, or at audio-pack lookup,
 /// with `UnknownAsset`), so the version gate rejects it up front instead.
-pub const FORMAT_VERSION: u32 = 5;
+pub const FORMAT_VERSION: u32 = 6;
 
 /// Cap on how many directory entries [`parse_directory`] pre-reserves from
 /// the untrusted `entry_count` header field. A corrupt count near `u32::MAX`
