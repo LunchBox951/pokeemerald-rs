@@ -9,7 +9,7 @@
 
 use super::{
     darken_outside, highlight_rect, render_label, MainMenuItem, MainMenuScene, MainMenuSceneError,
-    HEADER_TEXT_BG,
+    HEADER_TEXT_BG, HEADER_TEXT_FG,
 };
 use crate::textbox::{self, Coverage};
 use assets::pack::{AssetPack, ImageRef, PackError};
@@ -323,15 +323,21 @@ fn palette_meta(color_count: u16) -> Vec<u8> {
 /// A minimal pack covering exactly what [`super::MainMenuScene::from_pack`]
 /// needs: a 24x24 (3x3-tile) selectable window frame (every ring tile
 /// opaque, palette index 1, so the border is trivially distinguishable from
-/// both the content fill and the backdrop), a blank
-/// `font/normal/glyphs` sheet (transparent everywhere -- this fixture only
-/// needs the label glyphs to *exist*, not to be visually legible; the label
-/// colour mapping is pinned separately by
+/// both the content fill and the backdrop), a `font/normal/glyphs` sheet
+/// whose every pixel is `font_index`, and a `interface/palette/main_menu_bg`
+/// whose index 0 is a colour distinct from both the content fill white and
+/// the border colour.
+///
+/// `font_index` picks the fixture flavour: `0` (transparent everywhere)
+/// keeps every label pixel showing the *fill* underneath, so the
+/// fill/border/backdrop tests can assert those layers without glyph
+/// interference; `1` makes every glyph cell a solid block of the header
+/// *foreground* colour, so the label-path tests can pin the glyph blit's
+/// own darkening, clip, and origin offset (the colour mapping itself is
+/// pinned separately by
 /// [`header_glyph_colors_map_each_font_index_to_the_upstream_patched_palette`],
-/// which drives `textbox::blit_glyphs_colored` directly), and a
-/// `interface/palette/main_menu_bg` whose index 0 is a
-/// colour distinct from both the content fill white and the border colour.
-fn synthetic_main_menu_pack_bytes() -> Vec<u8> {
+/// which drives `textbox::blit_glyphs_colored` directly).
+fn synthetic_main_menu_pack_bytes(font_index: u8) -> Vec<u8> {
     // 24x24 frame sheet: every ring tile (the 8 border cells `border_tiles`
     // draws) opaque, palette index 1. Filling the whole sheet with index 1
     // is simplest and correct here: `border_tiles` only ever draws pixels
@@ -345,9 +351,9 @@ fn synthetic_main_menu_pack_bytes() -> Vec<u8> {
     let green = rendering::Bgr555::from_channels(0, 31, 0).raw();
     frame_palette[2..4].copy_from_slice(&green.to_le_bytes());
 
-    // Blank font sheet (module docs): every pixel index 0 (transparent).
+    // Font sheet: every pixel `font_index` (see the doc comment above).
     let font_pixels =
-        vec![0u8; (assets::fonts::SHEET_WIDTH * assets::fonts::SHEET_HEIGHT) as usize];
+        vec![font_index; (assets::fonts::SHEET_WIDTH * assets::fonts::SHEET_HEIGHT) as usize];
 
     // Background palette: index 0 a distinct dark blue, rest black.
     let mut bg_palette = vec![0u8; 32];
@@ -403,13 +409,20 @@ impl Drop for TempPackGuard {
 }
 
 fn load_synthetic_scene() -> MainMenuScene {
+    load_synthetic_scene_with_font(0)
+}
+
+/// [`load_synthetic_scene`], with the font-sheet flavour spelled out (see
+/// [`synthetic_main_menu_pack_bytes`]'s doc comment for what each
+/// `font_index` pins).
+fn load_synthetic_scene_with_font(font_index: u8) -> MainMenuScene {
     let path = std::env::temp_dir().join(format!(
-        "pokeemerald-rs-main-menu-test-{}-{:?}.pack",
+        "pokeemerald-rs-main-menu-test-{}-{:?}-{font_index}.pack",
         std::process::id(),
         std::thread::current().id()
     ));
     let temp_pack = TempPackGuard::new(path);
-    std::fs::write(temp_pack.path(), synthetic_main_menu_pack_bytes()).unwrap();
+    std::fs::write(temp_pack.path(), synthetic_main_menu_pack_bytes(font_index)).unwrap();
     let pack = AssetPack::load(temp_pack.path()).unwrap();
     MainMenuScene::from_pack(&pack).unwrap()
 }
@@ -424,7 +437,7 @@ fn temp_pack_cleanup_is_unwind_safe() {
 
     let result = std::panic::catch_unwind(|| {
         let temp_pack = TempPackGuard::new(path.clone());
-        std::fs::write(temp_pack.path(), synthetic_main_menu_pack_bytes()).unwrap();
+        std::fs::write(temp_pack.path(), synthetic_main_menu_pack_bytes(0)).unwrap();
         assert!(temp_pack.path().exists());
         panic!("deliberate panic to exercise temporary pack cleanup");
     });
@@ -500,6 +513,71 @@ fn compose_from_synthetic_pack_draws_the_border_from_the_extracted_frame_palette
     // Tile (1, 0) -> pixel (8, 0), +2 into the corner tile's own body.
     let green = rendering::Bgr555::from_channels(0, 31, 0).to_rgb888();
     assert_eq!(fb.pixel(10, 2), Some(green));
+
+    // OPTION's own top-left border corner -- tile (1, 4) -> pixel (8, 32),
+    // +2 in -- lies *outside* NEW GAME's WIN0 highlight rect (which ends at
+    // y=31), so it must be darkened like every other BG0 pixel outside it:
+    // the border blit is a `BLDCNT_TGT1_BG0` first target too, not just the
+    // content fill.
+    assert_eq!(fb.pixel(10, 34), Some(rendering::darken(green, 7)));
+}
+
+#[test]
+fn compose_with_opaque_font_darkens_the_unselected_items_label_glyphs() {
+    let scene = load_synthetic_scene_with_font(1);
+    let fb = scene.compose();
+
+    // The opaque fixture turns every glyph cell into a solid block of the
+    // header foreground colour (font index 1 -> `HEADER_GLYPH_COLORS[1]`).
+    // NEW GAME is selected: a pixel inside its first label glyph (label
+    // origin (16, 9), +1 into the cell) stays at full brightness...
+    assert_eq!(fb.pixel(17, 11), Some(HEADER_TEXT_FG));
+
+    // ...while OPTION's label (label origin (16, 41)) sits outside WIN0 and
+    // must darken along with its fill -- glyph pixels are BG0's own painted
+    // pixels, first targets of the same `BLDY` darken.
+    assert_eq!(
+        fb.pixel(17, 43),
+        Some(rendering::darken(HEADER_TEXT_FG, 7)),
+        "an unselected item's label glyphs must darken with its window"
+    );
+}
+
+#[test]
+fn compose_with_opaque_font_keeps_the_1px_text_origin_offset_and_clips_to_the_content_rect() {
+    let scene = load_synthetic_scene_with_font(1);
+    let fb = scene.compose();
+
+    // `AddTextPrinterParameterized3(_, FONT_NORMAL, 0, 1, ...)`'s y=1
+    // window-local origin (`main_menu.c:786-787`): NEW GAME's content rect
+    // spans y 8..24, so its top row (y=8) is still the plain content fill --
+    // the first glyph row lands one pixel down, at y=9.
+    assert_eq!(
+        fb.pixel(17, 8),
+        Some(HEADER_TEXT_BG),
+        "the content rect's own top row is above the y=1 text origin"
+    );
+    assert_eq!(
+        fb.pixel(17, 9),
+        Some(HEADER_TEXT_FG),
+        "the first glyph row starts exactly at the y=1 text origin"
+    );
+
+    // The clip (`label_clip`'s `content_size.1 - 1`) lets the glyph reach
+    // the content rect's own last row (y=23) and no further: the border row
+    // below (y=24) keeps the frame's own colour. Both pixels sit inside NEW
+    // GAME's WIN0 highlight, so neither is darkened.
+    assert_eq!(
+        fb.pixel(17, 23),
+        Some(HEADER_TEXT_FG),
+        "the last content row is still glyph-reachable"
+    );
+    let green = rendering::Bgr555::from_channels(0, 31, 0).to_rgb888();
+    assert_eq!(
+        fb.pixel(17, 24),
+        Some(green),
+        "the border row below the content rect must never take glyph pixels"
+    );
 }
 
 #[test]
