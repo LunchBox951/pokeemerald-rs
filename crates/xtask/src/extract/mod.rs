@@ -241,7 +241,11 @@ pub struct ExtractReport {
 /// The repository root, computed from this crate's own manifest directory
 /// (`crates/xtask`) rather than the process's current directory — robust
 /// regardless of where `cargo xtask extract` is invoked from.
-fn repo_root() -> PathBuf {
+///
+/// `pub(crate)`, not private: `crate::record_snapshot` (F-3, V-4) reuses it
+/// to find the same default pack path this module writes
+/// ([`OUTPUT_RELATIVE_PATH`]) rather than re-deriving it.
+pub(crate) fn repo_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .and_then(Path::parent)

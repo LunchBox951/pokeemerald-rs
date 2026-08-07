@@ -8,17 +8,32 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
-# The `e2e --suite smoke` run (F-3, V-1) drives the boot shell's `App` in
-# headless mode, in-process (see `crate::e2e`) -- a workspace-local path
+# The `e2e --suite smoke` run (F-3, V-1) and `record-snapshot` (F-3, V-4)
+# both drive real headless scenes from `pokeemerald-rs` in-process (see
+# `crate::e2e` / `crate::record_snapshot`) -- a workspace-local path
 # dependency, not an external crate, so `minimal-deps` owner approval does
-# not apply. Optional, gated behind the `smoke` feature: unconditionally
-# depending on `pokeemerald-rs` would transitively drag `platform` (and its
-# `cpal`/`winit`/`softbuffer`, i.e. ALSA dev headers on Linux) into every
-# `xtask` subcommand's build -- `extract`/`record-snapshot`/`scenario`
-# included -- when pre-PR `xtask` was std-only. Only `e2e --suite smoke`
-# needs it, so only `--features smoke` pulls it in; `cargo build -p xtask`
-# without the feature stays dependency-free.
+# not apply. Optional, gated behind the `scenes` feature (below):
+# unconditionally depending on `pokeemerald-rs` would transitively drag
+# `platform` (and its `cpal`/`winit`/`softbuffer`, i.e. ALSA dev headers on
+# Linux) into every `xtask` subcommand's build -- `extract`/`scenario`
+# included -- when pre-PR `xtask` was std-only. Only the two subcommands
+# that need a real scene pull it in; `cargo build -p xtask` without either
+# feature stays dependency-free.
 pokeemerald-rs = { path = "../pokeemerald-rs", optional = true }
+# `record-snapshot` also loads the pack directly (`AssetPack::load`, not
+# just `pokeemerald_rs::title::load_default`'s fixed-path convenience) so
+# its determinism/metadata tests can point at a scratch synthetic pack
+# instead of the one real, developer-local pack path -- see
+# `crate::record_snapshot`'s module docs. `assets` is itself std-only (see
+# its own `Cargo.toml`), and is already an implicit build dependency once
+# `pokeemerald-rs` is in the graph, so naming it here adds no new build
+# cost, only visibility.
+assets = { path = "../assets", optional = true }
 
 [features]
-smoke = ["dep:pokeemerald-rs"]
+# Pulls in the workspace-local scene drivers both `smoke` and
+# `record-snapshot` need. Not selected directly by a caller -- always
+# reached through one of those two subcommand features.
+scenes = ["dep:pokeemerald-rs", "dep:assets"]
+smoke = ["scenes"]
+record-snapshot = ["scenes"]
