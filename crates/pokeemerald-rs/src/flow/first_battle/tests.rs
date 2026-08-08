@@ -154,6 +154,54 @@ fn advance_first_battle_plays_to_a_terminal_outcome_without_ever_running() {
     );
 }
 
+/// The write-back's stat-stage reset, exercised for real rather than
+/// vacuously: against a level-50 lead the Zigzagoon never survives to act,
+/// so the terminal-outcome test above can never see a non-default stage. A
+/// level-2 lead is slow enough that Growl really lands before the fight
+/// ends, so the in-battle copy carries a lowered Attack stage at write-back
+/// time -- the mid-battle assertion proves the scenario stays non-vacuous,
+/// and the final one makes `advance_first_battle`'s reset load-bearing
+/// (deleting it fails here, not nowhere).
+#[test]
+fn the_write_back_resets_stat_stages_that_growl_really_lowered() {
+    let mut rng = Rng::new(2);
+    let lead = player_mon(277, 2, vec![POUND]);
+    let battle = start_first_battle(lead, &mut rng).expect("construction must succeed");
+
+    let mut slot = Some(battle);
+    let mut written_back: Option<BattlePokemon> = None;
+    let mut saw_lowered_stage = false;
+    let mut frames = 0;
+    loop {
+        if slot
+            .as_ref()
+            .is_some_and(|b| b.player().stages() != battle::StatStages::default())
+        {
+            saw_lowered_stage = true;
+        }
+        if advance_first_battle(&mut slot, &mut written_back, &mut rng).is_some() {
+            break;
+        }
+        assert!(
+            slot.is_some(),
+            "the driver aborted instead of playing this fight to an outcome"
+        );
+        frames += 1;
+        assert!(frames < 200, "the headless driver must terminate");
+    }
+
+    assert!(
+        saw_lowered_stage,
+        "Growl must land before the battle ends, or this test pins nothing"
+    );
+    let lead = written_back.expect("the driver writes the lead mon back on the frame it ends");
+    assert_eq!(
+        lead.stages(),
+        battle::StatStages::default(),
+        "in-battle stat stages must not leak back into the overworld copy"
+    );
+}
+
 /// The abort contract [`advance_first_battle`]'s doc comment spells out, and
 /// the reason it needs spelling out: unlike the Run driver's, this driver's
 /// [`PlayerAction::UseMove`] policy spends PP, so a lead that reaches the
