@@ -3344,6 +3344,29 @@ fn stepping_onto_the_route_101_trigger_tile_starts_the_scripted_first_battle() {
     );
 }
 
+/// Route 101's second rescue coord event must trigger independently of the
+/// first one: approach `(11, 19)` from the east and exercise the complete
+/// [`OverworldPhase::step`] path through the landing drain frame.
+#[test]
+fn stepping_west_onto_the_second_route_101_trigger_tile_starts_the_scripted_first_battle() {
+    let mut phase = route_101_trigger_phase(PlayerState::new(
+        (12, 19),
+        ROUTE_101_TRIGGER_ELEVATION,
+        Direction::West,
+    ));
+    phase.party_lead = Some(new_game::provisional_starter());
+
+    for _ in 0..WALK_FRAMES_PER_TILE {
+        phase.step(held(Buttons::LEFT));
+    }
+
+    assert_eq!(phase.player.position(), (11, 19));
+    assert!(
+        phase.first_battle.is_some(),
+        "the second rescue coord event must start the scripted first battle"
+    );
+}
+
 /// The no-party-lead arm of `super::first_battle_trigger`'s
 /// `begin_first_battle`, which its own doc comment claims outright ("The
 /// trigger is still consumed in that case, exactly as it is upstream -- the
