@@ -10,9 +10,8 @@ workspace = true
 [dependencies]
 # The `e2e --suite smoke` run (F-3, V-1) and `record-snapshot` (F-3, V-4)
 # both drive real headless scenes from `pokeemerald-rs` in-process (see
-# `crate::e2e` / `crate::record_snapshot`) -- a workspace-local path
-# dependency, not an external crate, so `minimal-deps` owner approval does
-# not apply. Optional, gated behind the `scenes` feature (below):
+# `crate::e2e` / `crate::record_snapshot`). The dependency is optional and
+# gated behind the `scenes` feature (below):
 # unconditionally depending on `pokeemerald-rs` would transitively drag
 # `platform` (and its `cpal`/`winit`/`softbuffer`, i.e. ALSA dev headers on
 # Linux) into every `xtask` subcommand's build -- `extract`/`scenario`
