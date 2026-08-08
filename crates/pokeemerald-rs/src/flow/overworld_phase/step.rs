@@ -246,12 +246,13 @@ impl OverworldPhase {
         // unconditionally, before the dialog early-return below.
         self.tick = self.tick.wrapping_add(1);
 
-        // A wild battle owns the frame outright (issue #169), ahead of the
-        // dialog check for the same reason upstream's battle callback owns
-        // `CB2_Overworld` outright once `SetMainCallback2(CB2_InitBattle)`
-        // has run (`src/battle_setup.c:369`): field input, movement, warps,
-        // and message boxes all stop until it ends.
-        if self.advance_wild_battle_frame() {
+        // A wild battle -- or the Route 101 scripted first battle (issue
+        // #231, `super::first_battle_trigger`; the two fields are never both
+        // `Some`, struct docs on `first_battle`) -- owns the frame outright,
+        // ahead of the dialog check, the same way upstream's battle callback
+        // owns `CB2_Overworld` outright once `SetMainCallback2(CB2_InitBattle)`
+        // has run (`src/battle_setup.c:369`).
+        if self.advance_wild_battle_frame() || self.advance_first_battle_frame() {
             return;
         }
 
@@ -359,19 +360,31 @@ impl OverworldPhase {
             // poll never happens on the frame a wild Pokémon appears. It is
             // gated on the same drained landing the door check consumes: a
             // completed step is this port's `checkStandardWildEncounter`.
-            let landed = self.pending_landing.take_if(|_| !self.player.in_transit());
+            let stepped_onto = self.pending_landing.take_if(|_| !self.player.in_transit());
+            // The Route 101 scripted first-battle coord-event trigger (issue
+            // #231, `super::first_battle_trigger`'s own "Precedence" section:
+            // it outranks the door warp, the wild-encounter roll, and the
+            // arrow poll below, the same as a fired encounter already does).
+            //
+            // Upstream reaches the coord-event check *inside*
+            // `TryStartStepBasedScript` (`TryStartCoordEventScript`,
+            // `:485-486`) and returns TRUE out of `ProcessPlayerFieldInput`
+            // the moment it fires, so nothing downstream sees the step at
+            // all. `landed` below is that single fact, as a value: the
+            // completed step the rest of this frame is allowed to know
+            // about. One filter, not one per consumer -- the door check and
+            // the encounter roll both read it, so neither can drift out of
+            // the precedence on its own.
+            let first_battle_triggered = self.first_battle_trigger_ready(&runtime, stepped_onto);
+            let landed = stepped_onto.filter(|_| !first_battle_triggered);
             let door_warp = landed
                 .and_then(|(x, y)| trigger_door_warp(&runtime, x, y, self.player.elevation()));
-            // The roll happens only on a completed step that neither warp
-            // path has already claimed (`wild_encounter::roll_eligible_landing`,
-            // which carries upstream's precedence and its rationale), only on
-            // a map whose whole land table the battle engine can fight
-            // (`OverworldPhase::wild_table_fightable`, memoised per map
-            // above), and only while the party's lead mon can actually
-            // fight (`wild_encounter::lead_can_fight` -- the fail-closed
-            // stand-in for the white-out this port does not model). The
-            // landed tile is the player's own tile on a drain frame, and it
-            // is what `GetPlayerPosition` would report there.
+            // The roll happens only on a completed step no warp path has
+            // claimed (`roll_eligible_landing`), only on a fightable map
+            // (`wild_table_fightable`), and only with a lead that can fight
+            // (`lead_can_fight`). The landed tile is the player's own tile on
+            // a drain frame, and it is what `GetPlayerPosition` would report
+            // there.
             let encounter = wild_encounter::roll_for_step(
                 &mut self.wild,
                 &mut self.rng,
@@ -381,66 +394,60 @@ impl OverworldPhase {
                     .filter(|_| wild_table_fightable)
                     .filter(|_| wild_encounter::lead_can_fight(self.party_lead.as_ref())),
             );
+            // Both remaining `ProcessPlayerFieldInput` steps -- the arrow
+            // poll (`:164-168`) and the interaction check (`:172`) -- are
+            // reached only by falling *through* everything above, and a
+            // fired encounter (`:162`) and a fired coord event
+            // (`:155-161`, via `TryStartStepBasedScript`) each return TRUE
+            // before them. One value for "something already claimed this
+            // frame's field input", so the two consumers cannot disagree
+            // about which events count.
+            //
+            // Neither consumer can be driven to the coord-event arm over
+            // bundled data -- Route 101 declares no warp events, and no
+            // object event stands beside the rescue tiles -- so that arm is
+            // encoded and documented rather than behaviourally pinned. Both
+            // of those data facts are themselves asserted, so a change that
+            // makes it reachable fails a test first. See
+            // `super::first_battle_trigger`'s "Precedence" section.
+            let field_event_fired = encounter.is_some() || first_battle_triggered;
             // Upstream `input->heldDirection && input->dpadDirection ==
-            // playerDirection` (`field_control_avatar.c:164-168`) -- polled
-            // every frame, independent of `tookStep`, and *not* the door
-            // path's gate. Reaching this arm at all is already this port's
-            // counterpart to the `T_TILE_CENTER`/`T_NOT_MOVING` test that
-            // sets `heldDirection` in the first place (`:95-112`), so the
-            // poll needs no `in_transit` test of its own beyond `landed`'s.
-            // A fired encounter suppresses it, as upstream's early return
-            // does (`wild_encounter::arrow_poll_open`, which owns both gates
-            // and their upstream citations). See the "Warp timing" section of
-            // this method's docs.
+            // playerDirection` (`:164-168`) -- polled every frame,
+            // independent of `tookStep`, and *not* the door path's gate.
+            // Reaching this arm at all is already this port's counterpart to
+            // the `T_TILE_CENTER`/`T_NOT_MOVING` test that sets
+            // `heldDirection` in the first place (`:95-112`), so the poll
+            // needs no `in_transit` test of its own beyond `landed`'s
+            // (`arrow_poll_open`; see the "Warp timing" doc section).
             let warp_trigger = preempting_arrow_trigger.or(door_warp).or_else(|| {
-                if !wild_encounter::arrow_poll_open(self.player.in_transit(), encounter.is_some()) {
+                if !wild_encounter::arrow_poll_open(self.player.in_transit(), field_event_fired) {
                     return None;
                 }
                 let (x, y) = pre_step_position;
                 trigger_arrow_warp(&runtime, x, y, self.player.elevation(), arrow_direction?)
             });
 
-            // A fired encounter consumes the frame's field input exactly as a
-            // resolved warp does -- upstream returns TRUE out of
-            // `ProcessPlayerFieldInput` at `:162`, before
-            // `TryStartInteractionScript` (`:172`) is ever reached
-            // (`wild_encounter::field_input_consumed`).
-            let input_consumed =
-                wild_encounter::field_input_consumed(encounter.is_some(), warp_trigger);
-            match warp_trigger {
-                Some(WarpTrigger::Resolved { map, warp_id }) => self.warp_to(map, warp_id),
-                Some(WarpTrigger::Unsupported) => eprintln!(
-                    "warp: destination at the player's tile can't be resolved by this port \
-                     (dynamic map/warp id) -- staying put"
-                ),
-                None => {}
-            }
-
-            // A fired warp or encounter wins over a same-frame interaction:
-            // the tokens were resolved against the pre-warp runtime (comment
-            // above), and upstream never looks for an interaction on a frame
-            // either of those already claimed.
-            if input_consumed {
-                if interaction_tokens.is_some() {
-                    eprintln!(
-                        "npc dialog: discarding a same-frame interaction the warp or wild \
-                         encounter takes precedence over"
-                    );
-                }
-            } else if let Some(tokens) = interaction_tokens {
-                match NpcDialog::open_default(tokens) {
-                    Ok(dialog) => self.dialog = Some(dialog),
-                    Err(err) => eprintln!("npc dialog: {err} -- staying in the overworld"),
-                }
-            }
+            // Resolve this frame's warp/interaction/battle precedence
+            // (module docs' own citations) -- pulled into its own method
+            // purely to keep this one under `clippy::too_many_lines`; see
+            // that method's doc comment for what each branch does and why.
+            // `runtime`'s last use is above this call, not inside it -- every
+            // argument below is an owned value already derived from it, so
+            // this borrows only `self`, the same way `begin_step_battle`
+            // already does.
+            self.resolve_step_events(
+                warp_trigger,
+                encounter,
+                field_event_fired,
+                first_battle_triggered,
+                interaction_tokens,
+            );
 
             // Map-edge connection crossing (issue #177): deferred to here,
             // `runtime`'s last use above (method docs' own section on this).
             // Never coincides with `warp_fired`: a crossing leaves
             // `self.player.in_transit()` true, the same gate that already
             // makes the `warp_trigger` closure above return `None`.
-            self.begin_wild_battle(encounter);
-
             if let Some((to_map, to_position)) = crossed_to {
                 if !self.cross_connection(to_map, to_position) {
                     // A refused rebind must not leave the player standing at
@@ -466,6 +473,55 @@ impl OverworldPhase {
             x: i16::try_from(x).unwrap_or(i16::MAX),
             y: i16::try_from(y).unwrap_or(i16::MAX),
         };
+    }
+
+    /// [`Self::step`]'s warp/interaction/battle precedence, once every input
+    /// to it has already been decided against this frame's `runtime` (pulled
+    /// out of that method purely to stay under `clippy::too_many_lines` --
+    /// every parameter here is an owned value, not a borrow of `runtime`, so
+    /// this method needs nothing from it).
+    ///
+    /// A resolved `warp_trigger` executes first ([`Self::warp_to`]).
+    /// Same-frame interaction tokens open a dialog only if neither a warp
+    /// nor a `field_event_fired` event (an encounter or the Route 101
+    /// first-battle trigger -- [`Self::step`]'s own single definition of
+    /// that) already consumed the frame's field input: upstream never
+    /// reaches `TryStartInteractionScript` (`:172`) on a frame anything
+    /// above it returned TRUE. Finally, the battle this frame earned -- if
+    /// any -- starts ([`Self::begin_step_battle`]).
+    fn resolve_step_events(
+        &mut self,
+        warp_trigger: Option<WarpTrigger>,
+        encounter: Option<engine::overworld::WildEncounter>,
+        field_event_fired: bool,
+        first_battle_triggered: bool,
+        interaction_tokens: Option<Vec<engine::text::Token>>,
+    ) {
+        match warp_trigger {
+            Some(WarpTrigger::Resolved { map, warp_id }) => self.warp_to(map, warp_id),
+            Some(WarpTrigger::Unsupported) => eprintln!(
+                "warp: destination at the player's tile can't be resolved by this port \
+                 (dynamic map/warp id) -- staying put"
+            ),
+            None => {}
+        }
+
+        let input_consumed = wild_encounter::field_input_consumed(field_event_fired, warp_trigger);
+        if input_consumed {
+            if interaction_tokens.is_some() {
+                eprintln!(
+                    "npc dialog: discarding a same-frame interaction the warp, the wild \
+                     encounter, or the Route 101 first-battle trigger takes precedence over"
+                );
+            }
+        } else if let Some(tokens) = interaction_tokens {
+            match NpcDialog::open_default(tokens) {
+                Ok(dialog) => self.dialog = Some(dialog),
+                Err(err) => eprintln!("npc dialog: {err} -- staying in the overworld"),
+            }
+        }
+
+        self.begin_step_battle(first_battle_triggered, encounter);
     }
 
     /// The token stream a [`NpcDialog`] should open with this frame, or

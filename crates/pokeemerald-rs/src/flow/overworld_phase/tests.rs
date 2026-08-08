@@ -8,7 +8,8 @@ use crate::new_game;
 use assets::{MapEvents, MapHeader, MapId, MapLayout, MetatileCell};
 use engine::event_data::EventData;
 use engine::overworld::metatile_behavior::{
-    MB_ANIMATED_DOOR, MB_NON_ANIMATED_DOOR, MB_SOUTH_ARROW_WARP, MB_TALL_GRASS,
+    MB_ANIMATED_DOOR, MB_EAST_ARROW_WARP, MB_NON_ANIMATED_DOOR, MB_NORMAL, MB_SOUTH_ARROW_WARP,
+    MB_TALL_GRASS,
 };
 use engine::overworld::{
     warp_in_facing, ConnectedMapData, Direction, MapRuntime, PlayerState, StepOutcome,
@@ -947,6 +948,19 @@ fn advance_player_one_frame_rejects_a_crossing_outside_the_neighbours_bounds() {
 /// `data/layouts/Route101/map.bin` -- flanked by collision-1 fence tiles
 /// everywhere else along both edges, and no object event sits anywhere near
 /// either row (both maps' own `map.json`).
+///
+/// **`(10, 19)` is also the Route 101 rescue coord-event trigger tile (issue
+/// #231).** That is deliberate and left alone: this phase is built with no
+/// `party_lead`, so the trigger fires on the crossing's drain frame and
+/// `super::first_battle_trigger`'s own `begin_first_battle` takes its
+/// documented "no party mon yet" arm -- it consumes the trigger
+/// (`VAR_ROUTE101_STATE` goes to `2`, upstream's mid-cutscene ordering) and
+/// logs, but builds no battle, so nothing freezes the frame and the walk back
+/// south below proceeds exactly as it did before that slice existed. This
+/// test's subject is the *connection crossing*, and giving it a lead to keep
+/// the trigger quiet would only trade a logged no-op for a battle it would
+/// then have to play out. The trigger's own behaviour on this tile is pinned
+/// by `real_pack_crossing_into_route_101_lands_on_the_rescue_trigger_and_starts_the_battle`.
 #[test]
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
 #[allow(clippy::too_many_lines)] // one continuous two-crossing walk; splitting would re-set-up the pack scene
@@ -956,7 +970,8 @@ fn walking_off_littlerootss_north_edge_crosses_into_route_101_and_back() {
     let scene = crate::overworld::load_room(littleroot).expect("run `cargo xtask extract` first");
 
     // Two ordinary tiles south of the north edge, already facing the
-    // direction that will carry it there.
+    // direction that will carry it there. No `party_lead` is assigned: see
+    // the doc comment on the rescue trigger this walk lands on.
     let player = PlayerState::new((10, 2), 3, Direction::North);
     let mut phase = OverworldPhase::for_test(scene, littleroot, player, None);
 
@@ -3055,6 +3070,19 @@ fn warping_restarts_the_wild_encounter_immunity_window() {
 /// which would spend the whole window before reaching it. Everything the
 /// test actually asserts -- the counter at the crossing, and the four silent
 /// steps after it -- is untouched by where the player is standing.
+///
+/// **`VAR_ROUTE101_STATE` is pre-set to its spent value (issue #231).**
+/// `(10, 19)` is also the rescue coord-event trigger tile, and a *live*
+/// trigger there would legitimately keep this step from ever reaching
+/// `CheckStandardWildEncounter` at all -- upstream's `TryStartStepBasedScript`
+/// returns TRUE at `:155-161`, two lines above it, so the immunity counter
+/// (decremented inside that function, `:668-686`) would not move. That is the
+/// coord event's behaviour, pinned in its own section further down this file;
+/// asserting it here too would only turn this test's own subject -- the
+/// crossing's immunity restart -- into a hostage of an unrelated slice. The
+/// var starts at the post-rescue `2` instead, exactly the state upstream
+/// leaves behind once the Birch rescue has run, which makes `(10, 19)` the
+/// ordinary landing tile this test has always meant it to be.
 #[test]
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
 fn crossing_a_map_connection_restarts_the_wild_encounter_immunity_window() {
@@ -3068,6 +3096,12 @@ fn crossing_a_map_connection_restarts_the_wild_encounter_immunity_window() {
         None,
     );
     phase.rng = Rng::new(IMMUNITY_SEED);
+    // The rescue trigger on the landing tile is already spent (doc comment).
+    phase
+        .save1
+        .event_data
+        .var_set(VAR_ROUTE101_STATE, 2)
+        .expect("VAR_ROUTE101_STATE is an ordinary var id");
 
     // Four ordinary steps north up Littleroot's own walkable column. Its map
     // has no wild table, so they draw nothing -- but upstream's
@@ -3141,5 +3175,863 @@ fn crossing_a_map_connection_restarts_the_wild_encounter_immunity_window() {
         phase.rng.state(),
         Rng::new(IMMUNITY_SEED).state(),
         "the step past the window's end rolls for real"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// The Route 101 scripted first-battle trigger (issue #231).
+// ---------------------------------------------------------------------------
+
+/// `VAR_ROUTE101_STATE` (`include/constants/vars.h:116`), transcribed
+/// independently of `first_battle_trigger`'s own (private) copy so these
+/// tests pin the real upstream id rather than restating that module's.
+const VAR_ROUTE101_STATE: u16 = 0x4060;
+
+/// One of the real Route 101 rescue coord-event trigger tiles
+/// (`pokeemerald/data/maps/Route101/map.json`'s `coord_events`, elevation 3)
+/// -- `first_battle_trigger`'s own module docs have the full citation.
+const ROUTE_101_TRIGGER_TILE: (i32, i32) = (10, 19);
+
+/// `ROUTE_101_TRIGGER_TILE`'s own elevation.
+const ROUTE_101_TRIGGER_ELEVATION: u8 = 3;
+
+/// A synthetic, fully open (no collision, elevation 3 throughout) room named
+/// `MAP_ROUTE101`: the layout grid is fabricated, but `map_id` still resolves
+/// to Route 101's *real* generated [`assets::MapEventsTable`] entry -- the
+/// same "real events over a synthetic grid" split
+/// `crate::flow::wild_encounter::tests::route_101_phase` uses for the wild
+/// table, here for the coord-event trigger instead. 25x25 is large enough to
+/// place the player next to [`ROUTE_101_TRIGGER_TILE`].
+fn route_101_trigger_phase(player: PlayerState) -> OverworldPhase {
+    OverworldPhase::for_test(
+        crate::overworld::tests::synthetic_scene(25, 25),
+        MapId("MAP_ROUTE101"),
+        player,
+        None,
+    )
+}
+
+/// [`route_101_trigger_phase`] with metatile behaviors painted onto named
+/// cells -- the precedence tests below need the trigger tile to *also* be
+/// something (tall grass, a door, an arrow), which is the only way this
+/// port's own precedence between the coord event and the rest of
+/// `ProcessPlayerFieldInput` becomes observable at all.
+fn route_101_trigger_phase_with_special_tiles(
+    player: PlayerState,
+    specials: &[((u16, u16), u8)],
+) -> OverworldPhase {
+    OverworldPhase::for_test(
+        crate::overworld::tests::synthetic_scene_with_special_tiles(25, 25, specials),
+        MapId("MAP_ROUTE101"),
+        player,
+        None,
+    )
+}
+
+/// [`ROUTE_101_TRIGGER_TILE`] as the `(u16, u16)` the synthetic-scene
+/// fixtures index cells by.
+fn trigger_tile_cell() -> (u16, u16) {
+    let (x, y) = ROUTE_101_TRIGGER_TILE;
+    (
+        u16::try_from(x).expect("the trigger tile is inside the fixture"),
+        u16::try_from(y).expect("the trigger tile is inside the fixture"),
+    )
+}
+
+/// Walk `tiles` whole tiles east, each with its own drain frame
+/// ([`walk_one_tile_east`]).
+fn walk_east(phase: &mut OverworldPhase, tiles: usize) {
+    for _ in 0..tiles {
+        walk_one_tile_east(phase);
+    }
+}
+
+/// Step 1 of the upstream chain (`first_battle_trigger`'s module docs):
+/// `Route101_OnFrame`'s guard bumps a fresh save's `VAR_ROUTE101_STATE` from
+/// `0` to `1` the moment the player is on the map, or this slice's trigger
+/// (gated on that same value) could never gate open in real play.
+#[test]
+fn entering_route_101_bumps_the_fresh_save_rescue_var_to_one() {
+    let phase = route_101_trigger_phase(PlayerState::new((0, 0), 3, Direction::East));
+    assert_eq!(
+        phase.save1.event_data.var_get(VAR_ROUTE101_STATE),
+        Ok(1),
+        "a fresh save's VAR_ROUTE101_STATE must read 1 on Route 101, not its 0 default"
+    );
+}
+
+/// Entering any *other* map must never touch `VAR_ROUTE101_STATE` -- the
+/// on-frame bump is gated on the map, matching upstream's own map-scoped
+/// `MAP_SCRIPT_ON_FRAME_TABLE`.
+#[test]
+fn entering_a_different_map_leaves_the_rescue_var_at_its_fresh_save_zero() {
+    let phase = OverworldPhase::for_test(
+        crate::overworld::tests::synthetic_scene(10, 10),
+        MapId("MAP_LITTLEROOT_TOWN"),
+        PlayerState::new((0, 0), 3, Direction::East),
+        None,
+    );
+    assert_eq!(phase.save1.event_data.var_get(VAR_ROUTE101_STATE), Ok(0));
+}
+
+/// The entry bump's documented idempotency, pinned directly rather than by
+/// accident: `sync_route_101_state_on_entry` only ever moves `0 -> 1`, so a
+/// post-rescue save (var `2`) entering Route 101 keeps its `2` -- without
+/// the guard, re-entering the map would re-open the trigger and re-fight
+/// the scripted Zigzagoon (issue #231 review).
+#[test]
+fn re_entering_route_101_after_the_rescue_leaves_the_var_at_two() {
+    let mut phase = route_101_trigger_phase(PlayerState::new((0, 0), 3, Direction::East));
+    phase
+        .save1
+        .event_data
+        .var_set(VAR_ROUTE101_STATE, 2)
+        .unwrap();
+    // A fresh entry through the production sync helper (the same one all
+    // three map-entry points call) must be a no-op on a consumed state.
+    super::first_battle_trigger::sync_route_101_state_on_entry(
+        phase.map_id,
+        &mut phase.save1.event_data,
+    );
+    assert_eq!(
+        phase.save1.event_data.var_get(VAR_ROUTE101_STATE),
+        Ok(2),
+        "the entry bump is 0 -> 1 only; a consumed trigger must stay consumed"
+    );
+}
+
+/// The acceptance path this issue exists for: stepping onto the real Route
+/// 101 rescue trigger tile, with the var in its pre-rescue state, starts the
+/// scripted first battle through the real [`OverworldPhase::step`] path --
+/// not [`crate::flow::first_battle::start_first_battle`] called directly.
+/// Pins (a) from the issue's test list.
+#[test]
+fn stepping_onto_the_route_101_trigger_tile_starts_the_scripted_first_battle() {
+    let (tx, ty) = ROUTE_101_TRIGGER_TILE;
+    let mut phase = route_101_trigger_phase(PlayerState::new(
+        (tx - 1, ty),
+        ROUTE_101_TRIGGER_ELEVATION,
+        Direction::East,
+    ));
+    phase.rng = Rng::new(4242);
+    phase.party_lead = Some(new_game::provisional_starter());
+    assert_eq!(
+        phase.save1.event_data.var_get(VAR_ROUTE101_STATE),
+        Ok(1),
+        "entering the map already primed the pre-rescue state"
+    );
+
+    walk_one_tile_east(&mut phase);
+
+    assert_eq!(phase.player.position(), (tx, ty));
+    assert!(
+        phase.wild_battle.is_none(),
+        "this trigger must never route through the ordinary wild-encounter path"
+    );
+    let battle = phase
+        .first_battle
+        .as_ref()
+        .expect("the rescue trigger must start the scripted first battle");
+    assert_eq!(
+        battle.enemy().species(),
+        assets::SpeciesId(288),
+        "SPECIES_ZIGZAGOON"
+    );
+    assert_eq!(battle.enemy().level(), 2);
+    assert!(
+        phase.party_lead.is_none(),
+        "the lead mon moved into the battle"
+    );
+}
+
+/// The no-party-lead arm of `super::first_battle_trigger`'s
+/// `begin_first_battle`, which its own doc comment claims outright ("The
+/// trigger is still consumed in that case, exactly as it is upstream -- the
+/// coord event fires, the cutscene it stands in for runs, and the tile is
+/// spent whether or not this port could build a battle out of it") and which
+/// `walking_off_littlerootss_north_edge_crosses_into_route_101_and_back`'s
+/// own doc comment relies on to explain why that pack-only walk stays quiet.
+/// Nothing else pins it: every other trigger test assigns a lead, so moving
+/// the `var_set` below `begin_first_battle`'s `let Some(lead) = ... else`
+/// early return survives the whole suite without this.
+#[test]
+fn the_trigger_is_consumed_even_when_there_is_no_party_lead_to_fight_with() {
+    let (tx, ty) = ROUTE_101_TRIGGER_TILE;
+    // Deliberately no `party_lead`: `OverworldPhase::for_test` leaves it
+    // `None`, which is the bare-test-phase case that arm exists for.
+    let mut phase = route_101_trigger_phase(PlayerState::new(
+        (tx - 1, ty),
+        ROUTE_101_TRIGGER_ELEVATION,
+        Direction::East,
+    ));
+
+    walk_one_tile_east(&mut phase);
+
+    assert_eq!(phase.player.position(), (tx, ty));
+    assert!(
+        phase.first_battle.is_none(),
+        "there was no lead mon to build a battle out of"
+    );
+    assert_eq!(
+        phase.save1.event_data.var_get(VAR_ROUTE101_STATE),
+        Ok(2),
+        "the coord event still fired, so the trigger is spent -- upstream's own \
+         setvar VAR_ROUTE101_STATE, 2 runs mid-cutscene, long before any battle"
+    );
+}
+
+/// A step that lands elsewhere on Route 101 -- one tile short of the trigger
+/// -- must not start anything: the coord-event lookup is exact-position, not
+/// a nearby-tile fuzzy match.
+#[test]
+fn a_step_that_does_not_land_on_the_trigger_tile_starts_nothing() {
+    let (tx, ty) = ROUTE_101_TRIGGER_TILE;
+    let mut phase = route_101_trigger_phase(PlayerState::new(
+        (tx - 2, ty),
+        ROUTE_101_TRIGGER_ELEVATION,
+        Direction::East,
+    ));
+    phase.rng = Rng::new(4242);
+    phase.party_lead = Some(new_game::provisional_starter());
+
+    walk_one_tile_east(&mut phase);
+
+    assert_eq!(phase.player.position(), (tx - 1, ty));
+    assert!(phase.first_battle.is_none());
+    assert!(phase.wild_battle.is_none());
+}
+
+/// (b) from the issue's test list: the battle the trigger starts plays to a
+/// real terminal outcome through the per-frame driver
+/// ([`OverworldPhase::step`] -> [`crate::flow::first_battle::advance_first_battle`]),
+/// freezing the overworld exactly as an ordinary wild battle does, and hands
+/// the player's mon back on the frame it ends.
+#[test]
+fn the_scripted_first_battle_plays_to_a_terminal_outcome_and_hands_the_lead_back() {
+    let (tx, ty) = ROUTE_101_TRIGGER_TILE;
+    let mut phase = route_101_trigger_phase(PlayerState::new(
+        (tx - 1, ty),
+        ROUTE_101_TRIGGER_ELEVATION,
+        Direction::East,
+    ));
+    phase.rng = Rng::new(4242);
+    phase.party_lead = Some(new_game::provisional_starter());
+    walk_one_tile_east(&mut phase);
+    assert!(phase.first_battle.is_some(), "setup: the trigger must fire");
+
+    let frozen_at = phase.player.position();
+    let mut frames = 0;
+    while phase.first_battle.is_some() {
+        phase.step(held(Buttons::RIGHT));
+        frames += 1;
+        assert!(
+            frames < 500,
+            "the headless first-battle driver must terminate"
+        );
+        assert_eq!(
+            phase.player.position(),
+            frozen_at,
+            "the overworld is frozen while the scripted first battle runs"
+        );
+    }
+    let lead = phase
+        .party_lead
+        .as_ref()
+        .expect("the battle writes the lead mon back on the frame it ends");
+    assert_eq!(lead.species(), new_game::PROVISIONAL_STARTER_SPECIES);
+}
+
+/// (c) from the issue's test list: by the time the battle ends,
+/// `VAR_ROUTE101_STATE` has advanced past the trigger's own gate (upstream's
+/// own `setvar VAR_ROUTE101_STATE, 2`, written at trigger time --
+/// `first_battle_trigger`'s "When the var advances" section), so stepping
+/// onto the same tile again starts nothing -- no second battle, and the roll
+/// doesn't silently fall through to an ordinary wild encounter either.
+#[test]
+fn after_the_battle_ends_the_trigger_tile_cannot_refire() {
+    let (tx, ty) = ROUTE_101_TRIGGER_TILE;
+    let mut phase = route_101_trigger_phase(PlayerState::new(
+        (tx - 1, ty),
+        ROUTE_101_TRIGGER_ELEVATION,
+        Direction::East,
+    ));
+    phase.rng = Rng::new(4242);
+    phase.party_lead = Some(new_game::provisional_starter());
+    walk_one_tile_east(&mut phase);
+    let mut frames = 0;
+    while phase.first_battle.is_some() {
+        phase.step(held(Buttons::RIGHT));
+        frames += 1;
+        assert!(frames < 500, "setup: the driver must terminate");
+    }
+    assert_eq!(
+        phase.save1.event_data.var_get(VAR_ROUTE101_STATE),
+        Ok(2),
+        "the fired trigger advanced the var, so it can't refire"
+    );
+
+    // Walk off the tile and back onto it -- a fresh completed step, the same
+    // kind that fired the trigger the first time.
+    phase.player = PlayerState::new((tx - 1, ty), ROUTE_101_TRIGGER_ELEVATION, Direction::East);
+    phase.pending_landing = None;
+    let rng_before = phase.rng.state();
+    walk_one_tile_east(&mut phase);
+
+    assert_eq!(phase.player.position(), (tx, ty));
+    assert!(
+        phase.first_battle.is_none(),
+        "the trigger must not refire once VAR_ROUTE101_STATE has advanced"
+    );
+    assert!(
+        phase.wild_battle.is_none(),
+        "the tile must not fall through to an ordinary wild-encounter roll either"
+    );
+    assert_eq!(
+        phase.rng.state(),
+        rng_before,
+        "ordinary ground (this synthetic room's own default) draws nothing either way"
+    );
+}
+
+/// (e) from the issue's test list: the trigger draws off the phase's one
+/// shared stream, in [`crate::flow::first_battle::start_first_battle`]'s own
+/// documented order -- stepping onto the tile must produce *exactly* the
+/// battle a direct call to that function, off an identically-seeded
+/// reference generator, would.
+#[test]
+fn the_trigger_draws_off_the_phases_single_shared_stream() {
+    const SEED: u32 = 4242;
+    let (tx, ty) = ROUTE_101_TRIGGER_TILE;
+    let mut phase = route_101_trigger_phase(PlayerState::new(
+        (tx - 1, ty),
+        ROUTE_101_TRIGGER_ELEVATION,
+        Direction::East,
+    ));
+    phase.rng = Rng::new(SEED);
+    let lead = new_game::provisional_starter();
+    phase.party_lead = Some(lead.clone());
+
+    walk_one_tile_east(&mut phase);
+    let battle = phase.first_battle.as_ref().expect("the trigger must fire");
+
+    // Replay the identical construction off an independent, identically
+    // seeded generator: no overworld step precedes it, so if the phase drew
+    // anything of its own before handing off, the enemy's rolled identity
+    // (and the stream's final position) would disagree.
+    let mut reference = Rng::new(SEED);
+    let expected = crate::flow::first_battle::start_first_battle(lead, &mut reference)
+        .expect("the same construction must succeed off a reference stream");
+    assert_eq!(battle.enemy().personality(), expected.enemy().personality());
+    assert_eq!(battle.enemy().ivs(), expected.enemy().ivs());
+    assert_eq!(
+        phase.rng.state(),
+        reference.state(),
+        "the trigger must draw exactly as many values as start_first_battle documents -- no \
+         more, no fewer"
+    );
+}
+
+/// The `cross_connection` half of [`OverworldPhase`]'s map-entry bump
+/// (`super::first_battle_trigger::sync_route_101_state_on_entry`'s own
+/// "called at every one of `OverworldPhase`'s map-entry points" claim):
+/// walking into Route 101 over its map-edge connection primes
+/// `VAR_ROUTE101_STATE` from a fresh save's `0` to `1` **on arrival**, before
+/// the crossing step's own walk animation has drained and therefore before
+/// the rescue trigger this slice gates on that value is ever tested.
+///
+/// Real-pack, and unavoidably so: `OverworldPhase::cross_connection` loads
+/// the entered map's room through `crate::overworld::load_room` and bails out
+/// before any arrival effect when no pack is extracted, so no synthetic
+/// fixture in this file can reach the call site at all.
+///
+/// Deleting `cross_connection`'s `sync_route_101_state_on_entry` call fails
+/// here directly (the var stays `0`), and fails
+/// `real_pack_crossing_into_route_101_lands_on_the_rescue_trigger_and_starts_the_battle`
+/// below as a consequence -- the trigger's gate never opens, so no battle
+/// starts. This test is the direct one: it isolates the arrival effect from
+/// the trigger that consumes it.
+#[test]
+#[ignore = "needs a local pack: run `cargo xtask extract` first"]
+fn real_pack_crossing_into_route_101_primes_the_rescue_var_on_arrival() {
+    let littleroot = assets::MapId("MAP_LITTLEROOT_TOWN");
+    let route101 = assets::MapId("MAP_ROUTE101");
+    let scene = crate::overworld::load_room(littleroot).expect("run `cargo xtask extract` first");
+
+    // One tile south of Littleroot's own last interior row (the walkable
+    // `x = 10` column `walking_off_littlerootss_north_edge_crosses_into_route_101_and_back`
+    // documents), so exactly two steps reach the crossing.
+    let player = PlayerState::new((10, 1), 3, Direction::North);
+    let mut phase = OverworldPhase::for_test(scene, littleroot, player, None);
+    assert_eq!(
+        phase.save1.event_data.var_get(VAR_ROUTE101_STATE),
+        Ok(0),
+        "setup: a phase built on Littleroot leaves the fresh-save value alone"
+    );
+
+    phase.step(held(Buttons::UP));
+    for _ in 1..WALK_FRAMES_PER_TILE {
+        phase.step(ButtonState::new());
+    }
+    assert_eq!(phase.player.position(), (10, 0));
+    assert_eq!(
+        phase.save1.event_data.var_get(VAR_ROUTE101_STATE),
+        Ok(0),
+        "still on Littleroot -- the bump is map-scoped"
+    );
+
+    // The step that walks off the north edge: the crossing itself.
+    phase.step(held(Buttons::UP));
+    assert_eq!(phase.map_id, route101, "the crossing must have landed");
+    assert_eq!(
+        phase.save1.event_data.var_get(VAR_ROUTE101_STATE),
+        Ok(1),
+        "cross_connection runs Route101_OnFrame's own guard on arrival, so the rescue \
+         trigger's gate is already open when this step's landing drains"
+    );
+    assert!(
+        phase.first_battle.is_none(),
+        "the crossing step is still mid-animation -- the coord event is only tested once \
+         its landing drains"
+    );
+}
+
+/// The end-to-end acceptance path against the real extracted pack: walking
+/// off Littleroot Town's north edge crosses into Route 101 and lands *exactly*
+/// on the real rescue coord-event trigger tile
+/// (`walking_off_littlerootss_north_edge_crosses_into_route_101_and_back`
+/// above already pins the landing itself at `(10, 19)`), which must start the
+/// scripted first battle and play it to a real outcome through
+/// [`OverworldPhase::step`] alone -- no direct call into
+/// [`crate::flow::first_battle`] anywhere in this test.
+#[test]
+#[ignore = "needs a local pack: run `cargo xtask extract` first"]
+fn real_pack_crossing_into_route_101_lands_on_the_rescue_trigger_and_starts_the_battle() {
+    let littleroot = assets::MapId("MAP_LITTLEROOT_TOWN");
+    let route101 = assets::MapId("MAP_ROUTE101");
+    let scene = crate::overworld::load_room(littleroot).expect("run `cargo xtask extract` first");
+
+    let player = PlayerState::new((10, 2), 3, Direction::North);
+    let mut phase = OverworldPhase::for_test(scene, littleroot, player, None);
+    // The production stand-in for the un-ported Birch-bag handout
+    // (`crate::new_game::provisional_starter`'s own docs) -- without it
+    // there would be nothing to fight with, exactly as `OverworldPhase::load_default`
+    // assigns it before the player can ever reach the overworld for real.
+    phase.party_lead = Some(new_game::provisional_starter());
+
+    // Two ordinary steps north to the edge, then the crossing step itself,
+    // then its own walk animation drains -- the same setup
+    // `walking_off_littlerootss_north_edge_crosses_into_route_101_and_back`
+    // uses, continued one step further into the rescue trigger.
+    for _ in 0..3 {
+        phase.step(held(Buttons::UP));
+        for _ in 1..WALK_FRAMES_PER_TILE {
+            phase.step(ButtonState::new());
+        }
+    }
+
+    assert_eq!(
+        phase.map_id, route101,
+        "the third step must have crossed into Route 101"
+    );
+    assert_eq!(
+        phase.player.position(),
+        (10, 19),
+        "Route 101's real south-edge landing tile is the real rescue trigger tile"
+    );
+    assert!(phase.wild_battle.is_none());
+    let battle = phase
+        .first_battle
+        .as_ref()
+        .expect("landing on the real trigger tile must start the scripted first battle");
+    assert_eq!(battle.enemy().species(), assets::SpeciesId(288));
+    assert_eq!(battle.enemy().level(), 2);
+
+    // Play it out through the real per-frame driver.
+    let mut frames = 0;
+    while phase.first_battle.is_some() {
+        phase.step(held(Buttons::RIGHT));
+        frames += 1;
+        assert!(
+            frames < 500,
+            "the headless first-battle driver must terminate"
+        );
+    }
+    let lead = phase
+        .party_lead
+        .as_ref()
+        .expect("the battle writes the lead mon back once it ends");
+    assert_eq!(lead.species(), new_game::PROVISIONAL_STARTER_SPECIES);
+    assert_eq!(
+        phase.save1.event_data.var_get(VAR_ROUTE101_STATE),
+        Ok(2),
+        "the real trigger tile must be consumed once the battle ends"
+    );
+}
+
+/// Review regression (#231, finding 1): an **aborted** first battle must
+/// consume the trigger just the same.
+///
+/// `crate::flow::first_battle::advance_first_battle`'s own doc comment spells
+/// the abort contract out — a turn the engine cannot play (here: a lead whose
+/// slot 0 has no PP left, `battle::BattleError::NoPpRemaining(0)` out of
+/// `Battle::take_turn`'s pre-draw validation) empties the slot, writes the
+/// lead back, and returns **`None`**, never an outcome. An earlier revision
+/// of this slice advanced `VAR_ROUTE101_STATE` only on `Some(outcome)`, which
+/// left the var at `1` on exactly this path and the coord-event tile live, so
+/// the next step onto it started the whole thing over. The var now moves at
+/// trigger time, upstream's own ordering (`scripts.inc:40`, mid-cutscene) —
+/// see `super::first_battle_trigger`'s "When the var advances" section.
+#[test]
+fn an_aborted_first_battle_still_consumes_the_route_101_trigger() {
+    let (tx, ty) = ROUTE_101_TRIGGER_TILE;
+    let mut phase = route_101_trigger_phase(PlayerState::new(
+        (tx - 1, ty),
+        ROUTE_101_TRIGGER_ELEVATION,
+        Direction::East,
+    ));
+    phase.rng = Rng::new(4242);
+    // Drain slot 0 through the same accessor the turn engine spends PP with,
+    // rather than reaching into the struct -- `crate::flow::first_battle`'s
+    // own abort test does it this way too.
+    let mut lead = new_game::provisional_starter();
+    let starting_pp = lead.moves()[0].pp;
+    assert!(starting_pp > 0, "a freshly built starter starts with PP");
+    for _ in 0..starting_pp {
+        lead.deduct_pp(0)
+            .expect("draining a slot that still has PP");
+    }
+    phase.party_lead = Some(lead);
+
+    walk_one_tile_east(&mut phase);
+    assert!(
+        phase.first_battle.is_some(),
+        "setup: the trigger must fire and build a battle -- the abort happens a frame later"
+    );
+
+    // One driver frame: the turn fails pre-draw, so the battle ends with no
+    // outcome at all.
+    phase.step(held(Buttons::RIGHT));
+    assert!(
+        phase.first_battle.is_none(),
+        "setup: the aborted battle must have emptied the slot"
+    );
+    assert!(
+        phase.party_lead.is_some(),
+        "setup: the abort writes the lead back all the same"
+    );
+    assert_eq!(
+        phase.save1.event_data.var_get(VAR_ROUTE101_STATE),
+        Ok(2),
+        "an abort produces no outcome, and the trigger must be consumed anyway"
+    );
+
+    // Walk off the tile and back onto it -- the same fresh completed step
+    // that fired the trigger the first time.
+    phase.player = PlayerState::new((tx - 1, ty), ROUTE_101_TRIGGER_ELEVATION, Direction::East);
+    phase.pending_landing = None;
+    let rng_before = phase.rng.state();
+    walk_one_tile_east(&mut phase);
+
+    assert_eq!(phase.player.position(), (tx, ty));
+    assert!(
+        phase.first_battle.is_none(),
+        "an aborted battle must not leave the rescue trigger live"
+    );
+    assert!(phase.wild_battle.is_none());
+    assert_eq!(
+        phase.rng.state(),
+        rng_before,
+        "a spent trigger draws nothing -- not even start_first_battle's construction draws"
+    );
+}
+
+/// Review regression (#231, finding 2a): the trigger **suppresses the
+/// wild-encounter roll** on the frame it fires.
+///
+/// Upstream reaches `CheckStandardWildEncounter` (`field_control_avatar.c:162`)
+/// only by falling through `TryStartStepBasedScript` (`:155-161`), which
+/// returns `TRUE` the moment `TryStartCoordEventScript` (`:485-486`) fires —
+/// so a coord-event frame never rolls. This is the one arm of that precedence
+/// bundled Route 101 data can actually express: the rescue tile is paintable
+/// as tall grass, and Route 101's real land table is fightable, so absent the
+/// suppression the very same step would draw.
+///
+/// Pinned two ways, because a suppressed roll is the absence of an effect:
+/// the stream must sit exactly where `start_first_battle` alone left it, and
+/// `CheckStandardWildEncounter`'s `sPrevMetatileBehavior` side effect
+/// (`:668-686`) must be untouched. The immunity counter cannot serve as a
+/// third pin -- a fired roll zeroes it (saturation) and `begin_first_battle`'s
+/// `battle_setup.c:941` restart zeroes it too, so its `0` here pins the
+/// *restart*, not the suppression. The control run at the end proves the
+/// fixture really would have rolled.
+#[test]
+fn the_route_101_trigger_suppresses_the_wild_encounter_roll_on_its_own_tile() {
+    // `crate::flow::wild_encounter::tests`' own `ENCOUNTER_SEED`: its first
+    // draws make the first *rolled* grass step produce a real encounter, so
+    // the control below is unambiguous.
+    const SEED: u32 = 17;
+    let (tx, ty) = ROUTE_101_TRIGGER_TILE;
+    let grass = [(trigger_tile_cell(), MB_TALL_GRASS)];
+
+    let mut phase = route_101_trigger_phase_with_special_tiles(
+        PlayerState::new((tx - 5, ty), ROUTE_101_TRIGGER_ELEVATION, Direction::East),
+        &grass,
+    );
+    phase.rng = Rng::new(SEED);
+    phase.party_lead = Some(new_game::provisional_starter());
+    // Four ordinary steps burn the whole post-transition immunity window
+    // (`WILD_ENCOUNTER_IMMUNITY_STEPS`) without drawing, so the fifth -- the
+    // one onto the trigger tile -- is a step the roll would really see.
+    walk_east(&mut phase, 4);
+    assert_eq!(
+        phase.wild.immunity_steps(),
+        WILD_ENCOUNTER_IMMUNITY_STEPS,
+        "setup: the immunity window must be spent before the trigger step"
+    );
+    assert_eq!(
+        phase.rng.state(),
+        Rng::new(SEED).state(),
+        "setup: immune steps draw nothing, so the stream is still untouched"
+    );
+
+    walk_one_tile_east(&mut phase);
+
+    assert_eq!(phase.player.position(), (tx, ty));
+    assert!(
+        phase.first_battle.is_some(),
+        "the coord event still fires on a tile that is also grass"
+    );
+    assert!(
+        phase.wild_battle.is_none(),
+        "and the grass roll it outranks must never have happened"
+    );
+    let mut reference = Rng::new(SEED);
+    crate::flow::first_battle::start_first_battle(new_game::provisional_starter(), &mut reference)
+        .expect("the same construction must succeed off a reference stream");
+    assert_eq!(
+        phase.rng.state(),
+        reference.state(),
+        "the frame's only draws are start_first_battle's -- an encounter roll would add its \
+         own AllowWildCheckOnNewMetatile draw ahead of them"
+    );
+    assert_eq!(
+        phase.wild.immunity_steps(),
+        0,
+        "CB2_StartFirstBattle's RestartWildEncounterImmunitySteps (battle_setup.c:941) \
+         must reset the spent window on the way into the fight (this value cannot \
+         distinguish suppression -- the stream assertion above owns that)"
+    );
+    assert_eq!(
+        phase.wild.prev_metatile_behavior(),
+        MB_NORMAL,
+        "sPrevMetatileBehavior must still read the ordinary ground of the step before"
+    );
+
+    // Control: the identical walk with the trigger already spent
+    // (`VAR_ROUTE101_STATE == 2`) really does roll on that same tile, so the
+    // assertions above are about a suppressed roll rather than a fixture that
+    // could never have rolled.
+    let mut control = route_101_trigger_phase_with_special_tiles(
+        PlayerState::new((tx - 5, ty), ROUTE_101_TRIGGER_ELEVATION, Direction::East),
+        &grass,
+    );
+    control
+        .save1
+        .event_data
+        .var_set(VAR_ROUTE101_STATE, 2)
+        .expect("VAR_ROUTE101_STATE is an ordinary var id");
+    control.rng = Rng::new(SEED);
+    control.party_lead = Some(new_game::provisional_starter());
+    walk_east(&mut control, 5);
+    assert!(
+        control.first_battle.is_none(),
+        "control: a spent trigger must not fire"
+    );
+    assert!(
+        control.wild_battle.is_some(),
+        "control: the same grass tile really does roll an encounter when nothing outranks it"
+    );
+    assert_eq!(
+        control.wild.prev_metatile_behavior(),
+        MB_TALL_GRASS,
+        "control: and CheckStandardWildEncounter really does record the tile it saw"
+    );
+}
+
+/// Review regression (#231, finding 2b): the trigger also outranks the
+/// door-warp check (`field_control_avatar.c:155-161`, after
+/// `TryStartCoordEventScript` inside the same `TryStartStepBasedScript`) and
+/// the arrow poll (`:164-168`) — and *why that half cannot be driven to a
+/// real warp on this map*.
+///
+/// Both warp paths need a `warp_events` entry at the tile
+/// (`engine::overworld::trigger_door_warp`/`trigger_arrow_warp` each look one
+/// up after the behavior check), and **Route 101 declares none at all** — a
+/// route is entered by walking, not through a door. So no test over bundled
+/// data can make a warp and this coord event contend for the same frame; the
+/// precedence is encoded and documented rather than pinned, exactly as
+/// `crate::flow::wild_encounter::arrow_poll_open` already documents for its
+/// own equally-unreachable encounter arm.
+///
+/// What this test *does* pin is that reachability argument itself — the
+/// emptiness of `warp_events` is an assertion, so a future Route 101 warp
+/// fails here and forces the real precedence test — plus the behavior half
+/// the fixture can express: a door-shaped and an arrow-shaped metatile
+/// behavior painted onto the trigger tile change nothing about the frame.
+#[test]
+fn route_101_has_no_warp_events_so_the_trigger_can_never_race_one() {
+    let route101 = MapId("MAP_ROUTE101");
+    let events = assets::MapEventsTable::new()
+        .resolve(route101)
+        .expect("Route 101 resolves in the generated map-events table");
+    assert!(
+        events.warp_events.is_empty(),
+        "Route 101 has no warp events, so the door/arrow arms of the trigger's precedence \
+         are unreachable over bundled data -- if that ever changes, pin them for real"
+    );
+
+    let (tx, ty) = ROUTE_101_TRIGGER_TILE;
+    for behavior in [MB_ANIMATED_DOOR, MB_EAST_ARROW_WARP] {
+        let mut phase = route_101_trigger_phase_with_special_tiles(
+            PlayerState::new((tx - 1, ty), ROUTE_101_TRIGGER_ELEVATION, Direction::East),
+            &[(trigger_tile_cell(), behavior)],
+        );
+        phase.rng = Rng::new(4242);
+        phase.party_lead = Some(new_game::provisional_starter());
+
+        walk_one_tile_east(&mut phase);
+
+        assert_eq!(
+            phase.map_id, route101,
+            "behavior {behavior:#04x}: no warp may fire, so the map must not change"
+        );
+        assert_eq!(
+            phase.player.position(),
+            (tx, ty),
+            "behavior {behavior:#04x}: the player stays on the trigger tile"
+        );
+        assert!(
+            phase.first_battle.is_some(),
+            "behavior {behavior:#04x}: the coord event fires regardless of the tile's behavior"
+        );
+    }
+}
+
+/// Review regression (#231, finding 3): `Route101_EventScript_PreventExitSouth`'s
+/// own coord event at `(10, 18)` must never start a battle — and the only
+/// thing standing between it and one is the **script-name** check in
+/// `super::first_battle_trigger::OverworldPhase::first_battle_trigger_at`.
+///
+/// Everything else about that event matches: it is a `Trigger` on
+/// `"VAR_ROUTE101_STATE"` at elevation 3, its `var_value` is `2` — the exact
+/// value this cut leaves behind once the rescue trigger is consumed — and it
+/// sits one tile north of the rescue tile, so the player really does stand on
+/// it, with the var really reading `2`, the moment they walk back south.
+/// Dropping the `script != TRIGGER_SCRIPT` half of that check restarts the
+/// Zigzagoon fight there.
+#[test]
+fn the_prevent_exit_coord_events_never_start_a_battle() {
+    let (tx, ty) = ROUTE_101_TRIGGER_TILE;
+    let mut phase = route_101_trigger_phase(PlayerState::new(
+        (tx - 1, ty),
+        ROUTE_101_TRIGGER_ELEVATION,
+        Direction::East,
+    ));
+    phase.rng = Rng::new(4242);
+    phase.party_lead = Some(new_game::provisional_starter());
+    walk_one_tile_east(&mut phase);
+    let mut frames = 0;
+    while phase.first_battle.is_some() {
+        phase.step(held(Buttons::RIGHT));
+        frames += 1;
+        assert!(frames < 500, "setup: the driver must terminate");
+    }
+    assert_eq!(
+        phase.save1.event_data.var_get(VAR_ROUTE101_STATE),
+        Ok(2),
+        "setup: the consumed trigger leaves exactly the value PreventExit* gates on"
+    );
+
+    // North onto `(10, 18)` -- `Route101_EventScript_PreventExitSouth`'s own
+    // coord-event tile.
+    let rng_before = phase.rng.state();
+    for _ in 0..WALK_FRAMES_PER_TILE {
+        phase.step(held(Buttons::UP));
+    }
+    assert_eq!(
+        phase.player.position(),
+        (tx, ty - 1),
+        "setup: the step must land on the PreventExitSouth coord event"
+    );
+    assert!(
+        phase.first_battle.is_none(),
+        "a PreventExit* coord event is not the rescue trigger, whatever its var says"
+    );
+    assert!(phase.wild_battle.is_none());
+    assert_eq!(
+        phase.rng.state(),
+        rng_before,
+        "and nothing was constructed off the shared stream either -- start_first_battle \
+         draws before it can fail"
+    );
+}
+
+/// The other half of the reachability argument
+/// `route_101_has_no_warp_events_so_the_trigger_can_never_race_one` starts:
+/// the trigger's "discards a same-frame interaction" arm
+/// (`crate::flow::wild_encounter::field_input_consumed`, upstream `:172`)
+/// cannot be driven either, because no Route 101 object event stands next to
+/// a rescue tile for an A press to find.
+///
+/// Route 101's six object events sit at `(16, 8)`, `(9, 13)`, `(7, 14)`,
+/// `(10, 13)`, `(5, 11)` and `(2, 13)` -- the nearest is five rows north of
+/// the trigger row. Asserted rather than asserted-in-a-comment so a future
+/// object-event addition next to the rescue tiles fails here and forces the
+/// real precedence test to be written.
+#[test]
+fn no_route_101_object_event_stands_beside_the_rescue_trigger_tiles() {
+    let events = assets::MapEventsTable::new()
+        .resolve(MapId("MAP_ROUTE101"))
+        .expect("Route 101 resolves in the generated map-events table");
+    for (tx, ty) in [ROUTE_101_TRIGGER_TILE, (11, 19)] {
+        for (dx, dy) in [(0, -1), (0, 1), (-1, 0), (1, 0)] {
+            let (nx, ny) = (tx + dx, ty + dy);
+            assert!(
+                !events
+                    .object_events
+                    .iter()
+                    .any(|o| i32::from(o.x) == nx && i32::from(o.y) == ny),
+                "an object event at ({nx}, {ny}) would make the trigger's interaction-discard \
+                 arm reachable -- pin it for real instead of relying on this assertion"
+            );
+        }
+    }
+}
+
+/// The data premise `MapRuntime::coord_event_at`'s documented first-match
+/// divergence rests on (its own doc comment): every Route 101 coord event
+/// sits at a distinct position, so first-match and upstream's
+/// keep-scanning loop cannot disagree here. Asserted like the slice's
+/// other data premises (no warp events, no adjacent NPCs), so a future
+/// map change that stacks two coord events on one tile fails this test
+/// and forces the engine helper's semantics to be revisited.
+#[test]
+fn route_101_coord_events_all_sit_at_distinct_positions() {
+    let events = assets::MapEventsTable::new()
+        .resolve(MapId("MAP_ROUTE101"))
+        .expect("Route 101 always has a static events entry");
+    let mut positions: Vec<(i16, i16, u8)> = events
+        .coord_events
+        .iter()
+        .map(|e| (e.x, e.y, e.elevation))
+        .collect();
+    let total = positions.len();
+    positions.sort_unstable();
+    positions.dedup();
+    assert_eq!(
+        positions.len(),
+        total,
+        "two coord events share a tile -- coord_event_at's first-match \
+         shortcut is no longer equivalent to upstream's scan"
     );
 }

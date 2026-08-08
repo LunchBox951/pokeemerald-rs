@@ -109,4 +109,21 @@ impl OverworldPhase {
             Err(error) => eprintln!("wild encounter: can't start a battle ({error:?})"),
         }
     }
+
+    /// [`OverworldPhase::step`]'s single call into whichever of
+    /// [`OverworldPhase::begin_first_battle`]/[`OverworldPhase::begin_wild_battle`]
+    /// this frame's landing earned (issue #231) -- `encounter` is always
+    /// `None` when `first_battle_triggered` (that method's own filter
+    /// chain), so exactly one of the two ever actually starts a battle.
+    pub(super) fn begin_step_battle(
+        &mut self,
+        first_battle_triggered: bool,
+        encounter: Option<engine::overworld::WildEncounter>,
+    ) {
+        if first_battle_triggered {
+            self.begin_first_battle();
+        } else {
+            self.begin_wild_battle(encounter);
+        }
+    }
 }
