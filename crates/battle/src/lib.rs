@@ -48,12 +48,16 @@
 //! ([`BattleError::RunForbidden`], see `escape`'s module docs), and the
 //! wild opponent's narrow AI-branch move choice (`battle`'s private
 //! `opponent_ai` submodule, not upstream's general trainer AI, which stays
-//! `I-5`). Only the *rules* are modelled — the scripted intro's
-//! own construction (`SetUpBattleVarsAndBirchZigzagoon`, the Zigzagoon
-//! opponent, the "don't leave Prof. Birch!" narrative trigger) is a
-//! separate, not-yet-modelled overworld hookup, deferred to and tracked by
-//! issue #221; every ordinary Route 101 grass encounter still constructs
-//! with `first_battle = false`
+//! `I-5`). Issue #221 adds the scripted intro's own construction —
+//! `SetUpBattleVarsAndBirchZigzagoon`'s Zigzagoon, built by
+//! [`wild::build_pokemon_with_random_personality`] rather than
+//! [`wild::build_wild_pokemon`] (see that function's docs for the exact
+//! upstream draw-order difference) — and its own headless driver, both in
+//! `crates/pokeemerald-rs/src/flow/first_battle.rs`. The "don't leave Prof.
+//! Birch!" narrative trigger that upstream reaches it through has no script
+//! engine to run it and stays unmodelled (that module's own docs, and the
+//! `src/battle_setup.c` ledger entry); every ordinary Route 101 grass
+//! encounter still constructs with `first_battle = false`
 //! (`crates/pokeemerald-rs/src/flow/wild_encounter.rs`).
 //!
 //! Out of scope for this slice (see each module's own docs for exactly what
@@ -98,4 +102,7 @@ pub use pokemon::{
 };
 pub use stat_change::{is_stat_lowering_effect, LoweredStat, StatChangeOutcome};
 pub use stat_stage::StatStage;
-pub use wild::{build_wild_pokemon, ensure_wild_startable, initial_moveset};
+pub use wild::{
+    build_pokemon_with_random_personality, build_wild_pokemon, ensure_wild_startable,
+    initial_moveset,
+};

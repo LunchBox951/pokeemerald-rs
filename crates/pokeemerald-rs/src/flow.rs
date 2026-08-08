@@ -47,6 +47,7 @@ use crate::intro::{self, IntroScene, IntroStatus};
 use crate::main_menu::{self, MainMenuItem, MainMenuScene, MainMenuType};
 use crate::title::TitleScene;
 
+pub(crate) mod first_battle;
 pub(crate) mod overworld_phase;
 mod wild_encounter;
 pub(crate) use overworld_phase::OverworldPhase;

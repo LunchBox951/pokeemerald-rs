@@ -34,6 +34,17 @@
 //! file on the way out, and read back at boot so the main menu can offer
 //! `CONTINUE` — upstream's `LoadGameSave`/`TrySavingData` pair, over
 //! `engine::save`'s existing sector serialization.
+//!
+//! [`start_first_battle`]/[`advance_first_battle`] (`flow::first_battle`,
+//! issue #221) are the scripted `BATTLE_TYPE_FIRST_BATTLE` Zigzagoon fight's
+//! own construction and headless driver — see that module's docs for the
+//! full account, including what upstream trigger this slice does not reach
+//! it through yet (no script engine). They are re-exported at the crate root
+//! **ahead of** any caller: as of this slice nothing calls either of them
+//! outside `flow::first_battle`'s own unit tests — not `App`'s game-flow
+//! state machine, not `xtask`. The intended caller is a future script-engine
+//! hookup (or a headless `xtask` scenario standing in for one), and it will
+//! need them reachable from outside this crate when it arrives.
 
 pub mod app;
 mod flow;
@@ -48,6 +59,10 @@ mod textbox;
 pub mod title;
 
 pub use app::App;
+pub use flow::first_battle::{
+    advance_first_battle, start_first_battle, FIRST_BATTLE_OPPONENT_LEVEL,
+    FIRST_BATTLE_OPPONENT_SPECIES,
+};
 
 /// Real-pack pinning tests for extraction pipelines that don't yet have a
 /// runtime consumer of their own in this crate (currently just

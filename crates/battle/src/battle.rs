@@ -63,13 +63,15 @@
 //!
 //! Every other rule (turn order, damage, fainting, exp, PP) is unchanged.
 //!
-//! Only those *rules* live here: no caller passes `first_battle = true` yet,
-//! because the scripted intro's own construction and trigger
-//! (`SetUpBattleVarsAndBirchZigzagoon`, `src/battle_controllers.c:67`-`:72`,
-//! and the "don't leave Prof. Birch!" narrative gate) are a separate
-//! overworld hookup, deferred to and tracked by issue #221. Every ordinary
-//! Route 101 grass encounter still constructs with `first_battle = false`
-//! (`crates/pokeemerald-rs/src/flow/wild_encounter.rs`).
+//! Only those *rules* live here: this module never itself passes
+//! `first_battle = true`. The scripted intro's own construction
+//! (`SetUpBattleVarsAndBirchZigzagoon`, `src/battle_controllers.c:67`-`:72`)
+//! and headless driver are issue #221's
+//! `crates/pokeemerald-rs/src/flow/first_battle.rs`; the "don't leave Prof.
+//! Birch!" narrative gate that upstream reaches it through is a separate,
+//! still-unmodelled overworld hookup (that module's own docs). Every
+//! ordinary Route 101 grass encounter still constructs with
+//! `first_battle = false` (`crates/pokeemerald-rs/src/flow/wild_encounter.rs`).
 //!
 //! # RNG draw order
 //!
