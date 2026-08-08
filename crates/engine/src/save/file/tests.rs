@@ -231,7 +231,7 @@ fn writing_leaves_no_temporary_file_behind() {
     file.write(&store).unwrap();
 
     let mut temporary = path.clone().into_os_string();
-    temporary.push(".tmp");
+    temporary.push(format!(".tmp.{}", std::process::id()));
     assert!(
         !PathBuf::from(temporary).exists(),
         "the staged temporary must be renamed away, not left on disk"
@@ -254,7 +254,7 @@ fn a_write_that_cannot_be_staged_leaves_the_previous_save_byte_identical() {
     // directory for writing, so this fails the staged write without needing
     // permission bits or a full disk.
     let mut temporary = path.clone().into_os_string();
-    temporary.push(".tmp");
+    temporary.push(format!(".tmp.{}", std::process::id()));
     std::fs::create_dir_all(PathBuf::from(&temporary)).unwrap();
 
     let mut second = first.clone();
@@ -344,5 +344,41 @@ fn reading_a_directory_in_the_files_place_is_an_io_error_not_a_panic() {
     assert!(
         matches!(file.read(), Err(SaveFileError::Read { .. })),
         "reading a directory must surface as a read failure"
+    );
+}
+
+/// `SaveFile::lock` really excludes a second locker until the guard drops
+/// (issue #214 review). Deterministic without timing: the first locker sets
+/// `released` immediately before dropping its guard, so if the second
+/// locker's `lock()` ever returned while the first still held it, the flag
+/// would read `false`.
+#[test]
+fn the_save_lock_excludes_a_second_locker_until_dropped() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+
+    let dir = TempDir::new("lock");
+    let path = dir.join(SAVE_FILE_NAME);
+    let file = SaveFile::at(&path);
+    let released = Arc::new(AtomicBool::new(false));
+
+    let guard = file.lock().expect("first lock must succeed");
+    let contender = {
+        let released = Arc::clone(&released);
+        let file = SaveFile::at(&path);
+        std::thread::spawn(move || {
+            let _guard = file.lock().expect("second lock must eventually succeed");
+            released.load(Ordering::SeqCst)
+        })
+    };
+    // Give the contender a real chance to be blocked inside lock() before
+    // releasing; correctness does not depend on this scheduling, only the
+    // strength of the exclusion evidence does.
+    std::thread::yield_now();
+    released.store(true, Ordering::SeqCst);
+    drop(guard);
+    assert!(
+        contender.join().expect("contender must not panic"),
+        "the second lock() returned while the first guard was still held"
     );
 }

@@ -110,10 +110,10 @@ fn a_failed_overworld_load_waits_instead_of_retrying_every_frame() {
         return;
     }
 
-    let (_temp, save_slot) = empty_slot("failed-overworld-load");
+    let (_temp, mut save_slot) = empty_slot("failed-overworld-load");
     let scene = AppScene::Intro(Box::new(intro::synthetic_finished_scene()));
 
-    let (after_first, _frame) = advance_scene(scene, ButtonState::new(), &save_slot);
+    let (after_first, _frame) = advance_scene(scene, ButtonState::new(), &mut save_slot);
     assert!(
         matches!(after_first, AppScene::OverworldLoadFailed(_)),
         "a failed load must leave `Intro` for the explicit waiting state"
@@ -121,12 +121,12 @@ fn a_failed_overworld_load_waits_instead_of_retrying_every_frame() {
 
     // No input edge across further frames -> stay waiting, not attempt
     // the load again (nor bounce back to `Intro`).
-    let (after_second, _frame) = advance_scene(after_first, ButtonState::new(), &save_slot);
+    let (after_second, _frame) = advance_scene(after_first, ButtonState::new(), &mut save_slot);
     assert!(matches!(after_second, AppScene::OverworldLoadFailed(_)));
 
     // A fresh confirm edge retries the load -- still fails (no pack),
     // but must land back in the same waiting state, not panic.
-    let (after_retry, _frame) = advance_scene(after_second, pressed(Buttons::A), &save_slot);
+    let (after_retry, _frame) = advance_scene(after_second, pressed(Buttons::A), &mut save_slot);
     assert!(matches!(after_retry, AppScene::OverworldLoadFailed(_)));
 }
 
@@ -158,7 +158,7 @@ fn title_advances_on_a_freshly_pressed_a_or_start_only() {
 #[test]
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
 fn title_a_or_start_button_transitions_to_main_menu() {
-    let (_temp, save_slot) = empty_slot("title-to-main-menu");
+    let (_temp, mut save_slot) = empty_slot("title-to-main-menu");
     for button in [Buttons::START, Buttons::A] {
         let title_scene = crate::title::load_default().expect("run `cargo xtask extract` first");
         let scene = AppScene::Title(Box::new(AnimatedTitle {
@@ -167,7 +167,7 @@ fn title_a_or_start_button_transitions_to_main_menu() {
             presented: false,
         }));
 
-        let (next, _frame) = advance_scene(scene, pressed(button), &save_slot);
+        let (next, _frame) = advance_scene(scene, pressed(button), &mut save_slot);
 
         let AppScene::MainMenu(state) = next else {
             panic!("{button:?} on the title screen must transition to the main menu");
@@ -192,8 +192,8 @@ fn title_without_start_stays_on_title_and_keeps_animating() {
         presented: true, // as if this were the second frame onward.
     }));
 
-    let (_temp, save_slot) = empty_slot("title-keeps-animating");
-    let (next, _frame) = advance_scene(scene, ButtonState::new(), &save_slot);
+    let (_temp, mut save_slot) = empty_slot("title-keeps-animating");
+    let (next, _frame) = advance_scene(scene, ButtonState::new(), &mut save_slot);
 
     let AppScene::Title(title) = next else {
         panic!("expected to stay on the title screen");
@@ -206,7 +206,7 @@ fn title_without_start_stays_on_title_and_keeps_animating() {
 #[test]
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
 fn main_menu_confirm_on_new_game_transitions_to_intro() {
-    let (_temp, save_slot) = empty_slot("confirm-new-game");
+    let (_temp, mut save_slot) = empty_slot("confirm-new-game");
     let menu = crate::main_menu::load_default(MainMenuType::NoSavedGame)
         .expect("run `cargo xtask extract` first");
     let scene = AppScene::MainMenu(Box::new(MainMenuState {
@@ -214,7 +214,7 @@ fn main_menu_confirm_on_new_game_transitions_to_intro() {
         saved: save_slot.load(),
     }));
 
-    let (next, _frame) = advance_scene(scene, pressed(Buttons::A), &save_slot);
+    let (next, _frame) = advance_scene(scene, pressed(Buttons::A), &mut save_slot);
 
     assert!(
         matches!(next, AppScene::Intro(_)),
@@ -230,7 +230,7 @@ fn main_menu_confirm_on_new_game_transitions_to_intro() {
 /// own doc comment).
 #[test]
 fn main_menu_confirm_on_option_stays_on_the_main_menu() {
-    let (_temp, save_slot) = empty_slot("confirm-option");
+    let (_temp, mut save_slot) = empty_slot("confirm-option");
     let mut menu = crate::main_menu::synthetic_scene(MainMenuType::NoSavedGame);
     menu.move_down();
     assert_eq!(menu.selected(), MainMenuItem::Option);
@@ -239,7 +239,7 @@ fn main_menu_confirm_on_option_stays_on_the_main_menu() {
         saved: save_slot.load(),
     }));
 
-    let (next, _frame) = advance_scene(scene, pressed(Buttons::A), &save_slot);
+    let (next, _frame) = advance_scene(scene, pressed(Buttons::A), &mut save_slot);
 
     let AppScene::MainMenu(state) = next else {
         panic!("A on OPTION must not leave the main menu");
@@ -281,7 +281,7 @@ fn menu_action_maps_each_item_to_its_upstream_action() {
 /// the selection exactly where it was.
 #[test]
 fn main_menu_a_wins_over_a_same_frame_direction_press() {
-    let (_temp, save_slot) = empty_slot("a-wins");
+    let (_temp, mut save_slot) = empty_slot("a-wins");
     let mut menu = crate::main_menu::synthetic_scene(MainMenuType::NoSavedGame);
     menu.move_down();
     assert_eq!(menu.selected(), MainMenuItem::Option);
@@ -290,7 +290,7 @@ fn main_menu_a_wins_over_a_same_frame_direction_press() {
         saved: save_slot.load(),
     }));
 
-    let (next, _frame) = advance_scene(scene, pressed(Buttons::A | Buttons::UP), &save_slot);
+    let (next, _frame) = advance_scene(scene, pressed(Buttons::A | Buttons::UP), &mut save_slot);
 
     let AppScene::MainMenu(state) = next else {
         panic!("a swallowed A press must stay on the main menu");
@@ -307,21 +307,21 @@ fn main_menu_a_wins_over_a_same_frame_direction_press() {
 /// above).
 #[test]
 fn main_menu_up_and_down_move_the_selection() {
-    let (_temp, save_slot) = empty_slot("menu-updown");
+    let (_temp, mut save_slot) = empty_slot("menu-updown");
     let menu = crate::main_menu::synthetic_scene(MainMenuType::NoSavedGame);
     let scene = AppScene::MainMenu(Box::new(MainMenuState {
         scene: menu,
         saved: save_slot.load(),
     }));
 
-    let (after_down, _frame) = advance_scene(scene, pressed(Buttons::DOWN), &save_slot);
+    let (after_down, _frame) = advance_scene(scene, pressed(Buttons::DOWN), &mut save_slot);
     let AppScene::MainMenu(state) = after_down else {
         panic!("expected to stay on the main menu");
     };
     assert_eq!(state.scene.selected(), MainMenuItem::Option);
 
     let scene = AppScene::MainMenu(state);
-    let (after_up, _frame) = advance_scene(scene, pressed(Buttons::UP), &save_slot);
+    let (after_up, _frame) = advance_scene(scene, pressed(Buttons::UP), &mut save_slot);
     let AppScene::MainMenu(state) = after_up else {
         panic!("expected to stay on the main menu");
     };
@@ -335,7 +335,7 @@ fn main_menu_up_and_down_move_the_selection() {
 /// under test here, not the transition (which needs a room to load).
 #[test]
 fn a_saved_game_menu_selects_continue_first_and_then_new_game_and_option() {
-    let (_temp, save_slot) = empty_slot("saved-menu-order");
+    let (_temp, mut save_slot) = empty_slot("saved-menu-order");
     let menu = crate::main_menu::synthetic_scene(MainMenuType::SavedGame);
     let mut scene = AppScene::MainMenu(Box::new(MainMenuState {
         scene: menu,
@@ -353,7 +353,7 @@ fn a_saved_game_menu_selects_continue_first_and_then_new_game_and_option() {
             panic!("expected to stay on the main menu");
         };
         assert_eq!(state.scene.selected(), expected);
-        let (next, _frame) = advance_scene(scene, pressed(Buttons::DOWN), &save_slot);
+        let (next, _frame) = advance_scene(scene, pressed(Buttons::DOWN), &mut save_slot);
         scene = next;
     }
 }
@@ -364,7 +364,7 @@ fn a_saved_game_menu_selects_continue_first_and_then_new_game_and_option() {
 /// a blank one on the way out of the title screen.
 #[test]
 fn save_on_exit_writes_nothing_outside_the_overworld() {
-    let (temp, save_slot) = empty_slot("no-save-outside-overworld");
+    let (temp, mut save_slot) = empty_slot("no-save-outside-overworld");
     let menu = crate::main_menu::synthetic_scene(MainMenuType::NoSavedGame);
     let scenes = [
         AppScene::MainMenu(Box::new(MainMenuState {
@@ -395,10 +395,10 @@ fn save_on_exit_writes_nothing_outside_the_overworld() {
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
 fn intro_skip_transitions_to_overworld_with_the_player_at_the_spawn_tile() {
     let intro_scene = crate::intro::load_default().expect("run `cargo xtask extract` first");
-    let (_temp, save_slot) = empty_slot("intro-skip");
+    let (_temp, mut save_slot) = empty_slot("intro-skip");
     let scene = AppScene::Intro(Box::new(intro_scene));
 
-    let (next, _frame) = advance_scene(scene, pressed(Buttons::B), &save_slot);
+    let (next, _frame) = advance_scene(scene, pressed(Buttons::B), &mut save_slot);
 
     let AppScene::Overworld(phase) = next else {
         panic!("expected the skipped intro to hand off to the overworld");
@@ -439,8 +439,8 @@ fn intro_finishing_every_page_also_transitions_to_the_overworld() {
     }
     assert_eq!(status, IntroStatus::Finished, "the intro must terminate");
 
-    let (_temp, save_slot) = empty_slot("intro-paged");
+    let (_temp, mut save_slot) = empty_slot("intro-paged");
     let scene = AppScene::Intro(Box::new(intro_scene));
-    let (next, _frame) = advance_scene(scene, ButtonState::new(), &save_slot);
+    let (next, _frame) = advance_scene(scene, ButtonState::new(), &mut save_slot);
     assert!(matches!(next, AppScene::Overworld(_)));
 }

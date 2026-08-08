@@ -396,7 +396,7 @@ impl App {
             eprintln!("{line}");
         }
         if let Some(scene) = self.scene.take() {
-            let (next, frame) = flow::advance_scene(scene, buttons, &self.save_slot);
+            let (next, frame) = flow::advance_scene(scene, buttons, &mut self.save_slot);
             self.scene = Some(next);
             self.frame = frame;
         }

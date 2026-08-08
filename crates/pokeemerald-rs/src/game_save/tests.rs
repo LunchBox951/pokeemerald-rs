@@ -77,7 +77,7 @@ fn a_slot_with_no_resolvable_path_loads_as_no_flash() {
 #[test]
 fn a_written_slot_loads_back_ok_with_its_blocks() {
     let temp = TempSave::new("ok");
-    let slot = temp.slot();
+    let mut slot = temp.slot();
     let block2 = SaveBlock2 {
         encryption_key: 0xDEAD_BEEF,
         ..SaveBlock2::default()
@@ -176,7 +176,7 @@ fn consecutive_saves_advance_the_save_counter_and_alternate_slots() {
 #[test]
 fn a_damaged_lone_save_falls_back_to_the_no_save_menu() {
     let temp = TempSave::new("corrupt");
-    let slot = temp.slot();
+    let mut slot = temp.slot();
     slot.store(&SaveBlock1::default(), &SaveBlock2::default())
         .unwrap();
 
@@ -211,4 +211,43 @@ fn the_file_is_the_stores_flash_image_verbatim() {
     let mut expected = SaveStore::new();
     expected.save(&block1, &block2);
     assert_eq!(std::fs::read(&temp.path).unwrap(), expected.flash_image());
+}
+
+/// The `NoFlash` latch (issue #214 review): a boot read that *fails* --
+/// rather than finding no file -- must disable saving for the whole
+/// session, even if the medium recovers afterwards. Upstream's
+/// `gFlashMemoryPresent` stays FALSE for the session the same way; without
+/// the latch, a later `store` would re-read the now-healthy file and
+/// overwrite a save this session never loaded.
+#[test]
+fn a_failed_boot_read_disables_saving_even_after_the_medium_recovers() {
+    let temp = TempSave::new("latch");
+    // A *directory* at the save path fails the read with an I/O error --
+    // the transient-failure stand-in -- without being "not found".
+    std::fs::create_dir_all(&temp.path).unwrap();
+    let mut slot = temp.slot();
+    let saved = slot.load();
+    assert_eq!(saved.status, SaveFileStatus::NoFlash);
+
+    // The medium "recovers": a perfectly valid save appears at the path.
+    std::fs::remove_dir_all(&temp.path).unwrap();
+    let block1 = SaveBlock1 {
+        money: 424_242,
+        ..SaveBlock1::default()
+    };
+    let block2 = SaveBlock2::default();
+    let mut recovered = SaveStore::new();
+    recovered.save(&block1, &block2);
+    std::fs::write(&temp.path, recovered.flash_image()).unwrap();
+    let original = std::fs::read(&temp.path).unwrap();
+
+    let err = slot
+        .store(&SaveBlock1::default(), &block2)
+        .expect_err("a NoFlash session must never write");
+    assert!(matches!(err, SaveFileError::NoDataDirectory));
+    assert_eq!(
+        std::fs::read(&temp.path).unwrap(),
+        original,
+        "the recovered save must be byte-identical -- this session never loaded it"
+    );
 }

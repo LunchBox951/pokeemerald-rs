@@ -59,17 +59,37 @@ pub const SAVE_BLOCK1_CHUNKS: usize = 4;
 /// docs for why this is smaller than upstream's `NUM_SECTORS_PER_SLOT`).
 pub const SECTORS_PER_SLOT: usize = 1 + SAVE_BLOCK1_CHUNKS;
 
+/// `NUM_SECTORS_PER_SLOT` -- the number of sectors upstream *reserves* per
+/// slot in the physical flash layout (ids 0-13, PC storage included). The
+/// layout constant, distinct from [`SECTORS_PER_SLOT`] (how many of those
+/// reserved sectors this port writes today): slot 1 starts at this offset
+/// whether or not the PC-storage sectors between are modelled, so growing
+/// `SECTORS_PER_SLOT` toward it never moves a sector that already exists.
+pub const NUM_SECTORS_PER_SLOT: usize = 14;
+
+/// `NUM_SECTORS` -- the AGB cart's whole 128 KiB flash chip in sectors:
+/// both 14-sector slots plus the Hall of Fame (2), Trainer Hill, and
+/// recorded-battle sectors (`pokeemerald/include/constants/save.h`).
+pub const NUM_SECTORS: usize = 32;
+
+const _: () = assert!(SECTORS_PER_SLOT <= NUM_SECTORS_PER_SLOT);
+const _: () = assert!(NUM_SAVE_SLOTS * NUM_SECTORS_PER_SLOT <= NUM_SECTORS);
+
 /// The exact byte length of a [`SaveStore`]'s backing flash image
-/// ([`SaveStore::flash_image`]): every sector of both slots, laid out
-/// slot-major.
+/// ([`SaveStore::flash_image`]): the **full 128 KiB flash chip**
+/// ([`NUM_SECTORS`] sectors), even though only [`SECTORS_PER_SLOT`] sectors
+/// per slot are written today.
 ///
-/// This is the *whole* addressable surface this port models, and it is
-/// smaller than a real AGB cart's 128 KiB flash for exactly the reason
-/// [`SECTORS_PER_SLOT`] is smaller than upstream's `NUM_SECTORS_PER_SLOT`
-/// (module docs): the nine PC-storage sectors and the special
-/// Hall-of-Fame/Trainer-Hill/recorded-battle sectors have no model here
-/// yet. A persisted image is therefore this length, not 131072.
-pub const FLASH_IMAGE_LEN: usize = NUM_SAVE_SLOTS * SECTORS_PER_SLOT * SECTOR_SIZE;
+/// Deliberately the whole chip rather than just the modelled sectors: this
+/// length (and each slot's [`NUM_SECTORS_PER_SLOT`]-sector offset) is the
+/// *on-disk format*, and freezing it at upstream's own physical geometry
+/// means adding PC storage later fills already-reserved erased sectors
+/// instead of changing the file's length or moving slot 1 -- an
+/// exact-length check that would otherwise reject every save written
+/// before the growth (issue #214 review). Unmodelled sectors persist as
+/// erased `0xFF` flash, exactly what a real cart holds where nothing was
+/// ever programmed `(behavioral-fidelity)`.
+pub const FLASH_IMAGE_LEN: usize = NUM_SECTORS * SECTOR_SIZE;
 
 // Typed views of the small constants above, for the `u16`/`u32` contexts
 // upstream's sector ids, `gLastWrittenSector`, and `gSaveCounter % NUM_SAVE_SLOTS`
@@ -212,11 +232,12 @@ struct SlotScan {
 /// upstream.
 #[derive(Debug, Clone)]
 pub struct SaveStore {
-    /// `NUM_SAVE_SLOTS * SECTORS_PER_SLOT` sectors, `SECTOR_SIZE` bytes
-    /// each, laid out slot-major (mirrors `gRamSaveSectorLocations`'
-    /// underlying flash addressing: slot 0 occupies sectors
-    /// `0..SECTORS_PER_SLOT`, slot 1 occupies
-    /// `SECTORS_PER_SLOT..2*SECTORS_PER_SLOT`).
+    /// The full [`NUM_SECTORS`]-sector chip, `SECTOR_SIZE` bytes each,
+    /// laid out slot-major at upstream's physical geometry (mirrors
+    /// `gRamSaveSectorLocations`' underlying flash addressing: slot 0
+    /// occupies sectors `0..NUM_SECTORS_PER_SLOT`, slot 1 occupies
+    /// `NUM_SECTORS_PER_SLOT..2*NUM_SECTORS_PER_SLOT`; only the first
+    /// [`SECTORS_PER_SLOT`] of each span is written today).
     buffer: Vec<u8>,
     /// `gLastWrittenSector` — the sector-rotation offset within a slot.
     last_written_sector: u16,
@@ -248,8 +269,9 @@ impl SaveStore {
         }
     }
 
-    /// The backing flash image: [`FLASH_IMAGE_LEN`] bytes, every sector of
-    /// both slots in physical (slot-major) order.
+    /// The backing flash image: [`FLASH_IMAGE_LEN`] bytes -- the whole
+    /// chip, both slots at their physical offsets, unmodelled sectors
+    /// erased (`0xFF`).
     ///
     /// This is the whole of the store's persistent state. The two counters
     /// [`SaveStore::last_written_sector`] and [`SaveStore::save_counter`]
@@ -300,7 +322,10 @@ impl SaveStore {
     }
 
     fn physical_offset(slot: usize, sector_in_slot: usize) -> usize {
-        (slot * SECTORS_PER_SLOT + sector_in_slot) * SECTOR_SIZE
+        // Slots sit NUM_SECTORS_PER_SLOT (14) sectors apart -- upstream's
+        // physical geometry -- even while only SECTORS_PER_SLOT (5) of each
+        // span is written; see FLASH_IMAGE_LEN's docs.
+        (slot * NUM_SECTORS_PER_SLOT + sector_in_slot) * SECTOR_SIZE
     }
 
     fn read_physical(&self, slot: usize, sector_in_slot: usize) -> Sector {
@@ -614,6 +639,25 @@ mod tests {
     use super::*;
     use crate::save::block::{Coords16, PlayerGender, WarpData, TRAINER_ID_LENGTH};
     use crate::save::{BoxPokemon, ItemSlot, Pokemon, PokemonSubstructures};
+
+    /// The on-disk geometry is upstream's physical flash layout, frozen
+    /// (issue #214 review): the image is the whole 128 KiB chip and the two
+    /// slots sit `NUM_SECTORS_PER_SLOT` sectors apart, so growing
+    /// `SECTORS_PER_SLOT` toward 14 (PC storage) can never change the
+    /// file's length or move a sector that already exists. Any change here
+    /// is a save-format break and must be a deliberate, migrated act.
+    #[test]
+    fn the_flash_image_geometry_is_upstreams_and_frozen() {
+        assert_eq!(NUM_SECTORS_PER_SLOT, 14);
+        assert_eq!(NUM_SECTORS, 32);
+        assert_eq!(FLASH_IMAGE_LEN, 131_072);
+        assert_eq!(SaveStore::physical_offset(0, 0), 0);
+        assert_eq!(
+            SaveStore::physical_offset(1, 0),
+            NUM_SECTORS_PER_SLOT * SECTOR_SIZE,
+            "slot 1 sits at upstream's 14-sector offset even while only 5 are written"
+        );
+    }
 
     #[test]
     fn counter_comparison_is_wraparound_aware() {

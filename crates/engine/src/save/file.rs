@@ -115,6 +115,14 @@ pub enum SaveFileError {
         /// The underlying I/O failure.
         source: std::io::Error,
     },
+    /// Acquiring the sibling `.lock` file's exclusive lock failed
+    /// ([`SaveFile::lock`]).
+    Lock {
+        /// The lock file that could not be created or locked.
+        path: PathBuf,
+        /// The underlying I/O failure.
+        source: std::io::Error,
+    },
     /// The file exists but is not a flash image: its length is not
     /// [`store::FLASH_IMAGE_LEN`].
     BadLength {
@@ -144,6 +152,9 @@ impl std::fmt::Display for SaveFileError {
             Self::Write { path, source } => {
                 write!(f, "save file: writing {} failed: {source}", path.display())
             }
+            Self::Lock { path, source } => {
+                write!(f, "save file: locking {} failed: {source}", path.display())
+            }
             Self::BadLength {
                 path,
                 expected,
@@ -162,7 +173,8 @@ impl std::error::Error for SaveFileError {
         match self {
             Self::CreateDirectory { source, .. }
             | Self::Read { source, .. }
-            | Self::Write { source, .. } => Some(source),
+            | Self::Write { source, .. }
+            | Self::Lock { source, .. } => Some(source),
             Self::NoDataDirectory | Self::BadLength { .. } => None,
         }
     }
@@ -262,8 +274,8 @@ pub fn default_save_path_from(
 /// flash image through it (module docs).
 ///
 /// Owns no save state of its own `(oop-boundaries)` — it is deliberately a
-/// path and two methods, so the store stays the single home of everything
-/// about save *contents*.
+/// path plus read/write/lock methods, so the store stays the single home of
+/// everything about save *contents*.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SaveFile {
     path: PathBuf,
@@ -366,16 +378,7 @@ impl SaveFile {
     /// be created; [`SaveFileError::Write`] if the temporary file could not
     /// be written, synced, or renamed into place.
     pub fn write(&self, store: &SaveStore) -> Result<(), SaveFileError> {
-        let parent = self
-            .path
-            .parent()
-            .filter(|parent| !parent.as_os_str().is_empty());
-        if let Some(parent) = parent {
-            std::fs::create_dir_all(parent).map_err(|source| SaveFileError::CreateDirectory {
-                path: parent.to_path_buf(),
-                source,
-            })?;
-        }
+        let parent = self.ensure_parent_directory()?;
 
         let temporary = self.temporary_path();
         let write_error = |source: std::io::Error| SaveFileError::Write {
@@ -417,17 +420,93 @@ impl SaveFile {
         staged.get_ref().sync_all()
     }
 
-    /// The sibling path [`SaveFile::write`] stages bytes at.
+    /// Take this save file's exclusive inter-process lock, creating the
+    /// parent directory and the sibling `.lock` file as needed. The lock is
+    /// held until the returned guard drops.
     ///
-    /// A fixed `.tmp` suffix rather than a randomized name: two concurrent
-    /// writers to one save file would be a bug in the caller (this port runs
-    /// one game at a time), and a predictable name is one a crashed run
-    /// leaves recoverable rather than scattering scratch files.
-    fn temporary_path(&self) -> PathBuf {
+    /// Serializes whole read-modify-write cycles across *processes* -- two
+    /// game instances closing concurrently would otherwise interleave
+    /// [`SaveFile::read`]/[`SaveFile::write`] pairs and one session's save
+    /// counters and slot rotation could overwrite the other's mid-cycle
+    /// (issue #214 review). Advisory (`std`'s [`std::fs::File::lock`], OS
+    /// `flock`-family), which is exactly enough: every writer in this port
+    /// goes through this method, and a foreign process that ignores
+    /// advisory locks could corrupt the file with plain writes no matter
+    /// what this method did.
+    ///
+    /// The lock lives on a sibling `.lock` file, not the save file itself:
+    /// [`SaveFile::write`] replaces the save's inode by rename, and a lock
+    /// on a replaced inode would silently stop excluding anyone who opened
+    /// the path afterwards.
+    ///
+    /// # Errors
+    ///
+    /// [`SaveFileError::CreateDirectory`] if the parent directory could not
+    /// be created; [`SaveFileError::Lock`] if the lock file could not be
+    /// created or locked.
+    pub fn lock(&self) -> Result<SaveFileGuard, SaveFileError> {
+        self.ensure_parent_directory()?;
+        let path = self.lock_path();
+        let lock_error = |source: std::io::Error| SaveFileError::Lock {
+            path: path.clone(),
+            source,
+        };
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(&path)
+            .map_err(lock_error)?;
+        file.lock().map_err(lock_error)?;
+        Ok(SaveFileGuard { _file: file })
+    }
+
+    /// Create [`SaveFile::path`]'s parent directory if needed, returning it
+    /// (or `None` for a bare filename).
+    fn ensure_parent_directory(&self) -> Result<Option<&Path>, SaveFileError> {
+        let parent = self
+            .path
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty());
+        if let Some(parent) = parent {
+            std::fs::create_dir_all(parent).map_err(|source| SaveFileError::CreateDirectory {
+                path: parent.to_path_buf(),
+                source,
+            })?;
+        }
+        Ok(parent)
+    }
+
+    /// The sibling path [`SaveFile::lock`]'s lock file lives at.
+    fn lock_path(&self) -> PathBuf {
         let mut name = self.path.as_os_str().to_os_string();
-        name.push(".tmp");
+        name.push(".lock");
         PathBuf::from(name)
     }
+
+    /// The sibling path [`SaveFile::write`] stages bytes at.
+    ///
+    /// Suffixed with the writer's process id so no two processes ever stage
+    /// through the same inode: even with [`SaveFile::lock`] serializing the
+    /// read-modify-write cycle, a second unlocked writer (an older build, a
+    /// stray copy) must at worst lose the last-rename race -- never
+    /// truncate bytes another process is about to rename into place (issue
+    /// #214 review). Still deterministic per process, so a crashed run
+    /// leaves at most one recognizable `.tmp.<pid>` file behind, which the
+    /// next successful write's rename does not depend on.
+    fn temporary_path(&self) -> PathBuf {
+        let mut name = self.path.as_os_str().to_os_string();
+        name.push(format!(".tmp.{}", std::process::id()));
+        PathBuf::from(name)
+    }
+}
+
+/// Holds [`SaveFile::lock`]'s exclusive inter-process lock; dropping it
+/// (closing the file) releases the lock. Deliberately opaque: there is
+/// nothing to do with it but hold it across a read-modify-write cycle.
+#[derive(Debug)]
+pub struct SaveFileGuard {
+    _file: std::fs::File,
 }
 
 #[cfg(test)]

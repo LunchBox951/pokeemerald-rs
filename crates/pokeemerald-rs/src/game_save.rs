@@ -211,7 +211,7 @@ impl SaveSlot {
     /// transition's pack load: there is no boot-time UI to report them
     /// through, and a game that refuses to start because a stray file is
     /// unreadable is strictly worse than one that offers `NEW GAME`.
-    pub(crate) fn load(&self) -> SavedGame {
+    pub(crate) fn load(&mut self) -> SavedGame {
         let Some(file) = &self.file else {
             return SavedGame::no_flash();
         };
@@ -221,7 +221,15 @@ impl SaveSlot {
             // buffer is exactly that, and resolves to `SAVE_STATUS_EMPTY`.
             Ok(None) => SaveStore::new(),
             Err(err) => {
-                eprintln!("save: {err} -- starting without a saved game");
+                // Latched for the whole session, exactly as upstream's
+                // `gFlashMemoryPresent` stays FALSE once the medium fails
+                // to identify: a boot that could not *read* the save must
+                // never *write* it later, even if the failure was
+                // transient and the medium recovers -- the bytes it would
+                // write are a session that never saw the real save (issue
+                // #214 review; module docs' `NoFlash` rule).
+                eprintln!("save: {err} -- starting without a saved game; saving is disabled for this session");
+                self.file = None;
                 return SavedGame::no_flash();
             }
         };
@@ -253,14 +261,20 @@ impl SaveSlot {
     /// # Errors
     ///
     /// [`engine::save::SaveFileError::NoDataDirectory`] if this slot has no
-    /// resolved path; otherwise whatever reading back or writing the image
-    /// failed with.
+    /// usable medium (an unresolvable path, or a boot read failure latched
+    /// by [`SaveSlot::load`]); otherwise whatever locking, reading back, or
+    /// writing the image failed with.
     pub(crate) fn store(
         &self,
         block1: &SaveBlock1,
         block2: &SaveBlock2,
     ) -> Result<(), SaveFileError> {
         let file = self.file.as_ref().ok_or(SaveFileError::NoDataDirectory)?;
+        // Exclusive across processes for the whole read-modify-write
+        // cycle, so a concurrent instance can neither interleave its own
+        // rotation with ours nor race the staged rename
+        // (`SaveFile::lock`'s docs; issue #214 review).
+        let _guard = file.lock()?;
         let mut store = file.read()?.unwrap_or_else(SaveStore::new);
         // Recovers the counters the image was last written with; the
         // returned blocks are the *previous* save's and are deliberately

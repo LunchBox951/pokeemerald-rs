@@ -173,7 +173,7 @@ fn play_a_bit(phase: &mut OverworldPhase) {
 #[test]
 fn a_saved_game_reloads_into_an_overworld_phase_that_matches_it() {
     let temp = TempSave::new("round-trip");
-    let slot = temp.slot();
+    let mut slot = temp.slot();
 
     let mut phase = new_game_phase();
     play_a_bit(&mut phase);
@@ -248,7 +248,7 @@ fn a_saved_game_reloads_into_an_overworld_phase_that_matches_it() {
 #[test]
 fn the_most_recent_of_two_saves_is_the_one_that_reloads() {
     let temp = TempSave::new("two-slot");
-    let slot = temp.slot();
+    let mut slot = temp.slot();
 
     let mut phase = new_game_phase();
     play_a_bit(&mut phase);
@@ -288,7 +288,7 @@ fn the_most_recent_of_two_saves_is_the_one_that_reloads() {
 #[test]
 fn a_corrupt_save_offers_no_continue_and_falls_back_to_new_game() {
     let temp = TempSave::new("corrupt-fallback");
-    let slot = temp.slot();
+    let mut slot = temp.slot();
 
     let mut phase = new_game_phase();
     play_a_bit(&mut phase);
@@ -345,7 +345,7 @@ fn a_save_pointing_at_no_known_map_does_not_resume() {
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
 fn real_pack_continue_from_the_main_menu_restores_the_saved_game() {
     let temp = TempSave::new("real-pack-continue");
-    let slot = temp.slot();
+    let mut slot = temp.slot();
 
     let mut phase = OverworldPhase::load_default().expect("run `cargo xtask extract` first");
     play_a_bit(&mut phase);
@@ -361,7 +361,7 @@ fn real_pack_continue_from_the_main_menu_restores_the_saved_game() {
     assert_eq!(menu.selected(), MainMenuItem::Continue);
 
     let scene = AppScene::MainMenu(Box::new(MainMenuState { scene: menu, saved }));
-    let (next, _frame) = super::advance_scene(scene, pressed(Buttons::A), &slot);
+    let (next, _frame) = super::advance_scene(scene, pressed(Buttons::A), &mut slot);
 
     let AppScene::Overworld(resumed) = next else {
         panic!("A on CONTINUE must hand off to the overworld");

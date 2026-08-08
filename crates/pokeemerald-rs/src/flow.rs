@@ -292,7 +292,7 @@ fn log_game_continued(phase: &OverworldPhase) {
 pub(crate) fn advance_scene(
     scene: AppScene,
     buttons: ButtonState,
-    save_slot: &SaveSlot,
+    save_slot: &mut SaveSlot,
 ) -> (AppScene, Box<Frame>) {
     match scene {
         AppScene::Title(mut title) => {
