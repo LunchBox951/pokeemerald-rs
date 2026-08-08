@@ -91,12 +91,16 @@ const SCREEN_WIDTH: usize = 240;
 /// See [`SCREEN_WIDTH`].
 const SCREEN_HEIGHT: usize = 160;
 
-/// The title screen's frame index this scene captures: the very first
-/// composed frame (`compose_frame(0)`) — deterministic and free of any
-/// "which frame did the blink cadence land on" ambiguity, unlike a later
-/// frame (`crate::e2e`'s own frame-20 check exists precisely because later
-/// frames *do* differ from frame 0).
-const TITLE_FRAME_INDEX: u32 = 0;
+/// The title screen's frame index this scene captures. Frame 16 sits in
+/// the *visible* half of the "Press Start" blink cadence
+/// (`pokeemerald_rs::title`'s `press_start_visible`: visible for frames
+/// 15–30 of every 32-frame period, invisible outside it) — frame 0 does
+/// not, and a capture with the banner hidden could never catch a banner
+/// regression: the blessing workflow would hash-match a title screen whose
+/// "Press Start" text was broken outright. Any fixed index is equally
+/// deterministic (every animated quantity is a pure function of the frame
+/// number), so the one that maximises what the capture can witness wins.
+const TITLE_FRAME_INDEX: u32 = 16;
 
 /// Why [`run`]/[`run_with_paths`] failed.
 ///
