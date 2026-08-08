@@ -83,12 +83,22 @@ const _: () = assert!(NUM_SAVE_SLOTS * NUM_SECTORS_PER_SLOT <= NUM_SECTORS);
 /// Deliberately the whole chip rather than just the modelled sectors: this
 /// length (and each slot's [`NUM_SECTORS_PER_SLOT`]-sector offset) is the
 /// *on-disk format*, and freezing it at upstream's own physical geometry
-/// means adding PC storage later fills already-reserved erased sectors
-/// instead of changing the file's length or moving slot 1 -- an
-/// exact-length check that would otherwise reject every save written
-/// before the growth (issue #214 review). Unmodelled sectors persist as
-/// erased `0xFF` flash, exactly what a real cart holds where nothing was
-/// ever programmed `(behavioral-fidelity)`.
+/// keeps the file's **length and slot offsets** stable when PC storage
+/// lands -- the exact-length check can never reject an older file, and no
+/// already-written sector ever moves (issue #214 review). Unmodelled
+/// sectors persist as erased `0xFF` flash, exactly what a real cart holds
+/// where nothing was ever programmed `(behavioral-fidelity)`.
+///
+/// That is the *whole* guarantee. It is **not** forward compatibility for
+/// slot *validation*: `scan_slot` requires every one of a slot's
+/// [`SECTORS_PER_SLOT`] sectors to validate, so raising that constant to
+/// 14 would make a 5-sector-era slot scan as damaged (its PC sectors are
+/// erased, not valid) and silently drop `CONTINUE` for existing saves --
+/// upstream's own `GetSaveValidStatus` is equally strict about all
+/// `NUM_SECTORS_PER_SLOT` sectors. Growing `SECTORS_PER_SLOT` is
+/// therefore a save-compatibility break that must ship with either
+/// placeholder PC sectors written from day one of that growth or a
+/// one-time migration of older images (issue #235).
 pub const FLASH_IMAGE_LEN: usize = NUM_SECTORS * SECTOR_SIZE;
 
 // Typed views of the small constants above, for the `u16`/`u32` contexts

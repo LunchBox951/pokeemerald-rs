@@ -257,8 +257,18 @@ fn the_most_recent_of_two_saves_is_the_one_that_reloads() {
         .unwrap()
         .unwrap();
 
-    let mut phase = new_game_phase();
-    play_a_bit(&mut phase);
+    // The second session *continues* the first save -- since the exit-write
+    // consent gate (issue #214 review), a fresh new-game session would be
+    // refused here, and continuing is the only real player flow that
+    // produces a second rotation write anyway.
+    let loaded = slot.load();
+    let map = saved_map_id(&loaded.block1).expect("the saved location must resolve");
+    let mut phase = OverworldPhase::from_saved(
+        crate::overworld::tests::synthetic_scene(10, 10),
+        map,
+        loaded.block1,
+        loaded.block2,
+    );
     phase.save1.money = 4_321;
     for _ in 0..20 {
         phase.step(held(Buttons::RIGHT));
@@ -376,4 +386,59 @@ fn real_pack_continue_from_the_main_menu_restores_the_saved_game() {
     assert_eq!(after.lead, before.lead);
     assert_eq!(after.trainer_id, before.trainer_id);
     assert_eq!(after.encryption_key, before.encryption_key);
+}
+
+/// The exit-write consent gate end to end (issue #214 review): a NEW GAME
+/// session that reaches the overworld and quits must not clobber a
+/// continuable save it never loaded -- upstream gates that overwrite on
+/// `gDifferentSaveFile`'s explicit prompt -- while a *continued* session
+/// writes its own save back unconditionally.
+#[test]
+fn a_new_game_session_never_overwrites_a_save_it_did_not_continue() {
+    let temp = TempSave::new("consent-gate");
+    let mut slot = temp.slot();
+
+    // A real prior save on disk, written by its own session.
+    let mut original_phase = new_game_phase();
+    play_a_bit(&mut original_phase);
+    save_on_exit(&AppScene::Overworld(Box::new(original_phase)), &slot)
+        .expect("the overworld has save state to write")
+        .expect("writing the scratch save file must succeed");
+    let original = std::fs::read(temp.path()).unwrap();
+
+    // A second session picks NEW GAME (fresh blocks, never continued) and
+    // quits from the overworld: nothing may be written.
+    let fresh = new_game_phase();
+    assert!(
+        save_on_exit(&AppScene::Overworld(Box::new(fresh)), &slot).is_none(),
+        "a refused exit write must report nothing-to-save, not success"
+    );
+    assert_eq!(
+        std::fs::read(temp.path()).unwrap(),
+        original,
+        "the unconsented NEW GAME session must leave the save byte-identical"
+    );
+
+    // A *continued* session is updating the very save it loaded, so its
+    // exit write proceeds.
+    let saved = slot.load();
+    let map = saved_map_id(&saved.block1).expect("the saved location must resolve");
+    let mut resumed = OverworldPhase::from_saved(
+        crate::overworld::tests::synthetic_scene(10, 10),
+        map,
+        saved.block1,
+        saved.block2,
+    );
+    // Not `play_a_bit`: its fixture asserts the running-shoes flag starts
+    // clear, and a resumed save already carries it. Any visible change
+    // proves the write happened.
+    resumed.save1.money = 4_321;
+    save_on_exit(&AppScene::Overworld(Box::new(resumed)), &slot)
+        .expect("a continued session's exit write is armed")
+        .expect("writing the scratch save file must succeed");
+    assert_ne!(
+        std::fs::read(temp.path()).unwrap(),
+        original,
+        "the continued session's write really replaced the image"
+    );
 }

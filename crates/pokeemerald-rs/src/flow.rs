@@ -42,7 +42,7 @@ use engine::save::SaveFileError;
 use platform::{ButtonState, Buttons, Frame};
 
 use crate::frame::to_platform_frame;
-use crate::game_save::{SaveSlot, SavedGame};
+use crate::game_save::{SaveSlot, SavedGame, StoreOutcome};
 use crate::intro::{self, IntroScene, IntroStatus};
 use crate::main_menu::{self, MainMenuItem, MainMenuScene, MainMenuType};
 use crate::title::TitleScene;
@@ -183,19 +183,37 @@ const fn menu_action(item: MainMenuItem) -> MainMenuAction {
 /// returns `None` rather than writing the blocks a not-yet-started game
 /// would have, which would clobber a real save with a fresh one.
 ///
-/// **The known cost of the stand-in, stated rather than hidden:** starting a
-/// `NEW GAME` over an existing save and then quitting *does* overwrite that
-/// save, because reaching the overworld at all is enough to arm this write.
-/// Upstream cannot do that -- overwriting is gated on the player answering
-/// `gDifferentSaveFile`'s "there is already a saved file, is it okay to
-/// overwrite it?" prompt (`src/start_menu.c`) -- and neither should this
-/// port once the start-menu flow lands and makes saving explicit again.
+/// **What arms the write** (issue #214 review): a session that
+/// [`OverworldPhase::continued_from_save`] writes back unconditionally --
+/// it is updating the very save it loaded. A *new-game* session instead
+/// goes through [`SaveSlot::store_unless_foreign_save`], which refuses --
+/// file untouched, refusal logged -- when a continuable save this session
+/// never loaded is on disk. Upstream gates that exact overwrite on the
+/// player answering `gDifferentSaveFile`'s "there is already a saved file,
+/// is it okay to overwrite it?" prompt (`src/start_menu.c`); no prompt
+/// exists here yet, so the only consent-free cases are writing over
+/// nothing (`Empty`/`Corrupt`/`NoFlash`) and writing over what you
+/// continued from.
 pub(crate) fn save_on_exit(
     scene: &AppScene,
     save_slot: &SaveSlot,
 ) -> Option<Result<(), SaveFileError>> {
     match scene {
-        AppScene::Overworld(phase) => Some(save_slot.store(phase.save1(), phase.save2())),
+        AppScene::Overworld(phase) => {
+            if phase.continued_from_save() {
+                return Some(save_slot.store(phase.save1(), phase.save2()));
+            }
+            match save_slot.store_unless_foreign_save(phase.save1(), phase.save2()) {
+                Ok(StoreOutcome::Written) => Some(Ok(())),
+                Ok(StoreOutcome::RefusedExistingSave) => {
+                    eprintln!(
+                        "save: a saved game this session never loaded is on disk --                          refusing to overwrite it without upstream's confirmation                          prompt; the new game was not saved"
+                    );
+                    None
+                }
+                Err(err) => Some(Err(err)),
+            }
+        }
         AppScene::Title(_)
         | AppScene::MainMenu(_)
         | AppScene::Intro(_)

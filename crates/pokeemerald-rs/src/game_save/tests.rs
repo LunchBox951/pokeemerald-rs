@@ -251,3 +251,56 @@ fn a_failed_boot_read_disables_saving_even_after_the_medium_recovers() {
         "the recovered save must be byte-identical -- this session never loaded it"
     );
 }
+
+// -- the exit-write consent gate (issue #214 review) ----------------------
+
+#[test]
+fn a_new_game_store_refuses_to_overwrite_a_continuable_save() {
+    let temp = TempSave::new("consent-refuse");
+    let slot = temp.slot();
+    let block2 = SaveBlock2::default();
+    slot.store(
+        &SaveBlock1 {
+            money: 999,
+            ..SaveBlock1::default()
+        },
+        &block2,
+    )
+    .unwrap();
+    let original = std::fs::read(&temp.path).unwrap();
+
+    let outcome = slot
+        .store_unless_foreign_save(&SaveBlock1::default(), &block2)
+        .unwrap();
+    assert_eq!(outcome, super::StoreOutcome::RefusedExistingSave);
+    assert_eq!(
+        std::fs::read(&temp.path).unwrap(),
+        original,
+        "a refused store must leave the file byte-identical"
+    );
+}
+
+#[test]
+fn a_new_game_store_writes_over_nothing_and_over_a_corrupt_save() {
+    let temp = TempSave::new("consent-allow");
+    let slot = temp.slot();
+    let block2 = SaveBlock2::default();
+
+    // Nothing on disk: `Empty` is not continuable, so the write proceeds.
+    let outcome = slot
+        .store_unless_foreign_save(&SaveBlock1::default(), &block2)
+        .unwrap();
+    assert_eq!(outcome, super::StoreOutcome::Written);
+
+    // A corrupted image is not continuable either -- there is no save left
+    // to protect, exactly the case upstream's HAS_NO_SAVED_GAME menu
+    // already treats as fresh ground.
+    let mut image = std::fs::read(&temp.path).unwrap();
+    let written_sector = image.len() / 2;
+    image[written_sector] ^= 0xFF;
+    std::fs::write(&temp.path, &image).unwrap();
+    let outcome = slot
+        .store_unless_foreign_save(&SaveBlock1::default(), &block2)
+        .unwrap();
+    assert_eq!(outcome, super::StoreOutcome::Written);
+}

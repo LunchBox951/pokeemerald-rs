@@ -153,6 +153,18 @@ impl SavedGame {
     }
 }
 
+/// What [`SaveSlot::store_unless_foreign_save`] did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum StoreOutcome {
+    /// The blocks were rotated in and persisted.
+    Written,
+    /// The write was refused: a continuable save this session did not load
+    /// is on disk, and overwriting it needs the consent prompt upstream
+    /// gates on `gDifferentSaveFile` (`src/main_menu.c`), which this port
+    /// cannot show yet. The file was left byte-untouched.
+    RefusedExistingSave,
+}
+
 /// This session's save medium: the one file the game loads from at boot and
 /// writes back to.
 ///
@@ -269,6 +281,35 @@ impl SaveSlot {
         block1: &SaveBlock1,
         block2: &SaveBlock2,
     ) -> Result<(), SaveFileError> {
+        self.store_impl(block1, block2, false).map(|_| ())
+    }
+
+    /// [`SaveSlot::store`], except it **refuses** -- file untouched,
+    /// [`StoreOutcome::RefusedExistingSave`] -- when the image on disk
+    /// holds a continuable save ([`SaveFileStatus::menu_shows_continue`]).
+    ///
+    /// The new-game session's exit write (issue #214 review): a session
+    /// that did not continue from the save on disk has no consent to
+    /// replace it -- upstream asks first, through `gDifferentSaveFile`'s
+    /// "there is already a saved file" prompt -- so until a start-menu save
+    /// flow exists to ask with, the only safe policy is to keep the old
+    /// save. Checked *under the same inter-process lock as the write*, so
+    /// a save appearing between check and write (another instance's) is
+    /// protected too, not just one present at boot.
+    pub(crate) fn store_unless_foreign_save(
+        &self,
+        block1: &SaveBlock1,
+        block2: &SaveBlock2,
+    ) -> Result<StoreOutcome, SaveFileError> {
+        self.store_impl(block1, block2, true)
+    }
+
+    fn store_impl(
+        &self,
+        block1: &SaveBlock1,
+        block2: &SaveBlock2,
+        preserve_existing: bool,
+    ) -> Result<StoreOutcome, SaveFileError> {
         let file = self.file.as_ref().ok_or(SaveFileError::NoDataDirectory)?;
         // Exclusive across processes for the whole read-modify-write
         // cycle, so a concurrent instance can neither interleave its own
@@ -277,12 +318,16 @@ impl SaveSlot {
         let _guard = file.lock()?;
         let mut store = file.read()?.unwrap_or_else(SaveStore::new);
         // Recovers the counters the image was last written with; the
-        // returned blocks are the *previous* save's and are deliberately
-        // discarded: `HandleSavingData` overwrites a whole slot from RAM, it
-        // never merges.
-        drop(store.load());
+        // returned blocks are the *previous* save's and are discarded:
+        // `HandleSavingData` overwrites a whole slot from RAM, it never
+        // merges. The load's *status* is the consent check's input.
+        let existing = store.load();
+        if preserve_existing && SaveFileStatus::from_store(existing.status).menu_shows_continue() {
+            return Ok(StoreOutcome::RefusedExistingSave);
+        }
         store.save(block1, block2);
-        file.write(&store)
+        file.write(&store)?;
+        Ok(StoreOutcome::Written)
     }
 }
 

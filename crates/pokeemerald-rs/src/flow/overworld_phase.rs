@@ -202,6 +202,15 @@ pub(crate) struct OverworldPhase {
     /// [`crate::flow::wild_encounter::advance_wild_battle`] drives one turn
     /// per frame. See that module's docs for what "headless" means here.
     pub(super) wild_battle: Option<battle::Battle>,
+    /// Whether this session was entered through
+    /// [`Self::continue_saved_game`] -- i.e. its `save1`/`save2` began as
+    /// the save on disk rather than fresh new-game blocks. The exit-write
+    /// consent bit (issue #214 review): [`crate::flow::save_on_exit`]
+    /// overwrites unconditionally only for a continued session, and a
+    /// new-game session must never clobber a continuable save it did not
+    /// load -- upstream gates that on `gDifferentSaveFile`'s explicit
+    /// overwrite prompt, which this port cannot show yet.
+    continued_from_save: bool,
 }
 
 impl OverworldPhase {
@@ -358,6 +367,7 @@ impl OverworldPhase {
             wild_table_screen: None,
             party_lead: None,
             wild_battle: None,
+            continued_from_save: true,
         };
         phase.party_lead = Some(new_game::provisional_starter());
         phase
@@ -411,6 +421,7 @@ impl OverworldPhase {
             wild_table_screen: None,
             party_lead: None,
             wild_battle: None,
+            continued_from_save: false,
         }
     }
 
@@ -430,6 +441,14 @@ impl OverworldPhase {
     #[must_use]
     pub(crate) const fn save2(&self) -> &SaveBlock2 {
         &self.save2
+    }
+
+    /// Whether this session began by continuing the save on disk (struct
+    /// docs) -- the exit-write consent bit [`crate::flow::save_on_exit`]
+    /// branches on.
+    #[must_use]
+    pub(crate) const fn continued_from_save(&self) -> bool {
+        self.continued_from_save
     }
 }
 
