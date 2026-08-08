@@ -226,6 +226,14 @@ use pack::{PackEntry, PackKind, PackWriter};
 /// `target/`, so it survives `cargo clean`.
 pub const OUTPUT_RELATIVE_PATH: &str = "assets-pack/pokeemerald.pack";
 
+/// Serializes the ignored tests that touch the one real, developer-local
+/// pack at [`OUTPUT_RELATIVE_PATH`]: `extract` rewrites it non-atomically
+/// while `record_snapshot`'s real-pack round-trip reads it, and the test
+/// harness runs ignored tests in parallel by default. Every ignored test
+/// that reads or writes that path must hold this lock for its whole body.
+#[cfg(test)]
+pub(crate) static REAL_PACK_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// A summary of a completed extraction, printed by `xtask`'s `main` and
 /// useful for tests.
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -552,6 +552,11 @@ fn default_paths_are_derived_without_capturing_into_the_repository() {
 #[test]
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
 fn real_pack_scene_round_trips_the_capture_and_matches_a_second_run() {
+    // Reads the real pack, which `extract_dispatch_succeeds_with_local_checkout`
+    // rewrites non-atomically -- exclude it (see `extract::REAL_PACK_LOCK`).
+    let _pack = crate::extract::REAL_PACK_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let output_dir = std::env::temp_dir().join(format!(
         "pokeemerald-rs-xtask-record-snapshot-real-pack-{}",
         std::process::id()

@@ -291,7 +291,9 @@ where
         }
         match std::fs::create_dir(&staged_dir) {
             Ok(()) => break (generation, staged_dir, generation_dir, pointer_tmp),
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            // Fall through to the next iteration (a bare `continue` here is
+            // `clippy::needless_continue`).
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
             Err(error) => {
                 return Err(RecordSnapshotError::Write(staged_dir, error.to_string()));
             }
@@ -415,9 +417,10 @@ fn fnv1a64(bytes: &[u8]) -> u64 {
 }
 
 /// Best-effort `git rev-parse HEAD` against `repo_root`, trimmed, with
-/// `-dirty` appended when the worktree has uncommitted changes. `None` on
-/// any failure (git missing from `PATH`, `repo_root` not a git checkout,
-/// non-UTF8 output) — [`run_with_paths`] falls back to the literal string
+/// `-dirty` appended when the worktree has uncommitted changes — or when
+/// `git status` itself fails, since an unverifiable worktree must not be
+/// vouched for as clean. `None` when no SHA is obtainable at all (git
+/// missing from `PATH`, `repo_root` not a git checkout, non-UTF8 output) — [`run_with_paths`] falls back to the literal string
 /// `"unknown"` rather than propagating an error: a missing SHA should never
 /// block a capture a developer is actively trying to record.
 ///
@@ -435,11 +438,13 @@ fn git_sha(repo_root: &Path) -> Option<String> {
     if sha.is_empty() {
         return None;
     }
-    // A failed/unavailable `status` must not lose the SHA we already have:
-    // fall back to reporting it clean rather than to `"unknown"`. `git`
-    // just answered `rev-parse`, so this is close to unreachable.
+    // A failed/unavailable `status` must not lose the SHA we already have,
+    // but it must not vouch for cleanliness either: a capture we cannot
+    // prove clean is treated as dirty, so a reviewer never blesses a hash
+    // the recorded SHA might not reproduce. `git` just answered
+    // `rev-parse`, so this is close to unreachable.
     let dirty = git_output(repo_root, &["status", "--porcelain"])
-        .is_some_and(|status| !status.trim().is_empty());
+        .is_none_or(|status| !status.trim().is_empty());
     if dirty {
         Some(format!("{sha}-dirty"))
     } else {

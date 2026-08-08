@@ -133,7 +133,7 @@ jobs:
       # and the smoke step that reads the pack.
       - name: Run ignored real-checkout assertions (xtask)
         if: runner.os == 'Linux'
-        run: cargo test -p xtask --features record-snapshot -- --ignored
+        run: cargo test -p xtask -- --ignored
       - name: Smoke E2E (pack present)
         if: runner.os == 'Linux'
         run: cargo run -p xtask --features smoke -- e2e --suite smoke

@@ -773,6 +773,11 @@ mod tests {
     #[test]
     #[ignore = "needs a local `./init.sh`-fetched pokeemerald/ checkout"]
     fn extract_dispatch_succeeds_with_local_checkout() {
+        // Rewrites the real pack -- exclude concurrent real-pack readers
+        // (see `extract::REAL_PACK_LOCK`).
+        let _pack = extract::REAL_PACK_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         run(&args(&["extract"])).expect("extract should succeed against a real checkout");
     }
 
