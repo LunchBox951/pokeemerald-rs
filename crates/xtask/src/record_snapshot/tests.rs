@@ -14,7 +14,12 @@
 
 use std::path::PathBuf;
 
-use super::{fnv1a64, git_sha, render_meta, run_with_paths, RecordSnapshotError};
+use assets::pack::AssetPack;
+
+use super::{
+    capture_loaded, default_paths, fnv1a64, git_sha, render_meta, run_with_paths,
+    RecordSnapshotError,
+};
 use crate::Scene;
 
 /// One directory entry for [`write_synthetic_pack`] (mirrors
@@ -76,6 +81,10 @@ fn palette_meta(color_count: u16) -> Vec<u8> {
 /// identical fixture for the field-by-field rationale (duplicated here
 /// rather than shared, module docs).
 fn synthetic_main_menu_pack_bytes() -> Vec<u8> {
+    synthetic_main_menu_pack_bytes_with_background(0x4104)
+}
+
+fn synthetic_main_menu_pack_bytes_with_background(background: u16) -> Vec<u8> {
     let frame_pixels = vec![1u8; 24 * 24];
     let mut frame_palette = vec![0u8; 32];
     frame_palette[2..4].copy_from_slice(&0x03E0u16.to_le_bytes()); // bright green
@@ -84,7 +93,7 @@ fn synthetic_main_menu_pack_bytes() -> Vec<u8> {
         vec![0u8; (assets::fonts::SHEET_WIDTH * assets::fonts::SHEET_HEIGHT) as usize];
 
     let mut bg_palette = vec![0u8; 32];
-    bg_palette[0..2].copy_from_slice(&0x4104u16.to_le_bytes()); // dark blue
+    bg_palette[0..2].copy_from_slice(&background.to_le_bytes());
 
     write_synthetic_pack(vec![
         Entry {
@@ -141,6 +150,13 @@ fn write_pack(name: &str) -> (PathBuf, ScratchGuard) {
     (path, guard)
 }
 
+fn visible_generation(output_dir: &std::path::Path, scene: Scene) -> Option<PathBuf> {
+    let pointer = output_dir.join(format!("{}.generation", scene.name()));
+    std::fs::read_to_string(pointer)
+        .ok()
+        .map(|generation| output_dir.join(generation.trim()))
+}
+
 // -- `fnv1a64` ------------------------------------------------------------
 
 #[test]
@@ -158,6 +174,11 @@ fn fnv1a64_matches_the_published_offset_basis_for_empty_input() {
     // string (no bytes ever XOR/multiply the seed) — pins the constant
     // against the published algorithm rather than just "some hash".
     assert_eq!(fnv1a64(&[]), 0xcbf2_9ce4_8422_2325);
+}
+
+#[test]
+fn fnv1a64_matches_the_published_non_empty_known_answer() {
+    assert_eq!(fnv1a64(b"a"), 0xaf63_dc4c_8601_ec8c);
 }
 
 // -- `git_sha` --------------------------------------------------------------
@@ -212,6 +233,7 @@ fn git_sha_marks_a_dirty_worktree_and_leaves_a_clean_one_bare() {
     // its own to inherit one from in a sandboxed CI environment.
     git(&["config", "user.email", "test@example.invalid"]);
     git(&["config", "user.name", "test"]);
+    git(&["config", "commit.gpgsign", "false"]);
     std::fs::write(repo.join("tracked.txt"), b"one").unwrap();
     git(&["add", "tracked.txt"]);
     git(&["commit", "--quiet", "-m", "initial"]);
@@ -354,14 +376,19 @@ fn main_menu_new_game_writes_a_full_frame_of_rgb_bytes_and_correct_metadata() {
     let pack_bytes = std::fs::read(&pack_path).unwrap();
     assert_eq!(report.pack_hash, format!("{:016x}", fnv1a64(&pack_bytes)));
 
-    // The `.tmp` siblings the write stages through must not survive a
-    // successful capture (`run_with_paths`' atomicity note).
+    let visible = visible_generation(&output_dir, Scene::MainMenuNewGame).unwrap();
+    assert_eq!(report.rgb_path.parent(), Some(visible.as_path()));
+    assert_eq!(report.meta_path.parent(), Some(visible.as_path()));
+
+    // No hidden staging directory or pointer temporary may survive a
+    // successful capture.
     let leftovers: Vec<PathBuf> = std::fs::read_dir(&output_dir)
         .unwrap()
         .map(|entry| entry.unwrap().path())
         .filter(|path| {
-            path.extension()
-                .is_some_and(|ext| ext.eq_ignore_ascii_case("tmp"))
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with('.'))
         })
         .collect();
     assert!(
@@ -373,35 +400,79 @@ fn main_menu_new_game_writes_a_full_frame_of_rgb_bytes_and_correct_metadata() {
 }
 
 #[test]
-fn a_failed_meta_write_publishes_no_orphaned_rgb() {
-    // The blessing workflow (`docs/snapshots.md`) reads the `.rgb`/`.meta`
-    // pair together, so a half-written capture must publish *neither*
-    // file: an orphaned `.rgb` next to a previous run's stale `.meta`
-    // would be blessed as if the metadata described those pixels
-    // `(gated-by-default)`.
-    //
-    // Forced by pre-creating a *directory* where the `.meta` staging file
-    // wants to go -- `fs::write` cannot truncate a directory, so the
-    // second staged write fails after the first has already succeeded,
-    // which is exactly the interleaving the two-file write has to survive.
-    let (pack_path, _pack_guard) = write_pack("failed-meta-write");
-    let output_dir = scratch_path("failed-meta-write-out");
-    let out_guard = ScratchGuard(output_dir.clone());
-    std::fs::create_dir_all(output_dir.join("main-menu-new-game.meta.tmp")).unwrap();
+fn replacing_the_pack_path_cannot_change_loaded_pack_provenance() {
+    let (pack_path, _pack_guard) = write_pack("loaded-pack-provenance");
+    let original_bytes = std::fs::read(&pack_path).unwrap();
+    let pack = AssetPack::load(&pack_path).unwrap();
 
-    let err = run_with_paths(Scene::MainMenuNewGame, &pack_path, &output_dir).unwrap_err();
+    let replacement = synthetic_main_menu_pack_bytes_with_background(0x001f);
+    assert_ne!(replacement, original_bytes);
+    std::fs::write(&pack_path, &replacement).unwrap();
+
+    let output_dir = scratch_path("loaded-pack-provenance-out");
+    let out_guard = ScratchGuard(output_dir.clone());
+    let report = capture_loaded(Scene::MainMenuNewGame, &pack, &output_dir, || Ok(())).unwrap();
+    let rgb = std::fs::read(&report.rgb_path).unwrap();
+
+    assert_eq!(
+        report.pack_hash,
+        format!("{:016x}", fnv1a64(&original_bytes))
+    );
+    assert_ne!(report.pack_hash, format!("{:016x}", fnv1a64(&replacement)));
+    assert_eq!(
+        &rgb[..3],
+        &[33, 66, 132],
+        "composition and provenance must both use the retained original buffer"
+    );
+
+    drop(out_guard);
+}
+
+#[test]
+fn failure_after_rgb_staging_preserves_the_visible_generation() {
+    let (pack_path, _pack_guard) = write_pack("failed-generation-commit");
+    let pack = AssetPack::load(&pack_path).unwrap();
+    let output_dir = scratch_path("failed-generation-commit-out");
+    let out_guard = ScratchGuard(output_dir.clone());
+
+    let injected_failure = || {
+        Err(RecordSnapshotError::Write(
+            output_dir.join("injected-after-rgb"),
+            "injected failure".to_owned(),
+        ))
+    };
+    let err =
+        capture_loaded(Scene::MainMenuNewGame, &pack, &output_dir, injected_failure).unwrap_err();
     assert!(matches!(err, RecordSnapshotError::Write(_, _)), "{err}");
     assert!(
-        !output_dir.join("main-menu-new-game.rgb").exists(),
-        "a failed capture must not publish a `.rgb` its `.meta` never described"
+        visible_generation(&output_dir, Scene::MainMenuNewGame).is_none(),
+        "an initial failure before the commit point must publish no generation"
     );
+
+    let previous = capture_loaded(Scene::MainMenuNewGame, &pack, &output_dir, || Ok(())).unwrap();
+    let pointer_path = output_dir.join("main-menu-new-game.generation");
+    let previous_pointer = std::fs::read(&pointer_path).unwrap();
+    let previous_rgb = std::fs::read(&previous.rgb_path).unwrap();
+    let previous_meta = std::fs::read(&previous.meta_path).unwrap();
+
+    let err = capture_loaded(Scene::MainMenuNewGame, &pack, &output_dir, || {
+        Err(RecordSnapshotError::Write(
+            output_dir.join("injected-after-rgb-again"),
+            "injected failure".to_owned(),
+        ))
+    })
+    .unwrap_err();
+    assert!(matches!(err, RecordSnapshotError::Write(_, _)), "{err}");
+    assert_eq!(std::fs::read(&pointer_path).unwrap(), previous_pointer);
+    assert_eq!(std::fs::read(&previous.rgb_path).unwrap(), previous_rgb);
+    assert_eq!(std::fs::read(&previous.meta_path).unwrap(), previous_meta);
     assert!(
-        !output_dir.join("main-menu-new-game.meta").exists(),
-        "a failed capture must not publish a `.meta`"
-    );
-    assert!(
-        !output_dir.join("main-menu-new-game.rgb.tmp").exists(),
-        "the already-written staging file must be cleaned up on failure"
+        std::fs::read_dir(&output_dir).unwrap().all(|entry| !entry
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .starts_with('.')),
+        "failed staging artifacts must be cleaned up"
     );
 
     drop(out_guard);
@@ -469,57 +540,13 @@ fn capturing_the_same_scene_twice_is_byte_identical() {
 }
 
 #[test]
-fn run_writes_under_the_default_repo_snapshots_directory() {
-    // `run` (not `run_with_paths`) must derive *both* of its default paths
-    // from `crate::extract::repo_root()`: the pack it reads
-    // (`assets-pack/pokeemerald.pack`) and the directory it writes
-    // (`snapshots/`). Which of the two this run can prove depends on
-    // whether a local pack exists -- but every environment proves one of
-    // them, and both branches name the directory/file literally, so
-    // renaming either default breaks this test rather than sliding
-    // through.
+fn default_paths_are_derived_without_capturing_into_the_repository() {
     let repo_root = crate::extract::repo_root();
     let expected_pack = repo_root.join(crate::extract::OUTPUT_RELATIVE_PATH);
     let expected_dir = repo_root.join("snapshots");
-
-    match super::run(Scene::MainMenuNewGame) {
-        // A real pack is present (e.g. a developer machine after `cargo
-        // xtask extract`): the capture succeeded, so pin where it landed.
-        // Pixel content is deliberately not asserted here -- that needs a
-        // real pack and lives in
-        // `real_pack_scene_round_trips_the_capture_and_matches_a_second_run`
-        // below.
-        Ok(report) => {
-            assert_eq!(
-                report.rgb_path,
-                expected_dir.join("main-menu-new-game.rgb"),
-                "`run` must write `<repo root>/snapshots/<scene>.rgb`"
-            );
-            assert_eq!(
-                report.meta_path,
-                expected_dir.join("main-menu-new-game.meta"),
-                "`run` must write `<repo root>/snapshots/<scene>.meta`"
-            );
-            assert!(report.rgb_path.is_file(), "the `.rgb` must really exist");
-            assert!(report.meta_path.is_file(), "the `.meta` must really exist");
-        }
-        // No local pack (CI, or a fresh clone before `cargo xtask
-        // extract`): must fail closed, and the error must name the exact
-        // default pack path -- proving `run` really did look there rather
-        // than at some other (or empty) path.
-        Err(RecordSnapshotError::Pack(assets::pack::PackError::NotFound(path))) => {
-            assert_eq!(
-                path, expected_pack,
-                "`run` must default to `<repo root>/assets-pack/pokeemerald.pack`"
-            );
-            // That a failed capture writes nothing at all is
-            // `missing_pack_fails_closed_with_pack_error`'s job -- asserted
-            // there against a scratch directory, where "empty" is
-            // unambiguous, rather than here against a shared repo-root
-            // directory a developer may have left captures in.
-        }
-        Err(other) => panic!("unexpected `run` failure: {other}"),
-    }
+    let (pack_path, output_dir) = default_paths(&repo_root);
+    assert_eq!(pack_path, expected_pack);
+    assert_eq!(output_dir, expected_dir);
 }
 
 #[test]

@@ -32,23 +32,25 @@
 //! other scene's `inputs` list is empty, honestly reflecting a static
 //! boot-state capture rather than a replayed session.
 //!
-//! # Capture format — two files, no new dependency
+//! # Capture format — one generation pointer, two payload files
 //!
 //! A PNG encoder would be a new Cargo dependency (`minimal-deps` forbids
 //! that without owner approval), so [`run`] writes raw pixel bytes instead:
 //!
-//! - `<scene>.rgb` — [`SCREEN_WIDTH`] x [`SCREEN_HEIGHT`] pixels, row-major,
-//!   3 bytes per pixel (R, G, B) — the composed frame's
+//! - `<scene>.generation` — the atomically replaced commit point naming one
+//!   complete generation directory.
+//! - `<generation>/<scene>.rgb` — [`SCREEN_WIDTH`] x [`SCREEN_HEIGHT`]
+//!   pixels, row-major, 3 bytes per pixel (R, G, B) — the composed frame's
 //!   `platform::Frame` `0x00RRGGBB` `u32`s split into their three
 //!   channel bytes (never naming `platform::Frame` directly, mirroring
 //!   `crate::e2e`'s own "stay on the `pokeemerald-rs` dependency, not
 //!   `platform`" reasoning).
-//! - `<scene>.meta` — plain UTF-8 text, one `key: value` line per field, in
-//!   a fixed order (see [`render_meta`]): `scene`, `width`, `height`,
+//! - `<generation>/<scene>.meta` — plain UTF-8 text, one `key: value` line
+//!   per field, in a fixed order (see [`render_meta`]): `scene`, `width`, `height`,
 //!   `pixel_format`, `inputs`, `rgb_hash`, `pack_hash`, `git_sha`.
 //!
-//! Deliberately two files rather than one framed container: a reviewer (or
-//! `diff`/`cmp`) can compare pixel payloads byte-for-byte without parsing
+//! Deliberately two payload files rather than one framed container: a
+//! reviewer (or `diff`/`cmp`) can compare pixel payloads byte-for-byte without parsing
 //! anything. `rgb_hash` — [`fnv1a64`] of the `.rgb` file's own bytes — is
 //! the value `docs/snapshots.md`'s blessing workflow actually tracks per
 //! scene, independent of `pack_hash` (provenance: which pack state produced
@@ -57,16 +59,19 @@
 //!
 //! # Determinism
 //!
-//! Both files' bytes are a pure function of the pack's own bytes and the
-//! selected [`Scene`], plus the ambient git SHA (with a `-dirty` marker when
-//! the worktree has uncommitted changes — [`git_sha`]) — no timestamp, no
-//! RNG, no wall-clock read anywhere in this module. The `.rgb`/`.meta` pair
-//! is staged through `.tmp` siblings and renamed into place, so a partial
-//! failure never publishes a `.rgb` the blessing workflow would pair with a
-//! stale `.meta` ([`run_with_paths`]). `rgb_hash`/`pack_hash` are both
+//! In a clean worktree, both payload files' bytes are a pure function of the
+//! loaded pack bytes and selected [`Scene`], plus the ambient git SHA — no
+//! timestamp, RNG, or wall-clock read. A dirty capture records only a generic
+//! `-dirty` marker and is not promised to be reproducible from the named
+//! commit. A complete versioned pair is staged first and becomes visible only
+//! when its single generation pointer is atomically replaced, so interruption
+//! before that commit point preserves the previous visible pair
+//! ([`run_with_paths`]). `rgb_hash`/`pack_hash` are both
 //! [`fnv1a64`] (a small, owned, `std`-only hash — not a `sha2` dependency
-//! this module has no cryptographic need for); `pack_hash` covers the whole
-//! pack file's bytes, not just the entries this scene reads: two packs that
+//! this module has no cryptographic need for); they are change-detection
+//! signals, not proof of byte identity. `pack_hash` covers the exact retained
+//! buffer used to compose the scene, not a second read of its path, and not
+//! just the entries this scene reads: two packs that
 //! decode identically for one scene but differ elsewhere must still be told
 //! apart, since a future bug in an unrelated extractor could otherwise go
 //! unnoticed by this capture's own hash.
@@ -106,11 +111,6 @@ pub enum RecordSnapshotError {
     /// `MainMenuSceneError` — folded to a `String` here so this enum does
     /// not need a variant per scene type).
     Scene(String),
-    /// Reading the pack's own bytes (for [`fnv1a64`] hashing) failed after
-    /// [`AssetPack::load`] already succeeded — practically unreachable
-    /// (the file was just read), but a real I/O race is possible. Carries
-    /// the path and the underlying error's rendered message.
-    ReadPack(PathBuf, String),
     /// Creating the output directory, or writing the `.rgb`/`.meta` file,
     /// failed. Carries the path and the underlying error's rendered
     /// message.
@@ -122,13 +122,6 @@ impl fmt::Display for RecordSnapshotError {
         match self {
             Self::Pack(err) => write!(f, "record-snapshot: {err}"),
             Self::Scene(msg) => write!(f, "record-snapshot: scene failed to build: {msg}"),
-            Self::ReadPack(path, msg) => {
-                write!(
-                    f,
-                    "record-snapshot: reading pack {} failed: {msg}",
-                    path.display()
-                )
-            }
             Self::Write(path, msg) => {
                 write!(
                     f,
@@ -193,9 +186,17 @@ pub struct Report {
 /// See [`run_with_paths`].
 pub fn run(scene: Scene) -> Result<Report, RecordSnapshotError> {
     let repo_root = crate::extract::repo_root();
-    let pack_path = repo_root.join(crate::extract::OUTPUT_RELATIVE_PATH);
-    let output_dir = repo_root.join("snapshots");
+    let (pack_path, output_dir) = default_paths(&repo_root);
     run_with_paths(scene, &pack_path, &output_dir)
+}
+
+/// Derive [`run`]'s two repository-relative paths without reading or writing
+/// either location.
+fn default_paths(repo_root: &Path) -> (PathBuf, PathBuf) {
+    (
+        repo_root.join(crate::extract::OUTPUT_RELATIVE_PATH),
+        repo_root.join("snapshots"),
+    )
 }
 
 /// [`run`], parameterized over the pack and output paths — split out so
@@ -209,53 +210,45 @@ pub fn run(scene: Scene) -> Result<Report, RecordSnapshotError> {
 /// [`RecordSnapshotError::Pack`] if `pack_path` does not exist or is not a
 /// well-formed pack; [`RecordSnapshotError::Scene`] if the pack loads but
 /// lacks (or misdecodes) the entries `scene` needs;
-/// [`RecordSnapshotError::ReadPack`] if the pack's bytes cannot be re-read
-/// for hashing; [`RecordSnapshotError::Write`] if `output_dir` cannot be
-/// created or either output file cannot be written.
+/// [`RecordSnapshotError::Write`] if `output_dir` cannot be created or the
+/// generation cannot be staged or committed.
 pub fn run_with_paths(
     scene: Scene,
     pack_path: &Path,
     output_dir: &Path,
 ) -> Result<Report, RecordSnapshotError> {
     let pack = AssetPack::load(pack_path)?;
-    let (rgb_bytes, inputs) = compose(scene, &pack)?;
-    let rgb_hash = format!("{:016x}", fnv1a64(&rgb_bytes));
+    capture_loaded(scene, &pack, output_dir, || Ok(()))
+}
 
-    let pack_bytes = std::fs::read(pack_path)
-        .map_err(|e| RecordSnapshotError::ReadPack(pack_path.to_path_buf(), e.to_string()))?;
-    let pack_hash = format!("{:016x}", fnv1a64(&pack_bytes));
+/// Compose and publish from one already-loaded pack. The hook runs after the
+/// RGB payload is staged but before metadata or the generation pointer; tests
+/// use it to prove that failure at that boundary cannot change visibility.
+fn capture_loaded<F>(
+    scene: Scene,
+    pack: &AssetPack,
+    output_dir: &Path,
+    after_rgb_staged: F,
+) -> Result<Report, RecordSnapshotError>
+where
+    F: FnOnce() -> Result<(), RecordSnapshotError>,
+{
+    let (rgb_bytes, inputs) = compose(scene, pack)?;
+    let rgb_hash = format!("{:016x}", fnv1a64(&rgb_bytes));
+    let pack_hash = format!("{:016x}", fnv1a64(pack.bytes()));
     let git_sha = git_sha(&crate::extract::repo_root()).unwrap_or_else(|| "unknown".to_owned());
 
     std::fs::create_dir_all(output_dir)
         .map_err(|e| RecordSnapshotError::Write(output_dir.to_path_buf(), e.to_string()))?;
 
-    let rgb_path = output_dir.join(format!("{}.rgb", scene.name()));
-    let meta_path = output_dir.join(format!("{}.meta", scene.name()));
     let meta = render_meta(scene, &inputs, &rgb_hash, &pack_hash, &git_sha);
-
-    // Write both files to `.tmp` siblings first and only then rename them
-    // into place, so a capture that fails part-way can never leave a
-    // *valid-looking* half-capture behind. The blessing workflow
-    // (`docs/snapshots.md`) reads the pair — a `.rgb` whose companion
-    // `.meta` write failed would otherwise sit next to the *previous*
-    // run's stale `.meta`, and an operator diffing hashes would be
-    // blessing pixels against metadata that never described them. Both
-    // temporaries are written before either rename, and the `.meta`
-    // rename lands last, so the window in which `.rgb` is new and `.meta`
-    // is stale is one `rename(2)` wide rather than one whole frame
-    // composition + file write wide. (Same-directory renames are atomic
-    // on every platform this project targets; `write_then_rename` cleans
-    // up its own temporary on failure.)
-    let rgb_tmp = tmp_sibling(&rgb_path);
-    let meta_tmp = tmp_sibling(&meta_path);
-    let staged = write_temporaries(&rgb_tmp, &rgb_bytes, &meta_tmp, meta.as_bytes());
-    if let Err(err) = staged {
-        let _ = std::fs::remove_file(&rgb_tmp);
-        let _ = std::fs::remove_file(&meta_tmp);
-        return Err(err);
-    }
-    rename_into_place(&rgb_tmp, &rgb_path)?;
-    rename_into_place(&meta_tmp, &meta_path)?;
+    let (rgb_path, meta_path) = publish_generation(
+        scene,
+        output_dir,
+        &rgb_bytes,
+        meta.as_bytes(),
+        after_rgb_staged,
+    )?;
 
     Ok(Report {
         rgb_path,
@@ -267,44 +260,71 @@ pub fn run_with_paths(
     })
 }
 
-/// The staging path [`run_with_paths`] writes before renaming into place:
-/// `path` with `.tmp` appended (`main-menu-new-game.rgb.tmp`), so the
-/// temporary is a sibling in the same directory — a cross-directory rename
-/// is not guaranteed atomic (it may not even stay on one filesystem),
-/// which would defeat the whole point.
-///
-/// The suffix is appended to the *whole* file name rather than replacing
-/// the extension: `<scene>.tmp` for both files would have the two writes
-/// racing each other over one path.
-fn tmp_sibling(path: &Path) -> PathBuf {
-    let mut name = path.as_os_str().to_os_string();
-    name.push(".tmp");
-    PathBuf::from(name)
-}
-
-/// Write both staging files (see [`run_with_paths`]'s atomicity note).
-/// Split out so its caller can clean up *both* temporaries on the first
-/// failure with one error path.
-fn write_temporaries(
-    rgb_tmp: &Path,
+/// Stage an entire generation and publish it by atomically replacing one
+/// pointer. Versioned directories are never modified after publication, so a
+/// reader that resolves the pointer sees two files from one generation.
+fn publish_generation<F>(
+    scene: Scene,
+    output_dir: &Path,
     rgb_bytes: &[u8],
-    meta_tmp: &Path,
     meta_bytes: &[u8],
-) -> Result<(), RecordSnapshotError> {
-    std::fs::write(rgb_tmp, rgb_bytes)
-        .map_err(|e| RecordSnapshotError::Write(rgb_tmp.to_path_buf(), e.to_string()))?;
-    std::fs::write(meta_tmp, meta_bytes)
-        .map_err(|e| RecordSnapshotError::Write(meta_tmp.to_path_buf(), e.to_string()))
-}
+    after_rgb_staged: F,
+) -> Result<(PathBuf, PathBuf), RecordSnapshotError>
+where
+    F: FnOnce() -> Result<(), RecordSnapshotError>,
+{
+    use std::sync::atomic::{AtomicU64, Ordering};
 
-/// Move a staged temporary onto its final path, reporting the *final* path
-/// in any error (that is the path the caller asked for and the one
-/// `docs/snapshots.md` names).
-fn rename_into_place(tmp: &Path, final_path: &Path) -> Result<(), RecordSnapshotError> {
-    std::fs::rename(tmp, final_path).map_err(|e| {
-        let _ = std::fs::remove_file(tmp);
-        RecordSnapshotError::Write(final_path.to_path_buf(), e.to_string())
-    })
+    static NEXT_GENERATION: AtomicU64 = AtomicU64::new(0);
+    let (generation, staged_dir, generation_dir, pointer_tmp) = loop {
+        let generation = format!(
+            "{}.generation-{}-{}",
+            scene.name(),
+            std::process::id(),
+            NEXT_GENERATION.fetch_add(1, Ordering::Relaxed)
+        );
+        let staged_dir = output_dir.join(format!(".{generation}.staged"));
+        let generation_dir = output_dir.join(&generation);
+        let pointer_tmp = output_dir.join(format!(".{generation}.pointer"));
+        if generation_dir.exists() || pointer_tmp.exists() {
+            continue;
+        }
+        match std::fs::create_dir(&staged_dir) {
+            Ok(()) => break (generation, staged_dir, generation_dir, pointer_tmp),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => {
+                return Err(RecordSnapshotError::Write(staged_dir, error.to_string()));
+            }
+        }
+    };
+    let pointer_path = output_dir.join(format!("{}.generation", scene.name()));
+    let staged_rgb = staged_dir.join(format!("{}.rgb", scene.name()));
+    let staged_meta = staged_dir.join(format!("{}.meta", scene.name()));
+
+    let result = (|| {
+        std::fs::write(&staged_rgb, rgb_bytes)
+            .map_err(|e| RecordSnapshotError::Write(staged_rgb.clone(), e.to_string()))?;
+        after_rgb_staged()?;
+        std::fs::write(&staged_meta, meta_bytes)
+            .map_err(|e| RecordSnapshotError::Write(staged_meta.clone(), e.to_string()))?;
+        std::fs::rename(&staged_dir, &generation_dir)
+            .map_err(|e| RecordSnapshotError::Write(generation_dir.clone(), e.to_string()))?;
+        std::fs::write(&pointer_tmp, format!("{generation}\n"))
+            .map_err(|e| RecordSnapshotError::Write(pointer_tmp.clone(), e.to_string()))?;
+        std::fs::rename(&pointer_tmp, &pointer_path)
+            .map_err(|e| RecordSnapshotError::Write(pointer_path.clone(), e.to_string()))?;
+        Ok((
+            generation_dir.join(format!("{}.rgb", scene.name())),
+            generation_dir.join(format!("{}.meta", scene.name())),
+        ))
+    })();
+
+    if result.is_err() {
+        let _ = std::fs::remove_file(&pointer_tmp);
+        let _ = std::fs::remove_dir_all(&staged_dir);
+        let _ = std::fs::remove_dir_all(&generation_dir);
+    }
+    result
 }
 
 /// Build `scene` out of `pack`, compose its one captured frame, and pack it

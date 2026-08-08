@@ -10,23 +10,27 @@ That command (F-3, V-4) drives one of the real headless scenes
 `crates/xtask/src/record_snapshot.rs`'s module docs for the exact mechanism
 and error cases). The full `cargo run` form is the working one: the scene
 drivers sit behind an optional cargo feature (below), and the `cargo xtask`
-alias has no way to pass `--features`. Two files per scene:
+alias has no way to pass `--features`. Each visible generation has two files:
 
-- `<scene>.rgb` — raw `240x160`, 3-byte-per-pixel (R, G, B) row-major pixels.
+- `<generation>/<scene>.rgb` — raw `240x160`, 3-byte-per-pixel (R, G, B) row-major pixels.
   No PNG encoder: that would be a new Cargo dependency `(minimal-deps)`.
-- `<scene>.meta` — plain text: `scene`, `width`, `height`, `pixel_format`,
+- `<generation>/<scene>.meta` — plain text: `scene`, `width`, `height`, `pixel_format`,
   `inputs` (the scripted button presses the scene's state implies, or
   `none`), `rgb_hash`, `pack_hash` (both `fnv1a64`, a small owned hash — no
   `sha2` dependency), and `git_sha` — suffixed `-dirty` when the capture was
-  recorded with uncommitted changes in the worktree, so a hash that cannot
-  be reproduced from the recorded commit says so.
+  recorded with uncommitted changes in the worktree.
+- `<scene>.generation` — the single commit point naming the directory that
+  contains both visible payload files.
 
-Both files are a pure function of the pack's bytes, the scene, and the
-current commit — no timestamp, no RNG — so two captures of the same pack on
-the same commit are byte-identical. They are staged through `.tmp` siblings
-and renamed into place, so a failed capture leaves neither file rather than
-an orphaned `.rgb` beside a stale `.meta`. Available scene names: `title`,
-`main-menu-new-game`, `main-menu-option`.
+For a clean worktree, both payload files are a pure function of the retained
+pack bytes, the scene, and the current commit — no timestamp, no RNG — so two
+captures of the same pack on the same commit are byte-identical. `-dirty`
+does not identify the contents of uncommitted source files, so no equivalent
+reproducibility claim applies to dirty captures. A complete versioned pair is
+staged before one generation pointer is atomically replaced. Failure before
+that commit point therefore leaves the previous generation visible, or no
+generation on an initial capture; a mixed pair is never published. Available
+scene names: `title`, `main-menu-new-game`, `main-menu-option`.
 
 The `record-snapshot` feature is kept optional so a default `cargo build -p
 xtask` stays dependency-free (`crate::record_snapshot`'s module docs); it is
@@ -55,13 +59,15 @@ alone. The mechanism:
    `git_sha` it was blessed at, and the operator's name — a plain record a
    later PR (or the maintenance routine) can diff against, so a
    `snapshot-review-needed` item only needs fresh human attention when the
-   *current* `rgb_hash` no longer matches the last blessed one for that
-   scene.
+   *current* RGB bytes no longer match the last blessed reference bytes for
+   that scene. The non-cryptographic `rgb_hash` is a quick change-detection
+   signal only: a hash match must be followed by an exact byte comparison
+   before claiming pixel identity. If the reference bytes are unavailable,
+   human review remains required.
 
-A hash match against the table means "pixel-identical to what was already
-reviewed", not "reviewed" on its own — a scene with no blessed row yet has
-never been reviewed, however long its `record-snapshot` output has been
-byte-identical across runs.
+A hash mismatch proves the bytes changed; a hash match alone does not prove
+identity. A scene with no blessed row yet has never been reviewed, however
+long its `record-snapshot` output has been byte-identical across runs.
 
 ### Blessed snapshots
 

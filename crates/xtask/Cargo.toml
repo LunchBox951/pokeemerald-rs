@@ -24,10 +24,7 @@ pokeemerald-rs = { path = "../pokeemerald-rs", optional = true }
 # just `pokeemerald_rs::title::load_default`'s fixed-path convenience) so
 # its determinism/metadata tests can point at a scratch synthetic pack
 # instead of the one real, developer-local pack path -- see
-# `crate::record_snapshot`'s module docs. `assets` is itself std-only (see
-# its own `Cargo.toml`), and is already an implicit build dependency once
-# `pokeemerald-rs` is in the graph, so naming it here adds no new build
-# cost, only visibility.
+# `crate::record_snapshot`'s module docs.
 assets = { path = "../assets", optional = true }
 
 [features]
