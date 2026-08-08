@@ -318,6 +318,22 @@ fn a_file_of_the_wrong_length_is_rejected_by_length_not_silently_padded() {
 }
 
 #[test]
+fn an_oversized_file_is_rejected_after_a_bounded_read() {
+    let dir = TempDir::new("oversized");
+    let path = dir.join(SAVE_FILE_NAME);
+    std::fs::write(&path, vec![0u8; FLASH_IMAGE_LEN + 4096]).unwrap();
+
+    let err = SaveFile::at(&path).read().unwrap_err();
+    match err {
+        SaveFileError::BadLength { expected, got, .. } => {
+            assert_eq!(expected, FLASH_IMAGE_LEN);
+            assert_eq!(got, FLASH_IMAGE_LEN + 1);
+        }
+        other => panic!("expected a length rejection, got {other:?}"),
+    }
+}
+
+#[test]
 fn reading_a_directory_in_the_files_place_is_an_io_error_not_a_panic() {
     let dir = TempDir::new("isdir");
     let path = dir.join(SAVE_FILE_NAME);

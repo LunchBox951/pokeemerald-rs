@@ -67,7 +67,7 @@
 //! most the one sector being programmed — defeating the very fallback
 //! [`SaveStore::load`] exists to provide.
 
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 
 use super::store::{self, SaveStore};
@@ -218,9 +218,15 @@ pub fn data_dir_for(family: HostFamily, env: impl Fn(&str) -> Option<OsString>) 
             non_empty("HOME").map(|home| home.join("Library").join("Application Support"))
         }
         HostFamily::Xdg => non_empty("XDG_DATA_HOME")
-            .filter(|dir| dir.is_absolute())
+            .filter(|dir| is_absolute_xdg_path(dir.as_os_str()))
             .or_else(|| non_empty("HOME").map(|home| home.join(".local").join("share"))),
     }
+}
+
+/// Whether `path` is absolute under the XDG Base Directory Specification's
+/// POSIX path rules, independently of the platform running this binary.
+fn is_absolute_xdg_path(path: &OsStr) -> bool {
+    path.as_encoded_bytes().starts_with(b"/")
 }
 
 /// The save file's path for this host (module docs' priority order).
@@ -312,8 +318,10 @@ impl SaveFile {
     /// [`SaveFileError::BadLength`] if the file is not
     /// [`store::FLASH_IMAGE_LEN`] bytes.
     pub fn read(&self) -> Result<Option<SaveStore>, SaveFileError> {
-        let bytes = match std::fs::read(&self.path) {
-            Ok(bytes) => bytes,
+        use std::io::Read as _;
+
+        let file = match std::fs::File::open(&self.path) {
+            Ok(file) => file,
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
             Err(source) => {
                 return Err(SaveFileError::Read {
@@ -322,6 +330,20 @@ impl SaveFile {
                 })
             }
         };
+        let mut bytes = Vec::with_capacity(store::FLASH_IMAGE_LEN + 1);
+        file.take((store::FLASH_IMAGE_LEN + 1) as u64)
+            .read_to_end(&mut bytes)
+            .map_err(|source| SaveFileError::Read {
+                path: self.path.clone(),
+                source,
+            })?;
+        if bytes.len() != store::FLASH_IMAGE_LEN {
+            return Err(SaveFileError::BadLength {
+                path: self.path.clone(),
+                expected: store::FLASH_IMAGE_LEN,
+                got: bytes.len(),
+            });
+        }
         SaveStore::from_flash_image(&bytes)
             .map(Some)
             .ok_or_else(|| SaveFileError::BadLength {
