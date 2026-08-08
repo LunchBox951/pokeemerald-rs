@@ -813,6 +813,26 @@ mod tests {
         assert!(matches!(err, XtaskError::RecordSnapshotUnavailable));
     }
 
+    // The other half of the wiring proof, mirroring
+    // `extract_dispatch_fails_closed_without_local_checkout`: with the
+    // module compiled in, dispatch must really reach
+    // `record_snapshot::run` -- a stub arm that reported success would
+    // satisfy a gate with zero validation `(gated-by-default)`
+    // `(test-ratchet)`. Checked through the pack-missing error path so
+    // this runs (and fails a no-op mutation) in pack-free CI, and skips
+    // read-only on a dev box whose real pack would make `run` succeed --
+    // that full path is `record_snapshot`'s own ignored real-pack test.
+    #[test]
+    #[cfg(feature = "scenes")]
+    fn record_snapshot_dispatch_fails_closed_without_a_pack() {
+        if assets::pack::AssetPack::default_path().exists() {
+            return;
+        }
+        let err = run(&args(&["record-snapshot", "--scene", "title"])).unwrap_err();
+        assert!(matches!(err, XtaskError::RecordSnapshotFailed(_)));
+        assert!(err.to_string().contains("pack"));
+    }
+
     #[test]
     fn smoke_unavailable_display_names_the_feature_and_has_no_usage_tail() {
         let rendered = XtaskError::SmokeUnavailable.to_string();
