@@ -73,9 +73,14 @@ long its `record-snapshot` output has been byte-identical across runs.
 
 | Scene | Blessed `rgb_hash` | `git_sha` | Operator | Status |
 |---|---|---|---|---|
-| `main-menu-new-game` | `fnv1a64:a4cfe59245374632` | `e5b3784292ec3956389aab1dea5327d2d45ff947` | — | pending operator sign-off (issue #226 proving run; not yet reviewed against mGBA) |
+| `main-menu-new-game` | `fnv1a64:a4cfe59245374632` | `e5b3784292ec3956389aab1dea5327d2d45ff947-dirty` | — | pending operator sign-off (issue #226 proving run; non-reproducible dirty capture, not yet reviewed against mGBA) |
 
 The `main-menu-new-game` row exercises the loop end-to-end (issue #226's
 definition of done) but is deliberately **not** a blessed reference yet —
-no operator has compared it against mGBA. It stays `pending` until a human
-does; V-4 itself stays open until at least one row leaves that state.
+no operator has compared it against mGBA. Its capture was necessarily
+recorded with the then-uncommitted `record-snapshot` implementation in the
+tree (no clean commit containing the code existed before this table did),
+so the SHA is honestly `-dirty` and the row is **dirty evidence, not a
+reproducible reference**: the first post-merge re-capture at a clean SHA
+replaces it. It stays `pending` until a human reviews such a clean
+capture; V-4 itself stays open until at least one row leaves that state.
