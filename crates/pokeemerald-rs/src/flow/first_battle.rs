@@ -4,8 +4,8 @@
 //! Upstream reaches this battle through `CB2_StartFirstBattle`
 //! (`pokeemerald/src/battle_setup.c:930`-`:945`), which sets
 //! `gBattleTypeFlags = BATTLE_TYPE_FIRST_BATTLE` and hands off to
-//! `CB2_InitBattle`. From there `BattleMainCB2` (`src/battle_main.c:684`)
-//! calls `SetUpBattleVarsAndBirchZigzagoon`
+//! `CB2_InitBattle`. From there `CB2_InitBattleInternal`
+//! (`src/battle_main.c:684`) calls `SetUpBattleVarsAndBirchZigzagoon`
 //! (`src/battle_controllers.c:42`-`:76`), whose `BATTLE_TYPE_FIRST_BATTLE`
 //! branch (`:67`-`:72`) builds the enemy party's sole member:
 //!
