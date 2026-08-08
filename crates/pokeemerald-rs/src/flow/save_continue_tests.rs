@@ -102,6 +102,7 @@ struct Snapshot {
     map: assets::MapId,
     position: (i32, i32),
     facing: Direction,
+    elevation: u8,
     money: u32,
     running_shoes: bool,
     repel_steps: u16,
@@ -118,6 +119,7 @@ fn snapshot(phase: &OverworldPhase) -> Snapshot {
         map: phase.map_id,
         position: phase.player.position(),
         facing: phase.player.facing(),
+        elevation: phase.player.elevation(),
         money: phase.save1.money,
         running_shoes: flags.flag_get(FLAG_RECEIVED_RUNNING_SHOES).unwrap(),
         repel_steps: flags.var_get(VAR_REPEL_STEP_COUNT).unwrap(),
@@ -210,6 +212,16 @@ fn a_saved_game_reloads_into_an_overworld_phase_that_matches_it() {
         "the player must reload on the tile they saved on"
     );
     assert_eq!(after.map, before.map);
+    assert_eq!(
+        after.elevation, before.elevation,
+        "the resumed player must stand at the saved tile's own elevation"
+    );
+    assert_ne!(
+        after.elevation,
+        new_game::SPAWN_ELEVATION,
+        "the fixture must resume off the spawn elevation, or a hardcoded \
+         fallback in saved_tile_placement would pass this test"
+    );
     assert_eq!(after.money, 1_234);
     assert!(after.running_shoes, "the set flag must survive the save");
     assert_eq!(after.repel_steps, 37, "the set var must survive the save");
@@ -440,5 +452,35 @@ fn a_new_game_session_never_overwrites_a_save_it_did_not_continue() {
         std::fs::read(temp.path()).unwrap(),
         original,
         "the continued session's write really replaced the image"
+    );
+}
+
+/// `saved_tile_placement`'s one substitution, pinned (issue #214 review):
+/// a save standing on an `ELEVATION_MULTI_LEVEL` (15) tile resumes at
+/// `ELEVATION_TRANSITION`, exactly the `ObjectEventUpdateElevation`
+/// behaviour the warp path already applies -- never at the raw 15, which
+/// no walking player can legitimately hold. The ordinary-tile case (the
+/// fixture's uniform elevation 3) is pinned by the round-trip snapshot.
+#[test]
+fn continue_on_a_multi_level_tile_resumes_at_the_transition_elevation() {
+    use engine::overworld::{ELEVATION_MULTI_LEVEL, ELEVATION_TRANSITION};
+
+    let bridge_tile = (4_u16, 4_u16);
+    let scene = crate::overworld::tests::synthetic_scene_with_cell_elevation(
+        10,
+        10,
+        bridge_tile,
+        ELEVATION_MULTI_LEVEL,
+    );
+    let mut block1 = SaveBlock1::default();
+    block1.pos.x = i16::try_from(bridge_tile.0).unwrap();
+    block1.pos.y = i16::try_from(bridge_tile.1).unwrap();
+
+    let resumed =
+        OverworldPhase::from_saved(scene, new_game::SPAWN_MAP_ID, block1, SaveBlock2::default());
+    assert_eq!(
+        resumed.player.elevation(),
+        ELEVATION_TRANSITION,
+        "a multi-level tile must resume as a transition, not as raw {ELEVATION_MULTI_LEVEL}"
     );
 }

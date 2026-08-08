@@ -304,3 +304,28 @@ fn a_new_game_store_writes_over_nothing_and_over_a_corrupt_save() {
         .unwrap();
     assert_eq!(outcome, super::StoreOutcome::Written);
 }
+
+/// The save path really takes the inter-process lock (issue #214 review):
+/// `SaveFile::lock` is what creates the sibling `.lock` file, so its
+/// existence after a store proves the guard line ran -- deleting
+/// `store_impl`'s `file.lock()?` fails this test deterministically, where
+/// a thread-interleaving probe could only fail it probabilistically. The
+/// exclusion semantics themselves are pinned at the `SaveFile::lock`
+/// layer (`engine`'s own lock test).
+#[test]
+fn storing_takes_the_inter_process_lock() {
+    let temp = TempSave::new("lock-taken");
+    let slot = temp.slot();
+    slot.store(&SaveBlock1::default(), &SaveBlock2::default())
+        .unwrap();
+
+    let mut lock_path = temp.path.clone().into_os_string();
+    lock_path.push(".lock");
+    let lock_path = std::path::PathBuf::from(lock_path);
+    assert!(
+        lock_path.exists(),
+        "SaveSlot::store must acquire SaveFile::lock, which creates {}",
+        lock_path.display()
+    );
+    drop(std::fs::remove_file(lock_path));
+}

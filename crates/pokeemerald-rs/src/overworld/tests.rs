@@ -570,6 +570,43 @@ pub(crate) fn synthetic_scene_with_special_tiles(
     .expect("synthetic pack with special tiles should decode cleanly")
 }
 
+/// [`synthetic_scene`], but the cell at `pos` carries `elevation` instead
+/// of the fixture's uniform 3 (same metatile 0, walkable, `MB_NORMAL`).
+/// `crate::flow`'s save-continue tests use `ELEVATION_MULTI_LEVEL` (15)
+/// here to pin `saved_tile_placement`'s transition substitution -- a
+/// branch no uniform-elevation fixture can reach.
+pub(crate) fn synthetic_scene_with_cell_elevation(
+    width: u16,
+    height: u16,
+    pos: (u16, u16),
+    elevation: u8,
+) -> super::OverworldScene {
+    let mut entries = synthetic_overworld_pack_entries_for("general", width, height);
+    assert!(
+        pos.0 < width && pos.1 < height,
+        "elevated tile {pos:?} must lie inside the {width}x{height} fixture"
+    );
+    let cell = assets::MetatileCell {
+        metatile_id: 0,
+        collision: 0,
+        elevation,
+    }
+    .pack();
+    let grid = entries
+        .iter_mut()
+        .find(|e| e.id == "layout/map_test/map")
+        .expect("the general fixture always fabricates its own layout entry");
+    let idx = (usize::from(pos.1) * usize::from(width) + usize::from(pos.0)) * 2;
+    grid.payload[idx..idx + 2].copy_from_slice(&cell.to_le_bytes());
+    synthetic_scene_result(
+        write_synthetic_pack(entries),
+        "gTileset_General",
+        width,
+        height,
+    )
+    .expect("synthetic pack with an elevated cell should decode cleanly")
+}
+
 /// [`synthetic_scene`]'s fallible core, parameterized on the pack bytes and
 /// the layout's tileset symbol: writes the scratch pack, runs
 /// [`super::OverworldScene::from_pack`], and returns its result -- so

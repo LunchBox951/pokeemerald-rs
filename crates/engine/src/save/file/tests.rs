@@ -348,10 +348,14 @@ fn reading_a_directory_in_the_files_place_is_an_io_error_not_a_panic() {
 }
 
 /// `SaveFile::lock` really excludes a second locker until the guard drops
-/// (issue #214 review). Deterministic without timing: the first locker sets
-/// `released` immediately before dropping its guard, so if the second
-/// locker's `lock()` ever returned while the first still held it, the flag
-/// would read `false`.
+/// (issue #214 review). The first locker sets `released` immediately
+/// before dropping its guard, so a second `lock()` returning while the
+/// first is still held reads `false` and fails. Detection of a fully
+/// no-op `lock()` is scheduling-dependent (the contender could observe
+/// the flag after it was set anyway); the deterministic pin that the save
+/// path *takes* the lock at all lives with the caller
+/// (`pokeemerald_rs::game_save`'s `storing_takes_the_inter_process_lock`),
+/// leaving this test to assert the release *ordering*.
 #[test]
 fn the_save_lock_excludes_a_second_locker_until_dropped() {
     use std::sync::atomic::{AtomicBool, Ordering};
