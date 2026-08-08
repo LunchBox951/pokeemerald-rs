@@ -331,6 +331,21 @@ fn title_scene_against_a_main_menu_only_pack_fails_closed_with_scene_error() {
     assert!(matches!(err, RecordSnapshotError::Scene(_)));
 }
 
+/// [`super::TITLE_FRAME_INDEX`] must sit in the *visible* half of the
+/// "Press Start" blink: a frame from the invisible half (like frame 0)
+/// hash-matches even with the banner broken outright, so the blessing
+/// workflow could never catch a banner regression. Pinned through
+/// [`pokeemerald_rs::title::press_start_visible`] -- the cadence's source
+/// of truth -- rather than a local copy of the rule, so either a frame
+/// change here or a cadence change there fails this test loudly.
+#[test]
+fn the_title_capture_frame_has_press_start_visible() {
+    assert!(
+        pokeemerald_rs::title::press_start_visible(super::TITLE_FRAME_INDEX),
+        "TITLE_FRAME_INDEX must witness the Press Start banner"
+    );
+}
+
 // -- `run_with_paths`: the main-menu proving case ----------------------------
 
 #[test]

@@ -30,7 +30,12 @@ reproducibility claim applies to dirty captures. A complete versioned pair is
 staged before one generation pointer is atomically replaced. Failure before
 that commit point therefore leaves the previous generation visible, or no
 generation on an initial capture; a mixed pair is never published. Available
-scene names: `title`, `main-menu-new-game`, `main-menu-option`.
+scene names: `title`, `main-menu-new-game`, `main-menu-option`. The `title`
+scene captures **frame 16** of the idle title screen — a frame in the
+*visible* half of the "Press Start" blink, so the capture witnesses the
+banner; an operator reproducing it against mGBA should compare against a
+tick where "Press Start" is shown (`record_snapshot::TITLE_FRAME_INDEX`
+documents the cadence math).
 
 The `record-snapshot` feature is kept optional so a default `cargo build -p
 xtask` stays dependency-free (`crate::record_snapshot`'s module docs); it is

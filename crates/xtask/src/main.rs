@@ -230,8 +230,10 @@ impl Suite {
 /// mirrors [`Suite`] living outside the feature-gated [`e2e`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Scene {
-    /// The real title screen (`pokeemerald_rs::title`), captured at its
-    /// first composed frame.
+    /// The real title screen (`pokeemerald_rs::title`), captured at frame
+    /// 16 — a fixed frame inside the *visible* half of the "Press Start"
+    /// blink, so the capture witnesses the banner (see
+    /// `record_snapshot::TITLE_FRAME_INDEX` for the full rationale).
     Title,
     /// The no-save main menu (`pokeemerald_rs::main_menu`, issue #216) with
     /// its default selection, `NEW GAME`.
@@ -825,6 +827,13 @@ mod tests {
     #[test]
     #[cfg(feature = "scenes")]
     fn record_snapshot_dispatch_fails_closed_without_a_pack() {
+        // Hold the real-pack lock across the existence probe *and* the
+        // run: under `--include-ignored`, `extract_dispatch_succeeds_with_
+        // local_checkout` could otherwise create the pack between the two
+        // and turn the expected error into a success.
+        let _pack = extract::REAL_PACK_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if assets::pack::AssetPack::default_path().exists() {
             return;
         }
