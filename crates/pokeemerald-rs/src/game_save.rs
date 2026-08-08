@@ -163,6 +163,14 @@ pub(crate) enum StoreOutcome {
     /// gates on `gDifferentSaveFile` (`src/main_menu.c`), which this port
     /// cannot show yet. The file was left byte-untouched.
     RefusedExistingSave,
+    /// The write was refused: the save on disk has rotated past the state
+    /// this session loaded at boot (its `gSaveCounter` no longer matches),
+    /// i.e. another process saved in between, and writing would overwrite
+    /// that newer progress with this session's stale copy (issue #214
+    /// review). Upstream has no counterpart -- one cartridge, one game --
+    /// so refusal is this port's own conservative policy. The file was
+    /// left byte-untouched.
+    RefusedStaleSession,
 }
 
 /// This session's save medium: the one file the game loads from at boot and
@@ -181,6 +189,12 @@ pub(crate) enum StoreOutcome {
 #[derive(Debug)]
 pub(crate) struct SaveSlot {
     file: Option<SaveFile>,
+    /// The `gSaveCounter` the image held when this session last read or
+    /// wrote it -- the session's save *identity*. `None` until
+    /// [`SaveSlot::load`] establishes it (or when the medium is unusable).
+    /// [`SaveSlot::store`]'s stale-session check compares the disk's
+    /// current counter against this before overwriting anything.
+    session_counter: Option<u32>,
 }
 
 impl SaveSlot {
@@ -193,10 +207,16 @@ impl SaveSlot {
     /// is unset is strictly worse than one that offers `NEW GAME`.
     pub(crate) fn default_location() -> Self {
         match SaveFile::default_location() {
-            Ok(file) => Self { file: Some(file) },
+            Ok(file) => Self {
+                file: Some(file),
+                session_counter: None,
+            },
             Err(err) => {
                 eprintln!("save: {err} -- this session cannot load or save");
-                Self { file: None }
+                Self {
+                    file: None,
+                    session_counter: None,
+                }
             }
         }
     }
@@ -209,7 +229,10 @@ impl SaveSlot {
     /// type takes its file by value instead of resolving one internally.
     #[cfg(test)]
     pub(crate) fn at(file: SaveFile) -> Self {
-        Self { file: Some(file) }
+        Self {
+            file: Some(file),
+            session_counter: None,
+        }
     }
 
     /// `Save_ResetSaveCounters` + `LoadGameSave(SAVE_NORMAL)`
@@ -246,6 +269,10 @@ impl SaveSlot {
             }
         };
         let outcome = store.load();
+        // The loaded image's counter is this session's save identity: the
+        // stale-session check in `store_impl` refuses to overwrite a file
+        // that has rotated past it (another process saved in between).
+        self.session_counter = Some(store.save_counter());
         SavedGame {
             status: SaveFileStatus::from_store(outcome.status),
             block1: outcome.block1,
@@ -268,7 +295,9 @@ impl SaveSlot {
     ///
     /// An existing file that cannot be read back is *not* silently
     /// overwritten; see the module docs' `NoFlash` rule. Only the "no file
-    /// at all" case starts from a fresh [`engine::save::SaveStore`].
+    /// at all" case starts from a fresh [`engine::save::SaveStore`]. A file
+    /// whose rotation moved past what this session loaded is refused as
+    /// [`StoreOutcome::RefusedStaleSession`] rather than overwritten.
     ///
     /// # Errors
     ///
@@ -277,11 +306,11 @@ impl SaveSlot {
     /// by [`SaveSlot::load`]); otherwise whatever locking, reading back, or
     /// writing the image failed with.
     pub(crate) fn store(
-        &self,
+        &mut self,
         block1: &SaveBlock1,
         block2: &SaveBlock2,
-    ) -> Result<(), SaveFileError> {
-        self.store_impl(block1, block2, false).map(|_| ())
+    ) -> Result<StoreOutcome, SaveFileError> {
+        self.store_impl(block1, block2, false)
     }
 
     /// [`SaveSlot::store`], except it **refuses** -- file untouched,
@@ -297,7 +326,7 @@ impl SaveSlot {
     /// a save appearing between check and write (another instance's) is
     /// protected too, not just one present at boot.
     pub(crate) fn store_unless_foreign_save(
-        &self,
+        &mut self,
         block1: &SaveBlock1,
         block2: &SaveBlock2,
     ) -> Result<StoreOutcome, SaveFileError> {
@@ -305,7 +334,7 @@ impl SaveSlot {
     }
 
     fn store_impl(
-        &self,
+        &mut self,
         block1: &SaveBlock1,
         block2: &SaveBlock2,
         preserve_existing: bool,
@@ -320,13 +349,33 @@ impl SaveSlot {
         // Recovers the counters the image was last written with; the
         // returned blocks are the *previous* save's and are discarded:
         // `HandleSavingData` overwrites a whole slot from RAM, it never
-        // merges. The load's *status* is the consent check's input.
+        // merges. The load's *status* feeds the consent check, and the
+        // recovered counter feeds the stale-session check.
         let existing = store.load();
+        // The stale-session check (issue #214 review): a counter that
+        // moved past the one this session loaded means another process
+        // saved since -- overwriting would replace newer persisted
+        // progress with this session's stale copy. Gated on the disk
+        // image still being *continuable*: a corrupted or wiped file is
+        // not newer progress, and refusing to heal it would strand the
+        // one session still holding valid state. Only armed once `load`
+        // has established an identity; checked under the same lock as
+        // the write, so the comparison cannot itself race.
+        if let Some(loaded) = self.session_counter {
+            if store.save_counter() != loaded
+                && SaveFileStatus::from_store(existing.status).menu_shows_continue()
+            {
+                return Ok(StoreOutcome::RefusedStaleSession);
+            }
+        }
         if preserve_existing && SaveFileStatus::from_store(existing.status).menu_shows_continue() {
             return Ok(StoreOutcome::RefusedExistingSave);
         }
         store.save(block1, block2);
         file.write(&store)?;
+        // The write advanced the rotation; future stores in this session
+        // must expect the counter *we* just produced.
+        self.session_counter = Some(store.save_counter());
         Ok(StoreOutcome::Written)
     }
 }

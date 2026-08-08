@@ -39,7 +39,10 @@ impl Drop for TempSave {
 /// TRUE`. Built by hand because [`SaveSlot::default_location`] can only
 /// produce it on a host with no data-directory environment at all.
 fn no_flash_slot() -> SaveSlot {
-    SaveSlot { file: None }
+    SaveSlot {
+        file: None,
+        session_counter: None,
+    }
 }
 
 // -- `gSaveFileStatus` -> `tMenuType` (main_menu.c:641-670) ---------------
@@ -146,7 +149,7 @@ fn saving_without_a_resolvable_path_reports_it_rather_than_pretending_to_save() 
 #[test]
 fn consecutive_saves_advance_the_save_counter_and_alternate_slots() {
     let temp = TempSave::new("rotation");
-    let slot = temp.slot();
+    let mut slot = temp.slot();
     let block2 = SaveBlock2::default();
 
     let mut counters = Vec::new();
@@ -257,7 +260,7 @@ fn a_failed_boot_read_disables_saving_even_after_the_medium_recovers() {
 #[test]
 fn a_new_game_store_refuses_to_overwrite_a_continuable_save() {
     let temp = TempSave::new("consent-refuse");
-    let slot = temp.slot();
+    let mut slot = temp.slot();
     let block2 = SaveBlock2::default();
     slot.store(
         &SaveBlock1 {
@@ -283,7 +286,7 @@ fn a_new_game_store_refuses_to_overwrite_a_continuable_save() {
 #[test]
 fn a_new_game_store_writes_over_nothing_and_over_a_corrupt_save() {
     let temp = TempSave::new("consent-allow");
-    let slot = temp.slot();
+    let mut slot = temp.slot();
     let block2 = SaveBlock2::default();
 
     // Nothing on disk: `Empty` is not continuable, so the write proceeds.
@@ -315,7 +318,7 @@ fn a_new_game_store_writes_over_nothing_and_over_a_corrupt_save() {
 #[test]
 fn storing_takes_the_inter_process_lock() {
     let temp = TempSave::new("lock-taken");
-    let slot = temp.slot();
+    let mut slot = temp.slot();
     slot.store(&SaveBlock1::default(), &SaveBlock2::default())
         .unwrap();
 
@@ -328,4 +331,83 @@ fn storing_takes_the_inter_process_lock() {
         lock_path.display()
     );
     drop(std::fs::remove_file(lock_path));
+}
+
+/// The stale-session check (issue #214 review): when two sessions load the
+/// same save and both write on exit, the second writer must refuse rather
+/// than overwrite the first writer's newer persisted progress with its own
+/// stale in-memory copy. The counter this session loaded is its identity;
+/// a disk that rotated past it belongs to someone else's progress now.
+#[test]
+fn a_session_never_overwrites_progress_saved_after_its_own_load() {
+    let temp = TempSave::new("stale-session");
+    let block2 = SaveBlock2::default();
+
+    // A prior save both sessions will load.
+    let mut writer = temp.slot();
+    writer
+        .store(
+            &SaveBlock1 {
+                money: 100,
+                ..SaveBlock1::default()
+            },
+            &block2,
+        )
+        .unwrap();
+
+    // Both sessions boot-load the same image.
+    let mut session_a = temp.slot();
+    let mut session_b = temp.slot();
+    assert_eq!(session_a.load().status, SaveFileStatus::Ok);
+    assert_eq!(session_b.load().status, SaveFileStatus::Ok);
+
+    // Session B exits first: its write advances the rotation.
+    assert_eq!(
+        session_b
+            .store(
+                &SaveBlock1 {
+                    money: 200,
+                    ..SaveBlock1::default()
+                },
+                &block2,
+            )
+            .unwrap(),
+        super::StoreOutcome::Written
+    );
+    let after_b = std::fs::read(&temp.path).unwrap();
+
+    // Session A exits second: its identity is stale, so it must refuse and
+    // leave B's progress byte-identical.
+    assert_eq!(
+        session_a
+            .store(
+                &SaveBlock1 {
+                    money: 100,
+                    ..SaveBlock1::default()
+                },
+                &block2,
+            )
+            .unwrap(),
+        super::StoreOutcome::RefusedStaleSession
+    );
+    assert_eq!(std::fs::read(&temp.path).unwrap(), after_b);
+    assert_eq!(
+        temp.slot().load().block1.money,
+        200,
+        "the surviving save must be B's, the newest persisted progress"
+    );
+
+    // B itself can keep saving: its identity tracked its own write.
+    assert_eq!(
+        session_b
+            .store(
+                &SaveBlock1 {
+                    money: 300,
+                    ..SaveBlock1::default()
+                },
+                &block2,
+            )
+            .unwrap(),
+        super::StoreOutcome::Written
+    );
 }

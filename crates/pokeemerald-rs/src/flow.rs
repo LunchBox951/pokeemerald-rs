@@ -196,20 +196,30 @@ const fn menu_action(item: MainMenuItem) -> MainMenuAction {
 /// continued from.
 pub(crate) fn save_on_exit(
     scene: &AppScene,
-    save_slot: &SaveSlot,
+    save_slot: &mut SaveSlot,
 ) -> Option<Result<(), SaveFileError>> {
     match scene {
         AppScene::Overworld(phase) => {
-            if phase.continued_from_save() {
-                return Some(save_slot.store(phase.save1(), phase.save2()));
-            }
-            match save_slot.store_unless_foreign_save(phase.save1(), phase.save2()) {
+            let outcome = if phase.continued_from_save() {
+                save_slot.store(phase.save1(), phase.save2())
+            } else {
+                save_slot.store_unless_foreign_save(phase.save1(), phase.save2())
+            };
+            match outcome {
                 Ok(StoreOutcome::Written) => Some(Ok(())),
                 Ok(StoreOutcome::RefusedExistingSave) => {
                     eprintln!(
                         "save: a saved game this session never loaded is on disk -- \
                          refusing to overwrite it without upstream's confirmation \
                          prompt; the new game was not saved"
+                    );
+                    None
+                }
+                Ok(StoreOutcome::RefusedStaleSession) => {
+                    eprintln!(
+                        "save: the save on disk changed since this session loaded \
+                         it (another instance saved?) -- refusing to overwrite \
+                         newer progress with stale state; this session was not saved"
                     );
                     None
                 }

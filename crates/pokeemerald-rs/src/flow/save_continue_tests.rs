@@ -182,7 +182,7 @@ fn a_saved_game_reloads_into_an_overworld_phase_that_matches_it() {
     let before = snapshot(&phase);
 
     // The real write trigger, not a hand-rolled call to the store.
-    save_on_exit(&AppScene::Overworld(Box::new(phase)), &slot)
+    save_on_exit(&AppScene::Overworld(Box::new(phase)), &mut slot)
         .expect("the overworld has save state to write")
         .expect("writing the scratch save file must succeed");
 
@@ -265,7 +265,7 @@ fn the_most_recent_of_two_saves_is_the_one_that_reloads() {
     let mut phase = new_game_phase();
     play_a_bit(&mut phase);
     let first_position = phase.player.position();
-    save_on_exit(&AppScene::Overworld(Box::new(phase)), &slot)
+    save_on_exit(&AppScene::Overworld(Box::new(phase)), &mut slot)
         .unwrap()
         .unwrap();
 
@@ -290,7 +290,7 @@ fn the_most_recent_of_two_saves_is_the_one_that_reloads() {
         first_position, second_position,
         "the second session must end somewhere else, or this proves nothing"
     );
-    save_on_exit(&AppScene::Overworld(Box::new(phase)), &slot)
+    save_on_exit(&AppScene::Overworld(Box::new(phase)), &mut slot)
         .unwrap()
         .unwrap();
 
@@ -314,7 +314,7 @@ fn a_corrupt_save_offers_no_continue_and_falls_back_to_new_game() {
 
     let mut phase = new_game_phase();
     play_a_bit(&mut phase);
-    save_on_exit(&AppScene::Overworld(Box::new(phase)), &slot)
+    save_on_exit(&AppScene::Overworld(Box::new(phase)), &mut slot)
         .unwrap()
         .unwrap();
     assert!(slot.load().status.menu_shows_continue());
@@ -372,7 +372,7 @@ fn real_pack_continue_from_the_main_menu_restores_the_saved_game() {
     let mut phase = OverworldPhase::load_default().expect("run `cargo xtask extract` first");
     play_a_bit(&mut phase);
     let before = snapshot(&phase);
-    save_on_exit(&AppScene::Overworld(Box::new(phase)), &slot)
+    save_on_exit(&AppScene::Overworld(Box::new(phase)), &mut slot)
         .unwrap()
         .unwrap();
 
@@ -413,7 +413,7 @@ fn a_new_game_session_never_overwrites_a_save_it_did_not_continue() {
     // A real prior save on disk, written by its own session.
     let mut original_phase = new_game_phase();
     play_a_bit(&mut original_phase);
-    save_on_exit(&AppScene::Overworld(Box::new(original_phase)), &slot)
+    save_on_exit(&AppScene::Overworld(Box::new(original_phase)), &mut slot)
         .expect("the overworld has save state to write")
         .expect("writing the scratch save file must succeed");
     let original = std::fs::read(temp.path()).unwrap();
@@ -422,7 +422,7 @@ fn a_new_game_session_never_overwrites_a_save_it_did_not_continue() {
     // quits from the overworld: nothing may be written.
     let fresh = new_game_phase();
     assert!(
-        save_on_exit(&AppScene::Overworld(Box::new(fresh)), &slot).is_none(),
+        save_on_exit(&AppScene::Overworld(Box::new(fresh)), &mut slot).is_none(),
         "a refused exit write must report nothing-to-save, not success"
     );
     assert_eq!(
@@ -445,7 +445,7 @@ fn a_new_game_session_never_overwrites_a_save_it_did_not_continue() {
     // clear, and a resumed save already carries it. Any visible change
     // proves the write happened.
     resumed.save1.money = 4_321;
-    save_on_exit(&AppScene::Overworld(Box::new(resumed)), &slot)
+    save_on_exit(&AppScene::Overworld(Box::new(resumed)), &mut slot)
         .expect("a continued session's exit write is armed")
         .expect("writing the scratch save file must succeed");
     assert_ne!(

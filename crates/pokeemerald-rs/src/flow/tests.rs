@@ -376,7 +376,7 @@ fn save_on_exit_writes_nothing_outside_the_overworld() {
     ];
     for scene in &scenes {
         assert!(
-            save_on_exit(scene, &save_slot).is_none(),
+            save_on_exit(scene, &mut save_slot).is_none(),
             "only the overworld holds save state worth writing"
         );
     }

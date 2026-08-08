@@ -385,7 +385,7 @@ impl App {
             if let Some(Err(err)) = self
                 .scene
                 .as_ref()
-                .and_then(|scene| flow::save_on_exit(scene, &self.save_slot))
+                .and_then(|scene| flow::save_on_exit(scene, &mut self.save_slot))
             {
                 eprintln!("save: {err} -- the game was not saved on exit");
             }
