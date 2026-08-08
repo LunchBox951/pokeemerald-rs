@@ -255,11 +255,20 @@ fn git_sha_marks_a_dirty_worktree_and_leaves_a_clean_one_bare() {
 
 #[test]
 fn git_sha_is_none_for_a_path_with_no_git_repo() {
-    // The OS temp dir itself is (almost certainly) not inside a git
-    // checkout `-C` can walk up from into this repository's own history.
+    // The scratch dir must be its own repository *boundary*, not just an
+    // empty dir: git's discovery walks upward, so a `TMPDIR` configured
+    // beneath some enclosing checkout would otherwise resolve that repo's
+    // real HEAD and flip this assertion environment-dependently. A `.git`
+    // *file* whose gitdir pointer dangles stops the walk right here and
+    // guarantees "no usable repository at this path" everywhere.
     let scratch = scratch_path("not-a-repo");
     std::fs::create_dir_all(&scratch).unwrap();
     let guard = ScratchGuard(scratch.clone());
+    std::fs::write(
+        scratch.join(".git"),
+        b"gitdir: this-path-deliberately-does-not-exist\n",
+    )
+    .unwrap();
     assert!(git_sha(&scratch).is_none());
     drop(guard);
 }
