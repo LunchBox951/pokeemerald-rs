@@ -207,7 +207,9 @@ pub(crate) fn save_on_exit(
                 Ok(StoreOutcome::Written) => Some(Ok(())),
                 Ok(StoreOutcome::RefusedExistingSave) => {
                     eprintln!(
-                        "save: a saved game this session never loaded is on disk --                          refusing to overwrite it without upstream's confirmation                          prompt; the new game was not saved"
+                        "save: a saved game this session never loaded is on disk -- \
+                         refusing to overwrite it without upstream's confirmation \
+                         prompt; the new game was not saved"
                     );
                     None
                 }
