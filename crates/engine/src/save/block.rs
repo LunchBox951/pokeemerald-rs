@@ -299,10 +299,12 @@ impl SaveBlock1 {
     /// encrypting money and bag quantities with `encryption_key` and
     /// leaving all other bytes untouched. Deferred *encrypted* fields
     /// (coins, game stats, …) in `base` stay ciphertext under the key that
-    /// wrote them; that stays coherent because the key itself round-trips
-    /// unchanged through [`SaveBlock2`] — a future slice that re-keys must
-    /// re-encrypt them, as upstream `ApplyNewEncryptionKeyToAllEncryptedData`
-    /// does.
+    /// wrote them; that stays coherent only while the base and the key share
+    /// a lineage — the key round-trips unchanged through [`SaveBlock2`] on
+    /// every continued session. A caller that abandons that lineage (a new
+    /// game re-keying from scratch) must zero its base first rather than
+    /// reuse it, and a future slice that re-keys in place must re-encrypt,
+    /// as upstream `ApplyNewEncryptionKeyToAllEncryptedData` does.
     pub fn patch_bytes(&self, base: &mut [u8; Self::PAYLOAD_LEN], encryption_key: u32) {
         base[POSITION_OFFSET..POSITION_OFFSET + Coords16::LEN]
             .copy_from_slice(&self.pos.to_bytes());

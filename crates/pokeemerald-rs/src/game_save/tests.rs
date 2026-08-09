@@ -308,6 +308,113 @@ fn a_new_game_store_writes_over_nothing_and_over_a_corrupt_save() {
     assert_eq!(outcome, super::StoreOutcome::Written);
 }
 
+/// #230 review, second round: a NEW GAME written over a `Corrupt` image
+/// must not inherit the previous trainer's deferred bytes. `store_impl`'s
+/// pre-write load retains the corrupt image's still-validating sectors as
+/// the serialization base, so the `preserve_existing` (new-game) path
+/// zeroes that base first, exactly as upstream's `Sav2_ClearSetDefault`
+/// memsets `gSaveBlock1/2` before a new game's first save.
+#[test]
+fn a_new_game_over_a_corrupt_save_carries_no_deferred_bytes() {
+    use engine::save::{Sector, SECTOR_SIGNATURE, SECTOR_SIZE};
+
+    // Upstream's sector ids within a slot: SaveBlock2 is sector 0,
+    // SaveBlock1 fills sectors 1..=4.
+    const SECTOR_ID_SAVEBLOCK2: u16 = 0;
+    const SECTOR_ID_SAVEBLOCK1_FIRST: u16 = 1;
+    // A SaveBlock2 payload offset no field models yet (play-time region).
+    const B2_DEFERRED: usize = 0x10;
+
+    let temp = TempSave::new("newgame-corrupt-deferred");
+    let block2 = SaveBlock2 {
+        encryption_key: 0xDEAD_BEEF,
+        ..SaveBlock2::default()
+    };
+    {
+        // Two saves, so the newest slot (counter 2) has the parity the
+        // adopted counter 0 selects after corruption: `Corrupt` resets the
+        // counter to 0 and the copy pass still best-effort reads slot
+        // `0 % 2` -- the slot the deferred byte must sit in for the
+        // pre-write load to retain it.
+        let mut slot = temp.slot();
+        slot.store(&SaveBlock1::default(), &block2).unwrap(); // counter 1, slot 1
+        slot.store(&SaveBlock1::default(), &block2).unwrap(); // counter 2, slot 0
+    }
+
+    // Plant a deferred byte in the newest slot's (still checksum-valid)
+    // SaveBlock2 sector and break one SaveBlock1 sector's payload in
+    // *each* slot: the image resolves `Corrupt`, while its surviving
+    // sectors -- the planted one included -- individually validate, which
+    // is exactly what the pre-write load copies into the retained base.
+    let mut image = std::fs::read(&temp.path).unwrap();
+    let mut planted = false;
+    let mut damaged = 0;
+    for index in 0..image.len() / SECTOR_SIZE {
+        let start = index * SECTOR_SIZE;
+        let sector = Sector::from_bytes(image[start..start + SECTOR_SIZE].try_into().unwrap());
+        if sector.signature() != SECTOR_SIGNATURE {
+            continue;
+        }
+        if sector.id() == SECTOR_ID_SAVEBLOCK2 && sector.counter() == 2 {
+            let mut payload = block2.to_bytes();
+            payload[B2_DEFERRED] = 0x5A;
+            let replacement = Sector::write(SECTOR_ID_SAVEBLOCK2, &payload, sector.counter());
+            image[start..start + SECTOR_SIZE].copy_from_slice(replacement.as_bytes());
+            planted = true;
+        } else if sector.id() == SECTOR_ID_SAVEBLOCK1_FIRST {
+            image[start] ^= 0xFF; // break the payload checksum, not the footer
+            damaged += 1;
+        }
+    }
+    assert!(
+        planted && damaged == 2,
+        "the fixture must plant one sector and damage one per slot"
+    );
+    std::fs::write(&temp.path, &image).unwrap();
+
+    // A fresh session boots against the corrupt image -- the menu offers
+    // NEW GAME only -- and writes its new game over it.
+    let mut slot = temp.slot();
+    assert_eq!(slot.load().status, SaveFileStatus::Corrupt);
+    let outcome = slot
+        .store_unless_foreign_save(&SaveBlock1::default(), &SaveBlock2::default())
+        .unwrap();
+    assert_eq!(outcome, super::StoreOutcome::Written);
+
+    // The new game went to slot 1 (adopted counter 0 -> written counter 1);
+    // the wrecked old slot 0 remains, so the image reloads as the
+    // best-effort `Error` -- continuable -- with the *new game's* blocks.
+    let saved = temp.slot().load();
+    assert!(saved.status.menu_shows_continue());
+    assert_eq!(
+        saved.block2.encryption_key, 0,
+        "the loaded save is the new game, not the old trainer's"
+    );
+    // And the new game's own SaveBlock2 sector (counter 1) carries a
+    // zeroed deferred byte -- not the previous trainer's 0x5A.
+    let image = std::fs::read(&temp.path).unwrap();
+    let mut checked = 0;
+    for index in 0..image.len() / SECTOR_SIZE {
+        let start = index * SECTOR_SIZE;
+        let sector = Sector::from_bytes(image[start..start + SECTOR_SIZE].try_into().unwrap());
+        if sector.signature() == SECTOR_SIGNATURE
+            && sector.id() == SECTOR_ID_SAVEBLOCK2
+            && sector.counter() == 1
+        {
+            assert_eq!(
+                sector.data()[B2_DEFERRED],
+                0,
+                "a new game's deferred bytes start from zero"
+            );
+            checked += 1;
+        }
+    }
+    assert_eq!(
+        checked, 1,
+        "the rewritten image must hold exactly the new game's SaveBlock2 sector"
+    );
+}
+
 /// The save path really takes the inter-process lock (issue #214 review):
 /// `SaveFile::lock` is what creates the sibling `.lock` file, so its
 /// existence after a store proves the guard line ran -- deleting

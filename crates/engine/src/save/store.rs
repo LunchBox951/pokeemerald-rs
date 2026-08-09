@@ -338,6 +338,19 @@ impl SaveStore {
         self.last_written_sector
     }
 
+    /// Zero the retained serialization base — upstream `ClearSav1`/
+    /// `ClearSav2` (`Sav2_ClearSetDefault`, `pokeemerald/src/new_game.c`),
+    /// the wholesale `memset` a new game runs before its first save. A
+    /// session that did not adopt the loaded image's blocks must call this
+    /// before [`SaveStore::save`], or the previous trainer's deferred bytes
+    /// — play time, options, Pokédex state, ciphertext under a key this
+    /// session discarded — leak into the new game's slot
+    /// `(behavioral-fidelity)`.
+    pub fn clear_base(&mut self) {
+        self.base_block1.fill(0);
+        self.base_block2.fill(0);
+    }
+
     /// `gSaveCounter`'s current value, for tests/observability.
     #[must_use]
     pub const fn save_counter(&self) -> u32 {
@@ -897,6 +910,40 @@ mod tests {
         assert_eq!(reloaded.block2, block2);
         assert_eq!(reloaded.block1.money, block1.money);
         assert_eq!(reloaded.block1.bag, block1.bag);
+    }
+
+    /// The retention test's complement (#230 review, second round): a
+    /// session that never adopted the loaded blocks — a new game — calls
+    /// [`SaveStore::clear_base`], so the previous trainer's deferred bytes
+    /// do not ride into its first save.
+    #[test]
+    fn clear_base_drops_the_loaded_deferred_bytes_from_the_next_save() {
+        const B2_DEFERRED: usize = 0x10;
+
+        let block2 = sample_block2();
+        let mut store = SaveStore::new();
+        store.save(&sample_block1(), &block2); // slot 1, counter 1
+
+        let mut payload = block2.to_bytes();
+        payload[B2_DEFERRED] = 0x5A;
+        let sector = Sector::write(SECTOR_ID_SAVEBLOCK2, &payload, 1);
+        let pos = store.find_sector_in_slot(1, SECTOR_ID_SAVEBLOCK2);
+        store.write_physical(1, pos, &sector);
+
+        assert_eq!(store.load().status, SaveStatus::Ok);
+        assert_eq!(
+            store.base_block2[B2_DEFERRED], 0x5A,
+            "the deferred byte is retained before the clear"
+        );
+
+        store.clear_base();
+        store.save(&SaveBlock1::default(), &SaveBlock2::default());
+
+        assert_eq!(store.load().status, SaveStatus::Ok);
+        assert_eq!(
+            store.base_block2[B2_DEFERRED], 0,
+            "a cleared base writes zeroed deferred bytes"
+        );
     }
 
     #[test]

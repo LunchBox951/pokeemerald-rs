@@ -368,8 +368,21 @@ impl SaveSlot {
                 return Ok(StoreOutcome::RefusedStaleSession);
             }
         }
-        if preserve_existing && SaveFileStatus::from_store(existing.status).menu_shows_continue() {
-            return Ok(StoreOutcome::RefusedExistingSave);
+        if preserve_existing {
+            if SaveFileStatus::from_store(existing.status).menu_shows_continue() {
+                return Ok(StoreOutcome::RefusedExistingSave);
+            }
+            // A `preserve_existing` write is a session that never adopted
+            // the loaded image's blocks (the new-game path -- flow keys it
+            // off `continued_from_save`). Upstream zeroes `gSaveBlock1/2`
+            // wholesale before such a session's first save
+            // (`Sav2_ClearSetDefault` -> `ClearSav1`/`ClearSav2`), so the
+            // deferred bytes the pre-write `load` retained -- the previous
+            // trainer's play time, options, Pokédex, ciphertext under a
+            // discarded key -- must not ride along into this slot (#230
+            // review). A *continued* session keeps the retained base: that
+            // is exactly upstream's RAM after `CopySaveSlotData`.
+            store.clear_base();
         }
         store.save(block1, block2);
         file.write(&store)?;
