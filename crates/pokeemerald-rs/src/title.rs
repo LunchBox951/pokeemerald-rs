@@ -903,8 +903,14 @@ fn sprite_palette_from_refs(
 /// visible for 16 ticks, invisible for 16, repeating forever. The copyright
 /// banner has no equivalent function -- its `sAnimate` is never set, so per
 /// that same callback's `else` branch it is simply always visible.
+///
+/// Public because it is the cadence's source of truth: `xtask`'s
+/// `record-snapshot` pins its captured title frame into the visible half
+/// through this function rather than through a duplicated copy of the
+/// rule, so a cadence change here fails that pin instead of silently
+/// un-witnessing the banner.
 #[must_use]
-const fn press_start_visible(frame: u32) -> bool {
+pub const fn press_start_visible(frame: u32) -> bool {
     (frame.wrapping_add(1) & 16) != 0
 }
 

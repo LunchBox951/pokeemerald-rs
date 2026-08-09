@@ -226,6 +226,14 @@ use pack::{PackEntry, PackKind, PackWriter};
 /// `target/`, so it survives `cargo clean`.
 pub const OUTPUT_RELATIVE_PATH: &str = "assets-pack/pokeemerald.pack";
 
+/// Serializes the ignored tests that touch the one real, developer-local
+/// pack at [`OUTPUT_RELATIVE_PATH`]: `extract` rewrites it non-atomically
+/// while `record_snapshot`'s real-pack round-trip reads it, and the test
+/// harness runs ignored tests in parallel by default. Every ignored test
+/// that reads or writes that path must hold this lock for its whole body.
+#[cfg(test)]
+pub(crate) static REAL_PACK_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// A summary of a completed extraction, printed by `xtask`'s `main` and
 /// useful for tests.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -241,7 +249,11 @@ pub struct ExtractReport {
 /// The repository root, computed from this crate's own manifest directory
 /// (`crates/xtask`) rather than the process's current directory — robust
 /// regardless of where `cargo xtask extract` is invoked from.
-fn repo_root() -> PathBuf {
+///
+/// `pub(crate)`, not private: `crate::record_snapshot` (F-3, V-4) reuses it
+/// to find the same default pack path this module writes
+/// ([`OUTPUT_RELATIVE_PATH`]) rather than re-deriving it.
+pub(crate) fn repo_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .and_then(Path::parent)

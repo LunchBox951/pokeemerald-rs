@@ -177,6 +177,18 @@ impl AssetPack {
         Ok(Self { bytes, entries })
     }
 
+    /// Return the exact, complete byte buffer retained when this pack was
+    /// loaded.
+    ///
+    /// This is a read-only view of the same allocation every typed accessor
+    /// decodes. Callers that record pack provenance can therefore hash the
+    /// bytes actually used for decoding without reopening the source path and
+    /// racing a replacement of that file.
+    #[must_use]
+    pub fn bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+
     /// Binary-search the (id-sorted, per the format's determinism
     /// guarantee) directory for `id`.
     fn find(&self, id: &str) -> Result<&Entry, PackError> {
