@@ -254,6 +254,15 @@ pub struct SaveStore {
     /// `gSaveCounter` — incremented on every full-slot write; its parity
     /// selects which physical slot gets written/read.
     save_counter: u32,
+    /// The raw [`SaveBlock1`] payload the last [`SaveStore::load`] decoded
+    /// from (zero-filled before any load), kept current by
+    /// [`SaveStore::save`]. The serialization base modeled fields are
+    /// patched into, so bytes no field models yet survive a save/load round
+    /// trip — upstream rewrites the whole `gSaveBlock1` from RAM and never
+    /// forgets what it hasn't touched `(behavioral-fidelity)`.
+    base_block1: Box<[u8; SaveBlock1::PAYLOAD_LEN]>,
+    /// [`SaveStore::base_block1`]'s [`SaveBlock2`] counterpart.
+    base_block2: Box<[u8; SaveBlock2::PAYLOAD_LEN]>,
 }
 
 impl Default for SaveStore {
@@ -276,6 +285,8 @@ impl SaveStore {
             buffer: vec![0xFFu8; FLASH_IMAGE_LEN],
             last_written_sector: 0,
             save_counter: 0,
+            base_block1: Box::new([0u8; SaveBlock1::PAYLOAD_LEN]),
+            base_block2: Box::new([0u8; SaveBlock2::PAYLOAD_LEN]),
         }
     }
 
@@ -316,6 +327,8 @@ impl SaveStore {
             buffer: image.to_vec(),
             last_written_sector: 0,
             save_counter: 0,
+            base_block1: Box::new([0u8; SaveBlock1::PAYLOAD_LEN]),
+            base_block2: Box::new([0u8; SaveBlock2::PAYLOAD_LEN]),
         })
     }
 
@@ -380,8 +393,15 @@ impl SaveStore {
     /// physical position rotated by the new `gLastWrittenSector` within
     /// whichever physical slot `gSaveCounter % NUM_SAVE_SLOTS` now selects.
     pub fn save(&mut self, block1: &SaveBlock1, block2: &SaveBlock2) {
-        let block2_bytes = block2.to_bytes();
-        let block1_bytes = block1.to_bytes(block2.encryption_key);
+        // Patch the modeled fields into the payloads the last load decoded
+        // from (zero fill before any load) rather than serializing from
+        // scratch, so deferred bytes — play time, options, Pokédex state, …
+        // — survive the rotation instead of being zeroed out of the newest
+        // valid slot.
+        let mut block2_bytes = self.base_block2.clone();
+        let mut block1_bytes = self.base_block1.clone();
+        block2.patch_bytes(&mut block2_bytes);
+        block1.patch_bytes(&mut block1_bytes, block2.encryption_key);
 
         let new_last_written_sector = (self.last_written_sector + 1) % SECTORS_PER_SLOT_U16;
         let new_save_counter = self.save_counter.wrapping_add(1);
@@ -389,10 +409,10 @@ impl SaveStore {
 
         for sector_id in 0..SECTORS_PER_SLOT_U16 {
             let data: &[u8] = if sector_id == SECTOR_ID_SAVEBLOCK2 {
-                &block2_bytes
+                &block2_bytes[..]
             } else {
                 let chunk_num = (sector_id - SECTOR_ID_SAVEBLOCK1_START) as usize;
-                chunk_of(&block1_bytes, chunk_num)
+                chunk_of(&block1_bytes[..], chunk_num)
             };
             let physical_in_slot =
                 ((sector_id + new_last_written_sector) % SECTORS_PER_SLOT_U16) as usize;
@@ -402,6 +422,10 @@ impl SaveStore {
 
         self.last_written_sector = new_last_written_sector;
         self.save_counter = new_save_counter;
+        // The patched payloads are now the newest slot's on-disk truth —
+        // adopt them as the base for the next save.
+        self.base_block1 = block1_bytes;
+        self.base_block2 = block2_bytes;
     }
 
     /// Scan one physical slot's sectors, mirroring the per-slot loop inside
@@ -502,8 +526,8 @@ impl SaveStore {
         // means keying off the adopted counter here `(behavioral-fidelity)`.
         let copy_slot = (self.save_counter % NUM_SAVE_SLOTS_U32) as usize;
 
-        let mut block2_bytes = vec![0u8; SaveBlock2::PAYLOAD_LEN];
-        let mut block1_bytes = vec![0u8; SaveBlock1::PAYLOAD_LEN];
+        let mut block2_bytes = Box::new([0u8; SaveBlock2::PAYLOAD_LEN]);
+        let mut block1_bytes = Box::new([0u8; SaveBlock1::PAYLOAD_LEN]);
         // Which SaveBlock1 chunks were copied from a validating sector. A
         // chunk left `false` keeps `block1_bytes`' zero fill, which — under a
         // recovered nonzero key — would XOR-decrypt to `key`/`low16(key)`
@@ -568,7 +592,7 @@ impl SaveStore {
         // out-of-range gender byte, matching upstream `CopySaveSlotData`.
         let (block2, key_recovered) = if block2_sector_valid {
             (
-                SaveBlock2::from_bytes(&block2_bytes).unwrap_or_default(),
+                SaveBlock2::from_bytes(&block2_bytes[..]).unwrap_or_default(),
                 true,
             )
         } else {
@@ -602,7 +626,7 @@ impl SaveStore {
         }
 
         let mut block1 =
-            SaveBlock1::from_bytes(&block1_bytes, block2.encryption_key).unwrap_or_default();
+            SaveBlock1::from_bytes(&block1_bytes[..], block2.encryption_key).unwrap_or_default();
 
         // Mirror of the re-seed pass above, for the opposite failure: no
         // usable key was recovered (the SaveBlock2 sector was missing/corrupt,
@@ -629,6 +653,12 @@ impl SaveStore {
                 slot.quantity = 0;
             }
         }
+
+        // Retain the exact payload bytes the blocks were decoded from as
+        // the base [`SaveStore::save`] patches modeled fields into —
+        // deferred bytes in a loaded save must survive the next rotation.
+        self.base_block1 = block1_bytes;
+        self.base_block2 = block2_bytes;
 
         LoadOutcome {
             status,
@@ -811,6 +841,62 @@ mod tests {
                 .var_get(crate::event_data::VARS_START),
             Ok(777)
         );
+    }
+
+    /// Issue #230's Codex P1 review scenario: nonzero bytes in *deferred*
+    /// regions — play time in [`SaveBlock2`]; coins, Pokédex, PC storage in
+    /// [`SaveBlock1`] — must survive a load → save rotation. `save` patches the
+    /// modeled fields into the payloads `load` decoded from; serializing
+    /// from a zeroed buffer instead would silently strip every deferred
+    /// byte from the newest valid slot while its checksums stay green.
+    #[test]
+    fn a_rotation_preserves_deferred_bytes_the_model_does_not_own() {
+        const B2_DEFERRED: usize = 0x10; // play-time region: modeled nowhere yet
+        const B1_DEFERRED_CHUNK0: usize = 0x100; // between the warps and the party
+        const B1_DEFERRED_CHUNK2: usize = 0x2000; // deep in the PC-storage span
+
+        let block1 = sample_block1();
+        let block2 = sample_block2();
+        let mut store = SaveStore::new();
+        store.save(&block1, &block2); // slot 1, counter 1
+
+        // Plant deferred bytes directly in the written slot's sectors,
+        // exactly as a save from a build that models more subsystems would
+        // have left them.
+        let mut payload = block2.to_bytes();
+        payload[B2_DEFERRED] = 0x5A;
+        let sector = Sector::write(SECTOR_ID_SAVEBLOCK2, &payload, 1);
+        let pos = store.find_sector_in_slot(1, SECTOR_ID_SAVEBLOCK2);
+        store.write_physical(1, pos, &sector);
+
+        let block1_bytes = block1.to_bytes(block2.encryption_key);
+        for (offset, value) in [(B1_DEFERRED_CHUNK0, 0xA5u8), (B1_DEFERRED_CHUNK2, 0xC3u8)] {
+            let chunk_num = offset / SECTOR_DATA_SIZE;
+            let id = SECTOR_ID_SAVEBLOCK1_START + u16::try_from(chunk_num).unwrap();
+            let mut payload = chunk_of(&block1_bytes, chunk_num).to_vec();
+            payload[offset % SECTOR_DATA_SIZE] = value;
+            let sector = Sector::write(id, &payload, 1);
+            let pos = store.find_sector_in_slot(1, id);
+            store.write_physical(1, pos, &sector);
+        }
+
+        // Load (as CONTINUE does), then save the loaded state (as the next
+        // TrySavingData does) — the rotation writes the *other* slot.
+        let outcome = store.load();
+        assert_eq!(outcome.status, SaveStatus::Ok);
+        store.save(&outcome.block1, &outcome.block2); // slot 0, counter 2
+
+        // The new newest slot still carries every deferred byte, and the
+        // modeled fields still round-trip.
+        let reloaded = store.load();
+        assert_eq!(reloaded.status, SaveStatus::Ok);
+        assert_eq!(store.save_counter(), 2, "the rotated slot is the winner");
+        assert_eq!(store.base_block2[B2_DEFERRED], 0x5A);
+        assert_eq!(store.base_block1[B1_DEFERRED_CHUNK0], 0xA5);
+        assert_eq!(store.base_block1[B1_DEFERRED_CHUNK2], 0xC3);
+        assert_eq!(reloaded.block2, block2);
+        assert_eq!(reloaded.block1.money, block1.money);
+        assert_eq!(reloaded.block1.bag, block1.bag);
     }
 
     #[test]
