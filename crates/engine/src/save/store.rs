@@ -214,7 +214,14 @@ fn expected_len_for(id: u16) -> Option<usize> {
 /// Ordinarily this is just `a < b`, but when one counter is `u32::MAX` and
 /// the other is `0` (the counter having just wrapped around), the wrapped
 /// one (`0`) is the newer save.
-fn counter_b_is_newer(a: u32, b: u32) -> bool {
+///
+/// Public because comparing save counters *directionally* is how a caller
+/// distinguishes "the file advanced past this session" (another process
+/// saved — strictly newer) from "the file fell back behind it" (a damaged
+/// newest slot made [`SaveStore::load`] adopt the older intact slot's
+/// counter) — an equality test conflates the two (#230 review).
+#[must_use]
+pub fn counter_b_is_newer(a: u32, b: u32) -> bool {
     if (a == u32::MAX && b == 0) || (a == 0 && b == u32::MAX) {
         a.wrapping_add(1) < b.wrapping_add(1)
     } else {

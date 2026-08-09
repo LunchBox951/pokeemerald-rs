@@ -49,4 +49,4 @@ pub use block::{Coords16, PlayerGender, SaveBlock1, SaveBlock2, SaveError, WarpD
 pub use file::{default_save_path, SaveFile, SaveFileError, SAVE_PATH_ENV};
 pub use pokemon::{BoxPokemon, Pokemon, PokemonError, PokemonSubstructures};
 pub use sector::{Sector, SECTOR_DATA_SIZE, SECTOR_SIGNATURE, SECTOR_SIZE};
-pub use store::{LoadOutcome, SaveStatus, SaveStore, FLASH_IMAGE_LEN};
+pub use store::{counter_b_is_newer, LoadOutcome, SaveStatus, SaveStore, FLASH_IMAGE_LEN};

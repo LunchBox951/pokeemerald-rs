@@ -67,7 +67,9 @@
 //!   [`crate::flow::overworld_phase::OverworldPhase::continue_saved_game`]
 //!   for what that costs on the party side.
 
-use engine::save::{SaveBlock1, SaveBlock2, SaveFile, SaveFileError, SaveStatus, SaveStore};
+use engine::save::{
+    counter_b_is_newer, SaveBlock1, SaveBlock2, SaveFile, SaveFileError, SaveStatus, SaveStore,
+};
 
 /// The boot load's verdict — upstream `gSaveFileStatus`'s `SAVE_STATUS_*`
 /// values (`pokeemerald/include/save.h:34-38`).
@@ -355,14 +357,20 @@ impl SaveSlot {
         // The stale-session check (issue #214 review): a counter that
         // moved past the one this session loaded means another process
         // saved since -- overwriting would replace newer persisted
-        // progress with this session's stale copy. Gated on the disk
-        // image still being *continuable*: a corrupted or wiped file is
-        // not newer progress, and refusing to heal it would strand the
-        // one session still holding valid state. Only armed once `load`
-        // has established an identity; checked under the same lock as
-        // the write, so the comparison cannot itself race.
+        // progress with this session's stale copy. *Directional* on
+        // purpose (#230 review round three): only a counter strictly
+        // *newer* than the session's identity is another process's
+        // progress. A counter that fell *behind* it is `SaveStore::load`'s
+        // corruption fallback -- the newest slot was damaged and the older
+        // intact slot's counter was adopted (a continuable `Error`) -- and
+        // this session, still holding the valid state, must be allowed to
+        // write and heal the image; `!=` would strand it. Also gated on
+        // the disk image still being *continuable*: a corrupted or wiped
+        // file is not newer progress either. Only armed once `load` has
+        // established an identity; checked under the same lock as the
+        // write, so the comparison cannot itself race.
         if let Some(loaded) = self.session_counter {
-            if store.save_counter() != loaded
+            if counter_b_is_newer(loaded, store.save_counter())
                 && SaveFileStatus::from_store(existing.status).menu_shows_continue()
             {
                 return Ok(StoreOutcome::RefusedStaleSession);

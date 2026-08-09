@@ -348,14 +348,14 @@ fn reading_a_directory_in_the_files_place_is_an_io_error_not_a_panic() {
 }
 
 /// `SaveFile::lock` really excludes a second locker until the guard drops
-/// (issue #214 review). The first locker sets `released` immediately
-/// before dropping its guard, so a second `lock()` returning while the
-/// first is still held reads `false` and fails. Detection of a fully
-/// no-op `lock()` is scheduling-dependent (the contender could observe
-/// the flag after it was set anyway); the deterministic pin that the save
-/// path *takes* the lock at all lives with the caller
-/// (`pokeemerald_rs::game_save`'s `storing_takes_the_inter_process_lock`),
-/// leaving this test to assert the release *ordering*.
+/// (issue #214 review). Deterministic since #230 review round three: while
+/// the guard is held, `try_lock` on a second handle to the same lock file
+/// must report `WouldBlock` -- a `lock()` that never takes the OS lock
+/// fails that assertion outright, no scheduling luck involved. The
+/// thread-based second half additionally pins the release *ordering*: the
+/// first locker sets `released` immediately before dropping its guard, so
+/// a blocking `lock()` returning while the first is still held reads
+/// `false` and fails.
 #[test]
 fn the_save_lock_excludes_a_second_locker_until_dropped() {
     use std::sync::atomic::{AtomicBool, Ordering};
@@ -367,6 +367,25 @@ fn the_save_lock_excludes_a_second_locker_until_dropped() {
     let released = Arc::new(AtomicBool::new(false));
 
     let guard = file.lock().expect("first lock must succeed");
+
+    // The deterministic exclusion probe: the sibling `.lock` file exists
+    // while the guard is held, and the OS lock the guard holds must turn
+    // a second handle's `try_lock` away with `WouldBlock`.
+    let lock_path = {
+        let mut name = path.clone().into_os_string();
+        name.push(".lock");
+        std::path::PathBuf::from(name)
+    };
+    let probe = std::fs::OpenOptions::new()
+        .write(true)
+        .open(&lock_path)
+        .expect("the lock file exists while the guard is held");
+    match probe.try_lock() {
+        Err(std::fs::TryLockError::WouldBlock) => {}
+        other => panic!("the held lock must exclude a second locker, got {other:?}"),
+    }
+    drop(probe);
+
     let contender = {
         let released = Arc::clone(&released);
         let file = SaveFile::at(&path);

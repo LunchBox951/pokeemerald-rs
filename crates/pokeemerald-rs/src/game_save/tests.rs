@@ -518,3 +518,61 @@ fn a_session_never_overwrites_progress_saved_after_its_own_load() {
         super::StoreOutcome::Written
     );
 }
+
+/// #230 review round three: the stale-session check must be *directional*.
+/// A disk counter that fell *behind* the session's identity is not another
+/// instance's newer save -- it is `SaveStore::load`'s corruption fallback
+/// to the older intact slot after the newest slot was damaged (a
+/// continuable `Error`). The session still holding the valid state must be
+/// allowed to write -- healing the image -- not be refused as stale; the
+/// old `!=` comparison conflated the two and silently discarded the whole
+/// session's progress.
+#[test]
+fn a_damaged_newest_slot_does_not_refuse_the_sessions_exit_write() {
+    use engine::save::{Sector, SECTOR_SIGNATURE, SECTOR_SIZE};
+
+    let temp = TempSave::new("damaged-newest-slot");
+    let block2 = SaveBlock2 {
+        encryption_key: 0xBEEF_CAFE,
+        ..SaveBlock2::default()
+    };
+    let mut slot = temp.slot();
+    slot.store(&SaveBlock1::default(), &block2).unwrap(); // counter 1, slot 1
+    slot.store(&SaveBlock1::default(), &block2).unwrap(); // counter 2, slot 0
+    assert_eq!(slot.load().status, SaveFileStatus::Ok); // session identity: 2
+
+    // Damage one counter-2 sector's payload on disk mid-session: the
+    // pre-write load falls back to the intact counter-1 slot and reports
+    // the continuable `Error` -- a counter *behind* the session's identity.
+    let mut image = std::fs::read(&temp.path).unwrap();
+    let mut damaged = false;
+    for index in 0..image.len() / SECTOR_SIZE {
+        let start = index * SECTOR_SIZE;
+        let sector = Sector::from_bytes(image[start..start + SECTOR_SIZE].try_into().unwrap());
+        if sector.signature() == SECTOR_SIGNATURE && sector.counter() == 2 && !damaged {
+            image[start] ^= 0xFF; // break the payload checksum, not the footer
+            damaged = true;
+        }
+    }
+    assert!(damaged, "the fixture must damage one newest-slot sector");
+    std::fs::write(&temp.path, &image).unwrap();
+
+    // The exit write must proceed and heal the image with this session's
+    // state, not refuse it as stale.
+    let outcome = slot
+        .store(
+            &SaveBlock1 {
+                money: 777,
+                ..SaveBlock1::default()
+            },
+            &block2,
+        )
+        .unwrap();
+    assert_eq!(outcome, super::StoreOutcome::Written);
+    let saved = temp.slot().load();
+    assert_eq!(saved.status, SaveFileStatus::Ok, "the image is healed");
+    assert_eq!(
+        saved.block1.money, 777,
+        "the surviving save is this session's, not the older slot's"
+    );
+}
