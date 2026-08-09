@@ -484,3 +484,63 @@ fn continue_on_a_multi_level_tile_resumes_at_the_transition_elevation() {
         "a multi-level tile must resume as a transition, not as raw {ELEVATION_MULTI_LEVEL}"
     );
 }
+
+/// #230 review round four: an exit while a wild battle owns the phase must
+/// not write the save at all. The blocks hold the *pre-battle* overworld --
+/// the party lead is borrowed by the battle, its RNG draws consumed -- so a
+/// save taken now would mint a valid save that undoes the live fight and
+/// lets a quit escape any encounter. Upstream cannot open its save flow
+/// mid-battle; the stand-in must not be able to either.
+#[test]
+fn exiting_mid_battle_does_not_save() {
+    use battle::{BattlePokemon, Dex, Ivs, MAX_IV};
+    use engine::overworld::wild_encounter::WildEncounter;
+    use engine::rng::Rng;
+
+    let temp = TempSave::new("mid-battle-no-save");
+    let mut save_slot = temp.slot();
+
+    let mut phase = new_game_phase();
+    let ivs = Ivs {
+        hp: MAX_IV,
+        attack: MAX_IV,
+        defense: MAX_IV,
+        speed: MAX_IV,
+        sp_attack: MAX_IV,
+        sp_defense: MAX_IV,
+    };
+    // Level-50 Treecko with Pound vs a Route 101 Wurmple -- the same
+    // fixture `wild_encounter::tests` fights full battles with.
+    let lead = BattlePokemon::new(
+        &Dex::new(),
+        assets::SpeciesId(277),
+        50,
+        ivs,
+        0,
+        vec![assets::MoveId(1)],
+    )
+    .expect("Treecko with Pound is in the dex");
+    let mut rng = Rng::new(0x00C0_FFEE);
+    let battle = super::wild_encounter::start_wild_battle(
+        lead,
+        WildEncounter {
+            species: assets::SpeciesId(290),
+            level: 2,
+            slot: 0,
+        },
+        &mut rng,
+    )
+    .expect("a Wurmple encounter is fightable");
+    phase.wild_battle = Some(battle);
+    assert!(phase.in_wild_battle());
+
+    let scene = AppScene::Overworld(Box::new(phase));
+    assert!(
+        save_on_exit(&scene, &mut save_slot).is_none(),
+        "an exit during a battle must not write the save"
+    );
+    assert!(
+        !temp.slot().load().status.menu_shows_continue(),
+        "the save file must be untouched -- the last save stands"
+    );
+}

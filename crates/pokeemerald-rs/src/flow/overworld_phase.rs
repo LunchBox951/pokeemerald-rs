@@ -450,6 +450,17 @@ impl OverworldPhase {
     pub(crate) const fn continued_from_save(&self) -> bool {
         self.continued_from_save
     }
+
+    /// Whether a wild battle currently owns the phase -- the exit-write
+    /// guard [`crate::flow::save_on_exit`] checks. Mid-battle state (the
+    /// live combat, the consumed RNG draws, the borrowed party lead) lives
+    /// outside the `SaveBlock`s until
+    /// [`Self::advance_wild_battle_frame`] finishes the battle, so a save
+    /// taken now would persist the *pre-battle* overworld (#230 review).
+    #[must_use]
+    pub(crate) const fn in_wild_battle(&self) -> bool {
+        self.wild_battle.is_some()
+    }
 }
 
 /// The map `block1.location` names -- `Overworld_GetMapHeaderByGroupAndId(

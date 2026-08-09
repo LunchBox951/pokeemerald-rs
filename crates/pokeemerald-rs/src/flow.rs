@@ -200,6 +200,18 @@ pub(crate) fn save_on_exit(
 ) -> Option<Result<(), SaveFileError>> {
     match scene {
         AppScene::Overworld(phase) => {
+            // Upstream cannot reach its save flow during a battle -- the
+            // start menu does not open there -- and the blocks here hold
+            // the *pre-battle* overworld (the party lead is borrowed by
+            // the battle, its RNG draws already consumed). Writing them
+            // now would mint a valid save that undoes the live fight,
+            // letting a quit escape any encounter (#230 review). Skip;
+            // the previous save stands, exactly as it would after an
+            // upstream mid-battle power-off.
+            if phase.in_wild_battle() {
+                eprintln!("save: exiting mid-battle -- not saving; the last save stands");
+                return None;
+            }
             let outcome = if phase.continued_from_save() {
                 save_slot.store(phase.save1(), phase.save2())
             } else {

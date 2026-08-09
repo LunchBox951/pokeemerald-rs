@@ -244,6 +244,13 @@ struct SlotScan {
     counter: u32,
 }
 
+/// The retained serialization base as [`SaveStore::base_snapshot`]
+/// returns it: the raw (`SaveBlock1`, `SaveBlock2`) payloads.
+pub type BaseSnapshot = (
+    Box<[u8; SaveBlock1::PAYLOAD_LEN]>,
+    Box<[u8; SaveBlock2::PAYLOAD_LEN]>,
+);
+
 /// A rotating two-slot save store over an in-memory byte buffer. See the
 /// module docs for the algorithm and its (documented) reductions from
 /// upstream.
@@ -343,6 +350,27 @@ impl SaveStore {
     #[must_use]
     pub const fn last_written_sector(&self) -> u16 {
         self.last_written_sector
+    }
+
+    /// A copy of the retained serialization base (see [`SaveStore`]'s
+    /// field docs): the raw `SaveBlock1`/`SaveBlock2` payloads the last
+    /// [`SaveStore::load`] or [`SaveStore::save`] established. A caller
+    /// that outlives this store — a session object that re-reads the file
+    /// for each write — snapshots the base it booted from so a later
+    /// corruption-fallback heal can write the *session's* deferred lineage
+    /// forward via [`SaveStore::restore_base`], rather than adopt the
+    /// older intact slot's (#230 review).
+    #[must_use]
+    pub fn base_snapshot(&self) -> BaseSnapshot {
+        (self.base_block1.clone(), self.base_block2.clone())
+    }
+
+    /// Replace the retained serialization base with a
+    /// [`SaveStore::base_snapshot`] taken earlier — see that method for
+    /// when a caller does this.
+    pub fn restore_base(&mut self, (block1, block2): BaseSnapshot) {
+        self.base_block1 = block1;
+        self.base_block2 = block2;
     }
 
     /// Zero the retained serialization base — upstream `ClearSav1`/

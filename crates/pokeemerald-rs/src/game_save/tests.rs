@@ -42,6 +42,7 @@ fn no_flash_slot() -> SaveSlot {
     SaveSlot {
         file: None,
         session_counter: None,
+        session_bases: None,
     }
 }
 
@@ -574,5 +575,110 @@ fn a_damaged_newest_slot_does_not_refuse_the_sessions_exit_write() {
     assert_eq!(
         saved.block1.money, 777,
         "the surviving save is this session's, not the older slot's"
+    );
+}
+
+/// #230 review round four: when the newest slot is damaged mid-session, the
+/// healing write must carry the *session's* deferred lineage forward -- the
+/// payload the boot load decoded -- not the older intact slot's, which the
+/// pre-write load's fallback adopted as its serialization base. Without the
+/// restore, play time/options/Pokédex silently roll back a generation while
+/// every checksum stays green.
+#[test]
+fn healing_a_damaged_newest_slot_keeps_the_sessions_deferred_lineage() {
+    use engine::save::{Sector, SECTOR_SIGNATURE, SECTOR_SIZE};
+
+    const SECTOR_ID_SAVEBLOCK2: u16 = 0;
+    // A SaveBlock2 payload offset no field models yet (play-time region).
+    const B2_DEFERRED: usize = 0x10;
+
+    let temp = TempSave::new("heal-lineage");
+    let block2 = SaveBlock2 {
+        encryption_key: 0xFEED_F00D,
+        ..SaveBlock2::default()
+    };
+    {
+        let mut slot = temp.slot();
+        slot.store(&SaveBlock1::default(), &block2).unwrap(); // counter 1, slot 1
+        slot.store(&SaveBlock1::default(), &block2).unwrap(); // counter 2, slot 0
+    }
+
+    // Distinct deferred bytes per generation: the older save's SaveBlock2
+    // carries 0x11, the newest (the one this session continues) 0x5A.
+    let mut image = std::fs::read(&temp.path).unwrap();
+    let mut planted = 0;
+    for index in 0..image.len() / SECTOR_SIZE {
+        let start = index * SECTOR_SIZE;
+        let sector = Sector::from_bytes(image[start..start + SECTOR_SIZE].try_into().unwrap());
+        if sector.signature() == SECTOR_SIGNATURE && sector.id() == SECTOR_ID_SAVEBLOCK2 {
+            let mut payload = block2.to_bytes();
+            payload[B2_DEFERRED] = if sector.counter() == 2 { 0x5A } else { 0x11 };
+            let replacement = Sector::write(SECTOR_ID_SAVEBLOCK2, &payload, sector.counter());
+            image[start..start + SECTOR_SIZE].copy_from_slice(replacement.as_bytes());
+            planted += 1;
+        }
+    }
+    assert_eq!(planted, 2, "both generations' SaveBlock2 sectors planted");
+    std::fs::write(&temp.path, &image).unwrap();
+
+    // The session boots from the newest slot: its lineage carries 0x5A.
+    let mut slot = temp.slot();
+    assert_eq!(slot.load().status, SaveFileStatus::Ok);
+
+    // The newest slot is damaged on disk mid-session (one non-SaveBlock2
+    // sector, so the planted byte itself stays readable to a naive base).
+    let mut image = std::fs::read(&temp.path).unwrap();
+    let mut damaged = false;
+    for index in 0..image.len() / SECTOR_SIZE {
+        let start = index * SECTOR_SIZE;
+        let sector = Sector::from_bytes(image[start..start + SECTOR_SIZE].try_into().unwrap());
+        if sector.signature() == SECTOR_SIGNATURE
+            && sector.counter() == 2
+            && sector.id() != SECTOR_ID_SAVEBLOCK2
+            && !damaged
+        {
+            image[start] ^= 0xFF; // break the payload checksum, not the footer
+            damaged = true;
+        }
+    }
+    assert!(damaged, "the fixture must damage one newest-slot sector");
+    std::fs::write(&temp.path, &image).unwrap();
+
+    // The healing exit write proceeds (directional stale check) and must
+    // write the session's 0x5A forward, not the older slot's 0x11.
+    let outcome = slot
+        .store(
+            &SaveBlock1 {
+                money: 777,
+                ..SaveBlock1::default()
+            },
+            &block2,
+        )
+        .unwrap();
+    assert_eq!(outcome, super::StoreOutcome::Written);
+
+    let image = std::fs::read(&temp.path).unwrap();
+    let mut checked = 0;
+    for index in 0..image.len() / SECTOR_SIZE {
+        let start = index * SECTOR_SIZE;
+        let sector = Sector::from_bytes(image[start..start + SECTOR_SIZE].try_into().unwrap());
+        if sector.signature() == SECTOR_SIGNATURE
+            && sector.id() == SECTOR_ID_SAVEBLOCK2
+            && sector.counter() == 2
+        {
+            assert_eq!(
+                sector.data()[B2_DEFERRED],
+                0x5A,
+                "the heal must carry the session's deferred lineage, \
+                 not roll back to the older slot's"
+            );
+            checked += 1;
+        }
+    }
+    assert_eq!(checked, 1, "exactly the healed SaveBlock2 sector");
+    assert_eq!(
+        temp.slot().load().block1.money,
+        777,
+        "the healed save is this session's state"
     );
 }

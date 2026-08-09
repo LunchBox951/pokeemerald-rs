@@ -68,7 +68,8 @@
 //!   for what that costs on the party side.
 
 use engine::save::{
-    counter_b_is_newer, SaveBlock1, SaveBlock2, SaveFile, SaveFileError, SaveStatus, SaveStore,
+    counter_b_is_newer, BaseSnapshot, SaveBlock1, SaveBlock2, SaveFile, SaveFileError, SaveStatus,
+    SaveStore,
 };
 
 /// The boot load's verdict — upstream `gSaveFileStatus`'s `SAVE_STATUS_*`
@@ -197,6 +198,16 @@ pub(crate) struct SaveSlot {
     /// [`SaveSlot::store`]'s stale-session check compares the disk's
     /// current counter against this before overwriting anything.
     session_counter: Option<u32>,
+    /// The serialization base this session actually booted from --
+    /// [`engine::save::SaveStore::base_snapshot`] of [`SaveSlot::load`]'s
+    /// store, refreshed after every successful write. When a write-time
+    /// read falls *behind* the session identity (the newest slot was
+    /// damaged and [`engine::save::SaveStore::load`] adopted the older
+    /// intact slot), the healing write restores this base first, so the
+    /// deferred state written forward is the session's own lineage -- not
+    /// a silent rollback to the older save's play time/options/Pokédex
+    /// (#230 review).
+    session_bases: Option<BaseSnapshot>,
 }
 
 impl SaveSlot {
@@ -212,12 +223,14 @@ impl SaveSlot {
             Ok(file) => Self {
                 file: Some(file),
                 session_counter: None,
+                session_bases: None,
             },
             Err(err) => {
                 eprintln!("save: {err} -- this session cannot load or save");
                 Self {
                     file: None,
                     session_counter: None,
+                    session_bases: None,
                 }
             }
         }
@@ -234,6 +247,7 @@ impl SaveSlot {
         Self {
             file: Some(file),
             session_counter: None,
+            session_bases: None,
         }
     }
 
@@ -273,8 +287,12 @@ impl SaveSlot {
         let outcome = store.load();
         // The loaded image's counter is this session's save identity: the
         // stale-session check in `store_impl` refuses to overwrite a file
-        // that has rotated past it (another process saved in between).
+        // that has rotated past it (another process saved in between). The
+        // base snapshot is the deferred lineage that identity continued
+        // from -- what a corruption-fallback heal writes forward (see
+        // `session_bases`' docs).
         self.session_counter = Some(store.save_counter());
+        self.session_bases = Some(store.base_snapshot());
         SavedGame {
             status: SaveFileStatus::from_store(outcome.status),
             block1: outcome.block1,
@@ -376,6 +394,22 @@ impl SaveSlot {
                 return Ok(StoreOutcome::RefusedStaleSession);
             }
         }
+        // The corruption-fallback heal's base (#230 review): when the disk
+        // fell *behind* the session identity, `store.load()` above adopted
+        // the *older* intact slot -- serialization base included -- so
+        // saving now would silently roll deferred state (play time,
+        // options, Pokédex) back a generation. The session continued from
+        // the boot load's payload; restore that as the base so the heal
+        // writes the session's own lineage forward. Moot when the counters
+        // match (same base either way) and skipped for `preserve_existing`
+        // (`clear_base` below zeroes the base regardless).
+        if !preserve_existing {
+            if let (Some(loaded), Some(bases)) = (self.session_counter, &self.session_bases) {
+                if counter_b_is_newer(store.save_counter(), loaded) {
+                    store.restore_base(bases.clone());
+                }
+            }
+        }
         if preserve_existing {
             if SaveFileStatus::from_store(existing.status).menu_shows_continue() {
                 return Ok(StoreOutcome::RefusedExistingSave);
@@ -395,8 +429,10 @@ impl SaveSlot {
         store.save(block1, block2);
         file.write(&store)?;
         // The write advanced the rotation; future stores in this session
-        // must expect the counter *we* just produced.
+        // must expect the counter *we* just produced -- and the payloads we
+        // just wrote are now the session's deferred lineage.
         self.session_counter = Some(store.save_counter());
+        self.session_bases = Some(store.base_snapshot());
         Ok(StoreOutcome::Written)
     }
 }
