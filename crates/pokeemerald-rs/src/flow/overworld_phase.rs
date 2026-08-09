@@ -249,4 +249,16 @@ impl OverworldPhase {
 }
 
 #[cfg(test)]
-mod tests;
+mod connections_tests;
+#[cfg(test)]
+mod decoration_tests;
+#[cfg(test)]
+mod frame_tests;
+#[cfg(test)]
+mod input_tests;
+#[cfg(test)]
+mod step_tests;
+#[cfg(test)]
+mod test_support;
+#[cfg(test)]
+mod warp_tests;
