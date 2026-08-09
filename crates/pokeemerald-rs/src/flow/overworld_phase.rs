@@ -22,8 +22,11 @@
 //! [`connections`] (warp and map-edge-crossing execution,
 //! [`OverworldPhase::warp_to`]/[`OverworldPhase::cross_connection`]),
 //! [`wild_battle`] (driving an in-progress wild battle,
-//! [`OverworldPhase::advance_wild_battle_frame`]), and [`frame`] (dialog
-//! ticking and frame composition, [`OverworldPhase::compose_frame`]).
+//! [`OverworldPhase::advance_wild_battle_frame`]),
+//! [`first_battle_trigger`] (the Route 101 scripted first-battle coord-event
+//! trigger, issue #231, [`OverworldPhase::advance_first_battle_frame`]), and
+//! [`frame`] (dialog ticking and frame composition,
+//! [`OverworldPhase::compose_frame`]).
 
 use engine::overworld::{PlayerState, TilePos, WildEncounterState};
 use engine::save::{SaveBlock1, SaveBlock2};
@@ -33,6 +36,7 @@ use crate::new_game;
 use crate::overworld::{self, NpcDialog, OverworldScene, OverworldSceneError};
 
 mod connections;
+mod first_battle_trigger;
 mod frame;
 mod input;
 mod step;
@@ -151,6 +155,19 @@ pub(crate) struct OverworldPhase {
     /// [`crate::flow::wild_encounter::advance_wild_battle`] drives one turn
     /// per frame. See that module's docs for what "headless" means here.
     pub(super) wild_battle: Option<battle::Battle>,
+    /// The Route 101 scripted first battle currently being played out, if
+    /// any (issue #231) -- the narrative-event counterpart to
+    /// [`Self::wild_battle`], kept in its own field rather than sharing that
+    /// one: [`first_battle_trigger`] starts it via
+    /// [`crate::flow::first_battle::start_first_battle`] and drives it with
+    /// [`crate::flow::first_battle::advance_first_battle`]'s `UseMove`
+    /// policy, never [`crate::flow::wild_encounter::advance_wild_battle`]'s
+    /// `Run` one -- see [`first_battle_trigger`]'s module docs for why the
+    /// two drivers cannot be shared. `Some` freezes the overworld for the
+    /// frame exactly like [`Self::wild_battle`] does; the two fields are
+    /// never `Some` at once, since only one of [`Self::step`]'s trigger and
+    /// wild-encounter branches can fire on a given frame.
+    pub(super) first_battle: Option<battle::Battle>,
 }
 
 impl OverworldPhase {
@@ -211,6 +228,10 @@ impl OverworldPhase {
         // the production spawn bedroom, this hides its twelve decoration
         // placeholders; test maps receive their own transition effects.
         connections::run_on_transition_map_script(map_id, &mut save1.event_data);
+        // Route 101's own on-frame `VAR_ROUTE101_STATE` bump (issue #231,
+        // `first_battle_trigger`'s module docs) -- a no-op for every other
+        // `map_id`.
+        first_battle_trigger::sync_route_101_state_on_entry(map_id, &mut save1.event_data);
         Self {
             scene,
             player,
@@ -226,6 +247,7 @@ impl OverworldPhase {
             wild_table_screen: None,
             party_lead: None,
             wild_battle: None,
+            first_battle: None,
         }
     }
 
