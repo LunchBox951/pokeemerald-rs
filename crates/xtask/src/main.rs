@@ -12,20 +12,43 @@
 //! `e2e --suite smoke` (F-3, V-1) is real: see [`crate::e2e::run_smoke`] for
 //! the headless boot-shell run it drives. `extract` (S-4, F-3) is also
 //! real: see [`crate::extract::run`] for the local asset-pack pipeline it
-//! drives (Discussion #71 policy A, issue #81). `record-snapshot` /
+//! drives (Discussion #71 policy A, issue #81). `record-snapshot` (F-3,
+//! V-4, issue #226) is also real: see [`crate::record_snapshot::run`] for
+//! the deterministic scene capture it drives, and `docs/snapshots.md` for
+//! the capture format and the blessing workflow that consumes it.
 //! `scenario`, and the `e2e` `full`/`soak` suites, remain stubs.
 //!
-//! `mod e2e` and its `pokeemerald-rs` dependency are gated behind the
-//! `smoke` cargo feature: a default `cargo build -p xtask` (every other
-//! subcommand) stays dependency-free, matching pre-PR `xtask`. Without the
-//! feature, `e2e --suite smoke` still fails *closed* — [`XtaskError::SmokeUnavailable`],
-//! not a silent no-op — telling the caller to rebuild with `--features
-//! smoke`. `mod extract` needs no such gate: it depends on nothing beyond
-//! `std`, so it is always compiled in.
+//! `mod e2e` and `mod record_snapshot` both need the workspace-local
+//! `pokeemerald-rs` (and, for `record_snapshot`, `assets`) dependency to
+//! drive a real scene, so both sit behind the shared `scenes` cargo feature
+//! (`Cargo.toml`) — a default `cargo build -p xtask` (every other
+//! subcommand) stays dependency-free, matching pre-PR `xtask`. Without
+//! `scenes`, each subcommand still fails *closed* —
+//! [`XtaskError::SmokeUnavailable`] / [`XtaskError::RecordSnapshotUnavailable`],
+//! not a silent no-op — telling the caller which feature to rebuild with.
+//! `mod extract` needs no such gate: it depends on nothing beyond `std`, so
+//! it is always compiled in.
 //!
-//! Run via the workspace alias: `cargo xtask <subcommand>` (add `--features
-//! smoke` for `e2e --suite smoke`, e.g.
-//! `cargo run -p xtask --features smoke -- e2e --suite smoke`).
+//! The two `#[cfg]`s are deliberately *asymmetric*. `mod e2e` is gated on
+//! `smoke` (the caller-facing feature that names its subcommand), because
+//! `e2e::run_smoke` boots a real windowless app that CI runs as its own
+//! separate step. `mod record_snapshot` is gated on `scenes` — the shared
+//! *implied* feature — one rung wider than the `record-snapshot` feature
+//! that names its subcommand: `record_snapshot`'s tests are pure
+//! synthetic-pack unit tests (`crate::record_snapshot::tests`, no real pack,
+//! no window, no upstream checkout), and gating the module on
+//! `record-snapshot` would have left them compiled out of every command CI
+//! actually runs — invisible to every merge gate. Gating on `scenes` means
+//! CI's existing `cargo test -p xtask --features smoke` leg compiles and
+//! runs them, while `--features record-snapshot` (which implies `scenes`)
+//! still builds the subcommand for a developer.
+//!
+//! Run via the workspace alias: `cargo xtask <subcommand>` for
+//! feature-free subcommands (`extract`, `scenario`); a gated subcommand
+//! needs the full `cargo run` form so the feature flag lands before the
+//! `--`, e.g. `cargo run -p xtask --features smoke -- e2e --suite smoke`
+//! or `cargo run -p xtask --features record-snapshot -- record-snapshot
+//! --scene title`.
 
 use std::error::Error;
 use std::fmt;
@@ -34,6 +57,8 @@ use std::process::ExitCode;
 #[cfg(feature = "smoke")]
 mod e2e;
 mod extract;
+#[cfg(feature = "scenes")]
+mod record_snapshot;
 
 /// Usage text shown on stderr for any parse error.
 const USAGE: &str = "\
@@ -41,7 +66,9 @@ usage: cargo xtask <command>
 
 commands:
   extract            extract data/assets from the upstream reference
-  record-snapshot    record a golden snapshot for regression tests
+  record-snapshot --scene <name>
+                     record a deterministic frame capture; <name> is
+                     title | main-menu-new-game | main-menu-option
   scenario           run a scripted gameplay scenario
   e2e --suite <s> [--release]
                      run the end-to-end suite; <s> is smoke | full | soak";
@@ -58,6 +85,12 @@ pub enum XtaskError {
     InvalidSuite(String),
     /// `e2e --suite` was present but no value followed it.
     MissingSuiteValue,
+    /// `record-snapshot` was given a `--scene` value that is not one of
+    /// [`Scene`]'s known names.
+    InvalidScene(String),
+    /// `record-snapshot --scene` was present but no value followed it, or
+    /// `record-snapshot` was given no `--scene` at all.
+    MissingSceneValue,
     /// A subcommand received an argument it does not accept. Carries the
     /// offending token.
     UnexpectedArg(String),
@@ -79,6 +112,17 @@ pub enum XtaskError {
     /// dependency) was not compiled in. Fails *closed* rather than silently
     /// reporting success `(gated-by-default)` `(test-ratchet)`.
     SmokeUnavailable,
+    /// `record-snapshot` ran but failed. Carries
+    /// [`record_snapshot::RecordSnapshotError`]'s rendered message (missing
+    /// local pack, a scene that failed to build, or a write failure — see
+    /// that type for the exact cases).
+    RecordSnapshotFailed(String),
+    /// `record-snapshot` was requested, but this `xtask` binary was built
+    /// without the `record-snapshot` feature, so `mod record_snapshot` (and
+    /// its `pokeemerald-rs`/`assets` dependencies) was not compiled in.
+    /// Fails *closed* rather than silently reporting success
+    /// `(gated-by-default)` `(test-ratchet)`.
+    RecordSnapshotUnavailable,
 }
 
 impl fmt::Display for XtaskError {
@@ -95,6 +139,12 @@ impl fmt::Display for XtaskError {
             }
             Self::MissingSuiteValue => {
                 writeln!(f, "error: `e2e --suite` requires a value")?;
+            }
+            Self::InvalidScene(scene) => {
+                writeln!(f, "error: unknown record-snapshot scene `{scene}`")?;
+            }
+            Self::MissingSceneValue => {
+                writeln!(f, "error: `record-snapshot --scene` requires a value")?;
             }
             Self::UnexpectedArg(arg) => {
                 writeln!(f, "error: unexpected argument `{arg}`")?;
@@ -121,6 +171,21 @@ impl fmt::Display for XtaskError {
                     f,
                     "error: `e2e --suite smoke` requires the `smoke` feature: rebuild with \
                      `cargo run -p xtask --features smoke -- e2e --suite smoke`"
+                );
+            }
+            // Likewise a record-snapshot failure: runtime/behavioural, not
+            // a malformed invocation.
+            Self::RecordSnapshotFailed(reason) => {
+                return write!(f, "error: `record-snapshot` failed: {reason}");
+            }
+            // Likewise: a missing feature is a build-configuration problem,
+            // not a malformed invocation, so it gets no USAGE tail either.
+            Self::RecordSnapshotUnavailable => {
+                return write!(
+                    f,
+                    "error: `record-snapshot` requires the `record-snapshot` feature: \
+                     rebuild with `cargo run -p xtask --features record-snapshot -- \
+                     record-snapshot --scene <name>`"
                 );
             }
         }
@@ -157,13 +222,65 @@ impl Suite {
     }
 }
 
+/// The scene `record-snapshot --scene <name>` captures (F-3, V-4).
+///
+/// Defined here at the crate root, not inside the feature-gated
+/// [`record_snapshot`] module, so [`parse`] can route (and reject unknown)
+/// scene names even in a build without the `record-snapshot` feature —
+/// mirrors [`Suite`] living outside the feature-gated [`e2e`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Scene {
+    /// The real title screen (`pokeemerald_rs::title`), captured at frame
+    /// 16 — a fixed frame inside the *visible* half of the "Press Start"
+    /// blink, so the capture witnesses the banner (see
+    /// `record_snapshot::TITLE_FRAME_INDEX` for the full rationale).
+    Title,
+    /// The no-save main menu (`pokeemerald_rs::main_menu`, issue #216) with
+    /// its default selection, `NEW GAME`.
+    MainMenuNewGame,
+    /// The no-save main menu with `OPTION` selected (one `DPAD_DOWN` press
+    /// from the default selection).
+    MainMenuOption,
+}
+
+impl Scene {
+    /// Parse a scene name.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`XtaskError::InvalidScene`] if `value` is not a known scene.
+    pub fn parse(value: &str) -> Result<Self, XtaskError> {
+        match value {
+            "title" => Ok(Self::Title),
+            "main-menu-new-game" => Ok(Self::MainMenuNewGame),
+            "main-menu-option" => Ok(Self::MainMenuOption),
+            other => Err(XtaskError::InvalidScene(other.to_owned())),
+        }
+    }
+
+    /// This scene's canonical name — the exact string [`Self::parse`]
+    /// accepts back, and the stem `record_snapshot::run_with_paths` uses
+    /// for its `<name>.rgb`/`<name>.meta` output files.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Title => "title",
+            Self::MainMenuNewGame => "main-menu-new-game",
+            Self::MainMenuOption => "main-menu-option",
+        }
+    }
+}
+
 /// A parsed, validated `xtask` invocation.
 #[derive(Debug, PartialEq, Eq)]
 pub enum Command {
     /// `extract`
     Extract,
-    /// `record-snapshot`
-    RecordSnapshot,
+    /// `record-snapshot --scene <name>`
+    RecordSnapshot {
+        /// The scene to capture.
+        scene: Scene,
+    },
     /// `scenario`
     Scenario,
     /// `e2e --suite <suite> [--release]`
@@ -195,7 +312,9 @@ pub fn parse(args: &[String]) -> Result<Command, XtaskError> {
 
     match subcommand.as_str() {
         "extract" => no_args(rest).map(|()| Command::Extract),
-        "record-snapshot" => no_args(rest).map(|()| Command::RecordSnapshot),
+        "record-snapshot" => {
+            parse_record_snapshot(rest).map(|scene| Command::RecordSnapshot { scene })
+        }
         "scenario" => no_args(rest).map(|()| Command::Scenario),
         "e2e" => parse_e2e(rest).map(|(suite, release)| Command::E2e { suite, release }),
         other => Err(XtaskError::UnknownCommand(other.to_owned())),
@@ -212,6 +331,31 @@ fn no_args(rest: &[String]) -> Result<(), XtaskError> {
         None => Ok(()),
         Some(arg) => Err(XtaskError::UnexpectedArg(arg.clone())),
     }
+}
+
+/// Parse the arguments following the `record-snapshot` subcommand:
+/// `--scene <value>`, required.
+///
+/// # Errors
+///
+/// Returns [`XtaskError::MissingSceneValue`] if `--scene` is missing or has
+/// no value, [`XtaskError::InvalidScene`] for an unknown scene name, and
+/// [`XtaskError::UnexpectedArg`] for any other token (including a
+/// duplicate `--scene`).
+fn parse_record_snapshot(rest: &[String]) -> Result<Scene, XtaskError> {
+    let mut scene: Option<Scene> = None;
+    let mut i = 0;
+    while i < rest.len() {
+        match rest[i].as_str() {
+            "--scene" if scene.is_none() => {
+                let value = rest.get(i + 1).ok_or(XtaskError::MissingSceneValue)?;
+                scene = Some(Scene::parse(value)?);
+                i += 2;
+            }
+            other => return Err(XtaskError::UnexpectedArg(other.to_owned())),
+        }
+    }
+    scene.ok_or(XtaskError::MissingSceneValue)
 }
 
 /// Parse the arguments following the `e2e` subcommand:
@@ -249,23 +393,29 @@ fn parse_e2e(rest: &[String]) -> Result<(Suite, bool), XtaskError> {
 /// `extract` is real (S-4, F-3): see [`extract::run`] for the local
 /// asset-pack pipeline it drives. `e2e --suite smoke` is also real (F-3,
 /// V-1) when built with `--features smoke`: see [`e2e::run_smoke`].
-/// Without that feature, the same command still fails *closed* —
-/// [`XtaskError::SmokeUnavailable`] — rather than silently no-opping. Every
-/// other subcommand — `record-snapshot`, `scenario`, and the `e2e`
-/// `full`/`soak` suites — remains a stub: rather than exiting 0, each
-/// returns [`XtaskError::NotImplemented`] so the process fails *closed*
-/// (non-zero exit). The `RELEASE.md` promotion gates run these exact
-/// commands, so a stub that reported success would satisfy a gate with zero
-/// validation `(gated-by-default)` `(test-ratchet)`.
+/// `record-snapshot` is also real (F-3, V-4) when built with `--features
+/// record-snapshot` (or anything else implying `scenes` — crate docs):
+/// see [`record_snapshot::run`]. Without the matching
+/// feature, each of those two still fails *closed* —
+/// [`XtaskError::SmokeUnavailable`] / [`XtaskError::RecordSnapshotUnavailable`]
+/// — rather than silently no-opping. Every other subcommand — `scenario`
+/// and the `e2e` `full`/`soak` suites — remains a stub: rather than
+/// exiting 0, each returns [`XtaskError::NotImplemented`] so the process
+/// fails *closed* (non-zero exit). The `RELEASE.md` promotion gates run
+/// these exact commands, so a stub that reported success would satisfy a
+/// gate with zero validation `(gated-by-default)` `(test-ratchet)`.
 ///
 /// # Errors
 ///
 /// Returns [`XtaskError::NotImplemented`] for every still-stubbed
 /// subcommand/suite, [`XtaskError::ExtractFailed`] if `extract` ran but
 /// failed, [`XtaskError::SmokeUnavailable`] if `e2e --suite smoke` was
-/// requested but this binary was built without the `smoke` feature, or
+/// requested but this binary was built without the `smoke` feature,
 /// [`XtaskError::SmokeFailed`] if `e2e --suite smoke` ran but did not report
-/// a clean boot.
+/// a clean boot, [`XtaskError::RecordSnapshotUnavailable`] if
+/// `record-snapshot` was requested but this binary was built without the
+/// `record-snapshot` feature, or [`XtaskError::RecordSnapshotFailed`] if
+/// `record-snapshot` ran but failed.
 fn dispatch(cmd: &Command) -> Result<(), XtaskError> {
     match cmd {
         Command::Extract => {
@@ -279,7 +429,24 @@ fn dispatch(cmd: &Command) -> Result<(), XtaskError> {
             );
             Ok(())
         }
-        Command::RecordSnapshot => Err(XtaskError::NotImplemented("record-snapshot")),
+        #[cfg(feature = "scenes")]
+        Command::RecordSnapshot { scene } => {
+            let report = record_snapshot::run(*scene)
+                .map_err(|err| XtaskError::RecordSnapshotFailed(err.to_string()))?;
+            println!(
+                "recorded `{}` snapshot ({} byte(s)) to {} (+ {}); rgb hash {}, pack hash {}, git sha {}",
+                scene.name(),
+                report.payload_len,
+                report.rgb_path.display(),
+                report.meta_path.display(),
+                report.rgb_hash,
+                report.pack_hash,
+                report.git_sha,
+            );
+            Ok(())
+        }
+        #[cfg(not(feature = "scenes"))]
+        Command::RecordSnapshot { .. } => Err(XtaskError::RecordSnapshotUnavailable),
         Command::Scenario => Err(XtaskError::NotImplemented("scenario")),
         #[cfg(feature = "smoke")]
         Command::E2e {
@@ -321,7 +488,7 @@ fn main() -> ExitCode {
 
 #[cfg(test)]
 mod tests {
-    use super::{extract, parse, run, Command, Suite, XtaskError};
+    use super::{extract, parse, run, Command, Scene, Suite, XtaskError};
 
     fn args(parts: &[&str]) -> Vec<String> {
         parts.iter().map(|s| (*s).to_owned()).collect()
@@ -335,9 +502,84 @@ mod tests {
     #[test]
     fn parse_record_snapshot_routes() {
         assert_eq!(
-            parse(&args(&["record-snapshot"])).unwrap(),
-            Command::RecordSnapshot
+            parse(&args(&["record-snapshot", "--scene", "title"])).unwrap(),
+            Command::RecordSnapshot {
+                scene: Scene::Title
+            }
         );
+        assert_eq!(
+            parse(&args(&["record-snapshot", "--scene", "main-menu-new-game"])).unwrap(),
+            Command::RecordSnapshot {
+                scene: Scene::MainMenuNewGame
+            }
+        );
+        assert_eq!(
+            parse(&args(&["record-snapshot", "--scene", "main-menu-option"])).unwrap(),
+            Command::RecordSnapshot {
+                scene: Scene::MainMenuOption
+            }
+        );
+    }
+
+    #[test]
+    fn parse_record_snapshot_requires_scene() {
+        let err = parse(&args(&["record-snapshot"])).unwrap_err();
+        assert!(matches!(err, XtaskError::MissingSceneValue));
+    }
+
+    #[test]
+    fn parse_record_snapshot_missing_scene_value() {
+        let err = parse(&args(&["record-snapshot", "--scene"])).unwrap_err();
+        assert!(matches!(err, XtaskError::MissingSceneValue));
+    }
+
+    #[test]
+    fn parse_record_snapshot_invalid_scene() {
+        let err = parse(&args(&["record-snapshot", "--scene", "bogus"])).unwrap_err();
+        assert!(matches!(err, XtaskError::InvalidScene(s) if s == "bogus"));
+    }
+
+    #[test]
+    fn parse_record_snapshot_rejects_trailing_args() {
+        let err = parse(&args(&["record-snapshot", "--scene", "title", "extra"])).unwrap_err();
+        assert!(matches!(err, XtaskError::UnexpectedArg(s) if s == "extra"));
+    }
+
+    #[test]
+    fn parse_record_snapshot_rejects_duplicate_scene() {
+        let err = parse(&args(&[
+            "record-snapshot",
+            "--scene",
+            "title",
+            "--scene",
+            "title",
+        ]))
+        .unwrap_err();
+        assert!(matches!(err, XtaskError::UnexpectedArg(s) if s == "--scene"));
+    }
+
+    #[test]
+    fn scene_parse_roundtrip() {
+        assert_eq!(Scene::parse("title").unwrap(), Scene::Title);
+        assert_eq!(
+            Scene::parse("main-menu-new-game").unwrap(),
+            Scene::MainMenuNewGame
+        );
+        assert_eq!(
+            Scene::parse("main-menu-option").unwrap(),
+            Scene::MainMenuOption
+        );
+        assert!(matches!(
+            Scene::parse("nope").unwrap_err(),
+            XtaskError::InvalidScene(_)
+        ));
+    }
+
+    #[test]
+    fn scene_name_round_trips_through_parse() {
+        for scene in [Scene::Title, Scene::MainMenuNewGame, Scene::MainMenuOption] {
+            assert_eq!(Scene::parse(scene.name()).unwrap(), scene);
+        }
     }
 
     #[test]
@@ -491,15 +733,17 @@ mod tests {
         // Recognised-but-unimplemented subcommands must NOT report success:
         // RELEASE.md wires `xtask e2e --suite …` in as promotion gates, so a
         // stub exiting 0 would satisfy a gate with zero validation
-        // `(gated-by-default)` `(test-ratchet)`. `extract` and
-        // `e2e --suite smoke` are deliberately absent here: both are no
-        // longer stubs (S-4/F-3 and F-3/V-1 respectively) and each has its
-        // own dedicated coverage — `extract` via
-        // `extract_dispatch_fails_closed_without_local_checkout`/
+        // `(gated-by-default)` `(test-ratchet)`. `extract`, `e2e --suite
+        // smoke`, and `record-snapshot` are deliberately absent here: all
+        // three are no longer stubs (S-4/F-3, F-3/V-1, and F-3/V-4
+        // respectively) and each has its own dedicated coverage —
+        // `extract` via `extract_dispatch_fails_closed_without_local_checkout`/
         // `extract_dispatch_succeeds_with_local_checkout` below, `e2e
         // --suite smoke` via `crate::e2e::tests::smoke_suite_boots_cleanly_headless`
         // (with the feature) and `e2e_smoke_without_feature_fails_closed`
-        // below (without it).
+        // below (without it), `record-snapshot` via
+        // `record_snapshot_without_feature_fails_closed` below (without the
+        // feature) and `crate::record_snapshot::tests` (with it).
         assert!(matches!(
             run(&args(&["e2e", "--suite", "full", "--release"])).unwrap_err(),
             XtaskError::NotImplemented("e2e")
@@ -531,6 +775,11 @@ mod tests {
     #[test]
     #[ignore = "needs a local `./init.sh`-fetched pokeemerald/ checkout"]
     fn extract_dispatch_succeeds_with_local_checkout() {
+        // Rewrites the real pack -- exclude concurrent real-pack readers
+        // (see `extract::REAL_PACK_LOCK`).
+        let _pack = extract::REAL_PACK_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         run(&args(&["extract"])).expect("extract should succeed against a real checkout");
     }
 
@@ -547,6 +796,50 @@ mod tests {
     fn e2e_smoke_without_feature_fails_closed() {
         let err = run(&args(&["e2e", "--suite", "smoke"])).unwrap_err();
         assert!(matches!(err, XtaskError::SmokeUnavailable));
+    }
+
+    // Identical reasoning to `e2e_smoke_without_feature_fails_closed`, for
+    // `record-snapshot`: in a build with neither `scenes`-implying feature,
+    // `mod record_snapshot` is not compiled in, so this must fail *closed*
+    // rather than silently no-opping `(gated-by-default)` `(test-ratchet)`.
+    // Gated on `scenes`, not `record-snapshot`, to match the module's own
+    // `#[cfg]` (crate docs' "asymmetric" note): under `--features smoke` the
+    // subcommand *is* compiled in and dispatch really runs it, so asserting
+    // `RecordSnapshotUnavailable` there would be asserting the opposite of
+    // the truth. The determinism/metadata behaviour with the module present
+    // lives in `crate::record_snapshot::tests` instead.
+    #[test]
+    #[cfg(not(feature = "scenes"))]
+    fn record_snapshot_without_feature_fails_closed() {
+        let err = run(&args(&["record-snapshot", "--scene", "title"])).unwrap_err();
+        assert!(matches!(err, XtaskError::RecordSnapshotUnavailable));
+    }
+
+    // The other half of the wiring proof, mirroring
+    // `extract_dispatch_fails_closed_without_local_checkout`: with the
+    // module compiled in, dispatch must really reach
+    // `record_snapshot::run` -- a stub arm that reported success would
+    // satisfy a gate with zero validation `(gated-by-default)`
+    // `(test-ratchet)`. Checked through the pack-missing error path so
+    // this runs (and fails a no-op mutation) in pack-free CI, and skips
+    // read-only on a dev box whose real pack would make `run` succeed --
+    // that full path is `record_snapshot`'s own ignored real-pack test.
+    #[test]
+    #[cfg(feature = "scenes")]
+    fn record_snapshot_dispatch_fails_closed_without_a_pack() {
+        // Hold the real-pack lock across the existence probe *and* the
+        // run: under `--include-ignored`, `extract_dispatch_succeeds_with_
+        // local_checkout` could otherwise create the pack between the two
+        // and turn the expected error into a success.
+        let _pack = extract::REAL_PACK_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if assets::pack::AssetPack::default_path().exists() {
+            return;
+        }
+        let err = run(&args(&["record-snapshot", "--scene", "title"])).unwrap_err();
+        assert!(matches!(err, XtaskError::RecordSnapshotFailed(_)));
+        assert!(err.to_string().contains("pack"));
     }
 
     #[test]
@@ -567,6 +860,21 @@ mod tests {
     fn smoke_failed_display_carries_the_reason_and_has_no_usage_tail() {
         let rendered = XtaskError::SmokeFailed("boom".to_owned()).to_string();
         assert!(rendered.contains("e2e --suite smoke"));
+        assert!(rendered.contains("boom"));
+        assert!(!rendered.contains("usage: cargo xtask"));
+    }
+
+    #[test]
+    fn record_snapshot_unavailable_display_names_the_feature_and_has_no_usage_tail() {
+        let rendered = XtaskError::RecordSnapshotUnavailable.to_string();
+        assert!(rendered.contains("--features record-snapshot"));
+        assert!(!rendered.contains("usage: cargo xtask"));
+    }
+
+    #[test]
+    fn record_snapshot_failed_display_carries_the_reason_and_has_no_usage_tail() {
+        let rendered = XtaskError::RecordSnapshotFailed("boom".to_owned()).to_string();
+        assert!(rendered.contains("record-snapshot"));
         assert!(rendered.contains("boom"));
         assert!(!rendered.contains("usage: cargo xtask"));
     }
