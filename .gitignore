@@ -11,6 +11,13 @@
 # `crates/xtask/src/extract/mod.rs`'s module docs.
 /assets-pack
 
+# `cargo xtask record-snapshot` output (F-3, V-4, issue #226): local frame
+# captures + metadata, gitignored by default like `/assets-pack` above — only
+# a capture's recorded hash is committed (`docs/snapshots.md`'s blessing
+# table), never the pixel/metadata files themselves. See
+# `crates/xtask/src/record_snapshot.rs`'s module docs.
+/snapshots
+
 # Rust build output
 /target/
 **/*.rs.bk

@@ -7,6 +7,8 @@ order:
    rule elsewhere cites one of these by `handle`. Start here.
 2. **[acceptance/v1.md](acceptance/v1.md)** — the definition of "done" for v1, as
    stable criteria IDs. The roadmap (GitHub issues) ladders up to these.
+3. **[snapshots.md](snapshots.md)** — the `record-snapshot` capture format
+   and the human blessing workflow V-4 requires.
 
 There are no design-spec or plan docs: the roadmap is dynamic and lives in GitHub
 issues, PRs, and discussions `(constitution-vs-roadmap)`. Docs hold the durable
