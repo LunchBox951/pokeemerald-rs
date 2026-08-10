@@ -174,6 +174,15 @@ impl From<TitleSceneError> for AppError {
 /// variants distinguish the two modes that temporarily freeze overworld
 /// movement, which lets I-7's future `boot-to-first-fight` scenario prove
 /// it reached the scripted fight rather than merely Route 101.
+///
+/// The battle variants share one edge-frame timing a scenario script must
+/// account for: the fight is scheduled at the end of the [`App::step`]
+/// call whose movement triggered it (before any turn has run), so that
+/// landing frame already reports [`AppState::WildBattle`] /
+/// [`AppState::FirstBattle`] -- and the step that plays the battle's final
+/// turn also clears the battle slot as it resolves, so the concluding
+/// frame reports [`AppState::Overworld`] again. Assert battle states on
+/// the triggering frame, not on the frame the fight finishes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AppState {
     /// The pack-free synthetic scene built by [`App::new_headless`].
@@ -188,9 +197,11 @@ pub enum AppState {
     OverworldLoadFailed,
     /// Ordinary overworld movement and interactions.
     Overworld,
-    /// A random wild encounter is running inside the overworld phase.
+    /// A random wild encounter is running inside the overworld phase
+    /// (edge-frame timing: enum docs above).
     WildBattle,
-    /// Route 101's scripted first battle is running inside the overworld phase.
+    /// Route 101's scripted first battle is running inside the overworld
+    /// phase (edge-frame timing: enum docs above).
     FirstBattle,
 }
 

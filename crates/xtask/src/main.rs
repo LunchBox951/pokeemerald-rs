@@ -594,7 +594,7 @@ fn main() -> ExitCode {
 
 #[cfg(test)]
 mod tests {
-    use super::{extract, parse, run, Command, ScenarioName, Scene, Suite, XtaskError};
+    use super::{extract, parse, run, Command, ScenarioName, Scene, Suite, XtaskError, USAGE};
 
     fn args(parts: &[&str]) -> Vec<String> {
         parts.iter().map(|s| (*s).to_owned()).collect()
@@ -730,9 +730,23 @@ mod tests {
     }
 
     #[test]
-    fn scenario_name_round_trips_through_parse() {
-        let name = ScenarioName::BootToMainMenu;
-        assert_eq!(ScenarioName::parse(name.name()).unwrap(), name);
+    fn every_scenario_name_round_trips_and_appears_in_usage() {
+        const ALL: &[ScenarioName] = &[ScenarioName::BootToMainMenu];
+        for name in ALL {
+            // Compile-forced completeness: adding a `ScenarioName` variant
+            // breaks this match, steering the author here to extend `ALL`
+            // -- which then drags along `parse` (whose string catch-all
+            // the compiler cannot check) and USAGE's hardcoded name list.
+            match name {
+                ScenarioName::BootToMainMenu => {}
+            }
+            assert_eq!(ScenarioName::parse(name.name()).unwrap(), *name);
+            assert!(
+                USAGE.contains(name.name()),
+                "USAGE must list `{}`",
+                name.name()
+            );
+        }
     }
 
     #[test]
@@ -892,7 +906,8 @@ mod tests {
         // below (without it), `record-snapshot` via
         // `record_snapshot_without_feature_fails_closed` below (without the
         // feature) and `crate::record_snapshot::tests` (with it), and
-        // `scenario` via the unavailable check below plus
+        // `scenario` via the unavailable check below (without its feature),
+        // the two `scenario_dispatch_*` wiring tests below (with it), plus
         // `crate::scenario::tests` under `--features smoke`/`scenario`.
         assert!(matches!(
             run(&args(&["e2e", "--suite", "full", "--release"])).unwrap_err(),
@@ -973,6 +988,53 @@ mod tests {
 
         let invalid = run(&args(&["scenario", "--name", "bogus"])).unwrap_err();
         assert!(matches!(invalid, XtaskError::InvalidScenario(name) if name == "bogus"));
+    }
+
+    // The other half of `scenario`'s wiring proof, mirroring
+    // `record_snapshot_dispatch_fails_closed_without_a_pack` below: with
+    // the feature-enabled arm compiled in, dispatch must really reach
+    // `scenario::run` -- an arm that swallowed the error (or returned
+    // `Ok(())` without running anything) would let `cargo xtask scenario`
+    // report success with zero validation `(gated-by-default)`
+    // `(test-ratchet)`. Checked through the pack-missing failure path so a
+    // pack-free `--features scenario` test run exercises it, and skips
+    // read-only on a box whose real pack would make the run succeed --
+    // that full path is `scenario_dispatch_succeeds_against_the_real_pack`
+    // below.
+    #[test]
+    #[cfg(feature = "scenario")]
+    fn scenario_dispatch_fails_closed_without_a_pack() {
+        // Hold the real-pack lock across the existence probe *and* the
+        // run, exactly as the record-snapshot twin does: under
+        // `--include-ignored`, `extract_dispatch_succeeds_with_local_
+        // checkout` could otherwise create the pack between the two and
+        // turn the expected error into a success.
+        let _pack = extract::REAL_PACK_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if assets::pack::AssetPack::default_path().exists() {
+            return;
+        }
+        let err = run(&args(&["scenario", "--name", "boot-to-main-menu"])).unwrap_err();
+        assert!(matches!(err, XtaskError::ScenarioFailed(_)));
+        assert!(err.to_string().contains("pack"));
+    }
+
+    // The success half of the same wiring proof, run by CI's ignored
+    // real-checkout xtask leg (`--features record-snapshot,scenario --
+    // --ignored`, pack present): the one automated invocation that drives
+    // the feature-enabled `Command::Scenario` arm end to end.
+    // `crate::scenario`'s own ignored real-pack test proves the runner but
+    // calls `scenario::run` directly, bypassing dispatch.
+    #[test]
+    #[cfg(feature = "scenario")]
+    #[ignore = "needs a local pack produced by `cargo xtask extract`"]
+    fn scenario_dispatch_succeeds_against_the_real_pack() {
+        let _pack = extract::REAL_PACK_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        run(&args(&["scenario", "--name", "boot-to-main-menu"]))
+            .expect("boot-to-main-menu should pass through dispatch against the real pack");
     }
 
     // The other half of the wiring proof, mirroring

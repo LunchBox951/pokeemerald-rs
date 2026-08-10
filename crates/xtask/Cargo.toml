@@ -14,8 +14,8 @@ workspace = true
 # gated behind the `scenes` feature (below):
 # unconditionally depending on `pokeemerald-rs` would transitively drag
 # `platform` (and its `cpal`/`winit`/`softbuffer`, i.e. ALSA dev headers on
-# Linux) into every `xtask` subcommand's build -- `extract`/`scenario`
-# included -- when pre-PR `xtask` was std-only. Only subcommands that need a
+# Linux) into every `xtask` subcommand's build -- `extract` included --
+# when pre-feature-split `xtask` was std-only. Only subcommands that need a
 # real scene pull it in; `cargo build -p xtask` without those features
 # stays dependency-free.
 pokeemerald-rs = { path = "../pokeemerald-rs", optional = true }
