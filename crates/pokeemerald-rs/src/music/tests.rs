@@ -75,6 +75,25 @@ fn short_one_shot_song() -> Song {
     Song::new(voices, vec![events], 150)
 }
 
+/// A finite song whose dry voice stops before its master-mix reverb tail.
+fn finite_reverbed_song() -> Song {
+    let voices = vec![Instrument::DirectSound(ToneData::new(
+        loud_wave(),
+        Adsr::flat(),
+    ))];
+    let events = vec![
+        Event::Voice(0),
+        Event::Note {
+            key: 60,
+            velocity: 127,
+            gate: 1,
+        },
+        Event::Wait(2),
+        Event::Fine,
+    ];
+    Song::new(voices, vec![events], 150).with_reverb(100)
+}
+
 #[test]
 fn advance_frame_produces_audible_output_and_never_underruns_when_drained_each_frame() {
     let output = AudioOutput::null(RING_CAPACITY_FRAMES);
@@ -264,6 +283,56 @@ fn a_finished_song_restarts_instead_of_falling_permanently_silent() {
     assert!(
         audible_after_expected_finish,
         "a one-shot song must restart rather than staying silent forever once finished"
+    );
+}
+
+#[test]
+fn finite_reverbed_song_restarts_only_after_tail_drains() {
+    let song = finite_reverbed_song();
+    // Exactly one rendered frame fits, while the half-ring prefill target is
+    // too small for a frame. Playback and the reference therefore both begin
+    // at frame zero, with no queued prefill to account for.
+    let capacity_frames = Sequencer::FRAME_SAMPLES / usize::from(AudioOutput::CHANNELS);
+    let output = AudioOutput::null(capacity_frames);
+    let mut player = MusicPlayer::start(song.clone(), output).expect("null backend never errors");
+    let mut reference = Sequencer::new(song.clone());
+    let mut expected = vec![0.0_f32; Sequencer::FRAME_SAMPLES];
+    let mut actual = vec![0.0_f32; Sequencer::FRAME_SAMPLES];
+    let mut heard_tail_without_voice = false;
+
+    for frame in 0..1000 {
+        reference.render_frame(&mut expected);
+        player.advance_frame();
+        player.drain_null_for_test(&mut actual);
+        assert_eq!(
+            actual, expected,
+            "MusicPlayer restarted before the reference tail drained on frame {frame}"
+        );
+
+        if reference.voice_count() == 0 && expected.iter().any(|&sample| sample != 0.0) {
+            heard_tail_without_voice = true;
+        }
+        if reference.is_finished() {
+            break;
+        }
+    }
+
+    assert!(
+        heard_tail_without_voice,
+        "the finite song must render a wet tail after its dry voice stops"
+    );
+    assert!(
+        reference.is_finished(),
+        "the finite song's reverb tail must eventually drain"
+    );
+
+    let mut restarted = Sequencer::new(song);
+    restarted.render_frame(&mut expected);
+    player.advance_frame();
+    player.drain_null_for_test(&mut actual);
+    assert_eq!(
+        actual, expected,
+        "MusicPlayer must restart on the frame after the drained tail completes"
     );
 }
 

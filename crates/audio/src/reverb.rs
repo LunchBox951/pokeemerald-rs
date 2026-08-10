@@ -159,6 +159,12 @@ impl Reverb {
         self.level != 0
     }
 
+    /// Whether an enabled stage still holds any delayed audio that must be
+    /// allowed to feed back before playback is complete.
+    pub(crate) fn has_pending_samples(&self) -> bool {
+        self.is_enabled() && self.delay.iter().any(|&sample| sample != (0, 0))
+    }
+
     /// Seed one frame's mixer accumulator with this stage's wet
     /// contribution, one delay-line position per output sample — the same
     /// per-sample granularity `SoundMainRAM_Reverb` runs at, not a single

@@ -234,7 +234,7 @@ impl Song {
     /// shape.
     #[must_use]
     pub fn with_reverb(mut self, level: u8) -> Self {
-        self.reverb = level;
+        self.reverb = level.min(127);
         self
     }
 
@@ -272,6 +272,15 @@ impl Song {
 #[cfg(test)]
 mod tests {
     use super::rhythm_pan_from_pan_sweep;
+    use super::Song;
+
+    #[test]
+    fn reverb_level_is_clamped_to_supported_range() {
+        let song = || Song::new(Vec::new(), Vec::new(), 150);
+
+        assert_eq!(song().with_reverb(127).reverb(), 127);
+        assert_eq!(song().with_reverb(128).reverb(), 127);
+    }
 
     #[test]
     fn rhythm_pan_pins_the_upstream_pan_sweep_mapping() {

@@ -112,6 +112,12 @@ impl Mixer {
         self.voices.is_empty() && self.cgb_voices.iter().all(Option::is_none)
     }
 
+    /// Whether the master-mix reverb still holds delayed samples that can
+    /// produce a wet tail after all voices have stopped.
+    pub(crate) fn has_pending_reverb(&self) -> bool {
+        self.reverb.has_pending_samples()
+    }
+
     /// Read-only view of the live voices, for the sequencer's own tests to
     /// inspect mid-note volume/pitch updates.
     #[cfg(test)]
