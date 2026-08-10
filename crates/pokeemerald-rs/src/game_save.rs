@@ -204,9 +204,10 @@ pub(crate) enum StoreOutcome {
 /// Upstream's counterpart is not a save type at all but the state a session
 /// settled long before it saves. `NewGameInitData`
 /// (`pokeemerald/src/new_game.c:149-186`) memsets `gSaveBlock1` through
-/// `ClearSav1` (`:160`, `src/load_save.c:64-67`) and resets `gSaveBlock2`'s
+/// `ClearSav1` (`:160`, `src/load_save.c:64-67` — which also covers
+/// `ResetGameStats`'s `gSaveBlock1Ptr->gameStats`) and resets `gSaveBlock2`'s
 /// own deferred state field by field (encryption key `:155`, `ResetPokedex`,
-/// `PlayTimeCounter_Reset`, `ResetGameStats`); a boot that found nothing
+/// `PlayTimeCounter_Reset`); a boot that found nothing
 /// usable has already run `Sav2_ClearSetDefault` -> `ClearSav2` on top
 /// (`src/intro.c:1155-1156`). `HandleSavingData` then writes a *whole slot*
 /// out of that RAM (`src/save.c:736-739`) on every save of the session, so a
@@ -221,9 +222,11 @@ pub(crate) enum StoreOutcome {
 /// One upstream nuance this port does *not* reproduce, recorded in the
 /// ledger's `src/load_save.c#clear_sav` entry: because `SetDefaultOptions`
 /// runs only from that empty/corrupt-boot `Sav2_ClearSetDefault`, a new game
-/// started over an *intact* save inherits the replaced file's option bytes in
-/// RAM and writes them back out. Options are deferred bytes here, so
-/// [`SaveLineage::NewGame`] drops them with everything else.
+/// started over an *intact* save inherits the replaced file's option bytes —
+/// one example of the `gSaveBlock2` bytes `NewGameInitData` never writes
+/// (`localTimeOffset` is another) — in RAM and writes them back out. All of
+/// those are deferred bytes here, so [`SaveLineage::NewGame`] drops them
+/// with everything else.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SaveLineage {
     /// The session chose NEW GAME: its blocks are `NewGameInitData`'s, never
