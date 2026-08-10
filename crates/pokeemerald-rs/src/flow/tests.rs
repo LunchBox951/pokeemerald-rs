@@ -369,16 +369,44 @@ fn no_scene_outside_the_overworld_writes_the_save() {
     let (temp, mut save_slot) = empty_slot("no-save-outside-overworld");
     let menu = crate::main_menu::synthetic_scene(MainMenuType::NoSavedGame);
     let saved = save_slot.load();
-    let scenes = [
-        AppScene::MainMenu(Box::new(MainMenuState { scene: menu, saved })),
-        AppScene::Intro(Box::new(intro::synthetic_finished_scene())),
-        AppScene::OverworldLoadFailed(Box::new(intro::synthetic_finished_scene())),
+    let mut scenes: Vec<(AppScene, &[Buttons])> = vec![
+        (
+            AppScene::MainMenu(Box::new(MainMenuState { scene: menu, saved })),
+            // A can enter the intro when a pack exists, so it runs last.
+            &[
+                Buttons::START,
+                Buttons::B,
+                Buttons::DOWN,
+                Buttons::UP,
+                Buttons::A,
+            ],
+        ),
+        (
+            AppScene::OverworldLoadFailed(Box::new(intro::synthetic_finished_scene())),
+            // A and B intentionally retry the asset-pack-dependent handoff.
+            &[Buttons::START, Buttons::DOWN],
+        ),
     ];
-    for scene in scenes {
-        // Every button this state machine reads anywhere, one per frame:
-        // none of them may reach a write outside the overworld.
+    if let Ok(scene) = intro::load_default() {
+        // A fresh real intro cannot finish in these three frames; B is the
+        // only immediate skip to the asset-pack-dependent handoff.
+        scenes.push((
+            AppScene::Intro(Box::new(scene)),
+            &[Buttons::START, Buttons::A, Buttons::DOWN],
+        ));
+    } else if !assets::pack::AssetPack::default_path().is_file() {
+        // With no pack on disk, a finished intro can exercise the failed
+        // handoff without any possibility of entering the overworld.
+        scenes.push((
+            AppScene::Intro(Box::new(intro::synthetic_finished_scene())),
+            &[Buttons::START, Buttons::DOWN],
+        ));
+    }
+    for (scene, buttons) in scenes {
+        // Use only frames that are guaranteed to remain pre-overworld, with
+        // or without an extracted asset pack.
         let mut scene = scene;
-        for button in [Buttons::START, Buttons::A, Buttons::B, Buttons::DOWN] {
+        for &button in buttons {
             let (next, _frame) = advance_scene(scene, pressed(button), &mut save_slot);
             assert!(
                 !matches!(next, AppScene::Overworld(_)),
