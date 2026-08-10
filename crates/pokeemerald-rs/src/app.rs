@@ -482,6 +482,13 @@ impl App {
     /// [`MusicPlayer::fade_out`] is idempotent, so calling it on every
     /// post-title frame simply keeps the one running fade running.
     ///
+    /// Dropping the player also discards whatever the ring still buffers
+    /// (~half its capacity, ≈9 game frames), so the audible tail truncates
+    /// around 8/64 (≈-18 dB) of the schedule rather than reaching exact
+    /// silence -- inherent to any buffered producer, and strictly quieter
+    /// than the last samples the device would otherwise play; revisit by
+    /// draining the ring before the drop if the tail ever matters.
+    ///
     /// A no-op throughout when [`Self::music`] is already `None` (no
     /// pack/audio device at boot, or a headless `App` that never requested
     /// one).

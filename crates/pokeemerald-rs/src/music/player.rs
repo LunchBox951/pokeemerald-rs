@@ -86,9 +86,10 @@ pub const TITLE_FADE_OUT_SPEED: u16 = 4;
 /// reaches zero or below, every track is stopped and the player is paused
 /// (`m4a.c:717`-`:744`) -- the point at which the song is really over.
 ///
-/// For `speed == 4` that is 16 steps of 4/64 spaced 4 frames apart: full
-/// volume for frames 0..4, 60/64 for 4..8, ... 4/64 for 60..64, silent and
-/// finished at frame 64 (about 1.07 s at 59.7275 Hz).
+/// For `speed == 4` that is 16 steps of 4/64 spaced 4 frames apart: the
+/// first step lands on the fourth `FadeOutBody` call, so full volume covers
+/// calls 1..=3, 60/64 covers 4..=7, ... 4/64 covers 60..=63, silent and
+/// finished at call 64 (about 1.07 s at 59.7275 Hz).
 ///
 /// # Divergence `(behavioral-fidelity)`
 ///
@@ -103,8 +104,11 @@ pub const TITLE_FADE_OUT_SPEED: u16 = 4;
 /// is applied once to the sum rather than per track (so per-channel integer
 /// rounding differs by well under an LSB), and that the reverb tail
 /// recirculating inside `audio::Mixer` is faded on its way out rather than
-/// being fed the already-faded dry signal -- audibly, a marginally longer
-/// tail at the very end of the fade.
+/// being fed the already-faded dry signal -- audibly, a marginally *shorter*
+/// tail: upstream's wet term carries the older, louder pre-fade volume back
+/// around the loop (and keeps recirculating `pcmBuffer` even after `fadeOV`
+/// hits zero), while this port scales the whole frame by the current volume
+/// and goes exactly silent when the fade finishes.
 #[derive(Clone, Copy, Debug)]
 struct FadeOut {
     /// `MusicPlayerInfo::fadeOI`: frames between steps.
