@@ -8,8 +8,8 @@
 //! local pack.
 
 use super::{
-    darken_outside, highlight_rect, render_label, MainMenuItem, MainMenuScene, MainMenuSceneError,
-    HEADER_TEXT_BG, HEADER_TEXT_FG,
+    darken_outside, highlight_rect, render_label, ItemWindow, MainMenuItem, MainMenuScene,
+    MainMenuSceneError, MainMenuType, HEADER_TEXT_BG, HEADER_TEXT_FG,
 };
 use crate::textbox::{self, Coverage};
 use assets::pack::{AssetPack, ImageRef, PackError};
@@ -55,23 +55,43 @@ fn is_pack_missing_matches_not_found_only() {
 
 #[test]
 fn item_labels_match_upstream_strings() {
+    assert_eq!(MainMenuItem::Continue.label(), "CONTINUE");
     assert_eq!(MainMenuItem::NewGame.label(), "NEW GAME");
     assert_eq!(MainMenuItem::Option.label(), "OPTION");
 }
 
+/// `sWindowTemplates_MainMenu[0]`/`[1]` (`main_menu.c:291-309`): the
+/// `HAS_NO_SAVED_GAME` boxes, unchanged by issue #214.
 #[test]
-fn item_top_tiles_match_menu_top_win0_and_win1() {
-    assert_eq!(MainMenuItem::NewGame.top_tile(), 1); // MENU_TOP_WIN0
-    assert_eq!(MainMenuItem::Option.top_tile(), 5); // MENU_TOP_WIN1
+fn no_saved_game_item_windows_match_menu_top_win0_and_win1() {
+    let menu = MainMenuType::NoSavedGame;
+    assert_eq!(menu.items(), [MainMenuItem::NewGame, MainMenuItem::Option]);
+    assert_eq!(
+        menu.window(MainMenuItem::NewGame),
+        Some(ItemWindow { top: 1, height: 2 })
+    );
+    assert_eq!(
+        menu.window(MainMenuItem::Option),
+        Some(ItemWindow { top: 5, height: 2 })
+    );
+    assert_eq!(
+        menu.window(MainMenuItem::Continue),
+        None,
+        "there is nothing to continue in the no-save list"
+    );
 }
 
 // -- `highlight_rect` (main_menu.c:283-284's `MENU_WIN_HCOORDS`/`MENU_WIN_VCOORDS`) --
+
+pub(super) fn window_of(menu: MainMenuType, item: MainMenuItem) -> ItemWindow {
+    menu.window(item).expect("item belongs to this menu type")
+}
 
 #[test]
 fn highlight_rect_matches_upstream_win0_coords_for_new_game() {
     // MENU_WIN_HCOORDS = WIN_RANGE(9, 231); MENU_WIN_VCOORDS(0) = WIN_RANGE(1, 31).
     assert_eq!(
-        highlight_rect(MainMenuItem::NewGame.top_tile()),
+        highlight_rect(window_of(MainMenuType::NoSavedGame, MainMenuItem::NewGame)),
         (9, 1, 231, 31)
     );
 }
@@ -80,7 +100,7 @@ fn highlight_rect_matches_upstream_win0_coords_for_new_game() {
 fn highlight_rect_matches_upstream_win0_coords_for_option() {
     // Same MENU_WIN_HCOORDS; MENU_WIN_VCOORDS(1) = WIN_RANGE(33, 63).
     assert_eq!(
-        highlight_rect(MainMenuItem::Option.top_tile()),
+        highlight_rect(window_of(MainMenuType::NoSavedGame, MainMenuItem::Option)),
         (9, 33, 231, 63)
     );
 }
@@ -89,7 +109,7 @@ fn highlight_rect_matches_upstream_win0_coords_for_option() {
 
 #[test]
 fn selection_starts_on_new_game_and_moves_without_wrapping() {
-    let mut menu = super::synthetic_scene();
+    let mut menu = super::synthetic_scene(MainMenuType::NoSavedGame);
     assert_eq!(menu.selected(), MainMenuItem::NewGame);
 
     menu.move_up();
@@ -412,10 +432,20 @@ fn load_synthetic_scene() -> MainMenuScene {
     load_synthetic_scene_with_font(0)
 }
 
+/// [`load_synthetic_scene`], for whichever item list is under test (the
+/// `HAS_SAVED_GAME` cases live in [`super::saved_game_tests`]).
+pub(super) fn load_synthetic_scene_of(menu_type: MainMenuType) -> MainMenuScene {
+    load_synthetic_scene_inner(0, menu_type)
+}
+
 /// [`load_synthetic_scene`], with the font-sheet flavour spelled out (see
 /// [`synthetic_main_menu_pack_bytes`]'s doc comment for what each
 /// `font_index` pins).
 fn load_synthetic_scene_with_font(font_index: u8) -> MainMenuScene {
+    load_synthetic_scene_inner(font_index, MainMenuType::NoSavedGame)
+}
+
+fn load_synthetic_scene_inner(font_index: u8, menu_type: MainMenuType) -> MainMenuScene {
     let path = std::env::temp_dir().join(format!(
         "pokeemerald-rs-main-menu-test-{}-{:?}-{font_index}.pack",
         std::process::id(),
@@ -424,7 +454,7 @@ fn load_synthetic_scene_with_font(font_index: u8) -> MainMenuScene {
     let temp_pack = TempPackGuard::new(path);
     std::fs::write(temp_pack.path(), synthetic_main_menu_pack_bytes(font_index)).unwrap();
     let pack = AssetPack::load(temp_pack.path()).unwrap();
-    MainMenuScene::from_pack(&pack).unwrap()
+    MainMenuScene::from_pack(&pack, menu_type).unwrap()
 }
 
 #[test]
@@ -604,7 +634,8 @@ fn compose_from_synthetic_pack_is_deterministic_and_selection_changes_the_frame(
 #[test]
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
 fn real_pack_composes_non_blank_deterministic_frames_for_both_selection_states() {
-    let mut scene = super::load_default().expect("run `cargo xtask extract` first");
+    let mut scene =
+        super::load_default(MainMenuType::NoSavedGame).expect("run `cargo xtask extract` first");
 
     let new_game_first = scene.compose();
     let new_game_second = scene.compose();

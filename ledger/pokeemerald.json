@@ -26298,6 +26298,14 @@
       "status": "pending"
     },
     "src/load_save.c": {
+      "artifacts": {
+        "clear_sav": {
+          "reason": "Sav2_ClearSetDefault -> ClearSav1/ClearSav2's zero-the-blocks-before-a-new-game's-first-save effect is modelled by SaveStore::clear_base on the not-continued (preserve_existing) store path (#230 review). NOT modelled: the RAM struct pointers/shuffling (SetSaveBlocksPointers, MoveSaveBlocks_ResetHeap) and the checksum globals.",
+          "rust_target": "crates/engine/src/save/store.rs",
+          "spec": "S-5",
+          "status": "stubbed"
+        }
+      },
       "category": "code.source",
       "kind": "file",
       "status": "pending"
@@ -26478,10 +26486,16 @@
           "status": "stubbed"
         },
         "no_save_menu": {
-          "reason": "HAS_NO_SAVED_GAME now renders both items at upstream's real geometry/palette/window frame (main_menu.c:259-309, 755-793) with Up/Down selection and the WIN0+BLDCNT+BLDY(7) highlight, whose BLDCNT first-target set is BG0 only (main_menu.c:751) so the darken reaches the two windows' own pixels and never the backdrop (main_menu.c:745-753, 903-925, 1170-1187), issue #216. Still not ported: CONTINUE/MYSTERY GIFT/MYSTERY EVENTS and every other gSaveFileStatus branch (no save-file load path exists yet), OPTION's own destination screen (ACTION_OPTION, main_menu.c:963) -- crate::flow::advance_scene swallows an A press on it instead of launching a screen that doesn't exist -- and HandleMainMenuInput's B-button return to the title screen (JOY_NEW(B_BUTTON), main_menu.c:895-901, Task_HandleMainMenuBPressed's white fade and full-screen WIN0 open), which this port leaves inert.",
+          "reason": "HAS_NO_SAVED_GAME now renders both items at upstream's real geometry/palette/window frame (main_menu.c:259-309, 755-793) with Up/Down selection and the WIN0+BLDCNT+BLDY(7) highlight, whose BLDCNT first-target set is BG0 only (main_menu.c:751) so the darken reaches the two windows' own pixels and never the backdrop (main_menu.c:745-753, 903-925, 1170-1187), issue #216. The HAS_SAVED_GAME/CONTINUE branch and the gSaveFileStatus table are modelled since issue #214 -- see the save_menu artifact. Still not ported: the MYSTERY GIFT/MYSTERY EVENTS menu types (HAS_MYSTERY_GIFT/HAS_MYSTERY_EVENTS, defined main_menu.c:514-515, selected by the tMenuType increments at main_menu.c:645 and :658), OPTION's own destination screen (ACTION_OPTION, main_menu.c:963) -- crate::flow::advance_scene swallows an A press on it instead of launching a screen that doesn't exist -- and HandleMainMenuInput's B-button return to the title screen (JOY_NEW(B_BUTTON), main_menu.c:895-901, Task_HandleMainMenuBPressed's white fade and full-screen WIN0 open), which this port leaves inert.",
           "rust_target": "crates/pokeemerald-rs/src/main_menu.rs",
           "spec": "I-3",
           "status": "rewritten"
+        },
+        "save_menu": {
+          "reason": "HAS_SAVED_GAME branch: Task_MainMenuCheckSaveFile's gSaveFileStatus -> tMenuType table, sWindowTemplates_MainMenu[2..4]'s CONTINUE/NEW GAME/OPTION geometry, Task_DisplayMainMenu's HAS_SAVED_GAME arm, HandleMainMenuInput's ACTION_CONTINUE dispatch, and HighlightSelectedMainMenuItem's MENU_WIN_VCOORDS(2..4). NOT modelled: MainMenu_FormatSavegameText's PLAYER/TIME/POKeDEX/BADGES info lines (no playtime, Pokedex or badge-flag save state yet), the gText_SaveFileErased/gText_SaveFileCorrupted error windows, and the HAS_MYSTERY_GIFT/HAS_MYSTERY_EVENTS menu types.",
+          "rust_target": "crates/pokeemerald-rs/src/main_menu.rs",
+          "spec": "I-6",
+          "status": "stubbed"
         }
       },
       "category": "code.source",
@@ -26755,6 +26769,12 @@
           "reason": "gSaveBlock1Ptr->location = sWarpDestination transcribed as OverworldPhase::warp_to's save1.location assignment on a resolved warp landing (flow/overworld_phase/connections.rs); gLastUsedWarp (the previous location) and the dive/hole-warp resets are not modeled (no typed home / out of v1 scope) — stubbed until they are.",
           "rust_target": "crates/pokeemerald-rs/src/flow/overworld_phase/connections.rs",
           "spec": "I-3",
+          "status": "stubbed"
+        },
+        "CB2_ContinueSavedGame": {
+          "reason": "Resuming a loaded save is OverworldPhase::continue_saved_game: LoadSaveblockMapHeader's location -> map resolution and placement at gSaveBlock1Ptr->pos. NOT modelled: the saved facing -- upstream's ordinary continue path restores it (LoadGameSave -> CopyPartyAndObjectsFromSave -> LoadObjectEvents refills gObjectEvents, and CB2_ReturnToField -> ReturnToFieldLocal -> InitObjectEventsReturnToField -> SpawnObjectEventsOnReturnToField respawns the player from it), but this port models no object events, so it stands in with the continue-game-warp branch's GetAdjustedInitialDirection (tile-derived, DIR_SOUTH on an ordinary tile, reused from engine::overworld::warp_in_facing); the continue-game warp branch itself (UseContinueGameWarp/SetWarpDestinationToContinueGameWarp); LoadSaveblockObjEventScripts; DoTimeBasedEvents; PlayTimeCounter_Start; InitMatchCallCounters; ResetSafariZoneFlag_; ResetWinStreaks on SAVE_STATUS_ERROR; LoadSavedMapView; and the Battle Pyramid/Trainer Hill floor special cases.",
+          "rust_target": "crates/pokeemerald-rs/src/flow/overworld_phase.rs",
+          "spec": "I-6",
           "status": "stubbed"
         },
         "GetAdjustedInitialDirection": {
@@ -27135,17 +27155,35 @@
           "spec": "S-5",
           "status": "rewritten"
         },
+        "LoadGameSave": {
+          "reason": "SAVE_NORMAL boot-load driver re-implemented as SaveSlot::load: Save_ResetSaveCounters + TryLoadSaveSlot(FULL_SAVE_SLOT) over a real save file, with gSaveFileStatus returned as a value (SaveFileStatus) instead of a global. NOT modelled: the SAVE_HALL_OF_FAME arm (no HOF sectors), UpdateSaveAddresses (no gRamSaveSectorLocations indirection), CopyPartyAndObjectsFromSave (no gObjectEvents model and no BattlePokemon<->save::Pokemon decoder), and gGameContinueCallback. gFlashMemoryPresent maps to an unresolvable/unreadable save path.",
+          "rust_target": "crates/pokeemerald-rs/src/game_save.rs",
+          "spec": "I-6",
+          "status": "stubbed"
+        },
         "ReadFlashSector": {
           "reason": "Raw sector read re-implemented as SaveStore::read_physical over the in-memory Vec<u8> buffer instead of ReadFlash",
           "rust_target": "crates/engine/src/save/store.rs",
           "spec": "S-5",
           "status": "rewritten"
         },
+        "Save_ResetSaveCounters": {
+          "reason": "gSaveCounter/gLastWrittenSector reset to zero is SaveStore::from_flash_image's construction state, so a reloaded image re-derives both from its own footers on the next load. NOT modelled: gDamagedSaveSectors, which has no counterpart (see TrySavingData).",
+          "rust_target": "crates/engine/src/save/store.rs",
+          "spec": "I-6",
+          "status": "stubbed"
+        },
         "TryLoadSaveSlot": {
           "reason": "GetSaveValidStatus + CopySaveSlotData composition (FULL_SAVE_SLOT path) re-implemented as SaveStore::load",
           "rust_target": "crates/engine/src/save/store.rs",
           "spec": "S-5",
           "status": "rewritten"
+        },
+        "TrySavingData": {
+          "reason": "SAVE_NORMAL write driver re-implemented as SaveSlot::store: HandleSavingData's SAVE_NORMAL arm (WriteSaveSectorOrSlot over the full slot) plus persistence of the resulting flash image. NOT modelled: the SAVE_LINK/SAVE_EREADER/SAVE_HALL_OF_FAME/SAVE_OVERWRITE_DIFFERENT_FILE arms, gDamagedSaveSectors and DoSaveFailedScreen (a Vec<u8>-backed file has no partial-sector write failure), gTrainerHillVBlankCounter save/restore, and CopyPartyAndObjectsToSave.",
+          "rust_target": "crates/pokeemerald-rs/src/game_save.rs",
+          "spec": "I-6",
+          "status": "stubbed"
         },
         "WriteSaveSectorOrSlot": {
           "reason": "Full-slot write with gLastWrittenSector/gSaveCounter advance re-implemented as SaveStore::save (the FULL_SAVE_SLOT path; the single-sector path is never reached upstream either)",
@@ -27525,6 +27563,14 @@
       "status": "pending"
     },
     "src/start_menu.c": {
+      "artifacts": {
+        "save_flow": {
+          "reason": "The port has no start menu yet, so the SAVE action's user-visible effect is stood in for by an automatic save on exit from the overworld (flow.rs save_on_exit, issue #214/#232): a real divergence from upstream, which only writes when the player saves. NOT modelled: the start menu itself, Task_HandleSave's confirm/overwrite dialogs, and the save-completed message.",
+          "rust_target": "crates/pokeemerald-rs/src/flow.rs",
+          "spec": "I-6",
+          "status": "stubbed"
+        }
+      },
       "category": "code.source",
       "kind": "file",
       "status": "pending"

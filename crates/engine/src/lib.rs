@@ -18,7 +18,9 @@
 //! - [`save`] — upstream-offset-compatible `SaveBlock1`/`SaveBlock2` models
 //!   for identity, location/warps, party Pokémon, money, bag contents, and
 //!   [`event_data`] flags/vars, plus a checksummed rotating two-slot store
-//!   faithful to upstream's flash layout (issues #94/#117).
+//!   faithful to upstream's flash layout (issues #94/#117), and that store's
+//!   on-disk home ([`save::file`], issue #214): a per-OS save path derived
+//!   from `std::env` alone, plus atomic read/write of the whole flash image.
 //! - [`overworld`] — the map runtime ([`overworld::MapRuntime`]: typed map
 //!   data binding, connection-edge crossing, object/warp/coord event
 //!   lookup) and the on-foot player movement state machine

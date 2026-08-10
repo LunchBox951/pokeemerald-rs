@@ -35,9 +35,10 @@
 //! exist to handle *write* failures a `Vec<u8>` cannot experience, so they
 //! have no counterpart here. What upstream calls "corruption" — a sector
 //! whose signature or checksum fails to validate on *load* — is fully
-//! modeled; see [`SaveStore::load`]. File I/O (persisting the buffer to
-//! disk) is intentionally left for a later slice; the issue's scope treats
-//! it as optional.
+//! modeled; see [`SaveStore::load`]. File I/O — moving this buffer between
+//! memory and an actual file, with the failures only a file system can
+//! produce — lives in [`super::file`], which owns the whole disk side and
+//! deliberately re-validates none of what this module decides.
 
 use super::block::{SaveBlock1, SaveBlock2};
 use super::sector::{Sector, SECTOR_DATA_SIZE, SECTOR_SIGNATURE, SECTOR_SIZE};
@@ -57,6 +58,48 @@ pub const SAVE_BLOCK1_CHUNKS: usize = 4;
 /// The number of sectors per save slot this port models (see the module
 /// docs for why this is smaller than upstream's `NUM_SECTORS_PER_SLOT`).
 pub const SECTORS_PER_SLOT: usize = 1 + SAVE_BLOCK1_CHUNKS;
+
+/// `NUM_SECTORS_PER_SLOT` -- the number of sectors upstream *reserves* per
+/// slot in the physical flash layout (ids 0-13, PC storage included). The
+/// layout constant, distinct from [`SECTORS_PER_SLOT`] (how many of those
+/// reserved sectors this port writes today): slot 1 starts at this offset
+/// whether or not the PC-storage sectors between are modelled, so growing
+/// `SECTORS_PER_SLOT` toward it never moves a sector that already exists.
+pub const NUM_SECTORS_PER_SLOT: usize = 14;
+
+/// `NUM_SECTORS` -- the AGB cart's whole 128 KiB flash chip in sectors:
+/// both 14-sector slots plus the Hall of Fame (2), Trainer Hill, and
+/// recorded-battle sectors (`pokeemerald/include/constants/save.h`).
+pub const NUM_SECTORS: usize = 32;
+
+const _: () = assert!(SECTORS_PER_SLOT <= NUM_SECTORS_PER_SLOT);
+const _: () = assert!(NUM_SAVE_SLOTS * NUM_SECTORS_PER_SLOT <= NUM_SECTORS);
+
+/// The exact byte length of a [`SaveStore`]'s backing flash image
+/// ([`SaveStore::flash_image`]): the **full 128 KiB flash chip**
+/// ([`NUM_SECTORS`] sectors), even though only [`SECTORS_PER_SLOT`] sectors
+/// per slot are written today.
+///
+/// Deliberately the whole chip rather than just the modelled sectors: this
+/// length (and each slot's [`NUM_SECTORS_PER_SLOT`]-sector offset) is the
+/// *on-disk format*, and freezing it at upstream's own physical geometry
+/// keeps the file's **length and slot offsets** stable when PC storage
+/// lands -- the exact-length check can never reject an older file, and no
+/// already-written sector ever moves (issue #214 review). Unmodelled
+/// sectors persist as erased `0xFF` flash, exactly what a real cart holds
+/// where nothing was ever programmed `(behavioral-fidelity)`.
+///
+/// That is the *whole* guarantee. It is **not** forward compatibility for
+/// slot *validation*: `scan_slot` requires every one of a slot's
+/// [`SECTORS_PER_SLOT`] sectors to validate, so raising that constant to
+/// 14 would make a 5-sector-era slot scan as damaged (its PC sectors are
+/// erased, not valid) and silently drop `CONTINUE` for existing saves --
+/// upstream's own `GetSaveValidStatus` is equally strict about all
+/// `NUM_SECTORS_PER_SLOT` sectors. Growing `SECTORS_PER_SLOT` is
+/// therefore a save-compatibility break that must ship with either
+/// placeholder PC sectors written from day one of that growth or a
+/// one-time migration of older images (issue #235).
+pub const FLASH_IMAGE_LEN: usize = NUM_SECTORS * SECTOR_SIZE;
 
 // Typed views of the small constants above, for the `u16`/`u32` contexts
 // upstream's sector ids, `gLastWrittenSector`, and `gSaveCounter % NUM_SAVE_SLOTS`
@@ -171,6 +214,15 @@ fn expected_len_for(id: u16) -> Option<usize> {
 /// Ordinarily this is just `a < b`, but when one counter is `u32::MAX` and
 /// the other is `0` (the counter having just wrapped around), the wrapped
 /// one (`0`) is the newer save.
+///
+/// Deliberately *not* a general modular ordering: upstream's rule only ever
+/// compares the two on-disk slots, whose counters are exactly one
+/// generation apart, so the adjacent pair is the only wrap that can occur
+/// here `(behavioral-fidelity)`. Callers asking a different question — "did
+/// the file drift an arbitrary distance past this session?" — need serial
+/// arithmetic instead (`pokeemerald-rs`'s `game_save::counter_is_ahead`,
+/// #230 review round five) and must not reuse this rule.
+#[must_use]
 fn counter_b_is_newer(a: u32, b: u32) -> bool {
     if (a == u32::MAX && b == 0) || (a == 0 && b == u32::MAX) {
         a.wrapping_add(1) < b.wrapping_add(1)
@@ -194,22 +246,39 @@ struct SlotScan {
     counter: u32,
 }
 
+/// The retained serialization base as [`SaveStore::base_snapshot`]
+/// returns it: the raw (`SaveBlock1`, `SaveBlock2`) payloads.
+pub type BaseSnapshot = (
+    Box<[u8; SaveBlock1::PAYLOAD_LEN]>,
+    Box<[u8; SaveBlock2::PAYLOAD_LEN]>,
+);
+
 /// A rotating two-slot save store over an in-memory byte buffer. See the
 /// module docs for the algorithm and its (documented) reductions from
 /// upstream.
 #[derive(Debug, Clone)]
 pub struct SaveStore {
-    /// `NUM_SAVE_SLOTS * SECTORS_PER_SLOT` sectors, `SECTOR_SIZE` bytes
-    /// each, laid out slot-major (mirrors `gRamSaveSectorLocations`'
-    /// underlying flash addressing: slot 0 occupies sectors
-    /// `0..SECTORS_PER_SLOT`, slot 1 occupies
-    /// `SECTORS_PER_SLOT..2*SECTORS_PER_SLOT`).
+    /// The full [`NUM_SECTORS`]-sector chip, `SECTOR_SIZE` bytes each,
+    /// laid out slot-major at upstream's physical geometry (mirrors
+    /// `gRamSaveSectorLocations`' underlying flash addressing: slot 0
+    /// occupies sectors `0..NUM_SECTORS_PER_SLOT`, slot 1 occupies
+    /// `NUM_SECTORS_PER_SLOT..2*NUM_SECTORS_PER_SLOT`; only the first
+    /// [`SECTORS_PER_SLOT`] of each span is written today).
     buffer: Vec<u8>,
     /// `gLastWrittenSector` — the sector-rotation offset within a slot.
     last_written_sector: u16,
     /// `gSaveCounter` — incremented on every full-slot write; its parity
     /// selects which physical slot gets written/read.
     save_counter: u32,
+    /// The raw [`SaveBlock1`] payload the last [`SaveStore::load`] decoded
+    /// from (zero-filled before any load), kept current by
+    /// [`SaveStore::save`]. The serialization base modeled fields are
+    /// patched into, so bytes no field models yet survive a save/load round
+    /// trip — upstream rewrites the whole `gSaveBlock1` from RAM and never
+    /// forgets what it hasn't touched `(behavioral-fidelity)`.
+    base_block1: Box<[u8; SaveBlock1::PAYLOAD_LEN]>,
+    /// [`SaveStore::base_block1`]'s [`SaveBlock2`] counterpart.
+    base_block2: Box<[u8; SaveBlock2::PAYLOAD_LEN]>,
 }
 
 impl Default for SaveStore {
@@ -229,16 +298,94 @@ impl SaveStore {
     #[must_use]
     pub fn new() -> Self {
         Self {
-            buffer: vec![0xFFu8; NUM_SAVE_SLOTS * SECTORS_PER_SLOT * SECTOR_SIZE],
+            buffer: vec![0xFFu8; FLASH_IMAGE_LEN],
             last_written_sector: 0,
             save_counter: 0,
+            base_block1: Box::new([0u8; SaveBlock1::PAYLOAD_LEN]),
+            base_block2: Box::new([0u8; SaveBlock2::PAYLOAD_LEN]),
         }
+    }
+
+    /// The backing flash image: [`FLASH_IMAGE_LEN`] bytes -- the whole
+    /// chip, both slots at their physical offsets, unmodelled sectors
+    /// erased (`0xFF`).
+    ///
+    /// This is the whole of the store's persistent state. The two counters
+    /// [`SaveStore::last_written_sector`] and [`SaveStore::save_counter`]
+    /// are deliberately *not* part of it: upstream keeps them in RAM
+    /// (`gLastWrittenSector`/`gSaveCounter`), zeroes them at boot
+    /// (`Save_ResetSaveCounters`, `pokeemerald/src/save.c:110-115`), and
+    /// re-derives both from the image's own footers on the next load —
+    /// `GetSaveValidStatus` adopts the winning slot's counter and
+    /// `CopySaveSlotData`'s `if (id == 0)` arm recovers the rotation offset.
+    /// A persisted image is therefore self-describing, exactly as real
+    /// flash is `(behavioral-fidelity)`.
+    #[must_use]
+    pub fn flash_image(&self) -> &[u8] {
+        &self.buffer
+    }
+
+    /// Rebuild a store over an existing flash `image`, or `None` if `image`
+    /// is not exactly [`FLASH_IMAGE_LEN`] bytes.
+    ///
+    /// The counters start at zero — this is `Save_ResetSaveCounters`
+    /// (`pokeemerald/src/save.c:110-115`), which upstream runs at boot
+    /// immediately before `LoadGameSave` (`src/intro.c:1153-1154`). Callers
+    /// that want the counters the image was last written with must call
+    /// [`SaveStore::load`], the same way upstream only ever learns them from
+    /// `LoadGameSave` `(behavioral-fidelity)`.
+    #[must_use]
+    pub fn from_flash_image(image: &[u8]) -> Option<Self> {
+        if image.len() != FLASH_IMAGE_LEN {
+            return None;
+        }
+        Some(Self {
+            buffer: image.to_vec(),
+            last_written_sector: 0,
+            save_counter: 0,
+            base_block1: Box::new([0u8; SaveBlock1::PAYLOAD_LEN]),
+            base_block2: Box::new([0u8; SaveBlock2::PAYLOAD_LEN]),
+        })
     }
 
     /// `gLastWrittenSector`'s current value, for tests/observability.
     #[must_use]
     pub const fn last_written_sector(&self) -> u16 {
         self.last_written_sector
+    }
+
+    /// A copy of the retained serialization base (see [`SaveStore`]'s
+    /// field docs): the raw `SaveBlock1`/`SaveBlock2` payloads the last
+    /// [`SaveStore::load`] or [`SaveStore::save`] established. A caller
+    /// that outlives this store — a session object that re-reads the file
+    /// for each write — snapshots the base it booted from so a later
+    /// corruption-fallback heal can write the *session's* deferred lineage
+    /// forward via [`SaveStore::restore_base`], rather than adopt the
+    /// older intact slot's (#230 review).
+    #[must_use]
+    pub fn base_snapshot(&self) -> BaseSnapshot {
+        (self.base_block1.clone(), self.base_block2.clone())
+    }
+
+    /// Replace the retained serialization base with a
+    /// [`SaveStore::base_snapshot`] taken earlier — see that method for
+    /// when a caller does this.
+    pub fn restore_base(&mut self, (block1, block2): BaseSnapshot) {
+        self.base_block1 = block1;
+        self.base_block2 = block2;
+    }
+
+    /// Zero the retained serialization base — upstream `ClearSav1`/
+    /// `ClearSav2` (`Sav2_ClearSetDefault`, `pokeemerald/src/new_game.c`),
+    /// the wholesale `memset` a new game runs before its first save. A
+    /// session that did not adopt the loaded image's blocks must call this
+    /// before [`SaveStore::save`], or the previous trainer's deferred bytes
+    /// — play time, options, Pokédex state, ciphertext under a key this
+    /// session discarded — leak into the new game's slot
+    /// `(behavioral-fidelity)`.
+    pub fn clear_base(&mut self) {
+        self.base_block1.fill(0);
+        self.base_block2.fill(0);
     }
 
     /// `gSaveCounter`'s current value, for tests/observability.
@@ -248,7 +395,10 @@ impl SaveStore {
     }
 
     fn physical_offset(slot: usize, sector_in_slot: usize) -> usize {
-        (slot * SECTORS_PER_SLOT + sector_in_slot) * SECTOR_SIZE
+        // Slots sit NUM_SECTORS_PER_SLOT (14) sectors apart -- upstream's
+        // physical geometry -- even while only SECTORS_PER_SLOT (5) of each
+        // span is written; see FLASH_IMAGE_LEN's docs.
+        (slot * NUM_SECTORS_PER_SLOT + sector_in_slot) * SECTOR_SIZE
     }
 
     fn read_physical(&self, slot: usize, sector_in_slot: usize) -> Sector {
@@ -293,8 +443,15 @@ impl SaveStore {
     /// physical position rotated by the new `gLastWrittenSector` within
     /// whichever physical slot `gSaveCounter % NUM_SAVE_SLOTS` now selects.
     pub fn save(&mut self, block1: &SaveBlock1, block2: &SaveBlock2) {
-        let block2_bytes = block2.to_bytes();
-        let block1_bytes = block1.to_bytes(block2.encryption_key);
+        // Patch the modeled fields into the payloads the last load decoded
+        // from (zero fill before any load) rather than serializing from
+        // scratch, so deferred bytes — play time, options, Pokédex state, …
+        // — survive the rotation instead of being zeroed out of the newest
+        // valid slot.
+        let mut block2_bytes = self.base_block2.clone();
+        let mut block1_bytes = self.base_block1.clone();
+        block2.patch_bytes(&mut block2_bytes);
+        block1.patch_bytes(&mut block1_bytes, block2.encryption_key);
 
         let new_last_written_sector = (self.last_written_sector + 1) % SECTORS_PER_SLOT_U16;
         let new_save_counter = self.save_counter.wrapping_add(1);
@@ -302,10 +459,10 @@ impl SaveStore {
 
         for sector_id in 0..SECTORS_PER_SLOT_U16 {
             let data: &[u8] = if sector_id == SECTOR_ID_SAVEBLOCK2 {
-                &block2_bytes
+                &block2_bytes[..]
             } else {
                 let chunk_num = (sector_id - SECTOR_ID_SAVEBLOCK1_START) as usize;
-                chunk_of(&block1_bytes, chunk_num)
+                chunk_of(&block1_bytes[..], chunk_num)
             };
             let physical_in_slot =
                 ((sector_id + new_last_written_sector) % SECTORS_PER_SLOT_U16) as usize;
@@ -315,6 +472,10 @@ impl SaveStore {
 
         self.last_written_sector = new_last_written_sector;
         self.save_counter = new_save_counter;
+        // The patched payloads are now the newest slot's on-disk truth —
+        // adopt them as the base for the next save.
+        self.base_block1 = block1_bytes;
+        self.base_block2 = block2_bytes;
     }
 
     /// Scan one physical slot's sectors, mirroring the per-slot loop inside
@@ -415,8 +576,8 @@ impl SaveStore {
         // means keying off the adopted counter here `(behavioral-fidelity)`.
         let copy_slot = (self.save_counter % NUM_SAVE_SLOTS_U32) as usize;
 
-        let mut block2_bytes = vec![0u8; SaveBlock2::PAYLOAD_LEN];
-        let mut block1_bytes = vec![0u8; SaveBlock1::PAYLOAD_LEN];
+        let mut block2_bytes = Box::new([0u8; SaveBlock2::PAYLOAD_LEN]);
+        let mut block1_bytes = Box::new([0u8; SaveBlock1::PAYLOAD_LEN]);
         // Which SaveBlock1 chunks were copied from a validating sector. A
         // chunk left `false` keeps `block1_bytes`' zero fill, which — under a
         // recovered nonzero key — would XOR-decrypt to `key`/`low16(key)`
@@ -481,7 +642,7 @@ impl SaveStore {
         // out-of-range gender byte, matching upstream `CopySaveSlotData`.
         let (block2, key_recovered) = if block2_sector_valid {
             (
-                SaveBlock2::from_bytes(&block2_bytes).unwrap_or_default(),
+                SaveBlock2::from_bytes(&block2_bytes[..]).unwrap_or_default(),
                 true,
             )
         } else {
@@ -515,7 +676,7 @@ impl SaveStore {
         }
 
         let mut block1 =
-            SaveBlock1::from_bytes(&block1_bytes, block2.encryption_key).unwrap_or_default();
+            SaveBlock1::from_bytes(&block1_bytes[..], block2.encryption_key).unwrap_or_default();
 
         // Mirror of the re-seed pass above, for the opposite failure: no
         // usable key was recovered (the SaveBlock2 sector was missing/corrupt,
@@ -543,6 +704,12 @@ impl SaveStore {
             }
         }
 
+        // Retain the exact payload bytes the blocks were decoded from as
+        // the base [`SaveStore::save`] patches modeled fields into —
+        // deferred bytes in a loaded save must survive the next rotation.
+        self.base_block1 = block1_bytes;
+        self.base_block2 = block2_bytes;
+
         LoadOutcome {
             status,
             block1,
@@ -562,6 +729,25 @@ mod tests {
     use super::*;
     use crate::save::block::{Coords16, PlayerGender, WarpData, TRAINER_ID_LENGTH};
     use crate::save::{BoxPokemon, ItemSlot, Pokemon, PokemonSubstructures};
+
+    /// The on-disk geometry is upstream's physical flash layout, frozen
+    /// (issue #214 review): the image is the whole 128 KiB chip and the two
+    /// slots sit `NUM_SECTORS_PER_SLOT` sectors apart, so growing
+    /// `SECTORS_PER_SLOT` toward 14 (PC storage) can never change the
+    /// file's length or move a sector that already exists. Any change here
+    /// is a save-format break and must be a deliberate, migrated act.
+    #[test]
+    fn the_flash_image_geometry_is_upstreams_and_frozen() {
+        assert_eq!(NUM_SECTORS_PER_SLOT, 14);
+        assert_eq!(NUM_SECTORS, 32);
+        assert_eq!(FLASH_IMAGE_LEN, 131_072);
+        assert_eq!(SaveStore::physical_offset(0, 0), 0);
+        assert_eq!(
+            SaveStore::physical_offset(1, 0),
+            NUM_SECTORS_PER_SLOT * SECTOR_SIZE,
+            "slot 1 sits at upstream's 14-sector offset even while only 5 are written"
+        );
+    }
 
     #[test]
     fn counter_comparison_is_wraparound_aware() {
@@ -704,6 +890,96 @@ mod tests {
                 .event_data
                 .var_get(crate::event_data::VARS_START),
             Ok(777)
+        );
+    }
+
+    /// Issue #230's Codex P1 review scenario: nonzero bytes in *deferred*
+    /// regions — play time in [`SaveBlock2`]; coins, Pokédex, PC storage in
+    /// [`SaveBlock1`] — must survive a load → save rotation. `save` patches the
+    /// modeled fields into the payloads `load` decoded from; serializing
+    /// from a zeroed buffer instead would silently strip every deferred
+    /// byte from the newest valid slot while its checksums stay green.
+    #[test]
+    fn a_rotation_preserves_deferred_bytes_the_model_does_not_own() {
+        const B2_DEFERRED: usize = 0x10; // play-time region: modeled nowhere yet
+        const B1_DEFERRED_CHUNK0: usize = 0x100; // between the warps and the party
+        const B1_DEFERRED_CHUNK2: usize = 0x2000; // deep in the PC-storage span
+
+        let block1 = sample_block1();
+        let block2 = sample_block2();
+        let mut store = SaveStore::new();
+        store.save(&block1, &block2); // slot 1, counter 1
+
+        // Plant deferred bytes directly in the written slot's sectors,
+        // exactly as a save from a build that models more subsystems would
+        // have left them.
+        let mut payload = block2.to_bytes();
+        payload[B2_DEFERRED] = 0x5A;
+        let sector = Sector::write(SECTOR_ID_SAVEBLOCK2, &payload, 1);
+        let pos = store.find_sector_in_slot(1, SECTOR_ID_SAVEBLOCK2);
+        store.write_physical(1, pos, &sector);
+
+        let block1_bytes = block1.to_bytes(block2.encryption_key);
+        for (offset, value) in [(B1_DEFERRED_CHUNK0, 0xA5u8), (B1_DEFERRED_CHUNK2, 0xC3u8)] {
+            let chunk_num = offset / SECTOR_DATA_SIZE;
+            let id = SECTOR_ID_SAVEBLOCK1_START + u16::try_from(chunk_num).unwrap();
+            let mut payload = chunk_of(&block1_bytes, chunk_num).to_vec();
+            payload[offset % SECTOR_DATA_SIZE] = value;
+            let sector = Sector::write(id, &payload, 1);
+            let pos = store.find_sector_in_slot(1, id);
+            store.write_physical(1, pos, &sector);
+        }
+
+        // Load (as CONTINUE does), then save the loaded state (as the next
+        // TrySavingData does) — the rotation writes the *other* slot.
+        let outcome = store.load();
+        assert_eq!(outcome.status, SaveStatus::Ok);
+        store.save(&outcome.block1, &outcome.block2); // slot 0, counter 2
+
+        // The new newest slot still carries every deferred byte, and the
+        // modeled fields still round-trip.
+        let reloaded = store.load();
+        assert_eq!(reloaded.status, SaveStatus::Ok);
+        assert_eq!(store.save_counter(), 2, "the rotated slot is the winner");
+        assert_eq!(store.base_block2[B2_DEFERRED], 0x5A);
+        assert_eq!(store.base_block1[B1_DEFERRED_CHUNK0], 0xA5);
+        assert_eq!(store.base_block1[B1_DEFERRED_CHUNK2], 0xC3);
+        assert_eq!(reloaded.block2, block2);
+        assert_eq!(reloaded.block1.money, block1.money);
+        assert_eq!(reloaded.block1.bag, block1.bag);
+    }
+
+    /// The retention test's complement (#230 review, second round): a
+    /// session that never adopted the loaded blocks — a new game — calls
+    /// [`SaveStore::clear_base`], so the previous trainer's deferred bytes
+    /// do not ride into its first save.
+    #[test]
+    fn clear_base_drops_the_loaded_deferred_bytes_from_the_next_save() {
+        const B2_DEFERRED: usize = 0x10;
+
+        let block2 = sample_block2();
+        let mut store = SaveStore::new();
+        store.save(&sample_block1(), &block2); // slot 1, counter 1
+
+        let mut payload = block2.to_bytes();
+        payload[B2_DEFERRED] = 0x5A;
+        let sector = Sector::write(SECTOR_ID_SAVEBLOCK2, &payload, 1);
+        let pos = store.find_sector_in_slot(1, SECTOR_ID_SAVEBLOCK2);
+        store.write_physical(1, pos, &sector);
+
+        assert_eq!(store.load().status, SaveStatus::Ok);
+        assert_eq!(
+            store.base_block2[B2_DEFERRED], 0x5A,
+            "the deferred byte is retained before the clear"
+        );
+
+        store.clear_base();
+        store.save(&SaveBlock1::default(), &SaveBlock2::default());
+
+        assert_eq!(store.load().status, SaveStatus::Ok);
+        assert_eq!(
+            store.base_block2[B2_DEFERRED], 0,
+            "a cleared base writes zeroed deferred bytes"
         );
     }
 

@@ -80,7 +80,7 @@ use std::fmt;
 use std::path::{Path, PathBuf};
 
 use assets::pack::{AssetPack, PackError};
-use pokeemerald_rs::main_menu::{MainMenuScene, MainMenuSceneError};
+use pokeemerald_rs::main_menu::{MainMenuScene, MainMenuSceneError, MainMenuType};
 use pokeemerald_rs::title::{TitleScene, TitleSceneError};
 
 use crate::Scene;
@@ -355,12 +355,15 @@ fn compose(
             Ok((frame_to_rgb_bytes(frame.as_slice()), Vec::new()))
         }
         Scene::MainMenuNewGame => {
-            let menu = MainMenuScene::from_pack(pack)?;
+            // Both menu scenes pin `NoSavedGame` regardless of any save on
+            // disk: captures must be deterministic, and the blessed frames
+            // in docs/snapshots.md are of the two-item no-save menu.
+            let menu = MainMenuScene::from_pack(pack, MainMenuType::NoSavedGame)?;
             let frame = menu.compose_frame();
             Ok((frame_to_rgb_bytes(frame.as_slice()), Vec::new()))
         }
         Scene::MainMenuOption => {
-            let mut menu = MainMenuScene::from_pack(pack)?;
+            let mut menu = MainMenuScene::from_pack(pack, MainMenuType::NoSavedGame)?;
             menu.move_down();
             let frame = menu.compose_frame();
             Ok((frame_to_rgb_bytes(frame.as_slice()), vec!["DPAD_DOWN"]))

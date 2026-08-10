@@ -15,7 +15,8 @@
 //! Deferred bytes decode as ignored data and encode as zero. The modeled
 //! state covers player identity, encryption key, location/continue/heal
 //! warps, a six-member party, money, the five bag pockets, and
-//! [`crate::event_data::EventData`]. PC storage, file persistence, inventory
+//! [`crate::event_data::EventData`]. The store's flash image now persists to
+//! and reloads from an ordinary file ([`file`], I-6). PC storage, inventory
 //! mutation, and battle-facing Pokémon APIs remain future work.
 //!
 //! # Layout at a glance
@@ -31,16 +32,21 @@
 //!   buffer: `save` mirrors `WriteSaveSectorOrSlot`/`HandleWriteSector`;
 //!   `load` mirrors `GetSaveValidStatus` + `CopySaveSlotData`, including
 //!   corrupt-sector detection and slot fallback via the save counter.
+//! * [`file::SaveFile`] -- that store's flash image on disk: where the save
+//!   file lives per OS, and the atomic read/write of the image through it.
+//!   Adds no validation of its own; contents stay [`store`]'s business.
 
 pub mod bag;
 pub mod block;
 pub mod checksum;
+pub mod file;
 pub mod pokemon;
 pub mod sector;
 pub mod store;
 
 pub use bag::{Bag, ItemSlot};
 pub use block::{Coords16, PlayerGender, SaveBlock1, SaveBlock2, SaveError, WarpData};
+pub use file::{default_save_path, SaveFile, SaveFileError, SAVE_PATH_ENV};
 pub use pokemon::{BoxPokemon, Pokemon, PokemonError, PokemonSubstructures};
 pub use sector::{Sector, SECTOR_DATA_SIZE, SECTOR_SIGNATURE, SECTOR_SIZE};
-pub use store::{LoadOutcome, SaveStatus, SaveStore};
+pub use store::{BaseSnapshot, LoadOutcome, SaveStatus, SaveStore, FLASH_IMAGE_LEN};

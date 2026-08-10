@@ -45,6 +45,12 @@
 //! its "log-or-ignore is fine" failure policy for a transition's own pack
 //! load.
 //!
+//! [`App`] also owns the session's save medium (I-6, issue #214): the
+//! [`SaveSlot`] it hands to every [`crate::flow::advance_scene`] call, and to
+//! [`crate::flow::save_on_exit`] on the one frame [`App::step`] observes a
+//! close request. That shutdown write is the only place this shell touches
+//! save state directly -- see [`crate::flow`]'s module docs for both ends.
+//!
 //! # The headless real-boot check (I-2, issues #168 and #175)
 //!
 //! The single home for this rationale: the items below cross-reference it
@@ -112,6 +118,7 @@ use platform::{ButtonState, Buttons, Frame, Platform, PlatformError};
 
 use crate::flow::{self, AnimatedTitle, AppScene};
 use crate::frame::to_platform_frame;
+use crate::game_save::SaveSlot;
 use crate::main_menu::MainMenuItem;
 use crate::scene::BootScene;
 use crate::title::{self, TitleSceneError};
@@ -189,7 +196,7 @@ pub enum AppState {
     SyntheticBoot,
     /// The real animated title screen.
     Title,
-    /// The no-save main menu and its current selection.
+    /// The main menu and its current selection.
     MainMenu(MainMenuItem),
     /// Birch's new-game introduction.
     Intro,
@@ -236,6 +243,12 @@ pub struct App {
     /// section) -- `None` for a headless `App` (module docs), whose
     /// [`BootScene`] frame never changes.
     scene: Option<AppScene>,
+    /// This session's save medium (I-6, issue #214): read by the `Title` ->
+    /// `MainMenu` transition, written by [`flow::save_on_exit`] on the way
+    /// out. Owned here, at the one place with a whole-session lifetime, and
+    /// passed down `(oop-boundaries)` -- upstream's equivalent is flash plus
+    /// the `gSaveCounter`/`gLastWrittenSector` globals.
+    save_slot: SaveSlot,
 }
 
 /// Compose an already-loaded [`title::TitleScene`] at tick 0 into the
@@ -266,17 +279,22 @@ impl App {
     /// and its headless counterparts cannot drift apart in what they store
     /// `(oop-boundaries)` -- and so this struct literal is code the I-2
     /// real-boot check (module docs) runs.
-    fn assemble(platform: Platform, (frame, scene): (Box<Frame>, AppScene)) -> Self {
+    fn assemble(
+        platform: Platform,
+        (frame, scene): (Box<Frame>, AppScene),
+        save_slot: SaveSlot,
+    ) -> Self {
         Self {
             platform,
             frame,
             scene: Some(scene),
+            save_slot,
         }
     }
 
     /// The whole of [`App::new`]'s body: load and compose the real title
     /// screen (I-2), open a platform backend via `open_platform`, and
-    /// assemble the two into a running `App`.
+    /// assemble the two around the save medium from `open_save_slot`.
     ///
     /// Loads *before* calling `open_platform`, so a missing pack (or any
     /// other title-screen error) is surfaced cleanly without ever flashing a
@@ -294,11 +312,13 @@ impl App {
     /// event loop could not be created) otherwise.
     fn boot(
         open_platform: impl FnOnce() -> Result<Platform, PlatformError>,
+        open_save_slot: impl FnOnce() -> SaveSlot,
     ) -> Result<Self, AppError> {
-        // Load first: no window is opened if the pack is missing.
+        // Load first: no window or save medium is opened if the pack is
+        // missing.
         let loaded = compose_title_scene(title::load_default()?);
         let platform = open_platform()?;
-        Ok(Self::assemble(platform, loaded))
+        Ok(Self::assemble(platform, loaded, open_save_slot()))
     }
 
     /// Load the real title screen (I-2) from the local asset pack, then open
@@ -316,7 +336,7 @@ impl App {
     /// run) or is otherwise malformed; [`AppError::Platform`] if the
     /// platform's windowing event loop could not be created.
     pub fn new(title: impl Into<String>) -> Result<Self, AppError> {
-        Self::boot(|| Platform::new(title))
+        Self::boot(|| Platform::new(title), SaveSlot::default_location)
     }
 
     /// Load the real title screen and game-flow state through [`App::boot`]
@@ -326,7 +346,9 @@ impl App {
     /// This is the scripted-scenario counterpart to [`App::new`]: it runs
     /// the same pack load, scene construction, [`App::step`] transitions,
     /// and presentation calls without opening a display or pacing against
-    /// wall time.
+    /// wall time. Persistence is deliberately disabled so a scenario
+    /// always starts on the no-save menu and never reads or writes a
+    /// player's save file.
     ///
     /// # Errors
     ///
@@ -334,7 +356,7 @@ impl App {
     /// [`App::new`] -- most commonly [`TitleSceneError::is_pack_missing`]
     /// when no local asset pack has been extracted yet.
     pub fn new_headless_real() -> Result<Self, AppError> {
-        Self::boot(|| Ok(Platform::new_headless()))
+        Self::boot(|| Ok(Platform::new_headless()), SaveSlot::disabled)
     }
 
     /// Build the I-1 synthetic placeholder scene against `platform`'s
@@ -354,6 +376,7 @@ impl App {
             platform: Platform::new_headless(),
             frame: compose_boot_frame(),
             scene: None,
+            save_slot: SaveSlot::disabled(),
         }
     }
 
@@ -363,7 +386,11 @@ impl App {
     /// [`App::new`] always opens one).
     #[cfg(test)]
     fn new_headless_animated(scene: title::TitleScene) -> Self {
-        Self::assemble(Platform::new_headless(), compose_title_scene(scene))
+        Self::assemble(
+            Platform::new_headless(),
+            compose_title_scene(scene),
+            SaveSlot::disabled(),
+        )
     }
 
     /// Run the frame loop until the window is closed or Escape is pressed
@@ -410,6 +437,19 @@ impl App {
     /// fails.
     pub fn step(&mut self) -> Result<bool, AppError> {
         if !self.platform.pump()? {
+            // I-6's write trigger, and the only one this slice ships: on the
+            // way out, persist whatever save state the current scene holds.
+            // See `flow::save_on_exit` for why this stands in for upstream's
+            // start-menu SAVE flow, and why a failure here is logged rather
+            // than turned into an `AppError` -- the window is already
+            // closing, and there is nothing left to show a diagnostic on.
+            if let Some(Err(err)) = self
+                .scene
+                .as_ref()
+                .and_then(|scene| flow::save_on_exit(scene, &mut self.save_slot))
+            {
+                eprintln!("save: {err} -- the game was not saved on exit");
+            }
             return Ok(false);
         }
         let buttons = *self.platform.buttons();
@@ -417,7 +457,7 @@ impl App {
             eprintln!("{line}");
         }
         if let Some(scene) = self.scene.take() {
-            let (next, frame) = flow::advance_scene(scene, buttons);
+            let (next, frame) = flow::advance_scene(scene, buttons, &mut self.save_slot);
             self.scene = Some(next);
             self.frame = frame;
         }
@@ -451,7 +491,7 @@ impl App {
         match self.scene.as_ref() {
             None => AppState::SyntheticBoot,
             Some(AppScene::Title(_)) => AppState::Title,
-            Some(AppScene::MainMenu(menu)) => AppState::MainMenu(menu.selected()),
+            Some(AppScene::MainMenu(menu)) => AppState::MainMenu(menu.scene.selected()),
             Some(AppScene::Intro(_)) => AppState::Intro,
             Some(AppScene::OverworldLoadFailed(_)) => AppState::OverworldLoadFailed,
             Some(AppScene::Overworld(phase)) if phase.is_first_battle_active() => {
