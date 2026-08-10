@@ -24,6 +24,10 @@ pub enum PlatformError {
     UnsupportedAudioConfig,
     /// `cpal` failed to query, configure, build, or drive an audio stream.
     Audio(cpal::Error),
+    /// Scripted buttons were supplied to a windowed backend. Only the
+    /// explicit null backend accepts injected input; windowed input remains
+    /// owned by the OS event loop.
+    ScriptedInputRequiresHeadless,
 }
 
 impl fmt::Display for PlatformError {
@@ -40,6 +44,9 @@ impl fmt::Display for PlatformError {
                 )
             }
             Self::Audio(err) => write!(f, "audio device error: {err}"),
+            Self::ScriptedInputRequiresHeadless => {
+                write!(f, "scripted input requires the headless platform backend")
+            }
         }
     }
 }
@@ -50,7 +57,9 @@ impl std::error::Error for PlatformError {
             Self::EventLoop(err) => Some(err),
             Self::Os(err) => Some(err),
             Self::SoftBuffer(err) => Some(err),
-            Self::NoAudioDevice | Self::UnsupportedAudioConfig => None,
+            Self::NoAudioDevice
+            | Self::UnsupportedAudioConfig
+            | Self::ScriptedInputRequiresHeadless => None,
             Self::Audio(err) => Some(err),
         }
     }

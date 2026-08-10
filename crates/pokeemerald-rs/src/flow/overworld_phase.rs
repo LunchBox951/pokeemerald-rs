@@ -268,6 +268,22 @@ impl OverworldPhase {
     pub(crate) const fn save2(&self) -> &SaveBlock2 {
         &self.save2
     }
+
+    /// Whether the scripted Route 101 first battle currently owns the
+    /// overworld frame. Used by [`crate::app::App::state`] to expose a
+    /// stable scenario milestone without exposing this phase's battle
+    /// storage.
+    #[must_use]
+    pub(crate) const fn is_first_battle_active(&self) -> bool {
+        self.first_battle.is_some()
+    }
+
+    /// Whether a random wild battle currently owns the overworld frame.
+    /// See [`Self::is_first_battle_active`].
+    #[must_use]
+    pub(crate) const fn is_wild_battle_active(&self) -> bool {
+        self.wild_battle.is_some()
+    }
 }
 
 #[cfg(test)]
