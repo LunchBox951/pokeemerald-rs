@@ -1,6 +1,7 @@
 //! Unit tests for [`super`]/[`super::player`]: a synthetic, pack-free
-//! [`MusicPlayer`] round-trip (continuous playback, restart-on-finish, no
-//! underrun when drained each frame), plus real-pack coverage of
+//! [`MusicPlayer`] round-trip (continuous playback, restart-on-finish, ring
+//! prefill sizing, neither underrun nor overrun when drained each frame, and
+//! the `FadeOutBGM` ramp), plus real-pack coverage of
 //! [`load_song_from_pack`] against `mus_title`.
 //!
 //! The ignored, env-gated mGBA reference comparison (Discussion #227's
@@ -11,7 +12,20 @@ use std::sync::Arc;
 use audio::{Adsr, Event, Instrument, Sequencer, Song, ToneData, WaveData};
 use platform::AudioOutput;
 
-use super::{load_song_from_pack, MusicPlayer, RING_CAPACITY_FRAMES};
+use super::{load_song_from_pack, MusicPlayer, RING_CAPACITY_FRAMES, TITLE_FADE_OUT_SPEED};
+
+/// The ring's capacity in interleaved samples, i.e. what
+/// `Producer::available_space` reports before anything is queued.
+const RING_CAPACITY_SAMPLES: usize = RING_CAPACITY_FRAMES * (AudioOutput::CHANNELS as usize);
+
+/// Drain everything currently queued in `player`'s ring, so the next
+/// [`MusicPlayer::advance_frame`] plus a one-frame drain reads back exactly
+/// the frame that call pushed.
+fn drain_everything(player: &mut MusicPlayer) {
+    let queued = RING_CAPACITY_SAMPLES - player.ring_free_for_test();
+    let mut sink = vec![0.0_f32; queued];
+    player.drain_null_for_test(&mut sink);
+}
 
 /// A short, loud, tied square-ish wave -- loud enough that `push`ed frames
 /// are trivially distinguishable from silence.
@@ -81,6 +95,151 @@ fn advance_frame_produces_audible_output_and_never_underruns_when_drained_each_f
         player.underruns(),
         0,
         "draining exactly one frame per advance must never starve the ring"
+    );
+    assert_eq!(
+        player.overruns(),
+        0,
+        "draining exactly one frame per advance must never overflow the ring either"
+    );
+}
+
+/// The prefill leaves roughly half the ring free (`super::player`'s module
+/// docs): headroom for game-loop/device clock drift, and half the latency a
+/// fill-to-the-brim prefill would add.
+#[test]
+fn start_prefills_about_half_the_ring_and_leaves_the_rest_as_headroom() {
+    let output = AudioOutput::null(RING_CAPACITY_FRAMES);
+    assert_eq!(
+        output.producer().available_space(),
+        RING_CAPACITY_SAMPLES,
+        "a fresh ring is empty, so this test's capacity constant is the real one"
+    );
+    let player = MusicPlayer::start(looping_song(), output).expect("null backend never errors");
+
+    let free = player.ring_free_for_test();
+    let queued = RING_CAPACITY_SAMPLES - free;
+    let half = RING_CAPACITY_SAMPLES / 2;
+    assert!(
+        queued <= half && queued + Sequencer::FRAME_SAMPLES > half,
+        "prefill queued {queued} samples: expected the largest whole number of \
+         {}-sample frames that fits in half of {RING_CAPACITY_SAMPLES}",
+        Sequencer::FRAME_SAMPLES
+    );
+    assert!(
+        free >= half,
+        "prefill must leave at least half the ring ({half} samples) free as drift headroom, \
+         left {free}"
+    );
+    assert_eq!(player.overruns(), 0, "the prefill must never drop a sample");
+}
+
+/// The overrun counter (`super::player`'s "Stream health" docs) surfaces the
+/// `push` return value the player used to discard: a producer nobody drains
+/// fills the ring and then starts losing samples, and that has to be visible.
+#[test]
+fn overruns_count_the_samples_a_full_ring_drops() {
+    let output = AudioOutput::null(RING_CAPACITY_FRAMES);
+    let mut player = MusicPlayer::start(looping_song(), output).expect("null backend never errors");
+    assert_eq!(player.overruns(), 0);
+
+    // Never drained: the ring fills, then every further push loses whatever
+    // does not fit.
+    let free_at_start = player.ring_free_for_test();
+    let frames_that_fit = free_at_start / Sequencer::FRAME_SAMPLES;
+    for _ in 0..frames_that_fit {
+        player.advance_frame();
+    }
+    assert_eq!(
+        player.overruns(),
+        0,
+        "frames that still fit must not be counted as dropped"
+    );
+
+    player.advance_frame();
+    let first_drop = player.overruns();
+    assert_eq!(
+        first_drop,
+        (Sequencer::FRAME_SAMPLES - free_at_start % Sequencer::FRAME_SAMPLES) as u64,
+        "the first overflowing push must drop exactly the part that did not fit"
+    );
+
+    player.advance_frame();
+    assert_eq!(
+        player.overruns(),
+        first_drop + Sequencer::FRAME_SAMPLES as u64,
+        "a completely full ring drops a whole frame"
+    );
+    assert_eq!(
+        player.underruns(),
+        0,
+        "overflowing is not underflowing -- the two counters must stay independent"
+    );
+}
+
+/// [`MusicPlayer::fade_out`] reproduces `m4aMPlayFadeOut`'s schedule for
+/// upstream's title-screen speed of 4 (`title_screen.c:784`): the volume
+/// holds at 64/64 for the first 4 frames, then drops 4/64 every 4 frames,
+/// reaching zero -- and the fade's terminal "player paused" state -- on
+/// frame 64. See [`super::player`]'s `FadeOut` docs for the arithmetic.
+///
+/// Asserted against an identically-seeded unfaded player rather than against
+/// hand-picked amplitudes: both sequencers are deterministic, so every
+/// sample must be exactly the unfaded one scaled by that frame's gain.
+#[test]
+fn fade_out_follows_upstreams_speed_4_volume_schedule_and_then_stops() {
+    /// 16 steps of 4/64, one every `TITLE_FADE_OUT_SPEED` frames.
+    const FADE_FRAMES: u32 = 64;
+
+    let mut plain = MusicPlayer::start(looping_song(), AudioOutput::null(RING_CAPACITY_FRAMES))
+        .expect("null backend never errors");
+    let mut fading = MusicPlayer::start(looping_song(), AudioOutput::null(RING_CAPACITY_FRAMES))
+        .expect("null backend never errors");
+    drain_everything(&mut plain);
+    drain_everything(&mut fading);
+
+    assert!(!fading.fade_finished(), "no fade has been started yet");
+    fading.fade_out(TITLE_FADE_OUT_SPEED);
+    // Idempotent: a second call must not restart the ramp at full volume.
+    fading.fade_out(TITLE_FADE_OUT_SPEED);
+
+    let mut plain_frame = vec![0.0_f32; Sequencer::FRAME_SAMPLES];
+    let mut fading_frame = vec![0.0_f32; Sequencer::FRAME_SAMPLES];
+    let mut any_audible = false;
+    for frame in 1..=FADE_FRAMES {
+        plain.advance_frame();
+        fading.advance_frame();
+        plain.drain_null_for_test(&mut plain_frame);
+        fading.drain_null_for_test(&mut fading_frame);
+
+        // `fadeOV` starts at 64 and loses 4 on every frame divisible by the
+        // speed (`m4a.c:715`), so `volX` is 64 - 4 * (frame / speed).
+        let vol_x = 64 - 4 * (frame / u32::from(TITLE_FADE_OUT_SPEED));
+        #[allow(clippy::cast_precision_loss)] // both sides are 0..=64.
+        let gain = vol_x as f32 / 64.0;
+        for (i, (&dry, &wet)) in plain_frame.iter().zip(&fading_frame).enumerate() {
+            assert!(
+                (wet - dry * gain).abs() < 1e-6,
+                "frame {frame}, sample {i}: expected {dry} * {gain} = {}, got {wet}",
+                dry * gain
+            );
+            if dry != 0.0 {
+                any_audible = true;
+            }
+        }
+
+        assert_eq!(
+            fading.fade_finished(),
+            frame == FADE_FRAMES,
+            "frame {frame}: the fade must finish on frame {FADE_FRAMES}, not before or after"
+        );
+    }
+    assert!(
+        any_audible,
+        "the reference player must actually have been producing sound to fade"
+    );
+    assert!(
+        fading_frame.iter().all(|&s| s == 0.0),
+        "the last fade frame must be silent"
     );
 }
 
@@ -168,17 +327,30 @@ fn mus_title_resolves_and_plays_continuously_with_its_real_reverb_level() {
 /// # Alignment and tolerance
 ///
 /// The two renders are not guaranteed to start at the same absolute sample
-/// (mGBA's own boot sequence differs from where this render starts): find
-/// the best-aligning offset within the first
-/// [`ALIGNMENT_SEARCH_WINDOW`](oracle::ALIGNMENT_SEARCH_WINDOW) samples by
-/// maximizing cross-correlation, then compare an [`COMPARE_WINDOW`](oracle::COMPARE_WINDOW)-sample
-/// window from there. Tolerance is RMS-error-relative, not sample-exact
-/// (`(behavioral-fidelity)`: player-audible result, not byte parity) --
-/// [`RMS_ERROR_TOLERANCE`](oracle::RMS_ERROR_TOLERANCE) is derived from (and
-/// must be re-derived and documented against) the *first* real reference
-/// comparison run, per Discussion #227's decision; until then it is a
-/// deliberately generous placeholder that still catches a grossly wrong
-/// render (silence, garbage, wrong pitch).
+/// (mGBA's own boot sequence differs from where this render starts): try
+/// every offset in the first
+/// [`ALIGNMENT_SEARCH_WINDOW`](oracle::ALIGNMENT_SEARCH_WINDOW) samples of
+/// the reference and keep the one whose
+/// [`COMPARE_WINDOW`](oracle::COMPARE_WINDOW)-sample RMS error against the
+/// native render is lowest, then report that offset's error. (Minimum RMS
+/// error, not maximum cross-correlation: with both renders at the same
+/// nominal amplitude the two pick the same offset, and the error is the
+/// quantity the tolerance below is expressed in, so there is no reason to
+/// compute a second statistic.) Every offset compares the *same* number of
+/// samples, so a late offset cannot win by comparing a shorter tail; the
+/// captures are length-checked up front instead.
+///
+/// Tolerance is relative to the reference's own energy, not an absolute
+/// number: the native render must sit within
+/// [`RMS_ERROR_FRACTION`](oracle::RMS_ERROR_FRACTION) of the reference's RMS
+/// over the compared window, and the reference itself must be louder than
+/// [`MIN_REFERENCE_RMS`](oracle::MIN_REFERENCE_RMS) so a silent or
+/// near-silent capture fails loudly rather than passing trivially. Not
+/// sample-exact (`(behavioral-fidelity)`: player-audible result, not byte
+/// parity). The fraction is a deliberately generous placeholder that still
+/// catches a grossly wrong render (silence, garbage, wrong pitch); per
+/// Discussion #227's decision it must be re-derived and re-documented
+/// against the *first* real reference comparison run.
 mod oracle {
     use std::env;
     use std::fs;
@@ -187,14 +359,19 @@ mod oracle {
 
     use super::load_song_from_pack;
 
-    /// How far into each render to search for the best-aligning offset.
+    /// How far into the reference to search for the best-aligning offset.
     pub(super) const ALIGNMENT_SEARCH_WINDOW: usize = MIXER_RATE as usize * 2; // 2 seconds
-    /// How many aligned samples to compare once an offset is chosen.
+    /// How many aligned samples every candidate offset compares -- fixed, so
+    /// all offsets are scored on equal terms.
     pub(super) const COMPARE_WINDOW: usize = MIXER_RATE as usize * 5; // 5 seconds
-    /// Placeholder RMS-error tolerance (module docs): re-derive from the
-    /// first real mGBA comparison and replace this constant (and this
-    /// comment) with the justified value.
-    pub(super) const RMS_ERROR_TOLERANCE: f64 = 0.35;
+    /// Placeholder tolerance (module docs), as a fraction of the reference
+    /// window's own RMS: re-derive from the first real mGBA comparison and
+    /// replace this constant (and this comment) with the justified value.
+    pub(super) const RMS_ERROR_FRACTION: f64 = 0.25;
+    /// Floor on the reference window's RMS. Below this the capture is
+    /// effectively silent, every relative tolerance becomes meaningless, and
+    /// the comparison is worthless -- so it fails instead of passing.
+    pub(super) const MIN_REFERENCE_RMS: f64 = 1e-4;
 
     /// Read a headerless, interleaved-stereo `f32` PCM file.
     fn read_pcm_f32(path: &str) -> Vec<f32> {
@@ -205,32 +382,75 @@ mod oracle {
             .collect()
     }
 
-    /// Left-channel RMS error at `offset` between `reference` and
-    /// `candidate`, over up to [`COMPARE_WINDOW`] samples.
+    /// Root-mean-square of a slice.
+    fn rms(xs: &[f32]) -> f64 {
+        assert!(!xs.is_empty(), "RMS of an empty window");
+        let sum_sq: f64 = xs.iter().map(|&s| f64::from(s) * f64::from(s)).sum();
+        #[allow(clippy::cast_precision_loss)] // a handful of seconds of samples.
+        let mean = sum_sq / xs.len() as f64;
+        mean.sqrt()
+    }
+
+    /// RMS error between `reference[offset..]` and `candidate`, over exactly
+    /// [`COMPARE_WINDOW`] samples.
+    ///
+    /// # Panics
+    ///
+    /// If either side is too short for a full window at `offset` -- callers
+    /// are expected to have length-checked already, so this is a bug, not a
+    /// short capture.
     fn rms_error(reference: &[f32], candidate: &[f32], offset: usize) -> f64 {
-        let len = COMPARE_WINDOW.min(reference.len().saturating_sub(offset).min(candidate.len()));
-        assert!(len > 0, "no overlap at offset {offset}");
-        let sum_sq: f64 = (0..len)
+        assert!(
+            reference.len() >= offset + COMPARE_WINDOW && candidate.len() >= COMPARE_WINDOW,
+            "rms_error called without a full {COMPARE_WINDOW}-sample window at offset {offset}"
+        );
+        let sum_sq: f64 = (0..COMPARE_WINDOW)
             .map(|i| {
                 let diff = f64::from(reference[offset + i]) - f64::from(candidate[i]);
                 diff * diff
             })
             .sum();
-        #[allow(clippy::cast_precision_loss)] // `len` is a handful of seconds of samples.
-        let mean = sum_sq / len as f64;
+        #[allow(clippy::cast_precision_loss)] // `COMPARE_WINDOW` is a handful of seconds.
+        let mean = sum_sq / COMPARE_WINDOW as f64;
         mean.sqrt()
     }
 
     /// Search `0..ALIGNMENT_SEARCH_WINDOW` for the offset into `reference`
     /// with the lowest RMS error against `candidate`'s start.
+    ///
+    /// Each offset's error is computed exactly once into a `Vec` before the
+    /// minimum is taken: `min_by` re-evaluates both sides of every
+    /// comparison, which would double an already
+    /// `ALIGNMENT_SEARCH_WINDOW * COMPARE_WINDOW`-sized scan (order 10^9
+    /// float operations, in a debug binary).
+    ///
+    /// # Panics
+    ///
+    /// If `reference` is shorter than `ALIGNMENT_SEARCH_WINDOW +
+    /// COMPARE_WINDOW`, or `candidate` shorter than `COMPARE_WINDOW`.
     fn best_alignment(reference: &[f32], candidate: &[f32]) -> usize {
-        (0..ALIGNMENT_SEARCH_WINDOW.min(reference.len()))
-            .min_by(|&a, &b| {
-                rms_error(reference, candidate, a)
-                    .partial_cmp(&rms_error(reference, candidate, b))
-                    .expect("RMS error is always finite")
-            })
-            .unwrap_or(0)
+        assert!(
+            reference.len() >= ALIGNMENT_SEARCH_WINDOW + COMPARE_WINDOW,
+            "reference capture is too short: {} samples per channel, but aligning over \
+             {ALIGNMENT_SEARCH_WINDOW} and comparing {COMPARE_WINDOW} needs at least {}. Capture \
+             more audio (see this module's docs) rather than comparing a shrinking window.",
+            reference.len(),
+            ALIGNMENT_SEARCH_WINDOW + COMPARE_WINDOW
+        );
+        assert!(
+            candidate.len() >= COMPARE_WINDOW,
+            "native render is too short: {} samples per channel, need {COMPARE_WINDOW}",
+            candidate.len()
+        );
+        let errors: Vec<f64> = (0..ALIGNMENT_SEARCH_WINDOW)
+            .map(|offset| rms_error(reference, candidate, offset))
+            .collect();
+        errors
+            .iter()
+            .enumerate()
+            .min_by(|(_, a), (_, b)| a.partial_cmp(b).expect("RMS error is always finite"))
+            .map(|(offset, _)| offset)
+            .expect("ALIGNMENT_SEARCH_WINDOW is nonzero")
     }
 
     #[test]
@@ -261,10 +481,18 @@ mod oracle {
 
         let offset = best_alignment(&reference_left, &native_left);
         let error = rms_error(&reference_left, &native_left, offset);
+        let reference_rms = rms(&reference_left[offset..offset + COMPARE_WINDOW]);
         assert!(
-            error < RMS_ERROR_TOLERANCE,
+            reference_rms > MIN_REFERENCE_RMS,
+            "the reference capture's aligned window is silent (RMS {reference_rms:.3e} at offset \
+             {offset}): it captured no audio, so there is nothing to compare against"
+        );
+        let tolerance = RMS_ERROR_FRACTION * reference_rms;
+        assert!(
+            error < tolerance,
             "native render diverges from the mGBA reference: RMS error {error:.4} at aligned \
-             offset {offset} exceeds the documented tolerance {RMS_ERROR_TOLERANCE}"
+             offset {offset} exceeds {RMS_ERROR_FRACTION} of the reference's own RMS \
+             {reference_rms:.4} (tolerance {tolerance:.4})"
         );
     }
 }

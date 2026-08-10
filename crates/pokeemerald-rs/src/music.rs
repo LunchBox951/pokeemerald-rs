@@ -81,7 +81,7 @@ mod player;
 #[cfg(test)]
 mod tests;
 
-pub use player::{MusicPlayer, RING_CAPACITY_FRAMES};
+pub use player::{MusicPlayer, RING_CAPACITY_FRAMES, TITLE_FADE_OUT_SPEED};
 
 /// `xIECV`'s `XCMD` sub-command number (pseudo-echo volume,
 /// `pokeemerald/sound/m4a_tables.c:252`) -- matches the identically-named,
@@ -344,6 +344,20 @@ fn convert_programmable_wave(
     }))
 }
 
+/// The [`KeySplit::table`] entry meaning "no child here" -- an index
+/// [`convert_key_split`] guarantees is out of range for the
+/// [`KeySplit::children`] it builds, so `children.get(MISS_CHILD)` always
+/// misses and the sequencer plays no note.
+///
+/// [`KeySplit::table`] is `[u8; KEY_SLOTS]` (that type's own docs), so the
+/// sentinel has to *be* a `u8`; reserving the top value and truncating the
+/// child list to `0..MISS_CHILD` keeps it unambiguous even for a
+/// pathologically large child group. Real voicegroups hold 128 slots, so
+/// nothing is ever actually dropped -- but a sentinel that silently becomes
+/// a valid index at 256 children would resolve to a real instrument, which
+/// is exactly the guess this module refuses to make.
+const MISS_CHILD: u8 = u8::MAX;
+
 /// Resolve a key-split indirection's child group into a full
 /// [`KeySplit::table`]/[`KeySplit::children`] pair.
 ///
@@ -352,7 +366,7 @@ fn convert_programmable_wave(
 /// type's own docs). Keys outside the source subrange -- which upstream
 /// leaves genuinely undefined (reading whatever bytes happen to follow the
 /// table in ROM, `assets::audio::voicegroup`'s own `KeySplitVoice` docs) --
-/// map to an out-of-range sentinel index instead of guessing at a real
+/// map to the [`MISS_CHILD`] sentinel index instead of guessing at a real
 /// child, so [`crate::audio::sequencer`]'s `resolve_instrument` cleanly
 /// finds no match and plays no note: silence is the honestly-representable
 /// choice here, not a guess at upstream's undefined behaviour.
@@ -363,12 +377,14 @@ fn convert_programmable_wave(
 /// conversion error from the child group's own slots.
 fn convert_key_split(pack: &AssetPack, v: &KeySplitVoice) -> Result<Instrument, MusicError> {
     let child_group = pack.voicegroup(&v.children)?;
-    let children = convert_indirection_children(pack, &child_group)?;
+    let mut children = convert_indirection_children(pack, &child_group)?;
 
-    // Deliberately out of `0..children.len()`, so `children.get(sentinel)`
-    // always misses (module docs).
-    let sentinel = u8::try_from(children.len()).unwrap_or(u8::MAX);
-    let mut table = [sentinel; KEY_SLOTS];
+    // Reserve [`MISS_CHILD`] by dropping any child a `u8` table index could
+    // never distinguish from it (see that constant's docs), so the sentinel
+    // below is guaranteed to miss rather than resolving to a real slot.
+    children.truncate(MISS_CHILD as usize);
+
+    let mut table = [MISS_CHILD; KEY_SLOTS];
     for (offset, &child_index) in v.table().iter().enumerate() {
         if let Some(key) = usize::from(v.starting_note).checked_add(offset) {
             if let Some(slot) = table.get_mut(key) {

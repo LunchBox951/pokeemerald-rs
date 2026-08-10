@@ -313,9 +313,13 @@ fn looping_song_for_test() -> audio::Song {
 }
 
 /// The App's own "stop" cue for its title BGM (Discussion #227's owner
-/// decision, S-3 issue #185): [`App::step`]'s `advance_music` stops (drops)
-/// an attached [`crate::music::MusicPlayer`] the moment [`AppScene::Title`]
-/// is no longer the active scene, rather than leaving it running unheard.
+/// decision, S-3 issue #185): [`App::step`]'s `advance_music` **fades** an
+/// attached [`crate::music::MusicPlayer`] out once [`AppScene::Title`] is no
+/// longer the active scene -- upstream's `FadeOutBGM(4)`
+/// (`pokeemerald/src/title_screen.c:784`) -- and drops it (stopping the
+/// stream) only when that fade completes, rather than hard-cutting it or
+/// leaving it running unheard.
+///
 /// Uses [`App::new_headless`] (the pure I-1 boot-scene path, whose
 /// `AppScene` is always `None` -- never `Title`) purely as a scaffold to
 /// attach a synthetic player to without needing a real asset pack; the
@@ -324,7 +328,11 @@ fn looping_song_for_test() -> audio::Song {
 /// `real_pack_boot_starts_title_music_and_sustains_it_without_underrun`,
 /// below.
 #[test]
-fn leaving_the_title_scene_stops_the_attached_music_player() {
+fn leaving_the_title_scene_fades_the_attached_music_player_out_before_stopping_it() {
+    /// `m4aMPlayFadeOut`'s 16 volume steps at `TITLE_FADE_OUT_SPEED` frames
+    /// each -- see `crate::music::player`'s `FadeOut` docs.
+    const FADE_FRAMES: usize = 64;
+
     let mut app = App::new_headless();
     let output = platform::AudioOutput::null(crate::music::RING_CAPACITY_FRAMES);
     let music = crate::music::MusicPlayer::start(looping_song_for_test(), output)
@@ -334,10 +342,26 @@ fn leaving_the_title_scene_stops_the_attached_music_player() {
 
     // `new_headless`'s `AppScene` is always `None`, never `Title` -- exactly
     // the "scene left Title" case `advance_music` must react to.
+    let mut drained = vec![0.0_f32; audio::Sequencer::FRAME_SAMPLES];
+    for frame in 1..FADE_FRAMES {
+        app.step().expect("headless step never errors");
+        app.drain_music_for_test(&mut drained);
+        assert!(
+            app.has_music_for_test(),
+            "frame {frame}: advance_music must fade the BGM out across {FADE_FRAMES} frames, not \
+             cut it dead"
+        );
+    }
+
     app.step().expect("headless step never errors");
     assert!(
         !app.has_music_for_test(),
-        "advance_music must stop the BGM once the scene is not AppScene::Title"
+        "advance_music must stop the BGM once the fade-out has run to completion"
+    );
+    assert_eq!(
+        app.music_underruns_for_test(),
+        None,
+        "a completed fade drops the player outright rather than leaving it paused"
     );
 }
 

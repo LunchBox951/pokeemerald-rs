@@ -462,19 +462,38 @@ impl App {
         Ok(true)
     }
 
-    /// The title flow's own "play/stop" cue for its BGM (Discussion #227's
-    /// owner decision): render and push one more frame of `mus_title` while
-    /// [`AppScene::Title`] is the active scene, or drop the player (stopping
-    /// the stream -- [`Self::music`]'s field docs) the moment it stops being
-    /// one. A no-op either way when [`Self::music`] is already `None` (no
+    /// The title flow's own "play/fade out" cue for its BGM (Discussion
+    /// #227's owner decision): render and push one more frame of `mus_title`
+    /// every frame, and -- once [`AppScene::Title`] is no longer the active
+    /// scene -- fade it out instead of cutting it dead.
+    ///
+    /// Upstream's title screen does exactly this: `Task_TitleScreenPhase3`
+    /// calls `FadeOutBGM(4)` on the A/START press
+    /// (`pokeemerald/src/title_screen.c:784`) *before* handing off with
+    /// `SetMainCallback2(CB2_GoToMainMenu)` (`:786`), so the BGM keeps
+    /// playing, quieter each step, across the palette fade into the main
+    /// menu. [`MusicPlayer::fade_out`] models `m4aMPlayFadeOut`'s schedule
+    /// (see its own docs for the arithmetic and the one divergence); this
+    /// method keeps the player alive and ticking until
+    /// [`MusicPlayer::fade_finished`] reports upstream's terminal
+    /// "stop every track, pause the player" state, and only then drops it
+    /// (tearing the stream down -- [`Self::music`]'s field docs).
+    ///
+    /// [`MusicPlayer::fade_out`] is idempotent, so calling it on every
+    /// post-title frame simply keeps the one running fade running.
+    ///
+    /// A no-op throughout when [`Self::music`] is already `None` (no
     /// pack/audio device at boot, or a headless `App` that never requested
     /// one).
     fn advance_music(&mut self) {
-        if matches!(self.scene, Some(AppScene::Title(_))) {
-            if let Some(music) = &mut self.music {
-                music.advance_frame();
-            }
-        } else {
+        let Some(music) = &mut self.music else {
+            return;
+        };
+        if !matches!(self.scene, Some(AppScene::Title(_))) {
+            music.fade_out(crate::music::TITLE_FADE_OUT_SPEED);
+        }
+        music.advance_frame();
+        if music.fade_finished() {
             self.music = None;
         }
     }
