@@ -5,8 +5,8 @@
 //! [`super::save_continue_tests`] instead -- see that module's own docs.
 
 use super::{
-    advance_scene, menu_action, save_on_exit, should_retry_overworld_load, title_advance_pressed,
-    AnimatedTitle, AppScene, MainMenuAction, MainMenuState,
+    advance_scene, menu_action, should_retry_overworld_load, title_advance_pressed, AnimatedTitle,
+    AppScene, MainMenuAction, MainMenuState,
 };
 use crate::game_save::SaveSlot;
 use crate::intro::{self, IntroStatus};
@@ -358,27 +358,30 @@ fn a_saved_game_menu_selects_continue_first_and_then_new_game_and_option() {
     }
 }
 
-/// I-6, issue #214: `save_on_exit` writes only when there is a game to
-/// write. Every pre-overworld scene must return `None` -- writing a
-/// not-yet-started game's blocks there would overwrite a real save with
-/// a blank one on the way out of the title screen.
+/// I-6, issues #214/#232: only the overworld can write the save, and only
+/// through the start menu. Every pre-overworld scene must leave the file
+/// alone no matter what is pressed -- writing a not-yet-started game's
+/// blocks from the title screen would overwrite a real save with a blank
+/// one, and `START` on the title screen means "go to the main menu", not
+/// "open a start menu".
 #[test]
-fn save_on_exit_writes_nothing_outside_the_overworld() {
+fn no_scene_outside_the_overworld_writes_the_save() {
     let (temp, mut save_slot) = empty_slot("no-save-outside-overworld");
     let menu = crate::main_menu::synthetic_scene(MainMenuType::NoSavedGame);
+    let saved = save_slot.load();
     let scenes = [
-        AppScene::MainMenu(Box::new(MainMenuState {
-            scene: menu,
-            saved: save_slot.load(),
-        })),
+        AppScene::MainMenu(Box::new(MainMenuState { scene: menu, saved })),
         AppScene::Intro(Box::new(intro::synthetic_finished_scene())),
         AppScene::OverworldLoadFailed(Box::new(intro::synthetic_finished_scene())),
     ];
-    for scene in &scenes {
-        assert!(
-            save_on_exit(scene, &mut save_slot).is_none(),
-            "only the overworld holds save state worth writing"
-        );
+    for scene in scenes {
+        // Every button this state machine reads anywhere, one per frame:
+        // none of them may reach a write outside the overworld.
+        let mut scene = scene;
+        for button in [Buttons::START, Buttons::A, Buttons::B, Buttons::DOWN] {
+            let (next, _frame) = advance_scene(scene, pressed(button), &mut save_slot);
+            scene = next;
+        }
     }
     assert!(
         !temp.slot().load().status.menu_shows_continue(),

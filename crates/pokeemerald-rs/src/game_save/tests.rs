@@ -43,6 +43,7 @@ fn no_flash_slot() -> SaveSlot {
         file: None,
         session_counter: None,
         session_bases: None,
+        session_status: None,
     }
 }
 

@@ -42,30 +42,39 @@
 //! difference between an unreadable save the player can still recover by
 //! hand and one this port silently destroys on the next save.
 //!
+//! # Who calls the writer
+//!
+//! The player does, through the field start menu: `START` -> `SAVE` ->
+//! upstream's confirm/overwrite chain (`src/start_menu.c`'s
+//! `sSaveDialogCallback` sequence, ported as [`crate::start_menu`], I-6
+//! issue #232). The three entry points below are that flow's two
+//! `TrySavingData` arms plus the guard the one unprompted write needs; this
+//! module never decides *whether* to save, only how.
+//!
+//! Issue #214's `flow::save_on_exit` stand-in — an automatic write on
+//! application shutdown, a deliberate deviation from upstream, which writes
+//! nothing when the lid closes — is gone with that flow.
+//!
 //! # Deferred, and honestly so
 //!
-//! - **The start-menu SAVE flow.** Upstream's in-game save is a
-//!   `START` -> `SAVE` -> confirmation-dialog chain
-//!   (`src/start_menu.c`'s `StartMenu_Save`/`SaveStartCallback` task
-//!   sequence), none of which is built. [`crate::flow::save_on_exit`] is the
-//!   headless-safe stand-in this slice ships instead; see its own docs.
 //! - **`DoSaveFailedScreen`.** Upstream shows a dedicated "save failed"
 //!   screen and retries against `gDamagedSaveSectors`. There is no such
 //!   screen here; a failed write is reported to the caller as a
-//!   [`engine::save::SaveFileError`] and logged.
+//!   [`engine::save::SaveFileError`], logged, and surfaced to the player as
+//!   the start menu's own `gText_SaveError` message.
 //! - **The save-file error message windows.** `SAVE_STATUS_CORRUPT` and
 //!   `SAVE_STATUS_ERROR` each open a main-menu message window first
 //!   (`gText_SaveFileErased` / `gText_SaveFileCorrupted`,
 //!   `src/main_menu.c:649-659`). The *menu type* each resolves to is
 //!   modelled ([`SaveFileStatus::menu_shows_continue`]); the windows are
 //!   not.
-//! - **`CopyPartyAndObjectsToSave`/`FromSave`.** Upstream syncs
-//!   `gPlayerParty` and `gObjectEvents` into the save block around every
-//!   save/load (`src/load_save.c:196-206`). This port has no `gObjectEvents`
-//!   model, and no encoder between `battle::BattlePokemon` and
-//!   [`engine::save::Pokemon`]'s encrypted substructures — see
-//!   [`crate::flow::overworld_phase::OverworldPhase::continue_saved_game`]
-//!   for what that costs on the party side.
+//! - **`CopyPartyAndObjectsToSave`/`FromSave`'s object-event half.**
+//!   Upstream syncs all of `gObjectEvents` into the save block around every
+//!   save/load (`src/load_save.c:196-206`). This port models one field of
+//!   one entry — the player's facing
+//!   ([`engine::save::SavedObjectEvent`]) — which is the only part a
+//!   continue observably restores here. The party half is fully modelled
+//!   since issue #232 ([`crate::party`]).
 
 use engine::save::{
     BaseSnapshot, SaveBlock1, SaveBlock2, SaveFile, SaveFileError, SaveStatus, SaveStore,
@@ -224,6 +233,14 @@ pub(crate) struct SaveSlot {
     /// a silent rollback to the older save's play time/options/Pokédex
     /// (#230 review).
     session_bases: Option<BaseSnapshot>,
+    /// `gSaveFileStatus` (`pokeemerald/src/save.c:89`): the verdict the
+    /// *boot* load reached, latched for the whole session so the
+    /// start-menu save flow can branch on it exactly as
+    /// `SaveConfirmInputCallback` does (`src/start_menu.c:1008-1023`).
+    /// `None` until [`SaveSlot::load`] has run -- upstream's own global is
+    /// zero-initialized, i.e. `SAVE_STATUS_EMPTY`, until then, which is
+    /// what [`SaveSlot::boot_status`] reports.
+    session_status: Option<SaveFileStatus>,
 }
 
 impl SaveSlot {
@@ -240,6 +257,7 @@ impl SaveSlot {
                 file: Some(file),
                 session_counter: None,
                 session_bases: None,
+                session_status: None,
             },
             Err(err) => {
                 eprintln!("save: {err} -- this session cannot load or save");
@@ -247,6 +265,7 @@ impl SaveSlot {
                     file: None,
                     session_counter: None,
                     session_bases: None,
+                    session_status: None,
                 }
             }
         }
@@ -264,7 +283,15 @@ impl SaveSlot {
             file: Some(file),
             session_counter: None,
             session_bases: None,
+            session_status: None,
         }
+    }
+
+    /// `gSaveFileStatus` (struct docs): the boot load's verdict, or
+    /// [`SaveFileStatus::Empty`] before any load has run -- upstream's
+    /// global holds `SAVE_STATUS_EMPTY` (0) then too.
+    pub(crate) fn boot_status(&self) -> SaveFileStatus {
+        self.session_status.unwrap_or(SaveFileStatus::Empty)
     }
 
     /// `Save_ResetSaveCounters` + `LoadGameSave(SAVE_NORMAL)`
@@ -280,6 +307,7 @@ impl SaveSlot {
     /// unreadable is strictly worse than one that offers `NEW GAME`.
     pub(crate) fn load(&mut self) -> SavedGame {
         let Some(file) = &self.file else {
+            self.session_status = Some(SaveFileStatus::NoFlash);
             return SavedGame::no_flash();
         };
         let mut store = match file.read() {
@@ -297,6 +325,7 @@ impl SaveSlot {
                 // #214 review; module docs' `NoFlash` rule).
                 eprintln!("save: {err} -- starting without a saved game; saving is disabled for this session");
                 self.file = None;
+                self.session_status = Some(SaveFileStatus::NoFlash);
                 return SavedGame::no_flash();
             }
         };
@@ -309,8 +338,12 @@ impl SaveSlot {
         // `session_bases`' docs).
         self.session_counter = Some(store.save_counter());
         self.session_bases = Some(store.base_snapshot());
+        let status = SaveFileStatus::from_store(outcome.status);
+        // `gSaveFileStatus` (struct docs): latched here, read later by the
+        // start menu's save flow.
+        self.session_status = Some(status);
         SavedGame {
-            status: SaveFileStatus::from_store(outcome.status),
+            status,
             block1: outcome.block1,
             block2: outcome.block2,
         }
@@ -346,34 +379,80 @@ impl SaveSlot {
         block1: &SaveBlock1,
         block2: &SaveBlock2,
     ) -> Result<StoreOutcome, SaveFileError> {
-        self.store_impl(block1, block2, false)
+        self.store_impl(block1, block2, false, false)
+    }
+
+    /// `TrySavingData(SAVE_OVERWRITE_DIFFERENT_FILE)` into
+    /// `HandleSavingData`'s own arm (`pokeemerald/src/save.c:751-760`):
+    /// [`SaveSlot::store`], plus the wipe of everything the *previous*
+    /// file left behind.
+    ///
+    /// Upstream reaches this arm only from `SaveDoSaveCallback`'s
+    /// `gDifferentSaveFile` branch (`src/start_menu.c:1093-1097`) -- a
+    /// session that started a new game and whose player has just answered
+    /// YES to `gText_DifferentSaveFile`'s WARNING -- and what it adds over
+    /// `SAVE_NORMAL` is erasing the Hall of Fame sectors, so no trace of
+    /// the replaced adventure survives. This port has no Hall of Fame
+    /// sectors; its counterpart is dropping the *retained payload base*
+    /// (`SaveStore::clear_base`), so the deferred bytes the pre-write read
+    /// recovered -- the previous trainer's play time, options, Pokédex, and
+    /// ciphertext under a discarded encryption key -- do not ride along
+    /// into the new file (#230 review).
+    ///
+    /// # Errors
+    ///
+    /// The same cases as [`SaveSlot::store`].
+    pub(crate) fn store_overwriting_different_file(
+        &mut self,
+        block1: &SaveBlock1,
+        block2: &SaveBlock2,
+    ) -> Result<StoreOutcome, SaveFileError> {
+        self.store_impl(block1, block2, false, true)
     }
 
     /// [`SaveSlot::store`], except it **refuses** -- file untouched,
     /// [`StoreOutcome::RefusedExistingSave`] -- when the image on disk
     /// holds a continuable save ([`SaveFileStatus::menu_shows_continue`]).
     ///
-    /// The new-game session's exit write (issue #214 review): a session
-    /// that did not continue from the save on disk has no consent to
-    /// replace it -- upstream asks first, through `gDifferentSaveFile`'s
-    /// "there is already a saved file" prompt -- so until a start-menu save
-    /// flow exists to ask with, the only safe policy is to keep the old
-    /// save. Checked *under the same inter-process lock as the write*, so
-    /// a save appearing between check and write (another instance's) is
-    /// protected too, not just one present at boot.
+    /// The one write this port performs with no prompt behind it
+    /// (issue #232): upstream's `SaveConfirmInputCallback` skips the
+    /// overwrite question entirely when a *new-game* session saves over an
+    /// `SAVE_STATUS_EMPTY`/`SAVE_STATUS_CORRUPT` cartridge
+    /// (`src/start_menu.c:1008-1019`) -- there is nothing there to ask
+    /// about. That reasoning holds on a cartridge and not on a filesystem,
+    /// where another instance can have written a real save since this
+    /// session booted, so the write is still checked *under the same
+    /// inter-process lock* and refused if the image on disk turned out to
+    /// be continuable after all. Also clears the retained base, for the
+    /// reason [`SaveSlot::store_overwriting_different_file`] documents:
+    /// this session never adopted the loaded image's blocks.
+    ///
+    /// # Errors
+    ///
+    /// The same cases as [`SaveSlot::store`].
     pub(crate) fn store_unless_foreign_save(
         &mut self,
         block1: &SaveBlock1,
         block2: &SaveBlock2,
     ) -> Result<StoreOutcome, SaveFileError> {
-        self.store_impl(block1, block2, true)
+        self.store_impl(block1, block2, true, true)
     }
 
+    /// The shared body of the three `TrySavingData` entry points above.
+    ///
+    /// `refuse_foreign` is the unprompted-write guard
+    /// ([`SaveSlot::store_unless_foreign_save`]); `clear_base` drops the
+    /// previous file's deferred bytes
+    /// ([`SaveSlot::store_overwriting_different_file`]). They are separate
+    /// because upstream separates them: only one of its three reachable
+    /// save types wipes the old file's leftovers, and none of them refuses
+    /// a write the player already consented to.
     fn store_impl(
         &mut self,
         block1: &SaveBlock1,
         block2: &SaveBlock2,
-        preserve_existing: bool,
+        refuse_foreign: bool,
+        clear_base: bool,
     ) -> Result<StoreOutcome, SaveFileError> {
         let file = self.file.as_ref().ok_or(SaveFileError::NoDataDirectory)?;
         // Exclusive across processes for the whole read-modify-write
@@ -417,23 +496,23 @@ impl SaveSlot {
         // options, Pokédex) back a generation. The session continued from
         // the boot load's payload; restore that as the base so the heal
         // writes the session's own lineage forward. Moot when the counters
-        // match (same base either way) and skipped for `preserve_existing`
-        // (`clear_base` below zeroes the base regardless).
-        if !preserve_existing {
+        // match (same base either way) and skipped when `clear_base` is
+        // set, since that zeroes the base regardless.
+        if !clear_base {
             if let (Some(loaded), Some(bases)) = (self.session_counter, &self.session_bases) {
                 if counter_is_ahead(store.save_counter(), loaded) {
                     store.restore_base(bases.clone());
                 }
             }
         }
-        if preserve_existing {
-            if SaveFileStatus::from_store(existing.status).menu_shows_continue() {
-                return Ok(StoreOutcome::RefusedExistingSave);
-            }
-            // A `preserve_existing` write is a session that never adopted
-            // the loaded image's blocks (the new-game path -- flow keys it
-            // off `continued_from_save`). Upstream zeroes `gSaveBlock1/2`
-            // wholesale before such a session's first save
+        if refuse_foreign && SaveFileStatus::from_store(existing.status).menu_shows_continue() {
+            return Ok(StoreOutcome::RefusedExistingSave);
+        }
+        if clear_base {
+            // A `clear_base` write is a session that never adopted the
+            // loaded image's blocks -- the new-game path, which the start
+            // menu keys off `gDifferentSaveFile`. Upstream zeroes
+            // `gSaveBlock1/2` wholesale before such a session's first save
             // (`Sav2_ClearSetDefault` -> `ClearSav1`/`ClearSav2`), so the
             // deferred bytes the pre-write `load` retained -- the previous
             // trainer's play time, options, Pokédex, ciphertext under a

@@ -1,11 +1,14 @@
-//! I-6 (issue #214) integration tests: save, exit, reload, continue.
+//! I-6 (issues #214/#232) integration tests: start-menu save, exit, reload,
+//! continue.
 //!
 //! These drive the *production* path end to end — the same
 //! [`OverworldPhase::step`] the windowed game runs, the same
-//! [`super::save_on_exit`] its shutdown calls, the same
+//! `OverworldPhase::advance_start_menu_frame` its `START` press reaches,
+//! the same [`crate::start_menu::StartMenu`] state machine and
+//! [`crate::game_save::SaveSlot::store`] behind its `SAVE` action, the same
 //! [`SaveSlot::load`](crate::game_save::SaveSlot::load) its boot calls, and
 //! the same [`OverworldPhase::from_saved`]
-//! [`OverworldPhase::continue_saved_game`] builds from — with two
+//! [`OverworldPhase::continue_saved_game`] builds from — with three
 //! substitutions that keep them runnable in CI, where there is no extracted
 //! asset pack:
 //!
@@ -13,30 +16,36 @@
 //!   grid rather than a pack-decoded one (the same fixture
 //!   `crate::flow::overworld_phase::tests` already walks the player around),
 //!   paired with a *real* map id so every `MapHeaderTable`/`MapEventsTable`
-//!   lookup on the way resolves; and
+//!   lookup on the way resolves;
+//! * the start menu is opened through
+//!   `OverworldPhase::open_synthetic_start_menu` — blank glyph sheet and
+//!   blank window frames, everything else (the item list, the cursor, the
+//!   whole `sSaveDialogCallback` chain, and the write itself) production;
+//!   and
 //! * the save file is a per-test scratch path, passed in as a
 //!   [`crate::game_save::SaveSlot`] value rather than read from the
 //!   process-wide environment.
 //!
-//! The one production step they cannot take is
+//! The two production steps they cannot take are
 //! [`OverworldPhase::continue_saved_game`]'s own
-//! `crate::overworld::load_room` call, which needs the pack. The
-//! `#[ignore]`d [`real_pack_continue_from_the_main_menu_restores_the_saved_game`]
-//! at the bottom closes that gap on the real-pack lane, going all the way
-//! through [`super::advance_scene`]'s `CONTINUE` press.
+//! `crate::overworld::load_room` call and `crate::start_menu::open_default`,
+//! both of which need the pack. The two `#[ignore]`d `real_pack_*` cases
+//! below close that gap on the real-pack lane.
 //!
 //! [`OverworldPhase::step`]: crate::flow::overworld_phase::OverworldPhase::step
 
 use engine::event_data::EventData;
 use engine::overworld::{Direction, PlayerState};
-use engine::save::{BoxPokemon, Pokemon, PokemonSubstructures, SaveBlock1, SaveBlock2};
+use engine::save::{SaveBlock1, SaveBlock2};
 use platform::Buttons;
 
 use super::overworld_phase::{saved_map_id, OverworldPhase};
 use super::tests::{held, pressed, TempSave};
-use super::{menu_type_for, save_on_exit, AppScene, MainMenuState};
+use super::{menu_type_for, AppScene, MainMenuState};
+use crate::game_save::SaveSlot;
 use crate::main_menu::{MainMenuItem, MainMenuType};
 use crate::new_game;
+use crate::start_menu::StartMenuItem;
 
 /// `FLAG_RECEIVED_RUNNING_SHOES` (`pokeemerald/include/constants/flags.h:300`)
 /// — an ordinary flag no new-game initialization sets, so setting it is a
@@ -48,42 +57,18 @@ const FLAG_RECEIVED_RUNNING_SHOES: u16 = 0x112;
 /// ordinary (non-temp) var, likewise untouched by new-game init.
 const VAR_REPEL_STEP_COUNT: u16 = 0x4021;
 
-/// A party member built through the save model's own encoder: real
-/// `personality`/`ot_id` (so the substructure order and XOR key are
-/// non-trivial), real substructure bytes, and the party-only stats block.
-///
-/// Deliberately *not* `Pokemon::default()`: a zeroed mon would round-trip
-/// through a buggy serializer just as happily as a correct one.
-fn a_party_member(ot_id: u32) -> Pokemon {
-    let mut box_data = BoxPokemon::new(0x1234_ABCD, ot_id);
-    box_data.set_substructures(&PokemonSubstructures {
-        // Growth: species 277 (Treecko) at offset 0, held item none.
-        growth: [0x15, 0x01, 0, 0, 0x40, 0x1F, 0, 0, 0, 0, 70, 0],
-        // Attacks: POUND / LEER, 35/30 PP.
-        attacks: [0x01, 0x00, 0x2B, 0x00, 0, 0, 0, 0, 35, 30, 0, 0],
-        evs_and_condition: [1, 2, 3, 4, 5, 6, 0, 0, 0, 0, 0, 0],
-        misc: [0, 0, 0, 0, 0x11, 0x22, 0x33, 0x44, 0, 0, 0, 0],
-    });
-    Pokemon {
-        box_data,
-        status: 0,
-        level: 7,
-        mail: 0xFF,
-        hp: 17,
-        max_hp: 23,
-        attack: 12,
-        defense: 11,
-        speed: 15,
-        special_attack: 13,
-        special_defense: 10,
-    }
-}
+/// How many frames a save flow gets before the fixture calls it wedged.
+/// Deliberately generous: `gText_DifferentSaveFile`'s four-page WARNING is
+/// ~200 glyphs, and `TextSpeed::Mid` reveals one every four frames, so the
+/// longest flow here is well over a thousand frames before the success
+/// message's own `SaveStartTimer` 60 even starts.
+const SAVE_FLOW_FRAME_BUDGET: usize = 4_000;
 
 /// A brand-new game in the protagonist's bedroom, on a synthetic room grid
 /// (module docs). Goes through `OverworldPhase::for_test` -> `::new`, i.e.
 /// through `new_game::init_save_blocks`, so the starting state is the real
 /// one.
-fn new_game_phase() -> OverworldPhase {
+pub(super) fn new_game_phase() -> OverworldPhase {
     OverworldPhase::for_test(
         crate::overworld::tests::synthetic_scene(10, 10),
         new_game::SPAWN_MAP_ID,
@@ -96,8 +81,14 @@ fn new_game_phase() -> OverworldPhase {
     )
 }
 
-/// Everything the round-trip asserts on, read out of a phase.
-#[derive(Debug, PartialEq, Eq)]
+/// Everything the round trip asserts on, read out of a phase.
+///
+/// `lead` is the *battle-facing* mon (`OverworldPhase::party_lead`), not
+/// the save block's bytes: that is the value a continued session actually
+/// fights with, and re-deriving it from
+/// [`new_game::provisional_starter`] is exactly the stand-in issue #232
+/// removed.
+#[derive(Debug, PartialEq)]
 struct Snapshot {
     map: assets::MapId,
     position: (i32, i32),
@@ -106,8 +97,7 @@ struct Snapshot {
     money: u32,
     running_shoes: bool,
     repel_steps: u16,
-    party_count: u8,
-    lead: Pokemon,
+    lead: Option<battle::BattlePokemon>,
     player_name: [u8; engine::save::block::PLAYER_NAME_BUF_LEN],
     trainer_id: [u8; engine::save::block::TRAINER_ID_LENGTH],
     encryption_key: u32,
@@ -123,40 +113,49 @@ fn snapshot(phase: &OverworldPhase) -> Snapshot {
         money: phase.save1.money,
         running_shoes: flags.flag_get(FLAG_RECEIVED_RUNNING_SHOES).unwrap(),
         repel_steps: flags.var_get(VAR_REPEL_STEP_COUNT).unwrap(),
-        party_count: phase.save1.player_party_count,
-        lead: phase.save1.player_party[0],
+        lead: phase.party_lead.clone(),
         player_name: phase.save2.player_name,
         trainer_id: phase.save2.player_trainer_id,
         encryption_key: phase.save2.encryption_key,
     }
 }
 
-/// Run input-free frames until no step is in flight: an exit save is
-/// refused while one is (`OverworldPhase::mid_step`, #230 review round
-/// five), and these fixtures save from a player at rest.
-fn settle(phase: &mut OverworldPhase) {
+/// Run input-free frames until no step is in flight: the start menu does
+/// not open while the player is moving
+/// (`OverworldPhase::start_menu_may_open`, #230 review round five), and
+/// these fixtures save from a player at rest.
+pub(super) fn settle(phase: &mut OverworldPhase) {
     for _ in 0..20 {
         if !phase.mid_step() {
             return;
         }
         phase.step(held(Buttons::NONE));
     }
-    panic!("the fixture must come to rest before it exit-saves");
+    panic!("the fixture must come to rest before it saves");
 }
 
-/// Play a little: walk south until the player has actually moved, then make
-/// the state unmistakably mid-game — a flag, a var, spent money, a party
-/// member, and a nonzero encryption key (so the save's *encrypted* fields
-/// are exercised too, not just its plaintext ones).
+/// Play a little: walk south, then west (so the player ends up facing a
+/// direction the tile-derived `DIR_SOUTH` fallback would *not* produce),
+/// then make the state unmistakably mid-game — a flag, a var, spent money,
+/// a damaged party lead, and a nonzero encryption key (so the save's
+/// *encrypted* fields are exercised too, not just its plaintext ones).
 fn play_a_bit(phase: &mut OverworldPhase) {
     for _ in 0..40 {
         phase.step(held(Buttons::DOWN));
+    }
+    for _ in 0..40 {
+        phase.step(held(Buttons::LEFT));
     }
     settle(phase);
     assert_ne!(
         phase.player.position(),
         new_game::SPAWN_POSITION,
         "the fixture must actually walk the player off the spawn tile"
+    );
+    assert_eq!(
+        phase.player.facing(),
+        Direction::West,
+        "the fixture must end facing somewhere the DIR_SOUTH fallback is not"
     );
 
     assert!(
@@ -180,12 +179,95 @@ fn play_a_bit(phase: &mut OverworldPhase) {
 
     phase.save2.encryption_key = 0x0BAD_F00D;
     phase.save1.money = 1_234;
-    phase.save1.player_party_count = 1;
-    phase.save1.player_party[0] = a_party_member(0x0011_2233);
+    phase.party_lead = Some(a_damaged_lead());
 }
 
-/// The I-6 acceptance round trip: new game -> play -> save -> reload ->
-/// continue, with the restored phase matching what was saved.
+/// The provisional starter after a fight it did not walk away from
+/// unscathed: HP spent and one move's PP spent. A full-HP, full-PP lead
+/// would round-trip just as happily through an encoder that dropped both.
+fn a_damaged_lead() -> battle::BattlePokemon {
+    let mut lead = new_game::provisional_starter();
+    lead.apply_damage(5);
+    lead.deduct_pp(0).unwrap();
+    lead
+}
+
+/// Drive an already-open start menu until it closes (or its SAVE flow is
+/// cancelled back to the item list), answering each Yes/No prompt from
+/// `answers` in order — `true` is YES — and defaulting to YES once
+/// `answers` runs out.
+///
+/// Returns the cursor row each prompt *opened* on (`0` = YES, `1` = NO),
+/// which is the observable difference between upstream's two overwrite
+/// prompts: `DisplayYesNoMenuDefaultYes` for the ordinary one,
+/// `DisplayYesNoMenuWithDefault(1)` for `gText_DifferentSaveFile`'s
+/// WARNING.
+fn drive_start_menu(
+    phase: &mut OverworldPhase,
+    save_slot: &mut SaveSlot,
+    answers: &[bool],
+) -> Vec<u8> {
+    let mut opened_on: Vec<u8> = Vec::new();
+    let mut answered = 0usize;
+    let mut entered_save_flow = false;
+    for _ in 0..SAVE_FLOW_FRAME_BUDGET {
+        let Some(menu) = phase.start_menu() else {
+            return opened_on;
+        };
+        if menu.saving() {
+            entered_save_flow = true;
+        } else if entered_save_flow {
+            // `SAVE_CANCELED`: the flow put the item list back up. Stop
+            // here rather than picking SAVE again forever.
+            return opened_on;
+        }
+        let buttons = match menu.yes_no_cursor() {
+            Some(cursor) => {
+                if opened_on.len() == answered {
+                    opened_on.push(cursor);
+                }
+                let wants_yes = answers.get(answered).copied().unwrap_or(true);
+                let desired = u8::from(!wants_yes);
+                match cursor.cmp(&desired) {
+                    std::cmp::Ordering::Equal => {
+                        answered += 1;
+                        pressed(Buttons::A)
+                    }
+                    std::cmp::Ordering::Greater => pressed(Buttons::UP),
+                    std::cmp::Ordering::Less => pressed(Buttons::DOWN),
+                }
+            }
+            // No prompt waiting: A advances whatever message is printing,
+            // picks SAVE off the item list, and dismisses the result
+            // message once the write is done.
+            None => pressed(Buttons::A),
+        };
+        assert!(
+            phase.advance_start_menu_frame(buttons, save_slot),
+            "an open start menu owns its frame"
+        );
+    }
+    panic!("the save flow must terminate within {SAVE_FLOW_FRAME_BUDGET} frames");
+}
+
+/// `START` -> `SAVE` -> YES to everything, through the real menu.
+fn save_from_the_start_menu(phase: &mut OverworldPhase, save_slot: &mut SaveSlot) -> Vec<u8> {
+    phase.open_synthetic_start_menu();
+    assert_eq!(
+        phase.start_menu().unwrap().selected(),
+        StartMenuItem::Save,
+        "SAVE is the first item, so a fresh menu opens on it"
+    );
+    let prompts = drive_start_menu(phase, save_slot, &[]);
+    assert!(
+        phase.start_menu().is_none(),
+        "a completed save closes the start menu"
+    );
+    prompts
+}
+
+/// The I-6 acceptance round trip: new game -> play -> start-menu save ->
+/// reload -> continue, with the restored phase matching what was saved.
 #[test]
 fn a_saved_game_reloads_into_an_overworld_phase_that_matches_it() {
     let temp = TempSave::new("round-trip");
@@ -194,11 +276,23 @@ fn a_saved_game_reloads_into_an_overworld_phase_that_matches_it() {
     let mut phase = new_game_phase();
     play_a_bit(&mut phase);
     let before = snapshot(&phase);
+    assert!(
+        phase.different_save_file(),
+        "a new-game session is upstream's gDifferentSaveFile == TRUE"
+    );
 
-    // The real write trigger, not a hand-rolled call to the store.
-    save_on_exit(&AppScene::Overworld(Box::new(phase)), &mut slot)
-        .expect("the overworld has save state to write")
-        .expect("writing the scratch save file must succeed");
+    // The real write trigger: the player's own START -> SAVE.
+    let prompts = save_from_the_start_menu(&mut phase, &mut slot);
+    assert_eq!(
+        prompts.len(),
+        1,
+        "an empty cartridge asks only gText_ConfirmSave -- there is nothing \
+         to overwrite (start_menu.c:1008-1019)"
+    );
+    assert!(
+        !phase.different_save_file(),
+        "a successful SAVE_OVERWRITE_DIFFERENT_FILE clears gDifferentSaveFile"
+    );
 
     // The real boot load, and the menu it selects.
     let saved = slot.load();
@@ -210,7 +304,7 @@ fn a_saved_game_reloads_into_an_overworld_phase_that_matches_it() {
     assert_eq!(menu_type_for(&saved), MainMenuType::SavedGame);
 
     // The real map resolution `continue_saved_game` performs, then its
-    // pack-free core (module docs on the one substituted step).
+    // pack-free core (module docs on the substituted steps).
     let map = saved_map_id(&saved.block1).expect("the saved location must resolve to a map");
     assert_eq!(map, new_game::SPAWN_MAP_ID);
     let resumed = OverworldPhase::from_saved(
@@ -236,41 +330,48 @@ fn a_saved_game_reloads_into_an_overworld_phase_that_matches_it() {
         "the fixture must resume off the spawn elevation, or a hardcoded \
          fallback in saved_tile_placement would pass this test"
     );
+    // Issue #232: the saved facing is restored from the player object
+    // event (`LoadObjectEvents`, `src/load_save.c:188-194`), not derived
+    // from the tile -- which for this ordinary tile would be `DIR_SOUTH`.
+    assert_eq!(
+        after.facing,
+        Direction::West,
+        "the continue must restore the direction the player saved facing"
+    );
+    assert_ne!(
+        after.facing,
+        new_game::SPAWN_FACING,
+        "the fixture must save facing somewhere the tile-derived stand-in is not"
+    );
     assert_eq!(after.money, 1_234);
     assert!(after.running_shoes, "the set flag must survive the save");
     assert_eq!(after.repel_steps, 37, "the set var must survive the save");
-    assert_eq!(after.party_count, 1);
+    // Issue #232: the actual saved party, not a fresh provisional starter.
     assert_eq!(
         after.lead,
-        a_party_member(0x0011_2233),
-        "the party member must round-trip byte-for-byte, encrypted \
-         substructures included"
+        Some(a_damaged_lead()),
+        "the continued session must fight with the mon that was saved -- \
+         damage taken and PP spent included"
+    );
+    assert_ne!(
+        after.lead,
+        Some(new_game::provisional_starter()),
+        "a re-derived starter would be undamaged, so the fixture must not \
+         accidentally save one"
     );
     assert_eq!(after.player_name, before.player_name);
     assert_eq!(after.trainer_id, before.trainer_id);
     assert_eq!(after.encryption_key, 0x0BAD_F00D);
-
-    // Facing is the one field this continue does *not* restore, and the
-    // assertion pins the stand-in rather than upstream: with no object-event
-    // model there is nothing to read the saved direction out of, so the
-    // continue-game *warp* branch's `GetAdjustedInitialDirection`
-    // (`src/overworld.c:929-951`) decides it from the tile instead, and an
-    // ordinary tile falls through to `DIR_SOUTH` (`:951`). Upstream's own
-    // ordinary continue path restores the saved facing -- see the deferral
-    // written up in `OverworldPhase::from_saved`. Change this expectation
-    // when object events land; do not read it as fidelity.
-    assert_eq!(
-        after.facing,
-        Direction::South,
-        "the tile-derived stand-in must be what a continue places, until a \
-         saved facing exists to restore"
+    assert!(
+        !resumed.different_save_file(),
+        "a continued session *is* the file on disk"
     );
 }
 
 /// Saving twice in one session must not lose the second save: the rotation
-/// counter is re-derived from the file each time
-/// (`SaveSlot::store`'s docs), so the newer write wins even though nothing
-/// held `gSaveCounter` in memory between the two.
+/// counter is re-derived from the file each time (`SaveSlot::store`'s
+/// docs), so the newer write wins even though nothing held `gSaveCounter`
+/// in memory between the two.
 #[test]
 fn the_most_recent_of_two_saves_is_the_one_that_reloads() {
     let temp = TempSave::new("two-slot");
@@ -279,14 +380,11 @@ fn the_most_recent_of_two_saves_is_the_one_that_reloads() {
     let mut phase = new_game_phase();
     play_a_bit(&mut phase);
     let first_position = phase.player.position();
-    save_on_exit(&AppScene::Overworld(Box::new(phase)), &mut slot)
-        .unwrap()
-        .unwrap();
+    save_from_the_start_menu(&mut phase, &mut slot);
 
-    // The second session *continues* the first save -- since the exit-write
-    // consent gate (issue #214 review), a fresh new-game session would be
-    // refused here, and continuing is the only real player flow that
-    // produces a second rotation write anyway.
+    // The second session *continues* the first save, which is the flow a
+    // player actually takes; a second new-game session would meet the
+    // WARNING prompt instead (see the consent test below).
     let loaded = slot.load();
     let map = saved_map_id(&loaded.block1).expect("the saved location must resolve");
     let mut phase = OverworldPhase::from_saved(
@@ -305,9 +403,13 @@ fn the_most_recent_of_two_saves_is_the_one_that_reloads() {
         first_position, second_position,
         "the second session must end somewhere else, or this proves nothing"
     );
-    save_on_exit(&AppScene::Overworld(Box::new(phase)), &mut slot)
-        .unwrap()
-        .unwrap();
+    let prompts = save_from_the_start_menu(&mut phase, &mut slot);
+    assert_eq!(
+        prompts,
+        vec![0, 0],
+        "a continued session is asked twice -- gText_ConfirmSave then \
+         gText_AlreadySavedFile -- both defaulting to YES"
+    );
 
     let saved = slot.load();
     assert!(saved.status.menu_shows_continue());
@@ -315,6 +417,38 @@ fn the_most_recent_of_two_saves_is_the_one_that_reloads() {
     assert_eq!(
         (i32::from(saved.block1.pos.x), i32::from(saved.block1.pos.y)),
         second_position
+    );
+}
+
+/// Answering NO to `gText_ConfirmSave` must leave the file untouched: the
+/// flow reports `SAVE_CANCELED` and puts the start menu back
+/// (`SaveConfirmInputCallback`'s `MENU_B_PRESSED`/NO arm,
+/// `start_menu.c:1026-1030`).
+#[test]
+fn declining_the_confirmation_writes_nothing() {
+    let temp = TempSave::new("confirm-no");
+    let mut slot = temp.slot();
+
+    let mut phase = new_game_phase();
+    play_a_bit(&mut phase);
+    phase.open_synthetic_start_menu();
+    drive_start_menu(&mut phase, &mut slot, &[false]);
+
+    assert!(
+        phase.start_menu().is_some(),
+        "a cancelled save returns to the start menu rather than closing it"
+    );
+    assert!(
+        !phase.start_menu().unwrap().saving(),
+        "the SAVE flow must have handed the item list back"
+    );
+    assert!(
+        !temp.slot().load().status.menu_shows_continue(),
+        "nothing may have been written"
+    );
+    assert!(
+        phase.different_save_file(),
+        "a declined save leaves gDifferentSaveFile set"
     );
 }
 
@@ -329,9 +463,7 @@ fn a_corrupt_save_offers_no_continue_and_falls_back_to_new_game() {
 
     let mut phase = new_game_phase();
     play_a_bit(&mut phase);
-    save_on_exit(&AppScene::Overworld(Box::new(phase)), &mut slot)
-        .unwrap()
-        .unwrap();
+    save_from_the_start_menu(&mut phase, &mut slot);
     assert!(slot.load().status.menu_shows_continue());
 
     // Damage the slot the write landed in (the second half of the image --
@@ -387,9 +519,7 @@ fn real_pack_continue_from_the_main_menu_restores_the_saved_game() {
     let mut phase = OverworldPhase::load_default().expect("run `cargo xtask extract` first");
     play_a_bit(&mut phase);
     let before = snapshot(&phase);
-    save_on_exit(&AppScene::Overworld(Box::new(phase)), &mut slot)
-        .unwrap()
-        .unwrap();
+    save_from_the_start_menu(&mut phase, &mut slot);
 
     let saved = slot.load();
     let menu_type = menu_type_for(&saved);
@@ -406,67 +536,82 @@ fn real_pack_continue_from_the_main_menu_restores_the_saved_game() {
     let after = snapshot(&resumed);
     assert_eq!(after.map, before.map);
     assert_eq!(after.position, before.position);
+    assert_eq!(after.facing, before.facing);
     assert_eq!(after.money, before.money);
     assert!(after.running_shoes);
     assert_eq!(after.repel_steps, 37);
-    assert_eq!(after.party_count, before.party_count);
     assert_eq!(after.lead, before.lead);
     assert_eq!(after.trainer_id, before.trainer_id);
     assert_eq!(after.encryption_key, before.encryption_key);
 }
 
-/// The exit-write consent gate end to end (issue #214 review): a NEW GAME
-/// session that reaches the overworld and quits must not clobber a
-/// continuable save it never loaded -- upstream gates that overwrite on
-/// `gDifferentSaveFile`'s explicit prompt -- while a *continued* session
-/// writes its own save back unconditionally.
+/// The other pack-gated step (module docs): `START` really opening the
+/// menu through `crate::start_menu::open_default`, with real chrome, and a
+/// whole save running through the pack-decoded windows.
 #[test]
-fn a_new_game_session_never_overwrites_a_save_it_did_not_continue() {
+#[ignore = "needs a local pack: run `cargo xtask extract` first"]
+fn real_pack_start_opens_the_menu_and_saves() {
+    let temp = TempSave::new("real-pack-start-menu");
+    let mut slot = temp.slot();
+
+    let mut phase = OverworldPhase::load_default().expect("run `cargo xtask extract` first");
+    settle(&mut phase);
+    assert!(
+        phase.advance_start_menu_frame(pressed(Buttons::START), &mut slot),
+        "START must open the menu and own the frame"
+    );
+    assert!(
+        phase.start_menu().is_some(),
+        "run `cargo xtask extract` first"
+    );
+
+    drive_start_menu(&mut phase, &mut slot, &[]);
+    assert!(phase.start_menu().is_none());
+    assert!(slot.load().status.menu_shows_continue());
+}
+
+/// The consent gate, now as upstream's own prompt (issue #232, replacing
+/// #214's save-on-exit `store_unless_foreign_save` stand-in): a NEW GAME
+/// session saving over someone else's file meets `gText_DifferentSaveFile`,
+/// whose Yes/No menu opens on **NO** (`DisplayYesNoMenuWithDefault(1)`,
+/// `start_menu.c:1049-1053`). Answering NO leaves the file byte-identical;
+/// answering YES replaces it, because the player said so.
+#[test]
+fn a_new_game_session_must_answer_the_overwrite_warning_before_it_can_clobber_a_save() {
     let temp = TempSave::new("consent-gate");
     let mut slot = temp.slot();
 
     // A real prior save on disk, written by its own session.
     let mut original_phase = new_game_phase();
     play_a_bit(&mut original_phase);
-    save_on_exit(&AppScene::Overworld(Box::new(original_phase)), &mut slot)
-        .expect("the overworld has save state to write")
-        .expect("writing the scratch save file must succeed");
+    save_from_the_start_menu(&mut original_phase, &mut slot);
     let original = std::fs::read(temp.path()).unwrap();
 
-    // A second session picks NEW GAME (fresh blocks, never continued) and
-    // quits from the overworld: nothing may be written.
-    let fresh = new_game_phase();
-    assert!(
-        save_on_exit(&AppScene::Overworld(Box::new(fresh)), &mut slot).is_none(),
-        "a refused exit write must report nothing-to-save, not success"
+    // A second session boots, sees that save (`gSaveFileStatus ==
+    // SAVE_STATUS_OK`), and picks NEW GAME.
+    let mut fresh_slot = temp.slot();
+    assert!(fresh_slot.load().status.menu_shows_continue());
+    let mut fresh = new_game_phase();
+    fresh.open_synthetic_start_menu();
+    let prompts = drive_start_menu(&mut fresh, &mut fresh_slot, &[true, false]);
+    assert_eq!(
+        prompts,
+        vec![0, 1],
+        "gText_ConfirmSave defaults to YES; the WARNING defaults to NO"
     );
     assert_eq!(
         std::fs::read(temp.path()).unwrap(),
         original,
-        "the unconsented NEW GAME session must leave the save byte-identical"
+        "declining the WARNING must leave the save byte-identical"
     );
 
-    // A *continued* session is updating the very save it loaded, so its
-    // exit write proceeds.
-    let saved = slot.load();
-    let map = saved_map_id(&saved.block1).expect("the saved location must resolve");
-    let mut resumed = OverworldPhase::from_saved(
-        crate::overworld::tests::synthetic_scene(10, 10),
-        map,
-        saved.block1,
-        saved.block2,
-    );
-    // Not `play_a_bit`: its fixture asserts the running-shoes flag starts
-    // clear, and a resumed save already carries it. Any visible change
-    // proves the write happened.
-    resumed.save1.money = 4_321;
-    save_on_exit(&AppScene::Overworld(Box::new(resumed)), &mut slot)
-        .expect("a continued session's exit write is armed")
-        .expect("writing the scratch save file must succeed");
+    // The same session, this time consenting.
+    fresh.open_synthetic_start_menu();
+    drive_start_menu(&mut fresh, &mut fresh_slot, &[true, true]);
     assert_ne!(
         std::fs::read(temp.path()).unwrap(),
         original,
-        "the continued session's write really replaced the image"
+        "an answered WARNING really does replace the other file"
     );
 }
 
@@ -500,128 +645,37 @@ fn continue_on_a_multi_level_tile_resumes_at_the_transition_elevation() {
     );
 }
 
-/// #230 review round four: an exit while a wild battle owns the phase must
-/// not write the save at all. The blocks hold the *pre-battle* overworld --
-/// the party lead is borrowed by the battle, its RNG draws consumed -- so a
-/// save taken now would mint a valid save that undoes the live fight and
-/// lets a quit escape any encounter. Upstream cannot open its save flow
-/// mid-battle; the stand-in must not be able to either.
+/// A save block whose player object event was never written -- a zeroed
+/// [`SaveBlock1`], or an image from before issue #232 modelled the field --
+/// holds `DIR_NONE`, which is no walking direction at all. The continue
+/// must fall back to the tile-derived `GetAdjustedInitialDirection`
+/// (`DIR_SOUTH` on an ordinary tile) rather than face an arbitrary way.
 #[test]
-fn exiting_mid_battle_does_not_save() {
-    use battle::{BattlePokemon, Dex, Ivs, MAX_IV};
-    use engine::overworld::wild_encounter::WildEncounter;
-    use engine::rng::Rng;
-
-    let temp = TempSave::new("mid-battle-no-save");
-    let mut save_slot = temp.slot();
-
-    let mut phase = new_game_phase();
-    let ivs = Ivs {
-        hp: MAX_IV,
-        attack: MAX_IV,
-        defense: MAX_IV,
-        speed: MAX_IV,
-        sp_attack: MAX_IV,
-        sp_defense: MAX_IV,
-    };
-    // Level-50 Treecko with Pound vs a Route 101 Wurmple -- the same
-    // fixture `wild_encounter::tests` fights full battles with.
-    let lead = BattlePokemon::new(
-        &Dex::new(),
-        assets::SpeciesId(277),
-        50,
-        ivs,
-        0,
-        vec![assets::MoveId(1)],
-    )
-    .expect("Treecko with Pound is in the dex");
-    let mut rng = Rng::new(0x00C0_FFEE);
-    let battle = super::wild_encounter::start_wild_battle(
-        lead,
-        WildEncounter {
-            species: assets::SpeciesId(290),
-            level: 2,
-            slot: 0,
-        },
-        &mut rng,
-    )
-    .expect("a Wurmple encounter is fightable");
-    phase.wild_battle = Some(battle);
-    assert!(phase.in_battle());
-
-    let scene = AppScene::Overworld(Box::new(phase));
-    assert!(
-        save_on_exit(&scene, &mut save_slot).is_none(),
-        "an exit during a battle must not write the save"
+fn a_save_with_no_recorded_facing_falls_back_to_the_tile_derived_direction() {
+    let block1 = SaveBlock1::default();
+    assert_eq!(
+        block1.player_object_event.facing_direction, 0,
+        "a zeroed block holds DIR_NONE"
     );
-    assert!(
-        !temp.slot().load().status.menu_shows_continue(),
-        "the save file must be untouched -- the last save stands"
+    let resumed = OverworldPhase::from_saved(
+        crate::overworld::tests::synthetic_scene(10, 10),
+        new_game::SPAWN_MAP_ID,
+        block1,
+        SaveBlock2::default(),
     );
+    assert_eq!(resumed.player.facing(), Direction::South);
 }
 
-/// The Route 101 scripted first battle (#231) freezes the phase exactly
-/// like a wild one -- same borrowed lead, same consumed RNG draws living
-/// outside the `SaveBlock`s -- so the exit-write guard must refuse it for
-/// the same reason [`exiting_mid_battle_does_not_save`] documents.
+/// A save whose party count is zero resumes with no lead at all -- not
+/// with a fabricated [`new_game::provisional_starter`], which is what the
+/// #214 slice did and what #232 removed.
 #[test]
-fn exiting_mid_first_battle_does_not_save() {
-    use engine::rng::Rng;
-
-    let temp = TempSave::new("mid-first-battle-no-save");
-    let mut save_slot = temp.slot();
-
-    let mut phase = new_game_phase();
-    let mut rng = Rng::new(0x00C0_FFEE);
-    let battle = super::first_battle::start_first_battle(new_game::provisional_starter(), &mut rng)
-        .expect("the scripted first battle constructs from the provisional starter");
-    phase.first_battle = Some(battle);
-    assert!(phase.in_battle());
-
-    let scene = AppScene::Overworld(Box::new(phase));
-    assert!(
-        save_on_exit(&scene, &mut save_slot).is_none(),
-        "an exit during the scripted first battle must not write the save"
+fn a_save_with_an_empty_party_resumes_with_no_lead() {
+    let resumed = OverworldPhase::from_saved(
+        crate::overworld::tests::synthetic_scene(10, 10),
+        new_game::SPAWN_MAP_ID,
+        SaveBlock1::default(),
+        SaveBlock2::default(),
     );
-    assert!(
-        !temp.slot().load().status.menu_shows_continue(),
-        "the save file must be untouched -- the last save stands"
-    );
-}
-
-/// #230 review round five: an exit while a step is in flight must not save.
-/// `save1.pos` is written at step *start*, so the blocks already hold the
-/// landing tile while none of the landing's consequences (door warps,
-/// encounters, coordinate events -- Route 101's scripted first battle among
-/// them) have run; a save taken now would resume standing *past* whatever
-/// the landing triggers. Upstream cannot open its save flow while the
-/// player is moving.
-#[test]
-fn exiting_mid_step_does_not_save() {
-    let temp = TempSave::new("mid-step-no-save");
-    let mut save_slot = temp.slot();
-
-    let mut phase = new_game_phase();
-    // Hold DOWN until a step is actually in flight -- the first frame may
-    // only turn the player in place.
-    for _ in 0..8 {
-        phase.step(held(Buttons::DOWN));
-        if phase.mid_step() {
-            break;
-        }
-    }
-    assert!(
-        phase.mid_step(),
-        "the fixture must catch a step in flight, or the guard is untested"
-    );
-
-    let scene = AppScene::Overworld(Box::new(phase));
-    assert!(
-        save_on_exit(&scene, &mut save_slot).is_none(),
-        "an exit mid-step must not write the save"
-    );
-    assert!(
-        !temp.slot().load().status.menu_shows_continue(),
-        "the save file must be untouched -- the last save stands"
-    );
+    assert!(resumed.party_lead.is_none());
 }

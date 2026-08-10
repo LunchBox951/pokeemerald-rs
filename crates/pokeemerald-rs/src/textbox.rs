@@ -373,10 +373,9 @@ pub(crate) fn palette_colors(raw: assets::pack::PaletteRef<'_>) -> Vec<Rgb888> {
 /// held beneath it, which for every caller in this crate is opaque black
 /// (each `compose`'s own `fb.fill(Rgb888::BLACK)`).
 ///
-/// Records every painted pixel into `coverage` (see [`Coverage`]). Unlike
-/// [`blit_frame_tiles`]/[`blit_glyphs`] there is no untracked twin: a fill
-/// is opaque by definition, and this crate's only caller
-/// ([`crate::main_menu`]) needs the coverage.
+/// Records every painted pixel into `coverage` (see [`Coverage`]);
+/// [`fill_rect`] is the untracked twin, for callers that draw no
+/// coverage-dependent effect over their own windows.
 pub(crate) fn fill_rect_tracked(
     fb: &mut Framebuffer,
     coverage: &mut Coverage,
@@ -390,6 +389,18 @@ pub(crate) fn fill_rect_tracked(
             set_pixel_checked(fb, coverage, origin.0 + dx, origin.1 + dy, color);
         }
     }
+}
+
+/// [`fill_rect_tracked`] without a coverage map -- see that function's
+/// docs for what the fill itself is.
+pub(crate) fn fill_rect(
+    fb: &mut Framebuffer,
+    origin: (i32, i32),
+    width: i32,
+    height: i32,
+    color: Rgb888,
+) {
+    fill_rect_tracked(fb, &mut Coverage::disabled(), origin, width, height, color);
 }
 
 /// [`Framebuffer::set_pixel`] plus a [`Coverage::mark`], skipping silently

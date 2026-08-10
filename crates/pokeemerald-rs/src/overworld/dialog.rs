@@ -109,7 +109,16 @@ impl NpcDialog {
     /// `frame`, printing `tokens` at [`TextSpeed::Mid`] (upstream's own
     /// new-game default -- see [`crate::intro::IntroScene::from_pack`]'s
     /// identical doc comment).
-    fn new(sheet: OwnedFontGlyphSheet, frame: FrameAssets, tokens: Vec<Token>) -> Self {
+    ///
+    /// `pub(crate)` because this box is not only an NPC's: upstream's
+    /// standard field message window is a single window
+    /// (`sStandardTextBox_WindowTemplates[0]`, `src/menu.c:84-96`) that
+    /// every field message prints into, and the start menu's save flow
+    /// (`ShowSaveMessage`, `src/start_menu.c:902-909`) prints into that same
+    /// one. [`crate::start_menu`] already holds a decoded sheet and
+    /// message-box frame, so it builds boxes here directly instead of
+    /// re-reading the pack once per message.
+    pub(crate) fn new(sheet: OwnedFontGlyphSheet, frame: FrameAssets, tokens: Vec<Token>) -> Self {
         let printer = Printer::new(tokens, sheet, TextSpeed::Mid, PRINTER_ORIGIN);
         Self {
             frame,

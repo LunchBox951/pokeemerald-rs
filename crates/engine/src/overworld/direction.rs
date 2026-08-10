@@ -60,6 +60,40 @@ impl Direction {
             Self::East => ConnectionDirection::East,
         }
     }
+
+    /// This direction's raw upstream `DIR_*` id
+    /// (`include/constants/global.h`): south 1, north 2, west 3, east 4.
+    ///
+    /// The one place a walking direction has to become a plain byte is the
+    /// save file — `struct ObjectEvent`'s `facingDirection:4` nibble
+    /// ([`crate::save::SavedObjectEvent`]) — so the mapping lives here,
+    /// beside the enum it belongs to, rather than being re-derived at the
+    /// serialization boundary.
+    #[must_use]
+    pub const fn to_dir_id(self) -> u8 {
+        match self {
+            Self::South => 1,
+            Self::North => 2,
+            Self::West => 3,
+            Self::East => 4,
+        }
+    }
+
+    /// The direction a raw `DIR_*` id names, or `None` for one this port
+    /// does not walk in: `DIR_NONE` (0, upstream's "no input" sentinel —
+    /// also what a zeroed, never-written save entry holds) and the four
+    /// bike-only diagonals `DIR_SOUTHWEST`..`DIR_NORTHEAST` (5-8), which
+    /// this v1 slice does not model (module docs).
+    #[must_use]
+    pub const fn from_dir_id(id: u8) -> Option<Self> {
+        match id {
+            1 => Some(Self::South),
+            2 => Some(Self::North),
+            3 => Some(Self::West),
+            4 => Some(Self::East),
+            _ => None,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -74,6 +108,31 @@ mod tests {
         assert_eq!(Direction::North.delta(), (0, -1));
         assert_eq!(Direction::West.delta(), (-1, 0));
         assert_eq!(Direction::East.delta(), (1, 0));
+    }
+
+    /// `include/constants/global.h`'s `DIR_*` numbering, and the round trip
+    /// the save file's `facingDirection:4` nibble depends on. `DIR_NONE`
+    /// (0) and the bike diagonals (5-8) have no [`Direction`], so a save
+    /// holding one must decode as `None` rather than as some cardinal.
+    #[test]
+    fn dir_ids_match_upstream_numbering_and_round_trip() {
+        for (direction, id) in [
+            (Direction::South, 1),
+            (Direction::North, 2),
+            (Direction::West, 3),
+            (Direction::East, 4),
+        ] {
+            assert_eq!(direction.to_dir_id(), id);
+            assert_eq!(Direction::from_dir_id(id), Some(direction));
+        }
+        assert_eq!(Direction::from_dir_id(0), None, "DIR_NONE is not walkable");
+        for diagonal in 5..=8 {
+            assert_eq!(
+                Direction::from_dir_id(diagonal),
+                None,
+                "the bike diagonals are not modelled"
+            );
+        }
     }
 
     #[test]
