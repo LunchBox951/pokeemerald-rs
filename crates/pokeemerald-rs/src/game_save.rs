@@ -47,9 +47,12 @@
 //! The player does, through the field start menu: `START` -> `SAVE` ->
 //! upstream's confirm/overwrite chain (`src/start_menu.c`'s
 //! `sSaveDialogCallback` sequence, ported as [`crate::start_menu`], I-6
-//! issue #232). The three entry points below are that flow's two
-//! `TrySavingData` arms plus the guard the one unprompted write needs; this
-//! module never decides *whether* to save, only how.
+//! issue #232). The two entry points below are that flow's `TrySavingData`
+//! call plus the guard the one unprompted write needs; this module never
+//! decides *whether* to save, only how. What it does *not* take from the
+//! flow is [`SaveLineage`] -- whose adventure is being written is a property
+//! of the session, handed down from its NEW GAME/CONTINUE choice, never
+//! re-derived from a save mode (#232 review round two).
 //!
 //! Issue #214's `flow::save_on_exit` stand-in — an automatic write on
 //! application shutdown, a deliberate deviation from upstream, which writes
@@ -170,9 +173,18 @@ pub(crate) enum StoreOutcome {
     /// The blocks were rotated in and persisted.
     Written,
     /// The write was refused: a continuable save this session did not load
-    /// is on disk, and overwriting it needs the consent prompt upstream
-    /// gates on `gDifferentSaveFile` (`src/main_menu.c`), which this port
-    /// cannot show yet. The file was left byte-untouched.
+    /// is on disk, and overwriting it needs consent the player has not been
+    /// asked for. That consent is upstream's own `gText_DifferentSaveFile`
+    /// WARNING, gated on `gDifferentSaveFile`
+    /// (`SaveFileExistsCallback`/`SaveConfirmInputCallback`,
+    /// `src/start_menu.c:1008-1023, 1035-1053`), ported in
+    /// [`crate::start_menu`] (issue #232); this outcome is what the *one*
+    /// write that reaches the medium without such a prompt --
+    /// [`SaveSlot::store_unless_foreign_save`], upstream's empty-cartridge
+    /// shortcut -- reports when the cartridge turned out not to be empty
+    /// after all. The flow surfaces it as `gText_SaveError`, and the
+    /// session's next SAVE asks `gText_AlreadySavedFile` before retrying.
+    /// The file was left byte-untouched.
     RefusedExistingSave,
     /// The write was refused: the save on disk has rotated past the state
     /// this session loaded at boot (its `gSaveCounter` no longer matches),
@@ -182,6 +194,57 @@ pub(crate) enum StoreOutcome {
     /// so refusal is this port's own conservative policy. The file was
     /// left byte-untouched.
     RefusedStaleSession,
+}
+
+/// Which adventure the *session* asking for a write belongs to -- the
+/// property every [`SaveSlot`] write states, and the only thing that decides
+/// whether the retained serialization base survives it
+/// ([`engine::save::SaveStore::clear_base`]).
+///
+/// Upstream's counterpart is not a save type at all but the state a session
+/// settled long before it saves. `NewGameInitData`
+/// (`pokeemerald/src/new_game.c:149-186`) memsets `gSaveBlock1` through
+/// `ClearSav1` (`:160`, `src/load_save.c:64-67`) and resets `gSaveBlock2`'s
+/// own deferred state field by field (encryption key `:155`, `ResetPokedex`,
+/// `PlayTimeCounter_Reset`, `ResetGameStats`); a boot that found nothing
+/// usable has already run `Sav2_ClearSetDefault` -> `ClearSav2` on top
+/// (`src/intro.c:1155-1156`). `HandleSavingData` then writes a *whole slot*
+/// out of that RAM (`src/save.c:736-739`) on every save of the session, so a
+/// `SAVE_NORMAL` retry after a failed overwrite is exactly as free of the
+/// replaced adventure as the first attempt was.
+///
+/// This port defers the bytes it does not model to the image on disk instead
+/// of holding them in RAM, so that one-time reset has to be re-applied at
+/// each write; making it a property of the session rather than of the save
+/// *mode* is what keeps the retry from leaking (#232 review round two).
+///
+/// One upstream nuance this port does *not* reproduce, recorded in the
+/// ledger's `src/load_save.c#clear_sav` entry: because `SetDefaultOptions`
+/// runs only from that empty/corrupt-boot `Sav2_ClearSetDefault`, a new game
+/// started over an *intact* save inherits the replaced file's option bytes in
+/// RAM and writes them back out. Options are deferred bytes here, so
+/// [`SaveLineage::NewGame`] drops them with everything else.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SaveLineage {
+    /// The session chose NEW GAME: its blocks are `NewGameInitData`'s, never
+    /// the loaded image's, so nothing of the file being replaced may survive
+    /// any of its writes.
+    NewGame,
+    /// The session adopted the boot load's blocks (`CONTINUE`, upstream's
+    /// `CopySaveSlotData` RAM): the deferred bytes on disk *are* this
+    /// session's own state and must be carried forward.
+    Continued,
+}
+
+impl SaveLineage {
+    /// Whether a write from this session drops the retained base
+    /// (`SaveStore::clear_base`).
+    const fn clears_base(self) -> bool {
+        match self {
+            Self::NewGame => true,
+            Self::Continued => false,
+        }
+    }
 }
 
 /// Whether counter `b` sits strictly *ahead* of counter `a` on the save
@@ -368,6 +431,22 @@ impl SaveSlot {
     /// whose rotation moved past what this session loaded is refused as
     /// [`StoreOutcome::RefusedStaleSession`] rather than overwritten.
     ///
+    /// # Which save type gets here
+    ///
+    /// Both of the ones the start menu can reach. `SAVE_NORMAL` and
+    /// `SAVE_OVERWRITE_DIFFERENT_FILE` differ upstream by exactly one thing
+    /// -- the latter erases the Hall of Fame sectors on top of the former
+    /// (`src/save.c:751-760`) -- and this port has no Hall of Fame sectors,
+    /// so the two arms are the same write here. What upstream's
+    /// `SAVE_OVERWRITE_DIFFERENT_FILE` is *not* is the wipe of the replaced
+    /// adventure's other state: that already happened at `NewGameInitData`
+    /// time, and is `lineage`'s job (#232 review round two).
+    ///
+    /// `lineage` is a property of the saving *session*, fixed when it chose
+    /// NEW GAME or CONTINUE and never re-derived from a save mode -- see
+    /// [`SaveLineage`]. It decides whether the previous file's deferred
+    /// bytes survive this write.
+    ///
     /// # Errors
     ///
     /// [`engine::save::SaveFileError::NoDataDirectory`] if this slot has no
@@ -378,36 +457,9 @@ impl SaveSlot {
         &mut self,
         block1: &SaveBlock1,
         block2: &SaveBlock2,
+        lineage: SaveLineage,
     ) -> Result<StoreOutcome, SaveFileError> {
-        self.store_impl(block1, block2, false, false)
-    }
-
-    /// `TrySavingData(SAVE_OVERWRITE_DIFFERENT_FILE)` into
-    /// `HandleSavingData`'s own arm (`pokeemerald/src/save.c:751-760`):
-    /// [`SaveSlot::store`], plus the wipe of everything the *previous*
-    /// file left behind.
-    ///
-    /// Upstream reaches this arm only from `SaveDoSaveCallback`'s
-    /// `gDifferentSaveFile` branch (`src/start_menu.c:1093-1097`) -- a
-    /// session that started a new game and whose player has just answered
-    /// YES to `gText_DifferentSaveFile`'s WARNING -- and what it adds over
-    /// `SAVE_NORMAL` is erasing the Hall of Fame sectors, so no trace of
-    /// the replaced adventure survives. This port has no Hall of Fame
-    /// sectors; its counterpart is dropping the *retained payload base*
-    /// (`SaveStore::clear_base`), so the deferred bytes the pre-write read
-    /// recovered -- the previous trainer's play time, options, Pokédex, and
-    /// ciphertext under a discarded encryption key -- do not ride along
-    /// into the new file (#230 review).
-    ///
-    /// # Errors
-    ///
-    /// The same cases as [`SaveSlot::store`].
-    pub(crate) fn store_overwriting_different_file(
-        &mut self,
-        block1: &SaveBlock1,
-        block2: &SaveBlock2,
-    ) -> Result<StoreOutcome, SaveFileError> {
-        self.store_impl(block1, block2, false, true)
+        self.store_impl(block1, block2, false, lineage)
     }
 
     /// [`SaveSlot::store`], except it **refuses** -- file untouched,
@@ -423,9 +475,15 @@ impl SaveSlot {
     /// where another instance can have written a real save since this
     /// session booted, so the write is still checked *under the same
     /// inter-process lock* and refused if the image on disk turned out to
-    /// be continuable after all. Also clears the retained base, for the
-    /// reason [`SaveSlot::store_overwriting_different_file`] documents:
-    /// this session never adopted the loaded image's blocks.
+    /// be continuable after all.
+    ///
+    /// `lineage` carries the same session property [`SaveSlot::store`]
+    /// takes, and for the same reason -- it is stated rather than assumed
+    /// here even though only a [`SaveLineage::NewGame`] session can reach
+    /// this entry point in production (the unprompted write exists only
+    /// behind `gDifferentSaveFile`), so that no write in this module
+    /// derives the previous file's fate from anything but the session it
+    /// belongs to (#232 review round two).
     ///
     /// # Errors
     ///
@@ -434,26 +492,28 @@ impl SaveSlot {
         &mut self,
         block1: &SaveBlock1,
         block2: &SaveBlock2,
+        lineage: SaveLineage,
     ) -> Result<StoreOutcome, SaveFileError> {
-        self.store_impl(block1, block2, true, true)
+        self.store_impl(block1, block2, true, lineage)
     }
 
-    /// The shared body of the three `TrySavingData` entry points above.
+    /// The shared body of the two `TrySavingData` entry points above.
     ///
     /// `refuse_foreign` is the unprompted-write guard
-    /// ([`SaveSlot::store_unless_foreign_save`]); `clear_base` drops the
-    /// previous file's deferred bytes
-    /// ([`SaveSlot::store_overwriting_different_file`]). They are separate
-    /// because upstream separates them: only one of its three reachable
-    /// save types wipes the old file's leftovers, and none of them refuses
-    /// a write the player already consented to.
+    /// ([`SaveSlot::store_unless_foreign_save`]), a port-specific policy
+    /// with no upstream counterpart; `lineage` is the writing session's own
+    /// identity, and the only source of `clear_base`. They are separate
+    /// axes: the guard asks "has the player consented to replacing what is
+    /// on disk", the lineage asks "whose bytes are these", and no save
+    /// *mode* answers either (#232 review round two).
     fn store_impl(
         &mut self,
         block1: &SaveBlock1,
         block2: &SaveBlock2,
         refuse_foreign: bool,
-        clear_base: bool,
+        lineage: SaveLineage,
     ) -> Result<StoreOutcome, SaveFileError> {
+        let clear_base = lineage.clears_base();
         let file = self.file.as_ref().ok_or(SaveFileError::NoDataDirectory)?;
         // Exclusive across processes for the whole read-modify-write
         // cycle, so a concurrent instance can neither interleave its own
@@ -509,16 +569,20 @@ impl SaveSlot {
             return Ok(StoreOutcome::RefusedExistingSave);
         }
         if clear_base {
-            // A `clear_base` write is a session that never adopted the
-            // loaded image's blocks -- the new-game path, which the start
-            // menu keys off `gDifferentSaveFile`. Upstream zeroes
-            // `gSaveBlock1/2` wholesale before such a session's first save
-            // (`Sav2_ClearSetDefault` -> `ClearSav1`/`ClearSav2`), so the
-            // deferred bytes the pre-write `load` retained -- the previous
-            // trainer's play time, options, Pokédex, ciphertext under a
-            // discarded key -- must not ride along into this slot (#230
-            // review). A *continued* session keeps the retained base: that
-            // is exactly upstream's RAM after `CopySaveSlotData`.
+            // Every write of a session that never adopted the loaded image's
+            // blocks -- the new-game path ([`SaveLineage::NewGame`]) --
+            // clears the base, not just the one that answered
+            // `gText_DifferentSaveFile`. Upstream settles what a new game's
+            // RAM holds once, at `NewGameInitData` time, and
+            // `HandleSavingData` writes a whole slot out of it every time
+            // ([`SaveLineage`]'s docs), so a `SAVE_NORMAL` retry after a
+            // failed overwrite carries no trace of the replaced file
+            // either. Keying this off the save *mode* instead made exactly
+            // that retry leak the previous trainer's deferred bytes -- play
+            // time, options, Pokédex, ciphertext under a discarded key
+            // (#230 review; #232 review round two). A *continued* session
+            // keeps the retained base: that is exactly upstream's RAM after
+            // `CopySaveSlotData`.
             store.clear_base();
         }
         store.save(block1, block2);

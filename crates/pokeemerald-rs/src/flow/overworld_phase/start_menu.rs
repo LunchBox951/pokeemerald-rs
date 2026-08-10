@@ -263,20 +263,35 @@ impl SaveTarget for PhaseSaveTarget<'_> {
     /// `saveStatus` is ever looked at (`src/start_menu.c:1093-1096`) -- so a
     /// failed overwrite clears it too. See the clear below for what that
     /// buys the player.
+    ///
+    /// # What the mode does and does not select
+    ///
+    /// It selects the *medium entry point*, and nothing about the bytes.
+    /// `SAVE_NORMAL` and `SAVE_OVERWRITE_DIFFERENT_FILE` differ upstream
+    /// only by the Hall of Fame erase this port has no counterpart for
+    /// ([`crate::game_save::SaveSlot::store`]'s docs); what separates a new
+    /// game's write from a continue's is
+    /// [`OverworldPhase::save_lineage`] -- the *session's* property, read
+    /// here for every arm alike. Deriving it from `mode` instead is what
+    /// leaked the replaced trainer's deferred bytes on a `SAVE_NORMAL`
+    /// retry (#232 review round two).
     fn try_saving_data(&mut self, mode: SaveMode) -> bool {
         self.phase.copy_party_and_objects_to_save();
+        // Fixed at NEW GAME/CONTINUE time and never re-derived from the
+        // flow's state: the WARNING below is retired by the first dispatch,
+        // this is not.
+        let lineage = self.phase.save_lineage();
         let (block1, block2) = (&self.phase.save1, &self.phase.save2);
         let outcome = match mode {
-            SaveMode::Normal => self.save_slot.store(block1, block2),
-            SaveMode::OverwriteDifferentFile { prompted: true } => self
-                .save_slot
-                .store_overwriting_different_file(block1, block2),
+            SaveMode::Normal | SaveMode::OverwriteDifferentFile { prompted: true } => {
+                self.save_slot.store(block1, block2, lineage)
+            }
             // The one write with no prompt behind it -- see
             // `SaveSlot::store_unless_foreign_save` for why it is still
             // checked against the image on disk.
-            SaveMode::OverwriteDifferentFile { prompted: false } => {
-                self.save_slot.store_unless_foreign_save(block1, block2)
-            }
+            SaveMode::OverwriteDifferentFile { prompted: false } => self
+                .save_slot
+                .store_unless_foreign_save(block1, block2, lineage),
         };
         // `gDifferentSaveFile = FALSE` (`src/start_menu.c:1096`), in
         // upstream's own position: inside the `if (gDifferentSaveFile ==
@@ -295,7 +310,10 @@ impl SaveTarget for PhaseSaveTarget<'_> {
         // the medium as `SAVE_NORMAL` -- but only *after* the player has
         // answered `gText_AlreadySavedFile`, so the foreign file still is
         // not clobbered without the player being asked, which is the whole
-        // point of `SaveSlot::store_unless_foreign_save`'s guard.
+        // point of `SaveSlot::store_unless_foreign_save`'s guard. And that
+        // retry is still a *new game's* write: `lineage` above does not
+        // move with this flag, so the replaced adventure's deferred bytes
+        // are dropped either way (#232 review round two).
         if matches!(mode, SaveMode::OverwriteDifferentFile { .. }) {
             self.phase.different_save_file = false;
         }

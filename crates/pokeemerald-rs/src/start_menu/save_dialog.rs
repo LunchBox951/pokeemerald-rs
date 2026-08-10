@@ -57,10 +57,19 @@ pub(crate) enum SaveMode {
     /// `SAVE_NORMAL` — the ordinary in-place save.
     Normal,
     /// `SAVE_OVERWRITE_DIFFERENT_FILE` — this session started a *new* game
-    /// (`gDifferentSaveFile`), so nothing of the previous file's state may
-    /// survive the write (upstream erases the Hall of Fame sectors; see
-    /// [`crate::game_save::SaveSlot::store_overwriting_different_file`] for
-    /// this port's counterpart).
+    /// and has not yet answered the overwrite question
+    /// (`gDifferentSaveFile`). What upstream adds over `SAVE_NORMAL` here is
+    /// erasing the Hall of Fame sectors (`src/save.c:751-760`), state this
+    /// port does not model at all — so the two arms reach the same write.
+    ///
+    /// The wipe of the *replaced adventure's* other bytes is deliberately
+    /// **not** this mode's job, in this port any more than upstream: there
+    /// it is `NewGameInitData`'s own reset of `gSaveBlock1/2`
+    /// (`src/new_game.c:149-186`), and here it is
+    /// [`crate::game_save::SaveLineage`], a property of the
+    /// session rather than of a save mode — which is what keeps the
+    /// `SAVE_NORMAL` retry after a failed overwrite from writing the
+    /// previous trainer's deferred bytes back out (#232 review round two).
     ///
     /// `prompted` is not upstream's — it carries which of
     /// `SaveConfirmInputCallback`'s two YES paths got here

@@ -35,6 +35,7 @@ use engine::overworld::{PlayerState, TilePos, WildEncounterState};
 use engine::save::{SaveBlock1, SaveBlock2};
 use std::cell::OnceCell;
 
+use crate::game_save::SaveLineage;
 use crate::new_game;
 use crate::overworld::{self, NpcDialog, OverworldScene, OverworldSceneError};
 use crate::start_menu::StartMenu;
@@ -211,16 +212,44 @@ pub(crate) struct OverworldPhase {
     /// per frame. See that module's docs for what "headless" means here.
     pub(super) wild_battle: Option<battle::Battle>,
     /// `gDifferentSaveFile` (`pokeemerald/src/new_game.c:55`): whether the
-    /// save this session would write is a *different adventure* from the
-    /// one on disk. `NewGameInitData` sets it (`:154`) and a successful
-    /// `SAVE_OVERWRITE_DIFFERENT_FILE` write clears it
-    /// (`src/start_menu.c:1096`), so it is true exactly for a new-game
-    /// session that has not saved yet -- which is what makes the start
-    /// menu's SAVE flow show `gText_DifferentSaveFile`'s WARNING (default
-    /// NO) instead of the ordinary "already a saved file" question. A
-    /// session entered through [`Self::continue_saved_game`] starts it
-    /// false: it *is* the file on disk.
+    /// next SAVE must still ask the different-save-file WARNING. That, and
+    /// nothing else.
+    ///
+    /// `NewGameInitData` sets it (`:154`); `SaveDoSaveCallback` clears it
+    /// *unconditionally* on the statement after its `TrySavingData` call,
+    /// inside the `gDifferentSaveFile` branch and before `saveStatus` is
+    /// read (`src/start_menu.c:1093-1096`) -- so any dispatched overwrite
+    /// retires it, failed and refused ones included. While it is set, the
+    /// SAVE flow shows `gText_DifferentSaveFile`'s WARNING (default NO)
+    /// instead of the ordinary `gText_AlreadySavedFile` question; once
+    /// cleared, the session has answered that question and is asked the
+    /// ordinary one. A session entered through [`Self::continue_saved_game`]
+    /// starts it false: it *is* the file on disk.
+    ///
+    /// It is emphatically **not** "this session's blocks are a new game's":
+    /// that outlives the first overwrite dispatch and is
+    /// [`Self::new_game_session`]'s job, which is what decides whether a
+    /// write drops the replaced file's deferred bytes
+    /// ([`crate::game_save::SaveLineage`], #232 review round two).
     different_save_file: bool,
+    /// Whether this session's save blocks are a *new game's* -- true when
+    /// the phase was built by [`Self::new`] (upstream's `NewGameInitData`
+    /// path), false when it was built by [`Self::from_saved`] (`CONTINUE`,
+    /// upstream's `CopySaveSlotData` RAM). Fixed for the session's whole
+    /// life; nothing mutates it.
+    ///
+    /// Upstream needs no such flag because it *has* the RAM:
+    /// `NewGameInitData` settles what a new game's `gSaveBlock1/2` hold
+    /// (`src/new_game.c:149-186`, `ClearSav1` at `:160`) and
+    /// `HandleSavingData` writes a whole slot out of them
+    /// (`src/save.c:736-739`), so every save in a new-game session is
+    /// already free of the replaced adventure. This port defers the bytes
+    /// it does not model to the image on disk, so that reset has to be
+    /// re-applied at each write -- and the session, not the save mode, is
+    /// what says whose bytes those are
+    /// ([`crate::game_save::SaveLineage`], read at the store call in
+    /// [`start_menu`]).
+    new_game_session: bool,
     /// The open field start menu, if any (issue #232). `Some` freezes the
     /// overworld for the frame, the same shape [`Self::dialog`] and
     /// [`Self::wild_battle`] use -- see [`start_menu`]'s module docs for
@@ -402,6 +431,9 @@ impl OverworldPhase {
             party_lead: None,
             wild_battle: None,
             different_save_file: false,
+            // A continue *is* the file on disk: its blocks came from it, so
+            // its writes carry the deferred bytes forward (field docs).
+            new_game_session: false,
             start_menu: None,
             first_battle: None,
         };
@@ -463,6 +495,11 @@ impl OverworldPhase {
             wild_battle: None,
             // `NewGameInitData` (`src/new_game.c:154`).
             different_save_file: true,
+            // `NewGameInitData`'s reset, as a session property (field
+            // docs): these blocks are this new game's, so no write of this
+            // session may carry the replaced file's bytes -- not even one
+            // taken after the WARNING has been retired.
+            new_game_session: true,
             start_menu: None,
             first_battle: None,
         }
@@ -496,6 +533,20 @@ impl OverworldPhase {
     #[must_use]
     pub(crate) const fn different_save_file(&self) -> bool {
         self.different_save_file
+    }
+
+    /// [`Self::new_game_session`] as the [`SaveLineage`] every write of this
+    /// session states (that field's docs): the *session's* answer to "whose
+    /// bytes are these", which is the only input to
+    /// [`engine::save::SaveStore::clear_base`]. Read at the one store call
+    /// site, in [`start_menu`]'s `PhaseSaveTarget::try_saving_data`.
+    #[must_use]
+    pub(super) const fn save_lineage(&self) -> SaveLineage {
+        if self.new_game_session {
+            SaveLineage::NewGame
+        } else {
+            SaveLineage::Continued
+        }
     }
 
     /// Whether any battle -- wild ([`Self::wild_battle`]) or the Route 101
