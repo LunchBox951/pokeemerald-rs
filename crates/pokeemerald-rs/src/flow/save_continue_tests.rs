@@ -1,0 +1,627 @@
+//! I-6 (issue #214) integration tests: save, exit, reload, continue.
+//!
+//! These drive the *production* path end to end — the same
+//! [`OverworldPhase::step`] the windowed game runs, the same
+//! [`super::save_on_exit`] its shutdown calls, the same
+//! [`SaveSlot::load`](crate::game_save::SaveSlot::load) its boot calls, and
+//! the same [`OverworldPhase::from_saved`]
+//! [`OverworldPhase::continue_saved_game`] builds from — with two
+//! substitutions that keep them runnable in CI, where there is no extracted
+//! asset pack:
+//!
+//! * the room is `crate::overworld::tests::synthetic_scene`'s flat, open
+//!   grid rather than a pack-decoded one (the same fixture
+//!   `crate::flow::overworld_phase::tests` already walks the player around),
+//!   paired with a *real* map id so every `MapHeaderTable`/`MapEventsTable`
+//!   lookup on the way resolves; and
+//! * the save file is a per-test scratch path, passed in as a
+//!   [`crate::game_save::SaveSlot`] value rather than read from the
+//!   process-wide environment.
+//!
+//! The one production step they cannot take is
+//! [`OverworldPhase::continue_saved_game`]'s own
+//! `crate::overworld::load_room` call, which needs the pack. The
+//! `#[ignore]`d [`real_pack_continue_from_the_main_menu_restores_the_saved_game`]
+//! at the bottom closes that gap on the real-pack lane, going all the way
+//! through [`super::advance_scene`]'s `CONTINUE` press.
+//!
+//! [`OverworldPhase::step`]: crate::flow::overworld_phase::OverworldPhase::step
+
+use engine::event_data::EventData;
+use engine::overworld::{Direction, PlayerState};
+use engine::save::{BoxPokemon, Pokemon, PokemonSubstructures, SaveBlock1, SaveBlock2};
+use platform::Buttons;
+
+use super::overworld_phase::{saved_map_id, OverworldPhase};
+use super::tests::{held, pressed, TempSave};
+use super::{menu_type_for, save_on_exit, AppScene, MainMenuState};
+use crate::main_menu::{MainMenuItem, MainMenuType};
+use crate::new_game;
+
+/// `FLAG_RECEIVED_RUNNING_SHOES` (`pokeemerald/include/constants/flags.h:300`)
+/// — an ordinary flag no new-game initialization sets, so setting it is a
+/// real mid-play mutation rather than something the reloaded blocks would
+/// have anyway.
+const FLAG_RECEIVED_RUNNING_SHOES: u16 = 0x112;
+
+/// `VAR_REPEL_STEP_COUNT` (`pokeemerald/include/constants/vars.h:51`) — an
+/// ordinary (non-temp) var, likewise untouched by new-game init.
+const VAR_REPEL_STEP_COUNT: u16 = 0x4021;
+
+/// A party member built through the save model's own encoder: real
+/// `personality`/`ot_id` (so the substructure order and XOR key are
+/// non-trivial), real substructure bytes, and the party-only stats block.
+///
+/// Deliberately *not* `Pokemon::default()`: a zeroed mon would round-trip
+/// through a buggy serializer just as happily as a correct one.
+fn a_party_member(ot_id: u32) -> Pokemon {
+    let mut box_data = BoxPokemon::new(0x1234_ABCD, ot_id);
+    box_data.set_substructures(&PokemonSubstructures {
+        // Growth: species 277 (Treecko) at offset 0, held item none.
+        growth: [0x15, 0x01, 0, 0, 0x40, 0x1F, 0, 0, 0, 0, 70, 0],
+        // Attacks: POUND / LEER, 35/30 PP.
+        attacks: [0x01, 0x00, 0x2B, 0x00, 0, 0, 0, 0, 35, 30, 0, 0],
+        evs_and_condition: [1, 2, 3, 4, 5, 6, 0, 0, 0, 0, 0, 0],
+        misc: [0, 0, 0, 0, 0x11, 0x22, 0x33, 0x44, 0, 0, 0, 0],
+    });
+    Pokemon {
+        box_data,
+        status: 0,
+        level: 7,
+        mail: 0xFF,
+        hp: 17,
+        max_hp: 23,
+        attack: 12,
+        defense: 11,
+        speed: 15,
+        special_attack: 13,
+        special_defense: 10,
+    }
+}
+
+/// A brand-new game in the protagonist's bedroom, on a synthetic room grid
+/// (module docs). Goes through `OverworldPhase::for_test` -> `::new`, i.e.
+/// through `new_game::init_save_blocks`, so the starting state is the real
+/// one.
+fn new_game_phase() -> OverworldPhase {
+    OverworldPhase::for_test(
+        crate::overworld::tests::synthetic_scene(10, 10),
+        new_game::SPAWN_MAP_ID,
+        PlayerState::new(
+            new_game::SPAWN_POSITION,
+            new_game::SPAWN_ELEVATION,
+            new_game::SPAWN_FACING,
+        ),
+        None,
+    )
+}
+
+/// Everything the round-trip asserts on, read out of a phase.
+#[derive(Debug, PartialEq, Eq)]
+struct Snapshot {
+    map: assets::MapId,
+    position: (i32, i32),
+    facing: Direction,
+    elevation: u8,
+    money: u32,
+    running_shoes: bool,
+    repel_steps: u16,
+    party_count: u8,
+    lead: Pokemon,
+    player_name: [u8; engine::save::block::PLAYER_NAME_BUF_LEN],
+    trainer_id: [u8; engine::save::block::TRAINER_ID_LENGTH],
+    encryption_key: u32,
+}
+
+fn snapshot(phase: &OverworldPhase) -> Snapshot {
+    let flags: &EventData = &phase.save1.event_data;
+    Snapshot {
+        map: phase.map_id,
+        position: phase.player.position(),
+        facing: phase.player.facing(),
+        elevation: phase.player.elevation(),
+        money: phase.save1.money,
+        running_shoes: flags.flag_get(FLAG_RECEIVED_RUNNING_SHOES).unwrap(),
+        repel_steps: flags.var_get(VAR_REPEL_STEP_COUNT).unwrap(),
+        party_count: phase.save1.player_party_count,
+        lead: phase.save1.player_party[0],
+        player_name: phase.save2.player_name,
+        trainer_id: phase.save2.player_trainer_id,
+        encryption_key: phase.save2.encryption_key,
+    }
+}
+
+/// Run input-free frames until no step is in flight: an exit save is
+/// refused while one is (`OverworldPhase::mid_step`, #230 review round
+/// five), and these fixtures save from a player at rest.
+fn settle(phase: &mut OverworldPhase) {
+    for _ in 0..20 {
+        if !phase.mid_step() {
+            return;
+        }
+        phase.step(held(Buttons::NONE));
+    }
+    panic!("the fixture must come to rest before it exit-saves");
+}
+
+/// Play a little: walk south until the player has actually moved, then make
+/// the state unmistakably mid-game — a flag, a var, spent money, a party
+/// member, and a nonzero encryption key (so the save's *encrypted* fields
+/// are exercised too, not just its plaintext ones).
+fn play_a_bit(phase: &mut OverworldPhase) {
+    for _ in 0..40 {
+        phase.step(held(Buttons::DOWN));
+    }
+    settle(phase);
+    assert_ne!(
+        phase.player.position(),
+        new_game::SPAWN_POSITION,
+        "the fixture must actually walk the player off the spawn tile"
+    );
+
+    assert!(
+        !phase
+            .save1
+            .event_data
+            .flag_get(FLAG_RECEIVED_RUNNING_SHOES)
+            .unwrap(),
+        "the chosen flag must start clear, or setting it proves nothing"
+    );
+    phase
+        .save1
+        .event_data
+        .flag_set(FLAG_RECEIVED_RUNNING_SHOES)
+        .unwrap();
+    phase
+        .save1
+        .event_data
+        .var_set(VAR_REPEL_STEP_COUNT, 37)
+        .unwrap();
+
+    phase.save2.encryption_key = 0x0BAD_F00D;
+    phase.save1.money = 1_234;
+    phase.save1.player_party_count = 1;
+    phase.save1.player_party[0] = a_party_member(0x0011_2233);
+}
+
+/// The I-6 acceptance round trip: new game -> play -> save -> reload ->
+/// continue, with the restored phase matching what was saved.
+#[test]
+fn a_saved_game_reloads_into_an_overworld_phase_that_matches_it() {
+    let temp = TempSave::new("round-trip");
+    let mut slot = temp.slot();
+
+    let mut phase = new_game_phase();
+    play_a_bit(&mut phase);
+    let before = snapshot(&phase);
+
+    // The real write trigger, not a hand-rolled call to the store.
+    save_on_exit(&AppScene::Overworld(Box::new(phase)), &mut slot)
+        .expect("the overworld has save state to write")
+        .expect("writing the scratch save file must succeed");
+
+    // The real boot load, and the menu it selects.
+    let saved = slot.load();
+    assert!(
+        saved.status.menu_shows_continue(),
+        "a save just written must be offerable as CONTINUE, got {:?}",
+        saved.status
+    );
+    assert_eq!(menu_type_for(&saved), MainMenuType::SavedGame);
+
+    // The real map resolution `continue_saved_game` performs, then its
+    // pack-free core (module docs on the one substituted step).
+    let map = saved_map_id(&saved.block1).expect("the saved location must resolve to a map");
+    assert_eq!(map, new_game::SPAWN_MAP_ID);
+    let resumed = OverworldPhase::from_saved(
+        crate::overworld::tests::synthetic_scene(10, 10),
+        map,
+        saved.block1,
+        saved.block2,
+    );
+
+    let after = snapshot(&resumed);
+    assert_eq!(
+        after.position, before.position,
+        "the player must reload on the tile they saved on"
+    );
+    assert_eq!(after.map, before.map);
+    assert_eq!(
+        after.elevation, before.elevation,
+        "the resumed player must stand at the saved tile's own elevation"
+    );
+    assert_ne!(
+        after.elevation,
+        new_game::SPAWN_ELEVATION,
+        "the fixture must resume off the spawn elevation, or a hardcoded \
+         fallback in saved_tile_placement would pass this test"
+    );
+    assert_eq!(after.money, 1_234);
+    assert!(after.running_shoes, "the set flag must survive the save");
+    assert_eq!(after.repel_steps, 37, "the set var must survive the save");
+    assert_eq!(after.party_count, 1);
+    assert_eq!(
+        after.lead,
+        a_party_member(0x0011_2233),
+        "the party member must round-trip byte-for-byte, encrypted \
+         substructures included"
+    );
+    assert_eq!(after.player_name, before.player_name);
+    assert_eq!(after.trainer_id, before.trainer_id);
+    assert_eq!(after.encryption_key, 0x0BAD_F00D);
+
+    // Facing is the one field this continue does *not* restore, and the
+    // assertion pins the stand-in rather than upstream: with no object-event
+    // model there is nothing to read the saved direction out of, so the
+    // continue-game *warp* branch's `GetAdjustedInitialDirection`
+    // (`src/overworld.c:929-951`) decides it from the tile instead, and an
+    // ordinary tile falls through to `DIR_SOUTH` (`:951`). Upstream's own
+    // ordinary continue path restores the saved facing -- see the deferral
+    // written up in `OverworldPhase::from_saved`. Change this expectation
+    // when object events land; do not read it as fidelity.
+    assert_eq!(
+        after.facing,
+        Direction::South,
+        "the tile-derived stand-in must be what a continue places, until a \
+         saved facing exists to restore"
+    );
+}
+
+/// Saving twice in one session must not lose the second save: the rotation
+/// counter is re-derived from the file each time
+/// (`SaveSlot::store`'s docs), so the newer write wins even though nothing
+/// held `gSaveCounter` in memory between the two.
+#[test]
+fn the_most_recent_of_two_saves_is_the_one_that_reloads() {
+    let temp = TempSave::new("two-slot");
+    let mut slot = temp.slot();
+
+    let mut phase = new_game_phase();
+    play_a_bit(&mut phase);
+    let first_position = phase.player.position();
+    save_on_exit(&AppScene::Overworld(Box::new(phase)), &mut slot)
+        .unwrap()
+        .unwrap();
+
+    // The second session *continues* the first save -- since the exit-write
+    // consent gate (issue #214 review), a fresh new-game session would be
+    // refused here, and continuing is the only real player flow that
+    // produces a second rotation write anyway.
+    let loaded = slot.load();
+    let map = saved_map_id(&loaded.block1).expect("the saved location must resolve");
+    let mut phase = OverworldPhase::from_saved(
+        crate::overworld::tests::synthetic_scene(10, 10),
+        map,
+        loaded.block1,
+        loaded.block2,
+    );
+    phase.save1.money = 4_321;
+    for _ in 0..20 {
+        phase.step(held(Buttons::RIGHT));
+    }
+    settle(&mut phase);
+    let second_position = phase.player.position();
+    assert_ne!(
+        first_position, second_position,
+        "the second session must end somewhere else, or this proves nothing"
+    );
+    save_on_exit(&AppScene::Overworld(Box::new(phase)), &mut slot)
+        .unwrap()
+        .unwrap();
+
+    let saved = slot.load();
+    assert!(saved.status.menu_shows_continue());
+    assert_eq!(saved.block1.money, 4_321);
+    assert_eq!(
+        (i32::from(saved.block1.pos.x), i32::from(saved.block1.pos.y)),
+        second_position
+    );
+}
+
+/// A corrupt save falls back to `NEW GAME` by upstream's own rule
+/// (`SAVE_STATUS_CORRUPT` -> `HAS_NO_SAVED_GAME`, `main_menu.c:649-653`) --
+/// the menu offers no `CONTINUE` at all, so there is nothing to select that
+/// could resume damaged data.
+#[test]
+fn a_corrupt_save_offers_no_continue_and_falls_back_to_new_game() {
+    let temp = TempSave::new("corrupt-fallback");
+    let mut slot = temp.slot();
+
+    let mut phase = new_game_phase();
+    play_a_bit(&mut phase);
+    save_on_exit(&AppScene::Overworld(Box::new(phase)), &mut slot)
+        .unwrap()
+        .unwrap();
+    assert!(slot.load().status.menu_shows_continue());
+
+    // Damage the slot the write landed in (the second half of the image --
+    // `gSaveCounter` advanced to 1 and its parity picks slot 1). Slot 0 is
+    // still erased, so no intact slot survives.
+    let file = temp.path();
+    let mut image = std::fs::read(file).unwrap();
+    let slot_one = image.len() / 2;
+    image[slot_one] ^= 0xFF;
+    std::fs::write(file, &image).unwrap();
+
+    let saved = slot.load();
+    assert!(!saved.status.menu_shows_continue());
+    assert_eq!(menu_type_for(&saved), MainMenuType::NoSavedGame);
+    assert_eq!(
+        crate::main_menu::MainMenuType::NoSavedGame.items(),
+        [MainMenuItem::NewGame, MainMenuItem::Option],
+        "the fallback menu must not contain CONTINUE"
+    );
+}
+
+/// A save whose `location` names no known map must not resume into an
+/// arbitrary one -- `continue_saved_game` fails closed
+/// (`ContinueError::UnknownLocation`) and `advance_scene` leaves the player
+/// on the main menu. Pack-free: the map lookup fails before any room load
+/// is attempted.
+#[test]
+fn a_save_pointing_at_no_known_map_does_not_resume() {
+    let mut block1 = SaveBlock1::default();
+    block1.location.map_group = 127;
+    block1.location.map_num = 127;
+    assert!(saved_map_id(&block1).is_none());
+
+    // `OverworldPhase` has no `Debug`, so this cannot be `expect_err`.
+    let Err(err) = OverworldPhase::continue_saved_game(block1, SaveBlock2::default()) else {
+        panic!("an unknown location must not resolve to some other map");
+    };
+    assert!(
+        err.to_string().contains("map-header table"),
+        "the diagnostic must say why: {err}"
+    );
+}
+
+/// The `#[ignore]`d half of the round trip (module docs): the whole
+/// `CONTINUE` press, through `advance_scene` and the real
+/// `OverworldPhase::continue_saved_game` -> `crate::overworld::load_room`.
+#[test]
+#[ignore = "needs a local pack: run `cargo xtask extract` first"]
+fn real_pack_continue_from_the_main_menu_restores_the_saved_game() {
+    let temp = TempSave::new("real-pack-continue");
+    let mut slot = temp.slot();
+
+    let mut phase = OverworldPhase::load_default().expect("run `cargo xtask extract` first");
+    play_a_bit(&mut phase);
+    let before = snapshot(&phase);
+    save_on_exit(&AppScene::Overworld(Box::new(phase)), &mut slot)
+        .unwrap()
+        .unwrap();
+
+    let saved = slot.load();
+    let menu_type = menu_type_for(&saved);
+    assert_eq!(menu_type, MainMenuType::SavedGame);
+    let menu = crate::main_menu::load_default(menu_type).expect("run `cargo xtask extract` first");
+    assert_eq!(menu.selected(), MainMenuItem::Continue);
+
+    let scene = AppScene::MainMenu(Box::new(MainMenuState { scene: menu, saved }));
+    let (next, _frame) = super::advance_scene(scene, pressed(Buttons::A), &mut slot);
+
+    let AppScene::Overworld(resumed) = next else {
+        panic!("A on CONTINUE must hand off to the overworld");
+    };
+    let after = snapshot(&resumed);
+    assert_eq!(after.map, before.map);
+    assert_eq!(after.position, before.position);
+    assert_eq!(after.money, before.money);
+    assert!(after.running_shoes);
+    assert_eq!(after.repel_steps, 37);
+    assert_eq!(after.party_count, before.party_count);
+    assert_eq!(after.lead, before.lead);
+    assert_eq!(after.trainer_id, before.trainer_id);
+    assert_eq!(after.encryption_key, before.encryption_key);
+}
+
+/// The exit-write consent gate end to end (issue #214 review): a NEW GAME
+/// session that reaches the overworld and quits must not clobber a
+/// continuable save it never loaded -- upstream gates that overwrite on
+/// `gDifferentSaveFile`'s explicit prompt -- while a *continued* session
+/// writes its own save back unconditionally.
+#[test]
+fn a_new_game_session_never_overwrites_a_save_it_did_not_continue() {
+    let temp = TempSave::new("consent-gate");
+    let mut slot = temp.slot();
+
+    // A real prior save on disk, written by its own session.
+    let mut original_phase = new_game_phase();
+    play_a_bit(&mut original_phase);
+    save_on_exit(&AppScene::Overworld(Box::new(original_phase)), &mut slot)
+        .expect("the overworld has save state to write")
+        .expect("writing the scratch save file must succeed");
+    let original = std::fs::read(temp.path()).unwrap();
+
+    // A second session picks NEW GAME (fresh blocks, never continued) and
+    // quits from the overworld: nothing may be written.
+    let fresh = new_game_phase();
+    assert!(
+        save_on_exit(&AppScene::Overworld(Box::new(fresh)), &mut slot).is_none(),
+        "a refused exit write must report nothing-to-save, not success"
+    );
+    assert_eq!(
+        std::fs::read(temp.path()).unwrap(),
+        original,
+        "the unconsented NEW GAME session must leave the save byte-identical"
+    );
+
+    // A *continued* session is updating the very save it loaded, so its
+    // exit write proceeds.
+    let saved = slot.load();
+    let map = saved_map_id(&saved.block1).expect("the saved location must resolve");
+    let mut resumed = OverworldPhase::from_saved(
+        crate::overworld::tests::synthetic_scene(10, 10),
+        map,
+        saved.block1,
+        saved.block2,
+    );
+    // Not `play_a_bit`: its fixture asserts the running-shoes flag starts
+    // clear, and a resumed save already carries it. Any visible change
+    // proves the write happened.
+    resumed.save1.money = 4_321;
+    save_on_exit(&AppScene::Overworld(Box::new(resumed)), &mut slot)
+        .expect("a continued session's exit write is armed")
+        .expect("writing the scratch save file must succeed");
+    assert_ne!(
+        std::fs::read(temp.path()).unwrap(),
+        original,
+        "the continued session's write really replaced the image"
+    );
+}
+
+/// `saved_tile_placement`'s one substitution, pinned (issue #214 review):
+/// a save standing on an `ELEVATION_MULTI_LEVEL` (15) tile resumes at
+/// `ELEVATION_TRANSITION`, exactly the `ObjectEventUpdateElevation`
+/// behaviour the warp path already applies -- never at the raw 15, which
+/// no walking player can legitimately hold. The ordinary-tile case (the
+/// fixture's uniform elevation 3) is pinned by the round-trip snapshot.
+#[test]
+fn continue_on_a_multi_level_tile_resumes_at_the_transition_elevation() {
+    use engine::overworld::{ELEVATION_MULTI_LEVEL, ELEVATION_TRANSITION};
+
+    let bridge_tile = (4_u16, 4_u16);
+    let scene = crate::overworld::tests::synthetic_scene_with_cell_elevation(
+        10,
+        10,
+        bridge_tile,
+        ELEVATION_MULTI_LEVEL,
+    );
+    let mut block1 = SaveBlock1::default();
+    block1.pos.x = i16::try_from(bridge_tile.0).unwrap();
+    block1.pos.y = i16::try_from(bridge_tile.1).unwrap();
+
+    let resumed =
+        OverworldPhase::from_saved(scene, new_game::SPAWN_MAP_ID, block1, SaveBlock2::default());
+    assert_eq!(
+        resumed.player.elevation(),
+        ELEVATION_TRANSITION,
+        "a multi-level tile must resume as a transition, not as raw {ELEVATION_MULTI_LEVEL}"
+    );
+}
+
+/// #230 review round four: an exit while a wild battle owns the phase must
+/// not write the save at all. The blocks hold the *pre-battle* overworld --
+/// the party lead is borrowed by the battle, its RNG draws consumed -- so a
+/// save taken now would mint a valid save that undoes the live fight and
+/// lets a quit escape any encounter. Upstream cannot open its save flow
+/// mid-battle; the stand-in must not be able to either.
+#[test]
+fn exiting_mid_battle_does_not_save() {
+    use battle::{BattlePokemon, Dex, Ivs, MAX_IV};
+    use engine::overworld::wild_encounter::WildEncounter;
+    use engine::rng::Rng;
+
+    let temp = TempSave::new("mid-battle-no-save");
+    let mut save_slot = temp.slot();
+
+    let mut phase = new_game_phase();
+    let ivs = Ivs {
+        hp: MAX_IV,
+        attack: MAX_IV,
+        defense: MAX_IV,
+        speed: MAX_IV,
+        sp_attack: MAX_IV,
+        sp_defense: MAX_IV,
+    };
+    // Level-50 Treecko with Pound vs a Route 101 Wurmple -- the same
+    // fixture `wild_encounter::tests` fights full battles with.
+    let lead = BattlePokemon::new(
+        &Dex::new(),
+        assets::SpeciesId(277),
+        50,
+        ivs,
+        0,
+        vec![assets::MoveId(1)],
+    )
+    .expect("Treecko with Pound is in the dex");
+    let mut rng = Rng::new(0x00C0_FFEE);
+    let battle = super::wild_encounter::start_wild_battle(
+        lead,
+        WildEncounter {
+            species: assets::SpeciesId(290),
+            level: 2,
+            slot: 0,
+        },
+        &mut rng,
+    )
+    .expect("a Wurmple encounter is fightable");
+    phase.wild_battle = Some(battle);
+    assert!(phase.in_battle());
+
+    let scene = AppScene::Overworld(Box::new(phase));
+    assert!(
+        save_on_exit(&scene, &mut save_slot).is_none(),
+        "an exit during a battle must not write the save"
+    );
+    assert!(
+        !temp.slot().load().status.menu_shows_continue(),
+        "the save file must be untouched -- the last save stands"
+    );
+}
+
+/// The Route 101 scripted first battle (#231) freezes the phase exactly
+/// like a wild one -- same borrowed lead, same consumed RNG draws living
+/// outside the `SaveBlock`s -- so the exit-write guard must refuse it for
+/// the same reason [`exiting_mid_battle_does_not_save`] documents.
+#[test]
+fn exiting_mid_first_battle_does_not_save() {
+    use engine::rng::Rng;
+
+    let temp = TempSave::new("mid-first-battle-no-save");
+    let mut save_slot = temp.slot();
+
+    let mut phase = new_game_phase();
+    let mut rng = Rng::new(0x00C0_FFEE);
+    let battle = super::first_battle::start_first_battle(new_game::provisional_starter(), &mut rng)
+        .expect("the scripted first battle constructs from the provisional starter");
+    phase.first_battle = Some(battle);
+    assert!(phase.in_battle());
+
+    let scene = AppScene::Overworld(Box::new(phase));
+    assert!(
+        save_on_exit(&scene, &mut save_slot).is_none(),
+        "an exit during the scripted first battle must not write the save"
+    );
+    assert!(
+        !temp.slot().load().status.menu_shows_continue(),
+        "the save file must be untouched -- the last save stands"
+    );
+}
+
+/// #230 review round five: an exit while a step is in flight must not save.
+/// `save1.pos` is written at step *start*, so the blocks already hold the
+/// landing tile while none of the landing's consequences (door warps,
+/// encounters, coordinate events -- Route 101's scripted first battle among
+/// them) have run; a save taken now would resume standing *past* whatever
+/// the landing triggers. Upstream cannot open its save flow while the
+/// player is moving.
+#[test]
+fn exiting_mid_step_does_not_save() {
+    let temp = TempSave::new("mid-step-no-save");
+    let mut save_slot = temp.slot();
+
+    let mut phase = new_game_phase();
+    // Hold DOWN until a step is actually in flight -- the first frame may
+    // only turn the player in place.
+    for _ in 0..8 {
+        phase.step(held(Buttons::DOWN));
+        if phase.mid_step() {
+            break;
+        }
+    }
+    assert!(
+        phase.mid_step(),
+        "the fixture must catch a step in flight, or the guard is untested"
+    );
+
+    let scene = AppScene::Overworld(Box::new(phase));
+    assert!(
+        save_on_exit(&scene, &mut save_slot).is_none(),
+        "an exit mid-step must not write the save"
+    );
+    assert!(
+        !temp.slot().load().status.menu_shows_continue(),
+        "the save file must be untouched -- the last save stands"
+    );
+}

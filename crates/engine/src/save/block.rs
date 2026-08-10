@@ -1,8 +1,11 @@
 //! Upstream-offset-compatible `SaveBlock1`/`SaveBlock2` models (S-5).
 //!
 //! The modeled fields are written at their exact Emerald offsets inside
-//! full-size, zero-filled block buffers. Unknown and deferred fields are
-//! ignored on decode and zeroed on encode. This slice models:
+//! full-size block buffers. Unknown and deferred fields are ignored on
+//! decode; on encode they keep whatever the caller's base buffer holds —
+//! `patch_bytes` writes only the modeled offsets, so a save loaded from
+//! disk keeps its not-yet-modeled bytes across a save/load round trip
+//! (`to_bytes` is the zero-base convenience form). This slice models:
 //!
 //! - `SaveBlock2`: player identity and the encryption key.
 //! - `SaveBlock1`: position, current/continue/last-heal warps, raw party
@@ -188,18 +191,28 @@ impl SaveBlock2 {
     /// Exact upstream `sizeof(struct SaveBlock2)`.
     pub const PAYLOAD_LEN: usize = 0xF2C;
 
-    /// Serialize into the exact full-size layout, zeroing deferred bytes.
+    /// Serialize into the exact full-size layout over a zeroed base — the
+    /// deferred bytes come out zero. Prefer [`SaveBlock2::patch_bytes`]
+    /// when the block was loaded from an existing payload.
     #[must_use]
     pub fn to_bytes(&self) -> [u8; Self::PAYLOAD_LEN] {
         let mut out = [0u8; Self::PAYLOAD_LEN];
-        out[PLAYER_NAME_OFFSET..PLAYER_NAME_OFFSET + PLAYER_NAME_BUF_LEN]
-            .copy_from_slice(&self.player_name);
-        out[PLAYER_GENDER_OFFSET] = self.player_gender.to_byte();
-        out[PLAYER_TRAINER_ID_OFFSET..PLAYER_TRAINER_ID_OFFSET + TRAINER_ID_LENGTH]
-            .copy_from_slice(&self.player_trainer_id);
-        out[ENCRYPTION_KEY_OFFSET..ENCRYPTION_KEY_OFFSET + 4]
-            .copy_from_slice(&self.encryption_key.to_le_bytes());
+        self.patch_bytes(&mut out);
         out
+    }
+
+    /// Write every modeled field at its exact upstream offset in `base`,
+    /// leaving all other bytes untouched — deferred fields (play time,
+    /// options, Pokédex state, …) survive when `base` is the payload this
+    /// block was decoded from.
+    pub fn patch_bytes(&self, base: &mut [u8; Self::PAYLOAD_LEN]) {
+        base[PLAYER_NAME_OFFSET..PLAYER_NAME_OFFSET + PLAYER_NAME_BUF_LEN]
+            .copy_from_slice(&self.player_name);
+        base[PLAYER_GENDER_OFFSET] = self.player_gender.to_byte();
+        base[PLAYER_TRAINER_ID_OFFSET..PLAYER_TRAINER_ID_OFFSET + TRAINER_ID_LENGTH]
+            .copy_from_slice(&self.player_trainer_id);
+        base[ENCRYPTION_KEY_OFFSET..ENCRYPTION_KEY_OFFSET + 4]
+            .copy_from_slice(&self.encryption_key.to_le_bytes());
     }
 
     /// Decode modeled fields from the exact full-size layout.
@@ -271,31 +284,48 @@ impl SaveBlock1 {
     /// Exact upstream `sizeof(struct SaveBlock1)`.
     pub const PAYLOAD_LEN: usize = 0x3D88;
 
-    /// Serialize into the exact full-size layout, encrypting money and bag
-    /// quantities with `encryption_key` and zeroing deferred bytes.
+    /// Serialize into the exact full-size layout over a zeroed base,
+    /// encrypting money and bag quantities with `encryption_key` — the
+    /// deferred bytes come out zero. Prefer [`SaveBlock1::patch_bytes`]
+    /// when the block was loaded from an existing payload.
     #[must_use]
     pub fn to_bytes(&self, encryption_key: u32) -> [u8; Self::PAYLOAD_LEN] {
         let mut out = [0u8; Self::PAYLOAD_LEN];
-        out[POSITION_OFFSET..POSITION_OFFSET + Coords16::LEN].copy_from_slice(&self.pos.to_bytes());
-        write_warp(&mut out, LOCATION_OFFSET, self.location);
-        write_warp(&mut out, CONTINUE_GAME_WARP_OFFSET, self.continue_game_warp);
-        write_warp(&mut out, LAST_HEAL_LOCATION_OFFSET, self.last_heal_location);
-        out[PARTY_COUNT_OFFSET] = self.player_party_count;
+        self.patch_bytes(&mut out, encryption_key);
+        out
+    }
+
+    /// Write every modeled field at its exact upstream offset in `base`,
+    /// encrypting money and bag quantities with `encryption_key` and
+    /// leaving all other bytes untouched. Deferred *encrypted* fields
+    /// (coins, game stats, …) in `base` stay ciphertext under the key that
+    /// wrote them; that stays coherent only while the base and the key share
+    /// a lineage — the key round-trips unchanged through [`SaveBlock2`] on
+    /// every continued session. A caller that abandons that lineage (a new
+    /// game re-keying from scratch) must zero its base first rather than
+    /// reuse it, and a future slice that re-keys in place must re-encrypt,
+    /// as upstream `ApplyNewEncryptionKeyToAllEncryptedData` does.
+    pub fn patch_bytes(&self, base: &mut [u8; Self::PAYLOAD_LEN], encryption_key: u32) {
+        base[POSITION_OFFSET..POSITION_OFFSET + Coords16::LEN]
+            .copy_from_slice(&self.pos.to_bytes());
+        write_warp(base, LOCATION_OFFSET, self.location);
+        write_warp(base, CONTINUE_GAME_WARP_OFFSET, self.continue_game_warp);
+        write_warp(base, LAST_HEAL_LOCATION_OFFSET, self.last_heal_location);
+        base[PARTY_COUNT_OFFSET] = self.player_party_count;
         for (index, pokemon) in self.player_party.iter().enumerate() {
             let offset = PARTY_OFFSET + index * POKEMON_LEN;
-            out[offset..offset + POKEMON_LEN].copy_from_slice(&pokemon.to_bytes());
+            base[offset..offset + POKEMON_LEN].copy_from_slice(&pokemon.to_bytes());
         }
-        out[MONEY_OFFSET..MONEY_OFFSET + 4]
+        base[MONEY_OFFSET..MONEY_OFFSET + 4]
             .copy_from_slice(&(self.money ^ encryption_key).to_le_bytes());
-        out[BAG_ITEMS_OFFSET..BAG_ITEMS_OFFSET + BAG_LEN]
+        base[BAG_ITEMS_OFFSET..BAG_ITEMS_OFFSET + BAG_LEN]
             .copy_from_slice(&self.bag.to_bytes(encryption_key));
-        out[FLAGS_OFFSET..FLAGS_OFFSET + event_data::NUM_FLAG_BYTES]
+        base[FLAGS_OFFSET..FLAGS_OFFSET + event_data::NUM_FLAG_BYTES]
             .copy_from_slice(self.event_data.flag_bytes());
         for (index, value) in self.event_data.vars_raw().iter().enumerate() {
             let offset = VARS_OFFSET + index * 2;
-            out[offset..offset + 2].copy_from_slice(&value.to_le_bytes());
+            base[offset..offset + 2].copy_from_slice(&value.to_le_bytes());
         }
-        out
     }
 
     /// Decode modeled fields, decrypting money and bag quantities with
@@ -456,6 +486,75 @@ mod tests {
         assert_eq!(encoded[0x09], 0);
         assert_eq!(encoded[0x20], 0);
         assert_eq!(encoded[SaveBlock2::PAYLOAD_LEN - 1], 0);
+    }
+
+    #[test]
+    fn save_block2_patch_bytes_touches_only_modeled_offsets() {
+        let block = SaveBlock2 {
+            player_name: *b"RUSTY\xFF\0\0",
+            player_gender: PlayerGender::Female,
+            player_trainer_id: [0x12, 0x34, 0x56, 0x78],
+            encryption_key: 0x89AB_CDEF,
+        };
+        // Patch the same block over two different fills: a byte that kept
+        // its fill in both is deferred (base preserved); every other byte
+        // must be the modeled encoding `to_bytes` produces.
+        let zeroed = block.to_bytes();
+        let mut fill_a = [0xEEu8; SaveBlock2::PAYLOAD_LEN];
+        let mut fill_b = [0x11u8; SaveBlock2::PAYLOAD_LEN];
+        block.patch_bytes(&mut fill_a);
+        block.patch_bytes(&mut fill_b);
+        let mut deferred = 0usize;
+        for (index, (&a, &b)) in fill_a.iter().zip(fill_b.iter()).enumerate() {
+            if a == 0xEE && b == 0x11 {
+                deferred += 1;
+            } else {
+                assert_eq!(a, b, "byte {index:#X} must not depend on the base fill");
+                assert_eq!(a, zeroed[index], "byte {index:#X} must match to_bytes");
+            }
+        }
+        assert!(
+            deferred > 0,
+            "SaveBlock2 still has deferred bytes to protect"
+        );
+        // A patched payload still decodes to the same block.
+        assert_eq!(SaveBlock2::from_bytes(&fill_a).unwrap(), block);
+    }
+
+    #[test]
+    fn save_block1_patch_bytes_touches_only_modeled_offsets() {
+        let key = 0xA1B2_C3D4;
+        let mut block = SaveBlock1 {
+            pos: Coords16 { x: -1234, y: 2345 },
+            money: 0x1234_5678,
+            ..SaveBlock1::default()
+        };
+        block.bag.items[0] = ItemSlot {
+            item_id: 0x1234,
+            quantity: 0x5678,
+        };
+        let zeroed = block.to_bytes(key);
+        let mut fill_a = [0xEEu8; SaveBlock1::PAYLOAD_LEN];
+        let mut fill_b = [0x11u8; SaveBlock1::PAYLOAD_LEN];
+        block.patch_bytes(&mut fill_a, key);
+        block.patch_bytes(&mut fill_b, key);
+        let mut deferred = 0usize;
+        for (index, (&a, &b)) in fill_a.iter().zip(fill_b.iter()).enumerate() {
+            if a == 0xEE && b == 0x11 {
+                deferred += 1;
+            } else {
+                assert_eq!(a, b, "byte {index:#X} must not depend on the base fill");
+                assert_eq!(a, zeroed[index], "byte {index:#X} must match to_bytes");
+            }
+        }
+        assert!(
+            deferred > 0,
+            "SaveBlock1 still has deferred bytes to protect"
+        );
+        assert_eq!(
+            SaveBlock1::from_bytes(&fill_a, key).unwrap().money,
+            block.money
+        );
     }
 
     #[test]
