@@ -210,18 +210,38 @@ pub struct Song {
     tracks: Vec<Vec<Event>>,
     /// Initial tempo in BPM.
     initial_tempo: u16,
+    /// `SongHeader::reverb` (`0..=127`; `0` means no reverb) — see
+    /// [`crate::reverb::Reverb`]. Set via [`Self::with_reverb`].
+    reverb: u8,
 }
 
 impl Song {
     /// Assemble a song from a voicegroup, decoded tracks, and an initial
-    /// tempo (BPM).
+    /// tempo (BPM). Reverb defaults to `0` (off) — see [`Self::with_reverb`].
     #[must_use]
     pub fn new(voices: Vec<Instrument>, tracks: Vec<Vec<Event>>, initial_tempo: u16) -> Self {
         Self {
             voices,
             tracks,
             initial_tempo,
+            reverb: 0,
         }
+    }
+
+    /// Set this song's master-mix reverb level (`SongHeader::reverb`,
+    /// `0..=127`; `0` disables it — see [`crate::reverb::Reverb`]).
+    /// Chainable onto [`Self::new`], mirroring [`ToneData::fixed`]'s builder
+    /// shape.
+    #[must_use]
+    pub fn with_reverb(mut self, level: u8) -> Self {
+        self.reverb = level;
+        self
+    }
+
+    /// This song's master-mix reverb level (`0` means off).
+    #[must_use]
+    pub fn reverb(&self) -> u8 {
+        self.reverb
     }
 
     /// The instrument at `index`, if the voicegroup has one.

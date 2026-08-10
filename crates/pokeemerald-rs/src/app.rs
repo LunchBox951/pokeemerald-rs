@@ -113,6 +113,7 @@ use platform::{ButtonState, Buttons, Frame, Platform, PlatformError};
 use crate::flow::{self, AnimatedTitle, AppScene};
 use crate::frame::to_platform_frame;
 use crate::game_save::SaveSlot;
+use crate::music::MusicPlayer;
 use crate::scene::BootScene;
 use crate::title::{self, TitleSceneError};
 
@@ -204,6 +205,15 @@ pub struct App {
     /// passed down `(oop-boundaries)` -- upstream's equivalent is flash plus
     /// the `gSaveCounter`/`gLastWrittenSector` globals.
     save_slot: SaveSlot,
+    /// This session's title-screen BGM (S-3, issue #185): `Some` for exactly
+    /// as long as [`AppScene::Title`] is the active scene (see
+    /// [`Self::advance_music`]) and a pack/audio device were both available
+    /// at boot -- `None` otherwise, including for every headless `App` this
+    /// module's other constructors build, which never attempt to open one.
+    /// Best-effort by design: a missing pack or audio device silences the
+    /// BGM rather than failing the whole boot (module docs' "log-or-ignore
+    /// is fine" policy, matching issue #70's precedent for input).
+    music: Option<MusicPlayer>,
 }
 
 /// Compose an already-loaded [`title::TitleScene`] at tick 0 into the
@@ -240,6 +250,7 @@ impl App {
             frame,
             scene: Some(scene),
             save_slot: SaveSlot::default_location(),
+            music: None,
         }
     }
 
@@ -277,6 +288,12 @@ impl App {
     /// which holds the entire construction body -- see the module docs' "The
     /// headless real-boot check" for how both halves are covered.
     ///
+    /// Also starts the title screen's BGM (S-3, issue #185) via
+    /// [`Self::start_title_music`] -- best-effort, so a missing pack or audio
+    /// device silences the BGM rather than failing the boot the title
+    /// screen's own graphics already succeeded at (see [`Self::music`]'s
+    /// field docs).
+    ///
     /// # Errors
     ///
     /// Returns [`AppError::Title`] if the asset pack has not been extracted
@@ -285,12 +302,20 @@ impl App {
     /// run) or is otherwise malformed; [`AppError::Platform`] if the
     /// platform's windowing event loop could not be created.
     pub fn new(title: impl Into<String>) -> Result<Self, AppError> {
-        Self::boot(|| Platform::new(title))
+        let mut app = Self::boot(|| Platform::new(title))?;
+        app.music = Self::start_title_music(|| {
+            platform::AudioOutput::open(crate::music::RING_CAPACITY_FRAMES)
+        });
+        Ok(app)
     }
 
     /// Test-only: [`App::boot`] -- [`App::new`]'s own body -- with
     /// `platform`'s headless/null backend substituted for a real window, the
-    /// I-2 real-boot check's constructor (module docs).
+    /// I-2 real-boot check's constructor (module docs). Also attempts to
+    /// start the title BGM against `platform`'s headless/null audio backend
+    /// (mirroring [`App::new`]'s real path, minus the real device), so the
+    /// I-2 real-boot check's own frame assertions run against exactly the
+    /// same per-step body [`App::new`] does.
     ///
     /// # Errors
     ///
@@ -299,7 +324,37 @@ impl App {
     /// when no local asset pack has been extracted yet.
     #[cfg(test)]
     fn new_headless_real_title() -> Result<Self, AppError> {
-        Self::boot(|| Ok(Platform::new_headless()))
+        let mut app = Self::boot(|| Ok(Platform::new_headless()))?;
+        app.music = Self::start_title_music(|| {
+            Ok(platform::AudioOutput::null(
+                crate::music::RING_CAPACITY_FRAMES,
+            ))
+        });
+        Ok(app)
+    }
+
+    /// Best-effort: load the asset pack a second time (deliberately -- see
+    /// [`Self::boot`]'s own load, which does not expose the [`assets::AssetPack`]
+    /// it built) and start `mus_title` through `open_audio`, logging and
+    /// returning `None` on any failure instead of propagating it -- see
+    /// [`Self::music`]'s field docs on why this stays best-effort.
+    fn start_title_music(
+        open_audio: impl FnOnce() -> Result<platform::AudioOutput, PlatformError>,
+    ) -> Option<MusicPlayer> {
+        let pack = match assets::AssetPack::load_default() {
+            Ok(pack) => pack,
+            Err(err) => {
+                eprintln!("music: {err} -- the title screen will play without music");
+                return None;
+            }
+        };
+        match MusicPlayer::start_from_pack(&pack, "mus_title", open_audio) {
+            Ok(player) => Some(player),
+            Err(err) => {
+                eprintln!("music: {err} -- the title screen will play without music");
+                None
+            }
+        }
     }
 
     /// Build the I-1 synthetic placeholder scene against `platform`'s
@@ -320,6 +375,7 @@ impl App {
             frame: compose_boot_frame(),
             scene: None,
             save_slot: SaveSlot::default_location(),
+            music: None,
         }
     }
 
@@ -400,9 +456,27 @@ impl App {
             self.scene = Some(next);
             self.frame = frame;
         }
+        self.advance_music();
         self.platform.wait_for_next_frame();
         self.platform.present(&self.frame)?;
         Ok(true)
+    }
+
+    /// The title flow's own "play/stop" cue for its BGM (Discussion #227's
+    /// owner decision): render and push one more frame of `mus_title` while
+    /// [`AppScene::Title`] is the active scene, or drop the player (stopping
+    /// the stream -- [`Self::music`]'s field docs) the moment it stops being
+    /// one. A no-op either way when [`Self::music`] is already `None` (no
+    /// pack/audio device at boot, or a headless `App` that never requested
+    /// one).
+    fn advance_music(&mut self) {
+        if matches!(self.scene, Some(AppScene::Title(_))) {
+            if let Some(music) = &mut self.music {
+                music.advance_frame();
+            }
+        } else {
+            self.music = None;
+        }
     }
 
     /// The composed placeholder scene's frame, as most recently handed to
@@ -416,6 +490,38 @@ impl App {
     #[must_use]
     pub fn frame(&self) -> &Frame {
         &self.frame
+    }
+}
+
+#[cfg(test)]
+impl App {
+    /// Test-only: attach an already-started [`MusicPlayer`] directly (bypassing
+    /// [`Self::start_title_music`]'s pack load), for tests that want to drive
+    /// [`Self::advance_music`] without a real asset pack.
+    fn attach_music_for_test(&mut self, music: MusicPlayer) {
+        self.music = Some(music);
+    }
+
+    /// Test-only: whether [`Self::music`] is currently playing.
+    fn has_music_for_test(&self) -> bool {
+        self.music.is_some()
+    }
+
+    /// Test-only: drain this session's music ring by hand (mirrors
+    /// `platform::AudioOutput::pull_null`/`MusicPlayer::drain_null_for_test`),
+    /// so a test can prove the frame-driven push [`Self::step`] performs
+    /// never underruns when paired with a steady drain -- exactly what a
+    /// real device callback provides. A no-op if no music is playing.
+    fn drain_music_for_test(&mut self, out: &mut [f32]) {
+        if let Some(music) = &mut self.music {
+            music.drain_null_for_test(out);
+        }
+    }
+
+    /// Test-only: this session's music underrun count, or `None` if no
+    /// music is playing.
+    fn music_underruns_for_test(&self) -> Option<u64> {
+        self.music.as_ref().map(MusicPlayer::underruns)
     }
 }
 

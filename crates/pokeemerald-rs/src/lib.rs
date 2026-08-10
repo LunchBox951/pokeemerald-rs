@@ -48,6 +48,13 @@
 //! starter-choose UI, and the `B_TRANSITION_BLUR` intro (the trigger
 //! module's docs carry the full deferral list). The crate-root re-exports
 //! remain for the next external caller (a headless `xtask` scenario).
+//!
+//! [`music`] (S-3, issue #185) bridges the asset pack's song/voicegroup/
+//! sample entries into the `audio` crate's sequencer and owns the
+//! frame-driven [`music::MusicPlayer`] `App::step` ticks while the title
+//! screen is showing -- see that module's docs for the resolution shape and
+//! Discussion #227's owner decision on why playback is frame-driven rather
+//! than a background thread.
 
 pub mod app;
 mod flow;
@@ -55,6 +62,7 @@ pub mod frame;
 mod game_save;
 pub mod intro;
 pub mod main_menu;
+pub mod music;
 pub mod new_game;
 pub mod overworld;
 pub mod scene;

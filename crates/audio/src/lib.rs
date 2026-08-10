@@ -32,15 +32,24 @@
 //! [`song::ToneData::fixed`]), and the `xIECV`/`xIECL` pseudo-echo `XCMD`s
 //! for both DirectSound and CGB voices.
 //!
+//! Slice 4 (S-3, issue #185) adds the master-mix reverb/pseudo-echo stage
+//! ([`reverb`], wired into [`mixer::Mixer`]) — a song's [`song::Song::reverb`]
+//! level seeds a feedback delay line the mixer reads before each frame's
+//! voices mix additively on top of it, producing the game's characteristic
+//! decaying echo. Continuous, frame-driven playback (the App advancing one
+//! frame of audio per game frame and looping via the song's own internal
+//! jump commands, per Discussion #227's owner decision) is the integration
+//! crate's job, not this one's — see `pokeemerald_rs::music`.
+//!
 //! Everything renders at exactly [`pitch::MIXER_RATE`] (13379 Hz), the rate the
 //! `platform` producer expects; a unit test pins the two together.
 //!
 //! ## Out of scope for this slice
 //!
-//! Reverb, SFX priority/interruption and voice stealing, the M4A player
-//! command interface, compressed/reversed DirectSound waves. `MEMACC` and
-//! every other `XCMD` sub-command are still only *decoded*, not executed, so
-//! the byte stream stays in sync.
+//! SFX priority/interruption and voice stealing, the M4A player command
+//! interface, compressed/reversed DirectSound waves. `MEMACC` and every
+//! other `XCMD` sub-command are still only *decoded*, not executed, so the
+//! byte stream stays in sync.
 
 // This crate's docs cite upstream C symbols and hardware names heavily
 // (DirectSound, MP2K, SongHeader, …); backticking every prose mention adds
@@ -60,6 +69,11 @@ pub mod sequence;
 pub mod sequencer;
 pub mod song;
 pub mod voice;
+
+/// The master-mix reverb/pseudo-echo stage (S-3, issue #185). Crate-private:
+/// a [`song::Song`]'s [`song::Song::reverb`] level is the only public knob —
+/// see [`reverb::Reverb`]'s own docs and [`mixer::Mixer::with_reverb_level`].
+mod reverb;
 
 pub use cgb_envelope::{CgbAdsr, CgbEnvelope};
 pub use cgb_voice::CgbVoice;

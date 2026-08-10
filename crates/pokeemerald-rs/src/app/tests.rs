@@ -288,3 +288,84 @@ fn release_then_repress_is_logged_again() {
     state.update(Buttons::B);
     assert_eq!(describe_newly_pressed(state).as_deref(), Some("input: B"));
 }
+
+/// S-3 (issue #185): a synthetic, pack-free song that loops forever via its
+/// own `Goto` -- exactly like a real BGM (see `crate::music`'s module docs
+/// on why continuous playback needs no extra restart logic beyond a song's
+/// own jump commands). Mirrors `crate::music::tests`' own `looping_song`.
+fn looping_song_for_test() -> audio::Song {
+    use audio::{Adsr, Event, Instrument, Song, ToneData, WaveData};
+    use std::sync::Arc;
+
+    let wave = Arc::new(WaveData::one_shot(1 << 20, vec![100; 64]));
+    let voices = vec![Instrument::DirectSound(ToneData::new(wave, Adsr::flat()))];
+    let events = vec![
+        Event::Voice(0),
+        Event::Note {
+            key: 60,
+            velocity: 127,
+            gate: 0,
+        },
+        Event::Wait(50),
+        Event::Goto(0),
+    ];
+    Song::new(voices, vec![events], 150)
+}
+
+/// The App's own "stop" cue for its title BGM (Discussion #227's owner
+/// decision, S-3 issue #185): [`App::step`]'s `advance_music` stops (drops)
+/// an attached [`crate::music::MusicPlayer`] the moment [`AppScene::Title`]
+/// is no longer the active scene, rather than leaving it running unheard.
+/// Uses [`App::new_headless`] (the pure I-1 boot-scene path, whose
+/// `AppScene` is always `None` -- never `Title`) purely as a scaffold to
+/// attach a synthetic player to without needing a real asset pack; the
+/// "keeps playing (and never underruns) while `Title` stays active" half
+/// needs a real `TitleScene` and lives in
+/// `real_pack_boot_starts_title_music_and_sustains_it_without_underrun`,
+/// below.
+#[test]
+fn leaving_the_title_scene_stops_the_attached_music_player() {
+    let mut app = App::new_headless();
+    let output = platform::AudioOutput::null(crate::music::RING_CAPACITY_FRAMES);
+    let music = crate::music::MusicPlayer::start(looping_song_for_test(), output)
+        .expect("null backend never errors");
+    app.attach_music_for_test(music);
+    assert!(app.has_music_for_test());
+
+    // `new_headless`'s `AppScene` is always `None`, never `Title` -- exactly
+    // the "scene left Title" case `advance_music` must react to.
+    app.step().expect("headless step never errors");
+    assert!(
+        !app.has_music_for_test(),
+        "advance_music must stop the BGM once the scene is not AppScene::Title"
+    );
+}
+
+/// The sustained half: while `AppScene::Title` stays active, repeated
+/// [`App::step`] calls must keep pushing audio without underrunning when
+/// drained at the same cadence. Needs the real pack, like every other
+/// `App::new_headless_real_title` test in this file.
+#[test]
+#[ignore = "needs a local pack: run `cargo xtask extract` first"]
+fn real_pack_boot_starts_title_music_and_sustains_it_without_underrun() {
+    let mut app = App::new_headless_real_title().expect("run `cargo xtask extract` first");
+    assert!(
+        app.has_music_for_test(),
+        "App::boot must have started mus_title against the real pack + null audio backend"
+    );
+
+    let mut drained = vec![0.0_f32; audio::Sequencer::FRAME_SAMPLES];
+    for _ in 0..120 {
+        app.step().expect("headless step never errors");
+        app.drain_music_for_test(&mut drained);
+    }
+    assert!(
+        app.has_music_for_test(),
+        "the title scene never left Title across these steps, so the BGM must still be playing"
+    );
+    assert_eq!(
+        app.music_underruns_for_test(),
+        Some(0),
+        "120 steps of frame-driven playback, drained once per step, must not underrun the ring"
+    );
+}

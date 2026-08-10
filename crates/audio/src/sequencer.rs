@@ -168,10 +168,11 @@ impl Sequencer {
     pub fn with_config(song: Song, master_volume: u8, max_voices: usize) -> Self {
         let tracks = (0..song.track_count()).map(|_| TrackState::new()).collect();
         let tempo_i = song.initial_tempo();
+        let mixer = Mixer::new(master_volume, max_voices).with_reverb_level(song.reverb());
         Self {
             song,
             tracks,
-            mixer: Mixer::new(master_volume, max_voices),
+            mixer,
             tempo_i,
             tempo_c: 0,
         }

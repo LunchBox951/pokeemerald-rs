@@ -26362,6 +26362,12 @@
           "spec": "S-3",
           "status": "rewritten"
         },
+        "m4aSongNumStart": {
+          "reason": "App::new/App::boot's title-screen path starts MUS_TITLE (m4aSongNumStart(MUS_TITLE), title_screen.c:661) via MusicPlayer::start_from_pack, frame-driven from App::step for as long as the title scene is active (issue #185, Discussion #227).",
+          "rust_target": "crates/pokeemerald-rs/src/app.rs",
+          "spec": "S-3",
+          "status": "rewritten"
+        },
         "ply_xiecl": {
           "reason": "ply_xiecl's pseudo-echo-length XCMD (kind 0x09) executed by sequencer::Sequencer::handle_event, alongside ply_xiecv (S-3 slice 3).",
           "rust_target": "crates/audio/src/sequencer.rs",
@@ -26384,6 +26390,12 @@
         "ChnVolSetAsm": {
           "reason": "ChnVolSetAsm (m4a_1.s:1508) right/left channel-volume formula reimplemented as voice::channel_volume + voice::pan_terms, including the rhythm-pan override (0x80+rhythmPan / 0x7F-rhythmPan) that a rhythm indirection's child pan_sweep byte can set (S-3 slice 3).",
           "rust_target": "crates/audio/src/voice.rs",
+          "spec": "S-3",
+          "status": "rewritten"
+        },
+        "SoundMainRAM_Reverb": {
+          "reason": "SoundMainRAM's reverb arm (feedback delay line seeding the mix buffer before per-voice mixing) reimplemented as Reverb, wired into Mixer::mix_frame; a song's SongHeader::reverb level enables it via Song::with_reverb/Sequencer::with_config (issue #185).",
+          "rust_target": "crates/audio/src/reverb.rs",
           "spec": "S-3",
           "status": "rewritten"
         },
