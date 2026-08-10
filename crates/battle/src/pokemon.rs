@@ -257,6 +257,7 @@ pub struct BattlePokemon {
     nature: Nature,
     ivs: Ivs,
     personality: u32,
+    original_trainer_id: u32,
     types: [Type; 2],
     stats: Stats,
     current_hp: u32,
@@ -377,6 +378,7 @@ impl BattlePokemon {
             nature,
             ivs,
             personality,
+            original_trainer_id: 0,
             types: base.types,
             stats,
             current_hp: stats.max_hp,
@@ -417,6 +419,23 @@ impl BattlePokemon {
     #[must_use]
     pub const fn personality(&self) -> u32 {
         self.personality
+    }
+
+    /// The trainer id of the Pokémon's original trainer.
+    ///
+    /// This identity belongs to the Pokémon rather than its current owner;
+    /// traded Pokémon therefore retain it when they move between saves.
+    #[must_use]
+    pub const fn original_trainer_id(&self) -> u32 {
+        self.original_trainer_id
+    }
+
+    /// Assign the original-trainer identity at the boundary that creates or
+    /// restores this Pokémon.
+    #[must_use]
+    pub const fn with_original_trainer_id(mut self, original_trainer_id: u32) -> Self {
+        self.original_trainer_id = original_trainer_id;
+        self
     }
 
     /// The species' one or two types, captured at construction so combat code

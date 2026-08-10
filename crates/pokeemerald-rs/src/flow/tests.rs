@@ -380,6 +380,10 @@ fn no_scene_outside_the_overworld_writes_the_save() {
         let mut scene = scene;
         for button in [Buttons::START, Buttons::A, Buttons::B, Buttons::DOWN] {
             let (next, _frame) = advance_scene(scene, pressed(button), &mut save_slot);
+            assert!(
+                !matches!(next, AppScene::Overworld(_)),
+                "the fixture must exercise only pre-overworld frames"
+            );
             scene = next;
         }
     }

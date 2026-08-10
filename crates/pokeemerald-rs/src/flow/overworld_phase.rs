@@ -292,7 +292,9 @@ impl OverworldPhase {
         // review): without a lead, every I-4 encounter would be rolled and
         // dropped. Deliberately drawing nothing from `phase.rng` — see
         // `new_game::provisional_starter`'s docs.
-        phase.party_lead = Some(new_game::provisional_starter());
+        let trainer_id = u32::from_le_bytes(phase.save2.player_trainer_id);
+        phase.party_lead =
+            Some(new_game::provisional_starter().with_original_trainer_id(trainer_id));
         Ok(phase)
     }
 

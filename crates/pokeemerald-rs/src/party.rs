@@ -147,14 +147,13 @@ fn unpack_ivs(word: u32) -> Ivs {
 /// `SavePlayerParty`'s per-mon half (`src/load_save.c:160-168`): the battler
 /// `mon`, as the exact 100-byte party value the save block stores.
 ///
-/// `ot_id` is the trainer id the box header's XOR key is built from
-/// (`personality ^ otId`) -- the player's own, out of
-/// [`engine::save::SaveBlock2::player_trainer_id`], so a mon saved by this
-/// session decrypts under the same key upstream would use.
+/// The box header's XOR key is built from the Pokémon's retained original
+/// trainer id (`personality ^ otId`), which can differ from the current
+/// player's id for a traded Pokémon.
 ///
 /// See the module docs for the complete list of fields this writes as a
 /// default rather than carrying.
-pub(crate) fn to_save_pokemon(dex: &Dex, mon: &BattlePokemon, ot_id: u32) -> Pokemon {
+pub(crate) fn to_save_pokemon(dex: &Dex, mon: &BattlePokemon) -> Pokemon {
     let mut growth = [0u8; SUBSTRUCTURE_LEN];
     growth[0..2].copy_from_slice(&mon.species().0.to_le_bytes());
     // `heldItem` (`/*0x02*/`) stays `ITEM_NONE`.
@@ -181,7 +180,7 @@ pub(crate) fn to_save_pokemon(dex: &Dex, mon: &BattlePokemon, ot_id: u32) -> Pok
     let mut misc = [0u8; SUBSTRUCTURE_LEN];
     misc[4..8].copy_from_slice(&pack_ivs(mon.ivs()).to_le_bytes());
 
-    let mut box_data = BoxPokemon::new(mon.personality(), ot_id);
+    let mut box_data = BoxPokemon::new(mon.personality(), mon.original_trainer_id());
     box_data.set_substructures(&PokemonSubstructures {
         growth,
         attacks,
@@ -255,7 +254,8 @@ pub(crate) fn from_save_pokemon(dex: &Dex, saved: &Pokemon) -> Result<BattlePoke
         ivs,
         saved.box_data.personality(),
         move_ids,
-    )?;
+    )?
+    .with_original_trainer_id(saved.box_data.ot_id());
 
     // Full HP is what `BattlePokemon::new` starts at; the save's own `hp`
     // is the state to restore. A saved value above the recomputed maximum

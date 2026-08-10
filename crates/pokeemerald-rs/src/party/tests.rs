@@ -25,6 +25,7 @@ fn a_battler() -> BattlePokemon {
         battle::initial_moveset(assets::SpeciesId(277), 12),
     )
     .expect("Treecko with its level-12 learnset is in the dex")
+    .with_original_trainer_id(0x89AB_CDEF)
 }
 
 #[test]
@@ -76,12 +77,13 @@ fn a_battler_round_trips_through_the_save_layout() {
     mon.deduct_pp(0).unwrap();
     mon.deduct_pp(0).unwrap();
 
-    let saved = to_save_pokemon(&dex, &mon, 0x0011_2233);
+    let saved = to_save_pokemon(&dex, &mon);
     let restored = from_save_pokemon(&dex, &saved).expect("what we just wrote must decode");
 
     assert_eq!(restored.species(), mon.species());
     assert_eq!(restored.level(), mon.level());
     assert_eq!(restored.personality(), mon.personality());
+    assert_eq!(restored.original_trainer_id(), mon.original_trainer_id());
     assert_eq!(restored.nature(), mon.nature());
     assert_eq!(restored.ivs(), mon.ivs());
     assert_eq!(restored.stats(), mon.stats());
@@ -106,9 +108,9 @@ fn a_battler_round_trips_through_the_save_layout() {
 fn the_saved_bytes_sit_at_upstream_offsets() {
     let dex = Dex::new();
     let mon = a_battler();
-    let saved = to_save_pokemon(&dex, &mon, 0x0011_2233);
+    let saved = to_save_pokemon(&dex, &mon);
 
-    assert_eq!(saved.box_data.ot_id(), 0x0011_2233);
+    assert_eq!(saved.box_data.ot_id(), mon.original_trainer_id());
     assert_eq!(saved.level, 12);
     assert_eq!(saved.mail, MAIL_NONE);
     assert_eq!(saved.max_hp, u16::try_from(mon.stats().max_hp).unwrap());
@@ -152,7 +154,7 @@ fn empty_move_slots_are_dropped_rather_than_decoded_as_moves() {
         vec![assets::MoveId(1)],
     )
     .unwrap();
-    let saved = to_save_pokemon(&dex, &mon, 7);
+    let saved = to_save_pokemon(&dex, &mon);
     let restored = from_save_pokemon(&dex, &saved).expect("a one-move mon must decode");
     assert_eq!(restored.moves().len(), 1);
 }
@@ -163,7 +165,7 @@ fn empty_move_slots_are_dropped_rather_than_decoded_as_moves() {
 #[test]
 fn a_corrupt_secure_region_is_reported_not_guessed_at() {
     let dex = Dex::new();
-    let mut saved = to_save_pokemon(&dex, &a_battler(), 7);
+    let mut saved = to_save_pokemon(&dex, &a_battler());
     let mut bytes = saved.box_data.to_bytes();
     bytes[40] ^= 0x80;
     saved.box_data = BoxPokemon::from_bytes(bytes);

@@ -36,7 +36,7 @@
 
 use engine::event_data::EventData;
 use engine::overworld::{Direction, PlayerState};
-use engine::save::{SaveBlock1, SaveBlock2};
+use engine::save::{BoxPokemon, Pokemon, SaveBlock1, SaveBlock2};
 use platform::Buttons;
 
 use super::overworld_phase::{saved_map_id, OverworldPhase};
@@ -198,6 +198,27 @@ fn a_damaged_lead() -> battle::BattlePokemon {
     lead.apply_damage(5);
     lead.deduct_pp(0).unwrap();
     lead
+}
+
+/// A recognizable, checksum-valid serialized party member whose bytes can
+/// prove a dormant slot survived a continue/save cycle untouched.
+fn dormant_party_member(marker: u32) -> Pokemon {
+    let bytes = marker.to_le_bytes();
+    let low = u16::from_le_bytes([bytes[0], bytes[1]]);
+    let high = u16::from_le_bytes([bytes[2], bytes[3]]);
+    Pokemon {
+        box_data: BoxPokemon::new(marker, marker.rotate_left(7)),
+        status: marker.rotate_right(3),
+        level: bytes[0],
+        mail: bytes[1],
+        hp: low,
+        max_hp: high,
+        attack: low.wrapping_add(1),
+        defense: low.wrapping_add(2),
+        speed: low.wrapping_add(3),
+        special_attack: low.wrapping_add(4),
+        special_defense: low.wrapping_add(5),
+    }
 }
 
 /// Drive an already-open start menu until it closes (or its SAVE flow is
@@ -386,6 +407,88 @@ fn a_saved_game_reloads_into_an_overworld_phase_that_matches_it() {
     assert!(
         !resumed.different_save_file(),
         "a continued session *is* the file on disk"
+    );
+}
+
+/// The live runtime currently owns only the lead, but a continued save may
+/// carry more party members in its exact serialized block. Re-saving that
+/// session must update slot 0 without erasing the dormant members or count.
+#[test]
+fn a_continued_multi_member_party_preserves_trailing_slots_and_count() {
+    let temp = TempSave::new("multi-member-party");
+    let mut slot = temp.slot();
+    let mut seed = new_game_phase();
+    let trainer_id = u32::from_le_bytes(seed.save2.player_trainer_id);
+    let lead = a_damaged_lead().with_original_trainer_id(trainer_id);
+    seed.save1.player_party_count = 4;
+    seed.save1.player_party[0] = crate::party::to_save_pokemon(&battle::Dex::new(), &lead);
+    seed.save1.player_party[1] = dormant_party_member(0x1111_2222);
+    seed.save1.player_party[2] = dormant_party_member(0x3333_4444);
+    seed.save1.player_party[3] = dormant_party_member(0x5555_6666);
+    let expected_trailing = seed.save1.player_party[1..].to_vec();
+
+    let mut resumed = OverworldPhase::from_saved(
+        crate::overworld::tests::synthetic_scene(10, 10),
+        seed.map_id,
+        seed.save1,
+        seed.save2,
+    );
+    assert_eq!(resumed.save1.player_party_count, 4);
+    assert_eq!(resumed.party_lead, Some(lead));
+
+    save_from_the_start_menu(&mut resumed, &mut slot);
+    let saved = slot.load();
+    assert_eq!(saved.block1.player_party_count, 4);
+    assert_eq!(saved.block1.player_party[1..], expected_trailing);
+}
+
+/// A traded lead is encrypted under its original trainer's id, not the id
+/// of the player who currently owns and saves it.
+#[test]
+fn a_continued_traded_lead_preserves_its_original_trainer_id() {
+    const PLAYER_ID: u32 = 0x1122_3344;
+    const TRADED_OT_ID: u32 = 0xAABB_CCDD;
+
+    let temp = TempSave::new("traded-lead");
+    let mut slot = temp.slot();
+    let mut seed = new_game_phase();
+    seed.save2.player_trainer_id = PLAYER_ID.to_le_bytes();
+    let traded_lead = a_damaged_lead().with_original_trainer_id(TRADED_OT_ID);
+    seed.save1.player_party_count = 1;
+    seed.save1.player_party[0] = crate::party::to_save_pokemon(&battle::Dex::new(), &traded_lead);
+
+    let mut resumed = OverworldPhase::from_saved(
+        crate::overworld::tests::synthetic_scene(10, 10),
+        seed.map_id,
+        seed.save1,
+        seed.save2,
+    );
+    assert_eq!(
+        resumed
+            .party_lead
+            .as_ref()
+            .map(battle::BattlePokemon::original_trainer_id),
+        Some(TRADED_OT_ID)
+    );
+    assert_ne!(TRADED_OT_ID, PLAYER_ID, "the fixture must model a trade");
+
+    save_from_the_start_menu(&mut resumed, &mut slot);
+    let saved = slot.load();
+    assert_eq!(saved.block2.player_trainer_id, PLAYER_ID.to_le_bytes());
+    assert_eq!(saved.block1.player_party[0].box_data.ot_id(), TRADED_OT_ID);
+
+    let reloaded = OverworldPhase::from_saved(
+        crate::overworld::tests::synthetic_scene(10, 10),
+        seed.map_id,
+        saved.block1,
+        saved.block2,
+    );
+    assert_eq!(
+        reloaded
+            .party_lead
+            .as_ref()
+            .map(battle::BattlePokemon::original_trainer_id),
+        Some(TRADED_OT_ID)
     );
 }
 

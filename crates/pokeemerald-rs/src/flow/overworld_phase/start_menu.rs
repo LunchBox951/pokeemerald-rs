@@ -155,11 +155,12 @@ impl OverworldPhase {
     ///
     /// **Party** (`SavePlayerParty`): this port's `gPlayerParty` is the
     /// single [`OverworldPhase::party_lead`] the battle paths borrow, so
-    /// the party is one member or none, and the encode is
-    /// [`crate::party::to_save_pokemon`] against the player's own trainer
-    /// id (the box header's XOR key). No lead means an empty party, and
-    /// slot 0 is zeroed rather than left holding a stale mon -- upstream's
-    /// `ZeroPlayerPartyMons` leaves the same shape.
+    /// only slot 0 is live. Saving rewrites that slot from the lead while
+    /// retaining an existing valid count and the dormant serialized slots
+    /// 1-5. The encoder uses the lead's own original-trainer id (the box
+    /// header's XOR key), which need not be the current player's id. No lead
+    /// means an empty party, and slot 0 is zeroed rather than left holding a
+    /// stale mon -- upstream's `ZeroPlayerPartyMons` leaves the same shape.
     ///
     /// **Object events** (`SaveObjectEvents`): only the player's facing,
     /// the one field this port models
@@ -169,10 +170,11 @@ impl OverworldPhase {
     /// (`src/event_object_movement.c:1867-1875`), which is the only way
     /// this port's avatar changes direction.
     pub(super) fn copy_party_and_objects_to_save(&mut self) {
-        let ot_id = u32::from_le_bytes(self.save2.player_trainer_id);
         if let Some(lead) = &self.party_lead {
-            self.save1.player_party[0] = party::to_save_pokemon(&battle::Dex::new(), lead, ot_id);
-            self.save1.player_party_count = 1;
+            self.save1.player_party[0] = party::to_save_pokemon(&battle::Dex::new(), lead);
+            if self.save1.player_party_count == 0 {
+                self.save1.player_party_count = 1;
+            }
         } else {
             self.save1.player_party[0] = engine::save::Pokemon::default();
             self.save1.player_party_count = 0;
