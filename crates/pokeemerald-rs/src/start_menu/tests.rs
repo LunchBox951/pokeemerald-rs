@@ -57,9 +57,17 @@ impl SaveTarget for FakeTarget {
         "STU".chars().map(Token::Char).collect()
     }
 
+    /// `SaveDoSaveCallback`'s dispatch (`start_menu.c:1093-1096`): the
+    /// `gDifferentSaveFile = FALSE` on `:1096` is inside the
+    /// `SAVE_OVERWRITE_DIFFERENT_FILE` branch and runs before `saveStatus`
+    /// is looked at, so a *failed* overwrite clears the flag too. The real
+    /// implementor
+    /// (`crate::flow::overworld_phase::start_menu`'s `PhaseSaveTarget`)
+    /// does the same; this fake would be a second, wrong opinion if it
+    /// gated the clear on success.
     fn try_saving_data(&mut self, mode: SaveMode) -> bool {
         self.writes.push(mode);
-        if self.write_succeeds {
+        if matches!(mode, SaveMode::OverwriteDifferentFile { .. }) {
             self.different_save_file = false;
         }
         self.write_succeeds
@@ -72,10 +80,27 @@ impl SaveTarget for FakeTarget {
 /// arithmetic).
 const FRAME_BUDGET: usize = 4_000;
 
+/// [`drive_reporting_outcome`], keeping only the prompt rows.
+fn drive(menu: &mut StartMenu, target: &mut FakeTarget, answers: &[bool]) -> Vec<u8> {
+    drive_reporting_outcome(menu, target, answers).0
+}
+
 /// Drive `menu` until it closes or its SAVE flow cancels back to the item
 /// list, answering Yes/No prompts from `answers` (`true` = YES, defaulting
-/// to YES). Returns the cursor row each prompt opened on.
-fn drive(menu: &mut StartMenu, target: &mut FakeTarget, answers: &[bool]) -> Vec<u8> {
+/// to YES).
+///
+/// Returns the cursor row each prompt opened on, and how the menu ended:
+/// [`StartMenuOutcome::Closed`] for `HideStartMenu` giving field control
+/// back, [`StartMenuOutcome::Open`] for `SAVE_CANCELED` putting the item
+/// list back up. The two are not interchangeable, and `saving()` cannot
+/// tell them apart -- `SaveCallback`'s `SAVE_SUCCESS`/`SAVE_ERROR` arm
+/// closes the menu with the save flow still installed on it
+/// (`start_menu.c:828-834`).
+fn drive_reporting_outcome(
+    menu: &mut StartMenu,
+    target: &mut FakeTarget,
+    answers: &[bool],
+) -> (Vec<u8>, StartMenuOutcome) {
     let mut opened_on: Vec<u8> = Vec::new();
     let mut answered = 0usize;
     let mut entered = false;
@@ -83,7 +108,7 @@ fn drive(menu: &mut StartMenu, target: &mut FakeTarget, answers: &[bool]) -> Vec
         if menu.saving() {
             entered = true;
         } else if entered {
-            return opened_on;
+            return (opened_on, StartMenuOutcome::Open);
         }
         let buttons = match menu.yes_no_cursor() {
             Some(cursor) => {
@@ -104,7 +129,7 @@ fn drive(menu: &mut StartMenu, target: &mut FakeTarget, answers: &[bool]) -> Vec
             None => pressed(Buttons::A),
         };
         if menu.tick(buttons, target) == StartMenuOutcome::Closed {
-            return opened_on;
+            return (opened_on, StartMenuOutcome::Closed);
         }
     }
     panic!("the save flow must terminate within {FRAME_BUDGET} frames");
@@ -146,6 +171,50 @@ fn the_item_cursor_wraps_in_both_directions() {
     assert_eq!(menu.selected(), StartMenuItem::Save);
     menu.tick(pressed(Buttons::DOWN), &mut target);
     assert_eq!(menu.selected(), StartMenuItem::Exit);
+}
+
+/// `HandleStartMenuInput`'s D-pad and A tests are three independent `if`s
+/// (`start_menu.c:595`, `:601`, `:607`), not a chain: a frame that reports
+/// DOWN and A together moves the cursor *and then* selects the item it
+/// landed on. The A branch's own `return FALSE` (`:626`) is why a START on
+/// that same frame does not also close the menu behind the selection.
+#[test]
+fn a_dpad_press_and_a_in_one_frame_move_the_cursor_then_select() {
+    let mut target = FakeTarget::new(SaveFileStatus::Ok, false);
+
+    // DOWN+A off a fresh menu: EXIT, chosen on the frame it was reached.
+    let mut menu = synthetic_start_menu();
+    assert_eq!(menu.selected(), StartMenuItem::Save);
+    assert_eq!(
+        menu.tick(pressed(Buttons::DOWN | Buttons::A), &mut target),
+        StartMenuOutcome::Closed,
+        "the A must act on the row DOWN just moved it to, not on SAVE"
+    );
+
+    // UP+A from EXIT: `Menu_MoveCursor` wraps back to SAVE and the same
+    // frame's A starts the save flow.
+    let mut menu = synthetic_start_menu();
+    menu.tick(pressed(Buttons::DOWN), &mut target);
+    assert_eq!(menu.selected(), StartMenuItem::Exit);
+    assert_eq!(
+        menu.tick(pressed(Buttons::UP | Buttons::A), &mut target),
+        StartMenuOutcome::Open
+    );
+    assert_eq!(menu.selected(), StartMenuItem::Save);
+    assert!(menu.saving(), "the same frame's A entered the SAVE flow");
+
+    // A+START: the A branch returns first, so START never closes anything.
+    let mut menu = synthetic_start_menu();
+    assert_eq!(
+        menu.tick(pressed(Buttons::A | Buttons::START), &mut target),
+        StartMenuOutcome::Open
+    );
+    assert!(menu.saving());
+
+    assert!(
+        target.writes.is_empty(),
+        "none of these frames reached the save medium"
+    );
 }
 
 /// `StartMenuExitCallback` (`start_menu.c:750-757`) and
@@ -309,8 +378,64 @@ fn a_failed_write_still_closes_the_menu() {
     let mut target = FakeTarget::new(SaveFileStatus::Ok, false);
     target.write_succeeds = false;
     let mut menu = synthetic_start_menu();
-    drive(&mut menu, &mut target, &[]);
+    let (_prompts, outcome) = drive_reporting_outcome(&mut menu, &mut target, &[]);
     assert_eq!(target.writes, vec![SaveMode::Normal]);
+    assert_eq!(
+        outcome,
+        StartMenuOutcome::Closed,
+        "SAVE_ERROR shares SAVE_SUCCESS's arm: the menu ends, it does not \
+         drop the player back on the item list"
+    );
+}
+
+/// `SaveDoSaveCallback` clears `gDifferentSaveFile` on the statement right
+/// after `TrySavingData(SAVE_OVERWRITE_DIFFERENT_FILE)`, inside the branch
+/// and before `saveStatus` is ever read (`start_menu.c:1093-1096`) -- so a
+/// *failed* overwrite clears it too, and the next SAVE in the same session
+/// meets the ordinary `gText_AlreadySavedFile` question (default YES)
+/// rather than `gText_DifferentSaveFile`'s WARNING (default NO) all over
+/// again. Clearing only on success would re-prompt where upstream does not.
+#[test]
+fn a_failed_overwrite_still_retires_the_different_save_file_warning() {
+    let mut target = FakeTarget::new(SaveFileStatus::Ok, true);
+    target.write_succeeds = false;
+
+    // First SAVE: the WARNING, consented to, and the write fails.
+    let mut menu = synthetic_start_menu();
+    let prompts = drive(&mut menu, &mut target, &[true, true]);
+    assert_eq!(
+        prompts,
+        vec![0, 1],
+        "gText_ConfirmSave defaults to YES; the WARNING to NO"
+    );
+    assert_eq!(
+        target.writes,
+        vec![SaveMode::OverwriteDifferentFile { prompted: true }]
+    );
+    assert!(
+        !target.different_save_file,
+        "gDifferentSaveFile is cleared by the dispatch, not by the status"
+    );
+
+    // Second SAVE, same session, this time the medium cooperates.
+    target.write_succeeds = true;
+    let mut menu = synthetic_start_menu();
+    let prompts = drive(&mut menu, &mut target, &[]);
+    assert_eq!(
+        prompts,
+        vec![0, 0],
+        "the retry asks gText_AlreadySavedFile, which defaults to YES -- a \
+         second WARNING would open its Yes/No on NO"
+    );
+    assert_eq!(
+        target.writes,
+        vec![
+            SaveMode::OverwriteDifferentFile { prompted: true },
+            SaveMode::Normal
+        ],
+        "the retry dispatches SAVE_NORMAL, exactly as upstream's own \
+         gDifferentSaveFile == FALSE branch does (start_menu.c:1098-1101)"
+    );
 }
 
 /// The composed frame really draws something over the map: a start menu

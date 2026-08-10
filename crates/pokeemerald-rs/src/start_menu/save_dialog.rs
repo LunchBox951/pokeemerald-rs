@@ -87,8 +87,9 @@ pub(crate) trait SaveTarget {
     fn boot_status(&self) -> SaveFileStatus;
 
     /// `gDifferentSaveFile` (`src/new_game.c:55`) — set by
-    /// `NewGameInitData` (`:154`) and cleared by a successful
-    /// `SAVE_OVERWRITE_DIFFERENT_FILE` write (`start_menu.c:1096`).
+    /// `NewGameInitData` (`:154`) and cleared once a
+    /// `SAVE_OVERWRITE_DIFFERENT_FILE` write has been *attempted*, whatever
+    /// its status (`start_menu.c:1093-1096`).
     fn different_save_file(&self) -> bool;
 
     /// The tokens `{PLAYER}` expands to in `gText_PlayerSavedGame` — the
@@ -96,9 +97,17 @@ pub(crate) trait SaveTarget {
     fn player_name(&self) -> Vec<Token>;
 
     /// `TrySavingData(mode)` (`src/save.c:765-783`): perform the write and
-    /// report whether it returned `SAVE_STATUS_OK`. Clearing
-    /// `gDifferentSaveFile` after a successful overwrite is the
-    /// implementor's job, exactly as it is upstream's `SaveDoSaveCallback`.
+    /// report whether it returned `SAVE_STATUS_OK`.
+    ///
+    /// Clearing `gDifferentSaveFile` is the implementor's job, exactly as
+    /// it is upstream's `SaveDoSaveCallback` — and on upstream's terms:
+    /// the clear sits in the `SAVE_OVERWRITE_DIFFERENT_FILE` branch
+    /// immediately after the `TrySavingData` call, before `saveStatus` is
+    /// examined (`start_menu.c:1093-1096`), so *every*
+    /// [`SaveMode::OverwriteDifferentFile`] call clears it — a failed one
+    /// included. An implementor that cleared only on success would re-show
+    /// `gText_DifferentSaveFile`'s WARNING on the next SAVE where upstream
+    /// shows `gText_AlreadySavedFile`.
     fn try_saving_data(&mut self, mode: SaveMode) -> bool;
 }
 

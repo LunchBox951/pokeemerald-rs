@@ -218,12 +218,20 @@ impl StartMenu {
             };
         }
 
-        // `HandleStartMenuInput` (`start_menu.c:594-635`).
+        // `HandleStartMenuInput` (`start_menu.c:593-637`). Upstream's four
+        // tests are *independent* `if`s, not a chain: `JOY_NEW(DPAD_UP)`
+        // (`:595`), `JOY_NEW(DPAD_DOWN)` (`:601`) and `JOY_NEW(A_BUTTON)`
+        // (`:607`) each run on the same frame if the pad reports them
+        // together, so a DOWN+A frame moves the cursor and *then* selects
+        // the item it landed on. An `else if` chain would silently drop
+        // the A.
         if buttons.is_newly_pressed(Buttons::UP) {
             self.move_cursor(-1);
-        } else if buttons.is_newly_pressed(Buttons::DOWN) {
+        }
+        if buttons.is_newly_pressed(Buttons::DOWN) {
             self.move_cursor(1);
-        } else if buttons.is_newly_pressed(Buttons::A) {
+        }
+        if buttons.is_newly_pressed(Buttons::A) {
             match self.items[self.cursor] {
                 // `StartMenuSaveCallback` -> `SaveStartCallback` ->
                 // `InitSave` (`:721-728`, `:809-815`).
@@ -231,8 +239,13 @@ impl StartMenu {
                 // `StartMenuExitCallback` (`:750-757`).
                 StartMenuItem::Exit => return StartMenuOutcome::Closed,
             }
-        } else if buttons.is_newly_pressed(Buttons::START) || buttons.is_newly_pressed(Buttons::B) {
-            // `JOY_NEW(START_BUTTON | B_BUTTON)` (`:628-633`): close.
+            // `return FALSE` (`:626`): the A branch is the one that ends
+            // the function, so a START/B on the same frame does *not* also
+            // close the menu behind the item it just picked.
+            return StartMenuOutcome::Open;
+        }
+        if buttons.is_newly_pressed(Buttons::START) || buttons.is_newly_pressed(Buttons::B) {
+            // `JOY_NEW(START_BUTTON | B_BUTTON)` (`:629-634`): close.
             return StartMenuOutcome::Closed;
         }
         StartMenuOutcome::Open

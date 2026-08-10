@@ -256,6 +256,13 @@ impl SaveTarget for PhaseSaveTarget<'_> {
     /// `gText_SaveError` and the player learns the save did not happen.
     /// Each one is logged first, because the on-screen message cannot say
     /// *which* of them it was.
+    ///
+    /// `gDifferentSaveFile = FALSE` is *not* one of those outcomes' jobs:
+    /// upstream clears it inside the `SAVE_OVERWRITE_DIFFERENT_FILE` branch
+    /// itself, on the statement after the `TrySavingData` call and before
+    /// `saveStatus` is ever looked at (`src/start_menu.c:1093-1096`) -- so a
+    /// failed overwrite clears it too. See the clear below for what that
+    /// buys the player.
     fn try_saving_data(&mut self, mode: SaveMode) -> bool {
         self.phase.copy_party_and_objects_to_save();
         let (block1, block2) = (&self.phase.save1, &self.phase.save2);
@@ -271,15 +278,29 @@ impl SaveTarget for PhaseSaveTarget<'_> {
                 self.save_slot.store_unless_foreign_save(block1, block2)
             }
         };
+        // `gDifferentSaveFile = FALSE` (`src/start_menu.c:1096`), in
+        // upstream's own position: inside the `if (gDifferentSaveFile ==
+        // TRUE)` branch, immediately after the `TrySavingData` call
+        // (`:1095`) and *unconditionally* -- `saveStatus` is not consulted
+        // until `:1103`. So the flag tracks "this session already answered
+        // the overwrite question", not "this session has a file on disk":
+        // once the player has consented (or the empty-cartridge shortcut
+        // has stood in for that consent), a retry after a failed write asks
+        // the ordinary `gText_AlreadySavedFile` question rather than
+        // re-issuing the WARNING. Matching the outcome instead would make
+        // this port re-prompt where upstream does not.
+        //
+        // The refusal arms below are no exception, and the port-specific
+        // one loses nothing by it: a retried `RefusedExistingSave` reaches
+        // the medium as `SAVE_NORMAL` -- but only *after* the player has
+        // answered `gText_AlreadySavedFile`, so the foreign file still is
+        // not clobbered without the player being asked, which is the whole
+        // point of `SaveSlot::store_unless_foreign_save`'s guard.
+        if matches!(mode, SaveMode::OverwriteDifferentFile { .. }) {
+            self.phase.different_save_file = false;
+        }
         match outcome {
-            Ok(StoreOutcome::Written) => {
-                // `gDifferentSaveFile = FALSE` (`src/start_menu.c:1096`):
-                // from here on this session *is* the file on disk, so the
-                // next save asks the ordinary "already a saved file"
-                // question instead of the WARNING.
-                self.phase.different_save_file = false;
-                true
-            }
+            Ok(StoreOutcome::Written) => true,
             Ok(StoreOutcome::RefusedExistingSave) => {
                 eprintln!(
                     "save: a saved game this session never loaded appeared on disk -- \

@@ -97,6 +97,13 @@ struct Snapshot {
     money: u32,
     running_shoes: bool,
     repel_steps: u16,
+    /// `gSaveBlock1Ptr->playerPartyCount` as it sits in the block --
+    /// `SavePlayerParty`'s own output (`src/load_save.c:180-186`). Pinned
+    /// by name alongside `lead` because the two can disagree: a decode that
+    /// silently dropped the mon would still leave `lead` matching a
+    /// re-derived starter, and a count that never got written would still
+    /// leave the bytes on disk.
+    party_count: u8,
     lead: Option<battle::BattlePokemon>,
     player_name: [u8; engine::save::block::PLAYER_NAME_BUF_LEN],
     trainer_id: [u8; engine::save::block::TRAINER_ID_LENGTH],
@@ -113,6 +120,7 @@ fn snapshot(phase: &OverworldPhase) -> Snapshot {
         money: phase.save1.money,
         running_shoes: flags.flag_get(FLAG_RECEIVED_RUNNING_SHOES).unwrap(),
         repel_steps: flags.var_get(VAR_REPEL_STEP_COUNT).unwrap(),
+        party_count: phase.save1.player_party_count,
         lead: phase.party_lead.clone(),
         player_name: phase.save2.player_name,
         trainer_id: phase.save2.player_trainer_id,
@@ -346,6 +354,19 @@ fn a_saved_game_reloads_into_an_overworld_phase_that_matches_it() {
     assert_eq!(after.money, 1_234);
     assert!(after.running_shoes, "the set flag must survive the save");
     assert_eq!(after.repel_steps, 37, "the set var must survive the save");
+    // `SavePlayerParty`'s raw count, pinned by name: the write itself is
+    // what put it there (`copy_party_and_objects_to_save`), so `before`
+    // still reads 0 -- the block only learns about the live lead at
+    // `HandleSavingData` time, exactly as upstream's does.
+    assert_eq!(
+        before.party_count, 0,
+        "the block's count is written by the save, not held live"
+    );
+    assert_eq!(
+        after.party_count, 1,
+        "gSaveBlock1Ptr->playerPartyCount must round-trip as bytes, not \
+         just as a decoded lead"
+    );
     // Issue #232: the actual saved party, not a fresh provisional starter.
     assert_eq!(
         after.lead,
@@ -540,6 +561,7 @@ fn real_pack_continue_from_the_main_menu_restores_the_saved_game() {
     assert_eq!(after.money, before.money);
     assert!(after.running_shoes);
     assert_eq!(after.repel_steps, 37);
+    assert_eq!(after.party_count, 1);
     assert_eq!(after.lead, before.lead);
     assert_eq!(after.trainer_id, before.trainer_id);
     assert_eq!(after.encryption_key, before.encryption_key);
@@ -612,6 +634,73 @@ fn a_new_game_session_must_answer_the_overwrite_warning_before_it_can_clobber_a_
         std::fs::read(temp.path()).unwrap(),
         original,
         "an answered WARNING really does replace the other file"
+    );
+}
+
+/// `SaveDoSaveCallback` clears `gDifferentSaveFile` on the statement after
+/// `TrySavingData(SAVE_OVERWRITE_DIFFERENT_FILE)`, inside the branch and
+/// before `saveStatus` is read (`start_menu.c:1093-1096`) -- so a *failed*
+/// overwrite retires the WARNING just as a successful one does, and the
+/// next SAVE in that session meets `gText_AlreadySavedFile` instead.
+///
+/// Driven through the real `PhaseSaveTarget` (not the unit tests' fake) on
+/// the one failure this port can stage honestly: the unprompted
+/// empty-cartridge write meeting a save another instance left on disk
+/// since this session booted (`SaveSlot::store_unless_foreign_save`).
+/// Nothing is lost by clearing the flag there -- the retry is still
+/// prompted, just by the ordinary overwrite question.
+#[test]
+fn a_refused_overwrite_retires_the_warning_and_the_retry_is_still_prompted() {
+    let temp = TempSave::new("refused-overwrite");
+
+    // Someone else's save, written by its own session.
+    let mut first_slot = temp.slot();
+    let mut original_phase = new_game_phase();
+    play_a_bit(&mut original_phase);
+    save_from_the_start_menu(&mut original_phase, &mut first_slot);
+    let original = std::fs::read(temp.path()).unwrap();
+
+    // A new-game session whose boot load saw nothing (`SAVE_STATUS_EMPTY`,
+    // the untouched slot's own default) -- upstream's empty-cartridge
+    // shortcut, so its first SAVE asks only `gText_ConfirmSave`.
+    let mut slot = temp.slot();
+    let mut phase = new_game_phase();
+    play_a_bit(&mut phase);
+    assert!(phase.different_save_file());
+    phase.open_synthetic_start_menu();
+    let prompts = drive_start_menu(&mut phase, &mut slot, &[]);
+    assert_eq!(
+        prompts,
+        vec![0],
+        "the empty-cartridge shortcut asks nothing about overwriting"
+    );
+    assert_eq!(
+        std::fs::read(temp.path()).unwrap(),
+        original,
+        "the unprompted write must have been refused, file untouched"
+    );
+    assert!(
+        phase.start_menu().is_none(),
+        "gText_SaveError still closes the menu"
+    );
+    assert!(
+        !phase.different_save_file(),
+        "the dispatch cleared gDifferentSaveFile, the status did not"
+    );
+
+    // The retry: the ordinary overwrite question (default YES), not the
+    // WARNING (default NO) all over again -- and it lands.
+    phase.open_synthetic_start_menu();
+    let prompts = drive_start_menu(&mut phase, &mut slot, &[]);
+    assert_eq!(
+        prompts,
+        vec![0, 0],
+        "gText_ConfirmSave then gText_AlreadySavedFile, both defaulting to YES"
+    );
+    assert_ne!(
+        std::fs::read(temp.path()).unwrap(),
+        original,
+        "the player answered the overwrite question, so the write lands"
     );
 }
 
