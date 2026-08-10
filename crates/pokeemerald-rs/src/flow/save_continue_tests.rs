@@ -131,6 +131,19 @@ fn snapshot(phase: &OverworldPhase) -> Snapshot {
     }
 }
 
+/// Run input-free frames until no step is in flight: an exit save is
+/// refused while one is (`OverworldPhase::mid_step`, #230 review round
+/// five), and these fixtures save from a player at rest.
+fn settle(phase: &mut OverworldPhase) {
+    for _ in 0..20 {
+        if !phase.mid_step() {
+            return;
+        }
+        phase.step(held(Buttons::NONE));
+    }
+    panic!("the fixture must come to rest before it exit-saves");
+}
+
 /// Play a little: walk south until the player has actually moved, then make
 /// the state unmistakably mid-game — a flag, a var, spent money, a party
 /// member, and a nonzero encryption key (so the save's *encrypted* fields
@@ -139,6 +152,7 @@ fn play_a_bit(phase: &mut OverworldPhase) {
     for _ in 0..40 {
         phase.step(held(Buttons::DOWN));
     }
+    settle(phase);
     assert_ne!(
         phase.player.position(),
         new_game::SPAWN_POSITION,
@@ -285,6 +299,7 @@ fn the_most_recent_of_two_saves_is_the_one_that_reloads() {
     for _ in 0..20 {
         phase.step(held(Buttons::RIGHT));
     }
+    settle(&mut phase);
     let second_position = phase.player.position();
     assert_ne!(
         first_position, second_position,
@@ -567,6 +582,43 @@ fn exiting_mid_first_battle_does_not_save() {
     assert!(
         save_on_exit(&scene, &mut save_slot).is_none(),
         "an exit during the scripted first battle must not write the save"
+    );
+    assert!(
+        !temp.slot().load().status.menu_shows_continue(),
+        "the save file must be untouched -- the last save stands"
+    );
+}
+
+/// #230 review round five: an exit while a step is in flight must not save.
+/// `save1.pos` is written at step *start*, so the blocks already hold the
+/// landing tile while none of the landing's consequences (door warps,
+/// encounters, coordinate events -- Route 101's scripted first battle among
+/// them) have run; a save taken now would resume standing *past* whatever
+/// the landing triggers. Upstream cannot open its save flow while the
+/// player is moving.
+#[test]
+fn exiting_mid_step_does_not_save() {
+    let temp = TempSave::new("mid-step-no-save");
+    let mut save_slot = temp.slot();
+
+    let mut phase = new_game_phase();
+    // Hold DOWN until a step is actually in flight -- the first frame may
+    // only turn the player in place.
+    for _ in 0..8 {
+        phase.step(held(Buttons::DOWN));
+        if phase.mid_step() {
+            break;
+        }
+    }
+    assert!(
+        phase.mid_step(),
+        "the fixture must catch a step in flight, or the guard is untested"
+    );
+
+    let scene = AppScene::Overworld(Box::new(phase));
+    assert!(
+        save_on_exit(&scene, &mut save_slot).is_none(),
+        "an exit mid-step must not write the save"
     );
     assert!(
         !temp.slot().load().status.menu_shows_continue(),

@@ -68,8 +68,7 @@
 //!   for what that costs on the party side.
 
 use engine::save::{
-    counter_b_is_newer, BaseSnapshot, SaveBlock1, SaveBlock2, SaveFile, SaveFileError, SaveStatus,
-    SaveStore,
+    BaseSnapshot, SaveBlock1, SaveBlock2, SaveFile, SaveFileError, SaveStatus, SaveStore,
 };
 
 /// The boot load's verdict — upstream `gSaveFileStatus`'s `SAVE_STATUS_*`
@@ -174,6 +173,23 @@ pub(crate) enum StoreOutcome {
     /// so refusal is this port's own conservative policy. The file was
     /// left byte-untouched.
     RefusedStaleSession,
+}
+
+/// Whether counter `b` sits strictly *ahead* of counter `a` on the save
+/// counter's wrapping number line -- serial-number arithmetic: `b` is ahead
+/// iff stepping forward from `a` reaches `b` in fewer than half the counter
+/// space. The session-vs-disk drift checks in [`SaveSlot::store`] need this
+/// rather than [`counter_b_is_newer`]'s adjacent-pair rule: that rule is a
+/// faithful model of upstream's `GetSaveValidStatus`, which only ever
+/// compares the two on-disk slots -- generations exactly one apart -- while
+/// an arbitrary number of another process's saves can intervene between
+/// this session's load and its exit write, including runs that straddle the
+/// `u32` wrap (`MAX -> 0 -> 1`, which the adjacent rule mis-orders as *not*
+/// newer than `MAX`) (#230 review round five). Kept here, not in
+/// `engine::save`: the slot resolver must keep upstream's exact rule
+/// `(behavioral-fidelity)`; this drift question has no upstream counterpart.
+const fn counter_is_ahead(a: u32, b: u32) -> bool {
+    b != a && b.wrapping_sub(a) < u32::MAX / 2
 }
 
 /// This session's save medium: the one file the game loads from at boot and
@@ -388,7 +404,7 @@ impl SaveSlot {
         // established an identity; checked under the same lock as the
         // write, so the comparison cannot itself race.
         if let Some(loaded) = self.session_counter {
-            if counter_b_is_newer(loaded, store.save_counter())
+            if counter_is_ahead(loaded, store.save_counter())
                 && SaveFileStatus::from_store(existing.status).menu_shows_continue()
             {
                 return Ok(StoreOutcome::RefusedStaleSession);
@@ -405,7 +421,7 @@ impl SaveSlot {
         // (`clear_base` below zeroes the base regardless).
         if !preserve_existing {
             if let (Some(loaded), Some(bases)) = (self.session_counter, &self.session_bases) {
-                if counter_b_is_newer(store.save_counter(), loaded) {
+                if counter_is_ahead(store.save_counter(), loaded) {
                     store.restore_base(bases.clone());
                 }
             }

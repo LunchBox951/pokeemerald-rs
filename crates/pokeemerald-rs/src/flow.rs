@@ -212,6 +212,18 @@ pub(crate) fn save_on_exit(
                 eprintln!("save: exiting mid-battle -- not saving; the last save stands");
                 return None;
             }
+            // The same shape one tile down: a step in flight has already
+            // moved `save1.pos` to the landing tile, but the landing's own
+            // consequences (door warps, encounters, coordinate events --
+            // Route 101's scripted battle among them) have not run. A save
+            // now would resume *past* whatever the landing triggers.
+            // Upstream cannot save mid-step -- the start menu does not
+            // open while moving -- so the last save stands here too (#230
+            // review round five).
+            if phase.mid_step() {
+                eprintln!("save: exiting mid-step -- not saving; the last save stands");
+                return None;
+            }
             let outcome = if phase.continued_from_save() {
                 save_slot.store(phase.save1(), phase.save2())
             } else {

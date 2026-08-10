@@ -682,3 +682,75 @@ fn healing_a_damaged_newest_slot_keeps_the_sessions_deferred_lineage() {
         "the healed save is this session's state"
     );
 }
+
+// -- the wrap-aware session-drift comparison (#230 review round five) -----
+
+/// [`super::counter_is_ahead`] must order across the `u32` wrap for
+/// *arbitrary* distances -- the adjacent-pair rule the two-slot resolver
+/// keeps (`engine`'s `counter_b_is_newer`) mis-orders `MAX -> 1` as "not
+/// ahead", which is exactly the reviewed stale-writer escape.
+#[test]
+fn counter_is_ahead_orders_across_the_wrap_at_any_distance() {
+    // The plain, un-wrapped cases.
+    assert!(super::counter_is_ahead(3, 7));
+    assert!(!super::counter_is_ahead(7, 3));
+    assert!(!super::counter_is_ahead(5, 5));
+    // The wrap: one advance, and the multi-advance case the adjacent rule
+    // gets wrong.
+    assert!(super::counter_is_ahead(u32::MAX, 0));
+    assert!(super::counter_is_ahead(u32::MAX, 1));
+    assert!(super::counter_is_ahead(u32::MAX - 1, 2));
+    assert!(!super::counter_is_ahead(0, u32::MAX));
+    assert!(!super::counter_is_ahead(1, u32::MAX));
+    // Serial-arithmetic half-space boundary: a forward distance under half
+    // the counter space is "ahead"; at or past it, it reads as "behind".
+    assert!(super::counter_is_ahead(0, u32::MAX / 2 - 1));
+    assert!(!super::counter_is_ahead(0, u32::MAX / 2));
+}
+
+/// The stale-session refusal must survive the counter wrap: a session whose
+/// identity is `u32::MAX` while the disk has advanced past the wrap (any
+/// small counter) is holding *older* progress and must refuse to write.
+/// Emulated by pinning the session identity directly -- driving a real file
+/// through 2^32 rotations is not a test.
+#[test]
+fn a_stale_session_is_refused_even_across_the_counter_wrap() {
+    let block2 = SaveBlock2::default();
+    let temp = TempSave::new("stale-across-wrap");
+
+    // Newest persisted progress: a small post-wrap counter.
+    let mut writer = temp.slot();
+    writer
+        .store(
+            &SaveBlock1 {
+                money: 200,
+                ..SaveBlock1::default()
+            },
+            &block2,
+        )
+        .unwrap();
+    let newest = std::fs::read(&temp.path).unwrap();
+
+    // A session that booted just before the wrap: identity `u32::MAX`,
+    // i.e. the disk's counter is ahead of it across the wrap boundary.
+    let mut stale = temp.slot();
+    stale.load();
+    stale.session_counter = Some(u32::MAX);
+    assert_eq!(
+        stale
+            .store(
+                &SaveBlock1 {
+                    money: 100,
+                    ..SaveBlock1::default()
+                },
+                &block2,
+            )
+            .unwrap(),
+        super::StoreOutcome::RefusedStaleSession
+    );
+    assert_eq!(
+        std::fs::read(&temp.path).unwrap(),
+        newest,
+        "the newest persisted progress must be byte-identical after the refusal"
+    );
+}

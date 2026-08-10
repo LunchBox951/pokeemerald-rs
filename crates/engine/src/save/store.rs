@@ -215,13 +215,15 @@ fn expected_len_for(id: u16) -> Option<usize> {
 /// the other is `0` (the counter having just wrapped around), the wrapped
 /// one (`0`) is the newer save.
 ///
-/// Public because comparing save counters *directionally* is how a caller
-/// distinguishes "the file advanced past this session" (another process
-/// saved — strictly newer) from "the file fell back behind it" (a damaged
-/// newest slot made [`SaveStore::load`] adopt the older intact slot's
-/// counter) — an equality test conflates the two (#230 review).
+/// Deliberately *not* a general modular ordering: upstream's rule only ever
+/// compares the two on-disk slots, whose counters are exactly one
+/// generation apart, so the adjacent pair is the only wrap that can occur
+/// here `(behavioral-fidelity)`. Callers asking a different question — "did
+/// the file drift an arbitrary distance past this session?" — need serial
+/// arithmetic instead (`pokeemerald-rs`'s `game_save::counter_is_ahead`,
+/// #230 review round five) and must not reuse this rule.
 #[must_use]
-pub fn counter_b_is_newer(a: u32, b: u32) -> bool {
+fn counter_b_is_newer(a: u32, b: u32) -> bool {
     if (a == u32::MAX && b == 0) || (a == 0 && b == u32::MAX) {
         a.wrapping_add(1) < b.wrapping_add(1)
     } else {

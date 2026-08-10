@@ -486,6 +486,21 @@ impl OverworldPhase {
     pub(crate) const fn in_battle(&self) -> bool {
         self.wild_battle.is_some() || self.first_battle.is_some()
     }
+
+    /// Whether a step is still in flight -- the transit frames themselves,
+    /// or a latched [`Self::pending_landing`] whose warp/encounter/
+    /// coordinate-event processing [`Self::step`] has not run yet. The
+    /// exit-write guard [`crate::flow::save_on_exit`] checks this too
+    /// (#230 review round five): `save1.pos` is written at step *start*,
+    /// so a save taken now would persist the destination tile while
+    /// dropping everything landing on it triggers -- door warps, wild
+    /// encounters, and Route 101's scripted first battle among them.
+    /// Upstream cannot save here either: the start menu does not open
+    /// while the player is moving.
+    #[must_use]
+    pub(crate) const fn mid_step(&self) -> bool {
+        self.pending_landing.is_some() || self.player.in_transit()
+    }
 }
 
 /// The map `block1.location` names -- `Overworld_GetMapHeaderByGroupAndId(
