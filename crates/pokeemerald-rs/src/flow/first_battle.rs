@@ -44,20 +44,21 @@
 //! `AI_FirstBattle` move choice and flee threshold, damage, fainting — is
 //! the real `battle::Battle` from issue #187.
 //!
-//! # What this slice does not wire up
+//! # What is wired up around this module, and what still is not
 //!
-//! Upstream reaches [`start_first_battle`]'s upstream counterpart through
-//! the Route 101 rescue-chain narrative gate: May/Brendan's Zigzagoon
-//! cornering the player, the `VAR_ROUTE101_STATE` coord events, the
+//! Since issue #231, [`crate::flow::overworld_phase::OverworldPhase`] *is*
+//! a real production caller: its Route 101 rescue trigger
+//! (`flow::overworld_phase::first_battle_trigger`) recognizes the map's
+//! own `VAR_ROUTE101_STATE` coord events and drives this construction/
+//! driver pair through the per-frame step path. What remains unmodelled is
+//! the narrative dressing upstream wraps around that trigger: the wild
+//! Zigzagoon cornering Professor Birch, the Birch-bag dialog, the
 //! starter-choose UI and `CB2_GiveStarter`'s `ScriptGiveMon` immediately
-//! before it, and `CB2_StartFirstBattle`'s `B_TRANSITION_BLUR`. None of
-//! that exists here — there is no script engine to run it — so this module
-//! is a construction/driver pair a future script-engine hookup can call,
-//! exercised directly by this module's own tests today rather than through
-//! [`crate::flow::overworld_phase::OverworldPhase`]. That gap is recorded on
-//! the `src/battle_setup.c` ledger entry rather than papered over; issue
-//! #221 scoped this slice to exactly this "smaller deterministic
-//! construction path" instead.
+//! before the fight, and `CB2_StartFirstBattle`'s `B_TRANSITION_BLUR` —
+//! there is still no script engine to run those. That remaining gap is
+//! recorded on the `src/battle_setup.c` ledger entry rather than papered
+//! over; issue #221 scoped the original slice to the construction path,
+//! and #231 to the deterministic trigger.
 //!
 //! # RNG stream
 //!

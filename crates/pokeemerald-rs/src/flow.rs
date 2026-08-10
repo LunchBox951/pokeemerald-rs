@@ -208,7 +208,7 @@ pub(crate) fn save_on_exit(
             // letting a quit escape any encounter (#230 review). Skip;
             // the previous save stands, exactly as it would after an
             // upstream mid-battle power-off.
-            if phase.in_wild_battle() {
+            if phase.in_battle() {
                 eprintln!("save: exiting mid-battle -- not saving; the last save stands");
                 return None;
             }

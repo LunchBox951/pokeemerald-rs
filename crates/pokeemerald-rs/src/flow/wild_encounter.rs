@@ -197,37 +197,56 @@ pub(super) fn roll_eligible_landing(
 /// Two gates, and they are not the same gate. `in_transit` is this port's
 /// counterpart to the `T_TILE_CENTER`/`T_NOT_MOVING` test that sets
 /// `input->heldDirection` upstream in the first place (`:95-112`).
-/// `encounter_fired` is the precedence one: `CheckStandardWildEncounter` at
-/// `:162` returns `TRUE` when a wild Pokémon appears, and
-/// `ProcessPlayerFieldInput` returns with it — so the arrow poll two lines
-/// below never runs on the frame an encounter fires.
+/// `field_event_fired` is the precedence one: everything upstream runs
+/// *above* the arrow poll returns `TRUE` out of `ProcessPlayerFieldInput`
+/// when it fires — `CheckStandardWildEncounter` at `:162` when a wild
+/// Pokémon appears, and `TryStartStepBasedScript` at `:155-161` when a coord
+/// event does (`TryStartCoordEventScript`, `:485-486`; this port's own is
+/// the Route 101 first-battle trigger, issue #231) — so the arrow poll two
+/// lines below never runs on such a frame. Its caller
+/// (`crate::flow::overworld_phase::OverworldPhase::step`) computes that
+/// single "something already claimed this frame" value once and hands the
+/// same one to [`field_input_consumed`].
 ///
-/// Like [`roll_eligible_landing`]'s `preempting` arm, the `encounter_fired`
-/// half is presently unreachable rather than merely untaken: the arrow poll
-/// reads the tile the player already stands on, which on the drain frame is
-/// the same tile the roll read, and no metatile behavior is both an
-/// arrow-warp id and a land-encounter id. It encodes upstream's ordering all
-/// the same, so a future slice that widens either id set inherits the right
+/// Like [`roll_eligible_landing`]'s `preempting` arm, the `field_event_fired`
+/// half is presently unreachable rather than merely untaken: for an
+/// encounter, the arrow poll reads the tile the player already stands on,
+/// which on the drain frame is the same tile the roll read, and no metatile
+/// behavior is both an arrow-warp id and a land-encounter id; for the coord
+/// trigger, Route 101 declares no `warp_events` at all
+/// (`data/maps/Route101/map.json`), so no arrow warp can exist on the one
+/// map the trigger is wired to (pinned by
+/// `crate::flow::overworld_phase::tests::route_101_has_no_warp_events_so_the_trigger_can_never_race_one`).
+/// It encodes upstream's ordering all the same, so a future slice that
+/// widens either id set — or gives Route 101 a warp — inherits the right
 /// precedence instead of a silent double-fire.
-pub(super) const fn arrow_poll_open(in_transit: bool, encounter_fired: bool) -> bool {
-    !in_transit && !encounter_fired
+pub(super) const fn arrow_poll_open(in_transit: bool, field_event_fired: bool) -> bool {
+    !in_transit && !field_event_fired
 }
 
 /// Whether this frame's field input has already been consumed by the time
 /// `ProcessPlayerFieldInput` reaches `TryStartInteractionScript` (`:172`).
 ///
-/// A resolved warp and a fired encounter consume it identically upstream —
+/// A resolved warp and a fired field event ([`arrow_poll_open`]'s own
+/// `field_event_fired`: a wild encounter, or a coord-event script such as
+/// the Route 101 first-battle trigger) consume it identically upstream —
 /// both return `TRUE` from `ProcessPlayerFieldInput` before `:172` is reached
 /// (`:155-161` and `:162` respectively) — so a same-frame A press finds
 /// nothing to talk to. [`WarpTrigger::Unsupported`] deliberately does *not*
 /// count: this port could not resolve that warp, nothing happened, and
 /// swallowing the player's A press on top of that would compound one
 /// unmodelled destination into a second missing behaviour.
+///
+/// The coord-event half of `field_event_fired` is unreachable here too, and
+/// for a data reason rather than a logic one: none of Route 101's six object
+/// events stands adjacent to either rescue tile, so no A press can find an
+/// interaction to discard on the frame the trigger fires (pinned by
+/// `crate::flow::overworld_phase::tests::no_route_101_object_event_stands_beside_the_rescue_trigger_tiles`).
 pub(super) const fn field_input_consumed(
-    encounter_fired: bool,
+    field_event_fired: bool,
     warp_trigger: Option<WarpTrigger>,
 ) -> bool {
-    encounter_fired || matches!(warp_trigger, Some(WarpTrigger::Resolved { .. }))
+    field_event_fired || matches!(warp_trigger, Some(WarpTrigger::Resolved { .. }))
 }
 
 /// Whether every wild mon `map`'s land table can roll is one the battle

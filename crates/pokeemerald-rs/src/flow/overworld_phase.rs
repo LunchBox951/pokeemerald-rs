@@ -22,8 +22,11 @@
 //! [`connections`] (warp and map-edge-crossing execution,
 //! [`OverworldPhase::warp_to`]/[`OverworldPhase::cross_connection`]),
 //! [`wild_battle`] (driving an in-progress wild battle,
-//! [`OverworldPhase::advance_wild_battle_frame`]), and [`frame`] (dialog
-//! ticking and frame composition, [`OverworldPhase::compose_frame`]).
+//! [`OverworldPhase::advance_wild_battle_frame`]),
+//! [`first_battle_trigger`] (the Route 101 scripted first-battle coord-event
+//! trigger, issue #231, [`OverworldPhase::advance_first_battle_frame`]), and
+//! [`frame`] (dialog ticking and frame composition,
+//! [`OverworldPhase::compose_frame`]).
 
 use engine::overworld::{
     warp_in_facing, PlayerState, TilePos, WildEncounterState, ELEVATION_MULTI_LEVEL,
@@ -36,6 +39,7 @@ use crate::new_game;
 use crate::overworld::{self, NpcDialog, OverworldScene, OverworldSceneError};
 
 mod connections;
+mod first_battle_trigger;
 mod frame;
 mod input;
 mod step;
@@ -211,6 +215,19 @@ pub(crate) struct OverworldPhase {
     /// load -- upstream gates that on `gDifferentSaveFile`'s explicit
     /// overwrite prompt, which this port cannot show yet.
     continued_from_save: bool,
+    /// The Route 101 scripted first battle currently being played out, if
+    /// any (issue #231) -- the narrative-event counterpart to
+    /// [`Self::wild_battle`], kept in its own field rather than sharing that
+    /// one: [`first_battle_trigger`] starts it via
+    /// [`crate::flow::first_battle::start_first_battle`] and drives it with
+    /// [`crate::flow::first_battle::advance_first_battle`]'s `UseMove`
+    /// policy, never [`crate::flow::wild_encounter::advance_wild_battle`]'s
+    /// `Run` one -- see [`first_battle_trigger`]'s module docs for why the
+    /// two drivers cannot be shared. `Some` freezes the overworld for the
+    /// frame exactly like [`Self::wild_battle`] does; the two fields are
+    /// never `Some` at once, since only one of [`Self::step`]'s trigger and
+    /// wild-encounter branches can fire on a given frame.
+    pub(super) first_battle: Option<battle::Battle>,
 }
 
 impl OverworldPhase {
@@ -368,6 +385,7 @@ impl OverworldPhase {
             party_lead: None,
             wild_battle: None,
             continued_from_save: true,
+            first_battle: None,
         };
         phase.party_lead = Some(new_game::provisional_starter());
         phase
@@ -406,6 +424,10 @@ impl OverworldPhase {
         // the production spawn bedroom, this hides its twelve decoration
         // placeholders; test maps receive their own transition effects.
         connections::run_on_transition_map_script(map_id, &mut save1.event_data);
+        // Route 101's own on-frame `VAR_ROUTE101_STATE` bump (issue #231,
+        // `first_battle_trigger`'s module docs) -- a no-op for every other
+        // `map_id`.
+        first_battle_trigger::sync_route_101_state_on_entry(map_id, &mut save1.event_data);
         Self {
             scene,
             player,
@@ -422,6 +444,7 @@ impl OverworldPhase {
             party_lead: None,
             wild_battle: None,
             continued_from_save: false,
+            first_battle: None,
         }
     }
 
@@ -451,15 +474,17 @@ impl OverworldPhase {
         self.continued_from_save
     }
 
-    /// Whether a wild battle currently owns the phase -- the exit-write
-    /// guard [`crate::flow::save_on_exit`] checks. Mid-battle state (the
-    /// live combat, the consumed RNG draws, the borrowed party lead) lives
-    /// outside the `SaveBlock`s until
-    /// [`Self::advance_wild_battle_frame`] finishes the battle, so a save
-    /// taken now would persist the *pre-battle* overworld (#230 review).
+    /// Whether any battle -- wild ([`Self::wild_battle`]) or the Route 101
+    /// scripted first battle ([`Self::first_battle`]) -- currently owns the
+    /// phase; the exit-write guard [`crate::flow::save_on_exit`] checks.
+    /// Mid-battle state (the live combat, the consumed RNG draws, the
+    /// borrowed party lead) lives outside the `SaveBlock`s until the
+    /// battle's driver finishes it, so a save taken now would persist the
+    /// *pre-battle* overworld (#230 review). Both fields gate for the same
+    /// reason; they are never `Some` at once ([`Self::first_battle`] docs).
     #[must_use]
-    pub(crate) const fn in_wild_battle(&self) -> bool {
-        self.wild_battle.is_some()
+    pub(crate) const fn in_battle(&self) -> bool {
+        self.wild_battle.is_some() || self.first_battle.is_some()
     }
 }
 

@@ -38,13 +38,16 @@
 //! [`start_first_battle`]/[`advance_first_battle`] (`flow::first_battle`,
 //! issue #221) are the scripted `BATTLE_TYPE_FIRST_BATTLE` Zigzagoon fight's
 //! own construction and headless driver — see that module's docs for the
-//! full account, including what upstream trigger this slice does not reach
-//! it through yet (no script engine). They are re-exported at the crate root
-//! **ahead of** any caller: as of this slice nothing calls either of them
-//! outside `flow::first_battle`'s own unit tests — not `App`'s game-flow
-//! state machine, not `xtask`. The intended caller is a future script-engine
-//! hookup (or a headless `xtask` scenario standing in for one), and it will
-//! need them reachable from outside this crate when it arrives.
+//! full account. Since issue #231 they have a real production caller:
+//! Route 101's rescue coord events (`Route101_EventScript_StartBirchRescue`,
+//! tiles (10,19)/(11,19), gated on `VAR_ROUTE101_STATE`), recognized by
+//! `flow::overworld_phase`'s `first_battle_trigger` on the same
+//! `OverworldPhase::step` path `App`'s game-flow state machine drives — so
+//! walking Route 101's grass in real play reaches the fight. Still not
+//! modelled around it: the rescue cutscene, Birch's bag and the
+//! starter-choose UI, and the `B_TRANSITION_BLUR` intro (the trigger
+//! module's docs carry the full deferral list). The crate-root re-exports
+//! remain for the next external caller (a headless `xtask` scenario).
 
 pub mod app;
 mod flow;

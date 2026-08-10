@@ -265,6 +265,10 @@ impl OverworldPhase {
         // destination map's object events, mirroring upstream's ordering
         // against `TrySpawnObjectEvents`.
         run_on_transition_map_script(map, &mut self.save1.event_data);
+        // Route 101's own on-frame `VAR_ROUTE101_STATE` bump (issue #231,
+        // `super::first_battle_trigger`'s module docs) -- a no-op unless
+        // `map` is Route 101 itself.
+        super::first_battle_trigger::sync_route_101_state_on_entry(map, &mut self.save1.event_data);
         // `RestartWildEncounterImmunitySteps` (`LoadMapFromWarp`,
         // `src/overworld.c:850`): the first four steps on the destination
         // map roll nothing, so stepping out of a door never drops the
@@ -370,6 +374,13 @@ impl OverworldPhase {
         // water/flower animation continues uninterrupted across a seamless
         // crossing, unlike a warp's full map load.
         run_on_transition_map_script(to_map, &mut self.save1.event_data);
+        // Route 101's own on-frame `VAR_ROUTE101_STATE` bump (issue #231,
+        // `super::first_battle_trigger`'s module docs) -- a no-op unless
+        // `to_map` is Route 101 itself.
+        super::first_battle_trigger::sync_route_101_state_on_entry(
+            to_map,
+            &mut self.save1.event_data,
+        );
         // `RestartWildEncounterImmunitySteps` (`LoadMapFromCameraTransition`,
         // `src/overworld.c:800`) -- the piece of that function issue #177
         // deferred to this slice. Crossing Littleroot's north edge into

@@ -249,9 +249,28 @@ impl<'a> MapRuntime<'a> {
     }
 
     /// The coord (trigger/weather) event at `(x, y, elevation)`, mirroring
-    /// `GetCoordEventScriptAtPosition` (`field_control_avatar.c`) — same
-    /// position-plus-elevation-wildcard matching as
+    /// `GetCoordEventScriptAtPosition` (`field_control_avatar.c:897-916`) —
+    /// same position-plus-elevation-wildcard matching as
     /// [`MapRuntime::warp_event_at`].
+    ///
+    /// **Known divergence: this stops at the first position+elevation match;
+    /// upstream keeps scanning.** Upstream's loop (`:903-914`) calls
+    /// `TryRunCoordEventScript` (`:877-895`) on each positional match and
+    /// returns only once that yields a non-`NULL` script — so an event whose
+    /// `VarGet(trigger) == (u8)index` check *fails* (`:891`) does not end the
+    /// search, and a later event stacked on the same tile can still run. This
+    /// method returns the first positional match and leaves the var check to
+    /// its caller, which therefore never sees a second candidate.
+    ///
+    /// Harmless on the only map with a live consumer today
+    /// (`pokeemerald_rs`'s Route 101 first-battle trigger, issue #231): all
+    /// nine of Route 101's `coord_events` sit at nine *distinct* positions,
+    /// so no tile there has a second candidate to fall through to. Latent
+    /// elsewhere, and deliberately left as-is: widening `MapRuntime`'s
+    /// matching (returning every match, or folding the var check in) is an
+    /// engine-semantics change beyond the slice that first consumed this
+    /// method, and needs its own tests over maps that really do stack coord
+    /// events on one tile.
     #[must_use]
     pub fn coord_event_at(&self, x: i32, y: i32, elevation: u8) -> Option<&'static CoordEvent> {
         self.events.coord_events.iter().find(|c| {

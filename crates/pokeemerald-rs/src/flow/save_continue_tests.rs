@@ -532,12 +532,41 @@ fn exiting_mid_battle_does_not_save() {
     )
     .expect("a Wurmple encounter is fightable");
     phase.wild_battle = Some(battle);
-    assert!(phase.in_wild_battle());
+    assert!(phase.in_battle());
 
     let scene = AppScene::Overworld(Box::new(phase));
     assert!(
         save_on_exit(&scene, &mut save_slot).is_none(),
         "an exit during a battle must not write the save"
+    );
+    assert!(
+        !temp.slot().load().status.menu_shows_continue(),
+        "the save file must be untouched -- the last save stands"
+    );
+}
+
+/// The Route 101 scripted first battle (#231) freezes the phase exactly
+/// like a wild one -- same borrowed lead, same consumed RNG draws living
+/// outside the `SaveBlock`s -- so the exit-write guard must refuse it for
+/// the same reason [`exiting_mid_battle_does_not_save`] documents.
+#[test]
+fn exiting_mid_first_battle_does_not_save() {
+    use engine::rng::Rng;
+
+    let temp = TempSave::new("mid-first-battle-no-save");
+    let mut save_slot = temp.slot();
+
+    let mut phase = new_game_phase();
+    let mut rng = Rng::new(0x00C0_FFEE);
+    let battle = super::first_battle::start_first_battle(new_game::provisional_starter(), &mut rng)
+        .expect("the scripted first battle constructs from the provisional starter");
+    phase.first_battle = Some(battle);
+    assert!(phase.in_battle());
+
+    let scene = AppScene::Overworld(Box::new(phase));
+    assert!(
+        save_on_exit(&scene, &mut save_slot).is_none(),
+        "an exit during the scripted first battle must not write the save"
     );
     assert!(
         !temp.slot().load().status.menu_shows_continue(),
