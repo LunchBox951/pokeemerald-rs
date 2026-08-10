@@ -168,6 +168,10 @@ enum Backend {
     /// No OS window, event loop, or surface — see [`Platform::new_headless`].
     Null {
         buttons: ButtonState,
+        /// The raw held set [`Platform::pump`] applies on its next null
+        /// frame. Defaults to [`Buttons::NONE`] and changes only through
+        /// [`Platform::set_headless_buttons`].
+        next_buttons: Buttons,
         /// The frame most recently handed to [`Platform::present`], read
         /// back via [`Platform::last_presented`]: the null backend's only
         /// observable effect, so a headless caller can check *what it
@@ -234,8 +238,9 @@ impl Platform {
     /// backend `cargo test`/CI's `xtask e2e --suite smoke` run may
     /// construct — mirrors [`crate::audio::AudioOutput::null`]'s pattern.
     /// [`Platform::pump`] always reports "keep going" (there is no
-    /// window-close event to simulate), [`Platform::buttons`] always reads
-    /// as nothing held (there is no keyboard to inject from),
+    /// window-close event to simulate), [`Platform::buttons`] reads as
+    /// nothing held unless a headless driver supplies a set through
+    /// [`Platform::set_headless_buttons`],
     /// [`Platform::present`] draws nothing (there is no surface to draw
     /// into) but records its argument for [`Platform::last_presented`], and
     /// [`Platform::wait_for_next_frame`] never sleeps (there is no real
@@ -246,6 +251,7 @@ impl Platform {
         Self {
             backend: Backend::Null {
                 buttons: ButtonState::new(),
+                next_buttons: Buttons::NONE,
                 last_presented: None,
             },
             pacer: FramePacer::new(),
@@ -280,15 +286,39 @@ impl Platform {
                 window.app.buttons.update(window.app.frame_held);
                 Ok(!matches!(status, PumpStatus::Exit(_)))
             }
-            Backend::Null { buttons, .. } => {
-                // No OS event source to drain, so the held set never
-                // changes — but still folded through `ButtonState::update`
-                // each call so `newly_pressed` behaves identically to the
-                // windowed path (always empty here, since nothing is ever
-                // held).
-                buttons.update(Buttons::NONE);
+            Backend::Null {
+                buttons,
+                next_buttons,
+                ..
+            } => {
+                // No OS event source to drain. The driver-supplied held set
+                // still goes through the exact `ButtonState::update` edge
+                // calculation used by the windowed path.
+                buttons.update(*next_buttons);
                 Ok(true)
             }
+        }
+    }
+
+    /// Set the buttons the null backend will report as held on its next and
+    /// subsequent [`pump`](Self::pump) calls.
+    ///
+    /// The value remains in effect until replaced, matching a physical key
+    /// that stays held across frames. Supply [`Buttons::NONE`] for a release
+    /// frame. `pump` derives newly-pressed edges from consecutive held sets,
+    /// so scripted and windowed input follow the same state transition.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PlatformError::ScriptedInputRequiresHeadless`] for a
+    /// windowed backend; OS-owned input cannot be replaced by a scenario.
+    pub fn set_headless_buttons(&mut self, buttons: Buttons) -> Result<(), PlatformError> {
+        match &mut self.backend {
+            Backend::Null { next_buttons, .. } => {
+                *next_buttons = buttons;
+                Ok(())
+            }
+            Backend::Window(_) => Err(PlatformError::ScriptedInputRequiresHeadless),
         }
     }
 
@@ -402,6 +432,29 @@ mod tests {
     #[test]
     fn headless_buttons_start_and_stay_unheld() {
         let mut platform = Platform::new_headless();
+        platform.pump().expect("null backend never errors");
+        assert_eq!(platform.buttons().held(), Buttons::NONE);
+        assert_eq!(platform.buttons().newly_pressed(), Buttons::NONE);
+    }
+
+    #[test]
+    fn headless_scripted_buttons_preserve_held_and_new_press_edges() {
+        let mut platform = Platform::new_headless();
+
+        platform
+            .set_headless_buttons(Buttons::START)
+            .expect("null backend accepts scripted input");
+        platform.pump().expect("null backend never errors");
+        assert_eq!(platform.buttons().held(), Buttons::START);
+        assert_eq!(platform.buttons().newly_pressed(), Buttons::START);
+
+        platform.pump().expect("null backend never errors");
+        assert_eq!(platform.buttons().held(), Buttons::START);
+        assert_eq!(platform.buttons().newly_pressed(), Buttons::NONE);
+
+        platform
+            .set_headless_buttons(Buttons::NONE)
+            .expect("null backend accepts release frames");
         platform.pump().expect("null backend never errors");
         assert_eq!(platform.buttons().held(), Buttons::NONE);
         assert_eq!(platform.buttons().newly_pressed(), Buttons::NONE);

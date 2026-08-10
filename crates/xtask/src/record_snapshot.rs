@@ -25,9 +25,9 @@
 //! synthetic pack instead of the one real, developer-local pack path
 //! (mirrors `pokeemerald_rs::main_menu::tests`' own synthetic-pack style).
 //!
-//! No scene here takes a scripted input sequence yet — that is the
-//! `scenario` subcommand's job (still `NotImplemented`, module docs of
-//! `crate`). [`Scene::MainMenuOption`] records the one `DPAD_DOWN` press
+//! No scene here takes a scripted input sequence — replayed input scripts
+//! are the `scenario` subcommand's job (`crate::scenario`, F-3 issue
+//! #233). [`Scene::MainMenuOption`] records the one `DPAD_DOWN` press
 //! its selection state implies as its `inputs` metadata (below); every
 //! other scene's `inputs` list is empty, honestly reflecting a static
 //! boot-state capture rather than a replayed session.

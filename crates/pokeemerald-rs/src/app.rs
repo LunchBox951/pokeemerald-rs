@@ -14,7 +14,13 @@
 //! (never the real title screen) so that suite's no-local-pack CI behaviour
 //! stays exactly as it was before I-2 -- see [`crate::title`]'s module docs
 //! for the real title screen, which only [`App::new`] (the real windowed
-//! entry point) composes.
+//! entry point) and [`App::new_headless_real`] compose.
+//!
+//! [`App::set_headless_buttons`] and [`App::state`] complete the F-3
+//! scenario seam: a runner supplies per-frame held buttons to the null
+//! platform, calls the unchanged production [`App::step`] entry point, and
+//! asserts stable high-level [`AppState`] milestones without gaining access
+//! to the owned flow scenes.
 //!
 //! # Animating the real title screen (I-2, issue #116)
 //!
@@ -59,7 +65,7 @@
 //! module's `tests` submodule:
 //!
 //! - `tests::real_pack_boots_to_the_title_screen_through_app_boot` reaches
-//!   `boot` via `App::new_headless_real_title`, i.e. with
+//!   `boot` via [`App::new_headless_real`], i.e. with
 //!   `Platform::new_headless`, so every construction step [`App::new`]
 //!   performs runs under test. The one line it cannot run is `Platform::new`
 //!   itself: no CI job may open an OS window.
@@ -113,6 +119,7 @@ use platform::{ButtonState, Buttons, Frame, Platform, PlatformError};
 use crate::flow::{self, AnimatedTitle, AppScene};
 use crate::frame::to_platform_frame;
 use crate::game_save::SaveSlot;
+use crate::main_menu::MainMenuItem;
 use crate::scene::BootScene;
 use crate::title::{self, TitleSceneError};
 
@@ -165,6 +172,44 @@ impl From<TitleSceneError> for AppError {
     fn from(err: TitleSceneError) -> Self {
         Self::Title(err)
     }
+}
+
+/// A stable, read-only milestone in the running [`App`] flow.
+///
+/// Scenarios assert these states after driving the production
+/// [`App::step`] loop; the owned scene objects remain private. Battle
+/// variants distinguish the two modes that temporarily freeze overworld
+/// movement, which lets I-7's future `boot-to-first-fight` scenario prove
+/// it reached the scripted fight rather than merely Route 101.
+///
+/// The battle variants share one edge-frame timing a scenario script must
+/// account for: the fight is scheduled at the end of the [`App::step`]
+/// call whose movement triggered it (before any turn has run), so that
+/// landing frame already reports [`AppState::WildBattle`] /
+/// [`AppState::FirstBattle`] -- and the step that plays the battle's final
+/// turn also clears the battle slot as it resolves, so the concluding
+/// frame reports [`AppState::Overworld`] again. Assert battle states on
+/// the triggering frame, not on the frame the fight finishes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AppState {
+    /// The pack-free synthetic scene built by [`App::new_headless`].
+    SyntheticBoot,
+    /// The real animated title screen.
+    Title,
+    /// The main menu and its current selection.
+    MainMenu(MainMenuItem),
+    /// Birch's new-game introduction.
+    Intro,
+    /// The introduction finished, but loading the overworld failed.
+    OverworldLoadFailed,
+    /// Ordinary overworld movement and interactions.
+    Overworld,
+    /// A random wild encounter is running inside the overworld phase
+    /// (edge-frame timing: enum docs above).
+    WildBattle,
+    /// Route 101's scripted first battle is running inside the overworld
+    /// phase (edge-frame timing: enum docs above).
+    FirstBattle,
 }
 
 /// The GBA button names in [`Buttons`] bit order, used only to format a
@@ -234,18 +279,22 @@ impl App {
     /// and its headless counterparts cannot drift apart in what they store
     /// `(oop-boundaries)` -- and so this struct literal is code the I-2
     /// real-boot check (module docs) runs.
-    fn assemble(platform: Platform, (frame, scene): (Box<Frame>, AppScene)) -> Self {
+    fn assemble(
+        platform: Platform,
+        (frame, scene): (Box<Frame>, AppScene),
+        save_slot: SaveSlot,
+    ) -> Self {
         Self {
             platform,
             frame,
             scene: Some(scene),
-            save_slot: SaveSlot::default_location(),
+            save_slot,
         }
     }
 
     /// The whole of [`App::new`]'s body: load and compose the real title
     /// screen (I-2), open a platform backend via `open_platform`, and
-    /// assemble the two into a running `App`.
+    /// assemble the two around the save medium from `open_save_slot`.
     ///
     /// Loads *before* calling `open_platform`, so a missing pack (or any
     /// other title-screen error) is surfaced cleanly without ever flashing a
@@ -263,11 +312,13 @@ impl App {
     /// event loop could not be created) otherwise.
     fn boot(
         open_platform: impl FnOnce() -> Result<Platform, PlatformError>,
+        open_save_slot: impl FnOnce() -> SaveSlot,
     ) -> Result<Self, AppError> {
-        // Load first: no window is opened if the pack is missing.
+        // Load first: no window or save medium is opened if the pack is
+        // missing.
         let loaded = compose_title_scene(title::load_default()?);
         let platform = open_platform()?;
-        Ok(Self::assemble(platform, loaded))
+        Ok(Self::assemble(platform, loaded, open_save_slot()))
     }
 
     /// Load the real title screen (I-2) from the local asset pack, then open
@@ -285,21 +336,27 @@ impl App {
     /// run) or is otherwise malformed; [`AppError::Platform`] if the
     /// platform's windowing event loop could not be created.
     pub fn new(title: impl Into<String>) -> Result<Self, AppError> {
-        Self::boot(|| Platform::new(title))
+        Self::boot(|| Platform::new(title), SaveSlot::default_location)
     }
 
-    /// Test-only: [`App::boot`] -- [`App::new`]'s own body -- with
-    /// `platform`'s headless/null backend substituted for a real window, the
-    /// I-2 real-boot check's constructor (module docs).
+    /// Load the real title screen and game-flow state through [`App::boot`]
+    /// while substituting `platform`'s headless/null backend for a real
+    /// window.
+    ///
+    /// This is the scripted-scenario counterpart to [`App::new`]: it runs
+    /// the same pack load, scene construction, [`App::step`] transitions,
+    /// and presentation calls without opening a display or pacing against
+    /// wall time. Persistence is deliberately disabled so a scenario
+    /// always starts on the no-save menu and never reads or writes a
+    /// player's save file.
     ///
     /// # Errors
     ///
     /// Returns [`AppError::Title`] under the same conditions as
     /// [`App::new`] -- most commonly [`TitleSceneError::is_pack_missing`]
     /// when no local asset pack has been extracted yet.
-    #[cfg(test)]
-    fn new_headless_real_title() -> Result<Self, AppError> {
-        Self::boot(|| Ok(Platform::new_headless()))
+    pub fn new_headless_real() -> Result<Self, AppError> {
+        Self::boot(|| Ok(Platform::new_headless()), SaveSlot::disabled)
     }
 
     /// Build the I-1 synthetic placeholder scene against `platform`'s
@@ -319,7 +376,7 @@ impl App {
             platform: Platform::new_headless(),
             frame: compose_boot_frame(),
             scene: None,
-            save_slot: SaveSlot::default_location(),
+            save_slot: SaveSlot::disabled(),
         }
     }
 
@@ -329,7 +386,11 @@ impl App {
     /// [`App::new`] always opens one).
     #[cfg(test)]
     fn new_headless_animated(scene: title::TitleScene) -> Self {
-        Self::assemble(Platform::new_headless(), compose_title_scene(scene))
+        Self::assemble(
+            Platform::new_headless(),
+            compose_title_scene(scene),
+            SaveSlot::disabled(),
+        )
     }
 
     /// Run the frame loop until the window is closed or Escape is pressed
@@ -403,6 +464,44 @@ impl App {
         self.platform.wait_for_next_frame();
         self.platform.present(&self.frame)?;
         Ok(true)
+    }
+
+    /// Set the buttons the headless backend will report as held on its next
+    /// and subsequent [`step`](Self::step) calls.
+    ///
+    /// Supply [`Buttons::NONE`] for a release frame. Input still flows
+    /// through `Platform::pump` and its normal held/newly-pressed edge
+    /// calculation; this method does not call the flow state machine
+    /// directly.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AppError::Platform`] wrapping
+    /// [`PlatformError::ScriptedInputRequiresHeadless`] for an app created
+    /// with [`App::new`].
+    pub fn set_headless_buttons(&mut self, buttons: Buttons) -> Result<(), AppError> {
+        self.platform.set_headless_buttons(buttons)?;
+        Ok(())
+    }
+
+    /// Return the current high-level game-flow milestone without exposing
+    /// the mutable scene objects that own it.
+    #[must_use]
+    pub fn state(&self) -> AppState {
+        match self.scene.as_ref() {
+            None => AppState::SyntheticBoot,
+            Some(AppScene::Title(_)) => AppState::Title,
+            Some(AppScene::MainMenu(menu)) => AppState::MainMenu(menu.scene.selected()),
+            Some(AppScene::Intro(_)) => AppState::Intro,
+            Some(AppScene::OverworldLoadFailed(_)) => AppState::OverworldLoadFailed,
+            Some(AppScene::Overworld(phase)) if phase.is_first_battle_active() => {
+                AppState::FirstBattle
+            }
+            Some(AppScene::Overworld(phase)) if phase.is_wild_battle_active() => {
+                AppState::WildBattle
+            }
+            Some(AppScene::Overworld(_)) => AppState::Overworld,
+        }
     }
 
     /// The composed placeholder scene's frame, as most recently handed to

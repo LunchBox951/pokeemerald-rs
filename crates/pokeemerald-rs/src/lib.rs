@@ -20,6 +20,9 @@
 //! connective tissue between the title screen and the overworld: [`App`]'s
 //! real (windowed) path now drives title -> main menu -> intro -> overworld
 //! as one state machine (see `app`'s module docs' "Game flow" section).
+//! [`App::new_headless_real`], [`App::set_headless_buttons`], and
+//! [`App::state`] expose that same state machine to deterministic xtask
+//! scenarios without opening a separate transition path (F-3, issue #233).
 //! [`new_game`] holds the pure new-game state (spawn position, default
 //! player identity, fresh [`engine::save`] blocks) both [`main_menu`] and
 //! [`intro`] ultimately hand off to.
@@ -61,11 +64,12 @@ pub mod scene;
 mod textbox;
 pub mod title;
 
-pub use app::App;
+pub use app::{App, AppState};
 pub use flow::first_battle::{
     advance_first_battle, start_first_battle, FIRST_BATTLE_OPPONENT_LEVEL,
     FIRST_BATTLE_OPPONENT_SPECIES,
 };
+pub use platform::Buttons as AppButtons;
 
 /// Real-pack pinning tests for extraction pipelines that don't yet have a
 /// runtime consumer of their own in this crate (currently just

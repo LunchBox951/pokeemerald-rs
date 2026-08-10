@@ -36,14 +36,9 @@ impl Drop for TempSave {
 }
 
 /// A slot with no resolvable path -- upstream's `gFlashMemoryPresent !=
-/// TRUE`. Built by hand because [`SaveSlot::default_location`] can only
-/// produce it on a host with no data-directory environment at all.
+/// TRUE`, and the save-isolated medium headless validation uses.
 fn no_flash_slot() -> SaveSlot {
-    SaveSlot {
-        file: None,
-        session_counter: None,
-        session_bases: None,
-    }
+    SaveSlot::disabled()
 }
 
 // -- `gSaveFileStatus` -> `tMenuType` (main_menu.c:641-670) ---------------

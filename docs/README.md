@@ -9,6 +9,8 @@ order:
    stable criteria IDs. The roadmap (GitHub issues) ladders up to these.
 3. **[snapshots.md](snapshots.md)** — the `record-snapshot` capture format
    and the human blessing workflow V-4 requires.
+4. **[scenarios.md](scenarios.md)** — the contract for named, scripted
+   headless runs through the real application flow.
 
 There are no design-spec or plan docs: the roadmap is dynamic and lives in GitHub
 issues, PRs, and discussions `(constitution-vs-roadmap)`. Docs hold the durable
