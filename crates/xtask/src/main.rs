@@ -320,9 +320,7 @@ pub enum ScenarioName {
     BootToMainMenu,
     /// Boot to the title, start a new game, walk the protagonist's room and
     /// Route 101, trigger `BATTLE_TYPE_FIRST_BATTLE`, and drive it until the
-    /// battle slot empties (I-7, issue #245) -- which proves the fight ran
-    /// and concluded, not what it resolved to (that scenario's own docs,
-    /// "no battle-*outcome* milestone").
+    /// battle resolves with a retained terminal outcome (I-7, issue #245).
     BootToFirstFight,
 }
 
@@ -553,10 +551,11 @@ fn dispatch(cmd: &Command) -> Result<(), XtaskError> {
             let report =
                 scenario::run(*name).map_err(|err| XtaskError::ScenarioFailed(err.to_string()))?;
             println!(
-                "scenario `{}` passed: {} frame(s), milestones {:?}",
+                "scenario `{}` passed: {} frame(s), milestones {:?}, first battle outcome {:?}",
                 name.name(),
                 report.frames_run,
                 report.milestones,
+                report.first_battle_outcome,
             );
             Ok(())
         }

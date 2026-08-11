@@ -11,7 +11,7 @@
 //! ([`super::Segment`]/[`super::expand_segments`]/[`super::ScenarioSpec`])
 //! every scenario shares.
 //!
-//! # The milestones this scenario can assert, and the two it can't
+//! # Milestones and the NPC-dialog limitation
 //!
 //! [`AppState`] is the only vocabulary a [`super::ScenarioDriver`] has, and
 //! its own doc comment was written with exactly this scenario in mind
@@ -27,9 +27,6 @@
 //! honest result, asserted by this module's own tests: `[Title,
 //! MainMenu(NewGame), Intro, Overworld, FirstBattle, Overworld]`.
 //!
-//! Two named limitations follow from that vocabulary, and neither is
-//! papered over below.
-//!
 //! **No NPC-dialog milestone.** This port has no script/dialog engine yet
 //! (`pokeemerald_rs::flow::first_battle`'s own module docs, "no script
 //! engine"), so "first NPC dialog" has no state to distinguish even in
@@ -37,30 +34,11 @@
 //! and Route 101 exactly as the issue describes, it just cannot assert a
 //! milestone [`AppState`] has no variant for.
 //!
-//! **No battle-*outcome* milestone.** The concluding frame asserts
-//! `AppState::Overworld`, which says only that the battle slot emptied --
-//! not that the player won, nor even that the battle produced an outcome
-//! at all. An **aborted** battle takes the identical `FirstBattle` ->
-//! `Overworld` path: per
-//! `pokeemerald_rs::flow::first_battle::advance_first_battle`'s own abort
-//! contract, a turn the engine cannot play empties the slot, writes the
-//! lead back, and returns `None` rather than an outcome -- the standing
-//! proof being
-//! `pokeemerald_rs::flow::overworld_phase::tests::an_aborted_first_battle_still_consumes_the_route_101_trigger`,
-//! which reaches exactly this state transition with no outcome behind it.
-//! [`super::Report`] has no outcome channel to carry the difference, so
-//! nothing here asserts the `first battle: ended -- PlayerWon` diagnostic
-//! a real run prints to stderr
-//! (`pokeemerald_rs::flow::overworld_phase`'s `first_battle_trigger`).
-//! Building that channel is deliberately out of this scenario's scope,
-//! and no test elsewhere closes the gap either. The closest,
-//! `pokeemerald_rs::flow::overworld_phase::tests::the_scripted_first_battle_plays_to_a_terminal_outcome_and_hands_the_lead_back`,
-//! drives the fight to conclusion through the real per-frame driver
-//! (`OverworldPhase::step` -> `advance_first_battle`) and then asserts the
-//! frozen overworld position and the lead's species -- but its loop, like
-//! this scenario's milestones, ends on an emptied battle slot, which the
-//! abort path reaches too. What the scripted first battle resolves *to* is
-//! currently pinned nowhere.
+//! The concluding frame's `AppState::Overworld` still says only that the
+//! battle slot emptied, but the runner now pairs it with the retained
+//! `pokeemerald_rs::BattleOutcome`. This scenario requires that channel to
+//! be populated on the `FirstBattle` -> `Overworld` edge, so the identical
+//! state transition produced by an aborted battle fails closed.
 //!
 //! # The route, tile by tile
 //!
@@ -322,6 +300,11 @@ mod tests {
                 AppState::FirstBattle,
                 AppState::Overworld,
             ]
+        );
+        assert_eq!(
+            report.first_battle_outcome,
+            Some(pokeemerald_rs::BattleOutcome::PlayerWon),
+            "the scenario must prove a real terminal resolution, not only an emptied slot"
         );
     }
 }

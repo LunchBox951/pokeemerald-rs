@@ -330,6 +330,10 @@ impl OverworldPhase {
     /// cutscene it stands in for runs, and the tile is spent whether or not
     /// this port could build a battle out of it.
     pub(super) fn begin_first_battle(&mut self) {
+        // A new attempt owns its result channel from trigger time onward.
+        // In particular, none of its early-return or turn-abort paths may
+        // leave an older completed battle's outcome visible.
+        self.first_battle_outcome = None;
         eprintln!(
             "first battle: Route 101 rescue trigger reached -- starting the scripted Zigzagoon \
              battle (issue #231)"
@@ -390,6 +394,7 @@ impl OverworldPhase {
             &mut self.rng,
         ) {
             eprintln!("first battle: ended -- {outcome:?}");
+            self.first_battle_outcome = Some(outcome);
         }
         true
     }

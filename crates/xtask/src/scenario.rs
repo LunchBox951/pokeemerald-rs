@@ -19,7 +19,7 @@
 use std::fmt;
 
 use pokeemerald_rs::main_menu::MainMenuItem;
-use pokeemerald_rs::{App, AppButtons, AppState};
+use pokeemerald_rs::{App, AppButtons, AppState, BattleOutcome};
 
 use crate::ScenarioName;
 
@@ -43,6 +43,7 @@ struct ScenarioFrame {
 struct ScenarioSpec {
     initial: AppState,
     frames: &'static [ScenarioFrame],
+    requires_first_battle_outcome: bool,
 }
 
 const BOOT_TO_MAIN_MENU: [ScenarioFrame; 2] = [
@@ -114,10 +115,12 @@ fn spec(name: ScenarioName) -> ScenarioSpec {
         ScenarioName::BootToMainMenu => ScenarioSpec {
             initial: AppState::Title,
             frames: &BOOT_TO_MAIN_MENU,
+            requires_first_battle_outcome: false,
         },
         ScenarioName::BootToFirstFight => ScenarioSpec {
             initial: AppState::Title,
             frames: boot_to_first_fight::frames(),
+            requires_first_battle_outcome: true,
         },
     }
 }
@@ -163,6 +166,12 @@ pub enum ScenarioError {
         /// Actual post-frame state.
         actual: AppState,
     },
+    /// A required scripted first battle left its active state without the
+    /// app retaining a terminal battle outcome.
+    FirstBattleEndedWithoutOutcome {
+        /// Zero-based frame on which the active battle slot emptied.
+        frame: usize,
+    },
 }
 
 impl fmt::Display for ScenarioError {
@@ -191,6 +200,10 @@ impl fmt::Display for ScenarioError {
                 f,
                 "frame {frame} milestone mismatch: expected {expected:?}, reached {actual:?}"
             ),
+            Self::FirstBattleEndedWithoutOutcome { frame } => write!(
+                f,
+                "frame {frame} ended the scripted first battle without a terminal outcome"
+            ),
         }
     }
 }
@@ -206,12 +219,16 @@ pub struct Report {
     /// Distinct expected states reached in order, including the initial
     /// state and suppressing consecutive duplicates.
     pub milestones: Vec<AppState>,
+    /// The terminal result retained by the app's scripted first-battle
+    /// channel, if this run completed one.
+    pub first_battle_outcome: Option<BattleOutcome>,
 }
 
 /// The minimal owned-driver boundary the runner needs. [`App`] is the only
 /// production implementation; fakes exist only in this module's tests.
 trait ScenarioDriver {
     fn state(&self) -> AppState;
+    fn first_battle_outcome(&self) -> Option<BattleOutcome>;
     fn set_buttons(&mut self, buttons: AppButtons) -> Result<(), String>;
     fn step(&mut self) -> Result<bool, String>;
 }
@@ -219,6 +236,10 @@ trait ScenarioDriver {
 impl ScenarioDriver for App {
     fn state(&self) -> AppState {
         self.state()
+    }
+
+    fn first_battle_outcome(&self) -> Option<BattleOutcome> {
+        self.first_battle_outcome()
     }
 
     fn set_buttons(&mut self, buttons: AppButtons) -> Result<(), String> {
@@ -259,6 +280,7 @@ fn run_with_driver(
     }
 
     let mut milestones = vec![initial];
+    let mut previous = initial;
     for (frame, scripted) in spec.frames.iter().enumerate() {
         driver
             .set_buttons(scripted.buttons)
@@ -278,14 +300,23 @@ fn run_with_driver(
                 actual,
             });
         }
+        if spec.requires_first_battle_outcome
+            && previous == AppState::FirstBattle
+            && actual != AppState::FirstBattle
+            && driver.first_battle_outcome().is_none()
+        {
+            return Err(ScenarioError::FirstBattleEndedWithoutOutcome { frame });
+        }
         if milestones.last() != Some(&actual) {
             milestones.push(actual);
         }
+        previous = actual;
     }
 
     Ok(Report {
         frames_run: spec.frames.len(),
         milestones,
+        first_battle_outcome: driver.first_battle_outcome(),
     })
 }
 
@@ -293,15 +324,18 @@ fn run_with_driver(
 mod tests {
     use std::collections::VecDeque;
 
-    use super::{run_with_driver, spec, ScenarioDriver, ScenarioError};
+    use super::{
+        run_with_driver, spec, ScenarioDriver, ScenarioError, ScenarioFrame, ScenarioSpec,
+    };
     use crate::ScenarioName;
     use pokeemerald_rs::main_menu::MainMenuItem;
-    use pokeemerald_rs::{AppButtons, AppState};
+    use pokeemerald_rs::{AppButtons, AppState, BattleOutcome};
 
     struct FakeDriver {
         state: AppState,
         pending: AppButtons,
         frames: VecDeque<(AppButtons, AppState, bool)>,
+        first_battle_outcome: Option<BattleOutcome>,
     }
 
     impl FakeDriver {
@@ -309,6 +343,7 @@ mod tests {
             Self {
                 state: AppState::Title,
                 pending: AppButtons::NONE,
+                first_battle_outcome: None,
                 frames: VecDeque::from([
                     (
                         AppButtons::START,
@@ -328,6 +363,10 @@ mod tests {
     impl ScenarioDriver for FakeDriver {
         fn state(&self) -> AppState {
             self.state
+        }
+
+        fn first_battle_outcome(&self) -> Option<BattleOutcome> {
+            self.first_battle_outcome
         }
 
         fn set_buttons(&mut self, buttons: AppButtons) -> Result<(), String> {
@@ -358,6 +397,7 @@ mod tests {
             .expect("the proving scenario should pass");
 
         assert_eq!(report.frames_run, 2);
+        assert_eq!(report.first_battle_outcome, None);
         assert_eq!(
             report.milestones,
             vec![AppState::Title, AppState::MainMenu(MainMenuItem::NewGame)]
@@ -411,6 +451,31 @@ mod tests {
     }
 
     #[test]
+    fn a_required_first_battle_rejects_an_aborted_transition() {
+        let mut driver = FakeDriver {
+            state: AppState::FirstBattle,
+            pending: AppButtons::NONE,
+            frames: VecDeque::from([(AppButtons::NONE, AppState::Overworld, true)]),
+            first_battle_outcome: None,
+        };
+        let scenario = ScenarioSpec {
+            initial: AppState::FirstBattle,
+            frames: &[ScenarioFrame {
+                buttons: AppButtons::NONE,
+                expected: AppState::Overworld,
+            }],
+            requires_first_battle_outcome: true,
+        };
+
+        let error = run_with_driver(scenario, &mut driver)
+            .expect_err("an emptied first-battle slot needs a terminal outcome");
+        assert_eq!(
+            error,
+            ScenarioError::FirstBattleEndedWithoutOutcome { frame: 0 }
+        );
+    }
+
+    #[test]
     #[cfg(feature = "scenario")]
     #[ignore = "needs a local pack produced by `cargo xtask extract`"]
     fn real_pack_boot_to_main_menu_passes_and_reaches_every_milestone_in_order() {
@@ -420,6 +485,7 @@ mod tests {
         let report = super::run(ScenarioName::BootToMainMenu)
             .expect("boot-to-main-menu should pass against the real pack");
         assert_eq!(report.frames_run, 2);
+        assert_eq!(report.first_battle_outcome, None);
         assert_eq!(
             report.milestones,
             vec![AppState::Title, AppState::MainMenu(MainMenuItem::NewGame)]

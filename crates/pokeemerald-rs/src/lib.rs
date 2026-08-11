@@ -60,12 +60,11 @@
 //! back that hookup for `xtask`'s `boot-to-first-fight` scenario (I-7,
 //! issue #245), which drives [`App`] through this exact chain -- title,
 //! new game, the protagonist's room, Route 101, the scripted fight, and the
-//! frame that concluded battle empties the slot on -- headlessly. That
-//! scenario reads coarse [`AppState`] milestones only, so it shows the
-//! fight ran and ended, not what it resolved to -- and no test pins that
-//! outcome either: `flow::overworld_phase`'s own tests drive the fight to
-//! conclusion through the real per-frame driver, then assert the frozen
-//! overworld and the lead handed back, never the `BattleOutcome` itself.
+//! frame that concluded battle empties the slot on -- headlessly. The
+//! overworld retains that terminal [`BattleOutcome`] through
+//! [`App::first_battle_outcome`], allowing the scenario to reject the
+//! otherwise-identical `FirstBattle` -> `Overworld` transition produced by
+//! an aborted fight.
 //!
 //! [`music`] (S-3, issue #185) bridges the asset pack's song/voicegroup/
 //! sample entries into the `audio` crate's sequencer and owns the
@@ -90,6 +89,7 @@ mod textbox;
 pub mod title;
 
 pub use app::{App, AppState};
+pub use battle::BattleOutcome;
 pub use flow::first_battle::{
     advance_first_battle, start_first_battle, FIRST_BATTLE_OPPONENT_LEVEL,
     FIRST_BATTLE_OPPONENT_SPECIES,

@@ -6,6 +6,7 @@ use super::OverworldPhase;
 use crate::flow::tests::held;
 use crate::new_game;
 use assets::{MapEvents, MapHeader, MapId, MapLayout, MetatileCell};
+use battle::BattleOutcome;
 use engine::event_data::EventData;
 use engine::overworld::metatile_behavior::{
     MB_ANIMATED_DOOR, MB_EAST_ARROW_WARP, MB_NON_ANIMATED_DOOR, MB_NORMAL, MB_SOUTH_ARROW_WARP,
@@ -3462,6 +3463,11 @@ fn the_scripted_first_battle_plays_to_a_terminal_outcome_and_hands_the_lead_back
         .as_ref()
         .expect("the battle writes the lead mon back on the frame it ends");
     assert_eq!(lead.species(), new_game::PROVISIONAL_STARTER_SPECIES);
+    assert_eq!(
+        phase.first_battle_outcome,
+        Some(BattleOutcome::PlayerWon),
+        "an emptied battle slot must retain the real terminal outcome"
+    );
 }
 
 /// (c) from the issue's test list: by the time the battle ends,
@@ -3713,6 +3719,9 @@ fn an_aborted_first_battle_still_consumes_the_route_101_trigger() {
         Direction::East,
     ));
     phase.rng = Rng::new(4242);
+    // Prove beginning this attempt clears stale terminal state rather than
+    // letting its later abort masquerade as a completed battle.
+    phase.first_battle_outcome = Some(BattleOutcome::PlayerWon);
     // Drain slot 0 through the same accessor the turn engine spends PP with,
     // rather than reaching into the struct -- `crate::flow::first_battle`'s
     // own abort test does it this way too.
@@ -3730,6 +3739,10 @@ fn an_aborted_first_battle_still_consumes_the_route_101_trigger() {
         phase.first_battle.is_some(),
         "setup: the trigger must fire and build a battle -- the abort happens a frame later"
     );
+    assert_eq!(
+        phase.first_battle_outcome, None,
+        "starting a new fight clears the previous terminal outcome"
+    );
 
     // One driver frame: the turn fails pre-draw, so the battle ends with no
     // outcome at all.
@@ -3741,6 +3754,10 @@ fn an_aborted_first_battle_still_consumes_the_route_101_trigger() {
     assert!(
         phase.party_lead.is_some(),
         "setup: the abort writes the lead back all the same"
+    );
+    assert_eq!(
+        phase.first_battle_outcome, None,
+        "an abort must not manufacture or retain a terminal outcome"
     );
     assert_eq!(
         phase.save1.event_data.var_get(VAR_ROUTE101_STATE),
