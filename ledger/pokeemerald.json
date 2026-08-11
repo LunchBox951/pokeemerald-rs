@@ -11726,8 +11726,10 @@
     "data/text/save.inc": {
       "category": "data.text",
       "kind": "file",
-      "spec_owner": "06-engine",
-      "status": "pending"
+      "reason": "All six save-flow strings the start menu prints -- gText_ConfirmSave, gText_AlreadySavedFile, gText_DifferentSaveFile (its three paragraph breaks and one scroll marker included, so it pages exactly where upstream pages it), gText_SavingDontTurnOff, gText_PlayerSavedGame with its {PLAYER} placeholder, and gText_SaveError -- transcribed as decoded engine::text::Token streams and pinned Gen-3-encodable by test (issue #232). gText_SavingDontTurnOffPower is the byte-identical duplicate of gText_SavingDontTurnOff that only the link-battle save path prints, which this port does not model.",
+      "rust_target": "crates/pokeemerald-rs/src/start_menu/text.rs",
+      "spec": "I-6",
+      "status": "ported"
     },
     "data/text/secret_base_trainers.inc": {
       "category": "data.text",
@@ -26299,10 +26301,22 @@
     },
     "src/load_save.c": {
       "artifacts": {
+        "CopyPartyAndObjectsToSave": {
+          "reason": "CopyPartyAndObjectsToSave/FromSave (:196-206) and the SavePlayerParty/LoadPlayerParty pair they wrap (:160-178) are OverworldPhase::copy_party_and_objects_to_save/_from_save, called around every start-menu save and on every continue (issue #232). gPlayerParty is this port's single OverworldPhase::party_lead, encoded to and from SaveBlock1::playerParty[0] by pokeemerald_rs::party -- species, level, personality/nature, the six IVs, the moveset with per-slot PP, current HP and the OT id all round-trip, so a continued session fights the mon that was saved. NOT modelled on the party side: EVs (battle::BattlePokemon carries none), held item, ppBonuses, contest condition, pokerus, met location/level/game, poke ball, OT gender, ribbons, nickname, OT name, language, markings and non-volatile status -- each written as CreateMon's own zero/MAIL_NONE default rather than an invented value (crate::party's module docs carry the list).",
+          "rust_target": "crates/pokeemerald-rs/src/flow/overworld_phase/start_menu.rs",
+          "spec": "I-6",
+          "status": "rewritten"
+        },
+        "SaveObjectEvents": {
+          "reason": "SaveObjectEvents/LoadObjectEvents (:180-194) copy all OBJECT_EVENTS_COUNT entries of gObjectEvents in and out of SaveBlock1::objectEvents. This port models one field of one entry: objectEvents[OBJ_EVENT_ID_PLAYER].facingDirection, as engine::save::SavedObjectEvent at its real offset (0xA30 + 0x18), written by OverworldPhase::copy_party_and_objects_to_save and read back on continue (issue #232). That is the only part of the array a continue observably restores here -- SpawnObjectEventsOnReturnToField respawns the player from it (event_object_movement.c:1715-1726) -- and it removes the DIR_SOUTH stand-in issue #214 recorded. NOT modelled: the other 0x23 bytes of the player's entry (sprite ids, ground-effect and movement bitfields, coordinate history, metatile-behaviour history, movementActionId) and every non-player entry, because this workspace models no object-event system to hold them; a save block whose byte is DIR_NONE still falls back to GetAdjustedInitialDirection.",
+          "rust_target": "crates/engine/src/save/block.rs",
+          "spec": "I-6",
+          "status": "stubbed"
+        },
         "clear_sav": {
-          "reason": "Sav2_ClearSetDefault -> ClearSav1/ClearSav2's zero-the-blocks-before-a-new-game's-first-save effect is modelled by SaveStore::clear_base on the not-continued (preserve_existing) store path (#230 review). NOT modelled: the RAM struct pointers/shuffling (SetSaveBlocksPointers, MoveSaveBlocks_ResetHeap) and the checksum globals.",
-          "rust_target": "crates/engine/src/save/store.rs",
-          "spec": "S-5",
+          "reason": "ClearSav1/ClearSav2's zero-the-blocks-when-a-new-game-starts effect is modelled by SaveStore::clear_base, applied on every write of a new-game session (#230 review; #232 review round two). Upstream settles a new game's RAM once -- NewGameInitData memsets gSaveBlock1 via ClearSav1 (new_game.c:160, load_save.c:64-67, which also covers ResetGameStats's gSaveBlock1Ptr->gameStats) and resets gSaveBlock2's deferred state field by field (encryption key :155, ResetPokedex, PlayTimeCounter_Reset), with Sav2_ClearSetDefault -> ClearSav2 on top when the boot load found nothing usable (intro.c:1155-1156) -- and HandleSavingData then writes a whole slot out of that RAM (save.c:736-739) on every save of the session. This port defers unmodelled bytes to the image on disk, so it re-applies the reset per write, and the clear_base input is a property of the *session* (OverworldPhase::new_game_session, read at the store call as game_save::SaveLineage), never of the save mode: keying it off the save type left a new-game session's SAVE_NORMAL retry -- the arm a cleared gDifferentSaveFile produces after a failed overwrite -- writing the replaced trainer's deferred bytes back out. NOT modelled: the RAM struct pointers/shuffling (SetSaveBlocksPointers, MoveSaveBlocks_ResetHeap) and the checksum globals; and the gSaveBlock2 bytes NewGameInitData never writes for a new game started over an *intact* save -- SetDefaultOptions runs only from the empty/corrupt-boot Sav2_ClearSetDefault, so the option bytes (and e.g. localTimeOffset) survive in RAM upstream and are written back out, whereas clear_base drops them with the rest of the deferred payload.",
+          "rust_target": "crates/pokeemerald-rs/src/game_save.rs",
+          "spec": "I-6",
           "status": "stubbed"
         }
       },
@@ -26529,6 +26543,12 @@
     },
     "src/menu.c": {
       "artifacts": {
+        "AddStartMenuWindow": {
+          "reason": "The two windows the field start menu opens (issue #232): AddStartMenuWindow's (bg 0, left 22, top 1, width 7, height numActions*2+2) template (:490-494) and sYesNo_WindowTemplates' (21, 9, 5, 4) (:98-107), each drawn as DrawStdWindowFrame does -- the standard frame's border ring plus its PIXEL_FILL(1) content fill (:225-232) -- with FONT_NORMAL's own default fg/shadow palette indices (text.c:131-140). Also InitMenuInUpperLeftCorner/InitMenuNormal's cursor placement and gText_SelectorArrow3 glyph (:945, :1556-1566), Menu_MoveCursor's wrapping (:948-962) and Menu_ProcessInputNoWrap's non-wrapping A/B/Up/Down (:1013-1041, MENU_B_PRESSED read as NO), and CreateYesNoMenu's gText_YesNo layout (:1621-1646). NOT modelled: the window *system* underneath (AddWindow/RemoveWindow/PutWindowTilemap/CopyWindowToVram and the BG tilemap they write) -- this crate blits window chrome straight into the framebuffer, see crate::textbox's module docs -- the grid-menu variants, and the sound effects every input path plays.",
+          "rust_target": "crates/pokeemerald-rs/src/start_menu/chrome.rs",
+          "spec": "I-6",
+          "status": "stubbed"
+        },
         "WindowFunc_DrawDialogueFrame": {
           "reason": "The standard overworld/battle dialogue box's frame-tile placement (the wing-notch top border, left/interior-fill/right column spanning height+1 rows, and the v-flipped bottom border reusing the top row's tiles) reimplemented as MessageBoxLayout::frame_tiles, against the message-box 7x2 tile sheet (assets::AssetPack::message_box).",
           "rust_target": "crates/engine/src/text/window.rs",
@@ -26772,7 +26792,7 @@
           "status": "stubbed"
         },
         "CB2_ContinueSavedGame": {
-          "reason": "Resuming a loaded save is OverworldPhase::continue_saved_game: LoadSaveblockMapHeader's location -> map resolution and placement at gSaveBlock1Ptr->pos. NOT modelled: the saved facing -- upstream's ordinary continue path restores it (LoadGameSave -> CopyPartyAndObjectsFromSave -> LoadObjectEvents refills gObjectEvents, and CB2_ReturnToField -> ReturnToFieldLocal -> InitObjectEventsReturnToField -> SpawnObjectEventsOnReturnToField respawns the player from it), but this port models no object events, so it stands in with the continue-game-warp branch's GetAdjustedInitialDirection (tile-derived, DIR_SOUTH on an ordinary tile, reused from engine::overworld::warp_in_facing); the continue-game warp branch itself (UseContinueGameWarp/SetWarpDestinationToContinueGameWarp); LoadSaveblockObjEventScripts; DoTimeBasedEvents; PlayTimeCounter_Start; InitMatchCallCounters; ResetSafariZoneFlag_; ResetWinStreaks on SAVE_STATUS_ERROR; LoadSavedMapView; and the Battle Pyramid/Trainer Hill floor special cases.",
+          "reason": "Resuming a loaded save is OverworldPhase::continue_saved_game: LoadSaveblockMapHeader's location -> map resolution, placement at gSaveBlock1Ptr->pos, the destination tile's own elevation with ObjectEventUpdateElevation's multi-level -> transition substitution, and -- since issue #232 -- the saved facing and the saved party. The facing comes from the restored player object event exactly as upstream's ordinary continue path produces it (LoadGameSave -> CopyPartyAndObjectsFromSave -> LoadObjectEvents refills gObjectEvents, then CB2_ReturnToField -> ReturnToFieldLocal -> InitObjectEventsReturnToField -> SpawnObjectEventsOnReturnToField respawns from it); see load_save.c#SaveObjectEvents for how much of that array is modelled. A save block holding DIR_NONE there still falls back to the continue-game-warp branch's GetAdjustedInitialDirection. The party lead is decoded from playerParty[0] rather than re-derived from the provisional starter (load_save.c#CopyPartyAndObjectsToSave). NOT modelled: the continue-game warp branch itself (UseContinueGameWarp/SetWarpDestinationToContinueGameWarp); LoadSaveblockObjEventScripts; DoTimeBasedEvents; PlayTimeCounter_Start; InitMatchCallCounters; ResetSafariZoneFlag_; ResetWinStreaks on SAVE_STATUS_ERROR; LoadSavedMapView; and the Battle Pyramid/Trainer Hill floor special cases.",
           "rust_target": "crates/pokeemerald-rs/src/flow/overworld_phase.rs",
           "spec": "I-6",
           "status": "stubbed"
@@ -27156,7 +27176,7 @@
           "status": "rewritten"
         },
         "LoadGameSave": {
-          "reason": "SAVE_NORMAL boot-load driver re-implemented as SaveSlot::load: Save_ResetSaveCounters + TryLoadSaveSlot(FULL_SAVE_SLOT) over a real save file, with gSaveFileStatus returned as a value (SaveFileStatus) instead of a global. NOT modelled: the SAVE_HALL_OF_FAME arm (no HOF sectors), UpdateSaveAddresses (no gRamSaveSectorLocations indirection), CopyPartyAndObjectsFromSave (no gObjectEvents model and no BattlePokemon<->save::Pokemon decoder), and gGameContinueCallback. gFlashMemoryPresent maps to an unresolvable/unreadable save path.",
+          "reason": "SAVE_NORMAL boot-load driver re-implemented as SaveSlot::load: Save_ResetSaveCounters + TryLoadSaveSlot(FULL_SAVE_SLOT) over a real save file, with gSaveFileStatus returned as a value (SaveFileStatus) and also latched on the slot, because the start menu's SaveConfirmInputCallback branches on it later (start_menu.c:1008-1023). CopyPartyAndObjectsFromSave is modelled since issue #232 -- see load_save.c#CopyPartyAndObjectsToSave for the party half and load_save.c#SaveObjectEvents for how much of the object-event array is -- but it runs at OverworldPhase::from_saved rather than inside the load, because this port has no gPlayerParty/gObjectEvents globals to fill. NOT modelled: the SAVE_HALL_OF_FAME arm (no HOF sectors), UpdateSaveAddresses (no gRamSaveSectorLocations indirection), and gGameContinueCallback. gFlashMemoryPresent maps to an unresolvable/unreadable save path.",
           "rust_target": "crates/pokeemerald-rs/src/game_save.rs",
           "spec": "I-6",
           "status": "stubbed"
@@ -27180,7 +27200,7 @@
           "status": "rewritten"
         },
         "TrySavingData": {
-          "reason": "SAVE_NORMAL write driver re-implemented as SaveSlot::store: HandleSavingData's SAVE_NORMAL arm (WriteSaveSectorOrSlot over the full slot) plus persistence of the resulting flash image. NOT modelled: the SAVE_LINK/SAVE_EREADER/SAVE_HALL_OF_FAME/SAVE_OVERWRITE_DIFFERENT_FILE arms, gDamagedSaveSectors and DoSaveFailedScreen (a Vec<u8>-backed file has no partial-sector write failure), gTrainerHillVBlankCounter save/restore, and CopyPartyAndObjectsToSave.",
+          "reason": "The two write drivers the start menu's SAVE action can reach (SaveDoSaveCallback, start_menu.c:1093-1101) re-implemented as SaveSlot::store (HandleSavingData's SAVE_NORMAL arm, :736-740, and the prompted SAVE_OVERWRITE_DIFFERENT_FILE arm, :751-760) and SaveSlot::store_unless_foreign_save (the unprompted empty/corrupt-cartridge shortcut), each preceded by CopyPartyAndObjectsToSave (load_save.c#CopyPartyAndObjectsToSave) and followed by persistence of the resulting flash image. The overwrite arm's Hall-of-Fame erase has no counterpart -- there are no HOF sectors here. Dropping the replaced file's retained payload base is deliberately NOT the overwrite mode's effect: store_impl derives clear_base solely from game_save::SaveLineage, the session's property (load_save.c#clear_sav), read once for every arm alike -- deriving it from the mode leaked the previous trainer's deferred bytes on the SAVE_NORMAL retry a cleared gDifferentSaveFile produces (#232 review round two). SaveSlot::store_unless_foreign_save is this port's own addition, not upstream's: it guards the one write upstream performs with no prompt behind it (the empty/corrupt-cartridge shortcut) against a save another process wrote between this session's boot and its save, which one cartridge cannot do. NOT modelled: the SAVE_LINK/SAVE_EREADER/SAVE_HALL_OF_FAME/SAVE_HALL_OF_FAME_ERASE_BEFORE arms, gDamagedSaveSectors and DoSaveFailedScreen (a file-backed image has no partial-sector write failure; a failed write surfaces as the start menu's gText_SaveError), gTrainerHillVBlankCounter save/restore, and UpdateSaveAddresses.",
           "rust_target": "crates/pokeemerald-rs/src/game_save.rs",
           "spec": "I-6",
           "status": "stubbed"
@@ -27565,8 +27585,14 @@
     "src/start_menu.c": {
       "artifacts": {
         "save_flow": {
-          "reason": "The port has no start menu yet, so the SAVE action's user-visible effect is stood in for by an automatic save on exit from the overworld (flow.rs save_on_exit, issue #214/#232): a real divergence from upstream, which only writes when the player saves. NOT modelled: the start menu itself, Task_HandleSave's confirm/overwrite dialogs, and the save-completed message.",
-          "rust_target": "crates/pokeemerald-rs/src/flow.rs",
+          "reason": "SaveGameTask's sSaveDialogCallback chain (start_menu.c:877-1160) re-implemented as the owned StartMenu/SaveDialog state machine (issue #232), replacing issue #214's save-on-exit stand-in: InitSave, RunSaveCallback's text-printer gate, SaveConfirmSaveCallback's gText_ConfirmSave + DisplayYesNoMenuDefaultYes, SaveConfirmInputCallback's gSaveFileStatus/gDifferentSaveFile branch (the empty/corrupt shortcut at :1008-1019 included), SaveFileExistsCallback's gText_AlreadySavedFile vs gText_DifferentSaveFile choice with its default-YES vs default-NO Yes/No menus, SaveOverwriteInputCallback, SaveSavingMessageCallback, SaveDoSaveCallback's SAVE_NORMAL vs SAVE_OVERWRITE_DIFFERENT_FILE dispatch and its gDifferentSaveFile clear on upstream's own terms (:1093-1096: the clear is inside the overwrite branch, on the statement after TrySavingData and before saveStatus is read, so a failed or refused overwrite retires the gText_DifferentSaveFile WARNING exactly as a successful one does and the session's next SAVE asks gText_AlreadySavedFile -- #232 review), and both result waits (SaveSuccesTimer's held-A-or-countdown at :947-962 and SaveErrorTimer's countdown-then-held-A at :964-976), plus SaveCallback's SAVE_CANCELED-back-to-menu / SAVE_SUCCESS-and-SAVE_ERROR-both-close arms. The save mode selects only the medium entry point, never the bytes: SAVE_OVERWRITE_DIFFERENT_FILE adds only the Hall-of-Fame erase this port has no counterpart for, while the ClearSav memset that keeps a replaced adventure out of a new game's slot rides on the session (game_save::SaveLineage, load_save.c#clear_sav) -- deriving it from the mode leaked the previous trainer's deferred bytes on the SAVE_NORMAL retry a cleared gDifferentSaveFile produces (#232 review round two). NOT modelled: ShowSaveInfoWindow/RemoveSaveInfoWindow (:1332-1420, the PLAYER/BADGES/POKeDEX/TIME panel -- no playtime, badge or Pokedex save state, the same gap main_menu.c#save_menu records), SaveMapView, IncrementGameStat(GAME_STAT_SAVED_GAME), every PlaySE (SE_SELECT/SE_SAVE/SE_BOO) and the IsSEPlaying wait they gate, the Battle Pyramid rest/retire variants and SoftResetInBattlePyramid, and Task_SaveAfterLinkBattle/CB2_SetUpSaveAfterLinkBattle.",
+          "rust_target": "crates/pokeemerald-rs/src/start_menu/save_dialog.rs",
+          "spec": "I-6",
+          "status": "rewritten"
+        },
+        "start_menu": {
+          "reason": "The field start menu shell (issue #232): ShowStartMenu's open from ProcessPlayerFieldInput's pressedStartButton branch (field_control_avatar.c:182-187), AddStartMenuWindow's geometry (menu.c:490-494), PrintStartMenuActions' label origin (:472-473), InitMenuNormal + Menu_MoveCursor's wrapping selector arrow (:511, menu.c:948-962), and HandleStartMenuInput's Up/Down/A and JOY_NEW(START|B) close (:594-635), with StartMenuExitCallback. NOT modelled: six of BuildNormalStartMenu's eight items -- POKeDEX, POKeMON, BAG, POKeNAV, PLAYER and OPTION (:315-337) -- because no slice has built any of their destination screens, so a label would open nothing; the three unlock flags gating them (FLAG_SYS_POKEDEX_GET/POKEMON_GET/POKENAV_GET); the six alternate menus (BuildLinkModeStartMenu, BuildSafariZoneStartMenu, BuildUnionRoomStartMenu, BuildBattlePikeStartMenu, BuildBattlePyramidStartMenu, BuildMultiPartnerRoomStartMenu) and their extra windows (ShowSafariBallsWindow, ShowPyramidFloorWindow); InitStartMenuStep's staged window build and CreateStartMenuTask/Task_ShowStartMenu; and the FadeScreen(FADE_TO_BLACK) transition non-SAVE/EXIT items trigger (:618-622).",
+          "rust_target": "crates/pokeemerald-rs/src/start_menu.rs",
           "spec": "I-6",
           "status": "stubbed"
         }

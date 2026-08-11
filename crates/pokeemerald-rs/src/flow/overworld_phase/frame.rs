@@ -38,7 +38,15 @@ impl OverworldPhase {
     /// [`crate::overworld::OverworldScene::compose`] against this phase's
     /// current player state and event-flag store, then (issue #161)
     /// [`NpcDialog::compose_over`](crate::overworld::NpcDialog::compose_over)
-    /// on top if [`OverworldPhase::dialog`] is open.
+    /// on top if [`OverworldPhase::dialog`] is open, then (issue #232) the
+    /// field start menu's own windows over that if one is open.
+    ///
+    /// The two overlays are never both open -- an open message box holds
+    /// `LockPlayerFieldControls`, so `START` cannot reach the start menu
+    /// ([`super::start_menu`]'s module docs) -- but each is drawn on its
+    /// own condition rather than in an either/or, so a future state that
+    /// *does* stack them draws in upstream's own order: the field message
+    /// box below, the menu windows above.
     pub(in crate::flow) fn compose_frame(&self) -> Box<Frame> {
         let base = self
             .scene
@@ -46,6 +54,10 @@ impl OverworldPhase {
         let composed = match &self.dialog {
             Some(dialog) => dialog.compose_over(base),
             None => base,
+        };
+        let composed = match self.start_menu() {
+            Some(menu) => menu.compose_over(composed),
+            None => composed,
         };
         crate::frame::to_platform_frame(&composed)
     }

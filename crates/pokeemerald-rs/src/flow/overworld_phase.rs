@@ -26,22 +26,26 @@
 //! [`first_battle_trigger`] (the Route 101 scripted first-battle coord-event
 //! trigger, issue #231, [`OverworldPhase::advance_first_battle_frame`]), and
 //! [`frame`] (dialog ticking and frame composition,
-//! [`OverworldPhase::compose_frame`]).
+//! [`OverworldPhase::compose_frame`]), [`start_menu`] (the field start
+//! menu's `START` gate and the party/object-event save sync behind its
+//! `SAVE` action, issue #232), and [`placement`] (where a continued save
+//! puts the player).
 
-use engine::overworld::{
-    warp_in_facing, PlayerState, TilePos, WildEncounterState, ELEVATION_MULTI_LEVEL,
-    ELEVATION_TRANSITION,
-};
+use engine::overworld::{PlayerState, TilePos, WildEncounterState};
 use engine::save::{SaveBlock1, SaveBlock2};
 use std::cell::OnceCell;
 
+use crate::game_save::SaveLineage;
 use crate::new_game;
 use crate::overworld::{self, NpcDialog, OverworldScene, OverworldSceneError};
+use crate::start_menu::StartMenu;
 
 mod connections;
 mod first_battle_trigger;
 mod frame;
 mod input;
+mod placement;
+mod start_menu;
 mod step;
 mod wild_battle;
 
@@ -102,8 +106,9 @@ impl From<OverworldSceneError> for ContinueError {
 /// name/gender -- see that function's module docs), or, for a resumed
 /// session, the pair [`OverworldPhase::continue_saved_game`] loaded off disk
 /// -- the actual save-state counterpart to `player`'s in-memory position.
-/// This pair *is* what gets written back: [`crate::flow::save_on_exit`]
-/// hands it to [`crate::game_save::SaveSlot::store`] (I-6, issue #214).
+/// This pair *is* what gets written back: the field start menu's `SAVE`
+/// action hands it to [`crate::game_save::SaveSlot::store`] and friends
+/// (I-6, issues #214/#232 -- see [`start_menu`]).
 /// `save1.pos` is re-synced to the player's logical tile after every
 /// [`OverworldPhase::step`] (upstream keeps `gSaveBlock1Ptr->pos` current as
 /// the object-event system moves the player), so the save/continue path
@@ -206,15 +211,51 @@ pub(crate) struct OverworldPhase {
     /// [`crate::flow::wild_encounter::advance_wild_battle`] drives one turn
     /// per frame. See that module's docs for what "headless" means here.
     pub(super) wild_battle: Option<battle::Battle>,
-    /// Whether this session was entered through
-    /// [`Self::continue_saved_game`] -- i.e. its `save1`/`save2` began as
-    /// the save on disk rather than fresh new-game blocks. The exit-write
-    /// consent bit (issue #214 review): [`crate::flow::save_on_exit`]
-    /// overwrites unconditionally only for a continued session, and a
-    /// new-game session must never clobber a continuable save it did not
-    /// load -- upstream gates that on `gDifferentSaveFile`'s explicit
-    /// overwrite prompt, which this port cannot show yet.
-    continued_from_save: bool,
+    /// `gDifferentSaveFile` (`pokeemerald/src/new_game.c:55`): whether the
+    /// next SAVE must still ask the different-save-file WARNING. That, and
+    /// nothing else.
+    ///
+    /// `NewGameInitData` sets it (`:154`); `SaveDoSaveCallback` clears it
+    /// *unconditionally* on the statement after its `TrySavingData` call,
+    /// inside the `gDifferentSaveFile` branch and before `saveStatus` is
+    /// read (`src/start_menu.c:1093-1096`) -- so any dispatched overwrite
+    /// retires it, failed and refused ones included. While it is set, the
+    /// SAVE flow shows `gText_DifferentSaveFile`'s WARNING (default NO)
+    /// instead of the ordinary `gText_AlreadySavedFile` question; once
+    /// cleared, the session has answered that question and is asked the
+    /// ordinary one. A session entered through [`Self::continue_saved_game`]
+    /// starts it false: it *is* the file on disk.
+    ///
+    /// It is emphatically **not** "this session's blocks are a new game's":
+    /// that outlives the first overwrite dispatch and is
+    /// [`Self::new_game_session`]'s job, which is what decides whether a
+    /// write drops the replaced file's deferred bytes
+    /// ([`crate::game_save::SaveLineage`], #232 review round two).
+    different_save_file: bool,
+    /// Whether this session's save blocks are a *new game's* -- true when
+    /// the phase was built by [`Self::new`] (upstream's `NewGameInitData`
+    /// path), false when it was built by [`Self::from_saved`] (`CONTINUE`,
+    /// upstream's `CopySaveSlotData` RAM). Fixed for the session's whole
+    /// life; nothing mutates it.
+    ///
+    /// Upstream needs no such flag because it *has* the RAM:
+    /// `NewGameInitData` settles what a new game's `gSaveBlock1/2` hold
+    /// (`src/new_game.c:149-186`, `ClearSav1` at `:160`) and
+    /// `HandleSavingData` writes a whole slot out of them
+    /// (`src/save.c:736-739`), so every save in a new-game session is
+    /// already free of the replaced adventure. This port defers the bytes
+    /// it does not model to the image on disk, so that reset has to be
+    /// re-applied at each write -- and the session, not the save mode, is
+    /// what says whose bytes those are
+    /// ([`crate::game_save::SaveLineage`], read at the store call in
+    /// [`start_menu`]).
+    new_game_session: bool,
+    /// The open field start menu, if any (issue #232). `Some` freezes the
+    /// overworld for the frame, the same shape [`Self::dialog`] and
+    /// [`Self::wild_battle`] use -- see [`start_menu`]'s module docs for
+    /// the gate that decides when `START` may open one, and for why the
+    /// save write lives behind it.
+    start_menu: Option<StartMenu>,
     /// The Route 101 scripted first battle currently being played out, if
     /// any (issue #231) -- the narrative-event counterpart to
     /// [`Self::wild_battle`], kept in its own field rather than sharing that
@@ -251,7 +292,9 @@ impl OverworldPhase {
         // review): without a lead, every I-4 encounter would be rolled and
         // dropped. Deliberately drawing nothing from `phase.rng` — see
         // `new_game::provisional_starter`'s docs.
-        phase.party_lead = Some(new_game::provisional_starter());
+        let trainer_id = u32::from_le_bytes(phase.save2.player_trainer_id);
+        phase.party_lead =
+            Some(new_game::provisional_starter().with_original_trainer_id(trainer_id));
         Ok(phase)
     }
 
@@ -295,11 +338,8 @@ impl OverworldPhase {
     /// * **Map** -- `map_id`, resolved from `block1.location` by the caller.
     /// * **Position** -- `block1.pos`, upstream's `GetCameraFocusCoords`
     ///   source.
-    /// * **Facing** -- `DIR_SOUTH` on an ordinary tile, from
-    ///   `GetAdjustedInitialDirection` (`src/overworld.c:929-951`) already
-    ///   ported as [`engine::overworld::warp_in_facing`]. **This is a
-    ///   deferral, not fidelity.** Upstream *does* restore the direction the
-    ///   player was facing when they saved, on the ordinary continue path:
+    /// * **Facing** -- the direction the player was facing when they saved
+    ///   (issue #232). Upstream restores it on the ordinary continue path:
     ///   the boot load runs `LoadGameSave` ->
     ///   `CopyPartyAndObjectsFromSave` (`src/save.c:887`) ->
     ///   `LoadObjectEvents` (`src/load_save.c:188-194`), which copies
@@ -311,14 +351,17 @@ impl OverworldPhase {
     ///   `SpawnObjectEventsOnReturnToField`
     ///   (`src/event_object_movement.c:1715-1726`), which respawns from
     ///   those restored object events rather than deriving anything from the
-    ///   destination tile. `GetAdjustedInitialDirection`'s `DIR_SOUTH`
-    ///   belongs to the *other* branch, the continue-game warp
-    ///   (`UseContinueGameWarp`, `:1739-1745`), which reaches
-    ///   `InitObjectEventsLocal` via `CB2_LoadMap`. This port models no
-    ///   object events at all, so there is nowhere to restore a saved facing
-    ///   *from*; the warp branch's tile-derived direction is the stand-in
-    ///   until one exists. Recorded as NOT modelled on
-    ///   `CB2_ContinueSavedGame` in the coverage ledger.
+    ///   destination tile. This port models one field of one object event
+    ///   -- the player's `facingDirection`
+    ///   ([`engine::save::SavedObjectEvent`], written by
+    ///   [`Self::copy_party_and_objects_to_save`]) -- which is all that
+    ///   path observably produces here, and reads it back through
+    ///   [`saved_facing`]. A save that holds `DIR_NONE` there (a zeroed
+    ///   block, or an image written before this slice) still falls back to
+    ///   the continue-game *warp* branch's tile-derived
+    ///   `GetAdjustedInitialDirection` (`src/overworld.c:929-951`, ported
+    ///   as [`engine::overworld::warp_in_facing`], `DIR_SOUTH` on an
+    ///   ordinary tile) rather than facing an arbitrary way.
     /// * **Elevation** -- the saved tile's own grid cell, with the
     ///   multi-level -> transition substitution
     ///   `ObjectEventUpdateElevation` applies, exactly as
@@ -335,19 +378,23 @@ impl OverworldPhase {
     ///   (`src/fieldmap.c:69-76`), never `RunOnTransitionMapScript`, because
     ///   the flags that script would set are already in the save file.
     ///
+    /// * **The battle-facing party lead** -- decoded out of
+    ///   `block1.player_party[0]` by
+    ///   [`Self::copy_party_and_objects_from_save`] (`LoadPlayerParty`,
+    ///   `src/load_save.c:170-178`), so a continued session fights with the
+    ///   mon that was saved -- damage taken and PP spent included -- rather
+    ///   than a fresh copy of [`new_game::provisional_starter`] (issue
+    ///   #232). See [`crate::party`] for what the encoder carries and what
+    ///   it does not.
+    ///
     /// # What it does not
     ///
-    /// [`Self::party_lead`], the battle-facing lead a wild encounter is
-    /// fought with, is re-derived from [`new_game::provisional_starter`]
-    /// rather than decoded from `block1.player_party[0]`. There is no
-    /// encoder between `battle::BattlePokemon` and
-    /// [`engine::save::Pokemon`]'s encrypted substructures yet (upstream's
-    /// `CreateMon`/`GetMonData` surface, explicitly deferred in
-    /// `engine::save::pokemon`'s module docs), so the saved party's *modelled*
-    /// bytes round-trip faithfully while the battler built from them does
-    /// not. The observable cost: damage taken before saving is not carried
-    /// back into a continued session's lead. Recorded as a NOT-modelled
-    /// artifact in the coverage ledger rather than papered over.
+    /// The five `CB2_ContinueSavedGame` steps around the field handoff --
+    /// the continue-game warp branch itself (`UseContinueGameWarp`),
+    /// `LoadSaveblockObjEventScripts`, `DoTimeBasedEvents`,
+    /// `PlayTimeCounter_Start`, and `LoadSavedMapView` -- have no
+    /// counterpart here; the coverage ledger's `CB2_ContinueSavedGame`
+    /// entry carries the full list.
     pub(super) fn from_saved(
         scene: OverworldScene,
         map_id: assets::MapId,
@@ -355,7 +402,8 @@ impl OverworldPhase {
         block2: SaveBlock2,
     ) -> Self {
         let position = (i32::from(block1.pos.x), i32::from(block1.pos.y));
-        let (elevation, facing) = saved_tile_placement(&scene, map_id, position);
+        let (elevation, tile_facing) = placement::saved_tile_placement(&scene, map_id, position);
+        let facing = placement::saved_facing(&block1, tile_facing);
         let mut phase = Self {
             scene,
             player: PlayerState::new(position, elevation, facing),
@@ -384,10 +432,14 @@ impl OverworldPhase {
             wild_table_screen: None,
             party_lead: None,
             wild_battle: None,
-            continued_from_save: true,
+            different_save_file: false,
+            // A continue *is* the file on disk: its blocks came from it, so
+            // its writes carry the deferred bytes forward (field docs).
+            new_game_session: false,
+            start_menu: None,
             first_battle: None,
         };
-        phase.party_lead = Some(new_game::provisional_starter());
+        phase.copy_party_and_objects_from_save();
         phase
     }
 
@@ -443,7 +495,14 @@ impl OverworldPhase {
             wild_table_screen: None,
             party_lead: None,
             wild_battle: None,
-            continued_from_save: false,
+            // `NewGameInitData` (`src/new_game.c:154`).
+            different_save_file: true,
+            // `NewGameInitData`'s reset, as a session property (field
+            // docs): these blocks are this new game's, so no write of this
+            // session may carry the replaced file's bytes -- not even one
+            // taken after the WARNING has been retired.
+            new_game_session: true,
+            start_menu: None,
             first_battle: None,
         }
     }
@@ -482,22 +541,42 @@ impl OverworldPhase {
         self.wild_battle.is_some()
     }
 
-    /// Whether this session began by continuing the save on disk (struct
-    /// docs) -- the exit-write consent bit [`crate::flow::save_on_exit`]
-    /// branches on.
+    /// `gDifferentSaveFile` (struct docs) -- what the start menu's SAVE
+    /// flow branches on to decide which overwrite prompt to show.
+    ///
+    /// Production reads the field directly (through
+    /// `start_menu::PhaseSaveTarget`); this accessor exists so the
+    /// save/continue tests can assert the flag's own lifecycle.
+    #[cfg(test)]
     #[must_use]
-    pub(crate) const fn continued_from_save(&self) -> bool {
-        self.continued_from_save
+    pub(crate) const fn different_save_file(&self) -> bool {
+        self.different_save_file
+    }
+
+    /// [`Self::new_game_session`] as the [`SaveLineage`] every write of this
+    /// session states (that field's docs): the *session's* answer to "whose
+    /// bytes are these", which is the only input to
+    /// [`engine::save::SaveStore::clear_base`]. Read at the one store call
+    /// site, in [`start_menu`]'s `PhaseSaveTarget::try_saving_data`.
+    #[must_use]
+    pub(super) const fn save_lineage(&self) -> SaveLineage {
+        if self.new_game_session {
+            SaveLineage::NewGame
+        } else {
+            SaveLineage::Continued
+        }
     }
 
     /// Whether any battle -- wild ([`Self::wild_battle`]) or the Route 101
     /// scripted first battle ([`Self::first_battle`]) -- currently owns the
-    /// phase; the exit-write guard [`crate::flow::save_on_exit`] checks.
-    /// Mid-battle state (the live combat, the consumed RNG draws, the
-    /// borrowed party lead) lives outside the `SaveBlock`s until the
-    /// battle's driver finishes it, so a save taken now would persist the
-    /// *pre-battle* overworld (#230 review). Both fields gate for the same
-    /// reason; they are never `Some` at once ([`Self::first_battle`] docs).
+    /// phase; one of the three gates
+    /// [`Self::start_menu_may_open`] checks. Mid-battle state (the live
+    /// combat, the consumed RNG draws, the borrowed party lead) lives
+    /// outside the `SaveBlock`s until the battle's driver finishes it, so a
+    /// save taken now would persist the *pre-battle* overworld (#230
+    /// review), and upstream's own start menu cannot open here either.
+    /// Both fields gate for the same reason; they are never `Some` at once
+    /// ([`Self::first_battle`] docs).
     #[must_use]
     pub(crate) const fn in_battle(&self) -> bool {
         self.wild_battle.is_some() || self.first_battle.is_some()
@@ -505,14 +584,14 @@ impl OverworldPhase {
 
     /// Whether a step is still in flight -- the transit frames themselves,
     /// or a latched [`Self::pending_landing`] whose warp/encounter/
-    /// coordinate-event processing [`Self::step`] has not run yet. The
-    /// exit-write guard [`crate::flow::save_on_exit`] checks this too
-    /// (#230 review round five): `save1.pos` is written at step *start*,
-    /// so a save taken now would persist the destination tile while
-    /// dropping everything landing on it triggers -- door warps, wild
-    /// encounters, and Route 101's scripted first battle among them.
-    /// Upstream cannot save here either: the start menu does not open
-    /// while the player is moving.
+    /// coordinate-event processing [`Self::step`] has not run yet.
+    /// [`Self::start_menu_may_open`] checks this too (#230 review round
+    /// five): `save1.pos` is written at step *start*, so a save taken now
+    /// would persist the destination tile while dropping everything
+    /// landing on it triggers -- door warps, wild encounters, and Route
+    /// 101's scripted first battle among them. Upstream cannot save here
+    /// either: `FieldGetPlayerInput` does not set `pressedStartButton`
+    /// while the player is moving (`field_control_avatar.c:95-101`).
     #[must_use]
     pub(crate) const fn mid_step(&self) -> bool {
         self.pending_landing.is_some() || self.player.in_transit()
@@ -538,45 +617,6 @@ pub(super) fn saved_map_id(block1: &SaveBlock1) -> Option<assets::MapId> {
             .get_by_position(group, num)?
             .id,
     )
-}
-
-/// The `(elevation, facing)` a continued save's player is placed with at
-/// `position` on `map_id` -- see
-/// [`OverworldPhase::from_saved`]'s "What a continue restores".
-///
-/// Both come from the saved tile's own map data, never from the save file:
-/// upstream reads the destination grid cell for elevation
-/// (`ObjectEventUpdateElevation`) and the destination metatile's behavior
-/// for direction (`GetAdjustedInitialDirection`). A tile that will not
-/// decode -- the map's header/events missing from the generated tables, or
-/// coordinates outside the grid -- yields the new-game spawn elevation and
-/// `DIR_SOUTH`, which is `GetAdjustedInitialDirection`'s own fallthrough
-/// (`src/overworld.c:951`) rather than an invented default.
-fn saved_tile_placement(
-    scene: &OverworldScene,
-    map_id: assets::MapId,
-    position: TilePos,
-) -> (u8, engine::overworld::Direction) {
-    let fallback = (new_game::SPAWN_ELEVATION, new_game::SPAWN_FACING);
-    let Ok(header) = assets::MapHeaderTable::new().header(map_id) else {
-        return fallback;
-    };
-    let Ok(events) = assets::MapEventsTable::new().resolve(map_id) else {
-        return fallback;
-    };
-    let runtime = scene.runtime(map_id, header, events);
-    let Some(cell) = runtime.metatile_cell(position.0, position.1) else {
-        return fallback;
-    };
-    let elevation = if cell.elevation == ELEVATION_MULTI_LEVEL {
-        ELEVATION_TRANSITION
-    } else {
-        cell.elevation
-    };
-    let facing = runtime
-        .metatile_behavior(position.0, position.1)
-        .map_or(new_game::SPAWN_FACING, warp_in_facing);
-    (elevation, facing)
 }
 
 #[cfg(test)]

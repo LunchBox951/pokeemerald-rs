@@ -26,7 +26,9 @@
 //! * [`sector::Sector`] -- one 4096-byte flash sector image: payload +
 //!   footer (`id`, `checksum`, `signature`, `counter`).
 //! * [`block::SaveBlock1`] / [`block::SaveBlock2`] -- the typed, modeled
-//!   subset of upstream's save blocks, with fixed-size (de)serialization.
+//!   subset of upstream's save blocks, with fixed-size (de)serialization,
+//!   including the player object event's saved facing
+//!   ([`block::SavedObjectEvent`], I-6).
 //! * [`store::SaveStore`] -- two rotating save slots of
 //!   [`store::SECTORS_PER_SLOT`] sectors each over an in-memory `Vec<u8>`
 //!   buffer: `save` mirrors `WriteSaveSectorOrSlot`/`HandleWriteSector`;
@@ -45,8 +47,10 @@ pub mod sector;
 pub mod store;
 
 pub use bag::{Bag, ItemSlot};
-pub use block::{Coords16, PlayerGender, SaveBlock1, SaveBlock2, SaveError, WarpData};
+pub use block::{
+    Coords16, PlayerGender, SaveBlock1, SaveBlock2, SaveError, SavedObjectEvent, WarpData,
+};
 pub use file::{default_save_path, SaveFile, SaveFileError, SAVE_PATH_ENV};
-pub use pokemon::{BoxPokemon, Pokemon, PokemonError, PokemonSubstructures};
+pub use pokemon::{BoxPokemon, Pokemon, PokemonError, PokemonSubstructures, SUBSTRUCTURE_LEN};
 pub use sector::{Sector, SECTOR_DATA_SIZE, SECTOR_SIGNATURE, SECTOR_SIZE};
 pub use store::{BaseSnapshot, LoadOutcome, SaveStatus, SaveStore, FLASH_IMAGE_LEN};
