@@ -27,7 +27,9 @@
 use crate::common::{max_iv_mon, SequenceRng};
 use assets::trainers::TrainerId;
 use assets::{MoveId, SpeciesId};
-use battle::{Battle, BattleError, BattleEvent, BattleOutcome, BattlePokemon, Dex, PlayerAction};
+use battle::{
+    Battle, BattleError, BattleEvent, BattleOutcome, BattlePokemon, Dex, HitOutcome, PlayerAction,
+};
 
 /// `TRAINER_MAY_ROUTE_103_MUDKIP` — the rival fought after choosing Mudkip.
 const MAY_ROUTE_103_MUDKIP: TrainerId = TrainerId(529);
@@ -40,6 +42,7 @@ const TREECKO: u16 = 277;
 const TORCHIC: u16 = 280;
 const MUDKIP: u16 = 283;
 const ZIGZAGOON: u16 = 288;
+const PICHU: u16 = 172;
 
 const POUND: MoveId = MoveId(1);
 const SCRATCH: MoveId = MoveId(10);
@@ -271,6 +274,78 @@ fn a_fainted_trainer_mon_is_replaced_by_the_next_one_in_party_order() {
         .any(|e| matches!(e, BattleEvent::TrainerSentOut { .. })));
     assert!(events.contains(&BattleEvent::MoneyGained(300)));
     assert_eq!(battle.outcome(), Some(BattleOutcome::PlayerWon));
+}
+
+/// EXP is applied to the owned player before trainer continuation, so a
+/// replacement fights the levelled-up mon rather than its stale snapshot.
+#[test]
+fn a_level_crossed_before_replacement_updates_the_next_turns_combat() {
+    let dex = Dex::new();
+    let player = max_iv_mon(&dex, TREECKO, 5, vec![SLASH]);
+    let old_player = player.clone();
+    let mut lead = max_iv_mon(&dex, MUDKIP, 5, vec![TACKLE]);
+    lead.apply_damage(lead.current_hp() - 1);
+    let party = vec![lead, max_iv_mon(&dex, PICHU, 5, vec![TACKLE])];
+
+    let mut rng = SequenceRng::new([u16::MAX; 128]);
+    let mut battle =
+        Battle::new_trainer(dex, player, MAY_ROUTE_103_MUDKIP, party, &mut rng).unwrap();
+    let old_stats = battle.player().stats();
+
+    let first = battle
+        .take_turn(PlayerAction::UseMove(0), &mut rng)
+        .unwrap();
+    let exp_index = first
+        .iter()
+        .position(|event| matches!(event, BattleEvent::ExpGained(_)))
+        .expect("the faint awards EXP");
+    let send_out_index = first
+        .iter()
+        .position(|event| matches!(event, BattleEvent::TrainerSentOut { .. }))
+        .expect("the trainer sends out the replacement");
+    assert!(
+        exp_index < send_out_index,
+        "EXP precedes send-out: {first:?}"
+    );
+    assert_eq!(battle.player().level(), 6);
+    assert_ne!(battle.player().stats(), old_stats);
+    assert_eq!(battle.enemy().species(), SpeciesId(PICHU));
+
+    let expected_damage = |attacker: &BattlePokemon| {
+        let mut hit_rng = SequenceRng::new([u16::MAX; 4]);
+        match battle::hit::resolve_hit(
+            &Dex::new(),
+            SLASH,
+            attacker,
+            battle.enemy(),
+            false,
+            &mut hit_rng,
+        )
+        .unwrap()
+        {
+            HitOutcome::Hit { damage, .. } => damage,
+            other => panic!("the deterministic Slash should hit: {other:?}"),
+        }
+    };
+    let updated_damage = expected_damage(battle.player());
+    let stale_damage = expected_damage(&old_player);
+    assert_ne!(
+        updated_damage, stale_damage,
+        "the level-up must affect damage"
+    );
+
+    let second = battle
+        .take_turn(PlayerAction::UseMove(0), &mut rng)
+        .unwrap();
+    assert!(
+        second.contains(&BattleEvent::Hit {
+            by_player: true,
+            move_id: SLASH,
+            damage: updated_damage,
+            is_critical: false,
+        }),
+        "the next turn uses the updated level and stats: {second:?}"
+    );
 }
 
 /// Every knocked-out party member pays its own boosted award, so the exp a

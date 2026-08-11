@@ -1348,6 +1348,7 @@ impl Battle {
                             } else {
                                 wild_faint_exp(base_exp, level)
                             };
+                            self.player.apply_experience(exp);
                             events.push(BattleEvent::ExpGained(exp));
                         }
                         // A wild battle ends the moment its only opponent

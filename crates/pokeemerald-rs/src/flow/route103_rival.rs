@@ -250,7 +250,7 @@ struct PartyEntry {
     /// `partyData[i].lvl`.
     level: u8,
     /// `partyData[i].iv`, before [`battle::fixed_ivs`]'s `* 31 / 255` scale.
-    iv: u16,
+    iv: u8,
     /// The fixed moveset the `F_TRAINER_PARTY_CUSTOM_MOVESET` shapes write
     /// over `CreateMon`'s result, or `None` for "leave
     /// `GiveBoxMonInitialMoveset`'s level-up moveset in place".
@@ -419,6 +419,11 @@ pub fn start_route103_rival_battle(
 /// caller through [`battle::Battle::take_turn`] regardless, so a later slice
 /// that adds a wallet has the amount already computed at the right point in
 /// the battle.
+///
+/// A `None` return is intentionally ambiguous: it can mean that `slot` was
+/// already empty, that the battle remains ongoing, or that a failed turn
+/// ended the battle and cleared `slot`. Callers must inspect `slot` after the
+/// call to determine whether a battle is still active.
 pub fn advance_route103_rival_battle(
     slot: &mut Option<Battle>,
     lead: &mut Option<BattlePokemon>,

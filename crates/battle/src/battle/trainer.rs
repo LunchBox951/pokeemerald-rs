@@ -88,9 +88,9 @@ pub const SHINY_ODDS: u16 = 8;
 /// do run on all-zero IVs — pinned by this module's tests rather than left
 /// implicit.
 #[must_use]
-pub fn fixed_ivs(iv: u16) -> Ivs {
-    #[allow(clippy::cast_possible_truncation)]
-    let value = (iv * MAX_PER_STAT_IVS / 255) as u8;
+pub fn fixed_ivs(iv: u8) -> Ivs {
+    let value =
+        u8::try_from(u16::from(iv) * MAX_PER_STAT_IVS / u16::from(u8::MAX)).unwrap_or(u8::MAX);
     Ivs {
         hp: value,
         attack: value,

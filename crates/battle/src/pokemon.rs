@@ -16,7 +16,7 @@
 //! non-volatile status conditions, and the Shedinja 1-HP special case in
 //! `CalculateMonStats`.
 
-use assets::{BaseStats, MoveId, SpeciesId, Type};
+use assets::{experience_for_level, BaseStats, MoveId, SpeciesId, Type};
 
 use crate::dex::Dex;
 use crate::error::BattleError;
@@ -247,6 +247,7 @@ pub fn compute_stats(base: &BaseStats, level: u8, nature: Nature, ivs: Ivs) -> S
 /// `0..=`[`MAX_IV`], and a moveset of `1..=`[`MAX_MON_MOVES`] real (never
 /// [`MOVE_NONE`]) moves. In-battle mutation is limited to the operations that
 /// preserve them: [`BattlePokemon::apply_damage`],
+/// [`BattlePokemon::apply_experience`],
 /// [`BattlePokemon::deduct_pp`], and [`BattlePokemon::stages_mut`] (a
 /// [`StatStage`] is itself a constrained type, so no invariant of *this* type
 /// can be broken through it).
@@ -259,6 +260,8 @@ pub struct BattlePokemon {
     personality: u32,
     original_trainer_id: u32,
     types: [Type; 2],
+    base_stats: BaseStats,
+    experience: u32,
     stats: Stats,
     current_hp: u32,
     moves: Vec<MoveSlot>,
@@ -366,6 +369,8 @@ impl BattlePokemon {
             return Err(BattleError::InvalidIv(offender));
         }
         let base = dex.species(species)?;
+        let experience = experience_for_level(base.growth_rate, level)
+            .map_err(|_| BattleError::InvalidLevel(level))?;
         let stats = compute_stats(base, level, nature, ivs);
         let mut slots = Vec::with_capacity(moves.len());
         for move_id in moves {
@@ -380,6 +385,8 @@ impl BattlePokemon {
             personality,
             original_trainer_id: 0,
             types: base.types,
+            base_stats: *base,
+            experience,
             stats,
             current_hp: stats.max_hp,
             moves: slots,
@@ -398,6 +405,12 @@ impl BattlePokemon {
     #[must_use]
     pub const fn level(&self) -> u8 {
         self.level
+    }
+
+    /// Total accumulated experience on this species' growth curve.
+    #[must_use]
+    pub const fn experience(&self) -> u32 {
+        self.experience
     }
 
     /// This mon's nature — always `personality % 25`
@@ -502,6 +515,39 @@ impl BattlePokemon {
     /// application clamps the same way).
     pub fn apply_damage(&mut self, amount: u32) {
         self.current_hp = self.current_hp.saturating_sub(amount);
+    }
+
+    /// Add earned experience, applying every crossed level threshold and
+    /// capping both level and total experience at level 100.
+    ///
+    /// Stat recalculation follows `CalculateMonStats`. If maximum HP grows,
+    /// the increase is also added to current HP, preserving the absolute
+    /// amount of damage the mon had taken before levelling up.
+    pub fn apply_experience(&mut self, amount: u32) {
+        let max_experience =
+            experience_for_level(self.base_stats.growth_rate, MAX_LEVEL).unwrap_or(u32::MAX);
+        self.experience = self.experience.saturating_add(amount).min(max_experience);
+
+        let mut new_level = self.level;
+        while new_level < MAX_LEVEL {
+            let next_level = new_level + 1;
+            let threshold =
+                experience_for_level(self.base_stats.growth_rate, next_level).unwrap_or(u32::MAX);
+            if self.experience < threshold {
+                break;
+            }
+            new_level = next_level;
+        }
+        if new_level == self.level {
+            return;
+        }
+
+        let old_max_hp = self.stats.max_hp;
+        self.level = new_level;
+        self.stats = compute_stats(&self.base_stats, self.level, self.nature, self.ivs);
+        self.current_hp = self
+            .current_hp
+            .saturating_add(self.stats.max_hp.saturating_sub(old_max_hp));
     }
 
     /// The attacking stat (Attack or Sp. Attack) and its stage for a move of
