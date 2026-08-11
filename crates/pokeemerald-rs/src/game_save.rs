@@ -310,6 +310,21 @@ pub(crate) struct SaveSlot {
 }
 
 impl SaveSlot {
+    /// A deliberately unavailable save medium.
+    ///
+    /// Headless validation uses this instead of the per-user path so a
+    /// deterministic scenario neither observes an existing save nor writes
+    /// one. Loading it produces [`SaveFileStatus::NoFlash`], which selects
+    /// the upstream no-save main menu.
+    pub(crate) const fn disabled() -> Self {
+        Self {
+            file: None,
+            session_counter: None,
+            session_bases: None,
+            session_status: None,
+        }
+    }
+
     /// The slot at [`engine::save::SaveFile::default_location`].
     ///
     /// An unresolvable path is logged once here and then behaves as
@@ -327,12 +342,7 @@ impl SaveSlot {
             },
             Err(err) => {
                 eprintln!("save: {err} -- this session cannot load or save");
-                Self {
-                    file: None,
-                    session_counter: None,
-                    session_bases: None,
-                    session_status: None,
-                }
+                Self::disabled()
             }
         }
     }
