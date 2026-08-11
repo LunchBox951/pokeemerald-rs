@@ -73,6 +73,32 @@
 //! ordinary Route 101 grass encounter still constructs with
 //! `first_battle = false` (`crates/pokeemerald-rs/src/flow/wild_encounter.rs`).
 //!
+//! # `BATTLE_TYPE_TRAINER`
+//!
+//! [`Battle::new_trainer`] (issue #237) is the trainer-battle constructor.
+//! It is a separate entry point rather than another `bool` on
+//! [`Battle::new`] because a trainer battle carries *state* a wild one does
+//! not: the opponent's bench, the trainer's `aiFlags`, and the prize purse,
+//! all owned by [`trainer::TrainerContext`]. [`trainer`]'s module docs
+//! enumerate the five deltas and cite each one upstream; the two that change
+//! this module's control flow are:
+//!
+//! - **Running is refused**, with [`BattleError::NoRunningFromTrainer`] —
+//!   a *different* upstream gate from `first_battle`'s
+//!   ([`BattleError::RunForbidden`]), tested earlier and printing a
+//!   different message, hence a distinct error.
+//! - **A fainted opponent does not end the battle.** The faint still emits
+//!   [`BattleEvent::Fainted`] and [`BattleEvent::ExpGained`] where it
+//!   always did, but the replacement is settled at the *end* of the turn,
+//!   in [`Battle::end_of_turn`] — upstream's `HandleFaintedMonActions`
+//!   position (`battle_main.c:3968`), so a mon that fainted earlier
+//!   in the turn is simply skipped when its slot in `gBattlerByTurnOrder`
+//!   comes up rather than being replaced mid-turn. With the bench empty,
+//!   that is where [`BattleEvent::MoneyGained`] and the win land.
+//!
+//! Everything else — turn order, damage, accuracy, PP, the escape formula's
+//! absence — is the same code the wild paths run.
+//!
 //! # RNG draw order
 //!
 //! The battle RNG is a single shared stream upstream, so *where* draws happen
@@ -168,20 +194,31 @@
 //! [`crate::critical`] and `crate::escape` for the other two `first_battle`
 //! deltas.
 //!
-//! Only single wild battles (one player mon, one wild mon, no switching, no
-//! doubles) are modelled: a player-mon faint ends the battle in defeat
-//! immediately rather than prompting a party switch.
+//! A trainer opponent's choice is neither of those: it is the real
+//! `AI_SCRIPT_*` scoring pipeline in this module's private [`trainer_ai`]
+//! submodule, narrowed to the four scripts and three move effects the Route
+//! 103 rival battle exercises and screened at [`Battle::new_trainer`] so
+//! nothing outside that narrowing can reach it. See that module's own docs
+//! for the per-script draw accounting.
+//!
+//! Only **single** battles are modelled (one player mon on the field, one
+//! opponent, no doubles). The player never switches: a player-mon faint ends
+//! the battle in defeat immediately rather than prompting a party switch,
+//! for a trainer battle exactly as for a wild one — the player's party is
+//! still one mon as far as this crate is concerned. The *opponent* does
+//! switch, but only when forced (see `BATTLE_TYPE_TRAINER` above).
 
 use std::error::Error;
 use std::fmt;
 
-use assets::MoveId;
+use assets::trainers::TrainerId;
+use assets::{MoveId, SpeciesId};
 
 use crate::damage::{BattleRng, STRUGGLE};
 use crate::dex::Dex;
 use crate::error::BattleError;
 use crate::escape::try_run_from_battle;
-use crate::exp::wild_faint_exp;
+use crate::exp::{trainer_faint_exp, wild_faint_exp};
 use crate::hit::{resolve_hit, HitOutcome};
 use crate::pokemon::{BattlePokemon, MAX_LEVEL};
 use crate::stat_change::{
@@ -191,9 +228,13 @@ use crate::stat_stage::StatStage;
 use crate::turn_order::{resolve_order, Order};
 
 pub(crate) mod opponent_ai;
+pub mod trainer;
+pub(crate) mod trainer_ai;
 use opponent_ai::{
     choose_enemy_action_first_battle, choose_enemy_move, selectable_slot, EnemyAction,
 };
+use trainer::TrainerContext;
+use trainer_ai::choose_trainer_action;
 
 /// The action the player commits to for a turn.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -336,8 +377,29 @@ pub enum BattleEvent {
         /// Which stat the move targeted.
         stat: LoweredStat,
     },
-    /// The player's mon gained experience for fainting the wild mon.
+    /// The trainer's active mon fainted and the next party member came out
+    /// in its place — upstream's forced post-faint switch
+    /// (`OpponentHandleChoosePokemon`,
+    /// `src/battle_controller_opponent.c:1621`), settled at the end of the
+    /// turn by [`Battle::end_of_turn`]. Only a
+    /// [`Battle::new_trainer`] battle can produce this.
+    TrainerSentOut {
+        /// The species that came out.
+        species: SpeciesId,
+        /// How many party members are still on the bench behind it.
+        bench_remaining: usize,
+    },
+    /// The player's mon gained experience for fainting the opposing mon.
     ExpGained(u32),
+    /// Beating a trainer paid out prize money — `Cmd_getmoneyreward`
+    /// (`src/battle_script_commands.c:5635`), whose
+    /// `AddMoney(&gSaveBlock1Ptr->money, ...)` this crate has no field to
+    /// perform. The amount is [`trainer::TrainerContext::money`]; crediting
+    /// it belongs to the integration layer, the same division of labour
+    /// [`BattleEvent::ExpGained`] follows. Always immediately before the
+    /// final [`BattleEvent::Ended`], and only for
+    /// [`BattleOutcome::PlayerWon`] against a trainer.
+    MoneyGained(u32),
     /// The battle reached a terminal outcome; no further turns are valid.
     Ended(BattleOutcome),
 }
@@ -486,19 +548,45 @@ pub struct Battle {
     run_tries: u8,
     random_turn_number: u16,
     outcome: Option<BattleOutcome>,
-    /// `gBattleTypeFlags & BATTLE_TYPE_FIRST_BATTLE` (issue #187): the
-    /// Route 101 intro Zigzagoon fight's three deltas from an ordinary wild
-    /// encounter — crit suppression ([`crate::critical`]/[`crate::hit`]),
-    /// running forbidden ([`crate::escape`]'s module docs), and the wild
-    /// opponent's AI-branch move choice (`opponent_ai::choose_enemy_action_first_battle`)
-    /// — all gated on this one flag, matching upstream's single
-    /// `gBattleTypeFlags` bit.
-    ///
-    /// Named `first_battle_flag`, not `first_battle`, only to satisfy
-    /// `clippy::struct_field_names` (a field ending in the struct's own
-    /// name); [`Battle::new`]'s parameter — the name that matters to a
-    /// caller — is still plain `first_battle`.
-    first_battle_flag: bool,
+    /// Which `gBattleTypeFlags` shape this battle is — the one place every
+    /// battle-type delta is gated, matching upstream having a single flag
+    /// word (see [`BattleKind`]).
+    kind: BattleKind,
+    /// `gBattleResults.battleTurnCounter` (`battle_main.c:3995`-`:3998`):
+    /// `0` throughout turn 1, then incremented by `BattleTurnPassed` at the
+    /// top of every later turn, saturating at `0xFF`. Only
+    /// `trainer_ai`'s `AI_SetupFirstTurn` reads it.
+    turn_counter: u8,
+    /// Whether any turn has begun. Turn 1 reaches action selection through
+    /// `TryDoEventsBeforeFirstTurn`, which does **not** touch
+    /// [`Battle::turn_counter`]; every later turn goes through
+    /// `BattleTurnPassed`, which does. Kept as its own flag rather than
+    /// re-derived from a turn count, which an aborted turn would skew.
+    turn_started: bool,
+}
+
+/// Which `gBattleTypeFlags` shape a [`Battle`] was constructed for.
+///
+/// Upstream has one flag word and tests bits of it at each decision point;
+/// this crate models the three *combinations* it can actually be handed as
+/// an enum, so a decision point that forgets a case fails to compile rather
+/// than silently taking the wild path `(oop-boundaries)`. The trainer arm
+/// carries a whole [`TrainerContext`] because a trainer battle needs state
+/// the other two do not: a bench, a prize purse, and `aiFlags`.
+#[derive(Debug, Clone)]
+enum BattleKind {
+    /// `gBattleTypeFlags == 0`: an ordinary wild encounter
+    /// (`DoStandardWildBattle`, `src/battle_setup.c:408`).
+    Wild,
+    /// `BATTLE_TYPE_FIRST_BATTLE` (issue #187): the scripted Route 101 intro
+    /// Zigzagoon fight — crit suppression
+    /// ([`crate::critical`]/[`crate::hit`]), running forbidden
+    /// ([`crate::escape`]'s module docs), and the wild opponent's AI-branch
+    /// move choice (`opponent_ai::choose_enemy_action_first_battle`).
+    FirstBattle,
+    /// `BATTLE_TYPE_TRAINER` (issue #237): see [`trainer`]'s module docs for
+    /// the five things this changes and where each one lives.
+    Trainer(TrainerContext),
 }
 
 impl Battle {
@@ -592,8 +680,129 @@ impl Battle {
             run_tries: 0,
             random_turn_number,
             outcome: None,
-            first_battle_flag: first_battle,
+            kind: if first_battle {
+                BattleKind::FirstBattle
+            } else {
+                BattleKind::Wild
+            },
+            turn_counter: 0,
+            turn_started: false,
         })
+    }
+
+    /// Start a `BATTLE_TYPE_TRAINER` battle (S-6, issue #237): the player's
+    /// lead against `party`, the opponent's whole `CreateNPCTrainerParty`
+    /// party in `gTrainers[].party` order, with `trainer`'s own metadata
+    /// driving the AI and the prize money.
+    ///
+    /// `party[0]` is the mon the trainer leads with (upstream sends out
+    /// party slot `0`; there is no lead-choice step for an NPC) and
+    /// everything after it becomes the bench
+    /// [`trainer::TrainerContext::send_out_next`] draws from. See
+    /// [`trainer`]'s module docs for the five deltas from a wild battle and
+    /// where each is implemented.
+    ///
+    /// # Two screens, both before the first draw
+    ///
+    /// Every party mon's moveset is checked twice over, because both checks
+    /// can only be honoured *ahead* of a battle rather than during one:
+    ///
+    /// * [`ensure_executable`] — can the turn engine run this move at all?
+    ///   The same screen [`Battle::new`] applies to the wild side, applied
+    ///   here to the whole party rather than just the lead: a benched mon
+    ///   arrives mid-battle, long after the shared stream has moved on, so
+    ///   discovering an unexecutable move then would mean a battle that
+    ///   cannot be finished.
+    /// * [`trainer_ai::ensure_scoreable`] — can the trainer AI *score* it?
+    ///   Strictly narrower, and separate on purpose: several unscored
+    ///   effects take `AI_CheckViability` branches that draw
+    ///   ([`trainer_ai`]'s module docs), so admitting one would leave the
+    ///   move executable but the RNG stream wrong.
+    ///
+    /// [`trainer_ai::ensure_supported_flags`] screens `gTrainers[].aiFlags`
+    /// the same way, for the same reason.
+    ///
+    /// Draws from `rng` exactly as [`Battle::new`] does once validation
+    /// passes — `BattleStartClearSetData`'s `gRandomTurnNumber`
+    /// (`battle_main.c:3140`) plus `TryDoEventsBeforeFirstTurn`'s
+    /// conditional Speed-tie draw — and nothing more: `CreateNPCTrainerParty`
+    /// runs *before* `BeginBattleIntro` upstream
+    /// (`CB2_InitBattleInternal`, `:697` then `:713`), so the party's own
+    /// construction draws belong to the caller that built it
+    /// (`crates/pokeemerald-rs/src/flow/route103_rival.rs`), exactly as the
+    /// scripted first battle's do.
+    ///
+    /// # Errors
+    ///
+    /// [`BattleError::EmptyTrainerParty`] for an empty `party`,
+    /// [`BattleError::UnknownTrainer`] for an id outside `gTrainers`,
+    /// [`BattleError::FaintedBattler`] if the player's lead or the
+    /// trainer's is already at `0` HP, and whatever the three screens above
+    /// report. None of them draws.
+    pub fn new_trainer(
+        dex: Dex,
+        player: BattlePokemon,
+        trainer: TrainerId,
+        mut party: Vec<BattlePokemon>,
+        rng: &mut impl BattleRng,
+    ) -> Result<Self, BattleError> {
+        if party.is_empty() {
+            return Err(BattleError::EmptyTrainerParty(trainer));
+        }
+        let data = trainer::trainer_data(trainer)?;
+        trainer_ai::ensure_supported_flags(data.ai_flags)?;
+        if player.is_fainted() {
+            return Err(BattleError::FaintedBattler(true));
+        }
+        if party[0].is_fainted() {
+            return Err(BattleError::FaintedBattler(false));
+        }
+        for mon in &party {
+            for slot in mon.moves() {
+                ensure_executable(&dex, slot.move_id)?;
+                trainer_ai::ensure_scoreable(&dex, slot.move_id)?;
+            }
+        }
+
+        let enemy = party.remove(0);
+        let random_turn_number = rng.next_u16();
+        // The same `TryDoEventsBeforeFirstTurn` seeding draw `Battle::new`
+        // takes; see its docs and the module docs' "RNG draw order".
+        let _ = resolve_order(0, 0, player.effective_speed(), enemy.effective_speed(), rng);
+        Ok(Self {
+            dex,
+            player,
+            enemy,
+            run_tries: 0,
+            random_turn_number,
+            outcome: None,
+            kind: BattleKind::Trainer(TrainerContext::new(trainer, data, party)),
+            turn_counter: 0,
+            turn_started: false,
+        })
+    }
+
+    /// The `BATTLE_TYPE_TRAINER` context — the opponent trainer's id, class,
+    /// `aiFlags`, remaining bench, and prize money — or `None` for a wild
+    /// battle of either kind.
+    #[must_use]
+    pub const fn trainer(&self) -> Option<&TrainerContext> {
+        match &self.kind {
+            BattleKind::Trainer(context) => Some(context),
+            BattleKind::Wild | BattleKind::FirstBattle => None,
+        }
+    }
+
+    /// Whether this is the scripted `BATTLE_TYPE_FIRST_BATTLE`
+    /// ([`Battle::new`]'s `first_battle`).
+    const fn is_first_battle(&self) -> bool {
+        matches!(self.kind, BattleKind::FirstBattle)
+    }
+
+    /// `gBattleResults.battleTurnCounter` — `0` for the whole of turn 1.
+    #[must_use]
+    pub const fn turn_counter(&self) -> u8 {
+        self.turn_counter
     }
 
     /// The player's mon.
@@ -750,8 +959,17 @@ impl Battle {
         // for the turn, so it leaves the battle and the shared RNG stream
         // exactly as they were -- see `crate::escape`'s module docs and
         // [`BattleError::RunForbidden`].
-        if self.first_battle_flag && matches!(player_action, PlayerAction::Run) {
-            return Err(BattleError::RunForbidden);
+        if matches!(player_action, PlayerAction::Run) {
+            match self.kind {
+                // Upstream tests BATTLE_TYPE_TRAINER *first*
+                // (`battle_main.c:4331`-`:4337`, BattleScript_PrintCantRunFromTrainer
+                // / STRINGID_NORUNNINGFROMTRAINERS), before
+                // IsRunningFromBattleImpossible is called at all -- so the
+                // two refusals stay distinct errors with distinct messages.
+                BattleKind::Trainer(_) => return Err(BattleError::NoRunningFromTrainer),
+                BattleKind::FirstBattle => return Err(BattleError::RunForbidden),
+                BattleKind::Wild => {}
+            }
         }
 
         // Validated before any draw. An out-of-range or PP-less slot has no
@@ -762,6 +980,17 @@ impl Battle {
             PlayerAction::Run => None,
             PlayerAction::UseMove(index) => Some((index, self.validate_player_move(index)?)),
         };
+
+        // BattleTurnPassed's `if (battleTurnCounter < 0xFF)
+        // battleTurnCounter++` (`battle_main.c:3995`-`:3998`), which runs
+        // for every turn *after* the first and lands immediately ahead of
+        // that turn's own turn-number draw. Turn 1 takes
+        // TryDoEventsBeforeFirstTurn's path instead, which never touches the
+        // counter -- so it reads 0 for the whole of turn 1.
+        if self.turn_started {
+            self.turn_counter = self.turn_counter.saturating_add(1);
+        }
+        self.turn_started = true;
 
         // `gRandomTurnNumber = Random()`: TryDoEventsBeforeFirstTurn
         // (`battle_main.c:3923`) on turn 1, BattleTurnPassed (`:4013`)
@@ -776,13 +1005,26 @@ impl Battle {
         // SetActionsAndBattlersTurnOrder looks at any of the choices --
         // true of both the ordinary rejection loop and the `first_battle`
         // AI branch alike.
-        let enemy_action = if self.first_battle_flag {
-            choose_enemy_action_first_battle(&self.enemy, &self.player, rng)
-        } else {
-            match choose_enemy_move(&self.enemy, rng) {
+        let enemy_action = match &self.kind {
+            BattleKind::FirstBattle => {
+                choose_enemy_action_first_battle(&self.enemy, &self.player, rng)
+            }
+            // `gTrainers[].aiFlags` was screened at `new_trainer`, so the
+            // only errors this can raise are unreachable ones -- they are
+            // propagated rather than unwrapped so a future caller that
+            // skipped the screen fails honestly instead of panicking.
+            BattleKind::Trainer(context) => choose_trainer_action(
+                &self.dex,
+                &self.enemy,
+                &self.player,
+                context.ai_flags(),
+                self.turn_counter,
+                rng,
+            )?,
+            BattleKind::Wild => match choose_enemy_move(&self.enemy, rng) {
                 Some(index) => EnemyAction::Move(index),
                 None => EnemyAction::Struggle,
-            }
+            },
         };
 
         let Some((index, player_move)) = player_move else {
@@ -844,25 +1086,71 @@ impl Battle {
         match order {
             Order::AttackerFirst => {
                 self.act(true, player_move, index, rng, events)?;
-                if self.outcome.is_some() {
-                    return Ok(());
+                // A battler that fainted earlier in the turn is skipped when
+                // its slot in `gBattlerByTurnOrder` comes up -- in a wild
+                // battle that is the same thing as the battle being over,
+                // but a trainer's fainted mon is only replaced at the *end*
+                // of the turn (`end_of_turn`), so the two tests are now
+                // distinct.
+                if self.outcome.is_none() && !self.enemy.is_fainted() {
+                    // If the enemy's action turns out to be the unexecutable
+                    // Struggle fallback, the player's events above are
+                    // already in `events` and stay there -- `take_turn`
+                    // returns them with the error rather than throwing away
+                    // a hit that really landed.
+                    self.enemy_acts(enemy_action, rng, events)?;
                 }
-                // If the enemy's action turns out to be the unexecutable
-                // Struggle fallback, the player's events above are already
-                // in `events` and stay there -- `take_turn` returns them
-                // with the error rather than throwing away a hit that
-                // really landed.
-                self.enemy_acts(enemy_action, rng, events)?;
             }
             Order::DefenderFirst => {
                 self.enemy_acts(enemy_action, rng, events)?;
-                if self.outcome.is_some() {
-                    return Ok(());
+                if self.outcome.is_none() && !self.player.is_fainted() {
+                    self.act(true, player_move, index, rng, events)?;
                 }
-                self.act(true, player_move, index, rng, events)?;
             }
         }
+        self.end_of_turn(events);
         Ok(())
+    }
+
+    /// `HandleFaintedMonActions` (`battle_util.c:1894`), reduced to the one
+    /// action this slice models: a trainer whose active mon fainted sends
+    /// out the next party member.
+    ///
+    /// Runs **after** both battlers' actions, not at the moment of the
+    /// faint, because that is where upstream puts it —
+    /// `RunTurnActionsFunctions` finishes the turn's actions and only then
+    /// hands off to `HandleFaintedMonActions` (`battle_util.c:1894`, called
+    /// from `BattleTurnPassed` at `battle_main.c:3968`). The
+    /// difference is observable: a Speed-tie turn where the player KOs the
+    /// trainer's lead still ends with the *fainted* mon on the field, not
+    /// its replacement taking a hit it never took upstream.
+    ///
+    /// A wild battle never reaches the body: the faint already set
+    /// [`BattleOutcome::PlayerWon`]. A trainer battle whose bench is empty
+    /// ends here instead, paying out [`trainer::TrainerContext::money`]
+    /// first — upstream's `Cmd_getmoneyreward`
+    /// (`battle_script_commands.c:5635`) runs after `Cmd_getexp`, which is
+    /// the order [`BattleEvent`]s come back in.
+    fn end_of_turn(&mut self, events: &mut Vec<BattleEvent>) {
+        if self.outcome.is_some() || !self.enemy.is_fainted() {
+            return;
+        }
+        let BattleKind::Trainer(context) = &mut self.kind else {
+            return;
+        };
+        if let Some(next) = context.send_out_next() {
+            let species = next.species();
+            let bench_remaining = context.bench_len();
+            self.enemy = next;
+            events.push(BattleEvent::TrainerSentOut {
+                species,
+                bench_remaining,
+            });
+            return;
+        }
+        let money = context.money();
+        events.push(BattleEvent::MoneyGained(money));
+        self.finish(events, BattleOutcome::PlayerWon);
     }
 
     /// One mover's whole action: `Cmd_attackcanceler`'s no-PP abort, PP
@@ -992,7 +1280,7 @@ impl Battle {
                 move_id,
                 attacker,
                 defender,
-                self.first_battle_flag,
+                self.is_first_battle(),
                 rng,
             )?
         };
@@ -1052,10 +1340,24 @@ impl Battle {
                         // event is emitted either.
                         if self.player.level() < MAX_LEVEL {
                             let base_exp = self.dex.species(self.enemy.species())?.base_exp;
-                            let exp = wild_faint_exp(base_exp, self.enemy.level());
+                            let level = self.enemy.level();
+                            // Cmd_getexp's `x1.5` trainer-battle bonus
+                            // (`:3378`-`:3379`) -- see `crate::exp`.
+                            let exp = if self.trainer().is_some() {
+                                trainer_faint_exp(base_exp, level)
+                            } else {
+                                wild_faint_exp(base_exp, level)
+                            };
                             events.push(BattleEvent::ExpGained(exp));
                         }
-                        self.finish(events, BattleOutcome::PlayerWon);
+                        // A wild battle ends the moment its only opponent
+                        // faints. A trainer's does not: the replacement (or
+                        // the trainer's defeat) is settled at the end of the
+                        // turn instead, in `end_of_turn`, exactly where
+                        // upstream's HandleFaintedMonActions sits.
+                        if self.trainer().is_none() {
+                            self.finish(events, BattleOutcome::PlayerWon);
+                        }
                     } else {
                         self.finish(events, BattleOutcome::PlayerLost);
                     }
