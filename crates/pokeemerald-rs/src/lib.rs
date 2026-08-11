@@ -61,9 +61,11 @@
 //! issue #245), which drives [`App`] through this exact chain -- title,
 //! new game, the protagonist's room, Route 101, the scripted fight, and the
 //! frame that concluded battle empties the slot on -- headlessly. That
-//! scenario reads coarse [`AppState`] milestones only, so it proves the
-//! fight ran and ended, not what it resolved to; the outcome itself is
-//! proved by `flow::overworld_phase`'s own tests.
+//! scenario reads coarse [`AppState`] milestones only, so it shows the
+//! fight ran and ended, not what it resolved to -- and no test pins that
+//! outcome either: `flow::overworld_phase`'s own tests drive the fight to
+//! conclusion through the real per-frame driver, then assert the frozen
+//! overworld and the lead handed back, never the `BattleOutcome` itself.
 //!
 //! [`music`] (S-3, issue #185) bridges the asset pack's song/voicegroup/
 //! sample entries into the `audio` crate's sequencer and owns the

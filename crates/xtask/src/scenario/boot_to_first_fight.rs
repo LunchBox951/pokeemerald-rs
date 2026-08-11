@@ -52,10 +52,15 @@
 //! nothing here asserts the `first battle: ended -- PlayerWon` diagnostic
 //! a real run prints to stderr
 //! (`pokeemerald_rs::flow::overworld_phase`'s `first_battle_trigger`).
-//! Building that channel is deliberately out of this scenario's scope;
-//! what the fight resolves *to* is proved where the vocabulary exists for
-//! it, in
-//! `pokeemerald_rs::flow::overworld_phase::tests::the_scripted_first_battle_plays_to_a_terminal_outcome_and_hands_the_lead_back`.
+//! Building that channel is deliberately out of this scenario's scope,
+//! and no test elsewhere closes the gap either. The closest,
+//! `pokeemerald_rs::flow::overworld_phase::tests::the_scripted_first_battle_plays_to_a_terminal_outcome_and_hands_the_lead_back`,
+//! drives the fight to conclusion through the real per-frame driver
+//! (`OverworldPhase::step` -> `advance_first_battle`) and then asserts the
+//! frozen overworld position and the lead's species -- but its loop, like
+//! this scenario's milestones, ends on an emptied battle slot, which the
+//! abort path reaches too. What the scripted first battle resolves *to* is
+//! currently pinned nowhere.
 //!
 //! # The route, tile by tile
 //!
@@ -176,10 +181,12 @@ const SEGMENTS: &[Segment] = &[
     // running this scenario against the real pack, and it reproduces only
     // because the whole run is deterministic: one fixed script off
     // `pokeemerald_rs::new_game::NEW_GAME_RNG_SEED`, so the battle always
-    // begins at one exact position in the new-game RNG stream. No unit
-    // test shares that position -- `OverworldPhase`'s own tests build a
-    // phase directly and reseed it, never drawing new-game's draws -- so
-    // no test elsewhere can stand in as the source of this number.
+    // begins at one exact position in the new-game RNG stream. No test
+    // anywhere asserts this three-frame count -- the closest,
+    // `pokeemerald_rs::flow::overworld_phase::tests::real_pack_crossing_into_route_101_lands_on_the_rescue_trigger_and_starts_the_battle`,
+    // drives an unbudgeted up-to-500-frame loop and never checks how many
+    // frames it took -- so no test elsewhere can stand in as the source of
+    // this number.
     //
     // It is deliberately a hard budget. Any change to the battle driver's
     // per-turn RNG draw counts or damage rolls shifts the fight's length,
@@ -214,9 +221,7 @@ const SEGMENTS: &[Segment] = &[
     // Release everything on one final frame and prove the overworld stays
     // put, the same convention `super::BOOT_TO_MAIN_MENU` ends on ("prove
     // the menu remains stable; otherwise a later scenario could inherit a
-    // held key and miss the next newly-pressed edge") -- here it also
-    // shows the returned-to overworld doesn't immediately walk back onto
-    // the trigger tile it just consumed.
+    // held key and miss the next newly-pressed edge").
     Segment {
         buttons: AppButtons::NONE,
         count: 1,
