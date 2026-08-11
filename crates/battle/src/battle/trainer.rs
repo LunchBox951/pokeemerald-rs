@@ -78,7 +78,7 @@ pub const MAX_PER_STAT_IVS: u16 = 31;
 pub const SHINY_ODDS: u16 = 8;
 
 /// `CreateNPCTrainerParty`'s per-mon IV derivation
-/// (`pokeemerald/src/battle_main.c:2014`): `fixedIV = partyData[i].iv *
+/// (`pokeemerald/src/battle_main.c:2013`): `fixedIV = partyData[i].iv *
 /// MAX_PER_STAT_IVS / 255`, a `u8` in `0..=31` applied to **every** stat
 /// alike (`CreateBoxMon`'s `fixedIV < USE_RANDOM_IVS` branch,
 /// `src/pokemon.c:2265`-`:2272`, sets all six from the one value and draws
