@@ -59,8 +59,11 @@
 //! module's docs carry the full deferral list). The crate-root re-exports
 //! back that hookup for `xtask`'s `boot-to-first-fight` scenario (I-7,
 //! issue #245), which drives [`App`] through this exact chain -- title,
-//! new game, the protagonist's room, Route 101, the scripted fight, and a
-//! played-out terminal outcome -- headlessly.
+//! new game, the protagonist's room, Route 101, the scripted fight, and the
+//! frame that concluded battle empties the slot on -- headlessly. That
+//! scenario reads coarse [`AppState`] milestones only, so it proves the
+//! fight ran and ended, not what it resolved to; the outcome itself is
+//! proved by `flow::overworld_phase`'s own tests.
 //!
 //! [`music`] (S-3, issue #185) bridges the asset pack's song/voicegroup/
 //! sample entries into the `audio` crate's sequencer and owns the

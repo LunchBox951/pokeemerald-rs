@@ -65,7 +65,7 @@ const BOOT_TO_MAIN_MENU: [ScenarioFrame; 2] = [
 /// adding that edge just for one constant would widen the dependency seam
 /// this crate deliberately keeps narrow. Sixteen rendered frames per tile
 /// crossing, matching every citation of the same constant in
-/// `crate::flow::overworld_phase`'s own real-pack tests.
+/// `pokeemerald_rs::flow::overworld_phase`'s own real-pack tests.
 const WALK_FRAMES_PER_TILE: usize = 16;
 
 /// One run of `count` consecutive frames holding `buttons`, all expecting

@@ -2,7 +2,7 @@
 //! main menu -> Birch's intro (skipped) -> the protagonist's own bedroom ->
 //! down the stairs -> through the house -> out onto Littleroot Town ->
 //! north onto Route 101's real rescue coord-event trigger tile ->
-//! `BATTLE_TYPE_FIRST_BATTLE` -> a played-out terminal outcome.
+//! `BATTLE_TYPE_FIRST_BATTLE` -> a concluded battle.
 //!
 //! Split out of `super` (`crate::scenario`) into its own file purely to
 //! keep that module under the `oop-boundaries` size guideline -- this is
@@ -11,7 +11,7 @@
 //! ([`super::Segment`]/[`super::expand_segments`]/[`super::ScenarioSpec`])
 //! every scenario shares.
 //!
-//! # The milestones this scenario can assert, and the one it can't
+//! # The milestones this scenario can assert, and the two it can't
 //!
 //! [`AppState`] is the only vocabulary a [`super::ScenarioDriver`] has, and
 //! its own doc comment was written with exactly this scenario in mind
@@ -19,19 +19,43 @@
 //! scripted fight rather than merely Route 101"). Issue #245's narrative
 //! scope names six milestones -- title reached, save menu answered,
 //! bedroom entered, first NPC dialog, Route 101 rescue trigger, first
-//! battle started, battle terminal state -- but [`AppState`] only
+//! battle started, battle concluded -- but [`AppState`] only
 //! distinguishes five of those: `Title`, `MainMenu`, `Intro`, `Overworld`
 //! (which "bedroom entered", "first NPC dialog", and "Route 101 rescue
 //! trigger" all fold into -- none of them changes the coarse flow state),
-//! `FirstBattle`, and `Overworld` again on the concluding frame. This port
-//! has no script/dialog engine yet
+//! `FirstBattle`, and `Overworld` again on the concluding frame. The
+//! honest result, asserted by this module's own tests: `[Title,
+//! MainMenu(NewGame), Intro, Overworld, FirstBattle, Overworld]`.
+//!
+//! Two named limitations follow from that vocabulary, and neither is
+//! papered over below.
+//!
+//! **No NPC-dialog milestone.** This port has no script/dialog engine yet
 //! (`pokeemerald_rs::flow::first_battle`'s own module docs, "no script
 //! engine"), so "first NPC dialog" has no state to distinguish even in
 //! principle -- the walk below still crosses the protagonist's own room
 //! and Route 101 exactly as the issue describes, it just cannot assert a
-//! milestone [`AppState`] has no variant for. The honest result, asserted
-//! by this module's own tests: `[Title, MainMenu(NewGame), Intro,
-//! Overworld, FirstBattle, Overworld]`.
+//! milestone [`AppState`] has no variant for.
+//!
+//! **No battle-*outcome* milestone.** The concluding frame asserts
+//! `AppState::Overworld`, which says only that the battle slot emptied --
+//! not that the player won, nor even that the battle produced an outcome
+//! at all. An **aborted** battle takes the identical `FirstBattle` ->
+//! `Overworld` path: per
+//! `pokeemerald_rs::flow::first_battle::advance_first_battle`'s own abort
+//! contract, a turn the engine cannot play empties the slot, writes the
+//! lead back, and returns `None` rather than an outcome -- the standing
+//! proof being
+//! `pokeemerald_rs::flow::overworld_phase::tests::an_aborted_first_battle_still_consumes_the_route_101_trigger`,
+//! which reaches exactly this state transition with no outcome behind it.
+//! [`super::Report`] has no outcome channel to carry the difference, so
+//! nothing here asserts the `first battle: ended -- PlayerWon` diagnostic
+//! a real run prints to stderr
+//! (`pokeemerald_rs::flow::overworld_phase`'s `first_battle_trigger`).
+//! Building that channel is deliberately out of this scenario's scope;
+//! what the fight resolves *to* is proved where the vocabulary exists for
+//! it, in
+//! `pokeemerald_rs::flow::overworld_phase::tests::the_scripted_first_battle_plays_to_a_terminal_outcome_and_hands_the_lead_back`.
 //!
 //! # The route, tile by tile
 //!
@@ -144,15 +168,36 @@ const SEGMENTS: &[Segment] = &[
     // `pokeemerald_rs::flow::first_battle::advance_first_battle` always
     // chooses the lead's first move slot (that module's own docs):
     // against `pokeemerald_rs::new_game::provisional_starter`'s Treecko
-    // and the scripted level-2 Zigzagoon opponent, off
-    // `pokeemerald_rs::new_game::NEW_GAME_RNG_SEED`, this always resolves
-    // in exactly three more driven frames -- the same deterministic-seed
-    // guarantee
-    // `pokeemerald_rs::flow::overworld_phase::tests::real_pack_crossing_into_route_101_lands_on_the_rescue_trigger_and_starts_the_battle`
-    // rests its own three-frame budget on. Which button is held here
-    // doesn't matter -- `OverworldPhase::advance_first_battle_frame` owns
-    // the whole frame once a first battle is running -- `RIGHT` only
-    // mirrors that same real-pack test's own choice.
+    // and the scripted level-2 Zigzagoon opponent, the fight resolves in
+    // exactly three `FirstBattle` frames -- the trigger's own landing
+    // frame, plus the two driven here.
+    //
+    // That `3` is **empirically pinned, not derived**. It was measured by
+    // running this scenario against the real pack, and it reproduces only
+    // because the whole run is deterministic: one fixed script off
+    // `pokeemerald_rs::new_game::NEW_GAME_RNG_SEED`, so the battle always
+    // begins at one exact position in the new-game RNG stream. No unit
+    // test shares that position -- `OverworldPhase`'s own tests build a
+    // phase directly and reseed it, never drawing new-game's draws -- so
+    // no test elsewhere can stand in as the source of this number.
+    //
+    // It is deliberately a hard budget. Any change to the battle driver's
+    // per-turn RNG draw counts or damage rolls shifts the fight's length,
+    // and the scenario fails closed on one of these frames with a
+    // `super::ScenarioError::Milestone` mismatch (`FirstBattle` where
+    // `Overworld` was expected, or the reverse) rather than silently
+    // passing. When that happens, re-derive the budget by running the
+    // scenario itself -- `cargo run -p xtask --features scenario --
+    // scenario --name boot-to-first-fight` names the mismatching frame --
+    // and adjust the counts below; the battle driver's own draw counts are
+    // the moving part, nothing on the walk above.
+    //
+    // Which button is held here doesn't matter --
+    // `OverworldPhase::advance_first_battle_frame` owns the whole frame
+    // once a first battle is running -- `RIGHT` only mirrors the choice
+    // made by
+    // `pokeemerald_rs::flow::overworld_phase::tests::real_pack_crossing_into_route_101_lands_on_the_rescue_trigger_and_starts_the_battle`,
+    // which drives its own (unbudgeted, up-to-500-frame) loop the same way.
     Segment {
         buttons: AppButtons::RIGHT,
         count: 2,
@@ -163,6 +208,17 @@ const SEGMENTS: &[Segment] = &[
     // `AppState::Overworld` again").
     Segment {
         buttons: AppButtons::RIGHT,
+        count: 1,
+        expected: AppState::Overworld,
+    },
+    // Release everything on one final frame and prove the overworld stays
+    // put, the same convention `super::BOOT_TO_MAIN_MENU` ends on ("prove
+    // the menu remains stable; otherwise a later scenario could inherit a
+    // held key and miss the next newly-pressed edge") -- here it also
+    // shows the returned-to overworld doesn't immediately walk back onto
+    // the trigger tile it just consumed.
+    Segment {
+        buttons: AppButtons::NONE,
         count: 1,
         expected: AppState::Overworld,
     },
@@ -189,9 +245,10 @@ mod tests {
     /// menu -> intro -> overworld handoff, and that exactly one landing
     /// frame plus two driven turns report `FirstBattle` before the
     /// concluding frame drops back to `Overworld` -- the same three-frame
-    /// battle budget [`super::SEGMENTS`]' own doc comment cites. Guards the
-    /// script's own self-consistency without a pack; the real-pack ignored
-    /// test below is the actual behavioural proof.
+    /// battle budget [`super::SEGMENTS`]' own doc comment pins
+    /// empirically. Guards the script's own self-consistency without a
+    /// pack; the real-pack ignored test below is the actual behavioural
+    /// proof.
     #[test]
     fn boot_to_first_fight_script_has_the_expected_shape() {
         let frames = spec(ScenarioName::BootToFirstFight).frames;
@@ -202,7 +259,8 @@ mod tests {
             + WALK_FRAMES_PER_TILE // clear the door's fencing
             + WALK_FRAMES_PER_TILE * 6 // east to the walkable column
             + WALK_FRAMES_PER_TILE * 10 // north to, and across, the edge
-            + 3; // the battle: two driven turns plus the terminal frame
+            + 3 // the battle: two driven turns plus the concluding frame
+            + 1; // the trailing button-release frame
         assert_eq!(frames.len(), expected_total);
 
         assert_eq!(frames[0].buttons, AppButtons::START);
@@ -223,10 +281,16 @@ mod tests {
             first_battle_frames, 3,
             "the trigger's landing frame plus two more driven turns"
         );
+        let last = frames.last().expect("the script is non-empty");
         assert_eq!(
-            frames.last().expect("the script is non-empty").expected,
+            last.expected,
             AppState::Overworld,
             "the battle's concluding frame must report Overworld again"
+        );
+        assert_eq!(
+            last.buttons,
+            AppButtons::NONE,
+            "the script ends on a released frame, like BOOT_TO_MAIN_MENU"
         );
     }
 

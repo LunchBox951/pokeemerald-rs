@@ -319,8 +319,10 @@ pub enum ScenarioName {
     /// Boot the real title screen and press Start into the no-save main menu.
     BootToMainMenu,
     /// Boot to the title, start a new game, walk the protagonist's room and
-    /// Route 101, trigger `BATTLE_TYPE_FIRST_BATTLE`, and play it to a
-    /// terminal outcome (I-7, issue #245).
+    /// Route 101, trigger `BATTLE_TYPE_FIRST_BATTLE`, and drive it until the
+    /// battle slot empties (I-7, issue #245) -- which proves the fight ran
+    /// and concluded, not what it resolved to (that scenario's own docs,
+    /// "no battle-*outcome* milestone").
     BootToFirstFight,
 }
 
