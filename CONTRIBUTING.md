@@ -90,7 +90,8 @@ CI enforces all four on every PR:
 ```bash
 cargo build --release --workspace
 cargo test --workspace
-cargo clippy --all-targets --workspace -- -D warnings
+cargo clippy --workspace --all-targets --locked -- -D warnings
+cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
 cargo fmt --check
 ```
 
