@@ -14,7 +14,13 @@
 //! (never the real title screen) so that suite's no-local-pack CI behaviour
 //! stays exactly as it was before I-2 -- see [`crate::title`]'s module docs
 //! for the real title screen, which only [`App::new`] (the real windowed
-//! entry point) composes.
+//! entry point) and [`App::new_headless_real`] compose.
+//!
+//! [`App::set_headless_buttons`] and [`App::state`] complete the F-3
+//! scenario seam: a runner supplies per-frame held buttons to the null
+//! platform, calls the unchanged production [`App::step`] entry point, and
+//! asserts stable high-level [`AppState`] milestones without gaining access
+//! to the owned flow scenes.
 //!
 //! # Animating the real title screen (I-2, issue #116)
 //!
@@ -39,11 +45,13 @@
 //! its "log-or-ignore is fine" failure policy for a transition's own pack
 //! load.
 //!
-//! [`App`] also owns the session's save medium (I-6, issue #214): the
-//! [`SaveSlot`] it hands to every [`crate::flow::advance_scene`] call, and to
-//! [`crate::flow::save_on_exit`] on the one frame [`App::step`] observes a
-//! close request. That shutdown write is the only place this shell touches
-//! save state directly -- see [`crate::flow`]'s module docs for both ends.
+//! [`App`] also owns the session's save medium (I-6, issues #214/#232): the
+//! [`SaveSlot`] it hands to every [`crate::flow::advance_scene`] call. This
+//! shell never touches save state itself -- the boot read happens on the
+//! `Title` -> `MainMenu` transition and the write behind the field start
+//! menu's `SAVE` action, both inside [`crate::flow`] (see its module docs
+//! for both ends). Closing the window writes nothing, exactly as closing a
+//! GBA's lid does.
 //!
 //! # The headless real-boot check (I-2, issues #168 and #175)
 //!
@@ -59,7 +67,7 @@
 //! module's `tests` submodule:
 //!
 //! - `tests::real_pack_boots_to_the_title_screen_through_app_boot` reaches
-//!   `boot` via `App::new_headless_real_title`, i.e. with
+//!   `boot` via [`App::new_headless_real`], i.e. with
 //!   `Platform::new_headless`, so every construction step [`App::new`]
 //!   performs runs under test. The one line it cannot run is `Platform::new`
 //!   itself: no CI job may open an OS window.
@@ -113,6 +121,7 @@ use platform::{ButtonState, Buttons, Frame, Platform, PlatformError};
 use crate::flow::{self, AnimatedTitle, AppScene};
 use crate::frame::to_platform_frame;
 use crate::game_save::SaveSlot;
+use crate::main_menu::MainMenuItem;
 use crate::music::MusicPlayer;
 use crate::scene::BootScene;
 use crate::title::{self, TitleSceneError};
@@ -168,6 +177,44 @@ impl From<TitleSceneError> for AppError {
     }
 }
 
+/// A stable, read-only milestone in the running [`App`] flow.
+///
+/// Scenarios assert these states after driving the production
+/// [`App::step`] loop; the owned scene objects remain private. Battle
+/// variants distinguish the two modes that temporarily freeze overworld
+/// movement, which lets I-7's future `boot-to-first-fight` scenario prove
+/// it reached the scripted fight rather than merely Route 101.
+///
+/// The battle variants share one edge-frame timing a scenario script must
+/// account for: the fight is scheduled at the end of the [`App::step`]
+/// call whose movement triggered it (before any turn has run), so that
+/// landing frame already reports [`AppState::WildBattle`] /
+/// [`AppState::FirstBattle`] -- and the step that plays the battle's final
+/// turn also clears the battle slot as it resolves, so the concluding
+/// frame reports [`AppState::Overworld`] again. Assert battle states on
+/// the triggering frame, not on the frame the fight finishes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AppState {
+    /// The pack-free synthetic scene built by [`App::new_headless`].
+    SyntheticBoot,
+    /// The real animated title screen.
+    Title,
+    /// The main menu and its current selection.
+    MainMenu(MainMenuItem),
+    /// Birch's new-game introduction.
+    Intro,
+    /// The introduction finished, but loading the overworld failed.
+    OverworldLoadFailed,
+    /// Ordinary overworld movement and interactions.
+    Overworld,
+    /// A random wild encounter is running inside the overworld phase
+    /// (edge-frame timing: enum docs above).
+    WildBattle,
+    /// Route 101's scripted first battle is running inside the overworld
+    /// phase (edge-frame timing: enum docs above).
+    FirstBattle,
+}
+
 /// The GBA button names in [`Buttons`] bit order, used only to format a
 /// human-readable input log line (see [`describe_newly_pressed`]).
 const BUTTON_NAMES: [(Buttons, &str); 10] = [
@@ -199,11 +246,12 @@ pub struct App {
     /// section) -- `None` for a headless `App` (module docs), whose
     /// [`BootScene`] frame never changes.
     scene: Option<AppScene>,
-    /// This session's save medium (I-6, issue #214): read by the `Title` ->
-    /// `MainMenu` transition, written by [`flow::save_on_exit`] on the way
-    /// out. Owned here, at the one place with a whole-session lifetime, and
-    /// passed down `(oop-boundaries)` -- upstream's equivalent is flash plus
-    /// the `gSaveCounter`/`gLastWrittenSector` globals.
+    /// This session's save medium (I-6, issues #214/#232): read by the
+    /// `Title` -> `MainMenu` transition, written by the field start menu's
+    /// `SAVE` action. Owned here, at the one place with a whole-session
+    /// lifetime, and passed down `(oop-boundaries)` -- upstream's
+    /// equivalent is flash plus the `gSaveCounter`/`gLastWrittenSector`
+    /// globals.
     save_slot: SaveSlot,
     /// This session's title-screen BGM (S-3, issue #185): `Some` for exactly
     /// as long as [`AppScene::Title`] is the active scene (see
@@ -244,19 +292,23 @@ impl App {
     /// and its headless counterparts cannot drift apart in what they store
     /// `(oop-boundaries)` -- and so this struct literal is code the I-2
     /// real-boot check (module docs) runs.
-    fn assemble(platform: Platform, (frame, scene): (Box<Frame>, AppScene)) -> Self {
+    fn assemble(
+        platform: Platform,
+        (frame, scene): (Box<Frame>, AppScene),
+        save_slot: SaveSlot,
+    ) -> Self {
         Self {
             platform,
             frame,
             scene: Some(scene),
-            save_slot: SaveSlot::default_location(),
+            save_slot,
             music: None,
         }
     }
 
     /// The whole of [`App::new`]'s body: load and compose the real title
     /// screen (I-2), open a platform backend via `open_platform`, and
-    /// assemble the two into a running `App`.
+    /// assemble the two around the save medium from `open_save_slot`.
     ///
     /// Loads *before* calling `open_platform`, so a missing pack (or any
     /// other title-screen error) is surfaced cleanly without ever flashing a
@@ -274,11 +326,13 @@ impl App {
     /// event loop could not be created) otherwise.
     fn boot(
         open_platform: impl FnOnce() -> Result<Platform, PlatformError>,
+        open_save_slot: impl FnOnce() -> SaveSlot,
     ) -> Result<Self, AppError> {
-        // Load first: no window is opened if the pack is missing.
+        // Load first: no window or save medium is opened if the pack is
+        // missing.
         let loaded = compose_title_scene(title::load_default()?);
         let platform = open_platform()?;
-        Ok(Self::assemble(platform, loaded))
+        Ok(Self::assemble(platform, loaded, open_save_slot()))
     }
 
     /// Load the real title screen (I-2) from the local asset pack, then open
@@ -302,29 +356,47 @@ impl App {
     /// run) or is otherwise malformed; [`AppError::Platform`] if the
     /// platform's windowing event loop could not be created.
     pub fn new(title: impl Into<String>) -> Result<Self, AppError> {
-        let mut app = Self::boot(|| Platform::new(title))?;
+        let mut app = Self::boot(|| Platform::new(title), SaveSlot::default_location)?;
         app.music = Self::start_title_music(|| {
             platform::AudioOutput::open(crate::music::RING_CAPACITY_FRAMES)
         });
         Ok(app)
     }
 
-    /// Test-only: [`App::boot`] -- [`App::new`]'s own body -- with
-    /// `platform`'s headless/null backend substituted for a real window, the
-    /// I-2 real-boot check's constructor (module docs). Also attempts to
-    /// start the title BGM against `platform`'s headless/null audio backend
-    /// (mirroring [`App::new`]'s real path, minus the real device), so the
-    /// I-2 real-boot check's own frame assertions run against exactly the
-    /// same per-step body [`App::new`] does.
+    /// Load the real title screen and game-flow state through [`App::boot`]
+    /// while substituting `platform`'s headless/null backend for a real
+    /// window.
+    ///
+    /// This is the scripted-scenario counterpart to [`App::new`]: it runs
+    /// the same pack load, scene construction, [`App::step`] transitions,
+    /// and presentation calls without opening a display or pacing against
+    /// wall time. Persistence is deliberately disabled so a scenario
+    /// always starts on the no-save menu and never reads or writes a
+    /// player's save file. No BGM is started either -- a scenario asserts
+    /// frames, not audio, and [`App::new`] alone owns the real device.
     ///
     /// # Errors
     ///
     /// Returns [`AppError::Title`] under the same conditions as
     /// [`App::new`] -- most commonly [`TitleSceneError::is_pack_missing`]
     /// when no local asset pack has been extracted yet.
+    pub fn new_headless_real() -> Result<Self, AppError> {
+        Self::boot(|| Ok(Platform::new_headless()), SaveSlot::disabled)
+    }
+
+    /// Test-only: [`App::new_headless_real`] with the title BGM started
+    /// against `platform`'s null audio backend (mirroring [`App::new`]'s
+    /// real path, minus the real device), so the I-2 real-boot check's
+    /// music assertions run against exactly the same per-step body
+    /// [`App::new`] does.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AppError::Title`] under the same conditions as
+    /// [`App::new`].
     #[cfg(test)]
     fn new_headless_real_title() -> Result<Self, AppError> {
-        let mut app = Self::boot(|| Ok(Platform::new_headless()))?;
+        let mut app = Self::boot(|| Ok(Platform::new_headless()), SaveSlot::disabled)?;
         app.music = Self::start_title_music(|| {
             Ok(platform::AudioOutput::null(
                 crate::music::RING_CAPACITY_FRAMES,
@@ -374,7 +446,7 @@ impl App {
             platform: Platform::new_headless(),
             frame: compose_boot_frame(),
             scene: None,
-            save_slot: SaveSlot::default_location(),
+            save_slot: SaveSlot::disabled(),
             music: None,
         }
     }
@@ -385,7 +457,11 @@ impl App {
     /// [`App::new`] always opens one).
     #[cfg(test)]
     fn new_headless_animated(scene: title::TitleScene) -> Self {
-        Self::assemble(Platform::new_headless(), compose_title_scene(scene))
+        Self::assemble(
+            Platform::new_headless(),
+            compose_title_scene(scene),
+            SaveSlot::disabled(),
+        )
     }
 
     /// Run the frame loop until the window is closed or Escape is pressed
@@ -432,19 +508,10 @@ impl App {
     /// fails.
     pub fn step(&mut self) -> Result<bool, AppError> {
         if !self.platform.pump()? {
-            // I-6's write trigger, and the only one this slice ships: on the
-            // way out, persist whatever save state the current scene holds.
-            // See `flow::save_on_exit` for why this stands in for upstream's
-            // start-menu SAVE flow, and why a failure here is logged rather
-            // than turned into an `AppError` -- the window is already
-            // closing, and there is nothing left to show a diagnostic on.
-            if let Some(Err(err)) = self
-                .scene
-                .as_ref()
-                .and_then(|scene| flow::save_on_exit(scene, &mut self.save_slot))
-            {
-                eprintln!("save: {err} -- the game was not saved on exit");
-            }
+            // Nothing is written on the way out (module docs): upstream's
+            // only save is the player's own `START` -> `SAVE`, and a
+            // closed window is a powered-off GBA. Issue #214's
+            // save-on-exit stand-in is gone with issue #232's start menu.
             return Ok(false);
         }
         let buttons = *self.platform.buttons();
@@ -502,6 +569,44 @@ impl App {
         music.advance_frame();
         if music.fade_finished() {
             self.music = None;
+        }
+    }
+
+    /// Set the buttons the headless backend will report as held on its next
+    /// and subsequent [`step`](Self::step) calls.
+    ///
+    /// Supply [`Buttons::NONE`] for a release frame. Input still flows
+    /// through `Platform::pump` and its normal held/newly-pressed edge
+    /// calculation; this method does not call the flow state machine
+    /// directly.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AppError::Platform`] wrapping
+    /// [`PlatformError::ScriptedInputRequiresHeadless`] for an app created
+    /// with [`App::new`].
+    pub fn set_headless_buttons(&mut self, buttons: Buttons) -> Result<(), AppError> {
+        self.platform.set_headless_buttons(buttons)?;
+        Ok(())
+    }
+
+    /// Return the current high-level game-flow milestone without exposing
+    /// the mutable scene objects that own it.
+    #[must_use]
+    pub fn state(&self) -> AppState {
+        match self.scene.as_ref() {
+            None => AppState::SyntheticBoot,
+            Some(AppScene::Title(_)) => AppState::Title,
+            Some(AppScene::MainMenu(menu)) => AppState::MainMenu(menu.scene.selected()),
+            Some(AppScene::Intro(_)) => AppState::Intro,
+            Some(AppScene::OverworldLoadFailed(_)) => AppState::OverworldLoadFailed,
+            Some(AppScene::Overworld(phase)) if phase.is_first_battle_active() => {
+                AppState::FirstBattle
+            }
+            Some(AppScene::Overworld(phase)) if phase.is_wild_battle_active() => {
+                AppState::WildBattle
+            }
+            Some(AppScene::Overworld(_)) => AppState::Overworld,
         }
     }
 

@@ -20,6 +20,9 @@
 //! connective tissue between the title screen and the overworld: [`App`]'s
 //! real (windowed) path now drives title -> main menu -> intro -> overworld
 //! as one state machine (see `app`'s module docs' "Game flow" section).
+//! [`App::new_headless_real`], [`App::set_headless_buttons`], and
+//! [`App::state`] expose that same state machine to deterministic xtask
+//! scenarios without opening a separate transition path (F-3, issue #233).
 //! [`new_game`] holds the pure new-game state (spawn position, default
 //! player identity, fresh [`engine::save`] blocks) both [`main_menu`] and
 //! [`intro`] ultimately hand off to.
@@ -29,11 +32,18 @@
 //! handoff from a rolled species/level to a real `battle::Battle` lives in
 //! `flow::wild_encounter`, headless for now — there is no battle scene yet.
 //!
-//! [`game_save`](crate::game_save) closes the loop (I-6, issue #214): the
-//! overworld's live `SaveBlock1`/`SaveBlock2` are written to a real save
-//! file on the way out, and read back at boot so the main menu can offer
-//! `CONTINUE` — upstream's `LoadGameSave`/`TrySavingData` pair, over
-//! `engine::save`'s existing sector serialization.
+//! [`game_save`](crate::game_save) closes the loop (I-6, issues
+//! #214/#232): the overworld's live `SaveBlock1`/`SaveBlock2` are written
+//! to a real save file when the player saves, and read back at boot so the
+//! main menu can offer `CONTINUE` — upstream's
+//! `LoadGameSave`/`TrySavingData` pair, over `engine::save`'s existing
+//! sector serialization. The write is reached the way upstream reaches it:
+//! `START` in the overworld opens the field
+//! [`start_menu`](crate::start_menu), whose `SAVE` action runs
+//! `src/start_menu.c`'s confirm/overwrite chain. [`party`](crate::party)
+//! is the `gPlayerParty` <-> `SaveBlock1::playerParty` encoder that save
+//! and continue are bracketed by, so a continued session fights with the
+//! mon that was saved.
 //!
 //! [`start_first_battle`]/[`advance_first_battle`] (`flow::first_battle`,
 //! issue #221) are the scripted `BATTLE_TYPE_FIRST_BATTLE` Zigzagoon fight's
@@ -65,15 +75,18 @@ pub mod main_menu;
 pub mod music;
 pub mod new_game;
 pub mod overworld;
+mod party;
 pub mod scene;
+mod start_menu;
 mod textbox;
 pub mod title;
 
-pub use app::App;
+pub use app::{App, AppState};
 pub use flow::first_battle::{
     advance_first_battle, start_first_battle, FIRST_BATTLE_OPPONENT_LEVEL,
     FIRST_BATTLE_OPPONENT_SPECIES,
 };
+pub use platform::Buttons as AppButtons;
 
 /// Real-pack pinning tests for extraction pipelines that don't yet have a
 /// runtime consumer of their own in this crate (currently just

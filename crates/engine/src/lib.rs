@@ -16,8 +16,9 @@
 //!   var storage with the `VARS_START` offset, and the temp/special id-space
 //!   semantics (issue #65).
 //! - [`save`] — upstream-offset-compatible `SaveBlock1`/`SaveBlock2` models
-//!   for identity, location/warps, party Pokémon, money, bag contents, and
-//!   [`event_data`] flags/vars, plus a checksummed rotating two-slot store
+//!   for identity, location/warps, party Pokémon, money, bag contents,
+//!   [`event_data`] flags/vars, and the player object event's saved facing
+//!   ([`save::SavedObjectEvent`], issue #232), plus a checksummed rotating two-slot store
 //!   faithful to upstream's flash layout (issues #94/#117), and that store's
 //!   on-disk home ([`save::file`], issue #214): a per-OS save path derived
 //!   from `std::env` alone, plus atomic read/write of the whole flash image.

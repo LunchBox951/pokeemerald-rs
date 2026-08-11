@@ -7,7 +7,7 @@
 //! `(lean-docs)`. Tests needing an extracted asset pack are `#[ignore]`d and
 //! run by CI's `real-pack` job.
 
-use super::{describe_newly_pressed, App, AppError};
+use super::{describe_newly_pressed, App, AppError, AppState, SaveSlot};
 use platform::{ButtonState, Buttons};
 
 /// The animated path's `frame()` contract (I-2): after every step,
@@ -94,7 +94,7 @@ fn real_pack_boots_to_the_title_screen_through_app_boot() {
          below would pass for an App running one tick ahead"
     );
 
-    let mut app = App::new_headless_real_title().expect("run `cargo xtask extract` first");
+    let mut app = App::new_headless_real().expect("run `cargo xtask extract` first");
 
     assert_eq!(
         app.frame().to_vec(),
@@ -193,15 +193,26 @@ fn boot_opens_no_platform_when_the_title_screen_fails_to_load() {
         return;
     }
     let mut opened = false;
-    let Err(err) = App::boot(|| {
-        opened = true;
-        Ok(platform::Platform::new_headless())
-    }) else {
+    let mut save_opened = false;
+    let Err(err) = App::boot(
+        || {
+            opened = true;
+            Ok(platform::Platform::new_headless())
+        },
+        || {
+            save_opened = true;
+            SaveSlot::disabled()
+        },
+    ) else {
         panic!("with no pack extracted, boot must fail");
     };
     assert!(
         !opened,
         "boot must not open a platform when the title load failed"
+    );
+    assert!(
+        !save_opened,
+        "boot must not open a save medium when the title load failed"
     );
     assert!(matches!(err, AppError::Title(_)), "got: {err}");
 }
@@ -214,7 +225,10 @@ fn boot_opens_no_platform_when_the_title_screen_fails_to_load() {
 #[test]
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
 fn real_pack_boot_propagates_a_platform_opener_error() {
-    let Err(err) = App::boot(|| Err(platform::PlatformError::NoAudioDevice)) else {
+    let Err(err) = App::boot(
+        || Err(platform::PlatformError::NoAudioDevice),
+        SaveSlot::disabled,
+    ) else {
         panic!("the opener failed, so boot must fail");
     };
     assert!(matches!(err, AppError::Platform(_)), "got: {err}");
@@ -223,9 +237,25 @@ fn real_pack_boot_propagates_a_platform_opener_error() {
 #[test]
 fn headless_frame_is_non_blank() {
     let app = App::new_headless();
+    assert_eq!(app.state(), AppState::SyntheticBoot);
     assert!(
         app.frame().iter().any(|&pixel| pixel != 0),
         "the composed boot scene must produce a non-blank frame"
+    );
+}
+
+#[test]
+#[ignore = "needs a local pack: run `cargo xtask extract` first"]
+fn real_headless_app_reports_title_then_selected_main_menu() {
+    let mut app = App::new_headless_real().expect("run `cargo xtask extract` first");
+    assert_eq!(app.state(), AppState::Title);
+
+    app.set_headless_buttons(Buttons::START)
+        .expect("headless input injection succeeds");
+    assert!(app.step().expect("headless step never errors"));
+    assert_eq!(
+        app.state(),
+        AppState::MainMenu(crate::main_menu::MainMenuItem::NewGame)
     );
 }
 

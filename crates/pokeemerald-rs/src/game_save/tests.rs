@@ -3,10 +3,18 @@
 //!
 //! Every test drives its own scratch file under `std::env::temp_dir()`,
 //! removed on drop; none reads or writes the real per-user save.
+//!
+//! Every write states the [`SaveLineage`] of the session it stands for
+//! (that type's docs). Fixture writes that merely *stage a file* use
+//! [`SaveLineage::Continued`]: on an empty or self-written image the two
+//! lineages are indistinguishable -- there is no previous trainer's base to
+//! drop -- and the continued one is what leaves a planted deferred byte
+//! observable. The tests where the choice is the whole point say
+//! [`SaveLineage::NewGame`] and assert on the bytes.
 
 use engine::save::{SaveBlock1, SaveBlock2, SaveFile, SaveFileError, SaveStore};
 
-use super::{SaveFileStatus, SaveSlot};
+use super::{SaveFileStatus, SaveLineage, SaveSlot};
 
 /// A scratch save path, removed on drop (including on unwind).
 struct TempSave {
@@ -36,14 +44,9 @@ impl Drop for TempSave {
 }
 
 /// A slot with no resolvable path -- upstream's `gFlashMemoryPresent !=
-/// TRUE`. Built by hand because [`SaveSlot::default_location`] can only
-/// produce it on a host with no data-directory environment at all.
+/// TRUE`, and the save-isolated medium headless validation uses.
 fn no_flash_slot() -> SaveSlot {
-    SaveSlot {
-        file: None,
-        session_counter: None,
-        session_bases: None,
-    }
+    SaveSlot::disabled()
 }
 
 // -- `gSaveFileStatus` -> `tMenuType` (main_menu.c:641-670) ---------------
@@ -91,7 +94,8 @@ fn a_written_slot_loads_back_ok_with_its_blocks() {
         ..SaveBlock1::default()
     };
 
-    slot.store(&block1, &block2).unwrap();
+    slot.store(&block1, &block2, SaveLineage::Continued)
+        .unwrap();
 
     let saved = slot.load();
     assert_eq!(saved.status, SaveFileStatus::Ok);
@@ -127,7 +131,11 @@ fn saving_over_an_unreadable_file_fails_instead_of_destroying_it() {
 
     let err = temp
         .slot()
-        .store(&SaveBlock1::default(), &SaveBlock2::default())
+        .store(
+            &SaveBlock1::default(),
+            &SaveBlock2::default(),
+            SaveLineage::Continued,
+        )
         .unwrap_err();
     assert!(matches!(err, SaveFileError::BadLength { .. }));
     assert_eq!(std::fs::read(&temp.path).unwrap(), b"not a save file");
@@ -136,7 +144,11 @@ fn saving_over_an_unreadable_file_fails_instead_of_destroying_it() {
 #[test]
 fn saving_without_a_resolvable_path_reports_it_rather_than_pretending_to_save() {
     let err = no_flash_slot()
-        .store(&SaveBlock1::default(), &SaveBlock2::default())
+        .store(
+            &SaveBlock1::default(),
+            &SaveBlock2::default(),
+            SaveLineage::Continued,
+        )
         .unwrap_err();
     assert!(matches!(err, SaveFileError::NoDataDirectory));
 }
@@ -159,7 +171,8 @@ fn consecutive_saves_advance_the_save_counter_and_alternate_slots() {
             money,
             ..SaveBlock1::default()
         };
-        slot.store(&block1, &block2).unwrap();
+        slot.store(&block1, &block2, SaveLineage::Continued)
+            .unwrap();
 
         let mut store = SaveFile::at(&temp.path).read().unwrap().unwrap();
         let outcome = store.load();
@@ -181,8 +194,12 @@ fn consecutive_saves_advance_the_save_counter_and_alternate_slots() {
 fn a_damaged_lone_save_falls_back_to_the_no_save_menu() {
     let temp = TempSave::new("corrupt");
     let mut slot = temp.slot();
-    slot.store(&SaveBlock1::default(), &SaveBlock2::default())
-        .unwrap();
+    slot.store(
+        &SaveBlock1::default(),
+        &SaveBlock2::default(),
+        SaveLineage::Continued,
+    )
+    .unwrap();
 
     // Flip one payload byte of the slot that first save actually wrote.
     // `gSaveCounter` advances to 1 before the write and its parity selects
@@ -210,7 +227,9 @@ fn the_file_is_the_stores_flash_image_verbatim() {
     let temp = TempSave::new("image");
     let block1 = SaveBlock1::default();
     let block2 = SaveBlock2::default();
-    temp.slot().store(&block1, &block2).unwrap();
+    temp.slot()
+        .store(&block1, &block2, SaveLineage::Continued)
+        .unwrap();
 
     let mut expected = SaveStore::new();
     expected.save(&block1, &block2);
@@ -246,7 +265,7 @@ fn a_failed_boot_read_disables_saving_even_after_the_medium_recovers() {
     let original = std::fs::read(&temp.path).unwrap();
 
     let err = slot
-        .store(&SaveBlock1::default(), &block2)
+        .store(&SaveBlock1::default(), &block2, SaveLineage::Continued)
         .expect_err("a NoFlash session must never write");
     assert!(matches!(err, SaveFileError::NoDataDirectory));
     assert_eq!(
@@ -269,12 +288,13 @@ fn a_new_game_store_refuses_to_overwrite_a_continuable_save() {
             ..SaveBlock1::default()
         },
         &block2,
+        SaveLineage::Continued,
     )
     .unwrap();
     let original = std::fs::read(&temp.path).unwrap();
 
     let outcome = slot
-        .store_unless_foreign_save(&SaveBlock1::default(), &block2)
+        .store_unless_foreign_save(&SaveBlock1::default(), &block2, SaveLineage::NewGame)
         .unwrap();
     assert_eq!(outcome, super::StoreOutcome::RefusedExistingSave);
     assert_eq!(
@@ -292,7 +312,7 @@ fn a_new_game_store_writes_over_nothing_and_over_a_corrupt_save() {
 
     // Nothing on disk: `Empty` is not continuable, so the write proceeds.
     let outcome = slot
-        .store_unless_foreign_save(&SaveBlock1::default(), &block2)
+        .store_unless_foreign_save(&SaveBlock1::default(), &block2, SaveLineage::NewGame)
         .unwrap();
     assert_eq!(outcome, super::StoreOutcome::Written);
 
@@ -304,7 +324,7 @@ fn a_new_game_store_writes_over_nothing_and_over_a_corrupt_save() {
     image[written_sector] ^= 0xFF;
     std::fs::write(&temp.path, &image).unwrap();
     let outcome = slot
-        .store_unless_foreign_save(&SaveBlock1::default(), &block2)
+        .store_unless_foreign_save(&SaveBlock1::default(), &block2, SaveLineage::NewGame)
         .unwrap();
     assert_eq!(outcome, super::StoreOutcome::Written);
 }
@@ -312,9 +332,9 @@ fn a_new_game_store_writes_over_nothing_and_over_a_corrupt_save() {
 /// #230 review, second round: a NEW GAME written over a `Corrupt` image
 /// must not inherit the previous trainer's deferred bytes. `store_impl`'s
 /// pre-write load retains the corrupt image's still-validating sectors as
-/// the serialization base, so the `preserve_existing` (new-game) path
-/// zeroes that base first, exactly as upstream's `Sav2_ClearSetDefault`
-/// memsets `gSaveBlock1/2` before a new game's first save.
+/// the serialization base, so a [`SaveLineage::NewGame`] write zeroes that
+/// base first, exactly as upstream's `Sav2_ClearSetDefault` memsets
+/// `gSaveBlock1/2` before a new game's first save.
 #[test]
 fn a_new_game_over_a_corrupt_save_carries_no_deferred_bytes() {
     use engine::save::{Sector, SECTOR_SIGNATURE, SECTOR_SIZE};
@@ -338,8 +358,10 @@ fn a_new_game_over_a_corrupt_save_carries_no_deferred_bytes() {
         // `0 % 2` -- the slot the deferred byte must sit in for the
         // pre-write load to retain it.
         let mut slot = temp.slot();
-        slot.store(&SaveBlock1::default(), &block2).unwrap(); // counter 1, slot 1
-        slot.store(&SaveBlock1::default(), &block2).unwrap(); // counter 2, slot 0
+        slot.store(&SaveBlock1::default(), &block2, SaveLineage::Continued)
+            .unwrap(); // counter 1, slot 1
+        slot.store(&SaveBlock1::default(), &block2, SaveLineage::Continued)
+            .unwrap(); // counter 2, slot 0
     }
 
     // Plant a deferred byte in the newest slot's (still checksum-valid)
@@ -378,7 +400,11 @@ fn a_new_game_over_a_corrupt_save_carries_no_deferred_bytes() {
     let mut slot = temp.slot();
     assert_eq!(slot.load().status, SaveFileStatus::Corrupt);
     let outcome = slot
-        .store_unless_foreign_save(&SaveBlock1::default(), &SaveBlock2::default())
+        .store_unless_foreign_save(
+            &SaveBlock1::default(),
+            &SaveBlock2::default(),
+            SaveLineage::NewGame,
+        )
         .unwrap();
     assert_eq!(outcome, super::StoreOutcome::Written);
 
@@ -416,6 +442,102 @@ fn a_new_game_over_a_corrupt_save_carries_no_deferred_bytes() {
     );
 }
 
+/// #232 review round two: the *ordinary* store clears the base too, when
+/// the session asking for it is a new game.
+///
+/// A new-game session does not stop being one once it has answered the
+/// different-save-file WARNING: `gDifferentSaveFile` is retired by the
+/// first overwrite *dispatch* (`start_menu.c:1093-1096`), so a first
+/// overwrite that fails is retried through `SAVE_NORMAL` --
+/// [`SaveSlot::store`], not [`SaveSlot::store_unless_foreign_save`]. If
+/// that entry point took `clear_base` from the save *mode*, the retry would
+/// keep the replaced trainer's payload as its serialization base and write
+/// their deferred bytes back out under the new game's checksums, which
+/// [`engine::save::SaveStore::clear_base`]'s contract forbids. The whole
+/// player-visible sequence is staged in `flow::save_continue_tests`; this
+/// pins the medium's own half.
+#[test]
+fn a_new_game_session_clears_the_base_on_an_ordinary_store_too() {
+    use engine::save::{Sector, SECTOR_SIGNATURE, SECTOR_SIZE};
+
+    const SECTOR_ID_SAVEBLOCK2: u16 = 0;
+    // A SaveBlock2 payload offset no field models yet (play-time region).
+    const B2_DEFERRED: usize = 0x10;
+
+    let temp = TempSave::new("newgame-normal-store-deferred");
+    let previous_trainer = SaveBlock2 {
+        encryption_key: 0xDEAD_BEEF,
+        ..SaveBlock2::default()
+    };
+    {
+        // The replaced adventure: one ordinary save, counter 1, slot 1.
+        let mut slot = temp.slot();
+        slot.store(
+            &SaveBlock1::default(),
+            &previous_trainer,
+            SaveLineage::Continued,
+        )
+        .unwrap();
+    }
+
+    // Give that save a recognizable deferred byte -- a play-time byte the
+    // port does not model, so nothing but the retained base can carry it.
+    let mut image = std::fs::read(&temp.path).unwrap();
+    let mut planted = false;
+    for index in 0..image.len() / SECTOR_SIZE {
+        let start = index * SECTOR_SIZE;
+        let sector = Sector::from_bytes(image[start..start + SECTOR_SIZE].try_into().unwrap());
+        if sector.signature() == SECTOR_SIGNATURE && sector.id() == SECTOR_ID_SAVEBLOCK2 {
+            let mut payload = previous_trainer.to_bytes();
+            payload[B2_DEFERRED] = 0x5A;
+            let replacement = Sector::write(SECTOR_ID_SAVEBLOCK2, &payload, sector.counter());
+            image[start..start + SECTOR_SIZE].copy_from_slice(replacement.as_bytes());
+            planted = true;
+        }
+    }
+    assert!(planted, "the fixture must plant one deferred byte");
+    std::fs::write(&temp.path, &image).unwrap();
+
+    // A session boots against that save -- the menu would offer CONTINUE --
+    // and the player picks NEW GAME instead. Its ordinary write must carry
+    // none of the replaced trainer's bytes.
+    let mut slot = temp.slot();
+    assert!(slot.load().status.menu_shows_continue());
+    let outcome = slot
+        .store(
+            &SaveBlock1::default(),
+            &SaveBlock2::default(),
+            SaveLineage::NewGame,
+        )
+        .unwrap();
+    assert_eq!(outcome, super::StoreOutcome::Written);
+
+    let image = std::fs::read(&temp.path).unwrap();
+    let mut checked = 0;
+    for index in 0..image.len() / SECTOR_SIZE {
+        let start = index * SECTOR_SIZE;
+        let sector = Sector::from_bytes(image[start..start + SECTOR_SIZE].try_into().unwrap());
+        if sector.signature() == SECTOR_SIGNATURE
+            && sector.id() == SECTOR_ID_SAVEBLOCK2
+            && sector.counter() == 2
+        {
+            assert_eq!(
+                sector.data()[B2_DEFERRED],
+                0,
+                "a new game's write must not carry the replaced trainer's \
+                 deferred bytes, whichever TrySavingData arm reached it"
+            );
+            checked += 1;
+        }
+    }
+    assert_eq!(checked, 1, "exactly the new game's SaveBlock2 sector");
+    assert_eq!(
+        temp.slot().load().block2.encryption_key,
+        0,
+        "the loaded save is the new game, not the replaced trainer's"
+    );
+}
+
 /// The save path really takes the inter-process lock (issue #214 review):
 /// `SaveFile::lock` is what creates the sibling `.lock` file, so its
 /// existence after a store proves the guard line ran -- deleting
@@ -427,8 +549,12 @@ fn a_new_game_over_a_corrupt_save_carries_no_deferred_bytes() {
 fn storing_takes_the_inter_process_lock() {
     let temp = TempSave::new("lock-taken");
     let mut slot = temp.slot();
-    slot.store(&SaveBlock1::default(), &SaveBlock2::default())
-        .unwrap();
+    slot.store(
+        &SaveBlock1::default(),
+        &SaveBlock2::default(),
+        SaveLineage::Continued,
+    )
+    .unwrap();
 
     let mut lock_path = temp.path.clone().into_os_string();
     lock_path.push(".lock");
@@ -460,6 +586,7 @@ fn a_session_never_overwrites_progress_saved_after_its_own_load() {
                 ..SaveBlock1::default()
             },
             &block2,
+            SaveLineage::Continued,
         )
         .unwrap();
 
@@ -478,6 +605,7 @@ fn a_session_never_overwrites_progress_saved_after_its_own_load() {
                     ..SaveBlock1::default()
                 },
                 &block2,
+                SaveLineage::Continued,
             )
             .unwrap(),
         super::StoreOutcome::Written
@@ -494,6 +622,7 @@ fn a_session_never_overwrites_progress_saved_after_its_own_load() {
                     ..SaveBlock1::default()
                 },
                 &block2,
+                SaveLineage::Continued,
             )
             .unwrap(),
         super::StoreOutcome::RefusedStaleSession
@@ -514,6 +643,7 @@ fn a_session_never_overwrites_progress_saved_after_its_own_load() {
                     ..SaveBlock1::default()
                 },
                 &block2,
+                SaveLineage::Continued,
             )
             .unwrap(),
         super::StoreOutcome::Written
@@ -538,8 +668,10 @@ fn a_damaged_newest_slot_does_not_refuse_the_sessions_exit_write() {
         ..SaveBlock2::default()
     };
     let mut slot = temp.slot();
-    slot.store(&SaveBlock1::default(), &block2).unwrap(); // counter 1, slot 1
-    slot.store(&SaveBlock1::default(), &block2).unwrap(); // counter 2, slot 0
+    slot.store(&SaveBlock1::default(), &block2, SaveLineage::Continued)
+        .unwrap(); // counter 1, slot 1
+    slot.store(&SaveBlock1::default(), &block2, SaveLineage::Continued)
+        .unwrap(); // counter 2, slot 0
     assert_eq!(slot.load().status, SaveFileStatus::Ok); // session identity: 2
 
     // Damage one counter-2 sector's payload on disk mid-session: the
@@ -567,6 +699,7 @@ fn a_damaged_newest_slot_does_not_refuse_the_sessions_exit_write() {
                 ..SaveBlock1::default()
             },
             &block2,
+            SaveLineage::Continued,
         )
         .unwrap();
     assert_eq!(outcome, super::StoreOutcome::Written);
@@ -599,8 +732,10 @@ fn healing_a_damaged_newest_slot_keeps_the_sessions_deferred_lineage() {
     };
     {
         let mut slot = temp.slot();
-        slot.store(&SaveBlock1::default(), &block2).unwrap(); // counter 1, slot 1
-        slot.store(&SaveBlock1::default(), &block2).unwrap(); // counter 2, slot 0
+        slot.store(&SaveBlock1::default(), &block2, SaveLineage::Continued)
+            .unwrap(); // counter 1, slot 1
+        slot.store(&SaveBlock1::default(), &block2, SaveLineage::Continued)
+            .unwrap(); // counter 2, slot 0
     }
 
     // Distinct deferred bytes per generation: the older save's SaveBlock2
@@ -653,6 +788,7 @@ fn healing_a_damaged_newest_slot_keeps_the_sessions_deferred_lineage() {
                 ..SaveBlock1::default()
             },
             &block2,
+            SaveLineage::Continued,
         )
         .unwrap();
     assert_eq!(outcome, super::StoreOutcome::Written);
@@ -727,6 +863,7 @@ fn a_stale_session_is_refused_even_across_the_counter_wrap() {
                 ..SaveBlock1::default()
             },
             &block2,
+            SaveLineage::Continued,
         )
         .unwrap();
     let newest = std::fs::read(&temp.path).unwrap();
@@ -744,6 +881,7 @@ fn a_stale_session_is_refused_even_across_the_counter_wrap() {
                     ..SaveBlock1::default()
                 },
                 &block2,
+                SaveLineage::Continued,
             )
             .unwrap(),
         super::StoreOutcome::RefusedStaleSession

@@ -9,7 +9,8 @@
 //!
 //! - `SaveBlock2`: player identity and the encryption key.
 //! - `SaveBlock1`: position, current/continue/last-heal warps, raw party
-//!   count, six party Pokémon, money, all five bag pockets, flags, and vars.
+//!   count, six party Pokémon, money, all five bag pockets, flags, vars, and
+//!   the player object event's two saved directions ([`SavedObjectEvent`]).
 //!
 //! Dynamic/escape warps, coins, registered/PC items, PC Pokémon storage, and
 //! the remaining gameplay subsystems retain no typed Rust home yet.
@@ -33,6 +34,19 @@ const MONEY_OFFSET: usize = 0x490;
 const BAG_ITEMS_OFFSET: usize = 0x560;
 const FLAGS_OFFSET: usize = 0x1270;
 const VARS_OFFSET: usize = 0x139C;
+const OBJECT_EVENTS_OFFSET: usize = 0xA30;
+/// `sizeof(struct ObjectEvent)` (`pokeemerald/include/global.fieldmap.h`).
+const OBJECT_EVENT_LEN: usize = 0x24;
+/// `struct ObjectEvent`'s `facingDirection:4` / `movementDirection:4`
+/// bitfield byte, relative to the object event's own start (`/*0x18*/`).
+const OBJECT_EVENT_DIRECTIONS_OFFSET: usize = 0x18;
+/// The one object-event byte this slice models, absolute in `SaveBlock1`:
+/// entry `OBJ_EVENT_ID_PLAYER` (0, so no stride term) direction nibbles.
+const PLAYER_OBJECT_EVENT_DIRECTIONS_OFFSET: usize =
+    OBJECT_EVENTS_OFFSET + OBJECT_EVENT_DIRECTIONS_OFFSET;
+// The modeled byte must fall inside the player's own entry, not spill into
+// the next object event's.
+const _: () = assert!(OBJECT_EVENT_DIRECTIONS_OFFSET < OBJECT_EVENT_LEN);
 
 /// A byte-serialization error for [`SaveBlock1`] or [`SaveBlock2`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -241,6 +255,67 @@ impl SaveBlock2 {
     }
 }
 
+/// The modeled slice of one entry of `SaveBlock1::objectEvents[]`
+/// (`pokeemerald/include/global.h`'s `/*0xA30*/ struct ObjectEvent
+/// objectEvents[OBJECT_EVENTS_COUNT]`): the two direction nibbles packed
+/// into the object event's `/*0x18*/` byte.
+///
+/// # Why only two nibbles
+///
+/// `struct ObjectEvent` is 0x24 bytes of live field state — sprite ids,
+/// ground-effect flags, metatile behaviour history, movement-action
+/// bookkeeping — and this workspace models no object-event system to hold
+/// any of it. What it *does* have is a player whose facing survives a
+/// save/continue, and upstream's only home for that fact is this array:
+/// `SaveObjectEvents`/`LoadObjectEvents` (`src/load_save.c:180-194`) copy
+/// `gObjectEvents` in and out wholesale, and the ordinary continue path
+/// respawns the player from the restored entry
+/// (`SpawnObjectEventsOnReturnToField`,
+/// `src/event_object_movement.c:1715-1726`). Writing the direction byte at
+/// its real offset keeps that one fact where upstream keeps it instead of
+/// inventing a parallel field; every other byte of every entry stays
+/// whatever the caller's base buffer held (module docs), so a later slice
+/// that models object events for real widens this struct rather than
+/// relocating anything.
+///
+/// Both nibbles are raw `DIR_*` ids (`DIR_NONE` 0, `DIR_SOUTH` 1,
+/// `DIR_NORTH` 2, `DIR_WEST` 3, `DIR_EAST` 4) rather than a typed
+/// direction: this module is the byte-layout boundary, and a save can
+/// legitimately hold `DIR_NONE` (a zeroed, never-saved entry) which no
+/// walking direction represents.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct SavedObjectEvent {
+    /// `facingDirection:4` — the low nibble of the `/*0x18*/` byte. This is
+    /// what a respawn reads (`GetFaceDirectionAnimNum(objectEvent->facingDirection)`,
+    /// `src/event_object_movement.c:1872`).
+    pub facing_direction: u8,
+    /// `movementDirection:4` — the high nibble of the same byte.
+    /// `SetObjectEventDirection` keeps it in step with `facingDirection`
+    /// for a plain turn, so a port that only turns the player in place
+    /// writes the same id into both.
+    pub movement_direction: u8,
+}
+
+impl SavedObjectEvent {
+    /// The packed `/*0x18*/` byte: facing in the low nibble, movement in
+    /// the high one. Nibbles wider than 4 bits are masked, matching the
+    /// bitfield's own truncation.
+    #[must_use]
+    pub const fn to_direction_byte(self) -> u8 {
+        (self.facing_direction & 0x0F) | ((self.movement_direction & 0x0F) << 4)
+    }
+
+    /// Decode the packed `/*0x18*/` byte — the inverse of
+    /// [`Self::to_direction_byte`].
+    #[must_use]
+    pub const fn from_direction_byte(byte: u8) -> Self {
+        Self {
+            facing_direction: byte & 0x0F,
+            movement_direction: byte >> 4,
+        }
+    }
+}
+
 /// Modeled fields from Emerald's full `SaveBlock1`.
 #[derive(Debug, Clone)]
 pub struct SaveBlock1 {
@@ -262,6 +337,13 @@ pub struct SaveBlock1 {
     pub bag: Bag,
     /// Persistent ordinary flags and vars.
     pub event_data: EventData,
+    /// `objectEvents[OBJ_EVENT_ID_PLAYER]`'s saved directions — see
+    /// [`SavedObjectEvent`]. The player is always entry `0`:
+    /// `InitObjectEventsLocal` (`pokeemerald/src/overworld.c:2163-2177`)
+    /// resets the array and spawns the avatar before any map object event,
+    /// so `InitPlayerAvatar`'s `SpawnSpecialObjectEvent` takes the first
+    /// free slot.
+    pub player_object_event: SavedObjectEvent,
 }
 
 impl Default for SaveBlock1 {
@@ -276,6 +358,7 @@ impl Default for SaveBlock1 {
             money: 0,
             bag: Bag::default(),
             event_data: EventData::default(),
+            player_object_event: SavedObjectEvent::default(),
         }
     }
 }
@@ -326,6 +409,7 @@ impl SaveBlock1 {
             let offset = VARS_OFFSET + index * 2;
             base[offset..offset + 2].copy_from_slice(&value.to_le_bytes());
         }
+        base[PLAYER_OBJECT_EVENT_DIRECTIONS_OFFSET] = self.player_object_event.to_direction_byte();
     }
 
     /// Decode modeled fields, decrypting money and bag quantities with
@@ -370,6 +454,9 @@ impl SaveBlock1 {
             money: read_u32(bytes, MONEY_OFFSET) ^ encryption_key,
             bag: Bag::from_bytes(bag_bytes, encryption_key),
             event_data: EventData::from_saved_state(flags, vars),
+            player_object_event: SavedObjectEvent::from_direction_byte(
+                bytes[PLAYER_OBJECT_EVENT_DIRECTIONS_OFFSET],
+            ),
         })
     }
 }
@@ -568,6 +655,12 @@ mod tests {
             player_party_count: 0xFE,
             player_party: std::array::from_fn(|index| sample_pokemon(u8::try_from(index).unwrap())),
             money: 0x1234_5678,
+            player_object_event: SavedObjectEvent {
+                // DIR_WEST facing, DIR_EAST movement: deliberately different
+                // nibbles, so a serializer that packed one twice would fail.
+                facing_direction: 3,
+                movement_direction: 4,
+            },
             ..SaveBlock1::default()
         };
         block.bag.items[0] = ItemSlot {
@@ -607,6 +700,9 @@ mod tests {
         assert_eq!(&bytes[0x844..0x848], &[0xCD, 0xAB, 0xD5, 0x2C]);
         assert_eq!(bytes[0x1270 + event_data::NUM_FLAG_BYTES - 1], 0x80);
         assert_eq!(&bytes[0x159A..0x159C], &[0xEF, 0xBE]);
+        // objectEvents[OBJ_EVENT_ID_PLAYER] (0xA30) + /*0x18*/: the two
+        // direction nibbles, movement in the high half.
+        assert_eq!(bytes[0xA48], 0x43);
 
         let restored = SaveBlock1::from_bytes(&bytes, key).unwrap();
         assert_eq!(restored.pos, block.pos);
@@ -621,6 +717,28 @@ mod tests {
         assert_eq!(
             restored.event_data.var_get(event_data::VARS_END),
             Ok(0xBEEF)
+        );
+        assert_eq!(restored.player_object_event, block.player_object_event);
+    }
+
+    /// The direction byte packs facing low, movement high, and masks each
+    /// nibble exactly as `struct ObjectEvent`'s two 4-bit bitfields do.
+    #[test]
+    fn saved_object_event_packs_two_direction_nibbles() {
+        let event = SavedObjectEvent {
+            facing_direction: 1,
+            movement_direction: 2,
+        };
+        assert_eq!(event.to_direction_byte(), 0x21);
+        assert_eq!(SavedObjectEvent::from_direction_byte(0x21), event);
+        assert_eq!(
+            SavedObjectEvent {
+                facing_direction: 0xFF,
+                movement_direction: 0xF0,
+            }
+            .to_direction_byte(),
+            0x0F,
+            "each nibble truncates like its bitfield, never spilling into the other"
         );
     }
 

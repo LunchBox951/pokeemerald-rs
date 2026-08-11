@@ -33,16 +33,20 @@
 //!   The loaded blocks ride along in [`MainMenuState`] until
 //!   [`MainMenuAction::Continue`] hands them to
 //!   [`OverworldPhase::continue_saved_game`].
-//! * **Write**, on shutdown: [`save_on_exit`], called from
-//!   [`crate::app::App::step`] when the window closes. That trigger is a
-//!   documented stand-in for upstream's start-menu SAVE flow -- see its own
-//!   doc comment.
+//! * **Write**, from the field start menu (I-6, issue #232): `START` in
+//!   the overworld opens [`crate::start_menu`], and its `SAVE` action runs
+//!   upstream's own confirm/overwrite chain before calling
+//!   [`SaveSlot::store`] and friends.
+//!   [`advance_scene`]'s `Overworld` arm drives that through
+//!   [`OverworldPhase::advance_start_menu_frame`], which owns the frame
+//!   whenever a menu is open. There is deliberately **no** save on exit:
+//!   upstream writes nothing when the lid closes, and issue #214's
+//!   `save_on_exit` stand-in existed only until this flow landed.
 
-use engine::save::SaveFileError;
 use platform::{ButtonState, Buttons, Frame};
 
 use crate::frame::to_platform_frame;
-use crate::game_save::{SaveSlot, SavedGame, StoreOutcome};
+use crate::game_save::{SaveSlot, SavedGame};
 use crate::intro::{self, IntroScene, IntroStatus};
 use crate::main_menu::{self, MainMenuItem, MainMenuScene, MainMenuType};
 use crate::title::TitleScene;
@@ -58,6 +62,13 @@ pub(crate) use overworld_phase::OverworldPhase;
 /// transition (`one module = one concept` `(oop-boundaries)`).
 #[cfg(test)]
 mod save_continue_tests;
+
+/// The field start menu's own behaviour (I-6, issue #232) -- the `START`
+/// gate, frame ownership, and the close paths that write nothing. Split
+/// from [`save_continue_tests`] for the same reason that file split from
+/// [`tests`]: one module, one concept `(oop-boundaries)`.
+#[cfg(test)]
+mod start_menu_tests;
 
 /// [`crate::app::App`]'s per-frame animation state for the real title screen
 /// (`crate::app`'s "Animating the real title screen" docs): the loaded
@@ -163,100 +174,6 @@ const fn menu_action(item: MainMenuItem) -> MainMenuAction {
     }
 }
 
-/// Persist the overworld's live save blocks if `scene` is one that has any,
-/// or `None` if there is nothing to save (I-6, issue #214).
-///
-/// # This trigger is a stand-in, and a deliberate deviation
-///
-/// Upstream has no "save on quit" at all: saving is the player's explicit
-/// `START` -> `SAVE` -> "there is already a saved file, overwrite?" chain in
-/// `src/start_menu.c`, and closing the lid writes nothing. None of that menu
-/// exists in this port yet, so this slice writes the save on the way out of
-/// the application instead -- the smallest trigger that makes "save, exit,
-/// and reload cleanly" (I-6) actually reachable by a player, and one that is
-/// callable headlessly with no UI. It is a deferral, not fidelity:
-/// `src/start_menu.c` -- the whole file, save flow included -- is still
-/// tracked as `pending` in the coverage ledger, and this function should be
-/// reduced to whatever that flow needs (or deleted) when it lands.
-///
-/// Only [`AppScene::Overworld`] carries save state; every other scene
-/// returns `None` rather than writing the blocks a not-yet-started game
-/// would have, which would clobber a real save with a fresh one.
-///
-/// **What arms the write** (issue #214 review): a session that
-/// [`OverworldPhase::continued_from_save`] writes back unconditionally --
-/// it is updating the very save it loaded. A *new-game* session instead
-/// goes through [`SaveSlot::store_unless_foreign_save`], which refuses --
-/// file untouched, refusal logged -- when a continuable save this session
-/// never loaded is on disk. Upstream gates that exact overwrite on the
-/// player answering `gDifferentSaveFile`'s "there is already a saved file,
-/// is it okay to overwrite it?" prompt (`src/start_menu.c`); no prompt
-/// exists here yet, so the only consent-free cases are writing over
-/// nothing (`Empty`/`Corrupt`/`NoFlash`) and writing over what you
-/// continued from.
-pub(crate) fn save_on_exit(
-    scene: &AppScene,
-    save_slot: &mut SaveSlot,
-) -> Option<Result<(), SaveFileError>> {
-    match scene {
-        AppScene::Overworld(phase) => {
-            // Upstream cannot reach its save flow during a battle -- the
-            // start menu does not open there -- and the blocks here hold
-            // the *pre-battle* overworld (the party lead is borrowed by
-            // the battle, its RNG draws already consumed). Writing them
-            // now would mint a valid save that undoes the live fight,
-            // letting a quit escape any encounter (#230 review). Skip;
-            // the previous save stands, exactly as it would after an
-            // upstream mid-battle power-off.
-            if phase.in_battle() {
-                eprintln!("save: exiting mid-battle -- not saving; the last save stands");
-                return None;
-            }
-            // The same shape one tile down: a step in flight has already
-            // moved `save1.pos` to the landing tile, but the landing's own
-            // consequences (door warps, encounters, coordinate events --
-            // Route 101's scripted battle among them) have not run. A save
-            // now would resume *past* whatever the landing triggers.
-            // Upstream cannot save mid-step -- the start menu does not
-            // open while moving -- so the last save stands here too (#230
-            // review round five).
-            if phase.mid_step() {
-                eprintln!("save: exiting mid-step -- not saving; the last save stands");
-                return None;
-            }
-            let outcome = if phase.continued_from_save() {
-                save_slot.store(phase.save1(), phase.save2())
-            } else {
-                save_slot.store_unless_foreign_save(phase.save1(), phase.save2())
-            };
-            match outcome {
-                Ok(StoreOutcome::Written) => Some(Ok(())),
-                Ok(StoreOutcome::RefusedExistingSave) => {
-                    eprintln!(
-                        "save: a saved game this session never loaded is on disk -- \
-                         refusing to overwrite it without upstream's confirmation \
-                         prompt; the new game was not saved"
-                    );
-                    None
-                }
-                Ok(StoreOutcome::RefusedStaleSession) => {
-                    eprintln!(
-                        "save: the save on disk changed since this session loaded \
-                         it (another instance saved?) -- refusing to overwrite \
-                         newer progress with stale state; this session was not saved"
-                    );
-                    None
-                }
-                Err(err) => Some(Err(err)),
-            }
-        }
-        AppScene::Title(_)
-        | AppScene::MainMenu(_)
-        | AppScene::Intro(_)
-        | AppScene::OverworldLoadFailed(_) => None,
-    }
-}
-
 /// Whether the idle title screen should advance to the main menu this
 /// frame.
 ///
@@ -341,8 +258,9 @@ fn log_game_continued(phase: &OverworldPhase) {
 /// `MainMenu` transition reads it (upstream's boot-time
 /// `LoadGameSave(SAVE_NORMAL)`, deferred to here because this port has no
 /// pre-title copyright screen to run it on -- see the `MainMenu` arm), and
-/// nothing else in this function touches it: the *write* side is
-/// [`save_on_exit`], driven from [`crate::app::App::step`]'s shutdown path.
+/// the `Overworld` arm hands it to
+/// [`OverworldPhase::advance_start_menu_frame`], the *only* write side
+/// (module docs).
 pub(crate) fn advance_scene(
     scene: AppScene,
     buttons: ButtonState,
@@ -476,7 +394,15 @@ pub(crate) fn advance_scene(
             (AppScene::OverworldLoadFailed(intro_scene), frame)
         }
         AppScene::Overworld(mut phase) => {
-            phase.step(buttons);
+            // The field start menu runs ahead of movement and owns the
+            // frame outright when it is open -- upstream's own ordering
+            // (`ProcessPlayerFieldInput` before `PlayerStep`, returning
+            // TRUE out of its `pressedStartButton` branch). This is the
+            // only point in the whole state machine that hands the save
+            // medium to something that can write it.
+            if !phase.advance_start_menu_frame(buttons, save_slot) {
+                phase.step(buttons);
+            }
             let frame = phase.compose_frame();
             (AppScene::Overworld(phase), frame)
         }

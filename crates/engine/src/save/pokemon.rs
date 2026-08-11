@@ -7,7 +7,10 @@
 //! growth/attacks/EVs/misc order.
 //!
 //! This module owns only that serialization boundary. Battle calculations
-//! and the complete `GetMonData`/`SetMonData` surface remain deferred.
+//! and the complete `GetMonData`/`SetMonData` surface remain deferred; the
+//! field-by-field bridge between these bytes and a battle-ready mon lives
+//! outside this crate, in `pokeemerald_rs::party` (I-6, issue #232), since
+//! `battle` and `engine` do not depend on each other.
 
 /// The serialized length of Emerald's `struct BoxPokemon`.
 pub const BOX_POKEMON_LEN: usize = 80;
