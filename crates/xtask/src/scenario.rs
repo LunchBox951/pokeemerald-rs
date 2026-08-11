@@ -23,6 +23,11 @@ use pokeemerald_rs::{App, AppButtons, AppState};
 
 use crate::ScenarioName;
 
+/// `boot-to-first-fight` (I-7, issue #245) -- split into its own file to
+/// keep this module under the `oop-boundaries` size guideline; see that
+/// module's own docs for the scenario itself.
+mod boot_to_first_fight;
+
 /// One exact frame of a scenario: which buttons are held while the app
 /// pumps input, and which state must be active after that frame.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -54,6 +59,54 @@ const BOOT_TO_MAIN_MENU: [ScenarioFrame; 2] = [
     },
 ];
 
+/// `engine::overworld::WALK_FRAMES_PER_TILE`, restated rather than
+/// imported: `xtask` only pulls in `pokeemerald-rs` (behind the `scenes`
+/// feature, `crate` root docs' "asymmetric" note), not `engine` directly --
+/// adding that edge just for one constant would widen the dependency seam
+/// this crate deliberately keeps narrow. Sixteen rendered frames per tile
+/// crossing, matching every citation of the same constant in
+/// `crate::flow::overworld_phase`'s own real-pack tests.
+const WALK_FRAMES_PER_TILE: usize = 16;
+
+/// One run of `count` consecutive frames holding `buttons`, all expecting
+/// `expected` -- [`expand_segments`]'s compact authoring unit, so a
+/// multi-hundred-frame walk doesn't need one literal [`ScenarioFrame`] per
+/// frame in this file (`oop-boundaries`).
+///
+/// A held direction only pays a facing-turn frame when the player is at
+/// rest facing a different way
+/// (`engine::overworld::player::PlayerState::step`'s own `running !=
+/// RunningState::Moving` guard on its turn branch): as long as input never
+/// lets go of a direction between two tiles, changing direction costs
+/// nothing extra -- the new direction just steers the very next tile.
+/// [`boot_to_first_fight`]'s own script never releases a direction
+/// mid-walk, so every one of its walking segments runs at exactly
+/// [`WALK_FRAMES_PER_TILE`] frames per tile, turn included, verified
+/// empirically against the real pack while authoring that scenario (see
+/// that constant's own doc comment).
+#[derive(Debug, Clone, Copy)]
+struct Segment {
+    buttons: AppButtons,
+    count: usize,
+    expected: AppState,
+}
+
+/// Flatten [`Segment`]s into the frame-per-frame script [`ScenarioSpec`]
+/// needs.
+fn expand_segments(segments: &[Segment]) -> Vec<ScenarioFrame> {
+    let mut frames = Vec::with_capacity(segments.iter().map(|segment| segment.count).sum());
+    for segment in segments {
+        frames.extend(std::iter::repeat_n(
+            ScenarioFrame {
+                buttons: segment.buttons,
+                expected: segment.expected,
+            },
+            segment.count,
+        ));
+    }
+    frames
+}
+
 /// Look up a parsed scenario's definition. Exhaustive over
 /// [`ScenarioName`], so a new public name cannot silently lack a script.
 fn spec(name: ScenarioName) -> ScenarioSpec {
@@ -61,6 +114,10 @@ fn spec(name: ScenarioName) -> ScenarioSpec {
         ScenarioName::BootToMainMenu => ScenarioSpec {
             initial: AppState::Title,
             frames: &BOOT_TO_MAIN_MENU,
+        },
+        ScenarioName::BootToFirstFight => ScenarioSpec {
+            initial: AppState::Title,
+            frames: boot_to_first_fight::frames(),
         },
     }
 }
@@ -367,5 +424,34 @@ mod tests {
             report.milestones,
             vec![AppState::Title, AppState::MainMenu(MainMenuItem::NewGame)]
         );
+    }
+
+    // `boot-to-first-fight` (I-7, issue #245) itself lives in
+    // `boot_to_first_fight`, including its own tests -- this module keeps
+    // only the shared runner's tests (`oop-boundaries`).
+
+    use super::{expand_segments, Segment};
+
+    #[test]
+    fn expand_segments_flattens_each_run_in_order() {
+        let segments = [
+            Segment {
+                buttons: AppButtons::UP,
+                count: 3,
+                expected: AppState::Overworld,
+            },
+            Segment {
+                buttons: AppButtons::A,
+                count: 1,
+                expected: AppState::FirstBattle,
+            },
+        ];
+        let frames = expand_segments(&segments);
+        assert_eq!(frames.len(), 4);
+        assert!(frames[..3]
+            .iter()
+            .all(|frame| frame.buttons == AppButtons::UP && frame.expected == AppState::Overworld));
+        assert_eq!(frames[3].buttons, AppButtons::A);
+        assert_eq!(frames[3].expected, AppState::FirstBattle);
     }
 }
