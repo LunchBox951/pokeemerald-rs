@@ -9,9 +9,16 @@
 //! for the `f32` producer `(no-verbatim)`. Clipping rather than wrapping is a
 //! deliberate, benign fidelity choice for this slice — the wrap-and-carry
 //! behaviour of the packed DMA lanes is a deferred quirk.
+//!
+//! Before voices mix in, [`crate::reverb::Reverb`] seeds the same
+//! accumulator with the master-mix reverb/pseudo-echo stage's wet
+//! contribution (S-3, issue #185) — see that module's docs. A disabled
+//! [`crate::reverb::Reverb`] (the default) seeds exactly the all-zero reset
+//! this mixer always performed, so every pre-reverb test stays unaffected.
 
 use crate::cgb_voice::CgbVoice;
 use crate::pitch::SAMPLES_PER_FRAME;
+use crate::reverb::Reverb;
 use crate::voice::{StereoAcc, Voice};
 
 /// Default global mix level (`0..=15`). Emerald's `m4aSoundInit` reconfigures
@@ -50,6 +57,9 @@ pub struct Mixer {
     /// Reusable per-frame accumulator, sized to [`SAMPLES_PER_FRAME`], so
     /// steady-state rendering does not allocate.
     scratch: Vec<StereoAcc>,
+    /// The master-mix reverb/pseudo-echo stage (module docs). Disabled
+    /// (`level 0`) unless [`Self::with_reverb_level`] is called.
+    reverb: Reverb,
 }
 
 impl Default for Mixer {
@@ -69,7 +79,18 @@ impl Mixer {
             max_voices,
             next_seq: 0,
             scratch: vec![(0, 0); SAMPLES_PER_FRAME],
+            reverb: Reverb::new(0),
         }
+    }
+
+    /// Set this mixer's reverb level (`SongHeader::reverb`, `0..=127`; `0`
+    /// disables it) — see [`crate::reverb::Reverb`]. Chainable onto
+    /// [`Self::new`]/[`Default::default`], mirroring [`crate::song::ToneData::fixed`]'s
+    /// builder shape.
+    #[must_use]
+    pub(crate) fn with_reverb_level(mut self, level: u8) -> Self {
+        self.reverb = Reverb::new(level);
+        self
     }
 
     /// The next shared note-on ordinal, advancing the counter.
@@ -89,6 +110,12 @@ impl Mixer {
     #[must_use]
     pub fn is_idle(&self) -> bool {
         self.voices.is_empty() && self.cgb_voices.iter().all(Option::is_none)
+    }
+
+    /// Whether the master-mix reverb still holds delayed samples that can
+    /// produce a wet tail after all voices have stopped.
+    pub(crate) fn has_pending_reverb(&self) -> bool {
+        self.reverb.has_pending_samples()
     }
 
     /// Read-only view of the live voices, for the sequencer's own tests to
@@ -274,9 +301,12 @@ impl Mixer {
             "mix_frame expects one frame of interleaved stereo",
         );
 
-        for acc in &mut self.scratch {
-            *acc = (0, 0);
-        }
+        // Seed from the reverb stage rather than a plain zero-reset (module
+        // docs): a disabled stage seeds exactly the zeroes this loop used to
+        // write inline, so this is a no-op change for every song that
+        // doesn't set a reverb level.
+        self.reverb.seed_frame(&mut self.scratch);
+
         for voice in &mut self.voices {
             voice.begin_frame(self.master_volume);
             voice.render(&mut self.scratch);
@@ -293,19 +323,34 @@ impl Mixer {
             }
         }
 
-        for (frame, acc) in self.scratch.iter().enumerate() {
-            out[frame * 2] = clip(acc.0);
-            out[frame * 2 + 1] = clip(acc.1);
+        // Clip in place first: the reverb delay line stores the same
+        // clipped `s8`-range samples upstream's `pcmBuffer` would hold once
+        // a frame's mixing finished (`crate::reverb`'s module docs), and
+        // `out`'s normalisation reads from that same clipped value.
+        for acc in &mut self.scratch {
+            *acc = (clip_i32(acc.0), clip_i32(acc.1));
+        }
+        self.reverb.commit_frame(&self.scratch);
+
+        for (frame, &(l, r)) in self.scratch.iter().enumerate() {
+            out[frame * 2] = to_f32(l);
+            out[frame * 2 + 1] = to_f32(r);
         }
     }
 }
 
-/// Clip a summed accumulator to the `s8` range and normalise to `[-1.0, 1.0)`.
-fn clip(sample: i32) -> f32 {
-    // Clamped to `[-128, 127]`, every value is exactly representable in `f32`.
+/// Clamp a summed accumulator to the `s8` range.
+fn clip_i32(sample: i32) -> i32 {
+    sample.clamp(-128, 127)
+}
+
+/// Normalise an already-`s8`-clamped sample to `[-1.0, 1.0)`.
+fn to_f32(sample: i32) -> f32 {
+    // Clamped to `[-128, 127]` by `clip_i32`, every value is exactly
+    // representable in `f32`.
     #[allow(clippy::cast_precision_loss)]
-    let clamped = sample.clamp(-128, 127) as f32;
-    clamped / 128.0
+    let value = sample as f32;
+    value / 128.0
 }
 
 #[cfg(test)]

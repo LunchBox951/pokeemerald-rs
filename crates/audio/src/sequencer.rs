@@ -168,10 +168,11 @@ impl Sequencer {
     pub fn with_config(song: Song, master_volume: u8, max_voices: usize) -> Self {
         let tracks = (0..song.track_count()).map(|_| TrackState::new()).collect();
         let tempo_i = song.initial_tempo();
+        let mixer = Mixer::new(master_volume, max_voices).with_reverb_level(song.reverb());
         Self {
             song,
             tracks,
-            mixer: Mixer::new(master_volume, max_voices),
+            mixer,
             tempo_i,
             tempo_c: 0,
         }
@@ -183,10 +184,13 @@ impl Sequencer {
         self.mixer.voice_count()
     }
 
-    /// Whether every track has ended and all voices have decayed to silence.
+    /// Whether every track has ended, all voices have decayed to silence, and
+    /// the master-mix reverb tail has drained.
     #[must_use]
     pub fn is_finished(&self) -> bool {
-        self.tracks.iter().all(|t| t.ended) && self.mixer.is_idle()
+        self.tracks.iter().all(|t| t.ended)
+            && self.mixer.is_idle()
+            && !self.mixer.has_pending_reverb()
     }
 
     /// Advance the sequencer by one V-blank frame and render its audio into
@@ -877,6 +881,57 @@ mod tests {
         // The note is on this frame: audible output.
         assert!(out.iter().any(|&s| s.abs() > 0.0));
         assert_eq!(seq.voice_count(), 1);
+    }
+
+    #[test]
+    fn finite_reverbed_song_finishes_only_after_tail_drains() {
+        let track = vec![
+            Event::Voice(0),
+            Event::Note {
+                key: 60,
+                velocity: 127,
+                gate: 1,
+            },
+            Event::Wait(2),
+            Event::Fine,
+        ];
+        let song = test_song(vec![track], 150).with_reverb(100);
+        let mut seq = Sequencer::new(song);
+        let mut out = vec![0.0; Sequencer::FRAME_SAMPLES];
+
+        for _ in 0..32 {
+            seq.render_frame(&mut out);
+            if seq.tracks.iter().all(|track| track.ended) && seq.mixer.is_idle() {
+                break;
+            }
+        }
+
+        assert!(seq.tracks.iter().all(|track| track.ended));
+        assert!(seq.mixer.is_idle());
+        assert!(
+            seq.mixer.has_pending_reverb(),
+            "the dry note must leave delayed samples in the reverb ring"
+        );
+        assert!(
+            !seq.is_finished(),
+            "ended tracks and inactive voices are not finished while reverb is pending"
+        );
+
+        let mut heard_wet_tail = false;
+        for _ in 0..1000 {
+            seq.render_frame(&mut out);
+            heard_wet_tail |= out.iter().any(|&sample| sample != 0.0);
+            if seq.is_finished() {
+                break;
+            }
+        }
+
+        assert!(heard_wet_tail, "the pending reverb must produce wet output");
+        assert!(
+            seq.is_finished(),
+            "a finite reverb tail must eventually decay to silence"
+        );
+        assert!(!seq.mixer.has_pending_reverb());
     }
 
     #[test]

@@ -24,6 +24,13 @@ assets = { path = "../assets" }
 # `battle::Battle`. Workspace-local as well, and `battle` itself depends only
 # on `assets`, so nothing new enters the build.
 battle = { path = "../battle" }
+# `audio` (S-3, issue #185) is the M4A sequencer/mixer/reverb engine
+# `crate::music` bridges the asset pack's song/voicegroup/sample entries
+# into: the App advances it one frame at a time to play the title screen's
+# BGM. Workspace-local, and `audio` itself depends on no external crate
+# either (only a dev-dependency on `platform`, unused here), so this drags
+# nothing new into the build.
+audio = { path = "../audio" }
 engine = { path = "../engine" }
 platform = { path = "../platform" }
 rendering = { path = "../rendering" }
