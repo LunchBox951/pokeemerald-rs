@@ -110,6 +110,32 @@ pub enum PlayerStarter {
     Mudkip,
 }
 
+impl PlayerStarter {
+    /// The honest species -> [`PlayerStarter`] mapping issue #248 (I-5)
+    /// needs to reach [`route103_rival_for`] from an actual battle-facing
+    /// lead, since `VAR_STARTER_MON` itself is not modelled (module docs'
+    /// "Explicitly out of scope" section: no starter-select UI exists, so
+    /// nothing ever writes it). Every production lead this is asked about
+    /// is `crate::new_game::PROVISIONAL_STARTER_SPECIES` (Treecko, the
+    /// stand-in for the un-ported Birch-bag handout), but the mapping
+    /// covers the real three starters, not just that one, so it stays
+    /// correct if a future slice ever lets the mon in slot 0 differ.
+    ///
+    /// `None` for any other species -- unreachable in production (the
+    /// provisional starter is always one of the three), but a real `None`
+    /// rather than a guessed starter for, say, a test lead built around an
+    /// arbitrary species.
+    #[must_use]
+    pub const fn from_species(species: SpeciesId) -> Option<Self> {
+        match species.0 {
+            277 => Some(Self::Treecko), // SPECIES_TREECKO
+            280 => Some(Self::Torchic), // SPECIES_TORCHIC
+            283 => Some(Self::Mudkip),  // SPECIES_MUDKIP
+            _ => None,
+        }
+    }
+}
+
 /// Which rival the player faces — the other axis, upstream's player-gender
 /// check (`MALE`/`FEMALE`; the player and the rival are always opposite).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -118,6 +144,30 @@ pub enum Rival {
     Brendan,
     /// A male player's rival: `TRAINER_MAY_ROUTE_103_*`.
     May,
+}
+
+impl Rival {
+    /// The rival a player of `gender` faces (upstream: `Route103_EventScript_Rival`'s
+    /// own `checkplayergender` — module docs; `data/maps/Route103/scripts.inc:19-21`)
+    /// — always the *opposite* protagonist.
+    ///
+    /// `None` for [`engine::save::PlayerGender::Other`]: upstream's
+    /// `checkplayergender` copies the raw `playerGender` byte into
+    /// `VAR_RESULT` and the two `goto_if_eq`s (`MALE`/`FEMALE`) simply fall
+    /// through to `end` for any other byte (`src/scrcmd.c:2014-2018`), so a
+    /// save with an out-of-range gender byte starts no battle at all —
+    /// the same no-op `crate::new_game::apply_truck_intro_flags` already
+    /// documents for its own `checkplayergender` branch. Unreachable in
+    /// production: [`crate::new_game::DEFAULT_PLAYER_GENDER`] is always
+    /// `Male` or `Female`, and nothing else writes the field.
+    #[must_use]
+    pub const fn for_gender(gender: engine::save::PlayerGender) -> Option<Self> {
+        match gender {
+            engine::save::PlayerGender::Male => Some(Self::May),
+            engine::save::PlayerGender::Female => Some(Self::Brendan),
+            engine::save::PlayerGender::Other(_) => None,
+        }
+    }
 }
 
 /// The six `TRAINER_*_ROUTE_103_*` ids

@@ -24,7 +24,10 @@
 //! [`wild_battle`] (driving an in-progress wild battle,
 //! [`OverworldPhase::advance_wild_battle_frame`]),
 //! [`first_battle_trigger`] (the Route 101 scripted first-battle coord-event
-//! trigger, issue #231, [`OverworldPhase::advance_first_battle_frame`]), and
+//! trigger, issue #231, [`OverworldPhase::advance_first_battle_frame`]),
+//! [`route103_rival_trigger`] (the Route 103 rival battle's own A-press
+//! interaction trigger and rival-sprite setup, issue #248,
+//! [`OverworldPhase::advance_route103_rival_battle_frame`]), and
 //! [`frame`] (dialog ticking and frame composition,
 //! [`OverworldPhase::compose_frame`]), [`start_menu`] (the field start
 //! menu's `START` gate and the party/object-event save sync behind its
@@ -45,6 +48,7 @@ mod first_battle_trigger;
 mod frame;
 mod input;
 mod placement;
+mod route103_rival_trigger;
 mod start_menu;
 mod step;
 mod wild_battle;
@@ -275,6 +279,22 @@ pub(crate) struct OverworldPhase {
     /// aborted battle remains distinguishable from a completed one after
     /// both have emptied [`Self::first_battle`].
     first_battle_outcome: Option<battle::BattleOutcome>,
+    /// The Route 103 rival battle currently being played out, if any (issue
+    /// #248) -- [`Self::first_battle`]'s sibling, in its own field for the
+    /// same reason: [`route103_rival_trigger`] starts it via
+    /// [`crate::flow::route103_rival::start_route103_rival_battle`] (a
+    /// `BATTLE_TYPE_TRAINER` party battle, not a wild one) and drives it
+    /// with [`crate::flow::route103_rival::advance_route103_rival_battle`]'s
+    /// own `UseMove` policy. `Some` freezes the overworld for the frame
+    /// exactly like [`Self::wild_battle`]/[`Self::first_battle`] do; never
+    /// `Some` at the same time as either -- only one of [`Self::step`]'s
+    /// interaction/coord-event/wild-encounter branches can fire on a given
+    /// frame.
+    pub(super) rival_battle: Option<battle::Battle>,
+    /// [`Self::first_battle_outcome`]'s sibling for
+    /// [`Self::rival_battle`] (issue #248): cleared at trigger time, set
+    /// only on a real reported outcome.
+    rival_battle_outcome: Option<battle::BattleOutcome>,
 }
 
 impl OverworldPhase {
@@ -287,7 +307,13 @@ impl OverworldPhase {
     /// future save-write path has real state to persist instead of
     /// re-deriving it from scratch.
     pub(super) fn load_default() -> Result<Self, OverworldSceneError> {
-        let scene = overworld::load_default_room()?;
+        // No session event-data exists yet at this point (`new_game::init_save_blocks`
+        // hasn't run) -- a fresh store is the honest value: `SPAWN_MAP_ID` is
+        // always the protagonist's bedroom, never Route 103, so nothing this
+        // port's own `OBJ_EVENT_GFX_VAR_0` exception (issue #248,
+        // `crate::overworld::npc`'s module docs) reads here could ever
+        // differ from a fresh store's `0` in production.
+        let scene = overworld::load_default_room(&engine::event_data::EventData::new())?;
         let player = PlayerState::new(
             new_game::SPAWN_POSITION,
             new_game::SPAWN_ELEVATION,
@@ -332,7 +358,13 @@ impl OverworldPhase {
             map_group: block1.location.map_group,
             map_num: block1.location.map_num,
         })?;
-        let scene = overworld::load_room(map_id)?;
+        // The save's own event-data state, carried wholesale (module docs'
+        // "What a continue restores" section): if a previous session ever
+        // set `VAR_OBJ_GFX_ID_0` on Route 103, it is already in `block1`,
+        // and this is what lets the resumed scene resolve the rival's
+        // sprite correctly on the very first composed frame -- no
+        // on-transition script re-runs on a continue (module docs).
+        let scene = overworld::load_room(map_id, &block1.event_data)?;
         Ok(Self::from_saved(scene, map_id, block1, block2))
     }
 
@@ -445,6 +477,8 @@ impl OverworldPhase {
             start_menu: None,
             first_battle: None,
             first_battle_outcome: None,
+            rival_battle: None,
+            rival_battle_outcome: None,
         };
         phase.copy_party_and_objects_from_save();
         phase
@@ -487,6 +521,17 @@ impl OverworldPhase {
         // `first_battle_trigger`'s module docs) -- a no-op for every other
         // `map_id`.
         first_battle_trigger::sync_route_101_state_on_entry(map_id, &mut save1.event_data);
+        // Route 103's own `VAR_OBJ_GFX_ID_0` rival-sprite setup (issue #248,
+        // `route103_rival_trigger`'s module docs) -- a no-op for every other
+        // `map_id`. Unreachable in production (`scene` here is always the
+        // spawn bedroom's, never Route 103's), called anyway for the same
+        // "every map-entry point, gated by map" completeness
+        // `sync_route_101_state_on_entry` above already keeps.
+        route103_rival_trigger::setup_rival_gfx_id_on_transition(
+            map_id,
+            &mut save1.event_data,
+            save2.player_gender,
+        );
         Self {
             scene,
             player,
@@ -512,6 +557,8 @@ impl OverworldPhase {
             start_menu: None,
             first_battle: None,
             first_battle_outcome: None,
+            rival_battle: None,
+            rival_battle_outcome: None,
         }
     }
 
@@ -556,6 +603,21 @@ impl OverworldPhase {
         self.wild_battle.is_some()
     }
 
+    /// Whether the Route 103 rival battle currently owns the overworld
+    /// frame (issue #248). See [`Self::is_first_battle_active`].
+    #[must_use]
+    pub(crate) const fn is_rival_battle_active(&self) -> bool {
+        self.rival_battle.is_some()
+    }
+
+    /// The terminal result retained after the Route 103 rival battle ends,
+    /// or `None` before it resolves and after an abort (issue #248). See
+    /// [`Self::first_battle_outcome`].
+    #[must_use]
+    pub(crate) const fn rival_battle_outcome(&self) -> Option<battle::BattleOutcome> {
+        self.rival_battle_outcome
+    }
+
     /// `gDifferentSaveFile` (struct docs) -- what the start menu's SAVE
     /// flow branches on to decide which overwrite prompt to show.
     ///
@@ -582,19 +644,20 @@ impl OverworldPhase {
         }
     }
 
-    /// Whether any battle -- wild ([`Self::wild_battle`]) or the Route 101
-    /// scripted first battle ([`Self::first_battle`]) -- currently owns the
-    /// phase; one of the three gates
+    /// Whether any battle -- wild ([`Self::wild_battle`]), the Route 101
+    /// scripted first battle ([`Self::first_battle`]), or the Route 103
+    /// rival battle ([`Self::rival_battle`], issue #248) -- currently owns
+    /// the phase; one of the three gates
     /// [`Self::start_menu_may_open`] checks. Mid-battle state (the live
     /// combat, the consumed RNG draws, the borrowed party lead) lives
     /// outside the `SaveBlock`s until the battle's driver finishes it, so a
     /// save taken now would persist the *pre-battle* overworld (#230
     /// review), and upstream's own start menu cannot open here either.
-    /// Both fields gate for the same reason; they are never `Some` at once
-    /// ([`Self::first_battle`] docs).
+    /// All three fields gate for the same reason; they are never `Some` at
+    /// once ([`Self::first_battle`] docs).
     #[must_use]
     pub(crate) const fn in_battle(&self) -> bool {
-        self.wild_battle.is_some() || self.first_battle.is_some()
+        self.wild_battle.is_some() || self.first_battle.is_some() || self.rival_battle.is_some()
     }
 
     /// Whether a step is still in flight -- the transit frames themselves,
@@ -636,3 +699,10 @@ pub(super) fn saved_map_id(block1: &SaveBlock1) -> Option<assets::MapId> {
 
 #[cfg(test)]
 mod tests;
+
+/// `route103_rival_trigger` (issue #248) -- its own sibling test module
+/// rather than more cases in [`tests`] (that module's own doc comment on
+/// PR #239's ongoing split of this crate's largest test file, and
+/// `route103_rival_trigger`'s own doc comment).
+#[cfg(test)]
+mod route103_rival_tests;

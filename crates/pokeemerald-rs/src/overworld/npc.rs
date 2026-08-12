@@ -50,6 +50,26 @@
 //! module's OAM building to cover them; nothing here silently mis-renders
 //! them as 16x32.
 //!
+//! **One `OBJ_EVENT_GFX_VAR_0` exception (I-5, issue #248).** Route 103's
+//! rival object event shares that exact `graphics_id` string with every
+//! bedroom decoration placeholder above -- upstream's
+//! `GetObjectEventGraphicsInfo` resolves `OBJ_EVENT_GFX_VAR_n` through
+//! `VAR_OBJ_GFX_ID_0 + n` (`event_object_movement.c:1914-1931`, `n == 0`
+//! here), a live indirection through event data rather than a fixed id, so
+//! the two cases can only be told apart by *what the var currently holds*,
+//! not by the graphics-id string alone. [`resolve_sprite_source`] therefore
+//! reads [`VAR_OBJ_GFX_ID_0`] and resolves to a rival
+//! ([`protagonist_source`]) only when it holds
+//! `OBJ_EVENT_GFX_RIVAL_BRENDAN_NORMAL`'s or `_MAY_NORMAL`'s own numeric id
+//! -- [`RIVAL_BRENDAN_NORMAL_GFX_ID`]/[`RIVAL_MAY_NORMAL_GFX_ID`], written by
+//! `crate::flow::overworld_phase::route103_rival_trigger::setup_rival_gfx_id_on_transition`
+//! on entering Route 103. A fresh save's var is `0` everywhere else this
+//! graphics id appears (`InitEventData` zeroes every var, and no other
+//! bundled map's `MAP_SCRIPT_ON_TRANSITION` writes it), matching neither id,
+//! so a bedroom's decoration slot 1 still resolves to `None` exactly as
+//! before -- unconditionally correct for every bundled map, not merely
+//! "safe because decorations are separately hidden by flag today".
+//!
 //! # Screen position: glued to the camera through a step (I-3, issue #217)
 //!
 //! [`object_screen_position`] generalizes [`super::avatar::PLAYER_OBJ_X`]/
@@ -171,6 +191,20 @@ enum NpcSpriteSource {
     },
 }
 
+/// `VAR_OBJ_GFX_ID_0` (`include/constants/vars.h:32`) -- see module docs'
+/// "One `OBJ_EVENT_GFX_VAR_0` exception" section.
+const VAR_OBJ_GFX_ID_0: u16 = 0x4010;
+
+/// `OBJ_EVENT_GFX_RIVAL_BRENDAN_NORMAL`'s own numeric id
+/// (`include/constants/event_objects.h:107`) -- what [`VAR_OBJ_GFX_ID_0`]
+/// holds for a female player's Route 103 rival (module docs).
+const RIVAL_BRENDAN_NORMAL_GFX_ID: u16 = 100;
+
+/// `OBJ_EVENT_GFX_RIVAL_MAY_NORMAL`'s own numeric id
+/// (`include/constants/event_objects.h:112`) -- what [`VAR_OBJ_GFX_ID_0`]
+/// holds for a male player's Route 103 rival (module docs).
+const RIVAL_MAY_NORMAL_GFX_ID: u16 = 105;
+
 /// Resolve `graphics_id` into a sprite source, or `None` if this slice
 /// doesn't render a sprite for it (module docs' "not drawn" list).
 ///
@@ -180,7 +214,16 @@ enum NpcSpriteSource {
 /// `OBJ_EVENT_GFX_*` -> `gObjectEventGraphicsInfo_*` table and each of those
 /// structs' own `.images`/`.paletteTag` fields
 /// (`object_event_pic_tables.h`/`object_event_graphics.h`).
-fn resolve_sprite_source(graphics_id: &str, player: PlayerCharacter) -> Option<NpcSpriteSource> {
+///
+/// `event_data` is read only for `"OBJ_EVENT_GFX_VAR_0"` (module docs' "One
+/// `OBJ_EVENT_GFX_VAR_0` exception" section); every other arm ignores it,
+/// matching upstream's own per-graphics-id dispatch, where only the
+/// `OBJ_EVENT_GFX_VAR_*` family is a live indirection at all.
+fn resolve_sprite_source(
+    graphics_id: &str,
+    player: PlayerCharacter,
+    event_data: &EventData,
+) -> Option<NpcSpriteSource> {
     use NpcPaletteTag::{Npc1, Npc2, Npc3, Npc4};
     use NpcSpriteSource::Standard;
 
@@ -189,6 +232,20 @@ fn resolve_sprite_source(graphics_id: &str, player: PlayerCharacter) -> Option<N
             Some(protagonist_source(PlayerCharacter::Brendan, player))
         }
         "OBJ_EVENT_GFX_RIVAL_MAY_NORMAL" => Some(protagonist_source(PlayerCharacter::May, player)),
+        "OBJ_EVENT_GFX_VAR_0" => {
+            match event_data.var_get(VAR_OBJ_GFX_ID_0).unwrap_or(0) {
+                id if id == RIVAL_BRENDAN_NORMAL_GFX_ID => {
+                    Some(protagonist_source(PlayerCharacter::Brendan, player))
+                }
+                id if id == RIVAL_MAY_NORMAL_GFX_ID => {
+                    Some(protagonist_source(PlayerCharacter::May, player))
+                }
+                // A bedroom decoration placeholder (var still `0`, the
+                // fresh-save value), or any other value this port never
+                // writes -- module docs.
+                _ => None,
+            }
+        }
         "OBJ_EVENT_GFX_MOM" => Some(Standard {
             sprite_path: "mom",
             palette_bank: Npc4.bank(),
@@ -307,6 +364,14 @@ impl SpriteBinding {
 /// only ever *appends*; the caller has already seeded `sprite_bytes` with
 /// the player's own frames at base tile `0`).
 ///
+/// `event_data` is this room's own current flags/vars, needed only for
+/// [`resolve_sprite_source`]'s `"OBJ_EVENT_GFX_VAR_0"` arm (module docs) --
+/// the binding this resolves to therefore reflects whatever
+/// `VAR_OBJ_GFX_ID_0` holds at the moment the scene is built, which is
+/// correct exactly because that var never changes for the rest of the
+/// room's visit (`route103_rival_trigger::setup_rival_gfx_id_on_transition`
+/// writes it once, on entry, before the scene decodes).
+///
 /// # Errors
 ///
 /// [`OverworldSceneError::Pack`]/[`OverworldSceneError::Asset`] if a
@@ -320,13 +385,14 @@ pub(super) fn resolve_bindings(
     player: PlayerCharacter,
     object_events: &'static [ObjectEvent],
     sprite_bytes: &mut Vec<u8>,
+    event_data: &EventData,
 ) -> Result<HashMap<&'static str, SpriteBinding>, OverworldSceneError> {
     let mut bindings = HashMap::new();
     for event in object_events {
         if bindings.contains_key(event.graphics_id) {
             continue;
         }
-        match resolve_sprite_source(event.graphics_id, player) {
+        match resolve_sprite_source(event.graphics_id, player, event_data) {
             Some(NpcSpriteSource::PlayerCharacter) => {
                 bindings.insert(
                     event.graphics_id,
@@ -585,11 +651,16 @@ mod tests {
     /// Both gender configurations, both ids -- four cases, none `None`.
     #[test]
     fn both_rival_variants_resolve_for_either_player_gender() {
+        let no_flags = EventData::new();
         // Playing as Brendan: May's House declares OBJ_EVENT_GFX_RIVAL_MAY_NORMAL,
         // and that object *is* the rival -- it must draw from May's own sheet
         // and palette.
         assert_eq!(
-            resolve_sprite_source("OBJ_EVENT_GFX_RIVAL_MAY_NORMAL", PlayerCharacter::Brendan),
+            resolve_sprite_source(
+                "OBJ_EVENT_GFX_RIVAL_MAY_NORMAL",
+                PlayerCharacter::Brendan,
+                &no_flags
+            ),
             Some(NpcSpriteSource::Standard {
                 sprite_path: "may/walking",
                 palette_bank: OTHER_PROTAGONIST_BANK,
@@ -598,7 +669,11 @@ mod tests {
         );
         // The mirror image.
         assert_eq!(
-            resolve_sprite_source("OBJ_EVENT_GFX_RIVAL_BRENDAN_NORMAL", PlayerCharacter::May),
+            resolve_sprite_source(
+                "OBJ_EVENT_GFX_RIVAL_BRENDAN_NORMAL",
+                PlayerCharacter::May,
+                &no_flags
+            ),
             Some(NpcSpriteSource::Standard {
                 sprite_path: "brendan/walking",
                 palette_bank: OTHER_PROTAGONIST_BANK,
@@ -611,13 +686,67 @@ mod tests {
         assert_eq!(
             resolve_sprite_source(
                 "OBJ_EVENT_GFX_RIVAL_BRENDAN_NORMAL",
-                PlayerCharacter::Brendan
+                PlayerCharacter::Brendan,
+                &no_flags
             ),
             Some(NpcSpriteSource::PlayerCharacter)
         );
         assert_eq!(
-            resolve_sprite_source("OBJ_EVENT_GFX_RIVAL_MAY_NORMAL", PlayerCharacter::May),
+            resolve_sprite_source(
+                "OBJ_EVENT_GFX_RIVAL_MAY_NORMAL",
+                PlayerCharacter::May,
+                &no_flags
+            ),
             Some(NpcSpriteSource::PlayerCharacter)
+        );
+    }
+
+    /// The Route 103 rival's own `OBJ_EVENT_GFX_VAR_0` indirection (module
+    /// docs' "One `OBJ_EVENT_GFX_VAR_0` exception" section, issue #248):
+    /// resolves to a rival exactly when `VAR_OBJ_GFX_ID_0` holds one of the
+    /// two real rival graphics ids, and to `None` for a bedroom decoration's
+    /// fresh-save `0` or any other value this port never writes there.
+    #[test]
+    fn var_0_resolves_to_a_rival_only_when_the_var_holds_a_real_rival_gfx_id() {
+        let mut event_data = EventData::new();
+
+        // Fresh save (a bedroom decoration placeholder's real state, and
+        // Route 103's own before its on-transition script runs): not drawn.
+        assert_eq!(
+            resolve_sprite_source("OBJ_EVENT_GFX_VAR_0", PlayerCharacter::Brendan, &event_data),
+            None
+        );
+
+        event_data
+            .var_set(VAR_OBJ_GFX_ID_0, RIVAL_MAY_NORMAL_GFX_ID)
+            .unwrap();
+        assert_eq!(
+            resolve_sprite_source("OBJ_EVENT_GFX_VAR_0", PlayerCharacter::Brendan, &event_data),
+            Some(NpcSpriteSource::Standard {
+                sprite_path: "may/walking",
+                palette_bank: OTHER_PROTAGONIST_BANK,
+            }),
+            "a male player's Route 103 rival is May"
+        );
+
+        event_data
+            .var_set(VAR_OBJ_GFX_ID_0, RIVAL_BRENDAN_NORMAL_GFX_ID)
+            .unwrap();
+        assert_eq!(
+            resolve_sprite_source("OBJ_EVENT_GFX_VAR_0", PlayerCharacter::May, &event_data),
+            Some(NpcSpriteSource::Standard {
+                sprite_path: "brendan/walking",
+                palette_bank: OTHER_PROTAGONIST_BANK,
+            }),
+            "a female player's Route 103 rival is Brendan"
+        );
+
+        // Some other, never-written value: still not drawn -- the check is
+        // an exact id match, not merely "nonzero".
+        event_data.var_set(VAR_OBJ_GFX_ID_0, 1).unwrap();
+        assert_eq!(
+            resolve_sprite_source("OBJ_EVENT_GFX_VAR_0", PlayerCharacter::Brendan, &event_data),
+            None
         );
     }
 
@@ -641,7 +770,12 @@ mod tests {
 
     #[test]
     fn resolve_sprite_source_resolves_mom_to_the_npc4_palette() {
-        let source = resolve_sprite_source("OBJ_EVENT_GFX_MOM", PlayerCharacter::Brendan).unwrap();
+        let source = resolve_sprite_source(
+            "OBJ_EVENT_GFX_MOM",
+            PlayerCharacter::Brendan,
+            &EventData::new(),
+        )
+        .unwrap();
         assert_eq!(
             source,
             NpcSpriteSource::Standard {
@@ -656,7 +790,7 @@ mod tests {
     /// render. Mirrored here (this crate cannot depend on `xtask`); that
     /// module's own `the_bundled_layout_set_is_pinned_for_the_tables_derived_from_it`
     /// is the tripwire that fails loudly when the list grows.
-    const BUNDLED_MAPS: [&str; 7] = [
+    const BUNDLED_MAPS: [&str; 9] = [
         "MAP_LITTLEROOT_TOWN",
         "MAP_LITTLEROOT_TOWN_BRENDANS_HOUSE_1F",
         "MAP_LITTLEROOT_TOWN_BRENDANS_HOUSE_2F",
@@ -664,6 +798,8 @@ mod tests {
         "MAP_LITTLEROOT_TOWN_MAYS_HOUSE_2F",
         "MAP_LITTLEROOT_TOWN_PROFESSOR_BIRCHS_LAB",
         "MAP_ROUTE101",
+        "MAP_OLDALE_TOWN",
+        "MAP_ROUTE103",
     ];
 
     /// Every distinct `graphics_id` referenced by an object event on one of
@@ -685,24 +821,32 @@ mod tests {
     }
 
     /// The module docs' scope claim, pinned as an exact partition of the
-    /// *reachable* graphics-id set: which of the 32 distinct ids the seven
+    /// *reachable* graphics-id set: which of the 46 distinct ids the nine
     /// bundled maps reference draw a sprite, and which are only hide-flag/
     /// interaction tracked. Dropping an arm from
     /// [`resolve_sprite_source`] -- or a map-data change making a new
     /// standard NPC reachable -- fails here rather than silently making
     /// that NPC invisible.
+    ///
+    /// `event_data` is a fresh, all-clear store throughout: `OBJ_EVENT_GFX_VAR_0`'s
+    /// own live-var exception is pinned separately by
+    /// `var_0_resolves_to_a_rival_only_when_the_var_holds_a_real_rival_gfx_id`,
+    /// and a fresh store's `VAR_OBJ_GFX_ID_0` is `0`, matching neither rival
+    /// id -- so it stays in `not_drawn` here exactly as it always has.
     #[test]
     fn resolve_sprite_source_covers_the_reachable_graphics_ids() {
         let reachable = reachable_graphics_ids();
         assert_eq!(
             reachable.len(),
-            32,
-            "the seven bundled maps reference 32 distinct graphics ids"
+            46,
+            "the nine bundled maps reference 46 distinct graphics ids"
         );
 
-        let (drawn, not_drawn): (Vec<&'static str>, Vec<&'static str>) = reachable
-            .iter()
-            .partition(|id| resolve_sprite_source(id, PlayerCharacter::Brendan).is_some());
+        let no_flags = EventData::new();
+        let (drawn, not_drawn): (Vec<&'static str>, Vec<&'static str>) =
+            reachable.iter().partition(|id| {
+                resolve_sprite_source(id, PlayerCharacter::Brendan, &no_flags).is_some()
+            });
 
         assert_eq!(
             drawn,
@@ -726,11 +870,24 @@ mod tests {
         assert_eq!(
             not_drawn,
             [
+                "OBJ_EVENT_GFX_BERRY_TREE",
                 "OBJ_EVENT_GFX_BIRCHS_BAG",
+                "OBJ_EVENT_GFX_BLACK_BELT",
+                "OBJ_EVENT_GFX_BOY_1",
+                "OBJ_EVENT_GFX_CUTTABLE_TREE",
+                "OBJ_EVENT_GFX_FISHERMAN",
+                "OBJ_EVENT_GFX_GIRL_3",
                 "OBJ_EVENT_GFX_ITEM_BALL",
+                "OBJ_EVENT_GFX_MANIAC",
+                "OBJ_EVENT_GFX_MAN_3",
+                "OBJ_EVENT_GFX_MAN_5",
+                "OBJ_EVENT_GFX_MART_EMPLOYEE",
                 "OBJ_EVENT_GFX_NINJA_BOY",
                 "OBJ_EVENT_GFX_PICHU_DOLL",
+                "OBJ_EVENT_GFX_POKEFAN_M",
                 "OBJ_EVENT_GFX_SWABLU_DOLL",
+                "OBJ_EVENT_GFX_SWIMMER_F",
+                "OBJ_EVENT_GFX_SWIMMER_M",
                 "OBJ_EVENT_GFX_TRUCK",
                 "OBJ_EVENT_GFX_VAR_0",
                 "OBJ_EVENT_GFX_VAR_1",
@@ -746,12 +903,16 @@ mod tests {
                 "OBJ_EVENT_GFX_VAR_B",
                 "OBJ_EVENT_GFX_VIGOROTH_CARRYING_BOX",
                 "OBJ_EVENT_GFX_VIGOROTH_FACING_AWAY",
+                "OBJ_EVENT_GFX_WOMAN_2",
                 "OBJ_EVENT_GFX_YOUNGSTER",
                 "OBJ_EVENT_GFX_ZIGZAGOON_1",
             ],
-            "module docs' own 'not drawn' list: decorations, props/dolls, \
-             the truck, the two non-16x32 NPCs, and (issue #177) Route 101's \
-             own unresolved youngster/bag/Zigzagoon ids"
+            "module docs' own 'not drawn' list: decorations (`OBJ_EVENT_GFX_VAR_0`'s \
+             own fresh-save/decoration state included), props/dolls, the \
+             truck, the two non-16x32 NPCs, Route 101's own unresolved \
+             youngster/bag/Zigzagoon ids (issue #177), and (issue #248) \
+             every Oldale Town/Route 103 background NPC this slice does not \
+             extend `resolve_sprite_source` to draw"
         );
 
         // The *partition* is gender-independent -- every id that draws for a
@@ -760,7 +921,7 @@ mod tests {
         // `both_rival_variants_resolve_for_either_player_gender`'s job.
         let drawn_as_may: Vec<_> = reachable
             .iter()
-            .filter(|id| resolve_sprite_source(id, PlayerCharacter::May).is_some())
+            .filter(|id| resolve_sprite_source(id, PlayerCharacter::May, &no_flags).is_some())
             .copied()
             .collect();
         assert_eq!(
@@ -772,14 +933,25 @@ mod tests {
 
     #[test]
     fn resolve_sprite_source_returns_none_for_decorations_and_props() {
-        assert!(resolve_sprite_source("OBJ_EVENT_GFX_VAR_0", PlayerCharacter::Brendan).is_none());
-        assert!(resolve_sprite_source("OBJ_EVENT_GFX_TRUCK", PlayerCharacter::Brendan).is_none());
+        let no_flags = EventData::new();
         assert!(
-            resolve_sprite_source("OBJ_EVENT_GFX_ITEM_BALL", PlayerCharacter::Brendan).is_none()
+            resolve_sprite_source("OBJ_EVENT_GFX_VAR_0", PlayerCharacter::Brendan, &no_flags)
+                .is_none()
+        );
+        assert!(
+            resolve_sprite_source("OBJ_EVENT_GFX_TRUCK", PlayerCharacter::Brendan, &no_flags)
+                .is_none()
         );
         assert!(resolve_sprite_source(
+            "OBJ_EVENT_GFX_ITEM_BALL",
+            PlayerCharacter::Brendan,
+            &no_flags
+        )
+        .is_none());
+        assert!(resolve_sprite_source(
             "OBJ_EVENT_GFX_VIGOROTH_CARRYING_BOX",
-            PlayerCharacter::Brendan
+            PlayerCharacter::Brendan,
+            &no_flags
         )
         .is_none());
     }

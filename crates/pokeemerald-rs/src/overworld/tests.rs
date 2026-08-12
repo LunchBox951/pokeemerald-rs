@@ -148,7 +148,7 @@ fn load_default_room_reports_pack_missing_when_no_pack_is_extracted() {
     if AssetPack::default_path().is_file() {
         return;
     }
-    let err = super::load_default_room().unwrap_err();
+    let err = super::load_default_room(&engine::event_data::EventData::new()).unwrap_err();
     assert!(err.is_pack_missing());
 }
 
@@ -161,7 +161,11 @@ fn load_room_reports_pack_missing_when_no_pack_is_extracted() {
     if AssetPack::default_path().is_file() {
         return;
     }
-    let err = super::load_room(assets::MapId("MAP_LITTLEROOT_TOWN_BRENDANS_HOUSE_1F")).unwrap_err();
+    let err = super::load_room(
+        assets::MapId("MAP_LITTLEROOT_TOWN_BRENDANS_HOUSE_1F"),
+        &engine::event_data::EventData::new(),
+    )
+    .unwrap_err();
     assert!(err.is_pack_missing());
 }
 
@@ -641,6 +645,7 @@ fn synthetic_scene_result(
         &layout,
         super::PlayerCharacter::Brendan,
         &NO_OBJECT_EVENTS,
+        &engine::event_data::EventData::new(),
     );
     let _ = std::fs::remove_file(path);
     scene
@@ -766,12 +771,12 @@ fn overworld_scene_from_pack_composes_a_non_blank_deterministic_frame() {
 #[test]
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
 fn real_pack_composes_non_blank_deterministic_overworld_frames() {
-    let scene = super::load_default_room().expect("run `cargo xtask extract` first");
     // The production fresh-save flag store, so the bedroom renders exactly
     // as it would for a real new game -- same reasoning as
     // `fresh_save_event_data` below: a fixture that claims to *be*
     // production state has to come from production state.
     let event_data = fresh_save_event_data();
+    let scene = super::load_default_room(&event_data).expect("run `cargo xtask extract` first");
 
     // A couple of on-foot player states across the bedroom's 9x8 interior
     // (`LAYOUT_LITTLEROOT_TOWN_BRENDANS_HOUSE_2F`), including one mid-step,
@@ -848,10 +853,10 @@ fn fresh_save_event_data() -> engine::event_data::EventData {
 #[test]
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
 fn real_pack_hiding_mom_changes_the_composed_1f_frame() {
-    let scene = super::load_room(ONE_F).expect("run `cargo xtask extract` first");
+    let mut data = fresh_save_event_data();
+    let scene = super::load_room(ONE_F, &data).expect("run `cargo xtask extract` first");
     let player = PlayerState::new((2, 7), 3, Direction::North);
 
-    let mut data = fresh_save_event_data();
     let mom = assets::MapEventsTable::new()
         .resolve(ONE_F)
         .unwrap()
@@ -893,8 +898,8 @@ fn real_pack_hiding_mom_changes_the_composed_1f_frame() {
 #[test]
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
 fn real_pack_1f_oam_entries_cover_every_drawn_fresh_save_npc() {
-    let scene = super::load_room(ONE_F).expect("run `cargo xtask extract` first");
     let data = fresh_save_event_data();
+    let scene = super::load_room(ONE_F, &data).expect("run `cargo xtask extract` first");
     let player = PlayerState::new((2, 7), 3, Direction::North);
 
     let entries = scene.sprites.entries(&player, &data);
@@ -1000,8 +1005,14 @@ fn real_pack_the_opposite_gender_rival_binds_for_either_player() {
         let header = assets::MapHeaderTable::new().header(map).unwrap();
         let layout = assets::LayoutTable::new().layout(header.layout).unwrap();
         let events = assets::MapEventsTable::new().resolve(map).unwrap();
-        super::OverworldScene::from_pack(&pack, layout, player, events)
-            .expect("a bundled bedroom must decode against the real pack")
+        super::OverworldScene::from_pack(
+            &pack,
+            layout,
+            player,
+            events,
+            &engine::event_data::EventData::new(),
+        )
+        .expect("a bundled bedroom must decode against the real pack")
     };
 
     // Playing as Brendan, visiting May's house: her rival object must bind.
@@ -1051,6 +1062,62 @@ fn real_pack_the_opposite_gender_rival_binds_for_either_player() {
     assert_eq!((own.palette_bank(), own.base_tile()), (0, 0));
 }
 
+/// The rendering half of [`super::npc`]'s `OBJ_EVENT_GFX_VAR_0` exception
+/// (issue #248): Route 103's real rival object event shares that exact
+/// `graphics_id` with every bedroom decoration placeholder, so this proves
+/// the *scene-decode* path -- not just [`super::npc::resolve_sprite_source`]
+/// in isolation -- resolves it to a real sprite binding once
+/// `VAR_OBJ_GFX_ID_0` names a real rival id, using the real
+/// [`assets::MapEventsTable`] entry against the real pack.
+#[test]
+#[ignore = "needs a local pack: run `cargo xtask extract` first"]
+fn real_pack_route_103_rival_binds_to_the_opposite_protagonists_sheet() {
+    const ROUTE_103: assets::MapId = assets::MapId("MAP_ROUTE103");
+    // `VAR_OBJ_GFX_ID_0` (`include/constants/vars.h:32`) and
+    // `OBJ_EVENT_GFX_RIVAL_MAY_NORMAL`'s own numeric id
+    // (`include/constants/event_objects.h:112`) -- independently
+    // transcribed here too, the same convention every module citing these
+    // ids uses (`crate::flow::overworld_phase::route103_rival_trigger`'s
+    // own docs).
+    const VAR_OBJ_GFX_ID_0: u16 = 0x4010;
+    const RIVAL_MAY_NORMAL_GFX_ID: u16 = 105;
+
+    let mut event_data = engine::event_data::EventData::new();
+    event_data
+        .var_set(VAR_OBJ_GFX_ID_0, RIVAL_MAY_NORMAL_GFX_ID)
+        .unwrap();
+
+    let scene = super::load_room(ROUTE_103, &event_data).expect("run `cargo xtask extract` first");
+    let events = assets::MapEventsTable::new().resolve(ROUTE_103).unwrap();
+    let rival = events
+        .object_events
+        .iter()
+        .find(|o| o.local_id == 2)
+        .expect("Route 103's own rival object event");
+    assert_eq!(rival.graphics_id, "OBJ_EVENT_GFX_VAR_0");
+
+    let binding = scene
+        .sprites
+        .bindings()
+        .get("OBJ_EVENT_GFX_VAR_0")
+        .copied()
+        .expect(
+            "VAR_OBJ_GFX_ID_0 naming a real rival id must bind a sprite, not stay `None` \
+             like a bedroom decoration",
+        );
+    assert_ne!(
+        binding.palette_bank(),
+        0,
+        "a male player's rival (May) must draw from the other-protagonist bank, not the \
+         player's own bank 0"
+    );
+    assert_ne!(
+        binding.base_tile(),
+        0,
+        "and from her own frame block, not the player's at base tile 0"
+    );
+}
+
 // -- Real-pack elevation-driven OBJ priority (S-5, issue #218) ---------------
 
 /// The visual counterpart to
@@ -1068,8 +1135,8 @@ fn real_pack_the_opposite_gender_rival_binds_for_either_player() {
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
 fn real_pack_the_bed_side_edge_draws_the_player_obj_at_the_raised_priority() {
     const BEDROOM: assets::MapId = assets::MapId("MAP_LITTLEROOT_TOWN_BRENDANS_HOUSE_2F");
-    let scene = super::load_room(BEDROOM).expect("run `cargo xtask extract` first");
     let data = fresh_save_event_data();
+    let scene = super::load_room(BEDROOM, &data).expect("run `cargo xtask extract` first");
 
     // (0, 7): ordinary floor south of the bed, elevation 3.
     let on_the_floor = PlayerState::new((0, 7), 3, Direction::North);
@@ -1248,11 +1315,11 @@ fn animated_tile_screen_rects(
 #[test]
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
 fn real_pack_tick_changes_only_the_animated_tile_screen_regions() {
-    let scene = super::load_room(assets::MapId("MAP_LITTLEROOT_TOWN"))
+    let event_data = engine::event_data::EventData::new();
+    let scene = super::load_room(assets::MapId("MAP_LITTLEROOT_TOWN"), &event_data)
         .expect("run `cargo xtask extract` first");
     let (x, y) = LITTLEROOT_TOWN_FLOWER_VIEW;
     let player = PlayerState::new((x, y), 3, Direction::South);
-    let event_data = engine::event_data::EventData::new();
 
     let rects = animated_tile_screen_rects(&scene, &player);
     assert!(
@@ -1317,11 +1384,11 @@ fn real_pack_tick_changes_only_the_animated_tile_screen_regions() {
 fn real_pack_tileset_animation_repeats_after_a_full_cadence_period() {
     const FULL_CADENCE_PERIOD: u32 = 128;
 
-    let scene = super::load_room(assets::MapId("MAP_LITTLEROOT_TOWN"))
+    let event_data = engine::event_data::EventData::new();
+    let scene = super::load_room(assets::MapId("MAP_LITTLEROOT_TOWN"), &event_data)
         .expect("run `cargo xtask extract` first");
     let (x, y) = LITTLEROOT_TOWN_FLOWER_VIEW;
     let player = PlayerState::new((x, y), 3, Direction::South);
-    let event_data = engine::event_data::EventData::new();
 
     // 0/1/8: this map/position only (doc comment). 16/60/127: the real,
     // map-independent invariant -- every region has fired by tick 16.

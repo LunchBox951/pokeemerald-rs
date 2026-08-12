@@ -76,7 +76,8 @@ fn pressed(button: Buttons) -> ButtonState {
 /// `OverworldPhase::warp_to` reads at runtime, not a restatement of
 /// their own expectations. Pack-dependent: `#[ignore]`d callers only.
 fn warp_tile_behavior(map: assets::MapId, warp_index: usize) -> ((i16, i16), u8) {
-    let scene = crate::overworld::load_room(map).expect("run `cargo xtask extract` first");
+    let scene = crate::overworld::load_room(map, &engine::event_data::EventData::new())
+        .expect("run `cargo xtask extract` first");
     let header = assets::MapHeaderTable::new()
         .header(map)
         .expect("map must resolve in the generated map-header table");
@@ -968,7 +969,8 @@ fn advance_player_one_frame_rejects_a_crossing_outside_the_neighbours_bounds() {
 fn walking_off_littlerootss_north_edge_crosses_into_route_101_and_back() {
     let littleroot = assets::MapId("MAP_LITTLEROOT_TOWN");
     let route101 = assets::MapId("MAP_ROUTE101");
-    let scene = crate::overworld::load_room(littleroot).expect("run `cargo xtask extract` first");
+    let scene = crate::overworld::load_room(littleroot, &engine::event_data::EventData::new())
+        .expect("run `cargo xtask extract` first");
 
     // Two ordinary tiles south of the north edge, already facing the
     // direction that will carry it there. No `party_lead` is assigned: see
@@ -1418,7 +1420,8 @@ fn warping_to_the_front_doormat_faces_north_and_rebinds_the_scene() {
          facing (overworld.c:937-938) -- South would mean the destination \
          behavior was never read"
     );
-    let fresh = crate::overworld::load_room(one_f).expect("1F must load from the extracted pack");
+    let fresh = crate::overworld::load_room(one_f, &phase.save1.event_data)
+        .expect("1F must load from the extracted pack");
     assert!(
         phase.compose_frame()[..]
             == fresh.compose_frame(&phase.player, &phase.save1.event_data, 0)[..],
@@ -1432,7 +1435,8 @@ fn warping_to_the_front_doormat_faces_north_and_rebinds_the_scene() {
 /// `facing`, at rest.
 fn one_f_phase(position: (i32, i32), facing: Direction) -> OverworldPhase {
     OverworldPhase::for_test(
-        crate::overworld::load_room(ONE_F).expect("run `cargo xtask extract` first"),
+        crate::overworld::load_room(ONE_F, &engine::event_data::EventData::new())
+            .expect("run `cargo xtask extract` first"),
         ONE_F,
         PlayerState::new(position, 3, facing),
         None,
@@ -2931,7 +2935,8 @@ fn taking_the_stairs_does_not_land_in_a_house_full_of_the_rivals_family() {
 fn idle_frames_animate_the_composed_tileset_pixels() {
     let town = assets::MapId("MAP_LITTLEROOT_TOWN");
     let mut phase = OverworldPhase::for_test(
-        crate::overworld::load_room(town).expect("run `cargo xtask extract` first"),
+        crate::overworld::load_room(town, &engine::event_data::EventData::new())
+            .expect("run `cargo xtask extract` first"),
         town,
         PlayerState::new((10, 17), 3, Direction::South),
         None,
@@ -3089,7 +3094,8 @@ fn warping_restarts_the_wild_encounter_immunity_window() {
 fn crossing_a_map_connection_restarts_the_wild_encounter_immunity_window() {
     let littleroot = MapId("MAP_LITTLEROOT_TOWN");
     let route101 = MapId("MAP_ROUTE101");
-    let scene = crate::overworld::load_room(littleroot).expect("run `cargo xtask extract` first");
+    let scene = crate::overworld::load_room(littleroot, &engine::event_data::EventData::new())
+        .expect("run `cargo xtask extract` first");
     let mut phase = OverworldPhase::for_test(
         scene,
         littleroot,
@@ -3584,7 +3590,8 @@ fn the_trigger_draws_off_the_phases_single_shared_stream() {
 fn real_pack_crossing_into_route_101_primes_the_rescue_var_on_arrival() {
     let littleroot = assets::MapId("MAP_LITTLEROOT_TOWN");
     let route101 = assets::MapId("MAP_ROUTE101");
-    let scene = crate::overworld::load_room(littleroot).expect("run `cargo xtask extract` first");
+    let scene = crate::overworld::load_room(littleroot, &engine::event_data::EventData::new())
+        .expect("run `cargo xtask extract` first");
 
     // One tile south of Littleroot's own last interior row (the walkable
     // `x = 10` column `walking_off_littlerootss_north_edge_crosses_into_route_101_and_back`
@@ -3637,7 +3644,8 @@ fn real_pack_crossing_into_route_101_primes_the_rescue_var_on_arrival() {
 fn real_pack_crossing_into_route_101_lands_on_the_rescue_trigger_and_starts_the_battle() {
     let littleroot = assets::MapId("MAP_LITTLEROOT_TOWN");
     let route101 = assets::MapId("MAP_ROUTE101");
-    let scene = crate::overworld::load_room(littleroot).expect("run `cargo xtask extract` first");
+    let scene = crate::overworld::load_room(littleroot, &engine::event_data::EventData::new())
+        .expect("run `cargo xtask extract` first");
 
     let player = PlayerState::new((10, 2), 3, Direction::North);
     let mut phase = OverworldPhase::for_test(scene, littleroot, player, None);

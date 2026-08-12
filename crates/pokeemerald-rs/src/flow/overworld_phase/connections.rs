@@ -224,7 +224,37 @@ impl OverworldPhase {
             eprintln!("warp: no event data for destination map {map:?} -- staying put");
             return;
         };
-        let Ok(scene) = overworld::load_room(map) else {
+        // `RunOnTransitionMapScript` (`src/overworld.c:860`, in
+        // `LoadMapFromWarp`) -- computed on a scratch clone, before the
+        // scene decodes and before anything reads the destination map's
+        // object events, mirroring upstream's ordering against
+        // `TrySpawnObjectEvents`: `route103_rival_trigger::setup_rival_gfx_id_on_transition`
+        // decides which sprite Route 103's rival object event resolves to
+        // (`crate::overworld::npc`'s own module docs), which the scene
+        // decode below needs to already know. Not committed to
+        // `self.save1.event_data` until the whole warp is known to succeed
+        // (module docs' "leaves the player exactly where they stood"
+        // failure contract) -- see the assignment near the end of this
+        // method.
+        let mut transitioned_event_data = self.save1.event_data.clone();
+        run_on_transition_map_script(map, &mut transitioned_event_data);
+        // Route 101's own on-frame `VAR_ROUTE101_STATE` bump (issue #231,
+        // `super::first_battle_trigger`'s module docs) -- a no-op unless
+        // `map` is Route 101 itself.
+        super::first_battle_trigger::sync_route_101_state_on_entry(
+            map,
+            &mut transitioned_event_data,
+        );
+        // Route 103's own `VAR_OBJ_GFX_ID_0` rival-sprite setup (issue #248,
+        // `super::route103_rival_trigger`'s module docs) -- a no-op unless
+        // `map` is Route 103 itself.
+        super::route103_rival_trigger::setup_rival_gfx_id_on_transition(
+            map,
+            &mut transitioned_event_data,
+            self.save2.player_gender,
+        );
+
+        let Ok(scene) = overworld::load_room(map, &transitioned_event_data) else {
             eprintln!("warp: failed to load destination map {map:?} -- staying put");
             return;
         };
@@ -260,15 +290,7 @@ impl OverworldPhase {
         // `tick`): the destination map's animated tiles start over from
         // their own tick 0, not wherever the departed map's counter was.
         self.tick = 0;
-        // `RunOnTransitionMapScript` (`src/overworld.c:860`, in
-        // `LoadMapFromWarp`) -- run on arrival, before anything reads the
-        // destination map's object events, mirroring upstream's ordering
-        // against `TrySpawnObjectEvents`.
-        run_on_transition_map_script(map, &mut self.save1.event_data);
-        // Route 101's own on-frame `VAR_ROUTE101_STATE` bump (issue #231,
-        // `super::first_battle_trigger`'s module docs) -- a no-op unless
-        // `map` is Route 101 itself.
-        super::first_battle_trigger::sync_route_101_state_on_entry(map, &mut self.save1.event_data);
+        self.save1.event_data = transitioned_event_data;
         // `RestartWildEncounterImmunitySteps` (`LoadMapFromWarp`,
         // `src/overworld.c:850`): the first four steps on the destination
         // map roll nothing, so stepping out of a door never drops the
@@ -347,7 +369,32 @@ impl OverworldPhase {
             );
             return false;
         };
-        let Ok(scene) = overworld::load_room(to_map) else {
+        // Same "compute on a scratch clone, commit only on success" shape
+        // as `Self::warp_to` (that method's own doc comment): the scene
+        // decode below needs to see the entered map's on-transition effects
+        // -- Route 103's rival-sprite setup among them -- before it ever
+        // runs.
+        let mut transitioned_event_data = self.save1.event_data.clone();
+        run_on_transition_map_script(to_map, &mut transitioned_event_data);
+        // Route 101's own on-frame `VAR_ROUTE101_STATE` bump (issue #231,
+        // `super::first_battle_trigger`'s module docs) -- a no-op unless
+        // `to_map` is Route 101 itself.
+        super::first_battle_trigger::sync_route_101_state_on_entry(
+            to_map,
+            &mut transitioned_event_data,
+        );
+        // Route 103's own `VAR_OBJ_GFX_ID_0` rival-sprite setup (issue #248,
+        // `super::route103_rival_trigger`'s module docs) -- a no-op unless
+        // `to_map` is Route 103 itself. This is in fact the one entry point
+        // this port's own connection chain (Littleroot<->Route101<->Oldale<->Route103)
+        // ever reaches Route 103 through.
+        super::route103_rival_trigger::setup_rival_gfx_id_on_transition(
+            to_map,
+            &mut transitioned_event_data,
+            self.save2.player_gender,
+        );
+
+        let Ok(scene) = overworld::load_room(to_map, &transitioned_event_data) else {
             eprintln!(
                 "connection: failed to load destination map {to_map:?} -- staying on the \
                  departed map's data"
@@ -373,14 +420,7 @@ impl OverworldPhase {
         // of that secondary-only re-init is a no-op: the shared
         // water/flower animation continues uninterrupted across a seamless
         // crossing, unlike a warp's full map load.
-        run_on_transition_map_script(to_map, &mut self.save1.event_data);
-        // Route 101's own on-frame `VAR_ROUTE101_STATE` bump (issue #231,
-        // `super::first_battle_trigger`'s module docs) -- a no-op unless
-        // `to_map` is Route 101 itself.
-        super::first_battle_trigger::sync_route_101_state_on_entry(
-            to_map,
-            &mut self.save1.event_data,
-        );
+        self.save1.event_data = transitioned_event_data;
         // `RestartWildEncounterImmunitySteps` (`LoadMapFromCameraTransition`,
         // `src/overworld.c:800`) -- the piece of that function issue #177
         // deferred to this slice. Crossing Littleroot's north edge into
