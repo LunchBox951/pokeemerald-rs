@@ -269,6 +269,12 @@ pub(crate) struct OverworldPhase {
     /// never `Some` at once, since only one of [`Self::step`]'s trigger and
     /// wild-encounter branches can fire on a given frame.
     pub(super) first_battle: Option<battle::Battle>,
+    /// The terminal result of the most recently completed Route 101
+    /// scripted first battle. Cleared when a new attempt starts and set
+    /// only when its driver reports a real [`battle::BattleOutcome`], so an
+    /// aborted battle remains distinguishable from a completed one after
+    /// both have emptied [`Self::first_battle`].
+    first_battle_outcome: Option<battle::BattleOutcome>,
 }
 
 impl OverworldPhase {
@@ -438,6 +444,7 @@ impl OverworldPhase {
             new_game_session: false,
             start_menu: None,
             first_battle: None,
+            first_battle_outcome: None,
         };
         phase.copy_party_and_objects_from_save();
         phase
@@ -504,6 +511,7 @@ impl OverworldPhase {
             new_game_session: true,
             start_menu: None,
             first_battle: None,
+            first_battle_outcome: None,
         }
     }
 
@@ -532,6 +540,13 @@ impl OverworldPhase {
     #[must_use]
     pub(crate) const fn is_first_battle_active(&self) -> bool {
         self.first_battle.is_some()
+    }
+
+    /// The terminal result retained after the scripted Route 101 first
+    /// battle ends, or `None` before it resolves and after an abort.
+    #[must_use]
+    pub(crate) const fn first_battle_outcome(&self) -> Option<battle::BattleOutcome> {
+        self.first_battle_outcome
     }
 
     /// Whether a random wild battle currently owns the overworld frame.

@@ -125,6 +125,7 @@ use crate::main_menu::MainMenuItem;
 use crate::music::MusicPlayer;
 use crate::scene::BootScene;
 use crate::title::{self, TitleSceneError};
+use battle::BattleOutcome;
 
 /// Compose a fresh [`BootScene`] into a `platform`-ready frame.
 ///
@@ -607,6 +608,18 @@ impl App {
                 AppState::WildBattle
             }
             Some(AppScene::Overworld(_)) => AppState::Overworld,
+        }
+    }
+
+    /// Return the retained terminal outcome of Route 101's scripted first
+    /// battle, if the current game flow has completed one successfully.
+    /// An empty result distinguishes an abort from the identical
+    /// [`AppState::FirstBattle`] to [`AppState::Overworld`] transition.
+    #[must_use]
+    pub fn first_battle_outcome(&self) -> Option<BattleOutcome> {
+        match self.scene.as_ref() {
+            Some(AppScene::Overworld(phase)) => phase.first_battle_outcome(),
+            _ => None,
         }
     }
 
