@@ -85,9 +85,10 @@ upstream code, stop and ask in an issue.
 - **Test ratchet `(test-ratchet)`** — never delete, skip, or weaken a test to make
   a gate pass. Fix the code, or fix the test with a recorded reason.
 
-CI enforces these on every PR — all of them on each of the three platform
-legs, except the `--all-features` Clippy pass, which runs on the Linux leg
-only:
+CI enforces these on every PR. The build, test, and default-feature Clippy
+commands run on each of the three platform legs; the `--all-features`
+Clippy pass and `cargo fmt --check` run on Linux only (the latter in the
+`policy` job):
 
 ```bash
 cargo build --release --workspace
