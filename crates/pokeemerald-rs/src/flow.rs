@@ -53,6 +53,21 @@ use crate::title::TitleScene;
 
 pub(crate) mod first_battle;
 pub(crate) mod overworld_phase;
+/// The scripted Route 103 rival battle's `CreateNPCTrainerParty`
+/// construction and headless driver (issue #237).
+///
+/// `#[allow(dead_code)]` is load-bearing and temporary: issue #237 scoped
+/// the trainer-battle rules, this construction, and this driver, and
+/// explicitly **not** Route 103's overworld reachability (the rival's own
+/// trigger, sight cone, and approach script), so nothing in the shipping
+/// binary calls into it yet -- only its own tests do. That is the same
+/// position [`first_battle`] was in between issues #221 and #231, and it
+/// goes away the moment the reachability slice lands and
+/// [`overworld_phase`] gains a `route103_rival_trigger` beside its existing
+/// `first_battle_trigger`. Suppressing the lint here rather than inventing
+/// a caller keeps the out-of-scope boundary the issue drew.
+#[allow(dead_code)]
+pub(crate) mod route103_rival;
 mod wild_encounter;
 pub(crate) use overworld_phase::OverworldPhase;
 

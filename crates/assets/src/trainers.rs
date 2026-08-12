@@ -241,7 +241,7 @@ impl std::ops::BitOrAssign for AiFlags {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TrainerMonNoItemDefaultMoves {
     /// The upstream `iv` value (`0..=255`), scaling this mon's IVs.
-    pub iv: u16,
+    pub iv: u8,
     /// The mon's level.
     pub lvl: u8,
     /// The mon's species.
@@ -254,7 +254,7 @@ pub struct TrainerMonNoItemDefaultMoves {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TrainerMonNoItemCustomMoves {
     /// The upstream `iv` value (`0..=255`), scaling this mon's IVs.
-    pub iv: u16,
+    pub iv: u8,
     /// The mon's level.
     pub lvl: u8,
     /// The mon's species.
@@ -270,7 +270,7 @@ pub struct TrainerMonNoItemCustomMoves {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TrainerMonItemDefaultMoves {
     /// The upstream `iv` value (`0..=255`), scaling this mon's IVs.
-    pub iv: u16,
+    pub iv: u8,
     /// The mon's level.
     pub lvl: u8,
     /// The mon's species.
@@ -285,7 +285,7 @@ pub struct TrainerMonItemDefaultMoves {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TrainerMonItemCustomMoves {
     /// The upstream `iv` value (`0..=255`), scaling this mon's IVs.
-    pub iv: u16,
+    pub iv: u8,
     /// The mon's level.
     pub lvl: u8,
     /// The mon's species.

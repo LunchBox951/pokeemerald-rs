@@ -5,6 +5,7 @@
 //! here as [`BattleError::UnknownSpecies`] / [`BattleError::UnknownMove`],
 //! so `battle` callers depend only on this crate's error type.
 
+use assets::trainers::{AiFlags, TrainerId};
 use assets::{MoveId, SpeciesId};
 use std::error::Error;
 use std::fmt;
@@ -211,6 +212,56 @@ pub enum BattleError {
     /// ([`Self::InvalidMoveSlot`] and friends): the battle and the shared RNG
     /// stream are left exactly as they were.
     RunForbidden,
+
+    /// [`crate::battle::PlayerAction::Run`] was chosen in a
+    /// `BATTLE_TYPE_TRAINER` battle ([`crate::battle::Battle::new_trainer`],
+    /// issue #237).
+    ///
+    /// A *different* upstream gate from [`Self::RunForbidden`], with a
+    /// different message, which is why it is a distinct variant rather than
+    /// a shared one: `HandleTurnActionSelectionState` tests
+    /// `gBattleTypeFlags & BATTLE_TYPE_TRAINER` **before**
+    /// `IsRunningFromBattleImpossible` is called at all
+    /// (`pokeemerald/src/battle_main.c:4331`-`:4337`) and runs
+    /// `BattleScript_PrintCantRunFromTrainer`
+    /// (`data/battle_scripts_1.s:3071`-`:3073`), printing
+    /// `STRINGID_NORUNNINGFROMTRAINERS` — "No! There's no running / from a
+    /// TRAINER battle!" (`src/battle_message.c:330`) — and re-prompting the
+    /// action menu. Like every other pre-draw player-input rejection, it
+    /// leaves the battle and the shared RNG stream exactly as they were.
+    NoRunningFromTrainer,
+
+    /// A trainer id was outside the extracted `gTrainers` range
+    /// (`0..`[`assets::trainers::TRAINERS_COUNT`]).
+    UnknownTrainer(TrainerId),
+
+    /// A trainer party mon knows a move whose `EFFECT_*` the trainer AI
+    /// cannot score (issue #237).
+    ///
+    /// Deliberately distinct from [`Self::UnsupportedMoveEffect`], and
+    /// strictly narrower: that one means the *turn engine* cannot execute
+    /// the move, while this one means the engine could execute it fine but
+    /// `crate::battle::trainer_ai` does not model the `AI_CheckBadMove` /
+    /// `AI_CheckViability` branch its effect takes — several of which draw,
+    /// so admitting one would silently desynchronise the shared RNG stream.
+    /// Reported by [`crate::battle::Battle::new_trainer`] before any draw.
+    UnscoreableMoveEffect(MoveId),
+
+    /// A trainer's `gTrainers[].aiFlags` set an `AI_SCRIPT_*` bit
+    /// `crate::battle::trainer_ai` does not run (issue #237).
+    ///
+    /// Carries **only the unmodelled bits**, so the error names exactly what
+    /// would have to be added. Reported by
+    /// [`crate::battle::Battle::new_trainer`] before any draw.
+    UnsupportedAiFlags(AiFlags),
+
+    /// [`crate::battle::Battle::new_trainer`] was handed an empty party.
+    ///
+    /// Unreachable upstream: `CreateNPCTrainerParty` returns
+    /// `gTrainers[].partySize`, and only `TRAINER_NONE` has a size of `0` —
+    /// a battle against it cannot be started. Rejected here rather than
+    /// panicking on the missing lead.
+    EmptyTrainerParty(TrainerId),
 }
 
 impl fmt::Display for BattleError {
@@ -259,6 +310,23 @@ impl fmt::Display for BattleError {
                     f,
                     "running is forbidden this battle (BATTLE_TYPE_FIRST_BATTLE)"
                 )
+            }
+            Self::NoRunningFromTrainer => {
+                write!(f, "there is no running from a TRAINER battle")
+            }
+            Self::UnknownTrainer(id) => write!(f, "unknown trainer id `{}`", id.0),
+            Self::UnscoreableMoveEffect(id) => write!(
+                f,
+                "move `{}` has a battle effect the trainer AI does not score",
+                id.0
+            ),
+            Self::UnsupportedAiFlags(flags) => write!(
+                f,
+                "trainer AI flags `{:#x}` include scripts this slice does not run",
+                flags.bits()
+            ),
+            Self::EmptyTrainerParty(id) => {
+                write!(f, "trainer `{}` has an empty party", id.0)
             }
         }
     }

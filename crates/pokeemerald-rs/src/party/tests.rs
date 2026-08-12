@@ -100,8 +100,56 @@ fn a_battler_round_trips_through_the_save_layout() {
     assert_eq!(restored.moves(), mon.moves(), "moves and PP, slot for slot");
 }
 
+/// Sub-level experience earned in battle is state, not a function of the
+/// level (`BattlePokemon::apply_experience`, issue #237) -- a round trip
+/// that re-derived the growth word from the level would silently reset
+/// every battle's progress on save/reload.
+#[test]
+fn sub_level_experience_survives_the_round_trip() {
+    let dex = Dex::new();
+    let mut mon = a_battler();
+    // Not enough to reach level 13, so the only observable difference is
+    // the experience total itself.
+    mon.apply_experience(10);
+    let treecko = dex.species(mon.species()).unwrap();
+    assert_eq!(
+        mon.experience(),
+        assets::experience_for_level(treecko.growth_rate, 12).unwrap() + 10,
+        "the fixture must sit strictly between two thresholds, or a \
+         level-derived re-encode would pass"
+    );
+    assert_eq!(mon.level(), 12);
+
+    let restored = from_save_pokemon(&dex, &to_save_pokemon(&dex, &mon))
+        .expect("what we just wrote must decode");
+    assert_eq!(restored.experience(), mon.experience());
+    assert_eq!(restored.level(), mon.level());
+    assert_eq!(restored.stats(), mon.stats());
+}
+
+/// A growth word at or past the next level's threshold reconciles the way
+/// upstream's own `GetLevelFromMonExp` does: the level rises to match the
+/// experience, rather than trusting a level/experience pair upstream could
+/// never store.
+#[test]
+fn an_experience_total_past_the_next_threshold_levels_the_decoded_mon_up() {
+    let dex = Dex::new();
+    let mon = a_battler();
+    let mut saved = to_save_pokemon(&dex, &mon);
+
+    let treecko = dex.species(mon.species()).unwrap();
+    let level_13 = assets::experience_for_level(treecko.growth_rate, 13).unwrap();
+    let mut substructures = saved.box_data.substructures().unwrap();
+    substructures.growth[4..8].copy_from_slice(&level_13.to_le_bytes());
+    saved.box_data.set_substructures(&substructures);
+
+    let restored = from_save_pokemon(&dex, &saved).expect("valid bytes must decode");
+    assert_eq!(restored.level(), 13, "the level follows the experience");
+    assert_eq!(restored.experience(), level_13);
+}
+
 /// The saved bytes are upstream's, not an invented shape: the growth
-/// substructure holds the species and the level's own experience, the party
+/// substructure holds the species and the accumulated experience, the party
 /// block holds `MAIL_NONE`, and the box header carries the OT id the key is
 /// built from.
 #[test]
@@ -123,8 +171,14 @@ fn the_saved_bytes_sit_at_upstream_offsets() {
     let treecko = dex.species(mon.species()).unwrap();
     assert_eq!(
         u32::from_le_bytes(substructures.growth[4..8].try_into().unwrap()),
+        mon.experience(),
+        "the growth word holds the mon's own accumulated experience"
+    );
+    assert_eq!(
+        mon.experience(),
         assets::experience_for_level(treecko.growth_rate, 12).unwrap(),
-        "experience is seeded from the growth curve, as CreateBoxMon does"
+        "which, for a freshly built mon, is the growth-curve seed \
+         CreateBoxMon writes"
     );
     assert_eq!(substructures.growth[9], treecko.base_friendship);
     assert_eq!(
