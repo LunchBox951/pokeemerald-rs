@@ -60,8 +60,32 @@
 //! encounter still constructs with `first_battle = false`
 //! (`crates/pokeemerald-rs/src/flow/wild_encounter.rs`).
 //!
+//! Issue #237 adds `BATTLE_TYPE_TRAINER` — the scripted Route 103 rival
+//! battle's rules — as a second constructor, [`battle::Battle::new_trainer`],
+//! rather than a second flag: a trainer battle needs *state* a wild one does
+//! not (a party bench, a prize purse, `gTrainers[].aiFlags`), so that state
+//! lives in [`battle::trainer::TrainerContext`] and `Battle` gates every
+//! battle-type delta on which shape it was built for. The five deltas —
+//! running refused outright ([`BattleError::NoRunningFromTrainer`], a
+//! *different* upstream gate from `first_battle`'s), a party opponent, a
+//! forced post-faint send-out in party order, `x1.5` experience
+//! ([`exp::trainer_faint_exp`]), and prize money on a win
+//! ([`battle::BattleEvent::MoneyGained`]) — are enumerated with their
+//! upstream citations in [`battle::trainer`]'s module docs. The opponent's
+//! move choice is upstream's real `AI_SCRIPT_*` scoring pipeline
+//! (`battle`'s private `trainer_ai` submodule): `AI_CheckBadMove`,
+//! `AI_TryToFaint`, `AI_CheckViability` and `AI_SetupFirstTurn`, narrowed to
+//! the move effects a level-5 starter can carry and screened at construction
+//! so nothing outside that narrowing can silently mis-draw. The battle's own
+//! construction — `CreateNPCTrainerParty`'s seeded personalities and fixed
+//! IVs — and its headless driver are
+//! `crates/pokeemerald-rs/src/flow/route103_rival.rs`, the same split issue
+//! #221 used for the first battle; Route 103's overworld reachability
+//! (the rival's sight cone and approach script) is a later slice.
+//!
 //! Out of scope for this slice (see each module's own docs for exactly what
-//! is/isn't modelled): general trainer/wild AI (`I-5`), battle UI/animations,
+//! is/isn't modelled): the *general* trainer AI beyond the four scripts
+//! above and mid-battle switching AI (`I-5`), battle UI/animations,
 //! overworld transition, abilities, held items, non-volatile status
 //! conditions, weather, multi/double battles, Mist/Substitute (see
 //! [`stat_change`]'s module docs for why those two are a documented boundary
@@ -86,6 +110,10 @@ pub mod stat_stage;
 pub mod turn_order;
 pub mod wild;
 
+pub use battle::trainer::{
+    build_trainer_pokemon, fixed_ivs, roll_non_shiny_ot_id, shiny_value, trainer_data,
+    trainer_money, TrainerContext, SHINY_ODDS,
+};
 pub use battle::{Battle, BattleEvent, BattleOutcome, PlayerAction, TurnError};
 pub use damage::{
     apply_damage_roll, apply_dual_type_effectiveness, apply_stab, apply_type_effectiveness,
@@ -94,6 +122,7 @@ pub use damage::{
 };
 pub use dex::Dex;
 pub use error::BattleError;
+pub use exp::{trainer_faint_exp, wild_faint_exp};
 pub use hit::{ensure_resolvable, is_ordinary_hit_effect, HitOutcome};
 pub use nature::{Nature, Stat};
 pub use pokemon::{

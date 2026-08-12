@@ -20,9 +20,9 @@
 //!
 //! # What survives the round trip, and what does not
 //!
-//! Round-trips exactly: species, level, personality (and so nature), the
-//! six IVs, the moveset with each slot's remaining PP, current HP, and the
-//! original-trainer id.
+//! Round-trips exactly: species, level, **accumulated experience**,
+//! personality (and so nature), the six IVs, the moveset with each slot's
+//! remaining PP, current HP, and the original-trainer id.
 //!
 //! Deliberately *not* modelled, written as upstream's own default and
 //! discarded on the way back:
@@ -42,17 +42,19 @@
 //!   (`PokemonSubstruct3`'s bits 30/31) stay clear: this port models no
 //!   eggs and no abilities.
 //!
-//! Two fields are *derived* rather than carried, so the saved bytes stay
+//! One field is *derived* rather than carried, so the saved bytes stay
 //! self-consistent with what upstream would have written:
 //!
-//! * **Experience** -- `CreateBoxMon` seeds it from the species' growth
-//!   curve at the mon's level (`gExperienceTables[growthRate][level]`,
-//!   `pokeemerald/src/pokemon.c:2262`), which is exactly
-//!   [`assets::experience_for_level`]. The decode reads `level` out of the
-//!   party block (upstream's own `MON_DATA_LEVEL`), never re-derives it
-//!   from experience.
 //! * **Friendship** -- the species' `base_friendship`, as `CreateBoxMon`
-//!   sets it (`:2270`).
+//!   sets it (`pokeemerald/src/pokemon.c:2270`).
+//!
+//! Experience used to be on that list, derived from the growth curve at
+//! the mon's level. Since battles apply earned experience to the battler
+//! itself ([`battle::BattlePokemon::apply_experience`], issue #237), the
+//! sub-level progress between two thresholds is real state, so the encode
+//! writes the mon's own total (upstream's `MON_DATA_EXP`) and the decode
+//! restores it -- see [`from_save_pokemon`] for how inconsistent bytes are
+//! reconciled.
 //!
 //! The stat block (`hp`/`max_hp`/`attack`/.../`special_defense`) is written
 //! from [`battle::BattlePokemon::stats`], i.e. `CalculateMonStats`' output,
@@ -157,17 +159,17 @@ pub(crate) fn to_save_pokemon(dex: &Dex, mon: &BattlePokemon) -> Pokemon {
     let mut growth = [0u8; SUBSTRUCTURE_LEN];
     growth[0..2].copy_from_slice(&mon.species().0.to_le_bytes());
     // `heldItem` (`/*0x02*/`) stays `ITEM_NONE`.
-    let (experience, friendship) = match dex.species(mon.species()) {
-        Ok(base) => (
-            assets::experience_for_level(base.growth_rate, mon.level()).unwrap_or(0),
-            base.base_friendship,
-        ),
+    // The mon's own accumulated total (`MON_DATA_EXP`), never re-derived
+    // from the level: sub-level progress earned in battle is state the
+    // save must carry (module docs).
+    growth[4..8].copy_from_slice(&mon.experience().to_le_bytes());
+    let friendship = match dex.species(mon.species()) {
+        Ok(base) => base.base_friendship,
         // Unreachable through `BattlePokemon`, whose constructor already
         // resolved this species against a dex -- but a species missing from
         // *this* dex must still produce writable bytes rather than a panic.
-        Err(_) => (0, 0),
+        Err(_) => 0,
     };
-    growth[4..8].copy_from_slice(&experience.to_le_bytes());
     // `ppBonuses` (`/*0x08*/`) stays 0: no PP Ups are modelled.
     growth[9] = friendship;
 
@@ -210,10 +212,11 @@ pub(crate) fn to_save_pokemon(dex: &Dex, mon: &BattlePokemon) -> Pokemon {
 /// a saved party value describes.
 ///
 /// Stats are recomputed from species/level/nature/IVs by
-/// [`battle::BattlePokemon::new`] (module docs), then current HP and each
-/// move slot's PP are wound back down to the saved values through the two
-/// mutations that preserve that type's invariants
-/// ([`battle::BattlePokemon::apply_damage`] /
+/// [`battle::BattlePokemon::new`] (module docs), then accumulated
+/// experience, current HP, and each move slot's PP are wound back to the
+/// saved values through the mutations that preserve that type's invariants
+/// ([`battle::BattlePokemon::apply_experience`] /
+/// [`battle::BattlePokemon::apply_damage`] /
 /// [`battle::BattlePokemon::deduct_pp`]) -- never by reaching past them.
 ///
 /// # Errors
@@ -256,6 +259,24 @@ pub(crate) fn from_save_pokemon(dex: &Dex, saved: &Pokemon) -> Result<BattlePoke
         move_ids,
     )?
     .with_original_trainer_id(saved.box_data.ot_id());
+
+    // `BattlePokemon::new` seeds experience at the level's own threshold;
+    // the saved total (`MON_DATA_EXP`) also carries the sub-level progress
+    // earned in battle, so apply the difference. Inconsistent bytes
+    // reconcile the way upstream's own level derivation does
+    // (`GetLevelFromMonExp`, reached from `CalculateMonStats`,
+    // `pokeemerald/src/pokemon.c`): a total at or past the next level's
+    // threshold levels the mon up to match it, and a total *below* the
+    // saved level's own floor (unwritable by [`to_save_pokemon`]) stays at
+    // the floor rather than representing a level/experience pair upstream
+    // could never store.
+    let saved_experience = u32::from_le_bytes([
+        substructures.growth[4],
+        substructures.growth[5],
+        substructures.growth[6],
+        substructures.growth[7],
+    ]);
+    mon.apply_experience(saved_experience.saturating_sub(mon.experience()));
 
     // Full HP is what `BattlePokemon::new` starts at; the save's own `hp`
     // is the state to restore. A saved value above the recomputed maximum

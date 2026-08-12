@@ -78,7 +78,7 @@ commands:
                      title | main-menu-new-game | main-menu-option
   scenario --name <name>
                      run a scripted gameplay scenario; <name> is
-                     boot-to-main-menu
+                     boot-to-main-menu | boot-to-first-fight
   e2e --suite <s> [--release]
                      run the end-to-end suite; <s> is smoke | full | soak";
 
@@ -318,6 +318,10 @@ impl Scene {
 pub enum ScenarioName {
     /// Boot the real title screen and press Start into the no-save main menu.
     BootToMainMenu,
+    /// Boot to the title, start a new game, walk the protagonist's room and
+    /// Route 101, trigger `BATTLE_TYPE_FIRST_BATTLE`, and drive it until the
+    /// battle resolves with a retained terminal outcome (I-7, issue #245).
+    BootToFirstFight,
 }
 
 impl ScenarioName {
@@ -329,6 +333,7 @@ impl ScenarioName {
     pub fn parse(value: &str) -> Result<Self, XtaskError> {
         match value {
             "boot-to-main-menu" => Ok(Self::BootToMainMenu),
+            "boot-to-first-fight" => Ok(Self::BootToFirstFight),
             other => Err(XtaskError::InvalidScenario(other.to_owned())),
         }
     }
@@ -338,6 +343,7 @@ impl ScenarioName {
     pub const fn name(self) -> &'static str {
         match self {
             Self::BootToMainMenu => "boot-to-main-menu",
+            Self::BootToFirstFight => "boot-to-first-fight",
         }
     }
 }
@@ -545,10 +551,11 @@ fn dispatch(cmd: &Command) -> Result<(), XtaskError> {
             let report =
                 scenario::run(*name).map_err(|err| XtaskError::ScenarioFailed(err.to_string()))?;
             println!(
-                "scenario `{}` passed: {} frame(s), milestones {:?}",
+                "scenario `{}` passed: {} frame(s), milestones {:?}, first battle outcome {:?}",
                 name.name(),
                 report.frames_run,
                 report.milestones,
+                report.first_battle_outcome,
             );
             Ok(())
         }
@@ -731,14 +738,15 @@ mod tests {
 
     #[test]
     fn every_scenario_name_round_trips_and_appears_in_usage() {
-        const ALL: &[ScenarioName] = &[ScenarioName::BootToMainMenu];
+        const ALL: &[ScenarioName] =
+            &[ScenarioName::BootToMainMenu, ScenarioName::BootToFirstFight];
         for name in ALL {
             // Compile-forced completeness: adding a `ScenarioName` variant
             // breaks this match, steering the author here to extend `ALL`
             // -- which then drags along `parse` (whose string catch-all
             // the compiler cannot check) and USAGE's hardcoded name list.
             match name {
-                ScenarioName::BootToMainMenu => {}
+                ScenarioName::BootToMainMenu | ScenarioName::BootToFirstFight => {}
             }
             assert_eq!(ScenarioName::parse(name.name()).unwrap(), *name);
             assert!(
