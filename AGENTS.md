@@ -38,7 +38,8 @@ formulas); `mgba/` clarifies hardware behaviour. Both are read-only `(reference-
 | Bootstrap upstream refs | `./init.sh` |
 | Build | `cargo build --workspace` (release: add `--release`) |
 | Test | `cargo test --workspace` |
-| Lint | `cargo clippy --all-targets --workspace -- -D warnings` |
+| Lint (default features) | `cargo clippy --workspace --all-targets --locked -- -D warnings` |
+| Lint (all features) | `cargo clippy --workspace --all-targets --all-features --locked -- -D warnings` |
 | Format | `cargo fmt --check` |
 | Ledger | `python3 scripts/ledger.py status \| verify \| gaps \| report` |
 
@@ -64,6 +65,9 @@ formulas); `mgba/` clarifies hardware behaviour. Both are read-only `(reference-
   module boundaries; **no global mutable state**.
 - One module = one concept. A file over ~600 lines is a smell — ask why.
 - `unsafe` requires a `// SAFETY:` block stating the invariant.
+- For new unconditional lint exceptions, prefer narrow
+  `#[expect(..., reason = "...")]`; use `#[allow(..., reason = "...")]` only
+  when configuration can make the lint absent.
 - Errors are concrete per-crate enums (no `anyhow` in library crates).
 - Public surface documented with `///`. Unit tests alongside code; integration
   tests under `<crate>/tests/`.

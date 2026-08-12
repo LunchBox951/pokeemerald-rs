@@ -85,12 +85,16 @@ upstream code, stop and ask in an issue.
 - **Test ratchet `(test-ratchet)`** — never delete, skip, or weaken a test to make
   a gate pass. Fix the code, or fix the test with a recorded reason.
 
-CI enforces all four on every PR:
+CI enforces these on every PR. The build, test, and default-feature Clippy
+commands run on each of the three platform legs; the `--all-features`
+Clippy pass and `cargo fmt --check` run on Linux only (the latter in the
+`policy` job):
 
 ```bash
 cargo build --release --workspace
 cargo test --workspace
-cargo clippy --all-targets --workspace -- -D warnings
+cargo clippy --workspace --all-targets --locked -- -D warnings
+cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
 cargo fmt --check
 ```
 
