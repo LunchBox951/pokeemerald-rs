@@ -7605,6 +7605,18 @@
     },
     "data/maps/Route103": {
       "artifacts": {
+        "Route103_EventScript_Rival": {
+          "reason": "data/maps/Route103/scripts.inc:19-56 -- the rival's own interaction script (local_id 2, data/maps/Route103/map.json's own object_events, already ported verbatim into assets::MapEventsTable, the parent dir entry's own header/events artifacts). Issue #248's cut: route103_rival_trigger::is_rival_trigger recognizes this exact script name on the facing object event the instant an A press lands, and OverworldPhase::begin_route103_rival_battle then calls flow::route103_rival::start_route103_rival_battle directly in this script's place, deriving Rival from SaveBlock2::player_gender (Rival::for_gender) and PlayerStarter from the party lead's real species (PlayerStarter::from_species) -- VAR_STARTER_MON itself is not modelled. The BATTLE_TYPE_TRAINER fight happens, but none of this script's own cutscene does: no lockall/checkplayergender-for-the-greeting/msgbox (Route103_Text_{May,Brendan}Route103Pokemon/LetsBattle/TimeToHeadBack/Defeated), no playbgm MUS_ENCOUNTER_{MAY,BRENDAN}, no applymovement (Common_Movement_FacePlayer/_ExclamationMark/_Delay48), no switch VAR_FACING exit-movement cutscene (Route103_EventScript_RivalExit and its Route103_Movement_* siblings), none of it. Route103_EventScript_RivalEnd's own removeobject is ported narrowly as advance_route103_rival_battle_frame's FLAG_HIDE_ROUTE_103_RIVAL set, on BattleOutcome::PlayerWon only -- see that function's own reason for the honest loss decision (no whiteout is modelled, so upstream's own routing of a loss to CB2_WhiteOut instead of RivalEnd is mirrored by a loss simply leaving the rival fightable again). RivalEnd's other six lines (setvar VAR_BIRCH_LAB_STATE/VAR_OLDALE_RIVAL_STATE, setflag FLAG_DEFEATED_RIVAL_ROUTE103, clearflag FLAG_HIDE_LITTLEROOT_TOWN_BIRCHS_LAB_RIVAL/FLAG_HIDE_OLDALE_TOWN_RIVAL, savebgm/fadedefaultbgm) are NOT modelled -- each only unlocks content this port cannot reach yet (Birch's lab post-battle dialog, Oldale's own rival encounter), so writing them would be dead state.",
+          "rust_target": "crates/pokeemerald-rs/src/flow/overworld_phase/route103_rival_trigger.rs",
+          "spec": "I-5",
+          "status": "stubbed"
+        },
+        "Route103_OnTransition": {
+          "reason": "data/maps/Route103/scripts.inc:6-9 (MAP_SCRIPT_ON_TRANSITION). Ported narrowly, the same one-targeted-effect shape overworld_phase::connections::run_on_transition_map_script already uses for SecretBase_EventScript_SetDecorationFlags: route103_rival_trigger::setup_rival_gfx_id_on_transition reproduces its 'call Common_EventScript_SetupRivalGfxId' half (see that script's own ledger entry, data/scripts/rival_graphics.inc#Common_EventScript_SetupRivalGfxId), writing VAR_OBJ_GFX_ID_0 from SaveBlock2::player_gender on entering Route 103 -- called from all three of OverworldPhase's map-entry points (new/warp_to/cross_connection), the same coverage sync_route_101_state_on_entry keeps for Route 101's own on-frame effect. NOT modelled: 'call ProfBirch_EventScript_UpdateLocation', the script's other half -- it only affects where a later Pokedex-rating dialog finds Birch standing, which this port does not render.",
+          "rust_target": "crates/pokeemerald-rs/src/flow/overworld_phase/route103_rival_trigger.rs",
+          "spec": "I-5",
+          "status": "stubbed"
+        },
         "header": {
           "reason": "map.json header fields (id, layout, music id, region_map_section, requires_flash, weather, map_type, allow_cycling/escaping/running, show_map_name, battle_scene) and connections transcribed to a typed MapHeader in crates/assets/src/map_headers.rs. object_events/warp_events/coord_events/bg_events (and shared_events_map/shared_scripts_map) are NOT covered here — issue #77 — so the file's own status stays pending and only this 'header' artifact is terminal.",
           "rust_target": "crates/assets/src/map_headers.rs",
@@ -11471,6 +11483,14 @@
       "status": "pending"
     },
     "data/scripts/rival_graphics.inc": {
+      "artifacts": {
+        "Common_EventScript_SetupRivalGfxId": {
+          "reason": "data/scripts/rival_graphics.inc:1-13. checkplayergender then setvar VAR_OBJ_GFX_ID_0, OBJ_EVENT_GFX_RIVAL_MAY_NORMAL (male player) / OBJ_EVENT_GFX_RIVAL_BRENDAN_NORMAL (female player) -- ported as route103_rival_trigger::setup_rival_gfx_id_on_transition, called from Route103_OnTransition's own port (data/maps/Route103#Route103_OnTransition) on Route 103 entry. crate::overworld::npc's own resolve_sprite_source then reads VAR_OBJ_GFX_ID_0 back out to resolve the rival's OBJ_EVENT_GFX_VAR_0 object event to a real sprite. An out-of-range player_gender byte (PlayerGender::Other) is upstream's own no-op (checkplayergender's two goto_if_eq never match, falling through to a bare end) -- mirrored exactly, not defaulted to either rival. The file's three sibling scripts (Common_EventScript_SetupRivalOnBikeGfxId and the two _SameGender variants) are not reachable from any object event this port bundles and are not ported.",
+          "rust_target": "crates/pokeemerald-rs/src/flow/overworld_phase/route103_rival_trigger.rs",
+          "spec": "I-5",
+          "status": "stubbed"
+        }
+      },
       "category": "data.script",
       "kind": "file",
       "spec_owner": "06-engine",
@@ -24577,9 +24597,9 @@
           "status": "stubbed"
         },
         "DoTrainerBattle": {
-          "reason": "battle_setup.c:459 (DoTrainerBattle, with BattleSetup_StartTrainerBattle at :1272 and CB2_EndTrainerBattle at :1327). What is modelled is the battle it starts: gBattleTypeFlags = BATTLE_TYPE_TRAINER and the CreateNPCTrainerParty construction behind it are flow::route103_rival::start_route103_rival_battle -> battle::Battle::new_trainer (issue #237's trainer rules -- no running, a party opponent, the forced post-faint send-out, x1.5 exp, prize money -- and the real AI_SCRIPT_* move choice), and flow::route103_rival::advance_route103_rival_battle plays it headlessly with PlayerAction::UseMove(0) every turn, a stand-in for the player's choice and only that. NOT modelled, and explicitly out of scope for issue #237, which scoped rules + construction + driver: Route 103's overworld reachability in every form -- Route103_EventScript_Rival*'s trigger, the rival-approach cutscene, trainer sight cones (TrainerApproachPlayer / CheckForTrainersWantingBattle), gTrainerBattleOpponent_A / TRAINER_BATTLE_* parameter parsing, the battle transition and SetMainCallback2(CB2_InitBattle), and the player-gender/VAR_STARTER_MON pair that picks which of the six TRAINER_*_ROUTE_103_* ids is fought (flow::route103_rival::route103_rival_for exposes the mapping so a later slice does not have to re-derive it). So this module has no production caller yet, exactly as flow::first_battle had none between issues #221 and #231. NOT modelled either: CB2_EndTrainerBattle's IsPlayerDefeated branch (:1333-:1338) routing to CB2_WhiteOut -- the same white-out deferral already recorded on BattleSetup_StartWildBattle, so a lost trainer battle likewise leaves a fainted lead written back where upstream would have healed and warped the party; and BattleEvent::MoneyGained's credit, there being no money field to add it to (src/battle_script_commands.c#Cmd_getmoneyreward).",
+          "reason": "battle_setup.c:459 (DoTrainerBattle, with BattleSetup_StartTrainerBattle at :1272 and CB2_EndTrainerBattle at :1327). The battle rules/construction/driver issue #237 built here (gBattleTypeFlags = BATTLE_TYPE_TRAINER, CreateNPCTrainerParty via flow::route103_rival::start_route103_rival_battle -> battle::Battle::new_trainer, advance_route103_rival_battle's headless PlayerAction::UseMove(0) driver) are now reachable from real play (issue #248): overworld_phase::route103_rival_trigger::begin_route103_rival_battle calls into this module the instant the player faces Route 103's rival and presses A (see data/maps/Route103#Route103_EventScript_Rival's own ledger entry for what that trigger covers and defers -- the cutscene dressing, the six unmodelled RivalEnd writes). What is STILL not modelled, unchanged from issue #237: CB2_EndTrainerBattle's IsPlayerDefeated branch (:1333-:1338) routing to CB2_WhiteOut -- the same white-out deferral already recorded on BattleSetup_StartWildBattle, so a lost trainer battle leaves a fainted lead written back and the rival still fightable, where upstream would have healed the party, halved the player's money, and warped to a Pokemon Center (route103_rival_trigger's own 'honest loss decision' docs record why this is the deliberate call, not an oversight); and BattleEvent::MoneyGained's credit, there being no money field to add it to (src/battle_script_commands.c#Cmd_getmoneyreward).",
           "rust_target": "crates/pokeemerald-rs/src/flow/route103_rival.rs",
-          "spec": "S-6",
+          "spec": "I-5",
           "status": "stubbed"
         }
       },
