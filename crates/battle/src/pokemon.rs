@@ -523,6 +523,26 @@ impl BattlePokemon {
     /// Stat recalculation follows `CalculateMonStats`. If maximum HP grows,
     /// the increase is also added to current HP, preserving the absolute
     /// amount of damage the mon had taken before levelling up.
+    ///
+    /// # Recorded divergence: a crossed level changes nothing but the level
+    ///
+    /// Upstream's level-up path does more than raise the number. From
+    /// `Cmd_getexp` it runs `BattleScript_LevelUp`
+    /// (`pokeemerald/data/battle_scripts_1.s`), whose `handlelearnnewmove`
+    /// (`Cmd_handlelearnnewmove` → `MonTryLearningNewMove`,
+    /// `src/battle_script_commands.c:5360`, `src/pokemon.c`) teaches each
+    /// crossed level's learnset move — with the four-known-moves
+    /// replacement prompt — and `Cmd_getexp` itself also applies
+    /// `MonGainEVs` (`src/battle_script_commands.c:3420`) and
+    /// `AdjustFriendship(FRIENDSHIP_EVENT_GROW_LEVEL)` (`:3465`). **None of
+    /// that is modelled here**: the moveset, EVs (this crate carries none),
+    /// and friendship are unchanged across a level-up, so a mon that
+    /// crosses a learnset level keeps its old moves. Deliberate deferral,
+    /// not an accident — teaching the move would hand out moves whose
+    /// effects this crate does not model yet and fails closed on. Recorded
+    /// on the `Cmd_getexp` / `MonTryLearningNewMove` ledger entries and
+    /// pinned by `a_crossed_level_does_not_learn_the_learnset_move_yet`, so
+    /// a future slice flips it deliberately, never silently.
     pub fn apply_experience(&mut self, amount: u32) {
         let max_experience =
             experience_for_level(self.base_stats.growth_rate, MAX_LEVEL).unwrap_or(u32::MAX);

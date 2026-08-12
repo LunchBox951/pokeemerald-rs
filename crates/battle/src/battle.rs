@@ -390,15 +390,28 @@ pub enum BattleEvent {
         bench_remaining: usize,
     },
     /// The player's mon gained experience for fainting the opposing mon.
+    ///
+    /// The award is **already applied** to [`Battle::player`] when this
+    /// event is emitted — accumulated experience, any crossed level, and
+    /// recomputed stats ([`BattlePokemon::apply_experience`], upstream
+    /// `Cmd_getexp`'s `SetMonData(MON_DATA_EXP)`/`CalculateMonStats` half).
+    /// The event is a report of that mutation, for the integration layer to
+    /// present; applying the amount to the battler again would double it.
+    /// What the in-battle application deliberately does *not* do (level-up
+    /// move learning, EV gain, friendship) is recorded on
+    /// [`BattlePokemon::apply_experience`] and the `Cmd_getexp` ledger
+    /// entry.
     ExpGained(u32),
     /// Beating a trainer paid out prize money — `Cmd_getmoneyreward`
     /// (`src/battle_script_commands.c:5635`), whose
     /// `AddMoney(&gSaveBlock1Ptr->money, ...)` this crate has no field to
     /// perform. The amount is [`trainer::TrainerContext::money`]; crediting
-    /// it belongs to the integration layer, the same division of labour
-    /// [`BattleEvent::ExpGained`] follows. Always immediately before the
-    /// final [`BattleEvent::Ended`], and only for
-    /// [`BattleOutcome::PlayerWon`] against a trainer.
+    /// it belongs to the integration layer — unlike
+    /// [`BattleEvent::ExpGained`], whose award `Battle` applies to its own
+    /// battler before emitting the event (this crate owns the battler, but
+    /// no save block). Always immediately before the final
+    /// [`BattleEvent::Ended`], and only for [`BattleOutcome::PlayerWon`]
+    /// against a trainer.
     MoneyGained(u32),
     /// The battle reached a terminal outcome; no further turns are valid.
     Ended(BattleOutcome),

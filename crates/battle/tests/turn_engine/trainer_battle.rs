@@ -348,6 +348,42 @@ fn a_level_crossed_before_replacement_updates_the_next_turns_combat() {
     );
 }
 
+/// The recorded level-up divergence (`BattlePokemon::apply_experience`'s
+/// docs, the `Cmd_getexp` / `MonTryLearningNewMove` ledger entries): a
+/// crossed level does **not** learn the crossed learnset move yet — a
+/// level-6 Treecko's learnset holds Absorb, and upstream's
+/// `MonTryLearningNewMove` would teach it, but this port's moveset is
+/// unchanged across a level-up. This pin exists so the deferral can only be
+/// flipped deliberately; when a slice models level-up move learning, update
+/// the ledger entries and this test together.
+#[test]
+fn a_crossed_level_does_not_learn_the_learnset_move_yet() {
+    const ABSORB: MoveId = MoveId(71);
+    let dex = Dex::new();
+    let mut mon = max_iv_mon(&dex, TREECKO, 5, vec![SLASH]);
+    let level_6 =
+        assets::experience_for_level(dex.species(SpeciesId(TREECKO)).unwrap().growth_rate, 6)
+            .unwrap();
+
+    mon.apply_experience(level_6 - mon.experience());
+
+    assert_eq!(mon.level(), 6, "the threshold was crossed");
+    assert_eq!(mon.experience(), level_6);
+    assert!(
+        battle::initial_moveset(SpeciesId(TREECKO), 6).contains(&ABSORB),
+        "the learnset itself does hold Absorb at level 6 — the data is \
+         present, the behaviour is the recorded deferral"
+    );
+    assert_eq!(
+        mon.moves()
+            .iter()
+            .map(|slot| slot.move_id)
+            .collect::<Vec<_>>(),
+        vec![SLASH],
+        "the moveset is unchanged across the level-up (recorded divergence)"
+    );
+}
+
 /// Every knocked-out party member pays its own boosted award, so the exp a
 /// multi-mon trainer hands over is the sum of them — pinned alongside the
 /// send-out because the two share the same faint path.
