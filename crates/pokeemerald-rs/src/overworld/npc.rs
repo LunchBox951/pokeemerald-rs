@@ -67,8 +67,11 @@
 //! to the rival: [`VAR_OBJ_GFX_ID_0`] is ordinary persistent event data, so
 //! once a Route 103 visit has written a rival id it stays written on every
 //! other map too, and the *other* bundled `OBJ_EVENT_GFX_VAR_0` object
-//! events -- the bedroom decoration placeholders and Oldale Town's own
-//! rival -- are kept invisible by their hide flags (`FLAG_DECORATION_*`,
+//! events -- the bedroom decoration placeholders, Oldale Town's own rival,
+//! and the Littleroot Town / Birch's Lab rivals
+//! (`FLAG_HIDE_LITTLEROOT_TOWN_RIVAL` /
+//! `FLAG_HIDE_LITTLEROOT_TOWN_BIRCHS_LAB_RIVAL`, both new-game-set) -- are
+//! kept invisible by their hide flags (`FLAG_DECORATION_*`,
 //! set on every bedroom entry; `FLAG_HIDE_OLDALE_TOWN_RIVAL`, set at new
 //! game and never cleared while `Route103_EventScript_RivalEnd`'s
 //! `clearflag` stays a recorded deferral), which gate them out of
