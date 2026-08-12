@@ -9,11 +9,12 @@
 #
 # `policy` owns the Ubuntu-only repository checks and the exact default format
 # command. `native` gives each supported OS one checkout and one shared Cargo
-# target directory for the exact default Clippy/build/test commands plus smoke
-# validation. On Ubuntu, that same workspace also restores the pinned upstream
-# references, extracts the real asset pack, runs the ignored real-pack and
-# real-checkout assertions, and repeats smoke with the pack present. No Cargo target cache is
-# used: reuse is deliberately limited to commands within one native runner.
+# target directory for the exact default-feature Clippy/build/test commands
+# plus smoke validation. Ubuntu also runs the all-feature Clippy gate, restores
+# the pinned upstream references, extracts the real asset pack, runs the ignored
+# real-pack and real-checkout assertions, and repeats smoke with the pack
+# present. No Cargo target cache is used: reuse is deliberately limited to
+# commands within one native runner.
 #
 # Branch rules require `merge-gate / <target>` from this workflow. The target
 # suffix is load-bearing: GitHub keys checks by head SHA, so distinct names keep
@@ -71,8 +72,6 @@ jobs:
         run: python3 -m unittest discover -s scripts -p "test_*.py"
       - name: Run init.sh regression tests
         run: bash init_test.sh
-      - name: Ensure rustfmt component
-        run: rustup component add rustfmt
       - name: cargo fmt --check
         run: cargo fmt --check
 
@@ -88,12 +87,11 @@ jobs:
       - name: Install ALSA dev headers (Linux)
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libasound2-dev
-      - name: Ensure clippy component (Linux)
+      - name: cargo clippy --workspace --all-targets --locked -- -D warnings
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - name: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
         if: runner.os == 'Linux'
-        run: rustup component add clippy
-      - name: cargo clippy --all-targets --workspace -- -D warnings
-        if: runner.os == 'Linux'
-        run: cargo clippy --all-targets --workspace -- -D warnings
+        run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
       - name: cargo build --release --workspace
         run: cargo build --release --workspace
       - name: cargo test --workspace

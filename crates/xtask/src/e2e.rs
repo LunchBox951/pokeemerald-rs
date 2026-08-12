@@ -249,6 +249,11 @@ fn check_title_screen() -> Result<(), E2eError> {
 /// [`E2eError::OverworldFrameBlank`] if a pack is present and loads, but
 /// composing fails either check.
 fn check_overworld_scene() -> Result<(), E2eError> {
+    const LATER_TICK: u32 = 17;
+    const AVATAR_X: usize = 112;
+    const AVATAR_Y: usize = 64;
+    const SCREEN_W: usize = 240;
+
     let scene = match pokeemerald_rs::overworld::load_default_room() {
         Ok(scene) => scene,
         Err(err) if err.is_pack_missing() => return Ok(()),
@@ -281,7 +286,6 @@ fn check_overworld_scene() -> Result<(), E2eError> {
     // half is pinned properly, on a map that does show animated tiles, by
     // `pokeemerald_rs::overworld::tests`'
     // `real_pack_tick_changes_only_the_animated_tile_screen_regions`.
-    const LATER_TICK: u32 = 17;
     let frame_a = scene.compose_frame(&player, &event_data, 0);
     let frame_b = scene.compose_frame(&player, &event_data, 0);
     if frame_a != frame_b {
@@ -302,9 +306,6 @@ fn check_overworld_scene() -> Result<(), E2eError> {
     // (x 112..128, y 64..96 -- `overworld::avatar`'s PLAYER_OBJ_X/Y): a
     // missing viewport leaves that region a single flat backdrop color,
     // while any real room supplies floor/wall/furniture variation.
-    const AVATAR_X: usize = 112;
-    const AVATAR_Y: usize = 64;
-    const SCREEN_W: usize = 240;
     let mut outside_colors = std::collections::BTreeSet::new();
     for (i, &pixel) in frame_a.iter().enumerate() {
         let (x, y) = (i % SCREEN_W, i / SCREEN_W);
