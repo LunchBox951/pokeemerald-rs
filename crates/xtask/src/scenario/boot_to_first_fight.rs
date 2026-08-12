@@ -27,12 +27,21 @@
 //! honest result, asserted by this module's own tests: `[Title,
 //! MainMenu(NewGame), Intro, Overworld, FirstBattle, Overworld]`.
 //!
-//! **No NPC-dialog milestone.** This port has no script/dialog engine yet
-//! (`pokeemerald_rs::flow::first_battle`'s own module docs, "no script
-//! engine"), so "first NPC dialog" has no state to distinguish even in
-//! principle -- the walk below still crosses the protagonist's own room
-//! and Route 101 exactly as the issue describes, it just cannot assert a
-//! milestone [`AppState`] has no variant for.
+//! **No NPC-dialog milestone.** A deliberate scope split, not a missing
+//! subsystem: the NPC dialog engine exists and is live in the exact flow
+//! this scenario drives (`pokeemerald_rs::overworld::dialog`'s `NpcDialog`,
+//! held as `OverworldPhase`'s `dialog` field and opened by the A-press
+//! interaction path -- issue #161), but [`AppState`]'s five-variant
+//! vocabulary has no dialog variant and no `App` accessor exposes
+//! dialog-open to a [`super::ScenarioDriver`] yet. "First NPC interaction"
+//! is I-3's acceptance criterion (`docs/acceptance/v1.md`), not I-7's, and
+//! keeps its own committed real-pack coverage
+//! (`flow/overworld_phase`'s
+//! `walking_downstairs_and_talking_to_mom_opens_and_closes_her_dialog`), so
+//! omitting the milestone here narrows this scenario to I-7's own criterion
+//! text rather than leaving Mom's dialog unguarded. When an I-3 slice wants
+//! the milestone asserted end-to-end, the retained-outcome accessor pattern
+//! below (`App::first_battle_outcome`) is the template for exposing it.
 //!
 //! The concluding frame's `AppState::Overworld` still says only that the
 //! battle slot emptied, but the runner now pairs it with the retained
