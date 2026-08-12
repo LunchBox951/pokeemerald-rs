@@ -63,12 +63,20 @@
 //! `OBJ_EVENT_GFX_RIVAL_BRENDAN_NORMAL`'s or `_MAY_NORMAL`'s own numeric id
 //! -- [`RIVAL_BRENDAN_NORMAL_GFX_ID`]/[`RIVAL_MAY_NORMAL_GFX_ID`], written by
 //! `crate::flow::overworld_phase::route103_rival_trigger::setup_rival_gfx_id_on_transition`
-//! on entering Route 103. A fresh save's var is `0` everywhere else this
-//! graphics id appears (`InitEventData` zeroes every var, and no other
-//! bundled map's `MAP_SCRIPT_ON_TRANSITION` writes it), matching neither id,
-//! so a bedroom's decoration slot 1 still resolves to `None` exactly as
-//! before -- unconditionally correct for every bundled map, not merely
-//! "safe because decorations are separately hidden by flag today".
+//! on entering Route 103. The exact-id check is what narrows the exception
+//! to the rival: [`VAR_OBJ_GFX_ID_0`] is ordinary persistent event data, so
+//! once a Route 103 visit has written a rival id it stays written on every
+//! other map too, and the *other* bundled `OBJ_EVENT_GFX_VAR_0` object
+//! events -- the bedroom decoration placeholders and Oldale Town's own
+//! rival -- are kept invisible by their hide flags (`FLAG_DECORATION_*`,
+//! set on every bedroom entry; `FLAG_HIDE_OLDALE_TOWN_RIVAL`, set at new
+//! game and never cleared while `Route103_EventScript_RivalEnd`'s
+//! `clearflag` stays a recorded deferral), which gate them out of
+//! `visible_object_events` before this module is asked at all. A future
+//! decoration slice that clears `FLAG_DECORATION_n` must also model
+//! upstream's per-slot `VAR_OBJ_GFX_ID_0 + n` writes
+//! (`InitSecretBaseDecorationSprites`), or a placed decoration would
+//! resolve through the rival id this exception matches.
 //!
 //! # Screen position: glued to the camera through a step (I-3, issue #217)
 //!

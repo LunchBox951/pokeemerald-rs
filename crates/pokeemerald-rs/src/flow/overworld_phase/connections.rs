@@ -151,7 +151,11 @@ pub(super) const MAPS_THAT_SET_DECORATION_FLAGS: [assets::MapId; 2] = [
 /// `playerRoomDecorations` save state for anything to be placed in -- a
 /// fresh save's slots are all empty, which is exactly the state this
 /// produces. A future decoration slice adds that half; it needs no change
-/// here. The other on-transition effects of these maps
+/// here, but it **must** model both of that function's writes together --
+/// upstream clears `FLAG_DECORATION_n` *and* sets `VAR_OBJ_GFX_ID_0 + n`
+/// per placed decoration, and `crate::overworld::npc`'s
+/// `OBJ_EVENT_GFX_VAR_0` exception resolves through that var (its module
+/// docs carry the hazard). The other on-transition effects of these maps
 /// (`VAR_LITTLEROOT_RIVAL_STATE`/`VAR_LITTLEROOT_INTRO_STATE` branches,
 /// `setvar VAR_SECRET_BASE_INITIALIZED`) drive story progression this port
 /// does not model yet.

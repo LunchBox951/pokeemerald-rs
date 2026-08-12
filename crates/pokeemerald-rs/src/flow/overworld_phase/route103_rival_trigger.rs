@@ -68,7 +68,7 @@
 //!    at all from then on (`crate::overworld::npc`'s hide-flag gate, shared
 //!    with every other `FLAG_HIDE_*` object event), matching upstream's own
 //!    observable result without a `removeobject`-the-verb to reimplement.
-//!    The other six lines are **not** modelled: `VAR_BIRCH_LAB_STATE`,
+//!    The other seven lines are **not** modelled: `VAR_BIRCH_LAB_STATE`,
 //!    `FLAG_DEFEATED_RIVAL_ROUTE103`, `VAR_OLDALE_RIVAL_STATE`, and
 //!    `FLAG_HIDE_LITTLEROOT_TOWN_BIRCHS_LAB_RIVAL`/`FLAG_HIDE_OLDALE_TOWN_RIVAL`
 //!    each only unlock content this port cannot reach yet (Birch's lab

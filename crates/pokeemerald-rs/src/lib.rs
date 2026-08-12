@@ -74,8 +74,9 @@
 //! `OverworldPhase::step` path) derives which of the six
 //! `TRAINER_*_ROUTE_103_*` rivals is fought from the player's own gender and
 //! the party lead's real species, and starts the fight. Still not modelled
-//! around it: the approach cutscene and its dialog, and four of
-//! `Route103_EventScript_RivalEnd`'s five writes (`route103_rival_trigger`'s
+//! around it: the approach cutscene and its dialog, and every
+//! `Route103_EventScript_RivalEnd` write except `removeobject`'s hide-flag
+//! effect (`route103_rival_trigger`'s
 //! own module docs carry the full deferral list) -- only
 //! `FLAG_HIDE_ROUTE_103_RIVAL` is ported, on a win, making the rival
 //! disappear and the fight non-repeatable; a loss leaves it standing,
