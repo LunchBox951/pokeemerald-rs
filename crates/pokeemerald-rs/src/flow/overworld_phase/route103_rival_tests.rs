@@ -481,8 +481,12 @@ fn an_unmodelled_player_gender_starts_no_battle() {
 fn walking_north_from_route_101_crosses_oldale_town_into_route_103() {
     let route101 = MapId("MAP_ROUTE101");
     let oldale = MapId("MAP_OLDALE_TOWN");
-    let scene = crate::overworld::load_room(route101, &EventData::new())
-        .expect("run `cargo xtask extract` first");
+    let scene = crate::overworld::load_room(
+        route101,
+        crate::overworld::PlayerCharacter::Brendan,
+        &EventData::new(),
+    )
+    .expect("run `cargo xtask extract` first");
 
     // One ordinary tile south of Route 101's own north edge (module docs).
     let player = PlayerState::new((10, 1), 3, Direction::North);

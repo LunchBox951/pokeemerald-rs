@@ -364,7 +364,7 @@ impl OverworldPhase {
         // and this is what lets the resumed scene resolve the rival's
         // sprite correctly on the very first composed frame -- no
         // on-transition script re-runs on a continue (module docs).
-        let scene = overworld::load_room(map_id, &block1.event_data)?;
+        let scene = overworld::load_room(map_id, block2.player_gender.into(), &block1.event_data)?;
         Ok(Self::from_saved(scene, map_id, block1, block2))
     }
 

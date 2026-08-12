@@ -258,7 +258,11 @@ impl OverworldPhase {
             self.save2.player_gender,
         );
 
-        let Ok(scene) = overworld::load_room(map, &transitioned_event_data) else {
+        let Ok(scene) = overworld::load_room(
+            map,
+            self.save2.player_gender.into(),
+            &transitioned_event_data,
+        ) else {
             eprintln!("warp: failed to load destination map {map:?} -- staying put");
             return;
         };
@@ -398,7 +402,11 @@ impl OverworldPhase {
             self.save2.player_gender,
         );
 
-        let Ok(scene) = overworld::load_room(to_map, &transitioned_event_data) else {
+        let Ok(scene) = overworld::load_room(
+            to_map,
+            self.save2.player_gender.into(),
+            &transitioned_event_data,
+        ) else {
             eprintln!(
                 "connection: failed to load destination map {to_map:?} -- staying on the \
                  departed map's data"

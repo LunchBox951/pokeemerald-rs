@@ -709,7 +709,7 @@ pub fn load_default_room(event_data: &EventData) -> Result<OverworldScene, Overw
 }
 
 /// Load the pack from its default location and decode `map_id`'s own room
-/// out of it, with [`PlayerCharacter::Brendan`]'s walking sprite -- the
+/// out of it, with `player`'s walking sprite -- the
 /// map-id-keyed counterpart to [`load_default_room`] (which always decodes
 /// the fixed [`DEFAULT_ROOM_LAYOUT_ID`]), added for warp processing (issue
 /// #163): [`crate::flow::OverworldPhase`] needs to rebind its rendered room
@@ -734,13 +734,14 @@ pub fn load_default_room(event_data: &EventData) -> Result<OverworldScene, Overw
 /// cases.
 pub fn load_room(
     map_id: assets::MapId,
+    player: PlayerCharacter,
     event_data: &EventData,
 ) -> Result<OverworldScene, OverworldSceneError> {
     let pack = AssetPack::load_default()?;
     let header = assets::MapHeaderTable::new().header(map_id)?;
     let layout = assets::LayoutTable::new().layout(header.layout)?;
     let events = MapEventsTable::new().resolve(map_id)?;
-    OverworldScene::from_pack(&pack, layout, PlayerCharacter::Brendan, events, event_data)
+    OverworldScene::from_pack(&pack, layout, player, events, event_data)
 }
 
 /// Translate a [`MapLayout`]'s `gTileset_*` symbol into the normalized pack

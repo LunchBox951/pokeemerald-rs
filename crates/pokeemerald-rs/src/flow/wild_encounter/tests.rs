@@ -507,8 +507,12 @@ const REAL_GRASS: [(i32, i32); 2] = [(2, 4), (3, 4)];
 #[test]
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
 fn walking_route_101s_real_grass_produces_an_encounter_from_its_own_table() {
-    let scene = crate::overworld::load_room(ROUTE_101, &engine::event_data::EventData::new())
-        .expect("run `cargo xtask extract` first");
+    let scene = crate::overworld::load_room(
+        ROUTE_101,
+        crate::overworld::PlayerCharacter::Brendan,
+        &engine::event_data::EventData::new(),
+    )
+    .expect("run `cargo xtask extract` first");
     let header = assets::MapHeaderTable::new()
         .header(ROUTE_101)
         .expect("Route 101 resolves in the generated map-header table");

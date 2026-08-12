@@ -163,6 +163,7 @@ fn load_room_reports_pack_missing_when_no_pack_is_extracted() {
     }
     let err = super::load_room(
         assets::MapId("MAP_LITTLEROOT_TOWN_BRENDANS_HOUSE_1F"),
+        super::PlayerCharacter::Brendan,
         &engine::event_data::EventData::new(),
     )
     .unwrap_err();
@@ -854,7 +855,8 @@ fn fresh_save_event_data() -> engine::event_data::EventData {
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
 fn real_pack_hiding_mom_changes_the_composed_1f_frame() {
     let mut data = fresh_save_event_data();
-    let scene = super::load_room(ONE_F, &data).expect("run `cargo xtask extract` first");
+    let scene = super::load_room(ONE_F, super::PlayerCharacter::Brendan, &data)
+        .expect("run `cargo xtask extract` first");
     let player = PlayerState::new((2, 7), 3, Direction::North);
 
     let mom = assets::MapEventsTable::new()
@@ -899,7 +901,8 @@ fn real_pack_hiding_mom_changes_the_composed_1f_frame() {
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
 fn real_pack_1f_oam_entries_cover_every_drawn_fresh_save_npc() {
     let data = fresh_save_event_data();
-    let scene = super::load_room(ONE_F, &data).expect("run `cargo xtask extract` first");
+    let scene = super::load_room(ONE_F, super::PlayerCharacter::Brendan, &data)
+        .expect("run `cargo xtask extract` first");
     let player = PlayerState::new((2, 7), 3, Direction::North);
 
     let entries = scene.sprites.entries(&player, &data);
@@ -1087,7 +1090,8 @@ fn real_pack_route_103_rival_binds_to_the_opposite_protagonists_sheet() {
         .var_set(VAR_OBJ_GFX_ID_0, RIVAL_MAY_NORMAL_GFX_ID)
         .unwrap();
 
-    let scene = super::load_room(ROUTE_103, &event_data).expect("run `cargo xtask extract` first");
+    let scene = super::load_room(ROUTE_103, super::PlayerCharacter::Brendan, &event_data)
+        .expect("run `cargo xtask extract` first");
     let events = assets::MapEventsTable::new().resolve(ROUTE_103).unwrap();
     let rival = events
         .object_events
@@ -1118,6 +1122,77 @@ fn real_pack_route_103_rival_binds_to_the_opposite_protagonists_sheet() {
     );
 }
 
+/// A female saved game must build Route 103 around May's player assets,
+/// while the map's variable graphics object resolves independently to
+/// Brendan as her rival. This pins the public `load_room` boundary where
+/// the saved-gender selection used to be discarded in favor of Brendan.
+#[test]
+#[ignore = "needs a local pack: run `cargo xtask extract` first"]
+fn female_route_103_room_load_uses_may_for_player_and_brendan_for_rival() {
+    const ROUTE_103: assets::MapId = assets::MapId("MAP_ROUTE103");
+    const VAR_OBJ_GFX_ID_0: u16 = 0x4010;
+    const RIVAL_BRENDAN_NORMAL_GFX_ID: u16 = 100;
+
+    let mut event_data = engine::event_data::EventData::new();
+    event_data
+        .var_set(VAR_OBJ_GFX_ID_0, RIVAL_BRENDAN_NORMAL_GFX_ID)
+        .unwrap();
+
+    let scene = super::load_room(ROUTE_103, super::PlayerCharacter::May, &event_data)
+        .expect("run `cargo xtask extract` first");
+    let pack = assets::pack::AssetPack::load_default().unwrap();
+
+    let may_pixels = pack.sprite("may/walking").unwrap();
+    let may_bytes = super::avatar::pack_people_sheet_frames("may/walking", may_pixels).unwrap();
+    let may_tiles = rendering::Tileset::decode(rendering::BitDepth::Bpp4, &may_bytes).unwrap();
+    for tile_index in 0..super::avatar::FRAME_BLOCK_TILES {
+        assert_eq!(
+            scene.sprites.tiles().tile(tile_index),
+            may_tiles.tile(tile_index),
+            "player tile {tile_index} must come from May's walking sheet"
+        );
+    }
+
+    let may_palette = pack.sprite_palette("may").unwrap();
+    for color_index in 0..rendering::Palette::BANK_LEN {
+        #[allow(clippy::cast_possible_truncation)]
+        let local_index = color_index as u8;
+        assert_eq!(
+            scene.sprites.palette().bank_color(0, local_index).raw(),
+            may_palette.color(color_index).unwrap() & 0x7FFF,
+            "player palette bank 0 color {color_index} must come from May"
+        );
+    }
+
+    let rival = scene
+        .sprites
+        .bindings()
+        .get("OBJ_EVENT_GFX_VAR_0")
+        .copied()
+        .expect("Route 103's variable graphics object must bind Brendan");
+    assert_ne!(rival.base_tile(), 0, "Brendan needs his own frame block");
+    assert_ne!(
+        rival.palette_bank(),
+        0,
+        "Brendan needs a palette bank distinct from May's player bank"
+    );
+
+    let brendan_palette = pack.sprite_palette("brendan").unwrap();
+    for color_index in 0..rendering::Palette::BANK_LEN {
+        #[allow(clippy::cast_possible_truncation)]
+        let local_index = color_index as u8;
+        assert_eq!(
+            scene
+                .sprites
+                .palette()
+                .bank_color(rival.palette_bank(), local_index)
+                .raw(),
+            brendan_palette.color(color_index).unwrap() & 0x7FFF,
+            "rival palette color {color_index} must come from Brendan"
+        );
+    }
+}
+
 // -- Real-pack elevation-driven OBJ priority (S-5, issue #218) ---------------
 
 /// The visual counterpart to
@@ -1136,7 +1211,8 @@ fn real_pack_route_103_rival_binds_to_the_opposite_protagonists_sheet() {
 fn real_pack_the_bed_side_edge_draws_the_player_obj_at_the_raised_priority() {
     const BEDROOM: assets::MapId = assets::MapId("MAP_LITTLEROOT_TOWN_BRENDANS_HOUSE_2F");
     let data = fresh_save_event_data();
-    let scene = super::load_room(BEDROOM, &data).expect("run `cargo xtask extract` first");
+    let scene = super::load_room(BEDROOM, super::PlayerCharacter::Brendan, &data)
+        .expect("run `cargo xtask extract` first");
 
     // (0, 7): ordinary floor south of the bed, elevation 3.
     let on_the_floor = PlayerState::new((0, 7), 3, Direction::North);
@@ -1316,8 +1392,12 @@ fn animated_tile_screen_rects(
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
 fn real_pack_tick_changes_only_the_animated_tile_screen_regions() {
     let event_data = engine::event_data::EventData::new();
-    let scene = super::load_room(assets::MapId("MAP_LITTLEROOT_TOWN"), &event_data)
-        .expect("run `cargo xtask extract` first");
+    let scene = super::load_room(
+        assets::MapId("MAP_LITTLEROOT_TOWN"),
+        super::PlayerCharacter::Brendan,
+        &event_data,
+    )
+    .expect("run `cargo xtask extract` first");
     let (x, y) = LITTLEROOT_TOWN_FLOWER_VIEW;
     let player = PlayerState::new((x, y), 3, Direction::South);
 
@@ -1385,8 +1465,12 @@ fn real_pack_tileset_animation_repeats_after_a_full_cadence_period() {
     const FULL_CADENCE_PERIOD: u32 = 128;
 
     let event_data = engine::event_data::EventData::new();
-    let scene = super::load_room(assets::MapId("MAP_LITTLEROOT_TOWN"), &event_data)
-        .expect("run `cargo xtask extract` first");
+    let scene = super::load_room(
+        assets::MapId("MAP_LITTLEROOT_TOWN"),
+        super::PlayerCharacter::Brendan,
+        &event_data,
+    )
+    .expect("run `cargo xtask extract` first");
     let (x, y) = LITTLEROOT_TOWN_FLOWER_VIEW;
     let player = PlayerState::new((x, y), 3, Direction::South);
 
