@@ -1453,8 +1453,10 @@
     "data/layouts/OldaleTown": {
       "category": "data.layout",
       "kind": "dir",
-      "spec_owner": "05-assets",
-      "status": "pending"
+      "reason": "map.bin/border.bin extracted as opaque raw blobs into the local gitignored asset pack (issue #248), id layout/oldale_town/map and layout/oldale_town/border (crates/xtask/src/extract/mod.rs::extract_layouts's LAYOUTS table, resolved via data/layouts/layouts.json) -- Route 101's own north map connection targets it, and Oldale's own north connection targets Route 103 in turn, so it is the second link of the Littleroot<->Route101<->Oldale<->Route103 chain I-5's Route 103 rival battle needs to be reachable on foot. Read back with AssetPack::layout_map/layout_border and decoded into typed grids via crates/assets/src/map_layouts.rs's existing MapLayout::grid/LayoutGrid/BorderGrid, same as the Littleroot Town family and Route 101.",
+      "rust_target": "crates/xtask/src/extract/mod.rs",
+      "spec": "I-5",
+      "status": "ported"
     },
     "data/layouts/PacifidlogTown": {
       "category": "data.layout",
@@ -1527,8 +1529,10 @@
     "data/layouts/Route103": {
       "category": "data.layout",
       "kind": "dir",
-      "spec_owner": "05-assets",
-      "status": "pending"
+      "reason": "map.bin/border.bin extracted as opaque raw blobs into the local gitignored asset pack (issue #248), id layout/route103/map and layout/route103/border (crates/xtask/src/extract/mod.rs::extract_layouts's LAYOUTS table, resolved via data/layouts/layouts.json) -- the third link of the Littleroot<->Route101<->Oldale<->Route103 chain, and I-5's own traversal target: the Route 103 rival battle. Read back with AssetPack::layout_map/layout_border and decoded into typed grids via crates/assets/src/map_layouts.rs's existing MapLayout::grid/LayoutGrid/BorderGrid, same as the Littleroot Town family and Route 101.",
+      "rust_target": "crates/xtask/src/extract/mod.rs",
+      "spec": "I-5",
+      "status": "ported"
     },
     "data/layouts/Route104": {
       "category": "data.layout",
