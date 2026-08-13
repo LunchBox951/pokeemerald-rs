@@ -110,7 +110,7 @@ fn sub_level_experience_survives_the_round_trip() {
     let mut mon = a_battler();
     // Not enough to reach level 13, so the only observable difference is
     // the experience total itself.
-    mon.apply_experience(10);
+    mon.apply_experience(&dex, 10);
     let treecko = dex.species(mon.species()).unwrap();
     assert_eq!(
         mon.experience(),
@@ -125,6 +125,58 @@ fn sub_level_experience_survives_the_round_trip() {
     assert_eq!(restored.experience(), mon.experience());
     assert_eq!(restored.level(), mon.level());
     assert_eq!(restored.stats(), mon.stats());
+}
+
+/// A move learned mid-battle by crossing a learnset level
+/// (`battle::BattlePokemon::apply_experience`'s learnset walk, issue #252)
+/// is moveset *state*, exactly like the hand-picked moves
+/// [`a_battler_round_trips_through_the_save_layout`] already covers -- it
+/// must survive the save round trip in its own right, not just as a side
+/// effect of that more general assertion.
+#[test]
+fn a_move_learned_by_levelling_up_survives_the_round_trip() {
+    let dex = Dex::new();
+    let mut mon = BattlePokemon::new(
+        &dex,
+        assets::SpeciesId(280), // SPECIES_TORCHIC
+        15,
+        Ivs {
+            hp: 1,
+            attack: 2,
+            defense: 3,
+            speed: 4,
+            sp_attack: 5,
+            sp_defense: 6,
+        },
+        0x1234_ABCD,
+        vec![assets::MoveId(10), assets::MoveId(45)], // Scratch, Growl
+    )
+    .expect("Torchic with a two-move starting set is in the dex")
+    .with_original_trainer_id(0x89AB_CDEF);
+
+    let torchic = dex.species(mon.species()).unwrap();
+    let level_16 = assets::experience_for_level(torchic.growth_rate, 16).unwrap();
+    mon.apply_experience(&dex, level_16 - mon.experience());
+    assert_eq!(
+        mon.moves()
+            .iter()
+            .map(|slot| slot.move_id)
+            .collect::<Vec<_>>(),
+        vec![assets::MoveId(10), assets::MoveId(45), assets::MoveId(64)], // + Bite
+        "fixture sanity: the level-up must actually have taught Bite \
+         (level 16, EFFECT_HIT -- modelled) before the round trip can prove \
+         anything about it"
+    );
+
+    let restored = from_save_pokemon(&dex, &to_save_pokemon(&dex, &mon))
+        .expect("what we just wrote must decode");
+    assert_eq!(
+        restored.moves(),
+        mon.moves(),
+        "the taught move -- and its freshly rolled PP -- survives the save \
+         round trip like any other moveset slot"
+    );
+    assert_eq!(restored.level(), mon.level());
 }
 
 /// A growth word at or past the next level's threshold reconciles the way

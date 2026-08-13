@@ -49,6 +49,8 @@ const SCRATCH: MoveId = MoveId(10);
 const TACKLE: MoveId = MoveId(33);
 const LEER: MoveId = MoveId(43);
 const GROWL: MoveId = MoveId(45);
+const BITE: MoveId = MoveId(64);
+const QUICK_ATTACK: MoveId = MoveId(98);
 const SLASH: MoveId = MoveId(163);
 
 /// The rival's real party: one level-5 Treecko knowing Pound and Leer.
@@ -348,16 +350,23 @@ fn a_level_crossed_before_replacement_updates_the_next_turns_combat() {
     );
 }
 
-/// The recorded level-up divergence (`BattlePokemon::apply_experience`'s
-/// docs, the `Cmd_getexp` / `MonTryLearningNewMove` ledger entries): a
-/// crossed level does **not** learn the crossed learnset move yet — a
-/// level-6 Treecko's learnset holds Absorb, and upstream's
-/// `MonTryLearningNewMove` would teach it, but this port's moveset is
-/// unchanged across a level-up. This pin exists so the deferral can only be
-/// flipped deliberately; when a slice models level-up move learning, update
-/// the ledger entries and this test together.
+/// The recorded level-up divergence, narrowed by issue #252
+/// (`BattlePokemon::apply_experience`'s docs, the `Cmd_getexp` /
+/// `MonTryLearningNewMove` ledger entries): level-up move learning is now
+/// modelled, but a crossed level whose learnset move has an unmodelled
+/// effect is still refused — not because learning itself is unimplemented,
+/// but because [`BattlePokemon::apply_experience`] screens every taught
+/// move against this crate's modelled-effect list (`battle::ensure_executable`,
+/// reached here through the public [`battle::hit::ensure_resolvable`] half
+/// of it), the same fail-closed screen [`Battle::new_trainer`] runs over a
+/// whole party before any turn.
+/// A level-6 Treecko's learnset holds Absorb, and `EFFECT_ABSORB` is not
+/// modelled ([`battle::hit`]'s module docs), so it is refused today — and
+/// this test pins the *mechanism*, not just the outcome, so the pin breaks
+/// (rather than silently going stale) the day `EFFECT_ABSORB` lands and
+/// Absorb starts being taught.
 #[test]
-fn a_crossed_level_does_not_learn_the_learnset_move_yet() {
+fn a_crossed_level_screens_out_a_learnset_move_with_an_unmodelled_effect() {
     const ABSORB: MoveId = MoveId(71);
     let dex = Dex::new();
     let mut mon = max_iv_mon(&dex, TREECKO, 5, vec![SLASH]);
@@ -365,14 +374,20 @@ fn a_crossed_level_does_not_learn_the_learnset_move_yet() {
         assets::experience_for_level(dex.species(SpeciesId(TREECKO)).unwrap().growth_rate, 6)
             .unwrap();
 
-    mon.apply_experience(level_6 - mon.experience());
+    mon.apply_experience(&dex, level_6 - mon.experience());
 
     assert_eq!(mon.level(), 6, "the threshold was crossed");
     assert_eq!(mon.experience(), level_6);
     assert!(
         battle::initial_moveset(SpeciesId(TREECKO), 6).contains(&ABSORB),
         "the learnset itself does hold Absorb at level 6 — the data is \
-         present, the behaviour is the recorded deferral"
+         present, the refusal is the screen, not missing data"
+    );
+    assert_eq!(
+        battle::hit::ensure_resolvable(&dex, ABSORB),
+        Err(BattleError::UnsupportedMoveEffect(ABSORB)),
+        "Absorb is screened out because EFFECT_ABSORB is unmodelled -- \
+         pinning *why*, not just that it happened"
     );
     assert_eq!(
         mon.moves()
@@ -380,7 +395,100 @@ fn a_crossed_level_does_not_learn_the_learnset_move_yet() {
             .map(|slot| slot.move_id)
             .collect::<Vec<_>>(),
         vec![SLASH],
-        "the moveset is unchanged across the level-up (recorded divergence)"
+        "screened exactly like a decline: not learned, no slot spent"
+    );
+}
+
+/// A single crossed level with a learnable move (a modelled `EFFECT_HIT`
+/// move, so `battle::ensure_executable`'s screen passes) is learned into
+/// the first empty slot — the ordinary case
+/// `MonTryLearningNewMove`/`GiveMoveToMon` models
+/// (`pokeemerald/src/pokemon.c:3014`-`:3044`).
+#[test]
+fn a_single_crossed_level_learns_its_modelled_learnset_move() {
+    let dex = Dex::new();
+    let mut mon = max_iv_mon(&dex, TORCHIC, 15, vec![SCRATCH, GROWL]);
+    let level_16 =
+        assets::experience_for_level(dex.species(SpeciesId(TORCHIC)).unwrap().growth_rate, 16)
+            .unwrap();
+
+    mon.apply_experience(&dex, level_16 - mon.experience());
+
+    assert_eq!(mon.level(), 16, "exactly one level crossed");
+    assert_eq!(
+        mon.moves()
+            .iter()
+            .map(|slot| slot.move_id)
+            .collect::<Vec<_>>(),
+        vec![SCRATCH, GROWL, BITE],
+        "Bite (level 16, EFFECT_HIT -- modelled) lands in the first empty slot"
+    );
+    assert_eq!(
+        mon.moves()[2].pp,
+        dex.move_data(BITE).unwrap().pp,
+        "a freshly learned move's PP starts at the move's own base PP"
+    );
+}
+
+/// A multi-level jump processes every crossed level in ascending order,
+/// exactly as upstream's own one-level-at-a-time `Cmd_getexp` loop does
+/// (`battle_script_commands.c` case 3 → case 4 → case 5, looping back to
+/// case 3 until the whole award is spent): Torchic's learnset has a
+/// screened-out entry at both level 19 (Sand Attack) and level 25 (Fire
+/// Spin) between two *learnable* ones, level 16's Bite and level 28's Quick
+/// Attack, so the final moveset is proof the walk visited every crossed
+/// level and learned in the right order, not just the last one.
+#[test]
+fn a_multi_level_jump_learns_each_crossed_levels_moves_in_order() {
+    let dex = Dex::new();
+    let mut mon = max_iv_mon(&dex, TORCHIC, 13, vec![SCRATCH, GROWL]);
+    let growth_rate = dex.species(SpeciesId(TORCHIC)).unwrap().growth_rate;
+    let level_29 = assets::experience_for_level(growth_rate, 29).unwrap();
+
+    mon.apply_experience(&dex, level_29 - mon.experience());
+
+    assert_eq!(mon.level(), 29, "many levels crossed in a single call");
+    assert_eq!(
+        mon.moves()
+            .iter()
+            .map(|slot| slot.move_id)
+            .collect::<Vec<_>>(),
+        vec![SCRATCH, GROWL, BITE, QUICK_ATTACK],
+        "level 16's Bite precedes level 28's Quick Attack; level 19's \
+         Sand Attack and level 25's Fire Spin are screened out (unmodelled \
+         effects) without spending a slot"
+    );
+}
+
+/// A full moveset declines a learnable move instead of prompting a
+/// replacement — the four-known-moves yes/no box
+/// (`BattleScript_AskToLearnMove`, `battle_script_commands.c:5368`-`:5370`)
+/// is a UI slice out of scope, modelled as the answer a player who chooses
+/// "Stop learning?" would give: not learned, moveset unchanged.
+#[test]
+fn a_full_moveset_declines_a_learnable_move() {
+    let original_moves = vec![SCRATCH, GROWL, TACKLE, LEER];
+    let dex = Dex::new();
+    let mut mon = max_iv_mon(&dex, TORCHIC, 15, original_moves.clone());
+    let level_16 =
+        assets::experience_for_level(dex.species(SpeciesId(TORCHIC)).unwrap().growth_rate, 16)
+            .unwrap();
+
+    mon.apply_experience(&dex, level_16 - mon.experience());
+
+    assert_eq!(
+        mon.level(),
+        16,
+        "the level still rises even though nothing is learned"
+    );
+    assert_eq!(
+        mon.moves()
+            .iter()
+            .map(|slot| slot.move_id)
+            .collect::<Vec<_>>(),
+        original_moves,
+        "Bite is learnable (a modelled effect) but every slot is already \
+         full, so it is declined rather than bumping an existing move"
     );
 }
 
