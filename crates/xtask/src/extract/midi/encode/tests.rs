@@ -123,15 +123,22 @@ fn multiple_tracks_each_carry_their_own_event_count() {
         encode_song(&song).expect("the sample song is well inside the u8 track-count bound");
     let id_len = "audio/voicegroup/title".len();
     let track_count_offset = 2 + id_len + 1 + 1 + 1;
-    assert_eq!(bytes[track_count_offset], 2);
+    // track_count (2), then per track: event_count: u32 LE followed by that
+    // many tagged events -- track 1's single `Fine` (tag 17), then track 2's
+    // `Wait(1)` (tag 0, ticks 1) followed by `Fine`.
+    assert_eq!(
+        bytes[track_count_offset..],
+        [2, 1, 0, 0, 0, 17, 2, 0, 0, 0, 0, 1, 17]
+    );
 }
 
 /// More tracks than the `u8` track-count field can describe is a returned
 /// error, not a panic. 255 tracks is the last encodable count; 256 is the
-/// first that is not. Reachable only from a format-1 file with seventeen or
-/// more note-carrying `MTrk` chunks (16 channels each), which is why the
-/// bound is the *wire format's*, not one upstream imposes — but the caller
-/// still gets a diagnostic it can attach a path to.
+/// first that is not. Reachable only from a format-1 file with sixteen or
+/// more note-carrying `MTrk` chunks (16 channels each), once every channel
+/// in each chunk is playable, which is why the bound is the *wire format's*,
+/// not one upstream imposes — but the caller still gets a diagnostic it can
+/// attach a path to.
 #[test]
 fn more_tracks_than_the_u8_count_can_describe_is_an_error() {
     let song = |count: usize| CompiledSong {
