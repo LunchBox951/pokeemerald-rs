@@ -26106,6 +26106,36 @@
     },
     "src/fieldmap.c": {
       "artifacts": {
+        "FillConnection": {
+          "reason": "The shared rectangular-copy helper collapses into connected_cell_at's own LayoutGrid::cell_at lookup once its four callers' own coordinate math is inlined per-direction; this port resolves one cell on demand rather than copying a whole strip into a backing buffer.",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/viewport.rs",
+          "spec": "I-4",
+          "status": "rewritten"
+        },
+        "FillEastConnection": {
+          "reason": "East-edge offset math (target_x = x - width, target_y = y - offset) re-implemented in connected_cell_at; upstream's own one-column MAP_OFFSET+1 depth asymmetry (a fixed-backup-buffer sizing artifact, include/fieldmap.h:19) is not reproduced since this port has no such buffer to size (issue #253).",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/viewport.rs",
+          "spec": "I-4",
+          "status": "rewritten"
+        },
+        "FillNorthConnection": {
+          "reason": "North-edge offset math (target_x = x - offset, target_y = connected_height + y) re-implemented in connected_cell_at, same depth-generalization as FillSouthConnection's own ledger entry.",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/viewport.rs",
+          "spec": "I-4",
+          "status": "rewritten"
+        },
+        "FillSouthConnection": {
+          "reason": "South-edge offset math (target_x = x - offset, target_y = y - height) re-implemented in connected_cell_at, generalized from upstream's fixed MAP_OFFSET (7-row) preload depth to on-demand resolution bounded only by the connected map's own grid extent (issue #253).",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/viewport.rs",
+          "spec": "I-4",
+          "status": "rewritten"
+        },
+        "FillWestConnection": {
+          "reason": "West-edge offset math (target_x = connected_width + x, target_y = y - offset) re-implemented in connected_cell_at, same depth-generalization as FillSouthConnection's own ledger entry.",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/viewport.rs",
+          "spec": "I-4",
+          "status": "rewritten"
+        },
         "GetBorderBlockAt": {
           "reason": "Border-block fallback for any camera viewport position outside the current layout's own grid, ported into viewport::cell_at (rendering-only; movement's own border handling stays out of MapRuntime's scope per issue #108).",
           "rust_target": "crates/pokeemerald-rs/src/overworld/viewport.rs",
@@ -26116,6 +26146,12 @@
           "reason": "Primary-vs-secondary tileset attribute table selection (NUM_METATILES_IN_PRIMARY split) re-implemented in MapRuntime::metatile_behavior",
           "rust_target": "crates/engine/src/overworld/map_runtime.rs",
           "spec": "S-5",
+          "status": "rewritten"
+        },
+        "InitBackupMapLayoutConnections": {
+          "reason": "Per-connection dispatch to the four Fill*Connection resolvers re-implemented as connected_cell_at's single match over ConnectionView::direction, called from cell_at on every out-of-bounds viewport sample instead of once per map load into a backing buffer (issue #253).",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/viewport.rs",
+          "spec": "I-4",
           "status": "rewritten"
         },
         "IsCoordInConnectingMap": {
