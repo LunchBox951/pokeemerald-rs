@@ -469,6 +469,30 @@ fn a_single_crossed_level_learns_its_learnset_move() {
     );
 }
 
+/// `GiveMoveToBoxMon`'s `MON_ALREADY_KNOWS_MOVE` branch
+/// (`pokemon.c:2951`-`:2952`): a mon that already knows the crossed
+/// level's learnset move neither duplicates it nor spends a slot on it.
+#[test]
+fn a_crossed_levels_already_known_move_is_skipped_at_no_slot_cost() {
+    let dex = Dex::new();
+    let mut mon = max_iv_mon(&dex, TORCHIC, 15, vec![SCRATCH, PECK]);
+    let level_16 =
+        assets::experience_for_level(dex.species(SpeciesId(TORCHIC)).unwrap().growth_rate, 16)
+            .unwrap();
+
+    mon.apply_experience(&dex, level_16 - mon.experience());
+
+    assert_eq!(mon.level(), 16, "exactly one level crossed");
+    assert_eq!(
+        mon.moves()
+            .iter()
+            .map(|slot| slot.move_id)
+            .collect::<Vec<_>>(),
+        vec![SCRATCH, PECK],
+        "level 16's Peck is already known -- no duplicate, no slot spent"
+    );
+}
+
 /// A multi-level jump processes every crossed level in ascending order,
 /// exactly as upstream's own one-level-at-a-time `Cmd_getexp` loop does
 /// (`battle_script_commands.c` case 3 → case 4 → case 5, looping back to

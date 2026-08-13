@@ -538,7 +538,7 @@ impl BattlePokemon {
     /// (`pokeemerald/data/battle_scripts_1.s`) plays the level-up
     /// fanfare/message, and `Cmd_getexp` itself also applies `MonGainEVs`
     /// (`src/battle_script_commands.c:3420`) and
-    /// `AdjustFriendship(FRIENDSHIP_EVENT_GROW_LEVEL)` (`:3465`). **Neither
+    /// `AdjustFriendship(FRIENDSHIP_EVENT_GROW_LEVEL)` (`:3463`). **Neither
     /// is modelled here**: EVs (this crate carries none, see the module
     /// docs) and friendship are out of this slice's scope, so only the
     /// numeric level, stats, and — as of issue #252 — learnset moves change
