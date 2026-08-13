@@ -1026,6 +1026,44 @@ fn a_connection_whose_target_has_no_pack_entry_is_omitted_not_an_error() {
     );
 }
 
+/// Review regression (#253): a connected target's map entry is optional
+/// only when it is absent. A present entry of another pack kind is corrupt
+/// and must retain the exact pack lookup error rather than disappearing as
+/// though the neighbour had not been bundled.
+#[test]
+fn a_connection_target_with_the_wrong_pack_entry_kind_is_an_error_not_a_silent_omission() {
+    let connections: &'static [assets::MapConnection] = &[assets::MapConnection {
+        direction: assets::Direction::South,
+        offset: 0,
+        target: CONNECTION_TARGET,
+    }];
+    let mut entries = connected_overworld_pack_entries(4, 4);
+    let target_grid = entries
+        .iter_mut()
+        .find(|e| e.id == "layout/littleroot_town_mays_house_1f/map")
+        .expect("the connection fixture always fabricates the target's map entry");
+    target_grid.kind_tag = 1;
+    target_grid.meta = 0u16.to_le_bytes().to_vec();
+
+    let err = synthetic_scene_result_with_connections(
+        write_synthetic_pack(entries),
+        "gTileset_General",
+        4,
+        4,
+        connections,
+    )
+    .expect_err("a present connection grid of the wrong kind must be reported");
+    assert_eq!(
+        err,
+        OverworldSceneError::Pack(assets::PackError::WrongKind {
+            id: "layout/littleroot_town_mays_house_1f/map".to_owned(),
+            expected: "raw blob",
+            actual: "palette",
+        }),
+        "the connected map's pack lookup error must reach the caller verbatim"
+    );
+}
+
 /// Review regression (#253): a connection target that *is* in the pack but
 /// whose `map.bin` bytes are too short for its own declared dimensions is a
 /// corrupt pack, not a missing neighbour -- it must surface as an

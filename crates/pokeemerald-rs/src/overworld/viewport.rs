@@ -404,8 +404,9 @@ fn connected_cell_at(
 }
 
 /// The decoded cell at world metatile position `(x, y)`: `grid`'s own cell
-/// if in bounds; else the first of `connections` whose own edge strip
-/// covers it ([`connected_cell_at`], issue #253); else `border`'s fallback
+/// if in bounds; else the last valid matching connection in declaration
+/// order whose own edge strip covers it ([`connected_cell_at`], issue #253);
+/// else `border`'s fallback
 /// (upstream `GetBorderBlockAt`, reached through `MapGridGetMetatileIdAt`'s
 /// out-of-bounds branch) -- see the parent module's docs on why this, not a
 /// viewport-position clamp, is this port's "edge clamping".

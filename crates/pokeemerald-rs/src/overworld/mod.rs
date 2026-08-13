@@ -347,14 +347,15 @@ impl OverworldSceneError {
 ///   [`viewport::cell_at`] already falls back to the active map's own
 ///   border block for any position no resolvable connection covers, so an
 ///   omitted connection is observably identical to it not being declared.
-/// - **Bundled but corrupt -- an error.** The pack lookup *succeeded* and
-///   the bytes then failed to decode against the target layout's own
-///   declared dimensions ([`AssetError::LayoutGridTooShort`]). That is a
-///   broken pack, not a missing neighbour, and it surfaces as an
-///   [`OverworldSceneError`] out of [`OverworldScene::from_pack`] -- the
-///   same treatment the *active* map's own `grid_bytes` already get a few
-///   lines below. Swallowing it would have rendered a silent border block
-///   in place of real, present-but-unreadable map data.
+/// - **Bundled but corrupt -- an error.** The pack entry is present but has
+///   the wrong kind ([`assets::PackError::WrongKind`]), or its raw bytes
+///   fail to decode against the target layout's own declared dimensions
+///   ([`AssetError::LayoutGridTooShort`]). That is a broken pack, not a
+///   missing neighbour, and it surfaces as an [`OverworldSceneError`] out
+///   of [`OverworldScene::from_pack`] -- the same treatment the *active*
+///   map's own `grid_bytes` already get a few lines below. Swallowing it
+///   would have rendered a silent border block in place of real,
+///   present-but-unreadable map data.
 #[derive(Debug)]
 struct ConnectedLayout {
     /// The edge this connection was declared on, and the neighbour's
@@ -387,11 +388,13 @@ struct ConnectedLayout {
 ///
 /// # Errors
 ///
-/// [`OverworldSceneError::Asset`] when a target's `layout/<name>/map` entry
-/// *is* present in `pack` but its bytes don't decode against that layout's
-/// own declared dimensions ([`ConnectedLayout`]'s docs on why this one is an
-/// error rather than an omission). Every other resolution failure omits the
-/// connection and returns `Ok`.
+/// [`OverworldSceneError::Pack`] when a target's `layout/<name>/map` entry
+/// is present with the wrong kind, or [`OverworldSceneError::Asset`] when
+/// its bytes don't decode against that layout's own declared dimensions
+/// ([`ConnectedLayout`]'s docs on why these are errors rather than
+/// omissions). An unknown target header or layout, and an
+/// [`assets::PackError::UnknownAsset`] lookup, omit the connection and
+/// return `Ok`.
 fn resolve_connections(
     pack: &AssetPack,
     header: &assets::MapHeader,
@@ -414,8 +417,10 @@ fn resolve_connections(
             continue;
         };
         let target_name = layout_pack_name(target_header.layout);
-        let Ok(target_bytes) = pack.layout_map(&target_name) else {
-            continue;
+        let target_bytes = match pack.layout_map(&target_name) {
+            Ok(bytes) => bytes,
+            Err(assets::PackError::UnknownAsset(_)) => continue,
+            Err(err) => return Err(err.into()),
         };
         // Validate now (mirrors `from_pack`'s own up-front `grid_bytes`/
         // `border_bytes` validation), so `frame_viewport` can trust every
