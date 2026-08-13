@@ -30,12 +30,15 @@
 //!   [`protagonist_source`] has the full reasoning, including why the rival
 //!   you can actually meet is always the *opposite* protagonist.
 //!
-//! Ten [`resolve_sprite_source`] arms in total, **all ten of which resolve
-//! for either [`PlayerCharacter`]** -- covering ten of the **32** distinct
-//! `graphics_id`s the seven bundled maps' object events actually reference
-//! (Route 101, since issue #177, adds three unresolved ids -- the
-//! youngster, Birch's starter bag, and the wild Zigzagoon -- to the six
-//! Littleroot-family maps' own 29; `resolve_sprite_source_covers_the_reachable_graphics_ids`
+//! Eleven [`resolve_sprite_source`] arms in total -- ten fixed-id arms,
+//! **all of which resolve for either [`PlayerCharacter`]**, plus the live
+//! `OBJ_EVENT_GFX_VAR_0` indirection below (issue #248) -- covering ten of
+//! the **46** distinct `graphics_id`s the nine bundled maps' object events
+//! actually reference on a fresh store (Route 101, since issue #177, adds
+//! three unresolved ids -- the youngster, Birch's starter bag, and the wild
+//! Zigzagoon -- and Oldale Town / Route 103, since issue #248, add their
+//! own unbound background-NPC ids (issue #262) to the six Littleroot-family
+//! maps' own 29; `resolve_sprite_source_covers_the_reachable_graphics_ids`
 //! pins that exact partition, and that it is gender-independent, so a newly
 //! reachable standard NPC cannot silently stop drawing).
 //!

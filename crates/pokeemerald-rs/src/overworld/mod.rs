@@ -463,6 +463,23 @@ impl OverworldScene {
         })
     }
 
+    /// Whether this scene's decode bound a sprite for `graphics_id` -- the
+    /// flow-facing probe
+    /// `flow::overworld_phase::route103_rival_tests`' crossing walk uses to
+    /// pin that a post-crossing rebind decoded against the *transitioned*
+    /// event-data store (issue #248): `OBJ_EVENT_GFX_VAR_0` binds only when
+    /// `VAR_OBJ_GFX_ID_0` already named a real rival id at decode time.
+    /// A yes/no answer on purpose: the sprite/OAM internals themselves stay
+    /// private to this module tree (`oop-boundaries`);
+    /// `overworld::tests`' own real-pack cases pin the binding's contents.
+    /// Test-only, like the [`sprites::SceneSprites::bindings`] accessor it
+    /// wraps.
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn binds_sprite(&self, graphics_id: &str) -> bool {
+        self.sprites.bindings().contains_key(graphics_id)
+    }
+
     /// Composite the current map viewport plus the player OBJ and this
     /// room's own currently-visible NPC object events, centered on
     /// `player`'s current tile with edge clamping via the border-block

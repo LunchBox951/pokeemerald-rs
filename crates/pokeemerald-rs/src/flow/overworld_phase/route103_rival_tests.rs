@@ -253,11 +253,14 @@ fn facing_the_rival_and_pressing_a_starts_the_trainer_battle() {
     );
 }
 
-/// Once the battle has started, [`OverworldPhase::step`]'s battle-ownership
-/// check (module docs) short-circuits everything below it -- so holding A
-/// through the very next frame does not re-run the interaction lookup at
-/// all, let alone start a second battle or touch the (already emptied)
-/// party lead.
+/// Holding A through the frame after the battle starts must not re-run the
+/// interaction lookup or start a second battle. Note what this does and
+/// does not prove: a *held* A is not a fresh edge, so
+/// [`OverworldPhase::interaction_tokens_this_frame`]'s `is_newly_pressed`
+/// gate already discards it regardless of the battle -- the
+/// battle-ownership short-circuit itself is pinned by
+/// `input_during_the_rival_battle_neither_moves_the_player_nor_re_triggers`
+/// below, which uses inputs that gate alone would otherwise act on.
 #[test]
 fn a_held_a_after_the_battle_starts_does_not_re_trigger_it() {
     let mut phase = route_103_phase_facing_the_rival();
@@ -277,6 +280,48 @@ fn a_held_a_after_the_battle_starts_does_not_re_trigger_it() {
         phase.is_rival_battle_active(),
         "the same battle instance must still be the one running"
     );
+}
+
+/// [`OverworldPhase::step`]'s battle-ownership check (its module docs: an
+/// in-progress rival battle "owns the frame outright") really does
+/// short-circuit everything below it --
+/// `advance_route103_rival_battle_frame`'s place in the `||` chain, the
+/// same coverage the sibling first-battle and wild-battle gates already
+/// have. A held direction during the battle would otherwise turn or move
+/// the player ([`super::input::held_direction`] runs on any ordinary
+/// frame), and a fresh A edge would re-run the interaction lookup; with
+/// the battle owning the frame, neither may observably happen.
+#[test]
+fn input_during_the_rival_battle_neither_moves_the_player_nor_re_triggers() {
+    let mut phase = route_103_phase_facing_the_rival();
+    // Even levels (the `one_turn_does_not_immediately_end_a_fresh_battle`
+    // precedent): the battle must survive the frames this test steps.
+    phase.party_lead = Some(lead(277, 5, 1));
+    let position = phase.player.position();
+    let facing = phase.player.facing();
+    phase.step(pressed(Buttons::A));
+    assert!(phase.is_rival_battle_active(), "setup: the battle started");
+
+    // A held direction away from the current (East) facing: on an ordinary
+    // frame this would at least turn the player in place.
+    phase.step(held(Buttons::UP));
+    assert!(phase.is_rival_battle_active());
+    assert_eq!(
+        phase.player.position(),
+        position,
+        "the battle owns the frame -- a held direction must not move the player"
+    );
+    assert_eq!(phase.player.facing(), facing, "nor even turn them in place");
+
+    // A fresh A edge: on an ordinary frame this would re-run the
+    // interaction lookup against the still-un-hidden rival.
+    phase.step(pressed(Buttons::A));
+    assert!(
+        phase.is_rival_battle_active(),
+        "a fresh A edge during the battle must not reach the interaction lookup"
+    );
+    assert_eq!(phase.player.position(), position);
+    assert_eq!(phase.player.facing(), facing);
 }
 
 /// Facing away from the rival must not start anything -- the ordinary
@@ -391,15 +436,28 @@ fn losing_the_rival_battle_does_not_hide_the_rival() {
     assert_eq!(
         phase.save1().event_data.flag_get(FLAG_HIDE_ROUTE_103_RIVAL),
         Ok(false),
-        "a loss must not remove the rival -- it stays fightable"
+        "a loss must not remove the rival -- it stays interactable"
     );
 
-    // Facing the still-visible rival again finds it -- re-fightable.
+    // Facing the still-visible rival again finds it. The fresh lead below
+    // is an out-of-band full heal no production path can perform yet: the
+    // loss left the real lead fainted, and a fresh attempt with it fails
+    // closed at `start_route103_rival_battle` (`FaintedBattler`) until the
+    // white-out/heal path lands (issue #261, module docs' "Interactable is
+    // not re-fightable"). So this pins the interaction *lookup* still
+    // finding the un-hidden rival -- not re-fightability -- plus the
+    // trigger-time result-channel clear below.
     phase.party_lead = Some(overwhelming_treecko_lead());
     phase.step(pressed(Buttons::A));
     assert!(
         phase.is_rival_battle_active(),
         "the rival must still be interactable after a loss"
+    );
+    assert_eq!(
+        phase.rival_battle_outcome(),
+        None,
+        "a new attempt owns its result channel from trigger time onward -- \
+         `begin_route103_rival_battle` clears the stale `PlayerLost`"
     );
 }
 
@@ -547,10 +605,24 @@ fn walking_north_from_route_101_crosses_oldale_town_into_route_103() {
         Ok(RIVAL_MAY_NORMAL_GFX_ID),
         "a fresh (default-gender) phase's rival is May the instant the crossing lands"
     );
+    // ... and `cross_connection` decoded the arrival scene against the
+    // *transitioned* store, not the pre-transition one -- the ordering
+    // `warp_to`/`cross_connection` (`super::connections`) were structured
+    // around. `OBJ_EVENT_GFX_VAR_0` binds a sprite only when the var
+    // already held a rival id at decode time, so this is the one
+    // production-path probe that the rival is actually drawable the instant
+    // the player walks in, not just that the var got written.
+    assert!(
+        phase.scene.binds_sprite("OBJ_EVENT_GFX_VAR_0"),
+        "the post-crossing rebind must decode against the transitioned event data -- \
+         the rival binds a sprite the instant the crossing lands"
+    );
 }
 
-// The rendering half of the `OBJ_EVENT_GFX_VAR_0` exception -- real-pack
-// scene decode against an already-primed `VAR_OBJ_GFX_ID_0` -- is pinned in
+// The rendered *contents* of the `OBJ_EVENT_GFX_VAR_0` binding -- which
+// sheet and palette bank the rival draws from -- are pinned in
 // `crate::overworld::tests::real_pack_route_103_rival_binds_to_the_opposite_protagonists_sheet`,
-// not here: `OverworldScene`'s own sprite/OAM internals are private to the
-// `overworld` module tree, not reachable from `flow::overworld_phase`.
+// not here: `OverworldScene`'s sprite/OAM internals are private to the
+// `overworld` module tree, and `flow::overworld_phase` sees only the
+// yes/no `OverworldScene::binds_sprite` probe the crossing walk above
+// uses.

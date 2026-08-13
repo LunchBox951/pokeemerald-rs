@@ -100,8 +100,14 @@
 //! docs describe), but the flag stays clear and the rival remains
 //! interactable -- a loss does not remove the rival upstream either, it
 //! just never reaches the line that would; the *route there* (a whiteout)
-//! is what is missing, not the outcome. The player can walk back up and
-//! fight the same rival again, which is the honest fidelity delta this
+//! is what is missing, not the outcome. Interactable is not re-fightable,
+//! though: the loss leaves the lead fainted, and a fresh attempt then
+//! fails closed at
+//! [`crate::flow::route103_rival::start_route103_rival_battle`]
+//! (`battle::BattleError::FaintedBattler`), the same posture
+//! [`crate::flow::wild_encounter`]'s `lead_can_fight` takes -- so until
+//! the white-out/heal path lands (issue #261) a post-loss player is
+//! walled here. That reachable dead-end is the honest fidelity delta this
 //! slice ships with rather than fabricating a whiteout to hide it.
 //!
 //! # RNG stream
