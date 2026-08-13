@@ -171,7 +171,8 @@ fn write_event(out: &mut Vec<u8>, event: &SongEvent) {
 /// [`MidiError::TooManyTracks`] if the song holds more tracks than the
 /// `u8` track-count field can describe. Sixteen channels per `MTrk` chunk
 /// keeps a single-chunk file well inside that, but a format-1 file with
-/// seventeen or more note-carrying chunks would pass 255 — a bound on the
+/// sixteen or more note-carrying `MTrk` chunks can produce 256 playable
+/// tracks once every channel in each chunk is playable — a bound on the
 /// *wire format*, not on anything upstream rejects, so this returns an
 /// error the caller can attach a path to rather than aborting the whole
 /// extraction. Mirrors `crates/assets::audio::AudioError::TooManyTracks`,
