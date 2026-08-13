@@ -84,12 +84,11 @@ pub struct DirectSoundSample {
     /// — not a plain sample rate; it already bakes in the fixed-point
     /// scaling the mixer's pitch calculation expects.
     pub base_frequency: u32,
-    /// The first sample index playback wraps to after the last sample, or
-    /// `None` for a one-shot (non-looping) sample (upstream's
-    /// `WAVE_DATA_FLAG_LOOP` status bit gates whether `loopStart` is used at
-    /// all, so a non-looping sample's `loopStart` is not meaningful data —
-    /// modelled as absent here rather than as a don't-care `0`).
-    pub loop_start: Option<u32>,
+    /// See [`loop_start`](Self::loop_start). Private for the same reason
+    /// `data` is: the constructor's `loop_start < data.len()` bound must
+    /// hold for the value's whole life, so [`Sample::encode`] can write it
+    /// unchecked and a round trip of any constructible value stays total.
+    loop_start: Option<u32>,
     data: Vec<i8>,
 }
 
@@ -144,6 +143,19 @@ impl DirectSoundSample {
     #[must_use]
     pub fn data(&self) -> &[i8] {
         &self.data
+    }
+
+    /// The first sample index playback wraps to after the last sample, or
+    /// `None` for a one-shot (non-looping) sample (upstream's
+    /// `WAVE_DATA_FLAG_LOOP` status bit gates whether `loopStart` is used at
+    /// all, so a non-looping sample's `loopStart` is not meaningful data —
+    /// modelled as absent here rather than as a don't-care `0`). When
+    /// `Some`, always strictly less than [`data`](Self::data)'s length —
+    /// [`new`](Self::new)'s validated bound, which the private field
+    /// preserves.
+    #[must_use]
+    pub fn loop_start(&self) -> Option<u32> {
+        self.loop_start
     }
 }
 
