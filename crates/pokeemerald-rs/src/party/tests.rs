@@ -162,10 +162,10 @@ fn a_move_learned_by_levelling_up_survives_the_round_trip() {
             .iter()
             .map(|slot| slot.move_id)
             .collect::<Vec<_>>(),
-        vec![assets::MoveId(10), assets::MoveId(45), assets::MoveId(64)], // + Bite
-        "fixture sanity: the level-up must actually have taught Bite \
-         (level 16, EFFECT_HIT -- modelled) before the round trip can prove \
-         anything about it"
+        vec![assets::MoveId(10), assets::MoveId(45), assets::MoveId(64)], // + Peck
+        "fixture sanity: the level-up must actually have taught Peck \
+         (MOVE_PECK, Torchic's level-16 learnset entry) before the round \
+         trip can prove anything about it"
     );
 
     let restored = from_save_pokemon(&dex, &to_save_pokemon(&dex, &mon))

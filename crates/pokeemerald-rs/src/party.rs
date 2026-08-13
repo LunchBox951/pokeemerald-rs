@@ -272,8 +272,11 @@ pub(crate) fn from_save_pokemon(dex: &Dex, saved: &Pokemon) -> Result<BattlePoke
     // could never store. In the ordinary (consistent-bytes) case this never
     // crosses a level -- `saved.level` and `saved_experience` already agree
     // -- so `apply_experience`'s learnset walk (issue #252) is a no-op here;
-    // it only fires for the inconsistent-bytes edge case above, where it is
-    // no less faithful than the level jump itself.
+    // it only fires for the inconsistent-bytes edge case above, where a
+    // hand-authored save can therefore gain the crossed levels' learnset
+    // moves (unscreened, as upstream teaches them) on load. That is no less
+    // faithful than the level jump itself, which upstream's own
+    // `GetLevelFromMonExp` would also perform on those bytes.
     let saved_experience = u32::from_le_bytes([
         substructures.growth[4],
         substructures.growth[5],

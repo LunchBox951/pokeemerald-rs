@@ -519,10 +519,13 @@ impl BattlePokemon {
 
     /// Add earned experience, applying every crossed level threshold and
     /// capping both level and total experience at level 100. For every
-    /// level crossed by this call, in order, also offers that level's
-    /// learnset moves the way upstream's `MonTryLearningNewMove` would —
-    /// see [`BattlePokemon::learn_crossed_level_moves`] for exactly what
-    /// that does and does not reproduce.
+    /// level crossed by this call, in order, also teaches that level's
+    /// learnset moves the way upstream's `MonTryLearningNewMove` does —
+    /// **unscreened**, exactly like upstream: a move this crate cannot
+    /// execute yet is still learned, sits in the moveset, and is refused
+    /// per turn when it is *selected* rather than at learn time (see
+    /// [`BattlePokemon::learn_crossed_level_moves`] for why that is the
+    /// consistent posture, and what else it does and does not reproduce).
     ///
     /// Stat recalculation follows `CalculateMonStats`. If maximum HP grows,
     /// the increase is also added to current HP, preserving the absolute
@@ -570,7 +573,7 @@ impl BattlePokemon {
     }
 
     /// `MonTryLearningNewMove` / `GiveMoveToMon`
-    /// (`pokeemerald/src/pokemon.c:3014`-`:3044`, `:2934`-`:2952`) — the
+    /// (`pokeemerald/src/pokemon.c:3014`-`:3044`, `:2934`-`:2955`) — the
     /// move-learning half of a level-up that
     /// [`BattlePokemon::apply_experience`] drives. For every level in
     /// `old_level+1..=new_level`, in ascending order, walks that level's
@@ -580,48 +583,50 @@ impl BattlePokemon {
     /// `GiveMoveToBoxMon`'s two outcomes, reproduced here `(no-verbatim)`:
     ///
     /// - a move already known is skipped, costing no slot
-    ///   (`MON_ALREADY_KNOWS_MOVE`, `:2949`-`:2950`);
+    ///   (`MON_ALREADY_KNOWS_MOVE`, `:2951`-`:2952`);
     /// - a move with an empty slot is learned into it, PP starting at the
-    ///   move's own base PP (`:2942`-`:2944`).
+    ///   move's own base PP (`:2945`-`:2949`, the two writes at
+    ///   `:2947`-`:2948`).
     ///
-    /// # Two divergences from upstream, both permanent design decisions
+    /// # Teaching is unscreened, exactly as upstream teaches
     ///
-    /// **The four-known-moves replacement prompt is out of scope (a UI
-    /// slice) and is modelled as a permanent decline.** Upstream's
-    /// `Cmd_handlelearnnewmove` treats `GiveMoveToMon` returning
+    /// Whatever move id the learnset names is learned, including one whose
+    /// effect this crate does not model yet: a level-6 Treecko learns
+    /// Absorb even though `EFFECT_ABSORB` has no resolver ([`crate::hit`]'s
+    /// module docs), just as upstream's `GiveMoveToMon` has no notion of
+    /// refusing a move. Nothing needs to be screened here because every
+    /// caller of [`BattlePokemon::apply_experience`] applies it to a mon on
+    /// the *player's* side — in-battle it is
+    /// [`crate::battle::Battle::take_turn`]'s exp award to `Battle::player`,
+    /// and out of battle it is the integration layer's save loader
+    /// reconciling a player-party mon's stored experience — and the player's
+    /// moveset is the one this crate deliberately does not screen:
+    /// [`crate::battle::Battle::new`] documents that only the **wild**
+    /// moveset is checked up front — because the wild rejection loop can
+    /// land on any slot mid-turn — while a player slot is validated per
+    /// turn, at selection, by `validate_player_move`, ahead of the turn's
+    /// first RNG draw. So an unexecutable taught move sits in the moveset
+    /// exactly like an unexecutable hand-picked one and is refused when it
+    /// is picked, with a recoverable
+    /// [`BattleError::UnsupportedMoveEffect`] /
+    /// [`BattleError::NonDamagingMove`] that leaves the battle and the
+    /// shared stream untouched. There is no crash path to fail closed
+    /// against: the trainer AI never scores the player's move ids, and no
+    /// Struggle fallback runs on the player's side.
+    ///
+    /// # Recorded divergence: the four-known-moves prompt is a decline
+    ///
+    /// Upstream's `Cmd_handlelearnnewmove` treats `GiveMoveToMon` returning
     /// `MON_HAS_MAX_MOVES` as the cue to run `BattleScript_AskToLearnMove`'s
     /// yes/no box (`battle_script_commands.c:5368`-`:5370`), which can
-    /// forget an old move to make room. This crate has no message/UI layer
-    /// to drive that prompt, so a full moveset always takes the answer a
-    /// player who chooses "Stop learning?" → yes would give: the move is
-    /// not learned. Matching upstream's own loop
+    /// forget an old move to make room. That prompt is a message/UI slice
+    /// this crate has no layer for, so a full moveset always takes the
+    /// answer a player who chooses "Stop learning?" → yes would give: the
+    /// move is **not** learned. Matching upstream's own loop
     /// (`BattleScript_TryLearnMoveLoop`), the walk still continues to the
-    /// *next* learnset entry rather than stopping at the decline.
-    ///
-    /// **Teaching is screened against this crate's modelled-move-effect
-    /// list, [`crate::battle::ensure_executable`]** — the same fail-closed
-    /// screen [`crate::battle::Battle::new_trainer`] runs over a whole
-    /// trainer party and [`crate::wild::ensure_wild_startable`] runs over a
-    /// wild encounter before either lets a battle start. Upstream's
-    /// `GiveMoveToMon` has no such concept — it hands out any move id the
-    /// learnset names. But every other admission point into this engine
-    /// already refuses a move the turn engine cannot execute *before* the
-    /// mon carrying it can reach a turn ([`crate::battle::Battle::new`],
-    /// `new_trainer`, `ensure_wild_startable`); an in-battle learn path that
-    /// skipped the same screen would be the one way to slip an
-    /// unmodelled-effect move past every other gate this crate has, later
-    /// surfacing as a move-selection crash instead of an upfront refusal.
-    /// Screening here keeps the port's existing fail-closed posture intact
-    /// rather than opening a new hole in it. A screened-out move is treated
-    /// exactly like a decline: not learned, no slot spent, walk continues to
-    /// the next entry. The screen is evaluated dynamically against `dex`
-    /// rather than a hardcoded exclusion list, so a move stays refused only
-    /// for as long as its effect actually is unmodelled: Absorb's
-    /// `EFFECT_ABSORB` is unmodelled today ([`crate::hit`]'s module docs),
-    /// so a level-6 Treecko is refused it now, but this function starts
-    /// teaching it, with no code change of its own, the day `EFFECT_ABSORB`
-    /// joins [`crate::hit::is_ordinary_hit_effect`]'s table (or gains its
-    /// own resolver). Recorded on the `MonTryLearningNewMove` ledger entry.
+    /// *next* learnset entry rather than stopping at the decline. This is
+    /// the only divergence on the learn path; it is recorded on the
+    /// `MonTryLearningNewMove` ledger entry.
     fn learn_crossed_level_moves(&mut self, dex: &Dex, old_level: u8, new_level: u8) {
         let Some(learnset) = LevelUpLearnsets::new().get(self.species) else {
             return;
@@ -632,16 +637,13 @@ impl BattlePokemon {
                 if self.moves.iter().any(|slot| slot.move_id == move_id) {
                     continue; // MON_ALREADY_KNOWS_MOVE -- no slot spent.
                 }
-                if crate::battle::ensure_executable(dex, move_id).is_err() {
-                    continue; // Screened: this move's effect is not modelled.
-                }
                 if self.moves.len() >= MAX_MON_MOVES {
                     continue; // MON_HAS_MAX_MOVES -- decline (no prompt UI).
                 }
-                // `ensure_executable` above already resolved `move_id`
-                // through `dex`, so this cannot fail in practice; handled
-                // defensively rather than panicking on a screen it just
-                // passed.
+                // Upstream indexes `gBattleMoves[move]` for the starting PP
+                // with no lookup that can fail; the learnset table only ever
+                // names real move ids, so this is total in practice. Skipping
+                // beats panicking if a future data extraction disagrees.
                 if let Ok(mv) = dex.move_data(move_id) {
                     self.moves.push(MoveSlot { move_id, pp: mv.pp });
                 }
