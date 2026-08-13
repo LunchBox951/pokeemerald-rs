@@ -27,8 +27,8 @@
 //! [`combined_world_tileset`].
 
 use assets::{
-    BorderGrid, ImageRef, LayoutGrid, MetatileAttributeTable, MetatileCell, MetatileLayerType,
-    PaletteRef,
+    BorderGrid, Direction as ConnectionDirection, ImageRef, LayoutGrid, MetatileAttributeTable,
+    MetatileCell, MetatileLayerType, PaletteRef,
 };
 use engine::overworld::{PlayerState, NUM_METATILES_IN_PRIMARY, WALK_FRAMES_PER_TILE};
 use rendering::{Bgr555, BitDepth, Palette, ScreenEntry, Tilemap};
@@ -197,11 +197,141 @@ fn copy_bank(colors: &mut [Bgr555; Palette::LEN], bank: usize, palette: PaletteR
 /// backup-map coordinates upstream's grid macros consume.
 const MAP_OFFSET: i32 = 7;
 
+/// One connected map's own decoded grid, sourced from a declared
+/// [`assets::MapConnection`] and ready for [`cell_at`]'s connection
+/// fallback -- see [`connected_cell_at`] for the geometry this feeds.
+///
+/// [`super::OverworldScene::from_pack`] resolves and owns each connection's
+/// target layout/grid bytes once, at load time (that method's own doc
+/// comment on why an unresolvable connection is simply omitted rather than
+/// surfaced as an error); this is the fresh, cheap [`LayoutGrid`] view over
+/// those owned bytes that [`super::OverworldScene::frame_viewport`] rebuilds
+/// every call, mirroring how `grid`/`border` themselves are rebuilt fresh
+/// each frame rather than cached (module docs on
+/// [`super::OverworldScene::grid_bytes`]).
+pub(super) struct ConnectionView<'a> {
+    /// Which edge of the *active* map this connection was declared on
+    /// (upstream `MapConnection::direction`). Only
+    /// [`ConnectionDirection::South`]/[`ConnectionDirection::North`]/
+    /// [`ConnectionDirection::West`]/[`ConnectionDirection::East`] ever
+    /// reach here: `Dive`/`Emerge` describe a diving transition, not a
+    /// map-edge crossing, and upstream's own
+    /// `InitBackupMapLayoutConnections` switch
+    /// (`pokeemerald/src/fieldmap.c:137-155`) has no case for them either --
+    /// `OverworldScene::from_pack`'s resolver filters them out before this
+    /// type is ever built.
+    pub(super) direction: ConnectionDirection,
+    /// The neighbour's offset along the shared edge (upstream
+    /// `MapConnection::offset`; can be negative) -- see
+    /// [`connected_cell_at`] for how it combines with `direction`.
+    pub(super) offset: i32,
+    /// The connected map's own decoded grid.
+    pub(super) grid: LayoutGrid<'a>,
+}
+
+/// The connected-map cell covering out-of-bounds active-map position
+/// `(x, y)` -- already known to fall outside the active grid's own
+/// `width`x`height` -- or `None` if no entry of `connections` reaches it.
+///
+/// Transcribes the offset math of upstream's four `Fill*Connection`
+/// functions (`pokeemerald/src/fieldmap.c:178-315`, called in turn from
+/// `InitBackupMapLayoutConnections`, `:121-157`), each of which resolves a
+/// declared connection's own edge strip of the *connected* map into world
+/// positions just past the active map's edge:
+///
+/// | direction | active-side guard | connected `(x, y)` |
+/// |-----------|--------------------|---------------------|
+/// | South | `y >= height` | `(x - offset, y - height)` |
+/// | North | `y < 0` | `(x - offset, connected_height + y)` |
+/// | West | `x < 0` | `(connected_width + x, y - offset)` |
+/// | East | `x >= width` | `(x - width, y - offset)` |
+///
+/// Each direction's perpendicular-axis subtraction (`x - offset` for
+/// South/North, `y - offset` for West/East) is exactly
+/// [`engine::overworld::MapRuntime::resolve_connection`]'s own
+/// `landing_position` formula. That function only ever resolves the single
+/// row/column immediately across an edge -- the one tile a player's own
+/// crossing step lands on; this is the identical formula at whatever depth
+/// `(x, y)` asks for, since the *viewport* can see several rows/columns past
+/// an edge well before the player ever steps there.
+///
+/// # Depth: unbounded here, naturally bounded in practice
+///
+/// Upstream additionally caps each direction's own copy depth at
+/// [`MAP_OFFSET`] (7) rows/columns -- `FillEastConnection`'s own 8 is a
+/// one-column asymmetry from its fixed backup buffer's own odd total width
+/// (`MAP_OFFSET_W`, `pokeemerald/include/fieldmap.h:19`) -- into a
+/// fixed-size backing buffer (`gBackupMapLayout`) sized just large enough
+/// for any camera position within one map load. This port has no such
+/// buffer; every cell is resolved on demand, so depth here is bounded only
+/// by the connected map's own grid extent (the table above's `target_x`/
+/// `target_y` bounds check, applied via [`LayoutGrid::cell_at`]'s own
+/// bounds-checked `None`). In practice [`build_tilemaps`]'s own viewport
+/// never queries further than roughly half of [`super::VIEW_COLS`]/
+/// [`super::VIEW_ROWS`] past an edge (the parent module's docs on the
+/// camera model), comfortably inside what upstream's fixed depth would have
+/// covered anyway -- so this is a difference in mechanism, not in what
+/// actually renders for any position the camera can reach.
+///
+/// # Overlapping connections: last declared, last resolved
+///
+/// A map corner can be simultaneously past two edges (`x < 0` *and*
+/// `y >= height`), and a header's own connection list can carry more than
+/// one entry for the same direction (e.g. a coastline split across several
+/// offset ranges). Both are resolved by iterating `connections` in
+/// [`assets::MapHeader::connections`]'s own declaration order and keeping
+/// the *last* valid hit -- mirroring upstream's own overwrite-in-declaration-order
+/// semantics: `InitBackupMapLayoutConnections`'s loop calls each
+/// `Fill*Connection` in turn, and a later one's copy simply overwrites an
+/// earlier one's for any backup cell both rectangles cover.
+fn connected_cell_at(
+    connections: &[ConnectionView<'_>],
+    width: u16,
+    height: u16,
+    x: i32,
+    y: i32,
+) -> Option<MetatileCell> {
+    let mut found = None;
+    for connection in connections {
+        let target = match connection.direction {
+            ConnectionDirection::South if y >= i32::from(height) => {
+                Some((x - connection.offset, y - i32::from(height)))
+            }
+            ConnectionDirection::North if y < 0 => Some((
+                x - connection.offset,
+                i32::from(connection.grid.height()) + y,
+            )),
+            ConnectionDirection::West if x < 0 => Some((
+                i32::from(connection.grid.width()) + x,
+                y - connection.offset,
+            )),
+            ConnectionDirection::East if x >= i32::from(width) => {
+                Some((x - i32::from(width), y - connection.offset))
+            }
+            // Not this connection's edge (or a `Dive`/`Emerge` entry, which
+            // never matches any arm above) -- module docs on `ConnectionView::direction`.
+            _ => None,
+        };
+        let Some((target_x, target_y)) = target else {
+            continue;
+        };
+        let (Ok(target_x), Ok(target_y)) = (u16::try_from(target_x), u16::try_from(target_y))
+        else {
+            continue;
+        };
+        if let Some(cell) = connection.grid.cell_at(target_x, target_y) {
+            found = Some(cell);
+        }
+    }
+    found
+}
+
 /// The decoded cell at world metatile position `(x, y)`: `grid`'s own cell
-/// if in bounds, else `border`'s fallback (upstream `GetBorderBlockAt`,
-/// reached through `MapGridGetMetatileIdAt`'s out-of-bounds branch) -- see
-/// the parent module's docs on why this, not a viewport-position clamp, is
-/// this port's "edge clamping".
+/// if in bounds; else the first of `connections` whose own edge strip
+/// covers it ([`connected_cell_at`], issue #253); else `border`'s fallback
+/// (upstream `GetBorderBlockAt`, reached through `MapGridGetMetatileIdAt`'s
+/// out-of-bounds branch) -- see the parent module's docs on why this, not a
+/// viewport-position clamp, is this port's "edge clamping".
 ///
 /// `GetBorderBlockAt`'s `((x + 1) & 1) + (((y + 1) & 1) << 1)` index is
 /// evaluated in *backup-map* coordinates (layout-local + [`MAP_OFFSET`],
@@ -209,11 +339,20 @@ const MAP_OFFSET: i32 = 7;
 /// offset is odd, so the shift flips the parity of both axes — passing
 /// layout-local coords straight through would select the diagonally-opposite
 /// cell of a patterned 2x2 border `(behavioral-fidelity)`.
-fn cell_at(grid: &LayoutGrid<'_>, border: &BorderGrid<'_>, x: i32, y: i32) -> MetatileCell {
+fn cell_at(
+    grid: &LayoutGrid<'_>,
+    border: &BorderGrid<'_>,
+    connections: &[ConnectionView<'_>],
+    x: i32,
+    y: i32,
+) -> MetatileCell {
     if let (Ok(ux), Ok(uy)) = (u16::try_from(x), u16::try_from(y)) {
         if let Some(cell) = grid.cell_at(ux, uy) {
             return cell;
         }
+    }
+    if let Some(cell) = connected_cell_at(connections, grid.width(), grid.height(), x, y) {
+        return cell;
     }
     border.cell_at(x + MAP_OFFSET, y + MAP_OFFSET)
 }
@@ -350,9 +489,41 @@ pub(super) struct FrameViewport {
 }
 
 /// Compose this frame's map viewport: the bottom/middle/top BG tilemaps
-/// covering the camera's current view of `grid` (falling back to `border`
-/// past its edges), plus the scroll offset that centers `player`'s tile on
-/// screen -- smoothly panning mid-step, per the parent module's docs.
+/// covering the camera's current view of `grid` (falling back first to
+/// `connections`' own declared edge strips and then to `border`, past
+/// `grid`'s edges -- [`cell_at`]), plus the scroll offset that centers
+/// `player`'s tile on screen -- smoothly panning mid-step, per the parent
+/// module's docs.
+///
+/// # Connected-map tiles render through the *active* map's own tileset
+///
+/// A cell [`cell_at`] resolves from `connections` carries only a raw
+/// metatile id (issue #253) -- the same shape `grid`'s own cells have, and
+/// the only shape upstream's `gBackupMapLayout` copy carries too
+/// (`InitBackupMapLayoutConnections`, [`connected_cell_at`]'s docs). Both
+/// this function and upstream's own `DrawMetatile` then resolve *every*
+/// on-screen cell, connected or not, against `primary_metatiles`/
+/// `secondary_metatiles`/`primary_attrs`/`secondary_attrs` -- the active
+/// map's own tileset -- never the connected map's. That is exactly right
+/// whenever the two maps share a tileset pair: Littleroot Town, Route 101,
+/// Oldale Town, and Route 103 -- the outdoor layouts this slice's own
+/// map.json connections cluster together -- all four declare
+/// `gTileset_General` + `gTileset_Petalburg` in `layouts.json`
+/// (cross-checked in `crates/assets/src/map_layouts.rs`), and every
+/// connection this port's *bundled asset pack* can actually resolve today
+/// stays within that cluster (`cargo xtask extract`'s own `LAYOUTS` table
+/// currently ships grid bytes for Littleroot Town and Route 101 only --
+/// `crates/xtask/src/extract/mod.rs` -- so a declared connection into
+/// Oldale Town or Route 103 has no target bytes to resolve and falls back
+/// to the border block exactly as an unresolvable connection always does,
+/// per [`super::OverworldScene::from_pack`]'s own docs; it is not rendered
+/// incorrectly, just not rendered at all). A connection into a map on a
+/// genuinely different tileset would render its metatile ids against the
+/// wrong tile art -- upstream's own documented limitation, faithfully
+/// reproduced rather than silently avoided, since upstream has no
+/// cross-tileset guard either; this port carries no heuristic to detect or
+/// special-case it because no connection reachable against the bundled
+/// pack ever exercises it.
 ///
 /// # The scroll derivation
 ///
@@ -381,6 +552,7 @@ pub(super) fn build_tilemaps(
     player: &PlayerState,
     grid: &LayoutGrid<'_>,
     border: &BorderGrid<'_>,
+    connections: &[ConnectionView<'_>],
     primary_metatiles: &[u8],
     secondary_metatiles: &[u8],
     primary_attrs: &MetatileAttributeTable<'_>,
@@ -423,7 +595,7 @@ pub(super) fn build_tilemaps(
 
     for my in 0..rows_metatiles {
         for mx in 0..cols_metatiles {
-            let cell = cell_at(grid, border, anchor_x + mx, anchor_y + my);
+            let cell = cell_at(grid, border, connections, anchor_x + mx, anchor_y + my);
             let Some((entries, layer_type)) = metatile_layers(
                 cell.metatile_id,
                 primary_metatiles,
@@ -695,11 +867,11 @@ mod tests {
         let border_bytes = synthetic_border_bytes();
         let border = BorderGrid::new(&border_bytes).unwrap();
 
-        assert_eq!(cell_at(&grid, &border, 0, 0).metatile_id, 0);
-        assert_eq!(cell_at(&grid, &border, -1, 0).metatile_id, 1);
-        assert_eq!(cell_at(&grid, &border, 4, 0).metatile_id, 1);
-        assert_eq!(cell_at(&grid, &border, 0, 4).metatile_id, 1);
-        assert_eq!(cell_at(&grid, &border, -50, 50).metatile_id, 1);
+        assert_eq!(cell_at(&grid, &border, &[], 0, 0).metatile_id, 0);
+        assert_eq!(cell_at(&grid, &border, &[], -1, 0).metatile_id, 1);
+        assert_eq!(cell_at(&grid, &border, &[], 4, 0).metatile_id, 1);
+        assert_eq!(cell_at(&grid, &border, &[], 0, 4).metatile_id, 1);
+        assert_eq!(cell_at(&grid, &border, &[], -50, 50).metatile_id, 1);
     }
 
     #[test]
@@ -727,13 +899,298 @@ mod tests {
         let border = BorderGrid::new(&border_bytes).unwrap();
 
         // One tile WEST of the origin: backup (6, 7) -> index 1.
-        assert_eq!(cell_at(&grid, &border, -1, 0).metatile_id, 11);
+        assert_eq!(cell_at(&grid, &border, &[], -1, 0).metatile_id, 11);
         // One tile NORTH: backup (7, 6) -> index 2.
-        assert_eq!(cell_at(&grid, &border, 0, -1).metatile_id, 12);
+        assert_eq!(cell_at(&grid, &border, &[], 0, -1).metatile_id, 12);
         // Diagonal NW: backup (6, 6) -> index 3.
-        assert_eq!(cell_at(&grid, &border, -1, -1).metatile_id, 13);
+        assert_eq!(cell_at(&grid, &border, &[], -1, -1).metatile_id, 13);
         // One past the SE corner: backup (11, 11) -> index 0.
-        assert_eq!(cell_at(&grid, &border, 4, 4).metatile_id, 10);
+        assert_eq!(cell_at(&grid, &border, &[], 4, 4).metatile_id, 10);
+    }
+
+    // -- Connected-map fallback (issue #253) -------------------------------
+
+    /// A grid whose every cell's metatile id encodes its own `(x, y)`
+    /// (`10 + y * width + x`), so a connection-resolution test can assert
+    /// *which* cell of the connected map was read, not just that some cell
+    /// was.
+    fn labeled_grid_bytes(width: u16, height: u16) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        for y in 0..height {
+            for x in 0..width {
+                bytes.extend_from_slice(&cell(10 + y * width + x, 0, 3).to_le_bytes());
+            }
+        }
+        bytes
+    }
+
+    fn labeled_layout(width: u16, height: u16) -> assets::MapLayout {
+        assets::MapLayout {
+            id: assets::LayoutId("MAP_CONNECTED"),
+            name: "MapConnected",
+            width,
+            height,
+            primary_tileset: "gTileset_General",
+            secondary_tileset: "gTileset_General",
+        }
+    }
+
+    /// South (`FillSouthConnection`, `fieldmap.c:178-211`): a position past
+    /// the active map's south edge resolves to the connected map's own row
+    /// 0 (its north edge), shifted along x by `offset`; a position whose
+    /// shifted x falls outside the connected map's own width resolves to
+    /// nothing (border territory, not this connection's).
+    #[test]
+    fn connected_cell_at_resolves_a_south_connection_with_offset() {
+        let target_bytes = labeled_grid_bytes(6, 6);
+        let target_layout = labeled_layout(6, 6);
+        let grid = target_layout.grid(&target_bytes).unwrap();
+        let connections = [ConnectionView {
+            direction: ConnectionDirection::South,
+            offset: 2,
+            grid,
+        }];
+
+        // Active map is 4x4; south edge is world y == 4. World (3, 4) ->
+        // connected (3 - 2, 4 - 4) = (1, 0) -> label 10 + 0*6 + 1 == 11.
+        assert_eq!(
+            connected_cell_at(&connections, 4, 4, 3, 4)
+                .unwrap()
+                .metatile_id,
+            11
+        );
+        // One row deeper: world (4, 5) -> connected (4 - 2, 5 - 4) = (2, 1)
+        // -> label 10 + 1*6 + 2 == 18.
+        assert_eq!(
+            connected_cell_at(&connections, 4, 4, 4, 5)
+                .unwrap()
+                .metatile_id,
+            18
+        );
+        // World (1, 4) -> connected (1 - 2, 0) = (-1, 0): negative x is
+        // outside the connected map's own width, so this connection does
+        // not cover it.
+        assert!(connected_cell_at(&connections, 4, 4, 1, 4).is_none());
+        // Not past the south edge at all (y < height): not this
+        // connection's territory regardless of x.
+        assert!(connected_cell_at(&connections, 4, 4, 3, 3).is_none());
+    }
+
+    /// North (`FillNorthConnection`, `fieldmap.c:213-247`): a position past
+    /// the active map's north edge resolves to the connected map's own
+    /// bottom rows, counting backward from its own height -- and querying
+    /// far enough north runs past the connected map's own top edge too,
+    /// which is the natural (unbounded-depth) fallback [`connected_cell_at`]'s
+    /// own doc comment describes, not a special case.
+    #[test]
+    fn connected_cell_at_resolves_a_north_connection_and_bounds_by_connected_height() {
+        let target_bytes = labeled_grid_bytes(6, 6);
+        let target_layout = labeled_layout(6, 6);
+        let grid = target_layout.grid(&target_bytes).unwrap();
+        let connections = [ConnectionView {
+            direction: ConnectionDirection::North,
+            offset: 1,
+            grid,
+        }];
+
+        // World (2, -1) -> connected (2 - 1, 6 + (-1)) = (1, 5) -> label
+        // 10 + 5*6 + 1 == 41.
+        assert_eq!(
+            connected_cell_at(&connections, 4, 4, 2, -1)
+                .unwrap()
+                .metatile_id,
+            41
+        );
+        // World (2, -6) -> connected (1, 0) -> label 11.
+        assert_eq!(
+            connected_cell_at(&connections, 4, 4, 2, -6)
+                .unwrap()
+                .metatile_id,
+            11
+        );
+        // World (2, -7) -> connected (1, -1): past the connected map's own
+        // top edge -- no cell, even though the query is still "north" of
+        // the active map.
+        assert!(connected_cell_at(&connections, 4, 4, 2, -7).is_none());
+    }
+
+    /// West/East (`FillWestConnection`/`FillEastConnection`,
+    /// `fieldmap.c:249-315`): same shape as South/North, transposed --
+    /// counting inward from the connected map's own width for West, and
+    /// starting at its column 0 for East.
+    #[test]
+    fn connected_cell_at_resolves_west_and_east_connections() {
+        let target_bytes = labeled_grid_bytes(6, 6);
+        let target_layout = labeled_layout(6, 6);
+        let grid = target_layout.grid(&target_bytes).unwrap();
+        let west = [ConnectionView {
+            direction: ConnectionDirection::West,
+            offset: 3,
+            grid,
+        }];
+        // World (-1, 5) -> connected (6 - 1, 5 - 3) = (5, 2) -> label
+        // 10 + 2*6 + 5 == 27.
+        assert_eq!(
+            connected_cell_at(&west, 4, 4, -1, 5).unwrap().metatile_id,
+            27
+        );
+        // World (-6, 5) -> connected (0, 2) -> label 22.
+        assert_eq!(
+            connected_cell_at(&west, 4, 4, -6, 5).unwrap().metatile_id,
+            22
+        );
+        // World (-7, 5) -> connected (-1, 2): past the connected map's own
+        // west edge.
+        assert!(connected_cell_at(&west, 4, 4, -7, 5).is_none());
+
+        let east = [ConnectionView {
+            direction: ConnectionDirection::East,
+            offset: -2,
+            grid,
+        }];
+        // Active width 4; world (4, 1) -> connected (4 - 4, 1 - (-2)) =
+        // (0, 3) -> label 10 + 3*6 + 0 == 28.
+        assert_eq!(
+            connected_cell_at(&east, 4, 4, 4, 1).unwrap().metatile_id,
+            28
+        );
+        // World (9, 1) -> connected (5, 3) -> label 33.
+        assert_eq!(
+            connected_cell_at(&east, 4, 4, 9, 1).unwrap().metatile_id,
+            33
+        );
+        // World (10, 1) -> connected (6, 3): past the connected map's own
+        // east edge (width 6).
+        assert!(connected_cell_at(&east, 4, 4, 10, 1).is_none());
+    }
+
+    /// `Dive`/`Emerge` connections never resolve a cell -- upstream's own
+    /// `InitBackupMapLayoutConnections` switch has no case for them either
+    /// (module docs).
+    #[test]
+    fn connected_cell_at_ignores_dive_and_emerge_connections() {
+        let target_bytes = labeled_grid_bytes(6, 6);
+        let target_layout = labeled_layout(6, 6);
+        let grid = target_layout.grid(&target_bytes).unwrap();
+        let connections = [
+            ConnectionView {
+                direction: ConnectionDirection::Dive,
+                offset: 0,
+                grid,
+            },
+            ConnectionView {
+                direction: ConnectionDirection::Emerge,
+                offset: 0,
+                grid,
+            },
+        ];
+        assert!(connected_cell_at(&connections, 4, 4, 2, 4).is_none());
+        assert!(connected_cell_at(&connections, 4, 4, -1, 2).is_none());
+    }
+
+    /// Overlapping connections resolve to the *last* declared match,
+    /// mirroring upstream's own overwrite-in-declaration-order semantics
+    /// (`connected_cell_at`'s own doc comment): two South connections whose
+    /// offsets both cover the same query position, and (separately) a
+    /// South/West pair that both reach a true map corner.
+    #[test]
+    fn connected_cell_at_lets_a_later_declared_connection_overwrite_an_earlier_one() {
+        let first_bytes = labeled_grid_bytes(6, 6);
+        let first_layout = labeled_layout(6, 6);
+        let first = first_layout.grid(&first_bytes).unwrap();
+        let mut second_bytes = Vec::new();
+        for _ in 0..36 {
+            second_bytes.extend_from_slice(&cell(99, 0, 3).to_le_bytes());
+        }
+        let second_layout = labeled_layout(6, 6);
+        let second = second_layout.grid(&second_bytes).unwrap();
+
+        // Both South, offset 0: world (1, 4) is in bounds of either map's
+        // own edge strip. The second entry, declared later, wins.
+        let connections = [
+            ConnectionView {
+                direction: ConnectionDirection::South,
+                offset: 0,
+                grid: first,
+            },
+            ConnectionView {
+                direction: ConnectionDirection::South,
+                offset: 0,
+                grid: second,
+            },
+        ];
+        assert_eq!(
+            connected_cell_at(&connections, 4, 4, 1, 4)
+                .unwrap()
+                .metatile_id,
+            99,
+            "the later-declared connection must win where both cover the same cell"
+        );
+
+        // A true corner: world (-1, 4) is simultaneously past the west edge
+        // (x < 0) and the south edge (y >= height). Declared South-then-West,
+        // the West connection (declared last) wins.
+        let corner = [
+            ConnectionView {
+                direction: ConnectionDirection::South,
+                offset: 0,
+                grid: first,
+            },
+            ConnectionView {
+                direction: ConnectionDirection::West,
+                offset: 0,
+                grid: second,
+            },
+        ];
+        assert_eq!(
+            connected_cell_at(&corner, 4, 4, -1, 4).unwrap().metatile_id,
+            99,
+            "at a corner, the later-declared direction must win"
+        );
+    }
+
+    /// [`cell_at`]'s own three-way precedence (issue #253): the active
+    /// grid's own cell wins in bounds; a connection's own cell wins next;
+    /// the border block is the last resort, exactly when neither of the
+    /// first two covers the position.
+    #[test]
+    fn cell_at_prefers_the_grid_then_a_connection_then_the_border() {
+        let grid_bytes = synthetic_grid_bytes(4, 4);
+        let layout = assets::MapLayout {
+            id: assets::LayoutId("MAP_TEST"),
+            name: "MapTest",
+            width: 4,
+            height: 4,
+            primary_tileset: "gTileset_General",
+            secondary_tileset: "gTileset_General",
+        };
+        let grid = layout.grid(&grid_bytes).unwrap();
+        let border_bytes = synthetic_border_bytes();
+        let border = BorderGrid::new(&border_bytes).unwrap();
+
+        let target_bytes = labeled_grid_bytes(3, 3);
+        let target_layout = labeled_layout(3, 3);
+        let target_grid = target_layout.grid(&target_bytes).unwrap();
+        let connections = [ConnectionView {
+            direction: ConnectionDirection::South,
+            offset: 0,
+            grid: target_grid,
+        }];
+
+        // In bounds: the active grid's own cell (id 0), regardless of the
+        // declared connection.
+        assert_eq!(cell_at(&grid, &border, &connections, 0, 0).metatile_id, 0);
+        // Just past the south edge, within the connected map's own 3-wide
+        // strip: world (1, 4) -> connected (1, 0) -> label 11.
+        assert_eq!(cell_at(&grid, &border, &connections, 1, 4).metatile_id, 11);
+        // Past the south edge but outside the connected map's own width
+        // (connected x == 3, out of its 0..3 range): the connection does
+        // not cover it, so this falls all the way to the border block
+        // (synthetic id 1).
+        assert_eq!(cell_at(&grid, &border, &connections, 3, 4).metatile_id, 1);
+        // Past a *different* edge (west, x < 0) with no declared West
+        // connection: border block again.
+        assert_eq!(cell_at(&grid, &border, &connections, -1, 0).metatile_id, 1);
     }
 
     #[test]
@@ -820,6 +1277,7 @@ mod tests {
             &player,
             &grid,
             &border,
+            &[],
             &metatiles,
             &[],
             &attrs,
@@ -869,6 +1327,7 @@ mod tests {
                 player,
                 &grid,
                 &border,
+                &[],
                 &metatiles,
                 &[],
                 &attrs,
@@ -974,6 +1433,7 @@ mod tests {
             &player,
             &grid,
             &border,
+            &[],
             &metatiles,
             &[],
             &attrs,
