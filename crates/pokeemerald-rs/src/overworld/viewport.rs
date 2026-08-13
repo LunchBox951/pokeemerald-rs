@@ -197,6 +197,58 @@ fn copy_bank(colors: &mut [Bgr555; Palette::LEN], bank: usize, palette: PaletteR
 /// backup-map coordinates upstream's grid macros consume.
 const MAP_OFFSET: i32 = 7;
 
+/// Upstream `MAP_OFFSET_W` (`pokeemerald/include/fieldmap.h:19`):
+/// `InitMapLayoutData` sizes `gBackupMapLayout.width` at
+/// `mapLayout->width + MAP_OFFSET_W` (`pokeemerald/src/fieldmap.c:98`), so
+/// the backup buffer carries [`MAP_OFFSET`] padding columns west of the
+/// layout and one *more* than that east of it -- see
+/// [`within_backup_map_band`].
+const MAP_OFFSET_W: i32 = MAP_OFFSET * 2 + 1;
+
+/// Upstream `MAP_OFFSET_H` (`pokeemerald/include/fieldmap.h:20`):
+/// `gBackupMapLayout.height` is `mapLayout->height + MAP_OFFSET_H`
+/// (`pokeemerald/src/fieldmap.c:99`) -- [`MAP_OFFSET`] padding rows north of
+/// the layout and one *fewer* than that south of it (see
+/// [`within_backup_map_band`]).
+const MAP_OFFSET_H: i32 = MAP_OFFSET * 2;
+
+/// The westmost/northmost layout-local coordinate upstream's backup buffer
+/// covers: backup index 0 is layout-local `-MAP_OFFSET`
+/// (`InitBackupMapLayoutData` writes the layout itself starting at backup
+/// index [`MAP_OFFSET`] on both axes, `pokeemerald/src/fieldmap.c:110-118`).
+const BACKUP_MAP_MIN: i32 = -MAP_OFFSET;
+
+/// How far *past* a layout's own east edge upstream's backup buffer reaches:
+/// the last valid backup column is `width + MAP_OFFSET_W - 1`, i.e.
+/// layout-local `width + 7`. `FillEastConnection`'s own `MAP_OFFSET + 1`
+/// copy width (`pokeemerald/src/fieldmap.c:313`) fills exactly that far.
+const BACKUP_MAP_MAX_PAST_EAST: i32 = MAP_OFFSET_W - 1 - MAP_OFFSET;
+
+/// How far past a layout's own south edge the backup buffer reaches: the
+/// last valid backup row is `height + MAP_OFFSET_H - 1`, i.e. layout-local
+/// `height + 6` -- one row *shy* of the north side's 7, because
+/// `MAP_OFFSET_H` is `MAP_OFFSET * 2` (even) rather than `MAP_OFFSET_W`'s
+/// `MAP_OFFSET * 2 + 1`. `FillSouthConnection` copies [`MAP_OFFSET`] rows
+/// starting at backup row `height + MAP_OFFSET`, the last of which
+/// (`height + 13`) is that same final row.
+const BACKUP_MAP_MAX_PAST_SOUTH: i32 = MAP_OFFSET_H - 1 - MAP_OFFSET;
+
+/// Whether layout-local `(x, y)` falls inside the band upstream's
+/// `gBackupMapLayout` actually covers for an active map of `width`x`height`:
+/// `x` in `-7..=width + 7`, `y` in `-7..=height + 6` (the named constants
+/// above derive both from [`MAP_OFFSET`]/[`MAP_OFFSET_W`]/[`MAP_OFFSET_H`]).
+///
+/// Outside that band upstream has no storage at all -- `MapGridGetMetatileIdAt`
+/// (`pokeemerald/src/fieldmap.c`) takes its out-of-`gBackupMapLayout` branch
+/// and returns `GetBorderBlockAt`'s border block -- so
+/// [`connected_cell_at`] must refuse to resolve there too, however deep a
+/// connected map's own grid would otherwise reach. See that function's own
+/// "Depth" section.
+fn within_backup_map_band(width: u16, height: u16, x: i32, y: i32) -> bool {
+    (BACKUP_MAP_MIN..=i32::from(width) + BACKUP_MAP_MAX_PAST_EAST).contains(&x)
+        && (BACKUP_MAP_MIN..=i32::from(height) + BACKUP_MAP_MAX_PAST_SOUTH).contains(&y)
+}
+
 /// One connected map's own decoded grid, sourced from a declared
 /// [`assets::MapConnection`] and ready for [`cell_at`]'s connection
 /// fallback -- see [`connected_cell_at`] for the geometry this feeds.
@@ -255,23 +307,42 @@ pub(super) struct ConnectionView<'a> {
 /// `(x, y)` asks for, since the *viewport* can see several rows/columns past
 /// an edge well before the player ever steps there.
 ///
-/// # Depth: unbounded here, naturally bounded in practice
+/// # Depth: bounded to upstream's backup-buffer band
 ///
-/// Upstream additionally caps each direction's own copy depth at
-/// [`MAP_OFFSET`] (7) rows/columns -- `FillEastConnection`'s own 8 is a
-/// one-column asymmetry from its fixed backup buffer's own odd total width
-/// (`MAP_OFFSET_W`, `pokeemerald/include/fieldmap.h:19`) -- into a
-/// fixed-size backing buffer (`gBackupMapLayout`) sized just large enough
-/// for any camera position within one map load. This port has no such
-/// buffer; every cell is resolved on demand, so depth here is bounded only
-/// by the connected map's own grid extent (the table above's `target_x`/
-/// `target_y` bounds check, applied via [`LayoutGrid::cell_at`]'s own
-/// bounds-checked `None`). In practice [`build_tilemaps`]'s own viewport
-/// never queries further than roughly half of [`super::VIEW_COLS`]/
-/// [`super::VIEW_ROWS`] past an edge (the parent module's docs on the
-/// camera model), comfortably inside what upstream's fixed depth would have
-/// covered anyway -- so this is a difference in mechanism, not in what
-/// actually renders for any position the camera can reach.
+/// Upstream resolves connections once per map load, by *copying* each
+/// direction's own edge strip into a fixed-size backing buffer
+/// (`gBackupMapLayout`): [`MAP_OFFSET`] (7) rows/columns per direction,
+/// except `FillEastConnection`'s [`MAP_OFFSET`]`+ 1`, a one-column
+/// asymmetry from that buffer's own odd total width ([`MAP_OFFSET_W`]).
+/// Everything outside the buffer is border block, unconditionally, because
+/// there is no storage there for a connection to have reached.
+///
+/// This port has no such buffer -- every cell is resolved on demand, so
+/// nothing about the *mechanism* bounds how deep a connected map's own grid
+/// could be sampled. So the bound is applied explicitly, up front, via
+/// [`within_backup_map_band`]: a query outside `x` in `-7..=width + 7`,
+/// `y` in `-7..=height + 6` (upstream's exact backup-buffer extents for the
+/// *active* map) resolves to `None` here and therefore to the border block
+/// in [`cell_at`], exactly as upstream renders it.
+///
+/// That bound is not merely defensive: the viewport really does reach past
+/// upstream's cover. [`build_tilemaps`] anchors at
+/// `base_x - PLAYER_VIEW_COL - pad_before_x`, whose [`super::PAD`] term is
+/// 1 whenever the player is mid-step along the scrolling axis -- so a
+/// player standing at `x == 0` and facing East in transit anchors at
+/// `0 - 7 - 1 == -8`, one column *past* upstream's own west cover.
+/// Upstream draws the border block there; without this bound the port would
+/// have drawn connected content instead. (The east side is exactly
+/// equivalent, thanks to `FillEastConnection`'s extra column; the north and
+/// south sides are only ever reachable well inside the band, since
+/// [`super::PLAYER_VIEW_ROW`] is 5 against a 7-row cover.)
+///
+/// Within the band the two agree cell for cell: upstream's west strip
+/// occupies backup columns `0..7` (layout-local `-7..=-1`), its east strip
+/// backup columns `width + 7..width + 15` (layout-local `width..=width + 7`),
+/// its north strip backup rows `0..7` (`-7..=-1`) and its south strip backup
+/// rows `height + 7..height + 14` (`height..=height + 6`) -- precisely the
+/// out-of-grid part of the band each direction's guard above claims.
 ///
 /// # Overlapping connections: last declared, last resolved
 ///
@@ -291,6 +362,12 @@ fn connected_cell_at(
     x: i32,
     y: i32,
 ) -> Option<MetatileCell> {
+    // Outside upstream's own backup-buffer band there is nothing for a
+    // connection to have been copied into: border block, whatever the
+    // connected grids would reach (this function's "Depth" docs).
+    if !within_backup_map_band(width, height, x, y) {
+        return None;
+    }
     let mut found = None;
     for connection in connections {
         let target = match connection.direction {
@@ -979,9 +1056,11 @@ mod tests {
     /// North (`FillNorthConnection`, `fieldmap.c:213-247`): a position past
     /// the active map's north edge resolves to the connected map's own
     /// bottom rows, counting backward from its own height -- and querying
-    /// far enough north runs past the connected map's own top edge too,
-    /// which is the natural (unbounded-depth) fallback [`connected_cell_at`]'s
-    /// own doc comment describes, not a special case.
+    /// far enough north runs past the connected map's own top edge too
+    /// (here, *before* [`within_backup_map_band`]'s own bound bites: the
+    /// connected map is only 6 tall, shallower than the band's 7 rows), the
+    /// connected-extent fallback [`connected_cell_at`]'s own doc comment
+    /// describes rather than a special case.
     #[test]
     fn connected_cell_at_resolves_a_north_connection_and_bounds_by_connected_height() {
         let target_bytes = labeled_grid_bytes(6, 6);
@@ -1064,6 +1143,131 @@ mod tests {
         assert!(connected_cell_at(&east, 4, 4, 10, 1).is_none());
     }
 
+    /// Review regression (#253): connection resolution stops exactly where
+    /// upstream's `gBackupMapLayout` stops ([`within_backup_map_band`]) --
+    /// layout-local `x` in `-7..=width + 7`, `y` in `-7..=height + 6` --
+    /// even when the connected map's own grid reaches further. Upstream
+    /// renders the border block one step past each of those edges because
+    /// its fixed backup buffer has no cell there at all, and
+    /// [`build_tilemaps`] really can query that far west/east (a player at
+    /// `x == 0` in transit facing East anchors at `-8`).
+    ///
+    /// The connected map here is 16x16 -- deliberately larger than the band
+    /// on every axis, so every `None` below is the band's own bound biting,
+    /// not [`LayoutGrid::cell_at`]'s.
+    #[test]
+    fn connected_cell_at_stops_at_upstreams_backup_map_band_edge() {
+        const CONNECTED: u16 = 16;
+        let target_bytes = labeled_grid_bytes(CONNECTED, CONNECTED);
+        let target_layout = labeled_layout(CONNECTED, CONNECTED);
+        let grid = target_layout.grid(&target_bytes).unwrap();
+        let of = |direction| {
+            [ConnectionView {
+                direction,
+                offset: 0,
+                grid,
+            }]
+        };
+
+        // West: `FillWestConnection` fills backup columns `0..MAP_OFFSET`,
+        // i.e. layout-local `-7..=-1`. World (-7, 2) -> connected
+        // (16 - 7, 2) == (9, 2) -> label 10 + 2*16 + 9 == 51.
+        let west = of(ConnectionDirection::West);
+        assert_eq!(
+            connected_cell_at(&west, 4, 4, -7, 2).unwrap().metatile_id,
+            51,
+            "the westmost column upstream's backup buffer covers must resolve"
+        );
+        // One column further west: connected (8, 2) exists in this 16-wide
+        // grid, but upstream has no backup cell there -- border block.
+        assert!(
+            connected_cell_at(&west, 4, 4, -8, 2).is_none(),
+            "one column past upstream's own west cover must not resolve"
+        );
+
+        // East: `FillEastConnection`'s own `MAP_OFFSET + 1` width reaches
+        // layout-local `width..=width + 7` (`MAP_OFFSET_W`'s odd total).
+        let east = of(ConnectionDirection::East);
+        assert_eq!(
+            connected_cell_at(&east, 4, 4, 4 + 7, 2)
+                .unwrap()
+                .metatile_id,
+            10 + 2 * CONNECTED + 7,
+            "the eastmost column upstream's backup buffer covers must resolve"
+        );
+        assert!(
+            connected_cell_at(&east, 4, 4, 4 + 8, 2).is_none(),
+            "one column past upstream's own east cover must not resolve"
+        );
+
+        // North: backup rows `0..MAP_OFFSET`, layout-local `-7..=-1`.
+        let north = of(ConnectionDirection::North);
+        assert_eq!(
+            connected_cell_at(&north, 4, 4, 2, -7).unwrap().metatile_id,
+            10 + (CONNECTED - 7) * CONNECTED + 2,
+            "the northmost row upstream's backup buffer covers must resolve"
+        );
+        assert!(
+            connected_cell_at(&north, 4, 4, 2, -8).is_none(),
+            "one row past upstream's own north cover must not resolve"
+        );
+
+        // South: `MAP_OFFSET_H` is even, so the south side reaches only
+        // `height + 6` -- one row shallower than the north side's 7.
+        let south = of(ConnectionDirection::South);
+        assert_eq!(
+            connected_cell_at(&south, 4, 4, 2, 4 + 6)
+                .unwrap()
+                .metatile_id,
+            10 + 6 * CONNECTED + 2,
+            "the southmost row upstream's backup buffer covers must resolve"
+        );
+        assert!(
+            connected_cell_at(&south, 4, 4, 2, 4 + 7).is_none(),
+            "one row past upstream's own south cover must not resolve"
+        );
+    }
+
+    /// The band edge, end to end through [`cell_at`]: the cell just inside
+    /// upstream's west cover renders the connected map's own metatile, the
+    /// adjacent one just outside renders the active map's border block --
+    /// the observable half of
+    /// [`connected_cell_at_stops_at_upstreams_backup_map_band_edge`].
+    #[test]
+    fn cell_at_falls_back_to_the_border_one_step_past_the_backup_map_band() {
+        let grid_bytes = synthetic_grid_bytes(4, 4);
+        let layout = assets::MapLayout {
+            id: assets::LayoutId("MAP_TEST"),
+            name: "MapTest",
+            width: 4,
+            height: 4,
+            primary_tileset: "gTileset_General",
+            secondary_tileset: "gTileset_General",
+        };
+        let grid = layout.grid(&grid_bytes).unwrap();
+        let border_bytes = synthetic_border_bytes();
+        let border = BorderGrid::new(&border_bytes).unwrap();
+
+        let target_bytes = labeled_grid_bytes(16, 16);
+        let target_layout = labeled_layout(16, 16);
+        let connections = [ConnectionView {
+            direction: ConnectionDirection::West,
+            offset: 0,
+            grid: target_layout.grid(&target_bytes).unwrap(),
+        }];
+
+        assert_eq!(
+            cell_at(&grid, &border, &connections, -7, 2).metatile_id,
+            51,
+            "world x == -7 is upstream's westmost covered column: connected content"
+        );
+        assert_eq!(
+            cell_at(&grid, &border, &connections, -8, 2).metatile_id,
+            1,
+            "world x == -8 is past every backup cell upstream has: border block"
+        );
+    }
+
     /// `Dive`/`Emerge` connections never resolve a cell -- upstream's own
     /// `InitBackupMapLayoutConnections` switch has no case for them either
     /// (module docs).
@@ -1128,24 +1332,58 @@ mod tests {
         );
 
         // A true corner: world (-1, 4) is simultaneously past the west edge
-        // (x < 0) and the south edge (y >= height). Declared South-then-West,
-        // the West connection (declared last) wins.
-        let corner = [
-            ConnectionView {
-                direction: ConnectionDirection::South,
-                offset: 0,
-                grid: first,
-            },
-            ConnectionView {
-                direction: ConnectionDirection::West,
-                offset: 0,
-                grid: second,
-            },
-        ];
+        // (x < 0) and the south edge (y >= height), and *both* arms really
+        // resolve there -- the South entry's own `offset: -1` shifts its
+        // lookup to connected (-1 - (-1), 4 - 4) == (0, 0) (label 10),
+        // inside its grid, rather than the negative x a zero offset would
+        // have produced; the West entry resolves to connected
+        // (6 + (-1), 4 - 0) == (5, 4) (label 99's uniform grid). So the
+        // winner below is decided by declaration order, not by one arm
+        // silently failing to resolve.
+        let south_at_corner = ConnectionView {
+            direction: ConnectionDirection::South,
+            offset: -1,
+            grid: first,
+        };
+        let west_at_corner = ConnectionView {
+            direction: ConnectionDirection::West,
+            offset: 0,
+            grid: second,
+        };
+        // Each arm alone resolves at the corner (the precondition that made
+        // this half vacuous before -- review of #253).
+        assert_eq!(
+            connected_cell_at(std::slice::from_ref(&south_at_corner), 4, 4, -1, 4)
+                .unwrap()
+                .metatile_id,
+            10,
+            "the South arm alone must resolve at the corner"
+        );
+        assert_eq!(
+            connected_cell_at(std::slice::from_ref(&west_at_corner), 4, 4, -1, 4)
+                .unwrap()
+                .metatile_id,
+            99,
+            "the West arm alone must resolve at the corner"
+        );
+        // Declared South-then-West: the West connection (declared last) wins.
+        let corner = [south_at_corner, west_at_corner];
         assert_eq!(
             connected_cell_at(&corner, 4, 4, -1, 4).unwrap().metatile_id,
             99,
             "at a corner, the later-declared direction must win"
+        );
+        // ...and reversing the declaration order reverses the winner, which
+        // is what makes this an order test rather than a direction-priority
+        // one.
+        let [south_at_corner, west_at_corner] = corner;
+        let corner_reversed = [west_at_corner, south_at_corner];
+        assert_eq!(
+            connected_cell_at(&corner_reversed, 4, 4, -1, 4)
+                .unwrap()
+                .metatile_id,
+            10,
+            "reversing the declaration order must reverse which direction wins"
         );
     }
 
