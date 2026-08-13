@@ -650,4 +650,18 @@ pub(super) fn saved_map_id(block1: &SaveBlock1) -> Option<assets::MapId> {
 }
 
 #[cfg(test)]
-mod tests;
+mod connections_tests;
+#[cfg(test)]
+mod decoration_tests;
+#[cfg(test)]
+mod first_battle_trigger_tests;
+#[cfg(test)]
+mod frame_tests;
+#[cfg(test)]
+mod input_tests;
+#[cfg(test)]
+mod step_tests;
+#[cfg(test)]
+mod test_support;
+#[cfg(test)]
+mod warp_tests;
