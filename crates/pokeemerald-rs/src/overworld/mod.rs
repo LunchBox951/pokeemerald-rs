@@ -333,15 +333,28 @@ impl OverworldSceneError {
 /// "resolve once, decode fresh every frame" shape the active map's own
 /// grid/border already use.
 ///
-/// A declared connection whose target map, layout, or grid bytes can't be
-/// resolved (most commonly: the target isn't one of the layouts `cargo
-/// xtask extract` currently bundles -- [`viewport::build_tilemaps`]'s own
-/// docs on which of this slice's four-map cluster that is today) is simply
-/// left out of [`OverworldScene::connections`] by
-/// [`resolve_connections`] rather than stored as an error:
-/// [`viewport::cell_at`] already falls back to the active map's own border
-/// block for any position not covered by a resolvable connection, so an
-/// unresolvable one is observably identical to it not existing at all.
+/// A declared connection that can't be resolved has two distinct fates,
+/// and [`resolve_connections`] keeps them apart (review of #253):
+///
+/// - **Not bundled -- silently omitted.** The target map isn't in the
+///   generated [`assets::MapHeaderTable`], or its layout isn't in
+///   [`assets::LayoutTable`], or the pack simply carries no `layout/<name>/map`
+///   entry for it (much the most common case: the target isn't one of the
+///   layouts `cargo xtask extract` currently bundles --
+///   [`viewport::build_tilemaps`]'s own docs on which of this slice's
+///   four-map cluster that is today). Nothing is *wrong* with the pack;
+///   there is just no neighbour content to draw, and
+///   [`viewport::cell_at`] already falls back to the active map's own
+///   border block for any position no resolvable connection covers, so an
+///   omitted connection is observably identical to it not being declared.
+/// - **Bundled but corrupt -- an error.** The pack lookup *succeeded* and
+///   the bytes then failed to decode against the target layout's own
+///   declared dimensions ([`AssetError::LayoutGridTooShort`]). That is a
+///   broken pack, not a missing neighbour, and it surfaces as an
+///   [`OverworldSceneError`] out of [`OverworldScene::from_pack`] -- the
+///   same treatment the *active* map's own `grid_bytes` already get a few
+///   lines below. Swallowing it would have rendered a silent border block
+///   in place of real, present-but-unreadable map data.
 #[derive(Debug)]
 struct ConnectedLayout {
     /// The edge this connection was declared on, and the neighbour's
@@ -369,9 +382,20 @@ struct ConnectedLayout {
 /// (for its `layout` id), layout (for width/height/tileset symbols), and
 /// `map.bin` bytes are resolved against the real generated
 /// [`assets::MapHeaderTable`]/[`assets::LayoutTable`] and `pack` itself --
-/// see [`ConnectedLayout`]'s own doc comment for why a connection that
-/// can't be fully resolved this way is simply omitted rather than reported.
-fn resolve_connections(pack: &AssetPack, header: &assets::MapHeader) -> Vec<ConnectedLayout> {
+/// see [`ConnectedLayout`]'s own doc comment for the two fates an
+/// unresolvable connection can meet (silently omitted vs. reported).
+///
+/// # Errors
+///
+/// [`OverworldSceneError::Asset`] when a target's `layout/<name>/map` entry
+/// *is* present in `pack` but its bytes don't decode against that layout's
+/// own declared dimensions ([`ConnectedLayout`]'s docs on why this one is an
+/// error rather than an omission). Every other resolution failure omits the
+/// connection and returns `Ok`.
+fn resolve_connections(
+    pack: &AssetPack,
+    header: &assets::MapHeader,
+) -> Result<Vec<ConnectedLayout>, OverworldSceneError> {
     let mut resolved = Vec::new();
     for connection in header.connections {
         if !matches!(
@@ -395,10 +419,12 @@ fn resolve_connections(pack: &AssetPack, header: &assets::MapHeader) -> Vec<Conn
         };
         // Validate now (mirrors `from_pack`'s own up-front `grid_bytes`/
         // `border_bytes` validation), so `frame_viewport` can trust every
-        // stored entry decodes on every subsequent call.
-        if target_layout.grid(target_bytes).is_err() {
-            continue;
-        }
+        // stored entry decodes on every subsequent call. Past the pack
+        // lookup above this is a *present* entry, so a decode failure is a
+        // corrupt pack and propagates, exactly like the active map's own
+        // grid -- it is not another way to be "not bundled"
+        // (`ConnectedLayout`'s docs).
+        let _ = target_layout.grid(target_bytes)?;
         resolved.push(ConnectedLayout {
             direction: connection.direction,
             offset: connection.offset,
@@ -406,7 +432,7 @@ fn resolve_connections(pack: &AssetPack, header: &assets::MapHeader) -> Vec<Conn
             grid_bytes: target_bytes.to_vec(),
         });
     }
-    resolved
+    Ok(resolved)
 }
 
 /// The current room's decoded BG tilesets/palette, layout grid/border, and
@@ -496,9 +522,10 @@ impl OverworldScene {
     /// [`OverworldSceneError::ImageNotTileAligned`], or
     /// [`OverworldSceneError::SpriteSheetWrongDimensions`] if a present
     /// entry's bytes don't fit the shape this module expects (unreachable
-    /// against a real pack). A declared connection whose own target can't
-    /// be resolved is *not* an error here -- see [`ConnectedLayout`]'s doc
-    /// comment.
+    /// against a real pack). A declared connection whose own target simply
+    /// isn't bundled is *not* an error here, but one whose bundled grid
+    /// bytes fail to decode is -- see [`ConnectedLayout`]'s doc comment on
+    /// the two.
     pub fn from_pack(
         pack: &AssetPack,
         header: &assets::MapHeader,
@@ -542,7 +569,7 @@ impl OverworldScene {
         // resolved against the pack now so `compose`/`frame_viewport` never
         // touch disk on a per-frame hot path -- mirrors `grid_bytes`/
         // `border_bytes`'s own up-front resolution just above.
-        let connections = resolve_connections(pack, header);
+        let connections = resolve_connections(pack, header)?;
 
         // The whole OBJ layer -- the player's own frames plus every NPC
         // sheet this room's object events reference, decoded once into one

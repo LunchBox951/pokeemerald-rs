@@ -984,6 +984,92 @@ fn an_unresolvable_connection_falls_back_to_the_border_exactly_like_no_connectio
     );
 }
 
+/// Review regression (#253), the *other* silent-omission path: the target
+/// map and its layout both resolve against the real generated tables (it's
+/// [`CONNECTION_TARGET`], a real bundled `MapId`), but the pack carries no
+/// `layout/<name>/map` entry for it at all. Still not an error -- that's
+/// exactly a not-yet-extracted neighbour -- and still observably identical
+/// to no connection, the same as the unknown-`MapId` case above
+/// ([`super::ConnectedLayout`]'s docs on the two omission modes).
+#[test]
+fn a_connection_whose_target_has_no_pack_entry_is_omitted_not_an_error() {
+    let connections: &'static [assets::MapConnection] = &[assets::MapConnection {
+        direction: assets::Direction::South,
+        offset: 0,
+        target: CONNECTION_TARGET,
+    }];
+    // The *base* fixture, deliberately not `connected_overworld_pack_entries`:
+    // it fabricates no `layout/littleroot_town_mays_house_1f/map` entry, so
+    // `resolve_connections` clears the header/layout table lookups and then
+    // fails at the pack lookup itself.
+    let with_connection = synthetic_scene_result_with_connections(
+        write_synthetic_pack(synthetic_overworld_pack_entries_for("general", 4, 4)),
+        "gTileset_General",
+        4,
+        4,
+        connections,
+    )
+    .expect("a bundled target with no pack entry must not fail from_pack");
+    assert!(
+        with_connection.connections.is_empty(),
+        "the connection must be omitted, not stored"
+    );
+
+    let without_connection = synthetic_scene(4, 4);
+    let player = PlayerState::new((0, 0), 3, Direction::South);
+    let event_data = engine::event_data::EventData::new();
+    assert_eq!(
+        with_connection.compose(&player, &event_data, 0).pixels(),
+        without_connection.compose(&player, &event_data, 0).pixels(),
+        "a connection whose target isn't in the pack must render identically \
+         to no connection at all"
+    );
+}
+
+/// Review regression (#253): a connection target that *is* in the pack but
+/// whose `map.bin` bytes are too short for its own declared dimensions is a
+/// corrupt pack, not a missing neighbour -- it must surface as an
+/// `OverworldSceneError` out of `from_pack` rather than being swallowed
+/// into a silent border fallback. Mirrors the *active* map's own
+/// `grid_bytes` validation, which has always propagated the identical
+/// `AssetError` ([`super::ConnectedLayout`]'s docs on the asymmetry this
+/// closes).
+#[test]
+fn a_connection_target_with_a_truncated_grid_is_an_error_not_a_silent_omission() {
+    let connections: &'static [assets::MapConnection] = &[assets::MapConnection {
+        direction: assets::Direction::South,
+        offset: 0,
+        target: CONNECTION_TARGET,
+    }];
+    let mut entries = connected_overworld_pack_entries(4, 4);
+    let target_grid = entries
+        .iter_mut()
+        .find(|e| e.id == "layout/littleroot_town_mays_house_1f/map")
+        .expect("the connection fixture always fabricates the target's map entry");
+    // One cell short of the target layout's own 11x9: present, decodable as
+    // a pack entry, and rejected by `MapLayout::grid`.
+    let full = target_grid.payload.len();
+    target_grid.payload.truncate(full - 2);
+
+    let err = synthetic_scene_result_with_connections(
+        write_synthetic_pack(entries),
+        "gTileset_General",
+        4,
+        4,
+        connections,
+    )
+    .expect_err("a present-but-truncated connection grid must be reported");
+    assert_eq!(
+        err,
+        OverworldSceneError::Asset(assets::AssetError::LayoutGridTooShort(
+            "LAYOUT_LITTLEROOT_TOWN_MAYS_HOUSE_1F",
+            usize::from(CONNECTION_TARGET_WIDTH) * usize::from(CONNECTION_TARGET_HEIGHT) * 2,
+            full - 2,
+        )),
+        "the connected map's own grid error must reach the caller verbatim"
+    );
+}
+
 /// Loads the *real* local pack (`cargo xtask extract`'s output) and
 /// exercises the full `load_default_room` + `compose` pipeline against
 /// the protagonist's bedroom (Brendan's house 2F) -- proof this module's
@@ -1624,9 +1710,11 @@ fn real_pack_littleroot_and_route_101_render_continuously_across_their_shared_ed
     // 20x20 grid -- `crates/assets/src/map_layouts.rs`), facing north: at
     // rest, the resting viewport's own anchor (`anchor_y == y -
     // PLAYER_VIEW_ROW == 1 - 5 == -4`, `super::viewport`'s module docs)
-    // samples world rows `-4..=5` -- the top four rows (screen rows 0..3,
-    // pixel rows `0..48`) already fall north of Littleroot's own y == 0
-    // edge, squarely in this connection's own territory.
+    // samples world rows `-4..=5` -- the top four rows (screen rows 0..=3,
+    // world rows `-4..=-1`, pixel rows `0..64`) already fall north of
+    // Littleroot's own y == 0 edge, squarely in this connection's own
+    // territory. All four are inside `viewport::within_backup_map_band`'s
+    // own `y >= -7` cover, so the band bound never trims this strip.
     let player = PlayerState::new((10, 1), 3, Direction::North);
     let frame = scene.compose(&player, &data, 0);
     let frame_border_only = scene_border_only.compose(&player, &data, 0);
@@ -1641,11 +1729,15 @@ fn real_pack_littleroot_and_route_101_render_continuously_across_their_shared_ed
     let route_101_player = PlayerState::new((10, 21), 3, Direction::North);
     let frame_route_101 = route_101.compose(&route_101_player, &data, 0);
 
-    // The shared strip: screen rows 0..48 (4 metatile rows), the full
-    // width -- entirely north of Littleroot's own grid at this player
-    // position, per the anchor math above.
+    // The shared strip: screen pixel rows `0..64` -- 4 metatile rows, the
+    // full width -- entirely north of Littleroot's own grid at this player
+    // position, per the anchor math above. The last of them (screen row 3,
+    // world row -1 on Littleroot's side, Route 101's own row 19) is the
+    // row immediately adjacent to the seam, the one the comparison most
+    // needs to cover (review of #253: the strip used to stop at `0..48`,
+    // three rows, excluding exactly that row).
     let mut any_pixel_changed_by_the_connection = false;
-    for py in 0..48usize {
+    for py in 0..64usize {
         for px in 0..240usize {
             let with_connection = frame.pixel(px, py);
             let without_connection = frame_border_only.pixel(px, py);
