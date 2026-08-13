@@ -77,8 +77,10 @@ pub struct MetatileAttribute {
 }
 
 impl MetatileAttribute {
-    /// Decode a raw packed `u16` attribute entry, the inverse of
-    /// [`pack`](MetatileAttribute::pack).
+    /// Decode a raw packed `u16` attribute entry.
+    ///
+    /// Only the modeled fields — behavior (bits 0-7) and layer type (bits
+    /// 12-15) — are extracted; the unused bits 8-11 are ignored.
     ///
     /// # Errors
     ///
@@ -98,8 +100,10 @@ impl MetatileAttribute {
         }
     }
 
-    /// Reconstruct the exact upstream packed `u16`, the inverse of
-    /// [`from_raw`](MetatileAttribute::from_raw).
+    /// Repack the modeled fields — behavior (bits 0-7) and layer type
+    /// (bits 12-15) — into a `u16`. The unused bits 8-11 are always zero,
+    /// so this does not reconstruct the exact original raw value if those
+    /// bits were nonzero.
     // `as u16` widens u8 -> u16 (lossless).
     #[allow(clippy::cast_lossless)]
     #[must_use]
