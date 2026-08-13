@@ -210,7 +210,7 @@ fn stepping_west_onto_the_second_route_101_trigger_tile_starts_the_scripted_firs
 /// trigger is still consumed in that case, exactly as it is upstream -- the
 /// coord event fires, the cutscene it stands in for runs, and the tile is
 /// spent whether or not this port could build a battle out of it") and which
-/// `walking_off_littlerootss_north_edge_crosses_into_route_101_and_back`'s
+/// `connections_tests::walking_off_littlerootss_north_edge_crosses_into_route_101_and_back`'s
 /// own doc comment relies on to explain why that pack-only walk stays quiet.
 /// Nothing else pins it: every other trigger test assigns a lead, so moving
 /// the `var_set` below `begin_first_battle`'s `let Some(lead) = ... else`
@@ -424,7 +424,7 @@ fn real_pack_crossing_into_route_101_primes_the_rescue_var_on_arrival() {
     let scene = crate::overworld::load_room(littleroot).expect("run `cargo xtask extract` first");
 
     // One tile south of Littleroot's own last interior row (the walkable
-    // `x = 10` column `walking_off_littlerootss_north_edge_crosses_into_route_101_and_back`
+    // `x = 10` column `connections_tests::walking_off_littlerootss_north_edge_crosses_into_route_101_and_back`
     // documents), so exactly two steps reach the crossing.
     let player = PlayerState::new((10, 1), 3, Direction::North);
     let mut phase = OverworldPhase::for_test(scene, littleroot, player, None);
@@ -464,8 +464,8 @@ fn real_pack_crossing_into_route_101_primes_the_rescue_var_on_arrival() {
 /// The end-to-end acceptance path against the real extracted pack: walking
 /// off Littleroot Town's north edge crosses into Route 101 and lands *exactly*
 /// on the real rescue coord-event trigger tile
-/// (`walking_off_littlerootss_north_edge_crosses_into_route_101_and_back`
-/// above already pins the landing itself at `(10, 19)`), which must start the
+/// (`connections_tests::walking_off_littlerootss_north_edge_crosses_into_route_101_and_back`
+/// pins the landing itself at `(10, 19)`), which must start the
 /// scripted first battle and play it to a real outcome through
 /// [`OverworldPhase::step`] alone -- no direct call into
 /// [`crate::flow::first_battle`] anywhere in this test.
@@ -486,7 +486,7 @@ fn real_pack_crossing_into_route_101_lands_on_the_rescue_trigger_and_starts_the_
 
     // Two ordinary steps north to the edge, then the crossing step itself,
     // then its own walk animation drains -- the same setup
-    // `walking_off_littlerootss_north_edge_crosses_into_route_101_and_back`
+    // `connections_tests::walking_off_littlerootss_north_edge_crosses_into_route_101_and_back`
     // uses, continued one step further into the rescue trigger.
     for _ in 0..3 {
         phase.step(held(Buttons::UP));

@@ -230,7 +230,8 @@ fn load_default_hides_the_spawn_bedrooms_decoration_placeholders() {
     // Placed directly rather than walked from the spawn tile (which is the
     // stair warp at `SPAWN_POSITION`, so stepping off it and back would
     // leave the room): the same direct-placement shape, for the same
-    // reason, as this module's real-pack Mom dialog test.
+    // reason, as
+    // `frame_tests::walking_downstairs_and_talking_to_mom_opens_and_closes_her_dialog`.
     phase.player = PlayerState::new((1, 3), 3, Direction::North);
     phase.step(held(Buttons::UP));
     assert_eq!(
@@ -356,8 +357,8 @@ fn taking_the_stairs_does_not_land_in_a_house_full_of_the_rivals_family() {
     let mut phase = OverworldPhase::load_default().expect("run `cargo xtask extract` first");
 
     // Step off the spawn tile (which *is* the stair warp) and back onto it,
-    // to generate a fresh landing -- the same shape as this module's other
-    // real-pack warp tests.
+    // to generate a fresh landing -- the same shape as the real-pack tests
+    // in `warp_tests`.
     phase.step(held(Buttons::DOWN));
     for _ in 1..WALK_FRAMES_PER_TILE {
         phase.step(ButtonState::new());
