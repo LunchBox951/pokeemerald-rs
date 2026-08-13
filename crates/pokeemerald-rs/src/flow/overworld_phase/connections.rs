@@ -241,6 +241,13 @@ impl OverworldPhase {
         // failure contract) -- see the assignment near the end of this
         // method.
         let mut transitioned_event_data = self.save1.event_data.clone();
+        // `ClearTempFieldEventData` (`src/overworld.c:848`, in
+        // `LoadMapFromWarp`, ahead of `RunOnTransitionMapScript` at `:860`):
+        // per-map-load temporary state -- the temp flag/var ranges Route
+        // 103's cuttable-tree object events now make load-bearing
+        // (`FLAG_TEMP_12`/`_13`, `assets::object_event_flags`) -- never
+        // survives into the entered map.
+        transitioned_event_data.clear_temp_field_event_data();
         run_on_transition_map_script(map, &mut transitioned_event_data);
         // Route 101's own on-frame `VAR_ROUTE101_STATE` bump (issue #231,
         // `super::first_battle_trigger`'s module docs) -- a no-op unless
@@ -383,6 +390,15 @@ impl OverworldPhase {
         // -- Route 103's rival-sprite setup among them -- before it ever
         // runs.
         let mut transitioned_event_data = self.save1.event_data.clone();
+        // `ClearTempFieldEventData` (`src/overworld.c:798`, in
+        // `LoadMapFromCameraTransition` -- upstream's connection-crossing
+        // load path clears per-map-load temporary state exactly like the
+        // warp path does, ahead of `RunOnTransitionMapScript` at `:807`):
+        // Route 103's cuttable-tree object events make the temp flag range
+        // load-bearing (`FLAG_TEMP_12`/`_13`,
+        // `assets::object_event_flags`), so a stale temp flag must not keep
+        // a tree hidden across a re-entry.
+        transitioned_event_data.clear_temp_field_event_data();
         run_on_transition_map_script(to_map, &mut transitioned_event_data);
         // Route 101's own on-frame `VAR_ROUTE101_STATE` bump (issue #231,
         // `super::first_battle_trigger`'s module docs) -- a no-op unless

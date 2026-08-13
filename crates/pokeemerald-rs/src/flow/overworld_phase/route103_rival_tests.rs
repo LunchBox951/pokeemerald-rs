@@ -583,6 +583,14 @@ fn walking_north_from_route_101_crosses_oldale_town_into_route_103() {
     }
     assert_eq!(phase.player.position(), (10, 0));
 
+    // A stale temp flag "from the departed map": `ClearTempFieldEventData`
+    // (`overworld.c:798`, `LoadMapFromCameraTransition`) runs on a
+    // connection crossing exactly like on a warp, so Route 103's
+    // cuttable-tree flags (`FLAG_TEMP_12`/`_13`,
+    // `assets::object_event_flags`) can never arrive pre-set and keep a
+    // tree hidden. `0x12` is `FLAG_TEMP_12`.
+    phase.save1.event_data.flag_set(0x12).unwrap();
+
     // The final step crosses Oldale's own north edge into Route 103 -- I-5's
     // own traversal target.
     walk_north_one_tile(&mut phase);
@@ -598,6 +606,14 @@ fn walking_north_from_route_101_crosses_oldale_town_into_route_103() {
     );
     assert_eq!(phase.player.elevation(), 3);
     assert!(!phase.player.in_transit());
+    // The temp flag set on Oldale's grid above did not survive the
+    // crossing's map load.
+    assert_eq!(
+        phase.save1().event_data.flag_get(0x12),
+        Ok(false),
+        "a connection crossing is a map load -- `ClearTempFieldEventData`'s port must \
+         clear the temp flag range before the entered map's transition effects run"
+    );
     // The crossing also ran this port's on-transition effects for Route
     // 103, so the rival's own gfx var is already primed on arrival.
     assert_eq!(

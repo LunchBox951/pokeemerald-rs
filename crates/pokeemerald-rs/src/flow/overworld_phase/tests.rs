@@ -1442,6 +1442,54 @@ fn warping_to_the_front_doormat_faces_north_and_rebinds_the_scene() {
     );
 }
 
+/// `ClearTempFieldEventData` (`overworld.c:848`, in `LoadMapFromWarp`,
+/// ahead of `RunOnTransitionMapScript` at `:860`): a warp clears the
+/// per-map-load temp flag/var ranges -- load-bearing since Route 103's
+/// cuttable-tree object events ride `FLAG_TEMP_12`/`_13`
+/// (`assets::object_event_flags`, issue #248) -- while ordinary persistent
+/// state survives untouched. The connection-crossing sibling
+/// (`LoadMapFromCameraTransition`, `:798`) is pinned by
+/// `route103_rival_tests::walking_north_from_route_101_crosses_oldale_town_into_route_103`.
+#[test]
+#[ignore = "needs a local pack: run `cargo xtask extract` first"]
+fn warping_clears_temp_field_event_data_but_not_persistent_flags() {
+    // `FLAG_TEMP_12` (`TEMP_FLAGS_START + 0x12`) and `VAR_TEMP_3`
+    // (`TEMP_VARS_START + 0x3`) -- independently transcribed, the same
+    // "each module cites its own constant" convention as everywhere else.
+    const FLAG_TEMP_12: u16 = 0x12;
+    const VAR_TEMP_3: u16 = 0x4003;
+    // An ordinary persistent flag far outside the temp range
+    // (`FLAG_HIDE_ROUTE_103_RIVAL`, `include/constants/flags.h:772`).
+    const FLAG_HIDE_ROUTE_103_RIVAL: u16 = 0x2D3;
+
+    let mut phase = OverworldPhase::load_default().expect("run `cargo xtask extract` first");
+    phase.save1.event_data.flag_set(FLAG_TEMP_12).unwrap();
+    phase.save1.event_data.var_set(VAR_TEMP_3, 7).unwrap();
+    phase
+        .save1
+        .event_data
+        .flag_set(FLAG_HIDE_ROUTE_103_RIVAL)
+        .unwrap();
+
+    phase.warp_to(assets::MapId("MAP_LITTLEROOT_TOWN_BRENDANS_HOUSE_1F"), 1);
+
+    assert_eq!(
+        phase.save1.event_data.flag_get(FLAG_TEMP_12),
+        Ok(false),
+        "a warp is a map load -- the temp flag range must clear"
+    );
+    assert_eq!(
+        phase.save1.event_data.var_get(VAR_TEMP_3),
+        Ok(0),
+        "and the temp var range with it"
+    );
+    assert_eq!(
+        phase.save1.event_data.flag_get(FLAG_HIDE_ROUTE_103_RIVAL),
+        Ok(true),
+        "while ordinary persistent flags survive the load untouched"
+    );
+}
+
 /// A phase standing on 1F's own floor, for the doormat tests below: a real
 /// pack-loaded [`ONE_F`] scene with the player placed at `position` facing
 /// `facing`, at rest.
