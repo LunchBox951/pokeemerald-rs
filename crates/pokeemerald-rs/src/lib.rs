@@ -79,8 +79,10 @@
 //! effect (`route103_rival_trigger`'s
 //! own module docs carry the full deferral list) -- only
 //! `FLAG_HIDE_ROUTE_103_RIVAL` is ported, on a win, making the rival
-//! disappear and the fight non-repeatable; a loss leaves it standing,
-//! re-fightable, since no whiteout is modelled either. `App::rival_battle_outcome`
+//! disappear and the fight non-repeatable; a loss leaves it standing and
+//! interactable but *not* re-fightable -- the fainted lead fails closed at
+//! `FaintedBattler` until issue #261's white-out/heal path lands
+//! (`route103_rival_trigger`'s "The honest loss decision"). `App::rival_battle_outcome`
 //! exposes the terminal `BattleOutcome` the same way `App::first_battle_outcome`
 //! does.
 //!
