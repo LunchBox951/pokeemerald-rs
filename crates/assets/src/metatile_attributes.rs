@@ -211,6 +211,16 @@ mod tests {
         }
     }
 
+    /// The other half of [`MetatileAttribute::pack`]'s documented contract:
+    /// the cases above all have the unused bits 8-11 clear, so only this
+    /// case exercises "the unused bits are always zero" -- a raw value
+    /// carrying them must repack without them, not round-trip exactly.
+    #[test]
+    fn metatile_attribute_pack_zeroes_the_unused_bits() {
+        let attr = MetatileAttribute::from_raw(0x0F01).unwrap();
+        assert_eq!(attr.pack(), 0x0001);
+    }
+
     #[test]
     fn metatile_attribute_rejects_unknown_layer_type_bits() {
         // Layer type bits (12-15) = 3, an upstream-unused value.
