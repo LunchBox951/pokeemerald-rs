@@ -1,34 +1,20 @@
 //! Rendering subsystem (S-2): 240x160 tile / sprite / layer renderer.
 //!
-//! Slice 1 (issue #50, merged) stood up the crate's headless-testable core:
-//! an owned [`Framebuffer`], faithful GBA BGR555 -> RGB888 palette
-//! conversion ([`Bgr555::to_rgb888`]), 4bpp/8bpp indexed tile decoding
-//! ([`Tileset`]), and a single regular (non-affine) background tile layer
-//! compositor ([`BgLayer`]).
-//!
-//! Slice 2 (issue #64) adds an OAM-equivalent sprite layer ([`OamEntry`],
-//! [`SpriteLayer`]), wrapping regular-BG scroll offsets
-//! ([`BgLayer::composite_scrolled`]), and the cross-layer priority
-//! compositor ([`compose_frame`]) that orders up to four BG layers plus
+//! Headless, testable core: an owned [`Framebuffer`], faithful GBA
+//! BGR555 -> RGB888 palette conversion ([`Bgr555::to_rgb888`]), and
+//! 4bpp/8bpp indexed tile decoding ([`Tileset`]). Regular ([`BgLayer`])
+//! and affine/rotation-scaling ([`AffineBgLayer`]) background tile
+//! layers, plus an OAM-equivalent sprite layer ([`SpriteLayer`],
+//! [`OamEntry`]) with affine and double-size sampling, all composite
+//! through [`compose_frame`], which orders up to four BG layers plus
 //! sprites the way the GBA PPU does.
 //!
-//! Slice 3 (issue #98) adds affine (rotation/scaling) support: the shared
-//! [`AffineMatrix`] parameter type, an affine BG tile layer
-//! ([`AffineTilemap`], [`AffineBgLayer`]), and affine (plus double-size)
-//! sprite sampling on [`SpriteLayer`] via [`OamEntry::with_affine`] and
-//! [`SpriteLayer::with_affine_matrices`]. Both slot into
-//! [`compose_frame`]/[`BgSlot`] without changing their signatures
-//! ([`BgSlot::new_affine`] adds the affine BG entry point).
-//!
-//! Slice 4 (issue #99) completes the deferred effect group: hardware
-//! windows (`WIN0`/`WIN1`/`OBJWIN`/`WINOUT`, [`window`]), color special
-//! effects (alpha blend, brighten, darken, [`effects`]), and mosaic
-//! ([`mosaic`]), all wired into [`compositor::compose_frame_with_effects`]
-//! via the [`compositor::FrameEffects`] parameter struct.
-//! [`compose_frame`]'s own signature is unchanged — it delegates to
-//! [`compositor::compose_frame_with_effects`] with
-//! [`compositor::FrameEffects::default`], which reproduces pre-slice-4
-//! output byte-for-byte.
+//! [`compositor::compose_frame_with_effects`] extends composition with
+//! the full hardware effect group: windows (`WIN0`/`WIN1`/`OBJWIN`/
+//! `WINOUT`, [`window`]), color special effects (alpha blend, brighten,
+//! darken, [`effects`]), and mosaic ([`mosaic`]), all controlled by the
+//! [`compositor::FrameEffects`] parameter struct. [`compose_frame`]
+//! delegates to it with [`compositor::FrameEffects::default`].
 //!
 //! Wiring this crate into `platform`'s presentation surface is a future
 //! integration issue `(constitution-vs-roadmap)`.

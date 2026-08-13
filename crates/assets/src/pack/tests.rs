@@ -910,7 +910,7 @@ fn sample_accessor_decodes_direct_sound_and_programmable_wave_entries() {
         panic!("expected a DirectSound sample");
     };
     assert_eq!(sample.base_frequency, 12345);
-    assert_eq!(sample.loop_start, Some(2));
+    assert_eq!(sample.loop_start(), Some(2));
     assert_eq!(sample.data(), &[-1, 0, 1, 2]);
 
     let wave_id = SampleId("audio/sample/programmable-wave/01".to_owned());
@@ -1200,7 +1200,7 @@ fn real_pack_audio_samples_decode_through_the_sample_schema() {
         };
         assert!(!sample.data().is_empty(), "`{id}` should carry PCM");
         assert_ne!(sample.base_frequency, 0, "`{id}` should carry a pitch word");
-        if let Some(start) = sample.loop_start {
+        if let Some(start) = sample.loop_start() {
             let start = usize::try_from(start).expect("a real loop start fits a usize");
             assert!(
                 start < sample.data().len(),
@@ -1240,7 +1240,7 @@ fn real_pack_audio_samples_decode_through_the_sample_schema() {
         panic!("the flute sample should decode as a DirectSound sample");
     };
     assert_eq!(flute.base_frequency, 3_425_024);
-    assert_eq!(flute.loop_start, Some(1312));
+    assert_eq!(flute.loop_start(), Some(1312));
     assert_eq!(flute.data().len(), 1874);
 
     let wave_bytes = pack
