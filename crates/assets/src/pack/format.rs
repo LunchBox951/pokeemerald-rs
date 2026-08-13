@@ -131,6 +131,11 @@ impl<'a> Cursor<'a> {
 /// Parse the header and directory out of a pack file's bytes (the payload
 /// region is read lazily, by slicing the original bytes directly, per
 /// entry — see [`super::AssetPack::payload`]).
+///
+/// Rejects a directory whose ids are not strictly ascending
+/// ([`PackError::Truncated`]) — `pack.rs`'s binary-search lookup assumes
+/// sorted, duplicate-free ids, so this is the one place that contract can be
+/// enforced.
 pub(super) fn parse_directory(bytes: &[u8]) -> Result<Vec<Entry>, PackError> {
     let mut cursor = Cursor::new(bytes);
 
@@ -179,6 +184,13 @@ pub(super) fn parse_directory(bytes: &[u8]) -> Result<Vec<Entry>, PackError> {
             .and_then(|end| bytes.get(offset..end))
             .is_some();
         if !payload_in_bounds {
+            return Err(PackError::Truncated);
+        }
+
+        if entries
+            .last()
+            .is_some_and(|previous: &Entry| previous.id >= id)
+        {
             return Err(PackError::Truncated);
         }
 

@@ -374,9 +374,9 @@ fn synthetic_pack() -> Vec<u8> {
     out
 }
 
-fn write_synthetic_pack(dir_hint: &str) -> std::path::PathBuf {
+fn write_synthetic_pack(test_case: &str) -> std::path::PathBuf {
     let path = std::env::temp_dir().join(format!(
-        "pokeemerald-rs-assets-pack-test-{dir_hint}-{}.pack",
+        "pokeemerald-rs-assets-pack-test-{test_case}-{}.pack",
         std::process::id()
     ));
     std::fs::write(&path, synthetic_pack()).unwrap();
@@ -483,6 +483,48 @@ fn truncated_pack_is_rejected() {
     let err = AssetPack::load(&path).unwrap_err();
     assert_eq!(err, PackError::Truncated);
     let _ = std::fs::remove_file(path);
+}
+
+/// Build a pack file's bytes from `Raw` entries, written in exactly the
+/// caller-supplied `ids` order (unlike [`synthetic_pack`], which always
+/// sorts) -- so a test can construct a directory that is deliberately not
+/// id-sorted.
+fn raw_pack_with_directory_order(ids: &[&str]) -> Vec<u8> {
+    let payload = b"x";
+    let header_size = 8 + 4 + 4;
+    let directory_size: usize = ids.iter().map(|id| 2 + id.len() + 1 + 8 + 8).sum();
+    let offset = header_size + directory_size;
+
+    let mut out = Vec::new();
+    out.extend_from_slice(&MAGIC);
+    out.extend_from_slice(&super::format::FORMAT_VERSION.to_le_bytes());
+    out.extend_from_slice(&u32::try_from(ids.len()).unwrap().to_le_bytes());
+    for id in ids {
+        out.extend_from_slice(&u16::try_from(id.len()).unwrap().to_le_bytes());
+        out.extend_from_slice(id.as_bytes());
+        out.push(2); // kind_tag: Raw
+        out.extend_from_slice(&(offset as u64).to_le_bytes());
+        out.extend_from_slice(&(payload.len() as u64).to_le_bytes());
+    }
+    for _ in ids {
+        out.extend_from_slice(payload);
+    }
+    out
+}
+
+#[test]
+fn unordered_and_duplicate_directory_ids_are_rejected() {
+    let descending = raw_pack_with_directory_order(&["b/entry", "a/entry"]);
+    assert_eq!(
+        super::format::parse_directory(&descending).unwrap_err(),
+        PackError::Truncated
+    );
+
+    let duplicate = raw_pack_with_directory_order(&["a/entry", "a/entry"]);
+    assert_eq!(
+        super::format::parse_directory(&duplicate).unwrap_err(),
+        PackError::Truncated
+    );
 }
 
 #[test]
@@ -1343,44 +1385,23 @@ fn real_pack_audio_song_decodes_through_the_song_schema() {
     assert_eq!(volumes, vec![10, 10, 16]);
 }
 
-/// The full `MUS_TITLE` data-chain round-trip through the typed accessors
-/// this module adds (S-4, issue #184, `#115` child 5): load
-/// `audio/song/mus_title` through [`AssetPack::song`], resolve every
-/// voicegroup [`AssetPack::voicegroup`] can reach from the song's own
-/// [`Song::voicegroup`] -- transitively, through every
-/// [`VoiceEntry::KeySplit`]/[`VoiceEntry::Rhythm`] indirection a resolved
-/// group carries -- and decode every sample
-/// [`VoiceEntry::DirectSound`]/[`VoiceEntry::ProgrammableWave`] leaf
-/// references through [`AssetPack::sample`]. Where
-/// [`real_pack_audio_song_decodes_through_the_song_schema`] and
-/// [`real_pack_audio_samples_decode_through_the_sample_schema`] each pin one
-/// schema's own producer/consumer agreement in isolation (`pack.raw` + a
-/// manual `decode` call), and
-/// `crates/pokeemerald-rs/src/voicegroup_pack_tests.rs`'s
-/// `every_id_a_voicegroup_references_resolves_to_a_pack_entry` walks the
-/// voicegroup graph checking only that referenced ids are *present*
-/// (`pack.raw(id).is_err()`), this test is the thing none of them are: proof
-/// that the *typed* accessors this module adds chain together end to end --
-/// a caller reaching for `pack.song(..)` can walk straight through
-/// `pack.voicegroup(..)`/`pack.sample(..)` without ever touching `pack.raw`
-/// or a schema's `decode` directly, and every step of that chain, for this
-/// one real song, actually holds together.
+/// Walks the typed `song -> voicegroup -> sample` closure for
+/// `audio/song/mus_title` end to end: [`AssetPack::song`], then every
+/// voicegroup [`AssetPack::voicegroup`] can reach transitively through
+/// [`VoiceEntry::KeySplit`]/[`VoiceEntry::Rhythm`] indirections, then every
+/// [`VoiceEntry::DirectSound`]/[`VoiceEntry::ProgrammableWave`] leaf sample
+/// through [`AssetPack::sample`] -- proving the typed accessors this module
+/// adds chain together without a caller ever touching `pack.raw` directly.
 ///
-/// **Not a playability claim.** This is data-chain integrity only: every
-/// reference resolves and every payload decodes to its schema's structural
-/// shape. It does not sequence events, mix a waveform, or produce audio --
-/// that is issue #185 (`#115` child 6), a separate slice.
+/// **Not a playability claim.** Data-chain integrity only: every reference
+/// resolves and every payload decodes to its schema's structural shape. It
+/// does not sequence events, mix a waveform, or produce audio -- that is
+/// issue #185 (`#115` child 6), a separate slice.
 ///
-/// The expected voicegroup label set (7: `title` plus its 6 keysplit/rhythm
-/// children) and sample count (37: 33 `DirectSound` + 4 programmable-wave)
-/// mirror `xtask::extract::voicegroups`'s and
-/// `xtask::extract::audio_samples`'s own module docs, which hand-traced and
-/// hand-verified exactly this same closure from the upstream sources -- see
-/// [`REAL_PACK_DIRECT_SOUND_SAMPLES`]/[`REAL_PACK_PROGRAMMABLE_WAVES`]'s docs
-/// for that trail. This test does not re-derive the set; it walks the real
-/// pack's own data and checks the walk lands on the same numbers, which is
-/// what would catch the resolver and the sample-extraction list drifting
-/// apart from each other via this crate's own read side.
+/// Expects exactly 7 voicegroups (`title` plus its 6 keysplit/rhythm
+/// children) and 37 samples (33 `DirectSound` + 4 programmable-wave), per
+/// `xtask::extract::voicegroups`'s and `xtask::extract::audio_samples`'s own
+/// hand-verified provenance for this closure.
 ///
 /// Needs a local pack: run `cargo xtask extract` first, then
 /// `cargo test -p assets -- --ignored` (CI's Ubuntu `native` leg does
@@ -1400,7 +1421,6 @@ fn real_pack_mus_title_data_chain_round_trips_through_the_typed_accessors() {
 
     let pack = AssetPack::load_default().expect("run `cargo xtask extract` first");
 
-    // 1. The song, through the typed accessor.
     let song = pack
         .song("mus_title")
         .expect("`audio/song/mus_title` should load through `AssetPack::song`");
@@ -1424,10 +1444,9 @@ fn real_pack_mus_title_data_chain_round_trips_through_the_typed_accessors() {
         "mus_title should select at least one VOICE"
     );
 
-    // 2. Every voicegroup slot the song references, resolved transitively
-    // through `AssetPack::voicegroup` -- a worklist walk starting at the
-    // song's own top-level group, following every KeySplit/Rhythm child
-    // reference outward, decoding each group exactly once.
+    // A worklist walk starting at the song's own top-level group, following
+    // every KeySplit/Rhythm child reference outward through
+    // `AssetPack::voicegroup`, decoding each group exactly once.
     let mut visited_groups: HashSet<VoiceGroupId> = HashSet::new();
     let mut pending_groups = vec![song.voicegroup().clone()];
     let mut visited_samples: HashSet<SampleId> = HashSet::new();
@@ -1448,8 +1467,8 @@ fn real_pack_mus_title_data_chain_round_trips_through_the_typed_accessors() {
         );
         for slot in group.slots() {
             match slot {
-                // 3. Every sample a concrete leaf voice references, decoded
-                // through `AssetPack::sample`.
+                // Each concrete leaf voice's sample, decoded through
+                // `AssetPack::sample`.
                 VoiceEntry::DirectSound(voice) => {
                     if visited_samples.insert(voice.sample.clone()) {
                         pack.sample(&voice.sample)
