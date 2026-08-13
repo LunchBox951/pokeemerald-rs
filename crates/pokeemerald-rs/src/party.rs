@@ -269,14 +269,18 @@ pub(crate) fn from_save_pokemon(dex: &Dex, saved: &Pokemon) -> Result<BattlePoke
     // threshold levels the mon up to match it, and a total *below* the
     // saved level's own floor (unwritable by [`to_save_pokemon`]) stays at
     // the floor rather than representing a level/experience pair upstream
-    // could never store.
+    // could never store. In the ordinary (consistent-bytes) case this never
+    // crosses a level -- `saved.level` and `saved_experience` already agree
+    // -- so `apply_experience`'s learnset walk (issue #252) is a no-op here;
+    // it only fires for the inconsistent-bytes edge case above, where it is
+    // no less faithful than the level jump itself.
     let saved_experience = u32::from_le_bytes([
         substructures.growth[4],
         substructures.growth[5],
         substructures.growth[6],
         substructures.growth[7],
     ]);
-    mon.apply_experience(saved_experience.saturating_sub(mon.experience()));
+    mon.apply_experience(dex, saved_experience.saturating_sub(mon.experience()));
 
     // Full HP is what `BattlePokemon::new` starts at; the save's own `hp`
     // is the state to restore. A saved value above the recomputed maximum

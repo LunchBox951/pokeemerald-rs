@@ -16,7 +16,7 @@
 //! non-volatile status conditions, and the Shedinja 1-HP special case in
 //! `CalculateMonStats`.
 
-use assets::{experience_for_level, BaseStats, MoveId, SpeciesId, Type};
+use assets::{experience_for_level, BaseStats, LevelUpLearnsets, MoveId, SpeciesId, Type};
 
 use crate::dex::Dex;
 use crate::error::BattleError;
@@ -518,32 +518,29 @@ impl BattlePokemon {
     }
 
     /// Add earned experience, applying every crossed level threshold and
-    /// capping both level and total experience at level 100.
+    /// capping both level and total experience at level 100. For every
+    /// level crossed by this call, in order, also offers that level's
+    /// learnset moves the way upstream's `MonTryLearningNewMove` would —
+    /// see [`BattlePokemon::learn_crossed_level_moves`] for exactly what
+    /// that does and does not reproduce.
     ///
     /// Stat recalculation follows `CalculateMonStats`. If maximum HP grows,
     /// the increase is also added to current HP, preserving the absolute
     /// amount of damage the mon had taken before levelling up.
     ///
-    /// # Recorded divergence: a crossed level changes nothing but the level
+    /// # Recorded divergence: EVs and friendship still do not move
     ///
-    /// Upstream's level-up path does more than raise the number. From
-    /// `Cmd_getexp` it runs `BattleScript_LevelUp`
-    /// (`pokeemerald/data/battle_scripts_1.s`), whose `handlelearnnewmove`
-    /// (`Cmd_handlelearnnewmove` → `MonTryLearningNewMove`,
-    /// `src/battle_script_commands.c:5360`, `src/pokemon.c`) teaches each
-    /// crossed level's learnset move — with the four-known-moves
-    /// replacement prompt — and `Cmd_getexp` itself also applies
-    /// `MonGainEVs` (`src/battle_script_commands.c:3420`) and
-    /// `AdjustFriendship(FRIENDSHIP_EVENT_GROW_LEVEL)` (`:3465`). **None of
-    /// that is modelled here**: the moveset, EVs (this crate carries none),
-    /// and friendship are unchanged across a level-up, so a mon that
-    /// crosses a learnset level keeps its old moves. Deliberate deferral,
-    /// not an accident — teaching the move would hand out moves whose
-    /// effects this crate does not model yet and fails closed on. Recorded
-    /// on the `Cmd_getexp` / `MonTryLearningNewMove` ledger entries and
-    /// pinned by `a_crossed_level_does_not_learn_the_learnset_move_yet`, so
-    /// a future slice flips it deliberately, never silently.
-    pub fn apply_experience(&mut self, amount: u32) {
+    /// Upstream's level-up path does more than raise the number and teach
+    /// moves. From `Cmd_getexp`, `BattleScript_LevelUp`
+    /// (`pokeemerald/data/battle_scripts_1.s`) plays the level-up
+    /// fanfare/message, and `Cmd_getexp` itself also applies `MonGainEVs`
+    /// (`src/battle_script_commands.c:3420`) and
+    /// `AdjustFriendship(FRIENDSHIP_EVENT_GROW_LEVEL)` (`:3465`). **Neither
+    /// is modelled here**: EVs (this crate carries none, see the module
+    /// docs) and friendship are out of this slice's scope, so only the
+    /// numeric level, stats, and — as of issue #252 — learnset moves change
+    /// across a level-up. Recorded on the `Cmd_getexp` ledger entry.
+    pub fn apply_experience(&mut self, dex: &Dex, amount: u32) {
         let max_experience =
             experience_for_level(self.base_stats.growth_rate, MAX_LEVEL).unwrap_or(u32::MAX);
         self.experience = self.experience.saturating_add(amount).min(max_experience);
@@ -562,12 +559,94 @@ impl BattlePokemon {
             return;
         }
 
+        let old_level = self.level;
         let old_max_hp = self.stats.max_hp;
         self.level = new_level;
         self.stats = compute_stats(&self.base_stats, self.level, self.nature, self.ivs);
         self.current_hp = self
             .current_hp
             .saturating_add(self.stats.max_hp.saturating_sub(old_max_hp));
+        self.learn_crossed_level_moves(dex, old_level, new_level);
+    }
+
+    /// `MonTryLearningNewMove` / `GiveMoveToMon`
+    /// (`pokeemerald/src/pokemon.c:3014`-`:3044`, `:2934`-`:2952`) — the
+    /// move-learning half of a level-up that
+    /// [`BattlePokemon::apply_experience`] drives. For every level in
+    /// `old_level+1..=new_level`, in ascending order, walks that level's
+    /// entries in [`assets::LevelUpLearnsets`] (already-extracted upstream
+    /// data; [`crate::wild::initial_moveset`] walks the same table for a
+    /// freshly built mon) in table order and offers each one to
+    /// `GiveMoveToBoxMon`'s two outcomes, reproduced here `(no-verbatim)`:
+    ///
+    /// - a move already known is skipped, costing no slot
+    ///   (`MON_ALREADY_KNOWS_MOVE`, `:2949`-`:2950`);
+    /// - a move with an empty slot is learned into it, PP starting at the
+    ///   move's own base PP (`:2942`-`:2944`).
+    ///
+    /// # Two divergences from upstream, both permanent design decisions
+    ///
+    /// **The four-known-moves replacement prompt is out of scope (a UI
+    /// slice) and is modelled as a permanent decline.** Upstream's
+    /// `Cmd_handlelearnnewmove` treats `GiveMoveToMon` returning
+    /// `MON_HAS_MAX_MOVES` as the cue to run `BattleScript_AskToLearnMove`'s
+    /// yes/no box (`battle_script_commands.c:5368`-`:5370`), which can
+    /// forget an old move to make room. This crate has no message/UI layer
+    /// to drive that prompt, so a full moveset always takes the answer a
+    /// player who chooses "Stop learning?" → yes would give: the move is
+    /// not learned. Matching upstream's own loop
+    /// (`BattleScript_TryLearnMoveLoop`), the walk still continues to the
+    /// *next* learnset entry rather than stopping at the decline.
+    ///
+    /// **Teaching is screened against this crate's modelled-move-effect
+    /// list, [`crate::battle::ensure_executable`]** — the same fail-closed
+    /// screen [`crate::battle::Battle::new_trainer`] runs over a whole
+    /// trainer party and [`crate::wild::ensure_wild_startable`] runs over a
+    /// wild encounter before either lets a battle start. Upstream's
+    /// `GiveMoveToMon` has no such concept — it hands out any move id the
+    /// learnset names. But every other admission point into this engine
+    /// already refuses a move the turn engine cannot execute *before* the
+    /// mon carrying it can reach a turn ([`crate::battle::Battle::new`],
+    /// `new_trainer`, `ensure_wild_startable`); an in-battle learn path that
+    /// skipped the same screen would be the one way to slip an
+    /// unmodelled-effect move past every other gate this crate has, later
+    /// surfacing as a move-selection crash instead of an upfront refusal.
+    /// Screening here keeps the port's existing fail-closed posture intact
+    /// rather than opening a new hole in it. A screened-out move is treated
+    /// exactly like a decline: not learned, no slot spent, walk continues to
+    /// the next entry. The screen is evaluated dynamically against `dex`
+    /// rather than a hardcoded exclusion list, so a move stays refused only
+    /// for as long as its effect actually is unmodelled: Absorb's
+    /// `EFFECT_ABSORB` is unmodelled today ([`crate::hit`]'s module docs),
+    /// so a level-6 Treecko is refused it now, but this function starts
+    /// teaching it, with no code change of its own, the day `EFFECT_ABSORB`
+    /// joins [`crate::hit::is_ordinary_hit_effect`]'s table (or gains its
+    /// own resolver). Recorded on the `MonTryLearningNewMove` ledger entry.
+    fn learn_crossed_level_moves(&mut self, dex: &Dex, old_level: u8, new_level: u8) {
+        let Some(learnset) = LevelUpLearnsets::new().get(self.species) else {
+            return;
+        };
+        for level in (old_level + 1)..=new_level {
+            for entry in learnset.iter().filter(|entry| entry.level == level) {
+                let move_id = entry.move_id;
+                if self.moves.iter().any(|slot| slot.move_id == move_id) {
+                    continue; // MON_ALREADY_KNOWS_MOVE -- no slot spent.
+                }
+                if crate::battle::ensure_executable(dex, move_id).is_err() {
+                    continue; // Screened: this move's effect is not modelled.
+                }
+                if self.moves.len() >= MAX_MON_MOVES {
+                    continue; // MON_HAS_MAX_MOVES -- decline (no prompt UI).
+                }
+                // `ensure_executable` above already resolved `move_id`
+                // through `dex`, so this cannot fail in practice; handled
+                // defensively rather than panicking on a screen it just
+                // passed.
+                if let Ok(mv) = dex.move_data(move_id) {
+                    self.moves.push(MoveSlot { move_id, pp: mv.pp });
+                }
+            }
+        }
     }
 
     /// The attacking stat (Attack or Sp. Attack) and its stage for a move of
