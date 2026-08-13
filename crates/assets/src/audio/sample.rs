@@ -69,7 +69,12 @@ pub enum Sample {
 /// a `u32`, and that bound is what makes [`Sample::encode`] total, so
 /// [`data`](Self::data) is private and the bound is enforced at construction
 /// — returning [`AudioError::SampleTooLong`] where a caller can see it —
-/// rather than left to a panic at encode time. Same discipline as
+/// rather than left to a panic at encode time. The constructor also enforces
+/// that a `Some` [`loop_start`](Self::loop_start) is strictly less than
+/// `data`'s length, returning [`AudioError::LoopStartOutOfRange`] otherwise:
+/// upstream's mixer computes the loop region's length as `size - loopStart`
+/// (`pokeemerald/src/m4a_1.s`), so a loop region at or past the end of the
+/// data would be empty or reach past it. Same discipline as
 /// [`super::song::Song::new`] and [`super::voicegroup::VoiceGroup::new`].
 /// (Its sibling [`ProgrammableWave`] needs no such constructor: its table is
 /// a fixed-size `[u8; 16]`, so there is no length to bound.)
@@ -102,23 +107,32 @@ impl DirectSoundSample {
     /// Build a `DirectSound` sample from its pitch constant, optional loop
     /// point, and PCM payload.
     ///
-    /// `loop_start` is *not* validated against `data`'s length — see
-    /// [`Sample::decode`] on cross-field validation being a later `#115`
-    /// child's job; this constructor only enforces the bound the encoding
-    /// itself imposes.
-    ///
     /// # Errors
     ///
     /// [`AudioError::SampleTooLong`] if `data.len()` overflows the `u32`
     /// sample count [`Sample::encode`] writes. Unreachable for any real GBA
     /// sample — the whole cartridge address space is 32 MiB — but it is the
     /// one bound that would otherwise be a panic reachable from safe code.
+    ///
+    /// [`AudioError::LoopStartOutOfRange`] if `loop_start` is `Some` value
+    /// that is not strictly less than `data.len()` — including `Some(0)`
+    /// against empty data. Upstream's mixer computes the loop region's
+    /// length as `size - loopStart` (`pokeemerald/src/m4a_1.s`), so a loop
+    /// region must be nonempty.
     pub fn new(
         base_frequency: u32,
         loop_start: Option<u32>,
         data: Vec<i8>,
     ) -> Result<Self, AudioError> {
-        checked_sample_len(data.len())?;
+        let sample_count = checked_sample_len(data.len())?;
+        if let Some(start) = loop_start {
+            if start >= sample_count {
+                return Err(AudioError::LoopStartOutOfRange {
+                    loop_start: start,
+                    sample_count,
+                });
+            }
+        }
         Ok(Self {
             base_frequency,
             loop_start,
@@ -180,19 +194,22 @@ impl Sample {
 
     /// Decode from [`encode`](Self::encode)'s binary form.
     ///
-    /// Structural decode only: a decoded [`DirectSoundSample::loop_start`]
-    /// is *not* validated against [`DirectSoundSample::data`]'s length, so a
-    /// loop point past the end of the wave decodes cleanly. Validating that
-    /// (and the [`SampleId`]/[`super::voicegroup::VoiceGroupId`] cross
-    /// references, which this module equally does not resolve) belongs to
-    /// the later `#115` child that loads a whole pack's audio entries
-    /// together and can see all of them at once.
+    /// A decoded [`DirectSoundSample`] is built through
+    /// [`DirectSoundSample::new`], so it is validated exactly as a
+    /// programmatically-constructed one is — in particular, a `Some`
+    /// [`loop_start`](DirectSoundSample::loop_start) at or past the decoded
+    /// payload's length is rejected rather than decoding cleanly. Resolving
+    /// the [`SampleId`]/[`super::voicegroup::VoiceGroupId`] cross references
+    /// is not this module's job — that belongs to the later `#115` child
+    /// that loads a whole pack's audio entries together and can see all of
+    /// them at once.
     ///
     /// # Errors
     ///
     /// [`AudioError::Truncated`] if `bytes` is shorter than the format
     /// requires; [`AudioError::UnknownSampleKind`] for an unrecognized kind
-    /// tag.
+    /// tag; [`AudioError::LoopStartOutOfRange`] if a looping sample's loop
+    /// start is not strictly less than its decoded sample count.
     /// [`AudioError::TrailingBytes`] if unread bytes remain after the
     /// payload.
     pub fn decode(bytes: &[u8]) -> Result<Self, AudioError> {
@@ -208,15 +225,12 @@ impl Sample {
                 for _ in 0..len {
                     data.push(r.i8()?);
                 }
-                // The encoded count is a `u32`, so a successfully-read
-                // payload always satisfies `DirectSoundSample::new`'s bound;
-                // no decode-side length check is reachable here.
                 r.expect_eof()?;
-                Ok(Self::DirectSound(DirectSoundSample {
+                Ok(Self::DirectSound(DirectSoundSample::new(
                     base_frequency,
                     loop_start,
                     data,
-                }))
+                )?))
             }
             KIND_PROGRAMMABLE_WAVE => {
                 let mut table = [0u8; 16];
@@ -301,13 +315,41 @@ mod tests {
     }
 
     #[test]
-    fn a_loop_start_past_the_end_of_the_data_still_decodes() {
-        // Documented non-validation: `decode` is structural, and cross-field
-        // validation is a later `#115` child's job. Pin the current
-        // behaviour so a future change to it is a deliberate one.
+    fn constructor_rejects_a_loop_start_at_or_past_the_data_length() {
+        for (loop_start, data) in [(3u32, vec![0i8, 1, 2]), (9_999, vec![0, 1, 2]), (0, vec![])] {
+            let sample_count = u32::try_from(data.len()).unwrap();
+            assert_eq!(
+                DirectSoundSample::new(1, Some(loop_start), data),
+                Err(AudioError::LoopStartOutOfRange {
+                    loop_start,
+                    sample_count,
+                })
+            );
+        }
+    }
+
+    /// The same boundary the constructor enforces, but reached through
+    /// [`Sample::decode`]'s route via [`DirectSoundSample::new`]: mutate the
+    /// little-endian loop-start field of an otherwise-valid encoded
+    /// `DirectSound` payload so the wire bytes are self-consistent (the
+    /// `looping` flag and `len` field are untouched) but the loop start no
+    /// longer points inside the decoded data.
+    #[test]
+    fn decode_rejects_a_loop_start_at_or_past_the_decoded_data_length() {
         let sample =
-            Sample::DirectSound(DirectSoundSample::new(1, Some(9_999), vec![0, 1, 2]).unwrap());
-        assert_eq!(Sample::decode(&sample.encode()).unwrap(), sample);
+            Sample::DirectSound(DirectSoundSample::new(1, Some(2), vec![0i8, 1, 2]).unwrap());
+        let mut bytes = sample.encode();
+        // Layout: u8 kind, u32 base_frequency, bool looping, u32 loop_start,
+        // u32 len, data...
+        let loop_start_field = 1 + 4 + 1;
+        bytes[loop_start_field..loop_start_field + 4].copy_from_slice(&9_999u32.to_le_bytes());
+        assert_eq!(
+            Sample::decode(&bytes),
+            Err(AudioError::LoopStartOutOfRange {
+                loop_start: 9_999,
+                sample_count: 3,
+            })
+        );
     }
 
     #[test]
