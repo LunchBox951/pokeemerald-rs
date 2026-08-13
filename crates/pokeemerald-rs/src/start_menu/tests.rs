@@ -464,3 +464,97 @@ fn an_open_menu_paints_its_window_and_leaves_the_rest_alone() {
     // Far from the window -- the overworld behind it still shows.
     assert_eq!(composed.pixel(4, 150), Some(marker));
 }
+
+/// Pins the palette split every window here draws with (correctness issue
+/// caught in review): the content fill and `FONT_NORMAL` glyph colours must
+/// come from the message-box palette (bank 15,
+/// `LoadMessageBoxAndBorderGfx`, `pokeemerald/src/text_window.c:93-112`),
+/// while only the border ring uses the selected standard frame's own
+/// palette (bank 14). The standard frame's palette is seeded with sentinel
+/// colours a correct implementation never reads for content or glyphs, so a
+/// regression back to reading `std_frame.palette` for either would show up
+/// as a wrong colour here instead of silently matching by coincidence.
+#[test]
+fn standard_window_uses_message_palette_for_content_and_standard_palette_for_border() {
+    use super::StartMenuChrome;
+    use assets::{Glyph, GLYPH_PIXELS};
+    use engine::text::render::RevealedGlyph;
+    use rendering::{Framebuffer, Rgb888};
+
+    const STD_SENTINEL: Rgb888 = Rgb888 { r: 200, g: 0, b: 0 };
+    const STD_BORDER: Rgb888 = Rgb888 { r: 0, g: 0, b: 200 };
+    const MSG_FILL: Rgb888 = Rgb888 {
+        r: 10,
+        g: 200,
+        b: 10,
+    };
+    const MSG_FG: Rgb888 = Rgb888 {
+        r: 20,
+        g: 20,
+        b: 220,
+    };
+    const MSG_SHADOW: Rgb888 = Rgb888 {
+        r: 220,
+        g: 220,
+        b: 20,
+    };
+
+    let mut chrome = StartMenuChrome::synthetic();
+    chrome.std_frame.palette[1] = STD_SENTINEL;
+    chrome.std_frame.palette[2] = STD_SENTINEL;
+    chrome.std_frame.palette[3] = STD_SENTINEL;
+    chrome.std_frame.palette[9] = STD_BORDER;
+    // Every tile of the border sheet reads palette index 9, so any drawn
+    // border pixel must be [`STD_BORDER`].
+    chrome.std_frame.pixels.fill(9);
+    chrome.message_frame.palette[1] = MSG_FILL;
+    chrome.message_frame.palette[2] = MSG_FG;
+    chrome.message_frame.palette[3] = MSG_SHADOW;
+
+    let mut fb = Framebuffer::new();
+    let (left, top, width, height) = (1, 1, 2, 2);
+    chrome.draw_window(&mut fb, left, top, width, height);
+
+    // The border's top-left corner tile, at tilemap (0, 0) -- pixel (0, 0).
+    assert_eq!(
+        fb.pixel(0, 0),
+        Some(STD_BORDER),
+        "the border ring must use the standard frame's own palette"
+    );
+    // Deep inside the content rect (tiles 1..3, i.e. pixels 8..24), away
+    // from where the glyph below will draw.
+    assert_eq!(
+        fb.pixel(20, 20),
+        Some(MSG_FILL),
+        "the content fill must use the message-box palette, not the \
+         standard frame's"
+    );
+
+    let mut pixels = [0u8; GLYPH_PIXELS];
+    pixels[0] = 1; // fg, glyph-local (0, 0)
+    pixels[5] = 2; // shadow, glyph-local (5, 0)
+    let glyph = RevealedGlyph {
+        x: 0,
+        y: 0,
+        glyph: Glyph {
+            advance_width: 8,
+            pixels,
+        },
+    };
+    chrome.draw_text(&mut fb, (left, top, width, height), (0, 0), &[glyph]);
+
+    assert_eq!(
+        fb.pixel(8, 8),
+        Some(MSG_FG),
+        "FONT_NORMAL's foreground colour must come from the message-box \
+         palette"
+    );
+    assert_eq!(
+        fb.pixel(13, 8),
+        Some(MSG_SHADOW),
+        "FONT_NORMAL's shadow colour must come from the message-box palette"
+    );
+    // Drawing text must not disturb the border already on the standard
+    // frame's own palette.
+    assert_eq!(fb.pixel(0, 0), Some(STD_BORDER));
+}
