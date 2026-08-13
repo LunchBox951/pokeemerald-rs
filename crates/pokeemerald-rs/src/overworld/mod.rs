@@ -53,11 +53,15 @@
 //!
 //! # Scope
 //!
-//! In scope: the current map's layout grid + border fill, primary/secondary
-//! tileset BG composition -- including (issue #160) the primary tileset's
-//! own animated tile ranges (flowers, water, the `building` tileset's
-//! turned-on TV screen; see [`tileset_anims`]) -- camera-follow scroll,
-//! the player OBJ's facing/step animation, and (issue #161) a bounded set of the current
+//! In scope: the current map's layout grid + border fill, connected-map
+//! tiles across a declared map-edge connection (issue #253: a camera near a
+//! boundary shows the neighbouring map's own edge strip instead of hard-
+//! cutting to the active map's border fill -- see [`viewport::cell_at`] and
+//! [`ConnectedLayout`]), primary/secondary tileset BG composition --
+//! including (issue #160) the primary tileset's own animated tile ranges
+//! (flowers, water, the `building` tileset's turned-on TV screen; see
+//! [`tileset_anims`]) -- camera-follow scroll, the player OBJ's
+//! facing/step animation, and (issue #161) a bounded set of the current
 //! map's *other* object events — [`npc`] renders the ones it recognizes a
 //! sprite for, hide-flag filtered via
 //! [`engine::overworld::object_event_is_visible`], and
@@ -65,9 +69,7 @@
 //! ([`engine::overworld::facing_object_event`]) and the resulting
 //! [`dialog::NpcDialog`] over this module's own composed frame. Out of scope
 //! (per issue #126, tracked as future integration slices): reflections and
-//! field effects, connection streaming (rendering a neighbouring map's own
-//! content near an edge, distinct from the border-block fallback above,
-//! which *is* modeled), and every `tileset_anims.c` effect outside
+//! field effects, and every `tileset_anims.c` effect outside
 //! [`tileset_anims`]'s own scope (that module's docs: palette-rotation
 //! effects and every tileset this port doesn't bundle). See [`npc`]'s own
 //! module docs for exactly which object-event graphics ids render a sprite
@@ -319,6 +321,94 @@ impl OverworldSceneError {
     }
 }
 
+/// One of the current room's own declared map connections
+/// ([`assets::MapHeader::connections`]), already resolved against the real
+/// generated map tables and this room's own pack (issue #253).
+///
+/// Mirrors `grid_bytes`/`border_bytes`'s own split: the connected map's
+/// layout metadata and `map.bin` bytes are resolved once, in
+/// [`OverworldScene::from_pack`], and turned into a fresh
+/// [`viewport::ConnectionView`] (a borrowed [`assets::LayoutGrid`] over
+/// `grid_bytes`) every [`OverworldScene::frame_viewport`] call -- the same
+/// "resolve once, decode fresh every frame" shape the active map's own
+/// grid/border already use.
+///
+/// A declared connection whose target map, layout, or grid bytes can't be
+/// resolved (most commonly: the target isn't one of the layouts `cargo
+/// xtask extract` currently bundles -- [`viewport::build_tilemaps`]'s own
+/// docs on which of this slice's four-map cluster that is today) is simply
+/// left out of [`OverworldScene::connections`] by
+/// [`resolve_connections`] rather than stored as an error:
+/// [`viewport::cell_at`] already falls back to the active map's own border
+/// block for any position not covered by a resolvable connection, so an
+/// unresolvable one is observably identical to it not existing at all.
+#[derive(Debug)]
+struct ConnectedLayout {
+    /// The edge this connection was declared on, and the neighbour's
+    /// offset along it (upstream `MapConnection::direction`/`::offset`) --
+    /// see [`viewport::connected_cell_at`] for how they combine.
+    direction: assets::Direction,
+    offset: i32,
+    /// The connected map's own layout metadata (id, dimensions, tileset
+    /// symbols) -- needed, alongside `grid_bytes`, to rebuild a
+    /// [`assets::LayoutGrid`] view fresh each frame, mirroring `self.layout`'s
+    /// own role for the active map.
+    layout: MapLayout,
+    /// The connected map's own decoded `map.bin` bytes.
+    grid_bytes: Vec<u8>,
+}
+
+/// Resolve `header`'s own [`assets::MapConnection`]s (issue #253) into
+/// owned [`ConnectedLayout`]s, for [`OverworldScene::from_pack`] to store.
+///
+/// Only [`assets::Direction::South`]/`::North`/`::West`/`::East` connections
+/// are kept -- `Dive`/`Emerge` describe a diving transition, not a map-edge
+/// crossing the camera can pan across; upstream's own
+/// `InitBackupMapLayoutConnections` switch (`pokeemerald/src/fieldmap.c:137-155`)
+/// has no case for them either. Each surviving connection's target header
+/// (for its `layout` id), layout (for width/height/tileset symbols), and
+/// `map.bin` bytes are resolved against the real generated
+/// [`assets::MapHeaderTable`]/[`assets::LayoutTable`] and `pack` itself --
+/// see [`ConnectedLayout`]'s own doc comment for why a connection that
+/// can't be fully resolved this way is simply omitted rather than reported.
+fn resolve_connections(pack: &AssetPack, header: &assets::MapHeader) -> Vec<ConnectedLayout> {
+    let mut resolved = Vec::new();
+    for connection in header.connections {
+        if !matches!(
+            connection.direction,
+            assets::Direction::South
+                | assets::Direction::North
+                | assets::Direction::West
+                | assets::Direction::East
+        ) {
+            continue;
+        }
+        let Ok(target_header) = assets::MapHeaderTable::new().header(connection.target) else {
+            continue;
+        };
+        let Ok(target_layout) = assets::LayoutTable::new().layout(target_header.layout) else {
+            continue;
+        };
+        let target_name = layout_pack_name(target_header.layout);
+        let Ok(target_bytes) = pack.layout_map(&target_name) else {
+            continue;
+        };
+        // Validate now (mirrors `from_pack`'s own up-front `grid_bytes`/
+        // `border_bytes` validation), so `frame_viewport` can trust every
+        // stored entry decodes on every subsequent call.
+        if target_layout.grid(target_bytes).is_err() {
+            continue;
+        }
+        resolved.push(ConnectedLayout {
+            direction: connection.direction,
+            offset: connection.offset,
+            layout: *target_layout,
+            grid_bytes: target_bytes.to_vec(),
+        });
+    }
+    resolved
+}
+
 /// The current room's decoded BG tilesets/palette, layout grid/border, and
 /// player OBJ sprite, ready to [`compose`](Self::compose) into a
 /// [`Framebuffer`] once per frame against a live
@@ -335,6 +425,12 @@ pub struct OverworldScene {
     layout: MapLayout,
     grid_bytes: Vec<u8>,
     border_bytes: Vec<u8>,
+    /// This room's own declared map-edge connections, already resolved
+    /// against the pack (issue #253) -- see [`ConnectedLayout`]'s own doc
+    /// comment. Empty for a room with no connections (upstream `connections
+    /// == NULL`, e.g. every bundled interior) or whose declared connections
+    /// couldn't be resolved against the bundled pack.
+    connections: Vec<ConnectedLayout>,
     primary_metatiles: Vec<u8>,
     secondary_metatiles: Vec<u8>,
     primary_attrs_bytes: Vec<u8>,
@@ -376,6 +472,12 @@ impl OverworldScene {
     /// Decode `layout`'s map viewport and `player`'s walking sprite out of
     /// an already-loaded `pack`.
     ///
+    /// `header` is this room's own map header: only its `connections` are
+    /// read here (issue #253, [`resolve_connections`]) -- everything else
+    /// [`Self::runtime`] takes as a separate, later parameter, since a
+    /// header's other fields (warp/collision-relevant metadata) aren't a
+    /// rendering concern.
+    ///
     /// `events` is this room's own map's object/warp/coord/bg events (issue
     /// #161: needed here, not just at [`Self::runtime`] time, so the NPC
     /// sprites [`Self::compose`] can draw are decoded once up front rather
@@ -394,9 +496,12 @@ impl OverworldScene {
     /// [`OverworldSceneError::ImageNotTileAligned`], or
     /// [`OverworldSceneError::SpriteSheetWrongDimensions`] if a present
     /// entry's bytes don't fit the shape this module expects (unreachable
-    /// against a real pack).
+    /// against a real pack). A declared connection whose own target can't
+    /// be resolved is *not* an error here -- see [`ConnectedLayout`]'s doc
+    /// comment.
     pub fn from_pack(
         pack: &AssetPack,
+        header: &assets::MapHeader,
         layout: &MapLayout,
         player: PlayerCharacter,
         events: &'static assets::MapEvents,
@@ -433,6 +538,12 @@ impl OverworldScene {
         let _ = layout.grid(&grid_bytes)?;
         let _ = BorderGrid::new(&border_bytes)?;
 
+        // This room's own declared map-edge connections (issue #253),
+        // resolved against the pack now so `compose`/`frame_viewport` never
+        // touch disk on a per-frame hot path -- mirrors `grid_bytes`/
+        // `border_bytes`'s own up-front resolution just above.
+        let connections = resolve_connections(pack, header);
+
         // The whole OBJ layer -- the player's own frames plus every NPC
         // sheet this room's object events reference, decoded once into one
         // combined tileset/palette (see `sprites`' module docs).
@@ -442,6 +553,7 @@ impl OverworldScene {
             layout: *layout,
             grid_bytes,
             border_bytes,
+            connections,
             primary_metatiles: primary.metatiles.to_vec(),
             secondary_metatiles: secondary.metatiles.to_vec(),
             primary_attrs_bytes: primary.metatile_attributes.to_vec(),
@@ -576,7 +688,9 @@ impl OverworldScene {
     /// # Panics
     ///
     /// Never in practice -- see [`Self::compose`]'s own note (this is the
-    /// `grid_bytes`/`border_bytes` half of it).
+    /// `grid_bytes`/`border_bytes`/`connections` half of it: every
+    /// [`ConnectedLayout`] in `connections` was already validated to decode
+    /// against its own stored `grid_bytes` in [`Self::from_pack`]).
     fn frame_viewport(&self, player: &PlayerState) -> viewport::FrameViewport {
         let grid = self
             .layout
@@ -586,11 +700,27 @@ impl OverworldScene {
             BorderGrid::new(&self.border_bytes).expect("border_bytes validated in from_pack");
         let primary_attrs = MetatileAttributeTable::new(&self.primary_attrs_bytes);
         let secondary_attrs = MetatileAttributeTable::new(&self.secondary_attrs_bytes);
+        // Issue #253: each declared connection's own grid, rebuilt fresh
+        // over its already-resolved bytes -- mirrors `grid`/`border`
+        // themselves, just above.
+        let connections: Vec<viewport::ConnectionView<'_>> = self
+            .connections
+            .iter()
+            .map(|connection| viewport::ConnectionView {
+                direction: connection.direction,
+                offset: connection.offset,
+                grid: connection
+                    .layout
+                    .grid(&connection.grid_bytes)
+                    .expect("grid_bytes validated in resolve_connections"),
+            })
+            .collect();
 
         viewport::build_tilemaps(
             player,
             &grid,
             &border,
+            &connections,
             &self.primary_metatiles,
             &self.secondary_metatiles,
             &primary_attrs,
@@ -688,9 +818,10 @@ impl OverworldScene {
 /// (real-pack-only) error cases.
 pub fn load_default_room() -> Result<OverworldScene, OverworldSceneError> {
     let pack = AssetPack::load_default()?;
+    let header = assets::MapHeaderTable::new().header(DEFAULT_ROOM_MAP_ID)?;
     let layout = assets::LayoutTable::new().layout(LayoutId(DEFAULT_ROOM_LAYOUT_ID))?;
     let events = MapEventsTable::new().resolve(DEFAULT_ROOM_MAP_ID)?;
-    OverworldScene::from_pack(&pack, layout, PlayerCharacter::Brendan, events)
+    OverworldScene::from_pack(&pack, header, layout, PlayerCharacter::Brendan, events)
 }
 
 /// Load the pack from its default location and decode `map_id`'s own room
@@ -716,7 +847,7 @@ pub fn load_room(map_id: assets::MapId) -> Result<OverworldScene, OverworldScene
     let header = assets::MapHeaderTable::new().header(map_id)?;
     let layout = assets::LayoutTable::new().layout(header.layout)?;
     let events = MapEventsTable::new().resolve(map_id)?;
-    OverworldScene::from_pack(&pack, layout, PlayerCharacter::Brendan, events)
+    OverworldScene::from_pack(&pack, header, layout, PlayerCharacter::Brendan, events)
 }
 
 /// Translate a [`MapLayout`]'s `gTileset_*` symbol into the normalized pack
