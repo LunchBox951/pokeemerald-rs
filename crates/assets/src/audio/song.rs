@@ -530,10 +530,12 @@ impl Song {
     /// Decode from [`encode`](Self::encode)'s binary form.
     ///
     /// Structural decode only: a [`SongEvent::Goto`] target is not validated
-    /// against the length of the track it appears in, the same way
-    /// [`super::Sample::decode`] does not validate a loop point against its
-    /// sample data. Cross-field and cross-entry validation belongs to the
-    /// later `#115` child that loads a pack's audio entries together.
+    /// against the length of the track it appears in. (Unlike
+    /// [`super::Sample::decode`], which does reject a loop start at or past
+    /// its PCM payload -- a looping sample's one single-field invariant --
+    /// a `Goto` target has no counterpart checkable from this entry alone.)
+    /// Cross-field and cross-entry validation belongs to the later `#115`
+    /// child that loads a pack's audio entries together.
     ///
     /// # Errors
     ///
