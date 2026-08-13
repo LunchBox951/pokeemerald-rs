@@ -190,16 +190,23 @@ const TRIGGER_SCRIPT: &str = "Route101_EventScript_StartBirchRescue";
 ///
 /// Called at every one of [`OverworldPhase`]'s map-entry points (`Self::new`,
 /// `Self::warp_to`, `Self::cross_connection`) alongside
-/// [`super::connections::run_on_transition_map_script`], gated on `map`
-/// being [`ROUTE_101`] so entering any other map is a costless no-op. That
-/// is upstream's own scope: `Route101_OnFrame` is a
+/// [`super::connections::run_on_transition_map_script`], and separately from
+/// [`OverworldPhase::from_saved`] when a continue resumes on the map, gated
+/// on `map` being [`ROUTE_101`] so entering any other map is a costless
+/// no-op. That is upstream's own scope: `Route101_OnFrame` is a
 /// `MAP_SCRIPT_ON_FRAME_TABLE` entry, so it runs however the player came to
-/// be standing on the map, not only by one route in.
+/// be standing on the map, not only by one route in — including landing
+/// there straight from a save file, which is ordinary field processing
+/// (`field_control_avatar.c:147-151` polls the on-frame script every frame,
+/// continued sessions included) rather than one of the three transition
+/// paths below.
 ///
 /// **How much of that is pinned.** `Self::new` is pinned by
 /// `super::tests::entering_route_101_bumps_the_fresh_save_rescue_var_to_one`
 /// (and its other-map complement), `Self::cross_connection` by
-/// `super::tests::real_pack_crossing_into_route_101_primes_the_rescue_var_on_arrival`.
+/// `super::tests::real_pack_crossing_into_route_101_primes_the_rescue_var_on_arrival`,
+/// and [`OverworldPhase::from_saved`] by
+/// `super::tests::continuing_on_route_101_only_advances_the_fresh_rescue_state`.
 /// The `Self::warp_to` call is **unreachable over bundled data and pinned
 /// only by that fact**: warping needs a `warp_events` entry at the
 /// destination, `warp_to` returns early ("no warp event #id") when the
@@ -209,8 +216,8 @@ const TRIGGER_SCRIPT: &str = "Route101_EventScript_StartBirchRescue";
 /// so a future Route 101 warp fails that test first and forces this arm to be
 /// pinned for real. It is called anyway rather than dropped, because
 /// upstream's on-frame script is not entry-path-scoped (above) and because a
-/// map-entry effect that runs at two of three entry points is the kind of
-/// gap this port would rather not leave behind — the same treatment
+/// map-entry effect that runs at two of three transition entry points is the
+/// kind of gap this port would rather not leave behind — the same treatment
 /// [`super::connections::run_on_transition_map_script`] already gets at all
 /// three.
 pub(super) fn sync_route_101_state_on_entry(map: assets::MapId, event_data: &mut EventData) {
@@ -280,12 +287,9 @@ impl OverworldPhase {
         self.save1.event_data.var_get(VAR_ROUTE101_STATE) == Ok(var_value)
     }
 
-    /// Whether the step landing at `(x, y)` (this frame's own elevation)
-    /// starts the scripted first battle — [`OverworldPhase::step`]'s single
-    /// call into this module's trigger check, folding in the "is there
-    /// actually a landing this frame" question
-    /// [`crate::flow::wild_encounter::roll_for_step`]'s own `landed?` early
-    /// return handles for the ordinary wild-encounter roll.
+    /// Whether the completed landing at `(x, y)` fires the Route 101
+    /// first-battle trigger. [`OverworldPhase::step`]'s single call into
+    /// this module's trigger check.
     pub(super) fn first_battle_trigger_ready(
         &self,
         runtime: &MapRuntime<'_>,

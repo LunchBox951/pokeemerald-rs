@@ -285,7 +285,7 @@ fn convert_direct_sound(pack: &AssetPack, v: &DirectSoundVoice) -> Result<Instru
             expected: "DirectSound",
         });
     };
-    let wave = Arc::new(match ds.loop_start {
+    let wave = Arc::new(match ds.loop_start() {
         Some(start) => WaveData::looping(ds.base_frequency, start, ds.data().to_vec()),
         None => WaveData::one_shot(ds.base_frequency, ds.data().to_vec()),
     });
