@@ -516,6 +516,13 @@ impl OverworldScene {
     /// [`assets::MapEventsTable::resolve`] entry, matching `layout`'s own
     /// map (see [`load_default_room`]/[`load_room`]).
     ///
+    /// `event_data` is this room's own current flags/vars, needed at decode
+    /// time only for [`npc`]'s own `OBJ_EVENT_GFX_VAR_0` exception (issue
+    /// #248, that module's own docs): whichever caller hands this its map's
+    /// destination event-data state, decided *before* this call, is what
+    /// Route 103's rival object event resolves against for the whole of
+    /// this room's visit.
+    ///
     /// # Errors
     ///
     /// [`OverworldSceneError::Pack`]/[`OverworldSceneError::Asset`] if a
@@ -537,6 +544,7 @@ impl OverworldScene {
         layout: &MapLayout,
         player: PlayerCharacter,
         events: &'static assets::MapEvents,
+        event_data: &EventData,
     ) -> Result<Self, OverworldSceneError> {
         let primary_name = resolve_tileset_pack_name(layout.primary_tileset)?;
         let secondary_name = resolve_tileset_pack_name(layout.secondary_tileset)?;
@@ -579,7 +587,7 @@ impl OverworldScene {
         // The whole OBJ layer -- the player's own frames plus every NPC
         // sheet this room's object events reference, decoded once into one
         // combined tileset/palette (see `sprites`' module docs).
-        let sprites = sprites::SceneSprites::from_pack(pack, player, events)?;
+        let sprites = sprites::SceneSprites::from_pack(pack, player, events, event_data)?;
 
         Ok(Self {
             layout: *layout,
@@ -597,6 +605,23 @@ impl OverworldScene {
             tile_anims,
             sprites,
         })
+    }
+
+    /// Whether this scene's decode bound a sprite for `graphics_id` -- the
+    /// flow-facing probe
+    /// `flow::overworld_phase::route103_rival_tests`' crossing walk uses to
+    /// pin that a post-crossing rebind decoded against the *transitioned*
+    /// event-data store (issue #248): `OBJ_EVENT_GFX_VAR_0` binds only when
+    /// `VAR_OBJ_GFX_ID_0` already named a real rival id at decode time.
+    /// A yes/no answer on purpose: the sprite/OAM internals themselves stay
+    /// private to this module tree (`oop-boundaries`);
+    /// `overworld::tests`' own real-pack cases pin the binding's contents.
+    /// Test-only, like the [`sprites::SceneSprites::bindings`] accessor it
+    /// wraps.
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn binds_sprite(&self, graphics_id: &str) -> bool {
+        self.sprites.bindings().contains_key(graphics_id)
     }
 
     /// Composite the current map viewport plus the player OBJ and this
@@ -842,22 +867,36 @@ impl OverworldScene {
 /// walking sprite and [`DEFAULT_ROOM_MAP_ID`]'s own object events (issue
 /// #161) -- the entry point `xtask`'s smoke e2e check uses.
 ///
+/// `event_data` is threaded down to [`OverworldScene::from_pack`] (issue
+/// #248) -- callers building the game's real intro handoff have no
+/// meaningful event-data state yet at this point (nothing has run
+/// `crate::new_game::init_save_blocks` for this session), so a fresh
+/// [`EventData::new`] is the honest value to pass; a real caller with an
+/// already-loaded save should prefer [`load_room`] instead.
+///
 /// # Errors
 ///
 /// [`OverworldSceneError::Pack`] with
 /// [`OverworldSceneError::is_pack_missing`] true if no pack has been
 /// extracted yet; see [`OverworldScene::from_pack`] for the other
 /// (real-pack-only) error cases.
-pub fn load_default_room() -> Result<OverworldScene, OverworldSceneError> {
+pub fn load_default_room(event_data: &EventData) -> Result<OverworldScene, OverworldSceneError> {
     let pack = AssetPack::load_default()?;
     let header = assets::MapHeaderTable::new().header(DEFAULT_ROOM_MAP_ID)?;
     let layout = assets::LayoutTable::new().layout(LayoutId(DEFAULT_ROOM_LAYOUT_ID))?;
     let events = MapEventsTable::new().resolve(DEFAULT_ROOM_MAP_ID)?;
-    OverworldScene::from_pack(&pack, header, layout, PlayerCharacter::Brendan, events)
+    OverworldScene::from_pack(
+        &pack,
+        header,
+        layout,
+        PlayerCharacter::Brendan,
+        events,
+        event_data,
+    )
 }
 
 /// Load the pack from its default location and decode `map_id`'s own room
-/// out of it, with [`PlayerCharacter::Brendan`]'s walking sprite -- the
+/// out of it, with `player`'s walking sprite -- the
 /// map-id-keyed counterpart to [`load_default_room`] (which always decodes
 /// the fixed [`DEFAULT_ROOM_LAYOUT_ID`]), added for warp processing (issue
 /// #163): [`crate::flow::OverworldPhase`] needs to rebind its rendered room
@@ -865,6 +904,12 @@ pub fn load_default_room() -> Result<OverworldScene, OverworldSceneError> {
 /// off to. Resolves `map_id`'s layout via the generated
 /// [`assets::MapHeaderTable`] (`header.layout`), then decodes it exactly
 /// like [`load_default_room`] does its own fixed id.
+///
+/// `event_data` is threaded down to [`OverworldScene::from_pack`] (issue
+/// #248) -- pass the destination map's own event-data state (i.e. after
+/// any on-transition effect this port models has already run against it),
+/// not the departed map's, so Route 103's rival object event resolves
+/// correctly the instant its room decodes.
 ///
 /// # Errors
 ///
@@ -874,12 +919,16 @@ pub fn load_default_room() -> Result<OverworldScene, OverworldSceneError> {
 /// any [`assets::MapId`] this port's own warp-destination tables reference;
 /// see [`OverworldScene::from_pack`] for the other (real-pack-only) error
 /// cases.
-pub fn load_room(map_id: assets::MapId) -> Result<OverworldScene, OverworldSceneError> {
+pub fn load_room(
+    map_id: assets::MapId,
+    player: PlayerCharacter,
+    event_data: &EventData,
+) -> Result<OverworldScene, OverworldSceneError> {
     let pack = AssetPack::load_default()?;
     let header = assets::MapHeaderTable::new().header(map_id)?;
     let layout = assets::LayoutTable::new().layout(header.layout)?;
     let events = MapEventsTable::new().resolve(map_id)?;
-    OverworldScene::from_pack(&pack, header, layout, PlayerCharacter::Brendan, events)
+    OverworldScene::from_pack(&pack, header, layout, player, events, event_data)
 }
 
 /// Translate a [`MapLayout`]'s `gTileset_*` symbol into the normalized pack
