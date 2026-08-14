@@ -10,6 +10,9 @@ import channel_ladder
 
 REPOSITORY_ROOT = Path(__file__).resolve().parent.parent
 PROMOTE_WORKFLOW = (REPOSITORY_ROOT / ".github/workflows/promote.yml").read_text()
+CI_WORKFLOW = (REPOSITORY_ROOT / ".github/workflows/ci.yml").read_text()
+RELEASE_WORKFLOW = (REPOSITORY_ROOT / ".github/workflows/release.yml").read_text()
+RELEASE_WORKFLOW_FLAT = RELEASE_WORKFLOW.replace("\\\n", " ")
 SOURCE_GATE_WORKFLOW = (
     REPOSITORY_ROOT / ".github/workflows/channel-merge-policy.yml"
 ).read_text()
@@ -27,6 +30,15 @@ class ChannelLadderTest(unittest.TestCase):
     def test_unknown_target_fails_closed(self):
         with self.assertRaisesRegex(ValueError, "unknown channel target"):
             channel_ladder.source_for("release/0.1")
+
+    def test_exact_target_for_every_promotion_source(self):
+        self.assertEqual(channel_ladder.target_for("dev"), "unstable")
+        self.assertEqual(channel_ladder.target_for("unstable"), "stable")
+        self.assertEqual(channel_ladder.target_for("stable"), "main")
+
+    def test_unknown_source_fails_closed(self):
+        with self.assertRaisesRegex(ValueError, "unknown channel source"):
+            channel_ladder.target_for("feature/example")
 
     def test_staggered_toronto_schedule(self):
         self.assertEqual(
@@ -57,6 +69,78 @@ class ChannelLadderTest(unittest.TestCase):
             if operation.startswith("merge-")
         }
         self.assertEqual(merge_operations, {"merge-unstable"})
+
+
+class VersionValidationModeTest(unittest.TestCase):
+    REPOSITORY = "LunchBox951/pokeemerald-rs"
+
+    def mode(self, event, **kwargs):
+        return channel_ladder.version_validation_mode(event, **kwargs)
+
+    def test_ordinary_pull_requests_are_strict_transitions(self):
+        cases = (
+            {"base": "dev", "head": "feature/ci-fix"},
+            {"base": "stable", "head": "feature/ci-fix"},
+            {"base": "stable", "head": "dev"},
+            {"base": "unstable", "head": "stable"},
+        )
+        for refs in cases:
+            with self.subTest(**refs):
+                self.assertEqual(
+                    self.mode(
+                        "pull_request",
+                        **refs,
+                        head_repository=self.REPOSITORY,
+                        repository=self.REPOSITORY,
+                    ),
+                    channel_ladder.TRANSITION_MODE,
+                )
+
+    def test_exact_same_repository_promotions_are_cumulative(self):
+        for head, base in channel_ladder.TARGET_FOR_SOURCE.items():
+            with self.subTest(head=head, base=base):
+                self.assertEqual(
+                    self.mode(
+                        "pull_request",
+                        base=base,
+                        head=head,
+                        head_repository=self.REPOSITORY,
+                        repository=self.REPOSITORY,
+                    ),
+                    channel_ladder.CUMULATIVE_MODE,
+                )
+
+    def test_fork_promotion_names_fall_back_to_strict(self):
+        for head, base in channel_ladder.TARGET_FOR_SOURCE.items():
+            with self.subTest(head=head, base=base):
+                self.assertEqual(
+                    self.mode(
+                        "pull_request",
+                        base=base,
+                        head=head,
+                        head_repository="someone/fork",
+                        repository=self.REPOSITORY,
+                    ),
+                    channel_ladder.TRANSITION_MODE,
+                )
+
+    def test_channel_pushes_and_dispatch_are_cumulative(self):
+        for ref in (*channel_ladder.TARGET_FOR_SOURCE, "main"):
+            with self.subTest(event="push", ref=ref):
+                self.assertEqual(
+                    self.mode("push", ref=ref),
+                    channel_ladder.CUMULATIVE_MODE,
+                )
+        self.assertEqual(
+            self.mode("workflow_dispatch", ref="dev"),
+            channel_ladder.CUMULATIVE_MODE,
+        )
+
+    def test_unknown_events_and_push_refs_fail_closed(self):
+        with self.assertRaisesRegex(ValueError, "unknown channel push ref"):
+            self.mode("push", ref="feature/example")
+        with self.assertRaisesRegex(ValueError, "unsupported validation event"):
+            self.mode("schedule", ref="dev")
 
 
 class PromotionWorkflowContractTest(unittest.TestCase):
@@ -115,6 +199,31 @@ class PromotionWorkflowContractTest(unittest.TestCase):
         )
         self.assertIn("sort_by(.created_at) | last", PROMOTE_WORKFLOW)
         self.assertNotIn('"github-actions[bot]"', PROMOTE_WORKFLOW)
+
+
+class CiVersionWorkflowContractTest(unittest.TestCase):
+    def test_workflow_delegates_mode_selection_to_the_tested_router(self):
+        self.assertIn("channel_ladder.py validation-mode", CI_WORKFLOW)
+        self.assertEqual(CI_WORKFLOW.count('--mode "${validation_mode}"'), 4)
+        self.assertNotIn("expected_target", CI_WORKFLOW)
+
+    def test_event_specific_comparison_refs_remain_wired(self):
+        for comparison in (
+            '--base "${live_base}" --head HEAD --require-bump',
+            '--base "${next_head}" --head HEAD',
+            '--base "${PUSH_BEFORE}" --head HEAD',
+            "--base HEAD --head HEAD",
+        ):
+            self.assertIn(comparison, CI_WORKFLOW)
+        self.assertNotIn("origin/main", CI_WORKFLOW)
+
+    def test_release_requires_a_cumulative_main_push_bump(self):
+        self.assertIn("BEFORE_SHA: ${{ github.event.before || '' }}", RELEASE_WORKFLOW)
+        self.assertRegex(
+            RELEASE_WORKFLOW_FLAT,
+            r"version_check\.py --mode cumulative\s+"
+            r'--base \"\$\{base\}\" --head HEAD --require-bump',
+        )
 
 
 class SourceGateWorkflowContractTest(unittest.TestCase):

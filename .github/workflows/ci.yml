@@ -47,11 +47,24 @@ jobs:
           fetch-depth: 0 # version_check needs the comparison base.
       - name: Validate VERSION
         env:
-          # Compare a PR with its actual live base. Push/manual runs retain the
-          # repository-wide origin/main monotonicity check.
+          EVENT_NAME: ${{ github.event_name }}
           PR_BASE_SHA: ${{ github.event.pull_request.base.sha || '' }}
           PR_BASE_REF: ${{ github.event.pull_request.base.ref || '' }}
+          PR_HEAD_REF: ${{ github.event.pull_request.head.ref || '' }}
+          PR_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name || '' }}
+          PUSH_BEFORE: ${{ github.event.before || '' }}
+          REPOSITORY: ${{ github.repository }}
         run: |
+          set -euo pipefail
+
+          validation_mode="$(python3 scripts/channel_ladder.py validation-mode \
+            --event "${EVENT_NAME}" \
+            --ref "${GITHUB_REF_NAME}" \
+            --base "${PR_BASE_REF}" \
+            --head "${PR_HEAD_REF}" \
+            --head-repository "${PR_HEAD_REPO}" \
+            --repository "${REPOSITORY}")"
+
           if [[ -n "${PR_BASE_SHA}" ]]; then
             git fetch --no-tags origin \
               "+refs/heads/${PR_BASE_REF}:refs/remotes/origin/${PR_BASE_REF}"
@@ -61,10 +74,30 @@ jobs:
               echo "::error::PR base advanced from ${PR_BASE_SHA} to ${live_base}; refresh the branch and rerun CI."
               exit 1
             fi
-            python3 scripts/version_check.py \
+
+            python3 scripts/version_check.py --mode "${validation_mode}" \
               --base "${live_base}" --head HEAD --require-bump
+          elif [[ "${EVENT_NAME}" == "push" ]]; then
+            if [[ "${GITHUB_REF_NAME}" == "main" ]]; then
+              python3 scripts/version_check.py --mode "${validation_mode}" \
+                --base "${PUSH_BEFORE}" --head HEAD
+            else
+              next_channel="$(
+                python3 scripts/channel_ladder.py target-for "${GITHUB_REF_NAME}"
+              )"
+              git fetch --no-tags origin \
+                "+refs/heads/${next_channel}:refs/remotes/origin/${next_channel}"
+              next_head="$(git rev-parse --verify \
+                "refs/remotes/origin/${next_channel}^{commit}")"
+              python3 scripts/version_check.py --mode "${validation_mode}" \
+                --base "${next_head}" --head HEAD
+            fi
+          elif [[ "${EVENT_NAME}" == "workflow_dispatch" ]]; then
+            python3 scripts/version_check.py --mode "${validation_mode}" \
+              --base HEAD --head HEAD
           else
-            python3 scripts/version_check.py --base origin/main --head HEAD
+            echo "::error::Unsupported VERSION validation event ${EVENT_NAME}."
+            exit 1
           fi
       - name: Verify ledger
         run: python3 scripts/ledger.py verify

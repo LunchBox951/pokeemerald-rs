@@ -198,13 +198,18 @@ class _TempGitRepo:
         self._run("tag", tag)
 
     def run_version_check(
-        self, base: str, head: str = "HEAD", *, require_bump: bool = False
+        self,
+        base: str,
+        head: str = "HEAD",
+        *,
+        mode: str = "transition",
+        require_bump: bool = False,
     ):
         """Invoke version_check.main() with cwd set to the repo (like CI)."""
         old_cwd = os.getcwd()
         os.chdir(self.path)
         try:
-            args = ["--base", base, "--head", head]
+            args = ["--mode", mode, "--base", base, "--head", head]
             if require_bump:
                 args.append("--require-bump")
             return version_check.main(args)
@@ -470,6 +475,154 @@ class TestFinalGateIntegration(unittest.TestCase):
 
         self.assertNotEqual(
             self.repo.run_version_check(base="baseline", head="HEAD"), 0
+        )
+
+
+class TestStrictTransitionPolicy(unittest.TestCase):
+    """Pin the ordinary-PR policy independently of cumulative validation."""
+
+    def test_valid_patch_and_reset_bumps(self):
+        for base, head in (
+            ((0, 1, 2, 5), (0, 1, 2, 6)),
+            ((0, 1, 2, 5), (0, 1, 3, 0)),
+            ((0, 1, 2, 5), (0, 2, 0, 0)),
+        ):
+            with self.subTest(base=base, head=head):
+                version_check.check_transition(
+                    base,
+                    head,
+                    marker_head=None,
+                    marker_unchanged=False,
+                    marker_rel=MARKER,
+                    require_bump=True,
+                )
+
+    def test_invalid_minor_and_major_resets_fail(self):
+        for head in ((0, 1, 3, 6), (0, 2, 1, 0), (0, 2, 0, 1)):
+            with self.subTest(head=head), self.assertRaises(
+                version_check.VersionError
+            ):
+                version_check.check_transition(
+                    (0, 1, 2, 5),
+                    head,
+                    marker_head=None,
+                    marker_unchanged=False,
+                    marker_rel=MARKER,
+                    require_bump=True,
+                )
+
+    def test_unchanged_and_regression_fail_when_bump_required(self):
+        for head in ((0, 1, 2, 5), (0, 1, 2, 4)):
+            with self.subTest(head=head), self.assertRaises(
+                version_check.VersionError
+            ):
+                version_check.check_transition(
+                    (0, 1, 2, 5),
+                    head,
+                    marker_head=None,
+                    marker_unchanged=False,
+                    marker_rel=MARKER,
+                    require_bump=True,
+                )
+
+    def test_malformed_versions_remain_rejected(self):
+        for raw in ("0.1.2", "v0.1.2.6", "0.01.2.6", "0.1.-2.6"):
+            with self.subTest(raw=raw), self.assertRaises(
+                version_check.VersionError
+            ):
+                version_check.parse_version(raw, "test")
+
+
+class TestCumulativePolicy(unittest.TestCase):
+    def setUp(self):
+        self.repo = _TempGitRepo()
+
+    def tearDown(self):
+        self.repo.cleanup()
+
+    def test_accepts_distant_accumulated_endpoints(self):
+        for base, head in (
+            ("0.0.0.0", "0.0.13.9"),
+            ("0.0.13.8", "0.1.36.2"),
+            ("1.0.0.0", "1.4.27.6"),
+            ("0.9.9.9", "1.4.27.6"),
+        ):
+            with self.subTest(base=base, head=head):
+                repo = _TempGitRepo()
+                try:
+                    repo.write("VERSION", f"{base}\n")
+                    repo.commit("base")
+                    repo.write("VERSION", f"{head}\n")
+                    repo.commit("head")
+                    self.assertEqual(
+                        repo.run_version_check(
+                            base="base", head="head", mode="cumulative"
+                        ),
+                        0,
+                    )
+                finally:
+                    repo.cleanup()
+
+    def test_equality_allowed_for_health_but_rejected_for_promotion(self):
+        self.repo.write("VERSION", "0.1.36.2\n")
+        self.repo.commit("same")
+        self.assertEqual(
+            self.repo.run_version_check(
+                base="same", head="same", mode="cumulative"
+            ),
+            0,
+        )
+        self.assertNotEqual(
+            self.repo.run_version_check(
+                base="same",
+                head="same",
+                mode="cumulative",
+                require_bump=True,
+            ),
+            0,
+        )
+
+    def test_regression_is_rejected(self):
+        self.repo.write("VERSION", "0.1.36.2\n")
+        self.repo.commit("base")
+        self.repo.write("VERSION", "0.0.13.9\n")
+        self.repo.commit("head")
+        self.assertNotEqual(
+            self.repo.run_version_check(
+                base="base", head="head", mode="cumulative"
+            ),
+            0,
+        )
+
+    def test_malformed_endpoints_are_rejected(self):
+        for base, head in (
+            ("0.0.13.9", "0.1.36"),
+            ("0.0.13", "0.1.36.2"),
+        ):
+            with self.subTest(base=base, head=head):
+                repo = _TempGitRepo()
+                try:
+                    repo.write("VERSION", f"{base}\n")
+                    repo.commit("base")
+                    repo.write("VERSION", f"{head}\n")
+                    repo.commit("head")
+                    self.assertNotEqual(
+                        repo.run_version_check(
+                            base="base", head="head", mode="cumulative"
+                        ),
+                        0,
+                    )
+                finally:
+                    repo.cleanup()
+
+    def test_missing_base_ref_is_rejected(self):
+        self.repo.write("VERSION", "0.1.36.2\n")
+        self.repo.commit("head")
+        self.assertNotEqual(
+            self.repo.run_version_check(
+                base="missing", head="head", mode="cumulative"
+            ),
+            0,
         )
 
 
