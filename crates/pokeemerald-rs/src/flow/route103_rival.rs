@@ -71,24 +71,27 @@
 //! `BATTLE_TYPE_TRAINER` outright (`battle_main.c:700`, `src/pokemon.c:6682`),
 //! so upstream does not spend it either.
 //!
-//! # Explicitly out of scope: getting to Route 103 at all
+//! # Reachability: wired from real play since issue #248
 //!
 //! Issue #237 scoped the rules, the construction and the driver, and *not*
-//! the overworld reachability — no `Route103_EventScript_Rival` trigger, no
-//! trainer sight cone (`TrainerApproachPlayer`), no
-//! `BattleSetup_ConfigureTrainerBattle`/`DoTrainerBattle` entry
-//! (`src/battle_setup.c:459`), and no rival-approach cutscene. This
-//! module is therefore reachable only from its own tests today, exactly as
-//! `crate::flow::first_battle` was between issues #221 and #231. The gap is
-//! recorded on the `src/battle_setup.c#DoTrainerBattle` ledger entry rather
-//! than papered over.
+//! the overworld reachability; issue #248 wired that on top.
+//! `overworld_phase::route103_rival_trigger` recognizes the rival's
+//! `Route103_EventScript_Rival` object event on an A-press
+//! (`is_rival_trigger`), and its `begin_route103_rival_battle` is this
+//! module's production caller. What that trigger covers and what it still
+//! defers is recorded on the `src/battle_setup.c#DoTrainerBattle` ledger
+//! entry: the trainer sight cone (`TrainerApproachPlayer`), the
+//! rival-approach cutscene, and `RivalEnd`'s seven post-battle script lines
+//! remain unmodelled (issue #264).
 //!
-//! Which of the six `TRAINER_*_ROUTE_103_*` rivals a real playthrough fights
-//! is likewise not decided here: it depends on the player's gender (Brendan
-//! or May) and on `VAR_STARTER_MON`, both set by script chains this port has
-//! no engine for. [`route103_rival_for`] exposes the *table* — the mapping
-//! upstream's `Route103_EventScript_*` scripts encode — so a later slice can
-//! wire the choice up without re-deriving it.
+//! Which of the six `TRAINER_*_ROUTE_103_*` rivals a playthrough fights is
+//! decided by that caller too: [`Rival::for_gender`] reads the saved
+//! `player_gender` (always the *opposite* protagonist), and
+//! [`PlayerStarter::from_species`] maps the party lead's own species —
+//! `VAR_STARTER_MON` itself is still not modelled, so the lead's real
+//! species is the honest stand-in. [`route103_rival_for`] exposes the
+//! *table* — the mapping upstream's `Route103_EventScript_*` scripts
+//! encode — independently of that derivation.
 
 use assets::trainers::{TrainerData, TrainerId, TrainerParty};
 use assets::{MoveId, SpeciesId, SpeciesNames};
