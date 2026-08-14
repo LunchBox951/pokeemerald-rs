@@ -211,8 +211,13 @@ class CiVersionWorkflowContractTest(unittest.TestCase):
         for comparison in (
             '--base "${live_base}" --head HEAD --require-bump',
             '--base "${next_head}" --head HEAD',
-            '--base "${PUSH_BEFORE}" --head HEAD',
+            '--base "${push_base}" --head HEAD',
             "--base HEAD --head HEAD",
+            # The main-push base is guarded: github.event.before is the
+            # zero SHA on branch creation and unreachable after a
+            # force-push, so the workflow falls back to HEAD^1 the same
+            # way release.yml already does.
+            'git cat-file -e "${push_base}^{commit}"',
         ):
             self.assertIn(comparison, CI_WORKFLOW)
         self.assertNotIn("origin/main", CI_WORKFLOW)

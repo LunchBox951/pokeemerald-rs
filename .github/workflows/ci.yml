@@ -79,8 +79,12 @@ jobs:
               --base "${live_base}" --head HEAD --require-bump
           elif [[ "${EVENT_NAME}" == "push" ]]; then
             if [[ "${GITHUB_REF_NAME}" == "main" ]]; then
+              push_base="${PUSH_BEFORE}"
+              if [[ -z "${push_base}" ]] || ! git cat-file -e "${push_base}^{commit}" 2>/dev/null; then
+                push_base="HEAD^1"
+              fi
               python3 scripts/version_check.py --mode "${validation_mode}" \
-                --base "${PUSH_BEFORE}" --head HEAD
+                --base "${push_base}" --head HEAD
             else
               next_channel="$(
                 python3 scripts/channel_ladder.py target-for "${GITHUB_REF_NAME}"
