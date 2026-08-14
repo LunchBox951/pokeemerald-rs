@@ -8,6 +8,8 @@
 //! exception, [`real_pack_composes_non_blank_deterministic_overworld_frames`],
 //! is `#[ignore]`d and needs a real local pack.
 
+use std::collections::HashMap;
+
 use super::{
     layout_pack_name, pack_4bpp_region, resolve_tileset_pack_name, OverworldSceneError,
     DEFAULT_ROOM_MAP_ID,
@@ -1120,6 +1122,187 @@ fn real_pack_route_103_rival_binds_to_the_opposite_protagonists_sheet() {
         0,
         "and from her own frame block, not the player's at base tile 0"
     );
+}
+
+// -- Real-pack Oldale Town / Route 103 background NPCs (issue #262) --------
+
+/// One [`super::npc::SpriteBinding`]'s worth of proof that a newly-bound
+/// background-NPC `graphics_id` really decodes against the real extracted
+/// pack -- not just that [`super::npc::resolve_sprite_source`] names a
+/// `sprite/<path>` id (already pinned pack-free by
+/// `npc::tests::resolve_sprite_source_resolves_the_oldale_and_route_103_background_npcs`),
+/// but that `AssetPack::sprite` actually finds that entry and
+/// `avatar::pack_people_sheet_frames` accepts its real dimensions (any
+/// mismatch is a real, real-pack-only failure mode --
+/// [`super::OverworldSceneError::SpriteSheetWrongDimensions`]/
+/// `ImagePixelCountMismatch`/`ImageNotTileAligned`). A nonzero base tile and
+/// the expected `npc_<n>` palette bank rule out the two ways a binding could
+/// silently be wrong instead of simply absent: reusing the player's own
+/// block (base tile `0`) or a different generic palette than upstream's
+/// `.paletteTag` names.
+fn assert_background_npc_binds(
+    bindings: &HashMap<&'static str, super::npc::SpriteBinding>,
+    graphics_id: &str,
+    expected_palette_bank: u8,
+) {
+    let binding = bindings
+        .get(graphics_id)
+        .copied()
+        .unwrap_or_else(|| panic!("{graphics_id} must bind against the real pack"));
+    assert_eq!(
+        binding.palette_bank(),
+        expected_palette_bank,
+        "{graphics_id}'s palette bank"
+    );
+    assert_ne!(
+        binding.base_tile(),
+        0,
+        "{graphics_id} must decode its own frame block, not reuse the \
+         player's at base tile 0"
+    );
+}
+
+/// The other half of "no longer invisible": a [`super::npc::SpriteBinding`]
+/// alone still draws nothing unless [`super::npc::oam_entries`] actually
+/// emits an entry for the object event using it. Mirrors
+/// [`real_pack_1f_oam_entries_cover_every_drawn_fresh_save_npc`]'s
+/// mechanics -- binding frame block, palette bank, 16x32 shape, and screen
+/// position derived from the player's own fixed one -- for a single
+/// `graphics_id`, one at a time rather than over a shared player position:
+/// `engine::overworld::object_event_is_in_view`'s spawn window is only ~17
+/// metatiles wide, and Route 103's trainers are spread across a 70-tile
+/// route, so no one player tile holds them all. The player is parked one
+/// metatile *north* of the NPC's own template tile, which puts it in that
+/// window and makes the expected entry position exactly one metatile south
+/// of [`super::avatar::PLAYER_OBJ_Y`] -- the same relationship the 1F test
+/// asserts for Mom, with the signs swapped.
+///
+/// Matching is by frame block rather than by count: bindings' blocks are
+/// disjoint by construction, so "exactly one entry addressing this
+/// binding's block" identifies this NPC's entry without assuming anything
+/// about how many *other* object events happen to share the window (Route
+/// 103's berry and cuttable trees are still unbound, and its twins are
+/// declared twice).
+fn assert_background_npc_draws_an_oam_entry(
+    scene: &super::OverworldScene,
+    map: assets::MapId,
+    data: &engine::event_data::EventData,
+    graphics_id: &str,
+) {
+    let event = assets::MapEventsTable::new()
+        .resolve(map)
+        .unwrap()
+        .object_events
+        .iter()
+        .find(|o| o.graphics_id == graphics_id)
+        .unwrap_or_else(|| panic!("{} declares {graphics_id}", map.0));
+    assert!(
+        engine::overworld::object_event_is_visible(event, data),
+        "{graphics_id}'s object event is fresh-save visible (`\"flag\": \"0\"`)"
+    );
+
+    let binding = scene.sprites.bindings()[graphics_id];
+    let player = PlayerState::new(
+        (i32::from(event.x), i32::from(event.y) - 1),
+        event.elevation,
+        Direction::South,
+    );
+    let entries = scene.sprites.entries(&player, data);
+
+    let block = super::avatar::FRAME_BLOCK_TILES;
+    let drawn: Vec<_> = entries
+        .iter()
+        .filter(|entry| {
+            (binding.base_tile()..binding.base_tile() + block).contains(&entry.tile_index())
+        })
+        .collect();
+    assert_eq!(
+        drawn.len(),
+        1,
+        "{graphics_id} must contribute exactly one OAM entry, drawn from \
+         its own binding's frame block -- a bound but never-emitted NPC is \
+         still invisible, which is the bug issue #262 fixes"
+    );
+
+    let entry = drawn[0];
+    assert_eq!(
+        entry.palette_bank(),
+        binding.palette_bank(),
+        "{graphics_id}'s entry draws from its own binding's palette bank"
+    );
+    assert!(entry.enabled(), "{graphics_id}'s entry is enabled");
+    assert_eq!(
+        entry.dimensions(),
+        (16, 32),
+        "{graphics_id} draws at this module's uniform 16x32 shape"
+    );
+    assert_eq!(
+        entry.x(),
+        i16::try_from(super::avatar::PLAYER_OBJ_X).unwrap(),
+        "{graphics_id} shares the player's column"
+    );
+    assert_eq!(
+        entry.y(),
+        super::avatar::PLAYER_OBJ_Y + u8::try_from(super::METATILE_PX).unwrap(),
+        "{graphics_id} stands one metatile south of the player"
+    );
+}
+
+/// Oldale Town's three fresh-save-visible background NPCs (issue #262):
+/// the girl (`GIRL_3`, `data/maps/OldaleTown/map.json:33-45`), the mart
+/// employee (`MART_EMPLOYEE`, `:46-59`), and the footprints man/maniac
+/// (`MANIAC`, `:60-73`) -- all `"flag": "0"`, so all three are always
+/// visible, unlike the town's own rival (`FLAG_HIDE_OLDALE_TOWN_RIVAL`).
+/// Palette banks per each id's own `gObjectEventGraphicsInfo_*.paletteTag`
+/// (`object_event_graphics_info.h`): `MART_EMPLOYEE` is `NPC_1`, `GIRL_3` is
+/// `NPC_2`, `MANIAC` is `NPC_4`.
+#[test]
+#[ignore = "needs a local pack: run `cargo xtask extract` first"]
+fn real_pack_oldale_town_binds_its_background_npcs() {
+    const OLDALE_TOWN: assets::MapId = assets::MapId("MAP_OLDALE_TOWN");
+    let data = fresh_save_event_data();
+    let scene = super::load_room(OLDALE_TOWN, super::PlayerCharacter::Brendan, &data)
+        .expect("run `cargo xtask extract` first");
+    let bindings = scene.sprites.bindings();
+
+    for (graphics_id, palette_bank) in [
+        ("OBJ_EVENT_GFX_MART_EMPLOYEE", 1),
+        ("OBJ_EVENT_GFX_GIRL_3", 2),
+        ("OBJ_EVENT_GFX_MANIAC", 4),
+    ] {
+        assert_background_npc_binds(bindings, graphics_id, palette_bank);
+        assert_background_npc_draws_an_oam_entry(&scene, OLDALE_TOWN, &data, graphics_id);
+    }
+}
+
+/// Route 103's own background NPCs/trainers (issue #262), every one of them
+/// `"flag": "0"` on a fresh save (`data/maps/Route103/map.json`) -- unlike
+/// its own rival (`FLAG_HIDE_ROUTE_103_RIVAL`) and Professor Birch
+/// (`FLAG_HIDE_ROUTE_103_BIRCH`, already bound before this slice). Palette
+/// banks per each id's own `gObjectEventGraphicsInfo_*.paletteTag`.
+#[test]
+#[ignore = "needs a local pack: run `cargo xtask extract` first"]
+fn real_pack_route_103_binds_its_background_npcs() {
+    const ROUTE_103: assets::MapId = assets::MapId("MAP_ROUTE103");
+    let data = fresh_save_event_data();
+    let scene = super::load_room(ROUTE_103, super::PlayerCharacter::Brendan, &data)
+        .expect("run `cargo xtask extract` first");
+    let bindings = scene.sprites.bindings();
+
+    for (graphics_id, palette_bank) in [
+        ("OBJ_EVENT_GFX_MAN_3", 2),
+        ("OBJ_EVENT_GFX_WOMAN_2", 3),
+        ("OBJ_EVENT_GFX_FISHERMAN", 2),
+        ("OBJ_EVENT_GFX_BOY_1", 3),
+        ("OBJ_EVENT_GFX_POKEFAN_M", 2),
+        ("OBJ_EVENT_GFX_BLACK_BELT", 3),
+        ("OBJ_EVENT_GFX_MAN_5", 2),
+        ("OBJ_EVENT_GFX_SWIMMER_F", 2),
+        ("OBJ_EVENT_GFX_SWIMMER_M", 1),
+    ] {
+        assert_background_npc_binds(bindings, graphics_id, palette_bank);
+        assert_background_npc_draws_an_oam_entry(&scene, ROUTE_103, &data, graphics_id);
+    }
 }
 
 /// A female saved game must build Route 103 around May's player assets,
