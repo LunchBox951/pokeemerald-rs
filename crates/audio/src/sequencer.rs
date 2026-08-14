@@ -164,11 +164,34 @@ impl Sequencer {
     }
 
     /// Build a sequencer with an explicit master volume and voice cap.
+    ///
+    /// Uses `song`'s own header reverb (`Song::reverb`, which collapses "no
+    /// override" to `0`); [`Self::with_resolved_reverb`] instead lets a
+    /// caller supply a session-carried level for a header that left reverb
+    /// unset.
     #[must_use]
     pub fn with_config(song: Song, master_volume: u8, max_voices: usize) -> Self {
+        let reverb_level = song.reverb();
+        Self::with_resolved_reverb(song, master_volume, max_voices, reverb_level)
+    }
+
+    /// Build a sequencer with an explicit master volume, voice cap, and
+    /// resolved reverb level, overriding `song`'s own header value.
+    ///
+    /// Used by the player crate to carry a session's previously configured
+    /// master reverb level across a song whose header left reverb unset
+    /// (`SongHeader::reverb`'s SET bit, `m4a_internal.h:12`..`:13`;
+    /// `m4a.c:661`..`:662`).
+    #[must_use]
+    pub fn with_resolved_reverb(
+        song: Song,
+        master_volume: u8,
+        max_voices: usize,
+        reverb_level: u8,
+    ) -> Self {
         let tracks = (0..song.track_count()).map(|_| TrackState::new()).collect();
         let tempo_i = song.initial_tempo();
-        let mixer = Mixer::new(master_volume, max_voices).with_reverb_level(song.reverb());
+        let mixer = Mixer::new(master_volume, max_voices).with_reverb_level(reverb_level);
         Self {
             song,
             tracks,
@@ -598,11 +621,12 @@ impl Sequencer {
             }
             Instrument::CgbSquare1(sq) => {
                 mixer.add_cgb_voice(
-                    CgbVoice::square(
+                    CgbVoice::square_with_fixed_rate(
                         CgbChannelNumber::Square1,
                         sq.duty,
                         Some(sq.sweep),
                         sq.adsr,
+                        sq.fixed_rate,
                         note_key,
                         pit_m,
                         vol_mr,
@@ -620,11 +644,12 @@ impl Sequencer {
             }
             Instrument::CgbSquare2(sq) => {
                 mixer.add_cgb_voice(
-                    CgbVoice::square(
+                    CgbVoice::square_with_fixed_rate(
                         CgbChannelNumber::Square2,
                         sq.duty,
                         None,
                         sq.adsr,
+                        sq.fixed_rate,
                         note_key,
                         pit_m,
                         vol_mr,
@@ -646,6 +671,7 @@ impl Sequencer {
                     CgbVoice::wave(
                         samples,
                         w.adsr,
+                        w.fixed_rate,
                         note_key,
                         pit_m,
                         vol_mr,
@@ -666,7 +692,7 @@ impl Sequencer {
                     CgbVoice::noise(
                         n.adsr,
                         note_key,
-                        n.period,
+                        n.lfsr_width_selector,
                         vol_mr,
                         vol_ml,
                         velocity,
@@ -932,6 +958,42 @@ mod tests {
             "a finite reverb tail must eventually decay to silence"
         );
         assert!(!seq.mixer.has_pending_reverb());
+    }
+
+    #[test]
+    fn with_resolved_reverb_applies_its_explicit_level_over_the_songs_own_header() {
+        // A song whose header never set a reverb level (`Song::reverb`
+        // collapses that to `0`) must still get a pending reverb tail when
+        // the caller supplies an explicit resolved level — this is how the
+        // player crate carries a session's previously configured level
+        // across such a header.
+        let track = vec![
+            Event::Voice(0),
+            Event::Note {
+                key: 60,
+                velocity: 127,
+                gate: 1,
+            },
+            Event::Wait(2),
+            Event::Fine,
+        ];
+        let song = test_song(vec![track], 150);
+        assert_eq!(song.reverb_override(), None);
+        let mut seq =
+            Sequencer::with_resolved_reverb(song, DEFAULT_MASTER_VOLUME, DEFAULT_MAX_VOICES, 100);
+        let mut out = vec![0.0; Sequencer::FRAME_SAMPLES];
+
+        for _ in 0..32 {
+            seq.render_frame(&mut out);
+            if seq.tracks.iter().all(|track| track.ended) && seq.mixer.is_idle() {
+                break;
+            }
+        }
+
+        assert!(
+            seq.mixer.has_pending_reverb(),
+            "the resolved reverb level must be the one actually applied to the mixer"
+        );
     }
 
     #[test]
@@ -1620,6 +1682,26 @@ mod tests {
             duty: 2,
             sweep: 0,
             adsr: CgbAdsr::flat(),
+            fixed_rate: false,
+        })];
+        let song = Song::new(voices, vec![cgb_test_track()], 150);
+        let mut seq = Sequencer::new(song);
+        let mut out = vec![0.0; Sequencer::FRAME_SAMPLES];
+        seq.render_frame(&mut out);
+        assert!(out.iter().any(|&s| s.abs() > 0.0));
+        assert_eq!(seq.voice_count(), 1);
+    }
+
+    #[test]
+    fn a_fixed_rate_cgb_square_note_still_produces_sound_through_the_sequencer() {
+        // Plumbing check: `SquareTone::fixed_rate` must reach `CgbVoice`
+        // without breaking playback — the DAC correction math itself is
+        // pinned by `cgb_voice`'s own tests.
+        let voices = vec![Instrument::CgbSquare1(SquareTone {
+            duty: 2,
+            sweep: 0,
+            adsr: CgbAdsr::flat(),
+            fixed_rate: true,
         })];
         let song = Song::new(voices, vec![cgb_test_track()], 150);
         let mut seq = Sequencer::new(song);
@@ -1634,6 +1716,7 @@ mod tests {
         let voices = vec![Instrument::CgbWave(WaveTone {
             table: [0xFF; 16],
             adsr: CgbAdsr::flat(),
+            fixed_rate: false,
         })];
         let song = Song::new(voices, vec![cgb_test_track()], 150);
         let mut seq = Sequencer::new(song);
@@ -1646,7 +1729,7 @@ mod tests {
     #[test]
     fn a_cgb_noise_note_produces_sound_through_the_sequencer() {
         let voices = vec![Instrument::CgbNoise(NoiseTone {
-            period: 0,
+            lfsr_width_selector: 0,
             adsr: CgbAdsr::flat(),
         })];
         let song = Song::new(voices, vec![cgb_test_track()], 150);
@@ -1667,11 +1750,13 @@ mod tests {
                 duty: 2,
                 sweep: 0,
                 adsr: CgbAdsr::flat(),
+                fixed_rate: false,
             }),
             Instrument::CgbSquare2(SquareTone {
                 duty: 1,
                 sweep: 0,
                 adsr: CgbAdsr::flat(),
+                fixed_rate: false,
             }),
         ];
         let track_a = vec![
@@ -1707,7 +1792,7 @@ mod tests {
         // channel) in immediate succession: the second retriggers the
         // channel rather than accumulating a second voice.
         let voices = vec![Instrument::CgbNoise(NoiseTone {
-            period: 0,
+            lfsr_width_selector: 0,
             adsr: CgbAdsr::flat(),
         })];
         let track = vec![
@@ -2173,6 +2258,7 @@ mod tests {
                     sustain: 15,
                     release: 0,
                 },
+                fixed_rate: false,
             })];
             let song = Song::new(voices, vec![make_track(with_echo)], 150);
             let mut seq = Sequencer::new(song);

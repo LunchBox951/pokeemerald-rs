@@ -122,7 +122,7 @@ use crate::flow::{self, AnimatedTitle, AppScene};
 use crate::frame::to_platform_frame;
 use crate::game_save::SaveSlot;
 use crate::main_menu::MainMenuItem;
-use crate::music::MusicPlayer;
+use crate::music::{MusicContext, MusicPlayer};
 use crate::scene::BootScene;
 use crate::title::{self, TitleSceneError};
 use battle::BattleOutcome;
@@ -263,6 +263,12 @@ pub struct App {
     /// BGM rather than failing the whole boot (module docs' "log-or-ignore
     /// is fine" policy, matching issue #70's precedent for input).
     music: Option<MusicPlayer>,
+    /// This session's carried-forward reverb level ([`MusicContext`]'s own
+    /// docs), threaded through every [`Self::start_title_music`] call so a
+    /// title BGM whose header leaves reverb unset inherits whatever the
+    /// previous song in this session left configured, matching upstream's
+    /// `gMPlayReverb` never resetting between `m4aSongNumStart` calls.
+    music_context: MusicContext,
 }
 
 /// Compose an already-loaded [`title::TitleScene`] at tick 0 into the
@@ -304,6 +310,7 @@ impl App {
             scene: Some(scene),
             save_slot,
             music: None,
+            music_context: MusicContext::new(),
         }
     }
 
@@ -358,7 +365,7 @@ impl App {
     /// platform's windowing event loop could not be created.
     pub fn new(title: impl Into<String>) -> Result<Self, AppError> {
         let mut app = Self::boot(|| Platform::new(title), SaveSlot::default_location)?;
-        app.music = Self::start_title_music(|| {
+        app.music = Self::start_title_music(&mut app.music_context, || {
             platform::AudioOutput::open(crate::music::RING_CAPACITY_FRAMES)
         });
         Ok(app)
@@ -398,7 +405,7 @@ impl App {
     #[cfg(test)]
     fn new_headless_real_title() -> Result<Self, AppError> {
         let mut app = Self::boot(|| Ok(Platform::new_headless()), SaveSlot::disabled)?;
-        app.music = Self::start_title_music(|| {
+        app.music = Self::start_title_music(&mut app.music_context, || {
             Ok(platform::AudioOutput::null(
                 crate::music::RING_CAPACITY_FRAMES,
             ))
@@ -408,10 +415,12 @@ impl App {
 
     /// Best-effort: load the asset pack a second time (deliberately -- see
     /// [`Self::boot`]'s own load, which does not expose the [`assets::AssetPack`]
-    /// it built) and start `mus_title` through `open_audio`, logging and
-    /// returning `None` on any failure instead of propagating it -- see
-    /// [`Self::music`]'s field docs on why this stays best-effort.
+    /// it built) and start `mus_title` through `open_audio`, resolving reverb
+    /// inheritance against `context` ([`Self::music_context`]'s field docs),
+    /// logging and returning `None` on any failure instead of propagating it
+    /// -- see [`Self::music`]'s field docs on why this stays best-effort.
     fn start_title_music(
+        context: &mut MusicContext,
         open_audio: impl FnOnce() -> Result<platform::AudioOutput, PlatformError>,
     ) -> Option<MusicPlayer> {
         let pack = match assets::AssetPack::load_default() {
@@ -421,7 +430,7 @@ impl App {
                 return None;
             }
         };
-        match MusicPlayer::start_from_pack(&pack, "mus_title", open_audio) {
+        match MusicPlayer::start_from_pack_with_context(context, &pack, "mus_title", open_audio) {
             Ok(player) => Some(player),
             Err(err) => {
                 eprintln!("music: {err} -- the title screen will play without music");
@@ -449,6 +458,7 @@ impl App {
             scene: None,
             save_slot: SaveSlot::disabled(),
             music: None,
+            music_context: MusicContext::new(),
         }
     }
 
