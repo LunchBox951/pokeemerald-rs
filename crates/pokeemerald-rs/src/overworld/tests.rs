@@ -1963,3 +1963,70 @@ fn real_pack_littleroot_and_route_101_render_continuously_across_their_shared_ed
          satisfied by an all-border strip"
     );
 }
+
+/// The same seam proof for the cluster's *other* live outdoor edge:
+/// Route 101's only North connection (`MAP_OLDALE_TOWN`, `offset: 0` --
+/// `crates/assets/src/map_headers.rs`), newly resolvable now that
+/// `cargo xtask extract`'s `LAYOUTS` table bundles Oldale Town's grid
+/// bytes (issue #248). Identical geometry to
+/// [`real_pack_littleroot_and_route_101_render_continuously_across_their_shared_edge`]
+/// -- both layouts are 20x20 and the offset is 0 -- so the same anchor
+/// math covers the same four-row strip; see that test's comments for the
+/// derivation.
+#[test]
+#[ignore = "needs a local pack: run `cargo xtask extract` first"]
+fn real_pack_route_101_and_oldale_town_render_continuously_across_their_shared_edge() {
+    const ROUTE_101: assets::MapId = assets::MapId("MAP_ROUTE101");
+    const OLDALE: assets::MapId = assets::MapId("MAP_OLDALE_TOWN");
+
+    let scene = super::load_room(
+        ROUTE_101,
+        super::PlayerCharacter::Brendan,
+        &engine::event_data::EventData::new(),
+    )
+    .expect("run `cargo xtask extract` first");
+    let mut scene_border_only = super::load_room(
+        ROUTE_101,
+        super::PlayerCharacter::Brendan,
+        &engine::event_data::EventData::new(),
+    )
+    .expect("run `cargo xtask extract` first");
+    scene_border_only.connections.clear();
+    let oldale = super::load_room(
+        OLDALE,
+        super::PlayerCharacter::Brendan,
+        &engine::event_data::EventData::new(),
+    )
+    .expect("run `cargo xtask extract` first");
+
+    let data = fresh_save_event_data();
+    let player = PlayerState::new((10, 1), 3, Direction::North);
+    let frame = scene.compose(&player, &data, 0);
+    let frame_border_only = scene_border_only.compose(&player, &data, 0);
+
+    let oldale_player = PlayerState::new((10, 21), 3, Direction::North);
+    let frame_oldale = oldale.compose(&oldale_player, &data, 0);
+
+    let mut any_pixel_changed_by_the_connection = false;
+    for py in 0..64usize {
+        for px in 0..240usize {
+            let with_connection = frame.pixel(px, py);
+            let without_connection = frame_border_only.pixel(px, py);
+            let neighbour_direct = frame_oldale.pixel(px, py);
+            assert_eq!(
+                with_connection, neighbour_direct,
+                "pixel ({px}, {py}) north of Route 101's own edge must match Oldale Town's \
+                 own rendering at the corresponding world position exactly -- no seam"
+            );
+            if with_connection != without_connection {
+                any_pixel_changed_by_the_connection = true;
+            }
+        }
+    }
+    assert!(
+        any_pixel_changed_by_the_connection,
+        "the connection must actually change at least one pixel versus the border-only \
+         fallback, or the comparisons above would be trivially satisfied by an \
+         all-border strip"
+    );
+}

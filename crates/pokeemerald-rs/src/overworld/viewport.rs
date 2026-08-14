@@ -588,20 +588,23 @@ pub(super) struct FrameViewport {
 /// map.json connections cluster together -- all four declare
 /// `gTileset_General` + `gTileset_Petalburg` in `layouts.json`
 /// (cross-checked in `crates/assets/src/map_layouts.rs`), and every
-/// connection this port's *bundled asset pack* can actually resolve today
-/// stays within that cluster (`cargo xtask extract`'s own `LAYOUTS` table
-/// currently ships grid bytes for Littleroot Town and Route 101 only --
-/// `crates/xtask/src/extract/mod.rs` -- so a declared connection into
-/// Oldale Town or Route 103 has no target bytes to resolve and falls back
-/// to the border block exactly as an unresolvable connection always does,
-/// per [`super::OverworldScene::from_pack`]'s own docs; it is not rendered
-/// incorrectly, just not rendered at all). A connection into a map on a
+/// connection resolvable against the bundled pack stays within that
+/// shared-tileset cluster: `cargo xtask extract`'s `LAYOUTS` table
+/// (`crates/xtask/src/extract/mod.rs`) ships grid bytes for all four
+/// outdoor maps (Oldale Town and Route 103 joined it in issue #248), so
+/// the Littleroot <-> Route 101 edge *and* Route 101's own north edge
+/// into Oldale Town both resolve real connected content; a declared
+/// connection whose target layout is *not* bundled still falls back to
+/// the border block exactly as an unresolvable connection always does,
+/// per [`super::OverworldScene::from_pack`]'s own docs -- not rendered
+/// incorrectly, just not rendered at all. A connection into a map on a
 /// genuinely different tileset would render its metatile ids against the
 /// wrong tile art -- upstream's own documented limitation, faithfully
 /// reproduced rather than silently avoided, since upstream has no
 /// cross-tileset guard either; this port carries no heuristic to detect or
-/// special-case it because no connection reachable against the bundled
-/// pack ever exercises it.
+/// special-case it because every bundled outdoor layout shares the one
+/// `gTileset_General`/`gTileset_Petalburg` pair, so no resolvable
+/// connection exercises it.
 ///
 /// # The scroll derivation
 ///

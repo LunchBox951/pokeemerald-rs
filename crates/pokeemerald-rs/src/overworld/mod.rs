@@ -339,10 +339,10 @@ impl OverworldSceneError {
 /// - **Not bundled -- silently omitted.** The target map isn't in the
 ///   generated [`assets::MapHeaderTable`], or its layout isn't in
 ///   [`assets::LayoutTable`], or the pack simply carries no `layout/<name>/map`
-///   entry for it (much the most common case: the target isn't one of the
-///   layouts `cargo xtask extract` currently bundles --
-///   [`viewport::build_tilemaps`]'s own docs on which of this slice's
-///   four-map cluster that is today). Nothing is *wrong* with the pack;
+///   entry for it (the target isn't one of the layouts `cargo xtask
+///   extract` bundles -- all four of this slice's outdoor cluster ship
+///   today, so this arm now covers only maps outside it;
+///   [`viewport::build_tilemaps`]'s own docs). Nothing is *wrong* with the pack;
 ///   there is just no neighbour content to draw, and
 ///   [`viewport::cell_at`] already falls back to the active map's own
 ///   border block for any position no resolvable connection covers, so an
