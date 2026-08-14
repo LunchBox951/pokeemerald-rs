@@ -24,7 +24,7 @@ pub(super) use super::input::{advance_player_one_frame, held_direction};
 pub(super) const VAR_ROUTE101_STATE: u16 = 0x4060;
 
 /// A fresh event-flag store: nothing hidden. Used by the
-/// [`advance_player_one_frame`] tests below, whose fixture map
+/// [`advance_player_one_frame`] tests in `connections_tests`, whose fixture map
 /// ([`flat_runtime`]) has no object events at all -- the phase-level tests
 /// instead go through [`OverworldPhase::step`], which threads the phase's
 /// own real save state.
@@ -40,7 +40,7 @@ pub(super) fn no_connections(_: MapId) -> Option<(u16, u16)> {
 }
 
 /// A single connected neighbour map, keyed by id -- the coordinate-
-/// translation fixture for the headless crossing tests below. Mirrors
+/// translation fixture for `connections_tests`' headless crossing tests. Mirrors
 /// `engine::overworld::player::tests::SingleConnectedMap` (that module's own
 /// private fixture): this crate can't import it directly (private to
 /// `engine`), but the shape this issue's [`ConnectedMapData`] consumers
@@ -67,7 +67,7 @@ impl ConnectedMapData for SingleConnectedMap {
 /// A single freshly-pressed button this frame (`is_newly_pressed` true,
 /// unlike `crate::flow::tests::held`'s deliberately *not*-fresh two-frame
 /// hold) -- mirrors that module's own private `pressed` helper, needed
-/// here too for the A-button edges the NPC dialog tests below drive.
+/// here too for the A-button edges `frame_tests`' NPC dialog tests drive.
 pub(super) fn pressed(button: Buttons) -> ButtonState {
     let mut state = ButtonState::new();
     state.update(button);
@@ -76,7 +76,7 @@ pub(super) fn pressed(button: Buttons) -> ButtonState {
 
 /// The `((x, y), metatile behavior)` of `map`'s `warp_index`-th warp
 /// event's own tile, read out of the extracted pack -- so the
-/// warp-facing tests below assert against the real attribute data
+/// warp-facing tests in `warp_tests` assert against the real attribute data
 /// `OverworldPhase::warp_to` reads at runtime, not a restatement of
 /// their own expectations. Pack-dependent: `#[ignore]`d callers only.
 pub(super) fn warp_tile_behavior(map: assets::MapId, warp_index: usize) -> ((i16, i16), u8) {
@@ -105,8 +105,8 @@ pub(super) fn warp_tile_behavior(map: assets::MapId, warp_index: usize) -> ((i16
 /// module's own fixture, private to its crate) so
 /// [`advance_player_one_frame`] is testable against a real
 /// [`MapRuntime`] without needing a local asset pack (`OverworldScene`,
-/// unlike `MapRuntime`, is pack-backed -- see [`OverworldPhase`]'s own
-/// pack-dependent, `#[ignore]`d tests below).
+/// unlike `MapRuntime`, is pack-backed -- see the sibling test modules'
+/// pack-dependent, `#[ignore]`d tests).
 pub(super) fn flat_runtime(width: u16, height: u16) -> MapRuntime<'static> {
     let mut bytes = Vec::with_capacity(usize::from(width) * usize::from(height) * 2);
     for _ in 0..width * height {
@@ -169,7 +169,8 @@ pub(super) fn flat_runtime(width: u16, height: u16) -> MapRuntime<'static> {
 
 // -- Headless phase fixtures -------------------------------------------------
 
-/// Brendan's House 1F: the map the headless interaction tests below drive,
+/// Brendan's House 1F: the map `frame_tests`/`step_tests`' headless
+/// interaction tests drive,
 /// picked because its real object events include Mom at `(2, 6)` — script
 /// `PlayersHouse_1F_EventScript_Mom`, the one
 /// [`crate::overworld::npc_scripts::script_text`] recognizes — visible on a
@@ -232,7 +233,7 @@ pub(super) fn runtime_for(phase: &OverworldPhase) -> MapRuntime<'_> {
 // two-map graph, without needing a local asset pack. The real
 // Littleroot Town <-> Route 101 crossing (offset 0 in both directions) is
 // additionally pinned end to end, through the whole `OverworldPhase`, by
-// the `#[ignore]`d `real_pack_*` tests further down this file.
+// `connections_tests`' `#[ignore]`d `real_pack_*` crossing tests.
 
 /// A small flat map whose header carries one connection in `direction`, to
 /// `target` with `offset` -- the fixture the coordinate-translation tests
@@ -312,7 +313,7 @@ pub(super) fn connected_runtime(
     )
 }
 
-/// A phase standing on 1F's own floor, for the doormat tests below: a real
+/// A phase standing on 1F's own floor, for `warp_tests`' doormat tests: a real
 /// pack-loaded [`ONE_F`] scene with the player placed at `position` facing
 /// `facing`, at rest.
 pub(super) fn one_f_phase(position: (i32, i32), facing: Direction) -> OverworldPhase {

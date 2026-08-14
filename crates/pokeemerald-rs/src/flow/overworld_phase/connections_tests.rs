@@ -277,7 +277,7 @@ fn walking_off_littlerootss_north_edge_crosses_into_route_101_and_back() {
         "a crossing is NOT a map load: upstream's LoadMapFromCameraTransition re-inits only \
          the secondary tileset counter (InitSecondaryTilesetAnimation, overworld.c:815), so \
          the primary counter this port models keeps running -- 32 walk frames plus the \
-         crossing step's own increment, with no reset (contrast the warp test above)"
+         crossing step's own increment, with no reset (contrast `step_tests`' warp tick-reset test)"
     );
     assert_eq!(
         phase.pending_landing,
@@ -403,7 +403,7 @@ fn walking_off_littlerootss_north_edge_crosses_into_route_101_and_back() {
 /// `CheckStandardWildEncounter` at all -- upstream's `TryStartStepBasedScript`
 /// returns TRUE at `:155-161`, two lines above it, so the immunity counter
 /// (decremented inside that function, `:668-686`) would not move. That is the
-/// coord event's behaviour, pinned in its own section further down this file;
+/// coord event's behaviour, pinned in `first_battle_trigger_tests`;
 /// asserting it here too would only turn this test's own subject -- the
 /// crossing's immunity restart -- into a hostage of an unrelated slice. The
 /// var starts at the post-rescue `2` instead, exactly the state upstream
