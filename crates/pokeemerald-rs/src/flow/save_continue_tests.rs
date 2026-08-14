@@ -280,7 +280,10 @@ fn drive_start_menu(
 }
 
 /// `START` -> `SAVE` -> YES to everything, through the real menu.
-fn save_from_the_start_menu(phase: &mut OverworldPhase, save_slot: &mut SaveSlot) -> Vec<u8> {
+pub(super) fn save_from_the_start_menu(
+    phase: &mut OverworldPhase,
+    save_slot: &mut SaveSlot,
+) -> Vec<u8> {
     phase.open_synthetic_start_menu();
     assert_eq!(
         phase.start_menu().unwrap().selected(),

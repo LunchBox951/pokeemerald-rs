@@ -336,7 +336,8 @@ impl OverworldPhase {
     /// effects, atomic scene/`map_id` rebind, `tick` reset,
     /// `RestartWildEncounterImmunitySteps` -- and the same "leaves the
     /// player exactly where they stood" failure contract if `map`'s
-    /// header/events/room can't be resolved.
+    /// header/events/room can't be resolved, or `(x, y)` is outside the
+    /// destination's decoded grid.
     ///
     /// Lands at elevation `ELEVATION_TRANSITION`
     /// (`pokeemerald/include/global.fieldmap.h:16`, value `0`):
@@ -392,6 +393,12 @@ impl OverworldPhase {
         };
         let facing = {
             let runtime = scene.runtime(map, header, events);
+            if runtime.metatile_cell(i32::from(x), i32::from(y)).is_none() {
+                eprintln!(
+                    "warp: destination position ({x}, {y}) is outside map {map:?} -- staying put"
+                );
+                return;
+            }
             let behavior = runtime
                 .metatile_behavior(i32::from(x), i32::from(y))
                 .unwrap_or(engine::overworld::metatile_behavior::MB_NORMAL);
@@ -416,6 +423,7 @@ impl OverworldPhase {
             x,
             y,
         };
+        self.save1.pos = engine::save::Coords16 { x, y };
     }
 
     /// Rebind `map_id`/`scene`/`save1.location` (issue #177) after

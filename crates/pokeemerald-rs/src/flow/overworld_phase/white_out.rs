@@ -144,11 +144,95 @@ impl OverworldPhase {
     }
 }
 
-// No sibling `tests` module here -- matching this file's own trigger
-// siblings (`first_battle_trigger`, `route103_rival_trigger`, `wild_battle`):
-// none of them own a dedicated test file either. `Self::white_out`'s
-// behaviour is exercised end-to-end from each battle driver's own outcome
-// tests instead -- `crate::flow::wild_encounter::tests` for the wild path,
-// `super::route103_rival_tests` for the Route 103 rival path -- since a
-// white-out is only ever reached through one of those two losses in
-// production.
+#[cfg(test)]
+mod tests {
+    use assets::MapId;
+    use engine::save::{Coords16, WarpData};
+
+    use crate::flow::save_continue_tests::save_from_the_start_menu;
+    use crate::flow::tests::TempSave;
+
+    use super::OverworldPhase;
+
+    const ROUTE_101_STATE: u16 = 0x4060;
+    const FLAG_TEMP_12: u16 = 0x12;
+
+    #[test]
+    #[ignore = "needs a local pack: run `cargo xtask extract` first"]
+    fn real_pack_explicit_coordinate_warp_rejects_out_of_bounds_position_atomically() {
+        let mut phase = OverworldPhase::load_default().expect("run `cargo xtask extract` first");
+        let destination = MapId("MAP_ROUTE101");
+        let header = assets::MapHeaderTable::new()
+            .header(destination)
+            .expect("Route 101 must resolve in the generated map-header table");
+        phase.save1.last_heal_location = WarpData {
+            map_group: i8::try_from(header.group).unwrap(),
+            map_num: i8::try_from(header.num).unwrap(),
+            warp_id: -1,
+            x: i16::MAX,
+            y: i16::MAX,
+        };
+        phase
+            .save1
+            .event_data
+            .flag_set(FLAG_TEMP_12)
+            .expect("FLAG_TEMP_12 is an ordinary flag id");
+
+        let player_before = phase.player;
+        let map_before = phase.map_id;
+        let location_before = phase.save1.location;
+        let position_before = phase.save1.pos;
+        assert_eq!(phase.save1.event_data.var_get(ROUTE_101_STATE), Ok(0));
+
+        phase.white_out();
+
+        assert_eq!(phase.player, player_before);
+        assert_eq!(phase.map_id, map_before);
+        assert_eq!(phase.save1.location, location_before);
+        assert_eq!(phase.save1.pos, position_before);
+        assert_eq!(
+            phase.save1.event_data.flag_get(FLAG_TEMP_12),
+            Ok(true),
+            "a rejected warp must not commit its scratch temp-field-data clear"
+        );
+        assert_eq!(
+            phase.save1.event_data.var_get(ROUTE_101_STATE),
+            Ok(0),
+            "a rejected warp must not commit Route 101's entry transition"
+        );
+    }
+
+    #[test]
+    #[ignore = "needs a local pack: run `cargo xtask extract` first"]
+    fn real_pack_immediate_post_white_out_save_persists_home_map_and_position() {
+        let mut phase = OverworldPhase::load_default().expect("run `cargo xtask extract` first");
+        let heal_location = phase.save1.last_heal_location;
+
+        phase.white_out();
+
+        assert_eq!(phase.save1.location, heal_location, "setup: warp completed");
+        assert_eq!(
+            phase.save1.pos,
+            Coords16 {
+                x: heal_location.x,
+                y: heal_location.y,
+            },
+            "the live save blocks must be coherent before another overworld step"
+        );
+
+        let temp = TempSave::new("immediate-post-white-out");
+        let mut slot = temp.slot();
+        save_from_the_start_menu(&mut phase, &mut slot);
+        let saved = slot.load();
+
+        assert!(saved.status.menu_shows_continue());
+        assert_eq!(saved.block1.location, heal_location);
+        assert_eq!(
+            saved.block1.pos,
+            Coords16 {
+                x: heal_location.x,
+                y: heal_location.y,
+            }
+        );
+    }
+}
