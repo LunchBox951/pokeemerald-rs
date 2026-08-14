@@ -281,9 +281,9 @@ impl MusicPlayer {
     /// As [`Self::start`], resolving reverb inheritance against `context`:
     /// `song`'s own header override
     /// ([`audio::Song::reverb_override`]) wins if set, otherwise
-    /// `context`'s carried-forward level is used, and `context` is updated to
-    /// that resolved level for the next song started against it (module
-    /// docs' [`MusicContext`]).
+    /// `context`'s carried-forward level is used. After the output starts
+    /// successfully, `context` is updated to that resolved level for the next
+    /// song started against it (module docs' [`MusicContext`]).
     ///
     /// # Errors
     ///
@@ -292,10 +292,21 @@ impl MusicPlayer {
     pub fn start_with_context(
         context: &mut MusicContext,
         song: Song,
+        output: AudioOutput,
+    ) -> Result<Self, PlatformError> {
+        Self::start_with_context_using(context, song, output, AudioOutput::start)
+    }
+
+    /// The shared startup path, with the final output-start operation
+    /// injectable so the failure ordering can be covered without depending
+    /// on an OS audio device.
+    fn start_with_context_using(
+        context: &mut MusicContext,
+        song: Song,
         mut output: AudioOutput,
+        start_output: impl FnOnce(&mut AudioOutput) -> Result<(), PlatformError>,
     ) -> Result<Self, PlatformError> {
         let reverb_level = song.reverb_override().unwrap_or(context.master_reverb);
-        context.master_reverb = reverb_level;
         let mut sequencer = Sequencer::with_resolved_reverb(
             song.clone(),
             DEFAULT_MASTER_VOLUME,
@@ -304,7 +315,8 @@ impl MusicPlayer {
         );
         let producer = output.producer();
         let overruns = prefill(&mut sequencer, &producer);
-        output.start()?;
+        start_output(&mut output)?;
+        context.master_reverb = reverb_level;
         Ok(Self {
             song,
             sequencer,
@@ -438,7 +450,7 @@ mod tests {
     use std::sync::Arc;
 
     use audio::{Adsr, Event, Instrument, Song, ToneData, WaveData};
-    use platform::AudioOutput;
+    use platform::{AudioOutput, PlatformError};
 
     use super::{MusicContext, MusicPlayer, RING_CAPACITY_FRAMES};
 
@@ -504,6 +516,29 @@ mod tests {
             !first_playthrough_finishes_within(&mut player, SETTLE_BUDGET),
             "an explicit reverb override must leave a tail pending well past the note's own end"
         );
+    }
+
+    #[test]
+    fn failed_output_start_preserves_music_context() {
+        let mut context = MusicContext::new();
+        let priming_song = short_song_without_its_own_reverb().with_reverb(77);
+        let priming_output = AudioOutput::null(RING_CAPACITY_FRAMES);
+        MusicPlayer::start_with_context(&mut context, priming_song, priming_output)
+            .expect("null backend never errors");
+        assert_eq!(context.master_reverb, 77);
+
+        let song = short_song_without_its_own_reverb().with_reverb(100);
+        let output = AudioOutput::null(RING_CAPACITY_FRAMES);
+
+        let result = MusicPlayer::start_with_context_using(
+            &mut context,
+            song,
+            output,
+            |_| Err(PlatformError::NoAudioDevice),
+        );
+
+        assert!(matches!(result, Err(PlatformError::NoAudioDevice)));
+        assert_eq!(context.master_reverb, 77);
     }
 
     #[test]
