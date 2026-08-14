@@ -547,7 +547,41 @@ impl BattlePokemon {
         let max_experience =
             experience_for_level(self.base_stats.growth_rate, MAX_LEVEL).unwrap_or(u32::MAX);
         self.experience = self.experience.saturating_add(amount).min(max_experience);
+        if let Some((old_level, new_level)) = self.raise_level_to_experience() {
+            self.learn_crossed_level_moves(dex, old_level, new_level);
+        }
+    }
 
+    /// `GetLevelFromMonExp` + `CalculateMonStats`
+    /// (`pokeemerald/src/pokemon.c`) as the **save decoder** reaches them:
+    /// adopt a stored experience total and re-derive the level from it,
+    /// teaching **nothing**. Upstream's load path copies the attacks
+    /// substructure verbatim and never runs `MonTryLearningNewMove` — the
+    /// learnset walk belongs to `Cmd_getexp`'s in-battle award
+    /// ([`BattlePokemon::apply_experience`]) alone — so a decode that
+    /// taught crossed-level moves would mutate the save's own authoritative
+    /// moveset merely by loading it.
+    ///
+    /// The level never moves down and the total never drops below the
+    /// current level's own floor: a stored total under that floor is a
+    /// level/experience pair upstream could never write, and reconciling it
+    /// upward mirrors the decoder's fail-toward-consistency posture. In the
+    /// ordinary consistent-bytes case the stored total sits inside the
+    /// current level's own band and this is a plain assignment.
+    pub fn reconcile_saved_experience(&mut self, total: u32) {
+        let max_experience =
+            experience_for_level(self.base_stats.growth_rate, MAX_LEVEL).unwrap_or(u32::MAX);
+        self.experience = self.experience.max(total.min(max_experience));
+        self.raise_level_to_experience();
+    }
+
+    /// Raise the level (and stats, preserving damage taken) to match the
+    /// current experience total, returning `Some((old_level, new_level))`
+    /// when at least one threshold was crossed. Shared by the in-battle
+    /// award ([`BattlePokemon::apply_experience`], which then teaches the
+    /// crossed learnset moves) and the save decoder
+    /// ([`BattlePokemon::reconcile_saved_experience`], which must not).
+    fn raise_level_to_experience(&mut self) -> Option<(u8, u8)> {
         let mut new_level = self.level;
         while new_level < MAX_LEVEL {
             let next_level = new_level + 1;
@@ -559,7 +593,7 @@ impl BattlePokemon {
             new_level = next_level;
         }
         if new_level == self.level {
-            return;
+            return None;
         }
 
         let old_level = self.level;
@@ -569,7 +603,7 @@ impl BattlePokemon {
         self.current_hp = self
             .current_hp
             .saturating_add(self.stats.max_hp.saturating_sub(old_max_hp));
-        self.learn_crossed_level_moves(dex, old_level, new_level);
+        Some((old_level, new_level))
     }
 
     /// `MonTryLearningNewMove` / `GiveMoveToMon`
@@ -596,10 +630,10 @@ impl BattlePokemon {
     /// module docs), just as upstream's `GiveMoveToMon` has no notion of
     /// refusing a move. Nothing needs to be screened here because every
     /// caller of [`BattlePokemon::apply_experience`] applies it to a mon on
-    /// the *player's* side — in-battle it is
-    /// [`crate::battle::Battle::take_turn`]'s exp award to `Battle::player`,
-    /// and out of battle it is the integration layer's save loader
-    /// reconciling a player-party mon's stored experience — and the player's
+    /// the *player's* side — [`crate::battle::Battle::take_turn`]'s exp
+    /// award to `Battle::player`; the save decoder deliberately takes the
+    /// non-teaching [`BattlePokemon::reconcile_saved_experience`] path
+    /// instead — and the player's
     /// moveset is the one this crate deliberately does not screen:
     /// [`crate::battle::Battle::new`] documents that only the **wild**
     /// moveset is checked up front — because the wild rejection loop can

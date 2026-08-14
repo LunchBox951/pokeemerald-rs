@@ -200,6 +200,63 @@ fn an_experience_total_past_the_next_threshold_levels_the_decoded_mon_up() {
     assert_eq!(restored.experience(), level_13);
 }
 
+/// The level reconciliation above derives the level *only*. Upstream's
+/// load path (`CalculateMonStats` -> `GetLevelFromMonExp`,
+/// `pokeemerald/src/pokemon.c`) copies the attacks substructure verbatim
+/// and never runs `MonTryLearningNewMove`, so decoding an inconsistent
+/// save must not teach the crossed levels' learnset moves -- merely
+/// loading a save may never mutate its own authoritative moveset
+/// (`BattlePokemon::reconcile_saved_experience` vs the in-battle
+/// `apply_experience` walk, issue #252).
+#[test]
+fn decoding_an_inconsistent_save_levels_up_without_teaching_moves() {
+    let dex = Dex::new();
+    let mon = BattlePokemon::new(
+        &dex,
+        assets::SpeciesId(280), // SPECIES_TORCHIC
+        15,
+        Ivs {
+            hp: 1,
+            attack: 2,
+            defense: 3,
+            speed: 4,
+            sp_attack: 5,
+            sp_defense: 6,
+        },
+        0x1234_ABCD,
+        vec![assets::MoveId(10), assets::MoveId(45)], // Scratch, Growl
+    )
+    .expect("Torchic with a two-move starting set is in the dex")
+    .with_original_trainer_id(0x89AB_CDEF);
+    let mut saved = to_save_pokemon(&dex, &mon);
+
+    // Level 16 is Torchic's Peck (`MOVE_PECK`, id 64) learnset entry --
+    // the in-battle award in `a_move_learned_by_levelling_up_survives_the_
+    // round_trip` proves crossing it teaches; this decode must not.
+    let torchic = dex.species(mon.species()).unwrap();
+    let level_16 = assets::experience_for_level(torchic.growth_rate, 16).unwrap();
+    let mut substructures = saved.box_data.substructures().unwrap();
+    substructures.growth[4..8].copy_from_slice(&level_16.to_le_bytes());
+    saved.box_data.set_substructures(&substructures);
+
+    let restored = from_save_pokemon(&dex, &saved).expect("valid bytes must decode");
+    assert_eq!(
+        restored.level(),
+        16,
+        "the level still follows the experience"
+    );
+    assert_eq!(
+        restored
+            .moves()
+            .iter()
+            .map(|slot| slot.move_id)
+            .collect::<Vec<_>>(),
+        vec![assets::MoveId(10), assets::MoveId(45)],
+        "but the moveset stays exactly the saved attacks substructure -- \
+         no Peck: load is not a level-up"
+    );
+}
+
 /// The saved bytes are upstream's, not an invented shape: the growth
 /// substructure holds the species and the accumulated experience, the party
 /// block holds `MAIL_NONE`, and the box header carries the OT id the key is

@@ -262,28 +262,27 @@ pub(crate) fn from_save_pokemon(dex: &Dex, saved: &Pokemon) -> Result<BattlePoke
 
     // `BattlePokemon::new` seeds experience at the level's own threshold;
     // the saved total (`MON_DATA_EXP`) also carries the sub-level progress
-    // earned in battle, so apply the difference. Inconsistent bytes
-    // reconcile the way upstream's own level derivation does
+    // earned in battle, so adopt the stored total. Inconsistent bytes
+    // reconcile the way upstream's own load path does
     // (`GetLevelFromMonExp`, reached from `CalculateMonStats`,
     // `pokeemerald/src/pokemon.c`): a total at or past the next level's
     // threshold levels the mon up to match it, and a total *below* the
     // saved level's own floor (unwritable by [`to_save_pokemon`]) stays at
     // the floor rather than representing a level/experience pair upstream
-    // could never store. In the ordinary (consistent-bytes) case this never
-    // crosses a level -- `saved.level` and `saved_experience` already agree
-    // -- so `apply_experience`'s learnset walk (issue #252) is a no-op here;
-    // it only fires for the inconsistent-bytes edge case above, where a
-    // hand-authored save can therefore gain the crossed levels' learnset
-    // moves (unscreened, as upstream teaches them) on load. That is no less
-    // faithful than the level jump itself, which upstream's own
-    // `GetLevelFromMonExp` would also perform on those bytes.
+    // could never store. Crucially the load path *only* derives the level:
+    // upstream copies the attacks substructure verbatim and never runs
+    // `MonTryLearningNewMove` on load, so the crossed levels' learnset
+    // moves are NOT taught here -- `reconcile_saved_experience` exists so
+    // this decode cannot mutate the save's own authoritative moveset.
+    // `apply_experience`'s learnset walk (issue #252) belongs to
+    // `Cmd_getexp`'s in-battle award alone.
     let saved_experience = u32::from_le_bytes([
         substructures.growth[4],
         substructures.growth[5],
         substructures.growth[6],
         substructures.growth[7],
     ]);
-    mon.apply_experience(dex, saved_experience.saturating_sub(mon.experience()));
+    mon.reconcile_saved_experience(saved_experience);
 
     // Full HP is what `BattlePokemon::new` starts at; the save's own `hp`
     // is the state to restore. A saved value above the recomputed maximum
