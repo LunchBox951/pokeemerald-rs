@@ -26136,6 +26136,36 @@
     },
     "src/fieldmap.c": {
       "artifacts": {
+        "FillConnection": {
+          "reason": "The shared rectangular-copy helper collapses into connected_cell_at's own LayoutGrid::cell_at lookup once its four callers' own coordinate math is inlined per-direction; this port resolves one cell on demand rather than copying a whole strip into a backing buffer, but only within the exact extents that buffer covers (viewport::within_backup_map_band).",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/viewport.rs",
+          "spec": "I-4",
+          "status": "rewritten"
+        },
+        "FillEastConnection": {
+          "reason": "East-edge offset math (target_x = x - width, target_y = y - offset) re-implemented in connected_cell_at, bounded to gBackupMapLayout's own east cover -- upstream's MAP_OFFSET + 1 copy width (a fixed-buffer sizing artifact of MAP_OFFSET_W's odd total, include/fieldmap.h:19) reproduced as layout-local x <= width + 7 (issue #253).",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/viewport.rs",
+          "spec": "I-4",
+          "status": "rewritten"
+        },
+        "FillNorthConnection": {
+          "reason": "North-edge offset math (target_x = x - offset, target_y = connected_height + y) re-implemented in connected_cell_at, bounded to gBackupMapLayout's own MAP_OFFSET rows north of the layout (layout-local y >= -7), same shape as FillSouthConnection's own ledger entry.",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/viewport.rs",
+          "spec": "I-4",
+          "status": "rewritten"
+        },
+        "FillSouthConnection": {
+          "reason": "South-edge offset math (target_x = x - offset, target_y = y - height) re-implemented in connected_cell_at, resolved on demand instead of preloaded, and bounded to the same rows gBackupMapLayout covers -- layout-local y <= height + 6, MAP_OFFSET_H's even total (issue #253).",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/viewport.rs",
+          "spec": "I-4",
+          "status": "rewritten"
+        },
+        "FillWestConnection": {
+          "reason": "West-edge offset math (target_x = connected_width + x, target_y = y - offset) re-implemented in connected_cell_at, bounded to gBackupMapLayout's own MAP_OFFSET columns west of the layout (layout-local x >= -7); past that the border block renders, exactly as upstream.",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/viewport.rs",
+          "spec": "I-4",
+          "status": "rewritten"
+        },
         "GetBorderBlockAt": {
           "reason": "Border-block fallback for any camera viewport position outside the current layout's own grid, ported into viewport::cell_at (rendering-only; movement's own border handling stays out of MapRuntime's scope per issue #108).",
           "rust_target": "crates/pokeemerald-rs/src/overworld/viewport.rs",
@@ -26146,6 +26176,12 @@
           "reason": "Primary-vs-secondary tileset attribute table selection (NUM_METATILES_IN_PRIMARY split) re-implemented in MapRuntime::metatile_behavior",
           "rust_target": "crates/engine/src/overworld/map_runtime.rs",
           "spec": "S-5",
+          "status": "rewritten"
+        },
+        "InitBackupMapLayoutConnections": {
+          "reason": "Per-connection dispatch to the four Fill*Connection resolvers re-implemented as connected_cell_at's single match over ConnectionView::direction, called from cell_at on every out-of-bounds viewport sample instead of once per map load into a backing buffer; declaration-order overwrite and the buffer's own coverage band are both preserved (issue #253).",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/viewport.rs",
+          "spec": "I-4",
           "status": "rewritten"
         },
         "IsCoordInConnectingMap": {
