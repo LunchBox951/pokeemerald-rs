@@ -76,7 +76,12 @@ fn pressed(button: Buttons) -> ButtonState {
 /// `OverworldPhase::warp_to` reads at runtime, not a restatement of
 /// their own expectations. Pack-dependent: `#[ignore]`d callers only.
 fn warp_tile_behavior(map: assets::MapId, warp_index: usize) -> ((i16, i16), u8) {
-    let scene = crate::overworld::load_room(map).expect("run `cargo xtask extract` first");
+    let scene = crate::overworld::load_room(
+        map,
+        crate::overworld::PlayerCharacter::Brendan,
+        &engine::event_data::EventData::new(),
+    )
+    .expect("run `cargo xtask extract` first");
     let header = assets::MapHeaderTable::new()
         .header(map)
         .expect("map must resolve in the generated map-header table");
@@ -968,7 +973,12 @@ fn advance_player_one_frame_rejects_a_crossing_outside_the_neighbours_bounds() {
 fn walking_off_littlerootss_north_edge_crosses_into_route_101_and_back() {
     let littleroot = assets::MapId("MAP_LITTLEROOT_TOWN");
     let route101 = assets::MapId("MAP_ROUTE101");
-    let scene = crate::overworld::load_room(littleroot).expect("run `cargo xtask extract` first");
+    let scene = crate::overworld::load_room(
+        littleroot,
+        crate::overworld::PlayerCharacter::Brendan,
+        &engine::event_data::EventData::new(),
+    )
+    .expect("run `cargo xtask extract` first");
 
     // Two ordinary tiles south of the north edge, already facing the
     // direction that will carry it there. No `party_lead` is assigned: see
@@ -1418,7 +1428,12 @@ fn warping_to_the_front_doormat_faces_north_and_rebinds_the_scene() {
          facing (overworld.c:937-938) -- South would mean the destination \
          behavior was never read"
     );
-    let fresh = crate::overworld::load_room(one_f).expect("1F must load from the extracted pack");
+    let fresh = crate::overworld::load_room(
+        one_f,
+        crate::overworld::PlayerCharacter::Brendan,
+        &phase.save1.event_data,
+    )
+    .expect("1F must load from the extracted pack");
     assert!(
         phase.compose_frame()[..]
             == fresh.compose_frame(&phase.player, &phase.save1.event_data, 0)[..],
@@ -1427,12 +1442,65 @@ fn warping_to_the_front_doormat_faces_north_and_rebinds_the_scene() {
     );
 }
 
+/// `ClearTempFieldEventData` (`overworld.c:848`, in `LoadMapFromWarp`,
+/// ahead of `RunOnTransitionMapScript` at `:860`): a warp clears the
+/// per-map-load temp flag/var ranges -- load-bearing since Route 103's
+/// cuttable-tree object events ride `FLAG_TEMP_12`/`_13`
+/// (`assets::object_event_flags`, issue #248) -- while ordinary persistent
+/// state survives untouched. The connection-crossing sibling
+/// (`LoadMapFromCameraTransition`, `:798`) is pinned by
+/// `route103_rival_tests::walking_north_from_route_101_crosses_oldale_town_into_route_103`.
+#[test]
+#[ignore = "needs a local pack: run `cargo xtask extract` first"]
+fn warping_clears_temp_field_event_data_but_not_persistent_flags() {
+    // `FLAG_TEMP_12` (`TEMP_FLAGS_START + 0x12`) and `VAR_TEMP_3`
+    // (`TEMP_VARS_START + 0x3`) -- independently transcribed, the same
+    // "each module cites its own constant" convention as everywhere else.
+    const FLAG_TEMP_12: u16 = 0x12;
+    const VAR_TEMP_3: u16 = 0x4003;
+    // An ordinary persistent flag far outside the temp range
+    // (`FLAG_HIDE_ROUTE_103_RIVAL`, `include/constants/flags.h:772`).
+    const FLAG_HIDE_ROUTE_103_RIVAL: u16 = 0x2D3;
+
+    let mut phase = OverworldPhase::load_default().expect("run `cargo xtask extract` first");
+    phase.save1.event_data.flag_set(FLAG_TEMP_12).unwrap();
+    phase.save1.event_data.var_set(VAR_TEMP_3, 7).unwrap();
+    phase
+        .save1
+        .event_data
+        .flag_set(FLAG_HIDE_ROUTE_103_RIVAL)
+        .unwrap();
+
+    phase.warp_to(assets::MapId("MAP_LITTLEROOT_TOWN_BRENDANS_HOUSE_1F"), 1);
+
+    assert_eq!(
+        phase.save1.event_data.flag_get(FLAG_TEMP_12),
+        Ok(false),
+        "a warp is a map load -- the temp flag range must clear"
+    );
+    assert_eq!(
+        phase.save1.event_data.var_get(VAR_TEMP_3),
+        Ok(0),
+        "and the temp var range with it"
+    );
+    assert_eq!(
+        phase.save1.event_data.flag_get(FLAG_HIDE_ROUTE_103_RIVAL),
+        Ok(true),
+        "while ordinary persistent flags survive the load untouched"
+    );
+}
+
 /// A phase standing on 1F's own floor, for the doormat tests below: a real
 /// pack-loaded [`ONE_F`] scene with the player placed at `position` facing
 /// `facing`, at rest.
 fn one_f_phase(position: (i32, i32), facing: Direction) -> OverworldPhase {
     OverworldPhase::for_test(
-        crate::overworld::load_room(ONE_F).expect("run `cargo xtask extract` first"),
+        crate::overworld::load_room(
+            ONE_F,
+            crate::overworld::PlayerCharacter::Brendan,
+            &engine::event_data::EventData::new(),
+        )
+        .expect("run `cargo xtask extract` first"),
         ONE_F,
         PlayerState::new(position, 3, facing),
         None,
@@ -2931,7 +2999,12 @@ fn taking_the_stairs_does_not_land_in_a_house_full_of_the_rivals_family() {
 fn idle_frames_animate_the_composed_tileset_pixels() {
     let town = assets::MapId("MAP_LITTLEROOT_TOWN");
     let mut phase = OverworldPhase::for_test(
-        crate::overworld::load_room(town).expect("run `cargo xtask extract` first"),
+        crate::overworld::load_room(
+            town,
+            crate::overworld::PlayerCharacter::Brendan,
+            &engine::event_data::EventData::new(),
+        )
+        .expect("run `cargo xtask extract` first"),
         town,
         PlayerState::new((10, 17), 3, Direction::South),
         None,
@@ -3089,7 +3162,12 @@ fn warping_restarts_the_wild_encounter_immunity_window() {
 fn crossing_a_map_connection_restarts_the_wild_encounter_immunity_window() {
     let littleroot = MapId("MAP_LITTLEROOT_TOWN");
     let route101 = MapId("MAP_ROUTE101");
-    let scene = crate::overworld::load_room(littleroot).expect("run `cargo xtask extract` first");
+    let scene = crate::overworld::load_room(
+        littleroot,
+        crate::overworld::PlayerCharacter::Brendan,
+        &engine::event_data::EventData::new(),
+    )
+    .expect("run `cargo xtask extract` first");
     let mut phase = OverworldPhase::for_test(
         scene,
         littleroot,
@@ -3588,7 +3666,12 @@ fn the_trigger_draws_off_the_phases_single_shared_stream() {
 fn real_pack_crossing_into_route_101_primes_the_rescue_var_on_arrival() {
     let littleroot = assets::MapId("MAP_LITTLEROOT_TOWN");
     let route101 = assets::MapId("MAP_ROUTE101");
-    let scene = crate::overworld::load_room(littleroot).expect("run `cargo xtask extract` first");
+    let scene = crate::overworld::load_room(
+        littleroot,
+        crate::overworld::PlayerCharacter::Brendan,
+        &engine::event_data::EventData::new(),
+    )
+    .expect("run `cargo xtask extract` first");
 
     // One tile south of Littleroot's own last interior row (the walkable
     // `x = 10` column `walking_off_littlerootss_north_edge_crosses_into_route_101_and_back`
@@ -3641,7 +3724,12 @@ fn real_pack_crossing_into_route_101_primes_the_rescue_var_on_arrival() {
 fn real_pack_crossing_into_route_101_lands_on_the_rescue_trigger_and_starts_the_battle() {
     let littleroot = assets::MapId("MAP_LITTLEROOT_TOWN");
     let route101 = assets::MapId("MAP_ROUTE101");
-    let scene = crate::overworld::load_room(littleroot).expect("run `cargo xtask extract` first");
+    let scene = crate::overworld::load_room(
+        littleroot,
+        crate::overworld::PlayerCharacter::Brendan,
+        &engine::event_data::EventData::new(),
+    )
+    .expect("run `cargo xtask extract` first");
 
     let player = PlayerState::new((10, 2), 3, Direction::North);
     let mut phase = OverworldPhase::for_test(scene, littleroot, player, None);
