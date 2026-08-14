@@ -1018,7 +1018,11 @@ fn real_pack_loads_and_every_typed_accessor_works() {
 
     // Every Littleroot Town layout's map/border bytes should be present and
     // decode through `crate::map_layouts`'s typed grid views, using the
-    // hand-transcribed `LayoutTable` metadata for dimensions.
+    // hand-transcribed `LayoutTable` metadata for dimensions -- plus the
+    // three connection targets outside that family this pipeline bundles:
+    // `LAYOUT_ROUTE101` (issue #177), `LAYOUT_OLDALE_TOWN`/`LAYOUT_ROUTE103`
+    // (issue #248), mirroring `crates/xtask/src/extract/mod.rs`'s own
+    // `LAYOUTS` table exactly.
     let table = LayoutTable::new();
     for (layout_id, pack_name) in [
         ("LAYOUT_LITTLEROOT_TOWN", "littleroot_town"),
@@ -1046,6 +1050,9 @@ fn real_pack_loads_and_every_typed_accessor_works() {
             "LAYOUT_LITTLEROOT_TOWN_PROFESSOR_BIRCHS_LAB_WITH_TABLE",
             "littleroot_town_professor_birchs_lab_with_table",
         ),
+        ("LAYOUT_ROUTE101", "route101"),
+        ("LAYOUT_OLDALE_TOWN", "oldale_town"),
+        ("LAYOUT_ROUTE103", "route103"),
     ] {
         let layout = table
             .layout(LayoutId(layout_id))
