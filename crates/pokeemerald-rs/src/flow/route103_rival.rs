@@ -71,24 +71,27 @@
 //! `BATTLE_TYPE_TRAINER` outright (`battle_main.c:700`, `src/pokemon.c:6682`),
 //! so upstream does not spend it either.
 //!
-//! # Explicitly out of scope: getting to Route 103 at all
+//! # Reachability: wired from real play since issue #248
 //!
 //! Issue #237 scoped the rules, the construction and the driver, and *not*
-//! the overworld reachability — no `Route103_EventScript_Rival` trigger, no
-//! trainer sight cone (`TrainerApproachPlayer`), no
-//! `BattleSetup_ConfigureTrainerBattle`/`DoTrainerBattle` entry
-//! (`src/battle_setup.c:459`), and no rival-approach cutscene. This
-//! module is therefore reachable only from its own tests today, exactly as
-//! `crate::flow::first_battle` was between issues #221 and #231. The gap is
-//! recorded on the `src/battle_setup.c#DoTrainerBattle` ledger entry rather
-//! than papered over.
+//! the overworld reachability; issue #248 wired that on top.
+//! `overworld_phase::route103_rival_trigger` recognizes the rival's
+//! `Route103_EventScript_Rival` object event on an A-press
+//! (`is_rival_trigger`), and its `begin_route103_rival_battle` is this
+//! module's production caller. What that trigger covers and what it still
+//! defers is recorded on the `src/battle_setup.c#DoTrainerBattle` ledger
+//! entry: the trainer sight cone (`TrainerApproachPlayer`), the
+//! rival-approach cutscene, and `RivalEnd`'s seven post-battle script lines
+//! remain unmodelled (issue #264).
 //!
-//! Which of the six `TRAINER_*_ROUTE_103_*` rivals a real playthrough fights
-//! is likewise not decided here: it depends on the player's gender (Brendan
-//! or May) and on `VAR_STARTER_MON`, both set by script chains this port has
-//! no engine for. [`route103_rival_for`] exposes the *table* — the mapping
-//! upstream's `Route103_EventScript_*` scripts encode — so a later slice can
-//! wire the choice up without re-deriving it.
+//! Which of the six `TRAINER_*_ROUTE_103_*` rivals a playthrough fights is
+//! decided by that caller too: [`Rival::for_gender`] reads the saved
+//! `player_gender` (always the *opposite* protagonist), and
+//! [`PlayerStarter::from_species`] maps the party lead's own species —
+//! `VAR_STARTER_MON` itself is still not modelled, so the lead's real
+//! species is the honest stand-in. [`route103_rival_for`] exposes the
+//! *table* — the mapping upstream's `Route103_EventScript_*` scripts
+//! encode — independently of that derivation.
 
 use assets::trainers::{TrainerData, TrainerId, TrainerParty};
 use assets::{MoveId, SpeciesId, SpeciesNames};
@@ -110,6 +113,32 @@ pub enum PlayerStarter {
     Mudkip,
 }
 
+impl PlayerStarter {
+    /// The honest species -> [`PlayerStarter`] mapping issue #248 (I-5)
+    /// needs to reach [`route103_rival_for`] from an actual battle-facing
+    /// lead, since `VAR_STARTER_MON` itself is not modelled (module docs'
+    /// "Explicitly out of scope" section: no starter-select UI exists, so
+    /// nothing ever writes it). Every production lead this is asked about
+    /// is `crate::new_game::PROVISIONAL_STARTER_SPECIES` (Treecko, the
+    /// stand-in for the un-ported Birch-bag handout), but the mapping
+    /// covers the real three starters, not just that one, so it stays
+    /// correct if a future slice ever lets the mon in slot 0 differ.
+    ///
+    /// `None` for any other species -- unreachable in production (the
+    /// provisional starter is always one of the three), but a real `None`
+    /// rather than a guessed starter for, say, a test lead built around an
+    /// arbitrary species.
+    #[must_use]
+    pub const fn from_species(species: SpeciesId) -> Option<Self> {
+        match species.0 {
+            277 => Some(Self::Treecko), // SPECIES_TREECKO
+            280 => Some(Self::Torchic), // SPECIES_TORCHIC
+            283 => Some(Self::Mudkip),  // SPECIES_MUDKIP
+            _ => None,
+        }
+    }
+}
+
 /// Which rival the player faces — the other axis, upstream's player-gender
 /// check (`MALE`/`FEMALE`; the player and the rival are always opposite).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -118,6 +147,30 @@ pub enum Rival {
     Brendan,
     /// A male player's rival: `TRAINER_MAY_ROUTE_103_*`.
     May,
+}
+
+impl Rival {
+    /// The rival a player of `gender` faces (upstream: `Route103_EventScript_Rival`'s
+    /// own `checkplayergender` — module docs; `data/maps/Route103/scripts.inc:19-21`)
+    /// — always the *opposite* protagonist.
+    ///
+    /// `None` for [`engine::save::PlayerGender::Other`]: upstream's
+    /// `checkplayergender` copies the raw `playerGender` byte into
+    /// `VAR_RESULT` and the two `goto_if_eq`s (`MALE`/`FEMALE`) simply fall
+    /// through to `end` for any other byte (`src/scrcmd.c:2014-2018`), so a
+    /// save with an out-of-range gender byte starts no battle at all —
+    /// the same no-op `crate::new_game::apply_truck_intro_flags` already
+    /// documents for its own `checkplayergender` branch. Unreachable in
+    /// production: [`crate::new_game::DEFAULT_PLAYER_GENDER`] is always
+    /// `Male` or `Female`, and nothing else writes the field.
+    #[must_use]
+    pub const fn for_gender(gender: engine::save::PlayerGender) -> Option<Self> {
+        match gender {
+            engine::save::PlayerGender::Male => Some(Self::May),
+            engine::save::PlayerGender::Female => Some(Self::Brendan),
+            engine::save::PlayerGender::Other(_) => None,
+        }
+    }
 }
 
 /// The six `TRAINER_*_ROUTE_103_*` ids

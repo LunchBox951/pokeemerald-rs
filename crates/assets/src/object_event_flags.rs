@@ -17,16 +17,20 @@
 //! Littleroot Town layout family (the town itself, both player houses'
 //! floors, Professor Birch's lab) plus, since issue #177, `LAYOUT_ROUTE101`
 //! (Littleroot's own north map connection, and I-4's traversal
-//! prerequisite), so [`resolve`] only ever needs to answer for a flag name
-//! actually reachable from one of *those* maps' own `object_events` --
-//! every such name (**46**: the 34 distinct `FLAG_HIDE_*` ids carried by
-//! object events across all seven maps, plus the twelve generic
-//! `FLAG_DECORATION_1..12` ids Littleroot's two player-house bedrooms also
-//! carry; the literal `"0"` no-flag sentinel is handled by [`resolve`]
-//! itself and is not a table entry) is transcribed below. A name outside
-//! this set can never occur for any map this port renders, so extending the
-//! table further would transcribe data no code here consumes -- the same
-//! bounded-scope reasoning
+//! prerequisite), plus, since issue #248, `LAYOUT_OLDALE_TOWN`/
+//! `LAYOUT_ROUTE103` (the next two links of that same connection chain,
+//! and I-5's Route 103 rival battle traversal prerequisite), so [`resolve`]
+//! only ever needs to answer for a flag name actually reachable from one of
+//! *those* maps' own `object_events` -- every such name (**53**: the 37
+//! distinct `FLAG_HIDE_*` ids carried by object events across all nine
+//! maps, the twelve generic `FLAG_DECORATION_1..12` ids Littleroot's two
+//! player-house bedrooms also carry, and four more that are neither --
+//! Route 103's own two `FLAG_TEMP_*` cuttable-tree ids and two
+//! `FLAG_ITEM_*` hidden-item ids; the literal `"0"` no-flag sentinel is
+//! handled by [`resolve`] itself and is not a table entry) is transcribed
+//! below. A name outside this set can never occur for any map this port
+//! renders, so extending the table further would transcribe data no code
+//! here consumes -- the same bounded-scope reasoning
 //! `crates/pokeemerald-rs/src/overworld/mod.rs`'s `resolve_tileset_pack_name`
 //! already applies to the five tilesets that pipeline bundles.
 //!
@@ -91,6 +95,25 @@ const OBJECT_EVENT_FLAGS: &[(&str, u16)] = &[
     ("FLAG_HIDE_ROUTE_101_BIRCH_ZIGZAGOON_BATTLE", 0x2D0),
     ("FLAG_HIDE_ROUTE_101_BOY", 0x3DF),
     ("FLAG_HIDE_ROUTE_101_ZIGZAGOON", 0x2EE),
+    // Oldale Town (issue #248, `data/maps/OldaleTown/map.json`'s own
+    // `object_events`) -- the second link of the Route 101 <-> Oldale Town
+    // <-> Route 103 connection chain I-5's Route 103 rival battle needs.
+    ("FLAG_HIDE_OLDALE_TOWN_RIVAL", 0x3D3),
+    // Route 103 (issue #248, `data/maps/Route103/map.json`'s own
+    // `object_events`) -- the third link, and I-5's own traversal target.
+    ("FLAG_HIDE_ROUTE_103_BIRCH", 0x382),
+    ("FLAG_HIDE_ROUTE_103_RIVAL", 0x2D3),
+    // Route 103's two cuttable trees and two hidden items are the first
+    // `FLAG_TEMP_*`/`FLAG_ITEM_*` ids this table carries: every map bundled
+    // before issue #248 happened to declare none. `FLAG_TEMP_12`/`_13`
+    // (`TEMP_FLAGS_START + 0x12`/`0x13`) are ordinary per-map-load-cleared
+    // temp flags reused by countless other cuttable trees across the game;
+    // nothing here is Route-103-specific about the *id*, only about which
+    // object event on a bundled map happens to carry it.
+    ("FLAG_TEMP_12", 0x12),
+    ("FLAG_TEMP_13", 0x13),
+    ("FLAG_ITEM_ROUTE_103_GUARD_SPEC", 0x45A),
+    ("FLAG_ITEM_ROUTE_103_PP_UP", 0x471),
 ];
 
 /// Resolve an `ObjectEvent::flag` string into the numeric id
@@ -156,7 +179,7 @@ mod tests {
     /// This crate's mirror of `crates/xtask/src/extract/mod.rs`'s `LAYOUTS`
     /// -- the layout family the extraction pipeline bundles, and so the
     /// exact scope [`OBJECT_EVENT_FLAGS`] has to cover (module docs).
-    const BUNDLED_LAYOUTS: [&str; 8] = [
+    const BUNDLED_LAYOUTS: [&str; 10] = [
         "LAYOUT_LITTLEROOT_TOWN",
         "LAYOUT_LITTLEROOT_TOWN_BRENDANS_HOUSE_1F",
         "LAYOUT_LITTLEROOT_TOWN_BRENDANS_HOUSE_2F",
@@ -165,6 +188,8 @@ mod tests {
         "LAYOUT_LITTLEROOT_TOWN_PROFESSOR_BIRCHS_LAB",
         "LAYOUT_LITTLEROOT_TOWN_PROFESSOR_BIRCHS_LAB_WITH_TABLE",
         "LAYOUT_ROUTE101",
+        "LAYOUT_OLDALE_TOWN",
+        "LAYOUT_ROUTE103",
     ];
 
     /// Every map whose generated header names one of [`BUNDLED_LAYOUTS`] --
@@ -266,10 +291,12 @@ mod tests {
     }
 
     /// The module docs' own arithmetic, pinned so it can't drift: the table
-    /// is exactly 46 entries, 34 `FLAG_HIDE_*` plus 12
-    /// `FLAG_DECORATION_*`, and nothing else.
+    /// is exactly 53 entries, 37 `FLAG_HIDE_*`, 12 `FLAG_DECORATION_*`, and
+    /// 4 more (`FLAG_TEMP_12`/`_13`, `FLAG_ITEM_ROUTE_103_GUARD_SPEC`/
+    /// `_PP_UP`) that are neither -- Route 103's cuttable trees and hidden
+    /// items (issue #248).
     #[test]
-    fn the_table_is_the_documented_34_hide_plus_12_decoration_entries() {
+    fn the_table_is_the_documented_37_hide_plus_12_decoration_plus_4_other_entries() {
         let hide = OBJECT_EVENT_FLAGS
             .iter()
             .filter(|(name, _)| name.starts_with("FLAG_HIDE_"))
@@ -278,21 +305,32 @@ mod tests {
             .iter()
             .filter(|(name, _)| name.starts_with("FLAG_DECORATION_"))
             .count();
-        assert_eq!((hide, decoration), (34, 12), "module docs' own counts");
+        let other = OBJECT_EVENT_FLAGS
+            .iter()
+            .filter(|(name, _)| {
+                !name.starts_with("FLAG_HIDE_") && !name.starts_with("FLAG_DECORATION_")
+            })
+            .count();
         assert_eq!(
-            hide + decoration,
-            OBJECT_EVENT_FLAGS.len(),
-            "every entry must be one of those two families"
+            (hide, decoration, other),
+            (37, 12, 4),
+            "module docs' own counts"
         );
-        assert_eq!(OBJECT_EVENT_FLAGS.len(), 46);
+        assert_eq!(
+            hide + decoration + other,
+            OBJECT_EVENT_FLAGS.len(),
+            "every entry must be one of those three families"
+        );
+        assert_eq!(OBJECT_EVENT_FLAGS.len(), 53);
     }
 
-    /// Every object event on the seven Littleroot-family-plus-Route-101
-    /// maps this port's extraction pipeline loads must resolve -- the whole
-    /// point of the bounded table (module docs). A `None` here would mean
-    /// an object event this port can actually render has an unresolvable
-    /// hide flag. The table must also carry *nothing else*: that equality
-    /// is what keeps the module docs' "34 + 12" honest as map data changes.
+    /// Every object event on the nine Littleroot-family-plus-Route-101-plus-
+    /// Oldale-Town-plus-Route-103 maps this port's extraction pipeline loads
+    /// must resolve -- the whole point of the bounded table (module docs).
+    /// A `None` here would mean an object event this port can actually
+    /// render has an unresolvable hide flag. The table must also carry
+    /// *nothing else*: that equality is what keeps the module docs' "37 +
+    /// 12 + 4" honest as map data changes.
     ///
     /// The map set is **derived**, not listed: every map whose header names
     /// one of [`BUNDLED_LAYOUTS`] (this crate's mirror of
@@ -308,10 +346,11 @@ mod tests {
         let maps = bundled_maps();
         assert_eq!(
             maps.len(),
-            7,
-            "the eight bundled layouts cover seven maps (the lab's \
+            9,
+            "the ten bundled layouts cover nine maps (the lab's \
              `_WITH_TABLE` variant is an alternate layout for a map already \
-             listed, not a map of its own; Route 101 -- issue #177 -- is)"
+             listed, not a map of its own; Route 101 -- issue #177 -- Oldale \
+             Town and Route 103 -- issue #248 -- each are)"
         );
         let mut reachable: Vec<&str> = Vec::new();
         for map in maps {
