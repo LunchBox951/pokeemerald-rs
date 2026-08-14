@@ -409,12 +409,20 @@ impl OverworldPhase {
     ///   panicking.
     /// * **Event flags and vars, money, bag, party, player identity** --
     ///   carried wholesale in `block1`/`block2`, which become this phase's
-    ///   own save state. Nothing is re-initialized: in particular
+    ///   own save state, with one modelled exception: Route 101's on-frame
+    ///   `VAR_ROUTE101_STATE` update
+    ///   ([`first_battle_trigger::sync_route_101_state_on_entry`]), which
+    ///   this constructor also runs, same as every other map-entry point.
+    ///   Otherwise nothing is re-initialized: in particular
     ///   `run_on_transition_map_script` is deliberately *not* run here.
     ///   Upstream agrees -- `CB2_ContinueSavedGame` runs
     ///   `InitMapFromSavedGame` -> `RunOnLoadMapScript`
     ///   (`src/fieldmap.c:69-76`), never `RunOnTransitionMapScript`, because
-    ///   the flags that script would set are already in the save file.
+    ///   the flags that script would set are already in the save file; the
+    ///   on-frame update is separate, ordinary field processing that runs
+    ///   regardless of how the field was reached
+    ///   (`src/field_control_avatar.c:147-151`,
+    ///   `src/script.c:299-325,353-362`).
     ///
     /// * **The battle-facing party lead** -- decoded out of
     ///   `block1.player_party[0]` by
@@ -481,6 +489,13 @@ impl OverworldPhase {
             rival_battle_outcome: None,
         };
         phase.copy_party_and_objects_from_save();
+        // Route 101's own on-frame `VAR_ROUTE101_STATE` bump (issue #231,
+        // `first_battle_trigger`'s module docs) -- a no-op for every other
+        // `map_id`. A continue reaches the field through the ordinary field
+        // callbacks, which poll the on-frame map script same as any other
+        // frame (`src/field_control_avatar.c:147-151`), so this runs here
+        // too rather than only on the three transition paths.
+        first_battle_trigger::sync_route_101_state_on_entry(map_id, &mut phase.save1.event_data);
         phase
     }
 

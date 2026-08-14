@@ -61,6 +61,14 @@ pub enum AudioError {
     /// encoding's `u32` length field can describe. Carries the sample count
     /// found.
     SampleTooLong(usize),
+    /// A [`super::sample::DirectSoundSample`] was built
+    /// ([`super::sample::DirectSoundSample::new`]) or decoded with a `Some`
+    /// loop start at or past its PCM payload's length — upstream's mixer
+    /// computes the loop region's length as `size - loopStart`
+    /// (`pokeemerald/src/m4a_1.s`), so a looping region must be nonempty:
+    /// `loop_start < sample_count`. Carries the offending loop start and the
+    /// sample count it was checked against.
+    LoopStartOutOfRange { loop_start: u32, sample_count: u32 },
     /// A [`super::voicegroup::DirectSoundVoice`]'s pan override was
     /// `Some(0)`, which the wire format cannot distinguish from `None` (the
     /// `0` byte is the no-override sentinel, mirroring upstream's own `0`
@@ -134,6 +142,14 @@ impl fmt::Display for AudioError {
                 f,
                 "audio-pack sample: {len} samples exceeds the maximum of {}",
                 u32::MAX
+            ),
+            Self::LoopStartOutOfRange {
+                loop_start,
+                sample_count,
+            } => write!(
+                f,
+                "audio-pack sample: loop start {loop_start} is not less than \
+                 the sample count {sample_count}"
             ),
             Self::PanOverrideZero => write!(
                 f,

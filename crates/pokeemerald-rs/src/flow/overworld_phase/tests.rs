@@ -3353,30 +3353,34 @@ fn entering_a_different_map_leaves_the_rescue_var_at_its_fresh_save_zero() {
     assert_eq!(phase.save1.event_data.var_get(VAR_ROUTE101_STATE), Ok(0));
 }
 
-/// The entry bump's documented idempotency, pinned directly rather than by
-/// accident: `sync_route_101_state_on_entry` only ever moves `0 -> 1`, so a
-/// post-rescue save (var `2`) entering Route 101 keeps its `2` -- without
-/// the guard, re-entering the map would re-open the trigger and re-fight
-/// the scripted Zigzagoon (issue #231 review).
+/// The entry bump's fresh-save behavior *and* its documented idempotency,
+/// pinned through the real continue constructor: `OverworldPhase::from_saved`
+/// must run `sync_route_101_state_on_entry` exactly as `Self::new`,
+/// `Self::warp_to`, and `Self::cross_connection` already do, so a fresh save
+/// (var `0`) resumed on Route 101 still gets bumped to `1`, and every later
+/// story state (`1`, `2`, `3`) resumes unchanged -- without that guard,
+/// re-entering the map on a post-rescue save would re-open the trigger and
+/// re-fight the scripted Zigzagoon (issue #231 review).
 #[test]
-fn re_entering_route_101_after_the_rescue_leaves_the_var_at_two() {
-    let mut phase = route_101_trigger_phase(PlayerState::new((0, 0), 3, Direction::East));
-    phase
-        .save1
-        .event_data
-        .var_set(VAR_ROUTE101_STATE, 2)
-        .unwrap();
-    // A fresh entry through the production sync helper (the same one all
-    // three map-entry points call) must be a no-op on a consumed state.
-    super::first_battle_trigger::sync_route_101_state_on_entry(
-        phase.map_id,
-        &mut phase.save1.event_data,
-    );
-    assert_eq!(
-        phase.save1.event_data.var_get(VAR_ROUTE101_STATE),
-        Ok(2),
-        "the entry bump is 0 -> 1 only; a consumed trigger must stay consumed"
-    );
+fn continuing_on_route_101_only_advances_the_fresh_rescue_state() {
+    for (saved_state, expected_state) in [(0, 1), (1, 1), (2, 2), (3, 3)] {
+        let (mut block1, block2) = new_game::init_save_blocks_for_new_game();
+        block1
+            .event_data
+            .var_set(VAR_ROUTE101_STATE, saved_state)
+            .unwrap();
+        let resumed = OverworldPhase::from_saved(
+            crate::overworld::tests::synthetic_scene(25, 25),
+            MapId("MAP_ROUTE101"),
+            block1,
+            block2,
+        );
+        assert_eq!(
+            resumed.save1.event_data.var_get(VAR_ROUTE101_STATE),
+            Ok(expected_state),
+            "a saved VAR_ROUTE101_STATE of {saved_state} must resume as {expected_state}"
+        );
+    }
 }
 
 /// The acceptance path this issue exists for: stepping onto the real Route

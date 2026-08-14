@@ -479,15 +479,12 @@ mod tests {
 
     /// `is_warp_trigger` is the **door-shaped** trigger predicate only
     /// (upstream `IsWarpMetatileBehavior`) — none of the arrow-warp ids (nor
-    /// their door-alias siblings) widen it, even though the arrow ids among
-    /// them *are* triggers under the separate direction-gated
-    /// `is_north_arrow_warp`-family predicates (updated for issue #174: this
-    /// test used to pin the whole list outside *any* warp trigger, back when
-    /// arrow warps were not ported at all — see
-    /// `arrow_warp_predicates_match_only_their_own_direction` below for what
-    /// replaced that claim for the arrow ids specifically).
+    /// their door-alias siblings) widen it. The arrow ids among them *are*
+    /// triggers, but only under the separate direction-gated
+    /// `is_north_arrow_warp`-family predicates tested in
+    /// `arrow_warp_predicates_match_only_their_own_direction` below.
     #[test]
-    fn arrival_facing_only_ids_are_not_door_shaped_warp_triggers() {
+    fn arrow_warp_and_arrival_facing_only_ids_are_not_door_shaped_warp_triggers() {
         for behavior in [
             MB_STAIRS_OUTSIDE_ABANDONED_SHIP,
             MB_SHOAL_CAVE_ENTRANCE,

@@ -70,7 +70,12 @@ const FRAME_ID: u8 = 0;
 
 /// `FillWindowPixelBuffer(windowId, PIXEL_FILL(1))`
 /// (`DrawStdWindowFrame`, `src/menu.c:228`): the window-content fill is
-/// palette index 1 of the standard frame's own palette.
+/// palette index 1 of the window's own buffer, which every window here
+/// loads onto palette bank 15 -- the message-box palette
+/// (`LoadMessageBoxAndBorderGfx`/`LoadMessageBoxGfx`,
+/// `src/text_window.c:93-112,187-190`) -- while the surrounding standard
+/// border tiles stay on bank 14, the selected frame's own palette
+/// (`pokeemerald/src/menu.c:23-27,98-107,210-213,490-494`).
 const CONTENT_FILL_INDEX: usize = 1;
 /// `gFontInfos[FONT_NORMAL].fgColor` (`src/text.c:137`).
 const FONT_FG_INDEX: usize = 2;
@@ -150,20 +155,23 @@ impl StartMenuChrome {
 
     /// The glyph-index -> colour mapping every window here prints with:
     /// `FONT_NORMAL`'s own default `fgColor`/`shadowColor` indices, read
-    /// out of the standard frame's palette. Index 0 (background) and index
-    /// 3 (box) stay transparent -- the window content rect is already
-    /// filled [`CONTENT_FILL_INDEX`] before any glyph is drawn, exactly as
+    /// out of the message-box palette that every window buffer here loads
+    /// onto bank 15 -- not the standard frame's own bank-14 palette, which
+    /// only the border tiles use. Index 0 (background) and index 3 (box)
+    /// stay transparent -- the window content rect is already filled
+    /// [`CONTENT_FILL_INDEX`] before any glyph is drawn, exactly as
     /// `DrawStdWindowFrame`'s own `FillWindowPixelBuffer` does.
     fn glyph_colors(&self) -> [Option<Rgb888>; 4] {
-        let color = |index: usize| self.std_frame.palette.get(index).copied();
+        let color = |index: usize| self.message_frame.palette.get(index).copied();
         [None, color(FONT_FG_INDEX), color(FONT_SHADOW_INDEX), None]
     }
 
-    /// [`CONTENT_FILL_INDEX`]'s real colour, or black for a frame palette
-    /// too short to have one (unreachable against an extracted pack, whose
+    /// [`CONTENT_FILL_INDEX`]'s real colour, out of the message-box
+    /// palette (see [`Self::glyph_colors`]), or black for a palette too
+    /// short to have one (unreachable against an extracted pack, whose
     /// window palettes are always a full bank).
     fn content_fill(&self) -> Rgb888 {
-        self.std_frame
+        self.message_frame
             .palette
             .get(CONTENT_FILL_INDEX)
             .copied()
