@@ -176,13 +176,18 @@ and Releases add it. Versions compare lexicographically as four unsigned ints.
 | `MAJOR` | large completed acceptance criterion or project phase; breaking repository contract | `MINOR`, `PATCH -> 0` | normal PR flow |
 | `FINAL` | project agreed complete (`0 -> 1`) | `MAJOR`, `MINOR`, `PATCH -> 0` | owner only |
 
-Every pull request must increase `VERSION`; an unchanged or lower version fails
-the policy gate. Choose the highest applicable component from delivered behavior,
-not diff size or parent completion. A closed milestone is at least `MINOR`, and is
-`MAJOR` when it represents a large completed win. A `MAJOR` or `MINOR` bump must
-reset lower components to zero. Promotion does not create a new product change,
-so its source version need only be strictly newer than the target channel's
-current version.
+Every ordinary pull request into `dev` must increase `VERSION`; an unchanged or
+lower version fails the strict transition gate. Choose the highest applicable
+component from delivered behavior, not diff size or parent completion. A closed
+milestone is at least `MINOR`, and is `MAJOR` when it represents a large completed
+win. Higher-tier bumps reset lower components as listed above, and a `FINAL` bump
+must carry fresh approval as described below.
+
+Channel promotions and post-merge health checks compare cumulative endpoints.
+They require canonical versions and preserve channel ordering without replaying
+reset or `FINAL`-marker rules already enforced when each change entered `dev`.
+Promotion and release transitions require the source to be strictly newer;
+branch-health comparisons permit equality.
 
 ## The `FINAL` gate
 
