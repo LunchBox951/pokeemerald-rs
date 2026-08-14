@@ -254,7 +254,12 @@ fn check_overworld_scene() -> Result<(), E2eError> {
     const AVATAR_Y: usize = 64;
     const SCREEN_W: usize = 240;
 
-    let scene = match pokeemerald_rs::overworld::load_default_room() {
+    // A fresh (all-clear) event-flag store: this check only cares that the
+    // frame composes deterministically and non-blank, not about any
+    // particular object event's hide-flag state.
+    let event_data = pokeemerald_rs::overworld::EventData::default();
+
+    let scene = match pokeemerald_rs::overworld::load_default_room(&event_data) {
         Ok(scene) => scene,
         Err(err) if err.is_pack_missing() => return Ok(()),
         Err(err) => return Err(E2eError::OverworldSceneFailed(err.to_string())),
@@ -270,11 +275,6 @@ fn check_overworld_scene() -> Result<(), E2eError> {
         3,
         pokeemerald_rs::overworld::Direction::South,
     );
-    // A fresh (all-clear) event-flag store: this check only cares that the
-    // frame composes deterministically and non-blank, not about any
-    // particular object event's hide-flag state.
-    let event_data = pokeemerald_rs::overworld::EventData::default();
-
     // Determinism at *two different* ticks (issue #160), not just at tick 0:
     // a `tick` argument that never reached `compose` at all would leave this
     // check passing on a single hardcoded value forever. The two ticks'

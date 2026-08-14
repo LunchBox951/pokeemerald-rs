@@ -182,18 +182,20 @@ impl From<TitleSceneError> for AppError {
 ///
 /// Scenarios assert these states after driving the production
 /// [`App::step`] loop; the owned scene objects remain private. Battle
-/// variants distinguish the two modes that temporarily freeze overworld
+/// variants distinguish the three modes that temporarily freeze overworld
 /// movement, which lets I-7's future `boot-to-first-fight` scenario prove
-/// it reached the scripted fight rather than merely Route 101.
+/// it reached the scripted fight rather than merely Route 101, and (issue
+/// #248) a Route 103 rival-battle scenario prove the same for that fight.
 ///
 /// The battle variants share one edge-frame timing a scenario script must
 /// account for: the fight is scheduled at the end of the [`App::step`]
 /// call whose movement triggered it (before any turn has run), so that
 /// landing frame already reports [`AppState::WildBattle`] /
-/// [`AppState::FirstBattle`] -- and the step that plays the battle's final
-/// turn also clears the battle slot as it resolves, so the concluding
-/// frame reports [`AppState::Overworld`] again. Assert battle states on
-/// the triggering frame, not on the frame the fight finishes.
+/// [`AppState::FirstBattle`] / [`AppState::TrainerBattle`] -- and the step
+/// that plays the battle's final turn also clears the battle slot as it
+/// resolves, so the concluding frame reports [`AppState::Overworld`]
+/// again. Assert battle states on the triggering frame, not on the frame
+/// the fight finishes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AppState {
     /// The pack-free synthetic scene built by [`App::new_headless`].
@@ -214,6 +216,9 @@ pub enum AppState {
     /// Route 101's scripted first battle is running inside the overworld
     /// phase (edge-frame timing: enum docs above).
     FirstBattle,
+    /// The Route 103 rival battle is running inside the overworld phase
+    /// (issue #248; edge-frame timing: enum docs above).
+    TrainerBattle,
 }
 
 /// The GBA button names in [`Buttons`] bit order, used only to format a
@@ -607,6 +612,9 @@ impl App {
             Some(AppScene::Overworld(phase)) if phase.is_wild_battle_active() => {
                 AppState::WildBattle
             }
+            Some(AppScene::Overworld(phase)) if phase.is_rival_battle_active() => {
+                AppState::TrainerBattle
+            }
             Some(AppScene::Overworld(_)) => AppState::Overworld,
         }
     }
@@ -619,6 +627,18 @@ impl App {
     pub fn first_battle_outcome(&self) -> Option<BattleOutcome> {
         match self.scene.as_ref() {
             Some(AppScene::Overworld(phase)) => phase.first_battle_outcome(),
+            _ => None,
+        }
+    }
+
+    /// Return the retained terminal outcome of the Route 103 rival battle
+    /// (issue #248), if the current game flow has completed one
+    /// successfully. See [`Self::first_battle_outcome`] for what an empty
+    /// result distinguishes.
+    #[must_use]
+    pub fn rival_battle_outcome(&self) -> Option<BattleOutcome> {
+        match self.scene.as_ref() {
+            Some(AppScene::Overworld(phase)) => phase.rival_battle_outcome(),
             _ => None,
         }
     }
