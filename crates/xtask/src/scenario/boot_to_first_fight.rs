@@ -60,7 +60,7 @@
 //! warp; one more tile clears the landing's fencing on Littleroot Town's
 //! side; six tiles east and nine north reach the map's own last interior
 //! row at the real walkable `x` column
-//! (`pokeemerald_rs::flow::overworld_phase::tests::walking_off_littlerootss_north_edge_crosses_into_route_101_and_back`'s
+//! (`pokeemerald_rs::flow::overworld_phase::connections_tests::walking_off_littlerootss_north_edge_crosses_into_route_101_and_back`'s
 //! own doc comment already pins `x` in `{10, 11}`); the tenth north tile
 //! crosses Littleroot's own north edge (`offset: 0` both ways) and lands
 //! exactly on Route 101's real rescue coord-event trigger
@@ -170,7 +170,7 @@ const SEGMENTS: &[Segment] = &[
     // `pokeemerald_rs::new_game::NEW_GAME_RNG_SEED`, so the battle always
     // begins at one exact position in the new-game RNG stream. No test
     // anywhere asserts this three-frame count -- the closest,
-    // `pokeemerald_rs::flow::overworld_phase::tests::real_pack_crossing_into_route_101_lands_on_the_rescue_trigger_and_starts_the_battle`,
+    // `pokeemerald_rs::flow::overworld_phase::first_battle_trigger_tests::real_pack_crossing_into_route_101_lands_on_the_rescue_trigger_and_starts_the_battle`,
     // drives an unbudgeted up-to-500-frame loop and never checks how many
     // frames it took -- so no test elsewhere can stand in as the source of
     // this number.
@@ -190,7 +190,7 @@ const SEGMENTS: &[Segment] = &[
     // `OverworldPhase::advance_first_battle_frame` owns the whole frame
     // once a first battle is running -- `RIGHT` only mirrors the choice
     // made by
-    // `pokeemerald_rs::flow::overworld_phase::tests::real_pack_crossing_into_route_101_lands_on_the_rescue_trigger_and_starts_the_battle`,
+    // `pokeemerald_rs::flow::overworld_phase::first_battle_trigger_tests::real_pack_crossing_into_route_101_lands_on_the_rescue_trigger_and_starts_the_battle`,
     // which drives its own (unbudgeted, up-to-500-frame) loop the same way.
     Segment {
         buttons: AppButtons::RIGHT,
