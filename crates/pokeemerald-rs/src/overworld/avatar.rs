@@ -54,6 +54,7 @@
 
 use assets::{ImageRef, PaletteRef};
 use engine::overworld::{Direction, PlayerState, WALK_FRAMES_PER_TILE};
+use engine::save::PlayerGender;
 use rendering::{Bgr555, BitDepth, OamEntry, ObjShape, Palette};
 
 use super::{OverworldSceneError, METATILE_PX, PLAYER_VIEW_COL, PLAYER_VIEW_ROW};
@@ -235,6 +236,15 @@ impl PlayerCharacter {
     }
 }
 
+impl From<PlayerGender> for PlayerCharacter {
+    fn from(gender: PlayerGender) -> Self {
+        match gender {
+            PlayerGender::Female => Self::May,
+            PlayerGender::Male | PlayerGender::Other(_) => Self::Brendan,
+        }
+    }
+}
+
 /// Validate and pack a 9-frame "people" sheet's raw pixels into the GBA's
 /// packed 4bpp tile byte stream (module docs' frame table): every one of
 /// upstream's `overworld_frame(<pic>, 2, 4, n)` walking-sheet pics --
@@ -372,6 +382,22 @@ mod tests {
     /// collision check never consults it.
     const NO_FLAGS: EventData = EventData::new();
     use rendering::Tileset;
+
+    #[test]
+    fn player_gender_selects_the_matching_character_with_brendan_as_fallback() {
+        assert_eq!(
+            PlayerCharacter::from(PlayerGender::Male),
+            PlayerCharacter::Brendan
+        );
+        assert_eq!(
+            PlayerCharacter::from(PlayerGender::Female),
+            PlayerCharacter::May
+        );
+        assert_eq!(
+            PlayerCharacter::from(PlayerGender::Other(7)),
+            PlayerCharacter::Brendan
+        );
+    }
 
     fn walking_sheet_image(pixels: &[u8]) -> ImageRef<'_> {
         #[allow(clippy::cast_possible_truncation)]
