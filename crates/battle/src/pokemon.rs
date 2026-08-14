@@ -16,7 +16,7 @@
 //! non-volatile status conditions, and the Shedinja 1-HP special case in
 //! `CalculateMonStats`.
 
-use assets::{experience_for_level, BaseStats, MoveId, SpeciesId, Type};
+use assets::{experience_for_level, BaseStats, LevelUpLearnsets, MoveId, SpeciesId, Type};
 
 use crate::dex::Dex;
 use crate::error::BattleError;
@@ -518,36 +518,70 @@ impl BattlePokemon {
     }
 
     /// Add earned experience, applying every crossed level threshold and
-    /// capping both level and total experience at level 100.
+    /// capping both level and total experience at level 100. For every
+    /// level crossed by this call, in order, also teaches that level's
+    /// learnset moves the way upstream's `MonTryLearningNewMove` does —
+    /// **unscreened**, exactly like upstream: a move this crate cannot
+    /// execute yet is still learned, sits in the moveset, and is refused
+    /// per turn when it is *selected* rather than at learn time (see
+    /// [`BattlePokemon::learn_crossed_level_moves`] for why that is the
+    /// consistent posture, and what else it does and does not reproduce).
     ///
     /// Stat recalculation follows `CalculateMonStats`. If maximum HP grows,
     /// the increase is also added to current HP, preserving the absolute
     /// amount of damage the mon had taken before levelling up.
     ///
-    /// # Recorded divergence: a crossed level changes nothing but the level
+    /// # Recorded divergence: EVs and friendship still do not move
     ///
-    /// Upstream's level-up path does more than raise the number. From
-    /// `Cmd_getexp` it runs `BattleScript_LevelUp`
-    /// (`pokeemerald/data/battle_scripts_1.s`), whose `handlelearnnewmove`
-    /// (`Cmd_handlelearnnewmove` → `MonTryLearningNewMove`,
-    /// `src/battle_script_commands.c:5360`, `src/pokemon.c`) teaches each
-    /// crossed level's learnset move — with the four-known-moves
-    /// replacement prompt — and `Cmd_getexp` itself also applies
-    /// `MonGainEVs` (`src/battle_script_commands.c:3420`) and
-    /// `AdjustFriendship(FRIENDSHIP_EVENT_GROW_LEVEL)` (`:3465`). **None of
-    /// that is modelled here**: the moveset, EVs (this crate carries none),
-    /// and friendship are unchanged across a level-up, so a mon that
-    /// crosses a learnset level keeps its old moves. Deliberate deferral,
-    /// not an accident — teaching the move would hand out moves whose
-    /// effects this crate does not model yet and fails closed on. Recorded
-    /// on the `Cmd_getexp` / `MonTryLearningNewMove` ledger entries and
-    /// pinned by `a_crossed_level_does_not_learn_the_learnset_move_yet`, so
-    /// a future slice flips it deliberately, never silently.
-    pub fn apply_experience(&mut self, amount: u32) {
+    /// Upstream's level-up path does more than raise the number and teach
+    /// moves. From `Cmd_getexp`, `BattleScript_LevelUp`
+    /// (`pokeemerald/data/battle_scripts_1.s`) plays the level-up
+    /// fanfare/message, and `Cmd_getexp` itself also applies `MonGainEVs`
+    /// (`src/battle_script_commands.c:3420`) and
+    /// `AdjustFriendship(FRIENDSHIP_EVENT_GROW_LEVEL)` (`:3463`). **Neither
+    /// is modelled here**: EVs (this crate carries none, see the module
+    /// docs) and friendship are out of this slice's scope, so only the
+    /// numeric level, stats, and — as of issue #252 — learnset moves change
+    /// across a level-up. Recorded on the `Cmd_getexp` ledger entry.
+    pub fn apply_experience(&mut self, dex: &Dex, amount: u32) {
         let max_experience =
             experience_for_level(self.base_stats.growth_rate, MAX_LEVEL).unwrap_or(u32::MAX);
         self.experience = self.experience.saturating_add(amount).min(max_experience);
+        if let Some((old_level, new_level)) = self.raise_level_to_experience() {
+            self.learn_crossed_level_moves(dex, old_level, new_level);
+        }
+    }
 
+    /// `GetLevelFromMonExp` + `CalculateMonStats`
+    /// (`pokeemerald/src/pokemon.c`) as the **save decoder** reaches them:
+    /// adopt a stored experience total and re-derive the level from it,
+    /// teaching **nothing**. Upstream's load path copies the attacks
+    /// substructure verbatim and never runs `MonTryLearningNewMove` — the
+    /// learnset walk belongs to `Cmd_getexp`'s in-battle award
+    /// ([`BattlePokemon::apply_experience`]) alone — so a decode that
+    /// taught crossed-level moves would mutate the save's own authoritative
+    /// moveset merely by loading it.
+    ///
+    /// The level never moves down and the total never drops below the
+    /// current level's own floor: a stored total under that floor is a
+    /// level/experience pair upstream could never write, and reconciling it
+    /// upward mirrors the decoder's fail-toward-consistency posture. In the
+    /// ordinary consistent-bytes case the stored total sits inside the
+    /// current level's own band and this is a plain assignment.
+    pub fn reconcile_saved_experience(&mut self, total: u32) {
+        let max_experience =
+            experience_for_level(self.base_stats.growth_rate, MAX_LEVEL).unwrap_or(u32::MAX);
+        self.experience = self.experience.max(total.min(max_experience));
+        self.raise_level_to_experience();
+    }
+
+    /// Raise the level (and stats, preserving damage taken) to match the
+    /// current experience total, returning `Some((old_level, new_level))`
+    /// when at least one threshold was crossed. Shared by the in-battle
+    /// award ([`BattlePokemon::apply_experience`], which then teaches the
+    /// crossed learnset moves) and the save decoder
+    /// ([`BattlePokemon::reconcile_saved_experience`], which must not).
+    fn raise_level_to_experience(&mut self) -> Option<(u8, u8)> {
         let mut new_level = self.level;
         while new_level < MAX_LEVEL {
             let next_level = new_level + 1;
@@ -559,15 +593,96 @@ impl BattlePokemon {
             new_level = next_level;
         }
         if new_level == self.level {
-            return;
+            return None;
         }
 
+        let old_level = self.level;
         let old_max_hp = self.stats.max_hp;
         self.level = new_level;
         self.stats = compute_stats(&self.base_stats, self.level, self.nature, self.ivs);
         self.current_hp = self
             .current_hp
             .saturating_add(self.stats.max_hp.saturating_sub(old_max_hp));
+        Some((old_level, new_level))
+    }
+
+    /// `MonTryLearningNewMove` / `GiveMoveToMon`
+    /// (`pokeemerald/src/pokemon.c:3014`-`:3044`, `:2934`-`:2955`) — the
+    /// move-learning half of a level-up that
+    /// [`BattlePokemon::apply_experience`] drives. For every level in
+    /// `old_level+1..=new_level`, in ascending order, walks that level's
+    /// entries in [`assets::LevelUpLearnsets`] (already-extracted upstream
+    /// data; [`crate::wild::initial_moveset`] walks the same table for a
+    /// freshly built mon) in table order and offers each one to
+    /// `GiveMoveToBoxMon`'s two outcomes, reproduced here `(no-verbatim)`:
+    ///
+    /// - a move already known is skipped, costing no slot
+    ///   (`MON_ALREADY_KNOWS_MOVE`, `:2951`-`:2952`);
+    /// - a move with an empty slot is learned into it, PP starting at the
+    ///   move's own base PP (`:2945`-`:2949`, the two writes at
+    ///   `:2947`-`:2948`).
+    ///
+    /// # Teaching is unscreened, exactly as upstream teaches
+    ///
+    /// Whatever move id the learnset names is learned, including one whose
+    /// effect this crate does not model yet: a level-6 Treecko learns
+    /// Absorb even though `EFFECT_ABSORB` has no resolver ([`crate::hit`]'s
+    /// module docs), just as upstream's `GiveMoveToMon` has no notion of
+    /// refusing a move. Nothing needs to be screened here because every
+    /// caller of [`BattlePokemon::apply_experience`] applies it to a mon on
+    /// the *player's* side — [`crate::battle::Battle::take_turn`]'s exp
+    /// award to `Battle::player`; the save decoder deliberately takes the
+    /// non-teaching [`BattlePokemon::reconcile_saved_experience`] path
+    /// instead — and the player's
+    /// moveset is the one this crate deliberately does not screen:
+    /// [`crate::battle::Battle::new`] documents that only the **wild**
+    /// moveset is checked up front — because the wild rejection loop can
+    /// land on any slot mid-turn — while a player slot is validated per
+    /// turn, at selection, by `validate_player_move`, ahead of the turn's
+    /// first RNG draw. So an unexecutable taught move sits in the moveset
+    /// exactly like an unexecutable hand-picked one and is refused when it
+    /// is picked, with a recoverable
+    /// [`BattleError::UnsupportedMoveEffect`] /
+    /// [`BattleError::NonDamagingMove`] that leaves the battle and the
+    /// shared stream untouched. There is no crash path to fail closed
+    /// against: the trainer AI never scores the player's move ids, and no
+    /// Struggle fallback runs on the player's side.
+    ///
+    /// # Recorded divergence: the four-known-moves prompt is a decline
+    ///
+    /// Upstream's `Cmd_handlelearnnewmove` treats `GiveMoveToMon` returning
+    /// `MON_HAS_MAX_MOVES` as the cue to run `BattleScript_AskToLearnMove`'s
+    /// yes/no box (`battle_script_commands.c:5368`-`:5370`), which can
+    /// forget an old move to make room. That prompt is a message/UI slice
+    /// this crate has no layer for, so a full moveset always takes the
+    /// answer a player who chooses "Stop learning?" → yes would give: the
+    /// move is **not** learned. Matching upstream's own loop
+    /// (`BattleScript_TryLearnMoveLoop`), the walk still continues to the
+    /// *next* learnset entry rather than stopping at the decline. This is
+    /// the only divergence on the learn path; it is recorded on the
+    /// `MonTryLearningNewMove` ledger entry.
+    fn learn_crossed_level_moves(&mut self, dex: &Dex, old_level: u8, new_level: u8) {
+        let Some(learnset) = LevelUpLearnsets::new().get(self.species) else {
+            return;
+        };
+        for level in (old_level + 1)..=new_level {
+            for entry in learnset.iter().filter(|entry| entry.level == level) {
+                let move_id = entry.move_id;
+                if self.moves.iter().any(|slot| slot.move_id == move_id) {
+                    continue; // MON_ALREADY_KNOWS_MOVE -- no slot spent.
+                }
+                if self.moves.len() >= MAX_MON_MOVES {
+                    continue; // MON_HAS_MAX_MOVES -- decline (no prompt UI).
+                }
+                // Upstream indexes `gBattleMoves[move]` for the starting PP
+                // with no lookup that can fail; the learnset table only ever
+                // names real move ids, so this is total in practice. Skipping
+                // beats panicking if a future data extraction disagrees.
+                if let Ok(mv) = dex.move_data(move_id) {
+                    self.moves.push(MoveSlot { move_id, pp: mv.pp });
+                }
+            }
+        }
     }
 
     /// The attacking stat (Attack or Sp. Attack) and its stage for a move of

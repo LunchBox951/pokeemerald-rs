@@ -392,15 +392,16 @@ pub enum BattleEvent {
     /// The player's mon gained experience for fainting the opposing mon.
     ///
     /// The award is **already applied** to [`Battle::player`] when this
-    /// event is emitted — accumulated experience, any crossed level, and
-    /// recomputed stats ([`BattlePokemon::apply_experience`], upstream
-    /// `Cmd_getexp`'s `SetMonData(MON_DATA_EXP)`/`CalculateMonStats` half).
-    /// The event is a report of that mutation, for the integration layer to
-    /// present; applying the amount to the battler again would double it.
-    /// What the in-battle application deliberately does *not* do (level-up
-    /// move learning, EV gain, friendship) is recorded on
-    /// [`BattlePokemon::apply_experience`] and the `Cmd_getexp` ledger
-    /// entry.
+    /// event is emitted — accumulated experience, any crossed level,
+    /// recomputed stats, and (issue #252) each crossed level's learnset
+    /// moves ([`BattlePokemon::apply_experience`], upstream `Cmd_getexp`'s
+    /// `SetMonData(MON_DATA_EXP)`/`CalculateMonStats` half plus
+    /// `BattleScript_LevelUp`'s `MonTryLearningNewMove` half). The event is
+    /// a report of that mutation, for the integration layer to present;
+    /// applying the amount to the battler again would double it. What the
+    /// in-battle application deliberately still does *not* do (EV gain,
+    /// friendship) is recorded on [`BattlePokemon::apply_experience`] and
+    /// the `Cmd_getexp` ledger entry.
     ExpGained(u32),
     /// Beating a trainer paid out prize money — `Cmd_getmoneyreward`
     /// (`src/battle_script_commands.c:5635`), whose
@@ -1361,7 +1362,7 @@ impl Battle {
                             } else {
                                 wild_faint_exp(base_exp, level)
                             };
-                            self.player.apply_experience(exp);
+                            self.player.apply_experience(&self.dex, exp);
                             events.push(BattleEvent::ExpGained(exp));
                         }
                         // A wild battle ends the moment its only opponent
