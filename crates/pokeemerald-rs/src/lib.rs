@@ -66,6 +66,26 @@
 //! otherwise-identical `FirstBattle` -> `Overworld` transition produced by
 //! an aborted fight.
 //!
+//! [`flow::route103_rival`] (issue #237) is the Route 103 rival battle's own
+//! `BATTLE_TYPE_TRAINER` construction and headless driver. Since issue #248
+//! it has a real production caller too: facing the rival's object event on
+//! Route 103 and pressing A (`Route103_EventScript_Rival`, recognized by
+//! `flow::overworld_phase`'s `route103_rival_trigger` on that same
+//! `OverworldPhase::step` path) derives which of the six
+//! `TRAINER_*_ROUTE_103_*` rivals is fought from the player's own gender and
+//! the party lead's real species, and starts the fight. Still not modelled
+//! around it: the approach cutscene and its dialog, and every
+//! `Route103_EventScript_RivalEnd` write except `removeobject`'s hide-flag
+//! effect (`route103_rival_trigger`'s
+//! own module docs carry the full deferral list) -- only
+//! `FLAG_HIDE_ROUTE_103_RIVAL` is ported, on a win, making the rival
+//! disappear and the fight non-repeatable; a loss leaves it standing and
+//! interactable but *not* re-fightable -- the fainted lead fails closed at
+//! `FaintedBattler` until issue #261's white-out/heal path lands
+//! (`route103_rival_trigger`'s "The honest loss decision"). `App::rival_battle_outcome`
+//! exposes the terminal `BattleOutcome` the same way `App::first_battle_outcome`
+//! does.
+//!
 //! [`music`] (S-3, issue #185) bridges the asset pack's song/voicegroup/
 //! sample entries into the `audio` crate's sequencer and owns the
 //! frame-driven [`music::MusicPlayer`] `App::step` ticks while the title

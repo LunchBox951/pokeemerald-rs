@@ -66,6 +66,12 @@ impl SceneSprites {
     /// Decode `player`'s walking sheet plus every NPC sheet
     /// `events.object_events` references out of an already-loaded `pack`.
     ///
+    /// `event_data` is this room's own current flags/vars, threaded down to
+    /// [`npc::resolve_bindings`]'s own `"OBJ_EVENT_GFX_VAR_0"` exception
+    /// (issue #248, that module's own docs) -- needed only for Route 103's
+    /// rival object event; every other bundled map's binding is unaffected
+    /// by it.
+    ///
     /// # Errors
     ///
     /// [`OverworldSceneError::Pack`]/[`OverworldSceneError::Asset`] if a
@@ -80,6 +86,7 @@ impl SceneSprites {
         pack: &AssetPack,
         player: PlayerCharacter,
         events: &'static assets::MapEvents,
+        event_data: &EventData,
     ) -> Result<Self, OverworldSceneError> {
         let sprite_image = pack.sprite(player.sprite_path())?;
         let palette_ref = pack.sprite_palette(player.palette_name())?;
@@ -89,7 +96,8 @@ impl SceneSprites {
         // this needs the raw, appendable bytes rather than a decoded
         // single-sheet `Tileset`.
         let mut bytes = avatar::pack_people_sheet_frames("sprite/*/walking", sprite_image)?;
-        let bindings = npc::resolve_bindings(pack, player, events.object_events, &mut bytes)?;
+        let bindings =
+            npc::resolve_bindings(pack, player, events.object_events, &mut bytes, event_data)?;
         Ok(Self {
             tiles: Tileset::decode(BitDepth::Bpp4, &bytes)?,
             palette: npc::build_combined_palette(pack, player, palette_ref)?,
