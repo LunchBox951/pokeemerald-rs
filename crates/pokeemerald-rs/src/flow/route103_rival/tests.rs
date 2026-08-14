@@ -381,6 +381,39 @@ fn a_lead_with_no_pp_in_slot_zero_ends_the_battle_and_is_still_written_back() {
     assert_eq!(mon.moves()[0].pp, 0, "drained PP and all");
 }
 
+/// The honest species -> [`PlayerStarter`] mapping (issue #248): the real
+/// three starters round-trip, and an arbitrary species has no mapping.
+#[test]
+fn player_starter_from_species_covers_exactly_the_three_starters() {
+    assert_eq!(
+        PlayerStarter::from_species(SpeciesId(TREECKO)),
+        Some(PlayerStarter::Treecko)
+    );
+    assert_eq!(
+        PlayerStarter::from_species(SpeciesId(TORCHIC)),
+        Some(PlayerStarter::Torchic)
+    );
+    assert_eq!(
+        PlayerStarter::from_species(SpeciesId(MUDKIP)),
+        Some(PlayerStarter::Mudkip)
+    );
+    // SPECIES_ZIGZAGOON -- not a starter.
+    assert_eq!(PlayerStarter::from_species(SpeciesId(288)), None);
+}
+
+/// [`Rival::for_gender`]'s opposite-gender pairing, and the `Other` no-op
+/// upstream's own `checkplayergender` branch documents (issue #248).
+#[test]
+fn rival_for_gender_is_always_the_opposite_protagonist() {
+    use engine::save::PlayerGender;
+    assert_eq!(Rival::for_gender(PlayerGender::Male), Some(Rival::May));
+    assert_eq!(
+        Rival::for_gender(PlayerGender::Female),
+        Some(Rival::Brendan)
+    );
+    assert_eq!(Rival::for_gender(PlayerGender::Other(7)), None);
+}
+
 /// An empty slot is a no-op, and does not touch the lead.
 #[test]
 fn advancing_an_empty_slot_does_nothing() {
