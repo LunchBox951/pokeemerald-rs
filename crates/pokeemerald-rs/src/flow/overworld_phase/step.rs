@@ -246,13 +246,18 @@ impl OverworldPhase {
         // unconditionally, before the dialog early-return below.
         self.tick = self.tick.wrapping_add(1);
 
-        // A wild battle -- or the Route 101 scripted first battle (issue
-        // #231, `super::first_battle_trigger`; the two fields are never both
-        // `Some`, struct docs on `first_battle`) -- owns the frame outright,
-        // ahead of the dialog check, the same way upstream's battle callback
-        // owns `CB2_Overworld` outright once `SetMainCallback2(CB2_InitBattle)`
+        // A wild battle, the Route 101 scripted first battle (issue #231,
+        // `super::first_battle_trigger`), or the Route 103 rival battle
+        // (issue #248, `super::route103_rival_trigger`) -- the three fields
+        // are never more than one `Some` at a time, struct docs on
+        // `first_battle` -- owns the frame outright, ahead of the dialog
+        // check, the same way upstream's battle callback owns
+        // `CB2_Overworld` outright once `SetMainCallback2(CB2_InitBattle)`
         // has run (`src/battle_setup.c:369`).
-        if self.advance_wild_battle_frame() || self.advance_first_battle_frame() {
+        if self.advance_wild_battle_frame()
+            || self.advance_first_battle_frame()
+            || self.advance_route103_rival_battle_frame()
+        {
             return;
         }
 
@@ -340,7 +345,7 @@ impl OverworldPhase {
             // and the rivals next to warps are hidden and script-less), but
             // guarded rather than assumed so a future map/script addition
             // can't silently trip it.
-            let interaction_tokens = self.interaction_tokens_this_frame(buttons, &runtime);
+            let interaction = self.interaction_tokens_this_frame(buttons, &runtime);
 
             // Upstream's `tookStep` gate, in this port's terms: the latched
             // landing is only tested once its walk animation has drained
@@ -440,7 +445,7 @@ impl OverworldPhase {
                 encounter,
                 field_event_fired,
                 first_battle_triggered,
-                interaction_tokens,
+                interaction,
             );
 
             // Map-edge connection crossing (issue #177): deferred to here,
@@ -482,20 +487,24 @@ impl OverworldPhase {
     /// this method needs nothing from it).
     ///
     /// A resolved `warp_trigger` executes first ([`Self::warp_to`]).
-    /// Same-frame interaction tokens open a dialog only if neither a warp
-    /// nor a `field_event_fired` event (an encounter or the Route 101
+    /// Same-frame interaction outcomes act only if neither a warp nor a
+    /// `field_event_fired` event (an encounter or the Route 101
     /// first-battle trigger -- [`Self::step`]'s own single definition of
     /// that) already consumed the frame's field input: upstream never
     /// reaches `TryStartInteractionScript` (`:172`) on a frame anything
-    /// above it returned TRUE. Finally, the battle this frame earned -- if
-    /// any -- starts ([`Self::begin_step_battle`]).
+    /// above it returned TRUE. A [`InteractionOutcome::Dialog`] opens a
+    /// message box; a [`InteractionOutcome::RivalBattle`] (issue #248,
+    /// `super::route103_rival_trigger`) starts the Route 103 rival battle
+    /// instead -- exactly the same gate, one extra branch. Finally, the
+    /// battle this frame earned -- if any -- starts
+    /// ([`Self::begin_step_battle`]).
     fn resolve_step_events(
         &mut self,
         warp_trigger: Option<WarpTrigger>,
         encounter: Option<engine::overworld::WildEncounter>,
         field_event_fired: bool,
         first_battle_triggered: bool,
-        interaction_tokens: Option<Vec<engine::text::Token>>,
+        interaction: Option<InteractionOutcome>,
     ) {
         match warp_trigger {
             Some(WarpTrigger::Resolved { map, warp_id }) => self.warp_to(map, warp_id),
@@ -508,16 +517,20 @@ impl OverworldPhase {
 
         let input_consumed = wild_encounter::field_input_consumed(field_event_fired, warp_trigger);
         if input_consumed {
-            if interaction_tokens.is_some() {
+            if interaction.is_some() {
                 eprintln!(
                     "npc dialog: discarding a same-frame interaction the warp, the wild \
                      encounter, or the Route 101 first-battle trigger takes precedence over"
                 );
             }
-        } else if let Some(tokens) = interaction_tokens {
-            match NpcDialog::open_default(tokens) {
-                Ok(dialog) => self.dialog = Some(dialog),
-                Err(err) => eprintln!("npc dialog: {err} -- staying in the overworld"),
+        } else {
+            match interaction {
+                Some(InteractionOutcome::Dialog(tokens)) => match NpcDialog::open_default(tokens) {
+                    Ok(dialog) => self.dialog = Some(dialog),
+                    Err(err) => eprintln!("npc dialog: {err} -- staying in the overworld"),
+                },
+                Some(InteractionOutcome::RivalBattle) => self.begin_route103_rival_battle(),
+                None => {}
             }
         }
 
@@ -554,29 +567,57 @@ impl OverworldPhase {
     /// frame.
     ///
     /// `&self` (not `&mut self`): [`OverworldPhase::step`] calls this while
-    /// `runtime` still borrows `self.scene`, and opening the dialog itself
-    /// (which does need `&mut self`) happens afterward, once that borrow
-    /// has ended.
+    /// `runtime` still borrows `self.scene`, and acting on the outcome
+    /// itself (which does need `&mut self`) happens afterward, once that
+    /// borrow has ended.
     pub(super) fn interaction_tokens_this_frame(
         &self,
         buttons: ButtonState,
         runtime: &engine::overworld::MapRuntime<'_>,
-    ) -> Option<Vec<engine::text::Token>> {
+    ) -> Option<InteractionOutcome> {
         if self.player.in_transit() || !buttons.is_newly_pressed(Buttons::A) {
             return None;
         }
-        self.find_interaction_tokens(runtime)
+        self.find_interaction_outcome(runtime)
     }
 
     /// The lookup half of [`OverworldPhase::interaction_tokens_this_frame`]:
     /// find the object event `self.player` currently faces
-    /// ([`facing_object_event`]) and, if this slice recognizes its script,
-    /// return the token stream a [`NpcDialog`] should open with.
-    fn find_interaction_tokens(
+    /// ([`facing_object_event`]) and decide what an A press on it does.
+    ///
+    /// Route 103's rival object event (issue #248,
+    /// `super::route103_rival_trigger::is_rival_trigger`) is checked
+    /// *before* the ordinary dialog lookup: its own `script`,
+    /// `"Route103_EventScript_Rival"`, is deliberately not one
+    /// [`npc_scripts::script_text`] recognizes (that module's own bounded
+    /// table), so without this branch it would simply open no dialog on A,
+    /// a silent gap rather than the trainer battle it should start. Every
+    /// other object event's script is unaffected -- Mom's own dialog path
+    /// (`OBJ_EVENT_GFX_MOM`'s script) is byte-identical to before this
+    /// method grew a second arm.
+    fn find_interaction_outcome(
         &self,
         runtime: &engine::overworld::MapRuntime<'_>,
-    ) -> Option<Vec<engine::text::Token>> {
+    ) -> Option<InteractionOutcome> {
         let object = facing_object_event(&self.player, runtime, &self.save1.event_data)?;
-        npc_scripts::script_text(object.script)
+        if super::route103_rival_trigger::is_rival_trigger(self.map_id, object.script) {
+            return Some(InteractionOutcome::RivalBattle);
+        }
+        npc_scripts::script_text(object.script).map(InteractionOutcome::Dialog)
     }
+}
+
+/// What a same-frame A-press interaction ([`OverworldPhase::interaction_tokens_this_frame`])
+/// should do -- a dialog box (the ordinary NPC case,
+/// [`npc_scripts::script_text`]) or the Route 103 rival battle (issue
+/// #248), never both. Not a dialog itself: a trainer battle is not a
+/// message box, so it needs its own outcome rather than being squeezed
+/// into [`Vec<engine::text::Token>`]'s shape.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum InteractionOutcome {
+    /// Open an [`NpcDialog`] with this token stream.
+    Dialog(Vec<engine::text::Token>),
+    /// Start the Route 103 rival battle
+    /// ([`OverworldPhase::begin_route103_rival_battle`]).
+    RivalBattle,
 }
