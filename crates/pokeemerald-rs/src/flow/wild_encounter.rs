@@ -40,29 +40,40 @@
 //! ([`battle::BattleError::RunForbidden`]), so the two drivers cannot share
 //! one action policy.
 //!
-//! # The unmodelled gate *behind* all this: losing
+//! # The white-out, modelled (issue #261)
 //!
 //! Upstream never leaves the overworld holding a fainted party. Losing a wild
 //! battle sets `gBattleOutcome` to a defeat, `CB2_EndWildBattle`
 //! (`src/battle_setup.c:602-616`) routes to `CB2_WhiteOut`
 //! (`src/overworld.c:1550-1570`) instead of `CB2_ReturnToField`, and
 //! `DoWhiteOut` (`:358-366`) runs the white-out script, halves the player's
-//! money, **heals the whole party** (`HealPlayerParty`), and warps to the last
-//! heal location. None of that is modelled here `(no script engine, no money,
-//! no heal locations, no warp-to-Pokémon-Center)`, so
-//! [`advance_wild_battle`] writes the player's mon back unconditionally —
-//! fainted included — and the player is left standing in the grass where
-//! upstream would already be waking up in a Pokémon Center.
+//! money, **heals the whole party** (`HealPlayerParty`), and warps to the
+//! last heal location.
+//! [`crate::flow::overworld_phase::white_out::OverworldPhase::white_out`]
+//! now reproduces exactly that — see its own module docs for the full
+//! upstream citation — called by
+//! [`crate::flow::overworld_phase::wild_battle::OverworldPhase::advance_wild_battle_frame`]
+//! the instant [`advance_wild_battle`] reports
+//! [`battle::BattleOutcome::PlayerLost`], after that call has already
+//! written the fainted lead back into `party_lead`. So the fainted state
+//! this doc comment used to describe as unmodelled now exists for at most
+//! the one frame between the battle ending and the white-out running, never
+//! long enough for another step to observe it.
 //!
-//! Rather than invent a white-out, this port **fails closed** at the only
-//! place the gap is RNG-observable: [`lead_can_fight`] refuses the encounter
-//! roll while the lead mon is fainted, so a grass step in that state draws
-//! nothing at all instead of spending a wild-mon construction and
-//! `Battle::new`'s turn-number draw on a battle that can only error out. That
-//! is a state upstream cannot reach, so suppressing it costs no fidelity and
-//! keeps the stream where a real playthrough would have it. The white-out
-//! itself is enumerated as NOT-modelled on this slice's ledger entry for
-//! `src/battle_setup.c#BattleSetup_StartWildBattle`.
+//! **Formerly a fail-closed guard, now retired.** Before this issue, this
+//! module instead refused the encounter roll outright while the lead was
+//! fainted (`lead_can_fight`, since removed) — a state upstream itself can
+//! never reach, since the white-out above already heals the party before
+//! the player's next step. That guard was the *documented interim posture*
+//! for the gap this section used to describe as unmodelled; now that the
+//! real white-out runs, the guard's premise (a fainted lead can persist into
+//! a later step) is false in production, so no guard is left to write. See
+//! `wild_encounter::tests::a_lost_battle_now_heals_the_party_and_halves_money`
+//! (plus its pack-gated companion
+//! `wild_encounter::tests::real_pack_a_lost_wild_battle_warps_home_to_the_default_heal_location`)
+//! for the behavioural tests that replace the old
+//! `a_lost_battle_leaves_a_fainted_lead_and_no_later_grass_step_draws`
+//! regression, and their own doc comments for why.
 //!
 //! # The unmodelled gate ahead of all this
 //!
@@ -261,11 +272,12 @@ pub(super) const fn field_input_consumed(
 /// failure mode once the roll has happened: `CreateWildMon`'s five draws are
 /// already spent by the time [`battle::Battle::new`] screens the moveset,
 /// and dropping the battle there leaves draws with no upstream counterpart.
-/// So the whole table is screened *up front*, the same fail-closed
-/// no-draw-at-all policy [`lead_can_fight`] applies to the unmodelled
-/// white-out: on a map that fails, a grass step draws nothing and moves no
-/// encounter bookkeeping, and the refusal is logged once here (at the map
-/// transition that computes it) rather than per step.
+/// So the whole table is screened *up front*: on a map that fails, a grass
+/// step draws nothing and moves no encounter bookkeeping, and the refusal is
+/// logged once here (at the map transition that computes it) rather than
+/// per step -- the same no-draw-at-all shape the former `lead_can_fight`
+/// guard used for its own now-retired reason (module docs, "The white-out,
+/// modelled").
 ///
 /// A map with no wild header, or no land table, is trivially fightable —
 /// there is nothing to roll, and [`roll_for_step`] already resolves that to
@@ -293,38 +305,6 @@ pub(super) fn map_wild_table_fightable(map: assets::MapId) -> bool {
                 return false;
             }
         }
-    }
-    true
-}
-
-/// Whether an encounter may be rolled at all with `lead` as the party's lead
-/// mon — the fail-closed half of the unmodelled white-out (module docs).
-///
-/// `None` (a fresh save with no party at all) is **allowed**: that is exactly
-/// upstream's own state before Birch's bag, where the roll happens for real
-/// and only the battle is missing, so the stream stays upstream's and
-/// [`crate::flow::overworld_phase::OverworldPhase::begin_wild_battle`] logs
-/// the encounter it cannot fight.
-///
-/// A *fainted* lead here means a fainted-**only** party, a state upstream
-/// cannot be in: losing routes through `CB2_WhiteOut`, which heals the party
-/// before the player ever takes another step (module docs). (Upstream's
-/// `gPlayerParty[0]` can be fainted with a *live* party behind it and rolls
-/// normally — `IsWildLevelAllowedByRepel`, `wild_encounter.c:878-887`, skips
-/// zero-HP mons rather than bailing — but this port models a one-mon party,
-/// so lead-fainted and party-fainted coincide; a future multi-slot party
-/// slice must revisit this guard.) Rolling here would draw a wild mon's five
-/// nature/personality/IV values plus `Battle::new`'s `gRandomTurnNumber` on
-/// every grass step, only to reject the battle afterwards — repeatable draws
-/// with no upstream counterpart. So the roll is refused before it draws
-/// anything, and the refusal is logged rather than silent.
-pub(super) fn lead_can_fight(lead: Option<&BattlePokemon>) -> bool {
-    if lead.is_some_and(BattlePokemon::is_fainted) {
-        eprintln!(
-            "wild encounter: the lead mon has fainted -- no roll until it is healed \
-             (upstream would have whited out; see flow::wild_encounter's module docs)"
-        );
-        return false;
     }
     true
 }
@@ -414,10 +394,14 @@ pub(super) fn start_wild_battle(
 /// `None` on every other.
 ///
 /// That write-back is unconditional, [`BattleOutcome::PlayerLost`] included,
-/// so a lost battle really does leave a fainted mon in `lead` — upstream
-/// instead white-outs and heals the party, which this port does not model
-/// (module docs). [`lead_can_fight`] is the guard that keeps that state from
-/// becoming RNG-observable.
+/// so a lost battle really does leave a fainted mon in `lead` for exactly
+/// the one frame it takes the caller
+/// ([`crate::flow::overworld_phase::wild_battle::OverworldPhase::advance_wild_battle_frame`])
+/// to notice the outcome and call
+/// [`crate::flow::overworld_phase::white_out::OverworldPhase::white_out`]
+/// (module docs, "The white-out, modelled") -- the same frame upstream's own
+/// `CB2_EndWildBattle` -> `CB2_WhiteOut` routing takes to reach
+/// `HealPlayerParty`.
 ///
 /// A turn that *errors* is not survivable here — there is no action menu to
 /// choose differently with — so it ends the battle too: the error is logged,

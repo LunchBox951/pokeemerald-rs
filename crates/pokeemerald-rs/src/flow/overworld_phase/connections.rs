@@ -320,6 +320,104 @@ impl OverworldPhase {
         };
     }
 
+    /// Execute an *explicit-coordinate* warp: land on `(x, y)` of `map`
+    /// directly, rather than resolving a warp event's own position the way
+    /// [`OverworldPhase::warp_to`] does. [`OverworldPhase::warp_to`]'s
+    /// sibling for the one caller with no warp event to resolve at all --
+    /// the white-out's `SetWarpDestinationToLastHealLocation` +
+    /// `WarpIntoMap` (`pokeemerald/src/overworld.c:364-365`,
+    /// `crate::flow::overworld_phase::white_out`, issue #261) — mirroring
+    /// `SetPlayerCoordsFromWarp`'s own `WARP_ID_NONE` branch
+    /// (`src/overworld.c:611-617`, "the given coords are valid, use those
+    /// instead"): a heal location names a raw tile, not a warp event index.
+    ///
+    /// Same shape as [`OverworldPhase::warp_to`] otherwise -- on-transition
+    /// effects, temp-field-data clear, the two Route 101/103 targeted
+    /// effects, atomic scene/`map_id` rebind, `tick` reset,
+    /// `RestartWildEncounterImmunitySteps` -- and the same "leaves the
+    /// player exactly where they stood" failure contract if `map`'s
+    /// header/events/room can't be resolved.
+    ///
+    /// Lands at elevation `ELEVATION_TRANSITION`
+    /// (`pokeemerald/include/global.fieldmap.h:16`, value `0`):
+    /// `InitPlayerAvatar` (`pokeemerald/src/field_player_avatar.c`) always
+    /// spawns the player object event with that sentinel regardless of
+    /// arrival kind, deferring to the first elevation-aware collision check
+    /// to resolve it against the tile's own layer -- the same value
+    /// [`crate::new_game::SPAWN_ELEVATION`] already uses for the intro's own
+    /// direct placement, for the identical reason.
+    ///
+    /// Unlike [`OverworldPhase::warp_to`]'s resolved-warp landing,
+    /// `save1.location.x`/`.y` are **not** `-1`: `ApplyCurrentWarp`
+    /// (`overworld.c:540-546`) copies `sWarpDestination` verbatim, and
+    /// `SetWarpDestinationToLastHealLocation` (`overworld.c:665-668`) sets
+    /// that to `gSaveBlock1Ptr->lastHealLocation` as-is -- a real `(x, y)`
+    /// pair, not the `WARP_ID_NONE`-plus-sentinel-coords shape a resolved
+    /// warp event leaves behind.
+    ///
+    /// # Panics
+    ///
+    /// Same as [`OverworldPhase::warp_to`]: if the destination's generated
+    /// `MAP_GROUP`/`MAP_NUM` index doesn't fit the `i8` upstream's `struct
+    /// WarpData` stores it in ([`warp_data_index`]).
+    pub(super) fn warp_to_position(&mut self, map: assets::MapId, x: i16, y: i16) {
+        let Ok(header) = MapHeaderTable::new().header(map) else {
+            eprintln!("warp: unknown destination map {map:?} -- staying put");
+            return;
+        };
+        let Ok(events) = MapEventsTable::new().resolve(map) else {
+            eprintln!("warp: no event data for destination map {map:?} -- staying put");
+            return;
+        };
+        let mut transitioned_event_data = self.save1.event_data.clone();
+        transitioned_event_data.clear_temp_field_event_data();
+        run_on_transition_map_script(map, &mut transitioned_event_data);
+        super::first_battle_trigger::sync_route_101_state_on_entry(
+            map,
+            &mut transitioned_event_data,
+        );
+        super::route103_rival_trigger::setup_rival_gfx_id_on_transition(
+            map,
+            &mut transitioned_event_data,
+            self.save2.player_gender,
+        );
+
+        let Ok(scene) = overworld::load_room(
+            map,
+            self.save2.player_gender.into(),
+            &transitioned_event_data,
+        ) else {
+            eprintln!("warp: failed to load destination map {map:?} -- staying put");
+            return;
+        };
+        let facing = {
+            let runtime = scene.runtime(map, header, events);
+            let behavior = runtime
+                .metatile_behavior(i32::from(x), i32::from(y))
+                .unwrap_or(engine::overworld::metatile_behavior::MB_NORMAL);
+            warp_in_facing(behavior)
+        };
+
+        self.player = engine::overworld::PlayerState::new(
+            (i32::from(x), i32::from(y)),
+            0, // ELEVATION_TRANSITION -- see doc comment.
+            facing,
+        );
+        self.pending_landing = None;
+        self.scene = scene;
+        self.map_id = map;
+        self.tick = 0;
+        self.save1.event_data = transitioned_event_data;
+        self.wild.restart_immunity_steps();
+        self.save1.location = WarpData {
+            map_group: warp_data_index(header.group, "MAP_GROUP"),
+            map_num: warp_data_index(header.num, "MAP_NUM"),
+            warp_id: -1,
+            x,
+            y,
+        };
+    }
+
     /// Rebind `map_id`/`scene`/`save1.location` (issue #177) after
     /// `self.player` has already stepped across a map-edge connection into
     /// `to_map`'s own coordinate space -- [`engine::overworld::StepOutcome::Crossed`],

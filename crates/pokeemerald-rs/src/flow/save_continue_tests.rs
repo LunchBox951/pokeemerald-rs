@@ -334,7 +334,8 @@ fn a_saved_game_reloads_into_an_overworld_phase_that_matches_it() {
 
     // The real map resolution `continue_saved_game` performs, then its
     // pack-free core (module docs on the substituted steps).
-    let map = saved_map_id(&saved.block1).expect("the saved location must resolve to a map");
+    let map =
+        saved_map_id(saved.block1.location).expect("the saved location must resolve to a map");
     assert_eq!(map, new_game::SPAWN_MAP_ID);
     let resumed = OverworldPhase::from_saved(
         crate::overworld::tests::synthetic_scene(10, 10),
@@ -510,7 +511,7 @@ fn the_most_recent_of_two_saves_is_the_one_that_reloads() {
     // player actually takes; a second new-game session would meet the
     // WARNING prompt instead (see the consent test below).
     let loaded = slot.load();
-    let map = saved_map_id(&loaded.block1).expect("the saved location must resolve");
+    let map = saved_map_id(loaded.block1.location).expect("the saved location must resolve");
     let mut phase = OverworldPhase::from_saved(
         crate::overworld::tests::synthetic_scene(10, 10),
         map,
@@ -619,7 +620,7 @@ fn a_save_pointing_at_no_known_map_does_not_resume() {
     let mut block1 = SaveBlock1::default();
     block1.location.map_group = 127;
     block1.location.map_num = 127;
-    assert!(saved_map_id(&block1).is_none());
+    assert!(saved_map_id(block1.location).is_none());
 
     // `OverworldPhase` has no `Debug`, so this cannot be `expect_err`.
     let Err(err) = OverworldPhase::continue_saved_game(block1, SaveBlock2::default()) else {

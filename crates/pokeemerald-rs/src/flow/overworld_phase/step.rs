@@ -385,10 +385,15 @@ impl OverworldPhase {
             let door_warp = landed
                 .and_then(|(x, y)| trigger_door_warp(&runtime, x, y, self.player.elevation()));
             // The roll happens only on a completed step no warp path has
-            // claimed (`roll_eligible_landing`), only on a fightable map
-            // (`wild_table_fightable`), and only with a lead that can fight
-            // (`lead_can_fight`). The landed tile is the player's own tile on
-            // a drain frame, and it is what `GetPlayerPosition` would report
+            // claimed (`roll_eligible_landing`) and only on a fightable map
+            // (`wild_table_fightable`). No fainted-lead filter belongs here
+            // any more (issue #261): `Self::white_out` heals the party the
+            // instant a battle is lost, before this method can ever run
+            // again with a fainted lead in `self.party_lead` -- the same
+            // state upstream cannot reach either
+            // (`crate::flow::wild_encounter`'s module docs, "The white-out,
+            // modelled"). The landed tile is the player's own tile on a
+            // drain frame, and it is what `GetPlayerPosition` would report
             // there.
             let encounter = wild_encounter::roll_for_step(
                 &mut self.wild,
@@ -396,8 +401,7 @@ impl OverworldPhase {
                 self.map_id,
                 &runtime,
                 wild_encounter::roll_eligible_landing(landed, preempting_arrow_trigger, door_warp)
-                    .filter(|_| wild_table_fightable)
-                    .filter(|_| wild_encounter::lead_can_fight(self.party_lead.as_ref())),
+                    .filter(|_| wild_table_fightable),
             );
             // Both remaining `ProcessPlayerFieldInput` steps -- the arrow
             // poll (`:164-168`) and the interaction check (`:172`) -- are

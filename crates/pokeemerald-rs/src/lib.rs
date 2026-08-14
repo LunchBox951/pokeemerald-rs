@@ -79,10 +79,15 @@
 //! effect (`route103_rival_trigger`'s
 //! own module docs carry the full deferral list) -- only
 //! `FLAG_HIDE_ROUTE_103_RIVAL` is ported, on a win, making the rival
-//! disappear and the fight non-repeatable; a loss leaves it standing and
-//! interactable but *not* re-fightable -- the fainted lead fails closed at
-//! `FaintedBattler` until issue #261's white-out/heal path lands
-//! (`route103_rival_trigger`'s "The honest loss decision"). `App::rival_battle_outcome`
+//! disappear and the fight non-repeatable; a loss instead routes through
+//! `OverworldPhase::white_out` (issue #261), the same way upstream's
+//! `CB2_EndTrainerBattle` routes one to `CB2_WhiteOut` -- the party is
+//! healed, the player's money is halved, and the player is warped to the
+//! last heal location. The rival's own hide flag stays clear on that path
+//! (upstream never reaches `RivalEnd` on a loss either), but the player is
+//! no longer standing on Route 103 to interact with it
+//! (`route103_rival_trigger`'s "The loss decision (issue #261: now the real
+//! one)"). `App::rival_battle_outcome`
 //! exposes the terminal `BattleOutcome` the same way `App::first_battle_outcome`
 //! does.
 //!

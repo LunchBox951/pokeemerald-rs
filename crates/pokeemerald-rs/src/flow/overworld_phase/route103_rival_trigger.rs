@@ -79,7 +79,7 @@
 //!    into. All recorded on the ledger's `Route103_EventScript_RivalEnd`
 //!    coverage, not silently dropped.
 //!
-//! # The honest loss decision
+//! # The loss decision (issue #261: now the real one)
 //!
 //! Upstream's `trainerbattle_no_intro` never returns control to
 //! `Route103_EventScript_RivalMay`/`Brendan`'s own `goto
@@ -87,28 +87,34 @@
 //! `IsPlayerDefeated` branch (`src/battle_setup.c:1327-1338`) instead routes
 //! to `CB2_WhiteOut`, which halves the player's money, heals the party, and
 //! warps to the last-used Pokémon Center -- so `RivalEnd`, and therefore
-//! `removeobject`, is simply never reached. This port has no money, no heal
-//! locations, and no warp-to-Pokémon-Center (the same white-out deferral
-//! already recorded for `src/battle_setup.c#DoTrainerBattle` and for the
-//! wild-battle path, `crate::flow::wild_encounter`'s module docs), so
-//! [`advance_route103_rival_battle_frame`] makes the one honest call
-//! available to it: set [`FLAG_HIDE_ROUTE_103_RIVAL`] on
-//! [`battle::BattleOutcome::PlayerWon`] only. On
-//! [`battle::BattleOutcome::PlayerLost`], the battle still concludes (the
-//! player's fainted lead is written back, exactly as
-//! [`crate::flow::route103_rival::advance_route103_rival_battle`]'s own
-//! docs describe), but the flag stays clear and the rival remains
-//! interactable -- a loss does not remove the rival upstream either, it
-//! just never reaches the line that would; the *route there* (a whiteout)
-//! is what is missing, not the outcome. Interactable is not re-fightable,
-//! though: the loss leaves the lead fainted, and a fresh attempt then
-//! fails closed at
+//! `removeobject`, is simply never reached. [`advance_route103_rival_battle_frame`]
+//! now reproduces exactly that ordering: set [`FLAG_HIDE_ROUTE_103_RIVAL`] on
+//! [`battle::BattleOutcome::PlayerWon`] (`RivalEnd`'s own real effect,
+//! unaffected by this issue), or call
+//! [`super::white_out::OverworldPhase::white_out`] on
+//! [`battle::BattleOutcome::PlayerLost`] -- **not both**, mirroring upstream's
+//! own exclusive branches (`CB2_EndTrainerBattle`'s `if`/`else if`, module
+//! docs). The rival's own hide flag stays clear on a loss exactly as it does
+//! upstream (the branch that would set it is never reached), but the
+//! player is no longer standing next to it to find out: `white_out` warps
+//! them back to the last heal location before the frame ends, the same
+//! displacement upstream's own white-out produces.
+//!
+//! **Formerly a fail-closed dead end, now retired.** Before this issue, a
+//! loss left the fainted lead in place and a fresh attempt failed closed at
 //! [`crate::flow::route103_rival::start_route103_rival_battle`]
-//! (`battle::BattleError::FaintedBattler`), the same posture
-//! [`crate::flow::wild_encounter`]'s `lead_can_fight` takes -- so until
-//! the white-out/heal path lands (issue #261) a post-loss player is
-//! walled here. That reachable dead-end is the honest fidelity delta this
-//! slice ships with rather than fabricating a whiteout to hide it.
+//! (`battle::BattleError::FaintedBattler`) -- an *emergent* wall from
+//! [`battle::Battle::new_trainer`] refusing a fainted battler, not a bespoke
+//! guard this module wrote, but a dead end this module's own docs recorded
+//! all the same as "the honest fidelity delta this slice ships with." That
+//! wall is unreachable now: `white_out` heals the lead in the same call that
+//! reports the loss, so no later attempt can ever find it fainted, and the
+//! player is off Route 103 entirely besides. See
+//! `route103_rival_tests::losing_the_rival_battle_now_heals_halves_money_and_leaves_the_hide_flag_clear`
+//! (plus its pack-gated companion
+//! `route103_rival_tests::real_pack_losing_the_rival_battle_warps_home_to_the_default_heal_location`)
+//! for the replacement tests and their own doc comments for what they
+//! retire.
 //!
 //! # RNG stream
 //!
@@ -308,8 +314,8 @@ impl OverworldPhase {
     /// shape with one addition: on
     /// [`battle::BattleOutcome::PlayerWon`], sets
     /// [`FLAG_HIDE_ROUTE_103_RIVAL`] -- the one load-bearing write module
-    /// docs' "The honest loss decision" section explains, and does *not* set
-    /// it on any other outcome, on purpose.
+    /// docs' "The loss decision (issue #261: now the real one)" section
+    /// explains, and does *not* set it on any other outcome, on purpose.
     pub(super) fn advance_route103_rival_battle_frame(&mut self) -> bool {
         if self.rival_battle.is_none() {
             return false;
@@ -328,6 +334,14 @@ impl OverworldPhase {
                          the rival may remain interactable"
                     );
                 }
+            }
+            // `CB2_EndTrainerBattle`'s `IsPlayerDefeated` branch
+            // (`src/battle_setup.c:1333-1338`) -> `CB2_WhiteOut` (issue
+            // #261, module docs' "The loss decision (issue #261: now the
+            // real one)"): heal, halve money, warp home -- the same shared
+            // `Self::white_out` the wild-battle driver calls.
+            if outcome == battle::BattleOutcome::PlayerLost {
+                self.white_out();
             }
         }
         true

@@ -35,7 +35,7 @@
 //! puts the player).
 
 use engine::overworld::{PlayerState, TilePos, WildEncounterState};
-use engine::save::{SaveBlock1, SaveBlock2};
+use engine::save::{SaveBlock1, SaveBlock2, WarpData};
 use std::cell::OnceCell;
 
 use crate::game_save::SaveLineage;
@@ -51,6 +51,7 @@ mod placement;
 mod route103_rival_trigger;
 mod start_menu;
 mod step;
+mod white_out;
 mod wild_battle;
 
 /// Why resuming a loaded save into an overworld phase failed
@@ -354,7 +355,7 @@ impl OverworldPhase {
         block1: SaveBlock1,
         block2: SaveBlock2,
     ) -> Result<Self, ContinueError> {
-        let map_id = saved_map_id(&block1).ok_or(ContinueError::UnknownLocation {
+        let map_id = saved_map_id(block1.location).ok_or(ContinueError::UnknownLocation {
             map_group: block1.location.map_group,
             map_num: block1.location.map_num,
         })?;
@@ -691,20 +692,27 @@ impl OverworldPhase {
     }
 }
 
-/// The map `block1.location` names -- `Overworld_GetMapHeaderByGroupAndId(
-/// gSaveBlock1Ptr->location.mapGroup, gSaveBlock1Ptr->location.mapNum)`, as
-/// `LoadSaveblockMapHeader` calls it (cited on
+/// The map `warp` names -- `Overworld_GetMapHeaderByGroupAndId(
+/// warp->mapGroup, warp->mapNum)`, as `LoadSaveblockMapHeader` calls it for
+/// `gSaveBlock1Ptr->location` (cited on
 /// [`OverworldPhase::continue_saved_game`]), resolved through the generated
 /// [`assets::MapHeaderTable`] instead of upstream's unchecked `gMapGroups`
 /// double index.
+///
+/// Takes a bare [`WarpData`] rather than a whole [`SaveBlock1`] (issue #261
+/// review) so both of `SaveBlock1`'s own map-naming fields can share this one
+/// resolver: [`OverworldPhase::continue_saved_game`] calls it on
+/// `block1.location`, and [`OverworldPhase::white_out`]'s warp-home step calls it on
+/// `save1.last_heal_location` -- the same `SetWarpData` shape upstream
+/// stores both in (`include/global.h`'s `struct SaveBlock1`).
 ///
 /// `None` for a negative or unknown group/num. Upstream stores both as `s8`
 /// and its own `MAP_GROUP`/`MAP_NUM` values are never negative, so a
 /// negative here can only come from corrupt save data -- exactly the case
 /// this must not resolve to some arbitrary map.
-pub(super) fn saved_map_id(block1: &SaveBlock1) -> Option<assets::MapId> {
-    let group = u8::try_from(block1.location.map_group).ok()?;
-    let num = u8::try_from(block1.location.map_num).ok()?;
+pub(super) fn saved_map_id(warp: WarpData) -> Option<assets::MapId> {
+    let group = u8::try_from(warp.map_group).ok()?;
+    let num = u8::try_from(warp.map_num).ok()?;
     Some(
         assets::MapHeaderTable::new()
             .get_by_position(group, num)?

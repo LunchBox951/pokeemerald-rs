@@ -455,23 +455,27 @@ pub fn start_route103_rival_battle(
 /// forced post-faint send-out, exp and prize money — is the real
 /// [`battle::Battle`].
 ///
-/// The write-back is unconditional, fainted lead included, and here that
-/// really is a **gap** rather than fidelity — the opposite of
-/// `advance_first_battle`, whose `CB2_EndFirstBattle` genuinely has no
-/// defeat branch. Losing a trainer battle upstream routes through
-/// `CB2_EndTrainerBattle`'s `IsPlayerDefeated` check
-/// (`src/battle_setup.c:1327`-`:1338`) to `CB2_WhiteOut`, which halves the
-/// player's money, heals the party and warps to the last heal location —
-/// none of which exists in this port (no money, no heal locations, no
-/// warp-to-Pokémon-Center), exactly as
-/// [`crate::flow::wild_encounter`]'s module docs already describe for the
-/// wild path. The same deferral, recorded on the same ledger entry.
+/// The write-back is unconditional, fainted lead included — this function's
+/// own job stops at "the battle ended, here is who's left standing," the
+/// same as [`crate::flow::wild_encounter::advance_wild_battle`]. Losing a
+/// trainer battle upstream routes through `CB2_EndTrainerBattle`'s
+/// `IsPlayerDefeated` check (`src/battle_setup.c:1327`-`:1338`) to
+/// `CB2_WhiteOut`, which halves the player's money, heals the party and
+/// warps to the last heal location — this function's own caller
+/// ([`crate::flow::overworld_phase::route103_rival_trigger::OverworldPhase::advance_route103_rival_battle_frame`])
+/// is what now runs that (issue #261,
+/// [`crate::flow::overworld_phase::white_out::OverworldPhase::white_out`]),
+/// the instant it sees [`BattleOutcome::PlayerLost`] here — so the fainted
+/// lead this function hands back is only ever momentarily fainted in
+/// practice, not a standing gap.
 ///
-/// [`battle::BattleEvent::MoneyGained`] is likewise reported and dropped:
-/// there is no money field to credit it to yet. The event is returned to the
-/// caller through [`battle::Battle::take_turn`] regardless, so a later slice
-/// that adds a wallet has the amount already computed at the right point in
-/// the battle.
+/// [`battle::BattleEvent::MoneyGained`] is still reported and dropped: this
+/// issue only wires `engine::save::SaveBlock1::money` up to be *halved* on a
+/// loss (issue #261's own scope) — awarding prize money on a *win* is a
+/// separate, still-open gap. The event is returned to the caller through
+/// [`battle::Battle::take_turn`] regardless, so a later slice that wires up
+/// a wallet credit has the amount already computed at the right point in the
+/// battle.
 ///
 /// A `None` return is intentionally ambiguous: it can mean that `slot` was
 /// already empty, that the battle remains ongoing, or that a failed turn
