@@ -80,7 +80,12 @@ pub(super) fn pressed(button: Buttons) -> ButtonState {
 /// `OverworldPhase::warp_to` reads at runtime, not a restatement of
 /// their own expectations. Pack-dependent: `#[ignore]`d callers only.
 pub(super) fn warp_tile_behavior(map: assets::MapId, warp_index: usize) -> ((i16, i16), u8) {
-    let scene = crate::overworld::load_room(map).expect("run `cargo xtask extract` first");
+    let scene = crate::overworld::load_room(
+        map,
+        crate::overworld::PlayerCharacter::Brendan,
+        &engine::event_data::EventData::new(),
+    )
+    .expect("run `cargo xtask extract` first");
     let header = assets::MapHeaderTable::new()
         .header(map)
         .expect("map must resolve in the generated map-header table");
@@ -312,7 +317,12 @@ pub(super) fn connected_runtime(
 /// `facing`, at rest.
 pub(super) fn one_f_phase(position: (i32, i32), facing: Direction) -> OverworldPhase {
     OverworldPhase::for_test(
-        crate::overworld::load_room(ONE_F).expect("run `cargo xtask extract` first"),
+        crate::overworld::load_room(
+            ONE_F,
+            crate::overworld::PlayerCharacter::Brendan,
+            &engine::event_data::EventData::new(),
+        )
+        .expect("run `cargo xtask extract` first"),
         ONE_F,
         PlayerState::new(position, 3, facing),
         None,

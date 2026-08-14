@@ -246,7 +246,12 @@ fn advance_player_one_frame_rejects_a_crossing_outside_the_neighbours_bounds() {
 fn walking_off_littlerootss_north_edge_crosses_into_route_101_and_back() {
     let littleroot = assets::MapId("MAP_LITTLEROOT_TOWN");
     let route101 = assets::MapId("MAP_ROUTE101");
-    let scene = crate::overworld::load_room(littleroot).expect("run `cargo xtask extract` first");
+    let scene = crate::overworld::load_room(
+        littleroot,
+        crate::overworld::PlayerCharacter::Brendan,
+        &engine::event_data::EventData::new(),
+    )
+    .expect("run `cargo xtask extract` first");
 
     // Two ordinary tiles south of the north edge, already facing the
     // direction that will carry it there. No `party_lead` is assigned: see
@@ -409,7 +414,12 @@ fn walking_off_littlerootss_north_edge_crosses_into_route_101_and_back() {
 fn crossing_a_map_connection_restarts_the_wild_encounter_immunity_window() {
     let littleroot = MapId("MAP_LITTLEROOT_TOWN");
     let route101 = MapId("MAP_ROUTE101");
-    let scene = crate::overworld::load_room(littleroot).expect("run `cargo xtask extract` first");
+    let scene = crate::overworld::load_room(
+        littleroot,
+        crate::overworld::PlayerCharacter::Brendan,
+        &engine::event_data::EventData::new(),
+    )
+    .expect("run `cargo xtask extract` first");
     let mut phase = OverworldPhase::for_test(
         scene,
         littleroot,

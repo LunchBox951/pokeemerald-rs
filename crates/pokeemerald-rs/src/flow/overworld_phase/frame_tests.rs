@@ -406,7 +406,12 @@ fn b_does_not_move_the_player_or_open_a_dialog() {
 fn idle_frames_animate_the_composed_tileset_pixels() {
     let town = assets::MapId("MAP_LITTLEROOT_TOWN");
     let mut phase = OverworldPhase::for_test(
-        crate::overworld::load_room(town).expect("run `cargo xtask extract` first"),
+        crate::overworld::load_room(
+            town,
+            crate::overworld::PlayerCharacter::Brendan,
+            &engine::event_data::EventData::new(),
+        )
+        .expect("run `cargo xtask extract` first"),
         town,
         PlayerState::new((10, 17), 3, Direction::South),
         None,
