@@ -7,10 +7,10 @@ use battle::{Battle, BattleError, BattleEvent, BattleOutcome, Dex, PlayerAction,
 #[test]
 fn every_move_event_names_the_move_that_was_used() {
     let dex = Dex::new();
-    // Slow player, so the run fails and the *enemy* acts -- the side whose
-    // move a caller cannot otherwise know, since it comes out of the
-    // rejection loop rather than from the caller.
-    let player = max_iv_mon(&dex, 19, 5, vec![MoveId(33)]);
+    // Slow player (Bulbasaur), so the run fails and the *enemy* acts -- the
+    // side whose move a caller cannot otherwise know, since it comes out of
+    // the rejection loop rather than from the caller.
+    let player = max_iv_mon(&dex, 1, 5, vec![MoveId(33)]);
     let enemy = max_iv_mon(&dex, 4, 50, vec![MoveId(33), MoveId(10)]); // Tackle, Scratch
     let mut rng = SequenceRng::new([0, 0, 1, 65000, 0, 1, 0, 0]);
     let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
