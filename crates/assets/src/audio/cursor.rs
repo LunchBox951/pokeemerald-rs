@@ -7,10 +7,12 @@
 //! pack entries by their normalized string id) and a matching write-side
 //! [`Writer`]. `crate::pack::format` has no write side of its own — packs
 //! are written by `xtask::extract`, a separate, deliberately decoupled crate
-//! (see `crate::pack`'s module docs) — but these three schemas are
-//! `encode`d by *this* crate directly (both extraction backends call into
-//! it, per `super`'s module docs), so, unlike `pack::format`, this cursor
-//! needs both directions.
+//! (see `crate::pack`'s module docs). This crate's own `Sample::encode`,
+//! `Song::encode`, and `VoiceGroup::encode` are the only callers of
+//! [`Writer`]; `xtask::extract` maintains its own independent encoders
+//! (`midi::encode`, `voicegroups::encode`, `audio_samples`) rather than
+//! calling into these, so, unlike `pack::format`, this cursor needs both
+//! directions.
 
 use super::error::AudioError;
 
