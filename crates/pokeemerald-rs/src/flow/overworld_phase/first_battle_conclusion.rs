@@ -57,8 +57,9 @@
 //! section: an abort reports no outcome at all; it is a port-only
 //! construct -- upstream would Struggle and end normally -- so there is no
 //! upstream state for a conclusion to model, and the abort can only leave
-//! an alive, damaged lead, never a fainted one, since every abort arm
-//! returns before damage is applied).
+//! an alive (if damaged) lead, never a fainted one: any damage that faints
+//! the lead sets a PlayerLost outcome and returns Ok, so a fainted lead is
+//! always a reported outcome, never an abort).
 //!
 //! # What's modelled, narrowly
 //!
@@ -242,7 +243,8 @@ impl OverworldPhase {
             // three real starters; logged rather than silently written as
             // Treecko, matching every other None-mapping arm in this diff.
             None => eprintln!(
-                "first battle: the provisional starter species has no VAR_STARTER_MON                  mapping -- leaving the var unwritten"
+                "first battle: the provisional starter species has no VAR_STARTER_MON \
+                 mapping -- leaving the var unwritten"
             ),
         }
 

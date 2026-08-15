@@ -62,9 +62,10 @@
 //! pack while authoring issue #251, unchanged.
 //!
 //! This script is **not** extended to walk the newly-reachable lab
-//! interior. `Route101_EventScript_BirchsBag`'s own remainder past the
-//! warp -- Birch's thank-you dialog, the gender-conditional bedroom-hide
-//! calls -- has no script-engine counterpart yet
+//! interior. `Route101_EventScript_BirchsBag`'s unmodelled dressing --
+//! Birch's thank-you dialog (`scripts.inc:231`) and the gender-conditional
+//! bedroom-hide calls (`:240-241`), both of which upstream runs *before*
+//! the warp at `:242` -- has no script-engine counterpart yet
 //! (`first_battle_conclusion`'s own module docs, "What's deliberately
 //! deferred"), so there is no honestly-modelled next milestone to walk
 //! toward; extending the script here would only prove the lab's own empty

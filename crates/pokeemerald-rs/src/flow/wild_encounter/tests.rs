@@ -1165,7 +1165,9 @@ fn a_lost_route_101_first_battle_heals_the_lead_instead_of_leaving_it_fainted() 
     assert_eq!(
         phase.save1.event_data.var_get(VAR_STARTER_MON),
         Ok(0),
-        "VAR_STARTER_MON reads Treecko's own encoding"
+        "VAR_STARTER_MON reads Treecko's own encoding (0 is also the var's fresh default -- \
+         the overwrite itself is pinned by first_battle_conclusion_tests' pre-poisoned run; \
+         the two non-default vars above prove the conclusion ran here)"
     );
     // Deliberately not asserting on `phase.map_id`/`phase.player.position()`
     // here: `conclude_first_battle`'s own warp to the lab depends on a local
