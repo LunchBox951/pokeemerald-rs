@@ -92,8 +92,11 @@ fn stepping_onto_the_bedroom_stair_warp_transitions_to_the_1f_map() {
     // `pos.x`/`pos.y`, and `InitPlayerAvatar` (`field_player_avatar.c:1391`)
     // always spawns the player at that sentinel regardless of arrival kind.
     // 1F's own warp #2 tile happens to decode to elevation 0 too (every
-    // real bundled warp destination does -- doors and stairs land on floor,
-    // never a raised tile), so this assertion alone cannot tell the fixed
+    // warp destination in the currently bundled 10-layout set does; NOT an
+    // upstream-wide property -- Pokemon Center 2F stairs decode to 4, and
+    // hundreds of upstream warp tiles sit at 3 -- so these assertions become
+    // real guards as soon as such a layout is bundled), so this assertion
+    // alone cannot tell the fixed
     // behaviour apart from the bug it replaces; the real mutation guard for
     // the destination-cell-elevation substitution the bug baked in is
     // `engine::overworld::warp::tests::

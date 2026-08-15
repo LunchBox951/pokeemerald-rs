@@ -204,7 +204,9 @@ pub fn resolve_warp_event(warp: &WarpEvent) -> WarpTrigger {
 /// This is the destination-side half of upstream `SetupWarp`
 /// (`field_control_avatar.c`) plus `SetPlayerCoordsFromWarp`
 /// (`overworld.c:603-624`), which is careful to write only `pos.x`/`pos.y`
-/// (`:622-623`) -- **never elevation**. Issue #286: an earlier revision of
+/// (`:608-609` on the warp-id branch this function models; `:615-616` and
+/// `:621-622` on the coord and center-fallback branches) -- **never
+/// elevation**. Issue #286: an earlier revision of
 /// this function derived an elevation from the destination grid cell here
 /// (substituting [`super::collision::ELEVATION_TRANSITION`] for a
 /// multi-level cell, matching `ObjectEventUpdateElevation`'s own skip rule)
