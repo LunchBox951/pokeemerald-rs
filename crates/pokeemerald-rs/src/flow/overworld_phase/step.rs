@@ -387,7 +387,16 @@ impl OverworldPhase {
             // The roll happens only on a completed step no warp path has
             // claimed (`roll_eligible_landing`), only on a fightable map
             // (`wild_table_fightable`), and only with a lead that can fight
-            // (`lead_can_fight`). The landed tile is the player's own tile on
+            // (`lead_can_fight`). Ordinary wild and trainer losses can no
+            // longer trip that last filter (issue #261): `Self::white_out`
+            // heals the party the instant such a battle is lost, before this
+            // method can ever run again with a fainted lead in
+            // `self.party_lead`. But a lost Route 101 first battle still
+            // leaves one -- `CB2_EndFirstBattle` has no `IsPlayerDefeated`
+            // branch, and issue #251's script conclusion is not yet modelled
+            // -- so the filter stays for exactly that residual state
+            // (`crate::flow::wild_encounter`'s module docs, "The fail-closed
+            // guard, narrowed"). The landed tile is the player's own tile on
             // a drain frame, and it is what `GetPlayerPosition` would report
             // there.
             let encounter = wild_encounter::roll_for_step(

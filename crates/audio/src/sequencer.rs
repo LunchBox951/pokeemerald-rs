@@ -164,11 +164,41 @@ impl Sequencer {
     }
 
     /// Build a sequencer with an explicit master volume and voice cap.
+    ///
+    /// Uses `song`'s own header reverb (`Song::reverb`, which collapses "no
+    /// override" to `0`); [`Self::with_resolved_reverb`] instead lets a
+    /// caller supply a session-carried level for a header that left reverb
+    /// unset.
     #[must_use]
     pub fn with_config(song: Song, master_volume: u8, max_voices: usize) -> Self {
+        let reverb_level = song.reverb();
+        Self::with_resolved_reverb(song, master_volume, max_voices, reverb_level)
+    }
+
+    /// Build a sequencer with an explicit master volume, voice cap, and
+    /// resolved reverb level, overriding `song`'s own header value.
+    ///
+    /// Used by the player crate to carry a session's previously configured
+    /// master reverb level across a song whose header left reverb unset
+    /// (`SongHeader::reverb`'s SET bit, `m4a_internal.h:12`..`:13`;
+    /// `m4a.c:661`..`:662`).
+    ///
+    /// `reverb_level`'s domain is `0..=127` (`SOUND_MODE_REVERB_VAL`,
+    /// `m4a_internal.h:12`); a larger value is clamped, the same bound
+    /// [`Song::with_reverb`] enforces at the header-ingest boundary --
+    /// upstream itself masks the byte (`soundInfo->reverb = temp &
+    /// SOUND_MODE_REVERB_VAL`, `m4a.c:445`), so no caller-supplied level may
+    /// push the comb feedback past the canonical range.
+    #[must_use]
+    pub fn with_resolved_reverb(
+        song: Song,
+        master_volume: u8,
+        max_voices: usize,
+        reverb_level: u8,
+    ) -> Self {
         let tracks = (0..song.track_count()).map(|_| TrackState::new()).collect();
         let tempo_i = song.initial_tempo();
-        let mixer = Mixer::new(master_volume, max_voices).with_reverb_level(song.reverb());
+        let mixer = Mixer::new(master_volume, max_voices).with_reverb_level(reverb_level.min(127));
         Self {
             song,
             tracks,
@@ -598,11 +628,12 @@ impl Sequencer {
             }
             Instrument::CgbSquare1(sq) => {
                 mixer.add_cgb_voice(
-                    CgbVoice::square(
+                    CgbVoice::square_with_fixed_rate(
                         CgbChannelNumber::Square1,
                         sq.duty,
                         Some(sq.sweep),
                         sq.adsr,
+                        sq.fixed_rate,
                         note_key,
                         pit_m,
                         vol_mr,
@@ -620,11 +651,12 @@ impl Sequencer {
             }
             Instrument::CgbSquare2(sq) => {
                 mixer.add_cgb_voice(
-                    CgbVoice::square(
+                    CgbVoice::square_with_fixed_rate(
                         CgbChannelNumber::Square2,
                         sq.duty,
                         None,
                         sq.adsr,
+                        sq.fixed_rate,
                         note_key,
                         pit_m,
                         vol_mr,
@@ -646,6 +678,7 @@ impl Sequencer {
                     CgbVoice::wave(
                         samples,
                         w.adsr,
+                        w.fixed_rate,
                         note_key,
                         pit_m,
                         vol_mr,
@@ -666,7 +699,7 @@ impl Sequencer {
                     CgbVoice::noise(
                         n.adsr,
                         note_key,
-                        n.period,
+                        n.lfsr_width_selector,
                         vol_mr,
                         vol_ml,
                         velocity,
@@ -932,6 +965,42 @@ mod tests {
             "a finite reverb tail must eventually decay to silence"
         );
         assert!(!seq.mixer.has_pending_reverb());
+    }
+
+    #[test]
+    fn with_resolved_reverb_applies_its_explicit_level_over_the_songs_own_header() {
+        // A song whose header never set a reverb level (`Song::reverb`
+        // collapses that to `0`) must still get a pending reverb tail when
+        // the caller supplies an explicit resolved level — this is how the
+        // player crate carries a session's previously configured level
+        // across such a header.
+        let track = vec![
+            Event::Voice(0),
+            Event::Note {
+                key: 60,
+                velocity: 127,
+                gate: 1,
+            },
+            Event::Wait(2),
+            Event::Fine,
+        ];
+        let song = test_song(vec![track], 150);
+        assert_eq!(song.reverb_override(), None);
+        let mut seq =
+            Sequencer::with_resolved_reverb(song, DEFAULT_MASTER_VOLUME, DEFAULT_MAX_VOICES, 100);
+        let mut out = vec![0.0; Sequencer::FRAME_SAMPLES];
+
+        for _ in 0..32 {
+            seq.render_frame(&mut out);
+            if seq.tracks.iter().all(|track| track.ended) && seq.mixer.is_idle() {
+                break;
+            }
+        }
+
+        assert!(
+            seq.mixer.has_pending_reverb(),
+            "the resolved reverb level must be the one actually applied to the mixer"
+        );
     }
 
     #[test]
@@ -1620,6 +1689,7 @@ mod tests {
             duty: 2,
             sweep: 0,
             adsr: CgbAdsr::flat(),
+            fixed_rate: false,
         })];
         let song = Song::new(voices, vec![cgb_test_track()], 150);
         let mut seq = Sequencer::new(song);
@@ -1630,10 +1700,121 @@ mod tests {
     }
 
     #[test]
+    fn a_fixed_rate_cgb_square_note_still_produces_sound_through_the_sequencer() {
+        // Plumbing check: `SquareTone::fixed_rate` must reach `CgbVoice`
+        // without breaking playback — the DAC correction math itself is
+        // pinned by `cgb_voice`'s own tests.
+        let voices = vec![Instrument::CgbSquare1(SquareTone {
+            duty: 2,
+            sweep: 0,
+            adsr: CgbAdsr::flat(),
+            fixed_rate: true,
+        })];
+        let song = Song::new(voices, vec![cgb_test_track()], 150);
+        let mut seq = Sequencer::new(song);
+        let mut out = vec![0.0; Sequencer::FRAME_SAMPLES];
+        seq.render_frame(&mut out);
+        assert!(out.iter().any(|&s| s.abs() > 0.0));
+        assert_eq!(seq.voice_count(), 1);
+    }
+
+    /// Render `frames` frames of a one-instrument song around `instrument`,
+    /// concatenated -- the comparison buffer for the fixed-rate threading
+    /// tests below.
+    fn rendered_cgb_frames(instrument: Instrument, frames: usize) -> Vec<f32> {
+        let song = Song::new(vec![instrument], vec![cgb_test_track()], 150);
+        let mut seq = Sequencer::new(song);
+        let mut all = Vec::with_capacity(frames * Sequencer::FRAME_SAMPLES);
+        let mut out = vec![0.0; Sequencer::FRAME_SAMPLES];
+        for _ in 0..frames {
+            seq.render_frame(&mut out);
+            all.extend_from_slice(&out);
+        }
+        all
+    }
+
+    /// `SquareTone::fixed_rate` must actually reach [`CgbVoice`]'s DAC
+    /// correction through the sequencer, not merely not crash (PR #276
+    /// review): [`cgb_test_track`]'s key 60 lands on the odd register
+    /// `0x60B`, which `cgb_dac_correct` rounds to a different playback
+    /// rate, so the two renders must diverge. A threading bug that pins the
+    /// flag to either constant makes them identical.
+    #[test]
+    fn a_fixed_rate_cgb_square_audibly_differs_from_a_plain_one() {
+        let tone = |fixed_rate| {
+            Instrument::CgbSquare1(SquareTone {
+                duty: 2,
+                sweep: 0,
+                adsr: CgbAdsr::flat(),
+                fixed_rate,
+            })
+        };
+        let fixed = rendered_cgb_frames(tone(true), 8);
+        let plain = rendered_cgb_frames(tone(false), 8);
+        assert!(
+            fixed.iter().zip(&plain).any(|(a, b)| a != b),
+            "the DAC-corrected register must change the rendered square waveform"
+        );
+    }
+
+    /// [`WaveTone::fixed_rate`]'s counterpart to
+    /// [`a_fixed_rate_cgb_square_audibly_differs_from_a_plain_one`] -- the
+    /// wave channel threads the same flag through `CgbVoice::wave`.
+    #[test]
+    fn a_fixed_rate_cgb_wave_audibly_differs_from_a_plain_one() {
+        let tone = |fixed_rate| {
+            Instrument::CgbWave(WaveTone {
+                // `0x0F` decodes to alternating 0/15 samples -- a full-swing
+                // waveform, so a playback-rate difference is visible (a
+                // constant table would render identically at any rate).
+                table: [0x0F; 16],
+                adsr: CgbAdsr::flat(),
+                fixed_rate,
+            })
+        };
+        let fixed = rendered_cgb_frames(tone(true), 8);
+        let plain = rendered_cgb_frames(tone(false), 8);
+        assert!(
+            fixed.iter().zip(&plain).any(|(a, b)| a != b),
+            "the DAC-corrected register must change the rendered wave waveform"
+        );
+    }
+
+    /// [`Sequencer::with_resolved_reverb`] clamps its level to the
+    /// `SOUND_MODE_REVERB_VAL` domain (`0..=127`) exactly as
+    /// [`Song::with_reverb`] does at the header boundary: an out-of-range
+    /// `255` must behave as `127`, never as unclamped comb feedback.
+    #[test]
+    fn an_out_of_range_resolved_reverb_level_clamps_to_the_canonical_maximum() {
+        let song = || {
+            Song::new(
+                vec![Instrument::CgbSquare1(SquareTone {
+                    duty: 2,
+                    sweep: 0,
+                    adsr: CgbAdsr::flat(),
+                    fixed_rate: false,
+                })],
+                vec![cgb_test_track()],
+                150,
+            )
+        };
+        let mut clamped = Sequencer::with_resolved_reverb(song(), 15, 8, 255);
+        let mut canonical = Sequencer::with_resolved_reverb(song(), 15, 8, 127);
+        let mut a = vec![0.0; Sequencer::FRAME_SAMPLES];
+        let mut b = vec![0.0; Sequencer::FRAME_SAMPLES];
+        for _ in 0..8 {
+            clamped.render_frame(&mut a);
+            canonical.render_frame(&mut b);
+            assert_eq!(a, b, "255 must render exactly as the clamped 127");
+        }
+    }
+
+    #[test]
     fn a_cgb_wave_note_produces_sound_through_the_sequencer() {
         let voices = vec![Instrument::CgbWave(WaveTone {
             table: [0xFF; 16],
             adsr: CgbAdsr::flat(),
+            fixed_rate: false,
         })];
         let song = Song::new(voices, vec![cgb_test_track()], 150);
         let mut seq = Sequencer::new(song);
@@ -1646,7 +1827,7 @@ mod tests {
     #[test]
     fn a_cgb_noise_note_produces_sound_through_the_sequencer() {
         let voices = vec![Instrument::CgbNoise(NoiseTone {
-            period: 0,
+            lfsr_width_selector: 0,
             adsr: CgbAdsr::flat(),
         })];
         let song = Song::new(voices, vec![cgb_test_track()], 150);
@@ -1667,11 +1848,13 @@ mod tests {
                 duty: 2,
                 sweep: 0,
                 adsr: CgbAdsr::flat(),
+                fixed_rate: false,
             }),
             Instrument::CgbSquare2(SquareTone {
                 duty: 1,
                 sweep: 0,
                 adsr: CgbAdsr::flat(),
+                fixed_rate: false,
             }),
         ];
         let track_a = vec![
@@ -1707,7 +1890,7 @@ mod tests {
         // channel) in immediate succession: the second retriggers the
         // channel rather than accumulating a second voice.
         let voices = vec![Instrument::CgbNoise(NoiseTone {
-            period: 0,
+            lfsr_width_selector: 0,
             adsr: CgbAdsr::flat(),
         })];
         let track = vec![
@@ -2173,6 +2356,7 @@ mod tests {
                     sustain: 15,
                     release: 0,
                 },
+                fixed_rate: false,
             })];
             let song = Song::new(voices, vec![make_track(with_echo)], 150);
             let mut seq = Sequencer::new(song);

@@ -94,7 +94,7 @@
 //! rule leaves all three of those paths with the var still at
 //! [`PRE_RESCUE_STATE`] and the trigger tile live, so the next step onto it
 //! re-fires the cutscene upstream already consumed. Pinned by
-//! `super::tests::an_aborted_first_battle_still_consumes_the_route_101_trigger`.
+//! `super::first_battle_trigger_tests::an_aborted_first_battle_still_consumes_the_route_101_trigger`.
 //!
 //! # Precedence
 //!
@@ -112,7 +112,7 @@
 //! **How much of that is *pinned*, and how much is only encoded.** The
 //! wild-encounter half is a real behavioural test: the trigger tile is
 //! paintable as tall grass over Route 101's own fightable land table, so
-//! `super::tests::the_route_101_trigger_suppresses_the_wild_encounter_roll_on_its_own_tile`
+//! `super::first_battle_trigger_tests::the_route_101_trigger_suppresses_the_wild_encounter_roll_on_its_own_tile`
 //! drives the suppression and its absence side by side. The other three
 //! arms cannot be reached over bundled data at all, and the reason is the
 //! map's own contents rather than the code's shape: Route 101 declares no
@@ -120,8 +120,8 @@
 //! on the trigger tile), and none of its six object events stands adjacent
 //! to `(10, 19)`/`(11, 19)` (so no A press can find an interaction to
 //! discard there). Both facts are themselves asserted — by
-//! `super::tests::route_101_has_no_warp_events_so_the_trigger_can_never_race_one`
-//! and `super::tests::no_route_101_object_event_stands_beside_the_rescue_trigger_tiles`
+//! `super::first_battle_trigger_tests::route_101_has_no_warp_events_so_the_trigger_can_never_race_one`
+//! and `super::first_battle_trigger_tests::no_route_101_object_event_stands_beside_the_rescue_trigger_tiles`
 //! — so a future map-data change that makes either arm reachable fails a
 //! test and forces the real precedence pin to be written. Until then the
 //! ordering is encoded and documented, the same treatment
@@ -202,17 +202,17 @@ const TRIGGER_SCRIPT: &str = "Route101_EventScript_StartBirchRescue";
 /// paths below.
 ///
 /// **How much of that is pinned.** `Self::new` is pinned by
-/// `super::tests::entering_route_101_bumps_the_fresh_save_rescue_var_to_one`
+/// `super::first_battle_trigger_tests::entering_route_101_bumps_the_fresh_save_rescue_var_to_one`
 /// (and its other-map complement), `Self::cross_connection` by
-/// `super::tests::real_pack_crossing_into_route_101_primes_the_rescue_var_on_arrival`,
+/// `super::first_battle_trigger_tests::real_pack_crossing_into_route_101_primes_the_rescue_var_on_arrival`,
 /// and [`OverworldPhase::from_saved`] by
-/// `super::tests::continuing_on_route_101_only_advances_the_fresh_rescue_state`.
+/// `super::first_battle_trigger_tests::continuing_on_route_101_only_advances_the_fresh_rescue_state`.
 /// The `Self::warp_to` call is **unreachable over bundled data and pinned
 /// only by that fact**: warping needs a `warp_events` entry at the
 /// destination, `warp_to` returns early ("no warp event #id") when the
 /// destination map declares none, and Route 101 declares none at all — the
 /// same emptiness the module docs' "Precedence" section rests on, asserted by
-/// `super::tests::route_101_has_no_warp_events_so_the_trigger_can_never_race_one`,
+/// `super::first_battle_trigger_tests::route_101_has_no_warp_events_so_the_trigger_can_never_race_one`,
 /// so a future Route 101 warp fails that test first and forces this arm to be
 /// pinned for real. It is called anyway rather than dropped, because
 /// upstream's on-frame script is not entry-path-scoped (above) and because a
@@ -259,7 +259,7 @@ impl OverworldPhase {
     /// the same elevation — so after the battle the player can, and on the
     /// way back south will, stand on one with the var matching its
     /// `var_value` exactly. Only the script name tells the two apart. Pinned
-    /// by `super::tests::the_prevent_exit_coord_events_never_start_a_battle`.
+    /// by `super::first_battle_trigger_tests::the_prevent_exit_coord_events_never_start_a_battle`.
     fn first_battle_trigger_at(
         &self,
         runtime: &MapRuntime<'_>,

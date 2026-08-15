@@ -86,8 +86,23 @@ fn cgb3_wave_level(envelope_volume: u8) -> u32 {
 /// instrument via `*nrx3ptr = wavePointer << 3` (`m4a.c:1022`), whose low bit
 /// is `voice_noise`'s `period & 1` (`music_voice.inc:105`). Reproduced here by
 /// ORing that bit into the table byte.
-fn noise_control_byte(note_key: u8, period: u8) -> u8 {
-    midi_key_to_noise_control(note_key) | ((period & 1) << 3)
+fn noise_control_byte(note_key: u8, lfsr_width_selector: u8) -> u8 {
+    midi_key_to_noise_control(note_key) | ((lfsr_width_selector & 1) << 3)
+}
+
+/// Emerald's 8-bit-DAC frequency correction for a fixed-rate
+/// (`TONEDATA_TYPE_FIX`) square/wave channel: `(freq_reg + 1) & 0x7fe`,
+/// applied at note-on (before the oscillator — and, on channel 1, its sweep
+/// unit's shadow frequency — initialize) and again on every mid-note pitch
+/// re-run (`m4a.c:1184`..`:1202`, under the 8-bit DAC configuration selected
+/// at `m4a.c:70`..`:81`). A non-fixed-rate channel's register passes through
+/// unmodified.
+fn cgb_dac_correct(freq_reg: u16, fixed_rate: bool) -> u16 {
+    if fixed_rate {
+        (freq_reg + 1) & 0x7fe
+    } else {
+        freq_reg
+    }
 }
 
 /// A live CGB PSG voice.
@@ -120,11 +135,17 @@ pub struct CgbVoice {
     /// [`crate::voice::Voice`]s so an end-of-tie can pick the newest match
     /// across both kinds (see that type's `seq` field). Stamped by the mixer.
     seq: u64,
+    /// `TONEDATA_TYPE_FIX`, threaded from the instrument at note-on: whether
+    /// [`Self::set_track_pitch`] re-applies [`cgb_dac_correct`] on every
+    /// mid-note retune. Always `false` for a noise voice (see [`Self::noise`]).
+    fixed_rate: bool,
 }
 
 impl CgbVoice {
-    /// Start a square-channel (1 or 2) voice. `sweep_byte` is `Some` only for
-    /// channel 1 (channel 2 has no hardware sweep register to drive).
+    /// Start a square-channel (1 or 2) voice, not fixed-rate. `sweep_byte` is
+    /// `Some` only for channel 1 (channel 2 has no hardware sweep register to
+    /// drive). See [`Self::square_with_fixed_rate`] for a `TONEDATA_TYPE_FIX`
+    /// instrument.
     #[must_use]
     #[allow(clippy::too_many_arguments)]
     pub fn square(
@@ -144,7 +165,53 @@ impl CgbVoice {
         echo_volume: u8,
         echo_length: u8,
     ) -> Self {
-        let freq_reg = midi_key_to_cgb_freq_reg(note_key, pit_m);
+        Self::square_with_fixed_rate(
+            channel,
+            duty,
+            sweep_byte,
+            adsr,
+            false,
+            note_key,
+            pit_m,
+            vol_mr,
+            vol_ml,
+            velocity,
+            gate_time,
+            midi_key,
+            track,
+            rhythm_pan,
+            echo_volume,
+            echo_length,
+        )
+    }
+
+    /// As [`Self::square`], additionally threading the instrument's
+    /// `TONEDATA_TYPE_FIX` flag through to Emerald's 8-bit-DAC frequency
+    /// correction ([`cgb_dac_correct`]) before the oscillator — and, for
+    /// channel 1, its sweep unit's shadow frequency — initialize
+    /// (`m4a.c:1184`..`:1202`), and to every later [`Self::set_track_pitch`]
+    /// re-run.
+    #[must_use]
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn square_with_fixed_rate(
+        channel: CgbChannelNumber,
+        duty: u8,
+        sweep_byte: Option<u8>,
+        adsr: CgbAdsr,
+        fixed_rate: bool,
+        note_key: u8,
+        pit_m: u8,
+        vol_mr: u8,
+        vol_ml: u8,
+        velocity: u8,
+        gate_time: u16,
+        midi_key: u8,
+        track: usize,
+        rhythm_pan: i8,
+        echo_volume: u8,
+        echo_length: u8,
+    ) -> Self {
+        let freq_reg = cgb_dac_correct(midi_key_to_cgb_freq_reg(note_key, pit_m), fixed_rate);
         let sweep = sweep_byte.map(|b| crate::psg::Sweep::from_byte(b, freq_reg));
         let square = SquareChannel::new(duty, freq_reg, sweep);
         // Hardware runs the sweep overflow calc immediately at trigger, so an
@@ -158,6 +225,7 @@ impl CgbVoice {
             channel,
             oscillator,
             adsr,
+            fixed_rate,
             vol_mr,
             vol_ml,
             velocity,
@@ -176,11 +244,16 @@ impl CgbVoice {
 
     /// Start a programmable-wave (channel 3) voice from already-decoded
     /// samples (see [`crate::psg::WaveChannel::decode_wave_ram`]).
+    /// `fixed_rate` threads the instrument's `TONEDATA_TYPE_FIX` flag through
+    /// to Emerald's 8-bit-DAC frequency correction ([`cgb_dac_correct`])
+    /// before the oscillator initializes, and to every later
+    /// [`Self::set_track_pitch`] re-run.
     #[must_use]
     #[allow(clippy::too_many_arguments)]
     pub fn wave(
         samples: [i8; 32],
         adsr: CgbAdsr,
+        fixed_rate: bool,
         note_key: u8,
         pit_m: u8,
         vol_mr: u8,
@@ -193,12 +266,13 @@ impl CgbVoice {
         echo_volume: u8,
         echo_length: u8,
     ) -> Self {
-        let freq_reg = midi_key_to_cgb_freq_reg(note_key, pit_m);
+        let freq_reg = cgb_dac_correct(midi_key_to_cgb_freq_reg(note_key, pit_m), fixed_rate);
         let oscillator = Oscillator::Wave(WaveChannel::new(samples, freq_reg));
         Self::new(
             CgbChannelNumber::Wave,
             oscillator,
             adsr,
+            fixed_rate,
             vol_mr,
             vol_ml,
             velocity,
@@ -212,18 +286,21 @@ impl CgbVoice {
     }
 
     /// Start a noise (channel 4) voice. Noise ignores fine pitch, matching
-    /// `MidiKeyToCgbFreq`'s noise branch (`m4a.c:812`). `period` is the
-    /// instrument's width selector (`ToneData` byte from `voice_noise`'s
-    /// `period & 1`, `music_voice.inc:105`): its low bit becomes `NR43` bit 3
-    /// (`0x08`), which `CgbSound` sets via `*nrx3ptr = wavePointer << 3`
-    /// (`m4a.c:1022`) and which the `gNoiseTable` control byte never carries
-    /// itself — so it alone selects the LFSR's narrow (7-bit) mode.
+    /// `MidiKeyToCgbFreq`'s noise branch (`m4a.c:812`), and is never
+    /// fixed-rate (Emerald's 8-bit-DAC correction applies only to the
+    /// pitched square/wave channels — `m4a.c:1184`..`:1202`).
+    /// `lfsr_width_selector` is the instrument's width selector (`ToneData`
+    /// byte from `voice_noise`'s `period & 1`, `music_voice.inc:105`): its
+    /// low bit becomes `NR43` bit 3 (`0x08`), which `CgbSound` sets via
+    /// `*nrx3ptr = wavePointer << 3` (`m4a.c:1022`) and which the
+    /// `gNoiseTable` control byte never carries itself — so it alone selects
+    /// the LFSR's narrow (7-bit) mode.
     #[must_use]
     #[allow(clippy::too_many_arguments)]
     pub fn noise(
         adsr: CgbAdsr,
         note_key: u8,
-        period: u8,
+        lfsr_width_selector: u8,
         vol_mr: u8,
         vol_ml: u8,
         velocity: u8,
@@ -234,12 +311,13 @@ impl CgbVoice {
         echo_volume: u8,
         echo_length: u8,
     ) -> Self {
-        let control = noise_control_byte(note_key, period);
+        let control = noise_control_byte(note_key, lfsr_width_selector);
         let oscillator = Oscillator::Noise(NoiseChannel::from_control_byte(control));
         Self::new(
             CgbChannelNumber::Noise,
             oscillator,
             adsr,
+            false,
             vol_mr,
             vol_ml,
             velocity,
@@ -257,6 +335,7 @@ impl CgbVoice {
         channel: CgbChannelNumber,
         oscillator: Oscillator,
         adsr: CgbAdsr,
+        fixed_rate: bool,
         vol_mr: u8,
         vol_ml: u8,
         velocity: u8,
@@ -289,6 +368,7 @@ impl CgbVoice {
             rhythm_pan,
             track,
             seq: 0,
+            fixed_rate,
         }
     }
 
@@ -382,11 +462,21 @@ impl CgbVoice {
     /// selector set at note-on is preserved by [`NoiseChannel::retune`],
     /// mirroring `CgbSound`'s `*nrx3ptr = (*nrx3ptr & 0x08) | frequency`
     /// (`m4a.c:1200`).
+    ///
+    /// A fixed-rate square/wave channel (`Self::fixed_rate`) re-applies
+    /// [`cgb_dac_correct`] here too, so a mid-note pitch re-run can't undo the
+    /// correction note-on applied.
     pub fn set_track_pitch(&mut self, key_m: i32, pit_m: u8) {
         let note_key = u8::try_from((i32::from(self.pitch_key) + key_m).max(0) & 0xFF).unwrap_or(0);
         match &mut self.oscillator {
-            Oscillator::Square(s) => s.set_frequency(midi_key_to_cgb_freq_reg(note_key, pit_m)),
-            Oscillator::Wave(w) => w.set_frequency(midi_key_to_cgb_freq_reg(note_key, pit_m)),
+            Oscillator::Square(s) => s.set_frequency(cgb_dac_correct(
+                midi_key_to_cgb_freq_reg(note_key, pit_m),
+                self.fixed_rate,
+            )),
+            Oscillator::Wave(w) => w.set_frequency(cgb_dac_correct(
+                midi_key_to_cgb_freq_reg(note_key, pit_m),
+                self.fixed_rate,
+            )),
             Oscillator::Noise(n) => n.retune(midi_key_to_noise_control(note_key)),
         }
     }
@@ -497,6 +587,7 @@ mod tests {
         let mut voice = CgbVoice::wave(
             full_swing_wave(),
             CgbAdsr::flat(),
+            false,
             60,
             0,
             0xFF,
@@ -703,5 +794,177 @@ mod tests {
             voice.is_active(),
             "a nonzero echo_volume must hold the channel in its pseudo-echo tail"
         );
+    }
+
+    #[test]
+    fn cgb_dac_correct_matches_emeralds_8_bit_dac_formula() {
+        // `(freq_reg + 1) & 0x7fe` (m4a.c:1184..:1202): a fixed-rate register
+        // rounds up to the next even value; a non-fixed-rate one passes
+        // through unmodified.
+        assert_eq!(cgb_dac_correct(0, true), 0);
+        assert_eq!(cgb_dac_correct(1, true), 2);
+        assert_eq!(cgb_dac_correct(2, true), 2);
+        assert_eq!(cgb_dac_correct(0x7FE, true), 0x7FE);
+        assert_eq!(cgb_dac_correct(0x555, false), 0x555);
+    }
+
+    #[test]
+    fn fixed_rate_note_on_applies_the_dac_correction_before_the_sweep_born_dead_check() {
+        // Key 54/fine 167 lands on the odd frequency register 0x555 (1365):
+        // its sweep-overflow sum (freq + freq>>shift) sits exactly at the
+        // 0x7FF threshold, so a plain (non-fixed-rate) note is NOT born
+        // dead. The DAC-corrected register 0x556 (1366) pushes that same sum
+        // over the threshold, so a fixed-rate note on the identical
+        // key/sweep IS born dead — which only holds if the correction runs
+        // before `SquareChannel::new`'s sweep initialization, not after.
+        let sweep_byte = 0b0000_0001; // period 0, add, shift 1
+        let plain = CgbVoice::square(
+            CgbChannelNumber::Square1,
+            2,
+            Some(sweep_byte),
+            CgbAdsr::flat(),
+            54,
+            167,
+            0xFF,
+            0xFF,
+            127,
+            0,
+            54,
+            0,
+            0,
+            0,
+            0,
+        );
+        assert!(
+            plain.is_active(),
+            "the uncorrected sum sits exactly at the threshold, not over it"
+        );
+
+        let fixed = CgbVoice::square_with_fixed_rate(
+            CgbChannelNumber::Square1,
+            2,
+            Some(sweep_byte),
+            CgbAdsr::flat(),
+            true,
+            54,
+            167,
+            0xFF,
+            0xFF,
+            127,
+            0,
+            54,
+            0,
+            0,
+            0,
+            0,
+        );
+        assert!(
+            !fixed.is_active(),
+            "the DAC-corrected sum must overflow the sweep, born dead"
+        );
+    }
+
+    #[test]
+    fn fixed_rate_wave_note_on_audibly_differs_from_the_uncorrected_register() {
+        // Key 54/fine 167 lands on the odd register 0x555; the DAC
+        // correction rounds it up to 0x556, a different playback rate. Over
+        // enough samples a one-register-step difference must show up in the
+        // rendered waveform.
+        let mut fixed = CgbVoice::wave(
+            full_swing_wave(),
+            CgbAdsr::flat(),
+            true,
+            54,
+            167,
+            0xFF,
+            0xFF,
+            127,
+            0,
+            54,
+            0,
+            0,
+            0,
+            0,
+        );
+        let mut plain = CgbVoice::wave(
+            full_swing_wave(),
+            CgbAdsr::flat(),
+            false,
+            54,
+            167,
+            0xFF,
+            0xFF,
+            127,
+            0,
+            54,
+            0,
+            0,
+            0,
+            0,
+        );
+        let mut acc_fixed = vec![(0i32, 0i32); 2048];
+        let mut acc_plain = vec![(0i32, 0i32); 2048];
+        fixed.begin_frame(15);
+        fixed.render(&mut acc_fixed);
+        plain.begin_frame(15);
+        plain.render(&mut acc_plain);
+        assert_ne!(
+            acc_fixed, acc_plain,
+            "the DAC-corrected register must audibly differ from the uncorrected one"
+        );
+    }
+
+    #[test]
+    fn set_track_pitch_reapplies_the_dac_correction_for_a_fixed_rate_channel() {
+        // A fixed-rate voice built directly at key 54/fine 167 must render
+        // identically to one built elsewhere then bent to that same key via
+        // `set_track_pitch` — a mid-note retune must reapply the DAC
+        // correction, not just the raw register.
+        let mut direct = CgbVoice::square_with_fixed_rate(
+            CgbChannelNumber::Square2,
+            2,
+            None,
+            CgbAdsr::flat(),
+            true,
+            54,
+            167,
+            0xFF,
+            0xFF,
+            127,
+            0,
+            54,
+            0,
+            0,
+            0,
+            0,
+        );
+        let mut retuned = CgbVoice::square_with_fixed_rate(
+            CgbChannelNumber::Square2,
+            2,
+            None,
+            CgbAdsr::flat(),
+            true,
+            60,
+            0,
+            0xFF,
+            0xFF,
+            127,
+            0,
+            54,
+            0,
+            0,
+            0,
+            0,
+        )
+        .with_pitch_key(54);
+        retuned.set_track_pitch(0, 167);
+
+        let mut acc_direct = vec![(0i32, 0i32); 2048];
+        let mut acc_retuned = vec![(0i32, 0i32); 2048];
+        direct.begin_frame(15);
+        direct.render(&mut acc_direct);
+        retuned.begin_frame(15);
+        retuned.render(&mut acc_retuned);
+        assert_eq!(acc_direct, acc_retuned);
     }
 }
