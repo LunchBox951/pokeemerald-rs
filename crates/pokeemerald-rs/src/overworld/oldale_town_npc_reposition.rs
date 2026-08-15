@@ -47,14 +47,17 @@
 //! on-transition effect like
 //! `crate::flow::overworld_phase::route103_rival_trigger::setup_rival_gfx_id_on_transition`
 //! (which mutates live [`engine::event_data::EventData`], read back later):
-//! there is no live var/flag here for anything to read, and no call site
-//! this port has could ever plausibly forget to apply it, since every
-//! consumer of Oldale Town's object events -- rendering
+//! there is no live var/flag here for anything to read, and both consumers
+//! of Oldale Town's *object events* that exist today -- rendering
 //! ([`super::load_room`] -> [`super::sprites::SceneSprites::from_pack`])
 //! and collision/interaction (`crate::flow::overworld_phase::step`'s
-//! per-frame [`engine::overworld::MapRuntime`] rebuild) -- already goes
-//! through [`assets::MapEventsTable::resolve`], and [`resolve_map_events`]
-//! is a drop-in replacement for exactly that call.
+//! per-frame [`engine::overworld::MapRuntime`] rebuild) -- were switched to
+//! [`resolve_map_events`]. Being a drop-in replacement cuts both ways: the
+//! raw [`assets::MapEventsTable::resolve`] still compiles and still looks
+//! right, so a *future* object-event consumer could forget the wrapper --
+//! the staleness-guard test below catches generated-data drift, not an
+//! un-switched call site, and a reviewer adding such a consumer must route
+//! it through this chokepoint.
 //!
 //! # What upstream's `SetObjEventTemplateCoords` actually mutates
 //!
@@ -203,12 +206,14 @@ static OLDALE_TOWN_OBJECT_EVENTS: [ObjectEvent; 4] = [
 ///
 /// Called from [`super::load_room`] (rendering, every warp/connection entry
 /// into a map) and from `crate::flow::overworld_phase::step`'s per-frame
-/// runtime rebuild (collision/interaction) -- **not** from
-/// `crate::flow::overworld_phase::connections`'s own two direct
-/// `MapEventsTable::resolve` calls, which only ever read a runtime's
-/// `warp_events`/metatile data to resolve a warp landing, never
-/// `object_events`, so patching there would be a costless no-op left out
-/// for that reason alone.
+/// runtime rebuild (collision/interaction) -- **not** from the three other
+/// production `MapEventsTable::resolve` sites, which never read
+/// `object_events`, so patching them would be a costless no-op left out
+/// for that reason alone: `crate::flow::overworld_phase::connections`'s two
+/// calls (one resolves a warp landing, one a caller-supplied position --
+/// both `warp_events`/metatile only) and
+/// `crate::flow::overworld_phase::placement`'s `saved_tile_placement`
+/// (metatile only, on the continue-from-save path).
 ///
 /// # Errors
 ///
