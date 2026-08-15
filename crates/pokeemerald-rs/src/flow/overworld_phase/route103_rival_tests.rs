@@ -253,6 +253,52 @@ fn facing_the_rival_and_pressing_a_starts_the_trainer_battle() {
     );
 }
 
+/// The residual state issue #261's white-out cannot cover, on the trainer
+/// path (issue #261 review; `flow::wild_encounter`'s module docs, "The
+/// fail-closed guard, narrowed"): a lost Route 101 first battle leaves a
+/// fainted lead free-roaming, and Route 103 is walkable from there. An
+/// A-press on the rival in that state must start nothing and, crucially,
+/// **draw nothing** -- without the screen each attempt would spend
+/// `build_trainer_pokemon`'s OT-id draws before `Battle::new_trainer`'s
+/// `FaintedBattler` refusal, repeatable draws with no upstream counterpart.
+#[test]
+fn a_fainted_lead_cannot_start_the_rival_battle_and_draws_nothing() {
+    let mut phase = route_103_phase_facing_the_rival();
+    let mut fainted = overmatched_treecko_lead();
+    fainted.apply_damage(u32::MAX);
+    assert!(fainted.is_fainted(), "setup: the lead really is fainted");
+    phase.party_lead = Some(fainted);
+
+    let before = phase.rng.state();
+    phase.step(pressed(Buttons::A));
+    assert!(
+        !phase.is_rival_battle_active(),
+        "a fainted lead must not start the rival battle"
+    );
+    assert!(
+        phase.party_lead.is_some(),
+        "the refused handoff leaves the lead in the party"
+    );
+    assert_eq!(
+        phase.rng.state(),
+        before,
+        "the screen runs before build_trainer_pokemon can draw anything"
+    );
+
+    // And the refusal is not a dead end: a healed lead fights normally.
+    phase
+        .party_lead
+        .as_mut()
+        .expect("still present")
+        .heal(&Dex::new())
+        .expect("a real species heals");
+    phase.step(pressed(Buttons::A));
+    assert!(
+        phase.is_rival_battle_active(),
+        "the same tile and stance starts the battle once the lead is healed"
+    );
+}
+
 /// Holding A through the frame after the battle starts must not re-run the
 /// interaction lookup or start a second battle. Note what this does and
 /// does not prove: a *held* A is not a fresh edge, so
@@ -396,6 +442,11 @@ fn winning_the_rival_battle_hides_the_rival_and_makes_the_fight_unrepeatable() {
         Ok(true),
         "removeobject's real, ported effect (module docs)"
     );
+    assert_eq!(
+        phase.save1().money,
+        crate::new_game::STARTING_MONEY,
+        "a win must not touch the player's money -- only `white_out` (a loss) halves it"
+    );
 
     // The rival is no longer even *found* by the facing lookup, so a fresh
     // A press finds nothing to interact with -- the fight cannot restart.
@@ -408,14 +459,37 @@ fn winning_the_rival_battle_hides_the_rival_and_makes_the_fight_unrepeatable() {
     );
 }
 
-/// Item (f): a [`BattleOutcome::PlayerLost`] battle still concludes (the
-/// fainted lead is written back), but the hide flag stays clear and the
-/// rival remains interactable -- module docs' "The honest loss decision".
+/// **Replaces** the former `losing_the_rival_battle_does_not_hide_the_rival`
+/// regression (issue #261, `route103_rival_trigger`'s module docs "The loss
+/// decision" section): that test pinned the *interim* posture this crate
+/// shipped before this issue -- a loss left a fainted lead standing right
+/// next to a still-interactable rival, walled off from a rematch only by an
+/// emergent `FaintedBattler` refusal one level down
+/// ([`crate::flow::route103_rival::start_route103_rival_battle`]). The real
+/// upstream behaviour is reachable now
+/// ([`super::white_out::OverworldPhase::white_out`]), so this pins that
+/// instead: item (f) of the issue's own test list -- a
+/// [`BattleOutcome::PlayerLost`] battle still concludes (the lead is written
+/// back, same as before), the hide flag stays clear exactly as it does
+/// upstream (`RivalEnd`'s branch is never reached on a loss, module docs),
+/// but the write-back lead is healed and the player's money is halved in the
+/// same frame, `DoWhiteOut`'s own ordering
+/// (`pokeemerald/src/overworld.c:361-362`).
+///
+/// Pack-free by construction, same reasoning as
+/// `crate::flow::wild_encounter::tests::a_lost_battle_now_heals_the_party_and_halves_money`:
+/// every assertion is about state `white_out` writes *before* it attempts
+/// the warp home, so it holds whether or not a local pack is extracted. The
+/// warp landing itself (and thus whether the rival is still reachable at
+/// all -- it is not, once the player is no longer standing on Route 103) is
+/// pack-gated, pinned separately by
+/// [`real_pack_losing_the_rival_battle_warps_home_to_the_default_heal_location`].
 #[test]
-fn losing_the_rival_battle_does_not_hide_the_rival() {
+fn losing_the_rival_battle_now_heals_halves_money_and_leaves_the_hide_flag_clear() {
     let mut phase = route_103_phase_facing_the_rival();
     phase.party_lead = Some(overmatched_treecko_lead());
     phase.rng = engine::rng::Rng::new(2024);
+    phase.save1.money = 2001;
     phase.step(pressed(Buttons::A));
     assert!(phase.is_rival_battle_active(), "setup: the battle started");
 
@@ -429,36 +503,94 @@ fn losing_the_rival_battle_does_not_hide_the_rival() {
         phase.rival_battle_outcome(),
         Some(BattleOutcome::PlayerLost)
     );
-    assert!(
-        phase.party_lead.is_some(),
-        "the fainted lead is still written back (module docs' own honest gap)"
-    );
     assert_eq!(
         phase.save1().event_data.flag_get(FLAG_HIDE_ROUTE_103_RIVAL),
         Ok(false),
-        "a loss must not remove the rival -- it stays interactable"
+        "a loss must not remove the rival -- upstream's `RivalEnd` branch is never reached \
+         on a loss either"
     );
+    assert_eq!(
+        phase.save1().money,
+        1000,
+        "SetMoney(&gSaveBlock1Ptr->money, GetMoney(&gSaveBlock1Ptr->money) / 2) -- \
+         2001 / 2 == 1000"
+    );
+    let lead = phase
+        .party_lead
+        .as_ref()
+        .expect("the driver writes the player's mon back, and white_out heals it in place");
+    assert!(
+        !lead.is_fainted(),
+        "HealPlayerParty restores full HP -- a lost battle no longer leaves a fainted lead"
+    );
+    assert_eq!(lead.current_hp(), lead.stats().max_hp);
+}
 
-    // Facing the still-visible rival again finds it. The fresh lead below
-    // is an out-of-band full heal no production path can perform yet: the
-    // loss left the real lead fainted, and a fresh attempt with it fails
-    // closed at `start_route103_rival_battle` (`FaintedBattler`) until the
-    // white-out/heal path lands (issue #261, module docs' "Interactable is
-    // not re-fightable"). So this pins the interaction *lookup* still
-    // finding the un-hidden rival -- not re-fightability -- plus the
-    // trigger-time result-channel clear below.
+/// The trigger-time result-channel clear, carried forward from the tail of
+/// the pre-#261 `losing_the_rival_battle_does_not_hide_the_rival` test that
+/// [`losing_the_rival_battle_now_heals_halves_money_and_leaves_the_hide_flag_clear`]
+/// replaced: [`super::OverworldPhase::begin_route103_rival_battle`] clears
+/// [`OverworldPhase::rival_battle_outcome`] the instant it fires, its own
+/// doc comment's still-live "a new attempt owns its result channel from
+/// trigger time onward" contract, so an in-progress battle can never report
+/// an earlier attempt's terminal outcome.
+///
+/// The old test reached that assertion by re-triggering the fight after a
+/// loss, which issue #261's white-out makes impossible (the player is warped
+/// off Route 103 before another A press is possible). The stale outcome is
+/// therefore seeded directly instead -- the same shape
+/// `super::tests::an_aborted_first_battle_still_consumes_the_route_101_trigger`
+/// already uses for `first_battle_outcome`'s identical contract on the
+/// Route 101 side.
+#[test]
+fn beginning_a_rival_battle_clears_a_stale_outcome_from_an_earlier_attempt() {
+    let mut phase = route_103_phase_facing_the_rival();
     phase.party_lead = Some(overwhelming_treecko_lead());
+    phase.rng = engine::rng::Rng::new(2024);
+    // Terminal state from an earlier fight, sitting exactly where a fresh
+    // attempt's own `None` belongs.
+    phase.rival_battle_outcome = Some(BattleOutcome::PlayerLost);
+
     phase.step(pressed(Buttons::A));
+
     assert!(
         phase.is_rival_battle_active(),
-        "the rival must still be interactable after a loss"
+        "setup: the trigger fired and built a battle"
     );
     assert_eq!(
         phase.rival_battle_outcome(),
         None,
-        "a new attempt owns its result channel from trigger time onward -- \
-         `begin_route103_rival_battle` clears the stale `PlayerLost`"
+        "`begin_route103_rival_battle` clears the stale `PlayerLost` at trigger time"
     );
+}
+
+/// The pack-gated companion to
+/// [`losing_the_rival_battle_now_heals_halves_money_and_leaves_the_hide_flag_clear`]:
+/// the same loss must also land the player on the default heal location
+/// (`crate::new_game::default_last_heal_location`) once `white_out`'s warp
+/// actually resolves against a real map -- so a post-loss player is not
+/// merely healed but genuinely off Route 103, the same displacement
+/// upstream's own white-out produces. `#[ignore]`d like this crate's other
+/// real-pack tests: run `cargo xtask extract` first.
+#[test]
+#[ignore = "needs a local pack: run `cargo xtask extract` first"]
+fn real_pack_losing_the_rival_battle_warps_home_to_the_default_heal_location() {
+    let mut phase = route_103_phase_facing_the_rival();
+    phase.party_lead = Some(overmatched_treecko_lead());
+    phase.rng = engine::rng::Rng::new(2024);
+    phase.step(pressed(Buttons::A));
+    assert!(phase.is_rival_battle_active(), "setup: the battle started");
+
+    let outcome = play_out_rival_battle(&mut phase, 64);
+    assert_eq!(outcome, Some(BattleOutcome::PlayerLost), "setup: must lose");
+
+    assert_eq!(
+        phase.map_id,
+        MapId("MAP_LITTLEROOT_TOWN_BRENDANS_HOUSE_2F"),
+        "the white-out must land on the default heal location's own map, off Route 103 \
+         entirely"
+    );
+    assert_eq!(phase.player.position(), (4, 2));
 }
 
 /// The driver never attempts to run -- the same headline requirement
