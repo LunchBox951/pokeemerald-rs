@@ -86,6 +86,28 @@ fn stepping_onto_the_bedroom_stair_warp_transitions_to_the_1f_map() {
         (8, 2),
         "the player must arrive at 1F's own warp #2 position"
     );
+    // Issue #286: a resolved warp lands at `ELEVATION_TRANSITION` (0),
+    // never the destination tile's own elevation -- upstream's
+    // `SetPlayerCoordsFromWarp` (`overworld.c:603-624`) writes only
+    // `pos.x`/`pos.y`, and `InitPlayerAvatar` (`field_player_avatar.c:1391`)
+    // always spawns the player at that sentinel regardless of arrival kind.
+    // 1F's own warp #2 tile happens to decode to elevation 0 too (every
+    // real bundled warp destination does -- doors and stairs land on floor,
+    // never a raised tile), so this assertion alone cannot tell the fixed
+    // behaviour apart from the bug it replaces; the real mutation guard for
+    // the destination-cell-elevation substitution the bug baked in is
+    // `engine::overworld::warp::tests::
+    // warp_destination_position_returns_position_only_regardless_of_the_destination_cells_elevation`,
+    // which uses synthetic non-zero and multi-level cells specifically
+    // because no real map exercises that case. What this assertion pins
+    // instead is the documented contract itself (`warp_to`'s own doc
+    // comment has the full citation trail), completed by the
+    // sentinel-then-adopt sequence at the end of this test.
+    assert_eq!(
+        phase.player.elevation(),
+        0,
+        "landed at ELEVATION_TRANSITION, matching warp_to's documented contract"
+    );
     // The facing is derived from the *destination* tile's own behavior,
     // so pin that behavior down too -- otherwise `South` here would also
     // be satisfied by `GetAdjustedInitialDirection`'s catch-all `else`.
@@ -130,6 +152,31 @@ fn stepping_onto_the_bedroom_stair_warp_transitions_to_the_1f_map() {
         ),
         (8, 2),
         "save1.pos must mirror the post-warp tile, not the pre-warp one"
+    );
+
+    // The other half of the sentinel-then-adopt sequence (issue #286): the
+    // very next completed step off the sentinel adopts the landing tile's
+    // own real elevation, exactly like any other step
+    // (`ObjectEventUpdateElevation`,
+    // `engine::overworld::PlayerState::step`'s "Elevation adoption"
+    // section) -- there is no dedicated warp-arrival elevation logic left to
+    // regress independently of the ordinary step path. One tile south of
+    // the stairs, `(8, 3)`, is ordinary floor -- ground truth confirmed by
+    // this step actually completing rather than blocking.
+    phase.step(held(Buttons::DOWN));
+    for _ in 1..u32::from(WALK_FRAMES_PER_TILE) {
+        phase.step(ButtonState::new());
+    }
+    assert_eq!(
+        phase.player.position(),
+        (8, 3),
+        "the step off the stair tile must complete onto ordinary 1F floor"
+    );
+    assert_eq!(
+        phase.player.elevation(),
+        3,
+        "the first completed step after the warp adopts (8, 3)'s own real \
+         elevation -- the sentinel is gone the moment an ordinary step lands"
     );
 }
 
@@ -254,6 +301,17 @@ fn warping_to_the_front_doormat_faces_north_and_rebinds_the_scene() {
         phase.player.position(),
         (8, 8),
         "1F's warp #1: the doormat inside the front door"
+    );
+    // Issue #286, the direct `warp_to` call-site half: lands at
+    // `ELEVATION_TRANSITION` (0) -- see
+    // `stepping_onto_the_bedroom_stair_warp_transitions_to_the_1f_map` for
+    // the full sentinel-then-adopt sequence and why this specific tile
+    // (like every real bundled warp destination) can't tell the fix apart
+    // from the bug it replaces on its own.
+    assert_eq!(
+        phase.player.elevation(),
+        0,
+        "landed at ELEVATION_TRANSITION, matching warp_to's documented contract"
     );
     assert_eq!(
         phase.player.facing(),
@@ -398,6 +456,17 @@ fn walking_onto_the_doormat_holding_south_exits_through_the_front_door() {
         phase.player.position(),
         (5, 8),
         "Littleroot's own warp #1: the front door"
+    );
+    // Issue #286, the arrow-warp trigger path: same `warp_to` sentinel
+    // landing as the door-triggered stair warp
+    // (`stepping_onto_the_bedroom_stair_warp_transitions_to_the_1f_map`),
+    // pinned here too since it's reached through `OverworldPhase::step`'s
+    // arrow-warp poll (`step.rs`'s `Some(WarpTrigger::Resolved { .. }) =>
+    // self.warp_to(..)`) rather than a direct `warp_to` call.
+    assert_eq!(
+        phase.player.elevation(),
+        0,
+        "landed at ELEVATION_TRANSITION, matching warp_to's documented contract"
     );
     assert_eq!(
         phase.player.facing(),

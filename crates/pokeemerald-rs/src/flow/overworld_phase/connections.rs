@@ -186,11 +186,31 @@ pub(super) fn run_on_transition_map_script(
 impl OverworldPhase {
     /// Execute a [`engine::overworld::WarpTrigger::Resolved`] warp: load
     /// `map`'s room ([`overworld::load_room`]) and resolve its `warp_id`-th
-    /// warp event's arrival position/elevation ([`warp_destination_position`]),
-    /// then place `player` there facing whatever the *destination* tile's
-    /// own metatile behavior dictates ([`warp_in_facing`] -- upstream
+    /// warp event's arrival position ([`warp_destination_position`]), then
+    /// place `player` there facing whatever the *destination* tile's own
+    /// metatile behavior dictates ([`warp_in_facing`] -- upstream
     /// `GetAdjustedInitialDirection`, `pokeemerald/src/overworld.c:929-951`)
     /// and assign `map_id`/`scene` together.
+    ///
+    /// **Lands at elevation `ELEVATION_TRANSITION` (issue #286), the same
+    /// sentinel [`OverworldPhase::warp_to_position`] already lands at --
+    /// see that method's own doc comment for the full citation trail.**
+    /// [`warp_destination_position`] resolves only the warp event's `(x, y)`;
+    /// it does not, and after issue #286 no longer can, report an elevation
+    /// of its own. This corrects an earlier revision that read the
+    /// *destination* grid cell's own elevation and landed the player on it
+    /// -- upstream never does that: `SetPlayerCoordsFromWarp`
+    /// (`pokeemerald/src/overworld.c:603-624`) writes only `pos.x`/`pos.y`,
+    /// and `InitPlayerAvatar` (`field_player_avatar.c:1391`) always spawns
+    /// the player object event at `ELEVATION_TRANSITION`, for every arrival
+    /// kind, regardless of what the landing tile's own cell says. The first
+    /// completed step after the warp re-derives the real elevation off the
+    /// landing tile the same way any ordinary step does
+    /// (`ObjectEventUpdateElevation`,
+    /// [`engine::overworld::PlayerState::step`]'s "Elevation adoption"
+    /// section) -- there is no gap where a stale or wrong elevation is
+    /// observable, only a stand-still frame at the sentinel before the next
+    /// step corrects it, exactly as upstream's own arrival does.
     ///
     /// Those two fields move in lockstep on purpose:
     /// [`crate::overworld::OverworldScene::runtime`] stamps `map_id` onto a
@@ -275,7 +295,7 @@ impl OverworldPhase {
         };
         let destination = {
             let runtime = scene.runtime(map, header, events);
-            warp_destination_position(&runtime, warp_id).map(|(x, y, elevation)| {
+            warp_destination_position(&runtime, warp_id).map(|(x, y)| {
                 // GetCenterScreenMetatileBehavior (overworld.c:954-957) reads
                 // the tile the player has just been placed on. An
                 // undecodable attribute entry can't happen for a cell
@@ -285,16 +305,19 @@ impl OverworldPhase {
                 let behavior = runtime
                     .metatile_behavior(i32::from(x), i32::from(y))
                     .unwrap_or(engine::overworld::metatile_behavior::MB_NORMAL);
-                (x, y, elevation, warp_in_facing(behavior))
+                (x, y, warp_in_facing(behavior))
             })
         };
-        let Some((x, y, elevation, facing)) = destination else {
+        let Some((x, y, facing)) = destination else {
             eprintln!("warp: destination map {map:?} has no warp event #{warp_id} -- staying put");
             return;
         };
 
-        self.player =
-            engine::overworld::PlayerState::new((i32::from(x), i32::from(y)), elevation, facing);
+        self.player = engine::overworld::PlayerState::new(
+            (i32::from(x), i32::from(y)),
+            0, // ELEVATION_TRANSITION -- see this method's own doc comment.
+            facing,
+        );
         // The departed map's latched landing tile must not survive into the
         // destination map, where its coordinates would name an unrelated
         // tile in the next frame's door check.
@@ -341,12 +364,15 @@ impl OverworldPhase {
     ///
     /// Lands at elevation `ELEVATION_TRANSITION`
     /// (`pokeemerald/include/global.fieldmap.h:16`, value `0`):
-    /// `InitPlayerAvatar` (`pokeemerald/src/field_player_avatar.c`) always
-    /// spawns the player object event with that sentinel regardless of
-    /// arrival kind, deferring to the first elevation-aware collision check
-    /// to resolve it against the tile's own layer -- the same value
+    /// `InitPlayerAvatar` (`pokeemerald/src/field_player_avatar.c:1391`)
+    /// always spawns the player object event with that sentinel regardless
+    /// of arrival kind, deferring to the first elevation-aware collision
+    /// check to resolve it against the tile's own layer -- the same value
     /// [`crate::new_game::SPAWN_ELEVATION`] already uses for the intro's own
-    /// direct placement, for the identical reason.
+    /// direct placement, for the identical reason, and
+    /// [`OverworldPhase::warp_to`]'s own resolved-warp landing now shares
+    /// too (issue #286) -- there is nothing left that distinguishes the two
+    /// siblings' elevation on arrival, only their position source.
     ///
     /// Unlike [`OverworldPhase::warp_to`]'s resolved-warp landing,
     /// `save1.location.x`/`.y` are **not** `-1`: `ApplyCurrentWarp`

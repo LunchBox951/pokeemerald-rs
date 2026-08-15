@@ -60,7 +60,6 @@
 
 use assets::{MapId, WarpDestination, WarpEvent, WarpId};
 
-use super::collision::{ELEVATION_MULTI_LEVEL, ELEVATION_TRANSITION};
 use super::direction::Direction;
 use super::map_runtime::MapRuntime;
 // The arrow-warp id *sets* deliberately aren't imported here: `warp_in_facing`
@@ -198,31 +197,41 @@ pub fn resolve_warp_event(warp: &WarpEvent) -> WarpTrigger {
     WarpTrigger::Resolved { map, warp_id }
 }
 
-/// The `(x, y, elevation)` a player arrives at after warping to `runtime`'s
+/// The `(x, y)` a player arrives at after warping to `runtime`'s
 /// `warp_id`-th warp event, or `None` if that map has no warp event at that
 /// index or its destination cell is unavailable.
 ///
 /// This is the destination-side half of upstream `SetupWarp`
 /// (`field_control_avatar.c`) plus `SetPlayerCoordsFromWarp`
-/// (`overworld.c`) and `ObjectEventUpdateElevation`
-/// (`event_object_movement.c`). The warp event selects the arrival position,
-/// but its elevation is only a trigger-matching filter; the player's actual
-/// elevation comes from the destination grid cell. A multi-level destination
-/// cell leaves the avatar at transition elevation,
-/// matching upstream's initialization and `ObjectEventUpdateElevation` skip
-/// rule. The source-side bookkeeping upstream's `SetupWarp` also does
-/// (escape-warp tracking, Trainer Hill/Battle Pyramid floor special-casing)
-/// is out of v1 scope.
+/// (`overworld.c:603-624`), which is careful to write only `pos.x`/`pos.y`
+/// (`:622-623`) -- **never elevation**. Issue #286: an earlier revision of
+/// this function derived an elevation from the destination grid cell here
+/// (substituting [`super::collision::ELEVATION_TRANSITION`] for a
+/// multi-level cell, matching `ObjectEventUpdateElevation`'s own skip rule)
+/// and callers landed the player on it, but that was never upstream's
+/// behaviour -- `InitPlayerAvatar` (`field_player_avatar.c:1391`) spawns the
+/// player object event at the [`super::collision::ELEVATION_TRANSITION`]
+/// sentinel unconditionally, for every arrival kind, regardless of what the
+/// landing tile's own cell says. The destination cell's elevation is
+/// therefore not this function's business at all; a caller lands at
+/// [`super::collision::ELEVATION_TRANSITION`] directly (see
+/// `pokeemerald_rs::flow::overworld_phase::OverworldPhase::warp_to`, whose
+/// sibling `warp_to_position` already did this), and the first completed
+/// step re-derives the real elevation off the landing tile, same as any
+/// other step (`ObjectEventUpdateElevation`, [`super::player::PlayerState::step`]'s
+/// "Elevation adoption" section).
+///
+/// The `runtime.metatile_cell` lookup below exists only to fail closed on a
+/// warp event whose target tile is out of bounds or undecodable -- not to
+/// read its elevation, which this function no longer reports. The
+/// source-side bookkeeping upstream's `SetupWarp` also does (escape-warp
+/// tracking, Trainer Hill/Battle Pyramid floor special-casing) is out of v1
+/// scope.
 #[must_use]
-pub fn warp_destination_position(runtime: &MapRuntime<'_>, warp_id: u8) -> Option<(i16, i16, u8)> {
+pub fn warp_destination_position(runtime: &MapRuntime<'_>, warp_id: u8) -> Option<(i16, i16)> {
     let warp = runtime.events().warp_events.get(usize::from(warp_id))?;
-    let cell = runtime.metatile_cell(i32::from(warp.x), i32::from(warp.y))?;
-    let elevation = if cell.elevation == ELEVATION_MULTI_LEVEL {
-        ELEVATION_TRANSITION
-    } else {
-        cell.elevation
-    };
-    Some((warp.x, warp.y, elevation))
+    runtime.metatile_cell(i32::from(warp.x), i32::from(warp.y))?;
+    Some((warp.x, warp.y))
 }
 
 /// The direction a player warping in faces, decided by the **destination**
@@ -295,6 +304,7 @@ pub const fn warp_in_facing(destination_behavior: u8) -> Direction {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::overworld::collision::ELEVATION_MULTI_LEVEL;
     use crate::overworld::metatile_behavior::{
         MB_EAST_ARROW_WARP, MB_NORMAL, MB_NORTH_ARROW_WARP, MB_SHOAL_CAVE_ENTRANCE,
         MB_SOUTH_ARROW_WARP, MB_STAIRS_OUTSIDE_ABANDONED_SHIP, MB_WEST_ARROW_WARP,
@@ -640,8 +650,22 @@ mod tests {
         assert_eq!(warp_in_facing(MB_SOUTH_ARROW_WARP), Direction::North);
     }
 
+    /// Issue #286: `warp_destination_position` used to bake the destination
+    /// cell's own elevation into its return value (substituting
+    /// `ELEVATION_TRANSITION` for a multi-level cell) and `warp_to` landed
+    /// the player on it -- upstream never does that. `SetPlayerCoordsFromWarp`
+    /// (`pokeemerald/src/overworld.c:603-624`) writes only `pos.x`/`pos.y`;
+    /// `InitPlayerAvatar` (`field_player_avatar.c:1391`) always spawns the
+    /// player at the `ELEVATION_TRANSITION` sentinel, regardless of what the
+    /// landing tile's own cell says. This is the regression pin for that fix
+    /// (`OverworldPhase::warp_to`'s own doc comment has the full story):
+    /// both warp events below resolve to their own `(x, y)` alone, whatever
+    /// their destination cell's elevation byte holds -- one multi-level, one
+    /// a plain elevated tile -- because there is no elevation in the return
+    /// value left for that byte to influence.
     #[test]
-    fn warp_destination_position_uses_the_destination_cell_elevation() {
+    fn warp_destination_position_returns_position_only_regardless_of_the_destination_cells_elevation(
+    ) {
         let mut bytes = cell_bytes(2, 1, |x, _| x);
         let multi_level = MetatileCell {
             metatile_id: 0,
@@ -702,6 +726,17 @@ mod tests {
                     dest_map: WarpDestination::Map(MapId("MAP_B")),
                     dest_warp_id: WarpId::Fixed(0),
                 },
+                // Out of the 2x1 grid entirely -- the `metatile_cell` lookup
+                // inside `warp_destination_position` is the only thing left
+                // to fail this closed now that elevation is out of the
+                // return value; this is warp id 2's own pin for that.
+                assets::WarpEvent {
+                    x: 99,
+                    y: 0,
+                    elevation: 0,
+                    dest_map: WarpDestination::Map(MapId("MAP_C")),
+                    dest_warp_id: WarpId::Fixed(0),
+                },
             ],
             coord_events: &[],
             bg_events: &[],
@@ -715,8 +750,25 @@ mod tests {
             MetatileAttributeTable::new(&[]),
         );
 
-        assert_eq!(warp_destination_position(&runtime, 0), Some((1, 0, 3)));
-        assert_eq!(warp_destination_position(&runtime, 1), Some((0, 0, 0)));
-        assert_eq!(warp_destination_position(&runtime, 5), None);
+        assert_eq!(
+            warp_destination_position(&runtime, 0),
+            Some((1, 0)),
+            "warp 0 lands on the elevated cell -- its elevation must not appear in the result"
+        );
+        assert_eq!(
+            warp_destination_position(&runtime, 1),
+            Some((0, 0)),
+            "warp 1 lands on the multi-level cell -- same story, no elevation to substitute"
+        );
+        assert_eq!(
+            warp_destination_position(&runtime, 2),
+            None,
+            "warp 2's own (99, 0) is outside the 2x1 grid -- fails closed, same as before #286"
+        );
+        assert_eq!(
+            warp_destination_position(&runtime, 5),
+            None,
+            "warp id 5 does not exist at all"
+        );
     }
 }
