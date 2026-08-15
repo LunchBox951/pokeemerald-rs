@@ -94,10 +94,10 @@ fn stepping_onto_the_bedroom_stair_warp_transitions_to_the_1f_map() {
     // 1F's own warp #2 tile happens to decode to elevation 0 too (every
     // warp destination in the currently bundled 10-layout set does; NOT an
     // upstream-wide property -- Pokemon Center 2F stairs decode to 4, and
-    // hundreds of upstream warp tiles sit at 3 -- so these assertions become
-    // real guards as soon as such a layout is bundled), so this assertion
-    // alone cannot tell the fixed
-    // behaviour apart from the bug it replaces; the real mutation guard for
+    // hundreds of upstream warp tiles sit at 3, so a future test warping
+    // into such a layout would be a discriminating pin), so this assertion
+    // alone cannot tell the fixed behaviour apart from the bug it replaces;
+    // the real mutation guard for
     // the destination-cell-elevation substitution the bug baked in is
     // `engine::overworld::warp::tests::
     // warp_destination_position_returns_position_only_regardless_of_the_destination_cells_elevation`,

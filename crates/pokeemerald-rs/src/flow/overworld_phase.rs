@@ -404,8 +404,9 @@ impl OverworldPhase {
     /// * **Elevation** -- the saved tile's own grid cell, with the
     ///   multi-level -> transition substitution
     ///   `ObjectEventUpdateElevation` applies. This is the continue path's
-    ///   own derivation (upstream respawns from the restored object event,
-    ///   never through `InitPlayerAvatar`); the warp path instead lands at
+    ///   own derivation (upstream's ordinary continue respawns from the
+    ///   restored object event, never through `InitPlayerAvatar`); the warp
+    ///   path instead lands at
     ///   `ELEVATION_TRANSITION` outright since issue #286
     ///   ([`engine::overworld::warp_destination_position`] reports position
     ///   only). A tile whose cell will not decode (a save pointing outside
