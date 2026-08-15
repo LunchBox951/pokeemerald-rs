@@ -530,12 +530,9 @@ mod tests {
         let song = short_song_without_its_own_reverb().with_reverb(100);
         let output = AudioOutput::null(RING_CAPACITY_FRAMES);
 
-        let result = MusicPlayer::start_with_context_using(
-            &mut context,
-            song,
-            output,
-            |_| Err(PlatformError::NoAudioDevice),
-        );
+        let result = MusicPlayer::start_with_context_using(&mut context, song, output, |_| {
+            Err(PlatformError::NoAudioDevice)
+        });
 
         assert!(matches!(result, Err(PlatformError::NoAudioDevice)));
         assert_eq!(context.master_reverb, 77);
