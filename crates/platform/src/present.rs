@@ -28,15 +28,20 @@ pub type Frame = [u32; PIXEL_COUNT];
 /// # Examples
 ///
 /// Fields are private, so external code cannot build a `Letterbox` with an
-/// invalid zero `scale`:
+/// invalid zero `scale`. All seven fields are listed and the expected
+/// diagnostic is pinned to E0451 (field-is-private), so this test fails --
+/// rather than silently passing on a missing-field E0063 -- if the seal is
+/// ever removed:
 ///
-/// ```compile_fail
+/// ```compile_fail,E0451
 /// let _ = platform::present::Letterbox {
 ///     scale: 0,
 ///     dest_x: 0,
 ///     dest_y: 0,
 ///     scaled_width: 0,
 ///     scaled_height: 0,
+///     crop_x: 0,
+///     crop_y: 0,
 /// };
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
