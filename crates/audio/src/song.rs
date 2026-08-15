@@ -80,6 +80,9 @@ pub struct SquareTone {
     /// simply never read.
     pub sweep: u8,
     pub adsr: CgbAdsr,
+    /// `TONEDATA_TYPE_FIX`: play at Emerald's 8-bit-DAC-corrected frequency
+    /// register rather than the note's plain one (`m4a.c:1184`..`:1202`).
+    pub fixed_rate: bool,
 }
 
 /// A CGB programmable-wave instrument (hardware channel 3).
@@ -94,17 +97,19 @@ pub struct WaveTone {
     /// amplitude comes solely from the envelope (`m4a.c:1211`).
     pub table: [u8; 16],
     pub adsr: CgbAdsr,
+    /// `TONEDATA_TYPE_FIX` — see [`SquareTone::fixed_rate`].
+    pub fixed_rate: bool,
 }
 
 /// A CGB noise instrument (hardware channel 4).
 #[derive(Clone, Copy, Debug)]
 pub struct NoiseTone {
-    /// Width selector (`voice_noise`'s `period & 1`, `music_voice.inc:105`).
-    /// Its low bit becomes `NR43` bit 3 (`0x08`), selecting the LFSR's narrow
-    /// (7-bit periodic) mode; `0` leaves it in wide 15-bit mode. The
-    /// `gNoiseTable` control bytes never set this bit themselves, so it comes
-    /// only from the instrument (`m4a.c:1022`).
-    pub period: u8,
+    /// LFSR width selector (`voice_noise`'s `period & 1`,
+    /// `music_voice.inc:105`). Its low bit becomes `NR43` bit 3 (`0x08`),
+    /// selecting the LFSR's narrow (7-bit periodic) mode; `0` leaves it in
+    /// wide 15-bit mode. The `gNoiseTable` control bytes never set this bit
+    /// themselves, so it comes only from the instrument (`m4a.c:1022`).
+    pub lfsr_width_selector: u8,
     pub adsr: CgbAdsr,
 }
 
@@ -210,37 +215,53 @@ pub struct Song {
     tracks: Vec<Vec<Event>>,
     /// Initial tempo in BPM.
     initial_tempo: u16,
-    /// `SongHeader::reverb` (`0..=127`; `0` means no reverb) — see
-    /// [`crate::reverb::Reverb`]. Set via [`Self::with_reverb`].
-    reverb: u8,
+    /// `SongHeader::reverb`, decomposed around its SET bit
+    /// (`m4a_internal.h:12`..`:13`): `None` when the header left the
+    /// session's previously configured master reverb level untouched,
+    /// `Some(level)` (`0..=127`, clamped) when it explicitly set one — `0`
+    /// included, an explicit disable rather than "no reverb specified"
+    /// (`m4a.c:661`..`:662`). Set via [`Self::with_reverb`].
+    reverb: Option<u8>,
 }
 
 impl Song {
     /// Assemble a song from a voicegroup, decoded tracks, and an initial
-    /// tempo (BPM). Reverb defaults to `0` (off) — see [`Self::with_reverb`].
+    /// tempo (BPM). Reverb defaults to `None` (inherit) — see
+    /// [`Self::with_reverb`].
     #[must_use]
     pub fn new(voices: Vec<Instrument>, tracks: Vec<Vec<Event>>, initial_tempo: u16) -> Self {
         Self {
             voices,
             tracks,
             initial_tempo,
-            reverb: 0,
+            reverb: None,
         }
     }
 
     /// Set this song's master-mix reverb level (`SongHeader::reverb`,
-    /// `0..=127`; `0` disables it — see [`crate::reverb::Reverb`]).
-    /// Chainable onto [`Self::new`], mirroring [`ToneData::fixed`]'s builder
-    /// shape.
+    /// `0..=127`; `0` explicitly disables it — see [`Self::reverb_override`]
+    /// and [`crate::reverb::Reverb`]). Chainable onto [`Self::new`],
+    /// mirroring [`ToneData::fixed`]'s builder shape.
     #[must_use]
     pub fn with_reverb(mut self, level: u8) -> Self {
-        self.reverb = level.min(127);
+        self.reverb = Some(level.min(127));
         self
     }
 
-    /// This song's master-mix reverb level (`0` means off).
+    /// This song's master-mix reverb level, `0` when [`Self::reverb_override`]
+    /// is `None` — a plain numeric accessor for callers that don't need to
+    /// distinguish "inherit the previous level" from an explicit `0`.
     #[must_use]
     pub fn reverb(&self) -> u8 {
+        self.reverb.unwrap_or(0)
+    }
+
+    /// `SongHeader::reverb`'s SET bit, decomposed: `Some(level)` when this
+    /// song's header explicitly set a master reverb level (`0` included),
+    /// `None` when it left the session's previously configured level as-is
+    /// (`m4a_internal.h:12`..`:13`; `m4a.c:661`..`:662`).
+    #[must_use]
+    pub fn reverb_override(&self) -> Option<u8> {
         self.reverb
     }
 
@@ -280,6 +301,26 @@ mod tests {
 
         assert_eq!(song().with_reverb(127).reverb(), 127);
         assert_eq!(song().with_reverb(128).reverb(), 127);
+    }
+
+    #[test]
+    fn no_override_reverb_is_distinct_from_an_explicit_zero() {
+        // `Song::new` alone (no header SET bit) must inherit whatever the
+        // session's reverb was already set to, not force it off -- while
+        // `with_reverb(0)` is a genuine explicit disable. Both read `0`
+        // through the plain numeric accessor, so `reverb_override` is the
+        // only way to tell them apart.
+        let inherited = Song::new(Vec::new(), Vec::new(), 150);
+        assert_eq!(inherited.reverb_override(), None);
+        assert_eq!(inherited.reverb(), 0);
+
+        let disabled = Song::new(Vec::new(), Vec::new(), 150).with_reverb(0);
+        assert_eq!(disabled.reverb_override(), Some(0));
+        assert_eq!(disabled.reverb(), 0);
+
+        let explicit = Song::new(Vec::new(), Vec::new(), 150).with_reverb(50);
+        assert_eq!(explicit.reverb_override(), Some(50));
+        assert_eq!(explicit.reverb(), 50);
     }
 
     #[test]

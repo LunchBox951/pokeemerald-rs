@@ -33,7 +33,7 @@
 //! see [`FadeOut`] for the upstream arithmetic and the one documented
 //! divergence.
 
-use audio::{Sequencer, Song};
+use audio::{Sequencer, Song, DEFAULT_MASTER_VOLUME, DEFAULT_MAX_VOICES};
 use platform::{AudioOutput, PlatformError, Producer};
 
 use super::MusicError;
@@ -70,6 +70,39 @@ const FADE_VOL_STEP: i32 = 4 << FADE_VOL_SHIFT;
 /// `FadeOutBGM`'s speed at the title screen's A/START handler
 /// (`title_screen.c:784`) -- the number of frames between fade steps.
 pub const TITLE_FADE_OUT_SPEED: u16 = 4;
+
+/// Session-lived state a [`crate::App`] carries across separate
+/// [`MusicPlayer::start_with_context`] calls -- currently just the master
+/// reverb level the M4A driver keeps configured between songs.
+///
+/// Upstream never resets `gMPlayReverb`/`m4aSoundMode`'s reverb byte between
+/// `m4aSongNumStart` calls; a song header only touches it when
+/// `SongHeader::reverb`'s SET bit is set (`m4a_internal.h:12`..`:13`;
+/// `m4a.c:661`..`:662`). A song whose header leaves that bit clear
+/// ([`audio::Song::reverb_override`] returning `None`) must keep playing at
+/// whatever level the previous song in the same session left configured,
+/// not silently reset to `0`.
+#[derive(Debug, Clone, Copy)]
+pub struct MusicContext {
+    /// The master reverb level the most recently started song resolved to,
+    /// carried forward for the next song whose header leaves it unset.
+    master_reverb: u8,
+}
+
+impl MusicContext {
+    /// A fresh session with no reverb configured yet, matching the driver's
+    /// own zeroed init state before any song has played.
+    #[must_use]
+    pub fn new() -> Self {
+        Self { master_reverb: 0 }
+    }
+}
+
+impl Default for MusicContext {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 /// A running `m4aMPlayFadeOut` (`m4a.c:202`), stepped once per rendered
 /// frame exactly as `MPlayMain` steps `FadeOutBody` (`m4a.c:692`) once per
@@ -179,6 +212,12 @@ pub struct MusicPlayer {
     overruns: u64,
     /// The running `FadeOutBGM`, once [`Self::fade_out`] has been called.
     fade: Option<FadeOut>,
+    /// The reverb level [`Self::song`] resolved to at start -- either its own
+    /// header override or, absent one, [`MusicContext`]'s carried-forward
+    /// level. Kept so a defensive restart ([`Self::advance_frame`]) can
+    /// rebuild the sequencer without losing that resolution back to `song`'s
+    /// own possibly-`None` header value.
+    reverb_level: u8,
 }
 
 impl MusicPlayer {
@@ -187,6 +226,11 @@ impl MusicPlayer {
     /// headless null backend for tests -- see [`crate::App::boot`]'s own
     /// opener-parameter precedent for `platform::Platform`), and start
     /// playing it.
+    ///
+    /// Starts a fresh, one-off [`MusicContext`]: the started song's reverb
+    /// falls back to `0`, not a previous session's level, if its header
+    /// leaves reverb unset. Use [`Self::start_from_pack_with_context`] to
+    /// carry a level across songs in the same session.
     ///
     /// # Errors
     ///
@@ -197,23 +241,82 @@ impl MusicPlayer {
         song_name: &str,
         open_audio: impl FnOnce() -> Result<AudioOutput, PlatformError>,
     ) -> Result<Self, MusicError> {
+        Self::start_from_pack_with_context(&mut MusicContext::new(), pack, song_name, open_audio)
+    }
+
+    /// As [`Self::start_from_pack`], resolving reverb inheritance against
+    /// `context` -- see [`Self::start_with_context`].
+    ///
+    /// # Errors
+    ///
+    /// Propagates [`MusicError`] from resolving the song out of the pack, or
+    /// from `open_audio`/[`Self::start_with_context`].
+    pub fn start_from_pack_with_context(
+        context: &mut MusicContext,
+        pack: &assets::AssetPack,
+        song_name: &str,
+        open_audio: impl FnOnce() -> Result<AudioOutput, PlatformError>,
+    ) -> Result<Self, MusicError> {
         let song = super::load_song_from_pack(pack, song_name)?;
         let output = open_audio()?;
-        Self::start(song, output).map_err(MusicError::from)
+        Self::start_with_context(context, song, output).map_err(MusicError::from)
     }
 
     /// Start playing an already-resolved `song` through `output`: prefills
     /// about half the ring, then starts the device.
     ///
+    /// Starts a fresh, one-off [`MusicContext`]: the started song's reverb
+    /// falls back to `0`, not a previous session's level, if its header
+    /// leaves reverb unset. Use [`Self::start_with_context`] to carry a level
+    /// across songs in the same session.
+    ///
     /// # Errors
     ///
     /// [`PlatformError`] if `output` refuses to start (never happens for the
     /// null backend).
-    pub fn start(song: Song, mut output: AudioOutput) -> Result<Self, PlatformError> {
-        let mut sequencer = Sequencer::new(song.clone());
+    pub fn start(song: Song, output: AudioOutput) -> Result<Self, PlatformError> {
+        Self::start_with_context(&mut MusicContext::new(), song, output)
+    }
+
+    /// As [`Self::start`], resolving reverb inheritance against `context`:
+    /// `song`'s own header override
+    /// ([`audio::Song::reverb_override`]) wins if set, otherwise
+    /// `context`'s carried-forward level is used. After the output starts
+    /// successfully, `context` is updated to that resolved level for the next
+    /// song started against it (module docs' [`MusicContext`]).
+    ///
+    /// # Errors
+    ///
+    /// [`PlatformError`] if `output` refuses to start (never happens for the
+    /// null backend).
+    pub fn start_with_context(
+        context: &mut MusicContext,
+        song: Song,
+        output: AudioOutput,
+    ) -> Result<Self, PlatformError> {
+        Self::start_with_context_using(context, song, output, AudioOutput::start)
+    }
+
+    /// The shared startup path, with the final output-start operation
+    /// injectable so the failure ordering can be covered without depending
+    /// on an OS audio device.
+    fn start_with_context_using(
+        context: &mut MusicContext,
+        song: Song,
+        mut output: AudioOutput,
+        start_output: impl FnOnce(&mut AudioOutput) -> Result<(), PlatformError>,
+    ) -> Result<Self, PlatformError> {
+        let reverb_level = song.reverb_override().unwrap_or(context.master_reverb);
+        let mut sequencer = Sequencer::with_resolved_reverb(
+            song.clone(),
+            DEFAULT_MASTER_VOLUME,
+            DEFAULT_MAX_VOICES,
+            reverb_level,
+        );
         let producer = output.producer();
         let overruns = prefill(&mut sequencer, &producer);
-        output.start()?;
+        start_output(&mut output)?;
+        context.master_reverb = reverb_level;
         Ok(Self {
             song,
             sequencer,
@@ -221,6 +324,7 @@ impl MusicPlayer {
             output,
             overruns,
             fade: None,
+            reverb_level,
         })
     }
 
@@ -235,7 +339,12 @@ impl MusicPlayer {
     /// rather than falling permanently silent.
     pub fn advance_frame(&mut self) {
         if self.sequencer.is_finished() {
-            self.sequencer = Sequencer::new(self.song.clone());
+            self.sequencer = Sequencer::with_resolved_reverb(
+                self.song.clone(),
+                DEFAULT_MASTER_VOLUME,
+                DEFAULT_MAX_VOICES,
+                self.reverb_level,
+            );
         }
         // `MPlayMain` steps the fade before `SoundMainRAM` mixes the frame it
         // applies to ([`FadeOut`]'s docs), so step first, then scale.
@@ -333,5 +442,199 @@ impl MusicPlayer {
     /// [`MusicPlayer::start`] consumed the output.
     pub(crate) fn ring_free_for_test(&self) -> usize {
         self.producer.available_space()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use audio::{Adsr, Event, Instrument, Song, ToneData, WaveData};
+    use platform::{AudioOutput, PlatformError};
+
+    use super::{MusicContext, MusicPlayer, RING_CAPACITY_FRAMES};
+
+    /// A short, loud one-shot note under no reverb override of its own
+    /// (`Song::reverb_override` stays `None`), so any tail heard after it
+    /// stops can only come from an inherited or explicitly-set level.
+    fn short_song_without_its_own_reverb() -> Song {
+        let wave = Arc::new(WaveData::one_shot(1 << 20, vec![100; 64]));
+        let voices = vec![Instrument::DirectSound(ToneData::new(wave, Adsr::flat()))];
+        let events = vec![
+            Event::Voice(0),
+            Event::Note {
+                key: 60,
+                velocity: 127,
+                gate: 1,
+            },
+            Event::Wait(2),
+            Event::Fine,
+        ];
+        Song::new(voices, vec![events], 150)
+    }
+
+    /// How many frames [`first_playthrough_finishes_within`] gives a song:
+    /// comfortably past the short note's own gate/wait window (which settles
+    /// in a handful of ticks), but comfortably short of how long a `level:
+    /// 100` reverb tail takes to drain (dozens of frames at minimum, per
+    /// `crate::audio::reverb`'s own decay-rate tests).
+    const SETTLE_BUDGET: usize = 25;
+
+    /// Advances `player` one frame at a time, stopping the instant its
+    /// sequencer reports finished, and reports whether that happened within
+    /// `budget` frames.
+    ///
+    /// Deliberately stops driving the moment [`audio::Sequencer::is_finished`]
+    /// first reports `true`, rather than running for a fixed window: past
+    /// that point, [`MusicPlayer::advance_frame`]'s defensive restart would
+    /// immediately re-trigger the note, and a longer window would then
+    /// measure that recurring note-on blip instead of (or as well as) any
+    /// reverb tail -- indistinguishable from the tail this helper exists to
+    /// detect. Reading [`audio::Sequencer::is_finished`] directly (rather
+    /// than sampling rendered audio for silence) sidesteps that confound
+    /// entirely: a pending reverb tail holds it `false` no matter how quiet
+    /// the tail's samples happen to be at any single instant.
+    fn first_playthrough_finishes_within(player: &mut MusicPlayer, budget: usize) -> bool {
+        for _ in 0..budget {
+            player.advance_frame();
+            if player.sequencer.is_finished() {
+                return true;
+            }
+        }
+        false
+    }
+
+    #[test]
+    fn a_songs_own_reverb_override_leaves_a_pending_tail() {
+        let mut context = MusicContext::new();
+        let song = short_song_without_its_own_reverb().with_reverb(100);
+        assert_eq!(song.reverb_override(), Some(100));
+        let output = AudioOutput::null(RING_CAPACITY_FRAMES);
+        let mut player = MusicPlayer::start_with_context(&mut context, song, output)
+            .expect("null backend never errors");
+        assert!(
+            !first_playthrough_finishes_within(&mut player, SETTLE_BUDGET),
+            "an explicit reverb override must leave a tail pending well past the note's own end"
+        );
+    }
+
+    #[test]
+    fn failed_output_start_preserves_music_context() {
+        let mut context = MusicContext::new();
+        let priming_song = short_song_without_its_own_reverb().with_reverb(77);
+        let priming_output = AudioOutput::null(RING_CAPACITY_FRAMES);
+        MusicPlayer::start_with_context(&mut context, priming_song, priming_output)
+            .expect("null backend never errors");
+        assert_eq!(context.master_reverb, 77);
+
+        let song = short_song_without_its_own_reverb().with_reverb(100);
+        let output = AudioOutput::null(RING_CAPACITY_FRAMES);
+
+        let result = MusicPlayer::start_with_context_using(&mut context, song, output, |_| {
+            Err(PlatformError::NoAudioDevice)
+        });
+
+        assert!(matches!(result, Err(PlatformError::NoAudioDevice)));
+        assert_eq!(context.master_reverb, 77);
+    }
+
+    #[test]
+    fn a_song_with_no_reverb_override_inherits_the_sessions_previous_level() {
+        let mut context = MusicContext::new();
+        let priming = short_song_without_its_own_reverb().with_reverb(100);
+        let priming_output = AudioOutput::null(RING_CAPACITY_FRAMES);
+        let mut priming_player =
+            MusicPlayer::start_with_context(&mut context, priming, priming_output)
+                .expect("null backend never errors");
+        assert!(!first_playthrough_finishes_within(
+            &mut priming_player,
+            SETTLE_BUDGET
+        ));
+
+        // The next song's header leaves reverb unset entirely; it must
+        // inherit the level the first song resolved to, not reset to 0.
+        let inheriting = short_song_without_its_own_reverb();
+        assert_eq!(inheriting.reverb_override(), None);
+        let inheriting_output = AudioOutput::null(RING_CAPACITY_FRAMES);
+        let mut inheriting_player =
+            MusicPlayer::start_with_context(&mut context, inheriting, inheriting_output)
+                .expect("null backend never errors");
+        assert!(
+            !first_playthrough_finishes_within(&mut inheriting_player, SETTLE_BUDGET),
+            "a header-less song must inherit the session's previously configured reverb level"
+        );
+    }
+
+    #[test]
+    fn an_explicit_zero_reverb_overrides_the_sessions_previous_level() {
+        let mut context = MusicContext::new();
+        let priming = short_song_without_its_own_reverb().with_reverb(100);
+        let priming_output = AudioOutput::null(RING_CAPACITY_FRAMES);
+        let mut priming_player =
+            MusicPlayer::start_with_context(&mut context, priming, priming_output)
+                .expect("null backend never errors");
+        assert!(!first_playthrough_finishes_within(
+            &mut priming_player,
+            SETTLE_BUDGET
+        ));
+
+        // `Some(0)` is an explicit disable, distinct from "no override" --
+        // it must NOT fall back to the session's carried-forward level.
+        let disabling = short_song_without_its_own_reverb().with_reverb(0);
+        assert_eq!(disabling.reverb_override(), Some(0));
+        let disabling_output = AudioOutput::null(RING_CAPACITY_FRAMES);
+        let mut disabling_player =
+            MusicPlayer::start_with_context(&mut context, disabling, disabling_output)
+                .expect("null backend never errors");
+        assert!(
+            first_playthrough_finishes_within(&mut disabling_player, SETTLE_BUDGET),
+            "an explicit reverb of 0 must disable the tail even though the session had one"
+        );
+    }
+
+    /// The defensive restart in [`MusicPlayer::advance_frame`] rebuilds the
+    /// sequencer from the *resolved* `reverb_level`, not from the song's own
+    /// header -- so an inheriting (header-less) song keeps its inherited
+    /// level when it loops, instead of silently dropping to the header's
+    /// zero (PR #276 review).
+    #[test]
+    fn an_inheriting_song_keeps_its_resolved_reverb_across_the_defensive_restart() {
+        let mut context = MusicContext::new();
+        let priming = short_song_without_its_own_reverb().with_reverb(100);
+        let priming_output = AudioOutput::null(RING_CAPACITY_FRAMES);
+        let mut priming_player =
+            MusicPlayer::start_with_context(&mut context, priming, priming_output)
+                .expect("null backend never errors");
+        assert!(!first_playthrough_finishes_within(
+            &mut priming_player,
+            SETTLE_BUDGET
+        ));
+
+        let inheriting = short_song_without_its_own_reverb();
+        assert_eq!(inheriting.reverb_override(), None);
+        let output = AudioOutput::null(RING_CAPACITY_FRAMES);
+        let mut player = MusicPlayer::start_with_context(&mut context, inheriting, output)
+            .expect("null backend never errors");
+
+        // Drain the whole first playthrough, inherited tail included.
+        let mut frames = 0;
+        while !player.sequencer.is_finished() {
+            player.advance_frame();
+            frames += 1;
+            assert!(
+                frames < 5_000,
+                "the inherited reverb tail must eventually drain"
+            );
+        }
+
+        // The next call restarts. The restarted playthrough must still hold
+        // the inherited level: its own tail keeps the sequencer unfinished
+        // well past the note's end, exactly like the first playthrough --
+        // whereas a restart from the song's header (reverb 0) finishes
+        // within the settle budget.
+        assert!(
+            !first_playthrough_finishes_within(&mut player, SETTLE_BUDGET),
+            "the defensive restart must reuse the resolved reverb level, not the song header's"
+        );
     }
 }

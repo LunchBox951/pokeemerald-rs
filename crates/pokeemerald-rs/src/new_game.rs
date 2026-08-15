@@ -20,6 +20,7 @@
 //! | `InitEventData()`                                           | [`SaveBlock1::event_data`] `= EventData::default()` |
 //! | `RunScriptImmediately(EventScript_ResetAllMapFlags)`'s 159 `setflag`s (`data/scripts/new_game.inc:116-274`) | [`SaveBlock1::event_data`]`.flag_set` for every id in [`assets::RESET_MAP_FLAGS`] (issue #164) |
 //! | (skipped truck sequence) `InsideOfTruck_EventScript_SetIntroFlags`'s gender branch (`data/maps/InsideOfTruck/scripts.inc:16-48`) | [`apply_truck_intro_flags`] — [`assets::TRUCK_INTRO_FLAGS_MALE`]/`_FEMALE` plus their vars (issue #161 review) |
+//! | (skipped truck sequence) `InsideOfTruck_EventScript_SetIntroFlags{Male,Female}`'s `setrespawn` (`data/maps/InsideOfTruck/scripts.inc:25,38`) | [`SaveBlock1::last_heal_location`] `= `[`default_last_heal_location`] (issue #261) |
 //! | (naming screen / `Task_NewGameBirchSpeech_ChooseGender`)    | [`SaveBlock2::player_name`]/`player_gender` `= `[`DEFAULT_PLAYER_NAME`]`/`[`DEFAULT_PLAYER_GENDER`] (deviation below) |
 //!
 //! **Consumed as of issue #161:** the flag set written here is no longer
@@ -236,6 +237,103 @@ pub const SPAWN_MAP_GROUP: i8 = 1;
 /// `LittlerootTown_BrendansHouse_2F` -- this room -- is position `1`).
 pub const SPAWN_MAP_NUM: i8 = 1;
 
+/// `HEAL_LOCATION_LITTLEROOT_TOWN_BRENDANS_HOUSE_2F`/`_MAYS_HOUSE_2F`'s
+/// shared `MAP_GROUP` (issue #261): both bedrooms are
+/// `gMapGroup_IndoorLittleroot`, the same group [`SPAWN_MAP_GROUP`] names.
+///
+/// # Why a new-game save needs a heal location at all
+///
+/// Upstream never sets `gSaveBlock1Ptr->lastHealLocation` from
+/// `NewGameInitData` directly -- `ClearSav1` (`src/load_save.c:64-67`)
+/// zeroes it along with the rest of `SaveBlock1`, same as this crate's own
+/// [`SaveBlock1::default`]. The real default comes from the truck sequence
+/// this port skips (module docs' "No truck sequence"): stepping off the
+/// truck runs `InsideOfTruck_EventScript_SetIntroFlagsMale`/`_Female`
+/// (`pokeemerald/data/maps/InsideOfTruck/scripts.inc:24-25`, `:37-38`),
+/// whose first line is `setrespawn HEAL_LOCATION_LITTLEROOT_TOWN_BRENDANS_HOUSE_2F`/
+/// `_MAYS_HOUSE_2F` -- `ScrCmd_setrespawn` (`src/scrcmd.c:2006-2012`) calling
+/// `SetLastHealLocationWarp` (`src/overworld.c:670-675`), which resolves the
+/// id through `src/data/heal_locations.json`
+/// (`{"id": "HEAL_LOCATION_LITTLEROOT_TOWN_BRENDANS_HOUSE_2F", "map":
+/// "MAP_LITTLEROOT_TOWN_BRENDANS_HOUSE_2F", "x": 4, "y": 2}`, and the
+/// `_MAYS_HOUSE_2F` entry at the same `x`/`y`) and writes it with
+/// `WARP_ID_NONE` (`overworld.c:674`).
+///
+/// Every real playthrough passes through that exit-tile trigger before
+/// `NewGameInitData`'s caller ever hands control to the overworld, so a
+/// fresh save's `lastHealLocation` is never really the zeroed default --
+/// [`apply_truck_intro_flags`] already reproduces this same script's other
+/// observable effect (module docs) for the identical reason: the skipped
+/// cutscene's *effects* still have to land somewhere. Without this, the
+/// first loss of a fresh game (issue #261's white-out) would warp the player
+/// to `MAP_PETALBURG_CITY` at `(0, 0)` -- [`SPAWN_MAP_GROUP`]'s own doc
+/// comment records that exact wrong-map failure mode for `location`, and
+/// `last_heal_location` starts at the identical zeroed [`WarpData::default`]
+/// if nothing sets it here.
+pub const DEFAULT_HEAL_LOCATION_MAP_GROUP: i8 = SPAWN_MAP_GROUP;
+
+/// `HEAL_LOCATION_LITTLEROOT_TOWN_BRENDANS_HOUSE_2F`'s `MAP_NUM` within
+/// [`DEFAULT_HEAL_LOCATION_MAP_GROUP`] -- position `1`, the same index
+/// [`SPAWN_MAP_NUM`] names (`InsideOfTruck_EventScript_SetIntroFlagsMale`'s
+/// `setrespawn`, [`DEFAULT_HEAL_LOCATION_MAP_GROUP`]'s doc comment): a male
+/// player's white-out destination is the same room the intro spawns into,
+/// just not the same tile within it (module docs on
+/// [`DEFAULT_HEAL_LOCATION_X`]/[`DEFAULT_HEAL_LOCATION_Y`]).
+pub const DEFAULT_HEAL_LOCATION_MALE_MAP_NUM: i8 = SPAWN_MAP_NUM;
+
+/// `HEAL_LOCATION_LITTLEROOT_TOWN_MAYS_HOUSE_2F`'s `MAP_NUM` within
+/// [`DEFAULT_HEAL_LOCATION_MAP_GROUP`] -- position `3`
+/// (`LittlerootTown_MaysHouse_1F` is position `2`, cross-checked against the
+/// generated table by
+/// [`tests::default_heal_locations_match_the_generated_map_header_positions`]),
+/// written for a female player by
+/// `InsideOfTruck_EventScript_SetIntroFlagsFemale`'s own `setrespawn`
+/// ([`DEFAULT_HEAL_LOCATION_MAP_GROUP`]'s doc comment).
+pub const DEFAULT_HEAL_LOCATION_FEMALE_MAP_NUM: i8 = 3;
+
+/// `HEAL_LOCATION_LITTLEROOT_TOWN_BRENDANS_HOUSE_2F`/`_MAYS_HOUSE_2F`'s
+/// shared `x` (`src/data/heal_locations.json`,
+/// [`DEFAULT_HEAL_LOCATION_MAP_GROUP`]'s doc comment) -- the bed tile, not
+/// [`SPAWN_POSITION`]'s stairwell landing tile: a heal location and a warp
+/// event are different upstream tables, and nothing requires them to agree.
+pub const DEFAULT_HEAL_LOCATION_X: i16 = 4;
+
+/// [`DEFAULT_HEAL_LOCATION_X`]'s `y` counterpart.
+pub const DEFAULT_HEAL_LOCATION_Y: i16 = 2;
+
+/// [`init_save_blocks`]'s `last_heal_location` -- `SetLastHealLocationWarp`'s
+/// effect for the gender-branched `setrespawn` the skipped truck sequence
+/// would have run ([`DEFAULT_HEAL_LOCATION_MAP_GROUP`]'s doc comment).
+///
+/// [`engine::save::PlayerGender::Other`] reproduces upstream's own true
+/// no-op rather than picking a house: `checkplayergender`'s two
+/// `goto_if_eq`s (`MALE`/`FEMALE`) both fail for an out-of-range gender byte
+/// and fall through to a bare `end`
+/// (`pokeemerald/data/maps/InsideOfTruck/scripts.inc:19-22`), so
+/// `ScrCmd_setrespawn` never runs and `lastHealLocation` stays at
+/// `ClearSav1`'s zeroed value -- exactly [`WarpData::default`], the value
+/// [`SaveBlock1::default`] already leaves this field at. The same no-op
+/// [`apply_truck_intro_flags`]'s own gender match documents for the
+/// identical upstream branch, and equally unreachable in production today
+/// ([`DEFAULT_PLAYER_GENDER`] is always `Male`).
+#[must_use]
+pub fn default_last_heal_location(gender: PlayerGender) -> WarpData {
+    let map_num = match gender {
+        PlayerGender::Male => DEFAULT_HEAL_LOCATION_MALE_MAP_NUM,
+        PlayerGender::Female => DEFAULT_HEAL_LOCATION_FEMALE_MAP_NUM,
+        PlayerGender::Other(_) => return WarpData::default(),
+    };
+    WarpData {
+        map_group: DEFAULT_HEAL_LOCATION_MAP_GROUP,
+        map_num,
+        // WARP_ID_NONE (`overworld.c:674`): a heal location names an
+        // explicit tile, not a resolved warp event.
+        warp_id: -1,
+        x: DEFAULT_HEAL_LOCATION_X,
+        y: DEFAULT_HEAL_LOCATION_Y,
+    }
+}
+
 /// Build a fresh [`SaveBlock1`]/[`SaveBlock2`] pair the way upstream
 /// `NewGameInitData` (`new_game.c:149-207`) does, for the fields this
 /// workspace's save model covers (module docs' table and deviations).
@@ -275,6 +373,11 @@ pub fn init_save_blocks(rng: &mut Rng) -> (SaveBlock1, SaveBlock2) {
         },
         location: spawn,
         money: STARTING_MONEY,
+        // `SetLastHealLocationWarp` via the skipped truck sequence's own
+        // `setrespawn` (`default_last_heal_location`'s doc comment) -- issue
+        // #261's white-out needs a real destination from the first loss of
+        // a fresh game onward, not the zeroed default.
+        last_heal_location: default_last_heal_location(block2.player_gender),
         ..SaveBlock1::default()
     };
 
@@ -551,6 +654,98 @@ mod tests {
         assert_eq!(SPAWN_ELEVATION, 0);
         assert_eq!(SPAWN_FACING, Direction::South);
         assert_eq!(SPAWN_MAP_ID.0, "MAP_LITTLEROOT_TOWN_BRENDANS_HOUSE_2F");
+    }
+
+    /// [`DEFAULT_HEAL_LOCATION_MAP_GROUP`]/[`DEFAULT_HEAL_LOCATION_MALE_MAP_NUM`]/
+    /// [`DEFAULT_HEAL_LOCATION_FEMALE_MAP_NUM`] must each resolve, through the
+    /// *generated* `assets::MapHeaderTable`, to the real bedroom maps --
+    /// [`spawn_location_matches_the_bedrooms_map_header_position`]'s own
+    /// cross-check, applied to both houses instead of only Brendan's, so a
+    /// future `assets` regeneration that renumbers Littleroot's indoor group
+    /// can't silently desync either constant.
+    #[test]
+    fn default_heal_locations_match_the_generated_map_header_positions() {
+        let brendans = assets::MapHeaderTable::new()
+            .header(assets::MapId("MAP_LITTLEROOT_TOWN_BRENDANS_HOUSE_2F"))
+            .expect("must resolve in the generated map-header table");
+        assert_eq!(
+            i8::try_from(brendans.group).unwrap(),
+            DEFAULT_HEAL_LOCATION_MAP_GROUP
+        );
+        assert_eq!(
+            i8::try_from(brendans.num).unwrap(),
+            DEFAULT_HEAL_LOCATION_MALE_MAP_NUM
+        );
+
+        let mays = assets::MapHeaderTable::new()
+            .header(assets::MapId("MAP_LITTLEROOT_TOWN_MAYS_HOUSE_2F"))
+            .expect("must resolve in the generated map-header table");
+        assert_eq!(
+            i8::try_from(mays.group).unwrap(),
+            DEFAULT_HEAL_LOCATION_MAP_GROUP
+        );
+        assert_eq!(
+            i8::try_from(mays.num).unwrap(),
+            DEFAULT_HEAL_LOCATION_FEMALE_MAP_NUM
+        );
+    }
+
+    /// `SetLastHealLocationWarp`'s gender pairing (module docs on
+    /// [`default_last_heal_location`]): a male player's white-out
+    /// destination is Brendan's house, a female player's is May's, and an
+    /// out-of-range gender byte is upstream's own true no-op -- the zeroed
+    /// [`WarpData::default`], not a guessed house.
+    #[test]
+    fn default_last_heal_location_matches_the_gender_pairing() {
+        assert_eq!(
+            default_last_heal_location(PlayerGender::Male),
+            WarpData {
+                map_group: DEFAULT_HEAL_LOCATION_MAP_GROUP,
+                map_num: DEFAULT_HEAL_LOCATION_MALE_MAP_NUM,
+                warp_id: -1,
+                x: DEFAULT_HEAL_LOCATION_X,
+                y: DEFAULT_HEAL_LOCATION_Y,
+            }
+        );
+        assert_eq!(
+            default_last_heal_location(PlayerGender::Female),
+            WarpData {
+                map_group: DEFAULT_HEAL_LOCATION_MAP_GROUP,
+                map_num: DEFAULT_HEAL_LOCATION_FEMALE_MAP_NUM,
+                warp_id: -1,
+                x: DEFAULT_HEAL_LOCATION_X,
+                y: DEFAULT_HEAL_LOCATION_Y,
+            }
+        );
+        assert_eq!(
+            default_last_heal_location(PlayerGender::Other(0xFF)),
+            WarpData::default(),
+            "upstream's own no-op: checkplayergender falls through to a bare `end`"
+        );
+    }
+
+    /// [`init_save_blocks`] must actually apply
+    /// [`default_last_heal_location`] to the fresh save, not merely leave
+    /// the constant computable -- the regression
+    /// [`spawn_location_matches_the_bedrooms_map_header_position`] guards
+    /// for `location`, applied to `last_heal_location` (issue #261).
+    #[test]
+    fn fresh_save_has_a_real_last_heal_location() {
+        let mut rng = Rng::new(0);
+        let (block1, block2) = init_save_blocks(&mut rng);
+        assert_eq!(block2.player_gender, PlayerGender::Male);
+        assert_eq!(
+            block1.last_heal_location,
+            default_last_heal_location(PlayerGender::Male)
+        );
+        assert_ne!(
+            (
+                block1.last_heal_location.map_group,
+                block1.last_heal_location.map_num
+            ),
+            (0, 0),
+            "must not be Petalburg City's own position"
+        );
     }
 
     /// Issue #164's `DoD`: a fresh save must have

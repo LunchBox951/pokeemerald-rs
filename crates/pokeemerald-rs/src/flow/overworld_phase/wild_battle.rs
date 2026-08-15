@@ -21,8 +21,12 @@ impl OverworldPhase {
     /// ([`OverworldPhase::wild_table_screen`]) because the screen walks the
     /// whole table; a map change invalidates the memo by construction, with
     /// no per-transition update to forget. `false` disables the encounter
-    /// roll outright (no draws, no bookkeeping), the same fail-closed shape
-    /// as the fainted-lead guard.
+    /// roll outright (no draws, no bookkeeping) -- the same no-draw-at-all
+    /// shape [`wild_encounter::lead_can_fight`] applies per step for the
+    /// first-battle-loss residual state issue #261's white-out cannot cover
+    /// ([`wild_encounter::map_wild_table_fightable`]'s own doc comment;
+    /// `crate::flow::wild_encounter`'s module docs, "The fail-closed guard,
+    /// narrowed").
     pub(in crate::flow) fn wild_table_fightable(&mut self) -> bool {
         match self.wild_table_screen {
             Some((map, fightable)) if map == self.map_id => fightable,
@@ -53,6 +57,15 @@ impl OverworldPhase {
             &mut self.rng,
         ) {
             eprintln!("wild battle: ended -- {outcome:?}");
+            // `CB2_EndWildBattle`'s `IsPlayerDefeated` branch
+            // (`src/battle_setup.c:602-616`) -> `CB2_WhiteOut` (issue #261):
+            // heal, halve money, warp home. `Self::white_out` (module docs'
+            // former "unmodelled gate" section, now retired) is the one
+            // shared implementation both this driver and the Route 103
+            // rival one call.
+            if outcome == battle::BattleOutcome::PlayerLost {
+                self.white_out();
+            }
         }
         true
     }
@@ -80,12 +93,12 @@ impl OverworldPhase {
     /// any draw on a map that could produce such a moveset, this arm is
     /// defensive: no table-rolled encounter reaches it today.
     ///
-    /// The lead mon reaching here is never *fainted*: the roll upstream of
-    /// this call is refused outright while it is
-    /// ([`wild_encounter::lead_can_fight`], the fail-closed stand-in for the
-    /// white-out this port does not model), so no encounter exists to hand
-    /// over. Guarded there rather than again here, where a second check could
-    /// only ever be dead code.
+    /// The lead mon reaching here is never *fainted* in production: a loss
+    /// heals it before the next step can roll another encounter
+    /// ([`Self::white_out`], `crate::flow::wild_encounter`'s module docs
+    /// "The white-out, modelled" section) -- the same state upstream itself
+    /// cannot reach. Not re-checked here, since a second check could only
+    /// ever be dead code against that invariant.
     pub(super) fn begin_wild_battle(
         &mut self,
         encounter: Option<engine::overworld::WildEncounter>,

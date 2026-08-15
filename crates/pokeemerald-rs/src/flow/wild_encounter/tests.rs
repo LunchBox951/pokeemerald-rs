@@ -358,9 +358,13 @@ fn route_101s_table_is_fightable_and_route_102s_is_not_yet() {
 /// On a map whose table fails the screen, a grass step must draw **nothing
 /// at all** -- not roll-and-reject, which would spend `CreateWildMon`'s draws
 /// on a battle that cannot start (upstream never rejects one, so those
-/// draws would have no upstream counterpart). Same state-based assertions
-/// as the fainted-lead guard: the stream, the immunity counter, and
-/// `sPrevMetatileBehavior` all stay frozen.
+/// draws would have no upstream counterpart). The assertions are
+/// deliberately on state rather than on the log line -- the screen skips
+/// `CheckStandardWildEncounter` outright, so the stream, the immunity
+/// counter, and `sPrevMetatileBehavior` all stay frozen, a discriminator a
+/// mere "drew nothing" cannot give (a non-grass step draws nothing either).
+/// The same shape the fainted-lead guard's own regression used before issue
+/// #261's white-out retired that guard.
 #[test]
 fn an_unfightable_map_table_disables_the_roll_without_drawing() {
     let specials: Vec<((u16, u16), u8)> = [(5u16, 5u16), (6, 5), (7, 5)]
@@ -856,39 +860,52 @@ fn a_fired_encounter_consumes_the_frames_field_input() {
 /// makes a *loss* reachable through the production path at all.
 const SHUCKLE: u16 = 213;
 
-/// The review finding this whole guard exists for: a lost battle leaves a
-/// fainted mon in the party (upstream would have whited out and healed it),
-/// and every later grass step must then draw **nothing**.
+/// **Replaces** the former `a_lost_battle_leaves_a_fainted_lead_and_no_later_grass_step_draws`
+/// regression (issue #261, `flow::wild_encounter`'s module docs "The
+/// white-out, modelled" section): that test pinned the *interim* fail-closed
+/// posture this crate shipped before this issue -- a lost battle left a
+/// fainted mon standing in the party, and the since-removed `lead_can_fight`
+/// guard refused every later roll rather than let the gap become
+/// RNG-observable. The real upstream behaviour is reachable now
+/// (`crate::flow::overworld_phase::white_out::OverworldPhase::white_out`),
+/// so this pins *that* instead: a lost wild battle heals the party back to
+/// full HP/PP and halves the player's money in the same frame the battle
+/// ends -- `DoWhiteOut`'s `SetMoney`/`HealPlayerParty` ordering
+/// (`pokeemerald/src/overworld.c:361-362`).
 ///
-/// Without [`super::lead_can_fight`], each of those steps rolls, and a
-/// fired roll spends the wild mon's five nature/personality/IV draws plus
-/// [`battle::Battle::new`]'s `gRandomTurnNumber` before anything notices the
-/// lead is fainted -- repeatable draws with no upstream counterpart, since
-/// upstream cannot reach a grass step with a fainted-only party at all
-/// (`CB2_EndWildBattle` -> `CB2_WhiteOut` -> `DoWhiteOut`'s
-/// `HealPlayerParty`).
+/// Money is seeded at an odd value (`2001`) specifically so the assertion
+/// pins upstream's exact integer-division semantics (`GetMoney(...) / 2`,
+/// no rounding) rather than an even value a rounding bug could also satisfy.
 ///
-/// The assertions are deliberately on state, not on the log line: the guard
-/// skips `CheckStandardWildEncounter` outright, so *neither* the immunity
-/// counter *nor* `sPrevMetatileBehavior` moves -- a discriminator a mere
-/// "drew nothing" cannot give, since a non-grass step draws nothing either.
+/// Pack-free by construction: every assertion below is about state
+/// `white_out` writes *before* it ever attempts the warp home
+/// (`self.save1.money`/`self.party_lead`), so it holds whether or not a
+/// local pack is extracted. The warp landing itself is pinned separately,
+/// pack-gated, by
+/// [`real_pack_a_lost_wild_battle_warps_home_to_the_default_heal_location`].
 #[test]
-fn a_lost_battle_leaves_a_fainted_lead_and_no_later_grass_step_draws() {
-    // A 20x10 room: one grass tile at (7, 5) for the encounter, then a run
-    // of grass from (12, 5) that a later walk can keep stepping onto -- far
-    // enough east that the four immune steps a fired encounter grants are
-    // spent on ordinary ground first.
+fn a_lost_battle_now_heals_the_party_and_halves_money() {
+    // A 20x10 room: one grass tile at (7, 5) is all this test needs -- the
+    // former version's extra grass run existed only to prove *no* later
+    // step drew anything, which is no longer this test's subject.
     let mut phase = route_101_phase_with_grass(
         20,
         10,
         PlayerState::new((2, 5), 3, Direction::East),
-        &[(7, 5), (12, 5), (13, 5), (14, 5), (15, 5), (16, 5)],
+        &[(7, 5)],
     );
     phase.rng = Rng::new(ENCOUNTER_SEED);
-    // A level-2 Shuckle on its last hit point: slow enough that the run can
-    // fail, frail enough that the Wurmple's reply faints it.
+    phase.save1.money = 2001;
+    // A level-2 Shuckle on its last hit point, with one PP already spent:
+    // slow enough that the driver's run can fail (`TryRunFromBattle`'s RNG
+    // branch), frail enough that the Wurmple's reply faints it -- and PP
+    // already short of its base, so healing it is observable too.
+    let dex = Dex::new();
     let mut lead = player_mon(SHUCKLE, 2, vec![MoveId(1)]);
     lead.apply_damage(lead.stats().max_hp - 1);
+    let base_pp = dex.move_data(MoveId(1)).unwrap().pp;
+    lead.deduct_pp(0).unwrap();
+    assert!(lead.moves()[0].pp < base_pp, "setup: PP really is short");
     phase.party_lead = Some(lead);
 
     for _ in 0..(5 * FRAMES_PER_STEP) {
@@ -906,33 +923,185 @@ fn a_lost_battle_leaves_a_fainted_lead_and_no_later_grass_step_draws() {
         frames += 1;
         assert!(frames < 200, "the headless driver must terminate");
     }
+
+    assert_eq!(
+        phase.save1.money, 1000,
+        "SetMoney(&gSaveBlock1Ptr->money, GetMoney(&gSaveBlock1Ptr->money) / 2) -- \
+         2001 / 2 == 1000, not 1000.5 rounded up"
+    );
     let lead = phase
         .party_lead
         .as_ref()
-        .expect("the battle writes the lead mon back on the frame it ends");
+        .expect("the battle writes the lead mon back, and white_out heals it in place");
     assert!(
-        lead.is_fainted(),
-        "a lost battle really does leave a fainted mon in the party -- this port models no \
-         white-out (flow::wild_encounter's module docs)"
+        !lead.is_fainted(),
+        "HealPlayerParty restores full HP -- a lost battle no longer leaves a fainted lead \
+         standing in the party"
+    );
+    assert_eq!(lead.current_hp(), lead.stats().max_hp);
+    assert_eq!(
+        lead.moves()[0].pp,
+        base_pp,
+        "HealPlayerParty restores PP to its base value too"
+    );
+}
+
+/// The ratchet the retired
+/// `a_lost_battle_leaves_a_fainted_lead_and_no_later_grass_step_draws`
+/// regression implied, closed the honest way round: that test pinned the
+/// stream **frozen** for every grass step after a loss, because the
+/// since-removed `lead_can_fight` guard refused the roll while the lead was
+/// fainted. With the white-out healing the lead in the frame the battle
+/// ends, the guard's premise is gone -- so the post-loss behaviour must now
+/// be upstream's ordinary one: the player walks, and the encounter check
+/// runs again.
+///
+/// The geometry is the old test's, deliberately: the tile the first
+/// encounter fires on at `(7, 5)`, then a run of grass from `(12, 5)` far
+/// enough east that the four immune steps a fired battle grants
+/// ([`engine::overworld::wild_encounter::WILD_ENCOUNTER_IMMUNITY_STEPS`],
+/// `RestartWildEncounterImmunitySteps` at `src/battle_setup.c:370`) are
+/// spent on ordinary ground first -- so the assertion below is about the
+/// roll being *allowed*, not about the immunity window.
+///
+/// `last_heal_location` is seeded to a deliberately unresolvable
+/// `(map_group, map_num)` so `white_out` takes its own documented "does not
+/// name a known map -- staying put" branch and leaves the player standing in
+/// this synthetic room. That is a fixture device, not the subject: the warp
+/// home is pinned by
+/// [`real_pack_a_lost_wild_battle_warps_home_to_the_default_heal_location`],
+/// and a *resolvable* heal location would rebind the whole scene to a real
+/// pack-loaded map with no grass under the player -- making this test's
+/// result depend on whether a pack happens to be extracted.
+#[test]
+fn after_a_white_out_a_later_grass_step_rolls_again() {
+    let mut phase = route_101_phase_with_grass(
+        20,
+        10,
+        PlayerState::new((2, 5), 3, Direction::East),
+        &[(7, 5), (12, 5), (13, 5), (14, 5), (15, 5), (16, 5)],
+    );
+    phase.rng = Rng::new(ENCOUNTER_SEED);
+    phase.save1.last_heal_location = engine::save::WarpData {
+        map_group: -1,
+        map_num: -1,
+        warp_id: -1,
+        x: 0,
+        y: 0,
+    };
+    let mut lead = player_mon(SHUCKLE, 2, vec![MoveId(1)]);
+    lead.apply_damage(lead.stats().max_hp - 1);
+    phase.party_lead = Some(lead);
+
+    for _ in 0..(5 * FRAMES_PER_STEP) {
+        phase.step(held(Buttons::RIGHT));
+    }
+    assert!(phase.wild_battle.is_some(), "setup: the roll fired");
+    let mut frames = 0;
+    while phase.wild_battle.is_some() {
+        phase.step(held(Buttons::RIGHT));
+        frames += 1;
+        assert!(frames < 200, "the headless driver must terminate");
+    }
+    assert!(
+        !phase
+            .party_lead
+            .as_ref()
+            .expect("the battle writes the lead back")
+            .is_fainted(),
+        "setup: the loss whited out, so the lead is healed"
+    );
+    assert_eq!(
+        (phase.map_id, phase.player.position()),
+        (ROUTE_101, (7, 5)),
+        "setup: the unresolvable heal location left the player where the battle ended"
     );
 
-    // From here nothing may touch the stream or the encounter bookkeeping,
-    // however much grass the player walks through.
+    // Four ordinary steps east spend the immunity window the battle
+    // restarted -- upstream's own post-battle grace, and no draw at all.
     let after_battle = phase.rng.state();
-    assert_eq!(phase.wild.immunity_steps(), 0, "the encounter reset it");
-    assert_eq!(phase.wild.prev_metatile_behavior(), MB_TALL_GRASS);
+    for _ in 0..(4 * FRAMES_PER_STEP) {
+        phase.step(held(Buttons::RIGHT));
+    }
+    assert_eq!(phase.player.position(), (11, 5));
+    assert_eq!(
+        phase.rng.state(),
+        after_battle,
+        "the immunity window returns before StandardWildEncounter draws"
+    );
+    assert_eq!(
+        phase.wild.immunity_steps(),
+        engine::overworld::wild_encounter::WILD_ENCOUNTER_IMMUNITY_STEPS,
+        "setup: the window is spent, so the next step is a rolled one"
+    );
 
-    for _ in 0..(9 * FRAMES_PER_STEP) {
+    // The first rolled step after the white-out, onto grass: the check runs.
+    for _ in 0..FRAMES_PER_STEP {
+        phase.step(held(Buttons::RIGHT));
+    }
+    assert_eq!(phase.player.position(), (12, 5));
+    assert_ne!(
+        phase.rng.state(),
+        after_battle,
+        "a healed lead must roll again -- `AllowWildCheckOnNewMetatile`'s draw is \
+         unconditional once the behavior changes to tall grass"
+    );
+    assert_eq!(
+        phase.wild.prev_metatile_behavior(),
+        MB_TALL_GRASS,
+        "and the encounter bookkeeping moves with it"
+    );
+}
+
+/// The residual state [`super::lead_can_fight`] still guards (issue #261
+/// review; `flow::wild_encounter`'s module docs, "The fail-closed guard,
+/// narrowed"): a lost Route 101 *first battle* leaves a fainted lead in the
+/// overworld -- `CB2_EndFirstBattle` has no `IsPlayerDefeated` branch, so no
+/// white-out and no heal -- and until issue #251 models the post-battle
+/// script, the player can walk that fainted lead straight into grass. Every
+/// such step must draw **nothing**: without the guard, each one would spend
+/// the wild mon's five nature/personality/IV draws plus `Battle::new`'s
+/// `gRandomTurnNumber` on a battle [`battle::Battle::new`] then refuses --
+/// repeatable draws with no upstream counterpart.
+///
+/// The fainted lead is written directly rather than driven through the
+/// scripted battle: `advance_first_battle`'s unconditional write-back is
+/// already pinned by `crate::flow::first_battle`'s own tests, and this
+/// test's subject is the *overworld consequence* of the state it leaves,
+/// not the battle that produces it.
+///
+/// The assertions are deliberately on state, not on the log line: the guard
+/// skips `CheckStandardWildEncounter` outright, so *neither* the immunity
+/// counter *nor* `sPrevMetatileBehavior` moves -- a discriminator a mere
+/// "drew nothing" cannot give, since a non-grass step draws nothing either.
+#[test]
+fn a_fainted_lead_from_a_lost_first_battle_draws_no_later_roll() {
+    let mut phase = route_101_phase_with_grass(
+        20,
+        10,
+        PlayerState::new((2, 5), 3, Direction::East),
+        &[(4, 5), (5, 5), (6, 5), (7, 5), (8, 5)],
+    );
+    phase.rng = Rng::new(ENCOUNTER_SEED);
+    // The state a lost first battle writes back (doc comment above): the
+    // one-mon party's lead, fainted.
+    let mut lead = player_mon(SHUCKLE, 2, vec![MoveId(1)]);
+    lead.apply_damage(u32::MAX);
+    assert!(lead.is_fainted(), "setup: the lead really is fainted");
+    phase.party_lead = Some(lead);
+
+    let before = phase.rng.state();
+    for _ in 0..(6 * FRAMES_PER_STEP) {
         phase.step(held(Buttons::RIGHT));
     }
     assert_eq!(
         phase.player.position(),
-        (16, 5),
-        "four ordinary steps then five straight through tall grass"
+        (8, 5),
+        "five straight steps through tall grass"
     );
     assert_eq!(
         phase.rng.state(),
-        after_battle,
+        before,
         "a fainted lead must make every one of those steps draw nothing at all"
     );
     assert!(phase.wild_battle.is_none(), "and start no battle");
@@ -942,16 +1111,16 @@ fn a_lost_battle_leaves_a_fainted_lead_and_no_later_grass_step_draws() {
         "the roll is refused before CheckStandardWildEncounter, so it never even consumes \
          an immunity step"
     );
-    assert_eq!(
+    assert_ne!(
         phase.wild.prev_metatile_behavior(),
         MB_TALL_GRASS,
         "nor updates sPrevMetatileBehavior"
     );
 }
 
-/// The other half of [`super::lead_can_fight`]: an *empty* party is upstream's
-/// own fresh-save state and must still roll, so the stream stays where a
-/// real playthrough would have it (this module's
+/// The other half of [`super::lead_can_fight`]: an *empty* party is
+/// upstream's own fresh-save state and must still roll, so the stream stays
+/// where a real playthrough would have it (this module's
 /// `an_encounter_without_a_party_mon_starts_no_battle_and_does_not_wedge_the_player`
 /// walks that path; this pins the predicate itself).
 #[test]
@@ -967,4 +1136,56 @@ fn only_a_fainted_lead_refuses_the_roll() {
     fainted.apply_damage(u32::MAX);
     assert!(fainted.is_fainted());
     assert!(!lead_can_fight(Some(&fainted)));
+}
+
+/// The pack-gated companion to
+/// [`a_lost_battle_now_heals_the_party_and_halves_money`]: the same lost
+/// battle must also land the player on the default heal location
+/// (`crate::new_game::default_last_heal_location`) -- Brendan's house,
+/// `(4, 2)` -- once `white_out`'s warp actually resolves against a real
+/// map. `#[ignore]`d like this crate's other real-pack tests: run
+/// `cargo xtask extract` first.
+#[test]
+#[ignore = "needs a local pack: run `cargo xtask extract` first"]
+fn real_pack_a_lost_wild_battle_warps_home_to_the_default_heal_location() {
+    let mut phase = route_101_phase_with_grass(
+        20,
+        10,
+        PlayerState::new((2, 5), 3, Direction::East),
+        &[(7, 5)],
+    );
+    phase.rng = Rng::new(ENCOUNTER_SEED);
+    let mut lead = player_mon(SHUCKLE, 2, vec![MoveId(1)]);
+    lead.apply_damage(lead.stats().max_hp - 1);
+    phase.party_lead = Some(lead);
+
+    for _ in 0..(5 * FRAMES_PER_STEP) {
+        phase.step(held(Buttons::RIGHT));
+    }
+    assert!(phase.wild_battle.is_some(), "setup: the roll fired");
+
+    let mut frames = 0;
+    while phase.wild_battle.is_some() {
+        phase.step(held(Buttons::RIGHT));
+        frames += 1;
+        assert!(frames < 200, "the headless driver must terminate");
+    }
+
+    assert_eq!(
+        phase.map_id,
+        assets::MapId("MAP_LITTLEROOT_TOWN_BRENDANS_HOUSE_2F"),
+        "the white-out must land on the default heal location's own map"
+    );
+    assert_eq!(
+        phase.player.position(),
+        (4, 2),
+        "and its own (x, y), not the intro's stairwell landing tile"
+    );
+    assert_eq!(
+        phase.save1().location.warp_id,
+        -1,
+        "WARP_ID_NONE -- a heal location names a raw tile, not a resolved warp event"
+    );
+    assert_eq!(phase.save1().location.x, 4);
+    assert_eq!(phase.save1().location.y, 2);
 }

@@ -747,6 +747,37 @@ impl BattlePokemon {
         slot.pp -= 1;
         Ok(())
     }
+
+    /// `HealPlayerParty`'s per-mon effect
+    /// (`pokeemerald/src/script_pokemon_util.c:30-59`, issue #261's
+    /// white-out): restore current HP to [`Stats::max_hp`] and every known
+    /// move's PP to its base value (`CalculatePPWithBonus` with a `0`
+    /// bonus — [`MoveSlot::pp`]'s own doc comment records that PP Up bonuses
+    /// are out of this crate's scope, so "base value" and "healed value"
+    /// coincide here).
+    ///
+    /// Upstream's third effect — zeroing `MON_DATA_STATUS` — has no
+    /// counterpart to run: this crate models no non-volatile status
+    /// conditions at all (module docs), so there is nothing left to clear.
+    /// The owned type this method lives on, not a free function, so a
+    /// future multi-slot party (this crate's module docs already flag the
+    /// one-mon-party limit) only has to call it once per member.
+    ///
+    /// # Errors
+    ///
+    /// Whatever [`crate::dex::Dex::move_data`] reports for a move id this
+    /// mon already knows — unreachable in practice, since every
+    /// [`MoveSlot::move_id`] this crate ever writes ([`BattlePokemon::new`],
+    /// [`BattlePokemon::learn_crossed_level_moves`]) already passed that
+    /// same lookup, but surfaced as a caller-visible `Result` instead of an
+    /// `expect` in case a future change to either ever desyncs them.
+    pub fn heal(&mut self, dex: &Dex) -> Result<(), BattleError> {
+        self.current_hp = self.stats.max_hp;
+        for slot in &mut self.moves {
+            slot.pp = dex.move_data(slot.move_id)?.pp;
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -1079,6 +1110,38 @@ mod tests {
         }
         assert_eq!(mon.moves()[0].pp, 0);
         assert_eq!(mon.deduct_pp(0), Err(BattleError::NoPpRemaining(0)));
+    }
+
+    /// `HealPlayerParty` (`pokeemerald/src/script_pokemon_util.c:30-59`):
+    /// full HP, and every move's PP restored to its base value.
+    #[test]
+    fn heal_restores_hp_and_every_moves_pp() {
+        let dex = Dex::new();
+        let mut mon = sample_mon(&dex);
+        let max_hp = mon.stats().max_hp;
+        let base_pp = dex.move_data(mon.moves()[0].move_id).unwrap().pp;
+
+        mon.apply_damage(max_hp); // faint it
+        mon.deduct_pp(0).unwrap();
+        assert!(mon.is_fainted());
+        assert!(mon.moves()[0].pp < base_pp);
+
+        mon.heal(&dex).unwrap();
+        assert_eq!(mon.current_hp(), max_hp);
+        assert!(!mon.is_fainted());
+        assert_eq!(mon.moves()[0].pp, base_pp);
+    }
+
+    /// A mon already at full HP/PP is unaffected -- `heal` is idempotent,
+    /// matching `HealPlayerParty` running against an already-healthy party
+    /// (upstream never gates the call on need).
+    #[test]
+    fn heal_is_a_no_op_on_an_already_full_mon() {
+        let dex = Dex::new();
+        let mut mon = sample_mon(&dex);
+        let before = mon.clone();
+        mon.heal(&dex).unwrap();
+        assert_eq!(mon, before);
     }
 
     #[test]
