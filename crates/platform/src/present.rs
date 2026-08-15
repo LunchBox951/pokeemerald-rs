@@ -28,20 +28,18 @@ pub type Frame = [u32; PIXEL_COUNT];
 /// # Examples
 ///
 /// Fields are private, so external code cannot build a `Letterbox` with an
-/// invalid zero `scale`. All seven fields are listed and the expected
-/// diagnostic is pinned to E0451 (field-is-private), so this test fails --
-/// rather than silently passing on a missing-field E0063 -- if the seal is
-/// ever removed:
+/// invalid zero `scale`. The probe uses functional-update syntax over a
+/// valid base value, so the *only* possible compile error is the privacy
+/// seal on `scale` (E0451) -- it cannot rot into a missing-field E0063 when
+/// fields are added or removed, and it stops compiling (failing this test)
+/// the moment `scale` becomes publicly writable. (The `E0451` annotation is
+/// enforced by rustdoc only on nightly; the update-syntax shape is what
+/// makes the test robust on the stable toolchain this repo pins.)
 ///
 /// ```compile_fail,E0451
 /// let _ = platform::present::Letterbox {
 ///     scale: 0,
-///     dest_x: 0,
-///     dest_y: 0,
-///     scaled_width: 0,
-///     scaled_height: 0,
-///     crop_x: 0,
-///     crop_y: 0,
+///     ..platform::present::Letterbox::compute(1, 1)
 /// };
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -315,6 +313,18 @@ mod tests {
         // Bottom-right destination pixel (99, 79): source (169, 119).
         let bottom_right_idx = 79 * 100 + 99;
         assert_eq!(dest[bottom_right_idx], encode(169, 119));
+        // Every pixel, not just the corners (the pre-crop version of this
+        // test asserted the whole buffer, and the ratchet keeps it that
+        // way): destination (x, y) must be exactly source (70 + x, 40 + y).
+        for y in 0..80u32 {
+            for x in 0..100u32 {
+                assert_eq!(
+                    dest[y as usize * 100 + x as usize],
+                    encode(70 + x, 40 + y),
+                    "cropped sample mismatch at destination ({x}, {y})"
+                );
+            }
+        }
     }
 
     #[test]
