@@ -61,7 +61,7 @@
 
 use assets::{ObjectEvent, TrainerType};
 
-use super::collision::{directionally_impassable, elevation_mismatch};
+use super::collision::{directionally_impassable, elevation_mismatch, elevations_compatible};
 use super::direction::Direction;
 use super::map_runtime::MapRuntime;
 use super::metatile_behavior::MB_NORMAL;
@@ -147,11 +147,23 @@ fn approach_distance(
 /// The final tile is the player's own (guaranteed by [`approach_distance`]'s
 /// own construction, which only ever returns `Some` for a distance measured
 /// straight to `player_pos`); the `distance - 1` tiles strictly between the
-/// trainer and the player are the intermediate collision-checked run.
+/// trainer and the player are the intermediate collision-checked run. The
+/// two runs use *different* upstream predicates and are therefore written
+/// out separately: the intermediate tiles take
+/// `GetCollisionFlagsAtCoords`'s "any bit set blocks"
+/// ([`tile_blocks_approach`]), while the final tile takes
+/// `GetCollisionAtCoords`' first-match chain, of which only
+/// `COLLISION_OBJECT_EVENT` lets the cone through (the inline citations
+/// below). A distance-1 cone runs *no* intermediate steps at all, so the
+/// final-tile chain is the only collision test standing between an adjacent
+/// player and a battle — which is exactly why it has to be the whole chain
+/// (issue #264 review; Amy and Liv both have sight range 1).
+///
 /// Upstream's own `range.rangeX`/`rangeY` zeroing (`:333-337`, bypassing the
 /// trainer's *own* movement-range restriction for the final-tile query) has
 /// no counterpart here: this crate has no per-object movement-range concept
-/// at all (module docs), so there is nothing to bypass.
+/// at all (module docs), so there is nothing to bypass — the arm it disables
+/// is one this port never applies in the first place.
 fn sight_line_clear(
     trainer: &ObjectEvent,
     trainer_pos: (i32, i32),
@@ -191,18 +203,46 @@ fn sight_line_clear(
     x += dx;
     y += dy;
     // `GetCollisionAtCoords(...) == COLLISION_OBJECT_EVENT` at the final
-    // tile (`:339`): both the *grid* cell's own elevation and the
-    // occupant's (the player's) elevation must be compatible with the
-    // trainer's -- `IsElevationMismatchAt` runs first and would otherwise
-    // report `COLLISION_ELEVATION_MISMATCH` instead, never reaching the
-    // `DoesObjectCollideWithObjectAt` arm this cone actually needs. An
-    // undecodable final cell fails closed (`false`), the same posture
-    // [`tile_blocks_approach`] takes for an undecodable intermediate one.
+    // tile (`:339`). `GetCollisionAtCoords` is an `else if` chain
+    // (`event_object_movement.c:4658-4672`) that returns the *first*
+    // condition that fires, and only its last arm is the one this cone
+    // accepts -- so every earlier arm must be tested here too, or a player
+    // standing behind a wall, on a directionally-walled tile, or at a
+    // mismatched grid elevation would be "seen" through it. In upstream's
+    // own order:
+    //
+    // 1. `IsCoordOutsideObjectEventMovementRange` -- bypassed upstream by
+    //    zeroing `range.rangeX`/`rangeY` around this one call (`:333-337`);
+    //    this crate has no movement-range concept to bypass (module docs).
+    // 2. `MapGridGetCollisionAt || GetMapBorderIdAt == CONNECTION_INVALID ||
+    //    IsMetatileDirectionallyImpassable` -> `COLLISION_IMPASSABLE`.
+    // 3. `trackedByCamera && !CanCameraMoveInDirection` -- never true for an
+    //    NPC, which is not the camera's subject.
+    // 4. `IsElevationMismatchAt` -> `COLLISION_ELEVATION_MISMATCH`, against
+    //    the *grid cell's* elevation.
+    // 5. `DoesObjectCollideWithObjectAt` -> `COLLISION_OBJECT_EVENT`, the
+    //    only accepting arm: the player object standing on that tile at an
+    //    `AreElevationsCompatible` elevation (no `ELEVATION_MULTI_LEVEL`
+    //    leniency here, unlike arm 4 -- see
+    //    [`super::collision::elevations_compatible`]).
+    //
+    // An undecodable final cell fails closed (`false`, arm 2's border case),
+    // the same posture [`tile_blocks_approach`] takes for an undecodable
+    // intermediate one.
     let Some(cell) = runtime.metatile_cell(x, y) else {
         return false;
     };
-    !elevation_mismatch(trainer.elevation, cell.elevation)
-        && !elevation_mismatch(trainer.elevation, player.elevation())
+    if cell.collision != 0 {
+        return false;
+    }
+    let target_behavior = runtime.metatile_behavior(x, y).unwrap_or(MB_NORMAL);
+    if directionally_impassable(standing_behavior, target_behavior, facing) {
+        return false;
+    }
+    if elevation_mismatch(trainer.elevation, cell.elevation) {
+        return false;
+    }
+    elevations_compatible(trainer.elevation, player.elevation())
 }
 
 /// Whether the intermediate tile `(x, y)` -- one step along `facing`, on the
@@ -589,6 +629,105 @@ mod tests {
         let player = player_at(5, 6, 3);
         let event_data = EventData::new();
         assert!(trainer_can_see_player(&t, &runtime, &player, &event_data));
+    }
+
+    /// The final tile takes the whole `GetCollisionAtCoords` chain, not just
+    /// its elevation arm (issue #264 review): a *collision-blocked* player
+    /// tile reports `COLLISION_IMPASSABLE` upstream, never
+    /// `COLLISION_OBJECT_EVENT`, so the cone must not reach -- at distance
+    /// 1, where there are no intermediate tiles to catch it first.
+    #[test]
+    fn a_collision_blocked_final_tile_is_not_seen_at_distance_one() {
+        let hdr = header(&[]);
+        let events = empty_events();
+        let mut bytes = grid_bytes(10, 10, cell(0, 0, 3));
+        // Block the player's own tile at (5, 6), one step south of the
+        // trainer at (5, 5).
+        let blocked = cell(0, 1, 3).to_le_bytes();
+        let idx = (6 * 10 + 5) * 2;
+        bytes[idx..idx + 2].copy_from_slice(&blocked);
+        let layout = Box::leak(Box::new(assets::MapLayout {
+            id: assets::LayoutId("MAP_TEST"),
+            name: "Test",
+            width: 10,
+            height: 10,
+            primary_tileset: "gTileset_General",
+            secondary_tileset: "gTileset_General",
+        }));
+        let grid = layout.grid(Box::leak(bytes.into_boxed_slice())).unwrap();
+        let runtime = MapRuntime::new(
+            MapId("MAP_TEST"),
+            &hdr,
+            &events,
+            grid,
+            assets::MetatileAttributeTable::new(&[]),
+            assets::MetatileAttributeTable::new(&[]),
+        );
+        let t = trainer(5, 5, 3, MovementType::FaceDown, "3");
+        let player = player_at(5, 6, 3);
+        let event_data = EventData::new();
+        assert!(!trainer_can_see_player(&t, &runtime, &player, &event_data));
+    }
+
+    /// The same chain's `IsMetatileDirectionallyImpassable` arm at the final
+    /// tile, again at distance 1: the trainer stands on a
+    /// `MB_IMPASSABLE_SOUTH` tile, so a southward line cannot leave it even
+    /// though the player is directly adjacent on open, same-elevation
+    /// ground.
+    #[test]
+    fn a_directionally_impassable_final_tile_is_not_seen_at_distance_one() {
+        use crate::overworld::metatile_behavior::MB_IMPASSABLE_SOUTH;
+        let hdr = header(&[]);
+        let events = empty_events();
+        // `metatile_attributes.bin` is one little-endian `u16` per metatile
+        // id, its low byte the behavior: id 0 stays MB_NORMAL, id 1 (the
+        // trainer's own tile, below) blocks southward movement.
+        let attributes: &'static [u8] = Box::leak(Box::new([MB_NORMAL, 0, MB_IMPASSABLE_SOUTH, 0]));
+        let mut bytes = grid_bytes(10, 10, cell(0, 0, 3));
+        let trainer_tile = cell(1, 0, 3).to_le_bytes();
+        let idx = (5 * 10 + 5) * 2;
+        bytes[idx..idx + 2].copy_from_slice(&trainer_tile);
+        let layout = Box::leak(Box::new(assets::MapLayout {
+            id: assets::LayoutId("MAP_TEST"),
+            name: "Test",
+            width: 10,
+            height: 10,
+            primary_tileset: "gTileset_General",
+            secondary_tileset: "gTileset_General",
+        }));
+        let grid = layout.grid(Box::leak(bytes.into_boxed_slice())).unwrap();
+        let runtime = MapRuntime::new(
+            MapId("MAP_TEST"),
+            &hdr,
+            &events,
+            grid,
+            assets::MetatileAttributeTable::new(attributes),
+            assets::MetatileAttributeTable::new(&[]),
+        );
+        let t = trainer(5, 5, 3, MovementType::FaceDown, "3");
+        let player = player_at(5, 6, 3);
+        let event_data = EventData::new();
+        assert!(!trainer_can_see_player(&t, &runtime, &player, &event_data));
+    }
+
+    /// The final tile's *object* arm is `AreElevationsCompatible`, which --
+    /// unlike `IsElevationMismatchAt` -- has no [`ELEVATION_MULTI_LEVEL`]
+    /// wildcard (issue #264 review): a player object at elevation `15`
+    /// really is at elevation `15`, and a trainer at `3` cannot collide with
+    /// them, so `GetCollisionAtCoords` never reaches
+    /// `COLLISION_OBJECT_EVENT`.
+    #[test]
+    fn a_multi_level_player_object_is_not_compatible_with_an_ordinary_trainer() {
+        use crate::overworld::collision::ELEVATION_MULTI_LEVEL;
+        let hdr = header(&[]);
+        let events = empty_events();
+        // The *grid* stays at elevation 3 so only the object-vs-object arm
+        // is under test.
+        let runtime = runtime_over(&hdr, &events, 10, 10, cell(0, 0, 3));
+        let t = trainer(5, 5, 3, MovementType::FaceDown, "3");
+        let player = player_at(5, 6, ELEVATION_MULTI_LEVEL);
+        let event_data = EventData::new();
+        assert!(!trainer_can_see_player(&t, &runtime, &player, &event_data));
     }
 
     /// Each of the four facing directions reaches a player placed on its own

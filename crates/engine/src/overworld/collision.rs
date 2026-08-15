@@ -56,6 +56,23 @@ pub const fn elevation_mismatch(current_elevation: u8, target_elevation: u8) -> 
     current_elevation != target_elevation
 }
 
+/// Whether two *objects'* elevations may share a tile, mirroring upstream
+/// `AreElevationsCompatible` (`event_object_movement.c:7789-7797`) exactly:
+/// [`ELEVATION_TRANSITION`] on either side is a wildcard, and otherwise the
+/// two must be equal.
+///
+/// **Not the same rule as [`elevation_mismatch`]**, and that difference is
+/// why both exist: `IsElevationMismatchAt` compares an object against a *map
+/// cell* and additionally lets [`ELEVATION_MULTI_LEVEL`] through, because a
+/// multi-level cell genuinely has no single elevation to disagree with. Two
+/// objects always do, so `DoesObjectCollideWithObjectAt`'s own test has no
+/// such leniency — an object standing at elevation `15` is at elevation
+/// `15`.
+#[must_use]
+pub const fn elevations_compatible(a: u8, b: u8) -> bool {
+    a == ELEVATION_TRANSITION || b == ELEVATION_TRANSITION || a == b
+}
+
 /// Whether a step in `direction` is blocked by an invisible one-sided wall
 /// carried by either tile's *behavior*, mirroring upstream
 /// `IsMetatileDirectionallyImpassable` (`event_object_movement.c:4715-4722`)
@@ -175,6 +192,26 @@ mod tests {
     fn differing_ordinary_elevations_mismatch() {
         assert!(elevation_mismatch(3, 4));
         assert!(elevation_mismatch(1, 2));
+    }
+
+    /// `AreElevationsCompatible` is symmetric in its transition wildcard and
+    /// strict everywhere else.
+    #[test]
+    fn object_elevations_are_compatible_only_on_a_match_or_a_transition() {
+        assert!(elevations_compatible(3, 3));
+        assert!(elevations_compatible(ELEVATION_TRANSITION, 5));
+        assert!(elevations_compatible(5, ELEVATION_TRANSITION));
+        assert!(!elevations_compatible(3, 4));
+    }
+
+    /// The one place `AreElevationsCompatible` and `IsElevationMismatchAt`
+    /// genuinely disagree, and the reason both primitives exist:
+    /// [`ELEVATION_MULTI_LEVEL`] is a wildcard for a *map cell* only, never
+    /// for another object.
+    #[test]
+    fn multi_level_is_a_cell_wildcard_but_not_an_object_one() {
+        assert!(!elevation_mismatch(3, ELEVATION_MULTI_LEVEL));
+        assert!(!elevations_compatible(3, ELEVATION_MULTI_LEVEL));
     }
 
     use super::super::metatile_behavior::{

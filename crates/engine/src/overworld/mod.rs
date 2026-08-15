@@ -74,8 +74,8 @@ pub mod warp;
 pub mod wild_encounter;
 
 pub use collision::{
-    directionally_impassable, elevation_mismatch, Collision, ELEVATION_MULTI_LEVEL,
-    ELEVATION_TRANSITION,
+    directionally_impassable, elevation_mismatch, elevations_compatible, Collision,
+    ELEVATION_MULTI_LEVEL, ELEVATION_TRANSITION,
 };
 pub use direction::Direction;
 pub use map_runtime::{ConnectedMapData, ConnectionCrossing, MapRuntime, NUM_METATILES_IN_PRIMARY};
