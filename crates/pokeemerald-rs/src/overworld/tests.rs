@@ -1548,7 +1548,7 @@ fn female_route_103_room_load_uses_may_for_player_and_brendan_for_rival() {
 // -- Real-pack elevation-driven OBJ priority (S-5, issue #218) ---------------
 
 /// The visual counterpart to
-/// `flow::overworld_phase::tests::bedroom_bed_side_column_is_walkable_and_retains_the_raised_previous_elevation`
+/// `flow::overworld_phase::step_tests::bedroom_bed_side_column_is_walkable_and_retains_the_raised_previous_elevation`
 /// (this crate's collision-side pin for the same issue): standing on the
 /// protagonist bedroom bed's raised elevation-4 edge tile must draw the
 /// player OBJ at the raised OAM priority
