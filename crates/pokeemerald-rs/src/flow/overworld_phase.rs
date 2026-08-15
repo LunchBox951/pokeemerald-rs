@@ -406,8 +406,8 @@ impl OverworldPhase {
     ///   `ObjectEventUpdateElevation` applies. This is the continue path's
     ///   own derivation (upstream's ordinary continue respawns from the
     ///   restored object event, never through `InitPlayerAvatar`); the warp
-    ///   path instead lands at
-    ///   `ELEVATION_TRANSITION` outright since issue #286
+    ///   path instead lands at `ELEVATION_TRANSITION` outright since issue
+    ///   #286
     ///   ([`engine::overworld::warp_destination_position`] reports position
     ///   only). A tile whose cell will not decode (a save pointing outside
     ///   the map) falls back to [`new_game::SPAWN_ELEVATION`] rather than
