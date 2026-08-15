@@ -48,13 +48,16 @@
 //! upstream itself limits pan overrides to -- see
 //! `assets::audio::voicegroup`'s module docs), and none of the CGB leaf
 //! kinds ([`audio::song::SquareTone`]/[`audio::song::WaveTone`]/
-//! [`audio::song::NoiseTone`]) carry a hardware sound-length counter or a
-//! fixed-rate flag -- `crate::audio`'s own module docs already list
-//! "SFX priority/interruption" adjacent gaps as this slice's scope
-//! boundary. This module drops [`assets::DirectSoundVoice::pan`] outside a
-//! rhythm child, and every CGB [`length`](assets::Square1Voice::length)/
-//! `fixed_rate` field, rather than inventing a new engine capability inside
-//! an audio-*playback* slice.
+//! [`audio::song::NoiseTone`]) carry a hardware sound-length counter --
+//! `crate::audio`'s own module docs already list "SFX priority/interruption"
+//! adjacent gaps as this slice's scope boundary. This module drops
+//! [`assets::DirectSoundVoice::pan`] outside a rhythm child, and every CGB
+//! [`length`](assets::Square1Voice::length) field, rather than inventing a
+//! new engine capability inside an audio-*playback* slice.
+//! [`assets::NoiseVoice::fixed_rate`] is dropped as well: Emerald's 8-bit-DAC
+//! frequency correction applies only to the pitched square/wave channels
+//! (`m4a.c:1184`..`:1202`), so channel 4 has no fixed-rate mode to model and
+//! `convert_noise` discards the flag.
 //!
 //! [`assets::DirectSoundMode::Reverse`] (backwards sample playback) has no
 //! engine representation at all (`crate::audio`'s own "out of scope" list:
@@ -81,7 +84,7 @@ mod player;
 #[cfg(test)]
 mod tests;
 
-pub use player::{MusicPlayer, RING_CAPACITY_FRAMES, TITLE_FADE_OUT_SPEED};
+pub use player::{MusicContext, MusicPlayer, RING_CAPACITY_FRAMES, TITLE_FADE_OUT_SPEED};
 
 /// `xIECV`'s `XCMD` sub-command number (pseudo-echo volume,
 /// `pokeemerald/sound/m4a_tables.c:252`) -- matches the identically-named,
@@ -181,8 +184,11 @@ pub fn load_song_from_pack(pack: &AssetPack, name: &str) -> Result<audio::Song, 
         .iter()
         .map(|track| track.iter().map(convert_event).collect())
         .collect();
-    Ok(audio::Song::new(voices, tracks, INITIAL_TEMPO_SEED)
-        .with_reverb(packed.reverb().unwrap_or(0)))
+    let song = audio::Song::new(voices, tracks, INITIAL_TEMPO_SEED);
+    Ok(match packed.reverb() {
+        Some(level) => song.with_reverb(level),
+        None => song,
+    })
 }
 
 /// Fetch and fully resolve a top-level voicegroup: every one of its (always
@@ -303,6 +309,7 @@ fn convert_square1(v: &Square1Voice) -> Instrument {
         duty: v.duty,
         sweep: v.sweep,
         adsr: convert_cgb_envelope(v.envelope),
+        fixed_rate: v.fixed_rate,
     })
 }
 
@@ -313,12 +320,13 @@ fn convert_square2(v: &Square2Voice) -> Instrument {
         duty: v.duty,
         sweep: 0,
         adsr: convert_cgb_envelope(v.envelope),
+        fixed_rate: v.fixed_rate,
     })
 }
 
 fn convert_noise(v: &NoiseVoice) -> Instrument {
     Instrument::CgbNoise(NoiseTone {
-        period: v.period,
+        lfsr_width_selector: v.period,
         adsr: convert_cgb_envelope(v.envelope),
     })
 }
@@ -341,6 +349,7 @@ fn convert_programmable_wave(
     Ok(Instrument::CgbWave(WaveTone {
         table: w.table,
         adsr: convert_cgb_envelope(v.envelope),
+        fixed_rate: v.fixed_rate,
     }))
 }
 
