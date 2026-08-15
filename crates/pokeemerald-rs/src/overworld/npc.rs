@@ -10,13 +10,19 @@
 //! actually contribute an [`OamEntry`] here -- [`resolve_sprite_source`]'s
 //! own match arms are the full list. Two shapes are modelled:
 //!
-//! - **`Standard`**: eight ordinary 16x32 "standing" NPCs (Mom, the twin,
-//!   the fat man, boy 2, Professor Birch, woman 4, Norman, scientist 1)
-//!   that share the exact upstream
-//!   `overworld_frame(<pic>, 2, 4, n)` 9-frame layout
+//! - **`Standard`**: twenty ordinary 16x32 "standing" NPCs -- the original
+//!   eight (Mom, the twin, the fat man, boy 2, Professor Birch, woman 4,
+//!   Norman, scientist 1) plus, since issue #262, Oldale Town's girl
+//!   (`GIRL_3`) and mart employee (`MART_EMPLOYEE`), the footprints
+//!   man/maniac (`MANIAC`), and Route 103's own background NPCs/trainers
+//!   (`BLACK_BELT`, `BOY_1`, `FISHERMAN`, `MAN_3`, `MAN_5`, `POKEFAN_M`,
+//!   `SWIMMER_F`, `SWIMMER_M`, `WOMAN_2`) -- that all share the exact
+//!   upstream `overworld_frame(<pic>, 2, 4, n)` 9-frame layout
 //!   [`super::avatar::pack_people_sheet_frames`] already knows how to pack,
 //!   drawn from one of the four generic `npc_1..4` palettes
-//!   (`OBJ_EVENT_PAL_TAG_NPC_1..4`) -- **plus** the two rival variants
+//!   (`OBJ_EVENT_PAL_TAG_NPC_1..4`, transcribed from each id's own
+//!   `gObjectEventGraphicsInfo_*.paletteTag` -- `object_event_graphics_info.h`)
+//!   -- **plus** the two rival variants
 //!   (`OBJ_EVENT_GFX_RIVAL_BRENDAN_NORMAL`/`_RIVAL_MAY_NORMAL`), which
 //!   upstream gives the *protagonists'* own walking sheets and palettes
 //!   rather than any rival-specific art, at
@@ -30,15 +36,18 @@
 //!   [`protagonist_source`] has the full reasoning, including why the rival
 //!   you can actually meet is always the *opposite* protagonist.
 //!
-//! Eleven [`resolve_sprite_source`] arms in total -- ten fixed-id arms,
-//! **all of which resolve for either [`PlayerCharacter`]**, plus the live
-//! `OBJ_EVENT_GFX_VAR_0` indirection below (issue #248) -- covering ten of
-//! the **46** distinct `graphics_id`s the nine bundled maps' object events
-//! actually reference on a fresh store (Route 101, since issue #177, adds
-//! three unresolved ids -- the youngster, Birch's starter bag, and the wild
-//! Zigzagoon -- and Oldale Town / Route 103, since issue #248, add their
-//! own unbound background-NPC ids (issue #262) to the six Littleroot-family
-//! maps' own 29; `resolve_sprite_source_covers_the_reachable_graphics_ids`
+//! Twenty-three [`resolve_sprite_source`] arms in total -- twenty-two
+//! fixed-id arms, **all of which resolve for either [`PlayerCharacter`]**,
+//! plus the live `OBJ_EVENT_GFX_VAR_0` indirection below (issue #248) --
+//! covering twenty-two of the **46** distinct `graphics_id`s the nine
+//! bundled maps' object events actually reference on a fresh store (Route
+//! 101, since issue #177, adds three unresolved ids -- the youngster,
+//! Birch's starter bag, and the wild Zigzagoon -- to the six
+//! Littleroot-family maps' own 29, and Oldale Town / Route 103, since issue
+//! #248, add fourteen of their own -- twelve background-NPC ids, all twelve
+//! of which issue #262 now binds, plus Route 103's two unresolved props
+//! (`OBJ_EVENT_GFX_BERRY_TREE` and `OBJ_EVENT_GFX_CUTTABLE_TREE`);
+//! `resolve_sprite_source_covers_the_reachable_graphics_ids`
 //! pins that exact partition, and that it is gender-independent, so a newly
 //! reachable standard NPC cannot silently stop drawing).
 //!
@@ -48,10 +57,21 @@
 //! resolution table exists here), inanimate props/dolls/the moving truck
 //! (different OAM shapes and sizes -- `48x48`/`16x16` -- than the uniform
 //! 16x32 this module's OAM building assumes), and the two non-16x32-vertical
-//! NPCs in scope's own reachable maps (Vigoroth, `32x32`; the ninja boy,
-//! `16x16`). A future slice can extend [`resolve_sprite_source`] and this
-//! module's OAM building to cover them; nothing here silently mis-renders
-//! them as 16x32.
+//! NPCs in scope's own reachable maps (Vigoroth, `32x32`; the rival's
+//! sibling -- the ninja boy declared only by
+//! `LittlerootTown_BrendansHouse_1F`/`LittlerootTown_MaysHouse_1F`'s own
+//! `map.json`, not by Route 103 -- `16x16`,
+//! `gObjectEventGraphicsInfo_NinjaBoy.width/height`,
+//! `object_event_graphics_info.h:115-132` -- upstream draws him from a
+//! smaller OAM shape than every other object event this module resolves,
+//! and stays out of scope for the same reason Vigoroth does: this module's
+//! [`oam_entries`] hard-codes [`avatar::PLAYER_OBJ_SHAPE`]/`_SIZE` for
+//! every entry it builds, so binding a non-16x32 id here today would
+//! mis-render it at the wrong shape rather than leave it merely undrawn --
+//! collision/interaction are unaffected either way, since hide-flag
+//! tracking never depended on a sprite binding existing). A future slice
+//! can extend [`resolve_sprite_source`] and this module's OAM building to
+//! cover them; nothing here silently mis-renders them as 16x32.
 //!
 //! **One `OBJ_EVENT_GFX_VAR_0` exception (I-5, issue #248).** Route 103's
 //! rival object event shares that exact `graphics_id` string with every
@@ -291,6 +311,60 @@ fn resolve_sprite_source(
         "OBJ_EVENT_GFX_SCIENTIST_1" => Some(Standard {
             sprite_path: "scientist_1",
             palette_bank: Npc3.bank(),
+        }),
+        // Oldale Town / Route 103 background NPCs (issue #262) -- same
+        // 9-frame `overworld_frame(<pic>, 2, 4, n)` 16x32 "standing" shape
+        // as the eight `Standard` arms above, each transcribed from its own
+        // `gObjectEventGraphicsInfo_*`'s `.images`/`.paletteTag`
+        // (`object_event_graphics_info.h`) and pic table
+        // (`object_event_pic_tables.h`).
+        "OBJ_EVENT_GFX_MART_EMPLOYEE" => Some(Standard {
+            sprite_path: "mart_employee",
+            palette_bank: Npc1.bank(),
+        }),
+        "OBJ_EVENT_GFX_GIRL_3" => Some(Standard {
+            sprite_path: "girl_3",
+            palette_bank: Npc2.bank(),
+        }),
+        "OBJ_EVENT_GFX_MANIAC" => Some(Standard {
+            sprite_path: "maniac",
+            palette_bank: Npc4.bank(),
+        }),
+        "OBJ_EVENT_GFX_MAN_3" => Some(Standard {
+            sprite_path: "man_3",
+            palette_bank: Npc2.bank(),
+        }),
+        "OBJ_EVENT_GFX_WOMAN_2" => Some(Standard {
+            sprite_path: "woman_2",
+            palette_bank: Npc3.bank(),
+        }),
+        "OBJ_EVENT_GFX_BOY_1" => Some(Standard {
+            sprite_path: "boy_1",
+            palette_bank: Npc3.bank(),
+        }),
+        "OBJ_EVENT_GFX_POKEFAN_M" => Some(Standard {
+            sprite_path: "pokefan_m",
+            palette_bank: Npc2.bank(),
+        }),
+        "OBJ_EVENT_GFX_BLACK_BELT" => Some(Standard {
+            sprite_path: "black_belt",
+            palette_bank: Npc3.bank(),
+        }),
+        "OBJ_EVENT_GFX_MAN_5" => Some(Standard {
+            sprite_path: "man_5",
+            palette_bank: Npc2.bank(),
+        }),
+        "OBJ_EVENT_GFX_SWIMMER_F" => Some(Standard {
+            sprite_path: "swimmer_f",
+            palette_bank: Npc2.bank(),
+        }),
+        "OBJ_EVENT_GFX_SWIMMER_M" => Some(Standard {
+            sprite_path: "swimmer_m",
+            palette_bank: Npc1.bank(),
+        }),
+        "OBJ_EVENT_GFX_FISHERMAN" => Some(Standard {
+            sprite_path: "fisherman",
+            palette_bank: Npc2.bank(),
         }),
         _ => None,
     }
@@ -799,6 +873,44 @@ mod tests {
         );
     }
 
+    /// The twelve Oldale Town / Route 103 background NPCs issue #262 binds,
+    /// each cross-checked against its own `gObjectEventGraphicsInfo_*.paletteTag`
+    /// (`object_event_graphics_info.h`): Oldale's girl (`GIRL_3`) and mart
+    /// employee (`MART_EMPLOYEE`), the footprints man/maniac (`MANIAC`), and
+    /// Route 103's own background NPCs/trainers (`BLACK_BELT`, `BOY_1`,
+    /// `FISHERMAN`, `MAN_3`, `MAN_5`, `POKEFAN_M`, `SWIMMER_F`, `SWIMMER_M`,
+    /// `WOMAN_2`).
+    #[test]
+    fn resolve_sprite_source_resolves_the_oldale_and_route_103_background_npcs() {
+        use NpcPaletteTag::{Npc1, Npc2, Npc3, Npc4};
+
+        let no_flags = EventData::new();
+        let cases = [
+            ("OBJ_EVENT_GFX_MART_EMPLOYEE", "mart_employee", Npc1),
+            ("OBJ_EVENT_GFX_GIRL_3", "girl_3", Npc2),
+            ("OBJ_EVENT_GFX_MANIAC", "maniac", Npc4),
+            ("OBJ_EVENT_GFX_MAN_3", "man_3", Npc2),
+            ("OBJ_EVENT_GFX_WOMAN_2", "woman_2", Npc3),
+            ("OBJ_EVENT_GFX_BOY_1", "boy_1", Npc3),
+            ("OBJ_EVENT_GFX_POKEFAN_M", "pokefan_m", Npc2),
+            ("OBJ_EVENT_GFX_BLACK_BELT", "black_belt", Npc3),
+            ("OBJ_EVENT_GFX_MAN_5", "man_5", Npc2),
+            ("OBJ_EVENT_GFX_SWIMMER_F", "swimmer_f", Npc2),
+            ("OBJ_EVENT_GFX_SWIMMER_M", "swimmer_m", Npc1),
+            ("OBJ_EVENT_GFX_FISHERMAN", "fisherman", Npc2),
+        ];
+        for (id, sprite_path, tag) in cases {
+            assert_eq!(
+                resolve_sprite_source(id, PlayerCharacter::Brendan, &no_flags),
+                Some(NpcSpriteSource::Standard {
+                    sprite_path,
+                    palette_bank: tag.bank(),
+                }),
+                "{id}"
+            );
+        }
+    }
+
     /// The maps `crates/xtask/src/extract/mod.rs`'s `LAYOUTS` bundles --
     /// every map whose object events this port can ever be asked to
     /// render. Mirrored here (this crate cannot depend on `xtask`); that
@@ -865,43 +977,45 @@ mod tests {
         assert_eq!(
             drawn,
             [
+                "OBJ_EVENT_GFX_BLACK_BELT",
+                "OBJ_EVENT_GFX_BOY_1",
                 "OBJ_EVENT_GFX_BOY_2",
                 "OBJ_EVENT_GFX_FAT_MAN",
+                "OBJ_EVENT_GFX_FISHERMAN",
+                "OBJ_EVENT_GFX_GIRL_3",
+                "OBJ_EVENT_GFX_MANIAC",
+                "OBJ_EVENT_GFX_MAN_3",
+                "OBJ_EVENT_GFX_MAN_5",
+                "OBJ_EVENT_GFX_MART_EMPLOYEE",
                 "OBJ_EVENT_GFX_MOM",
                 "OBJ_EVENT_GFX_NORMAN",
+                "OBJ_EVENT_GFX_POKEFAN_M",
                 "OBJ_EVENT_GFX_PROF_BIRCH",
                 "OBJ_EVENT_GFX_RIVAL_BRENDAN_NORMAL",
                 "OBJ_EVENT_GFX_RIVAL_MAY_NORMAL",
                 "OBJ_EVENT_GFX_SCIENTIST_1",
+                "OBJ_EVENT_GFX_SWIMMER_F",
+                "OBJ_EVENT_GFX_SWIMMER_M",
                 "OBJ_EVENT_GFX_TWIN",
+                "OBJ_EVENT_GFX_WOMAN_2",
                 "OBJ_EVENT_GFX_WOMAN_4",
             ],
-            "the eight `Standard` NPCs plus *both* rival variants -- the \
+            "the eight original `Standard` NPCs, both rival variants -- the \
              opposite-gender one is the rival the player can actually meet \
              (`protagonist_source`), and it must draw whichever way round \
-             this run's `PlayerCharacter` is"
+             this run's `PlayerCharacter` is -- and (issue #262) the twelve \
+             Oldale Town / Route 103 background NPCs this slice newly binds"
         );
         assert_eq!(
             not_drawn,
             [
                 "OBJ_EVENT_GFX_BERRY_TREE",
                 "OBJ_EVENT_GFX_BIRCHS_BAG",
-                "OBJ_EVENT_GFX_BLACK_BELT",
-                "OBJ_EVENT_GFX_BOY_1",
                 "OBJ_EVENT_GFX_CUTTABLE_TREE",
-                "OBJ_EVENT_GFX_FISHERMAN",
-                "OBJ_EVENT_GFX_GIRL_3",
                 "OBJ_EVENT_GFX_ITEM_BALL",
-                "OBJ_EVENT_GFX_MANIAC",
-                "OBJ_EVENT_GFX_MAN_3",
-                "OBJ_EVENT_GFX_MAN_5",
-                "OBJ_EVENT_GFX_MART_EMPLOYEE",
                 "OBJ_EVENT_GFX_NINJA_BOY",
                 "OBJ_EVENT_GFX_PICHU_DOLL",
-                "OBJ_EVENT_GFX_POKEFAN_M",
                 "OBJ_EVENT_GFX_SWABLU_DOLL",
-                "OBJ_EVENT_GFX_SWIMMER_F",
-                "OBJ_EVENT_GFX_SWIMMER_M",
                 "OBJ_EVENT_GFX_TRUCK",
                 "OBJ_EVENT_GFX_VAR_0",
                 "OBJ_EVENT_GFX_VAR_1",
@@ -917,16 +1031,17 @@ mod tests {
                 "OBJ_EVENT_GFX_VAR_B",
                 "OBJ_EVENT_GFX_VIGOROTH_CARRYING_BOX",
                 "OBJ_EVENT_GFX_VIGOROTH_FACING_AWAY",
-                "OBJ_EVENT_GFX_WOMAN_2",
                 "OBJ_EVENT_GFX_YOUNGSTER",
                 "OBJ_EVENT_GFX_ZIGZAGOON_1",
             ],
             "module docs' own 'not drawn' list: decorations (`OBJ_EVENT_GFX_VAR_0`'s \
              own fresh-save/decoration state included), props/dolls, the \
-             truck, the two non-16x32 NPCs, Route 101's own unresolved \
-             youngster/bag/Zigzagoon ids (issue #177), and (issue #248) \
-             every Oldale Town/Route 103 background NPC this slice does not \
-             extend `resolve_sprite_source` to draw"
+             truck, the two non-16x32 NPCs (Vigoroth, and the ninja boy the \
+             two Littleroot houses declare as the rival's sibling), and \
+             Route 101's own unresolved youngster/bag/Zigzagoon ids (issue \
+             #177) -- every Oldale Town/Route 103 background NPC is now \
+             bound (issue #262), leaving only that pair of maps' own berry \
+             and cuttable trees unresolved there"
         );
 
         // The *partition* is gender-independent -- every id that draws for a

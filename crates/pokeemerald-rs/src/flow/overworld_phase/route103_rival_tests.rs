@@ -1,7 +1,7 @@
 //! `route103_rival_trigger` (issue #248, I-5): rival-sprite setup, the
 //! A-press interaction trigger, and the headless per-frame driver. New
-//! sibling test module rather than more cases in the monolithic
-//! `overworld_phase::tests` (PR #239 is splitting that file by area) --
+//! sibling test module alongside the per-area split of the former
+//! monolithic `overworld_phase::tests` (issue #238) --
 //! `crate::flow::save_continue_tests`/`crate::flow::start_menu_tests` set
 //! the precedent for a per-area file at this crate's test-organization
 //! level; this one sits inside `overworld_phase` itself (not `flow`
@@ -12,7 +12,7 @@
 //! `pub(super)` to `overworld_phase`, not visible from `crate::flow`'s own
 //! sibling test files.
 //!
-//! Mirrors `overworld_phase::tests`' own "real events over a synthetic
+//! Mirrors `overworld_phase::first_battle_trigger_tests`' own "real events over a synthetic
 //! grid" split (its module doc comment, and
 //! `crate::flow::wild_encounter::tests::route_101_phase`/this file's own
 //! sibling `first_battle_trigger` tests' `route_101_trigger_phase`): a
@@ -351,7 +351,7 @@ fn the_trigger_with_no_party_lead_logs_and_starts_nothing() {
 /// The trigger does not fire on other maps: a synthetic phase built on
 /// Littleroot Town, with a fabricated lead, pressing A while facing empty
 /// ground, must never start a rival battle -- and Mom's own dialog path
-/// (already pinned in the monolithic `overworld_phase::tests`) is untouched
+/// (already pinned in `overworld_phase::frame_tests`) is untouched
 /// by this trigger's addition, since [`is_rival_trigger`] gates on
 /// [`ROUTE_103`] before anything else runs.
 #[test]
@@ -604,7 +604,8 @@ fn an_unmodelled_player_gender_starts_no_battle() {
 /// north edge crosses into Oldale Town, and walking off Oldale's own north
 /// edge in turn crosses into Route 103 -- completing the chain
 /// `walking_off_littlerootss_north_edge_crosses_into_route_101_and_back`
-/// (`crate::flow::overworld_phase::tests`) already proves the first leg of.
+/// (`crate::flow::overworld_phase::connections_tests`) already proves the
+/// first leg of.
 ///
 /// Starts one ordinary tile south of Route 101's own north edge rather than
 /// walking that map's whole interior: Route 101's own `x = 10`/`11` column

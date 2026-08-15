@@ -14,7 +14,8 @@
 //!
 //! * the room is `crate::overworld::tests::synthetic_scene`'s flat, open
 //!   grid rather than a pack-decoded one (the same fixture
-//!   `crate::flow::overworld_phase::tests` already walks the player around),
+//!   `crate::flow::overworld_phase::step_tests` already walks the player
+//!   around),
 //!   paired with a *real* map id so every `MapHeaderTable`/`MapEventsTable`
 //!   lookup on the way resolves;
 //! * the start menu is opened through

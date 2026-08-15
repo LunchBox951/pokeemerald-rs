@@ -56,7 +56,8 @@ jobs:
           if [ -z "${base}" ] || ! git cat-file -e "${base}" 2>/dev/null; then
             base="HEAD^1"
           fi
-          python3 scripts/version_check.py --base "${base}" --head HEAD
+          python3 scripts/version_check.py --mode cumulative \
+            --base "${base}" --head HEAD --require-bump
 
   # Linux build: `cargo build --release`, then package the binary (+ docs)
   # into a version-named tarball.

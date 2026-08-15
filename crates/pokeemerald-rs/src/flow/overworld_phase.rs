@@ -721,11 +721,23 @@ pub(super) fn saved_map_id(warp: WarpData) -> Option<assets::MapId> {
 }
 
 #[cfg(test)]
-mod tests;
-
-/// `route103_rival_trigger` (issue #248) -- its own sibling test module
-/// rather than more cases in [`tests`] (that module's own doc comment on
-/// PR #239's ongoing split of this crate's largest test file, and
-/// `route103_rival_trigger`'s own doc comment).
+mod connections_tests;
+#[cfg(test)]
+mod decoration_tests;
+#[cfg(test)]
+mod first_battle_trigger_tests;
+#[cfg(test)]
+mod frame_tests;
+#[cfg(test)]
+mod input_tests;
+/// `route103_rival_trigger`'s tests (issue #248) -- already split out as
+/// its own sibling module when it landed, the same per-area shape as the
+/// rest of this list (issue #238).
 #[cfg(test)]
 mod route103_rival_tests;
+#[cfg(test)]
+mod step_tests;
+#[cfg(test)]
+mod test_support;
+#[cfg(test)]
+mod warp_tests;

@@ -227,7 +227,7 @@ pub(super) fn roll_eligible_landing(
 /// trigger, Route 101 declares no `warp_events` at all
 /// (`data/maps/Route101/map.json`), so no arrow warp can exist on the one
 /// map the trigger is wired to (pinned by
-/// `crate::flow::overworld_phase::tests::route_101_has_no_warp_events_so_the_trigger_can_never_race_one`).
+/// `crate::flow::overworld_phase::first_battle_trigger_tests::route_101_has_no_warp_events_so_the_trigger_can_never_race_one`).
 /// It encodes upstream's ordering all the same, so a future slice that
 /// widens either id set — or gives Route 101 a warp — inherits the right
 /// precedence instead of a silent double-fire.
@@ -252,7 +252,7 @@ pub(super) const fn arrow_poll_open(in_transit: bool, field_event_fired: bool) -
 /// for a data reason rather than a logic one: none of Route 101's six object
 /// events stands adjacent to either rescue tile, so no A press can find an
 /// interaction to discard on the frame the trigger fires (pinned by
-/// `crate::flow::overworld_phase::tests::no_route_101_object_event_stands_beside_the_rescue_trigger_tiles`).
+/// `crate::flow::overworld_phase::first_battle_trigger_tests::no_route_101_object_event_stands_beside_the_rescue_trigger_tiles`).
 pub(super) const fn field_input_consumed(
     field_event_fired: bool,
     warp_trigger: Option<WarpTrigger>,
