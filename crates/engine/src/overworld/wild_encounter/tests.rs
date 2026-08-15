@@ -438,9 +438,9 @@ fn the_real_generator_drives_the_roll_identically_to_its_script() {
         .get_by_map(MapId("MAP_ROUTE101"))
         .expect("Route 101 header");
 
-    // Take the first three draws the LCG produces from a fixed seed, then
-    // replay them through the scripted source: both must agree, and both
-    // must consume exactly three values.
+    // Capture three draws so the scripted source has enough values queued for
+    // any outcome the real generator's rate/species/level rolls might take;
+    // this particular seed fails the rate check and consumes only the first.
     let mut probe = Rng::new(0x1234);
     let script = [probe.next_u16(), probe.next_u16(), probe.next_u16()];
 
@@ -451,7 +451,7 @@ fn the_real_generator_drives_the_roll_identically_to_its_script() {
         standard_wild_encounter(Some(header), MB_TALL_GRASS, MB_TALL_GRASS, &mut scripted);
 
     assert_eq!(from_real, from_script);
-    // 19915 % 2880 = 1195, which is not < 320, so this particular seed
+    // 19915 % 2880 = 2635, which is not < 320, so this particular seed
     // produces no encounter -- and stops after the single rate draw.
     assert!(from_real.is_none());
     assert_eq!(scripted.draws(), 1);
