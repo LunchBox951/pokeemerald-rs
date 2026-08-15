@@ -754,6 +754,14 @@ mod first_battle_trigger_tests;
 mod frame_tests;
 #[cfg(test)]
 mod input_tests;
+/// `oldale_town_npc_reposition`'s tests (issue #281) -- the
+/// `crate::flow::overworld_phase` half (collision, over both a synthetic
+/// grid and the real bundled map); the reposition-table staleness guard and
+/// the `resolve_map_events` unit tests live with the module itself,
+/// `crate::overworld::oldale_town_npc_reposition`, which this file cannot
+/// reach (`pub(crate)`, not `pub(super)` to `overworld_phase`).
+#[cfg(test)]
+mod oldale_reposition_tests;
 /// `route103_rival_trigger`'s tests (issue #248) -- already split out as
 /// its own sibling module when it landed, the same per-area shape as the
 /// rest of this list (issue #238).

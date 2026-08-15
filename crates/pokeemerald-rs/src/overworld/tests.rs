@@ -1541,8 +1541,14 @@ fn assert_background_npc_draws_an_oam_entry(
     data: &engine::event_data::EventData,
     graphics_id: &str,
 ) {
-    let event = assets::MapEventsTable::new()
-        .resolve(map)
+    // `oldale_town_npc_reposition::resolve_map_events` (issue #281), not a
+    // bare `MapEventsTable::resolve`: `scene` above was itself built through
+    // `load_room`, which already resolves through that same wrapper, so the
+    // expected position/facing this assertion computes below must agree --
+    // for Oldale Town's own footprints man and mart employee, that means
+    // their post-`OldaleTown_OnTransition` tiles, not their bare map.json
+    // ones. A no-op for every other map, Route 103 included.
+    let event = super::oldale_town_npc_reposition::resolve_map_events(map)
         .unwrap()
         .object_events
         .iter()
