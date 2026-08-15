@@ -460,10 +460,13 @@ pub fn trainer_data(trainer: TrainerId) -> Result<&'static TrainerData, BattleEr
 /// every party member, composed — see that method's own "Two screens, both
 /// before the first draw" section for why the pair is inseparable.
 ///
-/// Shared with [`ensure_trainer_party_startable`] so the pre-flight and the
-/// real handoff can never drift apart: a move the pre-flight admitted but
-/// `new_trainer` rejected would be exactly the RNG leak the pre-flight
-/// exists to prevent.
+/// Shared with [`ensure_trainer_party_startable`] so the per-move halves of
+/// the pre-flight and the real handoff cannot drift apart: a move the
+/// pre-flight admitted but `new_trainer` rejected would be exactly the RNG
+/// leak the pre-flight exists to prevent. (The other screens -- empty
+/// party, `trainer_data`, `ensure_supported_flags`, per-mon `validate` --
+/// are *duplicated* between the two paths, not shared; a screen added to
+/// `new_trainer` alone can still drift and must be mirrored here.)
 pub(crate) fn ensure_move_playable(dex: &Dex, move_id: MoveId) -> Result<(), BattleError> {
     crate::battle::ensure_executable(dex, move_id)?;
     super::trainer_ai::ensure_scoreable(dex, move_id)
@@ -473,7 +476,9 @@ pub(crate) fn ensure_move_playable(dex: &Dex, move_id: MoveId) -> Result<(), Bat
 /// [`ensure_trainer_party_startable`] needs to see it: the three `CreateMon`
 /// inputs the screens actually depend on. The personality and the IVs are
 /// deliberately absent — both are fixed values upstream computes without
-/// drawing, and neither is screened by anything.
+/// drawing, and the only IV producer (`fixed_ivs`, `iv * 31 / 255`) is
+/// range-safe by construction, so the post-draw `InvalidIv` refusal in
+/// `BattlePokemon::new` is unreachable from a trainer party.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TrainerPartyMon<'a> {
     /// `partyData[i].species`.
@@ -503,11 +508,17 @@ pub struct TrainerPartyMon<'a> {
 /// that leaves the shared stream exactly as it found it, which is what a
 /// refusal must cost `(behavioral-fidelity)`.
 ///
-/// The order below reproduces the *composed* order of the real handoff
-/// exactly — per-mon [`BattlePokemon::validate`] (which
-/// [`build_trainer_pokemon`] runs mon by mon, ahead of the battle), then
+/// The order below follows the real handoff's composed order — per-mon
+/// [`BattlePokemon::validate`] (which [`build_trainer_pokemon`] runs mon by
+/// mon, ahead of the battle), then
 /// [`super::trainer_ai::ensure_supported_flags`], then the per-move pair —
-/// so screening early cannot change *which* error a rejected party reports,
+/// with one caveat: this screen resolves `trainer_data` *first*, where the
+/// composed path only reaches it inside `new_trainer` after the mons
+/// validate, so a party that is both mis-specced and on an unknown trainer
+/// id reports the trainer error here and the mon error there (unreachable
+/// through `start_npc_trainer_battle`, whose `party_entries` resolves the
+/// trainer before any mon exists). For every reachable input, screening
+/// early does not change *which* error a rejected party reports,
 /// only how early it is discovered.
 ///
 /// # Errors

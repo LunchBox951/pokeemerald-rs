@@ -221,10 +221,13 @@ fn sight_line_clear(
     // 4. `IsElevationMismatchAt` -> `COLLISION_ELEVATION_MISMATCH`, against
     //    the *grid cell's* elevation.
     // 5. `DoesObjectCollideWithObjectAt` -> `COLLISION_OBJECT_EVENT`, the
-    //    only accepting arm: the player object standing on that tile at an
-    //    `AreElevationsCompatible` elevation (no `ELEVATION_MULTI_LEVEL`
-    //    leniency here, unlike arm 4 -- see
-    //    [`super::collision::elevations_compatible`]).
+    //    only accepting arm. Upstream scans *all* active objects on the
+    //    tile (current or previous coords) and accepts if any is
+    //    `AreElevationsCompatible`; this port tests the player object only
+    //    (no `ELEVATION_MULTI_LEVEL` leniency, unlike arm 4 -- see
+    //    [`super::collision::elevations_compatible`]), which is equivalent
+    //    in every reachable case because the final tile *is* the player's
+    //    own tile by construction.
     //
     // An undecodable final cell fails closed (`false`, arm 2's border case),
     // the same posture [`tile_blocks_approach`] takes for an undecodable

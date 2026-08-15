@@ -323,10 +323,15 @@ pub fn trainer_party_personalities(id: TrainerId) -> Result<Vec<u32>, NpcTrainer
 ///
 /// # Errors
 ///
-/// [`NpcTrainerBattleError`]'s three cases — **every one of them raised
-/// before the first draw** (module docs, "Nothing is built before the whole
-/// party is screened"): a refused trainer leaves `rng` exactly as it found
-/// it, however many times it is asked.
+/// [`NpcTrainerBattleError`]'s construction-refusal cases are raised
+/// **before the first draw** (module docs, "Nothing is built before the
+/// whole party is screened"): a refused party leaves `rng` exactly as it
+/// found it, however many times it is asked. The one exception is
+/// [`battle::BattleError::FaintedBattler`] for a fainted `player_lead`,
+/// which [`battle::Battle::new_trainer`] raises only *after* the party
+/// build's OT-id draws — the pre-flight takes no player argument and cannot
+/// screen it. Both in-tree callers check the lead before calling here;
+/// a future caller must do the same or accept the spent draws.
 pub fn start_npc_trainer_battle(
     player_lead: BattlePokemon,
     trainer: TrainerId,
