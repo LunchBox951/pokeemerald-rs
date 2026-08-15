@@ -74,15 +74,21 @@
 //! Before this issue, this port modelled *none* of the above and instead
 //! failed closed at the one place the gap was RNG-observable: a fainted lead
 //! could never re-roll a wild encounter
-//! (`crate::flow::wild_encounter::lead_can_fight`, now removed) and could
+//! (`crate::flow::wild_encounter::lead_can_fight`) and could
 //! never re-enter the Route 103 rival fight
 //! (`battle::BattleError::FaintedBattler`, an emergent consequence of
 //! [`battle::Battle::new`]/`new_trainer` refusing a fainted battler, not a
 //! bespoke guard -- `route103_rival_trigger`'s own former module docs
-//! recorded the resulting dead end). Both are unreachable now: this method
-//! runs the instant a loss is reported, before the driver ever returns
-//! control to [`super::OverworldPhase::step`], so no frame exists in which
-//! the party is fainted and the player can act.
+//! recorded the resulting dead end). Neither is reachable through a wild or
+//! trainer loss any more: this method runs the instant such a loss is
+//! reported, before the driver ever returns control to
+//! [`super::OverworldPhase::step`], so no frame exists in which the party is
+//! fainted and the player can act. One loss path is deliberately exempt --
+//! the Route 101 scripted first battle, whose `CB2_EndFirstBattle` has no
+//! `IsPlayerDefeated` branch and so never whites out -- which is why
+//! `lead_can_fight` survives, narrowed to that residual state
+//! (`crate::flow::wild_encounter`'s module docs, "The fail-closed guard,
+//! narrowed").
 //!
 //! # RNG stream
 //!

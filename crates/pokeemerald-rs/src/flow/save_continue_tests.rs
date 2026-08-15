@@ -37,7 +37,7 @@
 
 use engine::event_data::EventData;
 use engine::overworld::{Direction, PlayerState};
-use engine::save::{BoxPokemon, Pokemon, SaveBlock1, SaveBlock2};
+use engine::save::{BoxPokemon, Pokemon, SaveBlock1, SaveBlock2, WarpData};
 use platform::Buttons;
 
 use super::overworld_phase::{saved_map_id, OverworldPhase};
@@ -1024,6 +1024,54 @@ fn a_save_with_no_recorded_facing_falls_back_to_the_tile_derived_direction() {
         SaveBlock2::default(),
     );
     assert_eq!(resumed.player.facing(), Direction::South);
+}
+
+/// A save written before issue #261 had no writer for `last_heal_location`
+/// at all, so every such image carries the zeroed [`WarpData::default`] --
+/// which *resolves* (group 0/num 0 is a real generated-table entry), so
+/// without migration the first white-out of an upgraded save would warp to
+/// Petalburg City at `(0, 0)` instead of home (issue #261 review). The
+/// continue must adopt the same gender default a fresh game gets, and must
+/// leave a genuinely written heal location alone.
+#[test]
+fn a_save_with_a_legacy_zeroed_heal_location_adopts_the_gender_default() {
+    let block1 = SaveBlock1::default();
+    assert_eq!(
+        block1.last_heal_location,
+        WarpData::default(),
+        "a zeroed block holds the legacy marker"
+    );
+    let resumed = OverworldPhase::from_saved(
+        crate::overworld::tests::synthetic_scene(10, 10),
+        new_game::SPAWN_MAP_ID,
+        block1,
+        SaveBlock2::default(),
+    );
+    assert_eq!(
+        resumed.save1.last_heal_location,
+        new_game::default_last_heal_location(SaveBlock2::default().player_gender),
+        "the legacy all-zero value migrates to the gender default"
+    );
+
+    // A modern save's genuinely written value survives untouched.
+    let written = WarpData {
+        map_group: 0,
+        map_num: 9,
+        warp_id: -1,
+        x: 6,
+        y: 8,
+    };
+    let block1 = SaveBlock1 {
+        last_heal_location: written,
+        ..SaveBlock1::default()
+    };
+    let resumed = OverworldPhase::from_saved(
+        crate::overworld::tests::synthetic_scene(10, 10),
+        new_game::SPAWN_MAP_ID,
+        block1,
+        SaveBlock2::default(),
+    );
+    assert_eq!(resumed.save1.last_heal_location, written);
 }
 
 /// A save whose party count is zero resumes with no lead at all -- not

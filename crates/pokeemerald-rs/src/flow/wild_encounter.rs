@@ -60,20 +60,28 @@
 //! the one frame between the battle ending and the white-out running, never
 //! long enough for another step to observe it.
 //!
-//! **Formerly a fail-closed guard, now retired.** Before this issue, this
-//! module instead refused the encounter roll outright while the lead was
-//! fainted (`lead_can_fight`, since removed) — a state upstream itself can
-//! never reach, since the white-out above already heals the party before
-//! the player's next step. That guard was the *documented interim posture*
-//! for the gap this section used to describe as unmodelled; now that the
-//! real white-out runs, the guard's premise (a fainted lead can persist into
-//! a later step) is false in production, so no guard is left to write. See
+//! **The fail-closed guard, narrowed.** Before this issue, this module
+//! refused the encounter roll outright whenever the lead was fainted
+//! ([`lead_can_fight`]) — the documented interim posture for the whole
+//! unmodelled white-out. The white-out now runs for real on every wild and
+//! trainer loss, so those paths can never again reach a later step with a
+//! fainted lead — but one loss path still can: the Route 101 scripted first
+//! battle. `CB2_EndFirstBattle` (`pokeemerald/src/battle_setup.c:950-954`)
+//! has no `IsPlayerDefeated` branch at all, so losing the rescue fight
+//! really does return the player to the field with a fainted lead
+//! ([`crate::flow::first_battle`]'s write-back docs — fidelity, not a gap),
+//! and until issue #251 models the post-battle script that heals the party
+//! and warps to the lab, that player can walk straight back into grass.
+//! [`lead_can_fight`] therefore survives, scoped to exactly that residual
+//! state (issue #261 review). See
 //! `wild_encounter::tests::a_lost_battle_now_heals_the_party_and_halves_money`
 //! (plus its pack-gated companion
 //! `wild_encounter::tests::real_pack_a_lost_wild_battle_warps_home_to_the_default_heal_location`)
-//! for the behavioural tests that replace the old
+//! for the behavioural tests that replaced the old
 //! `a_lost_battle_leaves_a_fainted_lead_and_no_later_grass_step_draws`
-//! regression, and their own doc comments for why.
+//! regression on the healed paths, and
+//! `wild_encounter::tests::a_fainted_lead_from_a_lost_first_battle_draws_no_later_roll`
+//! for the residual state the guard still covers.
 //!
 //! # The unmodelled gate ahead of all this
 //!
@@ -275,8 +283,8 @@ pub(super) const fn field_input_consumed(
 /// So the whole table is screened *up front*: on a map that fails, a grass
 /// step draws nothing and moves no encounter bookkeeping, and the refusal is
 /// logged once here (at the map transition that computes it) rather than
-/// per step -- the same no-draw-at-all shape the former `lead_can_fight`
-/// guard used for its own now-retired reason (module docs, "The white-out,
+/// per step -- the same no-draw-at-all shape [`lead_can_fight`] applies to
+/// the first-battle-loss residual state (module docs, "The white-out,
 /// modelled").
 ///
 /// A map with no wild header, or no land table, is trivially fightable —
@@ -305,6 +313,46 @@ pub(super) fn map_wild_table_fightable(map: assets::MapId) -> bool {
                 return false;
             }
         }
+    }
+    true
+}
+
+/// Whether an encounter may be rolled at all with `lead` as the party's lead
+/// mon — the fail-closed guard over the one loss path that still leaves a
+/// fainted lead standing in the overworld: the Route 101 scripted first
+/// battle (module docs, "The fail-closed guard, narrowed"; issue #261
+/// review). `CB2_EndFirstBattle` has no `IsPlayerDefeated` branch, so losing
+/// the rescue fight returns the player to the field fainted, and until issue
+/// #251 models the post-battle script conclusion the player can free-roam in
+/// that state. Ordinary wild and trainer losses can never reach this guard —
+/// [`crate::flow::overworld_phase::white_out::OverworldPhase::white_out`]
+/// heals the party in the same frame the loss is reported.
+///
+/// `None` (a fresh save with no party at all) is **allowed**: that is exactly
+/// upstream's own state before Birch's bag, where the roll happens for real
+/// and only the battle is missing, so the stream stays upstream's and
+/// [`crate::flow::overworld_phase::OverworldPhase::begin_wild_battle`] logs
+/// the encounter it cannot fight.
+///
+/// A *fainted* lead here means a fainted-**only** party, a state upstream
+/// cannot be in outside the scripted first battle. (Upstream's
+/// `gPlayerParty[0]` can be fainted with a *live* party behind it and rolls
+/// normally — `IsWildLevelAllowedByRepel`, `wild_encounter.c:878-887`, skips
+/// zero-HP mons rather than bailing — but this port models a one-mon party,
+/// so lead-fainted and party-fainted coincide; a future multi-slot party
+/// slice must revisit this guard.) Rolling here would draw a wild mon's five
+/// nature/personality/IV values plus `Battle::new`'s `gRandomTurnNumber` on
+/// every grass step, only to reject the battle afterwards
+/// ([`battle::BattleError::FaintedBattler`]) — repeatable draws with no
+/// upstream counterpart. So the roll is refused before it draws anything,
+/// and the refusal is logged rather than silent.
+pub(super) fn lead_can_fight(lead: Option<&BattlePokemon>) -> bool {
+    if lead.is_some_and(BattlePokemon::is_fainted) {
+        eprintln!(
+            "wild encounter: the lead mon has fainted -- no roll until it is healed \
+             (a lost first battle is the one path here; see flow::wild_encounter's module docs)"
+        );
+        return false;
     }
     true
 }
@@ -401,7 +449,11 @@ pub(super) fn start_wild_battle(
 /// [`crate::flow::overworld_phase::white_out::OverworldPhase::white_out`]
 /// (module docs, "The white-out, modelled") -- the same frame upstream's own
 /// `CB2_EndWildBattle` -> `CB2_WhiteOut` routing takes to reach
-/// `HealPlayerParty`.
+/// `HealPlayerParty`. The first-battle driver
+/// ([`crate::flow::first_battle::advance_first_battle`]) shares this
+/// write-back shape but deliberately does *not* white out on a loss
+/// (`CB2_EndFirstBattle` has none) -- [`lead_can_fight`] covers the fainted
+/// lead that path leaves behind.
 ///
 /// A turn that *errors* is not survivable here — there is no action menu to
 /// choose differently with — so it ends the battle too: the error is logged,

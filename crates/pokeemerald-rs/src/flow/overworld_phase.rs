@@ -410,8 +410,11 @@ impl OverworldPhase {
     ///   panicking.
     /// * **Event flags and vars, money, bag, party, player identity** --
     ///   carried wholesale in `block1`/`block2`, which become this phase's
-    ///   own save state, with one modelled exception: Route 101's on-frame
-    ///   `VAR_ROUTE101_STATE` update
+    ///   own save state, with two modelled exceptions: a zeroed
+    ///   `last_heal_location` from a pre-#261 save image is migrated to
+    ///   [`new_game::default_last_heal_location`]'s gender default (the
+    ///   constructor body's own comment has the full reasoning), and Route
+    ///   101's on-frame `VAR_ROUTE101_STATE` update
     ///   ([`first_battle_trigger::sync_route_101_state_on_entry`]), which
     ///   this constructor also runs, same as every other map-entry point.
     ///   Otherwise nothing is re-initialized: in particular
@@ -445,9 +448,30 @@ impl OverworldPhase {
     pub(super) fn from_saved(
         scene: OverworldScene,
         map_id: assets::MapId,
-        block1: SaveBlock1,
+        mut block1: SaveBlock1,
         block2: SaveBlock2,
     ) -> Self {
+        // A save written before issue #261 had no writer for
+        // `last_heal_location` at all, so every such image carries
+        // `WarpData::default()` -- all zeros, which resolves to a *real* map
+        // (group 0/num 0) and would send the first white-out of an upgraded
+        // save to Petalburg City at `(0, 0)` instead of home. No real writer
+        // produces the all-zero value (`new_game::init_save_blocks` seeds the
+        // gender default; upstream's truck-exit `setrespawn` runs before the
+        // player can ever save), so it is unambiguously the legacy marker and
+        // is migrated to the same gender default a fresh game gets. The
+        // `Other`-gender default is itself the zero value (upstream's own
+        // fall-through no-op), so this migration is a fixed point there.
+        if block1.last_heal_location == WarpData::default() {
+            let migrated = new_game::default_last_heal_location(block2.player_gender);
+            if migrated != block1.last_heal_location {
+                eprintln!(
+                    "continue: this save predates heal-location tracking (issue #261) -- \
+                     adopting the default respawn {migrated:?}"
+                );
+                block1.last_heal_location = migrated;
+            }
+        }
         let position = (i32::from(block1.pos.x), i32::from(block1.pos.y));
         let (elevation, tile_facing) = placement::saved_tile_placement(&scene, map_id, position);
         let facing = placement::saved_facing(&block1, tile_facing);

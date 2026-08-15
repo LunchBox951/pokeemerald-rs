@@ -24,8 +24,8 @@ use engine::rng::Rng;
 use platform::{ButtonState, Buttons};
 
 use super::{
-    advance_wild_battle, arrow_poll_open, field_input_consumed, roll_eligible_landing,
-    start_wild_battle,
+    advance_wild_battle, arrow_poll_open, field_input_consumed, lead_can_fight,
+    roll_eligible_landing, start_wild_battle,
 };
 use crate::flow::overworld_phase::OverworldPhase;
 
@@ -1051,6 +1051,91 @@ fn after_a_white_out_a_later_grass_step_rolls_again() {
         MB_TALL_GRASS,
         "and the encounter bookkeeping moves with it"
     );
+}
+
+/// The residual state [`super::lead_can_fight`] still guards (issue #261
+/// review; `flow::wild_encounter`'s module docs, "The fail-closed guard,
+/// narrowed"): a lost Route 101 *first battle* leaves a fainted lead in the
+/// overworld -- `CB2_EndFirstBattle` has no `IsPlayerDefeated` branch, so no
+/// white-out and no heal -- and until issue #251 models the post-battle
+/// script, the player can walk that fainted lead straight into grass. Every
+/// such step must draw **nothing**: without the guard, each one would spend
+/// the wild mon's five nature/personality/IV draws plus `Battle::new`'s
+/// `gRandomTurnNumber` on a battle [`battle::Battle::new`] then refuses --
+/// repeatable draws with no upstream counterpart.
+///
+/// The fainted lead is written directly rather than driven through the
+/// scripted battle: `advance_first_battle`'s unconditional write-back is
+/// already pinned by `crate::flow::first_battle`'s own tests, and this
+/// test's subject is the *overworld consequence* of the state it leaves,
+/// not the battle that produces it.
+///
+/// The assertions are deliberately on state, not on the log line: the guard
+/// skips `CheckStandardWildEncounter` outright, so *neither* the immunity
+/// counter *nor* `sPrevMetatileBehavior` moves -- a discriminator a mere
+/// "drew nothing" cannot give, since a non-grass step draws nothing either.
+#[test]
+fn a_fainted_lead_from_a_lost_first_battle_draws_no_later_roll() {
+    let mut phase = route_101_phase_with_grass(
+        20,
+        10,
+        PlayerState::new((2, 5), 3, Direction::East),
+        &[(4, 5), (5, 5), (6, 5), (7, 5), (8, 5)],
+    );
+    phase.rng = Rng::new(ENCOUNTER_SEED);
+    // The state a lost first battle writes back (doc comment above): the
+    // one-mon party's lead, fainted.
+    let mut lead = player_mon(SHUCKLE, 2, vec![MoveId(1)]);
+    lead.apply_damage(u32::MAX);
+    assert!(lead.is_fainted(), "setup: the lead really is fainted");
+    phase.party_lead = Some(lead);
+
+    let before = phase.rng.state();
+    for _ in 0..(6 * FRAMES_PER_STEP) {
+        phase.step(held(Buttons::RIGHT));
+    }
+    assert_eq!(
+        phase.player.position(),
+        (8, 5),
+        "five straight steps through tall grass"
+    );
+    assert_eq!(
+        phase.rng.state(),
+        before,
+        "a fainted lead must make every one of those steps draw nothing at all"
+    );
+    assert!(phase.wild_battle.is_none(), "and start no battle");
+    assert_eq!(
+        phase.wild.immunity_steps(),
+        0,
+        "the roll is refused before CheckStandardWildEncounter, so it never even consumes \
+         an immunity step"
+    );
+    assert_ne!(
+        phase.wild.prev_metatile_behavior(),
+        MB_TALL_GRASS,
+        "nor updates sPrevMetatileBehavior"
+    );
+}
+
+/// The other half of [`super::lead_can_fight`]: an *empty* party is
+/// upstream's own fresh-save state and must still roll, so the stream stays
+/// where a real playthrough would have it (this module's
+/// `an_encounter_without_a_party_mon_starts_no_battle_and_does_not_wedge_the_player`
+/// walks that path; this pins the predicate itself).
+#[test]
+fn only_a_fainted_lead_refuses_the_roll() {
+    assert!(
+        lead_can_fight(None),
+        "no party at all is upstream's own pre-Birch state, where the roll really happens"
+    );
+    let healthy = player_mon(277, 50, vec![MoveId(1)]);
+    assert!(lead_can_fight(Some(&healthy)));
+
+    let mut fainted = player_mon(277, 50, vec![MoveId(1)]);
+    fainted.apply_damage(u32::MAX);
+    assert!(fainted.is_fainted());
+    assert!(!lead_can_fight(Some(&fainted)));
 }
 
 /// The pack-gated companion to
