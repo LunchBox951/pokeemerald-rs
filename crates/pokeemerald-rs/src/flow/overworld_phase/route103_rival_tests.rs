@@ -253,6 +253,52 @@ fn facing_the_rival_and_pressing_a_starts_the_trainer_battle() {
     );
 }
 
+/// The residual state issue #261's white-out cannot cover, on the trainer
+/// path (issue #261 review; `flow::wild_encounter`'s module docs, "The
+/// fail-closed guard, narrowed"): a lost Route 101 first battle leaves a
+/// fainted lead free-roaming, and Route 103 is walkable from there. An
+/// A-press on the rival in that state must start nothing and, crucially,
+/// **draw nothing** -- without the screen each attempt would spend
+/// `build_trainer_pokemon`'s OT-id draws before `Battle::new_trainer`'s
+/// `FaintedBattler` refusal, repeatable draws with no upstream counterpart.
+#[test]
+fn a_fainted_lead_cannot_start_the_rival_battle_and_draws_nothing() {
+    let mut phase = route_103_phase_facing_the_rival();
+    let mut fainted = overmatched_treecko_lead();
+    fainted.apply_damage(u32::MAX);
+    assert!(fainted.is_fainted(), "setup: the lead really is fainted");
+    phase.party_lead = Some(fainted);
+
+    let before = phase.rng.state();
+    phase.step(pressed(Buttons::A));
+    assert!(
+        !phase.is_rival_battle_active(),
+        "a fainted lead must not start the rival battle"
+    );
+    assert!(
+        phase.party_lead.is_some(),
+        "the refused handoff leaves the lead in the party"
+    );
+    assert_eq!(
+        phase.rng.state(),
+        before,
+        "the screen runs before build_trainer_pokemon can draw anything"
+    );
+
+    // And the refusal is not a dead end: a healed lead fights normally.
+    phase
+        .party_lead
+        .as_mut()
+        .expect("still present")
+        .heal(&Dex::new())
+        .expect("a real species heals");
+    phase.step(pressed(Buttons::A));
+    assert!(
+        phase.is_rival_battle_active(),
+        "the same tile and stance starts the battle once the lead is healed"
+    );
+}
+
 /// Holding A through the frame after the battle starts must not re-run the
 /// interaction lookup or start a second battle. Note what this does and
 /// does not prove: a *held* A is not a fresh edge, so

@@ -107,9 +107,18 @@
 //! [`battle::Battle::new_trainer`] refusing a fainted battler, not a bespoke
 //! guard this module wrote, but a dead end this module's own docs recorded
 //! all the same as "the honest fidelity delta this slice ships with." That
-//! wall is unreachable now: `white_out` heals the lead in the same call that
-//! reports the loss, so no later attempt can ever find it fainted, and the
-//! player is off Route 103 entirely besides. See
+//! wall is unreachable through a *rival* (or wild) loss now: `white_out`
+//! heals the lead in the same call that reports the loss, so those paths can
+//! never leave a fainted lead behind, and the player is off Route 103
+//! entirely besides. One path still can — a lost Route 101 first battle
+//! (`CB2_EndFirstBattle` has no `IsPlayerDefeated` branch; issue #251's
+//! script conclusion is not yet modelled), and Route 103 is walkable from
+//! there — so [`OverworldPhase::begin_route103_rival_battle`] now screens
+//! the fainted lead *before* the party build, the same fail-closed no-draw
+//! shape `crate::flow::wild_encounter::lead_can_fight` applies to the
+//! encounter roll (its module docs, "The fail-closed guard, narrowed"):
+//! without the screen, each attempt would spend `build_trainer_pokemon`'s
+//! OT-id draws before `FaintedBattler` refused it. See
 //! `route103_rival_tests::losing_the_rival_battle_now_heals_halves_money_and_leaves_the_hide_flag_clear`
 //! (plus its pack-gated companion
 //! `route103_rival_tests::real_pack_losing_the_rival_battle_warps_home_to_the_default_heal_location`)
@@ -281,6 +290,22 @@ impl OverworldPhase {
             eprintln!("route 103 rival: no party mon yet -- no battle to start");
             return;
         };
+        // The same fail-closed screen `wild_encounter::lead_can_fight`
+        // applies to the encounter roll, for the same residual state (a
+        // lost Route 101 first battle -- `crate::flow::wild_encounter`'s
+        // module docs, "The fail-closed guard, narrowed"; issue #261
+        // review): without it, every A-press here would spend
+        // `build_trainer_pokemon`'s per-member OT-id draws only for
+        // `Battle::new_trainer` to refuse the fainted battler -- repeatable
+        // draws with no upstream counterpart. Refused before anything draws.
+        if lead.is_fainted() {
+            eprintln!(
+                "route 103 rival: the lead mon has fainted -- no battle until it is healed \
+                 (a lost first battle is the one path here; see flow::wild_encounter's \
+                 module docs)"
+            );
+            return;
+        }
         let lead_species = lead.species();
         let Some(starter) = PlayerStarter::from_species(lead_species) else {
             eprintln!(
