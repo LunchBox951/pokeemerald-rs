@@ -28,10 +28,10 @@
 //! warp MAP_LITTLEROOT_TOWN_PROFESSOR_BIRCHS_LAB, 6, 5
 //! ```
 //!
-//! `special ChooseStarter` (`pokeemerald/src/battle_setup.c:911-914`) does
+//! `special ChooseStarter` (`pokeemerald/src/battle_setup.c:911-915`) does
 //! not run this script's own remainder at all: it hands the whole callback
 //! chain off to `CB2_ChooseStarter` and stashes `CB2_GiveStarter` as
-//! `gMain.savedCallback`. `CB2_GiveStarter` (`:916-925`) writes
+//! `gMain.savedCallback`. `CB2_GiveStarter` (`:917-929`) writes
 //! `VAR_STARTER_MON`, hands over the chosen starter (`ScriptGiveMon`), and
 //! sets `SetMainCallback2(CB2_StartFirstBattle)` -- the actual
 //! `BATTLE_TYPE_FIRST_BATTLE` Zigzagoon fight this port's own trigger
@@ -54,8 +54,11 @@
 //! (`PlayerWon`, `PlayerLost`, `WildFled`; `PlayerRan` is unreachable --
 //! the driver never chooses Run, `RunForbidden`) -- never on an *aborted*
 //! battle (`super::first_battle_trigger`'s own "When the var advances"
-//! section: an abort reports no outcome at all, and has no upstream
-//! counterpart to run a conclusion for).
+//! section: an abort reports no outcome at all; it is a port-only
+//! construct -- upstream would Struggle and end normally -- so there is no
+//! upstream state for a conclusion to model, and the abort can only leave
+//! an alive, damaged lead, never a fainted one, since every abort arm
+//! returns before damage is applied).
 //!
 //! # What's modelled, narrowly
 //!
@@ -165,7 +168,7 @@ use super::OverworldPhase;
 const VAR_BIRCH_LAB_STATE: u16 = 0x4084;
 
 /// The value `Route101_EventScript_BirchsBag` itself writes
-/// (`scripts.inc:238`, `setvar VAR_BIRCH_LAB_STATE, 2`) -- "the starter has
+/// (`scripts.inc:236`, `setvar VAR_BIRCH_LAB_STATE, 2`) -- "the starter has
 /// been given," the state a future Birch's-lab slice would gate its own
 /// thank-you dialog on.
 const BIRCH_LAB_STATE_STARTER_GIVEN: u16 = 2;
@@ -182,7 +185,7 @@ const VAR_STARTER_MON: u16 = 0x4023;
 /// same convention that module's docs explain for `VAR_OBJ_GFX_ID_0`.
 const VAR_ROUTE101_STATE: u16 = 0x4060;
 
-/// The chain's own terminal value (`scripts.inc:239`, `setvar
+/// The chain's own terminal value (`scripts.inc:237`, `setvar
 /// VAR_ROUTE101_STATE, 3`) -- one past
 /// `super::first_battle_trigger::TRIGGER_CONSUMED_STATE`, and the value the
 /// var holds for the rest of a playthrough.
@@ -192,7 +195,7 @@ const ROUTE101_STATE_CONCLUDED: u16 = 3;
 /// docs).
 const BIRCHS_LAB: assets::MapId = assets::MapId("MAP_LITTLEROOT_TOWN_PROFESSOR_BIRCHS_LAB");
 
-/// The `warp`'s own explicit coordinates (`scripts.inc:245`, `warp
+/// The `warp`'s own explicit coordinates (`scripts.inc:242`, `warp
 /// MAP_LITTLEROOT_TOWN_PROFESSOR_BIRCHS_LAB, 6, 5`).
 const BIRCHS_LAB_ARRIVAL: (i16, i16) = (6, 5);
 
@@ -229,9 +232,19 @@ impl OverworldPhase {
         // own value at CB2_GiveStarter time, reproduced here off the
         // provisional starter species (module docs' "What's modelled,
         // narrowly" section explains the timing divergence).
-        let starter_value = PlayerStarter::from_species(new_game::PROVISIONAL_STARTER_SPECIES)
-            .map_or(0, PlayerStarter::var_value);
-        Self::write_var(&mut self.save1.event_data, VAR_STARTER_MON, starter_value);
+        match PlayerStarter::from_species(new_game::PROVISIONAL_STARTER_SPECIES) {
+            Some(starter) => Self::write_var(
+                &mut self.save1.event_data,
+                VAR_STARTER_MON,
+                starter.var_value(),
+            ),
+            // Unreachable while PROVISIONAL_STARTER_SPECIES is one of the
+            // three real starters; logged rather than silently written as
+            // Treecko, matching every other None-mapping arm in this diff.
+            None => eprintln!(
+                "first battle: the provisional starter species has no VAR_STARTER_MON                  mapping -- leaving the var unwritten"
+            ),
+        }
 
         // setvar VAR_BIRCH_LAB_STATE, 2
         Self::write_var(

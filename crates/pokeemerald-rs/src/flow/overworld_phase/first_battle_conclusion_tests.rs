@@ -150,6 +150,14 @@ fn conclude_first_battle_writes_all_three_vars_on_both_outcomes() {
         ));
         phase.rng = Rng::new(seed);
         phase.party_lead = Some(lead);
+        // Pre-poison the var with Mudkip's encoding: Treecko's `0` is also
+        // `EventData`'s fresh default, so only an overwrite from a non-zero
+        // value proves the write actually ran (issue #251 review).
+        phase
+            .save1
+            .event_data
+            .var_set(VAR_STARTER_MON, 2)
+            .expect("VAR_STARTER_MON is an ordinary var");
 
         play_first_battle_to_conclusion(&mut phase);
 
@@ -171,7 +179,7 @@ fn conclude_first_battle_writes_all_three_vars_on_both_outcomes() {
         assert_eq!(
             phase.save1.event_data.var_get(VAR_STARTER_MON),
             Ok(0),
-            "outcome {expected_outcome:?}: VAR_STARTER_MON reads Treecko's own encoding"
+            "outcome {expected_outcome:?}: the conclusion overwrites the pre-poisoned var with Treecko's own encoding"
         );
     }
 }
@@ -272,7 +280,7 @@ fn an_aborted_first_battle_does_not_run_the_conclusion() {
 
 /// The real-pack acceptance path: a lost Route 101 first battle really does
 /// land the player inside Birch's lab, on the exact tile the `warp`
-/// command names (`scripts.inc:245`) -- the standing proof the lab's own
+/// command names (`scripts.inc:242`) -- the standing proof the lab's own
 /// bundled layout/tileset (module docs, "What's modelled, narrowly") are
 /// enough for [`super::OverworldPhase::warp_to_position`] to resolve a real
 /// room, not merely an id that happens to parse.
