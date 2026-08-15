@@ -26070,7 +26070,7 @@
         },
         "TryArrowWarp": {
           "fold_target": "crates/engine/src/overworld/warp.rs",
-          "reason": "GetWarpEventAtMapPosition + IsArrowWarpMetatileBehavior + SetupWarp/DoWarp's warp-resolution shape absorbed into engine::overworld::warp::trigger_arrow_warp, a separate entry point from the door-shaped trigger_door_warp precisely because the two are gated differently upstream. Called from crates/pokeemerald-rs/src/flow/overworld_phase/step.rs's OverworldPhase::step as a per-frame poll, upstream's own gating: the direction currently held must equal the direction the player currently faces (input->heldDirection && input->dpadDirection == playerDirection, field_control_avatar.c:164-168), evaluated at the tile the player is standing on, independent of tookStep -- so it fires both for a step taken onto an arrow tile while still holding its direction and for a turn in place while already standing on one. The only added gate is that the player be at rest between steps, which is this port's counterpart to the T_TILE_CENTER/T_NOT_MOVING test that sets heldDirection upstream in the first place (:95-112). Issue #174 (the Brendan's-house exit doormat, MAP_LITTLEROOT_TOWN_BRENDANS_HOUSE_1F warp #1 at (8, 8)). Issue #194 corrected the frame ordering against ProcessPlayerFieldInput (overworld.c:1444-1455), which runs this check *before* PlayerStep and skips the step outright when it fires: OverworldPhase::step now re-evaluates this same pre-movement gate ahead of its own movement call and, when it already fires, skips movement for the frame entirely instead of running it and polling afterward -- so a legal, walkable step in the arrow direction warps rather than stepping (previously a permanent no-warp, unreachable on bundled data since every arrow tile's own direction is impassable there, and pinned now by a synthetic scene in flow/overworld_phase/tests.rs). The door-shaped path is unaffected: its own tookStep-style gate inherently needs the step to have already landed, so it still runs after movement. Not modelled: StoreInitialPlayerAvatarState's pre-warp avatar snapshot, and SetupWarp's escape-warp/Trainer Hill bookkeeping.",
+          "reason": "GetWarpEventAtMapPosition + IsArrowWarpMetatileBehavior + SetupWarp/DoWarp's warp-resolution shape absorbed into engine::overworld::warp::trigger_arrow_warp, a separate entry point from the door-shaped trigger_door_warp precisely because the two are gated differently upstream. Called from crates/pokeemerald-rs/src/flow/overworld_phase/step.rs's OverworldPhase::step as a per-frame poll, upstream's own gating: the direction currently held must equal the direction the player currently faces (input->heldDirection && input->dpadDirection == playerDirection, field_control_avatar.c:164-168), evaluated at the tile the player is standing on, independent of tookStep -- so it fires both for a step taken onto an arrow tile while still holding its direction and for a turn in place while already standing on one. The only added gate is that the player be at rest between steps, which is this port's counterpart to the T_TILE_CENTER/T_NOT_MOVING test that sets heldDirection upstream in the first place (:95-112). Issue #174 (the Brendan's-house exit doormat, MAP_LITTLEROOT_TOWN_BRENDANS_HOUSE_1F warp #1 at (8, 8)). Issue #194 corrected the frame ordering against ProcessPlayerFieldInput (overworld.c:1444-1455), which runs this check *before* PlayerStep and skips the step outright when it fires: OverworldPhase::step now re-evaluates this same pre-movement gate ahead of its own movement call and, when it already fires, skips movement for the frame entirely instead of running it and polling afterward -- so a legal, walkable step in the arrow direction warps rather than stepping (previously a permanent no-warp, unreachable on bundled data since every arrow tile's own direction is impassable there, and pinned now by a synthetic scene in flow/overworld_phase/warp_tests.rs). The door-shaped path is unaffected: its own tookStep-style gate inherently needs the step to have already landed, so it still runs after movement. Not modelled: StoreInitialPlayerAvatarState's pre-warp avatar snapshot, and SetupWarp's escape-warp/Trainer Hill bookkeeping.",
           "spec": "I-3",
           "status": "folded"
         },
@@ -26208,6 +26208,36 @@
     },
     "src/fieldmap.c": {
       "artifacts": {
+        "FillConnection": {
+          "reason": "The shared rectangular-copy helper collapses into connected_cell_at's own LayoutGrid::cell_at lookup once its four callers' own coordinate math is inlined per-direction; this port resolves one cell on demand rather than copying a whole strip into a backing buffer, but only within the exact extents that buffer covers (viewport::within_backup_map_band).",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/viewport.rs",
+          "spec": "I-4",
+          "status": "rewritten"
+        },
+        "FillEastConnection": {
+          "reason": "East-edge offset math (target_x = x - width, target_y = y - offset) re-implemented in connected_cell_at, bounded to gBackupMapLayout's own east cover -- upstream's MAP_OFFSET + 1 copy width (a fixed-buffer sizing artifact of MAP_OFFSET_W's odd total, include/fieldmap.h:19) reproduced as layout-local x <= width + 7 (issue #253).",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/viewport.rs",
+          "spec": "I-4",
+          "status": "rewritten"
+        },
+        "FillNorthConnection": {
+          "reason": "North-edge offset math (target_x = x - offset, target_y = connected_height + y) re-implemented in connected_cell_at, bounded to gBackupMapLayout's own MAP_OFFSET rows north of the layout (layout-local y >= -7), same shape as FillSouthConnection's own ledger entry.",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/viewport.rs",
+          "spec": "I-4",
+          "status": "rewritten"
+        },
+        "FillSouthConnection": {
+          "reason": "South-edge offset math (target_x = x - offset, target_y = y - height) re-implemented in connected_cell_at, resolved on demand instead of preloaded, and bounded to the same rows gBackupMapLayout covers -- layout-local y <= height + 6, MAP_OFFSET_H's even total (issue #253).",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/viewport.rs",
+          "spec": "I-4",
+          "status": "rewritten"
+        },
+        "FillWestConnection": {
+          "reason": "West-edge offset math (target_x = connected_width + x, target_y = y - offset) re-implemented in connected_cell_at, bounded to gBackupMapLayout's own MAP_OFFSET columns west of the layout (layout-local x >= -7); past that the border block renders, exactly as upstream.",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/viewport.rs",
+          "spec": "I-4",
+          "status": "rewritten"
+        },
         "GetBorderBlockAt": {
           "reason": "Border-block fallback for any camera viewport position outside the current layout's own grid, ported into viewport::cell_at (rendering-only; movement's own border handling stays out of MapRuntime's scope per issue #108).",
           "rust_target": "crates/pokeemerald-rs/src/overworld/viewport.rs",
@@ -26218,6 +26248,12 @@
           "reason": "Primary-vs-secondary tileset attribute table selection (NUM_METATILES_IN_PRIMARY split) re-implemented in MapRuntime::metatile_behavior",
           "rust_target": "crates/engine/src/overworld/map_runtime.rs",
           "spec": "S-5",
+          "status": "rewritten"
+        },
+        "InitBackupMapLayoutConnections": {
+          "reason": "Per-connection dispatch to the four Fill*Connection resolvers re-implemented as connected_cell_at's single match over ConnectionView::direction, called from cell_at on every out-of-bounds viewport sample instead of once per map load into a backing buffer; declaration-order overwrite and the buffer's own coverage band are both preserved (issue #253).",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/viewport.rs",
+          "spec": "I-4",
           "status": "rewritten"
         },
         "IsCoordInConnectingMap": {
