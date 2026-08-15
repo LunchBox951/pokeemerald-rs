@@ -650,8 +650,9 @@ mod tests {
     /// (issue #264 review): the reason a trainer is unreachable is the
     /// interesting fact, and naming the offending move id is what forces a
     /// future move-coverage slice to come back here -- widening support for
-    /// `MOVE_NIGHT_SHADE` alone would leave a Rhett who now fails on
-    /// something else, and a bare `is_err()` would have hidden that.
+    /// Rhett's pinned `MOVE_FOCUS_ENERGY` alone could leave a Rhett who now
+    /// fails on some other move, and a bare `is_err()` would have hidden
+    /// that.
     ///
     /// Each refusal must also cost **nothing**: the whole party is screened
     /// before the first draw (`npc_trainer_battle`'s module docs), which is

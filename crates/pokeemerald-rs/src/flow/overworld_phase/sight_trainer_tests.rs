@@ -125,7 +125,7 @@ fn lead(species: u16, level: u8, move_id: u16) -> BattlePokemon {
 }
 
 /// `SPECIES_TREECKO`/`SLASH` at level 50 -- overwhelms Rhett's real level-15
-/// Zangoose almost immediately, for the tests whose subject is "the battle
+/// Makuhita almost immediately, for the tests whose subject is "the battle
 /// starts/concludes", not "who wins slowly".
 fn overwhelming_lead() -> BattlePokemon {
     lead(277, 50, 163)
