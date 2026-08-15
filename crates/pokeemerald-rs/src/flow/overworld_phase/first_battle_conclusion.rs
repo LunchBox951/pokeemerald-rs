@@ -58,7 +58,7 @@
 //! construct -- upstream would Struggle and end normally -- so there is no
 //! upstream state for a conclusion to model, and the abort can only leave
 //! an alive (if damaged) lead, never a fainted one: any damage that faints
-//! the lead sets a PlayerLost outcome and returns Ok, so a fainted lead is
+//! the lead sets a `PlayerLost` outcome and returns Ok, so a fainted lead is
 //! always a reported outcome, never an abort).
 //!
 //! # What's modelled, narrowly
