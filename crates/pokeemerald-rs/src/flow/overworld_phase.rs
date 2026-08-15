@@ -322,6 +322,13 @@ pub(crate) struct OverworldPhase {
     /// abort alike), so it is never stale once [`Self::sight_trainer_battle`]
     /// is `None` again.
     sight_trainer_id: Option<assets::trainers::TrainerId>,
+    /// Which sight-trainer refusals have already been logged since the
+    /// player last stood outside every sight cone (issue #264 review) --
+    /// [`sight_trainer_trigger`]'s own module docs, "One line per cone
+    /// entry". Purely a logging gate: it never changes what the trigger
+    /// decides, only how often it says so, on a check that reruns every
+    /// frame with no button gate.
+    sight_trainer_log: sight_trainer_trigger::SightTrainerLog,
 }
 
 impl OverworldPhase {
@@ -541,6 +548,7 @@ impl OverworldPhase {
             sight_trainer_battle: None,
             sight_trainer_battle_outcome: None,
             sight_trainer_id: None,
+            sight_trainer_log: sight_trainer_trigger::SightTrainerLog::default(),
         };
         phase.copy_party_and_objects_from_save();
         // Route 101's own on-frame `VAR_ROUTE101_STATE` bump (issue #231,
@@ -631,6 +639,7 @@ impl OverworldPhase {
             sight_trainer_battle: None,
             sight_trainer_battle_outcome: None,
             sight_trainer_id: None,
+            sight_trainer_log: sight_trainer_trigger::SightTrainerLog::default(),
         }
     }
 

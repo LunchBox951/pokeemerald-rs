@@ -22,7 +22,7 @@
 //! move this battle engine does not yet implement, so
 //! [`crate::flow::npc_trainer_battle::start_npc_trainer_battle`] fails for
 //! all nine today (pinned generically by
-//! `sight_trainer_trigger::tests::every_sight_trainers_real_party_currently_fails_to_construct`).
+//! `sight_trainer_trigger::tests::every_sight_trainers_real_party_fails_to_construct_for_exactly_these_reasons`).
 //! That is a genuine, current fact about this port, not a testing
 //! inconvenience to work around invisibly -- so the tests above that only
 //! need the trigger/geometry/refusal half
@@ -189,6 +189,56 @@ fn standing_in_a_real_trainers_cone_attempts_the_real_handoff_which_currently_fa
         phase.party_lead.is_some(),
         "a refused handoff must not consume the lead -- no soft lock"
     );
+}
+
+/// How many consecutive frames the multi-frame RNG tests stand still for --
+/// one wall-clock second at this port's 60 Hz frame budget, i.e. long past
+/// the point where a per-frame leak would be obvious.
+const FRAMES_STANDING_STILL: usize = 60;
+
+/// Issue #264's review finding F1, pinned: a cone whose battle *cannot be
+/// constructed* is re-reached on every single frame the player stands in it
+/// (there is no button gate on this check), so the refusal has to cost
+/// nothing at all -- not "nothing on the first frame", nothing ever. Before
+/// the pre-flight screen (`crate::flow::npc_trainer_battle`'s module docs)
+/// this leaked `CreateNPCTrainerParty`'s per-mon OT-id draws sixty times a
+/// second off the one stream every wild encounter and battle turn shares.
+///
+/// All three refusal shapes are covered: an unimplemented moveset (Rhett,
+/// module docs item 7), a held-item party (Miguel, item 6), and a double
+/// battle refused before construction is even attempted (Amy, item 5).
+#[test]
+fn standing_in_a_cone_for_many_frames_never_touches_the_rng_stream() {
+    let (rx, ry) = RHETT_TILE;
+    let (mx, my) = MIGUEL_TILE;
+    let (ax, ay) = AMY_TILE;
+    let cases = [
+        ("Rhett (unimplemented moveset)", (rx, ry + 1)),
+        ("Miguel (held-item party)", (mx + 2, my)),
+        ("Amy (double battle)", (ax, ay + 1)),
+    ];
+    for (name, tile) in cases {
+        let mut phase = route_103_phase(PlayerState::new(tile, 3, Direction::North));
+        phase.party_lead = Some(overwhelming_lead());
+        let before = phase.rng.state();
+        for frame in 0..FRAMES_STANDING_STILL {
+            phase.step(ButtonState::new());
+            assert!(
+                !phase.is_sight_trainer_battle_active(),
+                "{name}: frame {frame} must still refuse"
+            );
+            assert_eq!(
+                phase.rng.state(),
+                before,
+                "{name}: frame {frame} moved the shared RNG stream -- a refused cone must \
+                 draw nothing, on every frame, forever"
+            );
+        }
+        assert!(
+            phase.party_lead.is_some(),
+            "{name}: the lead is never consumed by a refusal"
+        );
+    }
 }
 
 /// A player one tile beyond a trainer's own sight range must not trigger.
@@ -541,18 +591,32 @@ fn the_trigger_never_fires_off_route_103() {
 // -- Real-pack terrain (issue #264's own item 1: real collision/elevation) -
 
 /// The geometry tests above run over a synthetic, fully open room; this
-/// confirms the same cones fire against Route 103's own *real* extracted
-/// terrain (collision bits and elevation, not just declared object-event
-/// coordinates) -- every tile these tests stand on was independently
-/// checked against the real decoded grid (`MetatileCell { collision: 0,
-/// elevation: 3 }` throughout) before being chosen, the same "checked
-/// against the real extracted grid, not assumed" discipline
-/// `route103_rival_tests::walking_north_from_route_101_crosses_oldale_town_into_route_103`'s
-/// own doc comment already applies. `#[ignore]`d like this crate's other
-/// real-pack tests: run `cargo xtask extract` first.
+/// confirms the same cone fires against Route 103's own *real* extracted
+/// terrain -- collision bits, elevation, **and object-event occupancy**, not
+/// just declared coordinates -- and that standing in it costs the shared RNG
+/// stream nothing, frame after frame.
+///
+/// The tile matters, and vetting it means all three (issue #264 review, F5):
+/// this test originally stood the player at `(67, 7)`, whose real decoded
+/// cell is indeed open ground at elevation 3 -- but Route 103 declares an
+/// `OBJ_EVENT_GFX_CUTTABLE_TREE` object event standing on it
+/// (`data/maps/Route103/map.json`), so no player can ever be there without
+/// HM01. `(67, 6)`, one tile south of Rhett, is genuinely occupiable: open
+/// ground, elevation 3, and no object event of any kind. It is also
+/// distance **1**, which after this same review's F3 fix is the newly
+/// guarded case -- the whole `GetCollisionAtCoords` chain applies to the
+/// player's own tile with no intermediate tile ahead of it to catch
+/// anything first (`engine::overworld::trainer_sight`'s own docs).
+///
+/// The positive "the geometry really fired" signal is the geometry itself,
+/// asked directly over the real runtime: it cannot be the RNG any more,
+/// because a cone that reaches and refuses must now leave the stream exactly
+/// where it found it (that is the property under test).
+/// `#[ignore]`d like this crate's other real-pack tests: run
+/// `cargo xtask extract` first.
 #[test]
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
-fn real_pack_rhetts_cone_reaches_the_player_over_real_terrain() {
+fn real_pack_rhetts_cone_reaches_the_player_over_real_terrain_and_draws_nothing() {
     let scene = crate::overworld::load_room(
         ROUTE_103,
         crate::overworld::PlayerCharacter::Brendan,
@@ -560,31 +624,52 @@ fn real_pack_rhetts_cone_reaches_the_player_over_real_terrain() {
     )
     .expect("run `cargo xtask extract` first");
     let (rx, ry) = RHETT_TILE;
-    let mut phase = OverworldPhase::for_test(
-        scene,
-        ROUTE_103,
-        PlayerState::new((rx, ry + 2), 3, Direction::North),
-        None,
+    let tile = (rx, ry + 1);
+    let player = PlayerState::new(tile, 3, Direction::North);
+
+    // The cone genuinely reaches, over the real decoded grid -- asked of the
+    // same `engine` geometry the trigger uses, with the real object events.
+    let header = assets::MapHeaderTable::new()
+        .header(ROUTE_103)
+        .expect("MAP_ROUTE103 is bundled map data");
+    let events = assets::MapEventsTable::new()
+        .resolve(ROUTE_103)
+        .expect("MAP_ROUTE103 is bundled map data");
+    let rhett = events
+        .object_events
+        .iter()
+        .find(|event| event.script == "Route103_EventScript_Rhett")
+        .expect("Route 103 declares Rhett's own object event");
+    assert!(
+        engine::overworld::trainer_can_see_player(
+            rhett,
+            &scene.runtime(ROUTE_103, header, events),
+            &player,
+            &engine::event_data::EventData::new(),
+        ),
+        "Rhett's real cone must reach a player standing one tile south of him over real \
+         terrain -- including the final tile's own collision/impassability arms"
     );
+
+    let mut phase = OverworldPhase::for_test(scene, ROUTE_103, player, None);
     phase.party_lead = Some(overwhelming_lead());
     let before = phase.rng.state();
 
-    phase.step(ButtonState::new());
+    for frame in 0..FRAMES_STANDING_STILL {
+        phase.step(ButtonState::new());
+        assert!(
+            !phase.is_sight_trainer_battle_active(),
+            "frame {frame}: the real handoff still fails to construct (module docs item 7)"
+        );
+        assert_eq!(
+            phase.rng.state(),
+            before,
+            "frame {frame}: standing in a real cone whose battle cannot start must leave the \
+             shared stream byte-identical (issue #264 review, F1)"
+        );
+    }
     assert!(
-        !phase.is_sight_trainer_battle_active(),
-        "the real handoff still fails to construct (module docs item 7)"
-    );
-    // A positive signal that the geometry itself actually fired, not just
-    // that no battle is active (which is equally true of "never checked"):
-    // `start_npc_trainer_battle` only ever draws once construction is
-    // actually attempted (Rhett's own real party gets far enough to draw an
-    // OT id before its move-support refusal surfaces --
-    // `sight_trainer_trigger`'s own module docs, item 7), so an unmoved RNG
-    // stream would mean the cone never reached the player at all.
-    assert_ne!(
-        phase.rng.state(),
-        before,
-        "the RNG must have moved -- Rhett's construction was genuinely attempted against \
-         real terrain, not skipped"
+        phase.party_lead.is_some(),
+        "a refused handoff must not consume the lead -- no soft lock"
     );
 }

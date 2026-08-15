@@ -71,6 +71,28 @@
 //! `BATTLE_TYPE_TRAINER` outright (`battle_main.c:700`, `src/pokemon.c:6682`),
 //! so upstream does not spend it either.
 //!
+//! # Nothing is built before the whole party is screened
+//!
+//! Upstream never *refuses* a trainer battle, so every refusal this port
+//! makes has to cost nothing: the draws have no upstream counterpart, and
+//! [`start_npc_trainer_battle`]'s hottest caller
+//! ([`crate::flow::overworld_phase::sight_trainer_trigger`]) asks again on
+//! **every frame** the player stands in a sight cone, with no button gate to
+//! slow it down. Building the party mon by mon and letting
+//! [`battle::Battle::new_trainer`]'s own screens reject it afterwards
+//! therefore leaked two draws per party member per frame (issue #264
+//! review) -- a real, observable corruption of the one shared stream every
+//! wild encounter and battle turn shares.
+//!
+//! So [`start_npc_trainer_battle`] resolves each member's moveset (which
+//! draws nothing) and runs [`battle::ensure_trainer_party_startable`] --
+//! the same screens `new_trainer` applies, composed into a pre-flight that
+//! takes no RNG at all -- **before** the first
+//! [`battle::build_trainer_pokemon`] call. A trainer this engine cannot
+//! fight is refused for free, forever, the same no-draw-at-all shape
+//! [`crate::flow::wild_encounter::map_wild_table_fightable`] already applies
+//! to wild tables via [`battle::ensure_wild_startable`].
+//!
 //! # Held-item parties: a fail-closed gap, not a silent drop
 //!
 //! Upstream's `party` field is a `union TrainerMonPtr` that can carry a
@@ -294,13 +316,17 @@ pub fn trainer_party_personalities(id: TrainerId) -> Result<Vec<u32>, NpcTrainer
 /// comes from [`battle::initial_moveset`] (`GiveBoxMonInitialMoveset`, which
 /// also draws nothing).
 ///
+/// A refusal draws **nothing at all**: the whole party is screened by
+/// [`battle::ensure_trainer_party_startable`] ahead of the first
+/// [`battle::build_trainer_pokemon`] call (module docs, "Nothing is built
+/// before the whole party is screened").
+///
 /// # Errors
 ///
-/// [`NpcTrainerBattleError`]'s three cases. Every construction failure is
-/// raised **before** the first draw except the party build itself, which is
-/// upstream's own order (a party is built mon by mon, each drawing its OT id
-/// as it goes); the `battle`-crate screens that could reject a party
-/// wholesale all run inside [`battle::Battle::new_trainer`], after it.
+/// [`NpcTrainerBattleError`]'s three cases — **every one of them raised
+/// before the first draw** (module docs, "Nothing is built before the whole
+/// party is screened"): a refused trainer leaves `rng` exactly as it found
+/// it, however many times it is asked.
 pub fn start_npc_trainer_battle(
     player_lead: BattlePokemon,
     trainer: TrainerId,
@@ -311,11 +337,31 @@ pub fn start_npc_trainer_battle(
     let entries = party_entries(trainer, data)?;
     let personalities = trainer_party_personalities(trainer)?;
 
+    // Resolve each member's real moveset first (`GiveBoxMonInitialMoveset`
+    // draws nothing), then screen the whole party -- ahead of the first
+    // `build_trainer_pokemon` call, which would draw an OT id.
+    let movesets: Vec<Vec<MoveId>> = entries
+        .iter()
+        .map(|entry| {
+            entry
+                .moves
+                .clone()
+                .unwrap_or_else(|| battle::initial_moveset(entry.species, entry.level))
+        })
+        .collect();
+    let specs: Vec<battle::TrainerPartyMon<'_>> = entries
+        .iter()
+        .zip(&movesets)
+        .map(|(entry, moves)| battle::TrainerPartyMon {
+            species: entry.species,
+            level: entry.level,
+            moves,
+        })
+        .collect();
+    battle::ensure_trainer_party_startable(&dex, trainer, &specs)?;
+
     let mut party = Vec::with_capacity(entries.len());
-    for (entry, personality) in entries.into_iter().zip(personalities) {
-        let moves = entry
-            .moves
-            .unwrap_or_else(|| battle::initial_moveset(entry.species, entry.level));
+    for ((entry, personality), moves) in entries.iter().zip(personalities).zip(movesets) {
         party.push(battle::build_trainer_pokemon(
             &dex,
             entry.species,

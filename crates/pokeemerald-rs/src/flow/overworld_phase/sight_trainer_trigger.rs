@@ -106,19 +106,22 @@
 //!    moveset ([`battle::initial_moveset`]) drawn from each species' full
 //!    learnset, which reliably includes at least one move `battle::BattlePokemon::validate`
 //!    does not yet implement (verified for all nine -- this module's own
-//!    `every_sight_trainers_real_party_currently_fails_to_construct` test,
-//!    which pins the exact refusal reason per trainer so a future
-//!    move-coverage slice that fixes one is forced to update this test
-//!    rather than silently going stale). This is an *emergent* wall, not a
+//!    `every_sight_trainers_real_party_fails_to_construct_for_exactly_these_reasons`
+//!    test, which pins each trainer's *exact* refusal, offending move id
+//!    included, so a future move-coverage slice that fixes one is forced to
+//!    update this test rather than silently going stale). This is an
+//!    *emergent* wall, not a
 //!    bespoke guard this module wrote -- the same category
 //!    `crate::flow::route103_rival`'s own module docs once described for the
 //!    (now-retired) `FaintedBattler` dead end: this module's own sight-cone
 //!    geometry, defeated-flag gating, and eligibility table are all real and
 //!    exercised end to end against the genuine Route 103 map data; only the
-//!    very last step -- `battle::Battle::new_trainer` actually accepting the
-//!    real party -- currently fails, for every one of the nine, and fails
-//!    the same way [`begin_sight_trainer_battle_if_seen`] already handles
-//!    Miguel's held item: logged, no battle, no soft lock. Widening move
+//!    very last step -- this engine actually being able to field the real
+//!    party -- currently fails, for every one of the nine, refused by
+//!    [`battle::ensure_trainer_party_startable`]'s pre-flight *before* the
+//!    first draw and handled the same way
+//!    [`begin_sight_trainer_battle_if_seen`] handles Miguel's held item:
+//!    logged once, no battle, no draws, no soft lock. Widening move
 //!    coverage in the `battle` crate is its own, separate, much larger slice
 //!    (`battle`'s own crate docs track it), not this issue's scope. The
 //!    win/loss/defeated-flag driver half below is instead pinned with a
@@ -131,8 +134,35 @@
 //!
 //! [`find_sight_trainer`] draws nothing (`engine::overworld::trainer_sight`'s
 //! own module docs); [`begin_sight_trainer_battle_if_seen`] draws off the
-//! phase's one shared stream only once a battle is actually being built,
+//! phase's one shared stream only once a battle is actually being *started*,
 //! exactly like [`super::route103_rival_trigger::OverworldPhase::begin_route103_rival_battle`].
+//!
+//! That "only once a battle is actually being started" is load-bearing here
+//! in a way it is not for the rival, and was wrong in this module's first
+//! cut (issue #264 review): this check has **no button gate**, so a cone
+//! whose battle cannot be constructed is re-attempted on every frame the
+//! player stands in it. Building the party first and refusing afterwards
+//! therefore leaked `CreateNPCTrainerParty`'s per-mon OT-id draws sixty
+//! times a second -- for a fight that can never start, off the same stream
+//! the next wild encounter rolls from. The refusal now happens in
+//! [`crate::flow::npc_trainer_battle::start_npc_trainer_battle`]'s pre-flight
+//! screen ([`battle::ensure_trainer_party_startable`]), ahead of the first
+//! draw, so standing in *any* Route 103 cone -- Miguel's held item, Amy &
+//! Liv's double battle, or the seven unimplemented movesets of item 7 --
+//! leaves the stream byte-identical for as long as the player cares to stand
+//! there (pinned by `overworld_phase::sight_trainer_tests`' own multi-frame
+//! tests, synthetic and real-pack alike).
+//!
+//! # One line per cone entry
+//!
+//! The same per-frame repetition applies to what this module *says*. Every
+//! refusal line below is gated through [`SightTrainerLog`], a small
+//! `OverworldPhase`-owned set of "already reported since the player was last
+//! outside every cone": entering a cone reports once, standing in it reports
+//! nothing further, and stepping out and back in reports again. The reset
+//! is keyed on "no cone reached the player at all" rather than "no candidate
+//! was selected", so a refused-but-reaching cone (Amy's) still counts as
+//! being inside one.
 
 use assets::trainers::TrainerId;
 use assets::{MapEventsTable, MapHeaderTable, ObjectEvent, TrainerType};
@@ -204,6 +234,22 @@ fn trainer_data_wants_double_battle(trainer_id: TrainerId) -> bool {
     battle::trainer_data(trainer_id).is_ok_and(|data| data.double_battle)
 }
 
+/// What one [`find_sight_trainer`] scan found -- more than just the winner,
+/// because the caller's *logging* needs to know whether the player is still
+/// standing in any cone at all (module docs, "One line per cone entry").
+#[derive(Debug, Default)]
+struct SightScan<'a> {
+    /// The first eligible candidate, in scan order, or `None`.
+    selected: Option<(&'a ObjectEvent, TrainerId)>,
+    /// Whether *any* not-yet-defeated `TRAINER_TYPE_NORMAL` cone reached the
+    /// player this scan, selected or refused. `false` is "the player is
+    /// outside every cone", the one fact that resets [`SightTrainerLog`].
+    any_cone_reached: bool,
+    /// Trainers whose cone reached but whose real party is a double battle
+    /// (module docs' item 5), in scan order.
+    doubles_refused: Vec<TrainerId>,
+}
+
 /// Scan `runtime`'s object events for the first `TRAINER_TYPE_NORMAL` sight
 /// trainer whose cone reaches `player` and who is currently eligible to
 /// fight -- module docs' items 1 and 5, mirroring
@@ -212,13 +258,17 @@ fn trainer_data_wants_double_battle(trainer_id: TrainerId) -> bool {
 /// the same order [`engine::overworld::map_runtime::MapRuntime::object_events_at`]'s
 /// own docs cite for every other scan in this crate).
 ///
-/// Draws nothing (module docs, "RNG stream").
+/// Pure, and draws nothing (module docs, "RNG stream"): every refusal it
+/// notices is *reported* to the caller rather than logged here, so the
+/// caller's own once-per-cone-entry gate can decide what is worth saying on
+/// a check that reruns sixty times a second.
 #[must_use]
 fn find_sight_trainer<'a>(
     runtime: &MapRuntime<'a>,
     player: &PlayerState,
     event_data: &EventData,
-) -> Option<(&'a ObjectEvent, TrainerId)> {
+) -> SightScan<'a> {
+    let mut scan = SightScan::default();
     for event in runtime.events().object_events {
         if event.trainer_type != TrainerType::Normal {
             continue;
@@ -232,18 +282,51 @@ fn find_sight_trainer<'a>(
         if !trainer_can_see_player(event, runtime, player, event_data) {
             continue;
         }
+        scan.any_cone_reached = true;
         if trainer_data_wants_double_battle(trainer_id) {
-            eprintln!(
-                "sight trainer: trainer {trainer_id:?}'s cone reached the player, but its \
-                 real party is a double battle -- this port has no doubles support and tracks \
-                 at most one party mon, so `GetMonsStateToDoubles_2` can never pass here \
-                 (module docs item 5); skipping to the next candidate"
-            );
+            scan.doubles_refused.push(trainer_id);
             continue;
         }
-        return Some((event, trainer_id));
+        if scan.selected.is_none() {
+            scan.selected = Some((event, trainer_id));
+        }
     }
-    None
+    scan
+}
+
+/// Which refusals have already been reported since the player was last
+/// standing outside every sight cone -- the per-cone-entry log gate module
+/// docs' "One line per cone entry" describes.
+///
+/// Owned by [`OverworldPhase`] rather than by this module `(oop-boundaries,
+/// no global mutable state)`, and deliberately the smallest state that is
+/// still honest: a *set* of ids rather than "the last one refused", because
+/// two cones can overlap on one tile (Amy's and Liv's do) and a single-slot
+/// memo would then alternate between them and log both forever.
+#[derive(Debug, Default, Clone)]
+pub(super) struct SightTrainerLog {
+    /// Ids already logged for this cone entry, in first-logged order. At
+    /// most one entry per [`SIGHT_TRAINERS`] row, so a [`Vec`] scan is
+    /// cheaper than any keyed structure.
+    logged: Vec<TrainerId>,
+}
+
+impl SightTrainerLog {
+    /// Whether `trainer_id`'s refusal is worth printing right now -- `true`
+    /// exactly once per cone entry per trainer.
+    fn should_log(&mut self, trainer_id: TrainerId) -> bool {
+        if self.logged.contains(&trainer_id) {
+            return false;
+        }
+        self.logged.push(trainer_id);
+        true
+    }
+
+    /// The player is outside every sight cone: the next entry into any of
+    /// them is a new event worth reporting again.
+    fn left_every_cone(&mut self) {
+        self.logged.clear();
+    }
 }
 
 impl OverworldPhase {
@@ -266,6 +349,15 @@ impl OverworldPhase {
     /// never resolve itself (Miguel's cone, forever) would be a real soft
     /// lock, not a cosmetic one-frame stall like a discarded A-press
     /// elsewhere in this crate.
+    ///
+    /// Every line this method prints is gated by [`SightTrainerLog`] for the
+    /// same reason (module docs, "One line per cone entry"): a refusal that
+    /// cannot resolve itself is re-reached on every one of the sixty frames
+    /// a second the player spends in that cone, and sixty identical lines a
+    /// second is noise, not a diagnostic. The refusals themselves are free
+    /// to repeat -- [`npc_trainer_battle::start_npc_trainer_battle`] screens
+    /// the whole party before its first draw (that module's own docs), so
+    /// re-refusing costs nothing but the check.
     pub(super) fn begin_sight_trainer_battle_if_seen(&mut self) -> bool {
         let Ok(header) = MapHeaderTable::new().header(self.map_id) else {
             return false;
@@ -274,20 +366,38 @@ impl OverworldPhase {
             return false;
         };
         let runtime = self.scene.runtime(self.map_id, header, events);
-        let Some((_object, trainer_id)) =
-            find_sight_trainer(&runtime, &self.player, &self.save1.event_data)
-        else {
+        let scan = find_sight_trainer(&runtime, &self.player, &self.save1.event_data);
+        if !scan.any_cone_reached {
+            self.sight_trainer_log.left_every_cone();
+            return false;
+        }
+        for refused in scan.doubles_refused {
+            if self.sight_trainer_log.should_log(refused) {
+                eprintln!(
+                    "sight trainer: trainer {refused:?}'s cone reached the player, but its \
+                     real party is a double battle -- this port has no doubles support and \
+                     tracks at most one party mon, so `GetMonsStateToDoubles_2` can never pass \
+                     here (module docs item 5); skipping to the next candidate"
+                );
+            }
+        }
+        let Some((_object, trainer_id)) = scan.selected else {
             return false;
         };
 
         self.sight_trainer_battle_outcome = None;
-        eprintln!(
-            "sight trainer: cone reached the player -- starting trainer {trainer_id:?} \
-             (issue #264)"
-        );
+        let first_report = self.sight_trainer_log.should_log(trainer_id);
+        if first_report {
+            eprintln!(
+                "sight trainer: cone reached the player -- starting trainer {trainer_id:?} \
+                 (issue #264)"
+            );
+        }
 
         let Some(lead) = self.party_lead.clone() else {
-            eprintln!("sight trainer: no party mon yet -- no battle to start");
+            if first_report {
+                eprintln!("sight trainer: no party mon yet -- no battle to start");
+            }
             return false;
         };
         // The same fail-closed screen `route103_rival_trigger`'s own
@@ -296,7 +406,11 @@ impl OverworldPhase {
         // module docs, "The fail-closed guard, narrowed"): refused before
         // `start_npc_trainer_battle` can draw anything.
         if lead.is_fainted() {
-            eprintln!("sight trainer: the lead mon has fainted -- no battle until it is healed");
+            if first_report {
+                eprintln!(
+                    "sight trainer: the lead mon has fainted -- no battle until it is healed"
+                );
+            }
             return false;
         }
         match npc_trainer_battle::start_npc_trainer_battle(lead, trainer_id, &mut self.rng) {
@@ -313,10 +427,12 @@ impl OverworldPhase {
                 true
             }
             Err(error) => {
-                eprintln!(
-                    "sight trainer: can't start against trainer {trainer_id:?} ({error}) -- \
-                     not modelled, no battle (module docs items 6-7)"
-                );
+                if first_report {
+                    eprintln!(
+                        "sight trainer: can't start against trainer {trainer_id:?} ({error}) -- \
+                         not modelled, no battle, no draws (module docs items 6-7)"
+                    );
+                }
                 false
             }
         }
@@ -448,37 +564,155 @@ mod tests {
         let player = PlayerState::new((67, 6), 3, engine::overworld::Direction::North);
 
         let event_data = EventData::new();
-        let (_, trainer_id) = find_sight_trainer(&runtime, &player, &event_data)
+        let scan = find_sight_trainer(&runtime, &player, &event_data);
+        let (_, trainer_id) = scan
+            .selected
             .expect("Rhett's own south-facing cone must reach a player one tile south of him");
         assert_eq!(trainer_id, TrainerId(703), "must resolve to TRAINER_RHETT");
+        assert!(scan.any_cone_reached);
 
         let mut defeated = EventData::new();
         defeated
             .flag_set(TRAINER_FLAGS_START + 703)
             .expect("TRAINER_FLAGS_START + 703 is an ordinary ranged flag id");
+        let scan = find_sight_trainer(&runtime, &player, &defeated);
         assert!(
-            find_sight_trainer(&runtime, &player, &defeated).is_none(),
+            scan.selected.is_none(),
             "an already-defeated trainer must not be selected even though the geometry \
              still qualifies (module docs item 4)"
+        );
+        assert!(
+            !scan.any_cone_reached,
+            "a defeated trainer is skipped before the geometry runs, so it cannot count as \
+             the player standing in a cone either"
+        );
+    }
+
+    /// A double-battle refusal is *reported*, not logged, and still counts
+    /// as the player standing inside a cone -- the distinction the log gate
+    /// resets on (module docs, "One line per cone entry"). Amy's own cone
+    /// (`(64, 12)`, facing south, range 1) reaches a player one tile south.
+    #[test]
+    fn a_double_battle_cone_is_reported_as_reached_but_never_selected() {
+        let map_id = assets::MapId("MAP_ROUTE103");
+        let scene = crate::overworld::tests::synthetic_scene(80, 16);
+        let header = assets::MapHeaderTable::new()
+            .header(map_id)
+            .expect("MAP_ROUTE103 is bundled map data");
+        let events = assets::MapEventsTable::new()
+            .resolve(map_id)
+            .expect("MAP_ROUTE103 is bundled map data");
+        let runtime = scene.runtime(map_id, header, events);
+        let player = PlayerState::new((64, 13), 3, engine::overworld::Direction::North);
+
+        let scan = find_sight_trainer(&runtime, &player, &EventData::new());
+        assert_eq!(
+            scan.doubles_refused,
+            vec![TrainerId(481)],
+            "TRAINER_AMY_AND_LIV_1's cone reached and was refused (module docs item 5)"
+        );
+        assert!(scan.selected.is_none(), "no other cone reaches that tile");
+        assert!(
+            scan.any_cone_reached,
+            "a refused-but-reaching cone still means the player is standing in one"
+        );
+    }
+
+    /// The log gate itself: once per trainer per cone entry, and a fresh
+    /// entry after the player has left every cone (module docs, "One line
+    /// per cone entry").
+    #[test]
+    fn the_log_gate_reports_each_trainer_once_per_cone_entry() {
+        let mut log = SightTrainerLog::default();
+        assert!(log.should_log(TrainerId(703)));
+        assert!(!log.should_log(TrainerId(703)), "still in the same cone");
+        assert!(
+            log.should_log(TrainerId(481)),
+            "a second, overlapping cone is its own event -- a single-slot memo would \
+             alternate between the two and log both forever"
+        );
+        assert!(!log.should_log(TrainerId(481)));
+
+        log.left_every_cone();
+        assert!(
+            log.should_log(TrainerId(703)),
+            "a fresh entry reports again"
         );
     }
 
     /// Module docs' item 7, pinned rather than left as prose: every one of
-    /// [`SIGHT_TRAINERS`]' distinct trainer ids currently fails to
-    /// construct through [`npc_trainer_battle::start_npc_trainer_battle`] --
-    /// Miguel for his held item (module docs item 6), every other one for a
-    /// move this battle engine does not yet implement. If a future
-    /// move-coverage slice makes any of these start succeeding, this test
-    /// forces an update here rather than letting the gap go stale silently
-    /// -- and that trainer should also gain a real construction-backed
-    /// win/loss test at that point.
+    /// [`SIGHT_TRAINERS`]' distinct trainer ids currently fails to construct
+    /// through [`npc_trainer_battle::start_npc_trainer_battle`] -- Miguel
+    /// for his held item (module docs item 6), every other one for a
+    /// specific move this battle engine does not yet implement.
+    ///
+    /// The **exact** refusal is pinned per trainer, not merely "it fails"
+    /// (issue #264 review): the reason a trainer is unreachable is the
+    /// interesting fact, and naming the offending move id is what forces a
+    /// future move-coverage slice to come back here -- widening support for
+    /// `MOVE_NIGHT_SHADE` alone would leave a Rhett who now fails on
+    /// something else, and a bare `is_err()` would have hidden that.
+    ///
+    /// Each refusal must also cost **nothing**: the whole party is screened
+    /// before the first draw (`npc_trainer_battle`'s module docs), which is
+    /// what makes the per-frame sight check above safe to run forever.
     #[test]
-    fn every_sight_trainers_real_party_currently_fails_to_construct() {
-        let mut seen_ids = std::collections::HashSet::new();
-        for (script, id) in SIGHT_TRAINERS {
-            if !seen_ids.insert(id.0) {
-                continue; // Amy and Liv share one id; only construct it once.
-            }
+    fn every_sight_trainers_real_party_fails_to_construct_for_exactly_these_reasons() {
+        use battle::BattleError;
+        use npc_trainer_battle::NpcTrainerBattleError::{Battle, HeldItemParty};
+
+        // Every distinct id in `SIGHT_TRAINERS`, with the refusal its real
+        // extracted party currently produces. The move ids are the first
+        // unsupported move in that trainer's own level-up-derived moveset.
+        let expected = [
+            (
+                "Daisy",
+                TrainerId(36),
+                Battle(BattleError::UnsupportedMoveEffect(assets::MoveId(71))), // MOVE_ABSORB
+            ),
+            (
+                "Amy & Liv",
+                TrainerId(481),
+                Battle(BattleError::NonDamagingMove(assets::MoveId(86))), // MOVE_THUNDER_WAVE
+            ),
+            (
+                "Andrew",
+                TrainerId(336),
+                Battle(BattleError::NonDamagingMove(assets::MoveId(150))), // MOVE_SPLASH
+            ),
+            ("Miguel", TrainerId(293), HeldItemParty(TrainerId(293))),
+            (
+                "Rhett",
+                TrainerId(703),
+                Battle(BattleError::NonDamagingMove(assets::MoveId(116))), // MOVE_FOCUS_ENERGY
+            ),
+            (
+                "Marcos",
+                TrainerId(702),
+                Battle(BattleError::NonDamagingMove(assets::MoveId(268))), // MOVE_CHARGE
+            ),
+            (
+                "Isabelle",
+                TrainerId(736),
+                Battle(BattleError::NonDamagingMove(assets::MoveId(111))), // MOVE_DEFENSE_CURL
+            ),
+            (
+                "Pete",
+                TrainerId(735),
+                Battle(BattleError::UnsupportedMoveEffect(assets::MoveId(40))), // MOVE_POISON_STING
+            ),
+        ];
+
+        let distinct: std::collections::HashSet<u16> =
+            SIGHT_TRAINERS.iter().map(|(_, id)| id.0).collect();
+        let covered: std::collections::HashSet<u16> =
+            expected.iter().map(|(_, id, _)| id.0).collect();
+        assert_eq!(
+            distinct, covered,
+            "this table must cover exactly SIGHT_TRAINERS' distinct ids"
+        );
+
+        for (name, id, refusal) in expected {
             let lead = battle::BattlePokemon::new(
                 &battle::Dex::new(),
                 assets::SpeciesId(277), // SPECIES_TREECKO
@@ -489,12 +723,19 @@ mod tests {
             )
             .expect("Treecko/Slash is a valid pairing");
             let mut rng = engine::rng::Rng::new(1);
-            let result = npc_trainer_battle::start_npc_trainer_battle(lead, *id, &mut rng);
-            assert!(
-                result.is_err(),
-                "{script} -> {id:?} was expected to still fail to construct (module docs \
-                 item 7) -- if this now succeeds, update this test and add a real \
-                 construction-backed win/loss test for it"
+            let before = rng.state();
+            let result = npc_trainer_battle::start_npc_trainer_battle(lead, id, &mut rng);
+            assert_eq!(
+                result.err(),
+                Some(refusal),
+                "{name} -> {id:?} was expected to still fail to construct for exactly this \
+                 reason (module docs item 7) -- if move coverage has grown, update this row \
+                 (or, if it now succeeds, add a real construction-backed win/loss test)"
+            );
+            assert_eq!(
+                rng.state(),
+                before,
+                "{name} -> {id:?}: a refused construction must draw nothing at all"
             );
         }
     }
