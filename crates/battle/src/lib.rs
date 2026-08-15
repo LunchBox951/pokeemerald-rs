@@ -83,6 +83,16 @@
 //! #221 used for the first battle; Route 103's overworld reachability
 //! (the rival's sight cone and approach script) is a later slice.
 //!
+//! Issue #264 wires Route 103's *sight* trainers to that same construction,
+//! and adds the screen it needed to do so honestly:
+//! [`battle::trainer::ensure_trainer_party_startable`], the trainer-side
+//! counterpart of [`wild::ensure_wild_startable`]. Both compose the screens
+//! a battle would apply anyway into a pre-flight an integration layer can
+//! run **before the first draw** — the only stream-faithful way to refuse a
+//! party this engine cannot fight, since a per-frame trigger that refuses
+//! *after* `CreateNPCTrainerParty`'s per-mon OT-id draws would spend the
+//! shared stream on every frame the player stands in a cone.
+//!
 //! Out of scope for this slice (see each module's own docs for exactly what
 //! is/isn't modelled): the *general* trainer AI beyond the four scripts
 //! above and mid-battle switching AI (`I-5`), battle UI/animations,
@@ -111,8 +121,8 @@ pub mod turn_order;
 pub mod wild;
 
 pub use battle::trainer::{
-    build_trainer_pokemon, fixed_ivs, roll_non_shiny_ot_id, shiny_value, trainer_data,
-    trainer_money, TrainerContext, SHINY_ODDS,
+    build_trainer_pokemon, ensure_trainer_party_startable, fixed_ivs, roll_non_shiny_ot_id,
+    shiny_value, trainer_data, trainer_money, TrainerContext, TrainerPartyMon, SHINY_ODDS,
 };
 pub use battle::{Battle, BattleEvent, BattleOutcome, PlayerAction, TurnError};
 pub use damage::{
