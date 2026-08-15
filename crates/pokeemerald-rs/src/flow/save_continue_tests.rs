@@ -14,7 +14,8 @@
 //!
 //! * the room is `crate::overworld::tests::synthetic_scene`'s flat, open
 //!   grid rather than a pack-decoded one (the same fixture
-//!   `crate::flow::overworld_phase::tests` already walks the player around),
+//!   `crate::flow::overworld_phase::step_tests` already walks the player
+//!   around),
 //!   paired with a *real* map id so every `MapHeaderTable`/`MapEventsTable`
 //!   lookup on the way resolves;
 //! * the start menu is opened through
@@ -36,7 +37,7 @@
 
 use engine::event_data::EventData;
 use engine::overworld::{Direction, PlayerState};
-use engine::save::{BoxPokemon, Pokemon, SaveBlock1, SaveBlock2};
+use engine::save::{BoxPokemon, Pokemon, SaveBlock1, SaveBlock2, WarpData};
 use platform::Buttons;
 
 use super::overworld_phase::{saved_map_id, OverworldPhase};
@@ -280,7 +281,10 @@ fn drive_start_menu(
 }
 
 /// `START` -> `SAVE` -> YES to everything, through the real menu.
-fn save_from_the_start_menu(phase: &mut OverworldPhase, save_slot: &mut SaveSlot) -> Vec<u8> {
+pub(super) fn save_from_the_start_menu(
+    phase: &mut OverworldPhase,
+    save_slot: &mut SaveSlot,
+) -> Vec<u8> {
     phase.open_synthetic_start_menu();
     assert_eq!(
         phase.start_menu().unwrap().selected(),
@@ -334,7 +338,8 @@ fn a_saved_game_reloads_into_an_overworld_phase_that_matches_it() {
 
     // The real map resolution `continue_saved_game` performs, then its
     // pack-free core (module docs on the substituted steps).
-    let map = saved_map_id(&saved.block1).expect("the saved location must resolve to a map");
+    let map =
+        saved_map_id(saved.block1.location).expect("the saved location must resolve to a map");
     assert_eq!(map, new_game::SPAWN_MAP_ID);
     let resumed = OverworldPhase::from_saved(
         crate::overworld::tests::synthetic_scene(10, 10),
@@ -510,7 +515,7 @@ fn the_most_recent_of_two_saves_is_the_one_that_reloads() {
     // player actually takes; a second new-game session would meet the
     // WARNING prompt instead (see the consent test below).
     let loaded = slot.load();
-    let map = saved_map_id(&loaded.block1).expect("the saved location must resolve");
+    let map = saved_map_id(loaded.block1.location).expect("the saved location must resolve");
     let mut phase = OverworldPhase::from_saved(
         crate::overworld::tests::synthetic_scene(10, 10),
         map,
@@ -619,7 +624,7 @@ fn a_save_pointing_at_no_known_map_does_not_resume() {
     let mut block1 = SaveBlock1::default();
     block1.location.map_group = 127;
     block1.location.map_num = 127;
-    assert!(saved_map_id(&block1).is_none());
+    assert!(saved_map_id(block1.location).is_none());
 
     // `OverworldPhase` has no `Debug`, so this cannot be `expect_err`.
     let Err(err) = OverworldPhase::continue_saved_game(block1, SaveBlock2::default()) else {
@@ -1019,6 +1024,54 @@ fn a_save_with_no_recorded_facing_falls_back_to_the_tile_derived_direction() {
         SaveBlock2::default(),
     );
     assert_eq!(resumed.player.facing(), Direction::South);
+}
+
+/// A save written before issue #261 had no writer for `last_heal_location`
+/// at all, so every such image carries the zeroed [`WarpData::default`] --
+/// which *resolves* (group 0/num 0 is a real generated-table entry), so
+/// without migration the first white-out of an upgraded save would warp to
+/// Petalburg City at `(0, 0)` instead of home (issue #261 review). The
+/// continue must adopt the same gender default a fresh game gets, and must
+/// leave a genuinely written heal location alone.
+#[test]
+fn a_save_with_a_legacy_zeroed_heal_location_adopts_the_gender_default() {
+    let block1 = SaveBlock1::default();
+    assert_eq!(
+        block1.last_heal_location,
+        WarpData::default(),
+        "a zeroed block holds the legacy marker"
+    );
+    let resumed = OverworldPhase::from_saved(
+        crate::overworld::tests::synthetic_scene(10, 10),
+        new_game::SPAWN_MAP_ID,
+        block1,
+        SaveBlock2::default(),
+    );
+    assert_eq!(
+        resumed.save1.last_heal_location,
+        new_game::default_last_heal_location(SaveBlock2::default().player_gender),
+        "the legacy all-zero value migrates to the gender default"
+    );
+
+    // A modern save's genuinely written value survives untouched.
+    let written = WarpData {
+        map_group: 0,
+        map_num: 9,
+        warp_id: -1,
+        x: 6,
+        y: 8,
+    };
+    let block1 = SaveBlock1 {
+        last_heal_location: written,
+        ..SaveBlock1::default()
+    };
+    let resumed = OverworldPhase::from_saved(
+        crate::overworld::tests::synthetic_scene(10, 10),
+        new_game::SPAWN_MAP_ID,
+        block1,
+        SaveBlock2::default(),
+    );
+    assert_eq!(resumed.save1.last_heal_location, written);
 }
 
 /// A save whose party count is zero resumes with no lead at all -- not

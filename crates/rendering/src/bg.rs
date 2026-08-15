@@ -128,11 +128,13 @@ impl<'a> BgLayer<'a> {
         scroll_y: u16,
     ) -> Option<Rgb888> {
         const DIM: usize = BitDepth::TILE_DIM;
-        let bg_width_px = self.tilemap.width_tiles() * DIM;
-        let bg_height_px = self.tilemap.height_tiles() * DIM;
-        if bg_width_px == 0 || bg_height_px == 0 {
+        let width_tiles = self.tilemap.width_tiles();
+        let height_tiles = self.tilemap.height_tiles();
+        if width_tiles == 0 || height_tiles == 0 {
             return None;
         }
+        let bg_width_px = width_tiles.checked_mul(DIM)?;
+        let bg_height_px = height_tiles.checked_mul(DIM)?;
         let scroll_x = usize::from(scroll_x & Self::SCROLL_MASK);
         let scroll_y = usize::from(scroll_y & Self::SCROLL_MASK);
         let src_x = (x + scroll_x) % bg_width_px;
@@ -509,5 +511,17 @@ mod tests {
 
         assert_eq!(unscrolled.pixel(0, 0), scrolled.pixel(0, 0));
         assert_eq!(unscrolled.pixel(7, 0), scrolled.pixel(7, 0));
+    }
+
+    #[test]
+    fn sample_scrolled_returns_none_for_extreme_zero_area_tilemaps() {
+        let tileset = Tileset::decode(BitDepth::Bpp4, &[0u8; 32]).unwrap();
+        let palette = Palette::new([Bgr555::default(); Palette::LEN]);
+
+        for (width_tiles, height_tiles) in [(usize::MAX, 0), (0, usize::MAX)] {
+            let tilemap = Tilemap::new(width_tiles, height_tiles, Vec::new()).unwrap();
+            let layer = BgLayer::new(&tileset, &palette, &tilemap);
+            assert_eq!(layer.sample_scrolled(0, 0, 0, 0), None);
+        }
     }
 }

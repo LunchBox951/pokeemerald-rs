@@ -199,8 +199,8 @@ enum Backend {
 ///     if platform.buttons().is_held(platform::Buttons::START) {
 ///         break;
 ///     }
-///     platform.present(&frame)?;
 ///     platform.wait_for_next_frame();
+///     platform.present(&frame)?;
 /// }
 /// # Ok(())
 /// # }
