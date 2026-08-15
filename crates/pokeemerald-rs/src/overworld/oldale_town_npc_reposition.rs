@@ -206,14 +206,17 @@ static OLDALE_TOWN_OBJECT_EVENTS: [ObjectEvent; 4] = [
 ///
 /// Called from [`super::load_room`] (rendering, every warp/connection entry
 /// into a map) and from `crate::flow::overworld_phase::step`'s per-frame
-/// runtime rebuild (collision/interaction) -- **not** from the three other
-/// production `MapEventsTable::resolve` sites, which never read
-/// `object_events`, so patching them would be a costless no-op left out
-/// for that reason alone: `crate::flow::overworld_phase::connections`'s two
-/// calls (one resolves a warp landing, one a caller-supplied position --
-/// both `warp_events`/metatile only) and
+/// runtime rebuild (collision/interaction) -- **not** from the four other
+/// production `MapEventsTable::resolve` sites, each a no-op to patch for
+/// its own reason: `crate::flow::overworld_phase::connections`'s two calls
+/// (one resolves a warp landing, one a caller-supplied position -- both
+/// `warp_events`/metatile only, never `object_events`),
 /// `crate::flow::overworld_phase::placement`'s `saved_tile_placement`
-/// (metatile only, on the continue-from-save path).
+/// (metatile only, on the continue-from-save path), and
+/// [`super::load_default_room`] (which *does* feed `object_events` to the
+/// sprite binder, but is hard-wired to
+/// [`super::DEFAULT_ROOM_MAP_ID`] -- Brendan's house 2F -- and can never
+/// resolve Oldale Town).
 ///
 /// # Errors
 ///
