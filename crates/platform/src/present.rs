@@ -27,20 +27,19 @@ pub type Frame = [u32; PIXEL_COUNT];
 ///
 /// # Examples
 ///
-/// Fields are private, so external code cannot build a `Letterbox` with an
-/// invalid zero `scale`. The probe uses functional-update syntax over a
-/// valid base value, so the *only* possible compile error is the privacy
-/// seal on `scale` (E0451) -- it cannot rot into a missing-field E0063 when
-/// fields are added or removed, and it stops compiling (failing this test)
-/// the moment `scale` becomes publicly writable. (The `E0451` annotation is
-/// enforced by rustdoc only on nightly; the update-syntax shape is what
-/// makes the test robust on the stable toolchain this repo pins.)
+/// Fields are private, so external code cannot put an invalid zero `scale`
+/// into a `Letterbox`. The probe mutates `scale` on a valid value, so the
+/// *only* thing that can make it compile -- and fail this test -- is
+/// `scale` itself becoming publicly writable: it cannot rot into a
+/// missing-field E0063 when fields are added or removed (a struct-literal
+/// probe could), and it cannot stay red on the *other* fields' privacy the
+/// way a functional-update probe would if `scale` alone were unsealed.
+/// (rustdoc enforces error-code annotations only on nightly; the probe's
+/// shape is what makes it robust on the stable toolchain this repo pins.)
 ///
-/// ```compile_fail,E0451
-/// let _ = platform::present::Letterbox {
-///     scale: 0,
-///     ..platform::present::Letterbox::compute(1, 1)
-/// };
+/// ```compile_fail,E0616
+/// let mut lb = platform::present::Letterbox::compute(1, 1);
+/// lb.scale = 0;
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Letterbox {
