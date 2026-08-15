@@ -451,7 +451,7 @@ fn the_real_generator_drives_the_roll_identically_to_its_script() {
         standard_wild_encounter(Some(header), MB_TALL_GRASS, MB_TALL_GRASS, &mut scripted);
 
     assert_eq!(from_real, from_script);
-    // 19915 % 2880 = 1195, which is not < 320, so this particular seed
+    // 19915 % 2880 = 2635, which is not < 320, so this particular seed
     // produces no encounter -- and stops after the single rate draw.
     assert!(from_real.is_none());
     assert_eq!(scripted.draws(), 1);
