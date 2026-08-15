@@ -27,7 +27,9 @@
 //! trigger, issue #231, [`OverworldPhase::advance_first_battle_frame`]),
 //! [`route103_rival_trigger`] (the Route 103 rival battle's own A-press
 //! interaction trigger and rival-sprite setup, issue #248,
-//! [`OverworldPhase::advance_route103_rival_battle_frame`]), and
+//! [`OverworldPhase::advance_route103_rival_battle_frame`]),
+//! [`sight_trainer_trigger`] (Route 103's own sight-cone trainers, issue
+//! #264, [`OverworldPhase::advance_sight_trainer_battle_frame`]), and
 //! [`frame`] (dialog ticking and frame composition,
 //! [`OverworldPhase::compose_frame`]), [`start_menu`] (the field start
 //! menu's `START` gate and the party/object-event save sync behind its
@@ -49,6 +51,7 @@ mod frame;
 mod input;
 mod placement;
 mod route103_rival_trigger;
+mod sight_trainer_trigger;
 mod start_menu;
 mod step;
 mod white_out;
@@ -296,6 +299,29 @@ pub(crate) struct OverworldPhase {
     /// [`Self::rival_battle`] (issue #248): cleared at trigger time, set
     /// only on a real reported outcome.
     rival_battle_outcome: Option<battle::BattleOutcome>,
+    /// A Route 103 sight-trainer battle currently being played out, if any
+    /// (issue #264) -- [`Self::rival_battle`]'s sibling, in its own field for
+    /// the same reason: [`sight_trainer_trigger`] starts it via
+    /// [`crate::flow::npc_trainer_battle::start_npc_trainer_battle`] the
+    /// instant a cone reaches the player (no button press, unlike the rival's
+    /// interaction trigger) and drives it with
+    /// [`crate::flow::npc_trainer_battle::advance_npc_trainer_battle`]'s
+    /// `UseMove` policy. `Some` freezes the overworld for the frame exactly
+    /// like [`Self::wild_battle`]/[`Self::first_battle`]/[`Self::rival_battle`]
+    /// do; never `Some` at the same time as any of the three.
+    pub(super) sight_trainer_battle: Option<battle::Battle>,
+    /// [`Self::rival_battle_outcome`]'s sibling for
+    /// [`Self::sight_trainer_battle`] (issue #264): cleared at trigger time,
+    /// set only on a real reported outcome.
+    sight_trainer_battle_outcome: Option<battle::BattleOutcome>,
+    /// Which [`assets::trainers::TrainerId`] [`Self::sight_trainer_battle`]
+    /// is being fought against, if any -- needed at battle-end to set that
+    /// trainer's own `FLAG_TRAINER_FLAGS_START + id` defeated flag on a win
+    /// ([`sight_trainer_trigger`]'s own module docs, item 4). Set the
+    /// instant the battle starts, cleared the instant it ends (win, loss, or
+    /// abort alike), so it is never stale once [`Self::sight_trainer_battle`]
+    /// is `None` again.
+    sight_trainer_id: Option<assets::trainers::TrainerId>,
 }
 
 impl OverworldPhase {
@@ -512,6 +538,9 @@ impl OverworldPhase {
             first_battle_outcome: None,
             rival_battle: None,
             rival_battle_outcome: None,
+            sight_trainer_battle: None,
+            sight_trainer_battle_outcome: None,
+            sight_trainer_id: None,
         };
         phase.copy_party_and_objects_from_save();
         // Route 101's own on-frame `VAR_ROUTE101_STATE` bump (issue #231,
@@ -599,6 +628,9 @@ impl OverworldPhase {
             first_battle_outcome: None,
             rival_battle: None,
             rival_battle_outcome: None,
+            sight_trainer_battle: None,
+            sight_trainer_battle_outcome: None,
+            sight_trainer_id: None,
         }
     }
 
@@ -658,6 +690,21 @@ impl OverworldPhase {
         self.rival_battle_outcome
     }
 
+    /// Whether a Route 103 sight-trainer battle currently owns the overworld
+    /// frame (issue #264). See [`Self::is_first_battle_active`].
+    #[must_use]
+    pub(crate) const fn is_sight_trainer_battle_active(&self) -> bool {
+        self.sight_trainer_battle.is_some()
+    }
+
+    /// The terminal result retained after a Route 103 sight-trainer battle
+    /// ends, or `None` before it resolves and after an abort (issue #264).
+    /// See [`Self::first_battle_outcome`].
+    #[must_use]
+    pub(crate) const fn sight_trainer_battle_outcome(&self) -> Option<battle::BattleOutcome> {
+        self.sight_trainer_battle_outcome
+    }
+
     /// `gDifferentSaveFile` (struct docs) -- what the start menu's SAVE
     /// flow branches on to decide which overwrite prompt to show.
     ///
@@ -685,19 +732,23 @@ impl OverworldPhase {
     }
 
     /// Whether any battle -- wild ([`Self::wild_battle`]), the Route 101
-    /// scripted first battle ([`Self::first_battle`]), or the Route 103
-    /// rival battle ([`Self::rival_battle`], issue #248) -- currently owns
-    /// the phase; one of the three gates
+    /// scripted first battle ([`Self::first_battle`]), the Route 103 rival
+    /// battle ([`Self::rival_battle`], issue #248), or a Route 103
+    /// sight-trainer battle ([`Self::sight_trainer_battle`], issue #264) --
+    /// currently owns the phase; one of the gates
     /// [`Self::start_menu_may_open`] checks. Mid-battle state (the live
     /// combat, the consumed RNG draws, the borrowed party lead) lives
     /// outside the `SaveBlock`s until the battle's driver finishes it, so a
     /// save taken now would persist the *pre-battle* overworld (#230
     /// review), and upstream's own start menu cannot open here either.
-    /// All three fields gate for the same reason; they are never `Some` at
+    /// All four fields gate for the same reason; they are never `Some` at
     /// once ([`Self::first_battle`] docs).
     #[must_use]
     pub(crate) const fn in_battle(&self) -> bool {
-        self.wild_battle.is_some() || self.first_battle.is_some() || self.rival_battle.is_some()
+        self.wild_battle.is_some()
+            || self.first_battle.is_some()
+            || self.rival_battle.is_some()
+            || self.sight_trainer_battle.is_some()
     }
 
     /// Whether a step is still in flight -- the transit frames themselves,
@@ -759,6 +810,10 @@ mod input_tests;
 /// rest of this list (issue #238).
 #[cfg(test)]
 mod route103_rival_tests;
+/// `sight_trainer_trigger`'s tests (issue #264) -- the same per-area split
+/// as [`route103_rival_tests`].
+#[cfg(test)]
+mod sight_trainer_tests;
 #[cfg(test)]
 mod step_tests;
 #[cfg(test)]

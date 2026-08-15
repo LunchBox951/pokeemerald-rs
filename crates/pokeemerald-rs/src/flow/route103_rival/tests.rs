@@ -15,9 +15,14 @@ use battle::{BattleOutcome, BattlePokemon, Dex, Ivs};
 use engine::rng::Rng;
 
 use super::{
-    advance_route103_rival_battle, route103_rival_for, start_route103_rival_battle,
-    trainer_party_personalities, PlayerStarter, Rival, RivalBattleError,
+    advance_route103_rival_battle, route103_rival_for, start_route103_rival_battle, PlayerStarter,
+    Rival, RivalBattleError,
 };
+// `trainer_party_personalities` lives in `npc_trainer_battle` since issue
+// #264's construction split (`route103_rival`'s own module docs); imported
+// from there directly rather than through a same-named pass-through this
+// module has no production caller for.
+use crate::flow::npc_trainer_battle::trainer_party_personalities;
 
 const TREECKO: u16 = 277;
 const TORCHIC: u16 = 280;
