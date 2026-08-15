@@ -134,6 +134,11 @@
     },
     "data/event_scripts.s": {
       "artifacts": {
+        "EventScript_WhiteOut": {
+          "reason": "event_scripts.s:585-588: call EverGrandeCity_HallOfFame_EventScript_ResetEliteFour, goto EventScript_ResetMrBriney. Both are content this port does not bundle -- no Elite Four state, no Mr. Briney NPC on any bundled map -- and DoWhiteOut runs this script before the message layer would show a 'You blacked out!' box, which this port also has no wiring for on this path. Dropped rather than stubbed: there is no typed home this port's white-out (src/overworld.c#DoWhiteOut, crates/pokeemerald-rs/src/flow/overworld_phase/white_out.rs) could plausibly grow into for either effect without bundling the Elite Four/Briney content first, unlike SetMoney/HealPlayerParty/SetWarpDestinationToLastHealLocation immediately after it in DoWhiteOut, all three of which are rewritten.",
+          "spec": "I-4",
+          "status": "dropped"
+        },
         "gStdScripts": {
           "reason": "gStdScripts's 11 labels transcribed as the StdScript enum, in table order; the scripts themselves are content, out of scope",
           "rust_target": "crates/engine/src/script/std_script.rs",
@@ -5306,7 +5311,7 @@
     "data/maps/InsideOfTruck": {
       "artifacts": {
         "InsideOfTruck_EventScript_SetIntroFlags": {
-          "reason": "The gender branch of the truck's exit-tile trigger, ported as its flag/var effect: assets::new_game_flags::TRUCK_INTRO_FLAGS_MALE/_FEMALE (5 setflags each) and TRUCK_INTRO_VARS_MALE/_FEMALE (VAR_LITTLEROOT_INTRO_STATE, VAR_LITTLEROOT_HOUSES_STATE_BRENDAN/_MAY), applied by crate::new_game::apply_truck_intro_flags at new-game init. Upstream this is a coord (trigger) event on all three truck exit tiles gated on VAR_LITTLEROOT_INTRO_STATE == 0 (data/maps/InsideOfTruck/map.json:85-112), so it fires exactly once on the way out of the truck and every real playthrough passes through it before reaching a house; this port skips the truck sequence entirely, so new-game init is the point the skipped flow would have produced the effect -- same 'the effect, without an interpreter' shape as the EventScript_ResetAllMapFlags application beside it. Load-bearing rather than cosmetic now that object-event visibility gates collision and rendering (issue #161): without it a fresh save reaches the player's house with the rival's Poke Ball spawned in the bedroom as an invisible collider and the rival's mother and sibling spawned in the player's own 1F (a duplicated mother plus another undrawn blocker). The two branches are exact Brendan/May mirrors, and a playerGender byte outside MALE/FEMALE applies neither, matching the script's own missing else. Not modelled: setrespawn HEAL_LOCATION_LITTLEROOT_TOWN_{BRENDANS,MAYS}_HOUSE_2F (no heal-location save state), setdynamicwarp MAP_LITTLEROOT_TOWN (no dynamic-warp destination state), the lockall/releaseall pair, and setflag FLAG_HIDE_MAP_NAME_POPUP (outside both gender branches; no map-name popup is rendered). The rest of this file -- InsideOfTruck_OnLoad's setmetatile calls, InsideOfTruck_OnResume's STEP_CB_TRUCK step callback, and the moving-box sign -- is untouched: the truck map itself is not bundled.",
+          "reason": "The gender branch of the truck's exit-tile trigger, ported as its flag/var effect: assets::new_game_flags::TRUCK_INTRO_FLAGS_MALE/_FEMALE (5 setflags each) and TRUCK_INTRO_VARS_MALE/_FEMALE (VAR_LITTLEROOT_INTRO_STATE, VAR_LITTLEROOT_HOUSES_STATE_BRENDAN/_MAY), applied by crate::new_game::apply_truck_intro_flags at new-game init. Upstream this is a coord (trigger) event on all three truck exit tiles gated on VAR_LITTLEROOT_INTRO_STATE == 0 (data/maps/InsideOfTruck/map.json:85-112), so it fires exactly once on the way out of the truck and every real playthrough passes through it before reaching a house; this port skips the truck sequence entirely, so new-game init is the point the skipped flow would have produced the effect -- same 'the effect, without an interpreter' shape as the EventScript_ResetAllMapFlags application beside it. Load-bearing rather than cosmetic now that object-event visibility gates collision and rendering (issue #161): without it a fresh save reaches the player's house with the rival's Poke Ball spawned in the bedroom as an invisible collider and the rival's mother and sibling spawned in the player's own 1F (a duplicated mother plus another undrawn blocker). The two branches are exact Brendan/May mirrors, and a playerGender byte outside MALE/FEMALE applies neither, matching the script's own missing else. As of issue #261, the leading setrespawn HEAL_LOCATION_LITTLEROOT_TOWN_{BRENDANS,MAYS}_HOUSE_2F line IS modelled too -- crate::new_game::default_last_heal_location reproduces its SetLastHealLocationWarp effect (gender-branched, same fallback-to-no-op for an out-of-range gender byte), applied to SaveBlock1::last_heal_location alongside this artifact's own flags/vars at init_save_blocks time; see src/overworld.c#SetLastHealLocationWarp for the full citation. Still not modelled: setdynamicwarp MAP_LITTLEROOT_TOWN (no dynamic-warp destination state), the lockall/releaseall pair, and setflag FLAG_HIDE_MAP_NAME_POPUP (outside both gender branches; no map-name popup is rendered). The rest of this file -- InsideOfTruck_OnLoad's setmetatile calls, InsideOfTruck_OnResume's STEP_CB_TRUCK step callback, and the moving-box sign -- is untouched: the truck map itself is not bundled.",
           "rust_target": "crates/assets/src/new_game_flags.rs",
           "spec": "I-3",
           "status": "stubbed"
@@ -7184,10 +7189,13 @@
     "data/maps/OldaleTown": {
       "artifacts": {
         "OldaleTown_OnTransition": {
-          "reason": "data/maps/OldaleTown/scripts.inc:5-11 (MAP_SCRIPT_ON_TRANSITION). NOT modelled -- recorded here because issue #248 makes Oldale Town reachable while overworld_phase::connections runs no on-transition effect for it: (1) 'call Common_EventScript_SetupRivalGfxId' runs here too, but route103_rival_trigger::setup_rival_gfx_id_on_transition is gated to MAP_ROUTE103 only -- unobservable today because Oldale's rival object event is hide-flag-gated (FLAG_HIDE_OLDALE_TOWN_RIVAL, in assets::new_game_flags' initial set, cleared only by RivalEnd's unmodelled writes); (2) setflag FLAG_VISITED_OLDALE_TOWN; (3) call_if_unset FLAG_ADVENTURE_STARTED -> OldaleTown_EventScript_BlockWestEntrance (setobjectxyperm LOCALID_FOOTPRINTS_MAN 1,11 + setobjectmovementtype MOVEMENT_TYPE_FACE_LEFT) -- FLAG_ADVENTURE_STARTED is set only by the unmodelled Pokedex handout (LittlerootTown_ProfessorBirchsLab/scripts.inc:519), so upstream ALWAYS repositions this NPC before the player can first see Oldale; the port keeps the map.json template tile (8,9), a real walkability divergence: an invisible collision blocker at (8,9) (walkable upstream) while (1,11) (blocked upstream) stays open; (4) call_if_unset FLAG_RECEIVED_POTION_OLDALE -> OldaleTown_EventScript_MoveMartEmployee (setobjectxyperm LOCALID_OLDALE_MART_EMPLOYEE 13,14 + MOVEMENT_TYPE_FACE_DOWN) -- same shape: port blocks template (13,7), leaves upstream's (13,14) open; (5) call_if_set FLAG_ADVENTURE_STARTED -> VAR_OLDALE_TOWN_STATE=1 (unused upstream, gate unreachable here). The repositionings and NPC visibility are tracked with issue #262's sprite-binding work; until they land, Oldale's walkable geometry deliberately diverges from upstream as described.",
+          "reason": "data/maps/OldaleTown/scripts.inc:5-11 (MAP_SCRIPT_ON_TRANSITION). NOT modelled -- recorded here because issue #248 makes Oldale Town reachable while overworld_phase::connections runs no on-transition effect for it: (1) 'call Common_EventScript_SetupRivalGfxId' runs here too, but route103_rival_trigger::setup_rival_gfx_id_on_transition is gated to MAP_ROUTE103 only -- unobservable today because Oldale's rival object event is hide-flag-gated (FLAG_HIDE_OLDALE_TOWN_RIVAL, in assets::new_game_flags' initial set, cleared only by RivalEnd's unmodelled writes); (2) setflag FLAG_VISITED_OLDALE_TOWN; (3) call_if_unset FLAG_ADVENTURE_STARTED -> OldaleTown_EventScript_BlockWestEntrance (setobjectxyperm LOCALID_FOOTPRINTS_MAN 1,11 + setobjectmovementtype MOVEMENT_TYPE_FACE_LEFT) -- FLAG_ADVENTURE_STARTED is set only by the unmodelled Pokedex handout (LittlerootTown_ProfessorBirchsLab/scripts.inc:519), so upstream ALWAYS repositions this NPC before the player can first see Oldale; the port keeps the map.json template tile (8,9), a real walkability divergence: an invisible collision blocker at (8,9) (walkable upstream) while (1,11) (blocked upstream) stays open; (4) call_if_unset FLAG_RECEIVED_POTION_OLDALE -> OldaleTown_EventScript_MoveMartEmployee (setobjectxyperm LOCALID_OLDALE_MART_EMPLOYEE 13,14 + MOVEMENT_TYPE_FACE_DOWN) -- same shape: port blocks template (13,7), leaves upstream's (13,14) open; (5) call_if_set FLAG_ADVENTURE_STARTED -> VAR_OLDALE_TOWN_STATE=1 (unused upstream, gate unreachable here). The NPC-visibility half of this has since landed: issue #262 binds both repositioned NPCs' sprites (LOCALID_FOOTPRINTS_MAN/OBJ_EVENT_GFX_MANIAC and LOCALID_OLDALE_MART_EMPLOYEE/OBJ_EVENT_GFX_MART_EMPLOYEE), so they now draw rather than standing as invisible blockers -- but at their map.json template tiles, since the setobjectxyperm repositionings above are still unmodelled. That repositioning half -- the remaining walkable-geometry divergence from upstream, at (8,9)/(1,11) and (13,7)/(13,14) -- is tracked by issue #281.",
           "rust_target": "crates/pokeemerald-rs/src/flow/overworld_phase/connections.rs",
           "spec": "I-5",
           "status": "stubbed"
+        },
+        "OldaleTown_ScriptsRemainder": {
+          "status": "pending"
         },
         "header": {
           "reason": "map.json header fields (id, layout, music id, region_map_section, requires_flash, weather, map_type, allow_cycling/escaping/running, show_map_name, battle_scene) and connections transcribed to a typed MapHeader in crates/assets/src/map_headers.rs. object_events/warp_events/coord_events/bg_events (and shared_events_map/shared_scripts_map) are NOT covered here — issue #77 — so the file's own status stays pending and only this 'header' artifact is terminal.",
@@ -7198,7 +7206,7 @@
       },
       "category": "data.map",
       "kind": "dir",
-      "reason": "object_events/warp_events/coord_events/bg_events transcribed to a typed MapEvents entry in crates/assets/src/map_events.rs (issue #77), completing this map's ledger entry alongside the already-ported 'header' artifact.",
+      "reason": "map.json only: header fields (separate 'header' artifact) and object_events/warp_events/coord_events/bg_events transcribed to a typed MapEvents entry in crates/assets/src/map_events.rs (issue #77). data/maps/OldaleTown/scripts.inc is NOT covered by this status: MAP_SCRIPT_ON_TRANSITION and everything it calls (OldaleTown_EventScript_SetOldaleState/BlockWestEntrance/MoveMartEmployee, lines 5-26) retain the terminal OldaleTown_OnTransition artifact; pending OldaleTown_ScriptsRemainder covers the TownSign sign and Girl NPC dialog (lines 28-34); the MartEmployee potion-giveaway dialog and mart-escort flow (giveitem ITEM_POTION, lines 36-91) with the six referenced movement macros OldaleTown_Movement_Employee{East,South,North} (lines 93-126) and OldaleTown_Movement_Player{East,South,North} (lines 144-174), excluding the unreferenced upstream Unknown1/Unknown2 macros; the four Common_EventScript_Show{PokemonCenter,Pokemart}Sign bg_events (map.json:166-197, defined in data/event_scripts.s:662-668); the FootprintsMan dialog and west-entrance path-block interaction (lines 190-216); and the Oldale-side rival farewell sequence (OldaleTown_EventScript_Rival/RivalTrigger1-3/ShowRivalMessage/RivalFinish/DoExitMovement1-2, lines 218-294), gated by VAR_OLDALE_RIVAL_STATE and handed off from Route103_EventScript_RivalEnd.",
       "rust_target": "crates/assets/src/map_events.rs",
       "spec": "S-4",
       "status": "ported"
@@ -7612,7 +7620,7 @@
     "data/maps/Route103": {
       "artifacts": {
         "Route103_EventScript_Rival": {
-          "reason": "data/maps/Route103/scripts.inc:19-56 -- the rival's own interaction script (local_id 2, data/maps/Route103/map.json's own object_events, already ported verbatim into assets::MapEventsTable, the parent dir entry's own header/events artifacts). Issue #248's cut: route103_rival_trigger::is_rival_trigger recognizes this exact script name on the facing object event the instant an A press lands, and OverworldPhase::begin_route103_rival_battle then calls flow::route103_rival::start_route103_rival_battle directly in this script's place, deriving Rival from SaveBlock2::player_gender (Rival::for_gender) and PlayerStarter from the party lead's real species (PlayerStarter::from_species) -- VAR_STARTER_MON itself is not modelled. The BATTLE_TYPE_TRAINER fight happens, but none of this script's own cutscene does: no lockall/checkplayergender-for-the-greeting/msgbox (Route103_Text_{May,Brendan}Route103Pokemon/LetsBattle/TimeToHeadBack/Defeated), no playbgm MUS_ENCOUNTER_{MAY,BRENDAN}, no applymovement (Common_Movement_FacePlayer/_ExclamationMark/_Delay48), no switch VAR_FACING exit-movement cutscene (Route103_EventScript_RivalExit and its Route103_Movement_* siblings), none of it. Route103_EventScript_RivalEnd's own removeobject is ported narrowly as advance_route103_rival_battle_frame's FLAG_HIDE_ROUTE_103_RIVAL set, on BattleOutcome::PlayerWon only -- see that function's own reason for the honest loss decision (no whiteout is modelled, so upstream's own routing of a loss to CB2_WhiteOut instead of RivalEnd is mirrored by a loss leaving the rival standing and interactable -- though not re-fightable, the fainted lead failing closed at FaintedBattler until issue #261's white-out/heal path lands). RivalEnd's other seven lines (setvar VAR_BIRCH_LAB_STATE/VAR_OLDALE_RIVAL_STATE, setflag FLAG_DEFEATED_RIVAL_ROUTE103, clearflag FLAG_HIDE_LITTLEROOT_TOWN_BIRCHS_LAB_RIVAL/FLAG_HIDE_OLDALE_TOWN_RIVAL, savebgm, fadedefaultbgm) are NOT modelled -- each only unlocks content this port cannot reach yet (Birch's lab post-battle dialog, Oldale's own rival encounter), so writing them would be dead state.",
+          "reason": "data/maps/Route103/scripts.inc:19-56 -- the rival's own interaction script (local_id 2, data/maps/Route103/map.json's own object_events, already ported verbatim into assets::MapEventsTable, the parent dir entry's own header/events artifacts). Issue #248's cut: route103_rival_trigger::is_rival_trigger recognizes this exact script name on the facing object event the instant an A press lands, and OverworldPhase::begin_route103_rival_battle then calls flow::route103_rival::start_route103_rival_battle directly in this script's place, deriving Rival from SaveBlock2::player_gender (Rival::for_gender) and PlayerStarter from the party lead's real species (PlayerStarter::from_species) -- VAR_STARTER_MON itself is not modelled. The BATTLE_TYPE_TRAINER fight happens, but none of this script's own cutscene does: no lockall/checkplayergender-for-the-greeting/msgbox (Route103_Text_{May,Brendan}Route103Pokemon/LetsBattle/TimeToHeadBack/Defeated), no playbgm MUS_ENCOUNTER_{MAY,BRENDAN}, no applymovement (Common_Movement_FacePlayer/_ExclamationMark/_Delay48), no switch VAR_FACING exit-movement cutscene (Route103_EventScript_RivalExit and its Route103_Movement_* siblings), none of it. Route103_EventScript_RivalEnd's own removeobject is ported narrowly as advance_route103_rival_battle_frame's FLAG_HIDE_ROUTE_103_RIVAL set, on BattleOutcome::PlayerWon only. A loss instead routes through OverworldPhase::white_out as of issue #261 -- CB2_EndTrainerBattle's IsPlayerDefeated branch (src/battle_setup.c:1333-1338) -> CB2_WhiteOut, which heals the party, halves the player's money, and warps to the last heal location (see src/overworld.c#DoWhiteOut for the full citation, and src/battle_setup.c#DoTrainerBattle for the driver side). The rival's own hide flag stays clear on that path exactly as it does upstream, RivalEnd (and so removeobject) never being reached on a loss at all -- but the player is warped off Route 103 in the same frame the loss is reported, so the un-hidden rival is no longer standing next to anyone. RivalEnd's other seven lines (setvar VAR_BIRCH_LAB_STATE/VAR_OLDALE_RIVAL_STATE, setflag FLAG_DEFEATED_RIVAL_ROUTE103, clearflag FLAG_HIDE_LITTLEROOT_TOWN_BIRCHS_LAB_RIVAL/FLAG_HIDE_OLDALE_TOWN_RIVAL, savebgm, fadedefaultbgm) are NOT modelled -- each only unlocks content this port cannot reach yet (Birch's lab post-battle dialog, Oldale's own rival encounter), so writing them would be dead state.",
           "rust_target": "crates/pokeemerald-rs/src/flow/overworld_phase/route103_rival_trigger.rs",
           "spec": "I-5",
           "status": "stubbed"
@@ -7623,6 +7631,9 @@
           "spec": "I-5",
           "status": "stubbed"
         },
+        "Route103_ScriptsRemainder": {
+          "status": "pending"
+        },
         "header": {
           "reason": "map.json header fields (id, layout, music id, region_map_section, requires_flash, weather, map_type, allow_cycling/escaping/running, show_map_name, battle_scene) and connections transcribed to a typed MapHeader in crates/assets/src/map_headers.rs. object_events/warp_events/coord_events/bg_events (and shared_events_map/shared_scripts_map) are NOT covered here — issue #77 — so the file's own status stays pending and only this 'header' artifact is terminal.",
           "rust_target": "crates/assets/src/map_headers.rs",
@@ -7632,7 +7643,7 @@
       },
       "category": "data.map",
       "kind": "dir",
-      "reason": "object_events/warp_events/coord_events/bg_events transcribed to a typed MapEvents entry in crates/assets/src/map_events.rs (issue #77), completing this map's ledger entry alongside the already-ported 'header' artifact.",
+      "reason": "map.json only: header fields (separate 'header' artifact) and object_events/warp_events/coord_events/bg_events transcribed to a typed MapEvents entry in crates/assets/src/map_events.rs (issue #77). data/maps/Route103/scripts.inc is NOT covered by this status: MAP_SCRIPT_ON_TRANSITION (lines 6-9) and the rival battle (Route103_EventScript_Rival and its callees, lines 20-188) retain the terminal Route103_OnTransition and Route103_EventScript_Rival artifacts. Pending Route103_ScriptsRemainder covers Route103_OnLoad and its FLAG_SYS_GAME_CLEAR-gated Altering Cave entrance metatile swap (Route103_EventScript_OpenAlteringCave, lines 11-18); the Boy/Man NPC dialog and RouteSign sign (lines 190-200); the nine TRAINER_TYPE_NORMAL sight-trainer object events (Daisy, Amy, Liv, Andrew, Miguel, Rhett, Marcos, Isabelle, Pete), mapping to eight trainer ids because Amy and Liv share TRAINER_AMY_AND_LIV_1 (lines 202-287; issue #264); the two item balls Route103_EventScript_ItemGuardSpec/ItemPPUp for ITEM_GUARD_SPEC/ITEM_PP_UP (defined in data/scripts/item_ball_scripts.inc:5-11); the two cuttable trees using EventScript_CutTree (defined in data/scripts/field_move_scripts.inc:2-17); the three OBJ_EVENT_GFX_BERRY_TREE object events (map.json:107-145) using BerryTreeScript (defined in data/scripts/berry_tree.inc); and the OBJ_EVENT_GFX_PROF_BIRCH object event using ProfBirch_EventScript_RatePokedexOrRegister (defined in data/scripts/prof_birch.inc).",
       "rust_target": "crates/assets/src/map_events.rs",
       "spec": "S-4",
       "status": "ported"
@@ -24585,7 +24596,7 @@
     "src/battle_setup.c": {
       "artifacts": {
         "BattleSetup_StartWildBattle": {
-          "reason": "battle_setup.c:389-395 (BattleSetup_StartWildBattle itself; its non-Safari arm DoStandardWildBattle is :402-419, and the battle transition that schedules is CreateBattleStartTask :414 with its Task_BattleStart :351-376). What is modelled is the handoff itself: flow::wild_encounter::start_wild_battle builds the rolled wild mon through CreateWildMon's RNG path (battle::build_wild_pokemon) with GiveBoxMonInitialMoveset's real level-up moveset, then constructs a battle::Battle around the player's lead mon -- all off the same single Random() stream the encounter roll drew from, so the draw order across the overworld/battle boundary is upstream's. NOT modelled: gBattleTypeFlags / BATTLE_TYPE_FIRST_BATTLE, ScriptContext_SetupScript(EventScript_StartWildBattle) and the whole script-driven entry, LockPlayerFieldControls, the battle transition (BattleTransition_StartOnField / IsBattleTransitionDone) and CleanupOverworldWindowsAndTilemaps, SetMainCallback2(CB2_InitBattle) and CB2_EndWildBattle's return path, ClearPoisonStepCounter, IncrementGameStat(GAME_STAT_TOTAL_BATTLES / GAME_STAT_WILD_BATTLES) and IncrementDailyWildBattles, and the whole battle presentation (backdrop, sprites, message box, and the action menu). NOT modelled either, and the reason this port can hold a state upstream cannot: the player-loss path. CB2_EndWildBattle's IsPlayerDefeated branch (:602-616) routes to CB2_WhiteOut (overworld.c:1550-1570), whose DoWhiteOut (overworld.c:358-366) runs EventScript_WhiteOut, halves the player's money, calls HealPlayerParty, and warps to the last heal location -- none of which exists here (no script engine, no money, no heal locations). So flow::wild_encounter::advance_wild_battle writes the post-battle player mon back unconditionally, BattleOutcome::PlayerLost included, leaving a fainted lead standing in the grass. The write-back resets in-battle stat stages to neutral first: upstream keeps them in gBattleMons[].statStages only, set to DEFAULT_STAT_STAGE when each battler's gBattleMons entry is built at battle entry (BattleIntroDrawTrainersOrMonsSprites, battle_main.c:3423-3424) and again at switch-in (SwitchInClearSetData, :3161); the party's struct Pokemon has no stage field, so a String Shot taken in one encounter can never slow the next one. flow::wild_encounter::lead_can_fight fails closed at the one place that gap would be RNG-observable: while the lead mon is fainted the encounter roll is refused outright, so a grass step draws nothing at all instead of spending a wild-mon construction plus Battle::new's gRandomTurnNumber on a battle that cannot be fought. Suppressing it costs no fidelity precisely because upstream can never reach a grass step with a fainted-only party. The same fail-closed no-draw policy gates whole maps: upstream never rejects a wild battle, so a land table that can roll a moveset the turn engine cannot execute yet (Route 102's level-3 Seedot knows Bide/Harden) is screened up front (flow::wild_encounter::map_wild_table_fightable over battle::ensure_wild_startable, computed per map transition) and encounter rolls are disabled on that map entirely -- no draws with no upstream counterpart, widening automatically as move support grows (PR #207 review round 3). With no action menu, OverworldPhase drives the encounter headlessly with a run attempt every turn -- a stand-in for the player's choice, not a modelled behaviour; every rule it exercises (turn order, the wild mon's move pick, escape odds, damage, fainting) is the real crates/battle engine.",
+          "reason": "battle_setup.c:389-395 (BattleSetup_StartWildBattle itself; its non-Safari arm DoStandardWildBattle is :402-419, and the battle transition that schedules is CreateBattleStartTask :414 with its Task_BattleStart :351-376). What is modelled is the handoff itself: flow::wild_encounter::start_wild_battle builds the rolled wild mon through CreateWildMon's RNG path (battle::build_wild_pokemon) with GiveBoxMonInitialMoveset's real level-up moveset, then constructs a battle::Battle around the player's lead mon -- all off the same single Random() stream the encounter roll drew from, so the draw order across the overworld/battle boundary is upstream's. NOT modelled: gBattleTypeFlags / BATTLE_TYPE_FIRST_BATTLE, ScriptContext_SetupScript(EventScript_StartWildBattle) and the whole script-driven entry, LockPlayerFieldControls, the battle transition (BattleTransition_StartOnField / IsBattleTransitionDone) and CleanupOverworldWindowsAndTilemaps, SetMainCallback2(CB2_InitBattle) and CB2_EndWildBattle's return path, ClearPoisonStepCounter, IncrementGameStat(GAME_STAT_TOTAL_BATTLES / GAME_STAT_WILD_BATTLES) and IncrementDailyWildBattles, and the whole battle presentation (backdrop, sprites, message box, and the action menu). The player-loss path IS modelled as of issue #261: CB2_EndWildBattle's IsPlayerDefeated branch (:602-616) routing to CB2_WhiteOut is now flow::overworld_phase::white_out::OverworldPhase::white_out, called by advance_wild_battle_frame the instant BattleOutcome::PlayerLost is reported -- see src/overworld.c#DoWhiteOut for the full citation. The fail-closed lead_can_fight guard survives, narrowed: an ordinary wild or trainer loss heals the lead in the same frame the outcome is reported, so those paths can never again roll with a fainted lead -- but a lost Route 101 first battle still leaves one standing in the field (CB2_EndFirstBattle, :950-954, has no IsPlayerDefeated branch, and issue #251's script conclusion is not yet modelled), so the guard still refuses the roll in exactly that residual state (issue #261 review). The write-back still resets in-battle stat stages to neutral first: upstream keeps them in gBattleMons[].statStages only, set to DEFAULT_STAT_STAGE when each battler's gBattleMons entry is built at battle entry (BattleIntroDrawTrainersOrMonsSprites, battle_main.c:3423-3424) and again at switch-in (SwitchInClearSetData, :3161); the party's struct Pokemon has no stage field, so a String Shot taken in one encounter can never slow the next one. The same fail-closed no-draw policy still gates whole maps for an unrelated reason: upstream never rejects a wild battle, so a land table that can roll a moveset the turn engine cannot execute yet (Route 102's level-3 Seedot knows Bide/Harden) is screened up front (flow::wild_encounter::map_wild_table_fightable over battle::ensure_wild_startable, computed per map transition) and encounter rolls are disabled on that map entirely -- no draws with no upstream counterpart, widening automatically as move support grows (PR #207 review round 3). With no action menu, OverworldPhase drives the encounter headlessly with a run attempt every turn -- a stand-in for the player's choice, not a modelled behaviour; every rule it exercises (turn order, the wild mon's move pick, escape odds, damage, fainting) is the real crates/battle engine.",
           "rust_target": "crates/pokeemerald-rs/src/flow/wild_encounter.rs",
           "spec": "I-4",
           "status": "stubbed"
@@ -24603,7 +24614,7 @@
           "status": "stubbed"
         },
         "DoTrainerBattle": {
-          "reason": "battle_setup.c:459 (DoTrainerBattle, with BattleSetup_StartTrainerBattle at :1272 and CB2_EndTrainerBattle at :1327). The battle rules/construction/driver issue #237 built here (gBattleTypeFlags = BATTLE_TYPE_TRAINER, CreateNPCTrainerParty via flow::route103_rival::start_route103_rival_battle -> battle::Battle::new_trainer, advance_route103_rival_battle's headless PlayerAction::UseMove(0) driver) are now reachable from real play (issue #248): overworld_phase::route103_rival_trigger::begin_route103_rival_battle calls into this module the instant the player faces Route 103's rival and presses A (see data/maps/Route103#Route103_EventScript_Rival's own ledger entry for what that trigger covers and defers -- the cutscene dressing, the seven unmodelled RivalEnd lines). What is STILL not modelled, unchanged from issue #237: CB2_EndTrainerBattle's IsPlayerDefeated branch (:1333-:1338) routing to CB2_WhiteOut -- the same white-out deferral already recorded on BattleSetup_StartWildBattle, so a lost trainer battle leaves a fainted lead written back and the rival still standing and interactable -- but not re-fightable: a fresh attempt fails closed at FaintedBattler until the white-out/heal path lands (issue #261), where upstream would have healed the party, halved the player's money, and warped to a Pokemon Center (route103_rival_trigger's own 'honest loss decision' docs record why this is the deliberate call, not an oversight); and BattleEvent::MoneyGained's credit, there being no money field to add it to (src/battle_script_commands.c#Cmd_getmoneyreward).",
+          "reason": "battle_setup.c:459 (DoTrainerBattle, with BattleSetup_StartTrainerBattle at :1272 and CB2_EndTrainerBattle at :1327). The battle rules/construction/driver issue #237 built here (gBattleTypeFlags = BATTLE_TYPE_TRAINER, CreateNPCTrainerParty via flow::route103_rival::start_route103_rival_battle -> battle::Battle::new_trainer, advance_route103_rival_battle's headless PlayerAction::UseMove(0) driver) are reachable from real play (issue #248): overworld_phase::route103_rival_trigger::begin_route103_rival_battle calls into this module the instant the player faces Route 103's rival and presses A (see data/maps/Route103#Route103_EventScript_Rival's own ledger entry for what that trigger covers and defers -- the cutscene dressing, the seven unmodelled RivalEnd lines). CB2_EndTrainerBattle's IsPlayerDefeated branch (:1333-:1338) routing to CB2_WhiteOut IS modelled as of issue #261: overworld_phase::route103_rival_trigger::advance_route103_rival_battle_frame calls the same flow::overworld_phase::white_out::OverworldPhase::white_out the wild-battle path uses on BattleOutcome::PlayerLost -- see src/overworld.c#DoWhiteOut for the full citation. The formerly-emergent FaintedBattler dead end this file's own reason used to record (a fresh attempt after a loss failing closed at Battle::new_trainer, since nothing healed the party) no longer arises: a loss heals the lead in the same frame it is reported. Still NOT modelled: BattleEvent::MoneyGained's credit on a WIN, there being no wallet-credit wiring yet (src/battle_script_commands.c#Cmd_getmoneyreward) -- issue #261's own scope is the loss path (halving), not prize money on a win.",
           "rust_target": "crates/pokeemerald-rs/src/flow/route103_rival.rs",
           "spec": "I-5",
           "status": "stubbed"
@@ -25320,7 +25331,7 @@
     "src/data/object_events/object_event_graphics_info_pointers.h": {
       "artifacts": {
         "OBJ_EVENT_GFX_to_graphics_info": {
-          "reason": "npc::resolve_sprite_source is a bounded, explicit re-derivation of this table's OBJ_EVENT_GFX_* -> gObjectEventGraphicsInfo_* mapping (plus each pointed-to struct's own .images/.paletteTag fields, object_event_pic_tables.h/object_event_graphics.h). Partial coverage, stated exactly: it has 11 resolving arms -- 8 'standard' 16x32 NPCs and the two rival variants (all ten fixed-id arms resolving for either PlayerCharacter), plus the OBJ_EVENT_GFX_VAR_0 live-var arm below (issue #248) -- against the 46 distinct graphics ids the nine bundled maps' (six Littleroot-family, Route 101, Oldale Town, Route 103) object events actually reference; a test pins that exact drawn/not-drawn partition, and that it is gender-independent, so a newly reachable standard NPC cannot silently stop drawing. The rival pair is deliberately NOT gender-filtered (issue #161 review): gObjectEventGraphicsInfo_RivalBrendanNormal/_RivalMayNormal (object_event_graphics_info.h:1920-1937, :2015-2032) simply reuse the corresponding protagonist's own sPicTable_* and OBJ_EVENT_PAL_TAG_*, with no rival-specific art existing at all -- and the rival a player can actually meet is always the OPPOSITE protagonist's object event, since the two Littleroot houses are mirrored maps hardcoding their own resident's id and the intro warp picks which is home (LittlerootTown/scripts.inc:116/:127). The port keeps upstream's PALSLOT_NPC_SPECIAL vs PALSLOT_PLAYER distinction as a separate palette bank, so a rival and the player can be on screen together. The remaining 36 reachable ids on a fresh store (the OBJ_EVENT_GFX_VAR_* decorations, item balls, dolls, the truck, the non-16x32 shapes Vigoroth/32x32 and the ninja boy/16x16, Route 101's three unresolved ids, and the Oldale Town / Route 103 background NPCs -- issue #262) and every one of this 239-entry table's other rows are untracked: resolve_sprite_source returns None for them, so their object events are still hide-flag-filtered and interaction-eligible but draw no sprite -- a follow-on slice's job to extend, not a silent mis-render. GetObjectEventGraphicsInfo's OBJ_EVENT_GFX_VARS -> VarGetObjectEventGraphicsId indirection (event_object_movement.c:1914-1931) is now modelled for n == 0 only, narrowed to the two rival ids: the OBJ_EVENT_GFX_VAR_0 arm reads VAR_OBJ_GFX_ID_0 and resolves a protagonist sheet exactly when the var holds OBJ_EVENT_GFX_RIVAL_BRENDAN_NORMAL's or _MAY_NORMAL's numeric id (issue #248, Route 103's rival). VAR_1..VAR_B, and any non-rival var value (a real decoration id), still resolve to None -- the decoration system remains unmodelled.",
+          "reason": "npc::resolve_sprite_source is a bounded, explicit re-derivation of this table's OBJ_EVENT_GFX_* -> gObjectEventGraphicsInfo_* mapping (plus each pointed-to struct's own .images/.paletteTag fields, object_event_pic_tables.h/object_event_graphics.h). Partial coverage, stated exactly: it has 23 resolving arms -- 20 'standard' 16x32 NPCs (the original 8 plus, since issue #262, Oldale Town's girl/mart employee/footprints man and Route 103's black belt/boy 1/fisherman/man 3/man 5/pokefan m/swimmer f/swimmer m/woman 2) and the two rival variants (all 22 fixed-id arms resolving for either PlayerCharacter), plus the OBJ_EVENT_GFX_VAR_0 live-var arm below (issue #248) -- against the 46 distinct graphics ids the nine bundled maps' (six Littleroot-family, Route 101, Oldale Town, Route 103) object events actually reference; a test pins that exact drawn/not-drawn partition, and that it is gender-independent, so a newly reachable standard NPC cannot silently stop drawing. The rival pair is deliberately NOT gender-filtered (issue #161 review): gObjectEventGraphicsInfo_RivalBrendanNormal/_RivalMayNormal (object_event_graphics_info.h:1920-1937, :2015-2032) simply reuse the corresponding protagonist's own sPicTable_* and OBJ_EVENT_PAL_TAG_*, with no rival-specific art existing at all -- and the rival a player can actually meet is always the OPPOSITE protagonist's object event, since the two Littleroot houses are mirrored maps hardcoding their own resident's id and the intro warp picks which is home (LittlerootTown/scripts.inc:116/:127). The port keeps upstream's PALSLOT_NPC_SPECIAL vs PALSLOT_PLAYER distinction as a separate palette bank, so a rival and the player can be on screen together. The remaining 24 reachable ids on a fresh store (the OBJ_EVENT_GFX_VAR_* decorations, item balls, dolls, the truck, the two non-16x32 shapes Vigoroth/32x32 and the ninja boy/16x16 -- the rival's sibling, declared only by LittlerootTown_BrendansHouse_1F/map.json and LittlerootTown_MaysHouse_1F/map.json, never by Route 103 -- Route 103's own berry tree and cuttable tree props, and Route 101's three unresolved ids) and every one of this 239-entry table's other rows are untracked: resolve_sprite_source returns None for them, so their object events are still hide-flag-filtered and interaction-eligible but draw no sprite -- a follow-on slice's job to extend, not a silent mis-render. GetObjectEventGraphicsInfo's OBJ_EVENT_GFX_VARS -> VarGetObjectEventGraphicsId indirection (event_object_movement.c:1914-1931) is now modelled for n == 0 only, narrowed to the two rival ids: the OBJ_EVENT_GFX_VAR_0 arm reads VAR_OBJ_GFX_ID_0 and resolves a protagonist sheet exactly when the var holds OBJ_EVENT_GFX_RIVAL_BRENDAN_NORMAL's or _MAY_NORMAL's numeric id (issue #248, Route 103's rival). VAR_1..VAR_B, and any non-rival var value (a real decoration id), still resolve to None -- the decoration system remains unmodelled.",
           "rust_target": "crates/pokeemerald-rs/src/overworld/npc.rs",
           "spec": "I-3",
           "status": "stubbed"
@@ -25332,6 +25343,18 @@
     },
     "src/data/object_events/object_event_pic_tables.h": {
       "artifacts": {
+        "sPicTable_BlackBelt": {
+          "reason": "This pic table's 9-frame overworld_frame(<pic>, 2, 4, n) layout is the same one crates/pokeemerald-rs/src/overworld/avatar.rs::pack_people_sheet_frames already packs for the player's own walking sheet; npc::resolve_sprite_source resolves the matching OBJ_EVENT_GFX_* id to this pic's own sprite/<name> pack entry, sharing that one packer rather than needing a per-table decode.",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/npc.rs",
+          "spec": "I-3",
+          "status": "rewritten"
+        },
+        "sPicTable_Boy1": {
+          "reason": "This pic table's 9-frame overworld_frame(<pic>, 2, 4, n) layout is the same one crates/pokeemerald-rs/src/overworld/avatar.rs::pack_people_sheet_frames already packs for the player's own walking sheet; npc::resolve_sprite_source resolves the matching OBJ_EVENT_GFX_* id to this pic's own sprite/<name> pack entry, sharing that one packer rather than needing a per-table decode.",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/npc.rs",
+          "spec": "I-3",
+          "status": "rewritten"
+        },
         "sPicTable_Boy2": {
           "reason": "This pic table's 9-frame overworld_frame(<pic>, 2, 4, n) layout is the same one crates/pokeemerald-rs/src/overworld/avatar.rs::pack_people_sheet_frames already packs for the player's own walking sheet; npc::resolve_sprite_source resolves the matching OBJ_EVENT_GFX_* id to this pic's own sprite/<name> pack entry, sharing that one packer rather than needing a per-table decode.",
           "rust_target": "crates/pokeemerald-rs/src/overworld/npc.rs",
@@ -25350,6 +25373,42 @@
           "spec": "I-3",
           "status": "rewritten"
         },
+        "sPicTable_Fisherman": {
+          "reason": "This pic table's 9-frame overworld_frame(<pic>, 2, 4, n) layout is the same one crates/pokeemerald-rs/src/overworld/avatar.rs::pack_people_sheet_frames already packs for the player's own walking sheet; npc::resolve_sprite_source resolves the matching OBJ_EVENT_GFX_* id to this pic's own sprite/<name> pack entry, sharing that one packer rather than needing a per-table decode.",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/npc.rs",
+          "spec": "I-3",
+          "status": "rewritten"
+        },
+        "sPicTable_Girl3": {
+          "reason": "This pic table's 9-frame overworld_frame(<pic>, 2, 4, n) layout is the same one crates/pokeemerald-rs/src/overworld/avatar.rs::pack_people_sheet_frames already packs for the player's own walking sheet; npc::resolve_sprite_source resolves the matching OBJ_EVENT_GFX_* id to this pic's own sprite/<name> pack entry, sharing that one packer rather than needing a per-table decode.",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/npc.rs",
+          "spec": "I-3",
+          "status": "rewritten"
+        },
+        "sPicTable_Man3": {
+          "reason": "This pic table's 9-frame overworld_frame(<pic>, 2, 4, n) layout is the same one crates/pokeemerald-rs/src/overworld/avatar.rs::pack_people_sheet_frames already packs for the player's own walking sheet; npc::resolve_sprite_source resolves the matching OBJ_EVENT_GFX_* id to this pic's own sprite/<name> pack entry, sharing that one packer rather than needing a per-table decode.",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/npc.rs",
+          "spec": "I-3",
+          "status": "rewritten"
+        },
+        "sPicTable_Man5": {
+          "reason": "This pic table's 9-frame overworld_frame(<pic>, 2, 4, n) layout is the same one crates/pokeemerald-rs/src/overworld/avatar.rs::pack_people_sheet_frames already packs for the player's own walking sheet; npc::resolve_sprite_source resolves the matching OBJ_EVENT_GFX_* id to this pic's own sprite/<name> pack entry, sharing that one packer rather than needing a per-table decode.",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/npc.rs",
+          "spec": "I-3",
+          "status": "rewritten"
+        },
+        "sPicTable_Maniac": {
+          "reason": "This pic table's 9-frame overworld_frame(<pic>, 2, 4, n) layout is the same one crates/pokeemerald-rs/src/overworld/avatar.rs::pack_people_sheet_frames already packs for the player's own walking sheet; npc::resolve_sprite_source resolves the matching OBJ_EVENT_GFX_* id to this pic's own sprite/<name> pack entry, sharing that one packer rather than needing a per-table decode.",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/npc.rs",
+          "spec": "I-3",
+          "status": "rewritten"
+        },
+        "sPicTable_MartEmployee": {
+          "reason": "This pic table's 9-frame overworld_frame(<pic>, 2, 4, n) layout is the same one crates/pokeemerald-rs/src/overworld/avatar.rs::pack_people_sheet_frames already packs for the player's own walking sheet; npc::resolve_sprite_source resolves the matching OBJ_EVENT_GFX_* id to this pic's own sprite/<name> pack entry, sharing that one packer rather than needing a per-table decode.",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/npc.rs",
+          "spec": "I-3",
+          "status": "rewritten"
+        },
         "sPicTable_Mom": {
           "reason": "This pic table's 9-frame overworld_frame(<pic>, 2, 4, n) layout is the same one crates/pokeemerald-rs/src/overworld/avatar.rs::pack_people_sheet_frames already packs for the player's own walking sheet; npc::resolve_sprite_source resolves the matching OBJ_EVENT_GFX_* id to this pic's own sprite/<name> pack entry, sharing that one packer rather than needing a per-table decode.",
           "rust_target": "crates/pokeemerald-rs/src/overworld/npc.rs",
@@ -25357,6 +25416,12 @@
           "status": "rewritten"
         },
         "sPicTable_Norman": {
+          "reason": "This pic table's 9-frame overworld_frame(<pic>, 2, 4, n) layout is the same one crates/pokeemerald-rs/src/overworld/avatar.rs::pack_people_sheet_frames already packs for the player's own walking sheet; npc::resolve_sprite_source resolves the matching OBJ_EVENT_GFX_* id to this pic's own sprite/<name> pack entry, sharing that one packer rather than needing a per-table decode.",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/npc.rs",
+          "spec": "I-3",
+          "status": "rewritten"
+        },
+        "sPicTable_PokefanM": {
           "reason": "This pic table's 9-frame overworld_frame(<pic>, 2, 4, n) layout is the same one crates/pokeemerald-rs/src/overworld/avatar.rs::pack_people_sheet_frames already packs for the player's own walking sheet; npc::resolve_sprite_source resolves the matching OBJ_EVENT_GFX_* id to this pic's own sprite/<name> pack entry, sharing that one packer rather than needing a per-table decode.",
           "rust_target": "crates/pokeemerald-rs/src/overworld/npc.rs",
           "spec": "I-3",
@@ -25374,7 +25439,25 @@
           "spec": "I-3",
           "status": "rewritten"
         },
+        "sPicTable_SwimmerF": {
+          "reason": "This pic table's 9-frame overworld_frame(<pic>, 2, 4, n) layout is the same one crates/pokeemerald-rs/src/overworld/avatar.rs::pack_people_sheet_frames already packs for the player's own walking sheet; npc::resolve_sprite_source resolves the matching OBJ_EVENT_GFX_* id to this pic's own sprite/<name> pack entry, sharing that one packer rather than needing a per-table decode.",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/npc.rs",
+          "spec": "I-3",
+          "status": "rewritten"
+        },
+        "sPicTable_SwimmerM": {
+          "reason": "This pic table's 9-frame overworld_frame(<pic>, 2, 4, n) layout is the same one crates/pokeemerald-rs/src/overworld/avatar.rs::pack_people_sheet_frames already packs for the player's own walking sheet; npc::resolve_sprite_source resolves the matching OBJ_EVENT_GFX_* id to this pic's own sprite/<name> pack entry, sharing that one packer rather than needing a per-table decode.",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/npc.rs",
+          "spec": "I-3",
+          "status": "rewritten"
+        },
         "sPicTable_Twin": {
+          "reason": "This pic table's 9-frame overworld_frame(<pic>, 2, 4, n) layout is the same one crates/pokeemerald-rs/src/overworld/avatar.rs::pack_people_sheet_frames already packs for the player's own walking sheet; npc::resolve_sprite_source resolves the matching OBJ_EVENT_GFX_* id to this pic's own sprite/<name> pack entry, sharing that one packer rather than needing a per-table decode.",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/npc.rs",
+          "spec": "I-3",
+          "status": "rewritten"
+        },
+        "sPicTable_Woman2": {
           "reason": "This pic table's 9-frame overworld_frame(<pic>, 2, 4, n) layout is the same one crates/pokeemerald-rs/src/overworld/avatar.rs::pack_people_sheet_frames already packs for the player's own walking sheet; npc::resolve_sprite_source resolves the matching OBJ_EVENT_GFX_* id to this pic's own sprite/<name> pack entry, sharing that one packer rather than needing a per-table decode.",
           "rust_target": "crates/pokeemerald-rs/src/overworld/npc.rs",
           "spec": "I-3",
@@ -25998,7 +26081,7 @@
         },
         "TryArrowWarp": {
           "fold_target": "crates/engine/src/overworld/warp.rs",
-          "reason": "GetWarpEventAtMapPosition + IsArrowWarpMetatileBehavior + SetupWarp/DoWarp's warp-resolution shape absorbed into engine::overworld::warp::trigger_arrow_warp, a separate entry point from the door-shaped trigger_door_warp precisely because the two are gated differently upstream. Called from crates/pokeemerald-rs/src/flow/overworld_phase/step.rs's OverworldPhase::step as a per-frame poll, upstream's own gating: the direction currently held must equal the direction the player currently faces (input->heldDirection && input->dpadDirection == playerDirection, field_control_avatar.c:164-168), evaluated at the tile the player is standing on, independent of tookStep -- so it fires both for a step taken onto an arrow tile while still holding its direction and for a turn in place while already standing on one. The only added gate is that the player be at rest between steps, which is this port's counterpart to the T_TILE_CENTER/T_NOT_MOVING test that sets heldDirection upstream in the first place (:95-112). Issue #174 (the Brendan's-house exit doormat, MAP_LITTLEROOT_TOWN_BRENDANS_HOUSE_1F warp #1 at (8, 8)). Issue #194 corrected the frame ordering against ProcessPlayerFieldInput (overworld.c:1444-1455), which runs this check *before* PlayerStep and skips the step outright when it fires: OverworldPhase::step now re-evaluates this same pre-movement gate ahead of its own movement call and, when it already fires, skips movement for the frame entirely instead of running it and polling afterward -- so a legal, walkable step in the arrow direction warps rather than stepping (previously a permanent no-warp, unreachable on bundled data since every arrow tile's own direction is impassable there, and pinned now by a synthetic scene in flow/overworld_phase/tests.rs). The door-shaped path is unaffected: its own tookStep-style gate inherently needs the step to have already landed, so it still runs after movement. Not modelled: StoreInitialPlayerAvatarState's pre-warp avatar snapshot, and SetupWarp's escape-warp/Trainer Hill bookkeeping.",
+          "reason": "GetWarpEventAtMapPosition + IsArrowWarpMetatileBehavior + SetupWarp/DoWarp's warp-resolution shape absorbed into engine::overworld::warp::trigger_arrow_warp, a separate entry point from the door-shaped trigger_door_warp precisely because the two are gated differently upstream. Called from crates/pokeemerald-rs/src/flow/overworld_phase/step.rs's OverworldPhase::step as a per-frame poll, upstream's own gating: the direction currently held must equal the direction the player currently faces (input->heldDirection && input->dpadDirection == playerDirection, field_control_avatar.c:164-168), evaluated at the tile the player is standing on, independent of tookStep -- so it fires both for a step taken onto an arrow tile while still holding its direction and for a turn in place while already standing on one. The only added gate is that the player be at rest between steps, which is this port's counterpart to the T_TILE_CENTER/T_NOT_MOVING test that sets heldDirection upstream in the first place (:95-112). Issue #174 (the Brendan's-house exit doormat, MAP_LITTLEROOT_TOWN_BRENDANS_HOUSE_1F warp #1 at (8, 8)). Issue #194 corrected the frame ordering against ProcessPlayerFieldInput (overworld.c:1444-1455), which runs this check *before* PlayerStep and skips the step outright when it fires: OverworldPhase::step now re-evaluates this same pre-movement gate ahead of its own movement call and, when it already fires, skips movement for the frame entirely instead of running it and polling afterward -- so a legal, walkable step in the arrow direction warps rather than stepping (previously a permanent no-warp, unreachable on bundled data since every arrow tile's own direction is impassable there, and pinned now by a synthetic scene in flow/overworld_phase/warp_tests.rs). The door-shaped path is unaffected: its own tookStep-style gate inherently needs the step to have already landed, so it still runs after movement. Not modelled: StoreInitialPlayerAvatarState's pre-warp avatar snapshot, and SetupWarp's escape-warp/Trainer Hill bookkeeping.",
           "spec": "I-3",
           "status": "folded"
         },
@@ -26136,6 +26219,36 @@
     },
     "src/fieldmap.c": {
       "artifacts": {
+        "FillConnection": {
+          "reason": "The shared rectangular-copy helper collapses into connected_cell_at's own LayoutGrid::cell_at lookup once its four callers' own coordinate math is inlined per-direction; this port resolves one cell on demand rather than copying a whole strip into a backing buffer, but only within the exact extents that buffer covers (viewport::within_backup_map_band).",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/viewport.rs",
+          "spec": "I-4",
+          "status": "rewritten"
+        },
+        "FillEastConnection": {
+          "reason": "East-edge offset math (target_x = x - width, target_y = y - offset) re-implemented in connected_cell_at, bounded to gBackupMapLayout's own east cover -- upstream's MAP_OFFSET + 1 copy width (a fixed-buffer sizing artifact of MAP_OFFSET_W's odd total, include/fieldmap.h:19) reproduced as layout-local x <= width + 7 (issue #253).",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/viewport.rs",
+          "spec": "I-4",
+          "status": "rewritten"
+        },
+        "FillNorthConnection": {
+          "reason": "North-edge offset math (target_x = x - offset, target_y = connected_height + y) re-implemented in connected_cell_at, bounded to gBackupMapLayout's own MAP_OFFSET rows north of the layout (layout-local y >= -7), same shape as FillSouthConnection's own ledger entry.",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/viewport.rs",
+          "spec": "I-4",
+          "status": "rewritten"
+        },
+        "FillSouthConnection": {
+          "reason": "South-edge offset math (target_x = x - offset, target_y = y - height) re-implemented in connected_cell_at, resolved on demand instead of preloaded, and bounded to the same rows gBackupMapLayout covers -- layout-local y <= height + 6, MAP_OFFSET_H's even total (issue #253).",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/viewport.rs",
+          "spec": "I-4",
+          "status": "rewritten"
+        },
+        "FillWestConnection": {
+          "reason": "West-edge offset math (target_x = connected_width + x, target_y = y - offset) re-implemented in connected_cell_at, bounded to gBackupMapLayout's own MAP_OFFSET columns west of the layout (layout-local x >= -7); past that the border block renders, exactly as upstream.",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/viewport.rs",
+          "spec": "I-4",
+          "status": "rewritten"
+        },
         "GetBorderBlockAt": {
           "reason": "Border-block fallback for any camera viewport position outside the current layout's own grid, ported into viewport::cell_at (rendering-only; movement's own border handling stays out of MapRuntime's scope per issue #108).",
           "rust_target": "crates/pokeemerald-rs/src/overworld/viewport.rs",
@@ -26146,6 +26259,12 @@
           "reason": "Primary-vs-secondary tileset attribute table selection (NUM_METATILES_IN_PRIMARY split) re-implemented in MapRuntime::metatile_behavior",
           "rust_target": "crates/engine/src/overworld/map_runtime.rs",
           "spec": "S-5",
+          "status": "rewritten"
+        },
+        "InitBackupMapLayoutConnections": {
+          "reason": "Per-connection dispatch to the four Fill*Connection resolvers re-implemented as connected_cell_at's single match over ConnectionView::direction, called from cell_at on every out-of-bounds viewport sample instead of once per map load into a backing buffer; declaration-order overwrite and the buffer's own coverage band are both preserved (issue #253).",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/viewport.rs",
+          "spec": "I-4",
           "status": "rewritten"
         },
         "IsCoordInConnectingMap": {
@@ -26294,6 +26413,14 @@
       "status": "pending"
     },
     "src/heal_location.c": {
+      "artifacts": {
+        "GetHealLocation": {
+          "reason": "heal_location.c: GetHealLocation(u32 index) indexes the full sHealLocations table (src/data/heal_locations.json, every HEAL_LOCATION_* id in the game -- Pokemon Centers, home beds, Battle Frontier respawns, etc). This port has no general assets::HealLocation lookup: only the two entries new-game init actually needs are transcribed as fixed constants (crate::new_game::DEFAULT_HEAL_LOCATION_MAP_GROUP/_MALE_MAP_NUM/_FEMALE_MAP_NUM/_X/_Y, cross-checked against src/data/heal_locations.json's own HEAL_LOCATION_LITTLEROOT_TOWN_BRENDANS_HOUSE_2F/_MAYS_HOUSE_2F entries by crate::new_game::tests::default_heal_locations_match_the_generated_map_header_positions). This file's two reverse lookups, GetHealLocationIndexByMap (heal_location.c:7-17) and GetHealLocationByMap (:19-27), are likewise not modelled -- and cost nothing to skip: neither has a single caller anywhere upstream (both are declared in include/heal_location.h:12-13, and the only reference to either in the tree is GetHealLocationByMap's own call to GetHealLocationIndexByMap). The one place upstream reads lastHealLocation back by map does it without them: ResetHealLocationFromDewford (src/field_specials.c:3880-3885) compares gSaveBlock1Ptr->lastHealLocation.mapGroup/.mapNum against MAP_DEWFORD_TOWN directly and calls SetLastHealLocationWarp(HEAL_LOCATION_PETALBURG_CITY) -- a softlock guard for a player who respawns on Dewford with no way off the island, not a table lookup, and not modelled here either (no Dewford, no Petalburg heal location bundled). A future slice adding a Pokemon Center heal flow (setrespawn's other real call sites) is what would give this file a real table-backed home instead of two named constants.",
+          "rust_target": "crates/pokeemerald-rs/src/new_game.rs",
+          "spec": "I-4",
+          "status": "stubbed"
+        }
+      },
       "category": "code.source",
       "kind": "file",
       "status": "pending"
@@ -26937,6 +27064,18 @@
           "spec": "I-6",
           "status": "stubbed"
         },
+        "CB2_WhiteOut": {
+          "reason": "overworld.c:1550-1570. The 120-frame fade-to-black counter, DoMapLoadLoop's map-load state machine, and FieldCB_WarpExitFadeFromBlack's fade-in are not modelled -- this port has no frame-counted fade transition for any warp, matching every other warp/connection crossing's own instant rebind (OverworldPhase::warp_to/warp_to_position/cross_connection, none of which animate a transition either). Nor is anything else this callback does around the fade: FieldClearVBlankHBlankCallbacks (:1556), StopMapMusic (:1557), and ResetSafariZoneFlag_ (:1558) have no counterparts -- no vblank/hblank callback table is modelled, no map music is playing to stop (crate::music drives the title screen only), and no Safari Zone state exists. Of the seven calls upstream makes at the end of the 120 frames, exactly one has a port counterpart that runs: DoWhiteOut (:1559) is OverworldPhase::white_out (see src/overworld.c#DoWhiteOut), called synchronously and immediately, the instant the losing battle's driver reports BattleOutcome::PlayerLost, with no fade in between. The three after it -- ResetInitialPlayerAvatarState (:1560), ScriptContext_Init (:1561), UnlockPlayerFieldControls (:1562) -- run nothing here: this port stores no pre-warp avatar state to reset (see src/overworld.c#GetAdjustedInitialDirection on the missing StoreInitialPlayerAvatarState), has no script engine to re-init, and never locks field controls in the first place (LockPlayerFieldControls is already recorded as unmodelled on src/battle_setup.c#BattleSetup_StartWildBattle), so the map-load-into-overworld handoff white_out performs is just OverworldPhase::warp_to_position's ordinary one.",
+          "rust_target": "crates/pokeemerald-rs/src/flow/overworld_phase/white_out.rs",
+          "spec": "I-4",
+          "status": "stubbed"
+        },
+        "DoWhiteOut": {
+          "reason": "overworld.c:358-366. Ordering reproduced exactly: SetMoney(&gSaveBlock1Ptr->money, GetMoney(&gSaveBlock1Ptr->money) / 2) is self.save1.money /= 2 (plain unsigned integer division, no rounding); HealPlayerParty() is battle::BattlePokemon::heal called on the phase's one modelled party slot (self.party_lead) -- see src/script_pokemon_util.c#HealPlayerParty; SetWarpDestinationToLastHealLocation() + WarpIntoMap() together are self.warp_to_position(map, heal_location.x, heal_location.y), map resolved from self.save1.last_heal_location via saved_map_id -- see src/overworld.c#SetWarpDestinationToLastHealLocation and src/overworld.c#WarpIntoMap. NOT modelled: RunScriptImmediately(EventScript_WhiteOut) -- the Elite Four reset and Mr. Briney relocation this port has no state for, and no 'You blacked out!' message box, since this port has no such content bundled and no message layer wired to this path (see data/event_scripts.s#EventScript_WhiteOut); Overworld_ResetStateAfterWhiteOut's field-effect/avatar-transition-state clears (cycling road, Safari Zone flags this port does not model). Called from both battle-loss drivers via the shared OverworldPhase::white_out (module docs' 'RNG stream' section: draws nothing, matching upstream) -- flow::wild_encounter's advance_wild_battle_frame (CB2_EndWildBattle's IsPlayerDefeated branch, src/battle_setup.c:602-616) and flow::overworld_phase::route103_rival_trigger's advance_route103_rival_battle_frame (CB2_EndTrainerBattle's, :1333-1338), both on BattleOutcome::PlayerLost.",
+          "rust_target": "crates/pokeemerald-rs/src/flow/overworld_phase/white_out.rs",
+          "spec": "I-4",
+          "status": "rewritten"
+        },
         "GetAdjustedInitialDirection": {
           "reason": "Destination-tile branches rewritten as engine::overworld::warp::warp_in_facing, keyed on the arrival tile's metatile behavior exactly as upstream keys on GetCenterScreenMetatileBehavior after WarpIntoMap (flow::OverworldPhase::warp_to reads that behavior off the destination map's runtime and passes it in): deep-south-warp -> North (tested first, before the door arm that also matches it), non-anim-door/door -> South, south-arrow -> North, north-arrow -> South, west-arrow -> East, east-arrow -> West, else South. Three branches are NOT modelled and all collapse into that final else: the FLAG_SYS_CRUISE_MODE + MAP_TYPE_OCEAN_ROUTE branch (no event-flag state), the surfing<->underwater transition branch (no surf/dive avatar flags), and the MetatileBehavior_IsLadder branch that preserves the pre-warp facing (no StoreInitialPlayerAvatarState equivalent -- that function and GetAdjustedInitialTransitionFlags stay unported).",
           "rust_target": "crates/engine/src/overworld/warp.rs",
@@ -26949,10 +27088,28 @@
           "spec": "I-4",
           "status": "stubbed"
         },
+        "SetLastHealLocationWarp": {
+          "reason": "overworld.c:670-675: resolves a HEAL_LOCATION_* id through GetHealLocation (src/heal_location.c) and writes its (mapGroup, mapNum, WARP_ID_NONE, x, y) into gSaveBlock1Ptr->lastHealLocation. Only the two call sites this port's bundled content actually reaches are modelled, as fixed constants rather than a general id-keyed lookup: crate::new_game::default_last_heal_location reproduces InsideOfTruck_EventScript_SetIntroFlagsMale/_Female's own setrespawn HEAL_LOCATION_LITTLEROOT_TOWN_BRENDANS_HOUSE_2F/_MAYS_HOUSE_2F calls (data/maps/InsideOfTruck/scripts.inc:25,38 -- see data/maps/InsideOfTruck#InsideOfTruck_EventScript_SetIntroFlags) at new-game init, cross-checked against src/data/heal_locations.json's own x=4,y=2 entries and the generated assets::MapHeaderTable position for each house (crate::new_game::tests::default_heal_locations_match_the_generated_map_header_positions). NOT modelled: every other way this function is reached -- every other setrespawn script site in the game (Pokemon Center visits and the like, via src/scrcmd.c#ScrCmd_setrespawn) and its one direct C caller, ResetHealLocationFromDewford's Dewford softlock guard (src/field_specials.c:3881-3885, SetLastHealLocationWarp(HEAL_LOCATION_PETALBURG_CITY)) -- and GetHealLocation's own general id table: no assets::HealLocation lookup exists in this workspace, since no Pokemon Center flow that would call it is bundled yet. The bound is deliberate and narrow, the same 'as much of the chain as this slice runs, no more' posture flow::overworld_phase::first_battle_trigger's own module docs already take for VAR_ROUTE101_STATE.",
+          "rust_target": "crates/pokeemerald-rs/src/new_game.rs",
+          "spec": "I-4",
+          "status": "stubbed"
+        },
         "SetWarpData": {
           "reason": "map_group/map_num/warp_id/x/y field assignment transcribed as the engine::save::WarpData literal OverworldPhase::warp_to builds for save1.location on a resolved warp (flow/overworld_phase/connections.rs); x/y are left at -1 matching SetWarpDestinationToMapWarp's own -1,-1 call shape for a map-warp-id destination (not fixed coordinates). The warp landing that consumes this data also performs LoadMapFromWarp's ClearTempFieldEventData (overworld.c:848) before RunOnTransitionMapScript (:860) -- recorded on ApplyCurrentWarp, same rust_target.",
           "rust_target": "crates/pokeemerald-rs/src/flow/overworld_phase/connections.rs",
           "spec": "I-3",
+          "status": "rewritten"
+        },
+        "SetWarpDestinationToLastHealLocation": {
+          "reason": "overworld.c:665-668: sWarpDestination = gSaveBlock1Ptr->lastHealLocation, a plain copy. OverworldPhase::white_out reads self.save1.last_heal_location and resolves its (map_group, map_num) through saved_map_id (crates/pokeemerald-rs/src/flow/overworld_phase.rs, shared with SaveBlock1::location's own CB2_ContinueSavedGame resolution) to hand warp_to_position a real assets::MapId plus the stored (x, y) -- this port's 'destination' is computed on demand rather than staged through a separate sWarpDestination global (oop-boundaries: no global mutable state), but the value copied is the same one.",
+          "rust_target": "crates/pokeemerald-rs/src/flow/overworld_phase/white_out.rs",
+          "spec": "I-4",
+          "status": "rewritten"
+        },
+        "WarpIntoMap": {
+          "reason": "overworld.c:626-631: ApplyCurrentWarp (copy sWarpDestination into gSaveBlock1Ptr->location), LoadCurrentMapData, SetPlayerCoordsFromWarp (:603-624). OverworldPhase::warp_to_position is this port's counterpart for exactly the WARP_ID_NONE branch (:611-617, 'the given coords are valid, use those instead') -- the only branch a heal location (which names a raw tile, not a warp event index) ever takes; the warpId>=0 branch is instead OverworldPhase::warp_to, which resolves a real warp event's own position. warp_to_position lands at elevation ELEVATION_TRANSITION (0, include/global.fieldmap.h:16), matching InitPlayerAvatar's own sentinel for every arrival kind (field_player_avatar.c), and writes save1.location with the heal location's own (x, y) rather than the -1/-1 sentinel a resolved warp id leaves (ApplyCurrentWarp's plain copy, again).",
+          "rust_target": "crates/pokeemerald-rs/src/flow/overworld_phase/connections.rs",
+          "spec": "I-4",
           "status": "rewritten"
         },
         "sOverworldBgTemplates": {
@@ -27517,6 +27674,12 @@
           "spec": "S-5",
           "status": "rewritten"
         },
+        "ScrCmd_setrespawn": {
+          "fold_target": "crates/pokeemerald-rs/src/new_game.rs",
+          "reason": "scrcmd.c:2006-2012: VarGet(healLocationId) then SetLastHealLocationWarp(healLocationId) (src/overworld.c#SetLastHealLocationWarp). This port has no script engine, so the two setrespawn calls its bundled content actually reaches (InsideOfTruck_EventScript_SetIntroFlagsMale/_Female's own -- data/maps/InsideOfTruck#InsideOfTruck_EventScript_SetIntroFlags) are folded directly into crate::new_game::default_last_heal_location's gender branch at new-game init, the same 'the effect, without an interpreter' treatment every other targeted script-command port in this crate already gets (apply_truck_intro_flags beside it, connections::run_on_transition_map_script, first_battle_trigger::sync_route_101_state_on_entry).",
+          "spec": "I-4",
+          "status": "folded"
+        },
         "ScrCmd_setvar": {
           "reason": "Literal var write re-implemented as commands::setvar (SCR_OP_SETVAR, 0x16) over EventData::var_set",
           "rust_target": "crates/engine/src/script/commands.rs",
@@ -27648,6 +27811,14 @@
       "status": "pending"
     },
     "src/script_pokemon_util.c": {
+      "artifacts": {
+        "HealPlayerParty": {
+          "reason": "script_pokemon_util.c:30-59. battle::BattlePokemon::heal reproduces the per-mon effect for the one party slot this crate models (the crate's own module docs record the one-mon-party limit): restore current HP to Stats::max_hp (upstream's MAX_HP write, :39-42), restore every known move's PP to its base value via crate::dex::Dex::move_data (upstream's CalculatePPWithBonus with this crate's own ppBonuses stand-in of 0 -- MoveSlot::pp's own doc comment records PP Up bonuses as out of scope, so 'base' and 'healed' coincide). Upstream's third effect -- zeroing MON_DATA_STATUS (:52-57) -- has no counterpart to run: this crate models no non-volatile status conditions at all (pokemon.rs module docs), so there is nothing left to clear. The loop over gPlayerPartyCount (:37) is trivially one iteration here; a future multi-slot party slice widens the call site (flow::overworld_phase::white_out) to loop, not this method.",
+          "rust_target": "crates/battle/src/pokemon.rs",
+          "spec": "I-4",
+          "status": "rewritten"
+        }
+      },
       "category": "code.source",
       "kind": "file",
       "status": "pending"
