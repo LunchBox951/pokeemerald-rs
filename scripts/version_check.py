@@ -16,7 +16,17 @@ exactly four dot-separated non-negative integers, e.g.::
 Git tags / GitHub Releases add the ``v`` prefix; the ``VERSION`` file never
 carries it.
 
-What this script checks:
+Two validation modes are available:
+
+``transition`` (the default) validates one product change entering ``dev``.
+It enforces reset rules and requires fresh approval evidence for a FINAL change.
+
+``cumulative`` validates ordering between channel snapshots or distant
+endpoints. It still requires canonical VERSION files and rejects regressions,
+but does not replay reset or FINAL-marker rules that were already enforced when
+the intervening changes entered ``dev``.
+
+What transition mode checks:
 
 1. Read ``VERSION`` at HEAD (the current working tree).
 2. Read ``VERSION`` at the base ref (default ``origin/main``). If the ref or
@@ -293,6 +303,23 @@ def read_base_version(base: str, root: str) -> Version:
     return parse_version(raw, f"base ({base})")
 
 
+def read_required_base_version(base: str, root: str) -> Version:
+    """Read a canonical VERSION at ``base``, failing if the ref/file is absent."""
+    raw = git_show_file(base, "VERSION", root)
+    if raw is None:
+        raise VersionError(f"base ({base}): VERSION not found")
+    return parse_version(raw, f"base ({base})")
+
+
+def require_commit_ref(ref: str, side: str, root: str) -> None:
+    """Require ``ref`` to resolve to a commit for cumulative comparison."""
+    resolved = _git_stdout(
+        ["git", "rev-parse", "--verify", f"{ref}^{{commit}}"], root
+    )
+    if resolved is None:
+        raise VersionError(f"{side} ({ref}): git ref not found")
+
+
 def parse_marker(raw: str, source: str) -> Tuple[Version, str]:
     """Parse a FINAL-gate approval marker's ``Approved version`` and ``Date``.
 
@@ -460,6 +487,22 @@ def check_transition(
         # head[i] == base[i]: tier unchanged, inspect the next tier down.
 
 
+def check_cumulative(
+    base: Version, head: Version, *, require_bump: bool = False
+) -> None:
+    """Validate cumulative ordering without replaying transition-only gates."""
+    if head < base:
+        raise VersionError(
+            f"version regression: {fmt(head)} is lower than base "
+            f"{fmt(base)} (versions only move forward)"
+        )
+    if require_bump and head == base:
+        raise VersionError(
+            f"version unchanged at {fmt(head)}; the proposed change must "
+            "advance VERSION"
+        )
+
+
 def _reset_lower(version: Version, idx: int) -> Version:
     """Return ``version`` with every component after ``idx`` set to 0."""
     kept = list(version[: idx + 1])
@@ -482,11 +525,22 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--mode",
+        choices=("transition", "cumulative"),
+        default="transition",
+        help=(
+            "Validation policy: 'transition' (default) enforces reset and "
+            "fresh FINAL-approval rules; 'cumulative' checks canonical "
+            "endpoint ordering without replaying those rules."
+        ),
+    )
+    parser.add_argument(
         "--base",
         default="origin/main",
         help=(
-            "Base git ref to compare against (default: origin/main). "
-            "If the ref or its VERSION is absent, base is treated as 0.0.0.0."
+            "Base git ref to compare against (default: origin/main). In "
+            "transition mode an absent base is treated as 0.0.0.0; cumulative "
+            "mode requires the ref and its VERSION file."
         ),
     )
     parser.add_argument(
@@ -523,23 +577,31 @@ def main(argv: Optional[list] = None) -> int:
 
     try:
         head_version = read_head_version(args.head, root)
-        base_version = read_base_version(args.base, root)
-        marker_head = read_ref_file(args.head, args.final_gate_marker, root)
-        # Base side always reads the committed blob (see read_base_version).
-        marker_base = git_show_file(args.base, args.final_gate_marker, root)
-        # Change detection is delegated to git (filter-aware, fails closed);
-        # a marker absent at base is trivially "changed" if present at head.
-        unchanged = marker_base is not None and not marker_changed(
-            args.base, args.head, args.final_gate_marker, root
-        )
-        check_transition(
-            base_version,
-            head_version,
-            marker_head=marker_head,
-            marker_unchanged=unchanged,
-            marker_rel=args.final_gate_marker,
-            require_bump=args.require_bump,
-        )
+        if args.mode == "cumulative":
+            require_commit_ref(args.base, "base", root)
+            require_commit_ref(args.head, "head", root)
+            base_version = read_required_base_version(args.base, root)
+            check_cumulative(
+                base_version, head_version, require_bump=args.require_bump
+            )
+        else:
+            base_version = read_base_version(args.base, root)
+            marker_head = read_ref_file(args.head, args.final_gate_marker, root)
+            # Base side always reads the committed blob (see read_base_version).
+            marker_base = git_show_file(args.base, args.final_gate_marker, root)
+            # Change detection is delegated to git (filter-aware, fails closed);
+            # a marker absent at base is trivially "changed" if present at head.
+            unchanged = marker_base is not None and not marker_changed(
+                args.base, args.head, args.final_gate_marker, root
+            )
+            check_transition(
+                base_version,
+                head_version,
+                marker_head=marker_head,
+                marker_unchanged=unchanged,
+                marker_rel=args.final_gate_marker,
+                require_bump=args.require_bump,
+            )
     except VersionError as exc:
         print(f"version_check: FAIL: {exc}", file=sys.stderr)
         return 1
