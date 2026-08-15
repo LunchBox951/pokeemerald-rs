@@ -596,7 +596,7 @@ mod tests {
     /// sequencer from the *resolved* `reverb_level`, not from the song's own
     /// header -- so an inheriting (header-less) song keeps its inherited
     /// level when it loops, instead of silently dropping to the header's
-    /// zero (issue #276 review).
+    /// zero (PR #276 review).
     #[test]
     fn an_inheriting_song_keeps_its_resolved_reverb_across_the_defensive_restart() {
         let mut context = MusicContext::new();

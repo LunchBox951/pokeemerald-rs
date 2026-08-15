@@ -336,9 +336,8 @@ fn finite_reverbed_song_restarts_only_after_tail_drains() {
     );
 }
 
-/// Real-pack coverage of [`load_song_from_pack`] (S-3, issue #185): resolves
 /// Synthetic-pack coverage of [`load_song_from_pack`]'s conversion edges
-/// (issue #276 review): a minimal but *real* pack file -- the same on-disk
+/// (PR #276 review): a minimal but *real* pack file -- the same on-disk
 /// format `cargo xtask extract` writes, built from the assets crate's own
 /// public encoders -- so the loader's CGB `fixed_rate` threading and its
 /// inherit-vs-explicit-zero reverb mapping are pinned in CI, not only on
@@ -521,6 +520,7 @@ mod synthetic_pack {
     }
 }
 
+/// Real-pack coverage of [`load_song_from_pack`] (S-3, issue #185): resolves
 /// `mus_title` end to end (voicegroup indirection, samples, reverb) and
 /// proves the result behaves like continuous BGM -- audible, self-looping,
 /// never reaching `Sequencer::is_finished`.

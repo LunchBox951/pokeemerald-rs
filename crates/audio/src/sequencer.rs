@@ -1711,6 +1711,68 @@ mod tests {
         assert_eq!(seq.voice_count(), 1);
     }
 
+    /// Render `frames` frames of a one-instrument song around `instrument`,
+    /// concatenated -- the comparison buffer for the fixed-rate threading
+    /// tests below.
+    fn rendered_cgb_frames(instrument: Instrument, frames: usize) -> Vec<f32> {
+        let song = Song::new(vec![instrument], vec![cgb_test_track()], 150);
+        let mut seq = Sequencer::new(song);
+        let mut all = Vec::with_capacity(frames * Sequencer::FRAME_SAMPLES);
+        let mut out = vec![0.0; Sequencer::FRAME_SAMPLES];
+        for _ in 0..frames {
+            seq.render_frame(&mut out);
+            all.extend_from_slice(&out);
+        }
+        all
+    }
+
+    /// `SquareTone::fixed_rate` must actually reach [`CgbVoice`]'s DAC
+    /// correction through the sequencer, not merely not crash (PR #276
+    /// review): [`cgb_test_track`]'s key 60 lands on the odd register
+    /// `0x60B`, which `cgb_dac_correct` rounds to a different playback
+    /// rate, so the two renders must diverge. A threading bug that pins the
+    /// flag to either constant makes them identical.
+    #[test]
+    fn a_fixed_rate_cgb_square_audibly_differs_from_a_plain_one() {
+        let tone = |fixed_rate| {
+            Instrument::CgbSquare1(SquareTone {
+                duty: 2,
+                sweep: 0,
+                adsr: CgbAdsr::flat(),
+                fixed_rate,
+            })
+        };
+        let fixed = rendered_cgb_frames(tone(true), 8);
+        let plain = rendered_cgb_frames(tone(false), 8);
+        assert!(
+            fixed.iter().zip(&plain).any(|(a, b)| a != b),
+            "the DAC-corrected register must change the rendered square waveform"
+        );
+    }
+
+    /// [`WaveTone::fixed_rate`]'s counterpart to
+    /// [`a_fixed_rate_cgb_square_audibly_differs_from_a_plain_one`] -- the
+    /// wave channel threads the same flag through `CgbVoice::wave`.
+    #[test]
+    fn a_fixed_rate_cgb_wave_audibly_differs_from_a_plain_one() {
+        let tone = |fixed_rate| {
+            Instrument::CgbWave(WaveTone {
+                // `0x0F` decodes to alternating 0/15 samples -- a full-swing
+                // waveform, so a playback-rate difference is visible (a
+                // constant table would render identically at any rate).
+                table: [0x0F; 16],
+                adsr: CgbAdsr::flat(),
+                fixed_rate,
+            })
+        };
+        let fixed = rendered_cgb_frames(tone(true), 8);
+        let plain = rendered_cgb_frames(tone(false), 8);
+        assert!(
+            fixed.iter().zip(&plain).any(|(a, b)| a != b),
+            "the DAC-corrected register must change the rendered wave waveform"
+        );
+    }
+
     #[test]
     fn a_cgb_wave_note_produces_sound_through_the_sequencer() {
         let voices = vec![Instrument::CgbWave(WaveTone {
