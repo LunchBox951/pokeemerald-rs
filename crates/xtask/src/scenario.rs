@@ -23,9 +23,6 @@ use pokeemerald_rs::{App, AppButtons, AppState, BattleOutcome};
 
 use crate::ScenarioName;
 
-/// `boot-to-first-fight` (I-7, issue #245) -- split into its own file to
-/// keep this module under the `oop-boundaries` size guideline; see that
-/// module's own docs for the scenario itself.
 mod boot_to_first_fight;
 
 /// One exact frame of a scenario: which buttons are held while the app
@@ -491,10 +488,6 @@ mod tests {
             vec![AppState::Title, AppState::MainMenu(MainMenuItem::NewGame)]
         );
     }
-
-    // `boot-to-first-fight` (I-7, issue #245) itself lives in
-    // `boot_to_first_fight`, including its own tests -- this module keeps
-    // only the shared runner's tests (`oop-boundaries`).
 
     use super::{expand_segments, Segment};
 
