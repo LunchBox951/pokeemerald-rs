@@ -54,6 +54,10 @@
 //! [`assets::DirectSoundVoice::pan`] outside a rhythm child, and every CGB
 //! [`length`](assets::Square1Voice::length) field, rather than inventing a
 //! new engine capability inside an audio-*playback* slice.
+//! [`assets::NoiseVoice::fixed_rate`] is dropped as well: Emerald's 8-bit-DAC
+//! frequency correction applies only to the pitched square/wave channels
+//! (`m4a.c:1184`..`:1202`), so channel 4 has no fixed-rate mode to model and
+//! `convert_noise` discards the flag.
 //!
 //! [`assets::DirectSoundMode::Reverse`] (backwards sample playback) has no
 //! engine representation at all (`crate::audio`'s own "out of scope" list:
