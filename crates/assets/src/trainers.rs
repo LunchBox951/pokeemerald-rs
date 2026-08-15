@@ -213,9 +213,8 @@ impl AiFlags {
         self.0 & other.0 == other.0
     }
 
-    /// The union of two flag sets. A `const fn` (not the `BitOr` operator,
-    /// which isn't const on stable Rust) so it can combine flags inside the
-    /// transcribed `const` trainer table.
+    /// The union of two flag sets, as a `const fn` since `BitOr` isn't const
+    /// on stable Rust.
     #[must_use]
     pub const fn union(self, other: AiFlags) -> AiFlags {
         AiFlags(self.0 | other.0)
@@ -23621,8 +23620,7 @@ mod tests {
 
     #[test]
     fn ai_flags_union_matches_manual_bit_or() {
-        // Guard AiFlags::union (used instead of the non-const `|` operator to
-        // build the transcribed table) against the trait-based operator.
+        // Compares AiFlags::union against the trait-based `BitOr` operator.
         let combo = AiFlags::CHECK_BAD_MOVE | AiFlags::TRY_TO_FAINT;
         assert_eq!(combo, AiFlags::CHECK_BAD_MOVE.union(AiFlags::TRY_TO_FAINT));
         assert!(combo.contains(AiFlags::CHECK_BAD_MOVE));
