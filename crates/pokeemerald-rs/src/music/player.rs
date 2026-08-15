@@ -591,4 +591,50 @@ mod tests {
             "an explicit reverb of 0 must disable the tail even though the session had one"
         );
     }
+
+    /// The defensive restart in [`MusicPlayer::advance_frame`] rebuilds the
+    /// sequencer from the *resolved* `reverb_level`, not from the song's own
+    /// header -- so an inheriting (header-less) song keeps its inherited
+    /// level when it loops, instead of silently dropping to the header's
+    /// zero (issue #276 review).
+    #[test]
+    fn an_inheriting_song_keeps_its_resolved_reverb_across_the_defensive_restart() {
+        let mut context = MusicContext::new();
+        let priming = short_song_without_its_own_reverb().with_reverb(100);
+        let priming_output = AudioOutput::null(RING_CAPACITY_FRAMES);
+        let mut priming_player =
+            MusicPlayer::start_with_context(&mut context, priming, priming_output)
+                .expect("null backend never errors");
+        assert!(!first_playthrough_finishes_within(
+            &mut priming_player,
+            SETTLE_BUDGET
+        ));
+
+        let inheriting = short_song_without_its_own_reverb();
+        assert_eq!(inheriting.reverb_override(), None);
+        let output = AudioOutput::null(RING_CAPACITY_FRAMES);
+        let mut player = MusicPlayer::start_with_context(&mut context, inheriting, output)
+            .expect("null backend never errors");
+
+        // Drain the whole first playthrough, inherited tail included.
+        let mut frames = 0;
+        while !player.sequencer.is_finished() {
+            player.advance_frame();
+            frames += 1;
+            assert!(
+                frames < 5_000,
+                "the inherited reverb tail must eventually drain"
+            );
+        }
+
+        // The next call restarts. The restarted playthrough must still hold
+        // the inherited level: its own tail keeps the sequencer unfinished
+        // well past the note's end, exactly like the first playthrough --
+        // whereas a restart from the song's header (reverb 0) finishes
+        // within the settle budget.
+        assert!(
+            !first_playthrough_finishes_within(&mut player, SETTLE_BUDGET),
+            "the defensive restart must reuse the resolved reverb level, not the song header's"
+        );
+    }
 }

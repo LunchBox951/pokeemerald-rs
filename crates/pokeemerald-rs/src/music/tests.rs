@@ -337,6 +337,190 @@ fn finite_reverbed_song_restarts_only_after_tail_drains() {
 }
 
 /// Real-pack coverage of [`load_song_from_pack`] (S-3, issue #185): resolves
+/// Synthetic-pack coverage of [`load_song_from_pack`]'s conversion edges
+/// (issue #276 review): a minimal but *real* pack file -- the same on-disk
+/// format `cargo xtask extract` writes, built from the assets crate's own
+/// public encoders -- so the loader's CGB `fixed_rate` threading and its
+/// inherit-vs-explicit-zero reverb mapping are pinned in CI, not only on
+/// the ignored real-pack lane.
+mod synthetic_pack {
+    use assets::{
+        AssetPack, Envelope, ProgrammableWave, ProgrammableWaveVoice, Sample, SampleId,
+        Square1Voice, Square2Voice, VoiceEntry, VoiceGroup, VoiceGroupId,
+    };
+    use audio::Instrument;
+
+    use crate::music::load_song_from_pack;
+
+    /// Serialize `entries` (id -> raw payload) into the pack container
+    /// format (`assets::pack::format`: magic, version, directory of Raw
+    /// entries, payloads) and write it to a per-test scratch path.
+    fn write_pack(test_name: &str, entries: &[(&str, Vec<u8>)]) -> std::path::PathBuf {
+        const RAW_KIND: u8 = 2;
+        // The reader binary-searches the directory, so ids must be sorted --
+        // the same determinism guarantee `xtask`'s writer upholds.
+        let mut entries: Vec<&(&str, Vec<u8>)> = entries.iter().collect();
+        entries.sort_by_key(|(id, _)| *id);
+        let entries = entries;
+        let header_len = 8 + 4 + 4;
+        let dir_len: usize = entries.iter().map(|(id, _)| 2 + id.len() + 1 + 8 + 8).sum();
+        let mut payload_offset = header_len + dir_len;
+
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(b"PKMRPACK");
+        bytes.extend_from_slice(&6u32.to_le_bytes());
+        bytes.extend_from_slice(&u32::try_from(entries.len()).unwrap().to_le_bytes());
+        for (id, payload) in &entries {
+            bytes.extend_from_slice(&u16::try_from(id.len()).unwrap().to_le_bytes());
+            bytes.extend_from_slice(id.as_bytes());
+            bytes.push(RAW_KIND);
+            bytes.extend_from_slice(&(payload_offset as u64).to_le_bytes());
+            bytes.extend_from_slice(&(payload.len() as u64).to_le_bytes());
+            payload_offset += payload.len();
+        }
+        for (_, payload) in &entries {
+            bytes.extend_from_slice(payload);
+        }
+
+        let path = std::env::temp_dir().join(format!(
+            "pokeemerald-rs-music-test-{}-{test_name}.pack",
+            std::process::id()
+        ));
+        std::fs::write(&path, bytes).expect("scratch pack must be writable");
+        path
+    }
+
+    fn flat_envelope() -> Envelope {
+        Envelope {
+            attack: 255,
+            decay: 0,
+            sustain: 255,
+            release: 0,
+        }
+    }
+
+    /// A voicegroup whose first four slots exercise every CGB kind that
+    /// carries `TONEDATA_TYPE_FIX`, `fixed_rate` alternating true/false so
+    /// both a dropped flag and an invented one fail the assertions below.
+    fn fix_voicegroup(wave_id: &str) -> VoiceGroup {
+        VoiceGroup::new(vec![
+            VoiceEntry::Square1(Square1Voice {
+                base_key: 60,
+                length: 0,
+                sweep: 0,
+                duty: 2,
+                envelope: flat_envelope(),
+                fixed_rate: true,
+            }),
+            VoiceEntry::Square2(Square2Voice {
+                base_key: 60,
+                length: 0,
+                duty: 2,
+                envelope: flat_envelope(),
+                fixed_rate: true,
+            }),
+            VoiceEntry::ProgrammableWave(ProgrammableWaveVoice {
+                base_key: 60,
+                length: 0,
+                wave: SampleId(wave_id.to_owned()),
+                envelope: flat_envelope(),
+                fixed_rate: true,
+            }),
+            VoiceEntry::Square1(Square1Voice {
+                base_key: 60,
+                length: 0,
+                sweep: 0,
+                duty: 2,
+                envelope: flat_envelope(),
+                fixed_rate: false,
+            }),
+        ])
+        .expect("four slots is well under VOICE_SLOT_COUNT")
+    }
+
+    fn pack_with_song(test_name: &str, reverb: Option<u8>) -> AssetPack {
+        let vg_id = "audio/voicegroup/fixtest";
+        let wave_id = "audio/sample/fixtest_wave";
+        let song = assets::Song::new(VoiceGroupId(vg_id.to_owned()), 0, reverb, vec![vec![]])
+            .expect("a one-empty-track song is well-formed");
+        let sample = Sample::ProgrammableWave(ProgrammableWave { table: [0x88; 16] });
+        let path = write_pack(
+            test_name,
+            &[
+                ("audio/song/fixtest", song.encode()),
+                (vg_id, fix_voicegroup(wave_id).encode()),
+                (wave_id, sample.encode()),
+            ],
+        );
+        AssetPack::load(&path).expect("the synthetic pack must parse")
+    }
+
+    /// The `TONEDATA_TYPE_FIX` tag must survive the asset -> engine
+    /// conversion for every CGB kind that carries it (`convert_square1`,
+    /// `convert_square2`, `convert_programmable_wave`) -- and must not be
+    /// invented where the instrument left it clear.
+    #[test]
+    fn cgb_fixed_rate_tags_survive_loading() {
+        let pack = pack_with_song("fixed-rate", None);
+        let song = load_song_from_pack(&pack, "fixtest").expect("the synthetic song loads");
+
+        match song.voice(0) {
+            Some(Instrument::CgbSquare1(tone)) => {
+                assert!(tone.fixed_rate, "square 1's FIX tag must survive loading");
+            }
+            other => panic!("slot 0 must convert to CgbSquare1, got {other:?}"),
+        }
+        match song.voice(1) {
+            Some(Instrument::CgbSquare2(tone)) => {
+                assert!(tone.fixed_rate, "square 2's FIX tag must survive loading");
+            }
+            other => panic!("slot 1 must convert to CgbSquare2, got {other:?}"),
+        }
+        match song.voice(2) {
+            Some(Instrument::CgbWave(tone)) => {
+                assert!(
+                    tone.fixed_rate,
+                    "the programmable wave's FIX tag must survive loading"
+                );
+            }
+            other => panic!("slot 2 must convert to CgbWave, got {other:?}"),
+        }
+        match song.voice(3) {
+            Some(Instrument::CgbSquare1(tone)) => {
+                assert!(
+                    !tone.fixed_rate,
+                    "a non-FIX instrument must not grow the tag in conversion"
+                );
+            }
+            other => panic!("slot 3 must convert to CgbSquare1, got {other:?}"),
+        }
+    }
+
+    /// [`load_song_from_pack`] must preserve the header's three reverb
+    /// states distinctly: unset stays *no override* (inherit at start
+    /// time), explicit `0` stays an explicit disable, and a real level
+    /// carries through -- the `unwrap_or(0)` collapse this distinction
+    /// replaced must not come back.
+    #[test]
+    fn loading_preserves_the_inherit_vs_explicit_zero_reverb_distinction() {
+        let unset = load_song_from_pack(&pack_with_song("reverb-unset", None), "fixtest")
+            .expect("the synthetic song loads");
+        assert_eq!(
+            unset.reverb_override(),
+            None,
+            "a header with reverb unset must load as no-override, not as an explicit 0"
+        );
+
+        let zero = load_song_from_pack(&pack_with_song("reverb-zero", Some(0)), "fixtest")
+            .expect("the synthetic song loads");
+        assert_eq!(zero.reverb_override(), Some(0));
+
+        let level = load_song_from_pack(&pack_with_song("reverb-77", Some(77)), "fixtest")
+            .expect("the synthetic song loads");
+        assert_eq!(level.reverb_override(), Some(77));
+    }
+}
+
 /// `mus_title` end to end (voicegroup indirection, samples, reverb) and
 /// proves the result behaves like continuous BGM -- audible, self-looping,
 /// never reaching `Sequencer::is_finished`.
