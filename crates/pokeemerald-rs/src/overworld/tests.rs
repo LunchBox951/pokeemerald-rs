@@ -8,6 +8,8 @@
 //! exception, [`real_pack_composes_non_blank_deterministic_overworld_frames`],
 //! is `#[ignore]`d and needs a real local pack.
 
+use std::collections::HashMap;
+
 use super::{
     layout_pack_name, pack_4bpp_region, resolve_tileset_pack_name, OverworldSceneError,
     DEFAULT_ROOM_MAP_ID,
@@ -616,11 +618,36 @@ pub(crate) fn synthetic_scene_with_cell_elevation(
 /// the layout's tileset symbol: writes the scratch pack, runs
 /// [`super::OverworldScene::from_pack`], and returns its result -- so
 /// tests can assert on rejection errors and on non-`general` fixtures too.
+///
+/// No declared connections (issue #253): every existing caller's fixture is
+/// a single, self-contained room, so `synthetic_scene_result_with_connections`
+/// is the one that exercises `header.connections` -- this is the same
+/// fixture shape, with an empty connection list.
 fn synthetic_scene_result(
     pack_bytes: Vec<u8>,
     tileset_symbol: &'static str,
     width: u16,
     height: u16,
+) -> Result<super::OverworldScene, OverworldSceneError> {
+    synthetic_scene_result_with_connections(pack_bytes, tileset_symbol, width, height, &[])
+}
+
+/// [`synthetic_scene_result`], with `connections` threaded onto the
+/// synthetic room's own [`assets::MapHeader`] (issue #253) -- the one
+/// fixture path that lets a test build a room whose declared connections
+/// `super::OverworldScene::from_pack`'s own `resolve_connections` actually
+/// walks. `connections`' own `target` ids still resolve against the *real*
+/// generated `assets::MapHeaderTable`/`assets::LayoutTable` (mirroring
+/// `crate::flow::overworld_phase::connections::MapConnections`'s identical
+/// choice) -- there is no synthetic map-table stand-in -- so a connection
+/// test target must be a real bundled `MapId` whose own pack entry this
+/// fixture's `pack_bytes` also supplies.
+fn synthetic_scene_result_with_connections(
+    pack_bytes: Vec<u8>,
+    tileset_symbol: &'static str,
+    width: u16,
+    height: u16,
+    connections: &'static [assets::MapConnection],
 ) -> Result<super::OverworldScene, OverworldSceneError> {
     // pid + thread id distinguish concurrently-running tests' scratch
     // packs with no shared mutable state `(oop-boundaries)`: the test
@@ -641,8 +668,27 @@ fn synthetic_scene_result(
         primary_tileset: tileset_symbol,
         secondary_tileset: tileset_symbol,
     };
+    let header = assets::MapHeader {
+        id: assets::MapId("MAP_TEST"),
+        group: 0,
+        num: 0,
+        name: "MapTest",
+        layout: LayoutId("LAYOUT_MAP_TEST"),
+        music: assets::MusicId(0),
+        region_map_section: assets::RegionMapSectionId("MAPSEC_NONE"),
+        requires_flash: false,
+        weather: assets::Weather::None,
+        map_type: assets::MapType::Route,
+        allow_bike: true,
+        allow_escape: true,
+        allow_run: true,
+        show_name: false,
+        battle_scene: assets::BattleScene::Normal,
+        connections,
+    };
     let scene = super::OverworldScene::from_pack(
         &pack,
+        &header,
         &layout,
         super::PlayerCharacter::Brendan,
         &NO_OBJECT_EVENTS,
@@ -760,6 +806,313 @@ fn overworld_scene_from_pack_composes_a_non_blank_deterministic_frame() {
             usize::from(super::avatar::PLAYER_OBJ_Y)
         ),
         Some(rendering::Bgr555::from_raw(0x7C00).to_rgb888())
+    );
+}
+
+/// A real, registered `MapId`/`LayoutId` (issue #253's own connection-test
+/// target) with no bearing on this fixture beyond its identity and real
+/// dimensions (11x9, `LAYOUT_LITTLEROOT_TOWN_MAYS_HOUSE_1F`,
+/// `crates/assets/src/map_layouts.rs`): `OverworldScene::from_pack`'s
+/// `resolve_connections` walks the *real* generated `MapHeaderTable`/
+/// `LayoutTable` to resolve a connection's target (mirroring
+/// `crate::flow::overworld_phase::connections::MapConnections`'s identical
+/// choice), so a synthetic connection test needs a real map id to point at
+/// -- there is no synthetic map-table stand-in. Its own real house-interior
+/// content is irrelevant here; only its declared width/height matter, and
+/// this fixture supplies its own hand-built `map.bin` bytes for it below
+/// rather than reading the real pack.
+const CONNECTION_TARGET: assets::MapId = assets::MapId("MAP_LITTLEROOT_TOWN_MAYS_HOUSE_1F");
+const CONNECTION_TARGET_WIDTH: u16 = 11;
+const CONNECTION_TARGET_HEIGHT: u16 = 9;
+
+/// [`overworld_scene_from_pack_composes_a_non_blank_deterministic_frame`]'s
+/// own synthetic fixture, extended with one declared South connection
+/// (issue #253) whose target is [`CONNECTION_TARGET`]: a second physical
+/// tile (index 1, palette index 6 -- distinct from the base fixture's index
+/// 5) and a second metatile (id 1, `Covered`, same shape as the base
+/// fixture's own metatile 0) referencing it, plus a
+/// [`CONNECTION_TARGET_WIDTH`]x[`CONNECTION_TARGET_HEIGHT`]
+/// `layout/littleroot_town_mays_house_1f/map` entry whose every cell is
+/// that new metatile -- so a composed pixel sampling the connected map's
+/// content is visibly distinct (color) from one sampling the active grid or
+/// the border block (both still metatile 0, per the base fixture's own
+/// docs).
+fn connected_overworld_pack_entries(width: u16, height: u16) -> Vec<Entry> {
+    let mut entries = synthetic_overworld_pack_entries_for("general", width, height);
+
+    // Extend `tileset/general/tiles` from one 8x8 tile (index 0, palette
+    // index 5) to two, stacked vertically (8x16): a new opaque tile, index
+    // 1, every pixel palette index 6.
+    let tiles = entries
+        .iter_mut()
+        .find(|e| e.id == "tileset/general/tiles")
+        .expect("the general fixture always fabricates its own tiles entry");
+    tiles.meta = image_meta(8, 16, 4);
+    tiles.payload.extend(std::iter::repeat_n(6u8, 8 * 8));
+
+    // A second metatile (id 1), `Covered` like metatile 0 (module docs on
+    // why -- the player OBJ must never be hidden by it), every raw entry
+    // pointing at the new tile index 1.
+    let metatile: Vec<u8> = std::iter::repeat_n(1u16.to_le_bytes(), 8)
+        .flatten()
+        .collect();
+    entries
+        .iter_mut()
+        .find(|e| e.id == "tileset/general/metatiles")
+        .expect("the general fixture always fabricates its own metatiles entry")
+        .payload
+        .extend_from_slice(&metatile);
+    let attr = (assets::MetatileLayerType::Covered as u16) << 12;
+    entries
+        .iter_mut()
+        .find(|e| e.id == "tileset/general/metatile-attributes")
+        .expect("the general fixture always fabricates its own metatile-attributes entry")
+        .payload
+        .extend_from_slice(&attr.to_le_bytes());
+
+    // Palette bank 0, index 6: distinct from index 5's red (green, raw
+    // BGR555 `0x03E0`).
+    let bank0 = entries
+        .iter_mut()
+        .find(|e| e.id == "tileset/general/palette/00")
+        .expect("the general fixture always fabricates its own bank-0 palette entry");
+    bank0.meta = 7u16.to_le_bytes().to_vec();
+    bank0.payload.extend_from_slice(&0x03E0u16.to_le_bytes());
+
+    // The connected map's own `map.bin`: every cell metatile 1 (the new
+    // marker tile), walkable, elevation 3 -- collision/elevation are
+    // irrelevant here (rendering only), matching the base fixture's own
+    // convention.
+    let target_cell = assets::MetatileCell {
+        metatile_id: 1,
+        collision: 0,
+        elevation: 3,
+    }
+    .pack();
+    let target_cells = usize::from(CONNECTION_TARGET_WIDTH) * usize::from(CONNECTION_TARGET_HEIGHT);
+    let target_grid: Vec<u8> = std::iter::repeat_n(target_cell.to_le_bytes(), target_cells)
+        .flatten()
+        .collect();
+    entries.push(Entry {
+        id: "layout/littleroot_town_mays_house_1f/map",
+        kind_tag: 2,
+        meta: vec![],
+        payload: target_grid,
+    });
+
+    entries
+}
+
+/// Issue #253's own wiring test: a declared South connection actually
+/// reaches composed pixels, and a position past a *different*, undeclared
+/// edge still falls back to the border block -- the two acceptance-test
+/// halves (I-4, V-4) at the synthetic-fixture level, ahead of the real-pack
+/// Littleroot/Route 101 test below.
+#[test]
+fn compose_renders_a_declared_connections_tiles_past_the_active_grids_own_edge() {
+    let connections: &'static [assets::MapConnection] = &[assets::MapConnection {
+        direction: assets::Direction::South,
+        offset: 0,
+        target: CONNECTION_TARGET,
+    }];
+    let scene = synthetic_scene_result_with_connections(
+        write_synthetic_pack(connected_overworld_pack_entries(4, 4)),
+        "gTileset_General",
+        4,
+        4,
+        connections,
+    )
+    .expect("the connection fixture should decode cleanly");
+
+    // At rest, standing at the active grid's own origin: the resting
+    // viewport's bottom row samples world y == 4 -- one row south of the
+    // 4x4 grid's own last row (module docs' anchor math: `anchor_y == -5`,
+    // `VIEW_ROWS == 10`, so the last sampled row is `-5 + 9 == 4`).
+    let player = PlayerState::new((0, 0), 3, Direction::South);
+    let event_data = engine::event_data::EventData::new();
+    let frame = scene.compose(&player, &event_data, 0);
+
+    // Screen (112, 144): world (0, 4) -- south of the grid, within the
+    // connected map's own width (target x == 0) -- must show the connected
+    // map's own marker tile (green, palette index 6), not the border block.
+    assert_eq!(
+        frame.pixel(112, 144),
+        Some(rendering::Bgr555::from_raw(0x03E0).to_rgb888()),
+        "a cell covered by the declared South connection must render the \
+         connected map's own tile"
+    );
+
+    // Screen (96, 144): world (-1, 4) -- simultaneously south of the grid
+    // *and* west of it (x < 0), but this fixture declares no West
+    // connection. The South connection's own bounds check
+    // (`connected_cell_at`) does not cover negative x, so this must still
+    // fall all the way back to the border block (red, palette index 5,
+    // this fixture's border/grid color -- module docs on the base fixture).
+    assert_eq!(
+        frame.pixel(96, 144),
+        Some(rendering::Bgr555::from_raw(0x001F).to_rgb888()),
+        "a position past an edge with no declared connection must still \
+         use the border block"
+    );
+}
+
+/// A connection declared in the header but whose target map/layout/grid
+/// can't be resolved against the pack (here: no real generated `MapId`
+/// matches) must not be surfaced as an error, and must render exactly as
+/// if it were not declared at all -- [`super::ConnectedLayout`]'s own doc comment
+/// on why an unresolvable connection is simply omitted. This is also the
+/// state of every bundled interior room and of any bundled outdoor map's
+/// declared connection into a not-yet-extracted neighbour (e.g. Route
+/// 101's own connection into Oldale Town -- [`super::viewport::build_tilemaps`]'s
+/// docs).
+#[test]
+fn an_unresolvable_connection_falls_back_to_the_border_exactly_like_no_connection() {
+    let unresolvable: &'static [assets::MapConnection] = &[assets::MapConnection {
+        direction: assets::Direction::South,
+        offset: 0,
+        target: assets::MapId("MAP_THIS_ID_DOES_NOT_EXIST"),
+    }];
+    let with_connection = synthetic_scene_result_with_connections(
+        write_synthetic_pack(synthetic_overworld_pack_entries_for("general", 4, 4)),
+        "gTileset_General",
+        4,
+        4,
+        unresolvable,
+    )
+    .expect("an unresolvable connection must not fail from_pack");
+    let without_connection = synthetic_scene(4, 4);
+
+    let player = PlayerState::new((0, 0), 3, Direction::South);
+    let event_data = engine::event_data::EventData::new();
+    assert_eq!(
+        with_connection.compose(&player, &event_data, 0).pixels(),
+        without_connection.compose(&player, &event_data, 0).pixels(),
+        "a declared but unresolvable connection must render identically to \
+         no connection at all"
+    );
+}
+
+/// Review regression (#253), the *other* silent-omission path: the target
+/// map and its layout both resolve against the real generated tables (it's
+/// [`CONNECTION_TARGET`], a real bundled `MapId`), but the pack carries no
+/// `layout/<name>/map` entry for it at all. Still not an error -- that's
+/// exactly a not-yet-extracted neighbour -- and still observably identical
+/// to no connection, the same as the unknown-`MapId` case above
+/// ([`super::ConnectedLayout`]'s docs on the two omission modes).
+#[test]
+fn a_connection_whose_target_has_no_pack_entry_is_omitted_not_an_error() {
+    let connections: &'static [assets::MapConnection] = &[assets::MapConnection {
+        direction: assets::Direction::South,
+        offset: 0,
+        target: CONNECTION_TARGET,
+    }];
+    // The *base* fixture, deliberately not `connected_overworld_pack_entries`:
+    // it fabricates no `layout/littleroot_town_mays_house_1f/map` entry, so
+    // `resolve_connections` clears the header/layout table lookups and then
+    // fails at the pack lookup itself.
+    let with_connection = synthetic_scene_result_with_connections(
+        write_synthetic_pack(synthetic_overworld_pack_entries_for("general", 4, 4)),
+        "gTileset_General",
+        4,
+        4,
+        connections,
+    )
+    .expect("a bundled target with no pack entry must not fail from_pack");
+    assert!(
+        with_connection.connections.is_empty(),
+        "the connection must be omitted, not stored"
+    );
+
+    let without_connection = synthetic_scene(4, 4);
+    let player = PlayerState::new((0, 0), 3, Direction::South);
+    let event_data = engine::event_data::EventData::new();
+    assert_eq!(
+        with_connection.compose(&player, &event_data, 0).pixels(),
+        without_connection.compose(&player, &event_data, 0).pixels(),
+        "a connection whose target isn't in the pack must render identically \
+         to no connection at all"
+    );
+}
+
+/// Review regression (#253): a connected target's map entry is optional
+/// only when it is absent. A present entry of another pack kind is corrupt
+/// and must retain the exact pack lookup error rather than disappearing as
+/// though the neighbour had not been bundled.
+#[test]
+fn a_connection_target_with_the_wrong_pack_entry_kind_is_an_error_not_a_silent_omission() {
+    let connections: &'static [assets::MapConnection] = &[assets::MapConnection {
+        direction: assets::Direction::South,
+        offset: 0,
+        target: CONNECTION_TARGET,
+    }];
+    let mut entries = connected_overworld_pack_entries(4, 4);
+    let target_grid = entries
+        .iter_mut()
+        .find(|e| e.id == "layout/littleroot_town_mays_house_1f/map")
+        .expect("the connection fixture always fabricates the target's map entry");
+    target_grid.kind_tag = 1;
+    target_grid.meta = 0u16.to_le_bytes().to_vec();
+
+    let err = synthetic_scene_result_with_connections(
+        write_synthetic_pack(entries),
+        "gTileset_General",
+        4,
+        4,
+        connections,
+    )
+    .expect_err("a present connection grid of the wrong kind must be reported");
+    assert_eq!(
+        err,
+        OverworldSceneError::Pack(assets::PackError::WrongKind {
+            id: "layout/littleroot_town_mays_house_1f/map".to_owned(),
+            expected: "raw blob",
+            actual: "palette",
+        }),
+        "the connected map's pack lookup error must reach the caller verbatim"
+    );
+}
+
+/// Review regression (#253): a connection target that *is* in the pack but
+/// whose `map.bin` bytes are too short for its own declared dimensions is a
+/// corrupt pack, not a missing neighbour -- it must surface as an
+/// `OverworldSceneError` out of `from_pack` rather than being swallowed
+/// into a silent border fallback. Mirrors the *active* map's own
+/// `grid_bytes` validation, which has always propagated the identical
+/// `AssetError` ([`super::ConnectedLayout`]'s docs on the asymmetry this
+/// closes).
+#[test]
+fn a_connection_target_with_a_truncated_grid_is_an_error_not_a_silent_omission() {
+    let connections: &'static [assets::MapConnection] = &[assets::MapConnection {
+        direction: assets::Direction::South,
+        offset: 0,
+        target: CONNECTION_TARGET,
+    }];
+    let mut entries = connected_overworld_pack_entries(4, 4);
+    let target_grid = entries
+        .iter_mut()
+        .find(|e| e.id == "layout/littleroot_town_mays_house_1f/map")
+        .expect("the connection fixture always fabricates the target's map entry");
+    // One cell short of the target layout's own 11x9: present, decodable as
+    // a pack entry, and rejected by `MapLayout::grid`.
+    let full = target_grid.payload.len();
+    target_grid.payload.truncate(full - 2);
+
+    let err = synthetic_scene_result_with_connections(
+        write_synthetic_pack(entries),
+        "gTileset_General",
+        4,
+        4,
+        connections,
+    )
+    .expect_err("a present-but-truncated connection grid must be reported");
+    assert_eq!(
+        err,
+        OverworldSceneError::Asset(assets::AssetError::LayoutGridTooShort(
+            "LAYOUT_LITTLEROOT_TOWN_MAYS_HOUSE_1F",
+            usize::from(CONNECTION_TARGET_WIDTH) * usize::from(CONNECTION_TARGET_HEIGHT) * 2,
+            full - 2,
+        )),
+        "the connected map's own grid error must reach the caller verbatim"
     );
 }
 
@@ -1010,6 +1363,7 @@ fn real_pack_the_opposite_gender_rival_binds_for_either_player() {
         let events = assets::MapEventsTable::new().resolve(map).unwrap();
         super::OverworldScene::from_pack(
             &pack,
+            header,
             layout,
             player,
             events,
@@ -1122,6 +1476,187 @@ fn real_pack_route_103_rival_binds_to_the_opposite_protagonists_sheet() {
     );
 }
 
+// -- Real-pack Oldale Town / Route 103 background NPCs (issue #262) --------
+
+/// One [`super::npc::SpriteBinding`]'s worth of proof that a newly-bound
+/// background-NPC `graphics_id` really decodes against the real extracted
+/// pack -- not just that [`super::npc::resolve_sprite_source`] names a
+/// `sprite/<path>` id (already pinned pack-free by
+/// `npc::tests::resolve_sprite_source_resolves_the_oldale_and_route_103_background_npcs`),
+/// but that `AssetPack::sprite` actually finds that entry and
+/// `avatar::pack_people_sheet_frames` accepts its real dimensions (any
+/// mismatch is a real, real-pack-only failure mode --
+/// [`super::OverworldSceneError::SpriteSheetWrongDimensions`]/
+/// `ImagePixelCountMismatch`/`ImageNotTileAligned`). A nonzero base tile and
+/// the expected `npc_<n>` palette bank rule out the two ways a binding could
+/// silently be wrong instead of simply absent: reusing the player's own
+/// block (base tile `0`) or a different generic palette than upstream's
+/// `.paletteTag` names.
+fn assert_background_npc_binds(
+    bindings: &HashMap<&'static str, super::npc::SpriteBinding>,
+    graphics_id: &str,
+    expected_palette_bank: u8,
+) {
+    let binding = bindings
+        .get(graphics_id)
+        .copied()
+        .unwrap_or_else(|| panic!("{graphics_id} must bind against the real pack"));
+    assert_eq!(
+        binding.palette_bank(),
+        expected_palette_bank,
+        "{graphics_id}'s palette bank"
+    );
+    assert_ne!(
+        binding.base_tile(),
+        0,
+        "{graphics_id} must decode its own frame block, not reuse the \
+         player's at base tile 0"
+    );
+}
+
+/// The other half of "no longer invisible": a [`super::npc::SpriteBinding`]
+/// alone still draws nothing unless [`super::npc::oam_entries`] actually
+/// emits an entry for the object event using it. Mirrors
+/// [`real_pack_1f_oam_entries_cover_every_drawn_fresh_save_npc`]'s
+/// mechanics -- binding frame block, palette bank, 16x32 shape, and screen
+/// position derived from the player's own fixed one -- for a single
+/// `graphics_id`, one at a time rather than over a shared player position:
+/// `engine::overworld::object_event_is_in_view`'s spawn window is only ~17
+/// metatiles wide, and Route 103's trainers are spread across a 70-tile
+/// route, so no one player tile holds them all. The player is parked one
+/// metatile *north* of the NPC's own template tile, which puts it in that
+/// window and makes the expected entry position exactly one metatile south
+/// of [`super::avatar::PLAYER_OBJ_Y`] -- the same relationship the 1F test
+/// asserts for Mom, with the signs swapped.
+///
+/// Matching is by frame block rather than by count: bindings' blocks are
+/// disjoint by construction, so "exactly one entry addressing this
+/// binding's block" identifies this NPC's entry without assuming anything
+/// about how many *other* object events happen to share the window (Route
+/// 103's berry and cuttable trees are still unbound, and its twins are
+/// declared twice).
+fn assert_background_npc_draws_an_oam_entry(
+    scene: &super::OverworldScene,
+    map: assets::MapId,
+    data: &engine::event_data::EventData,
+    graphics_id: &str,
+) {
+    let event = assets::MapEventsTable::new()
+        .resolve(map)
+        .unwrap()
+        .object_events
+        .iter()
+        .find(|o| o.graphics_id == graphics_id)
+        .unwrap_or_else(|| panic!("{} declares {graphics_id}", map.0));
+    assert!(
+        engine::overworld::object_event_is_visible(event, data),
+        "{graphics_id}'s object event is fresh-save visible (`\"flag\": \"0\"`)"
+    );
+
+    let binding = scene.sprites.bindings()[graphics_id];
+    let player = PlayerState::new(
+        (i32::from(event.x), i32::from(event.y) - 1),
+        event.elevation,
+        Direction::South,
+    );
+    let entries = scene.sprites.entries(&player, data);
+
+    let block = super::avatar::FRAME_BLOCK_TILES;
+    let drawn: Vec<_> = entries
+        .iter()
+        .filter(|entry| {
+            (binding.base_tile()..binding.base_tile() + block).contains(&entry.tile_index())
+        })
+        .collect();
+    assert_eq!(
+        drawn.len(),
+        1,
+        "{graphics_id} must contribute exactly one OAM entry, drawn from \
+         its own binding's frame block -- a bound but never-emitted NPC is \
+         still invisible, which is the bug issue #262 fixes"
+    );
+
+    let entry = drawn[0];
+    assert_eq!(
+        entry.palette_bank(),
+        binding.palette_bank(),
+        "{graphics_id}'s entry draws from its own binding's palette bank"
+    );
+    assert!(entry.enabled(), "{graphics_id}'s entry is enabled");
+    assert_eq!(
+        entry.dimensions(),
+        (16, 32),
+        "{graphics_id} draws at this module's uniform 16x32 shape"
+    );
+    assert_eq!(
+        entry.x(),
+        i16::try_from(super::avatar::PLAYER_OBJ_X).unwrap(),
+        "{graphics_id} shares the player's column"
+    );
+    assert_eq!(
+        entry.y(),
+        super::avatar::PLAYER_OBJ_Y + u8::try_from(super::METATILE_PX).unwrap(),
+        "{graphics_id} stands one metatile south of the player"
+    );
+}
+
+/// Oldale Town's three fresh-save-visible background NPCs (issue #262):
+/// the girl (`GIRL_3`, `data/maps/OldaleTown/map.json:33-45`), the mart
+/// employee (`MART_EMPLOYEE`, `:46-59`), and the footprints man/maniac
+/// (`MANIAC`, `:60-73`) -- all `"flag": "0"`, so all three are always
+/// visible, unlike the town's own rival (`FLAG_HIDE_OLDALE_TOWN_RIVAL`).
+/// Palette banks per each id's own `gObjectEventGraphicsInfo_*.paletteTag`
+/// (`object_event_graphics_info.h`): `MART_EMPLOYEE` is `NPC_1`, `GIRL_3` is
+/// `NPC_2`, `MANIAC` is `NPC_4`.
+#[test]
+#[ignore = "needs a local pack: run `cargo xtask extract` first"]
+fn real_pack_oldale_town_binds_its_background_npcs() {
+    const OLDALE_TOWN: assets::MapId = assets::MapId("MAP_OLDALE_TOWN");
+    let data = fresh_save_event_data();
+    let scene = super::load_room(OLDALE_TOWN, super::PlayerCharacter::Brendan, &data)
+        .expect("run `cargo xtask extract` first");
+    let bindings = scene.sprites.bindings();
+
+    for (graphics_id, palette_bank) in [
+        ("OBJ_EVENT_GFX_MART_EMPLOYEE", 1),
+        ("OBJ_EVENT_GFX_GIRL_3", 2),
+        ("OBJ_EVENT_GFX_MANIAC", 4),
+    ] {
+        assert_background_npc_binds(bindings, graphics_id, palette_bank);
+        assert_background_npc_draws_an_oam_entry(&scene, OLDALE_TOWN, &data, graphics_id);
+    }
+}
+
+/// Route 103's own background NPCs/trainers (issue #262), every one of them
+/// `"flag": "0"` on a fresh save (`data/maps/Route103/map.json`) -- unlike
+/// its own rival (`FLAG_HIDE_ROUTE_103_RIVAL`) and Professor Birch
+/// (`FLAG_HIDE_ROUTE_103_BIRCH`, already bound before this slice). Palette
+/// banks per each id's own `gObjectEventGraphicsInfo_*.paletteTag`.
+#[test]
+#[ignore = "needs a local pack: run `cargo xtask extract` first"]
+fn real_pack_route_103_binds_its_background_npcs() {
+    const ROUTE_103: assets::MapId = assets::MapId("MAP_ROUTE103");
+    let data = fresh_save_event_data();
+    let scene = super::load_room(ROUTE_103, super::PlayerCharacter::Brendan, &data)
+        .expect("run `cargo xtask extract` first");
+    let bindings = scene.sprites.bindings();
+
+    for (graphics_id, palette_bank) in [
+        ("OBJ_EVENT_GFX_MAN_3", 2),
+        ("OBJ_EVENT_GFX_WOMAN_2", 3),
+        ("OBJ_EVENT_GFX_FISHERMAN", 2),
+        ("OBJ_EVENT_GFX_BOY_1", 3),
+        ("OBJ_EVENT_GFX_POKEFAN_M", 2),
+        ("OBJ_EVENT_GFX_BLACK_BELT", 3),
+        ("OBJ_EVENT_GFX_MAN_5", 2),
+        ("OBJ_EVENT_GFX_SWIMMER_F", 2),
+        ("OBJ_EVENT_GFX_SWIMMER_M", 1),
+    ] {
+        assert_background_npc_binds(bindings, graphics_id, palette_bank);
+        assert_background_npc_draws_an_oam_entry(&scene, ROUTE_103, &data, graphics_id);
+    }
+}
+
 /// A female saved game must build Route 103 around May's player assets,
 /// while the map's variable graphics object resolves independently to
 /// Brendan as her rival. This pins the public `load_room` boundary where
@@ -1196,7 +1731,7 @@ fn female_route_103_room_load_uses_may_for_player_and_brendan_for_rival() {
 // -- Real-pack elevation-driven OBJ priority (S-5, issue #218) ---------------
 
 /// The visual counterpart to
-/// `flow::overworld_phase::tests::bedroom_bed_side_column_is_walkable_and_retains_the_raised_previous_elevation`
+/// `flow::overworld_phase::step_tests::bedroom_bed_side_column_is_walkable_and_retains_the_raised_previous_elevation`
 /// (this crate's collision-side pin for the same issue): standing on the
 /// protagonist bedroom bed's raised elevation-4 edge tile must draw the
 /// player OBJ at the raised OAM priority
@@ -1346,10 +1881,27 @@ fn animated_tile_screen_rects(
         assets::BorderGrid::new(&scene.border_bytes).expect("border_bytes validated in from_pack");
     let primary_attrs = assets::MetatileAttributeTable::new(&scene.primary_attrs_bytes);
     let secondary_attrs = assets::MetatileAttributeTable::new(&scene.secondary_attrs_bytes);
+    // Issue #253: rebuild the same per-connection grids `Self::frame_viewport`
+    // would, so this helper stays a faithful stand-in for it even though
+    // Littleroot Town's own North connection never actually resolves at
+    // this helper's own on-screen-flower fixture positions.
+    let connections: Vec<super::viewport::ConnectionView<'_>> = scene
+        .connections
+        .iter()
+        .map(|connection| super::viewport::ConnectionView {
+            direction: connection.direction,
+            offset: connection.offset,
+            grid: connection
+                .layout
+                .grid(&connection.grid_bytes)
+                .expect("grid_bytes validated in resolve_connections"),
+        })
+        .collect();
     let viewport = super::viewport::build_tilemaps(
         player,
         &grid,
         &border,
+        &connections,
         &scene.primary_metatiles,
         &scene.secondary_metatiles,
         &primary_attrs,
@@ -1487,4 +2039,177 @@ fn real_pack_tileset_animation_repeats_after_a_full_cadence_period() {
             tick + FULL_CADENCE_PERIOD
         );
     }
+}
+
+// -- Real-pack connected-map rendering (issue #253, I-4/V-4) ----------------
+
+/// Littleroot Town ↔ Route 101's own real cross-boundary continuity: a
+/// camera near Littleroot's north edge (`MAP_LITTLEROOT_TOWN`'s only
+/// declared connection, `Direction::North`, `offset: 0`, into
+/// `MAP_ROUTE101` -- `crates/assets/src/map_headers.rs`) must show Route
+/// 101's own tiles, not a hard cut to the border block, and must show
+/// *exactly* the tiles Route 101's own layout renders at the corresponding
+/// world position -- no seam.
+///
+/// A deterministic pixel comparison, not a golden image: rather than
+/// pinning specific upstream colors (which would break the moment either
+/// map's art changes), this composes the same physical world strip two
+/// ways -- once via Littleroot's own north-edge connection fallback, once
+/// by loading Route 101 directly and centering the camera on the
+/// corresponding position on *its* side (offset 0 means the x axes line up
+/// 1:1; the constants below derive the y alignment from that same
+/// [`super::PlayerCharacter`]/camera-centering math [`super::viewport`]'s
+/// own module docs describe) -- and asserts the two agree, pixel for
+/// pixel, everywhere in the shared strip.
+#[test]
+#[ignore = "needs a local pack: run `cargo xtask extract` first"]
+fn real_pack_littleroot_and_route_101_render_continuously_across_their_shared_edge() {
+    const LITTLEROOT: assets::MapId = assets::MapId("MAP_LITTLEROOT_TOWN");
+    const ROUTE_101: assets::MapId = assets::MapId("MAP_ROUTE101");
+
+    let scene = super::load_room(
+        LITTLEROOT,
+        super::PlayerCharacter::Brendan,
+        &engine::event_data::EventData::new(),
+    )
+    .expect("run `cargo xtask extract` first");
+    // The pre-#253 shape: the same room, its own declared connections
+    // stripped, so composing it reproduces exactly what a hard cut to the
+    // border block used to render -- `overworld::tests` is a descendant
+    // module of `overworld`, so it can reach this private field directly
+    // (the same access `animated_tile_screen_rects` above already uses).
+    let mut scene_border_only = super::load_room(
+        LITTLEROOT,
+        super::PlayerCharacter::Brendan,
+        &engine::event_data::EventData::new(),
+    )
+    .expect("run `cargo xtask extract` first");
+    scene_border_only.connections.clear();
+    let route_101 = super::load_room(
+        ROUTE_101,
+        super::PlayerCharacter::Brendan,
+        &engine::event_data::EventData::new(),
+    )
+    .expect("run `cargo xtask extract` first");
+
+    let data = fresh_save_event_data();
+    // Standing just inside Littleroot's own north edge (row 1 of its own
+    // 20x20 grid -- `crates/assets/src/map_layouts.rs`), facing north: at
+    // rest, the resting viewport's own anchor (`anchor_y == y -
+    // PLAYER_VIEW_ROW == 1 - 5 == -4`, `super::viewport`'s module docs)
+    // samples world rows `-4..=5` -- the top four rows (screen rows 0..=3,
+    // world rows `-4..=-1`, pixel rows `0..64`) already fall north of
+    // Littleroot's own y == 0 edge, squarely in this connection's own
+    // territory. All four are inside `viewport::within_backup_map_band`'s
+    // own `y >= -7` cover, so the band bound never trims this strip.
+    let player = PlayerState::new((10, 1), 3, Direction::North);
+    let frame = scene.compose(&player, &data, 0);
+    let frame_border_only = scene_border_only.compose(&player, &data, 0);
+
+    // Route 101's own camera, centered so the *same* screen pixel samples
+    // the *same* world position `connected_cell_at`'s North-connection
+    // formula names (`target_y == connected_height + y`, offset 0 leaves x
+    // untouched): matching x (10) and a y whose own `anchor_y` lines up
+    // Route 101's local row 19 (its own south edge) with Littleroot's local
+    // row -1 (screen row 3 in both compositions) -- `21 - 5 == 16`, and
+    // `16 + 3 == 19`, against Littleroot's own `-4 + 3 == -1`.
+    let route_101_player = PlayerState::new((10, 21), 3, Direction::North);
+    let frame_route_101 = route_101.compose(&route_101_player, &data, 0);
+
+    // The shared strip: screen pixel rows `0..64` -- 4 metatile rows, the
+    // full width -- entirely north of Littleroot's own grid at this player
+    // position, per the anchor math above. The last of them (screen row 3,
+    // world row -1 on Littleroot's side, Route 101's own row 19) is the
+    // row immediately adjacent to the seam, the one the comparison most
+    // needs to cover (review of #253: the strip used to stop at `0..48`,
+    // three rows, excluding exactly that row).
+    let mut any_pixel_changed_by_the_connection = false;
+    for py in 0..64usize {
+        for px in 0..240usize {
+            let with_connection = frame.pixel(px, py);
+            let without_connection = frame_border_only.pixel(px, py);
+            let neighbour_direct = frame_route_101.pixel(px, py);
+            assert_eq!(
+                with_connection, neighbour_direct,
+                "pixel ({px}, {py}) north of Littleroot's own edge must match Route 101's \
+                 own rendering at the corresponding world position exactly -- no seam"
+            );
+            if with_connection != without_connection {
+                any_pixel_changed_by_the_connection = true;
+            }
+        }
+    }
+    assert!(
+        any_pixel_changed_by_the_connection,
+        "the connection must actually change at least one pixel versus the pre-#253 \
+         border-only fallback, or the two comparisons above would be trivially \
+         satisfied by an all-border strip"
+    );
+}
+
+/// The same seam proof for the cluster's *other* live outdoor edge:
+/// Route 101's only North connection (`MAP_OLDALE_TOWN`, `offset: 0` --
+/// `crates/assets/src/map_headers.rs`), newly resolvable now that
+/// `cargo xtask extract`'s `LAYOUTS` table bundles Oldale Town's grid
+/// bytes (issue #248). Identical geometry to
+/// [`real_pack_littleroot_and_route_101_render_continuously_across_their_shared_edge`]
+/// -- both layouts are 20x20 and the offset is 0 -- so the same anchor
+/// math covers the same four-row strip; see that test's comments for the
+/// derivation.
+#[test]
+#[ignore = "needs a local pack: run `cargo xtask extract` first"]
+fn real_pack_route_101_and_oldale_town_render_continuously_across_their_shared_edge() {
+    const ROUTE_101: assets::MapId = assets::MapId("MAP_ROUTE101");
+    const OLDALE: assets::MapId = assets::MapId("MAP_OLDALE_TOWN");
+
+    let scene = super::load_room(
+        ROUTE_101,
+        super::PlayerCharacter::Brendan,
+        &engine::event_data::EventData::new(),
+    )
+    .expect("run `cargo xtask extract` first");
+    let mut scene_border_only = super::load_room(
+        ROUTE_101,
+        super::PlayerCharacter::Brendan,
+        &engine::event_data::EventData::new(),
+    )
+    .expect("run `cargo xtask extract` first");
+    scene_border_only.connections.clear();
+    let oldale = super::load_room(
+        OLDALE,
+        super::PlayerCharacter::Brendan,
+        &engine::event_data::EventData::new(),
+    )
+    .expect("run `cargo xtask extract` first");
+
+    let data = fresh_save_event_data();
+    let player = PlayerState::new((10, 1), 3, Direction::North);
+    let frame = scene.compose(&player, &data, 0);
+    let frame_border_only = scene_border_only.compose(&player, &data, 0);
+
+    let oldale_player = PlayerState::new((10, 21), 3, Direction::North);
+    let frame_oldale = oldale.compose(&oldale_player, &data, 0);
+
+    let mut any_pixel_changed_by_the_connection = false;
+    for py in 0..64usize {
+        for px in 0..240usize {
+            let with_connection = frame.pixel(px, py);
+            let without_connection = frame_border_only.pixel(px, py);
+            let neighbour_direct = frame_oldale.pixel(px, py);
+            assert_eq!(
+                with_connection, neighbour_direct,
+                "pixel ({px}, {py}) north of Route 101's own edge must match Oldale Town's \
+                 own rendering at the corresponding world position exactly -- no seam"
+            );
+            if with_connection != without_connection {
+                any_pixel_changed_by_the_connection = true;
+            }
+        }
+    }
+    assert!(
+        any_pixel_changed_by_the_connection,
+        "the connection must actually change at least one pixel versus the border-only \
+         fallback, or the comparisons above would be trivially satisfied by an \
+         all-border strip"
+    );
 }

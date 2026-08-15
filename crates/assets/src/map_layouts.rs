@@ -248,6 +248,27 @@ impl<'a> LayoutGrid<'a> {
         usize::from(self.width) * usize::from(self.height)
     }
 
+    /// This grid's width in metatiles (its owning [`MapLayout::width`]).
+    ///
+    /// `pokeemerald-rs`'s viewport uses this (alongside
+    /// [`height`](LayoutGrid::height)) to tell which edge an out-of-bounds
+    /// query position falls past, when resolving a map connection's own
+    /// edge strip instead of falling straight to the border block --
+    /// `crates/pokeemerald-rs/src/overworld/viewport.rs`'s
+    /// `connected_cell_at`.
+    #[must_use]
+    pub const fn width(&self) -> u16 {
+        self.width
+    }
+
+    /// This grid's height in metatiles (its owning [`MapLayout::height`]).
+    /// See [`width`](LayoutGrid::width)'s doc comment for why this is
+    /// exposed.
+    #[must_use]
+    pub const fn height(&self) -> u16 {
+        self.height
+    }
+
     /// The decoded cell at `(x, y)`, or `None` if out of bounds.
     #[must_use]
     pub fn cell_at(&self, x: u16, y: u16) -> Option<MetatileCell> {

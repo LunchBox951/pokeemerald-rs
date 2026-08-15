@@ -102,7 +102,8 @@ pub(crate) const fn expand_5_to_8(c: u8) -> u8 {
 /// for channels that actually came from [`expand_5_to_8`] (e.g. every
 /// [`Rgb888`] this crate produces, all ultimately from [`Bgr555::to_rgb888`]
 /// or a blend/brighten/darken of one) — an arbitrary externally-supplied
-/// [`Rgb888`] would round-trip through the nearest 5-bit value instead.
+/// [`Rgb888`] is instead truncated to its top 5 bits via `c >> 3`, discarding
+/// the low 3 bits rather than rounding.
 pub(crate) const fn compress_8_to_5(c: u8) -> u8 {
     c >> 3
 }
