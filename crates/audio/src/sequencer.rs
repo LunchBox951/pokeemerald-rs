@@ -182,6 +182,13 @@ impl Sequencer {
     /// master reverb level across a song whose header left reverb unset
     /// (`SongHeader::reverb`'s SET bit, `m4a_internal.h:12`..`:13`;
     /// `m4a.c:661`..`:662`).
+    ///
+    /// `reverb_level`'s domain is `0..=127` (`SOUND_MODE_REVERB_VAL`,
+    /// `m4a_internal.h:12`); a larger value is clamped, the same bound
+    /// [`Song::with_reverb`] enforces at the header-ingest boundary --
+    /// upstream itself masks the byte (`soundInfo->reverb = temp &
+    /// SOUND_MODE_REVERB_VAL`, `m4a.c:445`), so no caller-supplied level may
+    /// push the comb feedback past the canonical range.
     #[must_use]
     pub fn with_resolved_reverb(
         song: Song,
@@ -191,7 +198,7 @@ impl Sequencer {
     ) -> Self {
         let tracks = (0..song.track_count()).map(|_| TrackState::new()).collect();
         let tempo_i = song.initial_tempo();
-        let mixer = Mixer::new(master_volume, max_voices).with_reverb_level(reverb_level);
+        let mixer = Mixer::new(master_volume, max_voices).with_reverb_level(reverb_level.min(127));
         Self {
             song,
             tracks,
@@ -1771,6 +1778,35 @@ mod tests {
             fixed.iter().zip(&plain).any(|(a, b)| a != b),
             "the DAC-corrected register must change the rendered wave waveform"
         );
+    }
+
+    /// [`Sequencer::with_resolved_reverb`] clamps its level to the
+    /// `SOUND_MODE_REVERB_VAL` domain (`0..=127`) exactly as
+    /// [`Song::with_reverb`] does at the header boundary: an out-of-range
+    /// `255` must behave as `127`, never as unclamped comb feedback.
+    #[test]
+    fn an_out_of_range_resolved_reverb_level_clamps_to_the_canonical_maximum() {
+        let song = || {
+            Song::new(
+                vec![Instrument::CgbSquare1(SquareTone {
+                    duty: 2,
+                    sweep: 0,
+                    adsr: CgbAdsr::flat(),
+                    fixed_rate: false,
+                })],
+                vec![cgb_test_track()],
+                150,
+            )
+        };
+        let mut clamped = Sequencer::with_resolved_reverb(song(), 15, 8, 255);
+        let mut canonical = Sequencer::with_resolved_reverb(song(), 15, 8, 127);
+        let mut a = vec![0.0; Sequencer::FRAME_SAMPLES];
+        let mut b = vec![0.0; Sequencer::FRAME_SAMPLES];
+        for _ in 0..8 {
+            clamped.render_frame(&mut a);
+            canonical.render_frame(&mut b);
+            assert_eq!(a, b, "255 must render exactly as the clamped 127");
+        }
     }
 
     #[test]
