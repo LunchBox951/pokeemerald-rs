@@ -49,6 +49,27 @@
 //! be populated on the `FirstBattle` -> `Overworld` edge, so the identical
 //! state transition produced by an aborted battle fails closed.
 //!
+//! # Issue #251: the concluding frame now stands in Birch's lab, unbudgeted
+//!
+//! `pokeemerald_rs::flow::overworld_phase::first_battle_conclusion::OverworldPhase::conclude_first_battle`
+//! now runs on the very same frame the battle empties its slot -- healing
+//! the party, writing the Birch's-bag vars, and warping the player to
+//! `MAP_LITTLEROOT_TOWN_PROFESSOR_BIRCHS_LAB` -- so by the time this
+//! script's own final segments run, the player already stands in the lab,
+//! not on Route 101's grass. `AppState` carries no map identity at all, so
+//! this changes nothing about the script's own shape (`SEGMENTS`, the frame
+//! budget below) -- confirmed by re-running this scenario against the real
+//! pack while authoring issue #251, unchanged.
+//!
+//! This script is **not** extended to walk the newly-reachable lab
+//! interior. `Route101_EventScript_BirchsBag`'s own remainder past the
+//! warp -- Birch's thank-you dialog, the gender-conditional bedroom-hide
+//! calls -- has no script-engine counterpart yet
+//! (`first_battle_conclusion`'s own module docs, "What's deliberately
+//! deferred"), so there is no honestly-modelled next milestone to walk
+//! toward; extending the script here would only prove the lab's own empty
+//! floor is walkable, which is not this scenario's acceptance criterion.
+//!
 //! # The route, tile by tile
 //!
 //! Traced empirically against the real pack while authoring this scenario

@@ -25,6 +25,9 @@
 //! [`OverworldPhase::advance_wild_battle_frame`]),
 //! [`first_battle_trigger`] (the Route 101 scripted first-battle coord-event
 //! trigger, issue #231, [`OverworldPhase::advance_first_battle_frame`]),
+//! [`first_battle_conclusion`] (`Route101_EventScript_BirchsBag`'s
+//! post-battle heal/var-writes/warp tail, issue #251,
+//! [`OverworldPhase::conclude_first_battle`]),
 //! [`route103_rival_trigger`] (the Route 103 rival battle's own A-press
 //! interaction trigger and rival-sprite setup, issue #248,
 //! [`OverworldPhase::advance_route103_rival_battle_frame`]), and
@@ -44,6 +47,7 @@ use crate::overworld::{self, NpcDialog, OverworldScene, OverworldSceneError};
 use crate::start_menu::StartMenu;
 
 mod connections;
+mod first_battle_conclusion;
 mod first_battle_trigger;
 mod frame;
 mod input;
@@ -748,6 +752,10 @@ pub(super) fn saved_map_id(warp: WarpData) -> Option<assets::MapId> {
 mod connections_tests;
 #[cfg(test)]
 mod decoration_tests;
+/// `first_battle_conclusion`'s tests (issue #251) -- the same per-area split
+/// `route103_rival_tests`' own doc comment explains.
+#[cfg(test)]
+mod first_battle_conclusion_tests;
 #[cfg(test)]
 mod first_battle_trigger_tests;
 #[cfg(test)]

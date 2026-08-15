@@ -73,9 +73,8 @@
 //!
 //! Before this issue, this port modelled *none* of the above and instead
 //! failed closed at the one place the gap was RNG-observable: a fainted lead
-//! could never re-roll a wild encounter
-//! (`crate::flow::wild_encounter::lead_can_fight`) and could
-//! never re-enter the Route 103 rival fight
+//! could never re-roll a wild encounter (`crate::flow::wild_encounter::lead_can_fight`,
+//! since removed) and could never re-enter the Route 103 rival fight
 //! (`battle::BattleError::FaintedBattler`, an emergent consequence of
 //! [`battle::Battle::new`]/`new_trainer` refusing a fainted battler, not a
 //! bespoke guard -- `route103_rival_trigger`'s own former module docs
@@ -83,12 +82,16 @@
 //! trainer loss any more: this method runs the instant such a loss is
 //! reported, before the driver ever returns control to
 //! [`super::OverworldPhase::step`], so no frame exists in which the party is
-//! fainted and the player can act. One loss path is deliberately exempt --
-//! the Route 101 scripted first battle, whose `CB2_EndFirstBattle` has no
+//! fainted and the player can act. One loss path used to be exempt -- the
+//! Route 101 scripted first battle, whose `CB2_EndFirstBattle` has no
 //! `IsPlayerDefeated` branch and so never whites out -- which is why
-//! `lead_can_fight` survives, narrowed to that residual state
-//! (`crate::flow::wild_encounter`'s module docs, "The fail-closed guard,
-//! narrowed").
+//! `lead_can_fight` survived past this issue, narrowed to that residual
+//! state. Issue #251's `first_battle_conclusion` closes it too (its own
+//! heal is not routed through *this* method -- see that module's docs for
+//! why: no money halving, no heal-location warp, just
+//! `Route101_EventScript_BirchsBag`'s own narrower `HealPlayerParty` +
+//! warp-to-lab), which is why both fail-closed guards this section used to
+//! name are gone rather than merely narrowed further.
 //!
 //! # RNG stream
 //!

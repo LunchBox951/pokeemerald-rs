@@ -267,6 +267,15 @@ fn a_step_that_does_not_land_on_the_trigger_tile_starts_nothing() {
 /// ([`OverworldPhase::step`] -> [`crate::flow::first_battle::advance_first_battle`]),
 /// freezing the overworld exactly as an ordinary wild battle does, and hands
 /// the player's mon back on the frame it ends.
+///
+/// The "frozen" claim is checked only on frames that leave [`OverworldPhase::first_battle`]
+/// still `Some` -- the one frame that empties it (issue #251) also runs
+/// [`OverworldPhase::conclude_first_battle`], which may move the player via
+/// its own warp to Birch's lab (pack-dependent:
+/// [`OverworldPhase::warp_to_position`]'s "leaves the player exactly where
+/// they stood" fallback when no pack is extracted). That warp is this
+/// module's own concern, not this test's -- see
+/// `super::first_battle_conclusion_tests` for its pins.
 #[test]
 fn the_scripted_first_battle_plays_to_a_terminal_outcome_and_hands_the_lead_back() {
     let (tx, ty) = ROUTE_101_TRIGGER_TILE;
@@ -289,11 +298,13 @@ fn the_scripted_first_battle_plays_to_a_terminal_outcome_and_hands_the_lead_back
             frames < 500,
             "the headless first-battle driver must terminate"
         );
-        assert_eq!(
-            phase.player.position(),
-            frozen_at,
-            "the overworld is frozen while the scripted first battle runs"
-        );
+        if phase.first_battle.is_some() {
+            assert_eq!(
+                phase.player.position(),
+                frozen_at,
+                "the overworld is frozen while the scripted first battle runs"
+            );
+        }
     }
     let lead = phase
         .party_lead
@@ -313,33 +324,57 @@ fn the_scripted_first_battle_plays_to_a_terminal_outcome_and_hands_the_lead_back
 /// `first_battle_trigger`'s "When the var advances" section), so stepping
 /// onto the same tile again starts nothing -- no second battle, and the roll
 /// doesn't silently fall through to an ordinary wild encounter either.
+///
+/// Issue #251's own conclusion advances the var a second time, to its
+/// terminal `3` (`super::first_battle_conclusion`'s own module docs) --
+/// this test's subject is the trigger's refusal, not that further advance,
+/// so it drives the battle to conclusion on its own throwaway phase purely
+/// to obtain the real post-conclusion var value, then re-approaches the
+/// tile on a **fresh** phase with that value pre-set. A single phase
+/// carried straight through would conflate two different pack-dependent
+/// facts -- whether `conclude_first_battle`'s own warp fires depends on
+/// whether a local pack is extracted (`OverworldPhase::warp_to_position`'s
+/// "leaves the player exactly where they stood" fallback), and this test
+/// must pass identically either way.
 #[test]
 fn after_the_battle_ends_the_trigger_tile_cannot_refire() {
     let (tx, ty) = ROUTE_101_TRIGGER_TILE;
+    let mut concluded = route_101_trigger_phase(PlayerState::new(
+        (tx - 1, ty),
+        ROUTE_101_TRIGGER_ELEVATION,
+        Direction::East,
+    ));
+    concluded.rng = Rng::new(4242);
+    concluded.party_lead = Some(new_game::provisional_starter());
+    walk_one_tile_east(&mut concluded);
+    let mut frames = 0;
+    while concluded.first_battle.is_some() {
+        concluded.step(held(Buttons::RIGHT));
+        frames += 1;
+        assert!(frames < 500, "setup: the driver must terminate");
+    }
+    let concluded_state = concluded
+        .save1
+        .event_data
+        .var_get(VAR_ROUTE101_STATE)
+        .expect("VAR_ROUTE101_STATE is an ordinary var id");
+    assert_eq!(
+        concluded_state, 3,
+        "setup: the conclusion must have advanced the var to its terminal value"
+    );
+
+    // A fresh phase, carrying only the concluded var value forward -- the
+    // same kind of completed step that fired the trigger the first time.
     let mut phase = route_101_trigger_phase(PlayerState::new(
         (tx - 1, ty),
         ROUTE_101_TRIGGER_ELEVATION,
         Direction::East,
     ));
-    phase.rng = Rng::new(4242);
-    phase.party_lead = Some(new_game::provisional_starter());
-    walk_one_tile_east(&mut phase);
-    let mut frames = 0;
-    while phase.first_battle.is_some() {
-        phase.step(held(Buttons::RIGHT));
-        frames += 1;
-        assert!(frames < 500, "setup: the driver must terminate");
-    }
-    assert_eq!(
-        phase.save1.event_data.var_get(VAR_ROUTE101_STATE),
-        Ok(2),
-        "the fired trigger advanced the var, so it can't refire"
-    );
-
-    // Walk off the tile and back onto it -- a fresh completed step, the same
-    // kind that fired the trigger the first time.
-    phase.player = PlayerState::new((tx - 1, ty), ROUTE_101_TRIGGER_ELEVATION, Direction::East);
-    phase.pending_landing = None;
+    phase
+        .save1
+        .event_data
+        .var_set(VAR_ROUTE101_STATE, concluded_state)
+        .expect("VAR_ROUTE101_STATE is an ordinary var id");
     let rng_before = phase.rng.state();
     walk_one_tile_east(&mut phase);
 
@@ -537,10 +572,24 @@ fn real_pack_crossing_into_route_101_lands_on_the_rescue_trigger_and_starts_the_
         .as_ref()
         .expect("the battle writes the lead mon back once it ends");
     assert_eq!(lead.species(), new_game::PROVISIONAL_STARTER_SPECIES);
+    assert!(
+        !lead.is_fainted(),
+        "issue #251's conclusion heals the lead the instant the battle ends -- see \
+         first_battle_conclusion_tests for its own dedicated pins"
+    );
     assert_eq!(
         phase.save1.event_data.var_get(VAR_ROUTE101_STATE),
-        Ok(2),
-        "the real trigger tile must be consumed once the battle ends"
+        Ok(3),
+        "the real trigger tile must be consumed once the battle ends, and issue #251's own \
+         conclusion advances the var a second time, past this trigger's own \
+         TRIGGER_CONSUMED_STATE, to its terminal value"
+    );
+    assert_eq!(
+        phase.map_id,
+        assets::MapId("MAP_LITTLEROOT_TOWN_PROFESSOR_BIRCHS_LAB"),
+        "the conclusion's own warp MAP_LITTLEROOT_TOWN_PROFESSOR_BIRCHS_LAB, 6, 5 must resolve \
+         against the real pack too, reached this time through the real trigger rather than a \
+         synthetic Route 101 room (first_battle_conclusion_tests' own real-pack test)"
     );
 }
 
@@ -819,25 +868,29 @@ fn route_101_has_no_warp_events_so_the_trigger_can_never_race_one() {
 #[test]
 fn the_prevent_exit_coord_events_never_start_a_battle() {
     let (tx, ty) = ROUTE_101_TRIGGER_TILE;
+    // Starts directly on the rescue tile itself, not one step west of it:
+    // with the var already past `PRE_RESCUE_STATE` (below), the rescue
+    // trigger's own gate no longer matches there, so no walk onto it is
+    // needed to reach the ordinary-ground state this test wants before
+    // stepping north.
     let mut phase = route_101_trigger_phase(PlayerState::new(
-        (tx - 1, ty),
+        (tx, ty),
         ROUTE_101_TRIGGER_ELEVATION,
-        Direction::East,
+        Direction::North,
     ));
-    phase.rng = Rng::new(4242);
+    // The value `Route101_EventScript_StartBirchRescue`'s own trigger-time
+    // write leaves behind (`super::first_battle_trigger::TRIGGER_CONSUMED_STATE`)
+    // -- set directly rather than reached by driving a battle to conclusion,
+    // since issue #251's own conclusion now advances the var a second time,
+    // to `3` (`super::first_battle_conclusion`'s module docs), and this
+    // test's subject is the script-name discriminator `PreventExitSouth`'s
+    // *own* `var_value == 2` happens to share, not that later advance.
+    phase
+        .save1
+        .event_data
+        .var_set(VAR_ROUTE101_STATE, 2)
+        .expect("VAR_ROUTE101_STATE is an ordinary var id");
     phase.party_lead = Some(new_game::provisional_starter());
-    walk_one_tile_east(&mut phase);
-    let mut frames = 0;
-    while phase.first_battle.is_some() {
-        phase.step(held(Buttons::RIGHT));
-        frames += 1;
-        assert!(frames < 500, "setup: the driver must terminate");
-    }
-    assert_eq!(
-        phase.save1.event_data.var_get(VAR_ROUTE101_STATE),
-        Ok(2),
-        "setup: the consumed trigger leaves exactly the value PreventExit* gates on"
-    );
 
     // North onto `(10, 18)` -- `Route101_EventScript_PreventExitSouth`'s own
     // coord-event tile.

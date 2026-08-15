@@ -54,6 +54,12 @@ const RIVAL_MAY_NORMAL_GFX_ID: u16 = 105;
 /// `FLAG_HIDE_ROUTE_103_RIVAL` (`include/constants/flags.h:772`).
 const FLAG_HIDE_ROUTE_103_RIVAL: u16 = 0x2D3;
 
+/// `VAR_STARTER_MON` (`include/constants/vars.h:53`) -- independently
+/// transcribed here too, the same convention [`VAR_OBJ_GFX_ID_0`]'s own doc
+/// comment explains. A fresh phase's `EventData` defaults every var to `0`
+/// (Treecko), which is why most tests below need no explicit write at all.
+const VAR_STARTER_MON: u16 = 0x4023;
+
 /// The rival object event's own tile (`data/maps/Route103/map.json`,
 /// `local_id` 2) -- `(10, 3)`, elevation 3, facing right.
 const RIVAL_TILE: (i32, i32) = (10, 3);
@@ -80,9 +86,13 @@ fn route_103_phase_facing_the_rival() -> OverworldPhase {
 
 /// A battle-ready lead of `species`/`level` with a single `move_id`, built
 /// directly (not through [`new_game::provisional_starter`]) so the tests
-/// below can control level -- needed to force a fast, deterministic win
-/// (module docs on `PlayerStarter::from_species`: any of the three real
-/// starters reaches [`begin_route103_rival_battle`] honestly).
+/// below can control level -- needed to force a fast, deterministic win.
+/// `species` no longer decides which rival is fought (issue #251:
+/// [`begin_route103_rival_battle`] now reads `VAR_STARTER_MON` instead of
+/// deriving a starter from the lead's own species -- a fresh phase's var
+/// defaults to `0`/Treecko, [`VAR_STARTER_MON`]'s own doc comment), so a
+/// test that wants a non-Treecko rival must write the var explicitly rather
+/// than lean on this helper's `species` argument.
 fn lead(species: u16, level: u8, move_id: u16) -> BattlePokemon {
     let ivs = Ivs {
         hp: battle::MAX_IV,
@@ -250,52 +260,6 @@ fn facing_the_rival_and_pressing_a_starts_the_trainer_battle() {
         phase.rival_battle_outcome(),
         None,
         "the battle just started -- no outcome yet"
-    );
-}
-
-/// The residual state issue #261's white-out cannot cover, on the trainer
-/// path (issue #261 review; `flow::wild_encounter`'s module docs, "The
-/// fail-closed guard, narrowed"): a lost Route 101 first battle leaves a
-/// fainted lead free-roaming, and Route 103 is walkable from there. An
-/// A-press on the rival in that state must start nothing and, crucially,
-/// **draw nothing** -- without the screen each attempt would spend
-/// `build_trainer_pokemon`'s OT-id draws before `Battle::new_trainer`'s
-/// `FaintedBattler` refusal, repeatable draws with no upstream counterpart.
-#[test]
-fn a_fainted_lead_cannot_start_the_rival_battle_and_draws_nothing() {
-    let mut phase = route_103_phase_facing_the_rival();
-    let mut fainted = overmatched_treecko_lead();
-    fainted.apply_damage(u32::MAX);
-    assert!(fainted.is_fainted(), "setup: the lead really is fainted");
-    phase.party_lead = Some(fainted);
-
-    let before = phase.rng.state();
-    phase.step(pressed(Buttons::A));
-    assert!(
-        !phase.is_rival_battle_active(),
-        "a fainted lead must not start the rival battle"
-    );
-    assert!(
-        phase.party_lead.is_some(),
-        "the refused handoff leaves the lead in the party"
-    );
-    assert_eq!(
-        phase.rng.state(),
-        before,
-        "the screen runs before build_trainer_pokemon can draw anything"
-    );
-
-    // And the refusal is not a dead end: a healed lead fights normally.
-    phase
-        .party_lead
-        .as_mut()
-        .expect("still present")
-        .heal(&Dex::new())
-        .expect("a real species heals");
-    phase.step(pressed(Buttons::A));
-    assert!(
-        phase.is_rival_battle_active(),
-        "the same tile and stance starts the battle once the lead is healed"
     );
 }
 
@@ -612,22 +576,163 @@ fn one_turn_does_not_immediately_end_a_fresh_battle() {
     );
 }
 
-// -- The honest species -> `PlayerStarter` derivation ------------------------
+// -- The real `VAR_STARTER_MON` -> `PlayerStarter` derivation (issue #251) --
 
-/// [`begin_route103_rival_battle`] refuses to start a battle for a lead
-/// whose species has no `VAR_STARTER_MON` mapping (module docs) -- logged
-/// and no-op, not a panic.
+/// [`begin_route103_rival_battle`] refuses to start a battle when
+/// `VAR_STARTER_MON` reads a value with no `PlayerStarter` mapping (module
+/// docs) -- logged and no-op, not a panic. A fresh phase's `VAR_STARTER_MON`
+/// defaults to `0` (Treecko), so this needs an explicit out-of-range write
+/// to exercise -- unlike the species-derived predecessor this replaces, the
+/// lead's own species no longer matters to this check at all (a real
+/// Treecko lead is used here precisely to prove that).
 #[test]
-fn a_non_starter_lead_species_starts_no_battle() {
+fn an_out_of_range_starter_var_starts_no_battle() {
     let mut phase = route_103_phase_facing_the_rival();
-    // SPECIES_ZIGZAGOON -- a real dex entry, but not one of the three
-    // starters `PlayerStarter::from_species` maps.
-    phase.party_lead = Some(lead(288, 5, 1));
+    phase
+        .save1
+        .event_data
+        .var_set(VAR_STARTER_MON, 3)
+        .expect("VAR_STARTER_MON is an ordinary var id");
+    phase.party_lead = Some(lead(277, 5, 1));
     phase.step(pressed(Buttons::A));
     assert!(!phase.is_rival_battle_active());
     assert!(
         phase.party_lead.is_some(),
         "a refused trigger must not consume the lead"
+    );
+}
+
+/// **Test-ratchet replacement.** Before issue #251,
+/// `a_fainted_lead_cannot_start_the_rival_battle_and_draws_nothing` drove a
+/// *directly written* fainted lead onto the rival tile and proved the
+/// fail-closed screen refused it without drawing -- pinning the screen
+/// `begin_route103_rival_battle` carried solely because a lost Route 101
+/// first battle could leave a fainted lead standing in the overworld with
+/// nothing to heal it (`CB2_EndFirstBattle` has no `IsPlayerDefeated`
+/// branch).
+///
+/// `overworld_phase::first_battle_conclusion::OverworldPhase::conclude_first_battle`
+/// (issue #251) now heals that lead, and writes the real `VAR_STARTER_MON`,
+/// the instant the Route 101 battle ends -- so the state the screen existed
+/// to refuse can no longer reach Route 103 at all, and the screen has been
+/// removed (`super`'s own module docs, "The loss decision"). This test
+/// proves the *strictly stronger* claim the deleted one could not: not "a
+/// fainted lead is refused here," but "a lead reaching here from a real
+/// lost first battle is never fainted, and the rival it fights is the one
+/// `VAR_STARTER_MON` -- not the lead's incidental species -- actually
+/// names."
+///
+/// Drives the Route 101 loss through the real trigger/driver on its own
+/// synthetic `MAP_ROUTE101` phase (the same crafted level-1, zero-Defense-IV
+/// Treecko and seed `2` as
+/// `crate::flow::wild_encounter::tests::a_lost_route_101_first_battle_heals_the_lead_instead_of_leaving_it_fainted`
+/// -- that test's own doc comment has the full derivation), then carries
+/// the concluded lead and `VAR_STARTER_MON` over onto this file's own
+/// `MAP_ROUTE103` fixture -- the same "each test file owns its own map
+/// fixture" split this whole suite already keeps, since no single synthetic
+/// room can be both real maps at once.
+#[test]
+fn a_lost_route_101_first_battle_still_lets_the_healed_lead_fight_the_rival() {
+    use engine::rng::Rng;
+
+    const ROUTE_101_TRIGGER_TILE: (i32, i32) = (10, 19);
+    const ROUTE_101_TRIGGER_ELEVATION: u8 = 3;
+
+    let mut route_101 = OverworldPhase::for_test(
+        crate::overworld::tests::synthetic_scene(25, 25),
+        MapId("MAP_ROUTE101"),
+        PlayerState::new(
+            (ROUTE_101_TRIGGER_TILE.0 - 1, ROUTE_101_TRIGGER_TILE.1),
+            ROUTE_101_TRIGGER_ELEVATION,
+            Direction::East,
+        ),
+        None,
+    );
+    route_101.rng = Rng::new(2);
+    let ivs = Ivs {
+        hp: battle::MAX_IV,
+        attack: battle::MAX_IV,
+        defense: 0,
+        speed: battle::MAX_IV,
+        sp_attack: battle::MAX_IV,
+        sp_defense: battle::MAX_IV,
+    };
+    route_101.party_lead = Some(
+        BattlePokemon::new(&Dex::new(), SpeciesId(277), 1, ivs, 0, vec![MoveId(1)])
+            .expect("Treecko/Pound must be in the dex"),
+    );
+
+    for _ in 0..engine::overworld::WALK_FRAMES_PER_TILE {
+        route_101.step(held(Buttons::RIGHT));
+    }
+    assert!(
+        route_101.first_battle.is_some(),
+        "setup: the rescue trigger must fire"
+    );
+    let mut frames = 0;
+    while route_101.first_battle.is_some() {
+        route_101.step(held(Buttons::RIGHT));
+        frames += 1;
+        assert!(frames < 20, "setup: the crafted loss must resolve quickly");
+    }
+    assert_eq!(
+        route_101.first_battle_outcome(),
+        Some(BattleOutcome::PlayerLost),
+        "setup: this seed/lead combination must really lose"
+    );
+    let healed_lead = route_101
+        .party_lead
+        .clone()
+        .expect("conclude_first_battle heals in place");
+    assert!(
+        !healed_lead.is_fainted(),
+        "setup: the conclusion must have healed the lead"
+    );
+    let starter_var = route_101
+        .save1
+        .event_data
+        .var_get(VAR_STARTER_MON)
+        .expect("VAR_STARTER_MON is an ordinary var id");
+    assert_eq!(
+        starter_var, 0,
+        "setup: the conclusion wrote Treecko's own encoding"
+    );
+
+    // Carry the concluded state over onto this file's own Route 103
+    // fixture -- the healed lead and the real VAR_STARTER_MON the
+    // conclusion wrote, nothing else.
+    let mut route_103 = route_103_phase_facing_the_rival();
+    route_103.party_lead = Some(healed_lead);
+    route_103
+        .save1
+        .event_data
+        .var_set(VAR_STARTER_MON, starter_var)
+        .expect("VAR_STARTER_MON is an ordinary var id");
+
+    let before = route_103.rng.state();
+    route_103.step(pressed(Buttons::A));
+    assert!(
+        route_103.is_rival_battle_active(),
+        "a lead healed by a real conclusion must start the rival battle -- no fail-closed \
+         screen stands in the way any more"
+    );
+    assert_ne!(
+        route_103.rng.state(),
+        before,
+        "the party build really drew -- nothing refused it before it could"
+    );
+    assert!(
+        route_103.party_lead.is_none(),
+        "the lead moved into the battle, same as any other successful trigger"
+    );
+
+    // And the battle plays to a real terminal outcome -- the healed lead is
+    // not merely accepted, it can actually fight.
+    let outcome = play_out_rival_battle(&mut route_103, 50);
+    assert!(
+        outcome.is_some(),
+        "the rival battle carried from a healed post-conclusion lead must reach a real \
+         terminal outcome, not stall"
     );
 }
 
