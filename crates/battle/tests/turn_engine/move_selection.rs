@@ -3,7 +3,7 @@
 use crate::common::{max_iv_mon, SequenceRng};
 use assets::MoveId;
 use battle::{
-    Battle, BattleError, BattleEvent, BattleOutcome, Dex, LoweredStat, PlayerAction, StatStage,
+    Battle, BattleError, BattleEvent, BattleOutcome, ChangedStat, Dex, PlayerAction, StatStage,
     STRUGGLE,
 };
 
@@ -270,19 +270,24 @@ fn unsupported_moves_are_rejected_at_the_right_boundary_for_each_side() {
     let dex = Dex::new();
     let healthy = |dex: &Dex| max_iv_mon(dex, 4, 50, vec![MoveId(33)]);
 
-    // Sand Attack: 0 power, EFFECT_ACCURACY_DOWN -- a stat-lowering
-    // effect issue #199 does *not* cover (only ATTACK/DEFENSE/SPEED_DOWN
-    // are modelled; Growl and Leer, which used to stand in for this
-    // case, are executable now -- see
-    // `a_real_starter_moveset_can_fight_with_its_damaging_move` and
-    // `wild_zigzagoon_growl_executes_when_the_rejection_loop_lands_on_it`
-    // for their new coverage). Sonic Boom: power 1 but EFFECT_SONICBOOM's flat 20
-    // damage, which the ordinary pipeline gets wrong in both damage and
-    // draw count. Struggle: its EFFECT_RECOIL half is not applied by this
-    // engine (see crate::hit's module docs).
+    // The boundary this pins is "unsupported", not any particular move, so
+    // the specimens move outward as coverage grows -- Growl and Leer stood
+    // here before issue #199, Sand Attack and Sonic Boom before issue #293
+    // (both are executable now: `EFFECT_ACCURACY_DOWN` joined the widened
+    // `BattleScript_EffectStatDown` family, `EFFECT_SONICBOOM` got its own
+    // fixed-damage pipeline). The three below are the *current* frontier:
+    //
+    // * Haze: 0 power, `EFFECT_HAZE` -- resets every stat stage on both
+    //   sides at once, a whole-field operation nothing here models.
+    // * Horn Drill: power **1**, so base power alone does not filter it,
+    //   but `EFFECT_OHKO` is a wholly different script (an accuracy formula
+    //   built from the level difference, then a flat "target faints") that
+    //   the ordinary pipeline gets wrong in both damage and draw count.
+    // * Struggle: its `EFFECT_RECOIL` half is not applied by this engine
+    //   (see `crate::hit`'s module docs).
     for (bad_move, expected) in [
-        (MoveId(28), BattleError::NonDamagingMove(MoveId(28))),
-        (MoveId(49), BattleError::UnsupportedMoveEffect(MoveId(49))),
+        (MoveId(114), BattleError::NonDamagingMove(MoveId(114))),
+        (MoveId(32), BattleError::UnsupportedMoveEffect(MoveId(32))),
         (STRUGGLE, BattleError::UnsupportedMoveEffect(STRUGGLE)),
     ] {
         // The wild mon's moveset is screened at construction: the
@@ -397,7 +402,7 @@ fn a_real_starter_moveset_can_fight_with_its_damaging_move() {
             BattleEvent::StatFell {
                 by_player: true,
                 move_id: MoveId(43),
-                stat: LoweredStat::Defense,
+                stat: ChangedStat::Defense,
                 new_stage: StatStage::new(-1).unwrap(),
             },
             BattleEvent::Hit {

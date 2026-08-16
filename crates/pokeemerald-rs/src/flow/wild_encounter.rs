@@ -301,8 +301,9 @@ pub(super) const fn field_input_consumed(
 /// #207 review).
 ///
 /// Upstream never rejects a wild battle, so a moveset this engine cannot
-/// execute yet (Route 102's level-3 Seedot knows Bide and Harden, neither in
-/// the damaging nor the stat-lowering pipeline) has no stream-faithful
+/// execute yet (Route 102's level-3 Seedot knows Bide, whose `EFFECT_BIDE`
+/// script is in neither the damaging nor the stat-changing pipeline) has no
+/// stream-faithful
 /// failure mode once the roll has happened: `CreateWildMon`'s five draws are
 /// already spent by the time [`battle::Battle::new`] screens the moveset,
 /// and dropping the battle there leaves draws with no upstream counterpart.

@@ -2,7 +2,7 @@
 
 use crate::common::{max_iv_mon, SequenceRng};
 use assets::MoveId;
-use battle::{Battle, BattleEvent, Dex, LoweredStat, PlayerAction, StatStage};
+use battle::{Battle, BattleEvent, ChangedStat, Dex, PlayerAction, StatStage};
 
 #[test]
 fn wild_zigzagoon_growl_executes_when_the_rejection_loop_lands_on_it() {
@@ -49,7 +49,7 @@ fn wild_zigzagoon_growl_executes_when_the_rejection_loop_lands_on_it() {
             BattleEvent::StatFell {
                 by_player: false,
                 move_id: MoveId(45),
-                stat: LoweredStat::Attack,
+                stat: ChangedStat::Attack,
                 new_stage: StatStage::new(-1).unwrap(),
             },
         ]
@@ -155,7 +155,7 @@ fn a_stat_already_at_the_floor_reports_wont_go_lower_and_stays_put() {
             BattleEvent::StatWontGoLower {
                 by_player: true,
                 move_id: MoveId(45),
-                stat: LoweredStat::Attack,
+                stat: ChangedStat::Attack,
             },
             BattleEvent::Hit {
                 by_player: false,
@@ -208,7 +208,7 @@ fn growl_lowers_the_players_subsequent_tackle_damage() {
             BattleEvent::StatFell {
                 by_player: false,
                 move_id: MoveId(45),
-                stat: LoweredStat::Attack,
+                stat: ChangedStat::Attack,
                 new_stage: StatStage::new(-1).unwrap(),
             },
             BattleEvent::Hit {
@@ -286,7 +286,7 @@ fn string_shot_flips_turn_order_once_the_targets_effective_speed_drops_below_the
             BattleEvent::StatFell {
                 by_player: true,
                 move_id: MoveId(81),
-                stat: LoweredStat::Speed,
+                stat: ChangedStat::Speed,
                 new_stage: StatStage::new(-1).unwrap(),
             },
         ],

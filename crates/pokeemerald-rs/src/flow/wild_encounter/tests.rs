@@ -339,9 +339,13 @@ fn walking_on_ordinary_ground_never_rolls_an_encounter() {
 
 /// The per-map table screen (issue #207 review, round 3), both ways: Route
 /// 101's land table is entirely fightable, Route 102's is not -- its
-/// level-3 Seedot knows Bide and Harden, neither of which the turn engine
-/// executes yet. The rejection half is a deliberate ratchet: when those
-/// moves gain support this flips, and the map gate widens with it.
+/// level-3 Seedot knows Bide, whose `EFFECT_BIDE` script the turn engine
+/// does not run (its other move, Harden, became executable with issue
+/// #293's widened stat-change family, so Bide is now the sole blocker --
+/// pinned by name in `battle`'s own
+/// `ensure_wild_startable_accepts_route_101_mons_and_rejects_a_bide_seedot`).
+/// The rejection half is a deliberate ratchet: when Bide gains support this
+/// flips, and the map gate widens with it.
 #[test]
 fn route_101s_table_is_fightable_and_route_102s_is_not_yet() {
     assert!(super::map_wild_table_fightable(ROUTE_101));

@@ -222,7 +222,8 @@ use crate::exp::{trainer_faint_exp, wild_faint_exp};
 use crate::hit::{resolve_hit, HitOutcome};
 use crate::pokemon::{BattlePokemon, MAX_LEVEL};
 use crate::stat_change::{
-    self, is_stat_lowering_effect, resolve_stat_lowering_move, LoweredStat, StatChangeOutcome,
+    self, is_stat_change_effect, resolve_stat_change_move, set_stage, ChangedStat,
+    StatChangeDirection, StatChangeOutcome,
 };
 use crate::stat_stage::StatStage;
 use crate::turn_order::{resolve_order, Order};
@@ -339,8 +340,8 @@ pub enum BattleEvent {
     /// upstream's non-player `HandleAction_Run` has no escape formula to
     /// roll (module docs) — so there is nothing but the fact of it to carry.
     WildFled,
-    /// A stat-lowering move (Growl/Tail Whip/Leer/String Shot —
-    /// `EFFECT_ATTACK_DOWN`/`EFFECT_DEFENSE_DOWN`/`EFFECT_SPEED_DOWN`)
+    /// A stat-**lowering** move (`BattleScript_EffectStatDown`'s family —
+    /// Growl, Leer, Tail Whip, String Shot, Sand Attack, Screech, …)
     /// connected and actually lowered its target's stage — upstream's
     /// `B_MSG_DEFENDER_STAT_FELL` message
     /// (`ChangeStatBuffs`, `battle_script_commands.c:7058`-`:7059`).
@@ -353,13 +354,18 @@ pub enum BattleEvent {
     /// as distinct events rather than folding "won't go lower" into this
     /// variant with a no-op stage delta.
     StatFell {
-        /// Whether the player's mon was the one using the move.
+        /// Whether the player's mon was the one using the move. The stage
+        /// that fell is the *other* mon's — the lowering tail passes no
+        /// `MOVE_EFFECT_AFFECTS_USER` flag
+        /// ([`crate::stat_change::StatChangeEffect::affects_user`]).
         by_player: bool,
         /// The move that was used.
         move_id: MoveId,
         /// Which of the target's stats fell.
-        stat: LoweredStat,
-        /// The target's stage for `stat` after this move.
+        stat: ChangedStat,
+        /// The target's stage for `stat` after this move — `-2` moves
+        /// (Screech and friends) land two stages down, clamped at
+        /// [`crate::StatStage::MIN`].
         new_stage: StatStage,
     },
     /// A stat-lowering move connected, but its target's stage for that stat
@@ -375,7 +381,39 @@ pub enum BattleEvent {
         /// The move that was used.
         move_id: MoveId,
         /// Which stat the move targeted.
-        stat: LoweredStat,
+        stat: ChangedStat,
+    },
+    /// A stat-**raising** move (`BattleScript_EffectStatUp`'s family —
+    /// Growth, Harden, Swords Dance, …) raised its **user's** own stage
+    /// (issue #293) — upstream's `B_MSG_ATTACKER_STAT_ROSE`
+    /// (`ChangeStatBuffs`, `battle_script_commands.c:7082`).
+    ///
+    /// There is no `Missed` counterpart: `BattleScript_EffectStatUp` has no
+    /// `accuracycheck` command at all, so a raise cannot miss and costs no
+    /// RNG draw (see [`crate::stat_change`]'s module docs).
+    StatRose {
+        /// Whether the player's mon was the one using the move — and
+        /// therefore whose own stage rose.
+        by_player: bool,
+        /// The move that was used.
+        move_id: MoveId,
+        /// Which of the user's stats rose.
+        stat: ChangedStat,
+        /// The user's stage for `stat` after this move.
+        new_stage: StatStage,
+    },
+    /// A stat-raising move connected, but its user's stage for that stat was
+    /// already [`crate::StatStage::MAX`] — upstream's
+    /// `B_MSG_STAT_WONT_INCREASE` ("won't go any higher!",
+    /// `gStatUpStringIds`, `src/battle_message.c:1006`-`:1012`;
+    /// `ChangeStatBuffs`, `:7079`-`:7080`). The stage does not change.
+    StatWontGoHigher {
+        /// Whether the player's mon was the one using the move.
+        by_player: bool,
+        /// The move that was used.
+        move_id: MoveId,
+        /// Which stat the move targeted.
+        stat: ChangedStat,
     },
     /// The trainer's active mon fainted and the next party member came out
     /// in its place — upstream's forced post-faint switch
@@ -508,20 +546,21 @@ impl Error for TurnError {
     }
 }
 
-/// Whether the turn engine can execute `move_id` at all: either
-/// [`crate::hit`]'s ordinary damaging-move pipeline
-/// ([`crate::hit::ensure_resolvable`]) or [`crate::stat_change`]'s
-/// stat-lowering pipeline ([`crate::stat_change::ensure_resolvable`], added
-/// by issue #199) — the two-sided boundary the module docs describe.
-/// Checked *before* any state or RNG is touched, exactly like each of the
-/// two checks it composes.
+/// Whether the turn engine can execute `move_id` at all: [`crate::hit`]'s
+/// ordinary damaging-move pipeline ([`crate::hit::ensure_resolvable`]) or
+/// [`crate::stat_change`]'s stat-changing pipeline
+/// ([`crate::stat_change::ensure_resolvable`], added by issue #199 and
+/// widened to the whole `BattleScript_EffectStatUp`/`StatDown` family by
+/// issue #293) — the execution boundary the module docs describe. Checked
+/// *before* any state or RNG is touched, exactly like each of the checks it
+/// composes.
 ///
-/// Every real `EFFECT_ATTACK_DOWN`/`EFFECT_DEFENSE_DOWN`/`EFFECT_SPEED_DOWN`
-/// move is `0` base power, so `crate::hit::ensure_resolvable` always rejects
-/// it first with [`BattleError::NonDamagingMove`] (that check runs before
-/// its own effect check) — this falls through to
-/// [`stat_change::ensure_resolvable`] on *any* hit-pipeline rejection, not
-/// just [`BattleError::UnsupportedMoveEffect`], to cover that ordering.
+/// Every real stat-change move is `0` base power, so
+/// `crate::hit::ensure_resolvable` always rejects it first with
+/// [`BattleError::NonDamagingMove`] (that check runs before its own effect
+/// check) — this falls through to [`stat_change::ensure_resolvable`] on
+/// *any* hit-pipeline rejection, not just
+/// [`BattleError::UnsupportedMoveEffect`], to cover that ordering.
 ///
 /// # Errors
 ///
@@ -1264,15 +1303,15 @@ impl Battle {
     /// target faints.
     ///
     /// Dispatches on the move's `EFFECT_*` to one of two pipelines — this
-    /// crate's two-sided execution boundary (crate root docs): the ordinary
+    /// crate's execution boundary (crate root docs): the ordinary
     /// hit-shaped path (`execute_hit_move`,
-    /// [`crate::hit::is_ordinary_hit_effect`]) or the stat-lowering path
-    /// (`execute_stat_lowering_move`,
-    /// [`crate::stat_change::is_stat_lowering_effect`]). Every move that
+    /// [`crate::hit::is_ordinary_hit_effect`]) or the stat-changing path
+    /// (`execute_stat_change_move`,
+    /// [`crate::stat_change::is_stat_change_effect`]). Every move that
     /// reaches here already passed [`ensure_executable`] (at [`Battle::new`]
     /// for the wild side, at `validate_player_move` for the player's), so
     /// exactly one of the two `is_*` checks holds. ([`STRUGGLE`] needs no
-    /// case of its own: its `EFFECT_RECOIL` is not a stat-lowering effect,
+    /// case of its own: its `EFFECT_RECOIL` is not a stat-change effect,
     /// so it falls through to the hit pipeline, which accepts it.)
     fn execute_move(
         &mut self,
@@ -1282,8 +1321,8 @@ impl Battle {
         events: &mut Vec<BattleEvent>,
     ) -> Result<(), BattleError> {
         let effect = self.dex.move_data(move_id)?.effect;
-        if is_stat_lowering_effect(effect) {
-            self.execute_stat_lowering_move(attacker_is_player, move_id, rng, events)
+        if is_stat_change_effect(effect) {
+            self.execute_stat_change_move(attacker_is_player, move_id, rng, events)
         } else {
             self.execute_hit_move(attacker_is_player, move_id, rng, events)
         }
@@ -1399,14 +1438,20 @@ impl Battle {
         Ok(())
     }
 
-    /// The stat-lowering half of [`Self::execute_move`]'s dispatch (issue
-    /// #199) — [`crate::stat_change::resolve_stat_lowering_move`]'s
-    /// pipeline: Growl/Tail Whip/Leer/String Shot always target the other
-    /// mon (upstream's `MOVE_TARGET_BOTH`/`MOVE_TARGET_SELECTED` both
-    /// resolve to the single opposing battler in a one-on-one wild battle;
-    /// none of these four is `MOVE_EFFECT_AFFECTS_USER`), so `defender` here
-    /// is always the mon *not* using the move — never the attacker itself.
-    fn execute_stat_lowering_move(
+    /// The stat-changing half of [`Self::execute_move`]'s dispatch (issue
+    /// #199, widened by issue #293) —
+    /// [`crate::stat_change::resolve_stat_change_move`]'s pipeline.
+    ///
+    /// Which battler the change lands on is the *script family's* answer,
+    /// not the move's `target` byte:
+    /// [`crate::stat_change::StatChangeEffect::affects_user`] is
+    /// `BattleScript_EffectStatUp`'s `MOVE_EFFECT_AFFECTS_USER` flag
+    /// (`data/battle_scripts_1.s:494`), so a raise writes the attacker's own
+    /// stage and a drop writes the other mon's. In a one-on-one battle
+    /// upstream's `MOVE_TARGET_BOTH`/`MOVE_TARGET_SELECTED` both resolve to
+    /// the single opposing battler, so the drop half needs no target
+    /// selection of its own.
+    fn execute_stat_change_move(
         &mut self,
         attacker_is_player: bool,
         move_id: MoveId,
@@ -1419,7 +1464,7 @@ impl Battle {
             } else {
                 (&self.enemy, &self.player)
             };
-            resolve_stat_lowering_move(&self.dex, move_id, attacker, defender, rng)?
+            resolve_stat_change_move(&self.dex, move_id, attacker, defender, rng)?
         };
 
         match outcome {
@@ -1430,33 +1475,46 @@ impl Battle {
                 });
             }
             StatChangeOutcome::Applied {
-                stat,
+                change,
                 new_stage,
-                floored,
+                capped,
             } => {
-                let defender = if attacker_is_player {
-                    &mut self.enemy
+                let subject_is_player = if change.affects_user() {
+                    attacker_is_player
                 } else {
-                    &mut self.player
+                    !attacker_is_player
                 };
-                match stat {
-                    LoweredStat::Attack => defender.stages_mut().attack = new_stage,
-                    LoweredStat::Defense => defender.stages_mut().defense = new_stage,
-                    LoweredStat::Speed => defender.stages_mut().speed = new_stage,
-                }
-                events.push(if floored {
-                    BattleEvent::StatWontGoLower {
-                        by_player: attacker_is_player,
-                        move_id,
-                        stat,
-                    }
+                let subject = if subject_is_player {
+                    &mut self.player
                 } else {
-                    BattleEvent::StatFell {
+                    &mut self.enemy
+                };
+                set_stage(subject, change.stat, new_stage);
+
+                let stat = change.stat;
+                events.push(match (change.direction, capped) {
+                    (StatChangeDirection::Lower, false) => BattleEvent::StatFell {
                         by_player: attacker_is_player,
                         move_id,
                         stat,
                         new_stage,
-                    }
+                    },
+                    (StatChangeDirection::Lower, true) => BattleEvent::StatWontGoLower {
+                        by_player: attacker_is_player,
+                        move_id,
+                        stat,
+                    },
+                    (StatChangeDirection::Raise, false) => BattleEvent::StatRose {
+                        by_player: attacker_is_player,
+                        move_id,
+                        stat,
+                        new_stage,
+                    },
+                    (StatChangeDirection::Raise, true) => BattleEvent::StatWontGoHigher {
+                        by_player: attacker_is_player,
+                        move_id,
+                        stat,
+                    },
                 });
             }
         }

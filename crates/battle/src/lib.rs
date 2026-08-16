@@ -139,7 +139,10 @@ pub use pokemon::{
     BattlePokemon, Ivs, MoveSlot, StatStages, Stats, MAX_IV, MAX_LEVEL, MAX_MON_MOVES, MIN_LEVEL,
     MOVE_NONE, SPECIES_NONE,
 };
-pub use stat_change::{is_stat_lowering_effect, LoweredStat, StatChangeOutcome};
+pub use stat_change::{
+    is_stat_change_effect, stat_change_for_effect, ChangedStat, StatChangeDirection,
+    StatChangeEffect, StatChangeOutcome,
+};
 pub use stat_stage::StatStage;
 pub use wild::{
     build_pokemon_with_random_personality, build_wild_pokemon, ensure_wild_startable,
