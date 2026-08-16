@@ -23,11 +23,16 @@
 //!   only by `Cmd_critcalc`, which adds `2 * (status2 & STATUS2_FOCUS_ENERGY
 //!   != 0)` to the crit-chance stage (`:1267`) —
 //!   [`crate::critical::crit_stage`]. It is one of the five bits
-//!   `SwitchInClearSetData` deliberately **preserves** across a switch
-//!   (`src/battle_main.c:3175`), which this crate has no way to exercise
-//!   (the only switch it performs replaces a *fainted* mon with a fresh one
-//!   from the bench) but which its docs record so a future switching slice
-//!   does not clear it.
+//!   `SwitchInClearSetData` preserves — but **only on Baton Pass**. The
+//!   `status2 &= (STATUS2_CONFUSION | STATUS2_FOCUS_ENERGY | …)` mask at
+//!   `src/battle_main.c:3175` sits inside that function's
+//!   `if (gBattleMoves[gCurrentMove].effect == EFFECT_BATON_PASS)` branch
+//!   (`:3173`); an **ordinary** switch takes the `else` at `:3189`-`:3192`,
+//!   which zeroes `status2` and `gStatuses3[]` outright. This crate can
+//!   exercise neither (the only switch it performs replaces a *fainted* mon
+//!   with a fresh one from the bench), but the distinction is recorded so a
+//!   future switching slice clears the bit by default and spares it only for
+//!   Baton Pass.
 //! - **`STATUS2_DEFENSE_CURL`** (`1 << 30`, `:154`), set by
 //!   `Cmd_setdefensecurlbit` (`:8860`). Read only by
 //!   `Cmd_setrolloutcounter`'s power ramp (`:8564`-`:8565`), which doubles
@@ -46,8 +51,9 @@
 //!   decrements it *first* and then, only if any turns remain, rolls
 //!   `Random() & 1` for whether the battler hurts itself — see
 //!   [`Volatiles::tick_confusion`] and [`confusion_self_hit_roll`].
-//!   Like Focus Energy it is in `SwitchInClearSetData`'s preserve mask
-//!   (`src/battle_main.c:3175`).
+//!   Like Focus Energy it is in `SwitchInClearSetData`'s **Baton Pass**
+//!   preserve mask (`src/battle_main.c:3175`) and, like it, is cleared by
+//!   an ordinary switch (`:3189`-`:3192`).
 //! - **`STATUS3_CHARGED_UP`** (`1 << 9`, `:166`) plus
 //!   `gDisableStructs[].chargeTimer`, both set by `Cmd_setcharge` (`:9102`-
 //!   `:9104`). Read by `Cmd_damagecalc`: `if (charged && move type ==

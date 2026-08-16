@@ -249,6 +249,9 @@ fn a_held_item_party_is_represented_and_only_a_real_item_is_refused() {
         battle::ensure_trainer_party_startable(
             &dex,
             with_shape,
+            // Treecko has a single ability, so the AI's own
+            // `Cmd_get_ability` guess never enters into this row.
+            &player_mon(TREECKO, 5, vec![TACKLE]),
             &[battle::TrainerPartyMon {
                 species: SpeciesId(TREECKO),
                 level: 5,
@@ -274,6 +277,7 @@ fn a_held_item_party_is_represented_and_only_a_real_item_is_refused() {
         battle::ensure_trainer_party_startable(
             &dex,
             none_holder,
+            &player_mon(TREECKO, 5, vec![TACKLE]),
             &[battle::TrainerPartyMon {
                 species: SpeciesId(TREECKO),
                 level: 5,

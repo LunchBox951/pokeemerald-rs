@@ -18,7 +18,7 @@
 //! A held item is *carried* but never *acts* (issue #293): upstream's
 //! `CreateNPCTrainerParty` writes one with
 //! `SetMonData(&party[i], MON_DATA_HELD_ITEM, &partyData[i].heldItem)`
-//! (`pokeemerald/src/battle_main.c:2044`/`:2059`), so a party mon that holds
+//! (`pokeemerald/src/battle_main.c:2046`/`:2060`), so a party mon that holds
 //! an Oran Berry is only representable here if [`BattlePokemon`] has a field
 //! for it — see [`BattlePokemon::held_item`] for the field, and
 //! `battle::trainer`'s `ensure_held_item_playable` for the fail-closed
@@ -490,7 +490,7 @@ impl BattlePokemon {
     /// Assign the held item, the way `CreateNPCTrainerParty`'s
     /// `SetMonData(&party[i], MON_DATA_HELD_ITEM, &partyData[i].heldItem)`
     /// does for the two `F_TRAINER_PARTY_HELD_ITEM` party shapes
-    /// (`pokeemerald/src/battle_main.c:2044`, `:2059`) — after `CreateMon`,
+    /// (`pokeemerald/src/battle_main.c:2046`, `:2060`) — after `CreateMon`,
     /// so it draws nothing and changes no stat.
     ///
     /// Builder-shaped rather than a `new` parameter for the same reason

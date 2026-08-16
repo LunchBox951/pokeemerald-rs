@@ -59,8 +59,8 @@
 //!   `SETUP_FIRST_TURN` instead (`src/data/trainers.h:6280`-`:6290`), an
 //!   upstream inconsistency this port reproduces rather than smooths over.
 //! - **move effects**: screened **per script**, not globally (issue #293).
-//!   `AI_CheckBadMove` contains no `if_random_*` instruction anywhere, so
-//!   every branch of it is deterministic and it can score the wide set
+//!   `AI_CheckBadMove` contains no `if_random_*` instruction anywhere, so no
+//!   *branch* of it is chosen by a draw and it can score the wide set
 //!   [`is_check_bad_move_scoreable`] lists. The other three scripts *do*
 //!   draw — a single `AI_CV_*` handler can spend up to seven values on
 //!   state this crate does not track — so they keep the narrow set
@@ -82,14 +82,33 @@
 //! Abilities and held items, which several `AI_CheckBadMove` branches read
 //! (`get_ability AI_TARGET` for Volt Absorb / Water Absorb / Flash Fire /
 //! Wonder Guard / Levitate / Soundproof / Hyper Cutter / Clear Body /
-//! White Smoke). None of them exists in this crate, none of them draws, and
-//! none of the three starters has any of them — so those branches are
-//! unreachable rather than wrong. `AI_ACTION_WATCH` (Safari) and
-//! `AI_ACTION_FLEE` (`AI_FirstBattle`/`AI_Roaming`) are likewise not
-//! reachable from these four scripts.
+//! White Smoke). None of them exists in this crate and none of the three
+//! starters has any of them, so those *branches* are unreachable rather
+//! than wrong.
+//!
+//! The command that reads them is not free, though, and this is the one
+//! place where "`AI_CheckBadMove` never draws" needs a qualifier
+//! (issue #293 review). `Cmd_get_ability`
+//! (`src/battle_ai_script_commands.c:1350`-`:1405`) spends a `Random() & 1`
+//! at `:1383` whenever the target's ability is unrecorded **and** its
+//! species has a second, non-`ABILITY_NONE` ability — and
+//! `get_ability AI_TARGET` sits on the script's mainline
+//! (`data/battle_ai_scripts.s:93`, plus `:59` on the negates-type path), not
+//! down some branch. Nothing here records abilities, so the guard is the
+//! species: [`ensure_deterministic_target_ability`] refuses a player lead
+//! with two abilities at construction, before any draw, and the claim this
+//! module makes is the narrowed one — **deterministic for single-ability
+//! targets**. Modelling the guess instead would mean modelling
+//! `BATTLE_HISTORY` recording and every `get_ability` site that consumes its
+//! result, for an answer no modelled branch reads.
+//!
+//! `AI_ACTION_WATCH` (Safari) and `AI_ACTION_FLEE`
+//! (`AI_FirstBattle`/`AI_Roaming`) are likewise not reachable from these
+//! four scripts.
 
+use assets::species::AbilityId;
 use assets::trainers::AiFlags;
-use assets::{MoveEffect, MoveId, Type, TypeChart};
+use assets::{MoveEffect, MoveId, SpeciesId, Type, TypeChart};
 
 use super::opponent_ai::{selectable_slot, EnemyAction};
 use crate::damage::{apply_stab, apply_type_effectiveness, base_damage, has_stab, BattleRng};
@@ -151,8 +170,11 @@ enum MovePower {
 /// Much wider than [`is_viability_scoreable`] because `AI_CheckBadMove`
 /// is the *cheap* script: it contains **no `if_random_*` instruction
 /// anywhere** (`data/battle_ai_scripts.s:51`-`:650`, verified by sweep), so
-/// every branch here is deterministic and admitting one can never
-/// desynchronise the shared stream. Three groups:
+/// which branch runs is never decided by a draw and admitting one effect
+/// can never desynchronise the shared stream. (The script's one *other*
+/// source of draws, `Cmd_get_ability`'s two-ability guess, is not per-effect
+/// at all — it is screened once against the target's species by
+/// [`ensure_deterministic_target_ability`].) Three groups:
 ///
 /// 1. **The whole [`crate::stat_change`] family**, via one uniform handler:
 ///    every `AI_CBM_*Up` is `if_stat_level_equal AI_USER, STAT_x,
@@ -275,6 +297,48 @@ pub(crate) const fn ensure_supported_flags(flags: AiFlags) -> Result<(), BattleE
         Ok(())
     } else {
         Err(BattleError::UnsupportedAiFlags(AiFlags(extra)))
+    }
+}
+
+/// Screen the AI's **target** — the player's lead — for the one thing about
+/// it that costs a draw this module does not model: a species with two
+/// possible abilities (module docs, "Abilities and held items").
+///
+/// `Cmd_get_ability` (`src/battle_ai_script_commands.c:1350`-`:1405`) is
+/// deterministic for a target whose ability the AI has already *seen*
+/// (`BATTLE_HISTORY->abilities[battler]`, `:1361`), for the three
+/// flee-preventing abilities (`:1369`), and for a species whose
+/// `gSpeciesInfo[].abilities[1]` is `ABILITY_NONE` (`:1390`). For anything
+/// else it guesses, and the guess is a `Random() & 1` (`:1383`).
+///
+/// Nothing here records abilities, so only the last of those three
+/// conditions is available — hence a species-level screen. It is the
+/// *player's* lead because `get_ability AI_TARGET` resolves to
+/// `gBattlerTarget` (`:1357`), which in a single battle is the player, and
+/// only the `gActiveBattler != battler` arm (`:1359`) can draw:
+/// `get_ability AI_USER` reads the AI's own `gBattleMons[].ability` for
+/// free.
+///
+/// Deliberately screened once, up front, rather than per script:
+/// `get_ability AI_TARGET` appears seventeen times in `AI_CheckBadMove`
+/// alone (`data/battle_ai_scripts.s:59`-`:546`), two of them on the mainline
+/// every scored slot walks (`:59`, `:93`), and once more inside
+/// `AI_CheckViability` (`:2361`). One species test closes all of them, which
+/// is why it is not folded into [`ensure_scoreable`]'s per-effect answer.
+///
+/// # Errors
+///
+/// [`BattleError::UnknownSpecies`] if `species` is not in `dex`, or
+/// [`BattleError::AmbiguousTargetAbility`] if it has a second ability.
+pub(crate) fn ensure_deterministic_target_ability(
+    dex: &Dex,
+    species: SpeciesId,
+) -> Result<(), BattleError> {
+    // `abilities[1] != ABILITY_NONE` is upstream's own test, at `:1380`.
+    if dex.species(species)?.abilities[1] == AbilityId(0) {
+        Ok(())
+    } else {
+        Err(BattleError::AmbiguousTargetAbility(species))
     }
 }
 

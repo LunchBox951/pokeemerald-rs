@@ -42,6 +42,12 @@ const TREECKO: u16 = 277;
 const TORCHIC: u16 = 280;
 const MUDKIP: u16 = 283;
 const ZIGZAGOON: u16 = 288;
+/// `SPECIES_MACHOP` (`include/constants/species.h:66`) -- the player lead
+/// every "overwhelm the rival" test below uses. Single-ability
+/// (`ABILITY_GUTS`, `abilities[1]` is `ABILITY_NONE`), which is what keeps
+/// it a target `Cmd_get_ability` answers without the `Random() & 1` guess
+/// this crate refuses to model (`BattleError::AmbiguousTargetAbility`).
+const MACHOP: u16 = 66;
 const PICHU: u16 = 172;
 
 const POUND: MoveId = MoveId(1);
@@ -146,9 +152,9 @@ fn a_wild_battle_has_no_trainer_context() {
 #[test]
 fn beating_the_last_party_mon_pays_boosted_exp_then_money_then_ends_the_battle() {
     let dex = Dex::new();
-    // A level-50 Rattata one-shots a level-5 Treecko with Slash and easily
+    // A level-50 Machop one-shots a level-5 Treecko with Slash and easily
     // outspeeds it, so the rival's chosen action never executes.
-    let player = max_iv_mon(&dex, 19, 50, vec![SLASH]);
+    let player = max_iv_mon(&dex, MACHOP, 50, vec![SLASH]);
 
     // Battle::new_trainer: 1 turn number.
     // take_turn: 1 turn number, 2-5 simulatedRNG, 6 AI_CV_DefenseDown is
@@ -200,7 +206,7 @@ fn beating_the_last_party_mon_pays_boosted_exp_then_money_then_ends_the_battle()
 #[test]
 fn the_same_knockout_in_a_wild_battle_pays_the_unboosted_award() {
     let dex = Dex::new();
-    let player = max_iv_mon(&dex, 19, 50, vec![SLASH]);
+    let player = max_iv_mon(&dex, MACHOP, 50, vec![SLASH]);
     let enemy = max_iv_mon(&dex, TREECKO, 5, vec![POUND, LEER]);
 
     let mut rng = SequenceRng::new([0; 16]);
@@ -225,7 +231,7 @@ fn the_same_knockout_in_a_wild_battle_pays_the_unboosted_award() {
 #[test]
 fn a_fainted_trainer_mon_is_replaced_by_the_next_one_in_party_order() {
     let dex = Dex::new();
-    let player = max_iv_mon(&dex, 19, 50, vec![SLASH]);
+    let player = max_iv_mon(&dex, MACHOP, 50, vec![SLASH]);
     // A three-mon party. Route 103's is one mon, so this is a synthetic
     // party against a real trainer id -- the send-out *rule* is upstream's
     // regardless of who is fielding it.
@@ -581,7 +587,7 @@ fn a_full_moveset_declines_a_learnable_move() {
 #[test]
 fn each_knocked_out_party_member_pays_its_own_boosted_award() {
     let dex = Dex::new();
-    let player = max_iv_mon(&dex, 19, 50, vec![SLASH]);
+    let player = max_iv_mon(&dex, MACHOP, 50, vec![SLASH]);
     let party = vec![
         max_iv_mon(&dex, TREECKO, 5, vec![POUND, LEER]),
         max_iv_mon(&dex, TORCHIC, 5, vec![SCRATCH, GROWL]),
@@ -608,7 +614,7 @@ fn each_knocked_out_party_member_pays_its_own_boosted_award() {
 #[test]
 fn a_replacement_does_not_act_on_the_turn_it_is_sent_out() {
     let dex = Dex::new();
-    let player = max_iv_mon(&dex, 19, 50, vec![SLASH]);
+    let player = max_iv_mon(&dex, MACHOP, 50, vec![SLASH]);
     let party = vec![
         max_iv_mon(&dex, TREECKO, 5, vec![POUND, LEER]),
         max_iv_mon(&dex, TORCHIC, 5, vec![SCRATCH, GROWL]),
@@ -646,7 +652,7 @@ fn a_replacement_does_not_act_on_the_turn_it_is_sent_out() {
 fn both_route_103_ai_flag_shapes_construct_and_play() {
     for trainer in [MAY_ROUTE_103_MUDKIP, BRENDAN_ROUTE_103_TREECKO] {
         let dex = Dex::new();
-        let player = max_iv_mon(&dex, 19, 50, vec![SLASH]);
+        let player = max_iv_mon(&dex, MACHOP, 50, vec![SLASH]);
         let party = vec![max_iv_mon(&dex, TORCHIC, 5, vec![SCRATCH, GROWL])];
         let mut rng = SequenceRng::new([0; 32]);
         let mut battle = Battle::new_trainer(dex, player, trainer, party, &mut rng)
@@ -769,5 +775,88 @@ fn an_empty_party_or_unknown_trainer_is_rejected_before_any_draw() {
         )
         .unwrap_err(),
         BattleError::UnknownTrainer(TrainerId(60_000))
+    );
+}
+
+/// The screen on the *player's* side of a trainer battle: the AI's target.
+///
+/// `Cmd_get_ability` (`src/battle_ai_script_commands.c:1350`-`:1405`) answers
+/// from `gSpeciesInfo[].abilities` when nothing is recorded in
+/// `BATTLE_HISTORY`, and when slot 1 is not `ABILITY_NONE` it picks between
+/// the two with `Random() & 1` (`:1383`). `AI_CheckBadMove` walks
+/// `get_ability AI_TARGET` on its mainline (`data/battle_ai_scripts.s:93`),
+/// so against a two-ability lead that draw would be spent once per scored
+/// slot, every turn -- and this crate models no abilities at all, so it can
+/// never be the *recorded* branch.
+///
+/// `SPECIES_RATTATA` is the fixture because it is genuinely two-ability
+/// upstream (`ABILITY_RUN_AWAY` / `ABILITY_GUTS`), and `SPECIES_MACHOP`
+/// (`ABILITY_GUTS` alone) is the control that proves the refusal is the
+/// second ability and not the screen refusing everything.
+#[test]
+fn a_two_ability_player_lead_is_refused_before_any_draw() {
+    const RATTATA: u16 = 19;
+    let dex = Dex::new();
+    let mut rng = SequenceRng::new([]);
+    let error = Battle::new_trainer(
+        dex,
+        max_iv_mon(&Dex::new(), RATTATA, 50, vec![SLASH]),
+        MAY_ROUTE_103_MUDKIP,
+        rival_treecko(&Dex::new()),
+        &mut rng,
+    )
+    .unwrap_err();
+    assert_eq!(
+        error,
+        BattleError::AmbiguousTargetAbility(SpeciesId(RATTATA)),
+        "the error names the species, which is what a future ability slice \
+         has to make answerable"
+    );
+    assert_eq!(rng.draws(), 0, "an empty script: the refusal drew nothing");
+
+    // The control: the same battle with a single-ability lead constructs.
+    let mut rng = SequenceRng::new([0; 4]);
+    Battle::new_trainer(
+        Dex::new(),
+        max_iv_mon(&Dex::new(), MACHOP, 50, vec![SLASH]),
+        MAY_ROUTE_103_MUDKIP,
+        rival_treecko(&Dex::new()),
+        &mut rng,
+    )
+    .expect("a single-ability lead is a target `Cmd_get_ability` never guesses about");
+}
+
+/// ...and the same refusal comes out of the no-draw pre-flight, which is
+/// where a per-frame caller actually meets it: `ensure_trainer_party_startable`
+/// takes the lead as an argument precisely so this cannot be a screen a
+/// caller forgets to run (issue #293 review).
+#[test]
+fn the_pre_flight_refuses_the_same_two_ability_lead() {
+    const RATTATA: u16 = 19;
+    let dex = Dex::new();
+    let moves = [POUND];
+    let party = [battle::TrainerPartyMon {
+        species: SpeciesId(TREECKO),
+        level: 5,
+        moves: &moves,
+        held_item: assets::items::ItemId::NONE,
+    }];
+    assert_eq!(
+        battle::ensure_trainer_party_startable(
+            &dex,
+            MAY_ROUTE_103_MUDKIP,
+            &max_iv_mon(&Dex::new(), RATTATA, 50, vec![SLASH]),
+            &party,
+        ),
+        Err(BattleError::AmbiguousTargetAbility(SpeciesId(RATTATA)))
+    );
+    assert_eq!(
+        battle::ensure_trainer_party_startable(
+            &dex,
+            MAY_ROUTE_103_MUDKIP,
+            &max_iv_mon(&Dex::new(), MACHOP, 50, vec![SLASH]),
+            &party,
+        ),
+        Ok(())
     );
 }

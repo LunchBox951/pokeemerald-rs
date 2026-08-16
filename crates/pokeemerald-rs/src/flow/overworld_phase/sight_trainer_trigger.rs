@@ -589,6 +589,7 @@ mod tests {
             battle::ensure_trainer_party_startable(
                 &battle::Dex::new(),
                 TrainerId(293),
+                &treecko_lead(),
                 &[battle::TrainerPartyMon {
                     species: party[0].species,
                     level: party[0].lvl,
@@ -605,6 +606,7 @@ mod tests {
             battle::ensure_trainer_party_startable(
                 &battle::Dex::new(),
                 TrainerId(293),
+                &treecko_lead(),
                 &[battle::TrainerPartyMon {
                     species: party[0].species,
                     level: party[0].lvl,
@@ -840,8 +842,13 @@ mod tests {
     /// One row of
     /// [`every_sight_trainers_real_party_resolves_to_exactly_this_verdict`],
     /// checked against a fresh overwhelming lead and a fresh seeded stream.
-    fn assert_verdict(name: &str, id: TrainerId, verdict: Verdict) {
-        let lead = battle::BattlePokemon::new(
+    /// The player lead every row here is asked against: a level-50 Treecko
+    /// with Slash. Its species matters as well as its power -- Treecko's
+    /// `gSpeciesInfo[].abilities[1]` is `ABILITY_NONE`, so it is a target
+    /// `Cmd_get_ability` answers without the `Random() & 1` guess this port
+    /// refuses to model (`battle::BattleError::AmbiguousTargetAbility`).
+    fn treecko_lead() -> battle::BattlePokemon {
+        battle::BattlePokemon::new(
             &battle::Dex::new(),
             assets::SpeciesId(277), // SPECIES_TREECKO
             50,
@@ -849,7 +856,11 @@ mod tests {
             0,
             vec![assets::MoveId(163)], // MOVE_SLASH
         )
-        .expect("Treecko/Slash is a valid pairing");
+        .expect("Treecko/Slash is a valid pairing")
+    }
+
+    fn assert_verdict(name: &str, id: TrainerId, verdict: Verdict) {
+        let lead = treecko_lead();
         let mut rng = engine::rng::Rng::new(1);
         let before = rng.state();
         let result = npc_trainer_battle::start_npc_trainer_battle(lead, id, &mut rng);
@@ -918,5 +929,55 @@ mod tests {
             lead_back.is_some(),
             "{name}: the driver writes the player's mon back"
         );
+    }
+
+    /// The player's own lead can refuse a cone too, and it must refuse it
+    /// for free (issue #293 review).
+    ///
+    /// A two-ability lead is a target the trainer AI's `Cmd_get_ability`
+    /// would guess about with a `Random() & 1`
+    /// (`src/battle_ai_script_commands.c:1383`), which this port models no
+    /// abilities to answer -- so `battle::ensure_trainer_party_startable`
+    /// refuses it. This trigger has no button gate, so that refusal is
+    /// re-reached on *every* frame the player stands in the cone: exactly
+    /// the shape issue #264's review made cost nothing, now asked of the
+    /// lead rather than of the party.
+    #[test]
+    fn a_two_ability_player_lead_refuses_every_cone_without_touching_the_stream() {
+        let rattata = battle::BattlePokemon::new(
+            &battle::Dex::new(),
+            assets::SpeciesId(19), // SPECIES_RATTATA: Run Away / Guts
+            50,
+            battle::fixed_ivs(31),
+            0,
+            vec![assets::MoveId(163)], // MOVE_SLASH
+        )
+        .expect("Rattata/Slash is a valid pairing");
+
+        // Rhett is the one this file otherwise proves *does* construct, so
+        // the only thing left to refuse here is the lead.
+        let mut rng = engine::rng::Rng::new(1);
+        let before = rng.state();
+        let error = npc_trainer_battle::start_npc_trainer_battle(rattata, TrainerId(703), &mut rng)
+            .expect_err("a two-ability lead is refused");
+        assert_eq!(
+            error,
+            npc_trainer_battle::NpcTrainerBattleError::Battle(
+                battle::BattleError::AmbiguousTargetAbility(assets::SpeciesId(19))
+            )
+        );
+        assert_eq!(
+            rng.state(),
+            before,
+            "and the refusal is a pre-flight one, so it costs the shared stream nothing"
+        );
+
+        // The control: the same trainer, the same stream, a single-ability
+        // lead -- and now it builds and does spend the OT-id draws.
+        let mut rng = engine::rng::Rng::new(1);
+        let before = rng.state();
+        npc_trainer_battle::start_npc_trainer_battle(treecko_lead(), TrainerId(703), &mut rng)
+            .expect("Rhett's real party constructs against a single-ability lead");
+        assert_ne!(rng.state(), before);
     }
 }

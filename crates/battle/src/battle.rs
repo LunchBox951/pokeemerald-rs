@@ -504,7 +504,11 @@ impl Battle {
     ///   whole fight.
     ///
     /// [`trainer_ai::ensure_supported_flags`] screens `gTrainers[].aiFlags`
-    /// the same way, for the same reason.
+    /// the same way, for the same reason, and
+    /// [`trainer_ai::ensure_deterministic_target_ability`] screens the one
+    /// property of the *player's* lead the AI can spend a draw on — a
+    /// species with two possible abilities, which `Cmd_get_ability` guesses
+    /// between (issue #293 review).
     ///
     /// Both screens run here too late to help a *caller* that has already
     /// paid `CreateNPCTrainerParty`'s per-mon OT-id draws to build `party`:
@@ -528,7 +532,9 @@ impl Battle {
     /// [`BattleError::EmptyTrainerParty`] for an empty `party`,
     /// [`BattleError::UnknownTrainer`] for an id outside `gTrainers`,
     /// [`BattleError::FaintedBattler`] if the player's lead or the
-    /// trainer's is already at `0` HP, and whatever the three screens above
+    /// trainer's is already at `0` HP,
+    /// [`BattleError::AmbiguousTargetAbility`] for a player lead whose
+    /// species has two abilities, and whatever the three screens above
     /// report. None of them draws.
     pub fn new_trainer(
         dex: Dex,
@@ -542,6 +548,7 @@ impl Battle {
         }
         let data = trainer::trainer_data(trainer)?;
         trainer_ai::ensure_supported_flags(data.ai_flags)?;
+        trainer_ai::ensure_deterministic_target_ability(&dex, player.species())?;
         if player.is_fainted() {
             return Err(BattleError::FaintedBattler(true));
         }

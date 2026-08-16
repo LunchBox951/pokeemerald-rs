@@ -99,7 +99,7 @@
 //! per-mon held item (`F_TRAINER_PARTY_HELD_ITEM`) alongside the
 //! fixed-vs-custom moveset axis, and `CreateNPCTrainerParty` writes it with
 //! `SetMonData(&party[i], MON_DATA_HELD_ITEM, &partyData[i].heldItem)`
-//! (`battle_main.c:2044`, `:2059`).
+//! (`battle_main.c:2046`, `:2060`).
 //!
 //! Issue #264 modelled that by refusing the two item-carrying *shapes*
 //! outright, which over-refused (several `F_TRAINER_PARTY_HELD_ITEM` rows
@@ -245,7 +245,7 @@ struct PartyEntry {
     /// shapes, or [`ItemId::NONE`] for the two shapes whose struct has no
     /// such field at all — upstream only reaches its
     /// `SetMonData(MON_DATA_HELD_ITEM)` write in the former two cases
-    /// (`battle_main.c:2044`, `:2059`), and `CreateMon` leaves the item at
+    /// (`battle_main.c:2046`, `:2060`), and `CreateMon` leaves the item at
     /// `ITEM_NONE` otherwise, so the two spellings agree.
     held_item: ItemId,
 }
@@ -366,12 +366,14 @@ pub fn trainer_party_personalities(id: TrainerId) -> Result<Vec<u32>, NpcTrainer
 /// [`NpcTrainerBattleError`]'s construction-refusal cases are raised
 /// **before the first draw** (module docs, "Nothing is built before the
 /// whole party is screened"): a refused party leaves `rng` exactly as it
-/// found it, however many times it is asked. The one exception is
-/// [`battle::BattleError::FaintedBattler`] for a fainted `player_lead`,
-/// which [`battle::Battle::new_trainer`] raises only *after* the party
-/// build's OT-id draws — the pre-flight takes no player argument and cannot
-/// screen it. Both in-tree callers check the lead before calling here;
-/// a future caller must do the same or accept the spent draws.
+/// found it, however many times it is asked. That now includes the two
+/// facts about `player_lead` itself that can refuse a battle — a fainted
+/// lead ([`battle::BattleError::FaintedBattler`]) and a two-ability lead
+/// the trainer AI would guess about
+/// ([`battle::BattleError::AmbiguousTargetAbility`]) — because
+/// [`battle::ensure_trainer_party_startable`] takes the lead as an argument
+/// (issue #293 review). There is no longer a refusal shape that costs the
+/// stream anything.
 pub fn start_npc_trainer_battle(
     player_lead: BattlePokemon,
     trainer: TrainerId,
@@ -404,7 +406,7 @@ pub fn start_npc_trainer_battle(
             held_item: entry.held_item,
         })
         .collect();
-    battle::ensure_trainer_party_startable(&dex, trainer, &specs)?;
+    battle::ensure_trainer_party_startable(&dex, trainer, &player_lead, &specs)?;
 
     let mut party = Vec::with_capacity(entries.len());
     for ((entry, personality), moves) in entries.iter().zip(personalities).zip(movesets) {

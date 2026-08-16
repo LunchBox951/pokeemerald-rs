@@ -51,7 +51,7 @@
 //!   is now represented — [`crate::pokemon::BattlePokemon::held_item`],
 //!   written here by [`build_trainer_pokemon`] exactly where
 //!   `CreateNPCTrainerParty`'s `SetMonData(&party[i], MON_DATA_HELD_ITEM,
-//!   &partyData[i].heldItem)` writes it (`src/battle_main.c:2044`, `:2059`)
+//!   &partyData[i].heldItem)` writes it (`src/battle_main.c:2046`, `:2060`)
 //!   — but nothing *runs* it, so `ensure_held_item_playable` refuses a
 //!   non-`ITEM_NONE` item before the first draw rather than fielding a mon
 //!   whose Oran Berry never fires. See [`BattleError::UnsupportedHeldItem`].
@@ -167,7 +167,7 @@ pub fn roll_non_shiny_ot_id(personality: u32, rng: &mut impl BattleRng) -> u32 {
 /// hasFixedPersonality = TRUE, personality, OT_ID_RANDOM_NO_SHINY, 0)`
 /// (`pokeemerald/src/battle_main.c:2014`), plus the
 /// `SetMonData(MON_DATA_HELD_ITEM)` write the two
-/// `F_TRAINER_PARTY_HELD_ITEM` shapes make right after it (`:2044`, `:2059`)
+/// `F_TRAINER_PARTY_HELD_ITEM` shapes make right after it (`:2046`, `:2060`)
 /// — pass [`ItemId::NONE`] for the two shapes that make no such write.
 ///
 /// Distinct from both of [`crate::wild`]'s construction paths, and the
@@ -579,25 +579,38 @@ pub struct TrainerPartyMon<'a> {
 /// The order below follows the real handoff's composed order — per-mon
 /// [`BattlePokemon::validate`] (which [`build_trainer_pokemon`] runs mon by
 /// mon, ahead of the battle), then
-/// `super::trainer_ai`'s `ensure_supported_flags`, then the per-move pair —
-/// with one caveat: this screen resolves `trainer_data` *first*, where the
-/// composed path only reaches it inside `new_trainer` after the mons
-/// validate, so a party that is both mis-specced and on an unknown trainer
-/// id reports the trainer error here and the mon error there (unreachable
-/// through `start_npc_trainer_battle`, whose `party_entries` resolves the
-/// trainer before any mon exists). For every reachable input, screening
-/// early does not change *which* error a rejected party reports,
-/// only how early it is discovered.
+/// `super::trainer_ai`'s `ensure_supported_flags` and the `player_lead`
+/// screens beside it, then the per-move pair — with one caveat: this screen
+/// resolves `trainer_data` *first*, where the composed path only reaches it
+/// inside `new_trainer` after the mons validate, so a party that is both
+/// mis-specced and on an unknown trainer id reports the trainer error here
+/// and the mon error there (unreachable through
+/// `start_npc_trainer_battle`, whose `party_entries` resolves the trainer
+/// before any mon exists). For every reachable input, screening early does
+/// not change *which* error a rejected party reports, only how early it is
+/// discovered.
+///
+/// `player_lead` is here — rather than left to the caller — because it is the
+/// AI's own **target**, and the question that has to be asked about it is
+/// exactly the kind of refusal that must not cost the stream anything: does
+/// its species have two possible abilities, which `Cmd_get_ability` would
+/// guess between with a `Random() & 1`
+/// (`super::trainer_ai::ensure_deterministic_target_ability`)? A screen a
+/// caller can forget to run is a screen that leaks (issue #293 review). Its
+/// fainted-ness is asked in the same place for the same reason, closing the
+/// one gap `crate::battle::Battle::new_trainer` used to hold alone.
 ///
 /// # Errors
 ///
 /// [`BattleError::EmptyTrainerParty`] for an empty `party`,
 /// [`BattleError::UnknownTrainer`] for an id outside `gTrainers`,
 /// [`BattleError::UnsupportedAiFlags`] for a `gTrainers[].aiFlags` bit this
-/// crate's AI does not model, [`BattleError::UnsupportedHeldItem`] for a
-/// member holding an item nothing here runs
-/// (`ensure_held_item_playable`), and whatever [`BattlePokemon::validate`]
-/// or `ensure_move_playable` report for a member's species/level/moveset.
+/// crate's AI does not model, [`BattleError::AmbiguousTargetAbility`] or
+/// [`BattleError::FaintedBattler`] for `player_lead`,
+/// [`BattleError::UnsupportedHeldItem`] for a member holding an item nothing
+/// here runs (`ensure_held_item_playable`), and whatever
+/// [`BattlePokemon::validate`] or `ensure_move_playable` report for a
+/// member's species/level/moveset.
 ///
 /// The held-item screen runs **last**, after every move, so a party that is
 /// both unfieldable and item-carrying reports the move — the more actionable
@@ -605,6 +618,7 @@ pub struct TrainerPartyMon<'a> {
 pub fn ensure_trainer_party_startable(
     dex: &Dex,
     trainer: TrainerId,
+    player_lead: &BattlePokemon,
     party: &[TrainerPartyMon<'_>],
 ) -> Result<(), BattleError> {
     if party.is_empty() {
@@ -615,6 +629,10 @@ pub fn ensure_trainer_party_startable(
         BattlePokemon::validate(dex, mon.species, mon.level, mon.moves)?;
     }
     super::trainer_ai::ensure_supported_flags(data.ai_flags)?;
+    super::trainer_ai::ensure_deterministic_target_ability(dex, player_lead.species())?;
+    if player_lead.is_fainted() {
+        return Err(BattleError::FaintedBattler(true));
+    }
     for mon in party {
         for move_id in mon.moves {
             ensure_move_playable(dex, *move_id, data.ai_flags)?;
@@ -768,6 +786,21 @@ mod tests {
         assert_eq!(money_value_for_class(TrainerClass(0x26)), 50); // CHAMPION
     }
 
+    /// A single-ability player lead for the pre-flight's own `player_lead`
+    /// argument: Treecko's `gSpeciesInfo[].abilities[1]` is `ABILITY_NONE`,
+    /// so `Cmd_get_ability` answers it without a draw and the screen passes.
+    fn player_lead() -> crate::pokemon::BattlePokemon {
+        crate::pokemon::BattlePokemon::new(
+            &Dex::new(),
+            SpeciesId(277),
+            5,
+            fixed_ivs(0),
+            0,
+            vec![MoveId(1)],
+        )
+        .expect("Treecko/Pound is a valid pairing")
+    }
+
     /// The pre-flight accepts exactly the party the real handoff accepts —
     /// the Route 103 rival moveset every `route103_rival` test already
     /// proves constructible.
@@ -779,6 +812,7 @@ mod tests {
             ensure_trainer_party_startable(
                 &dex,
                 MAY_ROUTE_103_MUDKIP,
+                &player_lead(),
                 &[TrainerPartyMon {
                     species: SpeciesId(277), // Treecko
                     level: 5,
@@ -803,6 +837,7 @@ mod tests {
         let screened = ensure_trainer_party_startable(
             &dex,
             MAY_ROUTE_103_MUDKIP,
+            &player_lead(),
             &[TrainerPartyMon {
                 species: SpeciesId(277),
                 level: 5,
@@ -827,18 +862,9 @@ mod tests {
         )
         .expect("Treecko/Harden is a valid pairing -- only the turn engine refuses it");
         assert_eq!(rng.index, 2, "the leak: draws are spent before the screen");
-        let player = crate::pokemon::BattlePokemon::new(
-            &Dex::new(),
-            SpeciesId(277),
-            5,
-            fixed_ivs(0),
-            0,
-            vec![MoveId(1)],
-        )
-        .expect("Treecko/Pound is a valid pairing");
         let handoff = crate::battle::Battle::new_trainer(
             Dex::new(),
-            player,
+            player_lead(),
             MAY_ROUTE_103_MUDKIP,
             vec![enemy],
             &mut rng,
@@ -853,7 +879,7 @@ mod tests {
     fn the_pre_flight_rejects_an_empty_party_and_an_unknown_trainer() {
         let dex = Dex::new();
         assert_eq!(
-            ensure_trainer_party_startable(&dex, MAY_ROUTE_103_MUDKIP, &[]),
+            ensure_trainer_party_startable(&dex, MAY_ROUTE_103_MUDKIP, &player_lead(), &[]),
             Err(crate::error::BattleError::EmptyTrainerParty(
                 MAY_ROUTE_103_MUDKIP
             ))
@@ -863,6 +889,7 @@ mod tests {
             ensure_trainer_party_startable(
                 &dex,
                 TrainerId(60_000),
+                &player_lead(),
                 &[TrainerPartyMon {
                     species: SpeciesId(277),
                     level: 5,

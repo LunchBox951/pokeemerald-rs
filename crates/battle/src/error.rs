@@ -262,7 +262,7 @@ pub enum BattleError {
     /// [`crate::pokemon::BattlePokemon`] *represents* a held item
     /// ([`crate::pokemon::BattlePokemon::held_item`], upstream
     /// `MON_DATA_HELD_ITEM`, written by `CreateNPCTrainerParty` at
-    /// `pokeemerald/src/battle_main.c:2044`/`:2059`) but no item **acts**:
+    /// `pokeemerald/src/battle_main.c:2046`/`:2060`) but no item **acts**:
     /// there is no `ItemBattleEffects`/`ITEM_EFFECT_*` path here, so an Oran
     /// Berry that should restore 10 HP the moment its holder drops below half
     /// would simply never fire. That is a silent behavioural divergence in
@@ -287,6 +287,32 @@ pub enum BattleError {
     /// a battle against it cannot be started. Rejected here rather than
     /// panicking on the missing lead.
     EmptyTrainerParty(TrainerId),
+
+    /// The trainer AI's target — the player's lead — is a species with
+    /// **two** possible abilities, which `Cmd_get_ability` guesses between
+    /// with a `Random() & 1` (issue #293 review).
+    ///
+    /// `Cmd_get_ability` (`pokeemerald/src/battle_ai_script_commands.c:1350`)
+    /// answers from `BATTLE_HISTORY->abilities[battler]` when the AI has
+    /// *seen* the ability; with nothing recorded it falls through to
+    /// `gSpeciesInfo[].abilities`, and when slot `1` is not `ABILITY_NONE`
+    /// it spends a draw picking one at random (`:1383`). This crate models
+    /// no abilities at all, so nothing is ever recorded and that branch is
+    /// the only one a two-ability target can take.
+    ///
+    /// `AI_CheckBadMove` reaches `get_ability AI_TARGET` on its **mainline**
+    /// (`pokeemerald/data/battle_ai_scripts.s:93`, and again at `:59` on the
+    /// negates-type path), so the draw is not confined to some exotic
+    /// branch — it would be spent once per scored moveset slot, every turn,
+    /// against a two-ability lead. Reproducing the guess exactly would mean
+    /// modelling `BATTLE_HISTORY` recording plus every `get_ability
+    /// AI_TARGET` site in that script, so the crate fails closed at the edge
+    /// instead, the same way [`Self::UnsupportedHeldItem`] does.
+    ///
+    /// Carries the offending `SPECIES_*` id. Raised before any draw, by
+    /// [`crate::battle::trainer::ensure_trainer_party_startable`]'s
+    /// pre-flight and again by [`crate::battle::Battle::new_trainer`].
+    AmbiguousTargetAbility(SpeciesId),
 }
 
 impl fmt::Display for BattleError {
@@ -358,6 +384,12 @@ impl fmt::Display for BattleError {
             Self::EmptyTrainerParty(id) => {
                 write!(f, "trainer `{}` has an empty party", id.0)
             }
+            Self::AmbiguousTargetAbility(id) => write!(
+                f,
+                "species `{}` has two possible abilities, which the trainer AI \
+                 would guess between with a draw this slice does not model",
+                id.0
+            ),
         }
     }
 }
