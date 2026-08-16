@@ -736,6 +736,13 @@ impl Battle {
     /// [`trainer_ai::ensure_supported_flags`] screens `gTrainers[].aiFlags`
     /// the same way, for the same reason.
     ///
+    /// Both screens run here too late to help a *caller* that has already
+    /// paid `CreateNPCTrainerParty`'s per-mon OT-id draws to build `party`:
+    /// [`trainer::ensure_trainer_party_startable`] is the same set composed
+    /// into a pre-flight that runs before the first draw, and is what an
+    /// integration layer should ask (issue #264 review). These stay as the
+    /// last line of defence for a party built some other way.
+    ///
     /// Draws from `rng` exactly as [`Battle::new`] does once validation
     /// passes — `BattleStartClearSetData`'s `gRandomTurnNumber`
     /// (`battle_main.c:3140`) plus `TryDoEventsBeforeFirstTurn`'s
@@ -773,8 +780,7 @@ impl Battle {
         }
         for mon in &party {
             for slot in mon.moves() {
-                ensure_executable(&dex, slot.move_id)?;
-                trainer_ai::ensure_scoreable(&dex, slot.move_id)?;
+                trainer::ensure_move_playable(&dex, slot.move_id)?;
             }
         }
 

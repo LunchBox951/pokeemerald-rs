@@ -216,8 +216,13 @@ pub enum AppState {
     /// Route 101's scripted first battle is running inside the overworld
     /// phase (edge-frame timing: enum docs above).
     FirstBattle,
-    /// The Route 103 rival battle is running inside the overworld phase
-    /// (issue #248; edge-frame timing: enum docs above).
+    /// A trainer battle -- the Route 103 rival (issue #248) or, since issue
+    /// #264, one of Route 103's own sight trainers -- is running inside the
+    /// overworld phase (edge-frame timing: enum docs above). The two share
+    /// one variant: both are `BATTLE_TYPE_TRAINER` fights indistinguishable
+    /// from outside the overworld phase, and [`App::rival_battle_outcome`]/
+    /// [`App::sight_trainer_battle_outcome`] are what tell a caller which one
+    /// just concluded.
     TrainerBattle,
 }
 
@@ -625,6 +630,9 @@ impl App {
             Some(AppScene::Overworld(phase)) if phase.is_rival_battle_active() => {
                 AppState::TrainerBattle
             }
+            Some(AppScene::Overworld(phase)) if phase.is_sight_trainer_battle_active() => {
+                AppState::TrainerBattle
+            }
             Some(AppScene::Overworld(_)) => AppState::Overworld,
         }
     }
@@ -649,6 +657,18 @@ impl App {
     pub fn rival_battle_outcome(&self) -> Option<BattleOutcome> {
         match self.scene.as_ref() {
             Some(AppScene::Overworld(phase)) => phase.rival_battle_outcome(),
+            _ => None,
+        }
+    }
+
+    /// Return the retained terminal outcome of a Route 103 sight-trainer
+    /// battle (issue #264), if the current game flow has completed one
+    /// successfully. See [`Self::first_battle_outcome`] for what an empty
+    /// result distinguishes.
+    #[must_use]
+    pub fn sight_trainer_battle_outcome(&self) -> Option<BattleOutcome> {
+        match self.scene.as_ref() {
+            Some(AppScene::Overworld(phase)) => phase.sight_trainer_battle_outcome(),
             _ => None,
         }
     }

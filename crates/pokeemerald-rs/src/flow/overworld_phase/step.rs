@@ -9,7 +9,9 @@
 //! guideline -- see that module's own docs). Warp/connection *execution*
 //! lives in [`super::connections`]; the wild-battle and dialog
 //! frame-ownership checks [`OverworldPhase::step`] defers to live in
-//! [`super::wild_battle`] and [`super::frame`] respectively.
+//! [`super::wild_battle`] and [`super::frame`] respectively. The Route 103
+//! sight-trainer check (issue #264) [`OverworldPhase::step`] runs ahead of
+//! everything else lives in [`super::sight_trainer_trigger`].
 //! [`crate::flow::wild_encounter`]'s predicates already model the
 //! wild-encounter half of this pipeline's precedence rules.
 
@@ -247,21 +249,37 @@ impl OverworldPhase {
         self.tick = self.tick.wrapping_add(1);
 
         // A wild battle, the Route 101 scripted first battle (issue #231,
-        // `super::first_battle_trigger`), or the Route 103 rival battle
-        // (issue #248, `super::route103_rival_trigger`) -- the three fields
-        // are never more than one `Some` at a time, struct docs on
-        // `first_battle` -- owns the frame outright, ahead of the dialog
-        // check, the same way upstream's battle callback owns
+        // `super::first_battle_trigger`), the Route 103 rival battle (issue
+        // #248, `super::route103_rival_trigger`), or a Route 103
+        // sight-trainer battle (issue #264, `super::sight_trainer_trigger`)
+        // -- the four fields are never more than one `Some` at a time,
+        // struct docs on `first_battle` -- owns the frame outright, ahead of
+        // the dialog check, the same way upstream's battle callback owns
         // `CB2_Overworld` outright once `SetMainCallback2(CB2_InitBattle)`
         // has run (`src/battle_setup.c:369`).
         if self.advance_wild_battle_frame()
             || self.advance_first_battle_frame()
             || self.advance_route103_rival_battle_frame()
+            || self.advance_sight_trainer_battle_frame()
         {
             return;
         }
 
         if self.advance_dialog_frame(buttons) {
+            return;
+        }
+
+        // Sight-trainer detection (issue #264, `super::sight_trainer_trigger`'s
+        // own module docs): upstream's `CheckForTrainersWantingBattle` runs
+        // unconditionally at the very top of `ProcessPlayerFieldInput`,
+        // itself called every field frame *before* `PlayerStep`
+        // (`src/overworld.c:1447`/`:1451`) -- ahead of `TryRunOnFrameMapScript`,
+        // the door-shaped warp, the wild-encounter roll, the arrow poll, and
+        // the interaction lookup alike. Placed here, before any of this
+        // frame's movement is applied, for the same reason: a cone reaching
+        // the player preempts everything else this frame, exactly like
+        // upstream's own `return TRUE` short-circuit.
+        if self.begin_sight_trainer_battle_if_seen() {
             return;
         }
 

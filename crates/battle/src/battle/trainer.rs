@@ -87,10 +87,14 @@ pub const SHINY_ODDS: u16 = 8;
 /// Every Route 103 rival party entry has `iv = 0`, so their starters really
 /// do run on all-zero IVs — pinned by this module's tests rather than left
 /// implicit.
+// The parameter is upstream's `partyData[i].iv` byte, named in full here:
+// CodeQL's `rust/hard-coded-cryptographic-value` reads a parameter named
+// exactly `iv` as a cryptographic initialization-vector sink (the PR #167
+// false-positive convention -- rename, never dismiss).
 #[must_use]
-pub fn fixed_ivs(iv: u8) -> Ivs {
-    let value =
-        u8::try_from(u16::from(iv) * MAX_PER_STAT_IVS / u16::from(u8::MAX)).unwrap_or(u8::MAX);
+pub fn fixed_ivs(individual_value: u8) -> Ivs {
+    let value = u8::try_from(u16::from(individual_value) * MAX_PER_STAT_IVS / u16::from(u8::MAX))
+        .unwrap_or(u8::MAX);
     Ivs {
         hp: value,
         attack: value,
@@ -456,11 +460,105 @@ pub fn trainer_data(trainer: TrainerId) -> Result<&'static TrainerData, BattleEr
         .ok_or(BattleError::UnknownTrainer(trainer))
 }
 
+/// Both per-move screens [`crate::battle::Battle::new_trainer`] applies to
+/// every party member, composed — see that method's own "Two screens, both
+/// before the first draw" section for why the pair is inseparable.
+///
+/// Shared with [`ensure_trainer_party_startable`] so the per-move halves of
+/// the pre-flight and the real handoff cannot drift apart: a move the
+/// pre-flight admitted but `new_trainer` rejected would be exactly the RNG
+/// leak the pre-flight exists to prevent. (The other screens -- empty
+/// party, `trainer_data`, `ensure_supported_flags`, per-mon `validate` --
+/// are *duplicated* between the two paths, not shared; a screen added to
+/// `new_trainer` alone can still drift and must be mirrored here.)
+pub(crate) fn ensure_move_playable(dex: &Dex, move_id: MoveId) -> Result<(), BattleError> {
+    crate::battle::ensure_executable(dex, move_id)?;
+    super::trainer_ai::ensure_scoreable(dex, move_id)
+}
+
+/// One prospective `CreateNPCTrainerParty` party member as
+/// [`ensure_trainer_party_startable`] needs to see it: the three `CreateMon`
+/// inputs the screens actually depend on. The personality and the IVs are
+/// deliberately absent — both are fixed values upstream computes without
+/// drawing, and the only IV producer (`fixed_ivs`, `iv * 31 / 255`) is
+/// range-safe by construction, so the post-draw `InvalidIv` refusal in
+/// `BattlePokemon::new` is unreachable from a trainer party.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TrainerPartyMon<'a> {
+    /// `partyData[i].species`.
+    pub species: SpeciesId,
+    /// `partyData[i].lvl`.
+    pub level: u8,
+    /// The moveset the member will actually field — the party table's own
+    /// fixed moveset, or [`crate::wild::initial_moveset`]'s level-up result
+    /// for the `F_TRAINER_PARTY_*_DEFAULT_MOVES` shapes.
+    pub moves: &'a [MoveId],
+}
+
+/// Whether the whole `CreateNPCTrainerParty` →
+/// [`crate::battle::Battle::new_trainer`] handoff would accept `trainer`
+/// fielding `party` — every screen the two make between them, composed,
+/// with **no mon built and no RNG drawn**. The trainer-battle counterpart of
+/// [`crate::wild::ensure_wild_startable`], and it exists for the same reason
+/// (issue #264 review).
+///
+/// Upstream builds a trainer's party mon by mon, each drawing its own
+/// `OT_ID_RANDOM_NO_SHINY` id ([`roll_non_shiny_ot_id`]) as it goes, and
+/// only then reaches the battle's own screens — so a party this engine
+/// cannot fight has no stream-faithful failure mode once construction has
+/// started: those draws are already spent, with no upstream counterpart, and
+/// a caller that retries every frame (a sight cone the player is standing
+/// in) spends them again on every frame. Screening first is the only shape
+/// that leaves the shared stream exactly as it found it, which is what a
+/// refusal must cost `(behavioral-fidelity)`.
+///
+/// The order below follows the real handoff's composed order — per-mon
+/// [`BattlePokemon::validate`] (which [`build_trainer_pokemon`] runs mon by
+/// mon, ahead of the battle), then
+/// [`super::trainer_ai::ensure_supported_flags`], then the per-move pair —
+/// with one caveat: this screen resolves `trainer_data` *first*, where the
+/// composed path only reaches it inside `new_trainer` after the mons
+/// validate, so a party that is both mis-specced and on an unknown trainer
+/// id reports the trainer error here and the mon error there (unreachable
+/// through `start_npc_trainer_battle`, whose `party_entries` resolves the
+/// trainer before any mon exists). For every reachable input, screening
+/// early does not change *which* error a rejected party reports,
+/// only how early it is discovered.
+///
+/// # Errors
+///
+/// [`BattleError::EmptyTrainerParty`] for an empty `party`,
+/// [`BattleError::UnknownTrainer`] for an id outside `gTrainers`,
+/// [`BattleError::UnsupportedAiFlags`] for a `gTrainers[].aiFlags` bit this
+/// crate's AI does not model, and whatever [`BattlePokemon::validate`] or
+/// [`ensure_move_playable`] report for a member's species/level/moveset.
+pub fn ensure_trainer_party_startable(
+    dex: &Dex,
+    trainer: TrainerId,
+    party: &[TrainerPartyMon<'_>],
+) -> Result<(), BattleError> {
+    if party.is_empty() {
+        return Err(BattleError::EmptyTrainerParty(trainer));
+    }
+    let data = trainer_data(trainer)?;
+    for mon in party {
+        BattlePokemon::validate(dex, mon.species, mon.level, mon.moves)?;
+    }
+    super::trainer_ai::ensure_supported_flags(data.ai_flags)?;
+    for mon in party {
+        for move_id in mon.moves {
+            ensure_move_playable(dex, *move_id)?;
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        build_trainer_pokemon, fixed_ivs, money_value_for_class, roll_non_shiny_ot_id, shiny_value,
-        trainer_data, trainer_money, DEFAULT_MONEY_VALUE, SHINY_ODDS,
+        build_trainer_pokemon, ensure_trainer_party_startable, fixed_ivs, money_value_for_class,
+        roll_non_shiny_ot_id, shiny_value, trainer_data, trainer_money, TrainerPartyMon,
+        DEFAULT_MONEY_VALUE, SHINY_ODDS,
     };
     use crate::damage::BattleRng;
     use crate::dex::Dex;
@@ -592,6 +690,108 @@ mod tests {
         );
         // ...while a listed one does not.
         assert_eq!(money_value_for_class(TrainerClass(0x26)), 50); // CHAMPION
+    }
+
+    /// The pre-flight accepts exactly the party the real handoff accepts —
+    /// the Route 103 rival moveset every `route103_rival` test already
+    /// proves constructible.
+    #[test]
+    fn ensure_trainer_party_startable_accepts_a_real_constructible_party() {
+        let dex = Dex::new();
+        let moves = [MoveId(1)]; // MOVE_POUND
+        assert_eq!(
+            ensure_trainer_party_startable(
+                &dex,
+                MAY_ROUTE_103_MUDKIP,
+                &[TrainerPartyMon {
+                    species: SpeciesId(277), // Treecko
+                    level: 5,
+                    moves: &moves,
+                }],
+            ),
+            Ok(())
+        );
+    }
+
+    /// The whole point of the pre-flight (issue #264 review): it must report
+    /// *exactly* what the real handoff would, while the real handoff can
+    /// only report it after `CreateNPCTrainerParty` has already spent the
+    /// party's OT-id draws off the shared stream.
+    #[test]
+    fn the_pre_flight_reports_what_the_real_handoff_would_but_without_the_draws() {
+        let dex = Dex::new();
+        // MOVE_HARDEN: neither an ordinary-hit effect nor one of the three
+        // stat-lowering ones, so `ensure_executable` refuses it.
+        let moves = [MoveId(106)];
+        let screened = ensure_trainer_party_startable(
+            &dex,
+            MAY_ROUTE_103_MUDKIP,
+            &[TrainerPartyMon {
+                species: SpeciesId(277),
+                level: 5,
+                moves: &moves,
+            }],
+        )
+        .expect_err("Harden is not executable by this turn engine");
+
+        // The same party, built for real: two draws for the OT id, and only
+        // then the identical refusal.
+        let mut rng = SequenceRng::new([0x00FF, 0x0000]);
+        let enemy = build_trainer_pokemon(
+            &dex,
+            SpeciesId(277),
+            5,
+            fixed_ivs(0),
+            0,
+            moves.to_vec(),
+            &mut rng,
+        )
+        .expect("Treecko/Harden is a valid pairing -- only the turn engine refuses it");
+        assert_eq!(rng.index, 2, "the leak: draws are spent before the screen");
+        let player = crate::pokemon::BattlePokemon::new(
+            &Dex::new(),
+            SpeciesId(277),
+            5,
+            fixed_ivs(0),
+            0,
+            vec![MoveId(1)],
+        )
+        .expect("Treecko/Pound is a valid pairing");
+        let handoff = crate::battle::Battle::new_trainer(
+            Dex::new(),
+            player,
+            MAY_ROUTE_103_MUDKIP,
+            vec![enemy],
+            &mut rng,
+        )
+        .expect_err("the battle refuses the same moveset");
+        assert_eq!(screened, handoff);
+    }
+
+    /// An empty party and an unknown id are the two shape errors the
+    /// pre-flight must raise itself rather than defer to the battle.
+    #[test]
+    fn the_pre_flight_rejects_an_empty_party_and_an_unknown_trainer() {
+        let dex = Dex::new();
+        assert_eq!(
+            ensure_trainer_party_startable(&dex, MAY_ROUTE_103_MUDKIP, &[]),
+            Err(crate::error::BattleError::EmptyTrainerParty(
+                MAY_ROUTE_103_MUDKIP
+            ))
+        );
+        let moves = [MoveId(1)];
+        assert_eq!(
+            ensure_trainer_party_startable(
+                &dex,
+                TrainerId(60_000),
+                &[TrainerPartyMon {
+                    species: SpeciesId(277),
+                    level: 5,
+                    moves: &moves,
+                }],
+            ),
+            Err(crate::error::BattleError::UnknownTrainer(TrainerId(60_000)))
+        );
     }
 
     #[test]

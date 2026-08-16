@@ -39,6 +39,10 @@
 //!   upstream's encounter-rate/slot/level draws against the extracted
 //!   `gWildMonHeaders` tables, plus the post-transition immunity-step
 //!   bookkeeping around them.
+//! - [`trainer_sight`] — the `TRAINER_TYPE_NORMAL` sight-cone geometry check
+//!   (issue #264): whether a stationary trainer object event's own facing
+//!   direction, sight range, and an unobstructed, elevation-compatible line
+//!   reach the player.
 //!
 //! # Scope
 //!
@@ -65,12 +69,13 @@ pub mod map_runtime;
 pub mod metatile_behavior;
 pub mod object_event;
 pub mod player;
+pub mod trainer_sight;
 pub mod warp;
 pub mod wild_encounter;
 
 pub use collision::{
-    directionally_impassable, elevation_mismatch, Collision, ELEVATION_MULTI_LEVEL,
-    ELEVATION_TRANSITION,
+    directionally_impassable, elevation_mismatch, elevations_compatible, Collision,
+    ELEVATION_MULTI_LEVEL, ELEVATION_TRANSITION,
 };
 pub use direction::Direction;
 pub use map_runtime::{ConnectedMapData, ConnectionCrossing, MapRuntime, NUM_METATILES_IN_PRIMARY};
@@ -79,6 +84,7 @@ pub use object_event::{
     object_event_is_visible, visible_object_event_at, visible_object_events,
 };
 pub use player::{PlayerState, StepOutcome, TilePos, WALK_FRAMES_PER_TILE};
+pub use trainer_sight::trainer_can_see_player;
 pub use warp::{
     resolve_warp_event, trigger_arrow_warp, trigger_door_warp, warp_destination_position,
     warp_in_facing, WarpTrigger,

@@ -52,16 +52,26 @@ use crate::main_menu::{self, MainMenuItem, MainMenuScene, MainMenuType};
 use crate::title::TitleScene;
 
 pub(crate) mod first_battle;
+/// The shared `CreateNPCTrainerParty` construction and headless one-turn
+/// driver every NPC trainer battle in this crate goes through (issue #237,
+/// generalized off [`route103_rival`] by issue #264): both
+/// [`route103_rival`]'s own scripted rival and
+/// [`overworld_phase`]'s `sight_trainer_trigger` (Route 103's Daisy, Andrew,
+/// Miguel, Rhett, Marcos, Isabelle, Pete) build their battles through this
+/// module.
+pub(crate) mod npc_trainer_battle;
 pub(crate) mod overworld_phase;
-/// The scripted Route 103 rival battle's `CreateNPCTrainerParty`
-/// construction and headless driver (issue #237), reachable from real play
-/// since issue #248: [`overworld_phase`]'s own `route103_rival_trigger`
-/// (beside its existing `first_battle_trigger`) calls
+/// The scripted Route 103 rival battle's own choice of trainer, reachable
+/// from real play since issue #248: [`overworld_phase`]'s own
+/// `route103_rival_trigger` (beside its existing `first_battle_trigger` and,
+/// since issue #264, `sight_trainer_trigger`) calls
 /// [`route103_rival::start_route103_rival_battle`]/
 /// [`route103_rival::advance_route103_rival_battle`] the moment the player
 /// faces the rival's object event on Route 103 and presses A -- the same
 /// reachability slice that retired [`first_battle`]'s own former
-/// `#[allow(dead_code)]` between issues #221 and #231.
+/// `#[allow(dead_code)]` between issues #221 and #231. See
+/// [`npc_trainer_battle`] for the construction/driver this module's own
+/// functions now wrap.
 pub(crate) mod route103_rival;
 mod wild_encounter;
 pub(crate) use overworld_phase::OverworldPhase;

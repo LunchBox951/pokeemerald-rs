@@ -226,9 +226,7 @@ impl<'a> MapRuntime<'a> {
         objects.iter().filter(move |o| {
             i32::from(o.x) == x
                 && i32::from(o.y) == y
-                && (o.elevation == elevation
-                    || o.elevation == super::collision::ELEVATION_TRANSITION
-                    || elevation == super::collision::ELEVATION_TRANSITION)
+                && super::collision::elevations_compatible(o.elevation, elevation)
         })
     }
 
