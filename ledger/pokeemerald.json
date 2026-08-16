@@ -25374,7 +25374,7 @@
           "status": "rewritten"
         },
         "sPicTable_BrendanNormal": {
-          "reason": "9-frame walking-sheet layout (2x4-tile frames, on-foot subset only) ported into avatar::pack_people_sheet_frames, whose packed bytes seed the scene's combined sprite tileset (overworld::sprites::SceneSprites) at base tile 0. sPicTable_MayNormal is now reached by two code paths, not one: as this run's own PlayerCharacter::May walking sheet, and (issue #161 review) as the sheet an OBJ_EVENT_GFX_RIVAL_MAY_NORMAL object event draws from when the player is Brendan -- upstream's gObjectEventGraphicsInfo_RivalMayNormal points .images at this very table (object_event_graphics_info.h:2015-2032); there is no rival-specific pic table or PNG. Both paths go through the same avatar::pack_people_sheet_frames packer; the rival case appends its own frame block after the player's rather than reusing base tile 0, and draws from its own palette bank (upstream PALSLOT_NPC_SPECIAL). Same for sPicTable_BrendanNormal with the genders swapped. Running frames remain out of v1 scope.",
+          "reason": "9-frame walking-sheet layout (2x4-tile frames, on-foot subset only) ported into avatar::pack_people_sheet_frames, whose packed bytes seed the scene's combined sprite tileset (overworld::sprites::SceneSprites) at base tile 0. sPicTable_MayNormal is now reached by two code paths, not one: as this run's own PlayerCharacter::May walking sheet, and (issue #161 review) as the sheet an OBJ_EVENT_GFX_RIVAL_MAY_NORMAL object event draws from when the player is Brendan -- upstream's gObjectEventGraphicsInfo_RivalMayNormal points .images at this very table (object_event_graphics_info.h:2015-2032); there is no rival-specific pic table or PNG. Both paths go through the same avatar::pack_people_sheet_frames packer; the rival case appends its own frame block after the player's rather than reusing base tile 0, and draws from its own palette bank (upstream PALSLOT_NPC_SPECIAL). Same for sPicTable_BrendanNormal with the genders swapped. Running frames are not modelled yet -- deferred, still in v1 scope.",
           "rust_target": "crates/pokeemerald-rs/src/overworld/avatar.rs",
           "spec": "I-3",
           "status": "rewritten"
@@ -25973,7 +25973,7 @@
           "status": "rewritten"
         },
         "SetSpritePosToMapCoords": {
-          "reason": "Player-OBJ screen-position derivation: for the player's own object event mapX/mapY == gSaveBlock1Ptr->pos always, collapsing this to a per-frame-constant OAM origin (PLAYER_OBJ_X/PLAYER_OBJ_Y); the camera/BG scrolls instead (viewport::build_tilemaps). Bike pan-ahead (the only thing that would move dx/dy away from 0) is out of v1 scope.",
+          "reason": "Player-OBJ screen-position derivation: for the player's own object event mapX/mapY == gSaveBlock1Ptr->pos always, collapsing this to a per-frame-constant OAM origin (PLAYER_OBJ_X/PLAYER_OBJ_Y); the camera/BG scrolls instead (viewport::build_tilemaps). Bike pan-ahead (the only thing that would move dx/dy away from 0) is not modelled yet -- deferred, still in v1 scope.",
           "rust_target": "crates/pokeemerald-rs/src/overworld/avatar.rs",
           "spec": "I-3",
           "status": "rewritten"
@@ -26003,7 +26003,7 @@
           "status": "rewritten"
         },
         "gInitialMovementTypeFacingDirections": {
-          "reason": "Transcribed in full: engine::overworld::initial_facing_direction covers all 81 MOVEMENT_TYPE_* entries, mirroring InitObjectEventStateFromTemplate's initial-spawn-facing table. This port has no per-object movement-type task simulation yet (v1 scope: stationary + look-around only), so this is also the facing an object renders at forever, not just at spawn -- a MOVEMENT_TYPE_LOOK_AROUND/WANDER_* object's own random-turn cycling (MovementType_LookAround et al.) is not modelled.",
+          "reason": "Transcribed in full: engine::overworld::initial_facing_direction covers all 81 MOVEMENT_TYPE_* entries, mirroring InitObjectEventStateFromTemplate's initial-spawn-facing table. This port has no per-object movement-type task simulation yet (this port so far: stationary + look-around only), so this is also the facing an object renders at forever, not just at spawn -- a MOVEMENT_TYPE_LOOK_AROUND/WANDER_* object's own random-turn cycling (MovementType_LookAround et al.) is not modelled.",
           "rust_target": "crates/engine/src/overworld/object_event.rs",
           "spec": "I-3",
           "status": "rewritten"
@@ -26055,7 +26055,7 @@
           "status": "rewritten"
         },
         "UpdateCameraPanning": {
-          "reason": "gSpriteCoordOffsetX/Y's per-frame derivation from the camera's own pixel state, ported as the shared viewport::camera_lag_px this port's two camera-driven consumers both read (issue #217, I-3): build_tilemaps subtracts it from the BG scroll (mirroring gSpriteCoordOffsetX/Y being the camera-locked complement to the world-locked BG scroll) and npc::oam_entries adds it to every stationary NPC's placement (mirroring UpdateOamCoords -- see src/sprite.c#UpdateOamCoords). sHorizontalCameraPan/sVerticalCameraPan's bike pan-ahead terms are out of v1 scope (no bike).",
+          "reason": "gSpriteCoordOffsetX/Y's per-frame derivation from the camera's own pixel state, ported as the shared viewport::camera_lag_px this port's two camera-driven consumers both read (issue #217, I-3): build_tilemaps subtracts it from the BG scroll (mirroring gSpriteCoordOffsetX/Y being the camera-locked complement to the world-locked BG scroll) and npc::oam_entries adds it to every stationary NPC's placement (mirroring UpdateOamCoords -- see src/sprite.c#UpdateOamCoords). sHorizontalCameraPan/sVerticalCameraPan's bike pan-ahead terms are not modelled yet (no bike in this port yet) -- deferred, still in v1 scope.",
           "rust_target": "crates/pokeemerald-rs/src/overworld/viewport.rs",
           "spec": "I-3",
           "status": "rewritten"
@@ -26068,7 +26068,7 @@
     "src/field_control_avatar.c": {
       "artifacts": {
         "CheckStandardWildEncounter": {
-          "reason": "field_control_avatar.c:668-686. Fully modelled as WildEncounterState::check_standard_wild_encounter, including the four-step post-transition immunity window (which returns before StandardWildEncounter is reached, so it is invisible to the RNG stream, not merely to the player), the reset on a fired encounter (:679), and sPrevMetatileBehavior being updated on every step including suppressed ones (:673). Stubbed rather than rewritten because its caller's gating is only partially ported: FieldGetPlayerInput sets input->checkStandardWildEncounter at every T_TILE_CENTER regardless of runningState (:117-120), while OverworldPhase::step ties the roll to a landing a step actually committed. The two differ only on a frame where the player reaches a tile centre without having moved, which this port's PlayerState cannot produce for any bundled map. The forced-movement gate around that flag (:95, MetatileBehavior_IsForcedMovementTile) is not modelled either -- forced movement is out of v1 scope.",
+          "reason": "field_control_avatar.c:668-686. Fully modelled as WildEncounterState::check_standard_wild_encounter, including the four-step post-transition immunity window (which returns before StandardWildEncounter is reached, so it is invisible to the RNG stream, not merely to the player), the reset on a fired encounter (:679), and sPrevMetatileBehavior being updated on every step including suppressed ones (:673). Stubbed rather than rewritten because its caller's gating is only partially ported: FieldGetPlayerInput sets input->checkStandardWildEncounter at every T_TILE_CENTER regardless of runningState (:117-120), while OverworldPhase::step ties the roll to a landing a step actually committed. The two differ only on a frame where the player reaches a tile centre without having moved, which this port's PlayerState cannot produce for any bundled map. The forced-movement gate around that flag (:95, MetatileBehavior_IsForcedMovementTile) is not modelled either -- forced movement is not modelled yet -- deferred, still in v1 scope.",
           "rust_target": "crates/engine/src/overworld/wild_encounter.rs",
           "spec": "I-4",
           "status": "stubbed"
@@ -26131,7 +26131,7 @@
     "src/field_player_avatar.c": {
       "artifacts": {
         "CheckForPlayerAvatarCollision": {
-          "reason": "Destination-tile collision check re-implemented via MapRuntime::metatile_cell plus collision.rs's Collision/elevation_mismatch, and (issue #161, I-3 lane) the object-event occupancy test -- the grid collision-bit, elevation-mismatch and object-event cases, applied in GetCollisionAtCoords' own order. Still out of v1 scope: the ledge, boulder-push, rotating-gate and acro-bike sub-checks, plus IsCoordOutsideObjectEventMovementRange (never constrains the player), IsMetatileDirectionallyImpassable and CanCameraMoveInDirection.",
+          "reason": "Destination-tile collision check re-implemented via MapRuntime::metatile_cell plus collision.rs's Collision/elevation_mismatch, and (issue #161, I-3 lane) the object-event occupancy test -- the grid collision-bit, elevation-mismatch and object-event cases, applied in GetCollisionAtCoords' own order. Still not modelled (deferred, all still in v1 scope): the ledge, boulder-push, rotating-gate and acro-bike sub-checks, plus IsCoordOutsideObjectEventMovementRange (never constrains the player), IsMetatileDirectionallyImpassable and CanCameraMoveInDirection.",
           "rust_target": "crates/engine/src/overworld/player.rs",
           "spec": "S-5",
           "status": "rewritten"
@@ -26149,7 +26149,7 @@
           "status": "rewritten"
         },
         "GetPlayerMovementDirection": {
-          "reason": "Folded into the same PlayerState::facing field as GetPlayerFacingDirection: upstream's facingDirection/movementDirection only diverge under facingDirectionLocked (bike wheelies/slides), which is out of v1 scope, so this port never needs to distinguish them",
+          "reason": "Folded into the same PlayerState::facing field as GetPlayerFacingDirection: upstream's facingDirection/movementDirection only diverge under facingDirectionLocked (bike wheelies/slides), which this port does not model yet, so it has no way to tell them apart and no need to; revisit the fold when the bike lands (deferred, still in v1 scope)",
           "rust_target": "crates/engine/src/overworld/player.rs",
           "spec": "S-5",
           "status": "rewritten"
@@ -26161,7 +26161,7 @@
           "status": "rewritten"
         },
         "PlayerNotOnBikeMoving": {
-          "reason": "Ordinary-walk attempt-to-move re-implemented as PlayerState::step's Advanced/Blocked branch; surf/run/ledge-jump/boulder-push/rotating-gate/Faraway-Island-Mew special cases are out of v1 scope and not ported",
+          "reason": "Ordinary-walk attempt-to-move re-implemented as PlayerState::step's Advanced/Blocked branch; surf/run/ledge-jump/boulder-push/rotating-gate/Faraway-Island-Mew special cases are not ported yet -- deferred, still in v1 scope",
           "rust_target": "crates/engine/src/overworld/player.rs",
           "spec": "S-5",
           "status": "rewritten"
@@ -26179,7 +26179,7 @@
           "status": "rewritten"
         },
         "PlayerStep": {
-          "reason": "Per-input-poll orchestration (special-anim interrupt / bike branch / forced-movement dispatch stripped, on-foot-only v1 scope) re-implemented as PlayerState::step",
+          "reason": "Per-input-poll orchestration (special-anim interrupt / bike branch / forced-movement dispatch stripped, on-foot-only so far -- deferred, still in v1 scope) re-implemented as PlayerState::step",
           "rust_target": "crates/engine/src/overworld/player.rs",
           "spec": "S-5",
           "status": "rewritten"
@@ -27068,7 +27068,7 @@
     "src/overworld.c": {
       "artifacts": {
         "ApplyCurrentWarp": {
-          "reason": "gSaveBlock1Ptr->location = sWarpDestination transcribed as OverworldPhase::warp_to's save1.location assignment on a resolved warp landing (flow/overworld_phase/connections.rs); gLastUsedWarp (the previous location) and the dive/hole-warp resets are not modeled (no typed home / out of v1 scope) — stubbed until they are. LoadMapFromWarp's ClearTempFieldEventData (overworld.c:848) is modelled on this same landing path (issue #248): warp_to clears the temp flag/var ranges on its cloned event data ahead of run_on_transition_map_script, matching upstream's :848-before-:860 (RunOnTransitionMapScript) ordering that Route 103's VAR_OBJ_GFX_ID_0 rival-sprite setup depends on.",
+          "reason": "gSaveBlock1Ptr->location = sWarpDestination transcribed as OverworldPhase::warp_to's save1.location assignment on a resolved warp landing (flow/overworld_phase/connections.rs); gLastUsedWarp (the previous location) and the dive/hole-warp resets are not modeled (no typed home yet; deferred, still in v1 scope) — stubbed until they are. LoadMapFromWarp's ClearTempFieldEventData (overworld.c:848) is modelled on this same landing path (issue #248): warp_to clears the temp flag/var ranges on its cloned event data ahead of run_on_transition_map_script, matching upstream's :848-before-:860 (RunOnTransitionMapScript) ordering that Route 103's VAR_OBJ_GFX_ID_0 rival-sprite setup depends on.",
           "rust_target": "crates/pokeemerald-rs/src/flow/overworld_phase/connections.rs",
           "spec": "I-3",
           "status": "stubbed"

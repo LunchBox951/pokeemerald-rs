@@ -51,8 +51,8 @@ use crate::event_data::EventData;
 /// tile. Mirrors upstream `MOVE_SPEED_NORMAL`'s per-frame step table
 /// (`sStep1Funcs`, `event_object_movement.c`): 16 entries, each of which
 /// advances the sprite 1 of a tile's 16 pixels. Running (`MOVE_SPEED_FAST_1`,
-/// 8 frames) and every faster/bike speed are out of v1 scope (see the
-/// module docs).
+/// 8 frames) and every faster/bike speed are not modelled yet — deferred,
+/// still in v1 scope (see the module docs).
 pub const WALK_FRAMES_PER_TILE: u8 = 16;
 
 /// A tile position, `(x, y)`, in whichever map's coordinate space the
