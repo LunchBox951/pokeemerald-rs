@@ -1074,6 +1074,66 @@ fn a_save_with_a_legacy_zeroed_heal_location_adopts_the_gender_default() {
     assert_eq!(resumed.save1.last_heal_location, written);
 }
 
+/// A save carrying a *fainted* lead -- something only a build between
+/// issues #261 and #251 could serialize: a lost Route 101 first battle
+/// returned the player to the field fainted (`CB2_EndFirstBattle` has no
+/// `IsPlayerDefeated` branch) and the start menu saved it, while the
+/// first-battle conclusion now heals every outcome the frame the battle
+/// ends and upstream cannot save a party-wide faint at all -- is healed on
+/// continue (PR #291 review). Without the migration, every eligible grass
+/// step on such a save would spend the encounter and wild-mon RNG draws
+/// before `Battle::new` refused the fainted battler: repeatable draws with
+/// no upstream counterpart. A merely *damaged* lead is no legacy marker
+/// and must round-trip untouched -- the second half pins that boundary.
+#[test]
+fn a_save_with_a_fainted_lead_is_healed_on_continue() {
+    let mut fainted = new_game::provisional_starter();
+    fainted.apply_damage(u32::MAX);
+    assert!(fainted.is_fainted(), "setup: the lead must start fainted");
+    let mut seed = new_game_phase();
+    seed.save1.player_party_count = 1;
+    seed.save1.player_party[0] = crate::party::to_save_pokemon(&battle::Dex::new(), &fainted);
+
+    let resumed = OverworldPhase::from_saved(
+        crate::overworld::tests::synthetic_scene(10, 10),
+        seed.map_id,
+        seed.save1,
+        seed.save2,
+    );
+    let lead = resumed
+        .party_lead
+        .as_ref()
+        .expect("the migrated save still has its lead");
+    assert!(
+        !lead.is_fainted(),
+        "a fainted lead from a pre-#251 save is healed on load"
+    );
+
+    // The boundary: a damaged-but-standing lead is genuine mid-playthrough
+    // state, not the legacy marker, and keeps its spent HP.
+    let damaged = a_damaged_lead();
+    let expected_hp = damaged.current_hp();
+    let mut seed = new_game_phase();
+    seed.save1.player_party_count = 1;
+    seed.save1.player_party[0] = crate::party::to_save_pokemon(&battle::Dex::new(), &damaged);
+
+    let resumed = OverworldPhase::from_saved(
+        crate::overworld::tests::synthetic_scene(10, 10),
+        seed.map_id,
+        seed.save1,
+        seed.save2,
+    );
+    assert_eq!(
+        resumed
+            .party_lead
+            .as_ref()
+            .expect("the damaged save still has its lead")
+            .current_hp(),
+        expected_hp,
+        "a standing lead's spent HP survives the continue untouched"
+    );
+}
+
 /// A save whose party count is zero resumes with no lead at all -- not
 /// with a fabricated [`new_game::provisional_starter`], which is what the
 /// #214 slice did and what #232 removed.

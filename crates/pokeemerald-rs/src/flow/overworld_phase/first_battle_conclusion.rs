@@ -74,6 +74,22 @@
 //!   bag script's own heal, not a white-out, and halving the player's money
 //!   for winning (or merely surviving) a story-mandated fight would be a
 //!   fidelity bug, not a shortcut.
+//! - **The three object-event flag writes** -- `setflag
+//!   FLAG_HIDE_ROUTE_101_BIRCH_ZIGZAGOON_BATTLE`, `clearflag
+//!   FLAG_HIDE_LITTLEROOT_TOWN_BIRCHS_LAB_BIRCH`, `setflag
+//!   FLAG_HIDE_ROUTE_101_BIRCH_STARTERS_BAG` (`scripts.inc:233-235`), in
+//!   upstream's own order. These are observable *today*, not deferred
+//!   script dressing (PR #291 review): the generated
+//!   [`assets::MapEventsTable`] templates carry exactly these flag names on
+//!   the rescue-battle Birch/Zigzagoon pair, the starters bag, and the lab
+//!   Birch; `engine::overworld::object_event` removes a template whose
+//!   flag is set from both rendering and collision; and
+//!   [`crate::new_game`] starts a fresh save with the lab-Birch flag
+//!   *set*. Skipping them would leave the completed rescue's Birch,
+//!   Zigzagoon, and bag standing (and collidable) on any return to Route
+//!   101, and warp the player into a lab with no Birch in it. Ids
+//!   transcribed from `include/constants/flags.h:749,769-770`, the same
+//!   own-copy convention as the vars below.
 //! - **`setvar VAR_BIRCH_LAB_STATE, 2`** -- [`VAR_BIRCH_LAB_STATE`],
 //!   transcribed from `include/constants/vars.h:152`.
 //! - **The real `VAR_STARTER_MON` write** -- `include/constants/vars.h:53`,
@@ -119,10 +135,12 @@
 //! remains the whole port's stand-in), the `fadescreen`/`applymovement`/
 //! `msgbox` cutscene dressing (no script engine, the same gap
 //! `super::first_battle_trigger`'s own module docs record for the rescue
-//! cutscene), `FLAG_SYS_POKEMON_GET`/`FLAG_RESCUED_BIRCH` and the four
-//! other `setflag`/`clearflag` lines (nothing this port models reads any of
-//! them: no Pokédex, no rendered Birch NPC in the lab, no bag object event
-//! to hide), and the gender-conditional bedroom-hide calls (the sibling's
+//! cutscene), `FLAG_SYS_POKEMON_GET`/`FLAG_RESCUED_BIRCH` and the
+//! `clearflag FLAG_HIDE_MAP_NAME_POPUP` line (nothing this port models
+//! reads *these three*: no Pokédex, no Match Call, no map-name popup --
+//! the three object-event hide flags above are modelled precisely because
+//! the same claim is *not* true of them), and the gender-conditional
+//! bedroom-hide calls (the sibling's
 //! bedroom scene exists, but nothing routes a fresh save through it a
 //! second time post-rescue for this to matter yet).
 //!
@@ -192,6 +210,25 @@ const VAR_ROUTE101_STATE: u16 = 0x4060;
 /// var holds for the rest of a playthrough.
 const ROUTE101_STATE_CONCLUDED: u16 = 3;
 
+/// `FLAG_HIDE_ROUTE_101_BIRCH_ZIGZAGOON_BATTLE`
+/// (`include/constants/flags.h:769`) -- set by the tail
+/// (`scripts.inc:233`) so the rescue-battle Birch/Zigzagoon pair stops
+/// rendering and colliding on Route 101 once the fight is over (module
+/// docs' "What's modelled, narrowly").
+const FLAG_HIDE_ROUTE_101_BIRCH_ZIGZAGOON_BATTLE: u16 = 0x2D0;
+
+/// `FLAG_HIDE_LITTLEROOT_TOWN_BIRCHS_LAB_BIRCH`
+/// (`include/constants/flags.h:770`) -- *cleared* by the tail
+/// (`scripts.inc:234`): a fresh save starts with it set
+/// ([`crate::new_game`]'s flag seed), and this clear is what makes Birch
+/// stand in the lab the very warp below lands in.
+const FLAG_HIDE_LITTLEROOT_TOWN_BIRCHS_LAB_BIRCH: u16 = 0x2D1;
+
+/// `FLAG_HIDE_ROUTE_101_BIRCH_STARTERS_BAG` (`include/constants/flags.h:749`)
+/// -- set by the tail (`scripts.inc:235`) so the bag object vanishes with
+/// its owner.
+const FLAG_HIDE_ROUTE_101_BIRCH_STARTERS_BAG: u16 = 0x2BC;
+
 /// `MAP_LITTLEROOT_TOWN_PROFESSOR_BIRCHS_LAB` -- the `warp` target (module
 /// docs).
 const BIRCHS_LAB: assets::MapId = assets::MapId("MAP_LITTLEROOT_TOWN_PROFESSOR_BIRCHS_LAB");
@@ -228,6 +265,27 @@ impl OverworldPhase {
                 eprintln!("first battle: couldn't heal the party lead ({error}) -- left as-is");
             }
         }
+
+        // setflag FLAG_HIDE_ROUTE_101_BIRCH_ZIGZAGOON_BATTLE
+        // clearflag FLAG_HIDE_LITTLEROOT_TOWN_BIRCHS_LAB_BIRCH
+        // setflag FLAG_HIDE_ROUTE_101_BIRCH_STARTERS_BAG
+        // (upstream's own order, scripts.inc:233-235; the constants' doc
+        // comments carry what each one observably gates.)
+        Self::write_flag(
+            &mut self.save1.event_data,
+            FLAG_HIDE_ROUTE_101_BIRCH_ZIGZAGOON_BATTLE,
+            true,
+        );
+        Self::write_flag(
+            &mut self.save1.event_data,
+            FLAG_HIDE_LITTLEROOT_TOWN_BIRCHS_LAB_BIRCH,
+            false,
+        );
+        Self::write_flag(
+            &mut self.save1.event_data,
+            FLAG_HIDE_ROUTE_101_BIRCH_STARTERS_BAG,
+            true,
+        );
 
         // *GetVarPointer(VAR_STARTER_MON) = gSpecialVar_Result -- upstream's
         // own value at CB2_GiveStarter time, reproduced here off the
@@ -279,6 +337,22 @@ impl OverworldPhase {
     fn write_var(event_data: &mut EventData, id: u16, value: u16) {
         if let Err(error) = event_data.var_set(id, value) {
             eprintln!("first battle: couldn't write var {id:#06x} ({error}) -- left as-is");
+        }
+    }
+
+    /// [`Self::write_var`]'s flag twin, for the conclusion's three
+    /// object-event flag lines -- `set` picks `setflag` (`true`) or
+    /// `clearflag` (`false`). Same logged, best-effort posture, for the
+    /// same reason: every id is a transcribed `include/constants/flags.h`
+    /// literal well inside [`engine::event_data`]'s ordinary range.
+    fn write_flag(event_data: &mut EventData, id: u16, set: bool) {
+        let result = if set {
+            event_data.flag_set(id)
+        } else {
+            event_data.flag_clear(id)
+        };
+        if let Err(error) = result {
+            eprintln!("first battle: couldn't write flag {id:#06x} ({error}) -- left as-is");
         }
     }
 }

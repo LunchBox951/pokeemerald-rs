@@ -398,8 +398,11 @@ impl OverworldPhase {
             // not yet cover (a lost Route 101 first battle -- `CB2_EndFirstBattle`
             // has no `IsPlayerDefeated` branch); issue #251's
             // `first_battle_conclusion` now heals that lead the instant the
-            // battle ends, on every outcome, so no path can leave a fainted
-            // lead standing here any more and the filter was removed
+            // battle ends, on every outcome, and a pre-#251 save that
+            // *serialized* the residual state is healed at load
+            // (`from_saved`'s migration, PR #291 review), so no path can
+            // leave a fainted lead standing here any more and the filter
+            // was removed
             // (`crate::flow::wild_encounter`'s module docs, "The fail-closed
             // guard, retired"). The landed tile is the player's own tile on
             // a drain frame, and it is what `GetPlayerPosition` would report

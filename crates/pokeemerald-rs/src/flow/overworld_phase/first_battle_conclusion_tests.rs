@@ -32,6 +32,19 @@ const VAR_BIRCH_LAB_STATE: u16 = 0x4084;
 /// `VAR_STARTER_MON` (`include/constants/vars.h:53`).
 const VAR_STARTER_MON: u16 = 0x4023;
 
+/// `FLAG_HIDE_ROUTE_101_BIRCH_ZIGZAGOON_BATTLE`
+/// (`include/constants/flags.h:769`) -- independently transcribed, same
+/// convention as the vars above.
+const FLAG_HIDE_ROUTE_101_BIRCH_ZIGZAGOON_BATTLE: u16 = 0x2D0;
+
+/// `FLAG_HIDE_LITTLEROOT_TOWN_BIRCHS_LAB_BIRCH`
+/// (`include/constants/flags.h:770`).
+const FLAG_HIDE_LITTLEROOT_TOWN_BIRCHS_LAB_BIRCH: u16 = 0x2D1;
+
+/// `FLAG_HIDE_ROUTE_101_BIRCH_STARTERS_BAG`
+/// (`include/constants/flags.h:749`).
+const FLAG_HIDE_ROUTE_101_BIRCH_STARTERS_BAG: u16 = 0x2BC;
+
 /// A synthetic, fully open room named `MAP_ROUTE101` -- [`super::first_battle_trigger_tests`]'s
 /// own `route_101_trigger_phase` fixture, reconstructed locally (this
 /// module cannot import a sibling test file's private items).
@@ -180,6 +193,79 @@ fn conclude_first_battle_writes_all_three_vars_on_both_outcomes() {
             phase.save1.event_data.var_get(VAR_STARTER_MON),
             Ok(0),
             "outcome {expected_outcome:?}: the conclusion overwrites the pre-poisoned var with Treecko's own encoding"
+        );
+    }
+}
+
+/// The three object-event flag writes (`scripts.inc:233-235`) run on
+/// **either** terminal outcome, same as the vars -- and each one is
+/// asserted from a starting state that can only reach the expected value
+/// through the write itself: the lab-Birch flag starts *set* (as
+/// [`crate::new_game`] seeds every fresh save) and must come out cleared,
+/// while the two Route 101 flags start clear (their fresh-save state,
+/// which is exactly why Birch, the Zigzagoon, and the bag are visible for
+/// the rescue at all) and must come out set (PR #291 review: the
+/// generated map events carry these flag names and
+/// `engine::overworld::object_event` hides a set-flag template from
+/// rendering and collision, so skipping the writes leaves the rescue
+/// objects standing and the lab empty).
+#[test]
+fn conclude_first_battle_writes_the_three_object_event_flags_on_both_outcomes() {
+    for (seed, lead, expected_outcome) in [
+        (
+            4242,
+            new_game::provisional_starter(),
+            BattleOutcome::PlayerWon,
+        ),
+        (2, fragile_treecko_lead(), BattleOutcome::PlayerLost),
+    ] {
+        let (tx, ty) = ROUTE_101_TRIGGER_TILE;
+        let mut phase = route_101_trigger_phase(PlayerState::new(
+            (tx - 1, ty),
+            ROUTE_101_TRIGGER_ELEVATION,
+            Direction::East,
+        ));
+        phase.rng = Rng::new(seed);
+        phase.party_lead = Some(lead);
+        // The fresh-save posture, seeded explicitly so this fixture (which
+        // bypasses `new_game::init_save_blocks`) proves the *clear*, not a
+        // default that was never set.
+        phase
+            .save1
+            .event_data
+            .flag_set(FLAG_HIDE_LITTLEROOT_TOWN_BIRCHS_LAB_BIRCH)
+            .expect("the lab-Birch hide flag is an ordinary flag");
+
+        play_first_battle_to_conclusion(&mut phase);
+
+        assert_eq!(
+            phase.first_battle_outcome(),
+            Some(expected_outcome),
+            "setup: seed {seed} must produce {expected_outcome:?}"
+        );
+        assert_eq!(
+            phase
+                .save1
+                .event_data
+                .flag_get(FLAG_HIDE_ROUTE_101_BIRCH_ZIGZAGOON_BATTLE),
+            Ok(true),
+            "outcome {expected_outcome:?}: setflag FLAG_HIDE_ROUTE_101_BIRCH_ZIGZAGOON_BATTLE"
+        );
+        assert_eq!(
+            phase
+                .save1
+                .event_data
+                .flag_get(FLAG_HIDE_LITTLEROOT_TOWN_BIRCHS_LAB_BIRCH),
+            Ok(false),
+            "outcome {expected_outcome:?}: clearflag FLAG_HIDE_LITTLEROOT_TOWN_BIRCHS_LAB_BIRCH"
+        );
+        assert_eq!(
+            phase
+                .save1
+                .event_data
+                .flag_get(FLAG_HIDE_ROUTE_101_BIRCH_STARTERS_BAG),
+            Ok(true),
+            "outcome {expected_outcome:?}: setflag FLAG_HIDE_ROUTE_101_BIRCH_STARTERS_BAG"
         );
     }
 }

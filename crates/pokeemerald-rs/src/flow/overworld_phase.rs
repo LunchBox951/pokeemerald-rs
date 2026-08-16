@@ -441,7 +441,12 @@ impl OverworldPhase {
     ///   mon that was saved -- damage taken and PP spent included -- rather
     ///   than a fresh copy of [`new_game::provisional_starter`] (issue
     ///   #232). See [`crate::party`] for what the encoder carries and what
-    ///   it does not.
+    ///   it does not. One migration applies (PR #291 review): a *fainted*
+    ///   lead -- a state only a pre-#251 build could serialize, since the
+    ///   first-battle conclusion now heals every outcome the frame the
+    ///   battle ends and upstream cannot save a party-wide faint at all --
+    ///   is healed on load; the constructor body's own comment has the
+    ///   full reasoning.
     ///
     /// # What it does not
     ///
@@ -520,6 +525,36 @@ impl OverworldPhase {
             rival_battle_outcome: None,
         };
         phase.copy_party_and_objects_from_save();
+        // A save written between issues #261 and #251 can carry the one
+        // residual state the white-out never covered: a lost Route 101
+        // first battle returned the player to the field with a fainted
+        // lead (`CB2_EndFirstBattle` has no `IsPlayerDefeated` branch),
+        // and pre-#251 builds had no `first_battle_conclusion` heal before
+        // the start menu could save it. Upstream cannot write such an
+        // image at all -- a party-wide faint white-outs before the field
+        // is ever playable again -- so a fainted lead here is unambiguously
+        // that legacy marker (this port models a one-mon party, so
+        // lead-fainted and party-fainted coincide; a future multi-slot
+        // party slice must revisit this alongside
+        // `copy_party_and_objects_from_save`). Migrated with the same
+        // `HealPlayerParty` primitive the conclusion now applies to every
+        // fresh outcome, rather than left to spend encounter RNG draws on
+        // every grass step before `Battle::new` refuses the battler
+        // (PR #291 review; `flow::wild_encounter`'s "The fail-closed
+        // guard, retired" section leans on this migration for exactly
+        // these saves).
+        if let Some(lead) = phase.party_lead.as_mut() {
+            if lead.is_fainted() {
+                eprintln!(
+                    "continue: this save predates the first-battle conclusion (issue #251) and \
+                     carries a fainted lead -- healing it, as the conclusion now does on every \
+                     outcome"
+                );
+                if let Err(error) = lead.heal(&battle::Dex::new()) {
+                    eprintln!("continue: couldn't heal the migrated lead ({error}) -- left as-is");
+                }
+            }
+        }
         // Route 101's own on-frame `VAR_ROUTE101_STATE` bump (issue #231,
         // `first_battle_trigger`'s module docs) -- a no-op for every other
         // `map_id`. A continue reaches the field through the ordinary field

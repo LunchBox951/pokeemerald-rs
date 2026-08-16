@@ -73,10 +73,18 @@
 //! now heals that lead the instant the scripted battle reports *any*
 //! outcome — `Route101_EventScript_BirchsBag`'s own `HealPlayerParty` call,
 //! which upstream's `CB2_EndFirstBattle` reaches regardless of how the fight
-//! ended (that module's own docs cite the chain). No path can leave a
-//! fainted lead standing in the overworld any more, so `lead_can_fight` has
-//! been removed rather than kept as dead code with no reachable input to
-//! refuse. See
+//! ended (that module's own docs cite the chain). One copy of the state
+//! outlives the code that produced it: a save *serialized* by a pre-#251
+//! build after that loss legitimately carries the fainted lead in
+//! `playerParty[0]`, and no conclusion ever runs for it on load — the
+//! battle is long gone. `crate::flow::overworld_phase`'s `from_saved`
+//! migrates exactly that image, healing a fainted lead on continue with
+//! the same `HealPlayerParty` primitive (PR #291 review; the constructor
+//! body's comment has the upstream-cannot-save-this argument). So no path
+//! can leave a fainted lead standing in the overworld any more — fresh
+//! outcomes are healed by the conclusion, persisted ones by the load
+//! migration — and `lead_can_fight` has been removed rather than kept as
+//! dead code with no reachable input to refuse. See
 //! `wild_encounter::tests::a_lost_battle_now_heals_the_party_and_halves_money`
 //! (plus its pack-gated companion
 //! `wild_encounter::tests::real_pack_a_lost_wild_battle_warps_home_to_the_default_heal_location`)
