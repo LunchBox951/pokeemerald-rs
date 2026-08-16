@@ -70,10 +70,16 @@ const RHETT_TILE: (i32, i32) = (67, 5);
 const MAKUHITA: u16 = 335;
 
 /// `TRAINER_DAISY` (`include/constants/opponents.h`): still refused, for her
-/// Shroomish's Stun Spore (`EFFECT_PARALYZE`) -- the current stand-in for
-/// "a cone whose battle cannot be built". Her object event stands at
-/// `(59, 6)`, elevation 3, facing south, sight range 4.
-const DAISY_TILE: (i32, i32) = (59, 6);
+/// Shroomish's Leech Seed -- Absorb, Tackle and Stun Spore all execute
+/// since issue #293, so it is the end-of-turn drain and nothing else that
+/// makes her the stand-in for "a cone whose battle cannot be built"
+/// (`sight_trainer_trigger`'s own verdict table pins the move id). Her
+/// object event stands at `(71, 11)`, elevation 3,
+/// `MOVEMENT_TYPE_FACE_DOWN_AND_RIGHT` -- whose
+/// `gInitialMovementTypeFacingDirections` entry, and so the only facing
+/// this port's static object events ever have, is **south** -- sight range
+/// 3.
+const DAISY_TILE: (i32, i32) = (71, 11);
 
 /// `TRAINER_ANDREW` (`include/constants/opponents.h`): the subject of the
 /// "does not trigger" geometry tests -- so a false positive there can never
@@ -85,8 +91,11 @@ const ANDREW_TILE: (i32, i32) = (50, 8);
 const TRAINER_ANDREW: u16 = 336;
 
 /// `SPECIES_MAGIKARP` (`include/constants/species.h:133`) -- `sParty_Andrew`'s
-/// level-5 lead.
+/// level-5 lead, and again as its level-15 tail.
 const MAGIKARP: u16 = 129;
+
+/// `SPECIES_TENTACOOL` (`:76`) -- `sParty_Andrew`'s level-10 middle mon.
+const TENTACOOL: u16 = 72;
 
 /// `TRAINER_MIGUEL_1` (`include/constants/opponents.h`): a real
 /// `TrainerParty::ItemDefaultMoves` party (module docs' item 6) --
@@ -201,7 +210,7 @@ fn standing_in_a_real_trainers_cone_starts_the_real_battle() {
 
 /// ...and it is Rhett's *own* party that comes out, not some stand-in: the
 /// species and level `sParty_Rhett` names (`src/data/trainer_parties.h`), on
-/// the all-zero IVs its `.iv = 0` scales to.
+/// the IVs its `.iv = 100` scales to.
 #[test]
 fn the_battle_the_cone_starts_fields_rhetts_real_party() {
     let (rx, ry) = RHETT_TILE;
@@ -249,6 +258,40 @@ fn the_battle_the_cone_starts_fields_rhetts_real_party() {
 /// the point where a per-frame leak would be obvious.
 const FRAMES_STANDING_STILL: usize = 60;
 
+/// Assert that `tile` really is inside the cone of the object event running
+/// `script`, over this file's synthetic room and the real Route 103 object
+/// events -- asked of the same `engine` geometry the trigger itself uses.
+///
+/// A fixture check, not a subject: every caller's *own* assertion is about
+/// what happens once the cone has fired (or refused), and a tile that is in
+/// no cone at all would satisfy a "no battle started" assertion for entirely
+/// the wrong reason. Issue #293's review found exactly that -- a transcribed
+/// tile off the wrong object event -- so the check is now in front of it.
+fn assert_cone_reaches(script: &str, tile: (i32, i32)) {
+    let scene = crate::overworld::tests::synthetic_scene(80, 16);
+    let header = assets::MapHeaderTable::new()
+        .header(ROUTE_103)
+        .expect("MAP_ROUTE103 is bundled map data");
+    let events = assets::MapEventsTable::new()
+        .resolve(ROUTE_103)
+        .expect("MAP_ROUTE103 is bundled map data");
+    let event = events
+        .object_events
+        .iter()
+        .find(|event| event.script == script)
+        .unwrap_or_else(|| panic!("Route 103 declares an object event running {script}"));
+    assert!(
+        engine::overworld::trainer_can_see_player(
+            event,
+            &scene.runtime(ROUTE_103, header, events),
+            &PlayerState::new(tile, 3, Direction::North),
+            &engine::event_data::EventData::new(),
+        ),
+        "{script}: {tile:?} must really be inside the cone, or whatever the \
+         caller asserts about the cone firing proves nothing"
+    );
+}
+
 /// Issue #264's review finding F1, pinned: a cone whose battle *cannot be
 /// constructed* is re-reached on every single frame the player stands in it
 /// (there is no button gate on this check), so the refusal has to cost
@@ -260,24 +303,40 @@ const FRAMES_STANDING_STILL: usize = 60;
 /// The specimens moved with the coverage boundary at issue #293 -- Rhett's
 /// party constructs now, so he is the subject of the *win* tests below
 /// instead, and Daisy takes his place here. All three refusal shapes are
-/// still covered: an unimplemented moveset (Daisy's Stun Spore, module docs
+/// still covered: an unimplemented moveset (Daisy's Leech Seed, module docs
 /// item 7), a party that is refused for a move *and* holds an unrunnable
 /// item (Miguel, item 6), and a double battle refused before construction is
 /// even attempted (Amy, item 5).
+///
+/// Each tile is checked against the real cone *first* (issue #293 review):
+/// "no battle started" is a claim about a refusal, and a tile that is in no
+/// cone at all satisfies it for the wrong reason. `DAISY_TILE` had in fact
+/// been transcribed off the wrong object event, so this test's Daisy row was
+/// passing vacuously until [`assert_cone_reaches`] was put in front of it.
 #[test]
 fn standing_in_a_cone_for_many_frames_never_touches_the_rng_stream() {
     let (dx, dy) = DAISY_TILE;
     let (mx, my) = MIGUEL_TILE;
     let (ax, ay) = AMY_TILE;
     let cases = [
-        ("Daisy (unimplemented moveset)", (dx, dy + 1)),
+        (
+            "Daisy (unimplemented moveset)",
+            "Route103_EventScript_Daisy",
+            (dx, dy + 1),
+        ),
         (
             "Miguel (unimplemented moveset, held item behind it)",
+            "Route103_EventScript_Miguel",
             (mx + 2, my),
         ),
-        ("Amy (double battle)", (ax, ay + 1)),
+        (
+            "Amy (double battle)",
+            "Route103_EventScript_Amy",
+            (ax, ay + 1),
+        ),
     ];
-    for (name, tile) in cases {
+    for (name, script, tile) in cases {
+        assert_cone_reaches(script, tile);
         let mut phase = route_103_phase(PlayerState::new(tile, 3, Direction::North));
         phase.party_lead = Some(overwhelming_lead());
         let before = phase.rng.state();
@@ -424,13 +483,20 @@ fn andrews_cone_starts_his_real_three_mon_party_and_plays_it_out() {
         "sParty_Andrew leads with a level-5 Magikarp"
     );
     assert_eq!(battle.enemy().level(), 5);
+    let bench: Vec<(u16, u8)> = battle
+        .trainer()
+        .expect("a sight-trainer battle has a trainer context")
+        .bench()
+        .iter()
+        .map(|mon| (mon.species().0, mon.level()))
+        .collect();
     assert_eq!(
-        battle
-            .trainer()
-            .map(battle::TrainerContext::bench_len)
-            .unwrap_or_default(),
-        2,
-        "and two more behind it -- the first multi-mon party this port fields"
+        bench,
+        vec![(TENTACOOL, 10), (MAGIKARP, 15)],
+        "and two more behind it, in `sParty_Andrew`'s own party order -- the level-10 \
+         Tentacool before the level-15 Magikarp, which is the order \
+         `TrainerContext::send_out_next` will field them in \
+         (`src/data/trainer_parties.h` sParty_Andrew)"
     );
 
     let outcome = play_out_sight_battle(&mut phase, 64);
@@ -590,7 +656,7 @@ fn losing_heals_halves_money_and_leaves_the_defeated_flag_clear() {
     assert_eq!(
         outcome,
         Some(BattleOutcome::PlayerLost),
-        "a level-1 lead against a real level-5 trainer must lose"
+        "a level-1 lead against a real level-15 trainer must lose"
     );
     assert_eq!(
         phase
@@ -696,8 +762,8 @@ fn the_trigger_never_fires_off_route_103() {
 /// The geometry tests above run over a synthetic, fully open room; this
 /// confirms the same cone fires against Route 103's own *real* extracted
 /// terrain -- collision bits, elevation, **and object-event occupancy**, not
-/// just declared coordinates -- and that standing in it costs the shared RNG
-/// stream nothing, frame after frame.
+/// just declared coordinates -- and that the real battle really starts over
+/// it.
 ///
 /// The tile matters, and vetting it means all three (issue #264 review, F5):
 /// this test originally stood the player at `(67, 7)`, whose real decoded
@@ -711,15 +777,23 @@ fn the_trigger_never_fires_off_route_103() {
 /// player's own tile with no intermediate tile ahead of it to catch
 /// anything first (`engine::overworld::trainer_sight`'s own docs).
 ///
-/// The positive "the geometry really fired" signal is the geometry itself,
-/// asked directly over the real runtime: it cannot be the RNG any more,
-/// because a cone that reaches and refuses must now leave the stream exactly
-/// where it found it (that is the property under test).
+/// Issue #264 could only assert that the handoff was *attempted* and failed,
+/// so this test used to stand still for sixty frames and pin an untouched
+/// RNG stream. Rhett's real party constructs since issue #293 -- his row in
+/// `sight_trainer_trigger`'s verdict table is `Constructs(335, 15)` -- so
+/// keeping the old assertion would have pinned the opposite of what the
+/// engine now does, and contradicted this file's own synthetic-terrain
+/// [`standing_in_a_real_trainers_cone_starts_the_real_battle`]. It is
+/// inverted rather than deleted: the real-terrain half is the part no other
+/// test covers. The per-frame no-draw property it used to carry lives on in
+/// [`standing_in_a_cone_for_many_frames_never_touches_the_rng_stream`],
+/// against cones that really are still refused.
+///
 /// `#[ignore]`d like this crate's other real-pack tests: run
 /// `cargo xtask extract` first.
 #[test]
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
-fn real_pack_rhetts_cone_reaches_the_player_over_real_terrain_and_draws_nothing() {
+fn real_pack_rhetts_cone_starts_his_real_battle_over_real_terrain() {
     let scene = crate::overworld::load_room(
         ROUTE_103,
         crate::overworld::PlayerCharacter::Brendan,
@@ -758,21 +832,31 @@ fn real_pack_rhetts_cone_reaches_the_player_over_real_terrain_and_draws_nothing(
     phase.party_lead = Some(overwhelming_lead());
     let before = phase.rng.state();
 
-    for frame in 0..FRAMES_STANDING_STILL {
-        phase.step(ButtonState::new());
-        assert!(
-            !phase.is_sight_trainer_battle_active(),
-            "frame {frame}: the real handoff still fails to construct (module docs item 7)"
-        );
-        assert_eq!(
-            phase.rng.state(),
-            before,
-            "frame {frame}: standing in a real cone whose battle cannot start must leave the \
-             shared stream byte-identical (issue #264 review, F1)"
-        );
-    }
+    phase.step(ButtonState::new());
     assert!(
-        phase.party_lead.is_some(),
-        "a refused handoff must not consume the lead -- no soft lock"
+        phase.is_sight_trainer_battle_active(),
+        "Rhett's real party constructs since issue #293, so his cone starts the fight over \
+         real terrain exactly as it does over the synthetic room"
+    );
+    assert_eq!(
+        phase.sight_trainer_id,
+        Some(assets::trainers::TrainerId(TRAINER_RHETT)),
+        "and it is keyed to the real TRAINER_RHETT"
+    );
+    assert_eq!(
+        phase
+            .sight_trainer_battle
+            .as_ref()
+            .expect("the cone started a battle")
+            .enemy()
+            .species(),
+        assets::SpeciesId(MAKUHITA),
+        "fielding sParty_Rhett's own level-15 Makuhita"
+    );
+    assert!(phase.party_lead.is_none(), "the lead moved into the battle");
+    assert_ne!(
+        phase.rng.state(),
+        before,
+        "CreateNPCTrainerParty's per-mon OT-id draws really came off the shared stream"
     );
 }

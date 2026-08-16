@@ -725,7 +725,8 @@ mod tests {
     /// * [`Verdict::Constructs`] — the party builds *and* the battle it
     ///   builds is the real one, so the row also names the species and level
     ///   the party table says it should field, and the test plays the battle
-    ///   to a terminal outcome. As of issue #293 that is Rhett and Marcos.
+    ///   to a terminal outcome. As of issue #293 that is four of the nine —
+    ///   Andrew, Rhett, Marcos and Pete — not two.
     /// * [`Verdict::Refused`] — the **exact** refusal, offending move id and
     ///   all (issue #264 review): the reason a trainer is unreachable is the
     ///   interesting fact, and naming it is what forces a future
