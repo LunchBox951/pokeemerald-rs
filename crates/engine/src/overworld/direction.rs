@@ -4,8 +4,9 @@
 //! subset of upstream `include/constants/global.h`'s `DIR_*` enum that
 //! ordinary on-foot movement uses. Upstream's `DIR_*` also has four
 //! bike-only diagonals (`DIR_SOUTHWEST`..`DIR_NORTHEAST`, 5-8) and a
-//! `DIR_NONE` (0) sentinel for "no input"; this v1 slice only ports ordinary
-//! walking (no bike, no running), so [`Direction`] models the four
+//! `DIR_NONE` (0) sentinel for "no input"; this slice only ports ordinary
+//! walking (bike and running are not modelled yet -- deferred, still in v1
+//! scope), so [`Direction`] models the four
 //! cardinals only, and "no input" is expressed as `Option<Direction>` at the
 //! call site ([`crate::overworld::player::PlayerState::step`]) rather than a
 //! fifth variant here.
@@ -83,7 +84,7 @@ impl Direction {
     /// does not walk in: `DIR_NONE` (0, upstream's "no input" sentinel —
     /// also what a zeroed, never-written save entry holds) and the four
     /// bike-only diagonals `DIR_SOUTHWEST`..`DIR_NORTHEAST` (5-8), which
-    /// this v1 slice does not model (module docs).
+    /// this slice does not model yet (module docs).
     #[must_use]
     pub const fn from_dir_id(id: u8) -> Option<Self> {
         match id {

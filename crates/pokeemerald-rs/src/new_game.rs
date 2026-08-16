@@ -90,7 +90,7 @@
 //!   `pokeemerald/src/strings.c:60`) -- upstream's own first suggested
 //!   default name for a boy, rather than `Random() % NUM_PRESET_NAMES`'s
 //!   runtime pick (`pokeemerald/src/main_menu.c:1603`), for a deterministic
-//!   v1 default.
+//!   pre-1.0 default.
 //! - **Trainer id has no link-cable lower half.** Upstream's
 //!   `InitPlayerTrainerId` is `(Random() << 16) | GetGeneratedTrainerIdLower()`;
 //!   `GetGeneratedTrainerIdLower` (`link_rfu.c`) draws on RFU/link-cable
@@ -106,13 +106,14 @@ use engine::text;
 
 use crate::overworld::PlayerCharacter;
 
-/// `sMalePresetNames[0]` == `gText_DefaultNameStu` (module docs) -- the v1
-/// fixed default player name, standing in for the deferred naming screen.
+/// `sMalePresetNames[0]` == `gText_DefaultNameStu` (module docs) -- this
+/// slice's fixed default player name, standing in for the naming screen (not
+/// modelled yet -- deferred, still in v1 scope).
 /// Fits [`engine::save::block::PLAYER_NAME_LENGTH`] (7 glyphs) with room to
 /// spare.
 pub const DEFAULT_PLAYER_NAME: &str = "STU";
 
-/// The v1 fixed default player gender (module docs): male, matching
+/// This slice's fixed default player gender (module docs): male, matching
 /// [`PlayerCharacter::Brendan`], the only overworld sprite
 /// [`crate::overworld::load_default_room`] renders.
 pub const DEFAULT_PLAYER_GENDER: PlayerGender = PlayerGender::Male;

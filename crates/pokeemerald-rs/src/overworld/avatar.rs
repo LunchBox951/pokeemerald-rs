@@ -31,8 +31,9 @@
 //! `gSaveBlock1Ptr->pos` (upstream keeps the two in lock-step), so that
 //! term is always exactly `0` -- the player's OBJ screen position never
 //! moves during ordinary walking; only `dx`/`dy` (a small, at-rest-zero
-//! camera-pan term this port's bike-free v1 scope never sets away from 0)
-//! would move it, and the *background* scrolls instead
+//! camera-pan term nothing this port models yet sets away from 0 -- the
+//! bike pan-ahead that would is not modelled yet: deferred, still in v1
+//! scope) would move it, and the *background* scrolls instead
 //! (`super::viewport`'s job) `(behavioral-fidelity)`. [`PLAYER_OBJ_X`]/
 //! [`PLAYER_OBJ_Y`] are that resulting constant, derived from the same
 //! screen-center metatile [`super::viewport`] anchors its camera on, offset
@@ -66,7 +67,8 @@ pub(super) const FRAME_W: usize = 16;
 pub(super) const FRAME_H: usize = 32;
 /// `sPicTable_BrendanNormal`/`MayNormal`'s first 9 entries -- the on-foot
 /// (not-running) frames this slice uses. `walking.png`'s remaining content
-/// (if any) is never referenced (no running in v1 scope). Also the frame
+/// (if any) is never referenced (running is not modelled yet -- deferred,
+/// still in v1 scope). Also the frame
 /// count every NPC "people" sheet [`super::npc`] resolves shares (same
 /// `overworld_frame(..., 2, 4, n)` layout upstream's own pic tables use).
 pub(super) const NUM_WALK_FRAMES: usize = 9;
@@ -321,8 +323,9 @@ pub(super) fn fill_palette_bank(
 /// east reusing the west frame flipped. Shared by [`frame_for`] (the
 /// player, which additionally shows a walk-step frame mid-transit) and
 /// [`super::npc::oam_entries`] (every NPC this slice renders, which never
-/// walks -- v1's "stationary + look-around only" scope -- so it only ever
-/// needs this stand frame).
+/// walks -- this slice's "stationary + look-around only" scope, NPC
+/// movement being not modelled yet: deferred, still in v1 scope -- so it
+/// only ever needs this stand frame).
 pub(super) const fn stand_frame_for(facing: Direction) -> (u16, bool) {
     match facing {
         Direction::South => (FRAME_SOUTH_STAND, false),

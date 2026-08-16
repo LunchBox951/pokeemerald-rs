@@ -24,8 +24,9 @@
 //! and `gText_Birch_YourePlayer` ("You're {PLAYER}{KUN} who's moving..."),
 //! via a runtime `StringExpandPlaceholders` call
 //! (`main_menu.c:1612`/`1678`). Since this slice's player name is a fixed
-//! v1 default rather than the deferred naming screen (see
-//! `crate::new_game`'s module docs), [`crate::new_game::DEFAULT_PLAYER_NAME`]
+//! pre-1.0 default rather than the naming screen (not modelled yet --
+//! deferred, still in v1 scope; see `crate::new_game`'s module docs),
+//! [`crate::new_game::DEFAULT_PLAYER_NAME`]
 //! is baked into these two pages' text directly at authoring time -- the
 //! same observable result `StringExpandPlaceholders` would produce for that
 //! fixed name, without needing this module to depend on
@@ -110,7 +111,7 @@ const AND_YOU_ARE: &str = "And you are?{P}";
 const WHATS_YOUR_NAME: &str = "All right.\nWhat's your name?{P}";
 
 /// `gText_Birch_SoItsPlayer` (`birch_speech.inc:42-43`) with `{PLAYER}{KUN}`
-/// substituted for the fixed v1 default name (module docs), plus a trailing
+/// substituted for the fixed pre-1.0 default name (module docs), plus a trailing
 /// `{P}` this port adds on top of upstream's own raw string (which ends
 /// `"?$"` with no embedded `\p`) -- the same stand-in [`AND_YOU_ARE`] uses,
 /// for a different upstream mechanism.

@@ -58,8 +58,14 @@
 //! (`pokeemerald/src/text.c`) point them at the exact same
 //! `GetGlyphWidth_Short`/`gFontShortLatinGlyphWidths` as `FONT_SHORT`, so
 //! they're the same font under a different id, reachable here as
-//! [`FontId::Short`]. `FONT_BRAILLE` and the Japanese fonts are out of
-//! scope — v1 is English-only text.
+//! [`FontId::Short`]. The Japanese fonts are **excluded**: an English
+//! retail cartridge never renders them, so a lone player cannot reach them
+//! (`docs/acceptance/v1.md`'s exclusion rule). `FONT_BRAILLE` is a
+//! different case — it is single-player content, drawn by
+//! `ScrCmd_braillemessage` (`pokeemerald/src/scrcmd.c:1482`) for the Regi
+//! puzzle's braille signs (Sealed Chamber, Desert Ruins, Island Cave,
+//! Ancient Tomb) — so it is not modelled yet: deferred, still in v1 scope
+//! under `C-3`.
 
 use crate::error::AssetError;
 use crate::pack::ImageRef;
