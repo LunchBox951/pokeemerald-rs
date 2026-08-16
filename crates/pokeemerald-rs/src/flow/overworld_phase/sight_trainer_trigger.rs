@@ -84,17 +84,29 @@
 //!    scan continues to the next candidate object event exactly as
 //!    `CheckTrainer`'s own `return 0` does upstream. Recorded on the
 //!    ledger's `data/maps/Route103#Route103_SightTrainers` artifact.
-//! 6. **Miguel: a held-item construction gap.** `TRAINER_MIGUEL_1`
-//!    (`data/maps/Route103/scripts.inc:248-254`) is `trainerbattle_single`,
-//!    so his own cone selects cleanly -- but his real party
-//!    (`gTrainers[TRAINER_MIGUEL_1].party`) is
-//!    `TrainerParty::ItemDefaultMoves`, which
-//!    [`crate::flow::npc_trainer_battle`]'s own construction refuses rather
-//!    than silently drop the held item (that module's own docs). His fight
-//!    therefore never starts: [`begin_sight_trainer_battle_if_seen`] logs
-//!    the refusal and, deliberately, does **not** preempt the frame on that
-//!    path (see that function's own doc comment for why: preempting movement
-//!    on an unconditional per-frame check that can never succeed would be an
+//! 6. **Miguel: a held-item *effect* gap, no longer a representation one.**
+//!    `TRAINER_MIGUEL_1` (`data/maps/Route103/scripts.inc:248-254`) is
+//!    `trainerbattle_single`, so his own cone selects cleanly, and his real
+//!    party (`gTrainers[TRAINER_MIGUEL_1].party`,
+//!    `TrainerParty::ItemDefaultMoves` -- a level-15 Skitty holding
+//!    `ITEM_ORAN_BERRY`) now **constructs**: issue #293 taught
+//!    [`crate::flow::npc_trainer_battle`] to flatten all four `partyFlags`
+//!    shapes and carry `heldItem` through to
+//!    [`battle::BattlePokemon::held_item`], the same
+//!    `SetMonData(MON_DATA_HELD_ITEM)` write upstream makes. What is still
+//!    missing is the item *acting*: this port has no `ITEM_EFFECT_*` path,
+//!    so an Oran Berry would never restore its 10 HP, and
+//!    [`battle::ensure_trainer_party_startable`] therefore refuses a mon
+//!    holding a real item ([`battle::BattleError::UnsupportedHeldItem`],
+//!    before any draw). His fight still never starts -- though as of issue
+//!    #293 his Skitty's own moveset (Attract/Sing) is refused first, so the
+//!    berry is not currently the binding constraint; see this module's own
+//!    `miguels_oran_berry_is_carried_into_the_party_spec_and_refused_on_its_own`
+//!    test, which pins the item screen on its own.
+//!    [`begin_sight_trainer_battle_if_seen`] logs the refusal and,
+//!    deliberately, does **not** preempt the frame on that path (see that
+//!    function's own doc comment for why: preempting movement on an
+//!    unconditional per-frame check that can never succeed would be an
 //!    actual soft lock, not a cosmetic gap).
 //! 7. **An emergent gap, discovered while wiring this issue: every real
 //!    Route 103 sight trainer's own default moveset currently fails to
@@ -529,9 +541,9 @@ mod tests {
     }
 
     /// `TRAINER_MIGUEL_1`'s real party is the held-item shape module docs
-    /// item 6 says it is -- otherwise the "construction refuses" claim in
-    /// this module's own docs would be describing a gap that no longer
-    /// exists.
+    /// item 6 says it is -- otherwise the "held item is carried, and its
+    /// in-battle effect is the gap" claim in this module's own docs would be
+    /// describing something that no longer exists.
     #[test]
     fn miguel_carries_a_held_item_party() {
         let data = battle::trainer_data(TrainerId(293)).expect("TRAINER_MIGUEL_1 must resolve");
@@ -540,6 +552,69 @@ mod tests {
             assets::trainers::TrainerParty::ItemDefaultMoves(_)
                 | assets::trainers::TrainerParty::ItemCustomMoves(_)
         ));
+    }
+
+    /// Issue #293's half of module docs item 6, pinned as two separate
+    /// facts, because they used to be one and conflating them was the bug:
+    ///
+    /// 1. Miguel's Skitty really does hold `ITEM_ORAN_BERRY` (`139`), and
+    ///    that item is now **represented** -- his party row survives
+    ///    `party_entries`' flattening rather than being refused as an
+    ///    unrepresentable shape.
+    /// 2. A mon holding it is nevertheless refused by the `battle` crate,
+    ///    which has no `ITEM_EFFECT_*` machinery to *run* it
+    ///    (`battle::BattleError::UnsupportedHeldItem`) -- and the refusal
+    ///    names the berry, not the party shape, so a future held-item slice
+    ///    knows exactly what to implement.
+    ///
+    /// Asked of `battle::ensure_trainer_party_startable` directly with a
+    /// moveset this engine *can* field, since Miguel's own real moveset is
+    /// refused earlier (his row in the table above) and would mask this.
+    #[test]
+    fn miguels_oran_berry_is_carried_into_the_party_spec_and_refused_on_its_own() {
+        const ORAN_BERRY: assets::items::ItemId = assets::items::ItemId(139);
+
+        let data = battle::trainer_data(TrainerId(293)).expect("TRAINER_MIGUEL_1 must resolve");
+        let assets::trainers::TrainerParty::ItemDefaultMoves(party) = data.party else {
+            panic!("TRAINER_MIGUEL_1 is an ItemDefaultMoves party (test above)");
+        };
+        assert_eq!(
+            party[0].held_item, ORAN_BERRY,
+            "Miguel's Skitty holds an Oran Berry (trainer_parties.h sParty_Miguel1)"
+        );
+
+        // The same held item on a mon whose moveset this engine *can* field:
+        // the only thing left to refuse is the berry itself.
+        let moves = [assets::MoveId(33)]; // MOVE_TACKLE
+        assert_eq!(
+            battle::ensure_trainer_party_startable(
+                &battle::Dex::new(),
+                TrainerId(293),
+                &[battle::TrainerPartyMon {
+                    species: party[0].species,
+                    level: party[0].lvl,
+                    moves: &moves,
+                    held_item: party[0].held_item,
+                }],
+            ),
+            Err(battle::BattleError::UnsupportedHeldItem(ORAN_BERRY)),
+        );
+
+        // ...and the same party without the berry is fine, so the refusal is
+        // the item and nothing else.
+        assert_eq!(
+            battle::ensure_trainer_party_startable(
+                &battle::Dex::new(),
+                TrainerId(293),
+                &[battle::TrainerPartyMon {
+                    species: party[0].species,
+                    level: party[0].lvl,
+                    moves: &moves,
+                    held_item: assets::items::ItemId::NONE,
+                }],
+            ),
+            Ok(()),
+        );
     }
 
     /// [`find_sight_trainer`] against the real Route 103 object events
@@ -660,7 +735,7 @@ mod tests {
     #[test]
     fn every_sight_trainers_real_party_fails_to_construct_for_exactly_these_reasons() {
         use battle::BattleError;
-        use npc_trainer_battle::NpcTrainerBattleError::{Battle, HeldItemParty};
+        use npc_trainer_battle::NpcTrainerBattleError::Battle;
 
         // Every distinct id in `SIGHT_TRAINERS`, with the refusal its real
         // extracted party currently produces. The move ids are the first
@@ -681,7 +756,22 @@ mod tests {
                 TrainerId(336),
                 Battle(BattleError::NonDamagingMove(assets::MoveId(150))), // MOVE_SPLASH
             ),
-            ("Miguel", TrainerId(293), HeldItemParty(TrainerId(293))),
+            // Miguel's held-item party is now *representable* (issue #293:
+            // `npc_trainer_battle::party_entries` flattens all four
+            // `partyFlags` shapes and carries `heldItem` through to
+            // `battle::BattlePokemon::held_item`), so his refusal is no
+            // longer the party shape. His Skitty's real level-15 moveset --
+            // Tail Whip, Attract, Sing, Double Slap -- is refused first, and
+            // the Oran Berry his Skitty holds is screened only after every
+            // move (`battle::ensure_trainer_party_startable`'s documented
+            // order: the move is the more actionable half). The item screen
+            // itself is pinned by `miguels_oran_berry_is_carried_into_the_
+            // party_spec_and_refused_on_its_own`.
+            (
+                "Miguel",
+                TrainerId(293),
+                Battle(BattleError::NonDamagingMove(assets::MoveId(213))), // MOVE_ATTRACT
+            ),
             (
                 "Rhett",
                 TrainerId(703),

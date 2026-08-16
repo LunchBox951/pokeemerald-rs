@@ -12,10 +12,20 @@
 //!
 //! Out of scope for this slice: EV tracking (every mon this crate builds has
 //! `0` EVs — matching a freshly caught wild mon and an EV-less starting
-//! player mon, both realistic for a first encounter), abilities, held items,
-//! non-volatile status conditions, and the Shedinja 1-HP special case in
-//! `CalculateMonStats`.
+//! player mon, both realistic for a first encounter), abilities, and the
+//! Shedinja 1-HP special case in `CalculateMonStats`.
+//!
+//! A held item is *carried* but never *acts* (issue #293): upstream's
+//! `CreateNPCTrainerParty` writes one with
+//! `SetMonData(&party[i], MON_DATA_HELD_ITEM, &partyData[i].heldItem)`
+//! (`pokeemerald/src/battle_main.c:2044`/`:2059`), so a party mon that holds
+//! an Oran Berry is only representable here if [`BattlePokemon`] has a field
+//! for it — see [`BattlePokemon::held_item`] for the field, and
+//! [`crate::battle::trainer::ensure_held_item_playable`] for the fail-closed
+//! screen that keeps an item this engine cannot *run* from silently doing
+//! nothing mid-battle.
 
+use assets::items::ItemId;
 use assets::{experience_for_level, BaseStats, LevelUpLearnsets, MoveId, SpeciesId, Type};
 
 use crate::dex::Dex;
@@ -259,6 +269,7 @@ pub struct BattlePokemon {
     ivs: Ivs,
     personality: u32,
     original_trainer_id: u32,
+    held_item: ItemId,
     types: [Type; 2],
     base_stats: BaseStats,
     experience: u32,
@@ -384,6 +395,7 @@ impl BattlePokemon {
             ivs,
             personality,
             original_trainer_id: 0,
+            held_item: ItemId::NONE,
             types: base.types,
             base_stats: *base,
             experience,
@@ -448,6 +460,40 @@ impl BattlePokemon {
     #[must_use]
     pub const fn with_original_trainer_id(mut self, original_trainer_id: u32) -> Self {
         self.original_trainer_id = original_trainer_id;
+        self
+    }
+
+    /// The item this Pokémon is holding, or [`ItemId::NONE`] for none —
+    /// upstream `MON_DATA_HELD_ITEM`.
+    ///
+    /// **Carried, never run.** No held item has an in-battle effect in this
+    /// crate: not Leftovers' end-of-turn heal, not an Oran Berry's
+    /// `ITEM_EFFECT_*` HP restore, not Quick Claw's priority draw (the one
+    /// reader `gRandomTurnNumber` would have had — see
+    /// [`crate::battle::Battle::random_turn_number`]). The field exists so a
+    /// party mon that upstream *builds* holding something is representable
+    /// here at all, which is what lets
+    /// [`crate::battle::trainer::ensure_held_item_playable`] refuse it
+    /// **before the first draw** instead of building a battler that silently
+    /// drops it `(behavioral-fidelity)`.
+    #[must_use]
+    pub const fn held_item(&self) -> ItemId {
+        self.held_item
+    }
+
+    /// Assign the held item, the way `CreateNPCTrainerParty`'s
+    /// `SetMonData(&party[i], MON_DATA_HELD_ITEM, &partyData[i].heldItem)`
+    /// does for the two `F_TRAINER_PARTY_HELD_ITEM` party shapes
+    /// (`pokeemerald/src/battle_main.c:2044`, `:2059`) — after `CreateMon`,
+    /// so it draws nothing and changes no stat.
+    ///
+    /// Builder-shaped rather than a `new` parameter for the same reason
+    /// [`BattlePokemon::with_original_trainer_id`] is: every other
+    /// construction path (wild, player) leaves it at [`ItemId::NONE`], and
+    /// upstream sets it as a separate post-`CreateMon` write too.
+    #[must_use]
+    pub const fn with_held_item(mut self, held_item: ItemId) -> Self {
+        self.held_item = held_item;
         self
     }
 

@@ -16,7 +16,7 @@ use engine::rng::Rng;
 
 use super::{
     advance_route103_rival_battle, route103_rival_for, start_route103_rival_battle, PlayerStarter,
-    Rival, RivalBattleError,
+    Rival,
 };
 // `trainer_party_personalities` lives in `npc_trainer_battle` since issue
 // #264's construction split (`route103_rival`'s own module docs); imported
@@ -201,22 +201,87 @@ fn every_trainer_and_species_name_has_a_charmap_encoding() {
     }
 }
 
-/// A held-item party fails closed rather than silently dropping the item.
+/// A held-item party is **represented**, and the item is refused separately
+/// (issue #293, strengthening the old "the whole party shape fails closed"
+/// pin -- see `npc_trainer_battle`'s module docs for why the two were split).
+///
+/// Three things are asserted where there used to be one:
+///
+/// 1. an item-carrying party *shape* no longer blocks construction at all --
+///    `trainer_party_personalities` computes its seeded personalities, which
+///    it could not do while the shape itself was refused;
+/// 2. a mon actually holding something is refused by the `battle` crate,
+///    naming the `ITEM_*` (`BattleError::UnsupportedHeldItem`) rather than
+///    the party shape, because no item has an in-battle effect here;
+/// 3. an item-carrying *shape* whose `heldItem` is `ITEM_NONE` -- upstream
+///    has plenty -- is not refused at all, which the old shape-level check
+///    got wrong.
 #[test]
-fn a_held_item_party_is_refused_rather_than_stripped() {
+fn a_held_item_party_is_represented_and_only_a_real_item_is_refused() {
+    use assets::items::ItemId;
+
     let table = TrainerTable::new();
-    let id = (1..assets::trainers::TRAINERS_COUNT)
+    let ids: Vec<TrainerId> = (1..assets::trainers::TRAINERS_COUNT)
         .map(|i| TrainerId(u16::try_from(i).unwrap()))
+        .collect();
+
+    // (1) The shape itself constructs now.
+    let with_shape = ids
+        .iter()
+        .copied()
         .find(|id| {
             matches!(
                 table.trainer(*id).unwrap().party,
                 TrainerParty::ItemDefaultMoves(_) | TrainerParty::ItemCustomMoves(_)
             )
         })
-        .expect("some trainer fields held items");
+        .expect("some trainer fields the held-item party shape");
+    assert!(
+        trainer_party_personalities(with_shape).is_ok(),
+        "an item-carrying party shape must be representable (issue #293)"
+    );
+
+    // (2) A real item is refused, by name, before any draw.
+    let dex = Dex::new();
+    let moves = [TACKLE]; // something this engine can field
+    let real_item = ItemId(139); // ITEM_ORAN_BERRY
     assert_eq!(
-        trainer_party_personalities(id).unwrap_err(),
-        RivalBattleError::HeldItemParty(id)
+        battle::ensure_trainer_party_startable(
+            &dex,
+            with_shape,
+            &[battle::TrainerPartyMon {
+                species: SpeciesId(TREECKO),
+                level: 5,
+                moves: &moves,
+                held_item: real_item,
+            }],
+        ),
+        Err(battle::BattleError::UnsupportedHeldItem(real_item))
+    );
+
+    // (3) `ITEM_NONE` in an item-carrying shape is not a refusal -- the old
+    // shape-level check refused these too.
+    let none_holder = ids
+        .iter()
+        .copied()
+        .find(|id| match table.trainer(*id).unwrap().party {
+            TrainerParty::ItemDefaultMoves(p) => p.iter().all(|m| m.held_item == ItemId::NONE),
+            TrainerParty::ItemCustomMoves(p) => p.iter().all(|m| m.held_item == ItemId::NONE),
+            TrainerParty::NoItemDefaultMoves(_) | TrainerParty::NoItemCustomMoves(_) => false,
+        })
+        .expect("upstream has item-shaped parties whose heldItem is ITEM_NONE");
+    assert_eq!(
+        battle::ensure_trainer_party_startable(
+            &dex,
+            none_holder,
+            &[battle::TrainerPartyMon {
+                species: SpeciesId(TREECKO),
+                level: 5,
+                moves: &moves,
+                held_item: ItemId::NONE,
+            }],
+        ),
+        Ok(())
     );
 }
 

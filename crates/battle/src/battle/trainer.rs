@@ -47,6 +47,14 @@
 //!   the item-use AI in `src/battle_ai_switch_items.c`. No item system
 //!   exists in this crate, and every Route 103 rival carries `.items = {}`,
 //!   so the whole path is absent rather than stubbed.
+//! - **A party mon's *held* item, as an in-battle effect.** The item itself
+//!   is now represented — [`crate::pokemon::BattlePokemon::held_item`],
+//!   written here by [`build_trainer_pokemon`] exactly where
+//!   `CreateNPCTrainerParty`'s `SetMonData(&party[i], MON_DATA_HELD_ITEM,
+//!   &partyData[i].heldItem)` writes it (`src/battle_main.c:2044`, `:2059`)
+//!   — but nothing *runs* it, so [`ensure_held_item_playable`] refuses a
+//!   non-`ITEM_NONE` item before the first draw rather than fielding a mon
+//!   whose Oran Berry never fires. See [`BattleError::UnsupportedHeldItem`].
 //! - **Mid-battle switching.** `ShouldSwitch`/`AI_ShouldSwitchIfPerishSong`
 //!   (`battle_ai_switch_items.c:429`, called from `:543`) can switch a *healthy* mon out;
 //!   that is not modelled, so the only switch this crate performs is the
@@ -60,6 +68,7 @@
 //!   initialises it to `1`). Held items are out of scope, so
 //!   [`trainer_money`] hard-codes the `1` case.
 
+use assets::items::ItemId;
 use assets::trainers::{AiFlags, TrainerClass, TrainerData, TrainerId, TrainerParty, TrainerTable};
 use assets::{MoveId, SpeciesId};
 
@@ -156,7 +165,10 @@ pub fn roll_non_shiny_ot_id(personality: u32, rng: &mut impl BattleRng) -> u32 {
 
 /// Build one NPC trainer party member: `CreateMon(..., fixedIV,
 /// hasFixedPersonality = TRUE, personality, OT_ID_RANDOM_NO_SHINY, 0)`
-/// (`pokeemerald/src/battle_main.c:2014`).
+/// (`pokeemerald/src/battle_main.c:2014`), plus the
+/// `SetMonData(MON_DATA_HELD_ITEM)` write the two
+/// `F_TRAINER_PARTY_HELD_ITEM` shapes make right after it (`:2044`, `:2059`)
+/// — pass [`ItemId::NONE`] for the two shapes that make no such write.
 ///
 /// Distinct from both of [`crate::wild`]'s construction paths, and the
 /// difference is entirely in the draws:
@@ -179,6 +191,14 @@ pub fn roll_non_shiny_ot_id(personality: u32, rng: &mut impl BattleRng) -> u32 {
 /// species/level/moveset — checked **before the first draw**, so a rejected
 /// request leaves the shared stream exactly as it found it, the same rule
 /// [`crate::wild::build_wild_pokemon`] follows.
+// Eight parameters because upstream's own call is eight-wide: `CreateMon(mon,
+// species, level, fixedIV, hasFixedPersonality, personality, otIdType,
+// fixedOtId)` (`src/pokemon.c:2196`), of which this reproduces six, plus the
+// `dex` this crate threads instead of globals and the `SetMonData(
+// MON_DATA_HELD_ITEM)` write that follows on two of the four party shapes.
+// The arity is inherent to the upstream record `(behavioral-fidelity)`, the
+// same convention `assets`' own `battle_moves::m` row constructor records.
+#[allow(clippy::too_many_arguments)]
 pub fn build_trainer_pokemon(
     dex: &Dex,
     species: SpeciesId,
@@ -186,13 +206,15 @@ pub fn build_trainer_pokemon(
     fixed_iv: Ivs,
     personality: u32,
     moves: Vec<MoveId>,
+    held_item: ItemId,
     rng: &mut impl BattleRng,
 ) -> Result<BattlePokemon, BattleError> {
     BattlePokemon::validate(dex, species, level, &moves)?;
     let ot_id = roll_non_shiny_ot_id(personality, rng);
     Ok(
         BattlePokemon::new(dex, species, level, fixed_iv, personality, moves)?
-            .with_original_trainer_id(ot_id),
+            .with_original_trainer_id(ot_id)
+            .with_held_item(held_item),
     )
 }
 
@@ -476,13 +498,42 @@ pub(crate) fn ensure_move_playable(dex: &Dex, move_id: MoveId) -> Result<(), Bat
     super::trainer_ai::ensure_scoreable(dex, move_id)
 }
 
+/// Whether a party mon holding `held_item` can be fielded — the held-item
+/// counterpart of [`ensure_move_playable`], run by both
+/// [`ensure_trainer_party_startable`]'s pre-flight and
+/// [`crate::battle::Battle::new_trainer`]'s last line of defence (issue
+/// #293).
+///
+/// [`ItemId::NONE`] passes; **every other item is refused**, and that is the
+/// whole rule rather than a table with one row missing: this crate has no
+/// `ItemBattleEffects` / `ITEM_EFFECT_*` machinery at all, so no item can
+/// act. The check is on the *item*, not the party shape — upstream's
+/// `F_TRAINER_PARTY_HELD_ITEM` rows are free to store `ITEM_NONE` (several
+/// do), and such a mon is fielded normally, so the item is now carried
+/// through construction ([`crate::pokemon::BattlePokemon::held_item`])
+/// rather than the whole shape being rejected as unrepresentable.
+///
+/// # Errors
+///
+/// [`BattleError::UnsupportedHeldItem`] carrying `held_item`.
+pub(crate) const fn ensure_held_item_playable(held_item: ItemId) -> Result<(), BattleError> {
+    // `PartialEq` is not callable from a `const fn` on stable, so the
+    // reserved `ITEM_NONE` id is compared field-wise.
+    if held_item.0 == ItemId::NONE.0 {
+        Ok(())
+    } else {
+        Err(BattleError::UnsupportedHeldItem(held_item))
+    }
+}
+
 /// One prospective `CreateNPCTrainerParty` party member as
-/// [`ensure_trainer_party_startable`] needs to see it: the three `CreateMon`
-/// inputs the screens actually depend on. The personality and the IVs are
-/// deliberately absent — both are fixed values upstream computes without
-/// drawing, and the only IV producer (`fixed_ivs`, `iv * 31 / 255`) is
-/// range-safe by construction, so the post-draw `InvalidIv` refusal in
-/// `BattlePokemon::new` is unreachable from a trainer party.
+/// [`ensure_trainer_party_startable`] needs to see it: the four `CreateMon`
+/// (plus post-`CreateMon`) inputs the screens actually depend on. The
+/// personality and the IVs are deliberately absent — both are fixed values
+/// upstream computes without drawing, and the only IV producer
+/// (`fixed_ivs`, `iv * 31 / 255`) is range-safe by construction, so the
+/// post-draw `InvalidIv` refusal in `BattlePokemon::new` is unreachable from
+/// a trainer party.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TrainerPartyMon<'a> {
     /// `partyData[i].species`.
@@ -493,6 +544,10 @@ pub struct TrainerPartyMon<'a> {
     /// fixed moveset, or [`crate::wild::initial_moveset`]'s level-up result
     /// for the `F_TRAINER_PARTY_*_DEFAULT_MOVES` shapes.
     pub moves: &'a [MoveId],
+    /// `partyData[i].heldItem` for the two `F_TRAINER_PARTY_HELD_ITEM`
+    /// shapes, [`ItemId::NONE`] for the two that have no such field
+    /// (issue #293) — screened by [`ensure_held_item_playable`].
+    pub held_item: ItemId,
 }
 
 /// Whether the whole `CreateNPCTrainerParty` →
@@ -530,8 +585,14 @@ pub struct TrainerPartyMon<'a> {
 /// [`BattleError::EmptyTrainerParty`] for an empty `party`,
 /// [`BattleError::UnknownTrainer`] for an id outside `gTrainers`,
 /// [`BattleError::UnsupportedAiFlags`] for a `gTrainers[].aiFlags` bit this
-/// crate's AI does not model, and whatever [`BattlePokemon::validate`] or
-/// [`ensure_move_playable`] report for a member's species/level/moveset.
+/// crate's AI does not model, [`BattleError::UnsupportedHeldItem`] for a
+/// member holding an item nothing here runs
+/// ([`ensure_held_item_playable`]), and whatever [`BattlePokemon::validate`]
+/// or [`ensure_move_playable`] report for a member's species/level/moveset.
+///
+/// The held-item screen runs **last**, after every move, so a party that is
+/// both unfieldable and item-carrying reports the move — the more actionable
+/// half, and the one a move-coverage slice can move.
 pub fn ensure_trainer_party_startable(
     dex: &Dex,
     trainer: TrainerId,
@@ -550,6 +611,9 @@ pub fn ensure_trainer_party_startable(
             ensure_move_playable(dex, *move_id)?;
         }
     }
+    for mon in party {
+        ensure_held_item_playable(mon.held_item)?;
+    }
     Ok(())
 }
 
@@ -562,6 +626,7 @@ mod tests {
     };
     use crate::damage::BattleRng;
     use crate::dex::Dex;
+    use assets::items::ItemId;
     use assets::trainers::{TrainerClass, TrainerId};
     use assets::{MoveId, SpeciesId};
 
@@ -633,6 +698,7 @@ mod tests {
             fixed_ivs(0),
             0x1234_5678,
             vec![MoveId(1)], // Pound
+            ItemId::NONE,
             &mut rng,
         )
         .expect("Treecko/Pound are dex-resident");
@@ -656,6 +722,7 @@ mod tests {
             fixed_ivs(0),
             0,
             vec![MoveId(1)],
+            ItemId::NONE,
             &mut rng,
         )
         .unwrap_err();
@@ -707,6 +774,7 @@ mod tests {
                     species: SpeciesId(277), // Treecko
                     level: 5,
                     moves: &moves,
+                    held_item: ItemId::NONE,
                 }],
             ),
             Ok(())
@@ -730,6 +798,7 @@ mod tests {
                 species: SpeciesId(277),
                 level: 5,
                 moves: &moves,
+                held_item: ItemId::NONE,
             }],
         )
         .expect_err("Harden is not executable by this turn engine");
@@ -744,6 +813,7 @@ mod tests {
             fixed_ivs(0),
             0,
             moves.to_vec(),
+            ItemId::NONE,
             &mut rng,
         )
         .expect("Treecko/Harden is a valid pairing -- only the turn engine refuses it");
@@ -788,6 +858,7 @@ mod tests {
                     species: SpeciesId(277),
                     level: 5,
                     moves: &moves,
+                    held_item: ItemId::NONE,
                 }],
             ),
             Err(crate::error::BattleError::UnknownTrainer(TrainerId(60_000)))

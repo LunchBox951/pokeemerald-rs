@@ -93,21 +93,34 @@
 //! [`crate::flow::wild_encounter::map_wild_table_fightable`] already applies
 //! to wild tables via [`battle::ensure_wild_startable`].
 //!
-//! # Held-item parties: a fail-closed gap, not a silent drop
+//! # Held-item parties: represented at construction, refused at the edge
 //!
 //! Upstream's `party` field is a `union TrainerMonPtr` that can carry a
-//! per-mon held item (`F_TRAINER_PARTY_HELD_ITEM`) alongside the fixed-vs-
-//! custom moveset axis; [`battle::BattlePokemon`] has no held-item concept at
-//! all yet. Building such a party anyway would silently drop a Sitrus Berry
-//! or an Oran Berry rather than fail, so [`party_entries`] refuses instead
-//! ([`NpcTrainerBattleError::HeldItemParty`]) — the same fail-closed posture
-//! this module's every other unmodellable input takes. Reachable in real
-//! play as of issue #264: `TRAINER_MIGUEL_1` (Route 103's own Miguel,
-//! `crate::flow::overworld_phase::sight_trainer_trigger`) carries
-//! `TrainerParty::ItemDefaultMoves`, so his sight cone finds him, but his
-//! battle refuses to construct — recorded on that module's own docs and the
-//! ledger, not papered over.
+//! per-mon held item (`F_TRAINER_PARTY_HELD_ITEM`) alongside the
+//! fixed-vs-custom moveset axis, and `CreateNPCTrainerParty` writes it with
+//! `SetMonData(&party[i], MON_DATA_HELD_ITEM, &partyData[i].heldItem)`
+//! (`battle_main.c:2044`, `:2059`).
+//!
+//! Issue #264 modelled that by refusing the two item-carrying *shapes*
+//! outright, which over-refused (several `F_TRAINER_PARTY_HELD_ITEM` rows
+//! store `ITEM_NONE`) and, worse, refused at the wrong layer: the party was
+//! unrepresentable rather than unplayable. Issue #293 splits the two:
+//! [`party_entries`] now flattens **all four** shapes and carries
+//! `heldItem` through to [`battle::BattlePokemon::held_item`], so the party
+//! this port builds is the party upstream builds; and the `battle` crate
+//! separately refuses a mon holding a **real** item
+//! ([`battle::BattleError::UnsupportedHeldItem`], screened before the first
+//! draw by [`battle::ensure_trainer_party_startable`]) because no item has
+//! an in-battle effect here — an Oran Berry that never restores its 10 HP
+//! is a mid-fight divergence, so it fails closed at the edge instead.
+//!
+//! Reachable in real play: `TRAINER_MIGUEL_1` (Route 103's own Miguel,
+//! `crate::flow::overworld_phase::sight_trainer_trigger`) fields a Skitty
+//! holding `ITEM_ORAN_BERRY`, so his sight cone finds him and his party now
+//! *builds* — his battle is still refused, now naming the berry rather than
+//! the party shape. Recorded on that module's own docs and the ledger.
 
+use assets::items::ItemId;
 use assets::trainers::{TrainerData, TrainerId, TrainerParty};
 use assets::{MoveId, SpeciesNames};
 use battle::{Battle, BattleError, BattleOutcome, BattlePokemon, Dex, PlayerAction, StatStages};
@@ -118,10 +131,20 @@ use super::wild_encounter::SharedRng;
 /// Why an NPC trainer battle could not be constructed.
 ///
 /// A concrete enum owned by this module rather than a reuse of
-/// [`BattleError`] `(oop-boundaries)`: two of its three cases are
-/// *construction*-layer facts (an un-encodable name, a party shape carrying
-/// held items) that the `battle` crate has no vocabulary for, and both are
-/// deliberately fatal rather than silently approximated.
+/// [`BattleError`] `(oop-boundaries)`: one of its two cases is a
+/// *construction*-layer fact (an un-encodable trainer/species name) that the
+/// `battle` crate has no vocabulary for, and it is deliberately fatal rather
+/// than silently approximated.
+///
+/// It used to carry a third, `HeldItemParty`, for the two
+/// `F_TRAINER_PARTY_HELD_ITEM` party shapes. Issue #293 retired it: a held
+/// item is now *representable* here (it rides through
+/// [`PartyEntry::held_item`] into [`battle::BattlePokemon::held_item`], the
+/// same `SetMonData(MON_DATA_HELD_ITEM)` write upstream makes), so the
+/// refusal belongs to the `battle` crate that cannot *run* it —
+/// [`BattleError::UnsupportedHeldItem`], which names the offending `ITEM_*`
+/// rather than the party shape, and does not fire at all for a shape whose
+/// `heldItem` is `ITEM_NONE`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NpcTrainerBattleError {
     /// The `battle` crate rejected the party or the battle — see
@@ -142,10 +165,6 @@ pub enum NpcTrainerBattleError {
         /// The offending character.
         character: char,
     },
-    /// The trainer's party carries held items
-    /// (`F_TRAINER_PARTY_HELD_ITEM`), which [`battle::BattlePokemon`] cannot
-    /// represent at all (module docs' "Held-item parties" section).
-    HeldItemParty(TrainerId),
 }
 
 impl core::fmt::Display for NpcTrainerBattleError {
@@ -156,11 +175,6 @@ impl core::fmt::Display for NpcTrainerBattleError {
                 f,
                 "name `{name}` contains `{character}`, which has no Gen-3 charmap byte"
             ),
-            Self::HeldItemParty(id) => write!(
-                f,
-                "trainer `{}` fields held items, which are not modelled",
-                id.0
-            ),
         }
     }
 }
@@ -169,7 +183,7 @@ impl std::error::Error for NpcTrainerBattleError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Battle(error) => Some(error),
-            Self::UnnamedCharacter { .. } | Self::HeldItemParty(_) => None,
+            Self::UnnamedCharacter { .. } => None,
         }
     }
 }
@@ -213,7 +227,8 @@ fn add_name_bytes(hash: &mut u32, name: &'static str) -> Result<(), NpcTrainerBa
 }
 
 /// One party-table row, flattened out of [`TrainerParty`]'s four shapes into
-/// the fields `CreateNPCTrainerParty` actually feeds `CreateMon`.
+/// the fields `CreateNPCTrainerParty` actually feeds `CreateMon` (and the
+/// one it writes straight afterwards).
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct PartyEntry {
     /// `partyData[i].species`.
@@ -226,20 +241,26 @@ struct PartyEntry {
     /// over `CreateMon`'s result, or `None` for "leave
     /// `GiveBoxMonInitialMoveset`'s level-up moveset in place".
     moves: Option<Vec<MoveId>>,
+    /// `partyData[i].heldItem` for the two `F_TRAINER_PARTY_HELD_ITEM`
+    /// shapes, or [`ItemId::NONE`] for the two shapes whose struct has no
+    /// such field at all — upstream only reaches its
+    /// `SetMonData(MON_DATA_HELD_ITEM)` write in the former two cases
+    /// (`battle_main.c:2044`, `:2059`), and `CreateMon` leaves the item at
+    /// `ITEM_NONE` otherwise, so the two spellings agree.
+    held_item: ItemId,
 }
 
 /// Every member of `trainer`'s party, in `gTrainers[].party` order — the
-/// shape-dependent half of `CreateNPCTrainerParty`'s per-mon work.
-///
-/// # Errors
-///
-/// [`NpcTrainerBattleError::HeldItemParty`] for the two
-/// `F_TRAINER_PARTY_HELD_ITEM` shapes (see that variant).
-fn party_entries(
-    id: TrainerId,
-    trainer: &TrainerData,
-) -> Result<Vec<PartyEntry>, NpcTrainerBattleError> {
-    let entries = match trainer.party {
+/// shape-dependent half of `CreateNPCTrainerParty`'s per-mon work, all four
+/// `partyFlags` cases (issue #293; the two item-carrying shapes used to be
+/// refused here — see the module docs).
+fn party_entries(trainer: &TrainerData) -> Vec<PartyEntry> {
+    // `MOVE_NONE` pads the fixed array upstream; a real moveset is however
+    // many leading slots are filled.
+    fn fixed_moves(moves: [MoveId; 4]) -> Vec<MoveId> {
+        moves.into_iter().filter(|m| m.0 != 0).collect()
+    }
+    match trainer.party {
         TrainerParty::NoItemDefaultMoves(party) => party
             .iter()
             .map(|mon| PartyEntry {
@@ -247,6 +268,7 @@ fn party_entries(
                 level: mon.lvl,
                 iv: mon.iv,
                 moves: None,
+                held_item: ItemId::NONE,
             })
             .collect(),
         TrainerParty::NoItemCustomMoves(party) => party
@@ -255,16 +277,31 @@ fn party_entries(
                 species: mon.species,
                 level: mon.lvl,
                 iv: mon.iv,
-                // `MOVE_NONE` pads the fixed array upstream; a real moveset
-                // is however many leading slots are filled.
-                moves: Some(mon.moves.iter().copied().filter(|m| m.0 != 0).collect()),
+                moves: Some(fixed_moves(mon.moves)),
+                held_item: ItemId::NONE,
             })
             .collect(),
-        TrainerParty::ItemDefaultMoves(_) | TrainerParty::ItemCustomMoves(_) => {
-            return Err(NpcTrainerBattleError::HeldItemParty(id))
-        }
-    };
-    Ok(entries)
+        TrainerParty::ItemDefaultMoves(party) => party
+            .iter()
+            .map(|mon| PartyEntry {
+                species: mon.species,
+                level: mon.lvl,
+                iv: mon.iv,
+                moves: None,
+                held_item: mon.held_item,
+            })
+            .collect(),
+        TrainerParty::ItemCustomMoves(party) => party
+            .iter()
+            .map(|mon| PartyEntry {
+                species: mon.species,
+                level: mon.lvl,
+                iv: mon.iv,
+                moves: Some(fixed_moves(mon.moves)),
+                held_item: mon.held_item,
+            })
+            .collect(),
+    }
 }
 
 /// The personality `CreateNPCTrainerParty` seeds each of `trainer`'s party
@@ -278,11 +315,14 @@ fn party_entries(
 ///
 /// # Errors
 ///
-/// [`NpcTrainerBattleError::UnnamedCharacter`] or
-/// [`NpcTrainerBattleError::HeldItemParty`] — see each.
+/// [`NpcTrainerBattleError::UnnamedCharacter`] for a trainer or species name
+/// outside [`engine::text::char_to_byte`]'s table, or
+/// [`BattleError::UnknownSpecies`] wrapped in
+/// [`NpcTrainerBattleError::Battle`] for a party row naming a species with no
+/// `gSpeciesNames` entry — see each.
 pub fn trainer_party_personalities(id: TrainerId) -> Result<Vec<u32>, NpcTrainerBattleError> {
     let trainer = battle::trainer_data(id)?;
-    let entries = party_entries(id, trainer)?;
+    let entries = party_entries(trainer);
     let names = SpeciesNames::new();
     let base = personality_base(trainer);
 
@@ -339,7 +379,7 @@ pub fn start_npc_trainer_battle(
 ) -> Result<Battle, NpcTrainerBattleError> {
     let dex = Dex::new();
     let data = battle::trainer_data(trainer)?;
-    let entries = party_entries(trainer, data)?;
+    let entries = party_entries(data);
     let personalities = trainer_party_personalities(trainer)?;
 
     // Resolve each member's real moveset first (`GiveBoxMonInitialMoveset`
@@ -361,6 +401,7 @@ pub fn start_npc_trainer_battle(
             species: entry.species,
             level: entry.level,
             moves,
+            held_item: entry.held_item,
         })
         .collect();
     battle::ensure_trainer_party_startable(&dex, trainer, &specs)?;
@@ -374,6 +415,7 @@ pub fn start_npc_trainer_battle(
             battle::fixed_ivs(entry.iv),
             personality,
             moves,
+            entry.held_item,
             &mut SharedRng::new(rng),
         )?);
     }

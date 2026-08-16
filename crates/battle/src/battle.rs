@@ -732,6 +732,10 @@ impl Battle {
     ///   effects take `AI_CheckViability` branches that draw
     ///   ([`trainer_ai`]'s module docs), so admitting one would leave the
     ///   move executable but the RNG stream wrong.
+    /// * [`trainer::ensure_held_item_playable`] — can the engine *run* what
+    ///   this mon is holding? Nothing here does (issue #293), so any
+    ///   non-`ITEM_NONE` item is refused rather than silently inert for the
+    ///   whole fight.
     ///
     /// [`trainer_ai::ensure_supported_flags`] screens `gTrainers[].aiFlags`
     /// the same way, for the same reason.
@@ -782,6 +786,13 @@ impl Battle {
             for slot in mon.moves() {
                 trainer::ensure_move_playable(&dex, slot.move_id)?;
             }
+        }
+        // The held-item screen, last and separate for the same reason the
+        // pre-flight orders it last (issue #293): an item this crate carries
+        // but never runs is a mid-battle divergence, so it is refused at the
+        // edge -- see `trainer::ensure_held_item_playable`.
+        for mon in &party {
+            trainer::ensure_held_item_playable(mon.held_item())?;
         }
 
         let enemy = party.remove(0);

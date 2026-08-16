@@ -5,6 +5,7 @@
 //! here as [`BattleError::UnknownSpecies`] / [`BattleError::UnknownMove`],
 //! so `battle` callers depend only on this crate's error type.
 
+use assets::items::ItemId;
 use assets::trainers::{AiFlags, TrainerId};
 use assets::{MoveId, SpeciesId};
 use std::error::Error;
@@ -255,6 +256,30 @@ pub enum BattleError {
     /// [`crate::battle::Battle::new_trainer`] before any draw.
     UnsupportedAiFlags(AiFlags),
 
+    /// A party mon holds an item whose in-battle effect this crate does not
+    /// run (issue #293).
+    ///
+    /// [`crate::pokemon::BattlePokemon`] *represents* a held item
+    /// ([`crate::pokemon::BattlePokemon::held_item`], upstream
+    /// `MON_DATA_HELD_ITEM`, written by `CreateNPCTrainerParty` at
+    /// `pokeemerald/src/battle_main.c:2044`/`:2059`) but no item **acts**:
+    /// there is no `ItemBattleEffects`/`ITEM_EFFECT_*` path here, so an Oran
+    /// Berry that should restore 10 HP the moment its holder drops below half
+    /// would simply never fire. That is a silent behavioural divergence in
+    /// the middle of a fight rather than at its edge, so it is refused up
+    /// front instead — by
+    /// [`crate::battle::trainer::ensure_trainer_party_startable`]'s
+    /// pre-flight (no draws) and again by
+    /// [`crate::battle::Battle::new_trainer`].
+    ///
+    /// A party *shape* that can carry an item is **not** itself a refusal:
+    /// several `F_TRAINER_PARTY_HELD_ITEM` rows really do store
+    /// [`ItemId::NONE`], and those construct normally. Only a real item is
+    /// refused.
+    ///
+    /// Carries the offending `ITEM_*` id.
+    UnsupportedHeldItem(ItemId),
+
     /// [`crate::battle::Battle::new_trainer`] was handed an empty party.
     ///
     /// Unreachable upstream: `CreateNPCTrainerParty` returns
@@ -324,6 +349,11 @@ impl fmt::Display for BattleError {
                 f,
                 "trainer AI flags `{:#x}` include scripts this slice does not run",
                 flags.bits()
+            ),
+            Self::UnsupportedHeldItem(id) => write!(
+                f,
+                "held item `{}` has an in-battle effect this slice does not run",
+                id.0
             ),
             Self::EmptyTrainerParty(id) => {
                 write!(f, "trainer `{}` has an empty party", id.0)
