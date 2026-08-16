@@ -752,28 +752,28 @@ mod tests {
             (
                 "Daisy",
                 TrainerId(36),
-                // Shroomish's Absorb (drain) and Tackle are executable now;
-                // Stun Spore, `EFFECT_PARALYZE`, is not.
-                Verdict::Refused(Battle(BattleError::NonDamagingMove(assets::MoveId(78)))),
+                // Shroomish's Absorb (drain), Tackle and Stun Spore
+                // (`EFFECT_PARALYZE`) all execute; Leech Seed's
+                // end-of-turn drain does not.
+                Verdict::Refused(Battle(BattleError::NonDamagingMove(assets::MoveId(73)))),
             ),
             (
                 "Amy & Liv",
                 TrainerId(481),
-                // Plusle's Growl is fine; Thunder Wave shares Stun Spore's
-                // `EFFECT_PARALYZE`. Their cone is refused for being a
-                // *double battle* regardless (module docs item 5), which is
-                // a separate gate this row does not exercise.
-                Verdict::Refused(Battle(BattleError::NonDamagingMove(assets::MoveId(86)))),
+                // Plusle's Growl, Thunder Wave (`EFFECT_PARALYZE`) and
+                // Quick Attack all execute and all score under
+                // `AI_SCRIPT_CHECK_BAD_MOVE`; Helping Hand, a
+                // doubles-only move, does not. Their cone is refused for
+                // being a *double battle* regardless (module docs item 5),
+                // which is a separate gate this row does not exercise.
+                Verdict::Refused(Battle(BattleError::NonDamagingMove(assets::MoveId(270)))),
             ),
-            (
-                "Andrew",
-                TrainerId(336),
-                // Magikarp's Splash executes now; Tentacool's Poison Sting
-                // (`EFFECT_POISON_HIT`) needs a non-volatile status system.
-                Verdict::Refused(Battle(BattleError::UnsupportedMoveEffect(assets::MoveId(
-                    40,
-                )))),
-            ),
+            // Andrew's three-mon party is the first multi-mon one this
+            // engine can field: Magikarp's Splash, Tentacool's Poison Sting
+            // (`EFFECT_POISON_HIT`, poison and all) and Supersonic
+            // (`EFFECT_CONFUSE`), then a second Magikarp with Tackle. He
+            // leads with the level-5 Magikarp.
+            ("Andrew", TrainerId(336), Verdict::Constructs(129, 5)),
             (
                 "Miguel",
                 TrainerId(293),
@@ -809,13 +809,10 @@ mod tests {
                     205,
                 )))),
             ),
-            (
-                "Pete",
-                TrainerId(735),
-                Verdict::Refused(Battle(BattleError::UnsupportedMoveEffect(assets::MoveId(
-                    40,
-                )))),
-            ),
+            // Tentacool's Poison Sting, Supersonic and Constrict
+            // (`EFFECT_SPEED_DOWN_HIT`) -- the secondary-effect pair plus
+            // confusion.
+            ("Pete", TrainerId(735), Verdict::Constructs(72, 15)),
         ];
 
         let distinct: std::collections::HashSet<u16> =

@@ -240,6 +240,86 @@ pub enum BattleEvent {
         /// How many hits landed (`1..=5`).
         hits: u8,
     },
+    /// A poisoned battler took its end-of-turn damage —
+    /// `STRINGID_PKMNHURTBYPOISON`, `ENDTURN_POISON`
+    /// (`src/battle_util.c:1525`-`:1535`) via
+    /// `BattleScript_PoisonTurnDmg` (`data/battle_scripts_1.s:3736`).
+    ///
+    /// `damage` is `maxHP / 8` floored at `1`, capped at the HP the battler
+    /// had left, and is **already applied**. A faint it causes is reported
+    /// by the [`BattleEvent::Fainted`] that follows, with the same
+    /// experience award a move-caused faint gets — see
+    /// `Battle::residual_effects`.
+    HurtByPoison {
+        /// Whether it was the player's mon that took the damage.
+        by_player: bool,
+        /// HP lost.
+        damage: u32,
+    },
+    /// A confused battler hurt itself instead of moving —
+    /// `STRINGID_ITHURTCONFUSION`, `CANCELER_CONFUSED`'s self-hit branch
+    /// (`src/battle_util.c:2169`-`:2176`).
+    ///
+    /// A 40-power physical hit it takes from itself with no STAB and no
+    /// type chart. `damage` is already applied, and the move is cancelled:
+    /// **no PP is spent**, because `BattleScript_DoSelfConfusionDmg` has no
+    /// `ppreduce`.
+    HurtItselfInConfusion {
+        /// Whether it was the player's mon.
+        by_player: bool,
+        /// HP lost.
+        damage: u32,
+    },
+    /// A confused battler's `STATUS2_CONFUSION` counter reached `0` as it
+    /// went to move — `STRINGID_PKMNSNAPPEDOUTOFCONFUSION`,
+    /// `BattleScript_MoveUsedIsConfusedNoMore`
+    /// (`src/battle_util.c:2182`).
+    ///
+    /// The move then proceeds normally: this is not a cancellation, and it
+    /// costs no draw (the counter is decremented before the self-hit roll,
+    /// which a `0` result never reaches).
+    SnappedOutOfConfusion {
+        /// Whether it was the player's mon.
+        by_player: bool,
+    },
+    /// A paralysed battler could not move — `STRINGID_PKMNISPARALYZED`,
+    /// `CANCELER_PARALYZED`'s `Random() % 4 == 0`
+    /// (`src/battle_util.c:2189`-`:2196`).
+    ///
+    /// The move is cancelled and **no PP is spent**:
+    /// `BattleScript_MoveUsedIsParalyzed` (`data/battle_scripts_1.s:3773`)
+    /// has no `ppreduce` either.
+    FullyParalysed {
+        /// Whether it was the player's mon.
+        by_player: bool,
+    },
+    /// A move inflicted a non-volatile status on its target —
+    /// `seteffectprimary` for `EFFECT_PARALYZE`
+    /// ([`crate::primary_status`]), or a landed secondary chance for
+    /// `EFFECT_POISON_HIT` ([`crate::secondary`]).
+    ///
+    /// Already applied to the target. `by_player` names the mon that *used*
+    /// the move; the status lands on the other one, both effects being
+    /// foe-targeting.
+    StatusInflicted {
+        /// Whether the player's mon was the one using the move.
+        by_player: bool,
+        /// The move that was used.
+        move_id: MoveId,
+        /// The status the target now carries.
+        status: crate::status::Status1,
+    },
+    /// A move confused its target — `MOVE_EFFECT_CONFUSION`'s
+    /// `STATUS2_CONFUSION_TURN(((Random()) % 4) + 2)`
+    /// (`src/battle_script_commands.c:2541`).
+    Confused {
+        /// Whether the player's mon was the one using the move.
+        by_player: bool,
+        /// The move that was used.
+        move_id: MoveId,
+        /// How many turns of confusion the target drew (`2..=5`).
+        turns: u8,
+    },
     /// The trainer's active mon fainted and the next party member came out
     /// in its place — upstream's forced post-faint switch
     /// (`OpponentHandleChoosePokemon`,

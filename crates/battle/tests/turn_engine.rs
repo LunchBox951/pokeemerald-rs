@@ -16,6 +16,8 @@ mod move_resolution;
 mod move_selection;
 #[path = "turn_engine/stat_changes.rs"]
 mod stat_changes;
+#[path = "turn_engine/status_conditions.rs"]
+mod status_conditions;
 #[path = "turn_engine/trainer_battle.rs"]
 mod trainer_battle;
 #[path = "turn_engine/turn_order.rs"]

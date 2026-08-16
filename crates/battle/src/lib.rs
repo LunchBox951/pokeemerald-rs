@@ -118,8 +118,11 @@ pub mod hit;
 pub mod multi_hit;
 pub mod nature;
 pub mod pokemon;
+pub mod primary_status;
+pub mod secondary;
 pub mod stat_change;
 pub mod stat_stage;
+pub mod status;
 pub mod status_move;
 pub mod turn_order;
 pub mod volatile;
@@ -147,11 +150,14 @@ pub use pokemon::{
     BattlePokemon, Ivs, MoveSlot, StatStages, Stats, MAX_IV, MAX_LEVEL, MAX_MON_MOVES, MIN_LEVEL,
     MOVE_NONE, SPECIES_NONE,
 };
+pub use primary_status::{is_primary_status_effect, PrimaryStatusOutcome};
+pub use secondary::{is_secondary_effect, SecondaryEffect};
 pub use stat_change::{
     is_stat_change_effect, stat_change_for_effect, ChangedStat, StatChangeDirection,
     StatChangeEffect, StatChangeOutcome,
 };
 pub use stat_stage::StatStage;
+pub use status::Status1;
 pub use status_move::{is_status_move_effect, StatusMoveOutcome};
 pub use volatile::Volatiles;
 pub use wild::{

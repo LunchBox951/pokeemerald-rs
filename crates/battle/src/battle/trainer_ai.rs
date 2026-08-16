@@ -93,6 +93,7 @@ use crate::dex::Dex;
 use crate::error::BattleError;
 use crate::fixed_damage::EFFECT_SONICBOOM;
 use crate::pokemon::{BattlePokemon, MAX_MON_MOVES};
+use crate::primary_status::{EFFECT_CONFUSE, EFFECT_PARALYZE};
 use crate::stat_change::{
     stage_of, stat_change_for_effect, EFFECT_ATTACK_DOWN, EFFECT_DEFENSE_DOWN,
 };
@@ -159,7 +160,9 @@ enum MovePower {
 /// 2. **Effects with a dedicated handler this module reproduces**:
 ///    `EFFECT_DEFENSE_CURL` → `AI_CBM_DefenseUp` (`:186`),
 ///    `EFFECT_FOCUS_ENERGY` → `AI_CBM_FocusEnergy` (`:131`),
-///    `EFFECT_SONICBOOM` → `AI_CBM_HighRiskForDamage` (`:177`).
+///    `EFFECT_SONICBOOM` → `AI_CBM_HighRiskForDamage` (`:177`),
+///    `EFFECT_PARALYZE` → `AI_CBM_Paralyze` (`:149`),
+///    `EFFECT_CONFUSE` → `AI_CBM_Confuse` (`:132`).
 /// 3. **Effects with no `if_effect` row at all**, which therefore fall off
 ///    the end of the chain (`:214`) unchanged: [`EFFECT_HIT`],
 ///    `EFFECT_MULTI_HIT`, `EFFECT_ABSORB`, `EFFECT_POISON_HIT`,
@@ -179,6 +182,8 @@ pub(crate) fn is_check_bad_move_scoreable(effect: MoveEffect) -> bool {
         156 // EFFECT_DEFENSE_CURL  -> AI_CBM_DefenseUp
         | 47  // EFFECT_FOCUS_ENERGY -> AI_CBM_FocusEnergy
         | 130 // EFFECT_SONICBOOM    -> AI_CBM_HighRiskForDamage
+        | 67  // EFFECT_PARALYZE     -> AI_CBM_Paralyze
+        | 49  // EFFECT_CONFUSE      -> AI_CBM_Confuse
         // Group 3: no `if_effect` row, so the script ends unchanged.
         | 0   // EFFECT_HIT
         | 3   // EFFECT_ABSORB
@@ -700,6 +705,30 @@ fn run_check_bad_move(
         // STATUS2_FOCUS_ENERGY, Score_Minus10`.
         if enemy.volatiles().focus_energy {
             thinking.score(index, -10);
+        }
+        return Ok(());
+    }
+    if effect == EFFECT_PARALYZE {
+        // `AI_CBM_Paralyze` (`:397`-`:403`), in its own order: the x0 type
+        // check first, then Limber (an unmodelled ability), then
+        // `if_status AI_TARGET, STATUS1_ANY`, then Safeguard (an unmodelled
+        // side status). Two reachable `-10`s, and they can both fire --
+        // `Cmd_score` adds, so a Thunder Wave at an already-poisoned Ground
+        // type scores `-20`.
+        if is_no_effect(dex, move_id, enemy, player)? {
+            thinking.score(index, -10);
+        }
+        if player.status().is_any() {
+            thinking.score(index, -10);
+        }
+        return Ok(());
+    }
+    if effect == EFFECT_CONFUSE {
+        // `AI_CBM_Confuse` (`:386`-`:391`): `-5`, not `-10`, and keyed on
+        // `STATUS2_CONFUSION` rather than on `status1`. Own Tempo and
+        // Safeguard behind it are unmodelled.
+        if player.volatiles().is_confused() {
+            thinking.score(index, -5);
         }
         return Ok(());
     }

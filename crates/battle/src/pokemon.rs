@@ -32,6 +32,7 @@ use crate::dex::Dex;
 use crate::error::BattleError;
 use crate::nature::{Nature, Stat};
 use crate::stat_stage::StatStage;
+use crate::status::Status1;
 use crate::volatile::Volatiles;
 
 /// `MAX_MON_MOVES` (`pokeemerald/include/constants/global.h:82`): the most
@@ -279,6 +280,7 @@ pub struct BattlePokemon {
     moves: Vec<MoveSlot>,
     stages: StatStages,
     volatiles: Volatiles,
+    status: Status1,
 }
 
 impl BattlePokemon {
@@ -406,6 +408,7 @@ impl BattlePokemon {
             moves: slots,
             stages: StatStages::default(),
             volatiles: Volatiles::default(),
+            status: Status1::default(),
         })
     }
 
@@ -567,6 +570,26 @@ impl BattlePokemon {
     /// [`BattlePokemon::stages_mut`] rests on.
     pub const fn volatiles_mut(&mut self) -> &mut Volatiles {
         &mut self.volatiles
+    }
+
+    /// This mon's non-volatile status — `gBattleMons[].status1`, the one
+    /// condition store that survives leaving the field
+    /// ([`crate::status`]).
+    #[must_use]
+    pub const fn status(&self) -> Status1 {
+        self.status
+    }
+
+    /// Set the non-volatile status.
+    ///
+    /// Unguarded on purpose: whether a status *may* be applied is
+    /// [`crate::status::can_inflict`]'s question, asked by the pipeline that
+    /// inflicts it ([`crate::primary_status`], [`crate::secondary`]) at the
+    /// point upstream's `SetMoveEffect` asks it. Making this method
+    /// re-check would double the guard and, worse, silently disagree with
+    /// the message the caller already chose to emit.
+    pub const fn set_status(&mut self, status: Status1) {
+        self.status = status;
     }
 
     /// Whether this mon has fainted (`current_hp == 0`).
@@ -791,14 +814,28 @@ impl BattlePokemon {
         }
     }
 
-    /// This mon's effective Speed: [`Stats::speed`] scaled by the Speed
-    /// [`StatStage`] (`gStatStageRatios`-style `APPLY_STAT_MOD`, matching
-    /// [`crate::turn_order`]'s inputs). Weather/ability/item/paralysis speed
-    /// modifiers (`GetWhoStrikesFirst`, `pokeemerald/src/battle_main.c:4595`)
-    /// are not modelled this slice.
+    /// This mon's effective Speed as `GetWhoStrikesFirst` computes it
+    /// (`pokeemerald/src/battle_main.c:4624`-`:4651`), for the two terms
+    /// this crate models:
+    ///
+    /// 1. [`Stats::speed`] scaled by the Speed [`StatStage`]
+    ///    (`gStatStageRatios`-style `APPLY_STAT_MOD`, `:4624`-`:4626`);
+    /// 2. **then** quartered if paralysed (`:4650`-`:4651`,
+    ///    [`crate::status::paralysis_speed`]) — issue #293.
+    ///
+    /// The order is upstream's and both steps truncate, so folding them
+    /// would give a different number. The terms in between and after —
+    /// Swift Swim/Chlorophyll's weather doubling (`:4604`-`:4621`), the
+    /// Badge 03 `x110/100` (`:4644`), Macho Brace's halving (`:4648`), and
+    /// Quick Claw's `gRandomTurnNumber` comparison (`:4653`) — are all
+    /// ability/item/badge terms this crate does not model.
     #[must_use]
     pub const fn effective_speed(&self) -> u32 {
-        self.stages.speed.apply(self.stats.speed)
+        let scaled = self.stages.speed.apply(self.stats.speed);
+        match self.status {
+            Status1::Paralysed => crate::status::paralysis_speed(scaled),
+            Status1::Healthy | Status1::Poisoned => scaled,
+        }
     }
 
     /// Deduct one PP from move slot `index` — the deducting arm of

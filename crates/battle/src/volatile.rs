@@ -37,6 +37,17 @@
 //!   stat raise) and dropping it would make a later Rollout slice silently
 //!   half-powered. Unlike Focus Energy it is *not* in the switch-preserve
 //!   mask.
+//! - **`STATUS2_CONFUSION`** (the low three bits, `1 << 0 | 1 << 1 | 1 << 2`,
+//!   `:129`-`:130`) — a *counter*, not a flag: `SetMoveEffect`'s
+//!   `MOVE_EFFECT_CONFUSION` case stores
+//!   `STATUS2_CONFUSION_TURN(((Random()) % 4) + 2)`
+//!   (`src/battle_script_commands.c:2541`), i.e. 2..5 turns. Read by
+//!   `CANCELLER_CONFUSED` (`src/battle_util.c:2156`-`:2187`), which
+//!   decrements it *first* and then, only if any turns remain, rolls
+//!   `Random() & 1` for whether the battler hurts itself — see
+//!   [`Volatiles::tick_confusion`] and [`confusion_self_hit_roll`].
+//!   Like Focus Energy it is in `SwitchInClearSetData`'s preserve mask
+//!   (`src/battle_main.c:3175`).
 //! - **`STATUS3_CHARGED_UP`** (`1 << 9`, `:166`) plus
 //!   `gDisableStructs[].chargeTimer`, both set by `Cmd_setcharge` (`:9102`-
 //!   `:9104`). Read by `Cmd_damagecalc`: `if (charged && move type ==
@@ -66,6 +77,14 @@ pub struct Volatiles {
     /// `STATUS2_FOCUS_ENERGY`: this battler is "getting pumped", worth `+2`
     /// crit-chance stages ([`crate::critical::crit_stage`]).
     pub focus_energy: bool,
+    /// `STATUS2_CONFUSION`'s remaining turns (`0` when not confused).
+    ///
+    /// Set to `2..=5` by [`roll_confusion_turns`] and decremented by
+    /// [`Volatiles::tick_confusion`] at the top of each of this battler's
+    /// move attempts — **not** at end of turn, which is where a reader might
+    /// expect it: upstream decrements inside `CANCELLER_CONFUSED`, so a
+    /// battler that never gets to act never burns a confusion turn.
+    pub confusion_turns: u8,
     /// `STATUS2_DEFENSE_CURL`: this battler has used Defense Curl, which
     /// upstream's Rollout reads to double its power. Nothing reads it here
     /// yet — see the module docs.
@@ -91,6 +110,28 @@ impl Volatiles {
     #[must_use]
     pub const fn charged_up(self) -> bool {
         self.charge_timer > 0
+    }
+
+    /// Whether `STATUS2_CONFUSION` is set at all.
+    #[must_use]
+    pub const fn is_confused(self) -> bool {
+        self.confusion_turns > 0
+    }
+
+    /// `CANCELLER_CONFUSED`'s opening statement
+    /// (`src/battle_util.c:2159`): `status2 -= STATUS2_CONFUSION_TURN(1)`,
+    /// run **before** the self-hit roll and unconditionally on any confused
+    /// battler that is about to act.
+    ///
+    /// Returns `true` if the battler is still confused afterwards — the
+    /// `if (status2 & STATUS2_CONFUSION)` at `:2160` that gates the roll.
+    /// A `false` return is upstream's "snapped out of confusion", which
+    /// costs **no draw** and lets the move proceed.
+    pub const fn tick_confusion(&mut self) -> bool {
+        if self.confusion_turns > 0 {
+            self.confusion_turns -= 1;
+        }
+        self.confusion_turns > 0
     }
 
     /// `Cmd_setfocusenergy` (`src/battle_script_commands.c:7758`), reduced to
@@ -139,6 +180,56 @@ impl Volatiles {
     }
 }
 
+/// `SetMoveEffect`'s `MOVE_EFFECT_CONFUSION` duration
+/// (`src/battle_script_commands.c:2541`):
+/// `STATUS2_CONFUSION_TURN(((Random()) % 4) + 2)`, i.e. **2..=5** turns for
+/// one draw.
+///
+/// Written `% 4` rather than `& 3` because that is what the source says —
+/// the two agree for every `u16`, but the sibling cases at `:2481`
+/// (`MOVE_EFFECT_SLEEP`) and `:2573` (`MOVE_EFFECT_UPROAR`) genuinely use
+/// `& 3`, so keeping each spelling faithful is what makes the difference
+/// visible if one of them is ever changed upstream.
+#[must_use]
+pub fn roll_confusion_turns(rng: &mut impl crate::damage::BattleRng) -> u8 {
+    // `% 4` leaves 0..=3, so the sum is 2..=5 and the narrowing is exact.
+    #[allow(clippy::cast_possible_truncation)]
+    let turns = (rng.next_u16() % 4) as u8;
+    turns + 2
+}
+
+/// `CANCELLER_CONFUSED`'s self-hit roll (`src/battle_util.c:2162`):
+/// `if (Random() & 1)` — **odd means the move goes through**, even means the
+/// battler hurts itself instead.
+///
+/// Returns `true` for the self-hit (upstream's `else` at `:2169`). Only
+/// reached when [`Volatiles::tick_confusion`] left turns on the clock, so a
+/// battler whose confusion just expired makes no draw here.
+#[must_use]
+pub fn confusion_self_hit_roll(rng: &mut impl crate::damage::BattleRng) -> bool {
+    rng.next_u16() & 1 == 0
+}
+
+/// `CalculateBaseDamage(&attacker, &attacker, MOVE_POUND, 0, 40, 0, ...)` —
+/// the confusion self-hit's own damage call (`src/battle_util.c:2173`).
+///
+/// A **40-power physical hit the battler takes from itself**, and three
+/// things about it are easy to get wrong, all visible in that one call:
+///
+/// - `powerOverride` is `40`, so the move's own power is irrelevant (it is
+///   `MOVE_POUND` only to give `CalculateBaseDamage` a move id to read
+///   flags from);
+/// - `typeOverride` is `0` and no `typecalc` command ever runs on it, so
+///   there is **no STAB and no type chart** — not even an immunity;
+/// - attacker and defender are the same battler, so its own Attack and its
+///   own Defense (and their stages) are both inputs.
+///
+/// The `85..=100%` roll *does* apply: the script runs
+/// `adjustnormaldamage2` (`data/battle_scripts_1.s:3803`), which calls
+/// `ApplyRandomDmgMultiplier`. That draw is the caller's — see
+/// [`crate::battle::Battle`]'s canceller.
+pub const CONFUSION_SELF_HIT_POWER: u32 = 40;
+
 #[cfg(test)]
 mod tests {
     use super::Volatiles;
@@ -174,6 +265,63 @@ mod tests {
         // timer is a no-op rather than an underflow.
         v.tick_charge();
         assert_eq!(v.charge_timer, 0);
+    }
+
+    /// The confusion counter's own life: 2..=5 on infliction, one tick per
+    /// *move attempt*, and a final tick that snaps the battler out.
+    #[test]
+    fn confusion_counts_down_once_per_move_attempt() {
+        let mut v = Volatiles::default();
+        assert!(!v.is_confused());
+        v.confusion_turns = 2;
+        assert!(v.is_confused());
+
+        assert!(v.tick_confusion(), "2 -> 1, still confused");
+        assert_eq!(v.confusion_turns, 1);
+        assert!(!v.tick_confusion(), "1 -> 0, snapped out");
+        assert_eq!(v.confusion_turns, 0);
+        assert!(!v.is_confused());
+        // Upstream's guard: ticking an already-clear counter cannot
+        // underflow.
+        assert!(!v.tick_confusion());
+        assert_eq!(v.confusion_turns, 0);
+    }
+
+    #[test]
+    fn the_confusion_duration_roll_is_two_through_five_for_one_draw() {
+        use crate::damage::BattleRng;
+        struct One(u16, usize);
+        impl BattleRng for One {
+            fn next_u16(&mut self) -> u16 {
+                self.1 += 1;
+                self.0
+            }
+        }
+        for (draw, expected) in [(0u16, 2u8), (1, 3), (2, 4), (3, 5), (4, 2), (0xFFFF, 5)] {
+            let mut rng = One(draw, 0);
+            assert_eq!(
+                super::roll_confusion_turns(&mut rng),
+                expected,
+                "draw {draw}"
+            );
+            assert_eq!(rng.1, 1, "exactly one draw");
+        }
+    }
+
+    /// `Random() & 1`: **odd lets the move through**, even is the self-hit.
+    #[test]
+    fn the_confusion_self_hit_roll_fires_on_an_even_draw() {
+        use crate::damage::BattleRng;
+        struct One(u16);
+        impl BattleRng for One {
+            fn next_u16(&mut self) -> u16 {
+                self.0
+            }
+        }
+        assert!(super::confusion_self_hit_roll(&mut One(0)));
+        assert!(super::confusion_self_hit_roll(&mut One(2)));
+        assert!(!super::confusion_self_hit_roll(&mut One(1)));
+        assert!(!super::confusion_self_hit_roll(&mut One(3)));
     }
 
     #[test]

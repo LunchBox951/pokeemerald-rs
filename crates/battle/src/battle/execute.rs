@@ -71,6 +71,10 @@ impl Battle {
             self.execute_fixed_damage_move(attacker_is_player, move_id, rng, events)
         } else if crate::multi_hit::is_multi_hit_effect(effect) {
             self.execute_multi_hit_move(attacker_is_player, move_id, rng, events)
+        } else if crate::primary_status::is_primary_status_effect(effect) {
+            self.execute_primary_status_move(attacker_is_player, move_id, rng, events)
+        } else if crate::secondary::is_secondary_effect(effect) {
+            self.execute_secondary_hit_move(attacker_is_player, move_id, rng, events)
         } else {
             self.execute_hit_move(attacker_is_player, move_id, rng, events)
         }
@@ -317,9 +321,171 @@ impl Battle {
         self.settle_faint(attacker_is_player, events)
     }
 
+    /// The primary-status half (issue #293) —
+    /// [`crate::primary_status::resolve_primary_status_move`]: Thunder
+    /// Wave/Stun Spore's `EFFECT_PARALYZE` and Supersonic's
+    /// `EFFECT_CONFUSE`, whose whole effect is a condition on the target.
+    fn execute_primary_status_move(
+        &mut self,
+        attacker_is_player: bool,
+        move_id: MoveId,
+        rng: &mut impl BattleRng,
+        events: &mut Vec<BattleEvent>,
+    ) -> Result<(), BattleError> {
+        let outcome = {
+            let (attacker, defender) = self.battlers(attacker_is_player);
+            crate::primary_status::resolve_primary_status_move(
+                &self.dex, move_id, attacker, defender, rng,
+            )?
+        };
+        let by_player = attacker_is_player;
+        match outcome {
+            crate::primary_status::PrimaryStatusOutcome::Miss => {
+                events.push(BattleEvent::Missed { by_player, move_id });
+            }
+            crate::primary_status::PrimaryStatusOutcome::Failed => {
+                events.push(BattleEvent::MoveFailed { by_player, move_id });
+            }
+            crate::primary_status::PrimaryStatusOutcome::Paralysed => {
+                let status = crate::status::Status1::Paralysed;
+                self.battler_mut(!attacker_is_player).set_status(status);
+                events.push(BattleEvent::StatusInflicted {
+                    by_player,
+                    move_id,
+                    status,
+                });
+            }
+            crate::primary_status::PrimaryStatusOutcome::Confused(turns) => {
+                self.battler_mut(!attacker_is_player)
+                    .volatiles_mut()
+                    .confusion_turns = turns;
+                events.push(BattleEvent::Confused {
+                    by_player,
+                    move_id,
+                    turns,
+                });
+            }
+        }
+        Ok(())
+    }
+
+    /// The secondary-effect-on-hit half (issue #293) — the
+    /// `setmoveeffect X; goto BattleScript_EffectHit` trampolines
+    /// ([`crate::secondary`]): Poison Sting's `EFFECT_POISON_HIT` and
+    /// Constrict's `EFFECT_SPEED_DOWN_HIT`.
+    ///
+    /// The damage half is [`crate::hit`]'s, step for step and draw for
+    /// draw. What differs is that step 7's `Random() % 100 <
+    /// percentChance` is no longer discarded: `MOVE_EFFECT_BYTE` holds a
+    /// real byte, so a passing roll applies the secondary — unless the hit
+    /// was type-immune, which sets `MOVE_RESULT_NO_EFFECT` and fails the
+    /// `&&` chain's third operand (`battle_script_commands.c:2925`).
+    ///
+    /// The draw count is therefore **identical** to an ordinary move's;
+    /// only its consequences change.
+    fn execute_secondary_hit_move(
+        &mut self,
+        attacker_is_player: bool,
+        move_id: MoveId,
+        rng: &mut impl BattleRng,
+        events: &mut Vec<BattleEvent>,
+    ) -> Result<(), BattleError> {
+        crate::secondary::ensure_resolvable(&self.dex, move_id)?;
+        let mv = *self.dex.move_data(move_id)?;
+
+        let landed = {
+            let (attacker, defender) = self.battlers(attacker_is_player);
+            crate::hit::accuracy_roll(&self.dex, move_id, attacker, defender, rng)?
+        };
+        if !landed {
+            events.push(BattleEvent::Missed {
+                by_player: attacker_is_player,
+                move_id,
+            });
+            return Ok(());
+        }
+        let outcome = {
+            let (attacker, defender) = self.battlers(attacker_is_player);
+            crate::hit::damage_core(
+                &self.dex,
+                move_id,
+                attacker,
+                defender,
+                self.is_first_battle(),
+                rng,
+            )?
+        };
+        let immune = matches!(outcome, HitOutcome::NoEffect);
+        self.apply_damage_outcome(attacker_is_player, move_id, outcome, events);
+
+        // `Cmd_seteffectwithchance`'s leading operand: always drawn, even
+        // when the immunity below will discard the result.
+        let rolled = crate::secondary::secondary_chance_roll(mv.secondary_effect_chance, rng);
+        if rolled && !immune {
+            self.apply_secondary_effect(attacker_is_player, move_id, mv.effect, events);
+        }
+        self.settle_faint(attacker_is_player, events)
+    }
+
+    /// `SetMoveEffect`'s work for a landed secondary, which costs **no
+    /// further draw** for either of the two modelled bytes (see
+    /// [`crate::secondary`]'s module docs).
+    ///
+    /// Both target the foe, and both fail silently when their own guard
+    /// says so — an already-statused or Poison/Steel target takes no poison
+    /// ([`crate::status::can_inflict`]), and a target already at
+    /// [`crate::StatStage::MIN`] Speed loses no further stage. Upstream
+    /// prints a different string in each case; this crate emits an event
+    /// only when something actually changed.
+    fn apply_secondary_effect(
+        &mut self,
+        attacker_is_player: bool,
+        move_id: MoveId,
+        effect: assets::MoveEffect,
+        events: &mut Vec<BattleEvent>,
+    ) {
+        let Some(secondary) = crate::secondary::secondary_for_effect(effect) else {
+            return;
+        };
+        let target_is_player = !attacker_is_player;
+
+        if let Some(status) = secondary.status() {
+            if crate::status::can_inflict(self.battler(target_is_player), status) {
+                self.battler_mut(target_is_player).set_status(status);
+                events.push(BattleEvent::StatusInflicted {
+                    by_player: attacker_is_player,
+                    move_id,
+                    status,
+                });
+            }
+            return;
+        }
+        if let Some(change) = secondary.stat_change() {
+            let current = crate::stat_change::stage_of(self.battler(target_is_player), change.stat);
+            if current == change.cap() {
+                return;
+            }
+            let new_stage = current.saturating_add(change.delta());
+            crate::stat_change::set_stage(
+                self.battler_mut(target_is_player),
+                change.stat,
+                new_stage,
+            );
+            events.push(BattleEvent::StatFell {
+                by_player: attacker_is_player,
+                move_id,
+                stat: change.stat,
+                new_stage,
+            });
+        }
+    }
+
     /// The attacker/defender pair for a move used by whichever side
     /// `attacker_is_player` names.
-    const fn battlers(&self, attacker_is_player: bool) -> (&BattlePokemon, &BattlePokemon) {
+    pub(super) const fn battlers(
+        &self,
+        attacker_is_player: bool,
+    ) -> (&BattlePokemon, &BattlePokemon) {
         if attacker_is_player {
             (&self.player, &self.enemy)
         } else {
@@ -328,7 +494,7 @@ impl Battle {
     }
 
     /// One side's battler.
-    const fn battler(&self, is_player: bool) -> &BattlePokemon {
+    pub(super) const fn battler(&self, is_player: bool) -> &BattlePokemon {
         if is_player {
             &self.player
         } else {
@@ -337,7 +503,7 @@ impl Battle {
     }
 
     /// One side's battler, mutably.
-    const fn battler_mut(&mut self, is_player: bool) -> &mut BattlePokemon {
+    pub(super) const fn battler_mut(&mut self, is_player: bool) -> &mut BattlePokemon {
         if is_player {
             &mut self.player
         } else {
@@ -399,7 +565,7 @@ impl Battle {
     ///
     /// Shared by all four damaging pipelines for the same reason
     /// [`Self::apply_damage_outcome`] is.
-    fn settle_faint(
+    pub(super) fn settle_faint(
         &mut self,
         attacker_is_player: bool,
         events: &mut Vec<BattleEvent>,

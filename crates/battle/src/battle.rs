@@ -209,9 +209,9 @@
 //! switch, but only when forced (see `BATTLE_TYPE_TRAINER` above).
 
 use assets::trainers::TrainerId;
-use assets::MoveId;
+use assets::{MoveId, Type};
 
-use crate::damage::{BattleRng, STRUGGLE};
+use crate::damage::{BattleRng, DamageInput, MoveCategory, Weather, STRUGGLE};
 use crate::dex::Dex;
 use crate::error::BattleError;
 use crate::escape::try_run_from_battle;
@@ -298,14 +298,16 @@ pub(crate) fn ensure_executable(dex: &Dex, move_id: MoveId) -> Result<(), Battle
     match crate::hit::ensure_resolvable(dex, move_id) {
         Ok(()) => Ok(()),
         Err(hit_error) => {
-            // The five sibling pipelines, in no particular order: a move
+            // The seven sibling pipelines, in no particular order: a move
             // belongs to exactly one of them (each keys on a disjoint set of
             // `EFFECT_*` ids), so the first `Ok` is the only `Ok`.
             let accepted = stat_change::ensure_resolvable(dex, move_id).is_ok()
                 || crate::status_move::ensure_resolvable(dex, move_id).is_ok()
                 || crate::drain::ensure_resolvable(dex, move_id).is_ok()
                 || crate::fixed_damage::ensure_resolvable(dex, move_id).is_ok()
-                || crate::multi_hit::ensure_resolvable(dex, move_id).is_ok();
+                || crate::multi_hit::ensure_resolvable(dex, move_id).is_ok()
+                || crate::primary_status::ensure_resolvable(dex, move_id).is_ok()
+                || crate::secondary::ensure_resolvable(dex, move_id).is_ok();
             if accepted {
                 Ok(())
             } else {
@@ -853,7 +855,11 @@ impl Battle {
             // above survives a failure here -- `take_turn` returns it either
             // way.
             self.enemy_acts(enemy_action, rng, events)?;
-            self.finish_turn(events);
+            // A run action is `turnOrderId = 5`, reordered to the front of
+            // `gBattlerByTurnOrder` (`battle_main.c:4784`-`:4797`), so the
+            // player is battler 0 for the end-of-turn walk even though the
+            // run itself failed.
+            self.finish_turn(events, true);
             return Ok(());
         };
 
@@ -904,7 +910,7 @@ impl Battle {
                 }
             }
         }
-        self.finish_turn(events);
+        self.finish_turn(events, matches!(order, Order::AttackerFirst));
         Ok(())
     }
 
@@ -929,34 +935,76 @@ impl Battle {
     /// The `gBattleOutcome == 0` guard is real and reproduced: a battle that
     /// already ended this turn skips the residuals entirely and goes
     /// straight to the fainted-mon pass.
-    fn finish_turn(&mut self, events: &mut Vec<BattleEvent>) {
+    fn finish_turn(&mut self, events: &mut Vec<BattleEvent>, player_first: bool) {
         if self.outcome.is_none() {
-            self.residual_effects();
+            self.residual_effects(events, player_first);
         }
         self.end_of_turn(events);
     }
 
-    /// `DoBattlerEndTurnEffects` (`src/battle_util.c:1464`), reduced to the
-    /// one `ENDTURN_*` case this slice models: `ENDTURN_CHARGE` (`:1743`-
-    /// `:1745`), which decrements each battler's
-    /// [`crate::volatile::Volatiles::charge_timer`] and clears
-    /// `STATUS3_CHARGED_UP` when it reaches `0`.
+    /// `DoBattlerEndTurnEffects` (`src/battle_util.c:1464`-`:1783`), reduced
+    /// to the two `ENDTURN_*` cases this slice models.
     ///
     /// Upstream walks the battlers in `gBattlerByTurnOrder` order (`:1471`)
-    /// and runs the whole `ENDTURN_*` chain per battler. Order is
-    /// unobservable for this one case — a charge timer is per-battler and
-    /// nothing else reads it during the walk — and the case draws nothing,
-    /// so both battlers are ticked here without re-deriving the turn order.
+    /// and runs the **whole** `ENDTURN_*` chain for one battler before
+    /// moving to the next, which is what `player_first` reproduces: with
+    /// both sides poisoned and both about to faint, who faints first decides
+    /// the outcome, so the order is observable `(behavioral-fidelity)`.
+    /// Within a battler, the two modelled cases run in enum order:
+    ///
+    /// 1. **`ENDTURN_POISON`** (`:1525`-`:1535`): `maxHP / 8`, floored at
+    ///    `1` ([`crate::status::poison_turn_damage`]), applied to any
+    ///    [`crate::status::Status1::Poisoned`] battler with HP left. Draws
+    ///    nothing. A battler this kills is settled immediately, exp
+    ///    included — `HandleFaintedMonActions` runs `BattleScript_GiveExp`
+    ///    for *any* battler at `0` HP that has not yet given it (`:1918`-
+    ///    `:1922`), not only for one a move knocked out.
+    /// 2. **`ENDTURN_CHARGE`** (`:1743`-`:1745`): decrement the charge
+    ///    timer, clearing `STATUS3_CHARGED_UP` at `0`
+    ///    ([`crate::volatile::Volatiles::tick_charge`]). Draws nothing.
+    ///
+    /// The walk stops early once the battle has an outcome, reproducing
+    /// `DoBattlerEndTurnEffects` returning `TRUE` on an effect and
+    /// `BattleTurnPassed`'s `gBattleOutcome == 0` guard refusing to re-enter
+    /// it.
+    ///
     /// Every other `ENDTURN_*` case (Ingrain, abilities, items, Leech Seed,
-    /// poison/toxic/burn damage, Nightmare, Curse, Wrap, Uproar, Thrash,
-    /// Disable, Encore, Lock-On, Taunt, Yawn) has no state here to tick;
-    /// the two that *do* draw upstream (`ENDTURN_YAWN`'s sleep-turn roll at
-    /// `:1762` and `ENDTURN_THRASH`'s confusion roll at `:1687`) are
-    /// unreachable for the same reason, so this method's draw count is zero
-    /// `(behavioral-fidelity)`.
-    fn residual_effects(&mut self) {
-        self.player.volatiles_mut().tick_charge();
-        self.enemy.volatiles_mut().tick_charge();
+    /// toxic, burn, Nightmare, Curse, Wrap, Uproar, Thrash, Disable, Encore,
+    /// Lock-On, Taunt, Yawn) has no state here to tick; the two that *do*
+    /// draw upstream — `ENDTURN_YAWN`'s sleep-turn roll (`:1762`) and
+    /// `ENDTURN_THRASH`'s confusion roll (`:1687`) — are unreachable for the
+    /// same reason, so this method's draw count is **zero**.
+    fn residual_effects(&mut self, events: &mut Vec<BattleEvent>, player_first: bool) {
+        // `player_first` is `gBattlerByTurnOrder[0] == the player`.
+        let order = if player_first {
+            [true, false]
+        } else {
+            [false, true]
+        };
+        for is_player in order {
+            if self.outcome.is_some() {
+                return;
+            }
+            let mon = self.battler(is_player);
+            if matches!(mon.status(), crate::status::Status1::Poisoned) && !mon.is_fainted() {
+                let damage = crate::status::poison_turn_damage(mon.stats().max_hp);
+                let dealt = damage.min(mon.current_hp());
+                self.battler_mut(is_player).apply_damage(dealt);
+                events.push(BattleEvent::HurtByPoison {
+                    by_player: is_player,
+                    damage: dealt,
+                });
+                if self.battler(is_player).is_fainted() {
+                    // The *other* side is the notional attacker, which is
+                    // what makes `settle_faint` award the player exp for a
+                    // poisoned opponent and end the battle for a poisoned
+                    // player. It cannot fail: the only fallible step is the
+                    // species/base-exp lookup for a mon already in play.
+                    let _ = self.settle_faint(!is_player, events);
+                }
+            }
+            self.battler_mut(is_player).volatiles_mut().tick_charge();
+        }
     }
 
     /// `HandleFaintedMonActions` (`battle_util.c:1894`), reduced to the one
@@ -1029,6 +1077,12 @@ impl Battle {
         rng: &mut impl BattleRng,
         events: &mut Vec<BattleEvent>,
     ) -> Result<(), BattleError> {
+        // `AtkCanceler_UnableToUseMove` runs at `Cmd_attackcanceler:930`,
+        // **before** the no-PP test at `:934` and long before `ppreduce`,
+        // so a fully-paralysed or self-hitting battler keeps its PP.
+        if self.run_move_cancellers(is_player, events, rng) {
+            return Ok(());
+        }
         if is_player {
             self.player.deduct_pp(slot)?;
         } else if self.enemy.moves()[slot].pp == 0 {
@@ -1041,6 +1095,119 @@ impl Battle {
             self.enemy.deduct_pp(slot)?;
         }
         self.execute_move(is_player, move_id, rng, events)
+    }
+
+    /// `AtkCanceler_UnableToUseMove` (`src/battle_util.c:2002`-`:2277`),
+    /// reduced to the two `CANCELER_*` cases this slice can reach, **in
+    /// upstream's order**: `CANCELER_CONFUSED` (`:2156`) then
+    /// `CANCELER_PARALYZED` (`:2188`).
+    ///
+    /// Returns `true` when the move is cancelled, in which case the caller
+    /// must **not** deduct PP: neither cancelling script contains a
+    /// `ppreduce` (`BattleScript_MoveUsedIsParalyzed`,
+    /// `data/battle_scripts_1.s:3773`-`:3778`;
+    /// `BattleScript_MoveUsedIsConfused`, `:3796`-`:3815`).
+    ///
+    /// # RNG draws
+    ///
+    /// **Zero for a battler with neither condition**, which is what keeps
+    /// every pre-issue-#293 battle's stream byte-identical. Otherwise:
+    ///
+    /// | state | draws | which |
+    /// |---|---|---|
+    /// | confusion expiring this turn | 0 | the counter is decremented first, and a `0` result skips the roll |
+    /// | confused, move goes through | 1 | `Random() & 1`, odd |
+    /// | confused, self-hit | 2 | that roll, then `adjustnormaldamage2`'s `85..=100%` |
+    /// | paralysed | +1 | `Random() % 4`, and only if actually paralysed |
+    ///
+    /// The two stack: a confused *and* paralysed battler whose confusion
+    /// lets the move through still faces the paralysis roll.
+    ///
+    /// The other twelve `CANCELER_*` cases are sleep, freeze, Truant,
+    /// recharge, flinch, Disable, Taunt, Imprison, infatuation, Bide and
+    /// thaw — none of which this crate can produce, and three of which draw
+    /// (`:2062`, `:2204`), so a future slice adding any of them must slot it
+    /// into this same order.
+    fn run_move_cancellers(
+        &mut self,
+        is_player: bool,
+        events: &mut Vec<BattleEvent>,
+        rng: &mut impl BattleRng,
+    ) -> bool {
+        if self.battler(is_player).volatiles().is_confused() {
+            // `status2 -= STATUS2_CONFUSION_TURN(1)` happens first and
+            // unconditionally (`:2159`), so the roll below is only reached
+            // while turns remain.
+            let still_confused = self.battler_mut(is_player).volatiles_mut().tick_confusion();
+            if !still_confused {
+                events.push(BattleEvent::SnappedOutOfConfusion {
+                    by_player: is_player,
+                });
+            } else if crate::volatile::confusion_self_hit_roll(rng) {
+                self.hurt_itself_in_confusion(is_player, events, rng);
+                return true;
+            }
+        }
+        if crate::status::full_paralysis_roll(self.battler(is_player).status(), rng) {
+            events.push(BattleEvent::FullyParalysed {
+                by_player: is_player,
+            });
+            return true;
+        }
+        false
+    }
+
+    /// `CANCELER_CONFUSED`'s self-hit branch (`src/battle_util.c:2169`-
+    /// `:2176`) and the script it jumps to
+    /// (`BattleScript_DoSelfConfusionDmg`, `data/battle_scripts_1.s:3801`).
+    ///
+    /// `CalculateBaseDamage(&self, &self, MOVE_POUND, 0, 40, 0, ...)`: a
+    /// 40-power **physical** hit the battler takes from itself, using its
+    /// own Attack against its own Defense (stages included), with **no
+    /// STAB and no type chart** — the script runs no `typecalc`, so not even
+    /// a type immunity applies. `adjustnormaldamage2` (`:3803`) then spends
+    /// the ordinary `85..=100%` roll, which is this method's one draw.
+    ///
+    /// A battler that knocks itself out is settled through the same
+    /// [`Self::settle_faint`] a move would use, with the *other* side as the
+    /// notional attacker — so a confused wild mon that finishes itself off
+    /// still awards the player its experience, exactly as
+    /// `HandleFaintedMonActions`' `BattleScript_GiveExp` pass does.
+    fn hurt_itself_in_confusion(
+        &mut self,
+        is_player: bool,
+        events: &mut Vec<BattleEvent>,
+        rng: &mut impl BattleRng,
+    ) {
+        let damage = {
+            let mon = self.battler(is_player);
+            let (attack_stat, attack_stage) = mon.attacking_stat(MoveCategory::Physical);
+            let (defense_stat, defense_stage) = mon.defending_stat(MoveCategory::Physical);
+            crate::damage::base_damage(&DamageInput {
+                attacker_level: mon.level(),
+                power: crate::volatile::CONFUSION_SELF_HIT_POWER,
+                move_type: Type::Normal,
+                attack_stat,
+                attack_stage,
+                defense_stat,
+                defense_stage,
+                attacker_burned: false,
+                reflect: false,
+                light_screen: false,
+                weather: Weather::None,
+                is_solar_beam: false,
+            })
+        };
+        let damage = crate::damage::apply_damage_roll(damage, rng);
+        let dealt = damage.min(self.battler(is_player).current_hp());
+        self.battler_mut(is_player).apply_damage(dealt);
+        events.push(BattleEvent::HurtItselfInConfusion {
+            by_player: is_player,
+            damage: dealt,
+        });
+        if self.battler(is_player).is_fainted() {
+            let _ = self.settle_faint(!is_player, events);
+        }
     }
 
     /// The wild opponent's whole action, whichever of [`EnemyAction`]'s
