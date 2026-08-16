@@ -17,10 +17,11 @@ the authority.
   channels on the release ladder (`dev → unstable → stable → main`) and are
   player-facing toward the top `(gated-by-default)`. See
   [`RELEASE.md`](RELEASE.md).
-- Work the project toward v1. Open a roadmap issue or pick one up, and ladder it
-  to an acceptance ID (`F-1`, `S-1`, `I-4`, …) in
-  [`docs/acceptance/v1.md`](docs/acceptance/v1.md). PRs should name the acceptance
-  ID they advance.
+- Work the project toward v1 — the complete **single-player** game, beginning
+  through optional and postgame content, as defined in
+  [`docs/acceptance/v1.md`](docs/acceptance/v1.md). Open a roadmap issue or pick
+  one up, and ladder it to an acceptance ID (`F-1`, `S-1`, `C-3`, …) there. PRs
+  should name the acceptance ID they advance.
 
 ### Milestones
 
@@ -35,6 +36,8 @@ definition of done.
   description).
 - Consciously deferred work goes in **M8 with a recorded reason** — deferral is
   a decision, not an absence. An issue closed as not-planned gets no milestone.
+  Deferring is not excluding: single-player behaviour parked in M8 is still v1
+  scope; only recorded multiplayer-only exclusions leave v1.
 - A milestone **closes only when its acceptance IDs are all ☑ or a recorded ⊘**
   in `docs/acceptance/v1.md` — the issue bar can hit 100% while criteria are
   still in progress; the markers gate closure, not the count.

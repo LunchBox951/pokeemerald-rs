@@ -8,9 +8,11 @@ not its internal structure `(behavioral-fidelity)`.
 
 > **Status: pre-alpha.** The Cargo workspace is scaffolded and its crates build,
 > lint, and test clean in CI, but no subsystem is complete and the binary
-> doesn't yet play through a battle. See
-> [`docs/acceptance/v1.md`](docs/acceptance/v1.md) for exactly what "v1" means
-> and how far along we are.
+> doesn't yet play through a battle. `v1.0.0.0` means the game is fully playable
+> as a **single-player** game, beginning through optional and postgame content;
+> pre-1.0 versions mark progress toward that. See
+> [`docs/acceptance/v1.md`](docs/acceptance/v1.md) for the binding definition,
+> the per-criterion status, and how far along we are.
 
 ## How this project is built
 
@@ -40,7 +42,11 @@ description is a self-contained briefing on that area's scope:
 | [M5 · v1: Battle](../../milestone/5) | battle state machine, moves, AI, animations, UI |
 | [M6 · v1: Integration & E2E](../../milestone/6) | wiring it into one binary + end-to-end suites |
 | [M7 · v1: Release & Signoff](../../milestone/7) | packaging, ledger gate, operator signoff |
-| [M8 · Post-v1 (deferred)](../../milestone/8) | consciously deferred work, with reasons |
+| [M8 · Post-v1 (deferred)](../../milestone/8) | deferred work and documented exclusions, with reasons |
+
+Deferring is not excluding: single-player behaviour pushed to a later milestone
+is still v1 scope. Only multiplayer-only behaviour leaves v1, and only with a
+recorded reason.
 
 The authoritative per-criterion status lives in
 [`docs/acceptance/v1.md`](docs/acceptance/v1.md); a kanban view is on the
