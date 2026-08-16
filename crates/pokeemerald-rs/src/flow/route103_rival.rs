@@ -14,9 +14,11 @@
 //! this module's own scripted rival, so it moved to the shared
 //! [`crate::flow::npc_trainer_battle`] `(oop-boundaries)`: this module now
 //! re-exports [`start_route103_rival_battle`]/[`advance_route103_rival_battle`]/
-//! [`trainer_party_personalities`]/[`RivalBattleError`] as thin,
-//! Route-103-flavoured names over that module's real definitions, so nothing
-//! about this module's own public API or its existing tests had to change.
+//! [`RivalBattleError`] as thin, Route-103-flavoured names over that
+//! module's real definitions -- `trainer_party_personalities` moved
+//! outright with no wrapper here ([`RivalBattleError`]'s own doc comment
+//! records that choice), so its one test caller now imports it from
+//! `npc_trainer_battle` directly; everything else kept its public name.
 //! See [`crate::flow::npc_trainer_battle`]'s own module docs for
 //! `CreateNPCTrainerParty`'s odd personality seed, the RNG stream, and the
 //! held-item-party fail-closed gap.
