@@ -123,6 +123,7 @@ mod avatar;
 pub(crate) mod dialog;
 mod npc;
 pub(crate) mod npc_scripts;
+pub(crate) mod oldale_town_npc_reposition;
 mod sprites;
 mod tileset_anims;
 mod viewport;
@@ -512,9 +513,16 @@ impl OverworldScene {
     /// `events` is this room's own map's object/warp/coord/bg events (issue
     /// #161: needed here, not just at [`Self::runtime`] time, so the NPC
     /// sprites [`Self::compose`] can draw are decoded once up front rather
-    /// than every frame) -- typically a `'static`
+    /// than every frame) -- typically an
     /// [`assets::MapEventsTable::resolve`] entry, matching `layout`'s own
-    /// map (see [`load_default_room`]/[`load_room`]).
+    /// map (see [`load_default_room`]/[`load_room`]). Only borrowed for
+    /// this call (issue #281: [`load_room`] passes a locally patched, non-
+    /// `'static` value for Oldale Town -- see
+    /// [`oldale_town_npc_reposition::resolve_map_events`]) -- everything
+    /// this constructor keeps past it is copied out of `events.object_events`
+    /// itself, which is independently `'static`
+    /// ([`sprites::SceneSprites`]'s own `object_events` field), not out of
+    /// this reference.
     ///
     /// `event_data` is this room's own current flags/vars, needed at decode
     /// time only for [`npc`]'s own `OBJ_EVENT_GFX_VAR_0` exception (issue
@@ -543,7 +551,7 @@ impl OverworldScene {
         header: &assets::MapHeader,
         layout: &MapLayout,
         player: PlayerCharacter,
-        events: &'static assets::MapEvents,
+        events: &assets::MapEvents,
         event_data: &EventData,
     ) -> Result<Self, OverworldSceneError> {
         let primary_name = resolve_tileset_pack_name(layout.primary_tileset)?;
@@ -911,6 +919,13 @@ pub fn load_default_room(event_data: &EventData) -> Result<OverworldScene, Overw
 /// not the departed map's, so Route 103's rival object event resolves
 /// correctly the instant its room decodes.
 ///
+/// Resolves `map_id`'s events through
+/// [`oldale_town_npc_reposition::resolve_map_events`] (issue #281) rather
+/// than `assets::MapEventsTable::resolve` directly, so Oldale Town's
+/// footprints man and mart employee decode already standing where
+/// `OldaleTown_OnTransition` unconditionally puts them, not their bare
+/// map.json positions -- a no-op for every other map.
+///
 /// # Errors
 ///
 /// [`OverworldSceneError::Pack`] with [`OverworldSceneError::is_pack_missing`]
@@ -927,8 +942,8 @@ pub fn load_room(
     let pack = AssetPack::load_default()?;
     let header = assets::MapHeaderTable::new().header(map_id)?;
     let layout = assets::LayoutTable::new().layout(header.layout)?;
-    let events = MapEventsTable::new().resolve(map_id)?;
-    OverworldScene::from_pack(&pack, header, layout, player, events, event_data)
+    let events = oldale_town_npc_reposition::resolve_map_events(map_id)?;
+    OverworldScene::from_pack(&pack, header, layout, player, &events, event_data)
 }
 
 /// Translate a [`MapLayout`]'s `gTileset_*` symbol into the normalized pack

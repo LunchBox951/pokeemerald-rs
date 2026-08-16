@@ -85,7 +85,7 @@ impl SceneSprites {
     pub(super) fn from_pack(
         pack: &AssetPack,
         player: PlayerCharacter,
-        events: &'static assets::MapEvents,
+        events: &assets::MapEvents,
         event_data: &EventData,
     ) -> Result<Self, OverworldSceneError> {
         let sprite_image = pack.sprite(player.sprite_path())?;
