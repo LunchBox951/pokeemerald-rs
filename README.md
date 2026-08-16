@@ -41,7 +41,7 @@ description is a self-contained briefing on that area's scope:
 | [M5 · v1: Battle](../../milestone/5) | battle state machine, moves, AI, animations, UI |
 | [M6 · v1: Integration & E2E](../../milestone/6) | wiring it into one binary + end-to-end suites |
 | [M7 · v1: Release & Signoff](../../milestone/7) | packaging, ledger gate, operator signoff |
-| [M8 · Post-v1 (deferred)](../../milestone/8) | deferred work and documented exclusions, with reasons |
+| [M8](../../milestone/8) | deferred work and documented exclusions, with reasons — any "post-v1" wording still in the milestone's own title predates the scope clarification below and does not narrow it: deferred single-player work is v1 scope |
 
 Deferring is not excluding: single-player behaviour pushed to a later milestone
 is still v1 scope. Behaviour leaves v1 only as a recorded exclusion, with its

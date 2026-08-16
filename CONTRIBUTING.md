@@ -25,8 +25,8 @@ the authority.
 ### Milestones
 
 Roadmap issues are grouped by [milestones](../../milestones?state=all) — one per
-area of v1 (`M1 · v1: Foundation` … `M7 · v1: Release & Signoff`) plus
-`M8 · Post-v1 (deferred)`. Each milestone's description is a self-contained
+area of v1 (`M1 · v1: Foundation` … `M7 · v1: Release & Signoff`) plus `M8`,
+the deferral milestone. Each milestone's description is a self-contained
 briefing for that area: its acceptance IDs, scope, upstream references, and
 definition of done.
 

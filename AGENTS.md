@@ -20,7 +20,9 @@ formulas); `mgba/` clarifies hardware behaviour. Both are read-only `(reference-
 - `docs/acceptance/v1.md` — v1 criteria with stable IDs (`F-1`, `I-4`, …). The
   roadmap to reach them lives in GitHub issues/PRs/discussions `(constitution-vs-roadmap)`.
   Issues are grouped by area milestones (M1–M7 = v1, M8 = deferred — deferring
-  is not excluding: deferred single-player work is still v1 scope); each
+  is not excluding: deferred single-player work is still v1 scope, whatever
+  "post-v1" wording M8's own title may still carry from before that
+  clarification); each
   milestone description is that area's briefing — read it via
   `gh api repos/{owner}/{repo}/milestones/7` (swap `7` for the milestone
   number) and list its issues with `gh issue list --milestone "<title>"`.
