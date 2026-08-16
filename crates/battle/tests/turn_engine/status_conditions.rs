@@ -18,6 +18,7 @@
 //! the stream with the overworld actually has to budget for.
 
 use crate::common::{max_iv_mon, SequenceRng};
+use assets::trainers::TrainerId;
 use assets::MoveId;
 use battle::{Battle, BattleEvent, BattleOutcome, ChangedStat, Dex, PlayerAction, Status1};
 
@@ -26,12 +27,30 @@ const THUNDER_WAVE: MoveId = MoveId(86);
 const SUPERSONIC: MoveId = MoveId(48);
 const POISON_STING: MoveId = MoveId(40);
 const CONSTRICT: MoveId = MoveId(132);
+/// `MOVE_GROWL` (`include/constants/moves.h:49`) -- the harmless
+/// `EFFECT_ATTACK_DOWN` filler the trainer-residual tests below hand both
+/// sides, so nothing but the poison can decide the turn.
+const GROWL: MoveId = MoveId(45);
+/// `MOVE_CHARGE` (`:272`) -- `ENDTURN_CHARGE`'s only source, and the way
+/// those same tests make the *rest* of a battler's end-of-turn chain
+/// observable.
+const CHARGE: MoveId = MoveId(268);
+
+/// `TRAINER_MAY_ROUTE_103_MUDKIP` (`include/constants/opponents.h:533`), the
+/// same real single-battle trainer id `turn_engine::trainer_battle` uses for
+/// its synthetic parties: the residual rule under test is upstream's, and
+/// whose party table it is fielded from does not enter into it.
+const MAY_ROUTE_103_MUDKIP: TrainerId = TrainerId(529);
 
 const TREECKO: u16 = 277;
 const RATTATA: u16 = 19;
 const MARILL: u16 = 183;
 const PLUSLE: u16 = 353;
 const TENTACOOL: u16 = 72;
+/// `SPECIES_ELECTRODE` (`include/constants/species.h:101`) -- fast enough at
+/// a modest level to out-speed a level-100 Treecko, which is what puts the
+/// *enemy* first in the end-of-turn walk.
+const ELECTRODE: u16 = 101;
 
 /// A long, uniform script: every draw is `0`, which lands on the "always
 /// hits / never crits at stage 0 / best damage roll / effect fires" corner
@@ -685,5 +704,190 @@ fn the_residual_walk_stops_once_a_whole_party_is_down() {
         battle.enemy().current_hp(),
         enemy_hp_before,
         "so the enemy lost no HP to poison this turn"
+    );
+}
+
+/// The same `checkteamslost` rule on the side it is *hardest* to get right:
+/// a **trainer's last** mon fainting to poison mid-walk.
+///
+/// A wild opponent's faint is settled by `settle_faint` itself; a trainer's
+/// is deliberately deferred to `HandleFaintedMonActions`
+/// (`Battle::end_of_turn`) so a replacement cannot take a hit it never took
+/// upstream. But `BattleScript_DoTurnDmg` runs `checkteamslost` right after
+/// its own `tryfaintmon` (`data/battle_scripts_1.s:3746`), and with the
+/// bench empty that sets `B_OUTCOME_WON` (`src/battle_script_commands.c:3576`-
+/// `:3577`) *inside* the walk -- so the win, the prize money and the end of
+/// the turn all land there, not at `end_of_turn`.
+///
+/// Both sides carry Growl and nothing else, so no move can knock anything
+/// out and the poison is unambiguously the cause.
+#[test]
+fn a_trainers_last_mon_fainting_to_poison_wins_the_battle_inside_the_walk() {
+    let dex = Dex::new();
+    let player = max_iv_mon(&dex, TREECKO, 50, vec![GROWL]);
+    let mut lead = max_iv_mon(&dex, TREECKO, 5, vec![GROWL]);
+    lead.set_status(Status1::Poisoned);
+    let lead_hp = lead.current_hp();
+    lead.apply_damage(lead_hp - 1);
+
+    let mut rng = zeros();
+    let mut battle =
+        Battle::new_trainer(dex, player, MAY_ROUTE_103_MUDKIP, vec![lead], &mut rng).unwrap();
+    let events = battle
+        .take_turn(PlayerAction::UseMove(0), &mut rng)
+        .unwrap();
+
+    assert_eq!(battle.outcome(), Some(BattleOutcome::PlayerWon));
+    let index = |wanted: &BattleEvent| {
+        events
+            .iter()
+            .position(|event| event == wanted)
+            .unwrap_or_else(|| panic!("expected {wanted:?} in {events:?}"))
+    };
+    let tick = index(&BattleEvent::HurtByPoison {
+        by_player: false,
+        damage: 1,
+    });
+    let fainted = index(&BattleEvent::Fainted { by_player: false });
+    let money = index(&BattleEvent::MoneyGained(300));
+    let ended = index(&BattleEvent::Ended(BattleOutcome::PlayerWon));
+    assert!(
+        tick < fainted && fainted < money && money < ended,
+        "the whole win comes out of the residual walk, in Cmd_getexp-then-\
+         Cmd_getmoneyreward order: {events:?}"
+    );
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e, BattleEvent::ExpGained(_))),
+        "and `HandleFaintedMonActions` still pays the EXP: {events:?}"
+    );
+    assert!(
+        !events
+            .iter()
+            .any(|e| matches!(e, BattleEvent::TrainerSentOut { .. })),
+        "there is nothing left to send out: {events:?}"
+    );
+}
+
+/// ...and the point of settling it *there*: the player must not take the
+/// end-of-turn tick that follows.
+///
+/// The enemy is faster, so it is `gBattlerByTurnOrder[0]` and ticks first.
+/// Both battlers are poisoned and both are on `1` HP, so a player tick would
+/// be fatal -- deferring the trainer's defeat to `end_of_turn` would not
+/// merely add an unwanted event, it would turn `B_OUTCOME_WON` into
+/// `B_OUTCOME_LOST`.
+///
+/// The player also spent its turn on Charge, which pins the other half of
+/// `BattleTurnPassed`'s `if (gBattleOutcome == 0)` guard
+/// (`src/battle_main.c:3961`): the guard skips the *whole* remaining
+/// `ENDTURN_*` chain, so `ENDTURN_CHARGE` (`src/battle_util.c:1743`) does not
+/// run either and the charge timer is still where `Cmd_setcharge` left it.
+///
+/// The player is at `MAX_LEVEL` on purpose: `Cmd_getexp` case 2 awards a
+/// level-100 recipient nothing, so no level-up can move the HP the "1 HP
+/// survives" assertion reads.
+#[test]
+fn winning_inside_the_walk_spares_the_player_its_own_end_of_turn_chain() {
+    let dex = Dex::new();
+    // A level-100 Treecko against a level-60 Electrode: the *enemy* is the
+    // faster of the two, so it is battler 0 for the walk.
+    let mut player = max_iv_mon(&dex, TREECKO, 100, vec![CHARGE]);
+    player.set_status(Status1::Poisoned);
+    let player_hp = player.current_hp();
+    player.apply_damage(player_hp - 1);
+
+    let mut lead = max_iv_mon(&dex, ELECTRODE, 60, vec![GROWL]);
+    lead.set_status(Status1::Poisoned);
+    let lead_hp = lead.current_hp();
+    lead.apply_damage(lead_hp - 1);
+    assert!(
+        lead.effective_speed() > player.effective_speed(),
+        "fixture: the enemy must be battler 0 for the end-of-turn walk"
+    );
+
+    let mut rng = zeros();
+    let mut battle =
+        Battle::new_trainer(dex, player, MAY_ROUTE_103_MUDKIP, vec![lead], &mut rng).unwrap();
+    let events = battle
+        .take_turn(PlayerAction::UseMove(0), &mut rng)
+        .unwrap();
+
+    assert_eq!(
+        battle.outcome(),
+        Some(BattleOutcome::PlayerWon),
+        "checkteamslost fired on the enemy's own tick, before the player's: {events:?}"
+    );
+    assert!(
+        !events.iter().any(|e| matches!(
+            e,
+            BattleEvent::HurtByPoison {
+                by_player: true,
+                ..
+            }
+        )),
+        "the player must not tick after the win: {events:?}"
+    );
+    assert_eq!(
+        battle.player().current_hp(),
+        1,
+        "...which is the difference between winning and whiting out"
+    );
+    assert_eq!(
+        battle.player().volatiles().charge_timer,
+        2,
+        "and the rest of the player's own ENDTURN chain is skipped with it"
+    );
+}
+
+/// The control that keeps the fix honest: with a bench still standing,
+/// `checkteamslost` sums a party that is **not** at `0` HP, `gBattleOutcome`
+/// stays `0`, and the walk carries on into the player's own tick exactly as
+/// it did before.
+#[test]
+fn a_trainers_bench_still_standing_lets_the_players_own_tick_happen() {
+    let dex = Dex::new();
+    // The same `MAX_LEVEL` player and faster enemy as the test above, so the
+    // only difference between the two is the bench.
+    let mut player = max_iv_mon(&dex, TREECKO, 100, vec![CHARGE]);
+    player.set_status(Status1::Poisoned);
+
+    let mut lead = max_iv_mon(&dex, ELECTRODE, 60, vec![GROWL]);
+    lead.set_status(Status1::Poisoned);
+    let lead_hp = lead.current_hp();
+    lead.apply_damage(lead_hp - 1);
+    let party = vec![lead, max_iv_mon(&dex, MARILL, 10, vec![GROWL])];
+
+    let mut rng = zeros();
+    let mut battle =
+        Battle::new_trainer(dex, player, MAY_ROUTE_103_MUDKIP, party, &mut rng).unwrap();
+    let player_hp_before = battle.player().current_hp();
+    let events = battle
+        .take_turn(PlayerAction::UseMove(0), &mut rng)
+        .unwrap();
+
+    assert_eq!(battle.outcome(), None, "the trainer still has a mon");
+    assert!(
+        events.iter().any(|e| matches!(
+            e,
+            BattleEvent::HurtByPoison {
+                by_player: true,
+                ..
+            }
+        )),
+        "so the player's own tick still happens: {events:?}"
+    );
+    assert!(battle.player().current_hp() < player_hp_before);
+    assert_eq!(
+        battle.player().volatiles().charge_timer,
+        1,
+        "and so does the rest of its ENDTURN chain"
+    );
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e, BattleEvent::TrainerSentOut { .. })),
+        "with the replacement sent out at the end of the turn: {events:?}"
     );
 }

@@ -971,13 +971,36 @@ impl Battle {
     /// moment a whole party reads `0` HP
     /// (`src/battle_script_commands.c:3563`-`:3577`). `BattleTurnPassed`'s
     /// `if (gBattleOutcome == 0)` guard (`src/battle_main.c:3961`) then
-    /// refuses to re-enter `DoBattlerEndTurnEffects` at all, so the second
-    /// battler's tick never happens. The "whole party" part is load-bearing:
-    /// a **trainer's** active mon fainting to poison with a bench still
-    /// standing leaves `gBattleOutcome` at `0`, the walk continues, and the
-    /// player's own tick does happen — which is exactly what
-    /// [`Battle::outcome`] staying `None` until [`Battle::end_of_turn`]
-    /// empties the bench reproduces.
+    /// refuses to re-enter `DoBattlerEndTurnEffects` at all — so neither the
+    /// *second* battler's chain nor the **rest of the fainted battler's own**
+    /// runs, `ENDTURN_CHARGE` included. That is why
+    /// [`Self::check_teams_lost`] returning `true` bails out of the loop
+    /// before [`crate::volatile::Volatiles::tick_charge`] rather than after
+    /// it.
+    ///
+    /// The "whole party" part is load-bearing in both directions, and the
+    /// predicate is deliberately the party's, not the battler's:
+    ///
+    /// - a **trainer's** active mon fainting to poison with a bench still
+    ///   standing leaves `gBattleOutcome` at `0`, so the walk continues and
+    ///   the player's own tick does happen — [`Self::check_teams_lost`]
+    ///   answers `false` and [`Battle::end_of_turn`] sends the replacement
+    ///   out;
+    /// - a trainer's **last** mon fainting to poison sets `B_OUTCOME_WON`
+    ///   right there, mid-walk, so the player never takes the tick that
+    ///   follows it. Deferring that win to [`Battle::end_of_turn`] (where the
+    ///   *move*-inflicted faint is settled) would hand the player a poison
+    ///   tick upstream never applies, and a player on its last few HP would
+    ///   turn a win into a loss.
+    ///
+    /// The mid-turn faint keeps the deferral, because upstream's scripts do:
+    /// `BattleScript_FaintTarget` (`data/battle_scripts_1.s:2817`) has no
+    /// `checkteamslost` at all, and the one that does —
+    /// `BattleScript_HandleFaintedMon` (`:2830`-`:2832`) — is reached from
+    /// `HandleFaintedMonActions`, which `BattleTurnPassed` runs *after*
+    /// `DoBattlerEndTurnEffects` (`src/battle_main.c:3968`). So a player
+    /// poisoned on the turn its own move knocked out the trainer's last mon
+    /// really does take the tick.
     ///
     /// Every other `ENDTURN_*` case (Ingrain, abilities, items, Leech Seed,
     /// toxic, burn, Nightmare, Curse, Wrap, Uproar, Thrash, Disable, Encore,
@@ -1012,10 +1035,57 @@ impl Battle {
                     // player. It cannot fail: the only fallible step is the
                     // species/base-exp lookup for a mon already in play.
                     let _ = self.settle_faint(!is_player, events);
+                    // `BattleScript_DoTurnDmg`'s own `checkteamslost`, one
+                    // instruction after its `tryfaintmon`.
+                    if self.check_teams_lost(events) {
+                        return;
+                    }
                 }
             }
             self.battler_mut(is_player).volatiles_mut().tick_charge();
         }
+    }
+
+    /// `Cmd_checkteamslost` (`src/battle_script_commands.c:3534`-`:3577`) as
+    /// `BattleScript_DoTurnDmg` reaches it (`data/battle_scripts_1.s:3746`),
+    /// reduced to the one party this crate can sum: `gBattleOutcome` is set
+    /// when a **whole side** reads `0` HP, not when a battler faints.
+    ///
+    /// Returns whether the battle now has an outcome, which is
+    /// `BattleTurnPassed`'s `if (gBattleOutcome == 0)` guard
+    /// (`src/battle_main.c:3961`) seen from the caller's side.
+    ///
+    /// Only the `B_OUTCOME_WON` half (`:3576`-`:3577`) has any work to do
+    /// here. The `B_OUTCOME_LOST` half (`:3563`-`:3564`) sums a player party
+    /// this crate tracks one mon of, so [`Self::settle_faint`] has already
+    /// set [`BattleOutcome::PlayerLost`] by the time this is called and the
+    /// `outcome.is_some()` arm reports it — and upstream's own order tests
+    /// the player's party first, so the two agree on which flag lands when
+    /// both could.
+    ///
+    /// [`BattleEvent::MoneyGained`] comes first for the same reason
+    /// [`Battle::end_of_turn`] emits it first: `Cmd_getmoneyreward`
+    /// (`battle_script_commands.c:5635`) runs after `Cmd_getexp`, which
+    /// [`Self::settle_faint`] has just paid out.
+    fn check_teams_lost(&mut self, events: &mut Vec<BattleEvent>) -> bool {
+        if self.outcome.is_some() {
+            return true;
+        }
+        if !self.enemy.is_fainted() {
+            return false;
+        }
+        let BattleKind::Trainer(context) = &self.kind else {
+            // A wild battle's "party" is the one mon, so `settle_faint` has
+            // already finished it and the arm above returned.
+            return false;
+        };
+        if !context.bench().iter().all(BattlePokemon::is_fainted) {
+            return false;
+        }
+        let money = context.money();
+        events.push(BattleEvent::MoneyGained(money));
+        self.finish(events, BattleOutcome::PlayerWon);
+        true
     }
 
     /// `HandleFaintedMonActions` (`battle_util.c:1894`), reduced to the one
@@ -1037,6 +1107,12 @@ impl Battle {
     /// first — upstream's `Cmd_getmoneyreward`
     /// (`battle_script_commands.c:5635`) runs after `Cmd_getexp`, which is
     /// the order [`BattleEvent`]s come back in.
+    ///
+    /// This is the *move*-inflicted faint's path only. A trainer's last mon
+    /// fainting to the end-of-turn residual has already been settled, with
+    /// the same two events in the same order, by
+    /// [`Self::check_teams_lost`] — because upstream settles the two in
+    /// different places too (see [`Self::residual_effects`]).
     fn end_of_turn(&mut self, events: &mut Vec<BattleEvent>) {
         if self.outcome.is_some() || !self.enemy.is_fainted() {
             return;
