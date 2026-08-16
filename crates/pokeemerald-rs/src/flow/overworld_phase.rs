@@ -397,10 +397,12 @@ impl OverworldPhase {
     ///   path observably produces here, and reads it back through
     ///   [`saved_facing`]. A save that holds `DIR_NONE` there (a zeroed
     ///   block, or an image written before this slice) still falls back to
-    ///   the continue-game *warp* branch's tile-derived
-    ///   `GetAdjustedInitialDirection` (`src/overworld.c:929-951`, ported
-    ///   as [`engine::overworld::warp_in_facing`], `DIR_SOUTH` on an
-    ///   ordinary tile) rather than facing an arbitrary way.
+    ///   the tile-derived `GetAdjustedInitialDirection`
+    ///   (`src/overworld.c:929-951` -- shared local-map-load code reached
+    ///   from every warp via `InitObjectEventsLocal`, not the continue-game
+    ///   warp branch's own; ported as
+    ///   [`engine::overworld::warp_in_facing`], `DIR_SOUTH` on an ordinary
+    ///   tile) rather than facing an arbitrary way.
     /// * **Elevation** -- the saved tile's own grid cell, with the
     ///   multi-level -> transition substitution
     ///   `ObjectEventUpdateElevation` applies, exactly as
