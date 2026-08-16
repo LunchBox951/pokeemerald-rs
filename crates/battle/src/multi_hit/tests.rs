@@ -173,3 +173,49 @@ fn a_three_hit_sequence_costs_the_nine_draws_the_module_docs_claim() {
     spend_effect_chance_draw(&mut rng);
     assert_eq!(rng.draws(), 9);
 }
+
+/// `jumpifmovehadnoeffect` (`data/battle_scripts_1.s:623`) sits **between**
+/// `typecalc` (`:622`) and `adjustnormaldamage` (`:624`), so a type-immune
+/// iteration spends the crit draw and then jumps **past the damage roll** --
+/// the only damaging script in the engine that skips it.
+///
+/// The sequence is exactly three long (accuracy, hit count, crit), so a
+/// fourth draw would panic. Reproduced here at the level the loop actually
+/// runs at, since `crate::battle::Battle` owns the loop itself.
+#[test]
+fn an_immune_iteration_spends_the_crit_draw_but_not_the_damage_roll() {
+    let dex = Dex::new();
+    // Double Slap is Normal; Gastly (92) is Ghost/Poison, so every hit is
+    // `MOVE_RESULT_DOESNT_AFFECT_FOE`.
+    let attacker = mon(&dex, 315, 30, vec![DOUBLE_SLAP]); // Skitty
+    let ghost = mon(&dex, 92, 30, vec![TACKLE]);
+
+    let mut rng = SequenceRng::new([0, 0, 1]);
+    let hits = resolve_multi_hit(&dex, DOUBLE_SLAP, &attacker, &ghost, &mut rng)
+        .unwrap()
+        .expect("draw 0 is a hit against 85 accuracy");
+    assert_eq!(hits, 2, "draw 0 -> 0 + 2");
+
+    let (damage, _) =
+        crate::hit::damage_before_roll(&dex, DOUBLE_SLAP, &attacker, &ghost, false, &mut rng)
+            .unwrap();
+    assert_eq!(
+        damage, 0,
+        "Normal into Ghost is MOVE_RESULT_DOESNT_AFFECT_FOE"
+    );
+    assert_eq!(
+        rng.draws(),
+        3,
+        "accuracy + hit count + the iteration's crit roll, and NOT its \
+         damage roll -- upstream jumps past adjustnormaldamage at :623"
+    );
+
+    // The control: against a target the move *can* hurt, the same iteration
+    // reaches `damage_core` and does spend both.
+    let marill = mon(&dex, 183, 30, vec![TACKLE]);
+    let mut rng = SequenceRng::new([0, 0, 1, 0]);
+    let _ = resolve_multi_hit(&dex, DOUBLE_SLAP, &attacker, &marill, &mut rng).unwrap();
+    let _ =
+        crate::hit::damage_core(&dex, DOUBLE_SLAP, &attacker, &marill, false, &mut rng).unwrap();
+    assert_eq!(rng.draws(), 4, "crit *and* damage roll on a landing hit");
+}

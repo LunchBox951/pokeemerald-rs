@@ -317,14 +317,16 @@ pub fn accuracy_roll(
 /// and type rows, then `ApplyRandomDmgMultiplier`'s `85..=100%` roll.
 ///
 /// **Draws 2, or 1 when `suppress_crit`** — the crit roll and the damage
-/// roll. Assumes the accuracy check has already passed
-/// ([`accuracy_roll`]); it makes no accuracy draw of its own.
+/// roll, the latter unconditionally, immunity included. Assumes the accuracy
+/// check has already passed ([`accuracy_roll`]); it makes no accuracy draw
+/// of its own.
 ///
-/// Shared verbatim by [`resolve_hit`] and by the drain and multi-hit
-/// variants ([`crate::drain`], [`crate::multi_hit`]), which differ from the
-/// plain script only *outside* this range. [`crate::fixed_damage`] does
-/// **not** use it: `BattleScript_EffectSonicboom` has no `critcalc`,
-/// `damagecalc` or `adjustnormaldamage` at all.
+/// Shared verbatim by [`resolve_hit`] and by [`crate::drain`], which differs
+/// from the plain script only *outside* this range. [`crate::multi_hit`]
+/// uses [`damage_before_roll`] instead, because its script jumps past the
+/// damage roll on an immune iteration. [`crate::fixed_damage`] uses neither:
+/// `BattleScript_EffectSonicboom` has no `critcalc`, `damagecalc` or
+/// `adjustnormaldamage` at all.
 ///
 /// # Errors
 ///
@@ -338,6 +340,63 @@ pub fn damage_core(
     suppress_crit: bool,
     rng: &mut impl BattleRng,
 ) -> Result<HitOutcome, BattleError> {
+    let (damage, is_critical) =
+        damage_before_roll(dex, move_id, attacker, defender, suppress_crit, rng)?;
+    // `ApplyRandomDmgMultiplier` calls `Random()` at
+    // `battle_script_commands.c:1641`, *before* its own
+    // `gBattleMoveDamage != 0` guard at `:1644` -- so even a type-immune hit
+    // that reaches `adjustnormaldamage` spends this draw.
+    let damage = apply_damage_roll(damage, rng);
+    if damage == 0 {
+        Ok(HitOutcome::NoEffect)
+    } else {
+        Ok(HitOutcome::Hit {
+            damage,
+            is_critical,
+        })
+    }
+}
+
+/// [`damage_core`] **minus its final `ApplyRandomDmgMultiplier` roll**:
+/// `Cmd_critcalc`, `Cmd_damagecalc` (base damage, the crit `x2`, Charge's
+/// Electric `x2`) and `Cmd_typecalc` (STAB, then the type rows), returning
+/// the damage the roll would scale and whether the hit crit.
+///
+/// **Draws 1, or 0 when `suppress_crit`** — the crit roll and nothing else.
+///
+/// Split out because `BattleScript_EffectMultiHit` is the one script that
+/// looks at the type verdict *between* the two:
+///
+/// ```text
+/// critcalc / damagecalc / typecalc                       @ :620-:622
+/// jumpifmovehadnoeffect BattleScript_MultiHitNoMoreHits  @ :623
+/// adjustnormaldamage                                     @ :624
+/// ```
+///
+/// so an immune multi-hit iteration spends the crit draw and then **jumps
+/// past the damage roll**, where the plain hit script (`:249`-`:252`) and
+/// `BattleScript_EffectAbsorb` (`:328`-`:331`) have no such jump and always
+/// spend both. Reproducing that is one RNG value, which is one desynchronised
+/// stream `(behavioral-fidelity)`.
+///
+/// A returned damage of `0` is exactly `MOVE_RESULT_DOESNT_AFFECT_FOE`: the
+/// only way this arithmetic reaches zero is a type immunity, since
+/// `CalculateBaseDamage`'s physical branch floors at `1` and
+/// `ModulateDmgByType` re-floors any surviving non-immune row
+/// (`battle_script_commands.c:1323`-`:1325`).
+///
+/// # Errors
+///
+/// [`BattleError::UnknownMove`] if `move_id` is not in `dex`, or
+/// [`BattleError::UnsupportedMoveType`] for the sole `???`-typed move.
+pub fn damage_before_roll(
+    dex: &Dex,
+    move_id: MoveId,
+    attacker: &BattlePokemon,
+    defender: &BattlePokemon,
+    suppress_crit: bool,
+    rng: &mut impl BattleRng,
+) -> Result<(u32, bool), BattleError> {
     let mv = dex.move_data(move_id)?;
     let move_type: Type = mv
         .move_type
@@ -411,16 +470,7 @@ pub fn damage_core(
     } else {
         apply_dual_type_effectiveness(damage, move_type, defender.types())
     };
-    let damage = apply_damage_roll(damage, rng);
-
-    if damage == 0 {
-        Ok(HitOutcome::NoEffect)
-    } else {
-        Ok(HitOutcome::Hit {
-            damage,
-            is_critical,
-        })
-    }
+    Ok((damage, is_critical))
 }
 
 #[cfg(test)]

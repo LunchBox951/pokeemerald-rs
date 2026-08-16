@@ -58,14 +58,19 @@
 //!   — except `TRAINER_BRENDAN_ROUTE_103_TREECKO`, whose third bit is
 //!   `SETUP_FIRST_TURN` instead (`src/data/trainers.h:6280`-`:6290`), an
 //!   upstream inconsistency this port reproduces rather than smooths over.
-//! - **move effects**: only [`EFFECT_HIT`], `EFFECT_ATTACK_DOWN` and
-//!   `EFFECT_DEFENSE_DOWN` are scored. Every other effect takes a *different*
-//!   branch of at least one of the four scripts, several of which draw
-//!   (`AI_CV_HighCrit`, `AI_CV_Sleep`, …), so accepting one silently would
-//!   desynchronise the shared stream. This is deliberately narrower than
-//!   [`crate::hit::is_ordinary_hit_effect`]: `EFFECT_QUICK_ATTACK` and
-//!   `EFFECT_HIGH_CRITICAL` execute as plain hits but *score* differently
-//!   (`AI_TryToFaint_TryToEncourageQuickAttack`, `AI_CV_HighCrit`).
+//! - **move effects**: screened **per script**, not globally (issue #293).
+//!   `AI_CheckBadMove` contains no `if_random_*` instruction anywhere, so
+//!   every branch of it is deterministic and it can score the wide set
+//!   [`is_check_bad_move_scoreable`] lists. The other three scripts *do*
+//!   draw — a single `AI_CV_*` handler can spend up to seven values on
+//!   state this crate does not track — so they keep the narrow set
+//!   [`is_viability_scoreable`] lists: [`EFFECT_HIT`], `EFFECT_ATTACK_DOWN`
+//!   and `EFFECT_DEFENSE_DOWN`, exactly the six Route 103 rivals'
+//!   repertoire. Both sets are deliberately narrower than
+//!   [`crate::hit::is_ordinary_hit_effect`] in places:
+//!   `EFFECT_HIGH_CRITICAL` executes as a plain hit but *scores* differently
+//!   (`AI_CV_HighCrit`), and `EFFECT_QUICK_ATTACK` takes
+//!   `AI_TryToFaint_TryToEncourageQuickAttack`'s own `+2`.
 //!
 //! Those two sets cover every level-5 starter moveset a Route 103 rival can
 //! field: Treecko's Pound + Leer, Torchic's Scratch + Growl, Mudkip's
@@ -578,10 +583,14 @@ fn estimated_damage(
 /// `sIgnoredPowerfulMoveEffects` (`battle_ai_script_commands.c:266`-`:281`)
 /// membership, for the effects this module scores.
 ///
-/// Neither [`EFFECT_HIT`] nor the two stat-down effects is in that list, so
-/// `get_how_powerful_move_is` decides purely on `power > 1` for them. The
-/// list is not transcribed: no move this AI can score is in it, and
-/// transcribing 20 unreachable ids would be dead data.
+/// The list is exactly `EXPLOSION, DREAM_EATER, RAZOR_WIND, SKY_ATTACK,
+/// RECHARGE, SKULL_BASH, SOLAR_BEAM, SPIT_UP, FOCUS_PUNCH, SUPERPOWER,
+/// ERUPTION, OVERHEAT` — and **not one** of them is in either scoreable set
+/// ([`is_check_bad_move_scoreable`] / [`is_viability_scoreable`]), rechecked
+/// against the widened set at issue #293. So `get_how_powerful_move_is`
+/// decides purely on `power > 1` for every effect that can reach it, and the
+/// twelve ids are not transcribed: they would be dead data, and this
+/// function is the one place that would have to consult them.
 const fn ignored_by_power_check(_effect: MoveEffect) -> bool {
     false
 }
@@ -710,15 +719,13 @@ fn run_check_bad_move(
     }
     if effect == EFFECT_PARALYZE {
         // `AI_CBM_Paralyze` (`:397`-`:403`), in its own order: the x0 type
-        // check first, then Limber (an unmodelled ability), then
-        // `if_status AI_TARGET, STATUS1_ANY`, then Safeguard (an unmodelled
-        // side status). Two reachable `-10`s, and they can both fire --
-        // `Cmd_score` adds, so a Thunder Wave at an already-poisoned Ground
-        // type scores `-20`.
-        if is_no_effect(dex, move_id, enemy, player)? {
-            thinking.score(index, -10);
-        }
-        if player.status().is_any() {
+        // check, then Limber (an unmodelled ability), then `if_status
+        // AI_TARGET, STATUS1_ANY`, then Safeguard (an unmodelled side
+        // status). Two reachable `-10`s, but **at most one can fire**:
+        // `Score_Minus10` is `score -10` followed by `end` (`:620`-`:622`),
+        // so the first branch that matches terminates the script. A Thunder
+        // Wave at an already-poisoned Ground type scores `-10`, not `-20`.
+        if is_no_effect(dex, move_id, enemy, player)? || player.status().is_any() {
             thinking.score(index, -10);
         }
         return Ok(());

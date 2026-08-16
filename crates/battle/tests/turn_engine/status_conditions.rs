@@ -617,3 +617,73 @@ fn a_secondary_never_lands_on_a_target_the_damage_half_knocked_out() {
     assert_eq!(battle.enemy().status(), Status1::Healthy);
     assert_eq!(battle.outcome(), Some(BattleOutcome::PlayerWon));
 }
+
+/// The end-of-turn walk stops when `Cmd_checkteamslost` would have set
+/// `gBattleOutcome` -- i.e. when a WHOLE PARTY reads 0 HP -- rather than
+/// merely when a battler faints.
+///
+/// `BattleScript_DoTurnDmg`, which every residual-damage case ends in, runs
+/// `checkteamslost` right after its `tryfaintmon`
+/// (`data/battle_scripts_1.s:3746`), and `Cmd_checkteamslost` sets
+/// `B_OUTCOME_WON`/`_LOST` on a zero-HP party
+/// (`src/battle_script_commands.c:3563`-`:3577`). `BattleTurnPassed`'s
+/// `if (gBattleOutcome == 0)` guard (`src/battle_main.c:3961`) then refuses
+/// to re-enter `DoBattlerEndTurnEffects` at all, so the *second* battler in
+/// the walk never ticks.
+///
+/// Both mons are poisoned and the player -- faster, so battler 0 for the
+/// walk -- is on 1 HP, so its own tick is fatal. Both moves are scripted to
+/// miss, leaving the poison as unambiguously the cause.
+#[test]
+fn the_residual_walk_stops_once_a_whole_party_is_down() {
+    let dex = Dex::new();
+
+    let mut player = max_iv_mon(&dex, TREECKO, 50, vec![TACKLE]);
+    player.set_status(Status1::Poisoned);
+    let player_hp = player.current_hp();
+    player.apply_damage(player_hp - 1);
+
+    let mut enemy = max_iv_mon(&dex, MARILL, 50, vec![TACKLE]);
+    enemy.set_status(Status1::Poisoned);
+    let enemy_hp_before = enemy.current_hp();
+    assert!(
+        player.effective_speed() > enemy.effective_speed(),
+        "fixture: the player must be battler 0 for the end-of-turn walk"
+    );
+
+    // battle start, turn number, the enemy's selection, then both Tackles
+    // missing (95 against 95 accuracy rolls 96).
+    let mut rng = SequenceRng::new([0, 0, 0, 95, 95]);
+    let mut battle = Battle::new(Dex::new(), player, enemy, false, &mut rng).unwrap();
+    let events = battle
+        .take_turn(PlayerAction::UseMove(0), &mut rng)
+        .unwrap();
+
+    assert_eq!(battle.outcome(), Some(BattleOutcome::PlayerLost));
+    assert!(
+        events.iter().any(|e| matches!(
+            e,
+            BattleEvent::HurtByPoison {
+                by_player: true,
+                ..
+            }
+        )),
+        "the player ticked and it was fatal: {events:?}"
+    );
+    assert!(
+        !events.iter().any(|e| matches!(
+            e,
+            BattleEvent::HurtByPoison {
+                by_player: false,
+                ..
+            }
+        )),
+        "...and the enemy's own tick was skipped, because checkteamslost had \
+         already set B_OUTCOME_LOST: {events:?}"
+    );
+    assert_eq!(
+        battle.enemy().current_hp(),
+        enemy_hp_before,
+        "so the enemy lost no HP to poison this turn"
+    );
+}

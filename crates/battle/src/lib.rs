@@ -28,9 +28,9 @@
 //!
 //! Move-effect breadth is the sharp edge of this crate, so it is enforced
 //! rather than assumed: a move is executable only if its `EFFECT_*` belongs
-//! to one of **seven** pipelines, each of which reproduces one upstream
+//! to one of **eight** pipelines, each of which reproduces one upstream
 //! battle script draw for draw. Issue #159 shipped the first, #199 the
-//! second, and issue #293 the other five:
+//! second, and issue #293 the other six:
 //!
 //! | pipeline | script | admits |
 //! |---|---|---|
@@ -43,13 +43,13 @@
 //! | [`primary_status`] | `BattleScript_EffectParalyze`/`Confuse` | Thunder Wave, Stun Spore, Supersonic |
 //! | [`secondary`] | the `setmoveeffect X; goto …EffectHit` trampolines | Poison Sting, Constrict |
 //!
-//! The seven `EFFECT_*` sets are disjoint, and the split is not cosmetic:
+//! The eight `EFFECT_*` sets are disjoint, and the split is not cosmetic:
 //! a drain move costs **3** RNG draws where an ordinary hit costs 4, a
 //! fixed-damage move costs 2, a stat *raise* costs 0 and a stat *drop* 1,
 //! and a multi-hit move costs `1 + (1..2) + 2n + 1`. Running any of them
 //! through the wrong pipeline would be wrong twice over — wrong damage
 //! *and* a desynchronised shared stream — so
-//! [`battle::ensure_executable`](battle) composes all seven and anything
+//! [`battle::ensure_executable`](battle) composes all eight and anything
 //! outside them is refused.
 //!
 //! The refusal is guarded at a two-sided boundary.
@@ -131,7 +131,7 @@
 //! battles, Mist/Substitute/Protect (see [`stat_change`]'s module docs for
 //! why those are a documented boundary rather than dead code), sleep, burn,
 //! freeze and toxic (no modelled move inflicts them, so [`status`] does not
-//! represent them), and the move effects the seven pipelines above still do
+//! represent them), and the move effects the eight pipelines above still do
 //! not cover — Leech Seed and the rest of the end-of-turn residual family,
 //! Rollout's multi-turn lock, Attract, recoil, OHKO, Counter, Bide, and so
 //! on. Route 103's own sight trainers are the live measure of that last

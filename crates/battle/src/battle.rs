@@ -963,10 +963,21 @@ impl Battle {
     ///    timer, clearing `STATUS3_CHARGED_UP` at `0`
     ///    ([`crate::volatile::Volatiles::tick_charge`]). Draws nothing.
     ///
-    /// The walk stops early once the battle has an outcome, reproducing
-    /// `DoBattlerEndTurnEffects` returning `TRUE` on an effect and
-    /// `BattleTurnPassed`'s `gBattleOutcome == 0` guard refusing to re-enter
-    /// it.
+    /// The walk stops early once the battle has an outcome, and the reason
+    /// is more specific than "the battle ended": `BattleScript_DoTurnDmg`,
+    /// which every residual-damage case ends in, runs `checkteamslost`
+    /// (`data/battle_scripts_1.s:3746`) right after its `tryfaintmon`, and
+    /// `Cmd_checkteamslost` sets `gBattleOutcome |= B_OUTCOME_WON/LOST` the
+    /// moment a whole party reads `0` HP
+    /// (`src/battle_script_commands.c:3563`-`:3577`). `BattleTurnPassed`'s
+    /// `if (gBattleOutcome == 0)` guard (`src/battle_main.c:3961`) then
+    /// refuses to re-enter `DoBattlerEndTurnEffects` at all, so the second
+    /// battler's tick never happens. The "whole party" part is load-bearing:
+    /// a **trainer's** active mon fainting to poison with a bench still
+    /// standing leaves `gBattleOutcome` at `0`, the walk continues, and the
+    /// player's own tick does happen — which is exactly what
+    /// [`Battle::outcome`] staying `None` until [`Battle::end_of_turn`]
+    /// empties the bench reproduces.
     ///
     /// Every other `ENDTURN_*` case (Ingrain, abilities, items, Leech Seed,
     /// toxic, burn, Nightmare, Curse, Wrap, Uproar, Thrash, Disable, Encore,

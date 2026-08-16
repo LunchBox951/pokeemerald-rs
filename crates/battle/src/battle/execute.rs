@@ -1,5 +1,5 @@
-//! Move **execution**: [`super::Battle`]'s six per-script pipelines and the
-//! two helpers they share.
+//! Move **execution**: [`super::Battle`]'s eight per-script pipelines and
+//! the two helpers they share.
 //!
 //! Split out of `battle.rs` `(oop-boundaries)`: everything here answers
 //! "this battler used this move — what happens?", while what is left in
@@ -34,7 +34,7 @@ impl Battle {
     /// mon, pushing the resulting events and ending the battle if the
     /// target faints.
     ///
-    /// Dispatches on the move's `EFFECT_*` to one of **six** pipelines —
+    /// Dispatches on the move's `EFFECT_*` to one of **eight** pipelines —
     /// this crate's execution boundary (crate root docs), each one a
     /// distinct upstream battle script:
     ///
@@ -45,13 +45,15 @@ impl Battle {
     /// | `execute_drain_move` | `BattleScript_EffectAbsorb` | [`crate::drain`] |
     /// | `execute_fixed_damage_move` | `BattleScript_EffectSonicboom` | [`crate::fixed_damage`] |
     /// | `execute_multi_hit_move` | `BattleScript_EffectMultiHit` | [`crate::multi_hit`] |
+    /// | `execute_primary_status_move` | `BattleScript_EffectParalyze`/`Confuse` | [`crate::primary_status`] |
+    /// | `execute_secondary_hit_move` | the `setmoveeffect X; goto …EffectHit` trampolines | [`crate::secondary`] |
     /// | `execute_hit_move` | `BattleScript_EffectHit` | [`crate::hit`] |
     ///
-    /// The six `EFFECT_*` sets are disjoint, and every move that reaches
+    /// The eight `EFFECT_*` sets are disjoint, and every move that reaches
     /// here already passed [`ensure_executable`] (at [`Battle::new`] for the
     /// wild side, at `validate_player_move` for the player's), so exactly
     /// one arm holds. ([`STRUGGLE`] needs no case of its own: its
-    /// `EFFECT_RECOIL` is in none of the five special sets, so it falls
+    /// `EFFECT_RECOIL` is in none of the seven special sets, so it falls
     /// through to the hit pipeline, which accepts it.)
     pub(super) fn execute_move(
         &mut self,
@@ -252,15 +254,16 @@ impl Battle {
     /// draws at all, and the faint is settled once at the end exactly as it
     /// is for a single-hit move.
     ///
-    /// A mid-sequence [`HitOutcome::NoEffect`] is upstream's
-    /// `jumpifmovehadnoeffect` (`:623`), which leaves the loop *before*
-    /// `adjustnormaldamage` — but `damage_core` has already spent that
-    /// iteration's damage roll by the time it can report `NoEffect`, so the
-    /// only case where the two could diverge is a matchup that is immune,
-    /// and an immune matchup is immune on hit **one**: the loop breaks there
-    /// having drawn the same crit-plus-roll pair upstream's first iteration
-    /// draws before its own jump. Recorded on the `BattleScript_EffectMultiHit`
-    /// ledger entry.
+    /// A mid-sequence type immunity is upstream's `jumpifmovehadnoeffect`
+    /// (`:623`), which leaves the loop **before** `adjustnormaldamage`
+    /// (`:624`) — so that iteration spends its crit draw and *not* its
+    /// damage roll. This is the one place a damaging script skips the roll,
+    /// which is why the loop calls [`crate::hit::damage_before_roll`] and
+    /// applies the roll itself rather than reusing
+    /// [`crate::hit::damage_core`] the way the plain and drain pipelines do.
+    /// (In practice an immune matchup is immune on hit **one**, so the loop
+    /// breaks immediately — but one stray `Random()` is one desynchronised
+    /// stream for the rest of the battle.)
     fn execute_multi_hit_move(
         &mut self,
         attacker_is_player: bool,
@@ -286,9 +289,14 @@ impl Battle {
             if self.battler(!attacker_is_player).is_fainted() {
                 break;
             }
-            let outcome = {
+            // `critcalc / damagecalc / typecalc` (`:620`-`:622`), stopping
+            // short of `adjustnormaldamage` (`:624`) because
+            // `jumpifmovehadnoeffect` (`:623`) sits between them: an immune
+            // iteration spends the crit draw and then jumps **past the
+            // damage roll**, unlike every other damaging script.
+            let (damage, is_critical) = {
                 let (attacker, defender) = self.battlers(attacker_is_player);
-                crate::hit::damage_core(
+                crate::hit::damage_before_roll(
                     &self.dex,
                     move_id,
                     attacker,
@@ -297,12 +305,25 @@ impl Battle {
                     rng,
                 )?
             };
-            let no_effect = matches!(outcome, HitOutcome::NoEffect);
-            self.apply_damage_outcome(attacker_is_player, move_id, outcome, events);
-            if no_effect {
-                // `jumpifmovehadnoeffect BattleScript_MultiHitNoMoreHits`.
+            if damage == 0 {
+                self.apply_damage_outcome(
+                    attacker_is_player,
+                    move_id,
+                    HitOutcome::NoEffect,
+                    events,
+                );
                 break;
             }
+            let damage = crate::damage::apply_damage_roll(damage, rng);
+            self.apply_damage_outcome(
+                attacker_is_player,
+                move_id,
+                HitOutcome::Hit {
+                    damage,
+                    is_critical,
+                },
+                events,
+            );
             landed = landed.saturating_add(1);
         }
 
