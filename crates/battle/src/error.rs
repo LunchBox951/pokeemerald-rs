@@ -300,10 +300,12 @@ pub enum BattleError {
     /// no abilities at all, so nothing is ever recorded and that branch is
     /// the only one a two-ability target can take.
     ///
-    /// `AI_CheckBadMove` reaches `get_ability AI_TARGET` on its **mainline**
-    /// (`pokeemerald/data/battle_ai_scripts.s:93`, and again at `:59` on the
-    /// negates-type path), so the draw is not confined to some exotic
-    /// branch — it would be spent once per scored moveset slot, every turn,
+    /// `AI_CheckBadMove` reaches `get_ability AI_TARGET` on both of its
+    /// entry paths (`pokeemerald/data/battle_ai_scripts.s:59` on the
+    /// negates-type path and `:93` after it; a `MOVE_POWER_OTHER` move
+    /// skips `:59` and hits `:93` alone), so the draw is not confined to
+    /// some exotic branch — it would be spent up to twice per scored
+    /// moveset slot, every turn,
     /// against a two-ability lead. Reproducing the guess exactly would mean
     /// modelling `BATTLE_HISTORY` recording plus every `get_ability
     /// AI_TARGET` site in that script, so the crate fails closed at the edge

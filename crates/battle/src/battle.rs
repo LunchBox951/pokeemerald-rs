@@ -482,7 +482,7 @@ impl Battle {
     /// [`trainer`]'s module docs for the five deltas from a wild battle and
     /// where each is implemented.
     ///
-    /// # Two screens, both before the first draw
+    /// # Screens, all before the first draw
     ///
     /// Every party mon's moveset is checked twice over, because both checks
     /// can only be honoured *ahead* of a battle rather than during one:
@@ -534,7 +534,7 @@ impl Battle {
     /// [`BattleError::FaintedBattler`] if the player's lead or the
     /// trainer's is already at `0` HP,
     /// [`BattleError::AmbiguousTargetAbility`] for a player lead whose
-    /// species has two abilities, and whatever the three screens above
+    /// species has two abilities, and whatever the screens above
     /// report. None of them draws.
     pub fn new_trainer(
         dex: Dex,

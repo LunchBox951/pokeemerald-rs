@@ -337,8 +337,10 @@ pub(crate) const fn ensure_supported_flags(flags: AiFlags) -> Result<(), BattleE
 ///
 /// Deliberately screened once, up front, rather than per script:
 /// `get_ability AI_TARGET` appears seventeen times in `AI_CheckBadMove`
-/// alone (`data/battle_ai_scripts.s:59`-`:546`), two of them on the mainline
-/// every scored slot walks (`:59`, `:93`), and once more inside
+/// alone (`data/battle_ai_scripts.s:59`-`:546`), reached on both of the
+/// script's entry paths (`:59` on the negates-type path, then `:93`; a
+/// `MOVE_POWER_OTHER` move jumps straight past `:59` and hits `:93`
+/// alone -- up to twice per scored slot), and once more inside
 /// `AI_CheckViability` (`:2361`). One species test closes all of them, which
 /// is why it is not folded into [`ensure_scoreable`]'s per-effect answer.
 ///
