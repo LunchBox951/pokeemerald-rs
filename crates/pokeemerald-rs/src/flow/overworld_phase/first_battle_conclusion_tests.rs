@@ -34,8 +34,14 @@ const VAR_STARTER_MON: u16 = 0x4023;
 
 /// `FLAG_HIDE_ROUTE_101_BIRCH_ZIGZAGOON_BATTLE`
 /// (`include/constants/flags.h:769`) -- independently transcribed, same
-/// convention as the vars above.
+/// convention as the vars above. Assigned to the local-ID-2 rescue-battle
+/// Birch template only; the Zigzagoon's own hide flag is separate, below.
 const FLAG_HIDE_ROUTE_101_BIRCH_ZIGZAGOON_BATTLE: u16 = 0x2D0;
+
+/// `FLAG_HIDE_ROUTE_101_ZIGZAGOON` (`include/constants/flags.h:801`) --
+/// the local-ID-4 rescue Zigzagoon template's flag, which upstream sets
+/// through `removeobject` rather than a literal `setflag` line.
+const FLAG_HIDE_ROUTE_101_ZIGZAGOON: u16 = 0x2EE;
 
 /// `FLAG_HIDE_LITTLEROOT_TOWN_BIRCHS_LAB_BIRCH`
 /// (`include/constants/flags.h:770`).
@@ -197,20 +203,23 @@ fn conclude_first_battle_writes_all_three_vars_on_both_outcomes() {
     }
 }
 
-/// The three object-event flag writes (`scripts.inc:233-235`) run on
-/// **either** terminal outcome, same as the vars -- and each one is
+/// The four object-event flag writes -- the tail's own three
+/// (`scripts.inc:233-235`) plus `removeobject LOCALID_ROUTE101_ZIGZAGOON`'s
+/// persistent flag-set equivalent (`:224`; the module docs carry the
+/// `RemoveObjectEventByLocalIdAndMap` -> `FlagSet` citation) -- run on
+/// **either** terminal outcome, same as the vars, and each one is
 /// asserted from a starting state that can only reach the expected value
 /// through the write itself: the lab-Birch flag starts *set* (as
 /// [`crate::new_game`] seeds every fresh save) and must come out cleared,
-/// while the two Route 101 flags start clear (their fresh-save state,
-/// which is exactly why Birch, the Zigzagoon, and the bag are visible for
-/// the rescue at all) and must come out set (PR #291 review: the
-/// generated map events carry these flag names and
-/// `engine::overworld::object_event` hides a set-flag template from
-/// rendering and collision, so skipping the writes leaves the rescue
-/// objects standing and the lab empty).
+/// while the three Route 101 flags start clear (their fresh-save state,
+/// which is exactly why the rescue-battle Birch, its separately-flagged
+/// Zigzagoon, and the bag are visible for the rescue at all) and must
+/// come out set (PR #291 review: the generated map events carry these
+/// flag names per object and `engine::overworld::object_event` hides a
+/// set-flag template from rendering and collision, so skipping any write
+/// leaves that rescue object standing, or the lab empty).
 #[test]
-fn conclude_first_battle_writes_the_three_object_event_flags_on_both_outcomes() {
+fn conclude_first_battle_writes_the_object_event_flags_on_both_outcomes() {
     for (seed, lead, expected_outcome) in [
         (
             4242,
@@ -242,6 +251,15 @@ fn conclude_first_battle_writes_the_three_object_event_flags_on_both_outcomes() 
             phase.first_battle_outcome(),
             Some(expected_outcome),
             "setup: seed {seed} must produce {expected_outcome:?}"
+        );
+        assert_eq!(
+            phase
+                .save1
+                .event_data
+                .flag_get(FLAG_HIDE_ROUTE_101_ZIGZAGOON),
+            Ok(true),
+            "outcome {expected_outcome:?}: removeobject LOCALID_ROUTE101_ZIGZAGOON persists as \
+             setting the Zigzagoon's own hide flag"
         );
         assert_eq!(
             phase

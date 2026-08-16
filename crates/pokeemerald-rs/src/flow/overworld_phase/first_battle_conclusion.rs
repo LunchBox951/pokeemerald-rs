@@ -74,22 +74,27 @@
 //!   bag script's own heal, not a white-out, and halving the player's money
 //!   for winning (or merely surviving) a story-mandated fight would be a
 //!   fidelity bug, not a shortcut.
-//! - **The three object-event flag writes** -- `setflag
+//! - **The four object-event flag writes** -- the tail's own `setflag
 //!   FLAG_HIDE_ROUTE_101_BIRCH_ZIGZAGOON_BATTLE`, `clearflag
 //!   FLAG_HIDE_LITTLEROOT_TOWN_BIRCHS_LAB_BIRCH`, `setflag
-//!   FLAG_HIDE_ROUTE_101_BIRCH_STARTERS_BAG` (`scripts.inc:233-235`), in
-//!   upstream's own order. These are observable *today*, not deferred
-//!   script dressing (PR #291 review): the generated
-//!   [`assets::MapEventsTable`] templates carry exactly these flag names on
-//!   the rescue-battle Birch/Zigzagoon pair, the starters bag, and the lab
-//!   Birch; `engine::overworld::object_event` removes a template whose
-//!   flag is set from both rendering and collision; and
-//!   [`crate::new_game`] starts a fresh save with the lab-Birch flag
-//!   *set*. Skipping them would leave the completed rescue's Birch,
-//!   Zigzagoon, and bag standing (and collidable) on any return to Route
-//!   101, and warp the player into a lab with no Birch in it. Ids
-//!   transcribed from `include/constants/flags.h:749,769-770`, the same
-//!   own-copy convention as the vars below.
+//!   FLAG_HIDE_ROUTE_101_BIRCH_STARTERS_BAG` (`scripts.inc:233-235`, in
+//!   upstream's own order), plus `setflag FLAG_HIDE_ROUTE_101_ZIGZAGOON`
+//!   for the earlier `removeobject LOCALID_ROUTE101_ZIGZAGOON` (`:224`),
+//!   whose persistent effect upstream *is* that flag write
+//!   (`RemoveObjectEventByLocalIdAndMap` -> `FlagSet`,
+//!   `src/event_object_movement.c:1389-1397`; no script ever clears it).
+//!   These are observable *today*, not deferred script dressing (PR #291
+//!   review): the generated [`assets::MapEventsTable`] templates carry
+//!   exactly these flag names -- the rescue-battle Birch (local id 2), the
+//!   rescue Zigzagoon (local id 4, its *own* flag, not the Birch's), the
+//!   starters bag, and the lab Birch; `engine::overworld::object_event`
+//!   removes a template whose flag is set from both rendering and
+//!   collision; and [`crate::new_game`] starts a fresh save with the
+//!   lab-Birch flag *set*. Skipping them would leave the completed
+//!   rescue's Birch, Zigzagoon, and bag standing (and collidable) on any
+//!   return to Route 101, and warp the player into a lab with no Birch in
+//!   it. Ids transcribed from `include/constants/flags.h:749,769-770,801`,
+//!   the same own-copy convention as the vars below.
 //! - **`setvar VAR_BIRCH_LAB_STATE, 2`** -- [`VAR_BIRCH_LAB_STATE`],
 //!   transcribed from `include/constants/vars.h:152`.
 //! - **The real `VAR_STARTER_MON` write** -- `include/constants/vars.h:53`,
@@ -210,11 +215,23 @@ const VAR_ROUTE101_STATE: u16 = 0x4060;
 /// var holds for the rest of a playthrough.
 const ROUTE101_STATE_CONCLUDED: u16 = 3;
 
+/// `FLAG_HIDE_ROUTE_101_ZIGZAGOON` (`include/constants/flags.h:801`) --
+/// the rescue *Zigzagoon* template's own hide flag (local id 4 in the
+/// generated Route 101 events). Not one of the tail's literal `setflag`
+/// lines: it models `removeobject LOCALID_ROUTE101_ZIGZAGOON`
+/// (`scripts.inc:224`), which persists upstream by setting exactly this
+/// flag (`RemoveObjectEventByLocalIdAndMap` -> `FlagSet`,
+/// `src/event_object_movement.c:1389-1397`), and nothing upstream ever
+/// clears it again (PR #291 review).
+const FLAG_HIDE_ROUTE_101_ZIGZAGOON: u16 = 0x2EE;
+
 /// `FLAG_HIDE_ROUTE_101_BIRCH_ZIGZAGOON_BATTLE`
 /// (`include/constants/flags.h:769`) -- set by the tail
-/// (`scripts.inc:233`) so the rescue-battle Birch/Zigzagoon pair stops
-/// rendering and colliding on Route 101 once the fight is over (module
-/// docs' "What's modelled, narrowly").
+/// (`scripts.inc:233`) so the *rescue-battle Birch* (the local-ID-2
+/// template, the one object this flag is assigned to in the generated
+/// events -- the Zigzagoon's hide is [`FLAG_HIDE_ROUTE_101_ZIGZAGOON`]
+/// above) stops rendering and colliding on Route 101 once the fight is
+/// over (module docs' "What's modelled, narrowly").
 const FLAG_HIDE_ROUTE_101_BIRCH_ZIGZAGOON_BATTLE: u16 = 0x2D0;
 
 /// `FLAG_HIDE_LITTLEROOT_TOWN_BIRCHS_LAB_BIRCH`
@@ -265,6 +282,16 @@ impl OverworldPhase {
                 eprintln!("first battle: couldn't heal the party lead ({error}) -- left as-is");
             }
         }
+
+        // removeobject LOCALID_ROUTE101_ZIGZAGOON (scripts.inc:224) --
+        // modelled as the flag write it persists as upstream
+        // (`FLAG_HIDE_ROUTE_101_ZIGZAGOON`'s doc comment); it precedes the
+        // tail's own setflag/clearflag lines there too.
+        Self::write_flag(
+            &mut self.save1.event_data,
+            FLAG_HIDE_ROUTE_101_ZIGZAGOON,
+            true,
+        );
 
         // setflag FLAG_HIDE_ROUTE_101_BIRCH_ZIGZAGOON_BATTLE
         // clearflag FLAG_HIDE_LITTLEROOT_TOWN_BIRCHS_LAB_BIRCH

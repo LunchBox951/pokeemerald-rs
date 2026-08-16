@@ -78,13 +78,25 @@
 //! build after that loss legitimately carries the fainted lead in
 //! `playerParty[0]`, and no conclusion ever runs for it on load — the
 //! battle is long gone. `crate::flow::overworld_phase`'s `from_saved`
-//! migrates exactly that image, healing a fainted lead on continue with
-//! the same `HealPlayerParty` primitive (PR #291 review; the constructor
-//! body's comment has the upstream-cannot-save-this argument). So no path
-//! can leave a fainted lead standing in the overworld any more — fresh
-//! outcomes are healed by the conclusion, persisted ones by the load
-//! migration — and `lead_can_fight` has been removed rather than kept as
-//! dead code with no reachable input to refuse. See
+//! migrates exactly that image — keyed on its full signature (a
+//! single-member party with `VAR_ROUTE101_STATE` still at the
+//! trigger-consumed `2`), healing the fainted lead on continue with the
+//! same `HealPlayerParty` primitive (PR #291 review, both rounds; the
+//! constructor body's comment has the upstream-cannot-save-this
+//! argument). A fainted lead *outside* that signature — slot 0 down with
+//! a healthy member behind it, in some forward-version or hand-built
+//! multi-member save — deliberately roams unmigrated and *does* roll
+//! here, and that is upstream's own behaviour, not a gap:
+//! `IsWildLevelAllowedByRepel` (`wild_encounter.c:878-887`) skips zero-HP
+//! mons rather than bailing, so upstream rolls and fights with the next
+//! able member. That this port's one-mon battle model then refuses the
+//! battle (`battle::BattleError::FaintedBattler`, logged) is the
+//! already-documented multi-slot-party gap, not this module's concern. So
+//! no *modelled* path can leave a fainted lead standing in the overworld
+//! any more — fresh outcomes are healed by the conclusion, persisted
+//! legacy ones by the load migration — and `lead_can_fight` has been
+//! removed rather than kept as dead code with no reachable input to
+//! refuse. See
 //! `wild_encounter::tests::a_lost_battle_now_heals_the_party_and_halves_money`
 //! (plus its pack-gated companion
 //! `wild_encounter::tests::real_pack_a_lost_wild_battle_warps_home_to_the_default_heal_location`)
