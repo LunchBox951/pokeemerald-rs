@@ -448,6 +448,16 @@ impl Battle {
             return;
         };
         let target_is_player = !attacker_is_player;
+        // `SetMoveEffect`'s fainted-target early-out
+        // (`battle_script_commands.c:2261`-`:2264`): a battler at `0` HP
+        // takes no secondary at all, `MOVE_EFFECT_PAYDAY`/`_STEAL_ITEM`
+        // excepted — neither of which is modelled. Reached whenever the
+        // damage half was the knockout: the effect-chance roll happens
+        // *after* `datahpupdate`, so without this a Poison Sting that KOs
+        // would poison the corpse.
+        if self.battler(target_is_player).is_fainted() {
+            return;
+        }
 
         if let Some(status) = secondary.status() {
             if crate::status::can_inflict(self.battler(target_is_player), status) {

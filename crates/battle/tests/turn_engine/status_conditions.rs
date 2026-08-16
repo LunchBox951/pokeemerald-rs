@@ -579,3 +579,41 @@ fn constricts_secondary_lowers_the_targets_speed_by_one() {
         battle::StatStage::new(-1).unwrap()
     );
 }
+
+/// `SetMoveEffect`'s fainted-target early-out
+/// (`battle_script_commands.c:2261`-`:2264`): the effect-chance roll happens
+/// *after* `datahpupdate`, so a Poison Sting whose damage half was the
+/// knockout must not poison the corpse. The roll is still spent -- it is the
+/// leading operand of the `&&` chain -- so only the consequence is
+/// suppressed.
+#[test]
+fn a_secondary_never_lands_on_a_target_the_damage_half_knocked_out() {
+    let dex = Dex::new();
+    // A level-5 Marill against a level-50 Tentacool: the Poison Sting is
+    // lethal, and every draw is 0 so the 30% chance would otherwise fire.
+    let mut rng = zeros();
+    let mut battle = Battle::new(
+        Dex::new(),
+        max_iv_mon(&dex, TENTACOOL, 50, vec![POISON_STING]),
+        max_iv_mon(&dex, MARILL, 5, vec![TACKLE]),
+        false,
+        &mut rng,
+    )
+    .unwrap();
+    let events = battle
+        .take_turn(PlayerAction::UseMove(0), &mut rng)
+        .unwrap();
+
+    assert!(
+        events.contains(&BattleEvent::Fainted { by_player: false }),
+        "fixture: the hit must be lethal -- {events:?}"
+    );
+    assert!(
+        !events
+            .iter()
+            .any(|e| matches!(e, BattleEvent::StatusInflicted { .. })),
+        "a fainted target takes no secondary: {events:?}"
+    );
+    assert_eq!(battle.enemy().status(), Status1::Healthy);
+    assert_eq!(battle.outcome(), Some(BattleOutcome::PlayerWon));
+}
