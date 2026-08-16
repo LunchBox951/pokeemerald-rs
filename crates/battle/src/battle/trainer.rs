@@ -87,10 +87,14 @@ pub const SHINY_ODDS: u16 = 8;
 /// Every Route 103 rival party entry has `iv = 0`, so their starters really
 /// do run on all-zero IVs — pinned by this module's tests rather than left
 /// implicit.
+// The parameter is upstream's `partyData[i].iv` byte, named in full here:
+// CodeQL's `rust/hard-coded-cryptographic-value` reads a parameter named
+// exactly `iv` as a cryptographic initialization-vector sink (the PR #167
+// false-positive convention -- rename, never dismiss).
 #[must_use]
-pub fn fixed_ivs(iv: u8) -> Ivs {
-    let value =
-        u8::try_from(u16::from(iv) * MAX_PER_STAT_IVS / u16::from(u8::MAX)).unwrap_or(u8::MAX);
+pub fn fixed_ivs(individual_value: u8) -> Ivs {
+    let value = u8::try_from(u16::from(individual_value) * MAX_PER_STAT_IVS / u16::from(u8::MAX))
+        .unwrap_or(u8::MAX);
     Ivs {
         hp: value,
         attack: value,
