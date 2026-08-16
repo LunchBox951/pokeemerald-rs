@@ -26,8 +26,8 @@
 //! (`main_menu.c:1612`/`1678`). Since this slice's player name is a fixed
 //! pre-1.0 default rather than the naming screen (not modelled yet --
 //! deferred, still in v1 scope; see `crate::new_game`'s module docs),
-//! [`crate::new_game::DEFAULT_PLAYER_NAME`]
-//! is baked into these two pages' text directly at authoring time -- the
+//! [`crate::new_game::DEFAULT_PLAYER_NAME`] is baked into these two pages'
+//! text directly at authoring time -- the
 //! same observable result `StringExpandPlaceholders` would produce for that
 //! fixed name, without needing this module to depend on
 //! [`engine::text::format`]'s placeholder-resolver machinery for a

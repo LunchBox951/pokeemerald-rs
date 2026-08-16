@@ -12,13 +12,17 @@
 //! The other 12 files under `graphics/fonts/` are **not** extracted, for
 //! two different reasons. The Japanese sheets are **excluded**: an English
 //! retail cartridge never renders them, so no lone player reaches them
-//! (`docs/acceptance/v1.md`'s exclusion rule). The braille sheet is
+//! (`docs/acceptance/v1.md`'s exclusion rule), and so are the two
+//! `unused_frlg_*down_arrow` sheets — dead upstream assets with no live
+//! caller (`sUnusedFRLGBlankedDownArrow`/`sUnusedFRLGDownArrow`,
+//! `pokeemerald/src/text.c:73-74`, are defined and never read), excluded on
+//! the same ground as the Japanese sheets. The braille sheet is
 //! single-player content — `ScrCmd_braillemessage`
 //! (`pokeemerald/src/scrcmd.c:1482`) draws the Regi puzzle's braille signs
 //! (Sealed Chamber, Desert Ruins, Island Cave, Ancient Tomb) — and so are
-//! the keypad-icon and arrow sheets English text itself uses; those are not
-//! extracted yet: deferred, still in v1 scope (braille under `C-3`). Either
-//! way they stay `pending` in the ledger.
+//! the keypad-icon and the two live down-arrow sheets English text itself
+//! uses; those are not extracted yet: deferred, still in v1 scope (braille
+//! under `C-3`). Either way they stay `pending` in the ledger.
 
 use std::path::Path;
 

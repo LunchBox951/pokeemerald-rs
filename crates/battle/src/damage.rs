@@ -22,7 +22,8 @@
 //! (which also change *which* stat-stage changes `CalculateBaseDamage`
 //! ignores — a battle-state-machine concern), item/ability modifiers, double
 //! battles (the "hits both targets" halving and Reflect/Light Screen's
-//! double-battle `2/3` variant), and non-v1 move effects.
+//! double-battle `2/3` variant), and move effects beyond this slice (not
+//! modelled yet — deferred, still in v1 scope).
 //!
 //! Critical hits are added on top of this module, without changing it, by
 //! issue #159 (`S-6`)'s [`crate::critical`]: it derives the

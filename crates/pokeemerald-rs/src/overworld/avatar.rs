@@ -68,8 +68,8 @@ pub(super) const FRAME_H: usize = 32;
 /// `sPicTable_BrendanNormal`/`MayNormal`'s first 9 entries -- the on-foot
 /// (not-running) frames this slice uses. `walking.png`'s remaining content
 /// (if any) is never referenced (running is not modelled yet -- deferred,
-/// still in v1 scope). Also the frame
-/// count every NPC "people" sheet [`super::npc`] resolves shares (same
+/// still in v1 scope). Also the frame count every NPC "people" sheet
+/// [`super::npc`] resolves shares (same
 /// `overworld_frame(..., 2, 4, n)` layout upstream's own pic tables use).
 pub(super) const NUM_WALK_FRAMES: usize = 9;
 /// Tiles per frame: `(FRAME_W / 8) * (FRAME_H / 8)`.

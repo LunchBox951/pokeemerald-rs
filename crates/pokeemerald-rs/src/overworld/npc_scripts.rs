@@ -1,10 +1,9 @@
 //! NPC script-text subset (I-3, issue #161): a direct msgbox-style stand-in
 //! for the small number of upstream object-event scripts this slice
 //! recognizes, keyed by [`assets::ObjectEvent::script`]'s symbolic name --
-//! the full script bytecode interpreter (`engine::script`) is not modelled
-//! yet (deferred, still in v1 scope) and stays out of this slice's scope
-//! (the issue's own `DoD` wording: "a direct msgbox-style script subset is
-//! enough").
+//! the full script bytecode interpreter (`engine::script`) exists but is not
+//! wired into this slice yet -- deferred, still in v1 scope (the issue's own
+//! `DoD` wording: "a direct msgbox-style script subset is enough").
 //!
 //! [`script_text`] returns `None` for every script this table doesn't name
 //! (including the literal `"0x0"` no-script sentinel): pressing A while
@@ -43,9 +42,9 @@ pub(crate) fn script_text(script: &str) -> Option<Vec<Token>> {
 /// actually shows. `{PLAYER}` is substituted for the fixed pre-1.0 default
 /// name, mirroring `crate::intro::speech`'s identical convention for the same
 /// reason (the naming screen is not modelled yet -- deferred, still in v1
-/// scope); the trailing `{P}` is
-/// this port's own addition on top of upstream's raw string (which ends
-/// `"too?$"`, no embedded `\p`) -- standing in for `MSGBOX_DEFAULT`'s own
+/// scope); the trailing `{P}` is this port's own addition on top of
+/// upstream's raw string (which ends `"too?$"`, no embedded `\p`) --
+/// standing in for `MSGBOX_DEFAULT`'s own
 /// down-arrow wait-then-close behaviour (`crate::intro::speech::AND_YOU_ARE`'s
 /// doc comment explains the same stand-in for a different upstream
 /// mechanism).

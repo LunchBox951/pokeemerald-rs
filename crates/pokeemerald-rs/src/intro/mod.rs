@@ -59,14 +59,14 @@
 //! (upstream's A-button `JOY_NEW` check inside
 //! `TextPrinterWaitWithDownArrow`, which both `\p` and `\l` wait on) and
 //! `skip_pressed` -- a pre-1.0 development convenience with **no upstream
-//! analogue**, to be removed before `v1.0.0.0` (real Emerald's intro cannot
-//! be skipped outright; the closest it gets is `WhatsYourName`'s own wait
-//! state also accepting B, `main_menu.c:1590`). Since this slice does not
-//! model the naming/gender UI yet, a full-intro skip does not skip anything
-//! upstream would have made
-//! interactive -- it only lets a player (or a test) reach the overworld
-//! without re-confirming all eight pages. Wired to the B button in
-//! [`crate::app`].
+//! analogue**; its removal before `v1.0.0.0` is part of `C-6`'s
+//! no-unrecorded-divergence gate (`docs/acceptance/v1.md`). Real Emerald's
+//! intro cannot be skipped outright; the closest it gets is
+//! `WhatsYourName`'s own wait state also accepting B (`main_menu.c:1590`).
+//! Since this slice does not model the naming/gender UI yet, a full-intro
+//! skip does not skip anything upstream would have made interactive -- it
+//! only lets a player (or a test) reach the overworld without re-confirming
+//! all eight pages. Wired to the B button in [`crate::app`].
 
 mod speech;
 
@@ -260,8 +260,9 @@ impl IntroScene {
     ///
     /// `confirm_pressed` is the A-button just-pressed edge, forwarded
     /// straight to the current page's [`Printer::tick`] (module docs).
-    /// `skip_pressed` is the pre-1.0 development whole-intro skip, to be
-    /// removed before `v1.0.0.0` (module docs) -- once
+    /// `skip_pressed` is the pre-1.0 development whole-intro skip; its
+    /// removal before `v1.0.0.0` is part of `C-6`'s
+    /// no-unrecorded-divergence gate (module docs) -- once
     /// [`IntroStatus::Finished`] is returned, every further call returns it
     /// again without doing anything (mirrors
     /// [`engine::text::render::Printer::is_finished`]'s own terminal
