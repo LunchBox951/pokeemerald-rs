@@ -21,7 +21,7 @@
 //! (`pokeemerald/src/battle_main.c:2044`/`:2059`), so a party mon that holds
 //! an Oran Berry is only representable here if [`BattlePokemon`] has a field
 //! for it — see [`BattlePokemon::held_item`] for the field, and
-//! [`crate::battle::trainer::ensure_held_item_playable`] for the fail-closed
+//! `battle::trainer`'s `ensure_held_item_playable` for the fail-closed
 //! screen that keeps an item this engine cannot *run* from silently doing
 //! nothing mid-battle.
 
@@ -479,7 +479,7 @@ impl BattlePokemon {
     /// [`crate::battle::Battle::random_turn_number`]). The field exists so a
     /// party mon that upstream *builds* holding something is representable
     /// here at all, which is what lets
-    /// [`crate::battle::trainer::ensure_held_item_playable`] refuse it
+    /// `battle::trainer`'s `ensure_held_item_playable` refuse it
     /// **before the first draw** instead of building a battler that silently
     /// drops it `(behavioral-fidelity)`.
     #[must_use]

@@ -52,7 +52,7 @@
 //!   written here by [`build_trainer_pokemon`] exactly where
 //!   `CreateNPCTrainerParty`'s `SetMonData(&party[i], MON_DATA_HELD_ITEM,
 //!   &partyData[i].heldItem)` writes it (`src/battle_main.c:2044`, `:2059`)
-//!   — but nothing *runs* it, so [`ensure_held_item_playable`] refuses a
+//!   — but nothing *runs* it, so `ensure_held_item_playable` refuses a
 //!   non-`ITEM_NONE` item before the first draw rather than fielding a mon
 //!   whose Oran Berry never fires. See [`BattleError::UnsupportedHeldItem`].
 //! - **Mid-battle switching.** `ShouldSwitch`/`AI_ShouldSwitchIfPerishSong`
@@ -508,7 +508,7 @@ pub(crate) fn ensure_move_playable(
 }
 
 /// Whether a party mon holding `held_item` can be fielded — the held-item
-/// counterpart of [`ensure_move_playable`], run by both
+/// counterpart of `ensure_move_playable`, run by both
 /// [`ensure_trainer_party_startable`]'s pre-flight and
 /// [`crate::battle::Battle::new_trainer`]'s last line of defence (issue
 /// #293).
@@ -555,7 +555,7 @@ pub struct TrainerPartyMon<'a> {
     pub moves: &'a [MoveId],
     /// `partyData[i].heldItem` for the two `F_TRAINER_PARTY_HELD_ITEM`
     /// shapes, [`ItemId::NONE`] for the two that have no such field
-    /// (issue #293) — screened by [`ensure_held_item_playable`].
+    /// (issue #293) — screened by `ensure_held_item_playable`.
     pub held_item: ItemId,
 }
 
@@ -579,7 +579,7 @@ pub struct TrainerPartyMon<'a> {
 /// The order below follows the real handoff's composed order — per-mon
 /// [`BattlePokemon::validate`] (which [`build_trainer_pokemon`] runs mon by
 /// mon, ahead of the battle), then
-/// [`super::trainer_ai::ensure_supported_flags`], then the per-move pair —
+/// `super::trainer_ai`'s `ensure_supported_flags`, then the per-move pair —
 /// with one caveat: this screen resolves `trainer_data` *first*, where the
 /// composed path only reaches it inside `new_trainer` after the mons
 /// validate, so a party that is both mis-specced and on an unknown trainer
@@ -596,8 +596,8 @@ pub struct TrainerPartyMon<'a> {
 /// [`BattleError::UnsupportedAiFlags`] for a `gTrainers[].aiFlags` bit this
 /// crate's AI does not model, [`BattleError::UnsupportedHeldItem`] for a
 /// member holding an item nothing here runs
-/// ([`ensure_held_item_playable`]), and whatever [`BattlePokemon::validate`]
-/// or [`ensure_move_playable`] report for a member's species/level/moveset.
+/// (`ensure_held_item_playable`), and whatever [`BattlePokemon::validate`]
+/// or `ensure_move_playable` report for a member's species/level/moveset.
 ///
 /// The held-item screen runs **last**, after every move, so a party that is
 /// both unfieldable and item-carrying reports the move — the more actionable

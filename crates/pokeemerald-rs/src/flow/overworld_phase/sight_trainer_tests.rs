@@ -75,12 +75,18 @@ const MAKUHITA: u16 = 335;
 /// `(59, 6)`, elevation 3, facing south, sight range 4.
 const DAISY_TILE: (i32, i32) = (59, 6);
 
-/// `TRAINER_ANDREW` (`include/constants/opponents.h`): used only for the
-/// "does not trigger" geometry tests, so a false positive there can never be
-/// confused with Rhett's own fixtures. His object event stands at
+/// `TRAINER_ANDREW` (`include/constants/opponents.h`): the subject of the
+/// "does not trigger" geometry tests -- so a false positive there can never
+/// be confused with Rhett's own fixtures -- and, since issue #293, the only
+/// **multi-mon** party this port can field. His object event stands at
 /// `(50, 8)`, elevation 3, facing south (`MOVEMENT_TYPE_WALK_DOWN_AND_UP`'s
 /// own initial facing), sight range 3.
 const ANDREW_TILE: (i32, i32) = (50, 8);
+const TRAINER_ANDREW: u16 = 336;
+
+/// `SPECIES_MAGIKARP` (`include/constants/species.h:133`) -- `sParty_Andrew`'s
+/// level-5 lead.
+const MAGIKARP: u16 = 129;
 
 /// `TRAINER_MIGUEL_1` (`include/constants/opponents.h`): a real
 /// `TrainerParty::ItemDefaultMoves` party (module docs' item 6) --
@@ -381,6 +387,65 @@ fn start_rhetts_battle(phase: &mut OverworldPhase, player_lead: BattlePokemon, r
         phase.sight_trainer_id,
         Some(assets::trainers::TrainerId(TRAINER_RHETT)),
         "setup: keyed to the real TRAINER_RHETT, which the defeated flag depends on"
+    );
+}
+
+/// A second real trainer through the same cone, and the first **multi-mon**
+/// party this port has ever fielded: Andrew's Magikarp / Tentacool /
+/// Magikarp (`sParty_Andrew`).
+///
+/// Worth its own test rather than folding into Rhett's: it is the only
+/// sight-trainer battle that exercises the forced post-faint send-out
+/// (`OpponentHandleChoosePokemon` -> `TrainerContext::send_out_next`) from
+/// the cone, and the only one whose moveset spans four of the seven move
+/// pipelines at once -- Splash (`status_move`), Poison Sting (`secondary`,
+/// with the poison it inflicts), Supersonic (`primary_status`, confusion)
+/// and Tackle (`hit`).
+#[test]
+fn andrews_cone_starts_his_real_three_mon_party_and_plays_it_out() {
+    let (ax, ay) = ANDREW_TILE;
+    // Andrew faces south with sight range 3; two tiles south is inside it.
+    let mut phase = route_103_phase(PlayerState::new((ax, ay + 2), 3, Direction::North));
+    phase.rng = engine::rng::Rng::new(7);
+    phase.party_lead = Some(overwhelming_lead());
+
+    phase.step(ButtonState::new());
+    assert!(
+        phase.is_sight_trainer_battle_active(),
+        "Andrew's real party constructs since issue #293"
+    );
+    let battle = phase
+        .sight_trainer_battle
+        .as_ref()
+        .expect("the cone started a battle");
+    assert_eq!(
+        battle.enemy().species(),
+        assets::SpeciesId(MAGIKARP),
+        "sParty_Andrew leads with a level-5 Magikarp"
+    );
+    assert_eq!(battle.enemy().level(), 5);
+    assert_eq!(
+        battle
+            .trainer()
+            .map(battle::TrainerContext::bench_len)
+            .unwrap_or_default(),
+        2,
+        "and two more behind it -- the first multi-mon party this port fields"
+    );
+
+    let outcome = play_out_sight_battle(&mut phase, 64);
+    assert_eq!(
+        outcome,
+        Some(BattleOutcome::PlayerWon),
+        "an overwhelming lead must beat all three"
+    );
+    assert_eq!(
+        phase
+            .save1()
+            .event_data
+            .flag_get(TRAINER_FLAGS_START + TRAINER_ANDREW),
+        Ok(true),
+        "and the defeated flag is keyed to Andrew, not to whoever was last out"
     );
 }
 

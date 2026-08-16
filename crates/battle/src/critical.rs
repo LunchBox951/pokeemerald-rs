@@ -100,7 +100,7 @@ const HIGH_CRIT_EFFECTS: [MoveEffect; 4] = [
 ///            + 2 * (Stick on a Farfetch'd);                // :1274
 /// ```
 ///
-/// The four move-effect terms are [`HIGH_CRIT_EFFECTS`] and the Focus Energy
+/// The four move-effect terms are `HIGH_CRIT_EFFECTS` and the Focus Energy
 /// term is `focus_energy` (issue #293 — the attacker's
 /// [`crate::volatile::Volatiles::focus_energy`], set by
 /// [`crate::status_move`]). The three held-item terms are **not** modelled:
@@ -109,7 +109,7 @@ const HIGH_CRIT_EFFECTS: [MoveEffect; 4] = [
 /// the "no effect" case.
 ///
 /// Focus Energy is worth `2`, not `1` — enough on its own to take an
-/// ordinary move from `1/16` to `1/4` ([`CRIT_CHANCE_TABLE`]) — and it
+/// ordinary move from `1/16` to `1/4` (`CRIT_CHANCE_TABLE`) — and it
 /// stacks with a high-crit move for stage `3` (`1/3`). The caller clamps:
 /// [`crit_roll`] applies `Cmd_critcalc`'s own `:1276`-`:1277` clamp to the
 /// table's last index.

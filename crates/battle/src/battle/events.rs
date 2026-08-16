@@ -26,7 +26,7 @@ use super::BattleOutcome;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum BattleEvent {
     /// A run attempt and whether it succeeded. Always the first event of a
-    /// turn where the player chose [`PlayerAction::Run`].
+    /// turn where the player chose [`super::PlayerAction::Run`].
     RunAttempt {
         /// Always `true`: only the player runs from a wild battle this
         /// slice (see the module docs).
@@ -86,7 +86,7 @@ pub enum BattleEvent {
         by_player: bool,
     },
     /// The wild Pokémon chose to flee instead of acting — always the enemy
-    /// side (only [`Battle::new`]'s `first_battle` AI path can ever produce
+    /// side (only [`super::Battle::new`]'s `first_battle` AI path can ever produce
     /// this choice; see [`BattleOutcome::WildFled`]). No fields: unlike
     /// [`BattleEvent::RunAttempt`] this can never fail once chosen —
     /// upstream's non-player `HandleAction_Run` has no escape formula to
@@ -324,8 +324,8 @@ pub enum BattleEvent {
     /// in its place — upstream's forced post-faint switch
     /// (`OpponentHandleChoosePokemon`,
     /// `src/battle_controller_opponent.c:1621`), settled at the end of the
-    /// turn by [`Battle::end_of_turn`]. Only a
-    /// [`Battle::new_trainer`] battle can produce this.
+    /// turn by `Battle::end_of_turn`. Only a
+    /// [`super::Battle::new_trainer`] battle can produce this.
     TrainerSentOut {
         /// The species that came out.
         species: SpeciesId,
@@ -334,22 +334,22 @@ pub enum BattleEvent {
     },
     /// The player's mon gained experience for fainting the opposing mon.
     ///
-    /// The award is **already applied** to [`Battle::player`] when this
+    /// The award is **already applied** to [`super::Battle::player`] when this
     /// event is emitted — accumulated experience, any crossed level,
     /// recomputed stats, and (issue #252) each crossed level's learnset
-    /// moves ([`BattlePokemon::apply_experience`], upstream `Cmd_getexp`'s
+    /// moves ([`crate::pokemon::BattlePokemon::apply_experience`], upstream `Cmd_getexp`'s
     /// `SetMonData(MON_DATA_EXP)`/`CalculateMonStats` half plus
     /// `BattleScript_LevelUp`'s `MonTryLearningNewMove` half). The event is
     /// a report of that mutation, for the integration layer to present;
     /// applying the amount to the battler again would double it. What the
     /// in-battle application deliberately still does *not* do (EV gain,
-    /// friendship) is recorded on [`BattlePokemon::apply_experience`] and
+    /// friendship) is recorded on [`crate::pokemon::BattlePokemon::apply_experience`] and
     /// the `Cmd_getexp` ledger entry.
     ExpGained(u32),
     /// Beating a trainer paid out prize money — `Cmd_getmoneyreward`
     /// (`src/battle_script_commands.c:5635`), whose
     /// `AddMoney(&gSaveBlock1Ptr->money, ...)` this crate has no field to
-    /// perform. The amount is [`trainer::TrainerContext::money`]; crediting
+    /// perform. The amount is [`super::trainer::TrainerContext::money`]; crediting
     /// it belongs to the integration layer — unlike
     /// [`BattleEvent::ExpGained`], whose award `Battle` applies to its own
     /// battler before emitting the event (this crate owns the battler, but
@@ -361,7 +361,7 @@ pub enum BattleEvent {
     Ended(BattleOutcome),
 }
 
-/// A [`Battle::take_turn`] call that could not run to the end of the turn,
+/// A [`super::Battle::take_turn`] call that could not run to the end of the turn,
 /// together with every event that *did* happen before it stopped.
 ///
 /// A turn commits its effects as it goes — PP is deducted, damage is applied,
@@ -376,7 +376,7 @@ pub enum BattleEvent {
 /// untouched. Two different situations produce it:
 ///
 /// - **Rejected before the turn began.** [`BattleError::BattleAlreadyOver`],
-///   [`BattleError::RunForbidden`] (`first_battle` only — [`Battle::new`]'s
+///   [`BattleError::RunForbidden`] (`first_battle` only — [`super::Battle::new`]'s
 ///   docs), and — for the *player's* chosen slot, validated ahead of the
 ///   first draw — [`BattleError::InvalidMoveSlot`] /
 ///   [`BattleError::NoPpRemaining`] / [`BattleError::PlaceholderMove`],
@@ -392,7 +392,7 @@ pub enum BattleEvent {
 ///   — so when that fallback is the *first mover*, the turn stops with
 ///   nothing to report ([`BattleError::UnsupportedMoveEffect`] carrying
 ///   Struggle). By then the turn-number draw (plus a Speed-tie draw, if the
-///   speeds tied) has happened and [`Battle::random_turn_number`] has
+///   speeds tied) has happened and [`super::Battle::random_turn_number`] has
 ///   advanced; no PP or HP has changed, because neither mon got as far as
 ///   acting.
 ///

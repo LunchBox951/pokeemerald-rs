@@ -88,7 +88,7 @@
 //! cap, or miss alike. Nothing downstream of either draws:
 //!
 //! - `Cmd_attackcanceler`/`attackstring`/`Cmd_ppreduce` draw nothing beyond
-//!   the status canceller [`crate::battle::Battle::act`] runs for every move
+//!   the status canceller `Battle::act` runs for every move
 //!   alike ([`crate::status`]).
 //! - `ChangeStatBuffs` (`battle_script_commands.c:6937`-`:7098`) has no
 //!   `Random()` call anywhere in its body — read start to end, it is pure
@@ -117,7 +117,7 @@ use crate::stat_stage::StatStage;
 
 /// `EFFECT_ATTACK_DOWN` (`pokeemerald/include/constants/battle_move_effects.h:22`):
 /// Growl's effect id. Kept as a named constant (rather than only a
-/// [`STAT_CHANGE_EFFECTS`] row) because [`crate::battle::trainer_ai`] scores
+/// [`STAT_CHANGE_EFFECTS`] row) because `crate::battle`'s `trainer_ai` scores
 /// it by name.
 pub const EFFECT_ATTACK_DOWN: MoveEffect = MoveEffect(18);
 
@@ -372,7 +372,7 @@ pub fn ensure_resolvable(dex: &Dex, move_id: MoveId) -> Result<(), BattleError> 
 /// The returned [`StatChangeOutcome::Applied`] describes the change but does
 /// not perform it: which battler it lands on is
 /// [`StatChangeEffect::affects_user`]'s answer, and only the caller owns both
-/// battlers mutably ([`crate::battle::Battle::execute_stat_change_move`]).
+/// battlers mutably (`Battle::execute_stat_change_move`).
 ///
 /// # Errors
 ///

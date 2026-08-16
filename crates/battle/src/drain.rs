@@ -84,23 +84,6 @@ pub fn is_drain_effect(effect: MoveEffect) -> bool {
     effect == EFFECT_ABSORB
 }
 
-/// What one drain move did — [`crate::hit::HitOutcome`] plus the HP the
-/// attacker gets back.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct DrainOutcome {
-    /// The damage half, exactly as the plain pipeline would have reported
-    /// it (the two scripts are identical down to `adjustnormaldamage`).
-    pub hit: HitOutcome,
-    /// `Cmd_negativedamage`'s result as a positive heal — `dealt / 2`,
-    /// floored at `1` whenever any HP was dealt at all, and `0` when the
-    /// move missed or was type-immune (the script's `negativedamage` runs
-    /// after `datahpupdate`, which applied nothing).
-    ///
-    /// Computed from the HP the target **actually lost**, which the caller
-    /// supplies — see [`drain_amount`].
-    pub drain: u32,
-}
-
 /// `Cmd_negativedamage` (`src/battle_script_commands.c:6927`-`:6930`):
 /// `-(gHpDealt / 2)`, floored to `-1` when that truncates to zero.
 ///
@@ -147,7 +130,7 @@ pub fn ensure_resolvable(dex: &Dex, move_id: MoveId) -> Result<(), BattleError> 
 /// The heal is *not* computed here: it depends on `gHpDealt`, the HP the
 /// target actually lost, which only the caller knows once it has clamped the
 /// damage against the target's remaining HP. Feed that value to
-/// [`drain_amount`] — [`crate::battle::Battle::execute_drain_move`] does.
+/// [`drain_amount`] — `Battle::execute_drain_move` does.
 ///
 /// `suppress_crit` has the same meaning as in
 /// [`crate::hit::resolve_hit`]: pass `true` for a

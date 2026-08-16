@@ -26,20 +26,39 @@
 //! (`pokeemerald/src/pokemon.c`) and the STAB/type-effectiveness/random-roll
 //! battle-script steps around it.
 //!
-//! Move-effect breadth is the sharp edge of this slice, so it is enforced
-//! rather than assumed: a move is only executable if its `EFFECT_*` runs
-//! upstream's plain `BattleScript_EffectHit`
-//! ([`hit::is_ordinary_hit_effect`]) or is one of the three
-//! `BattleScript_EffectStatDown`-family stat-lowering effects
-//! ([`stat_change::is_stat_lowering_effect`], added by issue #199 so real
-//! Route 101 wild movesets — Zigzagoon's Growl, Wurmple's String Shot — and
-//! real starter movesets — Treecko's Leer — construct and play), guarded at
-//! a two-sided boundary. [`battle::Battle::new`] rejects a battle whose
-//! **wild** mon knows anything else (its rejection loop can land on any
-//! slot), while the **player's** moveset may carry unsupported moves and
-//! each *chosen* slot is validated per turn instead. Both checks run before
-//! any RNG is drawn, so an unsupported configuration or pick can never leave
-//! a half-played turn behind.
+//! Move-effect breadth is the sharp edge of this crate, so it is enforced
+//! rather than assumed: a move is executable only if its `EFFECT_*` belongs
+//! to one of **seven** pipelines, each of which reproduces one upstream
+//! battle script draw for draw. Issue #159 shipped the first, #199 the
+//! second, and issue #293 the other five:
+//!
+//! | pipeline | script | admits |
+//! |---|---|---|
+//! | [`hit`] | `BattleScript_EffectHit` | Tackle, Slash, Swift, Quick Attack, Vital Throw, … |
+//! | [`stat_change`] | `BattleScript_EffectStatUp`/`StatDown` | Growl, Leer, String Shot, Sand Attack, Screech, Growth, Harden, … |
+//! | [`status_move`] | four one-off self-targeting scripts | Splash, Focus Energy, Charge, Defense Curl |
+//! | [`drain`] | `BattleScript_EffectAbsorb` | Absorb, Mega Drain, Giga Drain |
+//! | [`fixed_damage`] | `BattleScript_EffectSonicboom` | Sonic Boom, Dragon Rage |
+//! | [`multi_hit`] | `BattleScript_EffectMultiHit` | Double Slap, Arm Thrust, … |
+//! | [`primary_status`] | `BattleScript_EffectParalyze`/`Confuse` | Thunder Wave, Stun Spore, Supersonic |
+//! | [`secondary`] | the `setmoveeffect X; goto …EffectHit` trampolines | Poison Sting, Constrict |
+//!
+//! The seven `EFFECT_*` sets are disjoint, and the split is not cosmetic:
+//! a drain move costs **3** RNG draws where an ordinary hit costs 4, a
+//! fixed-damage move costs 2, a stat *raise* costs 0 and a stat *drop* 1,
+//! and a multi-hit move costs `1 + (1..2) + 2n + 1`. Running any of them
+//! through the wrong pipeline would be wrong twice over — wrong damage
+//! *and* a desynchronised shared stream — so
+//! [`battle::ensure_executable`](battle) composes all seven and anything
+//! outside them is refused.
+//!
+//! The refusal is guarded at a two-sided boundary.
+//! [`battle::Battle::new`] rejects a battle whose **wild** mon knows an
+//! unsupported move (its rejection loop can land on any slot), while the
+//! **player's** moveset may carry one and each *chosen* slot is validated
+//! per turn instead. Both checks run before any RNG is drawn, so an
+//! unsupported configuration or pick can never leave a half-played turn
+//! behind.
 //!
 //! Issue #187 adds `BATTLE_TYPE_FIRST_BATTLE` — the Route 101 intro
 //! Zigzagoon fight's rules — as [`battle::Battle::new`]'s `first_battle`
@@ -93,16 +112,32 @@
 //! *after* `CreateNPCTrainerParty`'s per-mon OT-id draws would spend the
 //! shared stream on every frame the player stands in a cone.
 //!
-//! Out of scope for this slice (see each module's own docs for exactly what
-//! is/isn't modelled): the *general* trainer AI beyond the four scripts
-//! above and mid-battle switching AI (`I-5`), battle UI/animations,
-//! overworld transition, abilities, held items, non-volatile status
-//! conditions, weather, multi/double battles, Mist/Substitute (see
-//! [`stat_change`]'s module docs for why those two are a documented boundary
-//! rather than dead code), and move-effect breadth beyond the v1
-//! first-encounter damaging-move path plus the three stat-lowering effects
-//! above (other status moves, stat-raising moves, multi-hit/recoil/drain,
-//! ...).
+//! Issue #293 also adds the *conditions* those moves inflict and the two
+//! places a turn stops to look at them, both at upstream's own position:
+//! [`status`] (`status1` — paralysis and poison) and [`volatile`]
+//! (`status2`/`gStatuses3` — confusion, Focus Energy, Defense Curl, the
+//! charge timer), read by `Battle`'s `run_move_cancellers`
+//! (`AtkCanceler_UnableToUseMove`, before the no-PP test and before
+//! `ppreduce`, so a cancelled move keeps its PP) and `residual_effects`
+//! (`DoBattlerEndTurnEffects`, after both actions). A held item is now
+//! *carried* ([`pokemon::BattlePokemon::held_item`]) but never *run*, which
+//! is why a party mon holding one is refused up front rather than fielded
+//! with a silently inert berry.
+//!
+//! Out of scope (see each module's own docs for exactly what is/isn't
+//! modelled): the *general* trainer AI beyond the four scripts above and
+//! mid-battle switching AI (`I-5`), battle UI/animations, overworld
+//! transition, abilities, held-item **effects**, weather, multi/double
+//! battles, Mist/Substitute/Protect (see [`stat_change`]'s module docs for
+//! why those are a documented boundary rather than dead code), sleep, burn,
+//! freeze and toxic (no modelled move inflicts them, so [`status`] does not
+//! represent them), and the move effects the seven pipelines above still do
+//! not cover — Leech Seed and the rest of the end-of-turn residual family,
+//! Rollout's multi-turn lock, Attract, recoil, OHKO, Counter, Bide, and so
+//! on. Route 103's own sight trainers are the live measure of that last
+//! line: four of the nine fight as of issue #293, and
+//! `crates/pokeemerald-rs/src/flow/overworld_phase/sight_trainer_trigger.rs`
+//! pins the exact move that still stops each of the others.
 
 pub mod accuracy;
 pub mod battle;
@@ -139,7 +174,7 @@ pub use damage::{
     STRUGGLE,
 };
 pub use dex::Dex;
-pub use drain::{drain_amount, is_drain_effect, DrainOutcome};
+pub use drain::{drain_amount, is_drain_effect};
 pub use error::BattleError;
 pub use exp::{trainer_faint_exp, wild_faint_exp};
 pub use fixed_damage::{is_fixed_damage_effect, resolve_fixed_damage_move};

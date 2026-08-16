@@ -108,39 +108,38 @@
 //!    function's own doc comment for why: preempting movement on an
 //!    unconditional per-frame check that can never succeed would be an
 //!    actual soft lock, not a cosmetic gap).
-//! 7. **An emergent gap, discovered while wiring this issue: every real
-//!    Route 103 sight trainer's own default moveset currently fails to
-//!    construct.** Unlike the six Route 103 *rivals* (`route103_rival.rs`),
+//! 7. **Move coverage, the one thing standing between the cone and the
+//!    fight.** Unlike the six Route 103 *rivals* (`route103_rival.rs`),
 //!    whose hand-authored `TrainerParty::NoItemCustomMoves` movesets
-//!    (Pound/Tackle/Leer/Growl/Slash) were deliberately kept inside this
-//!    crate's early, small supported-move set, Route 103's own sight
-//!    trainers all carry `TrainerParty::NoItemDefaultMoves` -- a real level-up
-//!    moveset ([`battle::initial_moveset`]) drawn from each species' full
-//!    learnset, which reliably includes at least one move `battle::BattlePokemon::validate`
-//!    does not yet implement (verified for all nine -- this module's own
-//!    `every_sight_trainers_real_party_fails_to_construct_for_exactly_these_reasons`
-//!    test, which pins each trainer's *exact* refusal, offending move id
-//!    included, so a future move-coverage slice that fixes one is forced to
-//!    update this test rather than silently going stale). This is an
-//!    *emergent* wall, not a
-//!    bespoke guard this module wrote -- the same category
-//!    `crate::flow::route103_rival`'s own module docs once described for the
-//!    (now-retired) `FaintedBattler` dead end: this module's own sight-cone
-//!    geometry, defeated-flag gating, and eligibility table are all real and
-//!    exercised end to end against the genuine Route 103 map data; only the
-//!    very last step -- this engine actually being able to field the real
-//!    party -- currently fails, for every one of the nine, refused by
+//!    (Pound/Tackle/Leer/Growl/Slash) were deliberately kept inside the
+//!    `battle` crate's early, small supported-move set, Route 103's own
+//!    sight trainers all carry `TrainerParty::NoItemDefaultMoves` -- a real
+//!    level-up moveset ([`battle::initial_moveset`]) drawn from each
+//!    species' full learnset. Issue #264 discovered that **all nine** of
+//!    them reached a move the turn engine could not execute, so not one
+//!    could construct; this module's geometry, defeated-flag gating and
+//!    eligibility table were all real and exercised end to end against the
+//!    genuine map data, and only the very last step failed.
+//!
+//!    Issue #293 moved that wall. **Four of the nine now construct and
+//!    fight** -- Rhett (Focus Energy, Sand Attack, Arm Thrust, Vital
+//!    Throw), Marcos (Charge, Tackle, Screech, Sonic Boom), Andrew
+//!    (Splash, Poison Sting, Supersonic, Tackle across three mons) and
+//!    Pete (Poison Sting, Supersonic, Constrict) -- driven through this
+//!    module's own cone by `overworld_phase::sight_trainer_tests`. The
+//!    other four are each down to a single named move: Daisy to Leech
+//!    Seed, Amy & Liv to Helping Hand, Miguel to Attract, Isabelle to
+//!    Rollout.
+//!
+//!    That table is pinned, not narrated: this module's own
+//!    `every_sight_trainers_real_party_resolves_to_exactly_this_verdict`
+//!    test names either the species and level a trainer fields (and plays
+//!    the battle to an outcome) or the **exact** refusal and offending move
+//!    id, so a future move-coverage slice is forced to come back here
+//!    rather than let the claim go stale. A refusal is still refused by
 //!    [`battle::ensure_trainer_party_startable`]'s pre-flight *before* the
-//!    first draw and handled the same way
-//!    [`begin_sight_trainer_battle_if_seen`] handles Miguel's held item:
-//!    logged once, no battle, no draws, no soft lock. Widening move
-//!    coverage in the `battle` crate is its own, separate, much larger slice
-//!    (`battle`'s own crate docs track it), not this issue's scope. The
-//!    win/loss/defeated-flag driver half below is instead pinned with a
-//!    stand-in constructible party (one of the six proven-constructible
-//!    Route 103 rivals) rather than left untested -- see
-//!    `overworld_phase::sight_trainer_tests`' own module docs for exactly
-//!    how, and why that is still an honest test of this module's own logic.
+//!    first draw and handled the way item 6 describes: logged once, no
+//!    battle, no draws, no soft lock.
 //!
 //! # RNG stream
 //!

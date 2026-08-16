@@ -498,7 +498,7 @@ impl Battle {
     ///   effects take `AI_CheckViability` branches that draw
     ///   ([`trainer_ai`]'s module docs), so admitting one would leave the
     ///   move executable but the RNG stream wrong.
-    /// * [`trainer::ensure_held_item_playable`] — can the engine *run* what
+    /// * `trainer::ensure_held_item_playable` — can the engine *run* what
     ///   this mon is holding? Nothing here does (issue #293), so any
     ///   non-`ITEM_NONE` item is refused rather than silently inert for the
     ///   whole fight.

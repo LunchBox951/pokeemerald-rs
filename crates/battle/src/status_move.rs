@@ -79,7 +79,7 @@
 //! # What is not modelled
 //!
 //! `attackcanceler`'s status rolls belong to every move alike and live in
-//! [`crate::battle::Battle::act`]. `Cmd_setcharge`'s
+//! `Battle::act`. `Cmd_setcharge`'s
 //! `chargeTimerStartValue` (read only by the battle-recording code) and
 //! Splash's `GAME_STAT_USED_SPLASH` are noted above. Snatch — all four moves
 //! are `FLAG_SNATCH_AFFECTED` except Splash, whose `flags` are `0` — is not
@@ -193,7 +193,7 @@ pub fn ensure_resolvable(dex: &Dex, move_id: MoveId) -> Result<(), BattleError> 
 ///
 /// Like [`crate::stat_change::resolve_stat_change_move`], this decides but
 /// does not mutate: the caller owns the battler
-/// ([`crate::battle::Battle::execute_status_move`]).
+/// (`Battle::execute_status_move`).
 ///
 /// # Errors
 ///
