@@ -183,6 +183,20 @@ milestone is at least `MINOR`, and is `MAJOR` when it represents a large complet
 win. Higher-tier bumps reset lower components as listed above, and a `FINAL` bump
 must carry fresh approval as described below.
 
+### Pre-1.0 `MAJOR` bumps are playable progress
+
+While `FINAL` is `0`, `MAJOR` is content-oriented: `v0.1.0.0`, `v0.2.0.0`, and so
+on normally mark **meaningful playable progress through the game** — rival
+battles, Team Aqua/Magma encounters, Gym Leaders, major story events, the Elite
+Four and Champion, optional and postgame areas. Those are planning patterns, not
+a prescribed roadmap; which milestone comes next is decided in GitHub issues
+`(constitution-vs-roadmap)`. See [`docs/acceptance/v1.md`](docs/acceptance/v1.md).
+
+A change that delivers no playable progress therefore takes at most `MINOR` while
+`FINAL` is `0`, even when it breaks a repository contract — say the acceptance
+scope itself; the PR calls the reasoning out. The `MAJOR` row's ordinary meaning
+resumes once `FINAL` is `1`.
+
 Channel promotions and post-merge health checks compare cumulative endpoints.
 They require canonical versions and preserve channel ordering without replaying
 reset or `FINAL`-marker rules already enforced when each change entered `dev`.
@@ -201,8 +215,13 @@ Date: 2026-07-25
 ```
 
 `scripts/version_check.py` rejects a stale marker, malformed marker, or marker for
-another version. v1 ships only when every row in `docs/acceptance/v1.md` is done
-or has a recorded waiver and the H-1 operator playtest is signed.
+another version. `v1.0.0.0` means Pokémon Emerald is fully playable as a
+single-player game, from its beginning through its optional and postgame content
+— the binding gate defined in [`docs/acceptance/v1.md`](docs/acceptance/v1.md).
+It ships only when every row there is done or has a recorded waiver and the H-1
+operator playtest is signed. Multiplayer-only behavior may be excluded, but only
+with the reason recorded in the ledger entry (and as a ⊘ row when it drops a
+criterion); nothing a lone player reaches is waived by omission.
 
 ## Hotfixes
 
