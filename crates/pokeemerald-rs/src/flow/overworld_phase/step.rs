@@ -392,18 +392,19 @@ impl OverworldPhase {
             let door_warp = landed
                 .and_then(|(x, y)| trigger_door_warp(&runtime, x, y, self.player.elevation()));
             // The roll happens only on a completed step no warp path has
-            // claimed (`roll_eligible_landing`), only on a fightable map
-            // (`wild_table_fightable`), and only with a lead that can fight
-            // (`lead_can_fight`). Ordinary wild and trainer losses can no
-            // longer trip that last filter (issue #261): `Self::white_out`
-            // heals the party the instant such a battle is lost, before this
-            // method can ever run again with a fainted lead in
-            // `self.party_lead`. But a lost Route 101 first battle still
-            // leaves one -- `CB2_EndFirstBattle` has no `IsPlayerDefeated`
-            // branch, and issue #251's script conclusion is not yet modelled
-            // -- so the filter stays for exactly that residual state
+            // claimed (`roll_eligible_landing`) and only on a fightable map
+            // (`wild_table_fightable`). A fainted-lead filter used to sit
+            // here too, for the one loss path issue #261's white-out could
+            // not yet cover (a lost Route 101 first battle -- `CB2_EndFirstBattle`
+            // has no `IsPlayerDefeated` branch); issue #251's
+            // `first_battle_conclusion` now heals that lead the instant the
+            // battle ends, on every outcome, and a pre-#251 save that
+            // *serialized* the residual state is healed at load
+            // (`from_saved`'s migration, PR #291 review), so no path can
+            // leave a fainted lead standing here any more and the filter
+            // was removed
             // (`crate::flow::wild_encounter`'s module docs, "The fail-closed
-            // guard, narrowed"). The landed tile is the player's own tile on
+            // guard, retired"). The landed tile is the player's own tile on
             // a drain frame, and it is what `GetPlayerPosition` would report
             // there.
             let encounter = wild_encounter::roll_for_step(
@@ -412,8 +413,7 @@ impl OverworldPhase {
                 self.map_id,
                 &runtime,
                 wild_encounter::roll_eligible_landing(landed, preempting_arrow_trigger, door_warp)
-                    .filter(|_| wild_table_fightable)
-                    .filter(|_| wild_encounter::lead_can_fight(self.party_lead.as_ref())),
+                    .filter(|_| wild_table_fightable),
             );
             // Both remaining `ProcessPlayerFieldInput` steps -- the arrow
             // poll (`:164-168`) and the interaction check (`:172`) -- are

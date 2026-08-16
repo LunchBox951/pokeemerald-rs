@@ -100,30 +100,43 @@
 //! them back to the last heal location before the frame ends, the same
 //! displacement upstream's own white-out produces.
 //!
-//! **Formerly a fail-closed dead end, now retired.** Before this issue, a
-//! loss left the fainted lead in place and a fresh attempt failed closed at
-//! [`crate::flow::route103_rival::start_route103_rival_battle`]
+//! **Formerly a fail-closed dead end, now fully retired.** Before issue
+//! #261, a loss left the fainted lead in place and a fresh attempt failed
+//! closed at [`crate::flow::route103_rival::start_route103_rival_battle`]
 //! (`battle::BattleError::FaintedBattler`) -- an *emergent* wall from
 //! [`battle::Battle::new_trainer`] refusing a fainted battler, not a bespoke
 //! guard this module wrote, but a dead end this module's own docs recorded
 //! all the same as "the honest fidelity delta this slice ships with." That
-//! wall is unreachable through a *rival* (or wild) loss now: `white_out`
-//! heals the lead in the same call that reports the loss, so those paths can
-//! never leave a fainted lead behind, and the player is off Route 103
-//! entirely besides. One path still can — a lost Route 101 first battle
-//! (`CB2_EndFirstBattle` has no `IsPlayerDefeated` branch; issue #251's
-//! script conclusion is not yet modelled), and Route 103 is walkable from
-//! there — so [`OverworldPhase::begin_route103_rival_battle`] now screens
-//! the fainted lead *before* the party build, the same fail-closed no-draw
-//! shape `crate::flow::wild_encounter::lead_can_fight` applies to the
-//! encounter roll (its module docs, "The fail-closed guard, narrowed"):
-//! without the screen, each attempt would spend `build_trainer_pokemon`'s
-//! OT-id draws before `FaintedBattler` refused it. See
+//! wall was unreachable through a *rival* (or wild) loss as of #261:
+//! `white_out` heals the lead in the same call that reports the loss, so
+//! those paths can never leave a fainted lead behind, and the player is off
+//! Route 103 entirely besides. One path still could — a lost Route 101
+//! first battle (`CB2_EndFirstBattle` has no `IsPlayerDefeated` branch), and
+//! Route 103 is walkable from there — so between #261 and #251,
+//! [`OverworldPhase::begin_route103_rival_battle`] screened the fainted
+//! lead *before* the party build, the same fail-closed no-draw shape
+//! `crate::flow::wild_encounter::lead_can_fight` applied to the encounter
+//! roll.
+//!
+//! Issue #251 closes that last path too:
+//! `super::first_battle_conclusion::OverworldPhase::conclude_first_battle`
+//! now heals the Route 101 first-battle lead the instant *that* battle
+//! reports any outcome (win, loss, or flee), the same frame it happens --
+//! `Route101_EventScript_BirchsBag`'s own `HealPlayerParty` call, which
+//! upstream's `CB2_EndFirstBattle` reaches regardless of how the fight
+//! ended (that module's own docs cite the chain). A fainted lead can
+//! therefore no longer reach Route 103 by *any* path, so the screen here is
+//! retired outright rather than left in place as now-unreachable dead code
+//! -- see
+//! `route103_rival_tests::a_lost_route_101_first_battle_still_lets_the_healed_lead_fight_the_rival`
+//! for the replacement, strictly *stronger* pin (`(test-ratchet)`: it
+//! proves the fainted precondition itself can no longer arise, which the
+//! deleted screen's own unit test could never show by construction) and its
+//! own doc comment for exactly what it retires. See also
 //! `route103_rival_tests::losing_the_rival_battle_now_heals_halves_money_and_leaves_the_hide_flag_clear`
 //! (plus its pack-gated companion
 //! `route103_rival_tests::real_pack_losing_the_rival_battle_warps_home_to_the_default_heal_location`)
-//! for the replacement tests and their own doc comments for what they
-//! retire.
+//! for the ordinary rival/wild-loss pins issue #261 already established.
 //!
 //! # RNG stream
 //!
@@ -176,6 +189,14 @@ const RIVAL_MAY_NORMAL_GFX_ID: u16 = 105;
 /// `Route103_EventScript_RivalEnd`'s `removeobject` actually performs
 /// (module docs).
 const FLAG_HIDE_ROUTE_103_RIVAL: u16 = 0x2D3;
+
+/// `VAR_STARTER_MON` (`include/constants/vars.h:53`) -- independently
+/// transcribed, the same "own transcription, not a shared constant"
+/// convention [`VAR_OBJ_GFX_ID_0`]'s own doc comment explains.
+/// `super::first_battle_conclusion::OverworldPhase::conclude_first_battle`
+/// is this var's one writer (issue #251); [`OverworldPhase::begin_route103_rival_battle`]
+/// is its reader here.
+const VAR_STARTER_MON: u16 = 0x4023;
 
 /// Port of `Route103_OnTransition`'s `call Common_EventScript_SetupRivalGfxId`
 /// (module docs, step 1): on entering Route 103, write the rival's numeric
@@ -260,17 +281,32 @@ impl OverworldPhase {
     ///
     /// Derives [`Rival`] from [`OverworldPhase::save2`]'s `player_gender`
     /// (always the *opposite* protagonist, [`Rival::for_gender`]) and
-    /// [`PlayerStarter`] from the current party lead's own species
-    /// ([`PlayerStarter::from_species`]) -- `VAR_STARTER_MON` itself is not
-    /// modelled (`crate::flow::route103_rival`'s own module docs), so the
-    /// lead's real species is the honest stand-in: production always has
-    /// [`crate::new_game::PROVISIONAL_STARTER_SPECIES`] there.
+    /// [`PlayerStarter`] from the real `VAR_STARTER_MON`
+    /// ([`PlayerStarter::from_var`]) -- issue #251 gives that var a real
+    /// write (`super::first_battle_conclusion`), retiring the
+    /// species-derived stand-in [`PlayerStarter::from_species`] this method
+    /// used before: production always has
+    /// [`crate::new_game::PROVISIONAL_STARTER_SPECIES`]'s own encoding
+    /// there by the time Route 103 is reachable at all (the rescue chain
+    /// runs first).
     ///
     /// Clears [`OverworldPhase::rival_battle_outcome`] first, the same
     /// "a new attempt owns its result channel from trigger time onward"
     /// contract `begin_first_battle` documents, so a stale outcome from an
     /// earlier fight can never survive into this one -- including every
     /// early-return path below, which leaves no battle at all.
+    ///
+    /// No longer screens a fainted lead before building the party (issue
+    /// #251 review; module docs' "The loss decision" section). The one
+    /// residual state that screen existed for -- a lost Route 101 first
+    /// battle leaving a fainted lead standing in the overworld,
+    /// `CB2_EndFirstBattle` having no `IsPlayerDefeated` branch to route
+    /// through `white_out` -- no longer exists at all:
+    /// `super::first_battle_conclusion::OverworldPhase::conclude_first_battle`
+    /// now heals the lead in the same frame that battle ends, on every
+    /// outcome. See
+    /// `super::route103_rival_tests::a_lost_route_101_first_battle_still_lets_the_healed_lead_fight_the_rival`
+    /// for the replacement, strictly stronger pin.
     pub(super) fn begin_route103_rival_battle(&mut self) {
         self.rival_battle_outcome = None;
         eprintln!(
@@ -290,27 +326,17 @@ impl OverworldPhase {
             eprintln!("route 103 rival: no party mon yet -- no battle to start");
             return;
         };
-        // The same fail-closed screen `wild_encounter::lead_can_fight`
-        // applies to the encounter roll, for the same residual state (a
-        // lost Route 101 first battle -- `crate::flow::wild_encounter`'s
-        // module docs, "The fail-closed guard, narrowed"; issue #261
-        // review): without it, every A-press here would spend
-        // `build_trainer_pokemon`'s per-member OT-id draws only for
-        // `Battle::new_trainer` to refuse the fainted battler -- repeatable
-        // draws with no upstream counterpart. Refused before anything draws.
-        if lead.is_fainted() {
+        let starter_value = match self.save1.event_data.var_get(VAR_STARTER_MON) {
+            Ok(value) => value,
+            Err(error) => {
+                eprintln!("route 103 rival: couldn't read VAR_STARTER_MON ({error}) -- no battle to start");
+                return;
+            }
+        };
+        let Some(starter) = PlayerStarter::from_var(starter_value) else {
             eprintln!(
-                "route 103 rival: the lead mon has fainted -- no battle until it is healed \
-                 (a lost first battle is the one path here; see flow::wild_encounter's \
-                 module docs)"
-            );
-            return;
-        }
-        let lead_species = lead.species();
-        let Some(starter) = PlayerStarter::from_species(lead_species) else {
-            eprintln!(
-                "route 103 rival: lead species {lead_species:?} has no VAR_STARTER_MON mapping \
-                 -- no battle to start"
+                "route 103 rival: VAR_STARTER_MON reads {starter_value}, which names no \
+                 PlayerStarter -- no battle to start"
             );
             return;
         };

@@ -38,13 +38,19 @@
 //!    to the lab.
 //!
 //! This port has no script engine (`crate::flow::first_battle`'s own module
-//! docs), so none of steps 2's cutscene or 3's bag/starter/heal/warp chain
-//! is modelled — building one is explicitly out of this issue's scope. The
-//! "minimum honest cut" issue #231 asks for instead: **step 2's coord-event
-//! *trigger* runs [`crate::flow::first_battle::start_first_battle`]
-//! directly**, skipping straight from "player steps onto the rescue tile"
-//! to "the Zigzagoon fight happens," with the cutscene, the bag, and
-//! starter-selection UI recorded as NOT modelled below rather than faked.
+//! docs), so none of step 2's cutscene or step 3's `ChooseStarter`
+//! UI/dressing is modelled — building an interpreter is explicitly out of
+//! this issue's scope. The "minimum honest cut" issue #231 asks for
+//! instead: **step 2's coord-event *trigger* runs
+//! [`crate::flow::first_battle::start_first_battle`] directly**, skipping
+//! straight from "player steps onto the rescue tile" to "the Zigzagoon
+//! fight happens," with the cutscene, the bag, and starter-selection UI
+//! recorded as NOT modelled below rather than faked. Step 3's own *tail* —
+//! `HealPlayerParty`, the var writes, the warp to the lab — is issue #251's
+//! own narrow slice, not this one's: see `super::first_battle_conclusion`
+//! for that half of the chain, run from
+//! [`OverworldPhase::advance_first_battle_frame`] below the instant the
+//! battle this trigger starts reports a real outcome.
 //! Step 1's var bump *is* modelled (see [`sync_route_101_state_on_entry`])
 //! — without it, `VAR_ROUTE101_STATE` would sit at its fresh-save `0`
 //! forever and the trigger below could never gate open in real play, which
@@ -68,9 +74,12 @@
 //! `crates/assets/src/map_events.rs`); [`TRIGGER_CONSUMED_STATE`] (`2`) is
 //! what `Route101_EventScript_StartBirchRescue` itself sets
 //! (`scripts.inc:40`, `setvar VAR_ROUTE101_STATE, 2`) — reusing that exact
-//! upstream value, not `3` (which upstream only reaches after the bag/heal/
-//! warp chain this slice does not run), is deliberate: this cut models
-//! exactly as much of the chain as it runs, no more.
+//! upstream value here, rather than jumping straight to `3`, is deliberate:
+//! this trigger models only as much of the chain as *it* runs (the
+//! cutscene's own mid-point write), no more. `3` — the chain's real
+//! terminal value — is `super::first_battle_conclusion`'s own write
+//! instead, issue #251's, once the battle this trigger starts has actually
+//! ended.
 //!
 //! # When the var advances, and why it is at trigger time
 //!
@@ -380,14 +389,19 @@ impl OverworldPhase {
     /// mirroring [`OverworldPhase::advance_wild_battle_frame`]'s shape
     /// exactly except for which driver it calls.
     ///
-    /// Nothing here touches `VAR_ROUTE101_STATE`:
+    /// Nothing here touches `VAR_ROUTE101_STATE` directly:
     /// [`OverworldPhase::begin_first_battle`] already consumed the trigger
     /// when it fired (module docs' "When the var advances" section), which is
     /// both upstream's ordering and the only placement that also covers
     /// [`crate::flow::first_battle::advance_first_battle`]'s **abort** path —
     /// an unplayable turn (no PP in slot 0, an unsupported move effect)
     /// empties the slot and returns `None`, so a "set it on `Some(outcome)`"
-    /// rule would silently leave the tile live.
+    /// rule would silently leave the tile live. A **real** outcome, on the
+    /// other hand, runs [`OverworldPhase::conclude_first_battle`]
+    /// (`super::first_battle_conclusion`, issue #251) the instant it is
+    /// reported — `Route101_EventScript_BirchsBag`'s own post-battle tail,
+    /// which does advance `VAR_ROUTE101_STATE` again, past this trigger's
+    /// own `TRIGGER_CONSUMED_STATE`, to its terminal `3`.
     pub(super) fn advance_first_battle_frame(&mut self) -> bool {
         if self.first_battle.is_none() {
             return false;
@@ -399,6 +413,7 @@ impl OverworldPhase {
         ) {
             eprintln!("first battle: ended -- {outcome:?}");
             self.first_battle_outcome = Some(outcome);
+            self.conclude_first_battle();
         }
         true
     }

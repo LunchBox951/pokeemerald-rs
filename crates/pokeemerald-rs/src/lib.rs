@@ -53,10 +53,15 @@
 //! tiles (10,19)/(11,19), gated on `VAR_ROUTE101_STATE`), recognized by
 //! `flow::overworld_phase`'s `first_battle_trigger` on the same
 //! `OverworldPhase::step` path `App`'s game-flow state machine drives — so
-//! walking Route 101's grass in real play reaches the fight. Still not
-//! modelled around it: the rescue cutscene, Birch's bag and the
-//! starter-choose UI, and the `B_TRANSITION_BLUR` intro (the trigger
-//! module's docs carry the full deferral list). The crate-root re-exports
+//! walking Route 101's grass in real play reaches the fight. Since issue
+//! #251, `flow::overworld_phase::first_battle_conclusion` also runs
+//! `Route101_EventScript_BirchsBag`'s own post-battle tail the instant the
+//! battle reports any real outcome: heals the party lead, writes
+//! `VAR_BIRCH_LAB_STATE`/the real `VAR_STARTER_MON`/`VAR_ROUTE101_STATE`'s
+//! terminal value, and warps to Birch's lab. Still not modelled: the
+//! rescue cutscene, the `special ChooseStarter` starter-select UI and its
+//! `ScriptGiveMon` handout, and the `B_TRANSITION_BLUR` intro (that
+//! module's own docs carry the full deferral list). The crate-root re-exports
 //! back that hookup for `xtask`'s `boot-to-first-fight` scenario (I-7,
 //! issue #245), which drives [`App`] through this exact chain -- title,
 //! new game, the protagonist's room, Route 101, the scripted fight, and the
@@ -73,7 +78,9 @@
 //! `flow::overworld_phase`'s `route103_rival_trigger` on that same
 //! `OverworldPhase::step` path) derives which of the six
 //! `TRAINER_*_ROUTE_103_*` rivals is fought from the player's own gender and
-//! the party lead's real species, and starts the fight. Still not modelled
+//! the real `VAR_STARTER_MON` (issue #251 gives that var a real write;
+//! before it, the party lead's own species stood in), and starts the
+//! fight. Still not modelled
 //! around it: the approach cutscene and its dialog, and every
 //! `Route103_EventScript_RivalEnd` write except `removeobject`'s hide-flag
 //! effect (`route103_rival_trigger`'s
