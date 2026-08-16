@@ -401,10 +401,12 @@ impl OverworldPhase {
     ///   path observably produces here, and reads it back through
     ///   [`saved_facing`]. A save that holds `DIR_NONE` there (a zeroed
     ///   block, or an image written before this slice) still falls back to
-    ///   the continue-game *warp* branch's tile-derived
-    ///   `GetAdjustedInitialDirection` (`src/overworld.c:929-951`, ported
-    ///   as [`engine::overworld::warp_in_facing`], `DIR_SOUTH` on an
-    ///   ordinary tile) rather than facing an arbitrary way.
+    ///   the tile-derived `GetAdjustedInitialDirection`
+    ///   (`src/overworld.c:929-951` -- shared local-map-load code reached
+    ///   from every warp via `InitObjectEventsLocal`, not the continue-game
+    ///   warp branch's own; ported as
+    ///   [`engine::overworld::warp_in_facing`], `DIR_SOUTH` on an ordinary
+    ///   tile) rather than facing an arbitrary way.
     /// * **Elevation** -- the saved tile's own grid cell, with the
     ///   multi-level -> transition substitution
     ///   `ObjectEventUpdateElevation` applies, exactly as
@@ -762,6 +764,14 @@ mod first_battle_trigger_tests;
 mod frame_tests;
 #[cfg(test)]
 mod input_tests;
+/// `oldale_town_npc_reposition`'s tests (issue #281) -- the
+/// `crate::flow::overworld_phase` half (collision, over both a synthetic
+/// grid and the real bundled map); the reposition-table staleness guard and
+/// the `resolve_map_events` unit tests live with the module itself,
+/// `crate::overworld::oldale_town_npc_reposition`, which this file cannot
+/// reach (`pub(crate)`, not `pub(super)` to `overworld_phase`).
+#[cfg(test)]
+mod oldale_reposition_tests;
 /// `route103_rival_trigger`'s tests (issue #248) -- already split out as
 /// its own sibling module when it landed, the same per-area shape as the
 /// rest of this list (issue #238).
