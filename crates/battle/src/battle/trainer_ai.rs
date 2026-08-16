@@ -193,11 +193,23 @@ enum MovePower {
 /// 3. **Effects with no `if_effect` row at all**, which therefore fall off
 ///    the end of the chain (`:214`) unchanged: [`EFFECT_HIT`],
 ///    `EFFECT_MULTI_HIT`, `EFFECT_ABSORB`, `EFFECT_POISON_HIT`,
-///    `EFFECT_QUICK_ATTACK`, `EFFECT_VITAL_THROW`, `EFFECT_SPEED_DOWN_HIT`,
-///    `EFFECT_SPLASH` and `EFFECT_CHARGE`. Their absence from the chain is
-///    itself the model, so they are listed explicitly rather than allowed by
-///    a catch-all — an effect this module has *not* checked must still be
-///    refused.
+///    `EFFECT_QUICK_ATTACK`, `EFFECT_ALWAYS_HIT`, `EFFECT_VITAL_THROW`,
+///    `EFFECT_HIGH_CRITICAL`, `EFFECT_DRAGON_RAGE`,
+///    `EFFECT_SPEED_DOWN_HIT`, `EFFECT_EVASION_DOWN_HIT`, `EFFECT_SPLASH`
+///    and `EFFECT_CHARGE`. Their absence from the chain (`:104`-`:213`,
+///    swept row by row) is itself the model, so they are listed explicitly
+///    rather than allowed by a catch-all — an effect this module has *not*
+///    checked must still be refused.
+///
+///    The list is the *script's* answer, not the turn engine's, so it
+///    includes effects nothing here can execute (`EFFECT_DRAGON_RAGE`,
+///    `EFFECT_EVASION_DOWN_HIT`) and effects
+///    [`is_viability_scoreable`] deliberately refuses
+///    (`EFFECT_HIGH_CRITICAL`, whose `AI_CV_HighCrit` handler *does* draw).
+///    Nothing is admitted by that: [`ensure_scoreable`] requires **every**
+///    script a trainer's `aiFlags` selects to accept the move, and
+///    `super::trainer::ensure_move_playable` requires the turn engine to
+///    accept it as well.
 #[must_use]
 pub(crate) fn is_check_bad_move_scoreable(effect: MoveEffect) -> bool {
     if crate::stat_change::is_stat_change_effect(effect) {
@@ -215,8 +227,12 @@ pub(crate) fn is_check_bad_move_scoreable(effect: MoveEffect) -> bool {
         | 0   // EFFECT_HIT
         | 3   // EFFECT_ABSORB
         | 2   // EFFECT_POISON_HIT
+        | 17  // EFFECT_ALWAYS_HIT
         | 29  // EFFECT_MULTI_HIT
+        | 41  // EFFECT_DRAGON_RAGE
+        | 43  // EFFECT_HIGH_CRITICAL
         | 70  // EFFECT_SPEED_DOWN_HIT
+        | 74  // EFFECT_EVASION_DOWN_HIT
         | 78  // EFFECT_VITAL_THROW
         | 85  // EFFECT_SPLASH
         | 103 // EFFECT_QUICK_ATTACK
