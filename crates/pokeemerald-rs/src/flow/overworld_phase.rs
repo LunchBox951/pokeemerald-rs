@@ -25,6 +25,9 @@
 //! [`OverworldPhase::advance_wild_battle_frame`]),
 //! [`first_battle_trigger`] (the Route 101 scripted first-battle coord-event
 //! trigger, issue #231, [`OverworldPhase::advance_first_battle_frame`]),
+//! [`first_battle_conclusion`] (`Route101_EventScript_BirchsBag`'s
+//! post-battle heal/var-writes/warp tail, issue #251,
+//! [`OverworldPhase::conclude_first_battle`]),
 //! [`route103_rival_trigger`] (the Route 103 rival battle's own A-press
 //! interaction trigger and rival-sprite setup, issue #248,
 //! [`OverworldPhase::advance_route103_rival_battle_frame`]),
@@ -46,6 +49,7 @@ use crate::overworld::{self, NpcDialog, OverworldScene, OverworldSceneError};
 use crate::start_menu::StartMenu;
 
 mod connections;
+mod first_battle_conclusion;
 mod first_battle_trigger;
 mod frame;
 mod input;
@@ -56,6 +60,20 @@ mod start_menu;
 mod step;
 mod white_out;
 mod wild_battle;
+
+/// `VAR_ROUTE101_STATE` (`include/constants/vars.h:116`) -- independently
+/// transcribed for [`OverworldPhase::from_saved`]'s legacy-save check, the
+/// same "own copy per module" convention `first_battle_trigger`'s docs
+/// explain for `VAR_OBJ_GFX_ID_0`.
+const VAR_ROUTE101_STATE: u16 = 0x4060;
+
+/// The value the rescue cutscene's `setvar VAR_ROUTE101_STATE, 2` leaves
+/// behind (`Route101_EventScript_StartBirchRescue`, `scripts.inc:40`) --
+/// `first_battle_trigger`'s `TRIGGER_CONSUMED_STATE`, transcribed here for
+/// the legacy-save signature: a pre-#251 build could save in this state
+/// after a lost first battle, while the conclusion now always advances it
+/// to `3` the frame the battle ends.
+const ROUTE101_TRIGGER_CONSUMED_STATE: u16 = 2;
 
 /// Why resuming a loaded save into an overworld phase failed
 /// ([`OverworldPhase::continue_saved_game`]).
@@ -430,10 +448,12 @@ impl OverworldPhase {
     ///   path observably produces here, and reads it back through
     ///   [`saved_facing`]. A save that holds `DIR_NONE` there (a zeroed
     ///   block, or an image written before this slice) still falls back to
-    ///   the continue-game *warp* branch's tile-derived
-    ///   `GetAdjustedInitialDirection` (`src/overworld.c:929-951`, ported
-    ///   as [`engine::overworld::warp_in_facing`], `DIR_SOUTH` on an
-    ///   ordinary tile) rather than facing an arbitrary way.
+    ///   the tile-derived `GetAdjustedInitialDirection`
+    ///   (`src/overworld.c:929-951` -- shared local-map-load code reached
+    ///   from every warp via `InitObjectEventsLocal`, not the continue-game
+    ///   warp branch's own; ported as
+    ///   [`engine::overworld::warp_in_facing`], `DIR_SOUTH` on an ordinary
+    ///   tile) rather than facing an arbitrary way.
     /// * **Elevation** -- the saved tile's own grid cell, with the
     ///   multi-level -> transition substitution
     ///   `ObjectEventUpdateElevation` applies, exactly as
@@ -468,7 +488,14 @@ impl OverworldPhase {
     ///   mon that was saved -- damage taken and PP spent included -- rather
     ///   than a fresh copy of [`new_game::provisional_starter`] (issue
     ///   #232). See [`crate::party`] for what the encoder carries and what
-    ///   it does not.
+    ///   it does not. One migration applies (PR #291 review): a fainted
+    ///   lead in a save matching the pre-#251 legacy signature -- a
+    ///   single-member party with [`VAR_ROUTE101_STATE`] still at the
+    ///   trigger-consumed `2`, the one image only a build without the
+    ///   first-battle conclusion could serialize -- is healed on load. A
+    ///   fainted slot 0 with healthy members behind it is ordinary
+    ///   upstream state and round-trips untouched; the constructor body's
+    ///   own comment has the full reasoning.
     ///
     /// # What it does not
     ///
@@ -551,6 +578,52 @@ impl OverworldPhase {
             sight_trainer_log: sight_trainer_trigger::SightTrainerLog::default(),
         };
         phase.copy_party_and_objects_from_save();
+        // A save written between issues #261 and #251 can carry the one
+        // residual state the white-out never covered: a lost Route 101
+        // first battle returned the player to the field with a fainted
+        // lead (`CB2_EndFirstBattle` has no `IsPlayerDefeated` branch),
+        // and pre-#251 builds had no `first_battle_conclusion` heal before
+        // the start menu could save it. The migration keys on that state's
+        // *full* signature, not on the faint alone (PR #291 review, second
+        // round): a single-member party -- every pre-#251 build wrote
+        // exactly one -- with `VAR_ROUTE101_STATE` still at the
+        // trigger-consumed `2` the unmodelled conclusion would have
+        // advanced to `3`. A fainted slot 0 with healthy members behind it
+        // is an *ordinary* upstream state (`IsWildLevelAllowedByRepel`
+        // skips zero-HP mons rather than bailing, `wild_encounter.c:
+        // 878-887`) that a forward-version or hand-built multi-member save
+        // could legitimately hold, and it must round-trip untouched.
+        // Within the signature, upstream cannot write the image at all --
+        // a party-wide faint white-outs before the field is ever playable
+        // again -- so it is unambiguously the legacy marker. Migrated with
+        // the same `HealPlayerParty` primitive the conclusion now applies
+        // to every fresh outcome, rather than left to spend encounter RNG
+        // draws on every grass step before `Battle::new` refuses the
+        // battler (`flow::wild_encounter`'s "The fail-closed guard,
+        // retired" section leans on this migration for exactly these
+        // saves).
+        let legacy_first_battle_save = phase.save1.player_party_count <= 1
+            && phase
+                .save1
+                .event_data
+                .var_get(VAR_ROUTE101_STATE)
+                .is_ok_and(|state| state == ROUTE101_TRIGGER_CONSUMED_STATE);
+        if legacy_first_battle_save {
+            if let Some(lead) = phase.party_lead.as_mut() {
+                if lead.is_fainted() {
+                    eprintln!(
+                        "continue: this save predates the first-battle conclusion (issue #251) \
+                         and carries a fainted lead -- healing it, as the conclusion now does on \
+                         every outcome"
+                    );
+                    if let Err(error) = lead.heal(&battle::Dex::new()) {
+                        eprintln!(
+                            "continue: couldn't heal the migrated lead ({error}) -- left as-is"
+                        );
+                    }
+                }
+            }
+        }
         // Route 101's own on-frame `VAR_ROUTE101_STATE` bump (issue #231,
         // `first_battle_trigger`'s module docs) -- a no-op for every other
         // `map_id`. A continue reaches the field through the ordinary field
@@ -808,12 +881,24 @@ pub(super) fn saved_map_id(warp: WarpData) -> Option<assets::MapId> {
 mod connections_tests;
 #[cfg(test)]
 mod decoration_tests;
+/// `first_battle_conclusion`'s tests (issue #251) -- the same per-area split
+/// `route103_rival_tests`' own doc comment explains.
+#[cfg(test)]
+mod first_battle_conclusion_tests;
 #[cfg(test)]
 mod first_battle_trigger_tests;
 #[cfg(test)]
 mod frame_tests;
 #[cfg(test)]
 mod input_tests;
+/// `oldale_town_npc_reposition`'s tests (issue #281) -- the
+/// `crate::flow::overworld_phase` half (collision, over both a synthetic
+/// grid and the real bundled map); the reposition-table staleness guard and
+/// the `resolve_map_events` unit tests live with the module itself,
+/// `crate::overworld::oldale_town_npc_reposition`, which this file cannot
+/// reach (`pub(crate)`, not `pub(super)` to `overworld_phase`).
+#[cfg(test)]
+mod oldale_reposition_tests;
 /// `route103_rival_trigger`'s tests (issue #248) -- already split out as
 /// its own sibling module when it landed, the same per-area shape as the
 /// rest of this list (issue #238).

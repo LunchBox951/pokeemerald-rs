@@ -24,8 +24,8 @@ use engine::rng::Rng;
 use platform::{ButtonState, Buttons};
 
 use super::{
-    advance_wild_battle, arrow_poll_open, field_input_consumed, lead_can_fight,
-    roll_eligible_landing, start_wild_battle,
+    advance_wild_battle, arrow_poll_open, field_input_consumed, roll_eligible_landing,
+    start_wild_battle,
 };
 use crate::flow::overworld_phase::OverworldPhase;
 
@@ -1053,89 +1053,129 @@ fn after_a_white_out_a_later_grass_step_rolls_again() {
     );
 }
 
-/// The residual state [`super::lead_can_fight`] still guards (issue #261
-/// review; `flow::wild_encounter`'s module docs, "The fail-closed guard,
-/// narrowed"): a lost Route 101 *first battle* leaves a fainted lead in the
-/// overworld -- `CB2_EndFirstBattle` has no `IsPlayerDefeated` branch, so no
-/// white-out and no heal -- and until issue #251 models the post-battle
-/// script, the player can walk that fainted lead straight into grass. Every
-/// such step must draw **nothing**: without the guard, each one would spend
-/// the wild mon's five nature/personality/IV draws plus `Battle::new`'s
-/// `gRandomTurnNumber` on a battle [`battle::Battle::new`] then refuses --
-/// repeatable draws with no upstream counterpart.
+/// **Test-ratchet replacement.** Before issue #251, this test
+/// (`a_fainted_lead_from_a_lost_first_battle_draws_no_later_roll`) drove a
+/// *directly written* fainted lead through grass and proved every step drew
+/// nothing -- pinning `super::lead_can_fight`, the fail-closed guard that
+/// existed only because a lost Route 101 first battle left a fainted lead
+/// standing in the overworld with nothing to heal it (`CB2_EndFirstBattle`
+/// has no `IsPlayerDefeated` branch, so no white-out ever ran).
 ///
-/// The fainted lead is written directly rather than driven through the
-/// scripted battle: `advance_first_battle`'s unconditional write-back is
-/// already pinned by `crate::flow::first_battle`'s own tests, and this
-/// test's subject is the *overworld consequence* of the state it leaves,
-/// not the battle that produces it.
+/// `overworld_phase::first_battle_conclusion::OverworldPhase::conclude_first_battle`
+/// (issue #251) now heals that lead in the very same frame the battle ends,
+/// on every outcome -- so the guard's own precondition can no longer occur
+/// at all, and it has been removed (`super`'s own module docs, "The
+/// fail-closed guard, retired"). This test proves the *strictly stronger*
+/// claim the old one could not: not "a roll is suppressed while the lead is
+/// fainted," but "the lead is never fainted in the first place, past the
+/// frame the battle ends" -- a claim that makes the deleted guard's own
+/// precondition provably unreachable rather than merely refused.
 ///
-/// The assertions are deliberately on state, not on the log line: the guard
-/// skips `CheckStandardWildEncounter` outright, so *neither* the immunity
-/// counter *nor* `sPrevMetatileBehavior` moves -- a discriminator a mere
-/// "drew nothing" cannot give, since a non-grass step draws nothing either.
+/// Drives a real loss through the real trigger and driver -- not a directly
+/// written fainted lead -- so the heal under test is
+/// `conclude_first_battle`'s own, not asserted in isolation. The lead is a
+/// deliberately crafted level-1 Treecko (zero Defense IV, Pound only) whose
+/// 12 max HP a level-2 Zigzagoon's Tackle can overkill from `25%` (`3/12`,
+/// above `AI_FirstBattle`'s `<=20%` flee threshold) straight to `0` in one
+/// hit -- seed `2` was chosen by enumeration over the LCG (the same
+/// technique `ENCOUNTER_SEED`'s own doc comment names) to produce exactly
+/// that within a bounded number of turns; `crate::flow::first_battle::advance_first_battle`
+/// always picks move slot 0, so the sequence is fully deterministic.
 #[test]
-fn a_fainted_lead_from_a_lost_first_battle_draws_no_later_roll() {
-    let mut phase = route_101_phase_with_grass(
-        20,
-        10,
-        PlayerState::new((2, 5), 3, Direction::East),
-        &[(4, 5), (5, 5), (6, 5), (7, 5), (8, 5)],
-    );
-    phase.rng = Rng::new(ENCOUNTER_SEED);
-    // The state a lost first battle writes back (doc comment above): the
-    // one-mon party's lead, fainted.
-    let mut lead = player_mon(SHUCKLE, 2, vec![MoveId(1)]);
-    lead.apply_damage(u32::MAX);
-    assert!(lead.is_fainted(), "setup: the lead really is fainted");
-    phase.party_lead = Some(lead);
+fn a_lost_route_101_first_battle_heals_the_lead_instead_of_leaving_it_fainted() {
+    const TRIGGER_TILE: (i32, i32) = (10, 19);
+    const TRIGGER_ELEVATION: u8 = 3;
+    const VAR_ROUTE101_STATE: u16 = 0x4060;
+    const VAR_BIRCH_LAB_STATE: u16 = 0x4084;
+    const VAR_STARTER_MON: u16 = 0x4023;
 
-    let before = phase.rng.state();
-    for _ in 0..(6 * FRAMES_PER_STEP) {
+    let (tx, ty) = TRIGGER_TILE;
+    let mut phase = route_101_phase_with_grass(
+        25,
+        25,
+        PlayerState::new((tx - 1, ty), TRIGGER_ELEVATION, Direction::East),
+        &[],
+    );
+    phase.rng = Rng::new(2);
+    let ivs = Ivs {
+        hp: MAX_IV,
+        attack: MAX_IV,
+        defense: 0,
+        speed: MAX_IV,
+        sp_attack: MAX_IV,
+        sp_defense: MAX_IV,
+    };
+    let fragile_treecko =
+        BattlePokemon::new(&Dex::new(), SpeciesId(277), 1, ivs, 0, vec![MoveId(1)])
+            .expect("Treecko/Pound must be in the dex");
+    let max_hp = fragile_treecko.stats().max_hp;
+    let base_pp = fragile_treecko.moves()[0].pp;
+    phase.party_lead = Some(fragile_treecko);
+
+    for _ in 0..FRAMES_PER_STEP {
         phase.step(held(Buttons::RIGHT));
     }
     assert_eq!(
         phase.player.position(),
-        (8, 5),
-        "five straight steps through tall grass"
+        (tx, ty),
+        "setup: landed on the rescue trigger"
     );
-    assert_eq!(
-        phase.rng.state(),
-        before,
-        "a fainted lead must make every one of those steps draw nothing at all"
-    );
-    assert!(phase.wild_battle.is_none(), "and start no battle");
-    assert_eq!(
-        phase.wild.immunity_steps(),
-        0,
-        "the roll is refused before CheckStandardWildEncounter, so it never even consumes \
-         an immunity step"
-    );
-    assert_ne!(
-        phase.wild.prev_metatile_behavior(),
-        MB_TALL_GRASS,
-        "nor updates sPrevMetatileBehavior"
-    );
-}
+    assert!(phase.first_battle.is_some(), "setup: the trigger must fire");
 
-/// The other half of [`super::lead_can_fight`]: an *empty* party is
-/// upstream's own fresh-save state and must still roll, so the stream stays
-/// where a real playthrough would have it (this module's
-/// `an_encounter_without_a_party_mon_starts_no_battle_and_does_not_wedge_the_player`
-/// walks that path; this pins the predicate itself).
-#[test]
-fn only_a_fainted_lead_refuses_the_roll() {
+    let mut frames = 0;
+    while phase.first_battle.is_some() {
+        phase.step(held(Buttons::RIGHT));
+        frames += 1;
+        assert!(frames < 20, "the crafted loss must resolve quickly");
+    }
+    assert_eq!(
+        phase.first_battle_outcome(),
+        Some(BattleOutcome::PlayerLost),
+        "setup: the seed/lead combination must really lose"
+    );
+
+    let lead = phase
+        .party_lead
+        .as_ref()
+        .expect("conclude_first_battle heals in place -- it does not clear the lead");
     assert!(
-        lead_can_fight(None),
-        "no party at all is upstream's own pre-Birch state, where the roll really happens"
+        !lead.is_fainted(),
+        "a lost first battle must not leave a fainted lead standing in the overworld any more"
     );
-    let healthy = player_mon(277, 50, vec![MoveId(1)]);
-    assert!(lead_can_fight(Some(&healthy)));
-
-    let mut fainted = player_mon(277, 50, vec![MoveId(1)]);
-    fainted.apply_damage(u32::MAX);
-    assert!(fainted.is_fainted());
-    assert!(!lead_can_fight(Some(&fainted)));
+    assert_eq!(
+        lead.current_hp(),
+        max_hp,
+        "HealPlayerParty restores full HP"
+    );
+    assert_eq!(
+        lead.moves()[0].pp,
+        base_pp,
+        "HealPlayerParty restores PP to its base value too"
+    );
+    assert_eq!(
+        phase.save1.event_data.var_get(VAR_ROUTE101_STATE),
+        Ok(3),
+        "Route101_EventScript_BirchsBag's own setvar VAR_ROUTE101_STATE, 3 -- even on a loss"
+    );
+    assert_eq!(
+        phase.save1.event_data.var_get(VAR_BIRCH_LAB_STATE),
+        Ok(2),
+        "setvar VAR_BIRCH_LAB_STATE, 2 -- even on a loss"
+    );
+    assert_eq!(
+        phase.save1.event_data.var_get(VAR_STARTER_MON),
+        Ok(0),
+        "VAR_STARTER_MON reads Treecko's own encoding (0 is also the var's fresh default -- \
+         the overwrite itself is pinned by first_battle_conclusion_tests' pre-poisoned run; \
+         the two non-default vars above prove the conclusion ran here)"
+    );
+    // Deliberately not asserting on `phase.map_id`/`phase.player.position()`
+    // here: `conclude_first_battle`'s own warp to the lab depends on a local
+    // asset pack being extracted (`OverworldPhase::warp_to_position`'s own
+    // "leaves the player exactly where they stood" failure contract when one
+    // isn't) -- this test must pass identically either way, so the warp
+    // itself is `first_battle_conclusion_tests`' `#[ignore]`d real-pack
+    // proof, not this one's.
 }
 
 /// The pack-gated companion to

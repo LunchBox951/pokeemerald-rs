@@ -386,8 +386,10 @@ fn a_lead_with_no_pp_in_slot_zero_ends_the_battle_and_is_still_written_back() {
     assert_eq!(mon.moves()[0].pp, 0, "drained PP and all");
 }
 
-/// The honest species -> [`PlayerStarter`] mapping (issue #248): the real
-/// three starters round-trip, and an arbitrary species has no mapping.
+/// The species -> [`PlayerStarter`] mapping (issue #248, narrowed to the
+/// var-write side by issue #251 -- `PlayerStarter::from_species`'s own doc
+/// comment): the real three starters round-trip, and an arbitrary species
+/// has no mapping.
 #[test]
 fn player_starter_from_species_covers_exactly_the_three_starters() {
     assert_eq!(
@@ -404,6 +406,26 @@ fn player_starter_from_species_covers_exactly_the_three_starters() {
     );
     // SPECIES_ZIGZAGOON -- not a starter.
     assert_eq!(PlayerStarter::from_species(SpeciesId(288)), None);
+}
+
+/// The real `VAR_STARTER_MON` encoding (issue #251):
+/// `include/constants/vars.h:53`'s own comment (`0`=Treecko, `1`=Torchic,
+/// `2`=Mudkip), round-tripped both ways, plus an out-of-range value's `None`.
+#[test]
+fn player_starter_var_value_and_from_var_round_trip_the_real_encoding() {
+    for (value, starter) in [
+        (0, PlayerStarter::Treecko),
+        (1, PlayerStarter::Torchic),
+        (2, PlayerStarter::Mudkip),
+    ] {
+        assert_eq!(PlayerStarter::from_var(value), Some(starter));
+        assert_eq!(starter.var_value(), value);
+    }
+    assert_eq!(
+        PlayerStarter::from_var(3),
+        None,
+        "VAR_STARTER_MON only ever names one of the three real starters"
+    );
 }
 
 /// [`Rival::for_gender`]'s opposite-gender pairing, and the `Other` no-op

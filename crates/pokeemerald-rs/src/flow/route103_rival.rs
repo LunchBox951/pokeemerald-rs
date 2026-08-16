@@ -41,11 +41,13 @@
 //! Which of the six `TRAINER_*_ROUTE_103_*` rivals a playthrough fights is
 //! decided by that caller too: [`Rival::for_gender`] reads the saved
 //! `player_gender` (always the *opposite* protagonist), and
-//! [`PlayerStarter::from_species`] maps the party lead's own species —
-//! `VAR_STARTER_MON` itself is still not modelled, so the lead's real
-//! species is the honest stand-in. [`route103_rival_for`] exposes the
-//! *table* — the mapping upstream's `Route103_EventScript_*` scripts
-//! encode — independently of that derivation.
+//! [`PlayerStarter::from_var`] reads the real `VAR_STARTER_MON`
+//! (`overworld_phase::first_battle_conclusion` now writes it, issue #251,
+//! retiring the species-derived stand-in [`PlayerStarter::from_species`]
+//! used to be for -- that method's own doc comment records the narrower
+//! role it keeps). [`route103_rival_for`] exposes the *table* — the mapping
+//! upstream's `Route103_EventScript_*` scripts encode — independently of
+//! that derivation.
 
 use assets::trainers::TrainerId;
 use assets::SpeciesId;
@@ -68,15 +70,22 @@ pub enum PlayerStarter {
 }
 
 impl PlayerStarter {
-    /// The honest species -> [`PlayerStarter`] mapping issue #248 (I-5)
-    /// needs to reach [`route103_rival_for`] from an actual battle-facing
-    /// lead, since `VAR_STARTER_MON` itself is not modelled (module docs'
-    /// "Explicitly out of scope" section: no starter-select UI exists, so
-    /// nothing ever writes it). Every production lead this is asked about
-    /// is `crate::new_game::PROVISIONAL_STARTER_SPECIES` (Treecko, the
-    /// stand-in for the un-ported Birch-bag handout), but the mapping
-    /// covers the real three starters, not just that one, so it stays
-    /// correct if a future slice ever lets the mon in slot 0 differ.
+    /// The species -> [`PlayerStarter`] mapping issue #248 (I-5) used to
+    /// reach [`route103_rival_for`] from the party lead's own species,
+    /// before `VAR_STARTER_MON` was modelled. Issue #251 gives the var a
+    /// real write (`overworld_phase::first_battle_conclusion`), so
+    /// `overworld_phase::route103_rival_trigger::OverworldPhase::begin_route103_rival_battle`
+    /// now reads that var through [`Self::from_var`] instead of re-deriving
+    /// a starter from whatever mon happens to be in the lead slot -- the
+    /// species-derived stand-in this method was for is retired there.
+    ///
+    /// This method survives for the one honest use that remains: the
+    /// *write* side. `first_battle_conclusion::OverworldPhase::conclude_first_battle`
+    /// still has no `ChooseStarter` UI to read a real choice from, so it
+    /// derives the value it writes into `VAR_STARTER_MON` from
+    /// [`crate::new_game::PROVISIONAL_STARTER_SPECIES`] via this same
+    /// mapping -- the mirror-image use of [`Self::var_value`], not
+    /// [`Self::from_var`]'s.
     ///
     /// `None` for any other species -- unreachable in production (the
     /// provisional starter is always one of the three), but a real `None`
@@ -89,6 +98,41 @@ impl PlayerStarter {
             280 => Some(Self::Torchic), // SPECIES_TORCHIC
             283 => Some(Self::Mudkip),  // SPECIES_MUDKIP
             _ => None,
+        }
+    }
+
+    /// The inverse of [`Self::var_value`]: what a real `VAR_STARTER_MON`
+    /// reading `value` names (`include/constants/vars.h:53`'s own comment,
+    /// `// 0=Treecko, 1=Torchic, 2=Mudkip`) --
+    /// `route103_rival_trigger::OverworldPhase::begin_route103_rival_battle`'s
+    /// own read of the var this crate now actually writes
+    /// (`overworld_phase::first_battle_conclusion`, issue #251).
+    ///
+    /// `None` for any other value -- unreachable against a save this crate
+    /// itself ever wrote (`Self::var_value`'s own range), but a save file is
+    /// still external data, so a corrupted or hand-edited var fails closed
+    /// here rather than aliasing to an arbitrary starter.
+    #[must_use]
+    pub const fn from_var(value: u16) -> Option<Self> {
+        match value {
+            0 => Some(Self::Treecko),
+            1 => Some(Self::Torchic),
+            2 => Some(Self::Mudkip),
+            _ => None,
+        }
+    }
+
+    /// `VAR_STARTER_MON`'s own numeric encoding for `self`
+    /// (`include/constants/vars.h:53`'s comment; [`Self::from_var`]'s
+    /// inverse) -- what `overworld_phase::first_battle_conclusion` writes
+    /// into the var once it knows which [`PlayerStarter`] the provisional
+    /// species names.
+    #[must_use]
+    pub const fn var_value(self) -> u16 {
+        match self {
+            Self::Treecko => 0,
+            Self::Torchic => 1,
+            Self::Mudkip => 2,
         }
     }
 }

@@ -1074,6 +1074,118 @@ fn a_save_with_a_legacy_zeroed_heal_location_adopts_the_gender_default() {
     assert_eq!(resumed.save1.last_heal_location, written);
 }
 
+/// `VAR_ROUTE101_STATE` (`pokeemerald/include/constants/vars.h:116`) --
+/// independently transcribed, this file's own copy for the legacy-save
+/// signature below.
+const VAR_ROUTE101_STATE: u16 = 0x4060;
+
+/// A save matching the pre-#251 legacy signature -- a *single-member*
+/// party whose lead is fainted with `VAR_ROUTE101_STATE` still at the
+/// trigger-consumed `2` -- is the one image only a build between issues
+/// #261 and #251 could serialize: a lost Route 101 first battle returned
+/// the player to the field fainted (`CB2_EndFirstBattle` has no
+/// `IsPlayerDefeated` branch) and the start menu saved it, while the
+/// first-battle conclusion now heals every outcome (and writes `3`) the
+/// frame the battle ends, and upstream cannot save a party-wide faint at
+/// all. Such a save is healed on continue (PR #291 review): without the
+/// migration, every eligible grass step would spend the encounter and
+/// wild-mon RNG draws before `Battle::new` refused the fainted battler --
+/// repeatable draws with no upstream counterpart. Everything *outside*
+/// the signature must round-trip untouched, and the later halves pin each
+/// boundary: a fainted slot 0 with a healthy member behind it (ordinary
+/// upstream state, PR #291 review second round), a fainted single lead
+/// whose var never reached `2`, and a merely damaged lead.
+#[test]
+fn a_save_with_a_fainted_lead_is_healed_on_continue() {
+    fn fainted_lead() -> battle::BattlePokemon {
+        let mut fainted = new_game::provisional_starter();
+        fainted.apply_damage(u32::MAX);
+        assert!(fainted.is_fainted(), "setup: the lead must start fainted");
+        fainted
+    }
+    fn resume(mut seed: OverworldPhase, var: Option<u16>) -> OverworldPhase {
+        if let Some(value) = var {
+            seed.save1
+                .event_data
+                .var_set(VAR_ROUTE101_STATE, value)
+                .expect("VAR_ROUTE101_STATE is an ordinary var");
+        }
+        OverworldPhase::from_saved(
+            crate::overworld::tests::synthetic_scene(10, 10),
+            seed.map_id,
+            seed.save1,
+            seed.save2,
+        )
+    }
+
+    // The legacy signature itself: single member, var at 2, lead fainted.
+    let mut seed = new_game_phase();
+    seed.save1.player_party_count = 1;
+    seed.save1.player_party[0] =
+        crate::party::to_save_pokemon(&battle::Dex::new(), &fainted_lead());
+    let resumed = resume(seed, Some(2));
+    assert!(
+        !resumed
+            .party_lead
+            .as_ref()
+            .expect("the migrated save still has its lead")
+            .is_fainted(),
+        "a fainted lead from a pre-#251 save is healed on load"
+    );
+
+    // Boundary one: a fainted slot 0 with a healthy dormant member behind
+    // it is ordinary upstream state, not the legacy marker -- untouched.
+    let mut seed = new_game_phase();
+    seed.save1.player_party_count = 2;
+    seed.save1.player_party[0] =
+        crate::party::to_save_pokemon(&battle::Dex::new(), &fainted_lead());
+    seed.save1.player_party[1] = dormant_party_member(0x7777_8888);
+    let resumed = resume(seed, Some(2));
+    assert!(
+        resumed
+            .party_lead
+            .as_ref()
+            .expect("the multi-member save still has its lead")
+            .is_fainted(),
+        "a fainted lead backed by a healthy member is no legacy marker and stays fainted"
+    );
+
+    // Boundary two: the var outside the trigger-consumed value -- a state
+    // no pre-#251 loss path produced -- is likewise untouched.
+    let mut seed = new_game_phase();
+    seed.save1.player_party_count = 1;
+    seed.save1.player_party[0] =
+        crate::party::to_save_pokemon(&battle::Dex::new(), &fainted_lead());
+    let resumed = resume(seed, None);
+    assert!(
+        resumed
+            .party_lead
+            .as_ref()
+            .expect("the out-of-signature save still has its lead")
+            .is_fainted(),
+        "a fainted lead without the var-at-2 signature stays fainted"
+    );
+
+    // Boundary three: a damaged-but-standing lead is genuine
+    // mid-playthrough state, not the legacy marker, and keeps its spent HP
+    // even inside the rest of the signature.
+    let damaged = a_damaged_lead();
+    let expected_hp = damaged.current_hp();
+    let mut seed = new_game_phase();
+    seed.save1.player_party_count = 1;
+    seed.save1.player_party[0] = crate::party::to_save_pokemon(&battle::Dex::new(), &damaged);
+    let resumed = resume(seed, Some(2));
+    assert_eq!(
+        resumed
+            .party_lead
+            .as_ref()
+            .expect("the damaged save still has its lead")
+            .current_hp(),
+        expected_hp,
+        "a standing lead's spent HP survives the continue untouched"
+    );
+}
+
 /// A save whose party count is zero resumes with no lead at all -- not
 /// with a fabricated [`new_game::provisional_starter`], which is what the
 /// #214 slice did and what #232 removed.

@@ -21,12 +21,9 @@ impl OverworldPhase {
     /// ([`OverworldPhase::wild_table_screen`]) because the screen walks the
     /// whole table; a map change invalidates the memo by construction, with
     /// no per-transition update to forget. `false` disables the encounter
-    /// roll outright (no draws, no bookkeeping) -- the same no-draw-at-all
-    /// shape [`wild_encounter::lead_can_fight`] applies per step for the
-    /// first-battle-loss residual state issue #261's white-out cannot cover
-    /// ([`wild_encounter::map_wild_table_fightable`]'s own doc comment;
-    /// `crate::flow::wild_encounter`'s module docs, "The fail-closed guard,
-    /// narrowed").
+    /// roll outright (no draws, no bookkeeping) --
+    /// [`wild_encounter::map_wild_table_fightable`]'s own doc comment has
+    /// the full reasoning.
     pub(in crate::flow) fn wild_table_fightable(&mut self) -> bool {
         match self.wild_table_screen {
             Some((map, fightable)) if map == self.map_id => fightable,
