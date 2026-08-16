@@ -235,7 +235,7 @@ fn a_hit_screech_lowers_defense_by_two() {
 #[test]
 fn sand_attack_lowers_the_targets_accuracy_stage() {
     let dex = Dex::new();
-    let attacker = mon(&dex, 296, 15, vec![SAND_ATTACK]); // Makuhita
+    let attacker = mon(&dex, 335, 15, vec![SAND_ATTACK]); // Makuhita
     let defender = mon(&dex, 290, 15, vec![TACKLE]);
     let mut rng = SequenceRng::new([0]);
     let outcome =
@@ -257,7 +257,7 @@ fn sand_attack_lowers_the_targets_accuracy_stage() {
 #[test]
 fn a_stat_raising_move_draws_nothing_and_raises_the_users_own_stage() {
     let dex = Dex::new();
-    let attacker = mon(&dex, 315, 14, vec![GROWTH]); // Roselia/Growth
+    let attacker = mon(&dex, 363, 14, vec![GROWTH]); // Roselia/Growth
     let defender = mon(&dex, 290, 14, vec![TACKLE]);
     let mut rng = SequenceRng::new([]);
     let outcome = resolve_stat_change_move(&dex, GROWTH, &attacker, &defender, &mut rng).unwrap();
@@ -290,7 +290,7 @@ fn a_stat_raising_move_draws_nothing_and_raises_the_users_own_stage() {
 #[test]
 fn a_raise_reads_the_users_stage_and_a_drop_reads_the_targets() {
     let dex = Dex::new();
-    let mut attacker = mon(&dex, 315, 14, vec![GROWTH, GROWL]);
+    let mut attacker = mon(&dex, 363, 14, vec![GROWTH, GROWL]);
     let mut defender = mon(&dex, 290, 14, vec![TACKLE]);
     attacker.stages_mut().sp_attack = StatStage::new(4).unwrap();
     attacker.stages_mut().attack = StatStage::new(-3).unwrap();
@@ -330,7 +330,7 @@ fn a_missed_lowering_move_reports_miss_and_still_draws_once() {
 #[test]
 fn a_floored_drop_and_a_capped_raise_both_report_capped_without_moving_the_stage() {
     let dex = Dex::new();
-    let mut attacker = mon(&dex, 315, 14, vec![GROWTH]);
+    let mut attacker = mon(&dex, 363, 14, vec![GROWTH]);
     let mut defender = mon(&dex, 290, 14, vec![TACKLE]);
     attacker.stages_mut().sp_attack = StatStage::MAX;
     defender.stages_mut().attack = StatStage::MIN;

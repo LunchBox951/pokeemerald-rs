@@ -32,6 +32,7 @@ use crate::dex::Dex;
 use crate::error::BattleError;
 use crate::nature::{Nature, Stat};
 use crate::stat_stage::StatStage;
+use crate::volatile::Volatiles;
 
 /// `MAX_MON_MOVES` (`pokeemerald/include/constants/global.h:82`): the most
 /// moves a Pokémon can know at once.
@@ -277,6 +278,7 @@ pub struct BattlePokemon {
     current_hp: u32,
     moves: Vec<MoveSlot>,
     stages: StatStages,
+    volatiles: Volatiles,
 }
 
 impl BattlePokemon {
@@ -403,6 +405,7 @@ impl BattlePokemon {
             current_hp: stats.max_hp,
             moves: slots,
             stages: StatStages::default(),
+            volatiles: Volatiles::default(),
         })
     }
 
@@ -550,6 +553,22 @@ impl BattlePokemon {
         &mut self.stages
     }
 
+    /// This mon's volatile in-battle conditions — the `gBattleMons[].status2`
+    /// and `gStatuses3[]` bits [`crate::volatile`] models.
+    #[must_use]
+    pub const fn volatiles(&self) -> Volatiles {
+        self.volatiles
+    }
+
+    /// Mutable access to the volatile conditions.
+    ///
+    /// Every setter on [`Volatiles`] is a bounded flag/timer write, so this
+    /// cannot break any invariant of this type — the same reasoning
+    /// [`BattlePokemon::stages_mut`] rests on.
+    pub const fn volatiles_mut(&mut self) -> &mut Volatiles {
+        &mut self.volatiles
+    }
+
     /// Whether this mon has fainted (`current_hp == 0`).
     #[must_use]
     pub const fn is_fainted(&self) -> bool {
@@ -561,6 +580,26 @@ impl BattlePokemon {
     /// application clamps the same way).
     pub fn apply_damage(&mut self, amount: u32) {
         self.current_hp = self.current_hp.saturating_sub(amount);
+    }
+
+    /// Restore `amount` HP, clamped to [`Stats::max_hp`] — the healing half
+    /// of `Cmd_datahpupdate` (`battle_script_commands.c:1897`-`:1901`, the
+    /// `gBattleMoveDamage < 0` branch, whose `if (hp > maxHP) hp = maxHP`
+    /// clamp this reproduces).
+    ///
+    /// A fainted mon is **not** revived: upstream's negative-damage branch
+    /// is only ever reached from a script whose user is still standing
+    /// (`crate::drain`'s `BattleScript_EffectAbsorb`, `Cmd_negativedamage`),
+    /// and healing a `0`-HP battler back onto the field has no upstream
+    /// counterpart at all.
+    pub fn restore_hp(&mut self, amount: u32) {
+        if self.current_hp == 0 {
+            return;
+        }
+        self.current_hp = self
+            .current_hp
+            .saturating_add(amount)
+            .min(self.stats.max_hp);
     }
 
     /// Add earned experience, applying every crossed level threshold and

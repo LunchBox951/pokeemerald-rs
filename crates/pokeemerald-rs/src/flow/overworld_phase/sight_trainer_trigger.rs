@@ -715,82 +715,106 @@ mod tests {
         );
     }
 
-    /// Module docs' item 7, pinned rather than left as prose: every one of
-    /// [`SIGHT_TRAINERS`]' distinct trainer ids currently fails to construct
-    /// through [`npc_trainer_battle::start_npc_trainer_battle`] -- Miguel
-    /// for his held item (module docs item 6), every other one for a
-    /// specific move this battle engine does not yet implement.
+    /// Module docs' item 7, pinned rather than left as prose: the exact
+    /// construction verdict of **every** distinct [`SIGHT_TRAINERS`] id
+    /// against its real extracted party.
     ///
-    /// The **exact** refusal is pinned per trainer, not merely "it fails"
-    /// (issue #264 review): the reason a trainer is unreachable is the
-    /// interesting fact, and naming the offending move id is what forces a
-    /// future move-coverage slice to come back here -- widening support for
-    /// Rhett's pinned `MOVE_FOCUS_ENERGY` alone could leave a Rhett who now
-    /// fails on some other move, and a bare `is_err()` would have hidden
-    /// that.
+    /// Two kinds of row, and both are pins rather than smoke tests:
     ///
-    /// Each refusal must also cost **nothing**: the whole party is screened
-    /// before the first draw (`npc_trainer_battle`'s module docs), which is
-    /// what makes the per-frame sight check above safe to run forever.
+    /// * [`Verdict::Constructs`] — the party builds *and* the battle it
+    ///   builds is the real one, so the row also names the species and level
+    ///   the party table says it should field, and the test plays the battle
+    ///   to a terminal outcome. As of issue #293 that is Rhett and Marcos.
+    /// * [`Verdict::Refused`] — the **exact** refusal, offending move id and
+    ///   all (issue #264 review): the reason a trainer is unreachable is the
+    ///   interesting fact, and naming it is what forces a future
+    ///   move-coverage slice to come back here. Widening support for
+    ///   Rhett's old `MOVE_FOCUS_ENERGY` alone could have left a Rhett who
+    ///   now failed on some other move, and a bare `is_err()` would have
+    ///   hidden that — which is exactly what happened, twice, on the way to
+    ///   this revision.
+    ///
+    /// A refusal must additionally cost **nothing**: the whole party is
+    /// screened before the first draw (`npc_trainer_battle`'s module docs),
+    /// which is what makes the per-frame sight check above safe to run
+    /// forever. A construction, by contrast, is *expected* to draw — it
+    /// spends `CreateNPCTrainerParty`'s per-mon OT ids — so the two row
+    /// kinds assert opposite things about the stream.
     #[test]
-    fn every_sight_trainers_real_party_fails_to_construct_for_exactly_these_reasons() {
+    fn every_sight_trainers_real_party_resolves_to_exactly_this_verdict() {
         use battle::BattleError;
         use npc_trainer_battle::NpcTrainerBattleError::Battle;
 
-        // Every distinct id in `SIGHT_TRAINERS`, with the refusal its real
-        // extracted party currently produces. The move ids are the first
-        // unsupported move in that trainer's own level-up-derived moveset.
+        // Every distinct id in `SIGHT_TRAINERS`. The move ids on the refused
+        // rows are the *first* unsupported move in that trainer's own
+        // level-up-derived moveset, in party-then-slot order.
         let expected = [
             (
                 "Daisy",
                 TrainerId(36),
-                Battle(BattleError::UnsupportedMoveEffect(assets::MoveId(71))), // MOVE_ABSORB
+                // Shroomish's Absorb (drain) and Tackle are executable now;
+                // Stun Spore, `EFFECT_PARALYZE`, is not.
+                Verdict::Refused(Battle(BattleError::NonDamagingMove(assets::MoveId(78)))),
             ),
             (
                 "Amy & Liv",
                 TrainerId(481),
-                Battle(BattleError::NonDamagingMove(assets::MoveId(86))), // MOVE_THUNDER_WAVE
+                // Plusle's Growl is fine; Thunder Wave shares Stun Spore's
+                // `EFFECT_PARALYZE`. Their cone is refused for being a
+                // *double battle* regardless (module docs item 5), which is
+                // a separate gate this row does not exercise.
+                Verdict::Refused(Battle(BattleError::NonDamagingMove(assets::MoveId(86)))),
             ),
             (
                 "Andrew",
                 TrainerId(336),
-                Battle(BattleError::NonDamagingMove(assets::MoveId(150))), // MOVE_SPLASH
+                // Magikarp's Splash executes now; Tentacool's Poison Sting
+                // (`EFFECT_POISON_HIT`) needs a non-volatile status system.
+                Verdict::Refused(Battle(BattleError::UnsupportedMoveEffect(assets::MoveId(
+                    40,
+                )))),
             ),
-            // Miguel's held-item party is now *representable* (issue #293:
-            // `npc_trainer_battle::party_entries` flattens all four
-            // `partyFlags` shapes and carries `heldItem` through to
-            // `battle::BattlePokemon::held_item`), so his refusal is no
-            // longer the party shape. His Skitty's real level-15 moveset --
-            // Tail Whip, Attract, Sing, Double Slap -- is refused first, and
-            // the Oran Berry his Skitty holds is screened only after every
-            // move (`battle::ensure_trainer_party_startable`'s documented
-            // order: the move is the more actionable half). The item screen
-            // itself is pinned by `miguels_oran_berry_is_carried_into_the_
-            // party_spec_and_refused_on_its_own`.
             (
                 "Miguel",
                 TrainerId(293),
-                Battle(BattleError::NonDamagingMove(assets::MoveId(213))), // MOVE_ATTRACT
+                // Miguel's held-item party is *representable* since issue
+                // #293 (`party_entries` flattens all four `partyFlags`
+                // shapes and carries `heldItem` through to
+                // `battle::BattlePokemon::held_item`), so his refusal is no
+                // longer the party shape. His Skitty's real level-15
+                // moveset -- Tail Whip, Attract, Sing, Double Slap -- is
+                // refused at Attract, and the Oran Berry it holds is
+                // screened only after every move
+                // (`battle::ensure_trainer_party_startable`'s documented
+                // order: the move is the more actionable half). The item
+                // screen itself is pinned by
+                // `miguels_oran_berry_is_carried_into_the_party_spec_and_refused_on_its_own`.
+                Verdict::Refused(Battle(BattleError::NonDamagingMove(assets::MoveId(213)))),
             ),
-            (
-                "Rhett",
-                TrainerId(703),
-                Battle(BattleError::NonDamagingMove(assets::MoveId(116))), // MOVE_FOCUS_ENERGY
-            ),
-            (
-                "Marcos",
-                TrainerId(702),
-                Battle(BattleError::NonDamagingMove(assets::MoveId(268))), // MOVE_CHARGE
-            ),
+            // Makuhita's whole level-15 moveset landed with issue #293:
+            // Focus Energy (`crate::battle`'s `status_move`), Sand Attack
+            // (the widened `stat_change` family), Arm Thrust
+            // (`multi_hit`), Vital Throw (an ordinary accuracy-bypassing
+            // hit).
+            ("Rhett", TrainerId(703), Verdict::Constructs(335, 15)), // SPECIES_MAKUHITA
+            // Voltorb's did too: Charge, Tackle, Screech (`-2` defense),
+            // Sonic Boom (`fixed_damage`).
+            ("Marcos", TrainerId(702), Verdict::Constructs(100, 15)), // SPECIES_VOLTORB
             (
                 "Isabelle",
                 TrainerId(736),
-                Battle(BattleError::NonDamagingMove(assets::MoveId(111))), // MOVE_DEFENSE_CURL
+                // Marill's Defense Curl, Tail Whip and Water Gun all
+                // execute; Rollout's five-turn lock does not.
+                Verdict::Refused(Battle(BattleError::UnsupportedMoveEffect(assets::MoveId(
+                    205,
+                )))),
             ),
             (
                 "Pete",
                 TrainerId(735),
-                Battle(BattleError::UnsupportedMoveEffect(assets::MoveId(40))), // MOVE_POISON_STING
+                Verdict::Refused(Battle(BattleError::UnsupportedMoveEffect(assets::MoveId(
+                    40,
+                )))),
             ),
         ];
 
@@ -803,31 +827,100 @@ mod tests {
             "this table must cover exactly SIGHT_TRAINERS' distinct ids"
         );
 
-        for (name, id, refusal) in expected {
-            let lead = battle::BattlePokemon::new(
-                &battle::Dex::new(),
-                assets::SpeciesId(277), // SPECIES_TREECKO
-                50,
-                battle::fixed_ivs(31),
-                0,
-                vec![assets::MoveId(163)], // MOVE_SLASH
-            )
-            .expect("Treecko/Slash is a valid pairing");
-            let mut rng = engine::rng::Rng::new(1);
-            let before = rng.state();
-            let result = npc_trainer_battle::start_npc_trainer_battle(lead, id, &mut rng);
-            assert_eq!(
-                result.err(),
-                Some(refusal),
-                "{name} -> {id:?} was expected to still fail to construct for exactly this \
-                 reason (module docs item 7) -- if move coverage has grown, update this row \
-                 (or, if it now succeeds, add a real construction-backed win/loss test)"
-            );
-            assert_eq!(
-                rng.state(),
-                before,
-                "{name} -> {id:?}: a refused construction must draw nothing at all"
-            );
+        for (name, id, verdict) in expected {
+            assert_verdict(name, id, verdict);
         }
+    }
+
+    /// What one trainer's real party is expected to do — [`assert_verdict`]'s
+    /// two cases.
+    enum Verdict {
+        /// It builds, fielding this `(species, level)` lead.
+        Constructs(u16, u8),
+        /// It is refused, for exactly this reason, before any draw.
+        Refused(npc_trainer_battle::NpcTrainerBattleError),
+    }
+
+    /// One row of
+    /// [`every_sight_trainers_real_party_resolves_to_exactly_this_verdict`],
+    /// checked against a fresh overwhelming lead and a fresh seeded stream.
+    fn assert_verdict(name: &str, id: TrainerId, verdict: Verdict) {
+        let lead = battle::BattlePokemon::new(
+            &battle::Dex::new(),
+            assets::SpeciesId(277), // SPECIES_TREECKO
+            50,
+            battle::fixed_ivs(31),
+            0,
+            vec![assets::MoveId(163)], // MOVE_SLASH
+        )
+        .expect("Treecko/Slash is a valid pairing");
+        let mut rng = engine::rng::Rng::new(1);
+        let before = rng.state();
+        let result = npc_trainer_battle::start_npc_trainer_battle(lead, id, &mut rng);
+
+        let (species, level) = match verdict {
+            Verdict::Refused(refusal) => {
+                assert_eq!(
+                    result.err(),
+                    Some(refusal),
+                    "{name} -> {id:?} was expected to still fail to construct for exactly \
+                     this reason (module docs item 7) -- if move coverage has grown, update \
+                     this row, and if it now succeeds turn it into a Constructs row with a \
+                     real end-to-end battle"
+                );
+                assert_eq!(
+                    rng.state(),
+                    before,
+                    "{name} -> {id:?}: a refused construction must draw nothing at all"
+                );
+                return;
+            }
+            Verdict::Constructs(species, level) => (species, level),
+        };
+
+        let battle = result
+            .unwrap_or_else(|e| panic!("{name} -> {id:?} was expected to construct, got {e}"));
+        assert_eq!(
+            battle.enemy().species(),
+            assets::SpeciesId(species),
+            "{name}: the real party table's own species"
+        );
+        assert_eq!(battle.enemy().level(), level, "{name}: level");
+        assert_ne!(
+            rng.state(),
+            before,
+            "{name}: CreateNPCTrainerParty's OT-id draws really were spent"
+        );
+
+        // ...and it is a battle that finishes, driven through the
+        // **production** driver rather than `take_turn` directly, so this
+        // also covers the write-back the overworld sees. A level-50 Treecko
+        // with Slash against a real level-15 party is not a close fight,
+        // which is the point: this asserts the engine can run every move
+        // *both* sides know, turn after turn, not that the odds are
+        // interesting.
+        let mut slot = Some(battle);
+        let mut lead_back = None;
+        let mut outcome = None;
+        for _ in 0..64 {
+            outcome =
+                npc_trainer_battle::advance_npc_trainer_battle(&mut slot, &mut lead_back, &mut rng);
+            if outcome.is_some() {
+                break;
+            }
+        }
+        assert_eq!(
+            outcome,
+            Some(battle::BattleOutcome::PlayerWon),
+            "{name}: an overwhelming lead must finish the fight"
+        );
+        assert!(
+            slot.is_none(),
+            "{name}: a concluded battle empties its slot"
+        );
+        assert!(
+            lead_back.is_some(),
+            "{name}: the driver writes the player's mon back"
+        );
     }
 }

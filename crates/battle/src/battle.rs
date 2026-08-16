@@ -226,6 +226,9 @@ use crate::stat_change::{
     StatChangeDirection, StatChangeOutcome,
 };
 use crate::stat_stage::StatStage;
+use crate::status_move::{
+    is_status_move_effect, resolve_status_move, StatusMoveOutcome, DEFENSE_CURL_STAT_CHANGE,
+};
 use crate::turn_order::{resolve_order, Order};
 
 pub(crate) mod opponent_ai;
@@ -415,6 +418,79 @@ pub enum BattleEvent {
         /// Which stat the move targeted.
         stat: ChangedStat,
     },
+    /// Splash: `STRINGID_BUTNOTHINGHAPPENED`, "But nothing happened!"
+    /// (`BattleScript_EffectSplash`, `data/battle_scripts_1.s:1179`). The
+    /// move spent its PP and did nothing else at all — no accuracy check, no
+    /// state change, no RNG draw.
+    NothingHappened {
+        /// Whether the player's mon was the one using the move.
+        by_player: bool,
+        /// The move that was used.
+        move_id: MoveId,
+    },
+    /// A move that reached `BattleScript_ButItFailed` — "But it failed!".
+    /// Reachable this slice only from Focus Energy used while
+    /// `STATUS2_FOCUS_ENERGY` is already set
+    /// (`data/battle_scripts_1.s:889`).
+    MoveFailed {
+        /// Whether the player's mon was the one using the move.
+        by_player: bool,
+        /// The move that was used.
+        move_id: MoveId,
+    },
+    /// Focus Energy connected: `STRINGID_PKMNGETTINGPUMPED`, and the user's
+    /// [`crate::volatile::Volatiles::focus_energy`] is now set — worth `+2`
+    /// crit-chance stages for the rest of the battle
+    /// ([`crate::critical::crit_stage`]).
+    GettingPumped {
+        /// Whether the player's mon was the one using the move — and so
+        /// whose crit chance rose.
+        by_player: bool,
+        /// The move that was used.
+        move_id: MoveId,
+    },
+    /// Charge connected: `STRINGID_PKMNCHARGINGPOWER`, and the user's
+    /// two-turn [`crate::volatile::Volatiles::charge_timer`] started, which
+    /// doubles its next Electric move's damage.
+    ChargingPower {
+        /// Whether the player's mon was the one using the move.
+        by_player: bool,
+        /// The move that was used.
+        move_id: MoveId,
+    },
+    /// A draining move (`EFFECT_ABSORB` — Absorb, Mega Drain, Giga Drain)
+    /// healed its user, `Cmd_negativedamage`'s
+    /// `gBattleMoveDamage = -(gHpDealt / 2)`
+    /// (`src/battle_script_commands.c:6927`-`:6930`).
+    ///
+    /// Always immediately after the [`BattleEvent::Hit`] it drained from,
+    /// and **already applied** to the user (clamped to its max HP), the same
+    /// division of labour [`BattleEvent::ExpGained`] follows. The amount is
+    /// half the HP the target *actually* lost, not half the formula's raw
+    /// output — see [`crate::drain::drain_amount`].
+    HpDrained {
+        /// Whether the player's mon was the one draining.
+        by_player: bool,
+        /// HP restored to the user.
+        amount: u32,
+    },
+    /// A multi-hit move (`EFFECT_MULTI_HIT` — Double Slap, Arm Thrust, …)
+    /// finished its sequence: `STRINGID_HITXTIMES`, "Hit N time(s)!"
+    /// (`data/battle_scripts_1.s:648`).
+    ///
+    /// Emitted once, after the run of [`BattleEvent::Hit`] events it
+    /// summarises, and `hits` counts the hits that actually **landed** —
+    /// which is fewer than the rolled count when the target fainted partway
+    /// through. Absent entirely when the move missed (that is a plain
+    /// [`BattleEvent::Missed`]) or when the very first hit was type-immune.
+    HitCount {
+        /// Whether the player's mon was the one using the move.
+        by_player: bool,
+        /// The move that was used.
+        move_id: MoveId,
+        /// How many hits landed (`1..=5`).
+        hits: u8,
+    },
     /// The trainer's active mon fainted and the next party member came out
     /// in its place — upstream's forced post-faint switch
     /// (`OpponentHandleChoosePokemon`,
@@ -581,7 +657,15 @@ pub(crate) fn ensure_executable(dex: &Dex, move_id: MoveId) -> Result<(), Battle
     match crate::hit::ensure_resolvable(dex, move_id) {
         Ok(()) => Ok(()),
         Err(hit_error) => {
-            if stat_change::ensure_resolvable(dex, move_id).is_ok() {
+            // The five sibling pipelines, in no particular order: a move
+            // belongs to exactly one of them (each keys on a disjoint set of
+            // `EFFECT_*` ids), so the first `Ok` is the only `Ok`.
+            let accepted = stat_change::ensure_resolvable(dex, move_id).is_ok()
+                || crate::status_move::ensure_resolvable(dex, move_id).is_ok()
+                || crate::drain::ensure_resolvable(dex, move_id).is_ok()
+                || crate::fixed_damage::ensure_resolvable(dex, move_id).is_ok()
+                || crate::multi_hit::ensure_resolvable(dex, move_id).is_ok();
+            if accepted {
                 Ok(())
             } else {
                 Err(hit_error)
@@ -823,7 +907,7 @@ impl Battle {
         }
         for mon in &party {
             for slot in mon.moves() {
-                trainer::ensure_move_playable(&dex, slot.move_id)?;
+                trainer::ensure_move_playable(&dex, slot.move_id, data.ai_flags)?;
             }
         }
         // The held-item screen, last and separate for the same reason the
@@ -1128,6 +1212,7 @@ impl Battle {
             // above survives a failure here -- `take_turn` returns it either
             // way.
             self.enemy_acts(enemy_action, rng, events)?;
+            self.finish_turn(events);
             return Ok(());
         };
 
@@ -1178,8 +1263,59 @@ impl Battle {
                 }
             }
         }
-        self.end_of_turn(events);
+        self.finish_turn(events);
         Ok(())
+    }
+
+    /// Everything `BattleTurnPassed` runs once both battlers' actions are
+    /// done (`src/battle_main.c:3956`-`:3972`), in its order:
+    ///
+    /// ```text
+    /// if (gBattleOutcome == 0) {
+    ///     if (DoFieldEndTurnEffects())   return;   // :3963
+    ///     if (DoBattlerEndTurnEffects()) return;   // :3965
+    /// }
+    /// if (HandleFaintedMonActions())     return;   // :3968
+    /// ```
+    ///
+    /// `DoFieldEndTurnEffects` (`src/battle_util.c:1181`) is weather and the
+    /// Reflect/Light Screen/Mist/Safeguard/Wish side timers — none modelled,
+    /// and it contains no `Random()` at all, so there is nothing to run and
+    /// nothing to draw. [`Self::residual_effects`] is the modelled part of
+    /// `DoBattlerEndTurnEffects`, and [`Self::end_of_turn`] is
+    /// `HandleFaintedMonActions`.
+    ///
+    /// The `gBattleOutcome == 0` guard is real and reproduced: a battle that
+    /// already ended this turn skips the residuals entirely and goes
+    /// straight to the fainted-mon pass.
+    fn finish_turn(&mut self, events: &mut Vec<BattleEvent>) {
+        if self.outcome.is_none() {
+            self.residual_effects();
+        }
+        self.end_of_turn(events);
+    }
+
+    /// `DoBattlerEndTurnEffects` (`src/battle_util.c:1464`), reduced to the
+    /// one `ENDTURN_*` case this slice models: `ENDTURN_CHARGE` (`:1743`-
+    /// `:1745`), which decrements each battler's
+    /// [`crate::volatile::Volatiles::charge_timer`] and clears
+    /// `STATUS3_CHARGED_UP` when it reaches `0`.
+    ///
+    /// Upstream walks the battlers in `gBattlerByTurnOrder` order (`:1471`)
+    /// and runs the whole `ENDTURN_*` chain per battler. Order is
+    /// unobservable for this one case — a charge timer is per-battler and
+    /// nothing else reads it during the walk — and the case draws nothing,
+    /// so both battlers are ticked here without re-deriving the turn order.
+    /// Every other `ENDTURN_*` case (Ingrain, abilities, items, Leech Seed,
+    /// poison/toxic/burn damage, Nightmare, Curse, Wrap, Uproar, Thrash,
+    /// Disable, Encore, Lock-On, Taunt, Yawn) has no state here to tick;
+    /// the two that *do* draw upstream (`ENDTURN_YAWN`'s sleep-turn roll at
+    /// `:1762` and `ENDTURN_THRASH`'s confusion roll at `:1687`) are
+    /// unreachable for the same reason, so this method's draw count is zero
+    /// `(behavioral-fidelity)`.
+    fn residual_effects(&mut self) {
+        self.player.volatiles_mut().tick_charge();
+        self.enemy.volatiles_mut().tick_charge();
     }
 
     /// `HandleFaintedMonActions` (`battle_util.c:1894`), reduced to the one
@@ -1302,17 +1438,25 @@ impl Battle {
     /// mon, pushing the resulting events and ending the battle if the
     /// target faints.
     ///
-    /// Dispatches on the move's `EFFECT_*` to one of two pipelines — this
-    /// crate's execution boundary (crate root docs): the ordinary
-    /// hit-shaped path (`execute_hit_move`,
-    /// [`crate::hit::is_ordinary_hit_effect`]) or the stat-changing path
-    /// (`execute_stat_change_move`,
-    /// [`crate::stat_change::is_stat_change_effect`]). Every move that
-    /// reaches here already passed [`ensure_executable`] (at [`Battle::new`]
-    /// for the wild side, at `validate_player_move` for the player's), so
-    /// exactly one of the two `is_*` checks holds. ([`STRUGGLE`] needs no
-    /// case of its own: its `EFFECT_RECOIL` is not a stat-change effect,
-    /// so it falls through to the hit pipeline, which accepts it.)
+    /// Dispatches on the move's `EFFECT_*` to one of **six** pipelines —
+    /// this crate's execution boundary (crate root docs), each one a
+    /// distinct upstream battle script:
+    ///
+    /// | pipeline | script | module |
+    /// |---|---|---|
+    /// | `execute_stat_change_move` | `BattleScript_EffectStatUp`/`StatDown` | [`crate::stat_change`] |
+    /// | `execute_status_move` | Splash / Focus Energy / Charge / Defense Curl | [`crate::status_move`] |
+    /// | `execute_drain_move` | `BattleScript_EffectAbsorb` | [`crate::drain`] |
+    /// | `execute_fixed_damage_move` | `BattleScript_EffectSonicboom` | [`crate::fixed_damage`] |
+    /// | `execute_multi_hit_move` | `BattleScript_EffectMultiHit` | [`crate::multi_hit`] |
+    /// | `execute_hit_move` | `BattleScript_EffectHit` | [`crate::hit`] |
+    ///
+    /// The six `EFFECT_*` sets are disjoint, and every move that reaches
+    /// here already passed [`ensure_executable`] (at [`Battle::new`] for the
+    /// wild side, at `validate_player_move` for the player's), so exactly
+    /// one arm holds. ([`STRUGGLE`] needs no case of its own: its
+    /// `EFFECT_RECOIL` is in none of the five special sets, so it falls
+    /// through to the hit pipeline, which accepts it.)
     fn execute_move(
         &mut self,
         attacker_is_player: bool,
@@ -1323,15 +1467,89 @@ impl Battle {
         let effect = self.dex.move_data(move_id)?.effect;
         if is_stat_change_effect(effect) {
             self.execute_stat_change_move(attacker_is_player, move_id, rng, events)
+        } else if is_status_move_effect(effect) {
+            self.execute_status_move(attacker_is_player, move_id, events)
+        } else if crate::drain::is_drain_effect(effect) {
+            self.execute_drain_move(attacker_is_player, move_id, rng, events)
+        } else if crate::fixed_damage::is_fixed_damage_effect(effect) {
+            self.execute_fixed_damage_move(attacker_is_player, move_id, rng, events)
+        } else if crate::multi_hit::is_multi_hit_effect(effect) {
+            self.execute_multi_hit_move(attacker_is_player, move_id, rng, events)
         } else {
             self.execute_hit_move(attacker_is_player, move_id, rng, events)
         }
     }
 
+    /// The self-targeting flag-move third of [`Self::execute_move`]'s
+    /// dispatch (issue #293) — [`crate::status_move::resolve_status_move`]'s
+    /// four scripts (Splash, Focus Energy, Charge, Defense Curl).
+    ///
+    /// Takes no `rng`: none of the four scripts contains a `Random()` call
+    /// (that module's own docs), so the missing parameter is the type system
+    /// carrying the draw budget rather than a comment asserting it.
+    fn execute_status_move(
+        &mut self,
+        attacker_is_player: bool,
+        move_id: MoveId,
+        events: &mut Vec<BattleEvent>,
+    ) -> Result<(), BattleError> {
+        let user = if attacker_is_player {
+            &self.player
+        } else {
+            &self.enemy
+        };
+        let outcome = resolve_status_move(&self.dex, move_id, user)?;
+        let by_player = attacker_is_player;
+        let user = if attacker_is_player {
+            &mut self.player
+        } else {
+            &mut self.enemy
+        };
+
+        match outcome {
+            StatusMoveOutcome::NothingHappened => {
+                events.push(BattleEvent::NothingHappened { by_player, move_id });
+            }
+            StatusMoveOutcome::Failed => {
+                events.push(BattleEvent::MoveFailed { by_player, move_id });
+            }
+            StatusMoveOutcome::FocusEnergy => {
+                user.volatiles_mut().set_focus_energy();
+                events.push(BattleEvent::GettingPumped { by_player, move_id });
+            }
+            StatusMoveOutcome::Charge => {
+                user.volatiles_mut().set_charge();
+                events.push(BattleEvent::ChargingPower { by_player, move_id });
+            }
+            StatusMoveOutcome::DefenseCurl { new_stage, capped } => {
+                // `setdefensecurlbit` runs *before* the stat change and is
+                // unconditional (`data/battle_scripts_1.s:2018`-`:2020`), so
+                // a user already at +6 Defense still gets the Rollout flag.
+                user.volatiles_mut().set_defense_curl();
+                let stat = DEFENSE_CURL_STAT_CHANGE.stat;
+                crate::stat_change::set_stage(user, stat, new_stage);
+                events.push(if capped {
+                    BattleEvent::StatWontGoHigher {
+                        by_player,
+                        move_id,
+                        stat,
+                    }
+                } else {
+                    BattleEvent::StatRose {
+                        by_player,
+                        move_id,
+                        stat,
+                        new_stage,
+                    }
+                });
+            }
+        }
+        Ok(())
+    }
+
     /// The ordinary damaging-move half of [`Self::execute_move`]'s dispatch —
-    /// [`crate::hit::resolve_hit`]'s pipeline, unchanged from before issue
-    /// #199 except for threading `self.first_battle_flag` through as
-    /// `suppress_crit` (issue #187).
+    /// [`crate::hit::resolve_hit`]'s pipeline, threading
+    /// [`Self::is_first_battle`] through as `suppress_crit` (issue #187).
     fn execute_hit_move(
         &mut self,
         attacker_is_player: bool,
@@ -1340,11 +1558,7 @@ impl Battle {
         events: &mut Vec<BattleEvent>,
     ) -> Result<(), BattleError> {
         let outcome = {
-            let (attacker, defender) = if attacker_is_player {
-                (&self.player, &self.enemy)
-            } else {
-                (&self.enemy, &self.player)
-            };
+            let (attacker, defender) = self.battlers(attacker_is_player);
             resolve_hit(
                 &self.dex,
                 move_id,
@@ -1354,86 +1568,279 @@ impl Battle {
                 rng,
             )?
         };
+        self.apply_damage_outcome(attacker_is_player, move_id, outcome, events);
+        self.settle_faint(attacker_is_player, events)
+    }
 
+    /// The draining half (issue #293) — [`crate::drain::resolve_drain_move`],
+    /// which is [`crate::hit::resolve_hit`] minus the `seteffectwithchance`
+    /// draw, plus `Cmd_negativedamage`'s heal.
+    ///
+    /// The heal is computed from the HP the target **actually lost**
+    /// (upstream's `gHpDealt`, already clamped by `Cmd_datahpupdate`), which
+    /// is exactly what [`Self::apply_damage_outcome`] returns — see
+    /// [`crate::drain::drain_amount`] for why halving the formula's raw
+    /// output instead would be wrong.
+    fn execute_drain_move(
+        &mut self,
+        attacker_is_player: bool,
+        move_id: MoveId,
+        rng: &mut impl BattleRng,
+        events: &mut Vec<BattleEvent>,
+    ) -> Result<(), BattleError> {
+        let outcome = {
+            let (attacker, defender) = self.battlers(attacker_is_player);
+            crate::drain::resolve_drain_move(
+                &self.dex,
+                move_id,
+                attacker,
+                defender,
+                self.is_first_battle(),
+                rng,
+            )?
+        };
+        let dealt = self.apply_damage_outcome(attacker_is_player, move_id, outcome, events);
+        let healed = crate::drain::drain_amount(dealt);
+        if healed > 0 {
+            // `datahpupdate BS_ATTACKER` (`data/battle_scripts_1.s:353`)
+            // clamps the heal to the attacker's own max HP.
+            let attacker = self.battler_mut(attacker_is_player);
+            attacker.restore_hp(healed);
+            events.push(BattleEvent::HpDrained {
+                by_player: attacker_is_player,
+                amount: healed,
+            });
+        }
+        // `tryfaintmon BS_ATTACKER` (`:358`) precedes `tryfaintmon BS_TARGET`
+        // (`:359`), but only Liquid Ooze -- an unmodelled ability -- can
+        // faint the attacker here, so the target's is the only reachable one.
+        self.settle_faint(attacker_is_player, events)
+    }
+
+    /// The fixed-damage half (issue #293) —
+    /// [`crate::fixed_damage::resolve_fixed_damage_move`]: no crit roll and
+    /// no damage roll, but still an accuracy check, still a type-immunity
+    /// verdict, and still the trailing `seteffectwithchance` draw.
+    fn execute_fixed_damage_move(
+        &mut self,
+        attacker_is_player: bool,
+        move_id: MoveId,
+        rng: &mut impl BattleRng,
+        events: &mut Vec<BattleEvent>,
+    ) -> Result<(), BattleError> {
+        let outcome = {
+            let (attacker, defender) = self.battlers(attacker_is_player);
+            crate::fixed_damage::resolve_fixed_damage_move(
+                &self.dex, move_id, attacker, defender, rng,
+            )?
+        };
+        self.apply_damage_outcome(attacker_is_player, move_id, outcome, events);
+        self.settle_faint(attacker_is_player, events)
+    }
+
+    /// The multi-hit half (issue #293) — `BattleScript_EffectMultiHit`'s
+    /// loop, which lives here rather than in [`crate::multi_hit`] because it
+    /// needs the target's HP *between* hits to reproduce
+    /// `jumpifhasnohp BS_TARGET` (`data/battle_scripts_1.s:614`).
+    ///
+    /// The order is upstream's: one accuracy check, then the hit count, then
+    /// per hit a [`crate::hit::damage_core`] (crit roll + damage roll) whose
+    /// damage is applied immediately, then — **once, after the whole
+    /// sequence** — the `seteffectwithchance` draw (`:651`) and
+    /// `tryfaintmon` (`:652`). A target that faints mid-sequence stops the
+    /// loop at the top of the next iteration, so the remaining hits spend no
+    /// draws at all, and the faint is settled once at the end exactly as it
+    /// is for a single-hit move.
+    ///
+    /// A mid-sequence [`HitOutcome::NoEffect`] is upstream's
+    /// `jumpifmovehadnoeffect` (`:623`), which leaves the loop *before*
+    /// `adjustnormaldamage` — but `damage_core` has already spent that
+    /// iteration's damage roll by the time it can report `NoEffect`, so the
+    /// only case where the two could diverge is a matchup that is immune,
+    /// and an immune matchup is immune on hit **one**: the loop breaks there
+    /// having drawn the same crit-plus-roll pair upstream's first iteration
+    /// draws before its own jump. Recorded on the `BattleScript_EffectMultiHit`
+    /// ledger entry.
+    fn execute_multi_hit_move(
+        &mut self,
+        attacker_is_player: bool,
+        move_id: MoveId,
+        rng: &mut impl BattleRng,
+        events: &mut Vec<BattleEvent>,
+    ) -> Result<(), BattleError> {
+        let hits = {
+            let (attacker, defender) = self.battlers(attacker_is_player);
+            crate::multi_hit::resolve_multi_hit(&self.dex, move_id, attacker, defender, rng)?
+        };
+        let Some(hits) = hits else {
+            events.push(BattleEvent::Missed {
+                by_player: attacker_is_player,
+                move_id,
+            });
+            return Ok(());
+        };
+
+        let mut landed = 0u8;
+        for _ in 0..hits {
+            // `jumpifhasnohp BS_TARGET` at the top of the iteration.
+            if self.battler(!attacker_is_player).is_fainted() {
+                break;
+            }
+            let outcome = {
+                let (attacker, defender) = self.battlers(attacker_is_player);
+                crate::hit::damage_core(
+                    &self.dex,
+                    move_id,
+                    attacker,
+                    defender,
+                    self.is_first_battle(),
+                    rng,
+                )?
+            };
+            let no_effect = matches!(outcome, HitOutcome::NoEffect);
+            self.apply_damage_outcome(attacker_is_player, move_id, outcome, events);
+            if no_effect {
+                // `jumpifmovehadnoeffect BattleScript_MultiHitNoMoreHits`.
+                break;
+            }
+            landed = landed.saturating_add(1);
+        }
+
+        // `:651`, once for the whole move rather than once per hit.
+        crate::multi_hit::spend_effect_chance_draw(rng);
+        if landed > 0 {
+            // `printstring STRINGID_HITXTIMES` (`:648`) -- "Hit N time(s)!",
+            // reporting the hits that actually landed rather than the count
+            // that was rolled.
+            events.push(BattleEvent::HitCount {
+                by_player: attacker_is_player,
+                move_id,
+                hits: landed,
+            });
+        }
+        self.settle_faint(attacker_is_player, events)
+    }
+
+    /// The attacker/defender pair for a move used by whichever side
+    /// `attacker_is_player` names.
+    const fn battlers(&self, attacker_is_player: bool) -> (&BattlePokemon, &BattlePokemon) {
+        if attacker_is_player {
+            (&self.player, &self.enemy)
+        } else {
+            (&self.enemy, &self.player)
+        }
+    }
+
+    /// One side's battler.
+    const fn battler(&self, is_player: bool) -> &BattlePokemon {
+        if is_player {
+            &self.player
+        } else {
+            &self.enemy
+        }
+    }
+
+    /// One side's battler, mutably.
+    const fn battler_mut(&mut self, is_player: bool) -> &mut BattlePokemon {
+        if is_player {
+            &mut self.player
+        } else {
+            &mut self.enemy
+        }
+    }
+
+    /// Push the event for one damaging outcome and apply its damage,
+    /// returning the HP the defender **actually** lost (`0` for a miss or an
+    /// immunity).
+    ///
+    /// Shared by all four damaging pipelines, which differ in how they reach
+    /// a [`HitOutcome`] and not at all in what they do with one. The return
+    /// value is upstream's `gHpDealt` — `Cmd_datahpupdate` caps a lethal hit
+    /// at the target's remaining HP (`battle_script_commands.c:1920`-`:1929`)
+    /// — which the drain pipeline needs and the others ignore.
+    fn apply_damage_outcome(
+        &mut self,
+        attacker_is_player: bool,
+        move_id: MoveId,
+        outcome: HitOutcome,
+        events: &mut Vec<BattleEvent>,
+    ) -> u32 {
         match outcome {
             HitOutcome::Miss => {
                 events.push(BattleEvent::Missed {
                     by_player: attacker_is_player,
                     move_id,
                 });
+                0
             }
             HitOutcome::NoEffect => {
                 events.push(BattleEvent::NoEffect {
                     by_player: attacker_is_player,
                     move_id,
                 });
+                0
             }
             HitOutcome::Hit {
                 damage,
                 is_critical,
             } => {
-                // Report the HP the defender actually loses, not the raw
-                // formula result — upstream's `Cmd_datahpupdate` records the
-                // same cap on a lethal hit (`gHpDealt = gBattleMons[].hp`,
-                // `battle_script_commands.c:1920`-`:1929`).
-                let dealt = damage.min(if attacker_is_player {
-                    self.enemy.current_hp()
-                } else {
-                    self.player.current_hp()
-                });
+                let dealt = damage.min(self.battler(!attacker_is_player).current_hp());
                 events.push(BattleEvent::Hit {
                     by_player: attacker_is_player,
                     move_id,
                     damage: dealt,
                     is_critical,
                 });
-                if attacker_is_player {
-                    self.enemy.apply_damage(dealt);
-                } else {
-                    self.player.apply_damage(dealt);
-                }
-
-                let defender_fainted = if attacker_is_player {
-                    self.enemy.is_fainted()
-                } else {
-                    self.player.is_fainted()
-                };
-                if defender_fainted {
-                    events.push(BattleEvent::Fainted {
-                        by_player: !attacker_is_player,
-                    });
-                    if attacker_is_player {
-                        // A MAX_LEVEL recipient gains nothing and gets no
-                        // "gained EXP" message: Cmd_getexp case 2 zeroes the
-                        // award and jumps past the string
-                        // (`battle_script_commands.c:3351`-`:3356`), so no
-                        // event is emitted either.
-                        if self.player.level() < MAX_LEVEL {
-                            let base_exp = self.dex.species(self.enemy.species())?.base_exp;
-                            let level = self.enemy.level();
-                            // Cmd_getexp's `x1.5` trainer-battle bonus
-                            // (`:3378`-`:3379`) -- see `crate::exp`.
-                            let exp = if self.trainer().is_some() {
-                                trainer_faint_exp(base_exp, level)
-                            } else {
-                                wild_faint_exp(base_exp, level)
-                            };
-                            self.player.apply_experience(&self.dex, exp);
-                            events.push(BattleEvent::ExpGained(exp));
-                        }
-                        // A wild battle ends the moment its only opponent
-                        // faints. A trainer's does not: the replacement (or
-                        // the trainer's defeat) is settled at the end of the
-                        // turn instead, in `end_of_turn`, exactly where
-                        // upstream's HandleFaintedMonActions sits.
-                        if self.trainer().is_none() {
-                            self.finish(events, BattleOutcome::PlayerWon);
-                        }
-                    } else {
-                        self.finish(events, BattleOutcome::PlayerLost);
-                    }
-                }
+                self.battler_mut(!attacker_is_player).apply_damage(dealt);
+                dealt
             }
+        }
+    }
+
+    /// `tryfaintmon BS_TARGET`: if the defender is down, emit
+    /// [`BattleEvent::Fainted`], award `Cmd_getexp`'s experience, and end a
+    /// wild battle.
+    ///
+    /// Shared by all four damaging pipelines for the same reason
+    /// [`Self::apply_damage_outcome`] is.
+    fn settle_faint(
+        &mut self,
+        attacker_is_player: bool,
+        events: &mut Vec<BattleEvent>,
+    ) -> Result<(), BattleError> {
+        if !self.battler(!attacker_is_player).is_fainted() {
+            return Ok(());
+        }
+        events.push(BattleEvent::Fainted {
+            by_player: !attacker_is_player,
+        });
+        if !attacker_is_player {
+            self.finish(events, BattleOutcome::PlayerLost);
+            return Ok(());
+        }
+        // A MAX_LEVEL recipient gains nothing and gets no "gained EXP"
+        // message: Cmd_getexp case 2 zeroes the award and jumps past the
+        // string (`battle_script_commands.c:3351`-`:3356`), so no event is
+        // emitted either.
+        if self.player.level() < MAX_LEVEL {
+            let base_exp = self.dex.species(self.enemy.species())?.base_exp;
+            let level = self.enemy.level();
+            // Cmd_getexp's `x1.5` trainer-battle bonus (`:3378`-`:3379`) --
+            // see `crate::exp`.
+            let exp = if self.trainer().is_some() {
+                trainer_faint_exp(base_exp, level)
+            } else {
+                wild_faint_exp(base_exp, level)
+            };
+            self.player.apply_experience(&self.dex, exp);
+            events.push(BattleEvent::ExpGained(exp));
+        }
+        // A wild battle ends the moment its only opponent faints. A
+        // trainer's does not: the replacement (or the trainer's defeat) is
+        // settled at the end of the turn instead, in `end_of_turn`, exactly
+        // where upstream's HandleFaintedMonActions sits.
+        if self.trainer().is_none() {
+            self.finish(events, BattleOutcome::PlayerWon);
         }
         Ok(())
     }

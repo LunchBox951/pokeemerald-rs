@@ -91,9 +91,13 @@ use crate::damage::{apply_stab, apply_type_effectiveness, base_damage, has_stab,
 use crate::damage::{DamageInput, MoveCategory, Weather};
 use crate::dex::Dex;
 use crate::error::BattleError;
+use crate::fixed_damage::EFFECT_SONICBOOM;
 use crate::pokemon::{BattlePokemon, MAX_MON_MOVES};
-use crate::stat_change::{EFFECT_ATTACK_DOWN, EFFECT_DEFENSE_DOWN};
+use crate::stat_change::{
+    stage_of, stat_change_for_effect, EFFECT_ATTACK_DOWN, EFFECT_DEFENSE_DOWN,
+};
 use crate::stat_stage::StatStage;
+use crate::status_move::{EFFECT_DEFENSE_CURL, EFFECT_FOCUS_ENERGY};
 
 /// `EFFECT_HIT` (`include/constants/battle_move_effects.h:5`): the plain
 /// damaging effect Pound/Scratch/Tackle carry.
@@ -135,26 +139,116 @@ enum MovePower {
     MostPowerful,
 }
 
-/// Whether [`choose_trainer_action`] can score a move with this effect — the
-/// module docs' second boundary.
+/// Whether [`run_check_bad_move`] models `AI_CheckBadMove`'s branch for this
+/// effect (issue #293).
+///
+/// Much wider than [`is_viability_scoreable`] because `AI_CheckBadMove`
+/// is the *cheap* script: it contains **no `if_random_*` instruction
+/// anywhere** (`data/battle_ai_scripts.s:51`-`:650`, verified by sweep), so
+/// every branch here is deterministic and admitting one can never
+/// desynchronise the shared stream. Three groups:
+///
+/// 1. **The whole [`crate::stat_change`] family**, via one uniform handler:
+///    every `AI_CBM_*Up` is `if_stat_level_equal AI_USER, STAT_x,
+///    MAX_STAT_STAGE, Score_Minus10` (`:249`-`:274`) and every `AI_CBM_*Down`
+///    is the same against `AI_TARGET`/`MIN_STAT_STAGE` (`:276`-`:307`), so
+///    [`crate::stat_change::StatChangeEffect`]'s own `affects_user`/`cap`
+///    answer both. (The `_2` effects share their `_1` handler, and the
+///    per-stat ability guards — Hyper Cutter, Keen Eye, Speed Boost, Clear
+///    Body, White Smoke — are unmodelled and unreachable.)
+/// 2. **Effects with a dedicated handler this module reproduces**:
+///    `EFFECT_DEFENSE_CURL` → `AI_CBM_DefenseUp` (`:186`),
+///    `EFFECT_FOCUS_ENERGY` → `AI_CBM_FocusEnergy` (`:131`),
+///    `EFFECT_SONICBOOM` → `AI_CBM_HighRiskForDamage` (`:177`).
+/// 3. **Effects with no `if_effect` row at all**, which therefore fall off
+///    the end of the chain (`:214`) unchanged: [`EFFECT_HIT`],
+///    `EFFECT_MULTI_HIT`, `EFFECT_ABSORB`, `EFFECT_POISON_HIT`,
+///    `EFFECT_QUICK_ATTACK`, `EFFECT_VITAL_THROW`, `EFFECT_SPEED_DOWN_HIT`,
+///    `EFFECT_SPLASH` and `EFFECT_CHARGE`. Their absence from the chain is
+///    itself the model, so they are listed explicitly rather than allowed by
+///    a catch-all — an effect this module has *not* checked must still be
+///    refused.
 #[must_use]
-pub(crate) fn is_scoreable_effect(effect: MoveEffect) -> bool {
+pub(crate) fn is_check_bad_move_scoreable(effect: MoveEffect) -> bool {
+    if crate::stat_change::is_stat_change_effect(effect) {
+        return true;
+    }
+    matches!(
+        effect.id(),
+        // Group 2: a dedicated handler.
+        156 // EFFECT_DEFENSE_CURL  -> AI_CBM_DefenseUp
+        | 47  // EFFECT_FOCUS_ENERGY -> AI_CBM_FocusEnergy
+        | 130 // EFFECT_SONICBOOM    -> AI_CBM_HighRiskForDamage
+        // Group 3: no `if_effect` row, so the script ends unchanged.
+        | 0   // EFFECT_HIT
+        | 3   // EFFECT_ABSORB
+        | 2   // EFFECT_POISON_HIT
+        | 29  // EFFECT_MULTI_HIT
+        | 70  // EFFECT_SPEED_DOWN_HIT
+        | 78  // EFFECT_VITAL_THROW
+        | 85  // EFFECT_SPLASH
+        | 103 // EFFECT_QUICK_ATTACK
+        | 174 // EFFECT_CHARGE
+    )
+}
+
+/// Whether the three *scoring* scripts — `AI_TryToFaint`,
+/// `AI_CheckViability` and `AI_SetupFirstTurn` — can score this effect.
+///
+/// Deliberately far narrower than [`is_check_bad_move_scoreable`], and it
+/// has to be: unlike `AI_CheckBadMove`, all three of these draw. A single
+/// `AI_CV_*` handler can spend anywhere from zero to **seven** `Random()`
+/// values depending on branches keyed on state this crate does not track
+/// (`AI_CV_AccuracyDown`, `data/battle_ai_scripts.s:1198`-`:1230`, tests
+/// `STATUS1_TOXIC_POISON`, `STATUS3_LEECHSEED`, `STATUS3_ROOTED` and
+/// `STATUS2_CURSED` in turn), so admitting an effect whose handler is only
+/// half-modelled would leave the move executable and the shared stream
+/// wrong.
+///
+/// The three ids below are exactly what the six Route 103 rivals' level-5
+/// starters field — Pound/Scratch/Tackle ([`EFFECT_HIT`]), Growl
+/// (`EFFECT_ATTACK_DOWN` → `AI_CV_AttackDown`), Leer
+/// (`EFFECT_DEFENSE_DOWN` → `AI_CV_DefenseDown`) — and they are the only
+/// trainers in the port that set any of these three flags. Route 103's nine
+/// *sight* trainers all carry `aiFlags = AI_SCRIPT_CHECK_BAD_MOVE` alone
+/// (`src/data/trainers.h`), which is what makes the split worth having.
+#[must_use]
+pub(crate) fn is_viability_scoreable(effect: MoveEffect) -> bool {
     effect == EFFECT_HIT || effect == EFFECT_ATTACK_DOWN || effect == EFFECT_DEFENSE_DOWN
 }
 
-/// Screen one of a trainer party mon's moves against the effects this AI can
-/// score.
+/// Screen one of a trainer party mon's moves against the effects the scripts
+/// **this trainer actually runs** can score.
+///
+/// Flag-aware since issue #293, and that is a fidelity fix rather than a
+/// convenience: a trainer whose `aiFlags` is `AI_SCRIPT_CHECK_BAD_MOVE`
+/// alone never executes `AI_CheckViability` at all, so requiring that
+/// script's coverage of its moves refused parties for branches that could
+/// never run. The screen now asks each *set* bit whether it can score the
+/// effect, so widening `AI_CheckBadMove`'s coverage widens exactly the
+/// trainers that depend on it.
 ///
 /// # Errors
 ///
 /// [`BattleError::UnknownMove`] if `move_id` is not in `dex`, or
-/// [`BattleError::UnscoreableMoveEffect`] if its `EFFECT_*` takes a script
-/// branch this module does not model (module docs).
-pub(crate) fn ensure_scoreable(dex: &Dex, move_id: MoveId) -> Result<(), BattleError> {
-    if is_scoreable_effect(dex.move_data(move_id)?.effect) {
-        Ok(())
-    } else {
+/// [`BattleError::UnscoreableMoveEffect`] if some script `ai_flags` selects
+/// takes a branch this module does not model (module docs).
+pub(crate) fn ensure_scoreable(
+    dex: &Dex,
+    move_id: MoveId,
+    ai_flags: AiFlags,
+) -> Result<(), BattleError> {
+    let effect = dex.move_data(move_id)?.effect;
+    let unscoreable = (ai_flags.contains(SCRIPT_CHECK_BAD_MOVE)
+        && !is_check_bad_move_scoreable(effect))
+        || ((ai_flags.contains(SCRIPT_TRY_TO_FAINT)
+            || ai_flags.contains(SCRIPT_CHECK_VIABILITY)
+            || ai_flags.contains(SCRIPT_SETUP_FIRST_TURN))
+            && !is_viability_scoreable(effect));
+    if unscoreable {
         Err(BattleError::UnscoreableMoveEffect(move_id))
+    } else {
+        Ok(())
     }
 }
 
@@ -534,26 +628,29 @@ fn how_powerful(
     }
 }
 
-/// `AI_CheckBadMove` (`data/battle_ai_scripts.s:51`), for the three scored
-/// effects. **Draws nothing** on any of the three paths.
+/// `AI_CheckBadMove` (`data/battle_ai_scripts.s:51`-`:650`). **Draws
+/// nothing, on every path**: the script contains no `if_random_*`
+/// instruction anywhere.
 ///
-/// - `if_target_is_ally` (`:52`) never fires in a single battle.
-/// - `if_move MOVE_FISSURE`/`MOVE_HORN_DRILL` (`:53`-`:54`) never fire: both
-///   are `EFFECT_OHKO`, outside this module's scored set.
-/// - `get_how_powerful_move_is` → `MOVE_POWER_OTHER` (`:56`) skips the
-///   type/ability block for the two `0`-power stat-down moves and falls
-///   straight to the effect switch.
-/// - For [`EFFECT_HIT`]: `if_type_effectiveness AI_EFFECTIVENESS_x0`
-///   (`:58`) is the one branch that can fire (`Score_Minus10`); the five
-///   `get_ability AI_TARGET` branches after it, and the Soundproof block at
-///   `:92`-`:102`, need abilities this crate does not model and that none of
-///   the three starters has (module docs). `EFFECT_HIT` is absent from the
-///   `if_effect` chain (`:104`-`:216`), so the script then ends unchanged.
-/// - For `EFFECT_ATTACK_DOWN` → `AI_CBM_AttackDown` (`:277`) and
-///   `EFFECT_DEFENSE_DOWN` → `AI_CBM_DefenseDown` (`:283`): `score -10` if
-///   the target's stage for that stat is already `MIN_STAT_STAGE`, then the
-///   Hyper Cutter / Clear Body / White Smoke ability checks (unmodelled,
-///   unreachable).
+/// Reproduced in upstream's two halves.
+///
+/// **The prologue (`:51`-`:103`).** `if_target_is_ally` never fires in a
+/// single battle; `if_move MOVE_FISSURE`/`MOVE_HORN_DRILL` never fire (both
+/// are `EFFECT_OHKO`, outside every scoreable set). Then
+/// `get_how_powerful_move_is` gates the type check:
+/// `if_equal MOVE_POWER_OTHER, AI_CheckBadMove_CheckSoundproof` (`:56`)
+/// **skips** `if_type_effectiveness AI_EFFECTIVENESS_x0, Score_Minus10`
+/// (`:58`) for any move whose power is `0`/`1` or whose effect is in
+/// `sIgnoredPowerfulMoveEffects` ([`ignored_by_power_check`]) — so a
+/// `0`-power status move never gets the `-10`, while Tackle, Absorb, Arm
+/// Thrust and friends all do. The five `get_ability AI_TARGET` branches
+/// behind it (Volt Absorb / Water Absorb / Flash Fire / Wonder Guard /
+/// Levitate) and the Soundproof block at `:92`-`:102` need abilities this
+/// crate does not model, so both are unreachable rather than skipped.
+///
+/// **The effect chain (`:104`-`:214`).** Three shapes, per
+/// [`is_check_bad_move_scoreable`]'s groups: the uniform stat-stage-at-cap
+/// handler, three dedicated handlers, and "no row at all, script ends".
 fn run_check_bad_move(
     dex: &Dex,
     thinking: &mut Thinking,
@@ -562,24 +659,70 @@ fn run_check_bad_move(
     enemy: &BattlePokemon,
     player: &BattlePokemon,
 ) -> Result<(), BattleError> {
-    let effect = dex.move_data(move_id)?.effect;
-    if effect == EFFECT_HIT {
+    let mv = dex.move_data(move_id)?;
+    let effect = mv.effect;
+
+    // The prologue's type check, gated by `get_how_powerful_move_is`
+    // returning something other than MOVE_POWER_OTHER. `Score_Minus10` is
+    // `score -10; end` (`:620`-`:622`), so it ends the script -- the effect
+    // chain below never runs on this path.
+    if mv.power > 1 && !ignored_by_power_check(effect) && is_no_effect(dex, move_id, enemy, player)?
+    {
+        thinking.score(index, -10);
+        return Ok(());
+    }
+
+    // Group 1: the whole stat-change family, one handler. Every AI_CBM_*Up
+    // compares the *user's* stage to MAX_STAT_STAGE and every AI_CBM_*Down
+    // the *target's* to MIN_STAT_STAGE -- which is exactly
+    // `StatChangeEffect::affects_user()` against `StatChangeEffect::cap()`.
+    if let Some(change) = stat_change_for_effect(effect) {
+        let subject = if change.affects_user() { enemy } else { player };
+        if stage_of(subject, change.stat) == change.cap() {
+            thinking.score(index, -10);
+        }
+        return Ok(());
+    }
+
+    // Group 2: the three dedicated handlers.
+    if effect == EFFECT_DEFENSE_CURL {
+        // `if_effect EFFECT_DEFENSE_CURL, AI_CBM_DefenseUp` (`:186`), which
+        // is `if_stat_level_equal AI_USER, STAT_DEF, MAX_STAT_STAGE`
+        // (`:253`-`:255`) -- the *stat* half only; the Rollout flag it also
+        // sets is invisible to this script.
+        if enemy.stages().defense == StatStage::MAX {
+            thinking.score(index, -10);
+        }
+        return Ok(());
+    }
+    if effect == EFFECT_FOCUS_ENERGY {
+        // `AI_CBM_FocusEnergy` (`:382`-`:384`): `if_status2 AI_USER,
+        // STATUS2_FOCUS_ENERGY, Score_Minus10`.
+        if enemy.volatiles().focus_energy {
+            thinking.score(index, -10);
+        }
+        return Ok(());
+    }
+    if effect == EFFECT_SONICBOOM {
+        // `AI_CBM_HighRiskForDamage` (`:368`-`:376`): the x0 check the
+        // prologue skipped, because Sonic Boom's power of 1 made
+        // `get_how_powerful_move_is` answer MOVE_POWER_OTHER. The Wonder
+        // Guard arm behind it needs an ability this crate does not model.
         if is_no_effect(dex, move_id, enemy, player)? {
             thinking.score(index, -10);
         }
         return Ok(());
     }
-    let floored = if effect == EFFECT_ATTACK_DOWN {
-        player.stages().attack == StatStage::MIN
-    } else if effect == EFFECT_DEFENSE_DOWN {
-        player.stages().defense == StatStage::MIN
+
+    // Group 3: no `if_effect` row, so the chain runs off its end at `:214`
+    // and the score is unchanged. Anything *else* is an effect this module
+    // has not checked against the real script, so it is refused rather than
+    // silently treated as a no-op.
+    if is_check_bad_move_scoreable(effect) {
+        Ok(())
     } else {
-        return Err(BattleError::UnscoreableMoveEffect(move_id));
-    };
-    if floored {
-        thinking.score(index, -10);
+        Err(BattleError::UnscoreableMoveEffect(move_id))
     }
-    Ok(())
 }
 
 /// `AI_TryToFaint` (`data/battle_ai_scripts.s:2616`).
@@ -822,7 +965,7 @@ fn run_setup_first_turn(
 mod tests {
     use super::{
         choose_trainer_action, ensure_scoreable, ensure_supported_flags, estimated_damage,
-        is_scoreable_effect, EFFECT_HIT,
+        is_viability_scoreable, EFFECT_HIT,
     };
     use crate::battle::opponent_ai::EnemyAction;
     use crate::damage::BattleRng;
@@ -840,6 +983,18 @@ mod tests {
     const SCRATCH: MoveId = MoveId(10);
     const GROWL: MoveId = MoveId(45);
     const EMBER: MoveId = MoveId(52);
+    const SAND_ATTACK: MoveId = MoveId(28);
+    const SCREECH: MoveId = MoveId(103);
+    const GROWTH: MoveId = MoveId(74);
+    const SPLASH: MoveId = MoveId(150);
+    const CHARGE: MoveId = MoveId(268);
+    const FOCUS_ENERGY: MoveId = MoveId(116);
+    const DEFENSE_CURL: MoveId = MoveId(111);
+    const SONIC_BOOM: MoveId = MoveId(49);
+    const ARM_THRUST: MoveId = MoveId(292);
+    const ABSORB: MoveId = MoveId(71);
+    const VITAL_THROW: MoveId = MoveId(233);
+    const QUICK_ATTACK: MoveId = MoveId(98);
 
     /// `TRAINER_MAY_ROUTE_103_MUDKIP`'s flags.
     fn route103_flags() -> AiFlags {
@@ -883,19 +1038,92 @@ mod tests {
         .expect("test mon must be dex-resident")
     }
 
+    /// The narrow set: a trainer running any of the three *drawing* scripts
+    /// can only field `EFFECT_HIT` / `EFFECT_ATTACK_DOWN` /
+    /// `EFFECT_DEFENSE_DOWN` -- the six Route 103 rivals' whole repertoire.
     #[test]
-    fn only_the_three_route_103_effects_are_scoreable() {
+    fn a_viability_running_trainer_can_only_field_the_three_route_103_effects() {
         let dex = Dex::new();
-        assert!(is_scoreable_effect(EFFECT_HIT));
-        assert!(ensure_scoreable(&dex, POUND).is_ok());
-        assert!(ensure_scoreable(&dex, GROWL).is_ok());
-        assert!(ensure_scoreable(&dex, LEER).is_ok());
+        let flags = route103_flags();
+        assert!(is_viability_scoreable(EFFECT_HIT));
+        for move_id in [POUND, GROWL, LEER] {
+            assert!(
+                ensure_scoreable(&dex, move_id, flags).is_ok(),
+                "{move_id:?}"
+            );
+        }
         // Ember is EFFECT_BURN_HIT: a plain hit to `hit.rs`, but a different
         // AI_CheckBadMove/AI_CheckViability branch -- and those branches draw.
         assert_eq!(
-            ensure_scoreable(&dex, EMBER).unwrap_err(),
+            ensure_scoreable(&dex, EMBER, flags).unwrap_err(),
             BattleError::UnscoreableMoveEffect(EMBER)
         );
+        // Sand Attack is executable and `AI_CheckBadMove`-scoreable, but
+        // `AI_CV_AccuracyDown` can spend up to seven draws on state this
+        // crate does not track, so a CHECK_VIABILITY trainer still refuses it.
+        assert_eq!(
+            ensure_scoreable(&dex, SAND_ATTACK, flags).unwrap_err(),
+            BattleError::UnscoreableMoveEffect(SAND_ATTACK)
+        );
+    }
+
+    /// ...and the flag-aware half (issue #293): a trainer running **only**
+    /// `AI_SCRIPT_CHECK_BAD_MOVE` -- which is every one of Route 103's nine
+    /// sight trainers -- can field far more, because that script draws
+    /// nothing at all.
+    #[test]
+    fn a_check_bad_move_only_trainer_can_field_the_whole_wide_set() {
+        let dex = Dex::new();
+        let flags = AiFlags::CHECK_BAD_MOVE;
+        for move_id in [
+            POUND,       // EFFECT_HIT
+            GROWL,       // EFFECT_ATTACK_DOWN
+            SAND_ATTACK, // EFFECT_ACCURACY_DOWN
+            SCREECH,     // EFFECT_DEFENSE_DOWN_2
+            GROWTH,      // EFFECT_SPECIAL_ATTACK_UP
+            SPLASH,      // EFFECT_SPLASH
+            CHARGE,      // EFFECT_CHARGE
+            FOCUS_ENERGY,
+            DEFENSE_CURL,
+            SONIC_BOOM, // EFFECT_SONICBOOM
+            ARM_THRUST, // EFFECT_MULTI_HIT
+            ABSORB,     // EFFECT_ABSORB
+            VITAL_THROW,
+            QUICK_ATTACK,
+        ] {
+            assert!(
+                ensure_scoreable(&dex, move_id, flags).is_ok(),
+                "{move_id:?} must be AI_CheckBadMove-scoreable"
+            );
+        }
+        // ...but not *everything*: an effect whose `if_effect` row this
+        // module has not checked against the real script is still refused.
+        for move_id in [EMBER, MoveId(114) /* Haze */] {
+            assert_eq!(
+                ensure_scoreable(&dex, move_id, flags).unwrap_err(),
+                BattleError::UnscoreableMoveEffect(move_id),
+                "{move_id:?}"
+            );
+        }
+    }
+
+    /// The nine real Route 103 sight trainers all carry
+    /// `aiFlags = AI_SCRIPT_CHECK_BAD_MOVE` alone
+    /// (`src/data/trainers.h`), which is what makes the flag-aware split
+    /// worth having at all. Pinned against the extracted table so a data
+    /// re-extraction that changed it would fail here rather than silently
+    /// widening what those trainers demand.
+    #[test]
+    fn every_route_103_sight_trainer_runs_check_bad_move_alone() {
+        for id in [36u16, 481, 336, 293, 703, 702, 736, 735] {
+            let data = crate::battle::trainer::trainer_data(assets::trainers::TrainerId(id))
+                .expect("a real TRAINER_* id");
+            assert_eq!(
+                data.ai_flags.bits(),
+                AiFlags::CHECK_BAD_MOVE.bits(),
+                "TRAINER {id} must run AI_SCRIPT_CHECK_BAD_MOVE and nothing else"
+            );
+        }
     }
 
     #[test]

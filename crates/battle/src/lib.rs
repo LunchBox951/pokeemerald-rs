@@ -109,15 +109,20 @@ pub mod battle;
 pub mod critical;
 pub mod damage;
 pub mod dex;
+pub mod drain;
 pub mod error;
 pub mod escape;
 pub mod exp;
+pub mod fixed_damage;
 pub mod hit;
+pub mod multi_hit;
 pub mod nature;
 pub mod pokemon;
 pub mod stat_change;
 pub mod stat_stage;
+pub mod status_move;
 pub mod turn_order;
+pub mod volatile;
 pub mod wild;
 
 pub use battle::trainer::{
@@ -131,9 +136,12 @@ pub use damage::{
     STRUGGLE,
 };
 pub use dex::Dex;
+pub use drain::{drain_amount, is_drain_effect, DrainOutcome};
 pub use error::BattleError;
 pub use exp::{trainer_faint_exp, wild_faint_exp};
+pub use fixed_damage::{is_fixed_damage_effect, resolve_fixed_damage_move};
 pub use hit::{ensure_resolvable, is_ordinary_hit_effect, HitOutcome};
+pub use multi_hit::is_multi_hit_effect;
 pub use nature::{Nature, Stat};
 pub use pokemon::{
     BattlePokemon, Ivs, MoveSlot, StatStages, Stats, MAX_IV, MAX_LEVEL, MAX_MON_MOVES, MIN_LEVEL,
@@ -144,6 +152,8 @@ pub use stat_change::{
     StatChangeEffect, StatChangeOutcome,
 };
 pub use stat_stage::StatStage;
+pub use status_move::{is_status_move_effect, StatusMoveOutcome};
+pub use volatile::Volatiles;
 pub use wild::{
     build_pokemon_with_random_personality, build_wild_pokemon, ensure_wild_startable,
     initial_moveset,

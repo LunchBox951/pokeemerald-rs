@@ -57,6 +57,7 @@ const SAND_ATTACK: MoveId = MoveId(28);
 const FIRE_SPIN: MoveId = MoveId(83);
 const QUICK_ATTACK: MoveId = MoveId(98);
 const SLASH: MoveId = MoveId(163);
+const PURSUIT: MoveId = MoveId(228);
 
 /// The rival's real party: one level-5 Treecko knowing Pound and Leer.
 fn rival_treecko(dex: &Dex) -> Vec<BattlePokemon> {
@@ -373,32 +374,43 @@ fn a_level_crossed_before_replacement_updates_the_next_turns_combat() {
 fn a_crossed_level_learns_an_unexecutable_move_that_selection_then_refuses() {
     let dex = Dex::new();
     let mut player = max_iv_mon(&dex, TREECKO, 5, vec![SLASH]);
-    let level_6 =
-        assets::experience_for_level(dex.species(SpeciesId(TREECKO)).unwrap().growth_rate, 6)
+    // Level 16, crossing three learnset entries at once: Absorb (6), Quick
+    // Attack (11) and Pursuit (16). The specimen moved here from Absorb
+    // alone when issue #293 made `EFFECT_ABSORB` executable -- the *screen*
+    // is what this test pins, so the ratchet is to re-aim it at a move the
+    // engine still cannot run rather than to relax the assertion.
+    let level_16 =
+        assets::experience_for_level(dex.species(SpeciesId(TREECKO)).unwrap().growth_rate, 16)
             .unwrap();
 
-    player.apply_experience(&dex, level_6 - player.experience());
+    player.apply_experience(&dex, level_16 - player.experience());
 
-    assert_eq!(player.level(), 6, "the threshold was crossed");
-    assert_eq!(player.experience(), level_6);
-    assert!(
-        battle::initial_moveset(SpeciesId(TREECKO), 6).contains(&ABSORB),
-        "fixture sanity: level 6 is the learnset entry that holds Absorb"
-    );
+    assert_eq!(player.level(), 16, "three thresholds were crossed");
+    assert_eq!(player.experience(), level_16);
     assert_eq!(
         player
             .moves()
             .iter()
             .map(|slot| slot.move_id)
             .collect::<Vec<_>>(),
-        vec![SLASH, ABSORB],
-        "Absorb is taught into the empty slot with no effect-coverage \
-         screen, exactly as upstream's GiveMoveToMon hands it out"
+        vec![SLASH, ABSORB, QUICK_ATTACK, PURSUIT],
+        "all three are taught into the empty slots with no effect-coverage \
+         screen, exactly as upstream's GiveMoveToMon hands them out"
     );
     assert_eq!(
-        player.moves()[1].pp,
-        dex.move_data(ABSORB).unwrap().pp,
+        player.moves()[3].pp,
+        dex.move_data(PURSUIT).unwrap().pp,
         "a freshly learned move's PP starts at the move's own base PP"
+    );
+    // `EFFECT_PURSUIT` points at `BattleScript_EffectHit` in the table but
+    // the engine re-targets and re-powers it outside the script
+    // (`battle_script_commands.c:8745`/`:9854`), which is exactly why
+    // `crate::hit`'s allow-list leaves it out.
+    assert_eq!(
+        battle::ensure_resolvable(&dex, ABSORB),
+        Err(BattleError::UnsupportedMoveEffect(ABSORB)),
+        "Absorb is executable now, but through `crate::drain` -- the plain \
+         hit pipeline still refuses it, one draw short as it is"
     );
 
     // The fail-closed half: unexecutable *in the player's moveset* is fine;
@@ -415,13 +427,13 @@ fn a_crossed_level_learns_an_unexecutable_move_that_selection_then_refuses() {
     let draws_before = rng.draws();
 
     let failure = battle
-        .take_turn(PlayerAction::UseMove(1), &mut rng)
+        .take_turn(PlayerAction::UseMove(3), &mut rng)
         .unwrap_err();
     assert_eq!(
         failure.error(),
-        BattleError::UnsupportedMoveEffect(ABSORB),
-        "EFFECT_ABSORB has no resolver, so selecting it is refused -- \
-         pinning *why*, so this breaks loudly the day EFFECT_ABSORB lands"
+        BattleError::UnsupportedMoveEffect(PURSUIT),
+        "EFFECT_PURSUIT has no resolver, so selecting it is refused -- \
+         pinning *why*, so this breaks loudly the day EFFECT_PURSUIT lands"
     );
     assert!(
         failure.events().is_empty(),
@@ -434,9 +446,13 @@ fn a_crossed_level_learns_an_unexecutable_move_that_selection_then_refuses() {
          shared stream must not move at all"
     );
     assert!(battle.outcome().is_none(), "the refusal is recoverable");
+    // Another action can still be chosen this turn -- and the one chosen is
+    // Absorb, taught by the very same level-up run, so this also pins that
+    // the refusal above is about Pursuit specifically rather than about
+    // learned moves in general (Absorb executes through `crate::drain`).
     assert!(
-        battle.take_turn(PlayerAction::UseMove(0), &mut rng).is_ok(),
-        "and another action can still be chosen this turn"
+        battle.take_turn(PlayerAction::UseMove(1), &mut rng).is_ok(),
+        "the freshly learned Absorb is selectable and executes"
     );
 }
 

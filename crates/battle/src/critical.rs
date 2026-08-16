@@ -6,11 +6,12 @@
 //! (`pokeemerald/src/battle_script_commands.c:1253`). It builds a crit-stage
 //! index (`0..=4`) from Focus Energy / a handful of high-crit move effects /
 //! Scope Lens / Lucky Punch / Stick, then rolls `Random() %
-//! sCriticalHitChance[critChance] == 0` (`:606`). This slice models only the
-//! move-effect contribution ([`crit_stage_for_effect`]) — Focus Energy
-//! (`STATUS2_FOCUS_ENERGY`, no status2 bits tracked this slice) and every
-//! held-item/ability bonus are out of scope (`(behavioral-fidelity)`'s "as
-//! far as the first-encounter species need").
+//! sCriticalHitChance[critChance] == 0` (`:606`). [`crit_stage`] models the
+//! move-effect contribution **and** Focus Energy's `+2` (issue #293, which
+//! added the `STATUS2_FOCUS_ENERGY` bit — [`crate::volatile`]); the three
+//! held-item terms remain out of scope, since no item has an in-battle
+//! effect here at all ([`crate::pokemon::BattlePokemon::held_item`] is
+//! carried but never run).
 //!
 //! # When the draw does not happen at all
 //!
@@ -84,11 +85,37 @@ const HIGH_CRIT_EFFECTS: [MoveEffect; 4] = [
     MoveEffect(209),
 ];
 
-/// The crit-chance stage (`0..=4`) contributed by `move_effect` alone (Focus
-/// Energy and held items are not modelled — see the module docs).
+/// The crit-chance stage (`0..=4`) `Cmd_critcalc` builds
+/// (`battle_script_commands.c:1267`-`:1274`), as far as this crate models its
+/// terms:
+///
+/// ```text
+/// critChance = 2 * (status2 & STATUS2_FOCUS_ENERGY != 0)   // :1267
+///            + (effect == EFFECT_HIGH_CRITICAL)            // :1268
+///            + (effect == EFFECT_SKY_ATTACK)               // :1269
+///            + (effect == EFFECT_BLAZE_KICK)               // :1270
+///            + (effect == EFFECT_POISON_TAIL)              // :1271
+///            + (holdEffect == HOLD_EFFECT_SCOPE_LENS)      // :1272
+///            + 2 * (Lucky Punch on a Chansey)              // :1273
+///            + 2 * (Stick on a Farfetch'd);                // :1274
+/// ```
+///
+/// The four move-effect terms are [`HIGH_CRIT_EFFECTS`] and the Focus Energy
+/// term is `focus_energy` (issue #293 — the attacker's
+/// [`crate::volatile::Volatiles::focus_energy`], set by
+/// [`crate::status_move`]). The three held-item terms are **not** modelled:
+/// this crate carries a held item but runs no item effect at all
+/// ([`crate::pokemon::BattlePokemon::held_item`]), so `holdEffect` is always
+/// the "no effect" case.
+///
+/// Focus Energy is worth `2`, not `1` — enough on its own to take an
+/// ordinary move from `1/16` to `1/4` ([`CRIT_CHANCE_TABLE`]) — and it
+/// stacks with a high-crit move for stage `3` (`1/3`). The caller clamps:
+/// [`crit_roll`] applies `Cmd_critcalc`'s own `:1276`-`:1277` clamp to the
+/// table's last index.
 #[must_use]
-pub fn crit_stage_for_effect(move_effect: MoveEffect) -> u8 {
-    u8::from(HIGH_CRIT_EFFECTS.contains(&move_effect))
+pub fn crit_stage(move_effect: MoveEffect, focus_energy: bool) -> u8 {
+    2 * u8::from(focus_energy) + u8::from(HIGH_CRIT_EFFECTS.contains(&move_effect))
 }
 
 /// Roll for a critical hit at crit-chance `stage` (clamped to the table's
@@ -145,7 +172,9 @@ pub fn crit_adjusted_stages(
 
 #[cfg(test)]
 mod tests {
-    use super::{crit_adjusted_stages, crit_roll, crit_stage_for_effect, HIGH_CRIT_EFFECTS};
+    use super::{
+        crit_adjusted_stages, crit_roll, crit_stage, CRIT_CHANCE_TABLE, HIGH_CRIT_EFFECTS,
+    };
     use crate::damage::BattleRng;
     use crate::stat_stage::StatStage;
     use assets::MoveEffect;
@@ -169,11 +198,29 @@ mod tests {
     }
 
     #[test]
-    fn crit_stage_for_effect_covers_the_four_high_crit_effects() {
+    fn crit_stage_covers_the_four_high_crit_effects() {
         for effect in HIGH_CRIT_EFFECTS {
-            assert_eq!(crit_stage_for_effect(effect), 1, "{effect:?}");
+            assert_eq!(crit_stage(effect, false), 1, "{effect:?}");
         }
-        assert_eq!(crit_stage_for_effect(MoveEffect(0)), 0); // EFFECT_HIT
+        assert_eq!(crit_stage(MoveEffect(0), false), 0); // EFFECT_HIT
+    }
+
+    /// Focus Energy is worth **two** stages, not one, and stacks additively
+    /// with a high-crit move (`Cmd_critcalc:1267`-`:1268`) -- so an ordinary
+    /// move goes 1/16 -> 1/4 and a high-crit one 1/8 -> 1/3.
+    #[test]
+    fn focus_energy_is_worth_two_stages_and_stacks_with_a_high_crit_move() {
+        assert_eq!(crit_stage(MoveEffect(0), true), 2);
+        assert_eq!(crit_stage(HIGH_CRIT_EFFECTS[0], true), 3);
+        assert_eq!(CRIT_CHANCE_TABLE[2], 4, "stage 2 is 1 in 4");
+        assert_eq!(CRIT_CHANCE_TABLE[3], 3, "stage 3 is 1 in 3");
+
+        // The odds really do shorten: draw 4 crits at stage 2 but not at 0.
+        assert!(crit_roll(crit_stage(MoveEffect(0), true), &mut FixedRng(4)));
+        assert!(!crit_roll(
+            crit_stage(MoveEffect(0), false),
+            &mut FixedRng(4)
+        ));
     }
 
     #[test]
@@ -205,7 +252,7 @@ mod tests {
         // draw that crits at that stage but NOT at the stage below, so no
         // entry can silently degrade to a neighbour's odds. (Stages 2 and 3
         // need Focus Energy / held items and are unreachable through
-        // `crit_stage_for_effect` this slice, but the transcribed table is
+        // `crit_stage` this slice, but the transcribed table is
         // upstream data and is pinned as such.)
         //
         // stage 1 (1/8): 8 % 8 == 0 crits; 8 % 16 != 0 does not at stage 0.

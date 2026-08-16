@@ -170,18 +170,26 @@ fn a_faster_player_always_escapes_a_wild_battle_successfully() {
 #[test]
 fn a_battle_with_a_move_outside_this_slice_is_refused_before_it_starts() {
     let dex = Dex::new();
-    // Sonic Boom (move 49) has base *power 1* but EFFECT_SONICBOOM's flat
-    // 20 damage, so a power-only filter would have let it into the ordinary
-    // damage pipeline -- wrong damage and a desynchronised RNG stream.
+    // Horn Drill (move 32) has base *power 1* but EFFECT_OHKO's own script,
+    // so a power-only filter would have let it into the ordinary damage
+    // pipeline -- wrong damage and a desynchronised RNG stream. (Sonic Boom
+    // stood here until issue #293 gave `EFFECT_SONICBOOM` its own
+    // fixed-damage pipeline; the specimen moved outward with the boundary
+    // rather than the assertion being relaxed.)
     let player = fixed_mon(&dex, 4, 50, vec![MoveId(33)]);
-    let enemy = fixed_mon(&dex, 19, 5, vec![MoveId(49)]);
+    let enemy = fixed_mon(&dex, 19, 5, vec![MoveId(32)]);
+    assert_eq!(
+        dex.move_data(MoveId(32)).unwrap().power,
+        1,
+        "the point of this specimen is that base power alone does not filter it"
+    );
 
     // An empty script: a refused battle must not draw at all, so any draw
     // here panics rather than quietly passing.
     let mut rng = ScriptedRng::new([]);
     assert_eq!(
         Battle::new(dex, player, enemy, false, &mut rng).err(),
-        Some(BattleError::UnsupportedMoveEffect(MoveId(49)))
+        Some(BattleError::UnsupportedMoveEffect(MoveId(32)))
     );
     assert_eq!(rng.draws(), 0);
 }

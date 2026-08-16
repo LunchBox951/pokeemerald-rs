@@ -14,39 +14,30 @@
 //! limitation, not a claim they are untestable -- `engine::overworld::trainer_sight`'s
 //! own test suite already pins the elevation-compatibility rule generically).
 //!
-//! # The stand-in party (`seed_battle`)
+//! # A real battle, through the real cone (issue #293)
 //!
-//! `sight_trainer_trigger`'s own module docs (item 7) record an emergent gap
-//! discovered while writing this file: every real Route 103 sight trainer's
-//! own default, level-up-derived moveset currently includes at least one
-//! move this battle engine does not yet implement, so
-//! [`crate::flow::npc_trainer_battle::start_npc_trainer_battle`] fails for
-//! all nine today (pinned generically by
-//! `sight_trainer_trigger::tests::every_sight_trainers_real_party_fails_to_construct_for_exactly_these_reasons`).
-//! That is a genuine, current fact about this port, not a testing
-//! inconvenience to work around invisibly -- so the tests above that only
-//! need the trigger/geometry/refusal half
-//! (`standing_in_a_real_trainers_cone_attempts_the_real_handoff_which_currently_fails_to_construct`
-//! and its siblings) exercise Rhett's own real, currently-failing
-//! construction attempt directly, and pin that it fails.
+//! Issue #264 could not test the win/loss/defeated-flag driver against a
+//! real sight trainer at all: every one of the nine failed to construct,
+//! because their level-up-derived movesets all reached a move the `battle`
+//! crate could not execute. That file's [`seed_battle`] therefore borrowed a
+//! Route 103 *rival*'s proven-constructible party as a stand-in and seeded
+//! [`OverworldPhase::sight_trainer_battle`] directly, bypassing
+//! [`OverworldPhase::begin_sight_trainer_battle_if_seen`] — and its own docs
+//! recorded that "once a future move-coverage slice lets a real sight
+//! trainer construct, the two halves should be merged back into one real
+//! end-to-end test".
 //!
-//! The win/loss/defeated-flag *driver* half
-//! ([`OverworldPhase::advance_sight_trainer_battle_frame`]) is a different
-//! concern -- it runs identically regardless of *which* trainer's party
-//! constructed -- and leaving it untested would hide real bugs in this
-//! module's own glue (the flag id, the white-out call, the outcome channel)
-//! behind an unrelated `battle`-crate move-coverage gap. So [`seed_battle`]
-//! below seeds
-//! [`OverworldPhase::sight_trainer_battle`]/[`OverworldPhase::sight_trainer_id`]
-//! directly: a real battle, built through the real
-//! `start_npc_trainer_battle`/`advance_npc_trainer_battle` path, against one
-//! of the six Route 103 *rivals* (proven constructible by
-//! `route103_rival::tests::all_six_rivals_construct_and_play_to_a_terminal_outcome`)
-//! as a stand-in party, while `sight_trainer_id` is still set to Rhett's own
-//! real `TrainerId` -- so the *defeated-flag* half is pinned honestly (the
-//! real id the flag ends up keyed to) even though the *party* is borrowed.
-//! Once a future move-coverage slice lets a real sight trainer construct,
-//! the two halves should be merged back into one real end-to-end test.
+//! That slice was issue #293, and this is that merge. Rhett's real party —
+//! a level-15 Makuhita knowing Focus Energy, Sand Attack, Arm Thrust and
+//! Vital Throw — now constructs, so every test below runs the **whole
+//! chain**: stand in the real cone over the real object-event geometry, let
+//! the unconditional per-frame check fire, let
+//! `begin_sight_trainer_battle_if_seen` build the real
+//! `CreateNPCTrainerParty` party off the shared stream, and drive the real
+//! `battle::Battle` to a terminal outcome one turn per frame. No seeded
+//! slot, no borrowed party.
+//!
+//! [`seed_battle`] is gone with it. What remains borrowed is nothing.
 
 use assets::MapId;
 use battle::{BattleOutcome, BattlePokemon, Dex, Ivs};
@@ -72,6 +63,17 @@ const TRAINER_FLAGS_START: u16 = 0x500;
 /// range 2.
 const TRAINER_RHETT: u16 = 703;
 const RHETT_TILE: (i32, i32) = (67, 5);
+
+/// `SPECIES_MAKUHITA` (`include/constants/species.h:341`) -- the mon
+/// `sParty_Rhett` fields, and since issue #293 one this engine can play
+/// against move for move.
+const MAKUHITA: u16 = 335;
+
+/// `TRAINER_DAISY` (`include/constants/opponents.h`): still refused, for her
+/// Shroomish's Stun Spore (`EFFECT_PARALYZE`) -- the current stand-in for
+/// "a cone whose battle cannot be built". Her object event stands at
+/// `(59, 6)`, elevation 3, facing south, sight range 4.
+const DAISY_TILE: (i32, i32) = (59, 6);
 
 /// `TRAINER_ANDREW` (`include/constants/opponents.h`): used only for the
 /// "does not trigger" geometry tests, so a false positive there can never be
@@ -153,24 +155,21 @@ fn play_out_sight_battle(phase: &mut OverworldPhase, budget: usize) -> Option<Ba
 
 // -- Sight-cone geometry, through the real trigger -------------------------
 
-/// Item 1 of the issue's own scope: standing within a real sight trainer's
-/// cone attempts the battle on an ordinary frame -- **no button press at
-/// all** (unlike the rival's own A-press interaction trigger), matching
-/// upstream's `CheckForTrainersWantingBattle` running unconditionally ahead
-/// of every other per-frame check. The attempt itself currently fails to
-/// construct (`sight_trainer_trigger`'s own module docs, item 7: Rhett's
-/// real level-up moveset includes a move this battle engine does not yet
-/// implement) -- so this pins the *honest current* observable behaviour:
-/// the cone genuinely fires, the real handoff is genuinely attempted against
-/// the real extracted party, it genuinely fails, and the failure is logged
-/// rather than silently swallowed or soft-locking the player. Not a
-/// contradiction of the issue's own "starts the battle" framing so much as a
-/// gap this port's own tests should not paper over -- see
-/// [`winning_sets_the_defeated_flag_and_the_fight_cannot_restart`] and its
-/// siblings below for how the win/loss/defeated-flag *driver* half is still
-/// pinned, with a stand-in constructible party.
+/// Item 1 of the issue's own scope, now end to end (issue #293): standing
+/// within a real sight trainer's cone starts the real battle on an ordinary
+/// frame -- **no button press at all** (unlike the rival's own A-press
+/// interaction trigger), matching upstream's
+/// `CheckForTrainersWantingBattle` running unconditionally ahead of every
+/// other per-frame check.
+///
+/// Everything here is real: Rhett's own object event out of
+/// `MAP_ROUTE103`'s extracted `object_events`, his own
+/// `gTrainers[TRAINER_RHETT]` row, and the level-15 Makuhita his party table
+/// names, built through `CreateNPCTrainerParty`'s seeded personality and
+/// `OT_ID_RANDOM_NO_SHINY` draws. Under issue #264 this test could only
+/// assert that the handoff was *attempted* and failed.
 #[test]
-fn standing_in_a_real_trainers_cone_attempts_the_real_handoff_which_currently_fails_to_construct() {
+fn standing_in_a_real_trainers_cone_starts_the_real_battle() {
     let (rx, ry) = RHETT_TILE;
     let mut phase = route_103_phase(PlayerState::new((rx, ry + 1), 3, Direction::North));
     phase.party_lead = Some(overwhelming_lead());
@@ -179,15 +178,63 @@ fn standing_in_a_real_trainers_cone_attempts_the_real_handoff_which_currently_fa
         !phase.is_sight_trainer_battle_active(),
         "setup: no battle yet"
     );
+    let before = phase.rng.state();
     phase.step(ButtonState::new());
+
     assert!(
-        !phase.is_sight_trainer_battle_active(),
-        "Rhett's real moveset currently fails construction (module docs item 7) -- \
-         update this test once move coverage grows enough for it to succeed"
+        phase.is_sight_trainer_battle_active(),
+        "Rhett's real party constructs since issue #293, so his cone really starts the fight"
     );
-    assert!(
-        phase.party_lead.is_some(),
-        "a refused handoff must not consume the lead -- no soft lock"
+    assert!(phase.party_lead.is_none(), "the lead moved into the battle");
+    assert_ne!(
+        phase.rng.state(),
+        before,
+        "CreateNPCTrainerParty's per-mon OT-id draws really came off the shared stream"
+    );
+}
+
+/// ...and it is Rhett's *own* party that comes out, not some stand-in: the
+/// species and level `sParty_Rhett` names (`src/data/trainer_parties.h`), on
+/// the all-zero IVs its `.iv = 0` scales to.
+#[test]
+fn the_battle_the_cone_starts_fields_rhetts_real_party() {
+    let (rx, ry) = RHETT_TILE;
+    let mut phase = route_103_phase(PlayerState::new((rx, ry + 1), 3, Direction::North));
+    phase.party_lead = Some(overwhelming_lead());
+    phase.step(ButtonState::new());
+
+    let battle = phase
+        .sight_trainer_battle
+        .as_ref()
+        .expect("the cone started a battle");
+    assert_eq!(
+        battle.enemy().species(),
+        assets::SpeciesId(MAKUHITA),
+        "sParty_Rhett fields SPECIES_MAKUHITA"
+    );
+    assert_eq!(battle.enemy().level(), 15);
+    assert_eq!(
+        battle.enemy().ivs().as_array(),
+        [12; 6],
+        "`.iv = 100` scales to 100 * 31 / 255 == 12 across the board"
+    );
+    assert_eq!(
+        battle.trainer().map(battle::TrainerContext::id),
+        Some(assets::trainers::TrainerId(TRAINER_RHETT)),
+        "and it is a BATTLE_TYPE_TRAINER battle against Rhett himself"
+    );
+    // The moveset issue #293 unlocked, in learnset order.
+    let known: Vec<u16> = battle
+        .enemy()
+        .moves()
+        .iter()
+        .map(|slot| slot.move_id.0)
+        .collect();
+    assert_eq!(
+        known,
+        vec![116, 28, 292, 233],
+        "Focus Energy, Sand Attack, Arm Thrust, Vital Throw -- Makuhita's real level-15 \
+         GiveBoxMonInitialMoveset result"
     );
 }
 
@@ -204,17 +251,24 @@ const FRAMES_STANDING_STILL: usize = 60;
 /// this leaked `CreateNPCTrainerParty`'s per-mon OT-id draws sixty times a
 /// second off the one stream every wild encounter and battle turn shares.
 ///
-/// All three refusal shapes are covered: an unimplemented moveset (Rhett,
-/// module docs item 7), a held-item party (Miguel, item 6), and a double
-/// battle refused before construction is even attempted (Amy, item 5).
+/// The specimens moved with the coverage boundary at issue #293 -- Rhett's
+/// party constructs now, so he is the subject of the *win* tests below
+/// instead, and Daisy takes his place here. All three refusal shapes are
+/// still covered: an unimplemented moveset (Daisy's Stun Spore, module docs
+/// item 7), a party that is refused for a move *and* holds an unrunnable
+/// item (Miguel, item 6), and a double battle refused before construction is
+/// even attempted (Amy, item 5).
 #[test]
 fn standing_in_a_cone_for_many_frames_never_touches_the_rng_stream() {
-    let (rx, ry) = RHETT_TILE;
+    let (dx, dy) = DAISY_TILE;
     let (mx, my) = MIGUEL_TILE;
     let (ax, ay) = AMY_TILE;
     let cases = [
-        ("Rhett (unimplemented moveset)", (rx, ry + 1)),
-        ("Miguel (held-item party)", (mx + 2, my)),
+        ("Daisy (unimplemented moveset)", (dx, dy + 1)),
+        (
+            "Miguel (unimplemented moveset, held item behind it)",
+            (mx + 2, my),
+        ),
         ("Amy (double battle)", (ax, ay + 1)),
     ];
     for (name, tile) in cases {
@@ -304,37 +358,30 @@ fn a_fainted_lead_cannot_start_a_sight_trainer_battle_and_draws_nothing() {
     assert_eq!(phase.rng.state(), before);
 }
 
-/// `TRAINER_MAY_ROUTE_103_TREECKO` (`crates/battle/src/battle/trainer.rs`'s
-/// own `route103_rival::tests` fixtures use the identical id/RNG-seed/lead
-/// combination below for an identical "must lose" scenario) -- the
-/// proven-constructible stand-in party [`seed_battle`] builds a real battle
-/// around (module docs, "The stand-in party").
-const STAND_IN_TRAINER: u16 = 532;
-
-/// Seed `phase` with an in-progress sight-trainer battle directly, bypassing
-/// [`OverworldPhase::begin_sight_trainer_battle_if_seen`]'s own construction
-/// attempt (module docs, "The stand-in party"): a *real* battle, built
-/// through the real `start_npc_trainer_battle`, against
-/// [`STAND_IN_TRAINER`] -- but [`OverworldPhase::sight_trainer_id`] (private
-/// to `overworld_phase`, reachable here since this file is one of its own
-/// descendant modules) is set to `trainer_id`, the real sight trainer the
-/// defeated-flag half should end up keyed to.
-fn seed_battle(
-    phase: &mut OverworldPhase,
-    trainer_id: u16,
-    player_lead: BattlePokemon,
-    rng_seed: u32,
-) {
+/// Start Rhett's **real** battle the way real play does: stand the player in
+/// his real cone with `player_lead` in the party and take one ordinary
+/// frame, letting [`OverworldPhase::begin_sight_trainer_battle_if_seen`] do
+/// the whole `CreateNPCTrainerParty` construction off `phase`'s own shared
+/// stream (issue #293 — see the module docs for what this replaced).
+///
+/// `rng_seed` reseeds that stream first, so a scenario is reproducible: the
+/// party's OT ids, the battle's turn-number draw, and every AI and damage
+/// roll after it all come out of it in upstream's order.
+fn start_rhetts_battle(phase: &mut OverworldPhase, player_lead: BattlePokemon, rng_seed: u32) {
+    let (rx, ry) = RHETT_TILE;
+    phase.player = PlayerState::new((rx, ry + 1), 3, Direction::North);
     phase.rng = engine::rng::Rng::new(rng_seed);
-    let battle = crate::flow::npc_trainer_battle::start_npc_trainer_battle(
-        player_lead,
-        assets::trainers::TrainerId(STAND_IN_TRAINER),
-        &mut phase.rng,
-    )
-    .expect("the stand-in Route 103 rival must always construct");
-    phase.party_lead = None;
-    phase.sight_trainer_battle = Some(battle);
-    phase.sight_trainer_id = Some(assets::trainers::TrainerId(trainer_id));
+    phase.party_lead = Some(player_lead);
+    phase.step(ButtonState::new());
+    assert!(
+        phase.is_sight_trainer_battle_active(),
+        "setup: Rhett's real cone must start his real battle"
+    );
+    assert_eq!(
+        phase.sight_trainer_id,
+        Some(assets::trainers::TrainerId(TRAINER_RHETT)),
+        "setup: keyed to the real TRAINER_RHETT, which the defeated flag depends on"
+    );
 }
 
 // -- Frame ownership ---------------------------------------------------------
@@ -345,12 +392,10 @@ fn seed_battle(
 /// disturb the running battle).
 #[test]
 fn an_in_progress_sight_battle_owns_the_frame() {
-    let (rx, ry) = RHETT_TILE;
-    let mut phase = route_103_phase(PlayerState::new((rx, ry + 1), 3, Direction::North));
-    // Even levels on both sides (mirrors `one_turn_does_not_immediately_end_a_fresh_battle`
-    // below): the point here is frame ownership, not how long the fight lasts.
-    seed_battle(&mut phase, TRAINER_RHETT, lead(277, 5, 1), 1);
-    assert!(phase.is_sight_trainer_battle_active(), "setup: seeded");
+    let mut phase = route_103_phase(PlayerState::new((0, 0), 3, Direction::South));
+    // A level-15 Treecko with Pound against Rhett's real level-15 Makuhita:
+    // the point here is frame ownership, not how long the fight lasts.
+    start_rhetts_battle(&mut phase, lead(277, 15, 1), 1);
     let position = phase.player.position();
 
     phase.step(held(Buttons::UP));
@@ -366,8 +411,7 @@ fn an_in_progress_sight_battle_owns_the_frame() {
 #[test]
 fn one_turn_does_not_immediately_end_a_fresh_battle() {
     let mut phase = route_103_phase(PlayerState::new((0, 0), 3, Direction::South));
-    seed_battle(&mut phase, TRAINER_RHETT, lead(277, 5, 1), 1); // a level-5 Treecko with Pound
-    assert!(phase.is_sight_trainer_battle_active());
+    start_rhetts_battle(&mut phase, lead(277, 15, 1), 1); // a level-15 Treecko with Pound
 
     phase.step(ButtonState::new());
     assert!(
@@ -384,10 +428,8 @@ fn one_turn_does_not_immediately_end_a_fresh_battle() {
 /// fresh approach into the same cone starts nothing.
 #[test]
 fn winning_sets_the_defeated_flag_and_the_fight_cannot_restart() {
-    let (rx, ry) = RHETT_TILE;
-    let mut phase = route_103_phase(PlayerState::new((rx, ry + 1), 3, Direction::North));
-    seed_battle(&mut phase, TRAINER_RHETT, overwhelming_lead(), 1);
-    assert!(phase.is_sight_trainer_battle_active(), "setup: seeded");
+    let mut phase = route_103_phase(PlayerState::new((0, 0), 3, Direction::South));
+    start_rhetts_battle(&mut phase, overwhelming_lead(), 1);
 
     let outcome = play_out_sight_battle(&mut phase, 32);
     assert_eq!(outcome, Some(BattleOutcome::PlayerWon));
@@ -437,9 +479,8 @@ fn winning_sets_the_defeated_flag_and_the_fight_cannot_restart() {
 /// read is the one assertion that can.
 #[test]
 fn the_defeated_flag_survives_a_save_continue_round_trip() {
-    let (rx, ry) = RHETT_TILE;
-    let mut phase = route_103_phase(PlayerState::new((rx, ry + 1), 3, Direction::North));
-    seed_battle(&mut phase, TRAINER_RHETT, overwhelming_lead(), 1);
+    let mut phase = route_103_phase(PlayerState::new((0, 0), 3, Direction::South));
+    start_rhetts_battle(&mut phase, overwhelming_lead(), 1);
     let outcome = play_out_sight_battle(&mut phase, 32);
     assert_eq!(outcome, Some(BattleOutcome::PlayerWon), "setup: must win");
     assert_eq!(
@@ -474,14 +515,11 @@ fn the_defeated_flag_survives_a_save_continue_round_trip() {
 /// mirrors `route103_rival_tests::losing_the_rival_battle_now_heals_halves_money_and_leaves_the_hide_flag_clear`.
 #[test]
 fn losing_heals_halves_money_and_leaves_the_defeated_flag_clear() {
-    let (rx, ry) = RHETT_TILE;
-    let mut phase = route_103_phase(PlayerState::new((rx, ry + 1), 3, Direction::North));
+    let mut phase = route_103_phase(PlayerState::new((0, 0), 3, Direction::South));
     phase.save1.money = 2001;
-    // The same overmatched-level-1-lead / seed-2024 combination
-    // `route103_rival_tests::losing_the_rival_battle_now_heals_halves_money_and_leaves_the_hide_flag_clear`
-    // already proves loses against `STAND_IN_TRAINER` (`TrainerId(532)`).
-    seed_battle(&mut phase, TRAINER_RHETT, overmatched_lead(), 2024);
-    assert!(phase.is_sight_trainer_battle_active(), "setup: seeded");
+    // A level-1 Treecko with Pound against Rhett's real level-15 Makuhita
+    // cannot win.
+    start_rhetts_battle(&mut phase, overmatched_lead(), 2024);
 
     let outcome = play_out_sight_battle(&mut phase, 64);
     assert_eq!(
