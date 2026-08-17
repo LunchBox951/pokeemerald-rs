@@ -175,6 +175,7 @@ use super::parse::{self, RawEvent};
 use super::reader;
 use super::translate::{
     bpm_from_microseconds, centre_relative, convert_ticks, scale_volume, translate_controller,
+    ControllerEvent,
 };
 use super::velocity;
 
@@ -183,7 +184,9 @@ use super::velocity;
 /// docs, "Sort order".
 #[derive(Debug, Clone)]
 enum ItemKind {
-    EndOfTie { key: u8 },
+    EndOfTie {
+        key: u8,
+    },
     Label,
     LoopEnd,
     LoopEndBegin,
@@ -191,8 +194,18 @@ enum ItemKind {
     Tempo(u16),
     ProgramChange(u8),
     Command(SongEvent),
+    /// CC `0x1E`'s own timing-only marker — no [`SongEvent`] is emitted for
+    /// it, but [`emit_track`] needs it recorded so it can drop the wait
+    /// that follows, reproducing upstream's missing `PrintWait(event.time)`
+    /// (`super::translate`'s module docs, "Reproduced: the dropped wait
+    /// after CC `0x1E`").
+    ExtendedCommandSelect,
     PitchBend(i8),
-    Note { key: u8, velocity: u8, gate: u8 },
+    Note {
+        key: u8,
+        velocity: u8,
+        gate: u8,
+    },
 }
 
 impl ItemKind {
@@ -205,7 +218,9 @@ impl ItemKind {
             Self::LoopBegin => (0x14, 0),
             Self::Tempo(_) => (0x19, 0),
             Self::ProgramChange(_) => (0x21, 0),
-            Self::Command(_) => (0x22, 0),
+            // Both are upstream's own `EventType::Controller` (`midi.h:45`),
+            // so both share its sort priority.
+            Self::Command(_) | Self::ExtendedCommandSelect => (0x22, 0),
             Self::PitchBend(_) => (0x23, 0),
             Self::Note { key, .. } => (0x40 + u32::from(key), 0),
         }
@@ -368,11 +383,17 @@ fn compile_track(
             RawEvent::Controller {
                 controller, value, ..
             } => {
-                if let Some(song_event) =
-                    translate_controller(controller, value, master_volume, &mut extended_command)?
+                match translate_controller(controller, value, master_volume, &mut extended_command)?
                 {
-                    let converted = convert_ticks(time, division)?;
-                    items.push((converted, ItemKind::Command(song_event)));
+                    ControllerEvent::Event(song_event) => {
+                        let converted = convert_ticks(time, division)?;
+                        items.push((converted, ItemKind::Command(song_event)));
+                    }
+                    ControllerEvent::ExtendedCommandSelect => {
+                        let converted = convert_ticks(time, division)?;
+                        items.push((converted, ItemKind::ExtendedCommandSelect));
+                    }
+                    ControllerEvent::None => {}
                 }
             }
             _ => {}
@@ -386,7 +407,7 @@ fn compile_track(
                 if include_tempo {
                     items.push((
                         converted,
-                        ItemKind::Tempo(bpm_from_microseconds(microseconds)),
+                        ItemKind::Tempo(bpm_from_microseconds(microseconds)?),
                     ));
                 }
             }
@@ -463,7 +484,12 @@ fn emit_track(
     for (index, (time, kind)) in items.iter().enumerate() {
         match kind {
             ItemKind::EndOfTie { key } => out.push(SongEvent::EndOfTie { key: *key }),
-            ItemKind::Label => {}
+            // Label emits nothing, matching upstream (module docs, "Sort
+            // order"); ExtendedCommandSelect emits nothing either -- it is
+            // purely a timing marker (its doc comment) -- but the two
+            // arms are merged for clippy::match_same_arms, not because
+            // they mean the same thing.
+            ItemKind::Label | ItemKind::ExtendedCommandSelect => {}
             ItemKind::LoopBegin => {
                 loop_target = Some(
                     u32::try_from(out.len()).expect("a track has far fewer than u32::MAX events"),
@@ -498,7 +524,14 @@ fn emit_track(
         }
         let next_time = items.get(index + 1).map_or(final_boundary, |&(t, _)| t);
         let gap = next_time.checked_sub(*time).ok_or(MidiError::Truncated)?;
-        push_wait(&mut out, gap);
+        // agb.cpp:402-405: CC 0x1E's own arm is the one `PrintControllerOp`
+        // case that `break`s without a trailing `PrintWait(event.time)`, so
+        // the gap to the next event is dropped here too, not just the byte
+        // (`super::translate`'s module docs, "Reproduced: the dropped wait
+        // after CC `0x1E`").
+        if !matches!(kind, ItemKind::ExtendedCommandSelect) {
+            push_wait(&mut out, gap);
+        }
     }
 
     out.push(SongEvent::Fine);

@@ -62,6 +62,17 @@ pub(crate) enum MidiError {
     /// A tempo (`0xFF 0x51`) meta event declared zero microseconds per
     /// quarter note, which would make the BPM conversion divide by zero.
     ZeroTempo,
+    /// A tempo (`0xFF 0x51`) meta event's `round(60_000_000.0f32 /
+    /// microseconds)` BPM (`tools/mid2agb/agb.cpp:505-507`) does not fit a
+    /// `u16`. Upstream computes it into a 32-bit `int` and never
+    /// range-checks it before formatting; this compiler's
+    /// [`super::event::SongEvent::Tempo`] field is a `u16`, and a Rust
+    /// `as u16` cast on an out-of-range `f32` would saturate to
+    /// `u16::MAX` instead of erroring, silently turning every microseconds
+    /// value in `1..=915` into the same wrong tempo
+    /// ([`super::translate::bpm_from_microseconds`]'s docs). Carries the
+    /// offending microseconds-per-quarter-note value.
+    TempoOverflow(u32),
     /// A `NoteOn` (velocity != 0) on this channel had no later matching
     /// `NoteOff`/`NoteOn`-velocity-`0` for the same key before the track's
     /// `EndOfTrack` — `tools/mid2agb/midi.cpp:425-426`'s own
@@ -139,6 +150,10 @@ impl fmt::Display for MidiError {
             Self::InvalidDataByte(byte) => write!(f, "invalid MIDI data byte 0x{byte:02X}"),
             Self::BadTempoLength(len) => write!(f, "tempo meta event length {len} is not 3"),
             Self::ZeroTempo => write!(f, "tempo meta event is 0 microseconds per quarter note"),
+            Self::TempoOverflow(microseconds) => write!(
+                f,
+                "tempo {microseconds} microseconds per quarter note computes to a BPM that overflows a u16"
+            ),
             Self::UnterminatedNote { channel, key } => write!(
                 f,
                 "note {key} on channel {channel} has no matching note-off before end of track"

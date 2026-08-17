@@ -271,6 +271,90 @@ fn xcmd_pseudo_echo_volume_round_trips_and_unknown_subcommands_are_silent() {
     );
 }
 
+/// A nonzero gap after CC `0x1E` is dropped, not emitted as a `Wait` --
+/// `agb.cpp:402-405`'s `case 0x1E:` is the one `PrintControllerOp` arm that
+/// `break`s without a trailing `PrintWait(event.time)`, and this compiler
+/// now reproduces that (`super::super::translate`'s module docs,
+/// "Reproduced: the dropped wait after CC `0x1E`"). If the 24-tick gap
+/// between the selector and the trigger had survived, the waits between
+/// `Note` and `Fine` would sum to `34` (`4 + 24 + 6`), not `10`.
+#[test]
+fn a_nonzero_gap_after_cc_0x1e_is_dropped_not_emitted() {
+    let mut body = Vec::new();
+    body.extend(vlq(0));
+    body.extend([0x90, 60, 100]); // note-on, t=0
+    body.extend(vlq(4));
+    body.extend([0xB0, 0x1E, 8]); // select xIECV, t=4
+    body.extend(vlq(24)); // this gap must not surface as a Wait
+    body.extend([0x1D, 10]); // trigger (running status 0xB0), t=28
+    body.extend(vlq(6));
+    body.extend([0x80, 60, 0]); // note-off, t=34
+    let midi = single_track_midi(24, body);
+
+    let compiled = compile(&midi, &cfg()).unwrap();
+    assert_eq!(
+        compiled.tracks[0],
+        vec![
+            SongEvent::Volume(127),
+            SongEvent::KeyShift(0),
+            SongEvent::Note {
+                key: 60,
+                velocity: 100,
+                gate: 34
+            },
+            SongEvent::Wait(4),
+            SongEvent::PseudoEchoVolume(10),
+            SongEvent::Wait(6),
+            SongEvent::Fine,
+        ]
+    );
+}
+
+/// Waits that do not immediately follow a CC `0x1E` are unaffected by the
+/// drop above -- both the ordinary wait leading up to the selector and an
+/// ordinary (`> u8::MAX`, so still split) wait well after the triggered
+/// command survive untouched; only the one gap `agb.cpp:402-405` itself
+/// swallows disappears.
+#[test]
+fn waits_not_adjacent_to_cc_0x1e_are_unaffected() {
+    let mut body = Vec::new();
+    body.extend(vlq(0));
+    body.extend([0x90, 60, 100]); // note-on, t=0
+    body.extend(vlq(4));
+    body.extend([60, 0]); // note-off (running status), t=4
+    body.extend(vlq(10));
+    body.extend([0xB0, 0x15, 7]); // LFOS 7, t=14 -- ordinary wait before it
+    body.extend(vlq(5));
+    body.extend([0x1E, 9]); // select xIECL (running status 0xB0), t=19
+    body.extend(vlq(40)); // this gap must not surface as a Wait
+    body.extend([0x1F, 12]); // trigger xIECL, t=59
+    body.extend(vlq(300)); // ordinary wait, still split at u8::MAX
+    body.extend([0x01, 55]); // MOD 55, t=359
+    let midi = single_track_midi(24, body);
+
+    let compiled = compile(&midi, &cfg()).unwrap();
+    assert_eq!(
+        compiled.tracks[0],
+        vec![
+            SongEvent::Volume(127),
+            SongEvent::KeyShift(0),
+            SongEvent::Note {
+                key: 60,
+                velocity: 100,
+                gate: 4
+            },
+            SongEvent::Wait(14),
+            SongEvent::LfoSpeed(7),
+            SongEvent::Wait(5),
+            SongEvent::PseudoEchoLength(12),
+            SongEvent::Wait(u8::MAX),
+            SongEvent::Wait(45),
+            SongEvent::Modulation(55),
+            SongEvent::Fine,
+        ]
+    );
+}
+
 /// The `MEMACC` controller family is explicitly unsupported, not silently
 /// dropped (module docs, "`MEMACC` controllers").
 #[test]
