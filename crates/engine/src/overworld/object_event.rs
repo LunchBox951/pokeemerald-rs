@@ -43,8 +43,9 @@
 //! (`GetInteractedLinkPlayerScript`), `RamScript`, and the interaction sound
 //! effect. [`initial_facing_direction`] also only ever reflects an object
 //! event's *initial* spawn facing (`gInitialMovementTypeFacingDirections`) —
-//! this port has no per-object movement-type task simulation yet (the
-//! issue's own "stationary + look-around only" v1 scope), so a
+//! this port has no per-object movement-type task simulation (the issue's
+//! own "stationary + look-around only" scope for this slice): not modelled
+//! yet, deferred, still in v1 scope — so a
 //! `MOVEMENT_TYPE_LOOK_AROUND`/`_WANDER_*` object always renders facing its
 //! initial direction rather than cycling.
 

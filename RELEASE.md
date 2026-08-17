@@ -173,15 +173,32 @@ and Releases add it. Versions compare lexicographically as four unsigned ints.
 |---|---|---|---|
 | `PATCH` | small maintenance or narrow behavior change | — | normal PR flow |
 | `MINOR` | meaningful capability, including a substantial unfinished slice or smaller completed acceptance criterion | `PATCH -> 0` | normal PR flow |
-| `MAJOR` | large completed acceptance criterion or project phase; breaking repository contract | `MINOR`, `PATCH -> 0` | normal PR flow |
+| `MAJOR` | large completed acceptance criterion or project phase; breaking repository contract — while `FINAL` is `0`, read this through the pre-1.0 rule below | `MINOR`, `PATCH -> 0` | normal PR flow |
 | `FINAL` | project agreed complete (`0 -> 1`) | `MAJOR`, `MINOR`, `PATCH -> 0` | owner only |
 
 Every ordinary pull request into `dev` must increase `VERSION`; an unchanged or
 lower version fails the strict transition gate. Choose the highest applicable
 component from delivered behavior, not diff size or parent completion. A closed
 milestone is at least `MINOR`, and is `MAJOR` when it represents a large completed
-win. Higher-tier bumps reset lower components as listed above, and a `FINAL` bump
-must carry fresh approval as described below.
+win — while `FINAL` is `0`, when that win is playable progress (below). Higher-tier
+bumps reset lower components as listed above, and a `FINAL` bump must carry fresh
+approval as described below.
+
+### Pre-1.0 `MAJOR` bumps are playable progress
+
+While `FINAL` is `0`, `MAJOR` is content-oriented: `v0.1.0.0`, `v0.2.0.0`, and so
+on normally mark **meaningful playable progress through the game**.
+[`docs/acceptance/v1.md`](docs/acceptance/v1.md) owns the milestone patterns and
+what they cover `(lean-docs)`; they are planning patterns, not a prescribed
+roadmap, and which one comes next is decided in GitHub issues
+`(constitution-vs-roadmap)`.
+
+That rule governs the `MAJOR` row and the closed-milestone sentence above while
+`FINAL` is `0`: a change that delivers no playable progress takes at most `MINOR`
+— even when it completes a large acceptance criterion, closes a milestone, or
+breaks a repository contract such as the acceptance scope itself; the PR calls
+the reasoning out. Both statements' ordinary, phase-oriented meaning resumes once
+`FINAL` is `1`.
 
 Channel promotions and post-merge health checks compare cumulative endpoints.
 They require canonical versions and preserve channel ordering without replaying
@@ -201,8 +218,11 @@ Date: 2026-07-25
 ```
 
 `scripts/version_check.py` rejects a stale marker, malformed marker, or marker for
-another version. v1 ships only when every row in `docs/acceptance/v1.md` is done
-or has a recorded waiver and the H-1 operator playtest is signed.
+another version. `v1.0.0.0` means the complete single-player game — the binding
+gate is defined in [`docs/acceptance/v1.md`](docs/acceptance/v1.md), which owns
+that definition and its exclusion rule `(lean-docs)`. It ships only when every
+row there is done or has a recorded waiver and the H-1 operator playtest is
+signed.
 
 ## Hotfixes
 
