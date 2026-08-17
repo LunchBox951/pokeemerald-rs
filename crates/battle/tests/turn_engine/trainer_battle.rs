@@ -863,13 +863,18 @@ fn the_pre_flight_refuses_the_same_two_ability_lead() {
 
 /// A faster trainer mon that knocks *itself* out in confusion leaves the
 /// battle ongoing until the end-of-turn send-out -- and the player's queued
-/// action must be skipped exactly as a fainted battler's own slot in
-/// `gBattlerByTurnOrder` is, not executed into the corpse. Before issue
-/// #293's review fix, the `DefenderFirst` guard tested only the player's
-/// faint, so the player attacked the already-fainted enemy: a second
-/// `Fainted` event and a second experience award for one knockout.
+/// action still RUNS, exactly as upstream's does: `Cmd_attackcanceler`
+/// aborts only on `gBattleOutcome != 0` or the acting battler's own
+/// `hp == 0` (`battle_script_commands.c:919`-`:928`), the turn-order skip
+/// reads a turn-start `absentBattlerFlags` snapshot a mid-turn faint never
+/// updates (`battle_util.c:85`), and `Cmd_tryfaintmon` refires its faint
+/// message on any still-present `hp == 0` battler (`:4384`-`:4390`). What
+/// upstream guards is the *experience* -- `givenExpMons`
+/// (`battle_util.c:1917`) pays each party slot once -- so the corpse attack
+/// spends its draws and repeats the faint message, and the exp arrives
+/// exactly once (issue #293 review, rounds 2 and 4).
 #[test]
-fn an_enemy_that_self_kos_in_confusion_is_not_attacked_again_by_the_player() {
+fn a_player_attack_into_a_self_kod_enemy_runs_but_pays_exp_once() {
     let dex = Dex::new();
     // Slow player, fast enemy: the enemy acts first (`DefenderFirst`).
     let player = max_iv_mon(&dex, MACHOP, 5, vec![TACKLE]);
@@ -895,13 +900,25 @@ fn an_enemy_that_self_kos_in_confusion_is_not_attacked_again_by_the_player() {
         }),
         "the enemy self-hit is what fainted it: {events:?}"
     );
+    assert!(
+        events.iter().any(|e| matches!(
+            e,
+            BattleEvent::Hit {
+                by_player: true,
+                damage: 0,
+                ..
+            }
+        )),
+        "the player's action still runs, dealing 0 to the 0-HP target: {events:?}"
+    );
     assert_eq!(
         events
             .iter()
             .filter(|e| matches!(e, BattleEvent::Fainted { by_player: false }))
             .count(),
-        1,
-        "one knockout, one Fainted: {events:?}"
+        2,
+        "tryfaintmon refires: one faint per attack that found the target at \
+         0 HP: {events:?}"
     );
     assert_eq!(
         events
@@ -909,20 +926,7 @@ fn an_enemy_that_self_kos_in_confusion_is_not_attacked_again_by_the_player() {
             .filter(|e| matches!(e, BattleEvent::ExpGained(_)))
             .count(),
         1,
-        "one knockout, one experience award: {events:?}"
-    );
-    assert!(
-        !events.iter().any(|e| matches!(
-            e,
-            BattleEvent::Hit {
-                by_player: true,
-                ..
-            } | BattleEvent::Missed {
-                by_player: true,
-                ..
-            }
-        )),
-        "the player's action into the fainted enemy is skipped, not executed: {events:?}"
+        "givenExpMons: one knockout, one experience award: {events:?}"
     );
     assert!(
         events.contains(&BattleEvent::TrainerSentOut {

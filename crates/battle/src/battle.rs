@@ -343,6 +343,17 @@ pub struct Battle {
     /// `BattleTurnPassed`, which does. Kept as its own flag rather than
     /// re-derived from a turn count, which an aborted turn would skew.
     turn_started: bool,
+    /// `gBattleStruct->givenExpMons` for the active enemy mon
+    /// (`src/battle_util.c:1917`, read by `HandleFaintedMonActions`;
+    /// written by `Cmd_getexp`, `battle_script_commands.c:3284`): whether
+    /// this opponent's experience has already been paid out, so a second
+    /// attack on an already-fainted mon — which upstream lets *run*, faint
+    /// message and all (`Cmd_tryfaintmon`, `:4384`-`:4390`, refires on any
+    /// `hp == 0` battler not yet marked absent, and absence is only set by
+    /// the end-of-turn `Cmd_openpartyscreen`, `:4886`) — re-reports the
+    /// faint but never re-awards the exp (issue #293 review, round 4).
+    /// Reset when a trainer replacement is sent out.
+    enemy_exp_given: bool,
 }
 
 /// Which `gBattleTypeFlags` shape a [`Battle`] was constructed for.
@@ -467,6 +478,7 @@ impl Battle {
             },
             turn_counter: 0,
             turn_started: false,
+            enemy_exp_given: false,
         })
     }
 
@@ -583,6 +595,7 @@ impl Battle {
             kind: BattleKind::Trainer(TrainerContext::new(trainer, data, party)),
             turn_counter: 0,
             turn_started: false,
+            enemy_exp_given: false,
         })
     }
 
@@ -892,15 +905,22 @@ impl Battle {
             rng,
         );
 
+        // Each arm's guard is `Cmd_attackcanceler`'s own two aborts
+        // (`battle_script_commands.c:919`-`:928`), and nothing more: the
+        // whole-battle outcome (`gBattleOutcome != 0` -- which only a run or
+        // flee can set mid-turn, since a faint defers to `end_of_turn`'s
+        // `checkteamslost`), and the **acting battler's own** `hp == 0`.
+        // The *other* side having fainted cancels nothing: upstream's
+        // turn-order skip reads `gBattleStruct->absentBattlerFlags`, a
+        // turn-start snapshot a mid-turn faint never updates
+        // (`battle_util.c:85`; absence is written only by the end-of-turn
+        // `Cmd_openpartyscreen`), so an action aimed at a fainted target
+        // still runs, draws and repeat faint message included --
+        // `settle_faint`'s own docs cover the refire (issue #293 review,
+        // round 4).
         match order {
             Order::AttackerFirst => {
                 self.act(true, player_move, index, rng, events)?;
-                // A battler that fainted earlier in the turn is skipped when
-                // its slot in `gBattlerByTurnOrder` comes up -- in a wild
-                // battle that is the same thing as the battle being over,
-                // but a trainer's fainted mon is only replaced at the *end*
-                // of the turn (`end_of_turn`), so the two tests are now
-                // distinct.
                 if self.outcome.is_none() && !self.enemy.is_fainted() {
                     // If the enemy's action turns out to be the unexecutable
                     // Struggle fallback, the player's events above are
@@ -912,15 +932,7 @@ impl Battle {
             }
             Order::DefenderFirst => {
                 self.enemy_acts(enemy_action, rng, events)?;
-                // Both faint tests are needed here where AttackerFirst's arm
-                // needs only the enemy's: a player faint always ends a
-                // one-mon-party battle (outcome set), but a trainer's mon
-                // that knocked *itself* out in confusion leaves the battle
-                // ongoing until the end-of-turn send-out -- and its fainted
-                // slot is still skipped when the player's turn-order slot
-                // comes up, so acting into it would faint it twice and
-                // double the experience award (issue #293 review).
-                if self.outcome.is_none() && !self.player.is_fainted() && !self.enemy.is_fainted() {
+                if self.outcome.is_none() && !self.player.is_fainted() {
                     self.act(true, player_move, index, rng, events)?;
                 }
             }
@@ -1046,9 +1058,9 @@ impl Battle {
                 if self.battler(is_player).is_fainted() {
                     // The *other* side is the notional attacker, which is
                     // what makes `settle_faint` award the player exp for a
-                    // poisoned opponent and end the battle for a poisoned
-                    // player. It cannot fail: the only fallible step is the
-                    // species/base-exp lookup for a mon already in play.
+                    // poisoned opponent. It cannot fail: the only fallible
+                    // step is the species/base-exp lookup for a mon already
+                    // in play. The outcome is `check_teams_lost`'s, below.
                     let _ = self.settle_faint(!is_player, events);
                     // `BattleScript_DoTurnDmg`'s own `checkteamslost`, one
                     // instruction after its `tryfaintmon`.
@@ -1061,38 +1073,47 @@ impl Battle {
         }
     }
 
-    /// `Cmd_checkteamslost` (`src/battle_script_commands.c:3534`-`:3577`) as
-    /// `BattleScript_DoTurnDmg` reaches it (`data/battle_scripts_1.s:3746`),
-    /// reduced to the one party this crate can sum: `gBattleOutcome` is set
-    /// when a **whole side** reads `0` HP, not when a battler faints.
+    /// `Cmd_checkteamslost` (`src/battle_script_commands.c:3534`-`:3577`),
+    /// reached both from `BattleScript_DoTurnDmg` mid-residual-walk
+    /// (`data/battle_scripts_1.s:3746`) and from
+    /// `BattleScript_HandleFaintedMon` at the end of the turn (`:2831`):
+    /// `gBattleOutcome` is set when a **whole side** reads `0` HP, not when
+    /// a battler faints — which is why a mid-turn faint never cancels the
+    /// surviving battler's action (issue #293 review, round 4) and why
+    /// [`Self::settle_faint`] defers here instead of finishing.
     ///
     /// Returns whether the battle now has an outcome, which is
     /// `BattleTurnPassed`'s `if (gBattleOutcome == 0)` guard
     /// (`src/battle_main.c:3961`) seen from the caller's side.
     ///
-    /// Only the `B_OUTCOME_WON` half (`:3576`-`:3577`) has any work to do
-    /// here. The `B_OUTCOME_LOST` half (`:3563`-`:3564`) sums a player party
-    /// this crate tracks one mon of, so [`Self::settle_faint`] has already
-    /// set [`BattleOutcome::PlayerLost`] by the time this is called and the
-    /// `outcome.is_some()` arm reports it — and upstream's own order tests
-    /// the player's party first, so the two agree on which flag lands when
-    /// both could.
+    /// Upstream sums the player's party first (`:3563`-`:3564`, the
+    /// `B_OUTCOME_LOST` bit) and the enemy's second (`:3576`-`:3577`,
+    /// `B_OUTCOME_WON`), OR-ing both — a double faint is `B_OUTCOME_DREW`
+    /// (`LOST | WON`), which `IsPlayerDefeated` treats exactly like a loss
+    /// (`src/battle_setup.c`'s white-out gate). [`BattleOutcome`] carries no
+    /// draw variant, so the double faint reports the loss half — the same
+    /// white-out flow the draw takes — and this comment is the record of
+    /// that narrowing.
     ///
-    /// [`BattleEvent::MoneyGained`] comes first for the same reason
-    /// [`Battle::end_of_turn`] emits it first: `Cmd_getmoneyreward`
-    /// (`battle_script_commands.c:5635`) runs after `Cmd_getexp`, which
-    /// [`Self::settle_faint`] has just paid out.
+    /// [`BattleEvent::MoneyGained`] comes first for the same reason it
+    /// always has: `Cmd_getmoneyreward` (`battle_script_commands.c:5635`)
+    /// runs after `Cmd_getexp`, which [`Self::settle_faint`] has already
+    /// paid out.
     fn check_teams_lost(&mut self, events: &mut Vec<BattleEvent>) -> bool {
         if self.outcome.is_some() {
+            return true;
+        }
+        if self.player.is_fainted() {
+            self.finish(events, BattleOutcome::PlayerLost);
             return true;
         }
         if !self.enemy.is_fainted() {
             return false;
         }
         let BattleKind::Trainer(context) = &self.kind else {
-            // A wild battle's "party" is the one mon, so `settle_faint` has
-            // already finished it and the arm above returned.
-            return false;
+            // A wild battle's whole enemy "party" is the one mon.
+            self.finish(events, BattleOutcome::PlayerWon);
+            return true;
         };
         if !context.bench().iter().all(BattlePokemon::is_fainted) {
             return false;
@@ -1103,33 +1124,43 @@ impl Battle {
         true
     }
 
-    /// `HandleFaintedMonActions` (`battle_util.c:1894`), reduced to the one
-    /// action this slice models: a trainer whose active mon fainted sends
-    /// out the next party member.
+    /// `HandleFaintedMonActions` (`battle_util.c:1894`), reduced to what
+    /// this slice models: settle the turn's faints into an outcome
+    /// (`BattleScript_HandleFaintedMon`'s leading `checkteamslost`,
+    /// `data/battle_scripts_1.s:2831`, via [`Self::check_teams_lost`]) and,
+    /// when the battle is *not* over, send out a trainer's next party
+    /// member.
     ///
     /// Runs **after** both battlers' actions, not at the moment of the
     /// faint, because that is where upstream puts it —
     /// `RunTurnActionsFunctions` finishes the turn's actions and only then
     /// hands off to `HandleFaintedMonActions` (`battle_util.c:1894`, called
     /// from `BattleTurnPassed` at `battle_main.c:3968`). The
-    /// difference is observable: a Speed-tie turn where the player KOs the
-    /// trainer's lead still ends with the *fainted* mon on the field, not
-    /// its replacement taking a hit it never took upstream.
+    /// difference is observable twice over: a Speed-tie turn where the
+    /// player KOs the trainer's lead still ends with the *fainted* mon on
+    /// the field, and a battler that faints mid-turn leaves the survivor's
+    /// queued action running — the outcome lands here, never at the faint
+    /// (issue #293 review, round 4; `settle_faint`'s own docs).
     ///
-    /// A wild battle never reaches the body: the faint already set
-    /// [`BattleOutcome::PlayerWon`]. A trainer battle whose bench is empty
-    /// ends here instead, paying out [`trainer::TrainerContext::money`]
-    /// first — upstream's `Cmd_getmoneyreward`
+    /// The exp half of `HandleFaintedMonActions` (`:1917`, `givenExpMons`)
+    /// has always been paid by the time this runs — [`Self::settle_faint`]
+    /// awards it at the faint, once — so only the outcome and the
+    /// replacement remain. A trainer battle whose bench is empty pays out
+    /// [`trainer::TrainerContext::money`] before [`BattleEvent::Ended`],
+    /// inside `check_teams_lost` — upstream's `Cmd_getmoneyreward`
     /// (`battle_script_commands.c:5635`) runs after `Cmd_getexp`, which is
     /// the order [`BattleEvent`]s come back in.
     ///
-    /// This is the *move*-inflicted faint's path only. A trainer's last mon
-    /// fainting to the end-of-turn residual has already been settled, with
-    /// the same two events in the same order, by
-    /// [`Self::check_teams_lost`] — because upstream settles the two in
-    /// different places too (see [`Self::residual_effects`]).
+    /// A trainer's last mon fainting to the end-of-turn residual has
+    /// already been settled, with the same events in the same order, by the
+    /// residual walk's own [`Self::check_teams_lost`] call — because
+    /// upstream settles the two in different places too (see
+    /// [`Self::residual_effects`]).
     fn end_of_turn(&mut self, events: &mut Vec<BattleEvent>) {
-        if self.outcome.is_some() || !self.enemy.is_fainted() {
+        if self.check_teams_lost(events) {
+            return;
+        }
+        if !self.enemy.is_fainted() {
             return;
         }
         let BattleKind::Trainer(context) = &mut self.kind else {
@@ -1139,15 +1170,14 @@ impl Battle {
             let species = next.species();
             let bench_remaining = context.bench_len();
             self.enemy = next;
+            // The replacement is a fresh `givenExpMons` slot
+            // (`gBattlerPartyIndexes` changed): its own faint pays again.
+            self.enemy_exp_given = false;
             events.push(BattleEvent::TrainerSentOut {
                 species,
                 bench_remaining,
             });
-            return;
         }
-        let money = context.money();
-        events.push(BattleEvent::MoneyGained(money));
-        self.finish(events, BattleOutcome::PlayerWon);
     }
 
     /// One mover's whole action: `Cmd_attackcanceler`'s no-PP abort, PP

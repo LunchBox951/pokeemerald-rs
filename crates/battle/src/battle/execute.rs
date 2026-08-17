@@ -13,7 +13,7 @@
 
 use assets::MoveId;
 
-use crate::battle::{BattleEvent, BattleOutcome};
+use crate::battle::BattleEvent;
 use crate::damage::BattleRng;
 use crate::error::BattleError;
 use crate::exp::{trainer_faint_exp, wild_faint_exp};
@@ -601,10 +601,27 @@ impl Battle {
     }
 
     /// `tryfaintmon BS_TARGET`: if the defender is down, emit
-    /// [`BattleEvent::Fainted`], award `Cmd_getexp`'s experience, and end a
-    /// wild battle.
+    /// [`BattleEvent::Fainted`] and — first time only — award `Cmd_getexp`'s
+    /// experience.
     ///
-    /// Shared by all four damaging pipelines for the same reason
+    /// Deliberately does **not** end the battle (issue #293 review, round
+    /// 4): upstream's `gBattleOutcome` stays `0` through a mid-turn faint —
+    /// `BattleScript_FaintTarget` (`data/battle_scripts_1.s:2817`) runs no
+    /// `checkteamslost`, and the one that does sits in
+    /// `BattleScript_HandleFaintedMon` (`:2831`), reached only from the
+    /// end-of-turn `HandleFaintedMonActions` — so the *surviving* battler's
+    /// queued action still runs, spending its draws, even when the other
+    /// side is already down. [`super::Battle::end_of_turn`] owns the
+    /// outcome, via [`super::Battle::check_teams_lost`].
+    ///
+    /// Re-entered freely for an attack on an already-fainted target:
+    /// `Cmd_tryfaintmon` refires on any `hp == 0` battler not yet marked
+    /// absent (`battle_script_commands.c:4384`-`:4390`; absence is only set
+    /// by the end-of-turn `Cmd_openpartyscreen`, `:4886`), so the faint
+    /// message repeats while `givenExpMons`
+    /// ([`super::Battle`]'s `enemy_exp_given`) keeps the exp single.
+    ///
+    /// Shared by all the damaging pipelines for the same reason
     /// [`Self::apply_damage_outcome`] is.
     pub(super) fn settle_faint(
         &mut self,
@@ -618,9 +635,14 @@ impl Battle {
             by_player: !attacker_is_player,
         });
         if !attacker_is_player {
-            self.finish(events, BattleOutcome::PlayerLost);
+            // A fainted player pays out nothing; the loss itself is
+            // `check_teams_lost`'s call, at the end of the turn.
             return Ok(());
         }
+        if self.enemy_exp_given {
+            return Ok(());
+        }
+        self.enemy_exp_given = true;
         // A MAX_LEVEL recipient gains nothing and gets no "gained EXP"
         // message: Cmd_getexp case 2 zeroes the award and jumps past the
         // string (`battle_script_commands.c:3351`-`:3356`), so no event is
@@ -637,13 +659,6 @@ impl Battle {
             };
             self.player.apply_experience(&self.dex, exp);
             events.push(BattleEvent::ExpGained(exp));
-        }
-        // A wild battle ends the moment its only opponent faints. A
-        // trainer's does not: the replacement (or the trainer's defeat) is
-        // settled at the end of the turn instead, in `end_of_turn`, exactly
-        // where upstream's HandleFaintedMonActions sits.
-        if self.trainer().is_none() {
-            self.finish(events, BattleOutcome::PlayerWon);
         }
         Ok(())
     }

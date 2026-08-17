@@ -28,7 +28,10 @@
 //! ([`encode_status`]/[`decode_status`]). `status1` is exactly the
 //! condition store that is *supposed* to survive a save
 //! (`battle::Status1`'s own module docs), so a player who saves poisoned
-//! reloads poisoned.
+//! reloads poisoned. What the overworld does *not* yet do with that
+//! reloaded poison — upstream's every-4th-step `DoPoisonFieldEffect`
+//! damage and its field white-out — is a recorded gap (`battle::status`'s
+//! module docs, ledger, issue #306), not a modelled behaviour.
 //!
 //! Deliberately *not* modelled, written as upstream's own default and
 //! discarded on the way back:

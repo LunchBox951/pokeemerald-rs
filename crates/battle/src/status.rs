@@ -61,6 +61,18 @@
 //! Abilities (Limber, Immunity, Synchronize) are not modelled anywhere in
 //! this crate, so their branches are unreachable rather than skipped; none
 //! of them draws either.
+//!
+//! # A recorded field-side gap: no poison step damage yet
+//!
+//! Because `status1` survives the battle (above), a poisoned lead now walks
+//! the overworld poisoned — but upstream also *charges* for that on the
+//! field: `UpdatePoisonStepCounter` (`src/field_control_avatar.c:637`-`:659`)
+//! fires `DoPoisonFieldEffect` (`src/field_poison.c:120`) every 4th step —
+//! 1 HP per poisoned party mon, a faint at `0`, and a whole-party
+//! `TryFieldPoisonWhiteOut`. None of that is modelled yet, so a poisoned
+//! mon takes no step damage and cannot field-white-out. Recorded on the
+//! ledger (`src/battle_script_commands.c#SetMoveEffect`,
+//! `src/load_save.c#CopyPartyAndObjectsToSave`) and owned by issue #306.
 
 use assets::Type;
 

@@ -892,3 +892,68 @@ fn a_trainers_bench_still_standing_lets_the_players_own_tick_happen() {
         "with the replacement sent out at the end of the turn: {events:?}"
     );
 }
+
+/// A player that knocks *itself* out in confusion while acting first does
+/// not end the turn: `gBattleOutcome` stays `0` through a mid-turn faint
+/// (`BattleScript_FaintTarget` runs no `checkteamslost`), so the wild
+/// opponent's queued action still runs -- spending its draws on the shared
+/// stream, refiring the faint message on the 0-HP player -- and the loss
+/// lands at the end-of-turn `checkteamslost`, exactly where upstream's
+/// `HandleFaintedMonActions` puts it (issue #293 review, round 4). An
+/// engine that ended the battle at the faint would skip those enemy draws
+/// and desynchronise every overworld draw after the white-out.
+#[test]
+fn a_player_self_ko_in_confusion_still_lets_the_enemy_act_before_the_loss() {
+    let dex = Dex::new();
+    // Fast confused player at 1 HP; slow healthy enemy.
+    let mut player = max_iv_mon(&dex, PLUSLE, 30, vec![TACKLE]);
+    player.volatiles_mut().confusion_turns = 5;
+    let max_hp = player.stats().max_hp;
+    player.apply_damage(max_hp - 1);
+    let enemy = max_iv_mon(&dex, MARILL, 5, vec![TACKLE]);
+
+    let mut rng = zeros();
+    let mut battle = Battle::new(Dex::new(), player, enemy, false, &mut rng).unwrap();
+    let before_enemy_pp = battle.enemy().moves()[0].pp;
+    let events = battle
+        .take_turn(PlayerAction::UseMove(0), &mut rng)
+        .unwrap();
+
+    assert!(
+        events.contains(&BattleEvent::HurtItselfInConfusion {
+            by_player: true,
+            damage: 1,
+        }),
+        "the player's self-hit is the knockout: {events:?}"
+    );
+    assert!(
+        events.iter().any(|e| matches!(
+            e,
+            BattleEvent::Hit {
+                by_player: false,
+                damage: 0,
+                ..
+            }
+        )),
+        "the enemy's action still runs against the 0-HP player: {events:?}"
+    );
+    assert_eq!(
+        battle.enemy().moves()[0].pp,
+        before_enemy_pp - 1,
+        "the enemy really acted: its move spent PP"
+    );
+    assert_eq!(
+        events
+            .iter()
+            .filter(|e| matches!(e, BattleEvent::Fainted { by_player: true }))
+            .count(),
+        2,
+        "tryfaintmon refires on the corpse attack: {events:?}"
+    );
+    assert_eq!(
+        events.last(),
+        Some(&BattleEvent::Ended(BattleOutcome::PlayerLost)),
+        "the loss is settled at end of turn, after the enemy's action: {events:?}"
+    );
+    assert_eq!(battle.outcome(), Some(BattleOutcome::PlayerLost));
+}
