@@ -135,9 +135,7 @@
     "data/event_scripts.s": {
       "artifacts": {
         "EventScript_WhiteOut": {
-          "reason": "event_scripts.s:585-588: call EverGrandeCity_HallOfFame_EventScript_ResetEliteFour, goto EventScript_ResetMrBriney. Both are content this port does not bundle -- no Elite Four state, no Mr. Briney NPC on any bundled map -- and DoWhiteOut runs this script before the message layer would show a 'You blacked out!' box, which this port also has no wiring for on this path. Dropped rather than stubbed: there is no typed home this port's white-out (src/overworld.c#DoWhiteOut, crates/pokeemerald-rs/src/flow/overworld_phase/white_out.rs) could plausibly grow into for either effect without bundling the Elite Four/Briney content first, unlike SetMoney/HealPlayerParty/SetWarpDestinationToLastHealLocation immediately after it in DoWhiteOut, all three of which are rewritten.",
-          "spec": "I-4",
-          "status": "dropped"
+          "status": "pending"
         },
         "gStdScripts": {
           "reason": "gStdScripts's 11 labels transcribed as the StdScript enum, in table order; the scripts themselves are content, out of scope",
@@ -28084,9 +28082,7 @@
     "src/title_screen.c": {
       "artifacts": {
         "SpriteCB_PokemonLogoShine": {
-          "reason": "Not modeled (option b, documented fidelity delta). The shine is created with oam.objMode = ST_OAM_OBJ_WINDOW (title_screen.c:536): it never draws its own pixels but defines an OBJWIN region that, with WININ/WINOUT + BLDCNT_TGT1_BG2|BLDCNT_EFFECT_LIGHTEN + BLDY=12 (case 4, lines 646-660), lightens BG2 as the mask sweeps -- a Phase1-only effect running while only BG2 is displayed, before clouds/version/press-start exist and before the settled Phase3 cloud alpha blend (line 750) replaces that BLDCNT. The GBA runs one BLDCNT effect per frame and rendering's EffectsConfig mirrors that (one ColorEffect/frame), so the windowed BG2 lighten cannot be composited into the same settled frame whose color effect is already the alpha blend. Drawing it as an opaque OBJ would be visibly wrong; so it is omitted, along with its bg-color flash and the two later Phase1 re-triggers. See crates/pokeemerald-rs/src/title.rs module docs, 'Documented fidelity deltas'.",
-          "spec": "I-2",
-          "status": "dropped"
+          "status": "pending"
         },
         "SpriteCB_PressStartCopyrightBanner": {
           "reason": "Blink cadence (visible 16 ticks, invisible 16, alternating forever) transcribed as the pure fn press_start_visible(frame) -- issue #116. The copyright banner's own sAnimate is never set upstream, so it stays always-visible, matching this callback's else branch; that half needs no port of its own.",
