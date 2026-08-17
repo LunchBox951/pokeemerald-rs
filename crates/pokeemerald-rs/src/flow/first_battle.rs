@@ -79,8 +79,15 @@
 //! `:3021`) — construction draws first, the held-item draw next, the
 //! turn-number draw last, exactly as [`start_first_battle`] orders them.
 //!
-//! The *count* now matches upstream's: six primitive draws reach turn one
-//! (personality 2 + IVs 2 + held item 1 + turn number 1). `SetWildMonHeldItem`'s
+//! The *frame-free* count now matches upstream's: six primitive draws
+//! reach turn one (personality 2 + IVs 2 + held item 1 + turn number 1).
+//! Frame-free is a real qualifier, not hedging: upstream's
+//! `VBlankCB_Battle` also calls `Random()` once per vblank from
+//! `CB2_InitBattleInternal:684` onward (`battle_main.c:2085`-`:2089`,
+//! gated on `!(LINK | FRONTIER | RECORDED)`, which a first battle passes),
+//! so a real console interleaves a frame-timing-dependent number of extra
+//! draws this headless port deliberately does not model -- see the
+//! `src/battle_main.c#VBlankCB_Battle` ledger entry. `SetWildMonHeldItem`'s
 //! `u16 rnd = Random() % 100` (`src/pokemon.c:6682`) is gated only on
 //! `!(gBattleTypeFlags & (LEGENDARY | TRAINER | PYRAMID | PIKE))` — a gate
 //! `BATTLE_TYPE_FIRST_BATTLE` passes, since `CB2_StartFirstBattle` sets that

@@ -365,8 +365,12 @@ pub(super) fn map_wild_table_fightable(map: assets::MapId) -> bool {
 /// such field), so `SetWildMonHeldItem`'s selection and storage are not
 /// reproduced. Its shared-stream draw still is: the `Random() % 100` call is
 /// spent, discarded, immediately before [`battle::Battle::new`] is invoked,
-/// so `gRandomTurnNumber` and the ordinary wild battle it seeds land on
-/// exactly the values upstream's stream would have produced. The identical
+/// so the frame-free draw sequence -- construction, held item, turn number
+/// -- is upstream's own. (Upstream additionally advances the seed once per
+/// vblank through `VBlankCB_Battle`, `battle_main.c:2085`-`:2089`, a
+/// frame-timing-dependent interleaving this headless port deliberately
+/// does not model; see the `src/battle_main.c#VBlankCB_Battle` ledger
+/// entry.) The identical
 /// draw is spent the identical way in [`crate::flow::first_battle`]'s
 /// scripted fight (its own module docs' "RNG stream" section), and the
 /// remaining held-item gap is enumerated as NOT-modelled on the
