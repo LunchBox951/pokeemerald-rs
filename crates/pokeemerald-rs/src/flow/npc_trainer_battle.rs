@@ -318,10 +318,10 @@ fn party_entries(trainer: &TrainerData) -> Vec<PartyEntry> {
 /// # Errors
 ///
 /// [`NpcTrainerBattleError::UnnamedCharacter`] for a trainer or species name
-/// outside [`engine::text::char_to_byte`]'s table, or
-/// [`BattleError::UnknownSpecies`] wrapped in
-/// [`NpcTrainerBattleError::Battle`] for a party row naming a species with no
-/// `gSpeciesNames` entry — see each.
+/// outside [`engine::text::char_to_byte`]'s table, or — wrapped in
+/// [`NpcTrainerBattleError::Battle`] — [`BattleError::UnknownTrainer`] for an
+/// `id` outside `gTrainers` and [`BattleError::UnknownSpecies`] for a party
+/// row naming a species with no `gSpeciesNames` entry — see each.
 pub fn trainer_party_personalities(id: TrainerId) -> Result<Vec<u32>, NpcTrainerBattleError> {
     let trainer = battle::trainer_data(id)?;
     let entries = party_entries(trainer);

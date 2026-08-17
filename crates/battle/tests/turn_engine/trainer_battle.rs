@@ -408,10 +408,9 @@ fn a_crossed_level_learns_an_unexecutable_move_that_selection_then_refuses() {
         dex.move_data(PURSUIT).unwrap().pp,
         "a freshly learned move's PP starts at the move's own base PP"
     );
-    // `EFFECT_PURSUIT` points at `BattleScript_EffectHit` in the table but
-    // the engine re-targets and re-powers it outside the script
-    // (`battle_script_commands.c:8745`/`:9854`), which is exactly why
-    // `crate::hit`'s allow-list leaves it out.
+    // Absorb is executable now, but only through `crate::drain` -- the
+    // plain hit pipeline is one draw short for it, so its allow-list still
+    // refuses `EFFECT_ABSORB`.
     assert_eq!(
         battle::ensure_resolvable(&dex, ABSORB),
         Err(BattleError::UnsupportedMoveEffect(ABSORB)),
@@ -421,6 +420,10 @@ fn a_crossed_level_learns_an_unexecutable_move_that_selection_then_refuses() {
 
     // The fail-closed half: unexecutable *in the player's moveset* is fine;
     // unexecutable *as this turn's pick* is refused, before any draw.
+    // `EFFECT_PURSUIT` points at `BattleScript_EffectHit` in the table but
+    // the engine re-targets and re-powers it outside the script
+    // (`battle_script_commands.c:8745`/`:9854`), which is exactly why
+    // `crate::hit`'s allow-list leaves it out.
     let mut rng = SequenceRng::new([u16::MAX; 128]);
     let mut battle = Battle::new_trainer(
         dex,
@@ -936,6 +939,44 @@ fn a_player_attack_into_a_self_kod_enemy_runs_but_pays_exp_once() {
         "the end-of-turn send-out still happens: {events:?}"
     );
     assert_eq!(battle.outcome(), None, "the trainer still has a mon out");
+}
+
+/// The same self-KO fixture with an empty bench: the win still resolves
+/// through the end-of-turn `checkteamslost` -- `BattleScript_DoSelfConfusionDmg`
+/// runs no `checkteamslost` of its own -- so the last mon's confusion
+/// self-KO pays money and ends the battle exactly where a move-KO would.
+#[test]
+fn a_trainers_last_mon_self_koing_in_confusion_still_wins_the_battle() {
+    let dex = Dex::new();
+    let player = max_iv_mon(&dex, MACHOP, 5, vec![TACKLE]);
+    let mut lead = max_iv_mon(&dex, TREECKO, 30, vec![POUND, LEER]);
+    lead.volatiles_mut().confusion_turns = 5;
+    let max_hp = lead.stats().max_hp;
+    lead.apply_damage(max_hp - 1);
+
+    let mut rng = SequenceRng::new([0; 128]);
+    let mut battle =
+        Battle::new_trainer(dex, player, MAY_ROUTE_103_MUDKIP, vec![lead], &mut rng).unwrap();
+
+    let events = battle
+        .take_turn(PlayerAction::UseMove(0), &mut rng)
+        .unwrap();
+    assert!(
+        events.contains(&BattleEvent::HurtItselfInConfusion {
+            by_player: false,
+            damage: 1,
+        }),
+        "{events:?}"
+    );
+    assert!(
+        events.contains(&BattleEvent::MoneyGained(300)),
+        "{events:?}"
+    );
+    assert!(
+        events.contains(&BattleEvent::Ended(BattleOutcome::PlayerWon)),
+        "{events:?}"
+    );
+    assert_eq!(battle.outcome(), Some(BattleOutcome::PlayerWon));
 }
 
 /// The corpse-attack path's per-pipeline shape, through the same enemy

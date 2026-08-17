@@ -129,7 +129,12 @@ fn the_damage_half_matches_the_ordinary_pipeline_exactly() {
     let HitOutcome::Hit { damage, .. } = drained else {
         panic!("Absorb must land: {drained:?}");
     };
-    assert!(damage > 0);
+    // Hand-computed through the shared core (max-IV neutral L14s):
+    // Shroomish SpAtk (2*40+31)*14/100+5 = 20, Marill SpDef
+    // (2*50+31)*14/100+5 = 23; (2*14/5+2)*20*20/23/50+2 = 4, STAB *15/10
+    // = 6, Grass into Water *2 = 12, best roll keeps 12. Any skipped step
+    // of the core lands on a different number.
+    assert_eq!(damage, 12);
 }
 
 #[test]
