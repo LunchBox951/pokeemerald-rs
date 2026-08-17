@@ -200,7 +200,8 @@ fn walking_in_route_101s_grass_fires_an_encounter_and_runs_a_battle() {
     );
     // `SetWildMonHeldItem`'s `Random() % 100` draw, discarded here exactly as
     // `start_wild_battle` discards it, so the turn-number draw right after
-    // lands on the same value upstream's own stream would produce.
+    // lands where upstream's frame-free sequence puts it (the module docs'
+    // `VBlankCB_Battle` caveat applies to any real-console comparison).
     let _ = reference.next_u16() % 100;
     let expected_turn_number = reference.next_u16();
     assert_eq!(
