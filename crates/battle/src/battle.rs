@@ -354,6 +354,15 @@ pub struct Battle {
     /// faint but never re-awards the exp (issue #293 review, round 4).
     /// Reset when a trainer replacement is sent out.
     enemy_exp_given: bool,
+    /// Whether [`BattleEvent::Ended`] has been emitted for
+    /// [`Battle::outcome`]. The two separate because upstream's are:
+    /// `Cmd_checkteamslost` sets `gBattleOutcome` silently — mid-residual
+    /// (`BattleScript_DoTurnDmg`) it stops the walk with no message at all —
+    /// and the end-of-battle presentation happens later. A run or flee
+    /// still reports immediately ([`Battle::finish`]); a faint-decided
+    /// outcome is reported by [`Battle::end_of_turn`], after
+    /// `HandleFaintedMonActions`' exp pass.
+    outcome_reported: bool,
 }
 
 /// Which `gBattleTypeFlags` shape a [`Battle`] was constructed for.
@@ -479,6 +488,7 @@ impl Battle {
             turn_counter: 0,
             turn_started: false,
             enemy_exp_given: false,
+            outcome_reported: false,
         })
     }
 
@@ -596,6 +606,7 @@ impl Battle {
             turn_counter: 0,
             turn_started: false,
             enemy_exp_given: false,
+            outcome_reported: false,
         })
     }
 
@@ -1061,10 +1072,12 @@ impl Battle {
                     // poisoned opponent. It cannot fail: the only fallible
                     // step is the species/base-exp lookup for a mon already
                     // in play. The outcome is `check_teams_lost`'s, below.
-                    let _ = self.settle_faint(!is_player, events);
+                    self.settle_faint(!is_player, events);
                     // `BattleScript_DoTurnDmg`'s own `checkteamslost`, one
-                    // instruction after its `tryfaintmon`.
-                    if self.check_teams_lost(events) {
+                    // instruction after its `tryfaintmon` -- silent: the
+                    // walk stops, and `end_of_turn` reports the outcome
+                    // after the exp pass.
+                    if self.check_teams_lost() {
                         return;
                     }
                 }
@@ -1095,33 +1108,32 @@ impl Battle {
     /// white-out flow the draw takes — and this comment is the record of
     /// that narrowing.
     ///
-    /// [`BattleEvent::MoneyGained`] comes first for the same reason it
-    /// always has: `Cmd_getmoneyreward` (`battle_script_commands.c:5635`)
-    /// runs after `Cmd_getexp`, which [`Self::settle_faint`] has already
-    /// paid out.
-    fn check_teams_lost(&mut self, events: &mut Vec<BattleEvent>) -> bool {
+    /// **Silent**, exactly like `Cmd_checkteamslost` (issue #293 review,
+    /// round 5): it sets [`Battle::outcome`] and emits nothing. Mid-residual
+    /// that stops the walk with no message; the presentation —
+    /// [`BattleEvent::MoneyGained`] then [`BattleEvent::Ended`] — is
+    /// [`Self::end_of_turn`]'s, *after* the exp pass, matching upstream's
+    /// faint → exp → win order.
+    fn check_teams_lost(&mut self) -> bool {
         if self.outcome.is_some() {
             return true;
         }
         if self.player.is_fainted() {
-            self.finish(events, BattleOutcome::PlayerLost);
+            self.outcome = Some(BattleOutcome::PlayerLost);
             return true;
         }
         if !self.enemy.is_fainted() {
             return false;
         }
-        let BattleKind::Trainer(context) = &self.kind else {
+        let all_down = match &self.kind {
             // A wild battle's whole enemy "party" is the one mon.
-            self.finish(events, BattleOutcome::PlayerWon);
-            return true;
+            BattleKind::Wild | BattleKind::FirstBattle => true,
+            BattleKind::Trainer(context) => context.bench().iter().all(BattlePokemon::is_fainted),
         };
-        if !context.bench().iter().all(BattlePokemon::is_fainted) {
-            return false;
+        if all_down {
+            self.outcome = Some(BattleOutcome::PlayerWon);
         }
-        let money = context.money();
-        events.push(BattleEvent::MoneyGained(money));
-        self.finish(events, BattleOutcome::PlayerWon);
-        true
+        all_down
     }
 
     /// `HandleFaintedMonActions` (`battle_util.c:1894`), reduced to what
@@ -1142,22 +1154,32 @@ impl Battle {
     /// queued action running — the outcome lands here, never at the faint
     /// (issue #293 review, round 4; `settle_faint`'s own docs).
     ///
-    /// The exp half of `HandleFaintedMonActions` (`:1917`, `givenExpMons`)
-    /// has always been paid by the time this runs — [`Self::settle_faint`]
-    /// awards it at the faint, once — so only the outcome and the
-    /// replacement remain. A trainer battle whose bench is empty pays out
-    /// [`trainer::TrainerContext::money`] before [`BattleEvent::Ended`],
-    /// inside `check_teams_lost` — upstream's `Cmd_getmoneyreward`
-    /// (`battle_script_commands.c:5635`) runs after `Cmd_getexp`, which is
-    /// the order [`BattleEvent`]s come back in.
-    ///
-    /// A trainer's last mon fainting to the end-of-turn residual has
-    /// already been settled, with the same events in the same order, by the
-    /// residual walk's own [`Self::check_teams_lost`] call — because
-    /// upstream settles the two in different places too (see
-    /// [`Self::residual_effects`]).
+    /// Its three steps run in upstream's order (issue #293 review, round
+    /// 5): the **exp pass** first (`:1915`-`:1922`, `givenExpMons` —
+    /// [`Self::award_enemy_exp`], which skips a fainted recipient), then
+    /// `BattleScript_HandleFaintedMon`'s `checkteamslost` and, if it
+    /// decided the battle, the end presentation —
+    /// [`BattleEvent::MoneyGained`] for a trainer win (upstream's
+    /// `Cmd_getmoneyreward` runs after `Cmd_getexp`,
+    /// `battle_script_commands.c:5635`) and [`BattleEvent::Ended`] — and
+    /// only otherwise the trainer replacement. A run or flee already
+    /// reported through [`Self::finish`], so `outcome_reported` keeps this
+    /// from double-ending those turns.
     fn end_of_turn(&mut self, events: &mut Vec<BattleEvent>) {
-        if self.check_teams_lost(events) {
+        self.award_enemy_exp(events);
+        let over = self.check_teams_lost();
+        if over {
+            if let Some(outcome) = self.outcome {
+                if !self.outcome_reported {
+                    if outcome == BattleOutcome::PlayerWon {
+                        if let BattleKind::Trainer(context) = &self.kind {
+                            events.push(BattleEvent::MoneyGained(context.money()));
+                        }
+                    }
+                    self.outcome_reported = true;
+                    events.push(BattleEvent::Ended(outcome));
+                }
+            }
             return;
         }
         if !self.enemy.is_fainted() {
@@ -1338,7 +1360,7 @@ impl Battle {
             damage: dealt,
         });
         if self.battler(is_player).is_fainted() {
-            let _ = self.settle_faint(!is_player, events);
+            self.settle_faint(!is_player, events);
         }
     }
 
@@ -1374,8 +1396,13 @@ impl Battle {
         }
     }
 
+    /// Set and immediately report an outcome — the run/flee shape, whose
+    /// end really is decided and announced at the action. A faint-decided
+    /// outcome goes through the silent [`Self::check_teams_lost`] +
+    /// [`Self::end_of_turn`] pair instead.
     fn finish(&mut self, events: &mut Vec<BattleEvent>, outcome: BattleOutcome) {
         self.outcome = Some(outcome);
+        self.outcome_reported = true;
         events.push(BattleEvent::Ended(outcome));
     }
 }

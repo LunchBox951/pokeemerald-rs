@@ -166,9 +166,12 @@ fn the_drain_amount_halves_the_hp_actually_dealt_with_a_floor_of_one() {
     // The floor fires *after* the halving, so 1 damage still heals 1.
     assert_eq!(drain_amount(1), 1);
     assert_eq!(drain_amount(2), 1);
-    // Nothing dealt heals nothing: `negativedamage` runs after
-    // `datahpupdate`, which applied no damage on a missed/immune hit.
-    assert_eq!(drain_amount(0), 0);
+    // ...and it is unconditional: `Cmd_negativedamage` tests the quotient,
+    // not `gHpDealt`, so a landed hit that dealt 0 (an already-fainted
+    // target) still heals 1 (issue #293 review, round 5). A miss or
+    // immunity never reaches `negativedamage` at all -- that gate is
+    // `execute_drain_move`'s, not this function's.
+    assert_eq!(drain_amount(0), 1);
 }
 
 /// `drain_amount` on an overkill's *capped* HP: a worked example of the

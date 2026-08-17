@@ -89,14 +89,14 @@ pub fn is_drain_effect(effect: MoveEffect) -> bool {
 ///
 /// `hp_dealt` is `gHpDealt` — the HP the target really lost after
 /// `Cmd_datahpupdate`'s clamp — **not** the formula's raw output. Returns a
-/// positive heal amount; `0` in, `0` out (a move that dealt nothing heals
-/// nothing, because upstream's floor only fires once the division has
-/// something to truncate).
+/// positive heal amount, and the floor is **unconditional**: upstream tests
+/// the quotient, not the input, so even `gHpDealt == 0` becomes a 1-HP heal
+/// (issue #293 review, round 5). That input is reachable — a queued Absorb
+/// against a target that already fainted this turn deals 0 — and the user
+/// really does drink 1 HP from the corpse, clamped as ever by
+/// [`crate::pokemon::BattlePokemon::restore_hp`].
 #[must_use]
 pub const fn drain_amount(hp_dealt: u32) -> u32 {
-    if hp_dealt == 0 {
-        return 0;
-    }
     let half = hp_dealt / 2;
     if half == 0 {
         1

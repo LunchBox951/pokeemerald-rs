@@ -171,7 +171,8 @@ impl Battle {
             )?
         };
         self.apply_damage_outcome(attacker_is_player, move_id, outcome, events);
-        self.settle_faint(attacker_is_player, events)
+        self.settle_faint(attacker_is_player, events);
+        Ok(())
     }
 
     /// The draining half (issue #293) — [`crate::drain::resolve_drain_move`],
@@ -201,9 +202,15 @@ impl Battle {
                 rng,
             )?
         };
+        let landed = matches!(outcome, HitOutcome::Hit { .. });
         let dealt = self.apply_damage_outcome(attacker_is_player, move_id, outcome, events);
-        let healed = crate::drain::drain_amount(dealt);
-        if healed > 0 {
+        // `negativedamage` (`:352`) is only reached by a *landed* hit -- a
+        // miss or type immunity left the script before it -- but for any
+        // landed hit its `-1` floor is unconditional, `gHpDealt == 0`
+        // included, so a drain from an already-fainted target still heals 1
+        // (issue #293 review, round 5; `crate::drain::drain_amount`).
+        if landed {
+            let healed = crate::drain::drain_amount(dealt);
             // `datahpupdate BS_ATTACKER` (`data/battle_scripts_1.s:353`)
             // clamps the heal to the attacker's own max HP; the event
             // reports the HP actually gained, not the unclamped half
@@ -218,7 +225,8 @@ impl Battle {
         // `tryfaintmon BS_ATTACKER` (`:358`) precedes `tryfaintmon BS_TARGET`
         // (`:359`), but only Liquid Ooze -- an unmodelled ability -- can
         // faint the attacker here, so the target's is the only reachable one.
-        self.settle_faint(attacker_is_player, events)
+        self.settle_faint(attacker_is_player, events);
+        Ok(())
     }
 
     /// The fixed-damage half (issue #293) —
@@ -239,7 +247,8 @@ impl Battle {
             )?
         };
         self.apply_damage_outcome(attacker_is_player, move_id, outcome, events);
-        self.settle_faint(attacker_is_player, events)
+        self.settle_faint(attacker_is_player, events);
+        Ok(())
     }
 
     /// The multi-hit half (issue #293) — `BattleScript_EffectMultiHit`'s
@@ -286,8 +295,13 @@ impl Battle {
         };
 
         let mut landed = 0u8;
+        let mut immune_exit = false;
         for _ in 0..hits {
-            // `jumpifhasnohp BS_TARGET` at the top of the iteration.
+            // `jumpifhasnohp BS_TARGET` at the top of the iteration -- a
+            // jump to `BattleScript_MultiHitPrintStrings`, which still
+            // prints the hit-count summary (0 included, for a target that
+            // had already fainted before hit one -- issue #293 review,
+            // round 5), unlike the immunity exit below.
             if self.battler(!attacker_is_player).is_fainted() {
                 break;
             }
@@ -308,6 +322,11 @@ impl Battle {
                 )?
             };
             if damage == 0 {
+                // `jumpifmovehadnoeffect BattleScript_MultiHitNoMoreHits`
+                // (`:623`): this exit's `resultmessage` prints the
+                // no-effect string and `jumpifmovehadnoeffect` at `:646`
+                // then skips the hit-count line entirely.
+                immune_exit = true;
                 self.apply_damage_outcome(
                     attacker_is_player,
                     move_id,
@@ -331,17 +350,20 @@ impl Battle {
 
         // `:651`, once for the whole move rather than once per hit.
         crate::multi_hit::spend_effect_chance_draw(rng);
-        if landed > 0 {
+        if !immune_exit {
             // `printstring STRINGID_HITXTIMES` (`:648`) -- "Hit N time(s)!",
             // reporting the hits that actually landed rather than the count
-            // that was rolled.
+            // that was rolled. Every exit but the immunity one reaches it,
+            // including the zero-hit corpse-at-top jump (issue #293 review,
+            // round 5).
             events.push(BattleEvent::HitCount {
                 by_player: attacker_is_player,
                 move_id,
                 hits: landed,
             });
         }
-        self.settle_faint(attacker_is_player, events)
+        self.settle_faint(attacker_is_player, events);
+        Ok(())
     }
 
     /// The primary-status half (issue #293) —
@@ -377,6 +399,9 @@ impl Battle {
             crate::primary_status::PrimaryStatusOutcome::AlreadyConfused => {
                 events.push(BattleEvent::AlreadyConfused { by_player, move_id });
             }
+            // `SetMoveEffect`'s zero-HP early-out: the script's trailing
+            // `resultmessage` prints nothing for it, so no event.
+            crate::primary_status::PrimaryStatusOutcome::TargetDown => {}
             crate::primary_status::PrimaryStatusOutcome::Paralysed => {
                 let status = crate::status::Status1::Paralysed;
                 self.battler_mut(!attacker_is_player).set_status(status);
@@ -455,7 +480,8 @@ impl Battle {
         if rolled && !immune {
             self.apply_secondary_effect(attacker_is_player, move_id, mv.effect, events);
         }
-        self.settle_faint(attacker_is_player, events)
+        self.settle_faint(attacker_is_player, events);
+        Ok(())
     }
 
     /// `SetMoveEffect`'s work for a landed secondary, which costs **no
@@ -601,66 +627,81 @@ impl Battle {
     }
 
     /// `tryfaintmon BS_TARGET`: if the defender is down, emit
-    /// [`BattleEvent::Fainted`] and — first time only — award `Cmd_getexp`'s
-    /// experience.
+    /// [`BattleEvent::Fainted`] and run `cleareffectsonfaint`'s wipe —
+    /// `gBattleMons[].status1 = 0` plus `FaintClearSetData`'s
+    /// `status2`/`gStatuses3` zero (`battle_script_commands.c`'s
+    /// `Cmd_cleareffectsonfaint`), which is why a corpse never reads as
+    /// "already paralysed" and never leaks a condition into the write-back.
     ///
-    /// Deliberately does **not** end the battle (issue #293 review, round
-    /// 4): upstream's `gBattleOutcome` stays `0` through a mid-turn faint —
-    /// `BattleScript_FaintTarget` (`data/battle_scripts_1.s:2817`) runs no
-    /// `checkteamslost`, and the one that does sits in
-    /// `BattleScript_HandleFaintedMon` (`:2831`), reached only from the
-    /// end-of-turn `HandleFaintedMonActions` — so the *surviving* battler's
-    /// queued action still runs, spending its draws, even when the other
-    /// side is already down. [`super::Battle::end_of_turn`] owns the
-    /// outcome, via [`super::Battle::check_teams_lost`].
+    /// Deliberately does **not** end the battle and does **not** pay exp
+    /// (issue #293 review, rounds 4-5): upstream's `gBattleOutcome` stays
+    /// `0` through a mid-turn faint — `BattleScript_FaintTarget`
+    /// (`data/battle_scripts_1.s:2817`) runs no `checkteamslost` — and the
+    /// exp lives in `HandleFaintedMonActions` (`battle_util.c:1917`), after
+    /// the residual walk. So the *surviving* battler's queued action still
+    /// runs, spending its draws, and a player who KOs the opponent but then
+    /// faints to the same turn's poison earns nothing.
+    /// [`super::Battle::end_of_turn`] owns both, via
+    /// [`super::Battle::check_teams_lost`] and [`Self::award_enemy_exp`].
     ///
     /// Re-entered freely for an attack on an already-fainted target:
     /// `Cmd_tryfaintmon` refires on any `hp == 0` battler not yet marked
     /// absent (`battle_script_commands.c:4384`-`:4390`; absence is only set
     /// by the end-of-turn `Cmd_openpartyscreen`, `:4886`), so the faint
-    /// message repeats while `givenExpMons`
-    /// ([`super::Battle`]'s `enemy_exp_given`) keeps the exp single.
+    /// message repeats; the wipe is idempotent.
     ///
     /// Shared by all the damaging pipelines for the same reason
     /// [`Self::apply_damage_outcome`] is.
-    pub(super) fn settle_faint(
-        &mut self,
-        attacker_is_player: bool,
-        events: &mut Vec<BattleEvent>,
-    ) -> Result<(), BattleError> {
+    pub(super) fn settle_faint(&mut self, attacker_is_player: bool, events: &mut Vec<BattleEvent>) {
         if !self.battler(!attacker_is_player).is_fainted() {
-            return Ok(());
+            return;
         }
         events.push(BattleEvent::Fainted {
             by_player: !attacker_is_player,
         });
-        if !attacker_is_player {
-            // A fainted player pays out nothing; the loss itself is
-            // `check_teams_lost`'s call, at the end of the turn.
-            return Ok(());
-        }
-        if self.enemy_exp_given {
-            return Ok(());
+        let fainted = self.battler_mut(!attacker_is_player);
+        fainted.set_status(crate::status::Status1::Healthy);
+        *fainted.volatiles_mut() = crate::volatile::Volatiles::default();
+    }
+
+    /// `HandleFaintedMonActions`' exp pass (`battle_util.c:1915`-`:1922`,
+    /// `BattleScript_GiveExp`/`Cmd_getexp`): pay the fainted opponent's
+    /// experience exactly once (`givenExpMons`,
+    /// [`super::Battle`]'s `enemy_exp_given`), at the **end of the turn** —
+    /// after both actions and the residual walk — and only to a recipient
+    /// still standing: `Cmd_getexp` skips a `0`-HP party mon, so a player
+    /// who KO'd the opponent and then fainted to its own poison earns
+    /// nothing (issue #293 review, round 5). The forfeit is permanent:
+    /// `givenExpMons` is marked either way.
+    ///
+    /// A [`MAX_LEVEL`] recipient gains nothing and gets no "gained EXP"
+    /// message: `Cmd_getexp` case 2 zeroes the award and jumps past the
+    /// string (`battle_script_commands.c:3351`-`:3356`), so no event is
+    /// emitted either.
+    pub(super) fn award_enemy_exp(&mut self, events: &mut Vec<BattleEvent>) {
+        if !self.enemy.is_fainted() || self.enemy_exp_given {
+            return;
         }
         self.enemy_exp_given = true;
-        // A MAX_LEVEL recipient gains nothing and gets no "gained EXP"
-        // message: Cmd_getexp case 2 zeroes the award and jumps past the
-        // string (`battle_script_commands.c:3351`-`:3356`), so no event is
-        // emitted either.
-        if self.player.level() < MAX_LEVEL {
-            let base_exp = self.dex.species(self.enemy.species())?.base_exp;
-            let level = self.enemy.level();
-            // Cmd_getexp's `x1.5` trainer-battle bonus (`:3378`-`:3379`) --
-            // see `crate::exp`.
-            let exp = if self.trainer().is_some() {
-                trainer_faint_exp(base_exp, level)
-            } else {
-                wild_faint_exp(base_exp, level)
-            };
-            self.player.apply_experience(&self.dex, exp);
-            events.push(BattleEvent::ExpGained(exp));
+        if self.player.is_fainted() || self.player.level() >= MAX_LEVEL {
+            return;
         }
-        Ok(())
+        let Ok(species) = self.dex.species(self.enemy.species()) else {
+            // Unreachable for a mon already in play; a missing dex row
+            // forfeits the award rather than panicking mid-turn.
+            return;
+        };
+        let base_exp = species.base_exp;
+        let level = self.enemy.level();
+        // Cmd_getexp's `x1.5` trainer-battle bonus (`:3378`-`:3379`) --
+        // see `crate::exp`.
+        let exp = if self.trainer().is_some() {
+            trainer_faint_exp(base_exp, level)
+        } else {
+            wild_faint_exp(base_exp, level)
+        };
+        self.player.apply_experience(&self.dex, exp);
+        events.push(BattleEvent::ExpGained(exp));
     }
 
     /// The stat-changing half of [`Self::execute_move`]'s dispatch (issue

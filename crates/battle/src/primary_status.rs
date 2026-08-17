@@ -123,6 +123,17 @@ pub enum PrimaryStatusOutcome {
     /// (`:923`), from the `jumpifstatus2 BS_TARGET, STATUS2_CONFUSION` at
     /// `:909` — before the accuracy check, no draws.
     AlreadyConfused,
+    /// The target had already fainted this turn — `SetMoveEffect`'s
+    /// zero-HP early-out (`battle_script_commands.c:2261`-`:2264`), reached
+    /// **after** the accuracy check passed and **before**
+    /// `MOVE_EFFECT_CONFUSION`'s duration roll, so this outcome costs the
+    /// accuracy draw and nothing more (issue #293 review, round 5). The
+    /// script's trailing `resultmessage` prints nothing for it, so no event
+    /// maps to it either. Reachable only via a queued action against a
+    /// battler that fainted earlier in the same turn — the corpse reads as
+    /// status-free for the pre-accuracy checks because `cleareffectsonfaint`
+    /// wiped it at the faint.
+    TargetDown,
     /// The target is now paralysed.
     Paralysed,
     /// The target is now confused, for this many turns
@@ -181,6 +192,12 @@ pub fn resolve_primary_status_move(
         if !accuracy_roll(dex, move_id, attacker, defender, rng)? {
             return Ok(PrimaryStatusOutcome::Miss);
         }
+        // `SetMoveEffect`'s zero-HP early-out (`:2261`-`:2264`) sits
+        // between the accuracy draw and the duration roll, so a fainted
+        // target costs exactly one draw (issue #293 review, round 5).
+        if defender.is_fainted() {
+            return Ok(PrimaryStatusOutcome::TargetDown);
+        }
         return Ok(PrimaryStatusOutcome::Confused(
             crate::volatile::roll_confusion_turns(rng),
         ));
@@ -209,6 +226,12 @@ pub fn resolve_primary_status_move(
     }
     if !accuracy_roll(dex, move_id, attacker, defender, rng)? {
         return Ok(PrimaryStatusOutcome::Miss);
+    }
+    // `SetMoveEffect`'s zero-HP early-out (`:2261`-`:2264`): a target that
+    // fainted earlier this turn takes no status (issue #293 review, round
+    // 5). No draw either way -- paralysis never rolls.
+    if defender.is_fainted() {
+        return Ok(PrimaryStatusOutcome::TargetDown);
     }
     // `seteffectprimary` -> `SetMoveEffect(TRUE, 0)`: **no draw** for
     // paralysis (`src/battle_script_commands.c:2483`, the non-sleep arm).

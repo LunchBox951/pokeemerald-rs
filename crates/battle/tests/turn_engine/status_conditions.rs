@@ -957,3 +957,47 @@ fn a_player_self_ko_in_confusion_still_lets_the_enemy_act_before_the_loss() {
     );
     assert_eq!(battle.outcome(), Some(BattleOutcome::PlayerLost));
 }
+
+/// `HandleFaintedMonActions`' exp pass runs after the residual walk and
+/// skips a fainted recipient (`Cmd_getexp`'s 0-HP party check), so a
+/// poisoned player that KOs the wild mon and then dies to its own
+/// end-of-turn tick earns nothing -- and the forfeit is permanent
+/// (`givenExpMons` is marked either way). Upstream's `checkteamslost` ORs
+/// both sides into `B_OUTCOME_DREW` here, which `IsPlayerDefeated` routes
+/// to the same white-out a loss takes; this engine's outcome enum reports
+/// the loss half directly (issue #293 review, round 5).
+#[test]
+fn a_player_that_faints_to_its_own_poison_after_the_ko_forfeits_the_exp() {
+    let dex = Dex::new();
+    let mut player = max_iv_mon(&dex, PLUSLE, 50, vec![TACKLE]);
+    player.set_status(Status1::Poisoned);
+    let max_hp = player.stats().max_hp;
+    player.apply_damage(max_hp - 1); // any poison tick is lethal
+    let enemy = max_iv_mon(&dex, MARILL, 2, vec![TACKLE]);
+
+    let mut rng = zeros();
+    let mut battle = Battle::new(Dex::new(), player, enemy, false, &mut rng).unwrap();
+    let events = battle
+        .take_turn(PlayerAction::UseMove(0), &mut rng)
+        .unwrap();
+
+    assert!(
+        events.contains(&BattleEvent::Fainted { by_player: false }),
+        "the KO landed: {events:?}"
+    );
+    assert!(
+        events.contains(&BattleEvent::Fainted { by_player: true }),
+        "the residual tick then killed the poisoned winner: {events:?}"
+    );
+    assert!(
+        !events
+            .iter()
+            .any(|e| matches!(e, BattleEvent::ExpGained(_))),
+        "a fainted recipient is ineligible -- no exp: {events:?}"
+    );
+    assert_eq!(
+        events.last(),
+        Some(&BattleEvent::Ended(BattleOutcome::PlayerLost)),
+        "the double faint takes the loss (white-out) flow: {events:?}"
+    );
+}

@@ -240,3 +240,38 @@ fn confusion_and_paralysis_are_different_stores_and_stack() {
         PrimaryStatusOutcome::Confused(2)
     );
 }
+
+/// `SetMoveEffect`'s zero-HP early-out (`battle_script_commands.c:2261`-
+/// `:2264`): a queued status move against a target that fainted earlier in
+/// the turn spends its accuracy draw and nothing more -- no status write,
+/// no confusion-duration roll (issue #293 review, round 5). The corpse
+/// reads as status-free for the pre-accuracy branches because
+/// `cleareffectsonfaint` wiped it at the faint.
+#[test]
+fn a_fainted_target_takes_no_status_after_the_accuracy_draw() {
+    let dex = Dex::new();
+    let mut corpse = mon(&dex, 183);
+    let max_hp = corpse.stats().max_hp;
+    corpse.apply_damage(max_hp);
+
+    let waver = mon(&dex, 353);
+    // Exactly one value: a duration roll would panic the sequence.
+    let mut rng = SequenceRng::new([0]);
+    assert_eq!(
+        resolve_primary_status_move(&dex, THUNDER_WAVE, &waver, &corpse, &mut rng).unwrap(),
+        PrimaryStatusOutcome::TargetDown
+    );
+    assert_eq!(rng.draws(), 1, "accuracy only");
+
+    let sonic = mon(&dex, 72);
+    let mut rng = SequenceRng::new([0]);
+    assert_eq!(
+        resolve_primary_status_move(&dex, SUPERSONIC, &sonic, &corpse, &mut rng).unwrap(),
+        PrimaryStatusOutcome::TargetDown
+    );
+    assert_eq!(
+        rng.draws(),
+        1,
+        "accuracy only -- the duration roll is skipped"
+    );
+}

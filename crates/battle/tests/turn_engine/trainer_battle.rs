@@ -937,3 +937,97 @@ fn a_player_attack_into_a_self_kod_enemy_runs_but_pays_exp_once() {
     );
     assert_eq!(battle.outcome(), None, "the trainer still has a mon out");
 }
+
+/// The corpse-attack path's per-pipeline shape, through the same enemy
+/// self-KO fixture as
+/// [`a_player_attack_into_a_self_kod_enemy_runs_but_pays_exp_once`]: a
+/// queued multi-hit move whose target fainted earlier in the turn spends
+/// its accuracy, hit-count and effect-chance draws, lands nothing, and
+/// still emits the zero-hit summary -- upstream's `jumpifhasnohp
+/// BS_TARGET` at the loop top jumps to `BattleScript_MultiHitPrintStrings`,
+/// which prints "Hit 0 time(s)!", unlike the immunity exit (issue #293
+/// review, round 5).
+#[test]
+fn a_multi_hit_move_into_a_self_kod_enemy_reports_zero_hits() {
+    const FURY_ATTACK: MoveId = MoveId(31);
+    let dex = Dex::new();
+    let player = max_iv_mon(&dex, MACHOP, 5, vec![FURY_ATTACK]);
+    let mut lead = max_iv_mon(&dex, TREECKO, 30, vec![POUND, LEER]);
+    lead.volatiles_mut().confusion_turns = 5;
+    let max_hp = lead.stats().max_hp;
+    lead.apply_damage(max_hp - 1);
+    let party = vec![lead, max_iv_mon(&dex, TORCHIC, 5, vec![SCRATCH, GROWL])];
+
+    let mut rng = SequenceRng::new([0; 128]);
+    let mut battle =
+        Battle::new_trainer(dex, player, MAY_ROUTE_103_MUDKIP, party, &mut rng).unwrap();
+    let events = battle
+        .take_turn(PlayerAction::UseMove(0), &mut rng)
+        .unwrap();
+
+    assert!(
+        events.contains(&BattleEvent::HitCount {
+            by_player: true,
+            move_id: FURY_ATTACK,
+            hits: 0,
+        }),
+        "the zero-hit summary still prints for a corpse target: {events:?}"
+    );
+    assert!(
+        !events.iter().any(|e| matches!(
+            e,
+            BattleEvent::Hit {
+                by_player: true,
+                ..
+            }
+        )),
+        "no hit actually landed: {events:?}"
+    );
+    assert_eq!(
+        events
+            .iter()
+            .filter(|e| matches!(e, BattleEvent::ExpGained(_)))
+            .count(),
+        1,
+        "still exactly one exp award: {events:?}"
+    );
+}
+
+/// ...and a queued Absorb against the same corpse still heals:
+/// `Cmd_negativedamage`'s `-1` floor tests the quotient, not `gHpDealt`,
+/// so half of the 0 HP actually removed is bumped to a real 1-HP drink
+/// (issue #293 review, round 5).
+#[test]
+fn a_drain_move_into_a_self_kod_enemy_still_heals_the_floor_hp() {
+    let dex = Dex::new();
+    // MAX_LEVEL, so the end-of-turn exp award cannot level the attacker
+    // up mid-assertion and shift its HP bar.
+    let mut player = max_iv_mon(&dex, MACHOP, 100, vec![ABSORB]);
+    let player_max_hp = player.stats().max_hp;
+    player.apply_damage(5);
+    let mut lead = max_iv_mon(&dex, TREECKO, 30, vec![POUND, LEER]);
+    lead.volatiles_mut().confusion_turns = 5;
+    let max_hp = lead.stats().max_hp;
+    lead.apply_damage(max_hp - 1);
+    let party = vec![lead, max_iv_mon(&dex, TORCHIC, 5, vec![SCRATCH, GROWL])];
+
+    let mut rng = SequenceRng::new([0; 128]);
+    let mut battle =
+        Battle::new_trainer(dex, player, MAY_ROUTE_103_MUDKIP, party, &mut rng).unwrap();
+    let events = battle
+        .take_turn(PlayerAction::UseMove(0), &mut rng)
+        .unwrap();
+
+    assert!(
+        events.contains(&BattleEvent::HpDrained {
+            by_player: true,
+            amount: 1,
+        }),
+        "the floor heal lands even when 0 HP was dealt: {events:?}"
+    );
+    assert_eq!(
+        battle.player().current_hp(),
+        player_max_hp - 5 + 1,
+        "the 1 HP was really applied"
+    );
+}
