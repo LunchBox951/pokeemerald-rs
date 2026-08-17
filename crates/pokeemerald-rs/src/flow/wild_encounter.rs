@@ -370,7 +370,8 @@ pub(super) fn map_wild_table_fightable(map: assets::MapId) -> bool {
 /// draw is spent the identical way in [`crate::flow::first_battle`]'s
 /// scripted fight (its own module docs' "RNG stream" section), and the
 /// remaining held-item gap is enumerated as NOT-modelled on the
-/// `src/battle_setup.c#CB2_StartFirstBattle` ledger entry.
+/// `src/pokemon.c#SetWildMonHeldItem` ledger entry (and cross-referenced on
+/// `src/battle_setup.c#CB2_StartFirstBattle`).
 ///
 /// # Errors
 ///

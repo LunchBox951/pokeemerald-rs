@@ -27262,6 +27262,12 @@
           "spec": "S-5",
           "status": "rewritten"
         },
+        "SetWildMonHeldItem": {
+          "reason": "pokemon.c:6678-:6731, called from CB2_InitBattleInternal (battle_main.c:700) for every non-trainer battle. Modelled (issue #303): the RNG-observable half only -- the unconditional u16 rnd = Random() % 100 at :6682, gated on !(LEGENDARY|TRAINER|PYRAMID|PIKE), which both wild handoffs spend immediately before Battle::new (flow::wild_encounter::start_wild_battle and flow::first_battle's scripted fight), so the shared stream's draw count matches upstream's. NOT modelled: everything the draw decides -- the chanceNoItem/chanceNotRare thresholds, the Compound Eyes adjustment (:6686-:6691), the Altering Cave table branch (:6693-:6706), and the SetMonData(MON_DATA_HELD_ITEM) write -- because battle::BattlePokemon carries no held-item field on this branch for the roll to populate; PR #296 adds the field, and a follow-up slice can model selection/storage against it.",
+          "rust_target": "crates/pokeemerald-rs/src/flow/wild_encounter.rs",
+          "spec": "I-4",
+          "status": "stubbed"
+        },
         "gNatureStatTable": {
           "reason": "Nature stat modifier table ported as Rust data (Nature enum + Stat enum + MODIFIERS table), pinned to upstream via id/landmark/neutral-nature tests (issue #125).",
           "rust_target": "crates/battle/src/nature.rs",
