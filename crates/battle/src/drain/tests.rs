@@ -171,9 +171,13 @@ fn the_drain_amount_halves_the_hp_actually_dealt_with_a_floor_of_one() {
     assert_eq!(drain_amount(0), 0);
 }
 
-/// The `gHpDealt`-not-`gBattleMoveDamage` detail, stated as a scenario: an
-/// overkill hit drains half of what the target *had*, not half of the
-/// formula's output.
+/// `drain_amount` on an overkill's *capped* HP: a worked example of the
+/// numbers the `gHpDealt` contract produces. The contract itself — that the
+/// battle really feeds this function the capped value and not the formula's
+/// raw output — is a property of `execute_drain_move`'s wiring, so it is
+/// pinned at the turn level instead
+/// (`turn_engine::move_resolution::an_overkill_absorb_drains_half_the_hp_actually_removed`);
+/// this unit test only documents the arithmetic on the already-capped input.
 #[test]
 fn an_overkill_drain_heals_only_half_the_hp_the_target_had_left() {
     let formula_damage = 999u32;

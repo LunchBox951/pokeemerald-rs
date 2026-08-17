@@ -189,3 +189,77 @@ fn an_overkill_hit_reports_only_the_hp_actually_lost() {
     assert_eq!(battle.enemy().current_hp(), 0);
     assert_eq!(battle.outcome(), Some(BattleOutcome::PlayerWon));
 }
+
+/// The `gHpDealt`-not-`gBattleMoveDamage` contract, pinned through the real
+/// turn (issue #293 review, round 3): an overkill Absorb's `HpDrained`
+/// reports half the HP the target actually lost — the `Cmd_datahpupdate`
+/// cap — never half of the formula's raw output. Swapping
+/// `execute_drain_move`'s `drain_amount(dealt)` to the unclamped formula
+/// damage fails here where the unit tests alone could not catch it.
+#[test]
+fn an_overkill_absorb_drains_half_the_hp_actually_removed() {
+    let dex = Dex::new();
+    // Level-50 Treecko's Absorb against a level-2 Rattata at 5 HP computes
+    // far more than 5 damage; the attacker is missing 10 HP so the heal is
+    // not max-HP-clamped and the drained 2 is fully absorbed.
+    let mut player = max_iv_mon(&dex, 277, 50, vec![MoveId(71)]);
+    let player_max_hp = player.stats().max_hp;
+    player.apply_damage(10);
+    let mut enemy = max_iv_mon(&dex, 19, 2, vec![MoveId(33)]);
+    let enemy_max_hp = enemy.stats().max_hp;
+    enemy.apply_damage(enemy_max_hp - 5);
+
+    let mut rng = SequenceRng::new([0; 64]);
+    let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
+    let events = battle
+        .take_turn(PlayerAction::UseMove(0), &mut rng)
+        .unwrap();
+
+    assert!(
+        events.iter().any(|e| matches!(
+            e,
+            BattleEvent::Hit {
+                by_player: true,
+                damage: 5,
+                ..
+            }
+        )),
+        "the hit reports the 5 HP the target had, not the raw formula: {events:?}"
+    );
+    assert!(
+        events.contains(&BattleEvent::HpDrained {
+            by_player: true,
+            amount: 2,
+        }),
+        "the drain is half of the 5 actually removed (truncating), never \
+         half of the formula output: {events:?}"
+    );
+    assert_eq!(
+        battle.player().current_hp(),
+        player_max_hp - 10 + 2,
+        "the reported heal is the applied heal"
+    );
+    assert_eq!(battle.outcome(), Some(BattleOutcome::PlayerWon));
+
+    // A full-HP attacker: the event still fires (upstream's drain string
+    // still prints) but reports the 0 HP actually gained, not the request.
+    let dex = Dex::new();
+    let player = max_iv_mon(&dex, 277, 50, vec![MoveId(71)]);
+    let player_max_hp = player.stats().max_hp;
+    let mut enemy = max_iv_mon(&dex, 19, 2, vec![MoveId(33)]);
+    let enemy_max_hp = enemy.stats().max_hp;
+    enemy.apply_damage(enemy_max_hp - 5);
+    let mut rng = SequenceRng::new([0; 64]);
+    let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
+    let events = battle
+        .take_turn(PlayerAction::UseMove(0), &mut rng)
+        .unwrap();
+    assert!(
+        events.contains(&BattleEvent::HpDrained {
+            by_player: true,
+            amount: 0,
+        }),
+        "a full-HP drainer gains nothing and the event says so: {events:?}"
+    );
+    assert_eq!(battle.player().current_hp(), player_max_hp);
+}
