@@ -86,8 +86,9 @@
 //! `CB2_InitBattleInternal:684` onward (`battle_main.c:2085`-`:2089`,
 //! gated on `!(LINK | FRONTIER | RECORDED)`, which a first battle passes),
 //! so a real console interleaves a frame-timing-dependent number of extra
-//! draws this headless port deliberately does not model -- see the
-//! `src/battle_main.c#VBlankCB_Battle` ledger entry. `SetWildMonHeldItem`'s
+//! draws this headless port deliberately does not model
+//! (`src/battle_main.c#VBlankCB_Battle` stays pending in the ledger; this
+//! paragraph is the scope decision's record). `SetWildMonHeldItem`'s
 //! `u16 rnd = Random() % 100` (`src/pokemon.c:6682`) is gated only on
 //! `!(gBattleTypeFlags & (LEGENDARY | TRAINER | PYRAMID | PIKE))` — a gate
 //! `BATTLE_TYPE_FIRST_BATTLE` passes, since `CB2_StartFirstBattle` sets that

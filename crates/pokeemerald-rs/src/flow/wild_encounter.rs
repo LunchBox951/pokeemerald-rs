@@ -369,8 +369,9 @@ pub(super) fn map_wild_table_fightable(map: assets::MapId) -> bool {
 /// -- is upstream's own. (Upstream additionally advances the seed once per
 /// vblank through `VBlankCB_Battle`, `battle_main.c:2085`-`:2089`, a
 /// frame-timing-dependent interleaving this headless port deliberately
-/// does not model; see the `src/battle_main.c#VBlankCB_Battle` ledger
-/// entry.) The identical
+/// does not model; `src/battle_main.c#VBlankCB_Battle` stays pending in
+/// the ledger, and [`crate::flow::first_battle`]'s module docs record the
+/// scope decision.) The identical
 /// draw is spent the identical way in [`crate::flow::first_battle`]'s
 /// scripted fight (its own module docs' "RNG stream" section), and the
 /// remaining held-item gap is enumerated as NOT-modelled on the
