@@ -67,33 +67,35 @@
 //! and IVs ([`battle::build_pokemon_with_random_personality`] — *not*
 //! [`battle::build_wild_pokemon`]'s nature-forced path; see that function's
 //! docs for exactly why `CreateMon`'s draw order differs from
-//! `CreateWildMon`'s), then [`battle::Battle::new`]'s turn-number draw (and
-//! its conditional speed-tie draw).
+//! `CreateWildMon`'s), then the discarded `SetWildMonHeldItem` draw, then
+//! [`battle::Battle::new`]'s turn-number draw (and its conditional
+//! speed-tie draw).
 //!
 //! The *order* is upstream's own: `SetUpBattleVarsAndBirchZigzagoon`
-//! (`battle_main.c:684`) runs before `BeginBattleIntro` reaches
-//! `BattleStartClearSetData`'s `gRandomTurnNumber = Random()`
-//! (`battle_main.c:3140`, called from `:3021`) — construction draws first,
-//! the turn-number draw after, exactly as [`start_first_battle`] orders
-//! them.
+//! (`battle_main.c:684`) runs before `CB2_InitBattleInternal` reaches
+//! `SetWildMonHeldItem` (`battle_main.c:700`), which in turn runs before
+//! `BeginBattleIntro` reaches `BattleStartClearSetData`'s
+//! `gRandomTurnNumber = Random()` (`battle_main.c:3140`, called from
+//! `:3021`) — construction draws first, the held-item draw next, the
+//! turn-number draw last, exactly as [`start_first_battle`] orders them.
 //!
-//! The *count* is one short of upstream's, and knowingly so.
-//! `CB2_InitBattleInternal` interposes `SetWildMonHeldItem`
-//! (`battle_main.c:700`) between those two, and its `u16 rnd = Random() %
-//! 100` (`src/pokemon.c:6682`) is gated only on `!(gBattleTypeFlags &
-//! (LEGENDARY | TRAINER | PYRAMID | PIKE))` — a gate
+//! The *count* now matches upstream's: six primitive draws reach turn one
+//! (personality 2 + IVs 2 + held item 1 + turn number 1). `SetWildMonHeldItem`'s
+//! `u16 rnd = Random() % 100` (`src/pokemon.c:6682`) is gated only on
+//! `!(gBattleTypeFlags & (LEGENDARY | TRAINER | PYRAMID | PIKE))` — a gate
 //! `BATTLE_TYPE_FIRST_BATTLE` passes, since `CB2_StartFirstBattle` sets that
-//! flag *alone* (`src/battle_setup.c:937`). Upstream therefore spends six
-//! draws reaching turn one (personality 2 + IVs 2 + held item 1 + turn
-//! number 1) where this port spends five. Held items are unmodelled here
-//! outright — [`battle::BattlePokemon`] has no such field, so there is no
-//! value for that draw to produce — and the gap is neither new to this
-//! battle type nor this slice's to close: an ordinary wild encounter skips
-//! exactly the same draw, `DoStandardWildBattle` setting `gBattleTypeFlags =
-//! 0` (`src/battle_setup.c:408`) so the same gate passes there too (see
-//! [`crate::flow::wild_encounter::start_wild_battle`]). It is enumerated as
-//! NOT-modelled on the `src/battle_setup.c#CB2_StartFirstBattle` ledger
-//! entry rather than papered over.
+//! flag *alone* (`src/battle_setup.c:937`), so upstream draws it here.
+//! [`start_first_battle`] spends the identical draw and discards it: held
+//! items are still unmodelled outright — [`battle::BattlePokemon`] has no
+//! such field, so there is no value for that draw to produce — but its
+//! shared-stream cost is no longer silently skipped. The same discarded draw
+//! sits at the identical point of an ordinary wild encounter, since
+//! `DoStandardWildBattle` sets `gBattleTypeFlags = 0`
+//! (`src/battle_setup.c:408`) so the same gate passes there too (see
+//! [`crate::flow::wild_encounter::start_wild_battle`]). Held-item selection
+//! and storage remain enumerated as NOT-modelled on the
+//! `src/battle_setup.c#CB2_StartFirstBattle` ledger entry rather than
+//! papered over.
 
 use battle::{Battle, BattleError, BattleOutcome, BattlePokemon, Dex, PlayerAction, StatStages};
 use engine::rng::Rng;
@@ -114,12 +116,13 @@ pub const FIRST_BATTLE_OPPONENT_LEVEL: u8 = 2;
 /// true`.
 ///
 /// Draws in upstream's order off the shared stream (module docs, "RNG
-/// stream"): the enemy's personality and IVs, then `Battle::new`'s
-/// `gRandomTurnNumber` (and its conditional speed-tie draw). The moveset
-/// comes from [`battle::initial_moveset`] — `GiveBoxMonInitialMoveset`,
-/// which draws nothing — so a level-2 Zigzagoon really knows Tackle and
-/// Growl (`crates/battle/tests/turn_engine/first_battle.rs`'s module doc
-/// has the full learnset derivation).
+/// stream"): the enemy's personality and IVs, then the discarded
+/// `SetWildMonHeldItem` draw, then `Battle::new`'s `gRandomTurnNumber` (and
+/// its conditional speed-tie draw). The moveset comes from
+/// [`battle::initial_moveset`] — `GiveBoxMonInitialMoveset`, which draws
+/// nothing — so a level-2 Zigzagoon really knows Tackle and Growl
+/// (`crates/battle/tests/turn_engine/first_battle.rs`'s module doc has the
+/// full learnset derivation).
 ///
 /// # Errors
 ///
@@ -142,6 +145,9 @@ pub fn start_first_battle(
         moves,
         &mut SharedRng::new(rng),
     )?;
+    // `SetWildMonHeldItem` consumes `Random() % 100` here upstream. Held-item
+    // selection is not represented yet, but its shared-stream draw still is.
+    let _ = rng.next_u16() % 100;
     Battle::new(dex, player_lead, opponent, true, &mut SharedRng::new(rng))
 }
 

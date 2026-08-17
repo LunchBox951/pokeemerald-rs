@@ -91,7 +91,7 @@ fn play_first_battle_to_conclusion(phase: &mut OverworldPhase) {
 /// whose max HP a level-2 Zigzagoon's Tackle can overkill in one hit from
 /// above the `AI_FirstBattle` flee threshold -- see
 /// `crate::flow::wild_encounter::tests::a_lost_route_101_first_battle_heals_the_lead_instead_of_leaving_it_fainted`'s
-/// own doc comment for the full derivation of why seed `2` reliably
+/// own doc comment for the full derivation of why seed `1` reliably
 /// produces [`BattleOutcome::PlayerLost`] with this exact lead.
 fn fragile_treecko_lead() -> BattlePokemon {
     let ivs = Ivs {
@@ -159,7 +159,7 @@ fn conclude_first_battle_writes_all_three_vars_on_both_outcomes() {
             new_game::provisional_starter(),
             BattleOutcome::PlayerWon,
         ),
-        (2, fragile_treecko_lead(), BattleOutcome::PlayerLost),
+        (1, fragile_treecko_lead(), BattleOutcome::PlayerLost),
     ] {
         let (tx, ty) = ROUTE_101_TRIGGER_TILE;
         let mut phase = route_101_trigger_phase(PlayerState::new(
@@ -226,7 +226,7 @@ fn conclude_first_battle_writes_the_object_event_flags_on_both_outcomes() {
             new_game::provisional_starter(),
             BattleOutcome::PlayerWon,
         ),
-        (2, fragile_treecko_lead(), BattleOutcome::PlayerLost),
+        (1, fragile_treecko_lead(), BattleOutcome::PlayerLost),
     ] {
         let (tx, ty) = ROUTE_101_TRIGGER_TILE;
         let mut phase = route_101_trigger_phase(PlayerState::new(
@@ -301,7 +301,7 @@ fn conclude_first_battle_never_halves_money_even_on_a_loss() {
         ROUTE_101_TRIGGER_ELEVATION,
         Direction::East,
     ));
-    phase.rng = Rng::new(2);
+    phase.rng = Rng::new(1);
     phase.party_lead = Some(fragile_treecko_lead());
     phase.save1.money = 2001;
 
@@ -398,7 +398,7 @@ fn real_pack_a_lost_first_battle_still_heals_and_reaches_the_lab() {
         ROUTE_101_TRIGGER_ELEVATION,
         Direction::East,
     ));
-    phase.rng = Rng::new(2);
+    phase.rng = Rng::new(1);
     phase.party_lead = Some(fragile_treecko_lead());
 
     play_first_battle_to_conclusion(&mut phase);
