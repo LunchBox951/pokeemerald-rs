@@ -1001,3 +1001,108 @@ fn a_player_that_faints_to_its_own_poison_after_the_ko_forfeits_the_exp() {
         "the double faint takes the loss (white-out) flow: {events:?}"
     );
 }
+
+/// `BattleScript_MoveUsedIsConfused` prints `STRINGID_PKMNISCONFUSED`
+/// before its `cMULTISTRING_CHOOSER` branch resolves
+/// (`data/battle_scripts_1.s:3796`-`:3799`), so a still-confused battler
+/// announces its confusion on **both** roll outcomes -- ahead of the
+/// self-hit on an even `Random() & 1`, ahead of its own move on an odd
+/// one -- and the announcement itself costs no draw. The snap-out turn
+/// runs `BattleScript_MoveUsedIsConfusedNoMore` instead and must not
+/// announce.
+#[test]
+fn the_is_confused_message_precedes_both_confusion_roll_outcomes() {
+    let dex = Dex::new();
+
+    // Even roll (every draw 0): the self-hit branch.
+    let mut rng = zeros();
+    let mut battle = Battle::new(
+        Dex::new(),
+        max_iv_mon(&dex, TENTACOOL, 30, vec![SUPERSONIC]),
+        max_iv_mon(&dex, MARILL, 5, vec![TACKLE]),
+        false,
+        &mut rng,
+    )
+    .unwrap();
+    let events = battle
+        .take_turn(PlayerAction::UseMove(0), &mut rng)
+        .unwrap();
+    let announced = events
+        .iter()
+        .position(|e| matches!(e, BattleEvent::IsConfused { by_player: false }));
+    let hurt = events.iter().position(|e| {
+        matches!(
+            e,
+            BattleEvent::HurtItselfInConfusion {
+                by_player: false,
+                ..
+            }
+        )
+    });
+    assert!(
+        announced.is_some() && hurt.is_some() && announced < hurt,
+        "the announcement precedes the self-hit: {events:?}"
+    );
+    assert_eq!(
+        rng.draws(),
+        7,
+        "1 (battle start) + turn number, the wild selection, Supersonic's \
+         accuracy and duration draws, the confusion roll and the self-hit's \
+         damage roll -- the announcement adds no draw of its own"
+    );
+
+    // Second turn: the counter hits 0. `MoveUsedIsConfusedNoMore` has no
+    // `STRINGID_PKMNISCONFUSED`, so snapping out must not announce.
+    let events = battle
+        .take_turn(PlayerAction::UseMove(0), &mut rng)
+        .unwrap();
+    assert!(
+        events.contains(&BattleEvent::SnappedOutOfConfusion { by_player: false }),
+        "{events:?}"
+    );
+    assert!(
+        !events
+            .iter()
+            .any(|e| matches!(e, BattleEvent::IsConfused { .. })),
+        "snapping out is not an announcement: {events:?}"
+    );
+
+    // Odd roll (draw index 5, the confusion roll, is 1): the move-goes-
+    // through branch still announces first.
+    let mut vals = [0u16; 256];
+    vals[5] = 1;
+    let mut rng = SequenceRng::new(vals);
+    let mut battle = Battle::new(
+        Dex::new(),
+        max_iv_mon(&dex, TENTACOOL, 30, vec![SUPERSONIC]),
+        max_iv_mon(&dex, MARILL, 5, vec![TACKLE]),
+        false,
+        &mut rng,
+    )
+    .unwrap();
+    let events = battle
+        .take_turn(PlayerAction::UseMove(0), &mut rng)
+        .unwrap();
+    let announced = events
+        .iter()
+        .position(|e| matches!(e, BattleEvent::IsConfused { by_player: false }));
+    let moved = events.iter().position(|e| {
+        matches!(
+            e,
+            BattleEvent::Hit {
+                by_player: false,
+                ..
+            }
+        )
+    });
+    assert!(
+        announced.is_some() && moved.is_some() && announced < moved,
+        "an odd roll lets the move through, announcement first: {events:?}"
+    );
+    assert!(
+        !events
+            .iter()
+            .any(|e| matches!(e, BattleEvent::HurtItselfInConfusion { .. })),
+        "{events:?}"
+    );
+}

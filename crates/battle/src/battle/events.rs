@@ -119,6 +119,15 @@ pub enum BattleEvent {
         /// (Screech and friends) land two stages down, clamped at
         /// [`crate::StatStage::MIN`].
         new_stage: StatStage,
+        /// The move's requested drop, `1` or `2`
+        /// ([`crate::stat_change::StatChangeEffect::magnitude`]). Upstream
+        /// prefixes `STRINGID_STATHARSHLY` to the message exactly when this
+        /// is `2` (`ChangeStatBuffs`, `battle_script_commands.c:7044`-
+        /// `:7050`) — "harshly fell" versus "fell" — and keys that off the
+        /// *requested* value, so a Screech clamped to one actual stage at
+        /// [`crate::StatStage::MIN`]`+1` still reads harshly. `new_stage`
+        /// alone cannot recover this, so the event carries it.
+        magnitude: u8,
     },
     /// A stat-lowering move connected, but its target's stage for that stat
     /// was already [`crate::StatStage::MIN`] — upstream's distinct
@@ -153,6 +162,14 @@ pub enum BattleEvent {
         stat: ChangedStat,
         /// The user's stage for `stat` after this move.
         new_stage: StatStage,
+        /// The move's requested rise, `1` or `2`
+        /// ([`crate::stat_change::StatChangeEffect::magnitude`]). Upstream
+        /// prefixes `STRINGID_STATSHARPLY` exactly when this is `2`
+        /// (`ChangeStatBuffs`, `battle_script_commands.c:7067`-`:7073`) —
+        /// "sharply rose" versus "rose" — keyed off the requested value even
+        /// when the rise clamps at [`crate::StatStage::MAX`], the mirror of
+        /// [`BattleEvent::StatFell`]'s `magnitude`.
+        magnitude: u8,
     },
     /// A stat-raising move connected, but its user's stage for that stat was
     /// already [`crate::StatStage::MAX`] — upstream's
@@ -282,6 +299,21 @@ pub enum BattleEvent {
         by_player: bool,
         /// HP lost.
         damage: u32,
+    },
+    /// A battler went to move while its `STATUS2_CONFUSION` counter stayed
+    /// nonzero — `STRINGID_PKMNISCONFUSED`, printed by
+    /// `BattleScript_MoveUsedIsConfused` (`data/battle_scripts_1.s:3796`-
+    /// `:3797`) on **both** of `CANCELER_CONFUSED`'s still-confused branches
+    /// (`src/battle_util.c:2160`-`:2178`): the "is confused!" message
+    /// precedes either outcome, so this event always precedes the move's own
+    /// events or the [`BattleEvent::HurtItselfInConfusion`] that follows.
+    ///
+    /// Not a cancellation by itself, and it costs no draw of its own — the
+    /// `Random() & 1` outcome roll is `CANCELER_CONFUSED`'s, not the
+    /// message's.
+    IsConfused {
+        /// Whether it was the player's mon.
+        by_player: bool,
     },
     /// A confused battler hurt itself instead of moving —
     /// `STRINGID_ITHURTCONFUSION`, `CANCELER_CONFUSED`'s self-hit branch

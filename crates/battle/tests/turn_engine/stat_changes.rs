@@ -51,6 +51,7 @@ fn wild_zigzagoon_growl_executes_when_the_rejection_loop_lands_on_it() {
                 move_id: MoveId(45),
                 stat: ChangedStat::Attack,
                 new_stage: StatStage::new(-1).unwrap(),
+                magnitude: 1,
             },
         ]
     );
@@ -210,6 +211,7 @@ fn growl_lowers_the_players_subsequent_tackle_damage() {
                 move_id: MoveId(45),
                 stat: ChangedStat::Attack,
                 new_stage: StatStage::new(-1).unwrap(),
+                magnitude: 1,
             },
             BattleEvent::Hit {
                 by_player: true,
@@ -288,6 +290,7 @@ fn string_shot_flips_turn_order_once_the_targets_effective_speed_drops_below_the
                 move_id: MoveId(81),
                 stat: ChangedStat::Speed,
                 new_stage: StatStage::new(-1).unwrap(),
+                magnitude: 1,
             },
         ],
         "turn 1: Poochyena (faster) moves first"
@@ -327,4 +330,89 @@ fn string_shot_flips_turn_order_once_the_targets_effective_speed_drops_below_the
     assert_eq!(battle.player().current_hp(), 21 - 5 - 5);
     assert_eq!(battle.enemy().current_hp(), 20 - 5);
     assert_eq!(rng.draws(), 18);
+}
+
+/// Upstream keys the "harshly fell" / "sharply rose" prefix off the move's
+/// *requested* magnitude, not the stages actually applied (`ChangeStatBuffs`,
+/// `battle_script_commands.c:7044`-`:7050` and `:7067`-`:7073`), so the
+/// events carry that magnitude: Screech reports `2` even when the drop
+/// clamps to a single stage at the floor, and a Swords-Dance-family raise
+/// reports `2` on the way up.
+#[test]
+fn two_stage_moves_report_their_magnitude_even_when_the_drop_clamps() {
+    const LEER: MoveId = MoveId(43);
+    const SCREECH: MoveId = MoveId(103);
+    const SWORDS_DANCE: MoveId = MoveId(14);
+    let dex = Dex::new();
+
+    // Tentacool L30 out-speeds and out-lasts a L5 Marill for the six turns
+    // this needs; Marill's Tackle chip never decides anything.
+    let player = max_iv_mon(&dex, 72, 30, vec![LEER, SCREECH, SWORDS_DANCE]);
+    let enemy = max_iv_mon(&dex, 183, 5, vec![MoveId(33)]);
+    let mut rng = SequenceRng::new([0u16; 256]);
+    let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
+
+    let fell = |events: &[BattleEvent]| {
+        events
+            .iter()
+            .find_map(|e| match *e {
+                BattleEvent::StatFell {
+                    by_player: true,
+                    move_id,
+                    new_stage,
+                    magnitude,
+                    ..
+                } => Some((move_id, new_stage, magnitude)),
+                _ => None,
+            })
+            .unwrap()
+    };
+
+    // Leer: an ordinary one-stage drop reports magnitude 1.
+    let events = battle
+        .take_turn(PlayerAction::UseMove(0), &mut rng)
+        .unwrap();
+    assert_eq!(
+        fell(&events),
+        (LEER, StatStage::new(-1).unwrap(), 1),
+        "{events:?}"
+    );
+
+    // Screech twice: -1 -> -3 -> -5, magnitude 2 both times.
+    for expected in [-3, -5] {
+        let events = battle
+            .take_turn(PlayerAction::UseMove(1), &mut rng)
+            .unwrap();
+        assert_eq!(
+            fell(&events),
+            (SCREECH, StatStage::new(expected).unwrap(), 2),
+            "{events:?}"
+        );
+    }
+
+    // Screech into -5: only one stage can still land, but upstream reads
+    // the requested value, so the event still says 2.
+    let events = battle
+        .take_turn(PlayerAction::UseMove(1), &mut rng)
+        .unwrap();
+    assert_eq!(
+        fell(&events),
+        (SCREECH, StatStage::MIN, 2),
+        "a clamped Screech still reads harshly: {events:?}"
+    );
+
+    // The raise side mirrors: Swords Dance reports magnitude 2 going up.
+    let events = battle
+        .take_turn(PlayerAction::UseMove(2), &mut rng)
+        .unwrap();
+    assert!(
+        events.contains(&BattleEvent::StatRose {
+            by_player: true,
+            move_id: SWORDS_DANCE,
+            stat: ChangedStat::Attack,
+            new_stage: StatStage::new(2).unwrap(),
+            magnitude: 2,
+        }),
+        "{events:?}"
+    );
 }

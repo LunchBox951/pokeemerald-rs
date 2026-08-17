@@ -1293,13 +1293,22 @@ impl Battle {
             // unconditionally (`:2159`), so the roll below is only reached
             // while turns remain.
             let still_confused = self.battler_mut(is_player).volatiles_mut().tick_confusion();
-            if !still_confused {
+            if still_confused {
+                // `BattleScript_MoveUsedIsConfused` prints "is confused!"
+                // before either branch resolves (`data/battle_scripts_1.s:
+                // 3796`-`:3799`), so the event lands ahead of the roll's
+                // outcome — the move's own events or the self-hit.
+                events.push(BattleEvent::IsConfused {
+                    by_player: is_player,
+                });
+                if crate::volatile::confusion_self_hit_roll(rng) {
+                    self.hurt_itself_in_confusion(is_player, events, rng);
+                    return true;
+                }
+            } else {
                 events.push(BattleEvent::SnappedOutOfConfusion {
                     by_player: is_player,
                 });
-            } else if crate::volatile::confusion_self_hit_roll(rng) {
-                self.hurt_itself_in_confusion(is_player, events, rng);
-                return true;
             }
         }
         if crate::status::full_paralysis_roll(self.battler(is_player).status(), rng) {

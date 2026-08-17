@@ -296,6 +296,7 @@ fn wild_flees_after_the_players_move_already_resolved() {
                 move_id: GROWL,
                 stat: ChangedStat::Attack,
                 new_stage: battle::StatStage::new(-1).unwrap(),
+                magnitude: 1,
             },
             BattleEvent::WildFled,
             BattleEvent::Ended(BattleOutcome::WildFled),

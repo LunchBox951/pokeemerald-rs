@@ -142,6 +142,7 @@ impl Battle {
                         move_id,
                         stat,
                         new_stage,
+                        magnitude: DEFENSE_CURL_STAT_CHANGE.magnitude,
                     }
                 });
             }
@@ -543,6 +544,7 @@ impl Battle {
                 move_id,
                 stat: change.stat,
                 new_stage,
+                magnitude: change.magnitude,
             });
         }
     }
@@ -764,6 +766,7 @@ impl Battle {
                         move_id,
                         stat,
                         new_stage,
+                        magnitude: change.magnitude,
                     },
                     (StatChangeDirection::Lower, true) => BattleEvent::StatWontGoLower {
                         by_player: attacker_is_player,
@@ -775,6 +778,7 @@ impl Battle {
                         move_id,
                         stat,
                         new_stage,
+                        magnitude: change.magnitude,
                     },
                     (StatChangeDirection::Raise, true) => BattleEvent::StatWontGoHigher {
                         by_player: attacker_is_player,

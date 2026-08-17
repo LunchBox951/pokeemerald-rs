@@ -404,6 +404,7 @@ fn a_real_starter_moveset_can_fight_with_its_damaging_move() {
                 move_id: MoveId(43),
                 stat: ChangedStat::Defense,
                 new_stage: StatStage::new(-1).unwrap(),
+                magnitude: 1,
             },
             BattleEvent::Hit {
                 by_player: false,
