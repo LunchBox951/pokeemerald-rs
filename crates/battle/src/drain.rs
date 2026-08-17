@@ -1,19 +1,16 @@
 //! Draining moves (S-6, issue #293): `BattleScript_EffectAbsorb` —
 //! `EFFECT_ABSORB`, carried by Absorb, Mega Drain and Giga Drain.
 //!
-//! ```text
-//! BattleScript_EffectAbsorb::                      @ data/battle_scripts_1.s:323
-//!     attackcanceler
-//!     accuracycheck BattleScript_PrintMoveMissed, ACC_CURR_MOVE
-//!     attackstring / ppreduce
-//!     critcalc / damagecalc / typecalc / adjustnormaldamage
-//!     ... animation, healthbarupdate BS_TARGET, datahpupdate BS_TARGET ...
-//!     negativedamage                               @ :343  -- the drain
-//!     jumpifability BS_TARGET, ABILITY_LIQUID_OOZE, BattleScript_AbsorbLiquidOoze
-//!     ... healthbarupdate BS_ATTACKER / datahpupdate BS_ATTACKER ...
-//!     tryfaintmon BS_ATTACKER / tryfaintmon BS_TARGET
-//!     goto BattleScript_MoveEnd
-//! ```
+//! `BattleScript_EffectAbsorb` (`data/battle_scripts_1.s:323`-`:360`)
+//! opens exactly like the plain hit script — attack canceler, accuracy
+//! check (a miss prints the ordinary missed string and ends the move),
+//! attack string and PP deduction, then the crit/damage/type/damage-roll
+//! chain — and applies the hit to the target. Only then does it diverge:
+//! the drain step (`negativedamage`, `:343`) converts the HP dealt into a
+//! negative "damage" aimed back at the attacker, a Liquid Ooze ability
+//! check can flip that heal into harm, the attacker's own HP update
+//! applies it, both sides get a faint check (attacker first), and the
+//! script jumps straight to the move end.
 //!
 //! # The one draw that is *missing*
 //!
@@ -36,15 +33,10 @@
 //!
 //! # The drain amount
 //!
-//! `Cmd_negativedamage` (`src/battle_script_commands.c:6925`-`:6932`):
-//!
-//! ```text
-//! gBattleMoveDamage = -(gHpDealt / 2);
-//! if (gBattleMoveDamage == 0)
-//!     gBattleMoveDamage = -1;
-//! ```
-//!
-//! Two details a "half the damage" reimplementation gets wrong:
+//! `Cmd_negativedamage` (`src/battle_script_commands.c:6925`-`:6932`)
+//! stores half the HP dealt, negated, as the new damage word, then floors
+//! a zero result to a 1-HP heal. Two details a "half the damage"
+//! reimplementation gets wrong:
 //!
 //! 1. It halves **`gHpDealt`, not `gBattleMoveDamage`** — the HP the target
 //!    *actually* lost, which `Cmd_datahpupdate` already clamped to its

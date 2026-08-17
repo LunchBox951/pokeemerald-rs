@@ -6,15 +6,10 @@
 //! Two so far — `EFFECT_POISON_HIT` (Poison Sting) and
 //! `EFFECT_SPEED_DOWN_HIT` (Constrict). Each is two lines of script:
 //!
-//! ```text
-//! BattleScript_EffectPoisonHit::                   @ data/battle_scripts_1.s:319
-//!     setmoveeffect MOVE_EFFECT_POISON
-//!     goto BattleScript_EffectHit
-//!
-//! BattleScript_EffectSpeedDownHit::                @ :1048
-//!     setmoveeffect MOVE_EFFECT_SPD_MINUS_1
-//!     goto BattleScript_EffectHit
-//! ```
+//! `BattleScript_EffectPoisonHit` (`data/battle_scripts_1.s:319`-`:321`)
+//! sets the poison move-effect byte and jumps into the plain hit script;
+//! `BattleScript_EffectSpeedDownHit` (`:1048`-`:1050`) does the same with
+//! the one-stage speed drop.
 //!
 //! So the damage half is [`crate::hit::resolve_hit`]'s, unchanged and
 //! undamaged — same accuracy roll, same crit roll, same damage roll. What
@@ -22,15 +17,14 @@
 //!
 //! # The draw that stops being discarded
 //!
-//! `Cmd_seteffectwithchance` (`src/battle_script_commands.c:2908`-`:2939`):
+//! `Cmd_seteffectwithchance`'s deciding condition
+//! (`src/battle_script_commands.c:2908`-`:2939`) tests three things joined
+//! by short-circuit ANDs, with the `Random() % 100` roll against
+//! `percentChance` as the **first** operand (`:2923`) — so the draw is
+//! spent before the effect byte or the type-immunity flag is consulted,
+//! on every landed hit.
 //!
-//! ```text
-//! else if (Random() % 100 < percentChance          // :2923  <-- always drawn
-//!          && gBattleCommunication[MOVE_EFFECT_BYTE]
-//!          && !(gMoveResultFlags & MOVE_RESULT_NO_EFFECT))
-//! ```
-//!
-//! For a plain `EFFECT_HIT` move `MOVE_EFFECT_BYTE` is `0`, so the draw
+//! For a plain `EFFECT_HIT` move the effect byte is `0`, so the draw
 //! happens and the chain fails — [`crate::hit`]'s step 7, one wasted value.
 //! For these two the `setmoveeffect` has written a real byte, so the roll
 //! *lands* whenever it comes up under `percentChance` (`30` for Poison
