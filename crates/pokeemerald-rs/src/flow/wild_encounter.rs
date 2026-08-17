@@ -128,6 +128,7 @@
 
 use battle::{
     Battle, BattleError, BattleOutcome, BattlePokemon, BattleRng, Dex, PlayerAction, StatStages,
+    Volatiles,
 };
 use engine::overworld::warp::WarpTrigger;
 use engine::overworld::wild_encounter::{WildEncounter, WildEncounterState};
@@ -469,8 +470,10 @@ pub(super) fn advance_wild_battle(
     let mut mon = battle.player().clone();
     // Stat stages are battle-local upstream (`gBattleMons[].statStages`;
     // the party struct has no such field), so they never survive into the
-    // overworld copy.
+    // overworld copy. Neither do the `status2`/`gStatuses3` volatiles
+    // (issue #293 review) -- `status1` alone is party-record state.
     *mon.stages_mut() = StatStages::default();
+    *mon.volatiles_mut() = Volatiles::default();
     *lead = Some(mon);
     *slot = None;
     outcome

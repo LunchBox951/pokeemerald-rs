@@ -178,10 +178,33 @@ pub enum BattleEvent {
         move_id: MoveId,
     },
     /// A move that reached `BattleScript_ButItFailed` — "But it failed!".
-    /// Reachable this slice only from Focus Energy used while
-    /// `STATUS2_FOCUS_ENERGY` is already set
-    /// (`data/battle_scripts_1.s:889`).
+    /// Reachable from Focus Energy used while `STATUS2_FOCUS_ENERGY` is
+    /// already set (`data/battle_scripts_1.s:889`), and from every one of
+    /// [`crate::primary_status`]'s `ButItFailed` branches — the failed
+    /// accuracy check included, since both of those scripts' `accuracycheck`
+    /// jumps here rather than to `BattleScript_PrintMoveMissed`.
     MoveFailed {
+        /// Whether the player's mon was the one using the move.
+        by_player: bool,
+        /// The move that was used.
+        move_id: MoveId,
+    },
+    /// A paralysing move connected, but its target was already paralysed —
+    /// upstream's distinct `STRINGID_PKMNISALREADYPARALYZED`
+    /// (`BattleScript_AlreadyParalyzed`, `data/battle_scripts_1.s:1027`-
+    /// `:1030`), kept apart from [`BattleEvent::MoveFailed`] the same way
+    /// [`BattleEvent::StatWontGoLower`] is kept apart from a plain failure.
+    /// Costs no draw ([`crate::primary_status::PrimaryStatusOutcome`]).
+    AlreadyParalysed {
+        /// Whether the player's mon was the one using the move.
+        by_player: bool,
+        /// The move that was used.
+        move_id: MoveId,
+    },
+    /// A confusing move connected, but its target was already confused —
+    /// `STRINGID_PKMNALREADYCONFUSED` (`BattleScript_AlreadyConfused`,
+    /// `data/battle_scripts_1.s:920`-`:923`). Costs no draw.
+    AlreadyConfused {
         /// Whether the player's mon was the one using the move.
         by_player: bool,
         /// The move that was used.
@@ -213,14 +236,18 @@ pub enum BattleEvent {
     /// (`src/battle_script_commands.c:6927`-`:6930`).
     ///
     /// Always immediately after the [`BattleEvent::Hit`] it drained from,
-    /// and **already applied** to the user (clamped to its max HP), the same
-    /// division of labour [`BattleEvent::ExpGained`] follows. The amount is
-    /// half the HP the target *actually* lost, not half the formula's raw
-    /// output — see [`crate::drain::drain_amount`].
+    /// and **already applied** to the user, the same division of labour
+    /// [`BattleEvent::ExpGained`] follows. `amount` is the HP the user
+    /// **actually gained**: half the HP the target really lost
+    /// ([`crate::drain::drain_amount`]), further clamped by the user's own
+    /// max HP — a user missing 1 HP that drains 10 reports 1, and a
+    /// full-HP user reports 0 (the event still fires, as upstream's drain
+    /// string still prints) — so a presentation layer replaying events
+    /// reconstructs the same HP the battle state holds (issue #293 review).
     HpDrained {
         /// Whether the player's mon was the one draining.
         by_player: bool,
-        /// HP restored to the user.
+        /// HP actually restored to the user, clamps included.
         amount: u32,
     },
     /// A multi-hit move (`EFFECT_MULTI_HIT` — Double Slap, Arm Thrust, …)

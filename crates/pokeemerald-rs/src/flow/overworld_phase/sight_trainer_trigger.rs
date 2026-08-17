@@ -278,6 +278,7 @@ fn find_sight_trainer<'a>(
     runtime: &MapRuntime<'a>,
     player: &PlayerState,
     event_data: &EventData,
+    errored: &[TrainerId],
 ) -> SightScan<'a> {
     let mut scan = SightScan::default();
     for event in runtime.events().object_events {
@@ -288,6 +289,13 @@ fn find_sight_trainer<'a>(
             continue;
         };
         if already_defeated(trainer_id, event_data) {
+            continue;
+        }
+        // A battle against this trainer already started and died without an
+        // outcome this session (`OverworldPhase::sight_trainers_errored`'s
+        // own docs): skipped like a defeated trainer, because re-engaging
+        // re-spends the party-construction draws every frame.
+        if errored.contains(&trainer_id) {
             continue;
         }
         if !trainer_can_see_player(event, runtime, player, event_data) {
@@ -377,7 +385,12 @@ impl OverworldPhase {
             return false;
         };
         let runtime = self.scene.runtime(self.map_id, header, events);
-        let scan = find_sight_trainer(&runtime, &self.player, &self.save1.event_data);
+        let scan = find_sight_trainer(
+            &runtime,
+            &self.player,
+            &self.save1.event_data,
+            &self.sight_trainers_errored,
+        );
         if !scan.any_cone_reached {
             self.sight_trainer_log.left_every_cone();
             return false;
@@ -458,11 +471,36 @@ impl OverworldPhase {
         if self.sight_trainer_battle.is_none() {
             return false;
         }
-        if let Some(outcome) = npc_trainer_battle::advance_npc_trainer_battle(
+        let outcome = npc_trainer_battle::advance_npc_trainer_battle(
             &mut self.sight_trainer_battle,
             &mut self.party_lead,
             &mut self.rng,
-        ) {
+        );
+        // `advance_npc_trainer_battle`'s `None` is documented as ambiguous:
+        // "ongoing" and "a failed turn ended the battle" look the same, and
+        // callers must inspect the slot to tell them apart (issue #293
+        // review). Treating the failed-turn case as ongoing here would
+        // leave the cone active with no battle: the next frame re-triggers,
+        // rebuilds the party, and fails again -- an RNG-draining restart
+        // loop the player cannot walk out of mid-frame. Terminal instead:
+        // disengage and remember the trainer as unfightable this session
+        // (`Self::sight_trainers_errored`). No defeated flag -- the fight
+        // never resolved -- and no white-out: the lead is written back
+        // standing, exactly as `advance_npc_trainer_battle` left it.
+        if outcome.is_none() {
+            if self.sight_trainer_battle.is_none() {
+                if let Some(trainer_id) = self.sight_trainer_id.take() {
+                    eprintln!(
+                        "sight trainer: the battle against trainer {trainer_id:?} ended \
+                         without an outcome (a turn failed) -- disengaging, and skipping \
+                         this trainer's cone for the rest of the session"
+                    );
+                    self.sight_trainers_errored.push(trainer_id);
+                }
+            }
+            return true;
+        }
+        if let Some(outcome) = outcome {
             eprintln!("sight trainer: ended -- {outcome:?}");
             self.sight_trainer_battle_outcome = Some(outcome);
             if outcome == battle::BattleOutcome::PlayerWon {
@@ -640,7 +678,7 @@ mod tests {
         let player = PlayerState::new((67, 6), 3, engine::overworld::Direction::North);
 
         let event_data = EventData::new();
-        let scan = find_sight_trainer(&runtime, &player, &event_data);
+        let scan = find_sight_trainer(&runtime, &player, &event_data, &[]);
         let (_, trainer_id) = scan
             .selected
             .expect("Rhett's own south-facing cone must reach a player one tile south of him");
@@ -651,7 +689,7 @@ mod tests {
         defeated
             .flag_set(TRAINER_FLAGS_START + 703)
             .expect("TRAINER_FLAGS_START + 703 is an ordinary ranged flag id");
-        let scan = find_sight_trainer(&runtime, &player, &defeated);
+        let scan = find_sight_trainer(&runtime, &player, &defeated, &[]);
         assert!(
             scan.selected.is_none(),
             "an already-defeated trainer must not be selected even though the geometry \
@@ -681,7 +719,7 @@ mod tests {
         let runtime = scene.runtime(map_id, header, events);
         let player = PlayerState::new((64, 13), 3, engine::overworld::Direction::North);
 
-        let scan = find_sight_trainer(&runtime, &player, &EventData::new());
+        let scan = find_sight_trainer(&runtime, &player, &EventData::new(), &[]);
         assert_eq!(
             scan.doubles_refused,
             vec![TrainerId(481)],

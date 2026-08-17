@@ -198,8 +198,8 @@ impl Volatiles {
 /// visible if one of them is ever changed upstream.
 #[must_use]
 pub fn roll_confusion_turns(rng: &mut impl crate::damage::BattleRng) -> u8 {
-    // `% 4` leaves 0..=3, so the sum is 2..=5 and the narrowing is exact.
-    #[allow(clippy::cast_possible_truncation)]
+    // No truncation suppression needed: `% 4` leaves 0..=3, so the sum is
+    // 2..=5 and clippy can see the narrowing is exact.
     let turns = (rng.next_u16() % 4) as u8;
     turns + 2
 }

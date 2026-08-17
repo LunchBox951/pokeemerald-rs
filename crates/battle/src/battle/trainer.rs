@@ -191,14 +191,17 @@ pub fn roll_non_shiny_ot_id(personality: u32, rng: &mut impl BattleRng) -> u32 {
 /// species/level/moveset — checked **before the first draw**, so a rejected
 /// request leaves the shared stream exactly as it found it, the same rule
 /// [`crate::wild::build_wild_pokemon`] follows.
-// Eight parameters because upstream's own call is eight-wide: `CreateMon(mon,
-// species, level, fixedIV, hasFixedPersonality, personality, otIdType,
-// fixedOtId)` (`src/pokemon.c:2196`), of which this reproduces six, plus the
-// `dex` this crate threads instead of globals and the `SetMonData(
-// MON_DATA_HELD_ITEM)` write that follows on two of the four party shapes.
-// The arity is inherent to the upstream record `(behavioral-fidelity)`, the
-// same convention `assets`' own `battle_moves::m` row constructor records.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "upstream's own call is eight-wide: `CreateMon(mon, species, level, \
+              fixedIV, hasFixedPersonality, personality, otIdType, fixedOtId)` \
+              (`src/pokemon.c:2196`), of which this reproduces six, plus the `dex` \
+              this crate threads instead of globals and the \
+              `SetMonData(MON_DATA_HELD_ITEM)` write that follows on two of the four \
+              party shapes -- the arity is inherent to the upstream record \
+              `(behavioral-fidelity)`, the same convention `assets`' own \
+              `battle_moves::m` row constructor records"
+)]
 pub fn build_trainer_pokemon(
     dex: &Dex,
     species: SpeciesId,
@@ -629,7 +632,11 @@ pub fn ensure_trainer_party_startable(
         BattlePokemon::validate(dex, mon.species, mon.level, mon.moves)?;
     }
     super::trainer_ai::ensure_supported_flags(data.ai_flags)?;
-    super::trainer_ai::ensure_deterministic_target_ability(dex, player_lead.species())?;
+    super::trainer_ai::ensure_deterministic_target_ability(
+        dex,
+        player_lead.species(),
+        data.ai_flags,
+    )?;
     if player_lead.is_fainted() {
         return Err(BattleError::FaintedBattler(true));
     }

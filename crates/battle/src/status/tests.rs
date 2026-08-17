@@ -190,4 +190,16 @@ fn effective_speed_applies_the_stage_before_the_paralysis_quarter() {
         staged / 4,
         "the stage is applied first, then the quarter -- both truncating"
     );
+
+    // Voltorb's own numbers happen to agree under either order (39 -> 6
+    // both ways), so pin the module docs' discriminating case directly: a
+    // raw Speed of 30 at -1 stage is 30*2/3 = 20, then /4 = 5, where
+    // quartering first is 30/4 = 7, then *2/3 = 4 -- the two orders differ.
+    assert_eq!(paralysis_speed(30 * 2 / 3), 5, "stage first, then quarter");
+    assert_eq!(
+        paralysis_speed(30) * 2 / 3,
+        4,
+        "the reversed order gives a different number, so a swapped \
+         implementation cannot pass"
+    );
 }

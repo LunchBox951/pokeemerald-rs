@@ -117,13 +117,15 @@ fn a_thunder_wave_that_cannot_land_never_reaches_the_accuracy_roll() {
     );
     assert_eq!(rng.draws(), 0, "the type immunity is found before the roll");
 
-    // An already-paralysed target: `jumpifstatus BS_TARGET, STATUS1_PARALYSIS`.
+    // An already-paralysed target: `jumpifstatus BS_TARGET, STATUS1_PARALYSIS`,
+    // whose own distinct `BattleScript_AlreadyParalyzed` string is its own
+    // distinct outcome (issue #293 review).
     let mut paralysed = mon(&dex, 183);
     paralysed.set_status(Status1::Paralysed);
     let mut rng = empty();
     assert_eq!(
         resolve_primary_status_move(&dex, THUNDER_WAVE, &attacker, &paralysed, &mut rng).unwrap(),
-        PrimaryStatusOutcome::Failed
+        PrimaryStatusOutcome::AlreadyParalysed
     );
     assert_eq!(rng.draws(), 0);
 
@@ -216,7 +218,9 @@ fn an_already_confused_target_fails_supersonic_before_the_accuracy_roll() {
     let mut rng = SequenceRng::new([]);
     assert_eq!(
         resolve_primary_status_move(&dex, SUPERSONIC, &attacker, &defender, &mut rng).unwrap(),
-        PrimaryStatusOutcome::Failed
+        PrimaryStatusOutcome::AlreadyConfused,
+        "`BattleScript_AlreadyConfused` is its own distinct string, so its \
+         own distinct outcome (issue #293 review)"
     );
     assert_eq!(rng.draws(), 0);
 }

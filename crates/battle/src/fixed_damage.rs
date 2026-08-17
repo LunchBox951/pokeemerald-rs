@@ -1,22 +1,15 @@
 //! Fixed-damage moves (S-6, issue #293): `BattleScript_EffectSonicboom` and
 //! its byte-identical twin `BattleScript_EffectDragonrage`.
 //!
-//! ```text
-//! BattleScript_EffectSonicboom::                   @ data/battle_scripts_1.s:1720
-//!     attackcanceler
-//!     accuracycheck BattleScript_PrintMoveMissed, ACC_CURR_MOVE
-//!     attackstring
-//!     ppreduce
-//!     typecalc
-//!     bicbyte gMoveResultFlags, MOVE_RESULT_SUPER_EFFECTIVE | MOVE_RESULT_NOT_VERY_EFFECTIVE
-//!     setword gBattleMoveDamage, 20
-//!     adjustsetdamage
-//!     goto BattleScript_HitFromAtkAnimation
-//! ```
-//!
-//! `BattleScript_EffectDragonrage` (`:819`-`:828`) differs in exactly one
-//! byte: `setword gBattleMoveDamage, 40`. Both are transcribed in
-//! [`FIXED_DAMAGE_EFFECTS`].
+//! `BattleScript_EffectSonicboom` (`data/battle_scripts_1.s:1720`-`:1729`)
+//! runs, in order: the attack canceler, the accuracy check (a miss prints
+//! the ordinary missed string and ends the move), the attack string and PP
+//! deduction, `typecalc`, a mask that clears the super-/not-very-effective
+//! result bits, a literal store of `20` into the damage word, the
+//! roll-free damage adjustment (`adjustsetdamage`), and a jump into the
+//! plain hit script's animation tail. `BattleScript_EffectDragonrage`
+//! (`:819`-`:828`) differs in exactly one byte — its literal is `40`. Both
+//! literals are recorded in [`FIXED_DAMAGE_EFFECTS`].
 //!
 //! # Four things this script does *not* do
 //!

@@ -610,19 +610,24 @@ impl BattlePokemon {
     /// `gBattleMoveDamage < 0` branch, whose `if (hp > maxHP) hp = maxHP`
     /// clamp this reproduces).
     ///
+    /// Returns the HP actually gained — `0` for a full-HP or fainted mon,
+    /// and less than `amount` when the clamp bit — so an event reporting
+    /// the heal can carry the real delta rather than the request (issue
+    /// #293 review; the same "what actually happened" contract
+    /// [`crate::battle::BattleEvent::Hit`]'s `damage` keeps).
+    ///
     /// A fainted mon is **not** revived: upstream's negative-damage branch
     /// is only ever reached from a script whose user is still standing
     /// (`crate::drain`'s `BattleScript_EffectAbsorb`, `Cmd_negativedamage`),
     /// and healing a `0`-HP battler back onto the field has no upstream
     /// counterpart at all.
-    pub fn restore_hp(&mut self, amount: u32) {
+    pub fn restore_hp(&mut self, amount: u32) -> u32 {
         if self.current_hp == 0 {
-            return;
+            return 0;
         }
-        self.current_hp = self
-            .current_hp
-            .saturating_add(amount)
-            .min(self.stats.max_hp);
+        let before = self.current_hp;
+        self.current_hp = before.saturating_add(amount).min(self.stats.max_hp);
+        self.current_hp - before
     }
 
     /// Add earned experience, applying every crossed level threshold and
@@ -878,10 +883,11 @@ impl BattlePokemon {
     /// are out of this crate's scope, so "base value" and "healed value"
     /// coincide here).
     ///
-    /// Upstream's third effect — zeroing `MON_DATA_STATUS` — has no
-    /// counterpart to run: this crate models no non-volatile status
-    /// conditions at all (module docs), so there is nothing left to clear.
-    /// The owned type this method lives on, not a free function, so a
+    /// Upstream's third effect — zeroing `MON_DATA_STATUS` — is reproduced
+    /// too, since issue #293 made [`crate::status::Status1`] real state on
+    /// this type: a mon that whited out poisoned or paralysed comes back
+    /// [`crate::status::Status1::Healthy`], not quarter-Speed into its next
+    /// fight. The owned type this method lives on, not a free function, so a
     /// future multi-slot party (this crate's module docs already flag the
     /// one-mon-party limit) only has to call it once per member.
     ///
@@ -895,6 +901,9 @@ impl BattlePokemon {
     /// `expect` in case a future change to either ever desyncs them.
     pub fn heal(&mut self, dex: &Dex) -> Result<(), BattleError> {
         self.current_hp = self.stats.max_hp;
+        // `HealPlayerParty`'s `SetMonData(MON_DATA_STATUS, &zero)`
+        // (`src/script_pokemon_util.c:52`-`:57`).
+        self.status = crate::status::Status1::Healthy;
         for slot in &mut self.moves {
             slot.pp = dex.move_data(slot.move_id)?.pp;
         }
@@ -1264,6 +1273,37 @@ mod tests {
         let before = mon.clone();
         mon.heal(&dex).unwrap();
         assert_eq!(mon, before);
+    }
+
+    /// `HealPlayerParty`'s third effect -- `SetMonData(MON_DATA_STATUS,
+    /// &zero)` (`src/script_pokemon_util.c:52`-`:57`) -- became reachable
+    /// when issue #293 made `status1` real state: a whited-out mon must not
+    /// carry its paralysis (and the Speed quarter that comes with it) into
+    /// the next battle (issue #293 review).
+    #[test]
+    fn heal_clears_the_non_volatile_status() {
+        let dex = Dex::new();
+        let mut mon = sample_mon(&dex);
+        mon.set_status(crate::status::Status1::Paralysed);
+        mon.heal(&dex).unwrap();
+        assert_eq!(mon.status(), crate::status::Status1::Healthy);
+    }
+
+    /// `restore_hp` reports the HP actually gained, clamps included (issue
+    /// #293 review): the drain pipeline's `HpDrained` event carries this
+    /// return value, so a heal that was clamped must not claim its
+    /// unclamped request.
+    #[test]
+    fn restore_hp_returns_the_actual_delta() {
+        let dex = Dex::new();
+        let mut mon = sample_mon(&dex);
+        assert_eq!(mon.restore_hp(10), 0, "already at full HP");
+        mon.apply_damage(1);
+        assert_eq!(mon.restore_hp(10), 1, "clamped to the missing 1 HP");
+        assert_eq!(mon.current_hp(), mon.stats().max_hp);
+        let max_hp = mon.stats().max_hp;
+        mon.apply_damage(max_hp);
+        assert_eq!(mon.restore_hp(10), 0, "a fainted mon is not revived");
     }
 
     #[test]

@@ -347,6 +347,17 @@ pub(crate) struct OverworldPhase {
     /// decides, only how often it says so, on a check that reruns every
     /// frame with no button gate.
     sight_trainer_log: sight_trainer_trigger::SightTrainerLog,
+    /// Sight trainers whose battle *started* and then ended without an
+    /// outcome -- a failed turn (`TurnError`) cleared the battle slot
+    /// (issue #293 review). Unlike a pre-flight refusal, which costs no
+    /// draws and can safely be re-asked every frame, re-engaging one of
+    /// these would rebuild the party (`CreateNPCTrainerParty`'s per-mon
+    /// draws) and re-fail every frame the player stands in the cone --
+    /// draining the shared stream and trapping the player in a restart
+    /// loop. Skipped by the cone scan like a defeated trainer for the rest
+    /// of the session; session-scoped on purpose (the flag store must not
+    /// record a fight that never resolved).
+    sight_trainers_errored: Vec<assets::trainers::TrainerId>,
 }
 
 impl OverworldPhase {
@@ -576,6 +587,7 @@ impl OverworldPhase {
             sight_trainer_battle_outcome: None,
             sight_trainer_id: None,
             sight_trainer_log: sight_trainer_trigger::SightTrainerLog::default(),
+            sight_trainers_errored: Vec::new(),
         };
         phase.copy_party_and_objects_from_save();
         // A save written between issues #261 and #251 can carry the one
@@ -713,6 +725,7 @@ impl OverworldPhase {
             sight_trainer_battle_outcome: None,
             sight_trainer_id: None,
             sight_trainer_log: sight_trainer_trigger::SightTrainerLog::default(),
+            sight_trainers_errored: Vec::new(),
         }
     }
 

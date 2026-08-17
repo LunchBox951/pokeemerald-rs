@@ -349,3 +349,34 @@ fn an_empty_party_slot_does_not_decode_into_a_battler() {
     assert!(matches!(err, PartyError::Battler(_)), "{err}");
     assert!(err.to_string().starts_with("saved party member:"));
 }
+
+/// The modelled non-volatile status round-trips as upstream's own
+/// `MON_DATA_STATUS` bits, and the unmodelled bits decode to `Healthy`
+/// rather than an invented condition (issue #293 review: `status1` is
+/// exactly the store that must survive a save).
+#[test]
+fn the_non_volatile_status_survives_the_round_trip() {
+    let dex = Dex::new();
+    for (status, bit) in [
+        (battle::Status1::Healthy, 0u32),
+        (battle::Status1::Poisoned, 1 << 3),
+        (battle::Status1::Paralysed, 1 << 6),
+    ] {
+        let mut mon = a_battler();
+        mon.set_status(status);
+        let saved = to_save_pokemon(&dex, &mon);
+        assert_eq!(saved.status, bit, "{status:?} encodes as its upstream bit");
+        let decoded = from_save_pokemon(&dex, &saved).unwrap();
+        assert_eq!(decoded.status(), status, "{status:?} survives the trip");
+    }
+
+    // Sleep (`STATUS1_SLEEP`, bits 0-2) has no `battle::Status1` variant:
+    // the module docs' discard rule brings it back `Healthy`.
+    let mut saved = to_save_pokemon(&dex, &a_battler());
+    saved.status = 0b101;
+    assert_eq!(
+        from_save_pokemon(&dex, &saved).unwrap().status(),
+        battle::Status1::Healthy,
+        "an unmodelled status byte decodes to Healthy, not half a condition"
+    );
+}

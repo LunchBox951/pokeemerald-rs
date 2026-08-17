@@ -548,7 +548,7 @@ impl Battle {
         }
         let data = trainer::trainer_data(trainer)?;
         trainer_ai::ensure_supported_flags(data.ai_flags)?;
-        trainer_ai::ensure_deterministic_target_ability(&dex, player.species())?;
+        trainer_ai::ensure_deterministic_target_ability(&dex, player.species(), data.ai_flags)?;
         if player.is_fainted() {
             return Err(BattleError::FaintedBattler(true));
         }
@@ -912,7 +912,15 @@ impl Battle {
             }
             Order::DefenderFirst => {
                 self.enemy_acts(enemy_action, rng, events)?;
-                if self.outcome.is_none() && !self.player.is_fainted() {
+                // Both faint tests are needed here where AttackerFirst's arm
+                // needs only the enemy's: a player faint always ends a
+                // one-mon-party battle (outcome set), but a trainer's mon
+                // that knocked *itself* out in confusion leaves the battle
+                // ongoing until the end-of-turn send-out -- and its fainted
+                // slot is still skipped when the player's turn-order slot
+                // comes up, so acting into it would faint it twice and
+                // double the experience award (issue #293 review).
+                if self.outcome.is_none() && !self.player.is_fainted() && !self.enemy.is_fainted() {
                     self.act(true, player_move, index, rng, events)?;
                 }
             }

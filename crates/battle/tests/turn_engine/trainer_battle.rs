@@ -860,3 +860,76 @@ fn the_pre_flight_refuses_the_same_two_ability_lead() {
         Ok(())
     );
 }
+
+/// A faster trainer mon that knocks *itself* out in confusion leaves the
+/// battle ongoing until the end-of-turn send-out -- and the player's queued
+/// action must be skipped exactly as a fainted battler's own slot in
+/// `gBattlerByTurnOrder` is, not executed into the corpse. Before issue
+/// #293's review fix, the `DefenderFirst` guard tested only the player's
+/// faint, so the player attacked the already-fainted enemy: a second
+/// `Fainted` event and a second experience award for one knockout.
+#[test]
+fn an_enemy_that_self_kos_in_confusion_is_not_attacked_again_by_the_player() {
+    let dex = Dex::new();
+    // Slow player, fast enemy: the enemy acts first (`DefenderFirst`).
+    let player = max_iv_mon(&dex, MACHOP, 5, vec![TACKLE]);
+    let mut lead = max_iv_mon(&dex, TREECKO, 30, vec![POUND, LEER]);
+    // Confused with turns to spare, at 1 HP: with an all-zero stream the
+    // self-hit roll (`Random() & 1 == 0`) fires and any damage is lethal.
+    lead.volatiles_mut().confusion_turns = 5;
+    let max_hp = lead.stats().max_hp;
+    lead.apply_damage(max_hp - 1);
+    let party = vec![lead, max_iv_mon(&dex, TORCHIC, 5, vec![SCRATCH, GROWL])];
+
+    let mut rng = SequenceRng::new([0; 128]);
+    let mut battle =
+        Battle::new_trainer(dex, player, MAY_ROUTE_103_MUDKIP, party, &mut rng).unwrap();
+
+    let events = battle
+        .take_turn(PlayerAction::UseMove(0), &mut rng)
+        .unwrap();
+    assert!(
+        events.contains(&BattleEvent::HurtItselfInConfusion {
+            by_player: false,
+            damage: 1,
+        }),
+        "the enemy self-hit is what fainted it: {events:?}"
+    );
+    assert_eq!(
+        events
+            .iter()
+            .filter(|e| matches!(e, BattleEvent::Fainted { by_player: false }))
+            .count(),
+        1,
+        "one knockout, one Fainted: {events:?}"
+    );
+    assert_eq!(
+        events
+            .iter()
+            .filter(|e| matches!(e, BattleEvent::ExpGained(_)))
+            .count(),
+        1,
+        "one knockout, one experience award: {events:?}"
+    );
+    assert!(
+        !events.iter().any(|e| matches!(
+            e,
+            BattleEvent::Hit {
+                by_player: true,
+                ..
+            } | BattleEvent::Missed {
+                by_player: true,
+                ..
+            }
+        )),
+        "the player's action into the fainted enemy is skipped, not executed: {events:?}"
+    );
+    assert!(
+        events.contains(&BattleEvent::TrainerSentOut {
+            species: SpeciesId(TORCHIC),
+            bench_remaining: 0,
+        }),
+        "the end-of-turn send-out still happens: {events:?}"
+    );
+    assert_eq!(battle.outcome(), None, "the trainer still has a mon out");
+}

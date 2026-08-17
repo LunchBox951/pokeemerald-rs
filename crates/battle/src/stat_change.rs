@@ -183,9 +183,11 @@ impl StatChangeEffect {
     /// negation and `:7063` for the plain case).
     #[must_use]
     pub const fn delta(self) -> i8 {
-        // `magnitude` is 1 or 2 by construction (every row below), so the
-        // cast and the negation are both exact.
-        #[allow(clippy::cast_possible_wrap)]
+        #[expect(
+            clippy::cast_possible_wrap,
+            reason = "`magnitude` is 1 or 2 by construction (every row below), so the \
+                      cast and the negation are both exact"
+        )]
         let magnitude = self.magnitude as i8;
         match self.direction {
             StatChangeDirection::Raise => magnitude,

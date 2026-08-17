@@ -205,12 +205,14 @@ impl Battle {
         let healed = crate::drain::drain_amount(dealt);
         if healed > 0 {
             // `datahpupdate BS_ATTACKER` (`data/battle_scripts_1.s:353`)
-            // clamps the heal to the attacker's own max HP.
+            // clamps the heal to the attacker's own max HP; the event
+            // reports the HP actually gained, not the unclamped half
+            // (issue #293 review).
             let attacker = self.battler_mut(attacker_is_player);
-            attacker.restore_hp(healed);
+            let restored = attacker.restore_hp(healed);
             events.push(BattleEvent::HpDrained {
                 by_player: attacker_is_player,
-                amount: healed,
+                amount: restored,
             });
         }
         // `tryfaintmon BS_ATTACKER` (`:358`) precedes `tryfaintmon BS_TARGET`
@@ -361,11 +363,19 @@ impl Battle {
         };
         let by_player = attacker_is_player;
         match outcome {
-            crate::primary_status::PrimaryStatusOutcome::Miss => {
-                events.push(BattleEvent::Missed { by_player, move_id });
-            }
-            crate::primary_status::PrimaryStatusOutcome::Failed => {
+            // Both scripts' `accuracycheck` jumps to `BattleScript_ButItFailed`
+            // rather than `BattleScript_PrintMoveMissed`, so a failed roll is
+            // "But it failed!", not a miss (issue #293 review) -- see
+            // `PrimaryStatusOutcome::Miss`'s own docs.
+            crate::primary_status::PrimaryStatusOutcome::Miss
+            | crate::primary_status::PrimaryStatusOutcome::Failed => {
                 events.push(BattleEvent::MoveFailed { by_player, move_id });
+            }
+            crate::primary_status::PrimaryStatusOutcome::AlreadyParalysed => {
+                events.push(BattleEvent::AlreadyParalysed { by_player, move_id });
+            }
+            crate::primary_status::PrimaryStatusOutcome::AlreadyConfused => {
+                events.push(BattleEvent::AlreadyConfused { by_player, move_id });
             }
             crate::primary_status::PrimaryStatusOutcome::Paralysed => {
                 let status = crate::status::Status1::Paralysed;

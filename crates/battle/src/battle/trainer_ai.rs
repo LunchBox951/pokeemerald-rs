@@ -143,6 +143,17 @@ const SUPPORTED_FLAGS: u32 = SCRIPT_CHECK_BAD_MOVE.bits()
     | SCRIPT_CHECK_VIABILITY.bits()
     | SCRIPT_SETUP_FIRST_TURN.bits();
 
+/// The supported scripts that contain a `get_ability AI_TARGET` instruction
+/// at all — `AI_CheckBadMove` (seventeen sites, `data/battle_ai_scripts.s:59`-
+/// `:546`) and `AI_CheckViability` (one, `:2361`), verified by sweeping every
+/// `get_ability AI_TARGET` in the file back to its owning `AI_*` label.
+/// `AI_TryToFaint` and `AI_SetupFirstTurn` have none, so a trainer running
+/// only those (or no script at all — `gTrainers` has real `aiFlags = 0`
+/// entries) can never reach `Cmd_get_ability`'s two-ability guess and needs
+/// no target-species screen (issue #293 review).
+const TARGET_ABILITY_QUERYING_FLAGS: u32 =
+    SCRIPT_CHECK_BAD_MOVE.bits() | SCRIPT_CHECK_VIABILITY.bits();
+
 /// The `AI_EFFECTIVENESS_*` scale (`include/constants/battle_ai.h:18`-`:23`):
 /// `Cmd_if_type_effectiveness` seeds `gBattleMoveDamage` with the `x1` value
 /// and lets `TypeCalc` scale it.
@@ -344,14 +355,25 @@ pub(crate) const fn ensure_supported_flags(flags: AiFlags) -> Result<(), BattleE
 /// `AI_CheckViability` (`:2361`). One species test closes all of them, which
 /// is why it is not folded into [`ensure_scoreable`]'s per-effect answer.
 ///
+/// Gated on `ai_flags` intersecting [`TARGET_ABILITY_QUERYING_FLAGS`]: a
+/// trainer whose selected scripts contain no `get_ability AI_TARGET` cannot
+/// draw on the guess no matter what the player leads with, so refusing its
+/// otherwise-runnable battle over a two-ability species would be pure
+/// over-refusal (issue #293 review).
+///
 /// # Errors
 ///
 /// [`BattleError::UnknownSpecies`] if `species` is not in `dex`, or
-/// [`BattleError::AmbiguousTargetAbility`] if it has a second ability.
+/// [`BattleError::AmbiguousTargetAbility`] if it has a second ability and
+/// some selected script queries target abilities.
 pub(crate) fn ensure_deterministic_target_ability(
     dex: &Dex,
     species: SpeciesId,
+    ai_flags: AiFlags,
 ) -> Result<(), BattleError> {
+    if ai_flags.bits() & TARGET_ABILITY_QUERYING_FLAGS == 0 {
+        return Ok(());
+    }
     // `abilities[1] != ABILITY_NONE` is upstream's own test, at `:1380`.
     if dex.species(species)?.abilities[1] == AbilityId(0) {
         Ok(())
@@ -1082,8 +1104,8 @@ fn run_setup_first_turn(
 #[cfg(test)]
 mod tests {
     use super::{
-        choose_trainer_action, ensure_scoreable, ensure_supported_flags, estimated_damage,
-        is_viability_scoreable, EFFECT_HIT,
+        choose_trainer_action, ensure_deterministic_target_ability, ensure_scoreable,
+        ensure_supported_flags, estimated_damage, is_viability_scoreable, EFFECT_HIT,
     };
     use crate::battle::opponent_ai::EnemyAction;
     use crate::damage::BattleRng;
@@ -1225,7 +1247,9 @@ mod tests {
         }
     }
 
-    /// The nine real Route 103 sight trainers all carry
+    /// Route 103's nine sight-trainer object events resolve to eight
+    /// distinct trainer ids (Amy and Liv share `TRAINER_AMY_AND_LIV_1`,
+    /// `481`), and every one of them carries
     /// `aiFlags = AI_SCRIPT_CHECK_BAD_MOVE` alone
     /// (`src/data/trainers.h`), which is what makes the flag-aware split
     /// worth having at all. Pinned against the extracted table so a data
@@ -1404,5 +1428,41 @@ mod tests {
             "the spent slot scores 0, so the surviving slot is the only candidate"
         );
         assert_eq!(rng.index, 6);
+    }
+
+    /// The target-ability screen is gated on the scripts that can actually
+    /// execute `get_ability AI_TARGET` -- `AI_CheckBadMove` and
+    /// `AI_CheckViability` (issue #293 review). A trainer running neither
+    /// (real `gTrainers` entries carry `aiFlags = 0`, and `TRY_TO_FAINT`/
+    /// `SETUP_FIRST_TURN` contain no target-ability query) accepts a
+    /// two-ability player lead: refusing it would block a battle whose AI
+    /// can never draw on the guess.
+    #[test]
+    fn the_target_ability_screen_only_applies_when_a_script_queries_abilities() {
+        let dex = Dex::new();
+        let rattata = assets::SpeciesId(19); // two abilities: Run Away / Guts
+        assert_eq!(
+            ensure_deterministic_target_ability(&dex, rattata, route103_flags()).unwrap_err(),
+            BattleError::AmbiguousTargetAbility(rattata),
+            "CHECK_BAD_MOVE queries target abilities, so the screen applies"
+        );
+        assert_eq!(
+            ensure_deterministic_target_ability(&dex, rattata, AiFlags::CHECK_VIABILITY,)
+                .unwrap_err(),
+            BattleError::AmbiguousTargetAbility(rattata),
+            "AI_CheckViability's single get_ability site (`:2361`) counts too"
+        );
+        for flags in [
+            AiFlags(0),
+            AiFlags::TRY_TO_FAINT,
+            AiFlags::SETUP_FIRST_TURN,
+            AiFlags::TRY_TO_FAINT.union(AiFlags::SETUP_FIRST_TURN),
+        ] {
+            assert!(
+                ensure_deterministic_target_ability(&dex, rattata, flags).is_ok(),
+                "{flags:?} runs no ability-querying script, so a two-ability \
+                 lead is fine"
+            );
+        }
     }
 }

@@ -8,18 +8,15 @@
 //!
 //! # `BattleScript_EffectParalyze` (`data/battle_scripts_1.s:1007`-`:1025`)
 //!
-//! ```text
-//! attackcanceler / attackstring / ppreduce
-//! jumpifability BS_TARGET, ABILITY_LIMBER, BattleScript_LimberProtected
-//! jumpifstatus2 BS_TARGET, STATUS2_SUBSTITUTE, BattleScript_ButItFailed
-//! typecalc                                                   @ :1013
-//! jumpifmovehadnoeffect BattleScript_ButItFailed             @ :1014
-//! jumpifstatus BS_TARGET, STATUS1_PARALYSIS, BattleScript_AlreadyParalyzed
-//! jumpifstatus BS_TARGET, STATUS1_ANY, BattleScript_ButItFailed
-//! accuracycheck BattleScript_ButItFailed, ACC_CURR_MOVE      @ :1017  <-- the only draw
-//! jumpifsideaffecting BS_TARGET, SIDE_STATUS_SAFEGUARD, ...
-//! setmoveeffect MOVE_EFFECT_PARALYSIS / seteffectprimary     @ :1021-:1022
-//! ```
+//! The script's order: the attack canceler, attack string, and PP
+//! deduction; the Limber ability guard; the Substitute guard (to "But it
+//! failed!"); `typecalc` and its no-effect jump, also to "But it failed!"
+//! (`:1013`-`:1014`); the already-paralysed branch to its own distinct
+//! string (`:1015`); the any-other-status branch to "But it failed!"
+//! (`:1016`); the accuracy check — **the script's only draw**, failing to
+//! "But it failed!" rather than to a missed string (`:1017`); the Safeguard
+//! side-status guard; and finally the paralysis application via
+//! `seteffectprimary` (`:1021`-`:1022`).
 //!
 //! Two orderings here are load-bearing and easy to get backwards:
 //!
@@ -38,15 +35,11 @@
 //!
 //! # `BattleScript_EffectConfuse` (`:903`-`:918`)
 //!
-//! ```text
-//! attackcanceler / attackstring / ppreduce
-//! jumpifability BS_TARGET, ABILITY_OWN_TEMPO, BattleScript_OwnTempoPrevents
-//! jumpifstatus2 BS_TARGET, STATUS2_SUBSTITUTE, BattleScript_ButItFailed
-//! jumpifstatus2 BS_TARGET, STATUS2_CONFUSION,  BattleScript_AlreadyConfused
-//! accuracycheck BattleScript_ButItFailed, ACC_CURR_MOVE      @ :910  <-- draw 1
-//! jumpifsideaffecting BS_TARGET, SIDE_STATUS_SAFEGUARD, ...
-//! setmoveeffect MOVE_EFFECT_CONFUSION / seteffectprimary     @ :914-:915  <-- draw 2
-//! ```
+//! The same shape, shorter: canceler/string/ppreduce; the Own Tempo
+//! ability guard; the Substitute guard; the already-confused branch to its
+//! own distinct string (`:909`); the accuracy check — draw 1, again
+//! failing to "But it failed!" (`:910`); the Safeguard guard; and the
+//! confusion application (`:914`-`:915`), whose duration roll is draw 2.
 //!
 //! **There is no `typecalc` in this script at all**, so Supersonic has no
 //! type-based failure: a Ghost, a Ground type, anything is confusable. And
@@ -100,21 +93,36 @@ pub fn is_primary_status_effect(effect: MoveEffect) -> bool {
 }
 
 /// What one of the two scripts did.
+///
+/// The three failure shapes are distinct variants because upstream prints a
+/// distinct string for each ([`crate::battle::BattleEvent`] keeps distinct
+/// messages as distinct events — [`crate::stat_change`]'s "won't go lower"
+/// takes the same posture), and because they cost different draw counts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PrimaryStatusOutcome {
-    /// The accuracy check failed (`BattleScript_ButItFailed` via
-    /// `accuracycheck`'s own jump).
+    /// The accuracy check failed. `accuracycheck BattleScript_ButItFailed`
+    /// jumps to the same "But it failed!" string every pre-accuracy failure
+    /// lands on — **not** to `BattleScript_PrintMoveMissed` — so this is a
+    /// [`crate::battle::BattleEvent::MoveFailed`], never a `Missed`. Kept
+    /// apart from [`Self::Failed`] because it costs the accuracy draw the
+    /// pre-accuracy branches never spend.
     Miss,
-    /// The move connected but did nothing: the target was type-immune
-    /// (`EFFECT_PARALYZE` only, `jumpifmovehadnoeffect` at `:1014`), already
-    /// carried the very status this move inflicts
-    /// (`BattleScript_AlreadyParalyzed` / `AlreadyConfused`), or carried
-    /// some *other* non-volatile status (`jumpifstatus BS_TARGET,
-    /// STATUS1_ANY, BattleScript_ButItFailed`).
-    ///
-    /// Every one of those branches sits **before** the accuracy check, so
-    /// this outcome costs no draws at all.
+    /// The move connected but did nothing, before the accuracy check and so
+    /// for no draws at all: the target was type-immune (`EFFECT_PARALYZE`
+    /// only, `jumpifmovehadnoeffect` at `:1014`) or carried some *other*
+    /// non-volatile status (`jumpifstatus BS_TARGET, STATUS1_ANY,
+    /// BattleScript_ButItFailed`). Both land on `BattleScript_ButItFailed`.
     Failed,
+    /// The target already carries this very status —
+    /// `BattleScript_AlreadyParalyzed`'s own distinct
+    /// `STRINGID_PKMNISALREADYPARALYZED` (`data/battle_scripts_1.s:1030`),
+    /// checked at `:1015` before `STATUS1_ANY` and before the accuracy
+    /// check, so it too costs no draws.
+    AlreadyParalysed,
+    /// `BattleScript_AlreadyConfused`'s `STRINGID_PKMNALREADYCONFUSED`
+    /// (`:923`), from the `jumpifstatus2 BS_TARGET, STATUS2_CONFUSION` at
+    /// `:909` — before the accuracy check, no draws.
+    AlreadyConfused,
     /// The target is now paralysed.
     Paralysed,
     /// The target is now confused, for this many turns
@@ -168,7 +176,7 @@ pub fn resolve_primary_status_move(
         // `jumpifstatus2 BS_TARGET, STATUS2_CONFUSION` (`:909`), before the
         // accuracy check. No `typecalc` in this script at all.
         if defender.volatiles().is_confused() {
-            return Ok(PrimaryStatusOutcome::Failed);
+            return Ok(PrimaryStatusOutcome::AlreadyConfused);
         }
         if !accuracy_roll(dex, move_id, attacker, defender, rng)? {
             return Ok(PrimaryStatusOutcome::Miss);
@@ -189,10 +197,13 @@ pub fn resolve_primary_status_move(
     if apply_dual_type_effectiveness(64, move_type, defender.types()) == 0 {
         return Ok(PrimaryStatusOutcome::Failed);
     }
-    // `jumpifstatus BS_TARGET, STATUS1_PARALYSIS` (`:1015`) and
-    // `jumpifstatus BS_TARGET, STATUS1_ANY` (`:1016`) -- two branches, one
-    // question here, since both land on a no-op with no draw and this
-    // crate emits no messages to tell them apart.
+    // `jumpifstatus BS_TARGET, STATUS1_PARALYSIS` (`:1015`) then
+    // `jumpifstatus BS_TARGET, STATUS1_ANY` (`:1016`) -- asked in the
+    // script's own order because they land on different strings: already
+    // paralysed is its own message, any other status is "But it failed!".
+    if matches!(defender.status(), Status1::Paralysed) {
+        return Ok(PrimaryStatusOutcome::AlreadyParalysed);
+    }
     if !can_inflict(defender, Status1::Paralysed) {
         return Ok(PrimaryStatusOutcome::Failed);
     }

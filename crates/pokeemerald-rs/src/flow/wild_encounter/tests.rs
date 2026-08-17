@@ -488,6 +488,51 @@ fn ending_a_battle_writes_the_lead_back_with_neutral_stat_stages() {
     );
 }
 
+/// Issue #293 review: the `status2`/`gStatuses3` volatiles are the same
+/// kind of battle-local scratch the stages are, and must not leak into the
+/// overworld lead either -- a mon that ended a battle still confused (or
+/// pumped, or curled, or mid-Charge) must not *start* its next battle that
+/// way. Planted before the handoff exactly like the stage test above.
+#[test]
+fn ending_a_battle_writes_the_lead_back_with_cleared_volatiles() {
+    let mut rng = Rng::new(ENCOUNTER_SEED);
+    for _ in 0..4 {
+        rng.next_u16();
+    }
+    let encounter = WildEncounter {
+        species: WURMPLE,
+        level: 2,
+        slot: 0,
+    };
+
+    let mut lead = player_mon(277, 50, vec![MoveId(1)]);
+    lead.volatiles_mut().confusion_turns = 4;
+    lead.volatiles_mut().set_focus_energy();
+    lead.volatiles_mut().set_defense_curl();
+
+    let battle = start_wild_battle(lead, encounter, &mut rng)
+        .expect("a Route 101 Wurmple must be fightable");
+    assert!(
+        battle.player().volatiles().is_confused(),
+        "Battle::new must carry the planted volatiles in, or this pins nothing"
+    );
+
+    let mut slot = Some(battle);
+    let mut written_back: Option<BattlePokemon> = None;
+    let mut frames = 0;
+    while slot.is_some() {
+        advance_wild_battle(&mut slot, &mut written_back, &mut rng);
+        frames += 1;
+        assert!(frames < 200, "the headless driver must terminate");
+    }
+    let lead = written_back.expect("the battle writes the lead mon back when it ends");
+    assert_eq!(
+        lead.volatiles(),
+        battle::Volatiles::default(),
+        "volatile conditions are battle-local and must be cleared on the write-back"
+    );
+}
+
 /// `advance_wild_battle` is a no-op on an empty slot -- the guard the
 /// per-frame caller relies on.
 #[test]

@@ -860,3 +860,69 @@ fn real_pack_rhetts_cone_starts_his_real_battle_over_real_terrain() {
         "CreateNPCTrainerParty's per-mon OT-id draws really came off the shared stream"
     );
 }
+
+/// `advance_npc_trainer_battle`'s documented `None` ambiguity, resolved the
+/// way its docs demand (issue #293 review): a failed turn clears the battle
+/// slot *without* an outcome, and the trigger must treat that as terminal
+/// rather than ongoing. Before the fix, the still-active cone rebuilt
+/// Rhett's party on the very next frame -- `CreateNPCTrainerParty`'s
+/// per-mon draws off the shared stream, sixty times a second, forever --
+/// and the player was trapped in a restart loop.
+///
+/// The failure is manufactured through the same per-turn gate a real player
+/// would hit: the driver always picks move slot 0, so a lead whose only
+/// move has no PP left fails `validate_player_move` on turn one.
+#[test]
+fn a_battle_that_ends_without_an_outcome_disengages_instead_of_restarting() {
+    let mut phase = route_103_phase(PlayerState::new((0, 0), 3, Direction::South));
+    let mut drained = overwhelming_lead();
+    for _ in 0..drained.moves()[0].pp {
+        drained
+            .deduct_pp(0)
+            .expect("slot 0 exists with PP to spend");
+    }
+    start_rhetts_battle(&mut phase, drained, 1);
+
+    // Turn one: the no-PP turn fails, the battle dies without an outcome.
+    phase.step(ButtonState::new());
+    assert!(
+        !phase.is_sight_trainer_battle_active(),
+        "the failed turn cleared the battle slot"
+    );
+    assert_eq!(
+        phase.sight_trainer_battle_outcome(),
+        None,
+        "no outcome was ever reached"
+    );
+    assert!(
+        phase.party_lead.is_some(),
+        "the lead is written back standing, exactly as the driver left it"
+    );
+    assert_eq!(
+        phase
+            .save1()
+            .event_data
+            .flag_get(TRAINER_FLAGS_START + TRAINER_RHETT),
+        Ok(false),
+        "a fight that never resolved must not be recorded as won"
+    );
+    assert_eq!(phase.sight_trainer_id, None, "the engagement is dropped");
+
+    // Still standing in Rhett's cone: the fight must NOT restart, and the
+    // shared stream must not move -- the errored trainer is skipped like a
+    // defeated one for the rest of the session.
+    let before = phase.rng.state();
+    for frame in 0..FRAMES_STANDING_STILL {
+        phase.step(ButtonState::new());
+        assert!(
+            !phase.is_sight_trainer_battle_active(),
+            "frame {frame}: an errored engagement must not restart"
+        );
+        assert_eq!(
+            phase.rng.state(),
+            before,
+            "frame {frame}: no construction draws after disengaging"
+        );
+    }
+    assert!(phase.party_lead.is_some());
+}

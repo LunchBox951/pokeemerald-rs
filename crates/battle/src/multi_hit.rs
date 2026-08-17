@@ -2,26 +2,19 @@
 //! `EFFECT_MULTI_HIT`, carried by Double Slap, Arm Thrust, Fury Attack, Pin
 //! Missile, Bullet Seed and friends.
 //!
-//! ```text
-//! BattleScript_EffectMultiHit::                    @ data/battle_scripts_1.s:604
-//!     attackcanceler
-//!     accuracycheck BattleScript_PrintMoveMissed, ACC_CURR_MOVE   @ ONCE, :606
-//!     attackstring / ppreduce
-//!     setmultihitcounter 0                                        @ :609
-//!     initmultihitstring / setbyte sMULTIHIT_EFFECT, 0
-//! BattleScript_MultiHitLoop::                                     @ :612
-//!     jumpifhasnohp BS_ATTACKER, BattleScript_MultiHitEnd
-//!     jumpifhasnohp BS_TARGET,   BattleScript_MultiHitPrintStrings
-//!     ...
-//!     critcalc / damagecalc / typecalc                            @ :620-:622
-//!     jumpifmovehadnoeffect BattleScript_MultiHitNoMoreHits       @ :623
-//!     adjustnormaldamage                                          @ :624
-//!     ... animation, healthbarupdate, datahpupdate ...
-//!     decrementmultihit BattleScript_MultiHitLoop                 @ :639
-//! BattleScript_MultiHitEnd::                                      @ :650
-//!     seteffectwithchance                                         @ :651, ONCE
-//!     tryfaintmon BS_TARGET
-//! ```
+//! The script (`data/battle_scripts_1.s:604`-`:652`) is a prologue, a loop,
+//! and an epilogue. The prologue runs the attack canceler, **one** accuracy
+//! check (`:606` — a miss ends the whole move), the attack string, the PP
+//! deduction, and the hit-count roll (`setmultihitcounter 0`, `:609`). The
+//! loop body (`BattleScript_MultiHitLoop`, from `:612`) first bails out if
+//! either battler has no HP left (attacker → straight to the epilogue,
+//! target → to the hit-count string), then per iteration rolls the crit,
+//! computes damage, applies the type chart (`:620`-`:622`), leaves the loop
+//! early on a no-effect result (`:623`, **before** the damage roll at
+//! `:624`), applies the `85..=100%` roll and the damage, and loops while
+//! the counter has hits left (`:639`). The epilogue
+//! (`BattleScript_MultiHitEnd`, `:650`) spends **one** `seteffectwithchance`
+//! draw (`:651`) and then tries the target's faint.
 //!
 //! # Once vs. per hit — the whole reason this is its own pipeline
 //!
@@ -45,19 +38,11 @@
 //! # The hit count is a *two*-draw scheme
 //!
 //! `Cmd_setmultihitcounter` (`src/battle_script_commands.c:7139`-`:7155`),
-//! for the `gBattlescriptCurrInstr[1] == 0` case this effect uses:
-//!
-//! ```text
-//! gMultiHitCounter = Random() & 3;
-//! if (gMultiHitCounter > 1)
-//!     gMultiHitCounter = (Random() & 3) + 2;
-//! else
-//!     gMultiHitCounter += 2;
-//! ```
-//!
-//! A first draw of `0`/`1` settles it at 2 or 3 for **one** draw; a first
-//! draw of `2`/`3` **redraws** and takes `(second & 3) + 2`, i.e. 2..5, for
-//! **two**. The resulting distribution is the familiar 3/8, 3/8, 1/8, 1/8
+//! for the `gBattlescriptCurrInstr[1] == 0` case this effect uses, draws
+//! `Random() & 3` and branches on the result: `0` or `1` settles the count
+//! at 2 or 3 respectively for **one** draw; `2` or `3` **redraws**, masks
+//! again, and adds 2 — i.e. 2..=5 — for **two** draws.
+//! The resulting distribution is the familiar 3/8, 3/8, 1/8, 1/8
 //! over 2, 3, 4, 5 — but reproducing it by sampling that distribution
 //! directly would spend the wrong number of draws half the time, so
 //! [`roll_hit_count`] reproduces the branch instead `(behavioral-fidelity)`.
@@ -118,11 +103,10 @@ pub fn is_multi_hit_effect(effect: MoveEffect) -> bool {
 /// otherwise. The result is always in [`MIN_HITS`]`..=`[`MAX_HITS`].
 #[must_use]
 pub fn roll_hit_count(rng: &mut impl BattleRng) -> u8 {
-    // `Random() & 3` on a `u16`, narrowed: the mask leaves 0..=3.
-    #[allow(clippy::cast_possible_truncation)]
+    // No truncation suppression needed: the `& 3` mask bounds the u16 to
+    // 0..=3 before the narrowing, and clippy can see it.
     let first = (rng.next_u16() & 3) as u8;
     if first > 1 {
-        #[allow(clippy::cast_possible_truncation)]
         let second = (rng.next_u16() & 3) as u8;
         second + 2
     } else {

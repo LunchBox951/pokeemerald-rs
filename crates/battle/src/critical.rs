@@ -87,18 +87,15 @@ const HIGH_CRIT_EFFECTS: [MoveEffect; 4] = [
 
 /// The crit-chance stage (`0..=4`) `Cmd_critcalc` builds
 /// (`battle_script_commands.c:1267`-`:1274`), as far as this crate models its
-/// terms:
+/// terms.
 ///
-/// ```text
-/// critChance = 2 * (status2 & STATUS2_FOCUS_ENERGY != 0)   // :1267
-///            + (effect == EFFECT_HIGH_CRITICAL)            // :1268
-///            + (effect == EFFECT_SKY_ATTACK)               // :1269
-///            + (effect == EFFECT_BLAZE_KICK)               // :1270
-///            + (effect == EFFECT_POISON_TAIL)              // :1271
-///            + (holdEffect == HOLD_EFFECT_SCOPE_LENS)      // :1272
-///            + 2 * (Lucky Punch on a Chansey)              // :1273
-///            + 2 * (Stick on a Farfetch'd);                // :1274
-/// ```
+/// Upstream sums eight additive terms into the stage: **2** for an attacker
+/// under Focus Energy (`:1267`), **1** for each of the four high-critical
+/// move effects — `EFFECT_HIGH_CRITICAL`, Sky Attack's, Blaze Kick's and
+/// Poison Tail's, mutually exclusive since a move has one effect
+/// (`:1268`-`:1271`) — **1** for a held Scope Lens (`:1272`), and **2**
+/// each for the two species-specific held items, Lucky Punch on a Chansey
+/// and Stick on a Farfetch'd (`:1273`-`:1274`).
 ///
 /// The four move-effect terms are `HIGH_CRIT_EFFECTS` and the Focus Energy
 /// term is `focus_energy` (issue #293 — the attacker's
@@ -250,10 +247,10 @@ mod tests {
     fn every_crit_table_entry_is_pinned_at_its_own_boundary() {
         // sCriticalHitChance = [16, 8, 4, 3, 2]: each middle stage gets a
         // draw that crits at that stage but NOT at the stage below, so no
-        // entry can silently degrade to a neighbour's odds. (Stages 2 and 3
-        // need Focus Energy / held items and are unreachable through
-        // `crit_stage` this slice, but the transcribed table is
-        // upstream data and is pinned as such.)
+        // entry can silently degrade to a neighbour's odds. (Stage 2 is
+        // reachable through `crit_stage` via Focus Energy, stage 3 via
+        // Focus Energy plus a high-critical move; only stage 4 still needs
+        // the unmodelled held-item terms.)
         //
         // stage 1 (1/8): 8 % 8 == 0 crits; 8 % 16 != 0 does not at stage 0.
         assert!(crit_roll(1, &mut FixedRng(8)));

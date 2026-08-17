@@ -22,7 +22,13 @@
 //!
 //! Round-trips exactly: species, level, **accumulated experience**,
 //! personality (and so nature), the six IVs, the moveset with each slot's
-//! remaining PP, current HP, and the original-trainer id.
+//! remaining PP, current HP, the original-trainer id, and (since issue
+//! #293 made `status1` real state) the modelled non-volatile status —
+//! poison and paralysis, as upstream's own `MON_DATA_STATUS` bits
+//! ([`encode_status`]/[`decode_status`]). `status1` is exactly the
+//! condition store that is *supposed* to survive a save
+//! (`battle::Status1`'s own module docs), so a player who saves poisoned
+//! reloads poisoned.
 //!
 //! Deliberately *not* modelled, written as upstream's own default and
 //! discarded on the way back:
@@ -34,10 +40,13 @@
 //!   mon has.
 //! * **Held item, `ppBonuses`, contest condition, pokérus, met
 //!   location/level/game, poké ball, OT gender, ribbons, markings,
-//!   nickname, OT name, language, and non-volatile status** -- none has a
-//!   typed home in `battle::BattlePokemon`. Each is written as
-//!   `CreateMon`'s zero/`MAIL_NONE` default so the bytes are *valid*, not
-//!   as an invented value.
+//!   nickname, OT name, and language** -- none has a typed home in
+//!   `battle::BattlePokemon`. Each is written as `CreateMon`'s
+//!   zero/`MAIL_NONE` default so the bytes are *valid*, not as an invented
+//!   value. The **unmodelled status bits** (sleep, burn, freeze, toxic --
+//!   `battle::Status1` deliberately has no variants for them) follow the
+//!   same rule on decode: a saved byte carrying one comes back `Healthy`
+//!   rather than half-modelled.
 //! * **Egg and ability-slot bits** -- `isEgg`/`abilityNum`
 //!   (`PokemonSubstruct3`'s bits 30/31) stay clear: this port models no
 //!   eggs and no abilities.
@@ -70,6 +79,39 @@ use engine::save::{BoxPokemon, Pokemon, PokemonSubstructures, SUBSTRUCTURE_LEN};
 /// block's "no mail held" sentinel, which `CreateMon` writes into every
 /// freshly built mon (`src/pokemon.c:2201-2202`).
 const MAIL_NONE: u8 = 0xFF;
+
+/// `STATUS1_POISON` (`pokeemerald/include/constants/battle.h:117`).
+const STATUS1_POISON: u32 = 1 << 3;
+
+/// `STATUS1_PARALYSIS` (`:120`).
+const STATUS1_PARALYSIS: u32 = 1 << 6;
+
+/// [`battle::Status1`] as the `MON_DATA_STATUS` word upstream stores --
+/// each modelled condition on its own upstream bit, so the saved bytes are
+/// exactly what a real save would hold.
+const fn encode_status(status: battle::Status1) -> u32 {
+    match status {
+        battle::Status1::Healthy => 0,
+        battle::Status1::Poisoned => STATUS1_POISON,
+        battle::Status1::Paralysed => STATUS1_PARALYSIS,
+    }
+}
+
+/// [`encode_status`]' inverse, with the module docs' discard rule for the
+/// bits `battle::Status1` has no variant for: sleep/burn/freeze/toxic come
+/// back [`battle::Status1::Healthy`] rather than as an invented condition.
+/// (The two modelled bits cannot both be set by any writer here -- upstream's
+/// `SetMoveEffect` refuses a second status outright -- so the poison arm
+/// winning over paralysis on corrupt bytes is arbitrary but harmless.)
+const fn decode_status(status: u32) -> battle::Status1 {
+    if status & STATUS1_POISON != 0 {
+        battle::Status1::Poisoned
+    } else if status & STATUS1_PARALYSIS != 0 {
+        battle::Status1::Paralysed
+    } else {
+        battle::Status1::Healthy
+    }
+}
 
 /// Why a saved party member could not be decoded into a battler
 /// ([`from_save_pokemon`]).
@@ -194,8 +236,8 @@ pub(crate) fn to_save_pokemon(dex: &Dex, mon: &BattlePokemon) -> Pokemon {
     let stats = mon.stats();
     Pokemon {
         box_data,
-        // `MON_DATA_STATUS`: no non-volatile status is modelled.
-        status: 0,
+        // `MON_DATA_STATUS`: the modelled `status1` bits (issue #293).
+        status: encode_status(mon.status()),
         level: mon.level(),
         mail: MAIL_NONE,
         hp: clamp_u16(mon.current_hp()),
@@ -301,6 +343,10 @@ pub(crate) fn from_save_pokemon(dex: &Dex, saved: &Pokemon) -> Result<BattlePoke
             mon.deduct_pp(index)?;
         }
     }
+
+    // `MON_DATA_STATUS` (issue #293): restore the modelled bits, discard
+    // the rest -- see `decode_status`.
+    mon.set_status(decode_status(saved.status));
 
     Ok(mon)
 }

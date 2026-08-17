@@ -123,7 +123,9 @@
 use assets::items::ItemId;
 use assets::trainers::{TrainerData, TrainerId, TrainerParty};
 use assets::{MoveId, SpeciesNames};
-use battle::{Battle, BattleError, BattleOutcome, BattlePokemon, Dex, PlayerAction, StatStages};
+use battle::{
+    Battle, BattleError, BattleOutcome, BattlePokemon, Dex, PlayerAction, StatStages, Volatiles,
+};
 use engine::rng::Rng;
 
 use super::wild_encounter::SharedRng;
@@ -490,8 +492,12 @@ pub fn advance_npc_trainer_battle(
     let mut mon = battle.player().clone();
     // Stat stages live in `gBattleMons[].statStages` only and never reach
     // the party struct -- see `advance_first_battle`'s own doc comment for
-    // the citations.
+    // the citations. `status2`/`gStatuses3` (confusion, Focus Energy,
+    // Defense Curl, the Charge timer) are the same kind of battle scratch
+    // (issue #293 review): only `status1` is party-record state, so a mon
+    // that won while confused must not *start* its next battle confused.
     *mon.stages_mut() = StatStages::default();
+    *mon.volatiles_mut() = Volatiles::default();
     *lead = Some(mon);
     *slot = None;
     outcome

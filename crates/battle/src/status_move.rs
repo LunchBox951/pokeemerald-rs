@@ -12,28 +12,19 @@
 //!
 //! # `BattleScript_EffectSplash` (`data/battle_scripts_1.s:1172`-`:1181`)
 //!
-//! ```text
-//! attackcanceler / attackstring / ppreduce
-//! attackanimation / waitanimation
-//! incrementgamestat GAME_STAT_USED_SPLASH
-//! printstring STRINGID_BUTNOTHINGHAPPENED
-//! waitmessage / goto BattleScript_MoveEnd
-//! ```
-//!
-//! There is no `accuracycheck`, no `damagecalc`, no `seteffectwithchance`,
-//! and no state change of any kind: Splash spends a PP and prints "But
-//! nothing happened!". `GAME_STAT_USED_SPLASH` is a save-block counter this
-//! crate has no home for and is the one thing here left unmodelled.
+//! The attack canceler, attack string, and PP deduction; the animation; a
+//! `GAME_STAT_USED_SPLASH` counter bump; and the "But nothing happened!"
+//! string into the move-end tail. There is no `accuracycheck`, no
+//! `damagecalc`, no `seteffectwithchance`, and no state change of any kind:
+//! Splash spends a PP and prints its string. `GAME_STAT_USED_SPLASH` is a
+//! save-block counter this crate has no home for and is the one thing here
+//! left unmodelled.
 //!
 //! # `BattleScript_EffectFocusEnergy` (`:885`-`:895`)
 //!
-//! ```text
-//! attackcanceler / attackstring / ppreduce
-//! jumpifstatus2 BS_ATTACKER, STATUS2_FOCUS_ENERGY, BattleScript_ButItFailed
-//! setfocusenergy
-//! ...
-//! printfromtable gFocusEnergyUsedStringIds
-//! ```
+//! Canceler/string/ppreduce, then a jump to "But it failed!" if the
+//! **attacker** already carries `STATUS2_FOCUS_ENERGY` (`:889`), then the
+//! flag set (`setfocusenergy`) and the "getting pumped" string table.
 //!
 //! The already-pumped check is the **script's** `jumpifstatus2` at `:889`,
 //! not `Cmd_setfocusenergy`'s own `else` branch
@@ -44,12 +35,8 @@
 //!
 //! # `BattleScript_EffectCharge` (`:2297`-`:2306`)
 //!
-//! ```text
-//! attackcanceler / attackstring / ppreduce
-//! setcharge
-//! attackanimation / waitanimation
-//! printstring STRINGID_PKMNCHARGINGPOWER
-//! ```
+//! Canceler/string/ppreduce, the timer set (`setcharge`), the animation,
+//! and the "charging power" string. It has no failure branch at all.
 //!
 //! **Gen 3's Charge does not raise Sp. Defense.** The script has no
 //! `setstatchanger`/`statbuffchange` pair at all (compare Defense Curl's
@@ -60,13 +47,10 @@
 //!
 //! # `BattleScript_EffectDefenseCurl` (`:2014`-`:2025`)
 //!
-//! ```text
-//! attackcanceler / attackstring / ppreduce
-//! setdefensecurlbit
-//! setstatchanger STAT_DEF, 1, FALSE
-//! statbuffchange MOVE_EFFECT_AFFECTS_USER | STAT_CHANGE_ALLOW_PTR, ...
-//! jumpifbyte CMP_EQUAL, cMULTISTRING_CHOOSER, B_MSG_STAT_WONT_INCREASE, ...
-//! ```
+//! Canceler/string/ppreduce, then the Rollout flag (`setdefensecurlbit`),
+//! then a `+1` Defense raise through the same `statbuffchange
+//! MOVE_EFFECT_AFFECTS_USER` machinery the stat-up scripts use, with the
+//! "won't go any higher" byte checked afterwards for the message choice.
 //!
 //! The ordering is load-bearing and reproduced: `setdefensecurlbit` runs
 //! **first**, so a user already at `+6` Defense still gets the Rollout flag

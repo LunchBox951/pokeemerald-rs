@@ -386,17 +386,18 @@ fn thunder_wave_paralyses_the_target_for_the_rest_of_the_battle() {
     );
     assert_eq!(battle.enemy().status(), Status1::Paralysed);
 
-    // Next turn, still paralysed -- and a second Thunder Wave fails rather
-    // than re-applying it.
+    // Next turn, still paralysed -- and a second Thunder Wave lands on
+    // `BattleScript_AlreadyParalyzed`'s own distinct string, not the
+    // generic failure (issue #293 review).
     let events = battle
         .take_turn(PlayerAction::UseMove(0), &mut rng)
         .unwrap();
     assert!(
-        events.contains(&BattleEvent::MoveFailed {
+        events.contains(&BattleEvent::AlreadyParalysed {
             by_player: true,
             move_id: THUNDER_WAVE,
         }),
-        "a second Thunder Wave is `But it failed!`: {events:?}"
+        "a second Thunder Wave is `is already paralyzed!`: {events:?}"
     );
     assert_eq!(battle.enemy().status(), Status1::Paralysed);
 }
