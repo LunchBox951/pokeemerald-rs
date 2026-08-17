@@ -529,6 +529,21 @@ impl Battle {
             return;
         }
         if let Some(change) = secondary.stat_change() {
+            // `SetMoveEffect`'s `MOVE_EFFECT_*_MINUS_1` group calls
+            // `ChangeStatBuffs(..., flags = 0)` (`battle_script_commands.c:
+            // 2672`-`:2674`), so a blocking ability -- Shield Dust included,
+            // its guard fires only on `flags == 0` (`:7035`-`:7038`) --
+            // returns `STAT_CHANGE_DIDNT_WORK` with no message script: the
+            // block is silent, no event and no stage write.
+            if crate::ability::stat_drop_blocker(
+                self.battler(target_is_player).ability(),
+                change.stat,
+                true,
+            )
+            .is_some()
+            {
+                return;
+            }
             let current = crate::stat_change::stage_of(self.battler(target_is_player), change.stat);
             if current == change.cap() {
                 return;
@@ -630,10 +645,15 @@ impl Battle {
 
     /// `tryfaintmon BS_TARGET`: if the defender is down, emit
     /// [`BattleEvent::Fainted`] and run `cleareffectsonfaint`'s wipe —
-    /// `gBattleMons[].status1 = 0` plus `FaintClearSetData`'s
-    /// `status2`/`gStatuses3` zero (`battle_script_commands.c`'s
-    /// `Cmd_cleareffectsonfaint`), which is why a corpse never reads as
-    /// "already paralysed" and never leaks a condition into the write-back.
+    /// `gBattleMons[].status1 = 0` plus `FaintClearSetData`
+    /// (`battle_script_commands.c`'s `Cmd_cleareffectsonfaint`), whose
+    /// **first** action is resetting every stat stage to
+    /// `DEFAULT_STAT_STAGE` (`src/battle_main.c:3264`-`:3270`) and which
+    /// then zeroes `status2`/`gStatuses3`. All three wipes matter on the
+    /// corpse-attack path: a corpse never reads as "already paralysed",
+    /// never leaks a condition into the write-back, and a stat move
+    /// resolving against it starts from neutral stages, not the stale ones
+    /// it fainted with (issue #293 review, round 6).
     ///
     /// Deliberately does **not** end the battle and does **not** pay exp
     /// (issue #293 review, rounds 4-5): upstream's `gBattleOutcome` stays
@@ -664,6 +684,7 @@ impl Battle {
         let fainted = self.battler_mut(!attacker_is_player);
         fainted.set_status(crate::status::Status1::Healthy);
         *fainted.volatiles_mut() = crate::volatile::Volatiles::default();
+        *fainted.stages_mut() = crate::pokemon::StatStages::default();
     }
 
     /// `HandleFaintedMonActions`' exp pass (`battle_util.c:1915`-`:1922`,
@@ -740,6 +761,14 @@ impl Battle {
                 events.push(BattleEvent::Missed {
                     by_player: attacker_is_player,
                     move_id,
+                });
+            }
+            StatChangeOutcome::AbilityProtected { change, ability } => {
+                events.push(BattleEvent::StatLossPrevented {
+                    by_player: attacker_is_player,
+                    move_id,
+                    stat: change.stat,
+                    ability,
                 });
             }
             StatChangeOutcome::Applied {

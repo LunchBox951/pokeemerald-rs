@@ -677,6 +677,7 @@ fn estimated_damage(
         light_screen: false,
         weather: Weather::None,
         is_solar_beam: false,
+        defender_thick_fat: defender.ability() == crate::ability::THICK_FAT,
     };
     let damage = base_damage(&input);
     let damage = apply_stab(damage, has_stab(attacker.types(), move_id, move_type));

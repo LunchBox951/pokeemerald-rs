@@ -57,19 +57,22 @@
 //! `ChangeStatBuffs`'s own Protect gate (`JumpIfMoveAffectedByProtect(0)` at
 //! `pokeemerald/src/battle_script_commands.c:6981`-`:6986` — a *second*
 //! Protect check, distinct from `Cmd_accuracycheck`'s), and
-//! `ChangeStatBuffs`'s Mist-timer/ability-immunity branches (Clear Body,
-//! White Smoke, Keen Eye, Hyper Cutter, Shield Dust — `:6960`-`:7038`) are
+//! `ChangeStatBuffs`'s Mist-timer branch (`:6960`-`:6979`) are
 //! real upstream branches this module skips outright rather than reproducing
-//! as dead code: this slice tracks no Substitute status, no Protect, no Mist
-//! side-timer, and no abilities anywhere (see the crate root docs), so every
-//! one of those guards is always false for a battle this crate can construct.
-//! Note all of them guard the *lowering* path only — the raising path
-//! (`:7062`-`:7083`) has no immunity checks at all upstream either.
-//! If Protect, abilities, or Mist are ever modelled,
-//! [`resolve_stat_change_move`] must gain the corresponding branch *and* the
-//! RNG draw table above must be re-derived (none of those branches draw, but
-//! the caller-visible outcome would need to change from "stage changes" to
-//! "blocked").
+//! as dead code: this slice tracks no Substitute status, no Protect and no
+//! Mist side-timer, so those guards are always false for a battle this crate
+//! can construct. The **ability-immunity branches are modelled** as of the
+//! issue #293 review: Andrew's and Pete's seeded Tentacool really carries
+//! Clear Body, so [`resolve_stat_change_move`] runs
+//! [`crate::ability::stat_drop_blocker`] where `ChangeStatBuffs` runs its
+//! guards (`:6987`-`:7038`, after the accuracy draw, before the at-floor
+//! test) and reports [`StatChangeOutcome::AbilityProtected`]. None of the
+//! guards draw, so the table above is unchanged: a blocked drop still costs
+//! its one accuracy draw. All of them guard the *lowering* path only — the
+//! raising path (`:7062`-`:7083`) has no immunity checks at all upstream
+//! either. If Protect or Mist are ever modelled,
+//! [`resolve_stat_change_move`] must gain the corresponding branch in
+//! upstream's order (both run *before* the ability guards).
 //!
 //! `EFFECT_MINIMIZE` (`108`) is **absent** from [`STAT_CHANGE_EFFECTS`] even
 //! though it is an evasion-raiser: its thunk (`:1476`-`:1480`) runs
@@ -342,6 +345,21 @@ pub enum StatChangeOutcome {
         /// `B_MSG_*_STAT_ROSE`/`_FELL`.
         capped: bool,
     },
+    /// The target's ability blocked the drop — `ChangeStatBuffs`'s
+    /// Clear Body/White Smoke (every drop), Keen Eye (accuracy) and
+    /// Hyper Cutter (Attack) guards (`src/battle_script_commands.c:6987`-
+    /// `:7038`), reached only after the accuracy draw and only when the
+    /// change targets the foe. The stage does not move. Upstream jumps to
+    /// `BattleScript_AbilityNoStatLoss` / `_AbilityNoSpecificStatLoss`
+    /// (`data/battle_scripts_1.s:4116`/`:4166`), surfaced as
+    /// [`crate::battle::BattleEvent::StatLossPrevented`].
+    AbilityProtected {
+        /// What the move asked for.
+        change: StatChangeEffect,
+        /// The blocking ability (Clear Body, White Smoke, Keen Eye or
+        /// Hyper Cutter — [`crate::ability`]).
+        ability: assets::species::AbilityId,
+    },
 }
 
 /// Whether [`resolve_stat_change_move`] can resolve `move_id` at all —
@@ -411,6 +429,16 @@ pub fn resolve_stat_change_move(
         )
     {
         return Ok(StatChangeOutcome::Miss);
+    }
+
+    // `ChangeStatBuffs`' ability guards (`:6987`-`:7038`) run before its
+    // at-floor test, only for a foe-targeted drop, and never draw.
+    if !change.affects_user() && matches!(change.direction, StatChangeDirection::Lower) {
+        if let Some(ability) =
+            crate::ability::stat_drop_blocker(defender.ability(), change.stat, false)
+        {
+            return Ok(StatChangeOutcome::AbilityProtected { change, ability });
+        }
     }
 
     let subject = if change.affects_user() {

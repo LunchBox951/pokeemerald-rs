@@ -139,6 +139,7 @@
 //! `crates/pokeemerald-rs/src/flow/overworld_phase/sight_trainer_trigger.rs`
 //! pins the exact move that still stops each of the others.
 
+pub mod ability;
 pub mod accuracy;
 pub mod battle;
 pub mod critical;

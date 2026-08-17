@@ -12,6 +12,7 @@
 use std::error::Error;
 use std::fmt;
 
+use assets::species::AbilityId;
 use assets::{MoveId, SpeciesId};
 
 use crate::error::BattleError;
@@ -143,6 +144,29 @@ pub enum BattleEvent {
         move_id: MoveId,
         /// Which stat the move targeted.
         stat: ChangedStat,
+    },
+    /// A stat-lowering move connected, but the target's ability blocked the
+    /// drop — `ChangeStatBuffs`'s Clear Body/White Smoke/Keen Eye/Hyper
+    /// Cutter guards (`src/battle_script_commands.c:6987`-`:7038`), which
+    /// run after the accuracy draw and before the at-floor test, so a
+    /// blocked drop still costs its one draw. Upstream's
+    /// `BattleScript_AbilityNoStatLoss` ("prevents stat loss", Clear
+    /// Body/White Smoke, `data/battle_scripts_1.s:4116`) or
+    /// `_AbilityNoSpecificStatLoss` ("prevents that stat's loss", Keen
+    /// Eye/Hyper Cutter, `:4166`); which string upstream picks is fully
+    /// determined by `ability`. The stage does not change. Reachable from
+    /// issue #293's content: Andrew's and Pete's seeded Tentacool carries
+    /// Clear Body ([`crate::ability`]).
+    StatLossPrevented {
+        /// Whether the player's mon was the one using the move; the
+        /// blocking ability is the *other* mon's.
+        by_player: bool,
+        /// The move that was used.
+        move_id: MoveId,
+        /// Which stat the move targeted.
+        stat: ChangedStat,
+        /// The blocking ability.
+        ability: AbilityId,
     },
     /// A stat-**raising** move (`BattleScript_EffectStatUp`'s family —
     /// Growth, Harden, Swords Dance, …) raised its **user's** own stage
@@ -351,6 +375,25 @@ pub enum BattleEvent {
     FullyParalysed {
         /// Whether it was the player's mon.
         by_player: bool,
+    },
+    /// A sound move was cancelled by the target's Soundproof —
+    /// `AbilityBattleEffects`' `ABILITYEFFECT_MOVES_BLOCK` case
+    /// (`src/battle_util.c:2659`-`:2675`), run from `Cmd_attackcanceler`
+    /// **after** the status cancellers and **before** the no-PP test
+    /// (`src/battle_script_commands.c:932`), costing zero draws. Unlike
+    /// the canceller cancellations, **PP is spent**:
+    /// `BattleScript_SoundproofProtected` runs `attackstring` and
+    /// `ppreduce` before its `STRINGID_PKMNSXBLOCKSY` message
+    /// (`data/battle_scripts_1.s:4158`-`:4164`). Reachable from issue
+    /// #293's content: Marcos's seeded Voltorb carries Soundproof, and
+    /// Growl, Supersonic and Screech are all in `sSoundMovesTable`
+    /// ([`crate::ability::SOUND_MOVES`]).
+    BlockedBySoundproof {
+        /// Whether the player's mon was the one using the move; the
+        /// Soundproof battler is the other one.
+        by_player: bool,
+        /// The sound move that was blocked.
+        move_id: MoveId,
     },
     /// A move inflicted a non-volatile status on its target —
     /// `seteffectprimary` for `EFFECT_PARALYZE`

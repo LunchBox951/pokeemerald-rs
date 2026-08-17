@@ -434,9 +434,39 @@ fn the_driver_never_attempts_to_run() {
     );
 }
 
+/// The driver picks the first slot with PP, the way the real move-select
+/// UI greys a drained slot out (`CheckMoveLimitations`'
+/// `MOVE_LIMITATION_PP`, `src/battle_util.c:1101`) -- so a drained slot 0
+/// with a usable slot 1 keeps the battle alive instead of retiring the
+/// trainer through the no-outcome path (issue #293 review, round 6).
+#[test]
+fn a_drained_slot_zero_falls_through_to_the_next_usable_slot() {
+    const GROWL: MoveId = MoveId(45);
+    let id = route103_rival_for(Rival::May, PlayerStarter::Mudkip);
+    let mut rng = Rng::new(5);
+    let mut lead = player_mon(MUDKIP, 5, vec![TACKLE, GROWL]);
+    for _ in 0..lead.moves()[0].pp {
+        lead.deduct_pp(0).unwrap();
+    }
+    let mut slot = Some(start_route103_rival_battle(lead, id, &mut rng).unwrap());
+    let mut written_back = None;
+
+    let outcome = advance_route103_rival_battle(&mut slot, &mut written_back, &mut rng);
+    // The turn is taken with slot 1: either the battle is still ongoing, or
+    // it ended with a REAL outcome -- never the ambiguous no-outcome end
+    // that retires a sight trainer's cone.
+    if outcome.is_none() {
+        assert!(
+            slot.is_some(),
+            "no outcome with the slot cleared is the failed-turn ending the              fix removes for this shape"
+        );
+    }
+}
+
 /// A driver turn that cannot be taken ends the battle rather than looping
 /// forever: the same contract `advance_first_battle` documents, checked here
-/// through the one reachable route (a lead whose slot 0 is out of PP).
+/// through the one reachable route (a lead with no PP left in any slot --
+/// upstream's forced Struggle, which is not modelled).
 #[test]
 fn a_lead_with_no_pp_in_slot_zero_ends_the_battle_and_is_still_written_back() {
     let id = route103_rival_for(Rival::May, PlayerStarter::Mudkip);

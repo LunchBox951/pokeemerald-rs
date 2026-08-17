@@ -438,6 +438,7 @@ pub fn damage_before_roll(
         light_screen: false,
         weather: Weather::None,
         is_solar_beam: false,
+        defender_thick_fat: defender.ability() == crate::ability::THICK_FAT,
     };
 
     let mut damage = base_damage(&input);

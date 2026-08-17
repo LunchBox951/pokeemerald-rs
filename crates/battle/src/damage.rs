@@ -158,6 +158,18 @@ pub struct DamageInput {
     /// The move being calculated is Solar Beam (`MOVE_SOLAR_BEAM`): every
     /// non-sun weather halves it.
     pub is_solar_beam: bool,
+    /// The defender's ability is Thick Fat (`CalculateBaseDamage`'s
+    /// `spAttack /= 2` for a Fire- or Ice-type move,
+    /// `src/pokemon.c:3202`-`:3203`, applied to the **raw** stat before
+    /// the stage ratio). Upstream halves the special stat specifically;
+    /// every Fire/Ice move is special under [`MoveCategory::for_type`]'s
+    /// Gen-3 type-based split, so the two formulations coincide. Callers
+    /// pass `defender.ability() == `[`crate::ability::THICK_FAT`]. No
+    /// executable move is currently Fire- or Ice-typed (every candidate is
+    /// `EFFECT_BURN_HIT`, which the engine refuses fail-closed), so this
+    /// term is defensive fidelity for Rhett's seeded Thick Fat Makuhita,
+    /// pinned at this unit level (issue #293 review, round 6).
+    pub defender_thick_fat: bool,
 }
 
 /// `gStatStageRatios` applied via `APPLY_STAT_MOD`, guarding against a `0`
@@ -222,7 +234,16 @@ fn apply_weather(mut damage: u32, move_type: Type, weather: Weather, is_solar_be
 #[must_use]
 pub fn base_damage(input: &DamageInput) -> u32 {
     let category = MoveCategory::for_type(input.move_type);
-    let attack = stage_adjusted(input.attack_stat, input.attack_stage);
+    // Thick Fat halves the raw stat, before `gStatStageRatios` applies
+    // (`src/pokemon.c:3202`-`:3203` sits above the damage formula's
+    // `APPLY_STAT_MOD`s).
+    let attack_stat =
+        if input.defender_thick_fat && matches!(input.move_type, Type::Fire | Type::Ice) {
+            input.attack_stat / 2
+        } else {
+            input.attack_stat
+        };
+    let attack = stage_adjusted(attack_stat, input.attack_stage);
     let defense = stage_adjusted(input.defense_stat, input.defense_stage);
 
     let mut damage = attack * input.power;
@@ -524,7 +545,32 @@ mod tests {
             light_screen: false,
             weather: Weather::None,
             is_solar_beam: false,
+            defender_thick_fat: false,
         }
+    }
+
+    /// Thick Fat halves the RAW special stat, before the stage ratio
+    /// (`src/pokemon.c:3202`-`:3203` runs above the formula's
+    /// `APPLY_STAT_MOD`s), and only against Fire/Ice.
+    #[test]
+    fn thick_fat_halves_the_raw_stat_before_stages_for_fire_and_ice_only() {
+        let base = |move_type, thick_fat| {
+            let mut input = neutral_input(move_type, 21, 10, 40, 10);
+            input.attack_stage = StatStage::new(6).unwrap();
+            input.defender_thick_fat = thick_fat;
+            base_damage(&input)
+        };
+        // Fire, +6 attack stage (x4): raw halving first, 21/2 = 10, then
+        // 10*4 = 40 -> 40*40*(2*10/5+2)/10/50 + 2 = 40*40*6/10/50 + 2 = 21.
+        // Halving AFTER the stage would start from 84/2 = 42 and land on a
+        // different number (42*40*6/10/50 + 2 = 22), which is what makes
+        // this fixture discriminate the order.
+        assert_eq!(base(Type::Fire, true), 21);
+        assert_eq!(base(Type::Ice, true), 21);
+        // Without Thick Fat: 84*40*6/10/50 + 2 = 42.
+        assert_eq!(base(Type::Fire, false), 42);
+        // A non-Fire/Ice special move is untouched by the ability.
+        assert_eq!(base(Type::Water, true), 42);
     }
 
     #[test]

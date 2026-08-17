@@ -1237,6 +1237,23 @@ impl Battle {
         if self.run_move_cancellers(is_player, events, rng) {
             return Ok(());
         }
+        // `AbilityBattleEffects(ABILITYEFFECT_MOVES_BLOCK, ...)` runs next,
+        // at `:932` -- after the cancellers, before the no-PP test -- and
+        // draws nothing. Unlike a canceller cancellation the block DOES
+        // spend PP (`BattleScript_SoundproofProtected` has `attackstring` +
+        // `ppreduce`, `data/battle_scripts_1.s:4158`-`:4164`), floored at 0
+        // the way `Cmd_ppreduce` floors it.
+        if crate::ability::soundproof_blocks(self.battler(!is_player).ability(), move_id) {
+            let user = self.battler_mut(is_player);
+            if user.moves()[slot].pp > 0 {
+                user.deduct_pp(slot)?;
+            }
+            events.push(BattleEvent::BlockedBySoundproof {
+                by_player: is_player,
+                move_id,
+            });
+            return Ok(());
+        }
         if is_player {
             self.player.deduct_pp(slot)?;
         } else if self.enemy.moves()[slot].pp == 0 {
@@ -1356,6 +1373,10 @@ impl Battle {
                 defense_stage,
                 attacker_burned: false,
                 reflect: false,
+                // The self-hit's "defender" is the battler itself; the
+                // 40-power hit is Normal-typed, so a Thick Fat holder's
+                // own term is inert, but the value is threaded honestly.
+                defender_thick_fat: mon.ability() == crate::ability::THICK_FAT,
                 light_screen: false,
                 weather: Weather::None,
                 is_solar_beam: false,

@@ -478,7 +478,24 @@ pub fn advance_npc_trainer_battle(
     rng: &mut Rng,
 ) -> Option<BattleOutcome> {
     let battle = slot.as_mut()?;
-    let failed = match battle.take_turn(PlayerAction::UseMove(0), &mut SharedRng::new(rng)) {
+    // The headless stand-in for upstream's move-select UI picks the first
+    // slot with PP: `CheckMoveLimitations` greys a 0-PP slot out
+    // (`MOVE_LIMITATION_PP`, `src/battle_util.c:1101`), so a real player
+    // structurally cannot submit one (issue #293 review, round 6). The
+    // filter is PP-only, deliberately: an *unexecutable* move in the picked
+    // slot must still reach `take_turn` and be refused there, because that
+    // refusal is the fail-closed surface for unmodelled effects, and
+    // upstream's UI has no such concept to skip around. All four slots
+    // empty is upstream's forced Struggle (`:1127`-`:1132`), which is not
+    // modelled -- that turn fails like any other unmodelled pick and ends
+    // the battle through the caller's terminal path.
+    let picked = battle
+        .player()
+        .moves()
+        .iter()
+        .position(|slot| slot.pp > 0)
+        .unwrap_or(0);
+    let failed = match battle.take_turn(PlayerAction::UseMove(picked), &mut SharedRng::new(rng)) {
         Ok(_) => false,
         Err(error) => {
             eprintln!("npc trainer battle: turn failed ({error:?}) -- ending the battle");

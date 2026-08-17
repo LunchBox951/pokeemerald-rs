@@ -28,7 +28,8 @@ use crate::common::{max_iv_mon, SequenceRng};
 use assets::trainers::TrainerId;
 use assets::{MoveId, SpeciesId};
 use battle::{
-    Battle, BattleError, BattleEvent, BattleOutcome, BattlePokemon, Dex, HitOutcome, PlayerAction,
+    Battle, BattleError, BattleEvent, BattleOutcome, BattlePokemon, ChangedStat, Dex, HitOutcome,
+    PlayerAction,
 };
 
 /// `TRAINER_MAY_ROUTE_103_MUDKIP` — the rival fought after choosing Mudkip.
@@ -939,6 +940,57 @@ fn a_player_attack_into_a_self_kod_enemy_runs_but_pays_exp_once() {
         "the end-of-turn send-out still happens: {events:?}"
     );
     assert_eq!(battle.outcome(), None, "the trainer still has a mon out");
+}
+
+/// `FaintClearSetData`'s first action is resetting every stat stage to
+/// `DEFAULT_STAT_STAGE` (`src/battle_main.c:3264`-`:3270`), run from
+/// `Cmd_cleareffectsonfaint` before the survivor's queued action -- so a
+/// stat move resolving against the corpse starts from neutral, not the
+/// stale stages it fainted with (issue #293 review, round 6).
+#[test]
+fn a_stat_move_at_a_self_kod_enemy_resolves_against_reset_stages() {
+    let dex = Dex::new();
+    // Slow player, fast enemy: the enemy self-KOs first, the queued Growl
+    // then lands on the corpse.
+    let player = max_iv_mon(&dex, MACHOP, 5, vec![GROWL]);
+    let mut lead = max_iv_mon(&dex, TREECKO, 30, vec![POUND, LEER]);
+    lead.volatiles_mut().confusion_turns = 5;
+    let max_hp = lead.stats().max_hp;
+    lead.apply_damage(max_hp - 1);
+    // The lead faints holding a floored Attack stage; without the faint
+    // wipe, Growl would report StatWontGoLower off the stale -6.
+    lead.stages_mut().attack = battle::StatStage::MIN;
+    let party = vec![lead, max_iv_mon(&dex, TORCHIC, 5, vec![SCRATCH, GROWL])];
+
+    let mut rng = SequenceRng::new([0; 128]);
+    let mut battle =
+        Battle::new_trainer(dex, player, MAY_ROUTE_103_MUDKIP, party, &mut rng).unwrap();
+    let events = battle
+        .take_turn(PlayerAction::UseMove(0), &mut rng)
+        .unwrap();
+    assert!(
+        events.contains(&BattleEvent::HurtItselfInConfusion {
+            by_player: false,
+            damage: 1,
+        }),
+        "{events:?}"
+    );
+    assert!(
+        events.contains(&BattleEvent::StatFell {
+            by_player: true,
+            move_id: GROWL,
+            stat: ChangedStat::Attack,
+            new_stage: battle::StatStage::new(-1).unwrap(),
+            magnitude: 1,
+        }),
+        "the corpse's stages were reset, so Growl falls from neutral: {events:?}"
+    );
+    assert!(
+        !events
+            .iter()
+            .any(|e| matches!(e, BattleEvent::StatWontGoLower { .. })),
+        "{events:?}"
+    );
 }
 
 /// The same self-KO fixture with an empty bench: the win still resolves

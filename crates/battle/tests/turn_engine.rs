@@ -4,6 +4,8 @@
 
 mod common;
 
+#[path = "turn_engine/abilities.rs"]
+mod abilities;
 #[path = "turn_engine/escape.rs"]
 mod escape;
 #[path = "turn_engine/first_battle.rs"]

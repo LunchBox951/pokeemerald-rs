@@ -26,6 +26,7 @@
 //! nothing mid-battle.
 
 use assets::items::ItemId;
+use assets::species::AbilityId;
 use assets::{experience_for_level, BaseStats, LevelUpLearnsets, MoveId, SpeciesId, Type};
 
 use crate::dex::Dex;
@@ -450,6 +451,23 @@ impl BattlePokemon {
     #[must_use]
     pub const fn personality(&self) -> u32 {
         self.personality
+    }
+
+    /// This mon's ability, derived as upstream derives it: `CreateBoxMon`
+    /// stores `abilityNum = personality & 1` only for a species whose
+    /// ability slot 1 is non-`NONE` (`src/pokemon.c:2296`-`:2300`,
+    /// otherwise the field stays `0`), and `GetAbilityBySpecies` indexes
+    /// the species table with it (`:4546`-`:4554`). Deterministic per mon,
+    /// which is what lets a seeded trainer party's abilities be argued
+    /// about at all — see [`crate::ability`]'s module docs.
+    #[must_use]
+    pub const fn ability(&self) -> AbilityId {
+        let [first, second] = self.base_stats.abilities;
+        if second.0 == 0 || self.personality & 1 == 0 {
+            first
+        } else {
+            second
+        }
     }
 
     /// The trainer id of the Pokémon's original trainer.
@@ -1151,6 +1169,32 @@ mod tests {
                 species.0
             );
         }
+    }
+
+    #[test]
+    fn ability_is_derived_from_the_personality_parity() {
+        let dex = Dex::new();
+        let build = |species: u16, personality: u32| {
+            BattlePokemon::new(
+                &dex,
+                SpeciesId(species),
+                5,
+                Ivs::default(),
+                personality,
+                vec![MoveId(33)],
+            )
+            .unwrap()
+        };
+        // Tentacool carries two abilities, so bit 0 selects the slot
+        // (`CreateBoxMon`, `src/pokemon.c:2296`-`:2300`): Clear Body at 29,
+        // Liquid Ooze at 64 (`gSpeciesInfo`).
+        assert_eq!(build(72, 0x88).ability(), crate::ability::CLEAR_BODY);
+        assert_eq!(build(72, 0x89).ability().0, 64);
+        // A lone-ability species ignores parity (`GetAbilityBySpecies`
+        // reads a slot the table left `ABILITY_NONE`): Zigzagoon is Pickup
+        // in slot 0 on both parities.
+        assert_eq!(build(288, 0).ability().0, 53);
+        assert_eq!(build(288, 1).ability().0, 53);
     }
 
     #[test]
