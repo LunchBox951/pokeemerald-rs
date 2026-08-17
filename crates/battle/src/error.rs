@@ -46,8 +46,8 @@ pub enum BattleError {
     ///
     /// [`crate::hit`]'s single-hit resolution only handles the seventeen
     /// combat [`assets::Type`]s; Curse's dual (Ghost/non-Ghost) targeting and
-    /// 0-power self/foe status effect are non-v1 move-effect breadth, out of
-    /// scope for this slice.
+    /// 0-power self/foe status effect are move-effect breadth beyond this
+    /// slice -- not modelled yet, deferred, still in v1 scope.
     ///
     /// Carries the offending move id.
     UnsupportedMoveType(MoveId),

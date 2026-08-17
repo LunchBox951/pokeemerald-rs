@@ -184,8 +184,9 @@ pub fn choose_land_mon_index(rng: &mut impl RandomSource) -> usize {
 ///
 /// The Hustle / Vital Spirit / Pressure branch that follows (`:293-300`,
 /// a further `Random() % 2` biasing the result toward `max`) is **not**
-/// modelled — abilities are out of scope, and no starter has one of the
-/// three.
+/// modelled — abilities are not modelled yet (deferred, still in v1 scope),
+/// and no starter has one of the three, so upstream skips this branch on the
+/// early-slice first-encounter path anyway.
 #[must_use]
 pub fn level_for_roll(min_level: u8, max_level: u8, roll: u16) -> u8 {
     let (min, max) = if max_level >= min_level {

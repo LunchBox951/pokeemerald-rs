@@ -51,8 +51,8 @@
 //! [`is_north_blocked`] and its siblings); the direction-to-predicate
 //! pairing that turns them into a collision verdict is
 //! [`crate::overworld::collision::directionally_impassable`]'s job.
-//! Forced movement (currents, slopes, ice sliding)
-//! is out of v1 scope entirely: this port does not special-case those
+//! Forced movement (currents, slopes, ice sliding) is not modelled yet —
+//! deferred, still in v1 scope: this port does not special-case those
 //! behaviors, so stepping onto e.g. an ice tile is currently indistinguishable
 //! from stepping onto ordinary ground. That is a deliberate, documented gap,
 //! not a silent behavioral claim — no test here asserts ice sliding works.

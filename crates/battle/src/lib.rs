@@ -99,8 +99,8 @@
 //! overworld transition, abilities, held items, non-volatile status
 //! conditions, weather, multi/double battles, Mist/Substitute (see
 //! [`stat_change`]'s module docs for why those two are a documented boundary
-//! rather than dead code), and move-effect breadth beyond the v1
-//! first-encounter damaging-move path plus the three stat-lowering effects
+//! rather than dead code), and move-effect breadth beyond the early
+//! slice's damaging-move path plus the three stat-lowering effects
 //! above (other status moves, stat-raising moves, multi-hit/recoil/drain,
 //! ...).
 

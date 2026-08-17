@@ -212,7 +212,7 @@ pub fn resolve_warp_event(warp: &WarpEvent) -> WarpTrigger {
 /// matching upstream's initialization and `ObjectEventUpdateElevation` skip
 /// rule. The source-side bookkeeping upstream's `SetupWarp` also does
 /// (escape-warp tracking, Trainer Hill/Battle Pyramid floor special-casing)
-/// is out of v1 scope.
+/// is not modelled yet — deferred, still in v1 scope.
 #[must_use]
 pub fn warp_destination_position(runtime: &MapRuntime<'_>, warp_id: u8) -> Option<(i16, i16, u8)> {
     let warp = runtime.events().warp_events.get(usize::from(warp_id))?;
