@@ -76,6 +76,10 @@ pub enum PngError {
     /// [`decode_palette`] was asked to read a `PLTE` chunk that is absent,
     /// empty, or whose length isn't a whole number of 3-byte RGB entries.
     MissingOrBadPalette,
+    /// A `PLTE` chunk declared more entries than the PNG spec allows: RFC
+    /// 2083 §11.2.3 caps it at 256 (a colour-type-3 pixel index is at most
+    /// 8 bits wide). Carries the declared entry count.
+    TooManyPaletteEntries(usize),
 }
 
 impl fmt::Display for PngError {
@@ -100,6 +104,10 @@ impl fmt::Display for PngError {
                     "PNG has no PLTE chunk, an empty PLTE chunk, or a PLTE length that isn't a multiple of 3"
                 )
             }
+            Self::TooManyPaletteEntries(count) => write!(
+                f,
+                "PNG PLTE chunk declares {count} entries: the format allows at most 256"
+            ),
         }
     }
 }
@@ -266,7 +274,8 @@ pub fn decode(data: &[u8]) -> Result<IndexedImage, PngError> {
 
 /// Parse a `PLTE` chunk's body into `[r, g, b]` triples (RFC 2083 §11.2.3:
 /// three one-byte samples per entry, no separate length field — the chunk
-/// length itself, divided by 3, gives the entry count).
+/// length itself, divided by 3, gives the entry count — and at most 256
+/// entries; see [`PngError::TooManyPaletteEntries`]).
 ///
 /// # Errors
 ///
@@ -274,9 +283,14 @@ pub fn decode(data: &[u8]) -> Result<IndexedImage, PngError> {
 /// is not a multiple of three — the same fail-closed treatment
 /// [`decode_palette`] applies, so a malformed source PNG fails extraction
 /// instead of silently producing a truncated palette in the pack.
+/// [`PngError::TooManyPaletteEntries`] if it declares more than 256 entries.
 fn parse_plte(data: &[u8]) -> Result<Vec<[u8; 3]>, PngError> {
     if data.is_empty() || !data.len().is_multiple_of(3) {
         return Err(PngError::MissingOrBadPalette);
+    }
+    let count = data.len() / 3;
+    if count > 256 {
+        return Err(PngError::TooManyPaletteEntries(count));
     }
     Ok(data.chunks_exact(3).map(|c| [c[0], c[1], c[2]]).collect())
 }
@@ -396,7 +410,9 @@ fn unpack_row(packed: &[u8], width: usize, bit_depth: u8, out: &mut Vec<u8>) {
 ///
 /// [`PngError::BadSignature`] / [`PngError::Truncated`] for a malformed
 /// file (same as [`decode`]); [`PngError::MissingOrBadPalette`] if no `PLTE`
-/// chunk is present, is empty, or its length is not a multiple of 3 bytes.
+/// chunk is present, is empty, or its length is not a multiple of 3 bytes;
+/// [`PngError::TooManyPaletteEntries`] if it declares more than 256 entries
+/// (see [`parse_plte`], which this shares with [`decode`]'s own `PLTE` read).
 pub fn decode_palette(data: &[u8]) -> Result<Vec<Rgb888>, PngError> {
     if data.len() < 8 || data[..8] != SIGNATURE {
         return Err(PngError::BadSignature);
@@ -407,18 +423,10 @@ pub fn decode_palette(data: &[u8]) -> Result<Vec<Rgb888>, PngError> {
         .iter()
         .find(|c| &c.kind == b"PLTE")
         .ok_or(PngError::MissingOrBadPalette)?;
-    if plte.data.is_empty() || plte.data.len() % 3 != 0 {
-        return Err(PngError::MissingOrBadPalette);
-    }
 
-    Ok(plte
-        .data
-        .chunks_exact(3)
-        .map(|c| Rgb888 {
-            r: c[0],
-            g: c[1],
-            b: c[2],
-        })
+    Ok(parse_plte(plte.data)?
+        .into_iter()
+        .map(|[r, g, b]| Rgb888 { r, g, b })
         .collect())
 }
 
@@ -776,6 +784,22 @@ mod tests {
         assert_eq!(
             super::parse_plte(&[1, 2, 3, 4, 5, 6, 7, 8, 9]).unwrap(),
             vec![[1, 2, 3], [4, 5, 6], [7, 8, 9]]
+        );
+    }
+
+    #[test]
+    fn parse_plte_accepts_exactly_256_entries_but_rejects_257() {
+        // PNG's hard cap (RFC 2083 §11.2.3: "1 to 256 palette entries") --
+        // 256*3 bytes is still a multiple of 3, so only the dedicated
+        // entry-count check (not the multiple-of-3 guard above) catches
+        // going one entry over (issue #301).
+        let at_cap = vec![0u8; 256 * 3];
+        assert_eq!(super::parse_plte(&at_cap).unwrap().len(), 256);
+
+        let over_cap = vec![0u8; 257 * 3];
+        assert_eq!(
+            super::parse_plte(&over_cap).unwrap_err(),
+            PngError::TooManyPaletteEntries(257)
         );
     }
 

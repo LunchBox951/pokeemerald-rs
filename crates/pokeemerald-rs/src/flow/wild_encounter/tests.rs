@@ -198,6 +198,27 @@ fn walking_in_route_101s_grass_fires_an_encounter_and_runs_a_battle() {
         ivs,
         "and its IVs off the draws right after"
     );
+    // `SetWildMonHeldItem`'s `Random() % 100` draw, discarded here exactly as
+    // `start_wild_battle` discards it, so the turn-number draw right after
+    // lands where upstream's frame-free sequence puts it (the module docs'
+    // `VBlankCB_Battle` caveat applies to any real-console comparison).
+    let _ = reference.next_u16() % 100;
+    let expected_turn_number = reference.next_u16();
+    assert_eq!(
+        battle.random_turn_number(),
+        expected_turn_number,
+        "the turn number must come off the shared stream, right after the discarded held-item draw"
+    );
+    assert_ne!(
+        battle.player().effective_speed(),
+        battle.enemy().effective_speed(),
+        "speeds must differ so Battle::new draws only the turn number, no speed-tie draw"
+    );
+    assert_eq!(
+        phase.rng.state(),
+        reference.state(),
+        "exactly one held-item draw happened, and no more -- pinning the shared stream up to turn one"
+    );
     // The lead mon moved into the battle, so it can't be fought with twice.
     assert!(phase.party_lead.is_none());
     // A fired encounter restarts the immunity window (`:679`).
@@ -1077,10 +1098,13 @@ fn after_a_white_out_a_later_grass_step_rolls_again() {
 /// deliberately crafted level-1 Treecko (zero Defense IV, Pound only) whose
 /// 12 max HP a level-2 Zigzagoon's Tackle can overkill from `25%` (`3/12`,
 /// above `AI_FirstBattle`'s `<=20%` flee threshold) straight to `0` in one
-/// hit -- seed `2` was chosen by enumeration over the LCG (the same
+/// hit -- seed `1` was chosen by enumeration over the LCG (the same
 /// technique `ENCOUNTER_SEED`'s own doc comment names) to produce exactly
 /// that within a bounded number of turns; `crate::flow::first_battle::advance_first_battle`
-/// always picks move slot 0, so the sequence is fully deterministic.
+/// always picks move slot 0, so the sequence is fully deterministic. (Picked
+/// against the shared stream's current draw count -- `start_first_battle`'s
+/// discarded `SetWildMonHeldItem` draw included -- so a future change to
+/// that count would need to re-enumerate a working seed here too.)
 #[test]
 fn a_lost_route_101_first_battle_heals_the_lead_instead_of_leaving_it_fainted() {
     const TRIGGER_TILE: (i32, i32) = (10, 19);
@@ -1096,7 +1120,7 @@ fn a_lost_route_101_first_battle_heals_the_lead_instead_of_leaving_it_fainted() 
         PlayerState::new((tx - 1, ty), TRIGGER_ELEVATION, Direction::East),
         &[],
     );
-    phase.rng = Rng::new(2);
+    phase.rng = Rng::new(1);
     let ivs = Ivs {
         hp: MAX_IV,
         attack: MAX_IV,
