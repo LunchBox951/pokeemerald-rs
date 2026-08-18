@@ -364,9 +364,10 @@ pub fn default_last_heal_location(gender: PlayerGender) -> WarpData {
 /// signature.
 #[must_use]
 pub fn init_save_blocks(rng: &mut Rng) -> (SaveBlock1, SaveBlock2) {
-    // `rng`'s state here, before this function has drawn anything from it,
-    // is exactly the seed it was constructed with -- upstream's raw Timer-1
-    // read (`SeedRngAndSetTrainerId`, `pokeemerald/src/main.c:208-214`).
+    // `rng`'s current pre-draw state here, before this function has drawn
+    // anything from it, may already be advanced from its construction seed;
+    // upstream's corresponding state is the raw Timer-1 read
+    // (`SeedRngAndSetTrainerId`, `pokeemerald/src/main.c:208-214`).
     // Captured now, alongside the generator, so `trainer_id_bytes` can reuse
     // it verbatim as the id's low half the same way upstream's `sTrainerId`
     // does.
