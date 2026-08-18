@@ -215,6 +215,12 @@ pub struct Song {
     tracks: Vec<Vec<Event>>,
     /// Initial tempo in BPM.
     initial_tempo: u16,
+    /// `SongHeader::priority`, mirrored onto `MusicPlayerInfo::priority` when
+    /// the song starts. It is the base half of every note's effective
+    /// note-on priority: `ply_note` adds the sounding track's own `PRIO` to
+    /// it and saturates the sum at `0xFF` (`m4a_1.s:1628`..`:1633`). Set via
+    /// [`Self::with_priority`].
+    priority: u8,
     /// `SongHeader::reverb`, decomposed around its SET bit
     /// (`m4a_internal.h:12`..`:13`): `None` when the header left the
     /// session's previously configured master reverb level untouched,
@@ -234,8 +240,25 @@ impl Song {
             voices,
             tracks,
             initial_tempo,
+            priority: 0,
             reverb: None,
         }
+    }
+
+    /// Set this song's header priority (`SongHeader::priority`) -- see
+    /// [`Self::priority`]. Chainable onto [`Self::new`], mirroring
+    /// [`Self::with_reverb`].
+    #[must_use]
+    pub fn with_priority(mut self, priority: u8) -> Self {
+        self.priority = priority;
+        self
+    }
+
+    /// This song's header priority, the base term of every note's effective
+    /// note-on priority (`m4a_1.s:1628`..`:1633`).
+    #[must_use]
+    pub fn priority(&self) -> u8 {
+        self.priority
     }
 
     /// Set this song's master-mix reverb level (`SongHeader::reverb`,

@@ -73,6 +73,12 @@ pub struct Voice {
     /// (`m4a_1.s:1719`), so a higher ordinal is strictly newer; `ply_endtie`
     /// releases the newest match by walking from the head (`m4a_1.s:1819`).
     seq: u64,
+    /// The note's effective priority (`SoundChannel::priority`): the song
+    /// header's priority plus the owning track's `PRIO`, saturated at `0xFF`
+    /// (`m4a_1.s:1628`..`:1633`), stamped onto the channel when the note is
+    /// allocated (`m4a_1.s:1744`..`:1745`). [`crate::mixer::Mixer`]'s
+    /// note-on channel search reads it to pick a victim.
+    priority: u8,
 }
 
 impl Voice {
@@ -114,7 +120,23 @@ impl Voice {
             fixed_rate: false,
             track,
             seq: 0,
+            priority: 0,
         }
+    }
+
+    /// Stamp this voice's effective note-on priority (see [`Self::priority`]).
+    /// Chained onto [`Self::new`] so the many call sites that do not care
+    /// need not thread another constructor parameter.
+    #[must_use]
+    pub(crate) fn with_priority(mut self, priority: u8) -> Self {
+        self.priority = priority;
+        self
+    }
+
+    /// This voice's effective note-on priority (higher outranks lower).
+    #[must_use]
+    pub(crate) fn priority(&self) -> u8 {
+        self.priority
     }
 
     /// Override the key used for pitch resolution independently of

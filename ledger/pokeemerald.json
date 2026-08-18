@@ -26691,7 +26691,7 @@
           "status": "rewritten"
         },
         "ply_note": {
-          "reason": "ply_note (m4a_1.s:1538) key-split (TONEDATA_TYPE_SPL) / rhythm (TONEDATA_TYPE_RHY) child resolution, the TONEDATA_TYPE_FIX dispatch bypass, and the pseudoEchoVolume/Length note-on snapshot are reimplemented as sequencer::resolve_instrument + note_on (S-3 slice 3). Priority-based channel-stealing search over the fixed DirectSound/CGB pools is still deferred (out of scope; Mixer uses a flat voice cap instead).",
+          "reason": "ply_note (m4a_1.s:1538) key-split (TONEDATA_TYPE_SPL) / rhythm (TONEDATA_TYPE_RHY) child resolution, the TONEDATA_TYPE_FIX dispatch bypass, and the pseudoEchoVolume/Length note-on snapshot are reimplemented as sequencer::resolve_instrument + note_on (S-3 slice 3). The channel search is now implemented too (issue #314): sequencer::note_priority sums the song header's priority and the track's PRIO saturated at 0xFF (m4a_1.s:1628-1633) and mixer::Mixer::add_voice/add_cgb_voice reuse a free or released channel, else steal the lowest-priority channel the newcomer outranks (equal priority tie-broken by track order), else refuse the note (m4a_1.s:1647-1718, :1744-1745). Still deferred: ply_note's CGB store path (m4a_1.s:1766-1783) copies ToneData::length into CgbChannel::length (:1771-1772) and normalizes ToneData::pan_sweep into CgbChannel::sweep (:1773-1783; bit 7 set, or no bits of 0x70 set, forces sweep 0x08) -- we model no CGB sound-length counter and pass the voicegroup's sweep byte through unnormalized -- and SoundChannel::count is not seeded from track->unk_3C (:1792-1793).",
           "rust_target": "crates/audio/src/sequencer.rs",
           "spec": "S-3",
           "status": "stubbed"
