@@ -406,10 +406,10 @@ fn winning_the_rival_battle_hides_the_rival_and_makes_the_fight_unrepeatable() {
         Ok(true),
         "removeobject's real, ported effect (module docs)"
     );
-    // `Cmd_getmoneyreward`'s `AddMoney(&gSaveBlock1Ptr->money, moneyReward)`
-    // (`pokeemerald/src/battle_script_commands.c:5641`): a win credits the
-    // trainer's own reward -- the fresh save's default rival, a level-5
-    // Torchic fought by a male player who kept the default Treecko starter.
+    // `Cmd_getmoneyreward` (`pokeemerald/src/battle_script_commands.c:5641`)
+    // credits the beaten trainer's own reward to the saved wallet -- here the
+    // fresh save's default rival, a level-5 Torchic fought by a male player
+    // who kept the default Treecko starter.
     let trainer = crate::flow::route103_rival::route103_rival_for(
         crate::flow::route103_rival::Rival::May,
         crate::flow::route103_rival::PlayerStarter::Treecko,

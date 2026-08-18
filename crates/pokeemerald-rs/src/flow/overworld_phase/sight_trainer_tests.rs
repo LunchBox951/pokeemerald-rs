@@ -411,9 +411,9 @@ fn winning_sets_the_defeated_flag_and_the_fight_cannot_restart() {
         Ok(true),
         "SetBattledTrainersFlags's real effect (module docs item 4)"
     );
-    // `Cmd_getmoneyreward`'s `AddMoney(&gSaveBlock1Ptr->money, moneyReward)`
-    // (`pokeemerald/src/battle_script_commands.c:5641`): a win credits the
-    // stand-in party's own trainer reward.
+    // `Cmd_getmoneyreward` (`pokeemerald/src/battle_script_commands.c:5641`)
+    // credits the beaten trainer's own reward to the saved wallet -- here the
+    // stand-in party's trainer.
     let reward = battle::trainer_money(
         battle::trainer_data(assets::trainers::TrainerId(STAND_IN_TRAINER)).unwrap(),
     );
