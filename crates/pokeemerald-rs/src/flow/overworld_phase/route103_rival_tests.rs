@@ -406,10 +406,19 @@ fn winning_the_rival_battle_hides_the_rival_and_makes_the_fight_unrepeatable() {
         Ok(true),
         "removeobject's real, ported effect (module docs)"
     );
+    // `Cmd_getmoneyreward`'s `AddMoney(&gSaveBlock1Ptr->money, moneyReward)`
+    // (`pokeemerald/src/battle_script_commands.c:5641`): a win credits the
+    // trainer's own reward -- the fresh save's default rival, a level-5
+    // Torchic fought by a male player who kept the default Treecko starter.
+    let trainer = crate::flow::route103_rival::route103_rival_for(
+        crate::flow::route103_rival::Rival::May,
+        crate::flow::route103_rival::PlayerStarter::Treecko,
+    );
+    let reward = battle::trainer_money(battle::trainer_data(trainer).unwrap());
     assert_eq!(
         phase.save1().money,
-        crate::new_game::STARTING_MONEY,
-        "a win must not touch the player's money -- only `white_out` (a loss) halves it"
+        crate::new_game::STARTING_MONEY + reward,
+        "a win must credit the trainer's prize money to the wallet (AddMoney)"
     );
 
     // The rival is no longer even *found* by the facing lookup, so a fresh
@@ -420,6 +429,27 @@ fn winning_the_rival_battle_hides_the_rival_and_makes_the_fight_unrepeatable() {
     assert!(
         !phase.is_rival_battle_active(),
         "the hidden rival must not be found by a second A press"
+    );
+}
+
+/// `AddMoney` (`pokeemerald/src/money.c:90-108`) saturates at `MAX_MONEY`
+/// (`999999`) rather than wrapping or overshooting it -- pinned here by
+/// starting a wallet close enough to the cap that the rival's own reward
+/// would cross it.
+#[test]
+fn winning_the_rival_battle_saturates_money_at_the_upstream_cap() {
+    let mut phase = route_103_phase_facing_the_rival();
+    phase.party_lead = Some(overwhelming_treecko_lead());
+    phase.save1.money = 999_900;
+    phase.step(pressed(Buttons::A));
+    assert!(phase.is_rival_battle_active(), "setup: the battle started");
+
+    let outcome = play_out_rival_battle(&mut phase, 32);
+    assert_eq!(outcome, Some(BattleOutcome::PlayerWon), "setup: must win");
+    assert_eq!(
+        phase.save1().money,
+        999_999,
+        "a reward that would cross MAX_MONEY must clamp to it, not wrap or overshoot"
     );
 }
 

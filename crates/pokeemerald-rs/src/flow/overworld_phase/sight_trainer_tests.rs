@@ -411,10 +411,16 @@ fn winning_sets_the_defeated_flag_and_the_fight_cannot_restart() {
         Ok(true),
         "SetBattledTrainersFlags's real effect (module docs item 4)"
     );
+    // `Cmd_getmoneyreward`'s `AddMoney(&gSaveBlock1Ptr->money, moneyReward)`
+    // (`pokeemerald/src/battle_script_commands.c:5641`): a win credits the
+    // stand-in party's own trainer reward.
+    let reward = battle::trainer_money(
+        battle::trainer_data(assets::trainers::TrainerId(STAND_IN_TRAINER)).unwrap(),
+    );
     assert_eq!(
         phase.save1().money,
-        crate::new_game::STARTING_MONEY,
-        "a win must not touch the player's money -- only white_out (a loss) halves it"
+        crate::new_game::STARTING_MONEY + reward,
+        "a win must credit the trainer's prize money to the wallet (AddMoney)"
     );
 
     // Standing in the same cone again must not restart the fight -- the
@@ -424,6 +430,26 @@ fn winning_sets_the_defeated_flag_and_the_fight_cannot_restart() {
     // either).
     phase.step(ButtonState::new());
     assert!(!phase.is_sight_trainer_battle_active());
+}
+
+/// `AddMoney` (`pokeemerald/src/money.c:90-108`) saturates at `MAX_MONEY`
+/// (`999999`) rather than wrapping or overshooting it -- the sight-trainer
+/// driver's own counterpart to `route103_rival_tests`'
+/// `winning_the_rival_battle_saturates_money_at_the_upstream_cap`.
+#[test]
+fn winning_sets_the_defeated_flag_and_saturates_money_at_the_upstream_cap() {
+    let (rx, ry) = RHETT_TILE;
+    let mut phase = route_103_phase(PlayerState::new((rx, ry + 1), 3, Direction::North));
+    seed_battle(&mut phase, TRAINER_RHETT, overwhelming_lead(), 1);
+    phase.save1.money = 999_900;
+
+    let outcome = play_out_sight_battle(&mut phase, 32);
+    assert_eq!(outcome, Some(BattleOutcome::PlayerWon), "setup: must win");
+    assert_eq!(
+        phase.save1().money,
+        999_999,
+        "a reward that would cross MAX_MONEY must clamp to it, not wrap or overshoot"
+    );
 }
 
 /// The defeated flag survives a save/continue round trip: `SaveBlock1`'s own

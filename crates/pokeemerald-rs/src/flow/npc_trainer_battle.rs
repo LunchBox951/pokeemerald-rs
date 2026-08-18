@@ -110,10 +110,27 @@
 
 use assets::trainers::{TrainerData, TrainerId, TrainerParty};
 use assets::{MoveId, SpeciesNames};
-use battle::{Battle, BattleError, BattleOutcome, BattlePokemon, Dex, PlayerAction, StatStages};
+use battle::{
+    Battle, BattleError, BattleEvent, BattleOutcome, BattlePokemon, Dex, PlayerAction, StatStages,
+};
 use engine::rng::Rng;
 
 use super::wild_encounter::SharedRng;
+
+/// `MAX_MONEY` (`pokeemerald/src/money.c:13`): the wallet's own hard cap,
+/// upstream `999999`.
+pub const MAX_MONEY: u32 = 999_999;
+
+/// `AddMoney` (`pokeemerald/src/money.c:90-108`): add `amount` to `*money`,
+/// saturating at [`MAX_MONEY`] rather than wrapping past it. Upstream's own
+/// version reads as two branches -- a pre-check against `MAX_MONEY` and a
+/// post-add overflow guard that also clamps to `MAX_MONEY` -- but both
+/// branches land on the same value a plain saturating add and a final
+/// `min` already produce, for every `u32` input; this is that
+/// simplification, not a behavioural narrowing.
+fn credit_money(money: &mut u32, amount: u32) {
+    *money = money.saturating_add(amount).min(MAX_MONEY);
+}
 
 /// Why an NPC trainer battle could not be constructed.
 ///
@@ -414,13 +431,14 @@ pub fn start_npc_trainer_battle(
 /// lead this function hands back is only ever momentarily fainted in
 /// practice, not a standing gap.
 ///
-/// [`battle::BattleEvent::MoneyGained`] is still reported and dropped: this
-/// port only wires `engine::save::SaveBlock1::money` up to be *halved* on a
-/// loss (issue #261's own scope) — awarding prize money on a *win* is a
-/// separate, still-open gap. The event is returned to the caller through
-/// [`battle::Battle::take_turn`] regardless, so a later slice that wires up
-/// a wallet credit has the amount already computed at the right point in the
-/// battle.
+/// [`battle::BattleEvent::MoneyGained`] is credited to `*money` the instant
+/// it is seen, via [`credit_money`] -- `Cmd_getmoneyreward`'s own
+/// `AddMoney(&gSaveBlock1Ptr->money, moneyReward)`
+/// (`pokeemerald/src/battle_script_commands.c:5641`), reached only on the
+/// win path that emits the event in the first place (`battle::Battle`'s own
+/// `end_of_turn`), so a loss or an in-progress battle never touches the
+/// wallet here -- only [`crate::flow::overworld_phase::white_out`]'s halving
+/// does.
 ///
 /// A `None` return is intentionally ambiguous: it can mean that `slot` was
 /// already empty, that the battle remains ongoing, or that a failed turn
@@ -429,11 +447,19 @@ pub fn start_npc_trainer_battle(
 pub fn advance_npc_trainer_battle(
     slot: &mut Option<Battle>,
     lead: &mut Option<BattlePokemon>,
+    money: &mut u32,
     rng: &mut Rng,
 ) -> Option<BattleOutcome> {
     let battle = slot.as_mut()?;
     let failed = match battle.take_turn(PlayerAction::UseMove(0), &mut SharedRng::new(rng)) {
-        Ok(_) => false,
+        Ok(events) => {
+            for event in &events {
+                if let BattleEvent::MoneyGained(amount) = event {
+                    credit_money(money, *amount);
+                }
+            }
+            false
+        }
         Err(error) => {
             eprintln!("npc trainer battle: turn failed ({error:?}) -- ending the battle");
             true

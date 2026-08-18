@@ -11,7 +11,7 @@
 
 use assets::trainers::{TrainerId, TrainerParty, TrainerTable};
 use assets::{MoveId, SpeciesId};
-use battle::{BattleOutcome, BattlePokemon, Dex, Ivs};
+use battle::{trainer_data, trainer_money, BattleOutcome, BattlePokemon, Dex, Ivs};
 use engine::rng::Rng;
 
 use super::{
@@ -314,9 +314,11 @@ fn all_six_rivals_construct_and_play_to_a_terminal_outcome() {
                 .unwrap_or_else(|e| panic!("{id:?} must construct: {e}")),
         );
         let mut written_back = None;
+        let mut money = 0;
         let mut outcome = None;
         for _ in 0..32 {
-            outcome = advance_route103_rival_battle(&mut slot, &mut written_back, &mut rng);
+            outcome =
+                advance_route103_rival_battle(&mut slot, &mut written_back, &mut money, &mut rng);
             if outcome.is_some() {
                 break;
             }
@@ -330,6 +332,11 @@ fn all_six_rivals_construct_and_play_to_a_terminal_outcome() {
         assert!(
             written_back.is_some(),
             "the driver writes the player's mon back"
+        );
+        assert_eq!(
+            money,
+            trainer_money(trainer_data(id).unwrap()),
+            "{id:?}'s win must credit exactly its own AddMoney reward"
         );
     }
 }
@@ -349,7 +356,8 @@ fn the_driver_never_attempts_to_run() {
     let enemy_hp_before = slot.as_ref().unwrap().enemy().current_hp();
 
     let mut written_back = None;
-    let outcome = advance_route103_rival_battle(&mut slot, &mut written_back, &mut rng);
+    let mut money = 0;
+    let outcome = advance_route103_rival_battle(&mut slot, &mut written_back, &mut money, &mut rng);
     assert_eq!(outcome, None, "one turn must not end this battle");
     assert!(slot.is_some(), "an ongoing battle keeps its slot");
     let battle = slot.as_ref().unwrap();
@@ -378,8 +386,9 @@ fn a_lead_with_no_pp_in_slot_zero_ends_the_battle_and_is_still_written_back() {
     }
     let mut slot = Some(start_route103_rival_battle(lead, id, &mut rng).unwrap());
     let mut written_back = None;
+    let mut money = 0;
 
-    let outcome = advance_route103_rival_battle(&mut slot, &mut written_back, &mut rng);
+    let outcome = advance_route103_rival_battle(&mut slot, &mut written_back, &mut money, &mut rng);
     assert_eq!(outcome, None, "the engine reported no outcome...");
     assert!(slot.is_none(), "...but the battle was ended anyway");
     let mon = written_back.expect("the mon is still written back");
@@ -447,9 +456,15 @@ fn advancing_an_empty_slot_does_nothing() {
     let mut rng = Rng::new(1);
     let mut slot = None;
     let mut lead = None;
+    let mut money = crate::new_game::STARTING_MONEY;
     assert_eq!(
-        advance_route103_rival_battle(&mut slot, &mut lead, &mut rng),
+        advance_route103_rival_battle(&mut slot, &mut lead, &mut money, &mut rng),
         None
     );
     assert!(lead.is_none());
+    assert_eq!(
+        money,
+        crate::new_game::STARTING_MONEY,
+        "an empty slot must not touch the wallet"
+    );
 }

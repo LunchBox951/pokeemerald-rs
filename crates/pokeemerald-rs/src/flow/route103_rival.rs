@@ -229,9 +229,10 @@ pub fn start_route103_rival_battle(
 pub fn advance_route103_rival_battle(
     slot: &mut Option<Battle>,
     lead: &mut Option<BattlePokemon>,
+    money: &mut u32,
     rng: &mut Rng,
 ) -> Option<BattleOutcome> {
-    npc_trainer_battle::advance_npc_trainer_battle(slot, lead, rng)
+    npc_trainer_battle::advance_npc_trainer_battle(slot, lead, money, rng)
 }
 
 #[cfg(test)]
