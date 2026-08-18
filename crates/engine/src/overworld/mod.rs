@@ -5,7 +5,7 @@
 //! Ports the observable field-movement behaviour of upstream
 //! `pokeemerald/src/field_player_avatar.c`, `src/fieldmap.c`, and the
 //! warp-related subset of `src/field_control_avatar.c`/`src/metatile_behavior.c`
-//! `(behavioral-fidelity)`, restricted to the v1 north-star path: the
+//! `(behavioral-fidelity)`, restricted to the early playable slice: the
 //! protagonist's room -> downstairs -> Littleroot Town's outdoors -> Route
 //! 101's first wild-encounter tile. See each submodule's own docs for the
 //! exact upstream symbols it mirrors and the citations backing its test

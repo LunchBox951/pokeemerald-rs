@@ -685,8 +685,8 @@ const LAYOUTS: [(&str, &str); 10] = [
     // `data/layouts/Route101/`), bundled anyway: Littleroot's north
     // connection (`data/maps/LittlerootTown/map.json:15-21`) targets it, and
     // Route101's own south connection (`data/maps/Route101/map.json`)
-    // targets Littleroot right back -- the one connection pair this port's
-    // v1 north-star instance needs to cross.
+    // targets Littleroot right back -- the one connection pair the early
+    // playable slice needs to cross.
     ("LAYOUT_ROUTE101", "route101"),
     // Not part of the Littleroot Town directory family either (its own
     // top-level `data/layouts/OldaleTown/` and `data/layouts/Route103/`),
