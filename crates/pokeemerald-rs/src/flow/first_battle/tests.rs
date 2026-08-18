@@ -71,22 +71,24 @@ fn start_first_battle_builds_a_level_2_zigzagoon_with_first_battle_set() {
 
 /// The exact draw count [`start_first_battle`] spends before handing back a
 /// battle: [`battle::build_pokemon_with_random_personality`]'s personality
-/// (one `Random32`, two `next_u16` draws) and IVs (two more), then
-/// [`battle::Battle::new`]'s own turn-number draw. No speed-tie draw for
-/// this seed -- asserted explicitly below rather than assumed, so a future
-/// dex/stat change that flipped it would fail loudly here instead of
-/// silently shifting the pin.
+/// (one `Random32`, two `next_u16` draws) and IVs (two more), then the
+/// discarded `SetWildMonHeldItem` draw, then [`battle::Battle::new`]'s own
+/// turn-number draw. No speed-tie draw for this seed -- asserted explicitly
+/// below rather than assumed, so a future dex/stat change that flipped it
+/// would fail loudly here instead of silently shifting the pin.
 #[test]
-fn start_first_battle_draws_personality_then_ivs_then_the_turn_number_off_the_shared_stream() {
+fn start_first_battle_draws_personality_then_ivs_then_held_item_then_turn_number_off_the_shared_stream(
+) {
     const SEED: u32 = 1;
     let mut rng = Rng::new(SEED);
     let lead = player_mon(277, 50, vec![POUND]);
     let battle = start_first_battle(lead, &mut rng).expect("construction must succeed");
 
-    // Replay the same three primitive draws on an independent reference
+    // Replay the same primitive draws on an independent reference
     // generator seeded identically -- proving both the exact count *and*
-    // that the personality/IV draws land before Battle::new's, upstream's
-    // own order (module docs, "RNG stream").
+    // that the personality/IV draws land before the held-item draw, which
+    // lands before Battle::new's, upstream's own order (module docs, "RNG
+    // stream").
     let mut reference = Rng::new(SEED);
     let personality = reference.next_u32();
     let ivs_first = reference.next_u16();
@@ -97,10 +99,13 @@ fn start_first_battle_draws_personality_then_ivs_then_the_turn_number_off_the_sh
         battle.enemy().ivs().sp_defense,
         ((ivs_second >> 10) & 0x1F) as u8
     );
-    // `Battle::new`'s own turn-number draw -- the value itself is never read
-    // by anything this slice models (module docs' derivation), only its
-    // place in the sequence matters here.
-    reference.next_u16();
+    // `SetWildMonHeldItem`'s `Random() % 100` draw, discarded here exactly as
+    // `start_first_battle` discards it.
+    let _ = reference.next_u16() % 100;
+    // `Battle::new`'s own turn-number draw, right after the discarded
+    // held-item draw.
+    let expected_turn_number = reference.next_u16();
+    assert_eq!(battle.random_turn_number(), expected_turn_number);
 
     assert_ne!(
         battle.player().effective_speed(),
@@ -110,7 +115,7 @@ fn start_first_battle_draws_personality_then_ivs_then_the_turn_number_off_the_sh
     assert_eq!(
         rng.state(),
         reference.state(),
-        "exactly personality (2) + ivs (2) + turn number (1) = 5 draws, no more"
+        "exactly personality (2) + ivs (2) + held item (1) + turn number (1) = 6 draws, no more"
     );
 }
 

@@ -176,7 +176,8 @@ fn latch_landing(pending_landing: &mut Option<TilePos>, outcome: StepOutcome) {
 /// connections in the generated [`assets::MapHeaderTable`] at all, so
 /// `resolve_connection` never finds a candidate there regardless of which
 /// `maps` is passed; an outdoor map's own connections (Littleroot Town's
-/// north edge to Route 101, the v1 north-star instance) resolve for real
+/// north edge to Route 101, the early playable slice's own crossing) resolve
+/// for real
 /// against [`super::connections::MapConnections`].
 pub(super) fn advance_player_one_frame(
     player: &mut PlayerState,

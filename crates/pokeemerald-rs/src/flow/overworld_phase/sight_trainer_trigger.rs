@@ -450,6 +450,7 @@ impl OverworldPhase {
         if let Some(outcome) = npc_trainer_battle::advance_npc_trainer_battle(
             &mut self.sight_trainer_battle,
             &mut self.party_lead,
+            &mut self.save1.money,
             &mut self.rng,
         ) {
             eprintln!("sight trainer: ended -- {outcome:?}");

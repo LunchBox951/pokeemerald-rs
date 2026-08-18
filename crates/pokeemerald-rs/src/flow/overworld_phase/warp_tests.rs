@@ -515,7 +515,7 @@ fn a_one_frame_down_tap_on_the_doormat_facing_north_turns_without_warping() {
 }
 
 /// Senior-review regression (#174 finding 1a, the under-trigger half, and
-/// the v1 north-star doormat interaction): the state a warp *into* the
+/// the early playable slice's doormat interaction): the state a warp *into* the
 /// house leaves the player in -- standing on the doormat at `(8, 8)`,
 /// facing North, because the mat's own `MB_SOUTH_ARROW_WARP` drives
 /// `GetAdjustedInitialDirection` that way (`overworld.c:937-938`, pinned by
