@@ -13,7 +13,7 @@
 //! | upstream (`new_game.c:149-207`)                          | here |
 //! |------------------------------------------------------------|------|
 //! | `gSaveBlock2Ptr->encryptionKey = 0;`                        | [`SaveBlock2::encryption_key`] `= 0` |
-//! | `InitPlayerTrainerId()` (`Random() << 16 \| GetGeneratedTrainerIdLower()`) | [`SaveBlock2::player_trainer_id`], via `rng` (deviation below) |
+//! | `InitPlayerTrainerId()` (`Random() << 16 \| GetGeneratedTrainerIdLower()`) | [`SaveBlock2::player_trainer_id`], via `rng` ([`trainer_id_bytes`], deviation below) |
 //! | `ZeroPlayerPartyMons()` / `gPlayerPartyCount = 0`           | [`SaveBlock1::player_party`]/`player_party_count` `= 0` ([`SaveBlock1::default`]) |
 //! | `SetMoney(&gSaveBlock1Ptr->money, 3000)`                    | [`SaveBlock1::money`] `= `[`STARTING_MONEY`] |
 //! | `ClearBag()`                                                | [`SaveBlock1::bag`] `= Bag::default()` |
@@ -91,13 +91,20 @@
 //!   default name for a boy, rather than `Random() % NUM_PRESET_NAMES`'s
 //!   runtime pick (`pokeemerald/src/main_menu.c:1603`), for a deterministic
 //!   pre-1.0 default.
-//! - **Trainer id has no link-cable lower half.** Upstream's
-//!   `InitPlayerTrainerId` is `(Random() << 16) | GetGeneratedTrainerIdLower()`;
-//!   `GetGeneratedTrainerIdLower` (`link_rfu.c`) draws on RFU/link-cable
-//!   session state this engine slice has no model for. [`init_save_blocks`]
-//!   instead draws both halves from the same [`engine::rng::Rng`] the caller
-//!   supplies (`rng.next_u16()` twice), preserving the "one `Random()`-family
-//!   draw per half" shape without the unmodeled link dependency.
+//! - **Trainer id's low half is the seed, not a second draw.** Upstream
+//!   seeds `Random()` and sets the trainer id's low half from the very same
+//!   raw value in one step -- `SeedRngAndSetTrainerId` reads `REG_TM1CNT_L`
+//!   once into a local, calls `SeedRng` on it, and stashes it unmodified as
+//!   `sTrainerId` (`pokeemerald/src/main.c:208-214`); `GetGeneratedTrainerIdLower`
+//!   just returns that stashed value back (`main.c:216-219`), no RFU/link-cable
+//!   state involved. `InitPlayerTrainerId` then shifts one `Random()` draw
+//!   into the high half and keeps the untouched seed as the low half
+//!   (`pokeemerald/src/new_game.c:84-88`). [`trainer_id_bytes`] mirrors
+//!   that exactly: it takes `rng`'s own pre-draw state as the low half and
+//!   calls `rng.next_u16()` once for the high half. The only real deviation
+//!   is the seed's *source* -- see [`NEW_GAME_RNG_SEED`]'s docs for why this
+//!   workspace uses a fixed constant instead of upstream's hardware Timer-1
+//!   read.
 
 use engine::overworld::{Direction, TilePos};
 use engine::rng::Rng;
@@ -339,9 +346,13 @@ pub fn default_last_heal_location(gender: PlayerGender) -> WarpData {
 /// `NewGameInitData` (`new_game.c:149-207`) does, for the fields this
 /// workspace's save model covers (module docs' table and deviations).
 ///
-/// `rng` supplies the trainer id's two halves (module docs, "Trainer id has
-/// no link-cable lower half") -- callers that don't care about a specific
-/// sequence can pass a freshly seeded [`Rng`].
+/// `rng` supplies the trainer id's two halves (module docs, "Trainer id's
+/// low half is the seed, not a second draw"): its own pre-draw state is the
+/// low half, and one draw off it is the high half. Callers that don't care
+/// about a specific sequence can pass a freshly seeded [`Rng`]; passing one
+/// that has already drawn still works, but then the "low half" is that
+/// already-advanced state rather than a real seed -- harmless here since
+/// every caller in this workspace passes a freshly constructed [`Rng`].
 ///
 /// # Panics
 ///
@@ -353,10 +364,17 @@ pub fn default_last_heal_location(gender: PlayerGender) -> WarpData {
 /// signature.
 #[must_use]
 pub fn init_save_blocks(rng: &mut Rng) -> (SaveBlock1, SaveBlock2) {
+    // `rng`'s state here, before this function has drawn anything from it,
+    // is exactly the seed it was constructed with -- upstream's raw Timer-1
+    // read (`SeedRngAndSetTrainerId`, `pokeemerald/src/main.c:208-214`).
+    // Captured now, alongside the generator, so `trainer_id_bytes` can reuse
+    // it verbatim as the id's low half the same way upstream's `sTrainerId`
+    // does.
+    let new_game_seed = rng.state();
     let block2 = SaveBlock2 {
         player_name: encode_player_name(DEFAULT_PLAYER_NAME),
         player_gender: DEFAULT_PLAYER_GENDER,
-        player_trainer_id: trainer_id_bytes(rng),
+        player_trainer_id: trainer_id_bytes(new_game_seed, rng),
         encryption_key: 0,
     };
 
@@ -476,21 +494,21 @@ fn apply_truck_intro_flags(block1: &mut SaveBlock1, gender: PlayerGender) {
 }
 
 /// Seed [`init_save_blocks`]'s [`Rng`] draws its trainer id from when the
-/// caller has no seed of its own to supply (module docs, "Trainer id has no
-/// link-cable lower half"): this workspace has no wall-clock/hardware
-/// entropy source wired into any runtime path yet. The overworld runtime
-/// creates its owned generator from this seed, passes it through
-/// [`init_save_blocks`], and retains the resulting advanced stream. Reaching
-/// for `std::time` here just to look more "random" would make that stream
-/// non-deterministic for no modeled behavioural gain -- fixed, like every
-/// other RNG seed this workspace's own tests use.
+/// caller has no seed of its own to supply (module docs, "Trainer id's low
+/// half is the seed, not a second draw"): this workspace has no
+/// wall-clock/hardware entropy source wired into any runtime path yet. The
+/// overworld runtime creates its owned generator from this seed, passes it
+/// through [`init_save_blocks`], and retains the resulting advanced stream.
+/// Reaching for `std::time` here just to look more "random" would make that
+/// stream non-deterministic for no modeled behavioural gain -- fixed, like
+/// every other RNG seed this workspace's own tests use.
 pub const NEW_GAME_RNG_SEED: u32 = 0;
 
 /// [`init_save_blocks`], seeded with [`NEW_GAME_RNG_SEED`], for callers that
 /// need only the initialized save blocks and do not own the continuing
 /// runtime RNG stream. The overworld handoff instead seeds its owned [`Rng`]
 /// directly and passes it to [`init_save_blocks`] so later gameplay keeps
-/// the state after the trainer-ID draws.
+/// the state after the trainer-id draw.
 #[must_use]
 pub fn init_save_blocks_for_new_game() -> (SaveBlock1, SaveBlock2) {
     let mut rng = Rng::new(NEW_GAME_RNG_SEED);
@@ -519,12 +537,16 @@ fn encode_player_name(name: &str) -> [u8; engine::save::block::PLAYER_NAME_BUF_L
     buf
 }
 
-/// `InitPlayerTrainerId`'s two-`Random()`-half shape, minus the unmodeled
-/// link-cable lower word (module docs).
-fn trainer_id_bytes(rng: &mut Rng) -> [u8; engine::save::block::TRAINER_ID_LENGTH] {
+/// Upstream's `SeedRngAndSetTrainerId` + `InitPlayerTrainerId` shape (module
+/// docs, "Trainer id's low half is the seed, not a second draw"): `seed` --
+/// `rng`'s own pre-draw state -- becomes the id's low half verbatim, and one
+/// `rng.next_u16()` draw becomes the high half. Only `seed`'s low 16 bits
+/// matter, matching the `u16` upstream's raw Timer-1 read actually is
+/// (`Rng::new`'s docs); every seed this workspace uses is already in that
+/// range.
+fn trainer_id_bytes(seed: u32, rng: &mut Rng) -> [u8; engine::save::block::TRAINER_ID_LENGTH] {
     let hi = rng.next_u16();
-    let lo = rng.next_u16();
-    let trainer_id = (u32::from(hi) << 16) | u32::from(lo);
+    let trainer_id = (u32::from(hi) << 16) | (seed & 0xFFFF);
     trainer_id.to_le_bytes()
 }
 
@@ -594,6 +616,37 @@ mod tests {
         assert_eq!(block1.location.map_num, SPAWN_MAP_NUM);
     }
 
+    /// Issue #313: pins [`trainer_id_bytes`]'s corrected shape against
+    /// upstream's own values for the configured seed, computed independently
+    /// of this module's code from `SeedRngAndSetTrainerId`
+    /// (`pokeemerald/src/main.c:208-214`) and `InitPlayerTrainerId`
+    /// (`pokeemerald/src/new_game.c:84-88`): with seed `0`, the low half is
+    /// the seed itself (`0`) and the high half is `Random()`'s first draw
+    /// (also `0` for this seed, `engine::rng::Rng`'s own module docs'
+    /// worked example) -- so the id is all-zero bytes, and the generator has
+    /// advanced by exactly the one draw `ISO_RANDOMIZE1(0) == 24_691 ==
+    /// 0x0000_6073` leaves behind, not two.
+    #[test]
+    fn trainer_id_bytes_matches_upstream_for_the_configured_seed() {
+        let mut rng = Rng::new(NEW_GAME_RNG_SEED);
+        let (_, block2) = init_save_blocks(&mut rng);
+        assert_eq!(block2.player_trainer_id, [0x00, 0x00, 0x00, 0x00]);
+        assert_eq!(rng.state(), 0x0000_6073);
+    }
+
+    /// Seed `0` is degenerate -- both halves come out `0`, so a hi/lo
+    /// transposition would still pass the test above. This non-degenerate
+    /// seed pins the halves' order and the little-endian byte layout:
+    /// `Rng::new(0x1234)`'s first draw is `0x4DCB`
+    /// (`engine::rng`'s own `next_u16_matches_known_sequence_from_u16_seed`),
+    /// so the id is `0x4DCB_1234` stored as `[0x34, 0x12, 0xCB, 0x4D]`.
+    #[test]
+    fn trainer_id_halves_are_not_transposed_for_a_nondegenerate_seed() {
+        let mut rng = Rng::new(0x1234);
+        let (_, block2) = init_save_blocks(&mut rng);
+        assert_eq!(block2.player_trainer_id, [0x34, 0x12, 0xCB, 0x4D]);
+    }
+
     /// Regression for the finding that a fresh save's
     /// [`SaveBlock1::location`] stored `(map_group, map_num) == (0, 0)`,
     /// which `assets::MapHeaderTable` resolves to `MAP_PETALBURG_CITY`, not
@@ -636,7 +689,7 @@ mod tests {
     }
 
     #[test]
-    fn trainer_id_draws_two_rng_halves_deterministically() {
+    fn trainer_id_is_deterministic_from_seed_and_one_rng_draw() {
         let mut rng_a = Rng::new(42);
         let mut rng_b = Rng::new(42);
         let (_, block2_a) = init_save_blocks(&mut rng_a);

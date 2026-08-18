@@ -652,9 +652,11 @@ impl OverworldPhase {
     }
 
     /// Build a new overworld run while preserving its single RNG stream.
-    /// New-game initialization consumes the first two draws for the trainer
-    /// ID; the advanced generator then remains owned by the phase for all
-    /// subsequent encounter and battle draws.
+    /// New-game initialization consumes exactly one draw, for the trainer
+    /// id's high half -- the low half is the seed itself, not a second draw
+    /// ([`new_game::init_save_blocks`]'s module docs, "Trainer id's low half
+    /// is the seed, not a second draw"); the advanced generator then remains
+    /// owned by the phase for all subsequent encounter and battle draws.
     fn new(
         scene: OverworldScene,
         map_id: assets::MapId,
