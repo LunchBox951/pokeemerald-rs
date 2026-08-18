@@ -81,7 +81,8 @@ Every upstream artifact needs a tracked Rust home in `ledger/pokeemerald.json`.
 Update **only** via `scripts/ledger.py` (stdlib-only) so the JSON stays
 diff-friendly. Statuses: `pending`, `rewritten` (code), `ported` (data/asset),
 `stubbed`, `folded`, `dropped`. `pending=0` is a v1 gate (`L-1`). Run
-`python3 scripts/ledger.py --help` for the full workflow.
+`python3 scripts/ledger.py -h` for the command index and
+`python3 scripts/ledger.py <command> -h` for focused guidance.
 
 ## Release channels
 

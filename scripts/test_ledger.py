@@ -14,9 +14,12 @@ import contextlib
 import importlib.util
 import io
 import json
+import os
+import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 _LEDGER_PY = Path(__file__).resolve().parent / "ledger.py"
 _spec = importlib.util.spec_from_file_location("ledger_under_test", _LEDGER_PY)
@@ -490,7 +493,72 @@ class TestGapsInspect(LedgerTestBase):
         self.assertIn("crates/a/src/done.rs", out)
 
 
-# ── 8. migrate ───────────────────────────────────────────────────────────────
+# ── 8. help ───────────────────────────────────────────────────────────────
+
+class TestHelp(unittest.TestCase):
+    COMMANDS = (
+        "scan", "status", "categories", "report", "inspect", "gaps",
+        "mark", "port", "stub", "fold", "drop", "unmark", "verify",
+        "audit", "migrate", "init",
+    )
+
+    def capture_help(self, *args):
+        buf = io.StringIO()
+        # argparse wraps to the terminal width; pin it so the byte budgets
+        # below measure the same rendering everywhere.
+        with mock.patch.dict(os.environ, {"COLUMNS": "80"}):
+            with mock.patch.object(sys, "argv", ["ledger.py", *args]):
+                with contextlib.redirect_stdout(buf):
+                    with self.assertRaises(SystemExit) as cm:
+                        ledger.main()
+        self.assertEqual(cm.exception.code, 0)
+        return buf.getvalue()
+
+    def test_top_level_help_is_a_compact_command_index(self):
+        out = self.capture_help("-h")
+        self.assertLessEqual(len(out.splitlines()), 32)
+        self.assertLessEqual(len(out.encode("utf-8")), 1_500)
+        self.assertIn("ledger.py COMMAND -h", out)
+        for command in self.COMMANDS:
+            self.assertIn(command, out)
+        self.assertNotIn("ENTRY SHAPE", out)
+        self.assertNotIn("SUB-ARTIFACTS", out)
+
+    def test_command_help_stays_focused(self):
+        for command in self.COMMANDS:
+            with self.subTest(command=command):
+                out = self.capture_help(command, "-h")
+                self.assertLessEqual(len(out.splitlines()), 40)
+                self.assertLessEqual(len(out), 4_000)
+
+    def assert_help_contains(self, command, text):
+        self.assertIn(text, " ".join(self.capture_help(command, "-h").split()))
+
+    def test_relevant_commands_explain_ledger_rules(self):
+        self.assert_help_contains(
+            "status",
+            "own status and every sub-artifact status are terminal",
+        )
+        self.assert_help_contains(
+            "gaps",
+            "pending parent appears once",
+        )
+        self.assert_help_contains(
+            "mark",
+            "concrete Rust target, spec ID, and reason",
+        )
+        self.assert_help_contains(
+            "unmark",
+            "registers that artifact",
+        )
+        self.assert_help_contains("verify", "rust_target")
+        self.assert_help_contains(
+            "audit",
+            "Suggestions do not modify the ledger",
+        )
+
+
+# ── 9. migrate ───────────────────────────────────────────────────────────────
 
 class TestMigrate(LedgerTestBase):
     def test_v2_to_v3_pure_bump(self):
