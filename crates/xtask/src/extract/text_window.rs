@@ -186,7 +186,7 @@ fn push_text_window_palette_entry(
             colors.len(),
         ));
     }
-    super::push_palette_entry(colors, id, writer);
+    writer.push(super::build_palette_entry(path, colors, id)?);
     Ok(())
 }
 

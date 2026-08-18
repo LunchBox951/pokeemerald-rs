@@ -42,6 +42,15 @@ pub enum ExtractError {
     /// silently-empty sprite palette if the source ever changes shape.
     /// Carries the PNG's path.
     MissingEmbeddedPalette(PathBuf),
+    /// A decoded palette (from either a JASC `.pal` file or a PNG's own
+    /// `PLTE` chunk) had more colours than the pack format's `color_count`
+    /// field can represent: it's a `u16` (`crate::extract::pack`'s format
+    /// docs, "Palette: `color_count`: u16"), and the payload region's own
+    /// documented shape ("Palette: `color_count` * 2 bytes", same docs)
+    /// would silently mismatch the real payload length if this count were
+    /// narrowed with a truncating cast instead of rejected outright. Carries
+    /// the source path and the actual colour count.
+    PaletteColorCountUnrepresentable(PathBuf, usize),
     /// Assembling the final pack failed (duplicate or invalid id — an
     /// internal bug in this pipeline's manifest, since every id is
     /// generated here, not user-supplied).
@@ -184,6 +193,13 @@ impl fmt::Display for ExtractError {
                 f,
                 "`{}` has no embedded PLTE chunk (expected upstream's in-game palette there)",
                 path.display()
+            ),
+            Self::PaletteColorCountUnrepresentable(path, actual) => write!(
+                f,
+                "palette `{}` has {actual} colours: the pack format's `color_count` field is a \
+                 u16, so it cannot exceed {}",
+                path.display(),
+                u16::MAX
             ),
             Self::Pack(err) => write!(f, "assembling pack failed: {err}"),
             Self::LayoutsJson(path, err) => {
