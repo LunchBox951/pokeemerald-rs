@@ -1,133 +1,8 @@
 #!/usr/bin/env python3
-"""
-ledger.py — coverage ledger for the pokeemerald-rs rewrite.
+"""Track upstream coverage for the pokeemerald-rs rewrite.
 
-The ledger is a JSON file (one per upstream project) tracking which upstream
-files and asset directories have been accounted for, where their behavior
-now lives in the Rust workspace, and why items without a Rust counterpart
-were dropped or folded into another module.
-
-This is a passive bookkeeping tool. It does NOT dispatch agents. Specs in
-the v1 acceptance criteria and GitHub issues drive work; this ledger is consulted at planning time and
-updated post-merge to keep an audit trail of what got rewritten/ported and
-what intentionally didn't.
-
-The ledger file (`ledger/pokeemerald.json`) is committed to the repo
-and is the source of truth at every commit. Update only via this CLI so
-the canonical JSON format stays diff-friendly.
-
-USAGE
-─────
-
-    ledger.py status                   one-line summary per project
-    ledger.py categories               counts per category
-    ledger.py report                   detailed markdown report
-    ledger.py scan                     refresh entry list from disk
-    ledger.py gaps [--prefix X | --category K]
-                                       list pending entries
-    ledger.py inspect <path>           show one entry's row
-
-    ledger.py mark <path> --target <rust-path> --spec <id> --reason "..."
-    ledger.py port <path> --target <rust-path> --spec <id> --reason "..."
-    ledger.py stub <path> --target <rust-path> --spec <id> --reason "..."
-    ledger.py fold <path> --into   <target>    --spec <id> --reason "..."
-    ledger.py drop <path>                       --spec <id> --reason "..."
-    ledger.py unmark <path>                      reset to pending
-
-Any <path> above may address a sub-file artifact as `<path>#<name>`, e.g.
-`src/battle_main.c#gTypeEffectiveness` (see SUB-ARTIFACTS below).
-
-    ledger.py verify                   validate entry shape, then rust_target paths
-    ledger.py audit <spec-id>          suggest mappings from a merge commit
-    ledger.py migrate                  upgrade an older ledger to current schema
-    ledger.py init                     create empty ledgers (one-time)
-
-STATUSES
-────────
-
-    pending     untouched (default; the only non-terminal status)
-    rewritten   code re-implemented in Rust at `rust_target`
-    ported      data/asset extracted/transcoded into `rust_target`
-    stubbed     typed shell exists at `rust_target`, behavior deferred
-    folded      behavior absorbed into `fold_target` (must be specific)
-    dropped     intentionally excluded from the Rust port
-
-The `rewritten` vs `ported` distinction is informational: rewritten = code
-re-implementation, ported = data/asset extracted via the asset pipeline.
-Both are terminal "done" states.
-
-ENTRY SHAPE
-───────────
-
-Every entry carries:
-    status       one of the statuses above
-    category     a category key (see `ledger.py categories`)
-    kind         "file" or "dir"
-
-Optional:
-    spec_owner   predicted owning spec (informational, only on pending)
-    spec         the spec under which work was done (required when terminal)
-    reason       why this status was chosen (required when terminal)
-    rust_target  where in the workspace it lives (rewritten/ported/stubbed)
-    fold_target  what module absorbed it (folded only)
-    artifacts    map of sub-file tables carved out of this file (see
-                 SUB-ARTIFACTS); each value is a sub-entry with its own
-                 status / spec / reason / rust_target (or fold_target)
-
-CONSTRAINTS (enforced)
-──────────────────────
-
-    - Every entry needs `status`, `category`, `kind`.
-    - Every non-pending entry needs `spec` and `reason`.
-    - `rewritten`, `ported`, `stubbed` require `rust_target`.
-    - `folded` requires `fold_target`. Vague targets (`various`,
-      `everywhere`, `scattered`, `tbd`) are rejected — fold honestly or
-      drop honestly, never both.
-    - `dropped` must not carry `rust_target` or `fold_target`.
-    - Pending entries may carry only `status`, `category`, `kind`,
-      `spec_owner`, `artifacts` (no spec / reason / rust_target / fold_target).
-
-SUB-ARTIFACTS
-─────────────
-
-A large multi-concern source file may embed a single data table (e.g.
-`gTypeEffectiveness` inside `src/battle_main.c`) that gets extracted to its
-own Rust home while the rest of the file is handled separately. Marking the
-whole file for one table over-claims coverage; leaving it pending under-claims.
-
-A parent file entry may therefore carry an optional `artifacts` map, keyed by
-the bare artifact name. Each sub-artifact has its own `status` / `spec` /
-`reason` / `rust_target` (or `fold_target`), using the same status vocabulary
-and terminal-field rules as a file entry. Sub-artifacts are addressed on the
-CLI as `<upstream-path>#<name>`. Names may not contain `#`; a sub-artifact may
-not itself contain `artifacts` (no recursion). The parent file must already
-exist in the ledger — you carve an artifact out of a known file.
-
-`unmark <path>#<name>` sets the named artifact to `pending`, creating it if it
-does not yet exist. This is deliberate: it lets you register a fresh sub-artifact
-placeholder (which then keeps the file pending until it is marked terminal)
-without a separate command. The parent file must still exist.
-
-ACCOUNTED-FOR RULE (governs `pending` and the L-1 gate):
-
-    A file's own `status` describes everything in the file NOT broken out into
-    a named artifact. A file is accounted for (does not count toward `pending`)
-    iff its own status is terminal AND every one of its artifacts is terminal.
-    Otherwise the file counts as `pending`.
-
-For files with no artifacts this is exactly the file's own status, so existing
-entries are unaffected. This makes over-claiming impossible (a pending artifact
-keeps the whole file pending) and lets a partially-ported file be accounted for
-honestly (mark the extracted table terminal AND give the file's own status a
-terminal value covering the remainder).
-
-`status` vs `gaps` counts: `status` counts pending *files* (one per file, per
-the rule above), while `gaps` is a per-task work list that expands a terminal
-file's still-pending artifacts into one line each. A file with a terminal own
-status and several pending artifacts therefore contributes 0 to the `status`
-pending tally but multiple lines to `gaps`, so `len(gaps)` may exceed the
-`status` pending count. This is intentional: L-1 gates on the file tally, while
-`gaps` enumerates the outstanding units of work.
+This passive bookkeeping CLI does not dispatch agents. Run
+"ledger.py COMMAND -h" for focused guidance.
 """
 
 import argparse
@@ -1075,7 +950,7 @@ def _add_project(p, multi=False):
                        choices=list(PROJECTS))
 
 
-def main():
+def build_parser():
     ap = argparse.ArgumentParser(
         prog="ledger.py",
         description=__doc__,
@@ -1083,26 +958,66 @@ def main():
     )
     sub = ap.add_subparsers(dest="cmd", required=True)
 
-    p = sub.add_parser("scan", help="Refresh entry list from disk")
+    p = sub.add_parser(
+        "scan",
+        help="Refresh entry list from disk",
+        description=(
+            "Refresh entries from the read-only upstream tree while preserving "
+            "existing ledger decisions. --prune removes only missing pending "
+            "entries without sub-artifacts."
+        ),
+    )
     _add_project(p)
     p.add_argument("--prune", action="store_true",
                    help="Drop pending entries no longer on disk")
 
-    p = sub.add_parser("status", help="Per-project counts (one line each)")
+    p = sub.add_parser(
+        "status",
+        help="Per-project counts (one line each)",
+        description=(
+            "Count coverage by effective file status. A file is accounted for "
+            "only when its own status and every sub-artifact status are terminal."
+        ),
+    )
     _add_project(p, multi=True)
 
-    p = sub.add_parser("categories", help="Per-category counts")
+    p = sub.add_parser(
+        "categories",
+        help="Per-category counts",
+        description="Group effective file-status counts by ledger category.",
+    )
     _add_project(p)
 
-    p = sub.add_parser("report", help="Detailed markdown coverage report")
+    p = sub.add_parser(
+        "report",
+        help="Detailed markdown coverage report",
+        description=(
+            "Render Markdown coverage totals by status, category, spec, and "
+            "sub-artifact status."
+        ),
+    )
     _add_project(p)
 
-    p = sub.add_parser("inspect", help="Show one entry's ledger row")
+    p = sub.add_parser(
+        "inspect",
+        help="Show one entry's ledger row",
+        description=(
+            "Show one file entry or one named sub-artifact. Address a "
+            "sub-artifact as path#name."
+        ),
+    )
     _add_project(p)
     p.add_argument("path", help="upstream path, or path#artifact for a "
                    "sub-file table")
 
-    p = sub.add_parser("gaps", help="List pending entries")
+    p = sub.add_parser(
+        "gaps",
+        help="List pending entries",
+        description=(
+            "List work units: a pending parent appears once; otherwise each "
+            "pending sub-artifact appears as path#name."
+        ),
+    )
     _add_project(p)
     p.add_argument("--prefix", default="", help="Path-prefix filter")
     p.add_argument("--category", default="", help="Category-key filter",
@@ -1113,7 +1028,14 @@ def main():
     for name, status in (("mark", "rewritten"),
                          ("port", "ported"),
                          ("stub", "stubbed")):
-        p = sub.add_parser(name, help=f"Mark entry as {status}")
+        p = sub.add_parser(
+            name,
+            help=f"Mark entry as {status}",
+            description=(
+                f"Set a file or path#artifact to {status}. Terminal entries "
+                "require a concrete Rust target, spec ID, and reason."
+            ),
+        )
         _add_project(p)
         p.add_argument("path", help="upstream path, or path#artifact for a "
                        "sub-file table")
@@ -1123,7 +1045,14 @@ def main():
         p.add_argument("--spec", required=True, help="Spec id (e.g. 06-engine)")
         p.add_argument("--reason", required=True)
 
-    p = sub.add_parser("fold", help="Mark folded into another module")
+    p = sub.add_parser(
+        "fold",
+        help="Mark folded into another module",
+        description=(
+            "Set a file or path#artifact to folded. Folded entries require one "
+            "concrete target, a spec ID, and a reason."
+        ),
+    )
     _add_project(p)
     p.add_argument("path", help="upstream path, or path#artifact for a "
                    "sub-file table")
@@ -1133,7 +1062,14 @@ def main():
     p.add_argument("--spec", required=True)
     p.add_argument("--reason", required=True)
 
-    p = sub.add_parser("drop", help="Mark intentionally excluded")
+    p = sub.add_parser(
+        "drop",
+        help="Mark intentionally excluded",
+        description=(
+            "Set a file or path#artifact to dropped. Dropped entries require a "
+            "spec ID and exclusion reason, and carry no target."
+        ),
+    )
     _add_project(p)
     p.add_argument("path", help="upstream path, or path#artifact for a "
                    "sub-file table")
@@ -1142,25 +1078,59 @@ def main():
 
     p = sub.add_parser(
         "unmark",
-        help="Reset entry to pending (path#artifact is created if missing)")
+        help="Reset entry to pending (path#artifact is created if missing)",
+        description=(
+            "Reset a file or sub-artifact to pending. An unknown path#artifact "
+            "registers that artifact on its existing parent; it stays pending "
+            "until marked terminal."
+        ),
+    )
     _add_project(p)
     p.add_argument("path", help="upstream path, or path#artifact for a "
                    "sub-file table (a missing artifact is created as pending)")
 
     p = sub.add_parser(
-        "verify", help="Validate entry shape, then check rust_target paths exist")
+        "verify",
+        help="Validate entry shape, then check rust_target paths exist",
+        description=(
+            "Validate every file and sub-artifact entry, then fail if any "
+            "rust_target path does not exist."
+        ),
+    )
     _add_project(p)
 
-    p = sub.add_parser("audit", help="Suggest mappings from a merge commit")
+    p = sub.add_parser(
+        "audit",
+        help="Suggest mappings from a merge commit",
+        description=(
+            "Inspect changed Rust files and print heuristic upstream mappings. "
+            "Suggestions do not modify the ledger."
+        ),
+    )
     _add_project(p)
     p.add_argument("spec_id", help="Spec id (e.g. 06-engine)")
     p.add_argument("--base", default="main", help="git base ref (default: main)")
     p.add_argument("--rev", default="HEAD", help="git target ref (default: HEAD)")
 
-    sub.add_parser("migrate", help="Upgrade an older ledger to the current schema")
-    sub.add_parser("init", help="Create empty ledgers and run first scan")
+    sub.add_parser(
+        "migrate",
+        help="Upgrade an older ledger to the current schema",
+        description="Upgrade every existing ledger to the current schema.",
+    )
+    sub.add_parser(
+        "init",
+        help="Create empty ledgers and run first scan",
+        description=(
+            "Create any missing ledger files, leave existing ones untouched, "
+            "then scan the upstream trees."
+        ),
+    )
 
-    args = ap.parse_args()
+    return ap
+
+
+def main():
+    args = build_parser().parse_args()
     handlers = {
         "scan": cmd_scan, "status": cmd_status,
         "categories": cmd_categories, "report": cmd_report,
