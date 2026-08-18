@@ -310,6 +310,47 @@ fn a_nonzero_gap_after_cc_0x1e_is_dropped_not_emitted() {
     );
 }
 
+/// A silent controller (upstream's bare-`PrintWait` arms) between a CC
+/// `0x1E` and the next emitted event keeps its own wait: upstream drops
+/// only the selector's own gap (`agb.cpp:402-405`), while the unknown CC's
+/// `default:` arm still prints its wait. Dropping silent controllers from
+/// the item list entirely would fold both gaps into one suppressed wait,
+/// shifting everything after the selector `10` extra ticks early here.
+#[test]
+fn a_silent_controller_after_cc_0x1e_keeps_its_own_wait() {
+    let mut body = Vec::new();
+    body.extend(vlq(0));
+    body.extend([0x90, 60, 100]); // note-on, t=0
+    body.extend(vlq(4));
+    body.extend([0xB0, 0x1E, 8]); // select xIECV, t=4
+    body.extend(vlq(10)); // the selector's own gap: dropped
+    body.extend([0x50, 3]); // unknown CC 0x50 (running status 0xB0), t=14
+    body.extend(vlq(10)); // the silent controller's gap: kept
+    body.extend([0x1D, 10]); // trigger, t=24
+    body.extend(vlq(6));
+    body.extend([0x80, 60, 0]); // note-off, t=30
+    let midi = single_track_midi(24, body);
+
+    let compiled = compile(&midi, &cfg()).unwrap();
+    assert_eq!(
+        compiled.tracks[0],
+        vec![
+            SongEvent::Volume(127),
+            SongEvent::KeyShift(0),
+            SongEvent::Note {
+                key: 60,
+                velocity: 100,
+                gate: 30
+            },
+            SongEvent::Wait(4),
+            SongEvent::Wait(10),
+            SongEvent::PseudoEchoVolume(10),
+            SongEvent::Wait(6),
+            SongEvent::Fine,
+        ]
+    );
+}
+
 /// Waits that do not immediately follow a CC `0x1E` are unaffected by the
 /// drop above -- both the ordinary wait leading up to the selector and an
 /// ordinary (`> u8::MAX`, so still split) wait well after the triggered

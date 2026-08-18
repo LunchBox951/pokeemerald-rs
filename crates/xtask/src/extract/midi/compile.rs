@@ -200,6 +200,14 @@ enum ItemKind {
     /// (`super::translate`'s module docs, "Reproduced: the dropped wait
     /// after CC `0x1E`").
     ExtendedCommandSelect,
+    /// A controller upstream's switch handles with a bare
+    /// `PrintWait(event.time)` (an unknown CC, or a `0x1D`/`0x1F` trigger
+    /// whose selected sub-command is not `8`/`9`): no [`SongEvent`], but
+    /// unlike [`Self::ExtendedCommandSelect`] its own wait *is* kept, so it
+    /// must stay an item — dropping it would fold its gap into the previous
+    /// item's wait, and after a CC `0x1E` that folded gap would be dropped
+    /// wholesale where upstream drops only the selector's own gap.
+    SilentController,
     PitchBend(i8),
     Note {
         key: u8,
@@ -218,9 +226,9 @@ impl ItemKind {
             Self::LoopBegin => (0x14, 0),
             Self::Tempo(_) => (0x19, 0),
             Self::ProgramChange(_) => (0x21, 0),
-            // Both are upstream's own `EventType::Controller` (`midi.h:45`),
-            // so both share its sort priority.
-            Self::Command(_) | Self::ExtendedCommandSelect => (0x22, 0),
+            // All three are upstream's own `EventType::Controller`
+            // (`midi.h:45`), so all share its sort priority.
+            Self::Command(_) | Self::ExtendedCommandSelect | Self::SilentController => (0x22, 0),
             Self::PitchBend(_) => (0x23, 0),
             Self::Note { key, .. } => (0x40 + u32::from(key), 0),
         }
@@ -393,7 +401,10 @@ fn compile_track(
                         let converted = convert_ticks(time, division)?;
                         items.push((converted, ItemKind::ExtendedCommandSelect));
                     }
-                    ControllerEvent::None => {}
+                    ControllerEvent::None => {
+                        let converted = convert_ticks(time, division)?;
+                        items.push((converted, ItemKind::SilentController));
+                    }
                 }
             }
             _ => {}
@@ -485,11 +496,12 @@ fn emit_track(
         match kind {
             ItemKind::EndOfTie { key } => out.push(SongEvent::EndOfTie { key: *key }),
             // Label emits nothing, matching upstream (module docs, "Sort
-            // order"); ExtendedCommandSelect emits nothing either -- it is
-            // purely a timing marker (its doc comment) -- but the two
-            // arms are merged for clippy::match_same_arms, not because
-            // they mean the same thing.
-            ItemKind::Label | ItemKind::ExtendedCommandSelect => {}
+            // order"); ExtendedCommandSelect and SilentController emit
+            // nothing either -- both are timing markers (their doc
+            // comments) -- but the arms are merged for
+            // clippy::match_same_arms, not because they mean the same
+            // thing: only ExtendedCommandSelect suppresses the wait below.
+            ItemKind::Label | ItemKind::ExtendedCommandSelect | ItemKind::SilentController => {}
             ItemKind::LoopBegin => {
                 loop_target = Some(
                     u32::try_from(out.len()).expect("a track has far fewer than u32::MAX events"),

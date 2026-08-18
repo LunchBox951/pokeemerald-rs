@@ -105,15 +105,23 @@ pub(super) fn convert_ticks(raw: u32, division: u16) -> Result<u32, MidiError> {
 ///
 /// [`MidiError::TempoOverflow`] if the rounded BPM does not fit a `u16`.
 pub(super) fn bpm_from_microseconds(microseconds: u32) -> Result<u16, MidiError> {
-    #[allow(clippy::cast_precision_loss)]
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "upstream's own conversion is f32 arithmetic (agb.cpp:506); \
+                  reproducing it is the point"
+    )]
     let microseconds_f32 = microseconds as f32;
     let bpm = (60_000_000.0_f32 / microseconds_f32).round();
     if bpm > f32::from(u16::MAX) {
         return Err(MidiError::TempoOverflow(microseconds));
     }
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    // bpm is in 0.0..=65535.0 here: microseconds > 0 keeps the division
-    // positive, and the range check above rules out anything over u16::MAX.
+    #[expect(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "bpm is in 0.0..=65535.0 here: microseconds > 0 keeps the \
+                  division positive, and the range check above rules out \
+                  anything over u16::MAX"
+    )]
     let bpm = bpm as u16;
     Ok(bpm)
 }
