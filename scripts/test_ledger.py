@@ -14,6 +14,7 @@ import contextlib
 import importlib.util
 import io
 import json
+import os
 import sys
 import tempfile
 import unittest
@@ -503,17 +504,20 @@ class TestHelp(unittest.TestCase):
 
     def capture_help(self, *args):
         buf = io.StringIO()
-        with mock.patch.object(sys, "argv", ["ledger.py", *args]):
-            with contextlib.redirect_stdout(buf):
-                with self.assertRaises(SystemExit) as cm:
-                    ledger.main()
+        # argparse wraps to the terminal width; pin it so the byte budgets
+        # below measure the same rendering everywhere.
+        with mock.patch.dict(os.environ, {"COLUMNS": "80"}):
+            with mock.patch.object(sys, "argv", ["ledger.py", *args]):
+                with contextlib.redirect_stdout(buf):
+                    with self.assertRaises(SystemExit) as cm:
+                        ledger.main()
         self.assertEqual(cm.exception.code, 0)
         return buf.getvalue()
 
     def test_top_level_help_is_a_compact_command_index(self):
         out = self.capture_help("-h")
-        self.assertLessEqual(len(out.splitlines()), 40)
-        self.assertLessEqual(len(out), 2_000)
+        self.assertLessEqual(len(out.splitlines()), 32)
+        self.assertLessEqual(len(out.encode("utf-8")), 1_500)
         self.assertIn("ledger.py COMMAND -h", out)
         for command in self.COMMANDS:
             self.assertIn(command, out)
