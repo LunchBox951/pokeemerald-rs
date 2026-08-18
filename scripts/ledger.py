@@ -976,7 +976,10 @@ def build_parser():
         help="Per-project counts (one line each)",
         description=(
             "Count coverage by effective file status. A file is accounted for "
-            "only when its own status and every sub-artifact status are terminal."
+            "only when its own status and every sub-artifact status are "
+            "terminal. A split file's own status stands for everything not "
+            "carved into named sub-artifacts; mark it terminal only when that "
+            "remainder is done."
         ),
     )
     _add_project(p, multi=True)
@@ -1025,15 +1028,19 @@ def build_parser():
     p.add_argument("--limit", type=int, default=50,
                    help="Max rows to print (0 = unlimited)")
 
-    for name, status in (("mark", "rewritten"),
-                         ("port", "ported"),
-                         ("stub", "stubbed")):
+    for name, status, meaning in (
+            ("mark", "rewritten", "its behavior is reimplemented as Rust code"),
+            ("port", "ported",
+             "its data is extracted or transcoded from upstream"),
+            ("stub", "stubbed",
+             "a typed shell exists and its behavior stays deferred")):
         p = sub.add_parser(
             name,
             help=f"Mark entry as {status}",
             description=(
-                f"Set a file or path#artifact to {status}. Terminal entries "
-                "require a concrete Rust target, spec ID, and reason."
+                f"Set a file or path#artifact to {status}: {meaning}. "
+                "Terminal entries require a concrete Rust target, spec ID, "
+                "and reason."
             ),
         )
         _add_project(p)
@@ -1121,8 +1128,9 @@ def build_parser():
         "init",
         help="Create empty ledgers and run first scan",
         description=(
-            "Create any missing ledger files, leave existing ones untouched, "
-            "then scan the upstream trees."
+            "Create any missing ledger files, preserve existing decisions, "
+            "then scan every upstream tree; a scan can add new entries and "
+            "refresh rule-derived fields on pending ones."
         ),
     )
 
