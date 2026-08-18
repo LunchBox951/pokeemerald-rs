@@ -169,6 +169,42 @@ class TestCheckTransition(unittest.TestCase):
         )
 
 
+class TestCargoVersion(unittest.TestCase):
+    def test_maps_every_game_component(self):
+        self.assertEqual(
+            version_check.cargo_version((0, 0, 22, 7)),
+            "0.0.22+gamepatch.7",
+        )
+        self.assertEqual(
+            version_check.cargo_version((1, 0, 0, 0)),
+            "1.0.0+gamepatch.0",
+        )
+
+    def test_replaces_only_workspace_package_version(self):
+        manifest = (
+            '[package]\nversion = "9.9.9"\n\n'
+            '[workspace.package]\nedition = "2021"\nversion = "0.0.0"\n'
+        )
+        updated = version_check.replace_workspace_package_version(
+            manifest, (0, 1, 2, 3), "Cargo.toml"
+        )
+        self.assertIn('[package]\nversion = "9.9.9"', updated)
+        self.assertIn('version = "0.1.2+gamepatch.3"', updated)
+
+    def test_rejects_missing_or_duplicate_workspace_versions(self):
+        for manifest in (
+            "[workspace.package]\nedition = \"2021\"\n",
+            (
+                "[workspace.package]\n"
+                'version = "0.0.0"\nversion = "0.0.1"\n'
+            ),
+        ):
+            with self.subTest(manifest=manifest), self.assertRaises(
+                version_check.VersionError
+            ):
+                version_check.workspace_package_version(manifest, "Cargo.toml")
+
+
 class _TempGitRepo:
     """A throwaway git repo for driving version_check.main() end to end."""
 
@@ -192,7 +228,21 @@ class _TempGitRepo:
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(content, encoding="utf-8")
 
+    def sync_cargo_manifest(self):
+        version = version_check.parse_version(
+            (self.path / "VERSION").read_text(encoding="utf-8"), "VERSION"
+        )
+        self.write(
+            "Cargo.toml",
+            "[workspace.package]\n"
+            f'version = "{version_check.cargo_version(version)}"\n',
+        )
+
     def commit(self, tag: str, message: str = "commit"):
+        try:
+            self.sync_cargo_manifest()
+        except version_check.VersionError:
+            pass
         self._run("add", "-A")
         self._run("commit", "-q", "-m", message)
         self._run("tag", tag)
@@ -244,6 +294,26 @@ class TestFinalGateIntegration(unittest.TestCase):
 
     def tearDown(self):
         self.repo.cleanup()
+
+    def test_workspace_package_version_must_match_version(self):
+        self.repo.write("VERSION", "0.1.2.5\n")
+        self.repo.commit("baseline")
+
+        self.repo.write("VERSION", "0.1.2.6\n")
+        self.assertNotEqual(
+            self.repo.run_version_check(
+                base="baseline", head="HEAD", require_bump=True
+            ),
+            0,
+        )
+
+        self.repo.sync_cargo_manifest()
+        self.assertEqual(
+            self.repo.run_version_check(
+                base="baseline", head="HEAD", require_bump=True
+            ),
+            0,
+        )
 
     def test_stale_marker_no_longer_authorizes_later_final_bump(self):
         # Step 2: baseline at 0.9.9.9.
@@ -356,6 +426,7 @@ class TestFinalGateIntegration(unittest.TestCase):
         )
 
         self.repo.write("VERSION", "0.1.2.6\n")
+        self.repo.sync_cargo_manifest()
         self.assertEqual(
             self.repo.run_version_check(
                 base="baseline", head="HEAD", require_bump=True
