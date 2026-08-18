@@ -432,7 +432,16 @@ impl Sequencer {
             } => {
                 // `ply_note` records the raw command key as `track->key`.
                 track.key = key;
-                if Self::note_on(song, track, mixer, track_id, key, velocity, gate) {
+                // A successful note with an LFO delay is initialized from the
+                // reset modulation state. Use a temporary view for allocation
+                // so a refused note cannot mutate the real track or its live
+                // voices before acceptance is known.
+                let mut note_track = track.clone();
+                if note_track.lfo_delay != 0 {
+                    note_track.mod_m = 0;
+                    note_track.lfo_speed_c = 0;
+                }
+                if Self::note_on(song, &note_track, mixer, track_id, key, velocity, gate) {
                     // Once allocation succeeds, reload the LFO delay. A
                     // nonzero delay also resets the phase and clears any live
                     // modulation, mirroring the inline `clear_modM` call in
@@ -1615,6 +1624,43 @@ mod tests {
             .expect("the higher-priority note must replace square 1");
         assert_eq!(square1.track(), 1);
         assert_eq!(square1.midi_key(), 70);
+    }
+
+    #[test]
+    fn accepted_cgb_sweep_note_uses_reset_pitch_modulation() {
+        let instruments = vec![Instrument::CgbSquare1(SquareTone {
+            duty: 2,
+            sweep: 0x11, // period 1, add, shift 1
+            adsr: CgbAdsr::flat(),
+            fixed_rate: false,
+        })];
+        let song = Song::new(instruments, vec![vec![]], 150);
+        let mut seq = Sequencer::new(song);
+
+        seq.tracks[0].mod_type = 0;
+        seq.tracks[0].mod_m = 127;
+        seq.tracks[0].lfo_delay = 7;
+        seq.tracks[0].lfo_speed_c = 91;
+        apply_test_event(
+            &mut seq,
+            0,
+            &Event::Note {
+                key: 48,
+                velocity: 127,
+                gate: 0,
+            },
+        );
+
+        assert_eq!(seq.tracks[0].lfo_delay_c, 7);
+        assert_eq!(seq.tracks[0].lfo_speed_c, 0);
+        assert_eq!(seq.tracks[0].mod_m, 0);
+        let square1 = seq.mixer.cgb_voices()[CgbChannelNumber::Square1.slot()]
+            .as_ref()
+            .expect("the accepted square-1 note must occupy its channel");
+        assert!(
+            square1.is_active(),
+            "the sweep must initialize from reset pitch modulation, without trigger overflow"
+        );
     }
 
     #[test]
