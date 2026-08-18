@@ -18,7 +18,7 @@
 //! reached at `:175-179`) instead — evaluated against the tile *in front of*
 //! the player while they face north into it, one tile early, so the door
 //! sprite can visually swing open before the player walks through. Both are
-//! on the v1 north-star path (a house's front door, an interior staircase),
+//! on the early playable slice (a house's front door, an interior staircase),
 //! but this port has no rendering/animation to time a pre-step "door
 //! opening" against, so both collapse into one rule: **a door-shaped warp
 //! triggers once the player's own tile position matches a

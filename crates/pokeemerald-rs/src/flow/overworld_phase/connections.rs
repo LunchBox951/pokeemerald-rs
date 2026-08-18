@@ -340,13 +340,35 @@ impl OverworldPhase {
     /// destination's decoded grid.
     ///
     /// Lands at elevation `ELEVATION_TRANSITION`
-    /// (`pokeemerald/include/global.fieldmap.h:16`, value `0`):
-    /// `InitPlayerAvatar` (`pokeemerald/src/field_player_avatar.c`) always
-    /// spawns the player object event with that sentinel regardless of
-    /// arrival kind, deferring to the first elevation-aware collision check
-    /// to resolve it against the tile's own layer -- the same value
-    /// [`crate::new_game::SPAWN_ELEVATION`] already uses for the intro's own
-    /// direct placement, for the identical reason.
+    /// (`pokeemerald/include/global.fieldmap.h:16`, value `0`), the same
+    /// value [`crate::new_game::SPAWN_ELEVATION`] already uses for the
+    /// intro's own direct placement -- but for a different reason than
+    /// upstream's spawn path resolves to it.
+    ///
+    /// Upstream does not leave the sentinel in place until the player
+    /// moves: `InitObjectEventStateFromTemplate` sets a freshly spawned
+    /// object event's `triggerGroundEffectsOnMove = TRUE`
+    /// (`pokeemerald/src/event_object_movement.c:1301`), so the very next
+    /// `UpdateObjectEventCurrentMovement` call -- on the spawn frame
+    /// itself, during the warp fade and before input unlocks -- runs
+    /// `DoGroundEffects_OnSpawn` (`event_object_movement.c:4931`), which
+    /// calls `UpdateObjectEventElevationAndPriority`
+    /// (`event_object_movement.c:7737`), which calls
+    /// `ObjectEventUpdateElevation` (`event_object_movement.c:7759-7771`)
+    /// to read the landing tile's real elevation off the destination grid
+    /// and overwrite the sentinel before the player ever takes a step.
+    /// [`engine::overworld::warp_destination_position`] is this port's
+    /// faithful model of that same spawn-frame lookup: it resolves the
+    /// destination cell's real elevation immediately, as part of landing,
+    /// for [`OverworldPhase::warp_to`]'s resolved-warp-event case.
+    ///
+    /// `warp_to_position` doesn't call it: it has no warp event to hand a
+    /// `warp_id`, only a raw `(x, y)`, so it hardcodes
+    /// `ELEVATION_TRANSITION` instead and leaves resolution to
+    /// [`engine::overworld::PlayerState::step`]'s own elevation-adopt-on-
+    /// arrival, on whatever tile the player's first subsequent step lands
+    /// on -- a simplification against upstream's same-frame fixup, not a
+    /// reproduction of it.
     ///
     /// Unlike [`OverworldPhase::warp_to`]'s resolved-warp landing,
     /// `save1.location.x`/`.y` are **not** `-1`: `ApplyCurrentWarp`

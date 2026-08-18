@@ -388,26 +388,45 @@ fn decode_palette_entry(
 ) -> Result<(), ExtractError> {
     let text = read_text(path)?;
     let colors = jasc_pal::parse(&text).map_err(|e| ExtractError::Pal(path.to_path_buf(), e))?;
-    push_palette_entry(&colors, id, writer);
+    writer.push(build_palette_entry(path, &colors, id)?);
     Ok(())
 }
 
 /// Serialize already-decoded colours (from either a JASC `.pal` file or a
 /// PNG's own `PLTE` chunk — see [`text_window`]) into a
-/// [`PackKind::Palette`] entry.
-fn push_palette_entry(colors: &[jasc_pal::Rgb888], id: String, writer: &mut PackWriter) {
+/// [`PackKind::Palette`] entry. The one place the JASC (`.pal`) and
+/// embedded-PNG (`PLTE`) decode paths converge before writing the pack's
+/// `color_count` field, so both share this same bounds check rather than
+/// each narrowing `colors.len()` with its own truncating cast.
+///
+/// # Errors
+///
+/// [`ExtractError::PaletteColorCountUnrepresentable`] if `colors.len()`
+/// exceeds `u16::MAX` — the pack format's `color_count` field cannot
+/// represent it (`pack`'s format docs). Carries `path` purely for the error
+/// message; the returned entry is never associated back with a file.
+fn build_palette_entry(
+    path: &Path,
+    colors: &[jasc_pal::Rgb888],
+    id: String,
+) -> Result<PackEntry, ExtractError> {
+    let color_count = u16::try_from(colors.len()).map_err(|_| {
+        ExtractError::PaletteColorCountUnrepresentable(path.to_path_buf(), colors.len())
+    })?;
     let mut payload = Vec::with_capacity(colors.len() * 2);
     for color in colors {
         payload.extend_from_slice(&color.to_gba555().to_le_bytes());
     }
-    #[allow(clippy::cast_possible_truncation)]
-    writer.push(PackEntry {
+    // `payload` is built from exactly `colors`, one GBA555 `u16` (2 bytes)
+    // each, so this can never trip in practice -- asserted anyway since the
+    // pack's own payload-shape contract (`pack`'s format docs: "Palette:
+    // color_count * 2 bytes") is exactly what `color_count` promises readers.
+    debug_assert_eq!(payload.len(), usize::from(color_count) * 2);
+    Ok(PackEntry {
         id,
-        kind: PackKind::Palette {
-            color_count: colors.len() as u16,
-        },
+        kind: PackKind::Palette { color_count },
         payload,
-    });
+    })
 }
 
 fn raw_entry(path: &Path, id: String, writer: &mut PackWriter) -> Result<(), ExtractError> {
@@ -531,19 +550,14 @@ fn extract_title_screen(upstream: &Path, writer: &mut PackWriter) -> Result<(), 
                     if image.palette.is_empty() {
                         return Err(ExtractError::MissingEmbeddedPalette(path.clone()));
                     }
-                    let mut payload = Vec::with_capacity(image.palette.len() * 2);
-                    for &[r, g, b] in &image.palette {
-                        let color = jasc_pal::Rgb888 { r, g, b };
-                        payload.extend_from_slice(&color.to_gba555().to_le_bytes());
-                    }
-                    #[allow(clippy::cast_possible_truncation)]
-                    writer.push(PackEntry {
-                        id: format!("title/palette/{stem}"),
-                        kind: PackKind::Palette {
-                            color_count: image.palette.len() as u16,
-                        },
-                        payload,
-                    });
+                    let colors: Vec<jasc_pal::Rgb888> = image
+                        .palette
+                        .iter()
+                        .map(|&[r, g, b]| jasc_pal::Rgb888 { r, g, b })
+                        .collect();
+                    let entry =
+                        build_palette_entry(&path, &colors, format!("title/palette/{stem}"))?;
+                    writer.push(entry);
                 }
                 writer.push(PackEntry {
                     id: format!("title/image/{stem}"),
@@ -671,8 +685,8 @@ const LAYOUTS: [(&str, &str); 10] = [
     // `data/layouts/Route101/`), bundled anyway: Littleroot's north
     // connection (`data/maps/LittlerootTown/map.json:15-21`) targets it, and
     // Route101's own south connection (`data/maps/Route101/map.json`)
-    // targets Littleroot right back -- the one connection pair this port's
-    // v1 north-star instance needs to cross.
+    // targets Littleroot right back -- the one connection pair the early
+    // playable slice needs to cross.
     ("LAYOUT_ROUTE101", "route101"),
     // Not part of the Littleroot Town directory family either (its own
     // top-level `data/layouts/OldaleTown/` and `data/layouts/Route103/`),
@@ -878,6 +892,46 @@ mod tests {
         let rendered = err.to_string();
         assert!(rendered.contains("init.sh"));
         assert!(rendered.contains("cargo xtask extract"));
+    }
+
+    #[test]
+    fn oversized_jasc_palette_is_rejected_not_truncated() {
+        // The pack format's `color_count` field is a `u16` (`pack`'s format
+        // docs) -- 65 536 colours, one more than it can hold, must fail
+        // closed via `ExtractError::PaletteColorCountUnrepresentable` rather
+        // than silently narrow with an `as u16` cast (issue #301).
+        // `jasc_pal::parse` itself has no such bound (its own module docs),
+        // so this exercises the actual extraction entry point, not just the
+        // parser.
+        let count = usize::from(u16::MAX) + 1;
+        let mut text = String::from("JASC-PAL\r\n0100\r\n");
+        text.push_str(&count.to_string());
+        text.push_str("\r\n");
+        text.push_str(&"0 0 0\r\n".repeat(count));
+
+        let dir = std::env::temp_dir().join(format!(
+            "pokeemerald-rs-extract-oversized-jasc-test-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("oversized.pal");
+        std::fs::write(&path, &text).unwrap();
+
+        let mut writer = super::pack::PackWriter::new();
+        let err =
+            super::decode_palette_entry(&path, "test/palette".to_owned(), &mut writer).unwrap_err();
+        assert!(
+            matches!(
+                &err,
+                ExtractError::PaletteColorCountUnrepresentable(error_path, actual)
+                    if error_path == &path && *actual == count
+            ),
+            "wrong error for a {count}-colour JASC palette: {err:?}"
+        );
+        assert_eq!(writer.len(), 0, "oversized palette must not be serialized");
+
+        std::fs::remove_file(&path).unwrap();
+        std::fs::remove_dir(&dir).unwrap();
     }
 
     #[test]

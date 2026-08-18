@@ -624,7 +624,7 @@ fn an_out_of_range_starter_var_starts_no_battle() {
 ///
 /// Drives the Route 101 loss through the real trigger/driver on its own
 /// synthetic `MAP_ROUTE101` phase (the same crafted level-1, zero-Defense-IV
-/// Treecko and seed `2` as
+/// Treecko and seed `1` as
 /// `crate::flow::wild_encounter::tests::a_lost_route_101_first_battle_heals_the_lead_instead_of_leaving_it_fainted`
 /// -- that test's own doc comment has the full derivation), then carries
 /// the concluded lead and `VAR_STARTER_MON` over onto this file's own
@@ -648,7 +648,7 @@ fn a_lost_route_101_first_battle_still_lets_the_healed_lead_fight_the_rival() {
         ),
         None,
     );
-    route_101.rng = Rng::new(2);
+    route_101.rng = Rng::new(1);
     let ivs = Ivs {
         hp: battle::MAX_IV,
         attack: battle::MAX_IV,

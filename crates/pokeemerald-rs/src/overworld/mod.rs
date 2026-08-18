@@ -151,8 +151,8 @@ const PLAYER_VIEW_ROW: i32 = VIEW_ROWS / 2;
 const PAD: i32 = 1;
 
 /// `LAYOUT_LITTLEROOT_TOWN_BRENDANS_HOUSE_2F` -- [`load_default_room`]'s
-/// fixed choice: the protagonist's *bedroom* (the 2F room the north-star
-/// flow in `docs/acceptance/v1.md` starts in — 1F is the downstairs living
+/// fixed choice: the protagonist's *bedroom* (the 2F room the early playable
+/// slice in `docs/acceptance/v1.md` starts in — 1F is the downstairs living
 /// area), already shipped by `crates/xtask`'s extraction pipeline
 /// (`crates/xtask/src/extract/mod.rs`'s `LAYOUTS`).
 const DEFAULT_ROOM_LAYOUT_ID: &str = "LAYOUT_LITTLEROOT_TOWN_BRENDANS_HOUSE_2F";
