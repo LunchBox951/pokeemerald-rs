@@ -69,7 +69,7 @@
 //!   issue's own brief calls for spawning directly "in the protagonist's
 //!   room" -- the same room
 //!   [`overworld::load_default_room`](crate::overworld::load_default_room)
-//!   already treats as the v1 north-star's starting point (issue #126). This
+//!   already treats as the early playable slice's starting point (issue #126). This
 //!   slice skips the truck entirely rather than modeling a cutscene with no
 //!   consumer; [`SaveBlock1::location`] is set to the bedroom directly
 //!   instead of `MAP_INSIDE_OF_TRUCK`. Its one *observable* side effect is

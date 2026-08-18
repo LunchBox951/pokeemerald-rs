@@ -66,10 +66,11 @@
 //! [`battle::Battle::new_trainer`] for its turn-number draw and conditional
 //! speed-tie draw.
 //!
-//! Unlike the first battle's construction, there is **no** missing
-//! `SetWildMonHeldItem` draw to account for here: its gate excludes
-//! `BATTLE_TYPE_TRAINER` outright (`battle_main.c:700`, `src/pokemon.c:6682`),
-//! so upstream does not spend it either.
+//! There is no `SetWildMonHeldItem` draw on this path, and none to
+//! account for: the call at `battle_main.c:700` is reached, but its gate
+//! excludes `BATTLE_TYPE_TRAINER` outright (`src/pokemon.c:6680`), so
+//! upstream spends nothing -- unlike the wild and first-battle handoffs,
+//! which both spend that draw (issue #303).
 //!
 //! # Nothing is built before the whole party is screened
 //!

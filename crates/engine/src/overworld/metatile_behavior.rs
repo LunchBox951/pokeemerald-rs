@@ -6,7 +6,7 @@
 //! predicate for most of them (tall grass, ice, currents, ladders,
 //! escalators, a dozen map-specific warp variants, secret-base furniture,
 //! ...). Per the issue #108 scope (extended by issue #174 for arrow warps),
-//! this module ports **only** the predicates the v1 north-star path needs
+//! this module ports **only** the predicates the early playable slice needs
 //! (protagonist's room -> downstairs -> Littleroot outdoor -> Route 101):
 //! whether a tile is a door/warp trigger, the direction-gated arrow-warp
 //! trigger predicates (upstream `TryArrowWarp`/`IsArrowWarpMetatileBehavior`,
@@ -66,7 +66,7 @@
 pub const MB_NORMAL: u8 = 0;
 
 /// `MB_TALL_GRASS` (`0x02`): the grass a wild encounter is rolled in — the
-/// tile the v1 north-star path's first encounter happens on (issue #169).
+/// tile the early playable slice's first encounter happens on (issue #169).
 /// See [`is_land_wild_encounter`].
 pub const MB_TALL_GRASS: u8 = 0x02;
 
@@ -152,7 +152,7 @@ pub const MB_IMPASSABLE_SOUTHWEST: u8 = 0x37;
 /// warps as well as literal unanimated doors (`MetatileBehavior_IsNonAnimDoor`
 /// also matches [`MB_WATER_DOOR`]/[`MB_DEEP_SOUTH_WARP`], modeled below only
 /// for arrival-facing classification — see [`is_door`]). This is the behavior
-/// the v1 north-star path's house-interior stairs are assumed to use.
+/// the early playable slice's house-interior stairs are assumed to use.
 pub const MB_NON_ANIMATED_DOOR: u8 = 0x60;
 
 /// `MB_ANIMATED_DOOR` (`0x69`): a warp tile that plays an open/close animation
@@ -341,7 +341,7 @@ pub const fn is_door(behavior: u8) -> bool {
 /// Upstream's real `IsWarpMetatileBehavior` also accepts ladders,
 /// escalators, and half a dozen map-specific warp ids (Lavaridge gym,
 /// Aqua Hideout, Mt. Pyre hole, Mossdeep gym, Union Room) — none of those are
-/// on the v1 north-star path, and none are modelled by this module. A
+/// on the early playable slice, and none are modelled by this module. A
 /// [`WarpEvent`](assets::WarpEvent) that exists at a position whose metatile
 /// behavior isn't recognized here **fails closed**: [`is_warp_trigger`]
 /// returns `false` and the door-shaped warp does not fire, rather than

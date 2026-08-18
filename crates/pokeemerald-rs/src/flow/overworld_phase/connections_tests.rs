@@ -93,7 +93,8 @@ fn advance_player_one_frame_crosses_an_offset_connection_shifting_the_cross_axis
 }
 
 /// The same offset rule on the *north/south* axis -- the axis the
-/// Littleroot -> Route 101 north-star crossing actually uses (both its real
+/// Littleroot -> Route 101 crossing the early playable slice actually uses
+/// (both its real
 /// connections happen to carry `offset: 0`, which is exactly why a sign
 /// regression in `target_x = x - offset` would survive every real-map
 /// test; this synthetic pin is the guard).

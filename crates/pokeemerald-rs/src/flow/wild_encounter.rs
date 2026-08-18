@@ -350,26 +350,33 @@ pub(super) fn map_wild_table_fightable(map: assets::MapId) -> bool {
 ///
 /// Draws in upstream's order off the shared stream: the wild mon's
 /// nature/personality/IVs ([`battle::build_wild_pokemon`], five draws for a
-/// first-try personality), then [`battle::Battle::new`]'s
-/// `gRandomTurnNumber` (and its conditional speed-tie draw). The moveset
-/// comes from [`battle::initial_moveset`] — upstream's
-/// `GiveBoxMonInitialMoveset`, which draws nothing — so a Route 101 Wurmple
-/// really knows Tackle and String Shot.
-///
-/// The order is upstream's; the *count* is one short of it. Between those
-/// two, `CB2_InitBattleInternal` calls `SetWildMonHeldItem`
-/// (`src/battle_main.c:700`), whose `u16 rnd = Random() % 100`
-/// (`src/pokemon.c:6682`) is gated only on `!(gBattleTypeFlags & (LEGENDARY |
-/// TRAINER | PYRAMID | PIKE))` — and `DoStandardWildBattle` sets
+/// first-try personality), then `CB2_InitBattleInternal`'s
+/// `SetWildMonHeldItem` (`src/battle_main.c:700`), whose `u16 rnd = Random() %
+/// 100` (`src/pokemon.c:6682`) is gated only on `!(gBattleTypeFlags &
+/// (LEGENDARY | TRAINER | PYRAMID | PIKE))` — and `DoStandardWildBattle` sets
 /// `gBattleTypeFlags = 0` (`src/battle_setup.c:408`), so the gate passes and
-/// upstream draws it. This port models no held items at all
-/// ([`battle::BattlePokemon`] has no such field), so that draw produces
-/// nothing here and is simply absent: from the turn-number draw onward this
-/// handoff has consumed one fewer value than upstream would have. The gap is
-/// pre-existing and uniform — [`crate::flow::first_battle`]'s scripted fight
-/// skips the identical draw for the identical reason (its module docs' "RNG
-/// stream" section), and it is enumerated as NOT-modelled on the
-/// `src/battle_setup.c#CB2_StartFirstBattle` ledger entry.
+/// upstream draws it — then [`battle::Battle::new`]'s `gRandomTurnNumber`
+/// (and its conditional speed-tie draw). The moveset comes from
+/// [`battle::initial_moveset`] — upstream's `GiveBoxMonInitialMoveset`, which
+/// draws nothing — so a Route 101 Wurmple really knows Tackle and String
+/// Shot.
+///
+/// This port models no held items at all ([`battle::BattlePokemon`] has no
+/// such field), so `SetWildMonHeldItem`'s selection and storage are not
+/// reproduced. Its shared-stream draw still is: the `Random() % 100` call is
+/// spent, discarded, immediately before [`battle::Battle::new`] is invoked,
+/// so the frame-free draw sequence -- construction, held item, turn number
+/// -- is upstream's own. (Upstream additionally advances the seed once per
+/// vblank through `VBlankCB_Battle`, `battle_main.c:2085`-`:2089`, a
+/// frame-timing-dependent interleaving this headless port deliberately
+/// does not model; `src/battle_main.c#VBlankCB_Battle` stays pending in
+/// the ledger, and [`crate::flow::first_battle`]'s module docs record the
+/// scope decision.) The identical
+/// draw is spent the identical way in [`crate::flow::first_battle`]'s
+/// scripted fight (its own module docs' "RNG stream" section), and the
+/// remaining held-item gap is enumerated as NOT-modelled on the
+/// `src/pokemon.c#SetWildMonHeldItem` ledger entry (and cross-referenced on
+/// `src/battle_setup.c#CB2_StartFirstBattle`).
 ///
 /// # Errors
 ///
@@ -377,8 +384,8 @@ pub(super) fn map_wild_table_fightable(map: assets::MapId) -> bool {
 /// reports: an unknown species/move, or a wild moveset the turn engine
 /// cannot execute. Both validate before drawing, so a rejected encounter
 /// leaves the stream where it found it — except that a rejection at
-/// `Battle::new` happens *after* the wild mon's own five draws, exactly as
-/// upstream's ordering implies.
+/// `Battle::new` happens *after* both the wild mon's own five draws and the
+/// discarded held-item draw, exactly as upstream's ordering implies.
 pub(super) fn start_wild_battle(
     player_lead: BattlePokemon,
     encounter: WildEncounter,
@@ -393,6 +400,9 @@ pub(super) fn start_wild_battle(
         moves,
         &mut SharedRng::new(rng),
     )?;
+    // `SetWildMonHeldItem` consumes `Random() % 100` here upstream. Held-item
+    // selection is not represented yet, but its shared-stream draw still is.
+    let _ = rng.next_u16() % 100;
     // `false`: this handoff is #169's ongoing Route 101 grass encounter, not
     // the scripted intro Zigzagoon fight -- see issue #187's module docs on
     // `battle::Battle` for exactly what `BATTLE_TYPE_FIRST_BATTLE` changes.
