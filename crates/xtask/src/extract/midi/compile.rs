@@ -473,8 +473,7 @@ fn split_time_first_chunk(gap: u32) -> u32 {
     if gap > 96 {
         96
     } else {
-        #[allow(clippy::cast_possible_truncation)] // gap <= 96 here
-        let gap = gap as usize;
+        let gap = usize::try_from(gap).expect("gap <= 96 here, checked just above");
         u32::from(NOTE_DURATION_LUT[gap])
     }
 }
