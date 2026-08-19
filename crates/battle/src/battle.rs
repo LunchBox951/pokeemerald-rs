@@ -228,8 +228,12 @@ use assets::MoveId;
 
 use crate::damage::{BattleRng, STRUGGLE};
 use crate::dex::Dex;
+use crate::drain;
 use crate::error::BattleError;
 use crate::escape::try_run_from_battle;
+use crate::fixed_damage;
+use crate::flag_move;
+use crate::multi_hit;
 use crate::pokemon::BattlePokemon;
 use crate::stat_change;
 use crate::turn_order::{resolve_order, Order};
@@ -279,20 +283,45 @@ pub enum BattleOutcome {
     WildFled,
 }
 
-/// Whether the turn engine can execute `move_id` at all: either
-/// [`crate::hit`]'s ordinary damaging-move pipeline
-/// ([`crate::hit::ensure_resolvable`]) or [`crate::stat_change`]'s
-/// stat-lowering pipeline ([`crate::stat_change::ensure_resolvable`], added
-/// by issue #199) — the two-sided boundary the module docs describe.
-/// Checked *before* any state or RNG is touched, exactly like each of the
-/// two checks it composes.
+/// Whether the turn engine can execute `move_id` at all — the composed
+/// allow-list of every pipeline [`Battle::execute_move`] can dispatch to,
+/// checked **before any state or RNG is touched**, exactly like each of the
+/// checks it composes.
 ///
-/// Every real `EFFECT_ATTACK_DOWN`/`EFFECT_DEFENSE_DOWN`/`EFFECT_SPEED_DOWN`
-/// move is `0` base power, so `crate::hit::ensure_resolvable` always rejects
-/// it first with [`BattleError::NonDamagingMove`] (that check runs before
-/// its own effect check) — this falls through to
-/// [`stat_change::ensure_resolvable`] on *any* hit-pipeline rejection, not
-/// just [`BattleError::UnsupportedMoveEffect`], to cover that ordering.
+/// This is the crate's fail-closed boundary `(behavioral-fidelity)`. A move
+/// whose `EFFECT_*` runs a battle script no pipeline reproduces computes
+/// different damage *and* spends a different number of `Random()` calls, and
+/// a shared stream that has advanced the wrong number of steps is wrong for
+/// the rest of the battle — so an unsupported move is refused here, ahead of
+/// the first draw and ahead of any HP/PP/stage change, rather than being
+/// approximated. [`Battle::new`] runs it over the whole opposing side at
+/// construction and `validate_player_move` runs it over the player's *chosen*
+/// slot each turn, so no pipeline behind [`Battle::execute_move`] ever sees a
+/// move it would have to guess at.
+///
+/// Six pipelines are accepted as of issue #321, tried in this order:
+///
+/// | pipeline | script | added by |
+/// |---|---|---|
+/// | [`crate::hit`] | `BattleScript_EffectHit` | #125 |
+/// | [`stat_change`] | `BattleScript_EffectStatDown` family | #199 |
+/// | [`crate::drain`] | `BattleScript_EffectAbsorb` | #321 |
+/// | [`crate::fixed_damage`] | `BattleScript_EffectSonicboom` / `_DragonRage` / `_LevelDamage` | #321 |
+/// | [`crate::multi_hit`] | `BattleScript_EffectMultiHit` | #321 |
+/// | [`crate::flag_move`] | `_EffectSplash` / `_EffectFocusEnergy` / `_EffectCharge` | #321 |
+///
+/// The order is a *diagnostics* choice, not a semantic one: the six
+/// allow-lists are disjoint (each is a set of `EFFECT_*` ids, and no id
+/// appears in two), so at most one can accept. The hit pipeline goes first
+/// so its richer errors — [`BattleError::NonDamagingMove`],
+/// [`BattleError::UnsupportedMoveType`], [`BattleError::UnknownMove`] — are
+/// what a genuinely unsupported move reports, rather than a bare
+/// [`BattleError::UnsupportedMoveEffect`] from whichever list happened to be
+/// consulted last. (Every real stat-lowering and flag-only move is `0` base
+/// power, so the hit pipeline rejects those with
+/// [`BattleError::NonDamagingMove`] before reaching its own effect check —
+/// which is why the fallthrough is on *any* hit-pipeline rejection and not
+/// just on `UnsupportedMoveEffect`.)
 ///
 /// # Errors
 ///
@@ -301,10 +330,7 @@ pub enum BattleOutcome {
 /// while this slice never applies its `EFFECT_RECOIL` half; keeping the
 /// guard inside the composed check means no future call site can admit
 /// Struggle by forgetting a follow-up test. Otherwise the hit-pipeline's
-/// error if `move_id` is a genuinely unsupported move
-/// (neither pipeline accepts it — [`stat_change::ensure_resolvable`]'s
-/// [`BattleError::UnsupportedMoveEffect`] would be strictly less
-/// informative for, say, an unknown move type), or `Ok(())` if either
+/// error if `move_id` is a genuinely unsupported move, or `Ok(())` if any
 /// pipeline accepts it.
 pub(crate) fn ensure_executable(dex: &Dex, move_id: MoveId) -> Result<(), BattleError> {
     if move_id == STRUGGLE {
@@ -313,7 +339,12 @@ pub(crate) fn ensure_executable(dex: &Dex, move_id: MoveId) -> Result<(), Battle
     match crate::hit::ensure_resolvable(dex, move_id) {
         Ok(()) => Ok(()),
         Err(hit_error) => {
-            if stat_change::ensure_resolvable(dex, move_id).is_ok() {
+            let accepted = stat_change::ensure_resolvable(dex, move_id).is_ok()
+                || drain::ensure_resolvable(dex, move_id).is_ok()
+                || fixed_damage::ensure_resolvable(dex, move_id).is_ok()
+                || multi_hit::ensure_resolvable(dex, move_id).is_ok()
+                || flag_move::ensure_resolvable(dex, move_id).is_ok();
+            if accepted {
                 Ok(())
             } else {
                 Err(hit_error)
@@ -899,8 +930,29 @@ impl Battle {
                 }
             }
         }
+        self.residual_effects();
         self.end_of_turn(events);
         Ok(())
+    }
+
+    /// `DoBattlerEndTurnEffects` (`src/battle_util.c:1630`), reduced to the
+    /// one case this slice reaches: `ENDTURN_CHARGE`'s
+    /// `if (chargeTimer && --chargeTimer == 0) status3 &= ~STATUS3_CHARGED_UP`
+    /// (`:1743`-`:1745`), for every battler on the field.
+    ///
+    /// Runs **before** [`Battle::end_of_turn`], because upstream runs
+    /// `DoBattlerEndTurnEffects` before `HandleFaintedMonActions`
+    /// (`src/battle_main.c:3965` vs `:3968`) — and, like upstream's
+    /// `if (gBattleOutcome == 0)` guard at `:3961`, not at all once the
+    /// battle has an outcome. Draws nothing: no modelled end-turn effect
+    /// rolls (poison damage and the rest of the residual family are issue
+    /// #323's).
+    fn residual_effects(&mut self) {
+        if self.outcome.is_some() {
+            return;
+        }
+        self.player.volatiles_mut().tick_charge();
+        self.enemy.volatiles_mut().tick_charge();
     }
 
     /// `HandleFaintedMonActions` (`battle_util.c:1894`), reduced to the one

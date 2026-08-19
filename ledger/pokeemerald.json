@@ -90,9 +90,33 @@
     },
     "data/battle_scripts_1.s": {
       "artifacts": {
+        "BattleScript_EffectAbsorb": {
+          "reason": "data/battle_scripts_1.s:322-:360, EFFECT_ABSORB (Absorb, Mega Drain, Giga Drain). Reproduced end to end: the single accuracycheck, the ordinary critcalc/damagecalc/typecalc/adjustnormaldamage damage half (hit::damage_core), datahpupdate BS_TARGET's clamp, negativedamage, the jumpifability BS_TARGET ABILITY_LIQUID_OOZE branch at :345 with its manipulatedamage DMG_CHANGE_SIGN, datahpupdate BS_ATTACKER's max-HP clamp on the heal, and tryfaintmon BS_ATTACKER BEFORE tryfaintmon BS_TARGET (:358-:359). The script ends with goto BattleScript_MoveEnd (:360) and therefore never reaches seteffectwithchance, so a landed drain costs 3 draws where an ordinary landed move costs 4. NOT modelled: orword gHitMarker HITMARKER_IGNORE_SUBSTITUTE at :344 (no Substitute anywhere in this crate) and the animation/wait/sound instructions (no presentation layer).",
+          "rust_target": "crates/battle/src/drain.rs",
+          "spec": "S-6",
+          "status": "stubbed"
+        },
         "BattleScript_EffectHit": {
           "reason": "data/battle_scripts_1.s:236-:266 (EffectHit -> HitFromAtkCanceler -> AtkString -> CritCalc -> AtkAnimation -> MoveEnd) plus the :273 miss exit and :3556 BattleScript_NoPPForMove. resolve_hit reproduces the RNG-relevant step order: attackcanceler's no-PP abort (Battle::act), accuracycheck, critcalc, damagecalc, typecalc, adjustnormaldamage's 85-100% roll, and seteffectwithchance's discarded draw at :265; ppreduce is handled by the turn engine. The Surf/underwater prelude at :237-:240, animation/message steps, and every other BattleScript_* in this file are not modelled.",
           "rust_target": "crates/battle/src/hit.rs",
+          "spec": "S-6",
+          "status": "stubbed"
+        },
+        "BattleScript_EffectMultiHit": {
+          "reason": "data/battle_scripts_1.s:604-:652, EFFECT_MULTI_HIT. Reproduced with upstream's once-vs-per-hit split intact: ONE accuracycheck before the loop (:606), ONE setmultihitcounter (:609), then per iteration critcalc/damagecalc/typecalc plus adjustnormaldamage's own damage roll, then ONE trailing seteffectwithchance in the epilogue (:651). The loop's jumpifhasnohp BS_ATTACKER (:613, to MultiHitEnd, which skips the hit-count string) and jumpifhasnohp BS_TARGET (:614, to MultiHitPrintStrings, which prints it) are checked at the TOP of each iteration, so the killing hit completes and only the following iteration is abandoned -- with its draws unspent (Battle::execute_multi_hit_move). jumpifmovehadnoeffect (:623) leaves before adjustnormaldamage, so a type-immune iteration spends its crit draw but not its damage roll (hit::damage_before_roll exists for exactly this). NOT modelled: the Sleep Talk / STATUS1_SLEEP guards at :615-:616 (no status1; issue #323), MOVE_RESULT_FOE_ENDURED at :638 (no Endure/Focus Band), the sMULTIHIT_EFFECT byte's per-iteration copy at :619 (only Twineedle sets it, a different effect id), and the animation/string instructions.",
+          "rust_target": "crates/battle/src/multi_hit.rs",
+          "spec": "S-6",
+          "status": "stubbed"
+        },
+        "BattleScript_EffectSonicboom": {
+          "reason": "data/battle_scripts_1.s:1720-:1729, and its two structurally identical siblings BattleScript_EffectDragonRage (:819-:828, literal 40) and BattleScript_EffectLevelDamage (:1195-:1204, dmgtolevel instead of the setword). All three reproduced in fixed_damage: accuracycheck, typecalc read for its immunity verdict only (the bicbyte at :1726 discards the super/not-very-effective bits and the store at :1727 discards the magnitude, so a resisted or super-effective matchup still takes the flat figure while a TYPE_MUL_NO_EFFECT row still nullifies it), the fixed figure, adjustsetdamage's roll-free adjustment, and the goto into BattleScript_HitFromAtkAnimation at :1729, which still reaches seteffectwithchance. Two draws for a landed move, not four: no critcalc and no damage roll. NOT modelled: the animation/string instructions.",
+          "rust_target": "crates/battle/src/fixed_damage.rs",
+          "spec": "S-6",
+          "status": "stubbed"
+        },
+        "BattleScript_EffectSplash": {
+          "reason": "data/battle_scripts_1.s:1172-:1181, EFFECT_SPLASH, together with its two flag-only siblings BattleScript_EffectFocusEnergy (:885-:895) and BattleScript_EffectCharge (:2297-:2306). All three reproduced in flag_move::resolve_flag_move, which takes no RNG at all: none of the three has an accuracycheck, a damage calculation, or a seteffectwithchance, so each costs exactly ZERO draws on every path including failure. Splash prints STRINGID_BUTNOTHINGHAPPENED and changes nothing; Focus Energy checks the script's own jumpifstatus2 at :889 (not Cmd_setfocusenergy's unreachable else) and either sets STATUS2_FOCUS_ENERGY or reports But it failed!; Charge has no failure branch at all and restarts the timer. NOT modelled: GAME_STAT_USED_SPLASH (:1178, a save-block counter with no home here), the animation/wait instructions, and Gen-4's Sp. Def raise, which this Gen-3 script correctly does not have. BattleScript_EffectDefenseCurl is deliberately NOT part of this entry: it also raises a stat, so it belongs with the stat-change family (issue #322).",
+          "rust_target": "crates/battle/src/flag_move.rs",
           "spec": "S-6",
           "status": "stubbed"
         },
@@ -24474,6 +24498,14 @@
       "status": "pending"
     },
     "src/battle_message.c": {
+      "artifacts": {
+        "gAbsorbDrainStringIds": {
+          "reason": "battle_message.c:1120-:1124, both entries: B_MSG_ABSORB (STRINGID_PKMNENERGYDRAINED) and B_MSG_ABSORB_OOZE (STRINGID_ITSUCKEDLIQUIDOOZE), carried as the two distinct BattleEvent variants Drained and LiquidOoze rather than as a string table -- this crate has no text renderer, so the event vocabulary is where a message identity lives. BattleScript_EffectAbsorb picks exactly one of the two (data/battle_scripts_1.s:346 vs :350) and never prints both, which crates/battle/tests/turn_engine/pipelines.rs pins.",
+          "rust_target": "crates/battle/src/battle/events.rs",
+          "spec": "S-6",
+          "status": "ported"
+        }
+      },
       "category": "code.source",
       "kind": "file",
       "status": "pending"
@@ -24529,6 +24561,12 @@
           "spec": "S-6",
           "status": "stubbed"
         },
+        "Cmd_adjustsetdamage": {
+          "reason": "battle_script_commands.c:5861-:5900. Modelled as the absence it is: fixed_damage::resolve_fixed_damage_move makes NO damage roll, because this command is Cmd_adjustnormaldamage minus the ApplyRandomDmgMultiplier() call. NOT modelled: the Focus Band branch (:5865-:5882) -- its Random() % 100 is the SECOND operand of holdEffect == HOLD_EFFECT_FOCUS_BAND && ..., so a target without a Focus Band short-circuits before it and no draw is made; this crate models no held-item effects, so the draw is unreachable. Also NOT modelled: EFFECT_FALSE_SWIPE / gProtectStructs[].endured survival clamping and the MOVE_RESULT_FOE_ENDURED flag (:5883-:5895), neither reachable (False Swipe is not an executable effect and Endure is not modelled).",
+          "rust_target": "crates/battle/src/fixed_damage.rs",
+          "spec": "S-6",
+          "status": "stubbed"
+        },
         "Cmd_attackcanceler": {
           "reason": "battle_script_commands.c:915. The no-PP abort is modelled (Battle::act -> BattleEvent::FailedNoPp): a 0-PP slot jumps to BattleScript_NoPPForMove at :934-:939 -- attack string, STRINGID_BUTNOPPLEFT, MoveEnd -- consuming no RNG and dealing no damage; HITMARKER_ALLOW_NO_PP is never set upstream (tested :934, cleared :942 only) and the HITMARKER_NO_ATTACKSTRING / STATUS2_MULTIPLETURNS escapes are multi-turn machinery this slice does not model. NOT modelled: the battle-outcome/fainted-attacker early-outs (the engine's own outcome short-circuit covers the modelled cases), AtkCanceler_UnableToUseMove's sleep/freeze/confusion/etc. cascade (no status), ability move-blocks, disobedience, and the MOVE_RESULT_MISSED flag consumers.",
           "rust_target": "crates/battle/src/battle.rs",
@@ -24536,22 +24574,28 @@
           "status": "stubbed"
         },
         "Cmd_critcalc": {
-          "reason": "battle_script_commands.c:1253. sCriticalHitChance table and the four high-crit move-effect ids modelled (crit_stage_for_effect, crit_roll). Of the three suppressors that short-circuit the crit Random() away in the :1279-:1283 && chain, BATTLE_TYPE_FIRST_BATTLE (:1281) is now modelled end to end (issue #187): crate::hit::resolve_hit takes a suppress_crit flag that skips crit_roll and its draw entirely, threaded from Battle's first_battle flag (crit-proof for the whole battle, matching upstream's scripted Route 101 Zigzagoon fight, src/battle_setup.c:937). Still not modelled: Battle Armor/Shell Armor on the target (:1279), STATUS3_CANT_SCORE_A_CRIT (:1280), BATTLE_TYPE_WALLY_TUTORIAL (the other half of :1281), and Focus Energy/Scope Lens/Lucky Punch/Stick stage contributions (status2/items out of scope).",
+          "reason": "battle_script_commands.c:1253-:1286. Modelled (critical::crit_stage, critical::crit_roll): the sCriticalHitChance table, the four high-crit move-effect terms, the clamp to the table's last index, and -- since issue #321 gave the engine Focus Energy -- the 2 * ((status2 & STATUS2_FOCUS_ENERGY) != 0) term at :1267, reading crate::volatile::Volatiles::focus_energy. Of the three suppressors that short-circuit the crit Random() away in the :1279-:1283 && chain, BATTLE_TYPE_FIRST_BATTLE (:1281) is modelled end to end (issue #187): hit::damage_before_roll takes a suppress_crit flag that skips crit_roll and its draw entirely, threaded from Battle's first_battle flag. NOT modelled: Battle Armor/Shell Armor on the target (:1279), STATUS3_CANT_SCORE_A_CRIT (:1280), BATTLE_TYPE_WALLY_TUTORIAL (the other half of :1281), and the three held-item stage terms Scope Lens / Lucky Punch / Stick (:1272-:1274; held-item effects are not modelled anywhere in this crate). None of those draws.",
           "rust_target": "crates/battle/src/critical.rs",
           "spec": "S-6",
           "status": "stubbed"
         },
         "Cmd_damagecalc": {
-          "reason": "battle_script_commands.c:1290 (crit multiply :1296). The gCritMultiplier x2 multiply modelled (resolve_hit). dynamicMoveType, Helping Hand, and the charged-up-Electric double are not modelled.",
+          "reason": "battle_script_commands.c:1290-:1303. Modelled (hit::damage_before_roll): the CalculateBaseDamage call, the gCritMultiplier x2 multiply at :1296, and -- since issue #321 gave the engine Charge -- the STATUS3_CHARGED_UP Electric doubling at :1298-:1299, applied after the crit multiply and before typecalc, reading crate::volatile::Volatiles::charge_timer. NOT modelled: gBattleScripting.dmgMultiplier (doubles/spread moves), gDynamicBasePower and gBattleStruct->dynamicMoveType (no move this engine executes sets either), and Helping Hand's x1.5 at :1301-:1302 (a double-battle move). None of the unmodelled terms draws.",
           "rust_target": "crates/battle/src/hit.rs",
           "spec": "S-6",
           "status": "stubbed"
         },
         "Cmd_datahpupdate": {
-          "reason": "battle_script_commands.c:1844 (lethal cap :1920-:1929). The gHpDealt mirror is modelled: a lethal hit records only the HP actually lost (Battle's overkill cap on the Hit event). NOT modelled: Substitute damage routing, the special-vs-physical last-damage bookkeeping (gProtectStructs / gSpecialStatuses) consumed by Counter/Mirror Coat/Bide, and HITMARKER_IGNORE_SUBSTITUTE -- none of those systems exist this slice.",
+          "reason": "battle_script_commands.c:1844-:1960. Both HP-moving branches are now modelled. Damage (:1920-:1932): Battle::apply_damage_to_target clamps to the target's remaining HP and RETURNS gHpDealt, which is what makes the drain pipeline's heal derive from the HP actually lost rather than the formula's raw output (issue #321; crates/battle/tests/turn_engine/pipelines.rs pins the wiring). Healing (:1896-:1900, the gBattleMoveDamage < 0 branch): BattlePokemon::heal_hp adds and clamps at maxHP, which is why a full-HP drainer still prints its string but reports 0 HP gained. NOT modelled: Substitute damage routing (:1866-:1893), the physicalDmg/specialDmg and gBideDmg bookkeeping consumed by Counter/Mirror Coat/Bide, shellBellDmg, and HITMARKER_IGNORE_SUBSTITUTE / HITMARKER_IGNORE_BIDE -- none of those systems exists this slice.",
           "rust_target": "crates/battle/src/battle/execute.rs",
           "spec": "S-6",
           "status": "stubbed"
+        },
+        "Cmd_dmgtolevel": {
+          "reason": "battle_script_commands.c:7926-:7930, whole body: gBattleMoveDamage = gBattleMons[gBattlerAttacker].level, rewritten as fixed_damage::FixedDamage::AttackerLevel. No branches, no Random(). It reads the level directly rather than through CalculateBaseDamage, which is why EFFECT_LEVEL_DAMAGE (Seismic Toss, Night Shade) ignores every stat and stage.",
+          "rust_target": "crates/battle/src/fixed_damage.rs",
+          "spec": "S-6",
+          "status": "rewritten"
         },
         "Cmd_getexp": {
           "reason": "battle_script_commands.c:3255. The v1 single-eligible-recipient case (calculatedExp = expYield*enemyLevel/7, floored to 1, no redistribution) is modelled (wild_faint_exp), and the MAX_LEVEL exclusion (case 2, :3351-:3356: a level-100 recipient gets no exp and no 'gained EXP' string) is modelled at the turn-engine level (Battle emits no ExpGained event). As of issue #237 the BATTLE_TYPE_TRAINER x1.5 bonus (:3378-:3379) is modelled too, as exp::trainer_faint_exp -- multiplying the ALREADY FLOORED per-recipient award rather than the raw quotient, which is upstream's order and observably different whenever the /7 truncates -- AND the award is now APPLIED in-battle, not just reported: Battle calls BattlePokemon::apply_experience (crates/battle/src/pokemon.rs) before emitting BattleEvent::ExpGained, covering the SetMonData(MON_DATA_EXP) + crossed-level half via the case 1/case 4 getexpState transitions and BattleScript_LevelUp dispatch (:3444-:3461; the exp write and CalculateMonStats themselves run in battle_controller_player.c's Task_GiveExpToMon, :1251-:1263) for every player-caused faint, wild and trainer alike. As of issue #252, apply_experience also drives the level-up-move-learning half (BattleScript_LevelUp -> Cmd_handlelearnnewmove -> MonTryLearningNewMove, see src/pokemon.c#MonTryLearningNewMove for the model and its one recorded divergence, the four-known-moves replacement prompt) for every crossed level, teaching unscreened the way upstream does. What Cmd_getexp still does NOT do: BattleScript_LevelUp's own message/fanfare strings, MonGainEVs (:3420), and AdjustFriendship(FRIENDSHIP_EVENT_GROW_LEVEL) (:3463) remain unmodelled (EVs/friendship out of scope, recorded on apply_experience's own doc comment). Party-wide redistribution, Exp Share (gExpShareExp), Lucky Egg (:3376-:3377) and the traded-mon bonus (:3381, which needs an OT-name/id comparison against the player's own save data this crate cannot see) are still not modelled.",
@@ -24565,15 +24609,45 @@
           "spec": "S-6",
           "status": "stubbed"
         },
+        "Cmd_manipulatedamage": {
+          "reason": "battle_script_commands.c:6740-:6761. Only the DMG_CHANGE_SIGN case (:6744-:6746, gBattleMoveDamage *= -1) is modelled, as drain::DrainOutcome::inverted -- the one case BattleScript_AbsorbLiquidOoze reaches (data/battle_scripts_1.s:349), and the only one any move this engine can execute reaches. NOT modelled: DMG_RECOIL_FROM_MISS (:6747-:6754, the halve/floor/cap-at-half-max-HP crash-damage path used by Jump Kick and High Jump Kick, both unported effects) and DMG_DOUBLED (:6755-:6757, used by Twister/Stomp/Magnitude against a semi-invulnerable or Minimize target -- no status2/status3 tracked). Neither draws, so neither can move a stream while it stays unreachable.",
+          "rust_target": "crates/battle/src/drain.rs",
+          "spec": "S-6",
+          "status": "stubbed"
+        },
+        "Cmd_negativedamage": {
+          "reason": "battle_script_commands.c:6925-:6932, whole body: gBattleMoveDamage = -(gHpDealt / 2) with the -1 floor applied AFTER the halving, rewritten as drain::drain_amount. The command has no other branch and makes no Random() call. The load-bearing half is which value is halved: gHpDealt is the HP the target ACTUALLY lost (Cmd_datahpupdate's clamp at :1928-:1932), not the formula's raw output, so an overkill drain heals a little; Battle::execute_drain_move feeds it Battle::apply_damage_to_target's return value and crates/battle/tests/turn_engine/pipelines.rs pins that wiring at turn level.",
+          "rust_target": "crates/battle/src/drain.rs",
+          "spec": "S-6",
+          "status": "rewritten"
+        },
         "Cmd_ppreduce": {
           "reason": "battle_script_commands.c:1205. BattlePokemon::deduct_pp is the deducting arm. The :1230 0-PP guard ('&& gBattleMons[gBattlerAttacker].pp[gCurrMovePos]') is real but UNREACHABLE for an ordinary pick: Cmd_attackcanceler aborts a 0-PP move first (see the Cmd_attackcanceler artifact), so the guard only matters for Struggle and multi-turn continuations that legitimately reach ppreduce at 0 PP -- none modelled this slice. NOT modelled: Pressure's ppToDeduct++ (no abilities) and the HITMARKER_NO_PPDEDUCT guard. deduct_pp's NoPpRemaining error is a caller boundary (the player path pre-validates), not an upstream behaviour.",
           "rust_target": "crates/battle/src/pokemon.rs",
           "spec": "S-6",
           "status": "stubbed"
         },
+        "Cmd_setcharge": {
+          "reason": "battle_script_commands.c:9100-:9106. gStatuses3[] |= STATUS3_CHARGED_UP and gDisableStructs[].chargeTimer = 2 are rewritten as Volatiles::set_charge, one u8 carrying both (upstream raises and clears the flag in lockstep with the timer, so a separate bool could only contradict it). Read by Cmd_damagecalc's Electric doubling (hit::damage_core) and decremented by ENDTURN_CHARGE (Battle::residual_effects). NOT modelled: chargeTimerStartValue (:9104), read only by the battle-recording code this crate does not model. No Random().",
+          "rust_target": "crates/battle/src/volatile.rs",
+          "spec": "S-6",
+          "status": "stubbed"
+        },
         "Cmd_seteffectwithchance": {
-          "reason": "battle_script_commands.c:2908. The unconditional Random() draw on every landed hit is modelled (resolve_hit step 7): for plain-hit scripts MOVE_EFFECT_BYTE is 0, so the leading 'Random() % 100 < percentChance' operand at :2923 draws once and the chain fails -- the value is discarded. Struggle's MOVE_EFFECT_CERTAIN first branch (:2917, draw-free) is modelled as the no-draw exception. NOT modelled: actually firing a secondary effect via SetMoveEffect (no allow-listed move can: the plain hit script never runs setmoveeffect), Serene Grace's percentChance doubling (no abilities this slice), and the certain-effect application path.",
-          "rust_target": "crates/battle/src/hit.rs",
+          "reason": "battle_script_commands.c:2908-:2939. Now the crate's ONE shared post-damage hook (issue #321 moved it out of hit.rs into secondary.rs, because the five damaging scripts disagree about it: EffectAbsorb never reaches it, EffectMultiHit takes it once for a whole 2..5-hit sequence). Modelled: the whole && chain in upstream's order -- the MOVE_EFFECT_CERTAIN first branch at :2917, which draws NOTHING on a hit that had an effect (Struggle's case), and the else-if at :2923 whose LEADING operand is Random() % 100 < percentChance, so the draw happens before either suppressing test and is spent even by a plain move (MOVE_EFFECT_BYTE 0) and by a type-immune hit. secondary::SECONDARY_TRAMPOLINES transcribes all 27 setmoveeffect-then-goto-BattleScript_EffectHit scripts, so the hook can tell a discarded roll from a landed one. NOT modelled: SetMoveEffect itself -- infliction semantics, and the further Random() calls some of its cases make (sleep-turn, confusion-turn rolls) -- which is issue #323's; a roll that LANDS on a trampoline byte fails closed with BattleError::UnportedSecondaryEffect after spending the draw, rather than silently dropping the effect. Also NOT modelled: Serene Grace's percentChance doubling (that ability is not modelled, and it changes the value, never the draw count).",
+          "rust_target": "crates/battle/src/secondary.rs",
+          "spec": "S-6",
+          "status": "stubbed"
+        },
+        "Cmd_setfocusenergy": {
+          "reason": "battle_script_commands.c:7745-:7760. The success branch (:7756-:7758, status2 |= STATUS2_FOCUS_ENERGY) is rewritten as Volatiles::set_focus_energy and read by critical::crit_stage's 2 * (bit != 0) term. NOT modelled: the command's own already-pumped else (:7747-:7752, MOVE_RESULT_FAILED + B_MSG_FOCUS_ENERGY_FAILED), which is dead code from BattleScript_EffectFocusEnergy -- the script's jumpifstatus2 at data/battle_scripts_1.s:889 diverts one instruction earlier, and flag_move::resolve_flag_move reproduces the SCRIPT's check instead. Also NOT modelled: the gBattleCommunication[MULTISTRING_CHOOSER] index itself, which this crate expresses as distinct BattleEvent variants. No Random() anywhere in the command.",
+          "rust_target": "crates/battle/src/volatile.rs",
+          "spec": "S-6",
+          "status": "stubbed"
+        },
+        "Cmd_setmultihitcounter": {
+          "reason": "battle_script_commands.c:7139-:7155. The gBattlescriptCurrInstr[1] == 0 branch (:7147-:7151) is rewritten as multi_hit::roll_hit_count, reproducing the TWO-STAGE draw rather than its output distribution: Random() & 3 settles at 2 or 3 for one draw when it lands on 0/1, and redraws-and-adds-2 for two draws when it lands on 2/3. Sampling the resulting 3/8,3/8,1/8,1/8 shape directly would spend the wrong number of draws half the time. NOT modelled: the literal-count branch at :7143 (gBattlescriptCurrInstr[1] != 0), used by Twineedle/Triple Kick/Bonemerang-style fixed-count scripts, none of which is an executable effect here.",
+          "rust_target": "crates/battle/src/multi_hit.rs",
           "spec": "S-6",
           "status": "stubbed"
         },
@@ -24667,6 +24741,12 @@
         "AreAllMovesUnusable": {
           "reason": "battle_util.c:1125 (with CheckMoveLimitations, declared :1082). Modelled: the all-slots-unusable divert -- battle::opponent_ai::choose_enemy_move (a free function in crates/battle/src/battle/opponent_ai.rs, not a Battle method) returns the forced-Struggle fallback WITHOUT running the wild rejection loop, suppressing its RNG draw (an RNG-observable behaviour), with MOVE_LIMITATION_ZEROMOVE (:1098) and MOVE_LIMITATION_PP (:1101) as the modelled limitation rules (opponent_ai's selectable_slot / the pp==0 screen; the same rules back validate_player_move's pre-draw pick checks). NOT modelled: Struggle execution itself (the fallback having to act stops the turn with UnsupportedMoveEffect), gSelectionBattleScripts / BattleScript_NoMovesLeft presentation, and the Disable (:1104) / Torment / Taunt / Imprison / Encore / Choice-item limitation bits (none of those systems exist this slice).",
           "rust_target": "crates/battle/src/battle/opponent_ai.rs",
+          "spec": "S-6",
+          "status": "stubbed"
+        },
+        "DoBattlerEndTurnEffects": {
+          "reason": "battle_util.c:1630-:1880. Reduced to the one case a modelled move can reach: ENDTURN_CHARGE (:1743-:1745), if (chargeTimer && --chargeTimer == 0) status3 &= ~STATUS3_CHARGED_UP, run for every battler in Battle::residual_effects -- placed before HandleFaintedMonActions and gated on the battle having no outcome yet, matching battle_main.c:3961-:3968. NOT modelled: every other ENDTURN_* case (ingrain, ability healing, poison/burn residual damage, sleep/leech seed/nightmare/curse/wrap counters, Uproar, Thrash, Disable, Encore, Taunt, Yawn), all of which need status1/status2/side-status this crate does not track -- the status family is issue #323's. None of the modelled work draws.",
+          "rust_target": "crates/battle/src/battle.rs",
           "spec": "S-6",
           "status": "stubbed"
         },
@@ -27216,7 +27296,7 @@
     "src/pokemon.c": {
       "artifacts": {
         "CalculateBaseDamage": {
-          "reason": "Partial: the level/power/atk-def core plus the in-function burn, Reflect/Light-Screen, and weather hooks are rewritten as base_damage. Still pending from the same upstream function: hold-item boosts, ability modifiers (Huge/Pure Power, Thick Fat, Hustle, Guts, Plus/Minus, Overgrow-family, Marvel Scale, Flash Fire), badge boosts, Explosion defense-halving, field sports, and double-battle spread/screen variants (issue #125 scopes these to later slices). Critical-hit stat-stage handling is now covered separately by issue #159's src/pokemon.c#CalculateBaseDamage_CriticalStageOverride artifact. The surrounding STAB/type/roll battle-script steps are tracked under src/battle_script_commands.c.",
+          "reason": "Partial: the level/power/atk-def core plus the in-function burn, Reflect/Light-Screen, and weather hooks are rewritten as base_damage. Since issue #321, the pinch-ability power boost at :3219-:3226 is modelled too -- gBattleMovePower = (150 * gBattleMovePower) / 100 when the move's type matches the attacker's Overgrow/Blaze/Torrent/Swarm and hp <= maxHP / 3 -- applied to the POWER before the formula reads it (DamageInput::attacker_pinch_boost, crate::ability::pinch_boosts_power), so the truncation lands where upstream puts it. Only Overgrow is reachable in a battle this crate can construct; the other three rows are carried because they are the same four consecutive upstream lines. Still pending from the same function: hold-item boosts, the other ability modifiers (Huge/Pure Power, Thick Fat, Hustle, Guts, Plus/Minus, Marvel Scale, Flash Fire), badge boosts, Explosion defense-halving, Mud/Water Sport field sports, and double-battle spread/screen variants. Critical-hit stat-stage handling is covered separately by src/pokemon.c#CalculateBaseDamage_CriticalStageOverride. The surrounding STAB/type/roll battle-script steps are tracked under src/battle_script_commands.c.",
           "rust_target": "crates/battle/src/damage.rs",
           "spec": "S-6",
           "status": "stubbed"
@@ -27236,6 +27316,12 @@
         "CreateMonWithNature": {
           "reason": "pokemon.c:2195 (CreateMon), 2206 (CreateBoxMon), 2305 (CreateMonWithNature), 5498 (GetNatureFromPersonality). The RNG-observable USE_RANDOM_IVS path modelled exactly: the personality rejection loop against a target nature (roll_personality_for_nature) and the two-draw five-bit-field IV rolls (roll_ivs). As of issue #237 CreateBoxMon's other two branches are modelled too, in crates/battle/src/battle/trainer.rs for the NPC-trainer construction path: the fixedIV < USE_RANDOM_IVS branch (:2265-:2272), which sets all six IVs from one value and draws nothing (battle::fixed_ivs, scaling a gTrainers party entry's iv byte by MAX_PER_STAT_IVS/255), and the OT_ID_RANDOM_NO_SHINY rejection loop (:2223-:2231), whose Random32-until-not-shiny is battle::roll_non_shiny_ot_id with GET_SHINY_VALUE as battle::shiny_value -- the only RNG a trainer party mon costs, since its personality and IVs are both fixed. A wild mon still takes the player's OT id with no draw, matching CreateWildMon's OT_ID_PLAYER_ID argument. GiveBoxMonInitialMoveset is modelled separately (src/pokemon.c#GiveBoxMonInitialMoveset, battle::wild::initial_moveset) and composed by callers rather than folded into either builder, which both still take an explicit moveset. Still not modelled: OT_ID_PRESET, the checksum/encryption round-trip, and the abilityNum personality bit.",
           "rust_target": "crates/battle/src/wild.rs",
+          "spec": "S-6",
+          "status": "stubbed"
+        },
+        "GetAbilityBySpecies": {
+          "reason": "pokemon.c:4546-:4554, plus CreateBoxMon's abilityNum write at :2296-:2300. BattlePokemon::ability derives the ability from the personality exactly as upstream does: abilityNum = personality & 1, but only for a species whose slot-1 ability is non-ABILITY_NONE (otherwise the field stays 0), then index gSpeciesInfo[species].abilities[abilityNum]. Deterministic per mon, which is what lets a seeded party's abilities be argued about. NOT modelled: the gBattleMons[].ability copy that Transform/Role Play/Trace can overwrite mid-battle, and the abilityNum SetMonData path used by the Battle Frontier -- neither is reachable here.",
+          "rust_target": "crates/battle/src/pokemon.rs",
           "spec": "S-6",
           "status": "stubbed"
         },

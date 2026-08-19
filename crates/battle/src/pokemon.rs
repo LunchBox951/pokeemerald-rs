@@ -16,12 +16,14 @@
 //! non-volatile status conditions, and the Shedinja 1-HP special case in
 //! `CalculateMonStats`.
 
+use assets::species::AbilityId;
 use assets::{experience_for_level, BaseStats, LevelUpLearnsets, MoveId, SpeciesId, Type};
 
 use crate::dex::Dex;
 use crate::error::BattleError;
 use crate::nature::{Nature, Stat};
 use crate::stat_stage::StatStage;
+use crate::volatile::Volatiles;
 
 /// `MAX_MON_MOVES` (`pokeemerald/include/constants/global.h:82`): the most
 /// moves a Pokémon can know at once.
@@ -266,6 +268,7 @@ pub struct BattlePokemon {
     current_hp: u32,
     moves: Vec<MoveSlot>,
     stages: StatStages,
+    volatiles: Volatiles,
 }
 
 impl BattlePokemon {
@@ -391,6 +394,7 @@ impl BattlePokemon {
             current_hp: stats.max_hp,
             moves: slots,
             stages: StatStages::default(),
+            volatiles: Volatiles::default(),
         })
     }
 
@@ -515,6 +519,65 @@ impl BattlePokemon {
     /// application clamps the same way).
     pub fn apply_damage(&mut self, amount: u32) {
         self.current_hp = self.current_hp.saturating_sub(amount);
+    }
+
+    /// Add `amount` to current HP, clamped at maximum HP —
+    /// `Cmd_datahpupdate`'s negative-damage branch
+    /// (`pokeemerald/src/battle_script_commands.c:1896`-`:1900`):
+    ///
+    /// ```text
+    /// gBattleMons[].hp += -gBattleMoveDamage;
+    /// if (gBattleMons[].hp > gBattleMons[].maxHP)
+    ///     gBattleMons[].hp = gBattleMons[].maxHP;
+    /// ```
+    ///
+    /// Added by issue #321 for [`crate::drain`]'s heal half. Note that
+    /// upstream applies no fainted-battler guard here: the clamp is the only
+    /// bound, so this method has only the one too.
+    pub fn heal_hp(&mut self, amount: u32) {
+        self.current_hp = self
+            .current_hp
+            .saturating_add(amount)
+            .min(self.stats.max_hp);
+    }
+
+    /// The volatile conditions this battler currently carries
+    /// (`gBattleMons[].status2` / `gStatuses3[]`, as far as this crate
+    /// models them — see [`Volatiles`]).
+    #[must_use]
+    pub const fn volatiles(&self) -> Volatiles {
+        self.volatiles
+    }
+
+    /// Mutable access to [`BattlePokemon::volatiles`], for the pipelines
+    /// that set a bit ([`crate::flag_move`]) and for the end-of-turn tick
+    /// ([`Volatiles::tick_charge`]).
+    ///
+    /// Every [`Volatiles`] field is independently valid, so no invariant of
+    /// this type can be broken through the reference — the same reasoning
+    /// [`BattlePokemon::stages_mut`] rests on.
+    pub const fn volatiles_mut(&mut self) -> &mut Volatiles {
+        &mut self.volatiles
+    }
+
+    /// This mon's ability, derived as upstream derives it: `CreateBoxMon`
+    /// stores `abilityNum = personality & 1` — but **only** for a species
+    /// whose ability slot 1 is non-`ABILITY_NONE`
+    /// (`pokeemerald/src/pokemon.c:2296`-`:2300`; otherwise the field stays
+    /// `0`) — and `GetAbilityBySpecies` indexes the species table with it
+    /// (`:4546`-`:4554`).
+    ///
+    /// Deterministic per mon, which is what lets a seeded trainer party's
+    /// abilities be argued about at all — see [`crate::ability`]'s module
+    /// docs for which two this crate then acts on.
+    #[must_use]
+    pub const fn ability(&self) -> AbilityId {
+        let [first, second] = self.base_stats.abilities;
+        if second.0 == 0 || self.personality & 1 == 0 {
+            first
+        } else {
+            second
+        }
     }
 
     /// Add earned experience, applying every crossed level threshold and

@@ -50,6 +50,9 @@ const TACKLE: MoveId = MoveId(33);
 const LEER: MoveId = MoveId(43);
 const GROWL: MoveId = MoveId(45);
 const ABSORB: MoveId = MoveId(71);
+/// `MOVE_PURSUIT`, Treecko's level-16 learnset move -- still unexecutable
+/// after issue #321 (see `battle::hit`'s allow-list docs).
+const PURSUIT: MoveId = MoveId(228);
 /// `MOVE_PECK` (`include/constants/moves.h:68`) — Torchic's level-16
 /// learnset entry.
 const PECK: MoveId = MoveId(64);
@@ -356,11 +359,18 @@ fn a_level_crossed_before_replacement_updates_the_next_turns_combat() {
 }
 
 /// Level-up move learning is **unscreened**, exactly as upstream's
-/// `GiveMoveToMon` teaches (issue #252): a level-6 Treecko learns Absorb
-/// even though `EFFECT_ABSORB` has no resolver in this crate
-/// ([`battle::hit`]'s module docs). This is the successor to the old
+/// `GiveMoveToMon` teaches (issue #252): a Treecko crossing to level 16
+/// learns Pursuit even though `EFFECT_PURSUIT` has no resolver in this
+/// crate ([`battle::hit`]'s module docs — the engine re-targets and
+/// re-powers Pursuit outside the script, so it is deliberately absent from
+/// the plain-hit allow-list despite pointing at `BattleScript_EffectHit`).
+/// This is the successor to the old
 /// `a_crossed_level_does_not_learn_the_learnset_move_yet` deferral pin,
 /// flipped to the upstream behaviour it deferred.
+///
+/// The unexecutable move used to be Absorb, taught at level 6; issue #321's
+/// `drain` pipeline made that one executable, so the pin moved up the same
+/// learnset to the next move the engine still refuses.
 ///
 /// The fail-closed half that survives is the *other* one this crate always
 /// had, and this test pins both halves together so neither can drift: the
@@ -373,17 +383,17 @@ fn a_level_crossed_before_replacement_updates_the_next_turns_combat() {
 fn a_crossed_level_learns_an_unexecutable_move_that_selection_then_refuses() {
     let dex = Dex::new();
     let mut player = max_iv_mon(&dex, TREECKO, 5, vec![SLASH]);
-    let level_6 =
-        assets::experience_for_level(dex.species(SpeciesId(TREECKO)).unwrap().growth_rate, 6)
+    let level_16 =
+        assets::experience_for_level(dex.species(SpeciesId(TREECKO)).unwrap().growth_rate, 16)
             .unwrap();
 
-    player.apply_experience(&dex, level_6 - player.experience());
+    player.apply_experience(&dex, level_16 - player.experience());
 
-    assert_eq!(player.level(), 6, "the threshold was crossed");
-    assert_eq!(player.experience(), level_6);
+    assert_eq!(player.level(), 16, "the thresholds were crossed");
+    assert_eq!(player.experience(), level_16);
     assert!(
-        battle::initial_moveset(SpeciesId(TREECKO), 6).contains(&ABSORB),
-        "fixture sanity: level 6 is the learnset entry that holds Absorb"
+        battle::initial_moveset(SpeciesId(TREECKO), 16).contains(&PURSUIT),
+        "fixture sanity: level 16 is the learnset entry that holds Pursuit"
     );
     assert_eq!(
         player
@@ -391,13 +401,14 @@ fn a_crossed_level_learns_an_unexecutable_move_that_selection_then_refuses() {
             .iter()
             .map(|slot| slot.move_id)
             .collect::<Vec<_>>(),
-        vec![SLASH, ABSORB],
-        "Absorb is taught into the empty slot with no effect-coverage \
-         screen, exactly as upstream's GiveMoveToMon hands it out"
+        vec![SLASH, ABSORB, QUICK_ATTACK, PURSUIT],
+        "each crossed level's move is taught into the next empty slot with \
+         no effect-coverage screen, exactly as upstream's GiveMoveToMon \
+         hands them out"
     );
     assert_eq!(
-        player.moves()[1].pp,
-        dex.move_data(ABSORB).unwrap().pp,
+        player.moves()[3].pp,
+        dex.move_data(PURSUIT).unwrap().pp,
         "a freshly learned move's PP starts at the move's own base PP"
     );
 
@@ -415,13 +426,13 @@ fn a_crossed_level_learns_an_unexecutable_move_that_selection_then_refuses() {
     let draws_before = rng.draws();
 
     let failure = battle
-        .take_turn(PlayerAction::UseMove(1), &mut rng)
+        .take_turn(PlayerAction::UseMove(3), &mut rng)
         .unwrap_err();
     assert_eq!(
         failure.error(),
-        BattleError::UnsupportedMoveEffect(ABSORB),
-        "EFFECT_ABSORB has no resolver, so selecting it is refused -- \
-         pinning *why*, so this breaks loudly the day EFFECT_ABSORB lands"
+        BattleError::UnsupportedMoveEffect(PURSUIT),
+        "EFFECT_PURSUIT has no resolver, so selecting it is refused -- \
+         pinning *why*, so this breaks loudly the day EFFECT_PURSUIT lands"
     );
     assert!(
         failure.events().is_empty(),

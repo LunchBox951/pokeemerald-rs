@@ -158,6 +158,16 @@ pub struct DamageInput {
     /// The move being calculated is Solar Beam (`MOVE_SOLAR_BEAM`): every
     /// non-sun weather halves it.
     pub is_solar_beam: bool,
+    /// The attacker's pinch ability matches `move_type` and its HP is at or
+    /// below a third of its maximum — `CalculateBaseDamage`'s
+    /// `gBattleMovePower = (150 * gBattleMovePower) / 100`
+    /// (`pokeemerald/src/pokemon.c:3219`-`:3226`), i.e. Overgrow and its
+    /// three siblings. Callers pass
+    /// [`crate::ability::pinch_boosts_power`]'s verdict rather than a
+    /// pre-multiplied [`DamageInput::power`], because the `/ 100` truncation
+    /// has to happen at upstream's position — before the `attack * power`
+    /// multiply, not after it.
+    pub attacker_pinch_boost: bool,
 }
 
 /// `gStatStageRatios` applied via `APPLY_STAT_MOD`, guarding against a `0`
@@ -225,7 +235,16 @@ pub fn base_damage(input: &DamageInput) -> u32 {
     let attack = stage_adjusted(input.attack_stat, input.attack_stage);
     let defense = stage_adjusted(input.defense_stat, input.defense_stage);
 
-    let mut damage = attack * input.power;
+    // The pinch boost is a `gBattleMovePower` rewrite that happens *before*
+    // the formula reads the power (`src/pokemon.c:3219`), so it truncates on
+    // its own: a 35-power move becomes 52, not 52.5 rounded later.
+    let power = if input.attacker_pinch_boost {
+        150 * input.power / 100
+    } else {
+        input.power
+    };
+
+    let mut damage = attack * power;
     damage *= 2 * u32::from(input.attacker_level) / 5 + 2;
     damage /= defense;
     damage /= 50;
@@ -524,7 +543,40 @@ mod tests {
             light_screen: false,
             weather: Weather::None,
             is_solar_beam: false,
+            attacker_pinch_boost: false,
         }
+    }
+
+    /// The pinch boost rewrites `gBattleMovePower` **before** the formula
+    /// reads it (`src/pokemon.c:3219` runs above the `damage = attack *
+    /// gBattleMovePower` line), so the `150 * power / 100` truncation lands
+    /// on the *power*, not on the finished damage.
+    ///
+    /// Hand computation, attack 20 / defense 20 / level 10, a Grass
+    /// (special) move, no screens or weather:
+    ///
+    /// - power 20, unboosted: `20*20 = 400`, `*6 = 2400`, `/20 = 120`,
+    ///   `/50 = 2`, `+2` = **4**.
+    /// - power 20, boosted: power becomes `150*20/100 = 30`; `20*30 = 600`,
+    ///   `*6 = 3600`, `/20 = 180`, `/50 = 3`, `+2` = **5**.
+    /// - boosting the *result* instead would give `150 * 4 / 100 = 6`, then
+    ///   `+2` handling aside, a visibly different number — which is what
+    ///   makes this fixture discriminate the order.
+    #[test]
+    fn the_pinch_boost_scales_the_power_before_the_formula_reads_it() {
+        let boosted = |power| {
+            let mut input = neutral_input(Type::Grass, 20, 20, power, 10);
+            input.attacker_pinch_boost = true;
+            base_damage(&input)
+        };
+        let plain = |power| base_damage(&neutral_input(Type::Grass, 20, 20, power, 10));
+
+        assert_eq!(plain(20), 4);
+        assert_eq!(boosted(20), 5);
+        // power 35 -> 52 (truncated from 52.5): 20*52*6/20/50 + 2 = 8.
+        assert_eq!(plain(35), 6);
+        assert_eq!(boosted(35), 8);
+        assert_eq!(150 * 35 / 100, 52, "the truncation is on the power");
     }
 
     #[test]

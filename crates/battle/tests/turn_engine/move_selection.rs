@@ -276,13 +276,15 @@ fn unsupported_moves_are_rejected_at_the_right_boundary_for_each_side() {
     // case, are executable now -- see
     // `a_real_starter_moveset_can_fight_with_its_damaging_move` and
     // `wild_zigzagoon_growl_executes_when_the_rejection_loop_lands_on_it`
-    // for their new coverage). Sonic Boom: power 1 but EFFECT_SONICBOOM's flat 20
-    // damage, which the ordinary pipeline gets wrong in both damage and
-    // draw count. Struggle: its EFFECT_RECOIL half is not applied by this
+    // for their new coverage). Horn Drill: real base power but
+    // EFFECT_OHKO's own script, which the ordinary pipeline gets wrong in
+    // both damage and draw count -- it stands in for Sonic Boom, which
+    // played this role until issue #321's `fixed_damage` pipeline made it
+    // executable. Struggle: its EFFECT_RECOIL half is not applied by this
     // engine (see crate::hit's module docs).
     for (bad_move, expected) in [
         (MoveId(28), BattleError::NonDamagingMove(MoveId(28))),
-        (MoveId(49), BattleError::UnsupportedMoveEffect(MoveId(49))),
+        (MoveId(32), BattleError::UnsupportedMoveEffect(MoveId(32))),
         (STRUGGLE, BattleError::UnsupportedMoveEffect(STRUGGLE)),
     ] {
         // The wild mon's moveset is screened at construction: the
