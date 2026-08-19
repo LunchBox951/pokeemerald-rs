@@ -16,6 +16,13 @@
 //! [`compositor::FrameEffects`] parameter struct. [`compose_frame`]
 //! delegates to it with [`compositor::FrameEffects::default`].
 //!
+//! [`SpriteLayer`] gates both visible resolution and OBJWIN masking through
+//! a shared per-scanline OAM admission stage (`oam_budget`, private but see
+//! [`sprite`]'s module docs) modelling the GBA's fixed per-scanline OBJ
+//! cycle budget (S-2, issue #329) — a late sprite past the budget is
+//! dropped from both consistently, the way real hardware (and the pinned
+//! mgba renderer) drops it.
+//!
 //! Wiring this crate into `platform`'s presentation surface is a future
 //! integration issue `(constitution-vs-roadmap)`.
 //!
@@ -34,6 +41,7 @@ pub mod error;
 pub mod framebuffer;
 pub mod mosaic;
 pub mod oam;
+mod oam_budget;
 pub mod palette;
 pub mod sprite;
 mod sprite_affine;
