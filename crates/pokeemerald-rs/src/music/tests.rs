@@ -495,6 +495,38 @@ mod synthetic_pack {
         }
     }
 
+    /// A one-track synthetic pack whose song header carries `priority`.
+    fn pack_with_priority(test_name: &str, priority: u8) -> AssetPack {
+        let vg_id = "audio/voicegroup/fixtest";
+        let wave_id = "audio/sample/fixtest_wave";
+        let song = assets::Song::new(VoiceGroupId(vg_id.to_owned()), priority, None, vec![vec![]])
+            .expect("a one-empty-track song is well-formed");
+        let sample = Sample::ProgrammableWave(ProgrammableWave { table: [0x88; 16] });
+        let path = write_pack(
+            test_name,
+            &[
+                ("audio/song/fixtest", song.encode()),
+                (vg_id, fix_voicegroup(wave_id).encode()),
+                (wave_id, sample.encode()),
+            ],
+        );
+        AssetPack::load(&path).expect("the synthetic pack must parse")
+    }
+
+    /// `SongHeader::priority` is the base term of every note's effective
+    /// note-on priority (`m4a_1.s:1628`..`:1633`), so it has to survive the
+    /// pack -> engine conversion rather than being dropped at the boundary.
+    #[test]
+    fn loading_carries_the_header_priority_into_the_runtime_song() {
+        let plain = load_song_from_pack(&pack_with_priority("prio-zero", 0), "fixtest")
+            .expect("the synthetic song loads");
+        assert_eq!(plain.priority(), 0);
+
+        let raised = load_song_from_pack(&pack_with_priority("prio-200", 200), "fixtest")
+            .expect("the synthetic song loads");
+        assert_eq!(raised.priority(), 200);
+    }
+
     /// [`load_song_from_pack`] must preserve the header's three reverb
     /// states distinctly: unset stays *no override* (inherit at start
     /// time), explicit `0` stays an explicit disable, and a real level
