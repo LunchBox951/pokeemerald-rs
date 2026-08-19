@@ -374,6 +374,7 @@ impl OverworldPhase {
         if let Some(outcome) = route103_rival::advance_route103_rival_battle(
             &mut self.rival_battle,
             &mut self.party_lead,
+            &mut self.save1.money,
             &mut self.rng,
         ) {
             eprintln!("route 103 rival: ended -- {outcome:?}");

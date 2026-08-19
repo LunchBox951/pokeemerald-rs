@@ -8,21 +8,26 @@ use engine::overworld::{Direction, PlayerState, WALK_FRAMES_PER_TILE};
 use engine::rng::Rng;
 use platform::{ButtonState, Buttons};
 
-/// Regression for the new-game-to-overworld RNG handoff: trainer-ID
-/// initialization consumes the first two `Random()` draws, and encounters
-/// must continue from that advanced state rather than restarting at seed 0.
+/// Regression for the new-game-to-overworld RNG handoff: trainer-id
+/// initialization consumes exactly one `Random()` draw (the id's high half
+/// -- the low half is the seed itself, not a second draw;
+/// `new_game::init_save_blocks`'s module docs), and encounters must continue
+/// from that advanced state rather than restarting at seed 0 or skipping an
+/// extra draw that was never really spent.
 #[test]
-fn new_game_rng_stream_continues_after_trainer_id_draws() {
+fn new_game_rng_stream_continues_after_the_trainer_id_draw() {
     let phase = synthetic_phase(PlayerState::new((4, 6), 3, Direction::West), None);
     let mut expected = Rng::new(new_game::NEW_GAME_RNG_SEED);
-    expected.next_u16();
     expected.next_u16();
 
     assert_eq!(
         phase.rng.state(),
         expected.state(),
-        "the phase must retain the RNG state after both trainer-ID draws"
+        "the phase must retain the RNG state after the one trainer-id draw"
     );
+    // Independently-derived ground truth (issue #313): `ISO_RANDOMIZE1(0) ==
+    // 1_103_515_245 * 0 + 24_691 == 24_691 == 0x0000_6073`.
+    assert_eq!(phase.rng.state(), 0x0000_6073);
 }
 
 /// Senior review regression, headless: upstream discards an A press made

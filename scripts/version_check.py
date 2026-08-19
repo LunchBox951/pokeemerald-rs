@@ -49,6 +49,8 @@ What transition mode checks:
    contributors (handle: gated-by-default). A marker is only evidence for
    *this* transition if the diff actually touched it -- an untouched marker
    left over from an earlier approval authorizes nothing.
+8. Require the workspace package version to encode the proposed game version
+   as ``FINAL.MAJOR.MINOR+gamepatch.PATCH``.
 
    The marker must contain, one per line (case-insensitive keys, order
    doesn't matter)::
@@ -127,6 +129,17 @@ MARKER_DATE_RE = re.compile(r"(?im)^[ \t]*date[ \t]*:[ \t]*(\S+)[ \t]*\r?$")
 # Strict Date shape; date.fromisoformat alone also accepts e.g. '20260725'
 # and week dates, which the documented format does not.
 MARKER_DATE_SHAPE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+# Cargo accepts three numeric SemVer components. Preserve the game's fourth
+# component as build metadata while keeping VERSION authoritative for ordering.
+WORKSPACE_PACKAGE_SECTION_RE = re.compile(
+    r"(?ms)^\[workspace\.package\][ \t]*\r?\n"
+    r"(?P<body>.*?)(?=^\[|\Z)"
+)
+WORKSPACE_VERSION_RE = re.compile(
+    r'(?m)^(?P<prefix>[ \t]*version[ \t]*=[ \t]*")'
+    r'(?P<version>[^"\r\n]+)(?P<suffix>"[^\r\n]*)(?P<newline>\r?\n|$)'
+)
 
 Version = Tuple[int, int, int, int]
 
@@ -213,6 +226,60 @@ def parse_version(raw: str, source: str) -> Version:
         values.append(int(part))
 
     return (values[0], values[1], values[2], values[3])
+
+
+def cargo_version(version: Version) -> str:
+    """Map ``FINAL.MAJOR.MINOR.PATCH`` to valid Cargo SemVer."""
+    final, major, minor, patch = version
+    return f"{final}.{major}.{minor}+gamepatch.{patch}"
+
+
+def _workspace_version_match(raw: str, source: str):
+    """Return the workspace section and its single package version match."""
+    sections = list(WORKSPACE_PACKAGE_SECTION_RE.finditer(raw))
+    if len(sections) != 1:
+        raise VersionError(
+            f"{source}: expected one [workspace.package] section; "
+            f"found {len(sections)}"
+        )
+
+    versions = list(WORKSPACE_VERSION_RE.finditer(sections[0].group("body")))
+    if len(versions) != 1:
+        raise VersionError(
+            f"{source}: [workspace.package] must contain one version; "
+            f"found {len(versions)}"
+        )
+    return sections[0], versions[0]
+
+
+def workspace_package_version(raw: str, source: str) -> str:
+    """Read the single version from ``[workspace.package]``."""
+    _section, version = _workspace_version_match(raw, source)
+    return version.group("version")
+
+
+def replace_workspace_package_version(
+    raw: str, version: Version, source: str
+) -> str:
+    """Replace only ``[workspace.package].version`` while preserving layout."""
+    section, current = _workspace_version_match(raw, source)
+    start = section.start("body") + current.start("version")
+    end = section.start("body") + current.end("version")
+    return raw[:start] + cargo_version(version) + raw[end:]
+
+
+def check_workspace_package_version(
+    raw: str, version: Version, source: str
+) -> None:
+    """Require Cargo metadata to encode the canonical game version."""
+    actual = workspace_package_version(raw, source)
+    expected = cargo_version(version)
+    if actual != expected:
+        raise VersionError(
+            f"{source}: workspace package version {actual!r} does not match "
+            f"VERSION {fmt(version)}; expected {expected!r}. Run "
+            f"'python3 scripts/sync_cargo_version.py'."
+        )
 
 
 def read_ref_file(ref: str, rel_path: str, root: str) -> Optional[str]:
@@ -577,6 +644,12 @@ def main(argv: Optional[list] = None) -> int:
 
     try:
         head_version = read_head_version(args.head, root)
+        cargo_manifest = read_ref_file(args.head, "Cargo.toml", root)
+        if cargo_manifest is None:
+            raise VersionError(f"head ({args.head}): Cargo.toml not found")
+        check_workspace_package_version(
+            cargo_manifest, head_version, f"head ({args.head}): Cargo.toml"
+        )
         if args.mode == "cumulative":
             require_commit_ref(args.base, "base", root)
             require_commit_ref(args.head, "head", root)
