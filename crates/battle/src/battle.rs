@@ -207,29 +207,41 @@
 //! for a trainer battle exactly as for a wild one — the player's party is
 //! still one mon as far as this crate is concerned. The *opponent* does
 //! switch, but only when forced (see `BATTLE_TYPE_TRAINER` above).
-
-use std::error::Error;
-use std::fmt;
+//!
+//! Past ~1,450 lines, one file carrying turn flow, the event vocabulary, and
+//! move execution stopped being one concept (issue #320,
+//! `oop-boundaries`) — every move-effect slice had to edit all three at
+//! once. This file now keeps turn flow alone: [`Battle`]'s state and
+//! construction, per-turn validation, action selection, turn order, the
+//! two movers' actions, the end-of-turn fainted-mon pass, and the terminal
+//! outcome. The other two concerns are focused sibling modules, each
+//! contributing to [`Battle`] rather than owning a competing type —
+//! [`events`] (what a turn *reports*: [`BattleEvent`] and [`TurnError`]) and
+//! [`execute`] ("this battler used this move — what happens?":
+//! [`Battle::execute_move`]'s dispatch and the per-script pipelines behind
+//! it). [`ensure_executable`] stays here because it is a *pre-turn* screen:
+//! [`Battle::new`] and `validate_player_move` both run it before the first
+//! draw, so no pipeline in [`execute`] ever sees a move it rejects.
 
 use assets::trainers::TrainerId;
-use assets::{MoveId, SpeciesId};
+use assets::MoveId;
 
 use crate::damage::{BattleRng, STRUGGLE};
 use crate::dex::Dex;
 use crate::error::BattleError;
 use crate::escape::try_run_from_battle;
-use crate::exp::{trainer_faint_exp, wild_faint_exp};
-use crate::hit::{resolve_hit, HitOutcome};
-use crate::pokemon::{BattlePokemon, MAX_LEVEL};
-use crate::stat_change::{
-    self, is_stat_lowering_effect, resolve_stat_lowering_move, LoweredStat, StatChangeOutcome,
-};
-use crate::stat_stage::StatStage;
+use crate::pokemon::BattlePokemon;
+use crate::stat_change;
 use crate::turn_order::{resolve_order, Order};
 
+mod events;
+mod execute;
 pub(crate) mod opponent_ai;
 pub mod trainer;
 pub(crate) mod trainer_ai;
+
+pub use events::{BattleEvent, TurnError};
+
 use opponent_ai::{
     choose_enemy_action_first_battle, choose_enemy_move, selectable_slot, EnemyAction,
 };
@@ -265,247 +277,6 @@ pub enum BattleOutcome {
     /// [`crate::escape::try_run_from_battle`] the way the player's own Run
     /// does.
     WildFled,
-}
-
-/// A single observable event within a turn, in the order they occurred —
-/// enough for a test (or, later, a presentation layer) to reconstruct what
-/// happened without re-deriving it from before/after state.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum BattleEvent {
-    /// A run attempt and whether it succeeded. Always the first event of a
-    /// turn where the player chose [`PlayerAction::Run`].
-    RunAttempt {
-        /// Always `true`: only the player runs from a wild battle this
-        /// slice (see the module docs).
-        by_player: bool,
-        /// Whether the attempt succeeded.
-        success: bool,
-    },
-    /// A move missed its accuracy check.
-    Missed {
-        /// Whether the player's mon was the one using the move.
-        by_player: bool,
-        /// The move that was used. Carried on every move event because only
-        /// the player's choice is caller-known: the wild opponent's comes out
-        /// of `opponent_ai::choose_enemy_move`'s rejection loop, so without this
-        /// a presentation layer could not name the move the wild mon used.
-        move_id: MoveId,
-    },
-    /// A move failed because its slot had no PP left — upstream's
-    /// `Cmd_attackcanceler` abort (`battle_script_commands.c:934`-`:939`):
-    /// the *first* command of the hit script jumps to
-    /// `BattleScript_NoPPForMove` (`data/battle_scripts_1.s:3556`), which
-    /// prints the attack string and `STRINGID_BUTNOPPLEFT` ("But no PP
-    /// left!") and goes straight to `MoveEnd`. No RNG draw, no damage, and no
-    /// PP change — `ppreduce` is never reached. Only the wild side can
-    /// produce this event: the player's slot is validated against
-    /// upstream's selection menu before the turn begins.
-    FailedNoPp {
-        /// Whether the player's mon was the one using the move (always
-        /// `false` this slice — see above).
-        by_player: bool,
-        /// The move whose slot was empty.
-        move_id: MoveId,
-    },
-    /// A move connected but the target's typing made it deal no damage.
-    NoEffect {
-        /// Whether the player's mon was the one using the move.
-        by_player: bool,
-        /// The move that was used.
-        move_id: MoveId,
-    },
-    /// A move connected and dealt damage.
-    Hit {
-        /// Whether the player's mon was the one using the move.
-        by_player: bool,
-        /// The move that was used.
-        move_id: MoveId,
-        /// HP of damage actually dealt: the formula result capped at the
-        /// target's remaining HP, so an overkill KO reports the HP the
-        /// target really lost, never more.
-        damage: u32,
-        /// Whether this was a critical hit.
-        is_critical: bool,
-    },
-    /// A mon's HP reached `0`.
-    Fainted {
-        /// Whether it was the player's mon that fainted.
-        by_player: bool,
-    },
-    /// The wild Pokémon chose to flee instead of acting — always the enemy
-    /// side (only [`Battle::new`]'s `first_battle` AI path can ever produce
-    /// this choice; see [`BattleOutcome::WildFled`]). No fields: unlike
-    /// [`BattleEvent::RunAttempt`] this can never fail once chosen —
-    /// upstream's non-player `HandleAction_Run` has no escape formula to
-    /// roll (module docs) — so there is nothing but the fact of it to carry.
-    WildFled,
-    /// A stat-lowering move (Growl/Tail Whip/Leer/String Shot —
-    /// `EFFECT_ATTACK_DOWN`/`EFFECT_DEFENSE_DOWN`/`EFFECT_SPEED_DOWN`)
-    /// connected and actually lowered its target's stage — upstream's
-    /// `B_MSG_DEFENDER_STAT_FELL` message
-    /// (`ChangeStatBuffs`, `battle_script_commands.c:7058`-`:7059`).
-    ///
-    /// A miss is reported as [`BattleEvent::Missed`] instead (the accuracy
-    /// check is the same [`crate::accuracy::accuracy_check`] every other
-    /// move uses); the target already sitting at [`crate::StatStage::MIN`]
-    /// is [`BattleEvent::StatWontGoLower`] instead — upstream treats the two
-    /// "connected" outcomes as distinct messages, so this crate keeps them
-    /// as distinct events rather than folding "won't go lower" into this
-    /// variant with a no-op stage delta.
-    StatFell {
-        /// Whether the player's mon was the one using the move.
-        by_player: bool,
-        /// The move that was used.
-        move_id: MoveId,
-        /// Which of the target's stats fell.
-        stat: LoweredStat,
-        /// The target's stage for `stat` after this move.
-        new_stage: StatStage,
-    },
-    /// A stat-lowering move connected, but its target's stage for that stat
-    /// was already [`crate::StatStage::MIN`] — upstream's distinct
-    /// `B_MSG_STAT_WONT_DECREASE` ("Pokémon's stat won't go any lower!")
-    /// message (`gStatDownStringIds[B_MSG_STAT_WONT_DECREASE]`,
-    /// `src/battle_message.c:1020`; `ChangeStatBuffs`,
-    /// `battle_script_commands.c:7056`-`:7057`). The stage does not change:
-    /// it was already at the floor.
-    StatWontGoLower {
-        /// Whether the player's mon was the one using the move.
-        by_player: bool,
-        /// The move that was used.
-        move_id: MoveId,
-        /// Which stat the move targeted.
-        stat: LoweredStat,
-    },
-    /// The trainer's active mon fainted and the next party member came out
-    /// in its place — upstream's forced post-faint switch
-    /// (`OpponentHandleChoosePokemon`,
-    /// `src/battle_controller_opponent.c:1621`), settled at the end of the
-    /// turn by [`Battle::end_of_turn`]. Only a
-    /// [`Battle::new_trainer`] battle can produce this.
-    TrainerSentOut {
-        /// The species that came out.
-        species: SpeciesId,
-        /// How many party members are still on the bench behind it.
-        bench_remaining: usize,
-    },
-    /// The player's mon gained experience for fainting the opposing mon.
-    ///
-    /// The award is **already applied** to [`Battle::player`] when this
-    /// event is emitted — accumulated experience, any crossed level,
-    /// recomputed stats, and (issue #252) each crossed level's learnset
-    /// moves ([`BattlePokemon::apply_experience`], upstream `Cmd_getexp`'s
-    /// `SetMonData(MON_DATA_EXP)`/`CalculateMonStats` half plus
-    /// `BattleScript_LevelUp`'s `MonTryLearningNewMove` half). The event is
-    /// a report of that mutation, for the integration layer to present;
-    /// applying the amount to the battler again would double it. What the
-    /// in-battle application deliberately still does *not* do (EV gain,
-    /// friendship) is recorded on [`BattlePokemon::apply_experience`] and
-    /// the `Cmd_getexp` ledger entry.
-    ExpGained(u32),
-    /// Beating a trainer paid out prize money — `Cmd_getmoneyreward`
-    /// (`src/battle_script_commands.c:5635`), whose
-    /// `AddMoney(&gSaveBlock1Ptr->money, ...)` this crate has no field to
-    /// perform. The amount is [`trainer::TrainerContext::money`]; crediting
-    /// it belongs to the integration layer — unlike
-    /// [`BattleEvent::ExpGained`], whose award `Battle` applies to its own
-    /// battler before emitting the event (this crate owns the battler, but
-    /// no save block). Always immediately before the final
-    /// [`BattleEvent::Ended`], and only for [`BattleOutcome::PlayerWon`]
-    /// against a trainer.
-    MoneyGained(u32),
-    /// The battle reached a terminal outcome; no further turns are valid.
-    Ended(BattleOutcome),
-}
-
-/// A [`Battle::take_turn`] call that could not run to the end of the turn,
-/// together with every event that *did* happen before it stopped.
-///
-/// A turn commits its effects as it goes — PP is deducted, damage is applied,
-/// and the shared RNG stream advances — so an error partway through cannot
-/// simply discard what already happened: the caller still has to be able to
-/// tell (and show) that the first mover landed a hit. This type is the reason
-/// `take_turn` does not return a bare [`BattleError`]: the events come back on
-/// the failure path too `(behavioral-fidelity)`.
-///
-/// An empty [`TurnError::events`] means **no observable battle event
-/// occurred** — it does *not* mean the battle and the RNG stream are
-/// untouched. Two different situations produce it:
-///
-/// - **Rejected before the turn began.** [`BattleError::BattleAlreadyOver`],
-///   [`BattleError::RunForbidden`] (`first_battle` only — [`Battle::new`]'s
-///   docs), and — for the *player's* chosen slot, validated ahead of the
-///   first draw — [`BattleError::InvalidMoveSlot`] /
-///   [`BattleError::NoPpRemaining`] / [`BattleError::PlaceholderMove`],
-///   plus [`crate::hit::ensure_resolvable`]'s rejections of an unsupported
-///   pick ([`BattleError::NonDamagingMove`],
-///   [`BattleError::UnsupportedMoveEffect`],
-///   [`BattleError::UnsupportedMoveType`], [`BattleError::UnknownMove`]).
-///   These, and only these, leave the battle and the shared RNG stream
-///   exactly as they were.
-/// - **Stopped after the turn started but before either mon acted.** A wild
-///   opponent with *every* slot spent is upstream's forced-Struggle case
-///   (`opponent_ai::choose_enemy_move`), and this slice cannot execute Struggle
-///   — so when that fallback is the *first mover*, the turn stops with
-///   nothing to report ([`BattleError::UnsupportedMoveEffect`] carrying
-///   Struggle). By then the turn-number draw (plus a Speed-tie draw, if the
-///   speeds tied) has happened and [`Battle::random_turn_number`] has
-///   advanced; no PP or HP has changed, because neither mon got as far as
-///   acting.
-///
-/// So: empty events plus [`BattleError::UnsupportedMoveEffect`] is the one
-/// combination that *may* have consumed draws — the wild forced-Struggle
-/// fallback consumes the turn-number draw (and a tie draw, if any), while
-/// the player's rejected pick consumes none, and the two are not
-/// distinguishable from the error value alone. Anything else with empty
-/// events consumed none.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TurnError {
-    events: Vec<BattleEvent>,
-    error: BattleError,
-}
-
-impl TurnError {
-    /// Why the turn stopped.
-    #[must_use]
-    pub const fn error(&self) -> BattleError {
-        self.error
-    }
-
-    /// The events that occurred before the turn stopped, in order. Empty for
-    /// a call rejected before the turn began.
-    #[must_use]
-    pub fn events(&self) -> &[BattleEvent] {
-        &self.events
-    }
-
-    /// Take ownership of [`TurnError::events`].
-    #[must_use]
-    pub fn into_events(self) -> Vec<BattleEvent> {
-        self.events
-    }
-}
-
-impl From<BattleError> for TurnError {
-    /// A turn that stopped before it began, so with no events to report.
-    fn from(error: BattleError) -> Self {
-        Self {
-            events: Vec::new(),
-            error,
-        }
-    }
-}
-
-impl fmt::Display for TurnError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{} (after {} event(s))", self.error, self.events.len())
-    }
-}
-
-impl Error for TurnError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        Some(&self.error)
-    }
 }
 
 /// Whether the turn engine can execute `move_id` at all: either
@@ -1246,210 +1017,6 @@ impl Battle {
                 Ok(())
             }
         }
-    }
-
-    /// Resolve `attacker_is_player`'s use of `move_id` against the other
-    /// mon, pushing the resulting events and ending the battle if the
-    /// target faints.
-    ///
-    /// Dispatches on the move's `EFFECT_*` to one of two pipelines — this
-    /// crate's two-sided execution boundary (crate root docs): the ordinary
-    /// hit-shaped path (`execute_hit_move`,
-    /// [`crate::hit::is_ordinary_hit_effect`]) or the stat-lowering path
-    /// (`execute_stat_lowering_move`,
-    /// [`crate::stat_change::is_stat_lowering_effect`]). Every move that
-    /// reaches here already passed [`ensure_executable`] (at [`Battle::new`]
-    /// for the wild side, at `validate_player_move` for the player's), so
-    /// exactly one of the two `is_*` checks holds. ([`STRUGGLE`] needs no
-    /// case of its own: its `EFFECT_RECOIL` is not a stat-lowering effect,
-    /// so it falls through to the hit pipeline, which accepts it.)
-    fn execute_move(
-        &mut self,
-        attacker_is_player: bool,
-        move_id: MoveId,
-        rng: &mut impl BattleRng,
-        events: &mut Vec<BattleEvent>,
-    ) -> Result<(), BattleError> {
-        let effect = self.dex.move_data(move_id)?.effect;
-        if is_stat_lowering_effect(effect) {
-            self.execute_stat_lowering_move(attacker_is_player, move_id, rng, events)
-        } else {
-            self.execute_hit_move(attacker_is_player, move_id, rng, events)
-        }
-    }
-
-    /// The ordinary damaging-move half of [`Self::execute_move`]'s dispatch —
-    /// [`crate::hit::resolve_hit`]'s pipeline, unchanged from before issue
-    /// #199 except for threading `self.first_battle_flag` through as
-    /// `suppress_crit` (issue #187).
-    fn execute_hit_move(
-        &mut self,
-        attacker_is_player: bool,
-        move_id: MoveId,
-        rng: &mut impl BattleRng,
-        events: &mut Vec<BattleEvent>,
-    ) -> Result<(), BattleError> {
-        let outcome = {
-            let (attacker, defender) = if attacker_is_player {
-                (&self.player, &self.enemy)
-            } else {
-                (&self.enemy, &self.player)
-            };
-            resolve_hit(
-                &self.dex,
-                move_id,
-                attacker,
-                defender,
-                self.is_first_battle(),
-                rng,
-            )?
-        };
-
-        match outcome {
-            HitOutcome::Miss => {
-                events.push(BattleEvent::Missed {
-                    by_player: attacker_is_player,
-                    move_id,
-                });
-            }
-            HitOutcome::NoEffect => {
-                events.push(BattleEvent::NoEffect {
-                    by_player: attacker_is_player,
-                    move_id,
-                });
-            }
-            HitOutcome::Hit {
-                damage,
-                is_critical,
-            } => {
-                // Report the HP the defender actually loses, not the raw
-                // formula result — upstream's `Cmd_datahpupdate` records the
-                // same cap on a lethal hit (`gHpDealt = gBattleMons[].hp`,
-                // `battle_script_commands.c:1920`-`:1929`).
-                let dealt = damage.min(if attacker_is_player {
-                    self.enemy.current_hp()
-                } else {
-                    self.player.current_hp()
-                });
-                events.push(BattleEvent::Hit {
-                    by_player: attacker_is_player,
-                    move_id,
-                    damage: dealt,
-                    is_critical,
-                });
-                if attacker_is_player {
-                    self.enemy.apply_damage(dealt);
-                } else {
-                    self.player.apply_damage(dealt);
-                }
-
-                let defender_fainted = if attacker_is_player {
-                    self.enemy.is_fainted()
-                } else {
-                    self.player.is_fainted()
-                };
-                if defender_fainted {
-                    events.push(BattleEvent::Fainted {
-                        by_player: !attacker_is_player,
-                    });
-                    if attacker_is_player {
-                        // A MAX_LEVEL recipient gains nothing and gets no
-                        // "gained EXP" message: Cmd_getexp case 2 zeroes the
-                        // award and jumps past the string
-                        // (`battle_script_commands.c:3351`-`:3356`), so no
-                        // event is emitted either.
-                        if self.player.level() < MAX_LEVEL {
-                            let base_exp = self.dex.species(self.enemy.species())?.base_exp;
-                            let level = self.enemy.level();
-                            // Cmd_getexp's `x1.5` trainer-battle bonus
-                            // (`:3378`-`:3379`) -- see `crate::exp`.
-                            let exp = if self.trainer().is_some() {
-                                trainer_faint_exp(base_exp, level)
-                            } else {
-                                wild_faint_exp(base_exp, level)
-                            };
-                            self.player.apply_experience(&self.dex, exp);
-                            events.push(BattleEvent::ExpGained(exp));
-                        }
-                        // A wild battle ends the moment its only opponent
-                        // faints. A trainer's does not: the replacement (or
-                        // the trainer's defeat) is settled at the end of the
-                        // turn instead, in `end_of_turn`, exactly where
-                        // upstream's HandleFaintedMonActions sits.
-                        if self.trainer().is_none() {
-                            self.finish(events, BattleOutcome::PlayerWon);
-                        }
-                    } else {
-                        self.finish(events, BattleOutcome::PlayerLost);
-                    }
-                }
-            }
-        }
-        Ok(())
-    }
-
-    /// The stat-lowering half of [`Self::execute_move`]'s dispatch (issue
-    /// #199) — [`crate::stat_change::resolve_stat_lowering_move`]'s
-    /// pipeline: Growl/Tail Whip/Leer/String Shot always target the other
-    /// mon (upstream's `MOVE_TARGET_BOTH`/`MOVE_TARGET_SELECTED` both
-    /// resolve to the single opposing battler in a one-on-one wild battle;
-    /// none of these four is `MOVE_EFFECT_AFFECTS_USER`), so `defender` here
-    /// is always the mon *not* using the move — never the attacker itself.
-    fn execute_stat_lowering_move(
-        &mut self,
-        attacker_is_player: bool,
-        move_id: MoveId,
-        rng: &mut impl BattleRng,
-        events: &mut Vec<BattleEvent>,
-    ) -> Result<(), BattleError> {
-        let outcome = {
-            let (attacker, defender) = if attacker_is_player {
-                (&self.player, &self.enemy)
-            } else {
-                (&self.enemy, &self.player)
-            };
-            resolve_stat_lowering_move(&self.dex, move_id, attacker, defender, rng)?
-        };
-
-        match outcome {
-            StatChangeOutcome::Miss => {
-                events.push(BattleEvent::Missed {
-                    by_player: attacker_is_player,
-                    move_id,
-                });
-            }
-            StatChangeOutcome::Applied {
-                stat,
-                new_stage,
-                floored,
-            } => {
-                let defender = if attacker_is_player {
-                    &mut self.enemy
-                } else {
-                    &mut self.player
-                };
-                match stat {
-                    LoweredStat::Attack => defender.stages_mut().attack = new_stage,
-                    LoweredStat::Defense => defender.stages_mut().defense = new_stage,
-                    LoweredStat::Speed => defender.stages_mut().speed = new_stage,
-                }
-                events.push(if floored {
-                    BattleEvent::StatWontGoLower {
-                        by_player: attacker_is_player,
-                        move_id,
-                        stat,
-                    }
-                } else {
-                    BattleEvent::StatFell {
-                        by_player: attacker_is_player,
-                        move_id,
-                        stat,
-                        new_stage,
-                    }
-                });
-            }
-        }
-        Ok(())
     }
 
     fn finish(&mut self, events: &mut Vec<BattleEvent>, outcome: BattleOutcome) {

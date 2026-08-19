@@ -11,9 +11,10 @@ use crate::voice::{channel_volume, pan_terms, StereoAcc};
 /// Which of the four fixed CGB hardware channels a voice occupies.
 ///
 /// Unlike DirectSound's pooled voices, each of these exists exactly once —
-/// starting a new note on the same channel number retriggers whatever was
-/// already sounding there, mirroring `CgbSound`'s `for (ch = 1; ch <= 4;
-/// ch++)` loop over fixed channel slots (`m4a.c:946`).
+/// starting a new note on the same channel number may replace whatever was
+/// already sounding there, subject to `Mixer::add_cgb_voice`'s priority
+/// test, mirroring `CgbSound`'s `for (ch = 1; ch <= 4; ch++)` loop over
+/// fixed channel slots (`m4a.c:946`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CgbChannelNumber {
     Square1,
@@ -139,6 +140,11 @@ pub struct CgbVoice {
     /// [`Self::set_track_pitch`] re-applies [`cgb_dac_correct`] on every
     /// mid-note retune. Always `false` for a noise voice (see [`Self::noise`]).
     fixed_rate: bool,
+    /// The note's effective priority (`CgbChannel::priority`) -- see
+    /// [`crate::voice::Voice::priority`]. `ply_note`'s CGB arm compares it
+    /// against the occupant of this voice's one fixed hardware channel
+    /// before overwriting it (`m4a_1.s:1647`..`:1668`).
+    priority: u8,
 }
 
 impl CgbVoice {
@@ -369,7 +375,21 @@ impl CgbVoice {
             track,
             seq: 0,
             fixed_rate,
+            priority: 0,
         }
+    }
+
+    /// Stamp this voice's effective note-on priority (see [`Self::priority`]).
+    #[must_use]
+    pub(crate) fn with_priority(mut self, priority: u8) -> Self {
+        self.priority = priority;
+        self
+    }
+
+    /// This voice's effective note-on priority (higher outranks lower).
+    #[must_use]
+    pub(crate) fn priority(&self) -> u8 {
+        self.priority
     }
 
     /// Override the key used for pitch resolution independently of

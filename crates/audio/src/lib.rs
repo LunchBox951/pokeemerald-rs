@@ -46,8 +46,11 @@
 //!
 //! ## Out of scope for this slice
 //!
-//! SFX priority/interruption and voice stealing, the M4A player command
-//! interface, compressed/reversed DirectSound waves. `MEMACC` and every
+//! Cross-song SFX priority/interruption (which needs the M4A player command
+//! interface `MPlayStart`/`m4aSongNumStart` layers this crate does not model)
+//! and compressed/reversed DirectSound waves. Within a single song,
+//! `ply_note`'s priority-driven channel allocation *is* implemented — see
+//! [`mixer`]'s module docs. `MEMACC` and every
 //! other `XCMD` sub-command are still only *decoded*, not executed, so the
 //! byte stream stays in sync.
 
