@@ -24549,7 +24549,7 @@
         },
         "Cmd_datahpupdate": {
           "reason": "battle_script_commands.c:1844 (lethal cap :1920-:1929). The gHpDealt mirror is modelled: a lethal hit records only the HP actually lost (Battle's overkill cap on the Hit event). NOT modelled: Substitute damage routing, the special-vs-physical last-damage bookkeeping (gProtectStructs / gSpecialStatuses) consumed by Counter/Mirror Coat/Bide, and HITMARKER_IGNORE_SUBSTITUTE -- none of those systems exist this slice.",
-          "rust_target": "crates/battle/src/battle.rs",
+          "rust_target": "crates/battle/src/battle/execute.rs",
           "spec": "S-6",
           "status": "stubbed"
         },
