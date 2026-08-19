@@ -134,6 +134,8 @@ use engine::overworld::wild_encounter::{WildEncounter, WildEncounterState};
 use engine::overworld::{MapRuntime, TilePos};
 use engine::rng::Rng;
 
+use super::move_learn::settle_move_learn_prompts;
+
 /// One [`engine::rng::Rng`], seen through [`battle::BattleRng`].
 ///
 /// A borrowing newtype rather than an owned generator: the caller keeps the
@@ -451,6 +453,12 @@ pub(super) fn start_wild_battle(
 /// heals the fainted lead that path leaves behind instead, on the very same
 /// frame (module docs, "The fail-closed guard, retired").
 ///
+/// Any level-up move-replacement prompt this turn raised is answered
+/// first, by [`crate::flow::move_learn::settle_move_learn_prompts`] — the
+/// one place all three headless drivers give that stand-in answer, and the
+/// reason an unanswered question can never reach the write-back or the next
+/// turn. See that module's docs for the answer and where the seam ends.
+///
 /// A turn that *errors* is not survivable here — there is no action menu to
 /// choose differently with — so it ends the battle too: the error is logged,
 /// the mon is still written back, and `None` is returned rather than an
@@ -471,6 +479,12 @@ pub(super) fn advance_wild_battle(
             true
         }
     };
+    // A level crossed by this turn's exp award may have stopped on the
+    // replacement prompt; this driver has no player to ask, so it gives the
+    // one stand-in answer `crate::flow::move_learn` gives everywhere. Run
+    // *after* the turn and before the outcome is read, so no unanswered
+    // question can survive into the write-back or wedge the next turn.
+    let _ = settle_move_learn_prompts(battle);
     let outcome = battle.outcome();
     if !failed && outcome.is_none() {
         return None;

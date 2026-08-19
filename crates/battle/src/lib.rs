@@ -93,6 +93,24 @@
 //! *after* `CreateNPCTrainerParty`'s per-mon OT-id draws would spend the
 //! shared stream on every frame the player stands in a cone.
 //!
+//! Issue #304 closes the two move-slot gaps that were left open above.
+//! [`pokemon::PpBonuses`] is upstream's packed `ppBonuses` byte —
+//! [`pokemon::BattlePokemon`] carries it, [`pokemon::calculate_pp_with_bonus`]
+//! is `CalculatePPWithBonus`, and a slot's capacity (what a heal restores to,
+//! what PP counts down from) is now the PP-Up-adjusted maximum rather than the
+//! move's base PP. And the four-known-moves case is no longer a silent
+//! decline: [`pokemon::BattlePokemon::apply_experience`] hands back a
+//! [`pokemon::PendingMoveLearn`] the caller must answer with a
+//! [`pokemon::MoveLearnDecision`], which [`battle::Battle`] surfaces as
+//! [`battle::Battle::pending_move_learn`] /
+//! [`battle::Battle::resolve_move_learn`] and enforces by refusing a turn
+//! while the question is open. Answering resumes the same walk, so declining
+//! still continues to the next learnset entry; replacing a slot clears that
+//! slot's PP Ups, exactly as `RemoveMonPPBonus` + `SetMonMoveSlot` do. What
+//! this crate still does not own is the *asking* — there is no message layer
+//! or summary screen here, and there is deliberately no default answer baked
+//! in.
+//!
 //! Out of scope for this slice (see each module's own docs for exactly what
 //! is/isn't modelled): the *general* trainer AI beyond the four scripts
 //! above and mid-battle switching AI (`I-5`), battle UI/animations,
@@ -136,8 +154,9 @@ pub use exp::{trainer_faint_exp, wild_faint_exp};
 pub use hit::{ensure_resolvable, is_ordinary_hit_effect, HitOutcome};
 pub use nature::{Nature, Stat};
 pub use pokemon::{
-    BattlePokemon, Ivs, MoveSlot, StatStages, Stats, MAX_IV, MAX_LEVEL, MAX_MON_MOVES, MIN_LEVEL,
-    MOVE_NONE, SPECIES_NONE,
+    calculate_pp_with_bonus, BattlePokemon, Ivs, LearnedMove, MoveLearnDecision,
+    MoveLearnResolution, MoveSlot, PendingMoveLearn, PpBonuses, StatStages, Stats, MAX_IV,
+    MAX_LEVEL, MAX_MON_MOVES, MAX_PP_UPS, MIN_LEVEL, MOVE_NONE, SPECIES_NONE,
 };
 pub use stat_change::{is_stat_lowering_effect, LoweredStat, StatChangeOutcome};
 pub use stat_stage::StatStage;

@@ -15,13 +15,27 @@
 //! player mon, both realistic for a first encounter), abilities, held items,
 //! non-volatile status conditions, and the Shedinja 1-HP special case in
 //! `CalculateMonStats`.
+//!
+//! Two concerns live in sibling modules rather than here, each because it is
+//! its own concept `(oop-boundaries)`: [`pp_bonuses`] owns the packed
+//! `ppBonuses` byte and `CalculatePPWithBonus`, and [`learn`] owns the
+//! level-up learnset walk and the player decision a full moveset pauses for.
 
-use assets::{experience_for_level, BaseStats, LevelUpLearnsets, MoveId, SpeciesId, Type};
+use assets::{experience_for_level, BaseStats, MoveId, SpeciesId, Type};
 
 use crate::dex::Dex;
 use crate::error::BattleError;
 use crate::nature::{Nature, Stat};
 use crate::stat_stage::StatStage;
+
+pub mod learn;
+pub mod pp_bonuses;
+
+#[cfg(test)]
+mod tests;
+
+pub use learn::{LearnedMove, MoveLearnDecision, MoveLearnResolution, PendingMoveLearn};
+pub use pp_bonuses::{calculate_pp_with_bonus, PpBonuses, MAX_PP_UPS};
 
 /// `MAX_MON_MOVES` (`pokeemerald/include/constants/global.h:82`): the most
 /// moves a Pokémon can know at once.
@@ -187,8 +201,11 @@ impl Default for StatStages {
 pub struct MoveSlot {
     /// The known move.
     pub move_id: MoveId,
-    /// PP remaining (starts at the move's base PP; this slice does not model
-    /// PP Up bonuses).
+    /// PP remaining. A freshly learned move starts at the move's own base PP
+    /// (`gBattleMoves[move].pp`); the slot's *capacity* is
+    /// [`BattlePokemon::max_pp`], which adds the PP Ups recorded in the
+    /// mon's [`PpBonuses`] — capacity belongs to the mon, exactly as
+    /// upstream's single `ppBonuses` byte does (see [`pp_bonuses`]).
     pub pp: u8,
 }
 
@@ -247,7 +264,9 @@ pub fn compute_stats(base: &BaseStats, level: u8, nature: Nature, ivs: Ivs) -> S
 /// `0..=`[`MAX_IV`], and a moveset of `1..=`[`MAX_MON_MOVES`] real (never
 /// [`MOVE_NONE`]) moves. In-battle mutation is limited to the operations that
 /// preserve them: [`BattlePokemon::apply_damage`],
-/// [`BattlePokemon::apply_experience`],
+/// [`BattlePokemon::apply_experience`], [`BattlePokemon::resolve_move_learn`]
+/// (which swaps one slot for a move the learnset named, never widening the
+/// moveset past [`MAX_MON_MOVES`]),
 /// [`BattlePokemon::deduct_pp`], and [`BattlePokemon::stages_mut`] (a
 /// [`StatStage`] is itself a constrained type, so no invariant of *this* type
 /// can be broken through it).
@@ -265,6 +284,11 @@ pub struct BattlePokemon {
     stats: Stats,
     current_hp: u32,
     moves: Vec<MoveSlot>,
+    /// `mon->ppBonuses` / `gBattleMons[].ppBonuses`
+    /// (`pokeemerald/include/pokemon.h:104`, `:288`): how many PP Ups each
+    /// slot carries. One byte for the whole mon, not a per-slot field, for
+    /// the reasons [`pp_bonuses`] gives.
+    pp_bonuses: PpBonuses,
     stages: StatStages,
 }
 
@@ -390,8 +414,43 @@ impl BattlePokemon {
             stats,
             current_hp: stats.max_hp,
             moves: slots,
+            // `CreateBoxMon` zeroes the box before writing the fields it
+            // sets, and `ppBonuses` is not one of them: a freshly built mon
+            // has no PP Ups. A saved one restores its own byte through
+            // [`BattlePokemon::with_pp_bonuses`].
+            pp_bonuses: PpBonuses::NONE,
             stages: StatStages::default(),
         })
+    }
+
+    /// Adopt a saved `ppBonuses` byte (`MON_DATA_PP_BONUSES`) at the
+    /// boundary that restores this Pokémon, refilling every known slot to
+    /// its new [`BattlePokemon::max_pp`].
+    ///
+    /// A construction-time builder like
+    /// [`BattlePokemon::with_original_trainer_id`], and meant for the same
+    /// position: immediately after [`BattlePokemon::new`], which leaves
+    /// every slot full at its *base* PP. Refilling is what makes those slots
+    /// full at the PP-Up-adjusted maximum instead, so the save decoder can
+    /// then spend the difference down to the saved value through
+    /// [`BattlePokemon::deduct_pp`] and land on the right remaining PP for a
+    /// mon that really does hold PP Ups.
+    ///
+    /// Every byte is accepted: the two-bit fields cannot overflow, so there
+    /// is no invalid `ppBonuses` to reject (see [`PpBonuses`]).
+    ///
+    /// # Errors
+    ///
+    /// Whatever [`crate::dex::Dex::move_data`] reports for a move this mon
+    /// already knows — unreachable, since [`BattlePokemon::new`] resolved
+    /// every slot through that same lookup.
+    pub fn with_pp_bonuses(mut self, dex: &Dex, bonuses: PpBonuses) -> Result<Self, BattleError> {
+        self.pp_bonuses = bonuses;
+        for index in 0..self.moves.len() {
+            let full = self.max_pp(dex, index)?;
+            self.moves[index].pp = full;
+        }
+        Ok(self)
     }
 
     /// The species this mon was built from.
@@ -487,6 +546,40 @@ impl BattlePokemon {
         self.moves.get(index).map(|slot| slot.move_id)
     }
 
+    /// This mon's PP Ups, as upstream's packed `ppBonuses` byte
+    /// (`MON_DATA_PP_BONUSES`).
+    ///
+    /// Exposed whole so the save encoder can write the same byte back out
+    /// (`crates/pokeemerald-rs/src/party.rs`): the bits belonging to slots
+    /// this mon has no move for are carried through untouched rather than
+    /// re-emitted as zero.
+    #[must_use]
+    pub const fn pp_bonuses(&self) -> PpBonuses {
+        self.pp_bonuses
+    }
+
+    /// Slot `index`'s maximum PP — `CalculatePPWithBonus(move, ppBonuses,
+    /// index)` (`pokeemerald/src/pokemon.c:4650`-`:4654`): the move's base PP
+    /// plus 20% of it per PP Up applied to *that slot*.
+    ///
+    /// This, not the move's base PP, is what a heal restores to
+    /// ([`BattlePokemon::heal`]) and the ceiling
+    /// [`BattlePokemon::deduct_pp`] counts down from.
+    ///
+    /// # Errors
+    ///
+    /// [`BattleError::InvalidMoveSlot`] if `index` is not a slot this mon
+    /// has, or whatever [`crate::dex::Dex::move_data`] reports for the move
+    /// in it (unreachable — [`BattlePokemon::new`] already resolved it).
+    pub fn max_pp(&self, dex: &Dex, index: usize) -> Result<u8, BattleError> {
+        let slot = self
+            .moves
+            .get(index)
+            .ok_or(BattleError::InvalidMoveSlot(index))?;
+        let base_pp = dex.move_data(slot.move_id)?.pp;
+        Ok(calculate_pp_with_bonus(base_pp, self.pp_bonuses, index))
+    }
+
     /// In-battle stat stages.
     #[must_use]
     pub const fn stages(&self) -> StatStages {
@@ -524,8 +617,20 @@ impl BattlePokemon {
     /// **unscreened**, exactly like upstream: a move this crate cannot
     /// execute yet is still learned, sits in the moveset, and is refused
     /// per turn when it is *selected* rather than at learn time (see
-    /// [`BattlePokemon::learn_crossed_level_moves`] for why that is the
-    /// consistent posture, and what else it does and does not reproduce).
+    /// [`BattlePokemon::walk_learnset`] for why that is the consistent
+    /// posture, and what else it does and does not reproduce).
+    ///
+    /// # The return value is a question, and it has to be answered
+    ///
+    /// `Some(`[`PendingMoveLearn`]`)` means the walk **stopped**: a crossed
+    /// level offered a move and all four slots were full, which is where
+    /// upstream opens `BattleScript_AskToLearnMove`'s yes/no box
+    /// (`src/battle_script_commands.c:5368`-`:5370`). Nothing is learned
+    /// until the caller answers with
+    /// [`BattlePokemon::resolve_move_learn`], and the rest of the level-up's
+    /// learnset entries are still waiting behind that answer. Dropping the
+    /// token silently discards both — which is why it is `#[must_use]`
+    /// rather than a field this type answers on the player's behalf.
     ///
     /// Stat recalculation follows `CalculateMonStats`. If maximum HP grows,
     /// the increase is also added to current HP, preserving the absolute
@@ -543,13 +648,15 @@ impl BattlePokemon {
     /// docs) and friendship are out of this slice's scope, so only the
     /// numeric level, stats, and — as of issue #252 — learnset moves change
     /// across a level-up. Recorded on the `Cmd_getexp` ledger entry.
-    pub fn apply_experience(&mut self, dex: &Dex, amount: u32) {
+    #[must_use = "a full moveset pauses the level-up walk for a player \
+                  decision; dropping the token declines it *and* abandons \
+                  the rest of the level-up's learnset entries"]
+    pub fn apply_experience(&mut self, dex: &Dex, amount: u32) -> Option<PendingMoveLearn> {
         let max_experience =
             experience_for_level(self.base_stats.growth_rate, MAX_LEVEL).unwrap_or(u32::MAX);
         self.experience = self.experience.saturating_add(amount).min(max_experience);
-        if let Some((old_level, new_level)) = self.raise_level_to_experience() {
-            self.learn_crossed_level_moves(dex, old_level, new_level);
-        }
+        let (old_level, new_level) = self.raise_level_to_experience()?;
+        self.walk_learnset(dex, old_level + 1, 0, new_level)
     }
 
     /// `GetLevelFromMonExp` + `CalculateMonStats`
@@ -604,85 +711,6 @@ impl BattlePokemon {
             .current_hp
             .saturating_add(self.stats.max_hp.saturating_sub(old_max_hp));
         Some((old_level, new_level))
-    }
-
-    /// `MonTryLearningNewMove` / `GiveMoveToMon`
-    /// (`pokeemerald/src/pokemon.c:3014`-`:3044`, `:2934`-`:2955`) — the
-    /// move-learning half of a level-up that
-    /// [`BattlePokemon::apply_experience`] drives. For every level in
-    /// `old_level+1..=new_level`, in ascending order, walks that level's
-    /// entries in [`assets::LevelUpLearnsets`] (already-extracted upstream
-    /// data; [`crate::wild::initial_moveset`] walks the same table for a
-    /// freshly built mon) in table order and offers each one to
-    /// `GiveMoveToBoxMon`'s two outcomes, reproduced here `(no-verbatim)`:
-    ///
-    /// - a move already known is skipped, costing no slot
-    ///   (`MON_ALREADY_KNOWS_MOVE`, `:2951`-`:2952`);
-    /// - a move with an empty slot is learned into it, PP starting at the
-    ///   move's own base PP (`:2945`-`:2949`, the two writes at
-    ///   `:2947`-`:2948`).
-    ///
-    /// # Teaching is unscreened, exactly as upstream teaches
-    ///
-    /// Whatever move id the learnset names is learned, including one whose
-    /// effect this crate does not model yet: a level-6 Treecko learns
-    /// Absorb even though `EFFECT_ABSORB` has no resolver ([`crate::hit`]'s
-    /// module docs), just as upstream's `GiveMoveToMon` has no notion of
-    /// refusing a move. Nothing needs to be screened here because every
-    /// caller of [`BattlePokemon::apply_experience`] applies it to a mon on
-    /// the *player's* side — [`crate::battle::Battle::take_turn`]'s exp
-    /// award to `Battle::player`; the save decoder deliberately takes the
-    /// non-teaching [`BattlePokemon::reconcile_saved_experience`] path
-    /// instead — and the player's
-    /// moveset is the one this crate deliberately does not screen:
-    /// [`crate::battle::Battle::new`] documents that only the **wild**
-    /// moveset is checked up front — because the wild rejection loop can
-    /// land on any slot mid-turn — while a player slot is validated per
-    /// turn, at selection, by `validate_player_move`, ahead of the turn's
-    /// first RNG draw. So an unexecutable taught move sits in the moveset
-    /// exactly like an unexecutable hand-picked one and is refused when it
-    /// is picked, with a recoverable
-    /// [`BattleError::UnsupportedMoveEffect`] /
-    /// [`BattleError::NonDamagingMove`] that leaves the battle and the
-    /// shared stream untouched. There is no crash path to fail closed
-    /// against: the trainer AI never scores the player's move ids, and no
-    /// Struggle fallback runs on the player's side.
-    ///
-    /// # Recorded divergence: the four-known-moves prompt is a decline
-    ///
-    /// Upstream's `Cmd_handlelearnnewmove` treats `GiveMoveToMon` returning
-    /// `MON_HAS_MAX_MOVES` as the cue to run `BattleScript_AskToLearnMove`'s
-    /// yes/no box (`battle_script_commands.c:5368`-`:5370`), which can
-    /// forget an old move to make room. That prompt is a message/UI slice
-    /// this crate has no layer for, so a full moveset always takes the
-    /// answer a player who chooses "Stop learning?" → yes would give: the
-    /// move is **not** learned. Matching upstream's own loop
-    /// (`BattleScript_TryLearnMoveLoop`), the walk still continues to the
-    /// *next* learnset entry rather than stopping at the decline. This is
-    /// the only divergence on the learn path; it is recorded on the
-    /// `MonTryLearningNewMove` ledger entry.
-    fn learn_crossed_level_moves(&mut self, dex: &Dex, old_level: u8, new_level: u8) {
-        let Some(learnset) = LevelUpLearnsets::new().get(self.species) else {
-            return;
-        };
-        for level in (old_level + 1)..=new_level {
-            for entry in learnset.iter().filter(|entry| entry.level == level) {
-                let move_id = entry.move_id;
-                if self.moves.iter().any(|slot| slot.move_id == move_id) {
-                    continue; // MON_ALREADY_KNOWS_MOVE -- no slot spent.
-                }
-                if self.moves.len() >= MAX_MON_MOVES {
-                    continue; // MON_HAS_MAX_MOVES -- decline (no prompt UI).
-                }
-                // Upstream indexes `gBattleMoves[move]` for the starting PP
-                // with no lookup that can fail; the learnset table only ever
-                // names real move ids, so this is total in practice. Skipping
-                // beats panicking if a future data extraction disagrees.
-                if let Ok(mv) = dex.move_data(move_id) {
-                    self.moves.push(MoveSlot { move_id, pp: mv.pp });
-                }
-            }
-        }
     }
 
     /// The attacking stat (Attack or Sp. Attack) and its stage for a move of
@@ -751,10 +779,10 @@ impl BattlePokemon {
     /// `HealPlayerParty`'s per-mon effect
     /// (`pokeemerald/src/script_pokemon_util.c:30-59`, issue #261's
     /// white-out): restore current HP to [`Stats::max_hp`] and every known
-    /// move's PP to its base value (`CalculatePPWithBonus` with a `0`
-    /// bonus — [`MoveSlot::pp`]'s own doc comment records that PP Up bonuses
-    /// are out of this crate's scope, so "base value" and "healed value"
-    /// coincide here).
+    /// move's PP to [`BattlePokemon::max_pp`] — upstream's own
+    /// `CalculatePPWithBonus(move, ppBonuses, i)` (`:44`-`:50`), so a slot
+    /// carrying PP Ups heals to the *upgraded* maximum rather than to the
+    /// move's base PP (issue #304).
     ///
     /// Upstream's third effect — zeroing `MON_DATA_STATUS` — has no
     /// counterpart to run: this crate models no non-volatile status
@@ -768,392 +796,15 @@ impl BattlePokemon {
     /// Whatever [`crate::dex::Dex::move_data`] reports for a move id this
     /// mon already knows — unreachable in practice, since every
     /// [`MoveSlot::move_id`] this crate ever writes ([`BattlePokemon::new`],
-    /// [`BattlePokemon::learn_crossed_level_moves`]) already passed that
-    /// same lookup, but surfaced as a caller-visible `Result` instead of an
-    /// `expect` in case a future change to either ever desyncs them.
+    /// [`BattlePokemon::walk_learnset`]) already passed that same lookup,
+    /// but surfaced as a caller-visible `Result` instead of an `expect` in
+    /// case a future change to either ever desyncs them.
     pub fn heal(&mut self, dex: &Dex) -> Result<(), BattleError> {
         self.current_hp = self.stats.max_hp;
-        for slot in &mut self.moves {
-            slot.pp = dex.move_data(slot.move_id)?.pp;
+        for index in 0..self.moves.len() {
+            let full = self.max_pp(dex, index)?;
+            self.moves[index].pp = full;
         }
         Ok(())
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{
-        calc_max_hp, calc_stat, compute_stats, BattlePokemon, Ivs, MoveSlot, StatStages, MAX_IV,
-        MAX_LEVEL, MIN_LEVEL, MOVE_NONE, SPECIES_NONE, SPECIES_OLD_UNOWN_B, SPECIES_OLD_UNOWN_Z,
-    };
-    use crate::damage::MoveCategory;
-    use crate::dex::Dex;
-    use crate::error::BattleError;
-    use crate::nature::{Nature, Stat};
-    use crate::stat_stage::StatStage;
-    use assets::{MoveId, SpeciesId, SpeciesTable};
-
-    /// Max Gen-3 individual values (stat rolls — *not* a cryptographic
-    /// initialization vector; see [`Ivs`]): every `31` below is `MAX_IV_MASK`.
-    const MAX_IVS: Ivs = Ivs {
-        hp: 31,
-        attack: 31,
-        defense: 31,
-        speed: 31,
-        sp_attack: 31,
-        sp_defense: 31,
-    };
-
-    #[test]
-    fn calc_max_hp_matches_hand_computed_bulbasaur_at_level_5() {
-        // Bulbasaur base HP 45, IV 31 (max), level 5:
-        // n = 2*45+31 = 121; 121*5/100 = 6 (605/100 truncated); +5+10 = 21.
-        assert_eq!(calc_max_hp(45, 31, 5), 21);
-    }
-
-    #[test]
-    fn calc_stat_applies_the_nature_modifier_after_the_plus_five() {
-        // Bulbasaur base Attack 49, IV 31, level 5, Adamant (+Attack):
-        // n = 2*49+31 = 129; 129*5/100 = 6 (645/100); +5 = 11; *110/100 = 12
-        // (1210/100 truncated).
-        let n = calc_stat(49, 31, 5, Nature::Adamant, Stat::Attack);
-        assert_eq!(n, 12);
-        // Same base/IV/level, neutral nature: no scaling, stays 11.
-        assert_eq!(calc_stat(49, 31, 5, Nature::Hardy, Stat::Attack), 11);
-    }
-
-    #[test]
-    fn compute_stats_bundles_all_six_stats() {
-        let dex = Dex::new();
-        let bulbasaur = dex.species(SpeciesId(1)).unwrap();
-        let stats = compute_stats(bulbasaur, 5, Nature::Hardy, MAX_IVS);
-        assert_eq!(stats.max_hp, calc_max_hp(bulbasaur.hp, 31, 5));
-        assert_eq!(
-            stats.attack,
-            calc_stat(bulbasaur.attack, 31, 5, Nature::Hardy, Stat::Attack)
-        );
-        assert_eq!(
-            stats.speed,
-            calc_stat(bulbasaur.speed, 31, 5, Nature::Hardy, Stat::Speed)
-        );
-    }
-
-    fn sample_mon(dex: &Dex) -> BattlePokemon {
-        BattlePokemon::new(
-            dex,
-            SpeciesId(1), // Bulbasaur
-            5,
-            Ivs::default(),
-            0x1234_5663,      // % 25 == 0, so the derived nature is neutral Hardy
-            vec![MoveId(33)], // Tackle
-        )
-        .unwrap()
-    }
-
-    #[test]
-    fn new_starts_at_full_hp_with_neutral_stages() {
-        let dex = Dex::new();
-        let mon = sample_mon(&dex);
-        assert_eq!(mon.current_hp(), mon.stats().max_hp);
-        assert!(!mon.is_fainted());
-        assert_eq!(mon.stages(), StatStages::default());
-        assert_eq!(
-            mon.moves(),
-            [MoveSlot {
-                move_id: MoveId(33),
-                pp: 35, // Tackle's base PP
-            }]
-        );
-        assert_eq!(mon.move_at(0), Some(MoveId(33)));
-        assert_eq!(
-            mon.move_at(1),
-            None,
-            "an unknown slot is upstream MOVE_NONE"
-        );
-    }
-
-    #[test]
-    fn new_rejects_a_moveset_that_upstream_cannot_represent() {
-        let dex = Dex::new();
-        // Empty: `struct BattlePokemon` always has four slots and a battler
-        // with none of them filled never reaches the engine -- and an empty
-        // moveset would make the wild opponent's rejection loop spin forever.
-        assert_eq!(
-            BattlePokemon::new(&dex, SpeciesId(1), 5, Ivs::default(), 0, vec![]),
-            Err(BattleError::InvalidMoveCount(0))
-        );
-        // Overfull: MAX_MON_MOVES is 4 (`include/constants/global.h:82`).
-        assert_eq!(
-            BattlePokemon::new(
-                &dex,
-                SpeciesId(1),
-                5,
-                Ivs::default(),
-                0,
-                vec![MoveId(33); 5]
-            ),
-            Err(BattleError::InvalidMoveCount(5))
-        );
-    }
-
-    #[test]
-    fn new_rejects_move_none_placeholder_slots() {
-        let dex = Dex::new();
-        // MOVE_NONE is the *empty slot* marker, never a known move:
-        // `CheckMoveLimitations` rules it out (`battle_util.c:1098`) and the
-        // wild rejection loop retries past it
-        // (`battle_controller_opponent.c:1599`-`:1601`).
-        assert_eq!(
-            BattlePokemon::new(
-                &dex,
-                SpeciesId(1),
-                5,
-                Ivs::default(),
-                0,
-                vec![MOVE_NONE, MoveId(33)]
-            ),
-            Err(BattleError::PlaceholderMove(0))
-        );
-        // An all-placeholder moveset passes the non-empty count check, so the
-        // placeholder check is what actually rejects it.
-        assert_eq!(
-            BattlePokemon::new(&dex, SpeciesId(1), 5, Ivs::default(), 0, vec![MOVE_NONE]),
-            Err(BattleError::PlaceholderMove(0))
-        );
-    }
-
-    #[test]
-    fn new_rejects_levels_outside_the_upstream_range() {
-        let dex = Dex::new();
-        let build = |level| {
-            BattlePokemon::new(
-                &dex,
-                SpeciesId(1),
-                level,
-                Ivs::default(),
-                0,
-                vec![MoveId(33)],
-            )
-        };
-        // MIN_LEVEL..=MAX_LEVEL is 1..=100 (`include/constants/pokemon.h:145`-`:146`).
-        assert_eq!(build(0), Err(BattleError::InvalidLevel(0)));
-        assert_eq!(build(101), Err(BattleError::InvalidLevel(101)));
-        assert_eq!(build(255), Err(BattleError::InvalidLevel(255)));
-        assert!(build(MIN_LEVEL).is_ok());
-        assert!(build(MAX_LEVEL).is_ok());
-    }
-
-    #[test]
-    fn new_rejects_ivs_above_the_five_bit_maximum() {
-        let dex = Dex::new();
-        let build = |ivs| BattlePokemon::new(&dex, SpeciesId(1), 5, ivs, 0, vec![MoveId(33)]);
-        // Upstream stores each IV in five bits (MAX_IV_MASK = 31,
-        // `include/constants/pokemon.h:201`), so 32+ is unrepresentable.
-        for over in [
-            Ivs {
-                hp: 32,
-                ..Ivs::default()
-            },
-            Ivs {
-                sp_defense: 255,
-                ..Ivs::default()
-            },
-        ] {
-            assert!(matches!(build(over), Err(BattleError::InvalidIv(_))));
-        }
-        assert_eq!(
-            build(Ivs {
-                speed: MAX_IV + 1,
-                ..Ivs::default()
-            }),
-            Err(BattleError::InvalidIv(MAX_IV + 1))
-        );
-        assert!(build(MAX_IVS).is_ok(), "31 across the board is legal");
-    }
-
-    #[test]
-    fn new_reports_unknown_species_and_moves() {
-        let dex = Dex::new();
-        let bad_species = SpeciesId(SpeciesTable::LEN_U16);
-        assert_eq!(
-            BattlePokemon::new(&dex, bad_species, 5, Ivs::default(), 0, vec![MoveId(33)]),
-            Err(BattleError::UnknownSpecies(bad_species))
-        );
-
-        let bad_move = MoveId(60_000);
-        assert_eq!(
-            BattlePokemon::new(&dex, SpeciesId(1), 5, Ivs::default(), 0, vec![bad_move]),
-            Err(BattleError::UnknownMove(bad_move))
-        );
-    }
-
-    #[test]
-    fn new_rejects_the_species_none_placeholder() {
-        let dex = Dex::new();
-        // Slot 0 of `gSpeciesInfo` exists but is the all-zero SPECIES_NONE
-        // placeholder: addressable is not the same as real, so construction
-        // refuses it rather than building a fightable mon from zeroes.
-        assert_eq!(
-            BattlePokemon::new(&dex, SPECIES_NONE, 5, Ivs::default(), 0, vec![MoveId(33)]),
-            Err(BattleError::PlaceholderSpecies)
-        );
-    }
-
-    #[test]
-    fn new_rejects_the_old_unown_reserved_range_but_not_its_neighbours() {
-        let dex = Dex::new();
-        // 252..=276 are the Gen-2 compatibility holes carrying the dummy
-        // OLD_UNOWN_SPECIES_INFO row; the ids on either side are Celebi
-        // (251) and Treecko (277), which must keep working.
-        for species in [SPECIES_OLD_UNOWN_B, SpeciesId(260), SPECIES_OLD_UNOWN_Z] {
-            assert_eq!(
-                BattlePokemon::new(&dex, species, 5, Ivs::default(), 0, vec![MoveId(33)]),
-                Err(BattleError::PlaceholderSpecies),
-                "reserved id {} must be refused",
-                species.0
-            );
-        }
-        for species in [SpeciesId(251), SpeciesId(277)] {
-            assert!(
-                BattlePokemon::new(&dex, species, 5, Ivs::default(), 0, vec![MoveId(33)]).is_ok(),
-                "real neighbour id {} must construct",
-                species.0
-            );
-        }
-    }
-
-    #[test]
-    fn nature_is_derived_from_the_personality_value() {
-        let dex = Dex::new();
-        let build = |personality| {
-            BattlePokemon::new(
-                &dex,
-                SpeciesId(1),
-                5,
-                MAX_IVS,
-                personality,
-                vec![MoveId(33)],
-            )
-            .unwrap()
-        };
-        // GetNatureFromPersonality (`pokemon.c:5498`): personality % 25.
-        // Nature id 3 is Adamant (+Atk), so a mon built at personality 3
-        // carries Adamant *and* Adamant-modified stats — a contradictory
-        // nature/personality pair is unrepresentable by construction.
-        let adamant = build(3);
-        assert_eq!(adamant.nature(), Nature::Adamant);
-        let bulbasaur = dex.species(SpeciesId(1)).unwrap();
-        assert_eq!(
-            adamant.stats(),
-            compute_stats(bulbasaur, 5, Nature::Adamant, MAX_IVS)
-        );
-        // 28 % 25 == 3 wraps to the same nature.
-        assert_eq!(build(28).nature(), Nature::Adamant);
-        assert_eq!(build(0).nature(), Nature::Hardy);
-    }
-
-    #[test]
-    fn apply_damage_saturates_at_zero_and_marks_fainted() {
-        let dex = Dex::new();
-        let mut mon = sample_mon(&dex);
-        let max_hp = mon.stats().max_hp;
-        mon.apply_damage(max_hp + 1000);
-        assert_eq!(mon.current_hp(), 0);
-        assert!(mon.is_fainted());
-    }
-
-    #[test]
-    fn attacking_and_defending_stat_select_by_category() {
-        let dex = Dex::new();
-        let mon = sample_mon(&dex);
-        assert_eq!(
-            mon.attacking_stat(MoveCategory::Physical),
-            (mon.stats().attack, StatStage::NEUTRAL)
-        );
-        assert_eq!(
-            mon.attacking_stat(MoveCategory::Special),
-            (mon.stats().sp_attack, StatStage::NEUTRAL)
-        );
-        assert_eq!(
-            mon.defending_stat(MoveCategory::Physical),
-            (mon.stats().defense, StatStage::NEUTRAL)
-        );
-        assert_eq!(
-            mon.defending_stat(MoveCategory::Special),
-            (mon.stats().sp_defense, StatStage::NEUTRAL)
-        );
-    }
-
-    #[test]
-    fn effective_speed_applies_the_speed_stage() {
-        let dex = Dex::new();
-        let mut mon = sample_mon(&dex);
-        assert_eq!(mon.effective_speed(), mon.stats().speed);
-        mon.stages_mut().speed = StatStage::new(2).unwrap();
-        assert_eq!(mon.effective_speed(), mon.stats().speed * 2);
-    }
-
-    #[test]
-    fn deduct_pp_decrements_and_reports_exhaustion() {
-        let dex = Dex::new();
-        let mut mon = sample_mon(&dex);
-        let starting_pp = mon.moves()[0].pp;
-        mon.deduct_pp(0).unwrap();
-        assert_eq!(mon.moves()[0].pp, starting_pp - 1);
-
-        assert_eq!(mon.deduct_pp(5), Err(BattleError::InvalidMoveSlot(5)));
-
-        // Drain the slot through the only mutation the type offers: the
-        // moveset itself is not reachable for writing (`oop-boundaries`).
-        for _ in 0..(starting_pp - 1) {
-            mon.deduct_pp(0).unwrap();
-        }
-        assert_eq!(mon.moves()[0].pp, 0);
-        assert_eq!(mon.deduct_pp(0), Err(BattleError::NoPpRemaining(0)));
-    }
-
-    /// `HealPlayerParty` (`pokeemerald/src/script_pokemon_util.c:30-59`):
-    /// full HP, and every move's PP restored to its base value.
-    #[test]
-    fn heal_restores_hp_and_every_moves_pp() {
-        let dex = Dex::new();
-        let mut mon = sample_mon(&dex);
-        let max_hp = mon.stats().max_hp;
-        let base_pp = dex.move_data(mon.moves()[0].move_id).unwrap().pp;
-
-        mon.apply_damage(max_hp); // faint it
-        mon.deduct_pp(0).unwrap();
-        assert!(mon.is_fainted());
-        assert!(mon.moves()[0].pp < base_pp);
-
-        mon.heal(&dex).unwrap();
-        assert_eq!(mon.current_hp(), max_hp);
-        assert!(!mon.is_fainted());
-        assert_eq!(mon.moves()[0].pp, base_pp);
-    }
-
-    /// A mon already at full HP/PP is unaffected -- `heal` is idempotent,
-    /// matching `HealPlayerParty` running against an already-healthy party
-    /// (upstream never gates the call on need).
-    #[test]
-    fn heal_is_a_no_op_on_an_already_full_mon() {
-        let dex = Dex::new();
-        let mut mon = sample_mon(&dex);
-        let before = mon.clone();
-        mon.heal(&dex).unwrap();
-        assert_eq!(mon, before);
-    }
-
-    #[test]
-    fn ivs_report_their_upstream_five_bit_range() {
-        // Gen-3 stat rolls, not cryptographic initialization vectors.
-        assert!(Ivs::default().is_valid());
-        assert!(MAX_IVS.is_valid());
-        assert_eq!(MAX_IVS.as_array(), [MAX_IV; 6]);
-        assert!(!Ivs {
-            attack: MAX_IV + 1,
-            ..Ivs::default()
-        }
-        .is_valid());
     }
 }

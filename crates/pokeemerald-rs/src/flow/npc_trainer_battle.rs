@@ -116,6 +116,7 @@ use battle::{
 };
 use engine::rng::Rng;
 
+use super::move_learn::settle_move_learn_prompts;
 use super::wild_encounter::SharedRng;
 
 /// `MAX_MONEY` (`pokeemerald/src/money.c:13`): the wallet's own hard cap,
@@ -432,6 +433,13 @@ pub fn start_npc_trainer_battle(
 /// lead this function hands back is only ever momentarily fainted in
 /// practice, not a standing gap.
 ///
+/// Any level-up move-replacement prompt is answered by
+/// `crate::flow::move_learn::settle_move_learn_prompts` before the outcome
+/// is read. That matters most here: a trainer battle awards experience on
+/// every knockout and then keeps playing, so an unanswered prompt would
+/// refuse the *next* turn ([`BattleError::MoveLearnPending`]) and this
+/// driver's error arm would abandon a winnable fight.
+///
 /// [`battle::BattleEvent::MoneyGained`] is credited to `*money` the instant
 /// it is seen, via [`credit_money`] -- `Cmd_getmoneyreward`'s own
 /// `AddMoney(&gSaveBlock1Ptr->money, moneyReward)`
@@ -466,6 +474,11 @@ pub fn advance_npc_trainer_battle(
             true
         }
     };
+    // See `crate::flow::move_learn`: a trainer battle awards experience on
+    // every knockout, so this is the driver most likely to meet the
+    // replacement prompt -- and, with a bench behind the fainted mon, the
+    // one where leaving it unanswered would refuse the *next* turn.
+    let _ = settle_move_learn_prompts(battle);
     let outcome = battle.outcome();
     if !failed && outcome.is_none() {
         return None;

@@ -22,7 +22,18 @@
 //!
 //! Round-trips exactly: species, level, **accumulated experience**,
 //! personality (and so nature), the six IVs, the moveset with each slot's
-//! remaining PP, current HP, and the original-trainer id.
+//! remaining PP, the packed `ppBonuses` byte (issue #304), current HP, and
+//! the original-trainer id.
+//!
+//! `ppBonuses` is the one of those that is *byte*-exact rather than merely
+//! value-exact, and deliberately so: it is written back exactly as it was
+//! read, including bits belonging to a slot the moveset does not fill.
+//! Upstream's own paths never set such a bit (a PP Up can only be used on a
+//! move that exists), so this port can neither produce one nor be sure a
+//! save that has one is wrong -- and quietly zeroing a byte of somebody's
+//! save is not this encoder's call to make. See
+//! [`battle::PpBonuses`] for the packing and
+//! [`battle::BattlePokemon::max_pp`] for what it buys each slot.
 //!
 //! Deliberately *not* modelled, written as upstream's own default and
 //! discarded on the way back:
@@ -32,7 +43,7 @@
 //!   rather than inventing values, and [`from_save_pokemon`] does not read
 //!   it. A saved mon with real EVs would come back with the stats a 0-EV
 //!   mon has.
-//! * **Held item, `ppBonuses`, contest condition, pokérus, met
+//! * **Held item, contest condition, pokérus, met
 //!   location/level/game, poké ball, OT gender, ribbons, markings,
 //!   nickname, OT name, language, and non-volatile status** -- none has a
 //!   typed home in `battle::BattlePokemon`. Each is written as
@@ -170,7 +181,10 @@ pub(crate) fn to_save_pokemon(dex: &Dex, mon: &BattlePokemon) -> Pokemon {
         // *this* dex must still produce writable bytes rather than a panic.
         Err(_) => 0,
     };
-    // `ppBonuses` (`/*0x08*/`) stays 0: no PP Ups are modelled.
+    // `ppBonuses` (`/*0x08*/`): the mon's own packed byte, written back
+    // whole (module docs) -- issue #304, before which this stayed 0 and a
+    // load/save cycle silently stripped a save's PP Ups.
+    growth[8] = mon.pp_bonuses().bits();
     growth[9] = friendship;
 
     let mut attacks = [0u8; SUBSTRUCTURE_LEN];
@@ -250,6 +264,13 @@ pub(crate) fn from_save_pokemon(dex: &Dex, saved: &Pokemon) -> Result<BattlePoke
         .collect();
     let known_moves = move_ids.len();
 
+    // `MON_DATA_PP_BONUSES` (`/*0x08*/`), adopted before any PP is wound
+    // back: it is what each slot's *capacity* is, so the spend below counts
+    // down from the PP-Up-adjusted maximum rather than from base PP. Every
+    // byte is legal (two-bit fields cannot overflow), so there is nothing to
+    // screen -- `battle::PpBonuses`' own docs.
+    let pp_bonuses = battle::PpBonuses::from_bits(substructures.growth[8]);
+
     let mut mon = BattlePokemon::new(
         dex,
         species,
@@ -258,7 +279,8 @@ pub(crate) fn from_save_pokemon(dex: &Dex, saved: &Pokemon) -> Result<BattlePoke
         saved.box_data.personality(),
         move_ids,
     )?
-    .with_original_trainer_id(saved.box_data.ot_id());
+    .with_original_trainer_id(saved.box_data.ot_id())
+    .with_pp_bonuses(dex, pp_bonuses)?;
 
     // `BattlePokemon::new` seeds experience at the level's own threshold;
     // the saved total (`MON_DATA_EXP`) also carries the sub-level progress
@@ -293,9 +315,12 @@ pub(crate) fn from_save_pokemon(dex: &Dex, saved: &Pokemon) -> Result<BattlePoke
 
     for index in 0..known_moves {
         let saved_pp = substructures.attacks[8 + index];
-        // Slots start at the move's own base PP; spend the difference. A
-        // saved value *above* base PP (PP Ups, not modelled) leaves the
-        // slot full instead of adding capacity that does not exist here.
+        // `with_pp_bonuses` left every slot full at its PP-Up-adjusted
+        // maximum (`CalculatePPWithBonus`), so the difference to spend is
+        // measured from that maximum. A saved value *above* it -- which
+        // upstream cannot write, since `MON_DATA_PP1` is only ever set from
+        // that same formula -- leaves the slot full rather than underflowing
+        // the subtraction.
         let full_pp = mon.moves()[index].pp;
         for _ in 0..full_pp.saturating_sub(saved_pp) {
             mon.deduct_pp(index)?;

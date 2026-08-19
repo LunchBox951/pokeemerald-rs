@@ -163,6 +163,42 @@ pub enum BattleEvent {
     /// [`crate::pokemon::BattlePokemon::apply_experience`] and the
     /// `Cmd_getexp` ledger entry.
     ExpGained(u32),
+    /// A level-up move needs a player decision before it can be learned: the
+    /// mon knows four moves already, so upstream opens
+    /// `BattleScript_AskToLearnMove`'s yes/no box
+    /// (`src/battle_script_commands.c:5368`-`:5370`).
+    ///
+    /// The award that produced it is already applied
+    /// ([`BattleEvent::ExpGained`] comes first), the level has already
+    /// risen, and the rest of that level-up's learnset entries are waiting
+    /// behind the answer. No further turn is possible until
+    /// [`super::Battle::resolve_move_learn`] answers it
+    /// ([`BattleError::MoveLearnPending`]); the token itself is
+    /// [`super::Battle::pending_move_learn`].
+    MoveLearnPrompt {
+        /// The move being offered — upstream's `gMoveToLearn`.
+        move_id: MoveId,
+    },
+    /// A [`crate::pokemon::MoveLearnDecision::Replace`] answer went through:
+    /// the old move is gone, the new one sits in its slot at its own base PP,
+    /// and that slot's PP Ups were cleared with it (`RemoveMonPPBonus` +
+    /// `SetMonMoveSlot`, `src/battle_script_commands.c:5479`-`:5480`).
+    MoveReplaced {
+        /// The move that was learned.
+        learned: MoveId,
+        /// The move that was forgotten to make room.
+        forgotten: MoveId,
+        /// The slot both occupied.
+        slot: usize,
+    },
+    /// A [`crate::pokemon::MoveLearnDecision::Decline`] answer: the move was
+    /// not learned and the moveset is unchanged. The walk still continues to
+    /// the next eligible learnset entry, exactly as
+    /// `BattleScript_TryLearnMoveLoop` does.
+    MoveLearnDeclined {
+        /// The move that was turned down.
+        move_id: MoveId,
+    },
     /// Beating a trainer paid out prize money — `Cmd_getmoneyreward`
     /// (`src/battle_script_commands.c:5635`), whose
     /// `AddMoney(&gSaveBlock1Ptr->money, ...)` this crate has no field to

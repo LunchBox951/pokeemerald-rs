@@ -255,6 +255,23 @@ pub enum BattleError {
     /// [`crate::battle::Battle::new_trainer`] before any draw.
     UnsupportedAiFlags(AiFlags),
 
+    /// [`crate::battle::Battle::take_turn`] was called while a level-up move
+    /// is still waiting on a player decision (issue #304).
+    ///
+    /// Upstream cannot reach action selection in this state at all: the
+    /// yes/no box and the summary screen `Cmd_yesnoboxlearnmove` opens
+    /// (`src/battle_script_commands.c:5394`-`:5497`) are *inside*
+    /// `BattleScript_LevelUp`'s script, which runs to completion before the
+    /// next turn's `HandleTurnActionSelectionState`. Answering
+    /// ([`crate::battle::Battle::resolve_move_learn`]) is what clears it.
+    /// Like every other pre-turn rejection this leaves the battle and the
+    /// shared RNG stream exactly as they were.
+    MoveLearnPending(MoveId),
+
+    /// [`crate::battle::Battle::resolve_move_learn`] was called with no
+    /// prompt outstanding — a caller answering a question nobody asked.
+    NoMoveLearnPending,
+
     /// [`crate::battle::Battle::new_trainer`] was handed an empty party.
     ///
     /// Unreachable upstream: `CreateNPCTrainerParty` returns
@@ -325,6 +342,12 @@ impl fmt::Display for BattleError {
                 "trainer AI flags `{:#x}` include scripts this slice does not run",
                 flags.bits()
             ),
+            Self::MoveLearnPending(id) => write!(
+                f,
+                "move `{}` is still waiting on a learn/forget decision",
+                id.0
+            ),
+            Self::NoMoveLearnPending => write!(f, "no move-learn decision is pending"),
             Self::EmptyTrainerParty(id) => {
                 write!(f, "trainer `{}` has an empty party", id.0)
             }

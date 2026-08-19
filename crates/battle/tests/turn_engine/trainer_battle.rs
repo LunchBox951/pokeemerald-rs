@@ -28,7 +28,8 @@ use crate::common::{max_iv_mon, SequenceRng};
 use assets::trainers::TrainerId;
 use assets::{MoveId, SpeciesId};
 use battle::{
-    Battle, BattleError, BattleEvent, BattleOutcome, BattlePokemon, Dex, HitOutcome, PlayerAction,
+    Battle, BattleError, BattleEvent, BattleOutcome, BattlePokemon, Dex, HitOutcome,
+    MoveLearnDecision, PlayerAction, PpBonuses,
 };
 
 /// `TRAINER_MAY_ROUTE_103_MUDKIP` — the rival fought after choosing Mudkip.
@@ -377,7 +378,12 @@ fn a_crossed_level_learns_an_unexecutable_move_that_selection_then_refuses() {
         assets::experience_for_level(dex.species(SpeciesId(TREECKO)).unwrap().growth_rate, 6)
             .unwrap();
 
-    player.apply_experience(&dex, level_6 - player.experience());
+    assert!(
+        player
+            .apply_experience(&dex, level_6 - player.experience())
+            .is_none(),
+        "an empty slot never asks the player anything"
+    );
 
     assert_eq!(player.level(), 6, "the threshold was crossed");
     assert_eq!(player.experience(), level_6);
@@ -451,7 +457,11 @@ fn a_single_crossed_level_learns_its_learnset_move() {
         assets::experience_for_level(dex.species(SpeciesId(TORCHIC)).unwrap().growth_rate, 16)
             .unwrap();
 
-    mon.apply_experience(&dex, level_16 - mon.experience());
+    assert!(
+        mon.apply_experience(&dex, level_16 - mon.experience())
+            .is_none(),
+        "an empty slot never asks the player anything"
+    );
 
     assert_eq!(mon.level(), 16, "exactly one level crossed");
     assert_eq!(
@@ -480,7 +490,11 @@ fn a_crossed_levels_already_known_move_is_skipped_at_no_slot_cost() {
         assets::experience_for_level(dex.species(SpeciesId(TORCHIC)).unwrap().growth_rate, 16)
             .unwrap();
 
-    mon.apply_experience(&dex, level_16 - mon.experience());
+    assert!(
+        mon.apply_experience(&dex, level_16 - mon.experience())
+            .is_none(),
+        "an already-known move is skipped without asking"
+    );
 
     assert_eq!(mon.level(), 16, "exactly one level crossed");
     assert_eq!(
@@ -501,7 +515,7 @@ fn a_crossed_levels_already_known_move_is_skipped_at_no_slot_cost() {
 /// with one slot already taken, so the first three land *in learnset order*
 /// (no skips: Sand Attack and Fire Spin are not executable by this crate's
 /// turn engine and are taught anyway) and the fourth runs out of slots and
-/// is declined.
+/// stops the walk on a player decision (issue #304).
 #[test]
 fn a_multi_level_jump_learns_each_crossed_levels_moves_in_order() {
     let dex = Dex::new();
@@ -509,7 +523,9 @@ fn a_multi_level_jump_learns_each_crossed_levels_moves_in_order() {
     let growth_rate = dex.species(SpeciesId(TORCHIC)).unwrap().growth_rate;
     let level_29 = assets::experience_for_level(growth_rate, 29).unwrap();
 
-    mon.apply_experience(&dex, level_29 - mon.experience());
+    let pending = mon
+        .apply_experience(&dex, level_29 - mon.experience())
+        .expect("the fourth entry has no slot left, so the walk asks");
 
     assert_eq!(mon.level(), 29, "many levels crossed in a single call");
     let learned: Vec<MoveId> = mon.moves().iter().map(|slot| slot.move_id).collect();
@@ -519,21 +535,33 @@ fn a_multi_level_jump_learns_each_crossed_levels_moves_in_order() {
         "every crossed level's move lands, in ascending level order, until \
          the slots run out -- nothing is skipped for want of a modelled effect"
     );
+    assert_eq!(
+        pending.move_id(),
+        QUICK_ATTACK,
+        "level 28's Quick Attack is the first entry with no slot left, so \
+         it is the one the player is asked about (MON_HAS_MAX_MOVES)"
+    );
     assert!(
         !learned.contains(&QUICK_ATTACK),
-        "level 28's Quick Attack is the first entry with no slot left, so \
-         it is declined (MON_HAS_MAX_MOVES) rather than bumping a move"
+        "and nothing is bumped until that question is answered"
+    );
+    assert_eq!(
+        mon.resolve_move_learn(&dex, pending, MoveLearnDecision::Decline)
+            .unwrap()
+            .next,
+        None,
+        "declining resumes the walk, which finds no further entry to offer"
     );
 }
 
-/// A full moveset declines the crossed level's move instead of prompting a
-/// replacement — the four-known-moves yes/no box
-/// (`BattleScript_AskToLearnMove`, `battle_script_commands.c:5368`-`:5370`)
-/// is a UI slice out of scope, modelled as the answer a player who chooses
-/// "Stop learning?" would give: not learned, moveset unchanged. This is the
-/// one recorded divergence on the learn path.
+/// A full moveset **asks** rather than silently declining — the
+/// four-known-moves yes/no box (`BattleScript_AskToLearnMove`,
+/// `battle_script_commands.c:5368`-`:5370`), which issue #304 turned from a
+/// recorded divergence into real state the caller has to answer. Both
+/// answers are pinned: declining leaves the moveset alone, replacing swaps
+/// exactly the chosen slot.
 #[test]
-fn a_full_moveset_declines_a_learnable_move() {
+fn a_full_moveset_asks_before_learning_and_honours_either_answer() {
     let original_moves = vec![SCRATCH, GROWL, TACKLE, LEER];
     let dex = Dex::new();
     let mut mon = max_iv_mon(&dex, TORCHIC, 15, original_moves.clone());
@@ -541,12 +569,15 @@ fn a_full_moveset_declines_a_learnable_move() {
         assets::experience_for_level(dex.species(SpeciesId(TORCHIC)).unwrap().growth_rate, 16)
             .unwrap();
 
-    mon.apply_experience(&dex, level_16 - mon.experience());
+    let pending = mon
+        .apply_experience(&dex, level_16 - mon.experience())
+        .expect("four filled slots must raise the replacement question");
+    assert_eq!(pending.move_id(), PECK);
 
     assert_eq!(
         mon.level(),
         16,
-        "the level still rises even though nothing is learned"
+        "the level still rises while the question is open"
     );
     assert_eq!(
         mon.moves()
@@ -554,8 +585,140 @@ fn a_full_moveset_declines_a_learnable_move() {
             .map(|slot| slot.move_id)
             .collect::<Vec<_>>(),
         original_moves,
-        "every slot is already full, so Peck is declined rather than \
-         bumping an existing move"
+        "and nothing about the moveset moves until it is answered"
+    );
+
+    // Declining: unchanged, exactly what the pre-#304 silent decline did.
+    let mut declined = mon.clone();
+    assert!(declined
+        .resolve_move_learn(&dex, pending, MoveLearnDecision::Decline)
+        .unwrap()
+        .learned
+        .is_none());
+    assert_eq!(
+        declined
+            .moves()
+            .iter()
+            .map(|slot| slot.move_id)
+            .collect::<Vec<_>>(),
+        original_moves
+    );
+
+    // Replacing: only the chosen slot changes, at the new move's base PP.
+    mon.resolve_move_learn(&dex, pending, MoveLearnDecision::Replace(2))
+        .unwrap();
+    assert_eq!(
+        mon.moves()
+            .iter()
+            .map(|slot| slot.move_id)
+            .collect::<Vec<_>>(),
+        vec![SCRATCH, GROWL, PECK, LEER],
+        "TACKLE was the slot named, so TACKLE is the move forgotten"
+    );
+    assert_eq!(mon.moves()[2].pp, dex.move_data(PECK).unwrap().pp);
+}
+
+/// The decision surface, reached the way a player reaches it: through an
+/// NPC trainer battle's own experience award (issue #304). The prompt is
+/// reported as an event, held on the battle, blocks another turn until it is
+/// answered, and the answer performs `RemoveMonPPBonus` + `SetMonMoveSlot`.
+#[test]
+fn a_trainer_battles_exp_award_surfaces_the_replacement_prompt() {
+    let dex = Dex::new();
+    let growth_rate = dex.species(SpeciesId(TORCHIC)).unwrap().growth_rate;
+    let level_16 = assets::experience_for_level(growth_rate, 16).unwrap();
+    let mut player = max_iv_mon(&dex, TORCHIC, 15, vec![SCRATCH, GROWL, TACKLE, LEER]);
+    // One experience point short of level 16, so the battle's own award is
+    // what crosses the threshold -- and three PP Ups on the slot about to be
+    // given up, so the clear is observable.
+    assert!(player
+        .apply_experience(&dex, level_16 - 1 - player.experience())
+        .is_none());
+    let player = player
+        .with_pp_bonuses(&dex, PpBonuses::from_bits(0b0000_1100))
+        .unwrap();
+    let party = vec![max_iv_mon(&dex, TREECKO, 5, vec![POUND, LEER])];
+
+    let mut rng = SequenceRng::new([u16::MAX; 128]);
+    let mut battle =
+        Battle::new_trainer(dex, player, MAY_ROUTE_103_MUDKIP, party, &mut rng).unwrap();
+
+    // However many Scratches the level-5 Treecko survives; the award lands
+    // on the turn it faints.
+    let mut events = Vec::new();
+    for _ in 0..8 {
+        events = battle
+            .take_turn(PlayerAction::UseMove(0), &mut rng)
+            .unwrap();
+        if battle.outcome().is_some() {
+            break;
+        }
+    }
+    let exp_index = events
+        .iter()
+        .position(|event| matches!(event, BattleEvent::ExpGained(_)))
+        .unwrap_or_else(|| panic!("the faint awards EXP: {events:?}"));
+    let prompt_index = events
+        .iter()
+        .position(|event| event == &BattleEvent::MoveLearnPrompt { move_id: PECK })
+        .expect("crossing level 16 with four moves must ask about Peck");
+    assert!(
+        exp_index < prompt_index,
+        "the award is applied before the question is asked: {events:?}"
+    );
+    assert_eq!(battle.outcome(), Some(BattleOutcome::PlayerWon));
+    assert_eq!(
+        battle.pending_move_learn().map(|pending| pending.move_id()),
+        Some(PECK),
+        "the question outlives the battle it was asked in"
+    );
+
+    assert_eq!(
+        battle
+            .take_turn(PlayerAction::UseMove(0), &mut rng)
+            .unwrap_err()
+            .error(),
+        BattleError::MoveLearnPending(PECK),
+        "an unanswered prompt is reported ahead of even BattleAlreadyOver"
+    );
+
+    let dex = Dex::new();
+    let answered = battle
+        .resolve_move_learn(MoveLearnDecision::Replace(1))
+        .unwrap();
+    assert_eq!(
+        answered,
+        vec![BattleEvent::MoveReplaced {
+            learned: PECK,
+            forgotten: GROWL,
+            slot: 1,
+        }]
+    );
+    assert!(battle.pending_move_learn().is_none());
+    assert_eq!(
+        battle
+            .player()
+            .moves()
+            .iter()
+            .map(|slot| slot.move_id)
+            .collect::<Vec<_>>(),
+        vec![SCRATCH, PECK, TACKLE, LEER]
+    );
+    assert_eq!(
+        battle.player().pp_bonuses().get(1),
+        0,
+        "the forgotten move took its PP Ups with it (RemoveMonPPBonus)"
+    );
+    assert_eq!(
+        battle.player().max_pp(&dex, 1).unwrap(),
+        dex.move_data(PECK).unwrap().pp
+    );
+    assert_eq!(
+        battle
+            .resolve_move_learn(MoveLearnDecision::Decline)
+            .unwrap_err(),
+        BattleError::NoMoveLearnPending,
+        "answering twice is a caller bug, not a second decision"
     );
 }
 

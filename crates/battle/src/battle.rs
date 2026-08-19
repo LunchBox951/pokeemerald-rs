@@ -230,7 +230,7 @@ use crate::damage::{BattleRng, STRUGGLE};
 use crate::dex::Dex;
 use crate::error::BattleError;
 use crate::escape::try_run_from_battle;
-use crate::pokemon::BattlePokemon;
+use crate::pokemon::{BattlePokemon, MoveLearnDecision, PendingMoveLearn};
 use crate::stat_change;
 use crate::turn_order::{resolve_order, Order};
 
@@ -342,6 +342,13 @@ pub struct Battle {
     /// top of every later turn, saturating at `0xFF`. Only
     /// `trainer_ai`'s `AI_SetupFirstTurn` reads it.
     turn_counter: u8,
+    /// The level-up move waiting on a player decision, if any (issue #304):
+    /// upstream's `BattleScript_AskToLearnMove` yes/no box, as state instead
+    /// of a script the engine is parked in. Set when
+    /// [`BattlePokemon::apply_experience`] pauses its learnset walk, cleared
+    /// by [`Battle::resolve_move_learn`], and refused by
+    /// [`Battle::take_turn`] while it is `Some`.
+    pending_move_learn: Option<PendingMoveLearn>,
     /// Whether any turn has begun. Turn 1 reaches action selection through
     /// `TryDoEventsBeforeFirstTurn`, which does **not** touch
     /// [`Battle::turn_counter`]; every later turn goes through
@@ -471,6 +478,7 @@ impl Battle {
                 BattleKind::Wild
             },
             turn_counter: 0,
+            pending_move_learn: None,
             turn_started: false,
         })
     }
@@ -569,6 +577,7 @@ impl Battle {
             outcome: None,
             kind: BattleKind::Trainer(TrainerContext::new(trainer, data, party)),
             turn_counter: 0,
+            pending_move_learn: None,
             turn_started: false,
         })
     }
@@ -612,6 +621,83 @@ impl Battle {
     #[must_use]
     pub const fn outcome(&self) -> Option<BattleOutcome> {
         self.outcome
+    }
+
+    /// The level-up move waiting on a player decision, if any (issue #304)
+    /// — the state upstream's `BattleScript_AskToLearnMove` yes/no box
+    /// (`src/battle_script_commands.c:5368`-`:5370`) holds the engine in.
+    ///
+    /// This is the decision surface every experience-awarding flow reaches:
+    /// the award has already been applied and
+    /// [`BattleEvent::MoveLearnPrompt`] already reported, and the battle
+    /// refuses another turn ([`BattleError::MoveLearnPending`]) until
+    /// [`Battle::resolve_move_learn`] answers. A driver with no way to ask
+    /// the player must still *answer* — declining is an answer; ignoring the
+    /// prompt is not, and would strand the battle.
+    ///
+    /// A prompt outlives the battle's own end: the last faint of a battle
+    /// awards experience, so the question can be raised on the very turn the
+    /// outcome is decided, exactly as upstream runs `BattleScript_LevelUp`
+    /// before leaving the battle screen.
+    #[must_use]
+    pub const fn pending_move_learn(&self) -> Option<PendingMoveLearn> {
+        self.pending_move_learn
+    }
+
+    /// Answer [`Battle::pending_move_learn`] and resume the level-up walk it
+    /// paused — `Cmd_yesnoboxlearnmove`'s outcome
+    /// (`src/battle_script_commands.c:5455`-`:5497`) and the
+    /// `BattleScript_TryLearnMoveLoop` jump back into
+    /// `Cmd_handlelearnnewmove`.
+    ///
+    /// Returns the events the answer produced, in order:
+    /// [`BattleEvent::MoveReplaced`] or [`BattleEvent::MoveLearnDeclined`]
+    /// for the answer itself, then [`BattleEvent::MoveLearnPrompt`] again if
+    /// the resumed walk stopped at another entry it cannot fit. Draws no RNG
+    /// — upstream's box and summary screen draw none either.
+    ///
+    /// Only the *party* mon is updated, which is all this crate has: the
+    /// `gBattleMons` half of upstream's write
+    /// (`SetBattleMonMoveSlot`/`RemoveBattleMonPPBonus`, `:5484`-`:5492`)
+    /// exists because upstream keeps a separate in-battle copy, while
+    /// [`Battle::player`] *is* the mon.
+    ///
+    /// # Errors
+    ///
+    /// [`BattleError::NoMoveLearnPending`] if nothing is waiting on an
+    /// answer, or [`BattleError::InvalidMoveSlot`] if
+    /// [`crate::pokemon::MoveLearnDecision::Replace`] names a slot the mon
+    /// does not have. Neither mutates anything, and the prompt stays
+    /// outstanding so a corrected answer can still be given.
+    pub fn resolve_move_learn(
+        &mut self,
+        decision: MoveLearnDecision,
+    ) -> Result<Vec<BattleEvent>, BattleError> {
+        let pending = self
+            .pending_move_learn
+            .ok_or(BattleError::NoMoveLearnPending)?;
+        let resolution = self
+            .player
+            .resolve_move_learn(&self.dex, pending, decision)?;
+        self.pending_move_learn = resolution.next;
+
+        let mut events = Vec::new();
+        match resolution.learned {
+            Some(learned) => events.push(BattleEvent::MoveReplaced {
+                learned: learned.move_id,
+                forgotten: learned.forgotten,
+                slot: learned.slot,
+            }),
+            None => events.push(BattleEvent::MoveLearnDeclined {
+                move_id: pending.move_id(),
+            }),
+        }
+        if let Some(next) = resolution.next {
+            events.push(BattleEvent::MoveLearnPrompt {
+                move_id: next.move_id(),
+            });
+        }
+        Ok(events)
     }
 
     /// The number of previous run attempts this battle (upstream
@@ -739,6 +825,17 @@ impl Battle {
         rng: &mut impl BattleRng,
         events: &mut Vec<BattleEvent>,
     ) -> Result<(), BattleError> {
+        // Checked ahead of everything else, the battle's own end included:
+        // an unanswered level-up prompt is the loudest thing wrong with the
+        // call, and reporting `BattleAlreadyOver` first would hide the fact
+        // that a decision (and the rest of that level-up's learnset entries)
+        // is still outstanding. Upstream cannot reach action selection here
+        // at all -- the yes/no box is inside `BattleScript_LevelUp`, which
+        // completes before the next turn begins. Like every other pre-turn
+        // rejection, this draws nothing.
+        if let Some(pending) = self.pending_move_learn {
+            return Err(BattleError::MoveLearnPending(pending.move_id()));
+        }
         if self.outcome.is_some() {
             return Err(BattleError::BattleAlreadyOver);
         }

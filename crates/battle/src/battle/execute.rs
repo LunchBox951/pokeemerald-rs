@@ -150,8 +150,26 @@ impl Battle {
                             } else {
                                 wild_faint_exp(base_exp, level)
                             };
-                            self.player.apply_experience(&self.dex, exp);
+                            let pending = self.player.apply_experience(&self.dex, exp);
                             events.push(BattleEvent::ExpGained(exp));
+                            // A crossed level whose learnset move has no
+                            // free slot parks the walk on a player decision
+                            // (issue #304): upstream's
+                            // `BattleScript_AskToLearnMove` yes/no box. The
+                            // battle carries the question until
+                            // `Battle::resolve_move_learn` answers it, and
+                            // refuses another turn meanwhile.
+                            if let Some(prompt) = pending {
+                                debug_assert!(
+                                    self.pending_move_learn.is_none(),
+                                    "one exp award per take_turn; a second \
+                                     prompt would drop the first question"
+                                );
+                                self.pending_move_learn = Some(prompt);
+                                events.push(BattleEvent::MoveLearnPrompt {
+                                    move_id: prompt.move_id(),
+                                });
+                            }
                         }
                         // A wild battle ends the moment its only opponent
                         // faints. A trainer's does not: the replacement (or
