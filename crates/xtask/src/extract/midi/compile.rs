@@ -12,9 +12,9 @@
 //!
 //! 1. [`compile`] reads `MThd`, splits every `MTrk` chunk
 //!    ([`super::reader`]), and parses each one once ([`super::parse`]).
-//! 2. Track 0's parse is filtered down to "sequence events" — tempo plus
-//!    the four loop-marker text events — matching `ReadSeqEvent`'s own
-//!    narrower recognition (`midi.cpp:253-348`; `ReadTrackEvent` recognizes
+//! 2. Track 0's parse is filtered down to "sequence events" — tempo, time
+//!    signature, and the four loop-marker text events — matching
+//!    `ReadSeqEvent`'s own narrower recognition (`midi.cpp:253-348`; `ReadTrackEvent` recognizes
 //!    a disjoint event set, so one parse serves both purposes — see
 //!    `super::parse`'s module docs, "One pass, not sixteen").
 //! 3. For every `(MTrk chunk, MIDI channel)` pair that carries at least one
@@ -92,11 +92,14 @@
 //! gap when it doesn't fit in a `u8` (`> 255` ticks) — a wire-format
 //! necessity of *this* schema, unrelated to upstream's 49-value opcode set.
 //!
-//! One `SplitTime` boundary *does* change emitted delays, though: the wait
+//! One boundary in that machinery *does* change emitted delays: the wait
 //! upstream drops after a CC `0x1E` is the selector's post-`CalculateWaits`
-//! `time`, which reaches only as far as the first `TimeSplit` in the gap.
-//! [`split_time_first_chunk`] models exactly that one boundary — the rest
-//! of `SplitTime` stays unmodelled per the above.
+//! `time`, which reaches only to the next element of the augmented stream —
+//! the first timing mark `InsertTimingEvents` seeded on the whole-note grid
+//! (`midi.cpp:653-686`), or the first `TimeSplit` inside what remains.
+//! [`emit_track`]'s grid walk plus [`split_time_first_chunk`] model exactly
+//! that one boundary — the rest of the chunking stays unmodelled per the
+//! above.
 //!
 //! # No operand elision
 //!
@@ -198,6 +201,13 @@ enum ItemKind {
     LoopEndBegin,
     LoopBegin,
     Tempo(u16),
+    /// A file time-signature event (`RawEvent::TimeSignature`, converted to
+    /// its whole-note grid period in ticks). Emits nothing itself — after
+    /// `CalculateWaits` it is a `WholeNoteMark`, a pure wait printer
+    /// (`agb.cpp:488-494`) — but it keeps its own following wait like
+    /// [`Self::SilentController`], and it re-phases the timing grid that
+    /// bounds the dropped wait after a CC `0x1E` ([`emit_track`]).
+    TimeSignature(u32),
     ProgramChange(u8),
     Command(SongEvent),
     /// CC `0x1E`'s own timing-only marker — no [`SongEvent`] is emitted for
@@ -230,6 +240,7 @@ impl ItemKind {
             Self::LoopEnd => (0x12, 0),
             Self::LoopEndBegin => (0x13, 0),
             Self::LoopBegin => (0x14, 0),
+            Self::TimeSignature(_) => (0x18, 0),
             Self::Tempo(_) => (0x19, 0),
             Self::ProgramChange(_) => (0x21, 0),
             // All three are upstream's own `EventType::Controller`
@@ -428,6 +439,20 @@ fn compile_track(
                     ));
                 }
             }
+            RawEvent::TimeSignature {
+                numerator,
+                denominator_exponent,
+            } => {
+                // midi.cpp:329-331 at the enforced clocks_per_beat == 1;
+                // the numerator keeps the product far below upstream's
+                // `timeSig >= 0x10000` guard, so only the zero case is
+                // reachable here.
+                let period = (96 * u32::from(numerator)) >> denominator_exponent;
+                if period == 0 {
+                    return Err(MidiError::ZeroTimeSignature);
+                }
+                items.push((converted, ItemKind::TimeSignature(period)));
+            }
             RawEvent::LoopBegin => items.push((converted, ItemKind::LoopBegin)),
             RawEvent::LoopEndBegin => items.push((converted, ItemKind::LoopEndBegin)),
             RawEvent::LoopEnd => items.push((converted, ItemKind::LoopEnd)),
@@ -461,7 +486,10 @@ const NOTE_DURATION_LUT: [u8; 97] = [
 ];
 
 /// How much of `gap` upstream's `SplitTime` (`midi.cpp:689-730`) leaves
-/// between an event and the first `TimeSplit` it inserts into that gap:
+/// between an event and the first `TimeSplit` it inserts into that gap
+/// (the caller has already clamped `gap` to the next whole-note timing
+/// mark, which `InsertTimingEvents` seeded before `SplitTime` ran --
+/// [`emit_track`]'s grid walk):
 /// `96` when the gap exceeds a whole note (`midi.cpp:699-712` peels
 /// whole-note chunks first), otherwise the gap's `g_noteDurationLUT` floor
 /// (`midi.cpp:714-722`) — the entire gap exactly when it is a LUT fixed
@@ -528,7 +556,33 @@ fn emit_track(
     out.push(SongEvent::KeyShift(0));
 
     let mut loop_target: Option<u32> = None;
+    // midi.cpp:653-686 (`InsertTimingEvents`): a timing mark sits at every
+    // whole-note grid boundary -- period `96 * clocks_per_beat` ticks from
+    // `0`, re-phased to `time + period` by each file time-signature event
+    // -- and each mark prints its own wait as a `WholeNoteMark`
+    // (`agb.cpp:488-494`). The marks are wait chunking this schema doesn't
+    // model (module docs), but the next one bounds the wait upstream drops
+    // after a CC 0x1E, so walk their positions alongside the items.
+    let mut grid_period: u32 = 96;
+    let mut next_mark: u32 = 0;
     for (index, (time, kind)) in items.iter().enumerate() {
+        if let ItemKind::TimeSignature(period) = kind {
+            // midi.cpp:671-679: a file time-signature event overwrites the
+            // pending mark outright (a mark coincident with it is skipped:
+            // TimeSignature never sorts before itself in `EventCompare`).
+            grid_period = *period;
+            next_mark = time.saturating_add(*period);
+        } else {
+            // midi.cpp:663-667: marks are emitted up to (and, for item
+            // kinds that sort after `TimeSignature`, including) this item's
+            // time. Consuming through ties for the earlier-sorting kinds
+            // too is harmless: only the marks' positions matter here, never
+            // their interleaving with zero-gap neighbours. Saturating: a
+            // track long enough to overflow is ~2 years of ticks.
+            while next_mark <= *time {
+                next_mark = next_mark.saturating_add(grid_period);
+            }
+        }
         match kind {
             ItemKind::EndOfTie { key } => out.push(SongEvent::EndOfTie { key: *key }),
             // Label emits nothing, matching upstream (module docs, "Sort
@@ -537,7 +591,10 @@ fn emit_track(
             // comments) -- but the arms are merged for
             // clippy::match_same_arms, not because they mean the same
             // thing: only ExtendedCommandSelect suppresses the wait below.
-            ItemKind::Label | ItemKind::ExtendedCommandSelect | ItemKind::SilentController => {}
+            ItemKind::Label
+            | ItemKind::ExtendedCommandSelect
+            | ItemKind::SilentController
+            | ItemKind::TimeSignature(_) => {}
             ItemKind::LoopBegin => {
                 loop_target = Some(
                     u32::try_from(out.len()).expect("a track has far fewer than u32::MAX events"),
@@ -574,14 +631,16 @@ fn emit_track(
         let gap = next_time.checked_sub(*time).ok_or(MidiError::Truncated)?;
         // agb.cpp:402-405: CC 0x1E's own arm is the one `PrintControllerOp`
         // case that `break`s without a trailing `PrintWait(event.time)`.
-        // By then `SplitTime` has already broken the gap at whole-note and
-        // LUT boundaries, so the selector's own `time` holds only the
-        // gap's first chunk; the inserted `TimeSplit`s print the rest
-        // themselves (`agb.cpp:518-520`). Drop exactly that first chunk
-        // (`super::translate`'s module docs, "Reproduced: the dropped wait
-        // after CC `0x1E`").
+        // By then the stream already carries the timing marks and
+        // `SplitTime`'s `TimeSplit`s, all of which print their own waits,
+        // so the selector's post-`CalculateWaits` `time` -- the wait that
+        // goes missing -- reaches only to the nearest of the next item,
+        // the next grid mark, and the first `TimeSplit` boundary. Drop
+        // exactly that much (`super::translate`'s module docs,
+        // "Reproduced: the dropped wait after CC `0x1E`").
         if matches!(kind, ItemKind::ExtendedCommandSelect) {
-            push_wait(&mut out, gap - split_time_first_chunk(gap));
+            let bounded = gap.min(next_mark - *time);
+            push_wait(&mut out, gap - split_time_first_chunk(bounded));
         } else {
             push_wait(&mut out, gap);
         }
@@ -625,6 +684,7 @@ pub(super) fn compile(midi_bytes: &[u8], cfg: &MidiCfgEntry) -> Result<CompiledS
                     | RawEvent::LoopEndBegin
                     | RawEvent::LoopEnd
                     | RawEvent::Label
+                    | RawEvent::TimeSignature { .. }
             )
         })
         .collect();

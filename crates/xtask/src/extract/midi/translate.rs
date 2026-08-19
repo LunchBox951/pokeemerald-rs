@@ -12,13 +12,19 @@
 //! `PrintWait(event.time)` every other arm of that switch ends with. Since
 //! `event.time` is that event's gap to the *next* event (`CalculateWaits`,
 //! `midi.cpp:759-767`), upstream silently swallows that gap — but only up
-//! to the first `TimeSplit` that `SplitTime` (`midi.cpp:689-730`) inserted
-//! into it: a `TimeSplit` lands every 96 ticks of a longer gap and at the
-//! `g_noteDurationLUT` floor of an off-grid one, and each prints its own
-//! wait via `PrintAgbTrack`'s `default:` arm (`agb.cpp:518-520`). So a CC
-//! `0x1E` followed by 24 ticks of rest shifts everything after it 24 ticks
-//! early, but one followed by 27 ticks loses only 24 (`W03` survives), and
-//! one followed by 100 loses only 96 (`W04` survives). That looks like an
+//! to the next element of the augmented stream, because two passes have
+//! already subdivided it by the time `PrintAgbTrack` runs, and every
+//! inserted piece prints its own wait. `InsertTimingEvents`
+//! (`midi.cpp:653-686`) seeds a timing mark at every whole-note grid
+//! boundary — `96 * clocks_per_beat` ticks, re-phased by each file
+//! time-signature event — and each mark becomes a wait-printing
+//! `WholeNoteMark` (`agb.cpp:488-494`); then `SplitTime`
+//! (`midi.cpp:689-730`) drops a wait-printing `TimeSplit` at the
+//! `g_noteDurationLUT` floor of whatever off-grid stretch remains
+//! (`agb.cpp:518-520`). So a CC `0x1E` at tick 4 followed by 24 ticks of
+//! rest loses all 24, one followed by 27 ticks loses only 24 (`W03`
+//! survives), and one at tick 90 followed by 20 ticks loses only the 6
+//! that reach the grid line at 96 (`W14` survives). That looks like an
 //! oversight next to the `// TODO: loop op` comment sitting on the same
 //! arm, not an intended musical effect — but this compiler's job is to
 //! reproduce upstream's compiled output, oversight or not, so it does.
@@ -28,9 +34,11 @@
 //! byte), but unlike every other silent controller it is not simply
 //! discarded — `super::compile::compile_track` still records it as a
 //! timing-only item so `super::compile::emit_track` can single it out and
-//! shorten the following [`SongEvent::Wait`] by the gap's first
-//! `SplitTime` chunk (`super::compile`'s `split_time_first_chunk`),
-//! matching upstream's missing `PrintWait(event.time)`. `mus_title.mid`'s own
+//! shorten the following [`SongEvent::Wait`] by exactly the swallowed
+//! first chunk: the gap clamped to the next whole-note timing mark, then
+//! floored through the LUT (`emit_track`'s grid walk plus its
+//! `split_time_first_chunk`), matching upstream's missing
+//! `PrintWait(event.time)`. `mus_title.mid`'s own
 //! six CC `0x1E` occurrences (two each on the three pseudo-echo tracks,
 //! `mus_title_7`/`_8`/`_10`) all sit at tick `0` with a zero gap to the
 //! `0x1D`/`0x1F` that consumes them, so this is unobservable there (confirmed

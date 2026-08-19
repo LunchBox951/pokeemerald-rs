@@ -73,6 +73,22 @@ pub(crate) enum MidiError {
     /// ([`super::translate::bpm_from_microseconds`]'s docs). Carries the
     /// offending microseconds-per-quarter-note value.
     TempoOverflow(u32),
+    /// A time-signature (`0xFF 0x58`) meta event's declared length was not
+    /// the fixed `4` bytes every time-signature event carries
+    /// (`tools/mid2agb/midi.cpp:318-319`'s `RaiseError("invalid time
+    /// signature size")`).
+    BadTimeSignatureLength(u32),
+    /// A time-signature (`0xFF 0x58`) meta event's denominator exponent was
+    /// `16` or more (`tools/mid2agb/midi.cpp:324-325`'s `RaiseError("invalid
+    /// time signature denominator")`). Carries the offending exponent.
+    BadTimeSignatureDenominator(u8),
+    /// A time-signature meta event's whole-note grid period
+    /// (`96 * numerator * clocks_per_beat / denominator` —
+    /// `tools/mid2agb/midi.cpp:329-334`) worked out to zero ticks, which
+    /// would stall the timing-mark walk (`super::compile`'s `emit_track`).
+    /// Upstream's own `timeSig <= 0` guard, reachable via e.g. a `1/128`
+    /// signature.
+    ZeroTimeSignature,
     /// A `NoteOn` (velocity != 0) on this channel had no later matching
     /// `NoteOff`/`NoteOn`-velocity-`0` for the same key before the track's
     /// `EndOfTrack` — `tools/mid2agb/midi.cpp:425-426`'s own
@@ -150,6 +166,16 @@ impl fmt::Display for MidiError {
             Self::InvalidDataByte(byte) => write!(f, "invalid MIDI data byte 0x{byte:02X}"),
             Self::BadTempoLength(len) => write!(f, "tempo meta event length {len} is not 3"),
             Self::ZeroTempo => write!(f, "tempo meta event is 0 microseconds per quarter note"),
+            Self::BadTimeSignatureLength(len) => {
+                write!(f, "time signature meta event length {len} is not 4")
+            }
+            Self::BadTimeSignatureDenominator(exponent) => write!(
+                f,
+                "time signature denominator exponent {exponent} is 16 or more"
+            ),
+            Self::ZeroTimeSignature => {
+                write!(f, "time signature works out to a zero-tick whole-note grid")
+            }
             Self::TempoOverflow(microseconds) => write!(
                 f,
                 "tempo {microseconds} microseconds per quarter note computes to a BPM that overflows a u16"

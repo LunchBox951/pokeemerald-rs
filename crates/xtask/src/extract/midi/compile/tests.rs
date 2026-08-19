@@ -352,13 +352,16 @@ fn an_off_grid_gap_after_cc_0x1e_keeps_its_remainder_past_the_lut_floor() {
     );
 }
 
-/// A gap longer than a whole note after CC `0x1E` loses only its first 96
-/// ticks: `SplitTime` (`midi.cpp:699-712`) peels whole-note `TimeSplit`s
-/// off a 100-tick gap first, so the selector's own dropped wait is `96`
-/// and the `TimeSplit` prints the remaining `W04`. Dropping the whole gap
-/// here would shift everything after the selector `4` extra ticks early.
+/// A gap spanning a whole-note grid line after CC `0x1E` loses only the
+/// stretch up to that line's LUT floor: `InsertTimingEvents`
+/// (`midi.cpp:653-686`) put a wait-printing timing mark at absolute tick
+/// `96`, so the 100-tick gap from the selector at `19` is cut at `77` --
+/// then `SplitTime` floors that off-grid `77` to `g_noteDurationLUT[77] ==
+/// 76`, making `76` the selector's own dropped wait. The `TimeSplit` at
+/// `95` prints `W01` and the mark at `96` prints `W23`: `24` ticks
+/// survive. The pre-grid-walk revision of `emit_track` dropped `96` here.
 #[test]
-fn a_long_gap_after_cc_0x1e_keeps_its_remainder_past_the_first_whole_note() {
+fn a_gap_spanning_a_grid_line_after_cc_0x1e_is_cut_at_the_grid_lut_floor() {
     let mut body = Vec::new();
     body.extend(vlq(0));
     body.extend([0x90, 60, 100]); // note-on, t=0
@@ -366,7 +369,7 @@ fn a_long_gap_after_cc_0x1e_keeps_its_remainder_past_the_first_whole_note() {
     body.extend([60, 0]); // note-off (running status), t=4
     body.extend(vlq(15));
     body.extend([0xB0, 0x1E, 9]); // select xIECL, t=19
-    body.extend(vlq(100)); // dropped only up to the first whole note (96)
+    body.extend(vlq(100)); // dropped only up to LUT[96 - 19] == 76
     body.extend([0x1F, 12]); // trigger xIECL (running status 0xB0), t=119
     let midi = single_track_midi(24, body);
 
@@ -382,10 +385,110 @@ fn a_long_gap_after_cc_0x1e_keeps_its_remainder_past_the_first_whole_note() {
                 gate: 4
             },
             SongEvent::Wait(19),
-            SongEvent::Wait(4),
+            SongEvent::Wait(24),
             SongEvent::PseudoEchoLength(12),
             SongEvent::Fine,
         ]
+    );
+}
+
+/// A CC `0x1E` sitting just before a whole-note grid line loses only the
+/// ticks up to that line, whatever the gap: the timing mark at absolute
+/// tick `96` is `6` ticks after the selector at `90`, `g_noteDurationLUT[6]
+/// == 6`, so `6` is dropped and the mark prints the remaining `W14` --
+/// even though the raw 20-tick gap is itself a `Wnn` fixed point. Using
+/// the raw gap here would drop all `20`.
+#[test]
+fn cc_0x1e_near_a_grid_line_loses_only_the_ticks_up_to_it() {
+    let mut body = Vec::new();
+    body.extend(vlq(0));
+    body.extend([0x90, 60, 100]); // note-on, t=0
+    body.extend(vlq(4));
+    body.extend([60, 0]); // note-off (running status), t=4
+    body.extend(vlq(86));
+    body.extend([0xB0, 0x1E, 8]); // select xIECV, t=90
+    body.extend(vlq(20)); // dropped only up to the grid line at 96
+    body.extend([0x1D, 10]); // trigger (running status 0xB0), t=110
+    let midi = single_track_midi(24, body);
+
+    let compiled = compile(&midi, &cfg()).unwrap();
+    assert_eq!(
+        compiled.tracks[0],
+        vec![
+            SongEvent::Volume(127),
+            SongEvent::KeyShift(0),
+            SongEvent::Note {
+                key: 60,
+                velocity: 100,
+                gate: 4
+            },
+            SongEvent::Wait(90),
+            SongEvent::Wait(14),
+            SongEvent::PseudoEchoVolume(10),
+            SongEvent::Fine,
+        ]
+    );
+}
+
+/// A file time-signature event re-phases the whole-note grid that bounds
+/// the CC `0x1E` drop (`midi.cpp:671-679`): a `2/4` signature at tick `0`
+/// puts the next timing mark at `48`, so a selector at `40` with a 30-tick
+/// gap loses only the `8` ticks to that mark (`g_noteDurationLUT[8] == 8`)
+/// and `W22` survives. Under the default `96` grid the whole `30` would
+/// have been a fixed-point drop.
+#[test]
+fn a_time_signature_re_phases_the_grid_bounding_the_cc_0x1e_drop() {
+    let mut body = Vec::new();
+    body.extend(vlq(0));
+    body.extend([0xFF, 0x58, 0x04, 2, 2, 24, 8]); // 2/4 time signature, t=0
+    body.extend(vlq(0));
+    body.extend([0x90, 60, 100]); // note-on, t=0
+    body.extend(vlq(4));
+    body.extend([60, 0]); // note-off (running status), t=4
+    body.extend(vlq(36));
+    body.extend([0xB0, 0x1E, 8]); // select xIECV, t=40
+    body.extend(vlq(30)); // dropped only up to the re-phased mark at 48
+    body.extend([0x1D, 10]); // trigger (running status 0xB0), t=70
+    let midi = single_track_midi(24, body);
+
+    let compiled = compile(&midi, &cfg()).unwrap();
+    assert_eq!(
+        compiled.tracks[0],
+        vec![
+            SongEvent::Volume(127),
+            SongEvent::KeyShift(0),
+            SongEvent::Note {
+                key: 60,
+                velocity: 100,
+                gate: 4
+            },
+            SongEvent::Wait(40),
+            SongEvent::Wait(22),
+            SongEvent::PseudoEchoVolume(10),
+            SongEvent::Fine,
+        ]
+    );
+}
+
+/// A time signature whose whole-note grid period works out to zero ticks
+/// (`1/128`: `96 * 1 >> 7 == 0`) fails closed -- upstream's own
+/// `timeSig <= 0` guard (`midi.cpp:333-334`), enforced here at compile
+/// time where `clocks_per_beat` is known, since a zero period would stall
+/// `emit_track`'s timing-mark walk.
+#[test]
+fn a_zero_period_time_signature_is_an_error() {
+    let mut body = Vec::new();
+    body.extend(vlq(0));
+    body.extend([0xFF, 0x58, 0x04, 1, 7, 24, 8]); // 1/128 time signature
+    body.extend(vlq(0));
+    body.extend([0x90, 60, 100]); // note-on, t=0
+    body.extend(vlq(4));
+    body.extend([60, 0]); // note-off (running status), t=4
+    let midi = single_track_midi(24, body);
+
+    assert_eq!(
+        compile(&midi, &cfg()).unwrap_err(),
+        MidiError::ZeroTimeSignature
     );
 }
 
