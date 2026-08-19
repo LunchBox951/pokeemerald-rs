@@ -12,11 +12,16 @@
 //!
 //! Out of scope for this slice: EV tracking (every mon this crate builds has
 //! `0` EVs — matching a freshly caught wild mon and an EV-less starting
-//! player mon, both realistic for a first encounter), abilities, held items,
+//! player mon, both realistic for a first encounter), held items,
 //! non-volatile status conditions, and the Shedinja 1-HP special case in
-//! `CalculateMonStats`.
+//! `CalculateMonStats`. Abilities are out of scope too, with one exception:
+//! [`BattlePokemon::ability`] (issue #322), consumed only by
+//! [`crate::stat_change`]'s Clear Body guard — see that module's docs for
+//! why the ability system stops there.
 
-use assets::{experience_for_level, BaseStats, LevelUpLearnsets, MoveId, SpeciesId, Type};
+use assets::{
+    experience_for_level, AbilityId, BaseStats, LevelUpLearnsets, MoveId, SpeciesId, Type,
+};
 
 use crate::dex::Dex;
 use crate::error::BattleError;
@@ -432,6 +437,24 @@ impl BattlePokemon {
     #[must_use]
     pub const fn personality(&self) -> u32 {
         self.personality
+    }
+
+    /// This mon's ability, derived exactly as upstream derives it:
+    /// `CreateBoxMon` stores `abilityNum = personality & 1` only for a
+    /// species whose ability slot 1 is non-`ABILITY_NONE`
+    /// (`pokeemerald/src/pokemon.c:2296`-`:2300`; a single-ability species
+    /// leaves the field `0`), and `GetAbilityBySpecies` indexes the species
+    /// table with it (`:4546`-`:4554`). Consumed only by
+    /// [`crate::stat_change`]'s Clear Body guard (issue #322) — see this
+    /// type's module docs for why the rest of the ability system stays out.
+    #[must_use]
+    pub const fn ability(&self) -> AbilityId {
+        let [first, second] = self.base_stats.abilities;
+        if second.0 == 0 || self.personality & 1 == 0 {
+            first
+        } else {
+            second
+        }
     }
 
     /// The trainer id of the Pokémon's original trainer.
@@ -1050,6 +1073,32 @@ mod tests {
         // 28 % 25 == 3 wraps to the same nature.
         assert_eq!(build(28).nature(), Nature::Adamant);
         assert_eq!(build(0).nature(), Nature::Hardy);
+    }
+
+    #[test]
+    fn ability_is_derived_from_the_personality_parity() {
+        let dex = Dex::new();
+        let build = |species: u16, personality: u32| {
+            BattlePokemon::new(
+                &dex,
+                SpeciesId(species),
+                5,
+                MAX_IVS,
+                personality,
+                vec![MoveId(33)],
+            )
+            .unwrap()
+        };
+        // Tentacool carries two abilities, so bit 0 selects the slot
+        // (`CreateBoxMon`, `src/pokemon.c:2296`-`:2300`): Clear Body at 29,
+        // Liquid Ooze at 64 (`gSpeciesInfo`).
+        assert_eq!(build(72, 0x88).ability().0, 29);
+        assert_eq!(build(72, 0x89).ability().0, 64);
+        // A lone-ability species ignores parity entirely (`GetAbilityBySpecies`
+        // reads a slot the table left `ABILITY_NONE`): Zigzagoon is Pickup
+        // in slot 0 on both parities.
+        assert_eq!(build(288, 0).ability().0, 53);
+        assert_eq!(build(288, 1).ability().0, 53);
     }
 
     #[test]

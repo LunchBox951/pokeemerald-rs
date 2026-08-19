@@ -29,12 +29,15 @@
 //! Move-effect breadth is the sharp edge of this slice, so it is enforced
 //! rather than assumed: a move is only executable if its `EFFECT_*` runs
 //! upstream's plain `BattleScript_EffectHit`
-//! ([`hit::is_ordinary_hit_effect`]) or is one of the three
-//! `BattleScript_EffectStatDown`-family stat-lowering effects
-//! ([`stat_change::is_stat_lowering_effect`], added by issue #199 so real
+//! ([`hit::is_ordinary_hit_effect`]) or is one of the
+//! `BattleScript_EffectStatUp`/`StatDown`-family stat-changing effects
+//! ([`stat_change::is_stat_change_effect`], added by issue #199 so real
 //! Route 101 wild movesets — Zigzagoon's Growl, Wurmple's String Shot — and
-//! real starter movesets — Treecko's Leer — construct and play), guarded at
-//! a two-sided boundary. [`battle::Battle::new`] rejects a battle whose
+//! real starter movesets — Treecko's Leer — construct and play, and widened
+//! by issue #322 to the whole 18-row family — raises and drops, every stat
+//! either script reaches, both magnitudes upstream uses — plus Clear Body's
+//! stat-drop refusal and a fainting battler's stage reset), guarded at a
+//! two-sided boundary. [`battle::Battle::new`] rejects a battle whose
 //! **wild** mon knows anything else (its rejection loop can land on any
 //! slot), while the **player's** moveset may carry unsupported moves and
 //! each *chosen* slot is validated per turn instead. Both checks run before
@@ -96,13 +99,13 @@
 //! Out of scope for this slice (see each module's own docs for exactly what
 //! is/isn't modelled): the *general* trainer AI beyond the four scripts
 //! above and mid-battle switching AI (`I-5`), battle UI/animations,
-//! overworld transition, abilities, held items, non-volatile status
-//! conditions, weather, multi/double battles, Mist/Substitute (see
-//! [`stat_change`]'s module docs for why those two are a documented boundary
-//! rather than dead code), and move-effect breadth beyond the early
-//! slice's damaging-move path plus the three stat-lowering effects
-//! above (other status moves, stat-raising moves, multi-hit/recoil/drain,
-//! ...).
+//! overworld transition, held items, non-volatile status conditions,
+//! weather, multi/double battles, Mist/Substitute (see [`stat_change`]'s
+//! module docs for why those two are a documented boundary rather than dead
+//! code), abilities beyond Clear Body (same module, same reason), and
+//! move-effect breadth beyond the early slice's damaging-move path plus the
+//! widened stat-change family above (other status moves,
+//! multi-hit/recoil/drain, ...).
 
 pub mod accuracy;
 pub mod battle;
@@ -139,7 +142,10 @@ pub use pokemon::{
     BattlePokemon, Ivs, MoveSlot, StatStages, Stats, MAX_IV, MAX_LEVEL, MAX_MON_MOVES, MIN_LEVEL,
     MOVE_NONE, SPECIES_NONE,
 };
-pub use stat_change::{is_stat_lowering_effect, LoweredStat, StatChangeOutcome};
+pub use stat_change::{
+    is_stat_change_effect, stat_change_for_effect, ChangedStat, StatChangeDirection,
+    StatChangeEffect, StatChangeOutcome, CLEAR_BODY,
+};
 pub use stat_stage::StatStage;
 pub use wild::{
     build_pokemon_with_random_personality, build_wild_pokemon, ensure_wild_startable,

@@ -11,8 +11,8 @@
 //!
 //! Each pipeline reproduces one upstream battle script — the ordinary
 //! `BattleScript_EffectHit` ([`crate::hit`]) and the
-//! `BattleScript_EffectStatDown` family ([`crate::stat_change`]) — so a
-//! slice that widens move-effect breadth adds a pipeline here without
+//! `BattleScript_EffectStatUp`/`StatDown` family ([`crate::stat_change`]) —
+//! so a slice that widens move-effect breadth adds a pipeline here without
 //! touching turn flow or the event vocabulary.
 
 use assets::MoveId;
@@ -21,9 +21,10 @@ use crate::damage::BattleRng;
 use crate::error::BattleError;
 use crate::exp::{trainer_faint_exp, wild_faint_exp};
 use crate::hit::{resolve_hit, HitOutcome};
-use crate::pokemon::MAX_LEVEL;
+use crate::pokemon::{StatStages, MAX_LEVEL};
 use crate::stat_change::{
-    is_stat_lowering_effect, resolve_stat_lowering_move, LoweredStat, StatChangeOutcome,
+    is_stat_change_effect, resolve_stat_change_move, set_stage, StatChangeDirection,
+    StatChangeOutcome,
 };
 
 use super::{Battle, BattleEvent, BattleOutcome};
@@ -34,16 +35,15 @@ impl Battle {
     /// target faints.
     ///
     /// Dispatches on the move's `EFFECT_*` to one of two pipelines — this
-    /// crate's two-sided execution boundary (crate root docs): the ordinary
-    /// hit-shaped path (`execute_hit_move`,
-    /// [`crate::hit::is_ordinary_hit_effect`]) or the stat-lowering path
-    /// (`execute_stat_lowering_move`,
-    /// [`crate::stat_change::is_stat_lowering_effect`]). Every move that
+    /// crate's execution boundary (crate root docs): the ordinary hit-shaped
+    /// path (`execute_hit_move`, [`crate::hit::is_ordinary_hit_effect`]) or
+    /// the stat-changing path (`execute_stat_change_move`,
+    /// [`crate::stat_change::is_stat_change_effect`]). Every move that
     /// reaches here already passed [`super::ensure_executable`] (at
     /// [`Battle::new`] for the wild side, at `validate_player_move` for the
     /// player's), so exactly one of the two `is_*` checks holds.
     /// ([`crate::damage::STRUGGLE`] needs no case of its own: its
-    /// `EFFECT_RECOIL` is not a stat-lowering effect, so it falls through to
+    /// `EFFECT_RECOIL` is not a stat-change effect, so it falls through to
     /// the hit pipeline, which accepts it.)
     pub(super) fn execute_move(
         &mut self,
@@ -53,8 +53,8 @@ impl Battle {
         events: &mut Vec<BattleEvent>,
     ) -> Result<(), BattleError> {
         let effect = self.dex.move_data(move_id)?.effect;
-        if is_stat_lowering_effect(effect) {
-            self.execute_stat_lowering_move(attacker_is_player, move_id, rng, events)
+        if is_stat_change_effect(effect) {
+            self.execute_stat_change_move(attacker_is_player, move_id, rng, events)
         } else {
             self.execute_hit_move(attacker_is_player, move_id, rng, events)
         }
@@ -134,6 +134,19 @@ impl Battle {
                     events.push(BattleEvent::Fainted {
                         by_player: !attacker_is_player,
                     });
+                    // `cleareffectsonfaint`'s `FaintClearSetData` half
+                    // (`battle_script_commands.c:3063`-`:3076`,
+                    // `src/battle_main.c:3264`-`:3270`) resets every stat
+                    // stage to `DEFAULT_STAT_STAGE` as its *first* action,
+                    // ahead of `getexp` in the same script
+                    // (`data/battle_scripts_1.s:2813`-`:2827`) -- so the
+                    // corpse's accumulated boosts/drops are gone before this
+                    // crate's own exp step runs, issue #322.
+                    if attacker_is_player {
+                        *self.enemy.stages_mut() = StatStages::default();
+                    } else {
+                        *self.player.stages_mut() = StatStages::default();
+                    }
                     if attacker_is_player {
                         // A MAX_LEVEL recipient gains nothing and gets no
                         // "gained EXP" message: Cmd_getexp case 2 zeroes the
@@ -170,14 +183,20 @@ impl Battle {
         Ok(())
     }
 
-    /// The stat-lowering half of [`Self::execute_move`]'s dispatch (issue
-    /// #199) — [`crate::stat_change::resolve_stat_lowering_move`]'s
-    /// pipeline: Growl/Tail Whip/Leer/String Shot always target the other
-    /// mon (upstream's `MOVE_TARGET_BOTH`/`MOVE_TARGET_SELECTED` both
-    /// resolve to the single opposing battler in a one-on-one wild battle;
-    /// none of these four is `MOVE_EFFECT_AFFECTS_USER`), so `defender` here
-    /// is always the mon *not* using the move — never the attacker itself.
-    fn execute_stat_lowering_move(
+    /// The stat-changing half of [`Self::execute_move`]'s dispatch (issue
+    /// #199, widened by issue #322) —
+    /// [`crate::stat_change::resolve_stat_change_move`]'s pipeline.
+    ///
+    /// Which battler the change lands on is the *script family's* answer,
+    /// not the move's `target` byte:
+    /// [`crate::stat_change::StatChangeEffect::affects_user`] is
+    /// `BattleScript_EffectStatUp`'s `MOVE_EFFECT_AFFECTS_USER` flag
+    /// (`data/battle_scripts_1.s:494`), so a raise writes the attacker's own
+    /// stage and a drop writes the other mon's. In a one-on-one battle
+    /// upstream's `MOVE_TARGET_BOTH`/`MOVE_TARGET_SELECTED` both resolve to
+    /// the single opposing battler, so the drop half needs no target
+    /// selection of its own.
+    fn execute_stat_change_move(
         &mut self,
         attacker_is_player: bool,
         move_id: MoveId,
@@ -190,7 +209,7 @@ impl Battle {
             } else {
                 (&self.enemy, &self.player)
             };
-            resolve_stat_lowering_move(&self.dex, move_id, attacker, defender, rng)?
+            resolve_stat_change_move(&self.dex, move_id, attacker, defender, rng)?
         };
 
         match outcome {
@@ -200,34 +219,59 @@ impl Battle {
                     move_id,
                 });
             }
+            StatChangeOutcome::AbilityProtected { change, ability } => {
+                // Clear Body only ever guards the *lowering* tail, so the
+                // blocked mon is always the other side, never the attacker.
+                events.push(BattleEvent::StatLossPrevented {
+                    by_player: attacker_is_player,
+                    move_id,
+                    stat: change.stat,
+                    ability,
+                });
+            }
             StatChangeOutcome::Applied {
-                stat,
+                change,
                 new_stage,
-                floored,
+                capped,
             } => {
-                let defender = if attacker_is_player {
-                    &mut self.enemy
+                let subject_is_player = if change.affects_user() {
+                    attacker_is_player
                 } else {
-                    &mut self.player
+                    !attacker_is_player
                 };
-                match stat {
-                    LoweredStat::Attack => defender.stages_mut().attack = new_stage,
-                    LoweredStat::Defense => defender.stages_mut().defense = new_stage,
-                    LoweredStat::Speed => defender.stages_mut().speed = new_stage,
-                }
-                events.push(if floored {
-                    BattleEvent::StatWontGoLower {
-                        by_player: attacker_is_player,
-                        move_id,
-                        stat,
-                    }
+                let subject = if subject_is_player {
+                    &mut self.player
                 } else {
-                    BattleEvent::StatFell {
+                    &mut self.enemy
+                };
+                set_stage(subject, change.stat, new_stage);
+
+                let stat = change.stat;
+                events.push(match (change.direction, capped) {
+                    (StatChangeDirection::Lower, false) => BattleEvent::StatFell {
                         by_player: attacker_is_player,
                         move_id,
                         stat,
                         new_stage,
-                    }
+                        magnitude: change.magnitude,
+                    },
+                    (StatChangeDirection::Lower, true) => BattleEvent::StatWontGoLower {
+                        by_player: attacker_is_player,
+                        move_id,
+                        stat,
+                    },
+                    (StatChangeDirection::Raise, false) => BattleEvent::StatRose {
+                        by_player: attacker_is_player,
+                        move_id,
+                        stat,
+                        new_stage,
+                        magnitude: change.magnitude,
+                    },
+                    (StatChangeDirection::Raise, true) => BattleEvent::StatWontGoHigher {
+                        by_player: attacker_is_player,
+                        move_id,
+                        stat,
+                    },
                 });
             }
         }
