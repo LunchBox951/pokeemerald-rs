@@ -282,6 +282,18 @@ pub(crate) struct OverworldPhase {
     /// the gate that decides when `START` may open one, and for why the
     /// save write lives behind it.
     start_menu: Option<StartMenu>,
+    /// `sStartMenuCursorPos` (`start_menu.c:83`): the item the menu opens
+    /// on next, retained across close/reopen for this session's whole life
+    /// -- upstream's own EWRAM lifetime, since neither the START/B close
+    /// (`:629-633`) nor the EXIT close (`:747-752`) resets it. Seeds every
+    /// [`crate::start_menu::open_default`] (and its test-only
+    /// `open_synthetic_start_menu` counterpart) and is written back from
+    /// the closing [`StartMenu`] in [`Self::advance_start_menu_frame`]
+    /// before that menu is dropped. Zero (`SAVE`, the first entry of
+    /// upstream's `sCurrentStartMenuActions`) at construction in both
+    /// [`Self::new`] and [`Self::from_saved`], matching a fresh boot's
+    /// zeroed EWRAM.
+    start_menu_cursor: usize,
     /// The Route 101 scripted first battle currently being played out, if
     /// any (issue #231) -- the narrative-event counterpart to
     /// [`Self::wild_battle`], kept in its own field rather than sharing that
@@ -568,6 +580,11 @@ impl OverworldPhase {
             // its writes carry the deferred bytes forward (field docs).
             new_game_session: false,
             start_menu: None,
+            // `sStartMenuCursorPos` is EWRAM, not save data: a continue's
+            // process is a fresh boot, so this starts zeroed exactly as
+            // `Self::new`'s does, regardless of where the menu was left
+            // the last time this file was played.
+            start_menu_cursor: 0,
             first_battle: None,
             first_battle_outcome: None,
             rival_battle: None,
@@ -705,6 +722,9 @@ impl OverworldPhase {
             // taken after the WARNING has been retired.
             new_game_session: true,
             start_menu: None,
+            // `sStartMenuCursorPos` is EWRAM, zero at boot -- and this
+            // *is* boot (field docs).
+            start_menu_cursor: 0,
             first_battle: None,
             first_battle_outcome: None,
             rival_battle: None,
