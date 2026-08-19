@@ -169,6 +169,12 @@ normal rulesets retain no bypass actor.
 The canonical version lives in [`VERSION`](VERSION) without the `v` prefix; tags
 and Releases add it. Versions compare lexicographically as four unsigned ints.
 
+Cargo package metadata maps `FINAL.MAJOR.MINOR.PATCH` to
+`FINAL.MAJOR.MINOR+gamepatch.PATCH`. Run
+`python3 scripts/sync_cargo_version.py` after every `VERSION` bump. Cargo ignores
+build metadata during SemVer precedence comparisons, so `VERSION` remains the
+ordering authority.
+
 | Component | Bump when | Resets | Authority |
 |---|---|---|---|
 | `PATCH` | small maintenance or narrow behavior change | — | normal PR flow |
