@@ -192,8 +192,10 @@ pub(crate) struct OverworldPhase {
     /// turn, so the sequence is the one upstream would produce
     /// (`crate::flow::wild_encounter`'s module docs).
     ///
-    /// Seeded to `0`, then advanced by new-game initialization's two trainer-ID
-    /// draws before overworld play begins. Zero is upstream's real boot state:
+    /// Seeded to `0`, then advanced by new-game initialization's single
+    /// trainer-ID draw -- the id's high half; the low half reuses the raw seed
+    /// itself (`crate::new_game::trainer_id_bytes`) -- before overworld play
+    /// begins. Zero is upstream's real boot state:
     /// retail Emerald
     /// compiles `SeedRngWithRtc` out (`pokeemerald/src/main.c:229-236` is
     /// `#ifdef BUGFIX`), so `gRngValue` stays zero until
