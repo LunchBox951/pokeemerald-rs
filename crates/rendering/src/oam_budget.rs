@@ -59,24 +59,16 @@
 //!   So the rule is common to both sprite kinds, and it is what keeps every
 //!   cost below non-negative (see [`sprite_list_cost`]); admitting a
 //!   far-off-left affine entry would otherwise *refund* budget.
+//! - Entries entirely off the **right edge**, `x >= 240`
+//!   (`common.c:43-45`). Like an off-left entry, such a slot retains only
+//!   the walk's [`TRAVERSAL_COST`] and cannot drain the per-scanline budget
+//!   or displace a later visible sprite.
 //!
-//! `common.c:43-45` also rejects entries entirely off the **right** edge
-//! (`x >= 240`), and `common.c:40-42` entries whose box can never reach a
-//! visible scanline. This port does not model the right-edge rejection yet
-//! (issue #329 scoped the cost model to the negative-X cases): such an entry
-//! is charged its full cost here rather than a bare [`TRAVERSAL_COST`],
-//! draining budget hardware would not spend, so a *later* sprite hardware
-//! draws can be dropped here. Narrowly reachable: the `x` band is exactly
-//! `240..=255`, and pokeemerald's dominant hide idiom is unaffected
-//! (`invisible` entries leave the OAM buffer and its tail's `gDummyOamData`
-//! decodes to the *off-left* rejection this port does model) -- but snow
-//! weather parks wrapped flakes near `x = 242`
-//! (`pokeemerald/src/field_weather_effect.c:970`), inside the band. The
-//! vertical rejection
-//! needs no separate modelling: the walk below already skips an entry that
-//! does not cover the scanline *after* charging traversal and *without*
-//! charging its own cost, which is the same arithmetic the clean pass'
-//! index gap produces.
+//! `common.c:40-42` also rejects entries whose box can never reach a visible
+//! scanline. That vertical rejection needs no separate modelling: the walk
+//! below already skips an entry that does not cover the scanline *after*
+//! charging traversal and *without* charging its own cost, which is the same
+//! arithmetic the clean pass' index gap produces.
 //!
 //! # Per-entry cost
 //!
@@ -252,7 +244,11 @@ impl OamAdmission {
 /// The returned cost is always positive: the off-left rejection bounds `x`
 /// at `-width`, leaving a regular entry at least `width / 2 - 2` and an
 /// affine one at least `width + 8`.
-#[allow(clippy::cast_possible_wrap, clippy::cast_possible_truncation)] // A bounding-box width is at most 128 (64 doubled).
+#[expect(
+    clippy::cast_possible_wrap,
+    clippy::cast_possible_truncation,
+    reason = "a bounding-box width is at most 128 (64 doubled), so the i32 cast is exact"
+)]
 fn sprite_list_cost(entry: &OamEntry) -> Option<i32> {
     if !entry.enabled() {
         return None;
@@ -260,7 +256,7 @@ fn sprite_list_cost(entry: &OamEntry) -> Option<i32> {
     let (width, _height) = entry.bounding_box();
     let width = width as i32;
     let x = i32::from(entry.x());
-    if x + width < 0 {
+    if x + width < 0 || x >= 240 {
         return None;
     }
     Some(match entry.affine() {
@@ -414,6 +410,50 @@ mod tests {
             false,
         );
         assert_eq!(sprite_list_cost(&disabled), None, "disabled entry rejected");
+    }
+
+    #[test]
+    fn an_entry_at_or_beyond_the_right_edge_never_enters_the_sprite_list() {
+        let affine = |entry: OamEntry| entry.with_affine(AffineMode::Affine { matrix_num: 0 });
+
+        assert!(
+            sprite_list_cost(&entry_at(239, 0)).is_some(),
+            "x=239 is the last decoded X position retained by the clean pass"
+        );
+        assert_eq!(
+            sprite_list_cost(&entry_at(240, 0)),
+            None,
+            "regular x=240 is the first right-edge rejection"
+        );
+        assert_eq!(
+            sprite_list_cost(&affine(entry_at(255, 3))),
+            None,
+            "affine entries at the far end of the positive X range are rejected too"
+        );
+    }
+
+    #[test]
+    fn right_edge_entries_cannot_exhaust_budget_or_displace_a_later_visible_sprite() {
+        // If these 100 64-wide entries at x=240 were charged their regular
+        // 62-cycle cost, the walk would exhaust its budget before reaching
+        // the visible entry at index 100. Rejection leaves only traversal:
+        // 200 cycles through index 100, then 62 for the visible entry.
+        let mut entries = vec![entry_at(240, 3); 100];
+        entries.push(wide_64_entry());
+
+        let (admission, remaining) = OamAdmission::walk(&entries, 0, false);
+
+        for index in 0..100 {
+            assert!(
+                !admission.is_admitted(index),
+                "right-edge entry {index} is absent from the sprite list"
+            );
+        }
+        assert!(
+            admission.is_admitted(100),
+            "right-edge entries must not displace the later visible sprite"
+        );
+        assert_eq!(remaining, 948, "1210 - 100 * 2 traversal - 62 cost");
     }
 
     #[test]

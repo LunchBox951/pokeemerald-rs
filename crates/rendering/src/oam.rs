@@ -371,10 +371,11 @@ impl OamEntry {
     /// vertically off-scanline entry is skipped without its own processing
     /// cost but still charges the flat per-entry traversal cost.
     #[must_use]
-    #[allow(
+    #[expect(
         clippy::cast_possible_truncation,
         clippy::cast_possible_wrap,
-        clippy::cast_sign_loss
+        clippy::cast_sign_loss,
+        reason = "bounding-box height is at most 128, scanlines are 0..160, and dy is checked nonnegative before conversion"
     )]
     pub(crate) fn vertical_offset(self, y: usize) -> Option<usize> {
         let (_, height) = self.bounding_box();
