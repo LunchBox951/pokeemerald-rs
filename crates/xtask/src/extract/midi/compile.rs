@@ -92,6 +92,12 @@
 //! gap when it doesn't fit in a `u8` (`> 255` ticks) — a wire-format
 //! necessity of *this* schema, unrelated to upstream's 49-value opcode set.
 //!
+//! One `SplitTime` boundary *does* change emitted delays, though: the wait
+//! upstream drops after a CC `0x1E` is the selector's post-`CalculateWaits`
+//! `time`, which reaches only as far as the first `TimeSplit` in the gap.
+//! [`split_time_first_chunk`] models exactly that one boundary — the rest
+//! of `SplitTime` stays unmodelled per the above.
+//!
 //! # No operand elision
 //!
 //! `tools/mid2agb`'s compression pass (`g_compressionEnabled`, on by
@@ -195,10 +201,10 @@ enum ItemKind {
     ProgramChange(u8),
     Command(SongEvent),
     /// CC `0x1E`'s own timing-only marker — no [`SongEvent`] is emitted for
-    /// it, but [`emit_track`] needs it recorded so it can drop the wait
-    /// that follows, reproducing upstream's missing `PrintWait(event.time)`
-    /// (`super::translate`'s module docs, "Reproduced: the dropped wait
-    /// after CC `0x1E`").
+    /// it, but [`emit_track`] needs it recorded so it can drop the first
+    /// [`split_time_first_chunk`] of the wait that follows, reproducing
+    /// upstream's missing `PrintWait(event.time)` (`super::translate`'s
+    /// module docs, "Reproduced: the dropped wait after CC `0x1E`").
     ExtendedCommandSelect,
     /// A controller upstream's switch handles with a bare
     /// `PrintWait(event.time)` (an unknown CC, or a `0x1D`/`0x1F` trigger
@@ -442,6 +448,37 @@ fn compile_track(
 /// only because [`SongEvent::Wait`] carries a plain `u8` — a wire
 /// constraint of *this* schema, not upstream's 49-value opcode set (module
 /// docs).
+/// `tables.cpp:23-122`'s `g_noteDurationLUT`, indices `0..=96`: each tick
+/// count's nearest representable `Wnn` opcode value at or below it. Only
+/// consulted by [`split_time_first_chunk`]; the note-duration quantization
+/// path that also reads this table stays unmodelled (module docs, "Tick
+/// scaling and gate length").
+const NOTE_DURATION_LUT: [u8; 97] = [
+    0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 24,
+    24, 24, 28, 28, 30, 30, 32, 32, 32, 32, 36, 36, 36, 36, 40, 40, 42, 42, 44, 44, 44, 44, 48, 48,
+    48, 48, 52, 52, 54, 54, 56, 56, 56, 56, 60, 60, 60, 60, 64, 64, 66, 66, 68, 68, 68, 68, 72, 72,
+    72, 72, 76, 76, 78, 78, 80, 80, 80, 80, 84, 84, 84, 84, 88, 88, 90, 90, 92, 92, 92, 92, 96,
+];
+
+/// How much of `gap` upstream's `SplitTime` (`midi.cpp:689-730`) leaves
+/// between an event and the first `TimeSplit` it inserts into that gap:
+/// `96` when the gap exceeds a whole note (`midi.cpp:699-712` peels
+/// whole-note chunks first), otherwise the gap's `g_noteDurationLUT` floor
+/// (`midi.cpp:714-722`) — the entire gap exactly when it is a LUT fixed
+/// point. After `CalculateWaits` this first chunk is the *only* wait the
+/// preceding event's own `time` field carries; every later chunk belongs
+/// to a `TimeSplit`, which prints its own wait via `PrintAgbTrack`'s
+/// `default:` arm (`agb.cpp:518-520`).
+fn split_time_first_chunk(gap: u32) -> u32 {
+    if gap > 96 {
+        96
+    } else {
+        #[allow(clippy::cast_possible_truncation)] // gap <= 96 here
+        let gap = gap as usize;
+        u32::from(NOTE_DURATION_LUT[gap])
+    }
+}
+
 fn push_wait(out: &mut Vec<SongEvent>, ticks: u32) {
     let mut remaining = ticks;
     while remaining > u32::from(u8::MAX) {
@@ -537,11 +574,16 @@ fn emit_track(
         let next_time = items.get(index + 1).map_or(final_boundary, |&(t, _)| t);
         let gap = next_time.checked_sub(*time).ok_or(MidiError::Truncated)?;
         // agb.cpp:402-405: CC 0x1E's own arm is the one `PrintControllerOp`
-        // case that `break`s without a trailing `PrintWait(event.time)`, so
-        // the gap to the next event is dropped here too, not just the byte
+        // case that `break`s without a trailing `PrintWait(event.time)`.
+        // By then `SplitTime` has already broken the gap at whole-note and
+        // LUT boundaries, so the selector's own `time` holds only the
+        // gap's first chunk; the inserted `TimeSplit`s print the rest
+        // themselves (`agb.cpp:518-520`). Drop exactly that first chunk
         // (`super::translate`'s module docs, "Reproduced: the dropped wait
         // after CC `0x1E`").
-        if !matches!(kind, ItemKind::ExtendedCommandSelect) {
+        if matches!(kind, ItemKind::ExtendedCommandSelect) {
+            push_wait(&mut out, gap - split_time_first_chunk(gap));
+        } else {
             push_wait(&mut out, gap);
         }
     }

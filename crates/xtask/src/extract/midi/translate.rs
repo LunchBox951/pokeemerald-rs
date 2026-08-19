@@ -11,20 +11,26 @@
 //! (`s_extendedCommand = event.param2;`) and `break`s **without** the
 //! `PrintWait(event.time)` every other arm of that switch ends with. Since
 //! `event.time` is that event's gap to the *next* event (`CalculateWaits`,
-//! `midi.cpp:759-767`), upstream silently swallows that gap: a CC `0x1E`
-//! followed by, say, 24 ticks of rest shifts everything after it on that
-//! track 24 ticks early. That looks like an oversight next to the `// TODO:
-//! loop op` comment sitting on the same arm, not an intended musical
-//! effect — but this compiler's job is to reproduce upstream's compiled
-//! output, oversight or not, so it does.
+//! `midi.cpp:759-767`), upstream silently swallows that gap — but only up
+//! to the first `TimeSplit` that `SplitTime` (`midi.cpp:689-730`) inserted
+//! into it: a `TimeSplit` lands every 96 ticks of a longer gap and at the
+//! `g_noteDurationLUT` floor of an off-grid one, and each prints its own
+//! wait via `PrintAgbTrack`'s `default:` arm (`agb.cpp:518-520`). So a CC
+//! `0x1E` followed by 24 ticks of rest shifts everything after it 24 ticks
+//! early, but one followed by 27 ticks loses only 24 (`W03` survives), and
+//! one followed by 100 loses only 96 (`W04` survives). That looks like an
+//! oversight next to the `// TODO: loop op` comment sitting on the same
+//! arm, not an intended musical effect — but this compiler's job is to
+//! reproduce upstream's compiled output, oversight or not, so it does.
 //!
 //! [`translate_controller`] returns [`ControllerEvent::ExtendedCommandSelect`]
 //! for CC `0x1E`: no [`SongEvent`] is emitted (exactly as upstream emits no
 //! byte), but unlike every other silent controller it is not simply
 //! discarded — `super::compile::compile_track` still records it as a
 //! timing-only item so `super::compile::emit_track` can single it out and
-//! drop the [`SongEvent::Wait`] that would otherwise follow it, matching
-//! upstream's missing `PrintWait(event.time)` exactly. `mus_title.mid`'s own
+//! shorten the following [`SongEvent::Wait`] by the gap's first
+//! `SplitTime` chunk (`super::compile`'s `split_time_first_chunk`),
+//! matching upstream's missing `PrintWait(event.time)`. `mus_title.mid`'s own
 //! six CC `0x1E` occurrences (two each on the three pseudo-echo tracks,
 //! `mus_title_7`/`_8`/`_10`) all sit at tick `0` with a zero gap to the
 //! `0x1D`/`0x1F` that consumes them, so this is unobservable there (confirmed
@@ -145,9 +151,9 @@ fn translate_extended_command(extended_command: Option<u8>, value: u8) -> Option
 /// else), a genuine [`SongEvent`], or CC `0x1E`'s own case, which is
 /// neither — no [`SongEvent`] is emitted (upstream writes no byte either),
 /// but it is not silence: `emit_track` needs a timing-only marker for it so
-/// it can drop the wait that follows, reproducing upstream's missing
-/// `PrintWait(event.time)` (module docs, "Reproduced: the dropped wait
-/// after CC `0x1E`").
+/// it can drop the first `SplitTime` chunk of the wait that follows,
+/// reproducing upstream's missing `PrintWait(event.time)` (module docs,
+/// "Reproduced: the dropped wait after CC `0x1E`").
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum ControllerEvent {
     None,

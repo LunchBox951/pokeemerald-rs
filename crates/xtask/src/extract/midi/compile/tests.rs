@@ -271,13 +271,15 @@ fn xcmd_pseudo_echo_volume_round_trips_and_unknown_subcommands_are_silent() {
     );
 }
 
-/// A nonzero gap after CC `0x1E` is dropped, not emitted as a `Wait` --
-/// `agb.cpp:402-405`'s `case 0x1E:` is the one `PrintControllerOp` arm that
-/// `break`s without a trailing `PrintWait(event.time)`, and this compiler
-/// now reproduces that (`super::super::translate`'s module docs,
-/// "Reproduced: the dropped wait after CC `0x1E`"). If the 24-tick gap
-/// between the selector and the trigger had survived, the waits between
-/// `Note` and `Fine` would sum to `34` (`4 + 24 + 6`), not `10`.
+/// A `Wnn`-fixed-point gap after CC `0x1E` is dropped whole, not emitted
+/// as a `Wait` -- `agb.cpp:402-405`'s `case 0x1E:` is the one
+/// `PrintControllerOp` arm that `break`s without a trailing
+/// `PrintWait(event.time)`, `SplitTime` inserts no `TimeSplit` into a
+/// 24-tick gap (`g_noteDurationLUT[24] == 24`), and this compiler
+/// reproduces both (`super::super::translate`'s module docs, "Reproduced:
+/// the dropped wait after CC `0x1E`"). If the 24-tick gap between the
+/// selector and the trigger had survived, the waits between `Note` and
+/// `Fine` would sum to `34` (`4 + 24 + 6`), not `10`.
 #[test]
 fn a_nonzero_gap_after_cc_0x1e_is_dropped_not_emitted() {
     let mut body = Vec::new();
@@ -305,6 +307,83 @@ fn a_nonzero_gap_after_cc_0x1e_is_dropped_not_emitted() {
             SongEvent::Wait(4),
             SongEvent::PseudoEchoVolume(10),
             SongEvent::Wait(6),
+            SongEvent::Fine,
+        ]
+    );
+}
+
+/// An off-grid gap after CC `0x1E` loses only its `g_noteDurationLUT`
+/// floor, not the whole gap: `SplitTime` (`midi.cpp:714-722`) puts a
+/// `TimeSplit` at the 27-tick gap's LUT floor (`g_noteDurationLUT[27] ==
+/// 24`, `tables.cpp:52`), so the selector's own dropped wait is `24` and
+/// the `TimeSplit` prints the remaining `W03` (`agb.cpp:518-520`).
+/// Dropping the whole gap here would shift everything after the selector
+/// `3` extra ticks early.
+#[test]
+fn an_off_grid_gap_after_cc_0x1e_keeps_its_remainder_past_the_lut_floor() {
+    let mut body = Vec::new();
+    body.extend(vlq(0));
+    body.extend([0x90, 60, 100]); // note-on, t=0
+    body.extend(vlq(4));
+    body.extend([0xB0, 0x1E, 8]); // select xIECV, t=4
+    body.extend(vlq(27)); // dropped only up to the LUT floor (24)
+    body.extend([0x1D, 10]); // trigger (running status 0xB0), t=31
+    body.extend(vlq(6));
+    body.extend([0x80, 60, 0]); // note-off, t=37
+    let midi = single_track_midi(24, body);
+
+    let compiled = compile(&midi, &cfg()).unwrap();
+    assert_eq!(
+        compiled.tracks[0],
+        vec![
+            SongEvent::Volume(127),
+            SongEvent::KeyShift(0),
+            SongEvent::Note {
+                key: 60,
+                velocity: 100,
+                gate: 37
+            },
+            SongEvent::Wait(4),
+            SongEvent::Wait(3),
+            SongEvent::PseudoEchoVolume(10),
+            SongEvent::Wait(6),
+            SongEvent::Fine,
+        ]
+    );
+}
+
+/// A gap longer than a whole note after CC `0x1E` loses only its first 96
+/// ticks: `SplitTime` (`midi.cpp:699-712`) peels whole-note `TimeSplit`s
+/// off a 100-tick gap first, so the selector's own dropped wait is `96`
+/// and the `TimeSplit` prints the remaining `W04`. Dropping the whole gap
+/// here would shift everything after the selector `4` extra ticks early.
+#[test]
+fn a_long_gap_after_cc_0x1e_keeps_its_remainder_past_the_first_whole_note() {
+    let mut body = Vec::new();
+    body.extend(vlq(0));
+    body.extend([0x90, 60, 100]); // note-on, t=0
+    body.extend(vlq(4));
+    body.extend([60, 0]); // note-off (running status), t=4
+    body.extend(vlq(15));
+    body.extend([0xB0, 0x1E, 9]); // select xIECL, t=19
+    body.extend(vlq(100)); // dropped only up to the first whole note (96)
+    body.extend([0x1F, 12]); // trigger xIECL (running status 0xB0), t=119
+    let midi = single_track_midi(24, body);
+
+    let compiled = compile(&midi, &cfg()).unwrap();
+    assert_eq!(
+        compiled.tracks[0],
+        vec![
+            SongEvent::Volume(127),
+            SongEvent::KeyShift(0),
+            SongEvent::Note {
+                key: 60,
+                velocity: 100,
+                gate: 4
+            },
+            SongEvent::Wait(19),
+            SongEvent::Wait(4),
+            SongEvent::PseudoEchoLength(12),
             SongEvent::Fine,
         ]
     );
