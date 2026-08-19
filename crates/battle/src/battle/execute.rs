@@ -62,7 +62,7 @@ impl Battle {
 
     /// The ordinary damaging-move half of [`Self::execute_move`]'s dispatch —
     /// [`crate::hit::resolve_hit`]'s pipeline, unchanged from before issue
-    /// #199 except for threading `self.first_battle_flag` through as
+    /// #199 except for threading `self.is_first_battle()` through as
     /// `suppress_crit` (issue #187).
     fn execute_hit_move(
         &mut self,
