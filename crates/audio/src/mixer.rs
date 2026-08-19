@@ -509,9 +509,11 @@ fn clip_i32(sample: i32) -> i32 {
 
 /// Normalise an already-`s8`-clamped sample to `[-1.0, 1.0)`.
 fn to_f32(sample: i32) -> f32 {
-    // Clamped to `[-128, 127]` by `clip_i32`, every value is exactly
-    // representable in `f32`.
-    #[allow(clippy::cast_precision_loss)]
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "clamped to [-128, 127] by clip_i32, every value is exactly \
+                  representable in f32"
+    )]
     let value = sample as f32;
     value / 128.0
 }
@@ -520,9 +522,12 @@ fn to_f32(sample: i32) -> f32 {
 /// [`priority_tests`]: this file stays near the repo's per-file size
 /// guideline (`AGENTS.md`).
 #[cfg(test)]
-// Expected values are computed from small integer terms and compared with an
-// epsilon; the casts are exact for these magnitudes. Silence checks compare
-// exactly-representable `0.0`/`-1.0` values on purpose.
-#[allow(clippy::cast_precision_loss, clippy::float_cmp)]
+#[expect(
+    clippy::cast_precision_loss,
+    clippy::float_cmp,
+    reason = "expected values are computed from small integer terms whose casts \
+              are exact at these magnitudes, and silence checks compare \
+              exactly-representable 0.0/-1.0 values on purpose"
+)]
 #[path = "mixer_mixing.rs"]
 mod tests;
