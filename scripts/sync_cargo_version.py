@@ -24,11 +24,50 @@ def _restore(path: Path, original: Optional[bytes]) -> None:
         path.write_bytes(original)
 
 
-def run_cargo_metadata(root: Path, *, locked: bool) -> None:
-    """Refresh or verify Cargo metadata."""
-    command = ["cargo", "metadata", "--format-version", "1", "--no-deps"]
+def run_cargo_metadata(root: Path, *, locked: bool, no_deps: bool = True) -> None:
+    """Parse or verify Cargo metadata; never writes the lockfile.
+
+    ``--no-deps`` (the default) skips full dependency resolution, so it only
+    proves the manifest parses -- it does NOT prove the lock satisfies the
+    manifest, because Cargo never inspects workspace-member version pins
+    under ``--no-deps``. Pass ``no_deps=False`` for a real ``--locked``
+    verification that the *lock*, not just the manifest, is in sync; that
+    call still never writes because ``--locked`` forbids it, refusing
+    instead. Refreshing the lock is ``refresh_cargo_lock``'s job.
+    """
+    if not no_deps and not locked:
+        raise SyncError(
+            "full-resolution metadata without --locked would write Cargo.lock; "
+            "refreshing the lock is refresh_cargo_lock's job"
+        )
+    command = ["cargo", "metadata", "--format-version", "1", "--offline"]
+    if no_deps:
+        command.append("--no-deps")
     if locked:
         command.append("--locked")
+    try:
+        result = subprocess.run(
+            command,
+            cwd=root,
+            capture_output=True,
+            text=True,
+        )
+    except (FileNotFoundError, OSError) as exc:
+        raise SyncError(f"cannot run Cargo: {exc}") from exc
+    if result.returncode != 0:
+        detail = result.stderr.strip() or result.stdout.strip()
+        raise SyncError(f"{' '.join(command)} failed: {detail}")
+
+
+def refresh_cargo_lock(root: Path) -> None:
+    """Rewrite ``Cargo.lock`` so it matches the just-written manifest.
+
+    ``cargo update --workspace --offline`` re-resolves only the workspace
+    members' own version entries in the lock against the manifest just
+    written, without touching any third-party dependency version and without
+    reaching the network (``--offline`` forbids registry access).
+    """
+    command = ["cargo", "update", "--workspace", "--offline"]
     try:
         result = subprocess.run(
             command,
@@ -63,7 +102,13 @@ def sync(root: Path, *, check_only: bool = False) -> str:
         version_check.check_workspace_package_version(
             manifest_raw, game_version, str(manifest_path)
         )
-        run_cargo_metadata(root, locked=True)
+        # no_deps=False: a stale Cargo.lock (workspace member versions still
+        # pinned to the old release) passes plain ``--no-deps --locked``
+        # metadata unnoticed -- Cargo never inspects member version pins
+        # without full resolution. This full-resolution ``--locked`` call is
+        # what actually rejects a stale lock, and it stays read-only:
+        # ``--locked`` makes Cargo refuse to write rather than update.
+        run_cargo_metadata(root, locked=True, no_deps=False)
         return cargo_version
 
     original_lock = lock_path.read_bytes() if lock_path.exists() else None
@@ -79,7 +124,16 @@ def sync(root: Path, *, check_only: bool = False) -> str:
             game_version,
             str(manifest_path),
         )
-        run_cargo_metadata(root, locked=True)
+        # Rewrite Cargo.lock's workspace-member entries to match the version
+        # just written -- ``--no-deps`` metadata calls never do this (that
+        # was the bug: a bumped VERSION left the lock stale, and the next
+        # `--locked` CI job failed because it, unlike this helper, resolves
+        # dependencies fully).
+        refresh_cargo_lock(root)
+        # Full-resolution verification (no_deps=False) that the refreshed
+        # lock genuinely satisfies --locked, not just that the manifest
+        # parses.
+        run_cargo_metadata(root, locked=True, no_deps=False)
     except (OSError, SyncError, version_check.VersionError) as exc:
         _restore(manifest_path, original_manifest)
         _restore(lock_path, original_lock)
