@@ -284,3 +284,80 @@ fn the_start_menu_cursor_wraps() {
         "DOWN from the last item wraps to the first"
     );
 }
+
+/// A fresh session's first start menu opens on `SAVE`, `sStartMenuCursorPos`'s
+/// own zeroed-EWRAM default (`start_menu.c:83`) -- the state a session's
+/// retained cursor is constructed in, whether the phase came from
+/// [`crate::new_game`] or [`OverworldPhase::from_saved`].
+#[test]
+fn a_fresh_session_opens_the_start_menu_on_save() {
+    let mut phase = new_game_phase();
+    phase.open_synthetic_start_menu();
+    assert_eq!(
+        phase.start_menu().unwrap().selected(),
+        StartMenuItem::Save,
+        "a session that has never closed a menu opens on the first item"
+    );
+}
+
+/// `sStartMenuCursorPos` (`start_menu.c:83`) has session lifetime: closing
+/// the menu with `A` on `EXIT` (`StartMenuExitCallback`, `:750-757`) does
+/// not reset it, so the next `START` opens back on `EXIT`, not `SAVE`
+/// (issue: "Field start menu reopens on SAVE instead of the previously
+/// selected entry").
+#[test]
+fn reopening_after_a_on_exit_keeps_the_cursor_on_exit() {
+    let temp = TempSave::new("menu-cursor-persists-a-exit");
+    let mut save_slot = temp.slot();
+    let mut phase = new_game_phase();
+
+    phase.open_synthetic_start_menu();
+    phase.advance_start_menu_frame(pressed(Buttons::DOWN), &mut save_slot);
+    assert_eq!(
+        phase.start_menu().unwrap().selected(),
+        StartMenuItem::Exit,
+        "DOWN moves the cursor onto EXIT before closing"
+    );
+    phase.advance_start_menu_frame(pressed(Buttons::A), &mut save_slot);
+    assert!(phase.start_menu().is_none(), "A on EXIT closes the menu");
+
+    phase.open_synthetic_start_menu();
+    assert_eq!(
+        phase.start_menu().unwrap().selected(),
+        StartMenuItem::Exit,
+        "reopening must land back on EXIT, not reset to SAVE"
+    );
+}
+
+/// The same retention, through `HandleStartMenuInput`'s own close keys
+/// (`JOY_NEW(START_BUTTON | B_BUTTON)`, `start_menu.c:628-633`), which
+/// close without ever routing through `StartMenuExitCallback` at all.
+#[test]
+fn reopening_after_start_or_b_keeps_the_cursor() {
+    let temp = TempSave::new("menu-cursor-persists-start-b");
+    let mut save_slot = temp.slot();
+
+    for close_key in [Buttons::START, Buttons::B] {
+        let mut phase = new_game_phase();
+
+        phase.open_synthetic_start_menu();
+        phase.advance_start_menu_frame(pressed(Buttons::DOWN), &mut save_slot);
+        assert_eq!(
+            phase.start_menu().unwrap().selected(),
+            StartMenuItem::Exit,
+            "{close_key:?}: DOWN moves the cursor onto EXIT before closing"
+        );
+        phase.advance_start_menu_frame(pressed(close_key), &mut save_slot);
+        assert!(
+            phase.start_menu().is_none(),
+            "{close_key:?} must close the start menu"
+        );
+
+        phase.open_synthetic_start_menu();
+        assert_eq!(
+            phase.start_menu().unwrap().selected(),
+            StartMenuItem::Exit,
+            "{close_key:?}: reopening must land back on EXIT, not reset to SAVE"
+        );
+    }
+}

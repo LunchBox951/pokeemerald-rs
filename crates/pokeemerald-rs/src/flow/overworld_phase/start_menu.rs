@@ -78,7 +78,7 @@ impl OverworldPhase {
             if !self.start_menu_may_open(buttons) {
                 return false;
             }
-            match start_menu::open_default() {
+            match start_menu::open_default(self.start_menu_cursor) {
                 Ok(opened) => self.start_menu = Some(opened),
                 // The same "log-or-ignore is fine" policy [`crate::flow`]
                 // applies to every other pack load: a missing pack must not
@@ -108,6 +108,13 @@ impl OverworldPhase {
             save_slot,
         };
         let outcome = menu.tick(buttons, &mut target);
+        // `sStartMenuCursorPos` is EWRAM: every write to it outlives this
+        // `StartMenu`, which upstream never keeps a handle to once its
+        // `gMenuCallback` chain finishes. Reading it back every frame
+        // (rather than only when the menu is about to close) keeps this
+        // port's session-lifetime copy honest even if a future outcome
+        // ends the menu from inside a branch this match does not expect.
+        self.start_menu_cursor = menu.cursor_position();
         if outcome == StartMenuOutcome::Open {
             self.start_menu = Some(menu);
         }
@@ -136,17 +143,21 @@ impl OverworldPhase {
         self.start_menu.as_ref()
     }
 
-    /// Test-only: open a pack-free [`crate::start_menu::synthetic_start_menu`]
-    /// directly, so the save round-trip can drive the *real*
-    /// [`StartMenu::tick`] state machine in CI, where no asset pack exists
-    /// for [`crate::start_menu::open_default`] to read
-    /// (`crate::flow::save_continue_tests`' own module docs on the two
-    /// substitutions those tests make). Nothing but the chrome differs:
+    /// Test-only: open a pack-free
+    /// [`crate::start_menu::synthetic_start_menu_at`] directly, so the save
+    /// round-trip can drive the *real* [`StartMenu::tick`] state machine in
+    /// CI, where no asset pack exists for [`crate::start_menu::open_default`]
+    /// to read (`crate::flow::save_continue_tests`' own module docs on the
+    /// two substitutions those tests make). Nothing but the chrome differs:
     /// the menu, its items, its flow, and the write it performs are the
-    /// production ones.
+    /// production ones -- including the seed, taken from
+    /// [`Self::start_menu_cursor`] exactly as
+    /// [`Self::advance_start_menu_frame`] takes it for a real menu.
     #[cfg(test)]
     pub(in crate::flow) fn open_synthetic_start_menu(&mut self) {
-        self.start_menu = Some(crate::start_menu::synthetic_start_menu());
+        self.start_menu = Some(crate::start_menu::synthetic_start_menu_at(
+            self.start_menu_cursor,
+        ));
     }
 
     /// `CopyPartyAndObjectsToSave` (`src/load_save.c:196-200`): mirror the
