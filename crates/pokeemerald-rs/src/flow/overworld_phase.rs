@@ -192,8 +192,10 @@ pub(crate) struct OverworldPhase {
     /// turn, so the sequence is the one upstream would produce
     /// (`crate::flow::wild_encounter`'s module docs).
     ///
-    /// Seeded to `0`, then advanced by new-game initialization's two trainer-ID
-    /// draws before overworld play begins. Zero is upstream's real boot state:
+    /// Seeded to `0`, then advanced by new-game initialization's single
+    /// trainer-ID draw -- the id's high half; the low half reuses the raw seed
+    /// itself (`crate::new_game::trainer_id_bytes`) -- before overworld play
+    /// begins. Zero is upstream's real boot state:
     /// retail Emerald
     /// compiles `SeedRngWithRtc` out (`pokeemerald/src/main.c:229-236` is
     /// `#ifdef BUGFIX`), so `gRngValue` stays zero until
@@ -669,9 +671,11 @@ impl OverworldPhase {
     }
 
     /// Build a new overworld run while preserving its single RNG stream.
-    /// New-game initialization consumes the first two draws for the trainer
-    /// ID; the advanced generator then remains owned by the phase for all
-    /// subsequent encounter and battle draws.
+    /// New-game initialization consumes exactly one draw, for the trainer
+    /// id's high half -- the low half is the seed itself, not a second draw
+    /// ([`new_game::init_save_blocks`]'s module docs, "Trainer id's low half
+    /// is the seed, not a second draw"); the advanced generator then remains
+    /// owned by the phase for all subsequent encounter and battle draws.
     fn new(
         scene: OverworldScene,
         map_id: assets::MapId,
