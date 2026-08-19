@@ -166,7 +166,13 @@ impl StartMenu {
     /// [`open_default`] and the test-only [`synthetic_start_menu`], so a
     /// fixture menu's item list and geometry are never a second opinion
     /// (mirrors [`crate::main_menu::MainMenuScene::assemble`]).
-    fn assemble(chrome: StartMenuChrome) -> Self {
+    ///
+    /// `cursor` seeds `sStartMenuCursorPos` (`start_menu.c:83`, seeded back
+    /// in at `:511`) from whatever the caller retained across the previous
+    /// close -- [`crate::flow::overworld_phase`] is the session-lifetime
+    /// owner, EWRAM's counterpart here. Clamped to the item list so a
+    /// future slice shrinking [`ITEMS`] can never index out of bounds.
+    fn assemble(chrome: StartMenuChrome, cursor: usize) -> Self {
         let items = ITEMS.to_vec();
         let labels = items
             .iter()
@@ -177,15 +183,14 @@ impl StartMenu {
         // its rows land 16px apart from the printer's own newline handling
         // -- the same spacing `sMenu.optionHeight` gives the cursor.
         let yes_no_glyphs = chrome.render_label("YES\nNO");
+        let cursor = cursor.min(items.len() - 1);
         Self {
             chrome,
             items,
             labels,
             cursor_glyphs,
             yes_no_glyphs,
-            // `sStartMenuCursorPos` is EWRAM, zero at boot, and this port
-            // opens a fresh menu each time rather than persisting it.
-            cursor: 0,
+            cursor,
             save: None,
         }
     }
@@ -269,6 +274,15 @@ impl StartMenu {
     #[cfg(test)]
     pub(crate) fn selected(&self) -> StartMenuItem {
         self.items[self.cursor]
+    }
+
+    /// The raw `sStartMenuCursorPos` value (`start_menu.c:83`), read by
+    /// [`crate::flow::overworld_phase`] whenever this menu closes so the
+    /// session-lifetime owner can carry it into the next
+    /// [`Self::assemble`], the same way EWRAM outlives `InitStartMenu`
+    /// upstream.
+    pub(crate) const fn cursor_position(&self) -> usize {
+        self.cursor
     }
 
     /// Whether the SAVE flow currently owns the menu (`gMenuCallback ==
@@ -360,21 +374,39 @@ impl StartMenu {
 /// disk on every call for the same reason: a start menu only opens on the
 /// single frame the player presses `START`.
 ///
+/// `cursor` is [`StartMenu::assemble`]'s own seed -- the caller's retained
+/// `sStartMenuCursorPos`.
+///
 /// # Errors
 ///
 /// See [`StartMenuError`].
-pub(crate) fn open_default() -> Result<StartMenu, StartMenuError> {
+pub(crate) fn open_default(cursor: usize) -> Result<StartMenu, StartMenuError> {
     let pack = AssetPack::load_default()?;
-    Ok(StartMenu::assemble(StartMenuChrome::from_pack(&pack)?))
+    Ok(StartMenu::assemble(
+        StartMenuChrome::from_pack(&pack)?,
+        cursor,
+    ))
 }
 
 /// Test-only: a [`StartMenu`] over blank chrome, no local pack needed --
 /// mirroring [`crate::overworld::dialog::synthetic_dialog`], and going
 /// through the same [`StartMenu::assemble`] production uses so a fixture
-/// menu's items, geometry, and state machine are the real ones.
+/// menu's items, geometry, and state machine are the real ones. Opens on
+/// SAVE (`sStartMenuCursorPos`'s own zero default), the state a fresh
+/// session starts in -- [`synthetic_start_menu_at`] is the variant that
+/// exercises a retained cursor.
 #[cfg(test)]
 pub(crate) fn synthetic_start_menu() -> StartMenu {
-    StartMenu::assemble(StartMenuChrome::synthetic())
+    StartMenu::assemble(StartMenuChrome::synthetic(), 0)
+}
+
+/// Test-only: [`synthetic_start_menu`], seeded at a caller-chosen cursor --
+/// what [`crate::flow::overworld_phase::OverworldPhase::open_synthetic_start_menu`]
+/// calls with its own retained position, so a flow test can drive the
+/// close-and-reopen round trip without a real asset pack.
+#[cfg(test)]
+pub(crate) fn synthetic_start_menu_at(cursor: usize) -> StartMenu {
+    StartMenu::assemble(StartMenuChrome::synthetic(), cursor)
 }
 
 #[cfg(test)]
