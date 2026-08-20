@@ -635,10 +635,19 @@ impl Battle {
     /// the player must still *answer* — declining is an answer; ignoring the
     /// prompt is not, and would strand the battle.
     ///
-    /// A prompt outlives the battle's own end: the last faint of a battle
-    /// awards experience, so the question can be raised on the very turn the
-    /// outcome is decided, exactly as upstream runs `BattleScript_LevelUp`
-    /// before leaving the battle screen.
+    /// A prompt holds the battle's own end (and a trainer's replacement
+    /// send-out) *back*: the last faint of a battle awards experience, so
+    /// the question can be raised by the knockout that would decide the
+    /// outcome — and upstream finishes the whole level-up script, the ask
+    /// included, before anything after the faint runs
+    /// (`HandleFaintedMonActions` executes `BattleScript_GiveExp` to
+    /// completion in its case 1 before case 4's
+    /// `BattleScript_HandleFaintedMon` checks the outcome or sends out a
+    /// replacement, `battle_util.c:1894`-`:1951`). While this is `Some`,
+    /// [`Battle::outcome`] therefore stays `None` and no
+    /// [`BattleEvent::TrainerSentOut`]/[`BattleEvent::MoneyGained`]/
+    /// [`BattleEvent::Ended`] has been emitted; answering the last prompt
+    /// releases them ([`Battle::resolve_move_learn`]).
     #[must_use]
     pub const fn pending_move_learn(&self) -> Option<PendingMoveLearn> {
         self.pending_move_learn
@@ -653,8 +662,13 @@ impl Battle {
     /// Returns the events the answer produced, in order:
     /// [`BattleEvent::MoveReplaced`] or [`BattleEvent::MoveLearnDeclined`]
     /// for the answer itself, then [`BattleEvent::MoveLearnPrompt`] again if
-    /// the resumed walk stopped at another entry it cannot fit. Draws no RNG
-    /// — upstream's box and summary screen draw none either.
+    /// the resumed level-up stopped at another entry it cannot fit —
+    /// or, once no prompt remains, whatever the knockout's aftermath was
+    /// holding for the answer ([`Battle::pending_move_learn`]'s docs): a
+    /// trainer's [`BattleEvent::TrainerSentOut`], or
+    /// [`BattleEvent::MoneyGained`] (trainer only) and
+    /// [`BattleEvent::Ended`]. Draws no RNG — upstream's box and summary
+    /// screen draw none either.
     ///
     /// Only the *party* mon is updated, which is all this crate has: the
     /// `gBattleMons` half of upstream's write
@@ -665,10 +679,14 @@ impl Battle {
     /// # Errors
     ///
     /// [`BattleError::NoMoveLearnPending`] if nothing is waiting on an
-    /// answer, or [`BattleError::InvalidMoveSlot`] if
+    /// answer, [`BattleError::InvalidMoveSlot`] if
     /// [`crate::pokemon::MoveLearnDecision::Replace`] names a slot the mon
-    /// does not have. Neither mutates anything, and the prompt stays
-    /// outstanding so a corrected answer can still be given.
+    /// does not have, or [`BattleError::HmMoveCantBeForgotten`] if the
+    /// named slot holds an HM move — upstream's `IsHMMove2` refusal
+    /// (`src/battle_script_commands.c:5468`-`:5472`), which prints
+    /// `STRINGID_HMMOVESCANTBEFORGOTTEN` and reopens the move list. None of
+    /// the three mutates anything, and the prompt stays outstanding so a
+    /// corrected answer can still be given.
     pub fn resolve_move_learn(
         &mut self,
         decision: MoveLearnDecision,
@@ -692,10 +710,17 @@ impl Battle {
                 move_id: pending.move_id(),
             }),
         }
-        if let Some(next) = resolution.next {
-            events.push(BattleEvent::MoveLearnPrompt {
+        match resolution.next {
+            Some(next) => events.push(BattleEvent::MoveLearnPrompt {
                 move_id: next.move_id(),
-            });
+            }),
+            // The last prompt of the level-up: release the knockout's
+            // aftermath the pause was holding back — the trainer's
+            // replacement send-out, or the terminal outcome (money
+            // included) — exactly where upstream's completed level-up
+            // script hands back to `HandleFaintedMonActions`' case 4
+            // (`battle_util.c:1894`-`:1951`; see `settle_fainted_enemy`).
+            None => self.settle_fainted_enemy(&mut events),
         }
         Ok(events)
     }
@@ -1019,11 +1044,38 @@ impl Battle {
     /// first — upstream's `Cmd_getmoneyreward`
     /// (`battle_script_commands.c:5635`) runs after `Cmd_getexp`, which is
     /// the order [`BattleEvent`]s come back in.
+    ///
+    /// An open [`Battle::pending_move_learn`] defers the whole pass:
+    /// upstream runs `BattleScript_GiveExp` — the level-up and its yes/no
+    /// box included — to completion in `HandleFaintedMonActions`' case 1
+    /// before case 4's `BattleScript_HandleFaintedMon` checks the outcome
+    /// or sends out a replacement (`battle_util.c:1894`-`:1951`), so
+    /// nothing after the faint may run until the question is answered.
+    /// [`Battle::resolve_move_learn`] runs [`Battle::settle_fainted_enemy`]
+    /// when the last prompt resolves.
     fn end_of_turn(&mut self, events: &mut Vec<BattleEvent>) {
+        if self.pending_move_learn.is_some() {
+            return;
+        }
+        self.settle_fainted_enemy(events);
+    }
+
+    /// The knockout's aftermath — everything that may only run once the
+    /// level-up (prompts included) is done: `BattleScript_HandleFaintedMon`
+    /// reached from `HandleFaintedMonActions`' case 4
+    /// (`battle_util.c:1937`-`:1948`). A trainer with a bench sends out the
+    /// next party member; a trainer without one pays and the battle ends; a
+    /// wild battle simply ends. No-op unless the enemy is down and the
+    /// outcome still open — on the promptless path the wild faint already
+    /// finished the battle where it happened
+    /// ([`Battle::execute_move`]'s pipeline), so the wild arm here is only
+    /// reached by a deferred finish.
+    fn settle_fainted_enemy(&mut self, events: &mut Vec<BattleEvent>) {
         if self.outcome.is_some() || !self.enemy.is_fainted() {
             return;
         }
         let BattleKind::Trainer(context) = &mut self.kind else {
+            self.finish(events, BattleOutcome::PlayerWon);
             return;
         };
         if let Some(next) = context.send_out_next() {

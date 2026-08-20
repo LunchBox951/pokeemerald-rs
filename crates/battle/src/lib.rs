@@ -104,12 +104,19 @@
 //! [`pokemon::MoveLearnDecision`], which [`battle::Battle`] surfaces as
 //! [`battle::Battle::pending_move_learn`] /
 //! [`battle::Battle::resolve_move_learn`] and enforces by refusing a turn
-//! while the question is open. Answering resumes the same walk, so declining
-//! still continues to the next learnset entry; replacing a slot clears that
-//! slot's PP Ups, exactly as `RemoveMonPPBonus` + `SetMonMoveSlot` do. What
-//! this crate still does not own is the *asking* — there is no message layer
-//! or summary screen here, and there is deliberately no default answer baked
-//! in.
+//! while the question is open. The pause is faithful to upstream's
+//! one-level-at-a-time award loop: the mon holds *at* the prompted level
+//! (the award's remainder unconsumed on the token), and everything after
+//! the knockout — a trainer's forced send-out, the money payout, the
+//! battle's end — waits for the last answer, as upstream finishes the
+//! level-up script before `HandleFaintedMonActions`' aftermath. Answering
+//! resumes the same walk, so declining still continues to the next learnset
+//! entry; replacing a slot clears that slot's PP Ups, exactly as
+//! `RemoveMonPPBonus` + `SetMonMoveSlot` do — unless the slot holds an HM
+//! move, which is refused the way `IsHMMove2` refuses it
+//! ([`error::BattleError::HmMoveCantBeForgotten`]). What this crate still
+//! does not own is the *asking* — there is no message layer or summary
+//! screen here, and there is deliberately no default answer baked in.
 //!
 //! Out of scope for this slice (see each module's own docs for exactly what
 //! is/isn't modelled): the *general* trainer AI beyond the four scripts

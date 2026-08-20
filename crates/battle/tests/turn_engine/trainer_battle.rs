@@ -510,24 +510,43 @@ fn a_crossed_levels_already_known_move_is_skipped_at_no_slot_cost() {
 /// A multi-level jump processes every crossed level in ascending order,
 /// exactly as upstream's own one-level-at-a-time `Cmd_getexp` loop does
 /// (`battle_script_commands.c` case 3 → case 4 → case 5, looping back to
-/// case 3 until the whole award is spent). Torchic crosses four learnset
-/// levels here — 16 Peck, 19 Sand Attack, 25 Fire Spin, 28 Quick Attack —
-/// with one slot already taken, so the first three land *in learnset order*
-/// (no skips: Sand Attack and Fire Spin are not executable by this crate's
-/// turn engine and are taught anyway) and the fourth runs out of slots and
-/// stops the walk on a player decision (issue #304).
+/// case 3 until the whole award is spent, each level's write capped at the
+/// next threshold by `Task_GiveExpToMon`,
+/// `battle_controller_player.c:1154`-`:1181`). Torchic crosses four
+/// learnset levels here — 16 Peck, 19 Sand Attack, 25 Fire Spin, 28 Quick
+/// Attack — with one slot already taken, so the first three land *in
+/// learnset order* (no skips: Sand Attack and Fire Spin are not executable
+/// by this crate's turn engine and are taught anyway) and the fourth runs
+/// out of slots and stops the level-up on a player decision (issue #304)
+/// **at level 28**: the rest of the award is unconsumed while the question
+/// is open, so the prompt never shows a mon past the level it names.
 #[test]
 fn a_multi_level_jump_learns_each_crossed_levels_moves_in_order() {
     let dex = Dex::new();
     let mut mon = max_iv_mon(&dex, TORCHIC, 13, vec![SCRATCH]);
     let growth_rate = dex.species(SpeciesId(TORCHIC)).unwrap().growth_rate;
+    let level_28 = assets::experience_for_level(growth_rate, 28).unwrap();
     let level_29 = assets::experience_for_level(growth_rate, 29).unwrap();
 
     let pending = mon
         .apply_experience(&dex, level_29 - mon.experience())
         .expect("the fourth entry has no slot left, so the walk asks");
 
-    assert_eq!(mon.level(), 29, "many levels crossed in a single call");
+    assert_eq!(
+        mon.level(),
+        28,
+        "the award pauses at the prompted level; level 29 waits on the answer"
+    );
+    assert_eq!(
+        mon.experience(),
+        level_28,
+        "consumed exactly up to level 28's threshold (Task_GiveExpToMon's cap)"
+    );
+    assert_eq!(
+        mon.stats().max_hp,
+        max_iv_mon(&dex, TORCHIC, 28, vec![SCRATCH]).stats().max_hp,
+        "stats are level 28's while the question is open, not level 29's"
+    );
     let learned: Vec<MoveId> = mon.moves().iter().map(|slot| slot.move_id).collect();
     assert_eq!(
         learned,
@@ -541,6 +560,7 @@ fn a_multi_level_jump_learns_each_crossed_levels_moves_in_order() {
         "level 28's Quick Attack is the first entry with no slot left, so \
          it is the one the player is asked about (MON_HAS_MAX_MOVES)"
     );
+    assert_eq!(pending.level(), 28);
     assert!(
         !learned.contains(&QUICK_ATTACK),
         "and nothing is bumped until that question is answered"
@@ -550,8 +570,14 @@ fn a_multi_level_jump_learns_each_crossed_levels_moves_in_order() {
             .unwrap()
             .next,
         None,
-        "declining resumes the walk, which finds no further entry to offer"
+        "declining resumes the level-up, which finds no further entry to offer"
     );
+    assert_eq!(
+        mon.level(),
+        29,
+        "the answer releases the award's remainder (Cmd_getexp case 5)"
+    );
+    assert_eq!(mon.experience(), level_29);
 }
 
 /// A full moveset **asks** rather than silently declining — the
@@ -623,6 +649,7 @@ fn a_full_moveset_asks_before_learning_and_honours_either_answer() {
 /// reported as an event, held on the battle, blocks another turn until it is
 /// answered, and the answer performs `RemoveMonPPBonus` + `SetMonMoveSlot`.
 #[test]
+#[allow(clippy::too_many_lines)]
 fn a_trainer_battles_exp_award_surfaces_the_replacement_prompt() {
     let dex = Dex::new();
     let growth_rate = dex.species(SpeciesId(TORCHIC)).unwrap().growth_rate;
@@ -650,7 +677,7 @@ fn a_trainer_battles_exp_award_surfaces_the_replacement_prompt() {
         events = battle
             .take_turn(PlayerAction::UseMove(0), &mut rng)
             .unwrap();
-        if battle.outcome().is_some() {
+        if battle.pending_move_learn().is_some() || battle.outcome().is_some() {
             break;
         }
     }
@@ -666,11 +693,25 @@ fn a_trainer_battles_exp_award_surfaces_the_replacement_prompt() {
         exp_index < prompt_index,
         "the award is applied before the question is asked: {events:?}"
     );
-    assert_eq!(battle.outcome(), Some(BattleOutcome::PlayerWon));
+    // The knockout would end the battle -- the bench is empty -- but the
+    // open question holds everything after the faint back, exactly as
+    // upstream finishes the level-up script before
+    // BattleScript_HandleFaintedMon (`battle_util.c:1894`-`:1951`): no
+    // money, no outcome, no Ended event until the answer.
+    assert_eq!(
+        battle.outcome(),
+        None,
+        "the battle's end waits on the answer"
+    );
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, BattleEvent::MoneyGained(_) | BattleEvent::Ended(_))),
+        "nothing after the faint runs while the question is open: {events:?}"
+    );
     assert_eq!(
         battle.pending_move_learn().map(|pending| pending.move_id()),
-        Some(PECK),
-        "the question outlives the battle it was asked in"
+        Some(PECK)
     );
 
     assert_eq!(
@@ -679,21 +720,30 @@ fn a_trainer_battles_exp_award_surfaces_the_replacement_prompt() {
             .unwrap_err()
             .error(),
         BattleError::MoveLearnPending(PECK),
-        "an unanswered prompt is reported ahead of even BattleAlreadyOver"
+        "an unanswered prompt refuses the next turn"
     );
 
     let dex = Dex::new();
+    let money = battle.trainer().expect("a trainer battle").money();
     let answered = battle
         .resolve_move_learn(MoveLearnDecision::Replace(1))
         .unwrap();
     assert_eq!(
         answered,
-        vec![BattleEvent::MoveReplaced {
-            learned: PECK,
-            forgotten: GROWL,
-            slot: 1,
-        }]
+        vec![
+            BattleEvent::MoveReplaced {
+                learned: PECK,
+                forgotten: GROWL,
+                slot: 1,
+            },
+            // The last prompt resolved releases the deferred aftermath, in
+            // upstream's order: Cmd_getmoneyreward after Cmd_getexp, then
+            // the battle's end.
+            BattleEvent::MoneyGained(money),
+            BattleEvent::Ended(BattleOutcome::PlayerWon),
+        ]
     );
+    assert_eq!(battle.outcome(), Some(BattleOutcome::PlayerWon));
     assert!(battle.pending_move_learn().is_none());
     assert_eq!(
         battle
@@ -720,6 +770,151 @@ fn a_trainer_battles_exp_award_surfaces_the_replacement_prompt() {
         BattleError::NoMoveLearnPending,
         "answering twice is a caller bug, not a second decision"
     );
+}
+
+/// A knockout that raises a prompt with a bench still waiting holds the
+/// forced send-out back too: upstream completes the level-up script — yes/no
+/// box included — in `HandleFaintedMonActions`' case 1 before case 4 runs
+/// `BattleScript_HandleFaintedMon`'s replacement
+/// (`battle_util.c:1894`-`:1951`). The `TrainerSentOut` event arrives with
+/// the answer, and the battle then plays on normally.
+#[test]
+fn a_prompts_deferred_send_out_arrives_with_the_answer_and_the_battle_plays_on() {
+    let dex = Dex::new();
+    let growth_rate = dex.species(SpeciesId(TORCHIC)).unwrap().growth_rate;
+    let level_16 = assets::experience_for_level(growth_rate, 16).unwrap();
+    let mut player = max_iv_mon(&dex, TORCHIC, 15, vec![SCRATCH, GROWL, TACKLE, LEER]);
+    assert!(player
+        .apply_experience(&dex, level_16 - 1 - player.experience())
+        .is_none());
+    let party = vec![
+        max_iv_mon(&dex, TREECKO, 5, vec![POUND, LEER]),
+        max_iv_mon(&dex, TREECKO, 5, vec![POUND, LEER]),
+    ];
+
+    let mut rng = SequenceRng::new([u16::MAX; 128]);
+    let mut battle =
+        Battle::new_trainer(dex, player, MAY_ROUTE_103_MUDKIP, party, &mut rng).unwrap();
+
+    let mut events = Vec::new();
+    for _ in 0..8 {
+        events = battle
+            .take_turn(PlayerAction::UseMove(0), &mut rng)
+            .unwrap();
+        if battle.pending_move_learn().is_some() {
+            break;
+        }
+    }
+    assert!(
+        events.contains(&BattleEvent::MoveLearnPrompt { move_id: PECK }),
+        "the first knockout's award must ask about Peck: {events:?}"
+    );
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, BattleEvent::TrainerSentOut { .. })),
+        "the replacement waits on the answer: {events:?}"
+    );
+    assert!(
+        battle.enemy().is_fainted(),
+        "the fainted mon is still on the field while the question is open"
+    );
+
+    let answered = battle
+        .resolve_move_learn(MoveLearnDecision::Decline)
+        .unwrap();
+    assert_eq!(
+        answered,
+        vec![
+            BattleEvent::MoveLearnDeclined { move_id: PECK },
+            BattleEvent::TrainerSentOut {
+                species: SpeciesId(TREECKO),
+                bench_remaining: 0,
+            },
+        ]
+    );
+    assert_eq!(battle.outcome(), None, "the battle is still going");
+    assert!(
+        !battle.enemy().is_fainted(),
+        "the replacement is on the field now"
+    );
+    assert!(
+        battle.take_turn(PlayerAction::UseMove(0), &mut rng).is_ok(),
+        "and the next turn is takeable again"
+    );
+}
+
+/// A chain of prompts resolves *fully* before the deferred aftermath runs:
+/// Wynaut's four level-15 learnset entries each ask in turn
+/// (`BattleScript_TryLearnMoveLoop`), and only the last answer releases the
+/// money payout and the battle's end.
+#[test]
+fn a_multi_prompt_chain_resolves_fully_before_the_deferred_transition() {
+    /// `SPECIES_WYNAUT`, whose level-15 learnset block is four entries:
+    /// Counter, Mirror Coat, Safeguard, Destiny Bond (in table order).
+    const WYNAUT: u16 = 360;
+    const LEVEL_15_BLOCK: [MoveId; 4] = [MoveId(68), MoveId(243), MoveId(219), MoveId(194)];
+
+    let dex = Dex::new();
+    let growth_rate = dex.species(SpeciesId(WYNAUT)).unwrap().growth_rate;
+    let level_15 = assets::experience_for_level(growth_rate, 15).unwrap();
+    let mut player = max_iv_mon(&dex, WYNAUT, 14, vec![SCRATCH, GROWL, TACKLE, LEER]);
+    assert!(player
+        .apply_experience(&dex, level_15 - 1 - player.experience())
+        .is_none());
+    let party = vec![max_iv_mon(&dex, TREECKO, 5, vec![POUND, LEER])];
+
+    let mut rng = SequenceRng::new([u16::MAX; 128]);
+    let mut battle =
+        Battle::new_trainer(dex, player, MAY_ROUTE_103_MUDKIP, party, &mut rng).unwrap();
+
+    for _ in 0..8 {
+        let _ = battle
+            .take_turn(PlayerAction::UseMove(0), &mut rng)
+            .unwrap();
+        if battle.pending_move_learn().is_some() {
+            break;
+        }
+    }
+    assert_eq!(
+        battle.pending_move_learn().map(|pending| pending.move_id()),
+        Some(LEVEL_15_BLOCK[0]),
+        "the knockout's award must reach level 15's first entry"
+    );
+    let money = battle.trainer().expect("a trainer battle").money();
+
+    // The first three answers each surface the next question and nothing
+    // else -- no money, no outcome, no end.
+    for pair in LEVEL_15_BLOCK.windows(2) {
+        let answered = battle
+            .resolve_move_learn(MoveLearnDecision::Decline)
+            .unwrap();
+        assert_eq!(
+            answered,
+            vec![
+                BattleEvent::MoveLearnDeclined { move_id: pair[0] },
+                BattleEvent::MoveLearnPrompt { move_id: pair[1] },
+            ]
+        );
+        assert_eq!(battle.outcome(), None);
+    }
+
+    // The last answer releases the whole deferred aftermath, in order.
+    let answered = battle
+        .resolve_move_learn(MoveLearnDecision::Decline)
+        .unwrap();
+    assert_eq!(
+        answered,
+        vec![
+            BattleEvent::MoveLearnDeclined {
+                move_id: LEVEL_15_BLOCK[3]
+            },
+            BattleEvent::MoneyGained(money),
+            BattleEvent::Ended(BattleOutcome::PlayerWon),
+        ]
+    );
+    assert_eq!(battle.outcome(), Some(BattleOutcome::PlayerWon));
+    assert!(battle.pending_move_learn().is_none());
 }
 
 /// Every knocked-out party member pays its own boosted award, so the exp a

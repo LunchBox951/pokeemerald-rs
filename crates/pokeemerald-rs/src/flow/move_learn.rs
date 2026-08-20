@@ -56,7 +56,11 @@ use battle::{Battle, BattleEvent, MoveLearnDecision};
 
 /// Answer every outstanding [`Battle::pending_move_learn`] on `battle` with
 /// the module docs' stand-in, returning the events those answers produced in
-/// order.
+/// order — the answers themselves, plus whatever the knockout's aftermath
+/// was waiting on them: the last answer releases the trainer's replacement
+/// send-out, or the money payout and the battle's end
+/// ([`Battle::resolve_move_learn`]'s docs), so a caller that reads events
+/// (the trainer driver's `MoneyGained` scan) must read these too.
 ///
 /// A no-op — and an empty `Vec` — when nothing is pending, which is every
 /// turn but the rare one that crosses a level with a full moveset. Draws no

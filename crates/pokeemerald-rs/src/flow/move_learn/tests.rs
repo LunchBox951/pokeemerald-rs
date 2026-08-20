@@ -107,7 +107,8 @@ fn an_npc_trainer_battle_answers_a_mid_battle_prompt_and_plays_on() {
 }
 
 /// The answer itself, reported: one [`BattleEvent::MoveLearnDeclined`] per
-/// prompt, and nothing left pending afterwards.
+/// prompt, then the aftermath the prompt deferred, and nothing left pending
+/// afterwards.
 #[test]
 fn settling_declines_every_pending_prompt_and_reports_each_one() {
     let dex = Dex::new();
@@ -148,7 +149,17 @@ fn settling_declines_every_pending_prompt_and_reports_each_one() {
 
     assert_eq!(
         events,
-        vec![BattleEvent::MoveLearnDeclined { move_id: PECK }]
+        vec![
+            BattleEvent::MoveLearnDeclined { move_id: PECK },
+            // The answer also releases the aftermath the prompt was holding
+            // back -- here, the deferred forced send-out (upstream finishes
+            // the level-up script before `HandleFaintedMonActions`' case 4
+            // sends out the replacement).
+            BattleEvent::TrainerSentOut {
+                species: TREECKO,
+                bench_remaining: 0,
+            },
+        ]
     );
     assert!(battle.pending_move_learn().is_none());
     assert!(
@@ -230,4 +241,61 @@ fn settling_a_prompt_draws_nothing_from_the_shared_stream() {
         before,
         "answering the prompt must not move the stream"
     );
+}
+
+/// A prompt raised by the *final* knockout defers the money payout into the
+/// settlement's own events (`Cmd_getmoneyreward` runs only after the
+/// level-up script, ask included, has finished), so the driver must credit
+/// `MoneyGained` from there too — a wallet that only scanned the turn's
+/// events would silently drop the prize.
+#[test]
+fn a_prize_deferred_behind_the_final_knockouts_prompt_is_still_credited() {
+    let dex = Dex::new();
+    let player = torchic_one_point_from_a_full_moveset_level_up(&dex);
+    // One-mon party: the knockout that raises the prompt is also the one
+    // that decides the battle, so the payout waits on the answer.
+    let party =
+        vec![BattlePokemon::new(&dex, TREECKO, 5, Ivs::default(), 0, vec![POUND, LEER]).unwrap()];
+    let expected_money = {
+        let mut rng = Rng::new(1);
+        Battle::new_trainer(
+            dex.clone(),
+            player.clone(),
+            MAY_ROUTE_103_MUDKIP,
+            party.clone(),
+            &mut SharedRng::new(&mut rng),
+        )
+        .unwrap()
+        .trainer()
+        .expect("a trainer battle")
+        .money()
+    };
+
+    let mut rng = Rng::new(1);
+    let battle = Battle::new_trainer(
+        dex,
+        player,
+        MAY_ROUTE_103_MUDKIP,
+        party,
+        &mut SharedRng::new(&mut rng),
+    )
+    .unwrap();
+    let mut slot = Some(battle);
+    let mut lead = None;
+    let mut money = 0;
+
+    let mut outcome = None;
+    for _ in 0..60 {
+        outcome = advance_npc_trainer_battle(&mut slot, &mut lead, &mut money, &mut rng);
+        if outcome.is_some() {
+            break;
+        }
+    }
+
+    assert_eq!(outcome, Some(BattleOutcome::PlayerWon));
+    assert_eq!(
+        money, expected_money,
+        "the deferred MoneyGained must reach the wallet"
+    );
+    assert_ne!(money, 0, "fixture sanity: the trainer pays a real prize");
 }

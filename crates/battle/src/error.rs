@@ -272,6 +272,20 @@ pub enum BattleError {
     /// prompt outstanding — a caller answering a question nobody asked.
     NoMoveLearnPending,
 
+    /// A [`crate::pokemon::MoveLearnDecision::Replace`] named a slot holding
+    /// an HM move, which upstream refuses to overwrite: `IsHMMove2`
+    /// (`src/pokemon.c:6574`, over the eight-field-move `sHMMoves` list at
+    /// `:2108`) makes `Cmd_yesnoboxlearnmove` print
+    /// `STRINGID_HMMOVESCANTBEFORGOTTEN` and reopen the move list instead
+    /// (`src/battle_script_commands.c:5468`-`:5472`). Nothing is mutated and
+    /// the prompt stays outstanding, so the caller can re-ask and answer
+    /// with a different slot (or decline) — the same recoverable shape as
+    /// [`BattleError::InvalidMoveSlot`], distinct because this refusal is a
+    /// real upstream message rather than a caller bug.
+    ///
+    /// Carries the HM move in the refused slot.
+    HmMoveCantBeForgotten(MoveId),
+
     /// [`crate::battle::Battle::new_trainer`] was handed an empty party.
     ///
     /// Unreachable upstream: `CreateNPCTrainerParty` returns
@@ -348,6 +362,11 @@ impl fmt::Display for BattleError {
                 id.0
             ),
             Self::NoMoveLearnPending => write!(f, "no move-learn decision is pending"),
+            Self::HmMoveCantBeForgotten(id) => write!(
+                f,
+                "HM move `{}` can't be forgotten to make room for a new move",
+                id.0
+            ),
             Self::EmptyTrainerParty(id) => {
                 write!(f, "trainer `{}` has an empty party", id.0)
             }

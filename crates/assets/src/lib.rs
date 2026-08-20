@@ -117,7 +117,7 @@ pub use species::{
     SpeciesTable,
 };
 pub use species_names::SpeciesNames;
-pub use tmhm_learnsets::{TmHmLearnsets, TmHmSlot};
+pub use tmhm_learnsets::{is_hm_move, TmHmLearnsets, TmHmSlot};
 pub use trainers::{
     AiFlags, EncounterMusic, TrainerClass, TrainerData, TrainerId, TrainerMonItemCustomMoves,
     TrainerMonItemDefaultMoves, TrainerMonNoItemCustomMoves, TrainerMonNoItemDefaultMoves,

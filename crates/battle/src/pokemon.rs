@@ -610,31 +610,38 @@ impl BattlePokemon {
         self.current_hp = self.current_hp.saturating_sub(amount);
     }
 
-    /// Add earned experience, applying every crossed level threshold and
-    /// capping both level and total experience at level 100. For every
-    /// level crossed by this call, in order, also teaches that level's
-    /// learnset moves the way upstream's `MonTryLearningNewMove` does —
-    /// **unscreened**, exactly like upstream: a move this crate cannot
-    /// execute yet is still learned, sits in the moveset, and is refused
-    /// per turn when it is *selected* rather than at learn time (see
-    /// [`BattlePokemon::walk_learnset`] for why that is the consistent
-    /// posture, and what else it does and does not reproduce).
+    /// Add earned experience, consuming the award **one level threshold at
+    /// a time** the way upstream's controller/`Cmd_getexp` loop does
+    /// (`Task_GiveExpToMon`'s cap at `nextLvlExp`,
+    /// `src/battle_controller_player.c:1154`-`:1181`, looped by case 5 at
+    /// `src/battle_script_commands.c:3505`-`:3509`), capping both level and
+    /// total experience at level 100. Each level reached this way also
+    /// teaches that level's learnset moves the way upstream's
+    /// `MonTryLearningNewMove` does — **unscreened**, exactly like
+    /// upstream: a move this crate cannot execute yet is still learned,
+    /// sits in the moveset, and is refused per turn when it is *selected*
+    /// rather than at learn time (see
+    /// [`BattlePokemon::walk_level_learnset`] for why that is the
+    /// consistent posture, and what else it does and does not reproduce).
     ///
     /// # The return value is a question, and it has to be answered
     ///
     /// `Some(`[`PendingMoveLearn`]`)` means the walk **stopped**: a crossed
     /// level offered a move and all four slots were full, which is where
     /// upstream opens `BattleScript_AskToLearnMove`'s yes/no box
-    /// (`src/battle_script_commands.c:5368`-`:5370`). Nothing is learned
-    /// until the caller answers with
-    /// [`BattlePokemon::resolve_move_learn`], and the rest of the level-up's
-    /// learnset entries are still waiting behind that answer. Dropping the
-    /// token silently discards both — which is why it is `#[must_use]`
+    /// (`src/battle_script_commands.c:5368`-`:5370`). The mon holds *at*
+    /// that level — the award's remainder rides on the token, unconsumed,
+    /// like upstream's leftover `gBattleMoveDamage` — and nothing further
+    /// is learned or levelled until the caller answers with
+    /// [`BattlePokemon::resolve_move_learn`]. Dropping the token silently
+    /// discards the question, the rest of that level's learnset entries,
+    /// *and* the rest of the award — which is why it is `#[must_use]`
     /// rather than a field this type answers on the player's behalf.
     ///
-    /// Stat recalculation follows `CalculateMonStats`. If maximum HP grows,
-    /// the increase is also added to current HP, preserving the absolute
-    /// amount of damage the mon had taken before levelling up.
+    /// Stat recalculation follows `CalculateMonStats`, per level. If
+    /// maximum HP grows, the increase is also added to current HP,
+    /// preserving the absolute amount of damage the mon had taken before
+    /// levelling up.
     ///
     /// # Recorded divergence: EVs and friendship still do not move
     ///
@@ -650,13 +657,10 @@ impl BattlePokemon {
     /// across a level-up. Recorded on the `Cmd_getexp` ledger entry.
     #[must_use = "a full moveset pauses the level-up walk for a player \
                   decision; dropping the token declines it *and* abandons \
-                  the rest of the level-up's learnset entries"]
+                  the rest of the level-up's learnset entries and the \
+                  award's unconsumed remainder"]
     pub fn apply_experience(&mut self, dex: &Dex, amount: u32) -> Option<PendingMoveLearn> {
-        let max_experience =
-            experience_for_level(self.base_stats.growth_rate, MAX_LEVEL).unwrap_or(u32::MAX);
-        self.experience = self.experience.saturating_add(amount).min(max_experience);
-        let (old_level, new_level) = self.raise_level_to_experience()?;
-        self.walk_learnset(dex, old_level + 1, 0, new_level)
+        self.advance_experience(dex, amount)
     }
 
     /// `GetLevelFromMonExp` + `CalculateMonStats`
@@ -796,7 +800,7 @@ impl BattlePokemon {
     /// Whatever [`crate::dex::Dex::move_data`] reports for a move id this
     /// mon already knows — unreachable in practice, since every
     /// [`MoveSlot::move_id`] this crate ever writes ([`BattlePokemon::new`],
-    /// [`BattlePokemon::walk_learnset`]) already passed that same lookup,
+    /// [`BattlePokemon::walk_level_learnset`]) already passed that same lookup,
     /// but surfaced as a caller-visible `Result` instead of an `expect` in
     /// case a future change to either ever desyncs them.
     pub fn heal(&mut self, dex: &Dex) -> Result<(), BattleError> {
