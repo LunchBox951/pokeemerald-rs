@@ -290,15 +290,16 @@ class TestSyncCargoVersionWithRealCargo(unittest.TestCase):
             encoding="utf-8",
         )
         (self.root / "VERSION").write_text("0.0.22.5\n", encoding="utf-8")
+        original_manifest = manifest.read_bytes()
+        lockfile = self.root / "Cargo.lock"
+        original_lock = lockfile.read_bytes()
 
         with self.assertRaises(sync_cargo_version.SyncError):
             sync_cargo_version.sync(self.root, check_only=True)
 
-        # check mode must not have written anything.
-        self.assertNotIn(
-            "0.0.22+gamepatch.5",
-            (self.root / "Cargo.lock").read_text(encoding="utf-8"),
-        )
+        # check mode must not have written anything: byte-for-byte identical.
+        self.assertEqual(manifest.read_bytes(), original_manifest)
+        self.assertEqual(lockfile.read_bytes(), original_lock)
 
 
 if __name__ == "__main__":
