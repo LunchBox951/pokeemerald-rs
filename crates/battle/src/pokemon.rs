@@ -15,10 +15,11 @@
 //! player mon, both realistic for a first encounter), held items,
 //! non-volatile status conditions, and the Shedinja 1-HP special case in
 //! `CalculateMonStats`. Abilities are out of scope too, with one exception:
-//! [`BattlePokemon::ability`] (issue #322), consumed by
+//! [`BattlePokemon::ability`] (issues #321/#322), consumed by
 //! [`crate::stat_change`]'s ability guards (Clear Body, White Smoke, Keen
-//! Eye, Hyper Cutter) — see that module's docs for why the ability system
-//! stops there.
+//! Eye, Hyper Cutter) and by [`crate::ability`]'s two damage-formula
+//! checks (Overgrow's pinch boost, Liquid Ooze's drain inversion) — see
+//! those modules' docs for why the ability system stops there.
 
 use assets::{
     experience_for_level, AbilityId, BaseStats, LevelUpLearnsets, MoveId, SpeciesId, Type,

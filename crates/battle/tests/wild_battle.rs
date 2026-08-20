@@ -13,7 +13,7 @@
 
 mod common;
 
-use assets::{MoveId, SpeciesId};
+use assets::{MoveEffect, MoveId, SpeciesId};
 use battle::{
     build_wild_pokemon, Battle, BattleError, BattleEvent, BattleOutcome, BattlePokemon, Dex, Ivs,
     Nature, PlayerAction, MOVE_NONE,
@@ -175,6 +175,13 @@ fn a_battle_with_a_move_outside_this_slice_is_refused_before_it_starts() {
     // ordinary damage pipeline -- wrong damage and a desynchronised RNG
     // stream. (Sonic Boom stood here until issue #321's `fixed_damage`
     // pipeline made it executable; the point it pins is unchanged.)
+    // Pin the asset row this test leans on: if the extracted table ever
+    // drifted Horn Drill off EFFECT_OHKO (38) or its token base power 1,
+    // this test would silently stop guarding the OHKO boundary.
+    let horn_drill = dex.move_data(MoveId(32)).unwrap();
+    assert_eq!(horn_drill.effect, MoveEffect(38));
+    assert_eq!(horn_drill.power, 1);
+
     let player = fixed_mon(&dex, 4, 50, vec![MoveId(33)]);
     let enemy = fixed_mon(&dex, 19, 5, vec![MoveId(32)]);
 
