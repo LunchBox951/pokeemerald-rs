@@ -16,9 +16,14 @@
 //! (`ply_note`, `m4a_1.s:1580`..`:1609`, `:1757`..`:1758`; `ply_xiecv`/
 //! `ply_xiecl`, `m4a.c:1591`..`:1600`).
 //!
+//! `PRIO` is executed too: the track priority it sets combines with the song
+//! header's into each note's effective note-on priority (see
+//! [`Sequencer::note_priority`]), which drives [`crate::mixer::Mixer`]'s
+//! channel reuse/steal/refuse search.
+//!
 //! Out of scope for this slice (decoded but not executed): memory
 //! accumulator (`MEMACC`), the remaining `XCMD` sub-commands (tone
-//! overrides, wave swap, portamento wait), priority-based voice stealing.
+//! overrides, wave swap, portamento wait).
 
 use crate::cgb_voice::{CgbChannelNumber, CgbVoice};
 use crate::pitch::{self, SAMPLES_PER_FRAME};
@@ -100,6 +105,11 @@ struct TrackState {
     /// Active pseudo-echo length (`xIECL`, `track->pseudoEchoLength`); see
     /// [`Self::pseudo_echo_volume`].
     pseudo_echo_length: u8,
+    /// This track's own note priority (`PRIO`, `track->priority`). Added to
+    /// the song header's priority and saturated at `0xFF` to give each new
+    /// note its effective note-on priority (`m4a_1.s:1628`..`:1633`); see
+    /// [`Sequencer::note_priority`].
+    priority: u8,
 }
 
 impl TrackState {
@@ -135,6 +145,13 @@ impl TrackState {
             rep_n: 0,
             pseudo_echo_volume: 0,
             pseudo_echo_length: 0,
+            // Track init zeroes `priority`: `MPlayMain`'s `MPT_FLG_START`
+            // arm clears the whole track struct with `Clear64byte`
+            // (`m4a_1.s:1219`, mirrored by `m4aMPlayImmInit`,
+            // `m4a.c:241`..`:243`) and restores only the handful of non-zero
+            // defaults beside it. Only `PRIO` raises it again, so a song's
+            // header priority alone drives note-on ranking until then.
+            priority: 0,
         }
     }
 }
@@ -403,6 +420,11 @@ impl Sequencer {
                 }
             }
             Event::LfoDelay(delay) => track.lfo_delay = delay,
+            // `ply_prio` stores the operand on the track
+            // (`m4a_1.s:912`..`:917`); it takes effect only for notes
+            // started afterwards, since `ply_note` reads it when it stamps
+            // a channel (`m4a_1.s:1628`..`:1633`).
+            Event::Priority(priority) => track.priority = priority,
             Event::Note {
                 key,
                 velocity,
@@ -410,15 +432,26 @@ impl Sequencer {
             } => {
                 // `ply_note` records the raw command key as `track->key`.
                 track.key = key;
-                // Reload the LFO delay on every note-on; a nonzero delay
-                // also resets the LFO phase and clears any live modulation,
-                // mirroring the inline `clear_modM` call in `ply_note`
-                // (`m4a_1.s:1732`..`:1738`).
-                track.lfo_delay_c = track.lfo_delay;
-                if track.lfo_delay != 0 {
-                    Self::clear_mod_m(track, mixer, track_id);
+                // A successful note with an LFO delay is initialized from the
+                // reset modulation state. Use a temporary view for allocation
+                // so a refused note cannot mutate the real track or its live
+                // voices before acceptance is known.
+                let mut note_track = track.clone();
+                if note_track.lfo_delay != 0 {
+                    note_track.mod_m = 0;
+                    note_track.lfo_speed_c = 0;
                 }
-                Self::note_on(song, track, mixer, track_id, key, velocity, gate);
+                if Self::note_on(song, &note_track, mixer, track_id, key, velocity, gate) {
+                    // Once allocation succeeds, reload the LFO delay. A
+                    // nonzero delay also resets the phase and clears any live
+                    // modulation, mirroring the inline `clear_modM` call in
+                    // `ply_note` (`m4a_1.s:1732`..`:1738`). Refused notes
+                    // return before this block and leave that state untouched.
+                    track.lfo_delay_c = track.lfo_delay;
+                    if track.lfo_delay != 0 {
+                        Self::clear_mod_m(track, mixer, track_id);
+                    }
+                }
             }
             Event::EndOfTie { key } => {
                 // With an operand, `ply_endtie` stores it as the new `track->key`
@@ -578,12 +611,12 @@ impl Sequencer {
         key: u8,
         velocity: u8,
         gate: u8,
-    ) {
+    ) -> bool {
         let Some(instrument) = song.voice(track.voice) else {
-            return;
+            return false;
         };
         let Some((instrument, pitch_key, rhythm_pan)) = resolve_instrument(instrument, key) else {
-            return;
+            return false;
         };
 
         let (vol_mr, vol_ml) = track_volume(track);
@@ -602,6 +635,7 @@ impl Sequencer {
         let gate = u16::from(gate);
         let echo_volume = track.pseudo_echo_volume;
         let echo_length = track.pseudo_echo_length;
+        let priority = Self::note_priority(song, track);
 
         match instrument {
             Instrument::DirectSound(tone) => {
@@ -623,55 +657,56 @@ impl Sequencer {
                 )
                 .with_pitch_key(pitch_key)
                 .with_rhythm_pan(rhythm_pan)
-                .fixed_rate(tone.is_fixed_rate());
-                mixer.add_voice(voice);
+                .fixed_rate(tone.is_fixed_rate())
+                .with_priority(priority);
+                // A refused note simply never sounds -- upstream's `ply_note`
+                // returns without touching any channel (`m4a_1.s:1806`).
+                mixer.add_voice(voice)
             }
-            Instrument::CgbSquare1(sq) => {
-                mixer.add_cgb_voice(
-                    CgbVoice::square_with_fixed_rate(
-                        CgbChannelNumber::Square1,
-                        sq.duty,
-                        Some(sq.sweep),
-                        sq.adsr,
-                        sq.fixed_rate,
-                        note_key,
-                        pit_m,
-                        vol_mr,
-                        vol_ml,
-                        velocity,
-                        gate,
-                        key,
-                        track_id,
-                        rhythm_pan,
-                        echo_volume,
-                        echo_length,
-                    )
-                    .with_pitch_key(pitch_key),
-                );
-            }
-            Instrument::CgbSquare2(sq) => {
-                mixer.add_cgb_voice(
-                    CgbVoice::square_with_fixed_rate(
-                        CgbChannelNumber::Square2,
-                        sq.duty,
-                        None,
-                        sq.adsr,
-                        sq.fixed_rate,
-                        note_key,
-                        pit_m,
-                        vol_mr,
-                        vol_ml,
-                        velocity,
-                        gate,
-                        key,
-                        track_id,
-                        rhythm_pan,
-                        echo_volume,
-                        echo_length,
-                    )
-                    .with_pitch_key(pitch_key),
-                );
-            }
+            Instrument::CgbSquare1(sq) => mixer.add_cgb_voice(
+                CgbVoice::square_with_fixed_rate(
+                    CgbChannelNumber::Square1,
+                    sq.duty,
+                    Some(sq.sweep),
+                    sq.adsr,
+                    sq.fixed_rate,
+                    note_key,
+                    pit_m,
+                    vol_mr,
+                    vol_ml,
+                    velocity,
+                    gate,
+                    key,
+                    track_id,
+                    rhythm_pan,
+                    echo_volume,
+                    echo_length,
+                )
+                .with_pitch_key(pitch_key)
+                .with_priority(priority),
+            ),
+            Instrument::CgbSquare2(sq) => mixer.add_cgb_voice(
+                CgbVoice::square_with_fixed_rate(
+                    CgbChannelNumber::Square2,
+                    sq.duty,
+                    None,
+                    sq.adsr,
+                    sq.fixed_rate,
+                    note_key,
+                    pit_m,
+                    vol_mr,
+                    vol_ml,
+                    velocity,
+                    gate,
+                    key,
+                    track_id,
+                    rhythm_pan,
+                    echo_volume,
+                    echo_length,
+                )
+                .with_pitch_key(pitch_key)
+                .with_priority(priority),
+            ),
             Instrument::CgbWave(w) => {
                 let samples = WaveChannel::decode_wave_ram(&w.table);
                 mixer.add_cgb_voice(
@@ -691,35 +726,45 @@ impl Sequencer {
                         echo_volume,
                         echo_length,
                     )
-                    .with_pitch_key(pitch_key),
-                );
+                    .with_pitch_key(pitch_key)
+                    .with_priority(priority),
+                )
             }
-            Instrument::CgbNoise(n) => {
-                mixer.add_cgb_voice(
-                    CgbVoice::noise(
-                        n.adsr,
-                        note_key,
-                        n.lfsr_width_selector,
-                        vol_mr,
-                        vol_ml,
-                        velocity,
-                        gate,
-                        key,
-                        track_id,
-                        rhythm_pan,
-                        echo_volume,
-                        echo_length,
-                    )
-                    .with_pitch_key(pitch_key),
-                );
-            }
+            Instrument::CgbNoise(n) => mixer.add_cgb_voice(
+                CgbVoice::noise(
+                    n.adsr,
+                    note_key,
+                    n.lfsr_width_selector,
+                    vol_mr,
+                    vol_ml,
+                    velocity,
+                    gate,
+                    key,
+                    track_id,
+                    rhythm_pan,
+                    echo_volume,
+                    echo_length,
+                )
+                .with_pitch_key(pitch_key)
+                .with_priority(priority),
+            ),
             // `resolve_instrument` never returns an indirection as the leaf:
             // a KeySplit/Rhythm slot whose own resolved child is itself an
             // indirection is treated as "no note", exactly as upstream's
             // `ply_note` aborts on nested indirection (`m4a_1.s:1604`..
             // `:1609`) rather than recursing.
-            Instrument::KeySplit(_) | Instrument::Rhythm(_) => {}
+            Instrument::KeySplit(_) | Instrument::Rhythm(_) => false,
         }
+    }
+
+    /// A new note's effective priority: the song header's priority
+    /// (`MusicPlayerInfo::priority`) plus the sounding track's own `PRIO`,
+    /// saturated rather than wrapped at `0xFF` (`m4a_1.s:1628`..`:1633` --
+    /// upstream adds in a wide register and clamps the sum before storing
+    /// the byte). [`crate::mixer::Mixer`]'s channel search ranks note-ons by
+    /// this value.
+    fn note_priority(song: &Song, track: &TrackState) -> u8 {
+        song.priority().saturating_add(track.priority)
     }
 }
 
@@ -869,6 +914,17 @@ mod tests {
         let wave = Arc::new(WaveData::one_shot(freq, vec![100; SAMPLES_PER_FRAME * 4]));
         let voices = vec![Instrument::DirectSound(ToneData::new(wave, Adsr::flat()))];
         Song::new(voices, tracks, tempo)
+    }
+
+    fn apply_test_event(seq: &mut Sequencer, track_id: usize, event: &Event) {
+        let Sequencer {
+            song,
+            tracks,
+            mixer,
+            tempo_i,
+            ..
+        } = seq;
+        Sequencer::handle_event(song, &mut tracks[track_id], mixer, track_id, tempo_i, event);
     }
 
     #[test]
@@ -1479,6 +1535,232 @@ mod tests {
                 "frequency must not move during the LFO delay"
             );
         }
+    }
+
+    #[test]
+    fn refused_cgb_note_does_not_reset_track_modulation() {
+        let instruments = vec![
+            direct_sound(100),
+            Instrument::CgbSquare1(SquareTone {
+                duty: 2,
+                sweep: 0,
+                adsr: CgbAdsr::flat(),
+                fixed_rate: false,
+            }),
+        ];
+        let song = Song::new(instruments, vec![vec![], vec![]], 150);
+        let mut seq = Sequencer::with_config(song, DEFAULT_MASTER_VOLUME, 2);
+
+        // Track 0 occupies square 1 at a priority track 1 cannot displace.
+        seq.tracks[0].voice = 1;
+        seq.tracks[0].priority = 10;
+        apply_test_event(
+            &mut seq,
+            0,
+            &Event::Note {
+                key: 50,
+                velocity: 127,
+                gate: 0,
+            },
+        );
+
+        // Give track 1 a live DirectSound voice whose gain exposes any
+        // spurious amplitude-modulation reset caused by the refused note.
+        seq.tracks[1].voice = 0;
+        seq.tracks[1].mod_type = 1;
+        seq.tracks[1].mod_m = 64;
+        apply_test_event(
+            &mut seq,
+            1,
+            &Event::Note {
+                key: 60,
+                velocity: 127,
+                gate: 0,
+            },
+        );
+        let modulated_volume = seq.mixer.voices()[0].base_volume();
+
+        seq.tracks[1].voice = 1;
+        seq.tracks[1].lfo_delay = 7;
+        seq.tracks[1].lfo_delay_c = 3;
+        seq.tracks[1].lfo_speed_c = 91;
+        apply_test_event(
+            &mut seq,
+            1,
+            &Event::Note {
+                key: 70,
+                velocity: 127,
+                gate: 0,
+            },
+        );
+
+        assert_eq!(seq.tracks[1].key, 70, "the raw track key still updates");
+        assert_eq!(seq.tracks[1].lfo_delay_c, 3);
+        assert_eq!(seq.tracks[1].lfo_speed_c, 91);
+        assert_eq!(seq.tracks[1].mod_m, 64);
+        assert_eq!(seq.mixer.voices()[0].base_volume(), modulated_volume);
+        let square1 = seq.mixer.cgb_voices()[CgbChannelNumber::Square1.slot()]
+            .as_ref()
+            .expect("the original square-1 occupant must remain");
+        assert_eq!(square1.track(), 0);
+        assert_eq!(square1.midi_key(), 50);
+
+        // An accepted note retains the established note-on reset behaviour.
+        seq.tracks[1].priority = 20;
+        apply_test_event(
+            &mut seq,
+            1,
+            &Event::Note {
+                key: 70,
+                velocity: 127,
+                gate: 0,
+            },
+        );
+        assert_eq!(seq.tracks[1].lfo_delay_c, 7);
+        assert_eq!(seq.tracks[1].lfo_speed_c, 0);
+        assert_eq!(seq.tracks[1].mod_m, 0);
+        let square1 = seq.mixer.cgb_voices()[CgbChannelNumber::Square1.slot()]
+            .as_ref()
+            .expect("the higher-priority note must replace square 1");
+        assert_eq!(square1.track(), 1);
+        assert_eq!(square1.midi_key(), 70);
+    }
+
+    #[test]
+    fn accepted_cgb_sweep_note_uses_reset_pitch_modulation() {
+        let instruments = vec![Instrument::CgbSquare1(SquareTone {
+            duty: 2,
+            sweep: 0x11, // period 1, add, shift 1
+            adsr: CgbAdsr::flat(),
+            fixed_rate: false,
+        })];
+        let song = Song::new(instruments, vec![vec![]], 150);
+        let mut seq = Sequencer::new(song);
+
+        seq.tracks[0].mod_type = 0;
+        seq.tracks[0].mod_m = 127;
+        seq.tracks[0].lfo_delay = 7;
+        seq.tracks[0].lfo_speed_c = 91;
+        apply_test_event(
+            &mut seq,
+            0,
+            &Event::Note {
+                key: 48,
+                velocity: 127,
+                gate: 0,
+            },
+        );
+
+        assert_eq!(seq.tracks[0].lfo_delay_c, 7);
+        assert_eq!(seq.tracks[0].lfo_speed_c, 0);
+        assert_eq!(seq.tracks[0].mod_m, 0);
+        let square1 = seq.mixer.cgb_voices()[CgbChannelNumber::Square1.slot()]
+            .as_ref()
+            .expect("the accepted square-1 note must occupy its channel");
+        assert!(
+            square1.is_active(),
+            "the sweep must initialize from reset pitch modulation, without trigger overflow"
+        );
+    }
+
+    #[test]
+    fn refused_direct_sound_note_does_not_reset_track_modulation() {
+        let song = Song::new(vec![direct_sound(100)], vec![vec![], vec![]], 150);
+        let mut seq = Sequencer::with_config(song, DEFAULT_MASTER_VOLUME, 2);
+
+        // Start a pitch-modulated track-1 voice, then fill the other pool
+        // slot with another priority-10 voice.
+        seq.tracks[1].priority = 10;
+        seq.tracks[1].mod_m = 32;
+        apply_test_event(
+            &mut seq,
+            1,
+            &Event::Note {
+                key: 60,
+                velocity: 127,
+                gate: 0,
+            },
+        );
+        seq.tracks[0].priority = 10;
+        apply_test_event(
+            &mut seq,
+            0,
+            &Event::Note {
+                key: 50,
+                velocity: 127,
+                gate: 0,
+            },
+        );
+        let modulated_frequency = seq
+            .mixer
+            .voices()
+            .into_iter()
+            .find(|voice| voice.track() == 1)
+            .expect("track 1 must own its original voice")
+            .frequency();
+        let occupants: Vec<_> = seq
+            .mixer
+            .voices()
+            .into_iter()
+            .map(|voice| (voice.track(), voice.midi_key()))
+            .collect();
+
+        seq.tracks[1].priority = 0;
+        seq.tracks[1].lfo_delay = 7;
+        seq.tracks[1].lfo_delay_c = 3;
+        seq.tracks[1].lfo_speed_c = 91;
+        apply_test_event(
+            &mut seq,
+            1,
+            &Event::Note {
+                key: 70,
+                velocity: 127,
+                gate: 0,
+            },
+        );
+
+        assert_eq!(seq.tracks[1].key, 70, "the raw track key still updates");
+        assert_eq!(seq.tracks[1].lfo_delay_c, 3);
+        assert_eq!(seq.tracks[1].lfo_speed_c, 91);
+        assert_eq!(seq.tracks[1].mod_m, 32);
+        let voices = seq.mixer.voices();
+        assert_eq!(
+            voices
+                .iter()
+                .find(|voice| voice.track() == 1)
+                .expect("the original track-1 voice must remain")
+                .frequency(),
+            modulated_frequency
+        );
+        assert_eq!(
+            voices
+                .iter()
+                .map(|voice| (voice.track(), voice.midi_key()))
+                .collect::<Vec<_>>(),
+            occupants,
+            "a refused note must not replace either pool occupant"
+        );
+
+        // Raising the incoming priority makes allocation succeed and keeps
+        // the accepted-note LFO reset covered for DirectSound too.
+        seq.tracks[1].priority = 20;
+        apply_test_event(
+            &mut seq,
+            1,
+            &Event::Note {
+                key: 70,
+                velocity: 127,
+                gate: 0,
+            },
+        );
+        assert_eq!(seq.tracks[1].lfo_delay_c, 7);
+        assert_eq!(seq.tracks[1].lfo_speed_c, 0);
+        assert_eq!(seq.tracks[1].mod_m, 0);
+        assert!(seq
+            .mixer
+            .voices()
+            .iter()
+            .any(|voice| voice.track() == 1 && voice.midi_key() == 70));
     }
 
     #[test]
@@ -2416,5 +2698,110 @@ mod tests {
         // differently -- proving `VOICE 127` reads slot 127's own explicit
         // entry, not some other (adjacent, wrapped, or default) slot.
         assert_ne!(render(10), render(120));
+    }
+
+    /// The priority a note-on stamps on its channel after one leading
+    /// `PRIO` operand, for a song of header priority `song_priority`.
+    fn stamped_priority(song_priority: u8, prio: u8) -> u8 {
+        let track = vec![
+            Event::Voice(0),
+            Event::Priority(prio),
+            Event::Note {
+                key: 60,
+                velocity: 127,
+                gate: 8,
+            },
+            Event::Wait(48),
+            Event::Fine,
+        ];
+        let song = test_song(vec![track], 150).with_priority(song_priority);
+        let mut seq = Sequencer::new(song);
+        let mut out = vec![0.0; Sequencer::FRAME_SAMPLES];
+        seq.render_frame(&mut out);
+        seq.mixer.voices()[0].priority()
+    }
+
+    #[test]
+    fn note_priority_adds_the_song_and_track_halves() {
+        // `ply_note` sums `MusicPlayerInfo::priority` and the track's own
+        // `PRIO` (`m4a_1.s:1628`..`:1631`); either half alone still reaches
+        // the channel, so neither can quietly be dropped.
+        assert_eq!(stamped_priority(0, 0), 0);
+        assert_eq!(stamped_priority(30, 0), 30);
+        assert_eq!(stamped_priority(0, 40), 40);
+        assert_eq!(stamped_priority(30, 40), 70);
+    }
+
+    #[test]
+    fn note_priority_saturates_instead_of_wrapping() {
+        // The sum is clamped, not truncated (`m4a_1.s:1632`..`:1633`): the
+        // byte-wrapped answers would be 44 and 0, both far *below* the
+        // unsaturated halves rather than above them.
+        assert_eq!(stamped_priority(200, 100), 255);
+        assert_eq!(stamped_priority(255, 1), 255);
+        assert_eq!(stamped_priority(255, 255), 255);
+    }
+
+    #[test]
+    fn a_prio_command_only_affects_later_notes() {
+        // `ply_prio` just stores the operand; a channel keeps whatever
+        // priority it was stamped with at its own note-on.
+        let track = vec![
+            Event::Voice(0),
+            Event::Note {
+                key: 60,
+                velocity: 127,
+                gate: 8,
+            },
+            Event::Priority(90),
+            Event::Note {
+                key: 64,
+                velocity: 127,
+                gate: 8,
+            },
+            Event::Wait(48),
+            Event::Fine,
+        ];
+        let mut seq = Sequencer::new(test_song(vec![track], 150).with_priority(5));
+        let mut out = vec![0.0; Sequencer::FRAME_SAMPLES];
+        seq.render_frame(&mut out);
+        let stamped: Vec<(u8, u8)> = seq
+            .mixer
+            .voices()
+            .iter()
+            .map(|voice| (voice.midi_key(), voice.priority()))
+            .collect();
+        assert_eq!(stamped, vec![(60, 5), (64, 95)]);
+    }
+
+    #[test]
+    fn a_low_priority_track_loses_its_note_when_the_pool_is_full() {
+        // End to end: five tracks fill the default five-channel pool at
+        // priority 100, so a sixth track's `PRIO 1` note finds every channel
+        // outranking it and is refused (`m4a_1.s:1716`..`:1718`).
+        let loud = |prio: u8| {
+            vec![
+                Event::Voice(0),
+                Event::Priority(prio),
+                Event::Note {
+                    key: 60,
+                    velocity: 127,
+                    gate: 8,
+                },
+                Event::Wait(48),
+                Event::Fine,
+            ]
+        };
+        let mut tracks: Vec<Vec<Event>> = (0..5).map(|_| loud(100)).collect();
+        tracks.push(loud(1));
+        let mut seq = Sequencer::new(test_song(tracks, 150));
+        let mut out = vec![0.0; Sequencer::FRAME_SAMPLES];
+        seq.render_frame(&mut out);
+
+        assert_eq!(seq.voice_count(), DEFAULT_MAX_VOICES);
+        assert!(
+            seq.mixer.voices().iter().all(|voice| voice.track() < 5),
+            "the sixth track's weaker note must never have started"
+        );
     }
 }

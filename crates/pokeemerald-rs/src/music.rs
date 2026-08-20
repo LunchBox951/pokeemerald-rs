@@ -49,8 +49,8 @@
 //! `assets::audio::voicegroup`'s module docs), and none of the CGB leaf
 //! kinds ([`audio::song::SquareTone`]/[`audio::song::WaveTone`]/
 //! [`audio::song::NoiseTone`]) carry a hardware sound-length counter --
-//! `crate::audio`'s own module docs already list "SFX priority/interruption"
-//! adjacent gaps as this slice's scope boundary. This module drops
+//! `crate::audio`'s own module docs already list the adjacent cross-song SFX
+//! priority/interruption gap as this slice's scope boundary. This module drops
 //! [`assets::DirectSoundVoice::pan`] outside a rhythm child, and every CGB
 //! [`length`](assets::Square1Voice::length) field, rather than inventing a
 //! new engine capability inside an audio-*playback* slice.
@@ -184,7 +184,11 @@ pub fn load_song_from_pack(pack: &AssetPack, name: &str) -> Result<audio::Song, 
         .iter()
         .map(|track| track.iter().map(convert_event).collect())
         .collect();
-    let song = audio::Song::new(voices, tracks, INITIAL_TEMPO_SEED);
+    // `SongHeader::priority` is the base term of every note's effective
+    // note-on priority (`m4a_1.s:1628`..`:1633`), so it has to reach the
+    // runtime song rather than stopping at the pack schema.
+    let song =
+        audio::Song::new(voices, tracks, INITIAL_TEMPO_SEED).with_priority(packed.priority());
     Ok(match packed.reverb() {
         Some(level) => song.with_reverb(level),
         None => song,

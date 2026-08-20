@@ -353,6 +353,52 @@ impl OamEntry {
         self.mosaic
     }
 
+    /// The footprint-local vertical offset for scanline `y` (`0..160`), or
+    /// `None` if this entry's on-screen box does not reach `y` at all.
+    ///
+    /// GBA OBJ Y-space is 8-bit, but hardware does not clip each scanline
+    /// against the box modulo 256 — it places the box *once*, as a single
+    /// contiguous band, pulling a box whose bottom would pass row 256 up to
+    /// a negative origin instead (module docs; mgba's OAM-clean rule: `y =
+    /// objY; if (y + height > 256) { y -= 256; }`, then a scanline is
+    /// covered iff `y0 <= y < y0 + height`, `common.c` / `video-software.c`).
+    ///
+    /// The single source of truth for "does this sprite reach scanline y":
+    /// [`SpriteLayer::footprint`](crate::sprite::SpriteLayer::footprint)
+    /// uses the offset itself to index into the sprite; the OAM admission
+    /// stage ([`crate::oam_budget`], S-2 issue #329) only needs whether this
+    /// is `Some` (see [`covers_scanline`](Self::covers_scanline)), since a
+    /// vertically off-scanline entry is skipped without its own processing
+    /// cost but still charges the flat per-entry traversal cost.
+    #[must_use]
+    #[expect(
+        clippy::cast_possible_truncation,
+        clippy::cast_possible_wrap,
+        clippy::cast_sign_loss,
+        reason = "bounding-box height is at most 128, scanlines are 0..160, and dy is checked nonnegative before conversion"
+    )]
+    pub(crate) fn vertical_offset(self, y: usize) -> Option<usize> {
+        let (_, height) = self.bounding_box();
+        let mut y0 = i32::from(self.y);
+        if y0 + height as i32 > Self::Y_SPACE {
+            y0 -= Self::Y_SPACE;
+        }
+        let dy = y as i32 - y0;
+        if dy < 0 || dy as usize >= height {
+            None
+        } else {
+            Some(dy as usize)
+        }
+    }
+
+    /// Whether this entry's on-screen footprint reaches scanline `y`
+    /// (`0..160`) at all — [`vertical_offset`](Self::vertical_offset)
+    /// discarding the offset itself.
+    #[must_use]
+    pub(crate) fn covers_scanline(self, y: usize) -> bool {
+        self.vertical_offset(y).is_some()
+    }
+
     /// This sprite's on-screen bounding box `(width, height)`: equal to
     /// [`dimensions`](Self::dimensions) for [`AffineMode::Regular`]/
     /// [`AffineMode::Affine`], or doubled for
