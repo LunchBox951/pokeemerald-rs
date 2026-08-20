@@ -810,6 +810,35 @@ fn a_grid_mark_past_u32_max_is_an_error_not_a_hang() {
     );
 }
 
+/// The mark walk must be arithmetic, not iterative: a valid `1/64` time
+/// signature makes the grid period `1`, so an event near `u32::MAX` ticks
+/// (legal VLQ deltas, division 24) would otherwise advance the mark
+/// billions of times before reaching the event or the overflow report.
+/// This input must fail closed immediately — wall-clock, not eventually.
+#[test]
+fn a_unit_grid_period_reaches_a_distant_event_without_iterating() {
+    let mut body = Vec::new();
+    body.extend(vlq(0));
+    body.extend([0xFF, 0x58, 0x04, 0x01, 0x06, 0x18, 0x08]); // 1/64: period 1
+    body.extend(vlq(0));
+    body.extend([0x90, 60, 100]);
+    body.extend(vlq(0x0F));
+    body.extend([0x80, 60, 0]);
+    for _ in 0..16 {
+        // 0x0F + 16 * 0x0FFF_FFFF == u32::MAX (text metas carry the deltas).
+        body.extend(vlq(0x0FFF_FFFF));
+        body.extend([0xFF, 0x01, 0x00]);
+    }
+    body.extend(vlq(0));
+    body.extend([0xB0, 7, 100]); // an item at u32::MAX, 2^32 marks away
+    let midi = single_track_midi(24, body);
+
+    assert_eq!(
+        compile(&midi, &cfg()).unwrap_err(),
+        MidiError::TickOverflow(u32::MAX)
+    );
+}
+
 #[test]
 fn malformed_tempo_and_velocity_are_errors_at_the_compile_boundary() {
     let zero_tempo = single_track_midi(

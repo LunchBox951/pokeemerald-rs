@@ -579,13 +579,18 @@ fn emit_track(
             // kinds that sort after `TimeSignature`, including) this item's
             // time. Consuming through ties for the earlier-sorting kinds
             // too is harmless: only the marks' positions matter here, never
-            // their interleaving with zero-gap neighbours. Checked: a
-            // saturated mark at `u32::MAX` can never exceed a `u32::MAX`
-            // item time, so saturating here looped forever; a track long
-            // enough to overflow (~2 years of ticks) fails closed instead.
-            while next_mark <= *time {
-                next_mark = next_mark
-                    .checked_add(grid_period)
+            // their interleaving with zero-gap neighbours. Advanced
+            // arithmetically, not one period at a time: a `1/64` signature
+            // makes the period `1`, and a legal-VLQ event near `u32::MAX`
+            // would otherwise walk billions of iterations. Checked: a mark
+            // that cannot exceed a `u32::MAX` item time fails closed (a
+            // track that long is ~2 years of ticks) instead of saturating,
+            // which previously looped forever.
+            if next_mark <= *time {
+                let periods = (*time - next_mark) / grid_period + 1;
+                next_mark = periods
+                    .checked_mul(grid_period)
+                    .and_then(|step| next_mark.checked_add(step))
                     .ok_or(MidiError::TickOverflow(*time))?;
             }
         }
