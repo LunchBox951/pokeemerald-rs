@@ -39,7 +39,7 @@ use crate::flag_move::{resolve_flag_move, FlagMoveOutcome};
 use crate::hit::{damage_before_roll, HitOutcome};
 use crate::multi_hit::{resolve_multi_hit, spend_multi_hit_effect_chance_draw};
 
-use super::{Battle, BattleEvent};
+use super::{Battle, BattleEvent, BattleOutcome};
 
 impl Battle {
     /// `BattleScript_EffectAbsorb` (`data/battle_scripts_1.s:322`-`:360`):
@@ -116,12 +116,62 @@ impl Battle {
             }
         }
 
-        // `tryfaintmon BS_ATTACKER` first (`:358`) -- a Liquid Ooze target
-        // can kill the attacker, and upstream faints it before the target it
-        // just drained. `settle_faint` is a no-op once the battle has an
-        // outcome, so the second call cannot end the same battle twice.
-        self.settle_faint(attacker_is_player, events)?;
-        self.settle_faint(!attacker_is_player, events)?;
+        // `tryfaintmon BS_ATTACKER` then `tryfaintmon BS_TARGET`, in that
+        // script order (`:358`-`:359`). Neither call decides
+        // `gBattleOutcome` on its own -- upstream doesn't score the battle
+        // until `Cmd_checkteamslost` runs later, from
+        // `BattleScript_HandleFaintedMon`'s leading `checkteamslost`
+        // (`data/battle_scripts_1.s:2831`, reached via
+        // `HandleFaintedMonActions`, `battle_util.c:1945`) -- so both
+        // `tryfaintmon`s, and both `Fainted` events, fire regardless of
+        // which faint (if either) ends up mattering for the outcome.
+        //
+        // `checkteamslost` computes the two verdicts independently and ORs
+        // them together (`battle_script_commands.c:3560`-`:3573`): a
+        // player-side total of 0 HP sets `B_OUTCOME_LOST`, an opponent-side
+        // total of 0 HP sets `B_OUTCOME_WON`. This engine's last (only) mon
+        // on each side going down in the same instant -- Liquid Ooze
+        // recoil finishing the attacker while the direct hit already
+        // finished the target -- sets both at once, i.e. `B_OUTCOME_DREW`.
+        // But `B_OUTCOME_DREW` is dispatched through the exact same
+        // `HandleEndTurn_BattleLost` handler as an outright loss
+        // (`battle_main.c:557`-`:559`), never the win path, and
+        // `BattleScript_HandleFaintedMon` skips the EXP/switch-in
+        // continuation whenever `gBattleOutcome != 0`
+        // (`data/battle_scripts_1.s:2832`) -- so a simultaneous double
+        // faint is functionally a loss upstream, complete with no
+        // experience award, whichever side happens to be the attacker.
+        // The player's own faint therefore always takes priority over any
+        // simultaneous enemy faint when this crate decides the outcome.
+        let (attacker_fainted, target_fainted) = {
+            let (attacker, defender) = self.battlers(attacker_is_player);
+            (attacker.is_fainted(), defender.is_fainted())
+        };
+        if attacker_fainted {
+            events.push(BattleEvent::Fainted {
+                by_player: attacker_is_player,
+            });
+        }
+        if target_fainted {
+            events.push(BattleEvent::Fainted {
+                by_player: !attacker_is_player,
+            });
+        }
+        let player_fainted = if attacker_is_player {
+            attacker_fainted
+        } else {
+            target_fainted
+        };
+        let enemy_fainted = if attacker_is_player {
+            target_fainted
+        } else {
+            attacker_fainted
+        };
+        if player_fainted {
+            self.finish(events, BattleOutcome::PlayerLost);
+        } else if enemy_fainted {
+            self.settle_win_reward(events)?;
+        }
         Ok(())
     }
 

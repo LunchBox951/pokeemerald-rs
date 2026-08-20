@@ -195,8 +195,18 @@ fn liquid_ooze_turns_the_drain_into_damage_on_the_attacker() {
 
 /// `tryfaintmon BS_ATTACKER` comes **before** `tryfaintmon BS_TARGET`
 /// (`data/battle_scripts_1.s:358`-`:359`), so an attacker its own Liquid
-/// Ooze victim killed faints first — and the battle ends in defeat even
-/// though the target was also knocked out by the same move.
+/// Ooze victim killed faints first in the event stream — but **both**
+/// `tryfaintmon`s still run: upstream doesn't decide `gBattleOutcome`
+/// until `Cmd_checkteamslost` runs later, from
+/// `BattleScript_HandleFaintedMon`'s leading `checkteamslost`
+/// (`data/battle_scripts_1.s:2831`), by which point both faints already
+/// happened. This engine's last mon on each side going down together
+/// means upstream's `checkteamslost` ORs in both `B_OUTCOME_WON` and
+/// `B_OUTCOME_LOST` (`battle_script_commands.c:3560`-`:3573`) — but
+/// `B_OUTCOME_DREW` is dispatched through the exact same
+/// `HandleEndTurn_BattleLost` handler as an outright loss
+/// (`battle_main.c:557`-`:559`), never the win path, so the target's
+/// faint is still reported even though the outcome is an ordinary defeat.
 #[test]
 fn a_liquid_ooze_kill_faints_the_attacker_before_the_target() {
     let dex = Dex::new();
@@ -227,12 +237,81 @@ fn a_liquid_ooze_kill_faints_the_attacker_before_the_target() {
                 damage: 6,
             },
             BattleEvent::Fainted { by_player: true },
+            BattleEvent::Fainted { by_player: false },
             BattleEvent::Ended(BattleOutcome::PlayerLost),
         ],
-        "the attacker's faint is settled first, and it ends the battle"
+        "both tryfaintmons run and report -- the attacker's faint is \
+         settled first in the event stream, but the target's still shows \
+         up, and a simultaneous double faint resolves as a defeat, not a \
+         win, no matter which side is the attacker"
     );
     assert_eq!(battle.player().current_hp(), 0);
     assert_eq!(battle.enemy().current_hp(), 0, "the target died too");
+}
+
+/// The mirror of the test above with the roles swapped: the *enemy* is the
+/// one draining a Liquid-Ooze player, so the enemy is `BS_ATTACKER` and the
+/// player is `BS_TARGET`. A simultaneous double faint here must still
+/// resolve as `PlayerLost`, not `PlayerWon` -- upstream's `checkteamslost`
+/// scores the player's own total HP independently of who was attacking
+/// (`battle_script_commands.c:3560`-`:3573`), and `B_OUTCOME_DREW` runs
+/// through the loss handler regardless of which side dealt the finishing
+/// blow (`battle_main.c:557`-`:559`). An engine that let the enemy's faint
+/// win the race here would hand the player a victory (and an EXP award)
+/// for a battle upstream scores as a loss.
+#[test]
+fn a_liquid_ooze_kill_by_the_enemy_still_resolves_as_a_loss() {
+    let dex = Dex::new();
+    // The roles are swapped from the test above: the *enemy* Bulbasaur is
+    // `BS_ATTACKER` this time, so it is the one left on less HP than the
+    // ooze recoil will take, and the player's Tentacool -- holding Liquid
+    // Ooze in ability slot 1 -- is `BS_TARGET`, at its natural full HP
+    // exactly as the target was in the test above.
+    let player = mon_with_personality(&dex, TENTACOOL, 5, 1, vec![TACKLE]);
+    let mut enemy = max_iv_mon(&dex, BULBASAUR, 50, vec![ABSORB]);
+    let enemy_max_hp = enemy.stats().max_hp;
+    enemy.apply_damage(enemy_max_hp - 6);
+
+    // Bulbasaur (enemy, level 50) outruns Tentacool (player, level 5), so
+    // the enemy's Absorb resolves first -- `Order::DefenderFirst`, exactly
+    // mirroring the test above's `Order::AttackerFirst`. The player's
+    // chosen Tackle never runs: the battle is already over by the time
+    // its slot in turn order comes up. Draws: battle start, turn number,
+    // enemy pick (Absorb, its only move), then Absorb's ordinary 4
+    // (accuracy, crit, damage roll, effect chance) -- identical to the
+    // test above's script, since the arithmetic only depends on which
+    // *species* is attacking, not which struct field holds it.
+    let mut rng = SequenceRng::new([0, 0, 0, 0, 1, 0]);
+    let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
+    let events = battle
+        .take_turn(PlayerAction::UseMove(0), &mut rng)
+        .unwrap();
+
+    assert_eq!(
+        events,
+        [
+            BattleEvent::Hit {
+                by_player: false,
+                move_id: ABSORB,
+                damage: 20,
+                is_critical: false,
+            },
+            BattleEvent::LiquidOoze {
+                by_player: false,
+                move_id: ABSORB,
+                damage: 6,
+            },
+            BattleEvent::Fainted { by_player: false },
+            BattleEvent::Fainted { by_player: true },
+            BattleEvent::Ended(BattleOutcome::PlayerLost),
+        ],
+        "the enemy (the attacker here) faints first in the event stream, \
+         but the outcome is still PlayerLost, not PlayerWon -- a \
+         simultaneous double faint is a defeat no matter which side \
+         dealt the finishing blow"
+    );
+    assert_eq!(battle.player().current_hp(), 0);
+    assert_eq!(battle.enemy().current_hp(), 0);
 }
 
 /// Overgrow through a whole turn: the same Absorb from the same battler
@@ -638,4 +717,82 @@ fn charge_doubles_the_next_turns_electric_move_and_then_expires() {
          multiplier scales both equally: {boosted} vs {plain}"
     );
     assert_eq!(rng.draws(), script.len(), "Charge itself draws nothing");
+}
+
+/// A failed run still burns the turn -- and upstream still runs
+/// `DoBattlerEndTurnEffects` for it (`src/battle_main.c:3961`-`:3968`,
+/// gated only on `gBattleOutcome == 0`, which a merely-failed escape never
+/// sets). Charge's timer has to tick down on that turn exactly as it would
+/// on any other, closing the doubling window on schedule even though the
+/// player spent the turn trying to flee instead of attacking. Regression
+/// test for a failed-run path that returned before
+/// [`Battle::residual_effects`] and left the timer one tick too high.
+#[test]
+fn a_failed_run_still_ticks_the_charge_timer_down() {
+    let dex = Dex::new();
+    // Machop (raw speed 25) is slower than Bulbasaur (raw speed 29), so a
+    // chosen Run takes the RNG branch: speedVar = 25*128/29 = 110, and a
+    // roll of 200 always fails it (110 > 200 is false).
+    let player = max_iv_mon(&dex, MACHOP, 20, vec![CHARGE, SHOCK_WAVE]);
+    let enemy = max_iv_mon(&dex, BULBASAUR, 20, vec![TACKLE]);
+
+    // Bulbasaur is faster, so it acts first in both non-Run turns.
+    // turn 1: turn number, pick, Bulbasaur's Tackle (acc, crit, dmg,
+    //         effect chance), Charge (0 draws).
+    // turn 2: turn number, pick, the escape roll (fails), Bulbasaur's
+    //         Tackle again -- this is the turn the fix must still tick
+    //         Charge's timer down on.
+    // turn 3: turn number, pick, Bulbasaur's Tackle, Shock Wave (crit,
+    //         dmg, effect chance -- EFFECT_ALWAYS_HIT skips accuracy).
+    let script = [
+        0, // battle start
+        0, 0, 0, 1, 0, 0, // turn 1
+        0, 0, 200, 0, 1, 0, 0, // turn 2
+        0, 0, 0, 1, 0, 0, 1, 0, 0, // turn 3
+    ];
+    let mut rng = SequenceRng::new(script);
+    let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
+
+    let turn1 = battle
+        .take_turn(PlayerAction::UseMove(0), &mut rng)
+        .unwrap();
+    assert_eq!(
+        turn1[1],
+        BattleEvent::ChargingPower {
+            by_player: true,
+            move_id: CHARGE,
+        }
+    );
+
+    let turn2 = battle.take_turn(PlayerAction::Run, &mut rng).unwrap();
+    assert_eq!(
+        turn2[0],
+        BattleEvent::RunAttempt {
+            by_player: true,
+            success: false,
+        },
+        "the escape roll must fail for this test to exercise the residual \
+         path at all"
+    );
+
+    let turn3 = battle
+        .take_turn(PlayerAction::UseMove(1), &mut rng)
+        .unwrap();
+    let shock_wave_damage = match turn3[1] {
+        BattleEvent::Hit {
+            by_player: true,
+            damage,
+            ..
+        } => damage,
+        ref other => panic!("expected the player's Shock Wave hit, got {other:?}"),
+    };
+    assert_eq!(
+        shock_wave_damage, 5,
+        "Charge's timer must have ticked down across the failed-run turn \
+         (2 -> 1 on the Charge turn, 1 -> 0 on the failed-run turn), so \
+         this Shock Wave lands plain, not doubled -- an engine that skips \
+         residuals on a failed run leaves the timer at 1 and doubles this \
+         hit to 10"
+    );
+    assert_eq!(rng.draws(), script.len());
 }

@@ -12,20 +12,19 @@
 //! own `(oop-boundaries)`. Getting the count wrong desynchronises every
 //! later roll in the battle, so it is worth one file.
 //!
-//! # The command, transcribed
+//! # The contract
 //!
-//! ```text
-//! percentChance = secondaryEffectChance          (x2 for Serene Grace)
-//! if (MOVE_EFFECT_BYTE & MOVE_EFFECT_CERTAIN            // :2917 -- NO Random()
-//!     && !(gMoveResultFlags & MOVE_RESULT_NO_EFFECT))
-//!     SetMoveEffect(...)
-//! else if (Random() % 100 < percentChance               // :2923 -- ALWAYS drawn
-//!          && gBattleCommunication[MOVE_EFFECT_BYTE]    // :2924
-//!          && !(gMoveResultFlags & MOVE_RESULT_NO_EFFECT))  // :2925
-//!     SetMoveEffect(...)
-//! ```
-//!
-//! Three consequences this module exists to keep straight:
+//! `Cmd_seteffectwithchance` is an `if`/`else if` over two conditions: a
+//! `MOVE_EFFECT_CERTAIN` byte on a hit that had an effect takes the first
+//! branch and applies the move's secondary effect outright, with no
+//! `Random()` call at all (`:2917`); anything else falls to the second
+//! branch, which always spends one `Random() % 100` draw against
+//! `secondaryEffectChance` (doubled under Serene Grace) before checking
+//! whether the move even carries an effect byte or whether the hit did
+//! anything (`:2923`-`:2925`). The draw sits ahead of both of those
+//! checks, not behind them — that ordering, not the branch structure
+//! itself, is what this module exists to keep straight. Three
+//! consequences follow from it:
 //!
 //! 1. **The draw is the *leading* operand of the `else if`.** It happens
 //!    before either of the tests that could suppress it, so a plain

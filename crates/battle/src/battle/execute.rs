@@ -201,6 +201,24 @@ impl Battle {
             self.finish(events, BattleOutcome::PlayerLost);
             return Ok(());
         }
+        self.settle_win_reward(events)
+    }
+
+    /// The half of `tryfaintmon`'s aftermath that only ever applies to the
+    /// enemy going down: experience for the player, then the battle outcome
+    /// where the battle type ends there. Split out of [`Self::settle_faint`]
+    /// (issue #333) so [`Self::execute_drain_move`]'s Liquid-Ooze double
+    /// faint can run it *after* deciding the player didn't also go down,
+    /// instead of duplicating it.
+    ///
+    /// # Errors
+    ///
+    /// [`BattleError::UnknownSpecies`] if the fainted opponent's species is
+    /// missing from the dex, which the experience award has to look up.
+    pub(super) fn settle_win_reward(
+        &mut self,
+        events: &mut Vec<BattleEvent>,
+    ) -> Result<(), BattleError> {
         // A MAX_LEVEL recipient gains nothing and gets no "gained EXP"
         // message: Cmd_getexp case 2 zeroes the award and jumps past the
         // string (`battle_script_commands.c:3351`-`:3356`), so no event is

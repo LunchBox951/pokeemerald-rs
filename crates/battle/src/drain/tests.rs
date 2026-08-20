@@ -217,9 +217,9 @@ fn overgrow_boosts_a_low_hp_grass_drain_in_the_damage_path() {
     );
 }
 
-/// A resisted matchup still lands (the multiplier is real, unlike
-/// [`crate::fixed_damage`]'s discarded one) and still costs the same 3
-/// draws. No Grass move has a *type immunity* to reach — Grass is `x0` into
+/// A resisted matchup (a real net multiplier `< 1`, not two type legs that
+/// cancel back to neutral) still lands and still costs the same 3 draws.
+/// No Grass move has a *type immunity* to reach — Grass is `x0` into
 /// nothing — so the immune row of this pipeline's table is unreachable in
 /// practice, and the immunity shape is pinned in `crate::fixed_damage`'s
 /// tests (Normal into Ghost) instead of being faked here.
@@ -227,18 +227,20 @@ fn overgrow_boosts_a_low_hp_grass_drain_in_the_damage_path() {
 fn a_resisted_drain_still_lands_for_the_same_three_draws() {
     let dex = Dex::new();
     let attacker = mon(&dex, 1, 5, vec![ABSORB]);
-    // Tentacool (72) is Water/Poison: Grass is `x2` into Water and `x0.5`
-    // into Poison, so the two cancel to `x1`. Its Sp. Def is 100 base:
-    // `(2*100+31)*5/100 + 5` = `1155/100 = 11`, `+5` = 16.
-    // `13*20 = 260`, `*4 = 1040`, `/16 = 65`, `/50 = 1`, `+2 = 3`;
-    // STAB `3*15/10 = 4`; `x2` then `x0.5` leaves **4**.
-    let resisted = mon(&dex, 72, 5, vec![TACKLE]);
+    // Caterpie (10) is pure Bug, so Grass is a clean `x0.5` with no second
+    // type to cancel it back out (unlike a Water/Poison target, where
+    // Grass's `x2` into Water and `x0.5` into Poison multiply back to
+    // neutral). Its Sp. Def is 20 base: `(2*20+31)*5/100 + 5` = `355/100 =
+    // 3`, `+5` = **8**.
+    // `13*20 = 260`, `*4 = 1040`, `/8 = 130`, `/50 = 2`, `+2 = 4`;
+    // STAB `4*15/10 = 6`; `x0.5` leaves **3**.
+    let resisted = mon(&dex, 10, 5, vec![TACKLE]);
     let mut rng = SequenceRng::new([0, 1, 0]);
     let outcome = resolve_drain_move(&dex, ABSORB, &attacker, &resisted, false, &mut rng).unwrap();
     assert_eq!(
         outcome,
         HitOutcome::Hit {
-            damage: 4,
+            damage: 3,
             is_critical: false
         }
     );

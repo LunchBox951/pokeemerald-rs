@@ -878,8 +878,13 @@ impl Battle {
             // Failed run: the turn is burned, but the wild mon still acts on
             // the action it already selected above. The RunAttempt event
             // above survives a failure here -- `take_turn` returns it either
-            // way.
+            // way. Upstream still runs `DoBattlerEndTurnEffects` for this
+            // turn (`src/battle_main.c:3961`-`:3968`): a failed run does not
+            // skip end-of-turn residuals, so Charge's timer still ticks down
+            // even though the player never attacked.
             self.enemy_acts(enemy_action, rng, events)?;
+            self.residual_effects();
+            self.end_of_turn(events);
             return Ok(());
         };
 

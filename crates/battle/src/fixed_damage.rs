@@ -3,26 +3,20 @@
 //! `BattleScript_EffectSonicboom`, `BattleScript_EffectDragonRage`, and
 //! `BattleScript_EffectLevelDamage` (Seismic Toss, Night Shade).
 //!
-//! All three are the same nine instructions, differing in exactly one
-//! (`pokeemerald/data/battle_scripts_1.s:1720`, `:819`, `:1195`):
-//!
-//! ```text
-//! BattleScript_EffectSonicboom::                   @ :1720
-//!     attackcanceler
-//!     accuracycheck BattleScript_PrintMoveMissed, ACC_CURR_MOVE
-//!     attackstring / ppreduce
-//!     typecalc                                     @ :1725
-//!     bicbyte gMoveResultFlags, MOVE_RESULT_SUPER_EFFECTIVE | MOVE_RESULT_NOT_VERY_EFFECTIVE
-//!     setword gBattleMoveDamage, 20                @ :1727  <- the only difference
-//!     adjustsetdamage
-//!     goto BattleScript_HitFromAtkAnimation
-//! ```
-//!
-//! Dragon Rage's literal is `40` (`:826`); `EFFECT_LEVEL_DAMAGE` replaces
-//! the `setword` with `dmgtolevel` (`:1202`), whose whole body is
-//! `gBattleMoveDamage = gBattleMons[gBattlerAttacker].level`
-//! (`src/battle_script_commands.c:7926`-`:7930`). [`FIXED_DAMAGE_EFFECTS`]
-//! records all three.
+//! All three scripts (`pokeemerald/data/battle_scripts_1.s:1720`, `:819`,
+//! `:1195`) share the same shape and differ in exactly one step: the
+//! ordinary cancel/accuracy/PP bookkeeping opens each one, `typecalc` runs
+//! and is immediately stripped of its super-/not-very-effective flags
+//! (`:1725`-`:1726`) — but not of a type *immunity*, which survives that
+//! clearing — then the move's damage figure is written directly rather
+//! than computed: Sonic Boom stores the literal `20` (`:1727`), Dragon
+//! Rage stores `40` (`:826`), and Seismic Toss/Night Shade
+//! (`EFFECT_LEVEL_DAMAGE`) store the attacker's level instead of a literal,
+//! via `dmgtolevel`'s `gBattleMoveDamage =
+//! gBattleMons[gBattlerAttacker].level` (`src/battle_script_commands.c:7926`-
+//! `:7930`). Each script then runs `adjustsetdamage` and joins the
+//! ordinary hit script's animation tail. [`FIXED_DAMAGE_EFFECTS`] records
+//! all three.
 //!
 //! # Four things these scripts do *not* do
 //!
