@@ -151,12 +151,15 @@ pub enum BattleEvent {
         stat: ChangedStat,
     },
     /// A stat-lowering move connected, but the target's ability blocked the
-    /// drop — Clear Body's guard (`ChangeStatBuffs`,
-    /// `battle_script_commands.c:6987`-`:6989`; issue #322), which runs
+    /// drop — one of `ChangeStatBuffs`' ability guards
+    /// (`battle_script_commands.c:6987`-`:7028`; issue #322), which run
     /// after the accuracy draw and before the at-floor test, so a blocked
     /// drop still costs its one draw. Upstream's
     /// `BattleScript_AbilityNoStatLoss` ("prevents stat loss",
-    /// `data/battle_scripts_1.s:4116`). The stage does not change.
+    /// `data/battle_scripts_1.s:4116`) for Clear Body/White Smoke, or
+    /// `BattleScript_AbilityNoSpecificStatLoss` for Keen Eye/Hyper Cutter —
+    /// a distinction this crate does not surface. The stage does not
+    /// change.
     StatLossPrevented {
         /// Whether the player's mon was the one using the move; the
         /// blocking ability is the *other* mon's.
@@ -165,9 +168,11 @@ pub enum BattleEvent {
         move_id: MoveId,
         /// Which stat the move targeted.
         stat: ChangedStat,
-        /// The blocking ability — always
-        /// [`crate::stat_change::CLEAR_BODY`], the only guard this crate
-        /// reproduces.
+        /// The blocking ability — [`crate::stat_change::CLEAR_BODY`] and
+        /// [`crate::stat_change::WHITE_SMOKE`] (block any stat drop), or
+        /// [`crate::stat_change::KEEN_EYE`] (Accuracy only) and
+        /// [`crate::stat_change::HYPER_CUTTER`] (Attack only) — the four
+        /// guards this crate reproduces.
         ability: AbilityId,
     },
     /// A stat-**raising** move (`BattleScript_EffectStatUp`'s family —

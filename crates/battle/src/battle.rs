@@ -384,12 +384,14 @@ impl Battle {
     /// The *wild* moveset is checked here, before any state exists and
     /// before the first draw: every move the wild mon knows must be one
     /// [`ensure_executable`] accepts — either [`crate::hit::resolve_hit`]'s
-    /// ordinary damaging pipeline or [`crate::stat_change`]'s stat-lowering
-    /// one (Growl/Tail Whip/Leer/String Shot) — because its rejection loop
-    /// picks mid-turn and can land on any slot — discovering an unsupported
-    /// move *then* would mean a turn that has already consumed shared-RNG
-    /// draws failing with no events to show for it. The player's moveset is
-    /// deliberately *not* screened; each chosen slot is validated per turn
+    /// ordinary damaging pipeline or [`crate::stat_change`]'s stat-changing
+    /// one (the whole `BattleScript_EffectStatUp`/`EffectStatDown` family,
+    /// both raising and lowering, widened by issue #322) — because its
+    /// rejection loop picks mid-turn and can land on any slot — discovering
+    /// an unsupported move *then* would mean a turn that has already
+    /// consumed shared-RNG draws failing with no events to show for it. The
+    /// player's moveset is deliberately *not* screened; each chosen slot is
+    /// validated per turn
     /// instead, before any draw, so [`Battle::take_turn`] can still reject a
     /// player pick with [`BattleError::NonDamagingMove`] /
     /// [`BattleError::UnsupportedMoveEffect`].
@@ -405,8 +407,9 @@ impl Battle {
     /// [`BattleError::FaintedBattler`] if either mon is already at `0` HP
     /// (see that variant's docs), or whatever [`ensure_executable`] reports
     /// for the first unsupported move in the **wild mon's** moveset — a
-    /// `0`-power status move outside the three modelled stat-lowering
-    /// effects ([`BattleError::NonDamagingMove`]) or a move whose effect
+    /// `0`-power status move outside the modelled
+    /// `BattleScript_EffectStatUp`/`EffectStatDown` family (raises and
+    /// drops alike, [`BattleError::NonDamagingMove`]) or a move whose effect
     /// runs some other battle script ([`BattleError::UnsupportedMoveEffect`]),
     /// which includes [`crate::damage::STRUGGLE`]: the turn engine never
     /// applies its `EFFECT_RECOIL` half. Only the wild moveset is screened

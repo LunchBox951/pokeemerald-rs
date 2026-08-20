@@ -15,9 +15,10 @@
 //! player mon, both realistic for a first encounter), held items,
 //! non-volatile status conditions, and the Shedinja 1-HP special case in
 //! `CalculateMonStats`. Abilities are out of scope too, with one exception:
-//! [`BattlePokemon::ability`] (issue #322), consumed only by
-//! [`crate::stat_change`]'s Clear Body guard — see that module's docs for
-//! why the ability system stops there.
+//! [`BattlePokemon::ability`] (issue #322), consumed by
+//! [`crate::stat_change`]'s ability guards (Clear Body, White Smoke, Keen
+//! Eye, Hyper Cutter) — see that module's docs for why the ability system
+//! stops there.
 
 use assets::{
     experience_for_level, AbilityId, BaseStats, LevelUpLearnsets, MoveId, SpeciesId, Type,
@@ -263,6 +264,7 @@ pub struct BattlePokemon {
     nature: Nature,
     ivs: Ivs,
     personality: u32,
+    ability_slot: u8,
     original_trainer_id: u32,
     types: [Type; 2],
     base_stats: BaseStats,
@@ -388,6 +390,13 @@ impl BattlePokemon {
             nature,
             ivs,
             personality,
+            // `CreateBoxMon` (`pokeemerald/src/pokemon.c:2296`-`:2300`):
+            // `abilityNum = personality & 1`, stored once at creation time
+            // rather than re-derived on every read — a save round trip (the
+            // `pokeemerald-rs` crate's `party` module, which owns the
+            // `battle`/`engine::save` boundary) can hand back a slot that
+            // disagrees with this default, via [`Self::with_ability_slot`].
+            ability_slot: u8::from(personality & 1 != 0),
             original_trainer_id: 0,
             types: base.types,
             base_stats: *base,
@@ -439,22 +448,54 @@ impl BattlePokemon {
         self.personality
     }
 
-    /// This mon's ability, derived exactly as upstream derives it:
-    /// `CreateBoxMon` stores `abilityNum = personality & 1` only for a
-    /// species whose ability slot 1 is non-`ABILITY_NONE`
-    /// (`pokeemerald/src/pokemon.c:2296`-`:2300`; a single-ability species
-    /// leaves the field `0`), and `GetAbilityBySpecies` indexes the species
-    /// table with it (`:4546`-`:4554`). Consumed only by
-    /// [`crate::stat_change`]'s Clear Body guard (issue #322) — see this
-    /// type's module docs for why the rest of the ability system stays out.
+    /// This mon's ability, derived exactly as upstream's
+    /// `GetAbilityBySpecies` does: index the species' two-slot ability
+    /// table with [`BattlePokemon::ability_slot`]
+    /// (`pokeemerald/src/pokemon.c:4546`-`:4554`), falling back to slot 0
+    /// for a single-ability species regardless of the stored slot bit — a
+    /// slot-1 species whose slot 1 is `ABILITY_NONE` cannot exist in real
+    /// data, but `GetAbilityBySpecies` guards it anyway (`:4548`-`:4552`),
+    /// so this does too. Consumed by [`crate::stat_change`]'s ability
+    /// guards (issue #322: Clear Body, White Smoke, Keen Eye, Hyper
+    /// Cutter) — see this type's module docs for why the rest of the
+    /// ability system stays out.
     #[must_use]
     pub const fn ability(&self) -> AbilityId {
         let [first, second] = self.base_stats.abilities;
-        if second.0 == 0 || self.personality & 1 == 0 {
+        if second.0 == 0 || self.ability_slot == 0 {
             first
         } else {
             second
         }
+    }
+
+    /// The raw `abilityNum` bit (`0` or `1`) [`BattlePokemon::ability`]
+    /// indexes with — `0` or `1`, never anything else
+    /// ([`BattlePokemon::with_ability_slot`] masks it).
+    ///
+    /// Defaults to `personality & 1` at construction
+    /// (`CreateBoxMon`, `pokeemerald/src/pokemon.c:2296`-`:2300`) and is
+    /// otherwise immutable — the boundary that restores a saved mon
+    /// (`pokeemerald-rs`'s `party` module) is the one caller expected to
+    /// override it, via [`BattlePokemon::with_ability_slot`], with the bit
+    /// the save itself stored rather than one re-derived from personality.
+    #[must_use]
+    pub const fn ability_slot(&self) -> u8 {
+        self.ability_slot
+    }
+
+    /// Overwrite the stored ability slot — the boundary a save/load round
+    /// trip uses to restore upstream's `abilityNum` bit exactly as stored,
+    /// rather than leaving it at [`BattlePokemon::new`]'s personality-parity
+    /// default (which is only *this constructor's* choice for a freshly
+    /// built mon, not a re-derivation upstream itself performs on load —
+    /// `LoadPlayerParty` is a struct copy, not a `CreateBoxMon` call).
+    /// Masked to its single bit, so this can never desync
+    /// [`BattlePokemon::ability`] onto an out-of-range slot.
+    #[must_use]
+    pub const fn with_ability_slot(mut self, ability_slot: u8) -> Self {
+        self.ability_slot = ability_slot & 1;
+        self
     }
 
     /// The trainer id of the Pokémon's original trainer.

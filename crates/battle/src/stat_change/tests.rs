@@ -1,11 +1,12 @@
 //! [`crate::stat_change`]'s own unit tests: the transcribed thunk table, the
-//! two tails' differing draw counts, the cap/floor outcomes, and Clear
-//! Body's refusal (issue #322).
+//! two tails' differing draw counts, the cap/floor outcomes, and the
+//! Clear Body/White Smoke/Keen Eye/Hyper Cutter ability guards (issue #322).
 
 use super::{
     ensure_resolvable, is_stat_change_effect, resolve_stat_change_move, stat_change_for_effect,
-    ChangedStat, StatChangeDirection, StatChangeOutcome, CLEAR_BODY, EFFECT_ATTACK_DOWN,
-    EFFECT_DEFENSE_DOWN, STAT_CHANGE_EFFECTS, WHITE_SMOKE,
+    ChangedStat, StatChangeDirection, StatChangeEffect, StatChangeMagnitude, StatChangeOutcome,
+    CLEAR_BODY, EFFECT_ATTACK_DOWN, EFFECT_DEFENSE_DOWN, HYPER_CUTTER, KEEN_EYE,
+    STAT_CHANGE_EFFECTS, WHITE_SMOKE,
 };
 use crate::damage::BattleRng;
 use crate::dex::Dex;
@@ -71,6 +72,16 @@ const TACKLE: MoveId = MoveId(33);
 /// [`crate::pokemon::BattlePokemon::ability`]'s tests).
 const TENTACOOL: u16 = 72;
 
+/// `SPECIES_SKARMORY` (`227`): slot-0 Keen Eye, slot-1 Sturdy
+/// (`gSpeciesInfo`), naturally obtainable (this crate's own
+/// wild-encounter tables carry it).
+const SKARMORY: u16 = 227;
+
+/// `SPECIES_CORPHISH` (`326`): slot-0 Hyper Cutter, slot-1 Shell Armor
+/// (`gSpeciesInfo`), naturally obtainable (this crate's own
+/// wild-encounter tables carry it).
+const CORPHISH: u16 = 326;
+
 #[test]
 fn the_table_covers_the_named_effects_and_nothing_outside_it() {
     assert!(is_stat_change_effect(EFFECT_ATTACK_DOWN));
@@ -118,10 +129,8 @@ fn every_transcribed_row_agrees_with_the_real_move_table() {
         };
         seen += 1;
         assert_eq!(mv.power, 0, "move {move_id}: stat-change moves are 0-power");
-        assert!(
-            change.magnitude == 1 || change.magnitude == 2,
-            "move {move_id}: no upstream thunk uses another magnitude"
-        );
+        // No runtime check needed for the magnitude itself: `StatChangeMagnitude`
+        // (issue #322 follow-up) makes `1`/`2` the only representable values.
         match change.direction {
             StatChangeDirection::Raise => {
                 assert_eq!(
@@ -524,4 +533,126 @@ fn a_non_clear_body_holders_drop_is_unaffected() {
     let mut rng = SequenceRng::new([0]);
     let outcome = resolve_stat_change_move(&dex, GROWL, &attacker, &defender, &mut rng).unwrap();
     assert!(matches!(outcome, StatChangeOutcome::Applied { .. }));
+}
+
+/// Keen Eye's guard (issue #322): a Skarmory defender's Accuracy drop is
+/// blocked after the accuracy draw, and the stage does not move —
+/// `ChangeStatBuffs`' `ABILITY_KEEN_EYE && statId == STAT_ACC` branch
+/// (`battle_script_commands.c:7003`-`:7015`).
+#[test]
+fn a_keen_eye_holders_accuracy_drop_is_blocked() {
+    let dex = Dex::new();
+    let attacker = mon(&dex, 288, 15, vec![SAND_ATTACK]);
+    let defender = mon(&dex, SKARMORY, 15, vec![TACKLE]);
+    assert_eq!(
+        defender.ability(),
+        KEEN_EYE,
+        "fixture sanity: personality 0 selects slot 0, Keen Eye"
+    );
+
+    let mut rng = SequenceRng::new([0]);
+    let outcome =
+        resolve_stat_change_move(&dex, SAND_ATTACK, &attacker, &defender, &mut rng).unwrap();
+    assert_eq!(
+        outcome,
+        StatChangeOutcome::AbilityProtected {
+            change: stat_change_for_effect(dex.move_data(SAND_ATTACK).unwrap().effect).unwrap(),
+            ability: KEEN_EYE,
+        }
+    );
+    assert_eq!(
+        rng.draws(),
+        1,
+        "a blocked drop still costs its one accuracy draw"
+    );
+}
+
+/// Keen Eye's guard is narrow, unlike Clear Body/White Smoke's: it only
+/// covers Accuracy (`statId == STAT_ACC`), so the same Skarmory still loses
+/// Attack to Growl.
+#[test]
+fn a_keen_eye_holders_other_stats_still_drop() {
+    let dex = Dex::new();
+    let attacker = mon(&dex, 288, 15, vec![GROWL]);
+    let defender = mon(&dex, SKARMORY, 15, vec![TACKLE]);
+
+    let mut rng = SequenceRng::new([0]);
+    let outcome = resolve_stat_change_move(&dex, GROWL, &attacker, &defender, &mut rng).unwrap();
+    assert!(
+        matches!(outcome, StatChangeOutcome::Applied { .. }),
+        "Keen Eye must not guard a non-Accuracy stat: {outcome:?}"
+    );
+}
+
+/// Hyper Cutter's guard (issue #322): a Corphish defender's Attack drop is
+/// blocked after the accuracy draw, and the stage does not move —
+/// `ChangeStatBuffs`' `ABILITY_HYPER_CUTTER && statId == STAT_ATK` branch
+/// (`battle_script_commands.c:7016`-`:7028`).
+#[test]
+fn a_hyper_cutter_holders_attack_drop_is_blocked() {
+    let dex = Dex::new();
+    let attacker = mon(&dex, 288, 15, vec![GROWL]);
+    let defender = mon(&dex, CORPHISH, 15, vec![TACKLE]);
+    assert_eq!(
+        defender.ability(),
+        HYPER_CUTTER,
+        "fixture sanity: personality 0 selects slot 0, Hyper Cutter"
+    );
+
+    let mut rng = SequenceRng::new([0]);
+    let outcome = resolve_stat_change_move(&dex, GROWL, &attacker, &defender, &mut rng).unwrap();
+    assert_eq!(
+        outcome,
+        StatChangeOutcome::AbilityProtected {
+            change: stat_change_for_effect(dex.move_data(GROWL).unwrap().effect).unwrap(),
+            ability: HYPER_CUTTER,
+        }
+    );
+    assert_eq!(
+        rng.draws(),
+        1,
+        "a blocked drop still costs its one accuracy draw"
+    );
+}
+
+/// Hyper Cutter's guard is narrow too: it only covers Attack
+/// (`statId == STAT_ATK`), so the same Corphish still loses Defense to Leer.
+#[test]
+fn a_hyper_cutter_holders_other_stats_still_drop() {
+    let dex = Dex::new();
+    let attacker = mon(&dex, 288, 15, vec![LEER]);
+    let defender = mon(&dex, CORPHISH, 15, vec![TACKLE]);
+
+    let mut rng = SequenceRng::new([0]);
+    let outcome = resolve_stat_change_move(&dex, LEER, &attacker, &defender, &mut rng).unwrap();
+    assert!(
+        matches!(outcome, StatChangeOutcome::Applied { .. }),
+        "Hyper Cutter must not guard a non-Attack stat: {outcome:?}"
+    );
+}
+
+/// [`StatChangeMagnitude`]'s whole purpose (issue #322 follow-up): `get`
+/// names exactly the two upstream `stages` values, and `delta` applies
+/// direction's sign to both without any cast -- the invariant a bare `u8`
+/// field left the caller to trust is now enforced by the type itself, so
+/// there is no magnitude this test could hand `delta` that would panic or
+/// silently produce the wrong sign.
+#[test]
+fn stat_change_magnitude_names_exactly_the_two_upstream_values() {
+    assert_eq!(StatChangeMagnitude::One.get(), 1);
+    assert_eq!(StatChangeMagnitude::Two.get(), 2);
+
+    let raise_two = StatChangeEffect {
+        stat: ChangedStat::Attack,
+        magnitude: StatChangeMagnitude::Two,
+        direction: StatChangeDirection::Raise,
+    };
+    assert_eq!(raise_two.delta(), 2);
+
+    let lower_two = StatChangeEffect {
+        stat: ChangedStat::Attack,
+        magnitude: StatChangeMagnitude::Two,
+        direction: StatChangeDirection::Lower,
+    };
+    assert_eq!(lower_two.delta(), -2);
 }

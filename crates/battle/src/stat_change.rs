@@ -52,19 +52,31 @@
 //! script's `MOVE_EFFECT_AFFECTS_USER` flag is what actually decides whose
 //! `statStages` `ChangeStatBuffs` writes.
 //!
-//! # Clear Body (issue #322)
+//! # Ability immunity to stat drops (issue #322)
 //!
 //! `ChangeStatBuffs`' ability-immunity block (`battle_script_commands.c:
-//! 6987`-`:7038`) guards the *lowering* path only. It has four branches —
-//! `(CLEAR_BODY || WHITE_SMOKE)` in one condition (`:6987`-`:6989`), then
-//! Keen Eye, Hyper Cutter, Shield Dust — and only the first is modelled
-//! here, both of its abilities — see "What this module deliberately does
-//! not model" below for the other three. [`resolve_stat_change_move`]
-//! runs the guard on the defender after the accuracy draw, before the
-//! at-floor test (upstream's exact position), and it never draws: a blocked
-//! drop still costs its one accuracy draw, nothing more. A holder's own
-//! stat rise is never guarded — the raising path has no immunity checks at
-//! all upstream either.
+//! 6987`-`:7038`) guards the *lowering* path only. It has four branches, in
+//! this order: `(CLEAR_BODY || WHITE_SMOKE)` in one condition
+//! (`:6987`-`:6989`), then `KEEN_EYE` gated on `statId == STAT_ACC`
+//! (`:7003`-`:7015`), then `HYPER_CUTTER` gated on `statId == STAT_ATK`
+//! (`:7016`-`:7028`), then Shield Dust (`:7029`-`:7032`). This module
+//! reproduces the first three, in upstream's order — see "What this module
+//! deliberately does not model" below for why Shield Dust alone is left
+//! out. [`resolve_stat_change_move`] runs the guards on the defender after
+//! the accuracy draw, before the at-floor test (upstream's exact position),
+//! and none of them ever draw: a blocked drop still costs its one accuracy
+//! draw, nothing more. A holder's own stat rise is never guarded — the
+//! raising path has no immunity checks at all upstream either.
+//!
+//! [`CLEAR_BODY`]/[`WHITE_SMOKE`] block *every* stat drop; [`KEEN_EYE`]
+//! blocks only an Accuracy drop and [`HYPER_CUTTER`] blocks only an Attack
+//! drop — both share upstream's `BattleScript_AbilityNoSpecificStatLoss`
+//! ("won't go any lower" phrased as the ability's own doing) rather than
+//! Clear Body/White Smoke's `BattleScript_AbilityNoStatLoss`, a distinction
+//! this module does not surface (both report
+//! [`StatChangeOutcome::AbilityProtected`] with the blocking ability id;
+//! see [`crate::battle::BattleEvent::StatLossPrevented`]) because this crate
+//! renders no battle-script text.
 //!
 //! # What this module deliberately does not model
 //!
@@ -72,17 +84,18 @@
 //! `ChangeStatBuffs`'s own Protect gate (`JumpIfMoveAffectedByProtect(0)` at
 //! `pokeemerald/src/battle_script_commands.c:6981`-`:6986` — a *second*
 //! Protect check, distinct from `Cmd_accuracycheck`'s), its Mist-timer
-//! branch (`:6960`-`:6979`), and the three ability branches past the first
-//! (Keen Eye, Hyper Cutter, Shield Dust — `:7003`-`:7038`) are real
-//! upstream branches this module skips outright rather than reproducing as
-//! dead code: this slice tracks no Substitute status, no Protect, no Mist
-//! side-timer, and no ability beyond [`CLEAR_BODY`]/[`WHITE_SMOKE`] (see
-//! [`crate::pokemon::BattlePokemon::ability`]'s docs), so every one of those
-//! guards is always false for a battle this crate can construct. If
-//! Protect, Mist, or another stat-drop-blocking ability is ever modelled,
-//! [`resolve_stat_change_move`] must gain the corresponding branch *in
-//! upstream's order* (Mist and Protect both run *before* the ability
-//! guards) *and* the RNG draw table above must be re-derived (none of those
+//! branch (`:6960`-`:6979`), and the Shield Dust branch
+//! (`ABILITY_SHIELD_DUST && flags == 0`, `:7029`-`:7032`) are real upstream
+//! branches this module skips outright rather than reproducing as dead
+//! code: this slice tracks no Substitute status, no Protect, no Mist
+//! side-timer, and no Shield Dust holder (see
+//! [`crate::pokemon::BattlePokemon::ability`]'s docs for the full ability
+//! list this crate can construct), so every one of those guards is always
+//! false for a battle this crate can construct. If Protect, Mist, or Shield
+//! Dust is ever modelled, [`resolve_stat_change_move`] must gain the
+//! corresponding branch *in upstream's order* (Mist and Protect both run
+//! *before* the ability guards; Shield Dust runs *after* Keen Eye/Hyper
+//! Cutter) *and* the RNG draw table above must be re-derived (none of those
 //! branches draw, but the caller-visible outcome would need to change from
 //! "stage changes" to "blocked").
 //!
@@ -152,6 +165,19 @@ pub const CLEAR_BODY: AbilityId = AbilityId(29);
 /// only White Smoke species, is what makes the arm reachable.
 pub const WHITE_SMOKE: AbilityId = AbilityId(73);
 
+/// `ABILITY_KEEN_EYE` (`pokeemerald/include/constants/abilities.h:55`):
+/// blocks only an Accuracy drop (`statId == STAT_ACC`,
+/// `battle_script_commands.c:7003`-`:7015`) — narrower than
+/// [`CLEAR_BODY`]/[`WHITE_SMOKE`]'s every-stat guard, so its branch is a
+/// separate `if` in [`resolve_stat_change_move`] rather than folded into
+/// theirs.
+pub const KEEN_EYE: AbilityId = AbilityId(51);
+
+/// `ABILITY_HYPER_CUTTER` (`:56`): blocks only an Attack drop
+/// (`statId == STAT_ATK`, `:7016`-`:7028`) — [`KEEN_EYE`]'s mirror for
+/// Attack instead of Accuracy.
+pub const HYPER_CUTTER: AbilityId = AbilityId(52);
+
 /// Which of a battler's seven [`crate::pokemon::StatStages`] a
 /// [`StatChangeEffect`] moves.
 ///
@@ -191,15 +217,58 @@ pub enum StatChangeDirection {
     Lower,
 }
 
+/// The `stages` argument a `setstatchanger` thunk names — `1` or `2`; no
+/// upstream thunk uses any other magnitude (`STAT_CHANGE_EFFECTS`' own
+/// docs).
+///
+/// A closed enum rather than a bare `u8` (issue #322 follow-up): the field
+/// used to carry an unchecked `u8`, and [`StatChangeEffect::delta`] cast it
+/// to `i8` to apply direction's sign — a cast that silently produces the
+/// wrong stage for any magnitude above `2` (`255 as i8 == -1`) and can
+/// overflow the later negation in debug (`128 as i8` is already `i8::MIN`).
+/// Naming the two real magnitudes as variants makes the invalid ones
+/// unrepresentable instead of merely undocumented, so `delta` needs no cast
+/// and no bounds check at all.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum StatChangeMagnitude {
+    /// `stages = 1` — every thunk but the `_2`-suffixed ones.
+    One,
+    /// `stages = 2` — the `_UP_2`/`_DOWN_2` thunks (Swords Dance, Screech,
+    /// Amnesia, …), upstream's `STRINGID_STATHARSHLY`/`STRINGID_STATSHARPLY`
+    /// message prefix (`ChangeStatBuffs`, `battle_script_commands.c:
+    /// 7044`-`:7050` / `:7067`-`:7073`).
+    Two,
+}
+
+impl StatChangeMagnitude {
+    /// The upstream `stages` value this names — `1` or `2`.
+    #[must_use]
+    pub const fn get(self) -> u8 {
+        match self {
+            Self::One => 1,
+            Self::Two => 2,
+        }
+    }
+
+    /// [`StatChangeMagnitude::get`] widened to `i8`, unsigned — the
+    /// magnitude before [`StatChangeEffect::delta`] re-applies direction's
+    /// sign. Never wraps: both variants fit `i8` trivially.
+    const fn magnitude_i8(self) -> i8 {
+        match self {
+            Self::One => 1,
+            Self::Two => 2,
+        }
+    }
+}
+
 /// One transcribed `setstatchanger` thunk: what a member effect changes, by
 /// how much, and in which direction.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct StatChangeEffect {
     /// The `STAT_*` the thunk names.
     pub stat: ChangedStat,
-    /// The `stages` argument — `1` or `2`; no upstream thunk uses any other
-    /// magnitude.
-    pub magnitude: u8,
+    /// The `stages` argument.
+    pub magnitude: StatChangeMagnitude,
     /// Which shared tail the thunk jumps into.
     pub direction: StatChangeDirection,
 }
@@ -208,16 +277,13 @@ impl StatChangeEffect {
     /// The signed stage delta [`StatStage::saturating_add`] is handed, i.e.
     /// `GET_STAT_BUFF_VALUE`'s magnitude with `STAT_BUFF_NEGATIVE`'s sign
     /// re-applied (`ChangeStatBuffs`, `battle_script_commands.c:7040` for the
-    /// negation and `:7063` for the plain case).
+    /// negation and `:7063` for the plain case). Infallible: unlike the
+    /// bare-`u8` field this replaced, [`StatChangeMagnitude`] cannot name an
+    /// out-of-range magnitude, so there is no cast and nothing left to
+    /// panic or silently wrap.
     #[must_use]
     pub const fn delta(self) -> i8 {
-        // `magnitude` is 1 or 2 by construction (every row below), so the
-        // cast and the negation are both exact.
-        #[expect(
-            clippy::cast_possible_wrap,
-            reason = "magnitude is always 1 or 2 by construction (STAT_CHANGE_EFFECTS), so this never wraps"
-        )]
-        let magnitude = self.magnitude as i8;
+        let magnitude = self.magnitude.magnitude_i8();
         match self.direction {
             StatChangeDirection::Raise => magnitude,
             StatChangeDirection::Lower => -magnitude,
@@ -247,7 +313,7 @@ impl StatChangeEffect {
 }
 
 /// Shorthand for a [`STAT_CHANGE_EFFECTS`] row.
-const fn up(stat: ChangedStat, magnitude: u8) -> StatChangeEffect {
+const fn up(stat: ChangedStat, magnitude: StatChangeMagnitude) -> StatChangeEffect {
     StatChangeEffect {
         stat,
         magnitude,
@@ -256,7 +322,7 @@ const fn up(stat: ChangedStat, magnitude: u8) -> StatChangeEffect {
 }
 
 /// Shorthand for a [`STAT_CHANGE_EFFECTS`] row.
-const fn down(stat: ChangedStat, magnitude: u8) -> StatChangeEffect {
+const fn down(stat: ChangedStat, magnitude: StatChangeMagnitude) -> StatChangeEffect {
     StatChangeEffect {
         stat,
         magnitude,
@@ -279,24 +345,78 @@ const fn down(stat: ChangedStat, magnitude: u8) -> StatChangeEffect {
 /// [`crate::hit`]'s allow-list instead. Their *names* promise a stat change
 /// the Gen-3 table never wires up, and no move carries any of them anyway.
 pub const STAT_CHANGE_EFFECTS: [(MoveEffect, StatChangeEffect); 18] = [
-    (MoveEffect(10), up(ChangedStat::Attack, 1)), // ATTACK_UP           :475
-    (MoveEffect(11), up(ChangedStat::Defense, 1)), // DEFENSE_UP         :479
-    (MoveEffect(13), up(ChangedStat::SpAttack, 1)), // SPECIAL_ATTACK_UP :483
-    (MoveEffect(16), up(ChangedStat::Evasion, 1)), // EVASION_UP         :487
-    (MoveEffect(18), down(ChangedStat::Attack, 1)), // ATTACK_DOWN       :516
-    (MoveEffect(19), down(ChangedStat::Defense, 1)), // DEFENSE_DOWN     :520
-    (MoveEffect(20), down(ChangedStat::Speed, 1)), // SPEED_DOWN         :524
-    (MoveEffect(23), down(ChangedStat::Accuracy, 1)), // ACCURACY_DOWN   :528
-    (MoveEffect(24), down(ChangedStat::Evasion, 1)), // EVASION_DOWN     :532
-    (MoveEffect(50), up(ChangedStat::Attack, 2)), // ATTACK_UP_2         :927
-    (MoveEffect(51), up(ChangedStat::Defense, 2)), // DEFENSE_UP_2       :931
-    (MoveEffect(52), up(ChangedStat::Speed, 2)),  // SPEED_UP_2          :935
-    (MoveEffect(53), up(ChangedStat::SpAttack, 2)), // SPECIAL_ATTACK_UP_2  :939
-    (MoveEffect(54), up(ChangedStat::SpDefense, 2)), // SPECIAL_DEFENSE_UP_2 :943
-    (MoveEffect(58), down(ChangedStat::Attack, 2)), // ATTACK_DOWN_2     :958
-    (MoveEffect(59), down(ChangedStat::Defense, 2)), // DEFENSE_DOWN_2   :962
-    (MoveEffect(60), down(ChangedStat::Speed, 2)), // SPEED_DOWN_2       :966
-    (MoveEffect(62), down(ChangedStat::SpDefense, 2)), // SPECIAL_DEFENSE_DOWN_2 :970
+    (
+        MoveEffect(10),
+        up(ChangedStat::Attack, StatChangeMagnitude::One),
+    ), // ATTACK_UP           :475
+    (
+        MoveEffect(11),
+        up(ChangedStat::Defense, StatChangeMagnitude::One),
+    ), // DEFENSE_UP         :479
+    (
+        MoveEffect(13),
+        up(ChangedStat::SpAttack, StatChangeMagnitude::One),
+    ), // SPECIAL_ATTACK_UP :483
+    (
+        MoveEffect(16),
+        up(ChangedStat::Evasion, StatChangeMagnitude::One),
+    ), // EVASION_UP         :487
+    (
+        MoveEffect(18),
+        down(ChangedStat::Attack, StatChangeMagnitude::One),
+    ), // ATTACK_DOWN       :516
+    (
+        MoveEffect(19),
+        down(ChangedStat::Defense, StatChangeMagnitude::One),
+    ), // DEFENSE_DOWN     :520
+    (
+        MoveEffect(20),
+        down(ChangedStat::Speed, StatChangeMagnitude::One),
+    ), // SPEED_DOWN         :524
+    (
+        MoveEffect(23),
+        down(ChangedStat::Accuracy, StatChangeMagnitude::One),
+    ), // ACCURACY_DOWN   :528
+    (
+        MoveEffect(24),
+        down(ChangedStat::Evasion, StatChangeMagnitude::One),
+    ), // EVASION_DOWN     :532
+    (
+        MoveEffect(50),
+        up(ChangedStat::Attack, StatChangeMagnitude::Two),
+    ), // ATTACK_UP_2         :927
+    (
+        MoveEffect(51),
+        up(ChangedStat::Defense, StatChangeMagnitude::Two),
+    ), // DEFENSE_UP_2       :931
+    (
+        MoveEffect(52),
+        up(ChangedStat::Speed, StatChangeMagnitude::Two),
+    ), // SPEED_UP_2          :935
+    (
+        MoveEffect(53),
+        up(ChangedStat::SpAttack, StatChangeMagnitude::Two),
+    ), // SPECIAL_ATTACK_UP_2  :939
+    (
+        MoveEffect(54),
+        up(ChangedStat::SpDefense, StatChangeMagnitude::Two),
+    ), // SPECIAL_DEFENSE_UP_2 :943
+    (
+        MoveEffect(58),
+        down(ChangedStat::Attack, StatChangeMagnitude::Two),
+    ), // ATTACK_DOWN_2     :958
+    (
+        MoveEffect(59),
+        down(ChangedStat::Defense, StatChangeMagnitude::Two),
+    ), // DEFENSE_DOWN_2   :962
+    (
+        MoveEffect(60),
+        down(ChangedStat::Speed, StatChangeMagnitude::Two),
+    ), // SPEED_DOWN_2       :966
+    (
+        MoveEffect(62),
+        down(ChangedStat::SpDefense, StatChangeMagnitude::Two),
+    ), // SPECIAL_DEFENSE_DOWN_2 :970
 ];
 
 /// The [`StatChangeEffect`] `effect` runs, or `None` if it is not one of the
@@ -353,19 +473,23 @@ pub enum StatChangeOutcome {
     /// [`StatChangeDirection::Lower`] — the raising tail has no
     /// `accuracycheck` at all (module docs).
     Miss,
-    /// The target's ability blocked the drop — the shared
-    /// [`CLEAR_BODY`]/[`WHITE_SMOKE`] guard (`ChangeStatBuffs`,
-    /// `battle_script_commands.c:6987`-`:6989`), reached
-    /// only after the accuracy draw and only for
-    /// [`StatChangeDirection::Lower`]. The stage does not move. Upstream
-    /// jumps to `BattleScript_AbilityNoStatLoss`
-    /// (`data/battle_scripts_1.s:4116`), surfaced as
+    /// The target's ability blocked the drop — one of the three guards
+    /// `ChangeStatBuffs` runs in order (`battle_script_commands.c:
+    /// 6987`-`:7028`, module docs): [`CLEAR_BODY`]/[`WHITE_SMOKE`] against
+    /// any stat, [`KEEN_EYE`] against Accuracy only, or [`HYPER_CUTTER`]
+    /// against Attack only. Reached only after the accuracy draw and only
+    /// for [`StatChangeDirection::Lower`]. The stage does not move.
+    /// Upstream jumps to `BattleScript_AbilityNoStatLoss`
+    /// (`data/battle_scripts_1.s:4116`) for the first pair or
+    /// `BattleScript_AbilityNoSpecificStatLoss` for the other two —  a
+    /// distinction this module does not surface — either way, surfaced as
     /// [`crate::battle::BattleEvent::StatLossPrevented`].
     AbilityProtected {
         /// What the move asked for.
         change: StatChangeEffect,
-        /// The blocking ability — [`CLEAR_BODY`] or [`WHITE_SMOKE`], the
-        /// two halves of the one guard this module reproduces.
+        /// The blocking ability — [`CLEAR_BODY`], [`WHITE_SMOKE`],
+        /// [`KEEN_EYE`], or [`HYPER_CUTTER`], the four guards this module
+        /// reproduces.
         ability: AbilityId,
     },
     /// The move connected. `new_stage` is the post-move stage for `stat` on
@@ -455,13 +579,19 @@ pub fn resolve_stat_change_move(
         ) {
             return Ok(StatChangeOutcome::Miss);
         }
-        // `ChangeStatBuffs`' Clear Body/White Smoke guard (the shared
-        // condition at `:6987`-`:6989`) runs next, after the accuracy draw
-        // and before the at-floor test, and never draws. It only ever
-        // guards the target -- the lowering tail is never
-        // `MOVE_EFFECT_AFFECTS_USER` (module docs).
+        // `ChangeStatBuffs`' three ability guards (`:6987`-`:7028`) run
+        // next, in upstream's order, after the accuracy draw and before the
+        // at-floor test, and none of them ever draw. They only ever guard
+        // the target -- the lowering tail is never `MOVE_EFFECT_AFFECTS_USER`
+        // (module docs).
         let ability = defender.ability();
         if ability == CLEAR_BODY || ability == WHITE_SMOKE {
+            return Ok(StatChangeOutcome::AbilityProtected { change, ability });
+        }
+        if ability == KEEN_EYE && change.stat == ChangedStat::Accuracy {
+            return Ok(StatChangeOutcome::AbilityProtected { change, ability });
+        }
+        if ability == HYPER_CUTTER && change.stat == ChangedStat::Attack {
             return Ok(StatChangeOutcome::AbilityProtected { change, ability });
         }
     }

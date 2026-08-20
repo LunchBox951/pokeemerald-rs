@@ -144,7 +144,8 @@ pub use pokemon::{
 };
 pub use stat_change::{
     is_stat_change_effect, stat_change_for_effect, ChangedStat, StatChangeDirection,
-    StatChangeEffect, StatChangeOutcome, CLEAR_BODY,
+    StatChangeEffect, StatChangeMagnitude, StatChangeOutcome, CLEAR_BODY, HYPER_CUTTER, KEEN_EYE,
+    WHITE_SMOKE,
 };
 pub use stat_stage::StatStage;
 pub use wild::{

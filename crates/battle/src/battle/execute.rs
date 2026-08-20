@@ -253,7 +253,7 @@ impl Battle {
                         move_id,
                         stat,
                         new_stage,
-                        magnitude: change.magnitude,
+                        magnitude: change.magnitude.get(),
                     },
                     (StatChangeDirection::Lower, true) => BattleEvent::StatWontGoLower {
                         by_player: attacker_is_player,
@@ -265,7 +265,7 @@ impl Battle {
                         move_id,
                         stat,
                         new_stage,
-                        magnitude: change.magnitude,
+                        magnitude: change.magnitude.get(),
                     },
                     (StatChangeDirection::Raise, true) => BattleEvent::StatWontGoHigher {
                         by_player: attacker_is_player,
