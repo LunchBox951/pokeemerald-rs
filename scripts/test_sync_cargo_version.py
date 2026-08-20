@@ -160,6 +160,45 @@ class TestSyncCargoVersion(unittest.TestCase):
         )
         self.assertEqual(calls[1].args[0], ["cargo", "update", "--workspace"])
 
+    @mock.patch.object(sync_cargo_version, "subprocess")
+    def test_full_resolution_metadata_retries_online_but_no_deps_does_not(
+        self, subprocess_mod
+    ):
+        """Check mode's full-resolution --locked call also needs the retry.
+
+        A cold Cargo home cannot resolve the registry offline even when the
+        committed lock is synchronized, so the --locked verification retries
+        once with registry access (still read-only: --locked forbids
+        writes). The --no-deps manifest parse never resolves, so it stays a
+        single offline attempt.
+        """
+        offline_failure = mock.Mock(
+            returncode=101,
+            stdout="",
+            stderr="no matching package named `softbuffer` found",
+        )
+        online_success = mock.Mock(returncode=0, stdout="", stderr="")
+        subprocess_mod.run.side_effect = [offline_failure, online_success]
+
+        sync_cargo_version.run_cargo_metadata(self.root, locked=True, no_deps=False)
+
+        calls = subprocess_mod.run.call_args_list
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(
+            calls[0].args[0],
+            ["cargo", "metadata", "--format-version", "1", "--offline", "--locked"],
+        )
+        self.assertEqual(
+            calls[1].args[0],
+            ["cargo", "metadata", "--format-version", "1", "--locked"],
+        )
+
+        subprocess_mod.run.reset_mock()
+        subprocess_mod.run.side_effect = [offline_failure]
+        with self.assertRaises(sync_cargo_version.SyncError):
+            sync_cargo_version.run_cargo_metadata(self.root, locked=False)
+        self.assertEqual(subprocess_mod.run.call_count, 1)
+
 
 class TestSyncCargoVersionWithRealCargo(unittest.TestCase):
     """End-to-end regression test using the real ``cargo`` binary.

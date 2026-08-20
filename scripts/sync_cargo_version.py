@@ -40,23 +40,33 @@ def run_cargo_metadata(root: Path, *, locked: bool, no_deps: bool = True) -> Non
             "full-resolution metadata without --locked would write Cargo.lock; "
             "refreshing the lock is refresh_cargo_lock's job"
         )
-    command = ["cargo", "metadata", "--format-version", "1", "--offline"]
+    base = ["cargo", "metadata", "--format-version", "1"]
     if no_deps:
-        command.append("--no-deps")
+        base.append("--no-deps")
     if locked:
-        command.append("--locked")
-    try:
-        result = subprocess.run(
-            command,
-            cwd=root,
-            capture_output=True,
-            text=True,
-        )
-    except (FileNotFoundError, OSError) as exc:
-        raise SyncError(f"cannot run Cargo: {exc}") from exc
-    if result.returncode != 0:
-        detail = result.stderr.strip() or result.stdout.strip()
-        raise SyncError(f"{' '.join(command)} failed: {detail}")
+        base.append("--locked")
+    # Full resolution needs the registry index, which a fresh checkout's
+    # empty Cargo home lacks, so on offline failure retry once with
+    # registry access allowed; ``--locked`` still forbids lockfile writes.
+    # ``--no-deps`` never resolves, so it keeps the single offline attempt.
+    attempts = [base[:4] + ["--offline"] + base[4:]]
+    if not no_deps:
+        attempts.append(base)
+    last_detail = ""
+    for command in attempts:
+        try:
+            result = subprocess.run(
+                command,
+                cwd=root,
+                capture_output=True,
+                text=True,
+            )
+        except (FileNotFoundError, OSError) as exc:
+            raise SyncError(f"cannot run Cargo: {exc}") from exc
+        if result.returncode == 0:
+            return
+        last_detail = result.stderr.strip() or result.stdout.strip()
+    raise SyncError(f"{' '.join(base)} failed: {last_detail}")
 
 
 def refresh_cargo_lock(root: Path) -> None:
