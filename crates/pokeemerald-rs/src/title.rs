@@ -560,6 +560,12 @@ impl TitleScene {
         ];
 
         let entries = sprite_entries(frame);
+        // Left at the default normal 1210-cycle OAM budget (S-2, issue
+        // #329/#334): none of `title_screen.c`'s own
+        // `SetGpuReg(REG_OFFSET_DISPCNT, ...)` calls (`:581`, `:655`,
+        // `:707`, `:753`) sets `DISPCNT_HBLANK_INTERVAL`, unlike the
+        // overworld's (`overworld.c:2122-2123`, see
+        // `crate::overworld::OverworldScene::compose`'s own citation).
         let sprites = SpriteLayer::new(
             &entries,
             &self.sprite_tiles_4bpp,
