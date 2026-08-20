@@ -571,16 +571,22 @@ fn emit_track(
             // pending mark outright (a mark coincident with it is skipped:
             // TimeSignature never sorts before itself in `EventCompare`).
             grid_period = *period;
-            next_mark = time.saturating_add(*period);
+            next_mark = time
+                .checked_add(*period)
+                .ok_or(MidiError::TickOverflow(*time))?;
         } else {
             // midi.cpp:663-667: marks are emitted up to (and, for item
             // kinds that sort after `TimeSignature`, including) this item's
             // time. Consuming through ties for the earlier-sorting kinds
             // too is harmless: only the marks' positions matter here, never
-            // their interleaving with zero-gap neighbours. Saturating: a
-            // track long enough to overflow is ~2 years of ticks.
+            // their interleaving with zero-gap neighbours. Checked: a
+            // saturated mark at `u32::MAX` can never exceed a `u32::MAX`
+            // item time, so saturating here looped forever; a track long
+            // enough to overflow (~2 years of ticks) fails closed instead.
             while next_mark <= *time {
-                next_mark = next_mark.saturating_add(grid_period);
+                next_mark = next_mark
+                    .checked_add(grid_period)
+                    .ok_or(MidiError::TickOverflow(*time))?;
             }
         }
         match kind {

@@ -779,6 +779,37 @@ fn a_tick_that_overflows_once_scaled_is_an_error_not_a_panic() {
     );
 }
 
+/// The timing-grid walk once saturated `next_mark` at `u32::MAX`: a mark
+/// that can never exceed a `u32::MAX` item time left `while next_mark <=
+/// time` spinning forever. Reachable with division 24 (converted time ==
+/// raw tick) and legal VLQ deltas summing to `u32::MAX`, most immediately
+/// via a time-signature event at that tick. The walk now fails closed with
+/// [`MidiError::TickOverflow`] instead of hanging extraction.
+#[test]
+fn a_grid_mark_past_u32_max_is_an_error_not_a_hang() {
+    let mut body = Vec::new();
+    body.extend(vlq(0));
+    body.extend([0x90, 60, 100]); // note-on so the channel emits a track
+    body.extend(vlq(0x0F));
+    body.extend([0x80, 60, 0]); // note-off at tick 0x0F
+    for _ in 0..16 {
+        // 16 maximal four-byte VLQs: 0x0F + 16 * 0x0FFF_FFFF == u32::MAX.
+        // Text metas carry the deltas without emitting items of their own.
+        body.extend(vlq(0x0FFF_FFFF));
+        body.extend([0xFF, 0x01, 0x00]);
+    }
+    body.extend(vlq(0)); // time signature at exactly u32::MAX
+    body.extend([0xFF, 0x58, 0x04, 0x04, 0x02, 0x18, 0x08]);
+    body.extend(vlq(0));
+    body.extend([0xB0, 7, 100]); // an item at u32::MAX after the saturated mark
+    let midi = single_track_midi(24, body);
+
+    assert_eq!(
+        compile(&midi, &cfg()).unwrap_err(),
+        MidiError::TickOverflow(u32::MAX)
+    );
+}
+
 #[test]
 fn malformed_tempo_and_velocity_are_errors_at_the_compile_boundary() {
     let zero_tempo = single_track_midi(
