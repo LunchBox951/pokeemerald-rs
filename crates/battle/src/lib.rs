@@ -102,7 +102,9 @@
 //! overworld transition, held items, non-volatile status conditions,
 //! weather, multi/double battles, Mist/Substitute (see [`stat_change`]'s
 //! module docs for why those two are a documented boundary rather than dead
-//! code), abilities beyond Clear Body (same module, same reason), and
+//! code), abilities beyond the four stat-drop guards — Clear Body, White
+//! Smoke, Keen Eye, Hyper Cutter (same module, same reason; Shield Dust is
+//! the one guard left unmodelled) — and
 //! move-effect breadth beyond the early slice's damaging-move path plus the
 //! widened stat-change family above (other status moves,
 //! multi-hit/recoil/drain, ...).
