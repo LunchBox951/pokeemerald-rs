@@ -157,6 +157,24 @@ impl Battle {
                 by_player: !attacker_is_player,
             });
         }
+        // `cleareffectsonfaint`'s `FaintClearSetData` half resets the
+        // corpse's stat stages before any reward or outcome settles --
+        // `settle_faint` does this for every other pipeline, and this
+        // custom double-faint settlement must match it for each battler
+        // that went down (`battle_script_commands.c:3063`-`:3076`).
+        for (fainted, is_player) in [
+            (attacker_fainted, attacker_is_player),
+            (target_fainted, !attacker_is_player),
+        ] {
+            if fainted {
+                let corpse = if is_player {
+                    &mut self.player
+                } else {
+                    &mut self.enemy
+                };
+                *corpse.stages_mut() = crate::pokemon::StatStages::default();
+            }
+        }
         let player_fainted = if attacker_is_player {
             attacker_fainted
         } else {

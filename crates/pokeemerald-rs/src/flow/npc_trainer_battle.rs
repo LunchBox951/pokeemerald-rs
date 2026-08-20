@@ -111,7 +111,9 @@
 
 use assets::trainers::{TrainerData, TrainerId, TrainerParty};
 use assets::{MoveId, SpeciesNames};
-use battle::{Battle, BattleError, BattleEvent, BattleOutcome, BattlePokemon, Dex, PlayerAction};
+use battle::{
+    Battle, BattleError, BattleEvent, BattleOutcome, BattlePokemon, Dex, PlayerAction, StatStages,
+};
 use engine::rng::Rng;
 
 use super::wild_encounter::SharedRng;
@@ -469,10 +471,10 @@ pub fn advance_npc_trainer_battle(
         return None;
     }
     let mut mon = battle.player().clone();
-    // Stat stages and volatiles are battle scratch, not party data -- see
-    // `BattlePokemon::clear_battle_scratch`'s own doc comment for the
-    // citations.
-    mon.clear_battle_scratch();
+    // Stat stages live in `gBattleMons[].statStages` only and never reach
+    // the party struct -- see `advance_first_battle`'s own doc comment for
+    // the citations.
+    *mon.stages_mut() = StatStages::default();
     *lead = Some(mon);
     *slot = None;
     outcome

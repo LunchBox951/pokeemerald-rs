@@ -14,7 +14,9 @@
 
 use crate::common::{max_iv_mon, SequenceRng, MAX_IVS};
 use assets::{MoveId, SpeciesId};
-use battle::{Battle, BattleEvent, BattleOutcome, BattlePokemon, Dex, PlayerAction};
+use battle::{
+    Battle, BattleEvent, BattleOutcome, BattlePokemon, Dex, PlayerAction, StatStage, StatStages,
+};
 
 /// `MOVE_TACKLE`.
 const TACKLE: MoveId = MoveId(33);
@@ -214,7 +216,11 @@ fn a_liquid_ooze_kill_faints_the_attacker_before_the_target() {
     let player_max_hp = player.stats().max_hp;
     // Leave the attacker on less HP than the 10 the ooze will take.
     player.apply_damage(player_max_hp - 6);
-    let enemy = mon_with_personality(&dex, TENTACOOL, 5, 1, vec![TACKLE]);
+    // A physical-Attack boost no move in this turn reads: it exists only
+    // so the faint-reset assertion below is non-vacuous.
+    player.stages_mut().attack = StatStage::new(2).unwrap();
+    let mut enemy = mon_with_personality(&dex, TENTACOOL, 5, 1, vec![TACKLE]);
+    enemy.stages_mut().attack = StatStage::new(2).unwrap();
 
     let mut rng = SequenceRng::new([0, 0, 0, 0, 1, 0]);
     let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
@@ -247,6 +253,11 @@ fn a_liquid_ooze_kill_faints_the_attacker_before_the_target() {
     );
     assert_eq!(battle.player().current_hp(), 0);
     assert_eq!(battle.enemy().current_hp(), 0, "the target died too");
+    // FaintClearSetData resets each corpse's stat stages before rewards
+    // or outcome settle, and the drain path's custom double-faint
+    // settlement must match settle_faint on that.
+    assert_eq!(battle.player().stages(), StatStages::default());
+    assert_eq!(battle.enemy().stages(), StatStages::default());
 }
 
 /// The mirror of the test above with the roles swapped: the *enemy* is the

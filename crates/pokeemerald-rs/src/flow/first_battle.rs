@@ -105,7 +105,7 @@
 //! `src/battle_setup.c#CB2_StartFirstBattle` ledger entry rather than
 //! papered over.
 
-use battle::{Battle, BattleError, BattleOutcome, BattlePokemon, Dex, PlayerAction};
+use battle::{Battle, BattleError, BattleOutcome, BattlePokemon, Dex, PlayerAction, StatStages};
 use engine::rng::Rng;
 
 use super::wild_encounter::SharedRng;
@@ -215,10 +215,7 @@ pub fn advance_first_battle(
         return None;
     }
     let mut mon = battle.player().clone();
-    // Stat stages and volatiles are battle scratch, not party data -- see
-    // `BattlePokemon::clear_battle_scratch`'s own doc comment for the
-    // citations.
-    mon.clear_battle_scratch();
+    *mon.stages_mut() = StatStages::default();
     *lead = Some(mon);
     *slot = None;
     outcome
