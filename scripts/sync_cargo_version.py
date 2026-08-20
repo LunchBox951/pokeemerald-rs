@@ -62,24 +62,30 @@ def run_cargo_metadata(root: Path, *, locked: bool, no_deps: bool = True) -> Non
 def refresh_cargo_lock(root: Path) -> None:
     """Rewrite ``Cargo.lock`` so it matches the just-written manifest.
 
-    ``cargo update --workspace --offline`` re-resolves only the workspace
-    members' own version entries in the lock against the manifest just
-    written, without touching any third-party dependency version and without
-    reaching the network (``--offline`` forbids registry access).
+    ``cargo update --workspace`` re-resolves only the workspace members' own
+    version entries in the lock against the manifest just written, without
+    touching any third-party dependency version. The first attempt passes
+    ``--offline`` so a populated Cargo home never touches the network; a
+    fresh checkout with an empty Cargo home lacks the registry-index
+    metadata offline resolution needs, so on failure the command retries
+    once with registry access allowed.
     """
-    command = ["cargo", "update", "--workspace", "--offline"]
-    try:
-        result = subprocess.run(
-            command,
-            cwd=root,
-            capture_output=True,
-            text=True,
-        )
-    except (FileNotFoundError, OSError) as exc:
-        raise SyncError(f"cannot run Cargo: {exc}") from exc
-    if result.returncode != 0:
-        detail = result.stderr.strip() or result.stdout.strip()
-        raise SyncError(f"{' '.join(command)} failed: {detail}")
+    base = ["cargo", "update", "--workspace"]
+    last_detail = ""
+    for command in (base + ["--offline"], base):
+        try:
+            result = subprocess.run(
+                command,
+                cwd=root,
+                capture_output=True,
+                text=True,
+            )
+        except (FileNotFoundError, OSError) as exc:
+            raise SyncError(f"cannot run Cargo: {exc}") from exc
+        if result.returncode == 0:
+            return
+        last_detail = result.stderr.strip() or result.stdout.strip()
+    raise SyncError(f"{' '.join(base)} failed: {last_detail}")
 
 
 def sync(root: Path, *, check_only: bool = False) -> str:

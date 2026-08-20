@@ -15,9 +15,6 @@ sys.path.insert(0, str(SCRIPTS_DIR))
 import sync_cargo_version  # noqa: E402
 import version_check  # noqa: E402
 
-CARGO_AVAILABLE = shutil.which("cargo") is not None
-
-
 class TestSyncCargoVersion(unittest.TestCase):
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
@@ -136,8 +133,34 @@ class TestSyncCargoVersion(unittest.TestCase):
             refresh_argv, ["cargo", "update", "--workspace", "--offline"]
         )
 
+    @mock.patch.object(sync_cargo_version, "subprocess")
+    def test_refresh_retries_online_when_offline_resolution_fails(
+        self, subprocess_mod
+    ):
+        """A fresh checkout's empty Cargo home lacks registry-index metadata.
 
-@unittest.skipUnless(CARGO_AVAILABLE, "cargo binary not available")
+        Offline resolution then fails before touching the lock, so the
+        refresh must retry once with registry access allowed instead of
+        failing the whole sync.
+        """
+        offline_failure = mock.Mock(
+            returncode=101,
+            stdout="",
+            stderr="no matching package named `softbuffer` found",
+        )
+        online_success = mock.Mock(returncode=0, stdout="", stderr="")
+        subprocess_mod.run.side_effect = [offline_failure, online_success]
+
+        sync_cargo_version.refresh_cargo_lock(self.root)
+
+        calls = subprocess_mod.run.call_args_list
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(
+            calls[0].args[0], ["cargo", "update", "--workspace", "--offline"]
+        )
+        self.assertEqual(calls[1].args[0], ["cargo", "update", "--workspace"])
+
+
 class TestSyncCargoVersionWithRealCargo(unittest.TestCase):
     """End-to-end regression test using the real ``cargo`` binary.
 
@@ -150,6 +173,11 @@ class TestSyncCargoVersionWithRealCargo(unittest.TestCase):
     """
 
     def setUp(self):
+        # Mandatory, not skipped: without Cargo the stale-lock regression and
+        # the read-only check-mode contract would lose their only end-to-end
+        # coverage (test-ratchet).
+        if shutil.which("cargo") is None:
+            self.fail("cargo binary is required for these regression tests")
         self._tmp = tempfile.TemporaryDirectory()
         self.root = Path(self._tmp.name)
         (self.root / "member" / "src").mkdir(parents=True)
