@@ -391,16 +391,16 @@ impl BattlePokemon {
             ivs,
             personality,
             // `CreateBoxMon` (`pokeemerald/src/pokemon.c:2296`-`:2300`):
-            // `abilityNum = personality & 1`, stored once at creation time
-            // rather than re-derived on every read. Upstream writes it only
-            // when the species has a second ability; here the parity bit is
-            // stored unconditionally and [`Self::ability`]'s slot-0
-            // fallback makes the two agree for single-ability species. A
-            // save round trip (the `pokeemerald-rs` crate's `party` module,
-            // which owns the `battle`/`engine::save` boundary) can hand
-            // back a slot that disagrees with this default, via
-            // [`Self::with_ability_slot`].
-            ability_slot: u8::from(personality & 1 != 0),
+            // `abilityNum = personality & 1`, written only when the species
+            // has a second ability — a one-ability species keeps the bit
+            // clear, and so does this field, keeping the serialized save
+            // bit (`party::to_save_pokemon`'s misc-word bit 31) exactly
+            // what Emerald would have stored. Stored once at creation time
+            // rather than re-derived on every read: a save round trip (the
+            // `pokeemerald-rs` crate's `party` module, which owns the
+            // `battle`/`engine::save` boundary) can hand back a slot that
+            // disagrees with this default, via [`Self::with_ability_slot`].
+            ability_slot: u8::from(base.abilities[1].0 != 0 && personality & 1 != 0),
             original_trainer_id: 0,
             types: base.types,
             base_stats: *base,
@@ -1139,11 +1139,16 @@ mod tests {
         // Liquid Ooze at 64 (`gSpeciesInfo`).
         assert_eq!(build(72, 0x88).ability().0, 29);
         assert_eq!(build(72, 0x89).ability().0, 64);
-        // A lone-ability species ignores parity entirely (`GetAbilityBySpecies`
-        // reads a slot the table left `ABILITY_NONE`): Zigzagoon is Pickup
-        // in slot 0 on both parities.
+        // A lone-ability species ignores parity entirely — and stores a
+        // clear slot bit, exactly the `abilityNum` `CreateBoxMon` leaves
+        // unwritten for it (`:2296`-`:2300`), so the serialized save bit
+        // matches Emerald's: Zigzagoon is Pickup in slot 0 on both
+        // parities.
         assert_eq!(build(288, 0).ability().0, 53);
         assert_eq!(build(288, 1).ability().0, 53);
+        assert_eq!(build(288, 1).ability_slot(), 0);
+        // The dual-ability odd-parity mon, by contrast, stores slot 1.
+        assert_eq!(build(72, 0x89).ability_slot(), 1);
     }
 
     #[test]
