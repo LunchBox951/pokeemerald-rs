@@ -392,10 +392,14 @@ impl BattlePokemon {
             personality,
             // `CreateBoxMon` (`pokeemerald/src/pokemon.c:2296`-`:2300`):
             // `abilityNum = personality & 1`, stored once at creation time
-            // rather than re-derived on every read — a save round trip (the
-            // `pokeemerald-rs` crate's `party` module, which owns the
-            // `battle`/`engine::save` boundary) can hand back a slot that
-            // disagrees with this default, via [`Self::with_ability_slot`].
+            // rather than re-derived on every read. Upstream writes it only
+            // when the species has a second ability; here the parity bit is
+            // stored unconditionally and [`Self::ability`]'s slot-0
+            // fallback makes the two agree for single-ability species. A
+            // save round trip (the `pokeemerald-rs` crate's `party` module,
+            // which owns the `battle`/`engine::save` boundary) can hand
+            // back a slot that disagrees with this default, via
+            // [`Self::with_ability_slot`].
             ability_slot: u8::from(personality & 1 != 0),
             original_trainer_id: 0,
             types: base.types,
@@ -448,14 +452,14 @@ impl BattlePokemon {
         self.personality
     }
 
-    /// This mon's ability, derived exactly as upstream's
-    /// `GetAbilityBySpecies` does: index the species' two-slot ability
-    /// table with [`BattlePokemon::ability_slot`]
-    /// (`pokeemerald/src/pokemon.c:4546`-`:4554`), falling back to slot 0
-    /// for a single-ability species regardless of the stored slot bit — a
-    /// slot-1 species whose slot 1 is `ABILITY_NONE` cannot exist in real
-    /// data, but `GetAbilityBySpecies` guards it anyway (`:4548`-`:4552`),
-    /// so this does too. Consumed by [`crate::stat_change`]'s ability
+    /// This mon's ability: the species' two-slot ability table indexed
+    /// with [`BattlePokemon::ability_slot`], upstream's
+    /// `GetAbilityBySpecies` (`pokeemerald/src/pokemon.c:4546`-`:4554`).
+    /// The slot-0 fallback for a single-ability species is this port's own
+    /// hardening, not upstream's: `CreateBoxMon` never sets `abilityNum`
+    /// for such a species (`:2296`-`:2300`) while this type stores the
+    /// parity bit unconditionally, so the fallback is what keeps the two
+    /// observably identical. Consumed by [`crate::stat_change`]'s ability
     /// guards (issue #322: Clear Body, White Smoke, Keen Eye, Hyper
     /// Cutter) — see this type's module docs for why the rest of the
     /// ability system stays out.
