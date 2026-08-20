@@ -2,7 +2,10 @@
 
 use crate::common::{max_iv_mon, SequenceRng};
 use assets::MoveId;
-use battle::{Battle, BattleEvent, BattleOutcome, ChangedStat, Dex, PlayerAction, StatStage};
+use battle::{
+    Battle, BattleEvent, BattleOutcome, ChangedStat, Dex, PlayerAction, StatStage, StatStages,
+    Volatiles,
+};
 
 #[test]
 fn wild_zigzagoon_growl_executes_when_the_rejection_loop_lands_on_it() {
@@ -332,12 +335,12 @@ fn string_shot_flips_turn_order_once_the_targets_effective_speed_drops_below_the
     assert_eq!(rng.draws(), 18);
 }
 
-/// A fainting battler drops its accumulated stat stages -- upstream's
+/// A fainting battler drops its accumulated battle scratch -- upstream's
 /// `cleareffectsonfaint`/`FaintClearSetData` (`battle_script_commands.c:
 /// 3063`-`:3076`, `src/battle_main.c:3264`-`:3270`, issue #322): the enemy
-/// Hardens (raising its own Defense) and is then finished off in the same
-/// turn, and its stage must read back neutral once it has fainted, not the
-/// +1 it briefly carried.
+/// carries Focus Energy and Charge, Hardens (raising its own Defense), and
+/// is then finished off in the same turn. Its stages and volatiles must all
+/// read back empty once it has fainted.
 #[test]
 fn a_fainting_battler_drops_its_accumulated_stages() {
     let dex = Dex::new();
@@ -346,6 +349,8 @@ fn a_fainting_battler_drops_its_accumulated_stages() {
     // does not damage or delay the enemy's own faint.
     let mut enemy = max_iv_mon(&dex, 19, 50, vec![MoveId(106)]); // Rattata/Harden
     enemy.apply_damage(enemy.current_hp() - 1); // left at 1 HP
+    enemy.volatiles_mut().set_focus_energy();
+    enemy.volatiles_mut().set_charge();
     let player = max_iv_mon(&dex, 1, 5, vec![MoveId(33)]); // Bulbasaur/Tackle
 
     // battle start, turn number, the enemy's 1-draw rejection-loop pick
@@ -381,10 +386,7 @@ fn a_fainting_battler_drops_its_accumulated_stages() {
             .any(|e| matches!(e, BattleEvent::Fainted { by_player: false })),
         "the enemy must faint to Tackle: {events:?}"
     );
-    assert_eq!(
-        battle.enemy().stages().defense,
-        StatStage::NEUTRAL,
-        "a corpse's Defense boost must not survive the faint"
-    );
+    assert_eq!(battle.enemy().stages(), StatStages::default());
+    assert_eq!(battle.enemy().volatiles(), Volatiles::default());
     assert_eq!(battle.outcome(), Some(BattleOutcome::PlayerWon));
 }

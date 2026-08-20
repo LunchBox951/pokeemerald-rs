@@ -16,6 +16,7 @@ use crate::common::{max_iv_mon, SequenceRng, MAX_IVS};
 use assets::{MoveId, SpeciesId};
 use battle::{
     Battle, BattleEvent, BattleOutcome, BattlePokemon, Dex, PlayerAction, StatStage, StatStages,
+    Volatiles,
 };
 
 /// `MOVE_TACKLE`.
@@ -216,11 +217,15 @@ fn a_liquid_ooze_kill_faints_the_attacker_before_the_target() {
     let player_max_hp = player.stats().max_hp;
     // Leave the attacker on less HP than the 10 the ooze will take.
     player.apply_damage(player_max_hp - 6);
-    // A physical-Attack boost no move in this turn reads: it exists only
-    // so the faint-reset assertion below is non-vacuous.
+    // Battle scratch no move in this turn reads: it exists only so every
+    // part of the faint-reset assertion below is non-vacuous.
     player.stages_mut().attack = StatStage::new(2).unwrap();
+    player.volatiles_mut().set_focus_energy();
+    player.volatiles_mut().set_charge();
     let mut enemy = mon_with_personality(&dex, TENTACOOL, 5, 1, vec![TACKLE]);
     enemy.stages_mut().attack = StatStage::new(2).unwrap();
+    enemy.volatiles_mut().set_focus_energy();
+    enemy.volatiles_mut().set_charge();
 
     let mut rng = SequenceRng::new([0, 0, 0, 0, 1, 0]);
     let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
@@ -253,11 +258,13 @@ fn a_liquid_ooze_kill_faints_the_attacker_before_the_target() {
     );
     assert_eq!(battle.player().current_hp(), 0);
     assert_eq!(battle.enemy().current_hp(), 0, "the target died too");
-    // FaintClearSetData resets each corpse's stat stages before rewards
+    // FaintClearSetData clears each corpse's battle scratch before rewards
     // or outcome settle, and the drain path's custom double-faint
     // settlement must match settle_faint on that.
     assert_eq!(battle.player().stages(), StatStages::default());
     assert_eq!(battle.enemy().stages(), StatStages::default());
+    assert_eq!(battle.player().volatiles(), Volatiles::default());
+    assert_eq!(battle.enemy().volatiles(), Volatiles::default());
 }
 
 /// The mirror of the test above with the roles swapped: the *enemy* is the

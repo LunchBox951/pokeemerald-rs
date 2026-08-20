@@ -25,7 +25,7 @@ use crate::fixed_damage::is_fixed_damage_effect;
 use crate::flag_move::is_flag_move_effect;
 use crate::hit::{resolve_hit, HitOutcome};
 use crate::multi_hit::is_multi_hit_effect;
-use crate::pokemon::{StatStages, MAX_LEVEL};
+use crate::pokemon::MAX_LEVEL;
 use crate::stat_change::{
     is_stat_change_effect, resolve_stat_change_move, set_stage, StatChangeDirection,
     StatChangeOutcome,
@@ -200,17 +200,17 @@ impl Battle {
         });
         // `cleareffectsonfaint`'s `FaintClearSetData` half
         // (`battle_script_commands.c:3063`-`:3076`,
-        // `src/battle_main.c:3264`-`:3270`) resets every stat stage to
-        // `DEFAULT_STAT_STAGE` as its *first* action, ahead of `getexp` in
-        // the same script (`data/battle_scripts_1.s:2813`-`:2827`) -- so
-        // the corpse's accumulated boosts/drops are gone before this
-        // crate's own exp step runs, issue #322.
+        // `src/battle_main.c:3264`-`:3270`) clears the fainted battler's
+        // battle-only stages and volatiles ahead of `getexp` in the same
+        // script (`data/battle_scripts_1.s:2813`-`:2827`) -- so none of
+        // the corpse's accumulated scratch state reaches this crate's own
+        // exp step, issue #322.
         let corpse = if fainted_is_player {
             &mut self.player
         } else {
             &mut self.enemy
         };
-        *corpse.stages_mut() = StatStages::default();
+        corpse.clear_battle_scratch();
         if fainted_is_player {
             self.finish(events, BattleOutcome::PlayerLost);
             return Ok(());
