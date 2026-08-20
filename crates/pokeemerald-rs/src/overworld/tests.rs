@@ -14,7 +14,7 @@ use super::{
     layout_pack_name, pack_4bpp_region, resolve_tileset_pack_name, OverworldSceneError,
     DEFAULT_ROOM_MAP_ID,
 };
-use assets::{AssetPack, ImageRef, LayoutId, MapLayout};
+use assets::{AssetPack, ImageRef, LayoutId, MapLayout, MovementType, ObjectEvent, TrainerType};
 use engine::overworld::{Direction, PlayerState};
 
 // -- `DEFAULT_ROOM_MAP_ID` ----------------------------------------------------
@@ -649,6 +649,32 @@ fn synthetic_scene_result_with_connections(
     height: u16,
     connections: &'static [assets::MapConnection],
 ) -> Result<super::OverworldScene, OverworldSceneError> {
+    synthetic_scene_result_with_connections_and_events(
+        pack_bytes,
+        tileset_symbol,
+        width,
+        height,
+        connections,
+        &NO_OBJECT_EVENTS,
+    )
+}
+
+/// [`synthetic_scene_result_with_connections`], with `events` -- rather than
+/// the always-empty [`NO_OBJECT_EVENTS`] -- threaded into
+/// `super::OverworldScene::from_pack`, so a test can exercise NPC rendering
+/// over a synthetic pack instead of needing a real one. The S-2/#334
+/// `HBlank`-interval-free budget regression fixture
+/// (`hblank_budget_regression_fixture`, below) is the one caller: it needs
+/// enough OAM entries to straddle the normal/reduced per-scanline budget
+/// cutoff, which no bundled real map reliably provides on one screen.
+fn synthetic_scene_result_with_connections_and_events(
+    pack_bytes: Vec<u8>,
+    tileset_symbol: &'static str,
+    width: u16,
+    height: u16,
+    connections: &'static [assets::MapConnection],
+    events: &'static assets::MapEvents,
+) -> Result<super::OverworldScene, OverworldSceneError> {
     // pid + thread id distinguish concurrently-running tests' scratch
     // packs with no shared mutable state `(oop-boundaries)`: the test
     // harness runs each test on its own thread, and this function removes
@@ -691,7 +717,7 @@ fn synthetic_scene_result_with_connections(
         &header,
         &layout,
         super::PlayerCharacter::Brendan,
-        &NO_OBJECT_EVENTS,
+        events,
         &engine::event_data::EventData::new(),
     );
     let _ = std::fs::remove_file(path);
@@ -806,6 +832,178 @@ fn overworld_scene_from_pack_composes_a_non_blank_deterministic_frame() {
             usize::from(super::avatar::PLAYER_OBJ_Y)
         ),
         Some(rendering::Bgr555::from_raw(0x7C00).to_rgb888())
+    );
+}
+
+/// Builds [`compose_applies_the_reduced_954_cycle_hblank_free_oam_budget`]'s
+/// own fixture: a synthetic room with `FILLER_COUNT` transparent
+/// `OBJ_EVENT_GFX_MOM` NPCs followed by one opaque `OBJ_EVENT_GFX_TWIN`
+/// target, all stacked one metatile right of the player -- split out purely
+/// to keep that test's own body under `clippy::too_many_lines`, not because
+/// anything else reuses it.
+fn hblank_budget_regression_fixture() -> (
+    super::OverworldScene,
+    PlayerState,
+    engine::event_data::EventData,
+) {
+    const FILLER_COUNT: usize = 64;
+
+    let mut pack_entries = synthetic_overworld_pack_entries_for("general", 4, 4);
+    // The filler NPCs' entire sheet is palette index 0 -- transparent on
+    // real hardware regardless of which bank it draws from -- so every
+    // filler spends OAM admission budget without ever painting a pixel.
+    pack_entries.push(Entry {
+        id: "sprite/mom",
+        kind_tag: 0,
+        meta: image_meta(144, 32, 8),
+        payload: vec![0u8; 144 * 32],
+    });
+    // The target NPC's sheet is opaque (index 3) everywhere, so its
+    // admission is the only thing that can put color at its screen
+    // position.
+    pack_entries.push(Entry {
+        id: "sprite/twin",
+        kind_tag: 0,
+        meta: image_meta(144, 32, 8),
+        payload: vec![3u8; 144 * 32],
+    });
+
+    let player_tile = (5_i16, 5_i16);
+    // One metatile right of the player -- its own, non-overlapping 16px
+    // OAM column, never the player's own index-0 entry's.
+    let npc_tile = (player_tile.0 + 1, player_tile.1);
+
+    let mut object_events = Vec::with_capacity(FILLER_COUNT + 1);
+    for local_id in 1..=FILLER_COUNT {
+        object_events.push(ObjectEvent {
+            local_id: u8::try_from(local_id).unwrap(),
+            graphics_id: "OBJ_EVENT_GFX_MOM",
+            x: npc_tile.0,
+            y: npc_tile.1,
+            elevation: 3,
+            movement_type: MovementType::FaceDown,
+            movement_range_x: 0,
+            movement_range_y: 0,
+            trainer_type: TrainerType::None,
+            trainer_sight_or_berry_tree_id: "0",
+            script: "0x0",
+            flag: "0",
+        });
+    }
+    object_events.push(ObjectEvent {
+        local_id: u8::try_from(FILLER_COUNT + 1).unwrap(),
+        graphics_id: "OBJ_EVENT_GFX_TWIN",
+        x: npc_tile.0,
+        y: npc_tile.1,
+        elevation: 3,
+        movement_type: MovementType::FaceDown,
+        movement_range_x: 0,
+        movement_range_y: 0,
+        trainer_type: TrainerType::None,
+        trainer_sight_or_berry_tree_id: "0",
+        script: "0x0",
+        flag: "0",
+    });
+    let object_events: &'static [ObjectEvent] = Box::leak(object_events.into_boxed_slice());
+    let events: &'static assets::MapEvents = Box::leak(Box::new(assets::MapEvents {
+        id: assets::MapId("MAP_TEST"),
+        shared_events_map: None,
+        object_events,
+        warp_events: &[],
+        coord_events: &[],
+        bg_events: &[],
+    }));
+
+    let scene = synthetic_scene_result_with_connections_and_events(
+        write_synthetic_pack(pack_entries),
+        "gTileset_General",
+        4,
+        4,
+        &[],
+        events,
+    )
+    .expect("synthetic pack with 65 object events should decode cleanly");
+
+    let player = PlayerState::new(
+        (i32::from(player_tile.0), i32::from(player_tile.1)),
+        3,
+        Direction::South,
+    );
+    let event_data = engine::event_data::EventData::new();
+    (scene, player, event_data)
+}
+
+/// S-2/#334 regression: `OverworldScene::compose` must run its `SpriteLayer`
+/// under the reduced 954-cycle HBlank-interval-free OAM budget, not the
+/// normal 1210-cycle one -- see `super::OverworldScene::compose`'s own doc
+/// comment for the `overworld.c:2122-2123` `SetGpuReg(REG_OFFSET_DISPCNT,
+/// ...)` citation this wires up.
+///
+/// Mirrors `crates/rendering/src/sprite.rs`'s own
+/// `with_hblank_free_interval_applies_the_reduced_954_cycle_budget` test's
+/// transparent-filler/opaque-target arrangement (module docs there), but
+/// through the real `from_pack` -> `compose` pipeline instead of a bare
+/// `SpriteLayer`, so a regression in *wiring* the flag through -- not just
+/// in the budget math itself, which `rendering` already covers -- fails
+/// this test too.
+///
+/// `FILLER_COUNT` (64) transparent `OBJ_EVENT_GFX_MOM` NPCs stack on one
+/// screen position ahead of one opaque `OBJ_EVENT_GFX_TWIN` target, each
+/// in its own on-screen (`x >= 0`) 16px-wide OAM column one metatile off
+/// the player's index-0 entry (the fixture comment above), never
+/// overlapping it: each entry costs `TRAVERSAL_COST (2) + (width - 2) == 16`
+/// cycles once admitted (`oam_budget.rs`'s own cost model), so the target
+/// -- OAM index `FILLER_COUNT + 1` once the player's own index-0 entry is
+/// counted -- lands past the reduced budget's ~59-entry cutoff but well
+/// inside the normal budget's ~75-entry one. The two control assertions
+/// below pin those exact cutoffs against this arrangement before the real
+/// regression check relies on them.
+#[test]
+fn compose_applies_the_reduced_954_cycle_hblank_free_oam_budget() {
+    let (scene, player, event_data) = hblank_budget_regression_fixture();
+
+    let target_x =
+        usize::from(super::avatar::PLAYER_OBJ_X) + usize::try_from(super::METATILE_PX).unwrap();
+    let target_y = usize::from(super::avatar::PLAYER_OBJ_Y);
+
+    // Control: built independently over the exact same entries/tiles/palette
+    // `compose` draws from, the normal 1210-cycle budget still admits the
+    // target NPC, and the reduced 954-cycle one drops it -- pinning that
+    // this arrangement actually straddles the two budgets' cutoffs.
+    let sprite_entries = scene.sprites.entries(&player, &event_data);
+    let normal_budget = rendering::SpriteLayer::new(
+        &sprite_entries,
+        scene.sprites.tiles(),
+        scene.sprites.tiles(),
+        scene.sprites.palette(),
+    );
+    assert!(
+        normal_budget.resolve_pixel(target_x, target_y).is_some(),
+        "control: the normal 1210-cycle budget must still admit the target NPC"
+    );
+    let reduced_budget = rendering::SpriteLayer::new(
+        &sprite_entries,
+        scene.sprites.tiles(),
+        scene.sprites.tiles(),
+        scene.sprites.palette(),
+    )
+    .with_hblank_free_interval(true);
+    assert!(
+        reduced_budget.resolve_pixel(target_x, target_y).is_none(),
+        "control: the reduced 954-cycle budget must drop the target NPC"
+    );
+
+    // The regression: `OverworldScene::compose`'s own composed frame must
+    // match the reduced-budget control above, not the normal one -- the
+    // world's uniform red metatile (module docs on the sibling test above)
+    // fills back in once the target NPC is gone, since every filler NPC
+    // ahead of it is transparent.
+    let frame = scene.compose(&player, &event_data, 0);
+    assert_eq!(
+        frame.pixel(target_x, target_y),
+        Some(rendering::Bgr555::from_raw(0x001F).to_rgb888()),
+        "the overworld's own composed frame must drop the same late NPC the \
+         954-cycle budget drops"
     );
 }
 
