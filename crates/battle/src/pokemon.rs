@@ -12,11 +12,17 @@
 //!
 //! Out of scope for this slice: EV tracking (every mon this crate builds has
 //! `0` EVs — matching a freshly caught wild mon and an EV-less starting
-//! player mon, both realistic for a first encounter), abilities, held items,
+//! player mon, both realistic for a first encounter), held items,
 //! non-volatile status conditions, and the Shedinja 1-HP special case in
-//! `CalculateMonStats`.
+//! `CalculateMonStats`. Abilities are out of scope too, with one exception:
+//! [`BattlePokemon::ability`] (issue #322), consumed by
+//! [`crate::stat_change`]'s ability guards (Clear Body, White Smoke, Keen
+//! Eye, Hyper Cutter) — see that module's docs for why the ability system
+//! stops there.
 
-use assets::{experience_for_level, BaseStats, LevelUpLearnsets, MoveId, SpeciesId, Type};
+use assets::{
+    experience_for_level, AbilityId, BaseStats, LevelUpLearnsets, MoveId, SpeciesId, Type,
+};
 
 use crate::dex::Dex;
 use crate::error::BattleError;
@@ -258,6 +264,7 @@ pub struct BattlePokemon {
     nature: Nature,
     ivs: Ivs,
     personality: u32,
+    ability_slot: u8,
     original_trainer_id: u32,
     types: [Type; 2],
     base_stats: BaseStats,
@@ -383,6 +390,17 @@ impl BattlePokemon {
             nature,
             ivs,
             personality,
+            // `CreateBoxMon` (`pokeemerald/src/pokemon.c:2296`-`:2300`):
+            // `abilityNum = personality & 1`, written only when the species
+            // has a second ability — a one-ability species keeps the bit
+            // clear, and so does this field, keeping the serialized save
+            // bit (`party::to_save_pokemon`'s misc-word bit 31) exactly
+            // what Emerald would have stored. Stored once at creation time
+            // rather than re-derived on every read: a save round trip (the
+            // `pokeemerald-rs` crate's `party` module, which owns the
+            // `battle`/`engine::save` boundary) can hand back a slot that
+            // disagrees with this default, via [`Self::with_ability_slot`].
+            ability_slot: u8::from(base.abilities[1].0 != 0 && personality & 1 != 0),
             original_trainer_id: 0,
             types: base.types,
             base_stats: *base,
@@ -432,6 +450,56 @@ impl BattlePokemon {
     #[must_use]
     pub const fn personality(&self) -> u32 {
         self.personality
+    }
+
+    /// This mon's ability: the species' two-slot ability table indexed
+    /// with [`BattlePokemon::ability_slot`], upstream's
+    /// `GetAbilityBySpecies` (`pokeemerald/src/pokemon.c:4546`-`:4554`).
+    /// The slot-0 fallback for a single-ability species is this port's own
+    /// hardening, not upstream's: `CreateBoxMon` never sets `abilityNum`
+    /// for such a species (`:2296`-`:2300`) while this type stores the
+    /// parity bit unconditionally, so the fallback is what keeps the two
+    /// observably identical. Consumed by [`crate::stat_change`]'s ability
+    /// guards (issue #322: Clear Body, White Smoke, Keen Eye, Hyper
+    /// Cutter) — see this type's module docs for why the rest of the
+    /// ability system stays out.
+    #[must_use]
+    pub const fn ability(&self) -> AbilityId {
+        let [first, second] = self.base_stats.abilities;
+        if second.0 == 0 || self.ability_slot == 0 {
+            first
+        } else {
+            second
+        }
+    }
+
+    /// The raw `abilityNum` bit (`0` or `1`) [`BattlePokemon::ability`]
+    /// indexes with — `0` or `1`, never anything else
+    /// ([`BattlePokemon::with_ability_slot`] masks it).
+    ///
+    /// Defaults to `personality & 1` at construction
+    /// (`CreateBoxMon`, `pokeemerald/src/pokemon.c:2296`-`:2300`) and is
+    /// otherwise immutable — the boundary that restores a saved mon
+    /// (`pokeemerald-rs`'s `party` module) is the one caller expected to
+    /// override it, via [`BattlePokemon::with_ability_slot`], with the bit
+    /// the save itself stored rather than one re-derived from personality.
+    #[must_use]
+    pub const fn ability_slot(&self) -> u8 {
+        self.ability_slot
+    }
+
+    /// Overwrite the stored ability slot — the boundary a save/load round
+    /// trip uses to restore upstream's `abilityNum` bit exactly as stored,
+    /// rather than leaving it at [`BattlePokemon::new`]'s personality-parity
+    /// default (which is only *this constructor's* choice for a freshly
+    /// built mon, not a re-derivation upstream itself performs on load —
+    /// `LoadPlayerParty` is a struct copy, not a `CreateBoxMon` call).
+    /// Masked to its single bit, so this can never desync
+    /// [`BattlePokemon::ability`] onto an out-of-range slot.
+    #[must_use]
+    pub const fn with_ability_slot(mut self, ability_slot: u8) -> Self {
+        self.ability_slot = ability_slot & 1;
+        self
     }
 
     /// The trainer id of the Pokémon's original trainer.
@@ -1050,6 +1118,37 @@ mod tests {
         // 28 % 25 == 3 wraps to the same nature.
         assert_eq!(build(28).nature(), Nature::Adamant);
         assert_eq!(build(0).nature(), Nature::Hardy);
+    }
+
+    #[test]
+    fn ability_is_derived_from_the_personality_parity() {
+        let dex = Dex::new();
+        let build = |species: u16, personality: u32| {
+            BattlePokemon::new(
+                &dex,
+                SpeciesId(species),
+                5,
+                MAX_IVS,
+                personality,
+                vec![MoveId(33)],
+            )
+            .unwrap()
+        };
+        // Tentacool carries two abilities, so bit 0 selects the slot
+        // (`CreateBoxMon`, `src/pokemon.c:2296`-`:2300`): Clear Body at 29,
+        // Liquid Ooze at 64 (`gSpeciesInfo`).
+        assert_eq!(build(72, 0x88).ability().0, 29);
+        assert_eq!(build(72, 0x89).ability().0, 64);
+        // A lone-ability species ignores parity entirely — and stores a
+        // clear slot bit, exactly the `abilityNum` `CreateBoxMon` leaves
+        // unwritten for it (`:2296`-`:2300`), so the serialized save bit
+        // matches Emerald's: Zigzagoon is Pickup in slot 0 on both
+        // parities.
+        assert_eq!(build(288, 0).ability().0, 53);
+        assert_eq!(build(288, 1).ability().0, 53);
+        assert_eq!(build(288, 1).ability_slot(), 0);
+        // The dual-ability odd-parity mon, by contrast, stores slot 1.
+        assert_eq!(build(72, 0x89).ability_slot(), 1);
     }
 
     #[test]

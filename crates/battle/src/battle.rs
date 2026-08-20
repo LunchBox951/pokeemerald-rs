@@ -147,13 +147,15 @@
 //! `AccuracyCalcHelper`'s early return at
 //! `battle_script_commands.c:1089`-`:1094`) skips the accuracy draw and can
 //! never miss, so a Swift turn where both sides act costs 10 draws rather
-//! than 11. A fourth shape, added by issue #199: a stat-lowering move
-//! (Growl/Tail Whip/Leer/String Shot, `EFFECT_ATTACK_DOWN`/
-//! `EFFECT_DEFENSE_DOWN`/`EFFECT_SPEED_DOWN`) always draws exactly **1** —
-//! the accuracy roll, hit or miss, floored or not — because
-//! `BattleScript_EffectStatDown` has no crit/damage-roll/effect-chance step
-//! at all; see [`crate::stat_change`]'s module docs for the full derivation.
-//! See [`crate::hit`]'s draw table for the ordinary-hit shapes (including
+//! than 11. Two more shapes come from the `BattleScript_EffectStatUp`/
+//! `StatDown` family (issue #199, widened by issue #322):
+//! `BattleScript_EffectStatDown` (Growl, Leer, Sand Attack, Screech, …)
+//! always draws exactly **1** — the accuracy roll, hit, missed, blocked, or
+//! floored alike — because it has no crit/damage-roll/effect-chance step at
+//! all, while `BattleScript_EffectStatUp` (Growth, Harden, Swords Dance, …)
+//! has no `accuracycheck` command either and so draws **0**, always; see
+//! [`crate::stat_change`]'s module docs for the full derivation. See
+//! [`crate::hit`]'s draw table for the ordinary-hit shapes (including
 //! Struggle's no-effect-chance-draw exception).
 //!
 //! # What the wild opponent chooses
@@ -279,20 +281,21 @@ pub enum BattleOutcome {
     WildFled,
 }
 
-/// Whether the turn engine can execute `move_id` at all: either
-/// [`crate::hit`]'s ordinary damaging-move pipeline
-/// ([`crate::hit::ensure_resolvable`]) or [`crate::stat_change`]'s
-/// stat-lowering pipeline ([`crate::stat_change::ensure_resolvable`], added
-/// by issue #199) — the two-sided boundary the module docs describe.
-/// Checked *before* any state or RNG is touched, exactly like each of the
-/// two checks it composes.
+/// Whether the turn engine can execute `move_id` at all: [`crate::hit`]'s
+/// ordinary damaging-move pipeline ([`crate::hit::ensure_resolvable`]) or
+/// [`crate::stat_change`]'s stat-changing pipeline
+/// ([`crate::stat_change::ensure_resolvable`], added by issue #199 and
+/// widened to the whole `BattleScript_EffectStatUp`/`StatDown` family by
+/// issue #322) — the execution boundary the module docs describe. Checked
+/// *before* any state or RNG is touched, exactly like each of the checks it
+/// composes.
 ///
-/// Every real `EFFECT_ATTACK_DOWN`/`EFFECT_DEFENSE_DOWN`/`EFFECT_SPEED_DOWN`
-/// move is `0` base power, so `crate::hit::ensure_resolvable` always rejects
-/// it first with [`BattleError::NonDamagingMove`] (that check runs before
-/// its own effect check) — this falls through to
-/// [`stat_change::ensure_resolvable`] on *any* hit-pipeline rejection, not
-/// just [`BattleError::UnsupportedMoveEffect`], to cover that ordering.
+/// Every real stat-change move is `0` base power, so
+/// `crate::hit::ensure_resolvable` always rejects it first with
+/// [`BattleError::NonDamagingMove`] (that check runs before its own effect
+/// check) — this falls through to [`stat_change::ensure_resolvable`] on
+/// *any* hit-pipeline rejection, not just
+/// [`BattleError::UnsupportedMoveEffect`], to cover that ordering.
 ///
 /// # Errors
 ///
@@ -381,12 +384,14 @@ impl Battle {
     /// The *wild* moveset is checked here, before any state exists and
     /// before the first draw: every move the wild mon knows must be one
     /// [`ensure_executable`] accepts — either [`crate::hit::resolve_hit`]'s
-    /// ordinary damaging pipeline or [`crate::stat_change`]'s stat-lowering
-    /// one (Growl/Tail Whip/Leer/String Shot) — because its rejection loop
-    /// picks mid-turn and can land on any slot — discovering an unsupported
-    /// move *then* would mean a turn that has already consumed shared-RNG
-    /// draws failing with no events to show for it. The player's moveset is
-    /// deliberately *not* screened; each chosen slot is validated per turn
+    /// ordinary damaging pipeline or [`crate::stat_change`]'s stat-changing
+    /// one (the whole `BattleScript_EffectStatUp`/`EffectStatDown` family,
+    /// both raising and lowering, widened by issue #322) — because its
+    /// rejection loop picks mid-turn and can land on any slot — discovering
+    /// an unsupported move *then* would mean a turn that has already
+    /// consumed shared-RNG draws failing with no events to show for it. The
+    /// player's moveset is deliberately *not* screened; each chosen slot is
+    /// validated per turn
     /// instead, before any draw, so [`Battle::take_turn`] can still reject a
     /// player pick with [`BattleError::NonDamagingMove`] /
     /// [`BattleError::UnsupportedMoveEffect`].
@@ -402,8 +407,9 @@ impl Battle {
     /// [`BattleError::FaintedBattler`] if either mon is already at `0` HP
     /// (see that variant's docs), or whatever [`ensure_executable`] reports
     /// for the first unsupported move in the **wild mon's** moveset — a
-    /// `0`-power status move outside the three modelled stat-lowering
-    /// effects ([`BattleError::NonDamagingMove`]) or a move whose effect
+    /// `0`-power status move outside the modelled
+    /// `BattleScript_EffectStatUp`/`EffectStatDown` family (raises and
+    /// drops alike, [`BattleError::NonDamagingMove`]) or a move whose effect
     /// runs some other battle script ([`BattleError::UnsupportedMoveEffect`]),
     /// which includes [`crate::damage::STRUGGLE`]: the turn engine never
     /// applies its `EFFECT_RECOIL` half. Only the wild moveset is screened
@@ -443,7 +449,7 @@ impl Battle {
         // rejection loop ignores everything but `MOVE_NONE`, so any slot
         // can come up mid-turn, after draws. The player's moveset may still
         // carry a move neither pipeline covers (a status move beyond the
-        // three stat-lowering effects, say); the player's *chosen* slot is
+        // stat-changing family, say); the player's *chosen* slot is
         // validated per turn instead, before any draw
         // (`validate_player_move`), so an unsupported pick is rejected
         // without disturbing the stream and another action can be chosen.

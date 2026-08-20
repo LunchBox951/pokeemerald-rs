@@ -123,7 +123,9 @@ pub fn initial_moveset(species: SpeciesId, level: u8) -> Vec<MoveId> {
 /// [`BattleError::InvalidMoveCount`] for a species outside the learnset
 /// table, or [`BattleError::UnsupportedMoveEffect`] /
 /// [`BattleError::NonDamagingMove`] for a moveset the turn engine cannot
-/// execute (a level-3 Seedot's Bide/Harden, as of this slice).
+/// execute (a level-3 Seedot's Bide, as of issue #322 -- its Harden became
+/// executable when the widened [`crate::stat_change`] family picked up
+/// `EFFECT_DEFENSE_UP`).
 pub fn ensure_wild_startable(dex: &Dex, species: SpeciesId, level: u8) -> Result<(), BattleError> {
     let moves = initial_moveset(species, level);
     BattlePokemon::validate(dex, species, level, &moves)?;
