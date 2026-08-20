@@ -21,8 +21,8 @@
 //! # What survives the round trip, and what does not
 //!
 //! Round-trips exactly: species, level, **accumulated experience**,
-//! personality (and so nature), the six IVs, the moveset with each slot's
-//! remaining PP, current HP, and the original-trainer id.
+//! personality (and so nature), the six IVs, the ability slot, the moveset
+//! with each slot's remaining PP, current HP, and the original-trainer id.
 //!
 //! Deliberately *not* modelled, written as upstream's own default and
 //! discarded on the way back:
@@ -38,9 +38,18 @@
 //!   typed home in `battle::BattlePokemon`. Each is written as
 //!   `CreateMon`'s zero/`MAIL_NONE` default so the bytes are *valid*, not
 //!   as an invented value.
-//! * **Egg and ability-slot bits** -- `isEgg`/`abilityNum`
-//!   (`PokemonSubstruct3`'s bits 30/31) stay clear: this port models no
-//!   eggs and no abilities.
+//! * **The egg bit** -- `isEgg` (`PokemonSubstruct3`'s bit 30) stays clear:
+//!   this port models no eggs.
+//!
+//! One more field *does* round-trip, added alongside
+//! [`battle::BattlePokemon::ability`] (issue #322): **the ability slot** --
+//! `abilityNum` (`PokemonSubstruct3`'s bit 31, the IV word's top bit) is
+//! written from [`battle::BattlePokemon::ability_slot`] and read back into
+//! [`battle::BattlePokemon::with_ability_slot`] rather than left to
+//! [`battle::BattlePokemon::new`]'s personality-parity default, so a saved
+//! mon whose stored slot disagrees with its personality (a legitimate
+//! upstream state -- nothing re-derives `abilityNum` from personality after
+//! `CreateBoxMon`) keeps the ability it actually has.
 //!
 //! One field is *derived* rather than carried, so the saved bytes stay
 //! self-consistent with what upstream would have written:
@@ -119,7 +128,9 @@ impl From<battle::BattleError> for PartyError {
 /// Pack the six individual values into `PokemonSubstruct3`'s `/*0x04*/`
 /// word (`pokeemerald/include/pokemon.h`): five bits each, in
 /// HP/Attack/Defense/Speed/SpAttack/SpDefense declaration order from bit 0
-/// upward, leaving bit 30 (`isEgg`) and bit 31 (`abilityNum`) clear.
+/// upward, leaving bit 30 (`isEgg`) and bit 31 (`abilityNum`) clear -- the
+/// ability bit is `OR`ed in separately by [`to_save_pokemon`], which is the
+/// only caller that has a [`battle::BattlePokemon`] to read it from.
 ///
 /// The declaration order *is* the bit order: the ARM ABI lays consecutive
 /// bitfields out from the least significant bit of the storage unit, and
@@ -180,7 +191,13 @@ pub(crate) fn to_save_pokemon(dex: &Dex, mon: &BattlePokemon) -> Pokemon {
     }
 
     let mut misc = [0u8; SUBSTRUCTURE_LEN];
-    misc[4..8].copy_from_slice(&pack_ivs(mon.ivs()).to_le_bytes());
+    // `abilityNum` (`PokemonSubstruct3`'s bit 31, module docs) shares the IV
+    // word's top bit with `isEgg` (bit 30, left clear -- no eggs modelled).
+    // `ability_slot` is already masked to one bit
+    // ([`battle::BattlePokemon::with_ability_slot`]), so the shift never
+    // collides with the packed IVs below it.
+    let iv_word = pack_ivs(mon.ivs()) | (u32::from(mon.ability_slot()) << 31);
+    misc[4..8].copy_from_slice(&iv_word.to_le_bytes());
 
     let mut box_data = BoxPokemon::new(mon.personality(), mon.original_trainer_id());
     box_data.set_substructures(&PokemonSubstructures {
@@ -230,12 +247,18 @@ pub(crate) fn from_save_pokemon(dex: &Dex, saved: &Pokemon) -> Result<BattlePoke
         substructures.growth[0],
         substructures.growth[1],
     ]));
-    let ivs = unpack_ivs(u32::from_le_bytes([
+    let iv_word = u32::from_le_bytes([
         substructures.misc[4],
         substructures.misc[5],
         substructures.misc[6],
         substructures.misc[7],
-    ]));
+    ]);
+    let ivs = unpack_ivs(iv_word);
+    // `abilityNum`, the IV word's top bit (module docs) -- read back rather
+    // than re-derived from personality, so a saved slot that disagrees with
+    // personality parity (a legitimate upstream state) survives the round
+    // trip.
+    let ability_slot = u8::from(iv_word >> 31 != 0);
     // `MOVE_NONE` marks an unfilled slot upstream (`battle::MOVE_NONE`'s own
     // docs), so the moveset stops at the first empty one rather than
     // carrying placeholders into a battler that forbids them.
@@ -258,7 +281,8 @@ pub(crate) fn from_save_pokemon(dex: &Dex, saved: &Pokemon) -> Result<BattlePoke
         saved.box_data.personality(),
         move_ids,
     )?
-    .with_original_trainer_id(saved.box_data.ot_id());
+    .with_original_trainer_id(saved.box_data.ot_id())
+    .with_ability_slot(ability_slot);
 
     // `BattlePokemon::new` seeds experience at the level's own threshold;
     // the saved total (`MON_DATA_EXP`) also carries the sub-level progress

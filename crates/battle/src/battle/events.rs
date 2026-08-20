@@ -18,10 +18,10 @@
 use std::error::Error;
 use std::fmt;
 
-use assets::{MoveId, SpeciesId};
+use assets::{AbilityId, MoveId, SpeciesId};
 
 use crate::error::BattleError;
-use crate::stat_change::LoweredStat;
+use crate::stat_change::ChangedStat;
 use crate::stat_stage::StatStage;
 
 use super::BattleOutcome;
@@ -205,28 +205,42 @@ pub enum BattleEvent {
     /// — upstream's non-player `HandleAction_Run` has no escape formula to
     /// roll (module docs) — so there is nothing but the fact of it to carry.
     WildFled,
-    /// A stat-lowering move (Growl/Tail Whip/Leer/String Shot —
-    /// `EFFECT_ATTACK_DOWN`/`EFFECT_DEFENSE_DOWN`/`EFFECT_SPEED_DOWN`)
+    /// A stat-**lowering** move (`BattleScript_EffectStatDown`'s family —
+    /// Growl, Leer, Tail Whip, String Shot, Sand Attack, Screech, …)
     /// connected and actually lowered its target's stage — upstream's
     /// `B_MSG_DEFENDER_STAT_FELL` message
     /// (`ChangeStatBuffs`, `battle_script_commands.c:7058`-`:7059`).
     ///
     /// A miss is reported as [`BattleEvent::Missed`] instead (the accuracy
     /// check is the same [`crate::accuracy::accuracy_check`] every other
-    /// move uses); the target already sitting at [`crate::StatStage::MIN`]
-    /// is [`BattleEvent::StatWontGoLower`] instead — upstream treats the two
-    /// "connected" outcomes as distinct messages, so this crate keeps them
-    /// as distinct events rather than folding "won't go lower" into this
-    /// variant with a no-op stage delta.
+    /// move uses); a Clear Body holder's blocked drop is
+    /// [`BattleEvent::StatLossPrevented`] instead; the target already
+    /// sitting at [`crate::StatStage::MIN`] is
+    /// [`BattleEvent::StatWontGoLower`] instead — upstream treats each as a
+    /// distinct message, so this crate keeps them as distinct events rather
+    /// than folding them into this variant.
     StatFell {
-        /// Whether the player's mon was the one using the move.
+        /// Whether the player's mon was the one using the move. The stage
+        /// that fell is the *other* mon's — the lowering tail never passes
+        /// `MOVE_EFFECT_AFFECTS_USER`
+        /// ([`crate::stat_change::StatChangeEffect::affects_user`]).
         by_player: bool,
         /// The move that was used.
         move_id: MoveId,
         /// Which of the target's stats fell.
-        stat: LoweredStat,
-        /// The target's stage for `stat` after this move.
+        stat: ChangedStat,
+        /// The target's stage for `stat` after this move — a `-2` move
+        /// (Screech and friends) lands two stages down, clamped at
+        /// [`crate::StatStage::MIN`].
         new_stage: StatStage,
+        /// The move's requested drop, `1` or `2`
+        /// ([`crate::stat_change::StatChangeEffect::magnitude`]). Upstream
+        /// prefixes `STRINGID_STATHARSHLY` to the message exactly when this
+        /// is `2` (`ChangeStatBuffs`, `battle_script_commands.c:7044`-
+        /// `:7050`) — "harshly fell" versus "fell" — keyed off the
+        /// *requested* value even when the actual clamp only moves the
+        /// stage by one, so `new_stage` alone cannot recover this.
+        magnitude: u8,
     },
     /// A stat-lowering move connected, but its target's stage for that stat
     /// was already [`crate::StatStage::MIN`] — upstream's distinct
@@ -241,7 +255,72 @@ pub enum BattleEvent {
         /// The move that was used.
         move_id: MoveId,
         /// Which stat the move targeted.
-        stat: LoweredStat,
+        stat: ChangedStat,
+    },
+    /// A stat-lowering move connected, but the target's ability blocked the
+    /// drop — one of `ChangeStatBuffs`' ability guards
+    /// (`battle_script_commands.c:6987`-`:7028`; issue #322), which run
+    /// after the accuracy draw and before the at-floor test, so a blocked
+    /// drop still costs its one draw. Upstream's
+    /// `BattleScript_AbilityNoStatLoss` ("prevents stat loss",
+    /// `data/battle_scripts_1.s:4116`) for Clear Body/White Smoke, or
+    /// `BattleScript_AbilityNoSpecificStatLoss` for Keen Eye/Hyper Cutter —
+    /// a distinction this crate does not surface. The stage does not
+    /// change.
+    StatLossPrevented {
+        /// Whether the player's mon was the one using the move; the
+        /// blocking ability is the *other* mon's.
+        by_player: bool,
+        /// The move that was used.
+        move_id: MoveId,
+        /// Which stat the move targeted.
+        stat: ChangedStat,
+        /// The blocking ability — [`crate::stat_change::CLEAR_BODY`] and
+        /// [`crate::stat_change::WHITE_SMOKE`] (block any stat drop), or
+        /// [`crate::stat_change::KEEN_EYE`] (Accuracy only) and
+        /// [`crate::stat_change::HYPER_CUTTER`] (Attack only) — the four
+        /// guards this crate reproduces.
+        ability: AbilityId,
+    },
+    /// A stat-**raising** move (`BattleScript_EffectStatUp`'s family —
+    /// Growth, Harden, Swords Dance, …) raised its **user's** own stage —
+    /// upstream's `B_MSG_DEFENDER_STAT_ROSE` (`ChangeStatBuffs`,
+    /// `battle_script_commands.c:7080`-`:7083`: self-targeting makes
+    /// `gBattlerTarget == gBattlerAttacker`, so the chooser picks the
+    /// defender string).
+    ///
+    /// There is no `Missed` counterpart: `BattleScript_EffectStatUp` has no
+    /// `accuracycheck` command at all, so a raise cannot miss and costs no
+    /// RNG draw (see [`crate::stat_change`]'s module docs).
+    StatRose {
+        /// Whether the player's mon was the one using the move — and
+        /// therefore whose own stage rose.
+        by_player: bool,
+        /// The move that was used.
+        move_id: MoveId,
+        /// Which of the user's stats rose.
+        stat: ChangedStat,
+        /// The user's stage for `stat` after this move.
+        new_stage: StatStage,
+        /// The move's requested rise, `1` or `2` — the mirror of
+        /// [`BattleEvent::StatFell`]'s `magnitude`. Upstream prefixes
+        /// `STRINGID_STATSHARPLY` exactly when this is `2`
+        /// (`ChangeStatBuffs`, `:7067`-`:7073`) — "sharply rose" versus
+        /// "rose".
+        magnitude: u8,
+    },
+    /// A stat-raising move connected, but its user's stage for that stat was
+    /// already [`crate::StatStage::MAX`] — upstream's
+    /// `B_MSG_STAT_WONT_INCREASE` ("won't go any higher!",
+    /// `gStatUpStringIds`, `src/battle_message.c:1006`-`:1012`;
+    /// `ChangeStatBuffs`, `:7079`-`:7080`). The stage does not change.
+    StatWontGoHigher {
+        /// Whether the player's mon was the one using the move.
+        by_player: bool,
+        /// The move that was used.
+        move_id: MoveId,
+        /// Which stat the move targeted.
+        stat: ChangedStat,
     },
     /// The trainer's active mon fainted and the next party member came out
     /// in its place — upstream's forced post-faint switch

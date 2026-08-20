@@ -339,12 +339,15 @@ fn a_full_moveset_drops_the_oldest_move_first() {
 /// [`ensure_wild_startable`] must agree with the real handoff, both ways
 /// (issue #207 review): Route 101's rollable wild mons all pass, and the
 /// first reachable moveset the turn engine cannot execute -- a level-3
-/// Seedot's Bide/Harden, Route 102 slot data -- is rejected. The
-/// rejection arm is a deliberate ratchet: when Bide/Harden gain engine
-/// support, this assertion flips and must be updated alongside the
-/// map-table gate that consumes it.
+/// Seedot's, Route 102 slot data -- is rejected, **naming the exact move**.
+/// The rejection arm is a deliberate ratchet, and it has already moved once:
+/// before issue #322 the Seedot was blocked by Bide *and* Harden, but Harden
+/// is `EFFECT_DEFENSE_UP`, now part of the widened
+/// `BattleScript_EffectStatUp` family, so only Bide is left. Naming it is
+/// what forces the next move-coverage slice back here rather than letting a
+/// bare `is_err()` go quietly stale.
 #[test]
-fn ensure_wild_startable_accepts_route_101_mons_and_rejects_a_bide_harden_seedot() {
+fn ensure_wild_startable_accepts_route_101_mons_and_rejects_a_bide_seedot() {
     let dex = Dex::new();
     // Route 101's land table: Wurmple, Poochyena, Zigzagoon at 2..=3.
     for species in [290, 286, 288] {
@@ -356,9 +359,29 @@ fn ensure_wild_startable_accepts_route_101_mons_and_rejects_a_bide_harden_seedot
             );
         }
     }
-    // SPECIES_SEEDOT at Route 102's level 3: Bide (level 1) and Harden
-    // (level 3), neither in the damaging nor the stat-lowering pipeline.
-    assert!(ensure_wild_startable(&dex, SpeciesId(298), 3).is_err());
+    // SPECIES_SEEDOT at Route 102's level 3 knows Bide (level 1) and
+    // Harden (level 3), in that learnset order.
+    assert_eq!(
+        initial_moveset(SpeciesId(298), 3),
+        vec![MoveId(117), MoveId(106)],
+        "the fixture is only meaningful if the moveset really is Bide then Harden"
+    );
+    // Harden alone is fine now.
+    assert_eq!(
+        crate::battle::ensure_executable(&dex, MoveId(106)),
+        Ok(()),
+        "MOVE_HARDEN is EFFECT_DEFENSE_UP, executable since issue #322"
+    );
+    // Bide is what still blocks the table -- and it is reported first,
+    // because it is the earlier slot. Its `power` is **1**, not 0
+    // (`src/data/battle_moves.h:1527`), so it is refused for its
+    // `EFFECT_BIDE` script rather than for being a status move: base power
+    // alone would have waved it straight into the ordinary hit pipeline.
+    assert_eq!(dex.move_data(MoveId(117)).unwrap().power, 1);
+    assert_eq!(
+        ensure_wild_startable(&dex, SpeciesId(298), 3),
+        Err(BattleError::UnsupportedMoveEffect(MoveId(117))),
+    );
 }
 
 /// An unknown species fails closed with an empty moveset -- rejected

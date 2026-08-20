@@ -3,7 +3,7 @@
 use crate::common::{max_iv_mon, SequenceRng};
 use assets::MoveId;
 use battle::{
-    Battle, BattleError, BattleEvent, BattleOutcome, Dex, LoweredStat, PlayerAction, StatStage,
+    Battle, BattleError, BattleEvent, BattleOutcome, ChangedStat, Dex, PlayerAction, StatStage,
     STRUGGLE,
 };
 
@@ -270,20 +270,16 @@ fn unsupported_moves_are_rejected_at_the_right_boundary_for_each_side() {
     let dex = Dex::new();
     let healthy = |dex: &Dex| max_iv_mon(dex, 4, 50, vec![MoveId(33)]);
 
-    // Sand Attack: 0 power, EFFECT_ACCURACY_DOWN -- a stat-lowering
-    // effect issue #199 does *not* cover (only ATTACK/DEFENSE/SPEED_DOWN
-    // are modelled; Growl and Leer, which used to stand in for this
-    // case, are executable now -- see
-    // `a_real_starter_moveset_can_fight_with_its_damaging_move` and
-    // `wild_zigzagoon_growl_executes_when_the_rejection_loop_lands_on_it`
-    // for their new coverage). Horn Drill: real base power but
-    // EFFECT_OHKO's own script, which the ordinary pipeline gets wrong in
-    // both damage and draw count -- it stands in for Sonic Boom, which
-    // played this role until issue #321's `fixed_damage` pipeline made it
-    // executable. Struggle: its EFFECT_RECOIL half is not applied by this
-    // engine (see crate::hit's module docs).
+    // Haze: 0 power, EFFECT_HAZE -- not one of the widened
+    // BattleScript_EffectStatUp/StatDown family's 18 rows (issue #322;
+    // Sand Attack and Screech, which used to stand in for this case, are
+    // executable now -- see `stat_changes.rs`). Horn Drill: power 1 but
+    // EFFECT_OHKO's target-HP-based damage, which the ordinary pipeline
+    // gets wrong in both damage and draw count. Struggle: its
+    // EFFECT_RECOIL half is not applied by this engine (see crate::hit's
+    // module docs).
     for (bad_move, expected) in [
-        (MoveId(28), BattleError::NonDamagingMove(MoveId(28))),
+        (MoveId(114), BattleError::NonDamagingMove(MoveId(114))),
         (MoveId(32), BattleError::UnsupportedMoveEffect(MoveId(32))),
         (STRUGGLE, BattleError::UnsupportedMoveEffect(STRUGGLE)),
     ] {
@@ -374,10 +370,10 @@ fn a_real_starter_moveset_can_fight_with_its_damaging_move() {
     // resolvability screen would have rejected it (NonDamagingMove) and
     // no authentic Treecko could enter any wild battle. Leer is
     // EFFECT_DEFENSE_DOWN (`pokeemerald/src/data/battle_moves.h:562`-
-    // `:564`), one of the three stat-lowering effects this issue adds.
-    // It costs exactly one draw -- the accuracy check, and Leer's 100
-    // accuracy means it cannot miss -- and lowers the wild Poochyena's
-    // Defense by one stage.
+    // `:564`), one of the stat-changing family's effects. It costs
+    // exactly one draw -- the accuracy check, and Leer's 100 accuracy
+    // means it cannot miss -- and lowers the wild Poochyena's Defense by
+    // one stage.
     let dex = Dex::new();
     let player = max_iv_mon(&dex, 277, 5, vec![MoveId(1), MoveId(43)]);
     let enemy = max_iv_mon(&dex, 286, 2, vec![MoveId(33)]);
@@ -399,8 +395,9 @@ fn a_real_starter_moveset_can_fight_with_its_damaging_move() {
             BattleEvent::StatFell {
                 by_player: true,
                 move_id: MoveId(43),
-                stat: LoweredStat::Defense,
+                stat: ChangedStat::Defense,
                 new_stage: StatStage::new(-1).unwrap(),
+                magnitude: 1,
             },
             BattleEvent::Hit {
                 by_player: false,

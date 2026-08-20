@@ -34,7 +34,7 @@
 //! | pipeline | script | added by |
 //! |---|---|---|
 //! | [`hit`] | `BattleScript_EffectHit` ([`hit::is_ordinary_hit_effect`]) | #125 |
-//! | [`stat_change`] | the `BattleScript_EffectStatDown` family ([`stat_change::is_stat_lowering_effect`]) | #199 |
+//! | [`stat_change`] | the `BattleScript_EffectStatUp`/`StatDown` family ([`stat_change::is_stat_change_effect`]) | #199, widened by #322 |
 //! | [`drain`] | `BattleScript_EffectAbsorb` ([`drain::is_drain_effect`]) | #321 |
 //! | [`fixed_damage`] | `_Sonicboom` / `_DragonRage` / `_LevelDamage` ([`fixed_damage::is_fixed_damage_effect`]) | #321 |
 //! | [`multi_hit`] | `BattleScript_EffectMultiHit` ([`multi_hit::is_multi_hit_effect`]) | #321 |
@@ -146,17 +146,18 @@
 //! screen Route 103's sight-trainer parties hit, since #321 got four of
 //! them past `ensure_executable` and into
 //! `battle::trainer_ai::ensure_scoreable` (issue #325) — battle
-//! UI/animations, overworld transition, every ability but the two above,
-//! held items, non-volatile status conditions and confusion (issue #323),
-//! weather, multi/double battles, Mist/Substitute/Protect (see
-//! [`stat_change`]'s module docs for why those are a documented boundary
-//! rather than dead code), and the move effects the six pipelines still do
-//! not cover — stat-*raising* moves and the wider StatUp/StatDown family
-//! (issue #322), Defense Curl (flag *and* stat raise, so it belongs with
-//! that family), the secondary-effect trampolines
-//! ([`secondary::SECONDARY_TRAMPOLINES`] lists all 31), recoil, OHKO,
-//! Counter, Bide, Leech Seed and the rest of the end-of-turn residual
-//! family, and so on.
+//! UI/animations, overworld transition, every ability but Overgrow, Liquid
+//! Ooze (both above) and the four stat-drop guards — Clear Body, White
+//! Smoke, Keen Eye, Hyper Cutter ([`stat_change`]'s module docs; Shield
+//! Dust is the one guard left unmodelled) — held items, non-volatile
+//! status conditions and confusion (issue #323), weather, multi/double
+//! battles, Mist/Substitute/Protect (see [`stat_change`]'s module docs for
+//! why those are a documented boundary rather than dead code), and the
+//! move effects the six pipelines still do not cover — Defense Curl (flag
+//! *and* stat raise, so it belongs with the stat-change family), the
+//! secondary-effect trampolines ([`secondary::SECONDARY_TRAMPOLINES`]
+//! lists all 31), recoil, OHKO, Counter, Bide, Leech Seed and the rest of
+//! the end-of-turn residual family, and so on.
 
 pub mod ability;
 pub mod accuracy;
@@ -209,7 +210,11 @@ pub use pokemon::{
     MOVE_NONE, SPECIES_NONE,
 };
 pub use secondary::{is_secondary_effect, spend_effect_chance_draw, Trampoline};
-pub use stat_change::{is_stat_lowering_effect, LoweredStat, StatChangeOutcome};
+pub use stat_change::{
+    is_stat_change_effect, stat_change_for_effect, ChangedStat, StatChangeDirection,
+    StatChangeEffect, StatChangeMagnitude, StatChangeOutcome, CLEAR_BODY, HYPER_CUTTER, KEEN_EYE,
+    WHITE_SMOKE,
+};
 pub use stat_stage::StatStage;
 pub use volatile::Volatiles;
 pub use wild::{

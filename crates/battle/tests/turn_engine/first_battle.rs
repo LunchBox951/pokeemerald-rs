@@ -19,7 +19,7 @@
 
 use crate::common::{max_iv_mon, SequenceRng};
 use assets::MoveId;
-use battle::{Battle, BattleError, BattleEvent, BattleOutcome, Dex, LoweredStat, PlayerAction};
+use battle::{Battle, BattleError, BattleEvent, BattleOutcome, ChangedStat, Dex, PlayerAction};
 
 const TACKLE: MoveId = MoveId(33);
 const GROWL: MoveId = MoveId(45);
@@ -294,8 +294,9 @@ fn wild_flees_after_the_players_move_already_resolved() {
             BattleEvent::StatFell {
                 by_player: true,
                 move_id: GROWL,
-                stat: LoweredStat::Attack,
+                stat: ChangedStat::Attack,
                 new_stage: battle::StatStage::new(-1).unwrap(),
+                magnitude: 1,
             },
             BattleEvent::WildFled,
             BattleEvent::Ended(BattleOutcome::WildFled),
