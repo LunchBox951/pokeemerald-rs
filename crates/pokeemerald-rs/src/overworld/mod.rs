@@ -728,12 +728,32 @@ impl OverworldScene {
         // `sprites::SceneSprites::entries`' own doc comment on why index 0
         // is load-bearing).
         let entries = self.sprites.entries(player, event_data);
+        // `InitOverworldGraphicsRegisters` sets `DISPCNT_HBLANK_INTERVAL`
+        // unconditionally in its own `SetGpuReg(REG_OFFSET_DISPCNT, ...)`
+        // call (`pokeemerald/src/overworld.c:2122-2123`), so every overworld
+        // frame runs the reduced 954-cycle per-scanline OAM budget, not the
+        // normal 1210-cycle one (S-2, issue #329/#334; see
+        // `SpriteLayer::with_hblank_free_interval`'s own docs). No other
+        // scene this port composes a `SpriteLayer` for sets the bit: the
+        // title screen's four `SetGpuReg(REG_OFFSET_DISPCNT, ...)` calls
+        // (`title_screen.c:581,655,707,753` -- see `title.rs`'s own
+        // `compose` for the citation) never include it, and the main
+        // menu/battle DISPCNT sites (`main_menu.c:561,608,1267-1268,1770,1794-1795`,
+        // `battle_main.c:2434`) don't either -- neither builds its own
+        // `SpriteLayer` here regardless (`MainMenuScene::compose` fills a
+        // fresh framebuffer with no sprites; battle has no sprite
+        // composition yet). The field overlays that draw *over* this frame
+        // -- `NpcDialog::compose_over`, `StartMenu::compose_over` -- are
+        // pixel blits with no `SpriteLayer` of their own, matching
+        // upstream's field UI, which never rewrites DISPCNT: the bit stays
+        // set while they are open.
         let sprites = SpriteLayer::new(
             &entries,
             self.sprites.tiles(),
             self.sprites.tiles(),
             self.sprites.palette(),
-        );
+        )
+        .with_hblank_free_interval(true);
 
         // GBA hardware shows BG palette color 0 — not black — wherever every
         // enabled layer is transparent (reachable here via the blank-tile

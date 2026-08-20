@@ -31,10 +31,16 @@
 //! and the four one/two-character text meta events `ReadSeqEvent` treats as
 //! loop markers (`:287-296`). Recognized-but-ignored per upstream: poly/channel
 //! aftertouch (skipped, matching `ReadTrackEvent`'s own `default: Skip`
-//! branch), every other meta event including time signature (matching
-//! `ReadSeqEvent`'s `default: SkipEventData` — time signature only ever fed
-//! upstream's own whole-note/pattern-compression bookkeeping, which this
-//! compiler doesn't implement; see `super`'s module docs). `SysEx` events are
+//! branch), and every other meta event (matching `ReadSeqEvent`'s
+//! `default: SkipEventData`). Time signature (`0x58`) *is* parsed
+//! (`midi.cpp:316-340`): beyond upstream's whole-note/pattern-compression
+//! bookkeeping this compiler doesn't implement, it re-phases the timing
+//! grid that bounds the dropped wait after a CC `0x1E`
+//! (`super::compile`'s `emit_track`). Upstream validates it only on track
+//! 0 (`ReadSeqEvents`) and skips it unexamined on channel tracks; this
+//! one-pass parser validates it everywhere — a deliberate fail-closed
+//! narrowing, same category as the system-common rejection below.
+//! `SysEx` events are
 //! skipped by declared length. Anything not listed here that still consumes
 //! bytes (e.g. a text meta event whose payload doesn't match `[`/`]`/`][`/`:`)
 //! is parsed far enough to skip correctly but yields no [`RawEvent`].
@@ -96,6 +102,14 @@ pub(super) enum RawEvent {
     LoopEnd,
     /// Text meta event `":"` (`midi.cpp:294`).
     Label,
+    /// A time-signature meta event, kept as its raw numerator and
+    /// denominator exponent (`midi.cpp:316-340`); the whole-note grid
+    /// period it works out to depends on `clocks_per_beat`, so that
+    /// conversion lives in `super::compile`, which knows it.
+    TimeSignature {
+        numerator: u8,
+        denominator_exponent: u8,
+    },
 }
 
 impl RawEvent {
@@ -109,9 +123,12 @@ impl RawEvent {
             | Self::Controller { channel, .. }
             | Self::ProgramChange { channel, .. }
             | Self::PitchBend { channel, .. } => Some(channel),
-            Self::Tempo(_) | Self::LoopBegin | Self::LoopEndBegin | Self::LoopEnd | Self::Label => {
-                None
-            }
+            Self::Tempo(_)
+            | Self::LoopBegin
+            | Self::LoopEndBegin
+            | Self::LoopEnd
+            | Self::Label
+            | Self::TimeSignature { .. } => None,
         }
     }
 }
@@ -273,6 +290,26 @@ fn read_meta_event(
             return Err(MidiError::ZeroTempo);
         }
         events.push((abs_time, RawEvent::Tempo(microseconds)));
+        return Ok(MetaOutcome::Continue);
+    }
+    if meta_type == 0x58 {
+        let len = r.vlq()?;
+        if len != 4 {
+            return Err(MidiError::BadTimeSignatureLength(len));
+        }
+        let numerator = r.u8()?;
+        let denominator_exponent = r.u8()?;
+        if denominator_exponent >= 16 {
+            return Err(MidiError::BadTimeSignatureDenominator(denominator_exponent));
+        }
+        r.skip(2)?;
+        events.push((
+            abs_time,
+            RawEvent::TimeSignature {
+                numerator,
+                denominator_exponent,
+            },
+        ));
         return Ok(MetaOutcome::Continue);
     }
     let len = r.vlq()?;

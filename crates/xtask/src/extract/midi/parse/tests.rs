@@ -1,4 +1,4 @@
-use super::{parse_track, RawEvent};
+use super::{parse_track, MidiError, RawEvent};
 
 /// Encode a variable-length quantity the same way a real `.mid` file would
 /// (big-endian 7-bit groups, continuation bit set on every group but the
@@ -139,24 +139,62 @@ fn unrecognized_text_meta_yields_no_event() {
     assert!(parsed.events.is_empty());
 }
 
+/// A time-signature meta parses into [`RawEvent::TimeSignature`] -- it
+/// re-phases the whole-note grid bounding the CC `0x1E` drop (module docs)
+/// -- while genuinely unhandled metas still skip cleanly past.
 #[test]
-fn time_signature_and_other_unhandled_meta_events_are_skipped_without_error() {
+fn time_signature_parses_and_other_unhandled_meta_events_are_skipped() {
     let mut body = Vec::new();
     body.extend(vlq(0));
-    body.extend([0xFF, 0x58, 0x04, 4, 2, 24, 8]); // time signature, ignored
-    body.extend(vlq(5));
-    body.extend([0x90, 60, 100]); // a real note-on should still parse after it
+    body.extend([0xFF, 0x58, 0x04, 4, 2, 24, 8]); // 4/4 time signature
+    body.extend(vlq(3));
+    body.extend([0xFF, 0x59, 0x02, 0, 0]); // key signature, skipped
+    body.extend(vlq(2));
+    body.extend([0x90, 60, 100]); // a real note-on should still parse after both
     let parsed = parse_track(&track(body)).unwrap();
     assert_eq!(
         parsed.events,
-        vec![(
-            5,
-            RawEvent::NoteOn {
-                channel: 0,
-                key: 60,
-                velocity: 100
-            }
-        )]
+        vec![
+            (
+                0,
+                RawEvent::TimeSignature {
+                    numerator: 4,
+                    denominator_exponent: 2
+                }
+            ),
+            (
+                5,
+                RawEvent::NoteOn {
+                    channel: 0,
+                    key: 60,
+                    velocity: 100
+                }
+            )
+        ]
+    );
+}
+
+/// The three fail-closed guards on a time-signature meta, mirroring
+/// `midi.cpp:318-334`'s `RaiseError`s: a length other than 4 and a
+/// denominator exponent of 16+ fail at parse; a signature whose whole-note
+/// grid period works out to zero ticks (e.g. `1/128`) fails at compile,
+/// where `clocks_per_beat` is known (`super::super::compile`).
+#[test]
+fn a_malformed_time_signature_fails_closed() {
+    let mut body = Vec::new();
+    body.extend(vlq(0));
+    body.extend([0xFF, 0x58, 0x03, 4, 2, 24]); // declared length 3, not 4
+    assert_eq!(
+        parse_track(&track(body)).unwrap_err(),
+        MidiError::BadTimeSignatureLength(3)
+    );
+
+    let mut body = Vec::new();
+    body.extend(vlq(0));
+    body.extend([0xFF, 0x58, 0x04, 4, 16, 24, 8]); // denominator 2^16
+    assert_eq!(
+        parse_track(&track(body)).unwrap_err(),
+        MidiError::BadTimeSignatureDenominator(16)
     );
 }
 
