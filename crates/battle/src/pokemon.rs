@@ -629,6 +629,27 @@ impl BattlePokemon {
         &mut self.volatiles
     }
 
+    /// Reset every field that is battle scratch rather than party data:
+    /// [`BattlePokemon::stages`] and [`BattlePokemon::volatiles`].
+    ///
+    /// Neither survives upstream's own battle boundary — `stages` because
+    /// `struct Pokemon` has no such field at all (module docs on
+    /// [`StatStages`]), `volatiles` because `BattleStartClearSetData`
+    /// zeroes `gBattleMons[].status2` and `gStatuses3[]` before every
+    /// battle (`src/battle_main.c:3034`, cited on [`Volatiles`]). A flow
+    /// layer that clones the battle's player mon back into the party after
+    /// the battle ends must call this before the clone reaches the party
+    /// record, or the *next* battle's `BattlePokemon::new` — which already
+    /// starts at [`Volatiles::default`] and [`StatStages::default`] — would
+    /// be fighting a mon that inherited scratch state no upstream battle
+    /// ever carries forward. Exists as one method rather than three
+    /// call-site resets so the two fields cannot drift apart the way
+    /// [`BattlePokemon::stages_mut`] alone did before [`Volatiles`] existed.
+    pub fn clear_battle_scratch(&mut self) {
+        self.stages = StatStages::default();
+        self.volatiles = Volatiles::default();
+    }
+
     /// Add earned experience, applying every crossed level threshold and
     /// capping both level and total experience at level 100. For every
     /// level crossed by this call, in order, also teaches that level's
