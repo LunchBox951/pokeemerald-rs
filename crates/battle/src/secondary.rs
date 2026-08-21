@@ -73,7 +73,7 @@
 
 use assets::{MoveEffect, MoveId};
 
-use crate::damage::BattleRng;
+use crate::damage::{BattleRng, STRUGGLE};
 use crate::dex::Dex;
 use crate::error::BattleError;
 
@@ -251,15 +251,24 @@ pub fn spend_effect_chance_draw(
     let mv = dex.move_data(move_id)?;
     let trampoline = trampoline_for_effect(mv.effect);
 
+    // `MOVE_STRUGGLE` carries an effect byte without a trampoline row: its
+    // `EFFECT_RECOIL` script is a full script, not a two-instruction
+    // trampoline, and it writes `MOVE_EFFECT_RECOIL_25 |
+    // MOVE_EFFECT_AFFECTS_USER | MOVE_EFFECT_CERTAIN` before reaching this
+    // hook (`battle_scripts_1.s:897`-`:898`). The CERTAIN test therefore
+    // cannot come from `SECONDARY_TRAMPOLINES` alone.
+    let struggle = move_id == STRUGGLE;
+    let certain = struggle || trampoline.is_some_and(|t| t.certain);
+
     // Branch 1 (`:2917`): a CERTAIN byte on a hit that landed. No draw.
-    if trampoline.is_some_and(|t| t.certain) && hit_had_effect {
+    if certain && hit_had_effect {
         return Err(BattleError::UnportedSecondaryEffect(move_id));
     }
 
     // Branch 2 (`:2923`): the roll is the *leading* operand, so it is spent
     // before either suppressing test is even looked at.
     let roll = u32::from(rng.next_u16()) % 100 < u32::from(mv.secondary_effect_chance);
-    if roll && trampoline.is_some() && hit_had_effect {
+    if roll && (struggle || trampoline.is_some()) && hit_had_effect {
         return Err(BattleError::UnportedSecondaryEffect(move_id));
     }
     Ok(())

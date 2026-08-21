@@ -1,6 +1,7 @@
 use super::{
     is_secondary_effect, spend_effect_chance_draw, trampoline_for_effect, SECONDARY_TRAMPOLINES,
 };
+use crate::damage::STRUGGLE;
 use crate::dex::Dex;
 use crate::error::BattleError;
 use crate::script_rng::SequenceRng;
@@ -130,6 +131,33 @@ fn a_landed_roll_on_an_unported_byte_refuses_after_spending_the_draw() {
     let mut rng = SequenceRng::new([29]);
     assert_eq!(
         spend_effect_chance_draw(&dex, POISON_STING, false, &mut rng),
+        Ok(())
+    );
+    assert_eq!(rng.draws(), 1);
+}
+
+/// `MOVE_STRUGGLE` writes `MOVE_EFFECT_RECOIL_25 | MOVE_EFFECT_AFFECTS_USER |
+/// MOVE_EFFECT_CERTAIN` from a full script rather than a trampoline
+/// (`battle_scripts_1.s:897`-`:898`), so the hook must supply its CERTAIN
+/// handling itself: a landed Struggle takes the **draw-free** first branch
+/// and refuses fail-closed (the recoil infliction is [`crate::hit`]'s
+/// caller's, not this hook's), spending zero draws exactly as upstream does.
+#[test]
+fn a_landed_struggle_takes_the_draw_free_certain_branch_and_refuses() {
+    let dex = Dex::new();
+    let mut rng = SequenceRng::new([]);
+    assert_eq!(
+        spend_effect_chance_draw(&dex, STRUGGLE, true, &mut rng),
+        Err(BattleError::UnportedSecondaryEffect(STRUGGLE))
+    );
+    assert_eq!(rng.draws(), 0, "the CERTAIN first branch draws nothing");
+
+    // A CERTAIN byte on a no-effect hit falls through to the `else if` and
+    // spends the draw (module docs, consequence 2). Struggle's
+    // `secondaryEffectChance` is 0, so the roll can never land.
+    let mut rng = SequenceRng::new([0]);
+    assert_eq!(
+        spend_effect_chance_draw(&dex, STRUGGLE, false, &mut rng),
         Ok(())
     );
     assert_eq!(rng.draws(), 1);

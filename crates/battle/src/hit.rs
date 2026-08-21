@@ -464,8 +464,11 @@ pub fn resolve_hit(
     // move this pipeline admits (`MOVE_EFFECT_BYTE` is 0, so the `&&` chain
     // at `battle_script_commands.c:2923` fails after the leading `Random()`
     // operand). Struggle's `MOVE_EFFECT_CERTAIN` takes the draw-free first
-    // branch instead (`:2917`), so it must not consume a draw here
-    // `(behavioral-fidelity)`.
+    // branch instead (`:2917`), where upstream applies the recoil — a step
+    // this function's contract deliberately excludes (module docs). The hook
+    // models that branch as a draw-free fail-closed error, so calling it
+    // would refuse the landed Struggle this pipeline is pinned to resolve;
+    // skipping it spends the same zero draws `(behavioral-fidelity)`.
     if move_id != STRUGGLE {
         spend_effect_chance_draw(dex, move_id, outcome != HitOutcome::NoEffect, rng)?;
     }
