@@ -126,9 +126,7 @@
 //! gap and the stood-in handout are recorded on the ledger rather than
 //! papered over.
 
-use battle::{
-    Battle, BattleError, BattleOutcome, BattlePokemon, BattleRng, Dex, PlayerAction, StatStages,
-};
+use battle::{Battle, BattleError, BattleOutcome, BattlePokemon, BattleRng, Dex, PlayerAction};
 use engine::overworld::warp::WarpTrigger;
 use engine::overworld::wild_encounter::{WildEncounter, WildEncounterState};
 use engine::overworld::{MapRuntime, TilePos};
@@ -476,10 +474,10 @@ pub(super) fn advance_wild_battle(
         return None;
     }
     let mut mon = battle.player().clone();
-    // Stat stages are battle-local upstream (`gBattleMons[].statStages`;
-    // the party struct has no such field), so they never survive into the
-    // overworld copy.
-    *mon.stages_mut() = StatStages::default();
+    // Stat stages and volatiles are battle scratch, not party data -- see
+    // `BattlePokemon::clear_battle_scratch`'s own doc comment for the
+    // citations.
+    mon.clear_battle_scratch();
     *lead = Some(mon);
     *slot = None;
     outcome

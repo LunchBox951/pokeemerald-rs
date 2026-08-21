@@ -91,6 +91,113 @@ pub enum BattleEvent {
         /// Whether it was the player's mon that fainted.
         by_player: bool,
     },
+    /// A draining move healed its user — `gAbsorbDrainStringIds[B_MSG_ABSORB]`
+    /// = `STRINGID_PKMNENERGYDRAINED` ("the foe's PKMN had its energy
+    /// drained!", `src/battle_message.c:1122`), printed by
+    /// `BattleScript_EffectAbsorb`'s `printfromtable` at
+    /// `data/battle_scripts_1.s:355`.
+    ///
+    /// Emitted **after** the [`BattleEvent::Hit`] that produced it, matching
+    /// the script order (`resultmessage` for the damage, then
+    /// `negativedamage`, then the drain string). The healing is already
+    /// applied to the attacker when this is emitted, clamped to its maximum
+    /// HP ([`crate::pokemon::BattlePokemon::heal_hp`]).
+    Drained {
+        /// Whether the player's mon was the one using the move.
+        by_player: bool,
+        /// The draining move that was used.
+        move_id: MoveId,
+        /// HP the attacker actually regained: [`crate::drain::drain_amount`]
+        /// of the HP the *target* really lost, then clamped at the
+        /// attacker's maximum — so a full-HP attacker reports `0` while
+        /// still printing the message, exactly as upstream does.
+        healed: u32,
+    },
+    /// A draining move hit a Liquid Ooze target and damaged its user
+    /// instead — `gAbsorbDrainStringIds[B_MSG_ABSORB_OOZE]` =
+    /// `STRINGID_ITSUCKEDLIQUIDOOZE` ("it sucked up the liquid ooze!",
+    /// `src/battle_message.c:1123`), reached through
+    /// `BattleScript_AbsorbLiquidOoze` (`data/battle_scripts_1.s:348`).
+    ///
+    /// Replaces [`BattleEvent::Drained`] for that turn — upstream chooses
+    /// between the two string-table entries, never prints both — and, like
+    /// it, follows the [`BattleEvent::Hit`] it came from. The damage is
+    /// already applied to the attacker.
+    LiquidOoze {
+        /// Whether the player's mon was the one using the move.
+        by_player: bool,
+        /// The draining move that was used.
+        move_id: MoveId,
+        /// HP the *attacker* lost, saturating at its remaining HP — the same
+        /// magnitude the heal would have had, with its sign flipped by
+        /// `manipulatedamage DMG_CHANGE_SIGN`.
+        damage: u32,
+    },
+    /// A multi-hit move finished its loop — `STRINGID_HITXTIMES` ("hit N
+    /// time(s)!", `BattleScript_MultiHitPrintStrings`,
+    /// `data/battle_scripts_1.s:647`).
+    ///
+    /// Emitted once, after the per-hit [`BattleEvent::Hit`] events, and only
+    /// when at least one hit landed: the script's `jumpifmovehadnoeffect` at
+    /// `:646` skips the string for a type-immune move, which reports a bare
+    /// [`BattleEvent::NoEffect`] instead.
+    MultiHit {
+        /// Whether the player's mon was the one using the move.
+        by_player: bool,
+        /// The multi-hit move that was used.
+        move_id: MoveId,
+        /// How many hits actually landed — the *rolled* count
+        /// ([`crate::multi_hit::roll_hit_count`]) unless the target fainted
+        /// partway, in which case the loop stopped early and this is the
+        /// smaller number the message really prints.
+        hits: u8,
+    },
+    /// Splash — `STRINGID_BUTNOTHINGHAPPENED` ("But nothing happened!",
+    /// `BattleScript_EffectSplash`, `data/battle_scripts_1.s:1179`). Nothing
+    /// else happened, which is the point.
+    NothingHappened {
+        /// Whether the player's mon was the one using the move.
+        by_player: bool,
+        /// Always Splash this slice, carried for the same reason every other
+        /// move event carries it.
+        move_id: MoveId,
+    },
+    /// Focus Energy took hold —
+    /// `gFocusEnergyUsedStringIds[B_MSG_GETTING_PUMPED]`
+    /// (`BattleScript_EffectFocusEnergy`, `data/battle_scripts_1.s:893`).
+    /// The user's `STATUS2_FOCUS_ENERGY` bit is already set
+    /// ([`crate::volatile::Volatiles::focus_energy`]), worth `+2` crit-chance
+    /// stages from the next move on.
+    GettingPumped {
+        /// Whether the player's mon was the one using the move.
+        by_player: bool,
+        /// The move that was used.
+        move_id: MoveId,
+    },
+    /// A move failed outright — `BattleScript_ButItFailed`'s
+    /// `STRINGID_BUTITFAILED` ("But it failed!").
+    ///
+    /// Only Focus Energy on an already-pumped user reaches it this slice
+    /// (the script's `jumpifstatus2` at `data/battle_scripts_1.s:889`); it is
+    /// a general upstream message, so the variant is named for the message
+    /// rather than for that one move.
+    ButItFailed {
+        /// Whether the player's mon was the one using the move.
+        by_player: bool,
+        /// The move that failed.
+        move_id: MoveId,
+    },
+    /// Charge — `STRINGID_PKMNCHARGINGPOWER` ("PKMN began charging power!",
+    /// `BattleScript_EffectCharge`, `data/battle_scripts_1.s:2304`). The
+    /// user's charge timer is already (re)started
+    /// ([`crate::volatile::Volatiles::set_charge`]), doubling an Electric
+    /// move's damage for this turn and the next.
+    ChargingPower {
+        /// Whether the player's mon was the one using the move.
+        by_player: bool,
+        /// The move that was used.
+        move_id: MoveId,
+    },
     /// The wild Pokémon chose to flee instead of acting — always the enemy
     /// side (only [`super::Battle::new`]'s `first_battle` AI path can ever
     /// produce this choice; see [`BattleOutcome::WildFled`]). No fields:

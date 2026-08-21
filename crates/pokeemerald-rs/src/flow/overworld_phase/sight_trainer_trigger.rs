@@ -104,8 +104,10 @@
 //!    crate's early, small supported-move set, Route 103's own sight
 //!    trainers all carry `TrainerParty::NoItemDefaultMoves` -- a real level-up
 //!    moveset ([`battle::initial_moveset`]) drawn from each species' full
-//!    learnset, which reliably includes at least one move `battle::BattlePokemon::validate`
-//!    does not yet implement (verified for all nine -- this module's own
+//!    learnset, which reliably includes at least one move this engine does
+//!    not yet execute *or* (since issue #321 widened move coverage) at
+//!    least one whose effect the trainer AI cannot yet score (verified for
+//!    all nine -- this module's own
 //!    `every_sight_trainers_real_party_fails_to_construct_for_exactly_these_reasons`
 //!    test, which pins each trainer's *exact* refusal, offending move id
 //!    included, so a future move-coverage slice that fixes one is forced to
@@ -665,12 +667,22 @@ mod tests {
 
         // Every distinct id in `SIGHT_TRAINERS`, with the refusal its real
         // extracted party currently produces. The move ids are the first
-        // unsupported move in that trainer's own level-up-derived moveset.
+        // move in that trainer's own level-up-derived moveset that some
+        // screen refuses.
+        //
+        // Issue #321 moved four of these rows from one screen to the
+        // *next* one: Absorb, Splash, Focus Energy and Charge are all
+        // executable now (`battle`'s drain and flag-only pipelines), so
+        // those four parties get past `ensure_executable` and stop at
+        // `battle::battle::trainer_ai::ensure_scoreable` instead -- the
+        // trainer AI cannot yet *score* the new effects, which is issue
+        // #325's slice. Both screens run before the first draw, so the
+        // per-frame cone check is exactly as cheap as it was.
         let expected = [
             (
                 "Daisy",
                 TrainerId(36),
-                Battle(BattleError::UnsupportedMoveEffect(assets::MoveId(71))), // MOVE_ABSORB
+                Battle(BattleError::UnscoreableMoveEffect(assets::MoveId(71))), // MOVE_ABSORB
             ),
             (
                 "Amy & Liv",
@@ -680,18 +692,18 @@ mod tests {
             (
                 "Andrew",
                 TrainerId(336),
-                Battle(BattleError::NonDamagingMove(assets::MoveId(150))), // MOVE_SPLASH
+                Battle(BattleError::UnscoreableMoveEffect(assets::MoveId(150))), // MOVE_SPLASH
             ),
             ("Miguel", TrainerId(293), HeldItemParty(TrainerId(293))),
             (
                 "Rhett",
                 TrainerId(703),
-                Battle(BattleError::NonDamagingMove(assets::MoveId(116))), // MOVE_FOCUS_ENERGY
+                Battle(BattleError::UnscoreableMoveEffect(assets::MoveId(116))), // MOVE_FOCUS_ENERGY
             ),
             (
                 "Marcos",
                 TrainerId(702),
-                Battle(BattleError::NonDamagingMove(assets::MoveId(268))), // MOVE_CHARGE
+                Battle(BattleError::UnscoreableMoveEffect(assets::MoveId(268))), // MOVE_CHARGE
             ),
             (
                 "Isabelle",

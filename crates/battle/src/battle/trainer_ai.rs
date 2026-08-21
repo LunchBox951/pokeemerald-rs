@@ -472,6 +472,15 @@ fn estimated_damage(
         light_screen: false,
         weather: Weather::None,
         is_solar_beam: false,
+        // `AI_CalcDmg` calls the *same* `CalculateBaseDamage`
+        // (`battle_script_commands.c:1309`), so the AI sees the pinch boost
+        // exactly as the real damage step does (issue #321).
+        attacker_pinch_boost: crate::ability::pinch_boosts_power(
+            attacker.ability(),
+            move_type,
+            attacker.current_hp(),
+            attacker.stats().max_hp,
+        ),
     };
     let damage = base_damage(&input);
     let damage = apply_stab(damage, has_stab(attacker.types(), move_id, move_type));

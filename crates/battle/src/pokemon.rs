@@ -15,10 +15,11 @@
 //! player mon, both realistic for a first encounter), held items,
 //! non-volatile status conditions, and the Shedinja 1-HP special case in
 //! `CalculateMonStats`. Abilities are out of scope too, with one exception:
-//! [`BattlePokemon::ability`] (issue #322), consumed by
+//! [`BattlePokemon::ability`] (issues #321/#322), consumed by
 //! [`crate::stat_change`]'s ability guards (Clear Body, White Smoke, Keen
-//! Eye, Hyper Cutter) — see that module's docs for why the ability system
-//! stops there.
+//! Eye, Hyper Cutter) and by [`crate::ability`]'s two damage-formula
+//! checks (Overgrow's pinch boost, Liquid Ooze's drain inversion) — see
+//! those modules' docs for why the ability system stops there.
 
 use assets::{
     experience_for_level, AbilityId, BaseStats, LevelUpLearnsets, MoveId, SpeciesId, Type,
@@ -28,6 +29,7 @@ use crate::dex::Dex;
 use crate::error::BattleError;
 use crate::nature::{Nature, Stat};
 use crate::stat_stage::StatStage;
+use crate::volatile::Volatiles;
 
 /// `MAX_MON_MOVES` (`pokeemerald/include/constants/global.h:82`): the most
 /// moves a Pokémon can know at once.
@@ -273,6 +275,7 @@ pub struct BattlePokemon {
     current_hp: u32,
     moves: Vec<MoveSlot>,
     stages: StatStages,
+    volatiles: Volatiles,
 }
 
 impl BattlePokemon {
@@ -409,6 +412,7 @@ impl BattlePokemon {
             current_hp: stats.max_hp,
             moves: slots,
             stages: StatStages::default(),
+            volatiles: Volatiles::default(),
         })
     }
 
@@ -457,9 +461,10 @@ impl BattlePokemon {
     /// `GetAbilityBySpecies` (`pokeemerald/src/pokemon.c:4546`-`:4554`).
     /// The slot-0 fallback for a single-ability species is this port's own
     /// hardening, not upstream's: `CreateBoxMon` never sets `abilityNum`
-    /// for such a species (`:2296`-`:2300`) while this type stores the
-    /// parity bit unconditionally, so the fallback is what keeps the two
-    /// observably identical. Consumed by [`crate::stat_change`]'s ability
+    /// for such a species (`:2296`-`:2300`), and construction mirrors that
+    /// guard, so the fallback only matters for a save-loaded slot. Consumed
+    /// by [`crate::ability`]'s Overgrow/Liquid Ooze checks (issue #321) and
+    /// by [`crate::stat_change`]'s ability
     /// guards (issue #322: Clear Body, White Smoke, Keen Eye, Hyper
     /// Cutter) — see this type's module docs for why the rest of the
     /// ability system stays out.
@@ -583,6 +588,66 @@ impl BattlePokemon {
     /// application clamps the same way).
     pub fn apply_damage(&mut self, amount: u32) {
         self.current_hp = self.current_hp.saturating_sub(amount);
+    }
+
+    /// Add `amount` to current HP, clamped at maximum HP —
+    /// `Cmd_datahpupdate`'s negative-damage branch
+    /// (`pokeemerald/src/battle_script_commands.c:1896`-`:1900`):
+    ///
+    /// ```text
+    /// gBattleMons[].hp += -gBattleMoveDamage;
+    /// if (gBattleMons[].hp > gBattleMons[].maxHP)
+    ///     gBattleMons[].hp = gBattleMons[].maxHP;
+    /// ```
+    ///
+    /// Added by issue #321 for [`crate::drain`]'s heal half. Note that
+    /// upstream applies no fainted-battler guard here: the clamp is the only
+    /// bound, so this method has only the one too.
+    pub fn heal_hp(&mut self, amount: u32) {
+        self.current_hp = self
+            .current_hp
+            .saturating_add(amount)
+            .min(self.stats.max_hp);
+    }
+
+    /// The volatile conditions this battler currently carries
+    /// (`gBattleMons[].status2` / `gStatuses3[]`, as far as this crate
+    /// models them — see [`Volatiles`]).
+    #[must_use]
+    pub const fn volatiles(&self) -> Volatiles {
+        self.volatiles
+    }
+
+    /// Mutable access to [`BattlePokemon::volatiles`], for the pipelines
+    /// that set a bit ([`crate::flag_move`]) and for the end-of-turn tick
+    /// ([`Volatiles::tick_charge`]).
+    ///
+    /// Every [`Volatiles`] field is independently valid, so no invariant of
+    /// this type can be broken through the reference — the same reasoning
+    /// [`BattlePokemon::stages_mut`] rests on.
+    pub const fn volatiles_mut(&mut self) -> &mut Volatiles {
+        &mut self.volatiles
+    }
+
+    /// Reset every field that is battle scratch rather than party data:
+    /// [`BattlePokemon::stages`] and [`BattlePokemon::volatiles`].
+    ///
+    /// Neither survives upstream's own battle boundary — `stages` because
+    /// `struct Pokemon` has no such field at all (module docs on
+    /// [`StatStages`]), `volatiles` because `BattleStartClearSetData`
+    /// zeroes `gBattleMons[].status2` and `gStatuses3[]` before every
+    /// battle (`src/battle_main.c:3034`, cited on [`Volatiles`]). A flow
+    /// layer that clones the battle's player mon back into the party after
+    /// the battle ends must call this before the clone reaches the party
+    /// record, or the *next* battle's `BattlePokemon::new` — which already
+    /// starts at [`Volatiles::default`] and [`StatStages::default`] — would
+    /// be fighting a mon that inherited scratch state no upstream battle
+    /// ever carries forward. Exists as one method rather than three
+    /// call-site resets so the two fields cannot drift apart the way
+    /// [`BattlePokemon::stages_mut`] alone did before [`Volatiles`] existed.
+    pub fn clear_battle_scratch(&mut self) {
+        self.stages = StatStages::default();
+        self.volatiles = Volatiles::default();
     }
 
     /// Add earned experience, applying every crossed level threshold and
