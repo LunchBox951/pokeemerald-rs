@@ -781,6 +781,13 @@ impl BattlePokemon {
     /// preserving the absolute amount of damage the mon had taken before
     /// levelling up.
     ///
+    /// # Errors
+    ///
+    /// [`BattleError::MoveLearnPending`] if a prompt is already open
+    /// ([`BattlePokemon::pending_move_learn`]), refused before any
+    /// mutation: a second walk would overwrite the open question and drop
+    /// its unconsumed remainder.
+    ///
     /// # Recorded divergence: EVs and friendship still do not move
     ///
     /// Upstream's level-up path does more than raise the number and teach
@@ -797,14 +804,21 @@ impl BattlePokemon {
                   decision the mon now carries \
                   (`BattlePokemon::pending_move_learn`); ignoring the \
                   report means never asking the player"]
-    pub fn apply_experience(&mut self, dex: &Dex, amount: u32) -> Option<PendingMoveLearn> {
-        debug_assert!(
-            self.pending_move_learn.is_none(),
-            "one award at a time: a second walk would drop the open prompt \
-             and its unconsumed remainder"
-        );
+    pub fn apply_experience(
+        &mut self,
+        dex: &Dex,
+        amount: u32,
+    ) -> Result<Option<PendingMoveLearn>, BattleError> {
+        // One award at a time, refused before any mutation: a second walk
+        // would overwrite the open prompt and silently drop its unconsumed
+        // remainder. Upstream cannot interleave awards either -- the yes/no
+        // box completes inside `BattleScript_GiveExp` before the next
+        // `Cmd_getexp` can run.
+        if let Some(pending) = self.pending_move_learn {
+            return Err(BattleError::MoveLearnPending(pending.move_id()));
+        }
         self.pending_move_learn = self.advance_experience(dex, amount);
-        self.pending_move_learn
+        Ok(self.pending_move_learn)
     }
 
     /// `GetLevelFromMonExp` + `CalculateMonStats`

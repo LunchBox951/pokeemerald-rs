@@ -42,6 +42,7 @@ fn torchic_one_point_from_a_full_moveset_level_up(dex: &Dex) -> BattlePokemon {
     let level_16 = assets::experience_for_level(growth_rate, 16).unwrap();
     assert!(
         mon.apply_experience(dex, level_16 - 1 - mon.experience())
+            .unwrap()
             .is_none(),
         "fixture sanity: stopping short of the threshold crosses no level"
     );

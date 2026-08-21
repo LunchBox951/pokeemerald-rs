@@ -237,6 +237,7 @@ fn a_wild_knockouts_prompt_defers_the_battles_end_until_it_is_answered() {
     let level_16 = assets::experience_for_level(growth_rate, 16).unwrap();
     assert!(player
         .apply_experience(&dex, level_16 - 1 - player.experience())
+        .unwrap()
         .is_none());
     let enemy = max_iv_mon(&dex, RATTATA, 2, vec![TACKLE]);
 

@@ -391,6 +391,7 @@ fn a_crossed_level_learns_an_unexecutable_move_that_selection_then_refuses() {
     assert!(
         player
             .apply_experience(&dex, level_16 - player.experience())
+            .unwrap()
             .is_none(),
         "an empty slot never asks the player anything"
     );
@@ -470,6 +471,7 @@ fn a_single_crossed_level_learns_its_learnset_move() {
 
     assert!(
         mon.apply_experience(&dex, level_16 - mon.experience())
+            .unwrap()
             .is_none(),
         "an empty slot never asks the player anything"
     );
@@ -503,6 +505,7 @@ fn a_crossed_levels_already_known_move_is_skipped_at_no_slot_cost() {
 
     assert!(
         mon.apply_experience(&dex, level_16 - mon.experience())
+            .unwrap()
             .is_none(),
         "an already-known move is skipped without asking"
     );
@@ -541,6 +544,7 @@ fn a_multi_level_jump_learns_each_crossed_levels_moves_in_order() {
 
     let pending = mon
         .apply_experience(&dex, level_29 - mon.experience())
+        .unwrap()
         .expect("the fourth entry has no slot left, so the walk asks");
 
     assert_eq!(
@@ -608,6 +612,7 @@ fn a_full_moveset_asks_before_learning_and_honours_either_answer() {
 
     let pending = mon
         .apply_experience(&dex, level_16 - mon.experience())
+        .unwrap()
         .expect("four filled slots must raise the replacement question");
     assert_eq!(pending.move_id(), PECK);
 
@@ -671,6 +676,7 @@ fn a_trainer_battles_exp_award_surfaces_the_replacement_prompt() {
     // given up, so the clear is observable.
     assert!(player
         .apply_experience(&dex, level_16 - 1 - player.experience())
+        .unwrap()
         .is_none());
     let player = player
         .with_pp_bonuses(&dex, PpBonuses::from_bits(0b0000_1100))
@@ -797,6 +803,7 @@ fn a_prompts_deferred_send_out_arrives_with_the_answer_and_the_battle_plays_on()
     let mut player = max_iv_mon(&dex, TORCHIC, 15, vec![SCRATCH, GROWL, TACKLE, LEER]);
     assert!(player
         .apply_experience(&dex, level_16 - 1 - player.experience())
+        .unwrap()
         .is_none());
     let party = vec![
         max_iv_mon(&dex, TREECKO, 5, vec![POUND, LEER]),
@@ -872,6 +879,7 @@ fn a_multi_prompt_chain_resolves_fully_before_the_deferred_transition() {
     let mut player = max_iv_mon(&dex, WYNAUT, 14, vec![SCRATCH, GROWL, TACKLE, LEER]);
     assert!(player
         .apply_experience(&dex, level_15 - 1 - player.experience())
+        .unwrap()
         .is_none());
     let party = vec![max_iv_mon(&dex, TREECKO, 5, vec![POUND, LEER])];
 

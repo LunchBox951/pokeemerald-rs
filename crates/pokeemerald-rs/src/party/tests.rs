@@ -111,7 +111,7 @@ fn sub_level_experience_survives_the_round_trip() {
     // Not enough to reach level 13, so the only observable difference is
     // the experience total itself -- and no level crossed means no learnset
     // walk, hence nothing to ask the player about.
-    assert!(mon.apply_experience(&dex, 10).is_none());
+    assert!(mon.apply_experience(&dex, 10).unwrap().is_none());
     let treecko = dex.species(mon.species()).unwrap();
     assert_eq!(
         mon.experience(),
@@ -159,6 +159,7 @@ fn a_move_learned_by_levelling_up_survives_the_round_trip() {
     let level_16 = assets::experience_for_level(torchic.growth_rate, 16).unwrap();
     assert!(
         mon.apply_experience(&dex, level_16 - mon.experience())
+            .unwrap()
             .is_none(),
         "two of the four slots are free, so Peck is learned without asking"
     );

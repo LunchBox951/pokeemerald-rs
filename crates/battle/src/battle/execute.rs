@@ -247,7 +247,7 @@ impl Battle {
             } else {
                 wild_faint_exp(base_exp, level)
             };
-            let pending = self.player.apply_experience(&self.dex, exp);
+            let pending = self.player.apply_experience(&self.dex, exp)?;
             events.push(BattleEvent::ExpGained(exp));
             // A crossed level whose learnset move has no free slot parks
             // the walk on a player decision (issue #304): upstream's

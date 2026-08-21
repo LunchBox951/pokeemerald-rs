@@ -414,6 +414,7 @@ mod tests {
 
         let pending = mon
             .apply_experience(&dex, award)
+            .unwrap()
             .expect("level 16's Peck has no free slot, so the walk must pause");
 
         assert_eq!(pending.move_id(), PECK);
@@ -426,12 +427,34 @@ mod tests {
         );
     }
 
+    /// A second award while a prompt is open is refused before any
+    /// mutation (`BattleError::MoveLearnPending`): silently starting a new
+    /// walk would drop the open question and its unconsumed remainder.
+    #[test]
+    fn a_second_award_with_an_open_prompt_is_refused_unmutated() {
+        let dex = Dex::new();
+        let mut mon = full_torchic(&dex, 15);
+        let award = experience_to(&dex, &mon, 16);
+        let pending = mon.apply_experience(&dex, award).unwrap().unwrap();
+
+        assert_eq!(
+            mon.apply_experience(&dex, 50),
+            Err(BattleError::MoveLearnPending(PECK))
+        );
+        assert_eq!(
+            mon.pending_move_learn(),
+            Some(pending),
+            "the open prompt survives the refused call untouched"
+        );
+        assert_eq!(mon.level(), 16, "no part of the second award landed");
+    }
+
     #[test]
     fn declining_leaves_the_moveset_alone() {
         let dex = Dex::new();
         let mut mon = full_torchic(&dex, 15);
         let award = experience_to(&dex, &mon, 16);
-        let _ = mon.apply_experience(&dex, award).unwrap();
+        let _ = mon.apply_experience(&dex, award).unwrap().unwrap();
         let before = mon.moves().to_vec();
 
         let resolution = mon
@@ -454,7 +477,7 @@ mod tests {
             .with_pp_bonuses(&dex, bonuses)
             .unwrap();
         let award = experience_to(&dex, &mon, 16);
-        let _ = mon.apply_experience(&dex, award).unwrap();
+        let _ = mon.apply_experience(&dex, award).unwrap().unwrap();
 
         let resolution = mon
             .resolve_move_learn(&dex, MoveLearnDecision::Replace(1))
@@ -497,7 +520,7 @@ mod tests {
         let award = experience_to(&dex, &mon, 19);
         let growth_rate = dex.species(mon.species()).unwrap().growth_rate;
 
-        let first = mon.apply_experience(&dex, award).unwrap();
+        let first = mon.apply_experience(&dex, award).unwrap().unwrap();
         assert_eq!(first.move_id(), PECK);
         assert_eq!(first.level(), 16);
         assert_eq!(
@@ -566,7 +589,7 @@ mod tests {
         .expect("a four-move Wynaut is representable");
         let award = experience_to(&dex, &mon, 15);
 
-        let mut pending = mon.apply_experience(&dex, award);
+        let mut pending = mon.apply_experience(&dex, award).unwrap();
         let mut offered = Vec::new();
         while let Some(prompt) = pending {
             assert_eq!(prompt.level(), 15, "every offer sits on one level");
@@ -592,7 +615,7 @@ mod tests {
             BattlePokemon::new(&dex, TORCHIC, 15, Ivs::default(), 0, vec![SCRATCH]).unwrap();
         let award = experience_to(&dex, &mon, 16);
 
-        assert!(mon.apply_experience(&dex, award).is_none());
+        assert!(mon.apply_experience(&dex, award).unwrap().is_none());
         assert_eq!(
             mon.moves().iter().map(|s| s.move_id).collect::<Vec<_>>(),
             vec![SCRATCH, PECK]
@@ -604,7 +627,7 @@ mod tests {
         let dex = Dex::new();
         let mut mon = full_torchic(&dex, 15);
         let award = experience_to(&dex, &mon, 16);
-        let _ = mon.apply_experience(&dex, award).unwrap();
+        let _ = mon.apply_experience(&dex, award).unwrap().unwrap();
         let before = mon.moves().to_vec();
 
         assert_eq!(
@@ -642,7 +665,7 @@ mod tests {
         .with_pp_bonuses(&dex, bonuses)
         .unwrap();
         let award = experience_to(&dex, &mon, 16);
-        let pending = mon.apply_experience(&dex, award).unwrap();
+        let pending = mon.apply_experience(&dex, award).unwrap().unwrap();
         assert_eq!(pending.move_id(), PECK);
         let before = mon.moves().to_vec();
 
@@ -685,7 +708,7 @@ mod tests {
         )
         .unwrap();
         let award = experience_to(&dex, &mon, 16);
-        let _ = mon.apply_experience(&dex, award).unwrap();
+        let _ = mon.apply_experience(&dex, award).unwrap().unwrap();
         let before = mon.moves().to_vec();
 
         assert_eq!(
