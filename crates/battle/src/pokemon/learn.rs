@@ -90,10 +90,10 @@ use crate::error::BattleError;
 /// crossed this level (upstream's leftover `gBattleMoveDamage`,
 /// `src/battle_script_commands.c:3463`, `:3505`-`:3507`), so answering it
 /// continues the same level-up rather than restarting or truncating it. It
-/// is therefore only meaningful to the mon that produced it; handing one to
-/// a different [`BattlePokemon`] resumes *that* mon's learnset at an
-/// unrelated position. Owners keep the two together
-/// ([`crate::battle::Battle::pending_move_learn`]).
+/// is therefore only meaningful to the mon that produced it, which is why
+/// the mon *owns* it ([`BattlePokemon::pending_move_learn`]) and
+/// [`BattlePokemon::resolve_move_learn`] takes only the answer: a copy of
+/// this type is a report to read, never a credential to hand back in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct PendingMoveLearn {
     /// `gMoveToLearn` (`src/pokemon.c:3037`).
@@ -292,8 +292,10 @@ impl BattlePokemon {
     /// # Errors
     ///
     /// Every error leaves the mon unmutated and the prompt still
-    /// answerable — the caller re-asks with the same `pending`:
+    /// answerable — the caller simply asks again:
     ///
+    /// - [`BattleError::NoMoveLearnPending`] if no prompt is open
+    ///   ([`BattlePokemon::pending_move_learn`]).
     /// - [`BattleError::HmMoveCantBeForgotten`] if
     ///   [`MoveLearnDecision::Replace`] names a slot holding an HM move —
     ///   upstream's `IsHMMove2` refusal (`:5468`-`:5472`, printing
@@ -308,9 +310,11 @@ impl BattlePokemon {
     pub fn resolve_move_learn(
         &mut self,
         dex: &Dex,
-        pending: PendingMoveLearn,
         decision: MoveLearnDecision,
     ) -> Result<MoveLearnResolution, BattleError> {
+        let pending = self
+            .pending_move_learn
+            .ok_or(BattleError::NoMoveLearnPending)?;
         let learned = match decision {
             MoveLearnDecision::Decline => None,
             MoveLearnDecision::Replace(slot) => {
@@ -347,7 +351,19 @@ impl BattlePokemon {
                 pending.remaining_exp,
             )
             .or_else(|| self.advance_experience(dex, pending.remaining_exp));
+        self.pending_move_learn = next;
         Ok(MoveLearnResolution { learned, next })
+    }
+
+    /// The paused level-up prompt waiting on
+    /// [`BattlePokemon::resolve_move_learn`], if any — the question itself
+    /// lives on the mon (upstream's `gMoveToLearn`/`sLearningMoveTableID`
+    /// are flow state, not values the answer carries back in), so a stale
+    /// copy of an earlier prompt cannot be replayed and one mon's prompt
+    /// cannot be answered on another.
+    #[must_use]
+    pub const fn pending_move_learn(&self) -> Option<PendingMoveLearn> {
+        self.pending_move_learn
     }
 }
 
@@ -415,11 +431,11 @@ mod tests {
         let dex = Dex::new();
         let mut mon = full_torchic(&dex, 15);
         let award = experience_to(&dex, &mon, 16);
-        let pending = mon.apply_experience(&dex, award).unwrap();
+        let _ = mon.apply_experience(&dex, award).unwrap();
         let before = mon.moves().to_vec();
 
         let resolution = mon
-            .resolve_move_learn(&dex, pending, MoveLearnDecision::Decline)
+            .resolve_move_learn(&dex, MoveLearnDecision::Decline)
             .unwrap();
 
         assert!(resolution.learned.is_none());
@@ -438,10 +454,10 @@ mod tests {
             .with_pp_bonuses(&dex, bonuses)
             .unwrap();
         let award = experience_to(&dex, &mon, 16);
-        let pending = mon.apply_experience(&dex, award).unwrap();
+        let _ = mon.apply_experience(&dex, award).unwrap();
 
         let resolution = mon
-            .resolve_move_learn(&dex, pending, MoveLearnDecision::Replace(1))
+            .resolve_move_learn(&dex, MoveLearnDecision::Replace(1))
             .unwrap();
 
         let learned = resolution.learned.expect("slot 1 was replaced");
@@ -501,7 +517,7 @@ mod tests {
         );
 
         let resolution = mon
-            .resolve_move_learn(&dex, first, MoveLearnDecision::Decline)
+            .resolve_move_learn(&dex, MoveLearnDecision::Decline)
             .unwrap();
         let second = resolution
             .next
@@ -511,7 +527,7 @@ mod tests {
         assert_eq!(mon.level(), 19, "the answer released the rest of the award");
 
         let resolution = mon
-            .resolve_move_learn(&dex, second, MoveLearnDecision::Replace(3))
+            .resolve_move_learn(&dex, MoveLearnDecision::Replace(3))
             .unwrap();
         assert!(resolution.next.is_none(), "the award is fully spent");
         assert_eq!(mon.level(), 19);
@@ -556,7 +572,7 @@ mod tests {
             assert_eq!(prompt.level(), 15, "every offer sits on one level");
             offered.push(prompt.move_id());
             pending = mon
-                .resolve_move_learn(&dex, prompt, MoveLearnDecision::Decline)
+                .resolve_move_learn(&dex, MoveLearnDecision::Decline)
                 .unwrap()
                 .next;
         }
@@ -588,16 +604,16 @@ mod tests {
         let dex = Dex::new();
         let mut mon = full_torchic(&dex, 15);
         let award = experience_to(&dex, &mon, 16);
-        let pending = mon.apply_experience(&dex, award).unwrap();
+        let _ = mon.apply_experience(&dex, award).unwrap();
         let before = mon.moves().to_vec();
 
         assert_eq!(
-            mon.resolve_move_learn(&dex, pending, MoveLearnDecision::Replace(MAX_MON_MOVES)),
+            mon.resolve_move_learn(&dex, MoveLearnDecision::Replace(MAX_MON_MOVES)),
             Err(BattleError::InvalidMoveSlot(MAX_MON_MOVES))
         );
         assert_eq!(mon.moves(), before);
         assert_eq!(
-            mon.resolve_move_learn(&dex, pending, MoveLearnDecision::Decline)
+            mon.resolve_move_learn(&dex, MoveLearnDecision::Decline)
                 .unwrap()
                 .learned,
             None,
@@ -631,7 +647,7 @@ mod tests {
         let before = mon.moves().to_vec();
 
         assert_eq!(
-            mon.resolve_move_learn(&dex, pending, MoveLearnDecision::Replace(1)),
+            mon.resolve_move_learn(&dex, MoveLearnDecision::Replace(1)),
             Err(BattleError::HmMoveCantBeForgotten(SURF)),
             "slot 1 holds Surf, which upstream refuses to overwrite"
         );
@@ -645,7 +661,7 @@ mod tests {
         // The walk did not advance: the same prompt takes a corrected
         // answer, exactly like upstream reopening the move list.
         let resolution = mon
-            .resolve_move_learn(&dex, pending, MoveLearnDecision::Replace(0))
+            .resolve_move_learn(&dex, MoveLearnDecision::Replace(0))
             .unwrap();
         let learned = resolution.learned.expect("slot 0 holds no HM");
         assert_eq!(learned.forgotten, SCRATCH);
@@ -669,15 +685,15 @@ mod tests {
         )
         .unwrap();
         let award = experience_to(&dex, &mon, 16);
-        let pending = mon.apply_experience(&dex, award).unwrap();
+        let _ = mon.apply_experience(&dex, award).unwrap();
         let before = mon.moves().to_vec();
 
         assert_eq!(
-            mon.resolve_move_learn(&dex, pending, MoveLearnDecision::Replace(1)),
+            mon.resolve_move_learn(&dex, MoveLearnDecision::Replace(1)),
             Err(BattleError::HmMoveCantBeForgotten(SURF))
         );
         let resolution = mon
-            .resolve_move_learn(&dex, pending, MoveLearnDecision::Decline)
+            .resolve_move_learn(&dex, MoveLearnDecision::Decline)
             .unwrap();
         assert!(resolution.learned.is_none());
         assert!(resolution.next.is_none());

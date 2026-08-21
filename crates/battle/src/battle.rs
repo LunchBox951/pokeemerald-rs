@@ -375,13 +375,6 @@ pub struct Battle {
     /// top of every later turn, saturating at `0xFF`. Only
     /// `trainer_ai`'s `AI_SetupFirstTurn` reads it.
     turn_counter: u8,
-    /// The level-up move waiting on a player decision, if any (issue #304):
-    /// upstream's `BattleScript_AskToLearnMove` yes/no box, as state instead
-    /// of a script the engine is parked in. Set when
-    /// [`BattlePokemon::apply_experience`] pauses its learnset walk, cleared
-    /// by [`Battle::resolve_move_learn`], and refused by
-    /// [`Battle::take_turn`] while it is `Some`.
-    pending_move_learn: Option<PendingMoveLearn>,
     /// Whether any turn has begun. Turn 1 reaches action selection through
     /// `TryDoEventsBeforeFirstTurn`, which does **not** touch
     /// [`Battle::turn_counter`]; every later turn goes through
@@ -514,7 +507,6 @@ impl Battle {
                 BattleKind::Wild
             },
             turn_counter: 0,
-            pending_move_learn: None,
             turn_started: false,
         })
     }
@@ -613,7 +605,6 @@ impl Battle {
             outcome: None,
             kind: BattleKind::Trainer(TrainerContext::new(trainer, data, party)),
             turn_counter: 0,
-            pending_move_learn: None,
             turn_started: false,
         })
     }
@@ -686,7 +677,7 @@ impl Battle {
     /// releases them ([`Battle::resolve_move_learn`]).
     #[must_use]
     pub const fn pending_move_learn(&self) -> Option<PendingMoveLearn> {
-        self.pending_move_learn
+        self.player.pending_move_learn()
     }
 
     /// Answer [`Battle::pending_move_learn`] and resume the level-up walk it
@@ -727,13 +718,12 @@ impl Battle {
         &mut self,
         decision: MoveLearnDecision,
     ) -> Result<Vec<BattleEvent>, BattleError> {
-        let pending = self
-            .pending_move_learn
-            .ok_or(BattleError::NoMoveLearnPending)?;
-        let resolution = self
+        let asked = self
             .player
-            .resolve_move_learn(&self.dex, pending, decision)?;
-        self.pending_move_learn = resolution.next;
+            .pending_move_learn()
+            .ok_or(BattleError::NoMoveLearnPending)?
+            .move_id();
+        let resolution = self.player.resolve_move_learn(&self.dex, decision)?;
 
         let mut events = Vec::new();
         match resolution.learned {
@@ -742,9 +732,7 @@ impl Battle {
                 forgotten: learned.forgotten,
                 slot: learned.slot,
             }),
-            None => events.push(BattleEvent::MoveLearnDeclined {
-                move_id: pending.move_id(),
-            }),
+            None => events.push(BattleEvent::MoveLearnDeclined { move_id: asked }),
         }
         match resolution.next {
             Some(next) => events.push(BattleEvent::MoveLearnPrompt {
@@ -894,7 +882,7 @@ impl Battle {
         // at all -- the yes/no box is inside `BattleScript_LevelUp`, which
         // completes before the next turn begins. Like every other pre-turn
         // rejection, this draws nothing.
-        if let Some(pending) = self.pending_move_learn {
+        if let Some(pending) = self.player.pending_move_learn() {
             return Err(BattleError::MoveLearnPending(pending.move_id()));
         }
         if self.outcome.is_some() {
@@ -1139,7 +1127,7 @@ impl Battle {
     /// [`Battle::resolve_move_learn`] runs [`Battle::settle_fainted_enemy`]
     /// when the last prompt resolves.
     fn end_of_turn(&mut self, events: &mut Vec<BattleEvent>) {
-        if self.pending_move_learn.is_some() {
+        if self.player.pending_move_learn().is_some() {
             return;
         }
         self.settle_fainted_enemy(events);
@@ -1355,7 +1343,6 @@ mod tests {
             kind: BattleKind::Trainer(context),
             turn_counter: 0,
             turn_started: false,
-            pending_move_learn: None,
         };
         (battle, player_max_hp, tackle_max_pp)
     }

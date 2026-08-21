@@ -146,12 +146,14 @@
 //! is `CalculatePPWithBonus`, and a slot's capacity (what a heal restores to,
 //! what PP counts down from) is now the PP-Up-adjusted maximum rather than the
 //! move's base PP. And the four-known-moves case is no longer a silent
-//! decline: [`pokemon::BattlePokemon::apply_experience`] hands back a
-//! [`pokemon::PendingMoveLearn`] the caller must answer with a
-//! [`pokemon::MoveLearnDecision`], which [`battle::Battle`] surfaces as
+//! decline: [`pokemon::BattlePokemon::apply_experience`] parks a
+//! [`pokemon::PendingMoveLearn`] on the mon itself, which must be answered
+//! with a [`pokemon::MoveLearnDecision`] — the mon owns the open question,
+//! so a stale copy cannot be replayed and one mon's prompt cannot be
+//! answered on another. [`battle::Battle`] surfaces it as
 //! [`battle::Battle::pending_move_learn`] /
-//! [`battle::Battle::resolve_move_learn`] and enforces by refusing a turn
-//! while the question is open. The pause is faithful to upstream's
+//! [`battle::Battle::resolve_move_learn`] and enforces it by refusing a
+//! turn while the question is open. The pause is faithful to upstream's
 //! one-level-at-a-time award loop: the mon holds *at* the prompted level
 //! (the award's remainder unconsumed on the token), and everything after
 //! the knockout — a trainer's forced send-out, the money payout, the

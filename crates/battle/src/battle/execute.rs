@@ -251,15 +251,11 @@ impl Battle {
             events.push(BattleEvent::ExpGained(exp));
             // A crossed level whose learnset move has no free slot parks
             // the walk on a player decision (issue #304): upstream's
-            // `BattleScript_AskToLearnMove` yes/no box. The battle carries
-            // the question until `Battle::resolve_move_learn` answers it,
-            // and refuses another turn meanwhile.
+            // `BattleScript_AskToLearnMove` yes/no box. The mon itself
+            // carries the question (`BattlePokemon::pending_move_learn`)
+            // until `Battle::resolve_move_learn` answers it, and the
+            // battle refuses another turn meanwhile.
             if let Some(prompt) = pending {
-                debug_assert!(
-                    self.pending_move_learn.is_none(),
-                    "one exp award per take_turn; a second prompt would                      drop the first question"
-                );
-                self.pending_move_learn = Some(prompt);
                 events.push(BattleEvent::MoveLearnPrompt {
                     move_id: prompt.move_id(),
                 });
@@ -276,7 +272,7 @@ impl Battle {
         // `battle_util.c:1894`-`:1951`), so the wild finish waits in
         // `Battle::settle_fainted_enemy` for `Battle::resolve_move_learn`'s
         // last answer.
-        if self.trainer().is_none() && self.pending_move_learn.is_none() {
+        if self.trainer().is_none() && self.player.pending_move_learn().is_none() {
             self.finish(events, BattleOutcome::PlayerWon);
         }
         Ok(())

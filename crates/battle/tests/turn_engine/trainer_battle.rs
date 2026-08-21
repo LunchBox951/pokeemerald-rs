@@ -577,7 +577,7 @@ fn a_multi_level_jump_learns_each_crossed_levels_moves_in_order() {
         "and nothing is bumped until that question is answered"
     );
     assert_eq!(
-        mon.resolve_move_learn(&dex, pending, MoveLearnDecision::Decline)
+        mon.resolve_move_learn(&dex, MoveLearnDecision::Decline)
             .unwrap()
             .next,
         None,
@@ -628,7 +628,7 @@ fn a_full_moveset_asks_before_learning_and_honours_either_answer() {
     // Declining: unchanged, exactly what the pre-#304 silent decline did.
     let mut declined = mon.clone();
     assert!(declined
-        .resolve_move_learn(&dex, pending, MoveLearnDecision::Decline)
+        .resolve_move_learn(&dex, MoveLearnDecision::Decline)
         .unwrap()
         .learned
         .is_none());
@@ -642,7 +642,7 @@ fn a_full_moveset_asks_before_learning_and_honours_either_answer() {
     );
 
     // Replacing: only the chosen slot changes, at the new move's base PP.
-    mon.resolve_move_learn(&dex, pending, MoveLearnDecision::Replace(2))
+    mon.resolve_move_learn(&dex, MoveLearnDecision::Replace(2))
         .unwrap();
     assert_eq!(
         mon.moves()

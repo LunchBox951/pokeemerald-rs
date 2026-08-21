@@ -298,6 +298,12 @@ pub struct BattlePokemon {
     pp_bonuses: PpBonuses,
     stages: StatStages,
     volatiles: Volatiles,
+    /// The paused level-up walk waiting on a player decision, owned here so
+    /// no caller-supplied token can be replayed or handed to another mon —
+    /// upstream's `gMoveToLearn`/`sLearningMoveTableID` are likewise state
+    /// of the flow, not values the answer carries back in
+    /// ([`learn::PendingMoveLearn`]'s docs).
+    pending_move_learn: Option<PendingMoveLearn>,
 }
 
 impl BattlePokemon {
@@ -440,6 +446,7 @@ impl BattlePokemon {
             pp_bonuses: PpBonuses::NONE,
             stages: StatStages::default(),
             volatiles: Volatiles::default(),
+            pending_move_learn: None,
         })
     }
 
@@ -787,11 +794,17 @@ impl BattlePokemon {
     /// numeric level, stats, and — as of issue #252 — learnset moves change
     /// across a level-up. Recorded on the `Cmd_getexp` ledger entry.
     #[must_use = "a full moveset pauses the level-up walk for a player \
-                  decision; dropping the token declines it *and* abandons \
-                  the rest of the level-up's learnset entries and the \
-                  award's unconsumed remainder"]
+                  decision the mon now carries \
+                  (`BattlePokemon::pending_move_learn`); ignoring the \
+                  report means never asking the player"]
     pub fn apply_experience(&mut self, dex: &Dex, amount: u32) -> Option<PendingMoveLearn> {
-        self.advance_experience(dex, amount)
+        debug_assert!(
+            self.pending_move_learn.is_none(),
+            "one award at a time: a second walk would drop the open prompt \
+             and its unconsumed remainder"
+        );
+        self.pending_move_learn = self.advance_experience(dex, amount);
+        self.pending_move_learn
     }
 
     /// `GetLevelFromMonExp` + `CalculateMonStats`
