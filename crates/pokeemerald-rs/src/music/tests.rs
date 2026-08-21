@@ -367,7 +367,7 @@ mod synthetic_pack {
 
         let mut bytes = Vec::new();
         bytes.extend_from_slice(b"PKMRPACK");
-        bytes.extend_from_slice(&6u32.to_le_bytes());
+        bytes.extend_from_slice(&assets::pack::FORMAT_VERSION.to_le_bytes());
         bytes.extend_from_slice(&u32::try_from(entries.len()).unwrap().to_le_bytes());
         for (id, payload) in &entries {
             bytes.extend_from_slice(&u16::try_from(id.len()).unwrap().to_le_bytes());

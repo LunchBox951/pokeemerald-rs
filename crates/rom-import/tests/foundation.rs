@@ -66,7 +66,7 @@ fn a_profile_built_from_the_fixture_selects_it() {
 }
 
 #[test]
-fn import_fails_closed_without_domain_readers() {
+fn import_fails_closed_on_an_unsupported_rom() {
     let dir = std::env::temp_dir().join("rom-import-foundation-test");
     std::fs::create_dir_all(&dir).expect("a writable temp dir");
     let rom_path = dir.join("fixture.gba");
@@ -76,7 +76,7 @@ fn import_fails_closed_without_domain_readers() {
 
     // The fixture is not the supported revision, so the import stops at
     // profile selection and nothing is written.
-    let err = rom_import::import(&rom_path, &out_path).expect_err("no domain readers exist");
+    let err = rom_import::import(&rom_path, &out_path).expect_err("a fixture is not a real ROM");
     assert!(matches!(err, ImportError::UnsupportedRevision { .. }));
     assert!(!out_path.exists(), "import must never write a pack");
 

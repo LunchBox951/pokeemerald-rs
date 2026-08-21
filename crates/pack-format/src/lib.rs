@@ -2,7 +2,7 @@
 //! policy A): the one owner of the layout `cargo xtask extract` writes and
 //! `crates/assets` reads.
 //!
-//! # Format (version 6, wire layout unchanged since 1)
+//! # Format (version 7, wire layout unchanged since 1)
 //!
 //! All multi-byte integers are little-endian. Layout, in order:
 //!

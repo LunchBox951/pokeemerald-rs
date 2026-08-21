@@ -15,8 +15,7 @@
 //!
 //! # What exists
 //!
-//! This slice is the ROM-side foundation, everything below the first domain
-//! reader:
+//! The ROM-side foundation, plus the first domain readers:
 //!
 //! - [`Rom`] loads and validates an image: exact size, GBA cartridge header
 //!   with its fixed byte and complement check, whole-file SHA-1.
@@ -36,13 +35,30 @@
 //!   is needed and a dependency is not `(minimal-deps)`.
 //! - [`fixture::RomFixture`] builds synthetic ROM-shaped images for tests.
 //!   No real ROM is ever needed to test this crate.
+//! - `domains` holds one reader per asset domain. Two are wired: the title
+//!   screen (`title/image/*`, `title/raw/*`, `title/palette/*`) and the
+//!   interface palettes (`interface/palette/*`). [`import`] and
+//!   [`import_to_bytes`] run them into a `PackWriter` and hand back a real
+//!   pack.
+//!
+//! # Equivalence
+//!
+//! The pack this crate writes has to be byte-identical to the one `cargo
+//! xtask extract` writes from a decomp checkout, for every id both produce.
+//! `tests/equivalence.rs` is that gate: it is `#[ignore]`d, needs
+//! `$POKEEMERALD_ROM` and a checkout pack, and compares the two packs entry
+//! by entry. There is no reviewed difference to reconcile for the domains
+//! wired so far.
 //!
 //! # What is next
 //!
-//! Domain readers, one slice each, sharing this crate's reader and
-//! decompressor: tilesets and map layouts, sprites and palettes, text banks,
-//! species and move data. Each turns ROM bytes into [`pack_format`] entries
-//! under the ids `crates/assets` already expects.
+//! The remaining domains, one slice each, sharing this crate's reader and
+//! decompressor: tilesets and map layouts, sprites and fonts, text windows,
+//! `MUS_TITLE`'s audio tree. Each turns ROM bytes into [`pack_format`]
+//! entries under the ids `crates/assets` already expects, and each extends
+//! the same equivalence run. Until they land the pack is *partial*: it
+//! holds every id its domains claim and nothing else, so a run of the game
+//! against it still needs the checkout pack.
 //!
 //! The CLI that drives [`import`] already exists: `pokeemerald-rs
 //! --import-rom <path>` resolves the pack's destination, writes it
@@ -50,17 +66,12 @@
 //! `cli` and `import_rom` modules). It surfaces this crate's errors as they
 //! are, so the one thing users will get wrong, pointing it at the wrong
 //! ROM, is already [`ImportError::UnsupportedRevision`] naming the ROM the
-//! importer wants. Progress reporting is still to come, and needs domain
-//! readers to have something to report.
-//!
-//! Until domain readers land, [`import`] fails *closed* with
-//! [`ImportError::NoDomains`]. It never writes a pack. An empty pack would
-//! look like a successful import to every downstream check
-//! `(gated-by-default)` `(test-ratchet)`.
+//! importer wants. Progress reporting is still to come.
 
 pub mod fixture;
 pub mod profiles;
 
+mod domains;
 mod error;
 mod lz77;
 mod profile;
@@ -87,9 +98,6 @@ pub use roots::{
 pub use sha1::{sha1, Digest, DigestParseError, Sha1};
 
 /// What an import produced.
-///
-/// Returned only on success, which no build can reach yet. Later slices fill
-/// it in as domain readers land.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ImportReport {
     pack_path: PathBuf,
@@ -142,28 +150,73 @@ impl ImportReport {
 
 /// Import the ROM at `rom_path` into an asset pack at `out_path`.
 ///
-/// Validates the ROM and selects its revision profile, then stops: this
-/// build has no domain readers, so there is nothing to pack. Fails closed
-/// rather than writing an empty pack.
+/// Builds the whole pack in memory first, so a failure part-way through a
+/// domain cannot leave a truncated file behind. The caller owns publishing
+/// it: `pokeemerald-rs`'s `import_rom` points this at a temporary file
+/// beside the destination and renames it into place.
 ///
 /// # Errors
 ///
 /// [`ImportError::ReadFailed`], [`ImportError::WrongSize`], or
 /// [`ImportError::BadHeader`] if the file is not a GBA ROM;
 /// [`ImportError::UnsupportedRevision`] if it is not the supported build;
-/// [`ImportError::NoDomains`] once it is, until domain readers land.
+/// anything a domain reader raises (see [`import_to_bytes`]);
+/// [`ImportError::WriteFailed`] if the finished pack cannot be written.
 pub fn import(rom_path: &Path, out_path: &Path) -> Result<ImportReport, ImportError> {
     let rom = Rom::load(rom_path)?;
     let profile = select_profile(&rom)?;
-    // Both are validated as far as this slice can validate them. The write
-    // path stays unreachable until there is something to write.
-    let _ = (profile, out_path);
-    Err(ImportError::NoDomains)
+    let (entry_count, bytes) = build_pack(&rom, &profile.roots)?;
+    std::fs::write(out_path, &bytes).map_err(|source| ImportError::WriteFailed {
+        path: out_path.to_path_buf(),
+        source,
+    })?;
+    Ok(ImportReport::new(
+        out_path.to_path_buf(),
+        profile.name,
+        entry_count,
+        bytes.len(),
+    ))
+}
+
+/// Import the ROM at `rom_path` and hand back the pack's bytes.
+///
+/// [`import`] without the write. The equivalence gate uses it to compare a
+/// freshly imported pack against the checkout's without touching disk.
+///
+/// # Errors
+///
+/// As [`import`], minus [`ImportError::WriteFailed`]. A domain reader adds
+/// [`ImportError::Truncated`] or [`ImportError::PointerOutOfRange`] for an
+/// address the ROM does not hold, [`ImportError::Lz77`] for a stream that
+/// will not decode, and [`ImportError::EntryShape`] for bytes that do not
+/// fit the entry they shape into. [`ImportError::EmptyPack`] if every
+/// domain produced nothing.
+pub fn import_to_bytes(rom_path: &Path) -> Result<Vec<u8>, ImportError> {
+    let rom = Rom::load(rom_path)?;
+    let profile = select_profile(&rom)?;
+    Ok(build_pack(&rom, &profile.roots)?.1)
+}
+
+/// Run every domain reader over `rom` and serialize the pack.
+///
+/// Returns the entry count alongside the bytes, so a report does not have
+/// to re-parse what it just wrote.
+fn build_pack(rom: &Rom, roots: &Roots) -> Result<(usize, Vec<u8>), ImportError> {
+    let mut writer = pack_format::PackWriter::new();
+    for domain in domains::DOMAINS {
+        domain(rom, roots, &mut writer)?;
+    }
+    let entry_count = writer.len();
+    if entry_count == 0 {
+        return Err(ImportError::EmptyPack);
+    }
+    Ok((entry_count, writer.finish()?))
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{import, ImportError, ImportReport};
+    use super::{build_pack, import, import_to_bytes, ImportError, ImportReport, Roots};
+    use crate::fixture::shared_emerald_rom;
     use std::path::{Path, PathBuf};
 
     #[test]
@@ -171,15 +224,27 @@ mod tests {
         let out = Path::new("/nonexistent/rom-import/out.pack");
         let err = import(Path::new("/nonexistent/rom-import/rom.gba"), out).unwrap_err();
         assert!(matches!(err, ImportError::ReadFailed { .. }));
+        assert!(matches!(
+            import_to_bytes(Path::new("/nonexistent/rom-import/rom.gba")).unwrap_err(),
+            ImportError::ReadFailed { .. }
+        ));
     }
 
     #[test]
-    fn import_never_writes_a_pack() {
+    fn a_rejected_rom_never_reaches_the_write() {
         // The importer must reject before it can reach a write, so a path it
         // could never create is a safe target.
         let out = Path::new("/nonexistent/rom-import/out.pack");
         assert!(import(Path::new("/dev/null"), out).is_err());
         assert!(!out.exists());
+    }
+
+    #[test]
+    fn a_profile_with_no_roots_fails_closed() {
+        // An empty pack would look like a successful import to every
+        // downstream check, so it is an error rather than a 16-byte file.
+        let err = build_pack(shared_emerald_rom(), &Roots::NONE).unwrap_err();
+        assert!(matches!(err, ImportError::EmptyPack));
     }
 
     #[test]

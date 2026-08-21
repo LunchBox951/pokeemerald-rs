@@ -166,6 +166,17 @@ pub enum ImportError {
         /// The largest value the format allows.
         max: usize,
     },
+    /// A root's bytes did not fit the pack entry the format shapes them
+    /// into: tiles that do not fill the declared raster, say.
+    ///
+    /// Only reachable if the profile table disagrees with the ROM, since
+    /// every root was checked against real bytes when it was generated.
+    EntryShape {
+        /// The pack id the root produces.
+        id: &'static str,
+        /// What the format objected to.
+        source: pack_format::EntryShapeError,
+    },
     /// The asset pack could not be assembled.
     PackWrite(pack_format::PackWriteError),
     /// The asset pack could not be written to disk.
@@ -175,13 +186,14 @@ pub enum ImportError {
         /// The underlying I/O failure.
         source: io::Error,
     },
-    /// The import ran but this build has no domain readers, so there is
-    /// nothing to put in a pack.
+    /// Every domain reader ran and produced nothing.
     ///
     /// The importer fails *closed* rather than writing an empty pack: a
     /// zero-entry pack would look like a successful import to every
-    /// downstream check `(gated-by-default)` `(test-ratchet)`.
-    NoDomains,
+    /// downstream check `(gated-by-default)` `(test-ratchet)`. Unreachable
+    /// with a shipped profile, whose root table is never empty; it is
+    /// what a profile with no roots recorded produces.
+    EmptyPack,
 }
 
 impl fmt::Display for ImportError {
@@ -235,12 +247,15 @@ impl fmt::Display for ImportError {
             Self::Length { what, value, max } => {
                 write!(f, "{what} is {value}, over the maximum of {max}")
             }
+            Self::EntryShape { id, source } => {
+                write!(f, "asset `{id}` does not fit its pack entry: {source}")
+            }
             Self::PackWrite(source) => write!(f, "could not assemble the asset pack: {source}"),
             Self::WriteFailed { path, source } => {
                 write!(f, "could not write `{}`: {source}", path.display())
             }
-            Self::NoDomains => f.write_str(
-                "ROM import is not implemented yet: this build has no domain readers, so no pack was written",
+            Self::EmptyPack => f.write_str(
+                "the ROM's profile records no assets, so no pack was written",
             ),
         }
     }
@@ -251,6 +266,7 @@ impl std::error::Error for ImportError {
         match self {
             Self::ReadFailed { source, .. } | Self::WriteFailed { source, .. } => Some(source),
             Self::PackWrite(source) => Some(source),
+            Self::EntryShape { source, .. } => Some(source),
             _ => None,
         }
     }
@@ -340,8 +356,12 @@ mod tests {
                 value: 9,
                 max: 8,
             },
+            ImportError::EntryShape {
+                id: "title/image/press_start",
+                source: pack_format::EntryShapeError::UnsupportedBitDepth(3),
+            },
             ImportError::PackWrite(pack_format::PackWriteError::DuplicateId("a".into())),
-            ImportError::NoDomains,
+            ImportError::EmptyPack,
         ];
         for case in cases {
             let text = case.to_string();

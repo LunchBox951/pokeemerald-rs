@@ -99,9 +99,9 @@ pub enum ImportRomError {
         source: io::Error,
     },
     /// The importer itself failed. Carries [`ImportError`] whole, so the
-    /// message the player sees is the importer's own typed diagnosis (the
-    /// wrong ROM, a truncated file, or, until domain readers land,
-    /// [`ImportError::NoDomains`]).
+    /// message the player sees is the importer's own typed diagnosis: the
+    /// wrong ROM, a truncated file, or an asset the profile's addresses do
+    /// not reach.
     Import(ImportError),
     /// The pack was built, but moving it from its temporary file to the
     /// destination failed.

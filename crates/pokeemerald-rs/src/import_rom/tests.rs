@@ -94,17 +94,17 @@ fn a_successful_import_publishes_the_pack_and_clears_the_temp_file() {
 fn a_failed_import_leaves_neither_a_pack_nor_a_partial_file() {
     let dir = TempDir::new("fail-closed");
     let pack_path = dir.join("pokeemerald.pack");
-    // `NoDomains` is what the current importer returns for a valid ROM, and
-    // the write path must survive it having already written bytes.
+    // A domain reader can fail after the pack has been serialized, so the
+    // write path must survive the importer having already written bytes.
     let err = import_to_with(Path::new("/roms/emerald.gba"), &pack_path, |_rom, out| {
         fs::write(out, b"half a pack").expect("the fake importer writes");
-        Err(ImportError::NoDomains)
+        Err(ImportError::EmptyPack)
     })
     .unwrap_err();
 
     assert!(matches!(
         err,
-        ImportRomError::Import(ImportError::NoDomains)
+        ImportRomError::Import(ImportError::EmptyPack)
     ));
     assert!(!pack_path.exists());
     assert!(file_names(&dir.path).is_empty());
@@ -117,7 +117,7 @@ fn a_failed_import_removes_the_directory_it_created() {
     let pack_path = created.join("pokeemerald.pack");
 
     let err = import_to_with(Path::new("/roms/emerald.gba"), &pack_path, |_rom, _out| {
-        Err(ImportError::NoDomains)
+        Err(ImportError::EmptyPack)
     })
     .unwrap_err();
 
@@ -134,7 +134,7 @@ fn an_import_into_an_existing_directory_leaves_it_alone() {
     let pack_path = dir.join("pokeemerald.pack");
 
     let err = import_to_with(Path::new("/roms/emerald.gba"), &pack_path, |_rom, _out| {
-        Err(ImportError::NoDomains)
+        Err(ImportError::EmptyPack)
     })
     .unwrap_err();
 
@@ -151,7 +151,7 @@ fn an_existing_pack_survives_a_failed_import() {
 
     let err = import_to_with(Path::new("/roms/emerald.gba"), &pack_path, |_rom, out| {
         fs::write(out, b"half a pack").expect("the fake importer writes");
-        Err(ImportError::NoDomains)
+        Err(ImportError::EmptyPack)
     })
     .unwrap_err();
 
@@ -165,8 +165,8 @@ fn an_existing_pack_survives_a_failed_import() {
 
 #[test]
 fn the_import_error_renders_the_importers_own_message() {
-    let err = ImportRomError::Import(ImportError::NoDomains);
-    assert_eq!(err.to_string(), ImportError::NoDomains.to_string());
+    let err = ImportRomError::Import(ImportError::EmptyPack);
+    assert_eq!(err.to_string(), ImportError::EmptyPack.to_string());
     assert!(err.to_string().contains("no pack was written"));
 }
 
