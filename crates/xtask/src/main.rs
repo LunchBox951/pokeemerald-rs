@@ -17,8 +17,12 @@
 //! the deterministic scene capture it drives, and `docs/snapshots.md` for
 //! the capture format and the blessing workflow that consumes it.
 //! `scenario` (F-3, issue #233) is also real: its named input scripts drive
-//! the production [`pokeemerald_rs::App`] frame loop. Only the `e2e`
-//! `full`/`soak` suites remain stubs.
+//! the production [`pokeemerald_rs::App`] frame loop. `gen-rom-profile`
+//! (S-4, F-3, issue #122) is also real, and developer-only: it derives
+//! `rom-import`'s committed ROM address table from a cartridge image the
+//! developer already owns, and is the only place in this workspace a
+//! ROM-scanning heuristic ever runs -- see [`crate::gen_rom_profile`]. Only
+//! the `e2e` `full`/`soak` suites remain stubs.
 //!
 //! `mod e2e`, `mod record_snapshot`, and `mod scenario` need the
 //! workspace-local `pokeemerald-rs` (and, for `record_snapshot`, `assets`)
@@ -31,7 +35,9 @@
 //! [`XtaskError::ScenarioUnavailable`],
 //! not a silent no-op — telling the caller which feature to rebuild with.
 //! `mod extract` needs no such gate: it depends on nothing beyond `std`, so
-//! it is always compiled in.
+//! it is always compiled in. Neither does `mod gen_rom_profile`: its only
+//! dependencies are the workspace-local `pack-format` and `rom-import`,
+//! both std-only.
 //!
 //! The two `#[cfg]`s are deliberately *asymmetric*. `mod e2e` is gated on
 //! `smoke` (the caller-facing feature that names its subcommand), because
@@ -62,6 +68,7 @@ use std::process::ExitCode;
 #[cfg(feature = "smoke")]
 mod e2e;
 mod extract;
+mod gen_rom_profile;
 #[cfg(feature = "scenes")]
 mod record_snapshot;
 #[cfg(any(feature = "scenario", all(test, feature = "scenes")))]
@@ -73,6 +80,9 @@ usage: cargo xtask <command>
 
 commands:
   extract            extract data/assets from the upstream reference
+  gen-rom-profile --rom <path> [--out <file>] [--map <file>]
+                     derive rom-import's ROM address table from a
+                     cartridge image (developer-only)
   record-snapshot --scene <name>
                      record a deterministic frame capture; <name> is
                      title | main-menu-new-game | main-menu-option
@@ -115,6 +125,12 @@ pub enum XtaskError {
     /// commands must never be satisfiable by a no-op `(gated-by-default)`
     /// `(test-ratchet)`.
     NotImplemented(&'static str),
+    /// `gen-rom-profile` was given no `--rom`, or an option with no value.
+    /// Carries the option's name.
+    MissingOptionValue(&'static str),
+    /// `gen-rom-profile` ran but failed. Carries
+    /// [`gen_rom_profile::GenRomProfileError`]'s rendered message.
+    GenRomProfileFailed(String),
     /// `extract` ran but failed. Carries [`extract::ExtractError`]'s
     /// rendered message (missing upstream checkout, a malformed source
     /// file, or a write failure — see that type for the exact cases).
@@ -181,6 +197,14 @@ impl fmt::Display for XtaskError {
             // so it gets no USAGE tail.
             Self::NotImplemented(what) => {
                 return write!(f, "error: `{what}` is not implemented yet");
+            }
+            Self::MissingOptionValue(option) => {
+                writeln!(f, "error: `{option}` requires a value")?;
+            }
+            // A generator failure is runtime/behavioural, not a malformed
+            // invocation, so it gets no USAGE tail.
+            Self::GenRomProfileFailed(reason) => {
+                return write!(f, "error: `gen-rom-profile` failed: {reason}");
             }
             // Likewise an extract failure: runtime/behavioural, not a
             // malformed invocation.
@@ -353,6 +377,11 @@ impl ScenarioName {
 pub enum Command {
     /// `extract`
     Extract,
+    /// `gen-rom-profile --rom <path> [--out <file>] [--map <file>]`
+    GenRomProfile {
+        /// The parsed invocation.
+        options: gen_rom_profile::Options,
+    },
     /// `record-snapshot --scene <name>`
     RecordSnapshot {
         /// The scene to capture.
@@ -392,6 +421,9 @@ pub fn parse(args: &[String]) -> Result<Command, XtaskError> {
 
     match subcommand.as_str() {
         "extract" => no_args(rest).map(|()| Command::Extract),
+        "gen-rom-profile" => {
+            parse_gen_rom_profile(rest).map(|options| Command::GenRomProfile { options })
+        }
         "record-snapshot" => {
             parse_record_snapshot(rest).map(|scene| Command::RecordSnapshot { scene })
         }
@@ -436,6 +468,44 @@ fn parse_record_snapshot(rest: &[String]) -> Result<Scene, XtaskError> {
         }
     }
     scene.ok_or(XtaskError::MissingSceneValue)
+}
+
+/// Parse the arguments following `gen-rom-profile`: a required
+/// `--rom <path>`, an optional `--out <file>`, and an optional
+/// `--map <file>`.
+///
+/// # Errors
+///
+/// [`XtaskError::MissingOptionValue`] if `--rom` is absent or any option
+/// has no value, [`XtaskError::UnexpectedArg`] for any other token.
+fn parse_gen_rom_profile(rest: &[String]) -> Result<gen_rom_profile::Options, XtaskError> {
+    let mut rom: Option<std::path::PathBuf> = None;
+    let mut out: Option<std::path::PathBuf> = None;
+    let mut map: Option<std::path::PathBuf> = None;
+    let mut i = 0;
+    while i < rest.len() {
+        let slot = match rest[i].as_str() {
+            "--rom" if rom.is_none() => &mut rom,
+            "--out" if out.is_none() => &mut out,
+            "--map" if map.is_none() => &mut map,
+            other => return Err(XtaskError::UnexpectedArg(other.to_owned())),
+        };
+        let name = match rest[i].as_str() {
+            "--rom" => "gen-rom-profile --rom",
+            "--out" => "gen-rom-profile --out",
+            _ => "gen-rom-profile --map",
+        };
+        let value = rest
+            .get(i + 1)
+            .ok_or(XtaskError::MissingOptionValue(name))?;
+        *slot = Some(std::path::PathBuf::from(value));
+        i += 2;
+    }
+    Ok(gen_rom_profile::Options {
+        rom: rom.ok_or(XtaskError::MissingOptionValue("gen-rom-profile --rom"))?,
+        out,
+        map,
+    })
 }
 
 /// Parse `scenario --name <value>`, with exactly one required name.
@@ -528,6 +598,39 @@ fn dispatch(cmd: &Command) -> Result<(), XtaskError> {
             );
             Ok(())
         }
+        Command::GenRomProfile { options } => {
+            let report = gen_rom_profile::run(options)
+                .map_err(|err| XtaskError::GenRomProfileFailed(err.to_string()))?;
+            for line in &report.lines {
+                let note = line.note.as_deref().unwrap_or("");
+                println!(
+                    "{:08X} {:>8} {:>7} {}{}{note}",
+                    line.addr,
+                    line.len,
+                    line.resolution.label(),
+                    line.id,
+                    if note.is_empty() { "" } else { "  -- " },
+                );
+            }
+            println!(
+                "{} root(s): {} pinned by a unique signature, {} needing a struct or \
+                 pointer resolution, {} picked arbitrarily among identical copies; \
+                 written to {}",
+                report.root_count(),
+                report.root_count() - report.resolved_count(),
+                report.resolved_count() - report.arbitrary_count(),
+                report.arbitrary_count(),
+                report.out_path.display()
+            );
+            if report.map_used {
+                println!(
+                    "map cross-check: {} symbol name(s) matched, {} address(es) confirmed \
+                     unnamed, {} interior address(es) skipped",
+                    report.map_named, report.map_confirmed, report.map_skipped
+                );
+            }
+            Ok(())
+        }
         #[cfg(feature = "scenes")]
         Command::RecordSnapshot { scene } => {
             let report = record_snapshot::run(*scene)
@@ -601,7 +704,10 @@ fn main() -> ExitCode {
 
 #[cfg(test)]
 mod tests {
-    use super::{extract, parse, run, Command, ScenarioName, Scene, Suite, XtaskError, USAGE};
+    use super::{
+        extract, gen_rom_profile, parse, run, Command, ScenarioName, Scene, Suite, XtaskError,
+        USAGE,
+    };
 
     fn args(parts: &[&str]) -> Vec<String> {
         parts.iter().map(|s| (*s).to_owned()).collect()
@@ -610,6 +716,61 @@ mod tests {
     #[test]
     fn parse_extract_routes() {
         assert_eq!(parse(&args(&["extract"])).unwrap(), Command::Extract);
+    }
+
+    #[test]
+    fn parse_gen_rom_profile_routes() {
+        let cmd = parse(&args(&["gen-rom-profile", "--rom", "/tmp/a.gba"])).unwrap();
+        assert_eq!(
+            cmd,
+            Command::GenRomProfile {
+                options: gen_rom_profile::Options {
+                    rom: std::path::PathBuf::from("/tmp/a.gba"),
+                    out: None,
+                    map: None,
+                }
+            }
+        );
+        let cmd = parse(&args(&[
+            "gen-rom-profile",
+            "--map",
+            "/tmp/p.map",
+            "--out",
+            "/tmp/out.rs",
+            "--rom",
+            "/tmp/a.gba",
+        ]))
+        .unwrap();
+        assert_eq!(
+            cmd,
+            Command::GenRomProfile {
+                options: gen_rom_profile::Options {
+                    rom: std::path::PathBuf::from("/tmp/a.gba"),
+                    out: Some(std::path::PathBuf::from("/tmp/out.rs")),
+                    map: Some(std::path::PathBuf::from("/tmp/p.map")),
+                }
+            }
+        );
+    }
+
+    #[test]
+    fn gen_rom_profile_needs_a_rom() {
+        assert!(matches!(
+            parse(&args(&["gen-rom-profile"])),
+            Err(XtaskError::MissingOptionValue("gen-rom-profile --rom"))
+        ));
+        assert!(matches!(
+            parse(&args(&["gen-rom-profile", "--rom"])),
+            Err(XtaskError::MissingOptionValue("gen-rom-profile --rom"))
+        ));
+        assert!(matches!(
+            parse(&args(&["gen-rom-profile", "--rom", "a", "--rom", "b"])),
+            Err(XtaskError::UnexpectedArg(_))
+        ));
+        assert!(matches!(
+            parse(&args(&["gen-rom-profile", "--wat", "a"])),
+            Err(XtaskError::UnexpectedArg(_))
+        ));
     }
 
     #[test]

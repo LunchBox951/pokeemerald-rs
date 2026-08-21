@@ -74,8 +74,9 @@
 //! [`OUTPUT_RELATIVE_PATH`], [`EntryKind`]), the write side ([`PackEntry`],
 //! [`PackWriter`], [`PackWriteError`]), the entry constructors
 //! ([`palette_entry`], [`image_entry`], [`image_entry_from_tiles`],
-//! [`raw_entry`], [`EntryShapeError`]), the read side ([`parse_directory`],
-//! [`DirectoryEntry`], [`PackReadError`]), and runtime pack-path resolution
+//! [`tiles_from_image`], [`raw_entry`], [`EntryShapeError`]), the read side
+//! ([`parse_directory`], [`DirectoryEntry`], [`PackReadError`]), and runtime
+//! pack-path resolution
 //! ([`default_pack_path`], [`user_data_dir`], [`user_pack_path`],
 //! [`PACK_PATH_ENV`]). `xtask::extract` writes through it; `crates/assets`'s
 //! `AssetPack` reads through it.
@@ -111,7 +112,10 @@ mod path;
 mod reader;
 mod writer;
 
-pub use entry::{image_entry, image_entry_from_tiles, palette_entry, raw_entry, EntryShapeError};
+pub use entry::{
+    image_entry, image_entry_from_tiles, palette_entry, raw_entry, tiles_from_image,
+    EntryShapeError,
+};
 pub use layout::{EntryKind, FORMAT_VERSION, MAGIC, OUTPUT_RELATIVE_PATH};
 pub use path::{default_pack_path, user_data_dir, user_pack_path, PACK_PATH_ENV};
 pub use reader::{parse_directory, DirectoryEntry, PackReadError};

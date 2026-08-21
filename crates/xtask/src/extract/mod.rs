@@ -218,7 +218,7 @@ mod layouts_json;
 mod midi;
 pub mod png;
 mod text_window;
-mod voicegroups;
+pub(crate) mod voicegroups;
 mod wav;
 
 use std::path::{Path, PathBuf};

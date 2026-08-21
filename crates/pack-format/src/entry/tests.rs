@@ -1,7 +1,8 @@
 //! Unit tests for the entry constructors.
 
 use super::{
-    image_entry, image_entry_from_tiles, palette_entry, raw_entry, EntryShapeError, TILE_DIM,
+    image_entry, image_entry_from_tiles, palette_entry, raw_entry, tiles_from_image,
+    EntryShapeError, TILE_DIM,
 };
 use crate::layout::EntryKind;
 
@@ -236,4 +237,81 @@ fn solid_4bpp_tiles_unpack_to_their_index() {
     let tiles = solid_tile_4bpp(5);
     let entry = image_entry_from_tiles("i".into(), &tiles, 4, 8, 8, None).unwrap();
     assert!(entry.payload.iter().all(|&p| p == 5));
+}
+
+#[test]
+fn tiles_round_trip_through_the_raster_for_every_metatile_shape() {
+    // A 32x32 (4x4 tile) sheet whose every pixel is distinct enough that a
+    // wrong metatile walk cannot round-trip by accident.
+    let tiles_wide = 4u32;
+    let tiles_high = 4u32;
+    let mut tiles = vec![0u8; (tiles_wide * tiles_high) as usize * 32];
+    for (index, byte) in tiles.iter_mut().enumerate() {
+        let value = u8::try_from(index % 251).unwrap();
+        *byte = (value & 0x0F) | ((value.wrapping_add(7) & 0x0F) << 4);
+    }
+    for mw in [1, 2, 4] {
+        for mh in [1, 2, 4] {
+            let shape = Some((mw, mh));
+            let entry = image_entry_from_tiles(
+                "i".into(),
+                &tiles,
+                4,
+                tiles_wide * 8,
+                tiles_high * 8,
+                shape,
+            )
+            .unwrap();
+            let back =
+                tiles_from_image(&entry.payload, 4, tiles_wide * 8, tiles_high * 8, shape).unwrap();
+            assert_eq!(back, tiles, "4bpp round trip failed at metatile {mw}x{mh}");
+        }
+    }
+}
+
+#[test]
+fn tiles_round_trip_at_8bpp() {
+    let tiles: Vec<u8> = (0..64 * 6)
+        .map(|i| u8::try_from(i % 256).unwrap())
+        .collect();
+    let entry = image_entry_from_tiles("i".into(), &tiles, 8, 24, 16, Some((3, 1))).unwrap();
+    let back = tiles_from_image(&entry.payload, 8, 24, 16, Some((3, 1))).unwrap();
+    assert_eq!(back, tiles);
+}
+
+#[test]
+fn packing_tiles_keeps_only_the_low_nibble_at_4bpp() {
+    // A raster whose indices exceed 15 (an 8-bit-indexed PNG feeding a 4bpp
+    // ROM sheet, e.g. the title screen's press-start banner) packs to the
+    // low nibble, which is all a 4bpp tile can hold.
+    let pixels = vec![0x1Au8; 64];
+    let tiles = tiles_from_image(&pixels, 4, 8, 8, None).unwrap();
+    assert!(tiles.iter().all(|&b| b == 0xAA), "{tiles:?}");
+}
+
+#[test]
+fn packing_tiles_rejects_a_raster_of_the_wrong_length() {
+    assert!(matches!(
+        tiles_from_image(&[0u8; 10], 4, 8, 8, None),
+        Err(EntryShapeError::ImageSizeMismatch {
+            width: 8,
+            height: 8,
+            len: 10
+        })
+    ));
+    assert!(matches!(
+        tiles_from_image(&[0u8; 64], 3, 8, 8, None),
+        Err(EntryShapeError::UnsupportedBitDepth(3))
+    ));
+    assert!(matches!(
+        tiles_from_image(&[0u8; 20], 4, 5, 4, None),
+        Err(EntryShapeError::NotTileAligned {
+            width: 5,
+            height: 4
+        })
+    ));
+    assert!(matches!(
+        tiles_from_image(&[0u8; 64], 4, 8, 8, Some((3, 1))),
+        Err(EntryShapeError::MetatileMisaligned { .. })
+    ));
 }

@@ -11,7 +11,7 @@
 //! reference into another group's content, derives a pack id, or knows
 //! about the 128-slot bound — that linking work is [`super::resolve`]'s job.
 
-pub(super) use super::error::VoiceGroupError;
+pub(crate) use super::error::VoiceGroupError;
 
 /// Every value operand this parser reads is a plain `u8` (a MIDI key, a
 /// pan/length byte, an envelope component, ...) — matching
@@ -21,7 +21,7 @@ type RawU8 = u8;
 /// An instrument's attack/decay/sustain/release envelope — the trailing
 /// four operands every leaf `voice_*` macro shares.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) struct Envelope {
+pub(crate) struct Envelope {
     pub attack: u8,
     pub decay: u8,
     pub sustain: u8,
@@ -30,7 +30,7 @@ pub(super) struct Envelope {
 
 /// Which `voice_directsound*` macro produced a [`RawSlot::DirectSound`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum DirectSoundMode {
+pub(crate) enum DirectSoundMode {
     Resampled,
     Fixed,
     Reverse,
@@ -38,7 +38,7 @@ pub(super) enum DirectSoundMode {
 
 /// One parsed `.inc` body line, before any cross-file linking.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) enum RawSlot {
+pub(crate) enum RawSlot {
     DirectSound {
         base_key: RawU8,
         /// `None` when the source's `pan` operand is literally `0` (no
@@ -99,7 +99,7 @@ pub(super) enum RawSlot {
 /// numbers, see `pokeemerald/sound/voicegroups/drumsets/rs.inc`), and its
 /// slots in source order (*not* yet padded to 128 — see [`super::resolve`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct RawVoiceGroup {
+pub(crate) struct RawVoiceGroup {
     pub label: String,
     pub starting_note: u8,
     pub slots: Vec<RawSlot>,
@@ -110,7 +110,7 @@ pub(super) struct RawVoiceGroup {
 /// `starting_note + i`, built by expanding each `split index, ending_note`
 /// line's `.rept` per that file's own header comment.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct RawKeySplitTable {
+pub(crate) struct RawKeySplitTable {
     pub starting_note: u8,
     pub table: Vec<u8>,
 }
@@ -295,7 +295,7 @@ fn parse_slot_line(line: &str, group: &str) -> Result<RawSlot, VoiceGroupError> 
 /// # Errors
 ///
 /// See [`VoiceGroupError`]'s variants.
-pub(super) fn parse_voice_group(text: &str) -> Result<RawVoiceGroup, VoiceGroupError> {
+pub(crate) fn parse_voice_group(text: &str) -> Result<RawVoiceGroup, VoiceGroupError> {
     let mut lines = text
         .lines()
         .map(str::trim)
@@ -356,7 +356,7 @@ fn finish_keysplit_block(
 /// # Errors
 ///
 /// See [`VoiceGroupError`]'s variants.
-pub(super) fn parse_keysplit_tables(
+pub(crate) fn parse_keysplit_tables(
     text: &str,
 ) -> Result<std::collections::HashMap<String, RawKeySplitTable>, VoiceGroupError> {
     let mut out = std::collections::HashMap::new();
@@ -444,7 +444,7 @@ pub(super) fn parse_keysplit_tables(
 /// line (blank, an `@` comment) contributes nothing -- this reads an
 /// assembler include list, not a voicegroup source, so it has no macro
 /// grammar of its own to fail closed on.
-pub(super) fn parse_link_order(text: &str) -> Vec<LinkOrderItem> {
+pub(crate) fn parse_link_order(text: &str) -> Vec<LinkOrderItem> {
     const PREFIX: &str = "sound/voicegroups/";
     text.lines()
         .filter_map(|line| {
@@ -462,7 +462,7 @@ pub(super) fn parse_link_order(text: &str) -> Vec<LinkOrderItem> {
 
 /// One `.include` line of `sound/voice_groups.inc`, in file order.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) enum LinkOrderItem {
+pub(crate) enum LinkOrderItem {
     /// A `sound/voicegroups/<relative>` include -- carries `<relative>`.
     VoiceGroup(String),
     /// Any other include (e.g. `sound/cry_tables.inc`): an adjacency

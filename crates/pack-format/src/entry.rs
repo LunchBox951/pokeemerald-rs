@@ -275,6 +275,99 @@ pub fn image_entry_from_tiles(
     image_entry(id, width_px, height_px, bit_depth, pixels)
 }
 
+/// Pack a row-major, one-byte-per-pixel raster back into GBA 8x8 tile data.
+///
+/// The exact inverse of [`image_entry_from_tiles`]: same `bit_depth`, same
+/// `metatile` walk, same tile order. It exists for the profile generator,
+/// which has to recognise a pack entry's art *inside* a ROM and therefore
+/// needs the bytes the ROM would hold, not the raster the pack holds.
+///
+/// The result always covers the whole raster. Upstream's `-num_tiles` cuts
+/// drop all-zero trailing tiles, so a caller comparing against ROM bytes
+/// truncates to the tile count the ROM actually stores; only trailing tiles
+/// a round trip would zero-fill may be dropped.
+///
+/// Only the low nibble of each pixel survives at `bit_depth` 4, which is the
+/// same information a 4bpp tile can hold.
+///
+/// # Errors
+///
+/// [`EntryShapeError::UnsupportedBitDepth`] for a depth other than 4 or 8;
+/// [`EntryShapeError::NotTileAligned`] if `width_px` or `height_px` is not a
+/// multiple of 8; [`EntryShapeError::MetatileMisaligned`] if a metatile
+/// shape does not divide the tile grid;
+/// [`EntryShapeError::ImageSizeMismatch`] if `pixels` is not exactly
+/// `width_px * height_px` bytes.
+pub fn tiles_from_image(
+    pixels: &[u8],
+    bit_depth: u8,
+    width_px: u32,
+    height_px: u32,
+    metatile: Option<(u32, u32)>,
+) -> Result<Vec<u8>, EntryShapeError> {
+    let bytes_per_tile = match bit_depth {
+        4 => 32,
+        8 => 64,
+        other => return Err(EntryShapeError::UnsupportedBitDepth(other)),
+    };
+    if !width_px.is_multiple_of(TILE_DIM) || !height_px.is_multiple_of(TILE_DIM) {
+        return Err(EntryShapeError::NotTileAligned {
+            width: width_px,
+            height: height_px,
+        });
+    }
+    let tiles_wide = width_px / TILE_DIM;
+    let tiles_high = height_px / TILE_DIM;
+    let (mw, mh) = metatile.unwrap_or((1, 1));
+    if mw == 0 || mh == 0 || !tiles_wide.is_multiple_of(mw) || !tiles_high.is_multiple_of(mh) {
+        return Err(EntryShapeError::MetatileMisaligned {
+            metatile_width: mw,
+            metatile_height: mh,
+            tiles_wide,
+            tiles_high,
+        });
+    }
+    let width = width_px as usize;
+    if (width).checked_mul(height_px as usize) != Some(pixels.len()) {
+        return Err(EntryShapeError::ImageSizeMismatch {
+            width: width_px,
+            height: height_px,
+            len: pixels.len(),
+        });
+    }
+
+    let tile_count = (tiles_wide as usize) * (tiles_high as usize);
+    let metatiles_wide = (tiles_wide / mw) as usize;
+    let (mw, mh) = (mw as usize, mh as usize);
+    let per_metatile = mw * mh;
+    let mut out = vec![0u8; tile_count * bytes_per_tile];
+
+    for index in 0..tile_count {
+        // The same metatile walk `image_entry_from_tiles` undoes, run
+        // forwards.
+        let sub_x = index % mw;
+        let sub_y = (index / mw) % mh;
+        let metatile_index = index / per_metatile;
+        let tile_x = (metatile_index % metatiles_wide) * mw + sub_x;
+        let tile_y = (metatile_index / metatiles_wide) * mh + sub_y;
+
+        for row in 0..8 {
+            let start = (tile_y * 8 + row) * width + tile_x * 8;
+            let src = &pixels[start..start + 8];
+            let row_bytes = bytes_per_tile / 8;
+            let out_row = &mut out[index * bytes_per_tile + row * row_bytes..][..row_bytes];
+            if bit_depth == 8 {
+                out_row.copy_from_slice(src);
+            } else {
+                for (byte, pair) in out_row.iter_mut().zip(src.chunks_exact(2)) {
+                    *byte = (pair[0] & 0x0F) | (pair[1] << 4);
+                }
+            }
+        }
+    }
+    Ok(out)
+}
+
 /// Build a [`EntryKind::Raw`] entry: opaque bytes, no shape to validate.
 #[must_use]
 pub fn raw_entry(id: String, payload: Vec<u8>) -> PackEntry {
