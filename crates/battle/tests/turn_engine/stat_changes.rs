@@ -2,7 +2,10 @@
 
 use crate::common::{max_iv_mon, SequenceRng};
 use assets::MoveId;
-use battle::{Battle, BattleEvent, Dex, LoweredStat, PlayerAction, StatStage};
+use battle::{
+    Battle, BattleEvent, BattleOutcome, ChangedStat, Dex, PlayerAction, StatStage, StatStages,
+    Volatiles,
+};
 
 #[test]
 fn wild_zigzagoon_growl_executes_when_the_rejection_loop_lands_on_it() {
@@ -49,8 +52,9 @@ fn wild_zigzagoon_growl_executes_when_the_rejection_loop_lands_on_it() {
             BattleEvent::StatFell {
                 by_player: false,
                 move_id: MoveId(45),
-                stat: LoweredStat::Attack,
+                stat: ChangedStat::Attack,
                 new_stage: StatStage::new(-1).unwrap(),
+                magnitude: 1,
             },
         ]
     );
@@ -155,7 +159,7 @@ fn a_stat_already_at_the_floor_reports_wont_go_lower_and_stays_put() {
             BattleEvent::StatWontGoLower {
                 by_player: true,
                 move_id: MoveId(45),
-                stat: LoweredStat::Attack,
+                stat: ChangedStat::Attack,
             },
             BattleEvent::Hit {
                 by_player: false,
@@ -208,8 +212,9 @@ fn growl_lowers_the_players_subsequent_tackle_damage() {
             BattleEvent::StatFell {
                 by_player: false,
                 move_id: MoveId(45),
-                stat: LoweredStat::Attack,
+                stat: ChangedStat::Attack,
                 new_stage: StatStage::new(-1).unwrap(),
+                magnitude: 1,
             },
             BattleEvent::Hit {
                 by_player: true,
@@ -286,8 +291,9 @@ fn string_shot_flips_turn_order_once_the_targets_effective_speed_drops_below_the
             BattleEvent::StatFell {
                 by_player: true,
                 move_id: MoveId(81),
-                stat: LoweredStat::Speed,
+                stat: ChangedStat::Speed,
                 new_stage: StatStage::new(-1).unwrap(),
+                magnitude: 1,
             },
         ],
         "turn 1: Poochyena (faster) moves first"
@@ -327,4 +333,60 @@ fn string_shot_flips_turn_order_once_the_targets_effective_speed_drops_below_the
     assert_eq!(battle.player().current_hp(), 21 - 5 - 5);
     assert_eq!(battle.enemy().current_hp(), 20 - 5);
     assert_eq!(rng.draws(), 18);
+}
+
+/// A fainting battler drops its accumulated battle scratch -- upstream's
+/// `cleareffectsonfaint`/`FaintClearSetData` (`battle_script_commands.c:
+/// 3063`-`:3076`, `src/battle_main.c:3264`-`:3270`, issue #322): the enemy
+/// carries Focus Energy and Charge, Hardens (raising its own Defense), and
+/// is then finished off in the same turn. Its stages and volatiles must all
+/// read back empty once it has fainted.
+#[test]
+fn a_fainting_battler_drops_its_accumulated_stages() {
+    let dex = Dex::new();
+    // Rattata L50 (fast) uses Harden on itself first, then Bulbasaur L5
+    // (slow) finishes it off -- both within the same turn, since Harden
+    // does not damage or delay the enemy's own faint.
+    let mut enemy = max_iv_mon(&dex, 19, 50, vec![MoveId(106)]); // Rattata/Harden
+    enemy.apply_damage(enemy.current_hp() - 1); // left at 1 HP
+    enemy.volatiles_mut().set_focus_energy();
+    enemy.volatiles_mut().set_charge();
+    let player = max_iv_mon(&dex, 1, 5, vec![MoveId(33)]); // Bulbasaur/Tackle
+
+    // battle start, turn number, the enemy's 1-draw rejection-loop pick
+    // (only slot 0 is known, so draw 0 -> 0 % 4 == 0 lands immediately),
+    // Harden (0 draws -- BattleScript_EffectStatUp has no accuracycheck),
+    // then Tackle's ordinary 4-draw hit (accuracy, no crit, worst damage
+    // roll, discarded effect chance) -- any positive damage faints a 1-HP
+    // target, so the exact roll does not matter here.
+    let mut rng = SequenceRng::new([0, 0, 0, 0, 1, 0, 0]);
+    let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
+    let events = battle
+        .take_turn(PlayerAction::UseMove(0), &mut rng)
+        .unwrap();
+
+    let rose = events.iter().any(|e| {
+        matches!(
+            e,
+            BattleEvent::StatRose {
+                by_player: false,
+                stat: ChangedStat::Defense,
+                new_stage,
+                ..
+            } if *new_stage == StatStage::new(1).unwrap()
+        )
+    });
+    assert!(
+        rose,
+        "Harden must have raised the enemy's Defense to +1 before it fainted: {events:?}"
+    );
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e, BattleEvent::Fainted { by_player: false })),
+        "the enemy must faint to Tackle: {events:?}"
+    );
+    assert_eq!(battle.enemy().stages(), StatStages::default());
+    assert_eq!(battle.enemy().volatiles(), Volatiles::default());
+    assert_eq!(battle.outcome(), Some(BattleOutcome::PlayerWon));
 }

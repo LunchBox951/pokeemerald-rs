@@ -102,9 +102,10 @@ impl StatStage {
     /// (`pokeemerald/src/battle_script_commands.c:7085`-`:7089`):
     /// `gBattleMons[].statStages[statId] += statValue;` followed by two
     /// `if` clamps to `MIN_STAT_STAGE`/`MAX_STAT_STAGE`. Used by
-    /// [`crate::stat_change`] for the `-1` step every
-    /// `EFFECT_ATTACK_DOWN`/`EFFECT_DEFENSE_DOWN`/`EFFECT_SPEED_DOWN` move
-    /// applies to its target.
+    /// [`crate::stat_change`] for the `±1`/`±2` step every
+    /// `BattleScript_EffectStatUp`/`StatDown` family member applies, to
+    /// whichever battler [`crate::stat_change::StatChangeEffect::affects_user`]
+    /// selects.
     ///
     /// Not `const` (unlike this type's other methods): the widening
     /// `i32::from` conversion it needs to add without overflow is not yet

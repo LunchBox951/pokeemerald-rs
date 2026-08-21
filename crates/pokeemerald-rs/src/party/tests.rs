@@ -468,3 +468,55 @@ fn healing_a_restored_mon_refills_to_the_upgraded_maximum() {
         "a heal that stopped at base PP would strip the PP Ups again"
     );
 }
+
+/// The ability slot round-trips through the save's `abilityNum` bit
+/// (`PokemonSubstruct3`'s bit 31, the misc IV word's top bit) rather than
+/// being re-derived from personality on load -- a real save can hold a mon
+/// whose stored slot disagrees with its personality parity (nothing
+/// upstream re-derives `abilityNum` after `CreateBoxMon` writes it once),
+/// and this port must not silently swap such a mon's ability on load
+/// (issue #322).
+///
+/// `SPECIES_TENTACOOL` (`72`) is the dual-ability fixture already used by
+/// `battle`'s own ability tests: slot 0 is Clear Body, slot 1 is Liquid
+/// Ooze (`gSpeciesInfo`). An *even* personality selects slot 0 by default
+/// ([`battle::BattlePokemon::new`]), so overriding to slot 1 here is
+/// deliberately the disagreeing case.
+#[test]
+fn a_disagreeing_ability_slot_survives_the_save_round_trip() {
+    const TENTACOOL: u16 = 72;
+    const CLEAR_BODY: u16 = 29;
+    const LIQUID_OOZE: u16 = 64;
+
+    let dex = Dex::new();
+    let mon = BattlePokemon::new(
+        &dex,
+        assets::SpeciesId(TENTACOOL),
+        20,
+        Ivs::default(),
+        0x1234_ABCC, // even -- personality parity alone would pick slot 0
+        vec![assets::MoveId(33)],
+    )
+    .expect("Tentacool is in the dex")
+    .with_ability_slot(1);
+    assert_eq!(
+        mon.ability().0,
+        LIQUID_OOZE,
+        "fixture sanity: the override, not personality parity, decides"
+    );
+    assert_ne!(
+        mon.ability().0,
+        CLEAR_BODY,
+        "fixture sanity: personality parity alone would have picked this"
+    );
+
+    let restored = from_save_pokemon(&dex, &to_save_pokemon(&dex, &mon))
+        .expect("what we just wrote must decode");
+    assert_eq!(restored.ability_slot(), 1);
+    assert_eq!(
+        restored.ability().0,
+        LIQUID_OOZE,
+        "the disagreeing slot survives the round trip instead of being \
+         re-derived from the (even) personality"
+    );
+}

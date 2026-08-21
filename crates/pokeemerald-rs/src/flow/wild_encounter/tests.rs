@@ -505,6 +505,60 @@ fn ending_a_battle_writes_the_lead_back_with_neutral_stat_stages() {
     );
 }
 
+/// Reviewer finding 2 (`clear_battle_scratch`): Focus Energy and Charge are
+/// `gBattleMons[].status2` / `gStatuses3[]` bits, not `struct Pokemon`
+/// fields -- `BattleStartClearSetData` zeroes both at the start of every
+/// battle (`src/battle_main.c:3034`). A write-back that reset only stat
+/// stages would let a Focus-Energy'd lead walk into the *next* encounter
+/// still critting at `+2` stages, exactly the leak
+/// `ending_a_battle_writes_the_lead_back_with_neutral_stat_stages` pins for
+/// stages.
+///
+/// Mirrors that test's structure: the volatiles are planted directly on the
+/// lead before the handoff (no move in this crate sets Focus Energy or
+/// Charge yet, so the only way to reach a non-default value is to plant it),
+/// carried into `Battle::new` is checked as a sanity bound, and the same
+/// successful-run driver loop ends the battle.
+#[test]
+fn ending_a_battle_writes_the_lead_back_with_cleared_volatiles() {
+    let mut rng = Rng::new(ENCOUNTER_SEED);
+    for _ in 0..4 {
+        rng.next_u16();
+    }
+    let encounter = WildEncounter {
+        species: WURMPLE,
+        level: 2,
+        slot: 0,
+    };
+
+    let mut lead = player_mon(277, 50, vec![MoveId(1)]);
+    lead.volatiles_mut().set_focus_energy();
+    lead.volatiles_mut().set_charge();
+
+    let battle = start_wild_battle(lead, encounter, &mut rng)
+        .expect("a Route 101 Wurmple must be fightable");
+    assert!(
+        battle.player().volatiles().focus_energy,
+        "Battle::new must carry the planted volatiles in, or this pins nothing"
+    );
+    assert!(battle.player().volatiles().charged_up());
+
+    let mut slot = Some(battle);
+    let mut written_back: Option<BattlePokemon> = None;
+    let mut frames = 0;
+    while slot.is_some() {
+        advance_wild_battle(&mut slot, &mut written_back, &mut rng);
+        frames += 1;
+        assert!(frames < 200, "the headless driver must terminate");
+    }
+    let lead = written_back.expect("the battle writes the lead mon back when it ends");
+    assert_eq!(
+        lead.volatiles(),
+        battle::Volatiles::default(),
+        "in-battle volatiles are battle-local and must be reset on the write-back"
+    );
+}
+
 /// `advance_wild_battle` is a no-op on an empty slot -- the guard the
 /// per-frame caller relies on.
 #[test]

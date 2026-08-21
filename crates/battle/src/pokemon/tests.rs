@@ -278,6 +278,37 @@ fn nature_is_derived_from_the_personality_value() {
 }
 
 #[test]
+fn ability_is_derived_from_the_personality_parity() {
+    let dex = Dex::new();
+    let build = |species: u16, personality: u32| {
+        BattlePokemon::new(
+            &dex,
+            SpeciesId(species),
+            5,
+            MAX_IVS,
+            personality,
+            vec![MoveId(33)],
+        )
+        .unwrap()
+    };
+    // Tentacool carries two abilities, so bit 0 selects the slot
+    // (`CreateBoxMon`, `src/pokemon.c:2296`-`:2300`): Clear Body at 29,
+    // Liquid Ooze at 64 (`gSpeciesInfo`).
+    assert_eq!(build(72, 0x88).ability().0, 29);
+    assert_eq!(build(72, 0x89).ability().0, 64);
+    // A lone-ability species ignores parity entirely — and stores a
+    // clear slot bit, exactly the `abilityNum` `CreateBoxMon` leaves
+    // unwritten for it (`:2296`-`:2300`), so the serialized save bit
+    // matches Emerald's: Zigzagoon is Pickup in slot 0 on both
+    // parities.
+    assert_eq!(build(288, 0).ability().0, 53);
+    assert_eq!(build(288, 1).ability().0, 53);
+    assert_eq!(build(288, 1).ability_slot(), 0);
+    // The dual-ability odd-parity mon, by contrast, stores slot 1.
+    assert_eq!(build(72, 0x89).ability_slot(), 1);
+}
+
+#[test]
 fn apply_damage_saturates_at_zero_and_marks_fainted() {
     let dex = Dex::new();
     let mut mon = sample_mon(&dex);

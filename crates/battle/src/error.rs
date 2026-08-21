@@ -164,6 +164,24 @@ pub enum BattleError {
     /// Carries the offending move id.
     UnsupportedMoveEffect(MoveId),
 
+    /// [`crate::secondary`]'s post-damage hook rolled its
+    /// `Cmd_seteffectwithchance` chance **and it landed** on a
+    /// `MOVE_EFFECT_*` byte whose infliction this crate does not yet apply
+    /// — the fail-closed stub the shared hook dispatches to (issue #321).
+    ///
+    /// Deliberately distinct from [`Self::UnsupportedMoveEffect`], which is
+    /// a *pre-turn* refusal made before anything is drawn. This one is
+    /// reported **after** the draw upstream would also have made, because
+    /// the move's whole damage half already ran: the stream is correct, the
+    /// caller simply cannot be told what the secondary did. No move
+    /// [`crate::battle::ensure_executable`] admits can reach it, so in
+    /// production it is unreachable by construction — it exists so that a
+    /// future pipeline which admits a `setmoveeffect` script without porting
+    /// the infliction fails loudly instead of silently dropping the effect.
+    ///
+    /// Carries the offending move id.
+    UnportedSecondaryEffect(MoveId),
+
     /// A species handed to [`crate::pokemon::BattlePokemon::new`] was a
     /// reserved placeholder id: [`crate::pokemon::SPECIES_NONE`], the *empty
     /// slot* placeholder (`pokeemerald/include/constants/species.h:4`), or
@@ -323,6 +341,11 @@ impl fmt::Display for BattleError {
             Self::UnsupportedMoveEffect(id) => write!(
                 f,
                 "move `{}` has a battle effect this slice does not model",
+                id.0
+            ),
+            Self::UnportedSecondaryEffect(id) => write!(
+                f,
+                "move `{}` rolled a secondary effect this slice cannot inflict",
                 id.0
             ),
             Self::PlaceholderSpecies => {
