@@ -30,14 +30,10 @@
 //!      full PP, cleared status for every party member.
 //!      [`battle::BattlePokemon::heal`] is the per-mon effect, and this
 //!      port models one party slot ([`OverworldPhase::party_lead`]), so
-//!      healing that slot is the HP and PP two-thirds of it. The status
-//!      clear (`:52-57`) has no counterpart: `battle` models no
-//!      non-volatile status, and since issue #344 the save's own status
-//!      byte is *retained* through a re-save rather than zeroed, so a save
-//!      whose lead carries one keeps it across a white-out. That gap
-//!      belongs to the missing model, not to this transition -- see
-//!      [`crate::party`]'s module docs, which name the same divergence
-//!      from the encoder's side.
+//!      healing that slot restores its HP and PP. `battle` models no
+//!      non-volatile status, so this transition completes the heal by
+//!      clearing the retained backing record's status byte directly; the
+//!      next merge/save therefore cannot restore the pre-white-out status.
 //!    - `Overworld_ResetStateAfterWhiteOut` (`:399-...`, private upstream)
 //!      -- clears field-effect/avatar transition state this port has no
 //!      counterpart for (cycling road, Safari Zone, etc. flags this port
@@ -142,8 +138,15 @@ impl OverworldPhase {
 
         // HealPlayerParty() -- this port's one modeled party slot.
         if let Some(lead) = self.party_lead.as_mut() {
-            if let Err(error) = lead.heal(&Dex::new()) {
-                eprintln!("white-out: couldn't heal the party lead ({error}) -- left as-is");
+            match lead.heal(&Dex::new()) {
+                Ok(()) => {
+                    // `MON_DATA_STATUS`: the battle model has no status field, so clear the
+                    // retained save record at the transition boundary where upstream heals it.
+                    self.save1.player_party[0].status = 0;
+                }
+                Err(error) => {
+                    eprintln!("white-out: couldn't heal the party lead ({error}) -- left as-is");
+                }
             }
         }
 
@@ -165,13 +168,35 @@ mod tests {
     use assets::MapId;
     use engine::save::{Coords16, WarpData};
 
-    use crate::flow::save_continue_tests::save_from_the_start_menu;
+    use crate::flow::save_continue_tests::{new_game_phase, save_from_the_start_menu};
     use crate::flow::tests::TempSave;
 
     use super::OverworldPhase;
 
     const ROUTE_101_STATE: u16 = 0x4060;
     const FLAG_TEMP_12: u16 = 0x12;
+
+    #[test]
+    fn white_out_clears_stored_status_before_an_immediate_save() {
+        const STORED_STATUS: u32 = 0x40;
+
+        let mut phase = new_game_phase();
+        let trainer_id = u32::from_le_bytes(phase.save2.player_trainer_id);
+        let lead = crate::new_game::provisional_starter().with_original_trainer_id(trainer_id);
+        let mut stored = crate::party::to_save_pokemon(&battle::Dex::new(), &lead);
+        stored.status = STORED_STATUS;
+        phase.save1.player_party_count = 1;
+        phase.save1.player_party[0] = stored;
+        phase.party_lead = Some(lead);
+        assert_ne!(phase.save1.player_party[0].status, 0, "setup: lead is statused");
+
+        phase.white_out();
+
+        let temp = TempSave::new("white-out-clears-stored-status");
+        let mut slot = temp.slot();
+        save_from_the_start_menu(&mut phase, &mut slot);
+        assert_eq!(slot.load().block1.player_party[0].status, 0);
+    }
 
     #[test]
     #[ignore = "needs a local pack: run `cargo xtask extract` first"]

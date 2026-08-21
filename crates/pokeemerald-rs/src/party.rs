@@ -383,8 +383,9 @@ fn overlay_current_hp(record: &mut Pokemon, mon: &BattlePokemon) {
 /// zero.
 ///
 /// The cached stat block is the one group that is retained *conditionally*
-/// -- kept when species, experience and level are unchanged, recomputed
-/// when the session moved one of them. Current HP is always the battler's.
+/// -- kept when species and level are unchanged, recomputed when the
+/// session moved either one. Sub-level experience deliberately does not
+/// enter that guard. Current HP is always the battler's.
 /// The module docs give the reasoning; [`overlay_battle_stats`] and
 /// [`overlay_current_hp`] are the two writes.
 ///
@@ -456,9 +457,10 @@ pub(crate) fn merge_into_save_pokemon(dex: &Dex, mon: &BattlePokemon, base: &Pok
         // current HP, which is state, comes from the battler.
         overlay_current_hp(&mut merged, mon);
     } else {
-        // Species, experience or level moved this session, so the cached
-        // block is a function of inputs that no longer hold and upstream
-        // would have recomputed it (`CalculateMonStats`).
+        // Species or level moved this session, so the cached block is a
+        // function of inputs that no longer hold and upstream would have
+        // recomputed it (`CalculateMonStats`). Sub-level experience is
+        // deliberately excluded from the guard above.
         overlay_battle_stats(&mut merged, mon);
     }
     merged
