@@ -70,7 +70,7 @@
 //! 5. Each resolved group is [`encode::encode_voice_group`]d to
 //!    `crates/assets/src/audio/voicegroup.rs`'s exact wire shape (this
 //!    crate cannot depend on that one -- see `encode`'s module docs) and
-//!    pushed as a [`crate::extract::pack::PackKind::Raw`] entry under
+//!    pushed as a [`pack_format::EntryKind::Raw`] entry under
 //!    `audio/voicegroup/<label>`.
 //!
 //! # Scope: `MUS_TITLE`'s own dependency tree only
@@ -104,8 +104,8 @@ mod resolve;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use super::pack::{PackEntry, PackKind, PackWriter};
 use super::{read_text, ExtractError};
+use pack_format::{EntryKind, PackEntry, PackWriter};
 use parser::RawVoiceGroup;
 
 pub(crate) use error::VoiceGroupError;
@@ -114,7 +114,7 @@ pub(crate) use error::VoiceGroupError;
 /// `VOICE`/key-split-table command byte addresses a slot in `0..=127`.
 /// Duplicated from `crates/assets/src/audio/voicegroup.rs`'s
 /// `VOICE_SLOT_COUNT` rather than imported (this crate never depends on
-/// `crates/assets` -- see `crate::extract::pack`'s module docs).
+/// `crates/assets` -- see `pack_format`'s module docs).
 pub(super) const VOICE_SLOT_COUNT: usize = 128;
 
 /// `MUS_TITLE`'s own voicegroup label -- see the module docs' "Why
@@ -289,7 +289,7 @@ pub(super) fn extract_voicegroups(
     for group in &groups {
         writer.push(PackEntry {
             id: resolve::voice_group_pack_id(&group.label),
-            kind: PackKind::Raw,
+            kind: EntryKind::Raw,
             payload: encode::encode_voice_group(group),
         });
     }
@@ -302,7 +302,7 @@ mod tests {
         build_label_index, collect_inc_files_sorted, extract_voicegroups, link_order_successors,
         TOP_LEVEL_LABEL,
     };
-    use crate::extract::pack::PackWriter;
+    use pack_format::PackWriter;
 
     // Real-checkout tests: see `crate::extract`'s own test module docs on
     // why these are `#[ignore]`d and how to run them.

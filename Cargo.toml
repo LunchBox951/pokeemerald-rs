@@ -5,6 +5,7 @@ members = [
     "crates/rendering",
     "crates/audio",
     "crates/assets",
+    "crates/pack-format",
     "crates/engine",
     "crates/battle",
     "crates/pokeemerald-rs",

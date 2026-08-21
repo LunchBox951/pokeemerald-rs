@@ -6,10 +6,10 @@ use std::path::PathBuf;
 use super::jasc_pal::JascPalError;
 use super::layouts_json::LayoutsJsonError;
 use super::midi::MidiError;
-use super::pack::PackWriteError;
 use super::png::PngError;
 use super::voicegroups::VoiceGroupError;
 use super::wav::WavError;
+use pack_format::PackWriteError;
 
 /// An error produced while extracting the local asset pack.
 ///
@@ -44,7 +44,7 @@ pub enum ExtractError {
     MissingEmbeddedPalette(PathBuf),
     /// A decoded palette (from either a JASC `.pal` file or a PNG's own
     /// `PLTE` chunk) had more colours than the pack format's `color_count`
-    /// field can represent: it's a `u16` (`crate::extract::pack`'s format
+    /// field can represent: it's a `u16` (`pack_format`'s format
     /// docs, "Palette: `color_count`: u16"), and the payload region's own
     /// documented shape ("Palette: `color_count` * 2 bytes", same docs)
     /// would silently mismatch the real payload length if this count were

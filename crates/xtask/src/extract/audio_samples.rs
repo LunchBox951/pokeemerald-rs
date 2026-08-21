@@ -65,10 +65,10 @@
 //! `crates/assets::audio::sample::Sample::encode` would produce for the
 //! equivalent [`Sample::DirectSound`](../../../assets/src/audio/sample.rs)/
 //! `Sample::ProgrammableWave` value, stored as a plain
-//! [`PackKind::Raw`] entry (this pipeline never depends on `crates/assets`,
-//! and vice versa — see `crate::extract::pack`'s module docs — so
-//! [`encode_direct_sound`]/[`encode_programmable_wave`] below are this
-//! crate's own copy of that wire format, not a shared abstraction).
+//! [`EntryKind::Raw`] entry (this pipeline never depends on `crates/assets`,
+//! and vice versa, so [`encode_direct_sound`]/[`encode_programmable_wave`]
+//! below are this crate's own copy of that wire format, not a shared
+//! abstraction; only the container around them, `pack_format`, is shared).
 //!
 //! Because they *are* a copy, this module's own tests can only pin this
 //! side's understanding of the layout. The cross-crate half of the pin —
@@ -91,9 +91,9 @@
 
 use std::path::Path;
 
-use super::pack::{PackEntry, PackKind, PackWriter};
 use super::wav;
 use super::{read_file, ExtractError};
+use pack_format::{EntryKind, PackEntry, PackWriter};
 
 /// The upstream `.wav` basenames (`sound/direct_sound_samples/<name>.wav`,
 /// symbol `DirectSoundWaveData_<name>`) that `mus_title`'s voicegroup
@@ -183,7 +183,7 @@ fn encode_programmable_wave(table: &[u8; PROGRAMMABLE_WAVE_SIZE]) -> Vec<u8> {
 
 /// Extract every `DirectSound`/programmable-wave sample [`DIRECT_SOUND_SAMPLES`]/
 /// [`PROGRAMMABLE_WAVE_SAMPLES`] name (see the module docs for how that set
-/// was derived) as `audio/sample/*` [`PackKind::Raw`] entries.
+/// was derived) as `audio/sample/*` [`EntryKind::Raw`] entries.
 ///
 /// # Errors
 ///
@@ -203,7 +203,7 @@ pub(super) fn extract_audio_samples(
         let payload = encode_direct_sound(sample.base_frequency, sample.loop_start, &sample.data);
         writer.push(PackEntry {
             id: format!("audio/sample/direct-sound/{name}"),
-            kind: PackKind::Raw,
+            kind: EntryKind::Raw,
             payload,
         });
     }
@@ -222,7 +222,7 @@ pub(super) fn extract_audio_samples(
                 })?;
         writer.push(PackEntry {
             id: format!("audio/sample/programmable-wave/{n:02}"),
-            kind: PackKind::Raw,
+            kind: EntryKind::Raw,
             payload: encode_programmable_wave(&table),
         });
     }

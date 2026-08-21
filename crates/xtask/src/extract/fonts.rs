@@ -26,8 +26,8 @@
 
 use std::path::Path;
 
-use super::pack::{PackEntry, PackKind, PackWriter};
 use super::{png, read_file, ExtractError};
+use pack_format::{EntryKind, PackEntry, PackWriter};
 
 /// `(upstream `FONT_*` id, lowercased; `graphics/fonts/` filename)` — the
 /// five Latin glyph sheets this pipeline extracts. See the module docs for
@@ -70,7 +70,7 @@ pub(super) fn extract_fonts(upstream: &Path, writer: &mut PackWriter) -> Result<
         validate_font_sheet(&path, &image)?;
         writer.push(PackEntry {
             id: format!("font/{name}/glyphs"),
-            kind: PackKind::Image {
+            kind: EntryKind::Image {
                 width: image.width,
                 height: image.height,
                 bit_depth: image.bit_depth,

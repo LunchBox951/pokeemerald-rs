@@ -2,7 +2,7 @@
 //! `crates/assets::audio::song::SongEvent`'s shape — duplicated, not
 //! imported, for the same reason `xtask::extract::voicegroups::resolve`'s
 //! `VoiceSlot` duplicates `crates/assets::audio::voicegroup::VoiceEntry`: this
-//! crate never depends on `crates/assets` (`crate::extract::pack`'s module
+//! crate never depends on `crates/assets` (`pack_format`'s module
 //! docs). [`super::encode`] serializes this to that schema's exact wire
 //! shape.
 //!

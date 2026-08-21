@@ -3,7 +3,8 @@
 //!
 //! Implements the owner-decided "policy A" from Discussion #71: extraction
 //! reads the local checkout `./init.sh` fetches and writes a deterministic,
-//! versioned pack to disk (format: [`pack`]); it never runs automatically
+//! versioned pack to disk (format: the `pack_format` crate, which owns the
+//! container layout and the writer); it never runs automatically
 //! (only an explicit `cargo xtask extract` invocation triggers it, wired in
 //! `crate::dispatch`), and the pack itself is never committed, never a CI
 //! artifact, and never embedded in a binary (`.gitignore` excludes
@@ -29,7 +30,7 @@
 //!   `anim/**/*.png` animation frame (present for `general` and
 //!   `building` only), all 16 `palettes/NN.pal` files, and
 //!   `metatiles.bin` / `metatile_attributes.bin` as opaque
-//!   [`pack::PackKind::Raw`] blobs (upstream ships these as flat binary
+//!   [`pack_format::EntryKind::Raw`] blobs (upstream ships these as flat binary
 //!   files directly, not compiled from another source — see
 //!   `crates/assets/src/map_layouts.rs`'s docs for the identical
 //!   raw-binary-source situation with `map.bin`/`border.bin`). Extracting
@@ -82,7 +83,7 @@
 //!   Littleroot ↔ Route 101 ↔ Oldale Town ↔ Route 103 chain I-5's Route 103
 //!   rival battle needs to be reachable on foot (see [`LAYOUTS`]). Resolved
 //!   via `data/layouts/layouts.json` ([`layouts_json`]) rather than
-//!   hardcoded upstream paths, and extracted as opaque [`pack::PackKind::Raw`]
+//!   hardcoded upstream paths, and extracted as opaque [`pack_format::EntryKind::Raw`]
 //!   blobs — same rationale as `metatiles.bin` / `metatile_attributes.bin`
 //!   above: these are upstream's own flat binary files, not compiled from
 //!   another source. `crates/assets::map_layouts` already ships the typed
@@ -117,7 +118,7 @@
 //!   key-split sub-groups — see [`audio_samples`]'s module docs for exactly
 //!   how that set was traced and for the wire format each entry's payload
 //!   carries (`crates/assets::audio::sample::Sample`'s encoding, duplicated
-//!   here per this module's crate-decoupling policy — see [`pack`]'s
+//!   here per this module's crate-decoupling policy — see `pack_format`'s
 //!   docs). [`wav`] is the `.wav`-source decoder this needs; see its module
 //!   docs for the field-by-field derivation, cited into
 //!   `tools/wav2agb`.
@@ -206,7 +207,7 @@
 //! `<name>` is always a normalized, stable identifier (upstream's own
 //! directory/file naming, which is already `snake_case` and stable across
 //! decomp revisions) — never a `gTileset_*`-style linker symbol. See
-//! [`pack`]'s module docs for why that matters.
+//! `pack_format`'s crate docs for why that matters.
 
 mod audio_samples;
 mod error;
@@ -215,7 +216,6 @@ pub mod inflate;
 pub mod jasc_pal;
 mod layouts_json;
 mod midi;
-pub mod pack;
 pub mod png;
 mod text_window;
 mod voicegroups;
@@ -224,13 +224,8 @@ mod wav;
 use std::path::{Path, PathBuf};
 
 pub use error::ExtractError;
-use pack::{PackEntry, PackKind, PackWriter};
-
-/// The pack's location, relative to the repository root: a top-level,
-/// gitignored directory (mirroring how `pokeemerald/`/`mgba/` are also
-/// top-level gitignored reference dirs) rather than something under
-/// `target/`, so it survives `cargo clean`.
-pub const OUTPUT_RELATIVE_PATH: &str = "assets-pack/pokeemerald.pack";
+pub use pack_format::OUTPUT_RELATIVE_PATH;
+use pack_format::{EntryKind, PackEntry, PackWriter};
 
 /// Serializes the ignored tests that touch the one real, developer-local
 /// pack at [`OUTPUT_RELATIVE_PATH`]: `extract` rewrites it non-atomically
@@ -371,7 +366,7 @@ fn decode_png_entry(path: &Path, id: String, writer: &mut PackWriter) -> Result<
     let image = png::decode(&bytes).map_err(|e| ExtractError::Png(path.to_path_buf(), e))?;
     writer.push(PackEntry {
         id,
-        kind: PackKind::Image {
+        kind: EntryKind::Image {
             width: image.width,
             height: image.height,
             bit_depth: image.bit_depth,
@@ -394,7 +389,7 @@ fn decode_palette_entry(
 
 /// Serialize already-decoded colours (from either a JASC `.pal` file or a
 /// PNG's own `PLTE` chunk — see [`text_window`]) into a
-/// [`PackKind::Palette`] entry. The one place the JASC (`.pal`) and
+/// [`EntryKind::Palette`] entry. The one place the JASC (`.pal`) and
 /// embedded-PNG (`PLTE`) decode paths converge before writing the pack's
 /// `color_count` field, so both share this same bounds check rather than
 /// each narrowing `colors.len()` with its own truncating cast.
@@ -403,7 +398,7 @@ fn decode_palette_entry(
 ///
 /// [`ExtractError::PaletteColorCountUnrepresentable`] if `colors.len()`
 /// exceeds `u16::MAX` — the pack format's `color_count` field cannot
-/// represent it (`pack`'s format docs). Carries `path` purely for the error
+/// represent it (`pack_format`'s format docs). Carries `path` purely for the error
 /// message; the returned entry is never associated back with a file.
 fn build_palette_entry(
     path: &Path,
@@ -419,12 +414,12 @@ fn build_palette_entry(
     }
     // `payload` is built from exactly `colors`, one GBA555 `u16` (2 bytes)
     // each, so this can never trip in practice -- asserted anyway since the
-    // pack's own payload-shape contract (`pack`'s format docs: "Palette:
+    // pack's own payload-shape contract (`pack_format`'s format docs: "Palette:
     // color_count * 2 bytes") is exactly what `color_count` promises readers.
     debug_assert_eq!(payload.len(), usize::from(color_count) * 2);
     Ok(PackEntry {
         id,
-        kind: PackKind::Palette { color_count },
+        kind: EntryKind::Palette { color_count },
         payload,
     })
 }
@@ -433,14 +428,14 @@ fn raw_entry(path: &Path, id: String, writer: &mut PackWriter) -> Result<(), Ext
     let payload = read_file(path)?;
     writer.push(PackEntry {
         id,
-        kind: PackKind::Raw,
+        kind: EntryKind::Raw,
         payload,
     });
     Ok(())
 }
 
 /// Recursively collect every `*.png` under `dir`, sorted by full path —
-/// deterministic regardless of the OS's `read_dir` order (see [`pack`]'s
+/// deterministic regardless of the OS's `read_dir` order (see `pack_format`'s
 /// determinism docs).
 fn collect_pngs_sorted(dir: &Path) -> Result<Vec<PathBuf>, ExtractError> {
     fn walk(dir: &Path, out: &mut Vec<PathBuf>) -> std::io::Result<()> {
@@ -561,7 +556,7 @@ fn extract_title_screen(upstream: &Path, writer: &mut PackWriter) -> Result<(), 
                 }
                 writer.push(PackEntry {
                     id: format!("title/image/{stem}"),
-                    kind: PackKind::Image {
+                    kind: EntryKind::Image {
                         width: image.width,
                         height: image.height,
                         bit_depth: image.bit_depth,
@@ -737,7 +732,7 @@ fn extract_layouts(upstream: &Path, writer: &mut PackWriter) -> Result<(), Extra
         }
         writer.push(PackEntry {
             id: format!("layout/{name}/map"),
-            kind: PackKind::Raw,
+            kind: EntryKind::Raw,
             payload: map_bytes,
         });
 
@@ -750,7 +745,7 @@ fn extract_layouts(upstream: &Path, writer: &mut PackWriter) -> Result<(), Extra
         }
         writer.push(PackEntry {
             id: format!("layout/{name}/border"),
-            kind: PackKind::Raw,
+            kind: EntryKind::Raw,
             payload: border_bytes,
         });
     }
@@ -896,7 +891,7 @@ mod tests {
 
     #[test]
     fn oversized_jasc_palette_is_rejected_not_truncated() {
-        // The pack format's `color_count` field is a `u16` (`pack`'s format
+        // The pack format's `color_count` field is a `u16` (`pack_format`'s
         // docs) -- 65 536 colours, one more than it can hold, must fail
         // closed via `ExtractError::PaletteColorCountUnrepresentable` rather
         // than silently narrow with an `as u16` cast (issue #301).
@@ -917,7 +912,7 @@ mod tests {
         let path = dir.join("oversized.pal");
         std::fs::write(&path, &text).unwrap();
 
-        let mut writer = super::pack::PackWriter::new();
+        let mut writer = pack_format::PackWriter::new();
         let err =
             super::decode_palette_entry(&path, "test/palette".to_owned(), &mut writer).unwrap_err();
         assert!(
@@ -984,7 +979,7 @@ mod tests {
         // module docs), so this just confirms every expected `layout/*`
         // id's bytes made it into the pack's directory, via a crude
         // substring search over the raw file (every id is stored verbatim,
-        // UTF-8, in the directory region -- see `pack`'s format docs).
+        // UTF-8, in the directory region -- see `pack_format`'s format docs).
         assert!(upstream_present(), "run ./init.sh first");
         let path = scratch_path("layouts");
         let report = extract_to(&path).expect("extraction should succeed against a real checkout");

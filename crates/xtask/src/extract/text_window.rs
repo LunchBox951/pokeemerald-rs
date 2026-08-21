@@ -23,8 +23,8 @@
 
 use std::path::Path;
 
-use super::pack::{PackEntry, PackKind, PackWriter};
 use super::{jasc_pal, png, read_file, read_text, ExtractError};
+use pack_format::{EntryKind, PackEntry, PackWriter};
 
 /// Filename stems for every PNG required from `graphics/text_window/`.
 const TEXT_WINDOW_IMAGE_STEMS: [&str; 21] = [
@@ -104,7 +104,7 @@ pub(super) fn extract_text_window(
         validate_text_window_pixels(&path, &image.pixels, colors.len())?;
         writer.push(PackEntry {
             id: format!("text-window/image/{stem}"),
-            kind: PackKind::Image {
+            kind: EntryKind::Image {
                 width: image.width,
                 height: image.height,
                 bit_depth: image.bit_depth,
@@ -314,7 +314,7 @@ mod tests {
 
         for actual in [0, 1, 15, 17] {
             let colors = vec![color; actual];
-            let mut writer = super::super::pack::PackWriter::new();
+            let mut writer = pack_format::PackWriter::new();
             let err = push_text_window_palette_entry(
                 path,
                 &colors,
@@ -334,7 +334,7 @@ mod tests {
         }
 
         let colors = vec![color; TEXT_WINDOW_PALETTE_COLORS];
-        let mut writer = super::super::pack::PackWriter::new();
+        let mut writer = pack_format::PackWriter::new();
         push_text_window_palette_entry(
             path,
             &colors,

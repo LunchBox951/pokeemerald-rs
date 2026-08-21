@@ -9,6 +9,9 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
+# The asset-pack container format `extract` writes. In-workspace, std-only,
+# not a new external dependency.
+pack-format = { path = "../pack-format" }
 # The `e2e --suite smoke` run (F-3, V-1), `record-snapshot` (F-3, V-4),
 # and `scenario` (F-3, issue #233) drive headless scenes from
 # `pokeemerald-rs` in-process. The dependency is optional and
