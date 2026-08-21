@@ -15,7 +15,7 @@
 //!
 //! # What exists
 //!
-//! The ROM-side foundation, plus the first domain readers:
+//! The ROM-side foundation, and the domain readers built on it:
 //!
 //! - [`Rom`] loads and validates an image: exact size, GBA cartridge header
 //!   with its fixed byte and complement check, whole-file SHA-1.
@@ -35,11 +35,15 @@
 //!   is needed and a dependency is not `(minimal-deps)`.
 //! - [`fixture::RomFixture`] builds synthetic ROM-shaped images for tests.
 //!   No real ROM is ever needed to test this crate.
-//! - `domains` holds one reader per asset domain. Two are wired: the title
-//!   screen (`title/image/*`, `title/raw/*`, `title/palette/*`) and the
-//!   interface palettes (`interface/palette/*`). [`import`] and
-//!   [`import_to_bytes`] run them into a `PackWriter` and hand back a real
-//!   pack.
+//! - `domains` holds one reader per asset domain. Four are wired: the
+//!   title screen (`title/image/*`, `title/raw/*`, `title/palette/*`), the
+//!   interface palettes (`interface/palette/*`), the tilesets (`tileset/*`:
+//!   tile sheets, palette banks, metatile tables, animation frames), and
+//!   the map layouts (`layout/*`: metatile grids and border blocks). A
+//!   domain that has a ROM struct behind its roots corroborates it field by
+//!   field, so a wrong profile is a typed error rather than a
+//!   plausible-looking asset. [`import`] and [`import_to_bytes`] run them
+//!   into a `PackWriter` and hand back a real pack.
 //!
 //! # Equivalence
 //!
@@ -53,12 +57,12 @@
 //! # What is next
 //!
 //! The remaining domains, one slice each, sharing this crate's reader and
-//! decompressor: tilesets and map layouts, sprites and fonts, text windows,
-//! `MUS_TITLE`'s audio tree. Each turns ROM bytes into [`pack_format`]
-//! entries under the ids `crates/assets` already expects, and each extends
-//! the same equivalence run. Until they land the pack is *partial*: it
-//! holds every id its domains claim and nothing else, so a run of the game
-//! against it still needs the checkout pack.
+//! decompressor: sprites and fonts, text windows, `MUS_TITLE`'s audio
+//! tree. Each turns ROM bytes into [`pack_format`] entries under the ids
+//! `crates/assets` already expects, and each extends the same equivalence
+//! run. Until they land the pack is *partial*: it holds every id its
+//! domains claim and nothing else, so a run of the game against it still
+//! needs the checkout pack.
 //!
 //! The CLI that drives [`import`] already exists: `pokeemerald-rs
 //! --import-rom <path>` resolves the pack's destination, writes it

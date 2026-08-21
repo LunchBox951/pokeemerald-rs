@@ -10,7 +10,7 @@
 //!
 //! - `title/image/press_start` is 4bpp in the ROM and 8bpp in the pack.
 //!   `ImageRoot`'s `rom_bit_depth`/`pack_bit_depth` split carries that, and
-//!   [`super::write_image`] applies it.
+//!   [`super::image`] applies it.
 //! - `title/palette/pokemon_logo` is 224 colours, not the 256 its upstream
 //!   `.pal` file holds. Upstream's own build cuts it
 //!   (`graphics_file_rules.mk`'s `-num_colors 224`) and the game never
@@ -37,15 +37,16 @@ use crate::roots::Roots;
 /// Any [`ImportError`] a root's read raises. Fails on the first one: a
 /// partial title screen is not a useful pack.
 pub(crate) fn write(rom: &Rom, roots: &Roots, writer: &mut PackWriter) -> Result<(), ImportError> {
+    let reader = rom.reader();
     let title = &roots.title_screen;
-    for image in title.images {
-        super::write_image(rom, image, writer)?;
+    for root in title.images {
+        writer.push(super::image(&reader, root)?);
     }
-    for tilemap in title.tilemaps {
-        super::write_blob(rom, tilemap, writer)?;
+    for root in title.tilemaps {
+        writer.push(super::blob(&reader, root)?);
     }
-    for palette in title.palettes {
-        super::write_palette(rom, palette, writer)?;
+    for root in title.palettes {
+        writer.push(super::palette(&reader, root)?);
     }
     Ok(())
 }

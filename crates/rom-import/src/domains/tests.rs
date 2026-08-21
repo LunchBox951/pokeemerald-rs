@@ -9,12 +9,12 @@
 //! covered, because the importer runs on a file the user supplied and a
 //! wrong address must be a typed error, never a panic or a wrong asset.
 
-use pack_format::{EntryKind, PackWriter};
+use pack_format::{EntryKind, PackEntry, PackWriter};
 
-use super::{write_blob, write_image, write_palette, DOMAINS};
+use super::{blob, check_pointer, image, len_usize, palette, DOMAINS};
 use crate::error::{ImportError, Lz77Fault};
 use crate::fixture::RomFixture;
-use crate::reader::{GbaPtr, ROM_BASE};
+use crate::reader::{GbaPtr, RomReader, ROM_BASE};
 use crate::rom::{Rom, ROM_SIZE};
 use crate::roots::{
     BlobRoot, Encoding, ImageRoot, InterfaceRoots, PaletteRoot, Roots, TitleScreenRoots,
@@ -122,27 +122,18 @@ fn blob_root() -> BlobRoot {
     }
 }
 
-/// Queue one root and hand back the entry it produced.
-fn written<T>(
-    write: impl Fn(&Rom, &T, &mut PackWriter) -> Result<(), ImportError>,
+/// Read one root over the fixture and hand back the entry it produced.
+fn read<T>(
+    reader: fn(&RomReader<'_>, &T) -> Result<PackEntry, ImportError>,
     root: &T,
-) -> Result<pack_format::PackEntry, ImportError> {
-    let mut writer = PackWriter::new();
-    write(&fixture_rom(), root, &mut writer)?;
-    let bytes = writer.finish().expect("one entry is a valid pack");
-    let entries = pack_format::parse_directory(&bytes).expect("its own writer's output parses");
-    assert_eq!(entries.len(), 1);
-    let entry = &entries[0];
-    Ok(pack_format::PackEntry {
-        id: entry.id.clone(),
-        kind: entry.kind,
-        payload: bytes[entry.offset..entry.offset + entry.length].to_vec(),
-    })
+) -> Result<PackEntry, ImportError> {
+    let rom = fixture_rom();
+    reader(&rom.reader(), root)
 }
 
 #[test]
 fn a_compressed_image_unpacks_into_a_raster() {
-    let entry = written(write_image, &image_root()).expect("a well-formed root");
+    let entry = read(image, &image_root()).expect("a well-formed root");
     assert_eq!(entry.id, "title/image/test");
     assert_eq!(
         entry.kind,
@@ -164,7 +155,7 @@ fn an_uncompressed_image_reads_straight_through() {
         encoding: Encoding::Raw,
         ..image_root()
     };
-    let entry = written(write_image, &root).expect("a well-formed root");
+    let entry = read(image, &root).expect("a well-formed root");
     assert_eq!(&entry.payload[..8], &[0, 1, 2, 3, 4, 5, 6, 7]);
 }
 
@@ -176,7 +167,7 @@ fn the_pack_records_the_source_depth_not_the_roms() {
         pack_bit_depth: 8,
         ..image_root()
     };
-    let entry = written(write_image, &root).expect("a well-formed root");
+    let entry = read(image, &root).expect("a well-formed root");
     assert_eq!(
         entry.kind,
         EntryKind::Image {
@@ -190,7 +181,7 @@ fn the_pack_records_the_source_depth_not_the_roms() {
 
 #[test]
 fn a_palette_reads_gba_native_colours() {
-    let entry = written(write_palette, &palette_root()).expect("a well-formed root");
+    let entry = read(palette, &palette_root()).expect("a well-formed root");
     assert_eq!(entry.id, "title/palette/test");
     assert_eq!(entry.kind, EntryKind::Palette { color_count: 2 });
     // BGR555 passes through unconverted: red, then green.
@@ -198,8 +189,21 @@ fn a_palette_reads_gba_native_colours() {
 }
 
 #[test]
+fn a_raw_blob_copies_through() {
+    let root = BlobRoot {
+        addr: at(RAW_TILES_OFF),
+        encoding: Encoding::Raw,
+        len: 4,
+        ..blob_root()
+    };
+    let entry = read(blob, &root).expect("a well-formed root");
+    assert_eq!(entry.kind, EntryKind::Raw);
+    assert_eq!(entry.payload, TILE_ROW0);
+}
+
+#[test]
 fn a_compressed_blob_copies_through() {
-    let entry = written(write_blob, &blob_root()).expect("a well-formed root");
+    let entry = read(blob, &blob_root()).expect("a well-formed root");
     assert_eq!(entry.id, "title/raw/test");
     assert_eq!(entry.kind, EntryKind::Raw);
     assert_eq!(entry.payload, b"tilemap!");
@@ -214,7 +218,7 @@ fn a_truncated_stream_is_rejected() {
         len: 64,
         ..blob_root()
     };
-    let err = written(write_blob, &root).unwrap_err();
+    let err = read(blob, &root).unwrap_err();
     assert!(
         matches!(
             err,
@@ -234,7 +238,7 @@ fn a_wrong_decompressed_length_is_rejected() {
         len: 7,
         ..blob_root()
     };
-    let err = written(write_blob, &root).unwrap_err();
+    let err = read(blob, &root).unwrap_err();
     assert!(
         matches!(
             err,
@@ -256,7 +260,7 @@ fn a_stream_that_is_not_lz77_is_rejected() {
         addr: at(PALETTE_OFF),
         ..blob_root()
     };
-    let err = written(write_blob, &root).unwrap_err();
+    let err = read(blob, &root).unwrap_err();
     assert!(
         matches!(
             err,
@@ -276,7 +280,7 @@ fn a_palette_past_the_rom_end_is_rejected() {
         addr: GbaPtr::at(ROM_BASE + ROM_SIZE_U32 + 0x100),
         ..palette_root()
     };
-    let err = written(write_palette, &root).unwrap_err();
+    let err = read(palette, &root).unwrap_err();
     assert!(matches!(err, ImportError::Truncated { .. }), "{err}");
 
     // Straddling the end: the first colour is in the image, the second is
@@ -285,7 +289,7 @@ fn a_palette_past_the_rom_end_is_rejected() {
         addr: at(ROM_SIZE_U32 - 2),
         ..palette_root()
     };
-    let err = written(write_palette, &root).unwrap_err();
+    let err = read(palette, &root).unwrap_err();
     assert!(matches!(err, ImportError::Truncated { .. }), "{err}");
 }
 
@@ -296,7 +300,7 @@ fn an_uncompressed_read_past_the_rom_end_is_rejected() {
         encoding: Encoding::Raw,
         ..image_root()
     };
-    let err = written(write_image, &root).unwrap_err();
+    let err = read(image, &root).unwrap_err();
     assert!(matches!(err, ImportError::Truncated { .. }), "{err}");
 }
 
@@ -311,7 +315,7 @@ fn tiles_that_do_not_fit_the_raster_are_rejected() {
         tile_count: 2,
         ..image_root()
     };
-    let err = written(write_image, &root).unwrap_err();
+    let err = read(image, &root).unwrap_err();
     assert!(
         matches!(
             err,
@@ -335,8 +339,36 @@ fn an_unsupported_rom_depth_is_rejected() {
         rom_bit_depth: 2,
         ..image_root()
     };
-    let err = written(write_image, &root).unwrap_err();
+    let err = read(image, &root).unwrap_err();
     assert!(matches!(err, ImportError::EntryShape { .. }), "{err}");
+}
+
+#[test]
+fn lengths_narrow_without_panicking() {
+    assert_eq!(len_usize(0), 0);
+    assert_eq!(len_usize(u32::MAX), usize::try_from(u32::MAX).unwrap());
+}
+
+#[test]
+fn a_pointer_field_must_match_the_profile() {
+    // Four filler bytes, then one pointer to `ROM_BASE + 0x10`.
+    let mut bytes = vec![0u8; 4];
+    bytes.extend_from_slice(&(ROM_BASE + 0x10).to_le_bytes());
+    let reader = RomReader::new(&bytes);
+    let want = GbaPtr::at(ROM_BASE + 0x10);
+    assert!(check_pointer(&reader, 0, 4, want, "r", "S.f").is_ok());
+    assert!(matches!(
+        check_pointer(&reader, 0, 4, GbaPtr::at(ROM_BASE), "r", "S.f"),
+        Err(ImportError::StructMismatch {
+            root: "r",
+            field: "S.f"
+        })
+    ));
+    // A field offset that would wrap fails the read, never the compare.
+    assert!(matches!(
+        check_pointer(&reader, usize::MAX, 4, want, "r", "S.f"),
+        Err(ImportError::Truncated { .. })
+    ));
 }
 
 #[test]

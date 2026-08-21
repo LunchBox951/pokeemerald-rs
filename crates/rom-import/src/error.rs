@@ -150,6 +150,19 @@ pub enum ImportError {
         /// How many entries the table has.
         count: usize,
     },
+    /// A struct in the ROM disagreed with the profile that claims to
+    /// describe it.
+    ///
+    /// Corroboration, never selection: the profile's addresses are
+    /// authoritative, and this says the ROM does not back them up. In
+    /// practice it means the profile table is wrong, so the importer
+    /// refuses rather than packing whatever the addresses happened to hit.
+    StructMismatch {
+        /// The root's name, e.g. `"general"`.
+        root: &'static str,
+        /// The struct field that disagreed, e.g. `"Tileset.tiles"`.
+        field: &'static str,
+    },
     /// An LZ77 stream in the ROM could not be decompressed.
     Lz77 {
         /// The ROM offset the stream starts at.
@@ -240,6 +253,10 @@ impl fmt::Display for ImportError {
             } => write!(
                 f,
                 "index {index} is past the end of table `{table}` ({count} entries)"
+            ),
+            Self::StructMismatch { root, field } => write!(
+                f,
+                "the ROM's `{field}` for `{root}` disagrees with this revision profile"
             ),
             Self::Lz77 { at, fault } => {
                 write!(f, "LZ77 stream at ROM offset {at:#08x}: {fault}")
@@ -346,6 +363,10 @@ mod tests {
                 table: "species",
                 index: 9,
                 count: 4,
+            },
+            ImportError::StructMismatch {
+                root: "general",
+                field: "Tileset.tiles",
             },
             ImportError::Lz77 {
                 at: 0x20,

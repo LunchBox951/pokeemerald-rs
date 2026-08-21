@@ -19,8 +19,9 @@ use crate::roots::Roots;
 ///
 /// Any [`ImportError`] a palette read raises.
 pub(crate) fn write(rom: &Rom, roots: &Roots, writer: &mut PackWriter) -> Result<(), ImportError> {
-    for palette in roots.interface.palettes {
-        super::write_palette(rom, palette, writer)?;
+    let reader = rom.reader();
+    for root in roots.interface.palettes {
+        writer.push(super::palette(&reader, root)?);
     }
     Ok(())
 }
