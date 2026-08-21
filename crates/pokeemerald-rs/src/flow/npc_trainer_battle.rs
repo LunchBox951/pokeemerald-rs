@@ -111,11 +111,10 @@
 
 use assets::trainers::{TrainerData, TrainerId, TrainerParty};
 use assets::{MoveId, SpeciesNames};
-use battle::{
-    Battle, BattleError, BattleEvent, BattleOutcome, BattlePokemon, Dex, PlayerAction, StatStages,
-};
+use battle::{Battle, BattleError, BattleEvent, BattleOutcome, BattlePokemon, Dex, PlayerAction};
 use engine::rng::Rng;
 
+use super::move_learn::settle_move_learn_prompts;
 use super::wild_encounter::SharedRng;
 
 /// `MAX_MONEY` (`pokeemerald/src/money.c:13`): the wallet's own hard cap,
@@ -432,14 +431,25 @@ pub fn start_npc_trainer_battle(
 /// lead this function hands back is only ever momentarily fainted in
 /// practice, not a standing gap.
 ///
+/// Any level-up move-replacement prompt is answered by
+/// `crate::flow::move_learn::settle_move_learn_prompts` before the outcome
+/// is read. That matters most here: a trainer battle awards experience on
+/// every knockout and then keeps playing, so an unanswered prompt would
+/// refuse the *next* turn ([`BattleError::MoveLearnPending`]) and this
+/// driver's error arm would abandon a winnable fight.
+///
 /// [`battle::BattleEvent::MoneyGained`] is credited to `*money` the instant
 /// it is seen, via [`credit_money`] -- `Cmd_getmoneyreward`'s own
 /// `AddMoney(&gSaveBlock1Ptr->money, moneyReward)`
 /// (`pokeemerald/src/battle_script_commands.c:5641`), reached only on the
-/// win path that emits the event in the first place (`battle::Battle`'s own
-/// `end_of_turn`), so a loss or an in-progress battle never touches the
-/// wallet here -- only [`crate::flow::overworld_phase::white_out`]'s halving
-/// does.
+/// win path that emits the event in the first place -- so a loss or an
+/// in-progress battle never touches the wallet here; only
+/// [`crate::flow::overworld_phase::white_out`]'s halving does. The event
+/// can arrive from either of the engine's two mouths: the turn itself
+/// (`battle::Battle`'s own `end_of_turn`), or -- when the final knockout's
+/// level-up stopped on a move-learn prompt -- the settlement below, since
+/// upstream pays out only after the level-up script (ask included) has
+/// finished. Both are scanned.
 ///
 /// A `None` return is intentionally ambiguous: it can mean that `slot` was
 /// already empty, that the battle remains ongoing, or that a failed turn
@@ -466,15 +476,29 @@ pub fn advance_npc_trainer_battle(
             true
         }
     };
+    // See `crate::flow::move_learn`: a trainer battle awards experience on
+    // every knockout, so this is the driver most likely to meet the
+    // replacement prompt -- and, with a bench behind the fainted mon, the
+    // one where leaving it unanswered would refuse the *next* turn. A
+    // prompt raised by the *final* knockout defers the payout too
+    // (`Cmd_getmoneyreward` runs only once the level-up script, ask
+    // included, has finished -- `battle::Battle::resolve_move_learn`'s
+    // docs), so the settlement's own events must be scanned for
+    // `MoneyGained` exactly like the turn's.
+    for event in settle_move_learn_prompts(battle) {
+        if let BattleEvent::MoneyGained(amount) = event {
+            credit_money(money, amount);
+        }
+    }
     let outcome = battle.outcome();
     if !failed && outcome.is_none() {
         return None;
     }
     let mut mon = battle.player().clone();
-    // Stat stages live in `gBattleMons[].statStages` only and never reach
-    // the party struct -- see `advance_first_battle`'s own doc comment for
-    // the citations.
-    *mon.stages_mut() = StatStages::default();
+    // Stat stages and volatiles are battle scratch, not party data -- see
+    // `BattlePokemon::clear_battle_scratch`'s own doc comment for the
+    // citations.
+    mon.clear_battle_scratch();
     *lead = Some(mon);
     *slot = None;
     outcome

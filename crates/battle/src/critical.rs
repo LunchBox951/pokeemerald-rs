@@ -6,11 +6,14 @@
 //! (`pokeemerald/src/battle_script_commands.c:1253`). It builds a crit-stage
 //! index (`0..=4`) from Focus Energy / a handful of high-crit move effects /
 //! Scope Lens / Lucky Punch / Stick, then rolls `Random() %
-//! sCriticalHitChance[critChance] == 0` (`:606`). This slice models only the
-//! move-effect contribution ([`crit_stage_for_effect`]) — Focus Energy
-//! (`STATUS2_FOCUS_ENERGY`, no status2 bits tracked this slice) and every
-//! held-item/ability bonus are out of scope (`(behavioral-fidelity)`'s "as
-//! far as the first-encounter species need").
+//! sCriticalHitChance[critChance] == 0` (`:606`). [`crit_stage`] models two
+//! of those terms: the move-effect contribution
+//! ([`crit_stage_for_effect`]) and — since issue #321 gave the engine a move
+//! that can set it — Focus Energy's `+2`
+//! ([`crate::volatile::Volatiles::focus_energy`], written by
+//! [`crate::flag_move`]). The three held-item bonuses remain out of scope:
+//! held-item effects are not modelled anywhere in this crate, so no state
+//! could make them non-zero `(behavioral-fidelity)`.
 //!
 //! # When the draw does not happen at all
 //!
@@ -28,9 +31,13 @@
 //! C's `&&` short-circuits, so any of the first three conditions failing
 //! means **no crit draw is made** and the hit consumes one fewer RNG value
 //! than an ordinary hit does `(behavioral-fidelity)`. [`crit_roll`] models
-//! only the case where all three pass — the first two suppressors do not
-//! exist in this slice's world: abilities are not modelled at all, and
-//! `STATUS3_CANT_SCORE_A_CRIT` is only ever set by Future Sight/Doom Desire.
+//! only the case where all three pass. The ability suppressor (Battle
+//! Armor/Shell Armor) is a known omission, now cheap to close:
+//! `BattlePokemon::ability` exists (`crate::ability`), but no species this
+//! slice can field carries either ability, so the one-fewer-draw case is
+//! unreachable today — the next slice to widen species coverage must add
+//! it or inherit a silent one-draw desync. `STATUS3_CANT_SCORE_A_CRIT` is
+//! only ever set by Future Sight/Doom Desire.
 //! The third, `BATTLE_TYPE_FIRST_BATTLE`, belongs to a scripted one-off
 //! battle (set for the Route 101 intro Zigzagoon fight and nothing else,
 //! `SetUpBattleVarsAndBirchZigzagoon`, `src/battle_controllers.c:67`-`:72`,
@@ -84,11 +91,32 @@ const HIGH_CRIT_EFFECTS: [MoveEffect; 4] = [
     MoveEffect(209),
 ];
 
-/// The crit-chance stage (`0..=4`) contributed by `move_effect` alone (Focus
-/// Energy and held items are not modelled — see the module docs).
+/// The crit-chance stage (`0..=4`) contributed by `move_effect` alone —
+/// [`crit_stage`] without the Focus Energy term, kept as its own function
+/// because the move's contribution is the part that depends on nothing but
+/// the move.
 #[must_use]
 pub fn crit_stage_for_effect(move_effect: MoveEffect) -> u8 {
     u8::from(HIGH_CRIT_EFFECTS.contains(&move_effect))
+}
+
+/// `Cmd_critcalc`'s whole `critChance` sum
+/// (`pokeemerald/src/battle_script_commands.c:1267`-`:1274`), as far as this
+/// crate models its terms: `2 *` the attacker's `STATUS2_FOCUS_ENERGY` bit
+/// plus [`crit_stage_for_effect`]'s move term.
+///
+/// The four held-item terms (Scope Lens, and the species-locked Lucky Punch
+/// and Stick) are absent: held-item *effects* are not modelled anywhere in
+/// this crate, so there is no state that could make them non-zero. The
+/// result is **not** clamped here — [`crit_roll`] clamps to the table's last
+/// index exactly as upstream does at `:1277`-`:1278`, and clamping twice
+/// would hide a caller that summed too much.
+///
+/// `focus_energy` is [`crate::volatile::Volatiles::focus_energy`], set by
+/// [`crate::flag_move`]'s Focus Energy script.
+#[must_use]
+pub fn crit_stage(move_effect: MoveEffect, focus_energy: bool) -> u8 {
+    2 * u8::from(focus_energy) + crit_stage_for_effect(move_effect)
 }
 
 /// Roll for a critical hit at crit-chance `stage` (clamped to the table's

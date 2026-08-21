@@ -105,9 +105,10 @@
 //! `src/battle_setup.c#CB2_StartFirstBattle` ledger entry rather than
 //! papered over.
 
-use battle::{Battle, BattleError, BattleOutcome, BattlePokemon, Dex, PlayerAction, StatStages};
+use battle::{Battle, BattleError, BattleOutcome, BattlePokemon, Dex, PlayerAction};
 use engine::rng::Rng;
 
+use super::move_learn::settle_move_learn_prompts;
 use super::wild_encounter::SharedRng;
 
 /// `SPECIES_ZIGZAGOON` (`include/constants/species.h`) — Emerald's scripted
@@ -182,6 +183,10 @@ pub fn start_first_battle(
 /// scripted Zigzagoon fight really does leave the player standing on Route
 /// 101 with a fainted lead, so writing one back is fidelity, not a gap.
 ///
+/// Any level-up move-replacement prompt is answered by
+/// `crate::flow::move_learn::settle_move_learn_prompts` before the outcome
+/// is read, exactly as in the other two drivers (that module's docs).
+///
 /// Choosing a move instead of running has one consequence the Run driver
 /// does not: [`PlayerAction::UseMove`] **spends PP**, and this driver
 /// persists it (the write-back copies the battle's player mon, PP included).
@@ -210,12 +215,19 @@ pub fn advance_first_battle(
             true
         }
     };
+    // See `crate::flow::move_learn`: the level-up replacement prompt is
+    // answered with the same stand-in every headless driver gives, before
+    // the outcome is read.
+    let _ = settle_move_learn_prompts(battle);
     let outcome = battle.outcome();
     if !failed && outcome.is_none() {
         return None;
     }
     let mut mon = battle.player().clone();
-    *mon.stages_mut() = StatStages::default();
+    // Stat stages and volatiles are battle scratch, not party data -- see
+    // `BattlePokemon::clear_battle_scratch`'s own doc comment for the
+    // citations.
+    mon.clear_battle_scratch();
     *lead = Some(mon);
     *slot = None;
     outcome

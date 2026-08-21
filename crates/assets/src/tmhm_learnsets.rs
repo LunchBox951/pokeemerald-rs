@@ -232,6 +232,22 @@ impl Default for TmHmLearnsets {
     }
 }
 
+/// Whether `move_id` is a Hidden Machine move — upstream's `IsHMMove2`
+/// (`pokeemerald/src/pokemon.c:6574`-`:6583`), a linear scan of the
+/// `sHMMoves` list (`:2108`-`:2113`): Cut, Fly, Surf, Strength, Flash, Rock
+/// Smash, Waterfall, Dive. That list is exactly the eight HM slots' moves in
+/// `FOREACH_TMHM` order, so it is answered from [`SLOT_MOVES`]'s HM range
+/// rather than transcribed a second time; the `hm_slots_teach_field_moves`
+/// test pins the range against an independent reading of the ids.
+///
+/// The battle engine consults this where upstream does: a level-up move may
+/// not *replace* an HM move (`Cmd_yesnoboxlearnmove`,
+/// `src/battle_script_commands.c:5468`-`:5472`).
+#[must_use]
+pub fn is_hm_move(move_id: MoveId) -> bool {
+    SLOT_MOVES[TmHmLearnsets::TM_COUNT..].contains(&move_id)
+}
+
 /// The transcribed `gTMHMLearnsets` table: one `u64` learnset bitmask per
 /// species, indexed by `SPECIES_*` id. Bit `i` is set iff TM/HM slot `i`
 /// (`FOREACH_TMHM` order) is learnable. `0` is the all-zero `SPECIES_NONE` slot.
@@ -652,7 +668,7 @@ const LEARNSET_MASKS: [u64; 412] = [
 
 #[cfg(test)]
 mod tests {
-    use super::{TmHmLearnsets, LEARNSET_MASKS, SLOT_MOVES};
+    use super::{is_hm_move, TmHmLearnsets, LEARNSET_MASKS, SLOT_MOVES};
     use crate::error::AssetError;
     use crate::species::SpeciesId;
     use crate::MoveId;
@@ -943,5 +959,30 @@ mod tests {
         }
         // Slot 0 and referenced landmark constants stay in the TM range.
         assert!(!TmHmLearnsets::slot(TM01_FOCUS_PUNCH).unwrap().is_hm());
+    }
+
+    /// `IsHMMove2`'s answer (`pokemon.c:6574`, over `sHMMoves` at `:2108`):
+    /// exactly the eight HM moves, and nothing else — not a TM move that
+    /// *is* machine-taught (Focus Punch), not a level-up staple (Tackle),
+    /// and not `MOVE_NONE` or an out-of-range id.
+    #[test]
+    fn is_hm_move_matches_shmmoves() {
+        let hm_moves = [
+            MoveId(15),  // HM01 CUT
+            MoveId(19),  // HM02 FLY
+            MoveId(57),  // HM03 SURF
+            MoveId(70),  // HM04 STRENGTH
+            MoveId(148), // HM05 FLASH
+            MoveId(249), // HM06 ROCK_SMASH
+            MoveId(127), // HM07 WATERFALL
+            MoveId(291), // HM08 DIVE
+        ];
+        for hm in hm_moves {
+            assert!(is_hm_move(hm), "{hm:?} is an sHMMoves entry");
+        }
+        assert!(!is_hm_move(MoveId(264))); // TM01 MOVE_FOCUS_PUNCH
+        assert!(!is_hm_move(MoveId(33))); // MOVE_TACKLE
+        assert!(!is_hm_move(MoveId(0))); // MOVE_NONE
+        assert!(!is_hm_move(MoveId(u16::MAX)));
     }
 }

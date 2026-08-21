@@ -52,6 +52,10 @@ use crate::main_menu::{self, MainMenuItem, MainMenuScene, MainMenuType};
 use crate::title::TitleScene;
 
 pub(crate) mod first_battle;
+/// The level-up move-replacement decision (issue #304), answered in one
+/// place for all three headless battle drivers — see that module's docs for
+/// the stand-in answer it gives and exactly where the seam ends.
+mod move_learn;
 /// The shared `CreateNPCTrainerParty` construction and headless one-turn
 /// driver every NPC trainer battle in this crate goes through (issue #237,
 /// generalized off [`route103_rival`] by issue #264): both

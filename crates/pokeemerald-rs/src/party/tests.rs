@@ -109,8 +109,9 @@ fn sub_level_experience_survives_the_round_trip() {
     let dex = Dex::new();
     let mut mon = a_battler();
     // Not enough to reach level 13, so the only observable difference is
-    // the experience total itself.
-    mon.apply_experience(&dex, 10);
+    // the experience total itself -- and no level crossed means no learnset
+    // walk, hence nothing to ask the player about.
+    assert!(mon.apply_experience(&dex, 10).unwrap().is_none());
     let treecko = dex.species(mon.species()).unwrap();
     assert_eq!(
         mon.experience(),
@@ -156,7 +157,12 @@ fn a_move_learned_by_levelling_up_survives_the_round_trip() {
 
     let torchic = dex.species(mon.species()).unwrap();
     let level_16 = assets::experience_for_level(torchic.growth_rate, 16).unwrap();
-    mon.apply_experience(&dex, level_16 - mon.experience());
+    assert!(
+        mon.apply_experience(&dex, level_16 - mon.experience())
+            .unwrap()
+            .is_none(),
+        "two of the four slots are free, so Peck is learned without asking"
+    );
     assert_eq!(
         mon.moves()
             .iter()
@@ -348,4 +354,170 @@ fn an_empty_party_slot_does_not_decode_into_a_battler() {
         .expect_err("SPECIES_NONE is not a fightable mon");
     assert!(matches!(err, PartyError::Battler(_)), "{err}");
     assert!(err.to_string().starts_with("saved party member:"));
+}
+
+/// The save-data defect issue #304 fixes: `ppBonuses` used to be written as
+/// `0`, so loading and saving a file silently spent every PP Up the player
+/// had ever used. The byte now round-trips exactly, and the capacity it
+/// encodes is real on the way back in.
+#[test]
+fn pp_ups_survive_the_round_trip_byte_for_byte() {
+    let dex = Dex::new();
+    // Three PP Ups on slot 0, one on slot 1 -- distinct per slot, so a
+    // packer that wrote one field twice or shifted it wrong fails.
+    let bonuses = battle::PpBonuses::from_bits(0b0000_0111);
+    let mut mon = a_battler().with_pp_bonuses(&dex, bonuses).unwrap();
+    let slot_0_max = mon.max_pp(&dex, 0).unwrap();
+    let base_pp = dex.move_data(mon.moves()[0].move_id).unwrap().pp;
+    assert!(
+        slot_0_max > base_pp,
+        "fixture sanity: the upgraded slot must hold more than base PP"
+    );
+    // Spend a few, so the decode has to place remaining PP against the
+    // *adjusted* maximum rather than against base PP.
+    mon.deduct_pp(0).unwrap();
+    mon.deduct_pp(0).unwrap();
+
+    let saved = to_save_pokemon(&dex, &mon);
+    assert_eq!(
+        saved.box_data.substructures().unwrap().growth[8],
+        bonuses.bits(),
+        "the growth substructure's /*0x08*/ byte is ppBonuses itself"
+    );
+
+    let restored = from_save_pokemon(&dex, &saved).expect("what we just wrote must decode");
+    assert_eq!(restored.pp_bonuses(), bonuses);
+    assert_eq!(restored.max_pp(&dex, 0).unwrap(), slot_0_max);
+    assert_eq!(
+        restored.max_pp(&dex, 1).unwrap(),
+        mon.max_pp(&dex, 1).unwrap()
+    );
+    assert_eq!(
+        restored.moves()[0].pp,
+        slot_0_max - 2,
+        "remaining PP is measured from the PP-Up-adjusted maximum"
+    );
+    assert_eq!(restored.moves(), mon.moves(), "moves and PP, slot for slot");
+
+    let resaved = to_save_pokemon(&dex, &restored);
+    assert_eq!(
+        resaved.box_data.substructures().unwrap().growth[8],
+        bonuses.bits(),
+        "re-serialising must emit the identical byte, not zero"
+    );
+    assert_eq!(resaved, saved, "and the whole 100-byte value is unchanged");
+}
+
+/// A byte upstream itself could never write -- PP Ups recorded against a
+/// slot this mon has no move for -- is still carried through untouched.
+/// Save data is not quietly rewritten because this port cannot explain it.
+#[test]
+fn pp_bonus_bits_for_unknown_slots_are_not_stripped() {
+    let dex = Dex::new();
+    let bonuses = battle::PpBonuses::from_bits(0b1111_1111);
+    // A deliberately one-move mon, so three of the byte's four fields
+    // belong to slots that hold no move at all.
+    let mon = BattlePokemon::new(
+        &dex,
+        assets::SpeciesId(277),
+        12,
+        Ivs::default(),
+        0x1234_ABCD,
+        vec![assets::MoveId(33)],
+    )
+    .unwrap()
+    .with_pp_bonuses(&dex, bonuses)
+    .unwrap();
+    assert!(
+        mon.moves().len() < battle::MAX_MON_MOVES,
+        "fixture sanity: the fixture must leave at least one slot empty"
+    );
+
+    let saved = to_save_pokemon(&dex, &mon);
+    let restored = from_save_pokemon(&dex, &saved).unwrap();
+
+    assert_eq!(restored.pp_bonuses().bits(), 0b1111_1111);
+    assert_eq!(
+        to_save_pokemon(&dex, &restored)
+            .box_data
+            .substructures()
+            .unwrap()
+            .growth[8],
+        0b1111_1111
+    );
+}
+
+/// The white-out heal restores a saved mon to its *upgraded* maximum, not
+/// to the move's base PP (`HealPlayerParty`'s own `CalculatePPWithBonus`).
+#[test]
+fn healing_a_restored_mon_refills_to_the_upgraded_maximum() {
+    let dex = Dex::new();
+    let bonuses = battle::PpBonuses::from_bits(0b0000_0011);
+    let mut mon = a_battler().with_pp_bonuses(&dex, bonuses).unwrap();
+    for _ in 0..5 {
+        mon.deduct_pp(0).unwrap();
+    }
+    let saved = to_save_pokemon(&dex, &mon);
+
+    let mut restored = from_save_pokemon(&dex, &saved).unwrap();
+    restored.heal(&dex).unwrap();
+
+    let base_pp = dex.move_data(restored.moves()[0].move_id).unwrap().pp;
+    assert_eq!(restored.moves()[0].pp, restored.max_pp(&dex, 0).unwrap());
+    assert!(
+        restored.moves()[0].pp > base_pp,
+        "a heal that stopped at base PP would strip the PP Ups again"
+    );
+}
+
+/// The ability slot round-trips through the save's `abilityNum` bit
+/// (`PokemonSubstruct3`'s bit 31, the misc IV word's top bit) rather than
+/// being re-derived from personality on load -- a real save can hold a mon
+/// whose stored slot disagrees with its personality parity (nothing
+/// upstream re-derives `abilityNum` after `CreateBoxMon` writes it once),
+/// and this port must not silently swap such a mon's ability on load
+/// (issue #322).
+///
+/// `SPECIES_TENTACOOL` (`72`) is the dual-ability fixture already used by
+/// `battle`'s own ability tests: slot 0 is Clear Body, slot 1 is Liquid
+/// Ooze (`gSpeciesInfo`). An *even* personality selects slot 0 by default
+/// ([`battle::BattlePokemon::new`]), so overriding to slot 1 here is
+/// deliberately the disagreeing case.
+#[test]
+fn a_disagreeing_ability_slot_survives_the_save_round_trip() {
+    const TENTACOOL: u16 = 72;
+    const CLEAR_BODY: u16 = 29;
+    const LIQUID_OOZE: u16 = 64;
+
+    let dex = Dex::new();
+    let mon = BattlePokemon::new(
+        &dex,
+        assets::SpeciesId(TENTACOOL),
+        20,
+        Ivs::default(),
+        0x1234_ABCC, // even -- personality parity alone would pick slot 0
+        vec![assets::MoveId(33)],
+    )
+    .expect("Tentacool is in the dex")
+    .with_ability_slot(1);
+    assert_eq!(
+        mon.ability().0,
+        LIQUID_OOZE,
+        "fixture sanity: the override, not personality parity, decides"
+    );
+    assert_ne!(
+        mon.ability().0,
+        CLEAR_BODY,
+        "fixture sanity: personality parity alone would have picked this"
+    );
+
+    let restored = from_save_pokemon(&dex, &to_save_pokemon(&dex, &mon))
+        .expect("what we just wrote must decode");
+    assert_eq!(restored.ability_slot(), 1);
+    assert_eq!(
+        restored.ability().0,
+        LIQUID_OOZE,
+        "the disagreeing slot survives the round trip instead of being \
+         re-derived from the (even) personality"
+    );
 }

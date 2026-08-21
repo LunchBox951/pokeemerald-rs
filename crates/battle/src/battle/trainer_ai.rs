@@ -77,11 +77,14 @@
 //! Abilities and held items, which several `AI_CheckBadMove` branches read
 //! (`get_ability AI_TARGET` for Volt Absorb / Water Absorb / Flash Fire /
 //! Wonder Guard / Levitate / Soundproof / Hyper Cutter / Clear Body /
-//! White Smoke). None of them exists in this crate, none of them draws, and
-//! none of the three starters has any of them — so those branches are
-//! unreachable rather than wrong. `AI_ACTION_WATCH` (Safari) and
-//! `AI_ACTION_FLEE` (`AI_FirstBattle`/`AI_Roaming`) are likewise not
-//! reachable from these four scripts.
+//! White Smoke). Issue #322 gave [`crate::pokemon::BattlePokemon`] an
+//! ability accessor and taught [`crate::stat_change`] to read Clear Body,
+//! but *this* module's `get_ability` reads are a separate, still-unmodelled
+//! set of branches — none of them draws, and none of the three starters has
+//! any ability that would take one, so they stay unreachable rather than
+//! wrong regardless. `AI_ACTION_WATCH` (Safari) and `AI_ACTION_FLEE`
+//! (`AI_FirstBattle`/`AI_Roaming`) are likewise not reachable from these
+//! four scripts.
 
 use assets::trainers::AiFlags;
 use assets::{MoveEffect, MoveId, Type, TypeChart};
@@ -469,6 +472,15 @@ fn estimated_damage(
         light_screen: false,
         weather: Weather::None,
         is_solar_beam: false,
+        // `AI_CalcDmg` calls the *same* `CalculateBaseDamage`
+        // (`battle_script_commands.c:1309`), so the AI sees the pinch boost
+        // exactly as the real damage step does (issue #321).
+        attacker_pinch_boost: crate::ability::pinch_boosts_power(
+            attacker.ability(),
+            move_type,
+            attacker.current_hp(),
+            attacker.stats().max_hp,
+        ),
     };
     let damage = base_damage(&input);
     let damage = apply_stab(damage, has_stab(attacker.types(), move_id, move_type));
