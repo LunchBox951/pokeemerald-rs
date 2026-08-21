@@ -207,3 +207,76 @@ fn a_fainted_battler_is_rejected_before_the_battle_start_draw() {
     );
     assert_eq!(rng.draws(), 0, "a rejected configuration draws nothing");
 }
+
+/// A wild battle's final knockout normally ends it on the spot — but a
+/// level-up move-learn prompt raised by that knockout's award holds the end
+/// back: upstream runs the whole level-up script, yes/no box included,
+/// before anything after the faint (`HandleFaintedMonActions` completes
+/// `BattleScript_GiveExp` in its case 1 before case 4's
+/// `BattleScript_HandleFaintedMon`, `battle_util.c:1894`-`:1951`). The
+/// `Ended` event and the outcome arrive only with the answer.
+#[test]
+fn a_wild_knockouts_prompt_defers_the_battles_end_until_it_is_answered() {
+    use battle::MoveLearnDecision;
+
+    const TORCHIC: u16 = 280;
+    const RATTATA: u16 = 19;
+    const SCRATCH: MoveId = MoveId(10);
+    const GROWL: MoveId = MoveId(45);
+    const TACKLE: MoveId = MoveId(33);
+    const LEER: MoveId = MoveId(43);
+    /// `MOVE_PECK` — Torchic's level-16 learnset entry.
+    const PECK: MoveId = MoveId(64);
+
+    let dex = Dex::new();
+    // A full-moveset Torchic one experience point short of level 16, so the
+    // knockout's award crosses the threshold and offers Peck with nowhere
+    // to put it.
+    let mut player = max_iv_mon(&dex, TORCHIC, 15, vec![SCRATCH, GROWL, TACKLE, LEER]);
+    let growth_rate = dex.species(player.species()).unwrap().growth_rate;
+    let level_16 = assets::experience_for_level(growth_rate, 16).unwrap();
+    assert!(player
+        .apply_experience(&dex, level_16 - 1 - player.experience())
+        .unwrap()
+        .is_none());
+    let enemy = max_iv_mon(&dex, RATTATA, 2, vec![TACKLE]);
+
+    // Battle-start turn number; turn number, opponent pick, player's hit
+    // (accuracy / crit / roll / effect chance). No tie draws.
+    let mut rng = SequenceRng::new([0, 0, 0, 0, 0, 0, 0]);
+    let mut battle = Battle::new(dex, player, enemy, false, &mut rng).unwrap();
+
+    let events = battle
+        .take_turn(PlayerAction::UseMove(0), &mut rng)
+        .unwrap();
+    assert!(
+        events.contains(&BattleEvent::MoveLearnPrompt { move_id: PECK }),
+        "the one-hit knockout's award must ask about Peck: {events:?}"
+    );
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, BattleEvent::Ended(_))),
+        "the battle's end waits on the answer: {events:?}"
+    );
+    assert_eq!(
+        battle.outcome(),
+        None,
+        "no outcome while the question is open"
+    );
+    assert_eq!(battle.player().level(), 16);
+
+    let answered = battle
+        .resolve_move_learn(MoveLearnDecision::Decline)
+        .unwrap();
+    assert_eq!(
+        answered,
+        vec![
+            BattleEvent::MoveLearnDeclined { move_id: PECK },
+            // The deferred end, and nothing else: a wild battle pays no
+            // money (`Cmd_getmoneyreward` is trainer-only).
+            BattleEvent::Ended(BattleOutcome::PlayerWon),
+        ]
+    );
+    assert_eq!(battle.outcome(), Some(BattleOutcome::PlayerWon));
+}

@@ -247,14 +247,32 @@ impl Battle {
             } else {
                 wild_faint_exp(base_exp, level)
             };
-            self.player.apply_experience(&self.dex, exp);
+            let pending = self.player.apply_experience(&self.dex, exp)?;
             events.push(BattleEvent::ExpGained(exp));
+            // A crossed level whose learnset move has no free slot parks
+            // the walk on a player decision (issue #304): upstream's
+            // `BattleScript_AskToLearnMove` yes/no box. The mon itself
+            // carries the question (`BattlePokemon::pending_move_learn`)
+            // until `Battle::resolve_move_learn` answers it, and the
+            // battle refuses another turn meanwhile.
+            if let Some(prompt) = pending {
+                events.push(BattleEvent::MoveLearnPrompt {
+                    move_id: prompt.move_id(),
+                });
+            }
         }
         // A wild battle ends the moment its only opponent faints. A
         // trainer's does not: the replacement (or the trainer's defeat) is
         // settled at the end of the turn instead, in `end_of_turn`, exactly
-        // where upstream's HandleFaintedMonActions sits.
-        if self.trainer().is_none() {
+        // where upstream's HandleFaintedMonActions sits. Either way, an
+        // open prompt defers the aftermath: upstream finishes the level-up
+        // script -- the yes/no box included -- before anything after the
+        // faint runs (`BattleScript_GiveExp` completes in
+        // HandleFaintedMonActions' case 1 before case 4,
+        // `battle_util.c:1894`-`:1951`), so the wild finish waits in
+        // `Battle::settle_fainted_enemy` for `Battle::resolve_move_learn`'s
+        // last answer.
+        if self.trainer().is_none() && self.player.pending_move_learn().is_none() {
             self.finish(events, BattleOutcome::PlayerWon);
         }
         Ok(())

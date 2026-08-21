@@ -326,7 +326,12 @@ pub enum BattleEvent {
     /// in its place — upstream's forced post-faint switch
     /// (`OpponentHandleChoosePokemon`,
     /// `src/battle_controller_opponent.c:1621`), settled at the end of the
-    /// turn by [`super::Battle::end_of_turn`]. Only a
+    /// turn by [`super::Battle::end_of_turn`] — or, when the knockout's
+    /// level-up stopped on a [`BattleEvent::MoveLearnPrompt`], by the
+    /// answer that resolves the last prompt
+    /// ([`super::Battle::resolve_move_learn`]): upstream completes the
+    /// level-up script before the send-out (`HandleFaintedMonActions`,
+    /// `battle_util.c:1894`-`:1951`). Only a
     /// [`super::Battle::new_trainer`] battle can produce this.
     TrainerSentOut {
         /// The species that came out.
@@ -335,20 +340,65 @@ pub enum BattleEvent {
         bench_remaining: usize,
     },
     /// The player's mon gained experience for fainting the opposing mon.
+    /// Carries the whole award, which upstream likewise reports once, up
+    /// front (`STRINGID_PKMNGAINEDEXP`, `battle_script_commands.c:3418`).
     ///
-    /// The award is **already applied** to [`super::Battle::player`] when
-    /// this event is emitted — accumulated experience, any crossed level,
-    /// recomputed stats, and (issue #252) each crossed level's learnset
-    /// moves ([`crate::pokemon::BattlePokemon::apply_experience`], upstream
+    /// The award is applied to [`super::Battle::player`] when this event is
+    /// emitted — accumulated experience, each crossed level's recomputed
+    /// stats, and (issue #252) that level's learnset moves
+    /// ([`crate::pokemon::BattlePokemon::apply_experience`], upstream
     /// `Cmd_getexp`'s `SetMonData(MON_DATA_EXP)`/`CalculateMonStats` half
-    /// plus `BattleScript_LevelUp`'s `MonTryLearningNewMove` half). The
-    /// event is a report of that mutation, for the integration layer to
-    /// present; applying the amount to the battler again would double it.
-    /// What the in-battle application deliberately still does *not* do (EV
-    /// gain, friendship) is recorded on
-    /// [`crate::pokemon::BattlePokemon::apply_experience`] and the
+    /// plus `BattleScript_LevelUp`'s `MonTryLearningNewMove` half) — except
+    /// that a [`BattleEvent::MoveLearnPrompt`] raised partway holds the
+    /// mon *at the prompted level*, the award's remainder unconsumed until
+    /// the prompt resolves (that variant's docs). The event is a report,
+    /// for the integration layer to present; applying the amount to the
+    /// battler again would double it. What the in-battle application
+    /// deliberately still does *not* do (EV gain, friendship) is recorded
+    /// on [`crate::pokemon::BattlePokemon::apply_experience`] and the
     /// `Cmd_getexp` ledger entry.
     ExpGained(u32),
+    /// A level-up move needs a player decision before it can be learned: the
+    /// mon knows four moves already, so upstream opens
+    /// `BattleScript_AskToLearnMove`'s yes/no box
+    /// (`src/battle_script_commands.c:5368`-`:5370`).
+    ///
+    /// The award that produced it ([`BattleEvent::ExpGained`] comes first)
+    /// is consumed only up to the prompted level: the mon *is* that level,
+    /// with that level's stats, and the award's remainder — with the rest
+    /// of the level-up's learnset entries, and any aftermath of the
+    /// knockout (a trainer's send-out, the terminal outcome) — waits behind
+    /// the answer, exactly as upstream's leftover `gBattleMoveDamage` waits
+    /// while `BattleScript_LevelUp` runs
+    /// (`battle_controller_player.c:1154`-`:1181`,
+    /// `battle_script_commands.c:3505`-`:3509`). No further turn is
+    /// possible until [`super::Battle::resolve_move_learn`] answers it
+    /// ([`BattleError::MoveLearnPending`]); the token itself is
+    /// [`super::Battle::pending_move_learn`].
+    MoveLearnPrompt {
+        /// The move being offered — upstream's `gMoveToLearn`.
+        move_id: MoveId,
+    },
+    /// A [`crate::pokemon::MoveLearnDecision::Replace`] answer went through:
+    /// the old move is gone, the new one sits in its slot at its own base PP,
+    /// and that slot's PP Ups were cleared with it (`RemoveMonPPBonus` +
+    /// `SetMonMoveSlot`, `src/battle_script_commands.c:5479`-`:5480`).
+    MoveReplaced {
+        /// The move that was learned.
+        learned: MoveId,
+        /// The move that was forgotten to make room.
+        forgotten: MoveId,
+        /// The slot both occupied.
+        slot: usize,
+    },
+    /// A [`crate::pokemon::MoveLearnDecision::Decline`] answer: the move was
+    /// not learned and the moveset is unchanged. The walk still continues to
+    /// the next eligible learnset entry, exactly as
+    /// `BattleScript_TryLearnMoveLoop` does.
+    MoveLearnDeclined {
+        /// The move that was turned down.
+        move_id: MoveId,
+    },
     /// Beating a trainer paid out prize money — `Cmd_getmoneyreward`
     /// (`src/battle_script_commands.c:5635`), whose
     /// `AddMoney(&gSaveBlock1Ptr->money, ...)` this crate has no field to

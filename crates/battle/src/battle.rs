@@ -236,7 +236,7 @@ use crate::escape::try_run_from_battle;
 use crate::fixed_damage;
 use crate::flag_move;
 use crate::multi_hit;
-use crate::pokemon::BattlePokemon;
+use crate::pokemon::{BattlePokemon, MoveLearnDecision, PendingMoveLearn};
 use crate::stat_change;
 use crate::turn_order::{resolve_order, Order};
 
@@ -650,6 +650,105 @@ impl Battle {
         self.outcome
     }
 
+    /// The level-up move waiting on a player decision, if any (issue #304)
+    /// — the state upstream's `BattleScript_AskToLearnMove` yes/no box
+    /// (`src/battle_script_commands.c:5368`-`:5370`) holds the engine in.
+    ///
+    /// This is the decision surface every experience-awarding flow reaches:
+    /// the award has already been applied and
+    /// [`BattleEvent::MoveLearnPrompt`] already reported, and the battle
+    /// refuses another turn ([`BattleError::MoveLearnPending`]) until
+    /// [`Battle::resolve_move_learn`] answers. A driver with no way to ask
+    /// the player must still *answer* — declining is an answer; ignoring the
+    /// prompt is not, and would strand the battle.
+    ///
+    /// A prompt holds the battle's own end (and a trainer's replacement
+    /// send-out) *back*: the last faint of a battle awards experience, so
+    /// the question can be raised by the knockout that would decide the
+    /// outcome — and upstream finishes the whole level-up script, the ask
+    /// included, before anything after the faint runs
+    /// (`HandleFaintedMonActions` executes `BattleScript_GiveExp` to
+    /// completion in its case 1 before case 4's
+    /// `BattleScript_HandleFaintedMon` checks the outcome or sends out a
+    /// replacement, `battle_util.c:1894`-`:1951`). While this is `Some`,
+    /// [`Battle::outcome`] therefore stays `None` and no
+    /// [`BattleEvent::TrainerSentOut`]/[`BattleEvent::MoneyGained`]/
+    /// [`BattleEvent::Ended`] has been emitted; answering the last prompt
+    /// releases them ([`Battle::resolve_move_learn`]).
+    #[must_use]
+    pub const fn pending_move_learn(&self) -> Option<PendingMoveLearn> {
+        self.player.pending_move_learn()
+    }
+
+    /// Answer [`Battle::pending_move_learn`] and resume the level-up walk it
+    /// paused — `Cmd_yesnoboxlearnmove`'s outcome
+    /// (`src/battle_script_commands.c:5455`-`:5497`) and the
+    /// `BattleScript_TryLearnMoveLoop` jump back into
+    /// `Cmd_handlelearnnewmove`.
+    ///
+    /// Returns the events the answer produced, in order:
+    /// [`BattleEvent::MoveReplaced`] or [`BattleEvent::MoveLearnDeclined`]
+    /// for the answer itself, then [`BattleEvent::MoveLearnPrompt`] again if
+    /// the resumed level-up stopped at another entry it cannot fit —
+    /// or, once no prompt remains, whatever the knockout's aftermath was
+    /// holding for the answer ([`Battle::pending_move_learn`]'s docs): a
+    /// trainer's [`BattleEvent::TrainerSentOut`], or
+    /// [`BattleEvent::MoneyGained`] (trainer only) and
+    /// [`BattleEvent::Ended`]. Draws no RNG — upstream's box and summary
+    /// screen draw none either.
+    ///
+    /// Only the *party* mon is updated, which is all this crate has: the
+    /// `gBattleMons` half of upstream's write
+    /// (`SetBattleMonMoveSlot`/`RemoveBattleMonPPBonus`, `:5484`-`:5492`)
+    /// exists because upstream keeps a separate in-battle copy, while
+    /// [`Battle::player`] *is* the mon.
+    ///
+    /// # Errors
+    ///
+    /// [`BattleError::NoMoveLearnPending`] if nothing is waiting on an
+    /// answer, [`BattleError::InvalidMoveSlot`] if
+    /// [`crate::pokemon::MoveLearnDecision::Replace`] names a slot the mon
+    /// does not have, or [`BattleError::HmMoveCantBeForgotten`] if the
+    /// named slot holds an HM move — upstream's `IsHMMove2` refusal
+    /// (`src/battle_script_commands.c:5468`-`:5472`), which prints
+    /// `STRINGID_HMMOVESCANTBEFORGOTTEN` and reopens the move list. None of
+    /// the three mutates anything, and the prompt stays outstanding so a
+    /// corrected answer can still be given.
+    pub fn resolve_move_learn(
+        &mut self,
+        decision: MoveLearnDecision,
+    ) -> Result<Vec<BattleEvent>, BattleError> {
+        let asked = self
+            .player
+            .pending_move_learn()
+            .ok_or(BattleError::NoMoveLearnPending)?
+            .move_id();
+        let resolution = self.player.resolve_move_learn(&self.dex, decision)?;
+
+        let mut events = Vec::new();
+        match resolution.learned {
+            Some(learned) => events.push(BattleEvent::MoveReplaced {
+                learned: learned.move_id,
+                forgotten: learned.forgotten,
+                slot: learned.slot,
+            }),
+            None => events.push(BattleEvent::MoveLearnDeclined { move_id: asked }),
+        }
+        match resolution.next {
+            Some(next) => events.push(BattleEvent::MoveLearnPrompt {
+                move_id: next.move_id(),
+            }),
+            // The last prompt of the level-up: release the knockout's
+            // aftermath the pause was holding back — the trainer's
+            // replacement send-out, or the terminal outcome (money
+            // included) — exactly where upstream's completed level-up
+            // script hands back to `HandleFaintedMonActions`' case 4
+            // (`battle_util.c:1894`-`:1951`; see `settle_fainted_enemy`).
+            None => self.settle_fainted_enemy(&mut events),
+        }
+        Ok(events)
+    }
+
     /// The number of previous run attempts this battle (upstream
     /// `gBattleStruct->runTries`).
     #[must_use]
@@ -775,6 +874,17 @@ impl Battle {
         rng: &mut impl BattleRng,
         events: &mut Vec<BattleEvent>,
     ) -> Result<(), BattleError> {
+        // Checked ahead of everything else, the battle's own end included:
+        // an unanswered level-up prompt is the loudest thing wrong with the
+        // call, and reporting `BattleAlreadyOver` first would hide the fact
+        // that a decision (and the rest of that level-up's learnset entries)
+        // is still outstanding. Upstream cannot reach action selection here
+        // at all -- the yes/no box is inside `BattleScript_LevelUp`, which
+        // completes before the next turn begins. Like every other pre-turn
+        // rejection, this draws nothing.
+        if let Some(pending) = self.player.pending_move_learn() {
+            return Err(BattleError::MoveLearnPending(pending.move_id()));
+        }
         if self.outcome.is_some() {
             return Err(BattleError::BattleAlreadyOver);
         }
@@ -1007,11 +1117,38 @@ impl Battle {
     /// first — upstream's `Cmd_getmoneyreward`
     /// (`battle_script_commands.c:5635`) runs after `Cmd_getexp`, which is
     /// the order [`BattleEvent`]s come back in.
+    ///
+    /// An open [`Battle::pending_move_learn`] defers the whole pass:
+    /// upstream runs `BattleScript_GiveExp` — the level-up and its yes/no
+    /// box included — to completion in `HandleFaintedMonActions`' case 1
+    /// before case 4's `BattleScript_HandleFaintedMon` checks the outcome
+    /// or sends out a replacement (`battle_util.c:1894`-`:1951`), so
+    /// nothing after the faint may run until the question is answered.
+    /// [`Battle::resolve_move_learn`] runs [`Battle::settle_fainted_enemy`]
+    /// when the last prompt resolves.
     fn end_of_turn(&mut self, events: &mut Vec<BattleEvent>) {
+        if self.player.pending_move_learn().is_some() {
+            return;
+        }
+        self.settle_fainted_enemy(events);
+    }
+
+    /// The knockout's aftermath — everything that may only run once the
+    /// level-up (prompts included) is done: `BattleScript_HandleFaintedMon`
+    /// reached from `HandleFaintedMonActions`' case 4
+    /// (`battle_util.c:1937`-`:1948`). A trainer with a bench sends out the
+    /// next party member; a trainer without one pays and the battle ends; a
+    /// wild battle simply ends. No-op unless the enemy is down and the
+    /// outcome still open — on the promptless path the wild faint already
+    /// finished the battle where it happened
+    /// ([`Battle::execute_move`]'s pipeline), so the wild arm here is only
+    /// reached by a deferred finish.
+    fn settle_fainted_enemy(&mut self, events: &mut Vec<BattleEvent>) {
         if self.outcome.is_some() || !self.enemy.is_fainted() {
             return;
         }
         let BattleKind::Trainer(context) = &mut self.kind else {
+            self.finish(events, BattleOutcome::PlayerWon);
             return;
         };
         if let Some(next) = context.send_out_next() {
