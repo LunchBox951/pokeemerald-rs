@@ -1232,6 +1232,7 @@ dependencies = [
  "audio",
  "battle",
  "engine",
+ "pack-format",
  "platform",
  "rendering",
 ]

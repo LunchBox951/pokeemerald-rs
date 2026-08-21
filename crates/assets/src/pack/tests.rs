@@ -793,6 +793,13 @@ fn tileset_metatile_attribute_table_decodes_from_the_bundled_raw_bytes() {
 
 #[test]
 fn default_path_ends_with_expected_relative_path() {
+    // Rungs 1 to 3 of `pack_format::default_pack_path` redirect the path on
+    // purpose; only the plain developer checkout is deterministic.
+    if std::env::var_os(pack_format::PACK_PATH_ENV).is_some()
+        || pack_format::user_pack_path().is_some_and(|p| p.is_file())
+    {
+        return;
+    }
     let path = AssetPack::default_path();
     assert!(path.ends_with("assets-pack/pokeemerald.pack"));
 }

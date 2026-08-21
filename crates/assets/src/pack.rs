@@ -91,7 +91,7 @@ pub use error::PackError;
 pub use format::{DirectoryEntry, EntryKind, FORMAT_VERSION, MAGIC};
 pub use handles::{ImageRef, PaletteRef, TilesetHandle, WindowFrameHandle};
 
-use format::{kind_label, OUTPUT_RELATIVE_PATH};
+use format::kind_label;
 
 /// Every selectable text-window border frame is a 3x3 grid of 8x8 tiles —
 /// a 24x24 source sheet (upstream `sWindowFrames`,
@@ -121,25 +121,25 @@ pub struct AssetPack {
 }
 
 impl AssetPack {
-    /// The pack's default location: `<repo root>/assets-pack/pokeemerald.pack`,
-    /// computed from this crate's own manifest directory (robust regardless
-    /// of the caller's current working directory — `cargo test` in
-    /// particular runs each crate's tests with that crate's own directory
-    /// as `cwd`, not the workspace root).
+    /// The pack's default location, resolved at runtime by
+    /// [`pack_format::default_pack_path`] (see it for the full order):
+    /// `$POKEEMERALD_PACK`, then the OS user-data directory, then the
+    /// running executable's directory, then this checkout's
+    /// `assets-pack/pokeemerald.pack`.
     ///
-    /// # Panics
+    /// It used to be only that last rung, derived from
+    /// `env!("CARGO_MANIFEST_DIR")`. That is the *build* machine's checkout,
+    /// so a distributed binary went looking for the pack on a CI runner's
+    /// disk. The earlier rungs are what a shipped binary and its ROM
+    /// importer need; the compile-time path stays last so a developer
+    /// checkout with nothing configured behaves exactly as before.
     ///
-    /// Never in practice: `crates/assets` (this crate's own manifest
-    /// directory, `env!("CARGO_MANIFEST_DIR")`) is always exactly two path
-    /// components under the repository root in this workspace's fixed
-    /// layout.
+    /// Never fails: the last rung always yields a path, and a path that does
+    /// not exist surfaces as [`PackError::NotFound`] from
+    /// [`load`](Self::load).
     #[must_use]
     pub fn default_path() -> PathBuf {
-        Path::new(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .and_then(Path::parent)
-            .expect("crates/assets is always two levels under the repo root")
-            .join(OUTPUT_RELATIVE_PATH)
+        pack_format::default_pack_path()
     }
 
     /// Load the pack from [`default_path`](Self::default_path).

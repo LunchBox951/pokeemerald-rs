@@ -10,7 +10,7 @@ use pack_format::PackReadError;
 
 use super::error::PackError;
 
-pub use pack_format::{DirectoryEntry, EntryKind, FORMAT_VERSION, MAGIC, OUTPUT_RELATIVE_PATH};
+pub use pack_format::{DirectoryEntry, EntryKind, FORMAT_VERSION, MAGIC};
 
 impl From<PackReadError> for PackError {
     /// One variant per parse failure, so the loader's own diagnostics (which

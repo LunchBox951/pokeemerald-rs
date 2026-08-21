@@ -43,3 +43,10 @@ rendering = { path = "../rendering" }
 # asset pack. Dev-only, so production builds keep the pack-mediated pairing
 # guarantee.
 assets = { path = "../assets", features = ["test-support"] }
+# The pack format's own entry constructors, for `title`'s tile round-trip
+# test: it proves `title::pack_tile_bytes` is the exact inverse of
+# `pack_format::image_entry_from_tiles`, so the ROM importer's tile
+# unpacking and this crate's re-packing cannot drift. Workspace-local and
+# std-only, and dev-only because production code here reads rasters from the
+# pack rather than tiles.
+pack-format = { path = "../pack-format" }

@@ -225,7 +225,7 @@ use std::path::{Path, PathBuf};
 
 pub use error::ExtractError;
 pub use pack_format::OUTPUT_RELATIVE_PATH;
-use pack_format::{EntryKind, PackEntry, PackWriter};
+use pack_format::{EntryShapeError, PackEntry, PackWriter};
 
 /// Serializes the ignored tests that touch the one real, developer-local
 /// pack at [`OUTPUT_RELATIVE_PATH`]: `extract` rewrites it non-atomically
@@ -283,6 +283,13 @@ pub(crate) fn upstream_present() -> bool {
 ///
 /// See [`extract_to`].
 pub fn run() -> Result<ExtractReport, ExtractError> {
+    // Deliberately the repo path, not `pack_format::default_pack_path()`.
+    // That resolver answers "where does a *running game* find its pack",
+    // and its earlier rungs (`$POKEEMERALD_PACK`, the OS user-data
+    // directory, the executable's own directory) would silently redirect
+    // `cargo xtask extract` away from the checkout it belongs to. This is a
+    // developer tool writing a developer's gitignored build product; the
+    // only right destination is this repository.
     extract_to(&repo_root().join(OUTPUT_RELATIVE_PATH))
 }
 
@@ -364,16 +371,27 @@ fn read_text(path: &Path) -> Result<String, ExtractError> {
 fn decode_png_entry(path: &Path, id: String, writer: &mut PackWriter) -> Result<(), ExtractError> {
     let bytes = read_file(path)?;
     let image = png::decode(&bytes).map_err(|e| ExtractError::Png(path.to_path_buf(), e))?;
-    writer.push(PackEntry {
-        id,
-        kind: EntryKind::Image {
-            width: image.width,
-            height: image.height,
-            bit_depth: image.bit_depth,
-        },
-        payload: image.pixels,
-    });
+    writer.push(build_image_entry(path, id, image)?);
     Ok(())
+}
+
+/// Turn a decoded PNG into a [`EntryKind::Image`] entry through
+/// [`pack_format::image_entry`], the constructor the ROM importer also
+/// writes through. Every decoded-PNG call site in this pipeline funnels
+/// here, so no two of them can shape an image entry differently.
+///
+/// # Errors
+///
+/// [`ExtractError::EntryShape`] if the decoded pixel buffer is not
+/// `width * height` bytes. `png::decode` always produces exactly that, so
+/// this is a contract check, not a real failure mode.
+fn build_image_entry(
+    path: &Path,
+    id: String,
+    image: png::IndexedImage,
+) -> Result<PackEntry, ExtractError> {
+    pack_format::image_entry(id, image.width, image.height, image.bit_depth, image.pixels)
+        .map_err(|e| ExtractError::EntryShape(path.to_path_buf(), e))
 }
 
 fn decode_palette_entry(
@@ -405,32 +423,21 @@ fn build_palette_entry(
     colors: &[jasc_pal::Rgb888],
     id: String,
 ) -> Result<PackEntry, ExtractError> {
-    let color_count = u16::try_from(colors.len()).map_err(|_| {
-        ExtractError::PaletteColorCountUnrepresentable(path.to_path_buf(), colors.len())
-    })?;
-    let mut payload = Vec::with_capacity(colors.len() * 2);
-    for color in colors {
-        payload.extend_from_slice(&color.to_gba555().to_le_bytes());
-    }
-    // `payload` is built from exactly `colors`, one GBA555 `u16` (2 bytes)
-    // each, so this can never trip in practice -- asserted anyway since the
-    // pack's own payload-shape contract (`pack_format`'s format docs: "Palette:
-    // color_count * 2 bytes") is exactly what `color_count` promises readers.
-    debug_assert_eq!(payload.len(), usize::from(color_count) * 2);
-    Ok(PackEntry {
-        id,
-        kind: EntryKind::Palette { color_count },
-        payload,
+    // The GBA555 conversion is this pipeline's (upstream's `.pal` files are
+    // 8-bit RGB); the packing is `pack_format`'s, shared with the ROM
+    // importer, whose colours arrive GBA-native already.
+    let colors: Vec<u16> = colors.iter().map(|c| c.to_gba555()).collect();
+    pack_format::palette_entry(id, &colors).map_err(|e| match e {
+        EntryShapeError::PaletteColorCountUnrepresentable(actual) => {
+            ExtractError::PaletteColorCountUnrepresentable(path.to_path_buf(), actual)
+        }
+        other => ExtractError::EntryShape(path.to_path_buf(), other),
     })
 }
 
-fn raw_entry(path: &Path, id: String, writer: &mut PackWriter) -> Result<(), ExtractError> {
+fn push_raw_entry(path: &Path, id: String, writer: &mut PackWriter) -> Result<(), ExtractError> {
     let payload = read_file(path)?;
-    writer.push(PackEntry {
-        id,
-        kind: EntryKind::Raw,
-        payload,
-    });
+    writer.push(pack_format::raw_entry(id, payload));
     Ok(())
 }
 
@@ -497,12 +504,12 @@ fn extract_tileset(
         )?;
     }
 
-    raw_entry(
+    push_raw_entry(
         &base.join("metatiles.bin"),
         format!("tileset/{name}/metatiles"),
         writer,
     )?;
-    raw_entry(
+    push_raw_entry(
         &base.join("metatile_attributes.bin"),
         format!("tileset/{name}/metatile-attributes"),
         writer,
@@ -554,18 +561,14 @@ fn extract_title_screen(upstream: &Path, writer: &mut PackWriter) -> Result<(), 
                         build_palette_entry(&path, &colors, format!("title/palette/{stem}"))?;
                     writer.push(entry);
                 }
-                writer.push(PackEntry {
-                    id: format!("title/image/{stem}"),
-                    kind: EntryKind::Image {
-                        width: image.width,
-                        height: image.height,
-                        bit_depth: image.bit_depth,
-                    },
-                    payload: image.pixels,
-                });
+                writer.push(build_image_entry(
+                    &path,
+                    format!("title/image/{stem}"),
+                    image,
+                )?);
             }
             Some("pal") => decode_palette_entry(&path, format!("title/palette/{stem}"), writer)?,
-            Some("bin") => raw_entry(&path, format!("title/raw/{stem}"), writer)?,
+            Some("bin") => push_raw_entry(&path, format!("title/raw/{stem}"), writer)?,
             _ => {}
         }
     }
@@ -730,11 +733,10 @@ fn extract_layouts(upstream: &Path, writer: &mut PackWriter) -> Result<(), Extra
                 actual: map_bytes.len(),
             });
         }
-        writer.push(PackEntry {
-            id: format!("layout/{name}/map"),
-            kind: EntryKind::Raw,
-            payload: map_bytes,
-        });
+        writer.push(pack_format::raw_entry(
+            format!("layout/{name}/map"),
+            map_bytes,
+        ));
 
         let border_bytes = read_file(&upstream.join(&entry.border_filepath))?;
         if border_bytes.len() != BORDER_BLOCK_BYTES {
@@ -743,11 +745,10 @@ fn extract_layouts(upstream: &Path, writer: &mut PackWriter) -> Result<(), Extra
                 actual: border_bytes.len(),
             });
         }
-        writer.push(PackEntry {
-            id: format!("layout/{name}/border"),
-            kind: EntryKind::Raw,
-            payload: border_bytes,
-        });
+        writer.push(pack_format::raw_entry(
+            format!("layout/{name}/border"),
+            border_bytes,
+        ));
     }
     Ok(())
 }

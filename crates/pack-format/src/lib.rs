@@ -72,10 +72,13 @@
 //!
 //! This crate holds the format constants ([`MAGIC`], [`FORMAT_VERSION`],
 //! [`OUTPUT_RELATIVE_PATH`], [`EntryKind`]), the write side ([`PackEntry`],
-//! [`PackWriter`], [`PackWriteError`]), and the read side
-//! ([`parse_directory`], [`DirectoryEntry`], [`PackReadError`]).
-//! `xtask::extract` writes through it; `crates/assets`'s `AssetPack` reads
-//! through it.
+//! [`PackWriter`], [`PackWriteError`]), the entry constructors
+//! ([`palette_entry`], [`image_entry`], [`image_entry_from_tiles`],
+//! [`raw_entry`], [`EntryShapeError`]), the read side ([`parse_directory`],
+//! [`DirectoryEntry`], [`PackReadError`]), and runtime pack-path resolution
+//! ([`default_pack_path`], [`user_data_dir`], [`user_pack_path`],
+//! [`PACK_PATH_ENV`]). `xtask::extract` writes through it; `crates/assets`'s
+//! `AssetPack` reads through it.
 //!
 //! Both sides used to spell the layout out separately, so that the two
 //! crates stayed decoupled from each other. That held while there were two
@@ -83,15 +86,33 @@
 //! than keeping three copies in step: a format bump touches one file, and
 //! `xtask` and `assets` still never depend on each other.
 //!
-//! Next: entry constructors (typed helpers replacing hand-built
-//! [`PackEntry`] literals at every call site) and the default pack path
-//! (the constant is shared now; `AssetPack::default_path` and xtask's
-//! `repo_root()` still locate the repo root independently).
+//! The entry constructors are what makes two backends produce one pack. A
+//! hand-built [`PackEntry`] literal can promise a `color_count` or a
+//! `width`/`height` its payload does not deliver, and two backends writing
+//! their own literals drift. Both now shape entries here, so the same
+//! normalized input yields the same bytes whichever backend read it. See
+//! the `entry` module docs.
+//!
+//! [`default_pack_path`] resolves at runtime, first match wins:
+//! 1. `$POKEEMERALD_PACK`, if set and non-empty.
+//! 2. The OS user-data directory's `pokeemerald-rs/pokeemerald.pack`, if it
+//!    exists; the shipped ROM importer writes there ([`user_pack_path`]).
+//! 3. `<directory of the running executable>/`[`OUTPUT_RELATIVE_PATH`], if
+//!    it exists, for portable installs.
+//! 4. The compile-time repo path, so a developer checkout keeps working
+//!    with nothing configured.
+//!
+//! Next: the ROM importer itself, the second backend these constructors
+//! exist for.
 
+mod entry;
 mod layout;
+mod path;
 mod reader;
 mod writer;
 
+pub use entry::{image_entry, image_entry_from_tiles, palette_entry, raw_entry, EntryShapeError};
 pub use layout::{EntryKind, FORMAT_VERSION, MAGIC, OUTPUT_RELATIVE_PATH};
+pub use path::{default_pack_path, user_data_dir, user_pack_path, PACK_PATH_ENV};
 pub use reader::{parse_directory, DirectoryEntry, PackReadError};
 pub use writer::{PackEntry, PackWriteError, PackWriter};

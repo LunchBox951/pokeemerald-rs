@@ -105,7 +105,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use super::{read_text, ExtractError};
-use pack_format::{EntryKind, PackEntry, PackWriter};
+use pack_format::PackWriter;
 use parser::RawVoiceGroup;
 
 pub(crate) use error::VoiceGroupError;
@@ -287,11 +287,10 @@ pub(super) fn extract_voicegroups(
     .map_err(ExtractError::VoiceGroup)?;
 
     for group in &groups {
-        writer.push(PackEntry {
-            id: resolve::voice_group_pack_id(&group.label),
-            kind: EntryKind::Raw,
-            payload: encode::encode_voice_group(group),
-        });
+        writer.push(pack_format::raw_entry(
+            resolve::voice_group_pack_id(&group.label),
+            encode::encode_voice_group(group),
+        ));
     }
     Ok(())
 }

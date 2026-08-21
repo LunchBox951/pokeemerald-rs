@@ -1088,3 +1088,6 @@ fn affine_tilemap_from_raw(raw: &[u8]) -> Result<AffineTilemap, TitleSceneError>
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod tile_roundtrip_tests;
