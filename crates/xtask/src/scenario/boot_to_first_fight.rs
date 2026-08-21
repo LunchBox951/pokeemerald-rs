@@ -15,7 +15,7 @@
 //!
 //! [`AppState`] is the only vocabulary a [`super::ScenarioDriver`] has, and
 //! its own doc comment was written with exactly this scenario in mind
-//! ("lets I-7's future `boot-to-first-fight` scenario prove it reached the
+//! ("lets I-7's `boot-to-first-fight` scenario prove it reached the
 //! scripted fight rather than merely Route 101"). Issue #245's narrative
 //! scope names six milestones -- title reached, save menu answered,
 //! bedroom entered, first NPC dialog, Route 101 rescue trigger, first

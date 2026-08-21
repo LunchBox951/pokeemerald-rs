@@ -1,9 +1,9 @@
 //! An owned 240x160 RGB888 pixel buffer (S-2 slice 1).
 //!
 //! Pure `std`, headless-testable, with no dependency on `platform` or any
-//! windowing crate `(minimal-deps)`. Sized and pixel-formatted to be handed
-//! directly to `platform`'s `softbuffer` presentation surface once that
-//! wiring lands — a future integration issue, out of scope here.
+//! windowing crate `(minimal-deps)`. Sized and laid out for `platform`'s
+//! `softbuffer` presentation surface; the `pokeemerald_rs` crate's `frame`
+//! module owns the per-pixel repack that bridges the two.
 
 use crate::palette::Rgb888;
 

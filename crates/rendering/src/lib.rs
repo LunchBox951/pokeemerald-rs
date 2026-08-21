@@ -23,8 +23,10 @@
 //! dropped from both consistently, the way real hardware (and the pinned
 //! mgba renderer) drops it.
 //!
-//! Wiring this crate into `platform`'s presentation surface is a future
-//! integration issue `(constitution-vs-roadmap)`.
+//! The `pokeemerald_rs` crate's `frame` module bridges this crate's
+//! [`Framebuffer`] to `platform`'s presentation surface, converting a
+//! composed frame into `platform`'s pixel format for the frame loop
+//! (windowed or headless) to present.
 //!
 //! `std`-only, no FFI, no dependency on `platform` `(minimal-deps, no-ffi)`.
 //! Behaviour is transcribed from `pokeemerald/src/palette.c`,

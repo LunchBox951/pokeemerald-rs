@@ -12,13 +12,19 @@
 //! the exact `./init.sh`/`cargo xtask extract` commands to run) printed by
 //! this `main`, not a panic -- see [`pokeemerald_rs::app::AppError`].
 //!
-//! The intro cinematic, new-game flow, engine/battle wiring, audio, and save
-//! are all out of scope for this slice -- see issue #70 and #109.
+//! The reduced intro cinematic, new-game flow, and the title -> main menu
+//! -> intro -> overworld scene transitions run inside
+//! `pokeemerald_rs::flow`'s `advance_scene`; battles run *inside* the
+//! overworld phase (`pokeemerald_rs::flow`'s `overworld_phase` module,
+//! which owns the overworld scene). The save medium is owned by
+//! [`pokeemerald_rs::App`] and threaded through every `advance_scene`
+//! call; `App` also holds the title music's audio device, driven
+//! separately after each scene step.
 //!
 //! **Manual-run only**: CI is headless, so this binary never runs in a
-//! test -- only the headless glue in `pokeemerald_rs::app`, `::scene`,
-//! `::title`, and `::frame` is unit-tested, plus `xtask`'s `e2e --suite
-//! smoke` run, which drives `App::new_headless` in-process (F-3, V-1) --
+//! test -- only the library crate's headless glue is unit-tested, plus
+//! `xtask`'s `e2e --suite smoke` run, which drives `App::new_headless`
+//! in-process (F-3, V-1) --
 //! that constructor always uses the I-1 synthetic scene, never the real
 //! title screen (see `pokeemerald_rs::app`'s module docs). Verify the real
 //! windowed shell locally with:
