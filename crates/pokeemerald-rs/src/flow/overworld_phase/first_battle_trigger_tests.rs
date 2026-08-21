@@ -12,7 +12,7 @@ use engine::overworld::metatile_behavior::{
     MB_ANIMATED_DOOR, MB_EAST_ARROW_WARP, MB_NORMAL, MB_TALL_GRASS,
 };
 use engine::overworld::{
-    Direction, PlayerState, WALK_FRAMES_PER_TILE, WILD_ENCOUNTER_IMMUNITY_STEPS,
+    Direction, MapRuntime, PlayerState, WALK_FRAMES_PER_TILE, WILD_ENCOUNTER_IMMUNITY_STEPS,
 };
 use engine::rng::Rng;
 use platform::{ButtonState, Buttons};
@@ -948,13 +948,20 @@ fn no_route_101_object_event_stands_beside_the_rescue_trigger_tiles() {
     }
 }
 
-/// The data premise `MapRuntime::coord_event_at`'s documented first-match
-/// divergence rests on (its own doc comment): every Route 101 coord event
-/// sits at a distinct position, so first-match and upstream's
-/// keep-scanning loop cannot disagree here. Asserted like the slice's
-/// other data premises (no warp events, no adjacent NPCs), so a future
-/// map change that stacks two coord events on one tile fails this test
-/// and forces the engine helper's semantics to be revisited.
+/// Route 101's own coord events never stack: all nine sit at distinct
+/// `(x, y, elevation)` positions, so no *real* Route 101 tile ever hands
+/// `first_battle_trigger_at`'s scan (issue #343) more than one candidate.
+/// That is the whole claim here -- the scan's own multi-candidate branches
+/// are pinned separately, over fabricated stacks, by the four tests below.
+///
+/// Asserted like the slice's other data premises (no warp events, no
+/// adjacent NPCs), so a map change that stacks two coord events on one
+/// Route 101 tile fails this test and forces a look at what upstream's scan
+/// would do with the pair -- in particular whether the newcomer's guard is
+/// one this port can evaluate at all, since a trigger on any var other than
+/// `VAR_ROUTE101_STATE` makes the scan fail closed
+/// (`super::first_battle_trigger::OverworldPhase::first_battle_trigger_at`'s
+/// "A guard this port cannot evaluate" section).
 #[test]
 fn route_101_coord_events_all_sit_at_distinct_positions() {
     let events = assets::MapEventsTable::new()
@@ -971,7 +978,230 @@ fn route_101_coord_events_all_sit_at_distinct_positions() {
     assert_eq!(
         positions.len(),
         total,
-        "two coord events share a tile -- coord_event_at's first-match \
-         shortcut is no longer equivalent to upstream's scan"
+        "two coord events now share a tile -- review this module's \
+         single-candidate reachability arguments, which assumed they never would"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// The stacked coord-event scan (issue #343).
+//
+// Route 101's real coord events never share a tile (the test above), so the
+// only way to drive `first_battle_trigger_at`'s scan past a first candidate
+// is to fabricate the stack: real header, real player, real save state,
+// synthetic `coord_events`. These go through `first_battle_trigger_ready`
+// -- the one entry point `OverworldPhase::step` calls -- rather than the
+// private `first_battle_trigger_at`, so the production caller's own skip
+// behaviour is what is pinned.
+// ---------------------------------------------------------------------------
+
+/// One fabricated coord event sitting on [`ROUTE_101_TRIGGER_TILE`], at that
+/// tile's own elevation.
+fn candidate_on_the_trigger_tile(kind: assets::CoordEventKind) -> assets::CoordEvent {
+    assets::CoordEvent {
+        x: i16::try_from(ROUTE_101_TRIGGER_TILE.0).expect("a map coordinate fits an i16"),
+        y: i16::try_from(ROUTE_101_TRIGGER_TILE.1).expect("a map coordinate fits an i16"),
+        elevation: ROUTE_101_TRIGGER_ELEVATION,
+        kind,
+    }
+}
+
+/// The **real** rescue coord event, read straight out of the generated
+/// map-events table rather than restated -- so every stack below ends in
+/// exactly the candidate production data puts on that tile, and a map-data
+/// change to it breaks these tests rather than sliding past them.
+fn rescue_trigger_candidate() -> assets::CoordEvent {
+    let events = assets::MapEventsTable::new()
+        .resolve(MapId("MAP_ROUTE101"))
+        .expect("Route 101 resolves in the generated map-events table");
+    let x = i16::try_from(ROUTE_101_TRIGGER_TILE.0).expect("a map coordinate fits an i16");
+    let y = i16::try_from(ROUTE_101_TRIGGER_TILE.1).expect("a map coordinate fits an i16");
+    let rescue = *events
+        .coord_events
+        .iter()
+        .find(|c| c.x == x && c.y == y)
+        .expect("Route 101 declares its rescue coord event on the trigger tile");
+    assert!(
+        matches!(
+            rescue.kind,
+            assets::CoordEventKind::Trigger {
+                var: "VAR_ROUTE101_STATE",
+                var_value: 1,
+                script: "Route101_EventScript_StartBirchRescue",
+            }
+        ),
+        "fixture precondition: the rescue tile's real coord event is the \
+         VAR_ROUTE101_STATE == 1 Birch-rescue trigger"
+    );
+    assert_eq!(
+        rescue.elevation, ROUTE_101_TRIGGER_ELEVATION,
+        "fixture precondition: the stacks below share the rescue event's own elevation"
+    );
+    rescue
+}
+
+/// A [`MapRuntime`] over `phase`'s own synthetic Route 101 grid and real
+/// header, but a fabricated `coord_events` list. Leaks its event list
+/// `'static` the same way `engine`'s own `map_runtime` fixtures leak theirs
+/// -- a handful of small allocations for the process's lifetime, in a test
+/// binary.
+fn route_101_runtime_with_stack(
+    phase: &OverworldPhase,
+    stack: Vec<assets::CoordEvent>,
+) -> MapRuntime<'_> {
+    let coord_events: &'static [assets::CoordEvent] = Box::leak(stack.into_boxed_slice());
+    let header = assets::MapHeaderTable::new()
+        .header(MapId("MAP_ROUTE101"))
+        .expect("Route 101 resolves in the generated map-header table");
+    let events: &'static assets::MapEvents = Box::leak(Box::new(assets::MapEvents {
+        id: MapId("MAP_ROUTE101"),
+        shared_events_map: None,
+        object_events: &[],
+        warp_events: &[],
+        coord_events,
+        bg_events: &[],
+    }));
+    phase.scene.runtime(MapId("MAP_ROUTE101"), header, events)
+}
+
+/// A phase standing on [`ROUTE_101_TRIGGER_TILE`] with `VAR_ROUTE101_STATE`
+/// at the rescue trigger's own `1`, asserted rather than assumed.
+fn phase_on_the_trigger_tile() -> OverworldPhase {
+    let phase = route_101_trigger_phase(PlayerState::new(
+        ROUTE_101_TRIGGER_TILE,
+        ROUTE_101_TRIGGER_ELEVATION,
+        Direction::South,
+    ));
+    assert_eq!(
+        phase.save1.event_data.var_get(VAR_ROUTE101_STATE),
+        Ok(1),
+        "setup: entering Route 101 must leave the live var at the rescue trigger's var_value"
+    );
+    phase
+}
+
+/// Two candidates that upstream's `TryRunCoordEventScript` answers with
+/// `NULL` -- a weather event (`field_control_avatar.c:881-884`) and a
+/// trigger whose var check fails (`:891`) -- stacked *ahead* of the rescue
+/// trigger must not hide it: `GetCoordEventScriptAtPosition` only stops on a
+/// candidate that yields a script (`:909-911`), so the scan reaches the
+/// third entry and fires.
+///
+/// The failed-var candidate is Route 101's own `PreventExitSouth` script on
+/// `VAR_ROUTE101_STATE == 2` while the live var reads `1` -- the exact
+/// mismatch the map's real post-rescue triggers produce, moved onto the
+/// rescue tile.
+#[test]
+fn a_weather_and_failed_var_candidate_stacked_ahead_do_not_hide_the_rescue_trigger() {
+    let phase = phase_on_the_trigger_tile();
+    let runtime = route_101_runtime_with_stack(
+        &phase,
+        vec![
+            candidate_on_the_trigger_tile(assets::CoordEventKind::Weather(
+                assets::CoordWeather::Rain,
+            )),
+            candidate_on_the_trigger_tile(assets::CoordEventKind::Trigger {
+                var: "VAR_ROUTE101_STATE",
+                var_value: 2,
+                script: "Route101_EventScript_PreventExitSouth",
+            }),
+            rescue_trigger_candidate(),
+        ],
+    );
+
+    assert!(
+        phase.first_battle_trigger_ready(&runtime, Some(ROUTE_101_TRIGGER_TILE)),
+        "neither a weather candidate nor a failed var check yields a script upstream, so \
+         the scan must keep going and reach the rescue trigger stacked behind them"
+    );
+}
+
+/// A `TRIGGER_RUN_IMMEDIATELY` candidate (`include/constants/vars.h:312`)
+/// stacked ahead must not hide the rescue trigger either: upstream runs its
+/// script on the spot and *still* returns `NULL`
+/// (`field_control_avatar.c:886-889`), so the scan continues. Thirty-six
+/// bundled coord events across five maps carry that `var` -- none on Route
+/// 101, which is why this stack has to be fabricated.
+#[test]
+fn a_run_immediately_candidate_stacked_ahead_does_not_hide_the_rescue_trigger() {
+    let phase = phase_on_the_trigger_tile();
+    let runtime = route_101_runtime_with_stack(
+        &phase,
+        vec![
+            candidate_on_the_trigger_tile(assets::CoordEventKind::Trigger {
+                var: "TRIGGER_RUN_IMMEDIATELY",
+                var_value: 0,
+                script: "LavaridgeTown_EventScript_HotSpringsTrigger",
+            }),
+            rescue_trigger_candidate(),
+        ],
+    );
+
+    assert!(
+        phase.first_battle_trigger_ready(&runtime, Some(ROUTE_101_TRIGGER_TILE)),
+        "TRIGGER_RUN_IMMEDIATELY returns NULL after running its script, so it must not end \
+         the scan short of the rescue trigger behind it"
+    );
+}
+
+/// The other side of the same rule, and the one the first cut of this scan
+/// got wrong: a **foreign trigger whose var check passes** stacked ahead of
+/// the rescue trigger ends the scan. Upstream's `TryRunCoordEventScript`
+/// returns that candidate's script (`field_control_avatar.c:891-892`) and
+/// `GetCoordEventScriptAtPosition` returns it straight out of the loop
+/// (`:909-911`), so the foreign script -- not the rescue -- is what runs on
+/// this tile, and the rescue trigger behind it is never reached.
+///
+/// The candidate here gates on `VAR_ROUTE101_STATE == 1`, the value the live
+/// var actually holds, so its guard genuinely passes; only its script name
+/// differs. A scan that skipped it for that reason alone would fire a battle
+/// upstream never starts.
+#[test]
+fn a_foreign_trigger_whose_guard_passes_wins_the_tile_from_the_rescue_trigger() {
+    let phase = phase_on_the_trigger_tile();
+    let runtime = route_101_runtime_with_stack(
+        &phase,
+        vec![
+            candidate_on_the_trigger_tile(assets::CoordEventKind::Trigger {
+                var: "VAR_ROUTE101_STATE",
+                var_value: 1,
+                script: "Route101_EventScript_SomeOtherTrigger",
+            }),
+            rescue_trigger_candidate(),
+        ],
+    );
+
+    assert!(
+        !phase.first_battle_trigger_ready(&runtime, Some(ROUTE_101_TRIGGER_TILE)),
+        "a yielding candidate ends upstream's scan and its own script runs -- the rescue \
+         trigger stacked behind it must not fire"
+    );
+}
+
+/// A trigger gated on a variable this port cannot read at all (`var` is an
+/// open reference -- `assets::CoordEventKind::Trigger`) stacked ahead of the
+/// rescue trigger **fails closed**: with no way to know whether upstream's
+/// `VarGet` would pass, the scan treats it as yielding and stops, rather
+/// than optimistically stepping over it into a battle upstream might never
+/// have started (`first_battle_trigger_at`'s "A guard this port cannot
+/// evaluate" section, which records the divergence).
+#[test]
+fn a_trigger_on_an_unevaluable_var_stacked_ahead_fails_closed() {
+    let phase = phase_on_the_trigger_tile();
+    let runtime = route_101_runtime_with_stack(
+        &phase,
+        vec![
+            candidate_on_the_trigger_tile(assets::CoordEventKind::Trigger {
+                var: "VAR_LITTLEROOT_TOWN_STATE",
+                var_value: 1,
+                script: "LittlerootTown_EventScript_GoSaveBirchTrigger",
+            }),
+            rescue_trigger_candidate(),
+        ],
+    );
+
+    assert!(
+        !phase.first_battle_trigger_ready(&runtime, Some(ROUTE_101_TRIGGER_TILE)),
+        "an un-evaluable guard must end the scan, not be assumed to fail"
     );
 }

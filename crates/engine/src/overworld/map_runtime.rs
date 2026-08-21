@@ -246,32 +246,47 @@ impl<'a> MapRuntime<'a> {
         })
     }
 
-    /// The coord (trigger/weather) event at `(x, y, elevation)`, mirroring
-    /// `GetCoordEventScriptAtPosition` (`field_control_avatar.c:897-916`) —
-    /// same position-plus-elevation-wildcard matching as
-    /// [`MapRuntime::warp_event_at`].
+    /// Every coord (trigger/weather) event at `(x, y, elevation)`, in
+    /// `map.json` declaration order — mirroring the *scan* upstream
+    /// `GetCoordEventScriptAtPosition` (`field_control_avatar.c:897-916`)
+    /// performs over `mapHeader->events->coordEvents`, same
+    /// position-plus-elevation-wildcard matching as
+    /// [`MapRuntime::warp_event_at`] (only the stored event's own elevation
+    /// `0` is a wildcard, not the query's).
     ///
-    /// **Known divergence: this stops at the first position+elevation match;
-    /// upstream keeps scanning.** Upstream's loop (`:903-914`) calls
-    /// `TryRunCoordEventScript` (`:877-895`) on each positional match and
-    /// returns only once that yields a non-`NULL` script — so an event whose
-    /// `VarGet(trigger) == (u8)index` check *fails* (`:891`) does not end the
-    /// search, and a later event stacked on the same tile can still run. This
-    /// method returns the first positional match and leaves the var check to
-    /// its caller, which therefore never sees a second candidate.
-    ///
-    /// Harmless on the only map with a live consumer today
-    /// (`pokeemerald_rs`'s Route 101 first-battle trigger, issue #231): all
-    /// nine of Route 101's `coord_events` sit at nine *distinct* positions,
-    /// so no tile there has a second candidate to fall through to. Latent
-    /// elsewhere, and deliberately left as-is: widening `MapRuntime`'s
-    /// matching (returning every match, or folding the var check in) is an
-    /// engine-semantics change beyond the slice that first consumed this
-    /// method, and needs its own tests over maps that really do stack coord
-    /// events on one tile.
-    #[must_use]
-    pub fn coord_event_at(&self, x: i32, y: i32, elevation: u8) -> Option<&'static CoordEvent> {
-        self.events.coord_events.iter().find(|c| {
+    /// **An iterator, not a single hit, on purpose — the same shape
+    /// [`MapRuntime::object_events_at`] uses for its own stacked case.**
+    /// Upstream's loop (`:903-914`) calls `TryRunCoordEventScript`
+    /// (`:877-895`) on every positional match in turn, **ends the scan at
+    /// the first candidate that yields a script** (`:909-911`), and keeps
+    /// going past every candidate that yields `NULL` instead — of which
+    /// there are exactly three: a weather event
+    /// (`coordEvent->script == NULL`) dispatches `DoCoordEventWeather` and
+    /// falls through (`:881-884`); a `TRIGGER_RUN_IMMEDIATELY` event
+    /// (`trigger == 0`, `include/constants/vars.h:312`) has its script run
+    /// on the spot and *still* returns `NULL` (`:886-889`) — 36 bundled
+    /// coord events across five maps are of that kind, 24 of them on Route
+    /// 111 alone; and a trigger whose `VarGet(trigger) == (u8)index` check
+    /// fails (`:891`) is skipped rather than ending the search — so a later
+    /// event stacked on the same tile can still run (Littleroot Town stacks
+    /// `LittlerootTown_EventScript_NeedPokemonTriggerRight` and
+    /// `LittlerootTown_EventScript_GoSaveBirchTrigger` at `(11, 1)`; Jagged
+    /// Pass stacks a `Sunny` weather event under
+    /// `JaggedPass_EventScript_OpenMagmaHideout` at `(14, 15)`). This method
+    /// returns every positional match in order and leaves candidate
+    /// evaluation to its caller — skipping a weather event (no coord-event
+    /// weather consumer exists in this port yet) and running the var check
+    /// are the caller's — see `pokeemerald_rs`'s
+    /// `flow::overworld_phase::first_battle_trigger` for the caller-side
+    /// scan this replaced a first-match `Option` with (issue #343).
+    pub fn coord_events_at(
+        &self,
+        x: i32,
+        y: i32,
+        elevation: u8,
+    ) -> impl Iterator<Item = &'static CoordEvent> {
+        let coord_events = self.events.coord_events;
+        coord_events.iter().filter(move |c| {
             i32::from(c.x) == x
                 && i32::from(c.y) == y
                 && (c.elevation == elevation
@@ -552,14 +567,22 @@ mod tests {
     }
 
     #[test]
-    fn coord_event_at_matches_position_and_elevation_wildcard() {
+    fn coord_events_at_matches_position_and_elevation_wildcard() {
         let hdr = header("MAP_E", &[]);
-        let coords: &'static [CoordEvent] = Box::leak(Box::new([CoordEvent {
-            x: 2,
-            y: 2,
-            elevation: 0,
-            kind: CoordEventKind::Weather(CoordWeather::Rain),
-        }]));
+        let coords: &'static [CoordEvent] = Box::leak(Box::new([
+            CoordEvent {
+                x: 2,
+                y: 2,
+                elevation: 0, // ELEVATION_TRANSITION: matches any query elevation.
+                kind: CoordEventKind::Weather(CoordWeather::Rain),
+            },
+            CoordEvent {
+                x: 3,
+                y: 3,
+                elevation: 3, // An ordinary elevation: no wildcard of its own.
+                kind: CoordEventKind::Weather(CoordWeather::Rain),
+            },
+        ]));
         let events: &'static MapEvents = Box::leak(Box::new(MapEvents {
             id: MapId("MAP_E"),
             shared_events_map: None,
@@ -587,8 +610,149 @@ mod tests {
             MetatileAttributeTable::new(&[]),
         );
 
-        assert!(runtime.coord_event_at(2, 2, 9).is_some());
-        assert!(runtime.coord_event_at(2, 3, 0).is_none());
+        // ELEVATION_TRANSITION wildcard: the stored event's elevation `0`
+        // matches a query at any other elevation.
+        assert!(runtime.coord_events_at(2, 2, 9).next().is_some());
+        assert!(runtime.coord_events_at(2, 3, 0).next().is_none());
+
+        // ...and the wildcard is asymmetric. Upstream's test is
+        // `coordEvents[i].elevation == elevation || coordEvents[i].elevation
+        // == ELEVATION_TRANSITION` (`field_control_avatar.c:907`): only the
+        // *stored* elevation has a wildcard arm, never the query's. A step
+        // arriving at elevation 0 therefore does not see an elevation-3
+        // coord event, which is the half of the rule an implementation could
+        // silently symmetrize without any other assertion here noticing.
+        assert!(
+            runtime.coord_events_at(3, 3, 3).next().is_some(),
+            "the stored elevation-3 event must match a query at its own elevation"
+        );
+        assert!(
+            runtime.coord_events_at(3, 3, 0).next().is_none(),
+            "a query elevation of 0 is not a wildcard -- only a stored 0 is"
+        );
+    }
+
+    /// A [`MapRuntime`] over `map`'s real, compiled-in header and events
+    /// (`assets::MapHeaderTable`/`assets::MapEventsTable`, no local pack
+    /// needed — same premise as `pokeemerald_rs`'s own
+    /// `overworld_phase::test_support::runtime_for`) but a synthetic, fully
+    /// open `width`x`height` grid: real map layouts are pack-loaded binary
+    /// data this crate does not compile in, and
+    /// [`MapRuntime::coord_events_at`] never touches the grid, only
+    /// `events.coord_events`.
+    fn real_events_runtime(map: MapId, width: u16, height: u16) -> MapRuntime<'static> {
+        let header = assets::MapHeaderTable::new().header(map).unwrap();
+        let events = assets::MapEventsTable::new().resolve(map).unwrap();
+        let layout: &'static assets::MapLayout = Box::leak(Box::new(assets::MapLayout {
+            id: assets::LayoutId("TEST_OPEN_GRID"),
+            name: "TestOpenGrid",
+            width,
+            height,
+            primary_tileset: "gTileset_General",
+            secondary_tileset: "gTileset_General",
+        }));
+        let bytes: &'static [u8] =
+            Box::leak(grid_bytes(width, height, cell(1, 0, 3)).into_boxed_slice());
+        let grid = layout.grid(bytes).unwrap();
+        MapRuntime::new(
+            map,
+            header,
+            events,
+            grid,
+            MetatileAttributeTable::new(&[]),
+            MetatileAttributeTable::new(&[]),
+        )
+    }
+
+    /// Littleroot Town stacks two triggers on the same tile
+    /// (`crates/assets/src/map_events.rs`'s `MAP_LITTLEROOT_TOWN`
+    /// `coord_events`): `NeedPokemonTriggerRight`
+    /// (`VAR_LITTLEROOT_TOWN_STATE == 0`) declared first, then
+    /// `GoSaveBirchTrigger` (`== 1`), both at `(11, 1, 3)`. Upstream's
+    /// `GetCoordEventScriptAtPosition` (`field_control_avatar.c:897-916`)
+    /// would visit both in that order and let
+    /// `TryRunCoordEventScript`'s var check pick whichever one currently
+    /// matches; [`MapRuntime::coord_events_at`] must hand a caller the same
+    /// two candidates, in the same order, so that scan is possible at all
+    /// (issue #343 — the regression this port's own first-match shortcut
+    /// used to prevent).
+    #[test]
+    fn coord_events_at_yields_the_littleroot_town_trigger_stack_in_declaration_order() {
+        let runtime = real_events_runtime(MapId("MAP_LITTLEROOT_TOWN"), 20, 20);
+
+        let candidates: Vec<&CoordEvent> = runtime.coord_events_at(11, 1, 3).collect();
+        let scripts: Vec<&str> = candidates
+            .iter()
+            .map(|c| match c.kind {
+                CoordEventKind::Trigger { script, .. } => script,
+                CoordEventKind::Weather(_) => "<weather>",
+            })
+            .collect();
+        assert_eq!(
+            scripts,
+            [
+                "LittlerootTown_EventScript_NeedPokemonTriggerRight",
+                "LittlerootTown_EventScript_GoSaveBirchTrigger",
+            ],
+            "the stack must come back in map.json declaration order so a caller at \
+             VAR_LITTLEROOT_TOWN_STATE == 1 can walk past the first candidate and pick \
+             GoSaveBirchTrigger, mirroring TryRunCoordEventScript's own keep-scanning loop"
+        );
+
+        // A caller reproducing TryRunCoordEventScript's var check picks the
+        // second candidate once the state var reads `1`.
+        let state = 1u16;
+        let picked = candidates.into_iter().find(|c| match c.kind {
+            CoordEventKind::Trigger { var_value, .. } => var_value == state,
+            CoordEventKind::Weather(_) => false,
+        });
+        assert!(matches!(
+            picked.map(|c| c.kind),
+            Some(CoordEventKind::Trigger {
+                script: "LittlerootTown_EventScript_GoSaveBirchTrigger",
+                ..
+            })
+        ));
+    }
+
+    /// Jagged Pass stacks a weather event under a trigger on the same tile
+    /// (`crates/assets/src/map_events.rs`'s `MAP_JAGGED_PASS`
+    /// `coord_events`): a `Sunny` weather event declared first, then
+    /// `JaggedPass_EventScript_OpenMagmaHideout`
+    /// (`VAR_JAGGED_PASS_STATE == 1`), both at `(14, 15, 3)`. Upstream's
+    /// `TryRunCoordEventScript` never yields a script for the weather event
+    /// (`coordEvent->script == NULL` dispatches `DoCoordEventWeather` and
+    /// returns `NULL`, `field_control_avatar.c:881-884`) so the scan falls
+    /// through to the trigger behind it — the same "weather never blocks a
+    /// trigger stacked on top of it" case
+    /// [`MapRuntime::coord_events_at`]'s own doc comment cites.
+    #[test]
+    fn coord_events_at_yields_the_jagged_pass_weather_then_trigger_stack_in_order() {
+        let runtime = real_events_runtime(MapId("MAP_JAGGED_PASS"), 32, 32);
+
+        let candidates: Vec<&CoordEvent> = runtime.coord_events_at(14, 15, 3).collect();
+        assert_eq!(
+            candidates.len(),
+            2,
+            "expected exactly the weather-then-trigger stack"
+        );
+        assert!(
+            matches!(
+                candidates[0].kind,
+                CoordEventKind::Weather(CoordWeather::Sunny)
+            ),
+            "the weather event is declared first and must come back first"
+        );
+        assert!(
+            matches!(
+                candidates[1].kind,
+                CoordEventKind::Trigger {
+                    script: "JaggedPass_EventScript_OpenMagmaHideout",
+                    ..
+                }
+            ),
+            "the trigger behind the weather event must still be reachable"
+        );
     }
 
     #[test]
