@@ -140,6 +140,33 @@
 //! personality exactly as `CreateBoxMon`/`GetAbilityBySpecies` do, so a
 //! seeded party's abilities are deterministic.
 //!
+//! Issue #304 closes the two move-slot gaps that were left open above.
+//! [`pokemon::PpBonuses`] is upstream's packed `ppBonuses` byte —
+//! [`pokemon::BattlePokemon`] carries it, [`pokemon::calculate_pp_with_bonus`]
+//! is `CalculatePPWithBonus`, and a slot's capacity (what a heal restores to,
+//! what PP counts down from) is now the PP-Up-adjusted maximum rather than the
+//! move's base PP. And the four-known-moves case is no longer a silent
+//! decline: [`pokemon::BattlePokemon::apply_experience`] parks a
+//! [`pokemon::PendingMoveLearn`] on the mon itself, which must be answered
+//! with a [`pokemon::MoveLearnDecision`] — the mon owns the open question,
+//! so a stale copy cannot be replayed and one mon's prompt cannot be
+//! answered on another. [`battle::Battle`] surfaces it as
+//! [`battle::Battle::pending_move_learn`] /
+//! [`battle::Battle::resolve_move_learn`] and enforces it by refusing a
+//! turn while the question is open. The pause is faithful to upstream's
+//! one-level-at-a-time award loop: the mon holds *at* the prompted level
+//! (the award's remainder unconsumed on the token), and everything after
+//! the knockout — a trainer's forced send-out, the money payout, the
+//! battle's end — waits for the last answer, as upstream finishes the
+//! level-up script before `HandleFaintedMonActions`' aftermath. Answering
+//! resumes the same walk, so declining still continues to the next learnset
+//! entry; replacing a slot clears that slot's PP Ups, exactly as
+//! `RemoveMonPPBonus` + `SetMonMoveSlot` do — unless the slot holds an HM
+//! move, which is refused the way `IsHMMove2` refuses it
+//! ([`error::BattleError::HmMoveCantBeForgotten`]). What this crate still
+//! does not own is the *asking* — there is no message layer or summary
+//! screen here, and there is deliberately no default answer baked in.
+//!
 //! Out of scope for this slice (see each module's own docs for exactly what
 //! is/isn't modelled): the *general* trainer AI beyond the four scripts
 //! above and mid-battle switching AI (`I-5`) — which is now the *first*
@@ -206,8 +233,9 @@ pub use hit::{accuracy_roll, damage_core, ensure_resolvable, is_ordinary_hit_eff
 pub use multi_hit::{is_multi_hit_effect, roll_hit_count, MAX_HITS, MIN_HITS};
 pub use nature::{Nature, Stat};
 pub use pokemon::{
-    BattlePokemon, Ivs, MoveSlot, StatStages, Stats, MAX_IV, MAX_LEVEL, MAX_MON_MOVES, MIN_LEVEL,
-    MOVE_NONE, SPECIES_NONE,
+    calculate_pp_with_bonus, BattlePokemon, Ivs, LearnedMove, MoveLearnDecision,
+    MoveLearnResolution, MoveSlot, PendingMoveLearn, PpBonuses, StatStages, Stats, MAX_IV,
+    MAX_LEVEL, MAX_MON_MOVES, MAX_PP_UPS, MIN_LEVEL, MOVE_NONE, SPECIES_NONE,
 };
 pub use secondary::{is_secondary_effect, spend_effect_chance_draw, Trampoline};
 pub use stat_change::{
