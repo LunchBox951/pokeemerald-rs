@@ -16,14 +16,32 @@
 //! its order-shuffled, XOR-encrypted substructures. Neither crate can see
 //! the other, so the translation lives here, in the one crate that depends
 //! on both `(oop-boundaries)`. This module *is* the port of that `memcpy`
-//! -- see [`to_save_pokemon`] / [`from_save_pokemon`].
+//! -- see [`merge_into_save_pokemon`] / [`to_save_pokemon`] /
+//! [`from_save_pokemon`].
 //!
 //! # What survives the round trip, and what does not
 //!
-//! Round-trips exactly: species, level, **accumulated experience**,
-//! personality (and so nature), the six IVs, the ability slot, the moveset
-//! with each slot's remaining PP, the packed `ppBonuses` byte (issue #304),
-//! current HP, and the original-trainer id.
+//! Which fields survive depends on *which* encoder runs, and that is the
+//! whole point of the pair (issue #344).
+//!
+//! [`to_save_pokemon`] has nothing but a battler to write from, so a field
+//! with no home in [`battle::BattlePokemon`] can only be written as
+//! `CreateMon`'s own default. That is honest for a mon this port has just
+//! created and destructive for one it has just *loaded*: saving would hand
+//! the file back a mon stripped of everything the battle model does not
+//! model. [`merge_into_save_pokemon`] is the loaded case -- it starts from
+//! the record the save was read out of and overlays only the fields the
+//! battler is authoritative for, so an unmodelled field is carried by the
+//! bytes rather than by the model. The overworld save path uses the merge;
+//! the from-scratch encoder is what a mon with no backing record gets.
+//!
+//! Battle-authoritative, and so written by both encoders: species, level,
+//! **accumulated experience**, personality (and so nature), the six IVs,
+//! the ability slot, the moveset with each slot's remaining PP, the packed
+//! `ppBonuses` byte (issue #304), current HP, and the original-trainer id.
+//! Each is either identity the model carries verbatim or state that
+//! battling and levelling up mutate, which makes the live model the only
+//! copy that can be right.
 //!
 //! `ppBonuses` is the one of those that is *byte*-exact rather than merely
 //! value-exact, and deliberately so: it is written back exactly as it was
@@ -35,22 +53,38 @@
 //! [`battle::PpBonuses`] for the packing and
 //! [`battle::BattlePokemon::max_pp`] for what it buys each slot.
 //!
-//! Deliberately *not* modelled, written as upstream's own default and
-//! discarded on the way back:
+//! Deliberately *not* modelled by `battle`, and so **retained from the
+//! backing record** by [`merge_into_save_pokemon`]. Only
+//! [`to_save_pokemon`], which has no record to retain them from, writes
+//! upstream's own default; [`from_save_pokemon`] reads none of them back:
 //!
-//! * **Effort values** -- every mon `battle` builds has `0` EVs (that
-//!   crate's own module docs), so `PokemonSubstruct2` is written all-zero
-//!   rather than inventing values, and [`from_save_pokemon`] does not read
-//!   it. A saved mon with real EVs would come back with the stats a 0-EV
-//!   mon has.
-//! * **Held item, contest condition, pokérus, met
+//! * **Effort values and contest condition** -- every mon `battle` builds
+//!   has `0` EVs (that crate's own module docs), so `PokemonSubstruct2` is
+//!   passed through whole rather than re-derived. A saved mon with real EVs
+//!   still *battles* as a 0-EV mon, because the decode cannot rebuild what
+//!   the model has no field for, but the bytes stay on disk for the model
+//!   that eventually will.
+//! * **Held item, accumulated friendship, pokérus, met
 //!   location/level/game, poké ball, OT gender, ribbons, markings,
-//!   nickname, OT name, language, and non-volatile status** -- none has a
-//!   typed home in `battle::BattlePokemon`. Each is written as
-//!   `CreateMon`'s zero/`MAIL_NONE` default so the bytes are *valid*, not
-//!   as an invented value.
-//! * **The egg bit** -- `isEgg` (`PokemonSubstruct3`'s bit 30) stays clear:
-//!   this port models no eggs.
+//!   nickname, OT name, language, mail, and non-volatile status** -- none
+//!   has a typed home in `battle::BattlePokemon`, so each is exactly the
+//!   byte the save already held.
+//! * **The egg bit** -- `isEgg` (`PokemonSubstruct3`'s bit 30) shares its
+//!   word with the IVs the model *does* carry, so the merge rewrites the
+//!   word around it rather than through it. This port models no eggs and
+//!   so must not clear somebody else's flag on the way past.
+//!
+//! Retention has one visible edge, named here rather than left to be
+//! found. `HealPlayerParty` clears `MON_DATA_STATUS` along with the HP and
+//! PP it restores (`pokeemerald/src/script_pokemon_util.c:53-57`), and this
+//! port's own heals ([`battle::BattlePokemon::heal`], reached from the
+//! white-out and from the first battle's conclusion) restore both of those
+//! but have no status field to clear. A save whose lead carries a status
+//! byte therefore keeps it across a white-out, until `battle` models
+//! status and the merge can overlay it like any other battle-owned field.
+//! That is the modelling gap showing through, not the merge inventing
+//! anything: before it, a save cleared the byte whether the mon had been
+//! healed or not.
 //!
 //! One more field *does* round-trip, added alongside
 //! [`battle::BattlePokemon::ability`] (issue #322): **the ability slot** --
@@ -62,11 +96,15 @@
 //! upstream state -- nothing re-derives `abilityNum` from personality after
 //! `CreateBoxMon`) keeps the ability it actually has.
 //!
-//! One field is *derived* rather than carried, so the saved bytes stay
-//! self-consistent with what upstream would have written:
+//! One field is *derived* rather than carried when there is no record to
+//! read it from, so a from-scratch mon's bytes stay self-consistent with
+//! what upstream would have written:
 //!
 //! * **Friendship** -- the species' `base_friendship`, as `CreateBoxMon`
-//!   sets it (`pokeemerald/src/pokemon.c:2270`).
+//!   sets it (`pokeemerald/src/pokemon.c:2256`). Re-deriving it is right
+//!   for a mon being created and wrong for one being re-saved, whose
+//!   friendship is everything walking, levelling and fainting have done to
+//!   it since; [`merge_into_save_pokemon`] keeps the stored byte.
 //!
 //! Experience used to be on that list, derived from the growth curve at
 //! the mon's level. Since battles apply earned experience to the battler
@@ -76,12 +114,46 @@
 //! restores it -- see [`from_save_pokemon`] for how inconsistent bytes are
 //! reconciled.
 //!
-//! The stat block (`hp`/`max_hp`/`attack`/.../`special_defense`) is written
-//! from [`battle::BattlePokemon::stats`], i.e. `CalculateMonStats`' output,
-//! and *recomputed* on decode by [`battle::BattlePokemon::new`] rather than
-//! trusted -- upstream recomputes it too, on every `CalculateMonStats` call
-//! site. Only `hp` is read back, because current HP is the one stat that is
-//! state rather than a function of species/level/IVs.
+//! The stat block (`max_hp`/`attack`/.../`special_defense`) is the one
+//! group of fields that is neither purely battle-authoritative nor purely
+//! retained, so the merge decides per save. Upstream stores it as a
+//! *cache*: `CalculateMonStats` (`pokeemerald/src/pokemon.c:2823`)
+//! recomputes it from species, level, IVs **and EVs** at each of its call
+//! sites -- a level-up, an evolution, a vitamin, a Box withdrawal -- and
+//! every reader in between, battle included, takes the stored numbers as
+//! they are. Nothing on the load path recomputes them: `LoadPlayerParty`
+//! copies the bytes and calls nothing (`src/load_save.c:170-178`).
+//!
+//! [`from_save_pokemon`] cannot honour that cache, because
+//! [`battle::BattlePokemon::new`] rebuilds the block from the `0` EVs this
+//! port models, so a loaded EV-trained mon *battles* as a 0-EV one until
+//! `battle` carries EVs. Only `hp` is read back out of the record, because
+//! current HP is the one entry that is state rather than a function of the
+//! rest.
+//!
+//! [`merge_into_save_pokemon`] must therefore not write that rebuilt block
+//! back unconditionally: an EV-trained file merely loaded and re-saved
+//! would be filed weaker until something upstream next runs
+//! `CalculateMonStats` over it. So the six bytes are **retained** when the
+//! stored record's species and level are still the battler's -- the block
+//! is a function of species/level/IVs/EVs/nature, so sub-level experience
+//! earned this session does not invalidate it (the experience word itself
+//! is always overlaid). They are **overwritten** from
+//! [`battle::BattlePokemon::stats`] exactly when species or level moved: a
+//! mon that levelled up this session must not be filed with its old
+//! numbers under its new level, which is a record upstream could never
+//! write. The overwritten block is the 0-EV one, which is a derived field
+//! going stale rather than state being lost -- upstream rebuilds it from
+//! the retained EVs at its own next `CalculateMonStats`.
+//!
+//! Current HP is outside that choice: it is battle state, so the merge
+//! always writes the battler's, retained block or not. It can never
+//! contradict a retained maximum, because the model's own maximum is the
+//! 0-EV one and EVs only ever add to it. The converse gap is real and
+//! accepted: a heal fills the model to its 0-EV maximum, so a healed
+//! EV-trained lead is filed with `hp` below the retained `max_hp` -- a
+//! reload clamps back to the model's full, so nothing drifts, and the gap
+//! closes when `battle` carries EVs.
 
 use battle::{BattlePokemon, Dex, Ivs, MAX_MON_MOVES};
 use engine::save::{BoxPokemon, Pokemon, PokemonSubstructures, SUBSTRUCTURE_LEN};
@@ -90,6 +162,19 @@ use engine::save::{BoxPokemon, Pokemon, PokemonSubstructures, SUBSTRUCTURE_LEN};
 /// block's "no mail held" sentinel, which `CreateMon` writes into every
 /// freshly built mon (`src/pokemon.c:2201-2202`).
 const MAIL_NONE: u8 = 0xFF;
+
+/// `SPECIES_NONE` (`pokeemerald/include/constants/species.h:4`): the zero
+/// species an empty party slot holds. [`merge_into_save_pokemon`] uses it
+/// to tell a stored mon from a slot that never had one.
+const SPECIES_NONE: u16 = 0;
+
+/// `isEgg`, bit 30 of `PokemonSubstruct3`'s IV word
+/// (`pokeemerald/include/pokemon.h:147`).
+///
+/// The one bit of that word this port neither models nor may disturb: the
+/// IVs below it and `abilityNum` above it are both battle-authoritative,
+/// so the merge has to rebuild the word around this bit (module docs).
+const IS_EGG_BIT: u32 = 1 << 30;
 
 /// Why a saved party member could not be decoded into a battler
 /// ([`from_save_pokemon`]).
@@ -198,11 +283,7 @@ pub(crate) fn to_save_pokemon(dex: &Dex, mon: &BattlePokemon) -> Pokemon {
     growth[8] = mon.pp_bonuses().bits();
     growth[9] = friendship;
 
-    let mut attacks = [0u8; SUBSTRUCTURE_LEN];
-    for (index, slot) in mon.moves().iter().take(MAX_MON_MOVES).enumerate() {
-        attacks[index * 2..index * 2 + 2].copy_from_slice(&slot.move_id.0.to_le_bytes());
-        attacks[8 + index] = slot.pp;
-    }
+    let attacks = encode_attacks(mon);
 
     let mut misc = [0u8; SUBSTRUCTURE_LEN];
     // `abilityNum` (`PokemonSubstruct3`'s bit 31, module docs) shares the IV
@@ -222,21 +303,198 @@ pub(crate) fn to_save_pokemon(dex: &Dex, mon: &BattlePokemon) -> Pokemon {
         misc,
     });
 
-    let stats = mon.stats();
-    Pokemon {
+    let mut record = Pokemon {
         box_data,
-        // `MON_DATA_STATUS`: no non-volatile status is modelled.
+        // `MON_DATA_STATUS`: no non-volatile status is modelled, and a mon
+        // being created has none to lose.
         status: 0,
-        level: mon.level(),
         mail: MAIL_NONE,
-        hp: clamp_u16(mon.current_hp()),
-        max_hp: clamp_u16(stats.max_hp),
-        attack: clamp_u16(stats.attack),
-        defense: clamp_u16(stats.defense),
-        speed: clamp_u16(stats.speed),
-        special_attack: clamp_u16(stats.sp_attack),
-        special_defense: clamp_u16(stats.sp_defense),
+        ..Pokemon::default()
+    };
+    overlay_battle_stats(&mut record, mon);
+    record
+}
+
+/// `PokemonSubstruct1` (`pokeemerald/include/pokemon.h:109-113`): the four
+/// move ids followed by the four remaining-PP bytes.
+///
+/// All twelve bytes are the battler's, so even
+/// [`merge_into_save_pokemon`] writes the substructure whole and leaves
+/// the slots past the moveset `MOVE_NONE` with zero PP. That is not a hole
+/// in the retention rule: upstream shifts the surviving moves down when one
+/// is replaced (`DeleteFirstMoveAndGiveMoveToMon`,
+/// `pokeemerald/src/pokemon.c:3046-3071`), so a gap with a real move behind
+/// it is a shape upstream cannot store, and [`from_save_pokemon`] stops at
+/// the first gap in any case -- there is nothing there to preserve.
+fn encode_attacks(mon: &BattlePokemon) -> [u8; SUBSTRUCTURE_LEN] {
+    let mut attacks = [0u8; SUBSTRUCTURE_LEN];
+    for (index, slot) in mon.moves().iter().take(MAX_MON_MOVES).enumerate() {
+        attacks[index * 2..index * 2 + 2].copy_from_slice(&slot.move_id.0.to_le_bytes());
+        attacks[8 + index] = slot.pp;
     }
+    attacks
+}
+
+/// The party record's unencrypted tail -- level, current HP, and the
+/// derived stat block -- from the battler.
+///
+/// [`to_save_pokemon`] always runs this: a record built from scratch has
+/// no cached block to keep, so every entry must come from the model.
+/// [`merge_into_save_pokemon`] runs it only when the session changed what
+/// the block is a function of, and writes [`overlay_current_hp`] alone
+/// otherwise -- see the module docs for why re-deriving a retained block
+/// would file an EV-trained save permanently weaker.
+fn overlay_battle_stats(record: &mut Pokemon, mon: &BattlePokemon) {
+    let stats = mon.stats();
+    record.level = mon.level();
+    record.max_hp = clamp_u16(stats.max_hp);
+    record.attack = clamp_u16(stats.attack);
+    record.defense = clamp_u16(stats.defense);
+    record.speed = clamp_u16(stats.speed);
+    record.special_attack = clamp_u16(stats.sp_attack);
+    record.special_defense = clamp_u16(stats.sp_defense);
+    overlay_current_hp(record, mon);
+}
+
+/// Current HP, which both encoders write unconditionally: it is the one
+/// entry of the record's tail that is battle *state* rather than a
+/// function of species/level/IVs/EVs, so the live battler is always the
+/// only copy that can be right (module docs).
+///
+/// Safe to write over a retained stat block: the battler's HP is at most
+/// its own maximum, and that maximum is computed from the `0` EVs this
+/// port models, so it cannot exceed the maximum a retained block holds.
+fn overlay_current_hp(record: &mut Pokemon, mon: &BattlePokemon) {
+    record.hp = clamp_u16(mon.current_hp());
+}
+
+/// `SavePlayerParty`'s per-mon half for a mon that came *out* of a save
+/// (`src/load_save.c:160-168`): `base`, the record it was decoded from,
+/// with the battler's own fields overlaid onto it (issue #344).
+///
+/// Upstream can assign the whole structure because its live mon and its
+/// stored mon are the same 100-byte type. This port's live mon is a
+/// [`battle::BattlePokemon`], a deliberate subset of that type, so copying
+/// "the whole thing" here means copying the part the battler owns onto the
+/// part it does not -- held item, EVs, contest condition, friendship,
+/// status, mail, met data, ribbons and header metadata all stay as the save
+/// wrote them. Building the record from scratch instead is what erased
+/// them (issue #344): every field with no model to come from came back a
+/// zero.
+///
+/// The cached stat block is the one group that is retained *conditionally*
+/// -- kept when species, experience and level are unchanged, recomputed
+/// when the session moved one of them. Current HP is always the battler's.
+/// The module docs give the reasoning; [`overlay_battle_stats`] and
+/// [`overlay_current_hp`] are the two writes.
+///
+/// Falls back to [`to_save_pokemon`] when `base` is not this battler's own
+/// record -- see [`backing_substructures`] for what disqualifies it. The
+/// substructures go back through
+/// [`engine::save::BoxPokemon::set_substructures`], which re-shuffles them
+/// into personality order, re-encrypts them, and rewrites the checksum, so
+/// the merged record is as valid as the one it was read from.
+pub(crate) fn merge_into_save_pokemon(dex: &Dex, mon: &BattlePokemon, base: &Pokemon) -> Pokemon {
+    let mut substructures = match backing_substructures(mon, base) {
+        Ok(substructures) => substructures,
+        Err(reason) => {
+            eprintln!(
+                "save: party slot 0 {reason} -- writing a record built from the battler \
+                 alone, so every field the battle model does not carry takes CreateMon's \
+                 own default"
+            );
+            return to_save_pokemon(dex, mon);
+        }
+    };
+
+    // Whether the cached stat block is still the battler's own, decided
+    // *before* the growth substructure below is overwritten with the
+    // model's species (module docs). Species and level are the block's
+    // only inputs the session can move -- IVs, EVs and nature all ride the
+    // record -- so sub-level experience does not enter the test. Level is
+    // checked against the record's own byte rather than inferred:
+    // [`from_save_pokemon`] reconciles a stored level that its experience
+    // contradicts, and the reconciled mon needs the block that matches the
+    // level actually being written.
+    let stored_species = u16::from_le_bytes([substructures.growth[0], substructures.growth[1]]);
+    let stat_block_is_still_the_battlers =
+        stored_species == mon.species().0 && base.level == mon.level();
+
+    // `PokemonSubstruct0`: species, experience and `ppBonuses` are the
+    // battler's; `heldItem` (`/*0x02*/`), `friendship` (`/*0x09*/`) and the
+    // trailing filler are the save's.
+    substructures.growth[0..2].copy_from_slice(&mon.species().0.to_le_bytes());
+    substructures.growth[4..8].copy_from_slice(&mon.experience().to_le_bytes());
+    substructures.growth[8] = mon.pp_bonuses().bits();
+
+    substructures.attacks = encode_attacks(mon);
+
+    // `PokemonSubstruct2` -- EVs and contest condition -- is untouched: the
+    // battle model has no field that could contradict it.
+
+    // `PokemonSubstruct3`: only the IV word is rewritten, and only around
+    // `isEgg`. `pokerus`, the met data, the ball, `otGender` and every
+    // ribbon are the save's.
+    let iv_word = u32::from_le_bytes([
+        substructures.misc[4],
+        substructures.misc[5],
+        substructures.misc[6],
+        substructures.misc[7],
+    ]);
+    let merged_ivs =
+        pack_ivs(mon.ivs()) | (iv_word & IS_EGG_BIT) | (u32::from(mon.ability_slot()) << 31);
+    substructures.misc[4..8].copy_from_slice(&merged_ivs.to_le_bytes());
+
+    // The box header comes along whole -- nickname, language, OT name,
+    // markings and the `hasSpecies`/`isBadEgg` bits are all bytes this port
+    // does not model and so cannot re-derive.
+    let mut merged = *base;
+    merged.box_data.set_substructures(&substructures);
+    if stat_block_is_still_the_battlers {
+        // The save's own six stat bytes stay exactly as they were --
+        // including the EV contribution this port cannot rebuild. Only
+        // current HP, which is state, comes from the battler.
+        overlay_current_hp(&mut merged, mon);
+    } else {
+        // Species, experience or level moved this session, so the cached
+        // block is a function of inputs that no longer hold and upstream
+        // would have recomputed it (`CalculateMonStats`).
+        overlay_battle_stats(&mut merged, mon);
+    }
+    merged
+}
+
+/// The decrypted substructures of a `base` that really is this battler's
+/// own stored record, or the reason there is nothing
+/// [`merge_into_save_pokemon`] may overlay onto -- phrased to complete
+/// that function's log line, since a save that silently stops retaining is
+/// exactly the failure issue #344 is about.
+///
+/// Personality and the original-trainer id are both the mon's identity and
+/// its substructure XOR key, so a disagreement means the slot holds a
+/// *different* Pokémon: overlaying would graft this battler's moveset onto
+/// that one's ribbons and met data, which is worse than the zeroing this
+/// merge exists to fix. A `SPECIES_NONE` slot never held a mon and so has
+/// no bytes worth keeping, and a checksum failure means the retained bytes
+/// cannot be read at all. Each case wants a record built from scratch.
+fn backing_substructures(
+    mon: &BattlePokemon,
+    base: &Pokemon,
+) -> Result<PokemonSubstructures, &'static str> {
+    if base.box_data.personality() != mon.personality()
+        || base.box_data.ot_id() != mon.original_trainer_id()
+    {
+        return Err("holds a different Pokémon (personality or OT id)");
+    }
+    let substructures = base
+        .box_data
+        .substructures()
+        .map_err(|_| "failed its own checksum")?;
+    let species = u16::from_le_bytes([substructures.growth[0], substructures.growth[1]]);
+    if species == SPECIES_NONE {
+        return Err("is empty");
+    }
+    Ok(substructures)
 }
 
 /// `LoadPlayerParty`'s per-mon half (`src/load_save.c:170-178`): the battler

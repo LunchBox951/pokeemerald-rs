@@ -28,9 +28,16 @@
 //!      reproduces exactly this: `self.save1.money /= 2`.
 //!    - `HealPlayerParty()` (`src/script_pokemon_util.c:30-59`) -- full HP,
 //!      full PP, cleared status for every party member.
-//!      [`battle::BattlePokemon::heal`] is the per-mon effect; this port
-//!      models one party slot ([`OverworldPhase::party_lead`]), so healing
-//!      it is the whole of this port's `HealPlayerParty`.
+//!      [`battle::BattlePokemon::heal`] is the per-mon effect, and this
+//!      port models one party slot ([`OverworldPhase::party_lead`]), so
+//!      healing that slot is the HP and PP two-thirds of it. The status
+//!      clear (`:52-57`) has no counterpart: `battle` models no
+//!      non-volatile status, and since issue #344 the save's own status
+//!      byte is *retained* through a re-save rather than zeroed, so a save
+//!      whose lead carries one keeps it across a white-out. That gap
+//!      belongs to the missing model, not to this transition -- see
+//!      [`crate::party`]'s module docs, which name the same divergence
+//!      from the encoder's side.
 //!    - `Overworld_ResetStateAfterWhiteOut` (`:399-...`, private upstream)
 //!      -- clears field-effect/avatar transition state this port has no
 //!      counterpart for (cycling road, Safari Zone, etc. flags this port
