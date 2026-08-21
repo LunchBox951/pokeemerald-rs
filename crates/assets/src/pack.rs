@@ -5,9 +5,13 @@
 //! local, gitignored `pokeemerald/` checkout and writes a deterministic,
 //! versioned pack file — tileset tile graphics, palettes, and player/NPC
 //! sprite sheets, keyed by normalized asset ids (see that module's docs for
-//! the exact format and id scheme; this module is its read side and
-//! intentionally mirrors it rather than sharing code, so the two crates
-//! stay decoupled — `xtask` never depends on `assets`, and vice versa).
+//! the id scheme). This module is its read side.
+//!
+//! The container format belongs to [`pack_format`]: the layout, its
+//! constants, the writer `xtask::extract` drives, and the directory parser
+//! this module calls. Both sides used to spell that layout out separately so
+//! `xtask` and `assets` stayed decoupled; a shared, dependency-free format
+//! crate keeps them decoupled and leaves one file to change.
 //!
 //! The pack itself is **never committed, never a CI artifact, never
 //! embedded in a binary** (owner decision, Discussion #71). It exists only
@@ -37,7 +41,9 @@
 //! decoding handle: `crate::map_layouts`'s `LayoutGrid`/`BorderGrid` own the
 //! decode, this crate's pack loader stays decoupled from it (same rationale
 //! as `xtask::extract`/`crates::assets::pack` staying decoupled from each
-//! other — see this module's docs). [`AssetPack::font`] reaches a Latin
+//! other; see this module's docs). [`AssetPack::entries`] walks the raw
+//! directory for callers that need the pack's contents rather than one
+//! asset. [`AssetPack::font`] reaches a Latin
 //! font's glyph sheet (S-4, issue #114) as a
 //! [`FontImageRef`] bound to its [`FontId`], with
 //! [`crate::fonts::FontGlyphSheet`] owning the per-glyph decode.
@@ -59,20 +65,15 @@
 //! by its full id (used directly for e.g. `title/image/*` entries, which
 //! have no bundling handle of their own).
 //!
-//! # Format (mirrors `xtask::extract::pack`'s write side — version 1)
+//! # Format
 //!
-//! ```text
-//! Header:   magic: [u8; 8] = b"PKMRPACK", format_version: u32, entry_count: u32
-//! Directory (entry_count entries, sorted ascending by id):
-//!   id_len: u16, id: [u8; id_len], kind: u8, offset: u64, length: u64,
-//!   + kind-specific fixed metadata (Image: width/height/bit_depth;
-//!     Palette: color_count; Raw: none)
-//! Payload region: every entry's payload bytes, concatenated in directory order.
-//! ```
+//! [`pack_format`]'s crate docs are the spec: the header/directory layout,
+//! the per-kind metadata, the id scheme, and the writer's determinism
+//! rules. This module used to restate it. It no longer does.
 //!
 //! # Module layout
 //!
-//! [`error`] (`PackError`), [`format`] (the binary layout + parser), and
+//! [`error`] (`PackError`), [`format`] (the [`pack_format`] seam), and
 //! [`handles`] (the borrowed typed views) are split out one-concept-per-file
 //! `(oop-boundaries)`; this file is just [`AssetPack`] itself — loading and
 //! the typed accessor methods.
@@ -87,15 +88,10 @@ use crate::audio::{Sample, SampleId, Song, VoiceGroup, VoiceGroupId};
 use crate::fonts::{FontId, FontImageRef};
 
 pub use error::PackError;
-pub use format::{EntryKind, FORMAT_VERSION, MAGIC};
+pub use format::{DirectoryEntry, EntryKind, FORMAT_VERSION, MAGIC};
 pub use handles::{ImageRef, PaletteRef, TilesetHandle, WindowFrameHandle};
 
-use format::Entry;
-
-/// The pack's location, relative to the repository root — must match
-/// `xtask::extract::OUTPUT_RELATIVE_PATH` exactly (duplicated rather than
-/// shared, per this module's docs on why the two crates stay decoupled).
-const OUTPUT_RELATIVE_PATH: &str = "assets-pack/pokeemerald.pack";
+use format::{kind_label, OUTPUT_RELATIVE_PATH};
 
 /// Every selectable text-window border frame is a 3x3 grid of 8x8 tiles —
 /// a 24x24 source sheet (upstream `sWindowFrames`,
@@ -121,7 +117,7 @@ const MESSAGE_BOX_HEIGHT: u32 = 16;
 #[derive(Debug)]
 pub struct AssetPack {
     bytes: Vec<u8>,
-    entries: Vec<Entry>,
+    entries: Vec<DirectoryEntry>,
 }
 
 impl AssetPack {
@@ -164,7 +160,7 @@ impl AssetPack {
     /// for any other I/O failure; [`PackError::BadMagic`],
     /// [`PackError::UnsupportedVersion`], [`PackError::Truncated`],
     /// or [`PackError::BadEntryKind`] if the file exists but is not a
-    /// well-formed version-1 pack.
+    /// well-formed pack at [`FORMAT_VERSION`].
     pub fn load(path: &Path) -> Result<Self, PackError> {
         let bytes = std::fs::read(path).map_err(|e| {
             if e.kind() == std::io::ErrorKind::NotFound {
@@ -173,7 +169,7 @@ impl AssetPack {
                 PackError::ReadFailed(path.to_path_buf(), e.to_string())
             }
         })?;
-        let entries = format::parse_directory(&bytes)?;
+        let entries = pack_format::parse_directory(&bytes)?;
         Ok(Self { bytes, entries })
     }
 
@@ -189,16 +185,27 @@ impl AssetPack {
         &self.bytes
     }
 
+    /// Walk the directory: every entry's id, kind metadata, and the
+    /// `offset`/`length` its payload occupies in [`bytes`](Self::bytes), in
+    /// the id-sorted order the format guarantees.
+    ///
+    /// The typed accessors reach one known asset. This is for callers that
+    /// need to know what a pack *contains*: comparing two packs entry by
+    /// entry, or auditing coverage, with no lookup id to start from.
+    pub fn entries(&self) -> impl Iterator<Item = &DirectoryEntry> {
+        self.entries.iter()
+    }
+
     /// Binary-search the (id-sorted, per the format's determinism
     /// guarantee) directory for `id`.
-    fn find(&self, id: &str) -> Result<&Entry, PackError> {
+    fn find(&self, id: &str) -> Result<&DirectoryEntry, PackError> {
         self.entries
             .binary_search_by(|e| e.id.as_str().cmp(id))
             .map(|i| &self.entries[i])
             .map_err(|_| PackError::UnknownAsset(id.to_owned()))
     }
 
-    fn payload(&self, entry: &Entry) -> &[u8] {
+    fn payload(&self, entry: &DirectoryEntry) -> &[u8] {
         &self.bytes[entry.offset..entry.offset + entry.length]
     }
 
@@ -586,7 +593,7 @@ fn wrong_kind(id: &str, expected: &'static str, actual: EntryKind) -> PackError 
     PackError::WrongKind {
         id: id.to_owned(),
         expected,
-        actual: actual.label(),
+        actual: kind_label(actual),
     }
 }
 

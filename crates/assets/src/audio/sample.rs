@@ -32,7 +32,7 @@ const KIND_DIRECT_SOUND: u8 = 0;
 const KIND_PROGRAMMABLE_WAVE: u8 = 1;
 
 /// Cap on how many samples [`Sample::decode`] pre-reserves from the
-/// untrusted `sample_count` field, mirroring `crate::pack::format`'s
+/// untrusted `sample_count` field, mirroring `pack_format`'s reader's
 /// `MAX_PREALLOC_ENTRIES` (same rationale: a corrupt count near `u32::MAX`
 /// must not speculatively allocate gigabytes before the first short read
 /// fails the decode). The `Vec` still grows to whatever the input actually

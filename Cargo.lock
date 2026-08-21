@@ -99,6 +99,9 @@ checksum = "175571dd1d178ced59193a6fc02dde1b972eb0bc56c892cde9beeceac5bf0f6b"
 [[package]]
 name = "assets"
 version = "0.0.26+gamepatch.2"
+dependencies = [
+ "pack-format",
+]
 
 [[package]]
 name = "atomic-waker"

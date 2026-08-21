@@ -5,7 +5,7 @@
 //! `pokeemerald/` checkout and no real pack). The one exception,
 //! [`real_pack_loads_and_every_typed_accessor_works`], is `#[ignore]`d.
 
-use super::{AssetPack, PackError, MAGIC};
+use super::{AssetPack, PackError, FORMAT_VERSION, MAGIC};
 use crate::audio::{
     DirectSoundMode, DirectSoundSample, DirectSoundVoice, Envelope, ProgrammableWave, Sample,
     SampleId, Song, SongEvent, VoiceEntry, VoiceGroup, VoiceGroupId,
@@ -338,7 +338,7 @@ fn synthetic_pack() -> Vec<u8> {
         },
     ];
     // Directory entries must be written in id-sorted order, exactly like
-    // the real writer (`extract::pack::PackWriter::finish`) -- sort here
+    // the real writer (`pack_format::PackWriter::finish`) -- sort here
     // rather than trusting the literal array order above, so
     // reordering/adding fixture entries later can't quietly reintroduce an
     // unsorted directory the reader's binary search then misses.
@@ -358,7 +358,7 @@ fn synthetic_pack() -> Vec<u8> {
 
     let mut out = Vec::new();
     out.extend_from_slice(&MAGIC);
-    out.extend_from_slice(&super::format::FORMAT_VERSION.to_le_bytes()); // format_version
+    out.extend_from_slice(&FORMAT_VERSION.to_le_bytes()); // format_version
     out.extend_from_slice(&u32::try_from(entries.len()).unwrap().to_le_bytes());
     for (e, &off) in entries.iter().zip(&offsets) {
         out.extend_from_slice(&u16::try_from(e.id.len()).unwrap().to_le_bytes());
@@ -403,6 +403,35 @@ fn loads_and_reads_every_entry_kind() {
 
     let raw = pack.raw("tileset/test/metatiles").unwrap();
     assert_eq!(raw, &[9, 9, 9]);
+
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn entries_walks_the_whole_directory_in_sorted_order() {
+    let path = write_synthetic_pack("entries");
+    let pack = AssetPack::load(&path).unwrap();
+
+    let ids: Vec<&str> = pack.entries().map(|e| e.id.as_str()).collect();
+    assert!(ids.contains(&"tileset/test/tiles"));
+    assert!(ids.contains(&"tileset/test/palette/00"));
+    assert!(ids.contains(&"tileset/test/metatiles"));
+    let mut sorted = ids.clone();
+    sorted.sort_unstable();
+    assert_eq!(ids, sorted);
+
+    // Every entry's offset/length addresses the same payload the typed
+    // accessors hand out, so a caller can compare two packs entry by entry
+    // without going through a lookup id.
+    let entry = pack
+        .entries()
+        .find(|e| e.id == "tileset/test/metatiles")
+        .unwrap();
+    assert_eq!(entry.kind, super::EntryKind::Raw);
+    assert_eq!(
+        &pack.bytes()[entry.offset..entry.offset + entry.length],
+        pack.raw("tileset/test/metatiles").unwrap()
+    );
 
     let _ = std::fs::remove_file(path);
 }
@@ -947,9 +976,10 @@ fn sample_accessor_reports_a_malformed_payload() {
 }
 
 /// Loads the *real* local pack (`cargo xtask extract`'s output) and
-/// exercises every typed accessor against it -- proof the writer
-/// (`xtask::extract::pack`) and this reader agree byte-for-byte on the
-/// format, not just on the synthetic fixtures above. Needs a local pack:
+/// exercises every typed accessor against it -- proof the extraction
+/// pipeline (`xtask::extract`, writing through `pack_format::PackWriter`)
+/// and this reader agree byte-for-byte on the format, not just on the
+/// synthetic fixtures above. Needs a local pack:
 /// run `cargo xtask extract` first, then `cargo test -p assets -- --ignored`.
 // Long because it's one end-to-end smoke test exercising every typed
 // accessor this module offers (tileset/sprite/title/layout/font/text-window)

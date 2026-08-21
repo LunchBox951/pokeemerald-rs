@@ -404,7 +404,7 @@ pub const MAX_TRACKS: usize = u8::MAX as usize;
 
 /// Cap on how many events [`Song::decode`] pre-reserves per track from the
 /// untrusted per-track event count, mirroring
-/// [`super::sample`]'s `MAX_PREALLOC_SAMPLES` and `crate::pack::format`'s
+/// [`super::sample`]'s `MAX_PREALLOC_SAMPLES` and `pack_format`'s reader's
 /// `MAX_PREALLOC_ENTRIES` (same rationale: a corrupt count near `u32::MAX`
 /// must not speculatively allocate gigabytes before the first short read
 /// fails the decode). The `Vec` still grows to whatever the input holds.

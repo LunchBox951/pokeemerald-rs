@@ -1,6 +1,6 @@
 //! The asset-pack container format (S-4, F-3, issue #81 / Discussion #71
-//! policy A): the writer-side owner of the layout `cargo xtask extract`
-//! writes. `crates/assets` still mirrors the reader side; its migration is next.
+//! policy A): the one owner of the layout `cargo xtask extract` writes and
+//! `crates/assets` reads.
 //!
 //! # Format (version 6, wire layout unchanged since 1)
 //!
@@ -71,18 +71,27 @@
 //! # Status
 //!
 //! This crate holds the format constants ([`MAGIC`], [`FORMAT_VERSION`],
-//! [`OUTPUT_RELATIVE_PATH`], [`EntryKind`]) and the write side
-//! ([`PackEntry`], [`PackWriter`], [`PackWriteError`]). `xtask::extract` is
-//! its only consumer so far.
+//! [`OUTPUT_RELATIVE_PATH`], [`EntryKind`]), the write side ([`PackEntry`],
+//! [`PackWriter`], [`PackWriteError`]), and the read side
+//! ([`parse_directory`], [`DirectoryEntry`], [`PackReadError`]).
+//! `xtask::extract` writes through it; `crates/assets`'s `AssetPack` reads
+//! through it.
 //!
-//! Next: `crates/assets`'s reader moves here too, so the two sides stop
-//! mirroring one layout in two places. After that, entry constructors
-//! (typed helpers replacing hand-built [`PackEntry`] literals at every call
-//! site) and the default pack path (`AssetPack::default_path`'s repo-root
-//! join, currently derived independently on each side).
+//! Both sides used to spell the layout out separately, so that the two
+//! crates stayed decoupled from each other. That held while there were two
+//! of them. The ROM importer is a third writer, and one owner is now cheaper
+//! than keeping three copies in step: a format bump touches one file, and
+//! `xtask` and `assets` still never depend on each other.
+//!
+//! Next: entry constructors (typed helpers replacing hand-built
+//! [`PackEntry`] literals at every call site) and the default pack path
+//! (the constant is shared now; `AssetPack::default_path` and xtask's
+//! `repo_root()` still locate the repo root independently).
 
 mod layout;
+mod reader;
 mod writer;
 
 pub use layout::{EntryKind, FORMAT_VERSION, MAGIC, OUTPUT_RELATIVE_PATH};
+pub use reader::{parse_directory, DirectoryEntry, PackReadError};
 pub use writer::{PackEntry, PackWriteError, PackWriter};
