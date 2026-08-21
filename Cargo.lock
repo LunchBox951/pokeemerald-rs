@@ -1337,6 +1337,13 @@ name = "rendering"
 version = "0.0.26+gamepatch.2"
 
 [[package]]
+name = "rom-import"
+version = "0.0.26+gamepatch.2"
+dependencies = [
+ "pack-format",
+]
+
+[[package]]
 name = "rustc_version"
 version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
