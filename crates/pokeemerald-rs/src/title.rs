@@ -311,8 +311,8 @@ const COPYRIGHT_Y: u8 = 148;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TitleSceneError {
     /// Loading or reading the asset pack failed -- most commonly
-    /// [`PackError::NotFound`], the "run `./init.sh` then `cargo xtask
-    /// extract`" diagnostic (see [`TitleSceneError::is_pack_missing`]).
+    /// [`PackError::NotFound`], the "import your ROM, or extract from a
+    /// checkout" diagnostic (see [`TitleSceneError::is_pack_missing`]).
     Pack(PackError),
     /// A pack entry's bytes did not fit the `rendering` type built from it
     /// (wrong tilemap entry count, tile data not a multiple of the tile
@@ -417,9 +417,8 @@ impl From<RenderError> for TitleSceneError {
 impl TitleSceneError {
     /// Whether this is specifically the "no pack on disk" diagnostic
     /// ([`PackError::NotFound`]) -- lets callers (namely [`load_default`],
-    /// and `xtask`'s smoke e2e check) tell "run `./init.sh`/`cargo xtask
-    /// extract` first" apart from a genuine bug, without needing to name
-    /// [`PackError`] themselves.
+    /// and `xtask`'s smoke e2e check) tell "build a pack first" apart from
+    /// a genuine bug, without needing to name [`PackError`] themselves.
     #[must_use]
     pub const fn is_pack_missing(&self) -> bool {
         matches!(self, Self::Pack(PackError::NotFound(_)))
@@ -623,9 +622,9 @@ impl TitleScene {
 /// # Errors
 ///
 /// [`TitleSceneError::Pack`] with [`TitleSceneError::is_pack_missing`] true
-/// if no pack has been extracted yet (`./init.sh` then `cargo xtask
-/// extract`); see [`TitleScene::from_pack`] for the other (real-pack-only)
-/// error cases.
+/// if there is no pack yet (`pokeemerald-rs --import-rom <rom>`, or
+/// `./init.sh` then `cargo xtask extract` in a checkout); see
+/// [`TitleScene::from_pack`] for the other (real-pack-only) error cases.
 pub fn load_default() -> Result<TitleScene, TitleSceneError> {
     let pack = AssetPack::load_default()?;
     TitleScene::from_pack(&pack)

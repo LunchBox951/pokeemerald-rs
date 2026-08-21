@@ -1235,6 +1235,7 @@ dependencies = [
  "pack-format",
  "platform",
  "rendering",
+ "rom-import",
 ]
 
 [[package]]

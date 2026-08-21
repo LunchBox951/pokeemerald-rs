@@ -33,8 +33,17 @@ battle = { path = "../battle" }
 # nothing new into the build.
 audio = { path = "../audio" }
 engine = { path = "../engine" }
+# `pack-format` (S-4, issue #122) resolves where `--import-rom` writes:
+# `crate::import_rom` reads `PACK_PATH_ENV`/`user_pack_path` so the importer
+# and the loader agree on one location. Workspace-local and std-only, and
+# `assets` already depends on it, so nothing new enters the build.
+pack-format = { path = "../pack-format" }
 platform = { path = "../platform" }
 rendering = { path = "../rendering" }
+# `rom-import` (S-4, Discussion #71 policy C, issue #122) is the ROM reader
+# `--import-rom` drives. Workspace-local, and it depends only on the
+# std-only `pack-format`, so the shipped binary gains no external crate.
+rom-import = { path = "../rom-import" }
 
 [dev-dependencies]
 # The same workspace-local `assets` crate with its test-only seam enabled
@@ -43,10 +52,7 @@ rendering = { path = "../rendering" }
 # asset pack. Dev-only, so production builds keep the pack-mediated pairing
 # guarantee.
 assets = { path = "../assets", features = ["test-support"] }
-# The pack format's own entry constructors, for `title`'s tile round-trip
-# test: it proves `title::pack_tile_bytes` is the exact inverse of
-# `pack_format::image_entry_from_tiles`, so the ROM importer's tile
-# unpacking and this crate's re-packing cannot drift. Workspace-local and
-# std-only, and dev-only because production code here reads rasters from the
-# pack rather than tiles.
-pack-format = { path = "../pack-format" }
+# `pack-format` is a plain dependency now (see above), so it needs no
+# dev-dependency entry: `title`'s tile round-trip test, which proves
+# `title::pack_tile_bytes` is the exact inverse of
+# `pack_format::image_entry_from_tiles`, reaches it through that.

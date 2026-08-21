@@ -144,7 +144,8 @@ fn compose_boot_frame() -> Box<Frame> {
 /// real title screen ([`crate::title::load_default`]). The latter is the
 /// I-2 "missing pack" diagnostic: [`AppError::Title`] with
 /// [`TitleSceneError::is_pack_missing`] true prints exactly what to run
-/// (`./init.sh` then `cargo xtask extract`) and lets `main` exit cleanly --
+/// (`--import-rom <rom>` for a player, `./init.sh` then `cargo xtask
+/// extract` for a developer) and lets `main` exit cleanly --
 /// no panic, no window ever opened.
 #[derive(Debug)]
 pub enum AppError {
@@ -336,10 +337,10 @@ impl App {
     ///
     /// # Errors
     ///
-    /// Returns [`AppError::Title`] if the asset pack has not been extracted
+    /// Returns [`AppError::Title`] if there is no asset pack
     /// yet (check [`TitleSceneError::is_pack_missing`] -- its rendered
-    /// message names the exact `./init.sh`/`cargo xtask extract` commands to
-    /// run) or is otherwise malformed; whatever `open_platform` fails with
+    /// message names the exact commands to run, `--import-rom <rom>` for a
+    /// player and `./init.sh`/`cargo xtask extract` for a developer) or is otherwise malformed; whatever `open_platform` fails with
     /// (for [`App::new`], [`AppError::Platform`] if the platform's windowing
     /// event loop could not be created) otherwise.
     fn boot(
@@ -368,10 +369,10 @@ impl App {
     ///
     /// # Errors
     ///
-    /// Returns [`AppError::Title`] if the asset pack has not been extracted
+    /// Returns [`AppError::Title`] if there is no asset pack
     /// yet (check [`TitleSceneError::is_pack_missing`] -- its rendered
-    /// message names the exact `./init.sh`/`cargo xtask extract` commands to
-    /// run) or is otherwise malformed; [`AppError::Platform`] if the
+    /// message names the exact commands to run, `--import-rom <rom>` for a
+    /// player and `./init.sh`/`cargo xtask extract` for a developer) or is otherwise malformed; [`AppError::Platform`] if the
     /// platform's windowing event loop could not be created.
     pub fn new(title: impl Into<String>) -> Result<Self, AppError> {
         let mut app = Self::boot(|| Platform::new(title), SaveSlot::default_location)?;

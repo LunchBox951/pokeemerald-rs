@@ -43,8 +43,14 @@
 //! species and move data. Each turns ROM bytes into [`pack_format`] entries
 //! under the ids `crates/assets` already expects.
 //!
-//! Then the CLI that drives [`import`], with progress and a clear message
-//! for the one thing users will get wrong, pointing it at the wrong ROM.
+//! The CLI that drives [`import`] already exists: `pokeemerald-rs
+//! --import-rom <path>` resolves the pack's destination, writes it
+//! atomically, and prints one line either way (`crates/pokeemerald-rs`'s
+//! `cli` and `import_rom` modules). It surfaces this crate's errors as they
+//! are, so the one thing users will get wrong, pointing it at the wrong
+//! ROM, is already [`ImportError::UnsupportedRevision`] naming the ROM the
+//! importer wants. Progress reporting is still to come, and needs domain
+//! readers to have something to report.
 //!
 //! Until domain readers land, [`import`] fails *closed* with
 //! [`ImportError::NoDomains`]. It never writes a pack. An empty pack would

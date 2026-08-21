@@ -8,9 +8,20 @@
 //! binary `(oop-boundaries)`.
 //!
 //! [`title`] decodes the real title screen from the local asset pack
-//! (`assets::pack`, populated by `cargo xtask extract`); [`App::new`] uses
+//! (`assets::pack`, populated by `pokeemerald-rs --import-rom <rom>` or, in
+//! a checkout, `cargo xtask extract`); [`App::new`] uses
 //! it, falling back to no scene at all (a clean, no-panic diagnostic) when
-//! no pack has been extracted yet -- see [`title`]'s module docs.
+//! there is no pack yet -- see [`title`]'s module docs.
+//!
+//! [`import_rom`](crate::import_rom) (S-4, Discussion #71 policy C, issue
+//! #122) is the other half of that: the binary's `--import-rom <path>` flag
+//! reads the player's own Pokemon Emerald (US) ROM through the `rom-import`
+//! crate and writes the pack where `pack_format` resolves it, atomically.
+//! `src/cli.rs` (a module of the binary, not of this crate) parses the flag.
+//! The importer has no domain readers yet, so a valid ROM still fails
+//! closed with `rom_import::ImportError::NoDomains` rather than writing an
+//! empty pack; the CLI, the destination resolution, and the atomic write
+//! are real now, and later slices only fill in what gets packed.
 //!
 //! [`overworld`] (I-3, issue #126) composes the map viewport + player OBJ
 //! presentation lane over the `engine` overworld runtime (S-5, PR #120) --
@@ -109,6 +120,7 @@ pub mod app;
 mod flow;
 pub mod frame;
 mod game_save;
+pub mod import_rom;
 pub mod intro;
 pub mod main_menu;
 pub mod music;
@@ -126,6 +138,7 @@ pub use flow::first_battle::{
     advance_first_battle, start_first_battle, FIRST_BATTLE_OPPONENT_LEVEL,
     FIRST_BATTLE_OPPONENT_SPECIES,
 };
+pub use import_rom::{import_rom, ImportOutcome, ImportRomError};
 pub use platform::Buttons as AppButtons;
 
 /// Real-pack pinning tests for extraction pipelines that don't yet have a

@@ -477,9 +477,14 @@ fn wrong_kind_is_reported() {
 fn missing_pack_file_gives_the_required_diagnostic() {
     let err = AssetPack::load(std::path::Path::new("/definitely/does/not/exist.pack")).unwrap_err();
     assert!(matches!(err, PackError::NotFound(_)));
-    let rendered = err.to_string();
-    assert!(rendered.contains("init.sh"));
-    assert!(rendered.contains("cargo xtask extract"));
+    // Pinned whole: the message serves two audiences, and dropping either
+    // half strands one of them (Discussion #71 policy A and policy C).
+    assert_eq!(
+        err.to_string(),
+        "asset pack not found at `/definitely/does/not/exist.pack`: players run \
+         `pokeemerald-rs --import-rom <path to your Pokemon Emerald (US) ROM>`; developers \
+         run `./init.sh` then `cargo xtask extract`"
+    );
 }
 
 #[test]
@@ -501,6 +506,14 @@ fn unsupported_version_is_rejected() {
     std::fs::write(&path, &bytes).unwrap();
     let err = AssetPack::load(&path).unwrap_err();
     assert_eq!(err, PackError::UnsupportedVersion(99));
+    // Same two audiences as the missing-pack diagnostic: a stale pack is
+    // rebuilt by whichever route built it in the first place.
+    assert_eq!(
+        err.to_string(),
+        "asset pack: unsupported format version `99`: the pack predates this build's \
+         format; players rebuild it with `pokeemerald-rs --import-rom <path to your \
+         Pokemon Emerald (US) ROM>`, developers with `cargo xtask extract`"
+    );
     let _ = std::fs::remove_file(path);
 }
 

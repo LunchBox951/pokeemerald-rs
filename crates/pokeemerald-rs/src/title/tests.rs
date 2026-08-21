@@ -317,7 +317,12 @@ fn load_default_reports_pack_missing_when_no_pack_is_extracted() {
     }
     let err = super::load_default().unwrap_err();
     assert!(err.is_pack_missing());
-    assert!(err.to_string().contains("init.sh"));
+    let rendered = err.to_string();
+    // Both remedies survive the wrap into `TitleSceneError`: a player needs
+    // the import flag, a developer needs the checkout commands.
+    assert!(rendered.contains("--import-rom"), "{rendered}");
+    assert!(rendered.contains("init.sh"), "{rendered}");
+    assert!(rendered.contains("cargo xtask extract"), "{rendered}");
 }
 
 /// Loads the *real* local pack (`cargo xtask extract`'s output) and
