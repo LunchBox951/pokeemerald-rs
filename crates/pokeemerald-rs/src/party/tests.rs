@@ -956,3 +956,47 @@ fn the_merge_rewrites_the_iv_word_around_the_egg_bit() {
     assert_eq!(merged_word >> 31, 1, "abilityNum is the battler's");
     assert_eq!(unpack_ivs(merged_word), lead.ivs());
 }
+
+/// Issue #344's review, second round: an EV-trained lead saved at *full*
+/// health has `hp == max_hp` above the model's 0-EV maximum, and
+/// [`from_save_pokemon`] clamps the live copy down to the model's full.
+/// The merge must translate that clamp back out rather than file the
+/// clamped number: Continue -> SAVE of a full-health mon stays a no-op
+/// instead of marking the mon damaged.
+#[test]
+fn continue_then_save_keeps_a_full_health_ev_trained_lead_at_full() {
+    let dex = Dex::new();
+    let mut stored = a_stored_record();
+    stored.hp = stored.max_hp;
+    let lead = from_save_pokemon(&dex, &stored).expect("the fixture must decode");
+    assert!(
+        u32::from(stored.hp) > lead.stats().max_hp,
+        "fixture sanity: the stored full must exceed the model's maximum, \
+         or the load clamp never fires"
+    );
+
+    let merged = merge_into_save_pokemon(&dex, &lead, &stored);
+
+    assert_eq!(merged.to_bytes(), stored.to_bytes());
+}
+
+/// The same clamp with the stored current HP strictly *between* the
+/// model's maximum and the retained one: the load pins the live copy at
+/// the model's full, and the merge files the stored byte back rather than
+/// either boundary.
+#[test]
+fn continue_then_save_keeps_an_over_model_max_current_hp() {
+    let dex = Dex::new();
+    let mut stored = a_stored_record();
+    stored.hp = stored.max_hp - 3;
+    let lead = from_save_pokemon(&dex, &stored).expect("the fixture must decode");
+    assert!(
+        u32::from(stored.hp) > lead.stats().max_hp,
+        "fixture sanity: the stored value must sit above the model's \
+         maximum, or the load clamp never fires"
+    );
+
+    let merged = merge_into_save_pokemon(&dex, &lead, &stored);
+
+    assert_eq!(merged.to_bytes(), stored.to_bytes());
+}

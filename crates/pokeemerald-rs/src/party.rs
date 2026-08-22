@@ -152,11 +152,19 @@
 //! Current HP is outside that choice: it is battle state, so the merge
 //! always writes the battler's, retained block or not. It can never
 //! contradict a retained maximum, because the model's own maximum is the
-//! 0-EV one and EVs only ever add to it. The converse gap is real and
-//! accepted: a heal fills the model to its 0-EV maximum, so a healed
-//! EV-trained lead is filed with `hp` below the retained `max_hp` -- a
-//! reload clamps back to the model's full, so nothing drifts, and the gap
-//! closes when `battle` carries EVs.
+//! 0-EV one and EVs only ever add to it. One translation applies over a
+//! *retained* block: [`from_save_pokemon`] clamps a stored `hp` above the
+//! model's maximum down to it, so a battler standing at the model's full
+//! writes back the *higher* of the stored byte and the live number
+//! (capped at the retained `max_hp`). That keeps Continue -> SAVE a
+//! no-op for a full-health or over-model-max EV-trained lead -- filing
+//! the clamped number would mark it damaged, the corruption shape issue
+//! #344 exists to stop -- and files a battle-healed lead at the retained
+//! full exactly as upstream's EV-aware heal would. Below the model's
+//! full, damage is absolute and the live number is written as-is. The
+//! residue (a session that *ends* at exactly the model's full after real
+//! damage cannot distinguish itself from a no-op) closes when `battle`
+//! carries EVs.
 
 use battle::{BattlePokemon, Dex, Ivs, MAX_MON_MOVES};
 use engine::save::{BoxPokemon, Pokemon, PokemonSubstructures, SUBSTRUCTURE_LEN};
@@ -371,6 +379,22 @@ fn overlay_current_hp(record: &mut Pokemon, mon: &BattlePokemon) {
     record.hp = clamp_u16(mon.current_hp());
 }
 
+/// [`overlay_current_hp`] for a *retained* stat block, undoing
+/// [`from_save_pokemon`]'s load clamp where it can (module docs): a battler
+/// standing at the model's own full maximum files the higher of the stored
+/// `hp` and the live number, capped at the retained `max_hp`, so a
+/// Continue -> SAVE round trip cannot file a full-health EV-trained lead
+/// as damaged. Below the model's full, damage is absolute state and the
+/// live number is written as-is.
+fn overlay_current_hp_over_retained_block(record: &mut Pokemon, mon: &BattlePokemon) {
+    let live = clamp_u16(mon.current_hp());
+    record.hp = if mon.current_hp() == mon.stats().max_hp {
+        live.max(record.hp).min(record.max_hp)
+    } else {
+        live
+    };
+}
+
 /// `SavePlayerParty`'s per-mon half for a mon that came *out* of a save
 /// (`src/load_save.c:160-168`): `base`, the record it was decoded from,
 /// with the battler's own fields overlaid onto it (issue #344).
@@ -388,7 +412,8 @@ fn overlay_current_hp(record: &mut Pokemon, mon: &BattlePokemon) {
 /// The cached stat block is the one group that is retained *conditionally*
 /// -- kept when species and level are unchanged, recomputed when the
 /// session moved either one. Sub-level experience deliberately does not
-/// enter that guard. Current HP is always the battler's.
+/// enter that guard. Current HP is always the battler's, translated
+/// back across the load clamp when the block is retained (module docs).
 /// The module docs give the reasoning; [`overlay_battle_stats`] and
 /// [`overlay_current_hp`] are the two writes.
 ///
@@ -457,8 +482,9 @@ pub(crate) fn merge_into_save_pokemon(dex: &Dex, mon: &BattlePokemon, base: &Pok
     if stat_block_is_still_the_battlers {
         // The save's own six stat bytes stay exactly as they were --
         // including the EV contribution this port cannot rebuild. Only
-        // current HP, which is state, comes from the battler.
-        overlay_current_hp(&mut merged, mon);
+        // current HP, which is state, comes from the battler -- translated
+        // back across the load clamp at the model's full (module docs).
+        overlay_current_hp_over_retained_block(&mut merged, mon);
     } else {
         // Species or level moved this session, so the cached block is a
         // function of inputs that no longer hold and upstream would have
