@@ -102,12 +102,16 @@
 //!
 //! **Formerly a fail-closed dead end, now fully retired.** Before issue
 //! #261, a loss left the fainted lead in place and a fresh attempt failed
-//! closed at [`crate::flow::route103_rival::start_route103_rival_battle`]
-//! (`battle::BattleError::FaintedBattler`) -- an *emergent* wall from
-//! [`battle::Battle::new_trainer`] refusing a fainted battler, not a bespoke
-//! guard this module wrote, but a dead end this module's own docs recorded
-//! all the same as "the honest fidelity delta this slice ships with." That
-//! wall was unreachable through a *rival* (or wild) loss as of #261:
+//! closed inside this module's own construction call
+//! (`battle::BattleError::FaintedBattler`, raised by
+//! [`battle::Battle::new_trainer`] since it always did, moved along with
+//! the rest of the construction into
+//! [`crate::flow::npc_trainer_battle::start_npc_trainer_battle`] by issue
+//! #264) -- an *emergent* wall from `Battle::new_trainer` refusing a
+//! fainted battler, not a bespoke guard this module wrote, but a dead end
+//! this module's own docs recorded all the same as "the honest fidelity
+//! delta this slice ships with." That wall was unreachable through a
+//! *rival* (or wild) loss as of #261:
 //! `white_out` heals the lead in the same call that reports the loss, so
 //! those paths can never leave a fainted lead behind, and the player is off
 //! Route 103 entirely besides. One path still could — a lost Route 101
@@ -124,9 +128,11 @@
 //! reports any outcome (win, loss, or flee), the same frame it happens --
 //! `Route101_EventScript_BirchsBag`'s own `HealPlayerParty` call, which
 //! upstream's `CB2_EndFirstBattle` reaches regardless of how the fight
-//! ended (that module's own docs cite the chain). A fainted lead can
-//! therefore no longer reach Route 103 by *any* path, so the screen here is
-//! retired outright rather than left in place as now-unreachable dead code
+//! ended (that module's own docs cite the chain). No modelled path brings
+//! a fainted lead to Route 103 today (an unmigrated multi-member save's
+//! roaming slot-0 and a failed best-effort heal are the documented residual
+//! shapes, both refused downstream), so the screen here is retired outright
+//! rather than left in place as now-unreachable dead code
 //! -- see
 //! `route103_rival_tests::a_lost_route_101_first_battle_still_lets_the_healed_lead_fight_the_rival`
 //! for the replacement, strictly *stronger* pin (`(test-ratchet)`: it
@@ -149,6 +155,7 @@
 use engine::event_data::EventData;
 use engine::save::PlayerGender;
 
+use crate::flow::npc_trainer_battle;
 use crate::flow::route103_rival::{self, PlayerStarter, Rival};
 
 use super::OverworldPhase;
@@ -307,6 +314,19 @@ impl OverworldPhase {
     /// outcome. See
     /// `super::route103_rival_tests::a_lost_route_101_first_battle_still_lets_the_healed_lead_fight_the_rival`
     /// for the replacement, strictly stronger pin.
+    ///
+    /// This method reads the same [`OverworldPhase::party_lead`] the sight
+    /// trigger does, off the same overworld state -- so the closed
+    /// precondition above applied to `super::sight_trainer_trigger`'s own
+    /// caller-side fainted-lead screen exactly as much as it did to this
+    /// method's now-retired one. That screen survived here, uninspected,
+    /// until issue #347 traced it back to the same #251 healing and
+    /// retired it too, moving the actual screen into
+    /// [`crate::flow::npc_trainer_battle::start_npc_trainer_battle`] so it
+    /// runs unconditionally for both callers rather than depending on each
+    /// one remembering to add its own. `battle::Battle::new_trainer` keeps
+    /// its own fainted-player check as the backstop, so the flow-level
+    /// screen only moves the refusal ahead of the party build's draws.
     pub(super) fn begin_route103_rival_battle(&mut self) {
         self.rival_battle_outcome = None;
         eprintln!(
@@ -341,7 +361,7 @@ impl OverworldPhase {
             return;
         };
         let trainer = route103_rival::route103_rival_for(rival, starter);
-        match route103_rival::start_route103_rival_battle(lead, trainer, &mut self.rng) {
+        match npc_trainer_battle::start_npc_trainer_battle(lead, trainer, &mut self.rng) {
             Ok(battle) => {
                 self.party_lead = None;
                 self.rival_battle = Some(battle);
@@ -371,7 +391,7 @@ impl OverworldPhase {
         if self.rival_battle.is_none() {
             return false;
         }
-        if let Some(outcome) = route103_rival::advance_route103_rival_battle(
+        if let Some(outcome) = npc_trainer_battle::advance_npc_trainer_battle(
             &mut self.rival_battle,
             &mut self.party_lead,
             &mut self.save1.money,

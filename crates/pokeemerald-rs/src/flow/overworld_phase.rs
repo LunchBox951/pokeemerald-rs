@@ -318,9 +318,9 @@ pub(crate) struct OverworldPhase {
     /// The Route 103 rival battle currently being played out, if any (issue
     /// #248) -- [`Self::first_battle`]'s sibling, in its own field for the
     /// same reason: [`route103_rival_trigger`] starts it via
-    /// [`crate::flow::route103_rival::start_route103_rival_battle`] (a
+    /// [`crate::flow::npc_trainer_battle::start_npc_trainer_battle`] (a
     /// `BATTLE_TYPE_TRAINER` party battle, not a wild one) and drives it
-    /// with [`crate::flow::route103_rival::advance_route103_rival_battle`]'s
+    /// with [`crate::flow::npc_trainer_battle::advance_npc_trainer_battle`]'s
     /// own `UseMove` policy. `Some` freezes the overworld for the frame
     /// exactly like [`Self::wild_battle`]/[`Self::first_battle`] do; never
     /// `Some` at the same time as either -- only one of [`Self::step`]'s
