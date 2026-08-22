@@ -728,11 +728,14 @@ impl App {
 /// Format a log line naming every button that transitioned to held this
 /// frame, or `None` if nothing changed.
 ///
-/// The same [`ButtonState`] also drives the game ([`App::step`] hands it
-/// to `crate::flow`'s `advance_scene` every frame); this log line is the
-/// human-readable trace of that pipeline, emitted on the windowed and
-/// headless paths alike. Kept pure (no I/O) so it is unit-testable;
-/// [`App::step`] is the only caller.
+/// The same [`ButtonState`] also drives the game when a scene is present
+/// ([`App::step`] hands it to `crate::flow`'s `advance_scene` every frame
+/// on the real-flow constructors, [`App::new`] and `new_headless_real`;
+/// the smoke suite's `new_headless` has no scene, so there input is
+/// logged but drives nothing). This log line is the human-readable trace
+/// of that pipeline, emitted on the windowed and headless paths alike.
+/// Kept pure (no I/O) so it is unit-testable; [`App::step`] is the only
+/// caller.
 fn describe_newly_pressed(state: ButtonState) -> Option<String> {
     let pressed = state.newly_pressed();
     if pressed == Buttons::NONE {
