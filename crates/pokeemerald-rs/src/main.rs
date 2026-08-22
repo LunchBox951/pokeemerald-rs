@@ -12,14 +12,12 @@
 //! the exact `./init.sh`/`cargo xtask extract` commands to run) printed by
 //! this `main`, not a panic -- see [`pokeemerald_rs::app::AppError`].
 //!
-//! The reduced intro cinematic, new-game flow, and the title -> main menu
-//! -> intro -> overworld scene transitions run inside
-//! `pokeemerald_rs::flow`'s `advance_scene`; battles run *inside* the
-//! overworld phase (`pokeemerald_rs::flow`'s `overworld_phase` module,
-//! which owns the overworld scene). The save medium is owned by
-//! [`pokeemerald_rs::App`] and threaded through every `advance_scene`
-//! call; `App` also holds the title music's audio device, driven
-//! separately after each scene step.
+//! Everything past the title screen -- scene flow, battles, saving,
+//! audio -- lives behind [`pokeemerald_rs::App`]; `main` only constructs
+//! it and pumps frames. The live status write-up for each subsystem is
+//! its crate root's `//!` doc (`src/lib.rs` here, and each subsystem
+//! crate's own), per `AGENTS.md`; this entry-point overview deliberately
+//! does not restate it.
 //!
 //! **Manual-run only**: CI is headless, so this binary never runs in a
 //! test -- only the library crate's headless glue is unit-tested, plus
