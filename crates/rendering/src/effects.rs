@@ -1,22 +1,40 @@
 //! Hardware color special effects: alpha blend, brightness increase/decrease
-//! (S-2 slice 4, issue #99).
+//! (S-2 slice 4, issue #99; reworked to the 32-bit oracle in issue #380).
 //!
 //! Ports `BLDCNT`/`BLDALPHA`/`BLDY`'s per-pixel color math, verified against
 //! `mgba/include/mgba-util/image.h`'s `mColorMix5Bit` and
-//! `mgba/src/gba/renderers/software-private.h`'s `_brighten`/`_darken`. GBA
-//! color math happens on 5-bit-per-channel values, so [`alpha_blend`],
-//! [`brighten`], and [`darken`] round-trip an [`Rgb888`] through its
-//! originating 5-bit channel (see [`crate::palette::compress_8_to_5`])
-//! before doing the hardware arithmetic and re-expanding, rather than mixing
-//! already-8-bit-expanded channels directly, which would round differently
-//! `(behavioral-fidelity)`.
+//! `mgba/src/gba/renderers/software-private.h`'s `_brighten`/`_darken`.
+//!
+//! **The oracle is stock desktop mGBA (SDL/Qt), not `COLOR_16_BIT`.** mGBA
+//! selects the pixel format these functions operate on at compile time
+//! (`mgba/include/mgba-util/image.h:15-20`): `COLOR_16_BIT` makes `mColor` a
+//! packed 5-bit-per-channel `uint16_t` and runs the effect math on those 5
+//! bits directly; without it (the default), `mColor` is a `uint32_t` and
+//! palette colors are first expanded to 8 bits per channel by
+//! `mColorFrom555` (`image.h:253-266`, `M_RGB5_TO_BGR8` plus
+//! `color |= (color >> 5) & 0x070707`, i.e. `(c5 << 3) | (c5 >> 2)` — the
+//! exact formula [`crate::palette::expand_5_to_8`] already uses to build
+//! every [`Rgb888`] this crate produces), with `_brighten`/`_darken`/
+//! `mColorMix5Bit` then running on those already-8-bit channels
+//! (`software-private.h:237-245`, `:270-278`; `image.h:307-323`).
+//! `COLOR_16_BIT` is only ever added for the Wii, 3DS, and libretro targets
+//! (`mgba/CMakeLists.txt:1026`, the only `COLOR_16_BIT` definition in the
+//! build); a normal desktop SDL or Qt build never defines it and always
+//! takes the 32-bit path. `docs/acceptance/v1.md:16-24` binds v1 completion
+//! to "the observable experience of playing alone on mGBA" — that means
+//! stock desktop mGBA, so [`alpha_blend`], [`brighten`], and [`darken`]
+//! operate directly on [`Rgb888`]'s already-8-bit-expanded channels with
+//! 8-bit saturation, matching the 32-bit path bit for bit, rather than
+//! compressing back down to 5 bits first `(behavioral-fidelity)`.
 //!
 //! `EVA`/`EVB`/`EVY` are 5-bit register fields (`0..=31`) but hardware caps
 //! every one of them at 16 (100%) before using it — `mgba`'s
 //! `video-software.c:325-344` clamps `blda`/`bldb`/`bldy` to `0x10` right
 //! when the register is written; values `17..=31` behave identically to 16.
+//! That capping is independent of the `COLOR_16_BIT` pixel-format choice
+//! above.
 
-use crate::palette::{compress_8_to_5, expand_5_to_8, Rgb888};
+use crate::palette::Rgb888;
 
 /// The hardware's four `BLDCNT` special-effect modes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -100,17 +118,21 @@ const fn cap_weight(raw: u8) -> u32 {
     }
 }
 
-/// Mix one already-expanded 8-bit channel the way `mColorMix5Bit` mixes one
-/// 5-bit channel: `(a5*weight_a + b5*weight_b) / 16`, saturating at 31
-/// (5-bit max) before re-expanding to 8 bits. `weight_a`/`weight_b` are
-/// assumed already capped (module docs).
-#[allow(clippy::cast_possible_truncation)] // `mixed` is clamped to `0..=31` just above the cast.
+/// Mix one 8-bit channel the way the 32-bit `mColorMix5Bit` mixes one byte
+/// lane (`image.h:307-323`): `(a*weight_a + b*weight_b) / 16`, saturating at
+/// 255 (8-bit max) rather than 31 -- mGBA signals the per-channel overflow
+/// with a spare 9th bit (`& 0x1FF`, `if (c & 0x100) c = 0xFF`) because its
+/// three channels are packed into one `u32`; doing each channel as an
+/// independent scalar here makes that the same plain saturating clamp.
+/// `weight_a`/`weight_b` are assumed already capped (module docs).
+#[allow(clippy::cast_possible_truncation)] // `mixed` is clamped to `0..=255` just above the cast.
 const fn mix_channel(a: u8, b: u8, weight_a: u32, weight_b: u32) -> u8 {
-    let a5 = compress_8_to_5(a) as u32;
-    let b5 = compress_8_to_5(b) as u32;
-    let mixed = (a5 * weight_a + b5 * weight_b) / 16;
-    let clamped = if mixed > 31 { 31 } else { mixed as u8 };
-    expand_5_to_8(clamped)
+    let mixed = (a as u32 * weight_a + b as u32 * weight_b) / 16;
+    if mixed > 255 {
+        255
+    } else {
+        mixed as u8
+    }
 }
 
 /// Alpha-blend `first` (the first target, weighted by `eva`) with `second`
@@ -127,14 +149,13 @@ pub const fn alpha_blend(first: Rgb888, second: Rgb888, eva: u8, evb: u8) -> Rgb
     }
 }
 
-/// Brighten one channel toward white (`_brighten`): `c + (31-c)*y/16`,
-/// `y` already capped.
-#[allow(clippy::cast_possible_truncation)] // `r` is provably `<=31` (c5<=31, y<=16 => (31-c5)*y/16<=31).
+/// Brighten one 8-bit channel toward white -- the 32-bit `_brighten`
+/// (`software-private.h:237-245`): `c + (255-c)*y/16`, `y` already capped.
+#[allow(clippy::cast_possible_truncation)] // `r` is provably `<=255` (c<=255, y<=16 => (255-c)*y/16<=255-c, so c+that<=255).
 const fn brighten_channel(c: u8, y: u32) -> u8 {
-    let c5 = compress_8_to_5(c) as u32;
-    let r = c5 + ((31 - c5) * y) / 16;
-    let clamped = if r > 31 { 31 } else { r as u8 };
-    expand_5_to_8(clamped)
+    let c32 = c as u32;
+    let r = c32 + ((255 - c32) * y) / 16;
+    r as u8
 }
 
 /// Brighten `color` toward white by `evy` sixteenths — `BLDY`'s brighten
@@ -149,13 +170,13 @@ pub const fn brighten(color: Rgb888, evy: u8) -> Rgb888 {
     }
 }
 
-/// Darken one channel toward black (`_darken`): `c - c*y/16`, `y` already
-/// capped.
-#[allow(clippy::cast_possible_truncation)] // c5*y/16 <= c5 <= 31, so the subtraction result is `<=31`.
+/// Darken one 8-bit channel toward black -- the 32-bit `_darken`
+/// (`software-private.h:270-278`): `c - c*y/16`, `y` already capped.
+#[allow(clippy::cast_possible_truncation)] // c*y/16 <= c <= 255, so the subtraction result is `<=255` and non-negative.
 const fn darken_channel(c: u8, y: u32) -> u8 {
-    let c5 = compress_8_to_5(c) as u32;
-    let r = c5 - (c5 * y) / 16;
-    expand_5_to_8(r as u8)
+    let c32 = c as u32;
+    let r = c32 - (c32 * y) / 16;
+    r as u8
 }
 
 /// Darken `color` toward black by `evy` sixteenths — `BLDY`'s darken mode
@@ -267,8 +288,10 @@ mod tests {
 
     #[test]
     fn alpha_blend_hand_computed_50_50() {
-        // eva=8, evb=8: (a*8+b*8)/16 == (a+b)/2 in 5-bit space.
-        // 5-bit 0 and 5-bit 31 (channel bytes 0 and 255): (0*8+31*8)/16 = 15.
+        // eva=8, evb=8, operating on the already-8-bit channels (module
+        // docs' 32-bit oracle): (a*8+b*8)/16 == (a+b)/2 with truncating
+        // integer division. 0 and 255: (0*8+255*8)/16 = 2040/16 = 127
+        // (127.5 truncated toward zero, matching mgba's plain C `/`).
         let first = Rgb888 { r: 0, g: 0, b: 0 };
         let second = Rgb888 {
             r: 255,
@@ -276,19 +299,15 @@ mod tests {
             b: 255,
         };
         let blended = alpha_blend(first, second, 8, 8);
-        assert_eq!(
-            blended.r,
-            crate::palette::Bgr555::from_channels(15, 0, 0)
-                .to_rgb888()
-                .r
-        );
+        assert_eq!(blended.r, 127);
     }
 
     #[test]
     fn alpha_blend_full_weight_on_first_is_identity() {
-        // Both colors must actually round-trip through a 5-bit channel
-        // (module docs) -- use real palette-derived colors, not arbitrary
-        // 8-bit values.
+        // Use real palette-derived colors (not arbitrary 8-bit values) so
+        // this exercises the same channel bytes the compositor ever
+        // produces -- every one of them already 8-bit-expanded via
+        // `Bgr555::to_rgb888`.
         let first = crate::palette::Bgr555::from_channels(12, 20, 31).to_rgb888();
         let second = crate::palette::Bgr555::from_channels(1, 2, 3).to_rgb888();
         assert_eq!(alpha_blend(first, second, 16, 0), first);
@@ -296,8 +315,10 @@ mod tests {
 
     #[test]
     fn alpha_blend_saturates_when_weights_overflow() {
-        // eva=16, evb=16 (both capped at 16, not their raw values if larger):
-        // (31*16 + 31*16)/16 = 62, saturating to 31 (full white channel).
+        // eva=16, evb=16 (both capped at 16, not their raw values if
+        // larger): (255*16 + 255*16)/16 = 510, saturating to 255 (8-bit
+        // max, not 31 -- module docs' 32-bit oracle) for a full white
+        // channel.
         let first = Rgb888 {
             r: 255,
             g: 255,
@@ -328,15 +349,11 @@ mod tests {
     #[test]
     fn brighten_ramps_toward_white() {
         let color = Rgb888 { r: 0, g: 0, b: 0 };
-        // evy=16 (full): 0 + (31-0)*16/16 = 31 -> channel 255.
+        // evy=16 (full): 0 + (255-0)*16/16 = 255 -> channel 255.
         assert_eq!(brighten(color, 16).r, 255);
-        // evy=8 (half): 0 + 31*8/16 = 15.
-        assert_eq!(
-            brighten(color, 8).r,
-            crate::palette::Bgr555::from_channels(15, 0, 0)
-                .to_rgb888()
-                .r
-        );
+        // evy=8 (half), 8-bit oracle: 0 + (255-0)*8/16 = 2040/16 = 127
+        // (same truncation as the alpha-blend 50/50 case above).
+        assert_eq!(brighten(color, 8).r, 127);
         // evy=0: unchanged.
         assert_eq!(brighten(color, 0), color);
     }
@@ -358,7 +375,7 @@ mod tests {
             g: 255,
             b: 255,
         };
-        // evy=16 (full): 31 - 31*16/16 = 0 -> channel 0.
+        // evy=16 (full): 255 - 255*16/16 = 0 -> channel 0.
         assert_eq!(darken(color, 16).r, 0);
         // evy=0: unchanged.
         assert_eq!(darken(color, 0), color);
@@ -406,12 +423,9 @@ mod tests {
             LayerKind::Bg(1),
         ));
         let result = resolve_pixel_color(&cfg, true, true, front, next, Rgb888::BLACK);
-        assert_eq!(
-            result.r,
-            crate::palette::Bgr555::from_channels(15, 0, 0)
-                .to_rgb888()
-                .r
-        );
+        // eva=evb=8 blend of 0 and 255 (8-bit oracle, module docs):
+        // (0*8+255*8)/16 = 127 (see effects tests' alpha_blend_hand_computed_50_50).
+        assert_eq!(result.r, 127);
     }
 
     #[test]
@@ -455,12 +469,9 @@ mod tests {
             b: 255,
         };
         let result = resolve_pixel_color(&cfg, true, true, front, None, backdrop);
-        assert_eq!(
-            result.r,
-            crate::palette::Bgr555::from_channels(15, 0, 0)
-                .to_rgb888()
-                .r
-        );
+        // eva=evb=8 blend of 0 and 255 (8-bit oracle, module docs):
+        // (0*8+255*8)/16 = 127 (see effects tests' alpha_blend_hand_computed_50_50).
+        assert_eq!(result.r, 127);
     }
 
     #[test]
@@ -490,11 +501,9 @@ mod tests {
             LayerKind::Bg(0),
         ));
         let result = resolve_pixel_color(&cfg, true, true, front, next, Rgb888::BLACK);
+        // eva=evb=8 blend of 0 and 255 (8-bit oracle): (0*8+255*8)/16 = 127.
         assert_eq!(
-            result.r,
-            crate::palette::Bgr555::from_channels(15, 0, 0)
-                .to_rgb888()
-                .r,
+            result.r, 127,
             "semi-transparency must force alpha blend regardless of the selected effect"
         );
     }
@@ -528,11 +537,9 @@ mod tests {
 
         let result = resolve_pixel_color(&cfg, false, true, front, next, Rgb888::BLACK);
 
+        // eva=evb=8 blend of 0 and 255 (8-bit oracle): (0*8+255*8)/16 = 127.
         assert_eq!(
-            result.r,
-            crate::palette::Bgr555::from_channels(15, 0, 0)
-                .to_rgb888()
-                .r,
+            result.r, 127,
             "window effect-disable must not suppress OAM mode 1 forced alpha"
         );
     }

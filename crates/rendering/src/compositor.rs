@@ -368,7 +368,7 @@ mod tests {
     use crate::mosaic::MosaicSize;
     use crate::oam::ObjMode;
     use crate::oam::{OamEntry, ObjShape};
-    use crate::palette::{Bgr555, Palette};
+    use crate::palette::{Bgr555, Palette, Rgb888};
     use crate::sprite::SpriteLayer;
     use crate::tile::{BitDepth, Tileset};
     use crate::tilemap::{ScreenEntry, Tilemap};
@@ -990,10 +990,11 @@ mod tests {
 
     #[test]
     fn alpha_blend_end_to_end_over_two_bg_layers() {
-        // BG0 (black, priority 0, target1) alpha-blended with BG1 (white,
-        // priority 1, target2) at eva=evb=8 (50/50) must land on the 5-bit
-        // midpoint color, exactly as effects::alpha_blend computes in
-        // isolation.
+        // BG0 (r channel 0, priority 0, target1) alpha-blended with BG1 (r
+        // channel 31 -> byte 255, priority 1, target2) at eva=evb=8 (50/50)
+        // must land on the same 8-bit-oracle midpoint effects::alpha_blend
+        // computes in isolation (see effects tests'
+        // alpha_blend_hand_computed_50_50): (0*8+255*8)/16 = 127.
         let (tiles_a, palette_a, map_a) = opaque_bg_fixture(0);
         let (tiles_b, palette_b, map_b) = opaque_bg_fixture(31);
         let layer_a = crate::bg::BgLayer::new(&tiles_a, &palette_a, &map_a);
@@ -1026,10 +1027,7 @@ mod tests {
             ..FrameEffects::default()
         };
         let fb = compose_frame_with_effects(&sprites, &slots, &effects);
-        assert_eq!(
-            fb.pixel(0, 0),
-            Some(Bgr555::from_channels(15, 0, 0).to_rgb888())
-        );
+        assert_eq!(fb.pixel(0, 0), Some(Rgb888 { r: 127, g: 0, b: 0 }));
     }
 
     #[test]
@@ -1077,9 +1075,11 @@ mod tests {
             ..FrameEffects::default()
         };
         let fb = compose_frame_with_effects(&sprites, &slots, &effects);
+        // Same eva=evb=8 blend of r channels 0 and 255 as
+        // alpha_blend_end_to_end_over_two_bg_layers above: 127.
         assert_eq!(
             fb.pixel(0, 0),
-            Some(Bgr555::from_channels(15, 0, 0).to_rgb888()),
+            Some(Rgb888 { r: 127, g: 0, b: 0 }),
             "semi-transparency must force alpha blend even though BRIGHTEN was selected"
         );
     }
@@ -1148,9 +1148,15 @@ mod tests {
             ..FrameEffects::default()
         };
         let fb = compose_frame_with_effects(&sprites, &slots, &effects);
+        // eva=evb=8 blend of (0,0,0) and (255,255,255) per channel (8-bit
+        // oracle, module docs): (0*8+255*8)/16 = 127 on every channel.
         assert_eq!(
             fb.pixel(0, 0),
-            Some(Bgr555::from_channels(15, 15, 15).to_rgb888()),
+            Some(Rgb888 {
+                r: 127,
+                g: 127,
+                b: 127
+            }),
             "BG blended 50/50 with the white backdrop"
         );
     }
