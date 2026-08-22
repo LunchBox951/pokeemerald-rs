@@ -31,9 +31,11 @@
 //!      [`battle::BattlePokemon::heal`] is the per-mon effect, and this
 //!      port models one party slot ([`OverworldPhase::party_lead`]), so
 //!      healing that slot restores its HP and PP. `battle` models no
-//!      non-volatile status, so this transition completes the heal by
-//!      clearing the retained backing record's status byte directly; the
-//!      next merge/save therefore cannot restore the pre-white-out status.
+//!      non-volatile status and no EV-raised maximum, so this transition
+//!      completes the heal on the retained backing record directly:
+//!      clearing its status word and restoring its `hp` to its own
+//!      `max_hp`; the next merge/save therefore cannot restore the
+//!      pre-white-out status or file the healed lead as damaged.
 //!    - `Overworld_ResetStateAfterWhiteOut` (`:399-...`, private upstream)
 //!      -- clears field-effect/avatar transition state this port has no
 //!      counterpart for (cycling road, Safari Zone, etc. flags this port
@@ -143,6 +145,12 @@ impl OverworldPhase {
                     // `MON_DATA_STATUS`: the battle model has no status field, so clear the
                     // retained save record at the transition boundary where upstream heals it.
                     self.save1.player_party[0].status = 0;
+                    // `MON_DATA_HP`: the heal fills the battler to the model's 0-EV
+                    // maximum, but the retained record's maximum may carry an EV
+                    // contribution above it. Upstream restores to MAX_HP
+                    // (`script_pokemon_util.c:39-42`), so complete that here too --
+                    // otherwise the next merge files a fully healed lead as damaged.
+                    self.save1.player_party[0].hp = self.save1.player_party[0].max_hp;
                 }
                 Err(error) => {
                     eprintln!("white-out: couldn't heal the party lead ({error}) -- left as-is");
@@ -199,6 +207,38 @@ mod tests {
         let mut slot = temp.slot();
         save_from_the_start_menu(&mut phase, &mut slot);
         assert_eq!(slot.load().block1.player_party[0].status, 0);
+    }
+
+    /// The HP half of the same completion: an EV-trained record's maximum
+    /// sits above the model's, and `heal` can only fill the battler to the
+    /// model's own full. The white-out restores the record's `hp` to its
+    /// retained `max_hp`, as upstream's `HealPlayerParty` does, so the
+    /// next save files the healed lead at full rather than damaged.
+    #[test]
+    fn white_out_restores_the_stored_hp_to_the_retained_maximum() {
+        const EV_HP_BONUS: u16 = 7;
+
+        let mut phase = new_game_phase();
+        let trainer_id = u32::from_le_bytes(phase.save2.player_trainer_id);
+        let lead = crate::new_game::provisional_starter().with_original_trainer_id(trainer_id);
+        let mut stored = crate::party::to_save_pokemon(&battle::Dex::new(), &lead);
+        stored.max_hp += EV_HP_BONUS;
+        stored.hp = 1;
+        phase.save1.player_party_count = 1;
+        phase.save1.player_party[0] = stored;
+        phase.party_lead = Some(lead);
+
+        phase.white_out();
+
+        let temp = TempSave::new("white-out-restores-stored-hp");
+        let mut slot = temp.slot();
+        save_from_the_start_menu(&mut phase, &mut slot);
+        let saved = slot.load().block1.player_party[0];
+        assert_eq!(saved.hp, saved.max_hp, "a white-out heal files full");
+        assert_eq!(
+            saved.max_hp, stored.max_hp,
+            "the EV-raised maximum is retained"
+        );
     }
 
     #[test]

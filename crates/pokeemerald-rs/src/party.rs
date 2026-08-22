@@ -80,11 +80,11 @@
 //! port's own heals ([`battle::BattlePokemon::heal`], reached from the
 //! white-out and from the first battle's conclusion) restore both of those
 //! but have no status field to clear. The merge's side of that gap is
-//! plain retention: a stored status byte rides through every ordinary
+//! plain retention: a stored status word rides through every ordinary
 //! save like any other unmodelled field. The white-out closes its side at
 //! the call site -- after a successful heal it clears the retained
-//! record's status byte directly ([`crate::flow`]'s
-//! `overworld_phase::white_out`), so an ordinary save keeps the byte and
+//! record's status word directly ([`crate::flow`]'s
+//! `overworld_phase::white_out`), so an ordinary save keeps the word and
 //! a white-out does not, which is upstream's split. Once `battle` models
 //! status, the merge overlays it like any other battle-owned field and
 //! the call-site clear disappears.
@@ -155,7 +155,7 @@
 //! 0-EV one and EVs only ever add to it. One translation applies over a
 //! *retained* block: [`from_save_pokemon`] clamps a stored `hp` above the
 //! model's maximum down to it, so a battler standing at the model's full
-//! writes back the *higher* of the stored byte and the live number
+//! writes back the *higher* of the stored value and the live number
 //! (capped at the retained `max_hp`). That keeps Continue -> SAVE a
 //! no-op for a full-health or over-model-max EV-trained lead -- filing
 //! the clamped number would mark it damaged, the corruption shape issue
