@@ -33,16 +33,17 @@
 //! *in place* inside the packed `u32` (`& 0xFF`, `& 0xFF00`, `& 0xFF0000`;
 //! red is the low lane, `image.h:37-39`) rather than unpacking it, so a
 //! shifted lane's mask performs that lane's final shift-down and can
-//! truncate a second time. `mColorMix5Bit` and `_brighten` are unaffected: a
-//! shifted lane's numerator is an exact multiple of the lane's shift, so the
-//! mask has nothing left to discard. `_darken` is the exception — red
-//! computes `c - (c * y) / 16`, while green and blue lose their remainder to
-//! the mask instead of to the division and so compute
-//! `c - ceil(c * y / 16)`, one darker wherever `c * y` is not a multiple of
-//! 16. `_darken(0xFFFFFF, 7)` is `(144, 143, 143)`, not a uniform 144. Hence
-//! the split into `darken_red_channel` and `darken_shifted_channel` below,
-//! pinned lane by lane by `darken_matches_the_32bit_mgba_oracle`
-//! `(behavioral-fidelity)`.
+//! truncate a second time. `mColorMix5Bit` and `_brighten` are unaffected —
+//! their shifted lanes floor a *sum*, and a floor taken after the lane's
+//! shift lands on the same value the unpacked per-channel formula floors to.
+//! `_darken` is the exception: its shifted lanes floor a *difference*, and
+//! flooring the difference is `c - ceil(c * y / 16)`, one darker than red's
+//! unmasked `c - (c * y) / 16` wherever `c * y` is not a multiple of 16.
+//! `_darken(0xFFFFFF, 7)` is `(144, 143, 143)`, not a uniform 144. Hence
+//! the split into `darken_red_channel` and `darken_shifted_channel` below.
+//! All three routines are pinned lane by lane against transcribed oracles
+//! (`darken_matches_the_32bit_mgba_oracle` and its brighten and alpha-blend
+//! siblings) `(behavioral-fidelity)`.
 //!
 //! `EVA`/`EVB`/`EVY` are 5-bit register fields (`0..=31`) but hardware caps
 //! every one of them at 16 (100%) before using it — `mgba`'s
@@ -413,9 +414,72 @@ mod tests {
         assert_eq!(darken(color, 0), color);
     }
 
+    /// The alpha-blend third of the exhaustive oracle sweep: every pair of
+    /// weights over a representative color pair, plus the full 5-bit
+    /// channel domain on mismatched weights. `mColorMix5Bit`'s shifted
+    /// lanes floor sums, so the uniform per-channel `mix_channel` must
+    /// match it exactly (module docs).
+    #[test]
+    fn alpha_blend_matches_the_32bit_mgba_oracle() {
+        for r5 in 0..32 {
+            for g5 in 0..32 {
+                for b5 in 0..32 {
+                    let first = crate::palette::Bgr555::from_channels(r5, g5, b5).to_rgb888();
+                    let second = crate::palette::Bgr555::from_channels(
+                        31 - r5,
+                        (g5 + 7) % 32,
+                        (b5 + 19) % 32,
+                    )
+                    .to_rgb888();
+                    for (eva, evb) in [(8u8, 8u8), (16, 16), (16, 0), (0, 16), (5, 11), (13, 7)] {
+                        let expected = unpack(mgba_mix(
+                            u32::from(eva),
+                            pack(first),
+                            u32::from(evb),
+                            pack(second),
+                        ));
+                        assert_eq!(
+                            alpha_blend(first, second, eva, evb),
+                            expected,
+                            "alpha_blend({first:?}, {second:?}, {eva}, {evb}) must match \
+                             mGBA's 32-bit mColorMix5Bit"
+                        );
+                    }
+                }
+            }
+        }
+        // And the full 17x17 weight grid over a boundary-heavy color set,
+        // so every usable weight pair is pinned somewhere.
+        let extremes = [
+            (0u8, 0u8, 0u8),
+            (31, 31, 31),
+            (31, 0, 17),
+            (1, 30, 2),
+            (16, 16, 16),
+        ];
+        for (r5, g5, b5) in extremes {
+            let first = crate::palette::Bgr555::from_channels(r5, g5, b5).to_rgb888();
+            let second =
+                crate::palette::Bgr555::from_channels(31 - r5, 31 - g5, 31 - b5).to_rgb888();
+            for eva in 0..=16u8 {
+                for evb in 0..=16u8 {
+                    let expected = unpack(mgba_mix(
+                        u32::from(eva),
+                        pack(first),
+                        u32::from(evb),
+                        pack(second),
+                    ));
+                    assert_eq!(alpha_blend(first, second, eva, evb), expected);
+                }
+            }
+        }
+    }
+
     /// mGBA's 32-bit `_darken` (`software-private.h:270-278`), transcribed
     /// lane-by-lane from the C so this file's expectations never route
-    /// through the production helpers they are checking.
+    /// through the production helpers they are checking. A deliberate,
+    /// test-only exception to `no-verbatim`: the transcription is the
+    /// oracle's whole value, and it never compiles into the shipped path.
     fn mgba_darken(color: u32, y: u32) -> u32 {
         let mut c = 0;
         let a = color & 0x0000_00FF;
@@ -428,7 +492,7 @@ mod tests {
     }
 
     /// mGBA's 32-bit `_brighten` (`software-private.h:237-245`), transcribed
-    /// the same way.
+    /// the same way, under the same test-only `no-verbatim` exception.
     fn mgba_brighten(color: u32, y: u32) -> u32 {
         let mut c = 0;
         let a = color & 0x0000_00FF;
@@ -437,6 +501,33 @@ mod tests {
         c |= (a + ((0x0000_FF00 - a) * y) / 16) & 0x0000_FF00;
         let a = color & 0x00FF_0000;
         c |= (a + ((0x00FF_0000 - a) * y) / 16) & 0x00FF_0000;
+        c
+    }
+
+    /// mGBA's 32-bit `mColorMix5Bit` (`image.h:307-327`), transcribed the
+    /// same way, under the same test-only `no-verbatim` exception —
+    /// including the per-lane `0x1FF`-family carry masks and the
+    /// clamp-to-0xFF overflow handling.
+    fn mgba_mix(weight_a: u32, color_a: u32, weight_b: u32, color_b: u32) -> u32 {
+        let mut c: u32 = 0;
+        let a = color_a & 0x0000_00FF;
+        let b = color_b & 0x0000_00FF;
+        c |= ((a * weight_a + b * weight_b) / 16) & 0x0000_01FF;
+        if c & 0x0000_0100 != 0 {
+            c = 0x0000_00FF;
+        }
+        let a = color_a & 0x0000_FF00;
+        let b = color_b & 0x0000_FF00;
+        c |= ((a * weight_a + b * weight_b) / 16) & 0x0001_FF00;
+        if c & 0x0001_0000 != 0 {
+            c = (c & 0x0000_00FF) | 0x0000_FF00;
+        }
+        let a = color_a & 0x00FF_0000;
+        let b = color_b & 0x00FF_0000;
+        c |= ((a * weight_a + b * weight_b) / 16) & 0x01FF_0000;
+        if c & 0x0100_0000 != 0 {
+            c = (c & 0x0000_FFFF) | 0x00FF_0000;
+        }
         c
     }
 

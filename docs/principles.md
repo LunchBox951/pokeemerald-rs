@@ -36,14 +36,10 @@ specification of the game (data, scripts, text, formulas); `mgba/` clarifies how
 hardware would have behaved. Both are gitignored, read-only, and pulled by
 `init.sh`. Never edit them, never commit them, never link against them.
 
-mGBA's own pixel math is build-configurable, so where we consult it the
-oracle is **stock desktop mGBA**: an SDL or Qt build with no `COLOR_16_BIT`,
-whose `mColor` is 32-bit and whose palette entries are expanded to 8 bits per
-channel before any color effect runs (`mgba/include/mgba-util/image.h`,
-`mgba/src/gba/renderers/software-private.h`). The 5-bit `COLOR_16_BIT` path
-rounds differently but is only ever built for Wii, 3DS, and libretro; v1
-acceptance is the experience of playing on desktop mGBA, so that is the build
-whose output we compare against.
+mGBA's pixel math is build-configurable; the oracle is **stock desktop
+mGBA** (SDL/Qt, no `COLOR_16_BIT`: 32-bit `mColor`, 8-bit channels), the
+build v1 acceptance plays against. `crates/rendering/src/effects.rs`'s
+module docs carry the derivation and citations.
 
 **3. No verbatim copies (`no-verbatim`).** Read the upstream behaviour, then
 re-express it in idiomatic Rust. Translating a table of constants is fine;
