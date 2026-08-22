@@ -106,6 +106,12 @@ pub const DEFAULT_MASTER_VOLUME: u8 = 12;
 /// refused when every live voice outranks it.
 pub const DEFAULT_MAX_VOICES: usize = 5;
 
+/// The most 128 Hz sweep ticks one [`SAMPLES_PER_FRAME`] frame can contain.
+/// A frame spans `224 * 128 / 13_379` ~= `2.14` ticks, so it holds two or —
+/// when the Bresenham accumulator's fraction carries — three, never more.
+const MAX_SWEEP_TICKS_PER_FRAME: usize =
+    (SAMPLES_PER_FRAME * 128).div_ceil(crate::pitch::MIXER_RATE as usize);
+
 /// Owns the playing voices and renders them to interleaved stereo `f32`.
 #[derive(Debug)]
 pub struct Mixer {
@@ -142,6 +148,10 @@ pub struct Mixer {
     /// at hardware's true cadence regardless of how the stream is chunked
     /// into render buffers (issue #381).
     sweep_clock: FrameSequencer128Hz,
+    /// Reusable buffer for one frame's 128 Hz tick offsets, preallocated to
+    /// [`MAX_SWEEP_TICKS_PER_FRAME`] for the same reason as [`Self::scratch`]:
+    /// steady-state rendering must not allocate.
+    sweep_ticks: Vec<usize>,
 }
 
 impl Default for Mixer {
@@ -162,6 +172,7 @@ impl Mixer {
             scratch: vec![(0, 0); SAMPLES_PER_FRAME],
             reverb: Reverb::new(0),
             sweep_clock: FrameSequencer128Hz::default(),
+            sweep_ticks: Vec::with_capacity(MAX_SWEEP_TICKS_PER_FRAME),
         }
     }
 
@@ -487,11 +498,16 @@ impl Mixer {
         // One 128 Hz tick schedule per buffer, shared by every CGB voice:
         // hardware's frame sequencer is one clock for the whole unit, not
         // one per channel (module docs, `crate::psg::FrameSequencer128Hz`).
-        let sweep_ticks = self.sweep_clock.advance(self.scratch.len());
+        self.sweep_clock
+            .advance_into(self.scratch.len(), &mut self.sweep_ticks);
+        debug_assert!(
+            self.sweep_ticks.len() <= MAX_SWEEP_TICKS_PER_FRAME,
+            "a frame's tick buffer must never have to grow",
+        );
         for slot in &mut self.cgb_voices {
             if let Some(voice) = slot {
                 voice.begin_frame(self.master_volume);
-                voice.render(&mut self.scratch, &sweep_ticks);
+                voice.render(&mut self.scratch, &self.sweep_ticks);
                 if !voice.is_active() {
                     *slot = None;
                 }

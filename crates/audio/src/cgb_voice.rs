@@ -582,8 +582,9 @@ impl CgbVoice {
 
     /// This voice's channel-1 sweep shadow frequency register, or `None` if
     /// it is not a square voice with a sweep configured. Test-only
-    /// introspection for pinning sweep tick cadence (issue #381).
-    fn sweep_frequency(&self) -> Option<u16> {
+    /// introspection for pinning sweep tick cadence, here and from the
+    /// mixer's own frame-level tests (issue #381).
+    pub(crate) fn sweep_frequency(&self) -> Option<u16> {
         match &self.oscillator {
             Oscillator::Square(s) => s.sweep_frequency(),
             _ => None,
@@ -1024,12 +1025,16 @@ mod tests {
         assert_eq!(acc_direct, acc_retuned);
     }
 
-    /// A square-1 voice at the lowest playable frequency register (key `0`
-    /// clamps to `44`), leaving plenty of headroom before a shift-1 sweep's
-    /// compounding `x1.5`-per-tick growth overflows `0x7FF` — verified
-    /// empirically to stay in range through at least 7 successive period-1
-    /// ticks. Used by the 128 Hz cadence and chunk-boundary tests below,
-    /// which need several ticks without the channel disabling mid-test.
+    /// A square-1 voice at the lowest playable frequency. Key `0` is below
+    /// `MidiKeyToCgbFreq`'s floor, so it clamps to scale-table index `0`
+    /// (`cgb_pitch.rs`'s `key <= 35` arm), giving frequency register
+    /// `2048 - 2004 = 44` — the bottom of the 11-bit range, and so the most
+    /// headroom before a shift-1 sweep's compounding `x1.5`-per-step growth
+    /// overflows `0x7FF`. The ceiling is 8 successful period-1 steps (`44`,
+    /// `66`, `99`, `148`, `222`, `333`, `499`, `748`, `1122`); the 9th
+    /// tick's look-ahead overflows and disables the channel. Used by the
+    /// 128 Hz cadence and chunk-boundary tests below, which need several
+    /// ticks without the channel disabling mid-test.
     fn low_freq_sweep_voice(sweep_byte: u8) -> CgbVoice {
         CgbVoice::square(
             CgbChannelNumber::Square1,
@@ -1050,90 +1055,82 @@ mod tests {
         )
     }
 
-    /// Drive `voice` through every offset in `ticks` one sample at a time,
-    /// recording [`CgbVoice::sweep_frequency`] immediately after each tick
-    /// fires. Samples between ticks render with no ticks of their own.
-    fn sweep_frequency_after_each_tick(voice: &mut CgbVoice, ticks: &[usize]) -> Vec<u16> {
-        let mut cursor = 0usize;
-        let mut freqs = Vec::with_capacity(ticks.len());
-        for &tick in ticks {
-            let gap = tick - cursor;
-            if gap > 0 {
-                voice.render(&mut vec![(0i32, 0i32); gap], &[]);
+    /// The channel-1 shadow frequency a freshly triggered `sweep_byte` voice
+    /// reaches after rendering exactly `len` samples as ONE buffer, ticking
+    /// at every `schedule` offset that lands inside it.
+    ///
+    /// Every call starts from a new voice and renders a single buffer, so
+    /// the only thing that can move the frequency is where the tick offsets
+    /// sit *within* that buffer — not how many render calls a test makes.
+    fn sweep_frequency_after(sweep_byte: u8, len: usize, schedule: &[usize]) -> u16 {
+        let mut voice = low_freq_sweep_voice(sweep_byte);
+        voice.begin_frame(15);
+        let ticks: Vec<usize> = schedule.iter().copied().filter(|&t| t < len).collect();
+        let mut acc = vec![(0i32, 0i32); len];
+        voice.render(&mut acc, &ticks);
+        voice
+            .sweep_frequency()
+            .expect("still a square voice with a sweep configured")
+    }
+
+    /// Every `(sample offset, new frequency)` at which `sweep_byte`'s shadow
+    /// frequency steps while `total` samples render under `schedule`.
+    ///
+    /// Found by rendering each prefix length in turn and diffing, so an
+    /// offset here is the true sample index the step happened at.
+    fn sweep_steps(sweep_byte: u8, total: usize, schedule: &[usize]) -> Vec<(usize, u16)> {
+        let mut steps = Vec::new();
+        let mut previous = sweep_frequency_after(sweep_byte, 0, schedule);
+        for len in 1..=total {
+            let frequency = sweep_frequency_after(sweep_byte, len, schedule);
+            if frequency != previous {
+                steps.push((len - 1, frequency));
+                previous = frequency;
             }
-            voice.render(&mut [(0i32, 0i32)], &[0]);
-            freqs.push(
-                voice
-                    .sweep_frequency()
-                    .expect("still a square voice with a sweep configured"),
-            );
-            cursor = tick + 1;
         }
-        freqs
+        steps
     }
 
     #[test]
-    fn square1_sweep_period_1_ticks_at_every_128hz_sample_offset() {
+    fn square1_sweep_period_1_steps_at_every_128hz_sample_offset() {
         // period 1, add, shift 1: `GBAudioUpdateFrame`'s `case 2:`/`case 6:`
         // arm (`mgba/src/gb/audio.c:663`..`:668`) fires the sweep on every
-        // 128 Hz tick when `period == 1`. Pin that the shadow frequency
-        // changes at each of `FrameSequencer128Hz`'s tick offsets — not
-        // once per ~59.73 Hz render buffer, as before this fix (issue
-        // #381).
-        let mut voice = low_freq_sweep_voice(0x11);
-        voice.begin_frame(15);
-        let start_freq = voice.sweep_frequency().expect("square1 sweep configured");
-
+        // 128 Hz tick when `period == 1`. Pin the exact sample offsets the
+        // shadow frequency steps at — 104, 209, 313, 418, 522, the
+        // `FrameSequencer128Hz` schedule — rather than merely that it steps
+        // once per tick, which would hold for any schedule at all. Before
+        // this fix a step landed once per 224-sample render buffer instead
+        // (~59.73 Hz, issue #381).
         let mut clock = FrameSequencer128Hz::default();
-        let ticks = clock.advance(600); // 5 ticks, well short of the 8th (overflow)
-        let freqs = sweep_frequency_after_each_tick(&mut voice, &ticks);
+        let schedule = clock.advance(600); // 5 ticks, short of the 9th (overflow)
+        assert_eq!(schedule, vec![104, 209, 313, 418, 522]);
 
-        assert_eq!(freqs.len(), 5);
-        let mut expected = start_freq;
-        for &f in &freqs {
-            assert!(
-                f > expected,
-                "a period-1 sweep must advance on every 128 Hz tick, got {freqs:?}"
-            );
-            expected = f;
-        }
+        assert_eq!(
+            sweep_steps(0x11, 600, &schedule),
+            vec![(104, 66), (209, 99), (313, 148), (418, 222), (522, 333)],
+        );
     }
 
     #[test]
-    fn square1_sweep_period_2_ticks_at_half_the_128hz_rate() {
+    fn square1_sweep_period_2_steps_on_every_second_128hz_offset() {
         // period 2 (the issue's real repro: `rs_sfx_1.inc`'s
         // `voice_square_1_alt 60, 0, 44, 2, 0, 4, 0, 0` and `..., 38, 0, ...`
         // both encode period 2): the sweep must fire on every SECOND 128 Hz
-        // tick (64 Hz), not the ~29.86 Hz the old once-per-render-buffer
-        // cadence produced.
-        let mut voice = low_freq_sweep_voice(0x21); // period 2, add, shift 1
-        voice.begin_frame(15);
-        let start_freq = voice.sweep_frequency().expect("square1 sweep configured");
-
+        // tick (64 Hz), landing on that tick's own sample offset — 209, 418,
+        // 627, 836, 1045 — not on the ~29.86 Hz buffer boundaries the old
+        // once-per-render-buffer cadence produced. The counter starts at 2,
+        // so the first tick of each pair only counts down.
         let mut clock = FrameSequencer128Hz::default();
-        let ticks = clock.advance(1200); // 11 ticks
-        let freqs = sweep_frequency_after_each_tick(&mut voice, &ticks);
+        let schedule = clock.advance(1200); // 11 ticks
+        assert_eq!(
+            schedule,
+            vec![104, 209, 313, 418, 522, 627, 731, 836, 940, 1045, 1149]
+        );
 
-        assert_eq!(freqs.len(), 11);
-        let mut expected = start_freq;
-        let mut should_fire = false; // period 2's counter starts at 2: the
-                                     // first tick of each pair only counts
-                                     // down, the second fires.
-        for &f in &freqs {
-            if should_fire {
-                assert!(
-                    f > expected,
-                    "the second 128 Hz tick of a period-2 pair must fire, got {freqs:?}"
-                );
-                expected = f;
-            } else {
-                assert_eq!(
-                    f, expected,
-                    "the first 128 Hz tick of a period-2 pair must not fire, got {freqs:?}"
-                );
-            }
-            should_fire = !should_fire;
-        }
+        assert_eq!(
+            sweep_steps(0x21, 1200, &schedule),
+            vec![(209, 66), (418, 99), (627, 148), (836, 222), (1045, 333)],
+        );
     }
 
     #[test]

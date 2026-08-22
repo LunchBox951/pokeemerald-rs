@@ -224,3 +224,125 @@ fn voice_cap_drops_extra_notes() {
     assert!(!mixer.add_voice(constant_voice(10, 2)));
     assert_eq!(mixer.voice_count(), 2);
 }
+
+/// A square-1 voice with a sweep byte, at the lowest playable frequency:
+/// key `0` is below `MidiKeyToCgbFreq`'s floor, so the register clamps to
+/// `2048 - 2004 = 44` and a shift-1 sweep gets 8 upward steps (`66`, `99`,
+/// `148`, `222`, `333`, `499`, `748`, `1122`) before the 9th tick's
+/// look-ahead overflows `0x7FF` and disables the channel.
+fn cgb_sweep_voice(sweep_byte: u8) -> CgbVoice {
+    CgbVoice::square(
+        CgbChannelNumber::Square1,
+        2,
+        Some(sweep_byte),
+        CgbAdsr::flat(),
+        0,
+        0,
+        0xFF,
+        0xFF,
+        127,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+    )
+}
+
+/// The square-1 sweep's shadow frequency, or `None` once the slot retired.
+fn square1_sweep_frequency(mixer: &Mixer) -> Option<u16> {
+    mixer.cgb_voices()[CgbChannelNumber::Square1.slot()]
+        .as_ref()
+        .map(|voice| {
+            voice
+                .sweep_frequency()
+                .expect("the square-1 slot holds a sweeping voice")
+        })
+}
+
+#[test]
+fn mix_frame_sweeps_at_128hz_across_frame_boundaries() {
+    // The mixer's 128 Hz clock is one clock for the whole stream, not one
+    // per render buffer: 224 samples per frame is 2.143 sweep ticks, so a
+    // frame carries two ticks or — as the accumulator's fraction carries —
+    // three, and the count only comes out right if the phase survives from
+    // one `mix_frame` to the next (issue #381).
+    //
+    // Sweep byte `0x71` steps every 7th tick, so the shadow frequency pins
+    // the running tick count exactly. 16 frames are 34 ticks (4 steps: 66,
+    // 99, 148, 222); the 17th frame crosses tick 35 and takes the 5th step
+    // to 333. A clock restarted every frame would tick a flat 2 per frame —
+    // 119.5 Hz, not 128 — reaching only 34 ticks by the 17th frame and
+    // still sitting at 222.
+    let mut mixer = Mixer::default();
+    assert!(mixer.add_cgb_voice(cgb_sweep_voice(0x71)));
+    let mut out = vec![0.0; SAMPLES_PER_FRAME * 2];
+
+    for _ in 0..16 {
+        mixer.mix_frame(&mut out);
+    }
+    assert_eq!(
+        square1_sweep_frequency(&mixer),
+        Some(222),
+        "16 frames must be exactly 34 ticks, i.e. 4 period-7 steps"
+    );
+
+    mixer.mix_frame(&mut out);
+    assert_eq!(
+        square1_sweep_frequency(&mixer),
+        Some(333),
+        "the 17th frame must cross tick 35 and take the 5th step"
+    );
+}
+
+#[test]
+fn mix_frame_retires_an_overflowing_sweep_on_the_hardware_tick_count() {
+    // The same clock decides *when* an overflowing sweep retires its
+    // channel. `0x71` from register 44 needs 9 steps, i.e. 63 ticks, to
+    // overflow: real 128 Hz reaches tick 63 inside the 30th frame, while a
+    // per-frame-restarted clock's flat 2 ticks per frame would not get
+    // there until the 32nd (issue #381).
+    let mut mixer = Mixer::default();
+    assert!(mixer.add_cgb_voice(cgb_sweep_voice(0x71)));
+    let mut out = vec![0.0; SAMPLES_PER_FRAME * 2];
+
+    for _ in 0..29 {
+        mixer.mix_frame(&mut out);
+    }
+    assert_eq!(
+        square1_sweep_frequency(&mixer),
+        Some(1122),
+        "29 frames must be 62 ticks: 8 steps, one tick short of the overflow"
+    );
+
+    mixer.mix_frame(&mut out);
+    assert!(
+        square1_sweep_frequency(&mixer).is_none(),
+        "the 30th frame must reach tick 63, overflow, and free the slot"
+    );
+    assert_eq!(mixer.voice_count(), 0);
+}
+
+#[test]
+fn a_frames_sweep_tick_buffer_never_has_to_grow() {
+    // `mix_frame` reuses one preallocated tick buffer so steady-state
+    // rendering stays allocation-free (the `sweep_ticks` field). That only
+    // holds if `MAX_SWEEP_TICKS_PER_FRAME` really bounds a frame: 224
+    // samples span 2.143 ticks, so frames carry two or three, never more.
+    assert_eq!(MAX_SWEEP_TICKS_PER_FRAME, 3);
+
+    let mut clock = FrameSequencer128Hz::default();
+    let mut ticks = Vec::new();
+    let mut seen_three = false;
+    for _ in 0..1000 {
+        clock.advance_into(SAMPLES_PER_FRAME, &mut ticks);
+        assert!(
+            ticks.len() <= MAX_SWEEP_TICKS_PER_FRAME,
+            "a frame produced {} ticks",
+            ticks.len()
+        );
+        seen_three |= ticks.len() == MAX_SWEEP_TICKS_PER_FRAME;
+    }
+    assert!(seen_three, "the fractional carry must reach three ticks");
+}
