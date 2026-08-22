@@ -120,10 +120,22 @@ impl Resampler {
     /// `out.len()` should be a multiple of `channels`; a short trailing
     /// partial frame is filled as far as it goes and otherwise ignored.
     ///
+    /// A zero-length `out` is a no-op: it does not lock the ring buffer,
+    /// prime the interpolator, or count an underrun.
+    ///
     /// Locks the ring buffer exactly once: all the source frames this call
     /// needs are bulk-drained up front (see the module docs), then the
     /// interpolation loop reads them from scratch without touching the queue.
     pub fn fill(&mut self, out: &mut [f32]) {
+        // A zero-length fill must not move the stream: no priming frames
+        // drained, no queue occupancy change, no underrun accounted. Every
+        // step below assumes at least one output frame is being produced, so
+        // bail before any of it runs rather than special-casing `steps == 0`
+        // partway through.
+        if out.is_empty() {
+            return;
+        }
+
         // Number of interpolation steps == number of `chunks_mut` iterations
         // below (a trailing partial frame still advances the cursor).
         let steps = out.len().div_ceil(self.channels);
@@ -211,7 +223,7 @@ impl Resampler {
 #[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
-    use crate::ring::ring_buffer;
+    use crate::ring::{ring_buffer, Producer};
 
     #[test]
     fn identity_ratio_passes_frames_through_unchanged() {
@@ -305,5 +317,99 @@ mod tests {
         // Interpolates against the real frame 20, not stale silence.
         assert_eq!(cb2, [10.0, 15.0]);
         assert_eq!(resampler.underruns(), 0);
+    }
+
+    #[test]
+    fn empty_fill_before_priming_does_not_touch_queue_or_prime() {
+        // Regression test for #345: on a never-primed resampler, `fill` used
+        // to compute its 2-frame priming drain from `self.primed` alone, so
+        // an empty `out` still ran it. The queue here is deliberately
+        // starved to 1 sample (fewer than the 2 priming frames the old code
+        // would have drained), so the bug's two symptoms are both directly
+        // observable: `Consumer::fill`'s shortfall padding would count 1
+        // underrun on a call that produced no output, and the queue would
+        // lose its 1 queued sample even though nothing was emitted.
+        let (producer, consumer) = ring_buffer(16);
+        assert_eq!(producer.push(&[7.0]), 1);
+        let mut resampler = Resampler::new(consumer, 1, 100, 100, 16);
+
+        resampler.fill(&mut []);
+        assert_eq!(producer.available_space(), 16 - 1);
+        assert_eq!(resampler.underruns(), 0);
+        assert!(!resampler.primed);
+
+        // The old code would also have latched `primed = true` with
+        // `prev = 7.0` (the one real sample it grabbed) and `next = 0.0`
+        // (silence, padded for the shortfall) — corrupting the interpolator
+        // before any real output existed. Queue the rest of the stream and
+        // run a real fill: with the empty fill correctly a no-op, priming
+        // still happens here, against the real, un-poisoned data.
+        assert_eq!(producer.push(&[8.0, 9.0, 10.0]), 3);
+        let mut out = [0.0; 2];
+        resampler.fill(&mut out);
+        assert_eq!(out, [7.0, 8.0]);
+        assert_eq!(resampler.underruns(), 0);
+    }
+
+    #[test]
+    fn empty_fill_after_priming_leaves_interpolator_state_untouched() {
+        // The post-priming counterpart to
+        // `empty_fill_before_priming_does_not_touch_queue_or_prime`. Once
+        // `primed` is already `true`, the pre-#345-fix code happened to
+        // compute a 0-frame drain for an empty `out` too (its priming count
+        // is gated on `!self.primed`), so this case was not itself broken.
+        // This test isn't a regression test for a bug in this path; it pins
+        // the `out.is_empty()` guard's contract — no queue/underrun/cursor
+        // change — for the primed path as well, so a future change to this
+        // method can't reintroduce a cost or side effect here without
+        // failing a test. Two identically-seeded resamplers are driven
+        // through the same real fills; only one gets an empty fill spliced
+        // in between, and every field plus the next real fill's output must
+        // still match the one that never saw an empty fill.
+        fn make() -> (Producer, Resampler) {
+            let (producer, consumer) = ring_buffer(16);
+            assert_eq!(producer.push(&[0.0, 10.0]), 2);
+            (producer, Resampler::new(consumer, 1, 1, 2, 8))
+        }
+
+        let (producer_a, mut baseline) = make();
+        let (producer_b, mut with_empty) = make();
+
+        let mut first_a = [0.0; 2];
+        let mut first_b = [0.0; 2];
+        baseline.fill(&mut first_a);
+        with_empty.fill(&mut first_b);
+        assert_eq!(first_a, first_b);
+        assert!(baseline.primed);
+        // Both queues are fully drained by the first fill (2 pushed, 2
+        // consumed for priming, 0 crossings) -- an absolute checkpoint, not
+        // just a relative one, before the empty fill is spliced in.
+        assert_eq!(producer_a.available_space(), 16);
+        assert_eq!(producer_b.available_space(), 16);
+
+        // Only `with_empty` gets the empty fill.
+        with_empty.fill(&mut []);
+        assert_eq!(producer_b.available_space(), 16);
+        assert_eq!(producer_a.available_space(), producer_b.available_space());
+        assert_eq!(baseline.underruns(), with_empty.underruns());
+        assert_eq!(baseline.primed, with_empty.primed);
+        assert_eq!(baseline.need_advance, with_empty.need_advance);
+        assert_eq!(baseline.frac, with_empty.frac);
+        assert_eq!(baseline.prev, with_empty.prev);
+        assert_eq!(baseline.next, with_empty.next);
+
+        // Feed both queues identically, then confirm the next real fill
+        // still matches: proof the spliced-in empty fill changed nothing
+        // that later output depends on.
+        assert_eq!(producer_a.push(&[20.0]), 1);
+        assert_eq!(producer_b.push(&[20.0]), 1);
+
+        let mut second_a = [0.0; 2];
+        let mut second_b = [0.0; 2];
+        baseline.fill(&mut second_a);
+        with_empty.fill(&mut second_b);
+        assert_eq!(second_a, [10.0, 15.0]);
+        assert_eq!(second_a, second_b);
+        assert_eq!(baseline.underruns(), with_empty.underruns());
     }
 }

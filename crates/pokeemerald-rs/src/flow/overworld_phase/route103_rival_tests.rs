@@ -459,7 +459,7 @@ fn winning_the_rival_battle_saturates_money_at_the_upstream_cap() {
 /// shipped before this issue -- a loss left a fainted lead standing right
 /// next to a still-interactable rival, walled off from a rematch only by an
 /// emergent `FaintedBattler` refusal one level down
-/// ([`crate::flow::route103_rival::start_route103_rival_battle`]). The real
+/// ([`crate::flow::npc_trainer_battle::start_npc_trainer_battle`]). The real
 /// upstream behaviour is reachable now
 /// ([`super::white_out::OverworldPhase::white_out`]), so this pins that
 /// instead: item (f) of the issue's own test list -- a

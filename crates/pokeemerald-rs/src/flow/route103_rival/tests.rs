@@ -14,15 +14,19 @@ use assets::{MoveId, SpeciesId};
 use battle::{trainer_data, trainer_money, BattleOutcome, BattlePokemon, Dex, Ivs};
 use engine::rng::Rng;
 
-use super::{
-    advance_route103_rival_battle, route103_rival_for, start_route103_rival_battle, PlayerStarter,
-    Rival, RivalBattleError,
+use super::{route103_rival_for, PlayerStarter, Rival};
+// The construction/driver -- `trainer_party_personalities`,
+// `start_npc_trainer_battle`, `advance_npc_trainer_battle`, and the
+// `NpcTrainerBattleError` they report -- all live in `npc_trainer_battle`
+// since issue #264's construction split (`route103_rival`'s own module
+// docs). Issue #347 retired this module's thin
+// `start_route103_rival_battle`/`advance_route103_rival_battle`/
+// `RivalBattleError` pass-throughs, so every test below imports the real
+// names directly, the same way the personality test already did.
+use crate::flow::npc_trainer_battle::{
+    advance_npc_trainer_battle, start_npc_trainer_battle, trainer_party_personalities,
+    NpcTrainerBattleError,
 };
-// `trainer_party_personalities` lives in `npc_trainer_battle` since issue
-// #264's construction split (`route103_rival`'s own module docs); imported
-// from there directly rather than through a same-named pass-through this
-// module has no production caller for.
-use crate::flow::npc_trainer_battle::trainer_party_personalities;
 
 const TREECKO: u16 = 277;
 const TORCHIC: u16 = 280;
@@ -174,8 +178,8 @@ fn the_name_hash_accumulates_across_a_multi_mon_party() {
 }
 
 /// Every extracted trainer name and species name encodes, so
-/// [`RivalBattleError::UnnamedCharacter`] is genuinely unreachable for real
-/// data rather than merely untested.
+/// [`NpcTrainerBattleError::UnnamedCharacter`] is genuinely unreachable for
+/// real data rather than merely untested.
 #[test]
 fn every_trainer_and_species_name_has_a_charmap_encoding() {
     for data in TrainerTable::new().iter() {
@@ -216,7 +220,7 @@ fn a_held_item_party_is_refused_rather_than_stripped() {
         .expect("some trainer fields held items");
     assert_eq!(
         trainer_party_personalities(id).unwrap_err(),
-        RivalBattleError::HeldItemParty(id)
+        NpcTrainerBattleError::HeldItemParty(id)
     );
 }
 
@@ -224,12 +228,11 @@ fn a_held_item_party_is_refused_rather_than_stripped() {
 /// its seeded personality and all-zero IVs, and proof that
 /// `BATTLE_TYPE_TRAINER` really reached `Battle::new_trainer`.
 #[test]
-fn start_route103_rival_battle_builds_the_seeded_level_5_treecko() {
+fn starting_the_rival_battle_builds_the_seeded_level_5_treecko() {
     let id = route103_rival_for(Rival::May, PlayerStarter::Mudkip);
     let mut rng = Rng::new(1);
     let lead = player_mon(MUDKIP, 5, vec![TACKLE]);
-    let battle =
-        start_route103_rival_battle(lead, id, &mut rng).expect("construction must succeed");
+    let battle = start_npc_trainer_battle(lead, id, &mut rng).expect("construction must succeed");
 
     assert_eq!(battle.enemy().species(), SpeciesId(TREECKO));
     assert_eq!(battle.enemy().level(), 5);
@@ -253,18 +256,18 @@ fn start_route103_rival_battle_builds_the_seeded_level_5_treecko() {
     assert_eq!(context.money(), 300);
 }
 
-/// The exact draws `start_route103_rival_battle` spends: one `Random32` OT
-/// id for the party's single mon, then `Battle::new_trainer`'s turn-number
-/// draw. The personality and IVs draw nothing at all — which is the whole
-/// difference from `flow::first_battle`'s construction.
+/// The exact draws `start_npc_trainer_battle` spends for a Route 103 rival:
+/// one `Random32` OT id for the party's single mon, then
+/// `Battle::new_trainer`'s turn-number draw. The personality and IVs draw
+/// nothing at all — which is the whole difference from
+/// `flow::first_battle`'s construction.
 #[test]
 fn construction_draws_only_the_ot_id_then_the_turn_number() {
     const SEED: u32 = 7;
     let id = route103_rival_for(Rival::May, PlayerStarter::Mudkip);
     let mut rng = Rng::new(SEED);
     let lead = player_mon(MUDKIP, 5, vec![TACKLE]);
-    let battle =
-        start_route103_rival_battle(lead, id, &mut rng).expect("construction must succeed");
+    let battle = start_npc_trainer_battle(lead, id, &mut rng).expect("construction must succeed");
 
     let mut reference = Rng::new(SEED);
     let ot_id = reference.next_u32();
@@ -310,7 +313,7 @@ fn all_six_rivals_construct_and_play_to_a_terminal_outcome() {
         // who wins.
         let lead = player_mon(species, 50, vec![SLASH]);
         let mut slot = Some(
-            start_route103_rival_battle(lead, id, &mut rng)
+            start_npc_trainer_battle(lead, id, &mut rng)
                 .unwrap_or_else(|e| panic!("{id:?} must construct: {e}")),
         );
         let mut written_back = None;
@@ -318,7 +321,7 @@ fn all_six_rivals_construct_and_play_to_a_terminal_outcome() {
         let mut outcome = None;
         for _ in 0..32 {
             outcome =
-                advance_route103_rival_battle(&mut slot, &mut written_back, &mut money, &mut rng);
+                advance_npc_trainer_battle(&mut slot, &mut written_back, &mut money, &mut rng);
             if outcome.is_some() {
                 break;
             }
@@ -352,12 +355,12 @@ fn the_driver_never_attempts_to_run() {
     // real lead and simply watch that no turn ever fails with the trainer
     // run refusal, and that the battle really progresses.
     let lead = player_mon(MUDKIP, 5, vec![TACKLE]);
-    let mut slot = Some(start_route103_rival_battle(lead, id, &mut rng).unwrap());
+    let mut slot = Some(start_npc_trainer_battle(lead, id, &mut rng).unwrap());
     let enemy_hp_before = slot.as_ref().unwrap().enemy().current_hp();
 
     let mut written_back = None;
     let mut money = 0;
-    let outcome = advance_route103_rival_battle(&mut slot, &mut written_back, &mut money, &mut rng);
+    let outcome = advance_npc_trainer_battle(&mut slot, &mut written_back, &mut money, &mut rng);
     assert_eq!(outcome, None, "one turn must not end this battle");
     assert!(slot.is_some(), "an ongoing battle keeps its slot");
     let battle = slot.as_ref().unwrap();
@@ -384,11 +387,11 @@ fn a_lead_with_no_pp_in_slot_zero_ends_the_battle_and_is_still_written_back() {
     for _ in 0..lead.moves()[0].pp {
         lead.deduct_pp(0).unwrap();
     }
-    let mut slot = Some(start_route103_rival_battle(lead, id, &mut rng).unwrap());
+    let mut slot = Some(start_npc_trainer_battle(lead, id, &mut rng).unwrap());
     let mut written_back = None;
     let mut money = 0;
 
-    let outcome = advance_route103_rival_battle(&mut slot, &mut written_back, &mut money, &mut rng);
+    let outcome = advance_npc_trainer_battle(&mut slot, &mut written_back, &mut money, &mut rng);
     assert_eq!(outcome, None, "the engine reported no outcome...");
     assert!(slot.is_none(), "...but the battle was ended anyway");
     let mon = written_back.expect("the mon is still written back");
@@ -458,7 +461,7 @@ fn advancing_an_empty_slot_does_nothing() {
     let mut lead = None;
     let mut money = crate::new_game::STARTING_MONEY;
     assert_eq!(
-        advance_route103_rival_battle(&mut slot, &mut lead, &mut money, &mut rng),
+        advance_npc_trainer_battle(&mut slot, &mut lead, &mut money, &mut rng),
         None
     );
     assert!(lead.is_none());

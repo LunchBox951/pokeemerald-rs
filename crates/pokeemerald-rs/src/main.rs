@@ -12,13 +12,17 @@
 //! the exact `./init.sh`/`cargo xtask extract` commands to run) printed by
 //! this `main`, not a panic -- see [`pokeemerald_rs::app::AppError`].
 //!
-//! The intro cinematic, new-game flow, engine/battle wiring, audio, and save
-//! are all out of scope for this slice -- see issue #70 and #109.
+//! Everything past the title screen -- scene flow, battles, saving,
+//! audio -- lives behind [`pokeemerald_rs::App`]; `main` only constructs
+//! it and pumps frames. The live status write-up for each subsystem is
+//! its crate root's `//!` doc (`src/lib.rs` here, and each subsystem
+//! crate's own), per `AGENTS.md`; this entry-point overview deliberately
+//! does not restate it.
 //!
 //! **Manual-run only**: CI is headless, so this binary never runs in a
-//! test -- only the headless glue in `pokeemerald_rs::app`, `::scene`,
-//! `::title`, and `::frame` is unit-tested, plus `xtask`'s `e2e --suite
-//! smoke` run, which drives `App::new_headless` in-process (F-3, V-1) --
+//! test -- only the library crate's headless glue is unit-tested, plus
+//! `xtask`'s `e2e --suite smoke` run, which drives `App::new_headless`
+//! in-process (F-3, V-1) --
 //! that constructor always uses the I-1 synthetic scene, never the real
 //! title screen (see `pokeemerald_rs::app`'s module docs). Verify the real
 //! windowed shell locally with:
