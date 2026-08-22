@@ -61,9 +61,16 @@ Because of that posture, contributions **must be clean-room reimplementations**:
   re-express it in idiomatic Rust `(no-verbatim)`. Translating a table of
   constants is fine; transliterating a C function line-for-line is not.
 - **Never commit copyrighted game assets.** No ROM rips, no sprite/tile/audio
-  blobs from the game in the git tree. Assets are *extracted at build time* from
-  the user's own upstream checkout by the extraction pipeline — they are
-  not redistributed here.
+  blobs from the game in the git tree. Assets reach the game two ways, neither
+  of which passes through this repository: a player imports their own
+  cartridge image (`pokeemerald-rs --import-rom`, `crates/rom-import`), or a
+  developer extracts from their own upstream checkout (`cargo xtask extract`).
+  The ROM, its path, and its bytes never enter git, CI, artifacts, or logs:
+  `*.gba` is gitignored, CI tests the importer on synthetic fixtures only, and
+  the real-ROM equivalence harness is `#[ignore]`d behind `POKEEMERALD_ROM`.
+  The committed revision profile (`crates/rom-import/src/profiles/`) holds
+  offsets, lengths, and names, never ROM bytes; regenerate it with
+  `cargo xtask gen-rom-profile`, never by hand.
 - `pokeemerald/` and `mgba/` are **read-only references** `(reference-only)`,
   cloned by `init.sh` and gitignored. Never edit, commit, or link against them.
 

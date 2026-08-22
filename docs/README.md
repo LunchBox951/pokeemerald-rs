@@ -11,6 +11,11 @@ order:
    and the human blessing workflow V-4 requires.
 4. **[scenarios.md](scenarios.md)** — the contract for named, scripted
    headless runs through the real application flow.
+5. The player-facing **ROM import** is documented in the top-level
+   [README's Playing section](../README.md#playing); the contract it rests on
+   (one supported revision, hash-keyed, no ROM bytes in the repository) is
+   `crates/rom-import/src/lib.rs`'s `//!` doc, and the pack both backends
+   write is `crates/pack-format/src/lib.rs`'s.
 
 There are no design-spec or plan docs: the roadmap is dynamic and lives in GitHub
 issues, PRs, and discussions `(constitution-vs-roadmap)`. Docs hold the durable
