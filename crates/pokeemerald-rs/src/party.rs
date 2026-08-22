@@ -79,12 +79,15 @@
 //! PP it restores (`pokeemerald/src/script_pokemon_util.c:53-57`), and this
 //! port's own heals ([`battle::BattlePokemon::heal`], reached from the
 //! white-out and from the first battle's conclusion) restore both of those
-//! but have no status field to clear. A save whose lead carries a status
-//! byte therefore keeps it across a white-out, until `battle` models
-//! status and the merge can overlay it like any other battle-owned field.
-//! That is the modelling gap showing through, not the merge inventing
-//! anything: before it, a save cleared the byte whether the mon had been
-//! healed or not.
+//! but have no status field to clear. The merge's side of that gap is
+//! plain retention: a stored status byte rides through every ordinary
+//! save like any other unmodelled field. The white-out closes its side at
+//! the call site -- after a successful heal it clears the retained
+//! record's status byte directly ([`crate::flow`]'s
+//! `overworld_phase::white_out`), so an ordinary save keeps the byte and
+//! a white-out does not, which is upstream's split. Once `battle` models
+//! status, the merge overlays it like any other battle-owned field and
+//! the call-site clear disappears.
 //!
 //! One more field *does* round-trip, added alongside
 //! [`battle::BattlePokemon::ability`] (issue #322): **the ability slot** --
