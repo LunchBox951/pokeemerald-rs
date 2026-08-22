@@ -1341,6 +1341,7 @@ version = "0.0.26+gamepatch.2"
 name = "rom-import"
 version = "0.0.26+gamepatch.2"
 dependencies = [
+ "assets",
  "pack-format",
 ]
 

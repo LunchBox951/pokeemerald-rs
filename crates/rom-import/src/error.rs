@@ -207,6 +207,53 @@ pub enum ImportError {
         /// The claimed stored length in bytes.
         len: u32,
     },
+    /// A sample's `WaveData` is DPCM-compressed (`type != 0`).
+    ///
+    /// The pack stores samples decompressed and the mixer never expands
+    /// DPCM. No instrument the title music plays is compressed; every cry
+    /// is, and none is in scope. Refused rather than expanded because the
+    /// profile says this root is plain PCM, so the ROM disagrees with it.
+    CompressedSample {
+        /// The pack id the root produces.
+        id: &'static str,
+    },
+    /// A voicegroup slot's `ToneData.type` is one the importer does not
+    /// model: not a `DirectSound`, CGB, key-split, or rhythm voice.
+    VoiceType {
+        /// The voicegroup's pack id.
+        root: &'static str,
+        /// The slot index.
+        slot: usize,
+        /// The type byte.
+        kind: u8,
+    },
+    /// A voicegroup slot points at a sample, voicegroup, or key-split
+    /// table the profile does not record.
+    ///
+    /// The pack links by id, so a pointer with no id is unrepresentable.
+    /// The generator records every reachable root, so this is a wrong
+    /// profile, not a gap to fill at run time.
+    UnresolvedPointer {
+        /// The voicegroup's pack id.
+        root: &'static str,
+        /// The slot index.
+        slot: usize,
+        /// What the pointer was expected to address.
+        what: &'static str,
+        /// The pointer itself.
+        ptr: crate::reader::GbaPtr,
+    },
+    /// The audio schema refused what the ROM holds.
+    ///
+    /// [`assets`]'s constructors bound a sample's loop point, a key-split
+    /// table's length, a voicegroup's slot count, and a pan override. A
+    /// ROM value outside those bounds is a profile the schema cannot carry.
+    Audio {
+        /// The pack id being built.
+        id: &'static str,
+        /// What the schema objected to.
+        source: assets::AudioError,
+    },
     /// The asset pack could not be assembled.
     PackWrite(pack_format::PackWriteError),
     /// The asset pack could not be written to disk.
@@ -294,6 +341,24 @@ impl fmt::Display for ImportError {
                 f,
                 "`{id}` claims a {width}x{height}/{bit_depth}bpp glyph sheet of {len} bytes; the ROM stores 256x512/2bpp in 32768"
             ),
+            Self::CompressedSample { id } => {
+                write!(f, "`{id}` is DPCM-compressed in the ROM; the importer reads plain PCM only")
+            }
+            Self::VoiceType { root, slot, kind } => write!(
+                f,
+                "`{root}` slot {slot} has voice type {kind:#04x}, which the importer does not model"
+            ),
+            Self::UnresolvedPointer {
+                root,
+                slot,
+                what,
+                ptr,
+            } => write!(
+                f,
+                "`{root}` slot {slot} points at {what} {:#010x}, which this revision profile does not record",
+                ptr.raw()
+            ),
+            Self::Audio { id, source } => write!(f, "`{id}`: {source}"),
             Self::PackWrite(source) => write!(f, "could not assemble the asset pack: {source}"),
             Self::WriteFailed { path, source } => {
                 write!(f, "could not write `{}`: {source}", path.display())
@@ -311,6 +376,7 @@ impl std::error::Error for ImportError {
             Self::ReadFailed { source, .. } | Self::WriteFailed { source, .. } => Some(source),
             Self::PackWrite(source) => Some(source),
             Self::EntryShape { source, .. } => Some(source),
+            Self::Audio { source, .. } => Some(source),
             _ => None,
         }
     }
@@ -409,6 +475,31 @@ mod tests {
                 source: pack_format::EntryShapeError::UnsupportedBitDepth(3),
             },
             ImportError::PackWrite(pack_format::PackWriteError::DuplicateId("a".into())),
+            ImportError::FontShape {
+                id: "font/normal/glyphs",
+                width: 128,
+                height: 512,
+                bit_depth: 2,
+                len: 32768,
+            },
+            ImportError::CompressedSample {
+                id: "audio/sample/direct-sound/x",
+            },
+            ImportError::VoiceType {
+                root: "audio/voicegroup/title",
+                slot: 3,
+                kind: 0x20,
+            },
+            ImportError::UnresolvedPointer {
+                root: "audio/voicegroup/title",
+                slot: 3,
+                what: "a sample",
+                ptr: crate::reader::GbaPtr::AT_BASE,
+            },
+            ImportError::Audio {
+                id: "audio/voicegroup/title",
+                source: assets::AudioError::Truncated,
+            },
             ImportError::EmptyPack,
         ];
         for case in cases {

@@ -55,6 +55,8 @@ const COMPLETE_PREFIXES: &[&str] = &[
     "sprite/",
     "font/",
     "text-window/",
+    "audio/sample/",
+    "audio/voicegroup/",
 ];
 
 /// Ids the two backends are known and accepted to disagree on, each with

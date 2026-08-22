@@ -43,11 +43,15 @@
 //!   and border blocks), the object-event sprites (`sprite/*` sheets and
 //!   `sprite/palette/*` banks), the Latin glyph sheets (`font/*/glyphs`,
 //!   decoded from `gbagfx`'s `.latfont` layout), and the text windows
-//!   (`text-window/image/*`, `text-window/palette/*`). A domain that has a
-//!   ROM struct behind its roots corroborates it field by field, so a wrong
-//!   profile is a typed error rather than a plausible-looking asset.
-//!   [`import`] and [`import_to_bytes`] run them into a `PackWriter` and
-//!   hand back a real pack.
+//!   (`text-window/image/*`, `text-window/palette/*`). The sound engine's
+//!   data is wired too: `DirectSound` samples and programmable waves
+//!   (`audio/sample/*`) and voicegroups (`audio/voicegroup/*`), read from
+//!   the m4a `WaveData` and `ToneData` structs and emitted through
+//!   `assets`' own schema encoders. A domain that has a ROM struct behind
+//!   its roots corroborates it field by field, so a wrong profile is a
+//!   typed error rather than a plausible-looking asset. [`import`] and
+//!   [`import_to_bytes`] run them into a `PackWriter` and hand back a real
+//!   pack.
 //!
 //! # Equivalence
 //!
@@ -60,12 +64,11 @@
 //!
 //! # What is next
 //!
-//! `MUS_TITLE`'s audio tree, in two slices sharing this crate's reader:
-//! the samples and voicegroups, then the song decoder. Each turns ROM bytes
-//! into [`pack_format`] entries under the ids `crates/assets` already
-//! expects, and each extends the same equivalence run. Until they land the
-//! pack is *partial*: it holds every graphics id and no audio, so a run of
-//! the game against it still needs the checkout pack.
+//! The song decoder: `MUS_TITLE`'s `SongHeader` and its ten tracks of m4a
+//! commands, turned into `assets::Song` events under `audio/song/*`. It is
+//! the one id the checkout pack holds that this crate does not yet write,
+//! so the pack is *partial* until it lands: a run of the game against it
+//! still needs the checkout pack for its music.
 //!
 //! The CLI that drives [`import`] already exists: `pokeemerald-rs
 //! --import-rom <path>` resolves the pack's destination, writes it

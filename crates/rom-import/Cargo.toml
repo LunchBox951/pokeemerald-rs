@@ -6,8 +6,11 @@ rust-version.workspace = true
 publish.workspace = true
 
 [dependencies]
-# The importer's output side. `pack-format` is an in-workspace crate, not a
-# new external dependency; this crate takes no others (minimal-deps).
+# The importer's output side. Both are in-workspace crates, not new external
+# dependencies; this crate takes no others (minimal-deps). `assets` owns the
+# audio schemas (`Sample`, `VoiceGroup`, `Song`) and their wire encoders,
+# which the audio domains emit through rather than duplicate.
+assets = { path = "../assets" }
 pack-format = { path = "../pack-format" }
 
 [lints]
