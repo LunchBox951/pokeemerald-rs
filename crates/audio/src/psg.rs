@@ -119,8 +119,9 @@ impl FrameSequencer128Hz {
 /// itself is hardware, cross-checked against `mgba/src/gb/audio.c`'s
 /// `_updateSweep` — with one pre-existing divergence on a zero shift, noted
 /// at [`Self::tick`]'s `shift == 0` arm). The real unit ticks from two of
-/// the eight phases of a 512 Hz frame sequencer, i.e. 128 Hz exactly (`GBAudioUpdateFrame`'s `case
-/// 2:`/`case 6:` arm, `mgba/src/gb/audio.c:663`..`:668`; the 512 Hz base
+/// the eight phases of a 512 Hz frame sequencer, i.e. 128 Hz exactly
+/// (`GBAudioUpdateFrame`'s `case 2:`/`case 6:` arm,
+/// `mgba/src/gb/audio.c:663`..`:668`; the 512 Hz base
 /// itself is `FRAME_CYCLES` = `DMG_SM83_FREQUENCY >> 9`,
 /// `mgba/src/gb/audio.c:18`). [`Self::tick`] is driven at that same 128 Hz
 /// cadence by [`FrameSequencer128Hz`], which lands each tick at its correct

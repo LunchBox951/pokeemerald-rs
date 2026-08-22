@@ -529,7 +529,7 @@ impl CgbVoice {
     ///
     /// `sweep_ticks` are the ascending, 0-based sample offsets within `acc`
     /// at which the channel-1 sweep must tick — normally
-    /// [`crate::psg::FrameSequencer128Hz::advance`]'s result for `acc.len()`
+    /// [`crate::psg::FrameSequencer128Hz::advance_into`]'s output for `acc.len()`
     /// samples, shared across every CGB voice in a frame since the real
     /// frame sequencer is one clock for the whole hardware unit. Applying
     /// the tick at its exact sample offset (rather than once before the
@@ -1076,8 +1076,12 @@ mod tests {
     /// Every `(sample offset, new frequency)` at which `sweep_byte`'s shadow
     /// frequency steps while `total` samples render under `schedule`.
     ///
-    /// Found by rendering each prefix length in turn and diffing, so an
-    /// offset here is the true sample index the step happened at.
+    /// Found by rendering each prefix length in turn and diffing. The
+    /// offset is the schedule entry whose inclusion caused the step --
+    /// where the *schedule* puts the tick, not an independent observation
+    /// of where `render` applied it inside the buffer. In-buffer placement
+    /// is pinned separately by `cgb_voice_render_is_chunk_boundary_invariant`
+    /// and `square1_sweep_overflow_retires_the_voice_mid_buffer`.
     fn sweep_steps(sweep_byte: u8, total: usize, schedule: &[usize]) -> Vec<(usize, u16)> {
         let mut steps = Vec::new();
         let mut previous = sweep_frequency_after(sweep_byte, 0, schedule);
@@ -1092,15 +1096,15 @@ mod tests {
     }
 
     #[test]
-    fn square1_sweep_period_1_steps_at_every_128hz_sample_offset() {
+    fn square1_sweep_period_1_steps_once_per_scheduled_128hz_tick() {
         // period 1, add, shift 1: `GBAudioUpdateFrame`'s `case 2:`/`case 6:`
         // arm (`mgba/src/gb/audio.c:663`..`:668`) fires the sweep on every
-        // 128 Hz tick when `period == 1`. Pin the exact sample offsets the
-        // shadow frequency steps at — 104, 209, 313, 418, 522, the
-        // `FrameSequencer128Hz` schedule — rather than merely that it steps
-        // once per tick, which would hold for any schedule at all. Before
-        // this fix a step landed once per 224-sample render buffer instead
-        // (~59.73 Hz, issue #381).
+        // 128 Hz tick when `period == 1`. Pin the literal schedule — 104,
+        // 209, 313, 418, 522 — and that each scheduled tick, and nothing
+        // else, moves the shadow frequency one step. Before this fix a
+        // step landed once per 224-sample render buffer instead (~59.73
+        // Hz, issue #381). In-buffer placement of those ticks is pinned by
+        // the chunk-invariance and mid-buffer-retirement tests.
         let mut clock = FrameSequencer128Hz::default();
         let schedule = clock.advance(600); // 5 ticks, short of the 9th (overflow)
         assert_eq!(schedule, vec![104, 209, 313, 418, 522]);
@@ -1112,14 +1116,14 @@ mod tests {
     }
 
     #[test]
-    fn square1_sweep_period_2_steps_on_every_second_128hz_offset() {
+    fn square1_sweep_period_2_steps_once_per_second_scheduled_tick() {
         // period 2 (the issue's real repro: `rs_sfx_1.inc`'s
         // `voice_square_1_alt 60, 0, 44, 2, 0, 4, 0, 0` and `..., 38, 0, ...`
         // both encode period 2): the sweep must fire on every SECOND 128 Hz
-        // tick (64 Hz), landing on that tick's own sample offset — 209, 418,
-        // 627, 836, 1045 — not on the ~29.86 Hz buffer boundaries the old
-        // once-per-render-buffer cadence produced. The counter starts at 2,
-        // so the first tick of each pair only counts down.
+        // tick (64 Hz) — schedule entries 209, 418, 627, 836, 1045 — not
+        // at the ~29.86 Hz cadence the old once-per-render-buffer stepping
+        // produced. The counter starts at 2, so the first tick of each
+        // pair only counts down.
         let mut clock = FrameSequencer128Hz::default();
         let schedule = clock.advance(1200); // 11 ticks
         assert_eq!(
