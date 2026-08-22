@@ -414,11 +414,12 @@ mod tests {
         assert_eq!(darken(color, 0), color);
     }
 
-    /// The alpha-blend third of the exhaustive oracle sweep: every pair of
-    /// weights over a representative color pair, plus the full 5-bit
-    /// channel domain on mismatched weights. `mColorMix5Bit`'s shifted
-    /// lanes floor sums, so the uniform per-channel `mix_channel` must
-    /// match it exactly (module docs).
+    /// The alpha-blend third of the oracle sweep: the full 5-bit channel
+    /// domain against six weight pairs, then the full 17x17 weight grid
+    /// over five boundary-heavy color pairs -- every channel value and
+    /// every weight pair, though not their full cross product.
+    /// `mColorMix5Bit`'s shifted lanes floor sums, so the uniform
+    /// per-channel `mix_channel` must match it exactly (module docs).
     #[test]
     fn alpha_blend_matches_the_32bit_mgba_oracle() {
         for r5 in 0..32 {

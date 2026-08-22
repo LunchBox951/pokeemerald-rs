@@ -90,10 +90,12 @@ impl Bgr555 {
 /// 264-265`) — so every [`Rgb888`] this crate produces is already in the
 /// same 8-bit-per-channel representation [`crate::effects`]' color-effect
 /// math (`alpha_blend`/`brighten`/`darken`) operates on directly, matching
-/// stock desktop mGBA bit for bit. [`crate::effects`]' oracle tests prove
-/// that exhaustively, over every 5-bit channel value and every usable
-/// weight; its module docs explain the rounding asymmetry `_darken` hides in
-/// its shifted lanes `(behavioral-fidelity)`.
+/// stock desktop mGBA bit for bit. [`crate::effects`]' oracle tests pin
+/// that exhaustively for brighten and darken (every 5-bit channel value x
+/// every weight), and for alpha blend over every channel value and every
+/// weight pair, though not their full cross product; its module docs
+/// explain the rounding asymmetry `_darken` hides in its shifted lanes
+/// `(behavioral-fidelity)`.
 pub(crate) const fn expand_5_to_8(c: u8) -> u8 {
     (c << 3) | (c >> 2)
 }
