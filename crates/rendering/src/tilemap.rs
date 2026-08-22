@@ -114,12 +114,13 @@ impl Tilemap {
     /// screenblock's row-major layout composites and wraps correctly at any
     /// sub-32x32 size, not just the full 32x32 one.
     ///
-    /// Once either dimension exceeds 32, though, `Tilemap::entry`'s
-    /// screenblock addressing assumes *complete* 32x32 blocks, so the
-    /// dimensions must be exactly one of the three hardware multi-screenblock
-    /// regular-BG sizes real GBA hardware can express: 64x32, 32x64, or
-    /// 64x64 tiles (512x256 / 256x512 / 512x512 px). A size like 33x1 that
-    /// isn't a whole number of screenblocks would pass this far but leave
+    /// Once either dimension exceeds 32, though, the dimensions must be
+    /// exactly one of the three multi-screenblock regular-BG sizes real
+    /// GBA hardware can express: 64x32, 32x64, or 64x64 tiles (512x256 /
+    /// 256x512 / 512x512 px). Hardware fidelity is the rule -- other
+    /// whole-block sizes like 96x32 would address correctly but exist on
+    /// no GBA register setting, so they stay rejected. A partial size like
+    /// 33x1 is worse than unreal: it would pass this far but leave
     /// `Tilemap::entry` indexing past the end of `entries` for in-range
     /// coordinates, so it is rejected here instead. A zero-area map (either
     /// dimension `0`) is always allowed regardless of the other dimension,
@@ -294,7 +295,15 @@ mod tests {
 
         // Other partial multi-block sizes: neither whole-screenblock nor
         // one of the three hardware multi-block shapes.
-        for (width_tiles, height_tiles) in [(40, 40), (63, 32), (64, 33), (65, 64), (32, 33)] {
+        for (width_tiles, height_tiles) in [
+            (40, 40),
+            (63, 32),
+            (64, 33),
+            (33, 32),
+            (65, 64),
+            (64, 65),
+            (32, 33),
+        ] {
             let entries = vec![ScreenEntry::new(0, false, false, 0); width_tiles * height_tiles];
             assert_eq!(
                 Tilemap::new(width_tiles, height_tiles, entries).unwrap_err(),
@@ -321,8 +330,11 @@ mod tests {
 
     #[test]
     fn tilemap_new_rejects_length_overflow() {
-        // width_tiles * height_tiles overflows usize; this must return an
-        // error instead of panicking (debug) or silently wrapping (release).
+        // width_tiles * height_tiles overflows usize. The shape check
+        // rejects this pair too (and no shape-valid pair can overflow), so
+        // this assertion cannot isolate the checked_mul path; the guard is
+        // load-bearing as a debug-build panic-preventer ahead of the shape
+        // check, and this test pins the error over a panic.
         assert_eq!(
             Tilemap::new(usize::MAX, 2, Vec::new()).unwrap_err(),
             RenderError::TilemapDimensionsInvalid {

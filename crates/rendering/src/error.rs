@@ -34,10 +34,11 @@ pub enum RenderError {
     /// A [`Tilemap`](crate::tilemap::Tilemap) was constructed with a nonzero
     /// area whose `width_tiles`/`height_tiles` are not a shape
     /// [`Tilemap::entry`](crate::tilemap::Tilemap::entry)'s screenblock
-    /// addressing can resolve: either at most 32x32 (a single screenblock,
-    /// stored flat row-major) or exactly one of the three hardware
-    /// multi-screenblock regular-BG sizes (64x32, 32x64, 64x64). This also
-    /// covers `width_tiles * height_tiles` overflowing `usize`.
+    /// addressing accepts: either at most 32x32 (a single screenblock,
+    /// stored flat row-major) or exactly one of the three regular-BG sizes
+    /// real hardware can express (64x32, 32x64, 64x64) -- hardware
+    /// fidelity, not merely whole blocks, is the rule. This also covers
+    /// `width_tiles * height_tiles` overflowing `usize`.
     TilemapDimensionsInvalid {
         /// The offending width, in tiles.
         width_tiles: usize,

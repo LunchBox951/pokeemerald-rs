@@ -695,12 +695,15 @@ pub(super) fn build_tilemaps(
         }
     }
 
-    let bottom = Tilemap::new(cols_tiles, rows_tiles, bottom)
-        .expect("entries.len() == cols_tiles * rows_tiles by construction");
-    let middle = Tilemap::new(cols_tiles, rows_tiles, middle)
-        .expect("entries.len() == cols_tiles * rows_tiles by construction");
-    let top = Tilemap::new(cols_tiles, rows_tiles, top)
-        .expect("entries.len() == cols_tiles * rows_tiles by construction");
+    let bottom = Tilemap::new(cols_tiles, rows_tiles, bottom).expect(
+        "dimensions are compile-time capped at 32x32 and entries.len() matches by construction",
+    );
+    let middle = Tilemap::new(cols_tiles, rows_tiles, middle).expect(
+        "dimensions are compile-time capped at 32x32 and entries.len() matches by construction",
+    );
+    let top = Tilemap::new(cols_tiles, rows_tiles, top).expect(
+        "dimensions are compile-time capped at 32x32 and entries.len() matches by construction",
+    );
 
     // The shared signed lag term (module docs on `camera_lag_px`) -- also
     // what `super::npc::oam_entries` adds to every non-player object's OAM
