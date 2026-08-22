@@ -90,8 +90,10 @@ impl Bgr555 {
 /// 264-265`) — so every [`Rgb888`] this crate produces is already in the
 /// same 8-bit-per-channel representation [`crate::effects`]' color-effect
 /// math (`alpha_blend`/`brighten`/`darken`) operates on directly, matching
-/// stock desktop mGBA bit for bit (see `crate::effects`' module docs)
-/// `(behavioral-fidelity)`.
+/// stock desktop mGBA bit for bit. [`crate::effects`]' oracle tests prove
+/// that exhaustively, over every 5-bit channel value and every usable
+/// weight; its module docs explain the rounding asymmetry `_darken` hides in
+/// its shifted lanes `(behavioral-fidelity)`.
 pub(crate) const fn expand_5_to_8(c: u8) -> u8 {
     (c << 3) | (c >> 2)
 }
@@ -104,9 +106,12 @@ pub(crate) const fn expand_5_to_8(c: u8) -> u8 {
 /// right-shift recovers `c` exactly with no rounding loss. Only used by this
 /// module's own round-trip test below; [`crate::effects`] no longer
 /// compresses an [`Rgb888`] channel back down to 5 bits before doing color
-/// math (issue #380 moved it to the 8-bit oracle -- see `crate::effects`'
+/// math (issue #380 moved it to the 8-bit oracle — see `crate::effects`'
 /// module docs), so this is `#[cfg(test)]` rather than a live `pub(crate)`
 /// helper.
+// Kept rather than deleted: the round-trip test is what proves
+// `expand_5_to_8` is lossless, which is why the effects math can stay on the
+// expanded bytes at all `(test-ratchet)`.
 #[cfg(test)]
 pub(crate) const fn compress_8_to_5(c: u8) -> u8 {
     c >> 3
