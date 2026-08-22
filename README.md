@@ -51,6 +51,44 @@ The authoritative per-criterion status lives in
 [`docs/acceptance/v1.md`](docs/acceptance/v1.md); a kanban view is on the
 repository's [Projects tab](../../projects).
 
+## Playing
+
+The binary ships with no game data. It reads the art, maps, and music out of a
+Pokémon Emerald cartridge image you already own and keeps them in a local asset
+pack; nothing copyrighted is in this repository, its CI, or its releases.
+
+Exactly one ROM is supported: **Pokémon Emerald (US), revision 0**, game code
+`BPEE`, 16 MiB, SHA-1 `f3ae088181bf583e55daf962a92bb46f4f1d07b7`. The importer
+checks the whole-file hash first and refuses anything else, naming the ROM it
+wants. Dump the cartridge yourself; this project cannot help you obtain one.
+
+```bash
+pokeemerald-rs --import-rom /path/to/pokeemerald.gba   # once
+pokeemerald-rs                                          # every time after
+```
+
+The import prints `imported N entries (M bytes) to <path>` and exits. The pack
+lands in the per-user data directory, which is where the game then looks for
+it:
+
+| OS | Pack path |
+|----|-----------|
+| Linux | `$XDG_DATA_HOME/pokeemerald-rs/pokeemerald.pack`, else `~/.local/share/pokeemerald-rs/pokeemerald.pack` |
+| macOS | `~/Library/Application Support/pokeemerald-rs/pokeemerald.pack` |
+| Windows | `%APPDATA%\pokeemerald-rs\pokeemerald.pack` |
+
+Set `POKEEMERALD_PACK=<file>` to put it somewhere else; both the import and the
+game honour it. The ROM itself is read once and never copied, referenced, or
+logged.
+
+If something goes wrong, the message says what and what to do: a wrong or
+damaged ROM is refused before anything is written, a missing pack tells you to
+import, and a pack from an older build tells you to import again. Re-importing
+replaces the pack atomically, so an interrupted import never leaves a broken
+one behind. Developers with a `pret/pokeemerald` checkout can build the same
+pack from source with `cargo xtask extract` instead (see
+[Building](#building)); the two are byte-identical.
+
 ## Building
 
 ```bash
@@ -63,6 +101,13 @@ cargo test --workspace
 `mgba-emu/mgba` (hardware-behaviour reference) locally. Both are **read-only
 references** `(reference-only)` — no upstream code is copied, linked, or wrapped
 `(no-verbatim, no-ffi)`.
+
+A development checkout gets its asset pack either way: `cargo xtask extract`
+builds it from the `pokeemerald/` checkout into `assets-pack/`, or
+`--import-rom` reads it from a ROM as a player would (see
+[Playing](#playing)). The equivalence harness,
+`POKEEMERALD_ROM=<rom> cargo test -p rom-import -- --ignored`, proves the two
+packs byte-identical; it is `#[ignore]`d because CI has no ROM and never will.
 
 ## Release channels
 

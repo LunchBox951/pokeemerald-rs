@@ -27,6 +27,7 @@ pub(crate) mod audio;
 pub(crate) mod fonts;
 pub(crate) mod interface;
 pub(crate) mod layouts;
+pub(crate) mod song;
 pub(crate) mod sprites;
 pub(crate) mod text_window;
 pub(crate) mod tilesets;
@@ -56,6 +57,7 @@ pub(crate) const DOMAINS: &[Domain] = &[
     fonts::write,
     text_window::write,
     audio::write,
+    song::write,
 ];
 
 /// Read one image root's tiles and unpack them into a pack entry.

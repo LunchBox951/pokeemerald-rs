@@ -377,3 +377,118 @@ fn truncated_input_is_rejected() {
         assert!(Song::decode(&bytes[..cut]).is_err());
     }
 }
+
+mod canonical_waits {
+    //! `Song::new`'s wait rewrite (`super::super::canonical`).
+
+    use super::*;
+
+    fn canon(track: Vec<SongEvent>) -> Vec<SongEvent> {
+        song(vec![track]).tracks()[0].clone()
+    }
+
+    #[test]
+    fn adjacent_waits_merge() {
+        assert_eq!(
+            canon(vec![
+                SongEvent::Wait(96),
+                SongEvent::Wait(4),
+                SongEvent::Fine
+            ]),
+            vec![SongEvent::Wait(100), SongEvent::Fine]
+        );
+    }
+
+    #[test]
+    fn a_long_rest_splits_greedily_with_the_remainder_last() {
+        assert_eq!(
+            canon(vec![
+                SongEvent::Wait(96),
+                SongEvent::Wait(96),
+                SongEvent::Wait(96),
+                SongEvent::Wait(48),
+            ]),
+            vec![SongEvent::Wait(255), SongEvent::Wait(81)]
+        );
+        assert_eq!(
+            canon(vec![SongEvent::Wait(255), SongEvent::Wait(255)]),
+            vec![SongEvent::Wait(255), SongEvent::Wait(255)]
+        );
+    }
+
+    #[test]
+    fn a_zero_rest_vanishes() {
+        assert_eq!(
+            canon(vec![
+                SongEvent::Wait(0),
+                SongEvent::Voice(1),
+                SongEvent::Wait(0)
+            ]),
+            vec![SongEvent::Voice(1)]
+        );
+    }
+
+    #[test]
+    fn a_canonical_track_is_unchanged() {
+        let track = sample_track();
+        assert_eq!(canon(track.clone()), track);
+    }
+
+    #[test]
+    fn jump_targets_follow_the_events_they_name() {
+        // `Goto(4)` names `Voice(1)`, which moves to index 2 once the three
+        // rests before it merge.
+        let track = vec![
+            SongEvent::Voice(0),
+            SongEvent::Wait(10),
+            SongEvent::Wait(10),
+            SongEvent::Wait(10),
+            SongEvent::Voice(1),
+            SongEvent::Goto(4),
+        ];
+        assert_eq!(
+            canon(track),
+            vec![
+                SongEvent::Voice(0),
+                SongEvent::Wait(30),
+                SongEvent::Voice(1),
+                SongEvent::Goto(2),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_run_does_not_merge_across_a_jump_target() {
+        // The loop re-enters between the two rests, so they stay apart and
+        // the target keeps naming the second one.
+        let track = vec![
+            SongEvent::Wait(10),
+            SongEvent::Wait(20),
+            SongEvent::MemAccBranch {
+                condition: MemAccCondition::Eq,
+                address: 0,
+                data: 0,
+                target: 1,
+            },
+            SongEvent::Goto(1),
+        ];
+        assert_eq!(canon(track.clone()), track);
+    }
+
+    #[test]
+    fn a_target_past_the_end_is_left_alone() {
+        assert_eq!(canon(vec![SongEvent::Goto(99)]), vec![SongEvent::Goto(99)]);
+    }
+
+    #[test]
+    fn a_target_at_the_end_stays_at_the_end() {
+        assert_eq!(
+            canon(vec![
+                SongEvent::Wait(1),
+                SongEvent::Wait(1),
+                SongEvent::Goto(2)
+            ]),
+            vec![SongEvent::Wait(2), SongEvent::Goto(1)]
+        );
+    }
+}
