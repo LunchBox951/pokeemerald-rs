@@ -12,16 +12,26 @@
 //! construction for Route 103's *sight* trainers (Daisy, Andrew, Miguel,
 //! Rhett, Marcos, Isabelle, Pete, and the deferred Amy/Liv double), not just
 //! this module's own scripted rival, so it moved to the shared
-//! [`crate::flow::npc_trainer_battle`] `(oop-boundaries)`: this module now
-//! re-exports [`start_route103_rival_battle`]/[`advance_route103_rival_battle`]/
-//! [`RivalBattleError`] as thin, Route-103-flavoured names over that
-//! module's real definitions -- `trainer_party_personalities` moved
-//! outright with no wrapper here ([`RivalBattleError`]'s own doc comment
-//! records that choice), so its one test caller now imports it from
-//! `npc_trainer_battle` directly; everything else kept its public name.
-//! See [`crate::flow::npc_trainer_battle`]'s own module docs for
-//! `CreateNPCTrainerParty`'s odd personality seed, the RNG stream, and the
-//! held-item-party fail-closed gap.
+//! [`crate::flow::npc_trainer_battle`] `(oop-boundaries)`. From issue #264
+//! until issue #347, this module kept thin
+//! `start_route103_rival_battle`/`advance_route103_rival_battle`
+//! pass-throughs and a `RivalBattleError` alias over that module's real
+//! `start_npc_trainer_battle`/`advance_npc_trainer_battle`/
+//! `NpcTrainerBattleError` -- `trainer_party_personalities` made the same
+//! move outright with no wrapper even then, so its one test caller already
+//! imported it from `npc_trainer_battle` directly. Issue #347 retired the
+//! remaining three: none carried any Route-103-specific behaviour, and the
+//! wrapper shape is exactly what let `overworld_phase::route103_rival_trigger`
+//! call the shared constructor with no fainted-lead screen of its own while
+//! `overworld_phase::sight_trainer_trigger`'s own caller-side screen looked
+//! like the load-bearing one instead of the drift risk it actually was (see
+//! [`crate::flow::npc_trainer_battle`]'s own module docs, "The fainted-lead
+//! check used to live on the caller side instead"). Both this module's own
+//! trigger and its tests now call
+//! [`crate::flow::npc_trainer_battle::start_npc_trainer_battle`]/
+//! [`crate::flow::npc_trainer_battle::advance_npc_trainer_battle`] directly.
+//! See that module's own docs for `CreateNPCTrainerParty`'s odd personality
+//! seed, the RNG stream, and the held-item-party fail-closed gap.
 //!
 //! # Reachability: wired from real play since issue #248
 //!
@@ -53,10 +63,6 @@
 
 use assets::trainers::TrainerId;
 use assets::SpeciesId;
-use battle::{Battle, BattleOutcome, BattlePokemon};
-use engine::rng::Rng;
-
-use super::npc_trainer_battle;
 
 /// Which starter the *player* chose — the axis the Route 103 rival's own
 /// party is picked along (upstream `VAR_STARTER_MON`, read by
@@ -191,48 +197,6 @@ pub const fn route103_rival_for(rival: Rival, starter: PlayerStarter) -> Trainer
         (Rival::May, PlayerStarter::Treecko) => TrainerId(532),
         (Rival::May, PlayerStarter::Torchic) => TrainerId(535),
     }
-}
-
-/// [`crate::flow::npc_trainer_battle::NpcTrainerBattleError`], aliased under
-/// this module's original name (issue #264 review: the construction this
-/// type reports on moved to that shared module, but nothing about this
-/// module's own public API should shift under existing callers/tests). Used
-/// as [`start_route103_rival_battle`]'s own error type below -- unlike
-/// [`npc_trainer_battle::trainer_party_personalities`] (this module's tests
-/// now import that directly off the module it actually lives in, since a
-/// same-named pass-through here would have no production caller of its own
-/// and so nothing to keep it alive outside `#[cfg(test)]`), this alias stays
-/// because [`start_route103_rival_battle`] genuinely is.
-pub type RivalBattleError = crate::flow::npc_trainer_battle::NpcTrainerBattleError;
-
-/// Build `trainer`'s whole party and start the `BATTLE_TYPE_TRAINER` battle
-/// around it (module docs, "RNG stream") -- a thin, Route-103-flavoured name
-/// for [`npc_trainer_battle::start_npc_trainer_battle`], the shared
-/// construction every NPC trainer battle in this crate now goes through
-/// (issue #264 review).
-///
-/// # Errors
-///
-/// See [`npc_trainer_battle::start_npc_trainer_battle`].
-pub fn start_route103_rival_battle(
-    player_lead: BattlePokemon,
-    trainer: TrainerId,
-    rng: &mut Rng,
-) -> Result<Battle, RivalBattleError> {
-    npc_trainer_battle::start_npc_trainer_battle(player_lead, trainer, rng)
-}
-
-/// Play one turn of the in-progress rival battle in `slot`, headlessly --
-/// a thin, Route-103-flavoured name for
-/// [`npc_trainer_battle::advance_npc_trainer_battle`] (see that function's
-/// own docs for the driver's policy and what a `None` return means).
-pub fn advance_route103_rival_battle(
-    slot: &mut Option<Battle>,
-    lead: &mut Option<BattlePokemon>,
-    money: &mut u32,
-    rng: &mut Rng,
-) -> Option<BattleOutcome> {
-    npc_trainer_battle::advance_npc_trainer_battle(slot, lead, money, rng)
 }
 
 #[cfg(test)]

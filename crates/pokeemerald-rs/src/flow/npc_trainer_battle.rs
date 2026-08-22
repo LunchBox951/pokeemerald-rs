@@ -7,9 +7,16 @@
 //! duplicating them per caller would drift the two paths apart the moment
 //! either one changed. [`crate::flow::route103_rival`] keeps its own
 //! `PlayerStarter`/`Rival`/`route103_rival_for` mapping (the rival-specific
-//! *choice* of trainer) and re-exports this module's construction/driver
-//! under its original names, so nothing about that module's own public API
-//! or tests moved.
+//! *choice* of trainer); its own trigger
+//! (`overworld_phase::route103_rival_trigger`) and tests call
+//! [`start_npc_trainer_battle`]/[`advance_npc_trainer_battle`] directly
+//! rather than through a same-named pass-through. Issue #264 shipped that
+//! wrapper pair (plus a `RivalBattleError` alias); issue #347 retired both
+//! outright — neither carried any Route-103-specific behaviour, and a
+//! second name for the same function was one more place a caller-side
+//! screen could quietly drift out of sync with this module's own (see
+//! "Nothing is built before the whole party is screened" below for exactly
+//! that drift).
 //!
 //! # `CreateNPCTrainerParty`, and its very odd personality seed
 //!
@@ -85,14 +92,29 @@
 //! review) -- a real, observable corruption of the one shared stream every
 //! wild encounter and battle turn shares.
 //!
-//! So [`start_npc_trainer_battle`] resolves each member's moveset (which
-//! draws nothing) and runs [`battle::ensure_trainer_party_startable`] --
-//! the same screens `new_trainer` applies, composed into a pre-flight that
-//! takes no RNG at all -- **before** the first
-//! [`battle::build_trainer_pokemon`] call. A trainer this engine cannot
-//! fight is refused for free, forever, the same no-draw-at-all shape
+//! So [`start_npc_trainer_battle`] checks `player_lead.is_fainted()` first,
+//! ahead of even the trainer/party lookups, then resolves each member's
+//! moveset (which draws nothing) and runs
+//! [`battle::ensure_trainer_party_startable`] -- the same screens
+//! `new_trainer` applies, composed into a pre-flight that takes no RNG at
+//! all -- **before** the first [`battle::build_trainer_pokemon`] call. A
+//! trainer this engine cannot fight, or a fainted lead, is refused for
+//! free, forever, the same no-draw-at-all shape
 //! [`crate::flow::wild_encounter::map_wild_table_fightable`] already applies
 //! to wild tables via [`battle::ensure_wild_startable`].
+//!
+//! The fainted-lead check used to live on the caller side instead, and only
+//! one of the two in-tree callers actually carried it: `sight_trainer_trigger`
+//! screened `party_lead.is_fainted()` before ever reaching this function,
+//! but `route103_rival_trigger` did not, so a fainted lead reaching Route
+//! 103's rival trigger paid the full `CreateNPCTrainerParty` OT-id cost
+//! before [`battle::Battle::new_trainer`] raised
+//! [`battle::BattleError::FaintedBattler`] one level down -- a real
+//! stream corruption this module's own former docs mis-described as
+//! impossible ("both in-tree callers check the lead before calling here").
+//! Issue #347 moves the screen in here instead: every caller is now
+//! no-draw-on-refusal *by construction*, with no caller-side check left to
+//! forget or drift out of sync.
 //!
 //! # Held-item parties: a fail-closed gap, not a silent drop
 //!
@@ -141,7 +163,8 @@ fn credit_money(money: &mut u32, amount: u32) {
 /// deliberately fatal rather than silently approximated.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NpcTrainerBattleError {
-    /// The `battle` crate rejected the party or the battle — see
+    /// The party or the battle was refused — either this module's own
+    /// pre-draw fainted-lead screen ([`BattleError::FaintedBattler`]) or
     /// [`battle::Battle::new_trainer`]'s own error list.
     Battle(BattleError),
     /// A trainer or species name contains a character
@@ -321,9 +344,11 @@ pub fn trainer_party_personalities(id: TrainerId) -> Result<Vec<u32>, NpcTrainer
 /// Build `trainer`'s whole party (`CreateNPCTrainerParty`) and start the
 /// `BATTLE_TYPE_TRAINER` battle around it — the trainer-battle counterpart of
 /// [`crate::flow::first_battle::start_first_battle`], and the shared core
-/// behind both [`crate::flow::route103_rival::start_route103_rival_battle`]
-/// and [`crate::flow::overworld_phase::sight_trainer_trigger`]'s own battle
-/// handoff.
+/// both `overworld_phase::route103_rival_trigger`'s
+/// `begin_route103_rival_battle` and
+/// [`crate::flow::overworld_phase::sight_trainer_trigger`]'s own battle
+/// handoff call directly (issue #347 retired the Route-103-flavoured
+/// pass-through the first of those two used to go through).
 ///
 /// Draws in upstream's order off the shared stream (module docs, "RNG
 /// stream"): each party member's OT id, then
@@ -333,27 +358,35 @@ pub fn trainer_party_personalities(id: TrainerId) -> Result<Vec<u32>, NpcTrainer
 /// comes from [`battle::initial_moveset`] (`GiveBoxMonInitialMoveset`, which
 /// also draws nothing).
 ///
-/// A refusal draws **nothing at all**: the whole party is screened by
+/// A refusal draws **nothing at all**: `player_lead.is_fainted()` is
+/// checked before any lookup, and the rest of the party is screened by
 /// [`battle::ensure_trainer_party_startable`] ahead of the first
 /// [`battle::build_trainer_pokemon`] call (module docs, "Nothing is built
 /// before the whole party is screened").
 ///
 /// # Errors
 ///
-/// [`NpcTrainerBattleError`]'s construction-refusal cases are raised
-/// **before the first draw** (module docs, "Nothing is built before the
-/// whole party is screened"): a refused party leaves `rng` exactly as it
-/// found it, however many times it is asked. The one exception is
-/// [`battle::BattleError::FaintedBattler`] for a fainted `player_lead`,
-/// which [`battle::Battle::new_trainer`] raises only *after* the party
-/// build's OT-id draws — the pre-flight takes no player argument and cannot
-/// screen it. Both in-tree callers check the lead before calling here;
-/// a future caller must do the same or accept the spent draws.
+/// Every [`NpcTrainerBattleError`] case is raised **before the first
+/// draw** (module docs, "Nothing is built before the whole party is
+/// screened"): a refused call -- an unbuildable party, an un-encodable
+/// name, held items, or a fainted `player_lead` -- leaves `rng` exactly as
+/// it found it, however many times it is asked. The fainted-lead case is
+/// [`battle::BattleError::FaintedBattler`], the one screen
+/// [`battle::ensure_trainer_party_startable`]'s own pre-flight cannot cover
+/// (it takes no player argument), so this function checks it directly
+/// rather than leaving it to the caller.
 pub fn start_npc_trainer_battle(
     player_lead: BattlePokemon,
     trainer: TrainerId,
     rng: &mut Rng,
 ) -> Result<Battle, NpcTrainerBattleError> {
+    // Checked before the trainer/party lookups below, let alone any draw:
+    // this is the one `BattleError::FaintedBattler` case
+    // `ensure_trainer_party_startable`'s pre-flight cannot cover on its own
+    // (module docs, "Nothing is built before the whole party is screened").
+    if player_lead.is_fainted() {
+        return Err(BattleError::FaintedBattler(true).into());
+    }
     let dex = Dex::new();
     let data = battle::trainer_data(trainer)?;
     let entries = party_entries(trainer, data)?;
@@ -502,4 +535,58 @@ pub fn advance_npc_trainer_battle(
     *lead = Some(mon);
     *slot = None;
     outcome
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use assets::SpeciesId;
+
+    /// The screen module docs' "Nothing is built before the whole party is
+    /// screened" describes: a fainted `player_lead` is refused before any
+    /// lookup or draw, for *any* trainer -- not just the ones whose caller
+    /// happens to check first (module docs' "The fainted-lead check used to
+    /// live on the caller side instead").
+    ///
+    /// This is the shared-constructor coverage that replaces
+    /// `overworld_phase::sight_trainer_trigger`'s own former caller-side
+    /// test of the same fact (issue #347): that trigger's caller-side
+    /// `is_fainted` guard is retired along with the test that pinned it,
+    /// since the guard's own no-draw claim is now proven at its true
+    /// source rather than only for the one caller that happened to carry
+    /// it. `TrainerId(532)` (`TRAINER_MAY_ROUTE_103_TREECKO`) is an
+    /// arbitrary real, constructible trainer -- the point here is the
+    /// *player's* own screen, which runs before this function even looks
+    /// the trainer up, so which trainer id is passed cannot matter.
+    #[test]
+    fn a_fainted_player_lead_is_refused_before_any_draw() {
+        let mut lead = BattlePokemon::new(
+            &Dex::new(),
+            SpeciesId(277), // SPECIES_TREECKO
+            50,
+            battle::fixed_ivs(31),
+            0,
+            vec![MoveId(163)], // MOVE_SLASH
+        )
+        .expect("Treecko/Slash is a valid pairing");
+        lead.apply_damage(u32::MAX);
+        assert!(lead.is_fainted(), "setup: the lead really is fainted");
+
+        let mut rng = Rng::new(1);
+        let before = rng.state();
+        let result = start_npc_trainer_battle(lead, TrainerId(532), &mut rng);
+        assert_eq!(
+            result.err(),
+            Some(NpcTrainerBattleError::Battle(BattleError::FaintedBattler(
+                true
+            ))),
+            "a fainted player lead must be refused with the same error \
+             `Battle::new_trainer` itself would raise for one"
+        );
+        assert_eq!(
+            rng.state(),
+            before,
+            "a refused construction must draw nothing at all"
+        );
+    }
 }
