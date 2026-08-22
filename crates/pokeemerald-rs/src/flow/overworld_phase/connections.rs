@@ -358,7 +358,7 @@ impl OverworldPhase {
     /// to read the landing tile's real elevation off the destination grid
     /// and overwrite the sentinel before the player ever takes a step. Both
     /// of this method's own callers' destinations reach this: the white-out's
-    /// heal-location relocation to the player's own house at `(4, 2)`
+    /// heal-location relocation to the player's house 2F at its bed tile `(4, 2)`
     /// (`crate::flow::overworld_phase::white_out`,
     /// [`crate::new_game::default_last_heal_location`]) and the scripted
     /// first-battle conclusion's return to Birch's lab at `(6, 5)`
