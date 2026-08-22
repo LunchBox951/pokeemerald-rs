@@ -182,13 +182,14 @@ impl<'a> MapRuntime<'a> {
     /// does: `(x, y)` outside this map's own grid.
     ///
     /// **The multi-level rule, folded to a substitution.** Upstream's
-    /// `ObjectEventUpdateElevation` reads `curElevation` off the grid and
-    /// returns immediately -- touching neither `currentElevation` nor
-    /// `previousElevation` -- when that read comes back
-    /// [`super::collision::ELEVATION_MULTI_LEVEL`] (`:7761-7762`), so a
-    /// multi-level landing tile leaves an already-live object event's
-    /// elevation exactly where it was. Every caller of this method places a
-    /// *fresh* [`super::player::PlayerState`], though, whose elevation
+    /// `ObjectEventUpdateElevation` reads `curElevation` off the grid
+    /// (`:7761`) and returns immediately -- touching neither
+    /// `currentElevation` nor `previousElevation` -- when that read comes
+    /// back [`super::collision::ELEVATION_MULTI_LEVEL`] (the guard and its
+    /// early return, `:7764-7765`), so a multi-level landing tile leaves an
+    /// already-live object event's elevation exactly where it was. Every
+    /// caller of this method places a *fresh*
+    /// [`super::player::PlayerState`], though, whose elevation
     /// upstream's own spawn-time initialization already set to
     /// [`super::collision::ELEVATION_TRANSITION`] before this read would
     /// ever run -- so "leave it alone" and "return
@@ -196,8 +197,25 @@ impl<'a> MapRuntime<'a> {
     /// and this method returns the latter directly rather than modelling a
     /// no-op against state that was never live.
     ///
-    /// One read shared by every upstream `ObjectEventUpdateElevation` call
-    /// this port models on the *player's own* arrival --
+    /// **Why one coordinate pair models a two-read guard.** Upstream's
+    /// guard tests `previousCoords`' elevation as well as `currentCoords`'
+    /// (`prevElevation`, read at `:7762`), and this method takes a single
+    /// `(x, y)`. On an *arrival* those two coordinate pairs name the same
+    /// cell: a spawning object event seeds `previousCoords` equal to
+    /// `currentCoords` (`InitObjectEventStateFromTemplate`,
+    /// `event_object_movement.c:1309-1312`), and this read runs on the spawn
+    /// frame itself, before any step has moved one of them apart. So the
+    /// `prevElevation` half of the guard collapses into the `curElevation`
+    /// half here rather than being dropped.
+    ///
+    /// **The arrival half of the rule, not the whole of it.** This models
+    /// `ObjectEventUpdateElevation` where the player is *placed*;
+    /// `PlayerState::adopt_elevation`, described in
+    /// [`super::player::PlayerState::step`]'s "# Elevation adoption"
+    /// section, models the same upstream function per *step*, where the two
+    /// coordinate pairs really do differ and both fields are adopted
+    /// separately. Between them they cover the calls this port models on the
+    /// player; this one is the read shared by
     /// [`super::warp::warp_destination_position`] (a resolved warp event),
     /// `pokeemerald_rs`'s `OverworldPhase::warp_to_position` (an
     /// explicit-coordinate warp, e.g. white-out/first-battle relocation), and
@@ -517,11 +535,11 @@ mod tests {
 
     /// [`MapRuntime::arrival_elevation`]'s own substitution (issue #379): an
     /// ordinary cell's elevation passes straight through, an
-    /// [`super::collision::ELEVATION_MULTI_LEVEL`] (`15`) cell substitutes
-    /// [`super::collision::ELEVATION_TRANSITION`] (`0`), and an
-    /// out-of-bounds position is `None` under the same bound
+    /// [`super::super::collision::ELEVATION_MULTI_LEVEL`] (`15`) cell
+    /// substitutes [`super::super::collision::ELEVATION_TRANSITION`] (`0`),
+    /// and an out-of-bounds position is `None` under the same bound
     /// [`MapRuntime::metatile_cell`] uses -- the one read
-    /// [`super::warp::warp_destination_position`],
+    /// [`super::super::warp::warp_destination_position`],
     /// `pokeemerald_rs::flow::overworld_phase::OverworldPhase::warp_to_position`,
     /// and `pokeemerald_rs`'s `saved_tile_placement` all now share.
     #[test]

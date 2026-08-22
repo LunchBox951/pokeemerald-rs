@@ -323,13 +323,17 @@ impl OverworldPhase {
     /// Execute an *explicit-coordinate* warp: land on `(x, y)` of `map`
     /// directly, rather than resolving a warp event's own position the way
     /// [`OverworldPhase::warp_to`] does. [`OverworldPhase::warp_to`]'s
-    /// sibling for the one caller with no warp event to resolve at all --
+    /// sibling for the two callers with no warp event to resolve at all --
     /// the white-out's `SetWarpDestinationToLastHealLocation` +
     /// `WarpIntoMap` (`pokeemerald/src/overworld.c:364-365`,
-    /// `crate::flow::overworld_phase::white_out`, issue #261) — mirroring
+    /// `crate::flow::overworld_phase::white_out`, issue #261) and the
+    /// scripted first-battle conclusion's own
+    /// `warp MAP_LITTLEROOT_TOWN_PROFESSOR_BIRCHS_LAB, 6, 5`
+    /// (`crate::flow::overworld_phase::first_battle_conclusion`) — mirroring
     /// `SetPlayerCoordsFromWarp`'s own `WARP_ID_NONE` branch
     /// (`src/overworld.c:611-617`, "the given coords are valid, use those
-    /// instead"): a heal location names a raw tile, not a warp event index.
+    /// instead"): a heal location, like a `warp` command's own literal
+    /// coordinates, names a raw tile, not a warp event index.
     ///
     /// Same shape as [`OverworldPhase::warp_to`] otherwise -- on-transition
     /// effects, temp-field-data clear, the two Route 101/103 targeted
@@ -353,10 +357,12 @@ impl OverworldPhase {
     /// `ObjectEventUpdateElevation` (`event_object_movement.c:7759-7771`)
     /// to read the landing tile's real elevation off the destination grid
     /// and overwrite the sentinel before the player ever takes a step. Both
-    /// of this method's own default destinations reach this: the white-out's
-    /// heal-location relocation (`crate::flow::overworld_phase::white_out`)
-    /// and the scripted first-battle conclusion's return to the default
-    /// house (`crate::flow::overworld_phase::first_battle_conclusion`) land
+    /// of this method's own callers' destinations reach this: the white-out's
+    /// heal-location relocation to the player's own house at `(4, 2)`
+    /// (`crate::flow::overworld_phase::white_out`,
+    /// [`crate::new_game::default_last_heal_location`]) and the scripted
+    /// first-battle conclusion's return to Birch's lab at `(6, 5)`
+    /// (`crate::flow::overworld_phase::first_battle_conclusion`) land
     /// on elevation-`3` tiles, so leaving the sentinel in place would be
     /// wrong until the player's first step, not merely imprecise.
     ///
