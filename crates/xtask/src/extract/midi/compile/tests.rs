@@ -343,8 +343,7 @@ fn an_off_grid_gap_after_cc_0x1e_keeps_its_remainder_past_the_lut_floor() {
                 velocity: 100,
                 gate: 37
             },
-            SongEvent::Wait(4),
-            SongEvent::Wait(3),
+            SongEvent::Wait(7), // the two rests merge: canonical waits
             SongEvent::PseudoEchoVolume(10),
             SongEvent::Wait(6),
             SongEvent::Fine,
@@ -384,8 +383,7 @@ fn a_gap_spanning_a_grid_line_after_cc_0x1e_is_cut_at_the_grid_lut_floor() {
                 velocity: 100,
                 gate: 4
             },
-            SongEvent::Wait(19),
-            SongEvent::Wait(24),
+            SongEvent::Wait(43), // the two rests merge: canonical waits
             SongEvent::PseudoEchoLength(12),
             SongEvent::Fine,
         ]
@@ -422,8 +420,7 @@ fn cc_0x1e_near_a_grid_line_loses_only_the_ticks_up_to_it() {
                 velocity: 100,
                 gate: 4
             },
-            SongEvent::Wait(90),
-            SongEvent::Wait(14),
+            SongEvent::Wait(104), // the two rests merge: canonical waits
             SongEvent::PseudoEchoVolume(10),
             SongEvent::Fine,
         ]
@@ -462,8 +459,7 @@ fn a_time_signature_re_phases_the_grid_bounding_the_cc_0x1e_drop() {
                 velocity: 100,
                 gate: 4
             },
-            SongEvent::Wait(40),
-            SongEvent::Wait(22),
+            SongEvent::Wait(62), // the two rests merge: canonical waits
             SongEvent::PseudoEchoVolume(10),
             SongEvent::Fine,
         ]
@@ -524,8 +520,7 @@ fn a_silent_controller_after_cc_0x1e_keeps_its_own_wait() {
                 velocity: 100,
                 gate: 30
             },
-            SongEvent::Wait(4),
-            SongEvent::Wait(10),
+            SongEvent::Wait(14), // the two rests merge: canonical waits
             SongEvent::PseudoEchoVolume(10),
             SongEvent::Wait(6),
             SongEvent::Fine,

@@ -49,6 +49,46 @@ impl fmt::Display for HeaderFault {
     }
 }
 
+/// Why a song track's byte-code could not be followed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SongFault {
+    /// An operand byte sat at command position with no running status to
+    /// repeat.
+    NoRunningStatus,
+    /// A command byte the engine's jump table leaves unused.
+    UnknownCommand(u8),
+    /// An `XCMD` sub-command other than the pseudo-echo pair.
+    UnknownExtendedCommand(u8),
+    /// A `MEMACC` operation past the engine's table.
+    UnknownMemAccOp(u8),
+    /// `REPT`, which no compiled song carries and the pack cannot hold.
+    Repeat,
+    /// `PATT` nested past the engine's three-deep stack.
+    PatternTooDeep,
+    /// A `GOTO` or branch whose pointer is not a command boundary of this
+    /// track.
+    JumpOutsideTrack,
+    /// The track never reached `FINE`.
+    NoFine,
+}
+
+impl fmt::Display for SongFault {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::NoRunningStatus => f.write_str("an operand with no command to repeat"),
+            Self::UnknownCommand(byte) => write!(f, "unknown command {byte:#04x}"),
+            Self::UnknownExtendedCommand(sub) => {
+                write!(f, "unknown extended command {sub:#04x}")
+            }
+            Self::UnknownMemAccOp(op) => write!(f, "unknown MEMACC operation {op}"),
+            Self::Repeat => f.write_str("REPT is not supported"),
+            Self::PatternTooDeep => f.write_str("PATT nested more than three deep"),
+            Self::JumpOutsideTrack => f.write_str("a jump to somewhere that is not this track"),
+            Self::NoFine => f.write_str("no FINE within the event limit"),
+        }
+    }
+}
+
 /// Why an LZ77 stream could not be decompressed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Lz77Fault {
@@ -243,6 +283,17 @@ pub enum ImportError {
         /// The pointer itself.
         ptr: crate::reader::GbaPtr,
     },
+    /// A song track's byte-code could not be followed.
+    Song {
+        /// The song's pack id.
+        id: &'static str,
+        /// The track index.
+        track: usize,
+        /// The ROM offset of the command that failed.
+        at: usize,
+        /// What went wrong.
+        fault: SongFault,
+    },
     /// The audio schema refused what the ROM holds.
     ///
     /// [`assets`]'s constructors bound a sample's loop point, a key-split
@@ -358,6 +409,12 @@ impl fmt::Display for ImportError {
                 "`{root}` slot {slot} points at {what} {:#010x}, which this revision profile does not record",
                 ptr.raw()
             ),
+            Self::Song {
+                id,
+                track,
+                at,
+                fault,
+            } => write!(f, "`{id}` track {track} at ROM offset {at:#08x}: {fault}"),
             Self::Audio { id, source } => write!(f, "`{id}`: {source}"),
             Self::PackWrite(source) => write!(f, "could not assemble the asset pack: {source}"),
             Self::WriteFailed { path, source } => {
@@ -408,7 +465,7 @@ fn write_ascii(f: &mut fmt::Formatter<'_>, bytes: &[u8]) -> fmt::Result {
 
 #[cfg(test)]
 mod tests {
-    use super::{HeaderFault, ImportError, Lz77Fault};
+    use super::{HeaderFault, ImportError, Lz77Fault, SongFault};
 
     #[test]
     fn unsupported_revision_names_the_one_supported_rom() {
@@ -499,6 +556,12 @@ mod tests {
             ImportError::Audio {
                 id: "audio/voicegroup/title",
                 source: assets::AudioError::Truncated,
+            },
+            ImportError::Song {
+                id: "audio/song/mus_title",
+                track: 2,
+                at: 0x10,
+                fault: SongFault::JumpOutsideTrack,
             },
             ImportError::EmptyPack,
         ];

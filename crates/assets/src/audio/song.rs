@@ -25,6 +25,17 @@
 //! matching how a compiled form must ultimately resolve loop targets
 //! anyway.
 //!
+//! # Waits are canonical
+//!
+//! [`Song::new`] rewrites every track's rests into one shape: adjacent
+//! [`SongEvent::Wait`]s merge, a rest over `255` ticks splits into
+//! `255`-tick chunks with the remainder last, a zero rest vanishes, and a
+//! run never merges across a jump target. The `.mid` compiler and the ROM
+//! decoder chunk rests differently for reasons that are not musical, and
+//! the pack has to hold one answer so the two backends agree byte for
+//! byte. See `canonical`'s module docs for the rule in full. A decoded
+//! pack entry is taken as it is: [`Song::decode`] is structural.
+//!
 //! # Tempo is a track event, not header metadata
 //!
 //! [`Song`] carries no starting-tempo field, because upstream's
@@ -440,7 +451,8 @@ impl Song {
     ///   (mirrors `mid2agb`'s own `g_reverb >= 0` sentinel check,
     ///   `tools/mid2agb/agb.cpp`).
     /// * `tracks` — one normalized event stream per track,
-    ///   `MusicPlayerTrack`-order.
+    ///   `MusicPlayerTrack`-order. Each is rewritten into the canonical wait
+    ///   shape (module docs, "Waits are canonical"), jump targets included.
     ///
     /// # Errors
     ///
@@ -458,6 +470,10 @@ impl Song {
         if tracks.len() > MAX_TRACKS {
             return Err(AudioError::TooManyTracks(tracks.len()));
         }
+        let tracks: Vec<Vec<SongEvent>> = tracks
+            .into_iter()
+            .map(|track| canonical::canonicalize_waits(&track))
+            .collect();
         for track in &tracks {
             if u32::try_from(track.len()).is_err() {
                 return Err(AudioError::TooManyEvents(track.len()));
@@ -575,6 +591,8 @@ impl Song {
         })
     }
 }
+
+mod canonical;
 
 #[cfg(test)]
 mod tests;

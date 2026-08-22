@@ -47,7 +47,9 @@
 //!   data is wired too: `DirectSound` samples and programmable waves
 //!   (`audio/sample/*`) and voicegroups (`audio/voicegroup/*`), read from
 //!   the m4a `WaveData` and `ToneData` structs and emitted through
-//!   `assets`' own schema encoders. A domain that has a ROM struct behind
+//!   `assets`' own schema encoders, and `MUS_TITLE` itself
+//!   (`audio/song/*`), decoded from the engine's track byte-code into
+//!   `assets::Song` events. A domain that has a ROM struct behind
 //!   its roots corroborates it field by field, so a wrong profile is a
 //!   typed error rather than a plausible-looking asset. [`import`] and
 //!   [`import_to_bytes`] run them into a `PackWriter` and hand back a real
@@ -59,16 +61,15 @@
 //! xtask extract` writes from a decomp checkout, for every id both produce.
 //! `tests/equivalence.rs` is that gate: it is `#[ignore]`d, needs
 //! `$POKEEMERALD_ROM` and a checkout pack, and compares the two packs entry
-//! by entry. There is no reviewed difference to reconcile for the domains
-//! wired so far.
+//! by entry. Every id the checkout pack holds is covered and there is no
+//! reviewed difference.
 //!
 //! # What is next
 //!
-//! The song decoder: `MUS_TITLE`'s `SongHeader` and its ten tracks of m4a
-//! commands, turned into `assets::Song` events under `audio/song/*`. It is
-//! the one id the checkout pack holds that this crate does not yet write,
-//! so the pack is *partial* until it lands: a run of the game against it
-//! still needs the checkout pack for its music.
+//! The pack this crate writes is complete: a player who imports their ROM
+//! runs the game without a checkout pack. What remains is around the
+//! importer rather than in it: progress reporting from the CLI, and the
+//! player-facing documentation for the import step.
 //!
 //! The CLI that drives [`import`] already exists: `pokeemerald-rs
 //! --import-rom <path>` resolves the pack's destination, writes it
@@ -92,7 +93,7 @@ mod sha1;
 
 use std::path::{Path, PathBuf};
 
-pub use error::{HeaderFault, ImportError, Lz77Fault};
+pub use error::{HeaderFault, ImportError, Lz77Fault, SongFault};
 pub use lz77::{decompress as lz77_decompress, decompress_at as lz77_decompress_at, LZ77_TYPE};
 pub use profile::{
     select as select_profile, select_with as select_profile_with, RevisionProfile, EMERALD_US_REV0,
