@@ -188,7 +188,10 @@ mod tests {
         phase.save1.player_party_count = 1;
         phase.save1.player_party[0] = stored;
         phase.party_lead = Some(lead);
-        assert_ne!(phase.save1.player_party[0].status, 0, "setup: lead is statused");
+        assert_ne!(
+            phase.save1.player_party[0].status, 0,
+            "setup: lead is statused"
+        );
 
         phase.white_out();
 
