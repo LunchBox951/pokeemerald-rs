@@ -109,25 +109,51 @@ impl Tilemap {
     /// 32x32-entry *screenblocks*, ordered left-to-right then top-to-bottom
     /// (64x32 = left, right; 32x64 = top, bottom; 64x64 = TL, TR, BL, BR),
     /// exactly as `Tilemap::entry` decodes them. A map that is at most 32x32
-    /// in both axes is a single screenblock and is therefore plain row-major.
+    /// in both axes is a single screenblock and is therefore plain row-major
+    /// -- this is the one relaxation beyond real hardware, since a single
+    /// screenblock's row-major layout composites and wraps correctly at any
+    /// sub-32x32 size, not just the full 32x32 one.
     ///
-    /// `width_tiles`/`height_tiles` are caller-supplied rather than
-    /// restricted to the four hardware regular-BG sizes (256x256 / 512x256 /
-    /// 256x512 / 512x512 px, i.e. 32x32 / 64x32 / 32x64 / 64x64 tiles); a
-    /// non-hardware size still composites and wraps correctly against its
-    /// own actual pixel dimensions, it just isn't a size real regular-BG
-    /// hardware could express.
+    /// Once either dimension exceeds 32, though, `Tilemap::entry`'s
+    /// screenblock addressing assumes *complete* 32x32 blocks, so the
+    /// dimensions must be exactly one of the three hardware multi-screenblock
+    /// regular-BG sizes real GBA hardware can express: 64x32, 32x64, or
+    /// 64x64 tiles (512x256 / 256x512 / 512x512 px). A size like 33x1 that
+    /// isn't a whole number of screenblocks would pass this far but leave
+    /// `Tilemap::entry` indexing past the end of `entries` for in-range
+    /// coordinates, so it is rejected here instead. A zero-area map (either
+    /// dimension `0`) is always allowed regardless of the other dimension,
+    /// since `Tilemap::entry` can never resolve any coordinate into it.
     ///
     /// # Errors
     ///
-    /// Returns [`RenderError::TilemapSizeMismatch`] if `entries.len() !=
+    /// Returns [`RenderError::TilemapDimensionsInvalid`] if the tilemap has
+    /// nonzero area and `width_tiles`/`height_tiles` are neither at most
+    /// 32x32 nor one of the three hardware multi-screenblock sizes, or if
+    /// `width_tiles * height_tiles` would overflow `usize`. Returns
+    /// [`RenderError::TilemapSizeMismatch`] if `entries.len() !=
     /// width_tiles * height_tiles`.
     pub fn new(
         width_tiles: usize,
         height_tiles: usize,
         entries: Vec<ScreenEntry>,
     ) -> Result<Self, RenderError> {
-        let expected = width_tiles * height_tiles;
+        let dimensions_invalid = || RenderError::TilemapDimensionsInvalid {
+            width_tiles,
+            height_tiles,
+        };
+        let expected = width_tiles
+            .checked_mul(height_tiles)
+            .ok_or_else(dimensions_invalid)?;
+        let has_area = width_tiles > 0 && height_tiles > 0;
+        let exceeds_single_block =
+            width_tiles > Self::SCREENBLOCK_DIM || height_tiles > Self::SCREENBLOCK_DIM;
+        if has_area
+            && exceeds_single_block
+            && !Self::is_hardware_multi_block_size(width_tiles, height_tiles)
+        {
+            return Err(dimensions_invalid());
+        }
         if entries.len() != expected {
             return Err(RenderError::TilemapSizeMismatch {
                 expected,
@@ -139,6 +165,20 @@ impl Tilemap {
             height_tiles,
             entries,
         })
+    }
+
+    /// Whether `(width_tiles, height_tiles)` is one of the three hardware
+    /// regular-BG sizes that span more than one 32x32 screenblock: 64x32,
+    /// 32x64, or 64x64 tiles. Sizes at most 32x32 in both axes are a single
+    /// screenblock and are handled separately (see [`Tilemap::new`]).
+    #[must_use]
+    const fn is_hardware_multi_block_size(width_tiles: usize, height_tiles: usize) -> bool {
+        const DIM: usize = Tilemap::SCREENBLOCK_DIM;
+        const DOUBLE_DIM: usize = DIM * 2;
+        matches!(
+            (width_tiles, height_tiles),
+            (DOUBLE_DIM, DIM | DOUBLE_DIM) | (DIM, DOUBLE_DIM)
+        )
     }
 
     /// Width in tiles.
@@ -227,6 +267,93 @@ mod tests {
     }
 
     #[test]
+    fn tilemap_new_rejects_partial_multi_block_dimensions() {
+        // 33x1 exceeds a single 32x32 screenblock on width but isn't a whole
+        // number of screenblocks, so `Tilemap::entry` would compute an
+        // in-bounds-looking index (block 1, offset 0 = 1024) past the end of
+        // a 33-entry vec for the in-range coordinate (32, 0). Reject the
+        // shape at construction instead of letting that happen silently.
+        let entries = vec![ScreenEntry::new(0, false, false, 0); 33];
+        assert_eq!(
+            Tilemap::new(33, 1, entries).unwrap_err(),
+            RenderError::TilemapDimensionsInvalid {
+                width_tiles: 33,
+                height_tiles: 1,
+            }
+        );
+
+        // Same bug, transposed axis.
+        let entries = vec![ScreenEntry::new(0, false, false, 0); 33];
+        assert_eq!(
+            Tilemap::new(1, 33, entries).unwrap_err(),
+            RenderError::TilemapDimensionsInvalid {
+                width_tiles: 1,
+                height_tiles: 33,
+            }
+        );
+
+        // Other partial multi-block sizes: neither whole-screenblock nor
+        // one of the three hardware multi-block shapes.
+        for (width_tiles, height_tiles) in [(40, 40), (63, 32), (64, 33), (65, 64), (32, 33)] {
+            let entries = vec![ScreenEntry::new(0, false, false, 0); width_tiles * height_tiles];
+            assert_eq!(
+                Tilemap::new(width_tiles, height_tiles, entries).unwrap_err(),
+                RenderError::TilemapDimensionsInvalid {
+                    width_tiles,
+                    height_tiles,
+                },
+                "({width_tiles}, {height_tiles}) should have been rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn tilemap_new_allows_zero_area_regardless_of_the_other_dimension() {
+        // A zero-area map can never have any in-range coordinate (`entry`'s
+        // own bounds check rejects every `col`/`row` first), so the
+        // screenblock-shape restriction doesn't apply -- an extreme
+        // dimension paired with a `0` is harmless and must stay accepted.
+        for (width_tiles, height_tiles) in [(usize::MAX, 0), (0, usize::MAX), (33, 0), (0, 33)] {
+            let tilemap = Tilemap::new(width_tiles, height_tiles, Vec::new()).unwrap();
+            assert!(tilemap.entry(0, 0).is_none());
+        }
+    }
+
+    #[test]
+    fn tilemap_new_rejects_length_overflow() {
+        // width_tiles * height_tiles overflows usize; this must return an
+        // error instead of panicking (debug) or silently wrapping (release).
+        assert_eq!(
+            Tilemap::new(usize::MAX, 2, Vec::new()).unwrap_err(),
+            RenderError::TilemapDimensionsInvalid {
+                width_tiles: usize::MAX,
+                height_tiles: 2,
+            }
+        );
+    }
+
+    #[test]
+    fn tilemap_new_accepts_a_full_32x32_single_block() {
+        // The upper edge of the single-screenblock relaxation: exactly 32x32
+        // must still construct and address flat row-major.
+        let mut entries = vec![ScreenEntry::new(0, false, false, 0); 32 * 32];
+        entries[32] = ScreenEntry::new(9, false, false, 0); // row 1, col 0
+        let tilemap = Tilemap::new(32, 32, entries).unwrap();
+        assert_eq!(tilemap.entry(0, 1).unwrap().tile_index(), 9);
+    }
+
+    #[test]
+    fn tilemap_new_accepts_all_four_hardware_regular_bg_sizes() {
+        for (width_tiles, height_tiles) in [(32, 32), (64, 32), (32, 64), (64, 64)] {
+            let entries = vec![ScreenEntry::new(0, false, false, 0); width_tiles * height_tiles];
+            assert!(
+                Tilemap::new(width_tiles, height_tiles, entries).is_ok(),
+                "({width_tiles}, {height_tiles}) should be a valid hardware size"
+            );
+        }
+    }
+
+    #[test]
     fn tilemap_entry_out_of_range_is_none() {
         let entries = vec![ScreenEntry::new(0, false, false, 0); 4];
         let tilemap = Tilemap::new(2, 2, entries).unwrap();
@@ -251,6 +378,21 @@ mod tests {
         assert_eq!(tilemap.entry(32, 0).unwrap().tile_index(), 222);
         // A plain flat map would have put (col=32, row=0) at index 32; prove
         // the two addressings genuinely differ here.
+        assert_eq!(tilemap.entry(0, 0).unwrap().tile_index(), 0);
+    }
+
+    #[test]
+    fn entry_uses_screenblock_addressing_for_a_32x64_map() {
+        // A 32x64 map is two vertical 32x32 screenblocks: SB0 (rows 0-31),
+        // SB1 (rows 32-63).
+        let mut entries = vec![ScreenEntry::new(0, false, false, 0); 32 * 64];
+        entries[32] = ScreenEntry::new(111, false, false, 0); // SB0 row 1, col 0
+        entries[1024] = ScreenEntry::new(222, false, false, 0); // SB1 row 0, col 0
+        let tilemap = Tilemap::new(32, 64, entries).unwrap();
+
+        assert_eq!(tilemap.entry(0, 1).unwrap().tile_index(), 111);
+        // (col=0, row=32) -> entry 1024, the first entry of SB1.
+        assert_eq!(tilemap.entry(0, 32).unwrap().tile_index(), 222);
         assert_eq!(tilemap.entry(0, 0).unwrap().tile_index(), 0);
     }
 
