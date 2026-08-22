@@ -1,6 +1,6 @@
 //! The asset-pack container format (S-4, F-3, issue #81 / Discussion #71
-//! policy A): the one owner of the layout `cargo xtask extract` writes and
-//! `crates/assets` reads.
+//! policies A and C): the one owner of the layout `cargo xtask extract` and
+//! `pokeemerald-rs --import-rom` write and `crates/assets` reads.
 //!
 //! # Format (version 7, wire layout unchanged since 1)
 //!

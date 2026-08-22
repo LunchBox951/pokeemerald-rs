@@ -77,7 +77,8 @@
 //! `cli` and `import_rom` modules). It surfaces this crate's errors as they
 //! are, so the one thing users will get wrong, pointing it at the wrong
 //! ROM, is already [`ImportError::UnsupportedRevision`] naming the ROM the
-//! importer wants. Progress reporting is still to come.
+//! importer wants. The player-facing walkthrough is the top-level README's
+//! "Playing" section.
 
 pub mod fixture;
 pub mod profiles;
