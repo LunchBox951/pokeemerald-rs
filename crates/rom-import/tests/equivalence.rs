@@ -47,7 +47,15 @@ const ROM_ENV: &str = "POKEEMERALD_ROM";
 /// A checkout id under one of these with no ROM counterpart is a failure.
 /// Anything outside them is a domain that has not landed yet, and is
 /// counted but not compared.
-const COMPLETE_PREFIXES: &[&str] = &["title/", "interface/", "tileset/", "layout/"];
+const COMPLETE_PREFIXES: &[&str] = &[
+    "title/",
+    "interface/",
+    "tileset/",
+    "layout/",
+    "sprite/",
+    "font/",
+    "text-window/",
+];
 
 /// Ids the two backends are known and accepted to disagree on, each with
 /// the reason it was signed off.

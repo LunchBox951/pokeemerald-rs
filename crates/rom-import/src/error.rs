@@ -190,6 +190,23 @@ pub enum ImportError {
         /// What the format objected to.
         source: pack_format::EntryShapeError,
     },
+    /// A glyph-sheet root claims a shape the `.latfont` decoder cannot
+    /// honour: the layout is fixed at 256x512 pixels, 2bpp, 32 KiB.
+    ///
+    /// Only reachable from a wrong profile; the generator records the pack
+    /// entry's own shape.
+    FontShape {
+        /// The pack id the root produces.
+        id: &'static str,
+        /// The claimed width in pixels.
+        width: u32,
+        /// The claimed height in pixels.
+        height: u32,
+        /// The claimed bits per pixel.
+        bit_depth: u8,
+        /// The claimed stored length in bytes.
+        len: u32,
+    },
     /// The asset pack could not be assembled.
     PackWrite(pack_format::PackWriteError),
     /// The asset pack could not be written to disk.
@@ -267,6 +284,16 @@ impl fmt::Display for ImportError {
             Self::EntryShape { id, source } => {
                 write!(f, "asset `{id}` does not fit its pack entry: {source}")
             }
+            Self::FontShape {
+                id,
+                width,
+                height,
+                bit_depth,
+                len,
+            } => write!(
+                f,
+                "`{id}` claims a {width}x{height}/{bit_depth}bpp glyph sheet of {len} bytes; the ROM stores 256x512/2bpp in 32768"
+            ),
             Self::PackWrite(source) => write!(f, "could not assemble the asset pack: {source}"),
             Self::WriteFailed { path, source } => {
                 write!(f, "could not write `{}`: {source}", path.display())
