@@ -281,12 +281,29 @@ fn a_refused_sight_check_draws_nothing() {
 }
 
 // -- The fainted-lead fail-closed screen ------------------------------------
+//
+// Formerly pinned here as a caller-side test of this trigger's own
+// `is_fainted` guard -- retired along with that guard (issue #347):
+// `begin_sight_trainer_battle_if_seen` was the *only* in-tree caller still
+// carrying its own copy by the time of this issue -- `route103_rival_trigger`
+// retired its own equivalent guard back at issue #251 (that module's own
+// docs), and this module's guard just never got the same follow-up. A
+// per-caller test gave a false sense that the property was caller-specific
+// when the actual guarantee belongs to `start_npc_trainer_battle` itself.
+// The equivalent -- and strictly stronger, since it now covers every caller
+// including the one that had already lost its own screen -- coverage is
+// `npc_trainer_battle::tests::a_fainted_player_lead_is_refused_before_any_draw`.
+// `standing_in_a_cone_for_many_frames_never_touches_the_rng_stream` above
+// still proves this trigger's own multi-frame no-draw property end to end.
+// The integration half below re-drives the trigger with a fainted lead
+// through the shared refusal arm, so the caller-level coverage is not the
+// only pin on this shape.
 
-/// The same fail-closed screen the rival trigger applies: a fainted lead
-/// must not start a sight-trainer battle, and the screen itself draws
-/// nothing.
+/// The fainted-lead refusal, end to end through the trigger: the shared
+/// constructor's screen (issue #347) refuses inside `step`, no battle
+/// starts, the lead stays in the party, and the stream never moves.
 #[test]
-fn a_fainted_lead_cannot_start_a_sight_trainer_battle_and_draws_nothing() {
+fn a_fainted_lead_is_refused_through_the_trigger_without_a_draw() {
     let (rx, ry) = RHETT_TILE;
     let mut phase = route_103_phase(PlayerState::new((rx, ry + 1), 3, Direction::North));
     let mut fainted = overmatched_lead();

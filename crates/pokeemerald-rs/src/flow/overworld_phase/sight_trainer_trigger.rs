@@ -147,13 +147,17 @@
 //! therefore leaked `CreateNPCTrainerParty`'s per-mon OT-id draws sixty
 //! times a second -- for a fight that can never start, off the same stream
 //! the next wild encounter rolls from. The refusal now happens in
-//! [`crate::flow::npc_trainer_battle::start_npc_trainer_battle`]'s pre-flight
-//! screen ([`battle::ensure_trainer_party_startable`]), ahead of the first
-//! draw, so standing in *any* Route 103 cone -- Miguel's held item, Amy &
-//! Liv's double battle, or the seven unimplemented movesets of item 7 --
-//! leaves the stream byte-identical for as long as the player cares to stand
-//! there (pinned by `overworld_phase::sight_trainer_tests`' own multi-frame
-//! tests, synthetic and real-pack alike).
+//! [`crate::flow::npc_trainer_battle::start_npc_trainer_battle`] itself,
+//! ahead of the first draw -- a fainted-lead check, then the
+//! [`battle::ensure_trainer_party_startable`] pre-flight for everything
+//! else -- so standing in *any* Route 103 cone -- a fainted lead, Miguel's
+//! held item, Amy & Liv's double battle, or the seven unimplemented
+//! movesets of item 7 -- leaves the stream byte-identical for as long as
+//! the player cares to stand there (pinned by
+//! `overworld_phase::sight_trainer_tests`' own multi-frame tests, synthetic
+//! and real-pack alike, and by
+//! [`crate::flow::npc_trainer_battle`]'s own unit test for the fainted-lead
+//! case specifically, issue #347).
 //!
 //! # One line per cone entry
 //!
@@ -344,12 +348,13 @@ impl OverworldPhase {
     /// [`super::step::OverworldPhase::step`]'s own early-return) exactly
     /// like upstream's `ProcessPlayerFieldInput` returning `TRUE` before
     /// `PlayerStep`. Every refusal path below -- no qualifying candidate, no
-    /// party lead, a fainted lead, or a construction error (Miguel's held
-    /// item, module docs item 6) -- returns `false` and changes nothing
-    /// else, **on purpose**: this check reruns every single frame with no
-    /// button gate at all, so preempting movement on a refusal that can
-    /// never resolve itself (Miguel's cone, forever) would be a real soft
-    /// lock, not a cosmetic one-frame stall like a discarded A-press
+    /// party lead, or [`npc_trainer_battle::start_npc_trainer_battle`]
+    /// itself refusing (a fainted lead, Miguel's held item, module docs item
+    /// 6, or item 7's unimplemented movesets) -- returns `false` and changes
+    /// nothing else, **on purpose**: this check reruns every single frame
+    /// with no button gate at all, so preempting movement on a refusal that
+    /// can never resolve itself (Miguel's cone, forever) would be a real
+    /// soft lock, not a cosmetic one-frame stall like a discarded A-press
     /// elsewhere in this crate.
     ///
     /// Every line this method prints is gated by [`SightTrainerLog`] for the
@@ -358,8 +363,11 @@ impl OverworldPhase {
     /// a second the player spends in that cone, and sixty identical lines a
     /// second is noise, not a diagnostic. The refusals themselves are free
     /// to repeat -- [`npc_trainer_battle::start_npc_trainer_battle`] screens
-    /// the whole party before its first draw (that module's own docs), so
-    /// re-refusing costs nothing but the check.
+    /// both the lead and the whole party before its first draw (that
+    /// module's own docs), so re-refusing costs nothing but the check --
+    /// this method itself carries no fainted-lead screen of its own (issue
+    /// #347 retired the one it used to; see that shared function's own
+    /// docs for why the split screen was the actual defect).
     pub(super) fn begin_sight_trainer_battle_if_seen(&mut self) -> bool {
         let Ok(header) = MapHeaderTable::new().header(self.map_id) else {
             return false;
@@ -402,19 +410,12 @@ impl OverworldPhase {
             }
             return false;
         };
-        // The same fail-closed screen `route103_rival_trigger`'s own
-        // `begin_route103_rival_battle` applies, for the same residual
-        // state (a lost Route 101 first battle -- `crate::flow::wild_encounter`'s
-        // module docs, "The fail-closed guard, narrowed"): refused before
-        // `start_npc_trainer_battle` can draw anything.
-        if lead.is_fainted() {
-            if first_report {
-                eprintln!(
-                    "sight trainer: the lead mon has fainted -- no battle until it is healed"
-                );
-            }
-            return false;
-        }
+        // No caller-side fainted-lead screen here (issue #347 retired it):
+        // `start_npc_trainer_battle` now screens `lead.is_fainted()` itself,
+        // before any lookup or draw, so a fainted lead is refused for free
+        // exactly like every other construction refusal below (that
+        // function's own module docs, "Nothing is built before the whole
+        // party is screened").
         match npc_trainer_battle::start_npc_trainer_battle(lead, trainer_id, &mut self.rng) {
             Ok(battle) => {
                 self.party_lead = None;
@@ -432,7 +433,7 @@ impl OverworldPhase {
                 if first_report {
                     eprintln!(
                         "sight trainer: can't start against trainer {trainer_id:?} ({error}) -- \
-                         not modelled, no battle, no draws (module docs items 6-7)"
+                         refused before any draw (module docs items 6-7, or a fainted lead)"
                     );
                 }
                 false
