@@ -49,23 +49,69 @@ fn phase_delta(hz: f64, steps_per_cycle: f64) -> u32 {
     }
 }
 
+/// Sample-accurate 128 Hz phase accumulator driving the channel-1 sweep
+/// (and, per its doc, any future unit sharing the real hardware's frame
+/// sequencer) at the exact sample offset a tick falls on, rather than once
+/// per whole render buffer.
+///
+/// [`crate::pitch::MIXER_RATE`] (13,379) is not an integer multiple of 128,
+/// so a fixed samples-per-tick count would drift. This instead keeps an
+/// exact-rational Bresenham accumulator in units of `MIXER_RATE`: every
+/// output sample advances it by 128, and whenever it reaches or passes
+/// `MIXER_RATE` a tick fires and `MIXER_RATE` is subtracted. Because the
+/// accumulator persists in `self` across calls to [`Self::advance`], the
+/// tick offsets produced are identical whether a stream is rendered as one
+/// buffer or split into several smaller ones — see the
+/// `frame_sequencer_128hz` tests in this module and the
+/// `chunk_boundary_invariance` tests in `cgb_voice.rs`.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct FrameSequencer128Hz {
+    /// Accumulated phase, in units of [`crate::pitch::MIXER_RATE`].
+    acc: u32,
+}
+
+impl FrameSequencer128Hz {
+    /// The sweep tick rate, in Hz.
+    const TICK_HZ: u32 = 128;
+
+    /// Advance by `samples` output samples, returning the ascending 0-based
+    /// offsets within `0..samples` at which a 128 Hz tick fires.
+    #[must_use]
+    pub fn advance(&mut self, samples: usize) -> Vec<usize> {
+        let mut ticks = Vec::new();
+        for i in 0..samples {
+            self.acc += Self::TICK_HZ;
+            if self.acc >= MIXER_RATE {
+                self.acc -= MIXER_RATE;
+                ticks.push(i);
+            }
+        }
+        ticks
+    }
+}
+
 /// Channel-1 frequency sweep: periodically nudges the playing frequency up
 /// or down, disabling the channel outright on overflow.
 ///
 /// Behavioural port of the sweep unit `CgbSound` configures via `NR10`
 /// (`ply_note`'s CGB branch, `m4a_1.s:1773`..`:1783`, and the sweep math
 /// itself is hardware, cross-checked against `mgba/src/gb/audio.c`'s
-/// `_updateSweep`). The real unit ticks at 128 Hz against a shared frame
-/// sequencer; this reimplementation instead counts whole render frames per
-/// step `(no-verbatim)` — a deliberate, benign simplification in the spirit
-/// of `mixer::clip`'s clip-vs-wrap choice: the audible sweep shape survives,
-/// only its exact tick-for-tick cadence does not.
+/// `_updateSweep`). The real unit ticks from two of the eight phases of a
+/// 512 Hz frame sequencer, i.e. 128 Hz exactly (`GBAudioUpdateFrame`'s `case
+/// 2:`/`case 6:` arm, `mgba/src/gb/audio.c:663`..`:668`; the 512 Hz base
+/// itself is `FRAME_CYCLES` = `DMG_SM83_FREQUENCY >> 9`,
+/// `mgba/src/gb/audio.c:18`). [`Self::tick`] is driven at that same 128 Hz
+/// cadence by [`FrameSequencer128Hz`], which lands each tick at its correct
+/// sample offset within a render buffer instead of snapping to the buffer
+/// boundary (issue #381) — see [`crate::cgb_voice::CgbVoice::render`]. Before
+/// that fix this type counted whole ~59.73 Hz render frames per step
+/// instead, running sweeping notes roughly 2.14x too slowly.
 #[derive(Clone, Copy, Debug)]
 pub struct Sweep {
     shift: u8,
     subtract: bool,
-    /// Frames between steps; `0` disables the sweep entirely (matches
-    /// hardware: a zero sweep *time* never fires).
+    /// 128 Hz sequencer ticks between steps; `0` disables the sweep
+    /// entirely (matches hardware: a zero sweep *time* never fires).
     period: u8,
     counter: u8,
     /// The sweep unit's own shadow frequency register, mutated in place.
@@ -116,7 +162,9 @@ impl Sweep {
         self.frequency + delta > 0x7FF
     }
 
-    /// Advance the sweep unit by one render frame.
+    /// Advance the sweep unit by one 128 Hz sequencer tick (see the type
+    /// doc). Call sites drive this from [`FrameSequencer128Hz`], not once
+    /// per render buffer.
     pub fn tick(&mut self) -> SweepResult {
         if self.period == 0 {
             return SweepResult::Unchanged;
@@ -210,16 +258,24 @@ impl SquareChannel {
         self.disabled
     }
 
+    /// The sweep unit's current shadow frequency register, or `None` if
+    /// this channel has no sweep configured. Test-only introspection for
+    /// pinning sweep tick cadence (issue #381).
+    #[cfg(test)]
+    pub(crate) fn sweep_frequency(&self) -> Option<u16> {
+        self.sweep.as_ref().map(|s| s.frequency)
+    }
+
     /// Retune to a new 11-bit frequency register value.
     pub fn set_frequency(&mut self, freq_reg: u16) {
         let hz = register_freq_hz(freq_reg, 131_072.0);
         self.step_delta = phase_delta(hz, 8.0);
     }
 
-    /// Advance the sweep unit (channel 1 only) by one render frame,
+    /// Advance the sweep unit (channel 1 only) by one 128 Hz sequencer tick,
     /// retuning this channel's rate on a frequency change. Returns `false`
     /// once the sweep has overflowed and the channel must be silenced.
-    pub fn step_sweep_frame(&mut self) -> bool {
+    pub fn step_sweep_tick(&mut self) -> bool {
         let Some(sweep) = self.sweep.as_mut() else {
             return true;
         };
@@ -468,13 +524,13 @@ mod tests {
         // The public path from the issue's repro: a channel-1 voice at key
         // 48 (frequency register 1046) with sweep byte 0x11 stays active
         // through construction (the *trigger*-time check alone doesn't
-        // overflow), but the very first scheduled `step_sweep_frame` must
+        // overflow), but the very first scheduled `step_sweep_tick` must
         // retire it once the post-update look-ahead overflows.
         let sweep = Sweep::from_byte(0x11, 1046);
         assert!(!sweep.overflows_at_trigger());
         let mut chan = SquareChannel::new(2, 1046, Some(sweep));
         assert!(!chan.is_disabled());
-        assert!(!chan.step_sweep_frame());
+        assert!(!chan.step_sweep_tick());
     }
 
     #[test]
@@ -591,5 +647,45 @@ mod tests {
         let seq_a: Vec<i8> = (0..32).map(|_| a.sample()).collect();
         let seq_b: Vec<i8> = (0..32).map(|_| b.sample()).collect();
         assert_eq!(seq_a, seq_b);
+    }
+
+    #[test]
+    fn frame_sequencer_128hz_pins_the_hardware_tick_offsets() {
+        // 128 Hz against MIXER_RATE=13,379 is not an integer ratio
+        // (13379/128 ~= 104.52); the Bresenham accumulator must land ticks
+        // 104 or 105 samples apart so the average holds at exactly 128 Hz,
+        // matching hardware's sweep cadence (`GBAudioUpdateFrame`'s `case
+        // 2:`/`case 6:` arm, `mgba/src/gb/audio.c:663`..`:668`) rather than
+        // the old ~59.73 Hz once-per-render-buffer cadence this replaced
+        // (issue #381).
+        let mut seq = FrameSequencer128Hz::default();
+        let ticks = seq.advance(1200);
+        assert_eq!(
+            ticks,
+            vec![104, 209, 313, 418, 522, 627, 731, 836, 940, 1045, 1149]
+        );
+        let spacings: Vec<usize> = ticks.windows(2).map(|w| w[1] - w[0]).collect();
+        assert!(
+            spacings.iter().all(|&d| d == 104 || d == 105),
+            "every tick spacing must be 104 or 105 samples, got {spacings:?}"
+        );
+    }
+
+    #[test]
+    fn frame_sequencer_128hz_chunk_boundary_invariance() {
+        // The same persistent accumulator must produce identical absolute
+        // tick offsets whether a stream renders as one buffer or as several
+        // smaller ones back to back (issue #381's chunk-boundary-invariance
+        // requirement).
+        let mut whole = FrameSequencer128Hz::default();
+        let whole_ticks = whole.advance(600);
+
+        let mut split = FrameSequencer128Hz::default();
+        let first = split.advance(300);
+        let second = split.advance(300);
+        let mut combined = first;
+        combined.extend(second.into_iter().map(|t| t + 300));
+
+        assert_eq!(whole_ticks, combined);
     }
 }

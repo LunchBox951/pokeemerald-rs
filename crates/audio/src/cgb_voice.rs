@@ -501,15 +501,14 @@ impl CgbVoice {
         }
     }
 
-    /// Advance the envelope (and channel-1 sweep) one frame and recompute
-    /// the frame's gain.
+    /// Advance the envelope one frame and recompute the frame's gain.
+    /// Channel-1 sweep steps are *not* driven from here: unlike the
+    /// once-per-buffer M4A software envelope, the sweep unit ticks at
+    /// hardware's own 128 Hz cadence, which does not line up with render
+    /// buffer boundaries — see [`Self::render`]'s `sweep_ticks` parameter
+    /// and [`crate::psg::FrameSequencer128Hz`] (issue #381).
     pub fn begin_frame(&mut self, master_volume: u8) {
         self.envelope.step();
-        if let Oscillator::Square(s) = &mut self.oscillator {
-            if !s.step_sweep_frame() {
-                self.envelope.retire();
-            }
-        }
         // Scale the envelope's coarse level up to the same rough `0..=255`
         // range `Voice::begin_frame` mixes at, so a CGB channel's loudness is
         // comparable to a DirectSound one at the same nominal volume. The wave
@@ -527,10 +526,36 @@ impl CgbVoice {
 
     /// Render this voice's contribution across a frame, accumulating into
     /// `acc`. [`Self::begin_frame`] must have run for this frame first.
-    pub fn render(&mut self, acc: &mut [StereoAcc]) {
-        for slot in acc.iter_mut() {
+    ///
+    /// `sweep_ticks` are the ascending, 0-based sample offsets within `acc`
+    /// at which the channel-1 sweep must tick — normally
+    /// [`crate::psg::FrameSequencer128Hz::advance`]'s result for `acc.len()`
+    /// samples, shared across every CGB voice in a frame since the real
+    /// frame sequencer is one clock for the whole hardware unit. Applying
+    /// the tick at its exact sample offset (rather than once before the
+    /// whole buffer) is what gives a sweeping channel-1 voice hardware's
+    /// 128 Hz cadence instead of the render buffer's ~59.73 Hz (issue
+    /// #381). Ignored by non-square oscillators and by a square channel
+    /// with no sweep configured.
+    pub fn render(&mut self, acc: &mut [StereoAcc], sweep_ticks: &[usize]) {
+        let mut ticks = sweep_ticks.iter().copied().peekable();
+        for (i, slot) in acc.iter_mut().enumerate() {
             if !self.envelope.is_active() {
                 break;
+            }
+            if ticks.peek() == Some(&i) {
+                ticks.next();
+                if let Oscillator::Square(s) = &mut self.oscillator {
+                    if !s.step_sweep_tick() {
+                        // Hardware silences the channel from this exact tick
+                        // onward, so no further samples of this buffer may
+                        // render — mirroring how a trigger-time overflow
+                        // leaves a voice silent from frame 0
+                        // (`Self::square_with_fixed_rate`'s `born_dead`).
+                        self.envelope.retire();
+                        break;
+                    }
+                }
             }
             let raw = oscillator_sample(&mut self.oscillator);
             let contribution = (self.env_gain * raw) >> 8;
@@ -554,11 +579,22 @@ impl CgbVoice {
             _ => None,
         }
     }
+
+    /// This voice's channel-1 sweep shadow frequency register, or `None` if
+    /// it is not a square voice with a sweep configured. Test-only
+    /// introspection for pinning sweep tick cadence (issue #381).
+    fn sweep_frequency(&self) -> Option<u16> {
+        match &self.oscillator {
+            Oscillator::Square(s) => s.sweep_frequency(),
+            _ => None,
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::psg::FrameSequencer128Hz;
 
     #[test]
     fn noise_control_byte_sets_width_bit_only_for_odd_period() {
@@ -622,7 +658,7 @@ mod tests {
         );
         let mut acc = vec![(0i32, 0i32); 8];
         voice.begin_frame(15);
-        voice.render(&mut acc);
+        voice.render(&mut acc, &[]);
         assert!(
             acc.iter().any(|&(l, r)| l != 0 || r != 0),
             "a live-envelope wave note must be audible"
@@ -672,7 +708,7 @@ mod tests {
             assert!(!dead.is_active(), "overflowing sweep note is born dead");
             let mut acc = vec![(0i32, 0i32); 8];
             dead.begin_frame(15);
-            dead.render(&mut acc);
+            dead.render(&mut acc, &[]);
             assert!(
                 acc.iter().all(|&(l, r)| l == 0 && r == 0),
                 "born-dead channel must be silent from frame 0"
@@ -757,9 +793,9 @@ mod tests {
         let mut acc_a = vec![(0i32, 0i32); 16];
         let mut acc_b = vec![(0i32, 0i32); 16];
         square.begin_frame(15);
-        square.render(&mut acc_a);
+        square.render(&mut acc_a, &[]);
         expected.begin_frame(15);
-        expected.render(&mut acc_b);
+        expected.render(&mut acc_b, &[]);
         assert_eq!(acc_a, acc_b);
     }
 
@@ -925,9 +961,9 @@ mod tests {
         let mut acc_fixed = vec![(0i32, 0i32); 2048];
         let mut acc_plain = vec![(0i32, 0i32); 2048];
         fixed.begin_frame(15);
-        fixed.render(&mut acc_fixed);
+        fixed.render(&mut acc_fixed, &[]);
         plain.begin_frame(15);
-        plain.render(&mut acc_plain);
+        plain.render(&mut acc_plain, &[]);
         assert_ne!(
             acc_fixed, acc_plain,
             "the DAC-corrected register must audibly differ from the uncorrected one"
@@ -982,9 +1018,211 @@ mod tests {
         let mut acc_direct = vec![(0i32, 0i32); 2048];
         let mut acc_retuned = vec![(0i32, 0i32); 2048];
         direct.begin_frame(15);
-        direct.render(&mut acc_direct);
+        direct.render(&mut acc_direct, &[]);
         retuned.begin_frame(15);
-        retuned.render(&mut acc_retuned);
+        retuned.render(&mut acc_retuned, &[]);
         assert_eq!(acc_direct, acc_retuned);
+    }
+
+    /// A square-1 voice at the lowest playable frequency register (key `0`
+    /// clamps to `44`), leaving plenty of headroom before a shift-1 sweep's
+    /// compounding `x1.5`-per-tick growth overflows `0x7FF` — verified
+    /// empirically to stay in range through at least 7 successive period-1
+    /// ticks. Used by the 128 Hz cadence and chunk-boundary tests below,
+    /// which need several ticks without the channel disabling mid-test.
+    fn low_freq_sweep_voice(sweep_byte: u8) -> CgbVoice {
+        CgbVoice::square(
+            CgbChannelNumber::Square1,
+            2,
+            Some(sweep_byte),
+            CgbAdsr::flat(),
+            0,
+            0,
+            0xFF,
+            0xFF,
+            127,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+        )
+    }
+
+    /// Drive `voice` through every offset in `ticks` one sample at a time,
+    /// recording [`CgbVoice::sweep_frequency`] immediately after each tick
+    /// fires. Samples between ticks render with no ticks of their own.
+    fn sweep_frequency_after_each_tick(voice: &mut CgbVoice, ticks: &[usize]) -> Vec<u16> {
+        let mut cursor = 0usize;
+        let mut freqs = Vec::with_capacity(ticks.len());
+        for &tick in ticks {
+            let gap = tick - cursor;
+            if gap > 0 {
+                voice.render(&mut vec![(0i32, 0i32); gap], &[]);
+            }
+            voice.render(&mut [(0i32, 0i32)], &[0]);
+            freqs.push(
+                voice
+                    .sweep_frequency()
+                    .expect("still a square voice with a sweep configured"),
+            );
+            cursor = tick + 1;
+        }
+        freqs
+    }
+
+    #[test]
+    fn square1_sweep_period_1_ticks_at_every_128hz_sample_offset() {
+        // period 1, add, shift 1: `GBAudioUpdateFrame`'s `case 2:`/`case 6:`
+        // arm (`mgba/src/gb/audio.c:663`..`:668`) fires the sweep on every
+        // 128 Hz tick when `period == 1`. Pin that the shadow frequency
+        // changes at each of `FrameSequencer128Hz`'s tick offsets — not
+        // once per ~59.73 Hz render buffer, as before this fix (issue
+        // #381).
+        let mut voice = low_freq_sweep_voice(0x11);
+        voice.begin_frame(15);
+        let start_freq = voice.sweep_frequency().expect("square1 sweep configured");
+
+        let mut clock = FrameSequencer128Hz::default();
+        let ticks = clock.advance(600); // 5 ticks, well short of the 8th (overflow)
+        let freqs = sweep_frequency_after_each_tick(&mut voice, &ticks);
+
+        assert_eq!(freqs.len(), 5);
+        let mut expected = start_freq;
+        for &f in &freqs {
+            assert!(
+                f > expected,
+                "a period-1 sweep must advance on every 128 Hz tick, got {freqs:?}"
+            );
+            expected = f;
+        }
+    }
+
+    #[test]
+    fn square1_sweep_period_2_ticks_at_half_the_128hz_rate() {
+        // period 2 (the issue's real repro: `rs_sfx_1.inc`'s
+        // `voice_square_1_alt 60, 0, 44, 2, 0, 4, 0, 0` and `..., 38, 0, ...`
+        // both encode period 2): the sweep must fire on every SECOND 128 Hz
+        // tick (64 Hz), not the ~29.86 Hz the old once-per-render-buffer
+        // cadence produced.
+        let mut voice = low_freq_sweep_voice(0x21); // period 2, add, shift 1
+        voice.begin_frame(15);
+        let start_freq = voice.sweep_frequency().expect("square1 sweep configured");
+
+        let mut clock = FrameSequencer128Hz::default();
+        let ticks = clock.advance(1200); // 11 ticks
+        let freqs = sweep_frequency_after_each_tick(&mut voice, &ticks);
+
+        assert_eq!(freqs.len(), 11);
+        let mut expected = start_freq;
+        let mut should_fire = false; // period 2's counter starts at 2: the
+                                     // first tick of each pair only counts
+                                     // down, the second fires.
+        for &f in &freqs {
+            if should_fire {
+                assert!(
+                    f > expected,
+                    "the second 128 Hz tick of a period-2 pair must fire, got {freqs:?}"
+                );
+                expected = f;
+            } else {
+                assert_eq!(
+                    f, expected,
+                    "the first 128 Hz tick of a period-2 pair must not fire, got {freqs:?}"
+                );
+            }
+            should_fire = !should_fire;
+        }
+    }
+
+    #[test]
+    fn cgb_voice_render_is_chunk_boundary_invariant() {
+        // Rendering the same stream as one buffer or as two half-size
+        // buffers back to back must produce identical audio: the persistent
+        // `FrameSequencer128Hz` clock and the voice's own oscillator/sweep
+        // state are unaffected by how a caller chunks its render calls
+        // (issue #381).
+        let make_voice = || low_freq_sweep_voice(0x11); // period 1, add, shift 1
+
+        let mut whole_voice = make_voice();
+        whole_voice.begin_frame(15);
+        let mut whole_clock = FrameSequencer128Hz::default();
+        let whole_ticks = whole_clock.advance(600);
+        let mut whole_acc = vec![(0i32, 0i32); 600];
+        whole_voice.render(&mut whole_acc, &whole_ticks);
+
+        let mut split_voice = make_voice();
+        split_voice.begin_frame(15);
+        let mut split_clock = FrameSequencer128Hz::default();
+        let first_ticks = split_clock.advance(300);
+        let mut first_half = vec![(0i32, 0i32); 300];
+        split_voice.render(&mut first_half, &first_ticks);
+        let second_ticks = split_clock.advance(300);
+        let mut second_half = vec![(0i32, 0i32); 300];
+        split_voice.render(&mut second_half, &second_ticks);
+        let mut split_acc = first_half;
+        split_acc.extend(second_half);
+
+        assert_eq!(whole_acc, split_acc);
+        assert!(
+            whole_acc.iter().any(|&(l, r)| l != 0 || r != 0),
+            "sanity: the sweeping voice must actually be audible"
+        );
+    }
+
+    #[test]
+    fn square1_sweep_overflow_retires_the_voice_mid_buffer() {
+        // Key 48 (frequency register 1046) with sweep byte 0x11 (period 1,
+        // add, shift 1) survives construction (the trigger-time check alone
+        // doesn't overflow, `psg.rs`'s `sweep_square_channel_and_voice_retire_
+        // on_lookahead_overflow`), but its very first 128 Hz tick's
+        // post-update look-ahead does (`_updateSweep(ch, true)`,
+        // `mgba/src/gb/audio.c:980`..`:981`, ported as
+        // `Sweep::tick`'s look-ahead branch). Pin that retirement lands at
+        // that tick's exact sample offset within a render buffer, not only
+        // at the buffer's end (issue #381).
+        let mut voice = CgbVoice::square(
+            CgbChannelNumber::Square1,
+            2,
+            Some(0x11),
+            CgbAdsr::flat(),
+            48,
+            0,
+            0xFF,
+            0xFF,
+            127,
+            0,
+            48,
+            0,
+            0,
+            0,
+            0,
+        );
+        assert!(
+            voice.is_active(),
+            "not born dead: the trigger check alone doesn't overflow"
+        );
+        voice.begin_frame(15);
+
+        let mut clock = FrameSequencer128Hz::default();
+        let ticks = clock.advance(300);
+        let first_tick = ticks[0];
+        let mut acc = vec![(0i32, 0i32); 300];
+        voice.render(&mut acc, &ticks);
+
+        assert!(
+            acc[..first_tick].iter().any(|&(l, r)| l != 0 || r != 0),
+            "samples before the overflowing tick must still be audible"
+        );
+        assert!(
+            acc[first_tick..].iter().all(|&(l, r)| l == 0 && r == 0),
+            "samples from the overflowing tick onward must be silent, not just \
+             at the buffer end"
+        );
+        assert!(
+            !voice.is_active(),
+            "the voice must retire once the sweep overflows"
+        );
     }
 }
