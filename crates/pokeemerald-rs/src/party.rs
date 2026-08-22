@@ -85,9 +85,12 @@
 //! the call site -- after a successful heal it clears the retained
 //! record's status word directly ([`crate::flow`]'s
 //! `overworld_phase::white_out`), so an ordinary save keeps the word and
-//! a white-out does not, which is upstream's split. Once `battle` models
-//! status, the merge overlays it like any other battle-owned field and
-//! the call-site clear disappears.
+//! a white-out does not, which is upstream's split. The first battle's
+//! conclusion needs no such clear: its lead can only be a record this
+//! port itself wrote (the trigger is consumed before any save could carry
+//! real EVs or a status there), and every port-written record has a zero
+//! status word. Once `battle` models status, the merge overlays it like
+//! any other battle-owned field and the call-site clear disappears.
 //!
 //! One more field *does* round-trip, added alongside
 //! [`battle::BattlePokemon::ability`] (issue #322): **the ability slot** --
@@ -155,15 +158,19 @@
 //! 0-EV one and EVs only ever add to it. One translation applies over a
 //! *retained* block: [`from_save_pokemon`] clamps a stored `hp` above the
 //! model's maximum down to it, hiding the `stored - model_max` points the
-//! session never saw. The merge adds that hidden offset back onto the
-//! live number, capped at the retained `max_hp` and never resurrecting a
-//! fainted battler. Continue -> SAVE is therefore byte-exact at any
-//! stored `hp` -- filing the clamped number would mark a full-health lead
-//! damaged, the corruption shape issue #344 exists to stop -- and damage
-//! subtracts absolutely, as upstream's EV-aware arithmetic would. The
-//! residue (a live HP pinned at either boundary mid-session loses points
-//! the wider upstream range would have kept) closes when `battle` carries
-//! EVs.
+//! session never saw. That offset is measured once at load
+//! ([`hp_hidden_by_load`]) and carried as session state beside the lead;
+//! the merge adds it back onto the live number, capped at the retained
+//! `max_hp` and never resurrecting a fainted battler. It must be state
+//! rather than re-derived: the start menu writes the merge's output back
+//! into the slot it passes as the next save's `base`, so measuring an
+//! already-translated record would drift -- saving twice files the same
+//! bytes. Continue -> SAVE is therefore byte-exact at any stored `hp` --
+//! filing the clamped number would mark a full-health lead damaged, the
+//! corruption shape issue #344 exists to stop -- and damage subtracts
+//! absolutely, as upstream's EV-aware arithmetic would. The residue (a
+//! live HP pinned at either boundary mid-session loses points the wider
+//! upstream range would have kept) closes when `battle` carries EVs.
 
 use battle::{BattlePokemon, Dex, Ivs, MAX_MON_MOVES};
 use engine::save::{BoxPokemon, Pokemon, PokemonSubstructures, SUBSTRUCTURE_LEN};
@@ -386,14 +393,33 @@ fn overlay_current_hp(record: &mut Pokemon, mon: &BattlePokemon) {
 /// `hp`, and in-session damage subtracts absolutely from the stored value
 /// rather than from its clamp. A fainted battler stays fainted: `0` is
 /// the session's own outcome, not a clamp artifact.
-fn overlay_current_hp_over_retained_block(record: &mut Pokemon, mon: &BattlePokemon) {
+///
+/// The offset is the caller's, measured once at load ([`hp_hidden_by_load`])
+/// and carried as session state, *not* re-derived from `record.hp` here:
+/// the start menu writes this function's output back into the slot it will
+/// pass as the next save's `base`, so a re-derivation would measure an
+/// already-translated value and drift -- saving twice must file the same
+/// bytes.
+fn overlay_current_hp_over_retained_block(
+    record: &mut Pokemon,
+    mon: &BattlePokemon,
+    hp_hidden_by_load: u16,
+) {
     let live = clamp_u16(mon.current_hp());
-    let clamp_hidden = record.hp.saturating_sub(clamp_u16(mon.stats().max_hp));
     record.hp = if live == 0 {
         0
     } else {
-        live.saturating_add(clamp_hidden).min(record.max_hp)
+        live.saturating_add(hp_hidden_by_load).min(record.max_hp)
     };
+}
+
+/// The current-HP points [`from_save_pokemon`]'s clamp hid from the
+/// session: the stored `hp` above the decoded battler's own (0-EV)
+/// maximum. Measured once, when the record is decoded, and carried beside
+/// the lead until [`merge_into_save_pokemon`] adds it back; zero whenever
+/// the stored value fits the model's range.
+pub(crate) fn hp_hidden_by_load(stored: &Pokemon, lead: &BattlePokemon) -> u16 {
+    stored.hp.saturating_sub(clamp_u16(lead.stats().max_hp))
 }
 
 /// `SavePlayerParty`'s per-mon half for a mon that came *out* of a save
@@ -424,7 +450,12 @@ fn overlay_current_hp_over_retained_block(record: &mut Pokemon, mon: &BattlePoke
 /// [`engine::save::BoxPokemon::set_substructures`], which re-shuffles them
 /// into personality order, re-encrypts them, and rewrites the checksum, so
 /// the merged record is as valid as the one it was read from.
-pub(crate) fn merge_into_save_pokemon(dex: &Dex, mon: &BattlePokemon, base: &Pokemon) -> Pokemon {
+pub(crate) fn merge_into_save_pokemon(
+    dex: &Dex,
+    mon: &BattlePokemon,
+    base: &Pokemon,
+    hp_hidden_by_load: u16,
+) -> Pokemon {
     let mut substructures = match backing_substructures(mon, base) {
         Ok(substructures) => substructures,
         Err(reason) => {
@@ -484,8 +515,9 @@ pub(crate) fn merge_into_save_pokemon(dex: &Dex, mon: &BattlePokemon, base: &Pok
         // The save's own six stat bytes stay exactly as they were --
         // including the EV contribution this port cannot rebuild. Only
         // current HP, which is state, comes from the battler -- translated
-        // back across the load clamp at the model's full (module docs).
-        overlay_current_hp_over_retained_block(&mut merged, mon);
+        // back across the load clamp by the offset measured at load time
+        // (module docs).
+        overlay_current_hp_over_retained_block(&mut merged, mon, hp_hidden_by_load);
     } else {
         // Species or level moved this session, so the cached block is a
         // function of inputs that no longer hold and upstream would have

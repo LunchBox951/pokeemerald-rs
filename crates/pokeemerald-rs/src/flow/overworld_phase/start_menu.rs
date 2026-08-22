@@ -198,6 +198,7 @@ impl OverworldPhase {
                 &battle::Dex::new(),
                 lead,
                 &self.save1.player_party[0],
+                self.lead_hp_hidden_by_load,
             );
             if self.save1.player_party_count == 0 {
                 self.save1.player_party_count = 1;
@@ -231,13 +232,19 @@ impl OverworldPhase {
     pub(super) fn copy_party_and_objects_from_save(&mut self) {
         if self.save1.player_party_count == 0 {
             self.party_lead = None;
+            self.lead_hp_hidden_by_load = 0;
             return;
         }
         match party::from_save_pokemon(&battle::Dex::new(), &self.save1.player_party[0]) {
-            Ok(lead) => self.party_lead = Some(lead),
+            Ok(lead) => {
+                self.lead_hp_hidden_by_load =
+                    party::hp_hidden_by_load(&self.save1.player_party[0], &lead);
+                self.party_lead = Some(lead);
+            }
             Err(err) => {
                 eprintln!("continue: {err} -- resuming with an empty party");
                 self.party_lead = None;
+                self.lead_hp_hidden_by_load = 0;
             }
         }
     }

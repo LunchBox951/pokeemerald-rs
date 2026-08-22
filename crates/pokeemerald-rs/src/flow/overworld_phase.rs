@@ -233,6 +233,12 @@ pub(crate) struct OverworldPhase {
     /// mon back here when it ends, so damage taken persists into the
     /// overworld the way `gPlayerParty[0]` does.
     pub(super) party_lead: Option<battle::BattlePokemon>,
+    /// The current-HP points [`crate::party`]'s load clamp hid from
+    /// [`Self::party_lead`] (`party::hp_hidden_by_load`): measured when the
+    /// lead is decoded from the save, added back by the merge on every
+    /// save, and rewritten by the white-out when it completes a heal on
+    /// the record directly. Zero when no lead was loaded from a record.
+    pub(super) lead_hp_hidden_by_load: u16,
     /// The wild battle currently being played out, if any (issue #169).
     /// `Some` freezes the overworld for the frame -- the same shape
     /// [`Self::dialog`] uses -- while
@@ -576,6 +582,7 @@ impl OverworldPhase {
             wild: WildEncounterState::new(),
             wild_table_screen: None,
             party_lead: None,
+            lead_hp_hidden_by_load: 0,
             wild_battle: None,
             different_save_file: false,
             // A continue *is* the file on disk: its blocks came from it, so
@@ -717,6 +724,7 @@ impl OverworldPhase {
             wild: WildEncounterState::new(),
             wild_table_screen: None,
             party_lead: None,
+            lead_hp_hidden_by_load: 0,
             wild_battle: None,
             // `NewGameInitData` (`src/new_game.c:154`).
             different_save_file: true,

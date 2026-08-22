@@ -151,6 +151,13 @@ impl OverworldPhase {
                     // (`script_pokemon_util.c:39-42`), so complete that here too --
                     // otherwise the next merge files a fully healed lead as damaged.
                     self.save1.player_party[0].hp = self.save1.player_party[0].max_hp;
+                    // The record's hp no longer matches what the (healed)
+                    // battler will report, so re-measure the load offset the
+                    // merge adds back -- the retained maximum less the
+                    // model's own full.
+                    self.lead_hp_hidden_by_load = self.save1.player_party[0]
+                        .max_hp
+                        .saturating_sub(u16::try_from(lead.stats().max_hp).unwrap_or(u16::MAX));
                 }
                 Err(error) => {
                     eprintln!("white-out: couldn't heal the party lead ({error}) -- left as-is");

@@ -1,8 +1,8 @@
 //! Unit tests for the [`super`] party encoder (I-6, issue #232).
 
 use super::{
-    from_save_pokemon, merge_into_save_pokemon, pack_ivs, to_save_pokemon, unpack_ivs, PartyError,
-    MAIL_NONE,
+    from_save_pokemon, hp_hidden_by_load, merge_into_save_pokemon, pack_ivs, to_save_pokemon,
+    unpack_ivs, PartyError, MAIL_NONE,
 };
 use battle::{BattlePokemon, Dex, Ivs};
 use engine::save::{BoxPokemon, Pokemon};
@@ -619,7 +619,7 @@ fn re_saving_a_loaded_mon_keeps_every_field_the_battle_model_does_not_carry() {
     lead.apply_damage(9);
     lead.deduct_pp(0).unwrap();
 
-    let merged = merge_into_save_pokemon(&dex, &lead, &stored);
+    let merged = merge_into_save_pokemon(&dex, &lead, &stored, hp_hidden_by_load(&stored, &lead));
 
     let before = stored.box_data.substructures().unwrap();
     let after = merged
@@ -733,7 +733,7 @@ fn sub_level_experience_does_not_flatten_the_retained_stat_block() {
         "fixture sanity: the experience word really moved"
     );
 
-    let merged = merge_into_save_pokemon(&dex, &lead, &stored);
+    let merged = merge_into_save_pokemon(&dex, &lead, &stored, hp_hidden_by_load(&stored, &lead));
     let after = merged.box_data.substructures().unwrap();
     assert_eq!(
         u32::from_le_bytes(after.growth[4..8].try_into().unwrap()),
@@ -770,7 +770,7 @@ fn re_saving_an_untouched_lead_writes_the_record_back_byte_for_byte() {
          model cannot rebuild, so a re-derived block would differ"
     );
 
-    let merged = merge_into_save_pokemon(&dex, &lead, &stored);
+    let merged = merge_into_save_pokemon(&dex, &lead, &stored, hp_hidden_by_load(&stored, &lead));
 
     let (merged_bytes, stored_bytes) = (merged.to_bytes(), stored.to_bytes());
     let moved: Vec<usize> = (0..merged_bytes.len())
@@ -784,10 +784,12 @@ fn re_saving_an_untouched_lead_writes_the_record_back_byte_for_byte() {
 
     // And it stays that way: a player who continues and saves repeatedly
     // without battling cannot drift the record one byte per session.
+    let reloaded = from_save_pokemon(&dex, &merged).expect("the re-saved record must decode");
     let again = merge_into_save_pokemon(
         &dex,
-        &from_save_pokemon(&dex, &merged).expect("the re-saved record must decode"),
+        &reloaded,
         &merged,
+        hp_hidden_by_load(&merged, &reloaded),
     );
     assert_eq!(again.to_bytes(), stored.to_bytes());
 }
@@ -810,7 +812,7 @@ fn re_saving_a_loaded_mon_overlays_what_the_session_changed() {
     lead.deduct_pp(1).unwrap();
     lead.deduct_pp(1).unwrap();
 
-    let merged = merge_into_save_pokemon(&dex, &lead, &stored);
+    let merged = merge_into_save_pokemon(&dex, &lead, &stored, hp_hidden_by_load(&stored, &lead));
     let after = merged.box_data.substructures().unwrap();
 
     assert_eq!(
@@ -886,14 +888,14 @@ fn a_slot_holding_a_different_pokemon_is_rebuilt_rather_than_overlaid() {
     .unwrap()
     .with_original_trainer_id(lead.original_trainer_id());
     assert_eq!(
-        merge_into_save_pokemon(&dex, &swapped_personality, &stored),
+        merge_into_save_pokemon(&dex, &swapped_personality, &stored, 0),
         to_save_pokemon(&dex, &swapped_personality),
         "a different personality is a different mon"
     );
 
     let traded_away = lead.clone().with_original_trainer_id(0x0BAD_0BAD);
     assert_eq!(
-        merge_into_save_pokemon(&dex, &traded_away, &stored),
+        merge_into_save_pokemon(&dex, &traded_away, &stored, 0),
         to_save_pokemon(&dex, &traded_away),
         "so is a different original trainer -- it is half the XOR key"
     );
@@ -921,7 +923,7 @@ fn an_empty_slot_is_built_from_scratch() {
         "fixture sanity: the identity gate alone would let this through, so \
          the species check is what decides"
     );
-    let built = merge_into_save_pokemon(&dex, &mon, &empty);
+    let built = merge_into_save_pokemon(&dex, &mon, &empty, 0);
     assert_eq!(built, to_save_pokemon(&dex, &mon));
     assert_eq!(built.mail, MAIL_NONE, "an empty slot has no mail to keep");
 }
@@ -941,7 +943,7 @@ fn the_merge_rewrites_the_iv_word_around_the_egg_bit() {
     let lead = from_save_pokemon(&dex, &stored)
         .expect("the fixture must decode")
         .with_ability_slot(1);
-    let merged = merge_into_save_pokemon(&dex, &lead, &stored);
+    let merged = merge_into_save_pokemon(&dex, &lead, &stored, hp_hidden_by_load(&stored, &lead));
 
     let merged_word = u32::from_le_bytes(
         merged.box_data.substructures().unwrap().misc[4..8]
@@ -975,7 +977,7 @@ fn continue_then_save_keeps_a_full_health_ev_trained_lead_at_full() {
          or the load clamp never fires"
     );
 
-    let merged = merge_into_save_pokemon(&dex, &lead, &stored);
+    let merged = merge_into_save_pokemon(&dex, &lead, &stored, hp_hidden_by_load(&stored, &lead));
 
     assert_eq!(merged.to_bytes(), stored.to_bytes());
 }
@@ -996,7 +998,7 @@ fn continue_then_save_keeps_an_over_model_max_current_hp() {
          maximum, or the load clamp never fires"
     );
 
-    let merged = merge_into_save_pokemon(&dex, &lead, &stored);
+    let merged = merge_into_save_pokemon(&dex, &lead, &stored, hp_hidden_by_load(&stored, &lead));
 
     assert_eq!(merged.to_bytes(), stored.to_bytes());
 }
@@ -1023,7 +1025,7 @@ fn battle_damage_on_a_clamped_load_subtracts_from_the_stored_hp() {
     let mut lead = from_save_pokemon(&dex, &stored).expect("the fixture must decode");
     lead.apply_damage(DAMAGE);
 
-    let merged = merge_into_save_pokemon(&dex, &lead, &stored);
+    let merged = merge_into_save_pokemon(&dex, &lead, &stored, hp_hidden_by_load(&stored, &lead));
 
     assert_eq!(merged.hp, stored.hp - u16::try_from(DAMAGE).unwrap());
 }
