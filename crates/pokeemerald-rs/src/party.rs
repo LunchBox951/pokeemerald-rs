@@ -154,17 +154,16 @@
 //! contradict a retained maximum, because the model's own maximum is the
 //! 0-EV one and EVs only ever add to it. One translation applies over a
 //! *retained* block: [`from_save_pokemon`] clamps a stored `hp` above the
-//! model's maximum down to it, so a battler standing at the model's full
-//! writes back the *higher* of the stored value and the live number
-//! (capped at the retained `max_hp`). That keeps Continue -> SAVE a
-//! no-op for a full-health or over-model-max EV-trained lead -- filing
-//! the clamped number would mark it damaged, the corruption shape issue
-//! #344 exists to stop -- and files a battle-healed lead at the retained
-//! full exactly as upstream's EV-aware heal would. Below the model's
-//! full, damage is absolute and the live number is written as-is. The
-//! residue (a session that *ends* at exactly the model's full after real
-//! damage cannot distinguish itself from a no-op) closes when `battle`
-//! carries EVs.
+//! model's maximum down to it, hiding the `stored - model_max` points the
+//! session never saw. The merge adds that hidden offset back onto the
+//! live number, capped at the retained `max_hp` and never resurrecting a
+//! fainted battler. Continue -> SAVE is therefore byte-exact at any
+//! stored `hp` -- filing the clamped number would mark a full-health lead
+//! damaged, the corruption shape issue #344 exists to stop -- and damage
+//! subtracts absolutely, as upstream's EV-aware arithmetic would. The
+//! residue (a live HP pinned at either boundary mid-session loses points
+//! the wider upstream range would have kept) closes when `battle` carries
+//! EVs.
 
 use battle::{BattlePokemon, Dex, Ivs, MAX_MON_MOVES};
 use engine::save::{BoxPokemon, Pokemon, PokemonSubstructures, SUBSTRUCTURE_LEN};
@@ -380,18 +379,20 @@ fn overlay_current_hp(record: &mut Pokemon, mon: &BattlePokemon) {
 }
 
 /// [`overlay_current_hp`] for a *retained* stat block, undoing
-/// [`from_save_pokemon`]'s load clamp where it can (module docs): a battler
-/// standing at the model's own full maximum files the higher of the stored
-/// `hp` and the live number, capped at the retained `max_hp`, so a
-/// Continue -> SAVE round trip cannot file a full-health EV-trained lead
-/// as damaged. Below the model's full, damage is absolute state and the
-/// live number is written as-is.
+/// [`from_save_pokemon`]'s load clamp (module docs): the points of the
+/// stored `hp` above the model's maximum were hidden from the session, so
+/// they are added back onto the live number, capped at the retained
+/// `max_hp`. A Continue -> SAVE round trip is byte-exact at any stored
+/// `hp`, and in-session damage subtracts absolutely from the stored value
+/// rather than from its clamp. A fainted battler stays fainted: `0` is
+/// the session's own outcome, not a clamp artifact.
 fn overlay_current_hp_over_retained_block(record: &mut Pokemon, mon: &BattlePokemon) {
     let live = clamp_u16(mon.current_hp());
-    record.hp = if mon.current_hp() == mon.stats().max_hp {
-        live.max(record.hp).min(record.max_hp)
+    let clamp_hidden = record.hp.saturating_sub(clamp_u16(mon.stats().max_hp));
+    record.hp = if live == 0 {
+        0
     } else {
-        live
+        live.saturating_add(clamp_hidden).min(record.max_hp)
     };
 }
 

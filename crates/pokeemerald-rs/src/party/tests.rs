@@ -1000,3 +1000,30 @@ fn continue_then_save_keeps_an_over_model_max_current_hp() {
 
     assert_eq!(merged.to_bytes(), stored.to_bytes());
 }
+
+/// The clamp translation under battle damage: the stored points above the
+/// model's maximum were hidden from the session, so damage taken must
+/// subtract from the *stored* value, not from its clamp -- upstream's
+/// arithmetic is absolute. Stored `model_max + 5` taking 10 damage files
+/// `stored - 10`, not `model_max - 10`.
+#[test]
+fn battle_damage_on_a_clamped_load_subtracts_from_the_stored_hp() {
+    const DAMAGE: u32 = 10;
+    const HIDDEN: u16 = 5;
+
+    let dex = Dex::new();
+    let mut stored = a_stored_record();
+    let model_max =
+        u16::try_from(from_save_pokemon(&dex, &stored).unwrap().stats().max_hp).unwrap();
+    stored.hp = model_max + HIDDEN;
+    assert!(
+        stored.hp < stored.max_hp,
+        "fixture sanity: the stored hp must sit below the retained maximum"
+    );
+    let mut lead = from_save_pokemon(&dex, &stored).expect("the fixture must decode");
+    lead.apply_damage(DAMAGE);
+
+    let merged = merge_into_save_pokemon(&dex, &lead, &stored);
+
+    assert_eq!(merged.hp, stored.hp - u16::try_from(DAMAGE).unwrap());
+}
