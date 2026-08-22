@@ -60,7 +60,6 @@
 
 use assets::{MapId, WarpDestination, WarpEvent, WarpId};
 
-use super::collision::{ELEVATION_MULTI_LEVEL, ELEVATION_TRANSITION};
 use super::direction::Direction;
 use super::map_runtime::MapRuntime;
 // The arrow-warp id *sets* deliberately aren't imported here: `warp_in_facing`
@@ -207,21 +206,15 @@ pub fn resolve_warp_event(warp: &WarpEvent) -> WarpTrigger {
 /// (`overworld.c`) and `ObjectEventUpdateElevation`
 /// (`event_object_movement.c`). The warp event selects the arrival position,
 /// but its elevation is only a trigger-matching filter; the player's actual
-/// elevation comes from the destination grid cell. A multi-level destination
-/// cell leaves the avatar at transition elevation,
-/// matching upstream's initialization and `ObjectEventUpdateElevation` skip
-/// rule. The source-side bookkeeping upstream's `SetupWarp` also does
-/// (escape-warp tracking, Trainer Hill/Battle Pyramid floor special-casing)
-/// is not modelled yet — deferred, still in v1 scope.
+/// elevation comes from the destination grid cell
+/// ([`MapRuntime::arrival_elevation`], including the multi-level-to-transition
+/// rule documented there). The source-side bookkeeping upstream's `SetupWarp`
+/// also does (escape-warp tracking, Trainer Hill/Battle Pyramid floor
+/// special-casing) is not modelled yet — deferred, still in v1 scope.
 #[must_use]
 pub fn warp_destination_position(runtime: &MapRuntime<'_>, warp_id: u8) -> Option<(i16, i16, u8)> {
     let warp = runtime.events().warp_events.get(usize::from(warp_id))?;
-    let cell = runtime.metatile_cell(i32::from(warp.x), i32::from(warp.y))?;
-    let elevation = if cell.elevation == ELEVATION_MULTI_LEVEL {
-        ELEVATION_TRANSITION
-    } else {
-        cell.elevation
-    };
+    let elevation = runtime.arrival_elevation(i32::from(warp.x), i32::from(warp.y))?;
     Some((warp.x, warp.y, elevation))
 }
 
@@ -294,6 +287,7 @@ pub const fn warp_in_facing(destination_behavior: u8) -> Direction {
 
 #[cfg(test)]
 mod tests {
+    use super::super::collision::ELEVATION_MULTI_LEVEL;
     use super::*;
     use crate::overworld::metatile_behavior::{
         MB_EAST_ARROW_WARP, MB_NORMAL, MB_NORTH_ARROW_WARP, MB_SHOAL_CAVE_ENTRANCE,

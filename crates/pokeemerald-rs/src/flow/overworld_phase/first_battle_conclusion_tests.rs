@@ -426,3 +426,43 @@ fn real_pack_a_lost_first_battle_still_heals_and_reaches_the_lab() {
         "the warp's own explicit coordinates"
     );
 }
+
+/// Issue #379's counterpart to `white_out::tests::
+/// real_pack_white_out_relocation_adopts_the_heal_locations_elevation_before_any_movement`:
+/// the lab arrival's elevation must already be the real destination tile's
+/// own elevation the instant [`super::OverworldPhase::conclude_first_battle`]
+/// returns, before any subsequent step -- not the `ELEVATION_TRANSITION`
+/// wildcard [`super::OverworldPhase::warp_to_position`] used to hardcode.
+/// `(6, 5)` on Birch's lab is elevation `3` in the real bundled layout, the
+/// same as the module docs' "both of this method's own default
+/// destinations" claim -- confirmed here rather than merely asserted, so a
+/// fixture that stopped matching the real tile would fail loudly instead of
+/// passing vacuously. Both [`engine::overworld::PlayerState::elevation`]
+/// and [`engine::overworld::PlayerState::previous_elevation`] must read
+/// `3`: [`engine::overworld::PlayerState::new`]'s own doc comment records
+/// that a freshly placed player starts both fields equal.
+#[test]
+#[ignore = "needs a local pack: run `cargo xtask extract` first"]
+fn real_pack_first_battle_conclusion_relocation_adopts_the_labs_elevation_before_any_movement() {
+    let (tx, ty) = ROUTE_101_TRIGGER_TILE;
+    let mut phase = route_101_trigger_phase(PlayerState::new(
+        (tx - 1, ty),
+        ROUTE_101_TRIGGER_ELEVATION,
+        Direction::East,
+    ));
+    phase.rng = Rng::new(4242);
+    phase.party_lead = Some(new_game::provisional_starter());
+
+    play_first_battle_to_conclusion(&mut phase);
+
+    assert_eq!(
+        phase.player.elevation(),
+        3,
+        "the lab arrival tile's own real elevation, not the transition wildcard"
+    );
+    assert_eq!(
+        phase.player.previous_elevation(),
+        3,
+        "a freshly placed player's previous elevation starts equal to its current one"
+    );
+}

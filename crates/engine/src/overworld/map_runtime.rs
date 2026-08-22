@@ -170,6 +170,52 @@ impl<'a> MapRuntime<'a> {
         self.grid.cell_at(x, y)
     }
 
+    /// The elevation an object event arrives at when placed on the metatile
+    /// at `(x, y)` — the landing-tile read inside upstream
+    /// `ObjectEventUpdateElevation`
+    /// (`pokeemerald/src/event_object_movement.c:7759-7771`), reached via
+    /// `UpdateObjectEventElevationAndPriority` on the very first
+    /// `DoGroundEffects_OnSpawn` after a warp lands (`:8088-8090`), before
+    /// input ever unlocks.
+    ///
+    /// Returns `None` under the same bound [`MapRuntime::metatile_cell`]
+    /// does: `(x, y)` outside this map's own grid.
+    ///
+    /// **The multi-level rule, folded to a substitution.** Upstream's
+    /// `ObjectEventUpdateElevation` reads `curElevation` off the grid and
+    /// returns immediately -- touching neither `currentElevation` nor
+    /// `previousElevation` -- when that read comes back
+    /// [`super::collision::ELEVATION_MULTI_LEVEL`] (`:7761-7762`), so a
+    /// multi-level landing tile leaves an already-live object event's
+    /// elevation exactly where it was. Every caller of this method places a
+    /// *fresh* [`super::player::PlayerState`], though, whose elevation
+    /// upstream's own spawn-time initialization already set to
+    /// [`super::collision::ELEVATION_TRANSITION`] before this read would
+    /// ever run -- so "leave it alone" and "return
+    /// [`super::collision::ELEVATION_TRANSITION`]" are the same outcome here,
+    /// and this method returns the latter directly rather than modelling a
+    /// no-op against state that was never live.
+    ///
+    /// One read shared by every upstream `ObjectEventUpdateElevation` call
+    /// this port models on the *player's own* arrival --
+    /// [`super::warp::warp_destination_position`] (a resolved warp event),
+    /// `pokeemerald_rs`'s `OverworldPhase::warp_to_position` (an
+    /// explicit-coordinate warp, e.g. white-out/first-battle relocation), and
+    /// `pokeemerald_rs`'s `saved_tile_placement` (a continued save) -- so the
+    /// three cannot drift apart on the same upstream rule again (issue
+    /// #379).
+    #[must_use]
+    pub fn arrival_elevation(&self, x: i32, y: i32) -> Option<u8> {
+        let cell = self.metatile_cell(x, y)?;
+        Some(
+            if cell.elevation == super::collision::ELEVATION_MULTI_LEVEL {
+                super::collision::ELEVATION_TRANSITION
+            } else {
+                cell.elevation
+            },
+        )
+    }
+
     /// The decoded behavior id (upstream `MB_*`) of the metatile at
     /// `(x, y)`, or `None` if `(x, y)` is out of bounds or its metatile
     /// attribute entry fails to decode (see
@@ -467,6 +513,58 @@ mod tests {
         assert!(runtime.metatile_cell(-1, 0).is_none());
         assert!(runtime.metatile_cell(4, 0).is_none());
         assert!(runtime.metatile_cell(0, 4).is_none());
+    }
+
+    /// [`MapRuntime::arrival_elevation`]'s own substitution (issue #379): an
+    /// ordinary cell's elevation passes straight through, an
+    /// [`super::collision::ELEVATION_MULTI_LEVEL`] (`15`) cell substitutes
+    /// [`super::collision::ELEVATION_TRANSITION`] (`0`), and an
+    /// out-of-bounds position is `None` under the same bound
+    /// [`MapRuntime::metatile_cell`] uses -- the one read
+    /// [`super::warp::warp_destination_position`],
+    /// `pokeemerald_rs::flow::overworld_phase::OverworldPhase::warp_to_position`,
+    /// and `pokeemerald_rs`'s `saved_tile_placement` all now share.
+    #[test]
+    fn arrival_elevation_substitutes_transition_for_multi_level() {
+        use super::super::collision::{ELEVATION_MULTI_LEVEL, ELEVATION_TRANSITION};
+
+        let mut bytes = grid_bytes(2, 1, cell(0, 0, 3));
+        bytes[2..4].copy_from_slice(&cell(1, 0, ELEVATION_MULTI_LEVEL).to_le_bytes());
+        let hdr = header("MAP_C", &[]);
+        let events = empty_events("MAP_C");
+        let layout = assets::MapLayout {
+            id: assets::LayoutId("MAP_C"),
+            name: "MapC",
+            width: 2,
+            height: 1,
+            primary_tileset: "gTileset_General",
+            secondary_tileset: "gTileset_General",
+        };
+        let grid = layout.grid(&bytes).unwrap();
+        let runtime = MapRuntime::new(
+            MapId("MAP_C"),
+            Box::leak(Box::new(hdr)),
+            Box::leak(Box::new(events)),
+            grid,
+            MetatileAttributeTable::new(&[]),
+            MetatileAttributeTable::new(&[]),
+        );
+
+        assert_eq!(
+            runtime.arrival_elevation(0, 0),
+            Some(3),
+            "an ordinary cell's own elevation passes straight through"
+        );
+        assert_eq!(
+            runtime.arrival_elevation(1, 0),
+            Some(ELEVATION_TRANSITION),
+            "a multi-level cell substitutes the transition wildcard, never the raw {ELEVATION_MULTI_LEVEL}"
+        );
+        assert_eq!(
+            runtime.arrival_elevation(2, 0),
+            None,
+            "out of bounds, same as metatile_cell"
+        );
     }
 
     #[test]
