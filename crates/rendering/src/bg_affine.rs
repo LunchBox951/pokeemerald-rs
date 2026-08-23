@@ -74,11 +74,13 @@ impl AffineTilemap {
     /// raw tile indices, row-major.
     ///
     /// Real affine-BG hardware sizes are 16x16, 32x32, 64x64, or 128x128
-    /// tiles (128/256/512/1024 px square); as with
-    /// [`Tilemap::new`](crate::tilemap::Tilemap::new), `width_tiles`/
-    /// `height_tiles` are caller-supplied rather than restricted to those
-    /// four sizes — a non-hardware size still composites and wraps
-    /// correctly against its own actual pixel dimensions.
+    /// tiles (128/256/512/1024 px square); `width_tiles`/`height_tiles`
+    /// are caller-supplied rather than restricted to those four sizes.
+    /// Unlike [`Tilemap::new`](crate::tilemap::Tilemap::new) — whose
+    /// screenblock addressing constrains its shapes — affine tilemaps are
+    /// flat row-major with no screenblock path, so a non-hardware size
+    /// still composites and wraps correctly against its own actual pixel
+    /// dimensions.
     ///
     /// # Errors
     ///
