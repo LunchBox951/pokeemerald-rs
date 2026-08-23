@@ -444,6 +444,13 @@ pub(crate) fn hp_hidden_by_load(stored: &Pokemon, lead: &BattlePokemon) -> u16 {
 /// The module docs give the reasoning; [`overlay_battle_stats`] and
 /// [`overlay_current_hp`] are the two writes.
 ///
+/// `hp_hidden_by_load` is the session offset [`hp_hidden_by_load`] measured
+/// at load; the merge owns rebasing it. Both the recompute branch and the
+/// from-scratch fallback zero it, because the record they write has the
+/// model's own `max_hp` and hides nothing -- carrying the old offset into
+/// the next save's retained-block branch would silently heal the lead by
+/// its stale value.
+///
 /// Falls back to [`to_save_pokemon`] when `base` is not this battler's own
 /// record -- see [`backing_substructures`] for what disqualifies it. The
 /// substructures go back through
@@ -454,7 +461,7 @@ pub(crate) fn merge_into_save_pokemon(
     dex: &Dex,
     mon: &BattlePokemon,
     base: &Pokemon,
-    hp_hidden_by_load: u16,
+    hp_hidden_by_load: &mut u16,
 ) -> Pokemon {
     let mut substructures = match backing_substructures(mon, base) {
         Ok(substructures) => substructures,
@@ -464,6 +471,7 @@ pub(crate) fn merge_into_save_pokemon(
                  alone, so every field the battle model does not carry takes CreateMon's \
                  own default"
             );
+            *hp_hidden_by_load = 0;
             return to_save_pokemon(dex, mon);
         }
     };
@@ -517,12 +525,16 @@ pub(crate) fn merge_into_save_pokemon(
         // current HP, which is state, comes from the battler -- translated
         // back across the load clamp by the offset measured at load time
         // (module docs).
-        overlay_current_hp_over_retained_block(&mut merged, mon, hp_hidden_by_load);
+        overlay_current_hp_over_retained_block(&mut merged, mon, *hp_hidden_by_load);
     } else {
         // Species or level moved this session, so the cached block is a
         // function of inputs that no longer hold and upstream would have
         // recomputed it (`CalculateMonStats`). Sub-level experience is
-        // deliberately excluded from the guard above.
+        // deliberately excluded from the guard above. The record's stat
+        // block is the model's own from here on, so no stored points stay
+        // hidden behind the load clamp: a carried offset would heal the
+        // next retained-block save by exactly its stale value.
+        *hp_hidden_by_load = 0;
         overlay_battle_stats(&mut merged, mon);
     }
     merged

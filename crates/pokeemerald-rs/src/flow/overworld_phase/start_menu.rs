@@ -198,7 +198,7 @@ impl OverworldPhase {
                 &battle::Dex::new(),
                 lead,
                 &self.save1.player_party[0],
-                self.lead_hp_hidden_by_load,
+                &mut self.lead_hp_hidden_by_load,
             );
             if self.save1.player_party_count == 0 {
                 self.save1.player_party_count = 1;

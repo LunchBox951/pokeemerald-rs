@@ -619,7 +619,8 @@ fn re_saving_a_loaded_mon_keeps_every_field_the_battle_model_does_not_carry() {
     lead.apply_damage(9);
     lead.deduct_pp(0).unwrap();
 
-    let merged = merge_into_save_pokemon(&dex, &lead, &stored, hp_hidden_by_load(&stored, &lead));
+    let merged =
+        merge_into_save_pokemon(&dex, &lead, &stored, &mut hp_hidden_by_load(&stored, &lead));
 
     let before = stored.box_data.substructures().unwrap();
     let after = merged
@@ -733,7 +734,8 @@ fn sub_level_experience_does_not_flatten_the_retained_stat_block() {
         "fixture sanity: the experience word really moved"
     );
 
-    let merged = merge_into_save_pokemon(&dex, &lead, &stored, hp_hidden_by_load(&stored, &lead));
+    let merged =
+        merge_into_save_pokemon(&dex, &lead, &stored, &mut hp_hidden_by_load(&stored, &lead));
     let after = merged.box_data.substructures().unwrap();
     assert_eq!(
         u32::from_le_bytes(after.growth[4..8].try_into().unwrap()),
@@ -770,7 +772,8 @@ fn re_saving_an_untouched_lead_writes_the_record_back_byte_for_byte() {
          model cannot rebuild, so a re-derived block would differ"
     );
 
-    let merged = merge_into_save_pokemon(&dex, &lead, &stored, hp_hidden_by_load(&stored, &lead));
+    let merged =
+        merge_into_save_pokemon(&dex, &lead, &stored, &mut hp_hidden_by_load(&stored, &lead));
 
     let (merged_bytes, stored_bytes) = (merged.to_bytes(), stored.to_bytes());
     let moved: Vec<usize> = (0..merged_bytes.len())
@@ -789,7 +792,7 @@ fn re_saving_an_untouched_lead_writes_the_record_back_byte_for_byte() {
         &dex,
         &reloaded,
         &merged,
-        hp_hidden_by_load(&merged, &reloaded),
+        &mut hp_hidden_by_load(&merged, &reloaded),
     );
     assert_eq!(again.to_bytes(), stored.to_bytes());
 }
@@ -812,7 +815,8 @@ fn re_saving_a_loaded_mon_overlays_what_the_session_changed() {
     lead.deduct_pp(1).unwrap();
     lead.deduct_pp(1).unwrap();
 
-    let merged = merge_into_save_pokemon(&dex, &lead, &stored, hp_hidden_by_load(&stored, &lead));
+    let merged =
+        merge_into_save_pokemon(&dex, &lead, &stored, &mut hp_hidden_by_load(&stored, &lead));
     let after = merged.box_data.substructures().unwrap();
 
     assert_eq!(
@@ -888,14 +892,14 @@ fn a_slot_holding_a_different_pokemon_is_rebuilt_rather_than_overlaid() {
     .unwrap()
     .with_original_trainer_id(lead.original_trainer_id());
     assert_eq!(
-        merge_into_save_pokemon(&dex, &swapped_personality, &stored, 0),
+        merge_into_save_pokemon(&dex, &swapped_personality, &stored, &mut 0),
         to_save_pokemon(&dex, &swapped_personality),
         "a different personality is a different mon"
     );
 
     let traded_away = lead.clone().with_original_trainer_id(0x0BAD_0BAD);
     assert_eq!(
-        merge_into_save_pokemon(&dex, &traded_away, &stored, 0),
+        merge_into_save_pokemon(&dex, &traded_away, &stored, &mut 0),
         to_save_pokemon(&dex, &traded_away),
         "so is a different original trainer -- it is half the XOR key"
     );
@@ -923,7 +927,7 @@ fn an_empty_slot_is_built_from_scratch() {
         "fixture sanity: the identity gate alone would let this through, so \
          the species check is what decides"
     );
-    let built = merge_into_save_pokemon(&dex, &mon, &empty, 0);
+    let built = merge_into_save_pokemon(&dex, &mon, &empty, &mut 0);
     assert_eq!(built, to_save_pokemon(&dex, &mon));
     assert_eq!(built.mail, MAIL_NONE, "an empty slot has no mail to keep");
 }
@@ -943,7 +947,8 @@ fn the_merge_rewrites_the_iv_word_around_the_egg_bit() {
     let lead = from_save_pokemon(&dex, &stored)
         .expect("the fixture must decode")
         .with_ability_slot(1);
-    let merged = merge_into_save_pokemon(&dex, &lead, &stored, hp_hidden_by_load(&stored, &lead));
+    let merged =
+        merge_into_save_pokemon(&dex, &lead, &stored, &mut hp_hidden_by_load(&stored, &lead));
 
     let merged_word = u32::from_le_bytes(
         merged.box_data.substructures().unwrap().misc[4..8]
@@ -977,7 +982,8 @@ fn continue_then_save_keeps_a_full_health_ev_trained_lead_at_full() {
          or the load clamp never fires"
     );
 
-    let merged = merge_into_save_pokemon(&dex, &lead, &stored, hp_hidden_by_load(&stored, &lead));
+    let merged =
+        merge_into_save_pokemon(&dex, &lead, &stored, &mut hp_hidden_by_load(&stored, &lead));
 
     assert_eq!(merged.to_bytes(), stored.to_bytes());
 }
@@ -998,7 +1004,8 @@ fn continue_then_save_keeps_an_over_model_max_current_hp() {
          maximum, or the load clamp never fires"
     );
 
-    let merged = merge_into_save_pokemon(&dex, &lead, &stored, hp_hidden_by_load(&stored, &lead));
+    let merged =
+        merge_into_save_pokemon(&dex, &lead, &stored, &mut hp_hidden_by_load(&stored, &lead));
 
     assert_eq!(merged.to_bytes(), stored.to_bytes());
 }
@@ -1025,7 +1032,54 @@ fn battle_damage_on_a_clamped_load_subtracts_from_the_stored_hp() {
     let mut lead = from_save_pokemon(&dex, &stored).expect("the fixture must decode");
     lead.apply_damage(DAMAGE);
 
-    let merged = merge_into_save_pokemon(&dex, &lead, &stored, hp_hidden_by_load(&stored, &lead));
+    let merged =
+        merge_into_save_pokemon(&dex, &lead, &stored, &mut hp_hidden_by_load(&stored, &lead));
 
     assert_eq!(merged.hp, stored.hp - u16::try_from(DAMAGE).unwrap());
+}
+
+/// Issue #344's review, third round: the load-clamp offset is only a fact
+/// about the *retained* stat block. When a level-up makes the merge
+/// recompute the block, the record it writes has the model's own
+/// `max_hp` and hides nothing, so the merge must zero the session offset
+/// it was handed. Carrying the stale offset into the next save's
+/// retained-block branch healed the lead by exactly its value; saving
+/// twice with no gameplay in between must file the same bytes.
+#[test]
+fn a_stat_block_recompute_retires_the_load_clamp_offset() {
+    const HIDDEN: u16 = 5;
+    const DAMAGE: u32 = 10;
+
+    let dex = Dex::new();
+    let mut stored = a_stored_record();
+    let model_max =
+        u16::try_from(from_save_pokemon(&dex, &stored).unwrap().stats().max_hp).unwrap();
+    stored.hp = model_max + HIDDEN;
+    let mut lead = from_save_pokemon(&dex, &stored).expect("the fixture must decode");
+    let mut offset = hp_hidden_by_load(&stored, &lead);
+    assert_eq!(offset, HIDDEN, "fixture sanity: the load clamp must fire");
+
+    lead.apply_damage(DAMAGE);
+    let treecko = dex.species(lead.species()).unwrap();
+    let next_level = assets::experience_for_level(treecko.growth_rate, lead.level() + 1).unwrap();
+    lead.apply_experience(&dex, next_level - lead.experience())
+        .expect("no move-learn prompt is pending");
+    assert_ne!(
+        lead.level(),
+        stored.level,
+        "fixture sanity: the level must move"
+    );
+
+    let first = merge_into_save_pokemon(&dex, &lead, &stored, &mut offset);
+    assert_eq!(
+        offset, 0,
+        "the recompute wrote the model's own block, so no stored points stay hidden"
+    );
+
+    let second = merge_into_save_pokemon(&dex, &lead, &first, &mut offset);
+    assert_eq!(
+        second.to_bytes(),
+        first.to_bytes(),
+        "an immediate re-save must not heal the lead by the retired offset"
+    );
 }
