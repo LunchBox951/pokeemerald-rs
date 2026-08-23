@@ -323,13 +323,17 @@ impl OverworldPhase {
     /// Execute an *explicit-coordinate* warp: land on `(x, y)` of `map`
     /// directly, rather than resolving a warp event's own position the way
     /// [`OverworldPhase::warp_to`] does. [`OverworldPhase::warp_to`]'s
-    /// sibling for the one caller with no warp event to resolve at all --
+    /// sibling for the two callers with no warp event to resolve at all --
     /// the white-out's `SetWarpDestinationToLastHealLocation` +
     /// `WarpIntoMap` (`pokeemerald/src/overworld.c:364-365`,
-    /// `crate::flow::overworld_phase::white_out`, issue #261) — mirroring
+    /// `crate::flow::overworld_phase::white_out`, issue #261) and the
+    /// scripted first-battle conclusion's own
+    /// `warp MAP_LITTLEROOT_TOWN_PROFESSOR_BIRCHS_LAB, 6, 5`
+    /// (`crate::flow::overworld_phase::first_battle_conclusion`) — mirroring
     /// `SetPlayerCoordsFromWarp`'s own `WARP_ID_NONE` branch
     /// (`src/overworld.c:611-617`, "the given coords are valid, use those
-    /// instead"): a heal location names a raw tile, not a warp event index.
+    /// instead"): a heal location, like a `warp` command's own literal
+    /// coordinates, names a raw tile, not a warp event index.
     ///
     /// Same shape as [`OverworldPhase::warp_to`] otherwise -- on-transition
     /// effects, temp-field-data clear, the two Route 101/103 targeted
@@ -339,13 +343,9 @@ impl OverworldPhase {
     /// header/events/room can't be resolved, or `(x, y)` is outside the
     /// destination's decoded grid.
     ///
-    /// Lands at elevation `ELEVATION_TRANSITION`
-    /// (`pokeemerald/include/global.fieldmap.h:16`, value `0`), the same
-    /// value [`crate::new_game::SPAWN_ELEVATION`] already uses for the
-    /// intro's own direct placement -- but for a different reason than
-    /// upstream's spawn path resolves to it.
-    ///
-    /// Upstream does not leave the sentinel in place until the player
+    /// Lands at the destination tile's own elevation, exactly as
+    /// [`OverworldPhase::warp_to`]'s resolved-warp landing does. Upstream
+    /// does not leave the wildcard sentinel in place until the player
     /// moves: `InitObjectEventStateFromTemplate` sets a freshly spawned
     /// object event's `triggerGroundEffectsOnMove = TRUE`
     /// (`pokeemerald/src/event_object_movement.c:1301`), so the very next
@@ -356,19 +356,23 @@ impl OverworldPhase {
     /// (`event_object_movement.c:7737`), which calls
     /// `ObjectEventUpdateElevation` (`event_object_movement.c:7759-7771`)
     /// to read the landing tile's real elevation off the destination grid
-    /// and overwrite the sentinel before the player ever takes a step.
-    /// [`engine::overworld::warp_destination_position`] is this port's
-    /// faithful model of that same spawn-frame lookup: it resolves the
-    /// destination cell's real elevation immediately, as part of landing,
-    /// for [`OverworldPhase::warp_to`]'s resolved-warp-event case.
+    /// and overwrite the sentinel before the player ever takes a step. Both
+    /// of this method's own callers' destinations reach this: the white-out's
+    /// heal-location relocation to the player's house 2F at its bed tile `(4, 2)`
+    /// (`crate::flow::overworld_phase::white_out`,
+    /// [`crate::new_game::default_last_heal_location`]) and the scripted
+    /// first-battle conclusion's return to Birch's lab at `(6, 5)`
+    /// (`crate::flow::overworld_phase::first_battle_conclusion`) land
+    /// on elevation-`3` tiles, so leaving the sentinel in place would be
+    /// wrong until the player's first step, not merely imprecise.
     ///
-    /// `warp_to_position` doesn't call it: it has no warp event to hand a
-    /// `warp_id`, only a raw `(x, y)`, so it hardcodes
-    /// `ELEVATION_TRANSITION` instead and leaves resolution to
-    /// [`engine::overworld::PlayerState::step`]'s own elevation-adopt-on-
-    /// arrival, on whatever tile the player's first subsequent step lands
-    /// on -- a simplification against upstream's same-frame fixup, not a
-    /// reproduction of it.
+    /// `warp_to_position` has no warp event to hand a `warp_id`, so it can't
+    /// call [`warp_destination_position`] directly -- instead it reads the
+    /// destination cell itself, through the same
+    /// [`engine::overworld::MapRuntime::arrival_elevation`] helper
+    /// `warp_destination_position` and [`super::placement::saved_tile_placement`]
+    /// both call, including its multi-level-to-transition substitution
+    /// (issue #379: one read shared by all three placement paths).
     ///
     /// Unlike [`OverworldPhase::warp_to`]'s resolved-warp landing,
     /// `save1.location.x`/`.y` are **not** `-1`: `ApplyCurrentWarp`
@@ -413,25 +417,22 @@ impl OverworldPhase {
             eprintln!("warp: failed to load destination map {map:?} -- staying put");
             return;
         };
-        let facing = {
+        let (elevation, facing) = {
             let runtime = scene.runtime(map, header, events);
-            if runtime.metatile_cell(i32::from(x), i32::from(y)).is_none() {
+            let Some(elevation) = runtime.arrival_elevation(i32::from(x), i32::from(y)) else {
                 eprintln!(
                     "warp: destination position ({x}, {y}) is outside map {map:?} -- staying put"
                 );
                 return;
-            }
+            };
             let behavior = runtime
                 .metatile_behavior(i32::from(x), i32::from(y))
                 .unwrap_or(engine::overworld::metatile_behavior::MB_NORMAL);
-            warp_in_facing(behavior)
+            (elevation, warp_in_facing(behavior))
         };
 
-        self.player = engine::overworld::PlayerState::new(
-            (i32::from(x), i32::from(y)),
-            0, // ELEVATION_TRANSITION -- see doc comment.
-            facing,
-        );
+        self.player =
+            engine::overworld::PlayerState::new((i32::from(x), i32::from(y)), elevation, facing);
         self.pending_landing = None;
         self.scene = scene;
         self.map_id = map;

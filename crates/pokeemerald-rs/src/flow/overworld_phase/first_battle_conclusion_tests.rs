@@ -426,3 +426,61 @@ fn real_pack_a_lost_first_battle_still_heals_and_reaches_the_lab() {
         "the warp's own explicit coordinates"
     );
 }
+
+/// Issue #379's counterpart to
+/// `white_out::tests::real_pack_white_out_relocation_adopts_the_heal_locations_elevation_before_any_movement`:
+/// the lab arrival's elevation must already be the real destination tile's
+/// own elevation the instant [`super::OverworldPhase::conclude_first_battle`]
+/// returns, before any subsequent step -- not the `ELEVATION_TRANSITION`
+/// wildcard [`super::OverworldPhase::warp_to_position`] used to hardcode.
+/// `(6, 5)` on Birch's lab is elevation `3` in the real bundled layout --
+/// one of the two elevation-`3` landings
+/// [`super::OverworldPhase::warp_to_position`]'s own docs name (the other
+/// is the white-out's heal location, the player's house at `(4, 2)`) --
+/// confirmed here against the bundled pack rather than merely asserted, so
+/// a fixture that stopped matching the real tile would fail loudly instead
+/// of passing vacuously. Both [`engine::overworld::PlayerState::elevation`]
+/// and [`engine::overworld::PlayerState::previous_elevation`] must read
+/// `3`: [`engine::overworld::PlayerState::new`]'s own doc comment records
+/// that a freshly placed player starts both fields equal.
+///
+/// The two setup assertions come first on purpose: the Route 101 trigger
+/// tile this test starts on is itself elevation
+/// [`ROUTE_101_TRIGGER_ELEVATION`] (`3`), so the elevation assertions alone
+/// would pass unchanged if the warp never fired at all.
+#[test]
+#[ignore = "needs a local pack: run `cargo xtask extract` first"]
+fn real_pack_first_battle_conclusion_relocation_adopts_the_labs_elevation_before_any_movement() {
+    let (tx, ty) = ROUTE_101_TRIGGER_TILE;
+    let mut phase = route_101_trigger_phase(PlayerState::new(
+        (tx - 1, ty),
+        ROUTE_101_TRIGGER_ELEVATION,
+        Direction::East,
+    ));
+    phase.rng = Rng::new(4242);
+    phase.party_lead = Some(new_game::provisional_starter());
+
+    play_first_battle_to_conclusion(&mut phase);
+
+    assert_eq!(
+        phase.map_id,
+        assets::MapId("MAP_LITTLEROOT_TOWN_PROFESSOR_BIRCHS_LAB"),
+        "setup: the conclusion's warp must really have fired -- the elevation \
+         assertions below read the same 3 the Route 101 trigger tile already had"
+    );
+    assert_eq!(
+        phase.player.position(),
+        (6, 5),
+        "setup: the lab arrival tile whose elevation is under test"
+    );
+    assert_eq!(
+        phase.player.elevation(),
+        3,
+        "the lab arrival tile's own real elevation, not the transition wildcard"
+    );
+    assert_eq!(
+        phase.player.previous_elevation(),
+        3,
+        "a freshly placed player's previous elevation starts equal to its current one"
+    );
+}
