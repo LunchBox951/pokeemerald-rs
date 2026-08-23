@@ -5,15 +5,18 @@
 //!
 //! Two different upstream sources, deliberately kept apart: the elevation
 //! comes from the destination tile's own grid cell
-//! (`ObjectEventUpdateElevation`), while the facing comes from the *save*
+//! ([`engine::overworld::MapRuntime::arrival_elevation`], this port's shared
+//! home for `ObjectEventUpdateElevation`'s landing-tile read -- also used by
+//! [`engine::overworld::warp_destination_position`] for a resolved warp and
+//! [`super::OverworldPhase::warp_to_position`] for an explicit-coordinate
+//! warp, so the three placement paths cannot drift apart on the same
+//! upstream rule (issue #379)), while the facing comes from the *save*
 //! (`LoadObjectEvents`, `src/load_save.c:188-194`) and only falls back to
 //! the tile when the save holds none. See
 //! [`super::OverworldPhase::from_saved`]'s "What a continue restores" for the
 //! whole account.
 
-use engine::overworld::{
-    warp_in_facing, Direction, TilePos, ELEVATION_MULTI_LEVEL, ELEVATION_TRANSITION,
-};
+use engine::overworld::{warp_in_facing, Direction, TilePos};
 use engine::save::SaveBlock1;
 
 use crate::new_game;
@@ -42,9 +45,10 @@ pub(super) fn saved_facing(block1: &SaveBlock1, fallback: Direction) -> Directio
 ///
 /// Both come from the saved tile's own map data, never from the save file:
 /// upstream reads the destination grid cell for elevation
-/// (`ObjectEventUpdateElevation`) and the destination metatile's behavior
-/// for direction (`GetAdjustedInitialDirection`). A tile that will not
-/// decode -- the map's header/events missing from the generated tables, or
+/// (`ObjectEventUpdateElevation`, via
+/// [`engine::overworld::MapRuntime::arrival_elevation`]) and the destination
+/// metatile's behavior for direction (`GetAdjustedInitialDirection`). A tile
+/// that will not decode -- the map's header/events missing from the generated tables, or
 /// coordinates outside the grid -- yields the new-game spawn elevation and
 /// `DIR_SOUTH`, which is `GetAdjustedInitialDirection`'s own fallthrough
 /// (`src/overworld.c:951`) rather than an invented default.
@@ -61,13 +65,8 @@ pub(super) fn saved_tile_placement(
         return fallback;
     };
     let runtime = scene.runtime(map_id, header, events);
-    let Some(cell) = runtime.metatile_cell(position.0, position.1) else {
+    let Some(elevation) = runtime.arrival_elevation(position.0, position.1) else {
         return fallback;
-    };
-    let elevation = if cell.elevation == ELEVATION_MULTI_LEVEL {
-        ELEVATION_TRANSITION
-    } else {
-        cell.elevation
     };
     let facing = runtime
         .metatile_behavior(position.0, position.1)

@@ -468,10 +468,12 @@ impl OverworldPhase {
     ///   warp branch's own; ported as
     ///   [`engine::overworld::warp_in_facing`], `DIR_SOUTH` on an ordinary
     ///   tile) rather than facing an arbitrary way.
-    /// * **Elevation** -- the saved tile's own grid cell, with the
+    /// * **Elevation** -- the saved tile's own grid cell, read through
+    ///   [`engine::overworld::MapRuntime::arrival_elevation`] (issue #379:
+    ///   the one arrival read every placement path shares), so the
     ///   multi-level -> transition substitution
-    ///   `ObjectEventUpdateElevation` applies, exactly as
-    ///   [`engine::overworld::warp_destination_position`] does on the warp
+    ///   `ObjectEventUpdateElevation` applies is the very same one
+    ///   [`engine::overworld::warp_destination_position`] gets on the warp
     ///   path. A tile whose cell will not decode (a save pointing outside
     ///   the map) falls back to [`new_game::SPAWN_ELEVATION`] rather than
     ///   panicking.
