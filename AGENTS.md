@@ -19,11 +19,11 @@ formulas); `mgba/` clarifies hardware behaviour. Both are read-only `(reference-
 - `docs/principles.md` — the invariants. Cite by handle.
 - `docs/acceptance/v1.md` — v1 criteria with stable IDs (`F-1`, `I-4`, …). The
   roadmap to reach them lives in GitHub issues/PRs/discussions `(constitution-vs-roadmap)`.
-  Issues are grouped by area milestones, M1–M7 for v1 and M8 for recorded
-  deferrals; `CONTRIBUTING.md` §Milestones owns the rules, including why
-  deferred is not excluded. Each milestone description is that area's
-  briefing: read it via `gh api repos/{owner}/{repo}/milestones/<n>` and list
-  its issues with `gh issue list --milestone "<title>"`.
+  See [`CONTRIBUTING.md` §Milestones](CONTRIBUTING.md#milestones) for
+  milestone grouping, deferral, and closure rules. Each milestone description
+  is that area's briefing: read it via `gh api repos/{owner}/{repo}/milestones/$n`
+  (set `n` to the milestone number) and list its issues with
+  `gh issue list --milestone "<title>"`.
 - `crates/*/src/lib.rs` — each crate's `//!` doc is the live per-subsystem
   status write-up (what's implemented, what's next). Prefer it over
   hand-describing subsystem state anywhere else.
