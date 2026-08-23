@@ -52,7 +52,38 @@
 //!   and the clear in one `TextPrinterWaitWithDownArrow` branch. Like `\l`,
 //!   the `\p` char reloaded `delayCounter` when consumed, so the first glyph
 //!   after the clear resumes after a reveal-delay period at Slow/Mid.
+//! * `Pause` (`RENDER_STATE_PAUSE`) — `{PAUSE n}` (`EXT_CTRL_CODE_PAUSE`):
+//!   count down `n` frames with nothing new revealed, then resume
+//!   `HandleChar` (`text.c:1013-1017`, `text.c:1213-1220`). Unlike `\l`/`\p`,
+//!   upstream's own `RENDER_REPEAT` return from the `HANDLE_CHAR` case
+//!   re-enters `RenderText` a second time *on the same upstream frame*,
+//!   landing straight in `RENDER_STATE_PAUSE` and burning the first of the
+//!   `n` frames immediately — so the consuming tick is already the pause's
+//!   first counted frame, not a free transition tick the way `\l`/`\p`'s own
+//!   waiting states are. [`Printer::tick`]'s private `tick_pause` helper is
+//!   called directly from the token match for exactly this reason: getting
+//!   this same-frame chain wrong (deferring the first decrement to the next
+//!   external tick, the way `\l`/`\p` do) undercounts by one frame in the
+//!   other direction — an `{PAUSE n}` control code then blocks for `n + 1`
+//!   frames instead of exactly `n`.
 //! * `Finished` (`RENDER_FINISH`) — the `0xFF` terminator was consumed.
+//!
+//! # Held-A/B print speed-up
+//!
+//! Upstream's held-A/B reveal speed-up (`RENDER_STATE_HANDLE_CHAR`,
+//! `text.c:943-953`) is opt-in per printer via [`Printer::with_ab_speed_up_print`]
+//! (upstream `gTextFlags.canABSpeedUpPrint`, set per-message by
+//! `AddTextPrinterForMessage`'s own `allowSkippingDelayWithButtonPress`
+//! argument): a fresh *press* of A/B while a glyph's reveal delay is
+//! counting down latches `has_print_been_sped_up` and zeroes that delay
+//! immediately; from then on (upstream `subStruct->hasPrintBeenSpedUp`,
+//! reset on [`Printer::restart`] like every other per-message render state),
+//! simply *holding* A/B forces every further delay to zero too, without
+//! needing another fresh press. [`Printer::new`] defaults this off, matching
+//! the standard field message box (`gTextFlags.canABSpeedUpPrint = FALSE`,
+//! `pokeemerald/src/field_message_box.c`) — every printer in this port
+//! except the intro's Birch speech (`AddTextPrinterForMessage(TRUE)`,
+//! `pokeemerald/src/main_menu.c:1339`) matches that field default.
 //!
 //! # Deliberately out of scope
 //!
@@ -61,8 +92,8 @@
 //! `PALETTE`, `FONT`, `RESET_FONT`, `MIN_LETTER_SPACING`, `JPN`/`ENG`) are
 //! consumed as no-ops: they cost no frame but have no layout effect. Codes
 //! needing state this crate doesn't have yet are likewise no-ops:
-//! `PAUSE`/`PAUSE_UNTIL_PRESS`/`WAIT_SE` (timed/input pausing beyond
-//! `\l`/`\p`), `PLAY_BGM`/`PLAY_SE`/`PAUSE_MUSIC`/`RESUME_MUSIC` (audio),
+//! `PAUSE_UNTIL_PRESS`/`WAIT_SE` (input/audio pausing beyond `\l`/`\p`/
+//! `PAUSE`), `PLAY_BGM`/`PLAY_SE`/`PAUSE_MUSIC`/`RESUME_MUSIC` (audio),
 //! `FILL_WINDOW`/`CLEAR`/`CLEAR_TO` (they clear pixels in a window buffer
 //! this module doesn't own — see the module docs on [`Printer`] for the
 //! buffer-free design). [`super::Token::Placeholder`], [`super::Token::Dynamic`],
@@ -89,6 +120,13 @@ mod ext_ctrl {
     /// keeps them as separate codes; `text.c`'s `RenderText` implements them
     /// identically: `currentX = *currentChar + x`).
     pub const SKIP: u8 = 0x12;
+    /// `EXT_CTRL_CODE_PAUSE` — pause for the trailing argument's frame count
+    /// before resuming (`PrinterState::Pause`, module docs' "State machine"
+    /// section). Restated from [`super::super::EXT_CTRL_CODE_PAUSE`] rather
+    /// than a duplicated bare literal, since that constant is also this
+    /// crate's public authoring surface for the same sub-code (e.g.
+    /// `pokeemerald_rs::intro::speech`'s `{PAUSE n}` marker).
+    pub const PAUSE: u8 = super::super::EXT_CTRL_CODE_PAUSE;
 }
 
 /// Per-font line metrics `assets::fonts::FontId` doesn't carry (that crate
@@ -181,6 +219,68 @@ impl TextSpeed {
 /// themselves window-local, not screen-absolute).
 pub type PixelPos = (i32, i32);
 
+/// Per-frame printer input: the A/B buttons' newly-pressed and held state
+/// this frame (upstream `JOY_NEW`/`JOY_HELD`, both gated on `A_BUTTON |
+/// B_BUTTON` together — `text.c:874-879`'s `TextPrinterWaitWithDownArrow`
+/// and `text.c:943-953`'s held print speed-up never distinguish which of
+/// the two buttons did it, so neither does this struct's own
+/// [`Self::confirm_pressed`]/[`Self::confirm_held`]).
+///
+/// A plain bool-carrying struct, not a wrapper around `platform::ButtonState`:
+/// `engine` does not depend on `platform` (`assets` is this crate's only
+/// dependency — its own `Cargo.toml`), so the caller (a `pokeemerald-rs`
+/// scene) is the one that reads a real `ButtonState` and narrows it down to
+/// these four bits.
+// Four independent flags -- two buttons, each with its own pressed/held
+// edge, matching upstream's own separate `JOY_NEW`/`JOY_HELD` checks
+// (module docs) -- they don't share enough structure to collapse into a
+// state machine or enum, mirroring `assets::map_headers::MapHeader`'s
+// identical five-bool shape and its own allow.
+#[allow(clippy::struct_excessive_bools)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct PrinterInput {
+    /// A's just-pressed edge this frame (upstream `JOY_NEW(A_BUTTON)`).
+    pub a_pressed: bool,
+    /// B's just-pressed edge this frame (upstream `JOY_NEW(B_BUTTON)`).
+    pub b_pressed: bool,
+    /// Whether A is currently held down (upstream `JOY_HELD(A_BUTTON)`).
+    pub a_held: bool,
+    /// Whether B is currently held down (upstream `JOY_HELD(B_BUTTON)`).
+    pub b_held: bool,
+}
+
+impl PrinterInput {
+    /// No buttons pressed or held — the shape a non-interactive tick (a
+    /// throwaway printer rendering a menu label to completion, a test that
+    /// doesn't care about input) can pass.
+    #[must_use]
+    pub const fn none() -> Self {
+        Self {
+            a_pressed: false,
+            b_pressed: false,
+            a_held: false,
+            b_held: false,
+        }
+    }
+
+    /// Upstream `JOY_NEW(A_BUTTON | B_BUTTON)` — either button's just-pressed
+    /// edge this frame. The only input [`PrinterState::AwaitingScroll`]/
+    /// [`PrinterState::AwaitingClear`] consult.
+    #[must_use]
+    pub const fn confirm_pressed(self) -> bool {
+        self.a_pressed || self.b_pressed
+    }
+
+    /// Upstream `JOY_HELD(A_BUTTON | B_BUTTON)` — either button currently
+    /// held. Only consulted by [`Printer::tick`]'s held print speed-up
+    /// (module docs), and only once a printer has opted in via
+    /// [`Printer::with_ab_speed_up_print`].
+    #[must_use]
+    pub const fn confirm_held(self) -> bool {
+        self.a_held || self.b_held
+    }
+}
+
 /// One glyph made visible on a [`Printer::tick`] call: where to blit it and
 /// what to blit (upstream `CopyGlyphToWindow`, fed `gCurGlyph`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -201,6 +301,7 @@ enum PrinterState {
     AwaitingScroll,
     Scrolling,
     AwaitingClear,
+    Pause,
     Finished,
 }
 
@@ -240,6 +341,16 @@ pub enum TickEvent {
     /// box was cleared and the cursor reset to the printer's origin (a new
     /// page) on this same tick.
     Cleared,
+    /// A `{PAUSE n}` control code is counting down; nothing new is visible
+    /// this tick (upstream `RENDER_STATE_PAUSE`, `text.c:1213-1220`).
+    /// Returned for exactly `n` ticks — including the one that consumed the
+    /// control code itself, module docs' "State machine" section on the
+    /// same-frame `RENDER_REPEAT` chain.
+    Paused,
+    /// The pause's countdown reached zero this tick; printing resumes next
+    /// tick, not this one (mirrors [`TickEvent::ScrollFinished`]'s identical
+    /// one-tick-late shape).
+    PauseFinished,
     /// The `0xFF` terminator was consumed; nothing more to print (upstream
     /// `RENDER_FINISH`).
     Finished,
@@ -306,6 +417,8 @@ pub struct Printer<S> {
     line_height: i32,
     scroll_remaining: i32,
     state: PrinterState,
+    can_ab_speed_up_print: bool,
+    has_print_been_sped_up: bool,
 }
 
 impl<S: GlyphSource> Printer<S> {
@@ -314,6 +427,12 @@ impl<S: GlyphSource> Printer<S> {
     /// `TextPrinterTemplate.x`/`.y` — e.g. `(0, 1)` for the standard
     /// overworld dialogue box, `AddTextPrinterForMessage`,
     /// `pokeemerald/src/menu.c`).
+    ///
+    /// Held-A/B print speed-up starts disabled (upstream
+    /// `gTextFlags.canABSpeedUpPrint = FALSE`) — the standard field message
+    /// box's own default (`pokeemerald/src/field_message_box.c`), which
+    /// every printer in this port matches except the intro's Birch speech;
+    /// see [`Printer::with_ab_speed_up_print`].
     #[must_use]
     pub fn new(tokens: Vec<Token>, sheet: S, speed: TextSpeed, origin: PixelPos) -> Self {
         Self {
@@ -327,7 +446,23 @@ impl<S: GlyphSource> Printer<S> {
             cursor: origin,
             scroll_remaining: 0,
             state: PrinterState::HandleChar,
+            can_ab_speed_up_print: false,
+            has_print_been_sped_up: false,
         }
+    }
+
+    /// Enable upstream's held-A/B print speed-up on this printer (upstream
+    /// `gTextFlags.canABSpeedUpPrint = TRUE`, `AddTextPrinterForMessage(TRUE)`
+    /// — the intro's Birch speech, `pokeemerald/src/main_menu.c:1339`; module
+    /// docs' "Held-A/B print speed-up" section for the exact semantics).
+    /// Builder-style so the three other call sites in this port (the
+    /// standard field message box, the start-menu chrome, the main menu),
+    /// none of which set upstream's flag, don't need their own
+    /// [`Printer::new`] call site to change shape.
+    #[must_use]
+    pub const fn with_ab_speed_up_print(mut self) -> Self {
+        self.can_ab_speed_up_print = true;
+        self
     }
 
     /// The cursor's current window-local pixel position.
@@ -344,16 +479,22 @@ impl<S: GlyphSource> Printer<S> {
     }
 
     /// Re-arm this printer over a fresh `tokens` stream, keeping its glyph
-    /// source, speed and origin — the same printer starting a new message,
-    /// exactly as upstream reuses one `struct TextPrinter` slot for
-    /// consecutive `AddTextPrinter` calls into the same window rather than
-    /// allocating a new one per message (`pokeemerald/src/text.c`).
+    /// source, speed, origin and [`Printer::with_ab_speed_up_print`]
+    /// capability — the same printer starting a new message, exactly as
+    /// upstream reuses one `struct TextPrinter` slot for consecutive
+    /// `AddTextPrinter` calls into the same window rather than allocating a
+    /// new one per message (`pokeemerald/src/text.c`).
     ///
     /// Resets every scrap of per-message state (stream position, reveal
-    /// delay, cursor, in-flight scroll, render state), so the result is
-    /// indistinguishable from [`Printer::new`] with the same arguments —
-    /// without needing to hand the sheet back in, which matters when the
-    /// sheet is an owned one the caller cannot cheaply duplicate.
+    /// delay, cursor, in-flight scroll, render state, pause countdown, and
+    /// the latched print-speed-up flag — upstream's own
+    /// `subStruct->hasPrintBeenSpedUp`, zeroed fresh by every new
+    /// `AddTextPrinter` call the same way the rest of `TextPrinterSubStruct`
+    /// is), so the result is indistinguishable from [`Printer::new`] (plus
+    /// [`Printer::with_ab_speed_up_print`] if this printer had it) with the
+    /// same arguments — without needing to hand the sheet back in, which
+    /// matters when the sheet is an owned one the caller cannot cheaply
+    /// duplicate.
     pub fn restart(&mut self, tokens: Vec<Token>) {
         self.tokens = tokens;
         self.pos = 0;
@@ -361,31 +502,25 @@ impl<S: GlyphSource> Printer<S> {
         self.cursor = self.origin;
         self.scroll_remaining = 0;
         self.state = PrinterState::HandleChar;
+        self.has_print_been_sped_up = false;
     }
 
     /// Advance the printer by exactly one frame.
     ///
-    /// `confirm_pressed` models the confirm button's *just-pressed* edge
-    /// this frame (upstream `JOY_NEW(...)` inside
+    /// `input.confirm_pressed()` models the confirm button's *just-pressed*
+    /// edge this frame (upstream `JOY_NEW(A_BUTTON | B_BUTTON)` inside
     /// `TextPrinterWaitWithDownArrow`) — only consulted while waiting on
     /// `\l`/`\p` ([`TickEvent::AwaitingScroll`]/[`TickEvent::AwaitingClear`]);
     /// ignored otherwise, matching upstream (the equivalent upstream checks
-    /// are gated on those same states).
-    ///
-    /// Upstream's *held*-A/B reveal speed-up (`RENDER_STATE_HANDLE_CHAR`
-    /// zeroing `delayCounter` under `gTextFlags.canABSpeedUpPrint`,
-    /// `pokeemerald/src/text.c`) is deliberately not modelled: the standard
-    /// field message box — this slice's target — sets `canABSpeedUpPrint =
-    /// FALSE` (`pokeemerald/src/field_message_box.c`), so field dialogue has
-    /// no such speed-up to reproduce. The contexts that enable it (battle,
-    /// menus) arrive with their own slices and will need a held-input model
-    /// here `(behavioral-fidelity)`.
-    pub fn tick(&mut self, confirm_pressed: bool) -> TickEvent {
+    /// are gated on those same states). `input.confirm_held()` feeds the
+    /// held-A/B print speed-up (module docs), only observable once this
+    /// printer opted in via [`Printer::with_ab_speed_up_print`].
+    pub fn tick(&mut self, input: PrinterInput) -> TickEvent {
         match self.state {
             PrinterState::Finished => TickEvent::Finished,
-            PrinterState::HandleChar => self.tick_handle_char(),
+            PrinterState::HandleChar => self.tick_handle_char(input),
             PrinterState::AwaitingScroll => {
-                if confirm_pressed {
+                if input.confirm_pressed() {
                     self.scroll_remaining = self.line_height;
                     self.cursor.0 = self.origin.0;
                     self.state = PrinterState::Scrolling;
@@ -405,7 +540,7 @@ impl<S: GlyphSource> Printer<S> {
                 }
             }
             PrinterState::AwaitingClear => {
-                if confirm_pressed {
+                if input.confirm_pressed() {
                     self.cursor = self.origin;
                     self.state = PrinterState::HandleChar;
                     TickEvent::Cleared
@@ -413,6 +548,28 @@ impl<S: GlyphSource> Printer<S> {
                     TickEvent::AwaitingClear
                 }
             }
+            PrinterState::Pause => self.tick_pause(),
+        }
+    }
+
+    /// `RENDER_STATE_PAUSE` (`text.c:1213-1220`): count `delay_counter` down
+    /// to zero, one frame at a time, then resume `HandleChar` -- on the
+    /// *next* tick, not this one (upstream returns `RENDER_UPDATE`, not
+    /// `RENDER_REPEAT`, the frame the counter reaches zero, so nothing new
+    /// prints until a further tick — the same one-tick-late shape
+    /// [`TickEvent::ScrollFinished`] already has). Called both from the
+    /// dispatcher above (every external tick while already paused) and
+    /// directly from [`Printer::tick_handle_char`]'s own `{PAUSE n}` branch
+    /// (the same-frame `RENDER_REPEAT` chain, module docs), so the first of
+    /// the `n` counted-down frames lands on the tick that consumed the
+    /// control code, not a tick after it.
+    fn tick_pause(&mut self) -> TickEvent {
+        if self.delay_counter != 0 {
+            self.delay_counter -= 1;
+            TickEvent::Paused
+        } else {
+            self.state = PrinterState::HandleChar;
+            TickEvent::PauseFinished
         }
     }
 
@@ -422,20 +579,44 @@ impl<S: GlyphSource> Printer<S> {
     /// reveals a glyph, transitions to a waiting state, or hits the
     /// terminator; each of those ends the tick.
     ///
-    /// Faithful to upstream's `RENDER_STATE_HANDLE_CHAR` (`text.c`): the
-    /// reveal-delay counter is reloaded to [`TextSpeed::wait_frames`]
-    /// (`delayCounter = textSpeed`) *before* consuming each token, and the
-    /// `delay_counter > 0` guard at the top of the loop — upstream's
-    /// `if (delayCounter && textSpeed)` — burns it back down one frame per
-    /// tick. A `RENDER_REPEAT` token reloads the counter and loops back to
-    /// that guard, so at Slow/Mid (`wait_frames != 0`) it costs a full
-    /// reveal-delay period; at Fast/Instant (`wait_frames == 0`) the counter
-    /// stays 0 and those tokens remain free. The counter starts at 0, so the
-    /// very first glyph still reveals on frame 0.
-    fn tick_handle_char(&mut self) -> TickEvent {
+    /// Faithful to upstream's `RENDER_STATE_HANDLE_CHAR` (`text.c:943-1017`):
+    ///
+    /// * `text.c:944-945` — if this printer opted into held-A/B speed-up
+    ///   ([`Printer::with_ab_speed_up_print`]) and this message has already
+    ///   been sped up once (`has_print_been_sped_up`), *holding* A/B forces
+    ///   `delay_counter` to zero before the wait guard even runs, every loop
+    ///   iteration — including `RENDER_REPEAT` re-entries within one tick.
+    /// * `text.c:945-955` — the reveal-delay counter is reloaded to
+    ///   [`TextSpeed::wait_frames`] (`delayCounter = textSpeed`)
+    ///   *unconditionally* before consuming each token, and the
+    ///   `delay_counter > 0` guard at the top of the loop — upstream's
+    ///   `if (delayCounter && textSpeed)` — burns it back down one frame per
+    ///   tick. While burning it down, a fresh *press* of A/B (only checked
+    ///   here, not while merely held) latches `has_print_been_sped_up` and
+    ///   zeroes `delay_counter` outright — the char this delay was gating
+    ///   still doesn't reveal until the counter is checked again next tick
+    ///   (upstream returns `RENDER_UPDATE` either way on this branch).
+    /// * A `RENDER_REPEAT` token reloads the counter and loops back to the
+    ///   guard, so at Slow/Mid (`wait_frames != 0`) it costs a full
+    ///   reveal-delay period; at Fast/Instant (`wait_frames == 0`) the
+    ///   counter stays 0 and those tokens remain free. The counter starts at
+    ///   0, so the very first glyph still reveals on frame 0.
+    fn tick_handle_char(&mut self, input: PrinterInput) -> TickEvent {
         loop {
+            // `text.c:944-945`.
+            if input.confirm_held() && self.has_print_been_sped_up {
+                self.delay_counter = 0;
+            }
+
             if self.delay_counter > 0 {
                 self.delay_counter -= 1;
+                // `text.c:948-952`: only while `can_ab_speed_up_print` is set
+                // ([`Printer::with_ab_speed_up_print`]) does a fresh press
+                // during a pending delay latch the speed-up.
+                if self.can_ab_speed_up_print && input.confirm_pressed() {
+                    self.has_print_been_sped_up = true;
+                    self.delay_counter = 0;
+                }
                 return TickEvent::Idle;
             }
             // Upstream reloads `delayCounter = textSpeed` unconditionally here,
@@ -467,6 +648,20 @@ impl<S: GlyphSource> Printer<S> {
                 Token::PromptClear => {
                     self.state = PrinterState::AwaitingClear;
                     return TickEvent::AwaitingClear;
+                }
+                Token::ExtCtrl { sub, args } if sub == ext_ctrl::PAUSE => {
+                    // `text.c:1013-1017` (`EXT_CTRL_CODE_PAUSE`): reload the
+                    // delay counter to the control code's own argument, flip
+                    // to `RENDER_STATE_PAUSE`, then upstream returns
+                    // `RENDER_REPEAT` — which `RenderFont`'s `while` loop
+                    // re-enters immediately, on this same upstream frame,
+                    // landing straight in `RENDER_STATE_PAUSE` and burning
+                    // the pause's first frame right here. Calling
+                    // `tick_pause` directly (module docs' "State machine"
+                    // section) mirrors that same-frame chain precisely.
+                    self.delay_counter = args.first().copied().unwrap_or(0);
+                    self.state = PrinterState::Pause;
+                    return self.tick_pause();
                 }
                 Token::ExtCtrl { sub, args } => self.apply_ext_ctrl(sub, &args),
                 ref other => glyph_id_for_token(other),
@@ -544,6 +739,18 @@ mod tests {
         super::super::decode(bytes).unwrap()
     }
 
+    /// A's just-pressed edge, nothing else held or pressed -- the shape
+    /// every pre-existing test in this module used a bare `true` for, back
+    /// when [`Printer::tick`] took a single `confirm_pressed: bool`.
+    const fn press_a() -> PrinterInput {
+        PrinterInput {
+            a_pressed: true,
+            b_pressed: false,
+            a_held: false,
+            b_held: false,
+        }
+    }
+
     #[test]
     fn advance_widths_move_the_cursor_by_the_sheets_glyph_width() {
         // FONT_NORMAL 'A' (byte 0xBB) has advance width 6 per
@@ -553,13 +760,13 @@ mod tests {
         let tokens = decode_tokens(&[0xBB, 0xBB, super::super::EOS]); // "AA"
         let mut printer = Printer::new(tokens, sheet, TextSpeed::Instant, (0, 1));
 
-        let TickEvent::Glyph(first) = printer.tick(false) else {
+        let TickEvent::Glyph(first) = printer.tick(PrinterInput::none()) else {
             panic!("expected a glyph")
         };
         assert_eq!((first.x, first.y), (0, 1));
         assert_eq!(first.glyph.advance_width, 6);
 
-        let TickEvent::Glyph(second) = printer.tick(false) else {
+        let TickEvent::Glyph(second) = printer.tick(PrinterInput::none()) else {
             panic!("expected a glyph")
         };
         assert_eq!((second.x, second.y), (6, 1));
@@ -577,18 +784,18 @@ mod tests {
         let tokens = decode_tokens(&[0xBB, 0x37, 0xBB, super::super::EOS]); // "A<delim>A"
         let mut printer = Printer::new(tokens, sheet, TextSpeed::Instant, (0, 1));
 
-        let TickEvent::Glyph(first) = printer.tick(false) else {
+        let TickEvent::Glyph(first) = printer.tick(PrinterInput::none()) else {
             panic!("expected a glyph")
         };
         assert_eq!((first.x, first.y), (0, 1));
 
-        let TickEvent::Glyph(delim) = printer.tick(false) else {
+        let TickEvent::Glyph(delim) = printer.tick(PrinterInput::none()) else {
             panic!("expected the delimiter's blank glyph")
         };
         assert_eq!((delim.x, delim.y), (6, 1));
         assert_eq!(delim.glyph.advance_width, 3);
 
-        let TickEvent::Glyph(second) = printer.tick(false) else {
+        let TickEvent::Glyph(second) = printer.tick(PrinterInput::none()) else {
             panic!("expected a glyph")
         };
         assert_eq!((second.x, second.y), (9, 1), "words must stay separated");
@@ -615,14 +822,14 @@ mod tests {
         let tokens = decode_tokens(&[0xBB, super::super::CHAR_NEWLINE, 0xBB, super::super::EOS]);
         let mut printer = Printer::new(tokens, sheet, TextSpeed::Instant, (0, 1));
 
-        let TickEvent::Glyph(first) = printer.tick(false) else {
+        let TickEvent::Glyph(first) = printer.tick(PrinterInput::none()) else {
             panic!("expected a glyph")
         };
         assert_eq!((first.x, first.y), (0, 1));
 
         // Second tick consumes the newline AND draws the next glyph in one
         // frame (RENDER_REPEAT with a zero-frame reload at Instant).
-        let TickEvent::Glyph(second) = printer.tick(false) else {
+        let TickEvent::Glyph(second) = printer.tick(PrinterInput::none()) else {
             panic!("expected a glyph after the free newline")
         };
         assert_eq!((second.x, second.y), (0, 1 + 16));
@@ -641,7 +848,7 @@ mod tests {
         let mut printer = Printer::new(tokens, sheet, TextSpeed::Mid, (0, 0));
 
         // Frame 0: A drawn immediately (first glyph, delay_counter starts 0).
-        let TickEvent::Glyph(a) = printer.tick(false) else {
+        let TickEvent::Glyph(a) = printer.tick(PrinterInput::none()) else {
             panic!("expected 'A' on frame 0")
         };
         assert_eq!((a.x, a.y), (0, 0));
@@ -651,14 +858,14 @@ mod tests {
         // visible glyph and leaves the counter mid-drain.
         for frame in 1..=6 {
             assert_eq!(
-                printer.tick(false),
+                printer.tick(PrinterInput::none()),
                 TickEvent::Idle,
                 "frame {frame} should be idle"
             );
         }
 
         // Frame 7: B finally revealed, on the next line.
-        let TickEvent::Glyph(b) = printer.tick(false) else {
+        let TickEvent::Glyph(b) = printer.tick(PrinterInput::none()) else {
             panic!("expected 'B' on frame 7")
         };
         assert_eq!((b.x, b.y), (0, 16));
@@ -673,11 +880,17 @@ mod tests {
         let tokens = decode_tokens(&[0xBB, 0xBB, super::super::EOS]);
         let mut printer = Printer::new(tokens, sheet, TextSpeed::Mid, (0, 0));
 
-        assert!(matches!(printer.tick(false), TickEvent::Glyph(_)));
+        assert!(matches!(
+            printer.tick(PrinterInput::none()),
+            TickEvent::Glyph(_)
+        ));
         for _ in 0..3 {
-            assert_eq!(printer.tick(false), TickEvent::Idle);
+            assert_eq!(printer.tick(PrinterInput::none()), TickEvent::Idle);
         }
-        assert!(matches!(printer.tick(false), TickEvent::Glyph(_)));
+        assert!(matches!(
+            printer.tick(PrinterInput::none()),
+            TickEvent::Glyph(_)
+        ));
     }
 
     #[test]
@@ -688,7 +901,10 @@ mod tests {
         let mut printer = Printer::new(tokens, sheet, TextSpeed::Fast, (0, 0));
 
         for _ in 0..3 {
-            assert!(matches!(printer.tick(false), TickEvent::Glyph(_)));
+            assert!(matches!(
+                printer.tick(PrinterInput::none()),
+                TickEvent::Glyph(_)
+            ));
         }
     }
 
@@ -700,11 +916,17 @@ mod tests {
         let tokens = decode_tokens(&[0xBB, 0xBB, super::super::EOS]);
         let mut printer = Printer::new(tokens, sheet, TextSpeed::Slow, (0, 0));
 
-        assert!(matches!(printer.tick(false), TickEvent::Glyph(_)));
+        assert!(matches!(
+            printer.tick(PrinterInput::none()),
+            TickEvent::Glyph(_)
+        ));
         for _ in 0..7 {
-            assert_eq!(printer.tick(false), TickEvent::Idle);
+            assert_eq!(printer.tick(PrinterInput::none()), TickEvent::Idle);
         }
-        assert!(matches!(printer.tick(false), TickEvent::Glyph(_)));
+        assert!(matches!(
+            printer.tick(PrinterInput::none()),
+            TickEvent::Glyph(_)
+        ));
     }
 
     #[test]
@@ -720,19 +942,34 @@ mod tests {
         ]);
         let mut printer = Printer::new(tokens, sheet, TextSpeed::Fast, (0, 1));
 
-        assert!(matches!(printer.tick(false), TickEvent::Glyph(_)));
-        assert_eq!(printer.tick(false), TickEvent::AwaitingScroll);
+        assert!(matches!(
+            printer.tick(PrinterInput::none()),
+            TickEvent::Glyph(_)
+        ));
+        assert_eq!(
+            printer.tick(PrinterInput::none()),
+            TickEvent::AwaitingScroll
+        );
         // Still waiting: no confirm yet.
-        assert_eq!(printer.tick(false), TickEvent::AwaitingScroll);
+        assert_eq!(
+            printer.tick(PrinterInput::none()),
+            TickEvent::AwaitingScroll
+        );
         // Confirm: transitions state but does not itself move any pixels.
-        assert_eq!(printer.tick(true), TickEvent::ScrollStarted);
+        assert_eq!(printer.tick(press_a()), TickEvent::ScrollStarted);
         // FAST = 4px/frame; line height 16 -> 4 frames of Scrolling{4}, then
         // ScrollFinished, then printing resumes.
         for _ in 0..4 {
-            assert_eq!(printer.tick(false), TickEvent::Scrolling { dy: 4 });
+            assert_eq!(
+                printer.tick(PrinterInput::none()),
+                TickEvent::Scrolling { dy: 4 }
+            );
         }
-        assert_eq!(printer.tick(false), TickEvent::ScrollFinished);
-        let TickEvent::Glyph(g) = printer.tick(false) else {
+        assert_eq!(
+            printer.tick(PrinterInput::none()),
+            TickEvent::ScrollFinished
+        );
+        let TickEvent::Glyph(g) = printer.tick(PrinterInput::none()) else {
             panic!("expected printing to resume after the scroll")
         };
         // X reset to origin by the scroll-start transition; Y unchanged
@@ -754,13 +991,16 @@ mod tests {
         ]);
         let mut printer = Printer::new(tokens, sheet, TextSpeed::Fast, (0, 1));
 
-        assert!(matches!(printer.tick(false), TickEvent::Glyph(_)));
+        assert!(matches!(
+            printer.tick(PrinterInput::none()),
+            TickEvent::Glyph(_)
+        ));
         // The free newline plus hitting \p happen in the same tick.
-        assert_eq!(printer.tick(false), TickEvent::AwaitingClear);
-        assert_eq!(printer.tick(false), TickEvent::AwaitingClear);
-        assert_eq!(printer.tick(true), TickEvent::Cleared);
+        assert_eq!(printer.tick(PrinterInput::none()), TickEvent::AwaitingClear);
+        assert_eq!(printer.tick(PrinterInput::none()), TickEvent::AwaitingClear);
+        assert_eq!(printer.tick(press_a()), TickEvent::Cleared);
         assert_eq!(printer.cursor(), (0, 1));
-        let TickEvent::Glyph(g) = printer.tick(false) else {
+        let TickEvent::Glyph(g) = printer.tick(PrinterInput::none()) else {
             panic!("expected printing to resume on the new page")
         };
         assert_eq!((g.x, g.y), (0, 1));
@@ -782,32 +1022,35 @@ mod tests {
         let mut printer = Printer::new(tokens, sheet, TextSpeed::Mid, (0, 0));
 
         // Frame 0: 'A'. Frames 1-3: A's reveal delay.
-        assert!(matches!(printer.tick(false), TickEvent::Glyph(_)));
+        assert!(matches!(
+            printer.tick(PrinterInput::none()),
+            TickEvent::Glyph(_)
+        ));
         for frame in 1..=3 {
             assert_eq!(
-                printer.tick(false),
+                printer.tick(PrinterInput::none()),
                 TickEvent::Idle,
                 "frame {frame} should be idle"
             );
         }
         // Frame 4: \p consumed -> AwaitingClear (reloads delay_counter = 3).
-        assert_eq!(printer.tick(false), TickEvent::AwaitingClear);
+        assert_eq!(printer.tick(PrinterInput::none()), TickEvent::AwaitingClear);
         // Frame 5: still waiting for confirm.
-        assert_eq!(printer.tick(false), TickEvent::AwaitingClear);
+        assert_eq!(printer.tick(PrinterInput::none()), TickEvent::AwaitingClear);
         // Frame 6: confirm clears the page on the same tick.
-        assert_eq!(printer.tick(true), TickEvent::Cleared);
+        assert_eq!(printer.tick(press_a()), TickEvent::Cleared);
         assert_eq!(printer.cursor(), (0, 0));
         // Frames 7-9: the reveal delay reloaded by \p drains -- resume is NOT
         // immediate at MID.
         for frame in 7..=9 {
             assert_eq!(
-                printer.tick(false),
+                printer.tick(PrinterInput::none()),
                 TickEvent::Idle,
                 "resume frame {frame} should be idle"
             );
         }
         // Frame 10: the new page's first glyph.
-        let TickEvent::Glyph(b) = printer.tick(false) else {
+        let TickEvent::Glyph(b) = printer.tick(PrinterInput::none()) else {
             panic!("expected the new page's glyph on frame 10")
         };
         assert_eq!((b.x, b.y), (0, 0));
@@ -829,25 +1072,40 @@ mod tests {
         let mut printer = Printer::new(tokens, sheet, TextSpeed::Mid, (0, 1));
 
         // 'A', then its 3-frame reveal delay.
-        assert!(matches!(printer.tick(false), TickEvent::Glyph(_)));
+        assert!(matches!(
+            printer.tick(PrinterInput::none()),
+            TickEvent::Glyph(_)
+        ));
         for _ in 0..3 {
-            assert_eq!(printer.tick(false), TickEvent::Idle);
+            assert_eq!(printer.tick(PrinterInput::none()), TickEvent::Idle);
         }
         // \l consumed -> AwaitingScroll (reloads delay_counter = 3).
-        assert_eq!(printer.tick(false), TickEvent::AwaitingScroll);
-        assert_eq!(printer.tick(false), TickEvent::AwaitingScroll);
-        assert_eq!(printer.tick(true), TickEvent::ScrollStarted);
+        assert_eq!(
+            printer.tick(PrinterInput::none()),
+            TickEvent::AwaitingScroll
+        );
+        assert_eq!(
+            printer.tick(PrinterInput::none()),
+            TickEvent::AwaitingScroll
+        );
+        assert_eq!(printer.tick(press_a()), TickEvent::ScrollStarted);
         // MID scrolls 2px/frame over the 16px line height -> 8 scroll frames.
         for _ in 0..8 {
-            assert_eq!(printer.tick(false), TickEvent::Scrolling { dy: 2 });
+            assert_eq!(
+                printer.tick(PrinterInput::none()),
+                TickEvent::Scrolling { dy: 2 }
+            );
         }
-        assert_eq!(printer.tick(false), TickEvent::ScrollFinished);
+        assert_eq!(
+            printer.tick(PrinterInput::none()),
+            TickEvent::ScrollFinished
+        );
         // The reveal delay reloaded when \l was consumed still has to drain:
         // 3 idle frames, THEN the next glyph.
         for _ in 0..3 {
-            assert_eq!(printer.tick(false), TickEvent::Idle);
+            assert_eq!(printer.tick(PrinterInput::none()), TickEvent::Idle);
         }
-        let TickEvent::Glyph(g) = printer.tick(false) else {
+        let TickEvent::Glyph(g) = printer.tick(PrinterInput::none()) else {
             panic!("expected printing to resume after the scroll's reveal delay")
         };
         assert_eq!((g.x, g.y), (0, 1));
@@ -860,11 +1118,14 @@ mod tests {
         let tokens = decode_tokens(&[0xBB, super::super::EOS]);
         let mut printer = Printer::new(tokens, sheet, TextSpeed::Instant, (0, 0));
 
-        assert!(matches!(printer.tick(false), TickEvent::Glyph(_)));
-        assert_eq!(printer.tick(false), TickEvent::Finished);
+        assert!(matches!(
+            printer.tick(PrinterInput::none()),
+            TickEvent::Glyph(_)
+        ));
+        assert_eq!(printer.tick(PrinterInput::none()), TickEvent::Finished);
         assert!(printer.is_finished());
         // Further ticks stay Finished, never panic on the exhausted stream.
-        assert_eq!(printer.tick(false), TickEvent::Finished);
+        assert_eq!(printer.tick(PrinterInput::none()), TickEvent::Finished);
     }
 
     #[test]
@@ -876,7 +1137,7 @@ mod tests {
         let tokens = decode_tokens(&[super::super::CHAR_EXTRA_SYMBOL, 0x00, super::super::EOS]);
         let mut printer = Printer::new(tokens, sheet, TextSpeed::Instant, (0, 0));
 
-        let TickEvent::Glyph(g) = printer.tick(false) else {
+        let TickEvent::Glyph(g) = printer.tick(PrinterInput::none()) else {
             panic!("expected a glyph")
         };
         assert_eq!(
@@ -900,7 +1161,7 @@ mod tests {
         ]);
         let mut printer = Printer::new(tokens, sheet, TextSpeed::Instant, (0, 0));
 
-        let TickEvent::Glyph(g) = printer.tick(false) else {
+        let TickEvent::Glyph(g) = printer.tick(PrinterInput::none()) else {
             panic!("expected the placeholder to be skipped and 'A' drawn")
         };
         assert_eq!((g.x, g.y), (0, 0));
@@ -920,7 +1181,7 @@ mod tests {
         ]);
         let mut printer = Printer::new(tokens, sheet, TextSpeed::Instant, (0, 1));
 
-        let TickEvent::Glyph(g) = printer.tick(false) else {
+        let TickEvent::Glyph(g) = printer.tick(PrinterInput::none()) else {
             panic!("expected a glyph")
         };
         assert_eq!((g.x, g.y), (20, 1));
@@ -937,23 +1198,32 @@ mod tests {
         let tokens = decode_tokens(&[0xBB, super::super::EOS]); // "A"
         let mut printer = Printer::new(tokens, sheet, TextSpeed::Instant, (3, 1));
 
-        assert!(matches!(printer.tick(false), TickEvent::Glyph(_)));
-        assert!(matches!(printer.tick(false), TickEvent::Finished));
+        assert!(matches!(
+            printer.tick(PrinterInput::none()),
+            TickEvent::Glyph(_)
+        ));
+        assert!(matches!(
+            printer.tick(PrinterInput::none()),
+            TickEvent::Finished
+        ));
         assert!(printer.is_finished());
 
         printer.restart(decode_tokens(&[0xBB, 0xBB, super::super::EOS])); // "AA"
         assert!(!printer.is_finished(), "a restarted printer prints again");
         assert_eq!(printer.cursor(), (3, 1), "the cursor is back at the origin");
 
-        let TickEvent::Glyph(first) = printer.tick(false) else {
+        let TickEvent::Glyph(first) = printer.tick(PrinterInput::none()) else {
             panic!("expected the restarted stream's first glyph")
         };
         assert_eq!((first.x, first.y), (3, 1));
-        let TickEvent::Glyph(second) = printer.tick(false) else {
+        let TickEvent::Glyph(second) = printer.tick(PrinterInput::none()) else {
             panic!("expected the restarted stream's second glyph")
         };
         assert_eq!((second.x, second.y), (9, 1), "advanced by 'A''s 6px width");
-        assert!(matches!(printer.tick(false), TickEvent::Finished));
+        assert!(matches!(
+            printer.tick(PrinterInput::none()),
+            TickEvent::Finished
+        ));
     }
 
     /// An owned glyph source drives the printer identically to a borrowed
@@ -973,11 +1243,274 @@ mod tests {
             )
         };
 
-        let TickEvent::Glyph(g) = printer.tick(false) else {
+        let TickEvent::Glyph(g) = printer.tick(PrinterInput::none()) else {
             panic!("expected a glyph from the owned sheet")
         };
         assert_eq!((g.x, g.y), (0, 1));
         assert_eq!(g.glyph.advance_width, 6);
+    }
+
+    /// Issue #393: either A or B must advance a `\p`/`\l` wait identically --
+    /// upstream never distinguishes which button did it
+    /// (`JOY_NEW(A_BUTTON | B_BUTTON)`, `text.c:874-879`). Drives the same
+    /// `AwaitingClear` wait with `b_pressed` alone (no `a_pressed`) and
+    /// confirms it clears exactly like [`prompt_clear_waits_for_confirm_then_resets_the_cursor_on_page`]'s
+    /// `a_pressed`-only case does.
+    #[test]
+    fn b_alone_advances_a_prompt_clear_exactly_like_a_alone() {
+        let pixels = blank_sheet_pixels();
+        let sheet = synthetic_sheet(&pixels, FontId::Normal);
+        let tokens = decode_tokens(&[
+            0xBB,
+            super::super::CHAR_PROMPT_CLEAR,
+            0xBB,
+            super::super::EOS,
+        ]);
+        let mut printer = Printer::new(tokens, sheet, TextSpeed::Fast, (0, 1));
+
+        assert!(matches!(
+            printer.tick(PrinterInput::none()),
+            TickEvent::Glyph(_)
+        ));
+        assert_eq!(printer.tick(PrinterInput::none()), TickEvent::AwaitingClear);
+        let b_only = PrinterInput {
+            a_pressed: false,
+            b_pressed: true,
+            a_held: false,
+            b_held: false,
+        };
+        assert_eq!(printer.tick(b_only), TickEvent::Cleared);
+        assert_eq!(printer.cursor(), (0, 1));
+        let TickEvent::Glyph(g) = printer.tick(PrinterInput::none()) else {
+            panic!("expected printing to resume on the new page")
+        };
+        assert_eq!((g.x, g.y), (0, 1));
+    }
+
+    /// Issue #393: `{PAUSE n}` must block for *exactly* `n` frames -- not
+    /// `n + 1` (the off-by-one this module's own "State machine" docs warn
+    /// about, `text.c:1013-1017`'s same-frame `RENDER_REPEAT` chain into
+    /// `RENDER_STATE_PAUSE`, `text.c:1213-1220`). Runs at `Instant` speed so
+    /// every glyph is frame-free and the only source of `Idle`-shaped ticks
+    /// in this stream is the pause itself, isolating its own count exactly.
+    #[test]
+    fn pause_control_code_blocks_for_exactly_the_argument_frame_count() {
+        let pixels = blank_sheet_pixels();
+        let sheet = synthetic_sheet(&pixels, FontId::Normal);
+        let tokens = decode_tokens(&[
+            0xBB, // 'A'
+            super::super::EXT_CTRL_CODE_BEGIN,
+            super::super::EXT_CTRL_CODE_PAUSE,
+            96,
+            0xBB, // 'B'
+            super::super::EOS,
+        ]);
+        let mut printer = Printer::new(tokens, sheet, TextSpeed::Instant, (0, 1));
+
+        assert!(
+            matches!(printer.tick(PrinterInput::none()), TickEvent::Glyph(_)),
+            "'A' reveals before the pause"
+        );
+
+        // The pause control code is consumed on the very next tick, and
+        // upstream's same-frame `RENDER_REPEAT` chain means that tick is
+        // *already* the pause's first counted frame -- 96 `Paused` ticks
+        // total, this one included.
+        let mut paused_ticks = 0;
+        loop {
+            match printer.tick(PrinterInput::none()) {
+                TickEvent::Paused => paused_ticks += 1,
+                TickEvent::PauseFinished => break,
+                other => panic!("expected Paused or PauseFinished, got {other:?}"),
+            }
+        }
+        assert_eq!(
+            paused_ticks, 96,
+            "{{PAUSE 96}} must block for exactly 96 frames, not 95 or 97"
+        );
+
+        // Printing does not resume on the same tick `PauseFinished` was
+        // returned -- one more tick, matching `ScrollFinished`'s identical
+        // one-tick-late shape.
+        let TickEvent::Glyph(b) = printer.tick(PrinterInput::none()) else {
+            panic!("expected 'B' to resume the tick after PauseFinished")
+        };
+        assert_eq!((b.x, b.y), (6, 1), "advanced past 'A''s 6px width");
+    }
+
+    /// Issue #393: held-A/B print speed-up only applies to a printer that
+    /// opted in via [`Printer::with_ab_speed_up_print`] (the intro's Birch
+    /// speech) -- the standard field message box (every other printer in
+    /// this port) must keep printing at its own `TextSpeed` regardless of
+    /// how long A/B is held, matching `gTextFlags.canABSpeedUpPrint = FALSE`
+    /// (`pokeemerald/src/field_message_box.c`).
+    #[test]
+    fn held_ab_speed_up_only_affects_printers_that_opt_in() {
+        let pixels = blank_sheet_pixels();
+
+        // Three glyphs at MID (4 frames/char): without speed-up, 'B' and 'C'
+        // only reveal after their own full reveal-delay periods, no matter
+        // what is held.
+        let field_sheet = synthetic_sheet(&pixels, FontId::Normal);
+        let field_tokens = decode_tokens(&[0xBB, 0xBB, 0xBB, super::super::EOS]);
+        let mut field_printer = Printer::new(field_tokens, field_sheet, TextSpeed::Mid, (0, 0));
+
+        let held_a = PrinterInput {
+            a_pressed: true,
+            b_pressed: false,
+            a_held: true,
+            b_held: false,
+        };
+        assert!(
+            matches!(field_printer.tick(held_a), TickEvent::Glyph(_)),
+            "'A' reveals on frame 0 regardless"
+        );
+        // Continuing to hold A must NOT accelerate this printer: three idle
+        // frames (MID's own wait_frames), matching
+        // `reveal_cadence_matches_frames_per_char_table`'s un-accelerated
+        // cadence exactly, even though A is held (and was freshly pressed)
+        // throughout.
+        for frame in 1..=3 {
+            assert_eq!(
+                field_printer.tick(held_a),
+                TickEvent::Idle,
+                "field message box frame {frame} must stay un-accelerated"
+            );
+        }
+        assert!(
+            matches!(field_printer.tick(held_a), TickEvent::Glyph(_)),
+            "'B' still waits out the full MID delay"
+        );
+
+        // The intro's own printer, same tokens/speed, opted into speed-up:
+        // pressing A while a delay is pending latches the speed-up and
+        // zeroes that delay outright.
+        let intro_sheet = synthetic_sheet(&pixels, FontId::Normal);
+        let intro_tokens = decode_tokens(&[0xBB, 0xBB, 0xBB, super::super::EOS]);
+        let mut intro_printer = Printer::new(intro_tokens, intro_sheet, TextSpeed::Mid, (0, 0))
+            .with_ab_speed_up_print();
+
+        assert!(
+            matches!(
+                intro_printer.tick(PrinterInput::none()),
+                TickEvent::Glyph(_)
+            ),
+            "'A' still reveals on frame 0"
+        );
+        // A fresh press while the delay is pending latches the speed-up and
+        // zeroes the counter on this same tick (still no glyph this tick --
+        // upstream returns RENDER_UPDATE either way here).
+        assert_eq!(intro_printer.tick(held_a), TickEvent::Idle);
+        // The very next tick already reveals 'B' -- the latch fired.
+        assert!(
+            matches!(
+                intro_printer.tick(PrinterInput::none()),
+                TickEvent::Glyph(_)
+            ),
+            "'B' reveals early once the speed-up latches"
+        );
+        // With the latch set, merely holding A (no fresh press needed this
+        // time) forces 'C''s delay to zero too.
+        assert!(
+            matches!(intro_printer.tick(held_a), TickEvent::Glyph(_)),
+            "'C' reveals immediately: held A alone, once already sped up"
+        );
+    }
+
+    /// Issue #393: [`Printer::restart`] must clear a printer stuck mid-pause
+    /// -- upstream's own `RENDER_STATE_PAUSE`/`delayCounter` do not survive
+    /// a fresh `AddTextPrinter` call into the reused window slot.
+    #[test]
+    fn restart_clears_a_stuck_pause_state() {
+        let pixels = blank_sheet_pixels();
+        let sheet = synthetic_sheet(&pixels, FontId::Normal);
+
+        // Instant speed: the only source of a non-`Glyph`/`Finished` tick in
+        // this stream is the pause itself (no reveal-delay idle frames to
+        // account for), so five ticks land squarely mid-pause.
+        let tokens = decode_tokens(&[
+            super::super::EXT_CTRL_CODE_BEGIN,
+            super::super::EXT_CTRL_CODE_PAUSE,
+            96,
+            0xBB,
+            super::super::EOS,
+        ]);
+        let mut printer = Printer::new(tokens, sheet, TextSpeed::Instant, (0, 0));
+
+        for tick in 1..=5 {
+            assert_eq!(
+                printer.tick(PrinterInput::none()),
+                TickEvent::Paused,
+                "tick {tick} should still be mid-pause"
+            );
+        }
+
+        printer.restart(decode_tokens(&[0xBB, super::super::EOS])); // "A"
+        assert!(!printer.is_finished());
+        assert_eq!(printer.cursor(), (0, 0));
+
+        // The pause state is gone: the restarted stream's first glyph
+        // reveals immediately, not another `Paused`/`PauseFinished`.
+        assert!(
+            matches!(printer.tick(PrinterInput::none()), TickEvent::Glyph(_)),
+            "restart must not leave the printer stuck mid-pause"
+        );
+    }
+
+    /// Issue #393: [`Printer::restart`] must clear the latched print-speed-up
+    /// flag -- upstream's own `subStruct->hasPrintBeenSpedUp` does not
+    /// survive a fresh `AddTextPrinter` call into the reused window slot
+    /// either, so a later message on the same printer pays the full
+    /// reveal-delay period again until it earns its own speed-up.
+    #[test]
+    fn restart_clears_the_latched_speed_up_flag() {
+        let pixels = blank_sheet_pixels();
+        let sheet = synthetic_sheet(&pixels, FontId::Normal);
+        let tokens = decode_tokens(&[0xBB, 0xBB, super::super::EOS]); // "AA"
+        let mut printer =
+            Printer::new(tokens, sheet, TextSpeed::Mid, (0, 0)).with_ab_speed_up_print();
+
+        let press_and_hold_a = PrinterInput {
+            a_pressed: true,
+            b_pressed: false,
+            a_held: true,
+            b_held: false,
+        };
+        let hold_a = PrinterInput {
+            a_pressed: false,
+            b_pressed: false,
+            a_held: true,
+            b_held: false,
+        };
+
+        assert!(matches!(
+            printer.tick(PrinterInput::none()),
+            TickEvent::Glyph(_)
+        )); // 'A'
+        assert_eq!(printer.tick(press_and_hold_a), TickEvent::Idle); // latches the speed-up
+        assert!(matches!(
+            printer.tick(PrinterInput::none()),
+            TickEvent::Glyph(_)
+        )); // second 'A', sped up
+
+        printer.restart(decode_tokens(&[0xBB, 0xBB, super::super::EOS])); // "AA"
+        assert!(matches!(
+            printer.tick(PrinterInput::none()),
+            TickEvent::Glyph(_)
+        )); // 'A'
+
+        // The latch is gone: merely holding A (with no fresh press on this
+        // restarted stream) must NOT force the second glyph's delay to zero
+        // -- the full MID reveal-delay period must be paid again, exactly as
+        // a freshly-built printer would.
+        for frame in 1..=3 {
+            assert_eq!(
+                printer.tick(hold_a),
+                TickEvent::Idle,
+                "restart frame {frame}: the speed-up latch must not survive"
+            );
+        }
+        assert!(matches!(printer.tick(hold_a), TickEvent::Glyph(_)));
     }
 
     #[test]

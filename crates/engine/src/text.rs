@@ -109,6 +109,16 @@ pub const CHAR_EXTRA_SYMBOL: u8 = 0xF9;
 /// decodes to its own [`Token::BardWordDelimit`] and round-trips losslessly.
 pub const CHAR_BARD_WORD_DELIMIT: u8 = 0x37;
 
+/// Extended control sub-code that pauses printing for a fixed number of
+/// frames before resuming (upstream `EXT_CTRL_CODE_PAUSE`); emitted as
+/// `0xFC 0x08 <frames>`, one argument byte -- the frame count
+/// [`render::Printer`]'s `RENDER_STATE_PAUSE`-mirroring state counts down
+/// before returning to normal character handling (`text.c:1013-1017`,
+/// `text.c:1213-1220`).
+///
+/// [`render::Printer`]: crate::text::render::Printer
+pub const EXT_CTRL_CODE_PAUSE: u8 = 0x08;
+
 /// Extended control sub-code that switches the active font to Japanese
 /// (upstream `EXT_CTRL_CODE_JPN`); emitted as `0xFC 0x15`, zero arguments.
 pub const EXT_CTRL_CODE_JPN: u8 = 0x15;
