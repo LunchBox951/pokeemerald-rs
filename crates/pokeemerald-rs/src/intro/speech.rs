@@ -9,13 +9,16 @@
 //! not code `(no-verbatim)`: a literal `\n` in a page string is a real Rust
 //! newline (-> [`Token::Newline`], upstream `CHAR_NEWLINE`), `{P}` marks a
 //! upstream `\p` (-> [`Token::PromptClear`] -- wait for a button press, then
-//! clear and start a fresh page) and `{L}` marks a `\l` (->
+//! clear and start a fresh page), `{L}` marks a `\l` (->
 //! [`Token::PromptScroll`] -- wait for a button press, then scroll up one
-//! line). Every other character maps through
-//! [`Token::Char`]/[`engine::text::char_to_byte`] unchanged --
-//! this module's `every_page_is_gen3_encodable` test pins that every page's characters
-//! (including "é" and the curly “ ” quotes `gText_ThisIsAPokemon` uses) have
-//! a real Gen-3 encoding.
+//! line), and `{PAUSE n}` marks upstream's `EXT_CTRL_CODE_PAUSE` (->
+//! [`Token::ExtCtrl`] with [`engine::text::EXT_CTRL_CODE_PAUSE`] and one
+//! argument byte `n` -- pause printing for `n` frames,
+//! [`engine::text::render::Printer`]'s `PrinterState::Pause`). Every other
+//! character maps through [`Token::Char`]/[`engine::text::char_to_byte`]
+//! unchanged -- this module's `every_page_is_gen3_encodable` test pins that
+//! every page's characters (including "é" and the curly “ ” quotes
+//! `gText_ThisIsAPokemon` uses) have a real Gen-3 encoding.
 //!
 //! # Player-name substitution
 //!
@@ -33,17 +36,7 @@
 //! [`engine::text::format`]'s placeholder-resolver machinery for a
 //! single, statically-known substitution.
 //!
-//! # What's omitted
-//!
-//! `gText_ThisIsAPokemon`'s `{PAUSE 96}` control code (a 96-frame pause
-//! before its trailing `\p`) is not transcribed:
-//! [`engine::text::render::Printer`] already treats `PAUSE` as a no-op
-//! (see its module docs' "Deliberately out of scope" section), so encoding
-//! it would add a token with no observable effect in this engine slice --
-//! the trailing `{P}` still requires a button press exactly as upstream's
-//! `\p` does either way.
-
-use engine::text::Token;
+use engine::text::{Token, EXT_CTRL_CODE_PAUSE};
 
 use crate::new_game::DEFAULT_PLAYER_NAME;
 
@@ -74,9 +67,11 @@ pub fn pages() -> [Vec<Token>; NUM_PAGES] {
 /// `gText_Birch_Welcome` (`birch_speech.inc:1-7`).
 const WELCOME: &str = "Hi! Sorry to keep you waiting!{P}Welcome to the world of POKéMON!{P}My name is BIRCH.{P}But everyone calls me the POKéMON\nPROFESSOR.{P}";
 
-/// `gText_ThisIsAPokemon` (`strings.c:100`) -- module docs on the omitted
-/// `{PAUSE 96}`.
-const THIS_IS_A_POKEMON: &str = "This is what we call a “POKéMON.”{P}";
+/// `gText_ThisIsAPokemon` (`strings.c:100`): `{PAUSE 96}` pauses printing
+/// for 96 frames right before the trailing `{P}` -- upstream's own beat
+/// before Birch's speech continues, matching `strings.c:100`'s literal
+/// `"This is what we call a “POKéMON.”{PAUSE 96}\p"` byte for byte.
+const THIS_IS_A_POKEMON: &str = "This is what we call a “POKéMON.”{PAUSE 96}{P}";
 
 /// `gText_Birch_MainSpeech` (`birch_speech.inc:14-29`).
 const MAIN_SPEECH: &str = "This world is widely inhabited by\ncreatures known as POKéMON.{P}We humans live alongside POKéMON,\nat times as friendly playmates, and{L}at times as cooperative workmates.{P}And sometimes, we band together\nand battle others like us.{P}But despite our closeness, we don't\nknow everything about POKéMON.{P}In fact, there are many, many\nsecrets surrounding POKéMON.{P}To unravel POKéMON mysteries,\nI've been undertaking research.{L}That's what I do.{P}";
@@ -143,8 +138,9 @@ fn youre_player() -> String {
 /// `gText_Birch_AreYouReady` (`birch_speech.inc:52-61`).
 const ARE_YOU_READY: &str = "All right, are you ready?{P}Your very own adventure is about\nto unfold.{P}Take courage, and leap into the\nworld of POKéMON where dreams,{L}adventure, and friendships await!{P}Well, I'll be expecting you later.\nCome see me in my POKéMON LAB.{P}";
 
-/// Translate one authored page (module docs' `{P}`/`{L}`/`\n` convention)
-/// into a decoded [`Token`] stream, terminated with [`Token::End`].
+/// Translate one authored page (module docs' `{P}`/`{L}`/`{PAUSE n}`/`\n`
+/// convention) into a decoded [`Token`] stream, terminated with
+/// [`Token::End`].
 fn parse_page(text: &str) -> Vec<Token> {
     let mut tokens = Vec::new();
     let mut chars = text.chars().peekable();
@@ -152,20 +148,32 @@ fn parse_page(text: &str) -> Vec<Token> {
         match c {
             '\n' => tokens.push(Token::Newline),
             '{' => {
-                let marker: String = chars.clone().take(2).collect();
+                // Collect up to (and past) the matching `}` so a
+                // variable-length marker like `PAUSE 96` -- unlike the
+                // fixed two-character `P}`/`L}` -- parses the same way.
+                let marker: String = chars.by_ref().take_while(|&c| c != '}').collect();
                 match marker.as_str() {
-                    "P}" => {
-                        chars.by_ref().take(2).for_each(drop);
-                        tokens.push(Token::PromptClear);
+                    "P" => tokens.push(Token::PromptClear),
+                    "L" => tokens.push(Token::PromptScroll),
+                    _ => {
+                        if let Some(frames) = marker.strip_prefix("PAUSE ") {
+                            let frames: u8 = frames.parse().unwrap_or_else(|err| {
+                                panic!("bad {{PAUSE}} marker {marker:?}: {err}")
+                            });
+                            tokens.push(Token::ExtCtrl {
+                                sub: EXT_CTRL_CODE_PAUSE,
+                                args: vec![frames],
+                            });
+                        } else {
+                            // No other `{...}` marker appears in this
+                            // module's authored pages; a literal `{`
+                            // (never used above) would otherwise fall
+                            // through here unchanged, marker and all.
+                            tokens.push(Token::Char('{'));
+                            tokens.extend(marker.chars().map(Token::Char));
+                            tokens.push(Token::Char('}'));
+                        }
                     }
-                    "L}" => {
-                        chars.by_ref().take(2).for_each(drop);
-                        tokens.push(Token::PromptScroll);
-                    }
-                    // No other `{...}` marker appears in this module's
-                    // authored pages; a literal `{` (never used above)
-                    // would otherwise fall through here unchanged.
-                    _ => tokens.push(Token::Char('{')),
                 }
             }
             other => tokens.push(Token::Char(other)),

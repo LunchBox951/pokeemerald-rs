@@ -10,7 +10,7 @@
 
 use assets::fonts::{FontId, OwnedFontGlyphSheet};
 use assets::pack::AssetPack;
-use engine::text::render::{Printer, RevealedGlyph, TextSpeed, TickEvent};
+use engine::text::render::{Printer, PrinterInput, RevealedGlyph, TextSpeed, TickEvent};
 use engine::text::window as msgwin;
 use engine::text::Token;
 use platform::{ButtonState, Buttons};
@@ -144,7 +144,7 @@ impl StartMenuChrome {
         let mut printer = Printer::new(tokens, self.sheet.sheet(), TextSpeed::Instant, (0, 0));
         let mut glyphs = Vec::new();
         for _ in 0..=ticks {
-            match printer.tick(false) {
+            match printer.tick(PrinterInput::none()) {
                 TickEvent::Glyph(g) => glyphs.push(*g),
                 TickEvent::Finished => break,
                 _ => {}

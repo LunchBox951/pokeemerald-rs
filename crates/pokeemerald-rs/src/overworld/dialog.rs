@@ -17,7 +17,7 @@
 
 use assets::fonts::{FontId, OwnedFontGlyphSheet};
 use assets::pack::{AssetPack, PackError};
-use engine::text::render::{Printer, RevealedGlyph, TextSpeed, TickEvent};
+use engine::text::render::{Printer, PrinterInput, RevealedGlyph, TextSpeed, TickEvent};
 use engine::text::window::MessageBoxLayout;
 use engine::text::Token;
 use rendering::Framebuffer;
@@ -187,7 +187,17 @@ impl NpcDialog {
         if self.finished {
             return DialogOutcome::Closed;
         }
-        match self.printer.tick(confirm_pressed) {
+        // This box never opts into held-A/B print speed-up (`Printer::new`'s
+        // own default, matching the standard field message box -- module
+        // docs), so only the confirm edge matters; held state is left
+        // false, same as passing a bare bool used to mean before issue #393.
+        let input = PrinterInput {
+            a_pressed: confirm_pressed,
+            b_pressed: false,
+            a_held: false,
+            b_held: false,
+        };
+        match self.printer.tick(input) {
             TickEvent::Glyph(g) => self.revealed.push(*g),
             TickEvent::Cleared => self.revealed.clear(),
             TickEvent::Scrolling { dy } => {
@@ -200,7 +210,9 @@ impl NpcDialog {
             | TickEvent::AwaitingScroll
             | TickEvent::ScrollStarted
             | TickEvent::ScrollFinished
-            | TickEvent::AwaitingClear => {}
+            | TickEvent::AwaitingClear
+            | TickEvent::Paused
+            | TickEvent::PauseFinished => {}
         }
 
         if self.finished {

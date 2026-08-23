@@ -53,27 +53,36 @@
 //!   `PlaySE` call in the task chain are silent here (no audio wiring in
 //!   this slice).
 //!
-//! # Advance and skip
+//! # Advance (issue #393)
 //!
-//! [`IntroScene::tick`] takes two per-frame button edges: `confirm_pressed`
-//! (upstream's A-button `JOY_NEW` check inside
-//! `TextPrinterWaitWithDownArrow`, which both `\p` and `\l` wait on) and
-//! `skip_pressed` -- a pre-1.0 development convenience with **no upstream
-//! analogue**, recorded here as a pre-1.0 divergence; `V-7`/`H-1`
-//! (`docs/acceptance/v1.md`) are what catch it if it survives to
-//! `v1.0.0.0`. Real Emerald's
-//! intro cannot be skipped outright; the closest it gets is
-//! `WhatsYourName`'s own wait state also accepting B (`main_menu.c:1590`).
-//! Since this slice does not model the naming/gender UI yet, a full-intro
-//! skip does not skip anything upstream would have made interactive -- it
-//! only lets a player (or a test) reach the overworld without re-confirming
-//! all eight pages. Wired to the B button in [`crate::app`].
+//! [`IntroScene::tick`] takes one [`PrinterInput`] per frame -- newly-pressed
+//! and held A/B, forwarded straight to the underlying
+//! [`Printer::tick`](engine::text::render::Printer::tick) -- and no separate
+//! skip input. Real Emerald's intro cannot be skipped outright: B is an
+//! ordinary dialogue-advance button, not a whole-intro shortcut (upstream
+//! `JOY_NEW(A_BUTTON | B_BUTTON)` inside `TextPrinterWaitWithDownArrow`,
+//! `pokeemerald/src/text.c:874-879`, which both `\p` and `\l` wait on --
+//! either button clears/scrolls a page identically, module docs on
+//! [`engine::text::render::Printer::tick`]). An earlier pre-1.0 revision of
+//! this scene wired B to a `skip_pressed` shortcut with no upstream
+//! analogue at all; issue #393 deleted it once `V-7`/`H-1`
+//! (`docs/acceptance/v1.md`) flagged it as a dev convenience that had
+//! survived into production code. The closest real Emerald gets to a B
+//! shortcut is `WhatsYourName`'s own wait state also accepting B
+//! (`main_menu.c:1590`) -- ordinary dialogue-advance, exactly what this
+//! scene now does.
+//!
+//! The intro's own [`Printer`] opts into upstream's held-A/B print
+//! speed-up (`AddTextPrinterForMessage(TRUE)`, `main_menu.c:1339`) via
+//! [`Printer::with_ab_speed_up_print`] -- see that method's docs and
+//! [`engine::text::render`]'s own "Held-A/B print speed-up" module docs for
+//! the exact semantics.
 
 mod speech;
 
 use assets::fonts::{FontId, OwnedFontGlyphSheet};
 use assets::pack::{AssetPack, PackError};
-use engine::text::render::{Printer, RevealedGlyph, TextSpeed, TickEvent};
+use engine::text::render::{Printer, PrinterInput, RevealedGlyph, TextSpeed, TickEvent};
 use engine::text::window::MessageBoxLayout;
 use engine::text::Token;
 use rendering::{Framebuffer, Rgb888};
@@ -150,13 +159,12 @@ impl IntroSceneError {
 }
 
 /// Whether the intro is still running or has handed off to the overworld
-/// (module docs' "Advance and skip").
+/// (module docs' "Advance" section).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IntroStatus {
     /// More pages remain (or the current one is still printing/paging).
     Continue,
-    /// Every page finished, or [`IntroScene::tick`] was called with
-    /// `skip_pressed`. The caller should transition to the overworld.
+    /// Every page finished. The caller should transition to the overworld.
     Finished,
 }
 
@@ -203,7 +211,11 @@ impl IntroScene {
     #[must_use]
     pub(crate) fn new(sheet: OwnedFontGlyphSheet, frame: FrameAssets, speed: TextSpeed) -> Self {
         let pages = speech::pages();
-        let printer = Printer::new(pages[0].clone(), sheet, speed, PRINTER_ORIGIN);
+        // Upstream's `AddTextPrinterForMessage(TRUE)` (`main_menu.c:1339`):
+        // Birch's speech is the one printer in this port with held-A/B
+        // speed-up enabled (module docs' "Advance" section).
+        let printer =
+            Printer::new(pages[0].clone(), sheet, speed, PRINTER_ORIGIN).with_ab_speed_up_print();
         Self {
             frame,
             pages,
@@ -242,8 +254,7 @@ impl IntroScene {
         self.page_index
     }
 
-    /// Whether every page has finished (or [`IntroScene::tick`] was ever
-    /// called with `skip_pressed`).
+    /// Whether every page has finished.
     #[must_use]
     pub const fn is_finished(&self) -> bool {
         self.finished
@@ -259,25 +270,18 @@ impl IntroScene {
 
     /// Advance the intro by exactly one frame.
     ///
-    /// `confirm_pressed` is the A-button just-pressed edge, forwarded
-    /// straight to the current page's [`Printer::tick`] (module docs).
-    /// `skip_pressed` is the pre-1.0 development whole-intro skip, a
-    /// recorded pre-1.0 divergence that must not survive to `v1.0.0.0`
-    /// (module docs) -- once
-    /// [`IntroStatus::Finished`] is returned, every further call returns it
-    /// again without doing anything (mirrors
+    /// `input` is this frame's A/B edges and holds, forwarded straight to
+    /// the current page's [`Printer::tick`] (module docs' "Advance"
+    /// section) -- once [`IntroStatus::Finished`] is returned, every further
+    /// call returns it again without doing anything (mirrors
     /// [`engine::text::render::Printer::is_finished`]'s own terminal
     /// contract).
-    pub fn tick(&mut self, confirm_pressed: bool, skip_pressed: bool) -> IntroStatus {
+    pub fn tick(&mut self, input: PrinterInput) -> IntroStatus {
         if self.finished {
             return IntroStatus::Finished;
         }
-        if skip_pressed {
-            self.finished = true;
-            return IntroStatus::Finished;
-        }
 
-        match self.printer.tick(confirm_pressed) {
+        match self.printer.tick(input) {
             TickEvent::Glyph(g) => self.revealed.push(*g),
             TickEvent::Cleared => self.revealed.clear(),
             TickEvent::Scrolling { dy } => {
@@ -290,7 +294,9 @@ impl IntroScene {
             | TickEvent::AwaitingScroll
             | TickEvent::ScrollStarted
             | TickEvent::ScrollFinished
-            | TickEvent::AwaitingClear => {}
+            | TickEvent::AwaitingClear
+            | TickEvent::Paused
+            | TickEvent::PauseFinished => {}
         }
 
         if self.finished {
@@ -360,13 +366,22 @@ pub fn load_default() -> Result<IntroScene, IntroSceneError> {
     IntroScene::from_pack(&pack)
 }
 
-/// Test-only: an [`IntroScene`] already at [`IntroStatus::Finished`] (via
-/// the skip path), built the same synthetic way [`tests`]'s own fixtures
-/// are -- a blank glyph sheet plus a blank dialogue frame, no local pack
-/// needed -- so [`crate::flow`]'s own tests can put one straight into an
+/// Test-only: an [`IntroScene`] already at [`IntroStatus::Finished`], built
+/// the same synthetic way [`tests`]'s own fixtures are -- a blank glyph
+/// sheet plus a blank dialogue frame, no local pack needed -- so
+/// [`crate::flow`]'s own tests can put one straight into an
 /// [`crate::flow::AppScene::Intro`], the same shape [`load_default`] would
 /// hand [`crate::flow::advance_scene`]. Fully owned, like every real scene
 /// ([`IntroScene`]'s struct docs): nothing leaked, nothing `'static`.
+///
+/// Drives the real page-by-page advance to completion (module docs'
+/// "Advance" section -- there is no shortcut past it since issue #393
+/// deleted the pre-1.0 whole-intro B-skip this helper used to take): at
+/// [`TextSpeed::Instant`] every glyph reveals in one tick and every
+/// `\p`/`\l` wait resolves on the very next confirmed one, so this
+/// terminates in well under the bound, mirroring
+/// [`tests::confirming_every_frame_advances_through_every_page_to_the_overworld_handoff`]'s
+/// identical loop shape.
 #[cfg(test)]
 pub(crate) fn synthetic_finished_scene() -> IntroScene {
     use assets::fonts::FontImageRef;
@@ -390,7 +405,19 @@ pub(crate) fn synthetic_finished_scene() -> IntroScene {
         palette: vec![Rgb888::BLACK; 16],
     };
     let mut scene = IntroScene::new(sheet, frame, TextSpeed::Instant);
-    let status = scene.tick(false, true); // the skip path -> immediately Finished.
+    let confirm_a = PrinterInput {
+        a_pressed: true,
+        b_pressed: false,
+        a_held: true,
+        b_held: false,
+    };
+    let mut status = IntroStatus::Continue;
+    for _ in 0..5000 {
+        status = scene.tick(confirm_a);
+        if status == IntroStatus::Finished {
+            break;
+        }
+    }
     debug_assert_eq!(status, IntroStatus::Finished);
     scene
 }
