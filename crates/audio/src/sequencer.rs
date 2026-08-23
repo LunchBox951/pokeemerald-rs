@@ -21,7 +21,7 @@
 //! [`Sequencer::note_priority`]), which drives [`crate::mixer::Mixer`]'s
 //! channel reuse/steal/refuse search.
 //!
-//! `MEMACC` is executed too (`ply_memacc`, `m4a.c:1437`..`:1509`): see
+//! `MEMACC` is executed too (`ply_memacc`, `m4a.c:1437`..`:1521`): see
 //! [`Self::exec_memacc`] for the op table, the accumulator area's ownership
 //! (one per [`Sequencer`], [`MemAccArea`]'s docs), and its fail-safe
 //! out-of-range handling.
@@ -70,7 +70,7 @@ const MAX_COMMANDS_PER_TICK: u32 = 4096;
 const MEM_ACC_LEN: usize = 16;
 
 /// The `MEMACC` accumulator area: 16 byte cells `MEMACC` ops read and write
-/// (`ply_memacc`, `m4a.c:1437`..`:1509`).
+/// (`ply_memacc`, `m4a.c:1437`..`:1521`).
 ///
 /// # Divergence: one private area per [`Sequencer`], not one shared global
 ///
@@ -603,7 +603,7 @@ impl Sequencer {
         }
     }
 
-    /// `ply_memacc` (`m4a.c:1437`..`:1509`): execute one `MEMACC` op against
+    /// `ply_memacc` (`m4a.c:1437`..`:1521`): execute one `MEMACC` op against
     /// the shared accumulator area.
     ///
     /// `op` `0..=5` mutate a cell and never branch; `op` `6..=17` compare a
@@ -1352,7 +1352,7 @@ mod tests {
         assert!(!seq.is_finished());
     }
 
-    // --- MEMACC (`ply_memacc`, `m4a.c:1437`..`:1509`) ----------------------
+    // --- MEMACC (`ply_memacc`, `m4a.c:1437`..`:1521`) ----------------------
     //
     // The accumulator has no public accessor (upstream has none either —
     // `mplayInfo->memAccArea` is only ever read back by a later `MEMACC`),
@@ -1419,14 +1419,27 @@ mod tests {
     #[test]
     fn memacc_set_then_eq_does_not_take_the_branch_when_unequal() {
         // Same cell state, but compared against a different literal: the
-        // same `mem_beq` op must now fall through to `Fine`.
-        let prelude = vec![Event::MemAcc {
-            op: 0,
-            addr: 0,
-            value: 5,
-            target: None,
-        }];
-        assert!(!memacc_branch_taken(prelude, 6, 0, 6));
+        // same `mem_beq` op must now fall through to `Fine`. *Both*
+        // directions of "unequal" are checked, because one alone leaves `==`
+        // indistinguishable from the inequality that agrees with it on the
+        // equal boundary and on that one side (`>=` if only the below-data
+        // row existed, `<=` if only the above-data one did).
+        let prelude = || {
+            vec![Event::MemAcc {
+                op: 0,
+                addr: 0,
+                value: 5,
+                target: None,
+            }]
+        };
+        assert!(
+            !memacc_branch_taken(prelude(), 6, 0, 6),
+            "5 == 6 should not take mem_beq (cell below data; rules out `<=`/`<`)"
+        );
+        assert!(
+            !memacc_branch_taken(prelude(), 6, 0, 4),
+            "5 == 4 should not take mem_beq (cell above data; rules out `>=`/`>`)"
+        );
     }
 
     #[test]
@@ -1547,7 +1560,9 @@ mod tests {
 
     #[test]
     fn memacc_hi_comparison_takes_and_does_not_take() {
-        // mem_set cell0 = 10; mem_bhi covers both directions of the same op.
+        // `mem_bhi` (op 8) is a strict `>`. Three rows: above, equal, and
+        // below the data operand. The below-data row is what separates `>`
+        // from `!=`, which agrees with it on the other two.
         let prelude = || {
             vec![Event::MemAcc {
                 op: 0,
@@ -1562,7 +1577,11 @@ mod tests {
         );
         assert!(
             !memacc_branch_taken(prelude(), 8, 0, 10),
-            "10 > 10 should not take mem_bhi"
+            "10 > 10 should not take mem_bhi (>, not >=)"
+        );
+        assert!(
+            !memacc_branch_taken(prelude(), 8, 0, 11),
+            "10 > 11 should not take mem_bhi (cell below data; rules out `!=`)"
         );
     }
 
@@ -1621,7 +1640,9 @@ mod tests {
     #[test]
     fn memacc_ne_comparison_takes_and_does_not_take() {
         // `mem_bne` (op 7). The not-taken case is the *equal* boundary, so
-        // this fails if `!=` were ever written as `==`.
+        // this fails if `!=` were ever written as `==`. Both unequal
+        // directions are taken cases: with only the above-data one, `>`
+        // would still pass every row.
         let prelude = || {
             vec![Event::MemAcc {
                 op: 0,
@@ -1635,6 +1656,10 @@ mod tests {
             "10 != 5 should take mem_bne"
         );
         assert!(
+            memacc_branch_taken(prelude(), 7, 0, 11),
+            "10 != 11 should take mem_bne (cell below data; rules out `>`/`>=`)"
+        );
+        assert!(
             !memacc_branch_taken(prelude(), 7, 0, 10),
             "10 != 10 should not take mem_bne"
         );
@@ -1644,7 +1669,8 @@ mod tests {
     fn memacc_hs_comparison_includes_the_equal_boundary() {
         // `mem_bhs` (op 9) is `>=`. Taking at the equal boundary is what
         // separates it from `mem_bhi`'s `>`; not taking one below separates
-        // it from `mem_bls`'s `<=`.
+        // it from `mem_bls`'s `<=`; taking one *above* separates it from
+        // `mem_beq`'s `==`, which agrees with it on the other two rows.
         let prelude = || {
             vec![Event::MemAcc {
                 op: 0,
@@ -1658,6 +1684,10 @@ mod tests {
             "10 >= 10 should take mem_bhs (>=, not >)"
         );
         assert!(
+            memacc_branch_taken(prelude(), 9, 0, 5),
+            "10 >= 5 should take mem_bhs (cell above data; rules out `==`)"
+        );
+        assert!(
             !memacc_branch_taken(prelude(), 9, 0, 11),
             "10 >= 11 should not take mem_bhs"
         );
@@ -1667,7 +1697,8 @@ mod tests {
     fn memacc_ls_comparison_includes_the_equal_boundary() {
         // `mem_bls` (op 10) is `<=`. Taking at the equal boundary separates
         // it from `mem_blo`'s `<`; not taking one above separates it from
-        // `mem_bhs`'s `>=`.
+        // `mem_bhs`'s `>=`; taking one *below* separates it from
+        // `mem_beq`'s `==`, which agrees with it on the other two rows.
         let prelude = || {
             vec![Event::MemAcc {
                 op: 0,
@@ -1681,6 +1712,10 @@ mod tests {
             "10 <= 10 should take mem_bls (<=, not <)"
         );
         assert!(
+            memacc_branch_taken(prelude(), 10, 0, 11),
+            "10 <= 11 should take mem_bls (cell below data; rules out `==`)"
+        );
+        assert!(
             !memacc_branch_taken(prelude(), 10, 0, 9),
             "10 <= 9 should not take mem_bls"
         );
@@ -1689,7 +1724,9 @@ mod tests {
     #[test]
     fn memacc_lo_comparison_excludes_the_equal_boundary() {
         // `mem_blo` (op 11) is a strict `<`: the equal boundary must not
-        // take, which is what separates it from `mem_bls`'s `<=`.
+        // take, which is what separates it from `mem_bls`'s `<=`. The
+        // above-data row separates it from `!=`, which agrees with it on the
+        // other two.
         let prelude = || {
             vec![Event::MemAcc {
                 op: 0,
@@ -1706,6 +1743,10 @@ mod tests {
             !memacc_branch_taken(prelude(), 11, 0, 10),
             "10 < 10 should not take mem_blo (<, not <=)"
         );
+        assert!(
+            !memacc_branch_taken(prelude(), 11, 0, 5),
+            "10 < 5 should not take mem_blo (cell above data; rules out `!=`)"
+        );
     }
 
     #[test]
@@ -1714,9 +1755,20 @@ mod tests {
         // *cell index* rather than a literal. Each case below sets cell0 to
         // 10 and cell1 to `other`, then compares cell0 against cell1.
         //
-        // Every op gets a taken case and a not-taken case chosen at the
-        // boundary that distinguishes it from its nearest neighbour, so
-        // swapping any of `==`/`!=`/`>`/`>=`/`<=`/`<` fails at least one row.
+        // Every op gets all three orderings of cell0 against cell1 — below,
+        // equal, above — because the six relations are pairwise separated
+        // only by their full three-row truth vectors: `==` is
+        // `(F, T, F)`, `!=` `(T, F, T)`, `>` `(F, F, T)`, `>=` `(F, T, T)`,
+        // `<=` `(T, T, F)` and `<` `(T, F, F)` over (below, equal, above).
+        // Every pair differs in at least one column, so rewriting any op as
+        // any other relation fails at least one row here — checked by
+        // mutation, not just argued: all 30 swaps (each of ops 12..=17
+        // rewritten as each of the other five relations) fail this test.
+        // The literal-operand ops 6..=11 above are pinned the same way,
+        // three orderings each, and their 30 swaps all fail too. Two rows
+        // per op was *not* enough: it left one survivor per op, since a
+        // taken/not-taken pair straddling one boundary cannot tell an op
+        // apart from the relation that agrees with it on both rows.
         let prelude = |other: u8| {
             vec![
                 Event::MemAcc {
@@ -1734,20 +1786,35 @@ mod tests {
             ]
         };
         // (op, cell1, expected-taken, what the row pins down)
-        let cases: [(u8, u8, bool, &str); 12] = [
-            (12, 10, true, "mem_mem_beq: 10 == 10 takes"),
+        let cases: [(u8, u8, bool, &str); 18] = [
             (12, 11, false, "mem_mem_beq: 10 == 11 does not take"),
+            (12, 10, true, "mem_mem_beq: 10 == 10 takes"),
+            (
+                12,
+                5,
+                false,
+                "mem_mem_beq: 10 == 5 does not take (not `>=`)",
+            ),
             (13, 11, true, "mem_mem_bne: 10 != 11 takes"),
             (13, 10, false, "mem_mem_bne: 10 != 10 does not take"),
-            (14, 5, true, "mem_mem_bhi: 10 > 5 takes"),
+            (13, 5, true, "mem_mem_bne: 10 != 5 takes (not `<`)"),
+            (
+                14,
+                11,
+                false,
+                "mem_mem_bhi: 10 > 11 does not take (not `!=`)",
+            ),
             (
                 14,
                 10,
                 false,
                 "mem_mem_bhi: 10 > 10 does not take (>, not >=)",
             ),
-            (15, 10, true, "mem_mem_bhs: 10 >= 10 takes (>=, not >)"),
+            (14, 5, true, "mem_mem_bhi: 10 > 5 takes"),
             (15, 11, false, "mem_mem_bhs: 10 >= 11 does not take"),
+            (15, 10, true, "mem_mem_bhs: 10 >= 10 takes (>=, not >)"),
+            (15, 5, true, "mem_mem_bhs: 10 >= 5 takes (not `==`)"),
+            (16, 11, true, "mem_mem_bls: 10 <= 11 takes (not `==`)"),
             (16, 10, true, "mem_mem_bls: 10 <= 10 takes (<=, not <)"),
             (16, 9, false, "mem_mem_bls: 10 <= 9 does not take"),
             (17, 11, true, "mem_mem_blo: 10 < 11 takes"),
@@ -1757,6 +1824,7 @@ mod tests {
                 false,
                 "mem_mem_blo: 10 < 10 does not take (<, not <=)",
             ),
+            (17, 5, false, "mem_mem_blo: 10 < 5 does not take (not `!=`)"),
         ];
         for (op, other, expected, why) in cases {
             assert_eq!(
@@ -1773,8 +1841,9 @@ mod tests {
         // (`memacc_out_of_range_mem_cell_index_is_a_safe_no_op` covers only
         // the writing arm, op 3). cell0 is 10 and cell index 200 is past the
         // 16-cell area, so there is no second operand to compare: every one
-        // of ops 12..=17 must fail safe as "not taken" and fall through to
-        // `Fine`, never panic and never guess a value.
+        // of ops 12..=17 must fail safe rather than panic, falling through
+        // as "not taken", exactly like a `false` comparison (`exec_memacc`'s
+        // "Fail-safe out-of-range handling") — so the track reaches `Fine`.
         for op in 12..=17 {
             let prelude = vec![Event::MemAcc {
                 op: 0,

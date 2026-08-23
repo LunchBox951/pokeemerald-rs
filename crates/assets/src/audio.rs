@@ -118,12 +118,16 @@
 //!   `.mid`-sourced song can contain one. A ROM backend decompiling
 //!   hand-written sequence data is the only way either could appear.
 //! - `MEMACC` is *not* deferred (review finding on #193): exactly one
-//!   canonical song carries it (`mus_vs_trainer`'s conditional jump), but a
-//!   shared pack contract that cannot represent a canonical song would
-//!   force that backend to drop the branch or lower it to an unconditional
-//!   [`song::SongEvent::Goto`] — either audibly changes the trainer theme.
+//!   canonical song carries it — `mus_vs_trainer` issues a single
+//!   unconditional `mem_set` (op `0`, cell `0`, data `117`), and no
+//!   branching `mem_b*` op appears anywhere in shipped data. A shared pack
+//!   contract that cannot represent a canonical song would force a backend
+//!   to drop that write, so a byte-faithful pack has to carry the `MEMACC`
+//!   rather than lower it away.
 //!   [`song::SongEvent::MemAcc`]/[`song::SongEvent::MemAccBranch`] model
-//!   the full `mem_*` op table (`sound/MPlayDef.s:410-427`).
+//!   the full `mem_*` op table (`sound/MPlayDef.s:410-427`) — including the
+//!   branch family, because that is the op family the format defines, not
+//!   because shipped data uses one.
 //! - `XCMD` sub-commands other than `xIECV`/`xIECL` (ext cmds `8`/`9`):
 //!   `mid2agb`'s `PrintExtendedOp` handles only those two and drops the
 //!   rest (`// TODO: support for other extended commands`), so no other
