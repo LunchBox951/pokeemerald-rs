@@ -326,4 +326,42 @@ mod tests {
             }
         );
     }
+
+    /// Issue #379: the relocated player's elevation must already be the
+    /// heal-location tile's own real elevation the instant [`white_out`]
+    /// returns, before any step ever runs -- not the `ELEVATION_TRANSITION`
+    /// wildcard [`OverworldPhase::warp_to_position`] used to hardcode.
+    /// [`crate::new_game::default_last_heal_location`]'s male default names
+    /// `(4, 2)` on the default player's house 2F, which is elevation `3` in
+    /// the real bundled layout -- confirmed by this test rather than merely
+    /// asserted, since a fixture that stopped matching the real tile would
+    /// otherwise pass vacuously. Both
+    /// [`engine::overworld::PlayerState::elevation`] and
+    /// [`engine::overworld::PlayerState::previous_elevation`] must read `3`:
+    /// [`engine::overworld::PlayerState::new`]'s own doc comment records
+    /// that a freshly placed player starts both fields equal.
+    #[test]
+    #[ignore = "needs a local pack: run `cargo xtask extract` first"]
+    fn real_pack_white_out_relocation_adopts_the_heal_locations_elevation_before_any_movement() {
+        let mut phase = OverworldPhase::load_default().expect("run `cargo xtask extract` first");
+        let heal_location = phase.save1.last_heal_location;
+        assert_eq!(
+            (heal_location.x, heal_location.y),
+            (4, 2),
+            "setup: the default save's own male heal-location default"
+        );
+
+        phase.white_out();
+
+        assert_eq!(
+            phase.player.elevation(),
+            3,
+            "the heal-location tile's own real elevation, not the transition wildcard"
+        );
+        assert_eq!(
+            phase.player.previous_elevation(),
+            3,
+            "a freshly placed player's previous elevation starts equal to its current one"
+        );
+    }
 }
