@@ -1472,8 +1472,9 @@ fn a_slot_that_will_not_decode_survives_an_ordinary_save() {
 /// stale bytes (issue #353 review, requirement 2) -- the state a bug in a
 /// future retention path could leave behind. Reproduces the shape of
 /// `OverworldPhase::load_default`'s provisional-starter grant -- the
-/// flag's only production transition outside the load path -- without the
-/// asset pack a real `load_default` call needs.
+/// flag's only production write site outside the load path, and a no-op
+/// one at that (`false` onto `false`) -- without the asset pack a real
+/// `load_default` call needs.
 ///
 /// `copy_party_and_objects_to_save`'s merge arm is gated on `party_lead`
 /// being `Some` and is checked before the retained-undecodable flag is
@@ -1487,8 +1488,16 @@ fn a_deliberate_identity_change_overrides_a_retained_undecodable_slot() {
     let dex = battle::Dex::new();
 
     let mut phase = new_game_phase();
-    // The state a stray retention bug would leave behind: an old,
-    // undecodable-looking slot 0 and a set flag.
+    // The state a stray retention bug would leave behind: a stale slot 0
+    // that is not this identity's record, and a set flag. `BoxPokemon::new`
+    // writes a *valid* checksum over default (SPECIES_NONE) substructures,
+    // so these bytes are not the checksum-failure case: what disqualifies
+    // them from being merged onto is `party::backing_substructures`' first
+    // test, the personality/OT id disagreement
+    // (`NotTheBattlersRecord::DifferentPokemon`), which is checked before
+    // the checksum is ever read. Either reason lands on the same fallback
+    // -- rebuild slot 0 from the battler alone -- which is what the
+    // assertions below pin.
     let garbage = Pokemon {
         box_data: BoxPokemon::new(0xDEAD_BEEF, 0xCAFE_F00D),
         hp: 1,
@@ -1512,9 +1521,10 @@ fn a_deliberate_identity_change_overrides_a_retained_undecodable_slot() {
     let saved = slot.load().block1;
     let expected = crate::party::to_save_pokemon(&dex, &starter);
     assert_eq!(
-        saved.player_party[0].box_data.personality(),
-        expected.box_data.personality(),
-        "the fresh identity's own record is written, not the stale garbage bytes"
+        saved.player_party[0], expected,
+        "the fresh identity's own record is written whole -- every byte the \
+         from-scratch `to_save_pokemon` record carries, not the stale garbage \
+         bytes and not a partial merge of the two"
     );
     assert_ne!(
         saved.player_party[0].box_data.personality(),

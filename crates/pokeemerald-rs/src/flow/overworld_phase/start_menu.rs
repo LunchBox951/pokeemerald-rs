@@ -212,13 +212,25 @@ impl OverworldPhase {
     /// writes `gSaveBlock1Ptr->playerPartyCount = gPlayerPartyCount`
     /// unconditionally (`load_save.c:160-168`) and its `LoadPlayerParty`
     /// (`:170-178`) reads that same count straight back with no validation
-    /// step that could reject a slot -- there is no code path upstream
-    /// where a nonzero count and an undecodable slot 0 coexist after a
-    /// `SavePlayerParty`/`LoadPlayerParty` round trip, because upstream's
-    /// "decode" is a `memcpy` that cannot fail. This port's decode *can*
-    /// fail (`party::from_save_pokemon`'s own docs), and when it does, the
-    /// honest upstream-shaped answer is the count upstream would have
-    /// carried through that same memcpy: whatever was already there. See
+    /// step that could reject a slot. Upstream *does* reach the state this
+    /// arm is about -- a nonzero count over a slot 0 whose secure bytes do
+    /// not check out -- and it reaches it by the Bad Egg path: when
+    /// `CalculateBoxMonChecksum` disagrees with the stored checksum,
+    /// `GetBoxMonData`/`SetBoxMonData` set `boxMon->isBadEgg = TRUE`
+    /// (`pokeemerald/src/pokemon.c:3742-3744` and `:4167-4169`) and leave
+    /// that mon sitting in `gPlayerParty` with `gPlayerPartyCount`
+    /// unchanged (this port's [`party::PartyError::Substructures`] names
+    /// the same upstream behaviour). What upstream then does with it is
+    /// *preserve* it: the wholesale `gSaveBlock1Ptr->playerParty[i] =
+    /// gPlayerParty[i]` copy round-trips a Bad Egg's bytes with the count
+    /// intact, and `LoadPlayerParty` performs no validation, so the count
+    /// rides through the next load too. That is a stronger justification
+    /// for retention than an absent state would be: keeping both the
+    /// bytes and the count *is* upstream's answer to a slot whose checksum
+    /// failed. This port's decode is a real decode and can refuse
+    /// (`party::from_save_pokemon`'s own docs); when it does, the
+    /// upstream-shaped answer is the count upstream's copy would have
+    /// carried through: whatever was already there. See
     /// [`OverworldPhase::copy_party_and_objects_from_save`] for where the
     /// count is read back on the next load, still unconditionally.
     ///
