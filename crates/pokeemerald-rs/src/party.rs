@@ -556,21 +556,42 @@ pub(crate) fn merge_into_save_pokemon(
 fn backing_substructures(
     mon: &BattlePokemon,
     base: &Pokemon,
-) -> Result<PokemonSubstructures, &'static str> {
+) -> Result<PokemonSubstructures, NotTheBattlersRecord> {
     if base.box_data.personality() != mon.personality()
         || base.box_data.ot_id() != mon.original_trainer_id()
     {
-        return Err("holds a different Pokémon (personality or OT id)");
+        return Err(NotTheBattlersRecord::DifferentPokemon);
     }
     let substructures = base
         .box_data
         .substructures()
-        .map_err(|_| "failed its own checksum")?;
+        .map_err(|_| NotTheBattlersRecord::ChecksumFailed)?;
     let species = u16::from_le_bytes([substructures.growth[0], substructures.growth[1]]);
     if species == SPECIES_NONE {
-        return Err("is empty");
+        return Err(NotTheBattlersRecord::Empty);
     }
     Ok(substructures)
+}
+
+/// Why a slot's bytes are not the battler's own record to overlay onto --
+/// [`backing_substructures`]'s three disqualifiers, formatted only at
+/// [`merge_into_save_pokemon`]'s logging boundary, where each variant
+/// completes the "party slot 0 ..." sentence.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NotTheBattlersRecord {
+    DifferentPokemon,
+    ChecksumFailed,
+    Empty,
+}
+
+impl core::fmt::Display for NotTheBattlersRecord {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str(match self {
+            Self::DifferentPokemon => "holds a different Pokémon (personality or OT id)",
+            Self::ChecksumFailed => "failed its own checksum",
+            Self::Empty => "is empty",
+        })
+    }
 }
 
 /// `LoadPlayerParty`'s per-mon half (`src/load_save.c:170-178`): the battler
