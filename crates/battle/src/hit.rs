@@ -37,8 +37,10 @@
 //! immunity), and 7 once at the end. [`resolve_hit`] is the composition of
 //! all three, i.e. `BattleScript_EffectHit` itself.
 //!
-//! So, **when `suppress_crit` is `false`** (every battle but a first
-//! battle — see below), one move resolution costs:
+//! So, **when `suppress_crit` is `false` and the defender carries neither
+//! Battle Armor nor Shell Armor** (every battle but a first battle, against
+//! every defender but an armored one — see below), one move resolution
+//! costs:
 //!
 //! | move | draws | which |
 //! |------|-------|-------|
@@ -65,7 +67,10 @@
 //! step 2 draw **nothing** as well. The defender's Battle Armor / Shell
 //! Armor is checked directly off `defender`
 //! ([`crate::ability::suppresses_critical_hits`], issue #391 — reachable via
-//! Anorith/Armaldo, species 390/391), so it needs no caller flag; there is
+//! Battle Armor's Kabuto/Kabutops and Anorith/Armaldo, species 140/141 and
+//! 390/391, and Shell Armor's Shellder/Cloyster, Krabby/Kingler, Lapras,
+//! Omanyte/Omastar, Corphish/Crawdaunt and Clamperl, species 90/91, 98/99,
+//! 131, 138/139, 326/327 and 373), so it needs no caller flag; there is
 //! still no `STATUS3_CANT_SCORE_A_CRIT` anywhere in this crate.
 //! `BATTLE_TYPE_WALLY_TUTORIAL` / `BATTLE_TYPE_FIRST_BATTLE` does, as of
 //! issue #187: [`crate::battle::Battle`]'s `first_battle` flag passes
@@ -76,9 +81,9 @@
 //! hit, **2** for a landed Struggle) and forces [`HitOutcome::Hit`]'s
 //! `is_critical` field to `false` regardless of what the dropped roll would
 //! have produced — see [`crate::critical`]'s module docs. (Serene Grace
-//! doubling `percentChance` in step 7 similarly cannot matter: no abilities,
-//! and the draw's value is discarded for every allow-listed move
-//! regardless.)
+//! doubling `percentChance` in step 7 similarly cannot matter: no Serene
+//! Grace is modelled — it is not one of [`crate::ability`]'s six — and the
+//! draw's value is discarded for every allow-listed move regardless.)
 //!
 //! # Which moves this pipeline may be handed
 //!
@@ -330,8 +335,8 @@ pub fn damage_before_roll(
 
     let (attack_stat, attack_stage) = attacker.attacking_stat(category);
     // Huge Power / Pure Power double the raw stat here, ahead of the
-    // stat-stage multiply [`crate::damage::base_damage`] applies below --
-    // see [`huge_power_attack`]'s docs for why that order is load-bearing.
+    // stat-stage multiply `crate::damage::base_damage` applies below --
+    // see `huge_power_attack`'s docs for why that order is load-bearing.
     let attack_stat = huge_power_attack(attacker.ability(), category, attack_stat);
     let (defense_stat, defense_stage) = defender.defending_stat(category);
     let (attack_stage, defense_stage) =

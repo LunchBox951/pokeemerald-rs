@@ -15,11 +15,13 @@
 //! player mon, both realistic for a first encounter), held items,
 //! non-volatile status conditions, and the Shedinja 1-HP special case in
 //! `CalculateMonStats`. Abilities are out of scope too, with one exception:
-//! [`BattlePokemon::ability`] (issues #321/#322), consumed by
+//! [`BattlePokemon::ability`] (issues #321/#322/#391), consumed by
 //! [`crate::stat_change`]'s ability guards (Clear Body, White Smoke, Keen
-//! Eye, Hyper Cutter) and by [`crate::ability`]'s two damage-formula
-//! checks (Overgrow's pinch boost, Liquid Ooze's drain inversion) — see
-//! those modules' docs for why the ability system stops there.
+//! Eye, Hyper Cutter) and by [`crate::ability`]'s six damage-path checks
+//! (Overgrow's pinch boost, Liquid Ooze's drain inversion, Battle Armor's
+//! and Shell Armor's crit suppression, Huge Power's and Pure Power's
+//! Attack doubling) — see those modules' docs for why the ability system
+//! stops there.
 //!
 //! Two concerns live in sibling modules rather than here, each because it is
 //! its own concept `(oop-boundaries)`: [`pp_bonuses`] owns the packed
@@ -527,8 +529,9 @@ impl BattlePokemon {
     /// hardening, not upstream's: `CreateBoxMon` never sets `abilityNum`
     /// for such a species (`:2296`-`:2300`), and construction mirrors that
     /// guard, so the fallback only matters for a save-loaded slot. Consumed
-    /// by [`crate::ability`]'s Overgrow/Liquid Ooze checks (issue #321) and
-    /// by [`crate::stat_change`]'s ability
+    /// by [`crate::ability`]'s six damage-path checks (issue #321:
+    /// Overgrow, Liquid Ooze; issue #391: Battle Armor, Shell Armor, Huge
+    /// Power, Pure Power) and by [`crate::stat_change`]'s ability
     /// guards (issue #322: Clear Body, White Smoke, Keen Eye, Hyper
     /// Cutter) — see this type's module docs for why the rest of the
     /// ability system stays out.

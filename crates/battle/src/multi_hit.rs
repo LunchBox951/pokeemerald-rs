@@ -29,7 +29,10 @@
 //! So a landed hit costs **2** ([`crate::hit::damage_core`]: crit + damage
 //! roll) around a fixed `1 + 1..2 + 1` of accuracy, hit count and effect
 //! chance. A 3-hit Double Slap costs **9 or 10**; a missed one costs **1**.
-//! Under `suppress_crit` each hit costs 1 instead of 2.
+//! Under either crit suppressor — the caller's `suppress_crit`, or a
+//! defender carrying Battle Armor / Shell Armor
+//! ([`crate::ability::suppresses_critical_hits`], issue #391) — each hit
+//! costs 1 instead of 2, so the same 3-hit Double Slap costs **6 or 7**.
 //!
 //! (`seteffectwithchance` running once at the end is also why Twineedle, the
 //! other user of this loop, poisons at most once rather than per hit — the

@@ -4,7 +4,7 @@
 //! The decomposition rule this slice follows (issue #311) is that an ability
 //! lands with the move family that makes it reachable, so widening move
 //! coverage can never quietly field a battler whose ability the engine
-//! ignores. Four abilities land this way:
+//! ignores. Four families — six abilities — land this way:
 //!
 //! - **Overgrow** — `CalculateBaseDamage`'s pinch boost
 //!   (`pokeemerald/src/pokemon.c:3219`-`:3220`), reachable the moment
@@ -21,8 +21,12 @@
 //!   whose first operand skips *both* the crit and its `Random()` draw
 //!   whenever the **defender** carries either: [`suppresses_critical_hits`],
 //!   read by [`crate::hit::damage_before_roll`] ahead of
-//!   [`crate::critical::crit_roll`]. Reachable via Anorith/Armaldo (species
-//!   390/391, `crates/assets/src/species.rs`).
+//!   [`crate::critical::crit_roll`]. Both carriers are reachable
+//!   (`crates/assets/src/species.rs`): Battle Armor via Kabuto/Kabutops and
+//!   Anorith/Armaldo (species 140/141, 390/391), Shell Armor via
+//!   Shellder/Cloyster, Krabby/Kingler, Lapras, Omanyte/Omastar,
+//!   Corphish/Crawdaunt and Clamperl (90/91, 98/99, 131, 138/139, 326/327,
+//!   373).
 //! - **Huge Power** / **Pure Power** — `CalculateBaseDamage`'s raw-stat
 //!   doubling (`pokeemerald/src/pokemon.c:3158`-`:3159`), applied to the
 //!   **attacker**'s Attack stat before the stat-stage multiply and only for
@@ -32,8 +36,8 @@
 //!   Reachable via Marill/Azumarill/Azurill (Huge Power, ability index 1)
 //!   and Meditite/Medicham (Pure Power, ability index 0).
 //!
-//! None of the four draws on its own — Battle Armor/Shell Armor *removes* a
-//! draw rather than making one. `AbilityBattleEffects` is not involved in
+//! None of the four families draws on its own — Battle Armor/Shell Armor
+//! *removes* a draw rather than making one. `AbilityBattleEffects` is not involved in
 //! any of them: Overgrow is an inline test inside the damage formula, Liquid
 //! Ooze is a battle-script `jumpifability`, and the armor/power pair are
 //! both inline tests inside `CalculateBaseDamage` itself — so there is still
@@ -163,7 +167,7 @@ pub fn suppresses_critical_hits(ability: AbilityId) -> bool {
 /// for a special move or any other ability.
 ///
 /// Upstream sets the local `attack` variable from the raw stat
-/// (`:3128`), doubles it here for either ability, and only *afterwards*
+/// (`:3129`), doubles it here for either ability, and only *afterwards*
 /// scales it by the attacker's stat stage inside `APPLY_STAT_MOD`
 /// (`:3238`-`:3244`). A caller must therefore double the raw stat before it
 /// reaches [`crate::damage::DamageInput::attack_stat`] — composing as
