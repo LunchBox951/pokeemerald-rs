@@ -1,9 +1,10 @@
-//! The two abilities issue #321's move pipelines expose, and nothing else.
+//! The four ability families that wire into the shared damage path, and
+//! nothing else: the two issue #321 exposed plus the two issue #391 closed.
 //!
 //! The decomposition rule this slice follows (issue #311) is that an ability
 //! lands with the move family that makes it reachable, so widening move
 //! coverage can never quietly field a battler whose ability the engine
-//! ignores. Two arrive with the four pipelines:
+//! ignores. Four abilities land this way:
 //!
 //! - **Overgrow** — `CalculateBaseDamage`'s pinch boost
 //!   (`pokeemerald/src/pokemon.c:3219`-`:3220`), reachable the moment
@@ -15,11 +16,28 @@
 //!   (`pokeemerald/data/battle_scripts_1.s:345`-`:349`), which turns the
 //!   drain heal into damage on the *attacker*: [`inverts_drain`], read by
 //!   [`crate::drain`].
+//! - **Battle Armor** / **Shell Armor** — `Cmd_critcalc`'s short-circuiting
+//!   `&&` chain (`pokeemerald/src/battle_script_commands.c:1279`-`:1283`),
+//!   whose first operand skips *both* the crit and its `Random()` draw
+//!   whenever the **defender** carries either: [`suppresses_critical_hits`],
+//!   read by [`crate::hit::damage_before_roll`] ahead of
+//!   [`crate::critical::crit_roll`]. Reachable via Anorith/Armaldo (species
+//!   390/391, `crates/assets/src/species.rs`).
+//! - **Huge Power** / **Pure Power** — `CalculateBaseDamage`'s raw-stat
+//!   doubling (`pokeemerald/src/pokemon.c:3158`-`:3159`), applied to the
+//!   **attacker**'s Attack stat before the stat-stage multiply and only for
+//!   a physical move: [`huge_power_attack`], read by both
+//!   [`crate::hit::damage_before_roll`] (real damage) and
+//!   [`crate::battle::trainer_ai`]'s damage estimate, so the two agree.
+//!   Reachable via Marill/Azumarill/Azurill (Huge Power, ability index 1)
+//!   and Meditite/Medicham (Pure Power, ability index 0).
 //!
-//! Neither draws. `AbilityBattleEffects` is not involved in either: Overgrow
-//! is an inline test inside the damage formula and Liquid Ooze is a
-//! battle-script `jumpifability`, so there is no ability-effect dispatcher
-//! to model yet.
+//! None of the four draws on its own — Battle Armor/Shell Armor *removes* a
+//! draw rather than making one. `AbilityBattleEffects` is not involved in
+//! any of them: Overgrow is an inline test inside the damage formula, Liquid
+//! Ooze is a battle-script `jumpifability`, and the armor/power pair are
+//! both inline tests inside `CalculateBaseDamage` itself — so there is still
+//! no ability-effect dispatcher to model.
 //!
 //! # The pinch family is transcribed whole, not narrowed
 //!
@@ -46,6 +64,14 @@
 use assets::species::AbilityId;
 use assets::Type;
 
+use crate::damage::MoveCategory;
+
+/// `ABILITY_BATTLE_ARMOR` (`pokeemerald/include/constants/abilities.h:8`).
+pub const BATTLE_ARMOR: AbilityId = AbilityId(4);
+
+/// `ABILITY_HUGE_POWER` (`:41`).
+pub const HUGE_POWER: AbilityId = AbilityId(37);
+
 /// `ABILITY_OVERGROW` (`pokeemerald/include/constants/abilities.h:69`).
 pub const OVERGROW: AbilityId = AbilityId(65);
 
@@ -60,6 +86,12 @@ pub const SWARM: AbilityId = AbilityId(68);
 
 /// `ABILITY_LIQUID_OOZE` (`:68`).
 pub const LIQUID_OOZE: AbilityId = AbilityId(64);
+
+/// `ABILITY_PURE_POWER` (`pokeemerald/include/constants/abilities.h:78`).
+pub const PURE_POWER: AbilityId = AbilityId(74);
+
+/// `ABILITY_SHELL_ARMOR` (`:79`).
+pub const SHELL_ARMOR: AbilityId = AbilityId(75);
 
 /// `CalculateBaseDamage`'s four pinch abilities and the move type each one
 /// answers to (`pokeemerald/src/pokemon.c:3219`-`:3226`), in source order.
@@ -112,12 +144,55 @@ pub fn inverts_drain(target_ability: AbilityId) -> bool {
     target_ability == LIQUID_OOZE
 }
 
+/// Whether the **defender**'s `ability` makes `Cmd_critcalc`'s `&&` chain
+/// fail before its `Random()` operand — Battle Armor or Shell Armor
+/// (`battle_script_commands.c:1279`).
+///
+/// A caller must fold this into whatever crit-suppression check it already
+/// runs *ahead of* the draw ([`crate::critical::crit_roll`]), exactly as it
+/// would any other operand of the same short-circuiting `&&`: this ability
+/// costs the RNG stream nothing, not "a draw that always comes up non-crit".
+#[must_use]
+pub fn suppresses_critical_hits(ability: AbilityId) -> bool {
+    ability == BATTLE_ARMOR || ability == SHELL_ARMOR
+}
+
+/// The **attacker**'s raw physical-Attack stat after Huge Power / Pure
+/// Power's doubling — `CalculateBaseDamage`'s `attack *= 2`
+/// (`pokeemerald/src/pokemon.c:3158`-`:3159`) — or `attack_stat` unchanged
+/// for a special move or any other ability.
+///
+/// Upstream sets the local `attack` variable from the raw stat
+/// (`:3128`), doubles it here for either ability, and only *afterwards*
+/// scales it by the attacker's stat stage inside `APPLY_STAT_MOD`
+/// (`:3238`-`:3244`). A caller must therefore double the raw stat before it
+/// reaches [`crate::damage::DamageInput::attack_stat`] — composing as
+/// `stage(2 * attack)` — rather than double the stage-scaled figure
+/// [`crate::damage::base_damage`] produces internally (`2 * stage(attack)`):
+/// the two diverge whenever a stage's ratio doesn't divide the doubled stat
+/// evenly, which upstream's truncating integer division makes a real case:
+/// attack `15` at stage `-2` (`gStatStageRatios` `10/20`,
+/// [`crate::stat_stage`]) gives `stage(2*15) = stage(30) = 30*10/20 = 15`
+/// but `2*stage(15) = 2*(15*10/20) = 2*7 = 14`. Special moves read
+/// `spAttack`, a variable this line never touches, so `category` gates the
+/// doubling to [`MoveCategory::Physical`] only.
+#[must_use]
+pub fn huge_power_attack(ability: AbilityId, category: MoveCategory, attack_stat: u32) -> u32 {
+    if category == MoveCategory::Physical && (ability == HUGE_POWER || ability == PURE_POWER) {
+        attack_stat * 2
+    } else {
+        attack_stat
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        inverts_drain, pinch_boosts_power, BLAZE, LIQUID_OOZE, OVERGROW, PINCH_BOOSTS, SWARM,
-        TORRENT,
+        huge_power_attack, inverts_drain, pinch_boosts_power, suppresses_critical_hits,
+        BATTLE_ARMOR, BLAZE, HUGE_POWER, LIQUID_OOZE, OVERGROW, PINCH_BOOSTS, PURE_POWER,
+        SHELL_ARMOR, SWARM, TORRENT,
     };
+    use crate::damage::MoveCategory;
     use crate::dex::Dex;
     use assets::species::AbilityId;
     use assets::{SpeciesId, Type};
@@ -188,6 +263,99 @@ mod tests {
         assert_eq!(
             dex.species(SpeciesId(72)).unwrap().abilities[1],
             LIQUID_OOZE
+        );
+    }
+
+    #[test]
+    fn only_the_two_armor_abilities_suppress_crits() {
+        assert!(suppresses_critical_hits(BATTLE_ARMOR));
+        assert!(suppresses_critical_hits(SHELL_ARMOR));
+        for other in [OVERGROW, HUGE_POWER, PURE_POWER, LIQUID_OOZE, AbilityId(0)] {
+            assert!(!suppresses_critical_hits(other), "{other:?}");
+        }
+    }
+
+    #[test]
+    fn huge_power_and_pure_power_double_the_raw_physical_attack_stat() {
+        for ability in [HUGE_POWER, PURE_POWER] {
+            assert_eq!(
+                huge_power_attack(ability, MoveCategory::Physical, 50),
+                100,
+                "{ability:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn huge_power_never_touches_a_special_move() {
+        for ability in [HUGE_POWER, PURE_POWER] {
+            assert_eq!(
+                huge_power_attack(ability, MoveCategory::Special, 50),
+                50,
+                "{ability:?} must not double Sp. Attack"
+            );
+        }
+    }
+
+    #[test]
+    fn an_unrelated_ability_never_doubles_attack() {
+        for ability in [
+            BATTLE_ARMOR,
+            SHELL_ARMOR,
+            OVERGROW,
+            LIQUID_OOZE,
+            AbilityId(0),
+        ] {
+            assert_eq!(
+                huge_power_attack(ability, MoveCategory::Physical, 50),
+                50,
+                "{ability:?}"
+            );
+        }
+    }
+
+    /// The doubling composes with the stat-stage multiply in upstream's
+    /// order, `stage(2 * attack)`, which is *not* always the same as
+    /// `2 * stage(attack)`: attack `15` at stage `-2` (ratio `10/20`,
+    /// [`crate::stat_stage`]) gives `stage(30) = 15` but `2*stage(15) =
+    /// 2*7 = 14`. This pins that [`huge_power_attack`] doubles the *raw*
+    /// stat -- the only order a caller that then runs the doubled value
+    /// through [`crate::critical::crit_adjusted_stages`]/
+    /// [`crate::damage::base_damage`]'s own stage multiply reproduces
+    /// upstream with.
+    #[test]
+    fn doubling_the_raw_stat_diverges_from_doubling_the_stage_scaled_one() {
+        use crate::stat_stage::StatStage;
+
+        let doubled_raw = huge_power_attack(HUGE_POWER, MoveCategory::Physical, 15);
+        assert_eq!(doubled_raw, 30);
+
+        let stage = StatStage::new(-2).unwrap();
+        let stage_of_doubled = stage.apply(doubled_raw);
+        let double_of_staged = 2 * stage.apply(15);
+        assert_eq!(stage_of_doubled, 15, "upstream's actual order");
+        assert_eq!(double_of_staged, 14, "the order upstream does NOT use");
+        assert_ne!(stage_of_doubled, double_of_staged);
+    }
+
+    /// The three ids really are the ones the shipped species table carries:
+    /// Anorith (390) is Battle Armor in ability index 0, Marill (183) is
+    /// Huge Power in ability index 1, and Meditite (356) is Pure Power in
+    /// ability index 0.
+    #[test]
+    fn the_new_ability_ids_match_the_shipped_species_table() {
+        let dex = Dex::new();
+        assert_eq!(
+            dex.species(SpeciesId(390)).unwrap().abilities[0],
+            BATTLE_ARMOR
+        );
+        assert_eq!(
+            dex.species(SpeciesId(183)).unwrap().abilities[1],
+            HUGE_POWER
+        );
+        assert_eq!(
+            dex.species(SpeciesId(356)).unwrap().abilities[0],
+            PURE_POWER
         );
     }
 }

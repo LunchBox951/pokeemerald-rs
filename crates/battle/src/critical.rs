@@ -31,13 +31,21 @@
 //! C's `&&` short-circuits, so any of the first three conditions failing
 //! means **no crit draw is made** and the hit consumes one fewer RNG value
 //! than an ordinary hit does `(behavioral-fidelity)`. [`crit_roll`] models
-//! only the case where all three pass. The ability suppressor (Battle
-//! Armor/Shell Armor) is a known omission, now cheap to close:
-//! `BattlePokemon::ability` exists (`crate::ability`), but no species this
-//! slice can field carries either ability, so the one-fewer-draw case is
-//! unreachable today — the next slice to widen species coverage must add
-//! it or inherit a silent one-draw desync. `STATUS3_CANT_SCORE_A_CRIT` is
-//! only ever set by Future Sight/Doom Desire.
+//! only the case where all three pass — the *caller* is responsible for not
+//! invoking it at all when one of them fails, which is exactly what
+//! [`crate::hit::damage_before_roll`] does. The ability suppressor (Battle
+//! Armor/Shell Armor) closed as of issue #391:
+//! [`crate::ability::suppresses_critical_hits`] reads
+//! `BattlePokemon::ability` (`crate::ability`) and
+//! [`crate::hit::damage_before_roll`] folds it into the same short-circuit
+//! `suppress_crit` already gets, ahead of the draw. It is reachable, not
+//! hypothetical: Anorith/Armaldo (species 390/391,
+//! `crates/assets/src/species.rs`) carry Battle Armor, and a save-restored
+//! party keeps whichever ability slot the save stored
+//! (`BattlePokemon::with_ability_slot`, read by `pokeemerald-rs`'s `party`
+//! module on decode) rather than re-deriving it from personality, so a
+//! loaded Anorith reaches this path exactly as a freshly caught one does.
+//! `STATUS3_CANT_SCORE_A_CRIT` is only ever set by Future Sight/Doom Desire.
 //! The third, `BATTLE_TYPE_FIRST_BATTLE`, belongs to a scripted one-off
 //! battle (set for the Route 101 intro Zigzagoon fight and nothing else,
 //! `SetUpBattleVarsAndBirchZigzagoon`, `src/battle_controllers.c:67`-`:72`,
