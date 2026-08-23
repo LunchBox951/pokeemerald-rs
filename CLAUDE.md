@@ -16,10 +16,3 @@ additive — nothing here restates a default the system prompt already covers.
   produce materially different work. This never overrides the **Confirm
   first** list above — a new dependency or a workflow/release-file edit
   still waits for confirmation, however unambiguous the call.
-- Reserve Explore or subagent delegation for genuinely broad sweeps — a
-  multi-crate consistency check, a `ledger.py gaps` survey across many
-  entries — not a scoped, single-file change.
-- Running long or unattended here (`/loop`, a background agent)? Ground
-  progress claims in actual command output (`cargo test`, `ledger.py
-  verify`) — this repo's own maintenance loop already works that way (see
-  README's "How this project is built").
