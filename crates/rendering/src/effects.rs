@@ -426,14 +426,16 @@ mod tests {
     const ALPHA_WEIGHT_PAIRS: [(u8, u8); 6] =
         [(8, 8), (16, 16), (16, 0), (0, 16), (5, 11), (13, 7)];
 
+    // Tuples pin the complement, +7 modulo 32, and +19 modulo 32 source
+    // mappings in the red, green, and blue lanes respectively.
     #[rustfmt::skip]
-    const ALPHA_CHANNEL_EXPECTED: [[u8; 32]; 6] = [
-        [127, 127, 127, 127, 127, 127, 127, 127, 127, 127, 127, 127, 127, 127, 127, 127, 127, 127, 127, 127, 127, 127, 127, 127, 127, 127, 127, 127, 127, 127, 127, 127],
-        [255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255],
-        [0, 8, 16, 24, 33, 41, 49, 57, 66, 74, 82, 90, 99, 107, 115, 123, 132, 140, 148, 156, 165, 173, 181, 189, 198, 206, 214, 222, 231, 239, 247, 255],
-        [255, 247, 239, 231, 222, 214, 206, 198, 189, 181, 173, 165, 156, 148, 140, 132, 123, 115, 107, 99, 90, 82, 74, 66, 57, 49, 41, 33, 24, 16, 8, 0],
-        [175, 172, 169, 166, 162, 159, 156, 153, 150, 147, 144, 141, 138, 135, 132, 129, 125, 122, 119, 116, 113, 110, 107, 104, 101, 98, 95, 92, 88, 85, 82, 79],
-        [111, 114, 117, 120, 123, 126, 129, 132, 136, 139, 142, 145, 148, 151, 154, 157, 161, 164, 167, 170, 173, 176, 179, 182, 185, 188, 191, 194, 198, 201, 204, 207],
+    const ALPHA_CHANNEL_EXPECTED: [[(u8, u8, u8); 32]; 6] = [
+        [(127, 28, 78), (127, 37, 86), (127, 45, 94), (127, 53, 102), (127, 61, 111), (127, 70, 119), (127, 78, 127), (127, 86, 135), (127, 94, 144), (127, 103, 152), (127, 111, 160), (127, 119, 168), (127, 127, 177), (127, 136, 53), (127, 144, 61), (127, 152, 69), (127, 160, 78), (127, 169, 86), (127, 177, 94), (127, 185, 102), (127, 193, 111), (127, 202, 119), (127, 210, 127), (127, 218, 135), (127, 226, 144), (127, 103, 152), (127, 111, 160), (127, 119, 168), (127, 127, 177), (127, 136, 185), (127, 144, 193), (127, 152, 201)],
+        [(255, 57, 156), (255, 74, 173), (255, 90, 189), (255, 106, 205), (255, 123, 222), (255, 140, 239), (255, 156, 255), (255, 172, 255), (255, 189, 255), (255, 206, 255), (255, 222, 255), (255, 238, 255), (255, 255, 255), (255, 255, 107), (255, 255, 123), (255, 255, 139), (255, 255, 156), (255, 255, 173), (255, 255, 189), (255, 255, 205), (255, 255, 222), (255, 255, 239), (255, 255, 255), (255, 255, 255), (255, 255, 255), (255, 206, 255), (255, 222, 255), (255, 238, 255), (255, 255, 255), (255, 255, 255), (255, 255, 255), (255, 255, 255)],
+        [(0, 0, 0), (8, 8, 8), (16, 16, 16), (24, 24, 24), (33, 33, 33), (41, 41, 41), (49, 49, 49), (57, 57, 57), (66, 66, 66), (74, 74, 74), (82, 82, 82), (90, 90, 90), (99, 99, 99), (107, 107, 107), (115, 115, 115), (123, 123, 123), (132, 132, 132), (140, 140, 140), (148, 148, 148), (156, 156, 156), (165, 165, 165), (173, 173, 173), (181, 181, 181), (189, 189, 189), (198, 198, 198), (206, 206, 206), (214, 214, 214), (222, 222, 222), (231, 231, 231), (239, 239, 239), (247, 247, 247), (255, 255, 255)],
+        [(255, 57, 156), (247, 66, 165), (239, 74, 173), (231, 82, 181), (222, 90, 189), (214, 99, 198), (206, 107, 206), (198, 115, 214), (189, 123, 222), (181, 132, 231), (173, 140, 239), (165, 148, 247), (156, 156, 255), (148, 165, 0), (140, 173, 8), (132, 181, 16), (123, 189, 24), (115, 198, 33), (107, 206, 41), (99, 214, 49), (90, 222, 57), (82, 231, 66), (74, 239, 74), (66, 247, 82), (57, 255, 90), (49, 0, 99), (41, 8, 107), (33, 16, 115), (24, 24, 123), (16, 33, 132), (8, 41, 140), (0, 49, 148)],
+        [(175, 39, 107), (172, 47, 115), (169, 55, 123), (166, 63, 131), (162, 72, 140), (159, 80, 148), (156, 88, 156), (153, 96, 164), (150, 105, 173), (147, 113, 181), (144, 121, 189), (141, 129, 197), (138, 138, 206), (135, 146, 33), (132, 154, 41), (129, 162, 49), (125, 171, 57), (122, 179, 66), (119, 187, 74), (116, 195, 82), (113, 204, 90), (110, 212, 99), (107, 220, 107), (104, 228, 115), (101, 237, 123), (98, 64, 132), (95, 72, 140), (92, 80, 148), (88, 88, 156), (85, 97, 165), (82, 105, 173), (79, 113, 181)],
+        [(111, 24, 68), (114, 35, 78), (117, 45, 88), (120, 55, 98), (123, 66, 109), (126, 76, 119), (129, 86, 129), (132, 96, 139), (136, 107, 150), (139, 117, 161), (142, 127, 171), (145, 137, 181), (148, 148, 192), (151, 159, 86), (154, 169, 96), (157, 179, 106), (161, 189, 117), (164, 200, 128), (167, 210, 138), (170, 220, 148), (173, 231, 159), (176, 241, 169), (179, 251, 179), (182, 255, 189), (185, 255, 200), (188, 167, 210), (191, 177, 220), (194, 187, 230), (198, 198, 241), (201, 208, 251), (204, 218, 255), (207, 228, 255)],
     ];
 
     // Rows are EVA 0..=16 and columns are EVB 0..=16. Each tuple is the
@@ -457,6 +459,162 @@ mod tests {
         [(0, 223, 115), (15, 223, 123), (31, 223, 130), (47, 223, 138), (63, 223, 146), (79, 223, 153), (95, 223, 161), (111, 223, 169), (127, 223, 177), (143, 223, 184), (159, 223, 192), (175, 223, 200), (191, 223, 207), (207, 223, 215), (223, 223, 223), (239, 223, 230), (255, 223, 238)],
         [(0, 239, 123), (15, 239, 131), (31, 239, 139), (47, 239, 146), (63, 239, 154), (79, 239, 162), (95, 239, 169), (111, 239, 177), (127, 239, 185), (143, 239, 192), (159, 239, 200), (175, 239, 208), (191, 239, 216), (207, 239, 223), (223, 239, 231), (239, 239, 239), (255, 239, 246)],
         [(0, 255, 132), (15, 255, 139), (31, 255, 147), (47, 255, 155), (63, 255, 162), (79, 255, 170), (95, 255, 178), (111, 255, 185), (127, 255, 193), (143, 255, 201), (159, 255, 208), (175, 255, 216), (191, 255, 224), (207, 255, 231), (223, 255, 239), (239, 255, 247), (255, 255, 255)],
+    ];
+
+    const ALPHA_BOUNDARY_GRID_INPUTS: [(Rgb888, Rgb888); 5] = [
+        (
+            Rgb888 { r: 0, g: 0, b: 0 },
+            Rgb888 {
+                r: 255,
+                g: 255,
+                b: 255,
+            },
+        ),
+        (
+            Rgb888 {
+                r: 255,
+                g: 255,
+                b: 255,
+            },
+            Rgb888 { r: 0, g: 0, b: 0 },
+        ),
+        (
+            Rgb888 {
+                r: 255,
+                g: 0,
+                b: 140,
+            },
+            Rgb888 {
+                r: 0,
+                g: 255,
+                b: 115,
+            },
+        ),
+        (
+            Rgb888 {
+                r: 8,
+                g: 247,
+                b: 16,
+            },
+            Rgb888 {
+                r: 247,
+                g: 8,
+                b: 239,
+            },
+        ),
+        (
+            Rgb888 {
+                r: 132,
+                g: 132,
+                b: 132,
+            },
+            Rgb888 {
+                r: 123,
+                g: 123,
+                b: 123,
+            },
+        ),
+    ];
+
+    // For each input pair, rows are EVA 0..=16. Every six hex digits are
+    // one exact RGB result, with the 17 chunks in EVB 0..=16 order.
+    #[rustfmt::skip]
+    const ALPHA_BOUNDARY_GRID_EXPECTED: [[&str; 17]; 5] = [
+        [
+            "0000000f0f0f1f1f1f2f2f2f3f3f3f4f4f4f5f5f5f6f6f6f7f7f7f8f8f8f9f9f9fafafafbfbfbfcfcfcfdfdfdfefefefffffff",
+            "0000000f0f0f1f1f1f2f2f2f3f3f3f4f4f4f5f5f5f6f6f6f7f7f7f8f8f8f9f9f9fafafafbfbfbfcfcfcfdfdfdfefefefffffff",
+            "0000000f0f0f1f1f1f2f2f2f3f3f3f4f4f4f5f5f5f6f6f6f7f7f7f8f8f8f9f9f9fafafafbfbfbfcfcfcfdfdfdfefefefffffff",
+            "0000000f0f0f1f1f1f2f2f2f3f3f3f4f4f4f5f5f5f6f6f6f7f7f7f8f8f8f9f9f9fafafafbfbfbfcfcfcfdfdfdfefefefffffff",
+            "0000000f0f0f1f1f1f2f2f2f3f3f3f4f4f4f5f5f5f6f6f6f7f7f7f8f8f8f9f9f9fafafafbfbfbfcfcfcfdfdfdfefefefffffff",
+            "0000000f0f0f1f1f1f2f2f2f3f3f3f4f4f4f5f5f5f6f6f6f7f7f7f8f8f8f9f9f9fafafafbfbfbfcfcfcfdfdfdfefefefffffff",
+            "0000000f0f0f1f1f1f2f2f2f3f3f3f4f4f4f5f5f5f6f6f6f7f7f7f8f8f8f9f9f9fafafafbfbfbfcfcfcfdfdfdfefefefffffff",
+            "0000000f0f0f1f1f1f2f2f2f3f3f3f4f4f4f5f5f5f6f6f6f7f7f7f8f8f8f9f9f9fafafafbfbfbfcfcfcfdfdfdfefefefffffff",
+            "0000000f0f0f1f1f1f2f2f2f3f3f3f4f4f4f5f5f5f6f6f6f7f7f7f8f8f8f9f9f9fafafafbfbfbfcfcfcfdfdfdfefefefffffff",
+            "0000000f0f0f1f1f1f2f2f2f3f3f3f4f4f4f5f5f5f6f6f6f7f7f7f8f8f8f9f9f9fafafafbfbfbfcfcfcfdfdfdfefefefffffff",
+            "0000000f0f0f1f1f1f2f2f2f3f3f3f4f4f4f5f5f5f6f6f6f7f7f7f8f8f8f9f9f9fafafafbfbfbfcfcfcfdfdfdfefefefffffff",
+            "0000000f0f0f1f1f1f2f2f2f3f3f3f4f4f4f5f5f5f6f6f6f7f7f7f8f8f8f9f9f9fafafafbfbfbfcfcfcfdfdfdfefefefffffff",
+            "0000000f0f0f1f1f1f2f2f2f3f3f3f4f4f4f5f5f5f6f6f6f7f7f7f8f8f8f9f9f9fafafafbfbfbfcfcfcfdfdfdfefefefffffff",
+            "0000000f0f0f1f1f1f2f2f2f3f3f3f4f4f4f5f5f5f6f6f6f7f7f7f8f8f8f9f9f9fafafafbfbfbfcfcfcfdfdfdfefefefffffff",
+            "0000000f0f0f1f1f1f2f2f2f3f3f3f4f4f4f5f5f5f6f6f6f7f7f7f8f8f8f9f9f9fafafafbfbfbfcfcfcfdfdfdfefefefffffff",
+            "0000000f0f0f1f1f1f2f2f2f3f3f3f4f4f4f5f5f5f6f6f6f7f7f7f8f8f8f9f9f9fafafafbfbfbfcfcfcfdfdfdfefefefffffff",
+            "0000000f0f0f1f1f1f2f2f2f3f3f3f4f4f4f5f5f5f6f6f6f7f7f7f8f8f8f9f9f9fafafafbfbfbfcfcfcfdfdfdfefefefffffff",
+        ],
+        [
+            "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+            "0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f",
+            "1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f",
+            "2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f2f",
+            "3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f",
+            "4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f",
+            "5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f",
+            "6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f",
+            "7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f",
+            "8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f8f",
+            "9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f",
+            "afafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafaf",
+            "bfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbfbf",
+            "cfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcfcf",
+            "dfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdfdf",
+            "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
+            "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        ],
+        [
+            "000000000f07001f0e002f15003f1c004f23005f2b006f32007f39008f40009f4700af4f00bf5600cf5d00df6400ef6b00ff73",
+            "0f00080f0f0f0f1f170f2f1e0f3f250f4f2c0f5f330f6f3b0f7f420f8f490f9f500faf570fbf5f0fcf660fdf6d0fef740fff7b",
+            "1f00111f0f181f1f1f1f2f271f3f2e1f4f351f5f3c1f6f431f7f4b1f8f521f9f591faf601fbf671fcf6e1fdf761fef7d1fff84",
+            "2f001a2f0f212f1f282f2f2f2f3f372f4f3e2f5f452f6f4c2f7f532f8f5a2f9f622faf692fbf702fcf772fdf7e2fef862fff8d",
+            "3f00233f0f2a3f1f313f2f383f3f3f3f4f463f5f4e3f6f553f7f5c3f8f633f9f6a3faf723fbf793fcf803fdf873fef8e3fff96",
+            "4f002b4f0f324f1f3a4f2f414f3f484f4f4f4f5f564f6f5e4f7f654f8f6c4f9f734faf7a4fbf824fcf894fdf904fef974fff9e",
+            "5f00345f0f3b5f1f425f2f4a5f3f515f4f585f5f5f5f6f665f7f6e5f8f755f9f7c5faf835fbf8a5fcf915fdf995fefa05fffa7",
+            "6f003d6f0f446f1f4b6f2f526f3f5a6f4f616f5f686f6f6f6f7f766f8f7d6f9f856faf8c6fbf936fcf9a6fdfa16fefa96fffb0",
+            "7f00467f0f4d7f1f547f2f5b7f3f627f4f697f5f717f6f787f7f7f7f8f867f9f8d7faf957fbf9c7fcfa37fdfaa7fefb17fffb9",
+            "8f004e8f0f558f1f5d8f2f648f3f6b8f4f728f5f798f6f818f7f888f8f8f8f9f968faf9d8fbfa58fcfac8fdfb38fefba8fffc1",
+            "9f00579f0f5e9f1f659f2f6d9f3f749f4f7b9f5f829f6f899f7f919f8f989f9f9f9fafa69fbfad9fcfb49fdfbc9fefc39fffca",
+            "af0060af0f67af1f6eaf2f75af3f7daf4f84af5f8baf6f92af7f99af8fa0af9fa8afafafafbfb6afcfbdafdfc4afefccafffd3",
+            "bf0069bf0f70bf1f77bf2f7ebf3f85bf4f8cbf5f94bf6f9bbf7fa2bf8fa9bf9fb0bfafb8bfbfbfbfcfc6bfdfcdbfefd4bfffdc",
+            "cf0071cf0f78cf1f80cf2f87cf3f8ecf4f95cf5f9ccf6fa4cf7fabcf8fb2cf9fb9cfafc0cfbfc8cfcfcfcfdfd6cfefddcfffe4",
+            "df007adf0f81df1f88df2f90df3f97df4f9edf5fa5df6facdf7fb4df8fbbdf9fc2dfafc9dfbfd0dfcfd7dfdfdfdfefe6dfffed",
+            "ef0083ef0f8aef1f91ef2f98ef3fa0ef4fa7ef5faeef6fb5ef7fbcef8fc3ef9fcbefafd2efbfd9efcfe0efdfe7efefefeffff6",
+            "ff008cff0f93ff1f9aff2fa1ff3fa8ff4fafff5fb7ff6fbeff7fc5ff8fccff9fd3ffafdbffbfe2ffcfe9ffdff0ffeff7ffffff",
+        ],
+        [
+            "0000000f000e1e011d2e012c3d023b4d024a5c03596c03687b04778a04869a0595a905a4b906b3c806c2d807d1e707e0f708ef",
+            "000f010f0f0f1f101e2e102d3e113c4d114b5d125a6c12697c13788b13879a1496aa14a5b915b4c915c3d816d2e816e1f717f0",
+            "011e02101f101f1f1f2f202e3e203d4e214c5d215b6d226a7c22798b23889b2397aa24a6ba24b5c925c4d925d3e826e2f826f1",
+            "012e03102e11202f202f2f2f3f303e4e304d5e315c6d316b7d327a8c32899b3398ab33a7ba34b6ca34c5d935d4e935e3f836f2",
+            "023d04113e12203e21303f303f3f3f4f404e5e405d6e416c7d417b8c428a9c4299ab43a8bb43b7ca44c6da44d5e945e4f945f3",
+            "024d05114d13214e22304e31404f404f4f4f5f505e6e506d7e517c8d518b9c529aac52a9bb53b8cb53c7da54d6ea54e5f955f4",
+            "035c06125d14215d23315e32405e41505f505f5f5f6f606e7e607d8d618c9d619bac62aabc62b9cb63c8db63d7ea64e6fa64f5",
+            "036c07126c15226d24316d33416e42506e51606f606f6f6f7f707e8e708d9d719cad71abbc72bacc72c9db73d8eb73e7fa74f6",
+            "047b08137c16227c25327d34417d43517e52607e61707f707f7f7f8e808e9e809dad81acbd81bbcc82cadc82d9eb83e8fb83f7",
+            "048a09138b17238b26328c35428c44518d53618d62708e71808e808f8f8f9e8f9eae90adbd90bccd91cbdc91daec92e9fb92f8",
+            "059a0a149a18239b27339b36429c45529c54619d63719d72809e818f9e909f9f9fae9faebea0bdcda0ccdda1dbeca1eafca2f9",
+            "05a90b14aa1924aa2833ab3743ab4652ac5562ac6471ad7381ad8290ae919faea0afafafbeafbeceb0cdddb0dcedb1ebfcb1fa",
+            "06b90c15b91a24ba2934ba3843bb4753bb5662bc6572bc7481bd8390bd92a0bea1afbeb0bfbfbfcebfcedec0ddedc0ecfdc1fb",
+            "06c80d15c91b25c92a34ca3944ca4853cb5763cb6672cc7582cc8491cd93a0cda2b0ceb1bfcec0cfcfcfdecfdeeed0edfdd0fc",
+            "07d80e16d81c25d92b35d93a44da4954da5863db6773db7682dc8591dc94a1dda3b0ddb2c0dec1cfded0dfdfdfeedfeefee0fd",
+            "07e70f16e81d26e82c35e93b45e94a54ea5964ea6873eb7783eb8692ec95a1eca4b1edb3c0edc2d0eed1dfeee0efefeffeeffe",
+            "08f71017f71e26f82d36f83c45f94b55f95a64fa6974fa7883fb8792fb96a2fca5b1fcb4c1fdc3d0fdd2e0fee1effef0ffffff",
+        ],
+        [
+            "0000000707070f0f0f1717171e1e1e2626262e2e2e3535353d3d3d4545454c4c4c5454545c5c5c6363636b6b6b7373737b7b7b",
+            "0808080f0f0f1717171f1f1f2727272e2e2e3636363e3e3e4545454d4d4d5555555c5c5c6464646c6c6c7373737b7b7b838383",
+            "1010101818181f1f1f2727272f2f2f3636363e3e3e4646464e4e4e5555555d5d5d6565656c6c6c7474747c7c7c8383838b8b8b",
+            "1818182020202828282f2f2f3737373f3f3f4646464e4e4e5656565d5d5d6565656d6d6d7575757c7c7c8484848c8c8c939393",
+            "2121212828283030303838383f3f3f4747474f4f4f5656565e5e5e6666666d6d6d7575757d7d7d8484848c8c8c9494949c9c9c",
+            "2929293030303838384040404848484f4f4f5757575f5f5f6666666e6e6e7676767d7d7d8585858d8d8d9494949c9c9ca4a4a4",
+            "3131313939394040404848485050505757575f5f5f6767676f6f6f7676767e7e7e8686868d8d8d9595959d9d9da4a4a4acacac",
+            "3939394141414949495050505858586060606767676f6f6f7777777e7e7e8686868e8e8e9696969d9d9da5a5a5adadadb4b4b4",
+            "4242424949495151515959596060606868687070707777777f7f7f8787878e8e8e9696969e9e9ea5a5a5adadadb5b5b5bdbdbd",
+            "4a4a4a5151515959596161616969697070707878788080808787878f8f8f9797979e9e9ea6a6a6aeaeaeb5b5b5bdbdbdc5c5c5",
+            "5252525a5a5a6161616969697171717878788080808888889090909797979f9f9fa7a7a7aeaeaeb6b6b6bebebec5c5c5cdcdcd",
+            "5a5a5a6262626a6a6a7171717979798181818888889090909898989f9f9fa7a7a7afafafb7b7b7bebebec6c6c6cececed5d5d5",
+            "6363636a6a6a7272727a7a7a818181898989919191989898a0a0a0a8a8a8afafafb7b7b7bfbfbfc6c6c6cececed6d6d6dedede",
+            "6b6b6b7272727a7a7a8282828a8a8a919191999999a1a1a1a8a8a8b0b0b0b8b8b8bfbfbfc7c7c7cfcfcfd6d6d6dededee6e6e6",
+            "7373737b7b7b8282828a8a8a929292999999a1a1a1a9a9a9b1b1b1b8b8b8c0c0c0c8c8c8cfcfcfd7d7d7dfdfdfe6e6e6eeeeee",
+            "7b7b7b8383838b8b8b9292929a9a9aa2a2a2a9a9a9b1b1b1b9b9b9c0c0c0c8c8c8d0d0d0d8d8d8dfdfdfe7e7e7efefeff6f6f6",
+            "8484848b8b8b9393939b9b9ba2a2a2aaaaaab2b2b2b9b9b9c1c1c1c9c9c9d0d0d0d8d8d8e0e0e0e7e7e7efefeff7f7f7ffffff",
+        ],
     ];
 
     // Rows are EVY 0..=16; columns follow EXPANDED_CHANNELS.
@@ -514,31 +672,26 @@ mod tests {
             .copied()
             .zip(ALPHA_CHANNEL_EXPECTED.iter())
         {
-            for (index, (&first_channel, &expected_channel)) in EXPANDED_CHANNELS
+            for (index, (&first_channel, &(r, g, b))) in EXPANDED_CHANNELS
                 .iter()
                 .zip(expected_row.iter())
                 .enumerate()
             {
-                let second_channel = EXPANDED_CHANNELS[31 - index];
                 let first = Rgb888 {
                     r: first_channel,
                     g: first_channel,
                     b: first_channel,
                 };
                 let second = Rgb888 {
-                    r: second_channel,
-                    g: second_channel,
-                    b: second_channel,
+                    r: EXPANDED_CHANNELS[31 - index],
+                    g: EXPANDED_CHANNELS[(index + 7) % 32],
+                    b: EXPANDED_CHANNELS[(index + 19) % 32],
                 };
-                let expected = Rgb888 {
-                    r: expected_channel,
-                    g: expected_channel,
-                    b: expected_channel,
-                };
+                let expected = Rgb888 { r, g, b };
                 assert_eq!(
                     alpha_blend(first, second, eva, evb),
                     expected,
-                    "alpha fixture index {index}, weights ({eva}, {evb})"
+                    "alpha mapping fixture index {index}, weights ({eva}, {evb})"
                 );
             }
         }
@@ -566,6 +719,39 @@ mod tests {
                     alpha_blend(first, second, eva, evb),
                     expected,
                     "alpha weight-grid fixture ({eva}, {evb})"
+                );
+            }
+        }
+    }
+
+    /// Restores the full weight grids for the five original boundary-heavy
+    /// source pairs. Hex encoding keeps the exact literal fixtures compact;
+    /// no expected result is calculated while the test runs.
+    #[test]
+    fn alpha_blend_matches_committed_boundary_weight_grids() {
+        use std::fmt::Write as _;
+
+        for (case, ((first, second), expected_rows)) in ALPHA_BOUNDARY_GRID_INPUTS
+            .iter()
+            .copied()
+            .zip(ALPHA_BOUNDARY_GRID_EXPECTED.iter())
+            .enumerate()
+        {
+            for (eva, expected_row) in expected_rows.iter().enumerate() {
+                let eva = u8::try_from(eva).expect("fixture index is at most 16");
+                let mut actual_row = String::with_capacity(17 * 6);
+                for evb in 0..=16 {
+                    let actual = alpha_blend(first, second, eva, evb);
+                    write!(
+                        actual_row,
+                        "{:02x}{:02x}{:02x}",
+                        actual.r, actual.g, actual.b
+                    )
+                    .expect("writing to a String cannot fail");
+                }
+                assert_eq!(
+                    actual_row, *expected_row,
+                    "alpha boundary-grid fixture case {case}, EVA {eva}"
                 );
             }
         }
