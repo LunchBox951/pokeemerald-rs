@@ -54,7 +54,7 @@
 //!   after the clear resumes after a reveal-delay period at Slow/Mid.
 //! * `Pause` (`RENDER_STATE_PAUSE`) — `{PAUSE n}` (`EXT_CTRL_CODE_PAUSE`):
 //!   count down `n` frames with nothing new revealed, then resume
-//!   `HandleChar` (`text.c:1013-1017`, `text.c:1213-1220`). Unlike `\l`/`\p`,
+//!   `HandleChar` (`text.c:1013-1017`, `text.c:1215-1220`). Unlike `\l`/`\p`,
 //!   upstream's own `RENDER_REPEAT` return from the `HANDLE_CHAR` case
 //!   re-enters `RenderText` a second time *on the same upstream frame*,
 //!   landing straight in `RENDER_STATE_PAUSE` and burning the first of the
@@ -342,7 +342,7 @@ pub enum TickEvent {
     /// page) on this same tick.
     Cleared,
     /// A `{PAUSE n}` control code is counting down; nothing new is visible
-    /// this tick (upstream `RENDER_STATE_PAUSE`, `text.c:1213-1220`).
+    /// this tick (upstream `RENDER_STATE_PAUSE`, `text.c:1215-1220`).
     /// Returned for exactly `n` ticks — including the one that consumed the
     /// control code itself, module docs' "State machine" section on the
     /// same-frame `RENDER_REPEAT` chain.
@@ -552,7 +552,7 @@ impl<S: GlyphSource> Printer<S> {
         }
     }
 
-    /// `RENDER_STATE_PAUSE` (`text.c:1213-1220`): count `delay_counter` down
+    /// `RENDER_STATE_PAUSE` (`text.c:1215-1220`): count `delay_counter` down
     /// to zero, one frame at a time, then resume `HandleChar` -- on the
     /// *next* tick, not this one (upstream returns `RENDER_UPDATE`, not
     /// `RENDER_REPEAT`, the frame the counter reaches zero, so nothing new
@@ -1290,7 +1290,7 @@ mod tests {
     /// Issue #393: `{PAUSE n}` must block for *exactly* `n` frames -- not
     /// `n + 1` (the off-by-one this module's own "State machine" docs warn
     /// about, `text.c:1013-1017`'s same-frame `RENDER_REPEAT` chain into
-    /// `RENDER_STATE_PAUSE`, `text.c:1213-1220`). Runs at `Instant` speed so
+    /// `RENDER_STATE_PAUSE`, `text.c:1215-1220`). Runs at `Instant` speed so
     /// every glyph is frame-free and the only source of `Idle`-shaped ticks
     /// in this stream is the pause itself, isolating its own count exactly.
     #[test]

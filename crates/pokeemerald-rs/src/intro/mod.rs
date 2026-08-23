@@ -77,6 +77,23 @@
 //! [`Printer::with_ab_speed_up_print`] -- see that method's docs and
 //! [`engine::text::render`]'s own "Held-A/B print speed-up" module docs for
 //! the exact semantics.
+//!
+//! # Traversal pacing
+//!
+//! [`TRAVERSAL_RUNS`] pins, frame by frame, how long a full read of the
+//! speech takes at [`TextSpeed::Mid`] when the player never holds a button:
+//! thirty-six runs of no input, twenty-four of them ended by a single
+//! confirm press at a `\p`/`\l` wait, the other twelve (four scroll
+//! animations, eight page-terminator drains) needing no input at all.
+//! [`TRAVERSAL_FRAMES`] is their total.
+//!
+//! That table is a *derived* measurement, re-computed from the real
+//! [`Printer`] on every CI run by this module's own pack-free
+//! `traversal_runs_match_the_pinned_table` test -- not a set of magic
+//! numbers. `xtask`'s `boot-to-first-fight` scenario reads Birch's whole
+//! speech, so its authored script needs exactly these counts; publishing
+//! them here (rather than re-typing them into the script) keeps one
+//! machine-checked source for the intro's pacing.
 
 mod speech;
 
@@ -90,6 +107,119 @@ use rendering::{Framebuffer, Rgb888};
 use crate::textbox::{self, FrameAssets};
 
 pub use speech::NUM_PAGES;
+
+/// One uninterrupted run of *no* input while reading Birch's speech
+/// (module docs' "Traversal pacing" section) -- how many frames printing,
+/// scrolling or draining takes before the next thing happens, and whether
+/// that next thing is a single confirm press.
+///
+/// Plain data with public fields `(oop-boundaries)`: this is a measurement,
+/// not an object with behaviour.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TraversalRun {
+    /// Frames of no input in this run, counting the frame the run's own
+    /// terminating event fires on (the `\p`/`\l` wait being reached, the
+    /// scroll animation finishing, or the page's terminator being
+    /// consumed).
+    pub frames: u32,
+    /// Whether exactly one confirm-press frame follows this run: true for
+    /// a run that ended on a `\p`/`\l` wait, false for a scroll-animation
+    /// drain or a page's own terminator drain, which need no input.
+    pub confirm_after: bool,
+}
+
+/// Every [`TraversalRun`] of a full, never-held read of Birch's whole
+/// eight-page speech at [`TextSpeed::Mid`]
+/// ([`IntroScene::from_pack`]'s own speed), in order -- the intro's
+/// frame-level pacing contract (module docs' "Traversal pacing" section).
+///
+/// **Derived, not hand-copied.** `tests::traversal_runs_match_the_pinned_table`
+/// re-derives this whole table every CI run by driving [`speech::pages`]
+/// through a real [`Printer`] over a synthetic glyph sheet (no asset pack:
+/// only the compiled-in advance-width table, not sheet pixels, affects
+/// *when* a wait is reached), so any change to the printer's state machine,
+/// to a speech page's text, or to the reveal-delay timing fails that test
+/// instead of silently re-pacing the intro.
+///
+/// `xtask`'s `boot-to-first-fight` scenario script is the consumer: its
+/// intro block presses A or B on exactly the frames this table says a wait
+/// is reached, and its own tests assert the authored script against this
+/// table frame for frame.
+pub const TRAVERSAL_RUNS: &[TraversalRun] = &[
+    // --- page 0: WELCOME ---
+    run(121, true), // prompt 1 (\p)
+    run(132, true), // prompt 2 (\p)
+    run(72, true),  // prompt 3 (\p)
+    run(179, true), // prompt 4 (\p)
+    run(4, false),  // reveal-delay drain, then the page terminator
+    // --- page 1: THIS_IS_A_POKEMON (its {PAUSE 96} is inside this run) ---
+    run(230, true), // prompt 1 (\p)
+    run(4, false),  // page terminator drain
+    // --- page 2: MAIN_SPEECH ---
+    run(244, true), // prompt 1 (\p)
+    run(279, true), // prompt 2 (\l)
+    run(9, false),  // scroll animation, no input needed
+    run(140, true), // prompt 3 (\p)
+    run(235, true), // prompt 4 (\p)
+    run(267, true), // prompt 5 (\p)
+    run(235, true), // prompt 6 (\p)
+    run(247, true), // prompt 7 (\l)
+    run(9, false),  // scroll animation
+    run(72, true),  // prompt 8 (\p)
+    run(4, false),  // page terminator drain
+    // --- page 3: AND_YOU_ARE ---
+    run(49, true), // prompt 1 (\p)
+    run(4, false), // page terminator drain
+    // --- page 4: WHATS_YOUR_NAME ---
+    run(112, true), // prompt 1 (\p)
+    run(4, false),  // page terminator drain
+    // --- page 5: so_its_player ---
+    run(49, true), // prompt 1 (\p)
+    run(4, false), // page terminator drain
+    // --- page 6: youre_player ---
+    run(37, true),  // prompt 1 (\p)
+    run(215, true), // prompt 2 (\l)
+    run(9, false),  // scroll animation
+    run(56, true),  // prompt 3 (\p)
+    run(4, false),  // page terminator drain
+    // --- page 7: ARE_YOU_READY ---
+    run(101, true), // prompt 1 (\p)
+    run(175, true), // prompt 2 (\p)
+    run(251, true), // prompt 3 (\l)
+    run(9, false),  // scroll animation
+    run(136, true), // prompt 4 (\p)
+    run(263, true), // prompt 5 (\p)
+    run(4, false),  // the last drain: its final frame hands off to the overworld
+];
+
+/// [`TraversalRun`]'s own terser constructor, so [`TRAVERSAL_RUNS`] reads
+/// as a table of numbers rather than thirty-six struct literals.
+const fn run(frames: u32, confirm_after: bool) -> TraversalRun {
+    TraversalRun {
+        frames,
+        confirm_after,
+    }
+}
+
+/// Total frames a full, never-held read of Birch's speech takes: every
+/// [`TRAVERSAL_RUNS`] entry's own frames plus the single confirm-press
+/// frame after each run that needs one.
+pub const TRAVERSAL_FRAMES: usize = traversal_frames(TRAVERSAL_RUNS);
+
+/// [`TRAVERSAL_FRAMES`]'s sum, as a `const fn` so the total stays derived
+/// from the table instead of being a second number to keep in step.
+const fn traversal_frames(runs: &[TraversalRun]) -> usize {
+    let mut total = 0;
+    let mut i = 0;
+    while i < runs.len() {
+        total += runs[i].frames as usize;
+        if runs[i].confirm_after {
+            total += 1;
+        }
+        i += 1;
+    }
+    total
+}
 
 /// The dialogue box's window-local text origin (a small inset from the
 /// content rect's own top-left corner, matching the margin

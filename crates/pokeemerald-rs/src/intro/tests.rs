@@ -9,10 +9,10 @@
 
 use assets::fonts::{FontId, FontImageRef, OwnedFontGlyphSheet, GLYPH_COUNT};
 use assets::pack::ImageRef;
-use engine::text::render::{PrinterInput, TextSpeed};
+use engine::text::render::{Printer, PrinterInput, TextSpeed, TickEvent};
 use rendering::Rgb888;
 
-use super::{IntroScene, IntroStatus, NUM_PAGES};
+use super::{IntroScene, IntroStatus, TraversalRun, NUM_PAGES};
 use crate::textbox::FrameAssets;
 
 /// No buttons pressed or held this frame -- shorthand for
@@ -582,6 +582,117 @@ fn a_failed_load_default_keeps_reporting_pack_missing_without_panicking() {
     assert!(first.is_pack_missing());
     let second = super::load_default().unwrap_err();
     assert!(second.is_pack_missing());
+}
+
+/// A one-frame confirm press, exactly as the real app produces it:
+/// `crate::flow::intro_printer_input` sets *both* `a_pressed` and `a_held`
+/// on the frame a button goes down, so a press frame is never the
+/// "pressed but not held" shape [`PRESS_A`] uses for the state-machine
+/// tests above. It makes no difference to the held-A/B speed-up (the press
+/// lands while the printer is already waiting on a `\p`/`\l`, never mid
+/// reveal-delay, so `has_print_been_sped_up` never arms), but deriving
+/// [`super::TRAVERSAL_RUNS`] from anything other than the real input shape
+/// would leave the pin proving less than it claims.
+const CONFIRM: PrinterInput = PrinterInput {
+    a_pressed: true,
+    b_pressed: false,
+    a_held: true,
+    b_held: false,
+};
+
+/// Re-derive [`super::TRAVERSAL_RUNS`] from the real printer: build the
+/// same [`Printer`] [`IntroScene::new`] builds (same speed, same origin,
+/// same `with_ab_speed_up_print`), re-armed per page exactly as
+/// [`IntroScene::advance_page`] re-arms it, and drive
+/// [`super::speech::pages`] through it with no input at all except one
+/// [`CONFIRM`] frame on each `\p`/`\l` wait.
+///
+/// Returns the runs of no-input frames between those press frames,
+/// delimited the same three ways the scenario script's own segments are: a
+/// wait being reached ([`TickEvent::AwaitingClear`]/[`TickEvent::AwaitingScroll`],
+/// a press follows), a scroll animation finishing
+/// ([`TickEvent::ScrollFinished`]), and a page's terminator being consumed
+/// ([`TickEvent::Finished`]).
+fn derive_traversal_runs() -> Vec<TraversalRun> {
+    let pixels = blank_sheet_pixels();
+    let pages = super::speech::pages();
+    let mut printer = Printer::new(
+        pages[0].clone(),
+        synthetic_sheet(&pixels),
+        TextSpeed::Mid,
+        super::PRINTER_ORIGIN,
+    )
+    .with_ab_speed_up_print();
+
+    let mut runs = Vec::new();
+    let mut frames = 0;
+    let mut page = 0;
+    let mut confirm_next = false;
+    // A generous bound, ~5x the real total: a printer that stopped
+    // terminating should fail this test, not hang CI.
+    for _ in 0..20_000 {
+        if confirm_next {
+            printer.tick(CONFIRM);
+            confirm_next = false;
+            continue;
+        }
+        let event = printer.tick(NONE);
+        frames += 1;
+        match event {
+            TickEvent::AwaitingClear | TickEvent::AwaitingScroll => {
+                runs.push(TraversalRun {
+                    frames,
+                    confirm_after: true,
+                });
+                frames = 0;
+                confirm_next = true;
+            }
+            TickEvent::ScrollFinished => {
+                runs.push(TraversalRun {
+                    frames,
+                    confirm_after: false,
+                });
+                frames = 0;
+            }
+            TickEvent::Finished => {
+                runs.push(TraversalRun {
+                    frames,
+                    confirm_after: false,
+                });
+                frames = 0;
+                page += 1;
+                if page == NUM_PAGES {
+                    return runs;
+                }
+                printer.restart(pages[page].clone());
+            }
+            _ => {}
+        }
+    }
+    panic!("the speech never terminated: {} runs so far", runs.len());
+}
+
+/// The pack-free pin behind `xtask`'s `boot-to-first-fight` intro script
+/// (module docs' "Traversal pacing" section): every number in
+/// [`super::TRAVERSAL_RUNS`] is what the real [`Printer`] actually does
+/// with the real [`super::speech::pages`] at [`TextSpeed::Mid`], so a
+/// change to the printer's state machine, to a speech page's text, or to
+/// the reveal-delay timing breaks *here* -- visibly, in a test CI runs
+/// without a pack -- instead of only inside the pack-gated scenario run.
+#[test]
+fn traversal_runs_match_the_pinned_table() {
+    assert_eq!(derive_traversal_runs(), super::TRAVERSAL_RUNS);
+}
+
+/// [`super::TRAVERSAL_FRAMES`] is the table's own total, presses included
+/// -- the single number `xtask`'s script budgets its intro block against.
+#[test]
+fn traversal_frames_totals_the_table() {
+    let total: usize = super::TRAVERSAL_RUNS
+        .iter()
+        .map(|run| run.frames as usize + usize::from(run.confirm_after))
+        .sum();
+    assert_eq!(super::TRAVERSAL_FRAMES, total);
 }
 
 /// Senior review round 3: the one real-pack composition check this module

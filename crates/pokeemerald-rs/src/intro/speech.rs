@@ -14,9 +14,13 @@
 //! line), and `{PAUSE n}` marks upstream's `EXT_CTRL_CODE_PAUSE` (->
 //! [`Token::ExtCtrl`] with [`engine::text::EXT_CTRL_CODE_PAUSE`] and one
 //! argument byte `n` -- pause printing for `n` frames,
-//! [`engine::text::render::Printer`]'s `PrinterState::Pause`). Every other
-//! character maps through [`Token::Char`]/[`engine::text::char_to_byte`]
-//! unchanged -- this module's `every_page_is_gen3_encodable` test pins that
+//! [`engine::text::render::Printer`]'s `PrinterState::Pause`). Those three
+//! are the *only* markers: `{` is never a literal in an authored page, so
+//! any other -- or unterminated -- `{...}` is a typo and [`parse_page`]
+//! panics on it rather than printing it verbatim (see its own "Panics"
+//! section). Every other character maps through
+//! [`Token::Char`]/[`engine::text::char_to_byte`] unchanged -- this
+//! module's `every_page_is_gen3_encodable` test pins that
 //! every page's characters (including "é" and the curly “ ” quotes
 //! `gText_ThisIsAPokemon` uses) have a real Gen-3 encoding.
 //!
@@ -141,6 +145,16 @@ const ARE_YOU_READY: &str = "All right, are you ready?{P}Your very own adventure
 /// Translate one authored page (module docs' `{P}`/`{L}`/`{PAUSE n}`/`\n`
 /// convention) into a decoded [`Token`] stream, terminated with
 /// [`Token::End`].
+///
+/// # Panics
+///
+/// On any malformed `{...}` marker in an authored page: unterminated (no
+/// `}` before the page ends), unrecognized (anything but `{P}`, `{L}` and
+/// `{PAUSE n}` -- `{PAUSE96}`, missing the space, included), or a
+/// `{PAUSE n}` whose `n` isn't a `u8`. These pages are compile-time
+/// authored source, never runtime input, so a typo is a bug in this file:
+/// panicking surfaces it in this module's own tests instead of silently
+/// printing the marker as literal text or dropping a pause.
 fn parse_page(text: &str) -> Vec<Token> {
     let mut tokens = Vec::new();
     let mut chars = text.chars().peekable();
@@ -151,28 +165,47 @@ fn parse_page(text: &str) -> Vec<Token> {
                 // Collect up to (and past) the matching `}` so a
                 // variable-length marker like `PAUSE 96` -- unlike the
                 // fixed two-character `P}`/`L}` -- parses the same way.
-                let marker: String = chars.by_ref().take_while(|&c| c != '}').collect();
+                // A marker with no `}` at all runs to the end of the page,
+                // which `closed` catches below.
+                let mut marker = String::new();
+                let mut closed = false;
+                for c in chars.by_ref() {
+                    if c == '}' {
+                        closed = true;
+                        break;
+                    }
+                    marker.push(c);
+                }
+                assert!(
+                    closed,
+                    "unterminated {{...}} marker {marker:?} in an authored speech page"
+                );
                 match marker.as_str() {
                     "P" => tokens.push(Token::PromptClear),
                     "L" => tokens.push(Token::PromptScroll),
                     _ => {
-                        if let Some(frames) = marker.strip_prefix("PAUSE ") {
-                            let frames: u8 = frames.parse().unwrap_or_else(|err| {
-                                panic!("bad {{PAUSE}} marker {marker:?}: {err}")
-                            });
-                            tokens.push(Token::ExtCtrl {
-                                sub: EXT_CTRL_CODE_PAUSE,
-                                args: vec![frames],
-                            });
-                        } else {
-                            // No other `{...}` marker appears in this
-                            // module's authored pages; a literal `{`
-                            // (never used above) would otherwise fall
-                            // through here unchanged, marker and all.
-                            tokens.push(Token::Char('{'));
-                            tokens.extend(marker.chars().map(Token::Char));
-                            tokens.push(Token::Char('}'));
-                        }
+                        // Fail closed on anything else. This module's pages
+                        // are authored source, not runtime input: `{` is
+                        // never a literal here (no upstream Birch-speech
+                        // string contains one), so an unrecognized marker
+                        // is a typo -- and re-emitting it as literal text
+                        // would silently print "{PAUSE96}" on screen, or
+                        // silently drop a pause, instead of saying so. Same
+                        // posture as the `{PAUSE n}` argument parse just
+                        // below, which has always panicked.
+                        let frames = marker.strip_prefix("PAUSE ").unwrap_or_else(|| {
+                            panic!(
+                                "unrecognized {{{marker}}} marker in an authored speech page \
+                                 (expected {{P}}, {{L}} or {{PAUSE n}})"
+                            )
+                        });
+                        let frames: u8 = frames
+                            .parse()
+                            .unwrap_or_else(|err| panic!("bad {{PAUSE}} marker {marker:?}: {err}"));
+                        tokens.push(Token::ExtCtrl {
+                            sub: EXT_CTRL_CODE_PAUSE,
+                            args: vec![frames],
+                        });
                     }
                 }
             }
@@ -213,6 +246,60 @@ mod tests {
                 Token::End,
             ]
         );
+    }
+
+    /// `{PAUSE 96}` must survive authoring as a real pause token, not
+    /// degrade into literal text -- the regression this module's
+    /// fail-closed marker parse exists for.
+    #[test]
+    fn parse_page_translates_a_pause_marker() {
+        let tokens = parse_page("a{PAUSE 96}b");
+        assert_eq!(
+            tokens,
+            vec![
+                Token::Char('a'),
+                Token::ExtCtrl {
+                    sub: EXT_CTRL_CODE_PAUSE,
+                    args: vec![96],
+                },
+                Token::Char('b'),
+                Token::End,
+            ]
+        );
+    }
+
+    /// A mistyped marker used to re-emit itself as literal text -- so
+    /// `{PAUSE96}` (no space) would have *printed* "{PAUSE96}" in Birch's
+    /// speech and silently dropped the pause. It must panic instead
+    /// ([`parse_page`]'s "Panics" section).
+    #[test]
+    #[should_panic(expected = "unrecognized {PAUSE96} marker")]
+    fn a_marker_missing_its_space_panics_instead_of_printing_itself() {
+        parse_page("This is a POKéMON.{PAUSE96}{P}");
+    }
+
+    /// Same fail-closed posture for a marker this module has no case for
+    /// at all.
+    #[test]
+    #[should_panic(expected = "unrecognized {PLAYER} marker")]
+    fn an_unknown_marker_panics() {
+        parse_page("So it's {PLAYER}?");
+    }
+
+    /// An unterminated marker used to swallow the whole rest of the page
+    /// and then re-emit a `}` that was never there.
+    #[test]
+    #[should_panic(expected = "unterminated {...} marker")]
+    fn an_unterminated_marker_panics() {
+        parse_page("Hi!{P");
+    }
+
+    /// A `{PAUSE n}` whose argument isn't a `u8` -- the parse panic this
+    /// module has always had, kept under test now that its siblings are.
+    #[test]
+    #[should_panic(expected = "bad {PAUSE} marker")]
+    fn a_pause_marker_with_an_out_of_range_argument_panics() {
+        parse_page("{PAUSE 300}");
     }
 
     #[test]

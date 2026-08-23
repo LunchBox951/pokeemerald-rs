@@ -20,21 +20,29 @@
 //! reach the game through the real `App`/[`super::ScenarioDriver`] path,
 //! not just [`pokeemerald_rs::intro::IntroScene`]'s own headless tests.
 //!
-//! These counts were measured, not derived by hand: a scratch harness drove
-//! the real `pokeemerald_rs::intro::speech::pages()` token streams through
-//! `engine::text::render::Printer` at `TextSpeed::Mid` (`IntroScene::from_pack`'s
-//! own default) with a synthetic glyph sheet -- the same fixture shape
-//! `crate::intro::tests` already uses, and pixel-content-independent, since
-//! only real advance-width/frame-timing metadata (not sheet pixels) affects
-//! *when* a wait is reached. Re-derive by temporarily adding an equivalent
-//! harness if `pokeemerald_rs::intro::speech`'s authored pages ever change;
-//! see [`super::ScenarioError::Milestone`]'s own doc comment on this
-//! script's general "fails closed, re-derive the budget" philosophy.
+//! These counts are derived, not hand-copied. `pokeemerald_rs::intro`
+//! publishes them as `TRAVERSAL_RUNS` (and their total,
+//! `TRAVERSAL_FRAMES`), and that crate's own pack-free
+//! `intro::tests::traversal_runs_match_the_pinned_table` re-derives the
+//! whole table on every CI run by driving the real
+//! `pokeemerald_rs::intro::speech::pages()` token streams through
+//! `engine::text::render::Printer` at `TextSpeed::Mid`
+//! (`IntroScene::from_pack`'s own default) over a synthetic glyph sheet --
+//! pixel-content-independent, since only the compiled-in
+//! advance-width/frame-timing metadata (not sheet pixels) affects *when* a
+//! wait is reached. This module's own
+//! `intro_block_matches_the_engines_own_traversal_pacing` test then walks
+//! the intro block below against that table run by run, so a re-paced
+//! printer or an edited speech page fails a pack-free test naming the
+//! drifted run rather than only the pack-gated scenario -- see
+//! [`super::ScenarioError::Milestone`]'s own doc comment on this script's
+//! general "fails closed, re-derive the budget" philosophy.
 //!
 //! Every page's own last-token-before-`Token::End` shape (`...{P}` --
-//! `pokeemerald_rs::intro::speech`'s "every_question_page_waits_for_a_press_before_advancing"
-//! test) means the four ticks after a page's *final* prompt is confirmed
-//! are identical across every page: three reveal-delay-drain ticks the
+//! `pokeemerald_rs::intro::speech`'s
+//! `every_question_page_waits_for_a_press_before_advancing` test) means the
+//! four ticks after a page's *final* prompt is confirmed are identical
+//! across every page: three reveal-delay-drain ticks the
 //! `\p` reloaded, then the tick that actually consumes `Token::End`. For
 //! pages 0-6 that fourth tick only fires `IntroScene::advance_page` (still
 //! `AppState::Intro`); for page 7 (`ARE_YOU_READY`, the last page) that
@@ -607,44 +615,21 @@ mod tests {
 
     /// The intro traversal's own total frame count (module docs' "The
     /// intro traversal" section): twenty-four release-then-press pairs (two
-    /// of them B, the rest A), two nine-frame scroll drains, and the final
-    /// page's split `3 + 1` terminator tail -- summed here from the exact
-    /// same measured per-prompt counts [`super::SEGMENTS`]' own intro block
-    /// is built from, so a future re-measurement only has to update one
-    /// side of this comparison for `boot_to_first_fight_script_has_the_expected_shape`
-    /// to catch a drift.
-    const INTRO_TRAVERSAL_FRAMES: usize = 121 + 1 // page 0 prompt 1 (B)
-        + 132 + 1 // page 0 prompt 2
-        + 72 + 1 // page 0 prompt 3
-        + 179 + 1 // page 0 prompt 4
-        + 4 // page 0 -> page 1
-        + 230 + 1 // page 1 prompt 1
-        + 4 // page 1 -> page 2
-        + 244 + 1 // page 2 prompt 1
-        + 279 + 1 + 9 // page 2 prompt 2 (B, scroll)
-        + 140 + 1 // page 2 prompt 3
-        + 235 + 1 // page 2 prompt 4
-        + 267 + 1 // page 2 prompt 5
-        + 235 + 1 // page 2 prompt 6
-        + 247 + 1 + 9 // page 2 prompt 7 (scroll)
-        + 72 + 1 // page 2 prompt 8
-        + 4 // page 2 -> page 3
-        + 49 + 1 // page 3 prompt 1
-        + 4 // page 3 -> page 4
-        + 112 + 1 // page 4 prompt 1
-        + 4 // page 4 -> page 5
-        + 49 + 1 // page 5 prompt 1
-        + 4 // page 5 -> page 6
-        + 37 + 1 // page 6 prompt 1
-        + 215 + 1 + 9 // page 6 prompt 2 (scroll)
-        + 56 + 1 // page 6 prompt 3
-        + 4 // page 6 -> page 7
-        + 101 + 1 // page 7 prompt 1
-        + 175 + 1 // page 7 prompt 2
-        + 251 + 1 + 9 // page 7 prompt 3 (scroll)
-        + 136 + 1 // page 7 prompt 4
-        + 263 + 1 // page 7 prompt 5
-        + 3 + 1; // trailing reveal-delay drain, then the Overworld handoff
+    /// of them B, the rest A), four nine-frame scroll drains, and the final
+    /// page's split `3 + 1` terminator tail.
+    ///
+    /// **Not re-typed here.** `pokeemerald_rs::intro::TRAVERSAL_FRAMES` is
+    /// the total of `pokeemerald_rs::intro::TRAVERSAL_RUNS`, which that
+    /// crate's own pack-free
+    /// `intro::tests::traversal_runs_match_the_pinned_table` re-derives
+    /// from the real `engine::text::render::Printer` on every CI run -- so
+    /// this budget, and
+    /// [`intro_block_matches_the_engines_own_traversal_pacing`] below,
+    /// track the printer's actual behaviour instead of a measurement
+    /// someone took once. If the intro's pacing genuinely changes, that
+    /// test names the drifted run and [`super::SEGMENTS`]' own counts below
+    /// are what needs updating.
+    const INTRO_TRAVERSAL_FRAMES: usize = pokeemerald_rs::intro::TRAVERSAL_FRAMES;
 
     /// Pack-free shape assertions on the authored script itself: the total
     /// frame count [`super::SEGMENTS`] adds up to, the opening title ->
@@ -724,6 +709,64 @@ mod tests {
             last.buttons,
             AppButtons::NONE,
             "the script ends on a released frame, like BOOT_TO_MAIN_MENU"
+        );
+    }
+
+    /// Pin every one of [`super::SEGMENTS`]' intro counts against
+    /// `pokeemerald_rs::intro::TRAVERSAL_RUNS` -- the derived table (see
+    /// [`INTRO_TRAVERSAL_FRAMES`]) rather than the measurement session
+    /// that produced them.
+    ///
+    /// Walks the expanded intro region run by run: each
+    /// `TraversalRun::frames` must be that many consecutive released
+    /// frames, and each `confirm_after` run must be followed by exactly one
+    /// pressed frame (A or B -- which one is this script's own choice, not
+    /// the engine's, and changes no timing since neither button is ever
+    /// held). Any drift in a per-prompt count fails here naming the run,
+    /// where the total-frames assertion in
+    /// [`boot_to_first_fight_script_has_the_expected_shape`] could only say
+    /// the script got longer. Pack-free, like every test in this module
+    /// that isn't `#[ignore]`d.
+    #[test]
+    fn intro_block_matches_the_engines_own_traversal_pacing() {
+        let frames = spec(ScenarioName::BootToFirstFight).frames;
+        let mut index = 2; // past START and the NEW GAME confirm
+
+        for (run_index, run) in pokeemerald_rs::intro::TRAVERSAL_RUNS.iter().enumerate() {
+            for frame_in_run in 0..run.frames as usize {
+                assert_eq!(
+                    frames[index + frame_in_run].buttons,
+                    AppButtons::NONE,
+                    "run {run_index}: frame {frame_in_run} of {} must be released",
+                    run.frames
+                );
+            }
+            index += run.frames as usize;
+
+            if run.confirm_after {
+                let buttons = frames[index].buttons;
+                assert!(
+                    buttons == AppButtons::A || buttons == AppButtons::B,
+                    "run {run_index} ends on a \\p/\\l wait: script index {index} \
+                     must press A or B, not {buttons:?}"
+                );
+                index += 1;
+            } else {
+                // A scroll drain or a page terminator needs no input, so
+                // the next run simply continues -- either more released
+                // frames or, at the very end, the walk out of the intro.
+                assert_ne!(
+                    frames.get(index).map(|frame| frame.buttons),
+                    Some(AppButtons::A),
+                    "run {run_index} needs no confirm; script index {index} must not press one"
+                );
+            }
+        }
+
+        assert_eq!(
+            index,
+            2 + INTRO_TRAVERSAL_FRAMES,
+            "the traversal table must account for the whole intro block"
         );
     }
 

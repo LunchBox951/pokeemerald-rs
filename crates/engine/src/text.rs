@@ -114,7 +114,7 @@ pub const CHAR_BARD_WORD_DELIMIT: u8 = 0x37;
 /// `0xFC 0x08 <frames>`, one argument byte -- the frame count
 /// [`render::Printer`]'s `RENDER_STATE_PAUSE`-mirroring state counts down
 /// before returning to normal character handling (`text.c:1013-1017`,
-/// `text.c:1213-1220`).
+/// `text.c:1215-1220`).
 ///
 /// [`render::Printer`]: crate::text::render::Printer
 pub const EXT_CTRL_CODE_PAUSE: u8 = 0x08;
