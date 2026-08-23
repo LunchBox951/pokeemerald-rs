@@ -250,7 +250,7 @@ mod tests {
     /// returns, before any step ever runs -- not the `ELEVATION_TRANSITION`
     /// wildcard [`OverworldPhase::warp_to_position`] used to hardcode.
     /// [`crate::new_game::default_last_heal_location`]'s male default names
-    /// `(4, 2)` on the default player's house 1F, which is elevation `3` in
+    /// `(4, 2)` on the default player's house 2F, which is elevation `3` in
     /// the real bundled layout -- confirmed by this test rather than merely
     /// asserted, since a fixture that stopped matching the real tile would
     /// otherwise pass vacuously. Both
