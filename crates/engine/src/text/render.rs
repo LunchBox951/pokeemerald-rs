@@ -586,7 +586,7 @@ impl<S: GlyphSource> Printer<S> {
     ///   been sped up once (`has_print_been_sped_up`), *holding* A/B forces
     ///   `delay_counter` to zero before the wait guard even runs, every loop
     ///   iteration — including `RENDER_REPEAT` re-entries within one tick.
-    /// * `text.c:945-955` — the reveal-delay counter is reloaded to
+    /// * `text.c:945-961` — the reveal-delay counter is reloaded to
     ///   [`TextSpeed::wait_frames`] (`delayCounter = textSpeed`)
     ///   *unconditionally* before consuming each token, and the
     ///   `delay_counter > 0` guard at the top of the loop — upstream's

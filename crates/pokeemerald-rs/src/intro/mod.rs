@@ -65,9 +65,9 @@
 //! either button clears/scrolls a page identically, module docs on
 //! [`engine::text::render::Printer::tick`]). An earlier pre-1.0 revision of
 //! this scene wired B to a `skip_pressed` shortcut with no upstream
-//! analogue at all; issue #393 deleted it once `V-7`/`H-1`
-//! (`docs/acceptance/v1.md`) flagged it as a dev convenience that had
-//! survived into production code. The closest real Emerald gets to a B
+//! analogue at all; issue #393 flagged and deleted it as a dev
+//! convenience that would otherwise have run into the `V-7`/`H-1` gates
+//! (`docs/acceptance/v1.md`) at release time. The closest real Emerald gets to a B
 //! shortcut is `WhatsYourName`'s own wait state also accepting B
 //! (`main_menu.c:1590`) -- ordinary dialogue-advance, exactly what this
 //! scene now does.
