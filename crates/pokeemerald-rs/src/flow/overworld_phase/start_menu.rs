@@ -173,6 +173,18 @@ impl OverworldPhase {
     /// means an empty party, and slot 0 is zeroed rather than left holding a
     /// stale mon -- upstream's `ZeroPlayerPartyMons` leaves the same shape.
     ///
+    /// Slot 0 is *merged*, not rebuilt (issue #344). The block this phase
+    /// holds is the one a continue was loaded from, so `player_party[0]` is
+    /// still the record [`OverworldPhase::copy_party_and_objects_from_save`]
+    /// decoded the lead out of -- the backing state for every field the
+    /// battle model does not carry. Rebuilding the record from the lead
+    /// alone wrote all of them back as zero, which cost a loaded save its
+    /// held item, EVs, friendship, status and mail on an ordinary SAVE;
+    /// [`party::merge_into_save_pokemon`] overlays the battler onto those
+    /// retained bytes and falls back to a fresh record only when the slot
+    /// holds a different Pokémon -- a new game's empty slot, or a lead
+    /// swapped in since the load.
+    ///
     /// **Object events** (`SaveObjectEvents`): only the player's facing,
     /// the one field this port models
     /// ([`engine::save::SavedObjectEvent`]'s own docs). Both direction
@@ -182,7 +194,12 @@ impl OverworldPhase {
     /// this port's avatar changes direction.
     pub(super) fn copy_party_and_objects_to_save(&mut self) {
         if let Some(lead) = &self.party_lead {
-            self.save1.player_party[0] = party::to_save_pokemon(&battle::Dex::new(), lead);
+            self.save1.player_party[0] = party::merge_into_save_pokemon(
+                &battle::Dex::new(),
+                lead,
+                &self.save1.player_party[0],
+                &mut self.lead_hp_hidden_by_load,
+            );
             if self.save1.player_party_count == 0 {
                 self.save1.player_party_count = 1;
             }
@@ -215,13 +232,19 @@ impl OverworldPhase {
     pub(super) fn copy_party_and_objects_from_save(&mut self) {
         if self.save1.player_party_count == 0 {
             self.party_lead = None;
+            self.lead_hp_hidden_by_load = 0;
             return;
         }
         match party::from_save_pokemon(&battle::Dex::new(), &self.save1.player_party[0]) {
-            Ok(lead) => self.party_lead = Some(lead),
+            Ok(lead) => {
+                self.lead_hp_hidden_by_load =
+                    party::hp_hidden_by_load(&self.save1.player_party[0], &lead);
+                self.party_lead = Some(lead);
+            }
             Err(err) => {
                 eprintln!("continue: {err} -- resuming with an empty party");
                 self.party_lead = None;
+                self.lead_hp_hidden_by_load = 0;
             }
         }
     }
