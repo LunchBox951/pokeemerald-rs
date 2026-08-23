@@ -170,8 +170,9 @@ impl OverworldPhase {
     /// retaining an existing valid count and the dormant serialized slots
     /// 1-5. The encoder uses the lead's own original-trainer id (the box
     /// header's XOR key), which need not be the current player's id. No lead
-    /// means an empty party, and slot 0 is zeroed rather than left holding a
-    /// stale mon -- upstream's `ZeroPlayerPartyMons` leaves the same shape.
+    /// means an empty party -- *unless the slot was retained undecodable
+    /// (below)* -- and slot 0 is then zeroed rather than left holding a
+    /// stale mon, upstream's `ZeroPlayerPartyMons` shape.
     ///
     /// Slot 0 is *merged*, not rebuilt (issue #344). The block this phase
     /// holds is the one a continue was loaded from, so `player_party[0]` is
@@ -198,7 +199,7 @@ impl OverworldPhase {
     /// player the whole record -- nickname, OT name, language, markings,
     /// and the secure bytes themselves -- on the very next ordinary SAVE.
     /// Upstream never rebuilds a party record from a partial model either:
-    /// `SavePlayerParty` (`pokeemerald/src/load_save.c:160-163`) copies
+    /// `SavePlayerParty` (`pokeemerald/src/load_save.c:160-168`) copies
     /// whatever bytes `gPlayerParty` holds, with no decode step of its own
     /// to fail. A genuinely empty slot (`player_party_count == 0` at load)
     /// still gets [`OverworldPhase::undecodable_lead_retained`] `false` and
@@ -209,8 +210,8 @@ impl OverworldPhase {
     ///
     /// Left exactly as loaded, not zeroed. Upstream's `SavePlayerParty`
     /// writes `gSaveBlock1Ptr->playerPartyCount = gPlayerPartyCount`
-    /// unconditionally (`load_save.c:160-163`) and its `LoadPlayerParty`
-    /// (`:169-176`) reads that same count straight back with no validation
+    /// unconditionally (`load_save.c:160-168`) and its `LoadPlayerParty`
+    /// (`:170-178`) reads that same count straight back with no validation
     /// step that could reject a slot -- there is no code path upstream
     /// where a nonzero count and an undecodable slot 0 coexist after a
     /// `SavePlayerParty`/`LoadPlayerParty` round trip, because upstream's
@@ -295,13 +296,20 @@ impl OverworldPhase {
                 self.undecodable_lead_retained = false;
             }
             Err(err) => {
-                eprintln!("continue: {err} -- resuming with an empty party");
+                eprintln!(
+                    "continue: {err} -- slot 0's record and stored party count are \
+                     retained; resuming with an empty party"
+                );
                 self.party_lead = None;
                 self.lead_hp_hidden_by_load = 0;
                 // The slot's stored bytes are still real save data (issue
                 // #353): retained so `copy_party_and_objects_to_save`'s
                 // no-lead arm leaves them untouched instead of erasing them
-                // on the next ordinary SAVE.
+                // on the next ordinary SAVE. Every `PartyError` lands here,
+                // not just a failed secure-region checksum -- an unknown
+                // species and an unbuildable moveset are this port's limits,
+                // not proof the bytes are junk, so they are retained the
+                // same way (see `undecodable_lead_retained`'s own docs).
                 self.undecodable_lead_retained = true;
             }
         }

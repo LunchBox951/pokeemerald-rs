@@ -243,15 +243,34 @@ pub(crate) struct OverworldPhase {
     /// would not decode, rather than because the slot is genuinely empty
     /// (issue #353).
     ///
-    /// Set by [`Self::copy_party_and_objects_from_save`]'s error arm, and
-    /// nowhere else in production: the only other write to
-    /// [`Self::party_lead`] outside that load path is [`Self::load_default`]'s
-    /// provisional-starter grant, a deliberate new-game identity change that
-    /// starts from [`Self::new`]'s `false` and never runs the load path at
-    /// all. [`Self::copy_party_and_objects_to_save`] reads this flag, not
-    /// the save bytes, to decide whether the no-lead arm may zero
+    /// "Would not decode" covers *every* decode failure, not just a bad
+    /// secure-region checksum: [`crate::party::PartyError::Battler`]'s
+    /// unknown species, out-of-range level and unbuildable moveset are
+    /// retained on exactly the same footing as
+    /// [`crate::party::PartyError::Substructures`], because none of them is
+    /// evidence that the stored bytes are anything but real player data --
+    /// they are evidence that *this port* cannot yet run them. A stored
+    /// `player_party_count` of 1 beside such a slot is likewise preserved
+    /// as loaded rather than self-healed to zero.
+    ///
+    /// Set by [`Self::copy_party_and_objects_from_save`]'s error arm and
+    /// cleared by its other two (empty count, clean decode). The battle
+    /// handoffs write [`Self::party_lead`] too -- `begin_wild_battle`,
+    /// `begin_first_battle`, `begin_route103_rival_battle` and
+    /// `begin_sight_trainer_battle_if_seen` each take it to `None` for the
+    /// duration of a fight, and the `&mut` write-backs
+    /// (`npc_trainer_battle::advance_npc_trainer_battle` and its wild
+    /// counterpart) put a `Some` back -- but none of them can run while
+    /// this flag is true: every one of those handoffs bails out unless the
+    /// lead is already `Some`, and the flag is only ever set when the
+    /// decode left none. So the flag's production transitions remain
+    /// exactly two: this load path, and [`Self::load_default`]'s
+    /// provisional-starter grant, a deliberate new-game identity change
+    /// that starts from [`Self::new`]'s `false` and never runs the load
+    /// path at all. [`Self::copy_party_and_objects_to_save`] reads this
+    /// flag, not the save bytes, to decide whether the no-lead arm may zero
     /// `player_party[0]` -- upstream's `SavePlayerParty`
-    /// (`pokeemerald/src/load_save.c:160-163`) never rebuilds a party
+    /// (`pokeemerald/src/load_save.c:160-168`) never rebuilds a party
     /// record from a partial model, it copies whatever bytes `gPlayerParty`
     /// holds, so a slot this port cannot decode into a battler must still
     /// round-trip through a save exactly as those bytes came in.

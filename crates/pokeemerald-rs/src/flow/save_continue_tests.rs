@@ -1396,7 +1396,7 @@ fn saving_twice_in_one_session_files_the_same_bytes() {
 /// even attribute to a real cause (a flipped bit in a copied save file, a
 /// future encoder bug, anything) destroyed the record on the very next
 /// ordinary SAVE. Upstream has no such step to fail: `SavePlayerParty`
-/// (`pokeemerald/src/load_save.c:160-163`) is a `memcpy`, and this is the
+/// (`pokeemerald/src/load_save.c:160-168`) is a `memcpy`, and this is the
 /// port-only failure mode that memcpy cannot have.
 #[test]
 fn a_slot_that_will_not_decode_survives_an_ordinary_save() {
@@ -1463,7 +1463,7 @@ fn a_slot_that_will_not_decode_survives_an_ordinary_save() {
     assert_eq!(
         saved.player_party_count, STORED_COUNT,
         "upstream's own SavePlayerParty carries the count through unconditionally \
-         (load_save.c:160-163) -- an undecodable slot 0 must not lose it"
+         (load_save.c:160-168) -- an undecodable slot 0 must not lose it"
     );
 }
 
@@ -1471,8 +1471,8 @@ fn a_slot_that_will_not_decode_survives_an_ordinary_save() {
 /// that somehow inherited a set `undecodable_lead_retained` flag alongside
 /// stale bytes (issue #353 review, requirement 2) -- the state a bug in a
 /// future retention path could leave behind. Reproduces the shape of
-/// `OverworldPhase::load_default`'s provisional-starter grant, the one
-/// production write to `party_lead` outside the load path, without the
+/// `OverworldPhase::load_default`'s provisional-starter grant -- the
+/// flag's only production transition outside the load path -- without the
 /// asset pack a real `load_default` call needs.
 ///
 /// `copy_party_and_objects_to_save`'s merge arm is gated on `party_lead`
@@ -1499,12 +1499,13 @@ fn a_deliberate_identity_change_overrides_a_retained_undecodable_slot() {
     phase.undecodable_lead_retained = true;
 
     // The deliberate identity change `load_default` performs: a fresh
-    // provisional starter, and (belt and suspenders, matching that
-    // constructor) the retention flag cleared.
+    // provisional starter. That constructor also clears the retention flag
+    // belt-and-suspenders style, and this test deliberately does *not* --
+    // the flag stays `true` across the save below, so what follows proves
+    // the `Some` lead alone overrides it.
     let trainer_id = u32::from_le_bytes(phase.save2.player_trainer_id);
     let starter = new_game::provisional_starter().with_original_trainer_id(trainer_id);
     phase.party_lead = Some(starter.clone());
-    phase.undecodable_lead_retained = false;
 
     save_from_the_start_menu(&mut phase, &mut slot);
 
