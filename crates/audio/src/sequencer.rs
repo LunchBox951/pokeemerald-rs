@@ -21,7 +21,7 @@
 //! [`Sequencer::note_priority`]), which drives [`crate::mixer::Mixer`]'s
 //! channel reuse/steal/refuse search.
 //!
-//! `MEMACC` is executed too (`ply_memacc`, `m4a.c:1441`..`:1509`): see
+//! `MEMACC` is executed too (`ply_memacc`, `m4a.c:1437`..`:1509`): see
 //! [`Self::exec_memacc`] for the op table, the accumulator area's ownership
 //! (one per [`Sequencer`], [`MemAccArea`]'s docs), and its fail-safe
 //! out-of-range handling.
@@ -70,20 +70,46 @@ const MAX_COMMANDS_PER_TICK: u32 = 4096;
 const MEM_ACC_LEN: usize = 16;
 
 /// The `MEMACC` accumulator area: 16 byte cells `MEMACC` ops read and write
-/// (`ply_memacc`, `m4a.c:1441`..`:1509`).
+/// (`ply_memacc`, `m4a.c:1437`..`:1509`).
 ///
-/// Upstream's array is a single global (`gMPlayMemAccArea`) that every music
-/// player shares (`m4aSoundInit` points every `MusicPlayerInfo::memAccArea`
-/// at the same bytes, `m4a.c:88`) and that is zeroed exactly once, by its
-/// static initializer, and never again — it persists across every song any
-/// player ever plays for the life of the program. This crate has no
-/// standing "player" object that outlives one song (a new [`Sequencer`] is
-/// built per song, mirroring [`Song`] itself being a per-song value), so
-/// there is no cross-song global to carry it in; it lives on [`Sequencer`]
-/// instead, one area per player/session exactly as upstream attaches one
-/// `memAccArea` pointer per player, and is zeroed at construction — the
-/// same zero upstream's static initializer gives every player's shared area
-/// before any song has run.
+/// # Divergence: one private area per [`Sequencer`], not one shared global
+///
+/// Upstream's array is a single global (`gMPlayMemAccArea`). `m4aSoundInit`
+/// loops over `gMPlayTable` and assigns *that same* pointer to every
+/// player's `MusicPlayerInfo::memAccArea` (`m4a.c:88`), so all players alias
+/// one 16-byte area and can read cells another player wrote. It is zeroed
+/// exactly once, by its static initializer, and never again — it persists
+/// across every song any player ever plays for the life of the program.
+///
+/// This port instead gives each [`Sequencer`] a private area, zeroed at
+/// construction. That diverges on two axes rather than matching upstream:
+/// concurrent sequencers do not alias one another's cells, and a fresh
+/// [`Sequencer`] starts from zero where upstream would carry the previous
+/// song's cells forward. It follows from this crate having no standing
+/// "player" object that outlives one song (a new [`Sequencer`] is built per
+/// song, mirroring [`Song`] itself being a per-song value), so there is no
+/// cross-song global to carry the area in.
+///
+/// # Why the divergence is unobservable
+///
+/// A sweep of all 530 canonical MIDIs (`sound/songs/midi/*.mid`) for the
+/// controllers `tools/mid2agb` turns into `MEMACC` — CC `0x0C`/`0x10` emit
+/// the command, CC `0x0D` only latches the op number
+/// (`tools/mid2agb/agb.cpp:362`..`:371`) — finds exactly one emitter in the
+/// entire soundtrack: `mus_vs_trainer` issues a single `mem_set` of `117`
+/// into cell `0` (op `0`, addr `0`, data `117`). `mus_route104` sets CC
+/// `0x0D` but never emits a `MEMACC` at all, and no other song touches
+/// either controller.
+///
+/// So canonical data contains one blind write and zero reads: no song reads
+/// a cell back, and no branch op (`6..=17`) exists in shipped data at all.
+/// Nothing in the shipped soundtrack can observe cross-song, cross-player,
+/// or restart-time persistence of these bytes, which is what makes the
+/// private-area choice safe rather than merely convenient. The same
+/// argument covers the mid-playback sequencer rebuild in
+/// `crates/pokeemerald-rs/src/music/player.rs:340`..`:348`: it re-zeroes the
+/// area part-way through a song, and again there is no canonical reader to
+/// notice.
 type MemAccArea = [u8; MEM_ACC_LEN];
 
 /// Per-track runtime state (the mutable half of `struct MusicPlayerTrack`).
@@ -560,14 +586,24 @@ impl Sequencer {
             } => Self::exec_memacc(mem_acc, track, op, addr, value, target),
             // Every `XCMD` sub-command other than `xIECV`/`xIECL` (matched
             // above), and `PORT` (portamento), are decoded for stream
-            // fidelity but never emitted by `tools/mid2agb` (module docs,
+            // fidelity but not executed by this slice.
+            //
+            // That is deliberate deferral, not an absence of behaviour to
+            // defer: `ply_port` writes a byte to a CGB sound register
+            // selected by its first operand (`m4a_1.s:1056`..`:1068`; see
+            // `Event::Port`'s docs, `sequence.rs:87`..`:89`), and
+            // `gXcmdTable` (`m4a_tables.c:291`..`:307`) dispatches 12 real
+            // handlers behind its two `ply_xxx` stubs. The justification is
+            // reachability instead: `tools/mid2agb` emits only `xIECV` and
+            // `xIECL` and never a `PORT` or any other `XCMD`
+            // (`tools/mid2agb/agb.cpp:338`..`:341`; module docs, and
             // `crates/assets/src/audio.rs`'s "Deliberately deferred"), so
-            // there is no upstream behaviour for a Rust port to execute here.
+            // these arms are unreachable for canonical pack data.
             Event::Xcmd { .. } | Event::Port { .. } => {}
         }
     }
 
-    /// `ply_memacc` (`m4a.c:1441`..`:1509`): execute one `MEMACC` op against
+    /// `ply_memacc` (`m4a.c:1437`..`:1509`): execute one `MEMACC` op against
     /// the shared accumulator area.
     ///
     /// `op` `0..=5` mutate a cell and never branch; `op` `6..=17` compare a
@@ -693,11 +729,19 @@ impl Sequencer {
                 };
                 cell < other
             }
-            // `ply_memacc`'s `default: return;` (`m4a.c:1507`..`:1508`). The
-            // pack decoder already rejects any op outside `0..=17`
+            // `ply_memacc`'s `default: return;` (`m4a.c:1508`..`:1509`).
+            //
+            // The *assets* path cannot reach this arm: the pack decoder
+            // rejects any op outside `0..=17`
             // (`MemAccOp`/`MemAccCondition::from_byte`,
-            // `crates/assets/src/audio/song.rs`), so this only guards a raw
-            // `u8` that reached here some other way.
+            // `crates/assets/src/audio/song.rs`). The raw-ROM decoder is the
+            // concrete path that can: `Decoder::decode`'s `MEMACC` arm
+            // (`crates/audio/src/sequence.rs:280`..`:315`) passes the op byte
+            // through unchecked, and only `6..=17` (`MEMACC_COND_OPS`,
+            // `sequence.rs:161`) consumes a jump target — so an op `>= 18` in
+            // a malformed or non-mid2agb byte program arrives here with
+            // `target: None` and must simply do nothing, exactly as upstream
+            // does.
             _ => return,
         };
 
@@ -1308,7 +1352,7 @@ mod tests {
         assert!(!seq.is_finished());
     }
 
-    // --- MEMACC (`ply_memacc`, `m4a.c:1441`..`:1509`) ----------------------
+    // --- MEMACC (`ply_memacc`, `m4a.c:1437`..`:1509`) ----------------------
     //
     // The accumulator has no public accessor (upstream has none either —
     // `mplayInfo->memAccArea` is only ever read back by a later `MEMACC`),
@@ -1575,6 +1619,235 @@ mod tests {
     }
 
     #[test]
+    fn memacc_ne_comparison_takes_and_does_not_take() {
+        // `mem_bne` (op 7). The not-taken case is the *equal* boundary, so
+        // this fails if `!=` were ever written as `==`.
+        let prelude = || {
+            vec![Event::MemAcc {
+                op: 0,
+                addr: 0,
+                value: 10,
+                target: None,
+            }]
+        };
+        assert!(
+            memacc_branch_taken(prelude(), 7, 0, 5),
+            "10 != 5 should take mem_bne"
+        );
+        assert!(
+            !memacc_branch_taken(prelude(), 7, 0, 10),
+            "10 != 10 should not take mem_bne"
+        );
+    }
+
+    #[test]
+    fn memacc_hs_comparison_includes_the_equal_boundary() {
+        // `mem_bhs` (op 9) is `>=`. Taking at the equal boundary is what
+        // separates it from `mem_bhi`'s `>`; not taking one below separates
+        // it from `mem_bls`'s `<=`.
+        let prelude = || {
+            vec![Event::MemAcc {
+                op: 0,
+                addr: 0,
+                value: 10,
+                target: None,
+            }]
+        };
+        assert!(
+            memacc_branch_taken(prelude(), 9, 0, 10),
+            "10 >= 10 should take mem_bhs (>=, not >)"
+        );
+        assert!(
+            !memacc_branch_taken(prelude(), 9, 0, 11),
+            "10 >= 11 should not take mem_bhs"
+        );
+    }
+
+    #[test]
+    fn memacc_ls_comparison_includes_the_equal_boundary() {
+        // `mem_bls` (op 10) is `<=`. Taking at the equal boundary separates
+        // it from `mem_blo`'s `<`; not taking one above separates it from
+        // `mem_bhs`'s `>=`.
+        let prelude = || {
+            vec![Event::MemAcc {
+                op: 0,
+                addr: 0,
+                value: 10,
+                target: None,
+            }]
+        };
+        assert!(
+            memacc_branch_taken(prelude(), 10, 0, 10),
+            "10 <= 10 should take mem_bls (<=, not <)"
+        );
+        assert!(
+            !memacc_branch_taken(prelude(), 10, 0, 9),
+            "10 <= 9 should not take mem_bls"
+        );
+    }
+
+    #[test]
+    fn memacc_lo_comparison_excludes_the_equal_boundary() {
+        // `mem_blo` (op 11) is a strict `<`: the equal boundary must not
+        // take, which is what separates it from `mem_bls`'s `<=`.
+        let prelude = || {
+            vec![Event::MemAcc {
+                op: 0,
+                addr: 0,
+                value: 10,
+                target: None,
+            }]
+        };
+        assert!(
+            memacc_branch_taken(prelude(), 11, 0, 11),
+            "10 < 11 should take mem_blo"
+        );
+        assert!(
+            !memacc_branch_taken(prelude(), 11, 0, 10),
+            "10 < 10 should not take mem_blo (<, not <=)"
+        );
+    }
+
+    #[test]
+    fn memacc_cell_vs_cell_comparisons_cover_both_directions() {
+        // Ops 12..=17 (`mem_mem_beq`..`mem_mem_blo`) read `data` as a second
+        // *cell index* rather than a literal. Each case below sets cell0 to
+        // 10 and cell1 to `other`, then compares cell0 against cell1.
+        //
+        // Every op gets a taken case and a not-taken case chosen at the
+        // boundary that distinguishes it from its nearest neighbour, so
+        // swapping any of `==`/`!=`/`>`/`>=`/`<=`/`<` fails at least one row.
+        let prelude = |other: u8| {
+            vec![
+                Event::MemAcc {
+                    op: 0,
+                    addr: 0,
+                    value: 10,
+                    target: None,
+                },
+                Event::MemAcc {
+                    op: 0,
+                    addr: 1,
+                    value: other,
+                    target: None,
+                },
+            ]
+        };
+        // (op, cell1, expected-taken, what the row pins down)
+        let cases: [(u8, u8, bool, &str); 12] = [
+            (12, 10, true, "mem_mem_beq: 10 == 10 takes"),
+            (12, 11, false, "mem_mem_beq: 10 == 11 does not take"),
+            (13, 11, true, "mem_mem_bne: 10 != 11 takes"),
+            (13, 10, false, "mem_mem_bne: 10 != 10 does not take"),
+            (14, 5, true, "mem_mem_bhi: 10 > 5 takes"),
+            (
+                14,
+                10,
+                false,
+                "mem_mem_bhi: 10 > 10 does not take (>, not >=)",
+            ),
+            (15, 10, true, "mem_mem_bhs: 10 >= 10 takes (>=, not >)"),
+            (15, 11, false, "mem_mem_bhs: 10 >= 11 does not take"),
+            (16, 10, true, "mem_mem_bls: 10 <= 10 takes (<=, not <)"),
+            (16, 9, false, "mem_mem_bls: 10 <= 9 does not take"),
+            (17, 11, true, "mem_mem_blo: 10 < 11 takes"),
+            (
+                17,
+                10,
+                false,
+                "mem_mem_blo: 10 < 10 does not take (<, not <=)",
+            ),
+        ];
+        for (op, other, expected, why) in cases {
+            assert_eq!(
+                memacc_branch_taken(prelude(other), op, 0, 1),
+                expected,
+                "{why}"
+            );
+        }
+    }
+
+    #[test]
+    fn memacc_out_of_range_mem_cell_index_on_a_comparison_does_not_take() {
+        // The `data`-side bound check on the cell-vs-cell *comparison* arms
+        // (`memacc_out_of_range_mem_cell_index_is_a_safe_no_op` covers only
+        // the writing arm, op 3). cell0 is 10 and cell index 200 is past the
+        // 16-cell area, so there is no second operand to compare: every one
+        // of ops 12..=17 must fail safe as "not taken" and fall through to
+        // `Fine`, never panic and never guess a value.
+        for op in 12..=17 {
+            let prelude = vec![Event::MemAcc {
+                op: 0,
+                addr: 0,
+                value: 10,
+                target: None,
+            }];
+            assert!(
+                !memacc_branch_taken(prelude, op, 0, 200),
+                "op {op} with an out-of-range cell index must not take"
+            );
+        }
+    }
+
+    #[test]
+    fn memacc_op_past_the_last_real_one_is_a_no_op() {
+        // `ply_memacc`'s `default: return;` (`m4a.c:1508`..`:1509`).
+        //
+        // The assets pack decoder rejects ops outside `0..=17`, but the
+        // raw-ROM decoder does not: `Decoder::decode`'s `MEMACC` arm
+        // (`crates/audio/src/sequence.rs:280`..`:315`) passes the op byte
+        // through unchecked and consumes a jump target only for
+        // `MEMACC_COND_OPS` (`6..=17`, `sequence.rs:161`), so an op `>= 18`
+        // reaches `exec_memacc` with `target: None` — exactly the shape
+        // built here. It must write nothing, so a following
+        // `mem_beq cell0, 0` still sees the zeroed cell and takes.
+        for op in [18, 255] {
+            let prelude = vec![Event::MemAcc {
+                op,
+                addr: 0,
+                value: 42,
+                target: None,
+            }];
+            assert!(
+                memacc_branch_taken(prelude, 6, 0, 0),
+                "op {op} must not write a cell"
+            );
+        }
+    }
+
+    #[test]
+    fn memacc_taken_branch_without_a_target_falls_through() {
+        // Defensive pairing check. `Event::MemAcc`'s docs pair `6..=17` with
+        // `Some(target)`, but `op` arrives as a raw wire byte, so
+        // `exec_memacc` reads `target` rather than assuming it. A comparison
+        // that *does* hold but carries no target must behave like an ordinary
+        // fallthrough: keep going to the next event, not stall or panic.
+        let track = vec![
+            Event::Voice(0),
+            // A freshly zeroed area makes `mem_beq cell0, 0` true.
+            Event::MemAcc {
+                op: 6,
+                addr: 0,
+                value: 0,
+                target: None,
+            },
+            Event::Note {
+                key: 60,
+                velocity: 127,
+                gate: 1,
+            },
+            Event::Wait(24),
+            Event::Fine,
+        ];
+        let mut seq = Sequencer::new(test_song(vec![track], 150));
+        run_for_a_while(&mut seq);
+        assert!(
+            seq.is_finished(),
+            "a taken branch with no target must fall through to Fine"
+        );
+    }
+
+    #[test]
     fn memacc_accumulator_resets_between_sessions() {
         // A first sequencer/song sets cell0 to a nonzero value and finishes.
         let set_track = vec![
@@ -1590,9 +1863,13 @@ mod tests {
         run_for_a_while(&mut first);
         assert!(first.is_finished());
 
-        // A brand-new Sequencer is a new player/session, matching upstream
-        // zeroing `gMPlayMemAccArea` exactly once, via its static
-        // initializer (`m4a.c:20`) — never carrying `first`'s value forward.
+        // A brand-new Sequencer gets a freshly zeroed area, so `first`'s
+        // 42 is not carried forward. This is the deliberate divergence
+        // documented on `MemAccArea`: upstream's single global
+        // `gMPlayMemAccArea` is zeroed only by its static initializer
+        // (`m4a.c:20`) and *would* carry the value across songs. No
+        // canonical song reads a cell, so nothing can tell the difference —
+        // what this pins down is that the port's rule is the zeroing one.
         // mem_beq cell0 == 0 must take on a never-touched accumulator.
         assert!(memacc_branch_taken(Vec::new(), 6, 0, 0));
     }
