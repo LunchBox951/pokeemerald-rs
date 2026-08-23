@@ -59,9 +59,7 @@ Because of that posture, contributions **must be clean-room reimplementations**:
 
 - **Never copy upstream source code.** Read the behaviour in `pokeemerald/`, then
   re-express it in idiomatic Rust `(no-verbatim)`. Translating a table of
-  constants is fine; transliterating a C function line-for-line is not,
-  outside the narrow test-only oracle carve-out `docs/principles.md`'s
-  principle 3 records.
+  constants is fine; transliterating a C function line-for-line is not.
 - **Never commit copyrighted game assets.** No ROM rips, no sprite/tile/audio
   blobs from the game in the git tree. Assets are *extracted at build time* from
   the user's own upstream checkout by the extraction pipeline — they are

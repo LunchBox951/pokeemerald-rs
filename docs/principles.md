@@ -43,10 +43,7 @@ module docs carry the derivation and citations.
 
 **3. No verbatim copies (`no-verbatim`).** Read the upstream behaviour, then
 re-express it in idiomatic Rust. Translating a table of constants is fine;
-transliterating a C function line-for-line is not. One narrow carve-out:
-a `#[cfg(test)]` oracle transcribed from the reference so a test's
-expectations cannot come from the code under test. It never compiles into
-a shipped artifact, and each such helper names this carve-out in its doc.
+transliterating a C function line-for-line is not.
 
 **4. No FFI (`no-ffi`).** The goal is a native rewrite, not a wrapper. No
 `bindgen`, no linking to upstream C, no shelling out to an emulator at runtime.
