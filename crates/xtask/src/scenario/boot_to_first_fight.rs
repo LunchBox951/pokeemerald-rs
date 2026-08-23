@@ -1,8 +1,51 @@
 //! `boot-to-first-fight`'s script (I-7, issue #245): title -> the no-save
-//! main menu -> Birch's intro (skipped) -> the protagonist's own bedroom ->
-//! down the stairs -> through the house -> out onto Littleroot Town ->
-//! north onto Route 101's real rescue coord-event trigger tile ->
-//! `BATTLE_TYPE_FIRST_BATTLE` -> a concluded battle.
+//! main menu -> Birch's intro, read page by page (issue #393 deleted the
+//! pre-1.0 whole-intro B-skip this script used to take a shortcut through)
+//! -> the protagonist's own bedroom -> down the stairs -> through the
+//! house -> out onto Littleroot Town -> north onto Route 101's real rescue
+//! coord-event trigger tile -> `BATTLE_TYPE_FIRST_BATTLE` -> a concluded
+//! battle.
+//!
+//! # The intro traversal (issue #393)
+//!
+//! [`SEGMENTS`]' own intro block reads every one of Birch's eight speech
+//! pages exactly as a player would: release-then-press frames at every
+//! internal `\p`/`\l` wait (twenty-four of them across the eight pages --
+//! `pokeemerald_rs::intro::speech`'s own module docs), never a held button,
+//! so none of `engine::text::render::Printer`'s held-A/B print speed-up
+//! (issue #393's other half) ever engages -- every `NONE`-held wait below
+//! is therefore the *exact* number of frames `TextSpeed::Mid` takes to
+//! print up to that wait, not a padded guess. Two of the twenty-four
+//! presses use B instead of A (one `\p`, one `\l`), proving both buttons
+//! reach the game through the real `App`/[`super::ScenarioDriver`] path,
+//! not just [`pokeemerald_rs::intro::IntroScene`]'s own headless tests.
+//!
+//! These counts were measured, not derived by hand: a scratch harness drove
+//! the real `pokeemerald_rs::intro::speech::pages()` token streams through
+//! `engine::text::render::Printer` at `TextSpeed::Mid` (`IntroScene::from_pack`'s
+//! own default) with a synthetic glyph sheet -- the same fixture shape
+//! `crate::intro::tests` already uses, and pixel-content-independent, since
+//! only real advance-width/frame-timing metadata (not sheet pixels) affects
+//! *when* a wait is reached. Re-derive by temporarily adding an equivalent
+//! harness if `pokeemerald_rs::intro::speech`'s authored pages ever change;
+//! see [`super::ScenarioError::Milestone`]'s own doc comment on this
+//! script's general "fails closed, re-derive the budget" philosophy.
+//!
+//! Every page's own last-token-before-`Token::End` shape (`...{P}` --
+//! `pokeemerald_rs::intro::speech`'s "every_question_page_waits_for_a_press_before_advancing"
+//! test) means the four ticks after a page's *final* prompt is confirmed
+//! are identical across every page: three reveal-delay-drain ticks the
+//! `\p` reloaded, then the tick that actually consumes `Token::End`. For
+//! pages 0-6 that fourth tick only fires `IntroScene::advance_page` (still
+//! `AppState::Intro`); for page 7 (`ARE_YOU_READY`, the last page) that
+//! same fourth tick is the one where `IntroStatus::Finished` hands off to
+//! the overworld *within* that frame's own `App::step` --
+//! `pokeemerald_rs::flow::advance_scene`'s `Intro` arm transitions
+//! `AppScene` the instant it sees `Finished`, so [`super::run`]'s own
+//! post-step state read (`scenario.rs`'s `run_with_driver`) already
+//! reports `AppState::Overworld` on that exact frame, not one frame later
+//! -- hence the split `3` (`Intro`) `+ 1` (`Overworld`) at the very end of
+//! the intro block below, instead of a uniform `4`.
 //!
 //! Split out of `super` (`crate::scenario`) into its own file purely to
 //! keep that module under the `oop-boundaries` size guideline -- this is
@@ -111,15 +154,323 @@ const SEGMENTS: &[Segment] = &[
         count: 1,
         expected: AppState::Intro,
     },
-    // Skip the whole intro in one press
-    // (`pokeemerald_rs::intro::IntroScene::tick`'s `skip_pressed` arm) --
-    // lands in the bedroom the same frame, facing
-    // `pokeemerald_rs::new_game::SPAWN_FACING` (south).
+    // Read Birch's entire eight-page speech (module docs' "The intro
+    // traversal" section) -- release-then-press at every internal `\p`/`\l`
+    // wait, landing in the bedroom on the final page's own terminator tick,
+    // facing `pokeemerald_rs::new_game::SPAWN_FACING` (south).
+    // --- Birch speech page 0: WELCOME ---
+    Segment {
+        buttons: AppButtons::NONE,
+        count: 121,
+        expected: AppState::Intro,
+    },
     Segment {
         buttons: AppButtons::B,
         count: 1,
-        expected: AppState::Overworld,
+        expected: AppState::Intro,
+    }, // page 0 prompt 1 (CLEAR)
+    Segment {
+        buttons: AppButtons::NONE,
+        count: 132,
+        expected: AppState::Intro,
     },
+    Segment {
+        buttons: AppButtons::A,
+        count: 1,
+        expected: AppState::Intro,
+    }, // page 0 prompt 2 (CLEAR)
+    Segment {
+        buttons: AppButtons::NONE,
+        count: 72,
+        expected: AppState::Intro,
+    },
+    Segment {
+        buttons: AppButtons::A,
+        count: 1,
+        expected: AppState::Intro,
+    }, // page 0 prompt 3 (CLEAR)
+    Segment {
+        buttons: AppButtons::NONE,
+        count: 179,
+        expected: AppState::Intro,
+    },
+    Segment {
+        buttons: AppButtons::A,
+        count: 1,
+        expected: AppState::Intro,
+    }, // page 0 prompt 4 (CLEAR)
+    Segment {
+        buttons: AppButtons::NONE,
+        count: 4,
+        expected: AppState::Intro,
+    }, // page 0 -> page 1 (reveal-delay drain then the terminator)
+    // --- Birch speech page 1: THIS_IS_A_POKEMON ---
+    Segment {
+        buttons: AppButtons::NONE,
+        count: 230,
+        expected: AppState::Intro,
+    },
+    Segment {
+        buttons: AppButtons::A,
+        count: 1,
+        expected: AppState::Intro,
+    }, // page 1 prompt 1 (CLEAR)
+    Segment {
+        buttons: AppButtons::NONE,
+        count: 4,
+        expected: AppState::Intro,
+    }, // page 1 -> page 2 (reveal-delay drain then the terminator)
+    // --- Birch speech page 2: MAIN_SPEECH ---
+    Segment {
+        buttons: AppButtons::NONE,
+        count: 244,
+        expected: AppState::Intro,
+    },
+    Segment {
+        buttons: AppButtons::A,
+        count: 1,
+        expected: AppState::Intro,
+    }, // page 2 prompt 1 (CLEAR)
+    Segment {
+        buttons: AppButtons::NONE,
+        count: 279,
+        expected: AppState::Intro,
+    },
+    Segment {
+        buttons: AppButtons::B,
+        count: 1,
+        expected: AppState::Intro,
+    }, // page 2 prompt 2 (SCROLL)
+    Segment {
+        buttons: AppButtons::NONE,
+        count: 9,
+        expected: AppState::Intro,
+    }, // scroll-animation drain, no input needed
+    Segment {
+        buttons: AppButtons::NONE,
+        count: 140,
+        expected: AppState::Intro,
+    },
+    Segment {
+        buttons: AppButtons::A,
+        count: 1,
+        expected: AppState::Intro,
+    }, // page 2 prompt 3 (CLEAR)
+    Segment {
+        buttons: AppButtons::NONE,
+        count: 235,
+        expected: AppState::Intro,
+    },
+    Segment {
+        buttons: AppButtons::A,
+        count: 1,
+        expected: AppState::Intro,
+    }, // page 2 prompt 4 (CLEAR)
+    Segment {
+        buttons: AppButtons::NONE,
+        count: 267,
+        expected: AppState::Intro,
+    },
+    Segment {
+        buttons: AppButtons::A,
+        count: 1,
+        expected: AppState::Intro,
+    }, // page 2 prompt 5 (CLEAR)
+    Segment {
+        buttons: AppButtons::NONE,
+        count: 235,
+        expected: AppState::Intro,
+    },
+    Segment {
+        buttons: AppButtons::A,
+        count: 1,
+        expected: AppState::Intro,
+    }, // page 2 prompt 6 (CLEAR)
+    Segment {
+        buttons: AppButtons::NONE,
+        count: 247,
+        expected: AppState::Intro,
+    },
+    Segment {
+        buttons: AppButtons::A,
+        count: 1,
+        expected: AppState::Intro,
+    }, // page 2 prompt 7 (SCROLL)
+    Segment {
+        buttons: AppButtons::NONE,
+        count: 9,
+        expected: AppState::Intro,
+    }, // scroll-animation drain, no input needed
+    Segment {
+        buttons: AppButtons::NONE,
+        count: 72,
+        expected: AppState::Intro,
+    },
+    Segment {
+        buttons: AppButtons::A,
+        count: 1,
+        expected: AppState::Intro,
+    }, // page 2 prompt 8 (CLEAR)
+    Segment {
+        buttons: AppButtons::NONE,
+        count: 4,
+        expected: AppState::Intro,
+    }, // page 2 -> page 3 (reveal-delay drain then the terminator)
+    // --- Birch speech page 3: AND_YOU_ARE ---
+    Segment {
+        buttons: AppButtons::NONE,
+        count: 49,
+        expected: AppState::Intro,
+    },
+    Segment {
+        buttons: AppButtons::A,
+        count: 1,
+        expected: AppState::Intro,
+    }, // page 3 prompt 1 (CLEAR)
+    Segment {
+        buttons: AppButtons::NONE,
+        count: 4,
+        expected: AppState::Intro,
+    }, // page 3 -> page 4 (reveal-delay drain then the terminator)
+    // --- Birch speech page 4: WHATS_YOUR_NAME ---
+    Segment {
+        buttons: AppButtons::NONE,
+        count: 112,
+        expected: AppState::Intro,
+    },
+    Segment {
+        buttons: AppButtons::A,
+        count: 1,
+        expected: AppState::Intro,
+    }, // page 4 prompt 1 (CLEAR)
+    Segment {
+        buttons: AppButtons::NONE,
+        count: 4,
+        expected: AppState::Intro,
+    }, // page 4 -> page 5 (reveal-delay drain then the terminator)
+    // --- Birch speech page 5: so_its_player ---
+    Segment {
+        buttons: AppButtons::NONE,
+        count: 49,
+        expected: AppState::Intro,
+    },
+    Segment {
+        buttons: AppButtons::A,
+        count: 1,
+        expected: AppState::Intro,
+    }, // page 5 prompt 1 (CLEAR)
+    Segment {
+        buttons: AppButtons::NONE,
+        count: 4,
+        expected: AppState::Intro,
+    }, // page 5 -> page 6 (reveal-delay drain then the terminator)
+    // --- Birch speech page 6: youre_player ---
+    Segment {
+        buttons: AppButtons::NONE,
+        count: 37,
+        expected: AppState::Intro,
+    },
+    Segment {
+        buttons: AppButtons::A,
+        count: 1,
+        expected: AppState::Intro,
+    }, // page 6 prompt 1 (CLEAR)
+    Segment {
+        buttons: AppButtons::NONE,
+        count: 215,
+        expected: AppState::Intro,
+    },
+    Segment {
+        buttons: AppButtons::A,
+        count: 1,
+        expected: AppState::Intro,
+    }, // page 6 prompt 2 (SCROLL)
+    Segment {
+        buttons: AppButtons::NONE,
+        count: 9,
+        expected: AppState::Intro,
+    }, // scroll-animation drain, no input needed
+    Segment {
+        buttons: AppButtons::NONE,
+        count: 56,
+        expected: AppState::Intro,
+    },
+    Segment {
+        buttons: AppButtons::A,
+        count: 1,
+        expected: AppState::Intro,
+    }, // page 6 prompt 3 (CLEAR)
+    Segment {
+        buttons: AppButtons::NONE,
+        count: 4,
+        expected: AppState::Intro,
+    }, // page 6 -> page 7 (reveal-delay drain then the terminator)
+    // --- Birch speech page 7: ARE_YOU_READY ---
+    Segment {
+        buttons: AppButtons::NONE,
+        count: 101,
+        expected: AppState::Intro,
+    },
+    Segment {
+        buttons: AppButtons::A,
+        count: 1,
+        expected: AppState::Intro,
+    }, // page 7 prompt 1 (CLEAR)
+    Segment {
+        buttons: AppButtons::NONE,
+        count: 175,
+        expected: AppState::Intro,
+    },
+    Segment {
+        buttons: AppButtons::A,
+        count: 1,
+        expected: AppState::Intro,
+    }, // page 7 prompt 2 (CLEAR)
+    Segment {
+        buttons: AppButtons::NONE,
+        count: 251,
+        expected: AppState::Intro,
+    },
+    Segment {
+        buttons: AppButtons::A,
+        count: 1,
+        expected: AppState::Intro,
+    }, // page 7 prompt 3 (SCROLL)
+    Segment {
+        buttons: AppButtons::NONE,
+        count: 9,
+        expected: AppState::Intro,
+    }, // scroll-animation drain, no input needed
+    Segment {
+        buttons: AppButtons::NONE,
+        count: 136,
+        expected: AppState::Intro,
+    },
+    Segment {
+        buttons: AppButtons::A,
+        count: 1,
+        expected: AppState::Intro,
+    }, // page 7 prompt 4 (CLEAR)
+    Segment {
+        buttons: AppButtons::NONE,
+        count: 263,
+        expected: AppState::Intro,
+    },
+    Segment {
+        buttons: AppButtons::A,
+        count: 1,
+        expected: AppState::Intro,
+    }, // page 7 prompt 5 (CLEAR)
+    Segment {
+        buttons: AppButtons::NONE,
+        count: 3,
+        expected: AppState::Intro,
+    }, // trailing reveal-delay drain -- still Intro
+    Segment {
+        buttons: AppButtons::NONE,
+        count: 1,
+        expected: AppState::Overworld,
+    }, // the terminator tick: IntroStatus::Finished hands off to the overworld
     // The spawn tile is the stair warp itself, so arriving there triggers
     // nothing -- only *walking onto* it does. Step off it south, then
     // back north: the second step's own landing frame fires the warp to
@@ -254,10 +605,51 @@ mod tests {
     use pokeemerald_rs::main_menu::MainMenuItem;
     use pokeemerald_rs::{AppButtons, AppState};
 
+    /// The intro traversal's own total frame count (module docs' "The
+    /// intro traversal" section): twenty-four release-then-press pairs (two
+    /// of them B, the rest A), two nine-frame scroll drains, and the final
+    /// page's split `3 + 1` terminator tail -- summed here from the exact
+    /// same measured per-prompt counts [`super::SEGMENTS`]' own intro block
+    /// is built from, so a future re-measurement only has to update one
+    /// side of this comparison for `boot_to_first_fight_script_has_the_expected_shape`
+    /// to catch a drift.
+    const INTRO_TRAVERSAL_FRAMES: usize = 121 + 1 // page 0 prompt 1 (B)
+        + 132 + 1 // page 0 prompt 2
+        + 72 + 1 // page 0 prompt 3
+        + 179 + 1 // page 0 prompt 4
+        + 4 // page 0 -> page 1
+        + 230 + 1 // page 1 prompt 1
+        + 4 // page 1 -> page 2
+        + 244 + 1 // page 2 prompt 1
+        + 279 + 1 + 9 // page 2 prompt 2 (B, scroll)
+        + 140 + 1 // page 2 prompt 3
+        + 235 + 1 // page 2 prompt 4
+        + 267 + 1 // page 2 prompt 5
+        + 235 + 1 // page 2 prompt 6
+        + 247 + 1 + 9 // page 2 prompt 7 (scroll)
+        + 72 + 1 // page 2 prompt 8
+        + 4 // page 2 -> page 3
+        + 49 + 1 // page 3 prompt 1
+        + 4 // page 3 -> page 4
+        + 112 + 1 // page 4 prompt 1
+        + 4 // page 4 -> page 5
+        + 49 + 1 // page 5 prompt 1
+        + 4 // page 5 -> page 6
+        + 37 + 1 // page 6 prompt 1
+        + 215 + 1 + 9 // page 6 prompt 2 (scroll)
+        + 56 + 1 // page 6 prompt 3
+        + 4 // page 6 -> page 7
+        + 101 + 1 // page 7 prompt 1
+        + 175 + 1 // page 7 prompt 2
+        + 251 + 1 + 9 // page 7 prompt 3 (scroll)
+        + 136 + 1 // page 7 prompt 4
+        + 263 + 1 // page 7 prompt 5
+        + 3 + 1; // trailing reveal-delay drain, then the Overworld handoff
+
     /// Pack-free shape assertions on the authored script itself: the total
     /// frame count [`super::SEGMENTS`] adds up to, the opening title ->
-    /// menu -> intro -> overworld handoff, and that exactly one landing
-    /// frame plus two driven turns report `FirstBattle` before the
+    /// menu -> intro pages -> overworld handoff, and that exactly one
+    /// landing frame plus two driven turns report `FirstBattle` before the
     /// concluding frame drops back to `Overworld` -- the same three-frame
     /// battle budget [`super::SEGMENTS`]' own doc comment pins
     /// empirically. Guards the script's own self-consistency without a
@@ -267,7 +659,8 @@ mod tests {
     fn boot_to_first_fight_script_has_the_expected_shape() {
         let frames = spec(ScenarioName::BootToFirstFight).frames;
 
-        let expected_total = 3 // start, confirm, skip
+        let expected_total = 2 // start, confirm
+            + INTRO_TRAVERSAL_FRAMES
             + WALK_FRAMES_PER_TILE * 2 // off the stairs, back onto them
             + WALK_FRAMES_PER_TILE * 6 // down to the front door
             + WALK_FRAMES_PER_TILE // clear the door's fencing
@@ -284,8 +677,34 @@ mod tests {
         );
         assert_eq!(frames[1].buttons, AppButtons::A);
         assert_eq!(frames[1].expected, AppState::Intro);
-        assert_eq!(frames[2].buttons, AppButtons::B);
-        assert_eq!(frames[2].expected, AppState::Overworld);
+
+        // Issue #393: the intro no longer finishes in one B press -- every
+        // frame of the whole traversal but its very last must stay
+        // `Intro`, and B must appear at least once (proving it reaches the
+        // real `App`, not just `IntroScene`'s own headless tests).
+        let intro_start = 2;
+        let intro_end = intro_start + INTRO_TRAVERSAL_FRAMES;
+        for (offset, frame) in frames[intro_start..intro_end - 1].iter().enumerate() {
+            assert_eq!(
+                frame.expected,
+                AppState::Intro,
+                "intro frame {offset} (script index {}) must still be Intro",
+                intro_start + offset
+            );
+        }
+        assert_eq!(
+            frames[intro_end - 1].expected,
+            AppState::Overworld,
+            "the intro's own terminator tick must hand off to the overworld"
+        );
+        let b_presses_in_intro = frames[intro_start..intro_end]
+            .iter()
+            .filter(|frame| frame.buttons == AppButtons::B)
+            .count();
+        assert_eq!(
+            b_presses_in_intro, 2,
+            "B must advance a page exactly like A -- issue #393's own point"
+        );
 
         let first_battle_frames = frames
             .iter()
