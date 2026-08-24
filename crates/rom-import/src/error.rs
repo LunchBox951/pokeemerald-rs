@@ -307,6 +307,17 @@ pub enum ImportError {
     },
     /// The asset pack could not be assembled.
     PackWrite(pack_format::PackWriteError),
+    /// The pack's destination is the source ROM itself.
+    ///
+    /// [`Rom::load`](crate::Rom::load) reads the whole image into memory
+    /// before a byte is written, so the write would *succeed* and leave the
+    /// player holding a pack where their cartridge image used to be. The
+    /// importer refuses instead, before writing anything
+    /// `(no-silent-failure)`.
+    SameFile {
+        /// The ROM that would have been overwritten.
+        path: PathBuf,
+    },
     /// The asset pack could not be written to disk.
     WriteFailed {
         /// The path the importer tried to write.
@@ -325,6 +336,11 @@ pub enum ImportError {
 }
 
 impl fmt::Display for ImportError {
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one arm per variant of an exhaustive error enum; splitting the match \
+                  would only scatter the catalogue (`xtask`'s `ExtractError` precedent)"
+    )]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::ReadFailed { path, source } => {
@@ -417,6 +433,11 @@ impl fmt::Display for ImportError {
             } => write!(f, "`{id}` track {track} at ROM offset {at:#08x}: {fault}"),
             Self::Audio { id, source } => write!(f, "`{id}`: {source}"),
             Self::PackWrite(source) => write!(f, "could not assemble the asset pack: {source}"),
+            Self::SameFile { path } => write!(
+                f,
+                "refusing to write the asset pack over the source ROM `{}`",
+                path.display()
+            ),
             Self::WriteFailed { path, source } => {
                 write!(f, "could not write `{}`: {source}", path.display())
             }
@@ -564,6 +585,9 @@ mod tests {
                 fault: SongFault::JumpOutsideTrack,
             },
             ImportError::EmptyPack,
+            ImportError::SameFile {
+                path: std::path::PathBuf::from("/roms/emerald.gba"),
+            },
         ];
         for case in cases {
             let text = case.to_string();

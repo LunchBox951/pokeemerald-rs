@@ -244,6 +244,46 @@ fn a_bare_pack_name_lands_in_the_current_directory() {
 }
 
 #[test]
+fn a_pack_destination_pointing_at_the_rom_is_refused_with_the_rom_intact() {
+    // `$POKEEMERALD_PACK` can name any path, including the file passed to
+    // `--import-rom`. The temporary file is written fine and it is the
+    // *rename* that would drop the pack on the player's cartridge image,
+    // so the importer's own same-file guard never sees this one.
+    let dir = TempDir::new("pack-is-rom");
+    let rom_path = write_fixture_rom(&dir);
+    let before = fs::read(&rom_path).expect("the fixture reads back");
+
+    let err = import_to_with(&rom_path, &rom_path, |_rom, out| {
+        fs::write(out, b"pack bytes").expect("the fake importer writes");
+        Ok(ImportReport::new(out.to_path_buf(), "fixture", 7, 10))
+    })
+    .unwrap_err();
+
+    assert!(
+        matches!(err, ImportRomError::DestinationIsSource { .. }),
+        "expected a same-file refusal, got: {err}"
+    );
+    assert_eq!(
+        fs::read(&rom_path).expect("the ROM survives"),
+        before,
+        "the ROM must be byte-identical after a refused import"
+    );
+    // Nothing was written and no temporary file was left behind.
+    assert_eq!(file_names(&dir.path), ["fixture.gba"]);
+}
+
+#[test]
+fn a_refused_same_file_destination_says_which_variable_to_change() {
+    let rendered = ImportRomError::DestinationIsSource {
+        rom_path: PathBuf::from("/roms/emerald.gba"),
+    }
+    .to_string();
+    assert!(rendered.contains("/roms/emerald.gba"), "{rendered}");
+    assert!(rendered.contains(pack_format::PACK_PATH_ENV), "{rendered}");
+    assert!(!rendered.contains('\n'), "{rendered}");
+}
+
+#[test]
 fn a_missing_destination_says_which_variable_to_set() {
     let rendered = ImportRomError::NoDestination.to_string();
     assert!(rendered.contains(pack_format::PACK_PATH_ENV), "{rendered}");

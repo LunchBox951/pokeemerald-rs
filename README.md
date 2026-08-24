@@ -78,8 +78,9 @@ it:
 | Windows | `%APPDATA%\pokeemerald-rs\pokeemerald.pack` |
 
 Set `POKEEMERALD_PACK=<file>` to put it somewhere else; both the import and the
-game honour it. The ROM itself is read once and never copied, referenced, or
-logged.
+game honour it — with one exception: if it points at the ROM you are importing,
+the import is refused rather than replacing your cartridge image with a pack.
+The ROM itself is read once and never copied, referenced, or logged.
 
 If something goes wrong, the message says what and what to do: a wrong or
 damaged ROM is refused before anything is written, a missing pack tells you to

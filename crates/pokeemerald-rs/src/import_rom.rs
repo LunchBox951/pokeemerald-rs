@@ -27,6 +27,12 @@
 //! rename is atomic on every OS this project targets, so an interrupted or
 //! failed import leaves the previous pack intact rather than a truncated
 //! one that would load as a corrupt pack `(no-silent-failure)`.
+//!
+//! The one destination that is refused outright is the ROM being imported.
+//! `$POKEEMERALD_PACK` can name any path, including the file the player
+//! passed to `--import-rom`, and the rename would then drop the pack on
+//! top of their cartridge image. [`rom_import::overwrites_rom`] answers
+//! that before the directory is created.
 
 use std::fmt;
 use std::fs;
@@ -103,6 +109,16 @@ pub enum ImportRomError {
     /// wrong ROM, a truncated file, or an asset the profile's addresses do
     /// not reach.
     Import(ImportError),
+    /// The resolved destination *is* the ROM being imported.
+    ///
+    /// Publishing renames the finished pack over the destination, so a
+    /// `$POKEEMERALD_PACK` pointing at the file passed to `--import-rom`
+    /// would replace the player's cartridge image with a pack. Refused
+    /// before anything is written `(no-silent-failure)`.
+    DestinationIsSource {
+        /// The ROM that would have been replaced.
+        rom_path: PathBuf,
+    },
     /// The pack was built, but moving it from its temporary file to the
     /// destination failed.
     PublishFailed {
@@ -128,6 +144,13 @@ impl fmt::Display for ImportRomError {
                 write!(f, "could not create `{}`: {source}", path.display())
             }
             Self::Import(source) => write!(f, "{source}"),
+            Self::DestinationIsSource { rom_path } => write!(
+                f,
+                "refusing to write the asset pack over the source ROM `{}`: point `{}` at a \
+                 different file, or unset it to use the default location",
+                rom_path.display(),
+                pack_format::PACK_PATH_ENV
+            ),
             Self::PublishFailed {
                 temp_path,
                 pack_path,
@@ -151,7 +174,7 @@ impl std::error::Error for ImportRomError {
                 Some(source)
             }
             Self::Import(source) => Some(source),
-            Self::NoDestination => None,
+            Self::NoDestination | Self::DestinationIsSource { .. } => None,
         }
     }
 }
@@ -164,7 +187,9 @@ impl std::error::Error for ImportRomError {
 /// # Errors
 ///
 /// [`ImportRomError::NoDestination`] if no pack location can be resolved,
-/// [`ImportRomError::CreateDirFailed`] if its directory cannot be created,
+/// [`ImportRomError::DestinationIsSource`] if that location is the ROM
+/// itself, [`ImportRomError::CreateDirFailed`] if its directory cannot be
+/// created,
 /// [`ImportRomError::Import`] if the ROM is not the supported build or the
 /// import otherwise fails, and [`ImportRomError::PublishFailed`] if the
 /// finished pack cannot be moved into place.
@@ -197,6 +222,16 @@ fn import_to_with(
     pack_path: &Path,
     import: impl FnOnce(&Path, &Path) -> Result<ImportReport, ImportError>,
 ) -> Result<ImportOutcome, ImportRomError> {
+    // The temporary file never shares the ROM's name, so `rom_import`'s own
+    // guard cannot see this one: it is the *rename* that would drop the pack
+    // on top of the cartridge image. Refuse before the directory is touched,
+    // rather than build a pack that has nowhere safe to go.
+    if rom_import::overwrites_rom(rom_path, pack_path) {
+        return Err(ImportRomError::DestinationIsSource {
+            rom_path: rom_path.to_path_buf(),
+        });
+    }
+
     let dir = pack_directory(pack_path);
     // The temporary file has to sit in the destination directory for the
     // rename to be atomic, so the directory is created before the import
