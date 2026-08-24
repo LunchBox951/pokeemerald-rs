@@ -364,14 +364,19 @@ impl fmt::Display for TitleSceneError {
         match self {
             // A missing entry means the pack itself loaded fine but
             // predates this build (every id this module looks up is a
-            // fixed `title/*` name): the actionable fix is a re-extract,
-            // and without this hint the bare "no entry with id" message
-            // sends the developer bug-hunting instead (`no-silent-failure`
-            // in spirit -- fail with the remedy, not just the symptom).
+            // fixed `title/*` name): the actionable fix is rebuilding the
+            // pack, and without this hint the bare "no entry with id"
+            // message sends the reader bug-hunting instead
+            // (`no-silent-failure` in spirit -- fail with the remedy, not
+            // just the symptom). Both audiences are named, like
+            // `PackError::NotFound` and `PackError::UnsupportedVersion`:
+            // an imported pack goes stale exactly the way an extracted one
+            // does, and a player cannot run `cargo xtask extract`.
             Self::Pack(err @ PackError::UnknownAsset(_)) => write!(
                 f,
-                "title screen: {err}: the local asset pack predates this build -- re-run \
-                 `cargo xtask extract` to refresh it"
+                "title screen: {err}: the local asset pack predates this build -- players \
+                 rebuild it with `pokeemerald-rs --import-rom <path to your Pokemon Emerald \
+                 (US) ROM>`, developers with `cargo xtask extract`"
             ),
             Self::Pack(err) => write!(f, "title screen: {err}"),
             Self::Render(err) => write!(f, "title screen: {err}"),
@@ -429,8 +434,9 @@ impl TitleSceneError {
     /// ([`PackError::UnknownAsset`]) isn't in it — every id
     /// [`TitleScene::from_pack`] looks up is a fixed `title/*` name, so a
     /// missing one always means an out-of-date local pack, and the remedy
-    /// is re-running `cargo xtask extract` (which this error's
-    /// [`Display`](fmt::Display) message states).
+    /// is rebuilding it -- `--import-rom` for a player, `cargo xtask
+    /// extract` for a developer (which this error's
+    /// [`Display`](fmt::Display) message states, naming both).
     #[must_use]
     pub const fn is_pack_stale(&self) -> bool {
         matches!(self, Self::Pack(PackError::UnknownAsset(_)))
