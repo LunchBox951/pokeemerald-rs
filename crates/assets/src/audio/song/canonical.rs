@@ -102,7 +102,7 @@ fn wait_run_chunks(ticks: impl Iterator<Item = u8>) -> impl Iterator<Item = Song
             total -= u64::from(u8::MAX);
             Some(SongEvent::Wait(u8::MAX))
         } else if total > 0 {
-            #[allow(clippy::cast_possible_truncation, reason = "total <= u8::MAX here")]
+            #[expect(clippy::cast_possible_truncation, reason = "total <= u8::MAX here")]
             let chunk = SongEvent::Wait(total as u8);
             total = 0;
             Some(chunk)
