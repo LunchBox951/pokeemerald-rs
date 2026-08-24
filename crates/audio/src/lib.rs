@@ -22,8 +22,9 @@
 //! - [`mixer`] — the software [`Mixer`] that sums DirectSound and CGB voices
 //!   to interleaved stereo `f32` and clips.
 //! - [`sequencer`] — the owned [`Sequencer`] tying it together: the tick engine
-//!   (including LFO/vibrato and `PATT`/`PEND`/`REPT` pattern execution) plus
-//!   an offline, device-free rendering path ([`Sequencer::mix_into`]).
+//!   (including LFO/vibrato, `PATT`/`PEND`/`REPT` pattern execution, and
+//!   `MEMACC`) plus an offline, device-free rendering path
+//!   ([`Sequencer::mix_into`]).
 //! - [`pitch`] — the MIDI-key → frequency table and the fixed-point step math.
 //!
 //! Slice 3 adds key-split (`TONEDATA_TYPE_SPL`) and rhythm
@@ -41,6 +42,13 @@
 //! jump commands, per Discussion #227's owner decision) is the integration
 //! crate's job, not this one's — see `pokeemerald_rs::music`.
 //!
+//! Slice 5 (S-3, issue #394) executes the memory accumulator (`MEMACC`,
+//! `ply_memacc`) in the [`sequencer`]: both the cell-mutating ops and the
+//! conditional-jump family run, against an accumulator area owned per
+//! [`Sequencer`] rather than upstream's single global — see [`sequencer`]'s
+//! module docs for that divergence and why canonical song data cannot
+//! observe it.
+//!
 //! Everything renders at exactly [`pitch::MIXER_RATE`] (13379 Hz), the rate the
 //! `platform` producer expects; a unit test pins the two together.
 //!
@@ -50,9 +58,10 @@
 //! interface `MPlayStart`/`m4aSongNumStart` layers this crate does not model)
 //! and compressed/reversed DirectSound waves. Within a single song,
 //! `ply_note`'s priority-driven channel allocation *is* implemented — see
-//! [`mixer`]'s module docs. `MEMACC` and every
-//! other `XCMD` sub-command are still only *decoded*, not executed, so the
-//! byte stream stays in sync.
+//! [`mixer`]'s module docs. `PORT` and every `XCMD` sub-command other than
+//! `xIECV`/`xIECL` are still only *decoded*, not executed, so the byte
+//! stream stays in sync; `tools/mid2agb` emits none of them, so no
+//! canonical song reaches those arms ([`sequencer`]'s module docs).
 
 // This crate's docs cite upstream C symbols and hardware names heavily
 // (DirectSound, MP2K, SongHeader, …); backticking every prose mention adds
