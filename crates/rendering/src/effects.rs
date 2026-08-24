@@ -144,7 +144,10 @@ const fn cap_weight(raw: u8) -> u32 {
 /// three channels are packed into one `u32`; doing each channel as an
 /// independent scalar here makes that the same plain saturating clamp.
 /// `weight_a`/`weight_b` are assumed already capped (module docs).
-#[allow(clippy::cast_possible_truncation)] // `mixed` is clamped to `0..=255` just above the cast.
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "`mixed` is clamped to `0..=255` just above the cast."
+)]
 const fn mix_channel(a: u8, b: u8, weight_a: u32, weight_b: u32) -> u8 {
     let mixed = (a as u32 * weight_a + b as u32 * weight_b) / 16;
     if mixed > 255 {
@@ -170,7 +173,10 @@ pub const fn alpha_blend(first: Rgb888, second: Rgb888, eva: u8, evb: u8) -> Rgb
 
 /// Brighten one 8-bit channel toward white — the 32-bit `_brighten`
 /// (`software-private.h:237-245`): `c + (255-c)*y/16`, `y` already capped.
-#[allow(clippy::cast_possible_truncation)] // `r` is provably `<=255` (c<=255, y<=16 => (255-c)*y/16<=255-c, so c+that<=255).
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "`r` is provably `<=255` (c<=255, y<=16 => (255-c)*y/16<=255-c, so c+that<=255)."
+)]
 const fn brighten_channel(c: u8, y: u32) -> u8 {
     let c32 = c as u32;
     let r = c32 + ((255 - c32) * y) / 16;
@@ -192,7 +198,10 @@ pub const fn brighten(color: Rgb888, evy: u8) -> Rgb888 {
 /// Darken the *red* channel toward black — the 32-bit `_darken`'s low lane
 /// (`software-private.h:271-272`), whose `& 0xFF` mask discards nothing the
 /// `/ 16` did not already: `c - floor(c*y/16)`, `y` already capped.
-#[allow(clippy::cast_possible_truncation)] // c*y/16 <= c <= 255, so the subtraction result is `<=255` and non-negative.
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "c*y/16 <= c <= 255, so the subtraction result is `<=255` and non-negative."
+)]
 const fn darken_red_channel(c: u8, y: u32) -> u8 {
     let c32 = c as u32;
     let r = c32 - (c32 * y) / 16;
@@ -205,7 +214,10 @@ const fn darken_red_channel(c: u8, y: u32) -> u8 {
 /// `& 0xFF0000` mask does the truncating instead, which rounds the amount
 /// subtracted *up*: `c - ceil(c*y/16)`, i.e. `c - (c*y + 15)/16` — see the
 /// module docs. `y` already capped.
-#[allow(clippy::cast_possible_truncation)] // ceil(c*y/16) <= c <= 255 for y <= 16, so the result is `0..=255`.
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "ceil(c*y/16) <= c <= 255 for y <= 16, so the result is `0..=255`."
+)]
 const fn darken_shifted_channel(c: u8, y: u32) -> u8 {
     let c32 = c as u32;
     let r = c32 - (c32 * y).div_ceil(16);
