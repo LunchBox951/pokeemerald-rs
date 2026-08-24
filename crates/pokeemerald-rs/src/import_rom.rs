@@ -33,6 +33,25 @@
 //! passed to `--import-rom`, and the rename would then drop the pack on
 //! top of their cartridge image. [`rom_import::overwrites_rom`] answers
 //! that before the directory is created.
+//!
+//! # What that refusal does not cover
+//!
+//! It reads a path, and a path is not a handle. Let `$POKEEMERALD_PACK`
+//! run through a directory component another account can modify, and that
+//! account can redirect the component after the check and before the
+//! rename: the temporary file and the publication each resolve the path
+//! again, so the pack lands wherever the component now points — on the
+//! cartridge image itself, if the destination's file name is the ROM's.
+//!
+//! `std` cannot close that. Creating and publishing against a directory
+//! pinned open takes `openat`/`renameat`, which `std` exposes on no
+//! platform, so it takes a dependency this workspace does not add without
+//! owner approval (`minimal-deps`); re-resolving the guard just before the
+//! rename narrows the window without closing it and would read as a
+//! promise it cannot keep. The boundary is therefore stated rather than
+//! defended: `$POKEEMERALD_PACK` is trusted to name a path only the player
+//! controls. The default destination, their own user-data directory, is
+//! one.
 
 use std::fmt;
 use std::fs;
