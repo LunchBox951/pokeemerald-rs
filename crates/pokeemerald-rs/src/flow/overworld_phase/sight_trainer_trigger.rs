@@ -256,7 +256,7 @@ fn find_sight_trainer<'a>(
 
 /// How many tiles the approaching trainer walks: upstream
 /// `InitTrainerApproachTask(trainerObj, approachDistance - 1)`
-/// (`trainer_see.c:249`), which stops the trainer on the tile *beside* the
+/// (`trainer_see.c:292`), which stops the trainer on the tile *beside* the
 /// player rather than on top of them.
 ///
 /// `GetTrainerApproachDistance` returns the tile distance along the

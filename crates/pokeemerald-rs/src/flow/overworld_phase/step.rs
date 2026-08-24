@@ -275,9 +275,12 @@ impl OverworldPhase {
         // check below and the battle above, and drives its own intro message
         // box -- hence *ahead* of the generic dialog tick, which would
         // otherwise close that box a frame before its owner noticed. This is
-        // upstream's `lockall`/`FreezeObjectEvents` pair
-        // (`data/scripts/trainer_battle.inc:95-99`) in the only terms this
-        // port has for it: nothing else runs.
+        // upstream's `LockPlayerFieldControls`/`FreezeObjectEvents` pair --
+        // `ConfigureAndSetUpOneTrainerBattle`'s `LockPlayerFieldControls`
+        // (`src/battle_setup.c:1198-1199`) plus `lockfortrainer`'s
+        // `FreezeForApproachingTrainers` (`data/scripts/trainer_battle.inc:1-3`,
+        // `src/scrcmd.c:2193-2208`) -- in the only terms this port has for
+        // it: nothing else runs.
         if self
             .advance_sight_trainer_approach_frame(buttons)
             .is_some_and(SightTrainerOutcome::owns_frame)

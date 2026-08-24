@@ -514,7 +514,7 @@ impl ObjectEventState {
     /// `GetOppositeDirection(objEvent->facingDirection)`
     /// (`event_object_movement.c`), the direction
     /// `PlayerFaceApproachingTrainer` turns the player in once the trainer
-    /// has stopped facing them (`trainer_see.c:522-523`).
+    /// has stopped facing them (`trainer_see.c:526`).
     #[must_use]
     pub const fn opposite_facing(&self) -> Direction {
         match self.facing {

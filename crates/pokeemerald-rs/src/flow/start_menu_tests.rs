@@ -94,9 +94,12 @@ fn the_start_menu_does_not_open_mid_battle() {
 /// A sight-trainer approach cutscene (S-5, issue #300) is not `in_battle()`
 /// -- the fight has not started, and for the icon/walk-up half the *player*
 /// is not `mid_step()` either, only the trainer -- so neither of the two
-/// gates above stops `START` here on its own. Upstream's own lock
-/// (`EventScript_TrainerApproach`'s `lockall`,
-/// `data/scripts/trainer_battle.inc:95-99`) has no counterpart in this
+/// gates above stops `START` here on its own. Upstream's own
+/// `LockPlayerFieldControls`/`FreezeObjectEvents` pair --
+/// `ConfigureAndSetUpOneTrainerBattle`'s `LockPlayerFieldControls`
+/// (`src/battle_setup.c:1198-1199`) plus `lockfortrainer`'s
+/// `FreezeForApproachingTrainers` (`data/scripts/trainer_battle.inc:1-3`,
+/// `src/scrcmd.c:2193-2208`) -- has no counterpart in this
 /// port's frame-ownership model except this gate: without it, `START` would
 /// open the field start menu out from under the approach, which owns the
 /// frame just as fully as a battle does (`sight_trainer_approach`'s own

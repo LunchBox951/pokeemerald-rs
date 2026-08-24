@@ -889,7 +889,7 @@ fn the_trainer_stops_beside_the_player_and_both_turn_to_face_each_other() {
     );
 }
 
-/// `PlayerFaceApproachingTrainer`'s own guard (`trainer_see.c:508-509`): a
+/// `PlayerFaceApproachingTrainer`'s own guard (`trainer_see.c:522-523`): a
 /// step the player committed on the very frame the cone reached them (so
 /// [`engine::overworld::PlayerState::in_transit`] is still `true` when the
 /// approach starts owning the frame) must be allowed to finish -- ticked
@@ -941,7 +941,7 @@ fn the_players_in_flight_step_finishes_before_the_trainer_turns_them() {
         !phase.player.in_transit(),
         "the player must not be turned while still mid-step -- upstream blocks \
          `PlayerFaceApproachingTrainer` on `ObjectEventClearHeldMovementIfFinished` until the \
-         held walk is done (trainer_see.c:508-509)"
+         held walk is done (trainer_see.c:522-523)"
     );
     assert_eq!(
         phase.player.step_progress(),
@@ -960,7 +960,7 @@ fn the_players_in_flight_step_finishes_before_the_trainer_turns_them() {
     );
 }
 
-/// `EventScript_ShowTrainerIntroMsg` (`trainer_battle.inc:101-110`): the
+/// `EventScript_ShowTrainerIntroMsg` (`trainer_battle.inc:101-107`): the
 /// battle waits for the intro speech, the speech waits for the player, and
 /// only when the box closes does `dotrainerbattle` run -- taking the party
 /// lead and keying the fight to the real sight trainer.

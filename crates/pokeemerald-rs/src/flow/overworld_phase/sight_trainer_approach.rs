@@ -80,7 +80,7 @@ use super::OverworldPhase;
 const EXCLAMATION_ICON_FRAMES: u8 = 60;
 
 /// Which part of the sequence the approach is currently in -- upstream's
-/// `sTrainerSeeFuncList` (`trainer_see.c:438-448`) minus the two reveal
+/// `sTrainerSeeFuncList` (`trainer_see.c:89-104`) minus the two reveal
 /// stages, and with its two pairs of "do it"/"wait for it" states collapsed
 /// into one counting state each (this port counts the frames itself rather
 /// than polling a sprite that does not exist).
@@ -107,7 +107,7 @@ enum ApproachStage {
     PlayerFacesTrainer,
     /// `EventScript_ShowTrainerIntroMsg`: `special ShowTrainerIntroSpeech`,
     /// `waitmessage`, `waitbuttonpress`
-    /// (`data/scripts/trainer_battle.inc:101-110`).
+    /// (`data/scripts/trainer_battle.inc:101-107`).
     IntroMessage {
         /// Whether the message box has been opened yet -- the first frame in
         /// this stage opens it, every later one ticks it.
@@ -277,7 +277,7 @@ impl SightApproach {
     }
 
     /// `PlayerFaceApproachingTrainer`'s three write-backs
-    /// (`trainer_see.c:513-517`): pin the movement type so the trainer keeps
+    /// (`trainer_see.c:517-519`): pin the movement type so the trainer keeps
     /// facing the player instead of resuming its patrol
     /// (`SetTrainerMovementType`), and write both that movement type and the
     /// tile it stopped on into its own template
@@ -286,7 +286,7 @@ impl SightApproach {
     /// respawns it where it stopped.
     ///
     /// Returns the direction the player must turn to meet it --
-    /// `GetOppositeDirection(trainerObj->facingDirection)` (`:522-523`) --
+    /// `GetOppositeDirection(trainerObj->facingDirection)` (`:526`) --
     /// which only [`OverworldPhase`] can apply.
     fn stop_facing_player(&mut self) -> Direction {
         let movement_type = trainer_facing_movement_type(self.trainer.facing());
@@ -326,10 +326,12 @@ impl OverworldPhase {
     /// encounter roll, no interaction, and no ordinary dialog tick (this
     /// method ticks its own intro box, ahead of
     /// [`OverworldPhase::advance_dialog_frame`]'s generic one). That is
-    /// upstream's `LockPlayerFieldControls`/`FreezeObjectEvents` pair
-    /// (`EventScript_TrainerApproach`'s `lockall`,
-    /// `data/scripts/trainer_battle.inc:95-99`) expressed the only way this
-    /// port expresses frame ownership.
+    /// upstream's `LockPlayerFieldControls`/`FreezeObjectEvents` pair --
+    /// `ConfigureAndSetUpOneTrainerBattle`'s `LockPlayerFieldControls`
+    /// (`src/battle_setup.c:1198-1199`) plus `lockfortrainer`'s
+    /// `FreezeForApproachingTrainers` (`data/scripts/trainer_battle.inc:1-3`,
+    /// `src/scrcmd.c:2193-2208`) -- expressed the only way this port
+    /// expresses frame ownership.
     ///
     /// "No movement" is about *new* input-driven movement only --
     /// [`Self::begin_sight_trainer_approach_if_seen`] reads the player's
@@ -365,7 +367,7 @@ impl OverworldPhase {
             ApproachStage::PlayerFacesTrainer => {
                 if self.player.in_transit() {
                     // `PlayerFaceApproachingTrainer`'s own guard
-                    // (`trainer_see.c:508-509`):
+                    // (`trainer_see.c:522-523`):
                     // `ObjectEventIsMovementOverridden(playerObj) &&
                     // !ObjectEventClearHeldMovementIfFinished(playerObj)` ->
                     // `return FALSE`. A walking player *is*
@@ -393,7 +395,7 @@ impl OverworldPhase {
         }
     }
 
-    /// `EventScript_ShowTrainerIntroMsg` (`trainer_battle.inc:101-110`):
+    /// `EventScript_ShowTrainerIntroMsg` (`trainer_battle.inc:101-107`):
     /// open the trainer's own intro speech, hold it until the player
     /// dismisses it (`waitmessage`/`waitbuttonpress`, this port's `{P}`),
     /// then hand off to `dotrainerbattle`.
@@ -436,7 +438,7 @@ impl OverworldPhase {
         }
     }
 
-    /// `dotrainerbattle` (`trainer_battle.inc:112-115`): the approach ends
+    /// `dotrainerbattle` (`trainer_battle.inc:110`): the approach ends
     /// and the fight [`OverworldPhase::begin_sight_trainer_approach_if_seen`]
     /// already built becomes
     /// [`OverworldPhase::advance_sight_trainer_battle_frame`]'s to drive.

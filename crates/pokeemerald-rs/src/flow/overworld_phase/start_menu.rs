@@ -23,9 +23,12 @@
 //! * An open message box holds `LockPlayerFieldControls`, with the same
 //!   effect ([`OverworldPhase::dialog`]).
 //! * A sight-trainer approach cutscene (S-5, issue #300,
-//!   [`super::sight_trainer_approach`]) holds upstream's own `lockall` --
-//!   `EventScript_TrainerApproach`'s `LockPlayerFieldControls`
-//!   (`data/scripts/trainer_battle.inc:95-99`) -- for a stretch that is
+//!   [`super::sight_trainer_approach`]) holds upstream's own
+//!   `LockPlayerFieldControls`/`FreezeObjectEvents` pair --
+//!   `ConfigureAndSetUpOneTrainerBattle`'s `LockPlayerFieldControls`
+//!   (`src/battle_setup.c:1198-1199`) plus `lockfortrainer`'s
+//!   `FreezeForApproachingTrainers` (`data/scripts/trainer_battle.inc:1-3`,
+//!   `src/scrcmd.c:2193-2208`) -- for a stretch that is
 //!   never `in_battle()` (the fight has not started) and, for the whole
 //!   exclamation-mark/walk-up half, never `mid_step()` either (the *player*
 //!   is not moving; only the trainer is). Upstream's own gate reaches this
