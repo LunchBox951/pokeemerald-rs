@@ -185,6 +185,25 @@ impl PlayerState {
         self.facing
     }
 
+    /// Turn the avatar in place to face `direction` — upstream
+    /// `ObjectEventSetHeldMovement(playerObj, GetFaceDirectionMovementAction(dir))`,
+    /// which `PlayerFaceApproachingTrainer` uses to turn the player toward an
+    /// approaching sight trainer (`src/trainer_see.c:508-528`, S-5 issue
+    /// #300). `MovementAction_Face*_Step0` set `facingDirection` and return
+    /// `TRUE` in the same frame, so this costs no animation time and touches
+    /// nothing else: position, elevation and any in-progress step's transit
+    /// timer are all left exactly as they were.
+    ///
+    /// Deliberately *not* [`PlayerState::step`]'s own turn-in-place arm
+    /// ([`StepOutcome::Turned`]): that one is player **input**, so it is
+    /// refused while [`PlayerState::in_transit`] and it *steps* rather than
+    /// turns when the avatar already faces `direction`. A scripted face is
+    /// something a cutscene does *to* the player, and neither property
+    /// applies.
+    pub const fn face(&mut self, direction: Direction) {
+        self.facing = direction;
+    }
+
     /// Frames elapsed of the current step's walk animation, `0` when not
     /// mid-step.
     #[must_use]
@@ -640,6 +659,47 @@ mod tests {
             MetatileAttributeTable::new(&[]),
             MetatileAttributeTable::new(&[]),
         )
+    }
+
+    /// A scripted [`PlayerState::face`] turns the avatar and does nothing
+    /// else -- including mid-step, where the *input* turn arm
+    /// ([`StepOutcome::Turned`]) is refused outright, and when the avatar
+    /// already faces that way, where the input arm would step instead
+    /// (that method's own docs).
+    #[test]
+    fn a_scripted_face_turns_the_player_without_moving_or_disturbing_a_step() {
+        let mut player = PlayerState::new((2, 2), 3, Direction::South);
+        player.face(Direction::North);
+        assert_eq!(player.facing(), Direction::North);
+        assert_eq!(player.position(), (2, 2));
+        assert!(!player.in_transit());
+
+        let (bytes, header, events) = flat_runtime(5, 5, |_, _| 0);
+        let layout = assets::MapLayout {
+            id: assets::LayoutId("MAP_TEST"),
+            name: "MapTest",
+            width: 5,
+            height: 5,
+            primary_tileset: "gTileset_General",
+            secondary_tileset: "gTileset_General",
+        };
+        let grid = layout.grid(&bytes).unwrap();
+        let runtime = MapRuntime::new(
+            assets::MapId("MAP_TEST"),
+            &header,
+            &events,
+            grid,
+            MetatileAttributeTable::new(&[]),
+            MetatileAttributeTable::new(&[]),
+        );
+        let mut player = PlayerState::new((2, 2), 3, Direction::South);
+        player.step(Some(Direction::South), &runtime, &no_connections, &NO_FLAGS);
+        let progress = player.step_progress();
+        player.face(Direction::West);
+        assert_eq!(player.facing(), Direction::West);
+        assert_eq!(player.position(), (2, 3), "the committed step is untouched");
+        assert!(player.in_transit());
+        assert_eq!(player.step_progress(), progress);
     }
 
     #[test]
