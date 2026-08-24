@@ -239,6 +239,46 @@ pub(crate) struct OverworldPhase {
     /// save, and rewritten by the white-out when it completes a heal on
     /// the record directly. Zero when no lead was loaded from a record.
     pub(super) lead_hp_hidden_by_load: u16,
+    /// Whether [`Self::party_lead`] is `None` because `save1.player_party[0]`
+    /// would not decode, rather than because the slot is genuinely empty
+    /// (issue #353).
+    ///
+    /// "Would not decode" covers *every* decode failure, not just a bad
+    /// secure-region checksum: [`crate::party::PartyError::Battler`]'s
+    /// unknown species, out-of-range level and unbuildable moveset are
+    /// retained on exactly the same footing as
+    /// [`crate::party::PartyError::Substructures`], because none of them is
+    /// evidence that the stored bytes are anything but real player data --
+    /// they are evidence that *this port* cannot yet run them. A stored
+    /// `player_party_count` of 1 beside such a slot is likewise preserved
+    /// as loaded rather than self-healed to zero.
+    ///
+    /// Set by [`Self::copy_party_and_objects_from_save`]'s error arm and
+    /// cleared by its other two (empty count, clean decode). The battle
+    /// handoffs write [`Self::party_lead`] too -- `begin_wild_battle`,
+    /// `begin_first_battle`, `begin_route103_rival_battle` and
+    /// `begin_sight_trainer_battle_if_seen` each take it to `None` for the
+    /// duration of a fight, and the `&mut` write-backs
+    /// (`npc_trainer_battle::advance_npc_trainer_battle` and its wild
+    /// counterpart) put a `Some` back -- but none of them can run while
+    /// this flag is true: every one of those handoffs bails out unless the
+    /// lead is already `Some`, and the flag is only ever set when the
+    /// decode left none. So the flag's production *write sites* remain
+    /// exactly two: this load path, and [`Self::load_default`]'s
+    /// provisional-starter grant, a deliberate new-game identity change
+    /// that starts from [`Self::new`]'s `false` and never runs the load
+    /// path at all -- which makes that second write a no-op, `false` onto
+    /// `false`, spelled out only so a future new-game path cannot inherit
+    /// a set flag. The only production transition that *changes* the
+    /// value is this load path's error arm.
+    /// [`Self::copy_party_and_objects_to_save`] reads this
+    /// flag, not the save bytes, to decide whether the no-lead arm may zero
+    /// `player_party[0]` -- upstream's `SavePlayerParty`
+    /// (`pokeemerald/src/load_save.c:160-168`) never rebuilds a party
+    /// record from a partial model, it copies whatever bytes `gPlayerParty`
+    /// holds, so a slot this port cannot decode into a battler must still
+    /// round-trip through a save exactly as those bytes came in.
+    pub(super) undecodable_lead_retained: bool,
     /// The wild battle currently being played out, if any (issue #169).
     /// `Some` freezes the overworld for the frame -- the same shape
     /// [`Self::dialog`] uses -- while
@@ -399,6 +439,13 @@ impl OverworldPhase {
         let trainer_id = u32::from_le_bytes(phase.save2.player_trainer_id);
         phase.party_lead =
             Some(new_game::provisional_starter().with_original_trainer_id(trainer_id));
+        // A deliberate identity change (issue #353): `Self::new` already
+        // starts this `false` and this constructor never runs the load
+        // path that could have set it, but the clear is spelled out here
+        // too, so a future new-game write path cannot silently inherit a
+        // retained-undecodable slot from state this constructor does not
+        // build from.
+        phase.undecodable_lead_retained = false;
         Ok(phase)
     }
 
@@ -585,6 +632,11 @@ impl OverworldPhase {
             wild_table_screen: None,
             party_lead: None,
             lead_hp_hidden_by_load: 0,
+            // Overwritten immediately below, once `copy_party_and_objects_from_save`
+            // has actually looked at the save's party count and bytes; `false`
+            // here is only ever the value a decode error would need to
+            // replace.
+            undecodable_lead_retained: false,
             wild_battle: None,
             different_save_file: false,
             // A continue *is* the file on disk: its blocks came from it, so
@@ -727,6 +779,10 @@ impl OverworldPhase {
             wild_table_screen: None,
             party_lead: None,
             lead_hp_hidden_by_load: 0,
+            // `Self::from_saved`'s load path never runs for a new game, so
+            // there is no retained-undecodable slot to carry -- see
+            // `Self::load_default`'s own belt-and-suspenders clear.
+            undecodable_lead_retained: false,
             wild_battle: None,
             // `NewGameInitData` (`src/new_game.c:154`).
             different_save_file: true,

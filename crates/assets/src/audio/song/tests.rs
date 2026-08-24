@@ -242,10 +242,12 @@ fn a_tag_just_past_the_last_defined_one_is_rejected() {
     );
 }
 
-/// `mus_vs_trainer`'s own conditional-loop shape (review finding on #193):
-/// mid2agb's generated loop sets a memory cell, plays the body, and
-/// conditionally jumps on the cell's value -- the one canonical song the
-/// [`SongEvent::MemAcc`]/[`SongEvent::MemAccBranch`] pair exists for.
+/// A `MEMACC` conditional-loop shape (review finding on #193): set a memory
+/// cell, play the body, then conditionally jump on the cell's value. No
+/// canonical song has this shape -- `mus_vs_trainer`, the only song carrying
+/// a `MEMACC` at all, issues a single unconditional `mem_set` and never
+/// branches -- so this exercises the [`SongEvent::MemAccBranch`] half of the
+/// pair as raw-ROM/defensive breadth rather than as shipped data.
 #[test]
 fn the_memacc_conditional_loop_round_trips() {
     let track = vec![
