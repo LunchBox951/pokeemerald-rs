@@ -889,6 +889,77 @@ fn the_trainer_stops_beside_the_player_and_both_turn_to_face_each_other() {
     );
 }
 
+/// `PlayerFaceApproachingTrainer`'s own guard (`trainer_see.c:508-509`): a
+/// step the player committed on the very frame the cone reached them (so
+/// [`engine::overworld::PlayerState::in_transit`] is still `true` when the
+/// approach starts owning the frame) must be allowed to finish -- ticked
+/// under the exclamation icon, the same as any other spawned object event's
+/// held movement would keep animating upstream -- before the trainer turns
+/// them around. Turning a player who is still mid-tile would spin them in
+/// place under an animation upstream never lets get that far.
+#[test]
+fn the_players_in_flight_step_finishes_before_the_trainer_turns_them() {
+    let (rx, ry) = RHETT_TILE;
+    // Two tiles further south than Rhett's own stopping tile, so a full
+    // three-tile walk-up (`walk_tiles = 2`) leaves the trainer adjacent to
+    // where the player ends up below -- realistic geometry, not just a
+    // timing fixture.
+    let start = (rx, ry + 2);
+    let mut phase = route_103_phase(PlayerState::new(start, 3, Direction::South));
+
+    // Commit one ordinary step *before* the approach exists -- mirroring
+    // the frame order `begin_sight_trainer_approach_if_seen`'s own docs
+    // describe: `PlayerState::position` already reflects the just-stepped
+    // tile a frame before the cone check can see it, so the approach can
+    // start with the player still mid-transit (finding's own probe: this
+    // is genuinely `(67, 8)` with `step_progress() == 1`).
+    phase.step(held(Buttons::DOWN));
+    assert!(
+        phase.player.in_transit(),
+        "fixture precondition: the step must still be animating when the approach starts"
+    );
+    assert_eq!(phase.player.step_progress(), 1, "fixture precondition");
+    assert_eq!(phase.player.position(), (rx, ry + 3));
+
+    seed_approach(&mut phase, 2);
+    let original_facing = phase.player.facing();
+
+    // Run every frame from the icon to the moment the trainer turns the
+    // player, asserting the invariant `PlayerFaceApproachingTrainer` itself
+    // enforces: the player's own facing must never change while their step
+    // is still in flight.
+    let mut frames = 0;
+    while phase.player.facing() == original_facing {
+        phase.step(ButtonState::new());
+        frames += 1;
+        assert!(
+            frames < 200,
+            "the trainer must eventually turn the player -- the approach is stuck"
+        );
+    }
+    assert!(
+        !phase.player.in_transit(),
+        "the player must not be turned while still mid-step -- upstream blocks \
+         `PlayerFaceApproachingTrainer` on `ObjectEventClearHeldMovementIfFinished` until the \
+         held walk is done (trainer_see.c:508-509)"
+    );
+    assert_eq!(
+        phase.player.step_progress(),
+        0,
+        "the step must have fully drained, not merely stopped mid-count"
+    );
+    assert_eq!(
+        phase.player.position(),
+        (rx, ry + 3),
+        "the committed step's destination tile is unaffected by the turn"
+    );
+    assert_eq!(
+        phase.player.facing(),
+        Direction::North,
+        "the player turns to the opposite of the trainer's facing"
+    );
+}
+
 /// `EventScript_ShowTrainerIntroMsg` (`trainer_battle.inc:101-110`): the
 /// battle waits for the intro speech, the speech waits for the player, and
 /// only when the box closes does `dotrainerbattle` run -- taking the party
@@ -915,6 +986,23 @@ fn the_intro_speech_holds_the_battle_until_the_player_dismisses_it() {
         Token::PromptClear,
         Token::End,
     ]));
+
+    // Spend a couple of immune steps before the handoff so the reset
+    // assertion below is genuinely witnessed: `immunity_steps() == 0` is
+    // also this counter's untouched default, so proving the restart call
+    // actually ran means starting from something other than zero.
+    phase
+        .wild
+        .check_standard_wild_encounter(0, None, &mut phase.rng);
+    phase
+        .wild
+        .check_standard_wild_encounter(0, None, &mut phase.rng);
+    assert_eq!(
+        phase.wild.immunity_steps(),
+        2,
+        "setup: the counter must be nonzero before the handoff, or the reset assertion \
+         below cannot distinguish a real restart from the default"
+    );
 
     // No button: the box prints and waits, and nothing hands off.
     for frame in 0..FRAMES_STANDING_STILL {
@@ -957,8 +1045,120 @@ fn the_intro_speech_holds_the_battle_until_the_player_dismisses_it() {
     assert_eq!(
         phase.wild.immunity_steps(),
         0,
-        "the post-battle wild-encounter immunity window is restarted with the fight, for \
-         stream-order parity with `begin_route103_rival_battle`"
+        "the post-battle wild-encounter immunity window is restarted with the fight (the \
+         setup above spent it first, so this zero is the restart call firing, not merely \
+         the counter's untouched default), for stream-order parity with \
+         `begin_route103_rival_battle`"
+    );
+}
+
+/// The pack-gated companion to
+/// [`the_intro_speech_holds_the_battle_until_the_player_dismisses_it`]: that
+/// test only reaches `advance_intro_message`'s real `!opened` arm one frame
+/// after [`SightApproach::skip_to_open_intro_message`]'s synthetic
+/// shortcut plants the box directly -- so
+/// [`OverworldPhase::advance_intro_message`]'s actual `NpcDialog::open_default`
+/// call, its `opened` latch, and the `Err` fallback path
+/// (`sight_trainer_approach.rs`'s own module doc comment) had never been
+/// exercised by any test. This one drives the real icon, the real
+/// zero-tile turn, and the real message box -- open, print every glyph, and
+/// dismiss through the trailing prompt -- against the genuinely extracted
+/// pack, the same way `frame_tests`' own
+/// `walking_downstairs_and_talking_to_mom_opens_and_closes_her_dialog` does
+/// for an ordinary NPC. `#[ignore]`d like this crate's other real-pack
+/// tests: run `cargo xtask extract` first.
+#[test]
+#[ignore = "needs a local pack: run `cargo xtask extract` first"]
+fn real_pack_the_intro_message_opens_prints_and_dismisses_for_real() {
+    let (rx, ry) = RHETT_TILE;
+    let mut phase = route_103_phase(PlayerState::new((rx, ry + 1), 3, Direction::North));
+    seed_approach(&mut phase, 0);
+
+    // Icon, then the trainer's own zero-tile `MOVEMENT_ACTION_FACE_PLAYER`
+    // and stop: everything up to (but not including) the frame that opens
+    // the box.
+    let mut opened = false;
+    for frame in 0..120 {
+        phase.step(ButtonState::new());
+        assert!(
+            phase.sight_approach.is_some(),
+            "frame {frame}: the approach must not end before the real box has even opened"
+        );
+        if phase.dialog.is_some() {
+            opened = true;
+            break;
+        }
+    }
+    assert!(
+        opened,
+        "the real intro box must open against the extracted pack within a generous budget"
+    );
+    assert!(
+        phase.sight_approach.is_some(),
+        "the box only opened -- `dotrainerbattle` has not run yet"
+    );
+    assert!(
+        !phase.is_sight_trainer_battle_active(),
+        "opening the box must not itself start the battle"
+    );
+
+    // The exact real text this trainer's own `seed_approach` intro carries
+    // (module docs' "The stand-in party" section: the object event and the
+    // speech are real, only the party behind the battle is a stand-in).
+    let expected_tokens = crate::overworld::npc_scripts::parse_message(
+        "Whoa!\nHow'd you get into a space this small?{P}",
+    );
+    let expected_glyph_count = expected_tokens
+        .iter()
+        .filter(|t| matches!(t, engine::text::Token::Char(_)))
+        .count();
+    assert!(
+        expected_glyph_count > 0,
+        "the real intro line must contain visible text"
+    );
+
+    let mut fully_printed = false;
+    for _ in 0..400 {
+        phase.step(ButtonState::new());
+        let Some(dialog) = &phase.dialog else {
+            panic!("the box must not close on its own before the trailing prompt confirms");
+        };
+        if dialog.revealed_glyph_count() == expected_glyph_count {
+            fully_printed = true;
+            break;
+        }
+    }
+    assert!(
+        fully_printed,
+        "every glyph of the real intro line must print within the frame budget"
+    );
+
+    // Confirm through the trailing prompt (`the_intro_speech_holds...`'s
+    // own doc comment on why every frame presses A rather than one).
+    let mut handed_off = false;
+    for _ in 0..30 {
+        phase.step(pressed(Buttons::A));
+        if phase.dialog.is_none() {
+            handed_off = true;
+            break;
+        }
+    }
+    assert!(
+        handed_off,
+        "confirming through the trailing prompt must close the real box"
+    );
+    assert!(
+        phase.is_sight_trainer_battle_active(),
+        "`dotrainerbattle` must run the instant the real box closes"
+    );
+    assert!(
+        phase.sight_approach.is_none(),
+        "the approach is over once its battle has started"
+    );
+    assert_eq!(
+        phase.sight_trainer_id,
+        Some(assets::trainers::TrainerId(TRAINER_RHETT)),
+        "the fight is keyed to the real sight trainer"
     );
 }
 

@@ -330,11 +330,30 @@ impl OverworldPhase {
     /// (`EventScript_TrainerApproach`'s `lockall`,
     /// `data/scripts/trainer_battle.inc:95-99`) expressed the only way this
     /// port expresses frame ownership.
+    ///
+    /// "No movement" is about *new* input-driven movement only --
+    /// [`Self::begin_sight_trainer_approach_if_seen`] reads the player's
+    /// *post-movement* tile ([`engine::overworld::PlayerState::position`],
+    /// updated the instant a step is committed -- that method's own call
+    /// site in [`super::step::OverworldPhase::step`]), so the cone can
+    /// reach the player on the very frame after they step onto the tile it
+    /// covers, while their own held walk is still mid-tile
+    /// ([`engine::overworld::PlayerState::in_transit`]). Upstream does not
+    /// freeze that walk: `UpdateObjectEvents` keeps animating every spawned
+    /// object event's held movement every frame regardless of what
+    /// `LockPlayerFieldControls` has locked out of *input*, so the player's
+    /// own in-flight step keeps draining under the exclamation icon exactly
+    /// as it would with no trainer watching.
+    /// [`engine::overworld::PlayerState::tick`] here is that continued
+    /// animation's stand-in -- unconditional, the same way
+    /// [`super::input::advance_player_one_frame`] ticks it on an ordinary
+    /// frame, and a no-op once the step has already finished.
     pub(super) fn advance_sight_trainer_approach_frame(
         &mut self,
         buttons: ButtonState,
     ) -> Option<SightTrainerOutcome> {
         let stage = self.sight_approach.as_ref()?.stage;
+        self.player.tick();
         match stage {
             ApproachStage::ExclamationIcon { .. } | ApproachStage::WalkUp { .. } => {
                 let player_position = self.player.position();
@@ -344,13 +363,26 @@ impl OverworldPhase {
                 Some(SightTrainerOutcome::ApproachAdvanced)
             }
             ApproachStage::PlayerFacesTrainer => {
+                if self.player.in_transit() {
+                    // `PlayerFaceApproachingTrainer`'s own guard
+                    // (`trainer_see.c:508-509`):
+                    // `ObjectEventIsMovementOverridden(playerObj) &&
+                    // !ObjectEventClearHeldMovementIfFinished(playerObj)` ->
+                    // `return FALSE`. A walking player *is*
+                    // movement-overridden (`field_player_avatar.c:966-978`),
+                    // so the turn below waits one more frame rather than
+                    // spinning the player around mid-tile.
+                    return Some(SightTrainerOutcome::ApproachAdvanced);
+                }
                 if let Some(approach) = &mut self.sight_approach {
                     let facing = approach.stop_facing_player();
                     // `CancelPlayerForcedMovement` has no counterpart here
                     // (no forced movement is modelled), and the player's own
                     // face action finishes in the frame it is applied --
                     // `PlayerState::face`'s own docs -- so
-                    // `TRSEE_PLAYER_FACE_WAIT` has nothing left to wait for.
+                    // `TRSEE_PLAYER_FACE_WAIT` has nothing left to wait for
+                    // once the guard above has already let the held walk
+                    // finish.
                     self.player.face(facing);
                 }
                 Some(SightTrainerOutcome::ApproachAdvanced)
@@ -425,6 +457,62 @@ impl OverworldPhase {
         // yet.
         self.wild.restart_immunity_steps();
         SightTrainerOutcome::BattleStarted
+    }
+
+    /// Test-only: seed [`Self::sight_approach`] with a minimal in-progress
+    /// approach so a gate test elsewhere in `crate::flow` can assert
+    /// something about "`Some`", without caring which stage.
+    ///
+    /// This module's own `impl OverworldPhase` block is where
+    /// [`Self::sight_approach`] is written from production code, but the
+    /// module itself (`overworld_phase::sight_trainer_approach`) is private
+    /// to [`super::OverworldPhase`]'s own module, so a sibling test module
+    /// such as [`crate::flow::start_menu_tests`] cannot reach a bare
+    /// constructor the way this module's own tests do (`approaching_from`,
+    /// below) -- only a method on `OverworldPhase` itself, which method
+    /// calls resolve without naming that path.
+    #[cfg(test)]
+    pub(in crate::flow) fn begin_synthetic_sight_approach_for_test(&mut self) {
+        let dex = battle::Dex::new();
+        let lead = battle::BattlePokemon::new(
+            &dex,
+            assets::SpeciesId(277), // SPECIES_TREECKO
+            50,
+            battle::fixed_ivs(31),
+            0,
+            vec![assets::MoveId(163)], // MOVE_SLASH
+        )
+        .expect("Treecko/Slash is a valid pairing");
+        let mut rng = engine::rng::Rng::new(1);
+        let battle = crate::flow::npc_trainer_battle::start_npc_trainer_battle(
+            lead,
+            TrainerId(532), // TRAINER_BRENDAN_ROUTE_103_TREECKO
+            &mut rng,
+        )
+        .expect("the stand-in trainer's party is constructible today");
+
+        let facing = Direction::South;
+        let template = assets::ObjectEvent {
+            local_id: 1,
+            graphics_id: "OBJ_EVENT_GFX_HIKER",
+            x: 10,
+            y: 5,
+            elevation: 3,
+            movement_type: trainer_facing_movement_type(facing),
+            movement_range_x: 0,
+            movement_range_y: 0,
+            trainer_type: assets::TrainerType::Normal,
+            trainer_sight_or_berry_tree_id: "4",
+            script: "Route103_EventScript_Rhett",
+            flag: "0",
+        };
+        self.sight_approach = Some(SightApproach::new(
+            ObjectEventState::from_template(&template),
+            1,
+            "Whoa!{P}",
+            battle,
+            TrainerId(703),
+        ));
     }
 }
 

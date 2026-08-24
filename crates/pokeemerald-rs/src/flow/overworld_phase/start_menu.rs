@@ -11,7 +11,7 @@
 //! # When `START` opens a menu
 //!
 //! Upstream's answer is three separate mechanisms, and
-//! [`OverworldPhase::start_menu_may_open`] is all three:
+//! [`OverworldPhase::start_menu_may_open`] adds a fourth of this port's own:
 //!
 //! * `FieldGetPlayerInput` only sets `input->pressedStartButton` while
 //!   `gPlayerAvatar.tileTransitionState` is `T_TILE_CENTER` or
@@ -22,10 +22,23 @@
 //!   not being polled at all ([`OverworldPhase::in_battle`]).
 //! * An open message box holds `LockPlayerFieldControls`, with the same
 //!   effect ([`OverworldPhase::dialog`]).
+//! * A sight-trainer approach cutscene (S-5, issue #300,
+//!   [`super::sight_trainer_approach`]) holds upstream's own `lockall` --
+//!   `EventScript_TrainerApproach`'s `LockPlayerFieldControls`
+//!   (`data/scripts/trainer_battle.inc:95-99`) -- for a stretch that is
+//!   never `in_battle()` (the fight has not started) and, for the whole
+//!   exclamation-mark/walk-up half, never `mid_step()` either (the *player*
+//!   is not moving; only the trainer is). Upstream's own gate reaches this
+//!   case through the lock, which this port has no counterpart for
+//!   ([`super::sight_trainer_approach`]'s own module docs on why); this
+//!   field is that gate's stand-in, checked here rather than folded into
+//!   [`OverworldPhase::in_battle`] because it names a different upstream
+//!   mechanism (a lock, not a callback swap) for a state that is not a
+//!   battle at all.
 //!
-//! Those three gates are why this port needs no "do not save here" policy
-//! of its own: the two states a save must never be taken in -- mid-battle
-//! and mid-step, both established by #230's review -- are exactly the
+//! Those four gates are why this port needs no "do not save here" policy
+//! of its own: the states a save must never be taken in -- mid-battle,
+//! mid-step (#230's review), and now mid-approach -- are exactly the
 //! states upstream's own start menu cannot open in. The guard moved from
 //! the writer to the door.
 //!
@@ -135,6 +148,7 @@ impl OverworldPhase {
             && !self.in_battle()
             && !self.mid_step()
             && self.dialog.is_none()
+            && self.sight_approach.is_none()
     }
 
     /// Whether the start menu currently owns the phase -- read by
