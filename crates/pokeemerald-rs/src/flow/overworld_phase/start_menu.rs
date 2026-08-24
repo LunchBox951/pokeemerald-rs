@@ -300,10 +300,11 @@ impl OverworldPhase {
             self.undecodable_lead_retained = false;
             return;
         }
-        match party::from_save_pokemon(&battle::Dex::new(), &self.save1.player_party[0]) {
+        let dex = battle::Dex::new();
+        match party::from_save_pokemon(&dex, &self.save1.player_party[0]) {
             Ok(lead) => {
                 self.lead_hp_hidden_by_load =
-                    party::hp_hidden_by_load(&self.save1.player_party[0], &lead);
+                    party::hp_hidden_by_load(&dex, &self.save1.player_party[0], &lead);
                 self.party_lead = Some(lead);
                 self.undecodable_lead_retained = false;
             }

@@ -60,10 +60,14 @@
 //!
 //! * **Effort values and contest condition** -- every mon `battle` builds
 //!   has `0` EVs (that crate's own module docs), so `PokemonSubstruct2` is
-//!   passed through whole rather than re-derived. A saved mon with real EVs
+//!   passed through whole rather than re-derived, and [`from_save_pokemon`]
+//!   builds no EV field to read them back into. A saved mon with real EVs
 //!   still *battles* as a 0-EV mon, because the decode cannot rebuild what
-//!   the model has no field for, but the bytes stay on disk for the model
-//!   that eventually will.
+//!   the model has no field for. The bytes are not purely inert, though:
+//!   [`merge_into_save_pokemon`]'s stat-block recompute reads the six EV
+//!   bytes back out to size a levelled-up block (issue #384, see the stat
+//!   block discussion below) -- the one place this crate's own arithmetic
+//!   is EV-aware without a battler ever carrying an EV field.
 //! * **Held item, accumulated friendship, pokérus, met
 //!   location/level/game, poké ball, OT gender, ribbons, markings,
 //!   nickname, OT name, language, mail, and non-volatile status** -- none
@@ -144,33 +148,55 @@
 //! stored record's species and level are still the battler's -- the block
 //! is a function of species/level/IVs/EVs/nature, so sub-level experience
 //! earned this session does not invalidate it (the experience word itself
-//! is always overlaid). They are **overwritten** from
-//! [`battle::BattlePokemon::stats`] exactly when species or level moved: a
-//! mon that levelled up this session must not be filed with its old
-//! numbers under its new level, which is a record upstream could never
-//! write. The overwritten block is the 0-EV one, which is a derived field
-//! going stale rather than state being lost -- upstream rebuilds it from
-//! the retained EVs at its own next `CalculateMonStats`.
+//! is always overlaid). They are **recomputed** exactly when species or
+//! level moved: a mon that levelled up this session must not be filed with
+//! its old numbers under its new level, which is a record upstream could
+//! never write. The recompute (issue #384) is
+//! [`battle::compute_stats_with_evs`] -- `CALC_STAT`'s own arithmetic, `ev /
+//! 4` term and all -- fed `mon`'s IVs and nature alongside the EVs the
+//! record's own `PokemonSubstruct2` retains, not
+//! [`battle::BattlePokemon::stats`]'s `0`-EV cache: the battler still has
+//! nowhere of its own to carry EVs (`battle`'s module docs), but the six
+//! bytes this filed block replaces are exactly what upstream's own
+//! `CalculateMonStats` would have produced from them, not a value weaker
+//! than the record they came from.
 //!
 //! Current HP is outside that choice: it is battle state, so the merge
 //! always writes the battler's, retained block or not. It can never
-//! contradict a retained maximum, because the model's own maximum is the
-//! 0-EV one and EVs only ever add to it. One translation applies over a
-//! *retained* block: [`from_save_pokemon`] clamps a stored `hp` above the
-//! model's maximum down to it, hiding the `stored - model_max` points the
-//! session never saw. That offset is measured once at load
+//! contradict either maximum, because the model's own maximum is the 0-EV
+//! one and EVs only ever add to it -- true of a retained maximum and,
+//! since issue #384, of a freshly recomputed one too. The same translation
+//! applies over *both*: [`from_save_pokemon`] clamps a stored `hp` above
+//! the model's maximum down to it, hiding the `stored - model_max` points
+//! the session never saw. That offset is measured once at load
 //! ([`hp_hidden_by_load`]) and carried as session state beside the lead;
-//! the merge adds it back onto the live number, capped at the retained
-//! `max_hp` and never resurrecting a fainted battler. It must be state
+//! the merge adds it back onto the live number, capped at whichever
+//! maximum it is filing -- the retained one, or the one the recompute just
+//! produced -- and never resurrecting a fainted battler. It must be state
 //! rather than re-derived: the start menu writes the merge's output back
 //! into the slot it passes as the next save's `base`, so measuring an
 //! already-translated record would drift -- saving twice files the same
 //! bytes. Continue -> SAVE is therefore byte-exact at any stored `hp` --
 //! filing the clamped number would mark a full-health lead damaged, the
-//! corruption shape issue #344 exists to stop -- and damage subtracts
-//! absolutely, as upstream's EV-aware arithmetic would. The residue (a
-//! live HP pinned at either boundary mid-session loses points the wider
-//! upstream range would have kept) closes when `battle` carries EVs.
+//! corruption shape issue #344 exists to stop, whether or not the same
+//! save also carries a level-up -- and damage subtracts absolutely, as
+//! upstream's EV-aware arithmetic would. A recompute does not merely carry
+//! the offset forward, though: `CALC_STAT`'s `ev / 4` term is scaled by
+//! `* level / 100`, so the same retained EVs are worth a different number
+//! of points at a different level, and the offset was measured against the
+//! *old* maximum's gap over the `0`-EV floor. So the merge rebases it --
+//! [`zero_ev_max_hp`] recovers that old gap from the record it is
+//! overwriting, and the freshly recomputed block supplies the new one --
+//! before translating by it, so the offset goes on describing exactly the
+//! points still hidden under whichever maximum is being filed rather than a
+//! count fixed at load and never revisited. Carrying it unchanged across a
+//! level-up filed a full-health EV-trained lead as damaged by however much
+//! the gap grew (issue #384's round-2 review: a Treecko stored 41/41 at
+//! level 13 filed 43/44 at level 14); retiring it to zero, as an earlier
+//! version of this fix did, re-hides real points the moment the next save
+//! lands back on the retained branch. The residue (a live HP pinned at
+//! either boundary mid-session loses points the wider upstream range would
+//! have kept) closes when `battle` carries EVs.
 
 use battle::{BattlePokemon, Dex, Ivs, MAX_MON_MOVES};
 use engine::save::{BoxPokemon, Pokemon, PokemonSubstructures, SUBSTRUCTURE_LEN};
@@ -270,6 +296,86 @@ fn unpack_ivs(word: u32) -> Ivs {
     }
 }
 
+/// `PokemonSubstruct2`'s first six bytes (`pokeemerald/include/pokemon.h:
+/// 117`-`:122`) -- one whole byte per EV, in the same
+/// HP/Attack/Defense/Speed/SpAttack/SpDefense order [`pack_ivs`]/
+/// [`unpack_ivs`] use, unlike the IVs' packed five-bit fields. Read-only:
+/// the merge never writes these bytes (module docs), only reads them back
+/// to size a levelled-up stat block -- [`compute_levelled_up_stats`].
+fn evs_from_substruct2(evs_and_condition: &[u8; SUBSTRUCTURE_LEN]) -> battle::Evs {
+    battle::Evs {
+        hp: evs_and_condition[0],
+        attack: evs_and_condition[1],
+        defense: evs_and_condition[2],
+        speed: evs_and_condition[3],
+        sp_attack: evs_and_condition[4],
+        sp_defense: evs_and_condition[5],
+    }
+}
+
+/// The stat block [`merge_into_save_pokemon`] files for a lead whose species
+/// or level moved this session -- `CalculateMonStats`
+/// (`pokeemerald/src/pokemon.c:2823`), fed `mon`'s own IVs and nature
+/// alongside the EVs `evs_and_condition` retains, rather than
+/// [`battle::BattlePokemon::stats`]'s `0`-EV cache (module docs, issue
+/// #384). Falls back to that cache if `mon`'s species is not in `dex` --
+/// unreachable through [`BattlePokemon`], whose constructor already
+/// resolved the species against a dex, but a species missing from *this*
+/// dex must still produce a stat block rather than panic (matching
+/// [`to_save_pokemon`]'s own friendship fallback).
+fn compute_levelled_up_stats(
+    dex: &Dex,
+    mon: &BattlePokemon,
+    evs_and_condition: &[u8; SUBSTRUCTURE_LEN],
+) -> battle::Stats {
+    match dex.species(mon.species()) {
+        Ok(base) => battle::compute_stats_with_evs(
+            base,
+            mon.level(),
+            mon.nature(),
+            mon.ivs(),
+            evs_from_substruct2(evs_and_condition),
+        ),
+        Err(_) => mon.stats(),
+    }
+}
+
+/// The `0`-EV model's own maximum HP for `species` at `level`, `mon`'s
+/// nature and IVs (neither of which the session can move) fed through the
+/// same `CALC_STAT` formula [`compute_levelled_up_stats`] uses -- but at
+/// `0` EVs, matching [`battle::BattlePokemon::stats`]'s own cache rather
+/// than the record's retained ones.
+///
+/// [`merge_into_save_pokemon`]'s recompute branch uses this to rebase the
+/// load-clamp offset: the offset was measured at load against the gap
+/// between a *retained* maximum and this same `0`-EV floor, at whatever
+/// species/level the record held then (module docs, issue #384's round-2
+/// review). Moving the offset forward to a freshly recomputed maximum means
+/// first undoing that old gap and then adding the new one -- both against
+/// this floor, not against the battler's own cache, which already sits at
+/// the *new* level and would compare a level-13 gap to a level-14 one.
+///
+/// Falls back to `mon.stats().max_hp` when `species` is not in `dex` --
+/// unreachable in practice (this file models no evolution, so `species` is
+/// always `mon.species()`, which [`BattlePokemon`]'s constructor already
+/// resolved), but the same defensive fallback [`compute_levelled_up_stats`]
+/// uses rather than a panic.
+fn zero_ev_max_hp(dex: &Dex, species: u16, level: u8, mon: &BattlePokemon) -> u32 {
+    match dex.species(assets::SpeciesId(species)) {
+        Ok(base) => {
+            battle::compute_stats_with_evs(
+                base,
+                level,
+                mon.nature(),
+                mon.ivs(),
+                battle::Evs::default(),
+            )
+            .max_hp
+        }
+        Err(_) => mon.stats().max_hp,
+    }
+}
+
 /// `SavePlayerParty`'s per-mon half (`src/load_save.c:160-168`): the battler
 /// `mon`, as the exact 100-byte party value the save block stores.
 ///
@@ -328,7 +434,7 @@ pub(crate) fn to_save_pokemon(dex: &Dex, mon: &BattlePokemon) -> Pokemon {
         mail: MAIL_NONE,
         ..Pokemon::default()
     };
-    overlay_battle_stats(&mut record, mon);
+    overlay_battle_stats(&mut record, mon, mon.stats());
     record
 }
 
@@ -353,16 +459,22 @@ fn encode_attacks(mon: &BattlePokemon) -> [u8; SUBSTRUCTURE_LEN] {
 }
 
 /// The party record's unencrypted tail -- level, current HP, and the
-/// derived stat block -- from the battler.
+/// derived stat block -- from `stats`.
 ///
-/// [`to_save_pokemon`] always runs this: a record built from scratch has
-/// no cached block to keep, so every entry must come from the model.
-/// [`merge_into_save_pokemon`] runs it only when the session changed what
-/// the block is a function of, and writes [`overlay_current_hp`] alone
-/// otherwise -- see the module docs for why re-deriving a retained block
-/// would file an EV-trained save permanently weaker.
-fn overlay_battle_stats(record: &mut Pokemon, mon: &BattlePokemon) {
-    let stats = mon.stats();
+/// [`to_save_pokemon`] always runs this, fed the battler's own `0`-EV
+/// [`battle::BattlePokemon::stats`]: a record built from scratch has no
+/// cached block to keep, so every entry must come from the model, and the
+/// plain `current_hp` this writes into `record.hp` is exactly right --
+/// there is no load clamp to translate back across. [`merge_into_save_pokemon`]'s
+/// recompute branch runs it too, fed [`compute_levelled_up_stats`], only
+/// when the session changed what the block is a function of -- but there
+/// `record.hp` is not the last word: the caller re-overlays
+/// [`overlay_current_hp_over_retained_block`] on top, so the load-clamp
+/// offset still lands against the maximum just recomputed here (module
+/// docs, issue #384). The retained branch skips this function altogether,
+/// running [`overlay_current_hp_over_retained_block`] alone against the
+/// block it kept.
+fn overlay_battle_stats(record: &mut Pokemon, mon: &BattlePokemon, stats: battle::Stats) {
     record.level = mon.level();
     record.max_hp = clamp_u16(stats.max_hp);
     record.attack = clamp_u16(stats.attack);
@@ -378,21 +490,29 @@ fn overlay_battle_stats(record: &mut Pokemon, mon: &BattlePokemon) {
 /// function of species/level/IVs/EVs, so the live battler is always the
 /// only copy that can be right (module docs).
 ///
-/// Safe to write over a retained stat block: the battler's HP is at most
-/// its own maximum, and that maximum is computed from the `0` EVs this
-/// port models, so it cannot exceed the maximum a retained block holds.
+/// Safe to write over any stat block [`overlay_battle_stats`] computes,
+/// retained or recomputed: the battler's HP is at most its own maximum, and
+/// that maximum is computed from the `0` EVs this port models, so it cannot
+/// exceed either a retained block's maximum or a freshly recomputed
+/// (EV-aware) one, both of which only ever add to the `0`-EV formula. In
+/// [`to_save_pokemon`] this is the last word on `record.hp`; in
+/// [`merge_into_save_pokemon`]'s recompute branch it is a provisional value
+/// [`overlay_current_hp_over_retained_block`] immediately overwrites with
+/// the load-clamp translation (module docs).
 fn overlay_current_hp(record: &mut Pokemon, mon: &BattlePokemon) {
     record.hp = clamp_u16(mon.current_hp());
 }
 
-/// [`overlay_current_hp`] for a *retained* stat block, undoing
-/// [`from_save_pokemon`]'s load clamp (module docs): the points of the
-/// stored `hp` above the model's maximum were hidden from the session, so
-/// they are added back onto the live number, capped at the retained
-/// `max_hp`. A Continue -> SAVE round trip is byte-exact at any stored
-/// `hp`, and in-session damage subtracts absolutely from the stored value
-/// rather than from its clamp. A fainted battler stays fainted: `0` is
-/// the session's own outcome, not a clamp artifact.
+/// [`overlay_current_hp`] undoing [`from_save_pokemon`]'s load clamp
+/// (module docs): the points of the stored `hp` above the model's maximum
+/// were hidden from the session, so they are added back onto the live
+/// number, capped at `record.max_hp`. Used both for a *retained* stat block
+/// and, since issue #384, for a freshly *recomputed* one -- the caller
+/// always writes `record.max_hp` first, so the cap is whichever block is
+/// actually being filed. A Continue -> SAVE round trip is byte-exact at any
+/// stored `hp`, and in-session damage subtracts absolutely from the stored
+/// value rather than from its clamp. A fainted battler stays fainted: `0`
+/// is the session's own outcome, not a clamp artifact.
 ///
 /// The offset is the caller's, measured once at load ([`hp_hidden_by_load`])
 /// and carried as session state, *not* re-derived from `record.hp` here:
@@ -414,12 +534,30 @@ fn overlay_current_hp_over_retained_block(
 }
 
 /// The current-HP points [`from_save_pokemon`]'s clamp hid from the
-/// session: the stored `hp` above the decoded battler's own (0-EV)
-/// maximum. Measured once, when the record is decoded, and carried beside
-/// the lead until [`merge_into_save_pokemon`] adds it back; zero whenever
-/// the stored value fits the model's range.
-pub(crate) fn hp_hidden_by_load(stored: &Pokemon, lead: &BattlePokemon) -> u16 {
-    stored.hp.saturating_sub(clamp_u16(lead.stats().max_hp))
+/// session: `stored.hp` above the `0`-EV floor **at `stored.level`** --
+/// [`zero_ev_max_hp`], not [`battle::BattlePokemon::stats`]'s own cache.
+/// Measured once, when the record is decoded, and carried beside the lead
+/// until [`merge_into_save_pokemon`] adds it back; zero whenever the stored
+/// value fits that floor.
+///
+/// `stored.level` matters, not `lead.level()`: [`from_save_pokemon`] can
+/// hand back a battler whose level has already moved past the byte this
+/// same `stored` holds -- [`BattlePokemon::reconcile_saved_experience`]
+/// raises the level to match a growth word the level byte contradicts
+/// (issue #384's round-3 review). [`merge_into_save_pokemon`]'s recompute
+/// branch rebases this offset by comparing an old floor taken at
+/// `base.level` (the record's own stored byte, still `stored.level` here)
+/// against a new one at `mon.level()`; that rebasing is only sound if the
+/// offset itself was measured at `base.level` too, so this must not measure
+/// against whatever level the battler has already reconciled to. Using
+/// [`battle::BattlePokemon::stats`]'s cache here -- which tracks the
+/// battler's *current* level -- silently mixed the two, filing a record
+/// whose level byte disagreed with its experience weaker than upstream's
+/// own `CalculateMonStats`, which derives the level from experience before
+/// it ever computes a stat block.
+pub(crate) fn hp_hidden_by_load(dex: &Dex, stored: &Pokemon, lead: &BattlePokemon) -> u16 {
+    let floor = zero_ev_max_hp(dex, lead.species().0, stored.level, lead);
+    stored.hp.saturating_sub(clamp_u16(floor))
 }
 
 /// `SavePlayerParty`'s per-mon half for a mon that came *out* of a save
@@ -439,17 +577,37 @@ pub(crate) fn hp_hidden_by_load(stored: &Pokemon, lead: &BattlePokemon) -> u16 {
 /// The cached stat block is the one group that is retained *conditionally*
 /// -- kept when species and level are unchanged, recomputed when the
 /// session moved either one. Sub-level experience deliberately does not
-/// enter that guard. Current HP is always the battler's, translated
-/// back across the load clamp when the block is retained (module docs).
-/// The module docs give the reasoning; [`overlay_battle_stats`] and
-/// [`overlay_current_hp`] are the two writes.
+/// enter that guard. Current HP is always the battler's, translated back
+/// across the load clamp in *both* cases -- against the retained `max_hp`
+/// when the block is kept, against the freshly recomputed one when it is
+/// not (module docs, issue #384). [`overlay_battle_stats`] and
+/// [`overlay_current_hp_over_retained_block`] are the writes.
 ///
 /// `hp_hidden_by_load` is the session offset [`hp_hidden_by_load`] measured
-/// at load; the merge owns rebasing it. Both the recompute branch and the
-/// from-scratch fallback zero it, because the record they write has the
-/// model's own `max_hp` and hides nothing -- carrying the old offset into
-/// the next save's retained-block branch would silently heal the lead by
-/// its stale value.
+/// at load; the merge owns rebasing it. Only the from-scratch fallback
+/// above zeroes it: a record built with no backing substructures at all has
+/// no clamp history to carry, and [`to_save_pokemon`] never reads the
+/// offset back. The retained branch translates by it unchanged, because the
+/// maximum it is filed against did not move. The recompute branch below
+/// cannot: the offset was measured against `base`'s own retained maximum,
+/// at `base.level`, and `CALC_STAT`'s `ev / 4` term is scaled by
+/// `* level / 100`, so the same retained EVs are worth a different number
+/// of points once the level the block is filed under has moved. So the
+/// recompute branch first rebases the offset -- [`zero_ev_max_hp`] recovers
+/// `base`'s own gap over the `0`-EV floor at `base.level`, the freshly
+/// recomputed block supplies the gap at `mon.level()`, and the offset moves
+/// by the difference -- and only then runs the same translation the
+/// retained branch does, now against the just-recomputed (EV-aware, issue
+/// #384) maximum rather than the retained block's. The battler's own
+/// `current_hp` is still capped at the `0`-EV model's maximum regardless of
+/// which branch runs, so a mon that loaded with real EVs needs the
+/// translation either way. Carrying the offset forward unrebased, as an
+/// earlier round of this fix did, filed a full-health EV-trained lead that
+/// levelled up this session as damaged whenever the gap grew -- exactly the
+/// corruption shape issue #344 exists to stop -- and zeroing it outright,
+/// as an earlier version still did, would also have un-hidden those points
+/// on the very next save, once this record's own species and level put it
+/// on the retained branch above.
 ///
 /// Falls back to [`to_save_pokemon`] when `base` is not this battler's own
 /// record -- see [`backing_substructures`] for what disqualifies it. The
@@ -499,7 +657,10 @@ pub(crate) fn merge_into_save_pokemon(
     substructures.attacks = encode_attacks(mon);
 
     // `PokemonSubstruct2` -- EVs and contest condition -- is untouched: the
-    // battle model has no field that could contradict it.
+    // battle model has no field that could contradict it. The recompute
+    // branch below reads its EV bytes back out (they are not rewritten by
+    // doing so), because the block it files has to match them (module
+    // docs, issue #384).
 
     // `PokemonSubstruct3`: only the IV word is rewritten, and only around
     // `isEgg`. `pokerus`, the met data, the ball, `otGender` and every
@@ -530,12 +691,46 @@ pub(crate) fn merge_into_save_pokemon(
         // Species or level moved this session, so the cached block is a
         // function of inputs that no longer hold and upstream would have
         // recomputed it (`CalculateMonStats`). Sub-level experience is
-        // deliberately excluded from the guard above. The record's stat
-        // block is the model's own from here on, so no stored points stay
-        // hidden behind the load clamp: a carried offset would heal the
-        // next retained-block save by exactly its stale value.
-        *hp_hidden_by_load = 0;
-        overlay_battle_stats(&mut merged, mon);
+        // deliberately excluded from the guard above. The recomputed block
+        // is fed the record's own retained EVs (`compute_levelled_up_stats`,
+        // module docs, issue #384) rather than the battler's `0`-EV cache,
+        // so the maximum this write files is upstream's own EV-aware one,
+        // not a weaker cache the model built from `0` EVs.
+        //
+        // `overlay_battle_stats` writes a plain, untranslated `current_hp`
+        // into `record.hp` as its last step; that is wrong here exactly as
+        // it would be for the retained branch above, because the battler's
+        // own `current_hp` is still capped at the `0`-EV model's maximum
+        // regardless of which branch runs. So the same load-clamp
+        // translation the retained branch applies runs again here, now
+        // against the maximum `overlay_battle_stats` just recomputed rather
+        // than the retained block's. The offset itself is *not* reset: it
+        // still describes real hidden points under the new maximum, and
+        // zeroing it would un-hide them on the very next save, once this
+        // record's own species and level put it on the retained branch
+        // above.
+        //
+        // Nor is it carried unchanged: it was measured against `base`'s own
+        // gap over the `0`-EV floor at `base.level`, and `CALC_STAT`'s
+        // `ev / 4` term is scaled by `* level / 100`, so that gap is not the
+        // one the just-recomputed block has at `mon.level()`. Rebase by the
+        // difference before translating -- `zero_ev_max_hp` recovers the
+        // old floor from `base` and `stored_species`/`base.level` (the
+        // record this write is overwriting), and `mon.stats().max_hp` is
+        // already the new floor, at `mon.level()`, now that
+        // `overlay_battle_stats` has run (module docs).
+        let stats = compute_levelled_up_stats(dex, mon, &substructures.evs_and_condition);
+        overlay_battle_stats(&mut merged, mon, stats);
+        let old_floor = zero_ev_max_hp(dex, stored_species, base.level, mon);
+        let gap_old = u32::from(base.max_hp).saturating_sub(old_floor);
+        let gap_new = u32::from(merged.max_hp).saturating_sub(mon.stats().max_hp);
+        *hp_hidden_by_load = u16::try_from(
+            u32::from(*hp_hidden_by_load)
+                .saturating_add(gap_new)
+                .saturating_sub(gap_old),
+        )
+        .unwrap_or(u16::MAX);
+        overlay_current_hp_over_retained_block(&mut merged, mon, *hp_hidden_by_load);
     }
     merged
 }
