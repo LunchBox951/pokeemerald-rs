@@ -177,6 +177,12 @@ impl ImportReport {
 /// than followed and truncated (`write_new`); the caller publishes the
 /// finished file over the real destination itself.
 ///
+/// A failed import leaves nothing at `out_path`. Exclusive creation would
+/// otherwise make a half-written pack permanent — the retry would fail on
+/// its own leftover — so a write that dies part-way removes the file it
+/// created before returning [`ImportError::WriteFailed`]. The one failure
+/// that leaves the path occupied is the one that found it occupied.
+///
 /// # Errors
 ///
 /// [`ImportError::ReadFailed`], [`ImportError::WrongSize`], or
@@ -325,13 +331,44 @@ fn resolve_destination(out_path: &Path) -> Option<PathBuf> {
 /// `CREATE_NEW` refuses an existing name the same way. The attack becomes
 /// a refused import naming the path, not a truncated file.
 fn write_new(out_path: &Path, bytes: &[u8]) -> std::io::Result<()> {
-    use std::io::Write as _;
+    write_new_with(out_path, |file| {
+        use std::io::Write as _;
+        file.write_all(bytes)
+    })
+}
 
+/// [`write_new`] with the write injected, so the failure path is testable
+/// without a full filesystem (`pokeemerald-rs`'s `import_to_with`
+/// precedent).
+///
+/// A write that fails part-way leaves a prefix of the pack at a name this
+/// call created, and exclusive creation is what makes that unrecoverable:
+/// the retry would hit its own leftover and fail with `AlreadyExists`
+/// forever. So a failed write takes the file with it. Only this call could
+/// have created that name — creation succeeded here, exclusively — which
+/// is what makes removing it safe; the same reasoning already governs the
+/// CLI's cleanup of a failed import.
+///
+/// The handle is dropped before the unlink because Windows refuses to
+/// remove a file that is still open. The original I/O error is what the
+/// caller sees: the write is why the import failed, and a cleanup that
+/// also fails leaves litter but must not rename the diagnosis.
+fn write_new_with(
+    out_path: &Path,
+    write: impl FnOnce(&mut std::fs::File) -> std::io::Result<()>,
+) -> std::io::Result<()> {
     let mut file = std::fs::OpenOptions::new()
         .write(true)
         .create_new(true)
         .open(out_path)?;
-    file.write_all(bytes)
+    match write(&mut file) {
+        Ok(()) => Ok(()),
+        Err(error) => {
+            drop(file);
+            let _ = std::fs::remove_file(out_path);
+            Err(error)
+        }
+    }
 }
 
 /// Run every domain reader over `rom` and serialize the pack.
@@ -353,8 +390,8 @@ fn build_pack(rom: &Rom, roots: &Roots) -> Result<(usize, Vec<u8>), ImportError>
 #[cfg(test)]
 mod tests {
     use super::{
-        build_pack, import, import_to_bytes, overwrites_rom, write_new, ImportError, ImportReport,
-        Roots,
+        build_pack, import, import_to_bytes, overwrites_rom, write_new, write_new_with,
+        ImportError, ImportReport, Roots,
     };
     use crate::fixture::{shared_emerald_rom, RomFixture};
     use std::path::{Path, PathBuf};
@@ -529,6 +566,41 @@ mod tests {
         assert_eq!(
             std::fs::read(&out).expect("the existing file survives"),
             b"not the importer's"
+        );
+    }
+
+    #[test]
+    fn a_failed_write_takes_its_own_half_written_file_with_it() {
+        // A write that dies part-way — a full disk — leaves a prefix of the
+        // pack behind. Exclusive creation would make that leftover
+        // permanent: every retry hits its own debris and fails with
+        // `AlreadyExists`. The file is this call's own, so the failure
+        // removes it and the next attempt has a clean name to take.
+        let dir = TempDir::new("write-fails");
+        let out = dir.join("pokeemerald.pack");
+
+        let err = write_new_with(&out, |file| {
+            use std::io::Write as _;
+            file.write_all(b"half a ")?;
+            Err(std::io::Error::new(
+                std::io::ErrorKind::StorageFull,
+                "no space left on device",
+            ))
+        })
+        .unwrap_err();
+
+        // The write's own error survives the cleanup, not a removal error.
+        assert_eq!(err.kind(), std::io::ErrorKind::StorageFull, "{err}");
+        assert!(
+            !out.exists(),
+            "a failed write must not leave a partial pack at {}",
+            out.display()
+        );
+        // And the name is free again, so a retry gets through.
+        write_new(&out, b"pack bytes").expect("the retry takes the freed name");
+        assert_eq!(
+            std::fs::read(&out).expect("the pack reads back"),
+            b"pack bytes"
         );
     }
 
