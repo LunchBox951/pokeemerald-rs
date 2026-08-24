@@ -11,6 +11,10 @@
 //! POKEEMERALD_ROM=/path/to/pokeemerald.gba cargo test -p rom-import -- --ignored
 //! ```
 //!
+//! The checkout side is read from `cargo xtask extract`'s own fixed
+//! destination, `<repo root>/assets-pack/pokeemerald.pack`, and never
+//! through runtime pack resolution — see [`checkout_pack_path`].
+//!
 //! It skips with a printed reason when either is missing, rather than
 //! failing: a contributor without a ROM must still be able to run
 //! `--ignored` `(gated-by-default)`.
@@ -35,10 +39,10 @@
 //! cut rather than by writing the difference down here.
 
 use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use assets::Song;
-use pack_format::{parse_directory, DirectoryEntry, EntryKind};
+use pack_format::{parse_directory, DirectoryEntry, EntryKind, OUTPUT_RELATIVE_PATH};
 
 /// The environment variable naming the ROM to import.
 const ROM_ENV: &str = "POKEEMERALD_ROM";
@@ -74,7 +78,7 @@ fn the_rom_backend_matches_the_checkout_pack() {
         eprintln!("skipped: set {ROM_ENV} to a Pokemon Emerald (US) rev 0 ROM to run this");
         return;
     };
-    let checkout_path = pack_format::default_pack_path();
+    let checkout_path = checkout_pack_path();
     if !checkout_path.is_file() {
         eprintln!(
             "skipped: no pack at {}; run `cargo xtask extract` first",
@@ -131,6 +135,26 @@ fn the_rom_backend_matches_the_checkout_pack() {
         "{} entry difference(s) between the ROM backend and the checkout pack",
         differences.len()
     );
+}
+
+/// Where `cargo xtask extract` writes: `<repo root>/`
+/// [`OUTPUT_RELATIVE_PATH`], the same fixed destination
+/// `xtask::extract::run` computes from its own manifest directory.
+///
+/// Deliberately not [`pack_format::default_pack_path`]. That resolver
+/// answers "where does a *running game* find its pack", and its first two
+/// rungs — `$POKEEMERALD_PACK` and the OS user-data directory — are exactly
+/// the two destinations `--import-rom` writes to. Resolving through it
+/// would let this gate compare a fresh ROM import against an earlier ROM
+/// import and pass without the checkout extractor being involved at all,
+/// and a typo in the override would skip the gate even with a valid
+/// checkout pack on disk `(test-ratchet)`.
+fn checkout_pack_path() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(Path::parent)
+        .expect("crates/rom-import is always two levels under the repo root")
+        .join(OUTPUT_RELATIVE_PATH)
 }
 
 /// The ROM to import, if the environment names one.
