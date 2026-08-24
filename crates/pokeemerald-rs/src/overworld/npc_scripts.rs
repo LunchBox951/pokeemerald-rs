@@ -52,11 +52,17 @@ fn mom_text() -> String {
     format!("MOM: See, {DEFAULT_PLAYER_NAME}?\nIsn't it nice in here, too?{{P}}")
 }
 
-/// Translate one authored message (the same `{P}`/`\n` convention
-/// `crate::intro::speech::parse_page` uses, minus `{L}`/`\l`: no message in
-/// this table's own scope needs a mid-message scroll) into a decoded
-/// [`Token`] stream, terminated with [`Token::End`].
-fn parse_message(text: &str) -> Vec<Token> {
+/// Translate one authored message -- the same `{P}`/`{L}`/`\n` convention
+/// [`crate::intro::speech::parse_page`] uses -- into a decoded [`Token`]
+/// stream, terminated with [`Token::End`].
+///
+/// `pub(crate)` because the authored-message convention outlives this
+/// module's own table: the sight-trainer intro speech
+/// (`crate::flow::overworld_phase::sight_trainer_trigger`'s transcribed
+/// `data/text/trainers.inc` lines, S-5 issue #300) is the same kind of text
+/// bound for the same [`crate::overworld::NpcDialog`], and two copies of a
+/// parser would be two places for the convention to drift.
+pub(crate) fn parse_message(text: &str) -> Vec<Token> {
     let mut tokens = Vec::new();
     let mut chars = text.chars().peekable();
     while let Some(c) = chars.next() {
@@ -64,13 +70,20 @@ fn parse_message(text: &str) -> Vec<Token> {
             '\n' => tokens.push(Token::Newline),
             '{' => {
                 let marker: String = chars.clone().take(2).collect();
-                if marker == "P}" {
-                    chars.by_ref().take(2).for_each(drop);
-                    tokens.push(Token::PromptClear);
-                } else {
-                    // No other `{...}` marker appears in this module's
-                    // authored messages.
-                    tokens.push(Token::Char('{'));
+                // `{L}` is upstream's `\l` (`CHAR_PROMPT_SCROLL`): wait for a
+                // button, then scroll one line rather than clearing the box.
+                match marker.as_str() {
+                    "P}" => {
+                        chars.by_ref().take(2).for_each(drop);
+                        tokens.push(Token::PromptClear);
+                    }
+                    "L}" => {
+                        chars.by_ref().take(2).for_each(drop);
+                        tokens.push(Token::PromptScroll);
+                    }
+                    // No other `{...}` marker appears in this crate's
+                    // authored overworld messages.
+                    _ => tokens.push(Token::Char('{')),
                 }
             }
             other => tokens.push(Token::Char(other)),
@@ -110,6 +123,22 @@ mod tests {
         let tokens = script_text("PlayersHouse_1F_EventScript_Mom").unwrap();
         engine::text::encode(&tokens)
             .unwrap_or_else(|err| panic!("message not Gen-3 encodable: {err} in {tokens:?}"));
+    }
+
+    /// `{L}` is `\l`: wait, then scroll -- distinct from `{P}`'s wait, then
+    /// clear. Route 103's Amy and Andrew intros both use it (this crate's
+    /// `sight_trainer_trigger`), so it is no longer an unreachable arm.
+    #[test]
+    fn parse_message_translates_the_scroll_marker() {
+        assert_eq!(
+            parse_message("a{L}b"),
+            vec![
+                Token::Char('a'),
+                Token::PromptScroll,
+                Token::Char('b'),
+                Token::End,
+            ]
+        );
     }
 
     #[test]
