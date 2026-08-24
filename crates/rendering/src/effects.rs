@@ -415,9 +415,23 @@ mod tests {
         assert_eq!(darken(color, 0), color);
     }
 
-    // These expected values were generated outside the Rust implementation
-    // from the documented packed-lane behavior and committed as literals.
-    // The tests below perform no reference calculation at runtime.
+    // Provenance (issue #395's operator ruling: `no-verbatim` stays
+    // absolute, including in `#[cfg(test)]` code). Every expected value in
+    // the tables below -- `ALPHA_CHANNEL_EXPECTED`, `ALPHA_WEIGHT_GRID_EXPECTED`,
+    // `ALPHA_BOUNDARY_GRID_EXPECTED`, `BRIGHTEN_EXPECTED`, and `DARKEN_EXPECTED`
+    // -- was computed offline by a throwaway generator that is not part of
+    // this repository and was never committed to it. That generator
+    // evaluated the pinned `mgba/` reference checkout's stock-desktop
+    // (non-`COLOR_16_BIT`) 8-bit color-effect formulas directly:
+    //   `mColorMix5Bit`'s 8-bit path -- `image.h:307-327`
+    //   `_brighten`'s 8-bit path     -- `software-private.h:237-245`
+    //   `_darken`'s 8-bit path       -- `software-private.h:270-278`
+    // (the same three citations the module docs above use). Only the
+    // generator's *output* -- plain integers -- is committed here as
+    // literal data; the formulas themselves never enter this tree, so
+    // these tables are facts about the reference's observed behavior, not
+    // a transcription of its code. The tests below perform no reference
+    // calculation at runtime; they only compare against these literals.
     #[rustfmt::skip]
     const EXPANDED_CHANNELS: [u8; 32] = [
         0, 8, 16, 24, 33, 41, 49, 57, 66, 74, 82, 90, 99, 107, 115, 123, 132, 140, 148, 156, 165, 173, 181, 189, 198, 206, 214, 222, 231, 239, 247, 255
@@ -427,7 +441,8 @@ mod tests {
         [(8, 8), (16, 16), (16, 0), (0, 16), (5, 11), (13, 7)];
 
     // Tuples pin the complement, +7 modulo 32, and +19 modulo 32 source
-    // mappings in the red, green, and blue lanes respectively.
+    // mappings in the red, green, and blue lanes respectively. Provenance:
+    // see the comment above `EXPANDED_CHANNELS`.
     #[rustfmt::skip]
     const ALPHA_CHANNEL_EXPECTED: [[(u8, u8, u8); 32]; 6] = [
         [(127, 28, 78), (127, 37, 86), (127, 45, 94), (127, 53, 102), (127, 61, 111), (127, 70, 119), (127, 78, 127), (127, 86, 135), (127, 94, 144), (127, 103, 152), (127, 111, 160), (127, 119, 168), (127, 127, 177), (127, 136, 53), (127, 144, 61), (127, 152, 69), (127, 160, 78), (127, 169, 86), (127, 177, 94), (127, 185, 102), (127, 193, 111), (127, 202, 119), (127, 210, 127), (127, 218, 135), (127, 226, 144), (127, 103, 152), (127, 111, 160), (127, 119, 168), (127, 127, 177), (127, 136, 185), (127, 144, 193), (127, 152, 201)],
@@ -440,6 +455,7 @@ mod tests {
 
     // Rows are EVA 0..=16 and columns are EVB 0..=16. Each tuple is the
     // expected result for first=(0, 255, 132), second=(255, 0, 123).
+    // Provenance: see the comment above `EXPANDED_CHANNELS`.
     #[rustfmt::skip]
     const ALPHA_WEIGHT_GRID_EXPECTED: [[(u8, u8, u8); 17]; 17] = [
         [(0, 0, 0), (15, 0, 7), (31, 0, 15), (47, 0, 23), (63, 0, 30), (79, 0, 38), (95, 0, 46), (111, 0, 53), (127, 0, 61), (143, 0, 69), (159, 0, 76), (175, 0, 84), (191, 0, 92), (207, 0, 99), (223, 0, 107), (239, 0, 115), (255, 0, 123)],
@@ -518,6 +534,7 @@ mod tests {
 
     // For each input pair, rows are EVA 0..=16. Every six hex digits are
     // one exact RGB result, with the 17 chunks in EVB 0..=16 order.
+    // Provenance: see the comment above `EXPANDED_CHANNELS`.
     #[rustfmt::skip]
     const ALPHA_BOUNDARY_GRID_EXPECTED: [[&str; 17]; 5] = [
         [
@@ -617,7 +634,8 @@ mod tests {
         ],
     ];
 
-    // Rows are EVY 0..=16; columns follow EXPANDED_CHANNELS.
+    // Rows are EVY 0..=16; columns follow EXPANDED_CHANNELS. Provenance:
+    // see the comment above `EXPANDED_CHANNELS`.
     #[rustfmt::skip]
     const BRIGHTEN_EXPECTED: [[u8; 32]; 17] = [
         [0, 8, 16, 24, 33, 41, 49, 57, 66, 74, 82, 90, 99, 107, 115, 123, 132, 140, 148, 156, 165, 173, 181, 189, 198, 206, 214, 222, 231, 239, 247, 255],
@@ -640,7 +658,8 @@ mod tests {
     ];
 
     // Each tuple is (red-lane result, shifted-lane result). Rows are EVY
-    // 0..=16; columns follow EXPANDED_CHANNELS.
+    // 0..=16; columns follow EXPANDED_CHANNELS. Provenance: see the
+    // comment above `EXPANDED_CHANNELS`.
     #[rustfmt::skip]
     const DARKEN_EXPECTED: [[(u8, u8); 32]; 17] = [
         [(0, 0), (8, 8), (16, 16), (24, 24), (33, 33), (41, 41), (49, 49), (57, 57), (66, 66), (74, 74), (82, 82), (90, 90), (99, 99), (107, 107), (115, 115), (123, 123), (132, 132), (140, 140), (148, 148), (156, 156), (165, 165), (173, 173), (181, 181), (189, 189), (198, 198), (206, 206), (214, 214), (222, 222), (231, 231), (239, 239), (247, 247), (255, 255)],
