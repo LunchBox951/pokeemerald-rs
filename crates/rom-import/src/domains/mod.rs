@@ -7,7 +7,9 @@
 //!
 //! Three shapes cover almost every root, because the ROM stores art,
 //! colours, and opaque blobs the same way wherever they live: [`image`],
-//! [`palette`], and [`blob`]. Each hands back a [`PackEntry`] rather than
+//! [`palette`], and [`blob`]. The Latin glyph sheets are the one exception
+//! and [`fonts`] decodes them itself; [`audio`] reads the sound engine's
+//! own structs and emits them through `assets`' schema encoders. Each hands back a [`PackEntry`] rather than
 //! pushing one, so a domain that has to restamp what it read (a tile sheet
 //! whose pack depth is not its ROM depth) does that before it queues, and a
 //! domain that needs something else first (a `struct Tileset` to
@@ -21,8 +23,13 @@
 //! goes through [`RomReader`], which bounds-checks it and names the offset
 //! `(behavioral-fidelity)`.
 
+pub(crate) mod audio;
+pub(crate) mod fonts;
 pub(crate) mod interface;
 pub(crate) mod layouts;
+pub(crate) mod song;
+pub(crate) mod sprites;
+pub(crate) mod text_window;
 pub(crate) mod tilesets;
 pub(crate) mod title;
 
@@ -46,6 +53,11 @@ pub(crate) const DOMAINS: &[Domain] = &[
     interface::write,
     tilesets::write,
     layouts::write,
+    sprites::write,
+    fonts::write,
+    text_window::write,
+    audio::write,
+    song::write,
 ];
 
 /// Read one image root's tiles and unpack them into a pack entry.
