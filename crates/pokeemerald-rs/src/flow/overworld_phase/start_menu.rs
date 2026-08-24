@@ -170,8 +170,9 @@ impl OverworldPhase {
     /// retaining an existing valid count and the dormant serialized slots
     /// 1-5. The encoder uses the lead's own original-trainer id (the box
     /// header's XOR key), which need not be the current player's id. No lead
-    /// means an empty party, and slot 0 is zeroed rather than left holding a
-    /// stale mon -- upstream's `ZeroPlayerPartyMons` leaves the same shape.
+    /// means an empty party -- *unless the slot was retained undecodable
+    /// (below)* -- and slot 0 is then zeroed rather than left holding a
+    /// stale mon, upstream's `ZeroPlayerPartyMons` shape.
     ///
     /// Slot 0 is *merged*, not rebuilt (issue #344). The block this phase
     /// holds is the one a continue was loaded from, so `player_party[0]` is
@@ -184,6 +185,54 @@ impl OverworldPhase {
     /// retained bytes and falls back to a fresh record only when the slot
     /// holds a different Pokémon -- a new game's empty slot, or a lead
     /// swapped in since the load.
+    ///
+    /// A no-lead slot 0 is *not* always an empty one (issue #353): a load
+    /// whose secure region would not decode also leaves
+    /// [`OverworldPhase::party_lead`] `None`, and
+    /// [`OverworldPhase::undecodable_lead_retained`] is what tells the two
+    /// apart here, rather than re-probing `player_party[0]`'s bytes at save
+    /// time (which would just fail the same checksum again and give no way
+    /// to decide "erase" from "keep"). A retained-undecodable slot writes
+    /// nothing: `player_party[0]` and `player_party_count` are left exactly
+    /// as [`OverworldPhase::copy_party_and_objects_from_save`] found them,
+    /// so a checksum failure on slot 0's secure region no longer costs the
+    /// player the whole record -- nickname, OT name, language, markings,
+    /// and the secure bytes themselves -- on the very next ordinary SAVE.
+    /// Upstream never rebuilds a party record from a partial model either:
+    /// `SavePlayerParty` (`pokeemerald/src/load_save.c:160-168`) copies
+    /// whatever bytes `gPlayerParty` holds, with no decode step of its own
+    /// to fail. A genuinely empty slot (`player_party_count == 0` at load)
+    /// still gets [`OverworldPhase::undecodable_lead_retained`] `false` and
+    /// so still takes the zero-and-default arm below, matching upstream's
+    /// `ZeroPlayerPartyMons`.
+    ///
+    /// # `player_party_count` on a retained-undecodable slot
+    ///
+    /// Left exactly as loaded, not zeroed. Upstream's `SavePlayerParty`
+    /// writes `gSaveBlock1Ptr->playerPartyCount = gPlayerPartyCount`
+    /// unconditionally (`load_save.c:160-168`) and its `LoadPlayerParty`
+    /// (`:170-178`) reads that same count straight back with no validation
+    /// step that could reject a slot. Upstream *does* reach the state this
+    /// arm is about -- a nonzero count over a slot 0 whose secure bytes do
+    /// not check out -- and it reaches it by the Bad Egg path: when
+    /// `CalculateBoxMonChecksum` disagrees with the stored checksum,
+    /// `GetBoxMonData`/`SetBoxMonData` set `boxMon->isBadEgg = TRUE`
+    /// (`pokeemerald/src/pokemon.c:3742-3744` and `:4167-4169`) and leave
+    /// that mon sitting in `gPlayerParty` with `gPlayerPartyCount`
+    /// unchanged (this port's [`party::PartyError::Substructures`] names
+    /// the same upstream behaviour). What upstream then does with it is
+    /// *preserve* it: the wholesale `gSaveBlock1Ptr->playerParty[i] =
+    /// gPlayerParty[i]` copy round-trips a Bad Egg's bytes with the count
+    /// intact, and `LoadPlayerParty` performs no validation, so the count
+    /// rides through the next load too. That is a stronger justification
+    /// for retention than an absent state would be: keeping both the
+    /// bytes and the count *is* upstream's answer to a slot whose checksum
+    /// failed. This port's decode is a real decode and can refuse
+    /// (`party::from_save_pokemon`'s own docs); when it does, the
+    /// upstream-shaped answer is the count upstream's copy would have
+    /// carried through: whatever was already there. See
+    /// [`OverworldPhase::copy_party_and_objects_from_save`] for where the
+    /// count is read back on the next load, still unconditionally.
     ///
     /// **Object events** (`SaveObjectEvents`): only the player's facing,
     /// the one field this port models
@@ -203,6 +252,11 @@ impl OverworldPhase {
             if self.save1.player_party_count == 0 {
                 self.save1.player_party_count = 1;
             }
+        } else if self.undecodable_lead_retained {
+            // Leave `player_party[0]`/`player_party_count` exactly as
+            // `copy_party_and_objects_from_save` found them (this method's
+            // own docs, issue #353): a slot this port could not decode is
+            // not this port's to rebuild.
         } else {
             self.save1.player_party[0] = engine::save::Pokemon::default();
             self.save1.player_party_count = 0;
@@ -229,10 +283,21 @@ impl OverworldPhase {
     /// leaves the lead empty: fabricating a replacement starter would hand
     /// the player a different Pokémon than the one they saved, which is
     /// strictly worse than an honest empty party.
+    ///
+    /// Which of those two `None` reasons applies is recorded in
+    /// [`OverworldPhase::undecodable_lead_retained`] (issue #353), not left
+    /// for [`OverworldPhase::copy_party_and_objects_to_save`] to work out
+    /// again later: the failed decode already consumed the one piece of
+    /// evidence (the checksum mismatch) that could tell "empty" and
+    /// "undecodable" apart, so the save half reads this flag instead of
+    /// re-attempting the same decode. Set here and nowhere else in
+    /// production -- see that field's own docs for the one deliberate
+    /// exception, a new game's provisional-starter grant.
     pub(super) fn copy_party_and_objects_from_save(&mut self) {
         if self.save1.player_party_count == 0 {
             self.party_lead = None;
             self.lead_hp_hidden_by_load = 0;
+            self.undecodable_lead_retained = false;
             return;
         }
         match party::from_save_pokemon(&battle::Dex::new(), &self.save1.player_party[0]) {
@@ -240,11 +305,24 @@ impl OverworldPhase {
                 self.lead_hp_hidden_by_load =
                     party::hp_hidden_by_load(&self.save1.player_party[0], &lead);
                 self.party_lead = Some(lead);
+                self.undecodable_lead_retained = false;
             }
             Err(err) => {
-                eprintln!("continue: {err} -- resuming with an empty party");
+                eprintln!(
+                    "continue: {err} -- slot 0's record and stored party count are \
+                     retained; resuming with an empty party"
+                );
                 self.party_lead = None;
                 self.lead_hp_hidden_by_load = 0;
+                // The slot's stored bytes are still real save data (issue
+                // #353): retained so `copy_party_and_objects_to_save`'s
+                // no-lead arm leaves them untouched instead of erasing them
+                // on the next ordinary SAVE. Every `PartyError` lands here,
+                // not just a failed secure-region checksum -- an unknown
+                // species and an unbuildable moveset are this port's limits,
+                // not proof the bytes are junk, so they are retained the
+                // same way (see `undecodable_lead_retained`'s own docs).
+                self.undecodable_lead_retained = true;
             }
         }
     }

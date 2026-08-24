@@ -46,7 +46,10 @@
 //! mon that was saved. Saving a *loaded* mon merges rather than rebuilds
 //! (issue #344): the battler is overlaid onto the record it was decoded
 //! from, so held item, EVs, friendship, status and mail survive a file
-//! this port cannot yet model in full.
+//! this port cannot yet model in full. A slot 0 that will not decode at
+//! all is retained rather than erased (issue #353): the stored record and
+//! party count round-trip an ordinary SAVE untouched, so bytes this port
+//! cannot read do not cost the player the mon they saved.
 //!
 //! [`start_first_battle`]/[`advance_first_battle`] (`flow::first_battle`,
 //! issue #221) are the scripted `BATTLE_TYPE_FIRST_BATTLE` Zigzagoon fight's
