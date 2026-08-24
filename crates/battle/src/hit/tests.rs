@@ -1,9 +1,12 @@
 use super::{ensure_resolvable, is_ordinary_hit_effect, resolve_hit, HitOutcome};
+use crate::ability::{suppresses_critical_hits, HUGE_POWER, PURE_POWER};
 use crate::accuracy::always_hits;
 use crate::damage::{BattleRng, STRUGGLE};
 use crate::dex::Dex;
 use crate::error::BattleError;
 use crate::pokemon::{BattlePokemon, Ivs};
+use crate::stat_stage::StatStage;
+use assets::species::AbilityId;
 use assets::{MoveId, SpeciesId};
 
 /// A `BattleRng` fed from a fixed sequence, for pinning exact draw
@@ -507,5 +510,212 @@ fn ensure_resolvable_reports_unknown_and_zero_power_moves_without_drawing() {
     assert_eq!(
         ensure_resolvable(&dex, MoveId(174)),
         Err(BattleError::NonDamagingMove(MoveId(174)))
+    );
+}
+
+/// A Battle Armor or Shell Armor **defender** makes `resolve_hit` skip the
+/// crit draw the same way `suppress_crit` does (issue #391), needing no
+/// caller flag: Slash crits on draw 8 at stage 1 (the earlier
+/// `a_high_crit_move_crits_on_a_draw_a_plain_move_would_not` test proves
+/// it), so a crit surviving here would mean the ability check forgot to
+/// skip the *decision*, not just its consequence. Only 3 values are
+/// scripted -- accuracy, damage roll, effect chance -- so a stray crit draw
+/// would panic `SequenceRng` before the assertion even runs.
+#[test]
+fn a_battle_armor_or_shell_armor_defender_skips_the_crit_draw_and_never_crits() {
+    let dex = Dex::new();
+    let attacker = mon(&dex, 1, 5, vec![MoveId(163)]); // Bulbasaur/Slash
+    for armor_species in [390u16, 90] {
+        // Anorith (Battle Armor), Shellder (Shell Armor)
+        let defender = mon(&dex, armor_species, 5, vec![MoveId(33)]);
+        assert!(
+            suppresses_critical_hits(defender.ability()),
+            "species {armor_species}"
+        );
+        let mut rng = SequenceRng::new([0, 8, 0]);
+        let outcome =
+            resolve_hit(&dex, MoveId(163), &attacker, &defender, false, &mut rng).unwrap();
+        assert!(
+            matches!(
+                outcome,
+                HitOutcome::Hit {
+                    is_critical: false,
+                    ..
+                }
+            ),
+            "species {armor_species}: {outcome:?}"
+        );
+        assert_eq!(
+            rng.draws(),
+            3,
+            "species {armor_species}: armor must skip the crit draw entirely"
+        );
+    }
+}
+
+/// Reference for the Huge Power pins below, hand computed independent of
+/// this crate's own output:
+///
+/// Marill (species 183) level 5, max IVs, Hardy, using Tackle (move 33,
+/// power 35, accuracy 95, Normal/physical) against Squirtle (species 7)
+/// level 5, max IVs, Hardy -- the same defender [`PINNED_NON_CRIT_DAMAGE`]
+/// uses (defense 13).
+///
+/// - Marill attack = `CALC_STAT(base 20, iv 31, lvl 5)` = `(2*20+31)*5/100 +
+///   5` = `355/100 = 3`, `+5` = **8**.
+/// - Without Huge Power (ability index 0, Pickup): `8*35 = 280`;
+///   `*(2*5/5+2=4)` = 1120; `/13` = 86; `/50` = 1; `+2` = **3**.
+/// - With Huge Power (ability index 1, `AbilityId(37)`): the raw stat
+///   doubles to 16 before `APPLY_STAT_MOD` (no stat stage is in play here,
+///   so the order cannot matter for this pin -- see
+///   [`huge_power_doubles_the_raw_stat_before_the_attack_stage_not_after`]
+///   for a case where it does): `16*35 = 560`; `*4` = 2240; `/13` = 172;
+///   `/50` = 3; `+2` = **5**.
+/// - Marill is pure Water; Tackle is Normal, so no STAB, and Normal is
+///   neutral into Water, so both figures stand unmodified. Best roll (100%)
+///   leaves them at 3 and 5.
+#[test]
+fn huge_power_in_ability_slot_two_doubles_a_physical_hit() {
+    let dex = Dex::new();
+    let defender = mon(&dex, 7, 5, vec![MoveId(33)]); // Squirtle
+
+    let pickup = BattlePokemon::new(&dex, SpeciesId(183), 5, MAX_IVS, 0, vec![MoveId(33)])
+        .unwrap()
+        .with_ability_slot(0);
+    assert_eq!(
+        pickup.ability(),
+        AbilityId(47),
+        "Marill ability index 0 is Pickup"
+    );
+    let mut rng = SequenceRng::new([0, 1, 0, 0]);
+    assert_eq!(
+        resolve_hit(&dex, MoveId(33), &pickup, &defender, false, &mut rng).unwrap(),
+        HitOutcome::Hit {
+            damage: 3,
+            is_critical: false,
+        },
+        "no Huge Power in ability index 0"
+    );
+
+    let huge_power = BattlePokemon::new(&dex, SpeciesId(183), 5, MAX_IVS, 0, vec![MoveId(33)])
+        .unwrap()
+        .with_ability_slot(1);
+    assert_eq!(
+        huge_power.ability(),
+        HUGE_POWER,
+        "Marill ability index 1 is Huge Power"
+    );
+    let mut rng = SequenceRng::new([0, 1, 0, 0]);
+    assert_eq!(
+        resolve_hit(&dex, MoveId(33), &huge_power, &defender, false, &mut rng).unwrap(),
+        HitOutcome::Hit {
+            damage: 5,
+            is_critical: false,
+        },
+        "Huge Power in ability index 1 must double the raw Attack stat"
+    );
+}
+
+/// Pure Power (`AbilityId(74)`) is Meditite's sole ability (species 356,
+/// ability index 0 -- no `with_ability_slot` needed since its second slot
+/// is empty): the same raw-stat doubling as Huge Power, a different id.
+///
+/// Meditite level 5, max IVs, Hardy, using Tackle against the same Squirtle
+/// (defense 13):
+/// - attack = `CALC_STAT(base 40, iv 31, lvl 5)` = `(2*40+31)*5/100+5` =
+///   `555/100=5`, `+5` = **10**; doubled = **20**.
+/// - `20*35 = 700`; `*4 = 2800`; `/13 = 215`; `/50 = 4`; `+2 = 6`.
+/// - Meditite is Fighting/Psychic: no STAB against a Normal move, and
+///   Normal is neutral into Water, so the figure stands. Best roll (100%)
+///   leaves it at 6.
+#[test]
+fn pure_power_doubles_a_physical_hit() {
+    let dex = Dex::new();
+    let attacker = mon(&dex, 356, 5, vec![MoveId(33)]); // Meditite
+    assert_eq!(attacker.ability(), PURE_POWER, "Meditite's sole ability");
+    let defender = mon(&dex, 7, 5, vec![MoveId(33)]); // Squirtle
+
+    let mut rng = SequenceRng::new([0, 1, 0, 0]);
+    assert_eq!(
+        resolve_hit(&dex, MoveId(33), &attacker, &defender, false, &mut rng).unwrap(),
+        HitOutcome::Hit {
+            damage: 6,
+            is_critical: false,
+        }
+    );
+}
+
+/// Huge Power reads `attacker->attack`, never `attacker->spAttack`
+/// (`pokeemerald/src/pokemon.c:3158`-`:3159`), so a special move must come
+/// out identically whether the attacker's ability slot lands on Huge Power
+/// or not.
+#[test]
+fn huge_power_never_touches_a_special_move() {
+    let dex = Dex::new();
+    let defender = mon(&dex, 7, 5, vec![MoveId(33)]); // Squirtle
+
+    let pickup = BattlePokemon::new(&dex, SpeciesId(183), 5, MAX_IVS, 0, vec![MoveId(55)])
+        .unwrap()
+        .with_ability_slot(0);
+    let huge_power = BattlePokemon::new(&dex, SpeciesId(183), 5, MAX_IVS, 0, vec![MoveId(55)])
+        .unwrap()
+        .with_ability_slot(1);
+    assert_ne!(pickup.ability(), huge_power.ability());
+
+    let mut rng = SequenceRng::new([0, 1, 0, 0]);
+    let plain = resolve_hit(&dex, MoveId(55), &pickup, &defender, false, &mut rng).unwrap();
+    let mut rng = SequenceRng::new([0, 1, 0, 0]);
+    let boosted = resolve_hit(&dex, MoveId(55), &huge_power, &defender, false, &mut rng).unwrap();
+    assert_eq!(
+        plain, boosted,
+        "Huge Power must not affect a Water Gun (special move)"
+    );
+}
+
+/// Huge Power's doubling must land on the *raw* stat before the attack
+/// stage's `APPLY_STAT_MOD` multiply, not after -- the two orders can give
+/// different final damage once integer truncation is involved
+/// ([`crate::ability::huge_power_attack`]'s docs derive the general case;
+/// this pins one all the way through the pipeline, past the defense divide
+/// and the final `/50`, to prove the discrepancy really does survive to the
+/// returned damage and is not just an artifact of the isolated formula).
+///
+/// Marill (species 183) level 15, max IVs, Hardy, Huge Power (ability index
+/// 1), Attack stage **-2**, using Tackle against Abra (species 63) level
+/// 15, max IVs, Hardy (base defense 15, chosen so the discrepancy survives
+/// every later truncation).
+///
+/// - Marill's raw attack at level 15 = `CALC_STAT(base 20, iv 31, lvl 15)` =
+///   `(2*20+31)*15/100+5` = `1065/100=10`, `+5` = **15**.
+/// - Correct order (double, then apply stage -2, ratio `10/20`):
+///   `stage(2*15) = stage(30) = 30*10/20 = 15`.
+/// - Wrong order (stage, then double) would give `2*stage(15) =
+///   2*(15*10/20) = 2*7 = 14` -- one less, because `150/20 = 7.5` truncates
+///   down while `300/20 = 15` does not.
+/// - Abra's defense = `(2*15+31)*15/100+5` = `915/100=9`, `+5` = **14**.
+/// - Correct: `15*35=525`; `*(2*15/5+2=8)=4200`; `/14=300`; `/50=6`; `+2=8`.
+/// - Wrong: `14*35=490`; `*8=3920`; `/14=280`; `/50=5`; `+2=7` -- a
+///   genuinely different final number, so this pin discriminates the two
+///   orders rather than merely happening to agree.
+/// - Marill is pure Water and Abra is pure Psychic: Tackle is Normal, so
+///   neither STAB nor a type multiplier moves either figure.
+#[test]
+fn huge_power_doubles_the_raw_stat_before_the_attack_stage_not_after() {
+    let dex = Dex::new();
+    let mut attacker = BattlePokemon::new(&dex, SpeciesId(183), 15, MAX_IVS, 0, vec![MoveId(33)])
+        .unwrap()
+        .with_ability_slot(1);
+    assert_eq!(attacker.ability(), HUGE_POWER);
+    attacker.stages_mut().attack = StatStage::new(-2).unwrap();
+    let defender = mon(&dex, 63, 15, vec![MoveId(33)]); // Abra
+
+    let mut rng = SequenceRng::new([0, 1, 0, 0]);
+    assert_eq!(
+        resolve_hit(&dex, MoveId(33), &attacker, &defender, false, &mut rng).unwrap(),
+        HitOutcome::Hit {
+            damage: 8,
+            is_critical: false,
+        },
+        "upstream doubles the raw stat before APPLY_STAT_MOD, not after"
     );
 }
