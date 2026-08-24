@@ -37,6 +37,7 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
+use assets::Song;
 use pack_format::{parse_directory, DirectoryEntry, EntryKind};
 
 /// The environment variable naming the ROM to import.
@@ -47,7 +48,16 @@ const ROM_ENV: &str = "POKEEMERALD_ROM";
 /// A checkout id under one of these with no ROM counterpart is a failure.
 /// Anything outside them is a domain that has not landed yet, and is
 /// counted but not compared.
-const COMPLETE_PREFIXES: &[&str] = &["title/", "interface/"];
+const COMPLETE_PREFIXES: &[&str] = &[
+    "title/",
+    "interface/",
+    "tileset/",
+    "layout/",
+    "sprite/",
+    "font/",
+    "text-window/",
+    "audio/",
+];
 
 /// Ids the two backends are known and accepted to disagree on, each with
 /// the reason it was signed off.
@@ -161,6 +171,11 @@ fn compare(
     if ours_payload == theirs_payload {
         return None;
     }
+    if id.starts_with("audio/song/") {
+        if let Some(report) = compare_songs(id, ours_payload, theirs_payload) {
+            return Some(report);
+        }
+    }
     let first = ours_payload
         .iter()
         .zip(theirs_payload)
@@ -180,6 +195,36 @@ fn compare(
             theirs_payload.len()
         ),
     })
+}
+
+/// Name the first event the two backends disagree on, if both payloads
+/// decode as songs. A byte offset into an event stream is hard to read; a
+/// track and event index with the two events side by side is not.
+fn compare_songs(id: &str, ours: &[u8], theirs: &[u8]) -> Option<String> {
+    let (ours, theirs) = (Song::decode(ours).ok()?, Song::decode(theirs).ok()?);
+    if ours.tracks().len() != theirs.tracks().len() {
+        return Some(format!(
+            "{id}: {} tracks from the ROM, {} from the checkout",
+            ours.tracks().len(),
+            theirs.tracks().len()
+        ));
+    }
+    for (track, (a, b)) in ours.tracks().iter().zip(theirs.tracks()).enumerate() {
+        let first = a.iter().zip(b).position(|(x, y)| x != y);
+        let at = match first {
+            Some(at) => at,
+            None if a.len() == b.len() => continue,
+            None => a.len().min(b.len()),
+        };
+        return Some(format!(
+            "{id}: track {track} event {at}: {:?} from the ROM, {:?} from the checkout              (track lengths {} and {})",
+            a.get(at),
+            b.get(at),
+            a.len(),
+            b.len()
+        ));
+    }
+    Some(format!("{id}: header metadata differs"))
 }
 
 /// One entry's kind and metadata, on one line.

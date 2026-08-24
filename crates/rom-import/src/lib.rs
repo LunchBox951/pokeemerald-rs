@@ -15,7 +15,7 @@
 //!
 //! # What exists
 //!
-//! The ROM-side foundation, plus the first domain readers:
+//! The ROM-side foundation, and the domain readers built on it:
 //!
 //! - [`Rom`] loads and validates an image: exact size, GBA cartridge header
 //!   with its fixed byte and complement check, whole-file SHA-1.
@@ -35,9 +35,23 @@
 //!   is needed and a dependency is not `(minimal-deps)`.
 //! - [`fixture::RomFixture`] builds synthetic ROM-shaped images for tests.
 //!   No real ROM is ever needed to test this crate.
-//! - `domains` holds one reader per asset domain. Two are wired: the title
-//!   screen (`title/image/*`, `title/raw/*`, `title/palette/*`) and the
-//!   interface palettes (`interface/palette/*`). [`import`] and
+//! - `domains` holds one reader per asset domain. Every graphics domain is
+//!   wired: the title screen (`title/image/*`, `title/raw/*`,
+//!   `title/palette/*`), the interface palettes (`interface/palette/*`),
+//!   the tilesets (`tileset/*`: tile sheets, palette banks, metatile
+//!   tables, animation frames), the map layouts (`layout/*`: metatile grids
+//!   and border blocks), the object-event sprites (`sprite/*` sheets and
+//!   `sprite/palette/*` banks), the Latin glyph sheets (`font/*/glyphs`,
+//!   decoded from `gbagfx`'s `.latfont` layout), and the text windows
+//!   (`text-window/image/*`, `text-window/palette/*`). The sound engine's
+//!   data is wired too: `DirectSound` samples and programmable waves
+//!   (`audio/sample/*`) and voicegroups (`audio/voicegroup/*`), read from
+//!   the m4a `WaveData` and `ToneData` structs and emitted through
+//!   `assets`' own schema encoders, and `MUS_TITLE` itself
+//!   (`audio/song/*`), decoded from the engine's track byte-code into
+//!   `assets::Song` events. A domain that has a ROM struct behind
+//!   its roots corroborates it field by field, so a wrong profile is a
+//!   typed error rather than a plausible-looking asset. [`import`] and
 //!   [`import_to_bytes`] run them into a `PackWriter` and hand back a real
 //!   pack.
 //!
@@ -47,18 +61,15 @@
 //! xtask extract` writes from a decomp checkout, for every id both produce.
 //! `tests/equivalence.rs` is that gate: it is `#[ignore]`d, needs
 //! `$POKEEMERALD_ROM` and a checkout pack, and compares the two packs entry
-//! by entry. There is no reviewed difference to reconcile for the domains
-//! wired so far.
+//! by entry. Every id the checkout pack holds is covered and there is no
+//! reviewed difference.
 //!
 //! # What is next
 //!
-//! The remaining domains, one slice each, sharing this crate's reader and
-//! decompressor: tilesets and map layouts, sprites and fonts, text windows,
-//! `MUS_TITLE`'s audio tree. Each turns ROM bytes into [`pack_format`]
-//! entries under the ids `crates/assets` already expects, and each extends
-//! the same equivalence run. Until they land the pack is *partial*: it
-//! holds every id its domains claim and nothing else, so a run of the game
-//! against it still needs the checkout pack.
+//! The pack this crate writes is complete: a player who imports their ROM
+//! runs the game without a checkout pack. What remains is around the
+//! importer rather than in it: progress reporting from the CLI, and the
+//! player-facing documentation for the import step.
 //!
 //! The CLI that drives [`import`] already exists: `pokeemerald-rs
 //! --import-rom <path>` resolves the pack's destination, writes it
@@ -66,7 +77,8 @@
 //! `cli` and `import_rom` modules). It surfaces this crate's errors as they
 //! are, so the one thing users will get wrong, pointing it at the wrong
 //! ROM, is already [`ImportError::UnsupportedRevision`] naming the ROM the
-//! importer wants. Progress reporting is still to come.
+//! importer wants. The player-facing walkthrough is the top-level README's
+//! "Playing" section.
 
 pub mod fixture;
 pub mod profiles;
@@ -82,7 +94,7 @@ mod sha1;
 
 use std::path::{Path, PathBuf};
 
-pub use error::{HeaderFault, ImportError, Lz77Fault};
+pub use error::{HeaderFault, ImportError, Lz77Fault, SongFault};
 pub use lz77::{decompress as lz77_decompress, decompress_at as lz77_decompress_at, LZ77_TYPE};
 pub use profile::{
     select as select_profile, select_with as select_profile_with, RevisionProfile, EMERALD_US_REV0,
