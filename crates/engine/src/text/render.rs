@@ -79,11 +79,24 @@
 //! immediately; from then on (upstream `subStruct->hasPrintBeenSpedUp`,
 //! reset on [`Printer::restart`] like every other per-message render state),
 //! simply *holding* A/B forces every further delay to zero too, without
-//! needing another fresh press. [`Printer::new`] defaults this off, matching
-//! the standard field message box (`gTextFlags.canABSpeedUpPrint = FALSE`,
-//! `pokeemerald/src/field_message_box.c`) — every printer in this port
-//! except the intro's Birch speech (`AddTextPrinterForMessage(TRUE)`,
-//! `pokeemerald/src/main_menu.c:1339`) matches that field default.
+//! needing another fresh press. [`Printer::new`] defaults this off — a bare
+//! printer, opted into nothing, matching neither of upstream's two concrete
+//! `allowSkippingDelayWithButtonPress` shapes until a caller picks one.
+//!
+//! The standard field message box is *not* one of the false ones: both
+//! `ShowFieldMessage` and `ShowFieldMessageFromBuffer`
+//! (`pokeemerald/src/field_message_box.c:62-69,109-129`) call
+//! `AddTextPrinterForMessage(TRUE)`, same as the intro's Birch speech
+//! (`pokeemerald/src/main_menu.c:1339`) — `InitFieldMessageBox`'s own
+//! `gTextFlags.canABSpeedUpPrint = FALSE` (`field_message_box.c:17`) is only
+//! the module's dormant-box reset, overwritten `TRUE` the moment a message
+//! actually prints. `pokeemerald-rs`'s own field message box
+//! (`crate::overworld::dialog::NpcDialog`, in the `pokeemerald-rs` crate)
+//! opts in via [`Printer::with_ab_speed_up_print`] for exactly that reason;
+//! only the fixed-label printers that never opted in (`pokeemerald-rs`'s
+//! start-menu chrome and main menu, whose instant-speed label printers have
+//! no reveal delay for a hold to shorten in the first place) stay on this
+//! module's own off-by-default [`Printer::new`].
 //!
 //! # Deliberately out of scope
 //!
@@ -431,11 +444,12 @@ impl<S: GlyphSource> Printer<S> {
     /// overworld dialogue box, `AddTextPrinterForMessage`,
     /// `pokeemerald/src/menu.c`).
     ///
-    /// Held-A/B print speed-up starts disabled (upstream
-    /// `gTextFlags.canABSpeedUpPrint = FALSE`) — the standard field message
-    /// box's own default (`pokeemerald/src/field_message_box.c`), which
-    /// every printer in this port matches except the intro's Birch speech;
-    /// see [`Printer::with_ab_speed_up_print`].
+    /// Held-A/B print speed-up starts disabled — a bare, unopinionated
+    /// printer, matching neither of upstream's two concrete
+    /// `AddTextPrinterForMessage` argument shapes until a caller opts in
+    /// (module docs' "Held-A/B print speed-up" section on why the standard
+    /// field message box is one of the ones that does); see
+    /// [`Printer::with_ab_speed_up_print`].
     #[must_use]
     pub fn new(tokens: Vec<Token>, sheet: S, speed: TextSpeed, origin: PixelPos) -> Self {
         Self {
@@ -458,10 +472,12 @@ impl<S: GlyphSource> Printer<S> {
     /// `gTextFlags.canABSpeedUpPrint = TRUE`, `AddTextPrinterForMessage(TRUE)`
     /// — the intro's Birch speech, `pokeemerald/src/main_menu.c:1339`; module
     /// docs' "Held-A/B print speed-up" section for the exact semantics).
-    /// Builder-style so the three other call sites in this port (the
-    /// standard field message box, the start-menu chrome, the main menu),
-    /// none of which set upstream's flag, don't need their own
-    /// [`Printer::new`] call site to change shape.
+    /// Builder-style so the standard field message box's own call site
+    /// (`pokeemerald-rs`'s `NpcDialog::new`, which does opt in — module
+    /// docs) doesn't need its [`Printer::new`] call site to change shape;
+    /// the other two call sites in this port (the start-menu chrome's and
+    /// the main menu's fixed-label printers, both `TextSpeed::Instant` with
+    /// no reveal delay for a hold to shorten) simply never call this.
     #[must_use]
     pub const fn with_ab_speed_up_print(mut self) -> Self {
         self.can_ab_speed_up_print = true;
@@ -1342,11 +1358,13 @@ mod tests {
     }
 
     /// Issue #393: held-A/B print speed-up only applies to a printer that
-    /// opted in via [`Printer::with_ab_speed_up_print`] (the intro's Birch
-    /// speech) -- the standard field message box (every other printer in
-    /// this port) must keep printing at its own `TextSpeed` regardless of
-    /// how long A/B is held, matching `gTextFlags.canABSpeedUpPrint = FALSE`
-    /// (`pokeemerald/src/field_message_box.c`).
+    /// opted in via [`Printer::with_ab_speed_up_print`] -- a bare
+    /// [`Printer::new`] with no such opt-in must keep printing at its own
+    /// `TextSpeed` regardless of how long A/B is held. This is a property of
+    /// the flag itself, not a claim about which of this port's call sites
+    /// leave it unset -- module docs' "Held-A/B print speed-up" section for
+    /// which ones actually do (the standard field message box is not one of
+    /// them, matching upstream's own `AddTextPrinterForMessage(TRUE)`).
     #[test]
     fn held_ab_speed_up_only_affects_printers_that_opt_in() {
         let pixels = blank_sheet_pixels();
@@ -1354,9 +1372,10 @@ mod tests {
         // Three glyphs at MID (4 frames/char): without speed-up, 'B' and 'C'
         // only reveal after their own full reveal-delay periods, no matter
         // what is held.
-        let field_sheet = synthetic_sheet(&pixels, FontId::Normal);
-        let field_tokens = decode_tokens(&[0xBB, 0xBB, 0xBB, super::super::EOS]);
-        let mut field_printer = Printer::new(field_tokens, field_sheet, TextSpeed::Mid, (0, 0));
+        let opted_out_sheet = synthetic_sheet(&pixels, FontId::Normal);
+        let opted_out_tokens = decode_tokens(&[0xBB, 0xBB, 0xBB, super::super::EOS]);
+        let mut opted_out_printer =
+            Printer::new(opted_out_tokens, opted_out_sheet, TextSpeed::Mid, (0, 0));
 
         let held_a = PrinterInput {
             a_pressed: true,
@@ -1365,7 +1384,7 @@ mod tests {
             b_held: false,
         };
         assert!(
-            matches!(field_printer.tick(held_a), TickEvent::Glyph(_)),
+            matches!(opted_out_printer.tick(held_a), TickEvent::Glyph(_)),
             "'A' reveals on frame 0 regardless"
         );
         // Continuing to hold A must NOT accelerate this printer: three idle
@@ -1375,13 +1394,13 @@ mod tests {
         // throughout.
         for frame in 1..=3 {
             assert_eq!(
-                field_printer.tick(held_a),
+                opted_out_printer.tick(held_a),
                 TickEvent::Idle,
-                "field message box frame {frame} must stay un-accelerated"
+                "an opted-out printer's frame {frame} must stay un-accelerated"
             );
         }
         assert!(
-            matches!(field_printer.tick(held_a), TickEvent::Glyph(_)),
+            matches!(opted_out_printer.tick(held_a), TickEvent::Glyph(_)),
             "'B' still waits out the full MID delay"
         );
 

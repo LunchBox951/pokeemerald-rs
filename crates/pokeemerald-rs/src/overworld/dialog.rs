@@ -14,15 +14,51 @@
 //! already include their interior fill (`crate::textbox::blit_frame_tiles`'s
 //! own "last write wins" docs), so nothing behind the box needs erasing
 //! first.
+//!
+//! # Held-A/B print speed-up (issue #393)
+//!
+//! This *is* upstream's standard field message box (`ShowFieldMessage`/
+//! `ShowFieldMessageFromBuffer`, both routing through
+//! `AddTextPrinterForMessage(TRUE)` --
+//! `pokeemerald/src/field_message_box.c:62-69,109-129`), so it opts into
+//! held-A/B print speed-up the same way [`crate::intro::IntroScene`] does --
+//! [`Printer::with_ab_speed_up_print`], built in [`NpcDialog::new`]. An
+//! earlier revision of this module left it off and claimed that matched
+//! upstream's own default; it did not -- `InitFieldMessageBox`'s
+//! `gTextFlags.canABSpeedUpPrint = FALSE` (`field_message_box.c:17`) is only
+//! the dormant-box reset, overwritten `TRUE` the instant either function
+//! above actually shows a message. [`engine::text::render`]'s own
+//! "Held-A/B print speed-up" module docs have the exact latch semantics.
 
 use assets::fonts::{FontId, OwnedFontGlyphSheet};
 use assets::pack::{AssetPack, PackError};
 use engine::text::render::{Printer, PrinterInput, RevealedGlyph, TextSpeed, TickEvent};
 use engine::text::window::MessageBoxLayout;
 use engine::text::Token;
+use platform::{ButtonState, Buttons};
 use rendering::Framebuffer;
 
 use crate::textbox::{self, FrameAssets};
+
+/// Narrow a frame's real [`ButtonState`] down to the four bits
+/// [`NpcDialog::tick`] needs (same seam `crate::flow::intro_printer_input`
+/// crosses for [`crate::intro::IntroScene::tick`], and the same shape: A and
+/// B both count, pressed or held alike -- neither
+/// `TextPrinterWaitWithDownArrow`'s confirm-edge wait nor
+/// `RENDER_STATE_HANDLE_CHAR`'s held speed-up distinguish which button did
+/// it, so this doesn't either). Shared by every caller that ticks an
+/// [`NpcDialog`] with real input -- `OverworldPhase::advance_dialog_frame`
+/// for NPC/field dialogs and `SaveDialog::run` for `ShowSaveMessage`'s own
+/// box (both `pub(super)`/crate-private to their own modules, so no
+/// intra-doc link reaches either from here) -- so the two don't drift.
+pub(crate) fn confirm_printer_input(buttons: ButtonState) -> PrinterInput {
+    PrinterInput {
+        a_pressed: buttons.is_newly_pressed(Buttons::A),
+        b_pressed: buttons.is_newly_pressed(Buttons::B),
+        a_held: buttons.is_held(Buttons::A),
+        b_held: buttons.is_held(Buttons::B),
+    }
+}
 
 /// The dialogue box's window-local text origin -- mirrors
 /// [`crate::intro`]'s identical constant for the same standard field message
@@ -118,8 +154,14 @@ impl NpcDialog {
     /// one. [`crate::start_menu`] already holds a decoded sheet and
     /// message-box frame, so it builds boxes here directly instead of
     /// re-reading the pack once per message.
+    ///
+    /// Opts into held-A/B print speed-up (module docs' "Held-A/B print
+    /// speed-up" section): every caller of this constructor is one of
+    /// upstream's `AddTextPrinterForMessage(TRUE)` sites, so every box built
+    /// here -- an NPC's or `ShowSaveMessage`'s alike -- gets it.
     pub(crate) fn new(sheet: OwnedFontGlyphSheet, frame: FrameAssets, tokens: Vec<Token>) -> Self {
-        let printer = Printer::new(tokens, sheet, TextSpeed::Mid, PRINTER_ORIGIN);
+        let printer =
+            Printer::new(tokens, sheet, TextSpeed::Mid, PRINTER_ORIGIN).with_ab_speed_up_print();
         Self {
             frame,
             printer,
@@ -175,28 +217,21 @@ impl NpcDialog {
         self.revealed.len()
     }
 
-    /// Advance the dialog by exactly one frame. `confirm_pressed` is the
-    /// just-pressed edge of *either* confirm button -- upstream's message
-    /// box waits on `JOY_NEW(A_BUTTON | B_BUTTON)`
-    /// (`TextPrinterWaitWithDownArrow`, `src/text.c:865-882`), not A alone;
-    /// combining the two edges is the caller's job
-    /// (`crate::flow::overworld_phase::OverworldPhase::step`). Forwarded
-    /// straight to the current [`Printer::tick`] (only consulted while
-    /// awaiting a scroll/clear -- that method's own doc comment).
-    pub(crate) fn tick(&mut self, confirm_pressed: bool) -> DialogOutcome {
+    /// Advance the dialog by exactly one frame. `input`'s pressed/held A and
+    /// B bits are forwarded straight to the current [`Printer::tick`] --
+    /// both the confirm edge it consults while awaiting a scroll/clear (that
+    /// method's own doc comment) and, since this box opted into held-A/B
+    /// print speed-up ([`Self::new`]), the press/hold pair its
+    /// [`engine::text::render`] module docs describe. Upstream's message box
+    /// never distinguishes which button did either
+    /// (`TextPrinterWaitWithDownArrow`'s `JOY_NEW(A_BUTTON | B_BUTTON)`,
+    /// `src/text.c:865-882`, and `RENDER_STATE_HANDLE_CHAR`'s
+    /// `JOY_HELD(A_BUTTON | B_BUTTON)`, `:943-953`), so callers build `input`
+    /// with [`confirm_printer_input`] rather than picking one button.
+    pub(crate) fn tick(&mut self, input: PrinterInput) -> DialogOutcome {
         if self.finished {
             return DialogOutcome::Closed;
         }
-        // This box never opts into held-A/B print speed-up (`Printer::new`'s
-        // own default, matching the standard field message box -- module
-        // docs), so only the confirm edge matters; held state is left
-        // false, same as passing a bare bool used to mean before issue #393.
-        let input = PrinterInput {
-            a_pressed: confirm_pressed,
-            b_pressed: false,
-            a_held: false,
-            b_held: false,
-        };
         match self.printer.tick(input) {
             TickEvent::Glyph(g) => self.revealed.push(*g),
             TickEvent::Cleared => self.revealed.clear(),
@@ -278,11 +313,42 @@ mod tests {
     use super::*;
     use rendering::Rgb888;
 
+    /// No buttons pressed or held this frame -- shorthand for the many
+    /// no-input ticks these tests drive, mirroring
+    /// [`crate::intro::tests`]'s identical `NONE` constant.
+    const NONE: PrinterInput = PrinterInput {
+        a_pressed: false,
+        b_pressed: false,
+        a_held: false,
+        b_held: false,
+    };
+
+    /// A one-frame confirm press, exactly as [`confirm_printer_input`]
+    /// produces it on the frame a button goes down: `a_pressed` and
+    /// `a_held` both true (mirrors [`crate::intro::tests`]'s identical
+    /// `CONFIRM` constant and its own doc comment on why the real input
+    /// shape sets both).
+    const CONFIRM: PrinterInput = PrinterInput {
+        a_pressed: true,
+        b_pressed: false,
+        a_held: true,
+        b_held: false,
+    };
+
+    /// Still held, one frame after [`CONFIRM`] -- the edge is gone
+    /// (`a_pressed: false`) but the button has not been released.
+    const HELD: PrinterInput = PrinterInput {
+        a_pressed: false,
+        b_pressed: false,
+        a_held: true,
+        b_held: false,
+    };
+
     #[test]
     fn tick_reveals_glyphs_and_stays_open_while_printing() {
         let mut dialog = synthetic_dialog(vec![Token::Char('H'), Token::Char('i'), Token::End]);
         // TextSpeed::Mid: a glyph every 4th frame, starting at frame 0.
-        assert_eq!(dialog.tick(false), DialogOutcome::Continue);
+        assert_eq!(dialog.tick(NONE), DialogOutcome::Continue);
         assert_eq!(dialog.revealed.len(), 1);
     }
 
@@ -290,7 +356,7 @@ mod tests {
     fn a_message_without_a_trailing_prompt_closes_the_instant_printing_finishes() {
         let mut dialog = synthetic_dialog(vec![Token::Char('A'), Token::End]);
         for _ in 0..8 {
-            if dialog.tick(false) == DialogOutcome::Closed {
+            if dialog.tick(NONE) == DialogOutcome::Closed {
                 return;
             }
         }
@@ -303,7 +369,7 @@ mod tests {
         // Drain the reveal delay to reach AwaitingClear.
         for _ in 0..8 {
             assert!(
-                dialog.tick(false) != DialogOutcome::Closed,
+                dialog.tick(NONE) != DialogOutcome::Closed,
                 "must not close before a confirm press reaches the trailing prompt"
             );
         }
@@ -313,12 +379,12 @@ mod tests {
         // reached, mirroring `engine::text::render`'s own
         // `page_clear_resumes_after_a_reveal_delay_at_mid_speed` test).
         assert_eq!(
-            dialog.tick(true),
+            dialog.tick(CONFIRM),
             DialogOutcome::Continue,
             "Cleared, not yet Closed"
         );
         for _ in 0..8 {
-            if dialog.tick(false) == DialogOutcome::Closed {
+            if dialog.tick(NONE) == DialogOutcome::Closed {
                 return;
             }
         }
@@ -328,9 +394,56 @@ mod tests {
     #[test]
     fn tick_is_idempotent_once_closed() {
         let mut dialog = synthetic_dialog(vec![Token::End]);
-        assert_eq!(dialog.tick(false), DialogOutcome::Closed);
-        assert_eq!(dialog.tick(false), DialogOutcome::Closed);
-        assert_eq!(dialog.tick(true), DialogOutcome::Closed);
+        assert_eq!(dialog.tick(NONE), DialogOutcome::Closed);
+        assert_eq!(dialog.tick(NONE), DialogOutcome::Closed);
+        assert_eq!(dialog.tick(CONFIRM), DialogOutcome::Closed);
+    }
+
+    /// Issue #393: this box opts into held-A/B print speed-up
+    /// ([`NpcDialog::new`]'s doc comment) -- upstream's ordinary field
+    /// message box is one of the `AddTextPrinterForMessage(TRUE)` sites,
+    /// not the `FALSE` one an earlier revision of this module wrongly
+    /// claimed it matched. A press landing while the second glyph's reveal
+    /// delay is pending latches the speed-up and reaches it in fewer ticks
+    /// than never pressing anything at all -- mirrors
+    /// [`crate::intro::tests`]'s own printer-level proof of the same latch,
+    /// one level up (through [`NpcDialog::tick`] rather than
+    /// [`Printer::tick`] directly), so a regression here means a real NPC
+    /// conversation stopped accelerating, not just the underlying printer.
+    #[test]
+    fn held_confirm_reaches_the_next_glyph_in_fewer_ticks_than_unheld() {
+        let tokens = || {
+            vec![
+                Token::Char('A'),
+                Token::Char('B'),
+                Token::Char('C'),
+                Token::End,
+            ]
+        };
+
+        let ticks_to_second_glyph = |inputs: &[PrinterInput]| {
+            let mut dialog = synthetic_dialog(tokens());
+            for (tick, &input) in inputs.iter().cycle().enumerate() {
+                dialog.tick(input);
+                if dialog.revealed_glyph_count() >= 2 {
+                    return tick;
+                }
+            }
+            unreachable!("the cycling iterator never ends");
+        };
+
+        // Unheld: MID's own cadence, no acceleration -- 'A' on tick 0, 'B'
+        // only after a full reveal-delay period.
+        let unheld_ticks = ticks_to_second_glyph(&[NONE]);
+        // Held: a press on tick 1 (mid reveal-delay for 'B') latches the
+        // speed-up and zeroes the delay outright; still held afterward.
+        let held_ticks = ticks_to_second_glyph(&[NONE, CONFIRM, HELD]);
+
+        assert!(
+            held_ticks < unheld_ticks,
+            "held confirm must reach the second glyph faster ({held_ticks} ticks) than \
+             unheld ({unheld_ticks} ticks)"
+        );
     }
 
     #[test]
