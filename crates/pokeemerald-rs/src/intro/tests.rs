@@ -1,18 +1,44 @@
-//! [`IntroScene`] flow tests: page advance on confirm, the skip path, and
-//! headless composition -- all against a synthetic font sheet + dialogue
-//! frame (no local asset pack needed, mirroring `engine::text::render`'s own
-//! synthetic-sheet test pattern). A real-pack composition check
-//! (`real_pack_composes_a_non_blank_intro_frame`) lives right here, at the
-//! bottom of this file, mirroring `main_menu::tests::
+//! [`IntroScene`] flow tests: page advance on confirm, B as an ordinary
+//! dialogue-advance button (issue #393 -- there is no more whole-intro skip
+//! path to test), and headless composition -- all against a synthetic font
+//! sheet + dialogue frame (no local asset pack needed, mirroring
+//! `engine::text::render`'s own synthetic-sheet test pattern). A real-pack
+//! composition check (`real_pack_composes_a_non_blank_intro_frame`) lives
+//! right here, at the bottom of this file, mirroring `main_menu::tests::
 //! real_pack_composes_a_non_blank_menu_frame`.
 
 use assets::fonts::{FontId, FontImageRef, OwnedFontGlyphSheet, GLYPH_COUNT};
 use assets::pack::ImageRef;
-use engine::text::render::TextSpeed;
+use engine::text::render::{Printer, PrinterInput, TextSpeed, TickEvent};
 use rendering::Rgb888;
 
-use super::{IntroScene, IntroStatus, NUM_PAGES};
+use super::{IntroScene, IntroStatus, TraversalRun, NUM_PAGES};
 use crate::textbox::FrameAssets;
+
+/// No buttons pressed or held this frame -- shorthand for
+/// [`PrinterInput::none`], this file's stand-in for the old bare `false`
+/// every call here used before issue #393 replaced `IntroScene::tick`'s two
+/// bools with a [`PrinterInput`].
+const NONE: PrinterInput = PrinterInput::none();
+
+/// A's just-pressed edge, nothing else held or pressed -- this file's
+/// stand-in for the old bare `true` (`confirm_pressed`).
+const PRESS_A: PrinterInput = PrinterInput {
+    a_pressed: true,
+    b_pressed: false,
+    a_held: false,
+    b_held: false,
+};
+
+/// B's just-pressed edge, nothing else held or pressed -- issue #393's own
+/// point: B is an ordinary dialogue-advance button, not a whole-intro skip,
+/// so it needs its own edge here alongside [`PRESS_A`].
+const PRESS_B: PrinterInput = PrinterInput {
+    a_pressed: false,
+    b_pressed: true,
+    a_held: false,
+    b_held: false,
+};
 
 const SHEET_WIDTH: u32 = 256;
 const SHEET_HEIGHT: u32 = 512;
@@ -126,7 +152,7 @@ fn starts_on_the_first_page_not_finished() {
 fn a_glyph_reveals_on_the_first_tick_at_instant_speed() {
     let pixels = blank_sheet_pixels();
     let mut scene = synthetic_scene(&pixels, TextSpeed::Instant);
-    let status = scene.tick(false, false);
+    let status = scene.tick(NONE);
     assert_eq!(status, IntroStatus::Continue);
     assert_eq!(
         scene.revealed_glyph_count(),
@@ -135,28 +161,82 @@ fn a_glyph_reveals_on_the_first_tick_at_instant_speed() {
     );
 }
 
+/// Issue #393: B used to be wired to a pre-1.0 whole-intro skip with no
+/// upstream analogue (module docs' "Advance" section) -- that shortcut is
+/// gone. B is now an ordinary dialogue-advance button, so pressing it
+/// mid-page (well before any `\p`/`\l` wait is even reached) must do
+/// nothing but advance the reveal like any other press would -- it must
+/// never finish the intro outright.
 #[test]
-fn skip_finishes_immediately_regardless_of_page_progress() {
+fn b_mid_speech_does_not_finish_the_intro() {
     let pixels = blank_sheet_pixels();
     let mut scene = synthetic_scene(&pixels, TextSpeed::Mid);
-    // Print a little first, so the skip is genuinely mid-page, not a no-op.
+    // Print a little first, so this is genuinely mid-page, not a no-op.
     for _ in 0..5 {
-        scene.tick(false, false);
+        scene.tick(NONE);
     }
     assert!(!scene.is_finished());
 
-    let status = scene.tick(false, true);
-    assert_eq!(status, IntroStatus::Finished);
-    assert!(scene.is_finished());
+    let status = scene.tick(PRESS_B);
+    assert_eq!(
+        status,
+        IntroStatus::Continue,
+        "B mid-speech must not finish the intro"
+    );
+    assert!(!scene.is_finished());
+    assert_eq!(
+        scene.page_index(),
+        0,
+        "B mid-speech must not skip to a later page either"
+    );
+}
+
+/// Issue #393: upstream never distinguishes which of A/B advanced a
+/// `\p`/`\l` wait (`JOY_NEW(A_BUTTON | B_BUTTON)`, `text.c:874-879`) -- B
+/// must clear a page exactly as A does, not just fail to skip the whole
+/// intro. Drives page 0 ("Hi! Sorry to keep you waiting!{P}...") to its
+/// first `\p` with A, confirms it with B, and checks the accumulator
+/// cleared (the same observable [`super::IntroScene::tick`] docs
+/// `TickEvent::Cleared` produces for an A confirm).
+#[test]
+fn b_advances_a_prompt_clear_exactly_like_a_does() {
+    let pixels = blank_sheet_pixels();
+    let mut scene = synthetic_scene(&pixels, TextSpeed::Instant);
+
+    // Reveal every glyph up to (and including reaching) page 0's first
+    // `\p`, without ever confirming it -- `NONE` never advances a wait.
+    let mut before_clear = 0;
+    for _ in 0..200 {
+        scene.tick(NONE);
+        let count = scene.revealed_glyph_count();
+        if count == before_clear {
+            // No new glyph revealed this tick and nothing cleared yet ->
+            // the wait has been reached (Instant reveals one glyph per
+            // tick, so a repeat count this early can only mean AwaitingClear).
+            break;
+        }
+        before_clear = count;
+    }
+    assert!(
+        before_clear > 0,
+        "page 0 must have revealed something first"
+    );
+
+    let status = scene.tick(PRESS_B);
+    assert_eq!(status, IntroStatus::Continue);
+    assert_eq!(
+        scene.revealed_glyph_count(),
+        0,
+        "B must clear the accumulator exactly like A does"
+    );
 }
 
 #[test]
 fn once_finished_every_further_tick_stays_finished() {
-    let pixels = blank_sheet_pixels();
-    let mut scene = synthetic_scene(&pixels, TextSpeed::Instant);
-    assert_eq!(scene.tick(false, true), IntroStatus::Finished);
+    let mut scene = super::synthetic_finished_scene();
+    assert!(scene.is_finished());
     for _ in 0..5 {
-        assert_eq!(scene.tick(true, false), IntroStatus::Finished);
+        assert_eq!(scene.tick(PRESS_A), IntroStatus::Finished);
         assert!(scene.is_finished());
     }
 }
@@ -174,7 +254,7 @@ fn confirming_every_frame_advances_through_every_page_to_the_overworld_handoff()
     seen_pages.insert(scene.page_index());
     let mut status = IntroStatus::Continue;
     for _ in 0..5000 {
-        status = scene.tick(true, false);
+        status = scene.tick(PRESS_A);
         seen_pages.insert(scene.page_index());
         if status == IntroStatus::Finished {
             break;
@@ -200,7 +280,7 @@ fn a_page_break_clears_the_revealed_glyph_accumulator() {
     let mut max_seen = 0usize;
     let mut saw_reset = false;
     for _ in 0..500 {
-        scene.tick(true, false);
+        scene.tick(PRESS_A);
         if scene.is_finished() {
             break;
         }
@@ -226,7 +306,7 @@ fn a_page_break_clears_the_revealed_glyph_accumulator() {
 fn compose_paints_the_revealed_glyphs_pixel_not_just_the_frame_dimensions() {
     let pixels = distinguishable_sheet_pixels();
     let mut scene = synthetic_scene(&pixels, TextSpeed::Instant);
-    scene.tick(false, false); // reveals the first glyph ('H' of page 0).
+    scene.tick(NONE); // reveals the first glyph ('H' of page 0).
 
     let fb = scene.compose();
     assert_eq!(fb.width(), 240);
@@ -451,7 +531,7 @@ fn a_second_load_after_the_pack_is_regenerated_sees_the_new_bytes() {
     write_pack(&path, entries);
 
     let mut first = load_from(&path).expect("the synthetic pack has both required entries");
-    first.tick(false, false); // reveals page 0's first glyph.
+    first.tick(NONE); // reveals page 0's first glyph.
     assert_eq!(
         first_glyph_pixel(&first),
         Some(GLYPH_COLOR),
@@ -465,7 +545,7 @@ fn a_second_load_after_the_pack_is_regenerated_sees_the_new_bytes() {
     write_pack(&path, entries);
 
     let mut second = load_from(&path).expect("the regenerated pack is still well-formed");
-    second.tick(false, false);
+    second.tick(NONE);
     assert_eq!(
         first_glyph_pixel(&second),
         Some(GLYPH_SHADOW_COLOR),
@@ -504,6 +584,117 @@ fn a_failed_load_default_keeps_reporting_pack_missing_without_panicking() {
     assert!(second.is_pack_missing());
 }
 
+/// A one-frame confirm press, exactly as the real app produces it:
+/// `crate::flow::intro_printer_input` sets *both* `a_pressed` and `a_held`
+/// on the frame a button goes down, so a press frame is never the
+/// "pressed but not held" shape [`PRESS_A`] uses for the state-machine
+/// tests above. It makes no difference to the held-A/B speed-up (the press
+/// lands while the printer is already waiting on a `\p`/`\l`, never mid
+/// reveal-delay, so `has_print_been_sped_up` never arms), but deriving
+/// [`super::TRAVERSAL_RUNS`] from anything other than the real input shape
+/// would leave the pin proving less than it claims.
+const CONFIRM: PrinterInput = PrinterInput {
+    a_pressed: true,
+    b_pressed: false,
+    a_held: true,
+    b_held: false,
+};
+
+/// Re-derive [`super::TRAVERSAL_RUNS`] from the real printer: build the
+/// same [`Printer`] [`IntroScene::new`] builds (same speed, same origin,
+/// same `with_ab_speed_up_print`), re-armed per page exactly as
+/// [`IntroScene::advance_page`] re-arms it, and drive
+/// [`super::speech::pages`] through it with no input at all except one
+/// [`CONFIRM`] frame on each `\p`/`\l` wait.
+///
+/// Returns the runs of no-input frames between those press frames,
+/// delimited the same three ways the scenario script's own segments are: a
+/// wait being reached ([`TickEvent::AwaitingClear`]/[`TickEvent::AwaitingScroll`],
+/// a press follows), a scroll animation finishing
+/// ([`TickEvent::ScrollFinished`]), and a page's terminator being consumed
+/// ([`TickEvent::Finished`]).
+fn derive_traversal_runs() -> Vec<TraversalRun> {
+    let pixels = blank_sheet_pixels();
+    let pages = super::speech::pages();
+    let mut printer = Printer::new(
+        pages[0].clone(),
+        synthetic_sheet(&pixels),
+        TextSpeed::Mid,
+        super::PRINTER_ORIGIN,
+    )
+    .with_ab_speed_up_print();
+
+    let mut runs = Vec::new();
+    let mut frames = 0;
+    let mut page = 0;
+    let mut confirm_next = false;
+    // A generous bound, ~5x the real total: a printer that stopped
+    // terminating should fail this test, not hang CI.
+    for _ in 0..20_000 {
+        if confirm_next {
+            printer.tick(CONFIRM);
+            confirm_next = false;
+            continue;
+        }
+        let event = printer.tick(NONE);
+        frames += 1;
+        match event {
+            TickEvent::AwaitingClear | TickEvent::AwaitingScroll => {
+                runs.push(TraversalRun {
+                    frames,
+                    confirm_after: true,
+                });
+                frames = 0;
+                confirm_next = true;
+            }
+            TickEvent::ScrollFinished => {
+                runs.push(TraversalRun {
+                    frames,
+                    confirm_after: false,
+                });
+                frames = 0;
+            }
+            TickEvent::Finished => {
+                runs.push(TraversalRun {
+                    frames,
+                    confirm_after: false,
+                });
+                frames = 0;
+                page += 1;
+                if page == NUM_PAGES {
+                    return runs;
+                }
+                printer.restart(pages[page].clone());
+            }
+            _ => {}
+        }
+    }
+    panic!("the speech never terminated: {} runs so far", runs.len());
+}
+
+/// The pack-free pin behind `xtask`'s `boot-to-first-fight` intro script
+/// (module docs' "Traversal pacing" section): every number in
+/// [`super::TRAVERSAL_RUNS`] is what the real [`Printer`] actually does
+/// with the real [`super::speech::pages`] at [`TextSpeed::Mid`], so a
+/// change to the printer's state machine, to a speech page's text, or to
+/// the reveal-delay timing breaks *here* -- visibly, in a test CI runs
+/// without a pack -- instead of only inside the pack-gated scenario run.
+#[test]
+fn traversal_runs_match_the_pinned_table() {
+    assert_eq!(derive_traversal_runs(), super::TRAVERSAL_RUNS);
+}
+
+/// [`super::TRAVERSAL_FRAMES`] is the table's own total, presses included
+/// -- the single number `xtask`'s script budgets its intro block against.
+#[test]
+fn traversal_frames_totals_the_table() {
+    let total: usize = super::TRAVERSAL_RUNS
+        .iter()
+        .map(|run| run.frames as usize + usize::from(run.confirm_after))
+        .sum();
+    assert_eq!(super::TRAVERSAL_FRAMES, total);
+}
+
 /// Senior review round 3: the one real-pack composition check this module
 /// was missing (the `A real-pack composition check lives alongside the
 /// other scenes' #[ignore] tests in app.rs` claim this file's own module
@@ -520,7 +711,7 @@ fn a_failed_load_default_keeps_reporting_pack_missing_without_panicking() {
 fn real_pack_composes_a_non_blank_intro_frame() {
     let mut scene = super::load_default().expect("run `cargo xtask extract` first");
     for _ in 0..5 {
-        scene.tick(false, false);
+        scene.tick(NONE);
     }
 
     let fb = scene.compose();

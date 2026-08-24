@@ -26235,6 +26235,20 @@
       "status": "pending"
     },
     "src/field_message_box.c": {
+      "artifacts": {
+        "ShowFieldMessage": {
+          "reason": "Only the held-A/B print speed-up its ExpandStringAndStartDrawFieldMessage(str, TRUE) call enables (field_message_box.c:62-69,118-123 -> AddTextPrinterForMessage(TRUE) -> gTextFlags.canABSpeedUpPrint = TRUE, menu.c:191-...) is modelled: NpcDialog::new unconditionally builds its Printer with Printer::with_ab_speed_up_print, since every caller of that constructor is one of upstream's AddTextPrinterForMessage(TRUE) sites (dialog.rs module docs' 'Held-A/B print speed-up' section, issue #393). NOT modelled in this artifact: sFieldMessageBoxMode's HIDDEN/NORMAL/AUTO_SCROLL state machine (NpcDialog carries no such reentrancy guard), Task_DrawFieldMessage/CreateTask_DrawFieldMessage's two-frame LoadMessageBoxAndBorderGfx-then-DrawDialogueFrame task sequencing, and StringExpandPlaceholders' placeholder substitution (str -> gStringVar4).",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/dialog.rs",
+          "spec": "I-3",
+          "status": "stubbed"
+        },
+        "ShowFieldMessageFromBuffer": {
+          "reason": "Its StartDrawFieldMessage helper calls AddTextPrinterForMessage(TRUE) unconditionally (field_message_box.c:109-116,125-129) -- always a held-A/B speed-up site, same as ShowFieldMessage's TRUE call -- and modelled the same way: NpcDialog::new's unconditional Printer::with_ab_speed_up_print (dialog.rs module docs' 'Held-A/B print speed-up' section, issue #393). NOT modelled in this artifact: sFieldMessageBoxMode's state machine and the CreateTask_DrawFieldMessage task chain (see src/field_message_box.c#ShowFieldMessage); unlike ShowFieldMessage this function never expands placeholders itself -- it prints whatever the caller already staged in gStringVar4, which this crate has no equivalent global-buffer step for.",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/dialog.rs",
+          "spec": "I-3",
+          "status": "stubbed"
+        }
+      },
       "category": "code.source",
       "kind": "file",
       "status": "pending"
@@ -26893,7 +26907,7 @@
     "src/main_menu.c": {
       "artifacts": {
         "birch_speech": {
-          "reason": "Task_NewGameBirchSpeech_* task chain (main_menu.c:1279-1755) reduced to the real dialogue text, paged with upstream's \\p/\\l pacing; Birch/Lotad/player sprites, the platform background, palette fades/slides, gender-select menu, naming screen, and audio are not rendered (see intro module docs' 'Reduced cinematic' section)",
+          "reason": "Task_NewGameBirchSpeech_* task chain (main_menu.c:1279-1755) reduced to the real dialogue text, paged with upstream's \\p/\\l pacing; Birch/Lotad/player sprites, the platform background, palette fades/slides, gender-select menu, naming screen, and audio are not rendered (see intro module docs' 'Reduced cinematic' section). Issue #393 added the two pacing details the pages themselves carry: gText_ThisIsAPokemon's own {PAUSE 96} beat (strings.c:100) is transcribed as a real EXT_CTRL_CODE_PAUSE token rather than dropped, and the scene's printer opts into AddTextPrinterForMessage(TRUE)'s held-A/B print speed-up (main_menu.c:1339) via Printer::with_ab_speed_up_print -- the one printer in this port with upstream's canABSpeedUpPrint flag set",
           "rust_target": "crates/pokeemerald-rs/src/intro/mod.rs",
           "spec": "I-3",
           "status": "stubbed"
@@ -28147,14 +28161,14 @@
           "status": "rewritten"
         },
         "RenderText": {
-          "reason": "The per-frame RENDER_STATE_HANDLE_CHAR loop -- newline, \\l/\\p prompt-scroll/prompt-clear wait-then-act states, glyph-id resolution via the decoded byte, and the reveal-delay countdown -- reimplemented as Printer::tick's frame-driven state machine (PrinterState). Faithful to upstream's unconditional 'delayCounter = textSpeed' reload before each consumed char: a RENDER_REPEAT-class token (newline, no-op control code, skipped placeholder) reloads the reveal-delay counter and re-enters HANDLE_CHAR, so at Slow/Mid (textSpeed != 0) it costs one full reveal-delay period rather than being frame-free, and the first glyph after a \\l scroll or \\p page clear resumes with delayCounter = textSpeed; at Fast/Instant (textSpeed == 0) those tokens stay free. Colour/font/pause/audio extended control codes are consumed as documented no-ops; see the module's 'Deliberately out of scope' docs.",
+          "reason": "The per-frame RENDER_STATE_HANDLE_CHAR loop -- newline, \\l/\\p prompt-scroll/prompt-clear wait-then-act states, glyph-id resolution via the decoded byte, and the reveal-delay countdown -- reimplemented as Printer::tick's frame-driven state machine (PrinterState). Faithful to upstream's unconditional 'delayCounter = textSpeed' reload before each consumed char: a RENDER_REPEAT-class token (newline, no-op control code, skipped placeholder) reloads the reveal-delay counter and re-enters HANDLE_CHAR, so at Slow/Mid (textSpeed != 0) it costs one full reveal-delay period rather than being frame-free, and the first glyph after a \\l scroll or \\p page clear resumes with delayCounter = textSpeed; at Fast/Instant (textSpeed == 0) those tokens stay free. Colour/font/audio extended control codes are consumed as documented no-ops; see the module's 'Deliberately out of scope' docs. EXT_CTRL_CODE_PAUSE is no longer among them (issue #393): it is a modelled render state -- PrinterState::Pause mirrors upstream's RENDER_STATE_PAUSE (text.c:1215-1220), counting the control code's argument frames down before returning to HandleChar. The held-A/B print speed-up in the same HANDLE_CHAR case (gTextFlags.canABSpeedUpPrint / subStruct->hasPrintBeenSpedUp, text.c:944-953) is ported as well: Printer::with_ab_speed_up_print opts a printer in, PrinterInput carries the JOY_NEW/JOY_HELD(A_BUTTON | B_BUTTON) bits per frame, a fresh edge during a reveal delay zeroes delay_counter and arms has_print_been_sped_up, and every later held frame then zeroes it again -- upstream's exact two-step.",
           "rust_target": "crates/engine/src/text/render.rs",
           "spec": "S-5",
           "status": "rewritten"
         },
         "TextPrinterWaitWithDownArrow": {
-          "reason": "The message box's down-arrow wait prompt takes JOY_NEW(A_BUTTON | B_BUTTON) -- a fresh A *or* B edge -- which OverworldPhase::step now transcribes as the confirm edge it forwards to NpcDialog::tick (issue #161 review; previously A only, leaving a player who pressed B stuck with the box open). TextPrinterWait (src/text.c:884-900, the mid-page wait) and RunTextPrinter's hold-to-speed-up path (:944, :950) read the same button pair. Stubbed rather than rewritten: only the input predicate is ported. Not modelled -- gTextFlags.autoScroll / TextPrinterWaitAutoMode, the down-arrow sprite itself (TextPrinterDrawDownArrow) and its bob animation, and PlaySE(SE_SELECT).",
-          "rust_target": "crates/pokeemerald-rs/src/flow/overworld_phase/frame.rs",
+          "reason": "The message box's down-arrow wait prompt takes JOY_NEW(A_BUTTON | B_BUTTON) -- a fresh A *or* B edge -- which Printer::tick now consumes directly: its AwaitingClear/AwaitingScroll states (upstream RENDER_STATE_CLEAR / RENDER_STATE_SCROLL_START, this prompt's two callers) advance on either button via PrinterInput::confirm_pressed, and OverworldPhase::step transcribes the same edge for NpcDialog::tick (crates/pokeemerald-rs/src/flow/overworld_phase/frame.rs; issue #161 review -- previously A only, leaving a player who pressed B stuck with the box open). TextPrinterWait (src/text.c:884-900, the mid-page wait) reads the same button pair. RunTextPrinter's hold-to-speed-up path (:944-953) is no longer just a cited neighbour: issue #393 rewrote it in this same printer (Printer::with_ab_speed_up_print plus PrinterInput's held bits), so it is covered by src/text.c#RenderText's own entry. Still stubbed rather than rewritten because of what remains unmodelled in *this* artifact -- gTextFlags.autoScroll / TextPrinterWaitAutoMode, the down-arrow sprite itself (TextPrinterDrawDownArrow) and its bob animation, and PlaySE(SE_SELECT).",
+          "rust_target": "crates/engine/src/text/render.rs",
           "spec": "I-3",
           "status": "stubbed"
         },

@@ -44,6 +44,7 @@ use engine::text::{Token, PLACEHOLDER_PLAYER};
 use platform::{ButtonState, Buttons};
 
 use crate::game_save::SaveFileStatus;
+use crate::overworld::dialog::confirm_printer_input;
 use crate::overworld::{DialogOutcome, NpcDialog};
 
 use super::text::SaveMessage;
@@ -206,14 +207,16 @@ impl SaveDialog {
     ) -> SaveDialogOutcome {
         if self.printing {
             // `RunTextPrintersAndIsPrinter0Active()` (`:887`). A/B are the
-            // printer's own speed-up/advance edges (`NpcDialog::tick`'s
-            // docs); nothing else in this flow reads them on a frame the
-            // box is still printing, so the press that pages a message can
-            // never also answer the prompt behind it.
-            let confirm =
-                buttons.is_newly_pressed(Buttons::A) || buttons.is_newly_pressed(Buttons::B);
+            // printer's own press/hold speed-up-and-advance bits
+            // (`confirm_printer_input`'s docs, `NpcDialog::tick`'s own docs
+            // -- this box opts into held speed-up too, `NpcDialog::new`'s
+            // doc comment, matching `ShowSaveMessage`'s real
+            // `AddTextPrinterForMessage(TRUE)` call); nothing else in this
+            // flow reads them on a frame the box is still printing, so the
+            // press that pages a message can never also answer the prompt
+            // behind it.
             if let Some(message) = &mut self.message {
-                if message.tick(confirm) == DialogOutcome::Closed {
+                if message.tick(confirm_printer_input(buttons)) == DialogOutcome::Closed {
                     self.printing = false;
                 }
             } else {

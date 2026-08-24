@@ -7,8 +7,9 @@
 //! [`crate::flow`]'s scene dispatch), with the open dialog composited over
 //! the base scene.
 
-use platform::{ButtonState, Buttons, Frame};
+use platform::{ButtonState, Frame};
 
+use crate::overworld::dialog::confirm_printer_input;
 use crate::overworld::DialogOutcome;
 
 use super::OverworldPhase;
@@ -21,15 +22,20 @@ impl OverworldPhase {
     /// for a battle, and closing it consumes the same frame. Split from
     /// [`OverworldPhase::step`] purely along that existing
     /// frame-ownership seam.
+    ///
+    /// `buttons` is narrowed to the four A/B pressed/held bits
+    /// [`NpcDialog::tick`](crate::overworld::NpcDialog::tick) needs by
+    /// [`confirm_printer_input`] -- upstream's own
+    /// `TextPrinterWaitWithDownArrow`/`RENDER_STATE_HANDLE_CHAR` never
+    /// distinguish which button did it (that function's own doc comment),
+    /// and this box opts into held-A/B print speed-up
+    /// (`NpcDialog::new`'s doc comment, issue #393), so both the press and
+    /// the hold matter now, not just the edge.
     pub(super) fn advance_dialog_frame(&mut self, buttons: ButtonState) -> bool {
         let Some(dialog) = &mut self.dialog else {
             return false;
         };
-        // `JOY_NEW(A_BUTTON | B_BUTTON)` (`OverworldPhase::step`'s doc
-        // comment).
-        let confirm_pressed =
-            buttons.is_newly_pressed(Buttons::A) || buttons.is_newly_pressed(Buttons::B);
-        if dialog.tick(confirm_pressed) == DialogOutcome::Closed {
+        if dialog.tick(confirm_printer_input(buttons)) == DialogOutcome::Closed {
             self.dialog = None;
         }
         true
