@@ -26763,6 +26763,12 @@
           "spec": "S-3",
           "status": "rewritten"
         },
+        "ply_memacc": {
+          "reason": "ply_memacc's memory-access ops (set/add/sub and the mem_beq..mem_bhi conditional branches) executed as Sequencer::exec_memacc, dispatched from handle_event (S-3, issue #394). The accumulator area is per-Sequencer and zeroed at construction -- see MemAccArea's doc comment for the declared divergence from upstream's cross-song gMPlayMemAccArea lifetime, pinned by memacc_accumulator_resets_between_sessions.",
+          "rust_target": "crates/audio/src/sequencer.rs",
+          "spec": "S-3",
+          "status": "rewritten"
+        },
         "ply_xiecl": {
           "reason": "ply_xiecl's pseudo-echo-length XCMD (kind 0x09) executed by sequencer::Sequencer::handle_event, alongside ply_xiecv (S-3 slice 3).",
           "rust_target": "crates/audio/src/sequencer.rs",

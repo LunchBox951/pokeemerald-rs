@@ -72,7 +72,8 @@ pub enum Event {
     /// Memory-accumulator op (`MEMACC`). Conditional ops (`op` in `6..=17`)
     /// carry a `GOTO`-style jump `target`, resolved to an event index like any
     /// other jump; unconditional ops (`0..=5`) mutate memory and leave it
-    /// `None` (`ply_memacc`, `m4a.c`).
+    /// `None` (`ply_memacc`, `m4a.c`). Unlike its neighbours in this list,
+    /// this one *is* executed — `crate::sequencer::Sequencer::exec_memacc`.
     MemAcc {
         op: u8,
         addr: u8,
