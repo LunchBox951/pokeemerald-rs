@@ -33,31 +33,30 @@ pub(super) fn canonicalize_waits(track: &[SongEvent]) -> Vec<SongEvent> {
     let mut map = Vec::with_capacity(track.len() + 1);
     let mut index = 0;
     while index < track.len() {
-        let SongEvent::Wait(first) = track[index] else {
+        if !matches!(track[index], SongEvent::Wait(_)) {
             map.push(out.len());
             out.push(track[index].clone());
             index += 1;
             continue;
-        };
+        }
         let start = out.len();
-        let mut total = u32::from(first);
+        // Find the run's extent first; the tick sum is a separate pass
+        // below, wide enough that it cannot overflow no matter how long
+        // the run gets.
         let mut end = index + 1;
-        while let Some(SongEvent::Wait(ticks)) = track.get(end) {
+        while let Some(SongEvent::Wait(_)) = track.get(end) {
             if targets.contains(&end) {
                 break;
             }
-            total += u32::from(*ticks);
             end += 1;
         }
         map.extend(std::iter::repeat_n(start, end - index));
-        while total > u32::from(u8::MAX) {
-            out.push(SongEvent::Wait(u8::MAX));
-            total -= u32::from(u8::MAX);
-        }
-        if total > 0 {
-            #[allow(clippy::cast_possible_truncation, reason = "total <= u8::MAX here")]
-            out.push(SongEvent::Wait(total as u8));
-        }
+        out.extend(wait_run_chunks(track[index..end].iter().map(|event| {
+            let SongEvent::Wait(ticks) = event else {
+                unreachable!("the scan above only ever advances across Wait events")
+            };
+            *ticks
+        })));
         index = end;
     }
     map.push(out.len());
@@ -71,6 +70,33 @@ pub(super) fn canonicalize_waits(track: &[SongEvent]) -> Vec<SongEvent> {
         }
     }
     out
+}
+
+/// Sum a run of adjacent `Wait` tick counts and lazily split the total into
+/// canonical chunks: `255`-tick steps with the remainder last, nothing for a
+/// zero total (module docs).
+///
+/// The running total is `u64`, not `u32`, for the same reason
+/// `crates/assets::audio::song::canonical`'s copy of this function is: a
+/// run of `u32::MAX` `Wait(255)`s (the per-track event cap the pack
+/// contract documents) sums past `u32::MAX` well before the run ends. No
+/// current producer's output gets close, but the accumulator has to hold
+/// what the type promises.
+fn wait_run_chunks(ticks: impl Iterator<Item = u8>) -> impl Iterator<Item = SongEvent> {
+    let mut total: u64 = ticks.map(u64::from).sum();
+    std::iter::from_fn(move || {
+        if total > u64::from(u8::MAX) {
+            total -= u64::from(u8::MAX);
+            Some(SongEvent::Wait(u8::MAX))
+        } else if total > 0 {
+            #[allow(clippy::cast_possible_truncation, reason = "total <= u8::MAX here")]
+            let chunk = SongEvent::Wait(total as u8);
+            total = 0;
+            Some(chunk)
+        } else {
+            None
+        }
+    })
 }
 
 #[cfg(test)]
