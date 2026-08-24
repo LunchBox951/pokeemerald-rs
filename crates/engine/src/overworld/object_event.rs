@@ -553,7 +553,7 @@ impl ObjectEventState {
         self.position = (self.position.0 + dx, self.position.1 + dy);
     }
 
-    /// `SetTrainerMovementType` (`trainer_see.c:731-737`): the live
+    /// `SetTrainerMovementType` (`event_object_movement.c:4636-4643`): the live
     /// `movementType` a stopped trainer keeps, so its own movement-type task
     /// leaves it facing where it stopped instead of resuming its patrol.
     pub const fn set_movement_type(&mut self, movement_type: MovementType) {
@@ -562,22 +562,44 @@ impl ObjectEventState {
 
     /// `OverrideTemplateCoordsForObjectEvent`
     /// (`event_object_movement.c:2478-2488`): write the object's current
-    /// tile back into its own template, so leaving and re-entering the map
-    /// respawns it where it stopped rather than where it started.
+    /// tile back into its own `template_position` field -- upstream's half
+    /// of "leaving and re-entering the map respawns it where it stopped".
     ///
     /// Upstream writes `currentCoords - MAP_OFFSET` because a spawned object
     /// event's coordinates live in the padded backup-layout space
     /// ([`MAP_OFFSET`]); this port keeps object events in the unpadded
     /// template space throughout (module docs), where the same statement is
     /// simply "the template's tile becomes the current tile".
+    ///
+    /// **This is a promise this method alone cannot keep.** The write lands
+    /// on *this instance's own copy* of the template, and [`Self`]'s own
+    /// docs already name why that copy can't be read back by a later spawn:
+    /// this port has no persistent spawned-object-event array, so nothing
+    /// re-reads `template_position` on map re-entry at all. The one caller
+    /// today (`pokeemerald_rs::flow::overworld_phase::sight_trainer_approach`'s
+    /// `stop_facing_player`) makes this call and then, a few frames later,
+    /// drops the whole `ObjectEventState` the instant its approach hands off
+    /// to a battle (that module's own `start_sight_trainer_battle`) -- so a
+    /// save taken, or a map re-entered, after that fight ends finds the
+    /// trainer back at its original template tile, not the one it stopped
+    /// on. The write still runs, in the same order and on the same frame
+    /// upstream makes it, so this instance's own accessors observe it
+    /// faithfully for as long as it lives; a real respawn read is a
+    /// spawned-object-event list's job, not this method's or this type's
+    /// (that struct's own doc comment, "The consequence, named rather than
+    /// hidden").
     pub const fn override_template_coords(&mut self) {
         self.template_position = self.position;
     }
 
     /// `TryOverrideTemplateCoordsForObjectEvent`
     /// (`event_object_movement.c:2499-2506`) — misnamed upstream: it writes
-    /// the template's **`movementType`**, not its coordinates, so a respawn
-    /// keeps the stopped trainer's facing too.
+    /// the template's **`movementType`**, not its coordinates, so upstream's
+    /// respawn keeps the stopped trainer's facing too. The same disclosed
+    /// gap applies here as to [`Self::override_template_coords`]'s sibling
+    /// write: this instance's own copy records it faithfully, but nothing in
+    /// this port reads `template_movement_type` back on a later spawn (that
+    /// method's own doc comment).
     pub const fn override_template_movement_type(&mut self, movement_type: MovementType) {
         self.template_movement_type = movement_type;
     }
