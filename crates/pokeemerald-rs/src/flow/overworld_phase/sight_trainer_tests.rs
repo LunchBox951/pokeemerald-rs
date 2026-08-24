@@ -1,7 +1,9 @@
-//! `sight_trainer_trigger` (issue #264, I-5 follow-up): the per-frame
-//! `TRAINER_TYPE_NORMAL` sight-cone check, the headless battle handoff, and
-//! the defeated-flag/win/loss posture. New sibling test module, the same
-//! per-area split `route103_rival_tests` already uses (module docs there).
+//! `sight_trainer_trigger` (issue #264, I-5 follow-up) and
+//! `sight_trainer_approach` (S-5, issue #300): the per-frame
+//! `TRAINER_TYPE_NORMAL` sight-cone check, the approach cutscene it starts,
+//! the battle handoff at the end of that, and the defeated-flag/win/loss
+//! posture. New sibling test module, the same per-area split
+//! `route103_rival_tests` already uses (module docs there).
 //!
 //! Mirrors `route103_rival_tests`' own "real events over a synthetic grid"
 //! split: a fabricated flat open room paired with the *real* `MAP_ROUTE103`
@@ -16,7 +18,8 @@
 //!
 //! # The stand-in party (`seed_battle`)
 //!
-//! `sight_trainer_trigger`'s own module docs (item 7) record an emergent gap
+//! `begin_sight_trainer_approach_if_seen`'s own docs ("Refusals cost
+//! nothing, forever") record an emergent gap
 //! discovered while writing this file: every real Route 103 sight trainer's
 //! own default, level-up-derived moveset currently includes at least one
 //! move this battle engine does not yet implement, so
@@ -50,11 +53,13 @@
 
 use assets::MapId;
 use battle::{BattleOutcome, BattlePokemon, Dex, Ivs};
-use engine::overworld::{Direction, PlayerState};
+use engine::overworld::{Direction, ObjectEventState, PlayerState, WALK_FRAMES_PER_TILE};
 use platform::{ButtonState, Buttons};
 
 use crate::flow::tests::held;
 
+use super::sight_trainer_approach::SightApproach;
+use super::test_support::pressed;
 use super::OverworldPhase;
 
 /// `MAP_ROUTE103`, used throughout this file.
@@ -81,7 +86,8 @@ const RHETT_TILE: (i32, i32) = (67, 5);
 const ANDREW_TILE: (i32, i32) = (50, 8);
 
 /// `TRAINER_MIGUEL_1` (`include/constants/opponents.h`): a real
-/// `TrainerParty::ItemDefaultMoves` party (module docs' item 6) --
+/// `TrainerParty::ItemDefaultMoves` party (`begin_sight_trainer_approach_if_seen`'s
+/// own "Refusals cost nothing, forever") --
 /// [`crate::flow::npc_trainer_battle`] refuses to construct it. His object
 /// event stands at `(56, 13)`, elevation 3, facing east, sight range 5.
 const MIGUEL_TILE: (i32, i32) = (56, 13);
@@ -153,18 +159,18 @@ fn play_out_sight_battle(phase: &mut OverworldPhase, budget: usize) -> Option<Ba
 
 // -- Sight-cone geometry, through the real trigger -------------------------
 
-/// Item 1 of the issue's own scope: standing within a real sight trainer's
+/// The trigger itself (issue #264): standing within a real sight trainer's
 /// cone attempts the battle on an ordinary frame -- **no button press at
 /// all** (unlike the rival's own A-press interaction trigger), matching
 /// upstream's `CheckForTrainersWantingBattle` running unconditionally ahead
 /// of every other per-frame check. The attempt itself currently fails to
-/// construct (`sight_trainer_trigger`'s own module docs, item 7: Rhett's
+/// construct (`begin_sight_trainer_approach_if_seen`'s own docs: Rhett's
 /// real level-up moveset includes a move this battle engine does not yet
 /// implement) -- so this pins the *honest current* observable behaviour:
 /// the cone genuinely fires, the real handoff is genuinely attempted against
 /// the real extracted party, it genuinely fails, and the failure is logged
 /// rather than silently swallowed or soft-locking the player. Not a
-/// contradiction of the issue's own "starts the battle" framing so much as a
+/// contradiction of that issue's own "starts the battle" framing so much as a
 /// gap this port's own tests should not paper over -- see
 /// [`winning_sets_the_defeated_flag_and_the_fight_cannot_restart`] and its
 /// siblings below for how the win/loss/defeated-flag *driver* half is still
@@ -182,7 +188,8 @@ fn standing_in_a_real_trainers_cone_attempts_the_real_handoff_which_currently_fa
     phase.step(ButtonState::new());
     assert!(
         !phase.is_sight_trainer_battle_active(),
-        "Rhett's real moveset currently fails construction (module docs item 7) -- \
+        "Rhett's real moveset currently fails construction (the trigger's own \
+         `Refusals cost nothing, forever`) -- \
          update this test once move coverage grows enough for it to succeed"
     );
     assert!(
@@ -205,8 +212,9 @@ const FRAMES_STANDING_STILL: usize = 60;
 /// second off the one stream every wild encounter and battle turn shares.
 ///
 /// All three refusal shapes are covered: an unimplemented moveset (Rhett,
-/// module docs item 7), a held-item party (Miguel, item 6), and a double
-/// battle refused before construction is even attempted (Amy, item 5).
+/// the trigger's own "Refusals cost nothing, forever"), a held-item party
+/// (Miguel, same), and a double battle refused before construction is even
+/// attempted (Amy, `trainer_data_wants_double_battle`).
 #[test]
 fn standing_in_a_cone_for_many_frames_never_touches_the_rng_stream() {
     let (rx, ry) = RHETT_TILE;
@@ -395,7 +403,7 @@ fn one_turn_does_not_immediately_end_a_fresh_battle() {
 
 // -- Win: the defeated flag, and unrepeatability ----------------------------
 
-/// Item 4 of the issue's own scope: winning sets
+/// The defeated flag (issue #264): winning sets
 /// `FLAG_TRAINER_FLAGS_START + TRAINER_RHETT`, and the fight cannot restart
 /// -- unlike the rival, the trainer stays standing (no hide flag), but a
 /// fresh approach into the same cone starts nothing.
@@ -426,7 +434,7 @@ fn winning_sets_the_defeated_flag_and_the_fight_cannot_restart() {
             .event_data
             .flag_get(TRAINER_FLAGS_START + TRAINER_RHETT),
         Ok(true),
-        "SetBattledTrainersFlags's real effect (module docs item 4)"
+        "SetBattledTrainersFlags's real effect (`TRAINER_FLAGS_START`'s own docs)"
     );
     // `Cmd_getmoneyreward` (`pokeemerald/src/battle_script_commands.c:5641`)
     // credits the beaten trainer's own reward to the saved wallet -- here the
@@ -441,7 +449,8 @@ fn winning_sets_the_defeated_flag_and_the_fight_cannot_restart() {
     );
 
     // Standing in the same cone again must not restart the fight -- the
-    // trainer is still standing (no hide flag, module docs item 4), but
+    // trainer is still standing (no hide flag, `TRAINER_FLAGS_START`'s
+    // own docs), but
     // `already_defeated` refuses before the geometry even matters (and, as
     // of this issue, before Rhett's own real construction gap would matter
     // either).
@@ -553,7 +562,7 @@ fn losing_heals_halves_money_and_leaves_the_defeated_flag_clear() {
 
 // -- Honest cuts: Miguel's held item, Amy & Liv's double battle -------------
 
-/// Item 6 of the issue's own scope: Miguel's cone reaches, but his real
+/// The held-item cut (issue #264): Miguel's cone reaches, but his real
 /// held-item party refuses to construct -- no battle starts, the lead is
 /// untouched, and the refusal draws nothing (the held-item error is raised
 /// before any RNG draw, `crate::flow::npc_trainer_battle`'s own docs).
@@ -581,7 +590,7 @@ fn miguels_held_item_party_refuses_to_construct() {
     );
 }
 
-/// Item 5 of the issue's own scope: Amy's cone reaches, but her real party
+/// The doubles cut (issue #264): Amy's cone reaches, but her real party
 /// is a double battle this port cannot field (no doubles support, and at
 /// most one tracked party mon) -- no battle starts.
 #[test]
@@ -631,7 +640,7 @@ fn the_trigger_never_fires_off_route_103() {
     assert!(!phase.is_sight_trainer_battle_active());
 }
 
-// -- Real-pack terrain (issue #264's own item 1: real collision/elevation) -
+// -- Real-pack terrain: real collision and elevation (issue #264) ----------
 
 /// The geometry tests above run over a synthetic, fully open room; this
 /// confirms the same cone fires against Route 103's own *real* extracted
@@ -702,7 +711,7 @@ fn real_pack_rhetts_cone_reaches_the_player_over_real_terrain_and_draws_nothing(
         phase.step(ButtonState::new());
         assert!(
             !phase.is_sight_trainer_battle_active(),
-            "frame {frame}: the real handoff still fails to construct (module docs item 7)"
+            "frame {frame}: the real handoff still fails to construct (the trigger's own docs)"
         );
         assert_eq!(
             phase.rng.state(),
@@ -715,4 +724,278 @@ fn real_pack_rhetts_cone_reaches_the_player_over_real_terrain_and_draws_nothing(
         phase.party_lead.is_some(),
         "a refused handoff must not consume the lead -- no soft lock"
     );
+}
+
+// -- The approach sequence (S-5, issue #300) ---------------------------------
+//
+// Same honest cut as `seed_battle` above, one stage earlier: no real Route
+// 103 sight trainer's party constructs today, so
+// `begin_sight_trainer_approach_if_seen` can never *reach* the approach with
+// a real party -- but the sequence it would run is real, and so is the
+// object event it runs on. `seed_approach` therefore builds the approach the
+// trigger would build, from Rhett's own real extracted object event, around
+// the same proven-constructible stand-in battle.
+
+/// How many frames the exclamation-mark icon holds before the walk-up starts
+/// (`sSpriteAnim_Icons1`'s `ANIMCMD_FRAME(0, 60)`, `trainer_see.c:150-154`)
+/// -- transcribed independently of `sight_trainer_approach`'s own constant,
+/// this crate's usual "each test file cites the upstream fact" convention.
+const EXCLAMATION_ICON_FRAMES: usize = 60;
+
+/// Rhett's own real object event out of the extracted `MAP_ROUTE103` data.
+fn rhetts_object_event() -> &'static assets::ObjectEvent {
+    assets::MapEventsTable::new()
+        .resolve(ROUTE_103)
+        .expect("MAP_ROUTE103 is bundled map data")
+        .object_events
+        .iter()
+        .find(|event| event.script == "Route103_EventScript_Rhett")
+        .expect("Route 103 declares Rhett's own object event")
+}
+
+/// Seed `phase` with the approach `begin_sight_trainer_approach_if_seen`
+/// would start for Rhett against a player `walk_tiles + 1` tiles away
+/// (`InitTrainerApproachTask`'s own `approachDistance - 1`), carrying a real
+/// stand-in battle (section docs).
+fn seed_approach(phase: &mut OverworldPhase, walk_tiles: u8) {
+    phase.rng = engine::rng::Rng::new(7);
+    let battle = crate::flow::npc_trainer_battle::start_npc_trainer_battle(
+        overwhelming_lead(),
+        assets::trainers::TrainerId(STAND_IN_TRAINER),
+        &mut phase.rng,
+    )
+    .expect("the stand-in Route 103 rival must always construct");
+    phase.party_lead = Some(overwhelming_lead());
+    phase.sight_approach = Some(SightApproach::new(
+        ObjectEventState::from_template(rhetts_object_event()),
+        walk_tiles,
+        "Whoa!\nHow'd you get into a space this small?{P}",
+        battle,
+        assets::trainers::TrainerId(TRAINER_RHETT),
+    ));
+}
+
+/// The approach's tile-by-tile timing, through the real
+/// [`OverworldPhase::step`], with a direction held down the whole way: the
+/// icon holds for sixty frames, the walked tile is committed at its own
+/// *start* (`InitNpcForMovement`) and takes sixteen frames, and the player
+/// cannot move for any of it -- upstream's `lockall`/`FreezeObjectEvents`,
+/// expressed as frame ownership.
+#[test]
+fn the_approach_owns_every_frame_and_walks_one_tile_per_sixteen() {
+    let (rx, ry) = RHETT_TILE;
+    // Two tiles south of Rhett: `approachDistance` 2, so one walked tile.
+    let start = (rx, ry + 2);
+    let mut phase = route_103_phase(PlayerState::new(start, 3, Direction::South));
+    seed_approach(&mut phase, 1);
+
+    for frame in 1..EXCLAMATION_ICON_FRAMES {
+        phase.step(held(Buttons::DOWN));
+        assert_eq!(
+            approaching_trainer(&phase).position(),
+            RHETT_TILE,
+            "frame {frame}: the trainer stands still under its own icon"
+        );
+        assert_eq!(
+            phase.player.position(),
+            start,
+            "frame {frame}: a held direction must not move the player mid-cutscene"
+        );
+        assert!(
+            !phase.player.in_transit(),
+            "frame {frame}: no step even started"
+        );
+    }
+
+    // The icon's last frame is the first walked tile's own start.
+    phase.step(held(Buttons::DOWN));
+    assert_eq!(approaching_trainer(&phase).position(), (rx, ry + 1));
+    assert_eq!(
+        approaching_trainer(&phase).previous_position(),
+        RHETT_TILE,
+        "the vacated tile is retained for the length of the animation"
+    );
+
+    for frame in 1..usize::from(WALK_FRAMES_PER_TILE) {
+        phase.step(held(Buttons::DOWN));
+        assert_eq!(
+            approaching_trainer(&phase).position(),
+            (rx, ry + 1),
+            "walk frame {frame}: one tile takes sixteen frames"
+        );
+        assert_eq!(phase.player.position(), start);
+    }
+
+    assert!(
+        !phase.is_sight_trainer_battle_active(),
+        "no battle before the approach finishes"
+    );
+    assert!(
+        phase.party_lead.is_some(),
+        "the lead stays in the party for the whole approach -- a save taken mid-cutscene \
+         must persist an honest pre-battle overworld"
+    );
+}
+
+/// `PlayerFaceApproachingTrainer` (`trainer_see.c:508-528`), end to end: the
+/// trainer stops on the tile *beside* the player, both turn to face each
+/// other, and the trainer's own template is rewritten so a later respawn
+/// keeps the stopping tile and facing.
+#[test]
+fn the_trainer_stops_beside_the_player_and_both_turn_to_face_each_other() {
+    let (rx, ry) = RHETT_TILE;
+    let start = (rx, ry + 2);
+    // Facing *away* from the approaching trainer, so the turn is visible.
+    let mut phase = route_103_phase(PlayerState::new(start, 3, Direction::South));
+    seed_approach(&mut phase, 1);
+
+    // Sixty icon frames, sixteen walk frames, one frame for the trainer's own
+    // `MOVEMENT_ACTION_FACE_PLAYER`, then the stop itself.
+    for _ in 0..=EXCLAMATION_ICON_FRAMES + usize::from(WALK_FRAMES_PER_TILE) {
+        phase.step(ButtonState::new());
+    }
+    assert_eq!(
+        phase.player.facing(),
+        Direction::North,
+        "the player turns to the opposite of the trainer's facing"
+    );
+    assert_eq!(
+        phase.player.position(),
+        start,
+        "and turning is not stepping"
+    );
+
+    let trainer = approaching_trainer(&phase);
+    assert_eq!(
+        trainer.position(),
+        (rx, ry + 1),
+        "the trainer stops on the tile beside the player, never on it"
+    );
+    assert_eq!(trainer.facing(), Direction::South);
+    assert_eq!(
+        trainer.movement_type(),
+        assets::MovementType::FaceDown,
+        "SetTrainerMovementType pins the stopped facing instead of resuming the patrol"
+    );
+    assert_eq!(
+        trainer.template_position(),
+        (rx, ry + 1),
+        "OverrideTemplateCoordsForObjectEvent: a respawn uses the stopping tile"
+    );
+    assert_eq!(
+        trainer.template_movement_type(),
+        assets::MovementType::FaceDown,
+        "TryOverrideTemplateCoordsForObjectEvent: ...and the stopping facing"
+    );
+}
+
+/// `EventScript_ShowTrainerIntroMsg` (`trainer_battle.inc:101-110`): the
+/// battle waits for the intro speech, the speech waits for the player, and
+/// only when the box closes does `dotrainerbattle` run -- taking the party
+/// lead and keying the fight to the real sight trainer.
+///
+/// Driven against a synthetic message box (`skip_to_open_intro_message`'s own
+/// docs) so the handshake is pinned without an extracted pack.
+#[test]
+fn the_intro_speech_holds_the_battle_until_the_player_dismisses_it() {
+    use engine::text::Token;
+
+    let (rx, ry) = RHETT_TILE;
+    let mut phase = route_103_phase(PlayerState::new((rx, ry + 1), 3, Direction::North));
+    seed_approach(&mut phase, 0);
+    phase
+        .sight_approach
+        .as_mut()
+        .expect("just seeded")
+        .skip_to_open_intro_message();
+    phase.dialog = Some(crate::overworld::dialog::synthetic_dialog(vec![
+        Token::Char('W'),
+        Token::Char('h'),
+        Token::Char('o'),
+        Token::PromptClear,
+        Token::End,
+    ]));
+
+    // No button: the box prints and waits, and nothing hands off.
+    for frame in 0..FRAMES_STANDING_STILL {
+        phase.step(ButtonState::new());
+        assert!(
+            phase.dialog.is_some(),
+            "frame {frame}: an undismissed intro box stays open"
+        );
+        assert!(
+            !phase.is_sight_trainer_battle_active(),
+            "frame {frame}: `dotrainerbattle` must not run until the speech is dismissed"
+        );
+        assert!(
+            phase.party_lead.is_some(),
+            "frame {frame}: and the lead is still the player's"
+        );
+    }
+
+    // `waitbuttonpress`: A closes the box, and the fight starts with it.
+    let mut frames = 0;
+    while !phase.is_sight_trainer_battle_active() {
+        phase.step(pressed(Buttons::A));
+        frames += 1;
+        assert!(frames < 60, "the intro box must close on a button press");
+    }
+    assert!(phase.dialog.is_none(), "the box closed with the handoff");
+    assert!(
+        phase.sight_approach.is_none(),
+        "the approach is over once its battle has started"
+    );
+    assert!(
+        phase.party_lead.is_none(),
+        "`dotrainerbattle` is where the lead is finally taken into the fight"
+    );
+    assert_eq!(
+        phase.sight_trainer_id,
+        Some(assets::trainers::TrainerId(TRAINER_RHETT)),
+        "the fight is keyed to the real sight trainer, for the defeated flag"
+    );
+    assert_eq!(
+        phase.wild.immunity_steps(),
+        0,
+        "the post-battle wild-encounter immunity window is restarted with the fight, for \
+         stream-order parity with `begin_route103_rival_battle`"
+    );
+}
+
+/// An approach in progress preempts the whole rest of the frame, including
+/// the sight check that started it: a second cone entry must not stack a
+/// second approach on top of the first, and the trainer's own walk must not
+/// restart.
+#[test]
+fn a_running_approach_preempts_the_cone_check_that_started_it() {
+    let (rx, ry) = RHETT_TILE;
+    let mut phase = route_103_phase(PlayerState::new((rx, ry + 1), 3, Direction::North));
+    seed_approach(&mut phase, 0);
+
+    for frame in 0..EXCLAMATION_ICON_FRAMES {
+        phase.step(ButtonState::new());
+        assert!(
+            phase.sight_approach.is_some(),
+            "frame {frame}: still exactly one approach"
+        );
+        assert_eq!(
+            approaching_trainer(&phase).position(),
+            RHETT_TILE,
+            "frame {frame}: a re-fired cone check would have restarted the walk"
+        );
+    }
+    assert!(
+        phase.party_lead.is_some(),
+        "the trigger never got a second chance to spend the lead"
+    );
+}
+
+/// The approaching trainer's live object-event state, for the assertions
+/// above.
+fn approaching_trainer(phase: &OverworldPhase) -> &ObjectEventState {
+    phase
+        .sight_approach
+        .as_ref()
+        .expect("the approach must still be running")
+        .trainer()
 }
