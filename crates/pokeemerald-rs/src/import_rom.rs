@@ -38,6 +38,8 @@ use std::fmt;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::SystemTime;
 
 use rom_import::{ImportError, ImportReport};
 
@@ -248,9 +250,14 @@ fn import_to_with(
         Ok(report) => report,
         Err(source) => {
             // A failed import may have written part of a pack. Nothing
-            // downstream should ever see it, and the file has no other
-            // owner, so drop it here.
-            let _ = fs::remove_file(&temp_path);
+            // downstream should ever see it, and the file is this run's
+            // own, so drop it here. The exception is an import that failed
+            // *because* the name was already taken: what sits there is
+            // then somebody else's, and this run does not delete files it
+            // did not create.
+            if !name_was_taken(&source) {
+                let _ = fs::remove_file(&temp_path);
+            }
             undo_created_dir(&dir, existed);
             return Err(ImportRomError::Import(source));
         }
@@ -284,6 +291,19 @@ fn pack_directory(pack_path: &Path) -> PathBuf {
     }
 }
 
+/// Whether an import failed because its destination name was taken.
+///
+/// The importer creates the temporary file exclusively, so this is the one
+/// failure whose path names a file this run did not create: a leftover
+/// from a killed run, or a link planted by another account in a writable
+/// pack directory. Neither is this run's to remove.
+fn name_was_taken(error: &ImportError) -> bool {
+    matches!(
+        error,
+        ImportError::WriteFailed { source, .. } if source.kind() == io::ErrorKind::AlreadyExists
+    )
+}
+
 /// Remove the destination directory this run created, if it created one.
 ///
 /// A failed import should leave the filesystem as it found it: an empty
@@ -299,15 +319,36 @@ fn undo_created_dir(dir: &Path, existed: bool) {
 
 /// The temporary file the pack is built in, beside its destination.
 ///
-/// The process id keeps two concurrent imports from writing the same
-/// temporary file; the leading dot keeps it out of a casual directory
-/// listing while it exists.
+/// The importer creates this file exclusively (`rom_import`'s
+/// `write_new`), so the name has one job: be one nothing else already
+/// holds. A process id alone is not that. It repeats across PID
+/// namespaces sharing one mounted directory, it is recycled after a kill
+/// that left a stale temporary file behind, and `/proc` hands it to
+/// anyone on the machine — so in a pack directory another account can
+/// write to, `.pokeemerald.pack.<pid>.tmp` is a name an attacker can
+/// pre-create as a link to a file of the player's. The clock's
+/// nanoseconds and a per-process counter go in with it: no pre-created
+/// name matches one, and covering a second of them is a billion files.
+///
+/// A collision that happens anyway is a refused import naming the path,
+/// never a write through someone else's link, and the next run picks a
+/// different name. The leading dot keeps the file out of a casual
+/// directory listing while it exists.
 fn temp_path(pack_path: &Path, dir: &Path) -> PathBuf {
+    static SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
     let name = pack_path.file_name().map_or_else(
         || "pokeemerald.pack".to_owned(),
         |n| n.to_string_lossy().into_owned(),
     );
-    dir.join(format!(".{name}.{}.tmp", std::process::id()))
+    let nanos = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map_or(0, |since| since.as_nanos());
+    let sequence = SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    dir.join(format!(
+        ".{name}.{}.{nanos:x}.{sequence:x}.tmp",
+        std::process::id()
+    ))
 }
 
 #[cfg(test)]

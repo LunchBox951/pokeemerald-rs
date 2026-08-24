@@ -172,6 +172,11 @@ impl ImportReport {
 /// player's cartridge image. That is [`ImportError::SameFile`], raised
 /// before anything is written.
 ///
+/// Neither is a path that already exists. `out_path` is a file this call
+/// creates, exclusively, so a link planted at that name is refused rather
+/// than followed and truncated (`write_new`); the caller publishes the
+/// finished file over the real destination itself.
+///
 /// # Errors
 ///
 /// [`ImportError::ReadFailed`], [`ImportError::WrongSize`], or
@@ -179,7 +184,8 @@ impl ImportReport {
 /// [`ImportError::SameFile`] if `out_path` names the ROM itself;
 /// [`ImportError::UnsupportedRevision`] if it is not the supported build;
 /// anything a domain reader raises (see [`import_to_bytes`]);
-/// [`ImportError::WriteFailed`] if the finished pack cannot be written.
+/// [`ImportError::WriteFailed`] if the finished pack cannot be written,
+/// which includes a destination that already exists.
 pub fn import(rom_path: &Path, out_path: &Path) -> Result<ImportReport, ImportError> {
     let rom = Rom::load(rom_path)?;
     // Ahead of the revision check: which file gets clobbered does not
@@ -192,7 +198,7 @@ pub fn import(rom_path: &Path, out_path: &Path) -> Result<ImportReport, ImportEr
     }
     let profile = select_profile(&rom)?;
     let (entry_count, bytes) = build_pack(&rom, &profile.roots)?;
-    std::fs::write(out_path, &bytes).map_err(|source| ImportError::WriteFailed {
+    write_new(out_path, &bytes).map_err(|source| ImportError::WriteFailed {
         path: out_path.to_path_buf(),
         source,
     })?;
@@ -300,6 +306,34 @@ fn resolve_destination(out_path: &Path) -> Option<PathBuf> {
     Some(std::fs::canonicalize(parent).ok()?.join(name))
 }
 
+/// Write `bytes` to a file this call creates, refusing a path that is
+/// already taken.
+///
+/// `fs::write` opens create-and-truncate, which *follows* a symlink
+/// sitting at `out_path` and truncates whatever it points at. The
+/// destination is always a fresh name the caller picked for a file that
+/// does not exist yet — `pokeemerald-rs`'s `import_rom` builds the pack in
+/// a temporary file beside the real one and renames it into place — so
+/// anything already there is by definition not the file this importer
+/// meant to write. In a directory another account can write to, a
+/// player's own `$POKEEMERALD_PACK` choice, that is a planted link aimed
+/// at a file of theirs, and the import would spend its write truncating
+/// it.
+///
+/// Exclusive creation is the only open that cannot be redirected:
+/// `O_CREAT | O_EXCL` refuses a symlink even a dangling one, and Windows'
+/// `CREATE_NEW` refuses an existing name the same way. The attack becomes
+/// a refused import naming the path, not a truncated file.
+fn write_new(out_path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write as _;
+
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(out_path)?;
+    file.write_all(bytes)
+}
+
 /// Run every domain reader over `rom` and serialize the pack.
 ///
 /// Returns the entry count alongside the bytes, so a report does not have
@@ -319,7 +353,8 @@ fn build_pack(rom: &Rom, roots: &Roots) -> Result<(usize, Vec<u8>), ImportError>
 #[cfg(test)]
 mod tests {
     use super::{
-        build_pack, import, import_to_bytes, overwrites_rom, ImportError, ImportReport, Roots,
+        build_pack, import, import_to_bytes, overwrites_rom, write_new, ImportError, ImportReport,
+        Roots,
     };
     use crate::fixture::{shared_emerald_rom, RomFixture};
     use std::path::{Path, PathBuf};
@@ -467,6 +502,56 @@ mod tests {
             import(missing, missing).unwrap_err(),
             ImportError::ReadFailed { .. }
         ));
+    }
+
+    #[test]
+    fn a_fresh_destination_is_written_whole() {
+        let dir = TempDir::new("write-new");
+        let out = dir.join("pokeemerald.pack");
+        write_new(&out, b"pack bytes").expect("a name nothing holds");
+        assert_eq!(
+            std::fs::read(&out).expect("the pack reads back"),
+            b"pack bytes"
+        );
+    }
+
+    #[test]
+    fn a_destination_that_already_exists_is_refused_intact() {
+        // The importer only ever writes a name its caller reserved for a
+        // file that does not exist. Anything already there belongs to
+        // someone else, so it is refused rather than truncated.
+        let dir = TempDir::new("write-taken");
+        let out = dir.join("pokeemerald.pack");
+        std::fs::write(&out, b"not the importer's").expect("the existing file writes");
+
+        let err = write_new(&out, b"pack bytes").unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::AlreadyExists, "{err}");
+        assert_eq!(
+            std::fs::read(&out).expect("the existing file survives"),
+            b"not the importer's"
+        );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn a_symlinked_destination_is_refused_and_its_target_survives() {
+        // The attack this closes: in a pack directory another account can
+        // write to, a link planted at the temporary file's name would send
+        // `fs::write`'s truncation at a file of the player's. Exclusive
+        // creation refuses the link instead of following it.
+        let dir = TempDir::new("write-link");
+        let victim = dir.join("player-save.sav");
+        std::fs::write(&victim, b"the player's save").expect("the victim writes");
+        let planted = dir.join(".pokeemerald.pack.1234.tmp");
+        std::os::unix::fs::symlink(&victim, &planted).expect("the planted link");
+
+        let err = write_new(&planted, b"pack bytes").unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::AlreadyExists, "{err}");
+        assert_eq!(
+            std::fs::read(&victim).expect("the victim survives"),
+            b"the player's save",
+            "the link's target must be byte-identical after a refused write"
+        );
     }
 
     #[test]

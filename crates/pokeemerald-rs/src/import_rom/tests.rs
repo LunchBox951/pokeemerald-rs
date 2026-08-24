@@ -232,6 +232,62 @@ fn the_temp_file_sits_beside_the_pack() {
 }
 
 #[test]
+fn no_two_temp_names_are_the_same() {
+    // The importer creates the temporary file exclusively, so a repeated
+    // name is a refused import. It also has to be a name nobody watching
+    // the process can pre-create: the process id is on its own public and
+    // reusable, which is why it is not the whole name.
+    let pack_path = Path::new("/data/pokeemerald-rs/pokeemerald.pack");
+    let dir = pack_directory(pack_path);
+    let first = temp_path(pack_path, &dir);
+    let second = temp_path(pack_path, &dir);
+
+    assert_ne!(first, second);
+    let predictable = format!(".pokeemerald.pack.{}.tmp", std::process::id());
+    for candidate in [&first, &second] {
+        assert_ne!(
+            candidate.file_name().unwrap().to_string_lossy(),
+            predictable.as_str(),
+            "the pack name and the process id must not spell the whole name"
+        );
+    }
+}
+
+#[test]
+fn an_import_refused_for_a_taken_name_leaves_that_file_alone() {
+    // A name already taken is a file this run did not create: a leftover,
+    // or a link somebody planted in a writable pack directory. Cleanup
+    // removes this run's own partial writes, never that.
+    let dir = TempDir::new("taken-name");
+    let pack_path = dir.join("pokeemerald.pack");
+    let squatter = std::cell::RefCell::new(None);
+
+    let err = import_to_with(Path::new("/roms/emerald.gba"), &pack_path, |_rom, out| {
+        // Stand in for a name that was already taken: the file at `out`
+        // is somebody else's, and the importer refused it rather than
+        // truncating it.
+        fs::write(out, b"not the importer's").expect("the squatter writes");
+        *squatter.borrow_mut() = Some(out.to_path_buf());
+        Err(ImportError::WriteFailed {
+            path: out.to_path_buf(),
+            source: std::io::Error::from(std::io::ErrorKind::AlreadyExists),
+        })
+    })
+    .unwrap_err();
+
+    assert!(
+        matches!(err, ImportRomError::Import(ImportError::WriteFailed { .. })),
+        "expected a write failure, got: {err}"
+    );
+    assert!(!pack_path.exists());
+    let squatter = squatter.into_inner().expect("the importer ran");
+    assert_eq!(
+        fs::read(&squatter).expect("the squatter survives"),
+        b"not the importer's"
+    );
+}
+
+#[test]
 fn a_bare_pack_name_lands_in_the_current_directory() {
     let pack_path = Path::new("pokeemerald.pack");
     assert_eq!(pack_directory(pack_path), Path::new("."));
