@@ -26235,6 +26235,20 @@
       "status": "pending"
     },
     "src/field_message_box.c": {
+      "artifacts": {
+        "ShowFieldMessage": {
+          "reason": "Only the held-A/B print speed-up its ExpandStringAndStartDrawFieldMessage(str, TRUE) call enables (field_message_box.c:62-69,118-123 -> AddTextPrinterForMessage(TRUE) -> gTextFlags.canABSpeedUpPrint = TRUE, menu.c:191-...) is modelled: NpcDialog::new unconditionally builds its Printer with Printer::with_ab_speed_up_print, since every caller of that constructor is one of upstream's AddTextPrinterForMessage(TRUE) sites (dialog.rs module docs' 'Held-A/B print speed-up' section, issue #393). NOT modelled in this artifact: sFieldMessageBoxMode's HIDDEN/NORMAL/AUTO_SCROLL state machine (NpcDialog carries no such reentrancy guard), Task_DrawFieldMessage/CreateTask_DrawFieldMessage's two-frame LoadMessageBoxAndBorderGfx-then-DrawDialogueFrame task sequencing, and StringExpandPlaceholders' placeholder substitution (str -> gStringVar4).",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/dialog.rs",
+          "spec": "I-3",
+          "status": "stubbed"
+        },
+        "ShowFieldMessageFromBuffer": {
+          "reason": "Its StartDrawFieldMessage helper calls AddTextPrinterForMessage(TRUE) unconditionally (field_message_box.c:109-116,125-129) -- always a held-A/B speed-up site, same as ShowFieldMessage's TRUE call -- and modelled the same way: NpcDialog::new's unconditional Printer::with_ab_speed_up_print (dialog.rs module docs' 'Held-A/B print speed-up' section, issue #393). NOT modelled in this artifact: sFieldMessageBoxMode's state machine and the CreateTask_DrawFieldMessage task chain (see src/field_message_box.c#ShowFieldMessage); unlike ShowFieldMessage this function never expands placeholders itself -- it prints whatever the caller already staged in gStringVar4, which this crate has no equivalent global-buffer step for.",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/dialog.rs",
+          "spec": "I-3",
+          "status": "stubbed"
+        }
+      },
       "category": "code.source",
       "kind": "file",
       "status": "pending"
