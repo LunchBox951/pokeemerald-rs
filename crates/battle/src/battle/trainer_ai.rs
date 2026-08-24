@@ -458,6 +458,12 @@ fn estimated_damage(
     };
     let category = MoveCategory::for_type(move_type);
     let (attack_stat, attack_stage) = attacker.attacking_stat(category);
+    // Huge Power / Pure Power double the raw stat before the stat-stage
+    // multiply below, exactly as `crate::hit::damage_before_roll` does for
+    // real damage -- see `crate::ability::huge_power_attack`'s docs. `AI_CalcDmg`
+    // calls the same `CalculateBaseDamage`, so the AI's estimate must apply
+    // it too or it will under-value a Huge Power/Pure Power attacker's move.
+    let attack_stat = crate::ability::huge_power_attack(attacker.ability(), category, attack_stat);
     let (defense_stat, defense_stage) = defender.defending_stat(category);
     let input = DamageInput {
         attacker_level: attacker.level(),
@@ -1070,5 +1076,50 @@ mod tests {
             "the spent slot scores 0, so the surviving slot is the only candidate"
         );
         assert_eq!(rng.index, 6);
+    }
+
+    /// `AI_CalcDmg` calls the *same* `CalculateBaseDamage` the real damage
+    /// step does (`battle_script_commands.c:1309`), so a Huge Power
+    /// attacker's estimate must agree with what
+    /// [`crate::hit::damage_before_roll`] actually deals at the same "no
+    /// crit, best (100%) roll" conditions [`estimated_damage`] itself
+    /// assumes (issue #391: before this fix the AI under-valued a Huge
+    /// Power attacker's physical move by half).
+    #[test]
+    fn huge_power_estimated_damage_agrees_with_the_real_damage_step() {
+        let dex = Dex::new();
+        let attacker =
+            BattlePokemon::new(&dex, SpeciesId(183), 5, Ivs::default(), 0, vec![MoveId(33)])
+                .unwrap()
+                .with_ability_slot(1); // Marill, Huge Power
+        assert_eq!(attacker.ability(), crate::ability::HUGE_POWER);
+        let defender = mon(7, 5, vec![MoveId(33)]); // Squirtle
+
+        // The real step: no crit (suppressed, matching AI_CalcDmg's reset
+        // gCritMultiplier = 1), then the best-case 85..=100% roll.
+        let mut no_draws = SequenceRng::new([]);
+        let raw = crate::hit::damage_before_roll(
+            &dex,
+            MoveId(33),
+            &attacker,
+            &defender,
+            true,
+            &mut no_draws,
+        )
+        .unwrap();
+        let mut best_roll = SequenceRng::new([0]);
+        let real = crate::damage::apply_damage_roll(raw.damage, &mut best_roll);
+
+        // The AI's estimate: `simulated_rng = 100` reproduces the same
+        // "no randomness" reading `Cmd_if_can_faint`/
+        // `Cmd_get_how_powerful_move_is` feed it on a `simulatedRNG` value
+        // of exactly 100.
+        let estimate = estimated_damage(&dex, MoveId(33), &attacker, &defender, 100).unwrap();
+
+        assert_eq!(
+            estimate, real,
+            "the AI's estimate and the real damage step must apply Huge \
+             Power's doubling identically"
+        );
     }
 }

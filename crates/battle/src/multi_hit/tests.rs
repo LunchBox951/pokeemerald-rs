@@ -2,8 +2,10 @@ use super::{
     ensure_resolvable, is_multi_hit_effect, resolve_multi_hit, roll_hit_count,
     spend_multi_hit_effect_chance_draw, EFFECT_MULTI_HIT, MAX_HITS, MIN_HITS,
 };
+use crate::ability::suppresses_critical_hits;
 use crate::dex::Dex;
 use crate::error::BattleError;
+use crate::hit::{damage_core, HitOutcome};
 use crate::pokemon::{BattlePokemon, Ivs};
 use crate::script_rng::SequenceRng;
 use assets::{MoveId, SpeciesId};
@@ -173,4 +175,63 @@ fn a_rejected_move_draws_nothing() {
         Err(BattleError::UnsupportedMoveEffect(TACKLE))
     );
     assert_eq!(rng.draws(), 0);
+}
+
+/// The module docs say the per-hit loop lives in the caller, running
+/// [`crate::hit::damage_core`] once per landed hit. Battle Armor/Shell
+/// Armor's crit suppression (issue #391) lives inside that function, so a
+/// Battle Armor defender must drop **every processed hit** by one draw, not
+/// just the move as a whole -- this drives the loop the way the turn engine
+/// would and pins both shapes side by side.
+#[test]
+fn a_battle_armor_defender_drops_every_processed_hit_by_one_draw() {
+    let dex = Dex::new();
+    let attacker = mon(&dex, 1, 5, vec![DOUBLE_SLAP]);
+
+    // Control: an ordinary defender costs 2 draws per hit (crit + damage
+    // roll) -- `crate::hit`'s plain shape.
+    let plain = mon(&dex, 7, 5, vec![TACKLE]); // Squirtle
+                                               // accuracy hit, mask 0 -> 2 hits, then 2x(crit, damage roll).
+    let mut rng = SequenceRng::new([0, 0, 1, 0, 1, 0]);
+    let hits = resolve_multi_hit(&dex, DOUBLE_SLAP, &attacker, &plain, &mut rng)
+        .unwrap()
+        .expect("accuracy roll 0 must land");
+    assert_eq!(hits, 2);
+    for _ in 0..hits {
+        damage_core(&dex, DOUBLE_SLAP, &attacker, &plain, false, &mut rng).unwrap();
+    }
+    assert_eq!(
+        rng.draws(),
+        2 + 2 * usize::from(hits),
+        "plain: 2 draws per hit"
+    );
+
+    // Battle Armor: the identical shape costs 1 draw per hit instead of 2,
+    // and every hit reports non-critical. The sequence has exactly
+    // `2 + hits` values, so a stray crit draw would run it out and panic.
+    let armored = mon(&dex, 390, 5, vec![TACKLE]); // Anorith, Battle Armor
+    assert!(suppresses_critical_hits(armored.ability()));
+    let mut rng = SequenceRng::new([0, 0, 0, 0]); // accuracy, hit count, 2x damage roll
+    let hits = resolve_multi_hit(&dex, DOUBLE_SLAP, &attacker, &armored, &mut rng)
+        .unwrap()
+        .expect("accuracy roll 0 must land");
+    assert_eq!(hits, 2);
+    for _ in 0..hits {
+        let outcome = damage_core(&dex, DOUBLE_SLAP, &attacker, &armored, false, &mut rng).unwrap();
+        assert!(
+            matches!(
+                outcome,
+                HitOutcome::Hit {
+                    is_critical: false,
+                    ..
+                }
+            ),
+            "{outcome:?}"
+        );
+    }
+    assert_eq!(
+        rng.draws(),
+        2 + usize::from(hits),
+        "armored: one draw per hit, not two"
+    );
 }

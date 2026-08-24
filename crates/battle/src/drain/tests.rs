@@ -2,7 +2,7 @@ use super::{
     drain_amount, ensure_resolvable, is_drain_effect, resolve_drain, resolve_drain_move,
     EFFECT_ABSORB,
 };
-use crate::ability::{LIQUID_OOZE, OVERGROW};
+use crate::ability::{suppresses_critical_hits, LIQUID_OOZE, OVERGROW};
 use crate::dex::Dex;
 use crate::error::BattleError;
 use crate::hit::HitOutcome;
@@ -165,6 +165,43 @@ fn suppressing_the_crit_drops_a_landed_drain_to_two_draws() {
         }
     );
     assert_eq!(rng.draws(), 2);
+}
+
+/// A Battle Armor defender drops a landed drain to **2** draws (accuracy +
+/// damage roll, no crit) instead of the plain 3, exactly as `suppress_crit`
+/// does above -- but needing no caller flag (issue #391).
+///
+/// Bulbasaur (Sp. Atk 13, the reference scenario's own figure) using Absorb
+/// against Anorith (species 390, Battle Armor; Sp. Def base 50):
+/// - Anorith Sp. Def = `(2*50+31)*5/100+5` = `655/100=6`, `+5` = **11**.
+/// - `13*20=260`; `*4=1040`; `/11=94`; `/50=1`; `+2=3`.
+/// - STAB (Grass on a Grass/Poison attacker): `3*15/10=4`.
+/// - Type: Grass into Rock is `x2` (`4*20/10=8`), then into Bug is `x0.5`
+///   (`8*5/10=4`) -- the two type legs are applied one at a time, not
+///   combined first, so the intermediate 8 matters even though the net
+///   multiplier is `x1`.
+/// - Best roll (100%) leaves it at **4**.
+#[test]
+fn a_battle_armor_defender_drops_a_landed_drain_to_two_draws() {
+    let dex = Dex::new();
+    let attacker = mon(&dex, 1, 5, vec![ABSORB]);
+    let defender = mon(&dex, 390, 5, vec![TACKLE]); // Anorith, Battle Armor
+    assert!(suppresses_critical_hits(defender.ability()));
+
+    let mut rng = SequenceRng::new([0, 0]);
+    let outcome = resolve_drain_move(&dex, ABSORB, &attacker, &defender, false, &mut rng).unwrap();
+    assert_eq!(
+        outcome,
+        HitOutcome::Hit {
+            damage: 4,
+            is_critical: false,
+        }
+    );
+    assert_eq!(
+        rng.draws(),
+        2,
+        "Battle Armor must skip the crit draw on a drain move too"
+    );
 }
 
 /// Overgrow, the ability this pipeline exposes: at `hp <= maxHP / 3` a Grass
