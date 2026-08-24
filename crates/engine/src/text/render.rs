@@ -231,12 +231,15 @@ pub type PixelPos = (i32, i32);
 /// dependency — its own `Cargo.toml`), so the caller (a `pokeemerald-rs`
 /// scene) is the one that reads a real `ButtonState` and narrows it down to
 /// these four bits.
-// Four independent flags -- two buttons, each with its own pressed/held
-// edge, matching upstream's own separate `JOY_NEW`/`JOY_HELD` checks
-// (module docs) -- they don't share enough structure to collapse into a
-// state machine or enum, mirroring `assets::map_headers::MapHeader`'s
-// identical five-bool shape and its own allow.
-#[allow(clippy::struct_excessive_bools)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "Four independent flags -- two buttons, each with its own \
+              pressed/held edge, matching upstream's own separate \
+              `JOY_NEW`/`JOY_HELD` checks (module docs) -- they don't share \
+              enough structure to collapse into a state machine or enum, \
+              mirroring `assets::map_headers::MapHeader`'s identical \
+              five-bool shape and its own exception."
+)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct PrinterInput {
     /// A's just-pressed edge this frame (upstream `JOY_NEW(A_BUTTON)`).
