@@ -66,11 +66,9 @@
 //! `BATTLE_TYPE_WALLY_TUTORIAL` / `BATTLE_TYPE_FIRST_BATTLE` battle makes
 //! step 2 draw **nothing** as well. The defender's Battle Armor / Shell
 //! Armor is checked directly off `defender`
-//! ([`crate::ability::suppresses_critical_hits`], issue #391 — reachable via
-//! Battle Armor's Kabuto/Kabutops and Anorith/Armaldo, species 140/141 and
-//! 390/391, and Shell Armor's Shellder/Cloyster, Krabby/Kingler, Lapras,
-//! Omanyte/Omastar, Corphish/Crawdaunt and Clamperl, species 90/91, 98/99,
-//! 131, 138/139, 326/327 and 373), so it needs no caller flag; there is
+//! ([`crate::ability::suppresses_critical_hits`], issue #391 — see
+//! [`crate::ability`]'s module docs for the reachable carriers), so it
+//! needs no caller flag; there is
 //! still no `STATUS3_CANT_SCORE_A_CRIT` anywhere in this crate.
 //! `BATTLE_TYPE_WALLY_TUTORIAL` / `BATTLE_TYPE_FIRST_BATTLE` does, as of
 //! issue #187: [`crate::battle::Battle`]'s `first_battle` flag passes
