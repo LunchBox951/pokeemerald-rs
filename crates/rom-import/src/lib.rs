@@ -231,19 +231,58 @@ pub fn import_to_bytes(rom_path: &Path) -> Result<Vec<u8>, ImportError> {
 /// the rename is what would clobber the ROM, and the temporary file's own
 /// name never matches it.
 ///
-/// The comparison is on canonical paths, so a symlink, a `..`, or a
-/// relative spelling of the ROM is still the ROM. The destination usually
-/// does not exist yet and cannot be canonicalized directly, so it resolves
-/// as its canonical parent plus its own file name. Answers `false` for
-/// anything it cannot resolve — a ROM that does not exist has nothing to
-/// lose, and an unresolvable destination is a write that fails on its own
-/// and reports why.
+/// A destination that already exists is compared by *file identity*, so a
+/// hard link to the ROM under another name is still the ROM: the two names
+/// share one inode, and writing through either truncates it. Otherwise the
+/// comparison is on canonical paths, so a symlink, a `..`, or a relative
+/// spelling of the ROM is still the ROM. The destination usually does not
+/// exist yet and cannot be canonicalized directly, so it resolves as its
+/// canonical parent plus its own file name. Answers `false` for anything it
+/// cannot resolve — a ROM that does not exist has nothing to lose, and an
+/// unresolvable destination is a write that fails on its own and reports
+/// why.
 #[must_use]
 pub fn overwrites_rom(rom_path: &Path, out_path: &Path) -> bool {
+    if is_same_file(rom_path, out_path) {
+        return true;
+    }
     let Ok(rom) = std::fs::canonicalize(rom_path) else {
         return false;
     };
     resolve_destination(out_path).is_some_and(|out| out == rom)
+}
+
+/// Whether `a` and `b` are two names for one file on disk.
+///
+/// Hard links give one inode several directory entries, and no comparison
+/// of path *names* can see that: `canonicalize` resolves symlinks, but two
+/// hard links to the same file canonicalize to their own distinct names.
+/// A device and inode pair names the file itself.
+///
+/// Answers `false` when either path cannot be read — the caller falls back
+/// to the path comparison, which fails open for the same reason.
+#[cfg(unix)]
+fn is_same_file(a: &Path, b: &Path) -> bool {
+    use std::os::unix::fs::MetadataExt;
+
+    // `metadata` follows symlinks, which is what the guard wants: the
+    // question is which file the write lands on, not which name it took.
+    let (Ok(a), Ok(b)) = (std::fs::metadata(a), std::fs::metadata(b)) else {
+        return false;
+    };
+    a.dev() == b.dev() && a.ino() == b.ino()
+}
+
+/// Whether `a` and `b` are two names for one file on disk.
+///
+/// Always `false` off Unix: `std` exposes no stable file identity there,
+/// and the Windows answer needs `GetFileInformationByHandle` through a
+/// crate this workspace will not add without owner approval
+/// (`minimal-deps`). The canonical-path comparison in [`overwrites_rom`]
+/// still catches every alias that is not a hard link.
+#[cfg(not(unix))]
+fn is_same_file(_a: &Path, _b: &Path) -> bool {
+    false
 }
 
 /// The canonical path `out_path` names, whether or not it exists yet.
@@ -390,6 +429,33 @@ mod tests {
             &rom_path,
             &dir.join("nowhere").join("pokeemerald.pack")
         ));
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn a_hard_link_to_the_rom_is_still_the_rom() {
+        // A hard link is the one alias no comparison of path names can see:
+        // both entries canonicalize to themselves while sharing an inode, so
+        // `fs::write` to the link truncates the ROM the importer just read.
+        let dir = TempDir::new("hard-link");
+        let rom_path = write_fixture_rom(&dir, "emerald.gba");
+        let before = std::fs::read(&rom_path).expect("the fixture reads back");
+        let link = dir.join("pokeemerald.pack");
+        std::fs::hard_link(&rom_path, &link).expect("the hard link");
+        assert_ne!(
+            std::fs::canonicalize(&rom_path).expect("the ROM canonicalizes"),
+            std::fs::canonicalize(&link).expect("the link canonicalizes"),
+            "the test is pointless unless the two names really do differ"
+        );
+
+        assert!(overwrites_rom(&rom_path, &link));
+        let err = import(&rom_path, &link).unwrap_err();
+        assert!(matches!(err, ImportError::SameFile { .. }), "{err:?}");
+        assert_eq!(
+            std::fs::read(&rom_path).expect("the ROM survives"),
+            before,
+            "the ROM must be byte-identical after a refused import"
+        );
     }
 
     #[test]
