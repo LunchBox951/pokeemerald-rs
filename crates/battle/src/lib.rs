@@ -130,13 +130,20 @@
 //! Energy's `+2` crit stages) and [`hit::damage_core`] (Charge's Electric
 //! doubling), and ticked down at end of turn.
 //!
-//! Two abilities land here too, bundled with the move family that exposes
+//! Six abilities land here too, bundled with the move family that exposes
 //! them (#311's decomposition rule) rather than with a speculative ability
 //! layer: [`ability::pinch_boosts_power`] — Overgrow's `x1.5` power boost
 //! at or below a third of maximum HP, applied inside the damage formula —
 //! and [`ability::inverts_drain`] — Liquid Ooze turning a drain heal into
 //! damage on the attacker, in the drain script's own message and faint
-//! order. [`pokemon::BattlePokemon::ability`] derives the ability from the
+//! order. Issue #391 added the two damage-path pairs the same rule pulls
+//! in: [`ability::suppresses_critical_hits`] — Battle Armor and Shell
+//! Armor, which short-circuit `Cmd_critcalc` off the *defender* so the crit
+//! and its `Random()` draw are both skipped — and
+//! [`ability::huge_power_attack`] — Huge Power and Pure Power, doubling the
+//! *attacker*'s raw Attack for a physical move before the stat-stage
+//! multiply, in the real damage path and the trainer AI's estimate alike.
+//! [`pokemon::BattlePokemon::ability`] derives the ability from the
 //! personality exactly as `CreateBoxMon`/`GetAbilityBySpecies` do, so a
 //! seeded party's abilities are deterministic.
 //!
@@ -174,10 +181,11 @@
 //! them past `ensure_executable` and into
 //! `battle::trainer_ai::ensure_scoreable` (issue #325) — battle
 //! UI/animations, overworld transition, every ability but Overgrow, Liquid
-//! Ooze (both above) and the four stat-drop guards — Clear Body, White
-//! Smoke, Keen Eye, Hyper Cutter ([`stat_change`]'s module docs; Shield
-//! Dust is the one guard left unmodelled) — held items, non-volatile
-//! status conditions and confusion (issue #323), weather, multi/double
+//! Ooze, Battle Armor, Shell Armor, Huge Power, Pure Power (all six above)
+//! and the four stat-drop guards — Clear Body, White Smoke, Keen Eye,
+//! Hyper Cutter ([`stat_change`]'s module docs; Shield Dust is the one
+//! guard left unmodelled) — held items, non-volatile status conditions and
+//! confusion (issue #323), weather, multi/double
 //! battles, Mist/Substitute/Protect (see [`stat_change`]'s module docs for
 //! why those are a documented boundary rather than dead code), and the
 //! move effects the six pipelines still do not cover — Defense Curl (flag

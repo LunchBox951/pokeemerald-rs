@@ -39,8 +39,12 @@
 //! | landed, or type-immune | **3** | accuracy, crit, damage roll |
 //! | *ordinary* landed move, for contrast | 4 | …plus the discarded effect-chance roll |
 //!
-//! `suppress_crit` (`BATTLE_TYPE_FIRST_BATTLE`) drops the landed row to
-//! **2**, exactly as it drops every row in [`crate::hit`]'s table.
+//! Either crit suppressor drops the landed row to **2**, exactly as it
+//! drops every row in [`crate::hit`]'s table: the caller's `suppress_crit`
+//! (`BATTLE_TYPE_FIRST_BATTLE`), or a defender carrying Battle Armor /
+//! Shell Armor ([`crate::ability::suppresses_critical_hits`], issue #391),
+//! which [`crate::hit::damage_core`] folds into the same short-circuit
+//! ahead of the draw.
 //!
 //! Getting that count wrong desynchronises every later roll in the battle,
 //! which is the whole reason this is its own module rather than a flag on
