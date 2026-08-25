@@ -41,8 +41,12 @@ fn calc_max_hp_folds_ev_over_four_into_the_parenthesised_sum() {
     // Same Bulbasaur, 252 EV (the upstream single-stat cap): ev/4 = 63.
     // n = 2*45+31+63 = 184; 184*5/100 = 9 (920/100 truncated); +5+10 = 24.
     assert_eq!(calc_max_hp(45, 31, 252, 5), 24);
-    // ev/4's own truncation happens before the level scaling: 3 and 7 both
-    // floor-divide to 0, so they must not move the total at all.
+    // ev/4's own truncation happens before the level scaling, and the two
+    // truncations bite in that order: 3 floor-divides to 0, so it cannot
+    // reach the total at all. 7 floor-divides to 1 -- n = 122 -- but
+    // 122 * 5 / 100 is still 6, so `* level / 100` absorbs that point and
+    // the total is unchanged here too, for the second reason rather than
+    // the first.
     assert_eq!(calc_max_hp(45, 31, 0, 5), calc_max_hp(45, 31, 3, 5));
     assert_eq!(calc_max_hp(45, 31, 0, 5), calc_max_hp(45, 31, 7, 5));
 }

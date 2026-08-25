@@ -194,7 +194,22 @@
 //! the gap grew (issue #384's round-2 review: a Treecko stored 41/41 at
 //! level 13 filed 43/44 at level 14); retiring it to zero, as an earlier
 //! version of this fix did, re-hides real points the moment the next save
-//! lands back on the retained branch. The residue (a live HP pinned at
+//! lands back on the retained branch.
+//!
+//! That rebase is *signed*. `CALC_STAT` truncates the EV-aware product and
+//! the `0`-EV one independently, so the gap between them does not grow
+//! monotonically with level: it shrinks at every transition where the
+//! `ev / 4` term bought a point at the old level and buys none at the new
+//! one (issue #384's round-4 review -- a Treecko with HP IV 1 and 12 HP EVs
+//! has a one-point gap at level 12 and none at level 13). At such a
+//! level-up the model's own `0`-EV max-HP delta, which is what
+//! `battle` adds to the live `current_hp`, is one point *wider* than the
+//! EV-aware delta upstream's `CalculateMonStats` would have applied, so the
+//! offset has to go negative to file upstream's number -- a rebase that
+//! saturated at zero filed a lead stored at 1 HP as 3 where upstream files
+//! 2. A live battler still never files `0` (that would report a mon the
+//! session is still playing as fainted), the same way the translation never
+//! files above the block's own maximum. The residue (a live HP pinned at
 //! either boundary mid-session loses points the wider upstream range would
 //! have kept) closes when `battle` carries EVs.
 
@@ -514,6 +529,15 @@ fn overlay_current_hp(record: &mut Pokemon, mon: &BattlePokemon) {
 /// value rather than from its clamp. A fainted battler stays fainted: `0`
 /// is the session's own outcome, not a clamp artifact.
 ///
+/// The offset is signed, and goes negative after a level-up whose EV gap
+/// shrank ([`merge_into_save_pokemon`]): there the model's live HP moved by
+/// a *wider* delta than upstream's own EV-aware block would have, so filing
+/// upstream's number means subtracting rather than adding. The fainted
+/// guard's converse holds over that subtraction -- a live battler must not
+/// file `0`, which would mark a mon the session is still playing as
+/// fainted -- so the translated value floors at `1`, the mirror of the cap
+/// that keeps it under the block's own maximum.
+///
 /// The offset is the caller's, measured once at load ([`hp_hidden_by_load`])
 /// and carried as session state, *not* re-derived from `record.hp` here:
 /// the start menu writes this function's output back into the slot it will
@@ -523,13 +547,14 @@ fn overlay_current_hp(record: &mut Pokemon, mon: &BattlePokemon) {
 fn overlay_current_hp_over_retained_block(
     record: &mut Pokemon,
     mon: &BattlePokemon,
-    hp_hidden_by_load: u16,
+    hp_hidden_by_load: i32,
 ) {
     let live = clamp_u16(mon.current_hp());
     record.hp = if live == 0 {
         0
     } else {
-        live.saturating_add(hp_hidden_by_load).min(record.max_hp)
+        let translated = i64::from(live) + i64::from(hp_hidden_by_load);
+        u16::try_from(translated.max(1).min(i64::from(record.max_hp))).unwrap_or(record.max_hp)
     };
 }
 
@@ -539,6 +564,11 @@ fn overlay_current_hp_over_retained_block(
 /// Measured once, when the record is decoded, and carried beside the lead
 /// until [`merge_into_save_pokemon`] adds it back; zero whenever the stored
 /// value fits that floor.
+///
+/// Never negative here -- the clamp can only hide points, never invent them
+/// -- but signed for the caller's sake: [`merge_into_save_pokemon`]'s
+/// rebase moves the offset below zero wherever a level-up shrinks the EV
+/// gap, so the session state this seeds has to be able to hold that.
 ///
 /// `stored.level` matters, not `lead.level()`: [`from_save_pokemon`] can
 /// hand back a battler whose level has already moved past the byte this
@@ -555,9 +585,9 @@ fn overlay_current_hp_over_retained_block(
 /// whose level byte disagreed with its experience weaker than upstream's
 /// own `CalculateMonStats`, which derives the level from experience before
 /// it ever computes a stat block.
-pub(crate) fn hp_hidden_by_load(dex: &Dex, stored: &Pokemon, lead: &BattlePokemon) -> u16 {
+pub(crate) fn hp_hidden_by_load(dex: &Dex, stored: &Pokemon, lead: &BattlePokemon) -> i32 {
     let floor = zero_ev_max_hp(dex, lead.species().0, stored.level, lead);
-    stored.hp.saturating_sub(clamp_u16(floor))
+    i32::from(stored.hp.saturating_sub(clamp_u16(floor)))
 }
 
 /// `SavePlayerParty`'s per-mon half for a mon that came *out* of a save
@@ -596,7 +626,10 @@ pub(crate) fn hp_hidden_by_load(dex: &Dex, stored: &Pokemon, lead: &BattlePokemo
 /// recompute branch first rebases the offset -- [`zero_ev_max_hp`] recovers
 /// `base`'s own gap over the `0`-EV floor at `base.level`, the freshly
 /// recomputed block supplies the gap at `mon.level()`, and the offset moves
-/// by the difference -- and only then runs the same translation the
+/// by the difference, in either direction (the gap shrinks wherever
+/// `CALC_STAT`'s independent truncations make the `ev / 4` term worth a
+/// point at the old level and none at the new one, which is why the offset
+/// is signed) -- and only then runs the same translation the
 /// retained branch does, now against the just-recomputed (EV-aware, issue
 /// #384) maximum rather than the retained block's. The battler's own
 /// `current_hp` is still capped at the `0`-EV model's maximum regardless of
@@ -619,7 +652,7 @@ pub(crate) fn merge_into_save_pokemon(
     dex: &Dex,
     mon: &BattlePokemon,
     base: &Pokemon,
-    hp_hidden_by_load: &mut u16,
+    hp_hidden_by_load: &mut i32,
 ) -> Pokemon {
     let mut substructures = match backing_substructures(mon, base) {
         Ok(substructures) => substructures,
@@ -719,17 +752,26 @@ pub(crate) fn merge_into_save_pokemon(
         // record this write is overwriting), and `mon.stats().max_hp` is
         // already the new floor, at `mon.level()`, now that
         // `overlay_battle_stats` has run (module docs).
+        //
+        // The difference is signed. `CALC_STAT` truncates the EV-aware and
+        // `0`-EV products independently, so the gap does not climb
+        // monotonically with level: it shrinks wherever the EV term bought
+        // a point at the old level and buys none at the new one, and there
+        // the model's own `0`-EV level-up delta is *wider* than upstream's
+        // EV-aware one. An offset that could not go below zero filed that
+        // extra point (issue #384's round-4 review), so both the offset and
+        // this arithmetic are `i32` -- the gaps themselves stay clamped at
+        // `0`, since a record whose stored maximum sits below its own
+        // `0`-EV floor is inconsistent bytes rather than a negative EV
+        // contribution.
         let stats = compute_levelled_up_stats(dex, mon, &substructures.evs_and_condition);
         overlay_battle_stats(&mut merged, mon, stats);
         let old_floor = zero_ev_max_hp(dex, stored_species, base.level, mon);
-        let gap_old = u32::from(base.max_hp).saturating_sub(old_floor);
-        let gap_new = u32::from(merged.max_hp).saturating_sub(mon.stats().max_hp);
-        *hp_hidden_by_load = u16::try_from(
-            u32::from(*hp_hidden_by_load)
-                .saturating_add(gap_new)
-                .saturating_sub(gap_old),
-        )
-        .unwrap_or(u16::MAX);
+        let gap_old = clamp_i32(u32::from(base.max_hp).saturating_sub(old_floor));
+        let gap_new = clamp_i32(u32::from(merged.max_hp).saturating_sub(mon.stats().max_hp));
+        *hp_hidden_by_load = hp_hidden_by_load
+            .saturating_add(gap_new)
+            .saturating_sub(gap_old);
         overlay_current_hp_over_retained_block(&mut merged, mon, *hp_hidden_by_load);
     }
     merged
@@ -910,6 +952,14 @@ pub(crate) fn from_save_pokemon(dex: &Dex, saved: &Pokemon) -> Result<BattlePoke
 /// silently mint a different mon.
 fn clamp_u16(value: u32) -> u16 {
     u16::try_from(value).unwrap_or(u16::MAX)
+}
+
+/// The same narrowing for the signed side of the load-clamp offset
+/// ([`merge_into_save_pokemon`]'s rebase): an EV gap is a difference of two
+/// `u16` stat entries, so it always fits, but a wrap would turn a gap that
+/// grew into one that shrank.
+fn clamp_i32(value: u32) -> i32 {
+    i32::try_from(value).unwrap_or(i32::MAX)
 }
 
 #[cfg(test)]

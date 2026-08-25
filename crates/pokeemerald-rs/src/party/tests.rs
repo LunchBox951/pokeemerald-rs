@@ -1208,7 +1208,11 @@ fn a_stat_block_recompute_still_translates_the_load_clamp_offset() {
     stored.hp = model_max + HIDDEN;
     let mut lead = from_save_pokemon(&dex, &stored).expect("the fixture must decode");
     let mut offset = hp_hidden_by_load(&dex, &stored, &lead);
-    assert_eq!(offset, HIDDEN, "fixture sanity: the load clamp must fire");
+    assert_eq!(
+        offset,
+        i32::from(HIDDEN),
+        "fixture sanity: the load clamp must fire"
+    );
 
     lead.apply_damage(DAMAGE);
     let treecko = dex.species(lead.species()).unwrap();
@@ -1240,19 +1244,19 @@ fn a_stat_block_recompute_still_translates_the_load_clamp_offset() {
 
     let first = merge_into_save_pokemon(&dex, &lead, &stored, &mut offset);
     let gap_new = u32::from(first.max_hp) - lead.stats().max_hp;
-    let expected_offset = u16::try_from(u32::from(HIDDEN) + gap_new - gap_old)
-        .expect("the fixture's EVs keep this well under u16::MAX");
+    let expected_offset = i64::from(HIDDEN) + i64::from(gap_new) - i64::from(gap_old);
     assert_eq!(
-        offset, expected_offset,
+        i64::from(offset),
+        expected_offset,
         "the recompute rebases the offset by how the gap moved, rather than \
          zeroing it (which would drop the session's own hidden points) or \
          carrying it unrebased (which mis-sizes it once the gap is not the \
          same at the old level as at the new one)"
     );
-    let live = u16::try_from(lead.current_hp()).unwrap();
+    let live = i64::from(u16::try_from(lead.current_hp()).unwrap());
     assert_eq!(
-        first.hp,
-        live.saturating_add(offset).min(first.max_hp),
+        i64::from(first.hp),
+        (live + i64::from(offset)).min(i64::from(first.max_hp)),
         "current HP crosses the same load clamp the retained branch \
          applies, now against the block just recomputed for the new level"
     );
@@ -1284,7 +1288,11 @@ fn a_fainted_lead_stays_fainted_through_a_stat_block_recompute() {
     stored.hp = model_max + HIDDEN;
     let mut lead = from_save_pokemon(&dex, &stored).expect("the fixture must decode");
     let mut offset = hp_hidden_by_load(&dex, &stored, &lead);
-    assert_eq!(offset, HIDDEN, "fixture sanity: the load clamp must fire");
+    assert_eq!(
+        offset,
+        i32::from(HIDDEN),
+        "fixture sanity: the load clamp must fire"
+    );
 
     let treecko = dex.species(lead.species()).unwrap();
     let next_level = assets::experience_for_level(treecko.growth_rate, lead.level() + 1).unwrap();
@@ -1463,5 +1471,157 @@ fn an_inconsistent_level_byte_still_files_a_full_health_ev_trained_lead_at_full(
          files a full-health lead at full -- matching upstream's own \
          CalculateMonStats, not damaged by an offset measured against the \
          reconciled level instead of the record's own stored byte"
+    );
+}
+
+/// Issue #384's round-4 review: the gap between the EV-aware maximum and
+/// the `0`-EV floor does not only *grow* with level. `CALC_STAT` truncates
+/// `(n + ev / 4) * level / 100` and `n * level / 100` independently, so at
+/// some real level transitions the EV term buys a point at the old level
+/// and none at the new one, and the gap *shrinks*. The rebase must be able
+/// to run backwards there: a damaged lead's live HP moved by the model's
+/// own `0`-EV level-up delta, which is one point wider than the EV-aware
+/// delta upstream would have applied, so a rebase that cannot go below
+/// zero files that extra point.
+///
+/// This fixture's numbers: Treecko, HP IV `1`, so the `0`-EV `n` is `81`;
+/// HP EV `12`, so `ev / 4` is `3` and the EV-aware `n` is `84`. At level
+/// 12 that is `floor(1008/100) - floor(972/100) = 10 - 9 = 1` point of
+/// gap; at level 13 it is `floor(1092/100) - floor(1053/100) = 10 - 10 =
+/// 0`. A lead stored at `1` HP therefore loads with no hidden points at
+/// all (`1` is far below the floor), gains the model's `+2` on the
+/// level-up where upstream's own EV-aware block gains `+1`, and must be
+/// filed at upstream's `2` rather than the model's `3`.
+#[test]
+fn a_shrinking_ev_gap_files_upstreams_own_level_up_delta() {
+    let dex = Dex::new();
+    let treecko = dex.species(assets::SpeciesId(277)).unwrap();
+    let fixture = a_battler();
+    let retained_evs = battle::Evs {
+        hp: 12,
+        ..sentinel_retained_evs()
+    };
+
+    let mut stored = a_stored_record();
+    let mut substructures = stored.box_data.substructures().unwrap();
+    substructures.evs_and_condition[0] = retained_evs.hp;
+    stored.box_data.set_substructures(&substructures);
+
+    let ev_aware_at_12 =
+        battle::compute_stats_with_evs(treecko, 12, fixture.nature(), fixture.ivs(), retained_evs);
+    let ev_aware_at_13 =
+        battle::compute_stats_with_evs(treecko, 13, fixture.nature(), fixture.ivs(), retained_evs);
+    let floor_at_12 = battle::compute_stats_with_evs(
+        treecko,
+        12,
+        fixture.nature(),
+        fixture.ivs(),
+        battle::Evs::default(),
+    );
+    let floor_at_13 = battle::compute_stats_with_evs(
+        treecko,
+        13,
+        fixture.nature(),
+        fixture.ivs(),
+        battle::Evs::default(),
+    );
+    assert_eq!(
+        ev_aware_at_12.max_hp - floor_at_12.max_hp,
+        1,
+        "fixture sanity: the level-12 gap is one point"
+    );
+    assert_eq!(
+        ev_aware_at_13.max_hp - floor_at_13.max_hp,
+        0,
+        "fixture sanity: the level-13 gap is none -- the gap shrinks, which \
+         is the whole point of this fixture"
+    );
+
+    stored.level = 12;
+    stored.max_hp = u16::try_from(ev_aware_at_12.max_hp).unwrap();
+    stored.hp = 1;
+
+    let mut lead = from_save_pokemon(&dex, &stored).expect("the fixture must decode");
+    let mut offset = hp_hidden_by_load(&dex, &stored, &lead);
+    assert_eq!(
+        offset, 0,
+        "fixture sanity: a stored 1 HP is far below the 0-EV floor, so the \
+         load clamp hides nothing"
+    );
+
+    let level_13 = assets::experience_for_level(treecko.growth_rate, 13).unwrap();
+    lead.apply_experience(&dex, level_13 - lead.experience())
+        .expect("no move-learn prompt is pending");
+    assert_eq!(lead.level(), 13, "fixture sanity: the level must move");
+    assert_eq!(
+        lead.current_hp(),
+        1 + (floor_at_13.max_hp - floor_at_12.max_hp),
+        "fixture sanity: the live battler gained the 0-EV delta, which is \
+         the wider one"
+    );
+
+    let merged = merge_into_save_pokemon(&dex, &lead, &stored, &mut offset);
+
+    assert_eq!(
+        merged.max_hp,
+        u16::try_from(ev_aware_at_13.max_hp).unwrap(),
+        "fixture sanity: the merge recomputed the level-13 EV-aware block"
+    );
+    assert_eq!(
+        u32::from(merged.hp),
+        1 + (ev_aware_at_13.max_hp - ev_aware_at_12.max_hp),
+        "a level-up files upstream's own EV-aware max-HP delta onto the \
+         stored current HP, even where that delta is narrower than the \
+         model's 0-EV one -- the rebase has to subtract the point the \
+         shrinking gap took back"
+    );
+}
+
+/// The converse of the fainted guard, over the negative offset the fixture
+/// above produces: a battler the session is still playing must never be
+/// filed at `0`. Subtracting a shrunken gap from a live HP already down at
+/// `1` would do exactly that -- and a record that says `0` is a fainted
+/// lead on the next load, which the model on screen is not. The
+/// translation floors at `1`, the mirror of the cap that keeps it under the
+/// block's own maximum; the point of divergence from upstream (whose own
+/// EV-aware copy really would be at `0` here) is the same residue the
+/// module docs name, and it closes when `battle` carries EVs.
+#[test]
+fn a_live_lead_never_files_as_fainted_when_the_ev_gap_shrinks() {
+    let dex = Dex::new();
+    let treecko = dex.species(assets::SpeciesId(277)).unwrap();
+    let fixture = a_battler();
+    let retained_evs = battle::Evs {
+        hp: 12,
+        ..sentinel_retained_evs()
+    };
+
+    let mut stored = a_stored_record();
+    let mut substructures = stored.box_data.substructures().unwrap();
+    substructures.evs_and_condition[0] = retained_evs.hp;
+    stored.box_data.set_substructures(&substructures);
+    let ev_aware_at_12 =
+        battle::compute_stats_with_evs(treecko, 12, fixture.nature(), fixture.ivs(), retained_evs);
+    stored.level = 12;
+    stored.max_hp = u16::try_from(ev_aware_at_12.max_hp).unwrap();
+    stored.hp = 1;
+
+    let mut lead = from_save_pokemon(&dex, &stored).expect("the fixture must decode");
+    let mut offset = hp_hidden_by_load(&dex, &stored, &lead);
+    let level_13 = assets::experience_for_level(treecko.growth_rate, 13).unwrap();
+    lead.apply_experience(&dex, level_13 - lead.experience())
+        .expect("no move-learn prompt is pending");
+    // Back down to a single point, with the rebase about to take one away.
+    lead.apply_damage(lead.current_hp() - 1);
+    assert_eq!(lead.current_hp(), 1, "fixture sanity: one point left");
+    assert!(!lead.is_fainted(), "fixture sanity: and still standing");
+
+    let merged = merge_into_save_pokemon(&dex, &lead, &stored, &mut offset);
+
+    assert_eq!(offset, -1, "fixture sanity: the rebase went negative");
+    assert_eq!(
+        merged.hp, 1,
+        "a live battler files at least 1 -- a 0 here would come back from \
+         the next load as a fainted lead the session never fainted"
     );
 }
