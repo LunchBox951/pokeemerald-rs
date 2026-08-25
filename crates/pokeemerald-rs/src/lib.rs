@@ -18,10 +18,9 @@
 //! reads the player's own Pokemon Emerald (US) ROM through the `rom-import`
 //! crate and writes the pack where `pack_format` resolves it, atomically.
 //! `src/cli.rs` (a module of the binary, not of this crate) parses the flag.
-//! The importer has no domain readers yet, so a valid ROM still fails
-//! closed with `rom_import::ImportError::NoDomains` rather than writing an
-//! empty pack; the CLI, the destination resolution, and the atomic write
-//! are real now, and later slices only fill in what gets packed.
+//! The pack it writes is complete and byte-identical to `cargo xtask
+//! extract`'s, so a player needs no checkout (see `rom_import`'s own
+//! module docs for the contract and its equivalence harness).
 //!
 //! [`overworld`] (I-3, issue #126) composes the map viewport + player OBJ
 //! presentation lane over the `engine` overworld runtime (S-5, PR #120) --

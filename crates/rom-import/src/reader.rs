@@ -39,6 +39,31 @@ impl GbaPtr {
         }
     }
 
+    /// The first address of the cartridge window.
+    ///
+    /// A placeholder for a root a profile has not recorded, and the one
+    /// address [`new`](Self::new) is guaranteed to accept.
+    pub const AT_BASE: Self = Self(ROM_BASE);
+
+    /// Wrap a raw address in a `const` initializer.
+    ///
+    /// Generated profile tables need a [`GbaPtr`] as a constant, where
+    /// [`new`](Self::new)'s `Option` cannot be unwrapped. Every address in
+    /// such a table was verified against a real ROM when it was generated,
+    /// so an out-of-window value is a corrupt table, not a bad input.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `raw` is outside the cartridge window. In a `const`
+    /// initializer that is a compile error, which is the point.
+    #[must_use]
+    pub const fn at(raw: u32) -> Self {
+        match Self::new(raw) {
+            Some(ptr) => ptr,
+            None => panic!("profile address is outside the cartridge window"),
+        }
+    }
+
     /// The raw bus address.
     #[must_use]
     pub const fn raw(self) -> u32 {
@@ -234,6 +259,20 @@ mod tests {
         let ptr = r.ptr(8).unwrap();
         assert_eq!(ptr.raw(), ROM_BASE);
         assert_eq!(ptr.offset(), 0);
+    }
+
+    #[test]
+    fn const_pointers_accept_window_addresses() {
+        const PTR: GbaPtr = GbaPtr::at(ROM_BASE + 0x10);
+        assert_eq!(PTR.raw(), ROM_BASE + 0x10);
+        assert_eq!(PTR.offset(), 0x10);
+        assert_eq!(GbaPtr::AT_BASE.raw(), ROM_BASE);
+    }
+
+    #[test]
+    #[should_panic(expected = "outside the cartridge window")]
+    fn const_pointers_reject_addresses_outside_the_window() {
+        let _ = GbaPtr::at(0);
     }
 
     #[test]

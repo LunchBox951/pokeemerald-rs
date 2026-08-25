@@ -15,9 +15,10 @@
 
 use std::sync::OnceLock;
 
-use crate::profile::{RevisionProfile, Roots};
+use crate::profile::RevisionProfile;
 use crate::reader::GbaPtr;
 use crate::rom::{checksum, GbaHeader, Rom, ROM_SIZE};
+use crate::roots::Roots;
 use crate::sha1::sha1;
 
 /// The byte a fresh fixture is filled with.

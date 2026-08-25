@@ -51,6 +51,17 @@ pub enum ExtractError {
     /// narrowed with a truncating cast instead of rejected outright. Carries
     /// the source path and the actual colour count.
     PaletteColorCountUnrepresentable(PathBuf, usize),
+    /// A `.pal` file held fewer colours than the upstream build rule cuts it
+    /// to (see `crate::extract::TITLE_SCREEN_PALETTE_CUTS`). Carries the
+    /// source path, the cut, and the colour count found.
+    PaletteShorterThanCut {
+        /// The `.pal` file.
+        path: PathBuf,
+        /// How many colours the upstream rule keeps.
+        cut: usize,
+        /// How many colours the file actually holds.
+        actual: usize,
+    },
     /// A decoded source did not fit the pack's payload contract, as
     /// [`pack_format`]'s entry constructors define it (an image whose pixel
     /// buffer is not `width * height`, say). Only reachable if a source file
@@ -198,6 +209,12 @@ impl fmt::Display for ExtractError {
             Self::MissingEmbeddedPalette(path) => write!(
                 f,
                 "`{}` has no embedded PLTE chunk (expected upstream's in-game palette there)",
+                path.display()
+            ),
+            Self::PaletteShorterThanCut { path, cut, actual } => write!(
+                f,
+                "palette `{}` has {actual} colours, fewer than the {cut} upstream's build rule \
+                 keeps",
                 path.display()
             ),
             Self::PaletteColorCountUnrepresentable(path, actual) => write!(
