@@ -86,6 +86,34 @@ impl PackAsset {
         }
         Ok((&self.payload, colors))
     }
+
+    /// The image's payload and shape, checked against each other.
+    ///
+    /// Same contract as [`Self::palette_payload`]: the directory bounds a
+    /// payload against the file, not against the entry's metadata, so any
+    /// arithmetic on the declared shape — tile enumeration included — must
+    /// go through this check first or a malformed pack drives it with
+    /// dimensions no payload backs.
+    ///
+    /// # Errors
+    ///
+    /// [`GenRomProfileError::WrongPackEntryKind`] if `id` is not an image;
+    /// [`GenRomProfileError::EntryShape`] if the payload is not exactly one
+    /// byte per declared pixel.
+    pub fn image_raster(&self, id: &str) -> Result<(&[u8], u32, u32, u8), GenRomProfileError> {
+        let (width, height, bit_depth) = self.image_shape(id)?;
+        let expected = u64::from(width) * u64::from(height);
+        if self.payload.len() as u64 != expected {
+            return Err(GenRomProfileError::EntryShape {
+                id: id.to_owned(),
+                reason: format!(
+                    "a {width}x{height} raster holds {expected} bytes, got {}",
+                    self.payload.len()
+                ),
+            });
+        }
+        Ok((&self.payload, width, height, bit_depth))
+    }
 }
 
 /// Every entry of one pack, keyed by id.
@@ -195,7 +223,9 @@ pub fn metatile_candidates(width: u32, height: u32) -> Vec<(u32, u32)> {
             }
         }
     }
-    shapes.sort_by_key(|&(mw, mh)| std::cmp::Reverse((mw * mh, mw)));
+    // Widened: the caller validates the shape against a real payload, but
+    // this function's own contract should not overflow on any `u32` pair.
+    shapes.sort_by_key(|&(mw, mh)| std::cmp::Reverse((u64::from(mw) * u64::from(mh), mw)));
     shapes
 }
 
@@ -223,22 +253,12 @@ const LATIN_FONT_COLUMNS: usize = 16;
 /// against the entry's own metadata.
 pub fn latin_font_bytes(pack: &PackSource, id: &str) -> Result<Vec<u8>, GenRomProfileError> {
     let asset = pack.get(id)?;
-    let (width, height, bit_depth) = asset.image_shape(id)?;
+    let (_, width, height, bit_depth) = asset.image_raster(id)?;
     if width != 256 || height != 512 || bit_depth != 2 {
         return Err(GenRomProfileError::EntryShape {
             id: id.to_owned(),
             reason: format!(
                 "expected a 256x512 2bpp glyph sheet, got {width}x{height}/{bit_depth}bpp"
-            ),
-        });
-    }
-    let expected = width as usize * height as usize;
-    if asset.payload.len() != expected {
-        return Err(GenRomProfileError::EntryShape {
-            id: id.to_owned(),
-            reason: format!(
-                "a {width}x{height} sheet holds {expected} bytes, got {}",
-                asset.payload.len()
             ),
         });
     }
@@ -321,6 +341,28 @@ mod tests {
             .unwrap();
         assert_eq!(colors, 16);
         assert_eq!(payload.len(), 32);
+    }
+
+    #[test]
+    fn an_image_payload_disagreeing_with_its_dimensions_is_an_error_not_a_panic() {
+        // The declared shape drives the metatile enumeration and the tile
+        // packing, so dimensions no payload backs — however large — must
+        // fail the shape check, not the arithmetic built on them.
+        let source = source_with(
+            "title/image/pokemon_logo",
+            EntryKind::Image {
+                width: u32::MAX,
+                height: u32::MAX,
+                bit_depth: 4,
+            },
+            vec![0u8; 64],
+        );
+        let asset = source.get("title/image/pokemon_logo").unwrap();
+        let err = asset.image_raster("title/image/pokemon_logo").unwrap_err();
+        assert!(
+            matches!(err, GenRomProfileError::EntryShape { .. }),
+            "{err}"
+        );
     }
 
     #[test]

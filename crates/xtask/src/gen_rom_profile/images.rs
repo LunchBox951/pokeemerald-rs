@@ -154,7 +154,10 @@ pub fn locate_images(
 
     for (query_index, query) in queries.iter().enumerate() {
         let asset = ctx.pack.get(&query.id)?;
-        let (width, height, pack_bit_depth) = asset.image_shape(&query.id)?;
+        // Shape validated against the payload before anything enumerates
+        // over it: a malformed pack's dimensions drive the metatile walk
+        // and the tile packing, so they must be backed by real bytes.
+        let (_, width, height, pack_bit_depth) = asset.image_raster(&query.id)?;
         for &rom_bit_depth in rom_depths(pack_bit_depth) {
             let bytes_per_tile = if rom_bit_depth == 4 { 32 } else { 64 };
             for metatile in metatile_candidates(width, height) {
