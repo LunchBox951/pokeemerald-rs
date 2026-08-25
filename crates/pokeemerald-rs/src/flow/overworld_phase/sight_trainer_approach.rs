@@ -316,6 +316,71 @@ fn direction_to_face(from: TilePos, target: TilePos) -> Direction {
 }
 
 impl OverworldPhase {
+    /// One locked frame's worth of the player's own walk animation, plus
+    /// the latched-landing bookkeeping that goes with it -- the pair that
+    /// runs on **every** frame the approach owns, whether that is the
+    /// trigger frame which starts the approach
+    /// ([`super::step::OverworldPhase::step`]'s early return on
+    /// [`SightTrainerOutcome::owns_frame`]) or one of the cutscene frames
+    /// after it ([`Self::advance_sight_trainer_approach_frame`]). One
+    /// method shared by both call sites so the two cannot drift apart
+    /// again (PR #407 review: the trigger frame ticked on neither path and
+    /// stalled the animation for exactly one frame).
+    ///
+    /// # The lock stops input, not animation
+    ///
+    /// `LockPlayerFieldControls` gates `ProcessPlayerFieldInput` and
+    /// `PlayerStep` only, both inside CB1 (`src/overworld.c:1445-1455`);
+    /// the held movement itself is a sprite callback
+    /// (`sMovementTypeCallbacks`, `src/event_object_movement.c:222`,
+    /// installed at `:1559`/`:4641`) driven by `AnimateSprites` from CB2's
+    /// `OverworldBasic` (`src/overworld.c:1469`), and CB1 runs before CB2
+    /// on every frame (`src/main.c:188-195`). So even the frame
+    /// `CheckForTrainersWantingBattle` returns `TRUE` and the lock engages
+    /// on (`src/overworld.c:1447-1449`) still animates the player's
+    /// in-flight step afterwards -- which is why this runs unconditionally,
+    /// exactly as [`super::input::advance_or_skip_for_preempt`] ticks on a
+    /// preempted frame it already knows the tick is a no-op on, to keep the
+    /// same "the walk-animation timer always advances" contract whole.
+    ///
+    /// # That drained step's tile is owed nothing
+    ///
+    /// A step that finishes under the lock finishes *unobserved* upstream,
+    /// so [`super::step`]'s latched `pending_landing` is dropped here
+    /// rather than carried across the cutscene. Upstream derives
+    /// `input->tookStep` and `input->checkStandardWildEncounter` from the
+    /// *current* frame's `gPlayerAvatar.tileTransitionState`
+    /// (`src/field_control_avatar.c:116-121`) -- neither is latched -- and
+    /// their one reader, `ProcessPlayerFieldInput`, is skipped outright
+    /// while `ArePlayerFieldControlsLocked` holds (`:1445-1455` again),
+    /// even though `UpdatePlayerAvatarTransitionState` keeps draining that
+    /// state ahead of the lock check (`src/overworld.c:1442`,
+    /// `src/field_player_avatar.c:901-917`). The one `T_TILE_CENTER` frame
+    /// therefore passes with nobody looking and is `T_NOT_MOVING` again by
+    /// the next one (`:903`), so the tile the player walked onto genuinely
+    /// never gets its coordinate event, its door warp or its
+    /// wild-encounter roll -- `UnlockPlayerFieldControls` has nothing to
+    /// give back.
+    ///
+    /// Holding that latch open instead would be wrong in both directions
+    /// this port can be wrong, and *which* one it got would turn on nothing
+    /// more than whether a direction happened to still be held when the
+    /// fight ended: with one held, the next ordinary frame's
+    /// [`super::input::advance_or_skip_for_preempt`] silently overwrites
+    /// the stale tile with the new step's; with none held, that frame fires
+    /// the old tile's warp/encounter/coordinate event a whole cutscene
+    /// late. It would also break the "at rest implies no latched landing"
+    /// invariant that same function's own `debug_assert` states.
+    ///
+    /// Clearing unconditionally (and so idempotently) rather than on the
+    /// drain frame alone is safe for the same reason the tick is: no new
+    /// landing can be latched while the approach owns every frame, so the
+    /// only one this can ever clear is the pre-cutscene one it is meant to.
+    pub(super) fn tick_player_under_approach_lock(&mut self) {
+        self.player.tick();
+        self.pending_landing = None;
+    }
+
     /// Play one frame of an in-progress sight-trainer approach, if there is
     /// one -- `None` when there is not, so
     /// [`super::step::OverworldPhase::step`] can fall through to the rest of
@@ -346,52 +411,15 @@ impl OverworldPhase {
     /// `LockPlayerFieldControls` has locked out of *input*, so the player's
     /// own in-flight step keeps draining under the exclamation icon exactly
     /// as it would with no trainer watching.
-    /// [`engine::overworld::PlayerState::tick`] here is that continued
-    /// animation's stand-in -- unconditional, the same way
-    /// [`super::input::advance_player_one_frame`] ticks it on an ordinary
-    /// frame, and a no-op once the step has already finished.
-    ///
-    /// # That drained step's tile is owed nothing (PR #407 review)
-    ///
-    /// A step that finishes *under the lock* finishes unobserved upstream,
-    /// so [`super::step`]'s latched `pending_landing` has to be dropped
-    /// here rather than carried across the cutscene. Upstream derives
-    /// `input->tookStep` and `input->checkStandardWildEncounter` from the
-    /// *current* frame's `gPlayerAvatar.tileTransitionState`
-    /// (`src/field_control_avatar.c:116-121`) -- neither is latched -- and
-    /// their one reader, `ProcessPlayerFieldInput`, is skipped outright
-    /// while `ArePlayerFieldControlsLocked` holds
-    /// (`src/overworld.c:1445-1455`), even though
-    /// `UpdatePlayerAvatarTransitionState` keeps draining that state ahead
-    /// of the lock check (`:1442`, `src/field_player_avatar.c:901-917`).
-    /// The one `T_TILE_CENTER` frame therefore passes with nobody looking
-    /// and is `T_NOT_MOVING` again by the next one (`:903`), so the tile
-    /// the player walked onto genuinely never gets its coordinate event,
-    /// its door warp or its wild-encounter roll --
-    /// `UnlockPlayerFieldControls` has nothing to give back.
-    ///
-    /// Holding the latch open instead would be wrong in both directions
-    /// this port can be wrong, and *which* one it got would turn on nothing
-    /// more than whether a direction happened to still be held when the
-    /// fight ended: with one held, the next ordinary frame's
-    /// [`super::input::advance_or_skip_for_preempt`] silently overwrites
-    /// the stale tile with the new step's; with none held, that frame fires
-    /// the old tile's warp/encounter/coordinate event a whole cutscene
-    /// late. It would also break the "at rest implies no latched landing"
-    /// invariant that same function's own `debug_assert` states.
+    /// [`Self::tick_player_under_approach_lock`] here is that continued
+    /// animation's stand-in, and it carries the latched-landing half with
+    /// it -- that method's own docs for both.
     pub(super) fn advance_sight_trainer_approach_frame(
         &mut self,
         buttons: ButtonState,
     ) -> Option<SightTrainerOutcome> {
         let stage = self.sight_approach.as_ref()?.stage;
-        self.player.tick();
-        // The section above: this is a locked frame, so whatever the tick
-        // just drained, nothing is left owing the tile it drained onto.
-        // Unconditional (and idempotent) rather than gated on the drain
-        // frame itself: no new landing can be latched while the approach
-        // owns every frame, so the only one this can ever clear is the
-        // pre-cutscene one it is meant to clear.
-        self.pending_landing = None;
+        self.tick_player_under_approach_lock();
         match stage {
             ApproachStage::ExclamationIcon { .. } | ApproachStage::WalkUp { .. } => {
                 let player_position = self.player.position();

@@ -1032,6 +1032,52 @@ fn a_step_draining_under_the_lock_leaves_its_tile_owed_nothing() {
     );
 }
 
+/// [`OverworldPhase::tick_player_under_approach_lock`]'s own two-part
+/// contract, pinned directly: one frame of the player's held walk really
+/// runs, and the latched landing is dropped with it.
+///
+/// The frame that *starts* an approach ([`OverworldPhase::step`]'s early
+/// return on `SightTrainerOutcome::owns_frame`) is a locked frame like
+/// every other one and goes through this same method: upstream's lock gates
+/// CB1's `ProcessPlayerFieldInput`/`PlayerStep` only
+/// (`overworld.c:1445-1455`), while the held movement runs from CB2's
+/// `AnimateSprites` afterwards (`:1469`, `main.c:188-195`), so skipping that
+/// frame's tick stalls the walk animation by exactly one frame (PR #407
+/// review). That call site itself cannot be driven from a test today -- no
+/// real Route 103 sight trainer's party constructs, so `step` never reaches
+/// its `ApproachStarted` arm at all
+/// (`sight_trainer_trigger::tests::every_sight_trainers_real_party_fails_to_construct_for_exactly_these_reasons`)
+/// -- so the method both frames now share is what gets pinned.
+#[test]
+fn a_locked_frame_advances_the_players_walk_and_drops_its_latched_landing() {
+    let (rx, ry) = RHETT_TILE;
+    let mut phase = route_103_phase(PlayerState::new((rx, ry + 2), 3, Direction::South));
+
+    phase.step(held(Buttons::DOWN));
+    assert_eq!(
+        phase.player.step_progress(),
+        1,
+        "fixture precondition: one ordinary frame of an in-flight step"
+    );
+    assert_eq!(
+        phase.pending_landing,
+        Some((rx, ry + 3)),
+        "fixture precondition: with its landing tile latched"
+    );
+
+    phase.tick_player_under_approach_lock();
+
+    assert_eq!(
+        phase.player.step_progress(),
+        2,
+        "a locked frame still animates the held walk -- the lock stops input, not animation"
+    );
+    assert!(
+        phase.pending_landing.is_none(),
+        "and the landing whose completion frame the lock eats goes with it"
+    );
+}
+
 /// `EventScript_ShowTrainerIntroMsg` (`trainer_battle.inc:101-107`): the
 /// battle waits for the intro speech, the speech waits for the player, and
 /// only when the box closes does `dotrainerbattle` run -- taking the party

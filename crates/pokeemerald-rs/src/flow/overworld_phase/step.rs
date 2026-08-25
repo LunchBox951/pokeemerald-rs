@@ -305,6 +305,20 @@ impl OverworldPhase {
         // (`SightTrainerOutcome::Refused` -- no cone, or one that cannot
         // fight) deliberately does not: that variant's own docs.
         if self.begin_sight_trainer_approach_if_seen().owns_frame() {
+            // The trigger frame is a locked frame like every other frame of
+            // the approach, and the lock stops *input*, not animation: a
+            // step still in flight when the cone reaches the player keeps
+            // draining on this very frame upstream, because
+            // `LockPlayerFieldControls` gates only CB1's
+            // `ProcessPlayerFieldInput`/`PlayerStep` while the held movement
+            // runs from CB2's `AnimateSprites` afterwards
+            // (`tick_player_under_approach_lock`'s own docs). Without this
+            // the frame that *starts* the approach would be the one frame in
+            // the whole sequence that ticked on neither path -- neither here
+            // nor in `advance_sight_trainer_approach_frame` above, which ran
+            // before `self.sight_approach` existed and returned `None`
+            // (PR #407 review).
+            self.tick_player_under_approach_lock();
             return;
         }
 
