@@ -151,8 +151,9 @@ We default to the standard library; every crate added is justified here
   every file against that handle, so a directory component redirected
   mid-import can move nothing (see `import_rom`'s module docs).
   Owner-approved for exactly this scope on PR #372 (`minimal-deps: approved`,
-  2026-08-24), chosen over project-owned `unsafe` FFI. Uses the `fs` feature
-  only; off Unix the crate is not compiled and the path-based flow remains.
+  2026-08-24), chosen over project-owned `unsafe` FFI. Built with
+  `default-features = false` and only the `std` and `fs` features; off Unix
+  the crate is not compiled and the path-based flow remains.
 
 ## License
 
