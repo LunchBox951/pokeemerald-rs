@@ -16,8 +16,10 @@ use crate::audio::AudioError;
 pub enum PackError {
     /// No file exists at the given path. This is the "missing pack"
     /// diagnostic Discussion #71 required: its [`Display`](fmt::Display)
-    /// message tells the developer exactly what to run. Carries the path
-    /// that was checked.
+    /// message names the exact command for both audiences the pack has,
+    /// a player who imports their own ROM (`--import-rom`) and a developer
+    /// who extracts from a checkout (`cargo xtask extract`). Carries the
+    /// path that was checked.
     NotFound(PathBuf),
     /// Reading the pack file failed for a reason other than "missing"
     /// (permissions, I/O error, ...). Carries the path and the underlying
@@ -129,8 +131,9 @@ impl fmt::Display for PackError {
         match self {
             Self::NotFound(path) => write!(
                 f,
-                "asset pack not found at `{}`: run `./init.sh` to fetch the upstream reference, \
-                 then `cargo xtask extract` to build the pack",
+                "asset pack not found at `{}`: players run `pokeemerald-rs --import-rom <path \
+                 to your Pokemon Emerald (US) ROM>`; developers run `./init.sh` then \
+                 `cargo xtask extract`",
                 path.display()
             ),
             Self::ReadFailed(path, msg) => {
@@ -140,9 +143,10 @@ impl fmt::Display for PackError {
             Self::UnsupportedVersion(version) => {
                 write!(
                     f,
-                    "asset pack: unsupported format version `{version}` -- \
-                     the pack predates this build's format; regenerate it \
-                     with `cargo xtask extract`"
+                    "asset pack: unsupported format version `{version}`: the pack predates \
+                     this build's format; players rebuild it with `pokeemerald-rs \
+                     --import-rom <path to your Pokemon Emerald (US) ROM>`, developers with \
+                     `cargo xtask extract`"
                 )
             }
             Self::Truncated => write!(f, "asset pack: truncated or corrupt"),

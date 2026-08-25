@@ -11,6 +11,13 @@
 # `crates/xtask/src/extract/mod.rs`'s module docs.
 /assets-pack
 
+# A cartridge image (Discussion #71 policy C, issue #122). The importer reads
+# one the player supplies; it never enters git, CI, artifacts, or logs. The
+# character class matches every casing a case-sensitive filesystem
+# distinguishes (`emerald.Gba`, `dump.gBA`), which `*.gba` and `*.GBA` alone
+# would let through.
+*.[gG][bB][aA]
+
 # `cargo xtask record-snapshot` output (F-3, V-4, issue #226): local frame
 # captures + metadata, gitignored by default like `/assets-pack` above — only
 # a capture's recorded hash is committed (`docs/snapshots.md`'s blessing
