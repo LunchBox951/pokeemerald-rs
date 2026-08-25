@@ -285,11 +285,15 @@ fn is_pack_missing_is_true_only_for_not_found() {
 }
 
 #[test]
-fn stale_pack_reports_the_re_extract_remedy() {
+fn stale_pack_reports_the_rebuild_remedy_for_both_audiences() {
     // A pack that loads but predates this build (missing one of the
     // `title/*` entries this module requires) must render an actionable
-    // "re-extract" message, not just the bare "no entry with id" symptom
-    // -- and be distinguishable via `is_pack_stale`.
+    // rebuild message, not just the bare "no entry with id" symptom --
+    // and be distinguishable via `is_pack_stale`. Both audiences are
+    // named, as `PackError::NotFound`/`UnsupportedVersion` do: a player's
+    // imported pack goes stale the same way an extracted one does, and
+    // `cargo xtask extract` needs a decomp checkout the player has not
+    // got (README's "Playing" section promises the re-import).
     let stale = TitleSceneError::from(assets::PackError::UnknownAsset(
         "title/palette/emerald_version".to_owned(),
     ));
@@ -298,6 +302,7 @@ fn stale_pack_reports_the_re_extract_remedy() {
     let rendered = stale.to_string();
     assert!(rendered.contains("title/palette/emerald_version"));
     assert!(rendered.contains("cargo xtask extract"));
+    assert!(rendered.contains("--import-rom"));
 
     let other = TitleSceneError::from(assets::PackError::BadMagic);
     assert!(!other.is_pack_stale());

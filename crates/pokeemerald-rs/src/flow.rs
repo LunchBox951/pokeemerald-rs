@@ -316,16 +316,19 @@ pub(crate) fn advance_scene(
                         return (AppScene::MainMenu(Box::new(state)), frame);
                     }
                     // The hint covers both failure shapes operators actually
-                    // hit: no pack extracted at all (`PackError::NotFound`),
-                    // and -- easy to mistake for a code bug -- a pack
-                    // extracted before this screen existed, whose directory
-                    // has no `interface/palette/main_menu_bg` entry
+                    // hit: no pack built at all (`PackError::NotFound`),
+                    // and -- easy to mistake for a code bug -- a pack built
+                    // before this screen existed, whose directory has no
+                    // `interface/palette/main_menu_bg` entry
                     // (`PackError::UnknownAsset`). Both are fixed by
-                    // re-extracting; neither changes what the error *is*.
+                    // rebuilding the pack by whichever route built it in
+                    // the first place -- a player has no decomp checkout to
+                    // extract from; neither changes what the error *is*.
                     Err(err) => eprintln!(
-                        "main menu: {err} -- staying on the title screen; \
-                         re-run `cargo xtask extract` (a pack extracted before \
-                         this screen existed is missing its entries)"
+                        "main menu: {err} -- staying on the title screen; a pack built \
+                         before this screen existed is missing its entries: players \
+                         rebuild it with `pokeemerald-rs --import-rom <path to your \
+                         Pokemon Emerald (US) ROM>`, developers with `cargo xtask extract`"
                     ),
                 }
             }

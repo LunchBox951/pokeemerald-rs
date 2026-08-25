@@ -15,8 +15,7 @@
 //!
 //! # What exists
 //!
-//! This slice is the ROM-side foundation, everything below the first domain
-//! reader:
+//! The ROM-side foundation, and the domain readers built on it:
 //!
 //! - [`Rom`] loads and validates an image: exact size, GBA cartridge header
 //!   with its fixed byte and complement check, whole-file SHA-1.
@@ -36,13 +35,41 @@
 //!   is needed and a dependency is not `(minimal-deps)`.
 //! - [`fixture::RomFixture`] builds synthetic ROM-shaped images for tests.
 //!   No real ROM is ever needed to test this crate.
+//! - `domains` holds one reader per asset domain. Every graphics domain is
+//!   wired: the title screen (`title/image/*`, `title/raw/*`,
+//!   `title/palette/*`), the interface palettes (`interface/palette/*`),
+//!   the tilesets (`tileset/*`: tile sheets, palette banks, metatile
+//!   tables, animation frames), the map layouts (`layout/*`: metatile grids
+//!   and border blocks), the object-event sprites (`sprite/*` sheets and
+//!   `sprite/palette/*` banks), the Latin glyph sheets (`font/*/glyphs`,
+//!   decoded from `gbagfx`'s `.latfont` layout), and the text windows
+//!   (`text-window/image/*`, `text-window/palette/*`). The sound engine's
+//!   data is wired too: `DirectSound` samples and programmable waves
+//!   (`audio/sample/*`) and voicegroups (`audio/voicegroup/*`), read from
+//!   the m4a `WaveData` and `ToneData` structs and emitted through
+//!   `assets`' own schema encoders, and `MUS_TITLE` itself
+//!   (`audio/song/*`), decoded from the engine's track byte-code into
+//!   `assets::Song` events. A domain that has a ROM struct behind
+//!   its roots corroborates it field by field, so a wrong profile is a
+//!   typed error rather than a plausible-looking asset. [`import`] and
+//!   [`import_to_bytes`] run them into a `PackWriter` and hand back a real
+//!   pack.
+//!
+//! # Equivalence
+//!
+//! The pack this crate writes has to be byte-identical to the one `cargo
+//! xtask extract` writes from a decomp checkout, for every id both produce.
+//! `tests/equivalence.rs` is that gate: it is `#[ignore]`d, needs
+//! `$POKEEMERALD_ROM` and a checkout pack, and compares the two packs entry
+//! by entry. Every id the checkout pack holds is covered and there is no
+//! reviewed difference.
 //!
 //! # What is next
 //!
-//! Domain readers, one slice each, sharing this crate's reader and
-//! decompressor: tilesets and map layouts, sprites and palettes, text banks,
-//! species and move data. Each turns ROM bytes into [`pack_format`] entries
-//! under the ids `crates/assets` already expects.
+//! The pack this crate writes is complete: a player who imports their ROM
+//! runs the game without a checkout pack. What remains is around the
+//! importer rather than in it: progress reporting from the CLI, and the
+//! player-facing documentation for the import step.
 //!
 //! The CLI that drives [`import`] already exists: `pokeemerald-rs
 //! --import-rom <path>` resolves the pack's destination, writes it
@@ -50,17 +77,13 @@
 //! `cli` and `import_rom` modules). It surfaces this crate's errors as they
 //! are, so the one thing users will get wrong, pointing it at the wrong
 //! ROM, is already [`ImportError::UnsupportedRevision`] naming the ROM the
-//! importer wants. Progress reporting is still to come, and needs domain
-//! readers to have something to report.
-//!
-//! Until domain readers land, [`import`] fails *closed* with
-//! [`ImportError::NoDomains`]. It never writes a pack. An empty pack would
-//! look like a successful import to every downstream check
-//! `(gated-by-default)` `(test-ratchet)`.
+//! importer wants. The player-facing walkthrough is the top-level README's
+//! "Playing" section.
 
 pub mod fixture;
 pub mod profiles;
 
+mod domains;
 mod error;
 mod lz77;
 mod profile;
@@ -71,7 +94,7 @@ mod sha1;
 
 use std::path::{Path, PathBuf};
 
-pub use error::{HeaderFault, ImportError, Lz77Fault};
+pub use error::{HeaderFault, ImportError, Lz77Fault, SongFault};
 pub use lz77::{decompress as lz77_decompress, decompress_at as lz77_decompress_at, LZ77_TYPE};
 pub use profile::{
     select as select_profile, select_with as select_profile_with, RevisionProfile, EMERALD_US_REV0,
@@ -87,9 +110,6 @@ pub use roots::{
 pub use sha1::{sha1, Digest, DigestParseError, Sha1};
 
 /// What an import produced.
-///
-/// Returned only on success, which no build can reach yet. Later slices fill
-/// it in as domain readers land.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ImportReport {
     pack_path: PathBuf,
@@ -140,30 +160,331 @@ impl ImportReport {
     }
 }
 
+/// A finished pack the caller has yet to put anywhere.
+///
+/// [`import_pack`] and [`import_pack_from_file`] hand one back so a caller
+/// that publishes the pack itself does not have to re-parse the bytes to
+/// learn what they hold. `pokeemerald-rs`'s `--import-rom` is that caller:
+/// it creates the file and renames it into place against a directory
+/// descriptor it holds open, which no API taking an output *path* can do on
+/// its behalf — and it opens the ROM itself, which is why the handle-taking
+/// form exists.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImportedPack {
+    entry_count: usize,
+    bytes: Vec<u8>,
+}
+
+impl ImportedPack {
+    /// A pack of `bytes` holding `entry_count` entries.
+    ///
+    /// Public for the same reason [`ImportReport::new`] is: a caller's
+    /// tests stand in for the importer without a real ROM.
+    #[must_use]
+    pub const fn new(entry_count: usize, bytes: Vec<u8>) -> Self {
+        Self { entry_count, bytes }
+    }
+
+    /// How many entries the pack holds.
+    #[must_use]
+    pub const fn entry_count(&self) -> usize {
+        self.entry_count
+    }
+
+    /// The serialized pack.
+    #[must_use]
+    pub fn bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+
+    /// The serialized pack, owned.
+    #[must_use]
+    pub fn into_bytes(self) -> Vec<u8> {
+        self.bytes
+    }
+}
+
 /// Import the ROM at `rom_path` into an asset pack at `out_path`.
 ///
-/// Validates the ROM and selects its revision profile, then stops: this
-/// build has no domain readers, so there is nothing to pack. Fails closed
-/// rather than writing an empty pack.
+/// Builds the whole pack in memory first, so a failure part-way through a
+/// domain cannot leave a truncated file behind, then creates `out_path`
+/// and writes it.
+///
+/// This is the path-level API. A caller that has to publish the pack
+/// through a directory it holds open — `pokeemerald-rs`'s `--import-rom`,
+/// whose destination the player picks — takes the bytes from
+/// [`import_pack`] and owns the file itself.
+///
+/// The ROM is never a legal destination: it is read whole into memory
+/// first, so writing the pack over it would succeed and destroy the
+/// player's cartridge image. That is [`ImportError::SameFile`], raised
+/// before anything is written.
+///
+/// Neither is a path that already exists. `out_path` is a file this call
+/// creates, exclusively, so a link planted at that name is refused rather
+/// than followed and truncated (`write_new`); the caller publishes the
+/// finished file over the real destination itself.
+///
+/// A failed import leaves nothing at `out_path`. Exclusive creation would
+/// otherwise make a half-written pack permanent — the retry would fail on
+/// its own leftover — so a write that dies part-way removes the file it
+/// created before returning [`ImportError::WriteFailed`]. The one failure
+/// that leaves the path occupied is the one that found it occupied.
 ///
 /// # Errors
 ///
 /// [`ImportError::ReadFailed`], [`ImportError::WrongSize`], or
 /// [`ImportError::BadHeader`] if the file is not a GBA ROM;
+/// [`ImportError::SameFile`] if `out_path` names the ROM itself;
 /// [`ImportError::UnsupportedRevision`] if it is not the supported build;
-/// [`ImportError::NoDomains`] once it is, until domain readers land.
+/// anything a domain reader raises (see [`import_to_bytes`]);
+/// [`ImportError::WriteFailed`] if the finished pack cannot be written,
+/// which includes a destination that already exists.
 pub fn import(rom_path: &Path, out_path: &Path) -> Result<ImportReport, ImportError> {
     let rom = Rom::load(rom_path)?;
+    // Ahead of the revision check: which file gets clobbered does not
+    // depend on which ROM it is, and naming the destructive mistake is
+    // more use to the player than naming the wrong revision.
+    if overwrites_rom(rom_path, out_path) {
+        return Err(ImportError::SameFile {
+            path: out_path.to_path_buf(),
+        });
+    }
     let profile = select_profile(&rom)?;
-    // Both are validated as far as this slice can validate them. The write
-    // path stays unreachable until there is something to write.
-    let _ = (profile, out_path);
-    Err(ImportError::NoDomains)
+    let (entry_count, bytes) = build_pack(&rom, &profile.roots)?;
+    write_new(out_path, &bytes).map_err(|source| ImportError::WriteFailed {
+        path: out_path.to_path_buf(),
+        source,
+    })?;
+    Ok(ImportReport::new(
+        out_path.to_path_buf(),
+        profile.name,
+        entry_count,
+        bytes.len(),
+    ))
+}
+
+/// Import the ROM at `rom_path` and hand back the finished pack.
+///
+/// [`import`] without the write, and the entry point for a caller that
+/// publishes the pack itself: the ROM is never touched for writing here,
+/// so there is no destination to guard.
+///
+/// # Errors
+///
+/// As [`import`], minus [`ImportError::WriteFailed`] and
+/// [`ImportError::SameFile`]. A domain reader adds
+/// [`ImportError::Truncated`] or [`ImportError::PointerOutOfRange`] for an
+/// address the ROM does not hold, [`ImportError::Lz77`] for a stream that
+/// will not decode, and [`ImportError::EntryShape`] for bytes that do not
+/// fit the entry they shape into. [`ImportError::EmptyPack`] if every
+/// domain produced nothing.
+pub fn import_pack(rom_path: &Path) -> Result<ImportedPack, ImportError> {
+    pack_from_rom(&Rom::load(rom_path)?)
+}
+
+/// Import an already-open ROM and hand back the finished pack.
+///
+/// [`import_pack`] for a caller that opened the ROM itself, and the entry
+/// point for one that has to *keep* it open. A caller publishing the pack
+/// over a destination has to know the destination is not the ROM, and a
+/// path answers that question about whichever file it named at the moment
+/// it was asked: another account able to redirect a component of the ROM's
+/// path can let the check pass and the read land elsewhere. Handing the
+/// same descriptor to both settles it — see [`Rom::read_from`]. `rom_path`
+/// is carried for diagnostics only.
+///
+/// # Errors
+///
+/// As [`import_pack`]: [`ImportError::ReadFailed`] now names a handle that
+/// could not be read rather than a path that could not be opened.
+pub fn import_pack_from_file(
+    rom: &std::fs::File,
+    rom_path: &Path,
+) -> Result<ImportedPack, ImportError> {
+    pack_from_rom(&Rom::read_from(rom, rom_path)?)
+}
+
+/// Select `rom`'s profile and build its pack: the half of an import that
+/// happens once the bytes are in hand, however they got there.
+fn pack_from_rom(rom: &Rom) -> Result<ImportedPack, ImportError> {
+    let profile = select_profile(rom)?;
+    let (entry_count, bytes) = build_pack(rom, &profile.roots)?;
+    Ok(ImportedPack::new(entry_count, bytes))
+}
+
+/// Import the ROM at `rom_path` and hand back the pack's bytes.
+///
+/// [`import_pack`] for a caller that wants only the bytes: the equivalence
+/// gate compares a freshly imported pack against the checkout's without
+/// touching disk.
+///
+/// # Errors
+///
+/// As [`import_pack`].
+pub fn import_to_bytes(rom_path: &Path) -> Result<Vec<u8>, ImportError> {
+    Ok(import_pack(rom_path)?.into_bytes())
+}
+
+/// Whether writing to `out_path` would land on the ROM at `rom_path`.
+///
+/// [`import`] guards its own write with this. It is public because the
+/// binary's publish step needs the same answer about a *different* path:
+/// `--import-rom` writes a temporary file and renames it into place, so
+/// the rename is what would clobber the ROM, and the temporary file's own
+/// name never matches it. On Unix that step asks the question of a
+/// directory descriptor instead, which cannot be redirected mid-import;
+/// this is the path-level answer it falls back to elsewhere.
+///
+/// A destination that already exists is compared by *file identity*, so a
+/// hard link to the ROM under another name is still the ROM: the two names
+/// share one inode, and writing through either truncates it. Otherwise the
+/// comparison is on canonical paths, so a symlink, a `..`, or a relative
+/// spelling of the ROM is still the ROM. The destination usually does not
+/// exist yet and cannot be canonicalized directly, so it resolves as its
+/// canonical parent plus its own file name. Answers `false` for anything it
+/// cannot resolve — a ROM that does not exist has nothing to lose, and an
+/// unresolvable destination is a write that fails on its own and reports
+/// why.
+#[must_use]
+pub fn overwrites_rom(rom_path: &Path, out_path: &Path) -> bool {
+    if is_same_file(rom_path, out_path) {
+        return true;
+    }
+    let Ok(rom) = std::fs::canonicalize(rom_path) else {
+        return false;
+    };
+    resolve_destination(out_path).is_some_and(|out| out == rom)
+}
+
+/// Whether `a` and `b` are two names for one file on disk.
+///
+/// Hard links give one inode several directory entries, and no comparison
+/// of path *names* can see that: `canonicalize` resolves symlinks, but two
+/// hard links to the same file canonicalize to their own distinct names.
+/// A device and inode pair names the file itself.
+///
+/// Answers `false` when either path cannot be read — the caller falls back
+/// to the path comparison, which fails open for the same reason.
+#[cfg(unix)]
+fn is_same_file(a: &Path, b: &Path) -> bool {
+    use std::os::unix::fs::MetadataExt;
+
+    // `metadata` follows symlinks, which is what the guard wants: the
+    // question is which file the write lands on, not which name it took.
+    let (Ok(a), Ok(b)) = (std::fs::metadata(a), std::fs::metadata(b)) else {
+        return false;
+    };
+    a.dev() == b.dev() && a.ino() == b.ino()
+}
+
+/// Whether `a` and `b` are two names for one file on disk.
+///
+/// Always `false` off Unix: `std` exposes no stable file identity there,
+/// and the Windows answer needs `GetFileInformationByHandle` through a
+/// crate this workspace will not add without owner approval
+/// (`minimal-deps`). The canonical-path comparison in [`overwrites_rom`]
+/// still catches every alias that is not a hard link.
+#[cfg(not(unix))]
+fn is_same_file(_a: &Path, _b: &Path) -> bool {
+    false
+}
+
+/// The canonical path `out_path` names, whether or not it exists yet.
+fn resolve_destination(out_path: &Path) -> Option<PathBuf> {
+    if let Ok(existing) = std::fs::canonicalize(out_path) {
+        return Some(existing);
+    }
+    let name = out_path.file_name()?;
+    // A bare file name has no parent, and a parent of `""` is not a
+    // directory any OS accepts; both mean the current directory.
+    let parent = match out_path.parent() {
+        Some(parent) if !parent.as_os_str().is_empty() => parent,
+        _ => Path::new("."),
+    };
+    Some(std::fs::canonicalize(parent).ok()?.join(name))
+}
+
+/// Write `bytes` to a file this call creates, refusing a path that is
+/// already taken.
+///
+/// `fs::write` opens create-and-truncate, which *follows* a symlink
+/// sitting at `out_path` and truncates whatever it points at. The
+/// destination is always a fresh name the caller picked for a file that
+/// does not exist yet, so anything already there is by definition not the
+/// file this importer meant to write. In a directory another account can write to, a
+/// player's own `$POKEEMERALD_PACK` choice, that is a planted link aimed
+/// at a file of theirs, and the import would spend its write truncating
+/// it.
+///
+/// Exclusive creation is the only open that cannot be redirected:
+/// `O_CREAT | O_EXCL` refuses a symlink even a dangling one, and Windows'
+/// `CREATE_NEW` refuses an existing name the same way. The attack becomes
+/// a refused import naming the path, not a truncated file.
+fn write_new(out_path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    write_new_with(out_path, |file| {
+        use std::io::Write as _;
+        file.write_all(bytes)
+    })
+}
+
+/// [`write_new`] with the write injected, so the failure path is testable
+/// without a full filesystem (`pokeemerald-rs`'s `import_to_with`
+/// precedent).
+///
+/// A write that fails part-way leaves a prefix of the pack at a name this
+/// call created, and exclusive creation is what makes that unrecoverable:
+/// the retry would hit its own leftover and fail with `AlreadyExists`
+/// forever. So a failed write takes the file with it. Only this call could
+/// have created that name — creation succeeded here, exclusively — which
+/// is what makes removing it safe; the same reasoning already governs the
+/// CLI's cleanup of a failed import.
+///
+/// The handle is dropped before the unlink because Windows refuses to
+/// remove a file that is still open. The original I/O error is what the
+/// caller sees: the write is why the import failed, and a cleanup that
+/// also fails leaves litter but must not rename the diagnosis.
+fn write_new_with(
+    out_path: &Path,
+    write: impl FnOnce(&mut std::fs::File) -> std::io::Result<()>,
+) -> std::io::Result<()> {
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(out_path)?;
+    match write(&mut file) {
+        Ok(()) => Ok(()),
+        Err(error) => {
+            drop(file);
+            let _ = std::fs::remove_file(out_path);
+            Err(error)
+        }
+    }
+}
+
+/// Run every domain reader over `rom` and serialize the pack.
+///
+/// Returns the entry count alongside the bytes, so a report does not have
+/// to re-parse what it just wrote.
+fn build_pack(rom: &Rom, roots: &Roots) -> Result<(usize, Vec<u8>), ImportError> {
+    let mut writer = pack_format::PackWriter::new();
+    for domain in domains::DOMAINS {
+        domain(rom, roots, &mut writer)?;
+    }
+    let entry_count = writer.len();
+    if entry_count == 0 {
+        return Err(ImportError::EmptyPack);
+    }
+    Ok((entry_count, writer.finish()?))
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{import, ImportError, ImportReport};
+    use super::{
+        build_pack, import, import_to_bytes, overwrites_rom, write_new, write_new_with,
+        ImportError, ImportReport, Roots,
+    };
+    use crate::fixture::{shared_emerald_rom, RomFixture};
     use std::path::{Path, PathBuf};
 
     #[test]
@@ -171,15 +492,229 @@ mod tests {
         let out = Path::new("/nonexistent/rom-import/out.pack");
         let err = import(Path::new("/nonexistent/rom-import/rom.gba"), out).unwrap_err();
         assert!(matches!(err, ImportError::ReadFailed { .. }));
+        assert!(matches!(
+            import_to_bytes(Path::new("/nonexistent/rom-import/rom.gba")).unwrap_err(),
+            ImportError::ReadFailed { .. }
+        ));
     }
 
     #[test]
-    fn import_never_writes_a_pack() {
+    fn a_rejected_rom_never_reaches_the_write() {
         // The importer must reject before it can reach a write, so a path it
         // could never create is a safe target.
         let out = Path::new("/nonexistent/rom-import/out.pack");
         assert!(import(Path::new("/dev/null"), out).is_err());
         assert!(!out.exists());
+    }
+
+    #[test]
+    fn a_profile_with_no_roots_fails_closed() {
+        // An empty pack would look like a successful import to every
+        // downstream check, so it is an error rather than a 16-byte file.
+        let err = build_pack(shared_emerald_rom(), &Roots::NONE).unwrap_err();
+        assert!(matches!(err, ImportError::EmptyPack));
+    }
+
+    /// A fresh directory under the OS temporary directory, removed on drop.
+    struct TempDir {
+        path: PathBuf,
+    }
+
+    impl TempDir {
+        fn new(label: &str) -> Self {
+            use std::sync::atomic::{AtomicU32, Ordering};
+            static COUNTER: AtomicU32 = AtomicU32::new(0);
+            let unique = COUNTER.fetch_add(1, Ordering::Relaxed);
+            let path = std::env::temp_dir().join(format!(
+                "rom-import-{label}-{}-{unique}",
+                std::process::id()
+            ));
+            let _ = std::fs::remove_dir_all(&path);
+            std::fs::create_dir_all(&path).expect("a temporary directory");
+            Self { path }
+        }
+
+        fn join(&self, name: &str) -> PathBuf {
+            self.path.join(name)
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.path);
+        }
+    }
+
+    /// Write a header-valid synthetic ROM image and return its path.
+    ///
+    /// It gets past every structural check and is rejected on identity
+    /// alone, so a test can reach the code that runs *after* `Rom::load`
+    /// without a real cartridge.
+    fn write_fixture_rom(dir: &TempDir, name: &str) -> PathBuf {
+        let path = dir.join(name);
+        std::fs::write(&path, RomFixture::new().emerald_header().finish())
+            .expect("the fixture writes");
+        path
+    }
+
+    #[test]
+    fn importing_onto_the_source_rom_is_refused_with_the_rom_intact() {
+        // `Rom::load` reads the image whole before anything is written, so
+        // this write would succeed and leave the player holding a pack
+        // where their cartridge image used to be.
+        let dir = TempDir::new("same-file");
+        let rom_path = write_fixture_rom(&dir, "emerald.gba");
+        let before = std::fs::read(&rom_path).expect("the fixture reads back");
+
+        let err = import(&rom_path, &rom_path).unwrap_err();
+        assert!(matches!(err, ImportError::SameFile { .. }), "{err:?}");
+        assert_eq!(
+            std::fs::read(&rom_path).expect("the ROM survives"),
+            before,
+            "the ROM must be byte-identical after a refused import"
+        );
+    }
+
+    #[test]
+    fn a_relative_or_symlinked_spelling_of_the_rom_is_still_the_rom() {
+        // Canonical paths, not string equality: `./emerald.gba` and a
+        // detour through `..` name the same file the importer just read.
+        let dir = TempDir::new("aliases");
+        let rom_path = write_fixture_rom(&dir, "emerald.gba");
+        let detour = dir.join("nested").join("..").join("emerald.gba");
+        std::fs::create_dir_all(dir.join("nested")).expect("the nested directory");
+        assert!(overwrites_rom(&rom_path, &detour));
+
+        // A file beside it that does not exist yet is a legal destination,
+        // and so is one whose directory does not exist.
+        assert!(!overwrites_rom(&rom_path, &dir.join("pokeemerald.pack")));
+        assert!(!overwrites_rom(
+            &rom_path,
+            &dir.join("nowhere").join("pokeemerald.pack")
+        ));
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn a_hard_link_to_the_rom_is_still_the_rom() {
+        // A hard link is the one alias no comparison of path names can see:
+        // both entries canonicalize to themselves while sharing an inode, so
+        // `fs::write` to the link truncates the ROM the importer just read.
+        let dir = TempDir::new("hard-link");
+        let rom_path = write_fixture_rom(&dir, "emerald.gba");
+        let before = std::fs::read(&rom_path).expect("the fixture reads back");
+        let link = dir.join("pokeemerald.pack");
+        std::fs::hard_link(&rom_path, &link).expect("the hard link");
+        assert_ne!(
+            std::fs::canonicalize(&rom_path).expect("the ROM canonicalizes"),
+            std::fs::canonicalize(&link).expect("the link canonicalizes"),
+            "the test is pointless unless the two names really do differ"
+        );
+
+        assert!(overwrites_rom(&rom_path, &link));
+        let err = import(&rom_path, &link).unwrap_err();
+        assert!(matches!(err, ImportError::SameFile { .. }), "{err:?}");
+        assert_eq!(
+            std::fs::read(&rom_path).expect("the ROM survives"),
+            before,
+            "the ROM must be byte-identical after a refused import"
+        );
+    }
+
+    #[test]
+    fn a_missing_rom_never_reports_a_collision() {
+        // Nothing is at risk, so the missing ROM stays the diagnosis.
+        let missing = Path::new("/nonexistent/rom-import/rom.gba");
+        assert!(!overwrites_rom(missing, missing));
+        assert!(matches!(
+            import(missing, missing).unwrap_err(),
+            ImportError::ReadFailed { .. }
+        ));
+    }
+
+    #[test]
+    fn a_fresh_destination_is_written_whole() {
+        let dir = TempDir::new("write-new");
+        let out = dir.join("pokeemerald.pack");
+        write_new(&out, b"pack bytes").expect("a name nothing holds");
+        assert_eq!(
+            std::fs::read(&out).expect("the pack reads back"),
+            b"pack bytes"
+        );
+    }
+
+    #[test]
+    fn a_destination_that_already_exists_is_refused_intact() {
+        // The importer only ever writes a name its caller reserved for a
+        // file that does not exist. Anything already there belongs to
+        // someone else, so it is refused rather than truncated.
+        let dir = TempDir::new("write-taken");
+        let out = dir.join("pokeemerald.pack");
+        std::fs::write(&out, b"not the importer's").expect("the existing file writes");
+
+        let err = write_new(&out, b"pack bytes").unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::AlreadyExists, "{err}");
+        assert_eq!(
+            std::fs::read(&out).expect("the existing file survives"),
+            b"not the importer's"
+        );
+    }
+
+    #[test]
+    fn a_failed_write_takes_its_own_half_written_file_with_it() {
+        // A write that dies part-way — a full disk — leaves a prefix of the
+        // pack behind. Exclusive creation would make that leftover
+        // permanent: every retry hits its own debris and fails with
+        // `AlreadyExists`. The file is this call's own, so the failure
+        // removes it and the next attempt has a clean name to take.
+        let dir = TempDir::new("write-fails");
+        let out = dir.join("pokeemerald.pack");
+
+        let err = write_new_with(&out, |file| {
+            use std::io::Write as _;
+            file.write_all(b"half a ")?;
+            Err(std::io::Error::new(
+                std::io::ErrorKind::StorageFull,
+                "no space left on device",
+            ))
+        })
+        .unwrap_err();
+
+        // The write's own error survives the cleanup, not a removal error.
+        assert_eq!(err.kind(), std::io::ErrorKind::StorageFull, "{err}");
+        assert!(
+            !out.exists(),
+            "a failed write must not leave a partial pack at {}",
+            out.display()
+        );
+        // And the name is free again, so a retry gets through.
+        write_new(&out, b"pack bytes").expect("the retry takes the freed name");
+        assert_eq!(
+            std::fs::read(&out).expect("the pack reads back"),
+            b"pack bytes"
+        );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn a_symlinked_destination_is_refused_and_its_target_survives() {
+        // The attack this closes: in a pack directory another account can
+        // write to, a link planted at the temporary file's name would send
+        // `fs::write`'s truncation at a file of the player's. Exclusive
+        // creation refuses the link instead of following it.
+        let dir = TempDir::new("write-link");
+        let victim = dir.join("player-save.sav");
+        std::fs::write(&victim, b"the player's save").expect("the victim writes");
+        let planted = dir.join(".pokeemerald.pack.1234.tmp");
+        std::os::unix::fs::symlink(&victim, &planted).expect("the planted link");
+
+        let err = write_new(&planted, b"pack bytes").unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::AlreadyExists, "{err}");
+        assert_eq!(
+            std::fs::read(&victim).expect("the victim survives"),
+            b"the player's save",
+            "the link's target must be byte-identical after a refused write"
+        );
     }
 
     #[test]

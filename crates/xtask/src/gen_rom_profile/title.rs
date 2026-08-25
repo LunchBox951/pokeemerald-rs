@@ -4,14 +4,21 @@
 //! [`super::images`] and a compressed search settle them.
 //!
 //! The palettes are not. `gTitleScreenBgPalettes` concatenates the logo's
-//! palette with the rayquaza/clouds palette, and the ROM's copy of the logo
-//! palette is *shorter than the pack's*: upstream's own build rule cuts it
-//! to 224 colours (`graphics_file_rules.mk`'s `-num_colors 224`), while
-//! `cargo xtask extract` reads all 256 entries of the `.pal` file, the last
-//! 32 of which are black. So the logo palette is located by adjacency --
-//! it is what sits immediately before the rayquaza palette -- and the
-//! generator records the colour count the ROM really holds, plus a note,
-//! because the equivalence harness has to reconcile that difference.
+//! palette with the rayquaza/clouds palette, so the logo palette has no
+//! boundary of its own to search for: it is simply what sits immediately
+//! before the rayquaza palette. [`locate_trimmed_palette`] finds it that
+//! way, walking cuts longest-first.
+//!
+//! The walk is what it is because the two ends disagreed. Upstream's build
+//! rule cuts the logo palette to 224 colours
+//! (`graphics_file_rules.mk`'s `-num_colors 224`) while its `.pal` file
+//! holds 256, the last 32 of them black, and `cargo xtask extract` used to
+//! emit all 256. It now honours the cut
+//! (`xtask::extract::TITLE_SCREEN_PALETTE_CUTS`), so the pack and the ROM
+//! agree and the walk settles on its first candidate. It is kept rather
+//! than replaced by an exact match: it is the check that the palette really
+//! is adjacent, and it still reports honestly if upstream's rule changes
+//! again.
 
 use rom_import::Encoding;
 
@@ -114,8 +121,8 @@ fn locate_palettes(
             .with(Resolution::StructDerived)
             .symbol("gTitleScreenBgPalettes")
             .note(format!(
-                "the ROM holds {color_count} colours, {dropped} fewer than the pack's \
-                 (upstream cuts it with -num_colors); the pack's extra colours are all black"
+                "located by adjacency: {color_count} colours ending where \
+                 {ADJACENT_PALETTE} begins, {dropped} of the pack's colours dropped"
             )),
     );
     plans.push(PalettePlan {

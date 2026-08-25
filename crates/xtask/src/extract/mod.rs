@@ -49,7 +49,10 @@
 //!   *their* in-game palette directly from the PNG
 //!   (`INCGFX_U16(...png", ".gbapal")` in `graphics.c`), not a sibling
 //!   `.pal` file, so this is the only way to recover it (see
-//!   [`TITLE_SCREEN_EMBEDDED_PALETTE_SHEETS`]).
+//!   [`TITLE_SCREEN_EMBEDDED_PALETTE_SHEETS`]). One of the three `.pal`
+//!   files is not extracted whole: `pokemon_logo.pal` is cut to the 224
+//!   colours upstream's own build rule keeps (see
+//!   [`TITLE_SCREEN_PALETTE_CUTS`]).
 //! - **Player/NPC sprites** (`graphics/object_events/pics/people/`): every
 //!   PNG in the directory (133 files: Brendan's and May's own animation
 //!   sheets, plus the full upstream NPC roster — nurses, gym leaders,
@@ -399,8 +402,41 @@ fn decode_palette_entry(
     id: String,
     writer: &mut PackWriter,
 ) -> Result<(), ExtractError> {
+    decode_palette_entry_cut(path, id, None, writer)
+}
+
+/// As [`decode_palette_entry`], keeping only the first `cut` colours.
+///
+/// A `.pal` file can be longer than the palette upstream's build actually
+/// compiles from it (see [`TITLE_SCREEN_PALETTE_CUTS`]). The cut is applied
+/// here rather than in [`build_palette_entry`] so every other call site
+/// keeps reading whole files.
+///
+/// # Errors
+///
+/// [`ExtractError::PaletteShorterThanCut`] if the file has fewer colours
+/// than the cut asks for. Padding it out would put colours in the pack that
+/// no source declares; the cut is a fact about upstream's build rule, so a
+/// file that cannot satisfy it means the rule and the source have diverged.
+fn decode_palette_entry_cut(
+    path: &Path,
+    id: String,
+    cut: Option<usize>,
+    writer: &mut PackWriter,
+) -> Result<(), ExtractError> {
     let text = read_text(path)?;
-    let colors = jasc_pal::parse(&text).map_err(|e| ExtractError::Pal(path.to_path_buf(), e))?;
+    let mut colors =
+        jasc_pal::parse(&text).map_err(|e| ExtractError::Pal(path.to_path_buf(), e))?;
+    if let Some(cut) = cut {
+        if colors.len() < cut {
+            return Err(ExtractError::PaletteShorterThanCut {
+                path: path.to_path_buf(),
+                cut,
+                actual: colors.len(),
+            });
+        }
+        colors.truncate(cut);
+    }
     writer.push(build_palette_entry(path, &colors, id)?);
     Ok(())
 }
@@ -528,6 +564,20 @@ fn extract_tileset(
 /// (see [`extract_title_screen`]).
 const TITLE_SCREEN_EMBEDDED_PALETTE_SHEETS: [&str; 2] = ["emerald_version", "press_start"];
 
+/// Title-screen `.pal` files upstream's own build rule cuts short, and the
+/// colour count it cuts them to.
+///
+/// `graphics_file_rules.mk` builds `pokemon_logo.gbapal` with
+/// `-num_colors 224`, so the ROM holds 224 colours while the `.pal` file
+/// holds 256, the last 32 of them black. The game never reads past 224
+/// either (`pokeemerald_rs::title`'s `LOGO_PALETTE_COLORS`: entries
+/// `224..=255` of that flat palette come from
+/// `title/palette/rayquaza_and_clouds` and from unloaded palette RAM, not
+/// from this file). Honouring the cut here is what lets this pipeline and
+/// the ROM importer emit the same bytes for the same id, which is the whole
+/// point of the two backends sharing `pack_format`'s constructors.
+const TITLE_SCREEN_PALETTE_CUTS: [(&str, usize); 1] = [("pokemon_logo", 224)];
+
 /// Extract `graphics/title_screen/`'s full contents.
 fn extract_title_screen(upstream: &Path, writer: &mut PackWriter) -> Result<(), ExtractError> {
     let dir = upstream.join("graphics/title_screen");
@@ -567,7 +617,13 @@ fn extract_title_screen(upstream: &Path, writer: &mut PackWriter) -> Result<(), 
                     image,
                 )?);
             }
-            Some("pal") => decode_palette_entry(&path, format!("title/palette/{stem}"), writer)?,
+            Some("pal") => {
+                let cut = TITLE_SCREEN_PALETTE_CUTS
+                    .iter()
+                    .find(|(name, _)| *name == stem)
+                    .map(|&(_, colors)| colors);
+                decode_palette_entry_cut(&path, format!("title/palette/{stem}"), cut, writer)?;
+            }
             Some("bin") => push_raw_entry(&path, format!("title/raw/{stem}"), writer)?,
             _ => {}
         }

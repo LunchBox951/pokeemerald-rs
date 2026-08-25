@@ -49,6 +49,46 @@ impl fmt::Display for HeaderFault {
     }
 }
 
+/// Why a song track's byte-code could not be followed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SongFault {
+    /// An operand byte sat at command position with no running status to
+    /// repeat.
+    NoRunningStatus,
+    /// A command byte the engine's jump table leaves unused.
+    UnknownCommand(u8),
+    /// An `XCMD` sub-command other than the pseudo-echo pair.
+    UnknownExtendedCommand(u8),
+    /// A `MEMACC` operation past the engine's table.
+    UnknownMemAccOp(u8),
+    /// `REPT`, which no compiled song carries and the pack cannot hold.
+    Repeat,
+    /// `PATT` nested past the engine's three-deep stack.
+    PatternTooDeep,
+    /// A `GOTO` or branch whose pointer is not a command boundary of this
+    /// track.
+    JumpOutsideTrack,
+    /// The track never reached `FINE`.
+    NoFine,
+}
+
+impl fmt::Display for SongFault {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::NoRunningStatus => f.write_str("an operand with no command to repeat"),
+            Self::UnknownCommand(byte) => write!(f, "unknown command {byte:#04x}"),
+            Self::UnknownExtendedCommand(sub) => {
+                write!(f, "unknown extended command {sub:#04x}")
+            }
+            Self::UnknownMemAccOp(op) => write!(f, "unknown MEMACC operation {op}"),
+            Self::Repeat => f.write_str("REPT is not supported"),
+            Self::PatternTooDeep => f.write_str("PATT nested more than three deep"),
+            Self::JumpOutsideTrack => f.write_str("a jump to somewhere that is not this track"),
+            Self::NoFine => f.write_str("no FINE within the event limit"),
+        }
+    }
+}
+
 /// Why an LZ77 stream could not be decompressed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Lz77Fault {
@@ -150,6 +190,19 @@ pub enum ImportError {
         /// How many entries the table has.
         count: usize,
     },
+    /// A struct in the ROM disagreed with the profile that claims to
+    /// describe it.
+    ///
+    /// Corroboration, never selection: the profile's addresses are
+    /// authoritative, and this says the ROM does not back them up. In
+    /// practice it means the profile table is wrong, so the importer
+    /// refuses rather than packing whatever the addresses happened to hit.
+    StructMismatch {
+        /// The root's name, e.g. `"general"`.
+        root: &'static str,
+        /// The struct field that disagreed, e.g. `"Tileset.tiles"`.
+        field: &'static str,
+    },
     /// An LZ77 stream in the ROM could not be decompressed.
     Lz77 {
         /// The ROM offset the stream starts at.
@@ -166,8 +219,105 @@ pub enum ImportError {
         /// The largest value the format allows.
         max: usize,
     },
+    /// A root's bytes did not fit the pack entry the format shapes them
+    /// into: tiles that do not fill the declared raster, say.
+    ///
+    /// Only reachable if the profile table disagrees with the ROM, since
+    /// every root was checked against real bytes when it was generated.
+    EntryShape {
+        /// The pack id the root produces.
+        id: &'static str,
+        /// What the format objected to.
+        source: pack_format::EntryShapeError,
+    },
+    /// A glyph-sheet root claims a shape the `.latfont` decoder cannot
+    /// honour: the layout is fixed at 256x512 pixels, 2bpp, 32 KiB.
+    ///
+    /// Only reachable from a wrong profile; the generator records the pack
+    /// entry's own shape.
+    FontShape {
+        /// The pack id the root produces.
+        id: &'static str,
+        /// The claimed width in pixels.
+        width: u32,
+        /// The claimed height in pixels.
+        height: u32,
+        /// The claimed bits per pixel.
+        bit_depth: u8,
+        /// The claimed stored length in bytes.
+        len: u32,
+    },
+    /// A sample's `WaveData` is DPCM-compressed (`type != 0`).
+    ///
+    /// The pack stores samples decompressed and the mixer never expands
+    /// DPCM. No instrument the title music plays is compressed; every cry
+    /// is, and none is in scope. Refused rather than expanded because the
+    /// profile says this root is plain PCM, so the ROM disagrees with it.
+    CompressedSample {
+        /// The pack id the root produces.
+        id: &'static str,
+    },
+    /// A voicegroup slot's `ToneData.type` is one the importer does not
+    /// model: not a `DirectSound`, CGB, key-split, or rhythm voice.
+    VoiceType {
+        /// The voicegroup's pack id.
+        root: &'static str,
+        /// The slot index.
+        slot: usize,
+        /// The type byte.
+        kind: u8,
+    },
+    /// A voicegroup slot points at a sample, voicegroup, or key-split
+    /// table the profile does not record.
+    ///
+    /// The pack links by id, so a pointer with no id is unrepresentable.
+    /// The generator records every reachable root, so this is a wrong
+    /// profile, not a gap to fill at run time.
+    UnresolvedPointer {
+        /// The voicegroup's pack id.
+        root: &'static str,
+        /// The slot index.
+        slot: usize,
+        /// What the pointer was expected to address.
+        what: &'static str,
+        /// The pointer itself.
+        ptr: crate::reader::GbaPtr,
+    },
+    /// A song track's byte-code could not be followed.
+    Song {
+        /// The song's pack id.
+        id: &'static str,
+        /// The track index.
+        track: usize,
+        /// The ROM offset of the command that failed.
+        at: usize,
+        /// What went wrong.
+        fault: SongFault,
+    },
+    /// The audio schema refused what the ROM holds.
+    ///
+    /// [`assets`]'s constructors bound a sample's loop point, a key-split
+    /// table's length, a voicegroup's slot count, and a pan override. A
+    /// ROM value outside those bounds is a profile the schema cannot carry.
+    Audio {
+        /// The pack id being built.
+        id: &'static str,
+        /// What the schema objected to.
+        source: assets::AudioError,
+    },
     /// The asset pack could not be assembled.
     PackWrite(pack_format::PackWriteError),
+    /// The pack's destination is the source ROM itself.
+    ///
+    /// [`Rom::load`](crate::Rom::load) reads the whole image into memory
+    /// before a byte is written, so the write would *succeed* and leave the
+    /// player holding a pack where their cartridge image used to be. The
+    /// importer refuses instead, before writing anything
+    /// `(no-silent-failure)`.
+    SameFile {
+        /// The ROM that would have been overwritten.
+        path: PathBuf,
+    },
     /// The asset pack could not be written to disk.
     WriteFailed {
         /// The path the importer tried to write.
@@ -175,16 +325,22 @@ pub enum ImportError {
         /// The underlying I/O failure.
         source: io::Error,
     },
-    /// The import ran but this build has no domain readers, so there is
-    /// nothing to put in a pack.
+    /// Every domain reader ran and produced nothing.
     ///
     /// The importer fails *closed* rather than writing an empty pack: a
     /// zero-entry pack would look like a successful import to every
-    /// downstream check `(gated-by-default)` `(test-ratchet)`.
-    NoDomains,
+    /// downstream check `(gated-by-default)` `(test-ratchet)`. Unreachable
+    /// with a shipped profile, whose root table is never empty; it is
+    /// what a profile with no roots recorded produces.
+    EmptyPack,
 }
 
 impl fmt::Display for ImportError {
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one arm per variant of an exhaustive error enum; splitting the match \
+                  would only scatter the catalogue (`xtask`'s `ExtractError` precedent)"
+    )]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::ReadFailed { path, source } => {
@@ -229,18 +385,64 @@ impl fmt::Display for ImportError {
                 f,
                 "index {index} is past the end of table `{table}` ({count} entries)"
             ),
+            Self::StructMismatch { root, field } => write!(
+                f,
+                "the ROM's `{field}` for `{root}` disagrees with this revision profile"
+            ),
             Self::Lz77 { at, fault } => {
                 write!(f, "LZ77 stream at ROM offset {at:#08x}: {fault}")
             }
             Self::Length { what, value, max } => {
                 write!(f, "{what} is {value}, over the maximum of {max}")
             }
+            Self::EntryShape { id, source } => {
+                write!(f, "asset `{id}` does not fit its pack entry: {source}")
+            }
+            Self::FontShape {
+                id,
+                width,
+                height,
+                bit_depth,
+                len,
+            } => write!(
+                f,
+                "`{id}` claims a {width}x{height}/{bit_depth}bpp glyph sheet of {len} bytes; the ROM stores 256x512/2bpp in 32768"
+            ),
+            Self::CompressedSample { id } => {
+                write!(f, "`{id}` is DPCM-compressed in the ROM; the importer reads plain PCM only")
+            }
+            Self::VoiceType { root, slot, kind } => write!(
+                f,
+                "`{root}` slot {slot} has voice type {kind:#04x}, which the importer does not model"
+            ),
+            Self::UnresolvedPointer {
+                root,
+                slot,
+                what,
+                ptr,
+            } => write!(
+                f,
+                "`{root}` slot {slot} points at {what} {:#010x}, which this revision profile does not record",
+                ptr.raw()
+            ),
+            Self::Song {
+                id,
+                track,
+                at,
+                fault,
+            } => write!(f, "`{id}` track {track} at ROM offset {at:#08x}: {fault}"),
+            Self::Audio { id, source } => write!(f, "`{id}`: {source}"),
             Self::PackWrite(source) => write!(f, "could not assemble the asset pack: {source}"),
+            Self::SameFile { path } => write!(
+                f,
+                "refusing to write the asset pack over the source ROM `{}`",
+                path.display()
+            ),
             Self::WriteFailed { path, source } => {
                 write!(f, "could not write `{}`: {source}", path.display())
             }
-            Self::NoDomains => f.write_str(
-                "ROM import is not implemented yet: this build has no domain readers, so no pack was written",
+            Self::EmptyPack => f.write_str(
+                "the ROM's profile records no assets, so no pack was written",
             ),
         }
     }
@@ -251,6 +453,8 @@ impl std::error::Error for ImportError {
         match self {
             Self::ReadFailed { source, .. } | Self::WriteFailed { source, .. } => Some(source),
             Self::PackWrite(source) => Some(source),
+            Self::EntryShape { source, .. } => Some(source),
+            Self::Audio { source, .. } => Some(source),
             _ => None,
         }
     }
@@ -282,7 +486,7 @@ fn write_ascii(f: &mut fmt::Formatter<'_>, bytes: &[u8]) -> fmt::Result {
 
 #[cfg(test)]
 mod tests {
-    use super::{HeaderFault, ImportError, Lz77Fault};
+    use super::{HeaderFault, ImportError, Lz77Fault, SongFault};
 
     #[test]
     fn unsupported_revision_names_the_one_supported_rom() {
@@ -331,6 +535,10 @@ mod tests {
                 index: 9,
                 count: 4,
             },
+            ImportError::StructMismatch {
+                root: "general",
+                field: "Tileset.tiles",
+            },
             ImportError::Lz77 {
                 at: 0x20,
                 fault: Lz77Fault::WrongType,
@@ -340,8 +548,46 @@ mod tests {
                 value: 9,
                 max: 8,
             },
+            ImportError::EntryShape {
+                id: "title/image/press_start",
+                source: pack_format::EntryShapeError::UnsupportedBitDepth(3),
+            },
             ImportError::PackWrite(pack_format::PackWriteError::DuplicateId("a".into())),
-            ImportError::NoDomains,
+            ImportError::FontShape {
+                id: "font/normal/glyphs",
+                width: 128,
+                height: 512,
+                bit_depth: 2,
+                len: 32768,
+            },
+            ImportError::CompressedSample {
+                id: "audio/sample/direct-sound/x",
+            },
+            ImportError::VoiceType {
+                root: "audio/voicegroup/title",
+                slot: 3,
+                kind: 0x20,
+            },
+            ImportError::UnresolvedPointer {
+                root: "audio/voicegroup/title",
+                slot: 3,
+                what: "a sample",
+                ptr: crate::reader::GbaPtr::AT_BASE,
+            },
+            ImportError::Audio {
+                id: "audio/voicegroup/title",
+                source: assets::AudioError::Truncated,
+            },
+            ImportError::Song {
+                id: "audio/song/mus_title",
+                track: 2,
+                at: 0x10,
+                fault: SongFault::JumpOutsideTrack,
+            },
+            ImportError::EmptyPack,
+            ImportError::SameFile {
+                path: std::path::PathBuf::from("/roms/emerald.gba"),
+            },
         ];
         for case in cases {
             let text = case.to_string();
