@@ -162,7 +162,7 @@ fn locate_trimmed_palette(
     adjacent: u32,
 ) -> Result<(u32, u16, u16), GenRomProfileError> {
     let asset = ctx.pack.get(TRIMMED_PALETTE)?;
-    let pack_colors = asset.palette_colors(TRIMMED_PALETTE)?;
+    let (payload, pack_colors) = asset.palette_payload(TRIMMED_PALETTE)?;
 
     // Walk the possible cuts, longest first: the ROM holds some prefix of
     // the pack's colours, ending where the next palette begins.
@@ -171,8 +171,8 @@ fn locate_trimmed_palette(
         let Some(addr) = adjacent.checked_sub(u32::from(colors) * 2) else {
             continue;
         };
-        if slice_at_addr(ctx.rom, addr, bytes) == Some(&asset.payload[..bytes])
-            && asset.payload[bytes..].iter().all(|&byte| byte == 0)
+        if slice_at_addr(ctx.rom, addr, bytes) == Some(&payload[..bytes])
+            && payload[bytes..].iter().all(|&byte| byte == 0)
         {
             return Ok((addr, colors, pack_colors - colors));
         }

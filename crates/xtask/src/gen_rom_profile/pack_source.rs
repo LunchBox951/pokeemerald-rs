@@ -59,6 +59,33 @@ impl PackAsset {
             }),
         }
     }
+
+    /// The palette's payload and colour count, checked against each other.
+    ///
+    /// [`parse_directory`] bounds every entry against the file, not against
+    /// its own metadata, so a malformed pack can declare more colours than
+    /// its payload holds. Indexing the payload by the declared count must
+    /// go through this check or it panics on such a pack.
+    ///
+    /// # Errors
+    ///
+    /// [`GenRomProfileError::WrongPackEntryKind`] if `id` is not a palette;
+    /// [`GenRomProfileError::EntryShape`] if the payload is not exactly two
+    /// bytes per declared colour.
+    pub fn palette_payload(&self, id: &str) -> Result<(&[u8], u16), GenRomProfileError> {
+        let colors = self.palette_colors(id)?;
+        let expected = usize::from(colors) * 2;
+        if self.payload.len() != expected {
+            return Err(GenRomProfileError::EntryShape {
+                id: id.to_owned(),
+                reason: format!(
+                    "palette declares {colors} colours ({expected} bytes) but holds {} bytes",
+                    self.payload.len()
+                ),
+            });
+        }
+        Ok((&self.payload, colors))
+    }
 }
 
 /// Every entry of one pack, keyed by id.
@@ -191,7 +218,9 @@ const LATIN_FONT_COLUMNS: usize = 16;
 ///
 /// [`GenRomProfileError::WrongPackEntryKind`] if `id` is not an image;
 /// [`GenRomProfileError::EntryShape`] if the sheet is not the 256x512 2bpp
-/// shape the layout assumes.
+/// shape the layout assumes, or its payload is not one byte per pixel of
+/// that shape — the directory bounds a payload against the file, not
+/// against the entry's own metadata.
 pub fn latin_font_bytes(pack: &PackSource, id: &str) -> Result<Vec<u8>, GenRomProfileError> {
     let asset = pack.get(id)?;
     let (width, height, bit_depth) = asset.image_shape(id)?;
@@ -200,6 +229,16 @@ pub fn latin_font_bytes(pack: &PackSource, id: &str) -> Result<Vec<u8>, GenRomPr
             id: id.to_owned(),
             reason: format!(
                 "expected a 256x512 2bpp glyph sheet, got {width}x{height}/{bit_depth}bpp"
+            ),
+        });
+    }
+    let expected = width as usize * height as usize;
+    if asset.payload.len() != expected {
+        return Err(GenRomProfileError::EntryShape {
+            id: id.to_owned(),
+            reason: format!(
+                "a {width}x{height} sheet holds {expected} bytes, got {}",
+                asset.payload.len()
             ),
         });
     }
@@ -236,7 +275,72 @@ pub fn latin_font_bytes(pack: &PackSource, id: &str) -> Result<Vec<u8>, GenRomPr
 
 #[cfg(test)]
 mod tests {
-    use super::metatile_candidates;
+    use super::{latin_font_bytes, metatile_candidates, PackAsset, PackSource};
+    use crate::gen_rom_profile::error::GenRomProfileError;
+    use pack_format::EntryKind;
+
+    /// A one-entry source built by hand, bypassing [`PackSource::load`]'s
+    /// parse: exactly what a malformed pack's directory could deliver.
+    fn source_with(id: &str, kind: EntryKind, payload: Vec<u8>) -> PackSource {
+        PackSource {
+            assets: [(id.to_owned(), PackAsset { kind, payload })].into(),
+        }
+    }
+
+    #[test]
+    fn a_palette_payload_shorter_than_its_colour_count_is_an_error_not_a_panic() {
+        // The directory bounds a payload against the file, not against the
+        // entry's metadata, so the declared count has to be checked before
+        // it indexes the payload.
+        let source = source_with(
+            "title/palette/pokemon_logo",
+            EntryKind::Palette { color_count: 224 },
+            vec![0u8; 10],
+        );
+        let asset = source.get("title/palette/pokemon_logo").unwrap();
+        let err = asset
+            .palette_payload("title/palette/pokemon_logo")
+            .unwrap_err();
+        assert!(
+            matches!(err, GenRomProfileError::EntryShape { .. }),
+            "{err}"
+        );
+        assert!(err.to_string().contains("224"), "{err}");
+    }
+
+    #[test]
+    fn a_matching_palette_payload_passes_the_shape_check() {
+        let source = source_with(
+            "interface/palette/main_menu_bg",
+            EntryKind::Palette { color_count: 16 },
+            vec![0u8; 32],
+        );
+        let asset = source.get("interface/palette/main_menu_bg").unwrap();
+        let (payload, colors) = asset
+            .palette_payload("interface/palette/main_menu_bg")
+            .unwrap();
+        assert_eq!(colors, 16);
+        assert_eq!(payload.len(), 32);
+    }
+
+    #[test]
+    fn a_glyph_sheet_payload_shorter_than_its_raster_is_an_error_not_a_panic() {
+        let source = source_with(
+            "fonts/latin_normal",
+            EntryKind::Image {
+                width: 256,
+                height: 512,
+                bit_depth: 2,
+            },
+            vec![0u8; 100],
+        );
+        let err = latin_font_bytes(&source, "fonts/latin_normal").unwrap_err();
+        assert!(
+            matches!(err, GenRomProfileError::EntryShape { .. }),
+            "{err}"
+        );
+        assert!(err.to_string().contains("131072"), "{err}");
+    }
 
     #[test]
     fn metatile_candidates_are_every_divisor_pair_largest_first() {
