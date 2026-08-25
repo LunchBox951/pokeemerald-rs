@@ -28,12 +28,34 @@
 //! failed import leaves the previous pack intact rather than a truncated
 //! one that would load as a corrupt pack `(no-silent-failure)`.
 //!
+//! The temporary file is `sync_all`ed before that rename, on the same
+//! reasoning `engine`'s save writer spells out for save images: the rename
+//! is what survives the process dying, and the sync before it is what keeps
+//! a *power* loss from publishing a name whose bytes never reached the
+//! disk. The destination directory is synced after the rename, best-effort,
+//! so a completed import is not silently undone by the same crash — but not
+//! every platform lets a directory be synced, so its failure is ignored
+//! rather than reported over an import that otherwise finished.
+//!
 //! The one destination that is refused outright is the ROM being imported.
 //! `$POKEEMERALD_PACK` can name any path, including the file the player
 //! passed to `--import-rom`, and the rename would then drop the pack on
 //! top of their cartridge image. That refusal is a device and inode
 //! comparison against the destination directory's own handle, so a hard
 //! link or a symlink spelling of the ROM is still the ROM.
+//!
+//! The ROM is pinned for the same reason the destination is. That refusal
+//! is only as good as the two files it compares, and asking a *path* what
+//! file it names answers about the moment of asking: an account that can
+//! redirect a component of the ROM's path can let the comparison see a
+//! harmless file and the import read the one sitting at the destination,
+//! and the pack is then published over the very ROM it was built from. So
+//! `--import-rom`'s file is opened once, before the comparison, and the
+//! same descriptor answers both questions — `fstat` for the identity, and
+//! the bytes for the pack ([`rom_import::import_pack_from_file`]). The
+//! destination pin means the attacker cannot move where the pack lands;
+//! the source pin means they cannot change what it was built from after
+//! the guard has passed on it.
 //!
 //! # Why the directory is pinned
 //!
@@ -303,7 +325,7 @@ fn destination() -> Result<PathBuf, ImportRomError> {
 /// [`import_rom`]'s destination-agnostic core, so tests write into a
 /// temporary directory instead of the developer's real data directory.
 fn import_to(rom_path: &Path, pack_path: &Path) -> Result<ImportOutcome, ImportRomError> {
-    import_to_with(rom_path, pack_path, rom_import::import_pack)
+    import_to_with(rom_path, pack_path, rom_import::import_pack_from_file)
 }
 
 /// [`import_to`] with the importer injected, so the write path is testable
@@ -317,8 +339,20 @@ fn import_to(rom_path: &Path, pack_path: &Path) -> Result<ImportOutcome, ImportR
 fn import_to_with(
     rom_path: &Path,
     pack_path: &Path,
-    import: impl FnOnce(&Path) -> Result<ImportedPack, ImportError>,
+    import: impl FnOnce(&fs::File, &Path) -> Result<ImportedPack, ImportError>,
 ) -> Result<ImportOutcome, ImportRomError> {
+    // The ROM is opened once, before anything else looks at it, and every
+    // question the import asks about it is asked of this handle: whether it
+    // is the file the pack would be published over, and what its bytes are.
+    // See the module docs — a path answers about whichever file it named
+    // when it was asked, and the source path is not this run's to trust.
+    let rom = fs::File::open(rom_path).map_err(|source| {
+        ImportRomError::Import(ImportError::ReadFailed {
+            path: rom_path.to_path_buf(),
+            source,
+        })
+    })?;
+
     let dir = pack_directory(pack_path);
     // Refused before anything is created: with no final component, or with
     // the destination spelled as a directory, there is no name to publish
@@ -357,7 +391,7 @@ fn import_to_with(
     // pack on their cartridge image: the temporary file never shares the
     // ROM's name, so no guard on that name can see this. Refuse before
     // building a pack that has nowhere safe to go.
-    if dest.is_same_file_as(name, rom_path) {
+    if dest.is_same_file_as(name, &rom, rom_path) {
         undo_created_dir(&dir, existed);
         return Err(ImportRomError::DestinationIsSource {
             rom_path: rom_path.to_path_buf(),
@@ -381,7 +415,7 @@ fn import_to_with(
         }
     };
 
-    let pack = match import(rom_path) {
+    let pack = match import(&rom, rom_path) {
         Ok(pack) => pack,
         Err(source) => {
             drop(file);
@@ -395,7 +429,17 @@ fn import_to_with(
     // run would pick a different name and leave this one behind, so it goes
     // with the failure. The handle is dropped before the removal because
     // Windows refuses to unlink a file that is still open.
-    if let Err(source) = file.write_all(pack.bytes()).and_then(|()| file.flush()) {
+    //
+    // `sync_all` is part of the write, not an optimization after it: the
+    // rename below publishes a *name*, and a power loss that lands the
+    // rename without the bytes would replace a pack that worked with a
+    // truncated one. Reported like any other write failure, because an
+    // import that cannot get the pack onto the disk has not succeeded.
+    if let Err(source) = file
+        .write_all(pack.bytes())
+        .and_then(|()| file.flush())
+        .and_then(|()| file.sync_all())
+    {
         drop(file);
         dest.discard(&temp_name);
         undo_created_dir(&dir, existed);

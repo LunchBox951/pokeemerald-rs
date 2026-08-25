@@ -66,6 +66,35 @@ fn file_names(dir: &Path) -> Vec<String> {
     names
 }
 
+/// A stand-in for the file the player passes to `--import-rom`.
+///
+/// It has to be a real, openable file even where the importer is injected:
+/// the import opens the source once up front and hands that handle on, so
+/// there is no longer such a thing as a source path nothing opens. It keeps
+/// its own directory, so a test's assertions about the *destination*
+/// directory's contents are unaffected by it.
+struct SourceRom {
+    /// The directory holding it, removed when this is dropped.
+    _dir: TempDir,
+    /// The path to hand to the import.
+    path: PathBuf,
+}
+
+impl SourceRom {
+    /// A source file whose bytes are nobody's business but the importer's.
+    fn new(label: &str) -> Self {
+        let dir = TempDir::new(label);
+        let path = dir.join("emerald.gba");
+        fs::write(&path, b"stand-in for the player's cartridge").expect("the source writes");
+        Self { _dir: dir, path }
+    }
+
+    /// The path to hand to the import.
+    fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
 /// Write a synthetic Emerald-shaped ROM image and return its path.
 ///
 /// The image has a valid cartridge header, so it gets past every structural
@@ -83,7 +112,8 @@ fn a_successful_import_publishes_the_pack_and_clears_the_temp_file() {
     let dir = TempDir::new("publish");
     // A directory that does not exist yet: importing has to create it.
     let pack_path = dir.join("nested").join("pokeemerald.pack");
-    let outcome = import_to_with(Path::new("/roms/emerald.gba"), &pack_path, |_rom| {
+    let source = SourceRom::new("publish-src");
+    let outcome = import_to_with(source.path(), &pack_path, |_rom, _path| {
         Ok(fake_pack(b"pack bytes"))
     })
     .expect("the import succeeds");
@@ -105,7 +135,8 @@ fn a_failed_import_leaves_neither_a_pack_nor_a_partial_file() {
     let pack_path = dir.join("pokeemerald.pack");
     // The temporary file is created before the importer runs, so a failed
     // import has one to take with it even though no bytes ever reached it.
-    let err = import_to_with(Path::new("/roms/emerald.gba"), &pack_path, |_rom| {
+    let source = SourceRom::new("fail-closed-src");
+    let err = import_to_with(source.path(), &pack_path, |_rom, _path| {
         Err(ImportError::EmptyPack)
     })
     .unwrap_err();
@@ -124,7 +155,8 @@ fn a_failed_import_removes_the_directory_it_created() {
     let created = dir.join("pokeemerald-rs");
     let pack_path = created.join("pokeemerald.pack");
 
-    let err = import_to_with(Path::new("/roms/emerald.gba"), &pack_path, |_rom| {
+    let source = SourceRom::new("undo-dir-src");
+    let err = import_to_with(source.path(), &pack_path, |_rom, _path| {
         Err(ImportError::EmptyPack)
     })
     .unwrap_err();
@@ -141,7 +173,8 @@ fn an_import_into_an_existing_directory_leaves_it_alone() {
     let dir = TempDir::new("keep-dir");
     let pack_path = dir.join("pokeemerald.pack");
 
-    let err = import_to_with(Path::new("/roms/emerald.gba"), &pack_path, |_rom| {
+    let source = SourceRom::new("keep-dir-src");
+    let err = import_to_with(source.path(), &pack_path, |_rom, _path| {
         Err(ImportError::EmptyPack)
     })
     .unwrap_err();
@@ -157,7 +190,8 @@ fn an_existing_pack_survives_a_failed_import() {
     let pack_path = dir.join("pokeemerald.pack");
     fs::write(&pack_path, b"the pack that already worked").expect("the old pack writes");
 
-    let err = import_to_with(Path::new("/roms/emerald.gba"), &pack_path, |_rom| {
+    let source = SourceRom::new("keep-old-src");
+    let err = import_to_with(source.path(), &pack_path, |_rom, _path| {
         Err(ImportError::EmptyPack)
     })
     .unwrap_err();
@@ -286,7 +320,8 @@ fn a_long_but_valid_pack_name_still_imports() {
     let name = "p".repeat(240);
     let pack_path = dir.join(&name);
 
-    let outcome = import_to_with(Path::new("/roms/emerald.gba"), &pack_path, |_rom| {
+    let source = SourceRom::new("long-name-src");
+    let outcome = import_to_with(source.path(), &pack_path, |_rom, _path| {
         Ok(fake_pack(b"pack bytes"))
     })
     .expect("the import succeeds");
@@ -352,7 +387,8 @@ fn a_redirected_directory_component_cannot_move_the_published_pack() {
     std::os::unix::fs::symlink(&checked, &component).expect("the component links");
 
     let pack_path = component.join("pokeemerald.pack");
-    let outcome = import_to_with(Path::new("/roms/emerald.gba"), &pack_path, |_rom| {
+    let source = SourceRom::new("pinned-dir-src");
+    let outcome = import_to_with(source.path(), &pack_path, |_rom, _path| {
         fs::remove_file(&component).expect("the component is removed");
         std::os::unix::fs::symlink(&elsewhere, &component).expect("the component is redirected");
         Ok(fake_pack(b"pack bytes"))
@@ -380,10 +416,54 @@ fn the_rom_is_recognized_through_the_pinned_directory() {
     let rom_path = write_fixture_rom(&dir);
     fs::hard_link(&rom_path, dir.join("alias.gba")).expect("the link is made");
     let dest = Dest::open(&dir.path).expect("the directory opens");
+    let rom = fs::File::open(&rom_path).expect("the ROM opens");
 
-    assert!(dest.is_same_file_as(OsStr::new("fixture.gba"), &rom_path));
-    assert!(dest.is_same_file_as(OsStr::new("alias.gba"), &rom_path));
-    assert!(!dest.is_same_file_as(OsStr::new("pokeemerald.pack"), &rom_path));
+    assert!(dest.is_same_file_as(OsStr::new("fixture.gba"), &rom, &rom_path));
+    assert!(dest.is_same_file_as(OsStr::new("alias.gba"), &rom, &rom_path));
+    assert!(!dest.is_same_file_as(OsStr::new("pokeemerald.pack"), &rom, &rom_path));
+}
+
+#[cfg(unix)]
+#[test]
+fn a_redirected_source_component_cannot_change_what_is_imported() {
+    // The mirror of the destination race, on the file the player named.
+    // The identity guard clears the source against the destination, and an
+    // account owning a component of the source's path then redirects it at
+    // the destination. Only the pinned handle keeps the two answers
+    // together: what the guard cleared is what the importer reads, so the
+    // pack can never be built from the file it is about to replace.
+    use std::io::Read as _;
+
+    let roms = TempDir::new("pinned-source");
+    let named = roms.join("emerald.gba");
+    fs::write(&named, b"the ROM the player named").expect("the ROM writes");
+    let swapped = roms.join("swapped.gba");
+    fs::write(&swapped, b"the file swapped in mid-import").expect("the swap writes");
+    let component = roms.join("link.gba");
+    std::os::unix::fs::symlink(&named, &component).expect("the source links");
+
+    let dir = TempDir::new("pinned-source-dest");
+    let pack_path = dir.join("pokeemerald.pack");
+
+    let outcome = import_to_with(&component, &pack_path, |rom, _path| {
+        fs::remove_file(&component).expect("the source is removed");
+        std::os::unix::fs::symlink(&swapped, &component).expect("the source is redirected");
+
+        let mut handle = rom;
+        let mut bytes = Vec::new();
+        handle
+            .read_to_end(&mut bytes)
+            .expect("the pinned ROM reads");
+        assert_eq!(
+            bytes, b"the ROM the player named",
+            "the import must read the handle it checked, not the path again"
+        );
+        Ok(fake_pack(b"pack bytes"))
+    })
+    .expect("the import succeeds");
+
+    assert_eq!(outcome.pack_path(), pack_path);
+    assert_eq!(fs::read(&pack_path).unwrap(), b"pack bytes");
 }
 
 #[test]
@@ -401,7 +481,8 @@ fn a_destination_naming_no_file_is_refused_before_anything_is_written() {
     let dir = TempDir::new("no-file-name");
     let pack_path = dir.join("..");
 
-    let err = import_to_with(Path::new("/roms/emerald.gba"), &pack_path, |_rom| {
+    let source = SourceRom::new("no-file-name-src");
+    let err = import_to_with(source.path(), &pack_path, |_rom, _path| {
         Ok(fake_pack(b"pack bytes"))
     })
     .unwrap_err();
@@ -450,11 +531,10 @@ fn a_destination_spelled_as_a_directory_is_refused_with_that_name_intact() {
     let mut spelled = occupied.clone().into_os_string();
     spelled.push(std::path::MAIN_SEPARATOR_STR);
 
-    let err = import_to_with(
-        Path::new("/roms/emerald.gba"),
-        Path::new(&spelled),
-        |_rom| Ok(fake_pack(b"pack bytes")),
-    )
+    let source = SourceRom::new("directory-spelling-src");
+    let err = import_to_with(source.path(), Path::new(&spelled), |_rom, _path| {
+        Ok(fake_pack(b"pack bytes"))
+    })
     .unwrap_err();
 
     assert!(
@@ -479,7 +559,8 @@ fn a_non_utf8_pack_name_is_published_byte_for_byte() {
     let name = OsStr::from_bytes(b"pok\xe9mon.pack");
     let pack_path = dir.path.join(name);
 
-    let outcome = import_to_with(Path::new("/roms/emerald.gba"), &pack_path, |_rom| {
+    let source = SourceRom::new("non-utf8-name-src");
+    let outcome = import_to_with(source.path(), &pack_path, |_rom, _path| {
         Ok(fake_pack(b"pack bytes"))
     })
     .expect("the import succeeds");
@@ -509,8 +590,10 @@ fn a_pack_destination_pointing_at_the_rom_is_refused_with_the_rom_intact() {
     let rom_path = write_fixture_rom(&dir);
     let before = fs::read(&rom_path).expect("the fixture reads back");
 
-    let err =
-        import_to_with(&rom_path, &rom_path, |_rom| Ok(fake_pack(b"pack bytes"))).unwrap_err();
+    let err = import_to_with(&rom_path, &rom_path, |_rom, _path| {
+        Ok(fake_pack(b"pack bytes"))
+    })
+    .unwrap_err();
 
     assert!(
         matches!(err, ImportRomError::DestinationIsSource { .. }),

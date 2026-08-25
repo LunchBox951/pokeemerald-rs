@@ -162,11 +162,13 @@ impl ImportReport {
 
 /// A finished pack the caller has yet to put anywhere.
 ///
-/// [`import_pack`] hands one back so a caller that publishes the pack
-/// itself does not have to re-parse the bytes to learn what they hold.
-/// `pokeemerald-rs`'s `--import-rom` is that caller: it creates the file
-/// and renames it into place against a directory descriptor it holds open,
-/// which no API taking an output *path* can do on its behalf.
+/// [`import_pack`] and [`import_pack_from_file`] hand one back so a caller
+/// that publishes the pack itself does not have to re-parse the bytes to
+/// learn what they hold. `pokeemerald-rs`'s `--import-rom` is that caller:
+/// it creates the file and renames it into place against a directory
+/// descriptor it holds open, which no API taking an output *path* can do on
+/// its behalf — and it opens the ROM itself, which is why the handle-taking
+/// form exists.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ImportedPack {
     entry_count: usize,
@@ -278,9 +280,36 @@ pub fn import(rom_path: &Path, out_path: &Path) -> Result<ImportReport, ImportEr
 /// fit the entry they shape into. [`ImportError::EmptyPack`] if every
 /// domain produced nothing.
 pub fn import_pack(rom_path: &Path) -> Result<ImportedPack, ImportError> {
-    let rom = Rom::load(rom_path)?;
-    let profile = select_profile(&rom)?;
-    let (entry_count, bytes) = build_pack(&rom, &profile.roots)?;
+    pack_from_rom(&Rom::load(rom_path)?)
+}
+
+/// Import an already-open ROM and hand back the finished pack.
+///
+/// [`import_pack`] for a caller that opened the ROM itself, and the entry
+/// point for one that has to *keep* it open. A caller publishing the pack
+/// over a destination has to know the destination is not the ROM, and a
+/// path answers that question about whichever file it named at the moment
+/// it was asked: another account able to redirect a component of the ROM's
+/// path can let the check pass and the read land elsewhere. Handing the
+/// same descriptor to both settles it — see [`Rom::read_from`]. `rom_path`
+/// is carried for diagnostics only.
+///
+/// # Errors
+///
+/// As [`import_pack`]: [`ImportError::ReadFailed`] now names a handle that
+/// could not be read rather than a path that could not be opened.
+pub fn import_pack_from_file(
+    rom: &std::fs::File,
+    rom_path: &Path,
+) -> Result<ImportedPack, ImportError> {
+    pack_from_rom(&Rom::read_from(rom, rom_path)?)
+}
+
+/// Select `rom`'s profile and build its pack: the half of an import that
+/// happens once the bytes are in hand, however they got there.
+fn pack_from_rom(rom: &Rom) -> Result<ImportedPack, ImportError> {
+    let profile = select_profile(rom)?;
+    let (entry_count, bytes) = build_pack(rom, &profile.roots)?;
     Ok(ImportedPack::new(entry_count, bytes))
 }
 

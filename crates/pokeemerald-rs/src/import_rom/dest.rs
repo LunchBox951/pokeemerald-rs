@@ -47,7 +47,7 @@ impl Dest {
         Ok(Self { dir })
     }
 
-    /// Whether `name`, inside this directory, is the file at `path`.
+    /// Whether `name`, inside this directory, is the open file `rom`.
     ///
     /// A device and inode pair names the file itself, so a hard link under
     /// another name is still the same file — the comparison `std` cannot
@@ -55,13 +55,19 @@ impl Dest {
     /// `name`, which is the question being asked: not which name the
     /// destination took, but which file a write through it would land on.
     ///
+    /// Both sides are handles, not paths. `fstat` on the descriptor the
+    /// importer reads from is what makes the answer keep: a ROM path
+    /// another account can redirect would otherwise be one file when it is
+    /// checked and another when it is read. `rom_path` is unused here for
+    /// exactly that reason; it stays in the signature because the
+    /// non-Unix arm has no descriptor to ask.
+    ///
     /// `false` when either side cannot be read. A destination that does
-    /// not exist yet is not the ROM, and a ROM that cannot be stat'd has
-    /// nothing to lose.
-    pub(super) fn is_same_file_as(&self, name: &OsStr, path: &Path) -> bool {
+    /// not exist yet is not the ROM.
+    pub(super) fn is_same_file_as(&self, name: &OsStr, rom: &File, _rom_path: &Path) -> bool {
         let (Ok(here), Ok(there)) = (
             rustix::fs::statat(&self.dir, name, rustix::fs::AtFlags::empty()),
-            rustix::fs::stat(path),
+            rustix::fs::fstat(rom),
         ) else {
             return false;
         };
@@ -106,11 +112,19 @@ impl Dest {
     /// is atomic: a reader sees the old pack or the new one, never a
     /// partial file.
     ///
+    /// The directory is `fsync`ed afterwards, which is what makes the
+    /// rename itself outlive a power loss — the pinned descriptor is
+    /// already the handle to sync, so it costs no second open. Best-effort:
+    /// the pack's bytes are durable before this is reached (the caller
+    /// syncs the temporary file), so a directory entry left in the page
+    /// cache is not worth failing an otherwise finished import over.
+    ///
     /// # Errors
     ///
     /// Whatever `renameat(2)` reports.
     pub(super) fn publish(&self, from: &OsStr, to: &OsStr) -> io::Result<()> {
         rustix::fs::renameat(&self.dir, from, &self.dir, to)?;
+        let _ = rustix::fs::fsync(&self.dir);
         Ok(())
     }
 
@@ -157,12 +171,15 @@ impl Dest {
         })
     }
 
-    /// Whether `name`, inside this directory, is the file at `path`.
+    /// Whether `name`, inside this directory, is the open file `rom`.
     ///
     /// The path-level answer: canonical paths, since Windows exposes no
     /// stable file identity through `std` (`rom_import::overwrites_rom`).
-    pub(super) fn is_same_file_as(&self, name: &OsStr, path: &Path) -> bool {
-        rom_import::overwrites_rom(path, &self.dir.join(name))
+    /// The open handle is therefore no use here, and the window the Unix
+    /// arm closes stays open — [`super`]'s docs state what that leaves
+    /// trusted.
+    pub(super) fn is_same_file_as(&self, name: &OsStr, _rom: &File, rom_path: &Path) -> bool {
+        rom_import::overwrites_rom(rom_path, &self.dir.join(name))
     }
 
     /// Create `name` inside this directory, refusing a name already taken.
@@ -181,11 +198,18 @@ impl Dest {
 
     /// Rename `from` onto `to`, both inside this directory.
     ///
+    /// The directory sync that follows the rename on Unix has no portable
+    /// equivalent — Windows will not open a directory as a file — so the
+    /// rename's own durability is left to the platform here. The pack's
+    /// bytes are already synced either way.
+    ///
     /// # Errors
     ///
     /// Whatever the rename reports.
     pub(super) fn publish(&self, from: &OsStr, to: &OsStr) -> io::Result<()> {
-        std::fs::rename(self.dir.join(from), self.dir.join(to))
+        std::fs::rename(self.dir.join(from), self.dir.join(to))?;
+        let _ = File::open(&self.dir).and_then(|dir| dir.sync_all());
+        Ok(())
     }
 
     /// Remove `name` from this directory, ignoring a failure.
