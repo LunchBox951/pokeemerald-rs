@@ -636,6 +636,25 @@ pub fn load_default() -> Result<TitleScene, TitleSceneError> {
     TitleScene::from_pack(&pack)
 }
 
+/// [`load_default`], pinned to the checkout's own extracted pack
+/// ([`AssetPack::load_repo`]) instead of the runtime resolution order.
+///
+/// Checkout gates -- `cargo xtask scenario` and the smoke e2e -- must judge
+/// the pack the checkout just produced; the runtime order would let an
+/// installed user pack shadow it and the gate would validate the wrong
+/// bytes. Players never reach this: the shipped binary boots through
+/// [`load_default`].
+///
+/// # Errors
+///
+/// [`TitleSceneError::Pack`] with [`TitleSceneError::is_pack_missing`] true
+/// if the checkout has no extracted pack yet (`./init.sh` then
+/// `cargo xtask extract`); otherwise as [`load_default`].
+pub fn load_repo() -> Result<TitleScene, TitleSceneError> {
+    let pack = AssetPack::load_repo()?;
+    TitleScene::from_pack(&pack)
+}
+
 /// Convert a pack image entry's row-major, one-byte-per-pixel bitmap into a
 /// [`Tileset`] at `bit_depth`.
 ///

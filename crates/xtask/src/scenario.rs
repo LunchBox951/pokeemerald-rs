@@ -249,7 +249,8 @@ impl ScenarioDriver for App {
     }
 }
 
-/// Run `name` against the default local pack through the real headless app.
+/// Run `name` against the checkout's own extracted pack through the real
+/// headless app ([`App::new_headless_real`] pins it to `assets-pack/`).
 ///
 /// # Errors
 ///

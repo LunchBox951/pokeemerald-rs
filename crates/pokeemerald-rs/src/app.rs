@@ -344,12 +344,13 @@ impl App {
     /// (for [`App::new`], [`AppError::Platform`] if the platform's windowing
     /// event loop could not be created) otherwise.
     fn boot(
+        load_title: impl FnOnce() -> Result<title::TitleScene, title::TitleSceneError>,
         open_platform: impl FnOnce() -> Result<Platform, PlatformError>,
         open_save_slot: impl FnOnce() -> SaveSlot,
     ) -> Result<Self, AppError> {
         // Load first: no window or save medium is opened if the pack is
         // missing.
-        let loaded = compose_title_scene(title::load_default()?);
+        let loaded = compose_title_scene(load_title()?);
         let platform = open_platform()?;
         Ok(Self::assemble(platform, loaded, open_save_slot()))
     }
@@ -375,7 +376,11 @@ impl App {
     /// player and `./init.sh`/`cargo xtask extract` for a developer) or is otherwise malformed; [`AppError::Platform`] if the
     /// platform's windowing event loop could not be created.
     pub fn new(title: impl Into<String>) -> Result<Self, AppError> {
-        let mut app = Self::boot(|| Platform::new(title), SaveSlot::default_location)?;
+        let mut app = Self::boot(
+            title::load_default,
+            || Platform::new(title),
+            SaveSlot::default_location,
+        )?;
         app.music = Self::start_title_music(&mut app.music_context, || {
             platform::AudioOutput::open(crate::music::RING_CAPACITY_FRAMES)
         });
@@ -387,9 +392,13 @@ impl App {
     /// window.
     ///
     /// This is the scripted-scenario counterpart to [`App::new`]: it runs
-    /// the same pack load, scene construction, [`App::step`] transitions,
-    /// and presentation calls without opening a display or pacing against
-    /// wall time. Persistence is deliberately disabled so a scenario
+    /// the same scene construction, [`App::step`] transitions, and
+    /// presentation calls without opening a display or pacing against wall
+    /// time. The one deliberate divergence is the pack: it loads the
+    /// checkout's own extracted pack ([`title::load_repo`]), because the
+    /// scenario and e2e gates that boot through here promise fixed inputs
+    /// (`docs/scenarios.md`) and must never validate an installed user pack
+    /// that happens to shadow the checkout's. Persistence is deliberately disabled so a scenario
     /// always starts on the no-save menu and never reads or writes a
     /// player's save file. No BGM is started either -- a scenario asserts
     /// frames, not audio, and [`App::new`] alone owns the real device.
@@ -400,7 +409,11 @@ impl App {
     /// [`App::new`] -- most commonly [`TitleSceneError::is_pack_missing`]
     /// when no local asset pack has been extracted yet.
     pub fn new_headless_real() -> Result<Self, AppError> {
-        Self::boot(|| Ok(Platform::new_headless()), SaveSlot::disabled)
+        Self::boot(
+            title::load_repo,
+            || Ok(Platform::new_headless()),
+            SaveSlot::disabled,
+        )
     }
 
     /// Test-only: [`App::new_headless_real`] with the title BGM started
@@ -415,7 +428,11 @@ impl App {
     /// [`App::new`].
     #[cfg(test)]
     fn new_headless_real_title() -> Result<Self, AppError> {
-        let mut app = Self::boot(|| Ok(Platform::new_headless()), SaveSlot::disabled)?;
+        let mut app = Self::boot(
+            title::load_repo,
+            || Ok(Platform::new_headless()),
+            SaveSlot::disabled,
+        )?;
         app.music = Self::start_title_music(&mut app.music_context, || {
             Ok(platform::AudioOutput::null(
                 crate::music::RING_CAPACITY_FRAMES,
