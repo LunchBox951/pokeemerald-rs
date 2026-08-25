@@ -159,9 +159,11 @@ pub enum ImportRomError {
     ///
     /// A `$POKEEMERALD_PACK` ending in `..` (or naming a filesystem root)
     /// has no final component, so there is no name to rename the finished
-    /// pack onto. Refused before anything is written; substituting a
-    /// default name would publish somewhere the player did not ask for
-    /// `(no-silent-failure)`.
+    /// pack onto. One ending in a separator — `…/pack/`, `…/pack/.` — names
+    /// a directory, which is not a file to publish either. Refused before
+    /// anything is written; substituting a default name, or the name in
+    /// front of the separator, would publish somewhere the player did not
+    /// ask for `(no-silent-failure)`.
     DestinationNamesNoFile {
         /// The destination that names no file.
         pack_path: PathBuf,
@@ -318,9 +320,9 @@ fn import_to_with(
     import: impl FnOnce(&Path) -> Result<ImportedPack, ImportError>,
 ) -> Result<ImportOutcome, ImportRomError> {
     let dir = pack_directory(pack_path);
-    // Refused before anything is created: with no final component there is
-    // no name to publish onto, and substituting one would write somewhere
-    // the player did not ask for.
+    // Refused before anything is created: with no final component, or with
+    // the destination spelled as a directory, there is no name to publish
+    // onto that the player's own path leads back to.
     let Some(name) = pack_name(pack_path) else {
         return Err(ImportRomError::DestinationNamesNoFile {
             pack_path: pack_path.to_path_buf(),
@@ -362,7 +364,7 @@ fn import_to_with(
         });
     }
 
-    let temp_name = temp_name(name);
+    let temp_name = temp_name();
     // Exclusive, and before the import runs: the file the pack goes in is
     // this run's own from the moment it exists, so nothing that happens
     // during the import can substitute another one for it. A name already
@@ -439,9 +441,40 @@ fn pack_directory(pack_path: &Path) -> PathBuf {
 /// It stays an [`OsStr`] end to end: the name the player's path spells is
 /// the name published, byte for byte, even off UTF-8. A path with no final
 /// component (a bare `..`, a filesystem root) names no file to publish and
-/// is `None` — the caller refuses it rather than inventing a name.
+/// is `None` — the caller refuses it rather than inventing a name. So does
+/// one spelled as a directory, for the reason [`names_a_directory`] gives.
 fn pack_name(pack_path: &Path) -> Option<&OsStr> {
+    if names_a_directory(pack_path) {
+        return None;
+    }
     pack_path.file_name()
+}
+
+/// Whether `pack_path` is spelled as a directory rather than as a file.
+///
+/// [`Path::file_name`] answers about *components*, and a trailing separator
+/// is not one: `…/pokeemerald.pack/` and `…/pokeemerald.pack/.` both hand
+/// back `pokeemerald.pack`. Publishing under that name writes a file the
+/// player's own path cannot reach — every OS resolves the separator they
+/// typed, and a regular file behind one is `ENOTDIR` — while replacing
+/// whatever already held the name. The loader reads `$POKEEMERALD_PACK`
+/// back exactly as it was set ([`pack_format::default_pack_path`]'s first
+/// rung), so the import would report success over a pack the next run
+/// cannot open `(no-silent-failure)`.
+///
+/// Separators and `.` are ASCII, and [`OsStr::to_string_lossy`] leaves
+/// ASCII bytes alone, so a destination that is not UTF-8 reads correctly
+/// here too.
+fn names_a_directory(pack_path: &Path) -> bool {
+    let text = pack_path.as_os_str().to_string_lossy();
+    let mut tail = text.chars().rev();
+    match tail.next() {
+        // A trailing `.` is a directory spelling only after a separator:
+        // `pokeemerald.pack.` is a file name that happens to end in one.
+        Some('.') => tail.next().is_some_and(std::path::is_separator),
+        Some(last) => std::path::is_separator(last),
+        None => false,
+    }
 }
 
 /// Remove the destination directory this run created, if it created one.
@@ -457,7 +490,14 @@ fn undo_created_dir(dir: &Path, existed: bool) {
     }
 }
 
-/// The name of the temporary file the pack is built in, beside `name`.
+/// The fixed leading part of every temporary pack name.
+///
+/// The dot keeps the file out of a casual directory listing while it
+/// exists; the rest says who left it there, on the rare occasion a crash
+/// between the create and the publish leaves one behind.
+const TEMP_PREFIX: &str = ".pokeemerald-rs-import";
+
+/// The name of the temporary file the pack is built in, beside the pack.
 ///
 /// The file is created exclusively ([`Dest::create_new`]), so the name has
 /// one job: be one nothing else already
@@ -465,29 +505,33 @@ fn undo_created_dir(dir: &Path, existed: bool) {
 /// namespaces sharing one mounted directory, it is recycled after a kill
 /// that left a stale temporary file behind, and `/proc` hands it to
 /// anyone on the machine — so in a pack directory another account can
-/// write to, `.pokeemerald.pack.<pid>.tmp` is a name an attacker can
+/// write to, `.pokeemerald-rs-import.<pid>.tmp` is a name an attacker can
 /// pre-create as a link to a file of the player's. The clock's
 /// nanoseconds and a per-process counter go in with it: no pre-created
 /// name matches one, and covering a second of them is a billion files.
 ///
 /// A collision that happens anyway is a refused import naming the path,
 /// never a write through someone else's link, and the next run picks a
-/// different name. The leading dot keeps the file out of a casual
-/// directory listing while it exists.
-fn temp_name(name: &OsStr) -> OsString {
+/// different name.
+///
+/// What is deliberately *not* in it is the pack's own name. A 240-byte
+/// basename is valid on every filesystem this ships to, and prefixing a
+/// temporary name with the whole of it pushed past the 255-byte limit for
+/// one component: `ENAMETOOLONG` on a name the player never typed, leaving
+/// a perfectly valid destination impossible to import to. A fixed prefix
+/// and three numbers is bounded whatever the pack is called, and the
+/// destination is not what makes the name unique anyway.
+fn temp_name() -> OsString {
     static SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
     let nanos = SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
         .map_or(0, |since| since.as_nanos());
     let sequence = SEQUENCE.fetch_add(1, Ordering::Relaxed);
-    let mut temp = OsString::from(".");
-    temp.push(name);
-    temp.push(format!(
-        ".{}.{nanos:x}.{sequence:x}.tmp",
+    OsString::from(format!(
+        "{TEMP_PREFIX}.{}.{nanos:x}.{sequence:x}.tmp",
         std::process::id()
-    ));
-    temp
+    ))
 }
 
 #[cfg(test)]

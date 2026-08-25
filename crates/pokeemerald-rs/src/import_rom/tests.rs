@@ -226,7 +226,7 @@ fn the_outcome_renders_the_one_line_summary() {
 }
 
 #[test]
-fn the_temp_name_is_the_packs_own_name() {
+fn the_temp_name_is_a_bounded_name_in_the_packs_own_directory() {
     let pack_path = Path::new("/data/pokeemerald-rs/pokeemerald.pack");
     assert_eq!(pack_directory(pack_path), Path::new("/data/pokeemerald-rs"));
     let name = pack_name(pack_path).expect("the path names a file");
@@ -234,18 +234,24 @@ fn the_temp_name_is_the_packs_own_name() {
     // A basename, never a path: it is resolved against the pinned
     // directory, and the rename that publishes it stays inside that one
     // directory, which is what makes it atomic.
-    let temp = temp_name(name);
+    let temp = temp_name();
     let temp = temp.to_str().expect("a UTF-8 name stays UTF-8");
     assert!(
         !temp.contains(std::path::MAIN_SEPARATOR),
         "temp name: {temp}"
     );
-    assert!(temp.starts_with(".pokeemerald.pack."), "temp name: {temp}");
+    assert!(
+        temp.starts_with(&format!("{}.", super::TEMP_PREFIX)),
+        "temp name: {temp}"
+    );
     assert_eq!(
         Path::new(temp).extension().expect("a temp extension"),
         "tmp",
         "temp name: {temp}"
     );
+    // The destination's name is not in it, so no valid basename can push
+    // this past a filesystem's 255-byte limit for one component.
+    assert!(temp.len() <= 96, "temp name: {temp} ({} bytes)", temp.len());
 }
 
 #[test]
@@ -254,20 +260,41 @@ fn no_two_temp_names_are_the_same() {
     // refused import. It also has to be a name nobody watching the process
     // can pre-create: the process id is on its own public and reusable,
     // which is why it is not the whole name.
-    let name = pack_name(Path::new("/data/pokeemerald-rs/pokeemerald.pack"))
-        .expect("the path names a file");
-    let first = temp_name(name);
-    let second = temp_name(name);
+    let first = temp_name();
+    let second = temp_name();
 
     assert_ne!(first, second);
-    let predictable = format!(".pokeemerald.pack.{}.tmp", std::process::id());
+    let predictable = format!("{}.{}.tmp", super::TEMP_PREFIX, std::process::id());
     for candidate in [&first, &second] {
         assert_ne!(
             candidate.as_os_str(),
             OsStr::new(&predictable),
-            "the pack name and the process id must not spell the whole name"
+            "the prefix and the process id must not spell the whole name"
         );
     }
+}
+
+#[cfg(unix)]
+#[test]
+fn a_long_but_valid_pack_name_still_imports() {
+    // 240 bytes is a legal component wherever the limit is the usual 255,
+    // and the temporary file has to fit beside it: a temporary name built
+    // out of the destination's would not, and the destination could never
+    // be imported to. Unix-only because it is the *component* limit under
+    // test, and Windows caps the whole path first.
+    let dir = TempDir::new("long-name");
+    let name = "p".repeat(240);
+    let pack_path = dir.join(&name);
+
+    let outcome = import_to_with(Path::new("/roms/emerald.gba"), &pack_path, |_rom| {
+        Ok(fake_pack(b"pack bytes"))
+    })
+    .expect("the import succeeds");
+
+    assert_eq!(outcome.pack_path(), pack_path);
+    assert_eq!(fs::read(&pack_path).unwrap(), b"pack bytes");
+    // The pack is the only file left: the temporary one fit and is gone.
+    assert_eq!(file_names(&dir.path), [name]);
 }
 
 #[test]
@@ -384,6 +411,61 @@ fn a_destination_naming_no_file_is_refused_before_anything_is_written() {
         "expected a no-file-name refusal, got: {err}"
     );
     assert!(file_names(&dir.path).is_empty());
+}
+
+#[test]
+fn a_destination_spelled_as_a_directory_names_no_pack_file() {
+    // A trailing separator is not a component, so `file_name` hands back
+    // the name in front of it — a name the path itself never asks for. `/`
+    // is a separator on every supported platform.
+    for spelled in [
+        "/data/pokeemerald.pack/",
+        "/data/pokeemerald.pack/.",
+        "/data/pokeemerald.pack/./",
+        "/data/pokeemerald.pack//",
+    ] {
+        assert_eq!(pack_name(Path::new(spelled)), None, "{spelled}");
+    }
+    // A dot *inside* the final component is part of the name, not a
+    // directory spelling.
+    assert_eq!(
+        pack_name(Path::new("/data/pokeemerald.pack.")),
+        Some(OsStr::new("pokeemerald.pack."))
+    );
+    assert_eq!(
+        pack_name(Path::new("/data/pokeemerald.pack")),
+        Some(OsStr::new("pokeemerald.pack"))
+    );
+}
+
+#[test]
+fn a_destination_spelled_as_a_directory_is_refused_with_that_name_intact() {
+    // The harm is two-sided: the loader re-reads `$POKEEMERALD_PACK` with
+    // the trailing separator still on it and cannot open a regular file
+    // through one, so a "successful" import would be unreadable — and
+    // publishing would have replaced whatever already held the name.
+    let dir = TempDir::new("directory-spelling");
+    let occupied = dir.join("pokeemerald.pack");
+    fs::write(&occupied, b"the file that already held the name").expect("the occupant writes");
+    let mut spelled = occupied.clone().into_os_string();
+    spelled.push(std::path::MAIN_SEPARATOR_STR);
+
+    let err = import_to_with(
+        Path::new("/roms/emerald.gba"),
+        Path::new(&spelled),
+        |_rom| Ok(fake_pack(b"pack bytes")),
+    )
+    .unwrap_err();
+
+    assert!(
+        matches!(err, ImportRomError::DestinationNamesNoFile { .. }),
+        "expected a no-file-name refusal, got: {err}"
+    );
+    assert_eq!(
+        fs::read(&occupied).expect("the occupant survives"),
+        b"the file that already held the name"
+    );
+    assert_eq!(file_names(&dir.path), ["pokeemerald.pack"]);
 }
 
 #[cfg(unix)]
