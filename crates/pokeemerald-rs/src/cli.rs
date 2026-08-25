@@ -86,7 +86,8 @@ impl Error for CliError {}
 /// `args` is what [`std::env::args_os`] yields after the program name. An
 /// empty slice is [`Command::Play`], the case every player hits. Paths are
 /// bytes on Linux, so the ROM path stays an `OsStr`; only flag tokens need
-/// to be UTF-8.
+/// to be UTF-8. That holds for `--import-rom=<path>` too: the prefix is
+/// matched on bytes, so the path after `=` is never decoded.
 ///
 /// Arguments are read left to right. `--help` wins wherever it is read as
 /// a flag; the token after `--import-rom` is always a path.
@@ -109,15 +110,46 @@ pub fn parse(args: &[OsString]) -> Result<Command, CliError> {
                 rom = Some(take_rom_path(rom.as_ref(), value)?);
                 index += 2;
             }
-            Some(text) => {
-                let value = text.strip_prefix(IMPORT_ROM_EQ).ok_or_else(unexpected)?;
-                rom = Some(take_rom_path(rom.as_ref(), OsStr::new(value))?);
+            // Both the UTF-8 and the undecodable token land here: the
+            // inline form's path must survive either way, so the prefix
+            // test is the byte-level one and never the `to_str` above.
+            _ => {
+                let value = strip_import_rom_eq(arg).ok_or_else(unexpected)?;
+                rom = Some(take_rom_path(rom.as_ref(), value)?);
                 index += 1;
             }
-            None => return Err(unexpected()),
         }
     }
     Ok(rom.map_or(Command::Play, |path| Command::ImportRom { path }))
+}
+
+/// Split `--import-rom=<path>` into its path, without decoding the path.
+///
+/// On Unix an `OsStr` is bytes, and a ROM path is free to be any of them:
+/// `/roms/pok\xe9mon.gba` is a real filename that is not UTF-8. Testing
+/// the prefix on bytes keeps the whole token from having to decode, so
+/// the inline form accepts exactly the paths the separate form does.
+/// Returns `None` when `arg` is not the inline form at all.
+#[cfg(unix)]
+fn strip_import_rom_eq(arg: &OsStr) -> Option<&OsStr> {
+    use std::os::unix::ffi::OsStrExt as _;
+
+    arg.as_bytes()
+        .strip_prefix(IMPORT_ROM_EQ.as_bytes())
+        .map(OsStr::from_bytes)
+}
+
+/// Split `--import-rom=<path>` into its path.
+///
+/// Off Unix `std` exposes no byte view of an `OsStr`, so the token is
+/// matched as text and an undecodable one is not the inline form. Windows
+/// paths are UTF-16 and decode here except for unpaired surrogates, which
+/// no file the player can name for us carries.
+#[cfg(not(unix))]
+fn strip_import_rom_eq(arg: &OsStr) -> Option<&OsStr> {
+    arg.to_str()
+        .and_then(|text| text.strip_prefix(IMPORT_ROM_EQ))
+        .map(OsStr::new)
 }
 
 /// Accept one `--import-rom` value, rejecting a repeat or an empty path.
@@ -160,6 +192,38 @@ mod tests {
         let flag = OsString::from_vec(b"--\xff".to_vec());
         assert!(matches!(
             parse(&[flag]).unwrap_err(),
+            CliError::UnexpectedArg(_)
+        ));
+    }
+
+    /// The inline form has to reach the same paths the separate form
+    /// does. Decoding the whole token first would reject this one as an
+    /// unexpected argument, on a file the player is entitled to own.
+    #[cfg(unix)]
+    #[test]
+    fn a_non_utf8_rom_path_survives_the_inline_form() {
+        use std::os::unix::ffi::{OsStrExt as _, OsStringExt as _};
+
+        let mut token = OsString::from("--import-rom=").into_vec();
+        token.extend_from_slice(b"/roms/\xe9merald.gba");
+        assert_eq!(
+            parse(&[OsString::from_vec(token)]).unwrap(),
+            Command::ImportRom {
+                path: PathBuf::from(std::ffi::OsStr::from_bytes(b"/roms/\xe9merald.gba"))
+            }
+        );
+    }
+
+    /// An undecodable token that is not the inline form stays an error,
+    /// rather than becoming a path because the prefix test moved to bytes.
+    #[cfg(unix)]
+    #[test]
+    fn a_non_utf8_token_without_the_inline_prefix_is_rejected() {
+        use std::os::unix::ffi::OsStringExt as _;
+
+        let token = OsString::from_vec(b"--import-rom\xff=/roms/emerald.gba".to_vec());
+        assert!(matches!(
+            parse(&[token]).unwrap_err(),
             CliError::UnexpectedArg(_)
         ));
     }
