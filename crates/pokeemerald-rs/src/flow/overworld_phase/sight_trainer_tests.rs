@@ -960,6 +960,78 @@ fn the_players_in_flight_step_finishes_before_the_trainer_turns_them() {
     );
 }
 
+/// The other half of that in-flight step (PR #407 review): it drains under
+/// the lock, and the tile it drains onto is owed nothing afterwards.
+///
+/// Upstream reads `input->tookStep`/`input->checkStandardWildEncounter` off
+/// the *current* frame's `gPlayerAvatar.tileTransitionState`
+/// (`field_control_avatar.c:116-121`) -- neither is latched -- and their one
+/// reader, `ProcessPlayerFieldInput`, is skipped entirely while the
+/// approach's `LockPlayerFieldControls` holds (`overworld.c:1445-1455`),
+/// even though `UpdatePlayerAvatarTransitionState` keeps draining that state
+/// ahead of the lock check (`:1442`, `field_player_avatar.c:901-917`). So
+/// the single `T_TILE_CENTER` frame passes with nobody looking, and that
+/// tile's coordinate event, door warp and wild-encounter roll are genuinely
+/// skipped -- `UnlockPlayerFieldControls` gives nothing back.
+///
+/// This port's `pending_landing` is the latch upstream does not have, so it
+/// has to be dropped here rather than survive into the first ordinary frame
+/// after the fight -- where it would either fire that tile's events a whole
+/// cutscene late (no direction held) or be silently overwritten by the next
+/// step's landing (a direction held), and would break
+/// `advance_or_skip_for_preempt`'s "at rest implies no latched landing"
+/// invariant either way.
+#[test]
+fn a_step_draining_under_the_lock_leaves_its_tile_owed_nothing() {
+    let (rx, ry) = RHETT_TILE;
+    let start = (rx, ry + 2);
+    let mut phase = route_103_phase(PlayerState::new(start, 3, Direction::South));
+
+    // Same frame order as the test above: one ordinary step committed a
+    // frame before the cone reaches the player, so the approach starts with
+    // the landing tile already latched and its walk still animating.
+    phase.step(held(Buttons::DOWN));
+    assert_eq!(
+        phase.pending_landing,
+        Some((rx, ry + 3)),
+        "fixture precondition: the ordinary step latched its landing tile"
+    );
+    assert!(
+        phase.player.in_transit(),
+        "fixture precondition: with the walk still to drain"
+    );
+
+    seed_approach(&mut phase, 2);
+
+    for frame in 0..usize::from(WALK_FRAMES_PER_TILE) {
+        phase.step(held(Buttons::DOWN));
+        assert!(
+            phase.sight_approach.is_some(),
+            "frame {frame}: the approach is still running (the icon alone outlasts the walk)"
+        );
+        assert!(
+            phase.pending_landing.is_none(),
+            "frame {frame}: a landing whose completion frame falls under the lock is never \
+             observed upstream, so it must not be held open here"
+        );
+    }
+
+    assert!(
+        !phase.player.in_transit(),
+        "the held walk drained under the icon, exactly as it would with no trainer watching"
+    );
+    assert_eq!(
+        phase.player.position(),
+        (rx, ry + 3),
+        "the player really is standing on that tile -- only its step events are skipped"
+    );
+    assert!(
+        !phase.mid_step(),
+        "and nothing is left owing it, so the first ordinary frame after the cutscene starts \
+         from a clean at-rest stance"
+    );
+}
+
 /// `EventScript_ShowTrainerIntroMsg` (`trainer_battle.inc:101-107`): the
 /// battle waits for the intro speech, the speech waits for the player, and
 /// only when the box closes does `dotrainerbattle` run -- taking the party
