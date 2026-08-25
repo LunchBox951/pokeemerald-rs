@@ -6,6 +6,7 @@
 //! Nothing downstream re-checks those invariants.
 
 use std::fs;
+use std::io;
 use std::path::Path;
 
 use crate::error::{HeaderFault, ImportError};
@@ -176,9 +177,9 @@ impl Rom {
     /// from, so no answer can go stale between the asking and the reading.
     /// A pathname can be redirected between two opens; a descriptor cannot.
     ///
-    /// The size is taken from the handle and the read is bounded by it, so
-    /// a file that grows between the two still cannot fill memory: anything
-    /// but exactly [`ROM_SIZE`] bytes is [`ImportError::WrongSize`].
+    /// The size is taken from the handle, and the whole ROM is read from
+    /// the *start* of it: the answer does not depend on where `rom` happens
+    /// to be pointing, and does not move it. See [`read_whole`].
     ///
     /// # Errors
     ///
@@ -186,25 +187,22 @@ impl Rom {
     /// [`ImportError::WrongSize`] if it is not [`ROM_SIZE`] bytes;
     /// [`ImportError::BadHeader`] if its cartridge header is invalid.
     pub fn read_from(rom: &fs::File, path: &Path) -> Result<Self, ImportError> {
-        use std::io::Read as _;
-
         let read_failed = |source| ImportError::ReadFailed {
             path: path.to_path_buf(),
             source,
         };
         // Sized before reading, so pointing the importer at a huge file
-        // fails instead of filling memory with it.
+        // fails instead of filling memory with it. The buffer is then
+        // exactly one ROM, so a file that grows after the check cannot ask
+        // for more than that — and its first [`ROM_SIZE`] bytes still have
+        // to hash to a shipped profile before anything accepts them.
         let size = rom.metadata().map_err(read_failed)?.len();
         if size != rom_size_u64() {
             return Err(ImportError::WrongSize { actual: size });
         }
 
-        // One byte past the expected size: a handle that reports 16 MiB and
-        // then yields more is a wrong size, not a bigger allocation.
-        let mut bytes = Vec::with_capacity(ROM_SIZE);
-        rom.take(rom_size_u64().saturating_add(1))
-            .read_to_end(&mut bytes)
-            .map_err(read_failed)?;
+        let mut bytes = vec![0u8; ROM_SIZE];
+        read_whole(rom, &mut bytes).map_err(read_failed)?;
         Self::from_bytes(bytes)
     }
 
@@ -262,6 +260,33 @@ impl Rom {
 /// [`ROM_SIZE`] as a `u64`, for comparing against filesystem metadata.
 fn rom_size_u64() -> u64 {
     u64::try_from(ROM_SIZE).unwrap_or(u64::MAX)
+}
+
+/// Fill `buf` from the start of `rom`, leaving its cursor where it was.
+///
+/// A ROM is a whole file, so reading one must not depend on where a handle
+/// is pointing — least of all on a handle that has already been read once,
+/// which is sitting at EOF and would yield nothing at all. That would be
+/// reported as the wrong size for a file whose size had just been checked
+/// and was right: a diagnosis contradicting itself. The cursor is put back
+/// afterwards, including when the read fails, because the handle belongs to
+/// the caller and this is a question about the file rather than a read of
+/// their stream.
+///
+/// A seek pair rather than a positional read: `pread` is Unix-only and
+/// Windows' `seek_read` moves the cursor regardless, so the split would buy
+/// one code path per host where this buys one for all of them.
+fn read_whole(rom: &fs::File, buf: &mut [u8]) -> io::Result<()> {
+    use std::io::{Read as _, Seek as _, SeekFrom};
+
+    let mut handle = rom;
+    let resume = handle.stream_position()?;
+    handle.seek(SeekFrom::Start(0))?;
+    let read = handle.read_exact(buf);
+    let restored = handle.seek(SeekFrom::Start(resume)).map(drop);
+    // The read's own failure is the one worth reporting; a restore that
+    // fails on top of a good read still has to be told.
+    read.and(restored)
 }
 
 #[cfg(test)]
@@ -398,6 +423,51 @@ mod tests {
             Rom::read_from(&handle, &short),
             Err(ImportError::WrongSize { actual: 1024 })
         ));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn read_from_neither_depends_on_the_handles_cursor_nor_moves_it() {
+        // A handle is not a stream here: the same one has to give the same
+        // ROM however many times it is asked, and has to give it back
+        // pointing where it was found. Reading to the end and asking again
+        // is what caught this — the second read saw nothing and called a
+        // file that had just measured 16 MiB the wrong size.
+        use std::io::{Seek as _, SeekFrom};
+
+        let dir = std::env::temp_dir().join(format!(
+            "rom-import-cursor-{}-{}",
+            std::process::id(),
+            line!()
+        ));
+        std::fs::create_dir_all(&dir).expect("a temporary directory");
+        let path = dir.join("emerald.gba");
+        std::fs::write(&path, RomFixture::new().emerald_header().finish()).expect("the ROM writes");
+
+        let mut handle = std::fs::File::open(&path).expect("the ROM opens");
+        let first = Rom::read_from(&handle, &path).expect("the first read validates");
+        assert_eq!(
+            handle.stream_position().expect("the cursor reads"),
+            0,
+            "the read must leave the cursor where it found it"
+        );
+
+        let second = Rom::read_from(&handle, &path).expect("a second read validates too");
+        assert_eq!(first.digest(), second.digest());
+
+        // And a handle deliberately parked mid-file still reads the ROM
+        // whole, from its start.
+        handle
+            .seek(SeekFrom::Start(4096))
+            .expect("the cursor moves");
+        let parked = Rom::read_from(&handle, &path).expect("a parked handle validates");
+        assert_eq!(parked.digest(), first.digest());
+        assert_eq!(
+            handle.stream_position().expect("the cursor reads"),
+            4096,
+            "the caller's cursor must survive the read"
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }
