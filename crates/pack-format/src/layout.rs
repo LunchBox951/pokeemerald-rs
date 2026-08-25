@@ -14,12 +14,19 @@ pub const MAGIC: [u8; 8] = *b"PKMRPACK";
 /// back (issue #182, `#115` child 3); `5` added the `audio/song/mus_title`
 /// entry (issue #181, `#115` child 2) — see `assets::audio`'s module docs,
 /// "Versioning"; `6` added the `interface/palette/main_menu_bg` entry the
-/// no-save main menu requires (issue #216, I-3). Each bump is a pure content
-/// addition under the existing [`EntryKind`] tags (`audio/sample/*`,
-/// `audio/voicegroup/*`, and `audio/song/*` entries are all
-/// [`EntryKind::Raw`]; `interface/palette/*` is [`EntryKind::Palette`]); the
-/// wire layout has not changed since `1`.
-pub const FORMAT_VERSION: u32 = 6;
+/// no-save main menu requires (issue #216, I-3). Bumps `2` through `6` are
+/// pure content additions under the existing [`EntryKind`] tags
+/// (`audio/sample/*`, `audio/voicegroup/*`, and `audio/song/*` entries are
+/// all [`EntryKind::Raw`]; `interface/palette/*` is [`EntryKind::Palette`]).
+///
+/// `7` is the first bump that changes an existing entry's *bytes*:
+/// `title/palette/pokemon_logo` is now 224 colours rather than 256, the cut
+/// upstream's own build rule makes (`graphics_file_rules.mk`'s
+/// `-num_colors 224`) and the only part of that palette the game reads (see
+/// `xtask::extract::TITLE_SCREEN_PALETTE_CUTS`). Honouring it is what lets
+/// the ROM importer (issue #122) and `cargo xtask extract` emit identical
+/// bytes for that id. The wire layout has not changed since `1`.
+pub const FORMAT_VERSION: u32 = 7;
 
 /// The pack's location, relative to the repository root: a top-level,
 /// gitignored directory (mirroring how `pokeemerald/`/`mgba/` are also
@@ -69,7 +76,7 @@ mod tests {
     #[test]
     fn magic_and_version_are_the_published_values() {
         assert_eq!(&MAGIC, b"PKMRPACK");
-        assert_eq!(FORMAT_VERSION, 6);
+        assert_eq!(FORMAT_VERSION, 7);
     }
 
     #[test]
