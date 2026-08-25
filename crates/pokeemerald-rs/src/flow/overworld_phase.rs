@@ -238,7 +238,12 @@ pub(crate) struct OverworldPhase {
     /// lead is decoded from the save, added back by the merge on every
     /// save, and rewritten by the white-out when it completes a heal on
     /// the record directly. Zero when no lead was loaded from a record.
-    pub(super) lead_hp_hidden_by_load: u16,
+    ///
+    /// Signed because the merge rebases it across a level-up and the EV
+    /// gap it rebases by can shrink, leaving the model's live HP a point
+    /// above what upstream's own EV-aware block would hold
+    /// (`party::merge_into_save_pokemon`, issue #384's round-4 review).
+    pub(super) lead_hp_hidden_by_load: i32,
     /// Whether [`Self::party_lead`] is `None` because `save1.player_party[0]`
     /// would not decode, rather than because the slot is genuinely empty
     /// (issue #353).

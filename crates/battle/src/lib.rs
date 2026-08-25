@@ -241,9 +241,9 @@ pub use hit::{accuracy_roll, damage_core, ensure_resolvable, is_ordinary_hit_eff
 pub use multi_hit::{is_multi_hit_effect, roll_hit_count, MAX_HITS, MIN_HITS};
 pub use nature::{Nature, Stat};
 pub use pokemon::{
-    calculate_pp_with_bonus, BattlePokemon, Ivs, LearnedMove, MoveLearnDecision,
-    MoveLearnResolution, MoveSlot, PendingMoveLearn, PpBonuses, StatStages, Stats, MAX_IV,
-    MAX_LEVEL, MAX_MON_MOVES, MAX_PP_UPS, MIN_LEVEL, MOVE_NONE, SPECIES_NONE,
+    calculate_pp_with_bonus, compute_stats_with_evs, BattlePokemon, Evs, Ivs, LearnedMove,
+    MoveLearnDecision, MoveLearnResolution, MoveSlot, PendingMoveLearn, PpBonuses, StatStages,
+    Stats, MAX_IV, MAX_LEVEL, MAX_MON_MOVES, MAX_PP_UPS, MIN_LEVEL, MOVE_NONE, SPECIES_NONE,
 };
 pub use secondary::{is_secondary_effect, spend_effect_chance_draw, Trampoline};
 pub use stat_change::{
