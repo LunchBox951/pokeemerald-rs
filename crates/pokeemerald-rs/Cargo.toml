@@ -45,6 +45,20 @@ rendering = { path = "../rendering" }
 # std-only `pack-format`, so the shipped binary gains no external crate.
 rom-import = { path = "../rom-import" }
 
+# The one external crate this package names, added with owner approval on
+# PR #372 (`minimal-deps`). `crate::import_rom` has to create the pack's
+# temporary file and rename it into place against a directory it holds
+# open, or a `$POKEEMERALD_PACK` running through a component another
+# account controls can have that component redirected mid-import and the
+# rename lands elsewhere -- on the player's cartridge image, in the worst
+# case. `openat`/`renameat`/`statat` are exposed by no `std` API on any
+# platform, and the alternative was project-owned `unsafe` FFI. Unix-only,
+# `fs` alone of its feature set, and already in this binary's dependency
+# graph through `platform`'s `winit`/`softbuffer`, so the shipped build
+# links nothing it did not link before.
+[target.'cfg(unix)'.dependencies]
+rustix = { version = "1.1", default-features = false, features = ["std", "fs"] }
+
 [dev-dependencies]
 # The same workspace-local `assets` crate with its test-only seam enabled
 # (mirrors `engine`'s `Cargo.toml`): `main_menu`/`intro`'s unit tests build

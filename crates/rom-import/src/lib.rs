@@ -160,12 +160,58 @@ impl ImportReport {
     }
 }
 
+/// A finished pack the caller has yet to put anywhere.
+///
+/// [`import_pack`] hands one back so a caller that publishes the pack
+/// itself does not have to re-parse the bytes to learn what they hold.
+/// `pokeemerald-rs`'s `--import-rom` is that caller: it creates the file
+/// and renames it into place against a directory descriptor it holds open,
+/// which no API taking an output *path* can do on its behalf.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImportedPack {
+    entry_count: usize,
+    bytes: Vec<u8>,
+}
+
+impl ImportedPack {
+    /// A pack of `bytes` holding `entry_count` entries.
+    ///
+    /// Public for the same reason [`ImportReport::new`] is: a caller's
+    /// tests stand in for the importer without a real ROM.
+    #[must_use]
+    pub const fn new(entry_count: usize, bytes: Vec<u8>) -> Self {
+        Self { entry_count, bytes }
+    }
+
+    /// How many entries the pack holds.
+    #[must_use]
+    pub const fn entry_count(&self) -> usize {
+        self.entry_count
+    }
+
+    /// The serialized pack.
+    #[must_use]
+    pub fn bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+
+    /// The serialized pack, owned.
+    #[must_use]
+    pub fn into_bytes(self) -> Vec<u8> {
+        self.bytes
+    }
+}
+
 /// Import the ROM at `rom_path` into an asset pack at `out_path`.
 ///
 /// Builds the whole pack in memory first, so a failure part-way through a
-/// domain cannot leave a truncated file behind. The caller owns publishing
-/// it: `pokeemerald-rs`'s `import_rom` points this at a temporary file
-/// beside the destination and renames it into place.
+/// domain cannot leave a truncated file behind, then creates `out_path`
+/// and writes it.
+///
+/// This is the path-level API. A caller that has to publish the pack
+/// through a directory it holds open — `pokeemerald-rs`'s `--import-rom`,
+/// whose destination the player picks — takes the bytes from
+/// [`import_pack`] and owns the file itself.
 ///
 /// The ROM is never a legal destination: it is read whole into memory
 /// first, so writing the pack over it would succeed and destroy the
@@ -216,23 +262,39 @@ pub fn import(rom_path: &Path, out_path: &Path) -> Result<ImportReport, ImportEr
     ))
 }
 
-/// Import the ROM at `rom_path` and hand back the pack's bytes.
+/// Import the ROM at `rom_path` and hand back the finished pack.
 ///
-/// [`import`] without the write. The equivalence gate uses it to compare a
-/// freshly imported pack against the checkout's without touching disk.
+/// [`import`] without the write, and the entry point for a caller that
+/// publishes the pack itself: the ROM is never touched for writing here,
+/// so there is no destination to guard.
 ///
 /// # Errors
 ///
-/// As [`import`], minus [`ImportError::WriteFailed`]. A domain reader adds
+/// As [`import`], minus [`ImportError::WriteFailed`] and
+/// [`ImportError::SameFile`]. A domain reader adds
 /// [`ImportError::Truncated`] or [`ImportError::PointerOutOfRange`] for an
 /// address the ROM does not hold, [`ImportError::Lz77`] for a stream that
 /// will not decode, and [`ImportError::EntryShape`] for bytes that do not
 /// fit the entry they shape into. [`ImportError::EmptyPack`] if every
 /// domain produced nothing.
-pub fn import_to_bytes(rom_path: &Path) -> Result<Vec<u8>, ImportError> {
+pub fn import_pack(rom_path: &Path) -> Result<ImportedPack, ImportError> {
     let rom = Rom::load(rom_path)?;
     let profile = select_profile(&rom)?;
-    Ok(build_pack(&rom, &profile.roots)?.1)
+    let (entry_count, bytes) = build_pack(&rom, &profile.roots)?;
+    Ok(ImportedPack::new(entry_count, bytes))
+}
+
+/// Import the ROM at `rom_path` and hand back the pack's bytes.
+///
+/// [`import_pack`] for a caller that wants only the bytes: the equivalence
+/// gate compares a freshly imported pack against the checkout's without
+/// touching disk.
+///
+/// # Errors
+///
+/// As [`import_pack`].
+pub fn import_to_bytes(rom_path: &Path) -> Result<Vec<u8>, ImportError> {
+    Ok(import_pack(rom_path)?.into_bytes())
 }
 
 /// Whether writing to `out_path` would land on the ROM at `rom_path`.
@@ -241,7 +303,9 @@ pub fn import_to_bytes(rom_path: &Path) -> Result<Vec<u8>, ImportError> {
 /// binary's publish step needs the same answer about a *different* path:
 /// `--import-rom` writes a temporary file and renames it into place, so
 /// the rename is what would clobber the ROM, and the temporary file's own
-/// name never matches it.
+/// name never matches it. On Unix that step asks the question of a
+/// directory descriptor instead, which cannot be redirected mid-import;
+/// this is the path-level answer it falls back to elsewhere.
 ///
 /// A destination that already exists is compared by *file identity*, so a
 /// hard link to the ROM under another name is still the ROM: the two names
@@ -318,10 +382,8 @@ fn resolve_destination(out_path: &Path) -> Option<PathBuf> {
 /// `fs::write` opens create-and-truncate, which *follows* a symlink
 /// sitting at `out_path` and truncates whatever it points at. The
 /// destination is always a fresh name the caller picked for a file that
-/// does not exist yet — `pokeemerald-rs`'s `import_rom` builds the pack in
-/// a temporary file beside the real one and renames it into place — so
-/// anything already there is by definition not the file this importer
-/// meant to write. In a directory another account can write to, a
+/// does not exist yet, so anything already there is by definition not the
+/// file this importer meant to write. In a directory another account can write to, a
 /// player's own `$POKEEMERALD_PACK` choice, that is a planted link aimed
 /// at a file of theirs, and the import would spend its write truncating
 /// it.

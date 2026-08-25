@@ -31,36 +31,49 @@
 //! The one destination that is refused outright is the ROM being imported.
 //! `$POKEEMERALD_PACK` can name any path, including the file the player
 //! passed to `--import-rom`, and the rename would then drop the pack on
-//! top of their cartridge image. [`rom_import::overwrites_rom`] answers
-//! that before the directory is created.
+//! top of their cartridge image. That refusal is a device and inode
+//! comparison against the destination directory's own handle, so a hard
+//! link or a symlink spelling of the ROM is still the ROM.
 //!
-//! # What that refusal does not cover
+//! # Why the directory is pinned
 //!
-//! It reads a path, and a path is not a handle. Let `$POKEEMERALD_PACK`
-//! run through a directory component another account can modify, and that
-//! account can redirect the component after the check and before the
-//! rename: the temporary file and the publication each resolve the path
-//! again, so the pack lands wherever the component now points — on the
+//! A path is not a handle. Let `$POKEEMERALD_PACK` run through a directory
+//! component another account can modify, and a check that reads the path
+//! answers about the directory that component pointed at *then*: the
+//! account redirects it while the pack is being built, a temporary file
+//! created by path and a rename issued by path each resolve the path
+//! again, and the pack lands wherever the component now points — on the
 //! cartridge image itself, if the destination's file name is the ROM's.
 //!
-//! `std` cannot close that. Creating and publishing against a directory
-//! pinned open takes `openat`/`renameat`, which `std` exposes on no
-//! platform, so it takes a dependency this workspace does not add without
-//! owner approval (`minimal-deps`); re-resolving the guard just before the
-//! rename narrows the window without closing it and would read as a
-//! promise it cannot keep. The boundary is therefore stated rather than
-//! defended: `$POKEEMERALD_PACK` is trusted to name a path only the player
-//! controls. The default destination, their own user-data directory, is
-//! one.
+//! So the destination directory is opened once and held ([`dest::Dest`]).
+//! On Unix that is a descriptor, and the ROM check, the temporary file's
+//! exclusive creation, the write, and the publishing rename each name
+//! their file by basename against it (`openat`/`renameat`, through
+//! `rustix`; `std` exposes them on no platform). Redirecting a component
+//! after the open moves nothing, because nothing after the open looks at a
+//! component again. What is left trusted is the final name inside that one
+//! directory, and exclusive creation covers it: a link planted there is a
+//! refused import, not a write through it.
+//!
+//! Off Unix there is no such descriptor — `rustix` is Unix-only — so the
+//! destination is still addressed by path and the window above is still
+//! open there. On Windows, `$POKEEMERALD_PACK` is trusted to name a path
+//! only the player controls. The default destination, their own user-data
+//! directory, is one.
+
+mod dest;
 
 use std::fmt;
 use std::fs;
 use std::io;
+use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::SystemTime;
 
-use rom_import::{ImportError, ImportReport};
+use rom_import::{ImportError, ImportedPack};
+
+use dest::Dest;
 
 /// What a successful import produced.
 ///
@@ -125,6 +138,17 @@ pub enum ImportRomError {
         /// The underlying I/O failure.
         source: io::Error,
     },
+    /// The destination directory could not be opened.
+    ///
+    /// The import writes through a handle on that directory rather than
+    /// through its path (see the module docs), so failing to open it stops
+    /// the import instead of falling back to the path.
+    OpenDirFailed {
+        /// The directory that could not be opened.
+        path: PathBuf,
+        /// The underlying I/O failure.
+        source: io::Error,
+    },
     /// The importer itself failed. Carries [`ImportError`] whole, so the
     /// message the player sees is the importer's own typed diagnosis: the
     /// wrong ROM, a truncated file, or an asset the profile's addresses do
@@ -139,6 +163,18 @@ pub enum ImportRomError {
     DestinationIsSource {
         /// The ROM that would have been replaced.
         rom_path: PathBuf,
+    },
+    /// The temporary file the pack is built in could not be created, or
+    /// the finished pack could not be written into it.
+    ///
+    /// Creation is exclusive, so a name already taken lands here as
+    /// [`io::ErrorKind::AlreadyExists`] — and nothing was created, so the
+    /// file that holds the name is left exactly as it was found.
+    TempFileFailed {
+        /// The temporary file that could not be written.
+        temp_path: PathBuf,
+        /// The underlying I/O failure.
+        source: io::Error,
     },
     /// The pack was built, but moving it from its temporary file to the
     /// destination failed.
@@ -164,6 +200,9 @@ impl fmt::Display for ImportRomError {
             Self::CreateDirFailed { path, source } => {
                 write!(f, "could not create `{}`: {source}", path.display())
             }
+            Self::OpenDirFailed { path, source } => {
+                write!(f, "could not open `{}`: {source}", path.display())
+            }
             Self::Import(source) => write!(f, "{source}"),
             Self::DestinationIsSource { rom_path } => write!(
                 f,
@@ -171,6 +210,11 @@ impl fmt::Display for ImportRomError {
                  different file, or unset it to use the default location",
                 rom_path.display(),
                 pack_format::PACK_PATH_ENV
+            ),
+            Self::TempFileFailed { temp_path, source } => write!(
+                f,
+                "could not build the asset pack in `{}`: {source}",
+                temp_path.display()
             ),
             Self::PublishFailed {
                 temp_path,
@@ -191,9 +235,10 @@ impl std::error::Error for ImportRomError {
         // Every variant is spelled out, so a future source-carrying variant
         // fails to compile here instead of reporting an empty cause chain.
         match self {
-            Self::CreateDirFailed { source, .. } | Self::PublishFailed { source, .. } => {
-                Some(source)
-            }
+            Self::CreateDirFailed { source, .. }
+            | Self::OpenDirFailed { source, .. }
+            | Self::TempFileFailed { source, .. }
+            | Self::PublishFailed { source, .. } => Some(source),
             Self::Import(source) => Some(source),
             Self::NoDestination | Self::DestinationIsSource { .. } => None,
         }
@@ -208,12 +253,14 @@ impl std::error::Error for ImportRomError {
 /// # Errors
 ///
 /// [`ImportRomError::NoDestination`] if no pack location can be resolved,
+/// [`ImportRomError::CreateDirFailed`] or [`ImportRomError::OpenDirFailed`]
+/// if its directory cannot be created or opened,
 /// [`ImportRomError::DestinationIsSource`] if that location is the ROM
-/// itself, [`ImportRomError::CreateDirFailed`] if its directory cannot be
-/// created,
-/// [`ImportRomError::Import`] if the ROM is not the supported build or the
-/// import otherwise fails, and [`ImportRomError::PublishFailed`] if the
-/// finished pack cannot be moved into place.
+/// itself, [`ImportRomError::Import`] if the ROM is not the supported build
+/// or the import otherwise fails, [`ImportRomError::TempFileFailed`] if the
+/// pack cannot be built in its temporary file, and
+/// [`ImportRomError::PublishFailed`] if the finished pack cannot be moved
+/// into place.
 pub fn import_rom(rom_path: &Path) -> Result<ImportOutcome, ImportRomError> {
     let pack_path = destination()?;
     import_to(rom_path, &pack_path)
@@ -232,28 +279,24 @@ fn destination() -> Result<PathBuf, ImportRomError> {
 /// [`import_rom`]'s destination-agnostic core, so tests write into a
 /// temporary directory instead of the developer's real data directory.
 fn import_to(rom_path: &Path, pack_path: &Path) -> Result<ImportOutcome, ImportRomError> {
-    import_to_with(rom_path, pack_path, rom_import::import)
+    import_to_with(rom_path, pack_path, rom_import::import_pack)
 }
 
 /// [`import_to`] with the importer injected, so the write path is testable
 /// on both outcomes without a real ROM (`pack_format::path`'s pure-core
 /// precedent).
+///
+/// The importer only builds bytes. Creating the file they go in and
+/// publishing it are this module's, because both have to happen against
+/// the destination directory's own handle rather than its path — see the
+/// module docs.
 fn import_to_with(
     rom_path: &Path,
     pack_path: &Path,
-    import: impl FnOnce(&Path, &Path) -> Result<ImportReport, ImportError>,
+    import: impl FnOnce(&Path) -> Result<ImportedPack, ImportError>,
 ) -> Result<ImportOutcome, ImportRomError> {
-    // The temporary file never shares the ROM's name, so `rom_import`'s own
-    // guard cannot see this one: it is the *rename* that would drop the pack
-    // on top of the cartridge image. Refuse before the directory is touched,
-    // rather than build a pack that has nowhere safe to go.
-    if rom_import::overwrites_rom(rom_path, pack_path) {
-        return Err(ImportRomError::DestinationIsSource {
-            rom_path: rom_path.to_path_buf(),
-        });
-    }
-
     let dir = pack_directory(pack_path);
+    let name = pack_name(pack_path);
     // The temporary file has to sit in the destination directory for the
     // rename to be atomic, so the directory is created before the import
     // runs rather than after it succeeds. `existed` is what lets a failed
@@ -264,29 +307,79 @@ fn import_to_with(
         source,
     })?;
 
-    let temp_path = temp_path(pack_path, &dir);
-    let report = match import(rom_path, &temp_path) {
-        Ok(report) => report,
+    // Everything from here on names files inside this one handle. A
+    // directory component redirected after this open is a component
+    // nothing looks at again.
+    let dest = match Dest::open(&dir) {
+        Ok(dest) => dest,
         Err(source) => {
-            // A failed import may have written part of a pack. Nothing
-            // downstream should ever see it, and the file is this run's
-            // own, so drop it here. The exception is an import that failed
-            // *because* the name was already taken: what sits there is
-            // then somebody else's, and this run does not delete files it
-            // did not create.
-            if !name_was_taken(&source) {
-                let _ = fs::remove_file(&temp_path);
-            }
+            undo_created_dir(&dir, existed);
+            return Err(ImportRomError::OpenDirFailed {
+                path: dir.clone(),
+                source,
+            });
+        }
+    };
+
+    // `$POKEEMERALD_PACK` can name the file the player passed to
+    // `--import-rom`, and it is the *publishing rename* that would drop the
+    // pack on their cartridge image: the temporary file never shares the
+    // ROM's name, so no guard on that name can see this. Refuse before
+    // building a pack that has nowhere safe to go.
+    if dest.is_same_file_as(&name, rom_path) {
+        undo_created_dir(&dir, existed);
+        return Err(ImportRomError::DestinationIsSource {
+            rom_path: rom_path.to_path_buf(),
+        });
+    }
+
+    let temp_name = temp_name(&name);
+    // Exclusive, and before the import runs: the file the pack goes in is
+    // this run's own from the moment it exists, so nothing that happens
+    // during the import can substitute another one for it. A name already
+    // taken fails here having created nothing, which is what leaves that
+    // file to whoever does own it.
+    let mut file = match dest.create_new(&temp_name) {
+        Ok(file) => file,
+        Err(source) => {
+            undo_created_dir(&dir, existed);
+            return Err(ImportRomError::TempFileFailed {
+                temp_path: dir.join(&temp_name),
+                source,
+            });
+        }
+    };
+
+    let pack = match import(rom_path) {
+        Ok(pack) => pack,
+        Err(source) => {
+            drop(file);
+            dest.discard(&temp_name);
             undo_created_dir(&dir, existed);
             return Err(ImportRomError::Import(source));
         }
     };
 
-    fs::rename(&temp_path, pack_path).map_err(|source| {
-        let _ = fs::remove_file(&temp_path);
+    // A write that dies part-way leaves a prefix of a pack, and the next
+    // run would pick a different name and leave this one behind, so it goes
+    // with the failure. The handle is dropped before the removal because
+    // Windows refuses to unlink a file that is still open.
+    if let Err(source) = file.write_all(pack.bytes()).and_then(|()| file.flush()) {
+        drop(file);
+        dest.discard(&temp_name);
+        undo_created_dir(&dir, existed);
+        return Err(ImportRomError::TempFileFailed {
+            temp_path: dir.join(&temp_name),
+            source,
+        });
+    }
+    drop(file);
+
+    dest.publish(&temp_name, &name).map_err(|source| {
+        dest.discard(&temp_name);
         undo_created_dir(&dir, existed);
         ImportRomError::PublishFailed {
-            temp_path: temp_path.clone(),
+            temp_path: dir.join(&temp_name),
             pack_path: pack_path.to_path_buf(),
             source,
         }
@@ -294,8 +387,8 @@ fn import_to_with(
 
     Ok(ImportOutcome {
         pack_path: pack_path.to_path_buf(),
-        entry_count: report.entry_count(),
-        pack_bytes: report.pack_bytes(),
+        entry_count: pack.entry_count(),
+        pack_bytes: pack.bytes().len(),
     })
 }
 
@@ -310,16 +403,16 @@ fn pack_directory(pack_path: &Path) -> PathBuf {
     }
 }
 
-/// Whether an import failed because its destination name was taken.
+/// The pack file's own name inside [`pack_directory`].
 ///
-/// The importer creates the temporary file exclusively, so this is the one
-/// failure whose path names a file this run did not create: a leftover
-/// from a killed run, or a link planted by another account in a writable
-/// pack directory. Neither is this run's to remove.
-fn name_was_taken(error: &ImportError) -> bool {
-    matches!(
-        error,
-        ImportError::WriteFailed { source, .. } if source.kind() == io::ErrorKind::AlreadyExists
+/// Every filesystem operation the import performs names its file this way,
+/// relative to the pinned directory, so the name has to survive on its own.
+/// A path with no final component (a bare `..`) names no file to publish,
+/// and the default name is the one the loader reads back.
+fn pack_name(pack_path: &Path) -> String {
+    pack_path.file_name().map_or_else(
+        || "pokeemerald.pack".to_owned(),
+        |name| name.to_string_lossy().into_owned(),
     )
 }
 
@@ -336,10 +429,10 @@ fn undo_created_dir(dir: &Path, existed: bool) {
     }
 }
 
-/// The temporary file the pack is built in, beside its destination.
+/// The name of the temporary file the pack is built in, beside `name`.
 ///
-/// The importer creates this file exclusively (`rom_import`'s
-/// `write_new`), so the name has one job: be one nothing else already
+/// The file is created exclusively ([`Dest::create_new`]), so the name has
+/// one job: be one nothing else already
 /// holds. A process id alone is not that. It repeats across PID
 /// namespaces sharing one mounted directory, it is recycled after a kill
 /// that left a stale temporary file behind, and `/proc` hands it to
@@ -353,21 +446,14 @@ fn undo_created_dir(dir: &Path, existed: bool) {
 /// never a write through someone else's link, and the next run picks a
 /// different name. The leading dot keeps the file out of a casual
 /// directory listing while it exists.
-fn temp_path(pack_path: &Path, dir: &Path) -> PathBuf {
+fn temp_name(name: &str) -> String {
     static SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
-    let name = pack_path.file_name().map_or_else(
-        || "pokeemerald.pack".to_owned(),
-        |n| n.to_string_lossy().into_owned(),
-    );
     let nanos = SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
         .map_or(0, |since| since.as_nanos());
     let sequence = SEQUENCE.fetch_add(1, Ordering::Relaxed);
-    dir.join(format!(
-        ".{name}.{}.{nanos:x}.{sequence:x}.tmp",
-        std::process::id()
-    ))
+    format!(".{name}.{}.{nanos:x}.{sequence:x}.tmp", std::process::id())
 }
 
 #[cfg(test)]

@@ -1236,6 +1236,7 @@ dependencies = [
  "platform",
  "rendering",
  "rom-import",
+ "rustix 1.1.4",
 ]
 
 [[package]]
