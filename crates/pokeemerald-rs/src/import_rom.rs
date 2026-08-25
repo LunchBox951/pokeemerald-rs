@@ -63,6 +63,7 @@
 
 mod dest;
 
+use std::ffi::{OsStr, OsString};
 use std::fmt;
 use std::fs;
 use std::io;
@@ -154,6 +155,17 @@ pub enum ImportRomError {
     /// wrong ROM, a truncated file, or an asset the profile's addresses do
     /// not reach.
     Import(ImportError),
+    /// The resolved destination names no file to publish.
+    ///
+    /// A `$POKEEMERALD_PACK` ending in `..` (or naming a filesystem root)
+    /// has no final component, so there is no name to rename the finished
+    /// pack onto. Refused before anything is written; substituting a
+    /// default name would publish somewhere the player did not ask for
+    /// `(no-silent-failure)`.
+    DestinationNamesNoFile {
+        /// The destination that names no file.
+        pack_path: PathBuf,
+    },
     /// The resolved destination *is* the ROM being imported.
     ///
     /// Publishing renames the finished pack over the destination, so a
@@ -204,6 +216,13 @@ impl fmt::Display for ImportRomError {
                 write!(f, "could not open `{}`: {source}", path.display())
             }
             Self::Import(source) => write!(f, "{source}"),
+            Self::DestinationNamesNoFile { pack_path } => write!(
+                f,
+                "cannot write the asset pack to `{}`: the path names no file — point `{}` at a \
+                 file",
+                pack_path.display(),
+                pack_format::PACK_PATH_ENV
+            ),
             Self::DestinationIsSource { rom_path } => write!(
                 f,
                 "refusing to write the asset pack over the source ROM `{}`: point `{}` at a \
@@ -240,7 +259,9 @@ impl std::error::Error for ImportRomError {
             | Self::TempFileFailed { source, .. }
             | Self::PublishFailed { source, .. } => Some(source),
             Self::Import(source) => Some(source),
-            Self::NoDestination | Self::DestinationIsSource { .. } => None,
+            Self::NoDestination
+            | Self::DestinationNamesNoFile { .. }
+            | Self::DestinationIsSource { .. } => None,
         }
     }
 }
@@ -255,6 +276,7 @@ impl std::error::Error for ImportRomError {
 /// [`ImportRomError::NoDestination`] if no pack location can be resolved,
 /// [`ImportRomError::CreateDirFailed`] or [`ImportRomError::OpenDirFailed`]
 /// if its directory cannot be created or opened,
+/// [`ImportRomError::DestinationNamesNoFile`] if it names no file,
 /// [`ImportRomError::DestinationIsSource`] if that location is the ROM
 /// itself, [`ImportRomError::Import`] if the ROM is not the supported build
 /// or the import otherwise fails, [`ImportRomError::TempFileFailed`] if the
@@ -296,7 +318,14 @@ fn import_to_with(
     import: impl FnOnce(&Path) -> Result<ImportedPack, ImportError>,
 ) -> Result<ImportOutcome, ImportRomError> {
     let dir = pack_directory(pack_path);
-    let name = pack_name(pack_path);
+    // Refused before anything is created: with no final component there is
+    // no name to publish onto, and substituting one would write somewhere
+    // the player did not ask for.
+    let Some(name) = pack_name(pack_path) else {
+        return Err(ImportRomError::DestinationNamesNoFile {
+            pack_path: pack_path.to_path_buf(),
+        });
+    };
     // The temporary file has to sit in the destination directory for the
     // rename to be atomic, so the directory is created before the import
     // runs rather than after it succeeds. `existed` is what lets a failed
@@ -326,14 +355,14 @@ fn import_to_with(
     // pack on their cartridge image: the temporary file never shares the
     // ROM's name, so no guard on that name can see this. Refuse before
     // building a pack that has nowhere safe to go.
-    if dest.is_same_file_as(&name, rom_path) {
+    if dest.is_same_file_as(name, rom_path) {
         undo_created_dir(&dir, existed);
         return Err(ImportRomError::DestinationIsSource {
             rom_path: rom_path.to_path_buf(),
         });
     }
 
-    let temp_name = temp_name(&name);
+    let temp_name = temp_name(name);
     // Exclusive, and before the import runs: the file the pack goes in is
     // this run's own from the moment it exists, so nothing that happens
     // during the import can substitute another one for it. A name already
@@ -375,7 +404,7 @@ fn import_to_with(
     }
     drop(file);
 
-    dest.publish(&temp_name, &name).map_err(|source| {
+    dest.publish(&temp_name, name).map_err(|source| {
         dest.discard(&temp_name);
         undo_created_dir(&dir, existed);
         ImportRomError::PublishFailed {
@@ -407,13 +436,12 @@ fn pack_directory(pack_path: &Path) -> PathBuf {
 ///
 /// Every filesystem operation the import performs names its file this way,
 /// relative to the pinned directory, so the name has to survive on its own.
-/// A path with no final component (a bare `..`) names no file to publish,
-/// and the default name is the one the loader reads back.
-fn pack_name(pack_path: &Path) -> String {
-    pack_path.file_name().map_or_else(
-        || "pokeemerald.pack".to_owned(),
-        |name| name.to_string_lossy().into_owned(),
-    )
+/// It stays an [`OsStr`] end to end: the name the player's path spells is
+/// the name published, byte for byte, even off UTF-8. A path with no final
+/// component (a bare `..`, a filesystem root) names no file to publish and
+/// is `None` — the caller refuses it rather than inventing a name.
+fn pack_name(pack_path: &Path) -> Option<&OsStr> {
+    pack_path.file_name()
 }
 
 /// Remove the destination directory this run created, if it created one.
@@ -446,14 +474,20 @@ fn undo_created_dir(dir: &Path, existed: bool) {
 /// never a write through someone else's link, and the next run picks a
 /// different name. The leading dot keeps the file out of a casual
 /// directory listing while it exists.
-fn temp_name(name: &str) -> String {
+fn temp_name(name: &OsStr) -> OsString {
     static SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
     let nanos = SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
         .map_or(0, |since| since.as_nanos());
     let sequence = SEQUENCE.fetch_add(1, Ordering::Relaxed);
-    format!(".{name}.{}.{nanos:x}.{sequence:x}.tmp", std::process::id())
+    let mut temp = OsString::from(".");
+    temp.push(name);
+    temp.push(format!(
+        ".{}.{nanos:x}.{sequence:x}.tmp",
+        std::process::id()
+    ));
+    temp
 }
 
 #[cfg(test)]

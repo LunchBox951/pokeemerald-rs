@@ -7,6 +7,7 @@
 //! [`super`]'s docs for why re-walking them is the hole this closes, and
 //! for what stays open off Unix.
 
+use std::ffi::OsStr;
 use std::fs::File;
 use std::io;
 use std::path::Path;
@@ -57,7 +58,7 @@ impl Dest {
     /// `false` when either side cannot be read. A destination that does
     /// not exist yet is not the ROM, and a ROM that cannot be stat'd has
     /// nothing to lose.
-    pub(super) fn is_same_file_as(&self, name: &str, path: &Path) -> bool {
+    pub(super) fn is_same_file_as(&self, name: &OsStr, path: &Path) -> bool {
         let (Ok(here), Ok(there)) = (
             rustix::fs::statat(&self.dir, name, rustix::fs::AtFlags::empty()),
             rustix::fs::stat(path),
@@ -81,7 +82,7 @@ impl Dest {
     ///
     /// Whatever `openat(2)` reports, including
     /// [`AlreadyExists`](io::ErrorKind::AlreadyExists) for a taken name.
-    pub(super) fn create_new(&self, name: &str) -> io::Result<File> {
+    pub(super) fn create_new(&self, name: &OsStr) -> io::Result<File> {
         let file = rustix::fs::openat(
             &self.dir,
             name,
@@ -108,7 +109,7 @@ impl Dest {
     /// # Errors
     ///
     /// Whatever `renameat(2)` reports.
-    pub(super) fn publish(&self, from: &str, to: &str) -> io::Result<()> {
+    pub(super) fn publish(&self, from: &OsStr, to: &OsStr) -> io::Result<()> {
         rustix::fs::renameat(&self.dir, from, &self.dir, to)?;
         Ok(())
     }
@@ -119,7 +120,7 @@ impl Dest {
     /// cannot remove a file the import did not make. A removal that fails
     /// leaves litter but must not replace the diagnosis the caller is
     /// already returning.
-    pub(super) fn discard(&self, name: &str) {
+    pub(super) fn discard(&self, name: &OsStr) {
         let _ = rustix::fs::unlinkat(&self.dir, name, rustix::fs::AtFlags::empty());
     }
 }
@@ -160,7 +161,7 @@ impl Dest {
     ///
     /// The path-level answer: canonical paths, since Windows exposes no
     /// stable file identity through `std` (`rom_import::overwrites_rom`).
-    pub(super) fn is_same_file_as(&self, name: &str, path: &Path) -> bool {
+    pub(super) fn is_same_file_as(&self, name: &OsStr, path: &Path) -> bool {
         rom_import::overwrites_rom(path, &self.dir.join(name))
     }
 
@@ -171,7 +172,7 @@ impl Dest {
     /// Whatever the create reports. `CREATE_NEW` refuses an existing name,
     /// so a taken one is
     /// [`AlreadyExists`](io::ErrorKind::AlreadyExists).
-    pub(super) fn create_new(&self, name: &str) -> io::Result<File> {
+    pub(super) fn create_new(&self, name: &OsStr) -> io::Result<File> {
         File::options()
             .write(true)
             .create_new(true)
@@ -183,12 +184,12 @@ impl Dest {
     /// # Errors
     ///
     /// Whatever the rename reports.
-    pub(super) fn publish(&self, from: &str, to: &str) -> io::Result<()> {
+    pub(super) fn publish(&self, from: &OsStr, to: &OsStr) -> io::Result<()> {
         std::fs::rename(self.dir.join(from), self.dir.join(to))
     }
 
     /// Remove `name` from this directory, ignoring a failure.
-    pub(super) fn discard(&self, name: &str) {
+    pub(super) fn discard(&self, name: &OsStr) {
         let _ = std::fs::remove_file(self.dir.join(name));
     }
 }

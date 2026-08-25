@@ -4,6 +4,7 @@
 //! test is about *publishing* the pack, and `rom_import::fixture` supplies
 //! a synthetic cartridge image where the test is about the real wiring.
 
+use std::ffi::OsStr;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -228,19 +229,20 @@ fn the_outcome_renders_the_one_line_summary() {
 fn the_temp_name_is_the_packs_own_name() {
     let pack_path = Path::new("/data/pokeemerald-rs/pokeemerald.pack");
     assert_eq!(pack_directory(pack_path), Path::new("/data/pokeemerald-rs"));
-    let name = pack_name(pack_path);
+    let name = pack_name(pack_path).expect("the path names a file");
     assert_eq!(name, "pokeemerald.pack");
     // A basename, never a path: it is resolved against the pinned
     // directory, and the rename that publishes it stays inside that one
     // directory, which is what makes it atomic.
-    let temp = temp_name(&name);
+    let temp = temp_name(name);
+    let temp = temp.to_str().expect("a UTF-8 name stays UTF-8");
     assert!(
         !temp.contains(std::path::MAIN_SEPARATOR),
         "temp name: {temp}"
     );
     assert!(temp.starts_with(".pokeemerald.pack."), "temp name: {temp}");
     assert_eq!(
-        Path::new(&temp).extension().expect("a temp extension"),
+        Path::new(temp).extension().expect("a temp extension"),
         "tmp",
         "temp name: {temp}"
     );
@@ -252,15 +254,17 @@ fn no_two_temp_names_are_the_same() {
     // refused import. It also has to be a name nobody watching the process
     // can pre-create: the process id is on its own public and reusable,
     // which is why it is not the whole name.
-    let name = pack_name(Path::new("/data/pokeemerald-rs/pokeemerald.pack"));
-    let first = temp_name(&name);
-    let second = temp_name(&name);
+    let name = pack_name(Path::new("/data/pokeemerald-rs/pokeemerald.pack"))
+        .expect("the path names a file");
+    let first = temp_name(name);
+    let second = temp_name(name);
 
     assert_ne!(first, second);
     let predictable = format!(".pokeemerald.pack.{}.tmp", std::process::id());
     for candidate in [&first, &second] {
         assert_ne!(
-            candidate, &predictable,
+            candidate.as_os_str(),
+            OsStr::new(&predictable),
             "the pack name and the process id must not spell the whole name"
         );
     }
@@ -276,7 +280,7 @@ fn a_taken_temp_name_is_refused_and_its_file_is_left_alone() {
     fs::write(dir.join("taken"), b"not the importer's").expect("the squatter writes");
     let dest = Dest::open(&dir.path).expect("the directory opens");
 
-    let err = dest.create_new("taken").unwrap_err();
+    let err = dest.create_new(OsStr::new("taken")).unwrap_err();
 
     assert_eq!(err.kind(), std::io::ErrorKind::AlreadyExists, "{err}");
     assert_eq!(
@@ -296,7 +300,7 @@ fn a_symlink_at_the_temp_name_is_refused_and_its_target_survives() {
     std::os::unix::fs::symlink(&victim, dir.join("planted")).expect("the link is planted");
     let dest = Dest::open(&dir.path).expect("the directory opens");
 
-    let err = dest.create_new("planted").unwrap_err();
+    let err = dest.create_new(OsStr::new("planted")).unwrap_err();
 
     assert_eq!(err.kind(), std::io::ErrorKind::AlreadyExists, "{err}");
     assert_eq!(
@@ -350,16 +354,67 @@ fn the_rom_is_recognized_through_the_pinned_directory() {
     fs::hard_link(&rom_path, dir.join("alias.gba")).expect("the link is made");
     let dest = Dest::open(&dir.path).expect("the directory opens");
 
-    assert!(dest.is_same_file_as("fixture.gba", &rom_path));
-    assert!(dest.is_same_file_as("alias.gba", &rom_path));
-    assert!(!dest.is_same_file_as("pokeemerald.pack", &rom_path));
+    assert!(dest.is_same_file_as(OsStr::new("fixture.gba"), &rom_path));
+    assert!(dest.is_same_file_as(OsStr::new("alias.gba"), &rom_path));
+    assert!(!dest.is_same_file_as(OsStr::new("pokeemerald.pack"), &rom_path));
 }
 
 #[test]
 fn a_bare_pack_name_lands_in_the_current_directory() {
     let pack_path = Path::new("pokeemerald.pack");
     assert_eq!(pack_directory(pack_path), Path::new("."));
-    assert_eq!(pack_name(pack_path), "pokeemerald.pack");
+    assert_eq!(pack_name(pack_path), Some(OsStr::new("pokeemerald.pack")));
+}
+
+#[test]
+fn a_destination_naming_no_file_is_refused_before_anything_is_written() {
+    // A `$POKEEMERALD_PACK` ending in `..` has no final component. The old
+    // behaviour substituted `pokeemerald.pack` and published it while the
+    // outcome reported the original path; now it is refused outright.
+    let dir = TempDir::new("no-file-name");
+    let pack_path = dir.join("..");
+
+    let err = import_to_with(Path::new("/roms/emerald.gba"), &pack_path, |_rom| {
+        Ok(fake_pack(b"pack bytes"))
+    })
+    .unwrap_err();
+
+    assert!(
+        matches!(err, ImportRomError::DestinationNamesNoFile { .. }),
+        "expected a no-file-name refusal, got: {err}"
+    );
+    assert!(file_names(&dir.path).is_empty());
+}
+
+#[cfg(unix)]
+#[test]
+fn a_non_utf8_pack_name_is_published_byte_for_byte() {
+    // The requested basename survives as an `OsStr` end to end: the file
+    // published is the one the player named, not a lossy re-spelling.
+    use std::os::unix::ffi::OsStrExt as _;
+
+    let dir = TempDir::new("non-utf8-name");
+    let name = OsStr::from_bytes(b"pok\xe9mon.pack");
+    let pack_path = dir.path.join(name);
+
+    let outcome = import_to_with(Path::new("/roms/emerald.gba"), &pack_path, |_rom| {
+        Ok(fake_pack(b"pack bytes"))
+    })
+    .expect("the import succeeds");
+
+    assert_eq!(outcome.pack_path(), pack_path);
+    assert_eq!(fs::read(&pack_path).unwrap(), b"pack bytes");
+}
+
+#[test]
+fn a_refused_no_file_destination_says_which_variable_to_change() {
+    let rendered = ImportRomError::DestinationNamesNoFile {
+        pack_path: PathBuf::from("/data/.."),
+    }
+    .to_string();
+    assert!(rendered.contains("/data/.."), "{rendered}");
+    assert!(rendered.contains(pack_format::PACK_PATH_ENV), "{rendered}");
+    assert!(!rendered.contains('\n'), "{rendered}");
 }
 
 #[test]
