@@ -105,6 +105,43 @@ fn xdg_data_home_beats_the_home_fallback() {
 }
 
 #[test]
+fn a_relative_xdg_data_home_is_ignored_in_favour_of_the_home_fallback() {
+    // The Base Directory Specification requires a relative `$XDG_DATA_HOME`
+    // to be ignored, not resolved: honouring `data` would let the process's
+    // current directory choose the pack.
+    assert_eq!(
+        data_dir(
+            &env_of(&[("XDG_DATA_HOME", "data"), ("HOME", "/home/dev")]),
+            DataDirRule::Xdg
+        ),
+        Some(PathBuf::from("/home/dev/.local/share"))
+    );
+    let path = resolve(
+        &env_of(&[("XDG_DATA_HOME", "data"), ("HOME", "/home/dev")]),
+        None,
+        &exists_of(&[
+            "data/pokeemerald-rs/pokeemerald.pack",
+            "/home/dev/.local/share/pokeemerald-rs/pokeemerald.pack",
+        ]),
+        DataDirRule::Xdg,
+    );
+    assert_eq!(
+        path,
+        PathBuf::from("/home/dev/.local/share/pokeemerald-rs/pokeemerald.pack")
+    );
+}
+
+#[test]
+fn a_relative_xdg_data_home_with_no_home_yields_no_data_directory() {
+    // Ignored means ignored: with nothing to fall back to there is no
+    // user-data directory at all, rather than a cwd-relative one.
+    assert_eq!(
+        data_dir(&env_of(&[("XDG_DATA_HOME", "data")]), DataDirRule::Xdg),
+        None
+    );
+}
+
+#[test]
 fn macos_looks_under_library_application_support() {
     let path = resolve(
         &env_of(&[("HOME", "/Users/dev"), ("XDG_DATA_HOME", "/xdg")]),
@@ -129,6 +166,46 @@ fn windows_looks_under_appdata() {
     assert_eq!(
         path,
         PathBuf::from("C:/Users/dev/AppData/Roaming/pokeemerald-rs/pokeemerald.pack")
+    );
+}
+
+#[test]
+fn windows_falls_back_to_userprofile_when_appdata_is_unset() {
+    // A Windows service or a stripped shell can hand a process
+    // `%USERPROFILE%` without `%APPDATA%`; the conventional roaming
+    // directory is still derivable, and the save resolver already derives
+    // it, so the importer's default output must not vanish here.
+    assert_eq!(
+        data_dir(
+            &env_of(&[("USERPROFILE", r"C:\Users\dev")]),
+            DataDirRule::Windows
+        ),
+        Some(
+            PathBuf::from(r"C:\Users\dev")
+                .join("AppData")
+                .join("Roaming")
+        )
+    );
+    let path = resolve(
+        &env_of(&[("USERPROFILE", "C:/Users/dev")]),
+        None,
+        &exists_of(&["C:/Users/dev/AppData/Roaming/pokeemerald-rs/pokeemerald.pack"]),
+        DataDirRule::Windows,
+    );
+    assert_eq!(
+        path,
+        PathBuf::from("C:/Users/dev/AppData/Roaming/pokeemerald-rs/pokeemerald.pack")
+    );
+}
+
+#[test]
+fn windows_appdata_beats_the_userprofile_fallback() {
+    assert_eq!(
+        data_dir(
+            &env_of(&[("APPDATA", "D:/roaming"), ("USERPROFILE", "C:/Users/dev"),]),
+            DataDirRule::Windows
+        ),
+        Some(PathBuf::from("D:/roaming"))
     );
 }
 

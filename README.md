@@ -73,9 +73,14 @@ it:
 
 | OS | Pack path |
 |----|-----------|
-| Linux | `$XDG_DATA_HOME/pokeemerald-rs/pokeemerald.pack`, else `~/.local/share/pokeemerald-rs/pokeemerald.pack` |
+| Linux | `$XDG_DATA_HOME/pokeemerald-rs/pokeemerald.pack` if `$XDG_DATA_HOME` is absolute, else `~/.local/share/pokeemerald-rs/pokeemerald.pack` |
 | macOS | `~/Library/Application Support/pokeemerald-rs/pokeemerald.pack` |
-| Windows | `%APPDATA%\pokeemerald-rs\pokeemerald.pack` |
+| Windows | `%APPDATA%\pokeemerald-rs\pokeemerald.pack`, else `%USERPROFILE%\AppData\Roaming\pokeemerald-rs\pokeemerald.pack` |
+
+Same three rules the save file uses, so both per-user files land under one
+directory. A relative `$XDG_DATA_HOME` is ignored rather than resolved, which
+is the Base Directory Specification's own rule: honouring one would let the
+directory you launched from choose which pack the game loads.
 
 Set `POKEEMERALD_PACK=<file>` to put it somewhere else; both the import and the
 game honour it — with one exception: if it points at the ROM you are importing,

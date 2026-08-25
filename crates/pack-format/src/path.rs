@@ -12,7 +12,7 @@
 //! every OS convention is unit-testable on one host without touching the
 //! real environment.
 
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 
 use crate::layout::OUTPUT_RELATIVE_PATH;
@@ -30,11 +30,12 @@ const PACK_FILE_NAME: &str = "pokeemerald.pack";
 /// Which OS convention names the per-user data directory.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum DataDirRule {
-    /// Linux and other Unix: `$XDG_DATA_HOME`, else `$HOME/.local/share`.
+    /// Linux and other Unix: `$XDG_DATA_HOME` if absolute, else
+    /// `$HOME/.local/share`.
     Xdg,
     /// macOS: `$HOME/Library/Application Support`.
     MacOs,
-    /// Windows: `%APPDATA%`.
+    /// Windows: `%APPDATA%`, else `%USERPROFILE%\AppData\Roaming`.
     Windows,
 }
 
@@ -50,9 +51,16 @@ const HOST_RULE: DataDirRule = if cfg!(windows) {
 /// The OS user-data directory, or `None` when the variables it is built
 /// from are unset (a daemon with a scrubbed environment, say).
 ///
-/// - Linux and other Unix: `$XDG_DATA_HOME`, else `$HOME/.local/share`.
+/// - Linux and other Unix: `$XDG_DATA_HOME` if absolute, else
+///   `$HOME/.local/share`.
 /// - macOS: `$HOME/Library/Application Support`.
-/// - Windows: `%APPDATA%`.
+/// - Windows: `%APPDATA%`, else `%USERPROFILE%\AppData\Roaming`.
+///
+/// Deliberately the same three rules `engine::save::file::data_dir_for`
+/// resolves the save file with, down to the fallbacks: a player's pack and
+/// a player's save belong under one per-user directory, so the two
+/// resolvers disagreeing about where that is would split them across the
+/// disk in exactly the environments the fallbacks exist for.
 ///
 /// Hand-rolled from [`mod@std::env`] rather than taken from a crate
 /// `(minimal-deps)`: three rules is less code than a dependency review.
@@ -146,12 +154,30 @@ fn data_dir(env: &impl Fn(&str) -> Option<OsString>, rule: DataDirRule) -> Optio
     };
     match rule {
         DataDirRule::Xdg => non_empty("XDG_DATA_HOME")
+            .filter(|dir| is_absolute_xdg_path(dir.as_os_str()))
             .or_else(|| non_empty("HOME").map(|home| home.join(".local").join("share"))),
         DataDirRule::MacOs => {
             non_empty("HOME").map(|home| home.join("Library").join("Application Support"))
         }
-        DataDirRule::Windows => non_empty("APPDATA"),
+        DataDirRule::Windows => non_empty("APPDATA")
+            .or_else(|| non_empty("USERPROFILE").map(|home| home.join("AppData").join("Roaming"))),
     }
+}
+
+/// Whether `path` is absolute under the XDG Base Directory Specification's
+/// POSIX path rules, independently of the platform running this binary.
+///
+/// The specification requires a relative `$XDG_DATA_HOME` to be *ignored*,
+/// not resolved: honouring one would let the process's current directory
+/// pick the pack, so `pokeemerald-rs` launched from an untrusted directory
+/// with `XDG_DATA_HOME=data` would load `data/pokeemerald-rs/pokeemerald.pack`
+/// from it instead of the player's own. Asks the bytes rather than
+/// [`Path::is_absolute`] for the same reason
+/// `engine::save::file::is_absolute_xdg_path` does: the rule is POSIX's, so
+/// it must not change shape when [`data_dir`] is driven with
+/// [`DataDirRule::Xdg`] on a Windows host in a test.
+fn is_absolute_xdg_path(path: &OsStr) -> bool {
+    path.as_encoded_bytes().starts_with(b"/")
 }
 
 /// The developer path: this crate's manifest directory is always
