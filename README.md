@@ -145,6 +145,14 @@ We default to the standard library; every crate added is justified here
   binding that system lib, not FFI or linkage to the upstream C `(no-ffi)`;
   it is **not** a pure-Rust-only dependency, same caveat as `winit`/
   `softbuffer` above.
+- **`rustix`** (`crates/pokeemerald-rs`, Unix only) — safe wrappers over the
+  `openat`/`renameat`/`fstatat` family, which `std` exposes on no platform.
+  `--import-rom` pins the pack's destination directory open once and names
+  every file against that handle, so a directory component redirected
+  mid-import can move nothing (see `import_rom`'s module docs).
+  Owner-approved for exactly this scope on PR #372 (`minimal-deps: approved`,
+  2026-08-24), chosen over project-owned `unsafe` FFI. Uses the `fs` feature
+  only; off Unix the crate is not compiled and the path-based flow remains.
 
 ## License
 
