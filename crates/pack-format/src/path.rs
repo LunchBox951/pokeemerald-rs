@@ -180,12 +180,26 @@ fn is_absolute_xdg_path(path: &OsStr) -> bool {
     path.as_encoded_bytes().starts_with(b"/")
 }
 
-/// The developer path: this crate's manifest directory is always
+/// The checkout's own pack: `<repo root>/`[`OUTPUT_RELATIVE_PATH`], where
+/// `cargo xtask extract` writes. This crate's manifest directory is always
 /// `<repo root>/crates/pack-format`, so two levels up is the repo root.
 ///
-/// Resolved at compile time, which is exactly why it is the last rung: it
-/// names the machine that built the binary, not the one running it.
-fn repo_pack_path() -> PathBuf {
+/// Resolved at compile time, which is exactly why it is [`resolve`]'s last
+/// rung: it names the machine that built the binary, not the one running
+/// it.
+///
+/// Public because a *checkout-validation* gate must ask for it by name
+/// rather than through [`default_pack_path`]. That resolver answers "where
+/// does a running game find its pack", and its earlier rungs are the two
+/// destinations `--import-rom` writes to, so a gate resolving through it
+/// would validate whichever pack the developer happens to have installed
+/// instead of the one `cargo xtask extract` just produced — an extractor
+/// regression passing against an older user pack, or a stale user pack
+/// failing a checkout that is fine `(test-ratchet)`. `xtask::extract::run`
+/// and `rom-import`'s equivalence gate already compute this same path
+/// privately for that reason.
+#[must_use]
+pub fn repo_pack_path() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .and_then(Path::parent)

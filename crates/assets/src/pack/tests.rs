@@ -1013,7 +1013,7 @@ fn real_pack_loads_and_every_typed_accessor_works() {
     use crate::fonts::FontId;
     use crate::map_layouts::{BorderGrid, LayoutId, LayoutTable};
 
-    let pack = AssetPack::load_default().expect("run `cargo xtask extract` first");
+    let pack = AssetPack::load_repo().expect("run `cargo xtask extract` first");
 
     let general = pack
         .tileset("general")
@@ -1242,7 +1242,7 @@ const REAL_PACK_PROGRAMMABLE_WAVES: [u32; 4] = [1, 2, 5, 6];
 fn real_pack_audio_samples_decode_through_the_sample_schema() {
     use crate::audio::Sample;
 
-    let pack = AssetPack::load_default().expect("run `cargo xtask extract` first");
+    let pack = AssetPack::load_repo().expect("run `cargo xtask extract` first");
 
     let mut decoded = 0usize;
     for name in REAL_PACK_DIRECT_SOUND_SAMPLES {
@@ -1339,7 +1339,7 @@ fn real_pack_audio_samples_decode_through_the_sample_schema() {
 fn real_pack_audio_song_decodes_through_the_song_schema() {
     use crate::audio::{Song, SongEvent, VoiceGroupId};
 
-    let pack = AssetPack::load_default().expect("run `cargo xtask extract` first");
+    let pack = AssetPack::load_repo().expect("run `cargo xtask extract` first");
     let bytes = pack
         .raw("audio/song/mus_title")
         .expect("`audio/song/mus_title` should be in the pack");
@@ -1455,7 +1455,7 @@ fn real_pack_mus_title_data_chain_round_trips_through_the_typed_accessors() {
 
     use crate::audio::VoiceEntry;
 
-    let pack = AssetPack::load_default().expect("run `cargo xtask extract` first");
+    let pack = AssetPack::load_repo().expect("run `cargo xtask extract` first");
 
     // 1. The song, through the typed accessor.
     let song = pack

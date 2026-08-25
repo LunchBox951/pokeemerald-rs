@@ -77,9 +77,9 @@
 //! [`tiles_from_image`], [`raw_entry`], [`EntryShapeError`]), the read side
 //! ([`parse_directory`], [`DirectoryEntry`], [`PackReadError`]), and runtime
 //! pack-path resolution
-//! ([`default_pack_path`], [`user_data_dir`], [`user_pack_path`],
-//! [`PACK_PATH_ENV`]). `xtask::extract` writes through it; `crates/assets`'s
-//! `AssetPack` reads through it.
+//! ([`default_pack_path`], [`repo_pack_path`], [`user_data_dir`],
+//! [`user_pack_path`], [`PACK_PATH_ENV`]). `xtask::extract` writes through
+//! it; `crates/assets`'s `AssetPack` reads through it.
 //!
 //! Both sides used to spell the layout out separately, so that the two
 //! crates stayed decoupled from each other. That held while there were two
@@ -100,8 +100,15 @@
 //!    exists; the shipped ROM importer writes there ([`user_pack_path`]).
 //! 3. `<directory of the running executable>/`[`OUTPUT_RELATIVE_PATH`], if
 //!    it exists, for portable installs.
-//! 4. The compile-time repo path, so a developer checkout keeps working
-//!    with nothing configured.
+//! 4. [`repo_pack_path`], the compile-time repo path, so a developer
+//!    checkout keeps working with nothing configured.
+//!
+//! That order is right for a *running game* and wrong for a gate that means
+//! to validate this checkout: rungs 1 and 2 are the very destinations
+//! `--import-rom` writes to, so a checkout gate resolving through
+//! [`default_pack_path`] would read whichever pack the developer has
+//! installed rather than the one `cargo xtask extract` just wrote. Such
+//! gates call [`repo_pack_path`] by name instead `(test-ratchet)`.
 //!
 //! Next: the ROM importer itself, the second backend these constructors
 //! exist for.
@@ -117,6 +124,6 @@ pub use entry::{
     EntryShapeError,
 };
 pub use layout::{EntryKind, FORMAT_VERSION, MAGIC, OUTPUT_RELATIVE_PATH};
-pub use path::{default_pack_path, user_data_dir, user_pack_path, PACK_PATH_ENV};
+pub use path::{default_pack_path, repo_pack_path, user_data_dir, user_pack_path, PACK_PATH_ENV};
 pub use reader::{parse_directory, DirectoryEntry, PackReadError};
 pub use writer::{PackEntry, PackWriteError, PackWriter};

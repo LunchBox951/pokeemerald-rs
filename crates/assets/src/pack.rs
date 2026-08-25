@@ -151,6 +151,29 @@ impl AssetPack {
         Self::load(&Self::default_path())
     }
 
+    /// Load the pack `cargo xtask extract` writes into *this checkout*,
+    /// [`pack_format::repo_pack_path`] — deliberately not
+    /// [`load_default`](Self::load_default).
+    ///
+    /// For gates that mean to validate the checkout rather than to play the
+    /// game. [`default_path`](Self::default_path)'s first two rungs are the
+    /// two destinations `pokeemerald-rs --import-rom` writes to, so a gate
+    /// resolving through it reads whichever pack the developer has
+    /// installed: an extractor regression can pass against an older user
+    /// pack, and a stale user pack can fail a checkout that is fine
+    /// `(test-ratchet)`. `xtask::extract::run` refuses the resolver for the
+    /// write side for the same reason; this is the read side of that
+    /// refusal.
+    ///
+    /// # Errors
+    ///
+    /// See [`load`](Self::load). [`PackError::NotFound`] here means exactly
+    /// "run `cargo xtask extract` first", with no ambiguity about which
+    /// pack was looked for.
+    pub fn load_repo() -> Result<Self, PackError> {
+        Self::load(&pack_format::repo_pack_path())
+    }
+
     /// Load and parse a pack from `path`.
     ///
     /// # Errors

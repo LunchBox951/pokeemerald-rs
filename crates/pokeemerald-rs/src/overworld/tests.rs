@@ -1554,7 +1554,7 @@ fn real_pack_the_opposite_gender_rival_binds_for_either_player() {
     const BRENDANS_2F: assets::MapId = assets::MapId("MAP_LITTLEROOT_TOWN_BRENDANS_HOUSE_2F");
     const MAYS_2F: assets::MapId = assets::MapId("MAP_LITTLEROOT_TOWN_MAYS_HOUSE_2F");
 
-    let pack = assets::pack::AssetPack::load_default().expect("run `cargo xtask extract` first");
+    let pack = assets::pack::AssetPack::load_repo().expect("run `cargo xtask extract` first");
     let scene_for = |map: assets::MapId, player: super::PlayerCharacter| {
         let header = assets::MapHeaderTable::new().header(map).unwrap();
         let layout = assets::LayoutTable::new().layout(header.layout).unwrap();
@@ -1879,7 +1879,7 @@ fn female_route_103_room_load_uses_may_for_player_and_brendan_for_rival() {
 
     let scene = super::load_room(ROUTE_103, super::PlayerCharacter::May, &event_data)
         .expect("run `cargo xtask extract` first");
-    let pack = assets::pack::AssetPack::load_default().unwrap();
+    let pack = assets::pack::AssetPack::load_repo().unwrap();
 
     let may_pixels = pack.sprite("may/walking").unwrap();
     let may_bytes = super::avatar::pack_people_sheet_frames("may/walking", may_pixels).unwrap();
