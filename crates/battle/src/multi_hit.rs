@@ -95,6 +95,7 @@ use crate::damage::BattleRng;
 use crate::dex::Dex;
 use crate::error::BattleError;
 use crate::hit::accuracy_roll;
+use crate::move_gate::ensure_resolvable_effect;
 use crate::pokemon::BattlePokemon;
 use crate::secondary::spend_effect_chance_draw;
 
@@ -143,14 +144,7 @@ pub fn roll_hit_count(rng: &mut impl BattleRng) -> u8 {
 /// - [`BattleError::UnsupportedMoveType`] for a `???`-typed move, which
 ///   `Cmd_typecalc` could not classify.
 pub fn ensure_resolvable(dex: &Dex, move_id: MoveId) -> Result<(), BattleError> {
-    let mv = dex.move_data(move_id)?;
-    if !is_multi_hit_effect(mv.effect) {
-        return Err(BattleError::UnsupportedMoveEffect(move_id));
-    }
-    if mv.move_type.battle_type().is_none() {
-        return Err(BattleError::UnsupportedMoveType(move_id));
-    }
-    Ok(())
+    ensure_resolvable_effect(dex, move_id, is_multi_hit_effect)
 }
 
 /// The prologue of `BattleScript_EffectMultiHit`: the one accuracy check
