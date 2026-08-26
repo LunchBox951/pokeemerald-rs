@@ -14,7 +14,7 @@ Then read [`docs/README.md`](docs/README.md). It routes each task to the smalles
 - Normal work targets `dev` and advances one [`docs/acceptance/v1.md`](docs/acceptance/v1.md) ID. Use `none` with a concrete rationale for maintenance that advances no v1 criterion.
 - Confirm before adding an external Cargo dependency or changing `.github/workflows/`, `RELEASE.md`, `CODEOWNERS`, or another release-process file. Routine `PATCH`, `MINOR`, and `MAJOR` synchronization is allowed; `FINAL` remains owner-only.
 - Never edit or commit `pokeemerald/` or `mgba/`. Never weaken their `.gitignore` exclusions `(reference-only)`.
-- Change `ledger/pokeemerald.json` only through `scripts/ledger.py`. Never hand-edit it.
+- Inspect the relevant ledger entry for every upstream behaviour or asset change. Update `ledger/pokeemerald.json` in the same pull request and only through `scripts/ledger.py`; never hand-edit it.
 - Preserve unrelated worktree changes. Never weaken, skip, or delete a test to pass a gate `(test-ratchet)`.
 
 ## Verify
@@ -28,4 +28,4 @@ Then read [`docs/README.md`](docs/README.md). It routes each task to the smalles
 | Format | `cargo fmt --check` |
 | Ledger | `python3 scripts/ledger.py verify` |
 
-Run focused checks while iterating, then the applicable workspace gates before handoff. Update `VERSION` as required by [`RELEASE.md`](RELEASE.md) and run `python3 scripts/sync_cargo_version.py`. Work is done when its stated outcome is present, its authorities agree, its verification passes, and no promised follow-up remains hidden.
+Run focused checks while iterating, then the applicable workspace gates before handoff. Update `VERSION` as required by [`RELEASE.md`](RELEASE.md) and run `python3 scripts/sync_cargo_version.py`. Work is done when its stated outcome is present, its authorities and ledger disposition agree, its verification passes, and no promised follow-up remains hidden.
