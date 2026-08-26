@@ -106,6 +106,16 @@ pub enum GenRomProfileError {
         /// What went wrong.
         reason: String,
     },
+    /// The output would land on the ROM the profile was derived from.
+    ///
+    /// Carries both names the developer typed, because the whole point is
+    /// that they are two spellings of one file.
+    OutputIsRom {
+        /// The ROM path, as given to `--rom`.
+        rom_path: PathBuf,
+        /// The output path, as given to `--out` or defaulted.
+        out_path: PathBuf,
+    },
     /// Writing the generated profile failed.
     WriteFailed {
         /// The output path.
@@ -177,6 +187,14 @@ impl fmt::Display for GenRomProfileError {
             Self::MapUnreadable { path, reason } => {
                 write!(f, "cannot use the map {}: {reason}", path.display())
             }
+            Self::OutputIsRom { rom_path, out_path } => write!(
+                f,
+                "refusing to write the generated profile over the source ROM `{}`: `--out {}` \
+                 names the same file, so the generated module would replace the cartridge \
+                 image it was derived from -- point `--out` at a different file",
+                rom_path.display(),
+                out_path.display()
+            ),
             Self::WriteFailed { path, reason } => {
                 write!(f, "cannot write {}: {reason}", path.display())
             }

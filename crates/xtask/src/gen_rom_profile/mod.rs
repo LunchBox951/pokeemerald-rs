@@ -152,16 +152,47 @@ pub struct Context<'a> {
 /// # Errors
 ///
 /// [`GenRomProfileError::RomUnusable`] if the ROM is not the supported
-/// build, [`GenRomProfileError::PackUnreadable`] without a pack to compare
-/// against, any locator failure, [`GenRomProfileError::MapMismatch`] if a
-/// `--map` cross-check disagrees, or
-/// [`GenRomProfileError::WriteFailed`].
+/// build, [`GenRomProfileError::OutputIsRom`] if the output names the same
+/// file as the ROM, [`GenRomProfileError::PackUnreadable`] without a pack
+/// to compare against, any locator failure,
+/// [`GenRomProfileError::MapMismatch`] if a `--map` cross-check disagrees,
+/// or [`GenRomProfileError::WriteFailed`].
 pub fn run(options: &Options) -> Result<GenReport, GenRomProfileError> {
     let repo_root = crate::extract::repo_root();
     let rom = Rom::load(&options.rom).map_err(|err| GenRomProfileError::RomUnusable {
         path: options.rom.clone(),
         reason: err.to_string(),
     })?;
+
+    let out_path = options
+        .out
+        .clone()
+        .unwrap_or_else(|| repo_root.join(PROFILE_RELATIVE_PATH));
+    // Refused before the search, not at the write: the answer cannot change
+    // during a run, and a developer who spelled one file two ways should
+    // hear about it before minutes of scanning, not after.
+    //
+    // Before `select_profile` too, deliberately. The ROM is the one input
+    // here that cannot be regenerated -- a developer's own cartridge dump,
+    // which this project never ships -- and `Rom::load` has already read
+    // the whole of it into memory, so nothing downstream would notice the
+    // output landing on it and `write_module` would truncate the cartridge
+    // image into a Rust file. Whether the image is the *supported* build is
+    // a smaller question than whether this run is about to destroy it, so
+    // it is asked second.
+    //
+    // The shipped importer refuses the same shape for the same reason
+    // (`ImportRomError::DestinationIsSource`); this is that refusal on the
+    // developer tool, through the helper `rom_import` exposes for it. Hard
+    // links and symlink aliases are covered, which comparing the two path
+    // strings would miss.
+    if rom_import::overwrites_rom(&options.rom, &out_path) {
+        return Err(GenRomProfileError::OutputIsRom {
+            rom_path: options.rom.clone(),
+            out_path,
+        });
+    }
+
     // Heuristics only ever run against a ROM whose whole-file hash already
     // matched a shipped profile.
     let profile = select_profile(&rom).map_err(|err| GenRomProfileError::RomUnusable {
@@ -199,10 +230,6 @@ pub fn run(options: &Options) -> Result<GenReport, GenRomProfileError> {
     let map = cross_check(options.map.as_deref(), &mut lines)?;
 
     let module = emit::module(&plan, &profile.sha1.to_string(), lines.len());
-    let out_path = options
-        .out
-        .clone()
-        .unwrap_or_else(|| repo_root.join(PROFILE_RELATIVE_PATH));
     write_module(&out_path, &module)?;
 
     Ok(GenReport {

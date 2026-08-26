@@ -340,3 +340,132 @@ fn the_committed_profile_matches_a_fresh_generation() {
     let _ = std::fs::remove_dir(&dir);
     assert!(Path::new(&committed_path).is_file());
 }
+
+/// A ROM-shaped image at `path`, structurally valid but not the supported
+/// build, so a run reaches the destination guard and stops there.
+fn rom_shaped_file(path: &Path) -> Vec<u8> {
+    let bytes = RomFixture::new().emerald_header().finish();
+    std::fs::write(path, &bytes).expect("the stand-in ROM writes");
+    bytes
+}
+
+#[test]
+fn an_output_naming_the_rom_itself_is_refused_and_the_rom_survives() {
+    // The typo that costs a developer their cartridge dump: one path given
+    // to both `--rom` and `--out`. The whole ROM is in memory by the time
+    // the module is written, so nothing downstream would notice.
+    let dir = scratch("out-is-rom");
+    let rom = dir.join("emerald.gba");
+    let before = rom_shaped_file(&rom);
+
+    let err = super::run(&super::Options {
+        rom: rom.clone(),
+        out: Some(rom.clone()),
+        map: None,
+    })
+    .expect_err("an output naming the ROM must be refused");
+
+    assert!(
+        matches!(err, GenRomProfileError::OutputIsRom { .. }),
+        "{err:?}"
+    );
+    assert_eq!(
+        std::fs::read(&rom).expect("the ROM survives"),
+        before,
+        "the ROM must be byte-identical after a refused run"
+    );
+
+    let _ = std::fs::remove_file(&rom);
+    let _ = std::fs::remove_dir(&dir);
+}
+
+#[cfg(unix)]
+#[test]
+fn an_output_symlinked_to_the_rom_is_refused_and_the_rom_survives() {
+    // A different path *string*, the same file. Comparing the two spellings
+    // would miss this; resolving them does not.
+    let dir = scratch("out-links-to-rom");
+    let rom = dir.join("emerald.gba");
+    let before = rom_shaped_file(&rom);
+    let alias = dir.join("profile.rs");
+    std::os::unix::fs::symlink(&rom, &alias).expect("the alias links");
+
+    let err = super::run(&super::Options {
+        rom: rom.clone(),
+        out: Some(alias.clone()),
+        map: None,
+    })
+    .expect_err("a symlinked output naming the ROM must be refused");
+
+    assert!(
+        matches!(err, GenRomProfileError::OutputIsRom { .. }),
+        "{err:?}"
+    );
+    assert_eq!(
+        std::fs::read(&rom).expect("the ROM survives"),
+        before,
+        "the ROM must be byte-identical after a refused run"
+    );
+
+    let _ = std::fs::remove_file(&alias);
+    let _ = std::fs::remove_file(&rom);
+    let _ = std::fs::remove_dir(&dir);
+}
+
+#[cfg(unix)]
+#[test]
+fn an_output_hard_linked_to_the_rom_is_refused_and_the_rom_survives() {
+    // Two directory entries, one inode. `canonicalize` reports two distinct
+    // names here, so only a device/inode comparison sees it.
+    let dir = scratch("out-hardlinks-rom");
+    let rom = dir.join("emerald.gba");
+    let before = rom_shaped_file(&rom);
+    let alias = dir.join("profile.rs");
+    std::fs::hard_link(&rom, &alias).expect("the alias links");
+
+    let err = super::run(&super::Options {
+        rom: rom.clone(),
+        out: Some(alias.clone()),
+        map: None,
+    })
+    .expect_err("a hard-linked output naming the ROM must be refused");
+
+    assert!(
+        matches!(err, GenRomProfileError::OutputIsRom { .. }),
+        "{err:?}"
+    );
+    assert_eq!(
+        std::fs::read(&rom).expect("the ROM survives"),
+        before,
+        "the ROM must be byte-identical after a refused run"
+    );
+
+    let _ = std::fs::remove_file(&alias);
+    let _ = std::fs::remove_file(&rom);
+    let _ = std::fs::remove_dir(&dir);
+}
+
+#[test]
+fn an_ordinary_output_is_not_mistaken_for_the_rom() {
+    // The guard must not refuse the normal case: a distinct output path
+    // gets past it and fails later, on the ROM not being the supported
+    // build.
+    let dir = scratch("out-is-not-rom");
+    let rom = dir.join("emerald.gba");
+    rom_shaped_file(&rom);
+
+    let err = super::run(&super::Options {
+        rom: rom.clone(),
+        out: Some(dir.join("bpee_rev0.rs")),
+        map: None,
+    })
+    .expect_err("a stand-in ROM is not the supported build");
+
+    assert!(
+        matches!(err, GenRomProfileError::RomUnusable { .. }),
+        "{err:?}"
+    );
+
+    let _ = std::fs::remove_file(&rom);
+    let _ = std::fs::remove_dir(&dir);
+}
