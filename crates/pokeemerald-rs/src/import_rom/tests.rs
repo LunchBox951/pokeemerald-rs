@@ -205,6 +205,31 @@ fn an_existing_pack_survives_a_failed_import() {
 }
 
 #[test]
+fn a_re_import_replaces_the_pack_that_already_held_the_name() {
+    // Re-importing after a pack-format bump is the ordinary second run, so
+    // publishing must *replace* the installed pack rather than refuse a
+    // taken name. Both `publish` arms promise that: `renameat(2)` on Unix,
+    // and `std::fs::rename` off it -- which is `MoveFileExW` with
+    // replace-existing on Windows, not C `rename`. Runs on every OS in CI's
+    // `cargo test --workspace` matrix, so the off-Unix arm is pinned by a
+    // real Windows run and not by this comment.
+    let dir = TempDir::new("re-import");
+    let pack_path = dir.join("pokeemerald.pack");
+    fs::write(&pack_path, b"the pack from the last release").expect("the old pack writes");
+
+    let source = SourceRom::new("re-import-src");
+    let outcome = import_to_with(source.path(), &pack_path, |_rom, _path| {
+        Ok(fake_pack(b"rebuilt pack"))
+    })
+    .expect("the second import succeeds");
+
+    assert_eq!(outcome.pack_path(), pack_path);
+    assert_eq!(fs::read(&pack_path).unwrap(), b"rebuilt pack");
+    // The replaced pack leaves no litter: no temporary file, no backup.
+    assert_eq!(file_names(&dir.path), ["pokeemerald.pack"]);
+}
+
+#[test]
 fn the_import_error_renders_the_importers_own_message() {
     let err = ImportRomError::Import(ImportError::EmptyPack);
     assert_eq!(err.to_string(), ImportError::EmptyPack.to_string());
