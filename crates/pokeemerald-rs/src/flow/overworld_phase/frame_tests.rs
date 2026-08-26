@@ -13,7 +13,8 @@ use platform::{ButtonState, Buttons};
 /// `(2, 6)`, script `PlayersHouse_1F_EventScript_Mom`) -> A opens her
 /// dialog with the real upstream text (`crate::overworld::npc_scripts::script_text`'s
 /// own transcription of `PlayersHouse_1F_Text_IsntItNiceInHere`) -> A
-/// confirms through the trailing prompt -> the dialog closes and control
+/// confirms her script-level `waitbuttonpress` (issue #410) -> the dialog
+/// closes, with its text still up until that exact tick, and control
 /// returns cleanly to ordinary overworld movement.
 #[test]
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
@@ -77,11 +78,11 @@ fn walking_downstairs_and_talking_to_mom_opens_and_closes_her_dialog() {
 
     // Drive the dialog to completion: print every glyph of the real
     // upstream text (`Mid` speed -- confirm not held, since only the
-    // trailing prompt needs one), then confirm through the trailing
-    // prompt, then let it close. Generous frame budgets throughout: the
-    // exact per-glyph cadence is `engine::text::render::Printer`'s own,
-    // already pinned by that module's tests -- this test only cares that
-    // the *dialog* (not the printer internals) reaches each milestone.
+    // script-level waitbuttonpress wait needs one), then confirm it, then
+    // let it close. Generous frame budgets throughout: the exact per-glyph
+    // cadence is `engine::text::render::Printer`'s own, already pinned by
+    // that module's tests -- this test only cares that the *dialog* (not
+    // the printer internals) reaches each milestone.
     let expected_tokens =
         crate::overworld::npc_scripts::script_text("PlayersHouse_1F_EventScript_Mom")
             .expect("Mom's script must be recognized against the real map data");
@@ -98,7 +99,7 @@ fn walking_downstairs_and_talking_to_mom_opens_and_closes_her_dialog() {
     for _ in 0..400 {
         phase.step(ButtonState::new());
         let Some(dialog) = &phase.dialog else {
-            panic!("the dialog must not close on its own before the trailing prompt confirms");
+            panic!("the dialog must not close on its own before a confirm reaches waitbuttonpress");
         };
         if dialog.revealed_glyph_count() == expected_glyph_count {
             fully_printed = true;
@@ -110,32 +111,42 @@ fn walking_downstairs_and_talking_to_mom_opens_and_closes_her_dialog() {
         "every glyph of the real upstream text must print within the frame budget"
     );
 
-    // Confirm through the trailing prompt, then let the box finish
-    // closing (module docs on `NpcDialog::tick`'s `Cleared` -> `Closed`
-    // gap: a few post-clear reveal-delay frames drain first). Pressing A
-    // fresh every frame (rather than once) is deliberate and still
-    // exactly matches a single real button press's effect:
-    // `engine::text::render::Printer::tick` only ever consults
-    // `confirm_pressed` while awaiting the trailing prompt -- the exact
-    // frame that's true on is otherwise timing-sensitive (the printer
-    // must first finish draining the last glyph's own reveal delay
-    // before it even reaches `AwaitingClear`), so this holds the
-    // "button" down across that whole window instead of guessing the
-    // one frame a single press would need to land on; the loop stops
-    // the instant the dialog closes, so no press after that could
-    // re-open a new one against Mom, still facing.
+    // Still idling past the full print: the box must keep every glyph on
+    // screen, waiting on the script-level `waitbuttonpress`
+    // (`NpcDialog::with_waitbuttonpress`, issue #410) rather than auto-
+    // closing or clearing on its own.
+    for _ in 0..8 {
+        phase.step(ButtonState::new());
+        let dialog = phase
+            .dialog
+            .as_ref()
+            .expect("must still be open, awaiting the confirm press");
+        assert_eq!(
+            dialog.revealed_glyph_count(),
+            expected_glyph_count,
+            "text must stay fully on screen while awaiting waitbuttonpress"
+        );
+    }
+
+    // Confirm: issue #410 means this closes on the very next tick the
+    // press lands on, with the text still fully shown right up to that
+    // tick -- no intervening `Cleared`/blank-box frames the old synthetic
+    // trailing `{P}` used to force. Pressing A fresh every frame (rather
+    // than once) is deliberate and still exactly matches a single real
+    // button press's effect: the exact frame a press first lands on is
+    // otherwise timing-sensitive to get right in this test, so this holds
+    // the "button" down across a small window instead; the loop stops the
+    // instant the dialog closes, so no press after that could re-open a
+    // new one against Mom, still facing.
     let mut closed = false;
-    for _ in 0..30 {
+    for _ in 0..5 {
         phase.step(pressed(Buttons::A));
         if phase.dialog.is_none() {
             closed = true;
             break;
         }
     }
-    assert!(
-        closed,
-        "confirming through the trailing prompt must close the dialog"
-    );
+    assert!(closed, "confirming waitbuttonpress must close the dialog");
 
     // Control returns cleanly: ordinary movement input works again.
     // `phase.player` is still facing North (from facing Mom above), so
