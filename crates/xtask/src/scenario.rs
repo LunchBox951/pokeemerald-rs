@@ -250,7 +250,18 @@ impl ScenarioDriver for App {
 }
 
 /// Run `name` against the checkout's own extracted pack through the real
-/// headless app ([`App::new_headless_real`] pins it to `assets-pack/`).
+/// headless app.
+///
+/// The scenario contract promises fixed inputs (`docs/scenarios.md`), and
+/// pack loads happen lazily along the whole flow -- the title boot
+/// ([`App::new_headless_real`] pins that one itself), then the main menu,
+/// the intro, and the overworld as their transitions run. Every one of
+/// those resolves through [`pack_format::default_pack_path`], whose first
+/// rung is `$POKEEMERALD_PACK`, so pinning that variable to the checkout
+/// pack pins them all: an installed user pack or an inherited override can
+/// no longer substitute the bytes under a running scenario. Process-wide
+/// and deliberately left set -- everything this process loads afterwards
+/// should be the checkout pack too.
 ///
 /// # Errors
 ///
@@ -258,6 +269,7 @@ impl ScenarioDriver for App {
 /// step, or any expected state milestone fails.
 #[cfg(feature = "scenario")]
 pub fn run(name: ScenarioName) -> Result<Report, ScenarioError> {
+    std::env::set_var(pack_format::PACK_PATH_ENV, pack_format::repo_pack_path());
     let mut app =
         App::new_headless_real().map_err(|error| ScenarioError::Start(error.to_string()))?;
     run_with_driver(spec(name), &mut app)
