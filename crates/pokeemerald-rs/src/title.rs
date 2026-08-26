@@ -622,8 +622,8 @@ impl TitleScene {
 }
 
 /// Load the pack from its default location and decode the title screen out
-/// of it in one step -- the entry point both [`crate::App::new`] and
-/// `xtask`'s smoke e2e check use.
+/// of it in one step -- the entry point [`crate::App::new`] uses. Checkout
+/// gates take [`load_repo`] instead.
 ///
 /// # Errors
 ///

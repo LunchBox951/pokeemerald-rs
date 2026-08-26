@@ -155,6 +155,21 @@ fn load_default_room_reports_pack_missing_when_no_pack_is_extracted() {
 }
 
 #[test]
+fn load_repo_default_room_looks_only_at_the_checkout_pack() {
+    // The point of the repo-pinned loader: it must never consult
+    // `AssetPack::default_path`'s earlier rungs. With no checkout pack
+    // extracted it reports "pack missing" even where a user pack *is*
+    // installed (which `load_default_room` would happily load instead),
+    // so `xtask`'s smoke e2e can never validate the wrong bytes
+    // `(test-ratchet)`.
+    if pack_format::repo_pack_path().is_file() {
+        return;
+    }
+    let err = super::load_repo_default_room(&engine::event_data::EventData::new()).unwrap_err();
+    assert!(err.is_pack_missing());
+}
+
+#[test]
 fn load_room_reports_pack_missing_when_no_pack_is_extracted() {
     // Same reasoning as `load_default_room_reports_pack_missing_when_no_pack_is_extracted`
     // (this function's own doc comment): `load_room` fails at the same
