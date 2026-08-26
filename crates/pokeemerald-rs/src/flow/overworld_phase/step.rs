@@ -11,7 +11,11 @@
 //! frame-ownership checks [`OverworldPhase::step`] defers to live in
 //! [`super::wild_battle`] and [`super::frame`] respectively. The Route 103
 //! sight-trainer check (issue #264) [`OverworldPhase::step`] runs ahead of
-//! everything else lives in [`super::sight_trainer_trigger`].
+//! everything else lives in [`super::sight_trainer_trigger`], and the
+//! approach cutscene it starts (S-5, issue #300) in
+//! [`super::sight_trainer_approach`] -- both report what they did to this
+//! module as a named [`SightTrainerOutcome`] rather than as a bare "was the
+//! frame taken" flag.
 //! [`crate::flow::wild_encounter`]'s predicates already model the
 //! wild-encounter half of this pipeline's precedence rules.
 
@@ -27,6 +31,7 @@ use crate::overworld::{npc_scripts, oldale_town_npc_reposition, NpcDialog};
 
 use super::connections::MapConnections;
 use super::input::{advance_or_skip_for_preempt, held_direction};
+use super::sight_trainer_trigger::SightTrainerOutcome;
 use super::OverworldPhase;
 
 impl OverworldPhase {
@@ -265,6 +270,24 @@ impl OverworldPhase {
             return;
         }
 
+        // A sight trainer's approach cutscene (S-5, issue #300,
+        // `super::sight_trainer_approach`) owns every frame between the cone
+        // check below and the battle above, and drives its own intro message
+        // box -- hence *ahead* of the generic dialog tick, which would
+        // otherwise close that box a frame before its owner noticed. This is
+        // upstream's `LockPlayerFieldControls`/`FreezeObjectEvents` pair --
+        // `ConfigureAndSetUpOneTrainerBattle`'s `LockPlayerFieldControls`
+        // (`src/battle_setup.c:1198-1199`) plus `lockfortrainer`'s
+        // `FreezeForApproachingTrainers` (`data/scripts/trainer_battle.inc:1-3`,
+        // `src/scrcmd.c:2193-2208`) -- in the only terms this port has for
+        // it: nothing else runs.
+        if self
+            .advance_sight_trainer_approach_frame(buttons)
+            .is_some_and(SightTrainerOutcome::owns_frame)
+        {
+            return;
+        }
+
         if self.advance_dialog_frame(buttons) {
             return;
         }
@@ -278,8 +301,24 @@ impl OverworldPhase {
         // the interaction lookup alike. Placed here, before any of this
         // frame's movement is applied, for the same reason: a cone reaching
         // the player preempts everything else this frame, exactly like
-        // upstream's own `return TRUE` short-circuit.
-        if self.begin_sight_trainer_battle_if_seen() {
+        // upstream's own `return TRUE` short-circuit. A refusal
+        // (`SightTrainerOutcome::Refused` -- no cone, or one that cannot
+        // fight) deliberately does not: that variant's own docs.
+        if self.begin_sight_trainer_approach_if_seen().owns_frame() {
+            // The trigger frame is a locked frame like every other frame of
+            // the approach, and the lock stops *input*, not animation: a
+            // step still in flight when the cone reaches the player keeps
+            // draining on this very frame upstream, because
+            // `LockPlayerFieldControls` gates only CB1's
+            // `ProcessPlayerFieldInput`/`PlayerStep` while the held movement
+            // runs from CB2's `AnimateSprites` afterwards
+            // (`tick_player_under_approach_lock`'s own docs). Without this
+            // the frame that *starts* the approach would be the one frame in
+            // the whole sequence that ticked on neither path -- neither here
+            // nor in `advance_sight_trainer_approach_frame` above, which ran
+            // before `self.sight_approach` existed and returned `None`
+            // (PR #407 review).
+            self.tick_player_under_approach_lock();
             return;
         }
 

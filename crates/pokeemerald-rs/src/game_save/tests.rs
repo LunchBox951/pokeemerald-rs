@@ -839,9 +839,12 @@ fn counter_is_ahead_orders_across_the_wrap_at_any_distance() {
     assert!(!super::counter_is_ahead(0, u32::MAX));
     assert!(!super::counter_is_ahead(1, u32::MAX));
     // Serial-arithmetic half-space boundary: a forward distance under half
-    // the counter space is "ahead"; at or past it, it reads as "behind".
-    assert!(super::counter_is_ahead(0, u32::MAX / 2 - 1));
-    assert!(!super::counter_is_ahead(0, u32::MAX / 2));
+    // the counter space is "ahead"; the exact-half distance is antipodal
+    // and ambiguous, and this Boolean treats it as "not ahead" (#403: the
+    // previous bound, `u32::MAX / 2`, truncated one short of that true
+    // half, so this exact distance was wrongly read as "not ahead").
+    assert!(super::counter_is_ahead(0, (1u32 << 31) - 1));
+    assert!(!super::counter_is_ahead(0, 1u32 << 31));
 }
 
 /// The stale-session refusal must survive the counter wrap: a session whose

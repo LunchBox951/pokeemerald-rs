@@ -42,21 +42,31 @@ pub(crate) fn script_text(script: &str) -> Option<Vec<Token>> {
 /// actually shows. `{PLAYER}` is substituted for the fixed pre-1.0 default
 /// name, mirroring `crate::intro::speech`'s identical convention for the same
 /// reason (the naming screen is not modelled yet -- deferred, still in v1
-/// scope); the trailing `{P}` is this port's own addition on top of
-/// upstream's raw string (which ends `"too?$"`, no embedded `\p`) --
-/// standing in for `MSGBOX_DEFAULT`'s own
-/// down-arrow wait-then-close behaviour (`crate::intro::speech::AND_YOU_ARE`'s
-/// doc comment explains the same stand-in for a different upstream
-/// mechanism).
+/// scope).
+///
+/// Byte-identical to upstream's own raw string now (`"...too?$"`, no
+/// embedded `\p`): before issue #410, this function appended a synthetic
+/// trailing `{P}` here to stand in for `MSGBOX_DEFAULT`'s down-arrow
+/// wait-then-close behaviour, which clears the box and pays a post-clear
+/// reveal delay upstream's `waitbuttonpress` never does. That wait is now
+/// [`crate::overworld::dialog::NpcDialog::with_waitbuttonpress`] (applied by
+/// every real dialog this table opens through, `NpcDialog::from_pack`'s own
+/// doc comment), so the text itself carries none of it.
 fn mom_text() -> String {
-    format!("MOM: See, {DEFAULT_PLAYER_NAME}?\nIsn't it nice in here, too?{{P}}")
+    format!("MOM: See, {DEFAULT_PLAYER_NAME}?\nIsn't it nice in here, too?")
 }
 
-/// Translate one authored message (the same `{P}`/`\n` convention
-/// `crate::intro::speech::parse_page` uses, minus `{L}`/`\l`: no message in
-/// this table's own scope needs a mid-message scroll) into a decoded
-/// [`Token`] stream, terminated with [`Token::End`].
-fn parse_message(text: &str) -> Vec<Token> {
+/// Translate one authored message -- the same `{P}`/`{L}`/`\n` convention
+/// [`crate::intro::speech::parse_page`] uses -- into a decoded [`Token`]
+/// stream, terminated with [`Token::End`].
+///
+/// `pub(crate)` because the authored-message convention outlives this
+/// module's own table: the sight-trainer intro speech
+/// (`crate::flow::overworld_phase::sight_trainer_trigger`'s transcribed
+/// `data/text/trainers.inc` lines, S-5 issue #300) is the same kind of text
+/// bound for the same [`crate::overworld::NpcDialog`], and two copies of a
+/// parser would be two places for the convention to drift.
+pub(crate) fn parse_message(text: &str) -> Vec<Token> {
     let mut tokens = Vec::new();
     let mut chars = text.chars().peekable();
     while let Some(c) = chars.next() {
@@ -64,13 +74,20 @@ fn parse_message(text: &str) -> Vec<Token> {
             '\n' => tokens.push(Token::Newline),
             '{' => {
                 let marker: String = chars.clone().take(2).collect();
-                if marker == "P}" {
-                    chars.by_ref().take(2).for_each(drop);
-                    tokens.push(Token::PromptClear);
-                } else {
-                    // No other `{...}` marker appears in this module's
-                    // authored messages.
-                    tokens.push(Token::Char('{'));
+                // `{L}` is upstream's `\l` (`CHAR_PROMPT_SCROLL`): wait for a
+                // button, then scroll one line rather than clearing the box.
+                match marker.as_str() {
+                    "P}" => {
+                        chars.by_ref().take(2).for_each(drop);
+                        tokens.push(Token::PromptClear);
+                    }
+                    "L}" => {
+                        chars.by_ref().take(2).for_each(drop);
+                        tokens.push(Token::PromptScroll);
+                    }
+                    // No other `{...}` marker appears in this crate's
+                    // authored overworld messages.
+                    _ => tokens.push(Token::Char('{')),
                 }
             }
             other => tokens.push(Token::Char(other)),
@@ -92,17 +109,23 @@ mod tests {
     }
 
     #[test]
-    fn moms_message_bakes_in_the_fixed_default_name_and_waits_before_closing() {
+    fn moms_message_bakes_in_the_fixed_default_name_and_ends_on_the_upstream_raw_string() {
         let tokens = script_text("PlayersHouse_1F_EventScript_Mom").unwrap();
         assert!(tokens.windows(DEFAULT_PLAYER_NAME.len()).any(|w| w
             .iter()
             .zip(DEFAULT_PLAYER_NAME.chars())
             .all(|(t, c)| *t == Token::Char(c))));
-        // Ends `?{P}` then `End` -- a button press is required to close it,
-        // matching MSGBOX_DEFAULT (module docs).
-        assert_eq!(tokens[tokens.len() - 3], Token::Char('?'));
-        assert_eq!(tokens[tokens.len() - 2], Token::PromptClear);
+        // Ends `?` then `End`, with no `PromptClear` anywhere -- issue #410:
+        // the button-press-required-to-close wait is now
+        // `NpcDialog::with_waitbuttonpress` (module docs), not a synthetic
+        // `{P}` baked into the text, matching upstream's own raw string
+        // (`"...too?$"`, no embedded `\p`).
+        assert_eq!(tokens[tokens.len() - 2], Token::Char('?'));
         assert_eq!(tokens.last(), Some(&Token::End));
+        assert!(
+            !tokens.contains(&Token::PromptClear),
+            "Mom's message must not carry a synthetic trailing prompt-clear anymore"
+        );
     }
 
     #[test]
@@ -110,6 +133,22 @@ mod tests {
         let tokens = script_text("PlayersHouse_1F_EventScript_Mom").unwrap();
         engine::text::encode(&tokens)
             .unwrap_or_else(|err| panic!("message not Gen-3 encodable: {err} in {tokens:?}"));
+    }
+
+    /// `{L}` is `\l`: wait, then scroll -- distinct from `{P}`'s wait, then
+    /// clear. Route 103's Amy and Andrew intros both use it (this crate's
+    /// `sight_trainer_trigger`), so it is no longer an unreachable arm.
+    #[test]
+    fn parse_message_translates_the_scroll_marker() {
+        assert_eq!(
+            parse_message("a{L}b"),
+            vec![
+                Token::Char('a'),
+                Token::PromptScroll,
+                Token::Char('b'),
+                Token::End,
+            ]
+        );
     }
 
     #[test]

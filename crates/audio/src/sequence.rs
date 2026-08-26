@@ -35,7 +35,13 @@ pub enum Event {
     Volume(u8),
     /// Set track pan, centre-relative `-64..=63` (`PAN`).
     Pan(i8),
-    /// Set tempo in BPM (`TEMPO`, stored on disk as BPM/2).
+    /// Set tempo in BPM (`TEMPO`, stored on disk as BPM/2). The wire command
+    /// carries one operand byte doubled ([`decode_track`]'s `TEMPO` arm), so
+    /// [`MAX_TEMPO_BPM`] bounds every value this decoder ever produces —
+    /// see [`clamp_tempo`] for the ingestion-boundary guard that also holds
+    /// other producers of this event (a hand-built `Vec<Event>`, or the
+    /// normalized asset-pack schema's own unbounded on-disk `u16`) to the
+    /// same domain.
     Tempo(u16),
     /// Transpose the track by whole semitones (`KEYSH`).
     KeyShift(i8),
@@ -88,6 +94,29 @@ pub enum Event {
     /// and the value written to it (`ply_port`, `m4a_1.s:1057`). Decoded for
     /// stream fidelity; not acted on by this slice.
     Port { control: u8, value: u8 },
+}
+
+/// The largest tempo (BPM) any `TEMPO` command can carry: the wire command's
+/// one operand byte, doubled (`decode_track`'s `TEMPO` arm below,
+/// `u16::from(v) * 2` with `v: u8`). `Sequencer`'s tempo accumulator
+/// (`tempo_c: u16`) only stays below `TEMPO_UNIT` between frames, so a
+/// `tempo_i` this bounded can never overflow it — see [`clamp_tempo`], the
+/// guard applied at every place a `tempo_i` enters the engine, not only this
+/// decoder.
+pub const MAX_TEMPO_BPM: u16 = u8::MAX as u16 * 2;
+
+/// Clamp a caller- or wire-supplied tempo (BPM) to [`MAX_TEMPO_BPM`], the
+/// domain the `TEMPO` command can actually represent. Applied at every
+/// `tempo_i` ingestion boundary — [`crate::song::Song::new`]'s initial tempo
+/// and [`Event::Tempo`]'s runtime assignment
+/// (`crate::sequencer::Sequencer::handle_event`) — so neither a directly
+/// constructed [`crate::song::Song`] nor a malformed normalized asset pack
+/// (`assets::audio::song::SongEvent::Tempo` round-trips an unbounded on-disk
+/// `u16`) can hand the sequencer's `tempo_c: u16` accumulator a value that
+/// overflows it (`Sequencer::advance_frame`'s `tempo_c += tempo_i`).
+#[must_use]
+pub fn clamp_tempo(bpm: u16) -> u16 {
+    bpm.min(MAX_TEMPO_BPM)
 }
 
 /// Something wrong with a track's byte program.

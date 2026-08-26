@@ -30,10 +30,12 @@
 //!   [`PlayerState::step`](super::player::PlayerState::step). Upstream also
 //!   collides against an object's `previousCoords` (the tile a *walking*
 //!   NPC is vacating, so the player can't swap places with it mid-step);
-//!   this slice's object events never move (module docs' "stationary +
-//!   look-around only" scope, below), so `previousCoords` is always equal to
-//!   `currentCoords` and the extra term is unobservable — it becomes
-//!   reachable only when NPC movement lands.
+//!   the queries above all run against *templates*, which never move, so
+//!   `previousCoords` is always equal to `currentCoords` there and the extra
+//!   term is unobservable. [`ObjectEventState`] (below) is the one thing in
+//!   this port that does move an object event, and it does track both
+//!   coordinate pairs — but it is a *cutscene's* private copy, not something
+//!   these template-backed queries can see (that type's own docs).
 //!
 //! **Not ported** (recorded honestly in the ledger, not silently dropped):
 //! `TryStartInteractionScript`'s full fallback chain past the object-event
@@ -43,18 +45,20 @@
 //! (`GetInteractedLinkPlayerScript`), `RamScript`, and the interaction sound
 //! effect. [`initial_facing_direction`] also only ever reflects an object
 //! event's *initial* spawn facing (`gInitialMovementTypeFacingDirections`) —
-//! this port has no per-object movement-type task simulation (the issue's
-//! own "stationary + look-around only" scope for this slice): not modelled
-//! yet, deferred, still in v1 scope — so a
-//! `MOVEMENT_TYPE_LOOK_AROUND`/`_WANDER_*` object always renders facing its
-//! initial direction rather than cycling.
+//! this port has no per-object movement-type *task* simulation
+//! (`MOVEMENT_TYPE_LOOK_AROUND`/`_WANDER_*` never cycle; a spawned object
+//! renders facing its initial direction forever), and no persistent
+//! `gObjectEvents` array for a moved object to live in, so nothing that
+//! reads the `'static` template tables — the render path, the collision
+//! check, the interaction lookup, the sight cones — observes
+//! [`ObjectEventState`]'s movement.
 
 use assets::{MovementType, ObjectEvent};
 
 use super::collision::ELEVATION_TRANSITION;
 use super::direction::Direction;
 use super::map_runtime::MapRuntime;
-use super::player::PlayerState;
+use super::player::{PlayerState, TilePos};
 use crate::event_data::EventData;
 
 /// Whether `event` would currently be spawned (upstream: `!FlagGet(template->flagId)`).
@@ -370,6 +374,234 @@ pub const fn initial_facing_direction(movement_type: MovementType) -> Direction 
         | MovementType::WalkSlowlyInPlaceRight
         | MovementType::WalkSequenceRightUpLeftDown
         | MovementType::WalkSequenceRightDownLeftUp => East,
+    }
+}
+
+/// `gTrainerFacingDirectionMovementTypes` (`event_object_movement.c:881-891`),
+/// read through `GetTrainerFacingDirectionMovementType` (`:4645-4648`): the
+/// `MOVEMENT_TYPE_FACE_*` a stopped trainer is given so it keeps facing the
+/// direction it stopped in. Upstream's table also maps `DIR_NONE` and the
+/// four bike diagonals (all onto the `FACE_DOWN`/`FACE_UP` of their vertical
+/// component); [`Direction`] models only the four cardinals
+/// (that module's own docs), so only those four rows appear here.
+#[must_use]
+pub const fn trainer_facing_movement_type(facing: Direction) -> MovementType {
+    match facing {
+        Direction::South => MovementType::FaceDown,
+        Direction::North => MovementType::FaceUp,
+        Direction::West => MovementType::FaceLeft,
+        Direction::East => MovementType::FaceRight,
+    }
+}
+
+/// One object event's *movable* state: the `gObjectEvents` fields a cutscene
+/// mutates (`currentCoords`, `previousCoords`, `facingDirection`,
+/// `movementType`) plus the two `objectEventTemplate` fields upstream writes
+/// back through `OverrideTemplateCoordsForObjectEvent` /
+/// `TryOverrideTemplateCoordsForObjectEvent` (`event_object_movement.c:2478-2506`).
+///
+/// **Owned by the cutscene that moves it, not by the map.** This port has no
+/// persistent spawned-object-event array (module docs) and its templates are
+/// `'static` table data, so a moved object cannot be written back anywhere
+/// the render/collision/interaction/sight queries would see it: a caller
+/// constructs one of these from a template with [`Self::from_template`],
+/// drives it for the length of its sequence, and drops it. The first such
+/// caller is the sight-trainer approach
+/// (`pokeemerald_rs::flow::overworld_phase::sight_trainer_approach`, S-5,
+/// issue #300), which is exactly upstream's own arrangement in miniature:
+/// `Task_RunTrainerSeeFuncList` holds the one object event it is walking and
+/// nothing else looks at it until it stops. **The consequence, named rather
+/// than hidden: the walk-up is modelled but not *drawn*** — the trainer's
+/// sprite stays at its template tile for the whole approach, because that is
+/// where the renderer reads it from. Timing, facing, the stopping tile and
+/// the template write-back are all real; only the pixels are missing, and
+/// they arrive with a spawned-object-event list, not with this type.
+///
+/// No animation timer of its own: [`Self::walk`] commits the destination
+/// tile immediately, exactly as upstream's `InitNpcForMovement`
+/// (`event_object_movement.c`) commits `currentCoords` at movement *start*
+/// and as [`PlayerState::step`] already does for the player — the owning
+/// sequence counts out the [`WALK_FRAMES_PER_TILE`](super::player::WALK_FRAMES_PER_TILE)
+/// frames of animation that follow, the same way
+/// [`PlayerState::tick`] does for the player.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ObjectEventState {
+    /// `objEvent->currentCoords`, in this port's unpadded template
+    /// coordinate space (see [`MAP_OFFSET`]).
+    position: TilePos,
+    /// `objEvent->previousCoords`: the tile a walking object is vacating.
+    previous_position: TilePos,
+    /// `objEvent->currentElevation`, adopted from the template and never
+    /// changed — see [`Self::walk`].
+    elevation: u8,
+    /// `objEvent->facingDirection`.
+    facing: Direction,
+    /// `objEvent->movementType`.
+    movement_type: MovementType,
+    /// `objectEventTemplate->x`/`->y`, as
+    /// [`Self::override_template_coords`] would leave them.
+    template_position: TilePos,
+    /// `objectEventTemplate->movementType`, as
+    /// [`Self::override_template_movement_type`] would leave it.
+    template_movement_type: MovementType,
+}
+
+impl ObjectEventState {
+    /// Spawn `event`'s movable state, as `InitObjectEventStateFromTemplate`
+    /// would: standing on the template's own tile and elevation, facing
+    /// [`initial_facing_direction`], with both coordinate pairs equal
+    /// (`event_object_movement.c:1309-1314`) and both template fields still
+    /// holding what the template itself declares.
+    #[must_use]
+    pub fn from_template(event: &ObjectEvent) -> Self {
+        let position = (i32::from(event.x), i32::from(event.y));
+        Self {
+            position,
+            previous_position: position,
+            elevation: event.elevation,
+            facing: initial_facing_direction(event.movement_type),
+            movement_type: event.movement_type,
+            template_position: position,
+            template_movement_type: event.movement_type,
+        }
+    }
+
+    /// `objEvent->currentCoords`.
+    #[must_use]
+    pub const fn position(&self) -> TilePos {
+        self.position
+    }
+
+    /// `objEvent->previousCoords` — equal to [`Self::position`] until the
+    /// first [`Self::walk`].
+    #[must_use]
+    pub const fn previous_position(&self) -> TilePos {
+        self.previous_position
+    }
+
+    /// `objEvent->currentElevation`.
+    #[must_use]
+    pub const fn elevation(&self) -> u8 {
+        self.elevation
+    }
+
+    /// `objEvent->facingDirection`.
+    #[must_use]
+    pub const fn facing(&self) -> Direction {
+        self.facing
+    }
+
+    /// `objEvent->movementType`.
+    #[must_use]
+    pub const fn movement_type(&self) -> MovementType {
+        self.movement_type
+    }
+
+    /// `objectEventTemplate->x`/`->y` — what a later respawn of this object
+    /// event would place it at ([`Self::override_template_coords`]).
+    #[must_use]
+    pub const fn template_position(&self) -> TilePos {
+        self.template_position
+    }
+
+    /// `objectEventTemplate->movementType`
+    /// ([`Self::override_template_movement_type`]).
+    #[must_use]
+    pub const fn template_movement_type(&self) -> MovementType {
+        self.template_movement_type
+    }
+
+    /// `GetOppositeDirection(objEvent->facingDirection)`
+    /// (`event_object_movement.c`), the direction
+    /// `PlayerFaceApproachingTrainer` turns the player in once the trainer
+    /// has stopped facing them (`trainer_see.c:526`).
+    #[must_use]
+    pub const fn opposite_facing(&self) -> Direction {
+        match self.facing {
+            Direction::South => Direction::North,
+            Direction::North => Direction::South,
+            Direction::West => Direction::East,
+            Direction::East => Direction::West,
+        }
+    }
+
+    /// Face `direction` without moving —
+    /// `ObjectEventSetHeldMovement(obj, GetFaceDirectionMovementAction(dir))`.
+    /// Upstream's `MovementAction_Face*_Step0` set `facingDirection` and
+    /// return `TRUE` in the same frame, so this costs no animation time.
+    pub const fn face(&mut self, direction: Direction) {
+        self.facing = direction;
+    }
+
+    /// Start a one-tile walk in `direction` — `InitNpcForMovement`
+    /// (`event_object_movement.c`), which faces the object, copies
+    /// `currentCoords` into `previousCoords`, and commits the destination
+    /// tile *before* the 16 frames of walk animation run.
+    ///
+    /// No collision check: every caller so far walks a path upstream has
+    /// already cleared (`CheckPathBetweenTrainerAndPlayer` walks the whole
+    /// approach line looking for collisions before
+    /// `InitTrainerApproachTask` is ever called, `trainer_see.c`). No
+    /// elevation adoption either — `ObjectEventUpdateElevation` is not
+    /// modelled for object events (only for the player,
+    /// [`PlayerState::step`]'s own "Elevation adoption"), which is
+    /// unobservable for that same already-elevation-compatible path.
+    pub const fn walk(&mut self, direction: Direction) {
+        self.facing = direction;
+        self.previous_position = self.position;
+        let (dx, dy) = direction.delta();
+        self.position = (self.position.0 + dx, self.position.1 + dy);
+    }
+
+    /// `SetTrainerMovementType` (`event_object_movement.c:4636-4643`): the live
+    /// `movementType` a stopped trainer keeps, so its own movement-type task
+    /// leaves it facing where it stopped instead of resuming its patrol.
+    pub const fn set_movement_type(&mut self, movement_type: MovementType) {
+        self.movement_type = movement_type;
+    }
+
+    /// `OverrideTemplateCoordsForObjectEvent`
+    /// (`event_object_movement.c:2478-2488`): write the object's current
+    /// tile back into its own `template_position` field -- upstream's half
+    /// of "leaving and re-entering the map respawns it where it stopped".
+    ///
+    /// Upstream writes `currentCoords - MAP_OFFSET` because a spawned object
+    /// event's coordinates live in the padded backup-layout space
+    /// ([`MAP_OFFSET`]); this port keeps object events in the unpadded
+    /// template space throughout (module docs), where the same statement is
+    /// simply "the template's tile becomes the current tile".
+    ///
+    /// **This is a promise this method alone cannot keep.** The write lands
+    /// on *this instance's own copy* of the template, and [`Self`]'s own
+    /// docs already name why that copy can't be read back by a later spawn:
+    /// this port has no persistent spawned-object-event array, so nothing
+    /// re-reads `template_position` on map re-entry at all. The one caller
+    /// today (`pokeemerald_rs::flow::overworld_phase::sight_trainer_approach`'s
+    /// `stop_facing_player`) makes this call and then, a few frames later,
+    /// drops the whole `ObjectEventState` the instant its approach hands off
+    /// to a battle (that module's own `start_sight_trainer_battle`) -- so a
+    /// save taken, or a map re-entered, after that fight ends finds the
+    /// trainer back at its original template tile, not the one it stopped
+    /// on. The write still runs, in the same order and on the same frame
+    /// upstream makes it, so this instance's own accessors observe it
+    /// faithfully for as long as it lives; a real respawn read is a
+    /// spawned-object-event list's job, not this method's or this type's
+    /// (that struct's own doc comment, "The consequence, named rather than
+    /// hidden").
+    pub const fn override_template_coords(&mut self) {
+        self.template_position = self.position;
+    }
+
+    /// `TryOverrideTemplateCoordsForObjectEvent`
+    /// (`event_object_movement.c:2499-2506`) — misnamed upstream: it writes
+    /// the template's **`movementType`**, not its coordinates, so upstream's
+    /// respawn keeps the stopped trainer's facing too. The same disclosed
+    /// gap applies here as to [`Self::override_template_coords`]'s sibling
+    /// write: this instance's own copy records it faithfully, but nothing in
+    /// this port reads `template_movement_type` back on a later spawn (that
+    /// method's own doc comment).
+    pub const fn override_template_movement_type(&mut self, movement_type: MovementType) {
+        self.template_movement_type = movement_type;
     }
 }
 
@@ -1033,6 +1265,101 @@ mod tests {
             MovementType::from_id(81).is_err(),
             "upstream's table has exactly 81 entries -- a 82nd modelled \
              MovementType would need its own transcribed arm above"
+        );
+    }
+
+    /// `gTrainerFacingDirectionMovementTypes`' four cardinal rows
+    /// (`event_object_movement.c:881-891`), and the round trip that makes
+    /// them useful: the movement type a trainer stops with must be one whose
+    /// own initial facing is the direction it stopped in -- otherwise a
+    /// respawn (`OverrideTemplateCoordsForObjectEvent`'s whole point) would
+    /// face the wrong way.
+    #[test]
+    fn a_stopped_trainers_movement_type_respawns_facing_the_way_it_stopped() {
+        let expected = [
+            (Direction::South, MovementType::FaceDown),
+            (Direction::North, MovementType::FaceUp),
+            (Direction::West, MovementType::FaceLeft),
+            (Direction::East, MovementType::FaceRight),
+        ];
+        for (facing, movement_type) in expected {
+            assert_eq!(trainer_facing_movement_type(facing), movement_type);
+            assert_eq!(initial_facing_direction(movement_type), facing);
+        }
+    }
+
+    /// A freshly spawned [`ObjectEventState`] is
+    /// `InitObjectEventStateFromTemplate`'s own starting point: both
+    /// coordinate pairs on the template tile, the template's own facing, and
+    /// template fields that still say what the template says.
+    #[test]
+    fn object_event_state_spawns_on_its_template_tile_facing_its_template_direction() {
+        let mut event = object(1, 12, 34, 3, "0");
+        event.movement_type = MovementType::FaceUp;
+        let state = ObjectEventState::from_template(&event);
+
+        assert_eq!(state.position(), (12, 34));
+        assert_eq!(state.previous_position(), (12, 34));
+        assert_eq!(state.elevation(), 3);
+        assert_eq!(state.facing(), Direction::North);
+        assert_eq!(state.movement_type(), MovementType::FaceUp);
+        assert_eq!(state.template_position(), (12, 34));
+        assert_eq!(state.template_movement_type(), MovementType::FaceUp);
+    }
+
+    /// [`ObjectEventState::walk`] is `InitNpcForMovement`: the destination
+    /// tile is committed at movement *start*, with the vacated tile retained
+    /// as `previousCoords` -- the same "commit now, animate after" split
+    /// [`PlayerState::step`] already uses.
+    #[test]
+    fn walking_commits_the_destination_tile_and_retains_the_vacated_one() {
+        let event = object(1, 5, 5, 3, "0");
+        let mut state = ObjectEventState::from_template(&event);
+
+        state.walk(Direction::South);
+        assert_eq!(state.position(), (5, 6));
+        assert_eq!(state.previous_position(), (5, 5));
+        assert_eq!(state.facing(), Direction::South);
+
+        state.walk(Direction::South);
+        assert_eq!(state.position(), (5, 7));
+        assert_eq!(state.previous_position(), (5, 6));
+
+        // The template is untouched until it is explicitly overridden.
+        assert_eq!(state.template_position(), (5, 5));
+    }
+
+    /// The stop sequence `PlayerFaceApproachingTrainer` runs
+    /// (`trainer_see.c:508-528`), in its own order: face the player, adopt
+    /// the matching `MOVEMENT_TYPE_FACE_*`, write that movement type back to
+    /// the template, then write the stopping tile back to the template.
+    #[test]
+    fn the_stop_sequence_writes_the_stopping_tile_and_facing_back_to_the_template() {
+        let mut event = object(1, 5, 5, 3, "0");
+        event.movement_type = MovementType::FaceDown;
+        let mut state = ObjectEventState::from_template(&event);
+        state.walk(Direction::South);
+        state.walk(Direction::South);
+
+        state.face(Direction::East);
+        let movement_type = trainer_facing_movement_type(state.facing());
+        state.set_movement_type(movement_type);
+        state.override_template_movement_type(movement_type);
+        state.override_template_coords();
+
+        assert_eq!(state.facing(), Direction::East);
+        assert_eq!(state.opposite_facing(), Direction::West);
+        assert_eq!(state.movement_type(), MovementType::FaceRight);
+        assert_eq!(state.template_movement_type(), MovementType::FaceRight);
+        assert_eq!(
+            state.template_position(),
+            (5, 7),
+            "the template now names the tile the trainer stopped on"
+        );
+        assert_eq!(
+            state.elevation(),
+            3,
+            "elevation is not modelled for a walking object event (`walk`'s own docs)"
         );
     }
 }
