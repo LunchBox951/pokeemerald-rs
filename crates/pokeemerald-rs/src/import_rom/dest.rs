@@ -138,8 +138,17 @@ impl Dest {
     /// see [`super`]'s docs for why that grants it nothing. A removal that
     /// fails leaves litter but must not replace the diagnosis the caller
     /// is already returning.
-    pub(super) fn discard(&self, name: &OsStr) {
-        let _ = rustix::fs::unlinkat(&self.dir, name, rustix::fs::AtFlags::empty());
+    ///
+    /// Answers whether the name is gone afterwards, so a caller whose
+    /// diagnostic mentions the temporary file can say which of the two
+    /// happened instead of asserting the tidy one. Already absent counts as
+    /// gone: the caller's question is "is there a file left behind", not
+    /// "did this call do the removing".
+    pub(super) fn discard(&self, name: &OsStr) -> bool {
+        match rustix::fs::unlinkat(&self.dir, name, rustix::fs::AtFlags::empty()) {
+            Ok(()) => true,
+            Err(err) => err == rustix::io::Errno::NOENT,
+        }
     }
 }
 
@@ -217,7 +226,13 @@ impl Dest {
     }
 
     /// Remove `name` from this directory, ignoring a failure.
-    pub(super) fn discard(&self, name: &OsStr) {
-        let _ = std::fs::remove_file(self.dir.join(name));
+    ///
+    /// Answers whether the name is gone afterwards, as the Unix arm does
+    /// and for the same reason.
+    pub(super) fn discard(&self, name: &OsStr) -> bool {
+        match std::fs::remove_file(self.dir.join(name)) {
+            Ok(()) => true,
+            Err(err) => err.kind() == io::ErrorKind::NotFound,
+        }
     }
 }

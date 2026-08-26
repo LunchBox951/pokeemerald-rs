@@ -624,3 +624,59 @@ fn a_missing_destination_says_which_variable_to_set() {
     let rendered = ImportRomError::NoDestination.to_string();
     assert!(rendered.contains(pack_format::PACK_PATH_ENV), "{rendered}");
 }
+
+#[test]
+fn a_failed_publish_says_whether_the_finished_pack_is_still_on_disk() {
+    // `Dest::discard` swallows its own failure so it cannot displace the
+    // publish diagnosis, which means the temporary file can outlive the
+    // error. It holds a *finished* pack, so the message must not claim it
+    // was removed when it was not.
+    let removed = ImportRomError::PublishFailed {
+        temp_path: PathBuf::from("/data/.pokeemerald-rs-import.1.2.3.tmp"),
+        pack_path: PathBuf::from("/data/pokeemerald.pack"),
+        source: std::io::Error::from(std::io::ErrorKind::PermissionDenied),
+        temp_removed: true,
+    }
+    .to_string();
+    assert!(removed.contains("was removed"), "{removed}");
+
+    let kept = ImportRomError::PublishFailed {
+        temp_path: PathBuf::from("/data/.pokeemerald-rs-import.1.2.3.tmp"),
+        pack_path: PathBuf::from("/data/pokeemerald.pack"),
+        source: std::io::Error::from(std::io::ErrorKind::PermissionDenied),
+        temp_removed: false,
+    }
+    .to_string();
+    assert!(!kept.contains("was removed"), "{kept}");
+    assert!(
+        kept.contains("still at `/data/.pokeemerald-rs-import.1.2.3.tmp`"),
+        "{kept}"
+    );
+    // Both spellings stay one line: the binary prints them on one row.
+    for rendered in [&removed, &kept] {
+        assert!(!rendered.contains('\n'), "{rendered}");
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn discard_reports_a_name_that_is_gone_and_one_it_could_not_remove() {
+    let dir = TempDir::new("discard-reports");
+    std::fs::write(dir.join("present"), b"x").expect("the file writes");
+    let dest = Dest::open(&dir.path).expect("the directory opens");
+
+    assert!(
+        dest.discard(OsStr::new("present")),
+        "a removed name is gone"
+    );
+    // Already absent counts as gone: the caller asks whether a file is left
+    // behind, not whether this call did the removing.
+    assert!(dest.discard(OsStr::new("never-existed")), "absent is gone");
+    // A directory is not something `unlink` will remove, so this is the
+    // "could not remove it" answer without needing to break permissions.
+    std::fs::create_dir(dir.join("a-directory")).expect("the directory writes");
+    assert!(
+        !dest.discard(OsStr::new("a-directory")),
+        "a name that survives must report as still there"
+    );
+}

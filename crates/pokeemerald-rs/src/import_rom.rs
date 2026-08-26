@@ -226,6 +226,12 @@ pub enum ImportRomError {
         pack_path: PathBuf,
         /// The underlying I/O failure.
         source: io::Error,
+        /// Whether the cleanup that followed actually removed
+        /// `temp_path`. [`Dest::discard`] swallows its own failure so it
+        /// cannot displace this diagnosis, which means the file can still
+        /// be there — and it holds a *finished* pack, so the player is
+        /// owed the truth about it rather than told it is gone.
+        temp_removed: bool,
     },
 }
 
@@ -268,12 +274,32 @@ impl fmt::Display for ImportRomError {
                 temp_path,
                 pack_path,
                 source,
-            } => write!(
-                f,
-                "could not publish the finished pack to `{}`: {source} (the temporary file `{}` was removed)",
-                pack_path.display(),
-                temp_path.display()
-            ),
+                temp_removed,
+            } => {
+                write!(
+                    f,
+                    "could not publish the finished pack to `{}`: {source}",
+                    pack_path.display()
+                )?;
+                if *temp_removed {
+                    write!(
+                        f,
+                        " (the temporary file `{}` was removed)",
+                        temp_path.display()
+                    )
+                } else {
+                    // The pack itself is finished and synced, so this is not
+                    // just litter to apologize for -- it is the import's
+                    // whole product, and naming it is what lets the player
+                    // move it into place or delete it themselves.
+                    write!(
+                        f,
+                        " (the finished pack is still at `{}`; move it to the destination or \
+                         delete it yourself)",
+                        temp_path.display()
+                    )
+                }
+            }
         }
     }
 }
@@ -425,7 +451,7 @@ fn import_to_with(
         Ok(pack) => pack,
         Err(source) => {
             drop(file);
-            dest.discard(&temp_name);
+            let _ = dest.discard(&temp_name);
             undo_created_dir(&dir, existed);
             return Err(ImportRomError::Import(source));
         }
@@ -447,7 +473,7 @@ fn import_to_with(
         .and_then(|()| file.sync_all())
     {
         drop(file);
-        dest.discard(&temp_name);
+        let _ = dest.discard(&temp_name);
         undo_created_dir(&dir, existed);
         return Err(ImportRomError::TempFileFailed {
             temp_path: dir.join(&temp_name),
@@ -457,9 +483,10 @@ fn import_to_with(
     drop(file);
 
     dest.publish(&temp_name, name).map_err(|source| {
-        dest.discard(&temp_name);
+        let temp_removed = dest.discard(&temp_name);
         undo_created_dir(&dir, existed);
         ImportRomError::PublishFailed {
+            temp_removed,
             temp_path: dir.join(&temp_name),
             pack_path: pack_path.to_path_buf(),
             source,
