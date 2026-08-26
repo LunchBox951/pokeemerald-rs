@@ -398,10 +398,11 @@ impl OverworldPhase {
     ///
     /// [`OverworldPhase::party_lead`] is deliberately *not* taken here, only
     /// cloned: it is emptied when the battle actually starts
-    /// ([`super::sight_trainer_approach`]), so a save taken mid-approach --
-    /// the start menu has no idea a cutscene is running, this port having no
-    /// `LockPlayerFieldControls` -- persists an honest pre-battle overworld
-    /// rather than a party the player appears to have lost.
+    /// ([`super::sight_trainer_approach`]). A mid-approach save cannot
+    /// observe the difference -- `start_menu_may_open` refuses `START` while
+    /// an approach is in flight ([`super::start_menu`]'s gates) -- but
+    /// cloning keeps the overworld's party authoritative for every frame the
+    /// battle has not yet claimed it.
     ///
     /// # Refusals cost nothing, forever
     ///
