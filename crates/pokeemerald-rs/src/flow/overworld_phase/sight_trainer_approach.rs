@@ -150,9 +150,10 @@ pub(super) struct SightApproach {
 }
 
 impl SightApproach {
-    /// Start `trainer`'s approach: the icon goes up this frame
-    /// (`TrainerExclamationMark`'s `FieldEffectStart`) and the walk-up
-    /// begins when it comes down.
+    /// Start `trainer`'s approach: the icon goes up once the player stands
+    /// still (`TrainerExclamationMark`'s `FieldEffectStart`, gated behind
+    /// `lockfortrainer` -- [`OverworldPhase`]'s driver holds the countdown
+    /// while a step is in flight) and the walk-up begins when it comes down.
     pub(super) const fn new(
         trainer: ObjectEventState,
         walk_tiles: u8,
@@ -409,8 +410,11 @@ impl OverworldPhase {
     /// freeze that walk: `UpdateObjectEvents` keeps animating every spawned
     /// object event's held movement every frame regardless of what
     /// `LockPlayerFieldControls` has locked out of *input*, so the player's
-    /// own in-flight step keeps draining under the exclamation icon exactly
-    /// as it would with no trainer watching.
+    /// own in-flight step keeps draining exactly as it would with no
+    /// trainer watching -- but it drains *before* the exclamation icon, not
+    /// under it: `lockfortrainer` blocks the script until the player stands
+    /// still, and only then does `DoTrainerApproach` start the icon (the
+    /// `ExclamationIcon` guard arm below).
     /// [`Self::tick_player_under_approach_lock`] here is that continued
     /// animation's stand-in, and it carries the latched-landing half with
     /// it -- that method's own docs for both.
@@ -421,6 +425,18 @@ impl OverworldPhase {
         let stage = self.sight_approach.as_ref()?.stage;
         self.tick_player_under_approach_lock();
         match stage {
+            ApproachStage::ExclamationIcon { .. } if self.player.in_transit() => {
+                // `lockfortrainer` blocks the script on
+                // `IsFreezeObjectAndPlayerFinished` until the player is
+                // standing still (`scrcmd.c:2193-2208`,
+                // `event_object_lock.c:130-147`), and only then does
+                // `EventScript_TrainerApproach` reach `DoTrainerApproach`'s
+                // `FieldEffectStart` (`trainer_battle.inc:1-7`,
+                // `trainer_see.c:459-469`). The countdown therefore holds
+                // while the in-flight step drains above; it never overlaps
+                // the walk it waited out.
+                Some(SightTrainerOutcome::ApproachAdvanced)
+            }
             ApproachStage::ExclamationIcon { .. } | ApproachStage::WalkUp { .. } => {
                 let player_position = self.player.position();
                 if let Some(approach) = &mut self.sight_approach {

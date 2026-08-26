@@ -893,10 +893,11 @@ fn the_trainer_stops_beside_the_player_and_both_turn_to_face_each_other() {
 /// step the player committed on the very frame the cone reached them (so
 /// [`engine::overworld::PlayerState::in_transit`] is still `true` when the
 /// approach starts owning the frame) must be allowed to finish -- ticked
-/// under the exclamation icon, the same as any other spawned object event's
-/// held movement would keep animating upstream -- before the trainer turns
-/// them around. Turning a player who is still mid-tile would spin them in
-/// place under an animation upstream never lets get that far.
+/// while the icon countdown holds, the same as any other spawned object
+/// event's held movement would keep animating upstream while
+/// `lockfortrainer` waits -- before the trainer turns them around. Turning
+/// a player who is still mid-tile would spin them in place under an
+/// animation upstream never lets get that far.
 #[test]
 fn the_players_in_flight_step_finishes_before_the_trainer_turns_them() {
     let (rx, ry) = RHETT_TILE;
@@ -1029,6 +1030,64 @@ fn a_step_draining_under_the_lock_leaves_its_tile_owed_nothing() {
         !phase.mid_step(),
         "and nothing is left owing it, so the first ordinary frame after the cutscene starts \
          from a clean at-rest stance"
+    );
+}
+
+/// The icon countdown waits for the player (PR #407 review): upstream's
+/// `lockfortrainer` blocks the script on `IsFreezeObjectAndPlayerFinished`
+/// until `IsPlayerStandingStill()` (`scrcmd.c:2193-2208`,
+/// `event_object_lock.c:130-147`), and only then does
+/// `EventScript_TrainerApproach` reach `DoTrainerApproach`'s
+/// `FieldEffectStart` (`trainer_battle.inc:1-7`). A cone that catches the
+/// player mid-step must therefore spend the *full* sixty icon frames after
+/// the step drains -- overlapping the two would start the walk-up early by
+/// however many frames the step had left.
+#[test]
+fn the_icon_countdown_holds_until_the_players_step_drains() {
+    let (rx, ry) = RHETT_TILE;
+    let start = (rx, ry + 2);
+    let mut phase = route_103_phase(PlayerState::new(start, 3, Direction::South));
+
+    // One ordinary step committed the frame before the cone check, so the
+    // approach starts with the walk still animating (the two tests above).
+    phase.step(held(Buttons::DOWN));
+    assert!(phase.player.in_transit(), "fixture precondition");
+    seed_approach(&mut phase, 2);
+
+    let mut drain_frames = 0;
+    while phase.player.in_transit() {
+        phase.step(held(Buttons::DOWN));
+        drain_frames += 1;
+        assert_eq!(
+            approaching_trainer(&phase).position(),
+            RHETT_TILE,
+            "drain frame {drain_frames}: the trainer must not start walking while \
+             `lockfortrainer` would still be waiting on the player"
+        );
+        assert!(
+            drain_frames <= usize::from(WALK_FRAMES_PER_TILE),
+            "the held step must drain within one tile's animation"
+        );
+    }
+
+    // The drain-completing frame is also the countdown's first (stage
+    // changes happen within the frame that earns them -- `advance_movement`'s
+    // docs), so the first walked tile commits `EXCLAMATION_ICON_FRAMES - 1`
+    // frames later, not `EXCLAMATION_ICON_FRAMES - drain_frames`.
+    for frame in 1..EXCLAMATION_ICON_FRAMES - 1 {
+        phase.step(held(Buttons::DOWN));
+        assert_eq!(
+            approaching_trainer(&phase).position(),
+            RHETT_TILE,
+            "icon frame {frame}: the countdown had not begun while the step drained, so the \
+             walk-up must not start early"
+        );
+    }
+    phase.step(held(Buttons::DOWN));
+    assert_eq!(
+        approaching_trainer(&phase).position(),
+        (rx, ry + 1),
+        "the sixtieth icon frame after the drain commits the first walked tile"
     );
 }
 
