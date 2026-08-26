@@ -65,9 +65,13 @@ Because of that posture, contributions **must be clean-room reimplementations**:
   of which passes through this repository: a player imports their own
   cartridge image (`pokeemerald-rs --import-rom`, `crates/rom-import`), or a
   developer extracts from their own upstream checkout (`cargo xtask extract`).
-  The ROM, its path, and its bytes never enter git, CI, artifacts, or logs:
-  `*.gba` is gitignored, CI tests the importer on synthetic fixtures only, and
-  the real-ROM equivalence harness is `#[ignore]`d behind `POKEEMERALD_ROM`.
+  The ROM, its path, and its bytes never enter git, CI, or build artifacts,
+  and its bytes are never logged anywhere: `*.gba` is gitignored, CI tests
+  the importer on synthetic fixtures only, and the real-ROM equivalence
+  harness is `#[ignore]`d behind `POKEEMERALD_ROM`. The one place a path
+  appears is the binary's own error diagnostics on the player's terminal —
+  a failed `--import-rom` names the file that failed, which is the player's
+  own local path and theirs to share or not.
   The committed revision profile (`crates/rom-import/src/profiles/`) holds
   offsets, lengths, and names, never ROM bytes; regenerate it with
   `cargo xtask gen-rom-profile`, never by hand.
