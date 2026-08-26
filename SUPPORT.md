@@ -1,39 +1,22 @@
 # Support
 
-`pokeemerald-rs` is a **pre-alpha, best-effort hobby project**, maintained largely
-by an autonomous routine with occasional owner oversight. There's no support desk
-and no SLA — but the channels below are watched, and good reports help.
+`pokeemerald-rs` is experimental pre-alpha software maintained on a best-effort basis. Expect missing features, rough edges, and breaking changes; [`docs/acceptance/v1.md`](docs/acceptance/v1.md) owns the definition and current status of v1.
 
 ## Where to go
 
-- **Questions, ideas, "how does this work?"** → open a **GitHub Discussion**.
-- **Bugs and concrete defects** → open a **GitHub Issue**, using the bug-report
-  template.
-- **Security vulnerabilities** → **do not** use Issues or Discussions; report
-  privately per [`SECURITY.md`](SECURITY.md).
-- **Contributing** → see [`CONTRIBUTING.md`](CONTRIBUTING.md).
+- Open a GitHub Discussion for questions, ideas, and design decisions.
+- Open a GitHub Issue with the bug-report template for reproducible defects.
+- Report vulnerabilities privately through [`SECURITY.md`](SECURITY.md).
+- Read [`CONTRIBUTING.md`](CONTRIBUTING.md) before contributing.
 
-## What to expect
+Include the channel and `VERSION`, what you did, what you expected, and what happened. Clear reproduction evidence receives faster attention. `needs-operator` marks work awaiting human-only judgment.
 
-- This is **experimental software**; no subsystem is complete yet — see
-  [`docs/acceptance/v1.md`](docs/acceptance/v1.md) for what "done" means and
-  how far along things are. Expect missing features, rough edges, and breaking
-  changes.
-- Issues and Discussions are triaged when the automated maintenance routine next
-  runs and the owner is available — **best-effort, not on a clock**. Some things
-  genuinely need a human and are parked on `needs-operator`; those wait on the
-  owner.
-- A clear, reproducible report gets help faster than a vague one. Include the
-  channel/branch and version, what you did, what you expected, and what happened.
+## Player channels
 
-## Release channels
+| Channel | Branch | Purpose |
+|---|---|---|
+| stable | `main` | most stable release |
+| beta | `stable` | owner-reviewed candidate |
+| nightly | `unstable` | freshest release-ready build |
 
-If you're trying it out, pick a channel by how much risk you'll accept:
-
-| Channel | Branch     | What it is |
-|---------|------------|------------|
-| stable  | `main`     | most stable release |
-| beta    | `stable`   | broadly-validated beta |
-| nightly | `unstable` | freshest playable build, least baked |
-
-Please say which channel you're on when you report something.
+Source builds are CI-verified on Linux, macOS, and Windows. Published archives currently target Linux and Windows.

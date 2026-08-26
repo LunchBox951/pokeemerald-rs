@@ -1,8 +1,6 @@
-# Release policy & checklist
+# Release policy
 
-The canonical release policy for `pokeemerald-rs`: the direct branch ladder,
-per-rung gates, automation schedule, version scheme, and hotfix path. CI enforces
-objective rules; owners gate the player-facing rungs `(gated-by-default)`.
+This file owns the public branch ladder, per-rung gates, version scheme, operator evidence, and hotfix path. Workflow files and live rulesets enforce objective mechanics; GitHub promotion and playtest records own changing evidence `(gated-by-default, lean-docs)`.
 
 ## Direct branch ladder
 
@@ -10,229 +8,116 @@ objective rules; owners gate the player-facing rungs `(gated-by-default)`.
 |---|---|---|---|
 | `dev` | developer | integration | normal pull requests |
 | `unstable` | nightly | freshest release-ready build | `dev` |
-| `stable` | beta | maintainer-reviewed candidate | `unstable` |
+| `stable` | beta | owner-reviewed candidate | `unstable` |
 | `main` | stable | official player release | `stable` |
 
-Promotion is direct: `dev -> unstable -> stable -> main`. A channel accepts no
-fork, staging branch, or rung-skipping source. Every promotion uses a merge
-commit so channel ancestry remains auditable. Normal contributions target `dev`.
+Promotion is direct: `dev → unstable → stable → main`. No channel accepts a fork, staging branch, or rung-skipping source. Every promotion uses a merge commit so ancestry remains auditable. Normal contributions target `dev`.
 
-## Promotion schedule
-
-`.github/workflows/promote.yml` runs in `America/Toronto`, away from the daytime
-Birch automation window:
-
-| Local time | Operation |
-|---|---|
-| 00:17 daily | open/reconcile `dev -> unstable` |
-| 00:47 daily | open/reconcile `unstable -> stable` |
-| 01:17 daily | open/reconcile `stable -> main` |
-| 02:17 daily | attempt to merge `dev -> unstable` |
-
-The opener uses a dedicated least-privilege GitHub App, so its pull requests run
-normal CI without the approval hold applied to `GITHUB_TOKEN`-created PRs. An
-existing direct-channel PR follows its source branch automatically: updating
-`dev`, `unstable`, or `stable` updates the corresponding PR and invalidates stale
-checks or approvals.
-
-Only `unstable` has an automated merge path. The 02:17 job performs a fresh,
-non-admin merge attempt only when the exact App-created PR, live refs, required
-checks, readiness result, and review threads all satisfy the ruleset. If blocked,
-it records the reason and waits for the next scheduled attempt; it never leaves
-GitHub native auto-merge armed. `stable` and `main` are always merged manually.
+The scheduled promotion App opens or reconciles one exact next-rung pull request. Only `dev → unstable` may auto-merge. `stable` and `main` always require current CODEOWNER approval and manual merge.
 
 ## Official-ROM readiness
 
-`unstable` remains dormant until the native release can extract its required data
-from an owner-supplied, lawfully obtained official Pokémon Emerald GBA file. The
-ROM, its path, and its contents never enter the repository, Actions, artifacts,
-logs, or releases.
+The nightly remains dormant until the native release can extract required data from an owner-supplied, lawfully obtained official Pokémon Emerald ROM. The ROM, its path, and its contents never enter the repository, Actions, artifacts, logs, or releases.
 
-Birch validates the exact current `dev` SHA from a clean checkout during its
-10:00-20:00 local operating window by running the canonical ROM load/extract
-command. After a zero exit, Birch runs the local
-`scripts/record_nightly_readiness.py <tested-dev-sha>` command. The recorder
-requires the local `gh` credential to authenticate as the repository owner,
-rechecks that the tested SHA is still the live `dev` tip and that its ordinary CI
-and CodeQL checks passed, then records `release-readiness` on that SHA. The owner
-credential must never be stored in Actions; ordinary workflows therefore cannot
-impersonate the readiness publisher. If `dev` advances, the result does not
-follow it: the new tip must be validated during a later Birch run, and the next
-off-hours promotion waits.
+An owner-local verifier runs the canonical load and extraction path from a clean checkout at the current `dev` SHA. After ordinary CI and CodeQL succeed, it records the `release-readiness` status on that exact SHA. A later `dev` commit requires new evidence. Repository workflows cannot create this owner-bound status.
 
-The exact product command belongs to the extraction implementation tracked in
-GitHub issue #122 `(constitution-vs-roadmap)`. Until it exists and Birch can run
-it successfully, no `release-readiness` status is recorded and no nightly PR
-opens.
+The product command and remaining implementation live in GitHub roadmap work `(constitution-vs-roadmap)`. Until that command exists and passes, no readiness status exists and no nightly promotion advances.
 
 ## Per-rung gates
 
-### `dev` — developer integration
+### `dev`
 
-- pull request required, with no approving review required;
-- `merge-gate / dev`, dependency review, and all CodeQL languages pass;
-- the branch is current with `dev` before merge;
-- every review thread is resolved;
-- merge or squash is allowed; direct/force pushes and deletion are blocked.
+- A pull request is required; no approving review is required.
+- `merge-gate / dev`, dependency review, and all CodeQL languages pass.
+- The branch is current with `dev`, and every review thread is resolved.
+- Merge or squash is allowed. Direct pushes, force pushes, and deletion are blocked.
 
-### `dev -> unstable` — nightly
+### `dev → unstable`
 
-- promotion-App-authored PR from exact same-repository source `dev`, enforced by
-  `source-gate / unstable`;
-- SHA-bound `release-readiness` exists for the current `dev` tip;
-- `merge-gate / unstable`, dependency review, and all CodeQL languages pass;
-- every review thread is resolved;
-- no approval is required;
-- only the scheduled App may auto-merge, using a merge commit without bypass.
+- The dedicated promotion App authors the exact same-repository `dev` pull request.
+- `source-gate / unstable` proves the source and App identity.
+- Current SHA-bound `release-readiness`, `merge-gate / unstable`, dependency review, and CodeQL pass.
+- Every review thread is resolved. No approval is required.
+- Only the scheduled App may auto-merge, using a merge commit without bypass.
 
-### `unstable -> stable` — beta
+### `unstable → stable`
 
-- promotion-App-authored PR from exact same-repository source `unstable`, and
-  that tip is the merge commit of the preceding App-created `dev -> unstable`
-  PR, enforced by `source-gate / stable`;
-- `merge-gate / stable`, dependency review, and all CodeQL languages pass;
-- every review thread is resolved;
-- one current CODEOWNER approval and a manual merge commit are required.
+- The promotion App authors the exact same-repository `unstable` pull request.
+- `source-gate / stable` proves that `unstable` descends from the preceding App-created nightly promotion.
+- `merge-gate / stable`, dependency review, and CodeQL pass; every review thread is resolved.
+- A passing unstable playtest issue exists for the current `VERSION`.
+- One current CODEOWNER approval and a manual merge commit are required.
 
-There is no hard clock. Maintainers may leave ordinary changes soaking as long as
-needed or promote security-sensitive changes promptly once evidence and review
-are sufficient.
+### `stable → main`
 
-### `stable -> main` — official release
+- The promotion App authors the exact same-repository `stable` pull request.
+- `source-gate / main` proves that `stable` descends from the preceding App-created beta promotion.
+- `merge-gate / main`, dependency review, and CodeQL pass; every review thread is resolved.
+- A passing stable playtest issue exists for the current `VERSION`.
+- Full and soak E2E, clean-machine artifacts, release notes, active waivers, and the evidence required by V-2, V-3, R-1, R-2, H-1, and H-4 are present.
+- One current CODEOWNER approval and a manual merge commit are required.
 
-- promotion-App-authored PR from exact same-repository source `stable`, and that
-  tip is the merge commit of the preceding App-created `unstable -> stable` PR,
-  enforced by `source-gate / main`;
-- `merge-gate / main`, dependency review, and all CodeQL languages pass;
-- every review thread is resolved;
-- one current CODEOWNER approval and a manual merge commit are required;
-- full/soak E2E, clean-machine artifact, release notes, active waivers, and owner
-  playtest evidence required by V-2, V-3, R-1, R-2, H-1, and H-4 are attached.
+After promotion, validate the main build through its own playtest issue. A defect at any rung receives a bug issue for that channel. The fix lands on `dev`, reaches a new nightly, and repeats every later gate. No clock or urgency permits a direct upper-channel patch.
 
-No clock substitutes for validation. Maintainers may expedite a security release,
-but never bypass its objective checks, source gate, review, or release evidence.
+## Playtest records
 
-## Promotion PR shape
+Open one playtest issue per channel build. Require `VERSION`, channel, comparison scope, and an explicit pass or fail verdict. A pre-made release tag may provide additional identification; a separate SHA field is unnecessary because each `dev` change advances `VERSION`.
 
-Promotion PRs are mechanical: source and target in the title; live candidate and
-target SHAs; gate references; `release` label; and `needs-review` plus
-`needs-operator` for stable/main. Feature work lands on `dev`, never inside a
-promotion PR. A blocked nightly is fixed on `dev`, which updates the open PR.
+Compare the port side by side with the real game where applicable. File every defect as a separate linked bug, then close the playtest issue after the session whether it passed or failed. A new build receives a new issue; do not rewrite a failed record into a passing one.
+
+Playtest issues record player feedback. Deterministic snapshot generation and byte comparison remain implementation and review tools under [`docs/snapshots.md`](docs/snapshots.md); snapshot hashes are not player signoff.
+
+## Promotion pull requests
+
+Promotion pull requests are mechanical. The title names source and target; the body records candidate and target SHAs when the pull request is created, gate references, and required evidence. Current GitHub refs and checks, not the initial body text, govern merge safety.
+
+Apply `release` to every promotion. Apply `needs-review` and `needs-operator` to stable and main. Feature work never lands inside a promotion pull request.
 
 ## Repository controls
 
-Repository rulesets are the enforcement source of truth:
+Live rulesets are the enforcement authority:
 
-| Target | Required checks | Reviews | Merge methods |
+| Target | Additional target-specific checks | Reviews | Merge methods |
 |---|---|---|---|
-| `dev` | `merge-gate / dev`, `dependency-review`, `codeql (actions)`, `codeql (python)`, `codeql (rust)` | 0 | merge, squash |
-| `unstable` | dev checks plus `source-gate / unstable`, `release-readiness` | 0 | merge |
-| `stable` | dev checks plus `source-gate / stable` | 1 CODEOWNER | merge |
-| `main` | dev checks plus `source-gate / main` | 1 CODEOWNER | merge |
+| `dev` | `merge-gate / dev` | 0 | merge, squash |
+| `unstable` | `source-gate / unstable`, `release-readiness`, `merge-gate / unstable` | 0 | merge |
+| `stable` | `source-gate / stable`, `merge-gate / stable` | 1 CODEOWNER | merge |
+| `main` | `source-gate / main`, `merge-gate / main` | 1 CODEOWNER | merge |
 
-Every ruleset also requires a pull request and resolved review threads, dismisses
-stale approvals, blocks deletion and non-fast-forward updates, has no standing
-bypass actor, and blocks critical CodeQL alerts. `dev` uses GitHub's strict
-up-to-date mode. Direct channel heads cannot absorb their target's merge commits
-without polluting the preceding rung, so channel rules use loose status mode plus
-target-specific contexts, exact-source/provenance checks, live SHA rebinding, and
-single-PR enforcement.
+Every rung also requires dependency review, CodeQL, a pull request, and resolved review threads. Rules dismiss stale approvals, block deletion and non-fast-forward updates, and provide no standing bypass. Repository-native auto-merge remains disabled.
 
-Repository-native auto-merge is disabled. Default Actions permissions are
-read-only and Actions cannot approve pull requests. The promotion App is installed
-only on this repository and requests only Checks read, Commit statuses read,
-Contents write, Pull requests write, and Metadata read. Secret scanning and push
-protection remain enabled. CodeQL advanced setup scans Rust, Python, and Actions;
-critical alerts block every protected branch.
+## Platform support and artifacts
 
-`PROMOTION_APP_LOGIN` is a non-secret repository variable containing the exact
-App bot login. The required source gate uses it to reject user- or other-bot-
-created channel PRs and to authenticate preceding-rung provenance.
+Source builds and native CI support Linux, macOS, and Windows. Published archives currently target Linux and Windows. macOS packaging and platform-specific operator playtesting are not v1 gates; CI evidence carries the same unresolved product status as the other platforms.
 
-The separate readiness trust boundary is the repository owner's local Birch
-credential. It is not an Actions secret. Promotion automation accepts only the
-latest successful `release-readiness` status created by that owner identity, so a
-repository workflow cannot forge official-ROM evidence.
+R-1 remains incomplete until a configured binary archive runs on a clean target machine without a Rust toolchain. GitHub Releases own detailed artifact history; [`CHANGELOG.md`](CHANGELOG.md) owns concise curated summaries.
 
-### Control-plane bootstrap
+## Version scheme: `vFINAL.MAJOR.MINOR.PATCH`
 
-`pull_request` workflows execute from the base branch, so new channel workflows
-must exist on `unstable`, `stable`, and `main` before their contexts become
-required. A migration may temporarily grant only the owner a bypass, fast-forward
-one workflow-only bootstrap commit onto one channel, verify its new push checks,
-and remove the bypass immediately before moving to the next branch. Record the
-bootstrap commit SHAs in the migration PR. This is a one-time audited exception;
-normal rulesets retain no bypass actor.
-
-## Version scheme — `vFINAL.MAJOR.MINOR.PATCH`
-
-The canonical version lives in [`VERSION`](VERSION) without the `v` prefix; tags
-and Releases add it. Versions compare lexicographically as four unsigned ints.
-
-Cargo package metadata maps `FINAL.MAJOR.MINOR.PATCH` to
-`FINAL.MAJOR.MINOR+gamepatch.PATCH`. Run
-`python3 scripts/sync_cargo_version.py` after every `VERSION` bump. Cargo ignores
-build metadata during SemVer precedence comparisons, so `VERSION` remains the
-ordering authority.
+[`VERSION`](VERSION) stores the canonical four unsigned components without the `v` tag prefix. Cargo maps them to `FINAL.MAJOR.MINOR+gamepatch.PATCH`; run `python3 scripts/sync_cargo_version.py` after every bump.
 
 | Component | Bump when | Resets | Authority |
 |---|---|---|---|
-| `PATCH` | small maintenance or narrow behavior change | — | normal PR flow |
-| `MINOR` | meaningful capability, including a substantial unfinished slice or smaller completed acceptance criterion | `PATCH -> 0` | normal PR flow |
-| `MAJOR` | large completed acceptance criterion or project phase; breaking repository contract — while `FINAL` is `0`, read this through the pre-1.0 rule below | `MINOR`, `PATCH -> 0` | normal PR flow |
-| `FINAL` | project agreed complete (`0 -> 1`) | `MAJOR`, `MINOR`, `PATCH -> 0` | owner only |
+| `PATCH` | maintenance or a narrow behaviour change | none | normal PR flow |
+| `MINOR` | meaningful capability, substantial unfinished slice, or smaller completed criterion | `PATCH → 0` | normal PR flow |
+| `MAJOR` | large completed playable step before v1; normal project phase after v1 | `MINOR`, `PATCH → 0` | normal PR flow |
+| `FINAL` | the owner agrees the project is complete | `MAJOR`, `MINOR`, `PATCH → 0` | owner only |
 
-Every ordinary pull request into `dev` must increase `VERSION`; an unchanged or
-lower version fails the strict transition gate. Choose the highest applicable
-component from delivered behavior, not diff size or parent completion. A closed
-milestone is at least `MINOR`, and is `MAJOR` when it represents a large completed
-win — while `FINAL` is `0`, when that win is playable progress (below). Higher-tier
-bumps reset lower components as listed above, and a `FINAL` bump must carry fresh
-approval as described below.
+Every ordinary pull request into `dev` advances `VERSION`; an unchanged or lower version fails CI. Choose the highest applicable component from delivered behaviour, not diff size. Closing a milestone requires at least `MINOR`. Before v1, non-playable repository work takes at most `MINOR`, and `MAJOR` normally marks meaningful playable progress.
 
-### Pre-1.0 `MAJOR` bumps are playable progress
-
-While `FINAL` is `0`, `MAJOR` is content-oriented: `v0.1.0.0`, `v0.2.0.0`, and so
-on normally mark **meaningful playable progress through the game**.
-[`docs/acceptance/v1.md`](docs/acceptance/v1.md) owns the milestone patterns and
-what they cover `(lean-docs)`; they are planning patterns, not a prescribed
-roadmap, and which one comes next is decided in GitHub issues
-`(constitution-vs-roadmap)`.
-
-That rule governs the `MAJOR` row and the closed-milestone sentence above while
-`FINAL` is `0`: a change that delivers no playable progress takes at most `MINOR`
-— even when it completes a large acceptance criterion, closes a milestone, or
-breaks a repository contract such as the acceptance scope itself; the PR calls
-the reasoning out. Both statements' ordinary, phase-oriented meaning resumes once
-`FINAL` is `1`.
-
-Channel promotions and post-merge health checks compare cumulative endpoints.
-They require canonical versions and preserve channel ordering without replaying
-reset or `FINAL`-marker rules already enforced when each change entered `dev`.
-Promotion and release transitions require the source to be strictly newer;
-branch-health comparisons permit equality.
+Promotions and health checks compare cumulative endpoints. They preserve channel ordering without replaying reset or FINAL-marker rules already enforced when changes entered `dev`.
 
 ## The `FINAL` gate
 
-`FINAL` is the project-completion epoch and is never bumped by automation. A
-`FINAL` bump requires `docs/release/final-gate-approved.md` to be added or changed
-in the same PR, naming the exact approved version and date:
+Automation never bumps `FINAL`. The repository owner must add or change `docs/release/final-gate-approved.md` in the same pull request, naming the exact approved version and date:
 
 ```text
 Approved version: 1.0.0.0
 Date: 2026-07-25
 ```
 
-`scripts/version_check.py` rejects a stale marker, malformed marker, or marker for
-another version. `v1.0.0.0` means the complete single-player game — the binding
-gate is defined in [`docs/acceptance/v1.md`](docs/acceptance/v1.md), which owns
-that definition and its exclusion rule `(lean-docs)`. It ships only when every
-row there is done or has a recorded waiver and the H-1 operator playtest is
-signed.
+`scripts/version_check.py` rejects stale, malformed, or mismatched approval. `v1.0.0.0` ships only when every [`docs/acceptance/v1.md`](docs/acceptance/v1.md) criterion is done or has a recorded waiver and the owner completes H-1 playtesting.
 
 ## Hotfixes
 
-Security and serious player-facing fixes still follow the direct ladder. Land the
-minimal fix on `dev`, let Birch validate the candidate, and promote it through
-unstable, stable, and main. Owners may approve stable/main immediately once the
-required evidence is green; there is no time gate and no direct-to-main bypass.
+Security and serious player-facing fixes still enter through `dev` and traverse every rung. An owner may review stable and main promptly after evidence becomes current, but no hotfix bypasses source gates, objective checks, channel playtests, or review.
