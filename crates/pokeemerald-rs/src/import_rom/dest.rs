@@ -130,10 +130,14 @@ impl Dest {
 
     /// Remove `name` from this directory, ignoring a failure.
     ///
-    /// Only ever called on a name [`Self::create_new`] created, so this
-    /// cannot remove a file the import did not make. A removal that fails
-    /// leaves litter but must not replace the diagnosis the caller is
-    /// already returning.
+    /// Only ever called with a name [`Self::create_new`] created, and the
+    /// removal is name-scoped and never follows a final-component link, so
+    /// in a directory only the player writes it removes exactly the file
+    /// the import made. An account that can write the directory can have
+    /// swapped the entry, and then this removes that account's own entry —
+    /// see [`super`]'s docs for why that grants it nothing. A removal that
+    /// fails leaves litter but must not replace the diagnosis the caller
+    /// is already returning.
     pub(super) fn discard(&self, name: &OsStr) {
         let _ = rustix::fs::unlinkat(&self.dir, name, rustix::fs::AtFlags::empty());
     }

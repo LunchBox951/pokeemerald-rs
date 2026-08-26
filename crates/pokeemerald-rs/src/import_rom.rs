@@ -74,8 +74,13 @@
 //! `rustix`; `std` exposes them on no platform). Redirecting a component
 //! after the open moves nothing, because nothing after the open looks at a
 //! component again. What is left trusted is the final name inside that one
-//! directory, and exclusive creation covers it: a link planted there is a
-//! refused import, not a write through it.
+//! directory, and exclusive creation covers the write: a link planted
+//! there is a refused import, not a write through it. An account that can
+//! write the directory itself can still swap entries between creation and
+//! the rename — that account can equally replace the published pack
+//! outright, so the guarantee held here is only that no write ever lands
+//! *through* a planted link, never that a hostile directory yields a
+//! trustworthy pack.
 //!
 //! Off Unix there is no such descriptor — `rustix` is Unix-only — so the
 //! destination is still addressed by path and the window above is still
@@ -399,11 +404,12 @@ fn import_to_with(
     }
 
     let temp_name = temp_name();
-    // Exclusive, and before the import runs: the file the pack goes in is
-    // this run's own from the moment it exists, so nothing that happens
-    // during the import can substitute another one for it. A name already
-    // taken fails here having created nothing, which is what leaves that
-    // file to whoever does own it.
+    // Exclusive, and before the import runs: every byte is written through
+    // this one handle, so nothing that happens during the import can make
+    // the write land through another file. The directory entry itself is
+    // only as trustworthy as the directory (see the module docs). A name
+    // already taken fails here having created nothing, which is what
+    // leaves that file to whoever does own it.
     let mut file = match dest.create_new(&temp_name) {
         Ok(file) => file,
         Err(source) => {
