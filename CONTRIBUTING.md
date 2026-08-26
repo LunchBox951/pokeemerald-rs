@@ -112,7 +112,7 @@ so the JSON stays diff-friendly:
 python3 scripts/ledger.py gaps --prefix include/battle   # what's left
 python3 scripts/ledger.py inspect include/random.h        # one entry
 python3 scripts/ledger.py mark include/random.h \
-    --target crates/engine/src/rng.rs --spec 06-engine \
+    --target crates/engine/src/rng.rs --spec S-5 \
     --reason "Direct LCG port; same constants as upstream."
 python3 scripts/ledger.py verify                          # CI runs this too
 ```
