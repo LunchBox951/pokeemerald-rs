@@ -9,7 +9,7 @@
 - Report vulnerabilities privately through [`SECURITY.md`](SECURITY.md).
 - Read [`CONTRIBUTING.md`](CONTRIBUTING.md) before contributing.
 
-When known, include the channel and `VERSION`, what you did, what you expected, and what happened. Clear reproduction evidence receives faster attention. `needs-operator` marks work awaiting human-only judgment.
+When known, include the channel and `VERSION`, what you did, what you expected, and what happened. Clear reproduction evidence helps maintainers triage the report.
 
 ## Player channels
 
