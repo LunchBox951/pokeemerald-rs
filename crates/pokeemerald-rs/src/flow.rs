@@ -52,6 +52,10 @@ use crate::intro::{self, IntroScene, IntroStatus};
 use crate::main_menu::{self, MainMenuItem, MainMenuScene, MainMenuType};
 use crate::title::TitleScene;
 
+/// The battle-turn finalization (issue #405) shared by all three headless
+/// battle drivers -- see that module's docs for the shared decision and
+/// write-back, and each driver's own docs for what stays driver-specific.
+mod battle_finalize;
 pub(crate) mod first_battle;
 /// The level-up move-replacement decision (issue #304), answered in one
 /// place for all three headless battle drivers — see that module's docs for

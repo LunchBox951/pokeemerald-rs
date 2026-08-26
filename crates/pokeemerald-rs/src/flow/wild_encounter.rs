@@ -132,6 +132,7 @@ use engine::overworld::wild_encounter::{WildEncounter, WildEncounterState};
 use engine::overworld::{MapRuntime, TilePos};
 use engine::rng::Rng;
 
+use super::battle_finalize::finalize_battle_turn;
 use super::move_learn::settle_move_learn_prompts;
 
 /// One [`engine::rng::Rng`], seen through [`battle::BattleRng`].
@@ -483,18 +484,7 @@ pub(super) fn advance_wild_battle(
     // *after* the turn and before the outcome is read, so no unanswered
     // question can survive into the write-back or wedge the next turn.
     let _ = settle_move_learn_prompts(battle);
-    let outcome = battle.outcome();
-    if !failed && outcome.is_none() {
-        return None;
-    }
-    let mut mon = battle.player().clone();
-    // Stat stages and volatiles are battle scratch, not party data -- see
-    // `BattlePokemon::clear_battle_scratch`'s own doc comment for the
-    // citations.
-    mon.clear_battle_scratch();
-    *lead = Some(mon);
-    *slot = None;
-    outcome
+    finalize_battle_turn(slot, failed, lead)
 }
 
 #[cfg(test)]
