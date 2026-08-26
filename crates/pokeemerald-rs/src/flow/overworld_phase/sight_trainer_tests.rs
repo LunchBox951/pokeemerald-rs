@@ -769,7 +769,7 @@ fn seed_approach(phase: &mut OverworldPhase, walk_tiles: u8) {
     phase.sight_approach = Some(SightApproach::new(
         ObjectEventState::from_template(rhetts_object_event()),
         walk_tiles,
-        "Whoa!\nHow'd you get into a space this small?{P}",
+        "Whoa!\nHow'd you get into a space this small?",
         battle,
         assets::trainers::TrainerId(TRAINER_RHETT),
     ));
@@ -1084,7 +1084,11 @@ fn a_locked_frame_advances_the_players_walk_and_drops_its_latched_landing() {
 /// lead and keying the fight to the real sight trainer.
 ///
 /// Driven against a synthetic message box (`skip_to_open_intro_message`'s own
-/// docs) so the handshake is pinned without an extracted pack.
+/// docs) so the handshake is pinned without an extracted pack -- built the
+/// exact way the production path builds it since issue #410: no trailing
+/// `{P}`, and the script's `waitbuttonpress` opted into on the dialog
+/// (`NpcDialog::open_default` applies it for the real
+/// `advance_intro_message`).
 #[test]
 fn the_intro_speech_holds_the_battle_until_the_player_dismisses_it() {
     use engine::text::Token;
@@ -1097,13 +1101,15 @@ fn the_intro_speech_holds_the_battle_until_the_player_dismisses_it() {
         .as_mut()
         .expect("just seeded")
         .skip_to_open_intro_message();
-    phase.dialog = Some(crate::overworld::dialog::synthetic_dialog(vec![
-        Token::Char('W'),
-        Token::Char('h'),
-        Token::Char('o'),
-        Token::PromptClear,
-        Token::End,
-    ]));
+    phase.dialog = Some(
+        crate::overworld::dialog::synthetic_dialog(vec![
+            Token::Char('W'),
+            Token::Char('h'),
+            Token::Char('o'),
+            Token::End,
+        ])
+        .with_waitbuttonpress(),
+    );
 
     // Spend a couple of immune steps before the handoff so the reset
     // assertion below is genuinely witnessed: `immunity_steps() == 0` is
@@ -1139,13 +1145,33 @@ fn the_intro_speech_holds_the_battle_until_the_player_dismisses_it() {
         );
     }
 
-    // `waitbuttonpress`: A closes the box, and the fight starts with it.
-    let mut frames = 0;
-    while !phase.is_sight_trainer_battle_active() {
-        phase.step(pressed(Buttons::A));
-        frames += 1;
-        assert!(frames < 60, "the intro box must close on a button press");
-    }
+    // Issue #410: once printed, the speech stays fully on screen for every
+    // one of those waiting frames. The synthetic trailing `{P}` this stage
+    // used to carry cleared the box on the confirm instead and then drained
+    // a post-clear reveal delay, so the player watched an empty box for
+    // several frames before `dotrainerbattle` -- and, since the script-level
+    // wait then demanded a *second* fresh confirm edge on top of the `{P}`'s
+    // own, sat on that empty box indefinitely under a held button.
+    // `FRAMES_STANDING_STILL` is far past the three glyphs' print time.
+    let printed = phase
+        .dialog
+        .as_ref()
+        .expect("still open")
+        .revealed_glyph_count();
+    assert_eq!(
+        printed, 3,
+        "every glyph of the intro must still be on screen while `waitbuttonpress` waits"
+    );
+
+    // `waitbuttonpress`: A closes the box, and the fight starts with it --
+    // on that very frame, with the text still whole right up to it.
+    phase.step(pressed(Buttons::A));
+    assert!(
+        phase.is_sight_trainer_battle_active(),
+        "the confirm edge must hand off to `dotrainerbattle` on its own frame -- no clear, \
+         no post-clear reveal delay, exactly as upstream runs `waitbuttonpress` straight \
+         into `dotrainerbattle` (`trainer_battle.inc:104-107`)"
+    );
     assert!(phase.dialog.is_none(), "the box closed with the handoff");
     assert!(
         phase.sight_approach.is_none(),
@@ -1180,7 +1206,8 @@ fn the_intro_speech_holds_the_battle_until_the_player_dismisses_it() {
 /// (`sight_trainer_approach.rs`'s own module doc comment) had never been
 /// exercised by any test. This one drives the real icon, the real
 /// zero-tile turn, and the real message box -- open, print every glyph, and
-/// dismiss through the trailing prompt -- against the genuinely extracted
+/// dismiss through the script's own `waitbuttonpress` -- against the
+/// genuinely extracted
 /// pack, the same way `frame_tests`' own
 /// `walking_downstairs_and_talking_to_mom_opens_and_closes_her_dialog` does
 /// for an ordinary NPC. `#[ignore]`d like this crate's other real-pack
@@ -1224,7 +1251,7 @@ fn real_pack_the_intro_message_opens_prints_and_dismisses_for_real() {
     // (module docs' "The stand-in party" section: the object event and the
     // speech are real, only the party behind the battle is a stand-in).
     let expected_tokens = crate::overworld::npc_scripts::parse_message(
-        "Whoa!\nHow'd you get into a space this small?{P}",
+        "Whoa!\nHow'd you get into a space this small?",
     );
     let expected_glyph_count = expected_tokens
         .iter()
@@ -1239,7 +1266,7 @@ fn real_pack_the_intro_message_opens_prints_and_dismisses_for_real() {
     for _ in 0..400 {
         phase.step(ButtonState::new());
         let Some(dialog) = &phase.dialog else {
-            panic!("the box must not close on its own before the trailing prompt confirms");
+            panic!("the box must not close on its own before `waitbuttonpress` confirms");
         };
         if dialog.revealed_glyph_count() == expected_glyph_count {
             fully_printed = true;
@@ -1251,8 +1278,10 @@ fn real_pack_the_intro_message_opens_prints_and_dismisses_for_real() {
         "every glyph of the real intro line must print within the frame budget"
     );
 
-    // Confirm through the trailing prompt (`the_intro_speech_holds...`'s
-    // own doc comment on why every frame presses A rather than one).
+    // Confirm through the script's `waitbuttonpress`. Issue #410: the box
+    // holds every printed glyph right up to the confirm frame and closes on
+    // it, so this budget is spent on reaching a fresh edge, not on draining
+    // a clear that no longer happens.
     let mut handed_off = false;
     for _ in 0..30 {
         phase.step(pressed(Buttons::A));
@@ -1263,7 +1292,7 @@ fn real_pack_the_intro_message_opens_prints_and_dismisses_for_real() {
     }
     assert!(
         handed_off,
-        "confirming through the trailing prompt must close the real box"
+        "confirming `waitbuttonpress` must close the real box"
     );
     assert!(
         phase.is_sight_trainer_battle_active(),

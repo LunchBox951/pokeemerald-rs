@@ -80,10 +80,19 @@ struct SightTrainer {
     /// `data/text/trainers.inc` -- the line `ShowTrainerIntroSpeech` prints
     /// (`data/scripts/trainer_battle.inc:101-104`,
     /// [`super::sight_trainer_approach`]'s own intro stage). `\n`/`\l` are
-    /// spelled `\n`/`{L}` for [`crate::overworld::npc_scripts::parse_message`],
-    /// and the trailing `{P}` is this port's stand-in for the script's own
-    /// `waitmessage`/`waitbuttonpress` pair (that function's own docs, and
-    /// the identical convention `npc_scripts` uses for `MSGBOX_DEFAULT`).
+    /// spelled `\n`/`{L}` for [`crate::overworld::npc_scripts::parse_message`].
+    ///
+    /// Byte-identical to upstream's own raw strings, terminator aside: all
+    /// nine end `$` with no embedded `\p` (`data/text/trainers.inc:72-74`
+    /// Daisy, `:83-86` Amy, `:101-103` Liv, `:159-162` Andrew, `:172-174`
+    /// Miguel, `:200-202` Pete, `:213-215` Isabelle, `:224-226` Rhett,
+    /// `:236-237` Marcos). Before issue #410 this table appended a synthetic
+    /// trailing `{P}` to stand in for the script's own
+    /// `waitmessage`/`waitbuttonpress` pair; that wait is now
+    /// [`crate::overworld::dialog::NpcDialog::with_waitbuttonpress`], applied
+    /// by the [`crate::overworld::dialog::NpcDialog::open_default`] the intro
+    /// stage opens through, so the text itself carries none of it --
+    /// `npc_scripts`' own `MSGBOX_DEFAULT` line took the same migration.
     intro: &'static str,
 }
 
@@ -104,47 +113,47 @@ const SIGHT_TRAINERS: &[SightTrainer] = &[
     SightTrainer {
         script: "Route103_EventScript_Daisy",
         id: TrainerId(36), // TRAINER_DAISY
-        intro: "Did you feel the tug of our\nsoul-soothing fragrance?{P}",
+        intro: "Did you feel the tug of our\nsoul-soothing fragrance?",
     },
     SightTrainer {
         script: "Route103_EventScript_Amy",
         id: TrainerId(481), // TRAINER_AMY_AND_LIV_1 (double)
-        intro: "AMY: I'm AMY.\nAnd this is my little sister LIV.{L}We battle together!{P}",
+        intro: "AMY: I'm AMY.\nAnd this is my little sister LIV.{L}We battle together!",
     },
     SightTrainer {
         script: "Route103_EventScript_Liv",
         id: TrainerId(481), // TRAINER_AMY_AND_LIV_1 (double)
-        intro: "LIV: We battle together as one\nteam.{P}",
+        intro: "LIV: We battle together as one\nteam.",
     },
     SightTrainer {
         script: "Route103_EventScript_Andrew",
         id: TrainerId(336), // TRAINER_ANDREW
-        intro: "Gah! My fishing line's all snarled up!\nI'm getting frustrated and mean!{L}That's it! Battle me!{P}",
+        intro: "Gah! My fishing line's all snarled up!\nI'm getting frustrated and mean!{L}That's it! Battle me!",
     },
     SightTrainer {
         script: "Route103_EventScript_Miguel",
         id: TrainerId(293), // TRAINER_MIGUEL_1 (held-item party)
-        intro: "My POKéMON is delightfully adorable!\nDon't be shy--I'll show you!{P}",
+        intro: "My POKéMON is delightfully adorable!\nDon't be shy--I'll show you!",
     },
     SightTrainer {
         script: "Route103_EventScript_Rhett",
         id: TrainerId(703), // TRAINER_RHETT
-        intro: "Whoa!\nHow'd you get into a space this small?{P}",
+        intro: "Whoa!\nHow'd you get into a space this small?",
     },
     SightTrainer {
         script: "Route103_EventScript_Marcos",
         id: TrainerId(702), // TRAINER_MARCOS
-        intro: "Did my guitar's wailing draw you in?{P}",
+        intro: "Did my guitar's wailing draw you in?",
     },
     SightTrainer {
         script: "Route103_EventScript_Isabelle",
         id: TrainerId(736), // TRAINER_ISABELLE
-        intro: "Watch where you're going!\nWe're going to crash!{P}",
+        intro: "Watch where you're going!\nWe're going to crash!",
     },
     SightTrainer {
         script: "Route103_EventScript_Pete",
         id: TrainerId(735), // TRAINER_PETE
-        intro: "This sort of distance…\nYou should just swim it!{P}",
+        intro: "This sort of distance…\nYou should just swim it!",
     },
 ];
 
@@ -600,11 +609,20 @@ mod tests {
     }
 
     /// Every transcribed intro speech is real, printable text: non-empty,
-    /// Gen-3 encodable (`POKéMON`'s `é` and Pete's `…` included), and
-    /// terminated with the `{P}` wait this port uses in place of
-    /// `waitmessage`/`waitbuttonpress` ([`SightTrainer::intro`]'s own docs).
+    /// Gen-3 encodable (`POKéMON`'s `é` and Pete's `…` included), and --
+    /// since issue #410 -- carrying *no* trailing `{P}`, exactly like the
+    /// upstream strings it transcribes ([`SightTrainer::intro`]'s own docs).
+    ///
+    /// The button wait is the script's, not the text's: `waitbuttonpress`
+    /// (`data/scripts/trainer_battle.inc:104`) is
+    /// [`crate::overworld::dialog::NpcDialog::with_waitbuttonpress`] here. A
+    /// trailing `{P}` on top of it would be a *second*, earlier wait that
+    /// clears the box first, stranding the player on a blank box until a
+    /// further fresh confirm edge landed -- see
+    /// [`crate::overworld::dialog`]'s own "Script-level `waitbuttonpress`"
+    /// module docs.
     #[test]
-    fn every_intro_speech_is_encodable_and_waits_for_a_button_before_the_battle() {
+    fn every_intro_speech_is_encodable_and_leaves_the_button_wait_to_the_script() {
         for entry in SIGHT_TRAINERS {
             let tokens = crate::overworld::npc_scripts::parse_message(entry.intro);
             engine::text::encode(&tokens).unwrap_or_else(|err| {
@@ -613,10 +631,20 @@ mod tests {
                     entry.script
                 )
             });
-            assert_eq!(
+            assert!(
+                tokens
+                    .iter()
+                    .filter(|t| matches!(t, engine::text::Token::Char(_)))
+                    .count()
+                    > 0,
+                "{}'s intro speech must contain visible text",
+                entry.script
+            );
+            assert_ne!(
                 tokens[tokens.len() - 2],
                 engine::text::Token::PromptClear,
-                "{}'s intro speech must wait for a button press before the battle",
+                "{}'s intro speech must not end in a synthetic `{{P}}` -- the wait before \
+                 `dotrainerbattle` is the script's `waitbuttonpress`, not a text control code",
                 entry.script
             );
             assert_eq!(tokens.last(), Some(&engine::text::Token::End));

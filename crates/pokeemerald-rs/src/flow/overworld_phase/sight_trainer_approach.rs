@@ -461,8 +461,19 @@ impl OverworldPhase {
 
     /// `EventScript_ShowTrainerIntroMsg` (`trainer_battle.inc:101-107`):
     /// open the trainer's own intro speech, hold it until the player
-    /// dismisses it (`waitmessage`/`waitbuttonpress`, this port's `{P}`),
-    /// then hand off to `dotrainerbattle`.
+    /// dismisses it (`waitmessage`/`waitbuttonpress`), then hand off to
+    /// `dotrainerbattle`.
+    ///
+    /// The wait is the script's, not the text's (issue #410):
+    /// [`NpcDialog::open_default`] applies
+    /// [`NpcDialog::with_waitbuttonpress`], so the finished box holds its
+    /// last printed frame -- every glyph still on screen -- until a confirm
+    /// edge lands, and closes on that very tick. `start_sight_trainer_battle`
+    /// therefore runs on the confirm frame itself, with no intervening clear
+    /// and no post-clear reveal delay, exactly as upstream goes straight from
+    /// `waitbuttonpress` to `dotrainerbattle`. The intro strings carry no
+    /// trailing `{P}` for the same reason ([`super::sight_trainer_trigger`]'s
+    /// `SightTrainer::intro` docs).
     ///
     /// `special TryPrepareSecondApproachingTrainer` sits between the two
     /// upstream and always reports "no second trainer" here (module docs).
@@ -575,7 +586,7 @@ impl OverworldPhase {
         self.sight_approach = Some(SightApproach::new(
             ObjectEventState::from_template(&template),
             1,
-            "Whoa!{P}",
+            "Whoa!",
             battle,
             TrainerId(703),
         ));
@@ -755,7 +766,7 @@ mod tests {
         SightApproach::new(
             ObjectEventState::from_template(&template),
             walk_tiles,
-            "Whoa!{P}",
+            "Whoa!",
             stand_in_battle(),
             TrainerId(703),
         )
