@@ -469,3 +469,59 @@ fn an_ordinary_output_is_not_mistaken_for_the_rom() {
     let _ = std::fs::remove_file(&rom);
     let _ = std::fs::remove_dir(&dir);
 }
+
+#[cfg(unix)]
+#[test]
+fn writing_through_a_hard_link_retires_the_alias_and_not_the_file() {
+    // The residual the destination guard cannot close off Unix: `std`
+    // exposes no file identity on Windows, so `overwrites_rom` there
+    // compares canonical paths, and two hard links canonicalize to two
+    // distinct names. Publishing by rename is what makes that survivable --
+    // it replaces the alias's directory entry rather than truncating the
+    // inode both names share.
+    //
+    // Exercised on Unix because that is where a hard link can be made in a
+    // test; the property under test is `write_module`'s, and it is the same
+    // on every platform.
+    let dir = scratch("write-through-hard-link");
+    let rom = dir.join("emerald.gba");
+    let before = rom_shaped_file(&rom);
+    let alias = dir.join("bpee_rev0.rs");
+    std::fs::hard_link(&rom, &alias).expect("the alias links");
+
+    super::write_module(&alias, "pub const GENERATED: u32 = 0;\n").expect("the module writes");
+
+    assert_eq!(
+        std::fs::read(&rom).expect("the ROM survives"),
+        before,
+        "the ROM must be untouched under its own name"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&alias).expect("the module is there"),
+        "pub const GENERATED: u32 = 0;\n"
+    );
+
+    let _ = std::fs::remove_file(&alias);
+    let _ = std::fs::remove_file(&rom);
+    let _ = std::fs::remove_dir(&dir);
+}
+
+#[test]
+fn a_failed_write_leaves_no_temporary_beside_the_output() {
+    // The rename is the only publishing step, so a failure must not leave
+    // scratch files in the developer's checkout.
+    let dir = scratch("write-leaves-no-litter");
+    let out = dir.join("bpee_rev0.rs");
+    super::write_module(&out, "pub const GENERATED: u32 = 0;\n").expect("the module writes");
+
+    let stray: Vec<_> = std::fs::read_dir(&dir)
+        .expect("listing")
+        .filter_map(Result::ok)
+        .map(|entry| entry.file_name())
+        .filter(|name| name != "bpee_rev0.rs")
+        .collect();
+    assert!(stray.is_empty(), "{stray:?}");
+
+    let _ = std::fs::remove_file(&out);
+    let _ = std::fs::remove_dir(&dir);
+}

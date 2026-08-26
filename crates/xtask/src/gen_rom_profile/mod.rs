@@ -332,17 +332,62 @@ fn describe(expectation: &SymbolExpectation) -> String {
 }
 
 /// Write the generated module, creating its directory if needed.
+///
+/// Through a sibling temporary file and a rename, never a truncating write
+/// onto `path`. Two reasons, and the second is why it is not merely tidy:
+///
+/// 1. A run that dies mid-write leaves the previous profile intact instead
+///    of a half-written module that will not compile — the same reason
+///    `import_rom` and `engine`'s save writer publish by rename.
+/// 2. It replaces a *name*, so it cannot destroy a file reachable under
+///    another one. [`run`]'s guard catches an `--out` that resolves to the
+///    ROM, but `rom_import::overwrites_rom` cannot see a hard link off
+///    Unix (`std` exposes no file identity there). A truncating write
+///    through such an alias would destroy the cartridge image under every
+///    one of its names; a rename retires only the alias, and the ROM
+///    survives under the name `--rom` gave.
+///
+/// Same directory on both sides, so the rename is atomic and never
+/// `EXDEV`.
 fn write_module(path: &Path, module: &str) -> Result<(), GenRomProfileError> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|err| GenRomProfileError::WriteFailed {
-            path: path.to_path_buf(),
-            reason: err.to_string(),
-        })?;
-    }
-    std::fs::write(path, module).map_err(|err| GenRomProfileError::WriteFailed {
+    let failed = |err: std::io::Error| GenRomProfileError::WriteFailed {
         path: path.to_path_buf(),
         reason: err.to_string(),
+    };
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(failed)?;
+    }
+
+    let temp = temp_sibling(path);
+    std::fs::write(&temp, module).map_err(failed)?;
+    std::fs::rename(&temp, path).map_err(|err| {
+        // The rename is the only step that publishes anything, so a failure
+        // here leaves the old profile in place; the temporary file would
+        // just be litter beside it.
+        let _ = std::fs::remove_file(&temp);
+        failed(err)
     })
+}
+
+/// A scratch name beside `path`, in the same directory so the rename that
+/// follows it stays within one filesystem.
+///
+/// The process id and a counter keep two concurrent runs (or one run and a
+/// leftover from a killed one) off each other's name. Not a security
+/// boundary — this is a developer tool writing into a checkout — just
+/// enough to keep the tool from tripping over itself.
+fn temp_sibling(path: &Path) -> PathBuf {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+    let sequence = SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    let mut name = std::ffi::OsString::from(".");
+    name.push(
+        path.file_name()
+            .unwrap_or_else(|| std::ffi::OsStr::new("profile")),
+    );
+    name.push(format!(".{}.{sequence}.tmp", std::process::id()));
+    path.with_file_name(name)
 }
 
 #[cfg(test)]
