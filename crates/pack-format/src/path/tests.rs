@@ -10,7 +10,8 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
 use super::{
-    data_dir, default_pack_path, repo_pack_path, resolve, user_data_dir, DataDirRule, PACK_PATH_ENV,
+    data_dir, default_pack_path, repo_pack_path, resolve, user_data_dir, DataDirRule, Probe,
+    PACK_PATH_ENV,
 };
 use crate::layout::OUTPUT_RELATIVE_PATH;
 
@@ -23,10 +24,33 @@ fn env_of(pairs: &[(&str, &str)]) -> impl Fn(&str) -> Option<OsString> {
     move |key| owned.iter().find(|(k, _)| k == key).map(|(_, v)| v.clone())
 }
 
-/// An existence predicate that answers `true` for exactly `present`.
-fn exists_of(present: &[&str]) -> impl Fn(&Path) -> bool {
+/// A probe that finds exactly `present` and reports everything else
+/// missing.
+fn exists_of(present: &[&str]) -> impl Fn(&Path) -> Probe {
     let owned: Vec<PathBuf> = present.iter().map(PathBuf::from).collect();
-    move |path| owned.iter().any(|p| p == path)
+    move |path| {
+        if owned.iter().any(|p| p == path) {
+            Probe::Found
+        } else {
+            Probe::Missing
+        }
+    }
+}
+
+/// A probe that cannot examine `unreadable`, finds `present`, and reports
+/// everything else missing.
+fn probe_of(present: &[&str], unreadable: &[&str]) -> impl Fn(&Path) -> Probe {
+    let found: Vec<PathBuf> = present.iter().map(PathBuf::from).collect();
+    let blocked: Vec<PathBuf> = unreadable.iter().map(PathBuf::from).collect();
+    move |path| {
+        if blocked.iter().any(|p| p == path) {
+            Probe::Unreadable
+        } else if found.iter().any(|p| p == path) {
+            Probe::Found
+        } else {
+            Probe::Missing
+        }
+    }
 }
 
 #[test]
@@ -292,4 +316,112 @@ fn the_default_path_is_the_repo_path_in_a_plain_developer_checkout() {
         return;
     }
     assert_eq!(default_pack_path(), repo_pack_path());
+}
+
+#[test]
+fn an_unreadable_user_pack_stops_resolution_instead_of_falling_through() {
+    // The player installed a pack and something made its directory
+    // unsearchable. Walking on would either load the portable install
+    // silently or report the checkout path as missing; neither tells them
+    // what actually happened.
+    let path = resolve(
+        &env_of(&[("HOME", "/home/dev")]),
+        Some(Path::new("/opt/game")),
+        &probe_of(
+            &["/opt/game/assets-pack/pokeemerald.pack"],
+            &["/home/dev/.local/share/pokeemerald-rs/pokeemerald.pack"],
+        ),
+        DataDirRule::Xdg,
+    );
+    assert_eq!(
+        path,
+        PathBuf::from("/home/dev/.local/share/pokeemerald-rs/pokeemerald.pack"),
+        "an unreadable candidate is handed back for the loader to diagnose"
+    );
+}
+
+#[test]
+fn an_unreadable_executable_directory_pack_also_stops_resolution() {
+    let path = resolve(
+        &env_of(&[("HOME", "/home/dev")]),
+        Some(Path::new("/opt/game")),
+        &probe_of(&[], &["/opt/game/assets-pack/pokeemerald.pack"]),
+        DataDirRule::Xdg,
+    );
+    assert_eq!(
+        path,
+        PathBuf::from("/opt/game/assets-pack/pokeemerald.pack")
+    );
+}
+
+#[test]
+fn a_missing_candidate_still_advances_to_the_next_rung() {
+    // The other half of the distinction: only `Missing` walks on, and it
+    // must keep doing so or every packless developer checkout breaks.
+    let path = resolve(
+        &env_of(&[("HOME", "/home/dev")]),
+        Some(Path::new("/opt/game")),
+        &probe_of(&["/opt/game/assets-pack/pokeemerald.pack"], &[]),
+        DataDirRule::Xdg,
+    );
+    assert_eq!(
+        path,
+        PathBuf::from("/opt/game/assets-pack/pokeemerald.pack")
+    );
+}
+
+#[test]
+fn the_real_probe_separates_absent_from_unreadable_and_finds_a_file() {
+    use super::{probe, Probe};
+
+    let dir = std::env::temp_dir().join(format!("pack-format-probe-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("scratch directory");
+
+    let file = dir.join("pokeemerald.pack");
+    std::fs::write(&file, b"not really a pack").expect("the candidate writes");
+    assert_eq!(probe(&file), Probe::Found);
+    assert_eq!(probe(&dir.join("absent.pack")), Probe::Missing);
+    // A directory wearing the pack's name is not a pack, and the next rung
+    // is a better answer than a read error on it.
+    assert_eq!(probe(&dir), Probe::Missing);
+
+    let _ = std::fs::remove_file(&file);
+    let _ = std::fs::remove_dir(&dir);
+}
+
+#[cfg(unix)]
+#[test]
+fn the_real_probe_reports_a_pack_behind_an_unsearchable_directory_as_unreadable() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    use super::{probe, Probe};
+
+    let root = std::env::temp_dir().join(format!("pack-format-noaccess-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    let inner = root.join("pokeemerald-rs");
+    std::fs::create_dir_all(&inner).expect("scratch directories");
+    let pack = inner.join("pokeemerald.pack");
+    std::fs::write(&pack, b"the player's pack").expect("the pack writes");
+
+    std::fs::set_permissions(&inner, std::fs::Permissions::from_mode(0o000))
+        .expect("the directory closes");
+    let answer = probe(&pack);
+    std::fs::set_permissions(&inner, std::fs::Permissions::from_mode(0o755))
+        .expect("the directory reopens");
+
+    // A privileged user ignores directory permissions, so the close-off
+    // does not block them and there is nothing to assert. Asked of the
+    // outcome rather than of the uid, so it needs no libc.
+    if answer != Probe::Found {
+        assert_eq!(
+            answer,
+            Probe::Unreadable,
+            "a pack behind an unsearchable directory is not the same as no pack"
+        );
+    }
+
+    let _ = std::fs::remove_file(&pack);
+    let _ = std::fs::remove_dir(&inner);
+    let _ = std::fs::remove_dir(&root);
 }

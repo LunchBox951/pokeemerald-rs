@@ -92,6 +92,12 @@ pub fn user_pack_path() -> Option<PathBuf> {
 ///    compile-time developer path, which keeps `cargo test` working in a
 ///    checkout with nothing configured.
 ///
+/// "If that file exists" in rungs 2 and 3 means *known* not to exist. A
+/// candidate that cannot be examined at all — an unsearchable directory
+/// component, say — stops resolution and is returned, so the loader's error
+/// names the pack the player actually installed instead of silently
+/// reaching past it for another one `(no-silent-failure)`. See [`Probe`].
+///
 /// Rung 4 always yields a path, so this never fails; the caller's own
 /// "no pack extracted yet" diagnostic covers a path that does not exist.
 #[must_use]
@@ -99,12 +105,45 @@ pub fn default_pack_path() -> PathBuf {
     let exe_dir = std::env::current_exe()
         .ok()
         .and_then(|exe| exe.parent().map(Path::to_path_buf));
-    resolve(
-        &std_env,
-        exe_dir.as_deref(),
-        &|path| path.is_file(),
-        HOST_RULE,
-    )
+    resolve(&std_env, exe_dir.as_deref(), &probe, HOST_RULE)
+}
+
+/// What a look at a candidate pack path found.
+///
+/// Three answers, not two, because "there is no pack here" and "I was not
+/// allowed to look" are different facts and only the first should send
+/// resolution to the next rung.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Probe {
+    /// A pack file is there.
+    Found,
+    /// Nothing is there. The next rung is the right place to look.
+    Missing,
+    /// The candidate could not be examined — a directory component that
+    /// cannot be searched, most often. Whether a pack is there is unknown.
+    Unreadable,
+}
+
+/// [`Path::is_file`], but keeping the distinction that method throws away.
+///
+/// `is_file` folds every error into `false`, so a user pack sitting behind
+/// an unsearchable directory reads as absent and resolution walks on to a
+/// portable install or the compile-time checkout path. The player then gets
+/// either a *different* pack loaded silently or a "no pack" message naming
+/// a path they have never heard of, when the honest answer is that their
+/// own installed pack could not be reached `(no-silent-failure)`.
+///
+/// Only [`NotFound`](std::io::ErrorKind::NotFound) advances. Anything at
+/// the candidate that is not a regular file counts as missing too: a
+/// directory named `pokeemerald.pack` is not a pack, and the next rung is a
+/// better answer than a read error on it.
+fn probe(path: &Path) -> Probe {
+    match path.metadata() {
+        Ok(meta) if meta.is_file() => Probe::Found,
+        Ok(_) => Probe::Missing,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Probe::Missing,
+        Err(_) => Probe::Unreadable,
+    }
 }
 
 /// [`std::env::var_os`] as a plain function, so [`resolve`] can be handed a
@@ -116,13 +155,19 @@ fn std_env(key: &str) -> Option<OsString> {
 /// [`default_pack_path`]'s pure core: see it for the resolution order.
 ///
 /// `env` reads environment variables, `exe_dir` is the running
-/// executable's directory (`None` when the OS will not say), `exists`
-/// answers whether a candidate file is there, and `rule` selects the
-/// user-data-directory convention.
+/// executable's directory (`None` when the OS will not say), `probe` looks
+/// at a candidate file, and `rule` selects the user-data-directory
+/// convention.
+///
+/// A rung is skipped only on [`Probe::Missing`]. [`Probe::Unreadable`]
+/// *stops* here and hands the candidate back: the pack may well be there,
+/// and letting `AssetPack::load` fail on the path the player actually
+/// installed to is the only way they learn it was a permission problem
+/// rather than a missing file `(no-silent-failure)`.
 fn resolve(
     env: &impl Fn(&str) -> Option<OsString>,
     exe_dir: Option<&Path>,
-    exists: &impl Fn(&Path) -> bool,
+    probe: &impl Fn(&Path) -> Probe,
     rule: DataDirRule,
 ) -> PathBuf {
     if let Some(value) = env(PACK_PATH_ENV) {
@@ -132,13 +177,13 @@ fn resolve(
     }
     if let Some(dir) = data_dir(env, rule) {
         let candidate = dir.join(APP_DIR).join(PACK_FILE_NAME);
-        if exists(&candidate) {
+        if probe(&candidate) != Probe::Missing {
             return candidate;
         }
     }
     if let Some(dir) = exe_dir {
         let candidate = dir.join(OUTPUT_RELATIVE_PATH);
-        if exists(&candidate) {
+        if probe(&candidate) != Probe::Missing {
             return candidate;
         }
     }

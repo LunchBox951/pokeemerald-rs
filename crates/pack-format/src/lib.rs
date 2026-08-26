@@ -103,6 +103,12 @@
 //! 4. [`repo_pack_path`], the compile-time repo path, so a developer
 //!    checkout keeps working with nothing configured.
 //!
+//! Rungs 2 and 3 advance only when the candidate is *known* absent. One
+//! that cannot be examined — an unsearchable directory component — stops
+//! resolution and is handed back, so the loader reports the permission
+//! failure at the pack the player installed rather than a missing-file
+//! error naming some other path `(no-silent-failure)`.
+//!
 //! That order is right for a *running game* and wrong for a gate that means
 //! to validate this checkout: rungs 1 and 2 are the very destinations
 //! `--import-rom` writes to, so a checkout gate resolving through
