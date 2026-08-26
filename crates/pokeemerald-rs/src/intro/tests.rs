@@ -286,7 +286,7 @@ const _: () = assert!(GLYPH_COUNT == 512);
 /// metadata bytes, and its payload -- the exact byte layout
 /// `assets::pack`'s module docs specify (mirrors `assets::pack`'s own
 /// `crates/assets/src/pack/tests.rs::synthetic_pack` fixtures and
-/// `xtask::extract::pack`'s write side).
+/// `pack_format::PackWriter`'s write side).
 struct PackEntry {
     id: &'static str,
     tag: u8,

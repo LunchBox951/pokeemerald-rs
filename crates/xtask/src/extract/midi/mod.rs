@@ -77,7 +77,7 @@ use std::path::Path;
 pub(crate) use error::MidiError;
 
 use super::{read_file, read_text, ExtractError};
-use pack_format::{EntryKind, PackEntry, PackWriter};
+use pack_format::PackWriter;
 
 /// The upstream `.mid` source this slice compiles, and the pack id its
 /// compiled song is written under (module docs, "Asset id").
@@ -109,11 +109,7 @@ pub(super) fn extract_song(upstream: &Path, writer: &mut PackWriter) -> Result<(
     let payload =
         encode::encode_song(&song).map_err(|e| ExtractError::Midi(midi_path.clone(), e))?;
 
-    writer.push(PackEntry {
-        id: SONG_PACK_ID.to_owned(),
-        kind: EntryKind::Raw,
-        payload,
-    });
+    writer.push(pack_format::raw_entry(SONG_PACK_ID.to_owned(), payload));
     Ok(())
 }
 

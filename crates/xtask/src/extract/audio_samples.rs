@@ -93,7 +93,7 @@ use std::path::Path;
 
 use super::wav;
 use super::{read_file, ExtractError};
-use pack_format::{EntryKind, PackEntry, PackWriter};
+use pack_format::PackWriter;
 
 /// The upstream `.wav` basenames (`sound/direct_sound_samples/<name>.wav`,
 /// symbol `DirectSoundWaveData_<name>`) that `mus_title`'s voicegroup
@@ -201,11 +201,10 @@ pub(super) fn extract_audio_samples(
         let bytes = read_file(&path)?;
         let sample = wav::decode(&bytes).map_err(|e| ExtractError::Wav(path.clone(), e))?;
         let payload = encode_direct_sound(sample.base_frequency, sample.loop_start, &sample.data);
-        writer.push(PackEntry {
-            id: format!("audio/sample/direct-sound/{name}"),
-            kind: EntryKind::Raw,
+        writer.push(pack_format::raw_entry(
+            format!("audio/sample/direct-sound/{name}"),
             payload,
-        });
+        ));
     }
 
     let programmable_wave_dir = upstream.join("sound/programmable_wave_samples");
@@ -220,11 +219,10 @@ pub(super) fn extract_audio_samples(
                     path: path.clone(),
                     actual: bytes.len(),
                 })?;
-        writer.push(PackEntry {
-            id: format!("audio/sample/programmable-wave/{n:02}"),
-            kind: EntryKind::Raw,
-            payload: encode_programmable_wave(&table),
-        });
+        writer.push(pack_format::raw_entry(
+            format!("audio/sample/programmable-wave/{n:02}"),
+            encode_programmable_wave(&table),
+        ));
     }
 
     Ok(())

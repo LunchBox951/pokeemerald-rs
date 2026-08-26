@@ -352,7 +352,7 @@ mod synthetic_pack {
     use crate::music::load_song_from_pack;
 
     /// Serialize `entries` (id -> raw payload) into the pack container
-    /// format (`assets::pack::format`: magic, version, directory of Raw
+    /// format (`pack_format`: magic, version, directory of Raw
     /// entries, payloads) and write it to a per-test scratch path.
     fn write_pack(test_name: &str, entries: &[(&str, Vec<u8>)]) -> std::path::PathBuf {
         const RAW_KIND: u8 = 2;
@@ -367,7 +367,7 @@ mod synthetic_pack {
 
         let mut bytes = Vec::new();
         bytes.extend_from_slice(b"PKMRPACK");
-        bytes.extend_from_slice(&6u32.to_le_bytes());
+        bytes.extend_from_slice(&assets::pack::FORMAT_VERSION.to_le_bytes());
         bytes.extend_from_slice(&u32::try_from(entries.len()).unwrap().to_le_bytes());
         for (id, payload) in &entries {
             bytes.extend_from_slice(&u16::try_from(id.len()).unwrap().to_le_bytes());
@@ -559,7 +559,7 @@ mod synthetic_pack {
 #[test]
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
 fn mus_title_resolves_and_plays_continuously_with_its_real_reverb_level() {
-    let pack = assets::AssetPack::load_default().expect("run `cargo xtask extract` first");
+    let pack = assets::AssetPack::load_repo().expect("run `cargo xtask extract` first");
     let song = load_song_from_pack(&pack, "mus_title").expect("mus_title must resolve cleanly");
 
     // `-R50` in `pokeemerald/sound/songs/midi/midi.cfg`'s `mus_title.mid`
@@ -750,7 +750,7 @@ mod oracle {
             return;
         };
 
-        let pack = assets::AssetPack::load_default().expect("run `cargo xtask extract` first");
+        let pack = assets::AssetPack::load_repo().expect("run `cargo xtask extract` first");
         let song = load_song_from_pack(&pack, "mus_title").expect("mus_title must resolve cleanly");
         let mut seq = Sequencer::new(song);
 
