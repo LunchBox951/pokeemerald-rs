@@ -311,8 +311,8 @@ const COPYRIGHT_Y: u8 = 148;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TitleSceneError {
     /// Loading or reading the asset pack failed -- most commonly
-    /// [`PackError::NotFound`], the "run `./init.sh` then `cargo xtask
-    /// extract`" diagnostic (see [`TitleSceneError::is_pack_missing`]).
+    /// [`PackError::NotFound`], the "import your ROM, or extract from a
+    /// checkout" diagnostic (see [`TitleSceneError::is_pack_missing`]).
     Pack(PackError),
     /// A pack entry's bytes did not fit the `rendering` type built from it
     /// (wrong tilemap entry count, tile data not a multiple of the tile
@@ -364,14 +364,19 @@ impl fmt::Display for TitleSceneError {
         match self {
             // A missing entry means the pack itself loaded fine but
             // predates this build (every id this module looks up is a
-            // fixed `title/*` name): the actionable fix is a re-extract,
-            // and without this hint the bare "no entry with id" message
-            // sends the developer bug-hunting instead (`no-silent-failure`
-            // in spirit -- fail with the remedy, not just the symptom).
+            // fixed `title/*` name): the actionable fix is rebuilding the
+            // pack, and without this hint the bare "no entry with id"
+            // message sends the reader bug-hunting instead
+            // (`no-silent-failure` in spirit -- fail with the remedy, not
+            // just the symptom). Both audiences are named, like
+            // `PackError::NotFound` and `PackError::UnsupportedVersion`:
+            // an imported pack goes stale exactly the way an extracted one
+            // does, and a player cannot run `cargo xtask extract`.
             Self::Pack(err @ PackError::UnknownAsset(_)) => write!(
                 f,
-                "title screen: {err}: the local asset pack predates this build -- re-run \
-                 `cargo xtask extract` to refresh it"
+                "title screen: {err}: the local asset pack predates this build -- players \
+                 rebuild it with `pokeemerald-rs --import-rom <path to your Pokemon Emerald \
+                 (US) ROM>`, developers with `cargo xtask extract`"
             ),
             Self::Pack(err) => write!(f, "title screen: {err}"),
             Self::Render(err) => write!(f, "title screen: {err}"),
@@ -417,9 +422,8 @@ impl From<RenderError> for TitleSceneError {
 impl TitleSceneError {
     /// Whether this is specifically the "no pack on disk" diagnostic
     /// ([`PackError::NotFound`]) -- lets callers (namely [`load_default`],
-    /// and `xtask`'s smoke e2e check) tell "run `./init.sh`/`cargo xtask
-    /// extract` first" apart from a genuine bug, without needing to name
-    /// [`PackError`] themselves.
+    /// and `xtask`'s smoke e2e check) tell "build a pack first" apart from
+    /// a genuine bug, without needing to name [`PackError`] themselves.
     #[must_use]
     pub const fn is_pack_missing(&self) -> bool {
         matches!(self, Self::Pack(PackError::NotFound(_)))
@@ -430,8 +434,9 @@ impl TitleSceneError {
     /// ([`PackError::UnknownAsset`]) isn't in it — every id
     /// [`TitleScene::from_pack`] looks up is a fixed `title/*` name, so a
     /// missing one always means an out-of-date local pack, and the remedy
-    /// is re-running `cargo xtask extract` (which this error's
-    /// [`Display`](fmt::Display) message states).
+    /// is rebuilding it -- `--import-rom` for a player, `cargo xtask
+    /// extract` for a developer (which this error's
+    /// [`Display`](fmt::Display) message states, naming both).
     #[must_use]
     pub const fn is_pack_stale(&self) -> bool {
         matches!(self, Self::Pack(PackError::UnknownAsset(_)))
@@ -623,11 +628,30 @@ impl TitleScene {
 /// # Errors
 ///
 /// [`TitleSceneError::Pack`] with [`TitleSceneError::is_pack_missing`] true
-/// if no pack has been extracted yet (`./init.sh` then `cargo xtask
-/// extract`); see [`TitleScene::from_pack`] for the other (real-pack-only)
-/// error cases.
+/// if there is no pack yet (`pokeemerald-rs --import-rom <rom>`, or
+/// `./init.sh` then `cargo xtask extract` in a checkout); see
+/// [`TitleScene::from_pack`] for the other (real-pack-only) error cases.
 pub fn load_default() -> Result<TitleScene, TitleSceneError> {
     let pack = AssetPack::load_default()?;
+    TitleScene::from_pack(&pack)
+}
+
+/// [`load_default`], pinned to the checkout's own extracted pack
+/// ([`AssetPack::load_repo`]) instead of the runtime resolution order.
+///
+/// Checkout gates -- `cargo xtask scenario` and the smoke e2e -- must judge
+/// the pack the checkout just produced; the runtime order would let an
+/// installed user pack shadow it and the gate would validate the wrong
+/// bytes. Players never reach this: the shipped binary boots through
+/// [`load_default`].
+///
+/// # Errors
+///
+/// [`TitleSceneError::Pack`] with [`TitleSceneError::is_pack_missing`] true
+/// if the checkout has no extracted pack yet (`./init.sh` then
+/// `cargo xtask extract`); otherwise as [`load_default`].
+pub fn load_repo() -> Result<TitleScene, TitleSceneError> {
+    let pack = AssetPack::load_repo()?;
     TitleScene::from_pack(&pack)
 }
 
@@ -1088,3 +1112,6 @@ fn affine_tilemap_from_raw(raw: &[u8]) -> Result<AffineTilemap, TitleSceneError>
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod tile_roundtrip_tests;

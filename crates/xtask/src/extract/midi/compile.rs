@@ -91,6 +91,10 @@
 //! tick count with no such enum to respect, so [`push_wait`] only splits a
 //! gap when it doesn't fit in a `u8` (`> 255` ticks) — a wire-format
 //! necessity of *this* schema, unrelated to upstream's 49-value opcode set.
+//! What [`emit_track`] produces is then rewritten by [`canonical`] into the
+//! pack contract's one wait shape (adjacent rests merged, long rests split
+//! greedily), so the splits this pass leaves at silent controllers and the
+//! chunking a ROM backend decodes both land on the same bytes.
 //!
 //! One boundary in that machinery *does* change emitted delays: the wait
 //! upstream drops after a CC `0x1E` is the selector's post-`CalculateWaits`
@@ -731,7 +735,7 @@ pub(super) fn compile(midi_bytes: &[u8], cfg: &MidiCfgEntry) -> Result<CompiledS
                 cfg.master_volume,
                 final_boundary,
             )?;
-            tracks.push(track);
+            tracks.push(canonical::canonicalize_waits(&track));
             is_first_agb_track = false;
         }
     }
@@ -743,6 +747,8 @@ pub(super) fn compile(midi_bytes: &[u8], cfg: &MidiCfgEntry) -> Result<CompiledS
         tracks,
     })
 }
+
+mod canonical;
 
 #[cfg(test)]
 mod tests;

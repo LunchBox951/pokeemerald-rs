@@ -36,7 +36,7 @@ fn decode(pack: &AssetPack, label: &str) -> VoiceGroup {
 #[test]
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
 fn every_expected_voicegroup_is_present_and_decodes() {
-    let pack = AssetPack::load_default().expect("run `cargo xtask extract` first");
+    let pack = AssetPack::load_repo().expect("run `cargo xtask extract` first");
     for label in EXPECTED_GROUPS {
         let group = decode(&pack, label);
         assert_eq!(
@@ -66,7 +66,7 @@ fn overflow_slots_resolve_through_the_linked_successors_own_entries() {
     // new one), and slot 127 is intro's entry 38
     // (`sound/voicegroups/intro.inc:40`, `voice_square_1 60, 0, 0, 2, 0, 0,
     // 15, 0` -- a real, playable CGB square-1 voice, not fixed-rate).
-    let pack = AssetPack::load_default().expect("run `cargo xtask extract` first");
+    let pack = AssetPack::load_repo().expect("run `cargo xtask extract` first");
     let title = decode(&pack, "title");
 
     match title.slot(89) {
@@ -98,7 +98,7 @@ fn overflow_slots_resolve_through_the_linked_successors_own_entries() {
 #[test]
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
 fn titles_rhythm_slot_resolves_through_rs_drumset_with_its_starting_note_bias() {
-    let pack = AssetPack::load_default().expect("run `cargo xtask extract` first");
+    let pack = AssetPack::load_repo().expect("run `cargo xtask extract` first");
     let title = decode(&pack, "title");
     match title.slot(0) {
         Some(VoiceEntry::Rhythm(rhythm)) => {
@@ -123,7 +123,7 @@ fn titles_rhythm_slot_resolves_through_rs_drumset_with_its_starting_note_bias() 
 #[test]
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
 fn titles_key_split_slots_resolve_their_tables_and_children() {
-    let pack = AssetPack::load_default().expect("run `cargo xtask extract` first");
+    let pack = AssetPack::load_repo().expect("run `cargo xtask extract` first");
     let title = decode(&pack, "title");
     match title.slot(1) {
         Some(VoiceEntry::KeySplit(key_split)) => {
@@ -154,7 +154,7 @@ fn every_id_a_voicegroup_references_resolves_to_a_pack_entry() {
     // link-adjacency slot, issue #201) starts referencing a sample the
     // lists miss. This walks every slot of every emitted group and
     // requires each referenced id to name a real pack entry.
-    let pack = AssetPack::load_default().expect("run `cargo xtask extract` first");
+    let pack = AssetPack::load_repo().expect("run `cargo xtask extract` first");
     let mut dangling = Vec::new();
     let mut checked = 0usize;
     for label in EXPECTED_GROUPS {

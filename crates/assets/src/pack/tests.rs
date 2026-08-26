@@ -477,9 +477,14 @@ fn wrong_kind_is_reported() {
 fn missing_pack_file_gives_the_required_diagnostic() {
     let err = AssetPack::load(std::path::Path::new("/definitely/does/not/exist.pack")).unwrap_err();
     assert!(matches!(err, PackError::NotFound(_)));
-    let rendered = err.to_string();
-    assert!(rendered.contains("init.sh"));
-    assert!(rendered.contains("cargo xtask extract"));
+    // Pinned whole: the message serves two audiences, and dropping either
+    // half strands one of them (Discussion #71 policy A and policy C).
+    assert_eq!(
+        err.to_string(),
+        "asset pack not found at `/definitely/does/not/exist.pack`: players run \
+         `pokeemerald-rs --import-rom <path to your Pokemon Emerald (US) ROM>`; developers \
+         run `./init.sh` then `cargo xtask extract`"
+    );
 }
 
 #[test]
@@ -501,6 +506,14 @@ fn unsupported_version_is_rejected() {
     std::fs::write(&path, &bytes).unwrap();
     let err = AssetPack::load(&path).unwrap_err();
     assert_eq!(err, PackError::UnsupportedVersion(99));
+    // Same two audiences as the missing-pack diagnostic: a stale pack is
+    // rebuilt by whichever route built it in the first place.
+    assert_eq!(
+        err.to_string(),
+        "asset pack: unsupported format version `99`: the pack predates this build's \
+         format; players rebuild it with `pokeemerald-rs --import-rom <path to your \
+         Pokemon Emerald (US) ROM>`, developers with `cargo xtask extract`"
+    );
     let _ = std::fs::remove_file(path);
 }
 
@@ -793,6 +806,13 @@ fn tileset_metatile_attribute_table_decodes_from_the_bundled_raw_bytes() {
 
 #[test]
 fn default_path_ends_with_expected_relative_path() {
+    // Rungs 1 to 3 of `pack_format::default_pack_path` redirect the path on
+    // purpose; only the plain developer checkout is deterministic.
+    if std::env::var_os(pack_format::PACK_PATH_ENV).is_some()
+        || pack_format::user_pack_path().is_some_and(|p| p.is_file())
+    {
+        return;
+    }
     let path = AssetPack::default_path();
     assert!(path.ends_with("assets-pack/pokeemerald.pack"));
 }
@@ -993,7 +1013,7 @@ fn real_pack_loads_and_every_typed_accessor_works() {
     use crate::fonts::FontId;
     use crate::map_layouts::{BorderGrid, LayoutId, LayoutTable};
 
-    let pack = AssetPack::load_default().expect("run `cargo xtask extract` first");
+    let pack = AssetPack::load_repo().expect("run `cargo xtask extract` first");
 
     let general = pack
         .tileset("general")
@@ -1222,7 +1242,7 @@ const REAL_PACK_PROGRAMMABLE_WAVES: [u32; 4] = [1, 2, 5, 6];
 fn real_pack_audio_samples_decode_through_the_sample_schema() {
     use crate::audio::Sample;
 
-    let pack = AssetPack::load_default().expect("run `cargo xtask extract` first");
+    let pack = AssetPack::load_repo().expect("run `cargo xtask extract` first");
 
     let mut decoded = 0usize;
     for name in REAL_PACK_DIRECT_SOUND_SAMPLES {
@@ -1319,7 +1339,7 @@ fn real_pack_audio_samples_decode_through_the_sample_schema() {
 fn real_pack_audio_song_decodes_through_the_song_schema() {
     use crate::audio::{Song, SongEvent, VoiceGroupId};
 
-    let pack = AssetPack::load_default().expect("run `cargo xtask extract` first");
+    let pack = AssetPack::load_repo().expect("run `cargo xtask extract` first");
     let bytes = pack
         .raw("audio/song/mus_title")
         .expect("`audio/song/mus_title` should be in the pack");
@@ -1435,7 +1455,7 @@ fn real_pack_mus_title_data_chain_round_trips_through_the_typed_accessors() {
 
     use crate::audio::VoiceEntry;
 
-    let pack = AssetPack::load_default().expect("run `cargo xtask extract` first");
+    let pack = AssetPack::load_repo().expect("run `cargo xtask extract` first");
 
     // 1. The song, through the typed accessor.
     let song = pack

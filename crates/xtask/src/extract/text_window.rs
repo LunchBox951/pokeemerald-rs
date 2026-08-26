@@ -23,8 +23,8 @@
 
 use std::path::Path;
 
-use super::{jasc_pal, png, read_file, read_text, ExtractError};
-use pack_format::{EntryKind, PackEntry, PackWriter};
+use super::{build_image_entry, jasc_pal, png, read_file, read_text, ExtractError};
+use pack_format::PackWriter;
 
 /// Filename stems for every PNG required from `graphics/text_window/`.
 const TEXT_WINDOW_IMAGE_STEMS: [&str; 21] = [
@@ -102,15 +102,11 @@ pub(super) fn extract_text_window(
             ));
         }
         validate_text_window_pixels(&path, &image.pixels, colors.len())?;
-        writer.push(PackEntry {
-            id: format!("text-window/image/{stem}"),
-            kind: EntryKind::Image {
-                width: image.width,
-                height: image.height,
-                bit_depth: image.bit_depth,
-            },
-            payload: image.pixels,
-        });
+        writer.push(build_image_entry(
+            &path,
+            format!("text-window/image/{stem}"),
+            image,
+        )?);
         push_text_window_palette_entry(
             &path,
             &colors,

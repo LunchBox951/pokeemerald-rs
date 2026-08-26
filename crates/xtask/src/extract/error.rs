@@ -9,7 +9,7 @@ use super::midi::MidiError;
 use super::png::PngError;
 use super::voicegroups::VoiceGroupError;
 use super::wav::WavError;
-use pack_format::PackWriteError;
+use pack_format::{EntryShapeError, PackWriteError};
 
 /// An error produced while extracting the local asset pack.
 ///
@@ -51,6 +51,23 @@ pub enum ExtractError {
     /// narrowed with a truncating cast instead of rejected outright. Carries
     /// the source path and the actual colour count.
     PaletteColorCountUnrepresentable(PathBuf, usize),
+    /// A `.pal` file held fewer colours than the upstream build rule cuts it
+    /// to (see `crate::extract::TITLE_SCREEN_PALETTE_CUTS`). Carries the
+    /// source path, the cut, and the colour count found.
+    PaletteShorterThanCut {
+        /// The `.pal` file.
+        path: PathBuf,
+        /// How many colours the upstream rule keeps.
+        cut: usize,
+        /// How many colours the file actually holds.
+        actual: usize,
+    },
+    /// A decoded source did not fit the pack's payload contract, as
+    /// [`pack_format`]'s entry constructors define it (an image whose pixel
+    /// buffer is not `width * height`, say). Only reachable if a source file
+    /// reshapes underneath this pipeline, since the decoders here produce
+    /// well-formed input. Carries the source path and the shape error.
+    EntryShape(PathBuf, EntryShapeError),
     /// Assembling the final pack failed (duplicate or invalid id — an
     /// internal bug in this pipeline's manifest, since every id is
     /// generated here, not user-supplied).
@@ -194,6 +211,12 @@ impl fmt::Display for ExtractError {
                 "`{}` has no embedded PLTE chunk (expected upstream's in-game palette there)",
                 path.display()
             ),
+            Self::PaletteShorterThanCut { path, cut, actual } => write!(
+                f,
+                "palette `{}` has {actual} colours, fewer than the {cut} upstream's build rule \
+                 keeps",
+                path.display()
+            ),
             Self::PaletteColorCountUnrepresentable(path, actual) => write!(
                 f,
                 "palette `{}` has {actual} colours: the pack format's `color_count` field is a \
@@ -201,6 +224,9 @@ impl fmt::Display for ExtractError {
                 path.display(),
                 u16::MAX
             ),
+            Self::EntryShape(path, err) => {
+                write!(f, "`{}` cannot become a pack entry: {err}", path.display())
+            }
             Self::Pack(err) => write!(f, "assembling pack failed: {err}"),
             Self::LayoutsJson(path, err) => {
                 write!(f, "parsing `{}` failed: {err}", path.display())

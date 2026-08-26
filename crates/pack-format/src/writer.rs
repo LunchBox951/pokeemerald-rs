@@ -14,6 +14,18 @@ pub struct PackEntry {
     pub payload: Vec<u8>,
 }
 
+// Hand-written rather than derived: a payload runs to hundreds of KiB, and
+// a derived `Debug` would dump every byte into a failing test's output.
+impl fmt::Debug for PackEntry {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PackEntry")
+            .field("id", &self.id)
+            .field("kind", &self.kind)
+            .field("payload_len", &self.payload.len())
+            .finish_non_exhaustive()
+    }
+}
+
 /// An error building a pack.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PackWriteError {

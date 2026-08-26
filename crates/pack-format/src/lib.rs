@@ -1,8 +1,8 @@
 //! The asset-pack container format (S-4, F-3, issue #81 / Discussion #71
-//! policy A): the one owner of the layout `cargo xtask extract` writes and
-//! `crates/assets` reads.
+//! policies A and C): the one owner of the layout `cargo xtask extract` and
+//! `pokeemerald-rs --import-rom` write and `crates/assets` reads.
 //!
-//! # Format (version 6, wire layout unchanged since 1)
+//! # Format (version 7, wire layout unchanged since 1)
 //!
 //! All multi-byte integers are little-endian. Layout, in order:
 //!
@@ -72,10 +72,14 @@
 //!
 //! This crate holds the format constants ([`MAGIC`], [`FORMAT_VERSION`],
 //! [`OUTPUT_RELATIVE_PATH`], [`EntryKind`]), the write side ([`PackEntry`],
-//! [`PackWriter`], [`PackWriteError`]), and the read side
-//! ([`parse_directory`], [`DirectoryEntry`], [`PackReadError`]).
-//! `xtask::extract` writes through it; `crates/assets`'s `AssetPack` reads
-//! through it.
+//! [`PackWriter`], [`PackWriteError`]), the entry constructors
+//! ([`palette_entry`], [`image_entry`], [`image_entry_from_tiles`],
+//! [`tiles_from_image`], [`raw_entry`], [`EntryShapeError`]), the read side
+//! ([`parse_directory`], [`DirectoryEntry`], [`PackReadError`]), and runtime
+//! pack-path resolution
+//! ([`default_pack_path`], [`repo_pack_path`], [`user_data_dir`],
+//! [`user_pack_path`], [`PACK_PATH_ENV`]). `xtask::extract` writes through
+//! it; `crates/assets`'s `AssetPack` reads through it.
 //!
 //! Both sides used to spell the layout out separately, so that the two
 //! crates stayed decoupled from each other. That held while there were two
@@ -83,15 +87,49 @@
 //! than keeping three copies in step: a format bump touches one file, and
 //! `xtask` and `assets` still never depend on each other.
 //!
-//! Next: entry constructors (typed helpers replacing hand-built
-//! [`PackEntry`] literals at every call site) and the default pack path
-//! (the constant is shared now; `AssetPack::default_path` and xtask's
-//! `repo_root()` still locate the repo root independently).
+//! The entry constructors are what makes two backends produce one pack. A
+//! hand-built [`PackEntry`] literal can promise a `color_count` or a
+//! `width`/`height` its payload does not deliver, and two backends writing
+//! their own literals drift. Both now shape entries here, so the same
+//! normalized input yields the same bytes whichever backend read it. See
+//! the `entry` module docs.
+//!
+//! [`default_pack_path`] resolves at runtime, first match wins:
+//! 1. `$POKEEMERALD_PACK`, if set and non-empty.
+//! 2. The OS user-data directory's `pokeemerald-rs/pokeemerald.pack`, if it
+//!    exists; the shipped ROM importer writes there ([`user_pack_path`]).
+//! 3. `<directory of the running executable>/`[`OUTPUT_RELATIVE_PATH`], if
+//!    it exists, for portable installs.
+//! 4. [`repo_pack_path`], the compile-time repo path, so a developer
+//!    checkout keeps working with nothing configured.
+//!
+//! Rungs 2 and 3 advance only when the candidate is *known* absent. One
+//! that cannot be examined — an unsearchable directory component — stops
+//! resolution and is handed back, so the loader reports the permission
+//! failure at the pack the player installed rather than a missing-file
+//! error naming some other path `(no-silent-failure)`.
+//!
+//! That order is right for a *running game* and wrong for a gate that means
+//! to validate this checkout: rungs 1 and 2 are the very destinations
+//! `--import-rom` writes to, so a checkout gate resolving through
+//! [`default_pack_path`] would read whichever pack the developer has
+//! installed rather than the one `cargo xtask extract` just wrote. Such
+//! gates call [`repo_pack_path`] by name instead `(test-ratchet)`.
+//!
+//! Next: the ROM importer itself, the second backend these constructors
+//! exist for.
 
+mod entry;
 mod layout;
+mod path;
 mod reader;
 mod writer;
 
+pub use entry::{
+    image_entry, image_entry_from_tiles, palette_entry, raw_entry, tiles_from_image,
+    EntryShapeError,
+};
 pub use layout::{EntryKind, FORMAT_VERSION, MAGIC, OUTPUT_RELATIVE_PATH};
+pub use path::{default_pack_path, repo_pack_path, user_data_dir, user_pack_path, PACK_PATH_ENV};
 pub use reader::{parse_directory, DirectoryEntry, PackReadError};
 pub use writer::{PackEntry, PackWriteError, PackWriter};
