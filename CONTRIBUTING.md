@@ -132,8 +132,10 @@ honestly:
 - **Ledger impact** — `none`, `verify-only`, or the list of touched entries.
 - **Dependency impact** — `none`, or the explicit owner-approved dependency with
   its justification `(minimal-deps)`.
-- **Release impact** — `none`, `patch`, `minor`, `major`, or `final-gate` (see the
-  version rules in [`RELEASE.md`](RELEASE.md)).
+
+Release impact isn't a template field to fill in a subjective guess for — the
+`VERSION` bump and CI's gates are the sole authority on it (see the version
+rules in [`RELEASE.md`](RELEASE.md)).
 
 Keep PRs focused. Don't mix unrelated work, and never fold feature changes into a
 release-promotion PR.
