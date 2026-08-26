@@ -7,9 +7,9 @@
 //! `party.rs`'s are, so the type and its pins each read in one screen.
 
 use super::{
-    calc_max_hp, calc_stat, compute_stats, BattlePokemon, Ivs, MoveSlot, PpBonuses, StatStages,
-    MAX_IV, MAX_LEVEL, MIN_LEVEL, MOVE_NONE, SPECIES_NONE, SPECIES_OLD_UNOWN_B,
-    SPECIES_OLD_UNOWN_Z,
+    calc_max_hp, calc_stat, compute_stats, compute_stats_with_evs, BattlePokemon, Evs, Ivs,
+    MoveSlot, PpBonuses, StatStages, MAX_IV, MAX_LEVEL, MIN_LEVEL, MOVE_NONE, SPECIES_NONE,
+    SPECIES_OLD_UNOWN_B, SPECIES_OLD_UNOWN_Z,
 };
 use crate::damage::MoveCategory;
 use crate::dex::Dex;
@@ -31,20 +31,42 @@ const MAX_IVS: Ivs = Ivs {
 
 #[test]
 fn calc_max_hp_matches_hand_computed_bulbasaur_at_level_5() {
-    // Bulbasaur base HP 45, IV 31 (max), level 5:
-    // n = 2*45+31 = 121; 121*5/100 = 6 (605/100 truncated); +5+10 = 21.
-    assert_eq!(calc_max_hp(45, 31, 5), 21);
+    // Bulbasaur base HP 45, IV 31 (max), level 5, 0 EV:
+    // n = 2*45+31+0/4 = 121; 121*5/100 = 6 (605/100 truncated); +5+10 = 21.
+    assert_eq!(calc_max_hp(45, 31, 0, 5), 21);
+}
+
+#[test]
+fn calc_max_hp_folds_ev_over_four_into_the_parenthesised_sum() {
+    // Same Bulbasaur, 252 EV (the upstream single-stat cap): ev/4 = 63.
+    // n = 2*45+31+63 = 184; 184*5/100 = 9 (920/100 truncated); +5+10 = 24.
+    assert_eq!(calc_max_hp(45, 31, 252, 5), 24);
+    // ev/4's own truncation happens before the level scaling, and the two
+    // truncations bite in that order: 3 floor-divides to 0, so it cannot
+    // reach the total at all. 7 floor-divides to 1 -- n = 122 -- but
+    // 122 * 5 / 100 is still 6, so `* level / 100` absorbs that point and
+    // the total is unchanged here too, for the second reason rather than
+    // the first.
+    assert_eq!(calc_max_hp(45, 31, 0, 5), calc_max_hp(45, 31, 3, 5));
+    assert_eq!(calc_max_hp(45, 31, 0, 5), calc_max_hp(45, 31, 7, 5));
 }
 
 #[test]
 fn calc_stat_applies_the_nature_modifier_after_the_plus_five() {
-    // Bulbasaur base Attack 49, IV 31, level 5, Adamant (+Attack):
-    // n = 2*49+31 = 129; 129*5/100 = 6 (645/100); +5 = 11; *110/100 = 12
+    // Bulbasaur base Attack 49, IV 31, level 5, 0 EV, Adamant (+Attack):
+    // n = 2*49+31+0/4 = 129; 129*5/100 = 6 (645/100); +5 = 11; *110/100 = 12
     // (1210/100 truncated).
-    let n = calc_stat(49, 31, 5, Nature::Adamant, Stat::Attack);
+    let n = calc_stat(49, 31, 0, 5, Nature::Adamant, Stat::Attack);
     assert_eq!(n, 12);
     // Same base/IV/level, neutral nature: no scaling, stays 11.
-    assert_eq!(calc_stat(49, 31, 5, Nature::Hardy, Stat::Attack), 11);
+    assert_eq!(calc_stat(49, 31, 0, 5, Nature::Hardy, Stat::Attack), 11);
+}
+
+#[test]
+fn calc_stat_folds_ev_over_four_into_the_parenthesised_sum() {
+    // Same Bulbasaur Attack, 252 EV: ev/4 = 63.
+    // n = 2*49+31+63 = 192; 192*5/100 = 9 (960/100); +5 = 14.
+    assert_eq!(calc_stat(49, 31, 252, 5, Nature::Hardy, Stat::Attack), 14);
 }
 
 #[test]
@@ -52,15 +74,52 @@ fn compute_stats_bundles_all_six_stats() {
     let dex = Dex::new();
     let bulbasaur = dex.species(SpeciesId(1)).unwrap();
     let stats = compute_stats(bulbasaur, 5, Nature::Hardy, MAX_IVS);
-    assert_eq!(stats.max_hp, calc_max_hp(bulbasaur.hp, 31, 5));
+    assert_eq!(stats.max_hp, calc_max_hp(bulbasaur.hp, 31, 0, 5));
     assert_eq!(
         stats.attack,
-        calc_stat(bulbasaur.attack, 31, 5, Nature::Hardy, Stat::Attack)
+        calc_stat(bulbasaur.attack, 31, 0, 5, Nature::Hardy, Stat::Attack)
     );
     assert_eq!(
         stats.speed,
-        calc_stat(bulbasaur.speed, 31, 5, Nature::Hardy, Stat::Speed)
+        calc_stat(bulbasaur.speed, 31, 0, 5, Nature::Hardy, Stat::Speed)
     );
+}
+
+#[test]
+fn compute_stats_with_evs_matches_compute_stats_at_zero_evs() {
+    // `compute_stats` is `compute_stats_with_evs` at `Evs::default()`
+    // (module docs) -- pin the delegation directly.
+    let dex = Dex::new();
+    let bulbasaur = dex.species(SpeciesId(1)).unwrap();
+    assert_eq!(
+        compute_stats(bulbasaur, 50, Nature::Adamant, MAX_IVS),
+        compute_stats_with_evs(bulbasaur, 50, Nature::Adamant, MAX_IVS, Evs::default())
+    );
+}
+
+#[test]
+fn compute_stats_with_evs_raises_every_stat_the_ev_bytes_train() {
+    // A maximally EV-trained mon (252 in every stat, the upstream
+    // single-stat cap) must file a strictly larger block than the same mon
+    // at 0 EVs -- the `ev / 4` term CALC_STAT adds (module docs).
+    let dex = Dex::new();
+    let bulbasaur = dex.species(SpeciesId(1)).unwrap();
+    let untrained = compute_stats_with_evs(bulbasaur, 50, Nature::Hardy, MAX_IVS, Evs::default());
+    let trained_evs = Evs {
+        hp: 252,
+        attack: 252,
+        defense: 252,
+        speed: 252,
+        sp_attack: 252,
+        sp_defense: 252,
+    };
+    let trained = compute_stats_with_evs(bulbasaur, 50, Nature::Hardy, MAX_IVS, trained_evs);
+    assert!(trained.max_hp > untrained.max_hp);
+    assert!(trained.attack > untrained.attack);
+    assert!(trained.defense > untrained.defense);
+    assert!(trained.speed > untrained.speed);
+    assert!(trained.sp_attack > untrained.sp_attack);
+    assert!(trained.sp_defense > untrained.sp_defense);
 }
 
 fn sample_mon(dex: &Dex) -> BattlePokemon {

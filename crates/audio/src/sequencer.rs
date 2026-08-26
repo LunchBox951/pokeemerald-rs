@@ -34,7 +34,7 @@
 use crate::cgb_voice::{CgbChannelNumber, CgbVoice};
 use crate::pitch::{self, SAMPLES_PER_FRAME};
 use crate::psg::WaveChannel;
-use crate::sequence::Event;
+use crate::sequence::{clamp_tempo, Event, MAX_TEMPO_BPM};
 use crate::song::{Instrument, Song};
 use crate::voice::{channel_volume, pan_terms, Voice};
 use crate::{Mixer, DEFAULT_MASTER_VOLUME, DEFAULT_MAX_VOICES};
@@ -329,7 +329,19 @@ impl Sequencer {
 
     /// Run the tempo accumulator for one frame, firing ticks as it crosses
     /// [`TEMPO_UNIT`] (`m4a_1.s:1169`..`:1359`).
+    ///
+    /// # Overflow
+    ///
+    /// `tempo_c += tempo_i` never overflows its `u16`s: the loop below
+    /// always leaves `tempo_c < TEMPO_UNIT` (149 at most), and both
+    /// `tempo_i` ingestion points ([`Song::new`]'s initial tempo,
+    /// [`Event::Tempo`]'s runtime assignment in [`Self::handle_event`])
+    /// clamp to [`MAX_TEMPO_BPM`] (510) — `149 + 510` is nowhere near
+    /// `u16::MAX` (#404). The asserts document that invariant rather than
+    /// re-derive it at runtime.
     fn advance_frame(&mut self) {
+        debug_assert!(self.tempo_c < TEMPO_UNIT);
+        debug_assert!(self.tempo_i <= MAX_TEMPO_BPM);
         self.tempo_c += self.tempo_i;
         while self.tempo_c >= TEMPO_UNIT {
             self.tempo_c -= TEMPO_UNIT;
@@ -442,7 +454,14 @@ impl Sequencer {
                 track.pan = p;
                 Self::apply_track_volume(track, mixer, track_id);
             }
-            Event::Tempo(bpm) => *tempo_i = bpm,
+            // `bpm` already carries `clamp_tempo`'s bound when it came from
+            // `decode_track`'s `TEMPO` arm, but this also runs on an
+            // `Event::Tempo` converted from the normalized asset-pack schema
+            // (`assets::audio::song::SongEvent::Tempo`), which round-trips an
+            // unbounded on-disk `u16` -- so the clamp is re-applied here
+            // too, guarding `tempo_c`'s accumulation against a malformed
+            // pack (#404).
+            Event::Tempo(bpm) => *tempo_i = clamp_tempo(bpm),
             Event::KeyShift(k) => {
                 track.key_shift = k;
                 Self::apply_track_pitch(track, mixer, track_id);
@@ -1970,6 +1989,30 @@ mod tests {
             frames
         };
         assert!(frames_to_finish(300) < frames_to_finish(150));
+    }
+
+    #[test]
+    fn tempo_event_is_clamped_before_it_can_overflow_the_accumulator() {
+        // #404: `tempo_c += tempo_i` (`advance_frame`) is unguarded, so an
+        // out-of-domain `Event::Tempo` -- one a malformed asset pack could
+        // carry, since `SongEvent::Tempo` round-trips an unbounded on-disk
+        // `u16` -- must never reach `tempo_i` un-clamped.
+        let mut seq = Sequencer::new(test_song(vec![vec![Event::Fine]], 150));
+        apply_test_event(&mut seq, 0, &Event::Tempo(u16::MAX));
+        assert_eq!(
+            seq.tempo_i, MAX_TEMPO_BPM,
+            "an out-of-domain Tempo event must clamp to the TEMPO command's real bound"
+        );
+
+        // Drive tempo_c to the highest value `advance_frame`'s drain loop
+        // ever leaves behind (`TEMPO_UNIT - 1`) and take one more frame: the
+        // exact edge this issue reported. Before the fix, an unclamped
+        // `tempo_i` of `u16::MAX` overflowed this addition (panicking in a
+        // checked build, silently wrapping in release); the clamp above
+        // keeps the sum (`149 + 510 = 659`) nowhere near `u16::MAX`.
+        seq.tempo_c = TEMPO_UNIT - 1;
+        seq.advance_frame();
+        assert_eq!(seq.tempo_c, (TEMPO_UNIT - 1 + MAX_TEMPO_BPM) % TEMPO_UNIT);
     }
 
     #[test]

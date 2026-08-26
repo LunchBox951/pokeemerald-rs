@@ -42,14 +42,18 @@ pub(crate) fn script_text(script: &str) -> Option<Vec<Token>> {
 /// actually shows. `{PLAYER}` is substituted for the fixed pre-1.0 default
 /// name, mirroring `crate::intro::speech`'s identical convention for the same
 /// reason (the naming screen is not modelled yet -- deferred, still in v1
-/// scope); the trailing `{P}` is this port's own addition on top of
-/// upstream's raw string (which ends `"too?$"`, no embedded `\p`) --
-/// standing in for `MSGBOX_DEFAULT`'s own
-/// down-arrow wait-then-close behaviour (`crate::intro::speech::AND_YOU_ARE`'s
-/// doc comment explains the same stand-in for a different upstream
-/// mechanism).
+/// scope).
+///
+/// Byte-identical to upstream's own raw string now (`"...too?$"`, no
+/// embedded `\p`): before issue #410, this function appended a synthetic
+/// trailing `{P}` here to stand in for `MSGBOX_DEFAULT`'s down-arrow
+/// wait-then-close behaviour, which clears the box and pays a post-clear
+/// reveal delay upstream's `waitbuttonpress` never does. That wait is now
+/// [`crate::overworld::dialog::NpcDialog::with_waitbuttonpress`] (applied by
+/// every real dialog this table opens through, `NpcDialog::from_pack`'s own
+/// doc comment), so the text itself carries none of it.
 fn mom_text() -> String {
-    format!("MOM: See, {DEFAULT_PLAYER_NAME}?\nIsn't it nice in here, too?{{P}}")
+    format!("MOM: See, {DEFAULT_PLAYER_NAME}?\nIsn't it nice in here, too?")
 }
 
 /// Translate one authored message -- the same `{P}`/`{L}`/`\n` convention
@@ -105,17 +109,23 @@ mod tests {
     }
 
     #[test]
-    fn moms_message_bakes_in_the_fixed_default_name_and_waits_before_closing() {
+    fn moms_message_bakes_in_the_fixed_default_name_and_ends_on_the_upstream_raw_string() {
         let tokens = script_text("PlayersHouse_1F_EventScript_Mom").unwrap();
         assert!(tokens.windows(DEFAULT_PLAYER_NAME.len()).any(|w| w
             .iter()
             .zip(DEFAULT_PLAYER_NAME.chars())
             .all(|(t, c)| *t == Token::Char(c))));
-        // Ends `?{P}` then `End` -- a button press is required to close it,
-        // matching MSGBOX_DEFAULT (module docs).
-        assert_eq!(tokens[tokens.len() - 3], Token::Char('?'));
-        assert_eq!(tokens[tokens.len() - 2], Token::PromptClear);
+        // Ends `?` then `End`, with no `PromptClear` anywhere -- issue #410:
+        // the button-press-required-to-close wait is now
+        // `NpcDialog::with_waitbuttonpress` (module docs), not a synthetic
+        // `{P}` baked into the text, matching upstream's own raw string
+        // (`"...too?$"`, no embedded `\p`).
+        assert_eq!(tokens[tokens.len() - 2], Token::Char('?'));
         assert_eq!(tokens.last(), Some(&Token::End));
+        assert!(
+            !tokens.contains(&Token::PromptClear),
+            "Mom's message must not carry a synthetic trailing prompt-clear anymore"
+        );
     }
 
     #[test]

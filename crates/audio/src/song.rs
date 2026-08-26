@@ -14,7 +14,7 @@ use std::sync::Arc;
 use crate::cgb_envelope::CgbAdsr;
 use crate::envelope::Adsr;
 use crate::sample::WaveData;
-use crate::sequence::Event;
+use crate::sequence::{clamp_tempo, Event};
 
 /// Every addressable key-split/rhythm slot spans exactly `0..=127`: both are
 /// indexed directly by a raw command key byte, which the decoder guarantees
@@ -213,7 +213,8 @@ pub struct Song {
     voices: Vec<Instrument>,
     /// Decoded event streams, one per track.
     tracks: Vec<Vec<Event>>,
-    /// Initial tempo in BPM.
+    /// Initial tempo in BPM, clamped to [`crate::sequence::MAX_TEMPO_BPM`]
+    /// by [`Self::new`].
     initial_tempo: u16,
     /// `SongHeader::priority`, mirrored onto `MusicPlayerInfo::priority` when
     /// the song starts. It is the base half of every note's effective
@@ -234,12 +235,18 @@ impl Song {
     /// Assemble a song from a voicegroup, decoded tracks, and an initial
     /// tempo (BPM). Reverb defaults to `None` (inherit) — see
     /// [`Self::with_reverb`].
+    ///
+    /// `initial_tempo` is clamped to [`crate::sequence::MAX_TEMPO_BPM`], the
+    /// same bound a `TEMPO` command's single doubled operand byte can ever
+    /// carry (`clamp_tempo`) — so a directly constructed `Song` can't hand
+    /// [`crate::sequencer::Sequencer`]'s `u16` tempo accumulator a value
+    /// wide enough to overflow it.
     #[must_use]
     pub fn new(voices: Vec<Instrument>, tracks: Vec<Vec<Event>>, initial_tempo: u16) -> Self {
         Self {
             voices,
             tracks,
-            initial_tempo,
+            initial_tempo: clamp_tempo(initial_tempo),
             priority: 0,
             reverb: None,
         }
@@ -317,6 +324,7 @@ impl Song {
 mod tests {
     use super::rhythm_pan_from_pan_sweep;
     use super::Song;
+    use crate::sequence::MAX_TEMPO_BPM;
 
     #[test]
     fn reverb_level_is_clamped_to_supported_range() {
@@ -324,6 +332,27 @@ mod tests {
 
         assert_eq!(song().with_reverb(127).reverb(), 127);
         assert_eq!(song().with_reverb(128).reverb(), 127);
+    }
+
+    #[test]
+    fn initial_tempo_is_clamped_to_the_tempo_command_domain() {
+        // `TEMPO`'s one operand byte, doubled, can never exceed
+        // `MAX_TEMPO_BPM` (510) -- see `clamp_tempo`'s docs. `Song::new` must
+        // hold a directly constructed song to that same bound so it can
+        // never hand `Sequencer`'s `u16` tempo accumulator a value wide
+        // enough to overflow it (#404).
+        assert_eq!(
+            Song::new(Vec::new(), Vec::new(), MAX_TEMPO_BPM).initial_tempo(),
+            MAX_TEMPO_BPM
+        );
+        assert_eq!(
+            Song::new(Vec::new(), Vec::new(), MAX_TEMPO_BPM + 1).initial_tempo(),
+            MAX_TEMPO_BPM
+        );
+        assert_eq!(
+            Song::new(Vec::new(), Vec::new(), u16::MAX).initial_tempo(),
+            MAX_TEMPO_BPM
+        );
     }
 
     #[test]
