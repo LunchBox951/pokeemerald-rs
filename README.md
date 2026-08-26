@@ -39,7 +39,7 @@ cargo run --release -p pokeemerald-rs
 
 `init.sh` clones `pret/pokeemerald`, the canonical game specification, and `mgba-emu/mgba`, the hardware-behaviour reference. Both checkouts are gitignored and read-only `(reference-only)`. `cargo xtask extract` builds the local asset pack required by the application. A missing pack produces an actionable error instead of downloading or distributing game assets.
 
-Run the workspace gates with:
+Run a basic local build and test with:
 
 ```bash
 cargo build --release --workspace

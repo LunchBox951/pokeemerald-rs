@@ -18,7 +18,7 @@ The application cannot start without the extracted pack. It reports the missing-
 
 - Target `dev` for normal work. `unstable`, `stable`, and `main` accept only direct next-rung promotion pull requests `(gated-by-default)`.
 - Link work to the relevant stable ID in [`docs/acceptance/v1.md`](docs/acceptance/v1.md). Use `none` with a concrete rationale for maintenance that advances no v1 criterion.
-- Give each roadmap issue exactly one milestone. M1–M5 own foundation and subsystem work, M6 owns C-1 through C-5 integrated content, and M7 owns C-6 and release signoff.
+- Give each roadmap issue exactly one milestone. Read the live [milestone descriptions](../../milestones?state=all) for current acceptance-ID ownership and scope.
 - Put consciously deferred work in M8 with a recorded reason. Deferral does not remove single-player work from v1; only a recorded exclusion does.
 - Close a milestone only when each acceptance ID it owns is ☑ or a recorded ⊘. The issue progress bar is not the completion gate.
 
