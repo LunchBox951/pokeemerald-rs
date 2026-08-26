@@ -11498,7 +11498,7 @@
     "data/scripts/players_house.inc": {
       "artifacts": {
         "PlayersHouse_1F_EventScript_Mom": {
-          "reason": "Only the fresh-save default branch is transcribed (npc_scripts::script_text's mom_text, the real PlayersHouse_1F_Text_IsntItNiceInHere line reached when every earlier goto_if_set/goto_if_eq guard -- FLAG_HAS_MATCH_CALL, FLAG_RESCUED_BIRCH, VAR_TEMP_1, VAR_LITTLEROOT_INTRO_STATE, VAR_LITTLEROOT_HOUSES_STATE_MAY/_BRENDAN -- reads false/0, which is exactly a brand-new save's state). Not modelled: PlayersHouse_1F_EventScript_DontPushYourselfTooHard, _TryRegisterMom/_CheckGiveAmuletCoin/_TryGiveAmuletCoin (the match-call registration and Amulet Coin gift), _MomHealsParty, _SeeYouHoney, and _DidYouMeetProfBirch -- every branch reachable only after story-progression flags/vars this port doesn't yet set change from their fresh-save defaults.",
+          "reason": "Only the fresh-save default branch is transcribed (npc_scripts::script_text's mom_text, the real PlayersHouse_1F_Text_IsntItNiceInHere line reached when every earlier goto_if_set/goto_if_eq guard -- FLAG_HAS_MATCH_CALL, FLAG_RESCUED_BIRCH, VAR_TEMP_1, VAR_LITTLEROOT_INTRO_STATE, VAR_LITTLEROOT_HOUSES_STATE_MAY/_BRENDAN -- reads false/0, which is exactly a brand-new save's state). Byte-identical to upstream's raw string now (issue #410): mom_text used to append a synthetic trailing {P}/PromptClear to fake the wait-then-close this script's msgbox MSGBOX_DEFAULT call needs, which cleared the box and paid a post-clear reveal delay upstream's waitbuttonpress never does (data/scripts/std_msgbox.inc:18-22, Std_MsgboxDefault). That wait is now crate::overworld::dialog::NpcDialog::with_waitbuttonpress, applied automatically by NpcDialog::from_pack/open_default -- the constructor this script's dialog opens through -- so the authored text carries none of it. Not modelled: PlayersHouse_1F_EventScript_DontPushYourselfTooHard, _TryRegisterMom/_CheckGiveAmuletCoin/_TryGiveAmuletCoin (the match-call registration and Amulet Coin gift), _MomHealsParty, _SeeYouHoney, and _DidYouMeetProfBirch -- every branch reachable only after story-progression flags/vars this port doesn't yet set change from their fresh-save defaults.",
           "rust_target": "crates/pokeemerald-rs/src/overworld/npc_scripts.rs",
           "spec": "I-3",
           "status": "stubbed"
@@ -11598,6 +11598,14 @@
       "status": "pending"
     },
     "data/scripts/std_msgbox.inc": {
+      "artifacts": {
+        "Std_MsgboxDefault": {
+          "reason": "message NULL/waitmessage/waitbuttonpress/return (std_msgbox.inc:18-22), the exact reference semantics issue #410 named: waitbuttonpress polls JOY_NEW(A_BUTTON | B_BUTTON) alone (src/scrcmd.c:1323-1336, WaitForAorBPress) -- no clear, no window state touched -- after waitmessage has already confirmed the printer itself is done. Modelled end to end as NpcDialog::with_waitbuttonpress (crate::overworld::dialog): once the printer reaches Token::End, NpcDialog::tick holds the box open with its last printed frame untouched -- no TickEvent::Cleared, no post-clear reveal delay -- until a confirm edge lands, closing on that same tick. Applied automatically by NpcDialog::from_pack/open_default, the constructors every real field NPC dialog (currently Mom's, data/scripts/players_house.inc#PlayersHouse_1F_EventScript_Mom) opens through, replacing the port's old synthetic-trailing-{P} stand-in, which wrongly cleared the box and paid a reveal delay. Std_MsgboxNPC/Std_MsgboxSign's own extra lock/faceplayer/release(all) framing is not a separate artifact here -- this port's own lock-equivalent (movement freeze while a dialog is open) and interaction gating already live in crate::flow::overworld_phase, untouched by this fix.",
+          "rust_target": "crates/pokeemerald-rs/src/overworld/dialog.rs",
+          "spec": "I-3",
+          "status": "rewritten"
+        }
+      },
       "category": "data.script",
       "kind": "file",
       "spec_owner": "06-engine",
