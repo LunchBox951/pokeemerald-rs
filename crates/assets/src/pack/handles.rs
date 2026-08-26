@@ -32,7 +32,8 @@ impl<'a> PaletteRef<'a> {
     #[must_use]
     pub fn color(&self, index: usize) -> Option<u16> {
         let start = index.checked_mul(2)?;
-        let bytes = self.raw.get(start..start + 2)?;
+        let end = start.checked_add(2)?;
+        let bytes = self.raw.get(start..end)?;
         Some(u16::from_le_bytes([bytes[0], bytes[1]]))
     }
 
@@ -97,4 +98,25 @@ pub struct WindowFrameHandle<'a> {
     pub tiles: ImageRef<'a>,
     /// The frame's 16-colour palette.
     pub palette: PaletteRef<'a>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::PaletteRef;
+
+    #[test]
+    fn palette_color_returns_none_when_range_end_overflows() {
+        // `index.checked_mul(2)` succeeds here (`usize::MAX - 1`), so a
+        // naive `start + 2` on the following line overflows `usize` before
+        // `.get()` ever gets a chance to reject the out-of-range access —
+        // panicking in overflow-checked builds and wrapping in release,
+        // contradicting `color`'s documented "`None` if out of range"
+        // contract (issue #402).
+        let palette = PaletteRef {
+            color_count: 1,
+            raw: &[0x34, 0x12],
+        };
+
+        assert_eq!(palette.color(usize::MAX / 2), None);
+    }
 }
