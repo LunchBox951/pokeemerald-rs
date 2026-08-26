@@ -62,6 +62,7 @@
 //! --name boot-to-main-menu`.
 
 use std::error::Error;
+use std::ffi::{OsStr, OsString};
 use std::fmt;
 use std::process::ExitCode;
 
@@ -413,24 +414,57 @@ pub enum Command {
 /// arguments is given one (or `e2e` is given a stray/duplicate token),
 /// [`XtaskError::MissingSuiteValue`] if `e2e --suite` has no value, and
 /// [`XtaskError::InvalidSuite`] for an unknown suite name.
-pub fn parse(args: &[String]) -> Result<Command, XtaskError> {
+pub fn parse(args: &[OsString]) -> Result<Command, XtaskError> {
     let Some(subcommand) = args.first() else {
         return Err(XtaskError::UnknownCommand(String::new()));
     };
     let rest = &args[1..];
 
-    match subcommand.as_str() {
-        "extract" => no_args(rest).map(|()| Command::Extract),
+    // An undecodable subcommand is simply not one of the five names below,
+    // so it takes the same path any other unknown name does. Named lossily
+    // because the message exists to show the developer what they typed.
+    let Some(subcommand) = subcommand.to_str() else {
+        return Err(XtaskError::UnknownCommand(
+            subcommand.to_string_lossy().into_owned(),
+        ));
+    };
+
+    match subcommand {
+        // The one subcommand whose arguments are *paths*. Its values stay
+        // `OsString` end to end (see `parse_gen_rom_profile`).
         "gen-rom-profile" => {
             parse_gen_rom_profile(rest).map(|options| Command::GenRomProfile { options })
         }
+        // Every other subcommand's arguments are option names and fixed
+        // enum spellings -- `--scene title`, `--suite smoke`. None of them
+        // can be non-UTF-8 and still be valid, so they are decoded once
+        // here and the parsers below keep taking `&str`.
+        "extract" => no_args(&decode(rest)?).map(|()| Command::Extract),
         "record-snapshot" => {
-            parse_record_snapshot(rest).map(|scene| Command::RecordSnapshot { scene })
+            parse_record_snapshot(&decode(rest)?).map(|scene| Command::RecordSnapshot { scene })
         }
-        "scenario" => parse_scenario(rest).map(|name| Command::Scenario { name }),
-        "e2e" => parse_e2e(rest).map(|(suite, release)| Command::E2e { suite, release }),
+        "scenario" => parse_scenario(&decode(rest)?).map(|name| Command::Scenario { name }),
+        "e2e" => parse_e2e(&decode(rest)?).map(|(suite, release)| Command::E2e { suite, release }),
         other => Err(XtaskError::UnknownCommand(other.to_owned())),
     }
+}
+
+/// Decode a subcommand's arguments, for the subcommands whose arguments are
+/// all option names and fixed enum spellings.
+///
+/// # Errors
+///
+/// [`XtaskError::UnexpectedArg`] naming the token, lossily, if any of them
+/// is not UTF-8. That is the same answer these parsers give any token they
+/// do not recognise, and an undecodable one is never a name they know.
+fn decode(rest: &[OsString]) -> Result<Vec<String>, XtaskError> {
+    rest.iter()
+        .map(|arg| {
+            arg.to_str()
+                .map(str::to_owned)
+                .ok_or_else(|| XtaskError::UnexpectedArg(arg.to_string_lossy().into_owned()))
+        })
+        .collect()
 }
 
 /// Reject any trailing arguments for a subcommand that accepts none.
@@ -474,26 +508,45 @@ fn parse_record_snapshot(rest: &[String]) -> Result<Scene, XtaskError> {
 /// `--rom <path>`, an optional `--out <file>`, and an optional
 /// `--map <file>`.
 ///
+/// Takes [`OsString`]s and keeps every *value* as one. This is the only
+/// subcommand whose arguments are paths rather than fixed names, so it is
+/// the only one that can be handed bytes no `String` holds — and a path the
+/// filesystem accepts must not be a path the generator refuses.
+///
 /// # Errors
 ///
 /// [`XtaskError::MissingOptionValue`] if `--rom` is absent or any option
-/// has no value, [`XtaskError::UnexpectedArg`] for any other token.
-fn parse_gen_rom_profile(rest: &[String]) -> Result<gen_rom_profile::Options, XtaskError> {
+/// has no value, [`XtaskError::UnexpectedArg`] for any other token,
+/// including one in option-name position that is not UTF-8 (it is not a
+/// name this subcommand knows).
+fn parse_gen_rom_profile(rest: &[OsString]) -> Result<gen_rom_profile::Options, XtaskError> {
     let mut rom: Option<std::path::PathBuf> = None;
     let mut out: Option<std::path::PathBuf> = None;
     let mut map: Option<std::path::PathBuf> = None;
     let mut i = 0;
     while i < rest.len() {
-        let slot = match rest[i].as_str() {
-            "--rom" if rom.is_none() => &mut rom,
-            "--out" if out.is_none() => &mut out,
-            "--map" if map.is_none() => &mut map,
-            other => return Err(XtaskError::UnexpectedArg(other.to_owned())),
+        // Only the option *name* is matched as text; the value beside it is
+        // never decoded. A ROM, an output, or a map whose name is not UTF-8
+        // is a path `PathBuf` can hold and the filesystem accepts, so the
+        // generator must be able to take it -- the shipped `--import-rom`
+        // CLI is `OsStr`-clean for the same reason.
+        let named = |arg: &OsStr| -> Option<&'static str> {
+            match arg.to_str()? {
+                "--rom" => Some("--rom"),
+                "--out" => Some("--out"),
+                "--map" => Some("--map"),
+                _ => None,
+            }
         };
-        let name = match rest[i].as_str() {
-            "--rom" => "gen-rom-profile --rom",
-            "--out" => "gen-rom-profile --out",
-            _ => "gen-rom-profile --map",
+        let (slot, name) = match named(&rest[i]) {
+            Some("--rom") if rom.is_none() => (&mut rom, "gen-rom-profile --rom"),
+            Some("--out") if out.is_none() => (&mut out, "gen-rom-profile --out"),
+            Some("--map") if map.is_none() => (&mut map, "gen-rom-profile --map"),
+            _ => {
+                return Err(XtaskError::UnexpectedArg(
+                    rest[i].to_string_lossy().into_owned(),
+                ))
+            }
         };
         let value = rest
             .get(i + 1)
@@ -686,13 +739,17 @@ fn dispatch(cmd: &Command) -> Result<(), XtaskError> {
 ///
 /// Propagates any [`XtaskError`] from [`parse`], and (until the subcommands are
 /// implemented) [`XtaskError::NotImplemented`] from [`dispatch`].
-pub fn run(args: &[String]) -> Result<(), XtaskError> {
+pub fn run(args: &[OsString]) -> Result<(), XtaskError> {
     let cmd = parse(args)?;
     dispatch(&cmd)
 }
 
 fn main() -> ExitCode {
-    let args: Vec<String> = std::env::args().skip(1).collect();
+    // `args_os`, not `args`: the latter panics on an argument that is not
+    // UTF-8, and `gen-rom-profile` takes paths the filesystem may spell in
+    // bytes no `String` can hold. The shipped binary reads its argv the
+    // same way (`pokeemerald_rs`'s `main`).
+    let args: Vec<OsString> = std::env::args_os().skip(1).collect();
     match run(&args) {
         Ok(()) => ExitCode::SUCCESS,
         Err(err) => {
@@ -705,12 +762,12 @@ fn main() -> ExitCode {
 #[cfg(test)]
 mod tests {
     use super::{
-        extract, gen_rom_profile, parse, run, Command, ScenarioName, Scene, Suite, XtaskError,
-        USAGE,
+        extract, gen_rom_profile, parse, run, Command, OsString, ScenarioName, Scene, Suite,
+        XtaskError, USAGE,
     };
 
-    fn args(parts: &[&str]) -> Vec<String> {
-        parts.iter().map(|s| (*s).to_owned()).collect()
+    fn args(parts: &[&str]) -> Vec<OsString> {
+        parts.iter().map(|s| OsString::from(*s)).collect()
     }
 
     #[test]
@@ -769,6 +826,75 @@ mod tests {
         ));
         assert!(matches!(
             parse(&args(&["gen-rom-profile", "--wat", "a"])),
+            Err(XtaskError::UnexpectedArg(_))
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn gen_rom_profile_paths_survive_bytes_no_string_can_hold() {
+        // A ROM, an output, and a map whose names are not UTF-8. The
+        // filesystem accepts them and `PathBuf` holds them, so the
+        // generator has to take them -- and the option *names* beside them
+        // are still matched as text.
+        use std::os::unix::ffi::{OsStrExt as _, OsStringExt as _};
+
+        let rom = OsString::from_vec(b"/tmp/\xff\xfe-rom.gba".to_vec());
+        let out = OsString::from_vec(b"/tmp/\xff\xfe-out.rs".to_vec());
+        let map = OsString::from_vec(b"/tmp/\xff\xfe.map".to_vec());
+        assert!(rom.to_str().is_none(), "the fixture must be undecodable");
+
+        let cmd = parse(&[
+            OsString::from("gen-rom-profile"),
+            OsString::from("--rom"),
+            rom.clone(),
+            OsString::from("--out"),
+            out.clone(),
+            OsString::from("--map"),
+            map.clone(),
+        ])
+        .expect("undecodable paths are still valid paths");
+
+        let Command::GenRomProfile { options } = cmd else {
+            panic!("expected gen-rom-profile");
+        };
+        assert_eq!(options.rom.as_os_str().as_bytes(), rom.as_bytes());
+        assert_eq!(
+            options.out.expect("an --out").as_os_str().as_bytes(),
+            out.as_bytes()
+        );
+        assert_eq!(
+            options.map.expect("a --map").as_os_str().as_bytes(),
+            map.as_bytes()
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_undecodable_option_name_is_an_unexpected_arg_not_a_panic() {
+        // The other half: a token in *option-name* position that is not
+        // UTF-8 is simply not a name this subcommand knows, and it must be
+        // reported rather than panicked over.
+        use std::os::unix::ffi::OsStringExt as _;
+
+        assert!(matches!(
+            parse(&[
+                OsString::from("gen-rom-profile"),
+                OsString::from_vec(b"--\xff".to_vec()),
+                OsString::from("a"),
+            ]),
+            Err(XtaskError::UnexpectedArg(_))
+        ));
+        assert!(matches!(
+            parse(&[OsString::from_vec(b"extr\xffact".to_vec())]),
+            Err(XtaskError::UnknownCommand(_))
+        ));
+        assert!(matches!(
+            parse(&[
+                OsString::from("e2e"),
+                OsString::from("--suite"),
+                OsString::from_vec(b"smo\xffke".to_vec()),
+            ]),
             Err(XtaskError::UnexpectedArg(_))
         ));
     }
