@@ -12,6 +12,7 @@ Read this file for workspace-wide Rust conventions and responsibility routing. C
 - Use concrete per-crate error enums. Do not add `anyhow` to library crates.
 - Document public surfaces with `///`. Keep unit tests beside code and integration tests under `<crate>/tests/`.
 - Search every caller before changing a shared API. Keep caller-specific behaviour explicit at its owning boundary instead of hiding it in a generic default.
+- Make every regression test fail against the unfixed behaviour and exercise the actual failure boundary, not merely a nearby input.
 
 ## Ownership
 
@@ -32,6 +33,7 @@ Read this file for workspace-wide Rust conventions and responsibility routing. C
 - Graphics flow from `assets` through `rendering`, then through `platform` presentation into the application crate.
 - Music flows from `xtask` extraction through `assets` schemas, `audio` synthesis, `platform` transport, and the application crate's scene integration.
 - Game behaviour flows from canonical data in `assets` into reusable mechanics in `engine` and `battle`, then into playable reachability in `pokeemerald-rs`.
+- When a task asks for a gameplay entry point or reachability, trace the reusable mechanic through its production caller in `pokeemerald-rs`; do not stop at the crate-local implementation.
 - Headless validation in `xtask` must drive the same application and subsystem paths used by the native binary.
 
 Search within the owning crate after selecting it. Read neighbouring crate documentation only when the task crosses one of these seams.
