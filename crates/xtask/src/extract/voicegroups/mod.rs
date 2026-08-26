@@ -70,7 +70,7 @@
 //! 5. Each resolved group is [`encode::encode_voice_group`]d to
 //!    `crates/assets/src/audio/voicegroup.rs`'s exact wire shape (this
 //!    crate cannot depend on that one -- see `encode`'s module docs) and
-//!    pushed as a [`crate::extract::pack::PackKind::Raw`] entry under
+//!    pushed as a [`pack_format::EntryKind::Raw`] entry under
 //!    `audio/voicegroup/<label>`.
 //!
 //! # Scope: `MUS_TITLE`'s own dependency tree only
@@ -98,14 +98,14 @@
 
 mod encode;
 mod error;
-mod parser;
+pub(crate) mod parser;
 mod resolve;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use super::pack::{PackEntry, PackKind, PackWriter};
 use super::{read_text, ExtractError};
+use pack_format::PackWriter;
 use parser::RawVoiceGroup;
 
 pub(crate) use error::VoiceGroupError;
@@ -114,8 +114,8 @@ pub(crate) use error::VoiceGroupError;
 /// `VOICE`/key-split-table command byte addresses a slot in `0..=127`.
 /// Duplicated from `crates/assets/src/audio/voicegroup.rs`'s
 /// `VOICE_SLOT_COUNT` rather than imported (this crate never depends on
-/// `crates/assets` -- see `crate::extract::pack`'s module docs).
-pub(super) const VOICE_SLOT_COUNT: usize = 128;
+/// `crates/assets` -- see `pack_format`'s module docs).
+pub(crate) const VOICE_SLOT_COUNT: usize = 128;
 
 /// `MUS_TITLE`'s own voicegroup label -- see the module docs' "Why
 /// `MUS_TITLE`".
@@ -125,7 +125,7 @@ const TOP_LEVEL_LABEL: &str = "title";
 /// declared label, alongside the path (relative to `sound/voicegroups/`,
 /// forward-slashed) each one was parsed from, keyed the same way --
 /// see that function's own docs for why both maps are needed.
-type LabelIndex = (HashMap<String, RawVoiceGroup>, HashMap<String, String>);
+pub(crate) type LabelIndex = (HashMap<String, RawVoiceGroup>, HashMap<String, String>);
 
 /// Recursively collect every `*.inc` file under `dir`, sorted by full path
 /// (deterministic regardless of `read_dir`'s unspecified order -- mirrors
@@ -166,7 +166,7 @@ fn collect_inc_files_sorted(dir: &Path) -> Result<Vec<PathBuf>, ExtractError> {
 /// walks. A label need not match its filename (e.g. `drumsets/rs.inc`
 /// declares `rs_drumset`), so this mapping can't be reconstructed from
 /// `raw_groups` alone.
-fn build_label_index(upstream: &Path) -> Result<LabelIndex, ExtractError> {
+pub(crate) fn build_label_index(upstream: &Path) -> Result<LabelIndex, ExtractError> {
     let dir = upstream.join("sound/voicegroups");
     let mut raw_groups: HashMap<String, RawVoiceGroup> = HashMap::new();
     let mut label_paths: HashMap<String, PathBuf> = HashMap::new();
@@ -287,11 +287,10 @@ pub(super) fn extract_voicegroups(
     .map_err(ExtractError::VoiceGroup)?;
 
     for group in &groups {
-        writer.push(PackEntry {
-            id: resolve::voice_group_pack_id(&group.label),
-            kind: PackKind::Raw,
-            payload: encode::encode_voice_group(group),
-        });
+        writer.push(pack_format::raw_entry(
+            resolve::voice_group_pack_id(&group.label),
+            encode::encode_voice_group(group),
+        ));
     }
     Ok(())
 }
@@ -302,7 +301,7 @@ mod tests {
         build_label_index, collect_inc_files_sorted, extract_voicegroups, link_order_successors,
         TOP_LEVEL_LABEL,
     };
-    use crate::extract::pack::PackWriter;
+    use pack_format::PackWriter;
 
     // Real-checkout tests: see `crate::extract`'s own test module docs on
     // why these are `#[ignore]`d and how to run them.

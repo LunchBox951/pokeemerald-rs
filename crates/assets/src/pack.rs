@@ -5,9 +5,13 @@
 //! local, gitignored `pokeemerald/` checkout and writes a deterministic,
 //! versioned pack file — tileset tile graphics, palettes, and player/NPC
 //! sprite sheets, keyed by normalized asset ids (see that module's docs for
-//! the exact format and id scheme; this module is its read side and
-//! intentionally mirrors it rather than sharing code, so the two crates
-//! stay decoupled — `xtask` never depends on `assets`, and vice versa).
+//! the id scheme). This module is its read side.
+//!
+//! The container format belongs to [`pack_format`]: the layout, its
+//! constants, the writer `xtask::extract` drives, and the directory parser
+//! this module calls. Both sides used to spell that layout out separately so
+//! `xtask` and `assets` stayed decoupled; a shared, dependency-free format
+//! crate keeps them decoupled and leaves one file to change.
 //!
 //! The pack itself is **never committed, never a CI artifact, never
 //! embedded in a binary** (owner decision, Discussion #71). It exists only
@@ -37,7 +41,9 @@
 //! decoding handle: `crate::map_layouts`'s `LayoutGrid`/`BorderGrid` own the
 //! decode, this crate's pack loader stays decoupled from it (same rationale
 //! as `xtask::extract`/`crates::assets::pack` staying decoupled from each
-//! other — see this module's docs). [`AssetPack::font`] reaches a Latin
+//! other; see this module's docs). [`AssetPack::entries`] walks the raw
+//! directory for callers that need the pack's contents rather than one
+//! asset. [`AssetPack::font`] reaches a Latin
 //! font's glyph sheet (S-4, issue #114) as a
 //! [`FontImageRef`] bound to its [`FontId`], with
 //! [`crate::fonts::FontGlyphSheet`] owning the per-glyph decode.
@@ -59,20 +65,15 @@
 //! by its full id (used directly for e.g. `title/image/*` entries, which
 //! have no bundling handle of their own).
 //!
-//! # Format (mirrors `xtask::extract::pack`'s write side — version 1)
+//! # Format
 //!
-//! ```text
-//! Header:   magic: [u8; 8] = b"PKMRPACK", format_version: u32, entry_count: u32
-//! Directory (entry_count entries, sorted ascending by id):
-//!   id_len: u16, id: [u8; id_len], kind: u8, offset: u64, length: u64,
-//!   + kind-specific fixed metadata (Image: width/height/bit_depth;
-//!     Palette: color_count; Raw: none)
-//! Payload region: every entry's payload bytes, concatenated in directory order.
-//! ```
+//! [`pack_format`]'s crate docs are the spec: the header/directory layout,
+//! the per-kind metadata, the id scheme, and the writer's determinism
+//! rules. This module used to restate it. It no longer does.
 //!
 //! # Module layout
 //!
-//! [`error`] (`PackError`), [`format`] (the binary layout + parser), and
+//! [`error`] (`PackError`), [`format`] (the [`pack_format`] seam), and
 //! [`handles`] (the borrowed typed views) are split out one-concept-per-file
 //! `(oop-boundaries)`; this file is just [`AssetPack`] itself — loading and
 //! the typed accessor methods.
@@ -87,15 +88,10 @@ use crate::audio::{Sample, SampleId, Song, VoiceGroup, VoiceGroupId};
 use crate::fonts::{FontId, FontImageRef};
 
 pub use error::PackError;
-pub use format::{EntryKind, FORMAT_VERSION, MAGIC};
+pub use format::{DirectoryEntry, EntryKind, FORMAT_VERSION, MAGIC};
 pub use handles::{ImageRef, PaletteRef, TilesetHandle, WindowFrameHandle};
 
-use format::Entry;
-
-/// The pack's location, relative to the repository root — must match
-/// `xtask::extract::OUTPUT_RELATIVE_PATH` exactly (duplicated rather than
-/// shared, per this module's docs on why the two crates stay decoupled).
-const OUTPUT_RELATIVE_PATH: &str = "assets-pack/pokeemerald.pack";
+use format::kind_label;
 
 /// Every selectable text-window border frame is a 3x3 grid of 8x8 tiles —
 /// a 24x24 source sheet (upstream `sWindowFrames`,
@@ -121,29 +117,29 @@ const MESSAGE_BOX_HEIGHT: u32 = 16;
 #[derive(Debug)]
 pub struct AssetPack {
     bytes: Vec<u8>,
-    entries: Vec<Entry>,
+    entries: Vec<DirectoryEntry>,
 }
 
 impl AssetPack {
-    /// The pack's default location: `<repo root>/assets-pack/pokeemerald.pack`,
-    /// computed from this crate's own manifest directory (robust regardless
-    /// of the caller's current working directory — `cargo test` in
-    /// particular runs each crate's tests with that crate's own directory
-    /// as `cwd`, not the workspace root).
+    /// The pack's default location, resolved at runtime by
+    /// [`pack_format::default_pack_path`] (see it for the full order):
+    /// `$POKEEMERALD_PACK`, then the OS user-data directory, then the
+    /// running executable's directory, then this checkout's
+    /// `assets-pack/pokeemerald.pack`.
     ///
-    /// # Panics
+    /// It used to be only that last rung, derived from
+    /// `env!("CARGO_MANIFEST_DIR")`. That is the *build* machine's checkout,
+    /// so a distributed binary went looking for the pack on a CI runner's
+    /// disk. The earlier rungs are what a shipped binary and its ROM
+    /// importer need; the compile-time path stays last so a developer
+    /// checkout with nothing configured behaves exactly as before.
     ///
-    /// Never in practice: `crates/assets` (this crate's own manifest
-    /// directory, `env!("CARGO_MANIFEST_DIR")`) is always exactly two path
-    /// components under the repository root in this workspace's fixed
-    /// layout.
+    /// Never fails: the last rung always yields a path, and a path that does
+    /// not exist surfaces as [`PackError::NotFound`] from
+    /// [`load`](Self::load).
     #[must_use]
     pub fn default_path() -> PathBuf {
-        Path::new(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .and_then(Path::parent)
-            .expect("crates/assets is always two levels under the repo root")
-            .join(OUTPUT_RELATIVE_PATH)
+        pack_format::default_pack_path()
     }
 
     /// Load the pack from [`default_path`](Self::default_path).
@@ -155,6 +151,29 @@ impl AssetPack {
         Self::load(&Self::default_path())
     }
 
+    /// Load the pack `cargo xtask extract` writes into *this checkout*,
+    /// [`pack_format::repo_pack_path`] — deliberately not
+    /// [`load_default`](Self::load_default).
+    ///
+    /// For gates that mean to validate the checkout rather than to play the
+    /// game. [`default_path`](Self::default_path)'s first two rungs are the
+    /// two destinations `pokeemerald-rs --import-rom` writes to, so a gate
+    /// resolving through it reads whichever pack the developer has
+    /// installed: an extractor regression can pass against an older user
+    /// pack, and a stale user pack can fail a checkout that is fine
+    /// `(test-ratchet)`. `xtask::extract::run` refuses the resolver for the
+    /// write side for the same reason; this is the read side of that
+    /// refusal.
+    ///
+    /// # Errors
+    ///
+    /// See [`load`](Self::load). [`PackError::NotFound`] here means exactly
+    /// "run `cargo xtask extract` first", with no ambiguity about which
+    /// pack was looked for.
+    pub fn load_repo() -> Result<Self, PackError> {
+        Self::load(&pack_format::repo_pack_path())
+    }
+
     /// Load and parse a pack from `path`.
     ///
     /// # Errors
@@ -164,7 +183,7 @@ impl AssetPack {
     /// for any other I/O failure; [`PackError::BadMagic`],
     /// [`PackError::UnsupportedVersion`], [`PackError::Truncated`],
     /// or [`PackError::BadEntryKind`] if the file exists but is not a
-    /// well-formed version-1 pack.
+    /// well-formed pack at [`FORMAT_VERSION`].
     pub fn load(path: &Path) -> Result<Self, PackError> {
         let bytes = std::fs::read(path).map_err(|e| {
             if e.kind() == std::io::ErrorKind::NotFound {
@@ -173,7 +192,7 @@ impl AssetPack {
                 PackError::ReadFailed(path.to_path_buf(), e.to_string())
             }
         })?;
-        let entries = format::parse_directory(&bytes)?;
+        let entries = pack_format::parse_directory(&bytes)?;
         Ok(Self { bytes, entries })
     }
 
@@ -189,16 +208,27 @@ impl AssetPack {
         &self.bytes
     }
 
+    /// Walk the directory: every entry's id, kind metadata, and the
+    /// `offset`/`length` its payload occupies in [`bytes`](Self::bytes), in
+    /// the id-sorted order the format guarantees.
+    ///
+    /// The typed accessors reach one known asset. This is for callers that
+    /// need to know what a pack *contains*: comparing two packs entry by
+    /// entry, or auditing coverage, with no lookup id to start from.
+    pub fn entries(&self) -> impl Iterator<Item = &DirectoryEntry> {
+        self.entries.iter()
+    }
+
     /// Binary-search the (id-sorted, per the format's determinism
     /// guarantee) directory for `id`.
-    fn find(&self, id: &str) -> Result<&Entry, PackError> {
+    fn find(&self, id: &str) -> Result<&DirectoryEntry, PackError> {
         self.entries
             .binary_search_by(|e| e.id.as_str().cmp(id))
             .map(|i| &self.entries[i])
             .map_err(|_| PackError::UnknownAsset(id.to_owned()))
     }
 
-    fn payload(&self, entry: &Entry) -> &[u8] {
+    fn payload(&self, entry: &DirectoryEntry) -> &[u8] {
         &self.bytes[entry.offset..entry.offset + entry.length]
     }
 
@@ -586,7 +616,7 @@ fn wrong_kind(id: &str, expected: &'static str, actual: EntryKind) -> PackError 
     PackError::WrongKind {
         id: id.to_owned(),
         expected,
-        actual: actual.label(),
+        actual: kind_label(actual),
     }
 }
 

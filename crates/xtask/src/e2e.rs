@@ -20,7 +20,7 @@
 //! (issue #109). [`check_title_screen`] is the I-2 addition: when a local
 //! asset pack *is* present (`cargo xtask extract` has been run), it
 //! additionally loads the real title screen
-//! (`pokeemerald_rs::title::load_default`) and asserts, at two fixed frame
+//! (`pokeemerald_rs::title::load_repo`) and asserts, at two fixed frame
 //! indices (0 and 20, issue #116's OBJ sprites / alpha blend / cloud scroll
 //! slice), that: composing the same frame index twice is pixel-identical
 //! (deterministic), each composed frame is non-blank, and frame 0 differs
@@ -29,6 +29,23 @@
 //! docs) -- entirely separately from `App`, so it neither depends on nor
 //! perturbs the headless `App` run above. Without a local pack, this step is
 //! a no-op.
+//!
+//! # Which pack "a local asset pack" means
+//!
+//! The *checkout's* pack, `<repo root>/assets-pack/pokeemerald.pack`, always:
+//! both checks load through `pack_format::repo_pack_path` (reached via
+//! `pokeemerald_rs::title::load_repo` and
+//! `pokeemerald_rs::overworld::load_repo_default_room`), never through the
+//! runtime resolver `pack_format::default_pack_path`. That resolver's
+//! earlier rungs -- `$POKEEMERALD_PACK` and the OS user-data directory --
+//! are the two destinations `pokeemerald-rs --import-rom` writes to, so
+//! resolving through it would point this gate at whichever pack the
+//! developer happens to have installed: a broken or missing freshly
+//! extracted pack could pass against an older installed one, and a stale
+//! installed one could fail a checkout that is fine `(test-ratchet)`.
+//! `xtask::extract::run` refuses the resolver on the write side, and
+//! `crate::scenario::run` pins `$POKEEMERALD_PACK` to the same checkout path
+//! for the same reason.
 //!
 //! No real window, audio device, or timer wait is touched -- `Platform`'s
 //! null backend no-ops `wait_for_next_frame` (see its docs) -- so this suite
@@ -179,8 +196,10 @@ pub fn run_smoke() -> Result<(), E2eError> {
 /// pack, do nothing.
 ///
 /// Deliberately independent of `App`/`App::new_headless` above -- it loads
-/// `pokeemerald_rs::title::load_default` directly, so this check can never
-/// perturb (or depend on) the synthetic-scene headless run.
+/// `pokeemerald_rs::title::load_repo` directly, so this check can never
+/// perturb (or depend on) the synthetic-scene headless run. `load_repo`, not
+/// `load_default`: this gate judges the checkout's own pack (module docs'
+/// "Which pack").
 ///
 /// # Errors
 ///
@@ -192,7 +211,7 @@ pub fn run_smoke() -> Result<(), E2eError> {
 /// either check; [`E2eError::TitleFramesNotAnimated`] if both frames pass
 /// but are pixel-identical to each other.
 fn check_title_screen() -> Result<(), E2eError> {
-    let scene = match pokeemerald_rs::title::load_default() {
+    let scene = match pokeemerald_rs::title::load_repo() {
         Ok(scene) => scene,
         Err(err) if err.is_pack_missing() => return Ok(()),
         Err(err) => return Err(E2eError::TitleSceneFailed(err.to_string())),
@@ -229,7 +248,9 @@ fn check_title_screen() -> Result<(), E2eError> {
 }
 
 /// The I-3 smoke addition (issue #126): with a local asset pack present,
-/// load the default overworld room (`pokeemerald_rs::overworld::load_default_room`)
+/// load the default overworld room
+/// (`pokeemerald_rs::overworld::load_repo_default_room` -- the checkout's own
+/// pack, module docs' "Which pack")
 /// and assert the composed frame -- a standing player at a fixed room
 /// position -- is non-blank and deterministic across two `compose` calls, at
 /// each of two different animation ticks (issue #160; see the tick comment
@@ -259,7 +280,7 @@ fn check_overworld_scene() -> Result<(), E2eError> {
     // particular object event's hide-flag state.
     let event_data = pokeemerald_rs::overworld::EventData::default();
 
-    let scene = match pokeemerald_rs::overworld::load_default_room(&event_data) {
+    let scene = match pokeemerald_rs::overworld::load_repo_default_room(&event_data) {
         Ok(scene) => scene,
         Err(err) if err.is_pack_missing() => return Ok(()),
         Err(err) => return Err(E2eError::OverworldSceneFailed(err.to_string())),

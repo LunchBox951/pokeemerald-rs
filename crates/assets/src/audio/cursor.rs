@@ -1,18 +1,22 @@
 //! Shared little-endian byte reader/writer for the audio-pack schemas'
 //! `encode`/`decode` pairs.
 //!
-//! Mirrors `crate::pack::format`'s `Cursor` (same "erroring rather than
-//! panicking on truncation" discipline over untrusted input), extended with
-//! a length-prefixed string helper (voicegroup/song entries reference other
-//! pack entries by their normalized string id) and a matching write-side
-//! [`Writer`]. `crate::pack::format` has no write side of its own — packs
-//! are written by `xtask::extract`, a separate, deliberately decoupled crate
-//! (see `crate::pack`'s module docs). This crate's own `Sample::encode`,
-//! `Song::encode`, and `VoiceGroup::encode` are the only callers of
-//! [`Writer`]; `xtask::extract` maintains its own independent encoders
+//! Follows the same discipline as `pack_format`'s own directory cursor
+//! (erroring rather than panicking on truncation over untrusted input),
+//! extended with a length-prefixed string helper (voicegroup/song entries
+//! reference other pack entries by their normalized string id) and a
+//! matching write-side [`Writer`].
+//!
+//! This is the *payload* cursor, not the container one: `pack_format` reads
+//! and writes the pack's header and directory, while these schemas decode
+//! and encode the bytes inside one `Raw` entry. The two never share a
+//! buffer position, so they stay separate types.
+//!
+//! This crate's own `Sample::encode`, `Song::encode`, and
+//! `VoiceGroup::encode` are the only callers of [`Writer`];
+//! `xtask::extract` maintains its own independent encoders
 //! (`midi::encode`, `voicegroups::encode`, `audio_samples`) rather than
-//! calling into these, so, unlike `pack::format`, this cursor needs both
-//! directions.
+//! calling into these, so this cursor needs both directions.
 
 use super::error::AudioError;
 

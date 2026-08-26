@@ -893,7 +893,8 @@ impl OverworldScene {
 /// Load the pack from its default location and decode
 /// [`DEFAULT_ROOM_LAYOUT_ID`] out of it, with [`PlayerCharacter::Brendan`]'s
 /// walking sprite and [`DEFAULT_ROOM_MAP_ID`]'s own object events (issue
-/// #161) -- the entry point `xtask`'s smoke e2e check uses.
+/// #161) -- the entry point the running game uses. Checkout gates take
+/// [`load_repo_default_room`] instead.
 ///
 /// `event_data` is threaded down to [`OverworldScene::from_pack`] (issue
 /// #248) -- callers building the game's real intro handoff have no
@@ -910,6 +911,43 @@ impl OverworldScene {
 /// (real-pack-only) error cases.
 pub fn load_default_room(event_data: &EventData) -> Result<OverworldScene, OverworldSceneError> {
     let pack = AssetPack::load_default()?;
+    let header = assets::MapHeaderTable::new().header(DEFAULT_ROOM_MAP_ID)?;
+    let layout = assets::LayoutTable::new().layout(LayoutId(DEFAULT_ROOM_LAYOUT_ID))?;
+    let events = MapEventsTable::new().resolve(DEFAULT_ROOM_MAP_ID)?;
+    OverworldScene::from_pack(
+        &pack,
+        header,
+        layout,
+        PlayerCharacter::Brendan,
+        events,
+        event_data,
+    )
+}
+
+/// [`load_default_room`], pinned to the checkout's own extracted pack
+/// ([`AssetPack::load_repo`]) instead of the runtime resolution order --
+/// the overworld half of [`crate::title::load_repo`], and for the same
+/// reason.
+///
+/// `xtask`'s smoke e2e must judge the pack the checkout just produced.
+/// [`AssetPack::default_path`]'s earlier rungs are the two destinations
+/// `pokeemerald-rs --import-rom` writes to, so resolving through them would
+/// let an installed user pack shadow the checkout: a broken freshly
+/// extracted pack could pass the gate against an older installed one, and a
+/// stale installed one could fail a checkout that is fine `(test-ratchet)`.
+/// Players never reach this; the shipped binary loads through
+/// [`load_default_room`].
+///
+/// # Errors
+///
+/// [`OverworldSceneError::Pack`] with
+/// [`OverworldSceneError::is_pack_missing`] true if the checkout has no
+/// extracted pack yet (`./init.sh` then `cargo xtask extract`); otherwise
+/// as [`load_default_room`].
+pub fn load_repo_default_room(
+    event_data: &EventData,
+) -> Result<OverworldScene, OverworldSceneError> {
+    let pack = AssetPack::load_repo()?;
     let header = assets::MapHeaderTable::new().header(DEFAULT_ROOM_MAP_ID)?;
     let layout = assets::LayoutTable::new().layout(LayoutId(DEFAULT_ROOM_LAYOUT_ID))?;
     let events = MapEventsTable::new().resolve(DEFAULT_ROOM_MAP_ID)?;

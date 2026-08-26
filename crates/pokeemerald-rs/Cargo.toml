@@ -12,7 +12,7 @@ workspace = true
 # Workspace-local path dependencies, not external crates -- `minimal-deps`
 # owner approval does not apply (see `xtask`'s `Cargo.toml` for the identical
 # reasoning). `assets` is the I-2 title-screen pack loader
-# (`crate::title::load_default`); it is itself dependency-free (std-only), so
+# (`crate::title::load_default`); it depends only on the std-only `pack-format`, so
 # adding it here does not drag anything new into `xtask`'s `smoke`-gated
 # `pokeemerald-rs` dependency either. `engine` (I-3, issue #126) supplies
 # `overworld::PlayerState`/`Direction` -- the tile position/facing/step-progress
@@ -33,8 +33,31 @@ battle = { path = "../battle" }
 # nothing new into the build.
 audio = { path = "../audio" }
 engine = { path = "../engine" }
+# `pack-format` (S-4, issue #122) resolves where `--import-rom` writes:
+# `crate::import_rom` reads `PACK_PATH_ENV`/`user_pack_path` so the importer
+# and the loader agree on one location. Workspace-local and std-only, and
+# `assets` already depends on it, so nothing new enters the build.
+pack-format = { path = "../pack-format" }
 platform = { path = "../platform" }
 rendering = { path = "../rendering" }
+# `rom-import` (S-4, Discussion #71 policy C, issue #122) is the ROM reader
+# `--import-rom` drives. Workspace-local, and it depends only on the
+# std-only `pack-format`, so the shipped binary gains no external crate.
+rom-import = { path = "../rom-import" }
+
+# The one external crate this package names, added with owner approval on
+# PR #372 (`minimal-deps`). `crate::import_rom` has to create the pack's
+# temporary file and rename it into place against a directory it holds
+# open, or a `$POKEEMERALD_PACK` running through a component another
+# account controls can have that component redirected mid-import and the
+# rename lands elsewhere -- on the player's cartridge image, in the worst
+# case. `openat`/`renameat`/`statat` are exposed by no `std` API on any
+# platform, and the alternative was project-owned `unsafe` FFI. Unix-only,
+# `fs` alone of its feature set, and already in this binary's dependency
+# graph through `platform`'s `winit`/`softbuffer`, so the shipped build
+# links nothing it did not link before.
+[target.'cfg(unix)'.dependencies]
+rustix = { version = "1.1", default-features = false, features = ["std", "fs"] }
 
 [dev-dependencies]
 # The same workspace-local `assets` crate with its test-only seam enabled
@@ -43,3 +66,7 @@ rendering = { path = "../rendering" }
 # asset pack. Dev-only, so production builds keep the pack-mediated pairing
 # guarantee.
 assets = { path = "../assets", features = ["test-support"] }
+# `pack-format` is a plain dependency now (see above), so it needs no
+# dev-dependency entry: `title`'s tile round-trip test, which proves
+# `title::pack_tile_bytes` is the exact inverse of
+# `pack_format::image_entry_from_tiles`, reaches it through that.

@@ -2,7 +2,7 @@
 //! `voice_keysplit_all` reference a top-level group carries into another
 //! [`ResolvedVoiceGroup`] (cycle-safe, and rejecting a second level of
 //! indirection -- see [`resolve_voice_groups_with_link_successors`]), derives stable
-//! [`crate::extract::pack`] ids for the samples and child groups each slot
+//! [`pack_format`] ids for the samples and child groups each slot
 //! references, and normalizes every group to exactly
 //! [`super::VOICE_SLOT_COUNT`] (128) slots (see [`pad_to_128`]).
 //!
@@ -91,7 +91,7 @@ const PROGRAMMABLE_WAVE_SAMPLE_PREFIX: &str = "ProgrammableWaveData_";
 /// One fully-resolved voicegroup slot: every reference (sample, child
 /// group) has been turned into a stable pack id, and the shape otherwise
 /// mirrors `crates/assets/src/audio/voicegroup.rs`'s `VoiceEntry` exactly
-/// (this crate never depends on `crates/assets` -- see `crate::extract::pack`'s
+/// (this crate never depends on `crates/assets` -- see `pack_format`'s
 /// module docs on why the two crates stay decoupled -- so the shape is
 /// duplicated rather than shared, the same way the pack container format
 /// itself already is).
