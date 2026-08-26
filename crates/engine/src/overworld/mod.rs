@@ -30,8 +30,11 @@
 //!   destination-map-and-warp-id transition, plus the arrival position and
 //!   facing that transition lands on.
 //! - [`object_event`] — object-event hide-flag visibility, the
-//!   player-facing interactive-object lookup, and the visible-object-at-a-tile
-//!   query movement collision consults (issue #161).
+//!   player-facing interactive-object lookup, the visible-object-at-a-tile
+//!   query movement collision consults (issue #161), and
+//!   [`object_event::ObjectEventState`], the one *movable* object-event state
+//!   in this port — a cutscene's own private copy of the `gObjectEvents`
+//!   fields a scripted sequence mutates (S-5, issue #300).
 //! - [`player`] — [`player::PlayerState`], the tile-position/facing/
 //!   sub-tile-step-progress state machine that ties the above together into
 //!   one input-poll-at-a-time `step()` call.
@@ -54,7 +57,10 @@
 //! the facing-tile interactive-object lookup.
 //!
 //! Out of scope (tracked as future overworld slices, not silently
-//! approximated): rendering/camera, NPC/object-event *movement* and AI,
+//! approximated): rendering/camera, object-event movement *tasks* and AI
+//! (the per-movement-type patrols; [`object_event::ObjectEventState`] carries
+//! only the state a cutscene drives by hand, and no spawned-object-event
+//! array exists for the rest of this module's queries to see it through),
 //! script binding of any kind, the bike and running, forced movement (currents,
 //! conveyor slopes, ice sliding), ledges, and every `MB_*` behavior this
 //! module doesn't explicitly name. Where an unported behavior could
@@ -81,7 +87,8 @@ pub use direction::Direction;
 pub use map_runtime::{ConnectedMapData, ConnectionCrossing, MapRuntime, NUM_METATILES_IN_PRIMARY};
 pub use object_event::{
     facing_object_event, initial_facing_direction, object_event_is_in_view,
-    object_event_is_visible, visible_object_event_at, visible_object_events,
+    object_event_is_visible, trainer_facing_movement_type, visible_object_event_at,
+    visible_object_events, ObjectEventState,
 };
 pub use player::{PlayerState, StepOutcome, TilePos, WALK_FRAMES_PER_TILE};
 pub use trainer_sight::trainer_can_see_player;

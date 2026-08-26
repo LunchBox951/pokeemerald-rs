@@ -91,6 +91,51 @@ fn the_start_menu_does_not_open_mid_battle() {
     );
 }
 
+/// A sight-trainer approach cutscene (S-5, issue #300) is not `in_battle()`
+/// -- the fight has not started, and for the icon/walk-up half the *player*
+/// is not `mid_step()` either, only the trainer -- so neither of the two
+/// gates above stops `START` here on its own. Upstream's own
+/// `LockPlayerFieldControls`/`FreezeObjectEvents` pair --
+/// `ConfigureAndSetUpOneTrainerBattle`'s `LockPlayerFieldControls`
+/// (`src/battle_setup.c:1198-1199`) plus `lockfortrainer`'s
+/// `FreezeForApproachingTrainers` (`data/scripts/trainer_battle.inc:1-3`,
+/// `src/scrcmd.c:2193-2208`) -- has no counterpart in this
+/// port's frame-ownership model except this gate: without it, `START` would
+/// open the field start menu out from under the approach, which owns the
+/// frame just as fully as a battle does (`sight_trainer_approach`'s own
+/// module docs).
+#[test]
+fn the_start_menu_does_not_open_mid_sight_trainer_approach() {
+    let temp = TempSave::new("mid-sight-approach-no-save");
+    let mut save_slot = temp.slot();
+
+    let mut phase = new_game_phase();
+    settle(&mut phase);
+    assert!(
+        phase.start_menu_may_open(pressed(Buttons::START)),
+        "the fixture must start somewhere START normally works"
+    );
+
+    phase.begin_synthetic_sight_approach_for_test();
+    assert!(
+        !phase.in_battle(),
+        "an approach has not started its battle yet -- in_battle() alone must not catch this"
+    );
+
+    assert!(
+        !phase.start_menu_may_open(pressed(Buttons::START)),
+        "START must not open the start menu during a sight-trainer approach"
+    );
+    assert!(
+        !phase.advance_start_menu_frame(pressed(Buttons::START), &mut save_slot),
+        "no menu opened, so the frame belongs to the approach"
+    );
+    assert!(
+        !temp.slot().load().status.menu_shows_continue(),
+        "the save file must be untouched -- the last save stands"
+    );
+}
+
 /// The Route 101 scripted first battle (#231) freezes the phase exactly
 /// like a wild one -- same borrowed lead, same consumed RNG draws living
 /// outside the `SaveBlock`s -- so `START` must be refused for the same

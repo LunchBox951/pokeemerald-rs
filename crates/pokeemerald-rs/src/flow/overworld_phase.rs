@@ -32,7 +32,11 @@
 //! interaction trigger and rival-sprite setup, issue #248,
 //! [`OverworldPhase::advance_route103_rival_battle_frame`]),
 //! [`sight_trainer_trigger`] (Route 103's own sight-cone trainers, issue
-//! #264, [`OverworldPhase::advance_sight_trainer_battle_frame`]), and
+//! #264, [`OverworldPhase::advance_sight_trainer_battle_frame`]),
+//! [`sight_trainer_approach`] (the exclamation-mark/walk-up/intro-speech
+//! cutscene between that cone check and the battle it hands off to, S-5
+//! issue #300, [`OverworldPhase::advance_sight_trainer_approach_frame`]),
+//! and
 //! [`frame`] (dialog ticking and frame composition,
 //! [`OverworldPhase::compose_frame`]), [`start_menu`] (the field start
 //! menu's `START` gate and the party/object-event save sync behind its
@@ -55,6 +59,7 @@ mod frame;
 mod input;
 mod placement;
 mod route103_rival_trigger;
+mod sight_trainer_approach;
 mod sight_trainer_trigger;
 mod start_menu;
 mod step;
@@ -400,11 +405,19 @@ pub(crate) struct OverworldPhase {
     /// Which [`assets::trainers::TrainerId`] [`Self::sight_trainer_battle`]
     /// is being fought against, if any -- needed at battle-end to set that
     /// trainer's own `FLAG_TRAINER_FLAGS_START + id` defeated flag on a win
-    /// ([`sight_trainer_trigger`]'s own module docs, item 4). Set the
-    /// instant the battle starts, cleared the instant it ends (win, loss, or
-    /// abort alike), so it is never stale once [`Self::sight_trainer_battle`]
-    /// is `None` again.
+    /// ([`sight_trainer_trigger::SightTrainerLog`]'s neighbouring
+    /// `TRAINER_FLAGS_START`). Set the instant the battle starts, cleared the
+    /// instant it ends (win, loss, or abort alike), so it is never stale once
+    /// [`Self::sight_trainer_battle`] is `None` again.
     sight_trainer_id: Option<assets::trainers::TrainerId>,
+    /// A sight trainer's approach cutscene currently playing out, if any
+    /// (S-5, issue #300) -- the multi-frame sequence between the cone check
+    /// that started it and [`Self::sight_trainer_battle`] it ends in
+    /// ([`sight_trainer_approach`]). `Some` owns the frame outright, like a
+    /// battle does, and is never `Some` at the same time as any battle
+    /// field: the approach hands its own already-built fight over in the
+    /// same call that clears itself.
+    sight_approach: Option<sight_trainer_approach::SightApproach>,
     /// Which sight-trainer refusals have already been logged since the
     /// player last stood outside every sight cone (issue #264 review) --
     /// [`sight_trainer_trigger`]'s own module docs, "One line per cone
@@ -660,6 +673,7 @@ impl OverworldPhase {
             sight_trainer_battle: None,
             sight_trainer_battle_outcome: None,
             sight_trainer_id: None,
+            sight_approach: None,
             sight_trainer_log: sight_trainer_trigger::SightTrainerLog::default(),
         };
         phase.copy_party_and_objects_from_save();
@@ -807,6 +821,7 @@ impl OverworldPhase {
             sight_trainer_battle: None,
             sight_trainer_battle_outcome: None,
             sight_trainer_id: None,
+            sight_approach: None,
             sight_trainer_log: sight_trainer_trigger::SightTrainerLog::default(),
         }
     }
