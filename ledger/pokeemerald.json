@@ -27366,7 +27366,7 @@
           "status": "stubbed"
         },
         "CalculateMonStats": {
-          "reason": "pokemon.c:2814 (CALC_STAT macro), 2823 (CalculateMonStats). The max-HP and CALC_STAT formulas modelled (compute_stats/calc_stat/calc_max_hp) with EVs fixed at 0 (EV tracking/MonGainEVs not modelled this slice) and no Shedinja 1-HP special case.",
+          "reason": "pokemon.c:2814 (CALC_STAT macro), 2823 (CalculateMonStats), 2845-2848 (Shedinja's flat 1 max HP). The max-HP and CALC_STAT formulas modelled (compute_stats/calc_stat/calc_max_hp) with EVs fixed at 0 (EV tracking/MonGainEVs not modelled this slice). Since issue #401, calc_max_hp forces max HP to 1 for SPECIES_SHEDINJA before the ordinary formula runs, at every stat-computation site (construction, level-up recalculation, and party::merge_into_save_pokemon's EV-aware recompute).",
           "rust_target": "crates/battle/src/pokemon.rs",
           "spec": "S-6",
           "status": "stubbed"

@@ -12,10 +12,12 @@
 //!
 //! Out of scope for this slice: EV tracking (every mon this crate builds has
 //! `0` EVs — matching a freshly caught wild mon and an EV-less starting
-//! player mon, both realistic for a first encounter), held items,
-//! non-volatile status conditions, and the Shedinja 1-HP special case in
-//! `CalculateMonStats`. [`compute_stats_with_evs`] is the one crack in
-//! that boundary: the `CALC_STAT`/`CalculateMonStats` formula itself does
+//! player mon, both realistic for a first encounter), held items, and
+//! non-volatile status conditions. Shedinja's 1-HP special case (issue
+//! #401) *is* modelled — see [`calc_max_hp`] for what and
+//! [`SPECIES_SHEDINJA`] for the citation.
+//! [`compute_stats_with_evs`] is the one crack in the EV boundary: the
+//! `CALC_STAT`/`CalculateMonStats` formula itself does
 //! carry an EV parameter, for the sole caller outside this crate that has
 //! real EVs and no [`BattlePokemon`] of its own to attach them to
 //! (`pokeemerald-rs`'s `party::merge_into_save_pokemon`, issue #384) — no
@@ -83,6 +85,12 @@ pub const SPECIES_OLD_UNOWN_B: SpeciesId = SpeciesId(252);
 /// `SPECIES_OLD_UNOWN_Z` (`pokeemerald/include/constants/species.h:281`):
 /// last id of the reserved old-Unown range — see [`SPECIES_OLD_UNOWN_B`].
 pub const SPECIES_OLD_UNOWN_Z: SpeciesId = SpeciesId(276);
+
+/// `SPECIES_SHEDINJA` (`pokeemerald/include/constants/species.h:309`): the
+/// one species `CalculateMonStats` checks to force maximum HP to a flat `1`
+/// (`pokeemerald/src/pokemon.c:2845`-`:2848`), regardless of base HP, HP IV,
+/// HP EV, or level — [`calc_max_hp`] is where this crate mirrors that branch.
+pub const SPECIES_SHEDINJA: SpeciesId = SpeciesId(303);
 
 /// `MIN_LEVEL` (`pokeemerald/include/constants/pokemon.h:145`).
 pub const MIN_LEVEL: u8 = 1;
@@ -278,24 +286,44 @@ fn calc_stat(
 }
 
 /// The max-HP half of `CalculateMonStats` (`pokeemerald/src/pokemon.c`):
-/// `n = 2 * base + hpIV` (`:2851`), then
+/// `if (species == SPECIES_SHEDINJA) { newMaxHP = 1; }` (`:2845`-`:2848`),
+/// else `n = 2 * base + hpIV` (`:2851`), then
 /// `newMaxHP = (((n + hpEV / 4) * level) / 100) + level + 10;` (`:2852`).
 /// HP is never nature-modified
-/// (`ModifyStatByNature` special-cases `statIndex <= STAT_HP`). The Shedinja
-/// 1-HP special case (`species == SPECIES_SHEDINJA`) is not modelled.
-fn calc_max_hp(base: u8, individual_value: u8, effort_value: u8, level: u8) -> u32 {
+/// (`ModifyStatByNature` special-cases `statIndex <= STAT_HP`). Shedinja's
+/// flat `1` bypasses that formula entirely — base HP, IV, EV, and level all
+/// go unread — matching upstream's `if`/`else` shape rather than folding it
+/// into the arithmetic.
+fn calc_max_hp(
+    species: SpeciesId,
+    base: u8,
+    individual_value: u8,
+    effort_value: u8,
+    level: u8,
+) -> u32 {
+    if species == SPECIES_SHEDINJA {
+        return 1;
+    }
     let n = 2 * u32::from(base) + u32::from(individual_value) + u32::from(effort_value) / 4;
     (n * u32::from(level)) / 100 + u32::from(level) + 10
 }
 
-/// Compute a Pokémon's final battle stats from its base stats, level,
-/// nature, and IVs — `CalculateMonStats` (`pokeemerald/src/pokemon.c:2823`)
+/// Compute a Pokémon's final battle stats from its species, base stats,
+/// level, nature, and IVs — `CalculateMonStats` (`pokeemerald/src/pokemon.c:2823`)
 /// with EVs fixed at `0`, because every mon [`BattlePokemon`] builds has `0`
-/// EVs (see the module docs). [`compute_stats_with_evs`] is the same
-/// formula for a caller that has real EVs to feed it.
+/// EVs (see the module docs). `species` exists only to reach
+/// [`calc_max_hp`]'s Shedinja check — every other stat ignores it, exactly
+/// as upstream's `CALC_STAT` macro does. [`compute_stats_with_evs`] is the
+/// same formula for a caller that has real EVs to feed it.
 #[must_use]
-pub fn compute_stats(base: &BaseStats, level: u8, nature: Nature, ivs: Ivs) -> Stats {
-    compute_stats_with_evs(base, level, nature, ivs, Evs::default())
+pub fn compute_stats(
+    species: SpeciesId,
+    base: &BaseStats,
+    level: u8,
+    nature: Nature,
+    ivs: Ivs,
+) -> Stats {
+    compute_stats_with_evs(species, base, level, nature, ivs, Evs::default())
 }
 
 /// [`compute_stats`], but with the `ev / 4` term `CalculateMonStats`
@@ -306,6 +334,7 @@ pub fn compute_stats(base: &BaseStats, level: u8, nature: Nature, ivs: Ivs) -> S
 /// levelled-up stat block consistent with the EVs its record retains.
 #[must_use]
 pub fn compute_stats_with_evs(
+    species: SpeciesId,
     base: &BaseStats,
     level: u8,
     nature: Nature,
@@ -313,7 +342,7 @@ pub fn compute_stats_with_evs(
     evs: Evs,
 ) -> Stats {
     Stats {
-        max_hp: calc_max_hp(base.hp, ivs.hp, evs.hp, level),
+        max_hp: calc_max_hp(species, base.hp, ivs.hp, evs.hp, level),
         attack: calc_stat(
             base.attack,
             ivs.attack,
@@ -497,7 +526,7 @@ impl BattlePokemon {
         let base = dex.species(species)?;
         let experience = experience_for_level(base.growth_rate, level)
             .map_err(|_| BattleError::InvalidLevel(level))?;
-        let stats = compute_stats(base, level, nature, ivs);
+        let stats = compute_stats(species, base, level, nature, ivs);
         let mut slots = Vec::with_capacity(moves.len());
         for move_id in moves {
             let pp = dex.move_data(move_id)?.pp;
@@ -957,7 +986,13 @@ impl BattlePokemon {
         let old_level = self.level;
         let old_max_hp = self.stats.max_hp;
         self.level = new_level;
-        self.stats = compute_stats(&self.base_stats, self.level, self.nature, self.ivs);
+        self.stats = compute_stats(
+            self.species,
+            &self.base_stats,
+            self.level,
+            self.nature,
+            self.ivs,
+        );
         self.current_hp = self
             .current_hp
             .saturating_add(self.stats.max_hp.saturating_sub(old_max_hp));

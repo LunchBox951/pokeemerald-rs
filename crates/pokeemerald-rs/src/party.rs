@@ -345,6 +345,7 @@ fn compute_levelled_up_stats(
 ) -> battle::Stats {
     match dex.species(mon.species()) {
         Ok(base) => battle::compute_stats_with_evs(
+            mon.species(),
             base,
             mon.level(),
             mon.nature(),
@@ -379,6 +380,7 @@ fn zero_ev_max_hp(dex: &Dex, species: u16, level: u8, mon: &BattlePokemon) -> u3
     match dex.species(assets::SpeciesId(species)) {
         Ok(base) => {
             battle::compute_stats_with_evs(
+                assets::SpeciesId(species),
                 base,
                 level,
                 mon.nature(),
@@ -676,9 +678,21 @@ pub(crate) fn merge_into_save_pokemon(
     // [`from_save_pokemon`] reconciles a stored level that its experience
     // contradicts, and the reconciled mon needs the block that matches the
     // level actually being written.
+    //
+    // Shedinja never takes this fast path (issue #401): unlike every other
+    // species, its retained six bytes are never a legitimate EV-derived
+    // value the model cannot reconstruct -- `CalculateMonStats` pins its
+    // max HP to a flat `1` regardless of species/level staying put, so a
+    // stored block that disagrees (a save written before this fix, or a
+    // hand-edited one) must be normalized rather than carried forward
+    // unchanged forever. Routing it through the recompute branch instead
+    // is a no-op for an already-consistent `1`/`1` Shedinja (`zero_ev_max_hp`
+    // and the freshly recomputed block agree with the retained one, so the
+    // load-clamp offset moves by zero) and self-heals a stale one.
     let stored_species = u16::from_le_bytes([substructures.growth[0], substructures.growth[1]]);
-    let stat_block_is_still_the_battlers =
-        stored_species == mon.species().0 && base.level == mon.level();
+    let stat_block_is_still_the_battlers = mon.species() != battle::SPECIES_SHEDINJA
+        && stored_species == mon.species().0
+        && base.level == mon.level();
 
     // `PokemonSubstruct0`: species, experience and `ppBonuses` are the
     // battler's; `heldItem` (`/*0x02*/`), `friendship` (`/*0x09*/`) and the
