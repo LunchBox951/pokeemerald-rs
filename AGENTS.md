@@ -14,7 +14,7 @@ Then read [`docs/README.md`](docs/README.md). It routes each task to the smalles
 - Normal work targets `dev` and advances one [`docs/acceptance/v1.md`](docs/acceptance/v1.md) ID. Use `none` with a concrete rationale for maintenance that advances no v1 criterion.
 - Confirm before adding an external Cargo dependency or changing `.github/workflows/`, `RELEASE.md`, `CODEOWNERS`, or another release-process file. Routine `PATCH`, `MINOR`, and `MAJOR` synchronization is allowed; `FINAL` remains owner-only.
 - Never edit or commit `pokeemerald/` or `mgba/`. Never weaken their `.gitignore` exclusions `(reference-only)`.
-- Inspect the relevant ledger entry for every upstream behaviour or asset change. Update `ledger/pokeemerald.json` in the same pull request and only through `scripts/ledger.py`; never hand-edit it.
+- Inspect the exact upstream artifact with `scripts/ledger.py inspect` or a focused `gaps` query for every behaviour or asset change. Update that entry in the same pull request through the CLI; never infer a neighbouring disposition or hand-edit `ledger/pokeemerald.json`.
 - Preserve unrelated worktree changes. Never weaken, skip, or delete a test to pass a gate `(test-ratchet)`.
 
 ## Verify
