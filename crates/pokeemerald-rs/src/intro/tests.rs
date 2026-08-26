@@ -8,7 +8,7 @@
 //! real_pack_composes_a_non_blank_menu_frame`.
 
 use assets::fonts::{FontId, FontImageRef, OwnedFontGlyphSheet, GLYPH_COUNT};
-use assets::pack::ImageRef;
+use assets::pack::{AssetPack, ImageRef};
 use engine::text::render::{Printer, PrinterInput, TextSpeed, TickEvent};
 use rendering::Rgb888;
 
@@ -700,16 +700,18 @@ fn traversal_frames_totals_the_table() {
 /// other scenes' #[ignore] tests in app.rs` claim this file's own module
 /// docs used to make was false -- no such test exists in `app.rs`). Mirrors
 /// `main_menu::tests::real_pack_composes_a_non_blank_menu_frame`: build the
-/// real scene via [`super::load_default`], tick it forward a few frames (so
-/// more than one glyph has actually revealed), and confirm both that
-/// *something* painted (not an all-black frame) and that the dialogue box
-/// itself is visually distinct from the empty backdrop around it -- not
-/// just "some pixel somewhere is non-black," which a stray artifact could
-/// also satisfy.
+/// real scene via [`AssetPack::load_repo`] and [`super::IntroScene::from_pack`]
+/// -- not [`super::load_default`] (issue #412; see [`AssetPack::load_repo`]'s
+/// own docs for why) -- tick it forward a few frames (so more than one
+/// glyph has actually revealed), and confirm both that *something* painted
+/// (not an all-black frame) and that the dialogue box itself is visually
+/// distinct from the empty backdrop around it -- not just "some pixel
+/// somewhere is non-black," which a stray artifact could also satisfy.
 #[test]
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
 fn real_pack_composes_a_non_blank_intro_frame() {
-    let mut scene = super::load_default().expect("run `cargo xtask extract` first");
+    let pack = AssetPack::load_repo().expect("run `cargo xtask extract` first");
+    let mut scene = IntroScene::from_pack(&pack).expect("run `cargo xtask extract` first");
     for _ in 0..5 {
         scene.tick(NONE);
     }

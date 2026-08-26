@@ -125,11 +125,17 @@ pub struct AssetPack {
 }
 
 impl AssetPack {
-    /// The pack's default location: `<repo root>/assets-pack/pokeemerald.pack`,
-    /// computed from this crate's own manifest directory (robust regardless
-    /// of the caller's current working directory — `cargo test` in
-    /// particular runs each crate's tests with that crate's own directory
-    /// as `cwd`, not the workspace root).
+    /// The checkout's own pack: `<repo root>/`[`OUTPUT_RELATIVE_PATH`],
+    /// where `cargo xtask extract` writes. Resolved at compile time from
+    /// this crate's own manifest directory (robust regardless of the
+    /// caller's current working directory — `cargo test` in particular runs
+    /// each crate's tests with that crate's own directory as `cwd`, not the
+    /// workspace root), which is exactly why a *checkout-validation* gate
+    /// should ask for it by name rather than through
+    /// [`default_path`](Self::default_path): it names the machine that
+    /// built the binary, not necessarily the one running it (issue #412 —
+    /// a future runtime resolver with earlier, disk-searched rungs must not
+    /// change what an ignored real-pack test validates).
     ///
     /// # Panics
     ///
@@ -138,12 +144,22 @@ impl AssetPack {
     /// components under the repository root in this workspace's fixed
     /// layout.
     #[must_use]
-    pub fn default_path() -> PathBuf {
+    pub fn repo_pack_path() -> PathBuf {
         Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .and_then(Path::parent)
             .expect("crates/assets is always two levels under the repo root")
             .join(OUTPUT_RELATIVE_PATH)
+    }
+
+    /// The pack's default location for a running game — today identical to
+    /// [`repo_pack_path`](Self::repo_pack_path) (no other rung exists yet),
+    /// but the two are kept as separate functions precisely so that
+    /// `default_path` is free to grow earlier rungs later without moving
+    /// the ground a checkout-validation gate stands on (issue #412).
+    #[must_use]
+    pub fn default_path() -> PathBuf {
+        Self::repo_pack_path()
     }
 
     /// Load the pack from [`default_path`](Self::default_path).
@@ -153,6 +169,19 @@ impl AssetPack {
     /// See [`load`](Self::load).
     pub fn load_default() -> Result<Self, PackError> {
         Self::load(&Self::default_path())
+    }
+
+    /// Load the pack from [`repo_pack_path`](Self::repo_pack_path) — the
+    /// checkout's own pack, never whatever a future resolver's earlier
+    /// rungs might prefer. The loader a checkout-validation gate (an
+    /// ignored real-pack test, an `xtask` equivalence check) uses instead
+    /// of [`load_default`](Self::load_default).
+    ///
+    /// # Errors
+    ///
+    /// See [`load`](Self::load).
+    pub fn load_repo() -> Result<Self, PackError> {
+        Self::load(&Self::repo_pack_path())
     }
 
     /// Load and parse a pack from `path`.

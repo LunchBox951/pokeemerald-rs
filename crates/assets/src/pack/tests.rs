@@ -769,6 +769,32 @@ fn default_path_ends_with_expected_relative_path() {
 }
 
 #[test]
+fn repo_pack_path_ends_with_expected_relative_path() {
+    let path = AssetPack::repo_pack_path();
+    assert!(path.ends_with("assets-pack/pokeemerald.pack"));
+}
+
+/// Migration marker (issue #412): today [`AssetPack::default_path`] has
+/// nothing but [`AssetPack::repo_pack_path`] to return, so the two compare
+/// equal -- this only documents that starting point, it does not by itself
+/// prove a shadowing pack can never leak into an ignored real-pack test.
+/// Once issue #356 gives `default_path` earlier, disk-searched rungs, this
+/// assertion keeps passing in CI (nothing here resolves an earlier rung
+/// either), but will fail on any machine where one of those rungs actually
+/// resolves to a different file -- the signal that whoever lands #356 must
+/// also confirm every test pinned to `load_repo` still reads only the
+/// checkout's own pack, not silently drift back to `load_default`'s
+/// resolver.
+#[test]
+fn repo_pack_path_matches_default_path_before_any_resolver_rungs_exist() {
+    assert_eq!(
+        AssetPack::default_path(),
+        AssetPack::repo_pack_path(),
+        "the two must stay identical until issue #356 gives default_path an earlier rung"
+    );
+}
+
+#[test]
 fn song_accessor_decodes_the_named_entry_through_the_song_schema() {
     let path = write_synthetic_pack("song-ok");
     let pack = AssetPack::load(&path).unwrap();
