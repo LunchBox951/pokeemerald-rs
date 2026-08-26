@@ -158,6 +158,21 @@ const ROUTE_101: assets::MapId = assets::MapId("MAP_ROUTE101");
 /// `VAR_ROUTE101_STATE` (`include/constants/vars.h:116`).
 const VAR_ROUTE101_STATE: u16 = 0x4060;
 
+/// The same var's *name*, as `map.json`'s `coord_events` spell their `var`
+/// field (an open reference this port does not resolve to an id —
+/// [`assets::CoordEventKind::Trigger`]'s own docs, S-5). It is the only
+/// coord-event guard this module can evaluate at all, which is what
+/// [`OverworldPhase::first_battle_trigger_at`]'s scan tests candidates
+/// against.
+const VAR_ROUTE101_STATE_NAME: &str = "VAR_ROUTE101_STATE";
+
+/// `TRIGGER_RUN_IMMEDIATELY` (`include/constants/vars.h:312`, value `0`) —
+/// the `var` a coord event carries when upstream should run its script the
+/// instant the scan reaches it and then carry on scanning
+/// (`field_control_avatar.c:886-889`). Not a variable name at all, which is
+/// why it is matched by name here rather than looked up.
+const TRIGGER_RUN_IMMEDIATELY: &str = "TRIGGER_RUN_IMMEDIATELY";
+
 /// The fresh-save value `VAR_ROUTE101_STATE` starts at (`InitEventData`
 /// zeroes every var) before `Route101_OnFrame`'s guard has ever run.
 const FRESH_SAVE_STATE: u16 = 0;
@@ -245,19 +260,90 @@ impl OverworldPhase {
     /// [`ROUTE_101`] — is the rescue coord-event trigger with
     /// `VAR_ROUTE101_STATE` still in its pre-rescue state (module docs).
     ///
-    /// Mirrors `TryRunCoordEventScript`'s own gate (`field_control_avatar.c:891`,
-    /// `VarGet(coordEvent->trigger) == (u8)coordEvent->index`; note this
-    /// port compares the full `u16` where upstream truncates the event's
-    /// index to `u8` -- identical for every bundled coord event, whose
-    /// values all fit a byte, and the untruncated comparison is the safer
-    /// side of the divergence): the coord
-    /// event found at this position must be exactly the one trigger this
-    /// slice recognizes ([`TRIGGER_SCRIPT`] on `"VAR_ROUTE101_STATE"`), and
-    /// the *live* var value (not just the event's own `var_value`, though
-    /// today they're always equal by construction) must match it — so a
-    /// second step onto the same tile, once
+    /// # The scan, and exactly where it stops
+    ///
+    /// Every coord event stacked at this position is visited via
+    /// [`MapRuntime::coord_events_at`], in `map.json` declaration order,
+    /// mirroring `GetCoordEventScriptAtPosition`'s own loop
+    /// (`field_control_avatar.c:903-914`) over `TryRunCoordEventScript`
+    /// (`:877-895`). The rule that matters — and the one this method's first
+    /// cut got wrong — is that upstream's scan **ends at the first candidate
+    /// that yields a script** (`:909-911`: `if (script != NULL) return
+    /// script;`), and that script is what runs on this tile. Only candidates
+    /// that yield `NULL` let the scan reach whatever is stacked behind them,
+    /// and upstream has exactly three of those:
+    ///
+    /// 1. **Weather** ([`assets::CoordEventKind::Weather`], upstream's
+    ///    `coordEvent->script == NULL`): dispatches `DoCoordEventWeather`
+    ///    and falls through (`:881-884`). Route 101 declares no weather
+    ///    coord event of its own today, but
+    ///    [`MapRuntime::coord_events_at`]'s doc comment cites a live stacked
+    ///    case elsewhere (Jagged Pass) this loop must not stop at.
+    /// 2. **`TRIGGER_RUN_IMMEDIATELY`** ([`TRIGGER_RUN_IMMEDIATELY`],
+    ///    `trigger == 0`): upstream runs the script *on the spot* and still
+    ///    returns `NULL` (`:886-889`), so the scan continues. 36 bundled
+    ///    coord events across five maps are of this kind (24 on Route 111
+    ///    alone) — none on Route 101. A coord event's `script` is an open
+    ///    string reference here ([`assets::CoordEventKind::Trigger`], S-5),
+    ///    so the immediate run itself is not modelled (module docs); its
+    ///    *scan* consequence is, because deciding it needs no variable at
+    ///    all. An immediate script upstream could rewrite
+    ///    `VAR_ROUTE101_STATE` before a later candidate's check — moot
+    ///    while Route 101 declares none of these events.
+    /// 3. **A failed var check**: `VarGet(coordEvent->trigger) ==
+    ///    (u8)coordEvent->index` is false (`:891`), so this candidate is
+    ///    skipped rather than ending the search — the case Littleroot Town's
+    ///    own two-trigger stack depends on.
+    ///
+    /// Anything else *is* a yielding candidate and ends the scan. This
+    /// method therefore reports `true` only when the candidate the scan ends
+    /// on is the single trigger this slice ports ([`TRIGGER_SCRIPT`] gated
+    /// on [`VAR_ROUTE101_STATE_NAME`]) — and reports `false`, without
+    /// looking any further, when it ends on some *other* yielding trigger,
+    /// because upstream would have run that foreign script here and never
+    /// reached the rescue trigger behind it.
+    ///
+    /// The var check itself compares the **live** var value (not just the
+    /// event's own `var_value`, though today they are always equal by
+    /// construction), so a second step onto the same tile — once
     /// [`OverworldPhase::begin_first_battle`] has advanced the var to
-    /// [`TRIGGER_CONSUMED_STATE`], correctly reports `false`.
+    /// [`TRIGGER_CONSUMED_STATE`] — correctly reports `false`. Note this
+    /// port compares the full `u16` where upstream truncates the event's
+    /// index to `u8`: identical for every bundled coord event, whose values
+    /// all fit a byte, and the untruncated comparison is the safer side of
+    /// the divergence.
+    ///
+    /// # A guard this port cannot evaluate, and which way it fails
+    ///
+    /// A trigger gated on **any other variable** is the one candidate whose
+    /// `NULL`-or-not this module cannot decide: a coord event's `var` is an
+    /// open reference ([`assets::CoordEventKind::Trigger`]'s own docs — vars
+    /// beyond this slice's single [`VAR_ROUTE101_STATE`] are out of scope,
+    /// S-5), so there is no value to read and no honest way to say whether
+    /// upstream's `VarGet` would pass. **It is treated as a yielding
+    /// candidate: the scan ends and this trigger does not fire.** That is
+    /// the fail-closed side, the same posture
+    /// [`engine::overworld::metatile_behavior`] takes for a behavior id it
+    /// does not recognize — assuming the guard *fails* would let this port
+    /// start a scripted battle on a tile where upstream ran somebody else's
+    /// script instead, whereas assuming it passes only leaves a tile inert
+    /// that this port already cannot animate. It is still a divergence, and
+    /// a recorded one: were such a candidate ever stacked *ahead* of a
+    /// rescue tile, upstream might have kept scanning and reached the rescue
+    /// trigger where this port stops.
+    ///
+    /// **Unreachable over bundled data.** All nine of Route 101's coord
+    /// events are `VAR_ROUTE101_STATE` triggers at nine distinct tiles
+    /// (`crates/assets/src/map_events.rs`), so no stack of any kind exists
+    /// there — pinned by
+    /// `super::first_battle_trigger_tests::route_101_coord_events_all_sit_at_distinct_positions`.
+    /// The scan's own branches are pinned over synthetic stacks instead, by
+    /// `super::first_battle_trigger_tests`' `a_weather_and_failed_var_candidate_stacked_ahead_do_not_hide_the_rescue_trigger`,
+    /// `a_run_immediately_candidate_stacked_ahead_does_not_hide_the_rescue_trigger`,
+    /// `a_foreign_trigger_whose_guard_passes_wins_the_tile_from_the_rescue_trigger`
+    /// and `a_trigger_on_an_unevaluable_var_stacked_ahead_fails_closed`.
+    ///
+    /// # Which map, and which script
     ///
     /// Any other map reports `false`, and so does **any other coord event —
     /// on the strength of the [`TRIGGER_SCRIPT`] name check, not of tile
@@ -267,8 +353,10 @@ impl OverworldPhase {
     /// own `(10, 18)`/`(11, 18)` sit one tile north of the rescue tiles at
     /// the same elevation — so after the battle the player can, and on the
     /// way back south will, stand on one with the var matching its
-    /// `var_value` exactly. Only the script name tells the two apart. Pinned
-    /// by `super::first_battle_trigger_tests::the_prevent_exit_coord_events_never_start_a_battle`.
+    /// `var_value` exactly. Upstream would run that script; this port has
+    /// none to run, and either way no battle starts. Only the script name
+    /// tells the two apart. Pinned by
+    /// `super::first_battle_trigger_tests::the_prevent_exit_coord_events_never_start_a_battle`.
     fn first_battle_trigger_at(
         &self,
         runtime: &MapRuntime<'_>,
@@ -279,21 +367,42 @@ impl OverworldPhase {
         if self.map_id != ROUTE_101 {
             return false;
         }
-        let Some(event) = runtime.coord_event_at(x, y, elevation) else {
-            return false;
-        };
-        let assets::CoordEventKind::Trigger {
-            var,
-            var_value,
-            script,
-        } = event.kind
-        else {
-            return false;
-        };
-        if var != "VAR_ROUTE101_STATE" || script != TRIGGER_SCRIPT {
-            return false;
+        for event in runtime.coord_events_at(x, y, elevation) {
+            let assets::CoordEventKind::Trigger {
+                var,
+                var_value,
+                script,
+            } = event.kind
+            else {
+                // Weather never yields a script upstream -- keep scanning
+                // past it (`TryRunCoordEventScript`,
+                // `field_control_avatar.c:881-884`).
+                continue;
+            };
+            if var == TRIGGER_RUN_IMMEDIATELY {
+                // Upstream runs this candidate's script immediately and
+                // *still* returns `NULL`, so the scan continues (`:886-889`).
+                continue;
+            }
+            if var != VAR_ROUTE101_STATE_NAME {
+                // A guard this module cannot evaluate: fail closed by
+                // treating it as a yielding candidate, which ends the scan
+                // (doc comment above).
+                return false;
+            }
+            if self.save1.event_data.var_get(VAR_ROUTE101_STATE) != Ok(var_value) {
+                // The var check failed, so `TryRunCoordEventScript` yields
+                // `NULL` (`:891`) and the loop moves to the next positional
+                // match rather than giving up (`:909-911`).
+                continue;
+            }
+            // The var check passed, so upstream's scan ends right here and
+            // runs *this* candidate's script (`:892`, `:909-911`). It fires
+            // the rescue only if that script is the one this slice ports;
+            // any other yielding script wins the tile instead.
+            return script == TRIGGER_SCRIPT;
         }
-        self.save1.event_data.var_get(VAR_ROUTE101_STATE) == Ok(var_value)
+        false
     }
 
     /// Whether the completed landing at `(x, y)` fires the Route 101

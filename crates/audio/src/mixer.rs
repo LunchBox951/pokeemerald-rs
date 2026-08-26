@@ -81,6 +81,7 @@
 
 use crate::cgb_voice::CgbVoice;
 use crate::pitch::SAMPLES_PER_FRAME;
+use crate::psg::FrameSequencer128Hz;
 use crate::reverb::Reverb;
 use crate::voice::{StereoAcc, Voice};
 
@@ -104,6 +105,12 @@ pub const DEFAULT_MASTER_VOLUME: u8 = 12;
 /// cap reuses or steals a channel per the module docs' priority search, or is
 /// refused when every live voice outranks it.
 pub const DEFAULT_MAX_VOICES: usize = 5;
+
+/// The most 128 Hz sweep ticks one [`SAMPLES_PER_FRAME`] frame can contain.
+/// A frame spans `224 * 128 / 13_379` ~= `2.14` ticks, so it holds two or —
+/// when the Bresenham accumulator's fraction carries — three, never more.
+const MAX_SWEEP_TICKS_PER_FRAME: usize =
+    (SAMPLES_PER_FRAME * 128).div_ceil(crate::pitch::MIXER_RATE as usize);
 
 /// Owns the playing voices and renders them to interleaved stereo `f32`.
 #[derive(Debug)]
@@ -135,6 +142,16 @@ pub struct Mixer {
     /// The master-mix reverb/pseudo-echo stage (module docs). Disabled
     /// (`level 0`) unless [`Self::with_reverb_level`] is called.
     reverb: Reverb,
+    /// The persistent, sample-accurate 128 Hz clock the channel-1 sweep
+    /// ticks from (`crate::psg::FrameSequencer128Hz`'s doc): shared across
+    /// every CGB voice and every call to [`Self::mix_frame`] so ticks land
+    /// at hardware's true cadence regardless of how the stream is chunked
+    /// into render buffers (issue #381).
+    sweep_clock: FrameSequencer128Hz,
+    /// Reusable buffer for one frame's 128 Hz tick offsets, preallocated to
+    /// [`MAX_SWEEP_TICKS_PER_FRAME`] for the same reason as [`Self::scratch`]:
+    /// steady-state rendering must not allocate.
+    sweep_ticks: Vec<usize>,
 }
 
 impl Default for Mixer {
@@ -154,6 +171,8 @@ impl Mixer {
             next_seq: 0,
             scratch: vec![(0, 0); SAMPLES_PER_FRAME],
             reverb: Reverb::new(0),
+            sweep_clock: FrameSequencer128Hz::default(),
+            sweep_ticks: Vec::with_capacity(MAX_SWEEP_TICKS_PER_FRAME),
         }
     }
 
@@ -476,10 +495,19 @@ impl Mixer {
             }
         }
 
+        // One 128 Hz tick schedule per buffer, shared by every CGB voice:
+        // hardware's frame sequencer is one clock for the whole unit, not
+        // one per channel (module docs, `crate::psg::FrameSequencer128Hz`).
+        self.sweep_clock
+            .advance_into(self.scratch.len(), &mut self.sweep_ticks);
+        debug_assert!(
+            self.sweep_ticks.len() <= MAX_SWEEP_TICKS_PER_FRAME,
+            "a frame's tick buffer must never have to grow",
+        );
         for slot in &mut self.cgb_voices {
             if let Some(voice) = slot {
                 voice.begin_frame(self.master_volume);
-                voice.render(&mut self.scratch);
+                voice.render(&mut self.scratch, &self.sweep_ticks);
                 if !voice.is_active() {
                     *slot = None;
                 }

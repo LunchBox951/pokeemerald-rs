@@ -447,6 +447,135 @@ fn a_continued_multi_member_party_preserves_trailing_slots_and_count() {
     assert_eq!(saved.block1.player_party[1..], expected_trailing);
 }
 
+/// The save-data defect issue #344 fixes, driven through the production
+/// path end to end: continue a file, save it again from the field start
+/// menu, and read the party slot back off disk.
+///
+/// Saving used to rebuild slot 0 from the live battler alone, so every
+/// field with no home in `battle::BattlePokemon` -- held item, EVs, contest
+/// condition, accumulated friendship, non-volatile status, mail -- was
+/// written back as a zero. The bytes below are sentinels precisely because
+/// nothing in this port reads them yet: they are somebody's save data
+/// passing through, and passing through is all they have to do.
+#[test]
+fn a_re_saved_continued_lead_keeps_the_bytes_no_battle_model_carries() {
+    const SENTINEL_HELD_ITEM: u16 = 200; // ITEM_LEFTOVERS
+    const SENTINEL_STATUS: u32 = 1 << 6; // STATUS1_PARALYSIS
+    const SENTINEL_MAIL: u8 = 2;
+    const SENTINEL_FRIENDSHIP: u8 = 213;
+    const SENTINEL_EVS_AND_CONDITION: [u8; engine::save::SUBSTRUCTURE_LEN] =
+        [252, 6, 0, 252, 4, 8, 11, 22, 33, 44, 55, 66];
+    // The box header's deferred bytes: a nickname, `LANGUAGE_GERMAN`
+    // (`pokeemerald/include/constants/global.h:24`), an OT name, and two of
+    // the four marking bits. Every one is a byte this port stores and does
+    // not read, which is exactly why the fixture has to supply a non-zero
+    // value for each -- an all-zero "sentinel" would let the assertion
+    // below pass whatever the save path wrote.
+    const SENTINEL_NICKNAME: [u8; 10] = [0xBB; 10];
+    const SENTINEL_LANGUAGE: u8 = 5;
+    const SENTINEL_OT_NAME: [u8; 7] = [0xCC; 7];
+    const SENTINEL_MARKINGS: u8 = 0b0000_1010;
+
+    let temp = TempSave::new("unmodelled-lead-bytes");
+    let mut slot = temp.slot();
+    let dex = battle::Dex::new();
+    let mut seed = new_game_phase();
+    let trainer_id = u32::from_le_bytes(seed.save2.player_trainer_id);
+    // Three PP Ups on slot 0, one on slot 1: `ppBonuses` is carried by the
+    // model (issue #304) rather than retained, so it belongs in this
+    // fixture as the *other* kind of survival.
+    let bonuses = battle::PpBonuses::from_bits(0b0000_0111);
+    let lead = a_damaged_lead()
+        .with_original_trainer_id(trainer_id)
+        .with_pp_bonuses(&dex, bonuses)
+        .unwrap();
+
+    let mut stored = crate::party::to_save_pokemon(&dex, &lead);
+    let mut substructures = stored.box_data.substructures().unwrap();
+    substructures.growth[2..4].copy_from_slice(&SENTINEL_HELD_ITEM.to_le_bytes());
+    substructures.growth[9] = SENTINEL_FRIENDSHIP;
+    substructures.evs_and_condition = SENTINEL_EVS_AND_CONDITION;
+    stored.box_data.set_substructures(&substructures);
+    // The box header's own deferred bytes, stamped *after* the
+    // substructures because `set_substructures` rewrites the checksum and
+    // not these: nickname (`/*0x08*/`), language (`/*0x12*/`), OT name
+    // (`/*0x14*/`) and markings (`/*0x1B*/`). Without real values here the
+    // header assertion below would compare one run of zeros to another and
+    // pass whatever the save path did.
+    let mut header = stored.box_data.to_bytes();
+    header[8..18].copy_from_slice(&SENTINEL_NICKNAME);
+    header[18] = SENTINEL_LANGUAGE;
+    header[20..27].copy_from_slice(&SENTINEL_OT_NAME);
+    header[27] = SENTINEL_MARKINGS;
+    stored.box_data = engine::save::BoxPokemon::from_bytes(header);
+    stored.status = SENTINEL_STATUS;
+    stored.mail = SENTINEL_MAIL;
+    seed.save1.player_party_count = 1;
+    seed.save1.player_party[0] = stored;
+
+    let mut resumed = OverworldPhase::from_saved(
+        crate::overworld::tests::synthetic_scene(10, 10),
+        seed.map_id,
+        seed.save1,
+        seed.save2,
+    );
+    // Play the session, so the write under test is a real re-save rather
+    // than the retained record handed back untouched.
+    let live = resumed.party_lead.as_mut().expect("the fixture has a lead");
+    live.apply_damage(4);
+    live.deduct_pp(0).unwrap();
+    let played = live.clone();
+
+    save_from_the_start_menu(&mut resumed, &mut slot);
+    let written = slot.load().block1.player_party[0];
+    let after = written
+        .box_data
+        .substructures()
+        .expect("the written slot must still pass its own checksum");
+
+    assert_eq!(
+        u16::from_le_bytes([after.growth[2], after.growth[3]]),
+        SENTINEL_HELD_ITEM,
+        "the held item survives an ordinary load/save cycle"
+    );
+    assert_eq!(after.growth[9], SENTINEL_FRIENDSHIP, "so does friendship");
+    assert_eq!(
+        after.evs_and_condition, SENTINEL_EVS_AND_CONDITION,
+        "so do the EVs and the contest condition"
+    );
+    assert_eq!(
+        after.growth[8],
+        bonuses.bits(),
+        "and the PP Ups (issue #304)"
+    );
+    assert_eq!(written.status, SENTINEL_STATUS, "and the status condition");
+    assert_eq!(written.mail, SENTINEL_MAIL, "and the mail the mon holds");
+    let header = written.box_data.to_bytes();
+    assert_eq!(&header[8..18], &SENTINEL_NICKNAME, "and the nickname");
+    assert_eq!(header[18], SENTINEL_LANGUAGE, "and the language byte");
+    assert_eq!(&header[20..27], &SENTINEL_OT_NAME, "and the OT name");
+    assert_eq!(header[27], SENTINEL_MARKINGS, "and the box markings");
+    assert_eq!(
+        header[8..28],
+        stored.box_data.to_bytes()[8..28],
+        "the header metadata as a whole, byte for byte"
+    );
+
+    // The other half: what the session changed is what the file now holds.
+    assert_eq!(written.hp, u16::try_from(played.current_hp()).unwrap());
+    assert_eq!(after.attacks[8], played.moves()[0].pp);
+    assert_ne!(
+        written.hp, stored.hp,
+        "fixture sanity: the session's damage is real"
+    );
+    let reloaded = crate::party::from_save_pokemon(&dex, &written)
+        .expect("the re-saved slot must decode again");
+    assert_eq!(
+        reloaded, played,
+        "and comes back as the mon that was played"
+    );
+}
+
 /// A traded lead is encrypted under its original trainer's id, not the id
 /// of the player who currently owns and saves it.
 #[test]
@@ -1198,4 +1327,246 @@ fn a_save_with_an_empty_party_resumes_with_no_lead() {
         SaveBlock2::default(),
     );
     assert!(resumed.party_lead.is_none());
+}
+
+/// Two SAVEs in one session file the same bytes (PR #352's fifth review):
+/// the merge's HP translation adds back the points the load clamp hid,
+/// and that offset is session state measured at load, not re-derived from
+/// the record -- the first save writes its output back into the slot the
+/// second save merges from, so a re-derivation would drift the filed HP
+/// toward the model's 0-EV maximum one save at a time.
+#[test]
+fn saving_twice_in_one_session_files_the_same_bytes() {
+    const EV_HP_BONUS: u16 = 7;
+    const HIDDEN: u16 = 5;
+    const DAMAGE: u32 = 10;
+
+    let temp = TempSave::new("save-twice-idempotent");
+    let mut slot = temp.slot();
+    let dex = battle::Dex::new();
+    let mut seed = new_game_phase();
+    let trainer_id = u32::from_le_bytes(seed.save2.player_trainer_id);
+    let lead = crate::new_game::provisional_starter().with_original_trainer_id(trainer_id);
+    let mut stored = crate::party::to_save_pokemon(&dex, &lead);
+    // An EV-trained record: maximum above the model's, current HP above
+    // the model's maximum but below full, so the load clamp hides points.
+    stored.max_hp += EV_HP_BONUS;
+    stored.hp += HIDDEN;
+    seed.save1.player_party_count = 1;
+    seed.save1.player_party[0] = stored;
+
+    let mut resumed = OverworldPhase::from_saved(
+        crate::overworld::tests::synthetic_scene(10, 10),
+        seed.map_id,
+        seed.save1,
+        seed.save2,
+    );
+    resumed
+        .party_lead
+        .as_mut()
+        .expect("the fixture has a lead")
+        .apply_damage(DAMAGE);
+
+    save_from_the_start_menu(&mut resumed, &mut slot);
+    let first = slot.load().block1.player_party[0];
+    save_from_the_start_menu(&mut resumed, &mut slot);
+    let second = slot.load().block1.player_party[0];
+
+    assert_eq!(
+        first.hp,
+        stored.hp - u16::try_from(DAMAGE).unwrap(),
+        "damage subtracts from the stored value, not from its clamp"
+    );
+    assert_eq!(
+        first.to_bytes(),
+        second.to_bytes(),
+        "a second save with no play in between must file the same record"
+    );
+}
+
+/// The save-data defect issue #353 fixes, driven through the production
+/// path end to end exactly like #344's own regression test above: continue
+/// a file whose slot 0 has intact header bytes but a secure region that
+/// fails its own checksum, save it again from the field start menu, and
+/// read the party slot back off disk.
+///
+/// Before this fix, the no-lead arm of `copy_party_and_objects_to_save`
+/// could not tell "genuinely empty" from "would not decode" apart and
+/// always zeroed the slot -- so a checksum failure this port could not
+/// even attribute to a real cause (a flipped bit in a copied save file, a
+/// future encoder bug, anything) destroyed the record on the very next
+/// ordinary SAVE. Upstream has no such step to fail: `SavePlayerParty`
+/// (`pokeemerald/src/load_save.c:160-168`) is a `memcpy`, and this is the
+/// port-only failure mode that memcpy cannot have.
+#[test]
+fn a_slot_that_will_not_decode_survives_an_ordinary_save() {
+    const SENTINEL_NICKNAME: [u8; 10] = [0xAA; 10];
+    const SENTINEL_LANGUAGE: u8 = 5;
+    const SENTINEL_OT_NAME: [u8; 7] = [0xDD; 7];
+    const SENTINEL_MARKINGS: u8 = 0b0000_0101;
+    const STORED_COUNT: u8 = 1;
+
+    let temp = TempSave::new("undecodable-slot-survives-save");
+    let mut slot = temp.slot();
+    let dex = battle::Dex::new();
+    let mut seed = new_game_phase();
+    let trainer_id = u32::from_le_bytes(seed.save2.player_trainer_id);
+    let lead = a_damaged_lead().with_original_trainer_id(trainer_id);
+
+    let mut stored = crate::party::to_save_pokemon(&dex, &lead);
+    // Header sentinels, stamped exactly as #344's own regression test
+    // stamps them (nickname `/*0x08*/`, language `/*0x12*/`, OT name
+    // `/*0x14*/`, markings `/*0x1B*/`): these live outside the secure
+    // region, so they must survive a corrupted decode exactly as they
+    // survive a clean one.
+    let mut header = stored.box_data.to_bytes();
+    header[8..18].copy_from_slice(&SENTINEL_NICKNAME);
+    header[18] = SENTINEL_LANGUAGE;
+    header[20..27].copy_from_slice(&SENTINEL_OT_NAME);
+    header[27] = SENTINEL_MARKINGS;
+    // Flip a byte inside the encrypted secure region (box offset 32..80)
+    // without touching the stored checksum (offset 28..30) -- a bad
+    // substructure checksum with an intact header around it, the exact
+    // shape issue #353 describes.
+    header[40] ^= 0xFF;
+    stored.box_data = engine::save::BoxPokemon::from_bytes(header);
+    seed.save1.player_party_count = STORED_COUNT;
+    seed.save1.player_party[0] = stored;
+    assert!(
+        stored.box_data.substructures().is_err(),
+        "setup: the fixture's secure region must actually fail its checksum"
+    );
+
+    let mut resumed = OverworldPhase::from_saved(
+        crate::overworld::tests::synthetic_scene(10, 10),
+        seed.map_id,
+        seed.save1,
+        seed.save2,
+    );
+    assert!(
+        resumed.party_lead.is_none(),
+        "an undecodable slot leaves the lead empty, exactly as an empty slot does"
+    );
+    assert_eq!(
+        resumed.save1.player_party_count, STORED_COUNT,
+        "the stored count is untouched by the failed decode"
+    );
+
+    save_from_the_start_menu(&mut resumed, &mut slot);
+
+    let saved = slot.load().block1;
+    assert_eq!(
+        saved.player_party[0], stored,
+        "the retained record -- the whole 100 bytes, secure region included -- must \
+         round-trip an ordinary save untouched"
+    );
+    assert_eq!(
+        saved.player_party_count, STORED_COUNT,
+        "upstream's own SavePlayerParty carries the count through unconditionally \
+         (load_save.c:160-168) -- an undecodable slot 0 must not lose it"
+    );
+}
+
+/// A deliberate identity change always rebuilds slot 0, even from a phase
+/// that somehow inherited a set `undecodable_lead_retained` flag alongside
+/// stale bytes (issue #353 review, requirement 2) -- the state a bug in a
+/// future retention path could leave behind. Reproduces the shape of
+/// `OverworldPhase::load_default`'s provisional-starter grant -- the
+/// flag's only production write site outside the load path, and a no-op
+/// one at that (`false` onto `false`) -- without the asset pack a real
+/// `load_default` call needs.
+///
+/// `copy_party_and_objects_to_save`'s merge arm is gated on `party_lead`
+/// being `Some` and is checked before the retained-undecodable flag is
+/// ever consulted, so a real lead always overrides retention regardless of
+/// that flag's value -- retention cannot leak into a fresh identity's
+/// save.
+#[test]
+fn a_deliberate_identity_change_overrides_a_retained_undecodable_slot() {
+    let temp = TempSave::new("newgame-overrides-retained-slot");
+    let mut slot = temp.slot();
+    let dex = battle::Dex::new();
+
+    let mut phase = new_game_phase();
+    // The state a stray retention bug would leave behind: a stale slot 0
+    // that is not this identity's record, and a set flag. `BoxPokemon::new`
+    // writes a *valid* checksum over default (SPECIES_NONE) substructures,
+    // so these bytes are not the checksum-failure case: what disqualifies
+    // them from being merged onto is `party::backing_substructures`' first
+    // test, the personality/OT id disagreement
+    // (`NotTheBattlersRecord::DifferentPokemon`), which is checked before
+    // the checksum is ever read. Either reason lands on the same fallback
+    // -- rebuild slot 0 from the battler alone -- which is what the
+    // assertions below pin.
+    let garbage = Pokemon {
+        box_data: BoxPokemon::new(0xDEAD_BEEF, 0xCAFE_F00D),
+        hp: 1,
+        ..Pokemon::default()
+    };
+    phase.save1.player_party_count = 1;
+    phase.save1.player_party[0] = garbage;
+    phase.undecodable_lead_retained = true;
+
+    // The deliberate identity change `load_default` performs: a fresh
+    // provisional starter. That constructor also clears the retention flag
+    // belt-and-suspenders style, and this test deliberately does *not* --
+    // the flag stays `true` across the save below, so what follows proves
+    // the `Some` lead alone overrides it.
+    let trainer_id = u32::from_le_bytes(phase.save2.player_trainer_id);
+    let starter = new_game::provisional_starter().with_original_trainer_id(trainer_id);
+    phase.party_lead = Some(starter.clone());
+
+    save_from_the_start_menu(&mut phase, &mut slot);
+
+    let saved = slot.load().block1;
+    let expected = crate::party::to_save_pokemon(&dex, &starter);
+    assert_eq!(
+        saved.player_party[0], expected,
+        "the fresh identity's own record is written whole -- every byte the \
+         from-scratch `to_save_pokemon` record carries, not the stale garbage \
+         bytes and not a partial merge of the two"
+    );
+    assert_ne!(
+        saved.player_party[0].box_data.personality(),
+        garbage.box_data.personality(),
+        "the retained garbage must not have survived the identity change"
+    );
+    assert_eq!(saved.player_party_count, 1);
+}
+
+/// A genuinely empty slot (`player_party_count == 0` at load) still takes
+/// the zero-and-default arm on the next save -- retention is scoped to the
+/// undecodable case alone (issue #353 review, requirement 3), never to an
+/// ordinary empty one.
+#[test]
+fn a_genuinely_empty_party_still_saves_a_default_zeroed_slot() {
+    let temp = TempSave::new("empty-party-saves-zeroed-slot");
+    let mut slot = temp.slot();
+
+    let mut seed = new_game_phase();
+    // A recognizable non-default record sitting in slot 0 despite the
+    // count being zero -- the shape a save predating this port's own
+    // writer, or a hand-edited file, could leave behind. The save path
+    // must still zero it: an empty count is upstream's own "no lead" and
+    // must be honored the same way `ZeroPlayerPartyMons` honors it.
+    seed.save1.player_party[0] = dormant_party_member(0x1234_5678);
+    seed.save1.player_party_count = 0;
+
+    let mut resumed = OverworldPhase::from_saved(
+        crate::overworld::tests::synthetic_scene(10, 10),
+        seed.map_id,
+        seed.save1,
+        seed.save2,
+    );
+    assert!(resumed.party_lead.is_none());
+
+    save_from_the_start_menu(&mut resumed, &mut slot);
+
+    let saved = slot.load().block1;
+    assert_eq!(
+        saved.player_party[0],
+        Pokemon::default(),
+        "an empty slot's stale record is zeroed on the next save, not retained"
+    );
+    assert_eq!(saved.player_party_count, 0);
 }

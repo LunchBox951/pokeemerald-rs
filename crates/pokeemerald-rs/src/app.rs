@@ -4,7 +4,9 @@
 //!
 //! [`App`] is intentionally the only thing `main` touches (`main` stays
 //! thin, see the crate root docs) `(oop-boundaries)` -- this is the shell
-//! future engine state plugs into.
+//! the game-flow state machine and save medium plug into (the "Game flow"
+//! section below) and that holds the title music's audio device (the
+//! `music` field's docs).
 //!
 //! [`App::new_headless`] plus [`App::step`] (F-3, V-1) are the seam `xtask`'s
 //! `e2e --suite smoke` run drives in-process: the exact same per-frame loop
@@ -184,8 +186,8 @@ impl From<TitleSceneError> for AppError {
 /// Scenarios assert these states after driving the production
 /// [`App::step`] loop; the owned scene objects remain private. Battle
 /// variants distinguish the three modes that temporarily freeze overworld
-/// movement, which lets I-7's future `boot-to-first-fight` scenario prove
-/// it reached the scripted fight rather than merely Route 101, and (issue
+/// movement, which lets I-7's `boot-to-first-fight` scenario prove it
+/// reached the scripted fight rather than merely Route 101, and (issue
 /// #248) a Route 103 rival-battle scenario prove the same for that fight.
 ///
 /// The battle variants share one edge-frame timing a scenario script must
@@ -246,11 +248,15 @@ const BUTTON_NAMES: [(Buttons, &str); 10] = [
 /// backend) and the current scene's already-composed frame, presented
 /// unchanged every frame.
 ///
-/// No engine/battle state yet (out of scope for this slice, see the crate
-/// root docs). [`App::new`] composes the real title screen and keeps it
-/// animating every frame (module docs' "Animating the real title screen"
-/// section); [`App::new_headless`]'s synthetic [`BootScene`] stays a fixed
-/// placeholder, unchanged from before I-2.
+/// Game-flow state lives in the `scene` field below (`crate::flow`'s
+/// `AppScene`, advanced by `advance_scene`); battle state sits inside
+/// the overworld phase
+/// (`crate::flow::overworld_phase`, which owns the overworld scene and
+/// documents the battle dispatch). [`App::new`] composes
+/// the real title screen and keeps it animating every frame (module docs'
+/// "Animating the real title screen" section); [`App::new_headless`]'s
+/// synthetic [`BootScene`] stays a fixed placeholder, unchanged from before
+/// I-2.
 pub struct App {
     platform: Platform,
     frame: Box<Frame>,
@@ -740,11 +746,13 @@ impl App {
 /// Format a log line naming every button that transitioned to held this
 /// frame, or `None` if nothing changed.
 ///
-/// No engine exists yet to act on GBA input (that wiring is future work);
-/// this is the "log" half of "log-or-ignore is fine" (issue #70) -- proving
-/// the keymap -> [`ButtonState`] pipeline is live end to end without
-/// pretending it drives anything yet. Kept pure (no I/O) so it is
-/// headless-unit-testable; [`App::run`] is the only (windowed, untestable)
+/// The same [`ButtonState`] also drives the game when a scene is present
+/// ([`App::step`] hands it to `crate::flow`'s `advance_scene` every frame
+/// on the real-flow constructors, [`App::new`] and `new_headless_real`;
+/// the smoke suite's `new_headless` has no scene, so there input is
+/// logged but drives nothing). This log line is the human-readable trace
+/// of that pipeline, emitted on the windowed and headless paths alike.
+/// Kept pure (no I/O) so it is unit-testable; [`App::step`] is the only
 /// caller.
 fn describe_newly_pressed(state: ButtonState) -> Option<String> {
     let pressed = state.newly_pressed();

@@ -151,7 +151,7 @@
 
 use assets::fonts::{FontGlyphSheet, FontId};
 use assets::pack::{AssetPack, PackError};
-use engine::text::render::{Printer, RevealedGlyph, TextSpeed, TickEvent};
+use engine::text::render::{Printer, PrinterInput, RevealedGlyph, TextSpeed, TickEvent};
 use engine::text::window as msgwin;
 use engine::text::Token;
 use rendering::{Bgr555, Framebuffer, Rgb888};
@@ -545,7 +545,7 @@ fn render_label(label: &str, sheet: FontGlyphSheet<'_>) -> Vec<RevealedGlyph> {
     // speed (no reveal delay, no scroll/clear waits -- a plain label has
     // none of those tokens); +1 covers the terminal `Finished` tick.
     for _ in 0..=tokens_len(label) {
-        match printer.tick(false) {
+        match printer.tick(PrinterInput::none()) {
             TickEvent::Glyph(g) => glyphs.push(*g),
             TickEvent::Finished => break,
             _ => {}

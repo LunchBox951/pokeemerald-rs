@@ -388,8 +388,9 @@ fn no_scene_outside_the_overworld_writes_the_save() {
         ),
     ];
     if let Ok(scene) = intro::load_default() {
-        // A fresh real intro cannot finish in these three frames; B is the
-        // only immediate skip to the asset-pack-dependent handoff.
+        // A fresh real intro cannot finish in these three frames -- issue
+        // #393 deleted the whole-intro B-skip that used to reach the
+        // asset-pack-dependent handoff immediately, so nothing here can.
         scenes.push((
             AppScene::Intro(Box::new(scene)),
             &[Buttons::START, Buttons::A, Buttons::DOWN],
@@ -421,22 +422,41 @@ fn no_scene_outside_the_overworld_writes_the_save() {
     );
 }
 
-/// I-3 scene-flow test: intro finishing (here, via the skip path --
-/// `crate::intro`'s module docs on why B skips the whole intro) hands
-/// off to the overworld with the player placed at the upstream spawn
-/// tile (`crate::new_game::SPAWN_POSITION`), not left at `(0, 0)` or
-/// wherever the intro's own defaults would otherwise leave it.
+/// I-3 scene-flow test: the intro's own paged advance-on-confirm (issue
+/// #393 deleted the old pre-1.0 whole-intro B-skip this used to take a
+/// shortcut through -- `crate::intro`'s own module docs' "Advance"
+/// section) reaches the overworld once every page is read, with the
+/// player placed at the upstream spawn tile (`crate::new_game::SPAWN_POSITION`),
+/// not left at `(0, 0)` or wherever the intro's own defaults would
+/// otherwise leave it. Confirms every tick with A; `IntroScene`'s own
+/// headless tests (`crate::intro::tests`) already cover the finer
+/// per-page timing, including B's identical advance and the `{PAUSE 96}`
+/// control code.
 #[test]
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
-fn intro_skip_transitions_to_overworld_with_the_player_at_the_spawn_tile() {
-    let intro_scene = crate::intro::load_default().expect("run `cargo xtask extract` first");
-    let (_temp, mut save_slot) = empty_slot("intro-skip");
-    let scene = AppScene::Intro(Box::new(intro_scene));
+fn intro_finishing_every_page_transitions_to_overworld_with_the_player_at_the_spawn_tile() {
+    let mut intro_scene = crate::intro::load_default().expect("run `cargo xtask extract` first");
+    let confirm_a = engine::text::render::PrinterInput {
+        a_pressed: true,
+        b_pressed: false,
+        a_held: false,
+        b_held: false,
+    };
+    let mut status = IntroStatus::Continue;
+    for _ in 0..20_000 {
+        status = intro_scene.tick(confirm_a);
+        if status == IntroStatus::Finished {
+            break;
+        }
+    }
+    assert_eq!(status, IntroStatus::Finished, "the intro must terminate");
 
-    let (next, _frame) = advance_scene(scene, pressed(Buttons::B), &mut save_slot);
+    let (_temp, mut save_slot) = empty_slot("intro-paged");
+    let scene = AppScene::Intro(Box::new(intro_scene));
+    let (next, _frame) = advance_scene(scene, ButtonState::new(), &mut save_slot);
 
     let AppScene::Overworld(phase) = next else {
-        panic!("expected the skipped intro to hand off to the overworld");
+        panic!("expected the finished intro to hand off to the overworld");
     };
     assert_eq!(phase.player.position(), new_game::SPAWN_POSITION);
     assert_eq!(phase.player.elevation(), new_game::SPAWN_ELEVATION);
@@ -455,27 +475,4 @@ fn intro_skip_transitions_to_overworld_with_the_player_at_the_spawn_tile() {
     assert_eq!(phase.save1.location.map_num, new_game::SPAWN_MAP_NUM);
     assert_eq!(phase.save2.player_gender, new_game::DEFAULT_PLAYER_GENDER);
     assert_eq!(phase.save2.encryption_key, 0);
-}
-
-/// I-3 scene-flow test: the intro's own paged advance-on-confirm (not
-/// just the skip shortcut) also reaches the overworld once every page
-/// is read. Confirms every tick; `IntroScene`'s own headless tests
-/// (`crate::intro::tests`) already cover the finer per-page timing.
-#[test]
-#[ignore = "needs a local pack: run `cargo xtask extract` first"]
-fn intro_finishing_every_page_also_transitions_to_the_overworld() {
-    let mut intro_scene = crate::intro::load_default().expect("run `cargo xtask extract` first");
-    let mut status = IntroStatus::Continue;
-    for _ in 0..20_000 {
-        status = intro_scene.tick(true, false);
-        if status == IntroStatus::Finished {
-            break;
-        }
-    }
-    assert_eq!(status, IntroStatus::Finished, "the intro must terminate");
-
-    let (_temp, mut save_slot) = empty_slot("intro-paged");
-    let scene = AppScene::Intro(Box::new(intro_scene));
-    let (next, _frame) = advance_scene(scene, ButtonState::new(), &mut save_slot);
-    assert!(matches!(next, AppScene::Overworld(_)));
 }

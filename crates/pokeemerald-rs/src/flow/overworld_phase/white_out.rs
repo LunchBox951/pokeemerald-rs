@@ -28,9 +28,14 @@
 //!      reproduces exactly this: `self.save1.money /= 2`.
 //!    - `HealPlayerParty()` (`src/script_pokemon_util.c:30-59`) -- full HP,
 //!      full PP, cleared status for every party member.
-//!      [`battle::BattlePokemon::heal`] is the per-mon effect; this port
-//!      models one party slot ([`OverworldPhase::party_lead`]), so healing
-//!      it is the whole of this port's `HealPlayerParty`.
+//!      [`battle::BattlePokemon::heal`] is the per-mon effect, and this
+//!      port models one party slot ([`OverworldPhase::party_lead`]), so
+//!      healing that slot restores its HP and PP. `battle` models no
+//!      non-volatile status and no EV-raised maximum, so this transition
+//!      completes the heal on the retained backing record directly:
+//!      clearing its status word and restoring its `hp` to its own
+//!      `max_hp`; the next merge/save therefore cannot restore the
+//!      pre-white-out status or file the healed lead as damaged.
 //!    - `Overworld_ResetStateAfterWhiteOut` (`:399-...`, private upstream)
 //!      -- clears field-effect/avatar transition state this port has no
 //!      counterpart for (cycling road, Safari Zone, etc. flags this port
@@ -135,8 +140,44 @@ impl OverworldPhase {
 
         // HealPlayerParty() -- this port's one modeled party slot.
         if let Some(lead) = self.party_lead.as_mut() {
-            if let Err(error) = lead.heal(&Dex::new()) {
-                eprintln!("white-out: couldn't heal the party lead ({error}) -- left as-is");
+            let dex = Dex::new();
+            match lead.heal(&dex) {
+                Ok(()) => {
+                    // `MON_DATA_STATUS`: the battle model has no status field, so clear the
+                    // retained save record at the transition boundary where upstream heals it.
+                    self.save1.player_party[0].status = 0;
+                    // `MON_DATA_HP`: the heal fills the battler to the model's 0-EV
+                    // maximum, but the retained record's maximum may carry an EV
+                    // contribution above it. Upstream restores to MAX_HP
+                    // (`script_pokemon_util.c:39-42`), so complete that here too --
+                    // otherwise the next merge files a fully healed lead as damaged.
+                    self.save1.player_party[0].hp = self.save1.player_party[0].max_hp;
+                    // The record's hp no longer matches what the (healed) battler
+                    // will report, so re-measure the load offset the merge adds
+                    // back onto it -- [`crate::party::hp_hidden_by_load`], fed the
+                    // record *as just healed* (`hp == max_hp`), the same function
+                    // `copy_party_and_objects_from_save` uses at load. That -- not
+                    // `lead.stats().max_hp` -- matters: this record may have
+                    // levelled up since the load that first measured its offset
+                    // (a battle won, then lost, on the way to this white-out), and
+                    // `lead.stats().max_hp` is the `0`-EV floor at the battler's
+                    // *current* level, while `self.save1.player_party[0].max_hp`
+                    // here is still the retained maximum at the record's own
+                    // (unchanged) `level` byte -- comparing the two would measure
+                    // a gap between mismatched levels. `hp_hidden_by_load` instead
+                    // floors at `stored.level`, matching what
+                    // `merge_into_save_pokemon`'s recompute branch rebases against
+                    // (`base.level`, that same still-unchanged byte) on the next
+                    // save (issue #384's round-3 review: an EV-trained lead that
+                    // levelled up and then whited out filed damaged, because the
+                    // gap `F(mon.level()) - F(base.level)` this mismatch drops is
+                    // real HP the next merge could never recover).
+                    self.lead_hp_hidden_by_load =
+                        crate::party::hp_hidden_by_load(&dex, &self.save1.player_party[0], lead);
+                }
+                Err(error) => {
+                    eprintln!("white-out: couldn't heal the party lead ({error}) -- left as-is");
+                }
             }
         }
 
@@ -158,13 +199,161 @@ mod tests {
     use assets::MapId;
     use engine::save::{Coords16, WarpData};
 
-    use crate::flow::save_continue_tests::save_from_the_start_menu;
+    use crate::flow::save_continue_tests::{new_game_phase, save_from_the_start_menu};
     use crate::flow::tests::TempSave;
 
     use super::OverworldPhase;
 
     const ROUTE_101_STATE: u16 = 0x4060;
     const FLAG_TEMP_12: u16 = 0x12;
+
+    #[test]
+    fn white_out_clears_stored_status_before_an_immediate_save() {
+        const STORED_STATUS: u32 = 0x40;
+
+        let mut phase = new_game_phase();
+        let trainer_id = u32::from_le_bytes(phase.save2.player_trainer_id);
+        let lead = crate::new_game::provisional_starter().with_original_trainer_id(trainer_id);
+        let mut stored = crate::party::to_save_pokemon(&battle::Dex::new(), &lead);
+        stored.status = STORED_STATUS;
+        phase.save1.player_party_count = 1;
+        phase.save1.player_party[0] = stored;
+        phase.party_lead = Some(lead);
+        assert_ne!(
+            phase.save1.player_party[0].status, 0,
+            "setup: lead is statused"
+        );
+
+        phase.white_out();
+
+        let temp = TempSave::new("white-out-clears-stored-status");
+        let mut slot = temp.slot();
+        save_from_the_start_menu(&mut phase, &mut slot);
+        assert_eq!(slot.load().block1.player_party[0].status, 0);
+    }
+
+    /// The HP half of the same completion: an EV-trained record's maximum
+    /// sits above the model's, and `heal` can only fill the battler to the
+    /// model's own full. The white-out restores the record's `hp` to its
+    /// retained `max_hp`, as upstream's `HealPlayerParty` does, so the
+    /// next save files the healed lead at full rather than damaged.
+    #[test]
+    fn white_out_restores_the_stored_hp_to_the_retained_maximum() {
+        const EV_HP_BONUS: u16 = 7;
+
+        let mut phase = new_game_phase();
+        let trainer_id = u32::from_le_bytes(phase.save2.player_trainer_id);
+        let lead = crate::new_game::provisional_starter().with_original_trainer_id(trainer_id);
+        let mut stored = crate::party::to_save_pokemon(&battle::Dex::new(), &lead);
+        stored.max_hp += EV_HP_BONUS;
+        stored.hp = 1;
+        phase.save1.player_party_count = 1;
+        phase.save1.player_party[0] = stored;
+        phase.party_lead = Some(lead);
+
+        phase.white_out();
+
+        let temp = TempSave::new("white-out-restores-stored-hp");
+        let mut slot = temp.slot();
+        save_from_the_start_menu(&mut phase, &mut slot);
+        let saved = slot.load().block1.player_party[0];
+        assert_eq!(saved.hp, saved.max_hp, "a white-out heal files full");
+        assert_eq!(
+            saved.max_hp, stored.max_hp,
+            "the EV-raised maximum is retained"
+        );
+    }
+
+    /// Issue #384's round-3 review: a level-up between load and a
+    /// subsequent loss must not cost the lead's retained EV points. The
+    /// previous fix re-measured [`OverworldPhase::white_out`]'s own offset
+    /// against `lead.stats().max_hp` -- the `0`-EV floor at the battler's
+    /// *current* level -- while [`crate::party::merge_into_save_pokemon`]'s
+    /// recompute branch rebases that same offset against a floor taken at
+    /// `base.level`, the record's own (still pre-level-up) stored byte. A
+    /// level-up before the white-out left those two floors measured at
+    /// different levels, and the gap between them -- real, EV-derived HP --
+    /// went missing from the very next save. Reproduced through the real
+    /// flow this port drives a white-out through, not by calling the merge
+    /// directly, because the defect lives in what
+    /// [`OverworldPhase::white_out`] itself writes into
+    /// [`OverworldPhase::lead_hp_hidden_by_load`] before any merge runs.
+    #[test]
+    fn white_out_after_a_level_up_files_the_healed_lead_at_full_not_damaged() {
+        let dex = battle::Dex::new();
+        let mut phase = new_game_phase();
+        let trainer_id = u32::from_le_bytes(phase.save2.player_trainer_id);
+        let lead = crate::new_game::provisional_starter().with_original_trainer_id(trainer_id);
+        let species = dex
+            .species(lead.species())
+            .expect("the starter is in the dex");
+
+        // A real hp-EV investment: the recompute branch this test exercises
+        // reads the record's own retained EV substructure bytes, so they
+        // have to be genuine, not just a bump to `stored.max_hp` the way
+        // `white_out_restores_the_stored_hp_to_the_retained_maximum` above
+        // gets away with for its untouched-level fixture.
+        let evs = battle::Evs {
+            hp: 252,
+            ..battle::Evs::default()
+        };
+        let ev_aware_at_level_5 =
+            battle::compute_stats_with_evs(species, lead.level(), lead.nature(), lead.ivs(), evs);
+
+        let mut stored = crate::party::to_save_pokemon(&dex, &lead);
+        let mut substructures = stored
+            .box_data
+            .substructures()
+            .expect("a freshly encoded record decrypts");
+        substructures.evs_and_condition[0] = evs.hp;
+        stored.box_data.set_substructures(&substructures);
+        stored.max_hp = u16::try_from(ev_aware_at_level_5.max_hp).unwrap();
+        stored.hp = stored.max_hp;
+
+        phase.save1.player_party_count = 1;
+        phase.save1.player_party[0] = stored;
+        phase.party_lead = Some(lead);
+
+        // A battle won this session raises the level, exactly as
+        // `BattlePokemon::apply_experience` would; `reconcile_saved_experience`
+        // exercises the identical stats-preserving level-raise machinery
+        // (`BattlePokemon::raise_level_to_experience`) without needing a
+        // full battle fixture here.
+        let level_13 = assets::experience_for_level(species.growth_rate, 13)
+            .expect("level 13 is on every growth curve");
+        let leveled_lead = phase.party_lead.as_mut().expect("setup: a lead is present");
+        leveled_lead.reconcile_saved_experience(level_13);
+        assert_eq!(leveled_lead.level(), 13, "fixture sanity: the level moved");
+        assert_eq!(
+            leveled_lead.current_hp(),
+            leveled_lead.stats().max_hp,
+            "fixture sanity: the mon is still at its own (0-EV) full \
+             through the level-up, unfainted, so the white-out below heals \
+             a live lead"
+        );
+
+        phase.white_out();
+
+        let temp = TempSave::new("white-out-after-level-up");
+        let mut slot = temp.slot();
+        save_from_the_start_menu(&mut phase, &mut slot);
+        let saved = slot.load().block1.player_party[0];
+
+        let final_lead = phase.party_lead.as_ref().expect("still present");
+        let ev_aware_at_level_13 =
+            battle::compute_stats_with_evs(species, 13, final_lead.nature(), final_lead.ivs(), evs);
+        assert_eq!(
+            saved.max_hp,
+            u16::try_from(ev_aware_at_level_13.max_hp).unwrap(),
+            "fixture sanity: the merge recomputed the level-13 EV-aware block"
+        );
+        assert_eq!(
+            saved.hp, saved.max_hp,
+            "a white-out heal after a level-up must file the lead at full \
+             under the new maximum -- not damaged by the gap between the \
+             old and new floors the mismatched-level offset lost"
+        );
+    }
 
     #[test]
     #[ignore = "needs a local pack: run `cargo xtask extract` first"]
@@ -242,6 +431,44 @@ mod tests {
                 x: heal_location.x,
                 y: heal_location.y,
             }
+        );
+    }
+
+    /// Issue #379: the relocated player's elevation must already be the
+    /// heal-location tile's own real elevation the instant [`white_out`]
+    /// returns, before any step ever runs -- not the `ELEVATION_TRANSITION`
+    /// wildcard [`OverworldPhase::warp_to_position`] used to hardcode.
+    /// [`crate::new_game::default_last_heal_location`]'s male default names
+    /// `(4, 2)` on the default player's house 2F, which is elevation `3` in
+    /// the real bundled layout -- confirmed by this test rather than merely
+    /// asserted, since a fixture that stopped matching the real tile would
+    /// otherwise pass vacuously. Both
+    /// [`engine::overworld::PlayerState::elevation`] and
+    /// [`engine::overworld::PlayerState::previous_elevation`] must read `3`:
+    /// [`engine::overworld::PlayerState::new`]'s own doc comment records
+    /// that a freshly placed player starts both fields equal.
+    #[test]
+    #[ignore = "needs a local pack: run `cargo xtask extract` first"]
+    fn real_pack_white_out_relocation_adopts_the_heal_locations_elevation_before_any_movement() {
+        let mut phase = OverworldPhase::load_default().expect("run `cargo xtask extract` first");
+        let heal_location = phase.save1.last_heal_location;
+        assert_eq!(
+            (heal_location.x, heal_location.y),
+            (4, 2),
+            "setup: the default save's own male heal-location default"
+        );
+
+        phase.white_out();
+
+        assert_eq!(
+            phase.player.elevation(),
+            3,
+            "the heal-location tile's own real elevation, not the transition wildcard"
+        );
+        assert_eq!(
+            phase.player.previous_elevation(),
+            3,
+            "a freshly placed player's previous elevation starts equal to its current one"
         );
     }
 }

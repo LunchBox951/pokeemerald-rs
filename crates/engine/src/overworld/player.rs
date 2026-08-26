@@ -226,6 +226,14 @@ impl PlayerState {
     /// [`super::collision::ELEVATION_MULTI_LEVEL`] — upstream's own early
     /// return, guarding the sentinel some multi-level bridge overlaps use
     /// for "this cell doesn't have one well-defined elevation".
+    ///
+    /// This is the *per-step* half of upstream's one function, where
+    /// `currentCoords` and `previousCoords` really are different cells.
+    /// [`super::map_runtime::MapRuntime::arrival_elevation`] is the
+    /// *spawn/arrival* half (issue #379), reading the same rule off a single
+    /// cell because a freshly placed object event's two coordinate pairs are
+    /// equal (`event_object_movement.c:1309-1312`) — see that method's own
+    /// docs for why the `prevElevation` half of the guard collapses there.
     fn adopt_elevation(&mut self, origin: u8, dest: u8) {
         if origin == super::collision::ELEVATION_MULTI_LEVEL
             || dest == super::collision::ELEVATION_MULTI_LEVEL
@@ -330,7 +338,10 @@ impl PlayerState {
     ///
     /// # Elevation adoption
     ///
-    /// [`Self::adopt_elevation`] is `ObjectEventUpdateElevation` in full:
+    /// [`Self::adopt_elevation`] is `ObjectEventUpdateElevation` in full for
+    /// a player who is already on the map and steps
+    /// ([`super::map_runtime::MapRuntime::arrival_elevation`] is the same
+    /// function's arrival read, for a player being placed):
     /// [`Self::elevation`] (upstream `currentElevation`, what the collision
     /// check above consults) adopts *every* arrival elevation, including the
     /// `ELEVATION_TRANSITION` wildcard; [`Self::previous_elevation`]

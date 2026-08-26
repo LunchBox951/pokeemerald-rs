@@ -37,8 +37,10 @@
 //! immunity), and 7 once at the end. [`resolve_hit`] is the composition of
 //! all three, i.e. `BattleScript_EffectHit` itself.
 //!
-//! So, **when `suppress_crit` is `false`** (every battle but a first
-//! battle — see below), one move resolution costs:
+//! So, **when `suppress_crit` is `false` and the defender carries neither
+//! Battle Armor nor Shell Armor** (every battle but a first battle, against
+//! every defender but an armored one — see below), one move resolution
+//! costs:
 //!
 //! | move | draws | which |
 //! |------|-------|-------|
@@ -62,20 +64,24 @@
 //! (`battle_script_commands.c:1279`-`:1283`), so a defender with Battle Armor
 //! / Shell Armor, an attacker under `STATUS3_CANT_SCORE_A_CRIT`, or a
 //! `BATTLE_TYPE_WALLY_TUTORIAL` / `BATTLE_TYPE_FIRST_BATTLE` battle makes
-//! step 2 draw **nothing** as well. The first two of those three still don't
-//! exist anywhere in this crate (neither armour ability is modelled — see
-//! [`crate::ability`] for the two that are — and there is no
-//! `STATUS3_CANT_SCORE_A_CRIT`), but the third
-//! does, as of issue #187: [`crate::battle::Battle`]'s `first_battle` flag
-//! passes `suppress_crit = true` into every [`resolve_hit`] call for the
-//! whole battle, dropping every row above by exactly one draw (accuracy-only
-//! on a miss, unaffected; **3** for an ordinary hit, **2** for an
-//! accuracy-bypassing hit, **2** for a landed Struggle) and forcing
-//! [`HitOutcome::Hit`]'s `is_critical` field to `false` regardless of what
-//! the dropped roll would have produced — see [`crate::critical`]'s module
-//! docs. (Serene Grace doubling `percentChance` in step 7 similarly cannot
-//! matter: no abilities, and the draw's value is discarded for every
-//! allow-listed move regardless.)
+//! step 2 draw **nothing** as well. The defender's Battle Armor / Shell
+//! Armor is checked directly off `defender`
+//! ([`crate::ability::suppresses_critical_hits`], issue #391 — see
+//! [`crate::ability`]'s module docs for the reachable carriers), so it
+//! needs no caller flag; there is
+//! still no `STATUS3_CANT_SCORE_A_CRIT` anywhere in this crate.
+//! `BATTLE_TYPE_WALLY_TUTORIAL` / `BATTLE_TYPE_FIRST_BATTLE` does, as of
+//! issue #187: [`crate::battle::Battle`]'s `first_battle` flag passes
+//! `suppress_crit = true` into every [`resolve_hit`] call for the whole
+//! battle. Either suppressor — the caller's flag or the defender's ability —
+//! drops the row above by exactly one draw (accuracy-only on a miss,
+//! unaffected; **3** for an ordinary hit, **2** for an accuracy-bypassing
+//! hit, **2** for a landed Struggle) and forces [`HitOutcome::Hit`]'s
+//! `is_critical` field to `false` regardless of what the dropped roll would
+//! have produced — see [`crate::critical`]'s module docs. (Serene Grace
+//! doubling `percentChance` in step 7 similarly cannot matter: no Serene
+//! Grace is modelled — it is not one of [`crate::ability`]'s six — and the
+//! draw's value is discarded for every allow-listed move regardless.)
 //!
 //! # Which moves this pipeline may be handed
 //!
@@ -131,7 +137,7 @@
 
 use assets::{MoveEffect, MoveId, Type};
 
-use crate::ability::pinch_boosts_power;
+use crate::ability::{huge_power_attack, pinch_boosts_power, suppresses_critical_hits};
 use crate::accuracy::accuracy_check;
 use crate::critical::{crit_adjusted_stages, crit_roll, crit_stage};
 use crate::damage::{
@@ -287,7 +293,9 @@ pub struct RawDamage {
 /// the plain hit script spends both. A single fused function could not
 /// express both shapes `(behavioral-fidelity)`.
 ///
-/// Draws **1** when `suppress_crit` is `false` and **0** when it is `true`.
+/// Draws **1** when `suppress_crit` is `false` *and* the defender lacks
+/// Battle Armor / Shell Armor, and **0** otherwise — either suppressor alone
+/// skips the draw ([`crate::ability::suppresses_critical_hits`]).
 ///
 /// # Errors
 ///
@@ -310,8 +318,13 @@ pub fn damage_before_roll(
     let category = MoveCategory::for_type(move_type);
 
     // No crit stage is even computed when suppressed: nothing downstream
-    // reads it, and computing it would falsely imply the draw still mattered.
-    let is_critical = if suppress_crit {
+    // reads it, and computing it would falsely imply the draw still
+    // mattered. The defender's Battle Armor / Shell Armor short-circuits
+    // `Cmd_critcalc`'s `&&` chain exactly as `suppress_crit` does
+    // (`battle_script_commands.c:1279`-`:1283`, module docs) -- fold it in
+    // *before* the draw, not after, so the ability costs zero RNG the same
+    // way the caller-supplied flag does.
+    let is_critical = if suppress_crit || suppresses_critical_hits(defender.ability()) {
         false
     } else {
         let stage = crit_stage(mv.effect, attacker.volatiles().focus_energy);
@@ -319,6 +332,10 @@ pub fn damage_before_roll(
     };
 
     let (attack_stat, attack_stage) = attacker.attacking_stat(category);
+    // Huge Power / Pure Power double the raw stat here, ahead of the
+    // stat-stage multiply `crate::damage::base_damage` applies below --
+    // see `huge_power_attack`'s docs for why that order is load-bearing.
+    let attack_stat = huge_power_attack(attacker.ability(), category, attack_stat);
     let (defense_stat, defense_stage) = defender.defending_stat(category);
     let (attack_stage, defense_stage) =
         crit_adjusted_stages(attack_stage, defense_stage, is_critical);
@@ -387,8 +404,9 @@ pub fn damage_before_roll(
 /// about it ([`crate::drain`] never reaches it, [`crate::multi_hit`] takes
 /// it once for the whole move).
 ///
-/// Draws **2** when `suppress_crit` is `false` (crit roll, damage roll) and
-/// **1** when it is `true` — the damage roll happens even at `0` damage.
+/// Draws **2** when `suppress_crit` is `false` *and* the defender lacks
+/// Battle Armor / Shell Armor, and **1** otherwise — either suppressor drops
+/// the crit roll; the damage roll always happens, even at `0` damage.
 ///
 /// Status conditions (burn), Reflect/Light Screen, and weather are not
 /// modelled this slice: [`crate::damage::DamageInput`]'s corresponding
@@ -400,14 +418,18 @@ pub fn damage_before_roll(
 /// and Charge's Electric doubling (`Cmd_damagecalc`'s
 /// `STATUS3_CHARGED_UP` test, `battle_script_commands.c:1298`-`:1299`).
 ///
-/// `suppress_crit` reproduces `Cmd_critcalc`'s short-circuiting `&&` chain
+/// `suppress_crit` reproduces the *caller-known* one of `Cmd_critcalc`'s
+/// three short-circuiting `&&` operands
 /// (`battle_script_commands.c:1279`-`:1283`, [`crate::critical`]'s module
-/// docs): pass `true` when any of its three suppressors is in play —
-/// currently just `BATTLE_TYPE_WALLY_TUTORIAL | BATTLE_TYPE_FIRST_BATTLE`
-/// (`:1281`), which [`crate::battle::Battle`] does via its `first_battle`
-/// flag — to skip the crit roll **and its RNG draw** entirely, exactly as
+/// docs): pass `true` when it is in play — currently just
+/// `BATTLE_TYPE_WALLY_TUTORIAL | BATTLE_TYPE_FIRST_BATTLE` (`:1281`), which
+/// [`crate::battle::Battle`] does via its `first_battle` flag — to skip the
+/// crit roll **and its RNG draw** entirely, exactly as
 /// [`crate::critical::crit_roll`]'s own docs require of a caller that gains
-/// one of the suppressors, rather than drawing and discarding.
+/// one of the suppressors, rather than drawing and discarding. The other
+/// operand this function honours, the defender's Battle Armor / Shell Armor
+/// (`:1279`), needs no caller flag: [`damage_before_roll`] checks it
+/// directly off `defender`.
 ///
 /// # Errors
 ///

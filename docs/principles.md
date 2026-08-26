@@ -36,6 +36,11 @@ specification of the game (data, scripts, text, formulas); `mgba/` clarifies how
 hardware would have behaved. Both are gitignored, read-only, and pulled by
 `init.sh`. Never edit them, never commit them, never link against them.
 
+mGBA's pixel math is build-configurable; the oracle is **stock desktop
+mGBA** (SDL/Qt, no `COLOR_16_BIT`: 32-bit `mColor`, 8-bit channels), the
+build v1 acceptance plays against. `crates/rendering/src/effects.rs`'s
+module docs carry the derivation and citations.
+
 **3. No verbatim copies (`no-verbatim`).** Read the upstream behaviour, then
 re-express it in idiomatic Rust. Translating a table of constants is fine;
 transliterating a C function line-for-line is not.

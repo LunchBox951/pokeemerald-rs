@@ -14,12 +14,20 @@
 //! `0` EVs — matching a freshly caught wild mon and an EV-less starting
 //! player mon, both realistic for a first encounter), held items,
 //! non-volatile status conditions, and the Shedinja 1-HP special case in
-//! `CalculateMonStats`. Abilities are out of scope too, with one exception:
-//! [`BattlePokemon::ability`] (issues #321/#322), consumed by
+//! `CalculateMonStats`. [`compute_stats_with_evs`] is the one crack in
+//! that boundary: the `CALC_STAT`/`CalculateMonStats` formula itself does
+//! carry an EV parameter, for the sole caller outside this crate that has
+//! real EVs and no [`BattlePokemon`] of its own to attach them to
+//! (`pokeemerald-rs`'s `party::merge_into_save_pokemon`, issue #384) — no
+//! [`BattlePokemon`] this crate builds ever has a nonzero one. Abilities
+//! are out of scope too, with one exception:
+//! [`BattlePokemon::ability`] (issues #321/#322/#391), consumed by
 //! [`crate::stat_change`]'s ability guards (Clear Body, White Smoke, Keen
-//! Eye, Hyper Cutter) and by [`crate::ability`]'s two damage-formula
-//! checks (Overgrow's pinch boost, Liquid Ooze's drain inversion) — see
-//! those modules' docs for why the ability system stops there.
+//! Eye, Hyper Cutter) and by [`crate::ability`]'s six damage-path checks
+//! (Overgrow's pinch boost, Liquid Ooze's drain inversion, Battle Armor's
+//! and Shell Armor's crit suppression, Huge Power's and Pure Power's
+//! Attack doubling) — see those modules' docs for why the ability system
+//! stops there.
 //!
 //! Two concerns live in sibling modules rather than here, each because it is
 //! its own concept `(oop-boundaries)`: [`pp_bonuses`] owns the packed
@@ -139,6 +147,33 @@ impl Ivs {
     }
 }
 
+/// The six Pokémon **effort values**, as stored in `PokemonSubstruct2`'s
+/// first six bytes (`hpEV`/`attackEV`/`defenseEV`/`speedEV`/`spAttackEV`/
+/// `spDefenseEV`, `pokeemerald/include/pokemon.h:117`-`:122`) — the same
+/// HP/Attack/Defense/Speed/Sp. Attack/Sp. Defense order as [`Ivs`].
+///
+/// Not a field of [`BattlePokemon`]: every mon this crate builds has `0`
+/// EVs (module docs), so this type exists only to carry a value through
+/// [`compute_stats_with_evs`] for a caller outside this crate that has real
+/// EVs to feed it and no battler of its own to attach them to — issue
+/// #384's `party::merge_into_save_pokemon`, recomputing a levelled-up
+/// stat block from a loaded record's retained bytes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub struct Evs {
+    /// HP EV.
+    pub hp: u8,
+    /// Attack EV.
+    pub attack: u8,
+    /// Defense EV.
+    pub defense: u8,
+    /// Speed EV.
+    pub speed: u8,
+    /// Sp. Attack EV.
+    pub sp_attack: u8,
+    /// Sp. Defense EV.
+    pub sp_defense: u8,
+}
+
 /// A Pokémon's final computed battle stats — the `CalculateMonStats` output
 /// (`pokeemerald/src/pokemon.c:2823`), pre-stage (stat stages are tracked
 /// separately, see [`StatStages`], and applied by the damage/turn-order
@@ -220,41 +255,94 @@ pub struct MoveSlot {
 /// `s32 n = (((2 * baseStat + iv + ev / 4) * level) / 100) + 5;` (`:2817`),
 /// followed by `ModifyStatByNature` (`:2819`) — [`Nature::modify_stat`].
 ///
-/// The `ev / 4` term is **absent from the expression below** rather than
-/// written as a constant `0`: every mon this slice builds has `0` EVs (see
-/// the module docs), and `ev / 4` is its own integer division whose result
-/// (`0`) is added *before* the `* level` and `/ 100` steps, so dropping it
-/// cannot change the value or the division order `(behavioral-fidelity)`.
-/// Whenever EV tracking arrives, the term has to come back at that exact
-/// position — inside the parenthesised sum, not folded into `n`.
-fn calc_stat(base: u8, individual_value: u8, level: u8, nature: Nature, stat: Stat) -> u32 {
-    let n = (2 * u32::from(base) + u32::from(individual_value)) * u32::from(level) / 100 + 5;
+/// `ev / 4` is its own integer division, added *inside* the parenthesised
+/// sum — before the `* level` and `/ 100` steps, exactly as upstream's line
+/// orders it. Every mon [`compute_stats`] builds passes `0` here (see the
+/// module docs), for which that division is the identity and changes
+/// nothing; [`compute_stats_with_evs`] is the caller that passes a real
+/// value, for [`crate::pokemon`]'s one external EV-aware caller (issue
+/// #384's `party::merge_into_save_pokemon`).
+fn calc_stat(
+    base: u8,
+    individual_value: u8,
+    effort_value: u8,
+    level: u8,
+    nature: Nature,
+    stat: Stat,
+) -> u32 {
+    let n = (2 * u32::from(base) + u32::from(individual_value) + u32::from(effort_value) / 4)
+        * u32::from(level)
+        / 100
+        + 5;
     nature.modify_stat(stat, n)
 }
 
-/// The max-HP half of `CalculateMonStats` (`pokeemerald/src/pokemon.c:2851`):
-/// `(((2*base + iv) * level) / 100) + level + 10`. HP is never nature-modified
+/// The max-HP half of `CalculateMonStats` (`pokeemerald/src/pokemon.c`):
+/// `n = 2 * base + hpIV` (`:2851`), then
+/// `newMaxHP = (((n + hpEV / 4) * level) / 100) + level + 10;` (`:2852`).
+/// HP is never nature-modified
 /// (`ModifyStatByNature` special-cases `statIndex <= STAT_HP`). The Shedinja
 /// 1-HP special case (`species == SPECIES_SHEDINJA`) is not modelled.
-fn calc_max_hp(base: u8, individual_value: u8, level: u8) -> u32 {
-    let n = 2 * u32::from(base) + u32::from(individual_value);
+fn calc_max_hp(base: u8, individual_value: u8, effort_value: u8, level: u8) -> u32 {
+    let n = 2 * u32::from(base) + u32::from(individual_value) + u32::from(effort_value) / 4;
     (n * u32::from(level)) / 100 + u32::from(level) + 10
 }
 
 /// Compute a Pokémon's final battle stats from its base stats, level,
 /// nature, and IVs — `CalculateMonStats` (`pokeemerald/src/pokemon.c:2823`)
-/// with EVs fixed at `0` (see the module docs).
+/// with EVs fixed at `0`, because every mon [`BattlePokemon`] builds has `0`
+/// EVs (see the module docs). [`compute_stats_with_evs`] is the same
+/// formula for a caller that has real EVs to feed it.
 #[must_use]
 pub fn compute_stats(base: &BaseStats, level: u8, nature: Nature, ivs: Ivs) -> Stats {
+    compute_stats_with_evs(base, level, nature, ivs, Evs::default())
+}
+
+/// [`compute_stats`], but with the `ev / 4` term `CalculateMonStats`
+/// (`pokeemerald/src/pokemon.c:2823`) folds into every stat restored: this
+/// crate's own [`BattlePokemon`] never carries EVs (module docs), so the
+/// only caller that has any to pass is outside this crate — issue #384's
+/// `party::merge_into_save_pokemon`, filing a loaded EV-trained lead's
+/// levelled-up stat block consistent with the EVs its record retains.
+#[must_use]
+pub fn compute_stats_with_evs(
+    base: &BaseStats,
+    level: u8,
+    nature: Nature,
+    ivs: Ivs,
+    evs: Evs,
+) -> Stats {
     Stats {
-        max_hp: calc_max_hp(base.hp, ivs.hp, level),
-        attack: calc_stat(base.attack, ivs.attack, level, nature, Stat::Attack),
-        defense: calc_stat(base.defense, ivs.defense, level, nature, Stat::Defense),
-        speed: calc_stat(base.speed, ivs.speed, level, nature, Stat::Speed),
-        sp_attack: calc_stat(base.sp_attack, ivs.sp_attack, level, nature, Stat::SpAttack),
+        max_hp: calc_max_hp(base.hp, ivs.hp, evs.hp, level),
+        attack: calc_stat(
+            base.attack,
+            ivs.attack,
+            evs.attack,
+            level,
+            nature,
+            Stat::Attack,
+        ),
+        defense: calc_stat(
+            base.defense,
+            ivs.defense,
+            evs.defense,
+            level,
+            nature,
+            Stat::Defense,
+        ),
+        speed: calc_stat(base.speed, ivs.speed, evs.speed, level, nature, Stat::Speed),
+        sp_attack: calc_stat(
+            base.sp_attack,
+            ivs.sp_attack,
+            evs.sp_attack,
+            level,
+            nature,
+            Stat::SpAttack,
+        ),
         sp_defense: calc_stat(
             base.sp_defense,
             ivs.sp_defense,
+            evs.sp_defense,
             level,
             nature,
             Stat::SpDefense,
@@ -527,8 +615,9 @@ impl BattlePokemon {
     /// hardening, not upstream's: `CreateBoxMon` never sets `abilityNum`
     /// for such a species (`:2296`-`:2300`), and construction mirrors that
     /// guard, so the fallback only matters for a save-loaded slot. Consumed
-    /// by [`crate::ability`]'s Overgrow/Liquid Ooze checks (issue #321) and
-    /// by [`crate::stat_change`]'s ability
+    /// by [`crate::ability`]'s six damage-path checks (issue #321:
+    /// Overgrow, Liquid Ooze; issue #391: Battle Armor, Shell Armor, Huge
+    /// Power, Pure Power) and by [`crate::stat_change`]'s ability
     /// guards (issue #322: Clear Body, White Smoke, Keen Eye, Hyper
     /// Cutter) — see this type's module docs for why the rest of the
     /// ability system stays out.

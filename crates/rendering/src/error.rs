@@ -31,6 +31,21 @@ pub enum RenderError {
         actual: usize,
     },
 
+    /// A [`Tilemap`](crate::tilemap::Tilemap) was constructed with a nonzero
+    /// area whose `width_tiles`/`height_tiles` are not a shape
+    /// [`Tilemap::entry`](crate::tilemap::Tilemap::entry)'s screenblock
+    /// addressing accepts: either at most 32x32 (a single screenblock,
+    /// stored flat row-major) or exactly one of the three regular-BG sizes
+    /// real hardware can express (64x32, 32x64, 64x64) -- hardware
+    /// fidelity, not merely whole blocks, is the rule. This also covers
+    /// `width_tiles * height_tiles` overflowing `usize`.
+    TilemapDimensionsInvalid {
+        /// The offending width, in tiles.
+        width_tiles: usize,
+        /// The offending height, in tiles.
+        height_tiles: usize,
+    },
+
     /// An [`AffineTilemap`](crate::bg_affine::AffineTilemap)'s raw tile-index
     /// count did not match `width_tiles * height_tiles`.
     AffineTilemapSizeMismatch {
@@ -52,6 +67,14 @@ impl fmt::Display for RenderError {
             Self::TilemapSizeMismatch { expected, actual } => write!(
                 f,
                 "tilemap expected {expected} screen entries, got {actual}"
+            ),
+            Self::TilemapDimensionsInvalid {
+                width_tiles,
+                height_tiles,
+            } => write!(
+                f,
+                "tilemap dimensions {width_tiles}x{height_tiles} are not a valid single- or \
+                 multi-screenblock size"
             ),
             Self::AffineTilemapSizeMismatch { expected, actual } => write!(
                 f,
@@ -85,5 +108,13 @@ mod tests {
         let msg = err.to_string();
         assert!(msg.contains('6'));
         assert!(msg.contains('5'));
+
+        let err = RenderError::TilemapDimensionsInvalid {
+            width_tiles: 33,
+            height_tiles: 1,
+        };
+        let msg = err.to_string();
+        assert!(msg.contains("33"));
+        assert!(msg.contains('1'));
     }
 }

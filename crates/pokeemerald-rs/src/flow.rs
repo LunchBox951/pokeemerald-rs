@@ -43,6 +43,7 @@
 //!   upstream writes nothing when the lid closes, and issue #214's
 //!   `save_on_exit` stand-in existed only until this flow landed.
 
+use engine::text::render::PrinterInput;
 use platform::{ButtonState, Buttons, Frame};
 
 use crate::frame::to_platform_frame;
@@ -68,14 +69,17 @@ pub(crate) mod overworld_phase;
 /// The scripted Route 103 rival battle's own choice of trainer, reachable
 /// from real play since issue #248: [`overworld_phase`]'s own
 /// `route103_rival_trigger` (beside its existing `first_battle_trigger` and,
-/// since issue #264, `sight_trainer_trigger`) calls
-/// [`route103_rival::start_route103_rival_battle`]/
-/// [`route103_rival::advance_route103_rival_battle`] the moment the player
-/// faces the rival's object event on Route 103 and presses A -- the same
+/// since issue #264, `sight_trainer_trigger`) reads this module's
+/// [`route103_rival::route103_rival_for`] table, then calls
+/// [`npc_trainer_battle::start_npc_trainer_battle`]/
+/// [`npc_trainer_battle::advance_npc_trainer_battle`] directly -- the same
 /// reachability slice that retired [`first_battle`]'s own former
-/// `#[allow(dead_code)]` between issues #221 and #231. See
-/// [`npc_trainer_battle`] for the construction/driver this module's own
-/// functions now wrap.
+/// `#[allow(dead_code)]` between issues #221 and #231. This module carried
+/// thin pass-throughs over those two functions (plus a `RivalBattleError`
+/// alias) from issue #264 until issue #347 retired them: neither wrapper
+/// held any Route-103-specific behaviour, so [`npc_trainer_battle`] is the
+/// one place both this module's own trigger and
+/// [`overworld_phase`]'s `sight_trainer_trigger` build their battles now.
 pub(crate) mod route103_rival;
 mod wild_encounter;
 pub(crate) use overworld_phase::OverworldPhase;
@@ -220,14 +224,32 @@ fn title_advance_pressed(buttons: ButtonState) -> bool {
 }
 
 /// Whether [`AppScene::OverworldLoadFailed`]'s waiting state should retry
-/// [`OverworldPhase::load_default`] this frame -- only on a *fresh* confirm
-/// (A) or skip (B) edge, the same two buttons [`AppScene::Intro`] itself
+/// [`OverworldPhase::load_default`] this frame -- only on a *fresh* A or B
+/// edge, the same two dialogue-advance buttons [`AppScene::Intro`] itself
 /// reads (module docs on the finding this guards against: the previous
 /// behaviour re-attempted, and re-logged, the load every single frame while
 /// stuck here, since `IntroStatus::Finished` is sticky and was the only
 /// condition gating the attempt).
 fn should_retry_overworld_load(buttons: ButtonState) -> bool {
     buttons.is_newly_pressed(Buttons::A) || buttons.is_newly_pressed(Buttons::B)
+}
+
+/// Narrow a frame's real [`ButtonState`] down to the four bits
+/// [`IntroScene::tick`] needs (`engine::text::render::PrinterInput`'s own
+/// docs on why `engine` can't just take a [`ButtonState`] directly).
+///
+/// Issue #393: B is an ordinary dialogue-advance button here, exactly like
+/// A -- upstream's own `JOY_NEW`/`JOY_HELD(A_BUTTON | B_BUTTON)`
+/// (`pokeemerald/src/text.c:874-879`, `:943-953`) never distinguish which
+/// button did it, so neither does this. There is no separate whole-intro
+/// skip input anymore; the pre-1.0 `skip_pressed` this replaced is gone.
+fn intro_printer_input(buttons: ButtonState) -> PrinterInput {
+    PrinterInput {
+        a_pressed: buttons.is_newly_pressed(Buttons::A),
+        b_pressed: buttons.is_newly_pressed(Buttons::B),
+        a_held: buttons.is_held(Buttons::A),
+        b_held: buttons.is_held(Buttons::B),
+    }
 }
 
 /// Log the one-time proof that `phase`'s fresh save state
@@ -377,10 +399,10 @@ pub(crate) fn advance_scene(
             let frame = state.scene.compose_frame();
             (AppScene::MainMenu(state), frame)
         }
+        // Issue #393: B is an ordinary dialogue-advance button here, not a
+        // whole-intro skip -- `intro_printer_input`'s own doc comment.
         AppScene::Intro(mut intro_scene) => {
-            let confirm_pressed = buttons.is_newly_pressed(Buttons::A);
-            let skip_pressed = buttons.is_newly_pressed(Buttons::B);
-            let status = intro_scene.tick(confirm_pressed, skip_pressed);
+            let status = intro_scene.tick(intro_printer_input(buttons));
 
             if status == IntroStatus::Finished {
                 match OverworldPhase::load_default() {

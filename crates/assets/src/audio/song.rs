@@ -59,11 +59,12 @@
 //! sub-commands other than `xIECV`/`xIECL` (never emitted either) have no
 //! [`SongEvent`] variant in this slice. `MEMACC` *is* modelled
 //! ([`SongEvent::MemAcc`]/[`SongEvent::MemAccBranch`]): exactly one
-//! canonical song needs it (`mus_vs_trainer`'s conditional jump), but a
-//! schema that cannot represent a canonical song is not a shared contract
-//! — dropping the branch would lose it and lowering it to
-//! [`SongEvent::Goto`] would make it unconditional, audibly changing the
-//! trainer theme.
+//! canonical song needs it — `mus_vs_trainer`'s single unconditional
+//! `mem_set` of `117` into cell `0`, with no branching `mem_b*` anywhere in
+//! shipped data — and a schema that cannot represent a canonical song is
+//! not a shared contract. A byte-faithful pack must carry that write rather
+//! than drop it, and the branch conditions are modelled next to it because
+//! the format defines them as one op family, not because any song jumps.
 
 use super::cursor::{check_id_len, Reader, Writer};
 use super::error::AudioError;
@@ -147,8 +148,11 @@ pub enum SongEvent {
     /// [`SongEvent::Goto`]'s) — upstream `MEMACC` with a branching
     /// operation (`mem_beq..=mem_mem_blo`): compare cell `address` against
     /// `data` (a literal, or a cell address for the `Mem*` conditions) and
-    /// jump when the condition holds. `mus_vs_trainer` is the one canonical
-    /// song that carries this (module docs).
+    /// jump when the condition holds. No canonical song carries a *branching*
+    /// `MEMACC`: `mus_vs_trainer`, the only song with a `MEMACC` at all,
+    /// issues one unconditional `mem_set` (module docs). This variant covers
+    /// the branch half of the op family the format defines, so a ROM-sourced
+    /// backend reading hand-written sequence data has somewhere to put one.
     MemAccBranch {
         condition: MemAccCondition,
         address: u8,
