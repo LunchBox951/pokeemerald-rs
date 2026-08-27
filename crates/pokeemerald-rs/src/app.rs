@@ -400,14 +400,26 @@ impl App {
     /// This is the scripted-scenario counterpart to [`App::new`]: it runs
     /// the same scene construction, [`App::step`] transitions, and
     /// presentation calls without opening a display or pacing against wall
-    /// time. The one deliberate divergence is the pack: it loads the
-    /// checkout's own extracted pack ([`title::load_repo`]), because the
-    /// scenario and e2e gates that boot through here promise fixed inputs
-    /// (`docs/scenarios.md`) and must never validate an installed user pack
-    /// that happens to shadow the checkout's. Persistence is deliberately disabled so a scenario
-    /// always starts on the no-save menu and never reads or writes a
-    /// player's save file. No BGM is started either -- a scenario asserts
-    /// frames, not audio, and [`App::new`] alone owns the real device.
+    /// time. The one deliberate divergence is the pack: the title screen is
+    /// loaded from the checkout's own extracted pack ([`title::load_repo`]),
+    /// because the scenario and e2e gates that boot through here promise
+    /// fixed inputs (`docs/scenarios.md`) and must never validate an
+    /// installed user pack that happens to shadow the checkout's.
+    ///
+    /// That pinning reaches the title scene only. The scenes `flow`'s
+    /// `advance_scene` builds afterwards -- the main menu, the intro, the
+    /// overworld -- each resolve the pack themselves through
+    /// `load_default`, so on a machine with `$POKEEMERALD_PACK` set or a
+    /// user pack installed, a scenario that walks past the title screen
+    /// mixes checkout title assets with that pack's. CI has neither, so the
+    /// gates there read the checkout throughout. Closing the gap needs a
+    /// pack threaded through those scene loads, which is issue #412's scope,
+    /// not this constructor's.
+    ///
+    /// Persistence is deliberately disabled so a scenario always starts on
+    /// the no-save menu and never reads or writes a player's save file. No
+    /// BGM is started either -- a scenario asserts frames, not audio, and
+    /// [`App::new`] alone owns the real device.
     ///
     /// # Errors
     ///

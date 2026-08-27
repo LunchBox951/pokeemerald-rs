@@ -9,9 +9,11 @@
 //!
 //! [`title`] decodes the real title screen from the local asset pack
 //! (`assets::pack`, populated by `pokeemerald-rs --import-rom <rom>` or, in
-//! a checkout, `cargo xtask extract`); [`App::new`] uses
-//! it, falling back to no scene at all (a clean, no-panic diagnostic) when
-//! there is no pack yet -- see [`title`]'s module docs.
+//! a checkout, `cargo xtask extract`); [`App::new`] loads it before it
+//! opens a window, and when there is no pack yet it returns
+//! [`AppError::Title`](app::AppError::Title) rather than an [`App`] with no
+//! scene in it -- a clean, no-panic diagnostic naming what to run. See
+//! [`title`]'s module docs.
 //!
 //! [`import_rom`](crate::import_rom) (S-4, Discussion #71 policy C, issue
 //! #122) is the other half of that: the binary's `--import-rom <path>` flag

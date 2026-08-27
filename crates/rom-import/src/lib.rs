@@ -68,8 +68,8 @@
 //!
 //! The pack this crate writes is complete: a player who imports their ROM
 //! runs the game without a checkout pack. What remains is around the
-//! importer rather than in it: progress reporting from the CLI, and the
-//! player-facing documentation for the import step.
+//! importer rather than in it: progress reporting while a large import
+//! runs.
 //!
 //! The CLI that drives [`import`] already exists: `pokeemerald-rs
 //! --import-rom <path>` resolves the pack's destination, writes it

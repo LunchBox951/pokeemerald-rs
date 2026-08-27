@@ -90,7 +90,7 @@ cargo build --release --workspace
 cargo test --workspace
 ```
 
-A development checkout can also build the pack with `--import-rom` from a ROM, as a player would (see [Playing](#playing)). The equivalence harness `POKEEMERALD_ROM=<rom> cargo test -p rom-import -- --ignored` proves the two packs byte-identical; it stays `#[ignore]`d because CI has no ROM.
+A development checkout can also build the pack with `--import-rom` from a ROM, as a player would (see [Playing](#playing)). The equivalence harness `POKEEMERALD_ROM=/path/to/pokeemerald.gba cargo test -p rom-import -- --ignored` proves the two packs byte-identical; it stays `#[ignore]`d because CI has no ROM.
 
 ## Release channels
 
