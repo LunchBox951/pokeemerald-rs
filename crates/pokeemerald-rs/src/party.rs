@@ -734,8 +734,8 @@ pub(crate) fn merge_into_save_pokemon(
     // Shedinja does not leave that guard (issue #401): only its *maximum
     // HP* is species-invariant, and the retained branch normalizes that one
     // entry on its own ([`normalize_retained_shedinja_max_hp`]). Excluding
-    // Shedinja from the fast path outright, as an earlier round of this fix
-    // did, would file the other five bytes from a fresh EV-aware recompute
+    // Shedinja from the fast path outright would file the other five bytes
+    // from a fresh EV-aware recompute
     // on an ordinary save that moved neither species nor level -- a
     // `CalculateMonStats` upstream never runs there (`MonGainEVs`,
     // `src/battle_script_commands.c:3420`, updates the EV bytes and leaves
