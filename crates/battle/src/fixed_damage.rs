@@ -79,6 +79,7 @@ use crate::damage::{apply_dual_type_effectiveness, BattleRng};
 use crate::dex::Dex;
 use crate::error::BattleError;
 use crate::hit::{accuracy_roll, HitOutcome};
+use crate::move_gate::ensure_resolvable_effect;
 use crate::pokemon::BattlePokemon;
 use crate::secondary::spend_effect_chance_draw;
 
@@ -150,14 +151,7 @@ pub fn is_fixed_damage_effect(effect: MoveEffect) -> bool {
 /// - [`BattleError::UnsupportedMoveType`] for a `???`-typed move, which
 ///   `Cmd_typecalc` could not classify.
 pub fn ensure_resolvable(dex: &Dex, move_id: MoveId) -> Result<(), BattleError> {
-    let mv = dex.move_data(move_id)?;
-    if !is_fixed_damage_effect(mv.effect) {
-        return Err(BattleError::UnsupportedMoveEffect(move_id));
-    }
-    if mv.move_type.battle_type().is_none() {
-        return Err(BattleError::UnsupportedMoveType(move_id));
-    }
-    Ok(())
+    ensure_resolvable_effect(dex, move_id, is_fixed_damage_effect)
 }
 
 /// Resolve `attacker`'s fixed-damage move against `defender`.

@@ -207,6 +207,7 @@ pub mod exp;
 pub mod fixed_damage;
 pub mod flag_move;
 pub mod hit;
+mod move_gate;
 pub mod multi_hit;
 pub mod nature;
 pub mod pokemon;

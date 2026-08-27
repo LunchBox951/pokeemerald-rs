@@ -25,6 +25,66 @@ INVALID_FOLD_TARGETS = {"various", "everywhere", "scattered", "tbd", "many", "mu
 REF_COMMENT_RE = re.compile(r"//\s*(?:STUB:\s*from\s+|from\s+)pokeemerald/([\w./-]+)")
 
 
+# ─── acceptance-ID vocabulary ───────────────────────────────────────────────
+#
+# `docs/acceptance/v1.md` is the one owner of the exact v1 spec-ID vocabulary
+# (its own header names it authoritative). Every criterion-table row has the
+# shape `| <ID> | <criterion text> | <status marker> |`; parsing them here,
+# once, at import time, keeps this the single source of truth instead of a
+# second hand-maintained list that could drift out of sync (issue #424).
+# The row pattern is anchored on the doc's own "Status markers" legend (the
+# five glyphs below) so a stray `| C-99 |`-shaped line elsewhere in the doc
+# (prose, an example) can't be mistaken for a real criterion row.
+
+ACCEPTANCE_DOC = REPO_ROOT / "docs" / "acceptance" / "v1.md"
+_STATUS_MARKERS = "☐◐☑⏸⊘"
+_ACCEPTANCE_ROW_RE = re.compile(
+    r"^\|\s*([A-Z]-[1-9][0-9]*)\s*\|.+\|\s*[" + _STATUS_MARKERS + r"]\s*\|\s*$")
+
+
+def _parse_acceptance_ids(doc_path: Path) -> frozenset:
+    if not doc_path.exists():
+        sys.exit(f"cannot find acceptance doc: {doc_path}")
+    ids = set()
+    for line in doc_path.read_text(encoding="utf-8").splitlines():
+        m = _ACCEPTANCE_ROW_RE.match(line)
+        if m:
+            ids.add(m.group(1))
+    if not ids:
+        sys.exit(f"no acceptance IDs parsed from {doc_path}")
+    return frozenset(ids)
+
+
+ACCEPTANCE_IDS = _parse_acceptance_ids(ACCEPTANCE_DOC)
+
+# Pending `spec_owner` hints used to predate real acceptance IDs and were
+# free-text area names; `migrate` rewrites any that still linger in a saved
+# ledger to the exact v1 ID that replaced them (issue #424).
+LEGACY_SPEC_OWNER_MAP = {
+    "02-rendering": "S-2",
+    "03-audio": "S-3",
+    "05-assets": "S-4",
+    "06-engine": "S-5",
+    "07-battle": "S-6",
+}
+
+
+def invalid_spec_id(value):
+    """`None` if `value` is a valid v1 acceptance ID, else an error string.
+
+    Rejects both a malformed/legacy value (`06-engine`) and a well-formed but
+    nonexistent one (`C-99`) the same way: exact membership in the ID set
+    `docs/acceptance/v1.md` actually declares. `value` may be any JSON type a
+    hand-mangled or merge-mangled ledger could carry (not just `str`) — the
+    `isinstance` guard keeps this a validation error, never an unhandled
+    `TypeError` from an unhashable list/dict landing in a set-membership test.
+    """
+    if isinstance(value, str) and value in ACCEPTANCE_IDS:
+        return None
+    return (f"invalid spec id {value!r}: must be one of the acceptance IDs "
+            f"declared in docs/acceptance/v1.md")
+
+
 # ─── category rules ────────────────────────────────────────────────────────
 #
 # Each Rule produces ledger entries under one category key. Multiple rules
@@ -54,7 +114,7 @@ POKEEMERALD_RULES = [
     Rule("code.source",    "files", ["src/**/*.c"]),
     # Hand-written assembly sources under src/ that the *.c glob misses:
     # the m4a mixer/sequencer core plus GBA boot glue.
-    Rule("code.source",    "files", ["src/m4a_1.s"], spec_owner="03-audio"),
+    Rule("code.source",    "files", ["src/m4a_1.s"], spec_owner="S-3"),
     Rule("code.source",    "files", ["src/crt0.s", "src/libgcnmultiboot.s",
                                      "src/rom_header.s"]),
     Rule("code.header",    "files", ["src/**/*.h", "include/**/*.h"],
@@ -62,31 +122,31 @@ POKEEMERALD_RULES = [
     Rule("code.constants", "files", ["include/constants/*.h"]),
 
     # ─ DATA ────────────────────────────────────────────────────────────────
-    Rule("data.map",     "dirs",  ["data/maps/*"],    spec_owner="05-assets"),
+    Rule("data.map",     "dirs",  ["data/maps/*"],    spec_owner="S-4"),
     Rule("data.map",     "files", ["data/maps/map_groups.json"],
-         spec_owner="05-assets"),
-    Rule("data.layout",  "dirs",  ["data/layouts/*"], spec_owner="05-assets"),
+         spec_owner="S-4"),
+    Rule("data.layout",  "dirs",  ["data/layouts/*"], spec_owner="S-4"),
     Rule("data.layout",  "files", ["data/layouts/layouts.json"],
-         spec_owner="05-assets"),
+         spec_owner="S-4"),
     Rule("data.tileset", "dirs",  ["data/tilesets/primary/*",
                                    "data/tilesets/secondary/*"],
-         spec_owner="05-assets"),
+         spec_owner="S-4"),
     Rule("data.script",  "files", [
         "data/event_scripts.s",
         "data/field_effect_scripts.s",
         "data/scripts/*.inc",
         "data/specials.inc",
         "data/script_cmd_table.inc",
-    ], spec_owner="06-engine"),
+    ], spec_owner="S-5"),
     Rule("data.script",  "files", [
         "data/battle_scripts_1.s",
         "data/battle_scripts_2.s",
         "data/battle_anim_scripts.s",
         "data/battle_ai_scripts.s",
         "data/contest_ai_scripts.s",
-    ], spec_owner="07-battle"),
+    ], spec_owner="S-6"),
     Rule("data.script",  "files", ["data/sound_data.s"],
-         spec_owner="03-audio"),
+         spec_owner="S-3"),
     Rule("data.script",  "files", [
         "data/mystery_event_script_cmd_table.s",
         "data/mystery_gift.s",
@@ -96,21 +156,21 @@ POKEEMERALD_RULES = [
         "data/maps.s",
         "data/map_events.s",
     ]),  # no predicted owner: out-of-scope (link/mystery/multiboot) or build glue
-    Rule("data.text",    "files", ["data/text/*.inc"], spec_owner="06-engine"),
+    Rule("data.text",    "files", ["data/text/*.inc"], spec_owner="S-5"),
     Rule("data.misc",    "files", ["data/*.gba"]),  # multiboot blobs
 
     # ─ GRAPHICS ────────────────────────────────────────────────────────────
     Rule("graphics.pokemon",      "dirs", ["graphics/pokemon/*"],
-         spec_owner="05-assets"),
+         spec_owner="S-4"),
     Rule("graphics.trainer",      "files", ["graphics/trainers/front_pics/*.png",
                                             "graphics/trainers/back_pics/*.png"],
-         spec_owner="05-assets"),
+         spec_owner="S-4"),
     Rule("graphics.object_event", "dirs",  ["graphics/object_events/pics/*"],
-         spec_owner="05-assets"),
+         spec_owner="S-4"),
     Rule("graphics.item",         "files", ["graphics/items/icons/*.png"],
-         spec_owner="05-assets"),
+         spec_owner="S-4"),
     Rule("graphics.font",         "dirs", ["graphics/fonts"],
-         spec_owner="02-rendering"),
+         spec_owner="S-2"),
     Rule("graphics.ui", "dirs", [
         "graphics/bag", "graphics/balls", "graphics/berries",
         "graphics/decorations", "graphics/diploma", "graphics/easy_chat",
@@ -123,12 +183,12 @@ POKEEMERALD_RULES = [
         "graphics/types", "graphics/union_room_chat", "graphics/wallclock",
         "graphics/wireless_status_screen", "graphics/wonder_card",
         "graphics/wonder_news",
-    ], spec_owner="05-assets"),
+    ], spec_owner="S-4"),
     Rule("graphics.battle", "dirs", [
         "graphics/battle_anims", "graphics/battle_environment",
         "graphics/battle_frontier", "graphics/battle_interface",
         "graphics/battle_transitions", "graphics/trainer_hill",
-    ], spec_owner="05-assets"),
+    ], spec_owner="S-4"),
     Rule("graphics.scene", "dirs", [
         "graphics/berry_blender", "graphics/berry_crush", "graphics/berry_fix",
         "graphics/birch_speech", "graphics/cable_car", "graphics/cave_transition",
@@ -139,28 +199,28 @@ POKEEMERALD_RULES = [
         "graphics/reset_rtc_screen", "graphics/rotating_gates",
         "graphics/roulette", "graphics/slot_machine", "graphics/title_screen",
         "graphics/weather",
-    ], spec_owner="05-assets"),
+    ], spec_owner="S-4"),
     Rule("graphics.misc", "dirs",  ["graphics/misc", "graphics/unused"],
-         spec_owner="05-assets"),
+         spec_owner="S-4"),
     Rule("graphics.misc", "files", ["graphics/pokemon/unused_garbage.bin"],
-         spec_owner="05-assets"),
+         spec_owner="S-4"),
 
     # ─ AUDIO ───────────────────────────────────────────────────────────────
     Rule("audio.song",       "files", ["sound/songs/midi/*.mid"],
-         spec_owner="03-audio"),
+         spec_owner="S-3"),
     # `**` so the `drumsets/`/`keysplits/` subdirectories (issue #182's own
     # voicegroup resolver reaches both) are tracked too, not just the ~180
     # top-level files -- `*` alone does not cross `/`.
     Rule("audio.voicegroup", "files", ["sound/voicegroups/**/*.inc"],
-         spec_owner="03-audio"),
+         spec_owner="S-3"),
     Rule("audio.sample",     "files", ["sound/direct_sound_samples/*",
                                        "sound/programmable_wave_samples/*"],
-         spec_owner="03-audio"),
+         spec_owner="S-3"),
     Rule("audio.misc",       "files", ["sound/*.inc", "sound/*.s"],
-         spec_owner="03-audio"),
+         spec_owner="S-3"),
 
     # ─ META ────────────────────────────────────────────────────────────────
-    Rule("meta.charmap", "files", ["charmap.txt"], spec_owner="02-rendering"),
+    Rule("meta.charmap", "files", ["charmap.txt"], spec_owner="S-2"),
     Rule("meta.build",   "files", [
         "Makefile", "*.mk", "*.ld", "sym_*.txt", "rom.sha1",
         "asmdiff.sh", "asmdiff.ps1", "build_tools.sh",
@@ -265,6 +325,9 @@ def validate_artifact(name, sub):
     for key in ("spec", "reason"):
         if not sub.get(key):
             return f"artifact {name!r}: {status} requires '{key}'"
+    err = invalid_spec_id(sub["spec"])
+    if err:
+        return f"artifact {name!r}: {err}"
     if status in ("rewritten", "ported", "stubbed"):
         if not sub.get("rust_target"):
             return f"artifact {name!r}: {status} requires 'rust_target'"
@@ -315,11 +378,20 @@ def validate_entry(entry: dict):
         extras = set(entry.keys()) - allowed
         if extras:
             return f"pending entries must not carry: {sorted(extras)}"
+        # `in`, not truthiness: a present-but-falsy owner ("", [], null) is
+        # still a malformed value, not "no owner set" (issue #424).
+        if "spec_owner" in entry:
+            err = invalid_spec_id(entry["spec_owner"])
+            if err:
+                return f"spec_owner: {err}"
         return None
 
     for key in ("spec", "reason"):
         if not entry.get(key):
             return f"{status} entries require '{key}'"
+    err = invalid_spec_id(entry["spec"])
+    if err:
+        return err
 
     if status in ("rewritten", "ported", "stubbed"):
         if not entry.get("rust_target"):
@@ -636,6 +708,10 @@ def cmd_gaps(args):
 
 def _set_entry(project, path, status, *, rust_target=None, fold_target=None,
                spec=None, reason=None):
+    if spec is not None:
+        err = invalid_spec_id(spec)
+        if err:
+            sys.exit(err)
     ledger = load_ledger(project)
     file_path, name = split_artifact(path)
     if file_path not in ledger["files"]:
@@ -780,6 +856,9 @@ STEM_HINTS = {
 
 def cmd_audit(args):
     spec = args.spec_id
+    err = invalid_spec_id(spec)
+    if err:
+        sys.exit(err)
     base = args.base
     rev = args.rev
 
@@ -857,6 +936,25 @@ def cmd_audit(args):
         print("```")
 
 
+def _remap_legacy_spec_owners(data):
+    """Rewrite lingering legacy `spec_owner` hints in place; returns the count
+    changed. `LEGACY_SPEC_OWNER_MAP` is the exact and only remap (issue #424)
+    — an unrecognized owner is left alone so `verify`/`validate_entry` can
+    flag a genuine mistake instead of this silently masking one.
+    """
+    changed = 0
+    for entry in data.get("files", {}).values():
+        owner = entry.get("spec_owner")
+        # `owner` may be any JSON type in a hand-mangled ledger; only a
+        # string can be a dict key here, and only a string can be a legacy
+        # hint anyway (issue #424).
+        new_owner = LEGACY_SPEC_OWNER_MAP.get(owner) if isinstance(owner, str) else None
+        if new_owner:
+            entry["spec_owner"] = new_owner
+            changed += 1
+    return changed
+
+
 def cmd_migrate(args):
     del args
     for project in PROJECTS:
@@ -866,8 +964,14 @@ def cmd_migrate(args):
             continue
         data = _read_raw(project)
         v = data.get("schema_version")
+        remapped = _remap_legacy_spec_owners(data)
         if v == SCHEMA_VERSION:
-            print(f"{p.relative_to(REPO_ROOT)}: already at v{SCHEMA_VERSION}")
+            if remapped:
+                save_ledger(project, data)
+                print(f"{p.relative_to(REPO_ROOT)}: remapped {remapped} legacy "
+                      f"spec_owner hint(s) to their current v1 ID")
+            else:
+                print(f"{p.relative_to(REPO_ROOT)}: already at v{SCHEMA_VERSION}")
             continue
         if v == 2:
             # v2 → v3 is a pure version bump: the shapes are identical (a v2
@@ -1049,7 +1153,9 @@ def build_parser():
         p.add_argument("--target", required=True,
                        help="Rust file or asset path (e.g. crates/engine/src/rng.rs "
                             "or crates/assets/data/maps/littleroot_town)")
-        p.add_argument("--spec", required=True, help="Spec id (e.g. 06-engine)")
+        p.add_argument("--spec", required=True,
+                       help="v1 acceptance ID from docs/acceptance/v1.md "
+                            "(e.g. S-5)")
         p.add_argument("--reason", required=True)
 
     p = sub.add_parser(
@@ -1066,7 +1172,9 @@ def build_parser():
     p.add_argument("--into", required=True,
                    help="One concrete target (e.g. crates/engine::save). "
                         "Vague targets are rejected.")
-    p.add_argument("--spec", required=True)
+    p.add_argument("--spec", required=True,
+                   help="v1 acceptance ID from docs/acceptance/v1.md "
+                        "(e.g. S-5)")
     p.add_argument("--reason", required=True)
 
     p = sub.add_parser(
@@ -1080,7 +1188,9 @@ def build_parser():
     _add_project(p)
     p.add_argument("path", help="upstream path, or path#artifact for a "
                    "sub-file table")
-    p.add_argument("--spec", required=True)
+    p.add_argument("--spec", required=True,
+                   help="v1 acceptance ID from docs/acceptance/v1.md "
+                        "(e.g. S-5)")
     p.add_argument("--reason", required=True)
 
     p = sub.add_parser(
@@ -1115,14 +1225,19 @@ def build_parser():
         ),
     )
     _add_project(p)
-    p.add_argument("spec_id", help="Spec id (e.g. 06-engine)")
+    p.add_argument("spec_id", help="v1 acceptance ID from "
+                   "docs/acceptance/v1.md (e.g. S-5)")
     p.add_argument("--base", default="main", help="git base ref (default: main)")
     p.add_argument("--rev", default="HEAD", help="git target ref (default: HEAD)")
 
     sub.add_parser(
         "migrate",
-        help="Upgrade an older ledger to the current schema",
-        description="Upgrade every existing ledger to the current schema.",
+        help="Upgrade schema; remap legacy spec_owner hints",
+        description=(
+            "Upgrade every existing ledger to the current schema, and remap "
+            "any legacy pending spec_owner hint to its current v1 acceptance "
+            "ID (docs/acceptance/v1.md)."
+        ),
     )
     sub.add_parser(
         "init",

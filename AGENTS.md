@@ -1,99 +1,31 @@
 # pokeemerald-rs
 
-Project instructions for agents working in this repository. Keep this file
-compact `(lean-docs)`: durable detail belongs in the doc that owns it, linked
-here, not restated. Read [`docs/README.md`](docs/README.md) for the full doc
-reading order. The *why* lives in **`docs/principles.md`** (cite invariants by
-their `handle`). The definition of "done" is **`docs/acceptance/v1.md`**.
+`pokeemerald-rs` is a native Rust port of Pokémon Emerald for Linux, macOS, and Windows with no GBA emulation. It reproduces the observable behaviour specified by `pret/pokeemerald`; `mgba` clarifies hardware behaviour.
 
-## What this is
+## Start here
 
-`pokeemerald-rs` — a single native binary being built from one Cargo workspace
-to play Pokémon Emerald on Linux/macOS/Windows with **no GBA emulation**. We
-port the *behaviour* of `pret/pokeemerald`, not its structure `(behavioral-fidelity)`.
-`pokeemerald/` is the canonical game specification (data, scripts, text,
-formulas); `mgba/` clarifies hardware behaviour. Both are read-only `(reference-only)`.
+Before changing or reviewing repository work, read [`docs/principles.md`](docs/principles.md). Its handles are the project invariants, including `(self-explanatory-code)` and `(lean-docs)`.
 
-## Layout
+Then read [`docs/README.md`](docs/README.md). It routes each task to the smallest relevant context set. Do not follow unrelated branches.
 
-- `docs/principles.md` — the invariants. Cite by handle.
-- `docs/acceptance/v1.md` — v1 criteria with stable IDs (`F-1`, `I-4`, …). The
-  roadmap to reach them lives in GitHub issues/PRs/discussions `(constitution-vs-roadmap)`.
-  See [`CONTRIBUTING.md` §Milestones](CONTRIBUTING.md#milestones) for
-  milestone grouping, deferral, and closure rules. Each milestone description
-  is that area's briefing: read it via `gh api repos/{owner}/{repo}/milestones/$n`
-  (set `n` to the milestone number) and list its issues with
-  `gh issue list --milestone "<title>"`.
-- `crates/*/src/lib.rs` — each crate's `//!` doc is the live per-subsystem
-  status write-up (what's implemented, what's next). Prefer it over
-  hand-describing subsystem state anywhere else.
-- `ledger/pokeemerald.json` + `scripts/ledger.py` — the coverage ledger.
-- `init.sh` — clones the read-only upstream references into `pokeemerald/` and `mgba/`.
-- `pokeemerald/`, `mgba/` — gitignored upstream references. Never edit or commit.
+## Boundaries
 
-## Commands
+- The caller supplies authority for repository actions. Investigate freely and make in-scope changes without re-asking for routine decisions.
+- Normal work targets `dev` and advances one [`docs/acceptance/v1.md`](docs/acceptance/v1.md) ID. Use `none` with a concrete rationale for maintenance that advances no v1 criterion.
+- Confirm before adding an external Cargo dependency or changing `.github/workflows/`, `RELEASE.md`, `CODEOWNERS`, or another release-process file. Routine `PATCH`, `MINOR`, and `MAJOR` synchronization is allowed; `FINAL` remains owner-only.
+- Never edit or commit `pokeemerald/` or `mgba/`. Never weaken their `.gitignore` exclusions `(reference-only)`.
+- Inspect the exact upstream artifact with `scripts/ledger.py inspect` or a focused `gaps` query for every behaviour or asset change. Ledger `spec` values are current v1 acceptance IDs such as `S-3`, never legacy domain labels. Update through the CLI only when the work adds or moves coverage; an existing-coverage bug fix may be verify-only. Record partial file coverage as a sub-artifact while its parent stays pending. Never infer a neighbouring disposition or hand-edit `ledger/pokeemerald.json`. A plan may name a ledger command or status only after checking `inspect` and focused help; otherwise require that inspection without inventing the result.
+- Preserve unrelated worktree changes. Never weaken, skip, or delete a test to pass a gate `(test-ratchet)`.
+
+## Verify
 
 | Purpose | Command |
-|---------|---------|
-| Bootstrap upstream refs | `./init.sh` |
-| Build | `cargo build --workspace` (release: add `--release`) |
+|---|---|
+| Build | `cargo build --release --workspace` |
 | Test | `cargo test --workspace` |
-| Lint (default features) | `cargo clippy --workspace --all-targets --locked -- -D warnings` |
-| Lint (all features) | `cargo clippy --workspace --all-targets --all-features --locked -- -D warnings` |
+| Lint | `cargo clippy --workspace --all-targets --locked -- -D warnings` |
+| Lint all features | `cargo clippy --workspace --all-targets --all-features --locked -- -D warnings` |
 | Format | `cargo fmt --check` |
-| Ledger | `python3 scripts/ledger.py status \| verify \| gaps \| report` |
+| Ledger | `python3 scripts/ledger.py verify` |
 
-## Autonomy boundaries
-
-- **Investigate freely** — read code, run the commands above, `git
-  log`/`diff`/`status`. No confirmation needed.
-- **Change freely, in scope** — code or doc edits laddered to one
-  `docs/acceptance/v1.md` ID, validated with the commands above.
-- **Confirm first** — a new Cargo dependency `(minimal-deps)`, or a change to
-  `.github/workflows/`, `RELEASE.md`, `CODEOWNERS`, or a release-process
-  file. Exception: the routine per-PR `VERSION` bump is required by
-  `RELEASE.md`; `PATCH`/`MINOR`/`MAJOR` need no confirmation, while `FINAL`
-  still does. `pokeemerald/` and
-  `mgba/` are never edited, confirmation or not `(reference-only)`; neither
-  is `ledger/pokeemerald.json` outside `scripts/ledger.py`, confirmation or
-  not — see Coverage ledger below.
-
-## Conventions `(oop-boundaries)`
-
-- Rust 2021+, stable toolchain. Nightly only with owner sign-off.
-- Subsystems are owned types with methods; traits for polymorphism; explicit
-  module boundaries; **no global mutable state**.
-- One module = one concept. A file over ~600 lines is a smell — ask why.
-- `unsafe` requires a `// SAFETY:` block stating the invariant.
-- For new unconditional lint exceptions, prefer narrow
-  `#[expect(..., reason = "...")]`; use `#[allow(..., reason = "...")]` only
-  when configuration can make the lint absent.
-- Errors are concrete per-crate enums (no `anyhow` in library crates).
-- Public surface documented with `///`. Unit tests alongside code; integration
-  tests under `<crate>/tests/`.
-
-## Coverage ledger
-
-Every upstream artifact needs a tracked Rust home in `ledger/pokeemerald.json`.
-Update **only** via `scripts/ledger.py` (stdlib-only) so the JSON stays
-diff-friendly. Statuses: `pending`, `rewritten` (code), `ported` (data/asset),
-`stubbed`, `folded`, `dropped`. `pending=0` is a v1 gate (`L-1`). Run
-`python3 scripts/ledger.py -h` for the command index and
-`python3 scripts/ledger.py <command> -h` for focused guidance.
-
-## Release channels
-
-Four channel branches: `dev → unstable → stable → main` (developer → nightly →
-beta → stable). Normal work targets `dev`; scheduled CI opens direct
-next-rung promotion PRs. Only the nightly may auto-merge; beta and stable require
-CODEOWNER review and a manual merge. The release policy and per-rung gates are
-in **`RELEASE.md`**.
-
-## Hard rules — do not
-
-- Edit or commit anything under `pokeemerald/` or `mgba/` `(reference-only)`.
-- Copy upstream code verbatim `(no-verbatim)` — re-implement idiomatically.
-- Add FFI / `bindgen` / linkage to the upstream C `(no-ffi)`.
-- Add a dependency without owner approval `(minimal-deps)`.
-- Weaken `.gitignore`'s exclusion of `pokeemerald/`, `mgba/`, `target/`.
-- Weaken, skip, or delete a test to make a gate pass `(test-ratchet)`.
+Run focused checks while iterating, then the applicable workspace gates before handoff. Update `VERSION` as required by [`RELEASE.md`](RELEASE.md) and run `python3 scripts/sync_cargo_version.py`. Work is done when its stated outcome is present, its authorities and ledger disposition agree, its verification passes, and no promised follow-up remains hidden.

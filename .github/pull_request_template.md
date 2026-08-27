@@ -38,16 +38,6 @@ How this was verified — commands run and their outcome (test-ratchet).
 - [ ] none
 - [ ] explicit, owner-approved:
 
-## Release impact
-
-<!-- One of: none / patch / minor / major / final-gate. -->
-
-- [ ] none
-- [ ] patch
-- [ ] minor
-- [ ] major
-- [ ] final-gate
-
 ## Checklist
 
 - [ ] No test deleted or weakened to pass a gate (test-ratchet).

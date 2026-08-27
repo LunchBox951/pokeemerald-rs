@@ -108,6 +108,7 @@
 use battle::{Battle, BattleError, BattleOutcome, BattlePokemon, Dex, PlayerAction};
 use engine::rng::Rng;
 
+use super::battle_finalize::finalize_battle_turn;
 use super::move_learn::settle_move_learn_prompts;
 use super::wild_encounter::SharedRng;
 
@@ -219,18 +220,7 @@ pub fn advance_first_battle(
     // answered with the same stand-in every headless driver gives, before
     // the outcome is read.
     let _ = settle_move_learn_prompts(battle);
-    let outcome = battle.outcome();
-    if !failed && outcome.is_none() {
-        return None;
-    }
-    let mut mon = battle.player().clone();
-    // Stat stages and volatiles are battle scratch, not party data -- see
-    // `BattlePokemon::clear_battle_scratch`'s own doc comment for the
-    // citations.
-    mon.clear_battle_scratch();
-    *lead = Some(mon);
-    *slot = None;
-    outcome
+    finalize_battle_turn(slot, failed, lead)
 }
 
 #[cfg(test)]
