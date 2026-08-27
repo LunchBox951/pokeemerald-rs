@@ -31,7 +31,6 @@ body:
         - stable (main)
         - beta (stable)
         - nightly (unstable)
-        - dev
     validations:
       required: true
   - type: textarea
@@ -60,7 +59,8 @@ body:
     attributes:
       label: Notes and linked defects
       description: >-
-        Anything else worth recording. Link any defect issue(s) filed
-        separately from this session; don't describe the defect itself here.
+        A passing session with nothing to record enters `none`; a failing
+        session links at least one defect issue filed separately from this
+        report. Link defects here rather than describing them.
     validations:
-      required: false
+      required: true

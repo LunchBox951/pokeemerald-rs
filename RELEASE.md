@@ -61,7 +61,7 @@ After promotion, validate the main build through its own playtest issue. A defec
 
 ## Playtest records
 
-Open one playtest issue per channel build. Require `VERSION`, channel, comparison scope, and an explicit pass or fail verdict. A pre-made release tag may provide additional identification; a separate SHA field is unnecessary because each `dev` change advances `VERSION`.
+Open one playtest issue per player-channel build; `dev` is developer integration and is not playtested. Require `VERSION`, channel, comparison scope, an explicit pass or fail verdict, and notes carrying either `none` or the defects the session filed. A pre-made release tag may provide additional identification; a separate SHA field is unnecessary because each `dev` change advances `VERSION`.
 
 Compare the port side by side with the real game where applicable. File every defect as a separate linked bug, then close the playtest issue after the session whether it passed or failed. A new build receives a new issue; do not rewrite a failed record into a passing one.
 
