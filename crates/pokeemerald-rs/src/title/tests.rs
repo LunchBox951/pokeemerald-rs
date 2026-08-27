@@ -336,10 +336,16 @@ fn load_default_reports_pack_missing_when_no_pack_is_extracted() {
 /// scrolled (`cloud_scroll_y(0) == 0`, `cloud_scroll_y(20) == 5`). The logo
 /// shine is deliberately not composed (see the module docs' "Documented
 /// fidelity deltas"), so it plays no part in this distinction.
+///
+/// Loads [`AssetPack::load_repo`] directly rather than
+/// [`super::load_default`] (issue #412) -- see [`AssetPack::load_repo`]'s
+/// own docs for why a checkout-validation gate must not go through
+/// [`AssetPack::default_path`].
 #[test]
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
 fn real_pack_composes_non_blank_deterministic_title_frames() {
-    let scene = super::load_default().expect("run `cargo xtask extract` first");
+    let pack = AssetPack::load_repo().expect("run `cargo xtask extract` first");
+    let scene = super::TitleScene::from_pack(&pack).expect("run `cargo xtask extract` first");
 
     let frame0_first = scene.compose(0);
     let frame0_second = scene.compose(0);
