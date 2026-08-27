@@ -13,10 +13,4 @@ When known, include the channel and `VERSION`, what you did, what you expected, 
 
 ## Player channels
 
-| Channel | Branch | Purpose |
-|---|---|---|
-| stable | `main` | most stable release |
-| beta | `stable` | owner-reviewed candidate |
-| nightly | `unstable` | freshest release-ready build |
-
-Source builds are CI-verified on Linux, macOS, and Windows. Published archives currently target Linux and Windows.
+[`RELEASE.md`](RELEASE.md) owns the channel-to-branch ladder and platform support.
