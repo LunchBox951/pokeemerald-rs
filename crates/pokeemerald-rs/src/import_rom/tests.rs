@@ -573,11 +573,13 @@ fn a_destination_spelled_as_a_directory_is_refused_with_that_name_intact() {
     assert_eq!(file_names(&dir.path), ["pokeemerald.pack"]);
 }
 
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 #[test]
 fn a_non_utf8_pack_name_is_published_byte_for_byte() {
     // The requested basename survives as an `OsStr` end to end: the file
     // published is the one the player named, not a lossy re-spelling.
+    // Linux-only: APFS on macOS rejects non-UTF-8 names with EILSEQ at the
+    // filesystem, so the premise cannot be constructed there.
     use std::os::unix::ffi::OsStrExt as _;
 
     let dir = TempDir::new("non-utf8-name");

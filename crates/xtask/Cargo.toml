@@ -46,3 +46,9 @@ scenes = ["dep:pokeemerald-rs", "dep:assets"]
 smoke = ["scenes"]
 record-snapshot = ["scenes"]
 scenario = ["scenes"]
+# Selects the committed-profile drift check, which needs a developer-local
+# $POKEEMERALD_ROM. CI's `--ignored` legs run without a ROM by policy, so
+# the test is compiled out of them and fails hard (never skips) when the
+# feature is on but the ROM is absent:
+# `cargo test -p xtask --features rom-drift -- --ignored`.
+rom-drift = []

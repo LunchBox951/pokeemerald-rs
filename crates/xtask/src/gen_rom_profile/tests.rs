@@ -310,6 +310,7 @@ fn a_map_checks_names_where_they_are_derivable_and_presence_where_they_are_not()
     let _ = std::fs::remove_dir(&dir);
 }
 
+#[cfg(feature = "rom-drift")]
 #[test]
 #[ignore = "needs $POKEEMERALD_ROM, a pokeemerald/ checkout, and an extracted pack"]
 fn the_committed_profile_matches_a_fresh_generation() {
