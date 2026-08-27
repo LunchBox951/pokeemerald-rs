@@ -8,15 +8,15 @@
 
 use super::{
     calc_max_hp, calc_stat, compute_stats, compute_stats_with_evs, BattlePokemon, Evs, Ivs,
-    MoveSlot, PpBonuses, StatStages, MAX_IV, MAX_LEVEL, MIN_LEVEL, MOVE_NONE, SPECIES_NONE,
-    SPECIES_OLD_UNOWN_B, SPECIES_OLD_UNOWN_Z, SPECIES_SHEDINJA,
+    MoveSlot, PpBonuses, StatStages, MAX_IV, MAX_LEVEL, MAX_PER_STAT_EVS, MAX_TOTAL_EVS, MIN_LEVEL,
+    MOVE_NONE, SPECIES_NONE, SPECIES_OLD_UNOWN_B, SPECIES_OLD_UNOWN_Z, SPECIES_SHEDINJA,
 };
 use crate::damage::MoveCategory;
 use crate::dex::Dex;
 use crate::error::BattleError;
 use crate::nature::{Nature, Stat};
 use crate::stat_stage::StatStage;
-use assets::{MoveId, SpeciesId, SpeciesTable};
+use assets::{EvYield, MoveId, SpeciesId, SpeciesTable};
 
 /// Max Gen-3 individual values (stat rolls — *not* a cryptographic
 /// initialization vector; see [`Ivs`]): every `31` below is `MAX_IV_MASK`.
@@ -662,4 +662,262 @@ fn an_upgraded_slot_spends_its_whole_upgraded_capacity() {
     }
     assert_eq!(mon.moves()[0].pp, 0);
     assert_eq!(mon.deduct_pp(0), Err(BattleError::NoPpRemaining(0)));
+}
+
+/// A yield below both caps is added to every named stat untouched, and
+/// leaves the running total ready to accept the next award.
+#[test]
+fn gain_evs_adds_the_yield_to_each_named_stat() {
+    let dex = Dex::new();
+    let mut mon = sample_mon(&dex);
+    mon.gain_evs(EvYield {
+        hp: 1,
+        attack: 2,
+        defense: 3,
+        speed: 4,
+        sp_attack: 5,
+        sp_defense: 6,
+    });
+    assert_eq!(
+        mon.evs(),
+        Evs {
+            hp: 1,
+            attack: 2,
+            defense: 3,
+            speed: 4,
+            sp_attack: 5,
+            sp_defense: 6,
+        }
+    );
+}
+
+/// `MonGainEVs` is cumulative across KOs, not a per-call snapshot.
+#[test]
+fn gain_evs_accumulates_across_calls() {
+    let dex = Dex::new();
+    let mut mon = sample_mon(&dex);
+    let yield_ = EvYield {
+        hp: 0,
+        attack: 0,
+        defense: 0,
+        speed: 0,
+        sp_attack: 2,
+        sp_defense: 0,
+    };
+    mon.gain_evs(yield_);
+    mon.gain_evs(yield_);
+    assert_eq!(mon.evs().sp_attack, 4);
+}
+
+/// `MAX_PER_STAT_EVS` (255): a stat already close to the cap only gains
+/// enough to reach it exactly, never past it.
+#[test]
+fn gain_evs_caps_a_single_stat_at_max_per_stat_evs() {
+    let dex = Dex::new();
+    let mut mon = sample_mon(&dex);
+    let yield_ = EvYield {
+        hp: 0,
+        attack: 0,
+        defense: 0,
+        speed: 0,
+        sp_attack: 200,
+        sp_defense: 0,
+    };
+    mon.gain_evs(yield_);
+    assert_eq!(
+        mon.evs().sp_attack,
+        200,
+        "fixture sanity: the first award alone stays under both caps"
+    );
+    // A second 200-point award would total 400, well past the 255-point
+    // per-stat cap (and still under the 510-point total cap, so this pins
+    // the per-stat cap specifically).
+    mon.gain_evs(yield_);
+    assert_eq!(mon.evs().sp_attack, u8::try_from(MAX_PER_STAT_EVS).unwrap());
+
+    // Already at the cap: a further award adds nothing.
+    mon.gain_evs(yield_);
+    assert_eq!(mon.evs().sp_attack, u8::try_from(MAX_PER_STAT_EVS).unwrap());
+}
+
+/// `MAX_TOTAL_EVS` (510): once the running total reaches it, upstream's own
+/// `break` (`pokeemerald/src/pokemon.c:6005`-`:6006`) stops the whole loop --
+/// a later stat gets **no** award at all, not a share of whatever headroom
+/// is left (there is none once the total is exactly at the cap).
+#[test]
+fn gain_evs_stops_the_whole_loop_once_the_total_cap_is_reached() {
+    let dex = Dex::new();
+    let mut mon = sample_mon(&dex);
+    // HP to 255, Attack to 255: total 510, exactly the cap, with Speed
+    // (later in stat order) still untouched.
+    mon.gain_evs(EvYield {
+        hp: u8::try_from(MAX_PER_STAT_EVS).unwrap(),
+        attack: u8::try_from(MAX_PER_STAT_EVS).unwrap(),
+        defense: 0,
+        speed: 0,
+        sp_attack: 0,
+        sp_defense: 0,
+    });
+    let full = mon.evs();
+    assert_eq!(u16::from(full.hp) + u16::from(full.attack), MAX_TOTAL_EVS);
+
+    mon.gain_evs(EvYield {
+        hp: 0,
+        attack: 0,
+        defense: 0,
+        speed: 3,
+        sp_attack: 0,
+        sp_defense: 0,
+    });
+    assert_eq!(
+        mon.evs().speed,
+        0,
+        "the mon is already full, so a later stat gets nothing at all"
+    );
+}
+
+/// The total cap binds a stat's own award even when that stat's *own*
+/// per-stat headroom is nowhere close to exhausted -- upstream applies the
+/// total cap first (`pokeemerald/src/pokemon.c:6051`-`:6059`), and the two
+/// caps are independent bounds on the same award, so a stat starting at `0`
+/// EVs (255 points of its own headroom) still gets narrowed down to
+/// whatever the whole mon has left.
+#[test]
+fn gain_evs_applies_the_total_cap_even_with_per_stat_headroom_to_spare() {
+    let dex = Dex::new();
+    let mut mon = sample_mon(&dex);
+    // HP to 255 (full) and Attack to 254 -- 509 of the 510-point total cap,
+    // one point short, with Defense still untouched at `0`.
+    mon.gain_evs(EvYield {
+        hp: 255,
+        attack: 254,
+        defense: 0,
+        speed: 0,
+        sp_attack: 0,
+        sp_defense: 0,
+    });
+    let running = mon.evs();
+    assert_eq!(
+        u16::from(running.hp) + u16::from(running.attack),
+        MAX_TOTAL_EVS - 1,
+        "fixture sanity: one point of total headroom remains"
+    );
+
+    // Defense's own per-stat cap would allow all 5 of these points; only
+    // one point of *total* headroom is left for the whole mon.
+    mon.gain_evs(EvYield {
+        hp: 0,
+        attack: 0,
+        defense: 5,
+        speed: 0,
+        sp_attack: 0,
+        sp_defense: 0,
+    });
+    assert_eq!(
+        mon.evs().defense,
+        1,
+        "only the one remaining point of total headroom is awarded, not \
+         the full per-stat-legal 5"
+    );
+    assert_eq!(
+        u16::from(running.hp) + u16::from(running.attack) + u16::from(mon.evs().defense),
+        MAX_TOTAL_EVS
+    );
+}
+
+/// `gain_evs` moves only [`BattlePokemon::evs`]: the live stat cache stays
+/// untouched until a level-up folds the gain in
+/// ([`BattlePokemon::raise_level_to_experience`], module docs).
+#[test]
+fn gain_evs_does_not_disturb_the_live_stat_cache() {
+    let dex = Dex::new();
+    let mut mon = sample_mon(&dex);
+    let before = mon.stats();
+    mon.gain_evs(EvYield {
+        hp: 3,
+        attack: 0,
+        defense: 0,
+        speed: 0,
+        sp_attack: 0,
+        sp_defense: 0,
+    });
+    assert_eq!(
+        mon.stats(),
+        before,
+        "gain_evs alone must not recompute the cache"
+    );
+}
+
+/// The property issue #415 exists for: a KO that awards EVs and crosses a
+/// level in the same turn must fold the just-gained EVs into that same
+/// level's stat recompute -- `Cmd_getexp`'s own order, `MonGainEVs` before
+/// the `CalculateMonStats`-triggering exp write
+/// (`pokeemerald/src/battle_script_commands.c:3420`, module docs).
+/// [`crate::battle::Battle::settle_win_reward`] is the real call site; this
+/// pins the property directly against [`BattlePokemon`] alone.
+#[test]
+fn a_ko_that_awards_evs_and_crosses_a_level_folds_the_gain_into_the_recompute() {
+    let dex = Dex::new();
+    // Level 99, one Sp. Attack EV short of the next `ev / 4` unit, so
+    // Bulbasaur's own KO yield (`sp_attack: 1`) crosses that boundary
+    // exactly -- and level 99 -> 100 is where `CALC_STAT`'s `* level / 100`
+    // step stops truncating away a single point of `n`, so the boundary
+    // crossing survives all the way to the filed stat (module docs' own
+    // `calc_stat_folds_ev_over_four_into_the_parenthesised_sum` reasoning).
+    let mut mon = BattlePokemon::new(
+        &dex,
+        SpeciesId(1), // Bulbasaur
+        99,
+        Ivs::default(),
+        0x1234_5663, // % 25 == 0, so the derived nature is neutral Hardy
+        vec![MoveId(33)],
+    )
+    .unwrap()
+    .with_evs(Evs {
+        sp_attack: 3,
+        ..Evs::default()
+    });
+    let bulbasaur = dex.species(mon.species()).unwrap();
+
+    let award =
+        assets::experience_for_level(bulbasaur.growth_rate, 100).unwrap() - mon.experience();
+    mon.gain_evs(bulbasaur.ev_yield);
+    assert_eq!(
+        mon.evs().sp_attack,
+        4,
+        "fixture sanity: the KO's own yield crossed the ev/4 boundary"
+    );
+    let pending = mon.apply_experience(&dex, award).unwrap();
+    assert!(
+        pending.is_none(),
+        "Bulbasaur's level 100 has no learnset entry"
+    );
+    assert_eq!(mon.level(), 100, "fixture sanity: the mon levelled up");
+
+    let expected = compute_stats_with_evs(
+        mon.species(),
+        bulbasaur,
+        mon.level(),
+        mon.nature(),
+        mon.ivs(),
+        mon.evs(),
+    );
+    assert_eq!(
+        mon.stats(),
+        expected,
+        "the level-up recompute already sees the EVs this same KO awarded"
+    );
+    assert_ne!(
+        mon.stats(),
+        compute_stats(
+            mon.species(),
+            bulbasaur,
+            mon.level(),
+            mon.nature(),
+            mon.ivs()
+        ),
+        "fixture sanity: the gained EV really does move the block away from \
+         the 0-EV formula -- if it had not, the assertion above would be \
+         vacuously true"
+    );
 }

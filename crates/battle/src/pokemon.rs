@@ -10,19 +10,40 @@
 //! ([`engine::save::pokemon::Pokemon`] owns that boundary; this crate does
 //! not depend on `engine` — see [`crate::wild`] for why).
 //!
-//! Out of scope for this slice: EV tracking (every mon this crate builds has
-//! `0` EVs — matching a freshly caught wild mon and an EV-less starting
-//! player mon, both realistic for a first encounter), held items, and
-//! non-volatile status conditions. Shedinja's 1-HP special case (issue
-//! #401) *is* modelled — see [`calc_max_hp`] for what and
-//! [`SPECIES_SHEDINJA`] for the citation.
-//! [`compute_stats_with_evs`] is the one crack in the EV boundary: the
-//! `CALC_STAT`/`CalculateMonStats` formula itself does
-//! carry an EV parameter, for the sole caller outside this crate that has
-//! real EVs and no [`BattlePokemon`] of its own to attach them to
-//! (`pokeemerald-rs`'s `party::merge_into_save_pokemon`, issue #384) — no
-//! [`BattlePokemon`] this crate builds ever has a nonzero one. Abilities
-//! are out of scope too, with one exception:
+//! Out of scope for this slice: held items and non-volatile status
+//! conditions. Shedinja's 1-HP special case (issue #401) *is* modelled —
+//! see [`calc_max_hp`] for what and [`SPECIES_SHEDINJA`] for the citation.
+//!
+//! EV tracking is modelled as far as issue #415's slice needs it, and no
+//! further. Every mon [`BattlePokemon::new`] builds — every wild and trainer
+//! opponent, and a freshly created player mon — still starts at `0` EVs
+//! (matching a freshly caught wild mon and an EV-less starting player mon,
+//! both realistic for a first encounter); [`BattlePokemon::with_evs`] is the
+//! one exception, adopting a loaded record's own retained bytes at the save
+//! boundary (`pokeemerald-rs`'s `party::from_save_pokemon`) without
+//! recomputing anything. [`BattlePokemon::gain_evs`] is `MonGainEVs`
+//! (`pokeemerald/src/pokemon.c:5988`), called on every KO
+//! this crate's own [`crate::battle::Battle::settle_win_reward`] reaches,
+//! before [`BattlePokemon::apply_experience`] — upstream's own order, so a
+//! KO that both awards EVs and levels this mon up folds the just-gained EVs
+//! into that same level's stat recompute
+//! ([`BattlePokemon::raise_level_to_experience`] feeds
+//! [`BattlePokemon::evs`] to [`compute_stats_with_evs`]). Neither the
+//! Pokérus nor the Macho Brace doubling upstream's `MonGainEVs` applies is
+//! modelled: this crate carries no held items and no Pokérus byte (module
+//! docs' held-item exclusion above; Pokérus is retained save-file state with
+//! no typed home here, `pokeemerald-rs::party`'s own module docs), so every
+//! award this port can reach is upstream's un-multiplied base yield.
+//!
+//! What is still *not* modelled: a mon's live stats at construction or load
+//! time stay the `0`-EV formula regardless of [`BattlePokemon::evs`] — only
+//! a level-up recomputed **after** EVs entered the picture (a load, or a KO
+//! this session) folds them in, so a loaded EV-trained mon that never levels
+//! up this battle still fights the whole thing on its `0`-EV cache. That
+//! residual gap is `pokeemerald-rs::party`'s own to close, not this crate's
+//! (see that module's docs).
+//!
+//! Abilities are out of scope too, with one exception:
 //! [`BattlePokemon::ability`] (issues #321/#322/#391), consumed by
 //! [`crate::stat_change`]'s ability guards (Clear Body, White Smoke, Keen
 //! Eye, Hyper Cutter) and by [`crate::ability`]'s six damage-path checks
@@ -36,7 +57,7 @@
 //! `ppBonuses` byte and `CalculatePPWithBonus`, and [`learn`] owns the
 //! level-up learnset walk and the player decision a full moveset pauses for.
 
-use assets::{experience_for_level, AbilityId, BaseStats, MoveId, SpeciesId, Type};
+use assets::{experience_for_level, AbilityId, BaseStats, EvYield, MoveId, SpeciesId, Type};
 
 use crate::dex::Dex;
 use crate::error::BattleError;
@@ -102,6 +123,17 @@ pub const MAX_LEVEL: u8 = 100;
 /// value any single individual value can take.
 pub const MAX_IV: u8 = 31;
 
+/// `MAX_PER_STAT_EVS` (`pokeemerald/include/constants/pokemon.h:203`): the
+/// largest effort value any single stat can hold — [`BattlePokemon::gain_evs`]'s
+/// per-stat cap.
+pub const MAX_PER_STAT_EVS: u16 = 255;
+
+/// `MAX_TOTAL_EVS` (`pokeemerald/include/constants/pokemon.h:204`): the
+/// largest sum of all six effort values — [`BattlePokemon::gain_evs`]'s
+/// whole-mon cap, applied before [`MAX_PER_STAT_EVS`] (upstream's own order,
+/// `pokeemerald/src/pokemon.c:6051`-`:6059`).
+pub const MAX_TOTAL_EVS: u16 = 510;
+
 /// The six Pokémon **individual values** (`0..=`[`MAX_IV`]) rolled for a
 /// Pokémon (`MAX_IV_MASK`, `pokeemerald/include/constants/pokemon.h:201`).
 ///
@@ -160,12 +192,11 @@ impl Ivs {
 /// `spDefenseEV`, `pokeemerald/include/pokemon.h:117`-`:122`) — the same
 /// HP/Attack/Defense/Speed/Sp. Attack/Sp. Defense order as [`Ivs`].
 ///
-/// Not a field of [`BattlePokemon`]: every mon this crate builds has `0`
-/// EVs (module docs), so this type exists only to carry a value through
-/// [`compute_stats_with_evs`] for a caller outside this crate that has real
-/// EVs to feed it and no battler of its own to attach them to — issue
-/// #384's `party::merge_into_save_pokemon`, recomputing a levelled-up
-/// stat block from a loaded record's retained bytes.
+/// [`BattlePokemon::evs`]'s type (issue #415) and also the standalone value
+/// [`compute_stats_with_evs`] takes for the one caller outside this crate
+/// that has real EVs and no battler of its own to attach them to — issue
+/// #384's `party::merge_into_save_pokemon`, recomputing a levelled-up stat
+/// block from a save record's own bytes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub struct Evs {
     /// HP EV.
@@ -180,6 +211,23 @@ pub struct Evs {
     pub sp_attack: u8,
     /// Sp. Defense EV.
     pub sp_defense: u8,
+}
+
+impl Evs {
+    /// The six values in `PokemonSubstruct2`'s own declaration order — the
+    /// same HP/Attack/Defense/Speed/Sp. Attack/Sp. Defense order
+    /// [`Ivs::as_array`] uses.
+    #[must_use]
+    pub const fn as_array(self) -> [u8; 6] {
+        [
+            self.hp,
+            self.attack,
+            self.defense,
+            self.speed,
+            self.sp_attack,
+            self.sp_defense,
+        ]
+    }
 }
 
 /// A Pokémon's final computed battle stats — the `CalculateMonStats` output
@@ -407,6 +455,13 @@ pub struct BattlePokemon {
     experience: u32,
     stats: Stats,
     current_hp: u32,
+    /// This mon's effort values (issue #415) — `0` for every mon
+    /// [`BattlePokemon::new`] builds, a loaded record's own retained bytes
+    /// for one restored through [`BattlePokemon::with_evs`], and
+    /// incremented in place by [`BattlePokemon::gain_evs`] on every KO this
+    /// session awards. See the module docs for what carrying this value
+    /// does, and does not, change about [`BattlePokemon::stats`].
+    evs: Evs,
     moves: Vec<MoveSlot>,
     /// `mon->ppBonuses` / `gBattleMons[].ppBonuses`
     /// (`pokeemerald/include/pokemon.h:104`, `:288`): how many PP Ups each
@@ -555,6 +610,11 @@ impl BattlePokemon {
             experience,
             stats,
             current_hp: stats.max_hp,
+            // `CreateBoxMon` zeroes the box before writing the fields it
+            // sets, and the EV bytes are not one of them: a freshly built
+            // mon has no effort values. A saved one restores its own bytes
+            // through [`BattlePokemon::with_evs`] (issue #415).
+            evs: Evs::default(),
             moves: slots,
             // `CreateBoxMon` zeroes the box before writing the fields it
             // sets, and `ppBonuses` is not one of them: a freshly built mon
@@ -686,6 +746,43 @@ impl BattlePokemon {
     #[must_use]
     pub const fn with_ability_slot(mut self, ability_slot: u8) -> Self {
         self.ability_slot = ability_slot & 1;
+        self
+    }
+
+    /// This mon's effort values (issue #415) — see the field's own docs and
+    /// the module docs for what carrying this value does, and does not,
+    /// change.
+    #[must_use]
+    pub const fn evs(&self) -> Evs {
+        self.evs
+    }
+
+    /// Adopt a saved record's own EV bytes (`PokemonSubstruct2`'s first six,
+    /// [`Evs`]) at the boundary that restores this Pokémon — a
+    /// construction-time builder like
+    /// [`BattlePokemon::with_original_trainer_id`], meant for the same
+    /// position: immediately after [`BattlePokemon::new`], which otherwise
+    /// leaves every mon it builds at `0` EVs (module docs).
+    ///
+    /// Deliberately does **not** recompute [`BattlePokemon::stats`]: this
+    /// crate's live stat cache stays the `0`-EV formula until the next time
+    /// [`BattlePokemon::raise_level_to_experience`] runs -- an in-battle
+    /// level-up ([`BattlePokemon::apply_experience`]), or a load-time
+    /// reconciliation of a stored level/experience pair that disagrees
+    /// ([`BattlePokemon::reconcile_saved_experience`]), whichever this
+    /// battler reaches first (module docs) -- the same posture
+    /// [`BattlePokemon::with_ability_slot`] and
+    /// [`BattlePokemon::with_pp_bonuses`] take toward fields upstream's own
+    /// load path (`LoadPlayerParty`) never recomputes either.
+    ///
+    /// Every byte is accepted: `PokemonSubstruct2`'s EV fields are
+    /// unconstrained `u8`s upstream — `MonGainEVs`'s own caps
+    /// ([`MAX_PER_STAT_EVS`], [`MAX_TOTAL_EVS`]) bound only what *it*
+    /// writes, not what a hand-edited or pre-#415 save can already hold —
+    /// so there is nothing to reject.
+    #[must_use]
+    pub const fn with_evs(mut self, evs: Evs) -> Self {
+        self.evs = evs;
         self
     }
 
@@ -866,6 +963,70 @@ impl BattlePokemon {
         self.volatiles = Volatiles::default();
     }
 
+    /// `MonGainEVs` (`pokeemerald/src/pokemon.c:5988`-`:6064`), restricted to
+    /// this crate's own scope (issue #415): add `ev_yield`'s per-stat award
+    /// to [`BattlePokemon::evs`], HP/Attack/Defense/Speed/Sp. Attack/Sp.
+    /// Defense in that order (upstream's own `NUM_STATS` loop, `:6003`),
+    /// capping each stat's own increase at [`MAX_TOTAL_EVS`] minus the
+    /// running total, then at [`MAX_PER_STAT_EVS`] minus that stat's own
+    /// value — upstream's own order (`:6051`-`:6059`), reproduced here for
+    /// fidelity though a single stat's own increase ends up at the same
+    /// minimum of the three bounds regardless of which cap is checked
+    /// first. Where the order *is* observable is across stats: the loop
+    /// stops entirely, not just for the current stat, the moment the
+    /// running total reaches [`MAX_TOTAL_EVS`] -- a later stat gets **no**
+    /// award once the mon is full, exactly as upstream's `break` does
+    /// (`:6005`-`:6006`), and a stat whose own per-stat cap absorbed less
+    /// than its full award leaves the *rest* of the total cap's headroom for
+    /// the stats after it.
+    ///
+    /// Neither the Pokérus nor the Macho Brace doubling upstream's own
+    /// `MonGainEVs` applies here runs: this crate carries no held items and
+    /// no Pokérus byte (module docs), so every award this port can reach is
+    /// upstream's un-multiplied base yield.
+    ///
+    /// Called from [`crate::battle::Battle::settle_win_reward`] on every KO,
+    /// **before** [`BattlePokemon::apply_experience`] — upstream's own order
+    /// (`Cmd_getexp` case 2's `MonGainEVs` call, `:3420`, precedes case 3's
+    /// `SetMonData`/`CalculateMonStats` sequence) — so a KO that also levels
+    /// this mon up this turn folds the just-gained EVs into that same
+    /// level's stat recompute
+    /// ([`BattlePokemon::raise_level_to_experience`]).
+    pub fn gain_evs(&mut self, ev_yield: EvYield) {
+        let yields = [
+            ev_yield.hp,
+            ev_yield.attack,
+            ev_yield.defense,
+            ev_yield.speed,
+            ev_yield.sp_attack,
+            ev_yield.sp_defense,
+        ];
+        let mut evs = self.evs.as_array();
+        let mut total: u16 = evs.iter().copied().map(u16::from).sum();
+        for (ev, stat_yield) in evs.iter_mut().zip(yields) {
+            if total >= MAX_TOTAL_EVS {
+                break;
+            }
+            let mut increase = u16::from(stat_yield);
+            if total + increase > MAX_TOTAL_EVS {
+                increase = MAX_TOTAL_EVS - total;
+            }
+            if u16::from(*ev) + increase > MAX_PER_STAT_EVS {
+                increase = MAX_PER_STAT_EVS - u16::from(*ev);
+            }
+            *ev = u8::try_from(u16::from(*ev) + increase).unwrap_or(u8::MAX);
+            total += increase;
+        }
+        self.evs = Evs {
+            hp: evs[0],
+            attack: evs[1],
+            defense: evs[2],
+            speed: evs[3],
+            sp_attack: evs[4],
+            sp_defense: evs[5],
+        };
+    }
+
     /// Add earned experience, consuming the award **one level threshold at
     /// a time** the way upstream's controller/`Cmd_getexp` loop does
     /// (`Task_GiveExpToMon`'s cap at `nextLvlExp`,
@@ -906,18 +1067,22 @@ impl BattlePokemon {
     /// mutation: a second walk would overwrite the open question and drop
     /// its unconsumed remainder.
     ///
-    /// # Recorded divergence: EVs and friendship still do not move
+    /// # Recorded divergence: friendship still does not move
     ///
     /// Upstream's level-up path does more than raise the number and teach
     /// moves. From `Cmd_getexp`, `BattleScript_LevelUp`
     /// (`pokeemerald/data/battle_scripts_1.s`) plays the level-up
     /// fanfare/message, and `Cmd_getexp` itself also applies `MonGainEVs`
     /// (`src/battle_script_commands.c:3420`) and
-    /// `AdjustFriendship(FRIENDSHIP_EVENT_GROW_LEVEL)` (`:3463`). **Neither
-    /// is modelled here**: EVs (this crate carries none, see the module
-    /// docs) and friendship are out of this slice's scope, so only the
-    /// numeric level, stats, and — as of issue #252 — learnset moves change
-    /// across a level-up. Recorded on the `Cmd_getexp` ledger entry.
+    /// `AdjustFriendship(FRIENDSHIP_EVENT_GROW_LEVEL)` (`:3463`).
+    /// `MonGainEVs` **is** modelled as of issue #415 — see
+    /// [`BattlePokemon::gain_evs`], called before this method on every KO
+    /// ([`crate::battle::Battle::settle_win_reward`]), so its award is
+    /// already folded into [`BattlePokemon::evs`] by the time this method's
+    /// own stat recompute runs. Friendship is **not**: it stays out of this
+    /// slice's scope, so only the numeric level, stats, EVs, and — as of
+    /// issue #252 — learnset moves change across a level-up. Recorded on the
+    /// `Cmd_getexp` ledger entry.
     #[must_use = "a full moveset pauses the level-up walk for a player \
                   decision the mon now carries \
                   (`BattlePokemon::pending_move_learn`); ignoring the \
@@ -968,6 +1133,17 @@ impl BattlePokemon {
     /// award ([`BattlePokemon::apply_experience`], which then teaches the
     /// crossed learnset moves) and the save decoder
     /// ([`BattlePokemon::reconcile_saved_experience`], which must not).
+    ///
+    /// The stat recompute is fed [`BattlePokemon::evs`], not a `0`-EV cache
+    /// (issue #415): upstream's own `CalculateMonStats` call here
+    /// (`Cmd_getexp` case 3's `SetMonData`, `pokeemerald/src/pokemon.c:2823`)
+    /// reads whatever `MonGainEVs` already wrote, so a KO that both awards
+    /// EVs and crosses a level this same turn ([`BattlePokemon::gain_evs`]
+    /// runs first, module docs) sees its own gain here. A mon nothing has
+    /// ever called [`BattlePokemon::gain_evs`] or [`BattlePokemon::with_evs`]
+    /// on is still at `0` EVs, so this is the identity change for every
+    /// mon this crate builds fresh -- `compute_stats_with_evs` at `0` EVs
+    /// *is* [`compute_stats`].
     fn raise_level_to_experience(&mut self) -> Option<(u8, u8)> {
         let mut new_level = self.level;
         while new_level < MAX_LEVEL {
@@ -986,12 +1162,13 @@ impl BattlePokemon {
         let old_level = self.level;
         let old_max_hp = self.stats.max_hp;
         self.level = new_level;
-        self.stats = compute_stats(
+        self.stats = compute_stats_with_evs(
             self.species,
             &self.base_stats,
             self.level,
             self.nature,
             self.ivs,
+            self.evs,
         );
         self.current_hp = self
             .current_hp

@@ -283,20 +283,27 @@ mod tests {
         let dex = battle::Dex::new();
         let mut phase = new_game_phase();
         let trainer_id = u32::from_le_bytes(phase.save2.player_trainer_id);
-        let lead = crate::new_game::provisional_starter().with_original_trainer_id(trainer_id);
-        let species = dex
-            .species(lead.species())
-            .expect("the starter is in the dex");
 
         // A real hp-EV investment: the recompute branch this test exercises
         // reads the record's own retained EV substructure bytes, so they
         // have to be genuine, not just a bump to `stored.max_hp` the way
         // `white_out_restores_the_stored_hp_to_the_retained_maximum` above
-        // gets away with for its untouched-level fixture.
+        // gets away with for its untouched-level fixture. Carried by the
+        // lead itself too (`with_evs`, issue #415), matching what a real
+        // `party::from_save_pokemon` decode would seed it with -- a lead
+        // whose own EVs disagree with its paired record's bytes is a pair
+        // `from_saved`'s own continue path can never produce.
         let evs = battle::Evs {
             hp: 252,
             ..battle::Evs::default()
         };
+        let lead = crate::new_game::provisional_starter()
+            .with_original_trainer_id(trainer_id)
+            .with_evs(evs);
+        let species = dex
+            .species(lead.species())
+            .expect("the starter is in the dex");
+
         let ev_aware_at_level_5 = battle::compute_stats_with_evs(
             lead.species(),
             species,
@@ -306,13 +313,10 @@ mod tests {
             evs,
         );
 
+        // `to_save_pokemon` now writes the lead's own EVs through (issue
+        // #415), so the record's `evs_and_condition` bytes already agree
+        // with `evs` without a manual poke.
         let mut stored = crate::party::to_save_pokemon(&dex, &lead);
-        let mut substructures = stored
-            .box_data
-            .substructures()
-            .expect("a freshly encoded record decrypts");
-        substructures.evs_and_condition[0] = evs.hp;
-        stored.box_data.set_substructures(&substructures);
         stored.max_hp = u16::try_from(ev_aware_at_level_5.max_hp).unwrap();
         stored.hp = stored.max_hp;
 
@@ -333,7 +337,9 @@ mod tests {
         assert_eq!(
             leveled_lead.current_hp(),
             leveled_lead.stats().max_hp,
-            "fixture sanity: the mon is still at its own (0-EV) full \
+            "fixture sanity: the mon is still at its own full -- now the \
+             EV-aware level-13 maximum, since issue #415's level-up \
+             recompute folds the retained EVs `with_evs` seeded in -- \
              through the level-up, unfainted, so the white-out below heals \
              a live lead"
         );
