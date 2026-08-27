@@ -121,6 +121,7 @@ use crate::damage::BattleRng;
 use crate::dex::Dex;
 use crate::error::BattleError;
 use crate::hit::{accuracy_roll, damage_core, HitOutcome};
+use crate::move_gate::ensure_resolvable_effect;
 use crate::pokemon::BattlePokemon;
 
 /// `EFFECT_ABSORB` (`include/constants/battle_move_effects.h:7`): the drain
@@ -203,14 +204,7 @@ pub fn resolve_drain(hp_dealt: u32, target_ability: AbilityId) -> Option<DrainOu
 /// - [`BattleError::UnsupportedMoveType`] for a `???`-typed move, which
 ///   `Cmd_typecalc` could not classify.
 pub fn ensure_resolvable(dex: &Dex, move_id: MoveId) -> Result<(), BattleError> {
-    let mv = dex.move_data(move_id)?;
-    if !is_drain_effect(mv.effect) {
-        return Err(BattleError::UnsupportedMoveEffect(move_id));
-    }
-    if mv.move_type.battle_type().is_none() {
-        return Err(BattleError::UnsupportedMoveType(move_id));
-    }
-    Ok(())
+    ensure_resolvable_effect(dex, move_id, is_drain_effect)
 }
 
 /// Resolve `attacker`'s drain move against `defender`, returning the

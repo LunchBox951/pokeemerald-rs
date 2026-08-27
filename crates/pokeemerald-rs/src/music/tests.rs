@@ -559,7 +559,7 @@ mod synthetic_pack {
 #[test]
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
 fn mus_title_resolves_and_plays_continuously_with_its_real_reverb_level() {
-    let pack = assets::AssetPack::load_default().expect("run `cargo xtask extract` first");
+    let pack = assets::AssetPack::load_repo().expect("run `cargo xtask extract` first");
     let song = load_song_from_pack(&pack, "mus_title").expect("mus_title must resolve cleanly");
 
     // `-R50` in `pokeemerald/sound/songs/midi/midi.cfg`'s `mus_title.mid`
@@ -750,7 +750,7 @@ mod oracle {
             return;
         };
 
-        let pack = assets::AssetPack::load_default().expect("run `cargo xtask extract` first");
+        let pack = assets::AssetPack::load_repo().expect("run `cargo xtask extract` first");
         let song = load_song_from_pack(&pack, "mus_title").expect("mus_title must resolve cleanly");
         let mut seq = Sequencer::new(song);
 
