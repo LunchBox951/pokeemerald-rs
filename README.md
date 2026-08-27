@@ -1,55 +1,31 @@
 # pokeemerald-rs
 
-A from-scratch **native Rust port of Pokémon Emerald** — a single binary, being
-built from one Cargo workspace, to play the game on Linux/macOS/Windows with
-**no GBA emulation**. We reproduce the game's *observable behaviour* — the same
-dialog, trainers, encounters, music, and damage outcomes — in idiomatic Rust,
-not its internal structure `(behavioral-fidelity)`.
+A from-scratch native Rust port of Pokémon Emerald for Linux, macOS, and Windows with no GBA emulation. The project reproduces the game's observable behaviour in idiomatic Rust instead of copying its internal structure `(behavioral-fidelity)`.
 
-> **Status: pre-alpha.** The Cargo workspace is scaffolded and its crates build,
-> lint, and test clean in CI, but no subsystem is complete and the binary
-> doesn't yet play through a battle. `v1.0.0.0` means **the complete
-> single-player game**; pre-1.0 versions mark progress toward it. See
-> [`docs/acceptance/v1.md`](docs/acceptance/v1.md) for the binding definition,
-> the per-criterion status, and how far along we are.
+> **Status: pre-alpha.** `v1.0.0.0` means the complete single-player game. See [`docs/acceptance/v1.md`](docs/acceptance/v1.md) for the binding definition and current criterion markers, and the live [milestones](../../milestones?state=all) for roadmap progress.
 
 ## How this project is built
 
-Most of `pokeemerald-rs` is built and maintained by **Professor Birch** — an
-autonomous agent that runs on a *repeated loop*, picking the project up where it
-left off each time and nudging it a little further toward v1. A human owner steps
-in only where judgement genuinely requires it: playtests, new dependencies,
-release sign-off. That loop — an agent quietly growing a whole game port over many
-runs — is the experiment at the heart of this repository.
+Professor Birch is owner-local automation that helps maintain this repository. Public contribution and product policy remains in this repository; human-only decisions include playtests, dependencies, and final release approval.
 
-If you'd like to contribute, you're very welcome — see
-[`CONTRIBUTING.md`](CONTRIBUTING.md). The design lives in
-[`docs/`](docs/README.md); start with [`docs/principles.md`](docs/principles.md).
+Contributors should start with [`CONTRIBUTING.md`](CONTRIBUTING.md). The documentation router is [`docs/README.md`](docs/README.md), and the project invariants are [`docs/principles.md`](docs/principles.md).
 
-## Roadmap & progress
+## Roadmap
 
-Work toward v1 is grouped into [**milestones**](../../milestones?state=all), one
-per area — the milestones page shows live progress bars, and each milestone's
-description is a self-contained briefing on that area's scope:
+GitHub milestones own live implementation scope `(constitution-vs-roadmap)`:
 
 | Milestone | Covers |
-|-----------|--------|
-| [M1 · v1: Foundation](../../milestone/1) | workspace, CI, versioning, release plumbing |
-| [M2 · v1: Assets](../../milestone/2) | extraction pipeline + typed game data |
-| [M3 · v1: Platform & A/V](../../milestone/3) | window, input, 240×160 renderer, M4A audio |
-| [M4 · v1: Engine](../../milestone/4) | overworld, scripts, dialog, save, RNG, menus |
-| [M5 · v1: Battle](../../milestone/5) | battle state machine, moves, AI, animations, UI |
-| [M6 · v1: Integration & E2E](../../milestone/6) | wiring it into one binary + end-to-end suites |
-| [M7 · v1: Release & Signoff](../../milestone/7) | packaging, ledger gate, operator signoff |
-| [M8](../../milestone/8) | deferred work and documented exclusions, with reasons — any "post-v1" wording still in the milestone's own title predates the scope clarification below and does not narrow it: deferred single-player work is v1 scope |
+|---|---|
+| [M1 · v1: Foundation](../../milestone/1) | workspace, CI, versioning, and release plumbing |
+| [M2 · v1: Assets](../../milestone/2) | extraction and typed canonical game data |
+| [M3 · v1: Platform & A/V](../../milestone/3) | window, input, rendering, and audio |
+| [M4 · v1: Engine](../../milestone/4) | overworld, scripts, dialog, save, RNG, and menus |
+| [M5 · v1: Battle](../../milestone/5) | battle rules, state, AI, animation, and UI |
+| [M6 · v1: Integration & E2E](../../milestone/6) | integrated playable content and end-to-end validation |
+| [M7 · v1: Release & Signoff](../../milestone/7) | packaging, coverage audit, and operator signoff |
+| [M8](../../milestone/8) | consciously deferred work, still in v1 unless recorded as an exclusion |
 
-Deferring is not excluding: single-player behaviour pushed to a later milestone
-is still v1 scope. Behaviour leaves v1 only as a recorded exclusion, with its
-reason — see [`docs/acceptance/v1.md`](docs/acceptance/v1.md).
-
-The authoritative per-criterion status lives in
-[`docs/acceptance/v1.md`](docs/acceptance/v1.md); a kanban view is on the
-repository's [Projects tab](../../projects).
+Deferring work does not exclude it from v1. Only a recorded exclusion with a permitted reason removes behaviour from the single-player scope.
 
 ## Playing
 
@@ -97,79 +73,42 @@ pack from source with `cargo xtask extract` instead (see
 
 ## Building
 
+On Debian or Ubuntu, install the Rust toolchain and the ALSA development package (`libasound2-dev`). Equivalent platform audio and window development libraries may be required elsewhere.
+
 ```bash
-./init.sh                  # clone the read-only upstream references
+./init.sh
+cargo xtask extract
+cargo run --release -p pokeemerald-rs
+```
+
+`init.sh` clones `pret/pokeemerald`, the canonical game specification, and `mgba-emu/mgba`, the hardware-behaviour reference. Both checkouts are gitignored and read-only `(reference-only)`. `cargo xtask extract` builds the local asset pack required by the application. A missing pack produces an actionable error instead of downloading or distributing game assets.
+
+Run a basic local build and test with:
+
+```bash
 cargo build --release --workspace
 cargo test --workspace
 ```
 
-`init.sh` clones `pret/pokeemerald` (the canonical game specification) and
-`mgba-emu/mgba` (hardware-behaviour reference) locally. Both are **read-only
-references** `(reference-only)` — no upstream code is copied, linked, or wrapped
-`(no-verbatim, no-ffi)`.
-
-A development checkout gets its asset pack either way: `cargo xtask extract`
-builds it from the `pokeemerald/` checkout into `assets-pack/`, or
-`--import-rom` reads it from a ROM as a player would (see
-[Playing](#playing)). The equivalence harness,
-`POKEEMERALD_ROM=<rom> cargo test -p rom-import -- --ignored`, proves the two
-packs byte-identical; it is `#[ignore]`d because CI has no ROM and never will.
+A development checkout can also build the pack with `--import-rom` from a ROM, as a player would (see [Playing](#playing)). The equivalence harness `POKEEMERALD_ROM=<rom> cargo test -p rom-import -- --ignored` proves the two packs byte-identical; it stays `#[ignore]`d because CI has no ROM.
 
 ## Release channels
 
-Players will get three choices: **stable** (`main`), **beta** (`stable`), and
-**nightly** (`unstable`); `dev` is the developer integration branch. See
-[`RELEASE.md`](RELEASE.md).
+The three player channels are stable (`main`), beta (`stable`), and nightly (`unstable`); `dev` is developer integration. Source builds are CI-verified on Linux, macOS, and Windows. Published archives currently target Linux and Windows. See [`RELEASE.md`](RELEASE.md).
 
 ## Dependencies
 
-We default to the standard library; every crate added is justified here
-`(minimal-deps)`:
+The dependency ledger records each approved external crate and its exact purpose `(minimal-deps)`. Cargo manifests and `Cargo.lock` own the executable dependency graph.
 
-- **`winit`** (`crates/platform`) — cross-platform window creation and the OS
-  event loop (window/keyboard events, resize). Owner-approved for exactly this
-  crate in Discussion #17. On Linux it links the system X11 and/or Wayland
-  client libraries (`libX11`/`libxcb` or `libwayland-client`, whichever the
-  session provides) — it is a normal Rust crate binding those system libs at
-  compile/link time, not FFI or linkage to the upstream C `(no-ffi)`; it is
-  **not** a pure-Rust-only dependency, per the owner's caveat in Discussion #17.
-- **`softbuffer`** (`crates/platform`) — the CPU-side pixel buffer presented
-  each frame to a `winit` window; there is no GPU/renderer dependency for a
-  240x160 software-scaled image. Owner-approved alongside `winit` in
-  Discussion #17. On Linux it likewise binds the system X11
-  (`libX11`/`libxcb`) and/or Wayland (`libwayland-client`) client libraries to
-  present pixels into the window's surface — same caveat as `winit` above, not
-  pure-Rust-only.
-- **`cpal`** (`crates/platform`) — the RustAudio project's cross-platform
-  audio I/O library: opening the default output device and running one
-  output stream that a ring-buffer callback fills. Owner-approved for
-  exactly this crate and exactly this scope in Discussion #78 — no decoding,
-  no effects, just the device/stream and the callback the future `audio`
-  crate (M4A engine) writes PCM into. On Linux it binds the system ALSA
-  library (`libasound`) at compile/link time — it is a normal Rust crate
-  binding that system lib, not FFI or linkage to the upstream C `(no-ffi)`;
-  it is **not** a pure-Rust-only dependency, same caveat as `winit`/
-  `softbuffer` above.
-- **`rustix`** (`crates/pokeemerald-rs`, Unix only) — safe wrappers over the
-  `openat`/`renameat`/`fstatat` family, which `std` exposes on no platform.
-  `--import-rom` pins the pack's destination directory open once and names
-  every file against that handle, so a directory component redirected
-  mid-import can move nothing (see `import_rom`'s module docs).
-  Owner-approved for exactly this scope on PR #372 (`minimal-deps: approved`,
-  2026-08-24), chosen over project-owned `unsafe` FFI. Built with
-  `default-features = false` and only the `std` and `fs` features; off Unix
-  the crate is not compiled and the path-based flow remains.
+- **`winit`** (`crates/platform`) creates cross-platform windows and supplies OS input, resize, and event-loop integration. Discussion #17 approved it for this crate. On Linux it binds the active X11 or Wayland client libraries; those system bindings are unrelated to upstream game C `(no-ffi)`.
+- **`softbuffer`** (`crates/platform`) presents the CPU-rendered 240×160 framebuffer to a `winit` surface without adding a game renderer or GPU abstraction. Discussion #17 approved it with `winit`. Its Linux presentation path uses the same X11 or Wayland system libraries.
+- **`cpal`** (`crates/platform`) owns only the default audio device, output stream, and callback receiving frame-driven PCM through the ring buffer. Discussion #78 approved that scope. On Linux it binds ALSA through `libasound`; decoding, sequencing, and effects remain in the workspace `audio` crate.
+- **`rustix`** (`crates/pokeemerald-rs`, Unix only) wraps the `openat`/`renameat`/`fstatat` family so `--import-rom` pins the pack's destination directory open once and names every file against that handle (see `import_rom`'s module docs). PR #372 approved exactly that scope (`minimal-deps: approved`, 2026-08-24) over project-owned `unsafe` FFI. It builds with `default-features = false` plus `std` and `fs` only; off Unix it is not compiled and the path-based flow remains.
 
 ## License
 
-This project ships **no license**, matching the posture of the `pret/pokeemerald`
-disassembly it ports. It reproduces behaviour of a work owned by Nintendo / Game
-Freak / The Pokémon Company; treat it accordingly. See
-[`CONTRIBUTING.md`](CONTRIBUTING.md) for what that means for contributions.
+This project intentionally ships no license, matching the posture of the `pret/pokeemerald` disassembly it ports. It reproduces behaviour owned by Nintendo, Game Freak, and The Pokémon Company. See [`CONTRIBUTING.md`](CONTRIBUTING.md) before contributing.
 
 ## Acknowledgements
 
-The [pret](https://github.com/pret) project's `pokeemerald` disassembly is the
-canonical specification we port from, and [mGBA](https://github.com/mgba-emu/mgba)
-is our hardware-behaviour reference. This is an independent reimplementation, not
-affiliated with or endorsed by Nintendo, Game Freak, or The Pokémon Company.
+The [pret](https://github.com/pret) Pokémon disassemblies specify the game, and [mGBA](https://github.com/mgba-emu/mgba) clarifies hardware behaviour. This independent reimplementation is not affiliated with or endorsed by Nintendo, Game Freak, or The Pokémon Company.
