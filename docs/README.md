@@ -1,24 +1,18 @@
-# Docs
+# Documentation router
 
-These docs are the **why**; the code is the **how** `(lean-docs)`. Read in this
-order:
+Read only the branch required by the task. Each target below owns the named context; follow its links only when they narrow the work further `(lean-docs)`.
 
-1. **[principles.md](principles.md)** — the invariants this project holds. Every
-   rule elsewhere cites one of these by `handle`. Start here.
-2. **[acceptance/v1.md](acceptance/v1.md)** — the definition of "done" for v1, as
-   stable criteria IDs. The roadmap (GitHub issues) ladders up to these.
-3. **[snapshots.md](snapshots.md)** — the `record-snapshot` capture format
-   and the human blessing workflow V-4 requires.
-4. **[scenarios.md](scenarios.md)** — the contract for named, scripted
-   headless runs through the real application flow.
+| When the task involves | Read | Authority provided |
+|---|---|---|
+| Any change or review | [`principles.md`](principles.md) | Repository invariants and their stable handles |
+| Rust implementation, source ownership, or code conventions | [`../crates/README.md`](../crates/README.md) | Workspace-wide Rust rules, crate ownership, and cross-crate seams |
+| v1 scope or the definition of done | [`acceptance/v1.md`](acceptance/v1.md) | Stable acceptance criteria and status markers |
+| Roadmap work, milestones, or issue placement | The relevant acceptance criterion, then [`../CONTRIBUTING.md`](../CONTRIBUTING.md) and the live GitHub milestone | Dynamic scope, sequencing, and completion work |
+| Contributor setup or dependency policy | [`../README.md`](../README.md), then [`../CONTRIBUTING.md`](../CONTRIBUTING.md) | Human setup path, contribution contract, and approval requirements |
+| Upstream provenance or ledger coverage | `python3 scripts/ledger.py -h`, focused subcommand help, then the read-only upstream reference | Artifact ownership, status, destination, and canonical behaviour |
+| Deterministic frame captures | [`snapshots.md`](snapshots.md) | Snapshot format, generation, and comparison contract |
+| Scripted headless application runs | [`scenarios.md`](scenarios.md) | Scenario definition and execution contract |
+| Versions, releases, or channel promotion | [`../RELEASE.md`](../RELEASE.md), [`../CHANGELOG.md`](../CHANGELOG.md), and live GitHub state | Release policy, curated history, and current evidence |
+| Bugs, questions, security, or conduct | [`../SUPPORT.md`](../SUPPORT.md), [`../SECURITY.md`](../SECURITY.md), and [`../CODE_OF_CONDUCT.md`](../CODE_OF_CONDUCT.md) | Public reporting channels and response expectations |
 
-There are no design-spec or plan docs: the roadmap is dynamic and lives in GitHub
-issues, PRs, and discussions `(constitution-vs-roadmap)`. Docs hold the durable
-constitution; GitHub holds the dynamic plan, and the path to each acceptance
-criterion is planned there, not frozen into a file.
-
-Agents: start at [`AGENTS.md`](../AGENTS.md) (Claude Code also reads
-[`CLAUDE.md`](../CLAUDE.md), which imports it) for the operational rules —
-commands, autonomy boundaries, hard rules. For a subsystem's current
-implementation state, prefer its crate's `//!` doc (`crates/*/src/lib.rs`)
-over any hand-written status summary.
+Stable documentation owns contracts, invariants, constraints, and rationale that code cannot express. Code and tests own current behaviour. GitHub issues, pull requests, and milestones own roadmap state and implementation history. The ledger owns upstream provenance and Rust or asset destinations `(constitution-vs-roadmap)`.
