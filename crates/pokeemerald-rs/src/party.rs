@@ -161,6 +161,18 @@
 //! `CalculateMonStats` would have produced from them, not a value weaker
 //! than the record they came from.
 //!
+//! Exactly one byte pair escapes that retention: Shedinja's maximum HP
+//! (issue #401), which `CalculateMonStats` pins to a flat `1`
+//! (`pokeemerald/src/pokemon.c:2845`-`:2848`) no base HP, IV, EV or level
+//! can move. A retained maximum is kept because it may carry an EV
+//! contribution this port cannot rebuild; Shedinja's never can, so a stored
+//! maximum that disagrees is stale bytes rather than data, and
+//! [`normalize_retained_shedinja_max_hp`] rewrites that one entry (and
+//! rebases the load-clamp offset by the points it removes) inside the
+//! retained branch. The other five stay retained even for Shedinja: no
+//! `CalculateMonStats` runs on the save path, so EVs gained without a level
+//! cross must go on sitting outside the cache exactly as they do upstream.
+//!
 //! Current HP is outside that choice: it is battle state, so the merge
 //! always writes the battler's, retained block or not. It can never
 //! contradict either maximum, because the model's own maximum is the 0-EV
@@ -560,6 +572,46 @@ fn overlay_current_hp_over_retained_block(
     };
 }
 
+/// The one entry of a *retained* stat block that is still rewritten
+/// (issue #401): Shedinja's maximum HP, which `CalculateMonStats` pins to a
+/// flat `1` (`pokeemerald/src/pokemon.c:2845`-`:2848`) whatever its base HP,
+/// IV, EV and level say. Every other retained byte can be a real EV-derived
+/// value this port cannot reconstruct, so it is carried forward untouched
+/// (module docs, issue #384); Shedinja's maximum can never be one, so a
+/// stored block that disagrees -- a save written by a build predating this
+/// fix, or a hand-edited one -- is normalized rather than carried forward
+/// forever.
+///
+/// Only the maximum. The other five bytes stay retained even for Shedinja,
+/// because nothing on this path is a `CalculateMonStats` call: upstream's
+/// `MonGainEVs` (`pokeemerald/src/battle_script_commands.c:3420`) updates
+/// the EV bytes and leaves the cache stale until a level-up, evolution,
+/// vitamin or Box withdrawal recomputes it, and `SavePlayerParty` /
+/// `LoadPlayerParty` (`pokeemerald/src/load_save.c:160-178`) call neither.
+/// Refreshing all six here would cash an EV gain that crossed no level into
+/// the stat cache early, for Shedinja alone `(behavioral-fidelity)`.
+///
+/// The load-clamp offset is rebased by the points the normalization
+/// removes, exactly as [`merge_into_save_pokemon`]'s recompute branch
+/// rebases across a level change: this branch runs only when species and
+/// level are unchanged, so [`battle::BattlePokemon::stats`]'s own maximum
+/// *is* the `0`-EV floor the offset was measured against
+/// ([`hp_hidden_by_load`], [`zero_ev_max_hp`]), and the gap over it
+/// disappears the moment the filed maximum becomes that floor.
+fn normalize_retained_shedinja_max_hp(
+    record: &mut Pokemon,
+    mon: &BattlePokemon,
+    hp_hidden_by_load: &mut i32,
+) {
+    if mon.species() != battle::SPECIES_SHEDINJA {
+        return;
+    }
+    let invariant_max_hp = mon.stats().max_hp;
+    let stale_points = clamp_i32(u32::from(record.max_hp).saturating_sub(invariant_max_hp));
+    record.max_hp = clamp_u16(invariant_max_hp);
+    *hp_hidden_by_load = hp_hidden_by_load.saturating_sub(stale_points);
+}
+
 /// The current-HP points [`from_save_pokemon`]'s clamp hid from the
 /// session: `stored.hp` above the `0`-EV floor **at `stored.level`** --
 /// [`zero_ev_max_hp`], not [`battle::BattlePokemon::stats`]'s own cache.
@@ -679,20 +731,20 @@ pub(crate) fn merge_into_save_pokemon(
     // contradicts, and the reconciled mon needs the block that matches the
     // level actually being written.
     //
-    // Shedinja never takes this fast path (issue #401): unlike every other
-    // species, its retained six bytes are never a legitimate EV-derived
-    // value the model cannot reconstruct -- `CalculateMonStats` pins its
-    // max HP to a flat `1` regardless of species/level staying put, so a
-    // stored block that disagrees (a save written before this fix, or a
-    // hand-edited one) must be normalized rather than carried forward
-    // unchanged forever. Routing it through the recompute branch instead
-    // is a no-op for an already-consistent `1`/`1` Shedinja (`zero_ev_max_hp`
-    // and the freshly recomputed block agree with the retained one, so the
-    // load-clamp offset moves by zero) and self-heals a stale one.
+    // Shedinja does not leave that guard (issue #401): only its *maximum
+    // HP* is species-invariant, and the retained branch normalizes that one
+    // entry on its own ([`normalize_retained_shedinja_max_hp`]). Excluding
+    // Shedinja from the fast path outright, as an earlier round of this fix
+    // did, would file the other five bytes from a fresh EV-aware recompute
+    // on an ordinary save that moved neither species nor level -- a
+    // `CalculateMonStats` upstream never runs there (`MonGainEVs`,
+    // `src/battle_script_commands.c:3420`, updates the EV bytes and leaves
+    // the cache alone until a level-up, evolution, vitamin or Box
+    // withdrawal), so an EV gain without a level cross would be cashed into
+    // the stat cache early for Shedinja and only for Shedinja.
     let stored_species = u16::from_le_bytes([substructures.growth[0], substructures.growth[1]]);
-    let stat_block_is_still_the_battlers = mon.species() != battle::SPECIES_SHEDINJA
-        && stored_species == mon.species().0
-        && base.level == mon.level();
+    let stat_block_is_still_the_battlers =
+        stored_species == mon.species().0 && base.level == mon.level();
 
     // `PokemonSubstruct0`: species, experience and `ppBonuses` are the
     // battler's; `heldItem` (`/*0x02*/`), `friendship` (`/*0x09*/`) and the
@@ -729,10 +781,12 @@ pub(crate) fn merge_into_save_pokemon(
     merged.box_data.set_substructures(&substructures);
     if stat_block_is_still_the_battlers {
         // The save's own six stat bytes stay exactly as they were --
-        // including the EV contribution this port cannot rebuild. Only
-        // current HP, which is state, comes from the battler -- translated
-        // back across the load clamp by the offset measured at load time
-        // (module docs).
+        // including the EV contribution this port cannot rebuild -- bar
+        // Shedinja's maximum HP, the one entry no EV can move (issue #401).
+        // Only current HP, which is state, comes from the battler --
+        // translated back across the load clamp by the offset measured at
+        // load time (module docs).
+        normalize_retained_shedinja_max_hp(&mut merged, mon, hp_hidden_by_load);
         overlay_current_hp_over_retained_block(&mut merged, mon, *hp_hidden_by_load);
     } else {
         // Species or level moved this session, so the cached block is a

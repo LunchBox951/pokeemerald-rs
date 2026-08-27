@@ -171,8 +171,10 @@ fn a_levelled_up_shedinja_lead_saves_at_one_max_hp() {
 /// maximum is always the upstream-mandated flat `1`, so a stored block
 /// that disagrees (a save written by a build that predates this fix, or a
 /// hand-edited one) is never legitimate data to preserve. This pins that
-/// the fast path excludes Shedinja and self-heals the stale bytes instead
-/// of carrying them forward forever.
+/// the retained branch normalizes that one entry
+/// ([`super::normalize_retained_shedinja_max_hp`]) instead of carrying it
+/// forward forever, and that the rebased load-clamp offset leaves the next
+/// save byte-exact.
 #[test]
 fn an_unchanged_shedinja_lead_self_heals_a_stale_stored_maximum() {
     let dex = Dex::new();
@@ -200,6 +202,79 @@ fn an_unchanged_shedinja_lead_self_heals_a_stale_stored_maximum() {
          maximum rather than carrying it forward unchanged"
     );
     assert_eq!(merged.hp, 1);
+    assert_eq!(
+        offset, 0,
+        "the points the normalization removed leave the offset with them; \
+         they are not real hidden HP under a maximum of 1"
+    );
+
+    // Saving twice must file the same bytes: the normalization is a
+    // one-shot heal, not a per-save drift (module docs).
+    let resaved = merge_into_save_pokemon(&dex, &reloaded, &merged, &mut offset);
+    assert_eq!(resaved.max_hp, 1);
+    assert_eq!(resaved.hp, 1);
+    assert_eq!(offset, 0);
+}
+
+/// Issue #401, PR #447's review thread: the retained branch normalizes
+/// Shedinja's maximum HP and *only* that. The other five cached bytes stay
+/// retained even for Shedinja, because nothing this save path does is a
+/// `CalculateMonStats` call -- upstream's `MonGainEVs`
+/// (`pokeemerald/src/battle_script_commands.c:3420`) writes the EV bytes
+/// and leaves the stat cache stale until a level-up, evolution, vitamin or
+/// Box withdrawal recomputes it, and `SavePlayerParty`/`LoadPlayerParty`
+/// (`pokeemerald/src/load_save.c:160-178`) call neither. An earlier round
+/// of this fix excluded Shedinja from the fast path outright, which cashed
+/// exactly that EV gain into the cache one save early
+/// `(behavioral-fidelity)`.
+#[test]
+fn an_unchanged_shedinja_keeps_the_five_cached_stats_its_evs_have_outrun() {
+    let dex = Dex::new();
+    let lead = a_shedinja(20);
+    let mut stored = to_save_pokemon(&dex, &lead);
+
+    // EVs a battle awarded with no level cross behind them: substruct2's
+    // bytes move, the six cached stats do not. 252 + 252 stays inside
+    // upstream's 510 total.
+    let mut substructures = stored.box_data.substructures().unwrap();
+    substructures.evs_and_condition[1] = 252;
+    substructures.evs_and_condition[2] = 252;
+    stored.box_data.set_substructures(&substructures);
+    // A stale maximum on top, so the one entry that *is* rewritten stands
+    // out against the five that are not.
+    stored.max_hp = 40;
+    stored.hp = 40;
+
+    let reloaded = from_save_pokemon(&dex, &stored).expect("the fixture must decode");
+    let ev_aware = compute_levelled_up_stats(&dex, &reloaded, &substructures.evs_and_condition);
+    assert!(
+        ev_aware.attack > u32::from(stored.attack),
+        "fixture sanity: a fresh EV-aware recompute really would move the \
+         cached Attack, so retaining it is an observable choice"
+    );
+
+    let mut offset = hp_hidden_by_load(&dex, &stored, &reloaded);
+    let merged = merge_into_save_pokemon(&dex, &reloaded, &stored, &mut offset);
+
+    assert_eq!(merged.max_hp, 1, "the invariant entry is normalized");
+    assert_eq!(merged.hp, 1);
+    for (stat, filed, retained) in [
+        ("Attack", merged.attack, stored.attack),
+        ("Defense", merged.defense, stored.defense),
+        ("Speed", merged.speed, stored.speed),
+        ("Sp. Attack", merged.special_attack, stored.special_attack),
+        (
+            "Sp. Defense",
+            merged.special_defense,
+            stored.special_defense,
+        ),
+    ] {
+        assert_eq!(
+            filed, retained,
+            "{stat} is a cached byte upstream leaves alone until a \
+             CalculateMonStats call this save path never makes"
+        );
+    }
 }
 
 /// The `isEgg`/`abilityNum` bits share the IV word; decoding must mask them
