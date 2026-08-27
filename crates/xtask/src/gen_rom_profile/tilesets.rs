@@ -226,11 +226,21 @@ fn locate_tiles(
             reason: "the tiles pointer is not a cartridge address".to_owned(),
         })?;
     let rom_tiles = if is_compressed {
-        lz77_decompress(&ctx.rom[offset..], None).map_err(|fault| {
-            GenRomProfileError::StructMismatch {
+        // `to_offset` only rejects an address below the cartridge base, so
+        // a candidate struct whose tiles field points past the end of this
+        // image still arrives here. Ask for the slice rather than take it:
+        // an out-of-range pointer is a struct that was never the tileset,
+        // which is a mismatch to report, not a panic.
+        let stream = ctx
+            .rom
+            .get(offset..)
+            .ok_or_else(|| GenRomProfileError::StructMismatch {
                 id: id.to_owned(),
-                reason: format!("the tiles stream does not decompress: {fault}"),
-            }
+                reason: "the tiles pointer is past the end of the ROM".to_owned(),
+            })?;
+        lz77_decompress(stream, None).map_err(|fault| GenRomProfileError::StructMismatch {
+            id: id.to_owned(),
+            reason: format!("the tiles stream does not decompress: {fault}"),
         })?
     } else {
         slice_at_addr(ctx.rom, addr, expected.len())

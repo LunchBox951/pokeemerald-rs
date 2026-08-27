@@ -178,7 +178,12 @@ pub fn locate_images(
                     Encoding::Raw => (&mut raw_needles, &mut raw_variants),
                     Encoding::Lz77 => (&mut lz_needles, &mut lz_variants),
                 };
-                for len in (kept..=full).step_by(bytes_per_tile) {
+                // One tile is the floor: an all-zero sheet trims to nothing,
+                // and an empty needle carries no signature at all.
+                // `Lz77Search` buckets needles by decompressed size, so it
+                // would report every declared-size-zero stream in the ROM as
+                // a hit and turn a blank image into `Ambiguous`.
+                for len in (kept.max(bytes_per_tile)..=full).step_by(bytes_per_tile) {
                     variants.push(Variant {
                         query_index,
                         rom_bit_depth,
