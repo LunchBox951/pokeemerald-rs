@@ -24,24 +24,22 @@
 //! recomputing anything. [`BattlePokemon::gain_evs`] is `MonGainEVs`
 //! (`pokeemerald/src/pokemon.c:5988`), called on every KO
 //! this crate's own [`crate::battle::Battle::settle_win_reward`] reaches,
-//! before [`BattlePokemon::apply_experience`] — upstream's own order, so a
-//! KO that both awards EVs and levels this mon up folds the just-gained EVs
-//! into that same level's stat recompute
-//! ([`BattlePokemon::raise_level_to_experience`] feeds
-//! [`BattlePokemon::evs`] to [`compute_stats_with_evs`]). Neither the
-//! Pokérus nor the Macho Brace doubling upstream's `MonGainEVs` applies is
-//! modelled: this crate carries no held items and no Pokérus byte (module
-//! docs' held-item exclusion above; Pokérus is retained save-file state with
-//! no typed home here, `pokeemerald-rs::party`'s own module docs), so every
-//! award this port can reach is upstream's un-multiplied base yield.
+//! before [`BattlePokemon::apply_experience`] — upstream's own order.
+//! Neither the Pokérus nor the Macho Brace doubling upstream's `MonGainEVs`
+//! applies is modelled: this crate carries no held items and no Pokérus
+//! byte (module docs' held-item exclusion above; Pokérus is retained
+//! save-file state with no typed home here, `pokeemerald-rs::party`'s own
+//! module docs), so every award this port can reach is upstream's
+//! un-multiplied base yield.
 //!
-//! What is still *not* modelled: a mon's live stats at construction or load
-//! time stay the `0`-EV formula regardless of [`BattlePokemon::evs`] — only
-//! a level-up recomputed **after** EVs entered the picture (a load, or a KO
-//! this session) folds them in, so a loaded EV-trained mon that never levels
-//! up this battle still fights the whole thing on its `0`-EV cache. That
-//! residual gap is `pokeemerald-rs::party`'s own to close, not this crate's
-//! (see that module's docs).
+//! What is still *not* modelled: [`BattlePokemon::stats`] itself never
+//! becomes EV-aware, at construction, at load, or across any in-battle
+//! level-up ([`BattlePokemon::raise_level_to_experience`]'s own module
+//! docs) -- a loaded or KO-trained EV mon fights the *whole* battle on the
+//! `0`-EV cache, current HP included. Only `pokeemerald-rs::party`'s own
+//! save-time recompute reads [`BattlePokemon::evs`] to file the EV-aware
+//! block a save actually needs (that module's own docs); nothing in this
+//! crate's own live arithmetic ever does.
 //!
 //! Abilities are out of scope too, with one exception:
 //! [`BattlePokemon::ability`] (issues #321/#322/#391), consumed by
@@ -765,15 +763,15 @@ impl BattlePokemon {
     /// leaves every mon it builds at `0` EVs (module docs).
     ///
     /// Deliberately does **not** recompute [`BattlePokemon::stats`]: this
-    /// crate's live stat cache stays the `0`-EV formula until the next time
-    /// [`BattlePokemon::raise_level_to_experience`] runs -- an in-battle
-    /// level-up ([`BattlePokemon::apply_experience`]), or a load-time
-    /// reconciliation of a stored level/experience pair that disagrees
-    /// ([`BattlePokemon::reconcile_saved_experience`]), whichever this
-    /// battler reaches first (module docs) -- the same posture
-    /// [`BattlePokemon::with_ability_slot`] and
+    /// crate's live stat cache stays the `0`-EV formula for the whole
+    /// battle, through every level-up
+    /// ([`BattlePokemon::raise_level_to_experience`]'s own module docs) --
+    /// the same posture [`BattlePokemon::with_ability_slot`] and
     /// [`BattlePokemon::with_pp_bonuses`] take toward fields upstream's own
-    /// load path (`LoadPlayerParty`) never recomputes either.
+    /// load path (`LoadPlayerParty`) never recomputes either. An earlier
+    /// round of this fix fed the adopted value into that recompute instead;
+    /// the review that caught it is `raise_level_to_experience`'s own
+    /// "Recorded divergence" section.
     ///
     /// Every byte is accepted: `PokemonSubstruct2`'s EV fields are
     /// unconstrained `u8`s upstream — `MonGainEVs`'s own caps
@@ -988,10 +986,13 @@ impl BattlePokemon {
     /// Called from [`crate::battle::Battle::settle_win_reward`] on every KO,
     /// **before** [`BattlePokemon::apply_experience`] — upstream's own order
     /// (`Cmd_getexp` case 2's `MonGainEVs` call, `:3420`, precedes case 3's
-    /// `SetMonData`/`CalculateMonStats` sequence) — so a KO that also levels
-    /// this mon up this turn folds the just-gained EVs into that same
-    /// level's stat recompute
-    /// ([`BattlePokemon::raise_level_to_experience`]).
+    /// `SetMonData`/`CalculateMonStats` sequence). This crate's own live
+    /// [`BattlePokemon::stats`] never reads the result either way
+    /// ([`BattlePokemon::raise_level_to_experience`]'s own module docs) --
+    /// what the ordering buys is that [`BattlePokemon::evs`] already carries
+    /// this KO's gain by the time `pokeemerald-rs::party`'s save-time
+    /// recompute reads it back, whether or not this same KO also crossed a
+    /// level.
     pub fn gain_evs(&mut self, ev_yield: EvYield) {
         let yields = [
             ev_yield.hp,
@@ -1134,16 +1135,29 @@ impl BattlePokemon {
     /// crossed learnset moves) and the save decoder
     /// ([`BattlePokemon::reconcile_saved_experience`], which must not).
     ///
-    /// The stat recompute is fed [`BattlePokemon::evs`], not a `0`-EV cache
-    /// (issue #415): upstream's own `CalculateMonStats` call here
-    /// (`Cmd_getexp` case 3's `SetMonData`, `pokeemerald/src/pokemon.c:2823`)
-    /// reads whatever `MonGainEVs` already wrote, so a KO that both awards
-    /// EVs and crosses a level this same turn ([`BattlePokemon::gain_evs`]
-    /// runs first, module docs) sees its own gain here. A mon nothing has
-    /// ever called [`BattlePokemon::gain_evs`] or [`BattlePokemon::with_evs`]
-    /// on is still at `0` EVs, so this is the identity change for every
-    /// mon this crate builds fresh -- `compute_stats_with_evs` at `0` EVs
-    /// *is* [`compute_stats`].
+    /// # Recorded divergence: the live stat recompute stays `0`-EV
+    ///
+    /// The stat recompute here is [`compute_stats`], not
+    /// [`compute_stats_with_evs`] fed [`BattlePokemon::evs`] -- deliberately,
+    /// even though this mon may carry real, adopted EVs (issue #415's
+    /// `BattlePokemon::with_evs`). `pokeemerald-rs::party`'s whole
+    /// hidden-load-clamp system (`hp_hidden_by_load`,
+    /// `merge_into_save_pokemon`'s rebase) depends on
+    /// [`BattlePokemon::stats`] staying the `0`-EV floor for the *entire*
+    /// battle, at every level, so it can consistently measure how many real
+    /// points a retained or freshly recomputed save-file maximum sits above
+    /// it. Feeding real EVs into this recompute (an earlier round of this
+    /// fix did) left the live cache EV-aware only *after* an in-battle
+    /// level-up, which is exactly the level-up-then-not-again asymmetry that
+    /// breaks it: the retained branch of a later, unrelated save (issue
+    /// #415's own review) added the hidden EV gap on top of a `current_hp`
+    /// that was already real, silently healing away damage the session had
+    /// actually taken. [`BattlePokemon::gain_evs`]'s own KO award still
+    /// reaches the save file correctly -- `pokeemerald-rs::party` reads
+    /// [`BattlePokemon::evs`] directly for its own, separate, save-time
+    /// recompute ([`crate::battle::Battle::settle_win_reward`]'s and this
+    /// method's own module docs) -- only this crate's *live* cache stays
+    /// `0`-EV, matching every level [`BattlePokemon::new`] itself computes.
     fn raise_level_to_experience(&mut self) -> Option<(u8, u8)> {
         let mut new_level = self.level;
         while new_level < MAX_LEVEL {
@@ -1162,13 +1176,12 @@ impl BattlePokemon {
         let old_level = self.level;
         let old_max_hp = self.stats.max_hp;
         self.level = new_level;
-        self.stats = compute_stats_with_evs(
+        self.stats = compute_stats(
             self.species,
             &self.base_stats,
             self.level,
             self.nature,
             self.ivs,
-            self.evs,
         );
         self.current_hp = self
             .current_hp

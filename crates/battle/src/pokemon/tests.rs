@@ -848,22 +848,85 @@ fn gain_evs_does_not_disturb_the_live_stat_cache() {
     );
 }
 
-/// The property issue #415 exists for: a KO that awards EVs and crosses a
-/// level in the same turn must fold the just-gained EVs into that same
-/// level's stat recompute -- `Cmd_getexp`'s own order, `MonGainEVs` before
-/// the `CalculateMonStats`-triggering exp write
-/// (`pokeemerald/src/battle_script_commands.c:3420`, module docs).
-/// [`crate::battle::Battle::settle_win_reward`] is the real call site; this
-/// pins the property directly against [`BattlePokemon`] alone.
+/// Slice-review finding (correctness), issue #415: a level-up's HP growth
+/// must be measured `0`-EV-old-max to `0`-EV-new-max, the same delta a
+/// freshly built mon gets -- never against an EV-aware maximum the live
+/// cache never held *before* this level-up. `party::hp_hidden_by_load`'s
+/// whole rebase system depends on [`BattlePokemon::stats`] staying the
+/// `0`-EV floor forever (module docs); recomputing it EV-aware here adds
+/// too much current HP at the moment of the level-up itself, independent
+/// of anything party.rs later does with the result.
 #[test]
-fn a_ko_that_awards_evs_and_crosses_a_level_folds_the_gain_into_the_recompute() {
+fn a_level_up_on_a_loaded_ev_trained_mon_grows_current_hp_by_the_zero_ev_delta() {
+    let dex = Dex::new();
+    let mut mon = sample_mon(&dex).with_evs(Evs {
+        hp: 252,
+        ..Evs::default()
+    });
+    mon.apply_damage(3);
+    let before = mon.current_hp();
+
+    let bulbasaur = dex.species(mon.species()).unwrap();
+    let award = assets::experience_for_level(bulbasaur.growth_rate, 6).unwrap() - mon.experience();
+    mon.apply_experience(&dex, award)
+        .expect("no move-learn prompt is pending");
+    assert_eq!(mon.level(), 6, "fixture sanity: the mon levelled up");
+
+    let zero_ev_old_max =
+        compute_stats(mon.species(), bulbasaur, 5, mon.nature(), mon.ivs()).max_hp;
+    let zero_ev_new_max =
+        compute_stats(mon.species(), bulbasaur, 6, mon.nature(), mon.ivs()).max_hp;
+    let real_new_max = compute_stats_with_evs(
+        mon.species(),
+        bulbasaur,
+        6,
+        mon.nature(),
+        mon.ivs(),
+        mon.evs(),
+    )
+    .max_hp;
+    assert!(
+        real_new_max > zero_ev_new_max,
+        "fixture sanity: the loaded HP EV really does raise the EV-aware \
+         maximum above the 0-EV one, or this test cannot distinguish the \
+         two deltas"
+    );
+    assert_eq!(
+        mon.stats().max_hp,
+        zero_ev_new_max,
+        "the live cache stays the 0-EV formula through this level-up -- \
+         only the save-time recompute in pokeemerald-rs::party is EV-aware \
+         (module docs)"
+    );
+    assert_eq!(
+        mon.current_hp(),
+        before + (zero_ev_new_max - zero_ev_old_max),
+        "the level-up must grow current HP by the 0-EV delta, not one \
+         computed against an EV-aware maximum the live cache never held \
+         before this level-up"
+    );
+}
+
+/// The property issue #415 exists for: a KO that awards EVs and crosses a
+/// level in the same turn must leave [`BattlePokemon::evs`] carrying the
+/// just-gained EVs by the time the save-time recompute
+/// (`pokeemerald-rs::party::merge_into_save_pokemon`) reads them back --
+/// `Cmd_getexp`'s own order, `MonGainEVs` before the
+/// `CalculateMonStats`-triggering exp write
+/// (`pokeemerald/src/battle_script_commands.c:3420`, module docs).
+/// [`crate::battle::Battle::settle_win_reward`] is the real call site for
+/// the ordering; `pokeemerald-rs::party`'s own tests pin the save-file
+/// outcome end to end. This pins the [`BattlePokemon`]-level half: the
+/// gain survives the level-up, and [`BattlePokemon::stats`] itself stays
+/// the `0`-EV formula throughout (`raise_level_to_experience`'s own module
+/// docs) -- the save-time recompute, not this live cache, is what carries
+/// the EV-aware block.
+#[test]
+fn a_ko_that_awards_evs_and_crosses_a_level_keeps_the_gain_on_evs_not_the_live_cache() {
     let dex = Dex::new();
     // Level 99, one Sp. Attack EV short of the next `ev / 4` unit, so
     // Bulbasaur's own KO yield (`sp_attack: 1`) crosses that boundary
-    // exactly -- and level 99 -> 100 is where `CALC_STAT`'s `* level / 100`
-    // step stops truncating away a single point of `n`, so the boundary
-    // crossing survives all the way to the filed stat (module docs' own
-    // `calc_stat_folds_ev_over_four_into_the_parenthesised_sum` reasoning).
+    // exactly.
     let mut mon = BattlePokemon::new(
         &dex,
         SpeciesId(1), // Bulbasaur
@@ -894,7 +957,17 @@ fn a_ko_that_awards_evs_and_crosses_a_level_folds_the_gain_into_the_recompute() 
     );
     assert_eq!(mon.level(), 100, "fixture sanity: the mon levelled up");
 
-    let expected = compute_stats_with_evs(
+    // The gain is not lost across the level-up.
+    assert_eq!(
+        mon.evs().sp_attack,
+        4,
+        "the level-up must not reset or drop the KO's own EV gain"
+    );
+
+    // The information a save-time recompute needs is present and would
+    // move the block: `compute_stats_with_evs` fed `mon.evs()` differs
+    // from the `0`-EV formula at the same level.
+    let ev_aware = compute_stats_with_evs(
         mon.species(),
         bulbasaur,
         mon.level(),
@@ -902,22 +975,27 @@ fn a_ko_that_awards_evs_and_crosses_a_level_folds_the_gain_into_the_recompute() 
         mon.ivs(),
         mon.evs(),
     );
-    assert_eq!(
-        mon.stats(),
-        expected,
-        "the level-up recompute already sees the EVs this same KO awarded"
+    let zero_ev = compute_stats(
+        mon.species(),
+        bulbasaur,
+        mon.level(),
+        mon.nature(),
+        mon.ivs(),
     );
     assert_ne!(
+        ev_aware, zero_ev,
+        "fixture sanity: the gained EV really does move the block away \
+         from the 0-EV formula, or a save-time recompute reading mon.evs() \
+         could not observe this KO's gain"
+    );
+
+    // But the live cache itself never sees it -- only an external,
+    // save-time recompute reading `mon.evs()` does (module docs).
+    assert_eq!(
         mon.stats(),
-        compute_stats(
-            mon.species(),
-            bulbasaur,
-            mon.level(),
-            mon.nature(),
-            mon.ivs()
-        ),
-        "fixture sanity: the gained EV really does move the block away from \
-         the 0-EV formula -- if it had not, the assertion above would be \
-         vacuously true"
+        zero_ev,
+        "BattlePokemon::stats stays the 0-EV formula through this \
+         level-up; only pokeemerald-rs::party's own save-time recompute is \
+         EV-aware"
     );
 }

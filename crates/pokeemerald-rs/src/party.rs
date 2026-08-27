@@ -148,13 +148,13 @@
 //! [`from_save_pokemon`] cannot honour that cache at load time:
 //! [`battle::BattlePokemon::new`] always rebuilds the block from `0` EVs,
 //! and [`battle::BattlePokemon::with_evs`] (issue #415) deliberately does
-//! not recompute it either -- so a loaded EV-trained mon still *battles* as
-//! a 0-EV one until the next level-up folds the adopted value in, in
-//! battle or -- for a stored level/experience pair that disagrees -- right
-//! here at load, through [`battle::BattlePokemon::reconcile_saved_experience`]'s
-//! own share of that recompute (`battle`'s module docs). Only `hp` is read
-//! back out of the record at load, because current HP is the one entry
-//! that is state rather than a function of the rest.
+//! not recompute it either -- so a loaded EV-trained mon *battles* as a
+//! 0-EV one for the entire session, through every level-up
+//! (`battle`'s module docs; an earlier round of this fix tried feeding the
+//! adopted EVs into the live level-up recompute instead, and that crate's
+//! own review is why it does not). Only `hp` is read back out of the
+//! record at load, because current HP is the one entry that is state
+//! rather than a function of the rest.
 //!
 //! [`merge_into_save_pokemon`] must therefore not write that rebuilt block
 //! back unconditionally: an EV-trained file merely loaded and re-saved
@@ -174,15 +174,13 @@
 //! written back (the EVs discussion above) rather than whatever `base`
 //! loaded with, so a KO that gained EVs and crossed a level this same turn
 //! sees its own gain here -- the exact gap issue #415 exists to close. This
-//! is still not the same value as [`battle::BattlePokemon::stats`]'s own
-//! live cache, which stays the `0`-EV formula until an *in-battle*
-//! level-up recomputes it (`battle`'s module docs): this save-time
-//! recompute is independent of that cache and does not read it, though the
-//! two agree whenever the level moved through an in-battle award, since
-//! both then run the identical formula over the identical inputs. Either
-//! way the six bytes this filed block replaces are exactly what upstream's
-//! own `CalculateMonStats` would have produced from them, not a value
-//! weaker than the record they came from.
+//! is *never* the same value as [`battle::BattlePokemon::stats`]'s own live
+//! cache, which stays the `0`-EV formula for the whole battle regardless of
+//! any level-up (`battle`'s module docs): this save-time recompute is
+//! wholly independent of that cache and never reads it. Either way the six
+//! bytes this filed block replaces are exactly what upstream's own
+//! `CalculateMonStats` would have produced from them, not a value weaker
+//! than the record they came from.
 //!
 //! Exactly one byte pair escapes that retention: Shedinja's maximum HP
 //! (issue #401), which `CalculateMonStats` pins to a flat `1`
@@ -251,14 +249,14 @@
 //! session is still playing as fainted), the same way the translation never
 //! files above the block's own maximum. The residue (a live HP pinned at
 //! either boundary mid-session loses points the wider upstream range would
-//! have kept) closes for a session that levels up: issue #415 makes
-//! [`battle::BattlePokemon::stats`] itself EV-aware from that level-up
-//! onward (`battle`'s module docs), so the live maximum this translation
-//! caps against is no longer the `0`-EV one for the rest of the battle. It
-//! stays open for a loaded EV-trained mon that never levels up this
-//! session: its live cache never leaves the `0`-EV formula, by design
-//! (`battle`'s module docs), so the boundary this paragraph describes can
-//! still bind for it.
+//! have kept) stays open even after issue #415: [`battle::BattlePokemon::stats`]
+//! never becomes EV-aware, at load or across any in-battle level-up
+//! (`battle`'s module docs, and that crate's own review of an earlier round
+//! of this fix that tried exactly that), so the live maximum this
+//! translation caps against is always the `0`-EV one. Only this module's
+//! own save-time recompute is EV-aware; the boundary this paragraph
+//! describes closes when `battle`'s own live arithmetic is, which issue
+//! #415 does not attempt.
 
 use battle::{BattlePokemon, Dex, Ivs, MAX_MON_MOVES};
 use engine::save::{BoxPokemon, Pokemon, PokemonSubstructures, SUBSTRUCTURE_LEN};
@@ -965,16 +963,15 @@ impl core::fmt::Display for NotTheBattlersRecord {
 /// [`battle::BattlePokemon::new`] (module docs); the record's own EVs
 /// ([`evs_from_substruct2`]) are adopted right after, through
 /// [`battle::BattlePokemon::with_evs`] (issue #415), which does not disturb
-/// that `0`-EV stat block on its own (`battle`'s module docs). Accumulated
-/// experience is wound back to the saved value next -- through
-/// [`battle::BattlePokemon::reconcile_saved_experience`], which can itself
-/// raise the level (and, since the adopted EVs are already in place by
-/// then, recompute the stat block EV-aware) for a stored level/experience
-/// pair that disagrees, exactly the way an in-battle level-up would.
-/// Current HP and each move slot's PP are then wound back to the saved
-/// values through the remaining mutations that preserve that type's
-/// invariants ([`battle::BattlePokemon::apply_damage`] /
-/// [`battle::BattlePokemon::deduct_pp`]) -- never by reaching past them.
+/// that `0`-EV stat block at all -- `battle`'s own live cache stays `0`-EV
+/// for the whole battle, load included, however this method's own
+/// [`battle::BattlePokemon::reconcile_saved_experience`] call just below
+/// raises the level for a stored level/experience pair that disagrees
+/// (`battle`'s module docs). Accumulated experience is wound back to the
+/// saved value through that call; current HP and each move slot's PP are
+/// then wound back to the saved values through the remaining mutations
+/// that preserve that type's invariants ([`battle::BattlePokemon::apply_damage`]
+/// / [`battle::BattlePokemon::deduct_pp`]) -- never by reaching past them.
 ///
 /// # Errors
 ///
@@ -1021,10 +1018,11 @@ pub(crate) fn from_save_pokemon(dex: &Dex, saved: &Pokemon) -> Result<BattlePoke
     let pp_bonuses = battle::PpBonuses::from_bits(substructures.growth[8]);
 
     // `PokemonSubstruct2`'s first six bytes -- this record's own EVs (issue
-    // #415), adopted before `reconcile_saved_experience` below, which shares
-    // its stat recompute with the in-battle award and so must see the same
-    // EVs a battle-time recompute would (`battle::BattlePokemon::with_evs`'s
-    // own docs).
+    // #415), adopted through `with_evs` below so the battler carries them
+    // for the merge's own save-time recompute to read back later
+    // (`battle::BattlePokemon::with_evs`'s own docs); adopting them does not
+    // disturb the `0`-EV stat block `BattlePokemon::new` just built, so the
+    // order relative to `reconcile_saved_experience` below does not matter.
     let evs = evs_from_substruct2(&substructures.evs_and_condition);
 
     let mut mon = BattlePokemon::new(

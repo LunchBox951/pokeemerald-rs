@@ -337,11 +337,10 @@ mod tests {
         assert_eq!(
             leveled_lead.current_hp(),
             leveled_lead.stats().max_hp,
-            "fixture sanity: the mon is still at its own full -- now the \
-             EV-aware level-13 maximum, since issue #415's level-up \
-             recompute folds the retained EVs `with_evs` seeded in -- \
+            "fixture sanity: the mon is still at its own (0-EV) full \
              through the level-up, unfainted, so the white-out below heals \
-             a live lead"
+             a live lead -- battle's own live cache stays 0-EV regardless \
+             of the retained EVs with_evs seeded in (battle's module docs)"
         );
 
         phase.white_out();
