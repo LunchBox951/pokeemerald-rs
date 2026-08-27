@@ -72,7 +72,8 @@ Keep each pull request focused and complete its template honestly:
 - Record test evidence and outcomes.
 - State ledger impact as `none`, `verify-only`, or the touched entries.
 - State dependency impact as `none` or link the exact owner approval.
-- State release impact using the current template and [`RELEASE.md`](RELEASE.md).
+
+Release impact is not a template field: the `VERSION` bump and CI's gates are its sole authority (see [`RELEASE.md`](RELEASE.md)).
 
 Every ordinary pull request into `dev` advances `VERSION`. Run `python3 scripts/sync_cargo_version.py` after the chosen `PATCH`, `MINOR`, or `MAJOR` bump. `FINAL` is owner-only. Do not combine feature changes with channel promotion.
 
