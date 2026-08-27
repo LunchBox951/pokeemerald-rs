@@ -768,6 +768,31 @@ fn default_path_ends_with_expected_relative_path() {
     assert!(path.ends_with("assets-pack/pokeemerald.pack"));
 }
 
+/// What a checkout-validation gate needs from
+/// [`AssetPack::repo_pack_path`], and all it needs: an absolute path to
+/// `cargo xtask extract`'s output inside *this* workspace, identified by
+/// the root that holds the workspace manifest. Holds whatever
+/// [`AssetPack::default_path`] resolves to for a running game, and on a
+/// machine with any number of packs installed elsewhere.
+#[test]
+fn repo_pack_path_is_the_workspace_roots_own_extract_output() {
+    let path = AssetPack::repo_pack_path();
+    assert!(path.is_absolute(), "{} must be absolute", path.display());
+    assert!(path.ends_with(super::OUTPUT_RELATIVE_PATH));
+
+    let root = path
+        .parent()
+        .and_then(std::path::Path::parent)
+        .expect("the pack sits two components under the root it names");
+    let manifest = std::fs::read_to_string(root.join("Cargo.toml"))
+        .expect("the root repo_pack_path names must hold a Cargo manifest");
+    assert!(
+        manifest.contains("[workspace]"),
+        "{} must be this workspace's root, not an install location",
+        root.display()
+    );
+}
+
 #[test]
 fn song_accessor_decodes_the_named_entry_through_the_song_schema() {
     let path = write_synthetic_pack("song-ok");
@@ -963,7 +988,7 @@ fn real_pack_loads_and_every_typed_accessor_works() {
     use crate::fonts::FontId;
     use crate::map_layouts::{BorderGrid, LayoutId, LayoutTable};
 
-    let pack = AssetPack::load_default().expect("run `cargo xtask extract` first");
+    let pack = AssetPack::load_repo().expect("run `cargo xtask extract` first");
 
     let general = pack
         .tileset("general")
@@ -1192,7 +1217,7 @@ const REAL_PACK_PROGRAMMABLE_WAVES: [u32; 4] = [1, 2, 5, 6];
 fn real_pack_audio_samples_decode_through_the_sample_schema() {
     use crate::audio::Sample;
 
-    let pack = AssetPack::load_default().expect("run `cargo xtask extract` first");
+    let pack = AssetPack::load_repo().expect("run `cargo xtask extract` first");
 
     let mut decoded = 0usize;
     for name in REAL_PACK_DIRECT_SOUND_SAMPLES {
@@ -1289,7 +1314,7 @@ fn real_pack_audio_samples_decode_through_the_sample_schema() {
 fn real_pack_audio_song_decodes_through_the_song_schema() {
     use crate::audio::{Song, SongEvent, VoiceGroupId};
 
-    let pack = AssetPack::load_default().expect("run `cargo xtask extract` first");
+    let pack = AssetPack::load_repo().expect("run `cargo xtask extract` first");
     let bytes = pack
         .raw("audio/song/mus_title")
         .expect("`audio/song/mus_title` should be in the pack");
@@ -1405,7 +1430,7 @@ fn real_pack_mus_title_data_chain_round_trips_through_the_typed_accessors() {
 
     use crate::audio::VoiceEntry;
 
-    let pack = AssetPack::load_default().expect("run `cargo xtask extract` first");
+    let pack = AssetPack::load_repo().expect("run `cargo xtask extract` first");
 
     // 1. The song, through the typed accessor.
     let song = pack

@@ -9,7 +9,7 @@
 use super::{
     calc_max_hp, calc_stat, compute_stats, compute_stats_with_evs, BattlePokemon, Evs, Ivs,
     MoveSlot, PpBonuses, StatStages, MAX_IV, MAX_LEVEL, MIN_LEVEL, MOVE_NONE, SPECIES_NONE,
-    SPECIES_OLD_UNOWN_B, SPECIES_OLD_UNOWN_Z,
+    SPECIES_OLD_UNOWN_B, SPECIES_OLD_UNOWN_Z, SPECIES_SHEDINJA,
 };
 use crate::damage::MoveCategory;
 use crate::dex::Dex;
@@ -33,22 +33,36 @@ const MAX_IVS: Ivs = Ivs {
 fn calc_max_hp_matches_hand_computed_bulbasaur_at_level_5() {
     // Bulbasaur base HP 45, IV 31 (max), level 5, 0 EV:
     // n = 2*45+31+0/4 = 121; 121*5/100 = 6 (605/100 truncated); +5+10 = 21.
-    assert_eq!(calc_max_hp(45, 31, 0, 5), 21);
+    assert_eq!(calc_max_hp(SpeciesId(1), 45, 31, 0, 5), 21);
 }
 
 #[test]
 fn calc_max_hp_folds_ev_over_four_into_the_parenthesised_sum() {
     // Same Bulbasaur, 252 EV (the upstream single-stat cap): ev/4 = 63.
     // n = 2*45+31+63 = 184; 184*5/100 = 9 (920/100 truncated); +5+10 = 24.
-    assert_eq!(calc_max_hp(45, 31, 252, 5), 24);
+    assert_eq!(calc_max_hp(SpeciesId(1), 45, 31, 252, 5), 24);
     // ev/4's own truncation happens before the level scaling, and the two
     // truncations bite in that order: 3 floor-divides to 0, so it cannot
     // reach the total at all. 7 floor-divides to 1 -- n = 122 -- but
     // 122 * 5 / 100 is still 6, so `* level / 100` absorbs that point and
     // the total is unchanged here too, for the second reason rather than
     // the first.
-    assert_eq!(calc_max_hp(45, 31, 0, 5), calc_max_hp(45, 31, 3, 5));
-    assert_eq!(calc_max_hp(45, 31, 0, 5), calc_max_hp(45, 31, 7, 5));
+    assert_eq!(
+        calc_max_hp(SpeciesId(1), 45, 31, 0, 5),
+        calc_max_hp(SpeciesId(1), 45, 31, 3, 5)
+    );
+    assert_eq!(
+        calc_max_hp(SpeciesId(1), 45, 31, 0, 5),
+        calc_max_hp(SpeciesId(1), 45, 31, 7, 5)
+    );
+}
+
+#[test]
+fn calc_max_hp_forces_shedinja_to_one_regardless_of_inputs() {
+    // Every input the ordinary formula reads -- base HP, IV, EV, level --
+    // pushed to its upstream maximum; Shedinja's flat `1`
+    // (`pokeemerald/src/pokemon.c:2845`-`:2848`) bypasses all of them.
+    assert_eq!(calc_max_hp(SPECIES_SHEDINJA, 255, 31, 252, 100), 1);
 }
 
 #[test]
@@ -73,8 +87,11 @@ fn calc_stat_folds_ev_over_four_into_the_parenthesised_sum() {
 fn compute_stats_bundles_all_six_stats() {
     let dex = Dex::new();
     let bulbasaur = dex.species(SpeciesId(1)).unwrap();
-    let stats = compute_stats(bulbasaur, 5, Nature::Hardy, MAX_IVS);
-    assert_eq!(stats.max_hp, calc_max_hp(bulbasaur.hp, 31, 0, 5));
+    let stats = compute_stats(SpeciesId(1), bulbasaur, 5, Nature::Hardy, MAX_IVS);
+    assert_eq!(
+        stats.max_hp,
+        calc_max_hp(SpeciesId(1), bulbasaur.hp, 31, 0, 5)
+    );
     assert_eq!(
         stats.attack,
         calc_stat(bulbasaur.attack, 31, 0, 5, Nature::Hardy, Stat::Attack)
@@ -92,8 +109,15 @@ fn compute_stats_with_evs_matches_compute_stats_at_zero_evs() {
     let dex = Dex::new();
     let bulbasaur = dex.species(SpeciesId(1)).unwrap();
     assert_eq!(
-        compute_stats(bulbasaur, 50, Nature::Adamant, MAX_IVS),
-        compute_stats_with_evs(bulbasaur, 50, Nature::Adamant, MAX_IVS, Evs::default())
+        compute_stats(SpeciesId(1), bulbasaur, 50, Nature::Adamant, MAX_IVS),
+        compute_stats_with_evs(
+            SpeciesId(1),
+            bulbasaur,
+            50,
+            Nature::Adamant,
+            MAX_IVS,
+            Evs::default()
+        )
     );
 }
 
@@ -104,7 +128,14 @@ fn compute_stats_with_evs_raises_every_stat_the_ev_bytes_train() {
     // at 0 EVs -- the `ev / 4` term CALC_STAT adds (module docs).
     let dex = Dex::new();
     let bulbasaur = dex.species(SpeciesId(1)).unwrap();
-    let untrained = compute_stats_with_evs(bulbasaur, 50, Nature::Hardy, MAX_IVS, Evs::default());
+    let untrained = compute_stats_with_evs(
+        SpeciesId(1),
+        bulbasaur,
+        50,
+        Nature::Hardy,
+        MAX_IVS,
+        Evs::default(),
+    );
     let trained_evs = Evs {
         hp: 252,
         attack: 252,
@@ -113,13 +144,43 @@ fn compute_stats_with_evs_raises_every_stat_the_ev_bytes_train() {
         sp_attack: 252,
         sp_defense: 252,
     };
-    let trained = compute_stats_with_evs(bulbasaur, 50, Nature::Hardy, MAX_IVS, trained_evs);
+    let trained = compute_stats_with_evs(
+        SpeciesId(1),
+        bulbasaur,
+        50,
+        Nature::Hardy,
+        MAX_IVS,
+        trained_evs,
+    );
     assert!(trained.max_hp > untrained.max_hp);
     assert!(trained.attack > untrained.attack);
     assert!(trained.defense > untrained.defense);
     assert!(trained.speed > untrained.speed);
     assert!(trained.sp_attack > untrained.sp_attack);
     assert!(trained.sp_defense > untrained.sp_defense);
+}
+
+#[test]
+fn compute_stats_with_evs_forces_shedinja_to_one_hp_even_fully_ev_trained() {
+    // Shedinja's own base HP is 1 in the extracted data, so this also pins
+    // that the flat `1` isn't merely coincidental with the ordinary
+    // formula's output at low inputs -- run it at a high level and full HP
+    // EVs, where the ordinary formula would give something far larger.
+    let dex = Dex::new();
+    let shedinja = dex.species(SPECIES_SHEDINJA).unwrap();
+    let trained_evs = Evs {
+        hp: 252,
+        ..Evs::default()
+    };
+    let stats = compute_stats_with_evs(
+        SPECIES_SHEDINJA,
+        shedinja,
+        100,
+        Nature::Hardy,
+        MAX_IVS,
+        trained_evs,
+    );
+    assert_eq!(stats.max_hp, 1);
 }
 
 fn sample_mon(dex: &Dex) -> BattlePokemon {
@@ -329,7 +390,7 @@ fn nature_is_derived_from_the_personality_value() {
     let bulbasaur = dex.species(SpeciesId(1)).unwrap();
     assert_eq!(
         adamant.stats(),
-        compute_stats(bulbasaur, 5, Nature::Adamant, MAX_IVS)
+        compute_stats(SpeciesId(1), bulbasaur, 5, Nature::Adamant, MAX_IVS)
     );
     // 28 % 25 == 3 wraps to the same nature.
     assert_eq!(build(28).nature(), Nature::Adamant);
@@ -375,6 +436,52 @@ fn apply_damage_saturates_at_zero_and_marks_fainted() {
     mon.apply_damage(max_hp + 1000);
     assert_eq!(mon.current_hp(), 0);
     assert!(mon.is_fainted());
+}
+
+/// Issue #401: a constructed Shedinja starts at the flat `1` HP
+/// `CalculateMonStats` forces (`pokeemerald/src/pokemon.c:2845`-`:2848`),
+/// not the tens of HP the ordinary formula would give Shedinja's own base
+/// HP (1), IV, and level-20 scaling.
+#[test]
+fn new_gives_shedinja_one_max_hp_regardless_of_level_or_ivs() {
+    let dex = Dex::new();
+    let mon = BattlePokemon::new(
+        &dex,
+        SPECIES_SHEDINJA,
+        20,
+        MAX_IVS,
+        0,
+        vec![MoveId(10)], // Scratch, Shedinja's level-1 learnset entry
+    )
+    .expect("Shedinja at level 20 with Scratch is representable");
+    assert_eq!(mon.stats().max_hp, 1);
+    assert_eq!(mon.current_hp(), 1);
+    assert!(!mon.is_fainted());
+}
+
+/// Issue #401: the shared level-recalculation path
+/// (`raise_level_to_experience`, reached here through
+/// `reconcile_saved_experience` exactly as the save decoder reaches it)
+/// must keep Shedinja's max HP pinned at `1` across a level change, not
+/// just at construction.
+#[test]
+fn reconciling_experience_keeps_shedinja_at_one_max_hp_across_a_level_up() {
+    let dex = Dex::new();
+    let mut mon = BattlePokemon::new(&dex, SPECIES_SHEDINJA, 20, MAX_IVS, 0, vec![MoveId(10)])
+        .expect("Shedinja at level 20 with Scratch is representable");
+    let growth_rate = dex.species(SPECIES_SHEDINJA).unwrap().growth_rate;
+    let level_25_experience = assets::experience_for_level(growth_rate, 25).unwrap();
+
+    mon.reconcile_saved_experience(level_25_experience);
+
+    assert_eq!(mon.level(), 25, "fixture sanity: the level moved");
+    assert_eq!(
+        mon.stats().max_hp,
+        1,
+        "max HP stays pinned across the level-up"
+    );
+    assert_eq!(mon.current_hp(), 1, "still alive at Shedinja's one point");
+    assert!(!mon.is_fainted());
 }
 
 #[test]

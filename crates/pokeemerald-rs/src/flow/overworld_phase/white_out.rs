@@ -297,8 +297,14 @@ mod tests {
             hp: 252,
             ..battle::Evs::default()
         };
-        let ev_aware_at_level_5 =
-            battle::compute_stats_with_evs(species, lead.level(), lead.nature(), lead.ivs(), evs);
+        let ev_aware_at_level_5 = battle::compute_stats_with_evs(
+            lead.species(),
+            species,
+            lead.level(),
+            lead.nature(),
+            lead.ivs(),
+            evs,
+        );
 
         let mut stored = crate::party::to_save_pokemon(&dex, &lead);
         let mut substructures = stored
@@ -340,8 +346,14 @@ mod tests {
         let saved = slot.load().block1.player_party[0];
 
         let final_lead = phase.party_lead.as_ref().expect("still present");
-        let ev_aware_at_level_13 =
-            battle::compute_stats_with_evs(species, 13, final_lead.nature(), final_lead.ivs(), evs);
+        let ev_aware_at_level_13 = battle::compute_stats_with_evs(
+            final_lead.species(),
+            species,
+            13,
+            final_lead.nature(),
+            final_lead.ivs(),
+            evs,
+        );
         assert_eq!(
             saved.max_hp,
             u16::try_from(ev_aware_at_level_13.max_hp).unwrap(),

@@ -207,6 +207,7 @@ pub mod exp;
 pub mod fixed_damage;
 pub mod flag_move;
 pub mod hit;
+mod move_gate;
 pub mod multi_hit;
 pub mod nature;
 pub mod pokemon;
@@ -244,6 +245,7 @@ pub use pokemon::{
     calculate_pp_with_bonus, compute_stats_with_evs, BattlePokemon, Evs, Ivs, LearnedMove,
     MoveLearnDecision, MoveLearnResolution, MoveSlot, PendingMoveLearn, PpBonuses, StatStages,
     Stats, MAX_IV, MAX_LEVEL, MAX_MON_MOVES, MAX_PP_UPS, MIN_LEVEL, MOVE_NONE, SPECIES_NONE,
+    SPECIES_SHEDINJA,
 };
 pub use secondary::{is_secondary_effect, spend_effect_chance_draw, Trampoline};
 pub use stat_change::{
