@@ -827,7 +827,7 @@ fn default_path_ends_with_expected_relative_path() {
 fn repo_pack_path_is_the_workspace_roots_own_extract_output() {
     let path = AssetPack::repo_pack_path();
     assert!(path.is_absolute(), "{} must be absolute", path.display());
-    assert!(path.ends_with(super::OUTPUT_RELATIVE_PATH));
+    assert!(path.ends_with(pack_format::OUTPUT_RELATIVE_PATH));
 
     let root = path
         .parent()
