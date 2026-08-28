@@ -26264,7 +26264,7 @@
     "src/field_player_avatar.c": {
       "artifacts": {
         "CheckForPlayerAvatarCollision": {
-          "reason": "Destination-tile collision check re-implemented via MapRuntime::metatile_cell plus collision.rs's Collision/elevation_mismatch, and (issue #161, I-3 lane) the object-event occupancy test -- the grid collision-bit, elevation-mismatch and object-event cases, applied in GetCollisionAtCoords' own order. Still not modelled (deferred, all still in v1 scope): the ledge, boulder-push, rotating-gate and acro-bike sub-checks, plus IsCoordOutsideObjectEventMovementRange (never constrains the player), IsMetatileDirectionallyImpassable and CanCameraMoveInDirection.",
+          "reason": "Destination-tile collision check re-implemented via MapRuntime::metatile_cell plus collision.rs's Collision, elevation_mismatch, and directionally_impassable, and (issue #161, I-3 lane) the object-event occupancy test -- the grid collision-bit, directional-impassability, elevation-mismatch and object-event cases, applied in GetCollisionAtCoords' own order (shared between the same-map and connection-crossing step paths via PlayerState::try_start_resolved_step, issue #440). Still not modelled (deferred, all still in v1 scope): the ledge, boulder-push, rotating-gate and acro-bike sub-checks, plus IsCoordOutsideObjectEventMovementRange (never constrains the player) and CanCameraMoveInDirection.",
           "rust_target": "crates/engine/src/overworld/player.rs",
           "spec": "S-5",
           "status": "rewritten"

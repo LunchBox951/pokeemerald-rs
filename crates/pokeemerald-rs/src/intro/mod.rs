@@ -221,28 +221,6 @@ const fn traversal_frames(runs: &[TraversalRun]) -> usize {
     total
 }
 
-/// The dialogue box's window-local text origin (a small inset from the
-/// content rect's own top-left corner, matching the margin
-/// `AddTextPrinterForMessage`'s standard field message box uses -- upstream
-/// `sTextFlags`/`x = 1` in spirit, not transcribed byte-for-byte).
-const PRINTER_ORIGIN: (i32, i32) = (2, 2);
-
-/// `MessageBoxLayout::STANDARD`'s content rect, converted to absolute
-/// screen pixels (tile -> 8px), for [`textbox::blit_glyphs`]'s `origin`.
-const BOX_SCREEN_ORIGIN: (i32, i32) = (
-    engine::text::window::STANDARD_TILEMAP_LEFT * 8,
-    engine::text::window::STANDARD_TILEMAP_TOP * 8,
-);
-
-/// `MessageBoxLayout::STANDARD`'s content rect size, converted to pixels
-/// (tile -> 8px), for [`textbox::blit_glyphs`]'s `content_size` -- clips a
-/// scrolled-past-the-top-edge glyph (module docs there) to this box instead
-/// of letting it paint anywhere else in the framebuffer.
-const BOX_CONTENT_SIZE_PX: (i32, i32) = (
-    engine::text::window::STANDARD_CONTENT_WIDTH * 8,
-    engine::text::window::STANDARD_CONTENT_HEIGHT * 8,
-);
-
 /// Why building [`IntroScene`] failed.
 ///
 /// Concrete per-crate-boundary enum `(oop-boundaries)`, mirroring
@@ -344,8 +322,13 @@ impl IntroScene {
         // Upstream's `AddTextPrinterForMessage(TRUE)` (`main_menu.c:1339`):
         // Birch's speech is the one printer in this port with held-A/B
         // speed-up enabled (module docs' "Advance" section).
-        let printer =
-            Printer::new(pages[0].clone(), sheet, speed, PRINTER_ORIGIN).with_ab_speed_up_print();
+        let printer = Printer::new(
+            pages[0].clone(),
+            sheet,
+            speed,
+            textbox::STANDARD_PRINTER_ORIGIN,
+        )
+        .with_ab_speed_up_print();
         Self {
             frame,
             pages,
@@ -461,8 +444,8 @@ impl IntroScene {
         textbox::blit_glyphs(
             &mut fb,
             &self.revealed,
-            BOX_SCREEN_ORIGIN,
-            BOX_CONTENT_SIZE_PX,
+            textbox::STANDARD_BOX_SCREEN_ORIGIN,
+            textbox::STANDARD_BOX_CONTENT_SIZE_PX,
         );
 
         fb
