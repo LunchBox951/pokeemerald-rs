@@ -4,6 +4,8 @@
 //! Backgrounds and sprites use independent dimensions from [`MosaicConfig`].
 
 /// Horizontal and vertical mosaic block dimensions.
+///
+/// Each hardware dimension is in `1..=16`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MosaicSize {
     h: u8,
@@ -20,7 +22,8 @@ impl MosaicSize {
         v: Self::MIN_DIMENSION,
     };
 
-    /// Creates decoded block dimensions, clamping zero dimensions to one.
+    /// Creates dimensions from decoded hardware sizes (`1..=16`), clamping
+    /// zero dimensions to one.
     #[must_use]
     pub const fn new(h: u8, v: u8) -> Self {
         Self {
