@@ -286,7 +286,8 @@ pub struct App {
     /// previous song in this session left configured, matching upstream's
     /// `gMPlayReverb` never resetting between `m4aSongNumStart` calls.
     music_context: MusicContext,
-    /// Where every scene load [`crate::flow::advance_scene`] performs reads
+    /// Where every scene load [`crate::flow::advance_scene`] performs -- and
+    /// [`Self::start_title_music`]'s own second pack load -- reads
     /// from (issue #412): [`crate::pack_source::PackSource::Runtime`] for
     /// [`Self::new`], [`crate::pack_source::PackSource::Repo`] for
     /// [`Self::new_headless_real`] -- resolved once here, at construction,
@@ -413,7 +414,7 @@ impl App {
             SaveSlot::default_location,
             crate::pack_source::PackSource::Runtime,
         )?;
-        app.music = Self::start_title_music(&mut app.music_context, || {
+        app.music = Self::start_title_music(app.pack_source, &mut app.music_context, || {
             platform::AudioOutput::open(crate::music::RING_CAPACITY_FRAMES)
         });
         Ok(app)
@@ -467,7 +468,10 @@ impl App {
     /// against `platform`'s null audio backend (mirroring [`App::new`]'s
     /// real path, minus the real device), so the I-2 real-boot check's
     /// music assertions run against exactly the same per-step body
-    /// [`App::new`] does.
+    /// [`App::new`] does. The BGM is loaded through this `App`'s own
+    /// [`crate::pack_source::PackSource::Repo`] pin, like every other load
+    /// reachable from here, so the checkout gate hears the checkout's audio
+    /// rather than whatever pack the runtime resolver would have picked.
     ///
     /// # Errors
     ///
@@ -481,7 +485,7 @@ impl App {
             SaveSlot::disabled,
             crate::pack_source::PackSource::Repo,
         )?;
-        app.music = Self::start_title_music(&mut app.music_context, || {
+        app.music = Self::start_title_music(app.pack_source, &mut app.music_context, || {
             Ok(platform::AudioOutput::null(
                 crate::music::RING_CAPACITY_FRAMES,
             ))
@@ -495,11 +499,20 @@ impl App {
     /// inheritance against `context` ([`Self::music_context`]'s field docs),
     /// logging and returning `None` on any failure instead of propagating it
     /// -- see [`Self::music`]'s field docs on why this stays best-effort.
+    ///
+    /// Reads through `pack_source` -- this session's own
+    /// ([`Self::pack_source`]'s field docs) -- for the same reason every
+    /// scene load does: a checkout gate booting through
+    /// [`Self::new_headless_real_title`] must hear the checkout's own
+    /// extracted audio, never an installed user pack or one an inherited
+    /// `$POKEEMERALD_PACK` names. This second load resolving differently
+    /// from [`Self::boot`]'s first is exactly the split issue #412 closed.
     fn start_title_music(
+        pack_source: crate::pack_source::PackSource,
         context: &mut MusicContext,
         open_audio: impl FnOnce() -> Result<platform::AudioOutput, PlatformError>,
     ) -> Option<MusicPlayer> {
-        let pack = match assets::AssetPack::load_default() {
+        let pack = match pack_source.load() {
             Ok(pack) => pack,
             Err(err) => {
                 eprintln!("music: {err} -- the title screen will play without music");
