@@ -536,6 +536,70 @@ fn the_saved_bytes_sit_at_upstream_offsets() {
     assert_eq!(substructures.attacks[8], mon.moves()[0].pp);
 }
 
+/// Issue #415's own review: a fresh game's provisional starter has no
+/// backing save record at all -- `SaveBlock1::player_party` starts empty
+/// (`crate::new_game::init_save_blocks`) and the starter lives only in
+/// `OverworldPhase::party_lead` until its first save
+/// (`OverworldPhase::copy_party_and_objects_to_save`) -- so a starter that
+/// gains EVs and levels up in its first battle, before that first save ever
+/// runs, must still be filed with `CalculateMonStats`'s own EV-aware stat
+/// block. `to_save_pokemon` is the encoder both a direct first save and
+/// `merge_into_save_pokemon`'s own no-backing-record fallback run in that
+/// case, so both are pinned here. Before this fix both filed
+/// [`battle::BattlePokemon::stats`]'s live `0`-EV cache instead -- the cache
+/// this crate's own module docs (and `battle`'s) pin as deliberately never
+/// EV-aware, for the *loaded*-mon load-clamp rebase's sake, a concern this
+/// from-scratch path never has.
+#[test]
+fn to_save_pokemon_files_ev_aware_stats_for_a_freshly_earned_mon() {
+    let dex = Dex::new();
+    let mon = a_battler().with_evs(battle::Evs {
+        hp: 252,
+        attack: 252,
+        defense: 0,
+        speed: 0,
+        sp_attack: 0,
+        sp_defense: 0,
+    });
+
+    let zero_ev_max_hp = mon.stats().max_hp;
+    let ev_aware = battle::compute_stats_with_evs(
+        mon.species(),
+        dex.species(mon.species()).unwrap(),
+        mon.level(),
+        mon.nature(),
+        mon.ivs(),
+        mon.evs(),
+    );
+    assert!(
+        ev_aware.max_hp > zero_ev_max_hp,
+        "fixture sanity: 252 HP EVs at level 12 really do move CALC_STAT's \
+         own max HP, so retaining the live 0-EV cache would be an \
+         observable regression"
+    );
+
+    let saved = to_save_pokemon(&dex, &mon);
+    assert_eq!(
+        u32::from(saved.max_hp),
+        ev_aware.max_hp,
+        "a mon with no backing save record must be filed with its real \
+         EV-aware stat block, not the live 0-EV cache"
+    );
+
+    // The exact path a fresh game's first save takes: no backing record at
+    // all (`SaveBlock1::player_party[0]` starts at `Pokemon::default()`, an
+    // empty `SPECIES_NONE` slot), so `merge_into_save_pokemon`'s
+    // `backing_substructures` check fails and it falls back to
+    // `to_save_pokemon` internally.
+    let mut offset = 0;
+    let merged = merge_into_save_pokemon(&dex, &mon, &Pokemon::default(), &mut offset);
+    assert_eq!(
+        u32::from(merged.max_hp),
+        ev_aware.max_hp,
+        "the fresh-game fallback path must match the direct encoder"
+    );
+}
+
 /// A trailing `MOVE_NONE` slot is an *empty* slot upstream, not a known
 /// move -- a decoder that carried it through would build a battler
 /// `BattlePokemon::new` refuses outright.
