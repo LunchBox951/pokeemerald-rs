@@ -115,9 +115,6 @@
 //! [`default_pack_path`] would read whichever pack the developer has
 //! installed rather than the one `cargo xtask extract` just wrote. Such
 //! gates call [`repo_pack_path`] by name instead `(test-ratchet)`.
-//!
-//! Next: the ROM importer itself, the second backend these constructors
-//! exist for.
 
 mod entry;
 mod layout;

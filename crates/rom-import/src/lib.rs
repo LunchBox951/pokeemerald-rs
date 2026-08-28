@@ -64,21 +64,10 @@
 //! by entry. Every id the checkout pack holds is covered and there is no
 //! reviewed difference.
 //!
-//! # What is next
-//!
-//! The pack this crate writes is complete: a player who imports their ROM
-//! runs the game without a checkout pack. What remains is around the
-//! importer rather than in it: progress reporting while a large import
-//! runs.
-//!
-//! The CLI that drives [`import`] already exists: `pokeemerald-rs
-//! --import-rom <path>` resolves the pack's destination, writes it
-//! atomically, and prints one line either way (`crates/pokeemerald-rs`'s
-//! `cli` and `import_rom` modules). It surfaces this crate's errors as they
-//! are, so the one thing users will get wrong, pointing it at the wrong
-//! ROM, is already [`ImportError::UnsupportedRevision`] naming the ROM the
-//! importer wants. The player-facing walkthrough is the top-level README's
-//! "Playing" section.
+//! `pokeemerald-rs --import-rom` (that crate's `cli` and `import_rom`
+//! modules) drives [`import`] and surfaces this crate's errors as they
+//! are; the player-facing walkthrough is the top-level README's "Playing"
+//! section.
 
 pub mod fixture;
 pub mod profiles;
