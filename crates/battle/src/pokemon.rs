@@ -439,10 +439,27 @@ pub fn compute_stats_with_evs(
 /// [`BattlePokemon::deduct_pp`], and [`BattlePokemon::stages_mut`] (a
 /// [`StatStage`] is itself a constrained type, so no invariant of *this* type
 /// can be broken through it).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct BattlePokemon {
     species: SpeciesId,
     level: u8,
+    /// [`BattlePokemon::new`]'s own `level` argument, fixed for this
+    /// instance's lifetime (issue #415's own review): the one signal
+    /// `pokeemerald-rs::party`'s save encoders have for whether an
+    /// upstream `CalculateMonStats` call (a level-up; this port models no
+    /// evolution, vitamin, or Box withdrawal) has happened since this
+    /// value was last known-good, since [`BattlePokemon::level`] alone
+    /// cannot say so -- it already tracks [`BattlePokemon::experience`]
+    /// at every point past construction, whether or not a level was
+    /// crossed. See `party::to_save_pokemon`'s own doc comment for what
+    /// reads this.
+    ///
+    /// Deliberately excluded from [`PartialEq`] (below): this is
+    /// construction-provenance bookkeeping for this Rust value, not part of
+    /// the Pokémon's own battle identity, so two battlers built through
+    /// different paths (freshly, or decoded from save bytes) that agree on
+    /// every battle-observable field are still equal.
+    created_at_level: u8,
     nature: Nature,
     ivs: Ivs,
     personality: u32,
@@ -475,6 +492,54 @@ pub struct BattlePokemon {
     /// ([`learn::PendingMoveLearn`]'s docs).
     pending_move_learn: Option<PendingMoveLearn>,
 }
+
+// Manual, rather than derived, so `created_at_level` (this field's own doc
+// comment) can stay out of it without a wrapper type.
+impl PartialEq for BattlePokemon {
+    fn eq(&self, other: &Self) -> bool {
+        let Self {
+            species,
+            level,
+            created_at_level: _,
+            nature,
+            ivs,
+            personality,
+            ability_slot,
+            original_trainer_id,
+            types,
+            base_stats,
+            experience,
+            stats,
+            current_hp,
+            evs,
+            moves,
+            pp_bonuses,
+            stages,
+            volatiles,
+            pending_move_learn,
+        } = self;
+        *species == other.species
+            && *level == other.level
+            && *nature == other.nature
+            && *ivs == other.ivs
+            && *personality == other.personality
+            && *ability_slot == other.ability_slot
+            && *original_trainer_id == other.original_trainer_id
+            && *types == other.types
+            && *base_stats == other.base_stats
+            && *experience == other.experience
+            && *stats == other.stats
+            && *current_hp == other.current_hp
+            && *evs == other.evs
+            && *moves == other.moves
+            && *pp_bonuses == other.pp_bonuses
+            && *stages == other.stages
+            && *volatiles == other.volatiles
+            && *pending_move_learn == other.pending_move_learn
+    }
+}
+
+impl Eq for BattlePokemon {}
 
 impl BattlePokemon {
     /// Every check [`BattlePokemon::new`] makes that does **not** depend on
@@ -588,6 +653,7 @@ impl BattlePokemon {
         Ok(Self {
             species,
             level,
+            created_at_level: level,
             nature,
             ivs,
             personality,
@@ -666,6 +732,13 @@ impl BattlePokemon {
     #[must_use]
     pub const fn level(&self) -> u8 {
         self.level
+    }
+
+    /// The level [`BattlePokemon::new`] built this instance at -- see
+    /// [`Self::created_at_level`]'s own field doc.
+    #[must_use]
+    pub const fn created_at_level(&self) -> u8 {
+        self.created_at_level
     }
 
     /// Total accumulated experience on this species' growth curve.

@@ -538,22 +538,15 @@ fn the_saved_bytes_sit_at_upstream_offsets() {
 
 /// Issue #415's own review: a fresh game's provisional starter has no
 /// backing save record at all -- `SaveBlock1::player_party` starts empty
-/// (`crate::new_game::init_save_blocks`) and the starter lives only in
-/// `OverworldPhase::party_lead` until its first save
-/// (`OverworldPhase::copy_party_and_objects_to_save`) -- so a starter that
-/// gains EVs and levels up in its first battle, before that first save ever
-/// runs, must still be filed with `CalculateMonStats`'s own EV-aware stat
-/// block. `to_save_pokemon` is the encoder both a direct first save and
-/// `merge_into_save_pokemon`'s own no-backing-record fallback run in that
-/// case, so both are pinned here. Before this fix both filed
-/// [`battle::BattlePokemon::stats`]'s live `0`-EV cache instead -- the cache
-/// this crate's own module docs (and `battle`'s) pin as deliberately never
-/// EV-aware, for the *loaded*-mon load-clamp rebase's sake, a concern this
-/// from-scratch path never has.
+/// (`crate::new_game::init_save_blocks`) -- so a starter that gains EVs and
+/// levels up in its first battle, before that first save ever runs, must
+/// still be filed with `CalculateMonStats`'s own EV-aware stat block through
+/// `to_save_pokemon` (a direct first save) and
+/// `merge_into_save_pokemon`'s own no-backing-record fallback alike.
 #[test]
-fn to_save_pokemon_files_ev_aware_stats_for_a_freshly_earned_mon() {
+fn to_save_pokemon_files_ev_aware_stats_after_a_level_up() {
     let dex = Dex::new();
-    let mon = a_battler().with_evs(battle::Evs {
+    let mut mon = a_battler().with_evs(battle::Evs {
         hp: 252,
         attack: 252,
         defense: 0,
@@ -561,11 +554,27 @@ fn to_save_pokemon_files_ev_aware_stats_for_a_freshly_earned_mon() {
         sp_attack: 0,
         sp_defense: 0,
     });
+    let species = dex.species(mon.species()).unwrap();
+    let created_at_level = mon.created_at_level();
+
+    // The in-battle level-up that makes the EV-aware recompute apply
+    // (`to_save_pokemon`'s own doc comment): `Battle::settle_win_reward`
+    // awards EVs before applying experience, so a KO that does both sees
+    // its own gain here exactly as a real battle would.
+    let next_level_experience =
+        assets::experience_for_level(species.growth_rate, created_at_level + 1).unwrap();
+    mon.apply_experience(&dex, next_level_experience - mon.experience())
+        .expect("no move-learn prompt is pending");
+    assert_eq!(
+        mon.level(),
+        created_at_level + 1,
+        "fixture sanity: the level moved"
+    );
 
     let zero_ev_max_hp = mon.stats().max_hp;
     let ev_aware = battle::compute_stats_with_evs(
         mon.species(),
-        dex.species(mon.species()).unwrap(),
+        species,
         mon.level(),
         mon.nature(),
         mon.ivs(),
@@ -573,16 +582,16 @@ fn to_save_pokemon_files_ev_aware_stats_for_a_freshly_earned_mon() {
     );
     assert!(
         ev_aware.max_hp > zero_ev_max_hp,
-        "fixture sanity: 252 HP EVs at level 12 really do move CALC_STAT's \
-         own max HP, so retaining the live 0-EV cache would be an \
+        "fixture sanity: 252 HP EVs really do move CALC_STAT's own max HP \
+         at this level, so retaining the live 0-EV cache would be an \
          observable regression"
     );
-
     assert_eq!(
         mon.current_hp(),
         zero_ev_max_hp,
-        "fixture sanity: a freshly built battler starts at its own (0-EV) \
-         full health"
+        "fixture sanity: the level-up grew current HP by the 0-EV delta \
+         alone (`battle`'s own module docs), so the mon is still at its own \
+         (0-EV) full health"
     );
 
     let saved = to_save_pokemon(&dex, &mon);
@@ -637,6 +646,64 @@ fn to_save_pokemon_files_ev_aware_stats_for_a_freshly_earned_mon() {
         resaved.hp, resaved.max_hp,
         "a second, unchanged-state save must still file the lead at full, \
          not flip it to damaged because the carried offset was lost"
+    );
+}
+
+/// The counterpart the fix above must not overreach on (behavioral-fidelity
+/// review): `MonGainEVs` only ever writes the EV bytes
+/// (`pokeemerald/src/pokemon.c:5988`-`:6064`), and nothing recomputes the
+/// cached stat block until an actual `CalculateMonStats` call, which the
+/// battle controller makes only on a level-up
+/// (`src/battle_controller_player.c:1247`-`:1264`). A mon that gained real
+/// EVs but has not levelled up since `BattlePokemon::new` built it must
+/// stay filed at the stale `0`-EV block that cache actually holds, not cash
+/// the EVs in a save early.
+#[test]
+fn to_save_pokemon_keeps_the_stale_cache_when_no_level_up_happened_yet() {
+    let dex = Dex::new();
+    let mon = a_battler().with_evs(battle::Evs {
+        hp: 252,
+        ..battle::Evs::default()
+    });
+    assert_eq!(
+        mon.level(),
+        mon.created_at_level(),
+        "fixture sanity: no level-up happened"
+    );
+
+    let ev_aware = battle::compute_stats_with_evs(
+        mon.species(),
+        dex.species(mon.species()).unwrap(),
+        mon.level(),
+        mon.nature(),
+        mon.ivs(),
+        mon.evs(),
+    );
+    assert!(
+        ev_aware.max_hp > mon.stats().max_hp,
+        "fixture sanity: the EVs really would move CALC_STAT's own max HP, \
+         so filing the live 0-EV cache instead is an observable choice, not \
+         a coincidence"
+    );
+
+    let saved = to_save_pokemon(&dex, &mon);
+    assert_eq!(
+        u32::from(saved.max_hp),
+        mon.stats().max_hp,
+        "no upstream CalculateMonStats call has happened yet, so the filed \
+         block must stay the live 0-EV one"
+    );
+    assert_eq!(
+        saved.hp, saved.max_hp,
+        "the live cache's own full health, filed unmodified"
+    );
+
+    let mut offset = 0;
+    let merged = merge_into_save_pokemon(&dex, &mon, &Pokemon::default(), &mut offset);
+    assert_eq!(u32::from(merged.max_hp), mon.stats().max_hp);
+    assert_eq!(
+        offset, 0,
+        "no gap opened over the live floor, so nothing to carry forward"
     );
 }
 

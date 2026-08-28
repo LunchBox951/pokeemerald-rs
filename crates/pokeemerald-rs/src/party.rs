@@ -182,17 +182,16 @@
 //! `CalculateMonStats` would have produced from them, not a value weaker
 //! than the record they came from.
 //!
-//! [`to_save_pokemon`] runs the same recompute unconditionally (issue
-//! #415's own review), rather than the retained-or-recompute choice above:
-//! it has no stored record at all, so there is no six-byte cache to weigh
-//! preserving against recomputing, and nothing analogous to
-//! [`merge_into_save_pokemon`]'s "an EV-trained file merely loaded and
-//! re-saved" cost that motivates keeping the retained branch's stale bytes
-//! around. A fresh game's own first save, written before any prior save
-//! existed to retain a block from, is this encoder's only caller in
-//! practice -- and it can carry real, already-earned EVs and an in-battle
-//! level-up (the provisional starter, `crate::new_game::provisional_starter`)
-//! exactly like any other lead.
+//! [`to_save_pokemon`] runs the same species/level-moved test as the merge
+//! above (issue #415's own review), against
+//! [`battle::BattlePokemon::created_at_level`] rather than a stored record's
+//! byte: it has no record to compare against, but a mon that has levelled up
+//! since [`battle::BattlePokemon::new`] built it is still a mon upstream's
+//! `CalculateMonStats` would have recomputed, EVs and all. A fresh game's
+//! own first save (the provisional starter,
+//! `crate::new_game::provisional_starter`) is this encoder's main caller in
+//! practice, and can carry both a real EV gain and an in-battle level-up
+//! before ever touching a save file.
 //!
 //! Exactly one byte pair escapes that retention: Shedinja's maximum HP
 //! (issue #401), which `CalculateMonStats` pins to a flat `1`
@@ -396,10 +395,9 @@ fn evs_to_substruct2(evs: battle::Evs) -> [u8; 6] {
     evs.as_array()
 }
 
-/// The stat block [`merge_into_save_pokemon`] files for a lead whose species
-/// or level moved this session, and (issue #415's own review)
-/// [`to_save_pokemon`] files unconditionally, having no retained block to
-/// weigh against recomputing one -- `CalculateMonStats`
+/// The stat block [`merge_into_save_pokemon`] and [`to_save_pokemon`] (issue
+/// #415's own review) file for a lead whose species or level moved since
+/// the reference point each compares against -- `CalculateMonStats`
 /// (`pokeemerald/src/pokemon.c:2823`), fed `mon`'s own IVs and nature
 /// alongside the EVs `evs_and_condition` holds, rather than
 /// [`battle::BattlePokemon::stats`]'s `0`-EV cache (module docs, issue
@@ -527,40 +525,31 @@ pub(crate) fn to_save_pokemon(dex: &Dex, mon: &BattlePokemon) -> Pokemon {
         mail: MAIL_NONE,
         ..Pokemon::default()
     };
-    // The stat block, EV-aware -- issue #415's own review. There is no
-    // retained cache here to preserve (this encoder runs precisely when
-    // there is none, module docs), so unlike `merge_into_save_pokemon`'s
-    // retained branch this has nothing to lose by recomputing, and unlike
-    // `BattlePokemon::stats`'s own live cache it has no `hp_hidden_by_load`
-    // rebase depending on it staying the `0`-EV floor forever
-    // (`raise_level_to_experience`'s own module docs, `battle` crate) --
-    // that invariant is about the *load* path's offset arithmetic, which
-    // this from-scratch encoder never participates in. Reusing
-    // `mon.stats()` here would file a fresh game's own first save with a
-    // weaker block than the EV bytes two lines above it already claim, for
-    // a starter that gained EVs and levelled up before ever touching a
-    // save file. `compute_levelled_up_stats` is exactly the recompute
-    // `merge_into_save_pokemon`'s own recompute branch already trusts for
-    // this, fed the same `evs_and_condition` bytes just written above.
-    let stats = compute_levelled_up_stats(dex, mon, &evs_and_condition);
+    // The stat block: recomputed EV-aware only when `mon` has levelled up
+    // since [`BattlePokemon::new`] built it (issue #415's own review) --
+    // the one upstream event this port can reach that calls
+    // `CalculateMonStats` with real EVs. `MonGainEVs` itself never does
+    // (`pokeemerald/src/pokemon.c:5988`-`:6064`); the level-up handler does,
+    // once experience crosses a threshold
+    // (`src/battle_controller_player.c:1247`-`:1264`). Unconditionally
+    // recomputing here (an earlier round of this fix did) cashed a KO's EVs
+    // into the filed block even when no level-up followed, which upstream's
+    // own un-refreshed `gPlayerParty` cache never does either. Unchanged,
+    // this is [`BattlePokemon::stats`]'s live `0`-EV cache -- matching
+    // upstream's own stale-until-refreshed one, since a mon that has not
+    // levelled up carries exactly the cache `BattlePokemon::new` built it
+    // with, `0` EVs and all.
+    let stats = if mon.level() == mon.created_at_level() {
+        mon.stats()
+    } else {
+        compute_levelled_up_stats(dex, mon, &evs_and_condition)
+    };
     overlay_battle_stats(&mut record, mon, stats);
-    // `overlay_battle_stats`'s own `record.hp` write is only provisional --
-    // its doc comment says so -- because it writes `mon.current_hp()`
-    // straight through, which is bounded by the *live* `0`-EV maximum
-    // (`battle`'s own invariant), not by the EV-aware `stats.max_hp` just
-    // filed above. Before issue #415's review this was still exactly right,
-    // because both numbers came from the same `0`-EV formula and so never
-    // disagreed. Now that this function's own maximum is EV-aware, a full
-    // `0`-EV-bounded `current_hp` would file a genuinely full-health mon as
-    // damaged under the wider maximum -- precisely the corruption shape
-    // `overlay_current_hp_over_retained_block`'s load-clamp translation
-    // exists to prevent. There is no *carried* offset to translate by here
-    // (nothing was loaded), but the gap is not unknown: it is exactly the
-    // difference this recompute just introduced over the live `0`-EV floor,
-    // so translating by that freshly measured gap -- the same shape
-    // [`merge_into_save_pokemon`]'s own recompute branch uses when its own
-    // carried offset starts at `0` -- makes this record self-consistent
-    // without needing any session state to carry it.
+    // Translate `record.hp` across whatever gap the branch above opened --
+    // a no-op when it did not (`stats == mon.stats()` there), so safe to
+    // run unconditionally. See [`overlay_current_hp_over_retained_block`]'s
+    // own doc comment for why a *fresh* gap, not a carried offset, is fed
+    // here.
     let gap = clamp_i32(stats.max_hp.saturating_sub(mon.stats().max_hp));
     overlay_current_hp_over_retained_block(&mut record, mon, gap);
     record
@@ -589,22 +578,20 @@ fn encode_attacks(mon: &BattlePokemon) -> [u8; SUBSTRUCTURE_LEN] {
 /// The party record's unencrypted tail -- level, current HP, and the
 /// derived stat block -- from `stats`.
 ///
-/// [`to_save_pokemon`] always runs this, fed [`compute_levelled_up_stats`]
-/// (issue #415's own review) rather than [`battle::BattlePokemon::stats`]'s
-/// live `0`-EV cache: a record built from scratch has no cached block to
-/// keep, so every entry must come from the model, and there is nothing
-/// stale to preserve by *under*-computing it either -- unlike the live
-/// cache, this from-scratch block has no `hp_hidden_by_load` rebase resting
-/// on it staying `0`-EV. The plain `current_hp` this writes into `record.hp`
-/// is never the last word in either caller, though, because that maximum
-/// need not be the `0`-EV one this write is bounded by: both
-/// [`to_save_pokemon`] and [`merge_into_save_pokemon`]'s recompute branch
-/// re-overlay [`overlay_current_hp_over_retained_block`] on top, so the
-/// load-clamp-shaped translation lands against whichever maximum was just
-/// filed here (module docs, issues #384 and #415). The retained branch
-/// skips this function altogether, running
-/// [`overlay_current_hp_over_retained_block`] alone against the block it
-/// kept.
+/// [`to_save_pokemon`] always runs this, fed either
+/// [`battle::BattlePokemon::stats`]'s live `0`-EV cache or
+/// [`compute_levelled_up_stats`]'s EV-aware recompute depending on whether
+/// `mon` has levelled up since it was built (that function's own doc
+/// comment, issue #415's own review). [`merge_into_save_pokemon`]'s
+/// recompute branch runs it too, fed the same [`compute_levelled_up_stats`]
+/// unconditionally, since it only takes that branch when species or level
+/// moved. The plain `current_hp` this writes into `record.hp` is never the
+/// last word in either caller: both re-overlay
+/// [`overlay_current_hp_over_retained_block`] on top, so the load-clamp
+/// translation lands against whichever maximum was just filed here (module
+/// docs, issues #384 and #415). The retained branch skips this function
+/// altogether, running [`overlay_current_hp_over_retained_block`] alone
+/// against the block it kept.
 fn overlay_battle_stats(record: &mut Pokemon, mon: &BattlePokemon, stats: battle::Stats) {
     record.level = mon.level();
     record.max_hp = clamp_u16(stats.max_hp);
@@ -780,14 +767,13 @@ pub(crate) fn hp_hidden_by_load(dex: &Dex, stored: &Pokemon, lead: &BattlePokemo
 ///
 /// `hp_hidden_by_load` is the session offset [`hp_hidden_by_load`] measured
 /// at load; the merge owns rebasing it. The from-scratch fallback above has
-/// no *carried* clamp history -- nothing was loaded -- but it does not zero
-/// the offset either (issue #415's own review): [`to_save_pokemon`] now
-/// files an EV-aware maximum of its own, so the fallback reads the gap that
-/// opened back off the record it just built and seeds the offset with that,
-/// exactly the value the very next same-session save (likely the retained
-/// branch below, if species and level hold) needs to keep translating by.
-/// [`to_save_pokemon`] itself never reads the offset back; this write is
-/// solely for the merge's own next call. The retained branch translates by it unchanged, because the
+/// no *carried* clamp history -- nothing was loaded -- but does not zero the
+/// offset either (issue #415's own review): it reads back whatever gap
+/// [`to_save_pokemon`] just opened over the live `0`-EV floor (`0` when
+/// `mon` has not levelled up since construction, that function's own doc
+/// comment) and seeds the offset with it, so a same-session save that lands
+/// on the retained branch below next keeps translating by the right amount.
+/// [`to_save_pokemon`] itself never reads the offset back. The retained branch translates by it unchanged, because the
 /// maximum it is filed against did not move. The recompute branch below
 /// cannot: the offset was measured against `base`'s own retained maximum,
 /// at `base.level`, and `CALC_STAT`'s `ev / 4` term is scaled by
@@ -833,22 +819,9 @@ pub(crate) fn merge_into_save_pokemon(
                  own default"
             );
             let record = to_save_pokemon(dex, mon);
-            // The offset carried forward, not zeroed (issue #415's own
-            // review): `to_save_pokemon` already translated *this* record's
-            // own `hp` by the gap its EV-aware maximum opened over the live
-            // `0`-EV floor (that function's own doc comment), but the very
-            // next save on this same session, if species and level do not
-            // move again, takes the retained fast path below -- which
-            // trusts `hp_hidden_by_load` rather than re-deriving it.
-            // Zeroing it here, as an earlier version of this fix did, would
-            // have that next save re-measure a full-health lead against the
-            // retained (EV-aware) maximum with no gap to translate by,
-            // filing it damaged even though nothing happened to it between
-            // the two saves -- the same "saving twice must file the same
-            // bytes" corruption shape issue #344 exists to stop. The gap is
-            // read back off the record just written rather than recomputed
-            // a second time, matching exactly what that record's own
-            // maximum now says.
+            // Carried forward, not zeroed (this function's own doc comment
+            // covers why). Read back off `record` rather than recomputed,
+            // matching exactly what `to_save_pokemon` just filed.
             *hp_hidden_by_load =
                 clamp_i32(u32::from(record.max_hp).saturating_sub(mon.stats().max_hp));
             return record;
