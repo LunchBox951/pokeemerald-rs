@@ -91,11 +91,6 @@ pub(crate) fn parse_message(text: &str) -> Result<Vec<Token>, AuthoredMessageErr
         match c {
             '\n' => tokens.push(Token::Newline),
             '{' => {
-                // Collect up to (and past) the matching `}` so a
-                // variable-length marker like `PAUSE 96` parses the same way
-                // as the fixed two-character `P}`/`L}`. A marker with no `}`
-                // at all runs to the end of the message, caught by `closed`
-                // below.
                 let mut marker = String::new();
                 let mut closed = false;
                 for c in chars.by_ref() {
