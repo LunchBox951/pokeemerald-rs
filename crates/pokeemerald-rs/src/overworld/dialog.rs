@@ -93,27 +93,6 @@ pub(crate) fn confirm_printer_input(buttons: ButtonState) -> PrinterInput {
     }
 }
 
-/// The dialogue box's window-local text origin -- mirrors
-/// [`crate::intro`]'s identical constant for the same standard field message
-/// box.
-const PRINTER_ORIGIN: (i32, i32) = (2, 2);
-
-/// [`MessageBoxLayout::STANDARD`]'s content rect, converted to absolute
-/// screen pixels, for [`textbox::blit_glyphs`]'s `origin` -- mirrors
-/// [`crate::intro`]'s identical constant.
-const BOX_SCREEN_ORIGIN: (i32, i32) = (
-    engine::text::window::STANDARD_TILEMAP_LEFT * 8,
-    engine::text::window::STANDARD_TILEMAP_TOP * 8,
-);
-
-/// [`MessageBoxLayout::STANDARD`]'s content rect size in pixels, for
-/// [`textbox::blit_glyphs`]'s `content_size` -- mirrors [`crate::intro`]'s
-/// identical constant.
-const BOX_CONTENT_SIZE_PX: (i32, i32) = (
-    engine::text::window::STANDARD_CONTENT_WIDTH * 8,
-    engine::text::window::STANDARD_CONTENT_HEIGHT * 8,
-);
-
 /// Why opening an [`NpcDialog`] failed.
 ///
 /// Concrete per-crate-boundary enum `(oop-boundaries)`, mirroring
@@ -204,8 +183,13 @@ impl NpcDialog {
     /// upstream's `AddTextPrinterForMessage(TRUE)` sites, so every box built
     /// here -- an NPC's or `ShowSaveMessage`'s alike -- gets it.
     pub(crate) fn new(sheet: OwnedFontGlyphSheet, frame: FrameAssets, tokens: Vec<Token>) -> Self {
-        let printer =
-            Printer::new(tokens, sheet, TextSpeed::Mid, PRINTER_ORIGIN).with_ab_speed_up_print();
+        let printer = Printer::new(
+            tokens,
+            sheet,
+            TextSpeed::Mid,
+            textbox::STANDARD_PRINTER_ORIGIN,
+        )
+        .with_ab_speed_up_print();
         Self {
             frame,
             printer,
@@ -359,8 +343,8 @@ impl NpcDialog {
         textbox::blit_glyphs(
             &mut base,
             &self.revealed,
-            BOX_SCREEN_ORIGIN,
-            BOX_CONTENT_SIZE_PX,
+            textbox::STANDARD_BOX_SCREEN_ORIGIN,
+            textbox::STANDARD_BOX_CONTENT_SIZE_PX,
         );
         base
     }

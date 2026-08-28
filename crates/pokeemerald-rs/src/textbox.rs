@@ -74,6 +74,35 @@ const _: () = assert!(msgwin::TILE_SIZE == 8);
 const GLYPH_DIM: usize = 16;
 const _: () = assert!(assets::fonts::GLYPH_SIZE == 16);
 
+/// The standard field message box's window-local text origin (a small inset
+/// from the content rect's own top-left corner, matching the margin
+/// `AddTextPrinterForMessage`'s standard field message box uses -- upstream
+/// `sTextFlags`/`x = 1` in spirit, not transcribed byte-for-byte). Shared by
+/// every [`engine::text::render::Printer`] over
+/// [`msgwin::MessageBoxLayout::STANDARD`] -- [`crate::intro::IntroScene`]'s
+/// and [`crate::overworld::dialog::NpcDialog`]'s alike -- so a margin change
+/// can't update one without the other.
+pub(crate) const STANDARD_PRINTER_ORIGIN: (i32, i32) = (2, 2);
+
+/// [`msgwin::MessageBoxLayout::STANDARD`]'s content rect, converted to
+/// absolute screen pixels (tile -> 8px), for [`blit_glyphs`]'s `origin` --
+/// shared by every standard-field-message-box caller, see
+/// [`STANDARD_PRINTER_ORIGIN`]'s own docs.
+pub(crate) const STANDARD_BOX_SCREEN_ORIGIN: (i32, i32) = (
+    msgwin::STANDARD_TILEMAP_LEFT * 8,
+    msgwin::STANDARD_TILEMAP_TOP * 8,
+);
+
+/// [`msgwin::MessageBoxLayout::STANDARD`]'s content rect size, converted to
+/// pixels (tile -> 8px), for [`blit_glyphs`]'s `content_size` (see that
+/// function's own docs for why the clip matters). Shared by every
+/// standard-field-message-box caller, see [`STANDARD_PRINTER_ORIGIN`]'s own
+/// docs.
+pub(crate) const STANDARD_BOX_CONTENT_SIZE_PX: (i32, i32) = (
+    msgwin::STANDARD_CONTENT_WIDTH * 8,
+    msgwin::STANDARD_CONTENT_HEIGHT * 8,
+);
+
 /// Which framebuffer pixels a blit actually painted.
 ///
 /// The pixel-blit path's stand-in for the per-pixel opacity the BG/OBJ
