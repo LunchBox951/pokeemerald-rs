@@ -1,24 +1,9 @@
-//! GBA mosaic block sampling (S-2 slice 4, issue #99).
+//! Screen-aligned mosaic block sampling for backgrounds and sprites.
 //!
-//! Ports the `MOSAIC` register's block-sampling effect: a mosaic-enabled BG
-//! or OBJ layer does not sample its own pixel at `(x, y)` — it samples the
-//! top-left pixel of the `H x V` block `(x, y)` falls into, so a whole block
-//! shows one solid color. Verified against
-//! `mgba/src/gba/renderers/software-bg.c`'s `BACKGROUND_BITMAP_INIT` (BG) and
-//! `SPRITE_MOSAIC_LOOP` (OBJ) macros, both of which compute a block's pixel
-//! origin as `coord - (coord % size)` `(behavioral-fidelity)`.
-//!
-//! BG and OBJ mosaic are independent: hardware packs both as separate H/V
-//! nibble pairs in one `MOSAIC` register, and each BG/OBJ only mosaics if
-//! its own per-layer mosaic bit ([`crate::compositor::BgSlot::with_mosaic`],
-//! [`crate::oam::OamEntry::with_mosaic`]) is set — [`MosaicConfig`] carries
-//! both sizes, and it is the caller applying them that decides per-layer
-//! whether to use the snapped or raw coordinate.
+//! Each mosaic-enabled layer samples the top-left pixel of its current block.
+//! Backgrounds and sprites use independent dimensions from [`MosaicConfig`].
 
-/// One axis pair's mosaic block size (`1..=16` for each of H and V).
-///
-/// Hardware stores the block size minus one as a 4-bit register field
-/// (`0..=15`); [`MosaicSize::from_raw`] adds the `+1` back.
+/// Horizontal and vertical mosaic block dimensions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MosaicSize {
     h: u8,
@@ -26,106 +11,90 @@ pub struct MosaicSize {
 }
 
 impl MosaicSize {
-    /// No mosaic: every pixel is its own 1x1 "block", so [`snap`](Self::snap)
-    /// is the identity function.
-    pub const NONE: Self = Self { h: 1, v: 1 };
+    const MIN_DIMENSION: u8 = 1;
+    const REGISTER_FIELD_MASK: u8 = 0x0F;
 
-    /// Build a block size directly from already-decoded H/V sizes
-    /// (`1..=16`); zero is masked up to `1` (a `0`-sized block is
-    /// meaningless and would divide by zero in [`snap`](Self::snap)).
+    /// One-pixel blocks, which leave sampling unchanged.
+    pub const NONE: Self = Self {
+        h: Self::MIN_DIMENSION,
+        v: Self::MIN_DIMENSION,
+    };
+
+    /// Creates decoded block dimensions, clamping zero dimensions to one.
     #[must_use]
     pub const fn new(h: u8, v: u8) -> Self {
         Self {
-            h: if h == 0 { 1 } else { h },
-            v: if v == 0 { 1 } else { v },
+            h: if h == 0 { Self::MIN_DIMENSION } else { h },
+            v: if v == 0 { Self::MIN_DIMENSION } else { v },
         }
     }
 
-    /// Build a block size from the raw 4-bit `MOSAIC` register fields
-    /// (`0..=15`, masked): the effective block size is the raw field plus
-    /// one (`1..=16`), matching hardware.
+    /// Decodes the `MOSAIC` register's four-bit, size-minus-one fields.
     #[must_use]
     pub const fn from_raw(h: u8, v: u8) -> Self {
         Self {
-            h: (h & 0x0F) + 1,
-            v: (v & 0x0F) + 1,
+            h: (h & Self::REGISTER_FIELD_MASK) + Self::MIN_DIMENSION,
+            v: (v & Self::REGISTER_FIELD_MASK) + Self::MIN_DIMENSION,
         }
     }
 
-    /// Snap `(x, y)` to its mosaic block's top-left screen origin:
-    /// `coord - (coord % size)` per axis.
+    /// Returns the top-left screen coordinate of `(x, y)`'s mosaic block.
     #[must_use]
     pub const fn snap(&self, x: usize, y: usize) -> (usize, usize) {
         (x - x % self.h as usize, y - y % self.v as usize)
     }
 
-    /// Snap a *sprite-local* footprint offset to its mosaic block origin and
-    /// clamp the result back into the sprite footprint — the OBJ-mosaic
-    /// variant of [`snap`](Self::snap).
+    /// Returns the sprite-local sample for a screen-aligned mosaic block.
     ///
-    /// `local` is screen coordinate `screen`'s offset inside a sprite whose
-    /// footprint runs `0..dim` along this axis (`local = screen - origin`).
-    /// The block origin in local space is `local - (screen % size)`; unlike
-    /// [`snap`](Self::snap), which floors a *screen* coordinate and lets an
-    /// out-of-footprint result be discarded (a transparent leading band when
-    /// the sprite's edge is not block-aligned), this clamps that origin into
-    /// `0..=dim-1`, so the block straddling the leading edge samples the edge
-    /// column/row instead of vanishing. Reproduces mgba's OBJ-mosaic edge
-    /// clamp: `localX` to `[0, width-1]`
-    /// (`software-obj.c`'s `SPRITE_MOSAIC_LOOP`, lines 20-25) and `localY` to
-    /// `[sprite->y, endY-1]` (`video-software.c`, lines 1043-1050)
-    /// `(behavioral-fidelity)`. At [`MosaicSize::NONE`] the block position is
-    /// always `0`, so it returns `local` unchanged — a no-op snap.
-    ///
-    /// The caller still decides footprint membership from the *raw*
-    /// coordinate; this only relocates the sampled position.
+    /// `local_coordinate` is `screen_coordinate`'s offset in a non-empty sprite
+    /// footprint. Blocks that cross an edge reuse its nearest edge texel; the
+    /// caller still tests footprint membership with the unsnapped coordinate.
+    /// This matches mGBA's `SPRITE_MOSAIC_LOOP` edge clamp
+    /// `(behavioral-fidelity)`.
     #[must_use]
     pub const fn snap_local(
         &self,
-        local: (usize, usize),
-        screen: (usize, usize),
-        dim: (usize, usize),
+        local_coordinate: (usize, usize),
+        screen_coordinate: (usize, usize),
+        dimensions: (usize, usize),
     ) -> (usize, usize) {
+        let (local_x, local_y) = local_coordinate;
+        let (screen_x, screen_y) = screen_coordinate;
+        let (width, height) = dimensions;
         (
-            Self::snap_local_axis(local.0, screen.0, self.h, dim.0),
-            Self::snap_local_axis(local.1, screen.1, self.v, dim.1),
+            Self::snap_local_axis(local_x, screen_x, self.h, width),
+            Self::snap_local_axis(local_y, screen_y, self.v, height),
         )
     }
 
-    /// One axis of [`snap_local`](Self::snap_local): floor `local` to its
-    /// block origin (`local - screen % size`, low edge clamped to `0` via
-    /// `saturating_sub`) then clamp the high edge to `dim - 1`.
-    const fn snap_local_axis(local: usize, screen: usize, size: u8, dim: usize) -> usize {
-        let block_offset = screen % size as usize;
-        let origin = local.saturating_sub(block_offset);
-        if origin >= dim {
-            dim - 1
+    const fn snap_local_axis(
+        local_coordinate: usize,
+        screen_coordinate: usize,
+        block_size: u8,
+        dimension: usize,
+    ) -> usize {
+        let block_offset = screen_coordinate % block_size as usize;
+        let block_origin = local_coordinate.saturating_sub(block_offset);
+        if block_origin >= dimension {
+            dimension - 1
         } else {
-            origin
+            block_origin
         }
     }
 
-    /// Round a mosaic OBJ's raw horizontal screen-space right edge
-    /// (`entry_x + width`, may be negative) up to the *next* H mosaic-block
-    /// boundary — the trailing counterpart of [`snap_local`](Self::snap_local)'s
-    /// leading-edge clamp. mgba's `SPRITE_MOSAIC_LOOP` keeps drawing past the
-    /// sprite's raw edge until its `condition` (this same raw edge) lands on a
-    /// block boundary, sampling the clamped edge texel the rest of the way
-    /// (`software-obj.c:320-325`); this is what lets a partial trailing block
-    /// finish instead of stopping mid-block `(behavioral-fidelity)`. Uses
-    /// truncating (C-style) `%`, matching mgba bit-for-bit — including its
-    /// rounding of a negative `raw_end` past the mathematical next multiple,
-    /// since C's `%` keeps the dividend's sign rather than floor-dividing.
-    /// At [`MosaicSize::NONE`] (`h == 1`) `raw_end % 1` is always `0`, so this
-    /// is the identity and the trailing edge never extends.
+    /// Extends a sprite's raw right edge to the next horizontal block boundary.
+    ///
+    /// Negative edges use Rust's truncating remainder, matching mGBA's
+    /// `software-obj.c` condition rounding rather than Euclidean rounding
+    /// `(behavioral-fidelity)`. [`MosaicSize::NONE`] leaves the edge unchanged.
     #[must_use]
     pub const fn round_trailing_edge(&self, raw_end: i32) -> i32 {
-        let h = self.h as i32;
-        let rem = raw_end % h;
-        if rem == 0 {
+        let horizontal_size = self.h as i32;
+        let remainder = raw_end % horizontal_size;
+        if remainder == 0 {
             raw_end
         } else {
-            raw_end + (h - rem)
+            raw_end + (horizontal_size - remainder)
         }
     }
 }
@@ -136,20 +105,12 @@ impl Default for MosaicSize {
     }
 }
 
-/// Per-frame mosaic block sizes for BG layers and OBJ (sprite) entries —
-/// hardware's `MOSAIC` register packs both as independent H/V pairs.
-///
-/// The all-[`MosaicSize::NONE`] [`Default`] disables mosaic entirely,
-/// matching the GBA's power-on `MOSAIC = 0` state and reproducing pre-slice-4
-/// output byte-for-byte when composited via
-/// [`compose_frame`](crate::compositor::compose_frame).
+/// Per-frame background and sprite mosaic dimensions.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct MosaicConfig {
-    /// Block size applied to BG layers with their own mosaic bit set
-    /// ([`crate::compositor::BgSlot::with_mosaic`]).
+    /// Dimensions for mosaic-enabled background layers.
     pub bg: MosaicSize,
-    /// Block size applied to OBJ entries with their own mosaic bit set
-    /// ([`crate::oam::OamEntry::with_mosaic`]).
+    /// Dimensions for mosaic-enabled sprites.
     pub obj: MosaicSize,
 }
 
@@ -167,7 +128,6 @@ mod tests {
 
     #[test]
     fn snap_floors_to_the_block_origin() {
-        // 4x2 blocks: x floors to a multiple of 4, y to a multiple of 2.
         let size = MosaicSize::new(4, 2);
         assert_eq!(size.snap(0, 0), (0, 0));
         assert_eq!(size.snap(3, 1), (0, 0));
@@ -178,17 +138,12 @@ mod tests {
 
     #[test]
     fn snap_local_clamps_the_leading_partial_block_to_the_edge() {
-        // 4-wide blocks, sprite footprint 0..8, footprint origin at screen 2.
-        // Screen x=2 (local 0) and x=3 (local 1) fall in screen block [0,4),
-        // whose origin is left of the footprint; the local block origin
-        // (local - screen%4) goes negative and must clamp to 0 (the edge),
-        // matching mgba's `localX` clamp to [0, width-1].
-        let m = MosaicSize::new(4, 1);
-        assert_eq!(m.snap_local((0, 0), (2, 0), (8, 8)), (0, 0));
-        assert_eq!(m.snap_local((1, 0), (3, 0), (8, 8)), (0, 0));
-        // Interior block [4,8): local origin stays inside the footprint (col 2).
-        assert_eq!(m.snap_local((2, 0), (4, 0), (8, 8)), (2, 0));
-        assert_eq!(m.snap_local((5, 0), (7, 0), (8, 8)), (2, 0));
+        let size = MosaicSize::new(4, 1);
+        let dimensions = (8, 8);
+        assert_eq!(size.snap_local((0, 0), (2, 0), dimensions), (0, 0));
+        assert_eq!(size.snap_local((1, 0), (3, 0), dimensions), (0, 0));
+        assert_eq!(size.snap_local((2, 0), (4, 0), dimensions), (2, 0));
+        assert_eq!(size.snap_local((5, 0), (7, 0), dimensions), (2, 0));
     }
 
     #[test]
@@ -201,7 +156,6 @@ mod tests {
 
     #[test]
     fn from_raw_adds_one_to_the_register_field() {
-        // Raw 0 -> block size 1 (no visible effect); raw 15 -> block size 16.
         assert_eq!(MosaicSize::from_raw(0, 0), MosaicSize::new(1, 1));
         assert_eq!(MosaicSize::from_raw(15, 15), MosaicSize::new(16, 16));
     }
@@ -215,19 +169,15 @@ mod tests {
     }
 
     #[test]
-    fn new_masks_a_zero_size_up_to_one() {
-        // A 0-sized block would divide by zero in `snap`; it must clamp to 1.
+    fn new_clamps_a_zero_size_up_to_one() {
         let size = MosaicSize::new(0, 0);
         assert_eq!(size.snap(5, 9), (5, 9));
     }
 
     #[test]
     fn round_trailing_edge_extends_to_the_next_block_boundary() {
-        // Issue #132: raw edge 4, H mosaic size 3 -> rounds up to 6 (mgba's
-        // `condition` rounding, software-obj.c:320-325).
         let size = MosaicSize::new(3, 1);
         assert_eq!(size.round_trailing_edge(4), 6);
-        // Already on a block boundary: no-op.
         assert_eq!(size.round_trailing_edge(6), 6);
         assert_eq!(size.round_trailing_edge(0), 0);
     }
@@ -242,8 +192,8 @@ mod tests {
 
     #[test]
     fn config_default_is_no_mosaic_on_either_layer_kind() {
-        let cfg = MosaicConfig::default();
-        assert_eq!(cfg.bg, MosaicSize::NONE);
-        assert_eq!(cfg.obj, MosaicSize::NONE);
+        let config = MosaicConfig::default();
+        assert_eq!(config.bg, MosaicSize::NONE);
+        assert_eq!(config.obj, MosaicSize::NONE);
     }
 }
