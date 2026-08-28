@@ -38,9 +38,9 @@
 //! "sub-tile step progress" as a first-class concept future rendering work
 //! can build on.
 
-use assets::MapId;
+use assets::{MapId, MetatileCell};
 
-use super::collision::{directionally_impassable, elevation_mismatch};
+use super::collision::{directionally_impassable, elevation_mismatch, Collision};
 use super::direction::Direction;
 use super::map_runtime::{ConnectedMapData, MapRuntime};
 use super::metatile_behavior::MB_NORMAL;
@@ -128,6 +128,34 @@ pub enum StepOutcome {
         /// The landing position, in `to_map`'s coordinate space.
         to_position: TilePos,
     },
+}
+
+/// A step's destination, resolved before any collision test runs — either a
+/// cell on this map's own grid, or a landing tile across a connection. This
+/// is the "resolved landing data" [`PlayerState::try_start_resolved_step`]
+/// validates; acquiring it (a same-map grid lookup vs. [`MapRuntime::resolve_connection`]
+/// plus a neighbour lookup through [`ConnectedMapData`]) stays with each
+/// call site in [`PlayerState::step`], since only they know which source to
+/// read from.
+#[derive(Debug, Clone, Copy)]
+struct Landing {
+    /// Where this step would land: still on this map for a same-map step,
+    /// or a neighbour's landing tile (in that neighbour's own coordinate
+    /// space) for a connection crossing.
+    position: TilePos,
+    /// The destination's decoded metatile cell (grid collision bits and
+    /// elevation).
+    cell: MetatileCell,
+    /// The target-side input to [`directionally_impassable`]. A same-map
+    /// step supplies the real destination behavior; a connection crossing
+    /// supplies [`MB_NORMAL`], since a neighbour's tileset attributes are
+    /// not reachable through [`ConnectedMapData`] — see [`PlayerState::step`]'s
+    /// "# Collision" doc for why that narrowing is unobservable today.
+    target_behavior: u8,
+    /// Whether to run the object-event occupancy test against `position`.
+    /// `false` for a connection crossing, whose neighbour's object events
+    /// are likewise unreachable through [`ConnectedMapData`] (same doc).
+    check_object_event: bool,
 }
 
 impl PlayerState {
@@ -458,47 +486,26 @@ impl PlayerState {
             let target_behavior = runtime
                 .metatile_behavior(target.0, target.1)
                 .unwrap_or(MB_NORMAL);
-            if cell.collision != 0
-                || directionally_impassable(standing_behavior, target_behavior, direction)
-            {
-                return StepOutcome::Blocked {
-                    direction,
-                    collision: super::collision::Collision::Impassable,
-                };
-            }
-            if elevation_mismatch(self.elevation, cell.elevation) {
-                return StepOutcome::Blocked {
-                    direction,
-                    collision: super::collision::Collision::ElevationMismatch,
-                };
-            }
-            // GetCollisionAtCoords' last test: COLLISION_OBJECT_EVENT via
-            // DoesObjectCollideWithObjectAt. Queried at the *player's*
-            // current elevation -- upstream passes
-            // `objectEvent->currentElevation`, not the destination cell's --
-            // so `AreElevationsCompatible` compares the two movers, not the
-            // mover and the ground.
-            if visible_object_event_at(runtime, target.0, target.1, self.elevation, event_data)
-                .is_some()
-            {
-                return StepOutcome::Blocked {
-                    direction,
-                    collision: super::collision::Collision::ObjectEvent,
-                };
-            }
-
             let from = self.position;
-            // Read before `self.position` moves: `adopt_elevation`'s
-            // `origin` argument is `ObjectEventUpdateElevation`'s own fresh
-            // `MapGridGetElevationAt(previousCoords)` read, not a cached
-            // field (see that method's doc).
-            let origin_elevation = runtime
-                .metatile_cell(from.0, from.1)
-                .map_or(self.elevation, |origin_cell| origin_cell.elevation);
-            self.position = target;
-            self.adopt_elevation(origin_elevation, cell.elevation);
-            self.transit_frames = Some(0);
-            return StepOutcome::Advanced { from, to: target };
+            let landing = Landing {
+                position: target,
+                cell,
+                target_behavior,
+                check_object_event: true,
+            };
+            return match self.try_start_resolved_step(
+                direction,
+                runtime,
+                event_data,
+                standing_behavior,
+                landing,
+            ) {
+                Ok(()) => StepOutcome::Advanced { from, to: target },
+                Err(collision) => StepOutcome::Blocked {
+                    direction,
+                    collision,
+                },
+            };
         }
 
         if let Some(crossing) = runtime.resolve_connection(direction, target.0, target.1, maps) {
@@ -507,45 +514,102 @@ impl PlayerState {
             else {
                 return StepOutcome::Blocked {
                     direction,
-                    collision: super::collision::Collision::Impassable,
+                    collision: Collision::Impassable,
                 };
             };
             // Same arm as above, minus the target half: a neighbouring map's
             // tileset attributes are not reachable through `ConnectedMapData`,
             // so the landing tile reads as MB_NORMAL (documented narrowing in
             // this method's "# Collision" section). The standing half is this
-            // map's own tile and is evaluated for real.
-            if cell.collision != 0
-                || directionally_impassable(standing_behavior, MB_NORMAL, direction)
-            {
-                return StepOutcome::Blocked {
+            // map's own tile and is evaluated for real; the object-event
+            // test is skipped entirely for the same reason (same section).
+            let landing = Landing {
+                position: crossing.position,
+                cell,
+                target_behavior: MB_NORMAL,
+                check_object_event: false,
+            };
+            return match self.try_start_resolved_step(
+                direction,
+                runtime,
+                event_data,
+                standing_behavior,
+                landing,
+            ) {
+                Ok(()) => StepOutcome::Crossed {
+                    to_map: crossing.target,
+                    to_position: crossing.position,
+                },
+                Err(collision) => StepOutcome::Blocked {
                     direction,
-                    collision: super::collision::Collision::Impassable,
-                };
-            }
-            if elevation_mismatch(self.elevation, cell.elevation) {
-                return StepOutcome::Blocked {
-                    direction,
-                    collision: super::collision::Collision::ElevationMismatch,
-                };
-            }
-
-            let origin_elevation = runtime
-                .metatile_cell(self.position.0, self.position.1)
-                .map_or(self.elevation, |origin_cell| origin_cell.elevation);
-            self.position = crossing.position;
-            self.adopt_elevation(origin_elevation, cell.elevation);
-            self.transit_frames = Some(0);
-            return StepOutcome::Crossed {
-                to_map: crossing.target,
-                to_position: crossing.position,
+                    collision,
+                },
             };
         }
 
         StepOutcome::Blocked {
             direction,
-            collision: super::collision::Collision::Impassable,
+            collision: Collision::Impassable,
         }
+    }
+
+    /// The shared sequence both [`PlayerState::step`] branches run against a
+    /// resolved `landing` — `GetCollisionAtCoords`' own order (collision
+    /// bits and directional impassability together, then the elevation
+    /// mismatch, then, when `landing.check_object_event` says to, the
+    /// object-event occupancy test) — and, once every test clears, the
+    /// elevation adoption and transit start common to every successful
+    /// step. See [`PlayerState::step`]'s "# Collision" and "# Elevation
+    /// adoption" doc sections for why each test is ordered and gated the
+    /// way it is; this method only centralizes that ordering; which source
+    /// supplied `landing` and which [`StepOutcome`] variant to build from
+    /// the result stay with each call site, since only they know that.
+    fn try_start_resolved_step(
+        &mut self,
+        direction: Direction,
+        runtime: &MapRuntime<'_>,
+        event_data: &EventData,
+        standing_behavior: u8,
+        landing: Landing,
+    ) -> Result<(), Collision> {
+        if landing.cell.collision != 0
+            || directionally_impassable(standing_behavior, landing.target_behavior, direction)
+        {
+            return Err(Collision::Impassable);
+        }
+        if elevation_mismatch(self.elevation, landing.cell.elevation) {
+            return Err(Collision::ElevationMismatch);
+        }
+        // GetCollisionAtCoords' last test: COLLISION_OBJECT_EVENT via
+        // DoesObjectCollideWithObjectAt. Queried at the *player's* current
+        // elevation -- upstream passes `objectEvent->currentElevation`, not
+        // the destination cell's -- so `AreElevationsCompatible` compares
+        // the two movers, not the mover and the ground.
+        if landing.check_object_event
+            && visible_object_event_at(
+                runtime,
+                landing.position.0,
+                landing.position.1,
+                self.elevation,
+                event_data,
+            )
+            .is_some()
+        {
+            return Err(Collision::ObjectEvent);
+        }
+
+        // Read before `self.position` moves: `adopt_elevation`'s `origin`
+        // argument is `ObjectEventUpdateElevation`'s own fresh
+        // `MapGridGetElevationAt(previousCoords)` read, not a cached field
+        // (see that method's doc) -- always this map's own grid, since the
+        // avatar's *origin* tile never moves to a neighbour's map.
+        let origin_elevation = runtime
+            .metatile_cell(self.position.0, self.position.1)
+            .map_or(self.elevation, |origin_cell| origin_cell.elevation);
+        self.position = landing.position;
+        self.adopt_elevation(origin_elevation, landing.cell.elevation);
+        self.transit_frames = Some(0);
+        Ok(())
     }
 }
 
@@ -1621,6 +1685,103 @@ mod tests {
         assert_eq!(player.elevation(), 3);
     }
 
+    /// `GetCollisionAtCoords` tests the grid's collision bits ahead of the
+    /// elevation mismatch (see [`a_wall_outranks_an_object_event_on_the_same_tile`]);
+    /// a connection crossing must run the shared sequence in that same
+    /// order, not just the same-map branch.
+    #[test]
+    fn connection_collision_bit_outranks_elevation_mismatch() {
+        let runtime = south_connected_runtime();
+        let maps = SingleConnectedMap {
+            id: MapId("MAP_SOUTH"),
+            dimensions: (5, 5),
+            landing_position: (2, 0),
+            landing_cell: MetatileCell {
+                metatile_id: 1,
+                collision: 1,
+                elevation: 4,
+            },
+        };
+        let mut player = PlayerState::new((2, 4), 3, Direction::South);
+
+        assert_eq!(
+            player.step(Some(Direction::South), &runtime, &maps, &NO_FLAGS),
+            StepOutcome::Blocked {
+                direction: Direction::South,
+                collision: super::super::collision::Collision::Impassable,
+            },
+            "collision bits must outrank elevation mismatch on a crossing \
+             landing, the same order the same-map branch enforces"
+        );
+        assert_eq!(player.position(), (2, 4));
+        assert_eq!(player.elevation(), 3);
+    }
+
+    /// The narrowing [`PlayerState::step`]'s "# Collision" doc names: a
+    /// connection crossing never runs the local object-event check, because
+    /// a neighbour's object events are not reachable through
+    /// [`ConnectedMapData`]. This map's own event list places an object at
+    /// the same *numeric* coordinates as the neighbour's landing position —
+    /// if the crossing branch ever ran that check against this map's own
+    /// runtime (the only one it has), it would misread this unrelated
+    /// object as occupying the landing tile and wrongly block the crossing.
+    #[test]
+    fn connection_crossing_does_not_check_local_object_events() {
+        let (bytes, mut header, _) = flat_runtime(5, 5, |_, _| 0);
+        header.connections = &[MapConnection {
+            direction: assets::Direction::South,
+            offset: 0,
+            target: MapId("MAP_SOUTH"),
+        }];
+        let layout = assets::MapLayout {
+            id: assets::LayoutId("MAP_TEST"),
+            name: "MapTest",
+            width: 5,
+            height: 5,
+            primary_tileset: "gTileset_General",
+            secondary_tileset: "gTileset_General",
+        };
+        let objects: &'static [ObjectEvent] = Box::leak(Box::new([object(1, 2, 0, 3, "0")]));
+        let events: &'static MapEvents = Box::leak(Box::new(MapEvents {
+            id: assets::MapId("MAP_TEST"),
+            shared_events_map: None,
+            object_events: objects,
+            warp_events: &[],
+            coord_events: &[],
+            bg_events: &[],
+        }));
+        let bytes = Box::leak(bytes.into_boxed_slice());
+        let header = Box::leak(Box::new(header));
+        let runtime = MapRuntime::new(
+            MapId("MAP_TEST"),
+            header,
+            events,
+            layout.grid(bytes).unwrap(),
+            MetatileAttributeTable::new(&[]),
+            MetatileAttributeTable::new(&[]),
+        );
+        let maps = SingleConnectedMap {
+            id: MapId("MAP_SOUTH"),
+            dimensions: (5, 5),
+            landing_position: (2, 0),
+            landing_cell: MetatileCell {
+                metatile_id: 1,
+                collision: 0,
+                elevation: 3,
+            },
+        };
+
+        let mut player = PlayerState::new((2, 4), 3, Direction::South);
+        assert_eq!(
+            player.step(Some(Direction::South), &runtime, &maps, &NO_FLAGS),
+            StepOutcome::Crossed {
+                to_map: MapId("MAP_SOUTH"),
+                to_position: (2, 0),
+            },
+            "a connection crossing must never consult this map's own object events"
+        );
+    }
+
     #[test]
     fn stepping_off_the_edge_without_a_connection_is_blocked() {
         let (bytes, header, events) = flat_runtime(5, 5, |_, _| 0);
@@ -1880,6 +2041,91 @@ mod tests {
                 collision: super::super::collision::Collision::Impassable,
             }
         );
+    }
+
+    /// `GetCollisionAtCoords` tests the elevation mismatch *before*
+    /// `DoesObjectCollideWithObjectAt` (`event_object_movement.c:4658-4672`),
+    /// so a tile that is both elevation-mismatched and occupied by an
+    /// object compatible with the player's own elevation reports
+    /// `COLLISION_ELEVATION_MISMATCH`, never `COLLISION_OBJECT_EVENT`.
+    /// Reordering the checks in [`PlayerState::try_start_resolved_step`]
+    /// fails here.
+    #[test]
+    fn elevation_mismatch_outranks_an_object_event_on_the_same_tile() {
+        let width = 5u16;
+        let height = 5u16;
+        let mut bytes = Vec::with_capacity(usize::from(width) * usize::from(height) * 2);
+        for y in 0..height {
+            for x in 0..width {
+                // Every tile is elevation 3 except the one south of start (elevation 7).
+                let elevation = if x == 2 && y == 3 { 7 } else { 3 };
+                let raw = MetatileCell {
+                    metatile_id: 1,
+                    collision: 0,
+                    elevation,
+                }
+                .pack();
+                bytes.extend_from_slice(&raw.to_le_bytes());
+            }
+        }
+        let layout = assets::MapLayout {
+            id: assets::LayoutId("MAP_TEST"),
+            name: "MapTest",
+            width,
+            height,
+            primary_tileset: "gTileset_General",
+            secondary_tileset: "gTileset_General",
+        };
+        let grid = layout.grid(&bytes).unwrap();
+        let header = MapHeader {
+            id: assets::MapId("MAP_TEST"),
+            group: 0,
+            num: 0,
+            name: "MapTest",
+            layout: assets::LayoutId("MAP_TEST"),
+            music: assets::MusicId(0),
+            region_map_section: RegionMapSectionId("MAPSEC_NONE"),
+            requires_flash: false,
+            weather: Weather::None,
+            map_type: MapType::Route,
+            allow_bike: true,
+            allow_escape: true,
+            allow_run: true,
+            show_name: false,
+            battle_scene: BattleScene::Normal,
+            connections: &[] as &'static [MapConnection],
+        };
+        // At the player's own elevation (3), so if the object test ran
+        // first it would report `ObjectEvent` instead.
+        let objects: &'static [ObjectEvent] = Box::leak(Box::new([object(1, 2, 3, 3, "0")]));
+        let events = MapEvents {
+            id: assets::MapId("MAP_TEST"),
+            shared_events_map: None,
+            object_events: objects,
+            warp_events: &[],
+            coord_events: &[],
+            bg_events: &[],
+        };
+        let runtime = MapRuntime::new(
+            assets::MapId("MAP_TEST"),
+            &header,
+            &events,
+            grid,
+            MetatileAttributeTable::new(&[]),
+            MetatileAttributeTable::new(&[]),
+        );
+
+        let mut player = PlayerState::new((2, 2), 3, Direction::South);
+        assert_eq!(
+            player.step(Some(Direction::South), &runtime, &no_connections, &NO_FLAGS),
+            StepOutcome::Blocked {
+                direction: Direction::South,
+                collision: super::super::collision::Collision::ElevationMismatch,
+            },
+            "elevation mismatch must outrank an object event on the same \
+             tile, the same order GetCollisionAtCoords enforces"
+        );
+        assert_eq!(player.position(), (2, 2));
     }
 
     /// The finding-1/finding-2 intersection: templates stacked on one tile
