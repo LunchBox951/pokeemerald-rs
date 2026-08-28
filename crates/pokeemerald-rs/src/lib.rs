@@ -124,6 +124,7 @@
 //! than a background thread.
 
 pub mod app;
+mod authored_message;
 mod flow;
 pub mod frame;
 mod game_save;

@@ -631,11 +631,16 @@ fn compose_from_synthetic_pack_is_deterministic_and_selection_changes_the_frame(
     );
 }
 
+/// Loads [`AssetPack::load_repo`] directly rather than
+/// [`super::load_default`] (issue #412) -- see [`AssetPack::load_repo`]'s
+/// own docs for why a checkout-validation gate must not go through
+/// [`AssetPack::default_path`].
 #[test]
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
 fn real_pack_composes_non_blank_deterministic_frames_for_both_selection_states() {
-    let mut scene =
-        super::load_default(MainMenuType::NoSavedGame).expect("run `cargo xtask extract` first");
+    let pack = AssetPack::load_repo().expect("run `cargo xtask extract` first");
+    let mut scene = MainMenuScene::from_pack(&pack, MainMenuType::NoSavedGame)
+        .expect("run `cargo xtask extract` first");
 
     let new_game_first = scene.compose();
     let new_game_second = scene.compose();

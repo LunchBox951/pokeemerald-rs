@@ -58,7 +58,7 @@ use platform::ButtonState;
 
 use assets::trainers::TrainerId;
 
-use crate::overworld::npc_scripts::parse_message;
+use crate::authored_message;
 use crate::overworld::NpcDialog;
 
 use super::sight_trainer_trigger::SightTrainerOutcome;
@@ -138,7 +138,7 @@ pub(super) struct SightApproach {
     /// -- how many tiles the trainer walks in total.
     walk_tiles: u8,
     /// This trainer's own intro speech, in
-    /// [`crate::overworld::npc_scripts::parse_message`]'s authored form.
+    /// [`crate::authored_message::parse_message`]'s authored form.
     intro: &'static str,
     /// The already-constructed fight (struct docs).
     battle: battle::Battle,
@@ -504,7 +504,10 @@ impl OverworldPhase {
             let Some(intro) = self.sight_approach.as_ref().map(|approach| approach.intro) else {
                 return SightTrainerOutcome::Refused;
             };
-            match NpcDialog::open_default(parse_message(intro)) {
+            let tokens = authored_message::parse_message(intro).unwrap_or_else(|err| {
+                panic!("sight trainer intro speech {intro:?} is malformed: {err}")
+            });
+            match NpcDialog::open_default(tokens) {
                 Ok(dialog) => {
                     self.dialog = Some(dialog);
                     if let Some(approach) = &mut self.sight_approach {

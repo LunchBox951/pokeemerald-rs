@@ -10,7 +10,10 @@
 //! always exercised against exactly the same pack.
 
 use super::tests::{load_synthetic_scene_of, window_of};
-use super::{highlight_rect, ItemWindow, MainMenuItem, MainMenuType, HEADER_TEXT_BG};
+use super::{
+    highlight_rect, ItemWindow, MainMenuItem, MainMenuScene, MainMenuType, HEADER_TEXT_BG,
+};
+use assets::AssetPack;
 use rendering::Rgb888;
 
 // -- `HAS_SAVED_GAME` geometry -------------------------------------------
@@ -157,13 +160,17 @@ fn moving_the_saved_game_selection_moves_the_highlight() {
     assert_eq!(on_new_game.pixel(18, 74), Some(HEADER_TEXT_BG));
 }
 
+/// Loads [`AssetPack::load_repo`] directly rather than [`super::load_default`]
+/// (issue #412) -- see [`AssetPack::repo_pack_path`]'s own docs for why an
+/// ignored real-pack test must not go through [`AssetPack::default_path`].
 #[test]
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
 fn real_pack_composes_a_distinct_non_blank_saved_game_menu() {
-    let no_save =
-        super::load_default(MainMenuType::NoSavedGame).expect("run `cargo xtask extract` first");
-    let saved =
-        super::load_default(MainMenuType::SavedGame).expect("run `cargo xtask extract` first");
+    let pack = AssetPack::load_repo().expect("run `cargo xtask extract` first");
+    let no_save = MainMenuScene::from_pack(&pack, MainMenuType::NoSavedGame)
+        .expect("run `cargo xtask extract` first");
+    let saved = MainMenuScene::from_pack(&pack, MainMenuType::SavedGame)
+        .expect("run `cargo xtask extract` first");
 
     assert_eq!(saved.selected(), MainMenuItem::Continue);
 

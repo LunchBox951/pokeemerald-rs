@@ -8,12 +8,12 @@
 //! real_pack_composes_a_non_blank_menu_frame`.
 
 use assets::fonts::{FontId, FontImageRef, OwnedFontGlyphSheet, GLYPH_COUNT};
-use assets::pack::ImageRef;
+use assets::pack::{AssetPack, ImageRef};
 use engine::text::render::{Printer, PrinterInput, TextSpeed, TickEvent};
 use rendering::Rgb888;
 
 use super::{IntroScene, IntroStatus, TraversalRun, NUM_PAGES};
-use crate::textbox::FrameAssets;
+use crate::textbox::{FrameAssets, STANDARD_BOX_SCREEN_ORIGIN, STANDARD_PRINTER_ORIGIN};
 
 /// No buttons pressed or held this frame -- shorthand for
 /// [`PrinterInput::none`], this file's stand-in for the old bare `false`
@@ -313,13 +313,13 @@ fn compose_paints_the_revealed_glyphs_pixel_not_just_the_frame_dimensions() {
     assert_eq!(fb.height(), 160);
 
     // The first revealed glyph sits at the printer's own origin
-    // (`super::PRINTER_ORIGIN`), offset by the dialogue box's screen
-    // position (`super::BOX_SCREEN_ORIGIN`) -- a pixel comfortably inside
+    // (`STANDARD_PRINTER_ORIGIN`), offset by the dialogue box's screen
+    // position (`STANDARD_BOX_SCREEN_ORIGIN`) -- a pixel comfortably inside
     // that 16x16 cell must be the glyph's own opaque colour, proving
     // `compose` actually painted the revealed glyph rather than merely
     // producing a correctly-sized, still-blank framebuffer.
-    let x = usize::try_from(super::BOX_SCREEN_ORIGIN.0 + super::PRINTER_ORIGIN.0 + 4).unwrap();
-    let y = usize::try_from(super::BOX_SCREEN_ORIGIN.1 + super::PRINTER_ORIGIN.1 + 4).unwrap();
+    let x = usize::try_from(STANDARD_BOX_SCREEN_ORIGIN.0 + STANDARD_PRINTER_ORIGIN.0 + 4).unwrap();
+    let y = usize::try_from(STANDARD_BOX_SCREEN_ORIGIN.1 + STANDARD_PRINTER_ORIGIN.1 + 4).unwrap();
     assert_eq!(fb.pixel(x, y), Some(GLYPH_COLOR));
 }
 
@@ -346,8 +346,8 @@ fn compose_draws_the_dialogue_box_border_even_before_any_glyph_reveals() {
     // content rect -- `MessageBoxLayout::frame_tiles`'s top-border push,
     // which this port's `blit_frame_tiles` draws unconditionally, before
     // any glyph is ever revealed) must be the frame's own opaque colour.
-    let border_x = usize::try_from(super::BOX_SCREEN_ORIGIN.0).unwrap();
-    let border_y = usize::try_from(super::BOX_SCREEN_ORIGIN.1 - 8).unwrap();
+    let border_x = usize::try_from(STANDARD_BOX_SCREEN_ORIGIN.0).unwrap();
+    let border_y = usize::try_from(STANDARD_BOX_SCREEN_ORIGIN.1 - 8).unwrap();
     assert_eq!(fb.pixel(border_x, border_y), Some(FRAME_COLOR));
 
     // A pixel clearly outside the box stays the untouched black backdrop --
@@ -480,8 +480,8 @@ fn load_from(path: &std::path::Path) -> Result<IntroScene, super::IntroSceneErro
 fn first_glyph_pixel(scene: &IntroScene) -> Option<Rgb888> {
     let fb = scene.compose();
     fb.pixel(
-        usize::try_from(super::BOX_SCREEN_ORIGIN.0 + super::PRINTER_ORIGIN.0 + 4).unwrap(),
-        usize::try_from(super::BOX_SCREEN_ORIGIN.1 + super::PRINTER_ORIGIN.1 + 4).unwrap(),
+        usize::try_from(STANDARD_BOX_SCREEN_ORIGIN.0 + STANDARD_PRINTER_ORIGIN.0 + 4).unwrap(),
+        usize::try_from(STANDARD_BOX_SCREEN_ORIGIN.1 + STANDARD_PRINTER_ORIGIN.1 + 4).unwrap(),
     )
 }
 
@@ -620,7 +620,7 @@ fn derive_traversal_runs() -> Vec<TraversalRun> {
         pages[0].clone(),
         synthetic_sheet(&pixels),
         TextSpeed::Mid,
-        super::PRINTER_ORIGIN,
+        STANDARD_PRINTER_ORIGIN,
     )
     .with_ab_speed_up_print();
 
@@ -700,16 +700,18 @@ fn traversal_frames_totals_the_table() {
 /// other scenes' #[ignore] tests in app.rs` claim this file's own module
 /// docs used to make was false -- no such test exists in `app.rs`). Mirrors
 /// `main_menu::tests::real_pack_composes_a_non_blank_menu_frame`: build the
-/// real scene via [`super::load_default`], tick it forward a few frames (so
-/// more than one glyph has actually revealed), and confirm both that
-/// *something* painted (not an all-black frame) and that the dialogue box
-/// itself is visually distinct from the empty backdrop around it -- not
-/// just "some pixel somewhere is non-black," which a stray artifact could
-/// also satisfy.
+/// real scene via [`AssetPack::load_repo`] and [`super::IntroScene::from_pack`]
+/// -- not [`super::load_default`] (issue #412; see [`AssetPack::load_repo`]'s
+/// own docs for why) -- tick it forward a few frames (so more than one
+/// glyph has actually revealed), and confirm both that *something* painted
+/// (not an all-black frame) and that the dialogue box itself is visually
+/// distinct from the empty backdrop around it -- not just "some pixel
+/// somewhere is non-black," which a stray artifact could also satisfy.
 #[test]
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
 fn real_pack_composes_a_non_blank_intro_frame() {
-    let mut scene = super::load_default().expect("run `cargo xtask extract` first");
+    let pack = AssetPack::load_repo().expect("run `cargo xtask extract` first");
+    let mut scene = IntroScene::from_pack(&pack).expect("run `cargo xtask extract` first");
     for _ in 0..5 {
         scene.tick(NONE);
     }
@@ -725,8 +727,8 @@ fn real_pack_composes_a_non_blank_intro_frame() {
     // box -- this scene's own black backdrop, module docs).
     let inside = fb
         .pixel(
-            usize::try_from(super::BOX_SCREEN_ORIGIN.0 + 4).unwrap(),
-            usize::try_from(super::BOX_SCREEN_ORIGIN.1 + 4).unwrap(),
+            usize::try_from(STANDARD_BOX_SCREEN_ORIGIN.0 + 4).unwrap(),
+            usize::try_from(STANDARD_BOX_SCREEN_ORIGIN.1 + 4).unwrap(),
         )
         .expect("in bounds");
     let outside = fb.pixel(2, 2).expect("in bounds");

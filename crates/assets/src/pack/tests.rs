@@ -817,6 +817,31 @@ fn default_path_ends_with_expected_relative_path() {
     assert!(path.ends_with("assets-pack/pokeemerald.pack"));
 }
 
+/// What a checkout-validation gate needs from
+/// [`AssetPack::repo_pack_path`], and all it needs: an absolute path to
+/// `cargo xtask extract`'s output inside *this* workspace, identified by
+/// the root that holds the workspace manifest. Holds whatever
+/// [`AssetPack::default_path`] resolves to for a running game, and on a
+/// machine with any number of packs installed elsewhere.
+#[test]
+fn repo_pack_path_is_the_workspace_roots_own_extract_output() {
+    let path = AssetPack::repo_pack_path();
+    assert!(path.is_absolute(), "{} must be absolute", path.display());
+    assert!(path.ends_with(super::OUTPUT_RELATIVE_PATH));
+
+    let root = path
+        .parent()
+        .and_then(std::path::Path::parent)
+        .expect("the pack sits two components under the root it names");
+    let manifest = std::fs::read_to_string(root.join("Cargo.toml"))
+        .expect("the root repo_pack_path names must hold a Cargo manifest");
+    assert!(
+        manifest.contains("[workspace]"),
+        "{} must be this workspace's root, not an install location",
+        root.display()
+    );
+}
+
 #[test]
 fn song_accessor_decodes_the_named_entry_through_the_song_schema() {
     let path = write_synthetic_pack("song-ok");

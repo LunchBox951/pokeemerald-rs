@@ -142,6 +142,17 @@ impl AssetPack {
         pack_format::default_pack_path()
     }
 
+    /// The checkout's own pack: `<repo root>/assets-pack/pokeemerald.pack`,
+    /// where `cargo xtask extract` writes —
+    /// [`pack_format::repo_pack_path`], [`default_path`](Self::default_path)'s
+    /// last rung. A checkout-validation gate asks for it by name rather than
+    /// through the resolver, whose earlier rungs read whichever pack the
+    /// developer has installed (issue #412).
+    #[must_use]
+    pub fn repo_pack_path() -> PathBuf {
+        pack_format::repo_pack_path()
+    }
+
     /// Load the pack from [`default_path`](Self::default_path).
     ///
     /// # Errors
@@ -152,7 +163,7 @@ impl AssetPack {
     }
 
     /// Load the pack `cargo xtask extract` writes into *this checkout*,
-    /// [`pack_format::repo_pack_path`] — deliberately not
+    /// [`repo_pack_path`](Self::repo_pack_path) — deliberately not
     /// [`load_default`](Self::load_default).
     ///
     /// For gates that mean to validate the checkout rather than to play the
@@ -171,7 +182,7 @@ impl AssetPack {
     /// "run `cargo xtask extract` first", with no ambiguity about which
     /// pack was looked for.
     pub fn load_repo() -> Result<Self, PackError> {
-        Self::load(&pack_format::repo_pack_path())
+        Self::load(&Self::repo_pack_path())
     }
 
     /// Load and parse a pack from `path`.
