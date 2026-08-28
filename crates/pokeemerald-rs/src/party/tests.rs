@@ -1,9 +1,9 @@
 //! Unit tests for the [`super`] party encoder (I-6, issue #232).
 
 use super::{
-    compute_levelled_up_stats, evs_from_substruct2, from_save_pokemon, hp_hidden_by_load,
-    merge_into_save_pokemon, pack_ivs, to_save_pokemon, unpack_ivs, zero_ev_max_hp, PartyError,
-    MAIL_NONE,
+    clamp_i32, compute_levelled_up_stats, evs_from_substruct2, from_save_pokemon,
+    hp_hidden_by_load, merge_into_save_pokemon, pack_ivs, to_save_pokemon, unpack_ivs,
+    zero_ev_max_hp, PartyError, MAIL_NONE,
 };
 use battle::{BattlePokemon, Dex, Ivs};
 use engine::save::{BoxPokemon, Pokemon};
@@ -578,12 +578,25 @@ fn to_save_pokemon_files_ev_aware_stats_for_a_freshly_earned_mon() {
          observable regression"
     );
 
+    assert_eq!(
+        mon.current_hp(),
+        zero_ev_max_hp,
+        "fixture sanity: a freshly built battler starts at its own (0-EV) \
+         full health"
+    );
+
     let saved = to_save_pokemon(&dex, &mon);
     assert_eq!(
         u32::from(saved.max_hp),
         ev_aware.max_hp,
         "a mon with no backing save record must be filed with its real \
          EV-aware stat block, not the live 0-EV cache"
+    );
+    assert_eq!(
+        saved.hp, saved.max_hp,
+        "a mon that is full health under the live 0-EV cache must still be \
+         filed at full under the wider EV-aware maximum this encoder just \
+         computed -- not damaged by the gap between the two floors"
     );
 
     // The exact path a fresh game's first save takes: no backing record at
@@ -597,6 +610,33 @@ fn to_save_pokemon_files_ev_aware_stats_for_a_freshly_earned_mon() {
         u32::from(merged.max_hp),
         ev_aware.max_hp,
         "the fresh-game fallback path must match the direct encoder"
+    );
+    assert_eq!(
+        merged.hp, merged.max_hp,
+        "the fallback path must file the same full-health record the \
+         direct encoder does"
+    );
+    assert_eq!(
+        offset,
+        clamp_i32(ev_aware.max_hp.saturating_sub(zero_ev_max_hp)),
+        "the fallback must seed hp_hidden_by_load with the gap the record \
+         it just wrote opened over the live 0-EV floor, not leave it at 0 \
+         -- otherwise the very next same-session save, taking the retained \
+         fast path, would re-measure this same full-health lead against \
+         the retained EV-aware maximum with no gap to translate by and \
+         file it damaged"
+    );
+
+    // That next same-session save: species and level are unchanged, so
+    // `merge_into_save_pokemon` takes the retained fast path against the
+    // record `merged` just became, trusting the offset above rather than
+    // re-deriving it. Saving twice must file the same bytes (module docs).
+    let resaved = merge_into_save_pokemon(&dex, &mon, &merged, &mut offset);
+    assert_eq!(resaved.max_hp, merged.max_hp);
+    assert_eq!(
+        resaved.hp, resaved.max_hp,
+        "a second, unchanged-state save must still file the lead at full, \
+         not flip it to damaged because the carried offset was lost"
     );
 }
 
