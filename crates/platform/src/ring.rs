@@ -1,13 +1,12 @@
-//! A bounded, underrun-safe sample ring buffer (S-1): the seam between the
-//! future `audio` crate (M4A engine, S-3), which renders PCM on its own
-//! thread, and [`crate::audio::AudioOutput`], which drains it once per audio
-//! device callback.
+//! A bounded, underrun-safe sample ring buffer: the seam between the
+//! `audio` crate's M4A engine, which renders PCM on its own thread, and
+//! [`crate::audio::AudioOutput`], which drains it once per audio device
+//! callback.
 //!
 //! [`ring_buffer`] splits into a cloneable [`Producer`] (write side) and a
 //! single [`Consumer`] (read side) sharing one `Mutex`-guarded queue —
-//! simple over lock-free, per the project's "prefer a `Mutex`/atomic ring
-//! buffer" guidance; a few hundred samples per callback under a short-held
-//! lock is not a contention risk here.
+//! simple over lock-free, because a few hundred samples per callback under
+//! a short-held lock is not a contention risk here.
 //!
 //! [`Consumer::fill`] is the hot path every consumer of a ring buffer is
 //! built on — the real device callback, [`crate::resample::Resampler`], and
@@ -34,7 +33,7 @@ struct Shared {
 
 /// Lock `queue`, recovering from poisoning rather than propagating a panic.
 ///
-/// A panic on one side (e.g. a bug in the future `audio` crate's mixer)
+/// A panic on one side (e.g. a bug in the `audio` crate's mixer)
 /// should not also take down the audio device callback thread; the worst a
 /// poisoned lock should cost here is a torn-looking read, not a crash.
 fn lock(queue: &Mutex<VecDeque<f32>>) -> std::sync::MutexGuard<'_, VecDeque<f32>> {
@@ -216,7 +215,7 @@ mod tests {
     fn bulk_fill_consolidates_shortfall_into_the_underrun_count() {
         // A single `fill` that outruns the queue must add exactly the missing
         // sample count to the counter — the bulk drain's consolidated update
-        // is required to match the old per-sample accounting exactly.
+        // must match per-sample accounting exactly.
         let (producer, consumer) = ring_buffer(64);
         assert_eq!(producer.push(&[1.0, 2.0, 3.0]), 3);
 
