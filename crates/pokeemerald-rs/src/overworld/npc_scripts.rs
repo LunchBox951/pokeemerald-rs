@@ -17,6 +17,7 @@
 
 use engine::text::Token;
 
+use crate::authored_message;
 use crate::new_game::DEFAULT_PLAYER_NAME;
 
 /// The token stream to print for `script`'s recognized fresh-save default
@@ -25,7 +26,10 @@ use crate::new_game::DEFAULT_PLAYER_NAME;
 #[must_use]
 pub(crate) fn script_text(script: &str) -> Option<Vec<Token>> {
     match script {
-        "PlayersHouse_1F_EventScript_Mom" => Some(parse_message(&mom_text())),
+        "PlayersHouse_1F_EventScript_Mom" => Some(
+            authored_message::parse_message(&mom_text())
+                .expect("Mom's compiled-in default message must be a valid authored message"),
+        ),
         _ => None,
     }
 }
@@ -54,47 +58,6 @@ pub(crate) fn script_text(script: &str) -> Option<Vec<Token>> {
 /// doc comment), so the text itself carries none of it.
 fn mom_text() -> String {
     format!("MOM: See, {DEFAULT_PLAYER_NAME}?\nIsn't it nice in here, too?")
-}
-
-/// Translate one authored message -- the same `{P}`/`{L}`/`\n` convention
-/// [`crate::intro::speech::parse_page`] uses -- into a decoded [`Token`]
-/// stream, terminated with [`Token::End`].
-///
-/// `pub(crate)` because the authored-message convention outlives this
-/// module's own table: the sight-trainer intro speech
-/// (`crate::flow::overworld_phase::sight_trainer_trigger`'s transcribed
-/// `data/text/trainers.inc` lines, S-5 issue #300) is the same kind of text
-/// bound for the same [`crate::overworld::NpcDialog`], and two copies of a
-/// parser would be two places for the convention to drift.
-pub(crate) fn parse_message(text: &str) -> Vec<Token> {
-    let mut tokens = Vec::new();
-    let mut chars = text.chars().peekable();
-    while let Some(c) = chars.next() {
-        match c {
-            '\n' => tokens.push(Token::Newline),
-            '{' => {
-                let marker: String = chars.clone().take(2).collect();
-                // `{L}` is upstream's `\l` (`CHAR_PROMPT_SCROLL`): wait for a
-                // button, then scroll one line rather than clearing the box.
-                match marker.as_str() {
-                    "P}" => {
-                        chars.by_ref().take(2).for_each(drop);
-                        tokens.push(Token::PromptClear);
-                    }
-                    "L}" => {
-                        chars.by_ref().take(2).for_each(drop);
-                        tokens.push(Token::PromptScroll);
-                    }
-                    // No other `{...}` marker appears in this crate's
-                    // authored overworld messages.
-                    _ => tokens.push(Token::Char('{')),
-                }
-            }
-            other => tokens.push(Token::Char(other)),
-        }
-    }
-    tokens.push(Token::End);
-    tokens
 }
 
 #[cfg(test)]
@@ -133,44 +96,5 @@ mod tests {
         let tokens = script_text("PlayersHouse_1F_EventScript_Mom").unwrap();
         engine::text::encode(&tokens)
             .unwrap_or_else(|err| panic!("message not Gen-3 encodable: {err} in {tokens:?}"));
-    }
-
-    /// `{L}` is `\l`: wait, then scroll -- distinct from `{P}`'s wait, then
-    /// clear. Route 103's Amy and Andrew intros both use it (this crate's
-    /// `sight_trainer_trigger`), so it is no longer an unreachable arm.
-    #[test]
-    fn parse_message_translates_the_scroll_marker() {
-        assert_eq!(
-            parse_message("a{L}b"),
-            vec![
-                Token::Char('a'),
-                Token::PromptScroll,
-                Token::Char('b'),
-                Token::End,
-            ]
-        );
-    }
-
-    #[test]
-    fn parse_message_translates_newline_and_the_page_marker() {
-        let tokens = parse_message("Hi{P}there\nyou");
-        assert_eq!(
-            tokens,
-            vec![
-                Token::Char('H'),
-                Token::Char('i'),
-                Token::PromptClear,
-                Token::Char('t'),
-                Token::Char('h'),
-                Token::Char('e'),
-                Token::Char('r'),
-                Token::Char('e'),
-                Token::Newline,
-                Token::Char('y'),
-                Token::Char('o'),
-                Token::Char('u'),
-                Token::End,
-            ]
-        );
     }
 }

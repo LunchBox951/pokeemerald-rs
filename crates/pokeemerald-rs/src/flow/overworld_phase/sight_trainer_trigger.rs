@@ -80,7 +80,7 @@ struct SightTrainer {
     /// `data/text/trainers.inc` -- the line `ShowTrainerIntroSpeech` prints
     /// (`data/scripts/trainer_battle.inc:101-104`,
     /// [`super::sight_trainer_approach`]'s own intro stage). `\n`/`\l` are
-    /// spelled `\n`/`{L}` for [`crate::overworld::npc_scripts::parse_message`].
+    /// spelled `\n`/`{L}` for [`crate::authored_message::parse_message`].
     ///
     /// Byte-identical to upstream's own raw strings, terminator aside: all
     /// nine end `$` with no embedded `\p` (`data/text/trainers.inc:72-74`
@@ -625,7 +625,10 @@ mod tests {
     #[test]
     fn every_intro_speech_is_encodable_and_leaves_the_button_wait_to_the_script() {
         for entry in SIGHT_TRAINERS {
-            let tokens = crate::overworld::npc_scripts::parse_message(entry.intro);
+            let tokens =
+                crate::authored_message::parse_message(entry.intro).unwrap_or_else(|err| {
+                    panic!("{}'s intro speech is malformed: {err}", entry.script)
+                });
             engine::text::encode(&tokens).unwrap_or_else(|err| {
                 panic!(
                     "{}'s intro speech is not Gen-3 encodable: {err}",
