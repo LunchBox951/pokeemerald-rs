@@ -113,7 +113,12 @@ fn a_failed_overworld_load_waits_instead_of_retrying_every_frame() {
     let (_temp, mut save_slot) = empty_slot("failed-overworld-load");
     let scene = AppScene::Intro(Box::new(intro::synthetic_finished_scene()));
 
-    let (after_first, _frame) = advance_scene(scene, ButtonState::new(), &mut save_slot);
+    let (after_first, _frame) = advance_scene(
+        scene,
+        ButtonState::new(),
+        &mut save_slot,
+        crate::pack_source::PackSource::Runtime,
+    );
     assert!(
         matches!(after_first, AppScene::OverworldLoadFailed(_)),
         "a failed load must leave `Intro` for the explicit waiting state"
@@ -121,12 +126,22 @@ fn a_failed_overworld_load_waits_instead_of_retrying_every_frame() {
 
     // No input edge across further frames -> stay waiting, not attempt
     // the load again (nor bounce back to `Intro`).
-    let (after_second, _frame) = advance_scene(after_first, ButtonState::new(), &mut save_slot);
+    let (after_second, _frame) = advance_scene(
+        after_first,
+        ButtonState::new(),
+        &mut save_slot,
+        crate::pack_source::PackSource::Runtime,
+    );
     assert!(matches!(after_second, AppScene::OverworldLoadFailed(_)));
 
     // A fresh confirm edge retries the load -- still fails (no pack),
     // but must land back in the same waiting state, not panic.
-    let (after_retry, _frame) = advance_scene(after_second, pressed(Buttons::A), &mut save_slot);
+    let (after_retry, _frame) = advance_scene(
+        after_second,
+        pressed(Buttons::A),
+        &mut save_slot,
+        crate::pack_source::PackSource::Runtime,
+    );
     assert!(matches!(after_retry, AppScene::OverworldLoadFailed(_)));
 }
 
@@ -167,7 +182,12 @@ fn title_a_or_start_button_transitions_to_main_menu() {
             presented: false,
         }));
 
-        let (next, _frame) = advance_scene(scene, pressed(button), &mut save_slot);
+        let (next, _frame) = advance_scene(
+            scene,
+            pressed(button),
+            &mut save_slot,
+            crate::pack_source::PackSource::Runtime,
+        );
 
         let AppScene::MainMenu(state) = next else {
             panic!("{button:?} on the title screen must transition to the main menu");
@@ -193,7 +213,12 @@ fn title_without_start_stays_on_title_and_keeps_animating() {
     }));
 
     let (_temp, mut save_slot) = empty_slot("title-keeps-animating");
-    let (next, _frame) = advance_scene(scene, ButtonState::new(), &mut save_slot);
+    let (next, _frame) = advance_scene(
+        scene,
+        ButtonState::new(),
+        &mut save_slot,
+        crate::pack_source::PackSource::Runtime,
+    );
 
     let AppScene::Title(title) = next else {
         panic!("expected to stay on the title screen");
@@ -214,7 +239,12 @@ fn main_menu_confirm_on_new_game_transitions_to_intro() {
         saved: save_slot.load(),
     }));
 
-    let (next, _frame) = advance_scene(scene, pressed(Buttons::A), &mut save_slot);
+    let (next, _frame) = advance_scene(
+        scene,
+        pressed(Buttons::A),
+        &mut save_slot,
+        crate::pack_source::PackSource::Runtime,
+    );
 
     assert!(
         matches!(next, AppScene::Intro(_)),
@@ -239,7 +269,12 @@ fn main_menu_confirm_on_option_stays_on_the_main_menu() {
         saved: save_slot.load(),
     }));
 
-    let (next, _frame) = advance_scene(scene, pressed(Buttons::A), &mut save_slot);
+    let (next, _frame) = advance_scene(
+        scene,
+        pressed(Buttons::A),
+        &mut save_slot,
+        crate::pack_source::PackSource::Runtime,
+    );
 
     let AppScene::MainMenu(state) = next else {
         panic!("A on OPTION must not leave the main menu");
@@ -290,7 +325,12 @@ fn main_menu_a_wins_over_a_same_frame_direction_press() {
         saved: save_slot.load(),
     }));
 
-    let (next, _frame) = advance_scene(scene, pressed(Buttons::A | Buttons::UP), &mut save_slot);
+    let (next, _frame) = advance_scene(
+        scene,
+        pressed(Buttons::A | Buttons::UP),
+        &mut save_slot,
+        crate::pack_source::PackSource::Runtime,
+    );
 
     let AppScene::MainMenu(state) = next else {
         panic!("a swallowed A press must stay on the main menu");
@@ -314,14 +354,24 @@ fn main_menu_up_and_down_move_the_selection() {
         saved: save_slot.load(),
     }));
 
-    let (after_down, _frame) = advance_scene(scene, pressed(Buttons::DOWN), &mut save_slot);
+    let (after_down, _frame) = advance_scene(
+        scene,
+        pressed(Buttons::DOWN),
+        &mut save_slot,
+        crate::pack_source::PackSource::Runtime,
+    );
     let AppScene::MainMenu(state) = after_down else {
         panic!("expected to stay on the main menu");
     };
     assert_eq!(state.scene.selected(), MainMenuItem::Option);
 
     let scene = AppScene::MainMenu(state);
-    let (after_up, _frame) = advance_scene(scene, pressed(Buttons::UP), &mut save_slot);
+    let (after_up, _frame) = advance_scene(
+        scene,
+        pressed(Buttons::UP),
+        &mut save_slot,
+        crate::pack_source::PackSource::Runtime,
+    );
     let AppScene::MainMenu(state) = after_up else {
         panic!("expected to stay on the main menu");
     };
@@ -353,7 +403,12 @@ fn a_saved_game_menu_selects_continue_first_and_then_new_game_and_option() {
             panic!("expected to stay on the main menu");
         };
         assert_eq!(state.scene.selected(), expected);
-        let (next, _frame) = advance_scene(scene, pressed(Buttons::DOWN), &mut save_slot);
+        let (next, _frame) = advance_scene(
+            scene,
+            pressed(Buttons::DOWN),
+            &mut save_slot,
+            crate::pack_source::PackSource::Runtime,
+        );
         scene = next;
     }
 }
@@ -408,7 +463,12 @@ fn no_scene_outside_the_overworld_writes_the_save() {
         // or without an extracted asset pack.
         let mut scene = scene;
         for &button in buttons {
-            let (next, _frame) = advance_scene(scene, pressed(button), &mut save_slot);
+            let (next, _frame) = advance_scene(
+                scene,
+                pressed(button),
+                &mut save_slot,
+                crate::pack_source::PackSource::Runtime,
+            );
             assert!(
                 !matches!(next, AppScene::Overworld(_)),
                 "the fixture must exercise only pre-overworld frames"
@@ -453,7 +513,12 @@ fn intro_finishing_every_page_transitions_to_overworld_with_the_player_at_the_sp
 
     let (_temp, mut save_slot) = empty_slot("intro-paged");
     let scene = AppScene::Intro(Box::new(intro_scene));
-    let (next, _frame) = advance_scene(scene, ButtonState::new(), &mut save_slot);
+    let (next, _frame) = advance_scene(
+        scene,
+        ButtonState::new(),
+        &mut save_slot,
+        crate::pack_source::PackSource::Runtime,
+    );
 
     let AppScene::Overworld(phase) = next else {
         panic!("expected the finished intro to hand off to the overworld");

@@ -204,6 +204,7 @@ fn boot_opens_no_platform_when_the_title_screen_fails_to_load() {
             save_opened = true;
             SaveSlot::disabled()
         },
+        crate::pack_source::PackSource::Runtime,
     ) else {
         panic!("with no pack extracted, boot must fail");
     };
@@ -230,6 +231,7 @@ fn real_pack_boot_propagates_a_platform_opener_error() {
         crate::title::load_repo,
         || Err(platform::PlatformError::NoAudioDevice),
         SaveSlot::disabled,
+        crate::pack_source::PackSource::Repo,
     ) else {
         panic!("the opener failed, so boot must fail");
     };

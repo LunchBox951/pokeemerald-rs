@@ -286,6 +286,16 @@ pub struct App {
     /// previous song in this session left configured, matching upstream's
     /// `gMPlayReverb` never resetting between `m4aSongNumStart` calls.
     music_context: MusicContext,
+    /// Where every scene load [`crate::flow::advance_scene`] performs reads
+    /// from (issue #412): [`crate::pack_source::PackSource::Runtime`] for
+    /// [`Self::new`], [`crate::pack_source::PackSource::Repo`] for
+    /// [`Self::new_headless_real`] -- resolved once here, at construction,
+    /// and threaded down through every [`Self::step`] call rather than a
+    /// process-wide `$POKEEMERALD_PACK` override (`crates/README.md`'s
+    /// `no-global-mutable-state` convention). Unused by [`Self::new_headless`],
+    /// whose synthetic [`BootScene`] frame never advances through `flow` at
+    /// all.
+    pack_source: crate::pack_source::PackSource,
 }
 
 /// Compose an already-loaded [`title::TitleScene`] at tick 0 into the
@@ -320,6 +330,7 @@ impl App {
         platform: Platform,
         (frame, scene): (Box<Frame>, AppScene),
         save_slot: SaveSlot,
+        pack_source: crate::pack_source::PackSource,
     ) -> Self {
         Self {
             platform,
@@ -328,6 +339,7 @@ impl App {
             save_slot,
             music: None,
             music_context: MusicContext::new(),
+            pack_source,
         }
     }
 
@@ -349,16 +361,29 @@ impl App {
     /// player and `./init.sh`/`cargo xtask extract` for a developer) or is otherwise malformed; whatever `open_platform` fails with
     /// (for [`App::new`], [`AppError::Platform`] if the platform's windowing
     /// event loop could not be created) otherwise.
+    ///
+    /// `pack_source` is stored on the assembled `App` (see [`Self::pack_source`]'s
+    /// own field docs) and used only after this call returns: `load_title`
+    /// is still the one thing that loads the title screen itself, so a
+    /// caller picking a pinned `load_title` must pass the matching
+    /// [`crate::pack_source::PackSource`] here too, or later scene loads
+    /// would disagree with the one this boot already made.
     fn boot(
         load_title: impl FnOnce() -> Result<title::TitleScene, title::TitleSceneError>,
         open_platform: impl FnOnce() -> Result<Platform, PlatformError>,
         open_save_slot: impl FnOnce() -> SaveSlot,
+        pack_source: crate::pack_source::PackSource,
     ) -> Result<Self, AppError> {
         // Load first: no window or save medium is opened if the pack is
         // missing.
         let loaded = compose_title_scene(load_title()?);
         let platform = open_platform()?;
-        Ok(Self::assemble(platform, loaded, open_save_slot()))
+        Ok(Self::assemble(
+            platform,
+            loaded,
+            open_save_slot(),
+            pack_source,
+        ))
     }
 
     /// Load the real title screen (I-2) from the local asset pack, then open
@@ -386,6 +411,7 @@ impl App {
             title::load_default,
             || Platform::new(title),
             SaveSlot::default_location,
+            crate::pack_source::PackSource::Runtime,
         )?;
         app.music = Self::start_title_music(&mut app.music_context, || {
             platform::AudioOutput::open(crate::music::RING_CAPACITY_FRAMES)
@@ -400,21 +426,23 @@ impl App {
     /// This is the scripted-scenario counterpart to [`App::new`]: it runs
     /// the same scene construction, [`App::step`] transitions, and
     /// presentation calls without opening a display or pacing against wall
-    /// time. The one deliberate divergence is the pack: the title screen is
-    /// loaded from the checkout's own extracted pack ([`title::load_repo`]),
-    /// because the scenario and e2e gates that boot through here promise
-    /// fixed inputs (`docs/scenarios.md`) and must never validate an
-    /// installed user pack that happens to shadow the checkout's.
+    /// time. The one deliberate divergence is the pack: every load reachable
+    /// through this `App` -- the title screen [`App::boot`] loads eagerly
+    /// ([`title::load_repo`]), and every scene `flow::advance_scene` and the
+    /// [`crate::flow::OverworldPhase`] it builds load lazily afterwards
+    /// (main menu, intro, overworld, warps, map-edge connections, NPC/
+    /// sight-trainer dialog, the field start menu) -- reads the checkout's
+    /// own extracted pack ([`crate::pack_source::PackSource::Repo`], issue
+    /// #412), because the scenario and e2e gates that boot through here
+    /// promise fixed inputs (`docs/scenarios.md`) and must never validate an
+    /// installed user pack, or one an inherited `$POKEEMERALD_PACK` happens
+    /// to name, that shadows the checkout's.
     ///
-    /// That pinning reaches the title scene only. The scenes `flow`'s
-    /// `advance_scene` builds afterwards -- the main menu, the intro, the
-    /// overworld -- each resolve the pack themselves through
-    /// `load_default`, so on a machine with `$POKEEMERALD_PACK` set or a
-    /// user pack installed, a scenario that walks past the title screen
-    /// mixes checkout title assets with that pack's. CI has neither, so the
-    /// gates there read the checkout throughout. Closing the gap needs a
-    /// pack threaded through those scene loads, which is issue #412's scope,
-    /// not this constructor's.
+    /// Stored as plain owned data on the assembled `App`
+    /// ([`Self::pack_source`]'s own field docs), not a process-wide
+    /// override: `crates/README.md`'s `no-global-mutable-state` convention
+    /// rules out mutating `$POKEEMERALD_PACK` itself, which would still
+    /// leak into anything else this process loads afterwards.
     ///
     /// Persistence is deliberately disabled so a scenario always starts on
     /// the no-save menu and never reads or writes a player's save file. No
@@ -431,6 +459,7 @@ impl App {
             title::load_repo,
             || Ok(Platform::new_headless()),
             SaveSlot::disabled,
+            crate::pack_source::PackSource::Repo,
         )
     }
 
@@ -450,6 +479,7 @@ impl App {
             title::load_repo,
             || Ok(Platform::new_headless()),
             SaveSlot::disabled,
+            crate::pack_source::PackSource::Repo,
         )?;
         app.music = Self::start_title_music(&mut app.music_context, || {
             Ok(platform::AudioOutput::null(
@@ -505,6 +535,10 @@ impl App {
             save_slot: SaveSlot::disabled(),
             music: None,
             music_context: MusicContext::new(),
+            // Never consulted: `scene` is `None`, so `Self::step` never
+            // reaches `flow::advance_scene` (`Self::pack_source`'s own field
+            // docs).
+            pack_source: crate::pack_source::PackSource::Runtime,
         }
     }
 
@@ -518,6 +552,7 @@ impl App {
             Platform::new_headless(),
             compose_title_scene(scene),
             SaveSlot::disabled(),
+            crate::pack_source::PackSource::Runtime,
         )
     }
 
@@ -576,7 +611,8 @@ impl App {
             eprintln!("{line}");
         }
         if let Some(scene) = self.scene.take() {
-            let (next, frame) = flow::advance_scene(scene, buttons, &mut self.save_slot);
+            let (next, frame) =
+                flow::advance_scene(scene, buttons, &mut self.save_slot, self.pack_source);
             self.scene = Some(next);
             self.frame = frame;
         }

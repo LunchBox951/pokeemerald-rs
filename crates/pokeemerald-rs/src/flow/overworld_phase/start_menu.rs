@@ -94,7 +94,7 @@ impl OverworldPhase {
             if !self.start_menu_may_open(buttons) {
                 return false;
             }
-            match start_menu::open_default(self.start_menu_cursor) {
+            match start_menu::open(self.pack_source, self.start_menu_cursor) {
                 Ok(opened) => self.start_menu = Some(opened),
                 // The same "log-or-ignore is fine" policy [`crate::flow`]
                 // applies to every other pack load: a missing pack must not
@@ -163,7 +163,7 @@ impl OverworldPhase {
     /// Test-only: open a pack-free
     /// [`crate::start_menu::synthetic_start_menu_at`] directly, so the save
     /// round-trip can drive the *real* [`StartMenu::tick`] state machine in
-    /// CI, where no asset pack exists for [`crate::start_menu::open_default`]
+    /// CI, where no asset pack exists for [`crate::start_menu::open`]
     /// to read (`crate::flow::save_continue_tests`' own module docs on the
     /// two substitutions those tests make). Nothing but the chrome differs:
     /// the menu, its items, its flow, and the write it performs are the

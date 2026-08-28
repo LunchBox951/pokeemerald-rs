@@ -134,6 +134,7 @@ pub mod main_menu;
 pub mod music;
 pub mod new_game;
 pub mod overworld;
+mod pack_source;
 mod party;
 pub mod scene;
 mod start_menu;

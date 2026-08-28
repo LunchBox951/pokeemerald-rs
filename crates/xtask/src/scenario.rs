@@ -253,15 +253,17 @@ impl ScenarioDriver for App {
 /// headless app.
 ///
 /// The scenario contract promises fixed inputs (`docs/scenarios.md`), and
-/// pack loads happen lazily along the whole flow -- the title boot
-/// ([`App::new_headless_real`] pins that one itself), then the main menu,
-/// the intro, and the overworld as their transitions run. Every one of
-/// those resolves through [`pack_format::default_pack_path`], whose first
-/// rung is `$POKEEMERALD_PACK`, so pinning that variable to the checkout
-/// pack pins them all: an installed user pack or an inherited override can
-/// no longer substitute the bytes under a running scenario. Process-wide
-/// and deliberately left set -- everything this process loads afterwards
-/// should be the checkout pack too.
+/// pack loads happen lazily along the whole flow -- the title boot, then
+/// the main menu, the intro, and the overworld (warps, map-edge
+/// connections, NPC/sight-trainer dialog, the field start menu) as their
+/// transitions run. [`App::new_headless_real`] pins every one of those to
+/// the checkout's own pack itself (issue #412): an owned
+/// `pokeemerald_rs::pack_source::PackSource` resolved once at construction
+/// and threaded down through each lazy load, not a process-wide
+/// `$POKEEMERALD_PACK` override -- so an installed user pack or an
+/// inherited override can no longer substitute the bytes under a running
+/// scenario, and nothing else this process loads afterwards is affected
+/// either.
 ///
 /// # Errors
 ///
@@ -269,7 +271,6 @@ impl ScenarioDriver for App {
 /// step, or any expected state milestone fails.
 #[cfg(feature = "scenario")]
 pub fn run(name: ScenarioName) -> Result<Report, ScenarioError> {
-    std::env::set_var(pack_format::PACK_PATH_ENV, pack_format::repo_pack_path());
     let mut app =
         App::new_headless_real().map_err(|error| ScenarioError::Start(error.to_string()))?;
     run_with_driver(spec(name), &mut app)
@@ -340,6 +341,37 @@ mod tests {
     use crate::ScenarioName;
     use pokeemerald_rs::main_menu::MainMenuItem;
     use pokeemerald_rs::{AppButtons, AppState, BattleOutcome};
+
+    /// Test-only: pin `$POKEEMERALD_PACK` to `value` for the guard's
+    /// lifetime, restoring whatever the variable held before on `Drop` --
+    /// including while unwinding out of a failed assertion, so a decoy path
+    /// set here can never survive past the one test that sets it. Not a
+    /// production pattern: this is the process-wide state the whole of this
+    /// module's own boundary change (issue #412) exists to keep out of
+    /// production code; here it is deliberately scoped, restored
+    /// unconditionally, and serialized against every other real-pack test
+    /// by [`crate::extract::REAL_PACK_LOCK`] (this struct's one caller
+    /// holds it for the guard's entire lifetime).
+    struct PackEnvGuard {
+        previous: Option<std::ffi::OsString>,
+    }
+
+    impl PackEnvGuard {
+        fn set(value: &std::path::Path) -> Self {
+            let previous = std::env::var_os(pack_format::PACK_PATH_ENV);
+            std::env::set_var(pack_format::PACK_PATH_ENV, value);
+            Self { previous }
+        }
+    }
+
+    impl Drop for PackEnvGuard {
+        fn drop(&mut self) {
+            match self.previous.take() {
+                Some(value) => std::env::set_var(pack_format::PACK_PATH_ENV, value),
+                None => std::env::remove_var(pack_format::PACK_PATH_ENV),
+            }
+        }
+    }
 
     struct FakeDriver {
         state: AppState,
@@ -496,6 +528,50 @@ mod tests {
             .expect("boot-to-main-menu should pass against the real pack");
         assert_eq!(report.frames_run, 2);
         assert_eq!(report.first_battle_outcome, None);
+        assert_eq!(
+            report.milestones,
+            vec![AppState::Title, AppState::MainMenu(MainMenuItem::NewGame)]
+        );
+    }
+
+    /// The regression this whole module's own boundary change (issue #412)
+    /// must not reopen: with `$POKEEMERALD_PACK` pointing at a path that
+    /// cannot possibly hold a real pack, [`super::run`] must still reach
+    /// every milestone through [`App::new_headless_real`]'s owned checkout
+    /// pin -- not just the title screen [`App::boot`] loads eagerly, but
+    /// the `Title` -> `MainMenu` transition's lazily-loaded main menu too.
+    /// This proves the owned `pokeemerald_rs::pack_source::PackSource`
+    /// threading actually reaches that second load; it does not by itself
+    /// prove [`super::run`] no longer mutates the environment (a decoy
+    /// `$POKEEMERALD_PACK` passed this same assertion under the old
+    /// `std::env::set_var` override too, since that override unconditionally
+    /// replaced it before construction) -- that half is what reading
+    /// [`super::run`]'s own body confirms.
+    ///
+    /// Holds [`crate::extract::REAL_PACK_LOCK`] for the same reason
+    /// [`real_pack_boot_to_main_menu_passes_and_reaches_every_milestone_in_order`]
+    /// does -- no other test in this process reads `$POKEEMERALD_PACK` (this
+    /// module's own `grep` is the proof, not a promise: nothing else in this
+    /// crate's test binary references [`pack_format::PACK_PATH_ENV`]), so
+    /// that lock is the only serialization this decoy value needs. Restored
+    /// via [`PackEnvGuard`]'s `Drop`, not a plain match after the call, so a
+    /// failing assertion below still restores it instead of leaking the
+    /// decoy path into every real-pack test the lock admits afterward.
+    #[test]
+    #[cfg(feature = "scenario")]
+    #[ignore = "needs a local pack produced by `cargo xtask extract`"]
+    fn a_headless_real_scenario_resolves_the_checkout_pack_even_with_pokeemerald_pack_set() {
+        let _pack = crate::extract::REAL_PACK_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _env = PackEnvGuard::set(std::path::Path::new(
+            "/nonexistent/pokeemerald-pack-regression-test.pack",
+        ));
+        let report = super::run(ScenarioName::BootToMainMenu).expect(
+            "a headless-real scenario must resolve the checkout pack regardless of \
+             $POKEEMERALD_PACK",
+        );
+        assert_eq!(report.frames_run, 2);
         assert_eq!(
             report.milestones,
             vec![AppState::Title, AppState::MainMenu(MainMenuItem::NewGame)]

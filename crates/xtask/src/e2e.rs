@@ -44,8 +44,10 @@
 //! extracted pack could pass against an older installed one, and a stale
 //! installed one could fail a checkout that is fine `(test-ratchet)`.
 //! `xtask::extract::run` refuses the resolver on the write side, and
-//! `crate::scenario::run` pins `$POKEEMERALD_PACK` to the same checkout path
-//! for the same reason.
+//! `crate::scenario::run` reaches the same checkout path through
+//! `pokeemerald_rs::App::new_headless_real`'s own owned checkout pin
+//! (`pokeemerald_rs::pack_source::PackSource::Repo`, issue #412) for the
+//! same reason.
 //!
 //! No real window, audio device, or timer wait is touched -- `Platform`'s
 //! null backend no-ops `wait_for_next_frame` (see its docs) -- so this suite

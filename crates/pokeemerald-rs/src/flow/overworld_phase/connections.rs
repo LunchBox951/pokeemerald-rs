@@ -45,8 +45,15 @@ use super::OverworldPhase;
 /// resolver ([`OverworldPhase::connection_pack`]); a *failed* load is not
 /// cached (the no-pack case already fails every frame today, and caching
 /// the failure would pin a session to it).
+///
+/// `source` is the owning [`OverworldPhase`]'s own retained
+/// [`crate::pack_source::PackSource`] (issue #412), so this per-attempt
+/// memoized load honors a headless-real scenario's checkout pin exactly
+/// like every other load [`OverworldPhase`] performs after construction --
+/// never the runtime resolver regardless of `$POKEEMERALD_PACK`.
 pub(super) struct MapConnections<'a> {
     pub(super) pack: &'a OnceCell<assets::pack::AssetPack>,
+    pub(super) source: crate::pack_source::PackSource,
 }
 
 impl MapConnections<'_> {
@@ -55,7 +62,7 @@ impl MapConnections<'_> {
         if let Some(pack) = self.pack.get() {
             return Some(pack);
         }
-        let loaded = assets::AssetPack::load_default().ok()?;
+        let loaded = self.source.load().ok()?;
         // A racing set cannot happen (single-threaded phase); if the cell
         // were somehow filled between the check and here, the existing
         // value wins, which is equally correct.
@@ -265,7 +272,8 @@ impl OverworldPhase {
             self.save2.player_gender,
         );
 
-        let Ok(scene) = overworld::load_room(
+        let Ok(scene) = overworld::load_room_from_source(
+            self.pack_source,
             map,
             self.save2.player_gender.into(),
             &transitioned_event_data,
@@ -409,7 +417,8 @@ impl OverworldPhase {
             self.save2.player_gender,
         );
 
-        let Ok(scene) = overworld::load_room(
+        let Ok(scene) = overworld::load_room_from_source(
+            self.pack_source,
             map,
             self.save2.player_gender.into(),
             &transitioned_event_data,
@@ -547,7 +556,8 @@ impl OverworldPhase {
             self.save2.player_gender,
         );
 
-        let Ok(scene) = overworld::load_room(
+        let Ok(scene) = overworld::load_room_from_source(
+            self.pack_source,
             to_map,
             self.save2.player_gender.into(),
             &transitioned_event_data,

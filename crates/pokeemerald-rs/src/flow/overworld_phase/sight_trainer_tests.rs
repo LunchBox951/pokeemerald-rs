@@ -1146,7 +1146,7 @@ fn a_locked_frame_advances_the_players_walk_and_drops_its_latched_landing() {
 /// docs) so the handshake is pinned without an extracted pack -- built the
 /// exact way the production path builds it since issue #410: no trailing
 /// `{P}`, and the script's `waitbuttonpress` opted into on the dialog
-/// (`NpcDialog::open_default` applies it for the real
+/// (`NpcDialog::open` applies it for the real
 /// `advance_intro_message`).
 #[test]
 fn the_intro_speech_holds_the_battle_until_the_player_dismisses_it() {
@@ -1260,7 +1260,7 @@ fn the_intro_speech_holds_the_battle_until_the_player_dismisses_it() {
 /// test only reaches `advance_intro_message`'s real `!opened` arm one frame
 /// after [`SightApproach::skip_to_open_intro_message`]'s synthetic
 /// shortcut plants the box directly -- so
-/// [`OverworldPhase::advance_intro_message`]'s actual `NpcDialog::open_default`
+/// [`OverworldPhase::advance_intro_message`]'s actual `NpcDialog::open`
 /// call, its `opened` latch, and the `Err` fallback path
 /// (`sight_trainer_approach.rs`'s own module doc comment) had never been
 /// exercised by any test. This one drives the real icon, the real

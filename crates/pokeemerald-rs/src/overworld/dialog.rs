@@ -45,7 +45,7 @@
 //! [`Printer`]/[`TickEvent`] alongside `\l`/`\p` -- [`NpcDialog::tick`]
 //! models it as a second, later gate a message can opt into with
 //! [`NpcDialog::with_waitbuttonpress`] (applied automatically by
-//! [`NpcDialog::from_pack`]/[`NpcDialog::open_default`], the two
+//! [`NpcDialog::from_pack`]/[`NpcDialog::open`], the two
 //! constructors that build a real field NPC's dialog): once
 //! [`TickEvent::Finished`] is reached, the box holds its last frame of text
 //! exactly as printed -- no [`TickEvent::Cleared`], no post-clear reveal
@@ -223,7 +223,7 @@ impl NpcDialog {
     ///
     /// Opts into [`Self::with_waitbuttonpress`] (that method's own doc
     /// comment): this is the constructor real field NPC scripts open
-    /// through ([`Self::open_default`], `crate::flow::overworld_phase`'s own
+    /// through ([`Self::open`], `crate::flow::overworld_phase`'s own
     /// A-press interaction path), and every one of them ends with upstream's
     /// `waitbuttonpress`, not an auto-close.
     ///
@@ -238,20 +238,29 @@ impl NpcDialog {
         Ok(Self::new(sheet, frame, tokens).with_waitbuttonpress())
     }
 
-    /// Load the pack from its default location and open a dialog printing
-    /// `tokens` -- mirrors [`crate::intro::load_default`]. Reads from disk
-    /// on every call, by design (module docs on [`crate::intro::IntroScene`]'s
-    /// identical "owns every byte it renders" shape): a dialog only ever
-    /// opens for the single frame the player presses A facing an NPC, so the
-    /// small extra pack read is not a per-frame cost.
+    /// Load the pack this session's [`crate::pack_source::PackSource`]
+    /// resolves to and open a dialog printing `tokens` -- mirrors
+    /// [`crate::intro::load`]. Reads from disk on every call, by design
+    /// (module docs on [`crate::intro::IntroScene`]'s identical "owns every
+    /// byte it renders" shape): a dialog only ever opens for the single
+    /// frame the player presses A facing an NPC, so the small extra pack
+    /// read is not a per-frame cost.
+    ///
+    /// `source` is the owning [`crate::flow::OverworldPhase`]'s own
+    /// retained source (issue #412), so a headless-real scenario's field
+    /// dialog keeps reading the checkout pack exactly as its title screen
+    /// already did.
     ///
     /// # Errors
     ///
     /// [`NpcDialogError::Pack`] if no pack has been extracted yet, or is
     /// missing the entries [`Self::from_pack`] needs;
     /// [`NpcDialogError::Font`] if the font sheet doesn't decode.
-    pub(crate) fn open_default(tokens: Vec<Token>) -> Result<Self, NpcDialogError> {
-        let pack = AssetPack::load_default()?;
+    pub(crate) fn open(
+        source: crate::pack_source::PackSource,
+        tokens: Vec<Token>,
+    ) -> Result<Self, NpcDialogError> {
+        let pack = source.load()?;
         Self::from_pack(&pack, tokens)
     }
 

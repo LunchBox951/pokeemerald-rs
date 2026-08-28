@@ -910,18 +910,7 @@ impl OverworldScene {
 /// extracted yet; see [`OverworldScene::from_pack`] for the other
 /// (real-pack-only) error cases.
 pub fn load_default_room(event_data: &EventData) -> Result<OverworldScene, OverworldSceneError> {
-    let pack = AssetPack::load_default()?;
-    let header = assets::MapHeaderTable::new().header(DEFAULT_ROOM_MAP_ID)?;
-    let layout = assets::LayoutTable::new().layout(LayoutId(DEFAULT_ROOM_LAYOUT_ID))?;
-    let events = MapEventsTable::new().resolve(DEFAULT_ROOM_MAP_ID)?;
-    OverworldScene::from_pack(
-        &pack,
-        header,
-        layout,
-        PlayerCharacter::Brendan,
-        events,
-        event_data,
-    )
+    load_default_room_from_source(crate::pack_source::PackSource::Runtime, event_data)
 }
 
 /// [`load_default_room`], pinned to the checkout's own extracted pack
@@ -947,7 +936,25 @@ pub fn load_default_room(event_data: &EventData) -> Result<OverworldScene, Overw
 pub fn load_repo_default_room(
     event_data: &EventData,
 ) -> Result<OverworldScene, OverworldSceneError> {
-    let pack = AssetPack::load_repo()?;
+    load_default_room_from_source(crate::pack_source::PackSource::Repo, event_data)
+}
+
+/// [`load_default_room`]/[`load_repo_default_room`]'s shared core (issue
+/// #412): both are thin wrappers over the one [`crate::pack_source::PackSource`]
+/// this crate's construction sites choose between, so a headless-real
+/// scenario's lazily-loaded `Intro` -> `Overworld` transition
+/// ([`crate::flow::OverworldPhase::load`]) can request the checkout pin the
+/// same way its title screen already does, without a third near-duplicate
+/// public entry point.
+///
+/// # Errors
+///
+/// See [`load_default_room`].
+pub(crate) fn load_default_room_from_source(
+    source: crate::pack_source::PackSource,
+    event_data: &EventData,
+) -> Result<OverworldScene, OverworldSceneError> {
+    let pack = source.load()?;
     let header = assets::MapHeaderTable::new().header(DEFAULT_ROOM_MAP_ID)?;
     let layout = assets::LayoutTable::new().layout(LayoutId(DEFAULT_ROOM_LAYOUT_ID))?;
     let events = MapEventsTable::new().resolve(DEFAULT_ROOM_MAP_ID)?;
@@ -997,7 +1004,32 @@ pub fn load_room(
     player: PlayerCharacter,
     event_data: &EventData,
 ) -> Result<OverworldScene, OverworldSceneError> {
-    let pack = AssetPack::load_default()?;
+    load_room_from_source(
+        crate::pack_source::PackSource::Runtime,
+        map_id,
+        player,
+        event_data,
+    )
+}
+
+/// [`load_room`], pinned to whichever [`crate::pack_source::PackSource`]
+/// `source` names instead of always the runtime resolver (issue #412) --
+/// what every [`crate::flow::OverworldPhase`]-owned load reachable after
+/// construction (`continue_saved_game`, a resolved or explicit-coordinate
+/// warp, a map-edge connection crossing) calls with the phase's own
+/// retained source, so none of them can re-resolve a headless-real
+/// scenario's pin away mid-run.
+///
+/// # Errors
+///
+/// See [`load_room`].
+pub(crate) fn load_room_from_source(
+    source: crate::pack_source::PackSource,
+    map_id: assets::MapId,
+    player: PlayerCharacter,
+    event_data: &EventData,
+) -> Result<OverworldScene, OverworldSceneError> {
+    let pack = source.load()?;
     let header = assets::MapHeaderTable::new().header(map_id)?;
     let layout = assets::LayoutTable::new().layout(header.layout)?;
     let events = oldale_town_npc_reposition::resolve_map_events(map_id)?;

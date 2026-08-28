@@ -56,7 +56,7 @@
 //! See [`crate::flow::overworld_phase`]'s `start_menu` module for the gate
 //! that decides when `START` may open one at all.
 
-use assets::pack::{AssetPack, PackError};
+use assets::pack::PackError;
 use engine::text::render::RevealedGlyph;
 use platform::{ButtonState, Buttons};
 use rendering::Framebuffer;
@@ -163,7 +163,7 @@ pub(crate) struct StartMenu {
 
 impl StartMenu {
     /// Build the menu around already-decoded `chrome` -- the shared body of
-    /// [`open_default`] and the test-only [`synthetic_start_menu`], so a
+    /// [`open`] and the test-only [`synthetic_start_menu`], so a
     /// fixture menu's item list and geometry are never a second opinion
     /// (mirrors [`crate::main_menu::MainMenuScene::assemble`]).
     ///
@@ -369,19 +369,26 @@ impl StartMenu {
     }
 }
 
-/// Load the pack from its default location and open a start menu out of it
-/// -- mirrors [`crate::overworld::NpcDialog::open_default`], and reads from
-/// disk on every call for the same reason: a start menu only opens on the
-/// single frame the player presses `START`.
+/// Load the pack this session's [`crate::pack_source::PackSource`] resolves
+/// to and open a start menu out of it -- mirrors
+/// [`crate::overworld::NpcDialog::open`], and reads from disk on every call
+/// for the same reason: a start menu only opens on the single frame the
+/// player presses `START`.
 ///
 /// `cursor` is [`StartMenu::assemble`]'s own seed -- the caller's retained
-/// `sStartMenuCursorPos`.
+/// `sStartMenuCursorPos`. `source` is the owning
+/// [`crate::flow::OverworldPhase`]'s own retained source (issue #412), so a
+/// headless-real scenario's field start menu keeps reading the checkout
+/// pack exactly as its title screen already did.
 ///
 /// # Errors
 ///
 /// See [`StartMenuError`].
-pub(crate) fn open_default(cursor: usize) -> Result<StartMenu, StartMenuError> {
-    let pack = AssetPack::load_default()?;
+pub(crate) fn open(
+    source: crate::pack_source::PackSource,
+    cursor: usize,
+) -> Result<StartMenu, StartMenuError> {
+    let pack = source.load()?;
     Ok(StartMenu::assemble(
         StartMenuChrome::from_pack(&pack)?,
         cursor,
