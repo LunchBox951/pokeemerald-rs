@@ -85,6 +85,8 @@ fn pitched_table_position(key: u8, fine: u8) -> (usize, u8) {
 }
 
 /// Return the square or wave channel's 11-bit frequency-register value.
+/// Key clamping and interpolation match `MidiKeyToCgbFreq`
+/// (`m4a.c:827..853`).
 #[must_use]
 pub fn midi_key_to_cgb_freq_reg(key: u8, fine: u8) -> u16 {
     let (table_key, fine) = pitched_table_position(key, fine);
@@ -97,6 +99,7 @@ pub fn midi_key_to_cgb_freq_reg(key: u8, fine: u8) -> u16 {
 }
 
 /// Return the noise channel's packed `NR43` clock and divisor control.
+/// Key offset and clamping match `MidiKeyToCgbFreq` (`m4a.c:810..825`).
 #[must_use]
 pub fn midi_key_to_noise_control(key: u8) -> u8 {
     let table_key = key

@@ -125,6 +125,8 @@ impl Envelope {
 
     fn start(&mut self) {
         if self.note_off_requested {
+            // `SoundMainRAM` retires `START | STOP` before initializing attack
+            // (`m4a_1.s:177..184`).
             self.lifecycle = Lifecycle::Retired;
             return;
         }
@@ -179,6 +181,8 @@ impl Envelope {
     }
 
     fn pseudo_echo_step(&mut self) {
+        // `SoundMainRAM` keeps the tail only when its byte decrement is
+        // unsigned greater than zero (`subs; bhi`, `m4a_1.s:205..213`).
         if self.echo_length <= 1 {
             self.lifecycle = Lifecycle::Retired;
         } else {
@@ -187,6 +191,8 @@ impl Envelope {
     }
 }
 
+/// DirectSound decay and release use an 8-bit multiplier
+/// (`m4a_1.s:218..243`).
 fn apply_ratio(volume: u8, ratio: u8) -> u8 {
     let scaled = (u16::from(volume) * u16::from(ratio)) >> ENVELOPE_RATIO_BITS;
     u8::try_from(scaled).unwrap_or(u8::MAX)

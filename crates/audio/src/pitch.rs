@@ -7,6 +7,8 @@ const GBA_CPU_FREQUENCY_HZ: u32 = 16_777_216;
 const MAX_INTERPOLATED_KEY: u8 = 178;
 const FINE_SCALE_BITS: u32 = 24;
 
+// `SampleFreqSet` derives the rounded PCM rate and half-clock phase divisor in
+// this order (`m4a.c:400..413`).
 const fn sample_rate(samples_per_frame: u32) -> u32 {
     (LCD_REFRESH_RATE_X_10_000 * samples_per_frame + HZ_SCALE / 2) / HZ_SCALE
 }
@@ -18,6 +20,9 @@ pub const MIXER_RATE: u32 = sample_rate(PCM_SAMPLES_PER_FRAME);
 pub const SAMPLES_PER_FRAME: usize = PCM_SAMPLES_PER_FRAME as usize;
 
 /// Fractional bits in each source-sample phase position.
+///
+/// `SoundMainRAM` shifts and masks this exact 23-bit fraction
+/// (`m4a_1.s:407..418`).
 pub const FRAC_BITS: u32 = 23;
 
 /// One source sample in fixed-point phase units.
@@ -30,6 +35,8 @@ pub const FRAC_MASK: u32 = FRAC_ONE - 1;
 pub const DIV_FREQ: u32 = (GBA_CPU_FREQUENCY_HZ / MIXER_RATE).div_ceil(2);
 
 /// Return the high 32 bits of a 32-by-32-bit unsigned product.
+///
+/// This is the result contract of `umul3232H32` (`m4a_1.s:9..18`).
 #[must_use]
 pub fn umul3232_hi(a: u32, b: u32) -> u32 {
     let product = u64::from(a) * u64::from(b);
@@ -93,6 +100,8 @@ pub fn midi_key_to_freq(wav_freq: u32, key: u8, fine: u8) -> u32 {
     let lower_ratio = scale_ratio(SCALE_TABLE[usize::from(key)]);
     let upper_ratio = scale_ratio(SCALE_TABLE[usize::from(key) + 1]);
     let fine_fraction = u32::from(fine) << FINE_SCALE_BITS;
+    // `MidiKeyToFreq` performs this interpolation in unsigned 32-bit
+    // arithmetic (`m4a.c:23..41`).
     let interpolated_ratio = lower_ratio.wrapping_add(umul3232_hi(
         upper_ratio.wrapping_sub(lower_ratio),
         fine_fraction,
@@ -101,6 +110,9 @@ pub fn midi_key_to_freq(wav_freq: u32, key: u8, fine: u8) -> u32 {
 }
 
 /// Return the wrapping fixed-point source phase step for a frequency.
+///
+/// The 32-bit multiply and phase accumulation wrap in `SoundMainRAM`
+/// (`m4a_1.s:396..418`).
 #[must_use]
 pub fn phase_step(frequency: u32) -> u32 {
     DIV_FREQ.wrapping_mul(frequency)
