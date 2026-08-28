@@ -4,10 +4,50 @@
 //! Unlike the DirectSound envelope ([`crate::envelope`]), which fades a
 //! continuous `0..=255` gain, the four CGB channels share one hardware `s8`
 //! envelope stepping a coarse `0..=15` level. This crate has no GB APU to
-//! delegate that stepping to, so it is reproduced as its own per-render-frame
+//! delegate that stepping to, so it is reproduced as its own whole-frame-step
 //! state machine holding whole-frame step counters rather than the
 //! hardware's 1/64s envelope clock `(no-verbatim)` — the same deliberate,
-//! benign simplification [`crate::psg::Sweep`] documents.
+//! benign simplification [`crate::psg::Sweep`] documents. [`CgbEnvelope::step`]
+//! is one such software iteration; it does not always land one-for-one with a
+//! render frame — see [`CgbEnvelopeCadence`].
+
+/// Mirrors upstream's shared `soundInfo->c15` counter (`m4a.c:941`..`:945`),
+/// which paces a once-per-15-frames correction: the once-per-render-frame
+/// [`CgbEnvelope::step`] alone runs at ~59.73 Hz, visibly slower than
+/// hardware's true 1/64s (~63.71 Hz) envelope rate, so every 15th frame runs
+/// a second iteration to keep up (`m4a.c:1173`..`:1180`, "every 15 frames,
+/// envelope calculation has to be done twice to keep up with the hardware
+/// envelope rate"). `14` single-iteration frames plus `1` double-iteration
+/// frame gives 16 iterations per 15 frames, matching hardware's cadence over
+/// that span.
+///
+/// One cadence is shared by all four CGB channels, driven from a single
+/// per-render-frame call — upstream updates `soundInfo->c15` once per
+/// `CgbSound` call, before its per-channel loop, and every channel reads the
+/// same resulting value as `prevC15` (`m4a.c:941`..`:985`). Callers must
+/// therefore own exactly one instance across the whole CGB channel set (see
+/// [`crate::mixer::Mixer`]'s `cgb_envelope_cadence` field), not one per
+/// voice — a per-voice clock would desync the correction frame between
+/// channels started at different times, which [`CgbEnvelope::step_frame`]'s
+/// contract does not allow for.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct CgbEnvelopeCadence {
+    /// Upstream's `soundInfo->c15`, `0..=14`.
+    c15: u8,
+}
+
+impl CgbEnvelopeCadence {
+    /// Advance by one render frame, returning whether this frame gets the
+    /// extra iteration (`Self`'s doc). `m4a.c:941`..`:945`, `:970`..`:980`.
+    pub(crate) fn advance_frame(&mut self) -> bool {
+        if self.c15 != 0 {
+            self.c15 -= 1;
+        } else {
+            self.c15 = 14;
+        }
+        self.c15 == 0
+    }
+}
 
 /// Attack/decay/sustain/release parameters from a CGB instrument's
 /// `ToneData` (`m4a_internal.h:57`). `sustain` is a `0..=15` fraction of the
@@ -197,6 +237,24 @@ impl CgbEnvelope {
             Phase::Attack => self.attack_step(),
             Phase::Decay => self.decay_step(),
             Phase::Sustain => self.sustain_step(),
+        }
+    }
+
+    /// Advance by one render frame, honoring [`CgbEnvelopeCadence`]'s extra
+    /// iteration (`envelope_step_complete`'s `prevC15 == 0` re-entry into
+    /// `envelope_step_repeat`, `m4a.c:1176`..`:1180`).
+    ///
+    /// Skipped whenever the first iteration this call already entered the
+    /// pseudo-echo tail or retired the voice: those transitions, and an
+    /// already-ongoing tail, all reach upstream via a `goto` that jumps past
+    /// `envelope_step_complete`'s doubling check entirely
+    /// (`m4a.c:1048`..`:1059`, `:1087`..`:1103`, `:1125`..`:1129`). Every
+    /// other transition — note-on/note-off held frames included — falls
+    /// through to that check normally and can be doubled.
+    pub(crate) fn step_frame(&mut self, extra_iteration: bool) {
+        self.step();
+        if extra_iteration && self.active && !self.echo {
+            self.step();
         }
     }
 
@@ -833,3 +891,10 @@ mod tests {
         assert!(centred > panned);
     }
 }
+
+/// [`CgbEnvelopeCadence`]/[`CgbEnvelope::step_frame`]'s own tests, kept out
+/// of [`tests`] for the same per-file-size reason `mixer.rs` splits off
+/// `mixer_priority.rs`/`mixer_mixing.rs` (issue #453).
+#[cfg(test)]
+#[path = "cgb_envelope_cadence.rs"]
+mod cadence_tests;
