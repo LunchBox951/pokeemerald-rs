@@ -8,9 +8,9 @@ use super::*;
 #[test]
 fn cadence_doubles_on_exactly_the_fifteenth_call_of_every_cycle() {
     // `c15` counts down `14, 13, .., 1, 0` and wraps (`m4a.c:941`..`:945`);
-    // the extra iteration fires only on the call the result lands on `0`
-    // (`m4a.c:970`..`:980`) -- the 15th call of each 15-call cycle, never
-    // any other.
+    // the extra iteration fires only on the call whose `prevC15` (assigned
+    // from that result, `m4a.c:984`) is `0` (`m4a.c:1177`..`:1180`) -- the
+    // 15th call of each 15-call cycle, never any other.
     let mut cadence = CgbEnvelopeCadence::default();
     let results: Vec<bool> = (1..=30).map(|_| cadence.advance_frame()).collect();
     let expected: Vec<bool> = (1..=30).map(|call| call % 15 == 0).collect();

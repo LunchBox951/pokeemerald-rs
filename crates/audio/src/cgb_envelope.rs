@@ -38,7 +38,8 @@ pub(crate) struct CgbEnvelopeCadence {
 
 impl CgbEnvelopeCadence {
     /// Advance by one render frame, returning whether this frame gets the
-    /// extra iteration (`Self`'s doc). `m4a.c:941`..`:945`, `:970`..`:980`.
+    /// extra iteration (`Self`'s doc). `m4a.c:941`..`:945`, `:984`,
+    /// `:1177`..`:1180`.
     pub(crate) fn advance_frame(&mut self) -> bool {
         if self.c15 != 0 {
             self.c15 -= 1;
