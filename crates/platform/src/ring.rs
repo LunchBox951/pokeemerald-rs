@@ -11,8 +11,8 @@
 //!
 //! [`Consumer::fill`] is the hot path every consumer of a ring buffer is
 //! built on — the real device callback, [`crate::resample::Resampler`], and
-//! the null backend used in tests all drive it (directly, or one frame at a
-//! time from the resampler). It takes the queue lock exactly once per call,
+//! the null backend used in tests all drive it, each in one bulk call per
+//! callback. It takes the queue lock exactly once per call,
 //! bulk-drains whatever is queued into the requested slice, and pads any
 //! shortfall with silence, adding that shortfall to the underrun counter in a
 //! single consolidated update. That keeps the promised "short-held single
