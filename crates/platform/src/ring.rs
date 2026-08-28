@@ -1,5 +1,6 @@
-//! A bounded, underrun-safe sample ring buffer: the seam between the
-//! `audio` crate's M4A engine, which renders PCM on its own thread, and
+//! A bounded, underrun-safe sample ring buffer: the seam between a producer
+//! of rendered PCM — in practice the integration crate's frame-driven music
+//! player, pushing the `audio` crate's M4A output — and
 //! [`crate::audio::AudioOutput`], which drains it once per audio device
 //! callback.
 //!
@@ -33,7 +34,7 @@ struct Shared {
 
 /// Lock `queue`, recovering from poisoning rather than propagating a panic.
 ///
-/// A panic on one side (e.g. a bug in the `audio` crate's mixer)
+/// A panic on the producer side (e.g. a bug in the mixer feeding it)
 /// should not also take down the audio device callback thread; the worst a
 /// poisoned lock should cost here is a torn-looking read, not a crash.
 fn lock(queue: &Mutex<VecDeque<f32>>) -> std::sync::MutexGuard<'_, VecDeque<f32>> {
@@ -63,9 +64,9 @@ pub fn ring_buffer(capacity: usize) -> (Producer, Consumer) {
 /// The write half of a sample ring buffer.
 ///
 /// Cheap to clone (all clones share the same underlying buffer) and
-/// `Send + Sync`, which is the point: the `audio` crate's mixer pushes
-/// rendered PCM here from its own thread while [`Consumer`] drains it from
-/// the audio device callback thread.
+/// `Send + Sync`, which is the point: a producer may push rendered PCM here
+/// from any thread while [`Consumer`] drains it from the audio device
+/// callback thread.
 #[derive(Clone)]
 pub struct Producer {
     shared: Arc<Shared>,

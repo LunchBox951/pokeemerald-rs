@@ -20,8 +20,8 @@
 //!   read button state, present a frame, pace to the next one).
 //! - [`audio::AudioOutput`] — the audio output device (or a headless null
 //!   stand-in): owns at most one `cpal` output stream and exposes a
-//!   [`ring::Producer`] handle the `audio` crate's M4A engine fills from
-//!   its own thread.
+//!   [`ring::Producer`] handle its caller fills with PCM rendered by the
+//!   `audio` crate's M4A engine.
 //!
 //! CI is headless, so nothing here opens a real window or a real `cpal`
 //! stream in a test; only [`window::Platform::new`] and

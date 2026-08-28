@@ -1,10 +1,11 @@
 //! Audio output device: opens the default output device — or a
 //! headless-friendly null backend for tests/CI, since CI runners have no
 //! audio device — and streams PCM pulled from a [`crate::ring`] ring buffer
-//! that the `audio` crate's M4A sequence engine fills from its own thread.
+//! that its caller fills with the `audio` crate's rendered M4A output (in
+//! practice the integration crate's frame-driven music player).
 //!
-//! `cpal` is approved for exactly this crate and exactly this use: open
-//! the default output device, one stream, a ring-buffer callback. No
+//! `cpal` is owner-approved for exactly this crate and exactly this use:
+//! open the default output device, one stream, a ring-buffer callback. No
 //! decoding, no effects — see [`Resampler`] below for the one deliberate
 //! exception (bridging a sample-rate mismatch is format adaptation, not an
 //! effect).
@@ -15,8 +16,7 @@
 //!   samples (cpal's most portable format, and natural headroom for
 //!   downstream mixing). If the device's negotiated stream format is `i16`
 //!   instead (common on Linux/ALSA), the device callback converts on the
-//!   way out; the ring buffer and the `audio` crate's producer API never
-//!   need to know.
+//!   way out; the ring buffer and its producers never need to know.
 //! - **Sample rate**: [`AudioOutput::M4A_MIXER_RATE`] (13379 Hz, the rate
 //!   upstream's M4A engine actually renders PCM at — see the const's docs) is
 //!   always the ring buffer's nominal rate; the `audio` crate renders at this
@@ -84,8 +84,7 @@ enum Backend {
 }
 
 /// An owned audio-output subsystem: opens (at most) one output stream and
-/// exposes a [`Producer`] handle the `audio` crate fills from another
-/// thread.
+/// exposes a [`Producer`] handle its caller fills with rendered PCM.
 ///
 /// No global state: every [`AudioOutput`] owns its own device/stream (or
 /// null stand-in) and ring buffer. Dropping it tears the backend down
@@ -268,8 +267,8 @@ impl AudioOutput {
         self.channels
     }
 
-    /// A cloneable producer handle for the `audio` crate to fill from
-    /// another thread. See [`crate::ring::Producer`].
+    /// A cloneable producer handle for filling the ring buffer with
+    /// rendered PCM. See [`crate::ring::Producer`].
     #[must_use]
     pub fn producer(&self) -> Producer {
         self.producer.clone()
