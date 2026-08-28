@@ -1,104 +1,108 @@
-//! Pitch math for the four CGB PSG channels: MIDI key → hardware frequency
-//! register (square/wave) or noise control byte.
-//!
-//! Behavioural port of `MidiKeyToCgbFreq` (`src/m4a.c:810`). Square and wave
-//! channels share one derivation (an 11-bit `NRx3`/`NRx4` frequency register,
-//! `0..=2047`); the noise channel instead selects a whole `NR43`-style
-//! control byte (clock shift, width mode, and divisor ratio already packed
-//! together) straight out of a lookup table. The tables are reproduced
-//! verbatim as data `(ported)`; the surrounding logic is re-implemented
-//! `(no-verbatim)`.
+//! CGB square, wave, and noise channel pitch lookup.
 
-/// `gCgbScaleTable` (`m4a_tables.c:118`): 132 entries (keys `0..=131`, one
-/// past the last playable key so every lookup has a neighbour to interpolate
-/// toward), each a `(octave-shift << 4) | note-index` byte indexing
-/// [`CGB_FREQ_TABLE`].
+const PITCHED_KEY_OFFSET: u8 = 36;
+const MAX_PITCHED_TABLE_KEY: u8 = 130;
+const NOISE_KEY_OFFSET: u8 = 21;
+const MAX_NOISE_TABLE_KEY: u8 = 59;
+const FINE_SCALE_BITS: u32 = 8;
+const FREQUENCY_REGISTER_LIMIT: i32 = 2048;
+const FREQUENCY_REGISTER_MAX: i32 = FREQUENCY_REGISTER_LIMIT - 1;
+const NOISE_CLOCK_SHIFT_BITS: u32 = 4;
+
+#[derive(Clone, Copy)]
+struct PitchScale {
+    semitone: usize,
+    right_shift: u32,
+}
+
+const fn scale(semitone: usize, right_shift: u32) -> PitchScale {
+    PitchScale {
+        semitone,
+        right_shift,
+    }
+}
+
+/// Semitone and octave shifts for the 132 CGB pitch-table keys.
 #[rustfmt::skip]
-const CGB_SCALE_TABLE: [u8; 132] = [
-    0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B,
-    0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1A, 0x1B,
-    0x20, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27, 0x28, 0x29, 0x2A, 0x2B,
-    0x30, 0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x38, 0x39, 0x3A, 0x3B,
-    0x40, 0x41, 0x42, 0x43, 0x44, 0x45, 0x46, 0x47, 0x48, 0x49, 0x4A, 0x4B,
-    0x50, 0x51, 0x52, 0x53, 0x54, 0x55, 0x56, 0x57, 0x58, 0x59, 0x5A, 0x5B,
-    0x60, 0x61, 0x62, 0x63, 0x64, 0x65, 0x66, 0x67, 0x68, 0x69, 0x6A, 0x6B,
-    0x70, 0x71, 0x72, 0x73, 0x74, 0x75, 0x76, 0x77, 0x78, 0x79, 0x7A, 0x7B,
-    0x80, 0x81, 0x82, 0x83, 0x84, 0x85, 0x86, 0x87, 0x88, 0x89, 0x8A, 0x8B,
-    0x90, 0x91, 0x92, 0x93, 0x94, 0x95, 0x96, 0x97, 0x98, 0x99, 0x9A, 0x9B,
-    0xA0, 0xA1, 0xA2, 0xA3, 0xA4, 0xA5, 0xA6, 0xA7, 0xA8, 0xA9, 0xAA, 0xAB,
+const CGB_SCALE_TABLE: [PitchScale; 132] = [
+    scale(0, 0), scale(1, 0), scale(2, 0), scale(3, 0), scale(4, 0), scale(5, 0), scale(6, 0), scale(7, 0), scale(8, 0), scale(9, 0), scale(10, 0), scale(11, 0),
+    scale(0, 1), scale(1, 1), scale(2, 1), scale(3, 1), scale(4, 1), scale(5, 1), scale(6, 1), scale(7, 1), scale(8, 1), scale(9, 1), scale(10, 1), scale(11, 1),
+    scale(0, 2), scale(1, 2), scale(2, 2), scale(3, 2), scale(4, 2), scale(5, 2), scale(6, 2), scale(7, 2), scale(8, 2), scale(9, 2), scale(10, 2), scale(11, 2),
+    scale(0, 3), scale(1, 3), scale(2, 3), scale(3, 3), scale(4, 3), scale(5, 3), scale(6, 3), scale(7, 3), scale(8, 3), scale(9, 3), scale(10, 3), scale(11, 3),
+    scale(0, 4), scale(1, 4), scale(2, 4), scale(3, 4), scale(4, 4), scale(5, 4), scale(6, 4), scale(7, 4), scale(8, 4), scale(9, 4), scale(10, 4), scale(11, 4),
+    scale(0, 5), scale(1, 5), scale(2, 5), scale(3, 5), scale(4, 5), scale(5, 5), scale(6, 5), scale(7, 5), scale(8, 5), scale(9, 5), scale(10, 5), scale(11, 5),
+    scale(0, 6), scale(1, 6), scale(2, 6), scale(3, 6), scale(4, 6), scale(5, 6), scale(6, 6), scale(7, 6), scale(8, 6), scale(9, 6), scale(10, 6), scale(11, 6),
+    scale(0, 7), scale(1, 7), scale(2, 7), scale(3, 7), scale(4, 7), scale(5, 7), scale(6, 7), scale(7, 7), scale(8, 7), scale(9, 7), scale(10, 7), scale(11, 7),
+    scale(0, 8), scale(1, 8), scale(2, 8), scale(3, 8), scale(4, 8), scale(5, 8), scale(6, 8), scale(7, 8), scale(8, 8), scale(9, 8), scale(10, 8), scale(11, 8),
+    scale(0, 9), scale(1, 9), scale(2, 9), scale(3, 9), scale(4, 9), scale(5, 9), scale(6, 9), scale(7, 9), scale(8, 9), scale(9, 9), scale(10, 9), scale(11, 9),
+    scale(0, 10), scale(1, 10), scale(2, 10), scale(3, 10), scale(4, 10), scale(5, 10), scale(6, 10), scale(7, 10), scale(8, 10), scale(9, 10), scale(10, 10), scale(11, 10),
 ];
 
-/// `gCgbFreqTable` (`m4a_tables.c:133`): one octave of register-value deltas
-/// from `2048`, negative because every entry sits below the register's
-/// centre; the higher octaves (reached by right-shifting toward `0`) hold
-/// smaller-magnitude, so higher-pitch, deltas.
+/// One octave of frequency-register deltas from [`FREQUENCY_REGISTER_LIMIT`].
 const CGB_FREQ_TABLE: [i32; 12] = [
     -2004, -1891, -1785, -1685, -1591, -1501, -1417, -1337, -1262, -1192, -1125, -1062,
 ];
 
-/// `gNoiseTable` (`m4a_tables.c:149`): 60 entries (clamped key `0..=59`),
-/// each a ready-to-use `NR43`-style control byte (clock-shift, width-mode,
-/// and divisor-ratio bits already packed together).
+const fn noise_control(clock_shift: u8, divisor_code: u8) -> u8 {
+    (clock_shift << NOISE_CLOCK_SHIFT_BITS) | divisor_code
+}
+
+/// Packed `NR43` clock-shift and divisor codes for the 60 noise-table keys.
 #[rustfmt::skip]
 const NOISE_TABLE: [u8; 60] = [
-    0xD7, 0xD6, 0xD5, 0xD4,
-    0xC7, 0xC6, 0xC5, 0xC4,
-    0xB7, 0xB6, 0xB5, 0xB4,
-    0xA7, 0xA6, 0xA5, 0xA4,
-    0x97, 0x96, 0x95, 0x94,
-    0x87, 0x86, 0x85, 0x84,
-    0x77, 0x76, 0x75, 0x74,
-    0x67, 0x66, 0x65, 0x64,
-    0x57, 0x56, 0x55, 0x54,
-    0x47, 0x46, 0x45, 0x44,
-    0x37, 0x36, 0x35, 0x34,
-    0x27, 0x26, 0x25, 0x24,
-    0x17, 0x16, 0x15, 0x14,
-    0x07, 0x06, 0x05, 0x04,
-    0x03, 0x02, 0x01, 0x00,
+    noise_control(13, 7), noise_control(13, 6), noise_control(13, 5), noise_control(13, 4),
+    noise_control(12, 7), noise_control(12, 6), noise_control(12, 5), noise_control(12, 4),
+    noise_control(11, 7), noise_control(11, 6), noise_control(11, 5), noise_control(11, 4),
+    noise_control(10, 7), noise_control(10, 6), noise_control(10, 5), noise_control(10, 4),
+    noise_control(9, 7), noise_control(9, 6), noise_control(9, 5), noise_control(9, 4),
+    noise_control(8, 7), noise_control(8, 6), noise_control(8, 5), noise_control(8, 4),
+    noise_control(7, 7), noise_control(7, 6), noise_control(7, 5), noise_control(7, 4),
+    noise_control(6, 7), noise_control(6, 6), noise_control(6, 5), noise_control(6, 4),
+    noise_control(5, 7), noise_control(5, 6), noise_control(5, 5), noise_control(5, 4),
+    noise_control(4, 7), noise_control(4, 6), noise_control(4, 5), noise_control(4, 4),
+    noise_control(3, 7), noise_control(3, 6), noise_control(3, 5), noise_control(3, 4),
+    noise_control(2, 7), noise_control(2, 6), noise_control(2, 5), noise_control(2, 4),
+    noise_control(1, 7), noise_control(1, 6), noise_control(1, 5), noise_control(1, 4),
+    noise_control(0, 7), noise_control(0, 6), noise_control(0, 5), noise_control(0, 4),
+    noise_control(0, 3), noise_control(0, 2), noise_control(0, 1), noise_control(0, 0),
 ];
 
-/// Resolve a `CGB_SCALE_TABLE` byte into its `CGB_FREQ_TABLE` ratio: the low
-/// nibble picks the octave's base delta, the high nibble is a right
-/// (arithmetic) shift that selects the octave.
-fn cgb_scale_ratio(scale: u8) -> i32 {
-    CGB_FREQ_TABLE[(scale & 0x0F) as usize] >> (scale >> 4)
+fn cgb_scale_ratio(scale: PitchScale) -> i32 {
+    CGB_FREQ_TABLE[scale.semitone] >> scale.right_shift
 }
 
-/// The 11-bit `NRx3`/`NRx4` frequency register for a square or wave channel
-/// played at MIDI `key` with 8-bit `fine` interpolation between semitones.
-///
-/// Behavioural port of `MidiKeyToCgbFreq`'s non-noise branch (`m4a.c:827`).
+fn pitched_table_position(key: u8, fine: u8) -> (usize, u8) {
+    if key < PITCHED_KEY_OFFSET {
+        (0, 0)
+    } else {
+        let table_key = key - PITCHED_KEY_OFFSET;
+        if table_key > MAX_PITCHED_TABLE_KEY {
+            (usize::from(MAX_PITCHED_TABLE_KEY), u8::MAX)
+        } else {
+            (usize::from(table_key), fine)
+        }
+    }
+}
+
+/// Return the square or wave channel's 11-bit frequency-register value.
 #[must_use]
 pub fn midi_key_to_cgb_freq_reg(key: u8, fine: u8) -> u16 {
-    let (key, fine) = if key <= 35 {
-        (0u8, 0u8)
-    } else {
-        let shifted = key - 36;
-        if shifted > 130 {
-            (130u8, 255u8)
-        } else {
-            (shifted, fine)
-        }
-    };
-
-    let val1 = cgb_scale_ratio(CGB_SCALE_TABLE[key as usize]);
-    let val2 = cgb_scale_ratio(CGB_SCALE_TABLE[key as usize + 1]);
-    let interp = val1 + ((i32::from(fine) * (val2 - val1)) >> 8);
-    let reg = interp + 2048;
-    // The register is 11 bits wide on real hardware; clamp defensively so a
-    // future caller can never index a table with an out-of-range value.
-    u16::try_from(reg.clamp(0, 0x7FF)).unwrap_or(0)
+    let (table_key, fine) = pitched_table_position(key, fine);
+    let lower_delta = cgb_scale_ratio(CGB_SCALE_TABLE[table_key]);
+    let upper_delta = cgb_scale_ratio(CGB_SCALE_TABLE[table_key + 1]);
+    let interpolated_delta =
+        lower_delta + ((i32::from(fine) * (upper_delta - lower_delta)) >> FINE_SCALE_BITS);
+    let register = FREQUENCY_REGISTER_LIMIT + interpolated_delta;
+    u16::try_from(register.clamp(0, FREQUENCY_REGISTER_MAX)).unwrap_or(0)
 }
 
-/// The `NR43`-style noise control byte for the noise channel played at MIDI
-/// `key` (fine adjustment is not used for noise, matching upstream).
-///
-/// Behavioural port of `MidiKeyToCgbFreq`'s noise branch (`m4a.c:812`).
+/// Return the noise channel's packed `NR43` clock and divisor control.
 #[must_use]
 pub fn midi_key_to_noise_control(key: u8) -> u8 {
-    let index = if key <= 20 { 0 } else { (key - 21).min(59) };
-    NOISE_TABLE[index as usize]
+    let table_key = key
+        .saturating_sub(NOISE_KEY_OFFSET)
+        .min(MAX_NOISE_TABLE_KEY);
+    NOISE_TABLE[usize::from(table_key)]
 }
 
 #[cfg(test)]
@@ -107,16 +111,13 @@ mod tests {
 
     #[test]
     fn freq_reg_is_octave_periodic() {
-        // A key one octave (12 semitones) up must halve the register's
-        // distance below 2048 (an arithmetic right shift by one octave),
-        // matching MidiKeyToFreq's analogous octave doubling.
         let base = midi_key_to_cgb_freq_reg(60, 0);
         let up = midi_key_to_cgb_freq_reg(72, 0);
         assert!(
             up > base,
             "higher key must raise the register ({up} vs {base})"
         );
-        assert!(up <= 0x7FF);
+        assert!(i32::from(up) <= FREQUENCY_REGISTER_MAX);
     }
 
     #[test]
