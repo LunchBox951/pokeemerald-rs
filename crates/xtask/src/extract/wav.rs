@@ -17,6 +17,15 @@
 //!   converted to signed 8-bit PCM with wav2agb's floor-and-clamp operation
 //!   (`wav_file.cpp:235-297`, `converter.cpp:56-92`).
 //!
+//! `WavSample::data` keeps the logical sample count written to the compiled
+//! header. wav2agb applies `agbl` to that header word but writes the binary
+//! payload through the unoverridden sampler end and then pads to four bytes
+//! (`converter.cpp:77-92`, `:399-426`). Bytes past `agbl` and alignment padding
+//! are omitted: a consumer wraps looped reads to `loop_start` or extends a
+//! one-shot with silence. The unused assembly-output path's extra guard sample
+//! serves that same boundary read and is likewise not logical waveform data
+//! (`converter.cpp:56-75`, `:452-457`).
+//!
 //! Missing required chunks, unsupported fields, partial records, misaligned
 //! sample data, and out-of-range loop metadata fail closed.
 
