@@ -8,41 +8,12 @@ use super::{
     CLEAR_BODY, EFFECT_ATTACK_DOWN, EFFECT_DEFENSE_DOWN, HYPER_CUTTER, KEEN_EYE,
     STAT_CHANGE_EFFECTS, WHITE_SMOKE,
 };
-use crate::damage::BattleRng;
 use crate::dex::Dex;
 use crate::error::BattleError;
 use crate::pokemon::{BattlePokemon, Ivs};
+use crate::script_rng::SequenceRng;
 use crate::stat_stage::StatStage;
 use assets::{MoveEffect, MoveId, MoveTarget, SpeciesId};
-
-/// A `BattleRng` fed from a fixed sequence, for pinning exact draw
-/// order/count.
-struct SequenceRng {
-    values: Vec<u16>,
-    index: usize,
-}
-impl SequenceRng {
-    fn new(values: impl IntoIterator<Item = u16>) -> Self {
-        Self {
-            values: values.into_iter().collect(),
-            index: 0,
-        }
-    }
-    fn draws(&self) -> usize {
-        self.index
-    }
-}
-impl BattleRng for SequenceRng {
-    fn next_u16(&mut self) -> u16 {
-        let v = self
-            .values
-            .get(self.index)
-            .copied()
-            .expect("SequenceRng exhausted");
-        self.index += 1;
-        v
-    }
-}
 
 const MAX_IVS: Ivs = Ivs {
     hp: 31,
