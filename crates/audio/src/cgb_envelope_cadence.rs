@@ -152,11 +152,11 @@ fn extra_iteration_is_skipped_while_already_in_the_pseudo_echo_tail() {
 fn extra_iteration_is_skipped_the_frame_the_voice_retires() {
     // A `release == 0` note-off with no echo floor retires outright via
     // `oscillator_off` (`m4a.c:1053`), a goto that -- like the pseudo-echo
-    // entry above -- bypasses the doubling check. `step()` already
-    // early-returns for an inactive envelope regardless of this gate (see
-    // `step_frame`'s body), so this test pins the resulting state -- an
-    // already-dead envelope neither revives nor mis-steps -- rather than
-    // discriminating the `self.active` check itself.
+    // entry above -- bypasses the doubling check. `step()`'s `Phase::Retired`
+    // arm is already a no-op regardless of this gate (see `step_frame`'s
+    // body), so this test pins the resulting state -- an already-dead
+    // envelope neither revives nor mis-steps -- rather than discriminating
+    // the `Phase::Retired` check itself.
     let adsr = CgbAdsr {
         attack: 0,
         decay: 0,
