@@ -47,11 +47,10 @@ const PLAYER_PALETTE_BANK: u8 = 0;
 const RAISED_ELEVATIONS: [usize; 5] = [4, 6, 8, 10, 12];
 const FRONTMOST_ELEVATIONS: [usize; 2] = [13, 14];
 
-/// Emerald's `UpdateObjectEventElevationAndPriority` also selects a
-/// subsprite table from the retained elevation. Its 16x32 tables contain one
-/// full-size subsprite at the same priority, so one OAM entry is equivalent.
-/// The multi-piece tables belong to the separate long-grass field effect
-/// (`src/event_object_movement.c:7690-7746`).
+/// Emerald's elevation map selects one-piece 16x32 subsprite tables. Elevations
+/// 13 and 14 select empty table 0, whose sprite-buffer fallback copies the plain
+/// OAM entry instead. The multi-piece tables belong to the separate long-grass
+/// field effect (`src/event_object_movement.c:7690-7705`).
 const ELEVATION_TO_PRIORITY: [u8; 16] = {
     let mut priorities = [PLAYER_OBJ_PRIORITY; 16];
     let mut index = 0;
