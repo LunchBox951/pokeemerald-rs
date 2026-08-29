@@ -116,8 +116,6 @@ pub enum PackWriteError {
     DuplicateId(String),
     /// An id is empty or cannot fit in the directory's `u16` length field.
     InvalidId(String),
-    /// The asset count cannot fit in the header's `u32` entry-count field.
-    TooManyEntries(usize),
 }
 
 impl fmt::Display for PackWriteError {
@@ -125,17 +123,14 @@ impl fmt::Display for PackWriteError {
         match self {
             Self::DuplicateId(id) => write!(f, "duplicate asset id `{id}`"),
             Self::InvalidId(id) => write!(f, "invalid asset id `{id}` (empty or too long)"),
-            Self::TooManyEntries(count) => {
-                write!(f, "asset count {count} exceeds the pack format's u32 limit")
-            }
         }
     }
 }
 
 impl std::error::Error for PackWriteError {}
 
-fn entry_count_field(entry_count: usize) -> Result<u32, PackWriteError> {
-    u32::try_from(entry_count).map_err(|_| PackWriteError::TooManyEntries(entry_count))
+fn entry_count_field(entry_count: usize) -> u32 {
+    u32::try_from(entry_count).expect("pack entry count exceeds u32::MAX")
 }
 
 /// Collects assets and serializes a deterministic pack.
@@ -168,8 +163,11 @@ impl PackWriter {
     ///
     /// [`PackWriteError::DuplicateId`] if two entries share an id;
     /// [`PackWriteError::InvalidId`] if an id is empty or exceeds
-    /// `u16::MAX` bytes; [`PackWriteError::TooManyEntries`] if the asset count
-    /// exceeds `u32::MAX`.
+    /// `u16::MAX` bytes.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the asset count exceeds the header's `u32` entry-count field.
     pub fn finish(mut self) -> Result<Vec<u8>, PackWriteError> {
         self.entries.sort_by(|a, b| a.id.cmp(&b.id));
 
@@ -187,7 +185,7 @@ impl PackWriter {
         let directory_size: usize = self.entries.iter().map(PackEntry::directory_size).sum();
         let first_payload_offset = PACK_HEADER_SIZE + directory_size;
         let payload_size: usize = self.entries.iter().map(|entry| entry.payload.len()).sum();
-        let entry_count = entry_count_field(self.entries.len())?;
+        let entry_count = entry_count_field(self.entries.len());
 
         let mut output = Vec::with_capacity(first_payload_offset + payload_size);
         output.extend_from_slice(&MAGIC);
@@ -307,15 +305,12 @@ mod tests {
     }
 
     #[test]
-    fn unrepresentable_entry_count_is_rejected() {
+    fn unrepresentable_entry_count_panics_before_serialization() {
         let largest_entry_count = usize::try_from(u32::MAX).unwrap();
-        assert_eq!(entry_count_field(largest_entry_count), Ok(u32::MAX));
+        assert_eq!(entry_count_field(largest_entry_count), u32::MAX);
 
         if let Some(unrepresentable) = largest_entry_count.checked_add(1) {
-            assert_eq!(
-                entry_count_field(unrepresentable),
-                Err(PackWriteError::TooManyEntries(unrepresentable))
-            );
+            assert!(std::panic::catch_unwind(|| entry_count_field(unrepresentable)).is_err());
         }
     }
 
