@@ -1,46 +1,64 @@
-//! [`decode`]/[`WavSample`] fixture tests, split out of `wav.rs` itself
-//! to keep that file under this crate's ~600-line-per-file guideline
-//! (`oop-boundaries`) -- mirrors `crates::assets::audio::song`'s own
-//! `mod tests;` split.
+#![allow(
+    clippy::cast_possible_truncation,
+    reason = "hand-built WAV fixture lengths fit their u32 fields"
+)]
 
-// Every length cast below narrows a hand-built in-memory fixture's byte
-// count (always a handful of bytes) into the WAV chunk-length field's `u32`
-// -- provably in range, so the truncation lint would only add noise here.
-#![allow(clippy::cast_possible_truncation)]
+use std::mem::size_of;
 
 use super::{decode, SampleFormat, WavError};
 
-/// Build a minimal well-formed mono WAV file's bytes. `extra_chunks` is
-/// inserted between `fmt ` and `data` (e.g. `smpl`/`agbp`/`agbl`).
-fn build_wav(
-    format_tag: u16,
+const FIXTURE_MONO_CHANNEL_COUNT: u16 = 1;
+const FIXTURE_FMT_CHUNK_SIZE: usize = 16;
+const FIXTURE_SMPL_HEADER_SIZE: usize = 36;
+const FIXTURE_SMPL_LOOP_RECORD_SIZE: usize = 24;
+const FIXTURE_SMPL_MIDI_UNITY_NOTE_OFFSET: usize = 12;
+const FIXTURE_SMPL_MIDI_PITCH_FRACTION_OFFSET: usize = 16;
+const FIXTURE_SMPL_LOOP_COUNT_OFFSET: usize = 28;
+const FIXTURE_SMPL_LOOP_TYPE_OFFSET: usize = 40;
+const FIXTURE_SMPL_LOOP_START_OFFSET: usize = 44;
+const FIXTURE_SMPL_LOOP_END_OFFSET: usize = 48;
+const FIXTURE_FORWARD_LOOP_TYPE: u32 = 0;
+
+#[derive(Clone, Copy)]
+struct WavFormat {
+    tag: u16,
     block_align: u16,
     bits_per_sample: u16,
-    sample_rate: u32,
-    extra_chunks: &[(&[u8; 4], &[u8])],
-    data: &[u8],
-) -> Vec<u8> {
-    let mut fmt_body = Vec::new();
-    fmt_body.extend_from_slice(&format_tag.to_le_bytes());
-    fmt_body.extend_from_slice(&1u16.to_le_bytes()); // mono
-    fmt_body.extend_from_slice(&sample_rate.to_le_bytes());
-    let byte_rate = sample_rate * u32::from(block_align);
-    fmt_body.extend_from_slice(&byte_rate.to_le_bytes());
-    fmt_body.extend_from_slice(&block_align.to_le_bytes());
-    fmt_body.extend_from_slice(&bits_per_sample.to_le_bytes());
+}
 
-    let mut chunks = Vec::new();
-    chunks.push((*b"fmt ", fmt_body));
-    for (id, body) in extra_chunks {
-        chunks.push((**id, body.to_vec()));
-    }
-    chunks.push((*b"data", data.to_vec()));
+const PCM_U8: WavFormat = WavFormat {
+    tag: 1,
+    block_align: 1,
+    bits_per_sample: 8,
+};
+const PCM_S16: WavFormat = WavFormat {
+    tag: 1,
+    block_align: 2,
+    bits_per_sample: 16,
+};
+const IEEE_FLOAT_F32: WavFormat = WavFormat {
+    tag: 3,
+    block_align: 4,
+    bits_per_sample: 32,
+};
 
+fn fmt_chunk(format: WavFormat, channel_count: u16, sample_rate: u32) -> Vec<u8> {
+    let mut body = Vec::new();
+    body.extend_from_slice(&format.tag.to_le_bytes());
+    body.extend_from_slice(&channel_count.to_le_bytes());
+    body.extend_from_slice(&sample_rate.to_le_bytes());
+    let byte_rate = sample_rate * u32::from(format.block_align);
+    body.extend_from_slice(&byte_rate.to_le_bytes());
+    body.extend_from_slice(&format.block_align.to_le_bytes());
+    body.extend_from_slice(&format.bits_per_sample.to_le_bytes());
+    body
+}
+
+fn build_riff(chunks: &[([u8; 4], Vec<u8>)]) -> Vec<u8> {
     let mut riff_body = Vec::new();
     riff_body.extend_from_slice(b"WAVE");
-    for (id, body) in &chunks {
+    for (id, body) in chunks {
         riff_body.extend_from_slice(id);
-        #[allow(clippy::cast_possible_truncation)]
         riff_body.extend_from_slice(&(body.len() as u32).to_le_bytes());
         riff_body.extend_from_slice(body);
         if body.len() % 2 == 1 {
@@ -48,23 +66,48 @@ fn build_wav(
         }
     }
 
-    let mut out = Vec::new();
-    out.extend_from_slice(b"RIFF");
-    #[allow(clippy::cast_possible_truncation)]
-    out.extend_from_slice(&(riff_body.len() as u32).to_le_bytes());
-    out.extend_from_slice(&riff_body);
-    out
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(b"RIFF");
+    bytes.extend_from_slice(&(riff_body.len() as u32).to_le_bytes());
+    bytes.extend_from_slice(&riff_body);
+    bytes
+}
+
+fn build_wav(
+    format: WavFormat,
+    sample_rate: u32,
+    extra_chunks: &[(&[u8; 4], &[u8])],
+    data: &[u8],
+) -> Vec<u8> {
+    let mut chunks = vec![(
+        *b"fmt ",
+        fmt_chunk(format, FIXTURE_MONO_CHANNEL_COUNT, sample_rate),
+    )];
+    chunks.extend(extra_chunks.iter().map(|(id, body)| (**id, body.to_vec())));
+    chunks.push((*b"data", data.to_vec()));
+    build_riff(&chunks)
+}
+
+fn write_u32(body: &mut [u8], offset: usize, value: u32) {
+    body[offset..offset + size_of::<u32>()].copy_from_slice(&value.to_le_bytes());
 }
 
 fn smpl_chunk(midi_key: u32, tuning_fraction: u32, loop_start: u32, loop_end: u32) -> Vec<u8> {
-    let mut body = vec![0u8; 36 + 24];
-    body[12..16].copy_from_slice(&midi_key.to_le_bytes());
-    body[16..20].copy_from_slice(&tuning_fraction.to_le_bytes());
-    body[28..32].copy_from_slice(&1u32.to_le_bytes()); // num loops
-                                                       // loop record: cue point id (36), type (40), start (44), end (48), fraction (52), play count (56)
-    body[40..44].copy_from_slice(&0u32.to_le_bytes());
-    body[44..48].copy_from_slice(&loop_start.to_le_bytes());
-    body[48..52].copy_from_slice(&loop_end.to_le_bytes());
+    let mut body = vec![0u8; FIXTURE_SMPL_HEADER_SIZE + FIXTURE_SMPL_LOOP_RECORD_SIZE];
+    write_u32(&mut body, FIXTURE_SMPL_MIDI_UNITY_NOTE_OFFSET, midi_key);
+    write_u32(
+        &mut body,
+        FIXTURE_SMPL_MIDI_PITCH_FRACTION_OFFSET,
+        tuning_fraction,
+    );
+    write_u32(&mut body, FIXTURE_SMPL_LOOP_COUNT_OFFSET, 1);
+    write_u32(
+        &mut body,
+        FIXTURE_SMPL_LOOP_TYPE_OFFSET,
+        FIXTURE_FORWARD_LOOP_TYPE,
+    );
+    write_u32(&mut body, FIXTURE_SMPL_LOOP_START_OFFSET, loop_start);
+    write_u32(&mut body, FIXTURE_SMPL_LOOP_END_OFFSET, loop_end);
     body
 }
 
@@ -74,10 +117,8 @@ fn u32_chunk(value: u32) -> Vec<u8> {
 
 #[test]
 fn one_shot_u8_sample_decodes() {
-    // 5 unsigned 8-bit samples, no smpl chunk -> one-shot, key=60/no
-    // tuning, size == num_samples.
-    let data = [118u8, 128, 138, 128, 108]; // -10, 0, 10, 0, -20 once centered
-    let bytes = build_wav(1, 1, 8, 3344, &[], &data);
+    let data = [118u8, 128, 138, 128, 108];
+    let bytes = build_wav(PCM_U8, 3344, &[], &data);
     let sample = decode(&bytes).unwrap();
     assert_eq!(sample.base_frequency, 3344 * 1024);
     assert_eq!(sample.loop_start, None);
@@ -85,13 +126,12 @@ fn one_shot_u8_sample_decodes() {
 }
 
 #[test]
-fn looped_sample_uses_naive_loop_end_plus_one_when_no_agbl_override() {
+fn looped_sample_uses_inclusive_smpl_end_when_agbl_is_absent() {
     let data = [128u8, 129, 130, 131, 132, 133];
-    let smpl = smpl_chunk(60, 0, 1, 3); // loop start=1, end=3 (inclusive)
-    let bytes = build_wav(1, 1, 8, 8000, &[(b"smpl", &smpl)], &data);
+    let smpl = smpl_chunk(60, 0, 1, 3);
+    let bytes = build_wav(PCM_U8, 8000, &[(b"smpl", &smpl)], &data);
     let sample = decode(&bytes).unwrap();
     assert_eq!(sample.loop_start, Some(1));
-    // naive end = loop_end(3) + 1 = 4 samples.
     assert_eq!(sample.data, vec![0, 1, 2, 3]);
 }
 
@@ -99,8 +139,8 @@ fn looped_sample_uses_naive_loop_end_plus_one_when_no_agbl_override() {
 fn agbl_override_shortens_the_decoded_data() {
     let data = [128u8, 129, 130, 131, 132, 133];
     let smpl = smpl_chunk(60, 0, 1, 3);
-    let agbl = u32_chunk(2); // override: only 2 samples of real content
-    let bytes = build_wav(1, 1, 8, 8000, &[(b"smpl", &smpl), (b"agbl", &agbl)], &data);
+    let agbl = u32_chunk(2);
+    let bytes = build_wav(PCM_U8, 8000, &[(b"smpl", &smpl), (b"agbl", &agbl)], &data);
     let sample = decode(&bytes).unwrap();
     assert_eq!(sample.data, vec![0, 1]);
     assert_eq!(sample.loop_start, Some(1));
@@ -109,88 +149,67 @@ fn agbl_override_shortens_the_decoded_data() {
 #[test]
 fn agbp_override_replaces_the_computed_pitch() {
     let data = [128u8, 129];
-    let agbp = u32_chunk(0x0034_2000);
-    let bytes = build_wav(1, 1, 8, 3344, &[(b"agbp", &agbp)], &data);
+    let exact_pitch = 0x0034_2000;
+    let agbp = u32_chunk(exact_pitch);
+    let bytes = build_wav(PCM_U8, 3344, &[(b"agbp", &agbp)], &data);
     let sample = decode(&bytes).unwrap();
-    assert_eq!(sample.base_frequency, 0x0034_2000);
+    assert_eq!(sample.base_frequency, exact_pitch);
 }
 
-/// Upstream reads `agbp` out of a field that defaults to `0` and applies it
-/// only when non-zero (`converter.cpp:392-397`), so a present-but-zero
-/// `agbp` chunk must fall back to the computed pitch rather than compiling
-/// a zero pitch word. No shipped sample carries one -- hence the crafted
-/// fixture.
 #[test]
-fn a_zero_agbp_chunk_falls_back_to_the_computed_pitch() {
+fn zero_agbp_falls_back_to_the_computed_pitch() {
     let data = [128u8, 129];
     let agbp = u32_chunk(0);
-    let bytes = build_wav(1, 1, 8, 3344, &[(b"agbp", &agbp)], &data);
+    let bytes = build_wav(PCM_U8, 3344, &[(b"agbp", &agbp)], &data);
     let sample = decode(&bytes).unwrap();
     assert_eq!(sample.base_frequency, 3344 * 1024);
 }
 
-/// A 1-7-byte remnant after the last complete sub-chunk is a truncated
-/// chunk header, and a well-formed file ends exactly at the RIFF body's
-/// declared end -- fail closed rather than silently dropping the tail.
 #[test]
-fn a_trailing_partial_chunk_header_is_rejected() {
+fn trailing_partial_chunk_header_is_rejected() {
     let data = [128u8, 129];
-    let mut bytes = build_wav(1, 1, 8, 8000, &[], &data);
-    // Extend the RIFF body with a 5-byte fragment: a would-be chunk id
-    // plus one length byte, too short to be a header.
-    bytes.extend_from_slice(b"junk");
+    let mut bytes = build_wav(PCM_U8, 8000, &[], &data);
+    let partial_chunk_header = b"junk\x02";
+    bytes.extend_from_slice(partial_chunk_header);
     let riff_len = (bytes.len() - 8) as u32;
     bytes[4..8].copy_from_slice(&riff_len.to_le_bytes());
     assert_eq!(decode(&bytes).unwrap_err(), WavError::ChunkTruncated);
 }
 
-/// The fixed `smpl` header is 36 bytes and a declared loop record 24 more;
-/// a 56-byte chunk that declares one loop is missing the record's tail
-/// (fraction/play count) and must be refused, even though every field the
-/// parser reads sits below the cut.
 #[test]
-fn a_short_smpl_loop_record_is_rejected() {
+fn short_smpl_loop_record_is_rejected() {
     let data = [128u8, 129, 130, 131, 132];
-    let smpl = &smpl_chunk(60, 0, 1, 3)[..56];
-    let bytes = build_wav(1, 1, 8, 8000, &[(b"smpl", smpl)], &data);
+    let missing_record_tail_size = FIXTURE_SMPL_HEADER_SIZE + FIXTURE_SMPL_LOOP_RECORD_SIZE - 4;
+    let smpl = &smpl_chunk(60, 0, 1, 3)[..missing_record_tail_size];
+    let bytes = build_wav(PCM_U8, 8000, &[(b"smpl", smpl)], &data);
     assert_eq!(decode(&bytes).unwrap_err(), WavError::TruncatedSmplChunk);
 }
 
-/// A truncated override chunk is malformed input, not an absent override:
-/// both `agbp` and `agbl` must fail closed as `ChunkTruncated` rather than
-/// silently falling back to the derived value.
 #[test]
-fn a_truncated_override_chunk_is_rejected_not_ignored() {
+fn truncated_override_chunk_is_rejected() {
     let data = [128u8, 129];
     for id in [b"agbp", b"agbl"] {
-        let bytes = build_wav(1, 1, 8, 3344, &[(id, &[0u8, 0])], &data);
+        let bytes = build_wav(PCM_U8, 3344, &[(id, &[0u8, 0])], &data);
         assert_eq!(decode(&bytes).unwrap_err(), WavError::ChunkTruncated);
     }
 }
 
-/// The `agbl` half of the same upstream rule (`converter.cpp:399-402`): a
-/// zero override leaves the naive loop end in place instead of shrinking
-/// the decoded sample to zero length.
 #[test]
-fn a_zero_agbl_chunk_falls_back_to_the_naive_loop_end() {
+fn zero_agbl_falls_back_to_the_inclusive_smpl_end() {
     let data = [128u8, 129, 130, 131, 132, 133];
     let smpl = smpl_chunk(60, 0, 1, 3);
     let agbl = u32_chunk(0);
-    let bytes = build_wav(1, 1, 8, 8000, &[(b"smpl", &smpl), (b"agbl", &agbl)], &data);
+    let bytes = build_wav(PCM_U8, 8000, &[(b"smpl", &smpl), (b"agbl", &agbl)], &data);
     let sample = decode(&bytes).unwrap();
-    // Same result as
-    // `looped_sample_uses_naive_loop_end_plus_one_when_no_agbl_override`:
-    // naive end = loop_end(3) + 1 = 4 samples, not 0.
     assert_eq!(sample.data, vec![0, 1, 2, 3]);
     assert_eq!(sample.loop_start, Some(1));
 }
 
 #[test]
-fn non_default_midi_key_shifts_the_computed_pitch() {
-    // One octave down (key 72 vs unity 60) halves the naive pitch.
+fn midi_key_one_octave_above_unity_halves_the_computed_pitch() {
     let data = [128u8, 129];
     let smpl = smpl_chunk(72, 0, 0, 0);
-    let bytes = build_wav(1, 1, 8, 8000, &[(b"smpl", &smpl)], &data);
+    let bytes = build_wav(PCM_U8, 8000, &[(b"smpl", &smpl)], &data);
     let sample = decode(&bytes).unwrap();
     assert_eq!(sample.base_frequency, 4000 * 1024);
 }
@@ -198,10 +217,10 @@ fn non_default_midi_key_shifts_the_computed_pitch() {
 #[test]
 fn s16_format_decodes() {
     let mut data = Vec::new();
-    data.extend_from_slice(&(-32768i16).to_le_bytes());
+    data.extend_from_slice(&i16::MIN.to_le_bytes());
     data.extend_from_slice(&0i16.to_le_bytes());
-    data.extend_from_slice(&32767i16.to_le_bytes());
-    let bytes = build_wav(1, 2, 16, 22050, &[], &data);
+    data.extend_from_slice(&i16::MAX.to_le_bytes());
+    let bytes = build_wav(PCM_S16, 22050, &[], &data);
     let sample = decode(&bytes).unwrap();
     assert_eq!(sample.data, vec![-128, 0, 127]);
 }
@@ -210,23 +229,23 @@ fn s16_format_decodes() {
 fn f32_format_decodes() {
     let mut data = Vec::new();
     data.extend_from_slice(&(-1.0f32).to_le_bytes());
-    data.extend_from_slice(&(0.0f32).to_le_bytes());
-    let bytes = build_wav(3, 4, 32, 22050, &[], &data);
+    data.extend_from_slice(&0.0f32.to_le_bytes());
+    let bytes = build_wav(IEEE_FLOAT_F32, 22050, &[], &data);
     let sample = decode(&bytes).unwrap();
     assert_eq!(sample.data, vec![-128, 0]);
 }
 
 #[test]
 fn bad_riff_magic_is_rejected() {
-    let mut bytes = build_wav(1, 1, 8, 8000, &[], &[128]);
+    let mut bytes = build_wav(PCM_U8, 8000, &[], &[128]);
     bytes[0] = b'X';
     assert_eq!(decode(&bytes).unwrap_err(), WavError::BadRiffMagic);
 }
 
 #[test]
 fn riff_size_mismatch_is_rejected() {
-    let mut bytes = build_wav(1, 1, 8, 8000, &[], &[128]);
-    bytes.push(0xFF); // trailing byte the RIFF length doesn't account for
+    let mut bytes = build_wav(PCM_U8, 8000, &[], &[128]);
+    bytes.push(0xFF);
     assert!(matches!(
         decode(&bytes).unwrap_err(),
         WavError::RiffSizeMismatch { .. }
@@ -235,108 +254,70 @@ fn riff_size_mismatch_is_rejected() {
 
 #[test]
 fn bad_wave_magic_is_rejected() {
-    let mut bytes = build_wav(1, 1, 8, 8000, &[], &[128]);
+    let mut bytes = build_wav(PCM_U8, 8000, &[], &[128]);
     bytes[8..12].copy_from_slice(b"WAVX");
     assert_eq!(decode(&bytes).unwrap_err(), WavError::BadWaveMagic);
 }
 
 #[test]
 fn missing_fmt_chunk_is_rejected() {
-    // Hand-build a WAV with only a `data` chunk.
-    let mut riff_body = Vec::new();
-    riff_body.extend_from_slice(b"WAVE");
-    riff_body.extend_from_slice(b"data");
-    riff_body.extend_from_slice(&4u32.to_le_bytes());
-    riff_body.extend_from_slice(&[1, 2, 3, 4]);
-    let mut bytes = Vec::new();
-    bytes.extend_from_slice(b"RIFF");
-    bytes.extend_from_slice(&(riff_body.len() as u32).to_le_bytes());
-    bytes.extend_from_slice(&riff_body);
+    let bytes = build_riff(&[(*b"data", vec![1, 2, 3, 4])]);
     assert_eq!(decode(&bytes).unwrap_err(), WavError::MissingFmtChunk);
 }
 
 #[test]
 fn truncated_fmt_chunk_is_rejected() {
-    // A `fmt ` chunk shorter than the fixed 16-byte layout this reader
-    // requires (the real chunk always carries at least that much).
-    let mut riff_body = Vec::new();
-    riff_body.extend_from_slice(b"WAVE");
-    riff_body.extend_from_slice(b"fmt ");
-    riff_body.extend_from_slice(&8u32.to_le_bytes());
-    riff_body.extend_from_slice(&[0u8; 8]);
-    let mut bytes = Vec::new();
-    bytes.extend_from_slice(b"RIFF");
-    bytes.extend_from_slice(&(riff_body.len() as u32).to_le_bytes());
-    bytes.extend_from_slice(&riff_body);
+    let short_fmt = vec![0u8; FIXTURE_FMT_CHUNK_SIZE / 2];
+    let bytes = build_riff(&[(*b"fmt ", short_fmt)]);
     assert_eq!(decode(&bytes).unwrap_err(), WavError::ChunkTruncated);
 }
 
 #[test]
 fn missing_data_chunk_is_rejected() {
-    let mut fmt_body = Vec::new();
-    fmt_body.extend_from_slice(&1u16.to_le_bytes());
-    fmt_body.extend_from_slice(&1u16.to_le_bytes());
-    fmt_body.extend_from_slice(&8000u32.to_le_bytes());
-    fmt_body.extend_from_slice(&8000u32.to_le_bytes());
-    fmt_body.extend_from_slice(&1u16.to_le_bytes());
-    fmt_body.extend_from_slice(&8u16.to_le_bytes());
-    let mut riff_body = Vec::new();
-    riff_body.extend_from_slice(b"WAVE");
-    riff_body.extend_from_slice(b"fmt ");
-    riff_body.extend_from_slice(&(fmt_body.len() as u32).to_le_bytes());
-    riff_body.extend_from_slice(&fmt_body);
-    let mut bytes = Vec::new();
-    bytes.extend_from_slice(b"RIFF");
-    bytes.extend_from_slice(&(riff_body.len() as u32).to_le_bytes());
-    bytes.extend_from_slice(&riff_body);
+    let fmt = fmt_chunk(PCM_U8, FIXTURE_MONO_CHANNEL_COUNT, 8000);
+    let bytes = build_riff(&[(*b"fmt ", fmt)]);
     assert_eq!(decode(&bytes).unwrap_err(), WavError::MissingDataChunk);
 }
 
 #[test]
 fn stereo_is_rejected() {
-    let mut fmt_body = Vec::new();
-    fmt_body.extend_from_slice(&1u16.to_le_bytes());
-    fmt_body.extend_from_slice(&2u16.to_le_bytes()); // stereo
-    fmt_body.extend_from_slice(&8000u32.to_le_bytes());
-    fmt_body.extend_from_slice(&16000u32.to_le_bytes());
-    fmt_body.extend_from_slice(&2u16.to_le_bytes());
-    fmt_body.extend_from_slice(&8u16.to_le_bytes());
-    let mut riff_body = Vec::new();
-    riff_body.extend_from_slice(b"WAVE");
-    riff_body.extend_from_slice(b"fmt ");
-    riff_body.extend_from_slice(&(fmt_body.len() as u32).to_le_bytes());
-    riff_body.extend_from_slice(&fmt_body);
-    riff_body.extend_from_slice(b"data");
-    riff_body.extend_from_slice(&2u32.to_le_bytes());
-    riff_body.extend_from_slice(&[128, 128]);
-    let mut bytes = Vec::new();
-    bytes.extend_from_slice(b"RIFF");
-    bytes.extend_from_slice(&(riff_body.len() as u32).to_le_bytes());
-    bytes.extend_from_slice(&riff_body);
+    let stereo_channel_count = 2;
+    let fmt = fmt_chunk(PCM_U8, stereo_channel_count, 8000);
+    let bytes = build_riff(&[(*b"fmt ", fmt), (*b"data", vec![128, 128])]);
     assert_eq!(
         decode(&bytes).unwrap_err(),
-        WavError::NotMono { channels: 2 }
+        WavError::NotMono {
+            channels: stereo_channel_count
+        }
     );
 }
 
 #[test]
 fn unsupported_format_tag_is_rejected() {
-    // format tag 2 (ADPCM) isn't one of the six supported combinations.
-    let bytes = build_wav(2, 1, 8, 8000, &[], &[128]);
+    let adpcm = WavFormat {
+        tag: 2,
+        block_align: 1,
+        bits_per_sample: 8,
+    };
+    let bytes = build_wav(adpcm, 8000, &[], &[128]);
     assert_eq!(
         decode(&bytes).unwrap_err(),
         WavError::UnsupportedFormat {
-            format_tag: 2,
-            block_align: 1,
-            bits_per_sample: 8,
+            format_tag: adpcm.tag,
+            block_align: adpcm.block_align,
+            bits_per_sample: adpcm.bits_per_sample,
         }
     );
 }
 
 #[test]
 fn unsupported_bit_depth_combination_is_rejected() {
-    // Integer PCM but a width SampleFormat::resolve doesn't recognize.
-    let bytes = build_wav(1, 5, 40, 8000, &[], &[128, 128, 128, 128, 128]);
+    let unsupported_pcm = WavFormat {
+        tag: 1,
+        block_align: 5,
+        bits_per_sample: 40,
+    };
+    let bytes = build_wav(unsupported_pcm, 8000, &[], &[128; 5]);
     assert!(matches!(
         decode(&bytes).unwrap_err(),
         WavError::UnsupportedFormat { .. }
@@ -345,8 +326,7 @@ fn unsupported_bit_depth_combination_is_rejected() {
 
 #[test]
 fn misaligned_data_length_is_rejected() {
-    // s16 format but an odd number of bytes.
-    let bytes = build_wav(1, 2, 16, 8000, &[], &[1, 2, 3]);
+    let bytes = build_wav(PCM_S16, 8000, &[], &[1, 2, 3]);
     assert_eq!(
         decode(&bytes).unwrap_err(),
         WavError::DataLengthNotAligned {
@@ -358,54 +338,62 @@ fn misaligned_data_length_is_rejected() {
 
 #[test]
 fn too_many_sample_loops_is_rejected() {
-    let mut smpl = vec![0u8; 36];
-    smpl[28..32].copy_from_slice(&2u32.to_le_bytes());
-    let bytes = build_wav(1, 1, 8, 8000, &[(b"smpl", &smpl)], &[128, 128]);
+    let unsupported_loop_count = 2;
+    let mut smpl = vec![0u8; FIXTURE_SMPL_HEADER_SIZE];
+    write_u32(
+        &mut smpl,
+        FIXTURE_SMPL_LOOP_COUNT_OFFSET,
+        unsupported_loop_count,
+    );
+    let bytes = build_wav(PCM_U8, 8000, &[(b"smpl", &smpl)], &[128, 128]);
     assert_eq!(
         decode(&bytes).unwrap_err(),
-        WavError::TooManySampleLoops { count: 2 }
+        WavError::TooManySampleLoops {
+            count: unsupported_loop_count
+        }
     );
 }
 
 #[test]
 fn unsupported_loop_type_is_rejected() {
+    let backward_loop_type = 2;
     let mut smpl = smpl_chunk(60, 0, 0, 1);
-    smpl[40..44].copy_from_slice(&2u32.to_le_bytes()); // backward loop
-    let bytes = build_wav(1, 1, 8, 8000, &[(b"smpl", &smpl)], &[128, 128, 128]);
+    write_u32(&mut smpl, FIXTURE_SMPL_LOOP_TYPE_OFFSET, backward_loop_type);
+    let bytes = build_wav(PCM_U8, 8000, &[(b"smpl", &smpl)], &[128, 128, 128]);
     assert_eq!(
         decode(&bytes).unwrap_err(),
-        WavError::UnsupportedLoopType { loop_type: 2 }
+        WavError::UnsupportedLoopType {
+            loop_type: backward_loop_type
+        }
     );
 }
 
 #[test]
 fn truncated_smpl_chunk_is_rejected() {
-    let bytes = build_wav(1, 1, 8, 8000, &[(b"smpl", &[0u8; 10])], &[128]);
+    let bytes = build_wav(PCM_U8, 8000, &[(b"smpl", &[0u8; 10])], &[128]);
     assert_eq!(decode(&bytes).unwrap_err(), WavError::TruncatedSmplChunk);
 }
 
 #[test]
 fn agbl_override_past_the_real_sample_count_is_rejected() {
-    let agbl = u32_chunk(100);
-    let bytes = build_wav(1, 1, 8, 8000, &[(b"agbl", &agbl)], &[128, 128]);
+    let unavailable_sample_count = 100;
+    let agbl = u32_chunk(unavailable_sample_count);
+    let bytes = build_wav(PCM_U8, 8000, &[(b"agbl", &agbl)], &[128, 128]);
     assert_eq!(
         decode(&bytes).unwrap_err(),
         WavError::SizeOutOfRange {
-            size: 100,
+            size: unavailable_sample_count,
             num_samples: 2,
         }
     );
 }
 
 #[test]
-fn loop_start_past_the_derived_size_is_rejected() {
-    // agbl shrinks size to 1, but the loop starts at sample 2.
+fn loop_start_at_or_past_the_derived_size_is_rejected() {
     let smpl = smpl_chunk(60, 0, 2, 3);
     let agbl = u32_chunk(1);
     let bytes = build_wav(
-        1,
-        1,
-        8,
+        PCM_U8,
         8000,
         &[(b"smpl", &smpl), (b"agbl", &agbl)],
         &[128, 129, 130, 131],
@@ -420,7 +408,7 @@ fn loop_start_past_the_derived_size_is_rejected() {
 }
 
 #[test]
-fn sample_format_bytes_per_sample_matches_the_documented_widths() {
+fn each_sample_format_reports_its_encoded_width() {
     assert_eq!(SampleFormat::U8.bytes_per_sample(), 1);
     assert_eq!(SampleFormat::S16.bytes_per_sample(), 2);
     assert_eq!(SampleFormat::S24.bytes_per_sample(), 3);
