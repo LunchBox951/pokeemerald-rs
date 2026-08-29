@@ -14,6 +14,13 @@ const BLACK_PIXEL: u32 = 0;
 const INITIAL_TITLE_FRAME: u32 = 0;
 const TITLE_ANIMATION_PROBE_FRAME: u32 = 20;
 const INITIAL_OVERWORLD_TICK: u32 = 0;
+/// Second determinism probe (issue #160): a `tick` that never reached
+/// `compose` would pass forever on one hardcoded value. The two ticks'
+/// frames are deliberately not required to differ — the smoke room is a
+/// `building`-tileset interior with no animated metatile on screen, so a
+/// difference assertion would be flaky about map content. Tick-to-pixel
+/// behavior is pinned by `pokeemerald_rs::overworld::tests`'
+/// `real_pack_tick_changes_only_the_animated_tile_screen_regions`.
 const SECOND_OVERWORLD_DETERMINISM_TICK: u32 = 17;
 const SMOKE_PLAYER_TILE: (i32, i32) = (5, 5);
 const SMOKE_PLAYER_GROUND_ELEVATION: u8 = 3;
