@@ -1,10 +1,9 @@
-//! Presentation (S-1): integer-scale + letterbox math, and the blit that
+//! Presentation: integer-scale + letterbox math, and the blit that
 //! expands a 240x160 pixel buffer into a window-sized `softbuffer` surface.
 //!
 //! No real game content is produced by this crate — [`crate::window::Platform`]
 //! accepts any 240x160 buffer each frame (a static test pattern is enough to
-//! prove the pipeline end-to-end); real BG/sprite output is `rendering`'s job
-//! (S-2).
+//! prove the pipeline end-to-end); real BG/sprite output is `rendering`'s job.
 
 /// The GBA's native framebuffer width, in pixels.
 pub const GBA_WIDTH: u32 = 240;
@@ -178,7 +177,7 @@ fn sample(src: &Frame, letterbox: &Letterbox, x: u32, y: u32) -> u32 {
 
 /// A static test pattern (a 16x16 checkerboard) proving the presentation
 /// pipeline end-to-end. No real game content is produced by this crate —
-/// real BG/sprite rendering is `rendering`'s job (S-2).
+/// real BG/sprite rendering is `rendering`'s job.
 #[must_use]
 #[allow(clippy::missing_panics_doc)] // infallible: the vec is exactly PIXEL_COUNT long
 pub fn test_pattern() -> Box<Frame> {
@@ -312,9 +311,8 @@ mod tests {
         // Bottom-right destination pixel (99, 79): source (169, 119).
         let bottom_right_idx = 79 * 100 + 99;
         assert_eq!(dest[bottom_right_idx], encode(169, 119));
-        // Every pixel, not just the corners (the pre-crop version of this
-        // test asserted the whole buffer, and the ratchet keeps it that
-        // way): destination (x, y) must be exactly source (70 + x, 40 + y).
+        // Every pixel, not just the corners: destination (x, y) must be
+        // exactly source (70 + x, 40 + y).
         for y in 0..80u32 {
             for x in 0..100u32 {
                 assert_eq!(

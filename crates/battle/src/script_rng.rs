@@ -9,9 +9,6 @@
 //! [`SequenceRng::draws`] as routinely as on outcomes, and a script that
 //! draws one time too many runs off the end of the sequence and panics
 //! rather than reading a value the test never meant it to have.
-//!
-//! Older modules ([`crate::hit`], [`crate::stat_change`], `battle::trainer`,
-//! …) each carry a private copy predating this one; new modules use this.
 
 use crate::damage::BattleRng;
 
