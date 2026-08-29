@@ -1,7 +1,51 @@
 //! Per-frame CGB PSG envelope and stereo-panning state.
 //!
 //! The native mixer models the hardware's coarse 16-level envelope with
-//! render-frame counters because it has no GB APU envelope clock.
+//! whole-frame step counters rather than the hardware's 1/64s envelope clock
+//! `(no-verbatim)` — the same deliberate, benign simplification
+//! [`crate::psg::Sweep`] documents, since it has no GB APU envelope clock to
+//! delegate to. [`CgbEnvelope::step`] is one such software iteration; it does
+//! not always land one-for-one with a render frame — see
+//! [`CgbEnvelopeCadence`].
+
+/// Mirrors upstream's shared `soundInfo->c15` counter (`m4a.c:941`..`:945`),
+/// which paces a once-per-15-frames correction: the once-per-render-frame
+/// [`CgbEnvelope::step`] alone runs at ~59.73 Hz, visibly slower than
+/// hardware's true 1/64s (~63.71 Hz) envelope rate, so every 15th frame runs
+/// a second iteration to keep up (`m4a.c:1173`..`:1180`, "every 15 frames,
+/// envelope calculation has to be done twice to keep up with the hardware
+/// envelope rate"). `14` single-iteration frames plus `1` double-iteration
+/// frame gives 16 iterations per 15 frames, matching hardware's cadence over
+/// that span.
+///
+/// One cadence is shared by all four CGB channels, driven from a single
+/// per-render-frame call — upstream updates `soundInfo->c15` once per
+/// `CgbSound` call, before its per-channel loop, and every channel reads the
+/// same resulting value as `prevC15` (`m4a.c:941`..`:985`). Callers must
+/// therefore own exactly one instance across the whole CGB channel set (see
+/// [`crate::mixer::Mixer`]'s `cgb_envelope_cadence` field), not one per
+/// voice — a per-voice clock would desync the correction frame between
+/// channels started at different times, which [`CgbEnvelope::step_frame`]'s
+/// contract does not allow for.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct CgbEnvelopeCadence {
+    /// Upstream's `soundInfo->c15`, `0..=14`.
+    c15: u8,
+}
+
+impl CgbEnvelopeCadence {
+    /// Advance by one render frame, returning whether this frame gets the
+    /// extra iteration (`Self`'s doc). `m4a.c:941`..`:945`, `:984`,
+    /// `:1177`..`:1180`.
+    pub(crate) fn advance_frame(&mut self) -> bool {
+        if self.c15 != 0 {
+            self.c15 -= 1;
+        } else {
+            self.c15 = 14;
+        }
+        self.c15 == 0
+    }
+}
 
 const CGB_ENVELOPE_LEVELS: u32 = 16;
 const CGB_ENVELOPE_LEVEL_MAX: u8 = 15;
@@ -143,6 +187,34 @@ impl CgbEnvelope {
         }
     }
 
+    /// Advance by one render frame, honoring [`CgbEnvelopeCadence`]'s extra
+    /// iteration (`envelope_step_complete`'s `prevC15 == 0` re-entry into
+    /// `envelope_step_repeat`, `m4a.c:1176`..`:1180`).
+    ///
+    /// Skipped whenever the first iteration this call already entered the
+    /// pseudo-echo tail or retired the voice: those transitions, and an
+    /// already-ongoing tail, all reach upstream via a `goto` that jumps past
+    /// `envelope_step_complete`'s doubling check entirely
+    /// (`m4a.c:1048`..`:1059`, `:1087`..`:1103`, `:1125`..`:1129`). Every
+    /// other transition — note-on/note-off held frames included — falls
+    /// through to that check normally and can be doubled.
+    pub(crate) fn step_frame(&mut self, extra_iteration: bool) {
+        self.step();
+        if extra_iteration && !matches!(self.phase, Phase::PseudoEcho | Phase::Retired) {
+            self.step();
+        }
+    }
+
+    /// Decrement this phase's frame counter and report whether it just reached
+    /// zero — the frame a paced step fires. The counter is *armed on entry* to
+    /// the phase ([`Self::new`], [`Self::enter_decay`], [`Self::note_off`]) and
+    /// reloaded by the caller only while the phase continues, the same
+    /// decrement-first `frames_until_step -= 1; fire at 0` shape
+    /// [`Self::sustain_step`] uses. Upstream decrements `envelopeCounter` once
+    /// per frame at `envelope_step_complete` (`m4a.c:1176`) and fires the next
+    /// frame whose `envelope_step_repeat` sees it at zero (`m4a.c:1080`). Only
+    /// ever called with a non-zero armed counter; zero-period phases
+    /// transition instantly and never reach here (see [`Self::step`]).
     fn paced_step_is_due(&mut self) -> bool {
         self.frames_until_step -= 1;
         self.frames_until_step == 0
@@ -520,3 +592,10 @@ mod tests {
         assert!(centred > panned);
     }
 }
+
+/// [`CgbEnvelopeCadence`]/[`CgbEnvelope::step_frame`]'s own tests, kept out
+/// of [`tests`] for the same per-file-size reason `mixer.rs` splits off
+/// `mixer_priority.rs`/`mixer_mixing.rs` (issue #453).
+#[cfg(test)]
+#[path = "cgb_envelope_cadence.rs"]
+mod cadence_tests;

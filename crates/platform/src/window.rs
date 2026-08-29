@@ -1,4 +1,4 @@
-//! The [`Platform`] window type (S-1): owns the `winit` event loop, the
+//! The [`Platform`] window type: owns the `winit` event loop, the
 //! native window, and the `softbuffer` presentation surface, and glues them
 //! together with [`crate::input`] and [`crate::pacing`] behind a small
 //! per-frame API.
@@ -10,7 +10,7 @@
 //! [`Platform::pump`]) so a caller stays in control of its own frame loop
 //! rather than handing control to `winit`.
 //!
-//! [`Platform::new_headless`] (F-3, V-1) is the explicit, always-available
+//! [`Platform::new_headless`] is the explicit, always-available
 //! null backend for tests and CI — mirroring [`crate::audio::AudioOutput`]'s
 //! `null` constructor: no cargo feature flag, just a second constructor that
 //! opens no OS window/event loop/surface. It is what backs `xtask`'s `e2e
@@ -231,8 +231,8 @@ impl Platform {
         })
     }
 
-    /// An explicit headless/null backend (F-3, V-1): opens no `winit` event
-    /// loop, native window, or `softbuffer` surface.
+    /// An explicit headless/null backend: opens no `winit` event loop,
+    /// native window, or `softbuffer` surface.
     ///
     /// Always available (no display server required), so this is the only
     /// backend `cargo test`/CI's `xtask e2e --suite smoke` run may
@@ -400,9 +400,9 @@ impl Platform {
     /// compositor, so this crate keeps no copy — nothing to hand back, and
     /// no per-frame allocation added to the real path.
     ///
-    /// The point of the null backend recording it (F-3, V-1): headless
-    /// callers — `pokeemerald_rs`'s I-2 real-boot check, `xtask`'s smoke
-    /// suite — can assert on the frame that *reached presentation*, not
+    /// The point of the null backend recording it: headless callers —
+    /// `pokeemerald_rs`'s real-boot check, `xtask`'s smoke suite — can
+    /// assert on the frame that *reached presentation*, not
     /// merely the one their own scene state says they composed. Without it,
     /// a caller that composed correctly and then never called `present` at
     /// all would still look healthy.
