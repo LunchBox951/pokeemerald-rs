@@ -1,14 +1,24 @@
 //! WAV decoding for extracted `DirectSound` samples.
 //!
-//! The decoder accepts the six mono integer-PCM and IEEE-float layouts that
-//! `tools/wav2agb` supports. It reads `fmt `, `smpl`, `agbp`, `agbl`, and
-//! `data` chunks, rejects truncated RIFF structures, and converts each sample
-//! to signed 8-bit PCM with the same floor-and-clamp operation as wav2agb.
+//! The decoded fields follow `tools/wav2agb`:
 //!
-//! A sampler loop end is inclusive, so it becomes an exclusive sample count.
-//! Non-zero `agbp` and `agbl` words replace the derived pitch and sample count;
-//! zero preserves the derived value. These override rules and pitch truncation
-//! match `tools/wav2agb/converter.cpp:385-402`.
+//! - `fmt ` supplies the format tag, channel count, sample rate, block
+//!   alignment, and sample width. The supported mono layouts are unsigned
+//!   8-bit PCM, signed 16/24/32-bit PCM, and 32/64-bit IEEE float
+//!   (`wav_file.cpp:125-156`).
+//! - `smpl` supplies the MIDI unity note, pitch fraction, and optional forward
+//!   loop. wav2agb divides the pitch fraction by `2^32 * 100` despite its
+//!   adjacent comment claiming a `0..100` cent range; this decoder preserves
+//!   the implemented conversion (`wav_file.cpp:166-180`). The loop end is
+//!   inclusive, so it becomes an exclusive sample count capped by `data`.
+//! - Non-zero `agbp` and `agbl` words replace the derived pitch and sample
+//!   count. Zero preserves the derived value (`converter.cpp:385-402`).
+//! - `data` holds samples in the declared layout. Each value is normalized and
+//!   converted to signed 8-bit PCM with wav2agb's floor-and-clamp operation
+//!   (`wav_file.cpp:235-297`, `converter.cpp:56-92`).
+//!
+//! Missing required chunks, unsupported fields, partial records, misaligned
+//! sample data, and out-of-range loop metadata fail closed.
 
 use std::{fmt, mem::size_of};
 
@@ -61,7 +71,7 @@ pub(crate) enum WavError {
     MissingFmtChunk,
     /// The file has no `data` chunk.
     MissingDataChunk,
-    /// The format has more than one channel.
+    /// The format does not have exactly one channel.
     NotMono { channels: u16 },
     /// The format tag, alignment, and sample width are unsupported.
     UnsupportedFormat {
