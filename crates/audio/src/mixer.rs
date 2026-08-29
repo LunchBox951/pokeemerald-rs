@@ -2,13 +2,15 @@
 //! stereo `f32`, and clips.
 //!
 //! Behavioural model of `SoundMainRAM`'s outer channel loop (`m4a_1.s:153`):
-//! every active voice steps its envelope once per frame, then adds its
-//! contribution to the shared buffer. The hardware sums into 8-bit lanes that
-//! wrap; here contributions accumulate in `i32` and are **clipped** (not
-//! wrapped) to the `s8` range on the way out, then normalised to `[-1.0, 1.0)`
-//! for the `f32` producer `(no-verbatim)`. Clipping rather than wrapping is a
-//! deliberate, benign fidelity choice for this slice — the wrap-and-carry
-//! behaviour of the packed DMA lanes is a deferred quirk.
+//! every active voice steps its envelope once per frame — a CGB voice's
+//! extra 15th-frame iteration is [`crate::cgb_envelope::CgbEnvelopeCadence`]'s
+//! doc, issue #453 — then adds its contribution to the shared buffer. The
+//! hardware sums into 8-bit lanes that wrap; here contributions accumulate
+//! in `i32` and are **clipped** (not wrapped) to the `s8` range on the way
+//! out, then normalised to `[-1.0, 1.0)` for the `f32` producer
+//! `(no-verbatim)`. Clipping rather than wrapping is a deliberate, benign
+//! fidelity choice for this slice — the wrap-and-carry behaviour of the
+//! packed DMA lanes is a deferred quirk.
 //!
 //! # Note-on channel allocation (`ply_note`'s priority search)
 //!
@@ -79,6 +81,7 @@
 //! [`crate::reverb::Reverb`] (the default) seeds exactly the all-zero reset
 //! this mixer always performed, so every pre-reverb test stays unaffected.
 
+use crate::cgb_envelope::CgbEnvelopeCadence;
 use crate::cgb_voice::CgbVoice;
 use crate::pitch::SAMPLES_PER_FRAME;
 use crate::psg::FrameSequencer128Hz;
@@ -91,6 +94,13 @@ use crate::voice::{StereoAcc, Voice};
 #[cfg(test)]
 #[path = "mixer_priority.rs"]
 mod priority_tests;
+
+/// A sibling of [`priority_tests`] for the same reason: the 15-frame CGB
+/// envelope cadence (issue #453) is a distinct mechanism from
+/// [`tests`]'s frame-mixing/note-off suite.
+#[cfg(test)]
+#[path = "mixer_cgb_envelope.rs"]
+mod cgb_envelope_cadence_tests;
 
 /// Default global mix level (`0..=15`). Emerald's `m4aSoundInit` reconfigures
 /// the driver the instant it starts, calling `m4aSoundMode` with
@@ -152,6 +162,9 @@ pub struct Mixer {
     /// [`MAX_SWEEP_TICKS_PER_FRAME`] for the same reason as [`Self::scratch`]:
     /// steady-state rendering must not allocate.
     sweep_ticks: Vec<usize>,
+    /// This mixer's one shared [`CgbEnvelopeCadence`] (its own doc explains
+    /// why exactly one instance must cover every CGB voice; issue #453).
+    cgb_envelope_cadence: CgbEnvelopeCadence,
 }
 
 impl Default for Mixer {
@@ -173,6 +186,7 @@ impl Mixer {
             reverb: Reverb::new(0),
             sweep_clock: FrameSequencer128Hz::default(),
             sweep_ticks: Vec::with_capacity(MAX_SWEEP_TICKS_PER_FRAME),
+            cgb_envelope_cadence: CgbEnvelopeCadence::default(),
         }
     }
 
@@ -504,9 +518,13 @@ impl Mixer {
             self.sweep_ticks.len() <= MAX_SWEEP_TICKS_PER_FRAME,
             "a frame's tick buffer must never have to grow",
         );
+        // Advanced unconditionally, matching `soundInfo->c15`'s own
+        // every-`CgbSound`-call update regardless of which channels are on
+        // (`m4a.c:941`..`:945`; issue #453).
+        let extra_envelope_iteration = self.cgb_envelope_cadence.advance_frame();
         for slot in &mut self.cgb_voices {
             if let Some(voice) = slot {
-                voice.begin_frame(self.master_volume);
+                voice.begin_frame(self.master_volume, extra_envelope_iteration);
                 voice.render(&mut self.scratch, &self.sweep_ticks);
                 if !voice.is_active() {
                     *slot = None;
