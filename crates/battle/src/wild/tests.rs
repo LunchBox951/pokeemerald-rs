@@ -2,42 +2,12 @@ use super::{
     build_pokemon_with_random_personality, build_wild_pokemon, ensure_wild_startable,
     initial_moveset, roll_ivs, roll_nature, roll_personality_for_nature,
 };
-use crate::damage::BattleRng;
 use crate::dex::Dex;
 use crate::error::BattleError;
 use crate::nature::Nature;
 use crate::pokemon::{MAX_MON_MOVES, MOVE_NONE};
+use crate::script_rng::SequenceRng;
 use assets::{MoveId, SpeciesId};
-
-/// A `BattleRng` fed from a fixed sequence, panicking (loudly, not
-/// hanging) if exhausted — for pinning exact draw order/count without
-/// risking an infinite loop in a broken test.
-struct SequenceRng {
-    values: Vec<u16>,
-    index: usize,
-}
-impl SequenceRng {
-    fn new(values: impl IntoIterator<Item = u16>) -> Self {
-        Self {
-            values: values.into_iter().collect(),
-            index: 0,
-        }
-    }
-    fn draws(&self) -> usize {
-        self.index
-    }
-}
-impl BattleRng for SequenceRng {
-    fn next_u16(&mut self) -> u16 {
-        let v = self
-            .values
-            .get(self.index)
-            .copied()
-            .expect("SequenceRng exhausted");
-        self.index += 1;
-        v
-    }
-}
 
 #[test]
 fn roll_nature_is_modulo_twenty_five_of_one_draw() {
