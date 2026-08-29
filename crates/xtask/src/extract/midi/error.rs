@@ -5,7 +5,8 @@ use std::fmt;
 /// An error produced while extracting a MIDI song.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum MidiError {
-    /// A fixed-size field or declared body is incomplete.
+    /// Input is incomplete, a byte length does not fit `usize`, or event-time
+    /// arithmetic overflows or underflows.
     Truncated,
     /// A raw tick cannot be scaled into a `u32`.
     TickOverflow(u32),
@@ -21,7 +22,8 @@ pub(crate) enum MidiError {
     NegativeDivision(i16),
     /// An expected track chunk does not start with `MTrk`.
     BadTrackMagic,
-    /// A status byte is not valid in the current parser state.
+    /// A status byte is unsupported, or a data byte appears without running
+    /// status.
     InvalidStatusByte(u8),
     /// A channel-voice operand is not a seven-bit data byte.
     InvalidDataByte(u8),

@@ -1,4 +1,7 @@
 //! Parses the attached `mid2agb` flags in `sound/songs/midi/midi.cfg`.
+//!
+//! Assembly labels and assembly compression do not affect normalized song
+//! data, so their flags are accepted but not stored.
 
 use super::error::MidiError;
 
@@ -7,8 +10,8 @@ const DEFAULT_CLOCKS_PER_BEAT: u8 = 1;
 const DOUBLE_CLOCKS_PER_BEAT: u8 = 2;
 const EXACT_GATE_TIME_FLAG: char = 'E';
 const VOICEGROUP_FLAG: char = 'G';
-const ASSEMBLY_LABEL_FLAG: char = 'L';
-const DISABLE_COMPRESSION_FLAG: char = 'N';
+const ASSEMBLY_OUTPUT_LABEL_FLAG: char = 'L';
+const DISABLE_ASSEMBLY_COMPRESSION_FLAG: char = 'N';
 const PRIORITY_FLAG: char = 'P';
 const REVERB_FLAG: char = 'R';
 const MASTER_VOLUME_FLAG: char = 'V';
@@ -58,7 +61,7 @@ fn apply_flag(entry: &mut MidiCfgEntry, token: &str) -> Result<(), MidiError> {
     match letter.to_ascii_uppercase() {
         EXACT_GATE_TIME_FLAG => entry.exact_gate_time = true,
         DOUBLE_CLOCKS_PER_BEAT_FLAG => entry.clocks_per_beat = DOUBLE_CLOCKS_PER_BEAT,
-        ASSEMBLY_LABEL_FLAG | DISABLE_COMPRESSION_FLAG => {}
+        ASSEMBLY_OUTPUT_LABEL_FLAG | DISABLE_ASSEMBLY_COMPRESSION_FLAG => {}
         VOICEGROUP_FLAG => value
             .trim_start_matches('_')
             .clone_into(&mut entry.voicegroup_label),
