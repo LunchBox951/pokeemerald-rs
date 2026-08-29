@@ -3,6 +3,30 @@
 //! Each region selects numbered animation assets on its own cadence and patches
 //! a fixed range in the combined tileset's primary tile block. Bundled secondary
 //! tilesets have no active animation callback.
+//!
+//! `tick` is the number of rendered frames since the current room loaded. It
+//! resets to zero on fresh loads and warps, matching the upstream
+//! `InitTilesetAnimations` call sites (`pokeemerald/src/overworld.c:529,1867,
+//! 1942,2039`). No region fires at tick zero, so the base tiles remain unchanged.
+//! After the first dispatch, each frame stays latched until that region fires
+//! again. General's complete cadence repeats every 128 ticks once every region
+//! has fired; the last first dispatch occurs at tick 16.
+//!
+//! ## Configured regions
+//!
+//! | primary tileset | asset | start tile | tiles | phase | interval | sequence |
+//! |---|---|---:|---:|---:|---:|---|
+//! | General | `flower` | 508 | 4 | 0 | 16 | `[0, 1, 0, 2]` |
+//! | General | `water` | 432 | 30 | 1 | 16 | `[0, 1, 2, 3, 4, 5, 6, 7]` |
+//! | General | `sand_water_edge` | 464 | 10 | 2 | 16 | `[0, 1, 2, 3, 4, 5, 6, 0]` |
+//! | General | `waterfall` | 496 | 6 | 3 | 16 | `[0, 1, 2, 3]` |
+//! | General | `land_water_edge` | 480 | 10 | 4 | 16 | `[0, 1, 2, 3]` |
+//! | Building | `tv_turned_on` | 496 | 4 | 0 | 8 | `[0, 1]` |
+//!
+//! `start tile` is a combined-tileset tile index and `tiles` is the exact
+//! packed frame length that [`AnimatedTileset::load`] validates. A region fires
+//! when the counter modulo `interval` equals `phase`; `sequence` selects the
+//! numbered assets in dispatch order.
 
 use assets::AssetPack;
 use rendering::BitDepth;
@@ -198,10 +222,10 @@ impl AnimatedTileset {
 /// Returns the frame most recently dispatched by `tick`, or `None` before the
 /// region's first dispatch.
 ///
-/// Upstream increments its counter before dispatch and leaves transferred
-/// pixels latched between dispatches (`pokeemerald/src/tileset_anims.c:600-614`).
-/// Every configured cycle divides its 256-tick counter period, so unwrapped
-/// elapsed ticks select the same frame after each upstream wrap.
+/// Upstream increments its counter before dispatch and transfers only queued
+/// regions (`pokeemerald/src/tileset_anims.c:564-569,586-598`), leaving the
+/// other tile bytes latched. Every configured cycle divides its 256-tick counter
+/// period, so unwrapped elapsed ticks select the same frame after each wrap.
 fn latched_frame(
     tick: u64,
     fire_phase: u64,
