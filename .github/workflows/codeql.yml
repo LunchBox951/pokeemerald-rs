@@ -1,6 +1,5 @@
-# Repository-owned CodeQL configuration. Until the owner completes the go-live
-# sequence in RELEASE.md, analysis runs but uploads stay disabled because
-# GitHub's default setup rejects advanced-workflow SARIF.
+# This repository owns CodeQL advanced setup for Actions, Python, and Rust,
+# and SARIF upload is controlled by CODEQL_ADVANCED_UPLOADS_ENABLED.
 name: codeql
 
 on:
