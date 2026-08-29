@@ -55,6 +55,8 @@ const PITCH_FIXED_POINT_SCALE: f64 = 1024.0;
 const OUTPUT_SAMPLE_SCALE: f64 = 128.0;
 const OUTPUT_SAMPLE_MIN: f64 = -128.0;
 const OUTPUT_SAMPLE_MAX: f64 = 127.0;
+const S24_SIGN_BIT: u32 = 1 << 23;
+const S24_VALUE_RANGE: i64 = 1 << 24;
 
 /// A WAV decoding failure.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -220,6 +222,15 @@ fn read_u32(bytes: &[u8], offset: usize) -> Result<u32, WavError> {
     Ok(u32::from_le_bytes([field[0], field[1], field[2], field[3]]))
 }
 
+fn sign_extend_s24(encoded: u32) -> i32 {
+    let signed = if encoded & S24_SIGN_BIT == 0 {
+        i64::from(encoded)
+    } else {
+        i64::from(encoded) - S24_VALUE_RANGE
+    };
+    i32::try_from(signed).expect("signed 24-bit samples fit in i32")
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SampleFormat {
     U8,
@@ -270,8 +281,7 @@ impl SampleFormat {
                 let encoded = u32::from(bytes[start])
                     | (u32::from(bytes[start + 1]) << 8)
                     | (u32::from(bytes[start + 2]) << 16);
-                #[allow(clippy::cast_possible_wrap)]
-                let value = ((encoded << 8) as i32) >> 8;
+                let value = sign_extend_s24(encoded);
                 f64::from(value) / 8_388_608.0
             }
             Self::S32 => {

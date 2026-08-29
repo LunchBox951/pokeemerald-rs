@@ -36,6 +36,11 @@ const PCM_S16: WavFormat = WavFormat {
     block_align: 2,
     bits_per_sample: 16,
 };
+const PCM_S24: WavFormat = WavFormat {
+    tag: 1,
+    block_align: 3,
+    bits_per_sample: 24,
+};
 const IEEE_FLOAT_F32: WavFormat = WavFormat {
     tag: 3,
     block_align: 4,
@@ -221,6 +226,14 @@ fn s16_format_decodes() {
     data.extend_from_slice(&0i16.to_le_bytes());
     data.extend_from_slice(&i16::MAX.to_le_bytes());
     let bytes = build_wav(PCM_S16, 22050, &[], &data);
+    let sample = decode(&bytes).unwrap();
+    assert_eq!(sample.data, vec![-128, 0, 127]);
+}
+
+#[test]
+fn s24_format_sign_extends_and_decodes() {
+    let data = [0x00, 0x00, 0x80, 0x00, 0x00, 0x00, 0xFF, 0xFF, 0x7F];
+    let bytes = build_wav(PCM_S24, 22050, &[], &data);
     let sample = decode(&bytes).unwrap();
     assert_eq!(sample.data, vec![-128, 0, 127]);
 }
