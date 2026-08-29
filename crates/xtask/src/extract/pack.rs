@@ -130,7 +130,7 @@ impl fmt::Display for PackWriteError {
 impl std::error::Error for PackWriteError {}
 
 fn wrapping_entry_count_field(entry_count: usize) -> u32 {
-    #[allow(
+    #[expect(
         clippy::cast_possible_truncation,
         reason = "the u32 wire field contains the low 32 bits of the usize count"
     )]
