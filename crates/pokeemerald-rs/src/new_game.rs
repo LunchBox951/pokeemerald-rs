@@ -25,8 +25,10 @@ pub const DEFAULT_PLAYER_CHARACTER: PlayerCharacter = PlayerCharacter::Brendan;
 /// Money in a fresh save.
 pub const STARTING_MONEY: u32 = 3000;
 
+const TREECKO_SPECIES: assets::SpeciesId = assets::SpeciesId(277);
+
 /// Fixed Treecko choice for the direct-start flow.
-pub const PROVISIONAL_STARTER_SPECIES: assets::SpeciesId = assets::SpeciesId(277);
+pub const PROVISIONAL_STARTER_SPECIES: assets::SpeciesId = TREECKO_SPECIES;
 
 /// Level of the provisional starter.
 pub const PROVISIONAL_STARTER_LEVEL: u8 = 5;
@@ -227,7 +229,6 @@ fn trainer_id_from_pre_draw_state(
 mod tests {
     use super::*;
 
-    const TREECKO_SPECIES_ID: assets::SpeciesId = assets::SpeciesId(277);
     const CONFIGURED_SEED_TRAINER_ID: [u8; 4] = [0x00, 0x00, 0x00, 0x00];
     const CONFIGURED_SEED_STATE_AFTER_TRAINER_ID: u32 = 0x0000_6073;
     const NONDEGENERATE_TRAINER_ID_SEED: u32 = 0x1234;
@@ -248,7 +249,7 @@ mod tests {
     fn provisional_starter_is_a_deterministic_fightable_treecko() {
         let starter = provisional_starter();
         assert_eq!(starter.species(), PROVISIONAL_STARTER_SPECIES);
-        assert_eq!(starter.species(), TREECKO_SPECIES_ID);
+        assert_eq!(starter.species(), TREECKO_SPECIES);
         assert_eq!(starter.level(), PROVISIONAL_STARTER_LEVEL);
         assert!(!starter.is_fainted());
         assert_eq!(starter.current_hp(), starter.stats().max_hp);
