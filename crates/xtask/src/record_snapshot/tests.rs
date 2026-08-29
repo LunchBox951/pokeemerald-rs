@@ -1,93 +1,99 @@
-//! Unit/integration tests for [`super::run_with_paths`] and its private
-//! helpers.
-//!
-//! CI has no `pokeemerald/` checkout and no real asset pack (module docs'
-//! "CI stays pack-free" requirement, issue #226), so every test here builds
-//! a small **synthetic** pack in memory, mirroring
-//! `pokeemerald_rs::main_menu::tests`' own fixture style (a small,
-//! independent copy, not a shared helper — that module's own docs explain
-//! why the two crates' test fixtures stay decoupled rather than shared).
-//! [`Scene::Title`] is exercised only for its error-handling wiring here
-//! (a full synthetic title pack needs far more entries than this
-//! subcommand's own tests are worth duplicating) — its pixel content is
-//! already covered by `pokeemerald_rs::title::tests`.
-
 use std::path::PathBuf;
 
 use assets::pack::AssetPack;
 
 use super::{
     capture_loaded, default_paths, fnv1a64, git_sha, render_meta, run_with_paths,
-    RecordSnapshotError,
+    RecordSnapshotError, TITLE_FRAME_WITH_PRESS_START,
 };
 use crate::Scene;
 
-/// One directory entry for [`write_synthetic_pack`] (mirrors
-/// `pokeemerald_rs::main_menu::tests`' `Entry`).
+const WINDOW_FRAME_GREEN_BGR555: u16 = 0x03E0;
+const MAIN_MENU_BACKGROUND_BGR555: u16 = 0x4104;
+const REPLACEMENT_BACKGROUND_BGR555: u16 = 0x001F;
+const MAIN_MENU_BACKGROUND_RGB888: [u8; 3] = [33, 66, 132];
+
+#[derive(Clone, Copy)]
+enum EntryKind {
+    Image,
+    Palette,
+}
+
+impl EntryKind {
+    fn tag(self) -> u8 {
+        match self {
+            Self::Image => 0,
+            Self::Palette => 1,
+        }
+    }
+}
+
 struct Entry {
     id: &'static str,
-    kind_tag: u8,
+    kind: EntryKind,
     meta: Vec<u8>,
     payload: Vec<u8>,
 }
 
 fn write_synthetic_pack(mut entries: Vec<Entry>) -> Vec<u8> {
-    entries.sort_by(|a, b| a.id.cmp(b.id));
+    entries.sort_by(|left, right| left.id.cmp(right.id));
 
-    let header_size = 8 + 4 + 4;
+    let header_size =
+        assets::pack::MAGIC.len() + std::mem::size_of::<u32>() + std::mem::size_of::<u32>();
     let mut directory_size = 0usize;
-    for e in &entries {
-        directory_size += 2 + e.id.len() + 1 + 8 + 8 + e.meta.len();
+    for entry in &entries {
+        directory_size += std::mem::size_of::<u16>()
+            + entry.id.len()
+            + std::mem::size_of::<u8>()
+            + std::mem::size_of::<u64>()
+            + std::mem::size_of::<u64>()
+            + entry.meta.len();
     }
     let mut offset = header_size + directory_size;
     let mut offsets = Vec::new();
-    for e in &entries {
+    for entry in &entries {
         offsets.push(offset);
-        offset += e.payload.len();
+        offset += entry.payload.len();
     }
 
-    let mut out = Vec::new();
-    out.extend_from_slice(&assets::pack::MAGIC);
-    out.extend_from_slice(&assets::pack::FORMAT_VERSION.to_le_bytes());
-    out.extend_from_slice(&u32::try_from(entries.len()).unwrap().to_le_bytes());
-    for (e, &off) in entries.iter().zip(&offsets) {
-        out.extend_from_slice(&u16::try_from(e.id.len()).unwrap().to_le_bytes());
-        out.extend_from_slice(e.id.as_bytes());
-        out.push(e.kind_tag);
-        out.extend_from_slice(&u64::try_from(off).unwrap().to_le_bytes());
-        out.extend_from_slice(&u64::try_from(e.payload.len()).unwrap().to_le_bytes());
-        out.extend_from_slice(&e.meta);
+    let mut pack = Vec::new();
+    pack.extend_from_slice(&assets::pack::MAGIC);
+    pack.extend_from_slice(&assets::pack::FORMAT_VERSION.to_le_bytes());
+    pack.extend_from_slice(&u32::try_from(entries.len()).unwrap().to_le_bytes());
+    for (entry, &offset) in entries.iter().zip(&offsets) {
+        pack.extend_from_slice(&u16::try_from(entry.id.len()).unwrap().to_le_bytes());
+        pack.extend_from_slice(entry.id.as_bytes());
+        pack.push(entry.kind.tag());
+        pack.extend_from_slice(&u64::try_from(offset).unwrap().to_le_bytes());
+        pack.extend_from_slice(&u64::try_from(entry.payload.len()).unwrap().to_le_bytes());
+        pack.extend_from_slice(&entry.meta);
     }
-    for e in &entries {
-        out.extend_from_slice(&e.payload);
+    for entry in &entries {
+        pack.extend_from_slice(&entry.payload);
     }
-    out
+    pack
 }
 
 fn image_meta(width: u32, height: u32, bit_depth: u8) -> Vec<u8> {
-    let mut m = Vec::new();
-    m.extend_from_slice(&width.to_le_bytes());
-    m.extend_from_slice(&height.to_le_bytes());
-    m.push(bit_depth);
-    m
+    let mut meta = Vec::new();
+    meta.extend_from_slice(&width.to_le_bytes());
+    meta.extend_from_slice(&height.to_le_bytes());
+    meta.push(bit_depth);
+    meta
 }
 
 fn palette_meta(color_count: u16) -> Vec<u8> {
     color_count.to_le_bytes().to_vec()
 }
 
-/// A minimal pack covering exactly what [`pokeemerald_rs::main_menu::MainMenuScene::from_pack`]
-/// needs — see `pokeemerald_rs::main_menu::tests::synthetic_main_menu_pack_bytes`'s
-/// identical fixture for the field-by-field rationale (duplicated here
-/// rather than shared, module docs).
 fn synthetic_main_menu_pack_bytes() -> Vec<u8> {
-    synthetic_main_menu_pack_bytes_with_background(0x4104)
+    synthetic_main_menu_pack_bytes_with_background(MAIN_MENU_BACKGROUND_BGR555)
 }
 
 fn synthetic_main_menu_pack_bytes_with_background(background: u16) -> Vec<u8> {
     let frame_pixels = vec![1u8; 24 * 24];
     let mut frame_palette = vec![0u8; 32];
-    frame_palette[2..4].copy_from_slice(&0x03E0u16.to_le_bytes()); // bright green
+    frame_palette[2..4].copy_from_slice(&WINDOW_FRAME_GREEN_BGR555.to_le_bytes());
 
     let font_pixels =
         vec![0u8; (assets::fonts::SHEET_WIDTH * assets::fonts::SHEET_HEIGHT) as usize];
@@ -98,33 +104,31 @@ fn synthetic_main_menu_pack_bytes_with_background(background: u16) -> Vec<u8> {
     write_synthetic_pack(vec![
         Entry {
             id: "text-window/image/1",
-            kind_tag: 0,
+            kind: EntryKind::Image,
             meta: image_meta(24, 24, 4),
             payload: frame_pixels,
         },
         Entry {
             id: "text-window/palette/1",
-            kind_tag: 1,
+            kind: EntryKind::Palette,
             meta: palette_meta(16),
             payload: frame_palette,
         },
         Entry {
             id: "font/normal/glyphs",
-            kind_tag: 0,
+            kind: EntryKind::Image,
             meta: image_meta(assets::fonts::SHEET_WIDTH, assets::fonts::SHEET_HEIGHT, 2),
             payload: font_pixels,
         },
         Entry {
             id: "interface/palette/main_menu_bg",
-            kind_tag: 1,
+            kind: EntryKind::Palette,
             meta: palette_meta(16),
             payload: bg_palette,
         },
     ])
 }
 
-/// A scratch path under the OS temp dir, unique per test-and-suffix pair so
-/// parallel `cargo test` runs never collide.
 fn scratch_path(name: &str) -> PathBuf {
     std::env::temp_dir().join(format!(
         "pokeemerald-rs-xtask-record-snapshot-test-{}-{:?}-{name}",
@@ -133,7 +137,6 @@ fn scratch_path(name: &str) -> PathBuf {
     ))
 }
 
-/// RAII cleanup for a scratch file or directory this test tree created.
 struct ScratchGuard(PathBuf);
 
 impl Drop for ScratchGuard {
@@ -157,8 +160,6 @@ fn visible_generation(output_dir: &std::path::Path, scene: Scene) -> Option<Path
         .map(|generation| output_dir.join(generation.trim()))
 }
 
-// -- `fnv1a64` ------------------------------------------------------------
-
 #[test]
 fn fnv1a64_is_deterministic_and_input_sensitive() {
     let a = fnv1a64(b"hello world");
@@ -170,9 +171,6 @@ fn fnv1a64_is_deterministic_and_input_sensitive() {
 
 #[test]
 fn fnv1a64_matches_the_published_offset_basis_for_empty_input() {
-    // The FNV-1a 64-bit offset basis is itself the hash of the empty
-    // string (no bytes ever XOR/multiply the seed) — pins the constant
-    // against the published algorithm rather than just "some hash".
     assert_eq!(fnv1a64(&[]), 0xcbf2_9ce4_8422_2325);
 }
 
@@ -181,21 +179,8 @@ fn fnv1a64_matches_the_published_non_empty_known_answer() {
     assert_eq!(fnv1a64(b"a"), 0xaf63_dc4c_8601_ec8c);
 }
 
-// -- `git_sha` --------------------------------------------------------------
-
 #[test]
-fn git_sha_of_this_checkout_is_a_40_char_hex_string() {
-    // This test runs inside the actual pokeemerald-rs checkout (`cargo
-    // test`'s own working directory is this crate's manifest dir, but
-    // `crate::extract::repo_root()` walks back to the repo root
-    // regardless) -- a real git repo, so this must succeed, not fall back
-    // to "unknown".
-    //
-    // The worktree's cleanliness is not this test's to control (CI's is
-    // clean, a developer mid-slice is not), so accept either form and
-    // assert the exact shape of each: a bare 40-hex SHA, or that same SHA
-    // with the literal `-dirty` marker `git_sha` appends -- never some
-    // other suffix, and never a truncated/`describe`-style SHA.
+fn git_sha_of_this_checkout_is_full_length_with_an_optional_dirty_suffix() {
     let sha = git_sha(&crate::extract::repo_root()).expect("this checkout is a real git repo");
     let hex = sha.strip_suffix("-dirty").unwrap_or(&sha);
     assert_eq!(hex.len(), 40, "a git SHA-1 is 40 hex characters: {sha}");
@@ -207,12 +192,6 @@ fn git_sha_of_this_checkout_is_a_40_char_hex_string() {
 
 #[test]
 fn git_sha_marks_a_dirty_worktree_and_leaves_a_clean_one_bare() {
-    // A scratch repo this test fully controls, so it can assert *both*
-    // states -- the ambient checkout can only ever show one of them, and
-    // which one is not this suite's to decide (see
-    // `git_sha_of_this_checkout_is_a_40_char_hex_string`). Without this,
-    // deleting the `--porcelain` check would still pass the whole suite on
-    // a clean CI checkout.
     let repo = scratch_path("dirty-marker-repo");
     let _guard = ScratchGuard(repo.clone());
     std::fs::create_dir_all(&repo).unwrap();
@@ -229,8 +208,6 @@ fn git_sha_marks_a_dirty_worktree_and_leaves_a_clean_one_bare() {
         assert!(ok, "git {args:?} failed");
     };
     git(&["init", "--quiet"]);
-    // Committing needs an identity, and this scratch repo has no config of
-    // its own to inherit one from in a sandboxed CI environment.
     git(&["config", "user.email", "test@example.invalid"]);
     git(&["config", "user.name", "test"]);
     git(&["config", "commit.gpgsign", "false"]);
@@ -255,15 +232,10 @@ fn git_sha_marks_a_dirty_worktree_and_leaves_a_clean_one_bare() {
 
 #[test]
 fn git_sha_is_none_for_a_path_with_no_git_repo() {
-    // The scratch dir must be its own repository *boundary*, not just an
-    // empty dir: git's discovery walks upward, so a `TMPDIR` configured
-    // beneath some enclosing checkout would otherwise resolve that repo's
-    // real HEAD and flip this assertion environment-dependently. A `.git`
-    // *file* whose gitdir pointer dangles stops the walk right here and
-    // guarantees "no usable repository at this path" everywhere.
     let scratch = scratch_path("not-a-repo");
     std::fs::create_dir_all(&scratch).unwrap();
     let guard = ScratchGuard(scratch.clone());
+    // A dangling .git file prevents discovery of an enclosing repository.
     std::fs::write(
         scratch.join(".git"),
         b"gitdir: this-path-deliberately-does-not-exist\n",
@@ -272,8 +244,6 @@ fn git_sha_is_none_for_a_path_with_no_git_repo() {
     assert!(git_sha(&scratch).is_none());
     drop(guard);
 }
-
-// -- `render_meta` ----------------------------------------------------------
 
 #[test]
 fn render_meta_has_the_documented_fixed_field_order() {
@@ -306,8 +276,6 @@ fn render_meta_joins_multiple_inputs_with_commas() {
     assert!(text.contains("inputs: DPAD_DOWN,A\n"));
 }
 
-// -- `run_with_paths`: error paths -------------------------------------------
-
 #[test]
 fn missing_pack_fails_closed_with_pack_error() {
     let pack_path = scratch_path("missing.pack");
@@ -322,34 +290,22 @@ fn missing_pack_fails_closed_with_pack_error() {
 
 #[test]
 fn title_scene_against_a_main_menu_only_pack_fails_closed_with_scene_error() {
-    // Proves `Scene::Title` really is wired into `compose`/`from_pack`
-    // (not silently skipped): a pack with none of the `title/*` entries it
-    // needs must surface a `Scene` error, not succeed or panic.
     let (pack_path, _guard) = write_pack("title-against-main-menu-pack");
     let output_dir = scratch_path("title-scene-error-out");
     let err = run_with_paths(Scene::Title, &pack_path, &output_dir).unwrap_err();
     assert!(matches!(err, RecordSnapshotError::Scene(_)));
 }
 
-/// [`super::TITLE_FRAME_INDEX`] must sit in the *visible* half of the
-/// "Press Start" blink: a frame from the invisible half (like frame 0)
-/// hash-matches even with the banner broken outright, so the blessing
-/// workflow could never catch a banner regression. Pinned through
-/// [`pokeemerald_rs::title::press_start_visible`] -- the cadence's source
-/// of truth -- rather than a local copy of the rule, so either a frame
-/// change here or a cadence change there fails this test loudly.
 #[test]
 fn the_title_capture_frame_has_press_start_visible() {
     assert!(
-        pokeemerald_rs::title::press_start_visible(super::TITLE_FRAME_INDEX),
-        "TITLE_FRAME_INDEX must witness the Press Start banner"
+        pokeemerald_rs::title::press_start_visible(TITLE_FRAME_WITH_PRESS_START),
+        "TITLE_FRAME_WITH_PRESS_START must witness the Press Start banner"
     );
 }
 
-// -- `run_with_paths`: the main-menu proving case ----------------------------
-
 #[test]
-fn main_menu_new_game_writes_a_full_frame_of_rgb_bytes_and_correct_metadata() {
+fn main_menu_new_game_writes_rgb_channels_in_order_and_correct_metadata() {
     let (pack_path, _pack_guard) = write_pack("main-menu-new-game-report");
     let output_dir = scratch_path("main-menu-new-game-out");
     let out_guard = ScratchGuard(output_dir.clone());
@@ -360,28 +316,11 @@ fn main_menu_new_game_writes_a_full_frame_of_rgb_bytes_and_correct_metadata() {
     let rgb_bytes = std::fs::read(&report.rgb_path).unwrap();
     assert_eq!(rgb_bytes.len(), report.payload_len);
 
-    // Channel order, pinned positionally against a known pixel.
-    //
-    // `MainMenuScene::compose` fills the whole framebuffer with the
-    // backdrop colour before drawing either item window, and the backdrop
-    // is never darkened (`main_menu.rs`' "Selection highlight" section), so
-    // pixel (0, 0) -- the top-left corner, far outside both windows -- is
-    // exactly `interface/palette/main_menu_bg` entry 0. This fixture sets
-    // that entry to bgr555 `0x4104` (see `synthetic_main_menu_pack_bytes`).
-    //
-    // `rendering::Bgr555::from_raw(0x4104)` decodes to 5-bit channels
-    // r=4, g=8, b=16 (red in bits 0-4, green 5-9, blue 10-14), and
-    // `to_rgb888` expands each with `(c << 3) | (c >> 2)`:
-    //   r = (4  << 3) | (4  >> 2) = 33
-    //   g = (8  << 3) | (8  >> 2) = 66
-    //   b = (16 << 3) | (16 >> 2) = 132
-    // Spelled as literals rather than recomputed through `rendering` (not a
-    // dependency of this crate, and recomputing would only re-derive the
-    // value, never pin the *order*). All three differ, so any channel swap
-    // in `frame_to_rgb_bytes` -- BGR, GRB, anything -- fails here.
-    assert_eq!(rgb_bytes[0], 33, "byte 0 of a pixel must be red");
-    assert_eq!(rgb_bytes[1], 66, "byte 1 of a pixel must be green");
-    assert_eq!(rgb_bytes[2], 132, "byte 2 of a pixel must be blue");
+    assert_eq!(
+        &rgb_bytes[..3],
+        &MAIN_MENU_BACKGROUND_RGB888,
+        "the first pixel must preserve RGB channel order"
+    );
 
     let meta = std::fs::read_to_string(&report.meta_path).unwrap();
     assert!(meta.contains("scene: main-menu-new-game\n"));
@@ -393,9 +332,6 @@ fn main_menu_new_game_writes_a_full_frame_of_rgb_bytes_and_correct_metadata() {
     assert!(meta.contains(&format!("pack_hash: fnv1a64:{}\n", report.pack_hash)));
     assert!(meta.contains(&format!("git_sha: {}\n", report.git_sha)));
 
-    // `rgb_hash`/`pack_hash` in the report/metadata must be the real hash
-    // of the `.rgb` file's own bytes / the pack's own bytes, not a
-    // placeholder.
     assert_eq!(report.rgb_hash, format!("{:016x}", fnv1a64(&rgb_bytes)));
     let pack_bytes = std::fs::read(&pack_path).unwrap();
     assert_eq!(report.pack_hash, format!("{:016x}", fnv1a64(&pack_bytes)));
@@ -404,8 +340,6 @@ fn main_menu_new_game_writes_a_full_frame_of_rgb_bytes_and_correct_metadata() {
     assert_eq!(report.rgb_path.parent(), Some(visible.as_path()));
     assert_eq!(report.meta_path.parent(), Some(visible.as_path()));
 
-    // No hidden staging directory or pointer temporary may survive a
-    // successful capture.
     let leftovers: Vec<PathBuf> = std::fs::read_dir(&output_dir)
         .unwrap()
         .map(|entry| entry.unwrap().path())
@@ -429,7 +363,7 @@ fn replacing_the_pack_path_cannot_change_loaded_pack_provenance() {
     let original_bytes = std::fs::read(&pack_path).unwrap();
     let pack = AssetPack::load(&pack_path).unwrap();
 
-    let replacement = synthetic_main_menu_pack_bytes_with_background(0x001f);
+    let replacement = synthetic_main_menu_pack_bytes_with_background(REPLACEMENT_BACKGROUND_BGR555);
     assert_ne!(replacement, original_bytes);
     std::fs::write(&pack_path, &replacement).unwrap();
 
@@ -445,7 +379,7 @@ fn replacing_the_pack_path_cannot_change_loaded_pack_provenance() {
     assert_ne!(report.pack_hash, format!("{:016x}", fnv1a64(&replacement)));
     assert_eq!(
         &rgb[..3],
-        &[33, 66, 132],
+        &MAIN_MENU_BACKGROUND_RGB888,
         "composition and provenance must both use the retained original buffer"
     );
 
@@ -576,8 +510,7 @@ fn default_paths_are_derived_without_capturing_into_the_repository() {
 #[test]
 #[ignore = "needs a local pack: run `cargo xtask extract` first"]
 fn real_pack_scene_round_trips_the_capture_and_matches_a_second_run() {
-    // Reads the real pack, which `extract_dispatch_succeeds_with_local_checkout`
-    // rewrites non-atomically -- exclude it (see `extract::REAL_PACK_LOCK`).
+    // Extraction rewrites the shared real pack non-atomically.
     let _pack = crate::extract::REAL_PACK_LOCK
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
