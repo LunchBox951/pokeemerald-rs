@@ -100,7 +100,7 @@ const ACCURACY_ROLL_RANGE: u32 = 100;
 ///
 /// Always-hit effects consume no draw. Every other effect consumes exactly one,
 /// even when its adjusted accuracy guarantees a hit, matching
-/// `Cmd_accuracycheck` (`pokeemerald/src/battle_script_commands.c:1181`). Zero
+/// `Cmd_accuracycheck` (`pokeemerald/src/battle_script_commands.c:1176`). Zero
 /// accuracy therefore misses unless the effect is always-hit.
 #[must_use]
 pub fn accuracy_check(
@@ -152,6 +152,7 @@ mod tests {
     #[test]
     fn always_hits_covers_swift_and_vital_throw_only() {
         assert!(always_hits(EFFECT_ALWAYS_HIT));
+        assert_eq!(EFFECT_VITAL_THROW, MoveEffect(78));
         assert!(always_hits(EFFECT_VITAL_THROW));
         assert!(!always_hits(ORDINARY_HIT_EFFECT));
     }
