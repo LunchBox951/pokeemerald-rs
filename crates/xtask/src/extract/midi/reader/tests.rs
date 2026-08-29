@@ -1,9 +1,14 @@
-use super::{read_header, split_tracks, MidiReader, MIDI_HEADER_BODY_LEN};
+use super::{read_header, split_tracks, MidiReader};
 use crate::extract::midi::error::MidiError;
+
+/// The `MThd` body length the Standard MIDI File 1.0 format fixes at six
+/// bytes. Spelled out here rather than imported so this fixture stays an
+/// independent oracle for the parser's own constant.
+const SPEC_HEADER_BODY_LEN: u32 = 6;
 
 fn mthd(format: u16, track_count: u16, division: u16) -> Vec<u8> {
     let mut out = b"MThd".to_vec();
-    out.extend(MIDI_HEADER_BODY_LEN.to_be_bytes());
+    out.extend(SPEC_HEADER_BODY_LEN.to_be_bytes());
     out.extend(format.to_be_bytes());
     out.extend(track_count.to_be_bytes());
     out.extend(division.to_be_bytes());
