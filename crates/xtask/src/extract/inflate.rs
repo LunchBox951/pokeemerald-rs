@@ -136,8 +136,8 @@ impl HuffmanTable {
                 return Err(InflateError::BadHuffmanTable);
             }
         }
-        // RFC 1951 section 3.2.7 permits a one-symbol distance tree, so
-        // `remaining_code_space` may be positive.
+        // Keep incomplete tables decodable: RFC 1951 section 3.2.7 requires
+        // this for one-symbol distance trees, and `decode` rejects unused codes.
 
         let mut next_symbol_by_length = [0u16; 16];
         for length in 1..16 {
