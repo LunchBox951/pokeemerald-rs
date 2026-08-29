@@ -1254,6 +1254,7 @@ mod tests {
 
     use super::*;
     use crate::pokemon::Ivs;
+    use crate::script_rng::SequenceRng;
 
     const MAX_IVS: Ivs = Ivs {
         hp: 31,
@@ -1267,26 +1268,6 @@ mod tests {
     const ABSORB: MoveId = MoveId(71);
     /// `MOVE_TACKLE`.
     const TACKLE: MoveId = MoveId(33);
-
-    struct SequenceRng {
-        values: Vec<u16>,
-        idx: usize,
-    }
-    impl SequenceRng {
-        fn new(values: impl Into<Vec<u16>>) -> Self {
-            Self {
-                values: values.into(),
-                idx: 0,
-            }
-        }
-    }
-    impl BattleRng for SequenceRng {
-        fn next_u16(&mut self) -> u16 {
-            let v = self.values[self.idx];
-            self.idx += 1;
-            v
-        }
-    }
 
     /// Hand-builds the reviewer finding 3 fixture: a trainer [`Battle`]
     /// whose enemy (level-50 Bulbasaur, Absorb, faster (65) than the
@@ -1365,9 +1346,9 @@ mod tests {
         // `trainer_ai`) plus its one-candidate tie-break, then Absorb's
         // ordinary three (accuracy, crit, damage roll -- `crate::drain`'s
         // module docs: no `seteffectwithchance` draw). If the player's
-        // Tackle wrongly executes too, `SequenceRng` panics on an
-        // out-of-bounds read rather than silently drawing zero, so a
-        // regression here fails loudly.
+        // Tackle wrongly executes too, `SequenceRng` panics on exhaustion
+        // rather than silently drawing zero, so a regression here fails
+        // loudly.
         let mut rng = SequenceRng::new([0, 0, 0, 0, 0, 0, 0, 0, 0]);
         let events = battle
             .take_turn(PlayerAction::UseMove(0), &mut rng)
