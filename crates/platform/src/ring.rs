@@ -1,18 +1,18 @@
-//! A bounded, underrun-safe sample ring buffer (S-1): the seam between the
-//! future `audio` crate (M4A engine, S-3), which renders PCM on its own
-//! thread, and [`crate::audio::AudioOutput`], which drains it once per audio
-//! device callback.
+//! A bounded, underrun-safe sample ring buffer: the seam between a producer
+//! of rendered PCM — in practice the integration crate's frame-driven music
+//! player, pushing the `audio` crate's M4A output — and
+//! [`crate::audio::AudioOutput`], which drains it once per audio device
+//! callback.
 //!
 //! [`ring_buffer`] splits into a cloneable [`Producer`] (write side) and a
 //! single [`Consumer`] (read side) sharing one `Mutex`-guarded queue —
-//! simple over lock-free, per the project's "prefer a `Mutex`/atomic ring
-//! buffer" guidance; a few hundred samples per callback under a short-held
-//! lock is not a contention risk here.
+//! simple over lock-free, because a few hundred samples per callback under
+//! a short-held lock is not a contention risk here.
 //!
 //! [`Consumer::fill`] is the hot path every consumer of a ring buffer is
 //! built on — the real device callback, [`crate::resample::Resampler`], and
-//! the null backend used in tests all drive it (directly, or one frame at a
-//! time from the resampler). It takes the queue lock exactly once per call,
+//! the null backend used in tests all drive it, each in one bulk call per
+//! callback. It takes the queue lock exactly once per call,
 //! bulk-drains whatever is queued into the requested slice, and pads any
 //! shortfall with silence, adding that shortfall to the underrun counter in a
 //! single consolidated update. That keeps the promised "short-held single
@@ -34,7 +34,7 @@ struct Shared {
 
 /// Lock `queue`, recovering from poisoning rather than propagating a panic.
 ///
-/// A panic on one side (e.g. a bug in the future `audio` crate's mixer)
+/// A panic on the producer side (e.g. a bug in the mixer feeding it)
 /// should not also take down the audio device callback thread; the worst a
 /// poisoned lock should cost here is a torn-looking read, not a crash.
 fn lock(queue: &Mutex<VecDeque<f32>>) -> std::sync::MutexGuard<'_, VecDeque<f32>> {
@@ -64,9 +64,9 @@ pub fn ring_buffer(capacity: usize) -> (Producer, Consumer) {
 /// The write half of a sample ring buffer.
 ///
 /// Cheap to clone (all clones share the same underlying buffer) and
-/// `Send + Sync`, which is the point: the `audio` crate's mixer pushes
-/// rendered PCM here from its own thread while [`Consumer`] drains it from
-/// the audio device callback thread.
+/// `Send + Sync`, which is the point: a producer may push rendered PCM here
+/// from any thread while [`Consumer`] drains it from the audio device
+/// callback thread.
 #[derive(Clone)]
 pub struct Producer {
     shared: Arc<Shared>,
@@ -216,7 +216,7 @@ mod tests {
     fn bulk_fill_consolidates_shortfall_into_the_underrun_count() {
         // A single `fill` that outruns the queue must add exactly the missing
         // sample count to the counter — the bulk drain's consolidated update
-        // is required to match the old per-sample accounting exactly.
+        // must match per-sample accounting exactly.
         let (producer, consumer) = ring_buffer(64);
         assert_eq!(producer.push(&[1.0, 2.0, 3.0]), 3);
 
