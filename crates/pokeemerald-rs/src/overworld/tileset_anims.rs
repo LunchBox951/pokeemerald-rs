@@ -2,7 +2,8 @@
 //!
 //! Each region selects numbered animation assets on its own cadence and patches
 //! a fixed range in the combined tileset's primary tile block. Bundled secondary
-//! tilesets have no active animation callback.
+//! tilesets have no active animation callback. Animations and palette-only
+//! effects for unbundled tilesets remain outside this module with their assets.
 //!
 //! `tick` is the number of rendered frames since the current room loaded. It
 //! resets to zero on fresh loads and warps, matching the upstream
