@@ -9,8 +9,8 @@
 //! [`CgbEnvelopeCadence`].
 
 /// Mirrors upstream's shared `soundInfo->c15` counter (`m4a.c:941`..`:945`),
-/// which paces a once-per-15-frames correction: the once-per-render-frame
-/// [`CgbEnvelope::step`] alone runs at ~59.73 Hz, visibly slower than
+/// which paces a once-per-15-frames correction: one [`CgbEnvelope::step`] per
+/// render frame alone runs at ~59.73 Hz, visibly slower than
 /// hardware's true 1/64s (~63.71 Hz) envelope rate, so every 15th frame runs
 /// a second iteration to keep up (`m4a.c:1173`..`:1180`, "every 15 frames,
 /// envelope calculation has to be done twice to keep up with the hardware
@@ -174,7 +174,9 @@ impl CgbEnvelope {
         self.sustain_goal = sustain_goal_of(goal, adsr.sustain);
     }
 
-    /// Advance the envelope by one render frame.
+    /// Advance the envelope by one software iteration. A render frame is one
+    /// or two iterations, so production rendering drives the envelope through
+    /// `step_frame` rather than calling this directly (module docs).
     pub fn step(&mut self) {
         match self.phase {
             Phase::Attack => self.attack_step(),
