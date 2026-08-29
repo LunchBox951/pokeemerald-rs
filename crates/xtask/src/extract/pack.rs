@@ -129,8 +129,14 @@ impl fmt::Display for PackWriteError {
 
 impl std::error::Error for PackWriteError {}
 
-fn entry_count_field(entry_count: usize) -> u32 {
-    u32::try_from(entry_count).expect("pack entry count exceeds u32::MAX")
+fn wrapping_entry_count_field(entry_count: usize) -> u32 {
+    #[allow(
+        clippy::cast_possible_truncation,
+        reason = "the u32 wire field contains the low 32 bits of the usize count"
+    )]
+    {
+        entry_count as u32
+    }
 }
 
 /// Collects assets and serializes a deterministic pack.
@@ -164,10 +170,6 @@ impl PackWriter {
     /// [`PackWriteError::DuplicateId`] if two entries share an id;
     /// [`PackWriteError::InvalidId`] if an id is empty or exceeds
     /// `u16::MAX` bytes.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the asset count exceeds the header's `u32` entry-count field.
     pub fn finish(mut self) -> Result<Vec<u8>, PackWriteError> {
         self.entries.sort_by(|a, b| a.id.cmp(&b.id));
 
@@ -185,7 +187,7 @@ impl PackWriter {
         let directory_size: usize = self.entries.iter().map(PackEntry::directory_size).sum();
         let first_payload_offset = PACK_HEADER_SIZE + directory_size;
         let payload_size: usize = self.entries.iter().map(|entry| entry.payload.len()).sum();
-        let entry_count = entry_count_field(self.entries.len());
+        let entry_count = wrapping_entry_count_field(self.entries.len());
 
         let mut output = Vec::with_capacity(first_payload_offset + payload_size);
         output.extend_from_slice(&MAGIC);
@@ -211,8 +213,8 @@ mod tests {
     use std::mem::size_of;
 
     use super::{
-        entry_count_field, PackEntry, PackKind, PackWriteError, PackWriter, FORMAT_VERSION,
-        ID_LENGTH_SIZE, KIND_TAG_SIZE, MAGIC, PACK_HEADER_SIZE,
+        wrapping_entry_count_field, PackEntry, PackKind, PackWriteError, PackWriter,
+        FORMAT_VERSION, ID_LENGTH_SIZE, KIND_TAG_SIZE, MAGIC, PACK_HEADER_SIZE,
     };
 
     #[test]
@@ -305,12 +307,12 @@ mod tests {
     }
 
     #[test]
-    fn unrepresentable_entry_count_panics_before_serialization() {
+    fn entry_count_field_keeps_the_low_u32_bits() {
         let largest_entry_count = usize::try_from(u32::MAX).unwrap();
-        assert_eq!(entry_count_field(largest_entry_count), u32::MAX);
+        assert_eq!(wrapping_entry_count_field(largest_entry_count), u32::MAX);
 
         if let Some(unrepresentable) = largest_entry_count.checked_add(1) {
-            assert!(std::panic::catch_unwind(|| entry_count_field(unrepresentable)).is_err());
+            assert_eq!(wrapping_entry_count_field(unrepresentable), 0);
         }
     }
 
