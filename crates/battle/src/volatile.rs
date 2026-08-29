@@ -1,4 +1,7 @@
-//! Transient conditions that are cleared when a battler leaves the field.
+//! Focus Energy and Charge state carried by one battler.
+//!
+//! Ordinary switches clear both. Baton Pass preserves Focus Energy but clears
+//! Charge's timer (`src/battle_main.c:3173`-`:3217`).
 //!
 //! Charge's timer is also its active flag because upstream raises and clears
 //! `STATUS3_CHARGED_UP` in lockstep with `chargeTimer`
