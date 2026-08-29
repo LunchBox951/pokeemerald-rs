@@ -244,7 +244,7 @@ pub struct ItemData {
     pub battle_usage: BattleUsage,
     /// Importance tier: ordinary, key/HM, or plot-critical.
     pub importance: u8,
-    /// Whether Select can register the item for field use.
+    /// Preserved registration flag; Emerald does not read it.
     pub registrable: bool,
     /// Item-family-specific ball, mail, rod, bike, or event discriminator.
     pub secondary_id: u8,
