@@ -1,78 +1,61 @@
-//! Item data table (S-4): the numeric/enum fields of `gItems`.
-//!
-//! Ports the flat numeric fields of every item from the upstream reference
-//! `pokeemerald/src/data/items.h` (`const struct Item gItems[]`) — item id,
-//! buy price, hold effect (+ its parameter), pocket, the overloaded `type`
-//! byte, battle-usage class, the `importance`/`registrability` key-item flags,
-//! and the `secondaryId`. The record layout is `struct Item` in
-//! `pokeemerald/include/item.h`; the enum constants live in
-//! `pokeemerald/include/constants/item.h` (`POCKET_*`, `ITEM_USE_*`),
-//! `pokeemerald/include/constants/items.h` (`ITEM_*`, `ITEM_B_USE_*`) and
-//! `pokeemerald/include/constants/hold_effects.h` (`HOLD_EFFECT_*`).
-//!
-//! Out of scope for this slice (separate ledger entries): the item `name`,
-//! `description` text pointer, and the `fieldUseFunc` / `battleUseFunc`
-//! function pointers — those are text/graphics/behaviour, not flat data.
-//!
-//! The table is re-expressed idiomatically rather than the C copied
-//! `(no-verbatim)`: each field is a typed value and the C designated-initializer
-//! array is replaced by an owned [`ItemTable`] `(oop-boundaries)`. The
-//! upstream-tie test at the bottom pins a hand-picked sample (a ball, a medicine,
-//! a held item, a berry, a mail, a TM, an HM, a key item, and the two dummy
-//! slots) back to their exact `items.h` values so the transcription cannot
-//! silently drift, alongside a length anchor and aggregate structural guards
-//! `(behavioral-fidelity)`.
+//! Typed identities and numeric attributes for every item.
 
 use crate::error::AssetError;
 
-/// The number of entries in `gItems`, matching upstream `ITEMS_COUNT`
-/// (`pokeemerald/include/constants/items.h`): ids `0..=376`.
+/// Number of entries in the item table.
 pub const ITEMS_COUNT: usize = 377;
 
-/// An item identifier — a newtype index into the [`gItems`](ItemTable) table,
-/// matching the upstream `ITEM_*` ids (`0` is `ITEM_NONE`).
+/// A stable index into [`ItemTable`].
 ///
-/// Note that several reserved/dummy slots (e.g. `ITEM_034`) occupy a table
-/// index but carry `item_id == ItemId(0)` in their data, exactly as upstream.
+/// Reserved indices have names but contain [`ItemId::NONE`] as their item data.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ItemId(pub u16);
 
 impl ItemId {
-    /// `ITEM_NONE` (`0`): the reserved empty item.
+    /// The empty item identity.
     pub const NONE: ItemId = ItemId(0);
 
-    /// The raw upstream `ITEM_*` id.
+    /// Returns the numeric table index.
     #[must_use]
     pub const fn index(self) -> u16 {
         self.0
     }
+
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "the offset is checked against the complete u8 range before casting"
+    )]
+    const fn offset_from(self, first: ItemId) -> u8 {
+        let offset = self.index() - first.index();
+        assert!(offset <= u8::MAX as u16);
+        offset as u8
+    }
 }
 
-/// The bag pocket an item sorts into — the upstream `POCKET_*` constants
-/// (`pokeemerald/include/constants/item.h`), stored in the `pocket` field.
+/// The bag pocket containing an item.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(u8)]
 pub enum Pocket {
-    /// `POCKET_NONE` (0): no pocket (unused by any real item in-table).
+    /// No bag pocket.
     None = 0,
-    /// `POCKET_ITEMS` (1): the general Items pocket.
+    /// General items.
     Items = 1,
-    /// `POCKET_POKE_BALLS` (2): the Poké Balls pocket.
+    /// Poké Balls.
     PokeBalls = 2,
-    /// `POCKET_TM_HM` (3): the TMs & HMs pocket.
+    /// Technical and Hidden Machines.
     TmHm = 3,
-    /// `POCKET_BERRIES` (4): the Berries pocket.
+    /// Berries.
     Berries = 4,
-    /// `POCKET_KEY_ITEMS` (5): the Key Items pocket.
+    /// Key items.
     KeyItems = 5,
 }
 
 impl Pocket {
-    /// The [`Pocket`] for a raw `POCKET_*` value.
+    /// Decodes a stored pocket identifier.
     ///
     /// # Errors
     ///
-    /// Returns [`AssetError::UnknownItemPocket`] if `id` is not `0..=5`.
+    /// Returns [`AssetError::UnknownItemPocket`] for values outside `0..=5`.
     pub const fn from_id(id: u8) -> Result<Pocket, AssetError> {
         match id {
             0 => Ok(Pocket::None),
@@ -85,33 +68,31 @@ impl Pocket {
         }
     }
 
-    /// The raw upstream `POCKET_*` value.
+    /// Returns the stored pocket identifier.
     #[must_use]
     pub const fn id(self) -> u8 {
         self as u8
     }
 }
 
-/// How an item may be used in battle — the upstream `battleUsage` field, whose
-/// values are the `ITEM_B_USE_*` constants (`constants/items.h`). Upstream only
-/// checks this for being non-zero, but the two distinct classes are preserved.
+/// How an item can be used during battle.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(u8)]
 pub enum BattleUsage {
-    /// `0`: not usable in battle.
+    /// Cannot be used in battle.
     None = 0,
-    /// `ITEM_B_USE_MEDICINE` (1): a medicine (HP/PP/status restore).
+    /// Restores HP, PP, or status in battle.
     Medicine = 1,
-    /// `ITEM_B_USE_OTHER` (2): any other battle item (balls, X-items, escape).
+    /// Performs another battle action.
     Other = 2,
 }
 
 impl BattleUsage {
-    /// The [`BattleUsage`] for a raw `battleUsage` byte.
+    /// Decodes a stored battle-usage identifier.
     ///
     /// # Errors
     ///
-    /// Returns [`AssetError::UnknownItemBattleUsage`] if `id` is not `0..=2`.
+    /// Returns [`AssetError::UnknownItemBattleUsage`] for values outside `0..=2`.
     pub const fn from_id(id: u8) -> Result<BattleUsage, AssetError> {
         match id {
             0 => Ok(BattleUsage::None),
@@ -121,938 +102,728 @@ impl BattleUsage {
         }
     }
 
-    /// The raw upstream `battleUsage` value.
+    /// Returns the stored battle-usage identifier.
     #[must_use]
     pub const fn id(self) -> u8 {
         self as u8
     }
 
-    /// Whether the item is usable in battle at all (upstream's only check).
+    /// Returns whether the item can be used during battle.
     #[must_use]
     pub const fn is_usable(self) -> bool {
         !matches!(self, BattleUsage::None)
     }
 }
 
-/// An item's held-effect id — the upstream `holdEffect` field, one of the
-/// `HOLD_EFFECT_*` constants (`constants/hold_effects.h`, `0..=66`). Kept as an
-/// opaque typed id rather than a ~67-variant enum: the *effect* is battle/field
-/// behaviour extracted elsewhere, so here the value is only carried faithfully.
+/// Identifies an effect applied by a held item.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct HoldEffect(pub u8);
 
 impl HoldEffect {
-    /// `HOLD_EFFECT_NONE` (`0`): no held effect.
+    /// No held effect.
     pub const NONE: HoldEffect = HoldEffect(0);
+    pub(crate) const RESTORE_HP: HoldEffect = HoldEffect(1);
+    pub(crate) const CURE_PARALYSIS: HoldEffect = HoldEffect(2);
+    pub(crate) const CURE_SLEEP: HoldEffect = HoldEffect(3);
+    pub(crate) const CURE_POISON: HoldEffect = HoldEffect(4);
+    pub(crate) const CURE_BURN: HoldEffect = HoldEffect(5);
+    pub(crate) const CURE_FREEZE: HoldEffect = HoldEffect(6);
+    pub(crate) const RESTORE_PP: HoldEffect = HoldEffect(7);
+    pub(crate) const CURE_CONFUSION: HoldEffect = HoldEffect(8);
+    pub(crate) const CURE_STATUS: HoldEffect = HoldEffect(9);
+    pub(crate) const CONFUSE_SPICY: HoldEffect = HoldEffect(10);
+    pub(crate) const CONFUSE_DRY: HoldEffect = HoldEffect(11);
+    pub(crate) const CONFUSE_SWEET: HoldEffect = HoldEffect(12);
+    pub(crate) const CONFUSE_BITTER: HoldEffect = HoldEffect(13);
+    pub(crate) const CONFUSE_SOUR: HoldEffect = HoldEffect(14);
+    pub(crate) const ATTACK_UP: HoldEffect = HoldEffect(15);
+    pub(crate) const DEFENSE_UP: HoldEffect = HoldEffect(16);
+    pub(crate) const SPEED_UP: HoldEffect = HoldEffect(17);
+    pub(crate) const SPECIAL_ATTACK_UP: HoldEffect = HoldEffect(18);
+    pub(crate) const SPECIAL_DEFENSE_UP: HoldEffect = HoldEffect(19);
+    pub(crate) const CRITICAL_UP: HoldEffect = HoldEffect(20);
+    pub(crate) const RANDOM_STAT_UP: HoldEffect = HoldEffect(21);
+    pub(crate) const EVASION_UP: HoldEffect = HoldEffect(22);
+    pub(crate) const RESTORE_STATS: HoldEffect = HoldEffect(23);
+    pub(crate) const MACHO_BRACE: HoldEffect = HoldEffect(24);
+    pub(crate) const EXP_SHARE: HoldEffect = HoldEffect(25);
+    pub(crate) const QUICK_CLAW: HoldEffect = HoldEffect(26);
+    pub(crate) const FRIENDSHIP_UP: HoldEffect = HoldEffect(27);
+    pub(crate) const CURE_ATTRACT: HoldEffect = HoldEffect(28);
+    pub(crate) const CHOICE_BAND: HoldEffect = HoldEffect(29);
+    pub(crate) const FLINCH: HoldEffect = HoldEffect(30);
+    pub(crate) const BUG_POWER: HoldEffect = HoldEffect(31);
+    pub(crate) const DOUBLE_PRIZE: HoldEffect = HoldEffect(32);
+    pub(crate) const REPEL: HoldEffect = HoldEffect(33);
+    pub(crate) const SOUL_DEW: HoldEffect = HoldEffect(34);
+    pub(crate) const DEEP_SEA_TOOTH: HoldEffect = HoldEffect(35);
+    pub(crate) const DEEP_SEA_SCALE: HoldEffect = HoldEffect(36);
+    pub(crate) const CAN_ALWAYS_RUN: HoldEffect = HoldEffect(37);
+    pub(crate) const PREVENT_EVOLUTION: HoldEffect = HoldEffect(38);
+    pub(crate) const FOCUS_BAND: HoldEffect = HoldEffect(39);
+    pub(crate) const LUCKY_EGG: HoldEffect = HoldEffect(40);
+    pub(crate) const SCOPE_LENS: HoldEffect = HoldEffect(41);
+    pub(crate) const STEEL_POWER: HoldEffect = HoldEffect(42);
+    pub(crate) const LEFTOVERS: HoldEffect = HoldEffect(43);
+    pub(crate) const DRAGON_SCALE: HoldEffect = HoldEffect(44);
+    pub(crate) const LIGHT_BALL: HoldEffect = HoldEffect(45);
+    pub(crate) const GROUND_POWER: HoldEffect = HoldEffect(46);
+    pub(crate) const ROCK_POWER: HoldEffect = HoldEffect(47);
+    pub(crate) const GRASS_POWER: HoldEffect = HoldEffect(48);
+    pub(crate) const DARK_POWER: HoldEffect = HoldEffect(49);
+    pub(crate) const FIGHTING_POWER: HoldEffect = HoldEffect(50);
+    pub(crate) const ELECTRIC_POWER: HoldEffect = HoldEffect(51);
+    pub(crate) const WATER_POWER: HoldEffect = HoldEffect(52);
+    pub(crate) const FLYING_POWER: HoldEffect = HoldEffect(53);
+    pub(crate) const POISON_POWER: HoldEffect = HoldEffect(54);
+    pub(crate) const ICE_POWER: HoldEffect = HoldEffect(55);
+    pub(crate) const GHOST_POWER: HoldEffect = HoldEffect(56);
+    pub(crate) const PSYCHIC_POWER: HoldEffect = HoldEffect(57);
+    pub(crate) const FIRE_POWER: HoldEffect = HoldEffect(58);
+    pub(crate) const DRAGON_POWER: HoldEffect = HoldEffect(59);
+    pub(crate) const NORMAL_POWER: HoldEffect = HoldEffect(60);
+    pub(crate) const UP_GRADE: HoldEffect = HoldEffect(61);
+    pub(crate) const SHELL_BELL: HoldEffect = HoldEffect(62);
+    pub(crate) const LUCKY_PUNCH: HoldEffect = HoldEffect(63);
+    pub(crate) const METAL_POWDER: HoldEffect = HoldEffect(64);
+    pub(crate) const THICK_CLUB: HoldEffect = HoldEffect(65);
+    pub(crate) const STICK: HoldEffect = HoldEffect(66);
 
-    /// The raw upstream `HOLD_EFFECT_*` id.
+    /// Returns the stored effect identifier.
     #[must_use]
     pub const fn id(self) -> u8 {
         self.0
     }
 }
 
-/// The overloaded `type` byte of an item.
+/// Identifies the menu behavior for an item, or the zero-based ball index.
 ///
-/// For most items this is an `ITEM_USE_*` value (`constants/item.h`, `0..=4`)
-/// selecting the use-menu / exit-callback. For items in the Poké Balls pocket,
-/// however, upstream instead stores `itemId - FIRST_BALL` (the ball index,
-/// `0..=11`) in this same field. It is therefore modelled as a raw typed byte
-/// with named `ITEM_USE_*` constants rather than an enum, so the ball overload
-/// stays representable `(behavioral-fidelity)`.
+/// Ball items overload this byte with their position in the contiguous ball range.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ItemType(pub u8);
 
 impl ItemType {
-    /// `ITEM_USE_MAIL` (0).
+    /// Opens mail.
     pub const USE_MAIL: ItemType = ItemType(0);
-    /// `ITEM_USE_PARTY_MENU` (1).
+    /// Opens the party menu.
     pub const USE_PARTY_MENU: ItemType = ItemType(1);
-    /// `ITEM_USE_FIELD` (2).
+    /// Performs an immediate field action.
     pub const USE_FIELD: ItemType = ItemType(2);
-    /// `ITEM_USE_PBLOCK_CASE` (3).
+    /// Opens the Pokéblock Case.
     pub const USE_PBLOCK_CASE: ItemType = ItemType(3);
-    /// `ITEM_USE_BAG_MENU` (4): no exit callback, stays in the bag menu.
+    /// Remains in the bag menu.
     pub const USE_BAG_MENU: ItemType = ItemType(4);
 
-    /// The raw upstream `type` byte.
+    const fn for_ball(item_id: ItemId) -> ItemType {
+        ItemType(item_id.offset_from(ItemId::MASTER_BALL))
+    }
+
+    /// Returns the stored item-type byte.
     #[must_use]
     pub const fn raw(self) -> u8 {
         self.0
     }
 }
 
-/// One item's flat data — the owned Rust form of the numeric fields of
-/// `struct Item`. Text, description, and use-function pointers are out of scope
-/// for this slice (see the module docs).
+/// Numeric attributes for one item.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ItemData {
-    /// The `ITEM_*` id this entry carries (`ItemId::NONE` for dummy slots).
+    /// Item identity, or [`ItemId::NONE`] for a reserved entry.
     pub item_id: ItemId,
-    /// Buy price in Poké-dollars (`0` if the item cannot be bought).
+    /// Purchase price in Pokédollars, or zero when the item is not sold.
     pub price: u16,
-    /// The `HOLD_EFFECT_*` held-effect id.
+    /// Effect applied while the item is held.
     pub hold_effect: HoldEffect,
-    /// The held-effect magnitude parameter (`holdEffectParam`).
+    /// Magnitude or argument consumed by the item's effect.
     pub hold_effect_param: u8,
-    /// The bag pocket the item sorts into.
+    /// Bag pocket containing the item.
     pub pocket: Pocket,
-    /// The overloaded `type` byte (`ITEM_USE_*`, or a ball index in the Balls
-    /// pocket — see [`ItemType`]).
+    /// Menu behavior or ball index.
     pub item_type: ItemType,
-    /// The battle-usage class.
+    /// Battle-use category.
     pub battle_usage: BattleUsage,
-    /// `importance`: non-zero marks a key/undiscardable item (HMs use `1`).
+    /// Importance tier: ordinary, key/HM, or plot-critical.
     pub importance: u8,
-    /// `registrability`: whether the item can be registered to Select (unused
-    /// upstream but preserved).
+    /// Whether Select can register the item for field use.
     pub registrable: bool,
-    /// `secondaryId`: a use-specific sub-index (ball index, mail index, rod /
-    /// bike variant, …); `0` when unused.
+    /// Item-family-specific ball, mail, rod, bike, or event discriminator.
     pub secondary_id: u8,
 }
 
-/// Construct one [`ItemData`] row from raw upstream field values. A terse free
-/// helper so the generated table stays readable; positional order mirrors the
-/// in-scope fields of `struct Item`, so the arity is inherent to the record.
-#[allow(clippy::too_many_arguments)]
-const fn i(
-    item_id: u16,
-    price: u16,
-    hold_effect: u8,
-    hold_effect_param: u8,
-    pocket: u8,
-    item_type: u8,
-    battle_usage: u8,
-    importance: u8,
-    registrable: u8,
-    secondary_id: u8,
-) -> ItemData {
-    // The raw enum bytes are transcribed straight from `items.h`; decode them
-    // through the same fallible mappings the public API uses. A byte outside the
-    // modelled set is a transcription error, so panic at compile time (this is a
-    // `const` initializer) rather than silently coercing it to a valid variant.
-    let Ok(pocket) = Pocket::from_id(pocket) else {
-        panic!("gItems row has an out-of-range pocket byte")
-    };
-    let Ok(battle_usage) = BattleUsage::from_id(battle_usage) else {
-        panic!("gItems row has an out-of-range battleUsage byte")
-    };
-    ItemData {
-        item_id: ItemId(item_id),
-        price,
-        hold_effect: HoldEffect(hold_effect),
-        hold_effect_param,
-        pocket,
-        item_type: ItemType(item_type),
-        battle_usage,
-        importance,
-        registrable: registrable != 0,
-        secondary_id,
+#[derive(Clone, Copy)]
+struct Price(u16);
+
+#[derive(Clone, Copy)]
+struct Effect(HoldEffect, u8);
+
+#[derive(Clone, Copy)]
+enum ItemUse {
+    Mail,
+    PartyMenu,
+    Field,
+    PokeblockCase,
+    BagMenu,
+    Ball,
+}
+
+impl ItemUse {
+    const fn item_type(self, item_id: ItemId) -> ItemType {
+        match self {
+            ItemUse::Mail => ItemType::USE_MAIL,
+            ItemUse::PartyMenu => ItemType::USE_PARTY_MENU,
+            ItemUse::Field => ItemType::USE_FIELD,
+            ItemUse::PokeblockCase => ItemType::USE_PBLOCK_CASE,
+            ItemUse::BagMenu => ItemType::USE_BAG_MENU,
+            ItemUse::Ball => ItemType::for_ball(item_id),
+        }
     }
 }
 
-/// The transcribed `gItems` table, indexed by `ITEM_*` id. Each row is a
-/// faithful translation of the numeric fields of the corresponding `items.h`
-/// entry. Field order in [`i`]: `itemId, price, holdEffect, holdEffectParam,
-/// pocket, type, battleUsage, importance, registrability, secondaryId`.
-#[rustfmt::skip]
-const ITEMS: [ItemData; ITEMS_COUNT] = [
-    // [0] ITEM_NONE
-    i(0, 0, 0, 0, 1, 4, 0, 0, 0, 0),
-    // [1] ITEM_MASTER_BALL
-    i(1, 0, 0, 0, 2, 0, 2, 0, 0, 0),
-    // [2] ITEM_ULTRA_BALL
-    i(2, 1200, 0, 0, 2, 1, 2, 0, 0, 1),
-    // [3] ITEM_GREAT_BALL
-    i(3, 600, 0, 0, 2, 2, 2, 0, 0, 2),
-    // [4] ITEM_POKE_BALL
-    i(4, 200, 0, 0, 2, 3, 2, 0, 0, 3),
-    // [5] ITEM_SAFARI_BALL
-    i(5, 0, 0, 0, 2, 4, 2, 0, 0, 4),
-    // [6] ITEM_NET_BALL
-    i(6, 1000, 0, 0, 2, 5, 2, 0, 0, 5),
-    // [7] ITEM_DIVE_BALL
-    i(7, 1000, 0, 0, 2, 6, 2, 0, 0, 6),
-    // [8] ITEM_NEST_BALL
-    i(8, 1000, 0, 0, 2, 7, 2, 0, 0, 7),
-    // [9] ITEM_REPEAT_BALL
-    i(9, 1000, 0, 0, 2, 8, 2, 0, 0, 8),
-    // [10] ITEM_TIMER_BALL
-    i(10, 1000, 0, 0, 2, 9, 2, 0, 0, 9),
-    // [11] ITEM_LUXURY_BALL
-    i(11, 1000, 0, 0, 2, 10, 2, 0, 0, 10),
-    // [12] ITEM_PREMIER_BALL
-    i(12, 200, 0, 0, 2, 11, 2, 0, 0, 11),
-    // [13] ITEM_POTION
-    i(13, 300, 0, 20, 1, 1, 1, 0, 0, 0),
-    // [14] ITEM_ANTIDOTE
-    i(14, 100, 0, 0, 1, 1, 1, 0, 0, 0),
-    // [15] ITEM_BURN_HEAL
-    i(15, 250, 0, 0, 1, 1, 1, 0, 0, 0),
-    // [16] ITEM_ICE_HEAL
-    i(16, 250, 0, 0, 1, 1, 1, 0, 0, 0),
-    // [17] ITEM_AWAKENING
-    i(17, 250, 0, 0, 1, 1, 1, 0, 0, 0),
-    // [18] ITEM_PARALYZE_HEAL
-    i(18, 200, 0, 0, 1, 1, 1, 0, 0, 0),
-    // [19] ITEM_FULL_RESTORE
-    i(19, 3000, 0, 255, 1, 1, 1, 0, 0, 0),
-    // [20] ITEM_MAX_POTION
-    i(20, 2500, 0, 255, 1, 1, 1, 0, 0, 0),
-    // [21] ITEM_HYPER_POTION
-    i(21, 1200, 0, 200, 1, 1, 1, 0, 0, 0),
-    // [22] ITEM_SUPER_POTION
-    i(22, 700, 0, 50, 1, 1, 1, 0, 0, 0),
-    // [23] ITEM_FULL_HEAL
-    i(23, 600, 0, 0, 1, 1, 1, 0, 0, 0),
-    // [24] ITEM_REVIVE
-    i(24, 1500, 0, 0, 1, 1, 1, 0, 0, 0),
-    // [25] ITEM_MAX_REVIVE
-    i(25, 4000, 0, 0, 1, 1, 1, 0, 0, 0),
-    // [26] ITEM_FRESH_WATER
-    i(26, 200, 0, 50, 1, 1, 1, 0, 0, 0),
-    // [27] ITEM_SODA_POP
-    i(27, 300, 0, 60, 1, 1, 1, 0, 0, 0),
-    // [28] ITEM_LEMONADE
-    i(28, 350, 0, 80, 1, 1, 1, 0, 0, 0),
-    // [29] ITEM_MOOMOO_MILK
-    i(29, 500, 0, 100, 1, 1, 1, 0, 0, 0),
-    // [30] ITEM_ENERGY_POWDER
-    i(30, 500, 0, 0, 1, 1, 1, 0, 0, 0),
-    // [31] ITEM_ENERGY_ROOT
-    i(31, 800, 0, 0, 1, 1, 1, 0, 0, 0),
-    // [32] ITEM_HEAL_POWDER
-    i(32, 450, 0, 0, 1, 1, 1, 0, 0, 0),
-    // [33] ITEM_REVIVAL_HERB
-    i(33, 2800, 0, 0, 1, 1, 1, 0, 0, 0),
-    // [34] ITEM_ETHER
-    i(34, 1200, 0, 10, 1, 1, 1, 0, 0, 0),
-    // [35] ITEM_MAX_ETHER
-    i(35, 2000, 0, 255, 1, 1, 1, 0, 0, 0),
-    // [36] ITEM_ELIXIR
-    i(36, 3000, 0, 10, 1, 1, 1, 0, 0, 0),
-    // [37] ITEM_MAX_ELIXIR
-    i(37, 4500, 0, 255, 1, 1, 1, 0, 0, 0),
-    // [38] ITEM_LAVA_COOKIE
-    i(38, 200, 0, 0, 1, 1, 1, 0, 0, 0),
-    // [39] ITEM_BLUE_FLUTE
-    i(39, 100, 0, 0, 1, 1, 1, 0, 0, 0),
-    // [40] ITEM_YELLOW_FLUTE
-    i(40, 200, 0, 0, 1, 1, 1, 0, 0, 0),
-    // [41] ITEM_RED_FLUTE
-    i(41, 300, 0, 0, 1, 1, 1, 0, 0, 0),
-    // [42] ITEM_BLACK_FLUTE
-    i(42, 400, 0, 50, 1, 1, 0, 0, 0, 0),
-    // [43] ITEM_WHITE_FLUTE
-    i(43, 500, 0, 150, 1, 1, 0, 0, 0, 0),
-    // [44] ITEM_BERRY_JUICE
-    i(44, 100, 1, 20, 1, 1, 1, 0, 0, 0),
-    // [45] ITEM_SACRED_ASH
-    i(45, 200, 0, 0, 1, 1, 0, 0, 0, 0),
-    // [46] ITEM_SHOAL_SALT
-    i(46, 20, 0, 0, 1, 4, 0, 0, 0, 0),
-    // [47] ITEM_SHOAL_SHELL
-    i(47, 20, 0, 0, 1, 4, 0, 0, 0, 0),
-    // [48] ITEM_RED_SHARD
-    i(48, 200, 0, 0, 1, 4, 0, 0, 0, 0),
-    // [49] ITEM_BLUE_SHARD
-    i(49, 200, 0, 0, 1, 4, 0, 0, 0, 0),
-    // [50] ITEM_YELLOW_SHARD
-    i(50, 200, 0, 0, 1, 4, 0, 0, 0, 0),
-    // [51] ITEM_GREEN_SHARD
-    i(51, 200, 0, 0, 1, 4, 0, 0, 0, 0),
-    // [52] ITEM_034
-    i(0, 0, 0, 0, 1, 4, 0, 0, 0, 0),
-    // [53] ITEM_035
-    i(0, 0, 0, 0, 1, 4, 0, 0, 0, 0),
-    // [54] ITEM_036
-    i(0, 0, 0, 0, 1, 4, 0, 0, 0, 0),
-    // [55] ITEM_037
-    i(0, 0, 0, 0, 1, 4, 0, 0, 0, 0),
-    // [56] ITEM_038
-    i(0, 0, 0, 0, 1, 4, 0, 0, 0, 0),
-    // [57] ITEM_039
-    i(0, 0, 0, 0, 1, 4, 0, 0, 0, 0),
-    // [58] ITEM_03A
-    i(0, 0, 0, 0, 1, 4, 0, 0, 0, 0),
-    // [59] ITEM_03B
-    i(0, 0, 0, 0, 1, 4, 0, 0, 0, 0),
-    // [60] ITEM_03C
-    i(0, 0, 0, 0, 1, 4, 0, 0, 0, 0),
-    // [61] ITEM_03D
-    i(0, 0, 0, 0, 1, 4, 0, 0, 0, 0),
-    // [62] ITEM_03E
-    i(0, 0, 0, 0, 1, 4, 0, 0, 0, 0),
-    // [63] ITEM_HP_UP
-    i(63, 9800, 0, 0, 1, 1, 0, 0, 0, 0),
-    // [64] ITEM_PROTEIN
-    i(64, 9800, 0, 0, 1, 1, 0, 0, 0, 0),
-    // [65] ITEM_IRON
-    i(65, 9800, 0, 0, 1, 1, 0, 0, 0, 0),
-    // [66] ITEM_CARBOS
-    i(66, 9800, 0, 0, 1, 1, 0, 0, 0, 0),
-    // [67] ITEM_CALCIUM
-    i(67, 9800, 0, 0, 1, 1, 0, 0, 0, 0),
-    // [68] ITEM_RARE_CANDY
-    i(68, 4800, 0, 0, 1, 1, 0, 0, 0, 0),
-    // [69] ITEM_PP_UP
-    i(69, 9800, 0, 0, 1, 1, 0, 0, 0, 0),
-    // [70] ITEM_ZINC
-    i(70, 9800, 0, 0, 1, 1, 0, 0, 0, 0),
-    // [71] ITEM_PP_MAX
-    i(71, 9800, 0, 0, 1, 1, 0, 0, 0, 0),
-    // [72] ITEM_048
-    i(0, 0, 0, 0, 1, 4, 0, 0, 0, 0),
-    // [73] ITEM_GUARD_SPEC
-    i(73, 700, 0, 0, 1, 4, 2, 0, 0, 0),
-    // [74] ITEM_DIRE_HIT
-    i(74, 650, 0, 0, 1, 4, 2, 0, 0, 0),
-    // [75] ITEM_X_ATTACK
-    i(75, 500, 0, 0, 1, 4, 2, 0, 0, 0),
-    // [76] ITEM_X_DEFEND
-    i(76, 550, 0, 0, 1, 4, 2, 0, 0, 0),
-    // [77] ITEM_X_SPEED
-    i(77, 350, 0, 0, 1, 4, 2, 0, 0, 0),
-    // [78] ITEM_X_ACCURACY
-    i(78, 950, 0, 0, 1, 4, 2, 0, 0, 0),
-    // [79] ITEM_X_SPECIAL
-    i(79, 350, 0, 0, 1, 4, 2, 0, 0, 0),
-    // [80] ITEM_POKE_DOLL
-    i(80, 1000, 0, 0, 1, 4, 2, 0, 0, 0),
-    // [81] ITEM_FLUFFY_TAIL
-    i(81, 1000, 0, 0, 1, 4, 2, 0, 0, 0),
-    // [82] ITEM_052
-    i(0, 0, 0, 0, 1, 4, 0, 0, 0, 0),
-    // [83] ITEM_SUPER_REPEL
-    i(83, 500, 0, 200, 1, 4, 0, 0, 0, 0),
-    // [84] ITEM_MAX_REPEL
-    i(84, 700, 0, 250, 1, 4, 0, 0, 0, 0),
-    // [85] ITEM_ESCAPE_ROPE
-    i(85, 550, 0, 0, 1, 2, 0, 0, 0, 0),
-    // [86] ITEM_REPEL
-    i(86, 350, 0, 100, 1, 4, 0, 0, 0, 0),
-    // [87] ITEM_057
-    i(0, 0, 0, 0, 1, 4, 0, 0, 0, 0),
-    // [88] ITEM_058
-    i(0, 0, 0, 0, 1, 4, 0, 0, 0, 0),
-    // [89] ITEM_059
-    i(0, 0, 0, 0, 1, 4, 0, 0, 0, 0),
-    // [90] ITEM_05A
-    i(0, 0, 0, 0, 1, 4, 0, 0, 0, 0),
-    // [91] ITEM_05B
-    i(0, 0, 0, 0, 1, 4, 0, 0, 0, 0),
-    // [92] ITEM_05C
-    i(0, 0, 0, 0, 1, 4, 0, 0, 0, 0),
-    // [93] ITEM_SUN_STONE
-    i(93, 2100, 0, 0, 1, 1, 0, 0, 0, 0),
-    // [94] ITEM_MOON_STONE
-    i(94, 0, 0, 0, 1, 1, 0, 0, 0, 0),
-    // [95] ITEM_FIRE_STONE
-    i(95, 2100, 0, 0, 1, 1, 0, 0, 0, 0),
-    // [96] ITEM_THUNDER_STONE
-    i(96, 2100, 0, 0, 1, 1, 0, 0, 0, 0),
-    // [97] ITEM_WATER_STONE
-    i(97, 2100, 0, 0, 1, 1, 0, 0, 0, 0),
-    // [98] ITEM_LEAF_STONE
-    i(98, 2100, 0, 0, 1, 1, 0, 0, 0, 0),
-    // [99] ITEM_063
-    i(0, 0, 0, 0, 1, 4, 0, 0, 0, 0),
-    // [100] ITEM_064
-    i(0, 0, 0, 0, 1, 4, 0, 0, 0, 0),
-    // [101] ITEM_065
-    i(0, 0, 0, 0, 1, 4, 0, 0, 0, 0),
-    // [102] ITEM_066
-    i(0, 0, 0, 0, 1, 4, 0, 0, 0, 0),
-    // [103] ITEM_TINY_MUSHROOM
-    i(103, 500, 0, 0, 1, 4, 0, 0, 0, 0),
-    // [104] ITEM_BIG_MUSHROOM
-    i(104, 5000, 0, 0, 1, 4, 0, 0, 0, 0),
-    // [105] ITEM_069
-    i(0, 0, 0, 0, 1, 4, 0, 0, 0, 0),
-    // [106] ITEM_PEARL
-    i(106, 1400, 0, 0, 1, 4, 0, 0, 0, 0),
-    // [107] ITEM_BIG_PEARL
-    i(107, 7500, 0, 0, 1, 4, 0, 0, 0, 0),
-    // [108] ITEM_STARDUST
-    i(108, 2000, 0, 0, 1, 4, 0, 0, 0, 0),
-    // [109] ITEM_STAR_PIECE
-    i(109, 9800, 0, 0, 1, 4, 0, 0, 0, 0),
-    // [110] ITEM_NUGGET
-    i(110, 10000, 0, 0, 1, 4, 0, 0, 0, 0),
-    // [111] ITEM_HEART_SCALE
-    i(111, 100, 0, 0, 1, 4, 0, 0, 0, 0),
-    // [112] ITEM_070
-    i(0, 0, 0, 0, 1, 4, 0, 0, 0, 0),
-    // [113] ITEM_071
-    i(0, 0, 0, 0, 1, 4, 0, 0, 0, 0),
-    // [114] ITEM_072
-    i(0, 0, 0, 0, 1, 4, 0, 0, 0, 0),
-    // [115] ITEM_073
-    i(0, 0, 0, 0, 1, 4, 0, 0, 0, 0),
-    // [116] ITEM_074
-    i(0, 0, 0, 0, 1, 4, 0, 0, 0, 0),
-    // [117] ITEM_075
-    i(0, 0, 0, 0, 1, 4, 0, 0, 0, 0),
-    // [118] ITEM_076
-    i(0, 0, 0, 0, 1, 4, 0, 0, 0, 0),
-    // [119] ITEM_077
-    i(0, 0, 0, 0, 1, 4, 0, 0, 0, 0),
-    // [120] ITEM_078
-    i(0, 0, 0, 0, 1, 4, 0, 0, 0, 0),
-    // [121] ITEM_ORANGE_MAIL
-    i(121, 50, 0, 0, 1, 0, 0, 0, 0, 0),
-    // [122] ITEM_HARBOR_MAIL
-    i(122, 50, 0, 0, 1, 0, 0, 0, 0, 1),
-    // [123] ITEM_GLITTER_MAIL
-    i(123, 50, 0, 0, 1, 0, 0, 0, 0, 2),
-    // [124] ITEM_MECH_MAIL
-    i(124, 50, 0, 0, 1, 0, 0, 0, 0, 3),
-    // [125] ITEM_WOOD_MAIL
-    i(125, 50, 0, 0, 1, 0, 0, 0, 0, 4),
-    // [126] ITEM_WAVE_MAIL
-    i(126, 50, 0, 0, 1, 0, 0, 0, 0, 5),
-    // [127] ITEM_BEAD_MAIL
-    i(127, 50, 0, 0, 1, 0, 0, 0, 0, 6),
-    // [128] ITEM_SHADOW_MAIL
-    i(128, 50, 0, 0, 1, 0, 0, 0, 0, 7),
-    // [129] ITEM_TROPIC_MAIL
-    i(129, 50, 0, 0, 1, 0, 0, 0, 0, 8),
-    // [130] ITEM_DREAM_MAIL
-    i(130, 50, 0, 0, 1, 0, 0, 0, 0, 9),
-    // [131] ITEM_FAB_MAIL
-    i(131, 50, 0, 0, 1, 0, 0, 0, 0, 10),
-    // [132] ITEM_RETRO_MAIL
-    i(132, 0, 0, 0, 1, 0, 0, 0, 0, 11),
-    // [133] ITEM_CHERI_BERRY
-    i(133, 20, 2, 0, 4, 1, 1, 0, 0, 0),
-    // [134] ITEM_CHESTO_BERRY
-    i(134, 20, 3, 0, 4, 1, 1, 0, 0, 0),
-    // [135] ITEM_PECHA_BERRY
-    i(135, 20, 4, 0, 4, 1, 1, 0, 0, 0),
-    // [136] ITEM_RAWST_BERRY
-    i(136, 20, 5, 0, 4, 1, 1, 0, 0, 0),
-    // [137] ITEM_ASPEAR_BERRY
-    i(137, 20, 6, 0, 4, 1, 1, 0, 0, 0),
-    // [138] ITEM_LEPPA_BERRY
-    i(138, 20, 7, 10, 4, 1, 1, 0, 0, 0),
-    // [139] ITEM_ORAN_BERRY
-    i(139, 20, 1, 10, 4, 1, 1, 0, 0, 0),
-    // [140] ITEM_PERSIM_BERRY
-    i(140, 20, 8, 0, 4, 4, 1, 0, 0, 0),
-    // [141] ITEM_LUM_BERRY
-    i(141, 20, 9, 0, 4, 1, 1, 0, 0, 0),
-    // [142] ITEM_SITRUS_BERRY
-    i(142, 20, 1, 30, 4, 1, 1, 0, 0, 0),
-    // [143] ITEM_FIGY_BERRY
-    i(143, 20, 10, 8, 4, 4, 0, 0, 0, 0),
-    // [144] ITEM_WIKI_BERRY
-    i(144, 20, 11, 8, 4, 4, 0, 0, 0, 0),
-    // [145] ITEM_MAGO_BERRY
-    i(145, 20, 12, 8, 4, 4, 0, 0, 0, 0),
-    // [146] ITEM_AGUAV_BERRY
-    i(146, 20, 13, 8, 4, 4, 0, 0, 0, 0),
-    // [147] ITEM_IAPAPA_BERRY
-    i(147, 20, 14, 8, 4, 4, 0, 0, 0, 0),
-    // [148] ITEM_RAZZ_BERRY
-    i(148, 20, 0, 0, 4, 4, 0, 0, 0, 0),
-    // [149] ITEM_BLUK_BERRY
-    i(149, 20, 0, 0, 4, 4, 0, 0, 0, 0),
-    // [150] ITEM_NANAB_BERRY
-    i(150, 20, 0, 0, 4, 4, 0, 0, 0, 0),
-    // [151] ITEM_WEPEAR_BERRY
-    i(151, 20, 0, 0, 4, 4, 0, 0, 0, 0),
-    // [152] ITEM_PINAP_BERRY
-    i(152, 20, 0, 0, 4, 4, 0, 0, 0, 0),
-    // [153] ITEM_POMEG_BERRY
-    i(153, 20, 0, 0, 4, 1, 0, 0, 0, 0),
-    // [154] ITEM_KELPSY_BERRY
-    i(154, 20, 0, 0, 4, 1, 0, 0, 0, 0),
-    // [155] ITEM_QUALOT_BERRY
-    i(155, 20, 0, 0, 4, 1, 0, 0, 0, 0),
-    // [156] ITEM_HONDEW_BERRY
-    i(156, 20, 0, 0, 4, 1, 0, 0, 0, 0),
-    // [157] ITEM_GREPA_BERRY
-    i(157, 20, 0, 0, 4, 1, 0, 0, 0, 0),
-    // [158] ITEM_TAMATO_BERRY
-    i(158, 20, 0, 0, 4, 1, 0, 0, 0, 0),
-    // [159] ITEM_CORNN_BERRY
-    i(159, 20, 0, 0, 4, 4, 0, 0, 0, 0),
-    // [160] ITEM_MAGOST_BERRY
-    i(160, 20, 0, 0, 4, 4, 0, 0, 0, 0),
-    // [161] ITEM_RABUTA_BERRY
-    i(161, 20, 0, 0, 4, 4, 0, 0, 0, 0),
-    // [162] ITEM_NOMEL_BERRY
-    i(162, 20, 0, 0, 4, 4, 0, 0, 0, 0),
-    // [163] ITEM_SPELON_BERRY
-    i(163, 20, 0, 0, 4, 4, 0, 0, 0, 0),
-    // [164] ITEM_PAMTRE_BERRY
-    i(164, 20, 0, 0, 4, 4, 0, 0, 0, 0),
-    // [165] ITEM_WATMEL_BERRY
-    i(165, 20, 0, 0, 4, 4, 0, 0, 0, 0),
-    // [166] ITEM_DURIN_BERRY
-    i(166, 20, 0, 0, 4, 4, 0, 0, 0, 0),
-    // [167] ITEM_BELUE_BERRY
-    i(167, 20, 0, 0, 4, 4, 0, 0, 0, 0),
-    // [168] ITEM_LIECHI_BERRY
-    i(168, 20, 15, 4, 4, 4, 0, 0, 0, 0),
-    // [169] ITEM_GANLON_BERRY
-    i(169, 20, 16, 4, 4, 4, 0, 0, 0, 0),
-    // [170] ITEM_SALAC_BERRY
-    i(170, 20, 17, 4, 4, 4, 0, 0, 0, 0),
-    // [171] ITEM_PETAYA_BERRY
-    i(171, 20, 18, 4, 4, 4, 0, 0, 0, 0),
-    // [172] ITEM_APICOT_BERRY
-    i(172, 20, 19, 4, 4, 4, 0, 0, 0, 0),
-    // [173] ITEM_LANSAT_BERRY
-    i(173, 20, 20, 4, 4, 4, 0, 0, 0, 0),
-    // [174] ITEM_STARF_BERRY
-    i(174, 20, 21, 4, 4, 4, 0, 0, 0, 0),
-    // [175] ITEM_ENIGMA_BERRY
-    i(175, 20, 0, 0, 4, 4, 1, 0, 0, 0),
-    // [176] ITEM_UNUSED_BERRY_1
-    i(0, 0, 0, 0, 1, 4, 0, 0, 0, 0),
-    // [177] ITEM_UNUSED_BERRY_2
-    i(0, 0, 0, 0, 1, 4, 0, 0, 0, 0),
-    // [178] ITEM_UNUSED_BERRY_3
-    i(0, 0, 0, 0, 1, 4, 0, 0, 0, 0),
-    // [179] ITEM_BRIGHT_POWDER
-    i(179, 10, 22, 10, 1, 4, 0, 0, 0, 0),
-    // [180] ITEM_WHITE_HERB
-    i(180, 100, 23, 0, 1, 4, 0, 0, 0, 0),
-    // [181] ITEM_MACHO_BRACE
-    i(181, 3000, 24, 0, 1, 4, 0, 0, 0, 0),
-    // [182] ITEM_EXP_SHARE
-    i(182, 3000, 25, 0, 1, 4, 0, 0, 0, 0),
-    // [183] ITEM_QUICK_CLAW
-    i(183, 100, 26, 20, 1, 4, 0, 0, 0, 0),
-    // [184] ITEM_SOOTHE_BELL
-    i(184, 100, 27, 0, 1, 4, 0, 0, 0, 0),
-    // [185] ITEM_MENTAL_HERB
-    i(185, 100, 28, 0, 1, 4, 0, 0, 0, 0),
-    // [186] ITEM_CHOICE_BAND
-    i(186, 100, 29, 0, 1, 4, 0, 0, 0, 0),
-    // [187] ITEM_KINGS_ROCK
-    i(187, 100, 30, 10, 1, 4, 0, 0, 0, 0),
-    // [188] ITEM_SILVER_POWDER
-    i(188, 100, 31, 10, 1, 4, 0, 0, 0, 0),
-    // [189] ITEM_AMULET_COIN
-    i(189, 100, 32, 10, 1, 4, 0, 0, 0, 0),
-    // [190] ITEM_CLEANSE_TAG
-    i(190, 200, 33, 0, 1, 4, 0, 0, 0, 0),
-    // [191] ITEM_SOUL_DEW
-    i(191, 200, 34, 0, 1, 4, 0, 0, 0, 0),
-    // [192] ITEM_DEEP_SEA_TOOTH
-    i(192, 200, 35, 0, 1, 4, 0, 0, 0, 0),
-    // [193] ITEM_DEEP_SEA_SCALE
-    i(193, 200, 36, 0, 1, 4, 0, 0, 0, 0),
-    // [194] ITEM_SMOKE_BALL
-    i(194, 200, 37, 0, 1, 4, 0, 0, 0, 0),
-    // [195] ITEM_EVERSTONE
-    i(195, 200, 38, 0, 1, 4, 0, 0, 0, 0),
-    // [196] ITEM_FOCUS_BAND
-    i(196, 200, 39, 10, 1, 4, 0, 0, 0, 0),
-    // [197] ITEM_LUCKY_EGG
-    i(197, 200, 40, 0, 1, 4, 0, 0, 0, 0),
-    // [198] ITEM_SCOPE_LENS
-    i(198, 200, 41, 0, 1, 4, 0, 0, 0, 0),
-    // [199] ITEM_METAL_COAT
-    i(199, 100, 42, 10, 1, 4, 0, 0, 0, 0),
-    // [200] ITEM_LEFTOVERS
-    i(200, 200, 43, 10, 1, 4, 0, 0, 0, 0),
-    // [201] ITEM_DRAGON_SCALE
-    i(201, 2100, 44, 10, 1, 4, 0, 0, 0, 0),
-    // [202] ITEM_LIGHT_BALL
-    i(202, 100, 45, 0, 1, 4, 0, 0, 0, 0),
-    // [203] ITEM_SOFT_SAND
-    i(203, 100, 46, 10, 1, 4, 0, 0, 0, 0),
-    // [204] ITEM_HARD_STONE
-    i(204, 100, 47, 10, 1, 4, 0, 0, 0, 0),
-    // [205] ITEM_MIRACLE_SEED
-    i(205, 100, 48, 10, 1, 4, 0, 0, 0, 0),
-    // [206] ITEM_BLACK_GLASSES
-    i(206, 100, 49, 10, 1, 4, 0, 0, 0, 0),
-    // [207] ITEM_BLACK_BELT
-    i(207, 100, 50, 10, 1, 4, 0, 0, 0, 0),
-    // [208] ITEM_MAGNET
-    i(208, 100, 51, 10, 1, 4, 0, 0, 0, 0),
-    // [209] ITEM_MYSTIC_WATER
-    i(209, 100, 52, 10, 1, 4, 0, 0, 0, 0),
-    // [210] ITEM_SHARP_BEAK
-    i(210, 100, 53, 10, 1, 4, 0, 0, 0, 0),
-    // [211] ITEM_POISON_BARB
-    i(211, 100, 54, 10, 1, 4, 0, 0, 0, 0),
-    // [212] ITEM_NEVER_MELT_ICE
-    i(212, 100, 55, 10, 1, 4, 0, 0, 0, 0),
-    // [213] ITEM_SPELL_TAG
-    i(213, 100, 56, 10, 1, 4, 0, 0, 0, 0),
-    // [214] ITEM_TWISTED_SPOON
-    i(214, 100, 57, 10, 1, 4, 0, 0, 0, 0),
-    // [215] ITEM_CHARCOAL
-    i(215, 9800, 58, 10, 1, 4, 0, 0, 0, 0),
-    // [216] ITEM_DRAGON_FANG
-    i(216, 100, 59, 10, 1, 4, 0, 0, 0, 0),
-    // [217] ITEM_SILK_SCARF
-    i(217, 100, 60, 10, 1, 4, 0, 0, 0, 0),
-    // [218] ITEM_UP_GRADE
-    i(218, 2100, 61, 0, 1, 4, 0, 0, 0, 0),
-    // [219] ITEM_SHELL_BELL
-    i(219, 200, 62, 8, 1, 4, 0, 0, 0, 0),
-    // [220] ITEM_SEA_INCENSE
-    i(220, 9600, 52, 5, 1, 4, 0, 0, 0, 0),
-    // [221] ITEM_LAX_INCENSE
-    i(221, 9600, 22, 5, 1, 4, 0, 0, 0, 0),
-    // [222] ITEM_LUCKY_PUNCH
-    i(222, 10, 63, 0, 1, 4, 0, 0, 0, 0),
-    // [223] ITEM_METAL_POWDER
-    i(223, 10, 64, 0, 1, 4, 0, 0, 0, 0),
-    // [224] ITEM_THICK_CLUB
-    i(224, 500, 65, 0, 1, 4, 0, 0, 0, 0),
-    // [225] ITEM_STICK
-    i(225, 200, 66, 0, 1, 4, 0, 0, 0, 0),
-    // [226] ITEM_0E2
-    i(0, 0, 0, 0, 1, 4, 0, 0, 0, 0),
-    // [227] ITEM_0E3
-    i(0, 0, 0, 0, 1, 4, 0, 0, 0, 0),
-    // [228] ITEM_0E4
-    i(0, 0, 0, 0, 1, 4, 0, 0, 0, 0),
-    // [229] ITEM_0E5
-    i(0, 0, 0, 0, 1, 4, 0, 0, 0, 0),
-    // [230] ITEM_0E6
-    i(0, 0, 0, 0, 1, 4, 0, 0, 0, 0),
-    // [231] ITEM_0E7
-    i(0, 0, 0, 0, 1, 4, 0, 0, 0, 0),
-    // [232] ITEM_0E8
-    i(0, 0, 0, 0, 1, 4, 0, 0, 0, 0),
-    // [233] ITEM_0E9
-    i(0, 0, 0, 0, 1, 4, 0, 0, 0, 0),
-    // [234] ITEM_0EA
-    i(0, 0, 0, 0, 1, 4, 0, 0, 0, 0),
-    // [235] ITEM_0EB
-    i(0, 0, 0, 0, 1, 4, 0, 0, 0, 0),
-    // [236] ITEM_0EC
-    i(0, 0, 0, 0, 1, 4, 0, 0, 0, 0),
-    // [237] ITEM_0ED
-    i(0, 0, 0, 0, 1, 4, 0, 0, 0, 0),
-    // [238] ITEM_0EE
-    i(0, 0, 0, 0, 1, 4, 0, 0, 0, 0),
-    // [239] ITEM_0EF
-    i(0, 0, 0, 0, 1, 4, 0, 0, 0, 0),
-    // [240] ITEM_0F0
-    i(0, 0, 0, 0, 1, 4, 0, 0, 0, 0),
-    // [241] ITEM_0F1
-    i(0, 0, 0, 0, 1, 4, 0, 0, 0, 0),
-    // [242] ITEM_0F2
-    i(0, 0, 0, 0, 1, 4, 0, 0, 0, 0),
-    // [243] ITEM_0F3
-    i(0, 0, 0, 0, 1, 4, 0, 0, 0, 0),
-    // [244] ITEM_0F4
-    i(0, 0, 0, 0, 1, 4, 0, 0, 0, 0),
-    // [245] ITEM_0F5
-    i(0, 0, 0, 0, 1, 4, 0, 0, 0, 0),
-    // [246] ITEM_0F6
-    i(0, 0, 0, 0, 1, 4, 0, 0, 0, 0),
-    // [247] ITEM_0F7
-    i(0, 0, 0, 0, 1, 4, 0, 0, 0, 0),
-    // [248] ITEM_0F8
-    i(0, 0, 0, 0, 1, 4, 0, 0, 0, 0),
-    // [249] ITEM_0F9
-    i(0, 0, 0, 0, 1, 4, 0, 0, 0, 0),
-    // [250] ITEM_0FA
-    i(0, 0, 0, 0, 1, 4, 0, 0, 0, 0),
-    // [251] ITEM_0FB
-    i(0, 0, 0, 0, 1, 4, 0, 0, 0, 0),
-    // [252] ITEM_0FC
-    i(0, 0, 0, 0, 1, 4, 0, 0, 0, 0),
-    // [253] ITEM_0FD
-    i(0, 0, 0, 0, 1, 4, 0, 0, 0, 0),
-    // [254] ITEM_RED_SCARF
-    i(254, 100, 0, 0, 1, 4, 0, 0, 0, 0),
-    // [255] ITEM_BLUE_SCARF
-    i(255, 100, 0, 0, 1, 4, 0, 0, 0, 0),
-    // [256] ITEM_PINK_SCARF
-    i(256, 100, 0, 0, 1, 4, 0, 0, 0, 0),
-    // [257] ITEM_GREEN_SCARF
-    i(257, 100, 0, 0, 1, 4, 0, 0, 0, 0),
-    // [258] ITEM_YELLOW_SCARF
-    i(258, 100, 0, 0, 1, 4, 0, 0, 0, 0),
-    // [259] ITEM_MACH_BIKE
-    i(259, 0, 0, 0, 5, 2, 0, 1, 1, 0),
-    // [260] ITEM_COIN_CASE
-    i(260, 0, 0, 0, 5, 4, 0, 1, 0, 0),
-    // [261] ITEM_ITEMFINDER
-    i(261, 0, 0, 0, 5, 2, 0, 1, 1, 0),
-    // [262] ITEM_OLD_ROD
-    i(262, 0, 0, 0, 5, 2, 0, 1, 1, 0),
-    // [263] ITEM_GOOD_ROD
-    i(263, 0, 0, 0, 5, 2, 0, 1, 1, 1),
-    // [264] ITEM_SUPER_ROD
-    i(264, 0, 0, 0, 5, 2, 0, 1, 1, 2),
-    // [265] ITEM_SS_TICKET
-    i(265, 0, 0, 0, 5, 4, 0, 1, 0, 0),
-    // [266] ITEM_CONTEST_PASS
-    i(266, 0, 0, 0, 5, 4, 0, 1, 0, 0),
-    // [267] ITEM_10B
-    i(0, 0, 0, 0, 1, 4, 0, 0, 0, 0),
-    // [268] ITEM_WAILMER_PAIL
-    i(268, 0, 0, 0, 5, 2, 0, 1, 0, 0),
-    // [269] ITEM_DEVON_GOODS
-    i(269, 0, 0, 0, 5, 4, 0, 2, 0, 0),
-    // [270] ITEM_SOOT_SACK
-    i(270, 0, 0, 0, 5, 4, 0, 1, 0, 0),
-    // [271] ITEM_BASEMENT_KEY
-    i(271, 0, 0, 0, 5, 4, 0, 1, 0, 0),
-    // [272] ITEM_ACRO_BIKE
-    i(272, 0, 0, 0, 5, 2, 0, 1, 1, 1),
-    // [273] ITEM_POKEBLOCK_CASE
-    i(273, 0, 0, 0, 5, 3, 0, 1, 1, 0),
-    // [274] ITEM_LETTER
-    i(274, 0, 0, 0, 5, 4, 0, 2, 0, 0),
-    // [275] ITEM_EON_TICKET
-    i(275, 0, 0, 0, 5, 4, 0, 1, 0, 1),
-    // [276] ITEM_RED_ORB
-    i(276, 0, 0, 0, 5, 4, 0, 2, 0, 0),
-    // [277] ITEM_BLUE_ORB
-    i(277, 0, 0, 0, 5, 4, 0, 2, 0, 0),
-    // [278] ITEM_SCANNER
-    i(278, 0, 0, 0, 5, 4, 0, 1, 0, 0),
-    // [279] ITEM_GO_GOGGLES
-    i(279, 0, 0, 0, 5, 4, 0, 1, 0, 0),
-    // [280] ITEM_METEORITE
-    i(280, 0, 0, 0, 5, 4, 0, 1, 0, 0),
-    // [281] ITEM_ROOM_1_KEY
-    i(281, 0, 0, 0, 5, 4, 0, 1, 0, 0),
-    // [282] ITEM_ROOM_2_KEY
-    i(282, 0, 0, 0, 5, 4, 0, 1, 0, 0),
-    // [283] ITEM_ROOM_4_KEY
-    i(283, 0, 0, 0, 5, 4, 0, 1, 0, 0),
-    // [284] ITEM_ROOM_6_KEY
-    i(284, 0, 0, 0, 5, 4, 0, 1, 0, 0),
-    // [285] ITEM_STORAGE_KEY
-    i(285, 0, 0, 0, 5, 4, 0, 1, 0, 0),
-    // [286] ITEM_ROOT_FOSSIL
-    i(286, 0, 0, 0, 5, 4, 0, 1, 0, 0),
-    // [287] ITEM_CLAW_FOSSIL
-    i(287, 0, 0, 0, 5, 4, 0, 1, 0, 0),
-    // [288] ITEM_DEVON_SCOPE
-    i(288, 0, 0, 0, 5, 4, 0, 1, 0, 0),
-    // [289] ITEM_TM_FOCUS_PUNCH
-    i(289, 3000, 0, 0, 3, 1, 0, 0, 0, 0),
-    // [290] ITEM_TM_DRAGON_CLAW
-    i(290, 3000, 0, 0, 3, 1, 0, 0, 0, 0),
-    // [291] ITEM_TM_WATER_PULSE
-    i(291, 3000, 0, 0, 3, 1, 0, 0, 0, 0),
-    // [292] ITEM_TM_CALM_MIND
-    i(292, 3000, 0, 0, 3, 1, 0, 0, 0, 0),
-    // [293] ITEM_TM_ROAR
-    i(293, 1000, 0, 0, 3, 1, 0, 0, 0, 0),
-    // [294] ITEM_TM_TOXIC
-    i(294, 3000, 0, 0, 3, 1, 0, 0, 0, 0),
-    // [295] ITEM_TM_HAIL
-    i(295, 3000, 0, 0, 3, 1, 0, 0, 0, 0),
-    // [296] ITEM_TM_BULK_UP
-    i(296, 3000, 0, 0, 3, 1, 0, 0, 0, 0),
-    // [297] ITEM_TM_BULLET_SEED
-    i(297, 3000, 0, 0, 3, 1, 0, 0, 0, 0),
-    // [298] ITEM_TM_HIDDEN_POWER
-    i(298, 3000, 0, 0, 3, 1, 0, 0, 0, 0),
-    // [299] ITEM_TM_SUNNY_DAY
-    i(299, 2000, 0, 0, 3, 1, 0, 0, 0, 0),
-    // [300] ITEM_TM_TAUNT
-    i(300, 3000, 0, 0, 3, 1, 0, 0, 0, 0),
-    // [301] ITEM_TM_ICE_BEAM
-    i(301, 3000, 0, 0, 3, 1, 0, 0, 0, 0),
-    // [302] ITEM_TM_BLIZZARD
-    i(302, 5500, 0, 0, 3, 1, 0, 0, 0, 0),
-    // [303] ITEM_TM_HYPER_BEAM
-    i(303, 7500, 0, 0, 3, 1, 0, 0, 0, 0),
-    // [304] ITEM_TM_LIGHT_SCREEN
-    i(304, 3000, 0, 0, 3, 1, 0, 0, 0, 0),
-    // [305] ITEM_TM_PROTECT
-    i(305, 3000, 0, 0, 3, 1, 0, 0, 0, 0),
-    // [306] ITEM_TM_RAIN_DANCE
-    i(306, 2000, 0, 0, 3, 1, 0, 0, 0, 0),
-    // [307] ITEM_TM_GIGA_DRAIN
-    i(307, 3000, 0, 0, 3, 1, 0, 0, 0, 0),
-    // [308] ITEM_TM_SAFEGUARD
-    i(308, 3000, 0, 0, 3, 1, 0, 0, 0, 0),
-    // [309] ITEM_TM_FRUSTRATION
-    i(309, 1000, 0, 0, 3, 1, 0, 0, 0, 0),
-    // [310] ITEM_TM_SOLAR_BEAM
-    i(310, 3000, 0, 0, 3, 1, 0, 0, 0, 0),
-    // [311] ITEM_TM_IRON_TAIL
-    i(311, 3000, 0, 0, 3, 1, 0, 0, 0, 0),
-    // [312] ITEM_TM_THUNDERBOLT
-    i(312, 3000, 0, 0, 3, 1, 0, 0, 0, 0),
-    // [313] ITEM_TM_THUNDER
-    i(313, 5500, 0, 0, 3, 1, 0, 0, 0, 0),
-    // [314] ITEM_TM_EARTHQUAKE
-    i(314, 3000, 0, 0, 3, 1, 0, 0, 0, 0),
-    // [315] ITEM_TM_RETURN
-    i(315, 1000, 0, 0, 3, 1, 0, 0, 0, 0),
-    // [316] ITEM_TM_DIG
-    i(316, 2000, 0, 0, 3, 1, 0, 0, 0, 0),
-    // [317] ITEM_TM_PSYCHIC
-    i(317, 2000, 0, 0, 3, 1, 0, 0, 0, 0),
-    // [318] ITEM_TM_SHADOW_BALL
-    i(318, 3000, 0, 0, 3, 1, 0, 0, 0, 0),
-    // [319] ITEM_TM_BRICK_BREAK
-    i(319, 3000, 0, 0, 3, 1, 0, 0, 0, 0),
-    // [320] ITEM_TM_DOUBLE_TEAM
-    i(320, 2000, 0, 0, 3, 1, 0, 0, 0, 0),
-    // [321] ITEM_TM_REFLECT
-    i(321, 3000, 0, 0, 3, 1, 0, 0, 0, 0),
-    // [322] ITEM_TM_SHOCK_WAVE
-    i(322, 3000, 0, 0, 3, 1, 0, 0, 0, 0),
-    // [323] ITEM_TM_FLAMETHROWER
-    i(323, 3000, 0, 0, 3, 1, 0, 0, 0, 0),
-    // [324] ITEM_TM_SLUDGE_BOMB
-    i(324, 1000, 0, 0, 3, 1, 0, 0, 0, 0),
-    // [325] ITEM_TM_SANDSTORM
-    i(325, 2000, 0, 0, 3, 1, 0, 0, 0, 0),
-    // [326] ITEM_TM_FIRE_BLAST
-    i(326, 5500, 0, 0, 3, 1, 0, 0, 0, 0),
-    // [327] ITEM_TM_ROCK_TOMB
-    i(327, 3000, 0, 0, 3, 1, 0, 0, 0, 0),
-    // [328] ITEM_TM_AERIAL_ACE
-    i(328, 3000, 0, 0, 3, 1, 0, 0, 0, 0),
-    // [329] ITEM_TM_TORMENT
-    i(329, 3000, 0, 0, 3, 1, 0, 0, 0, 0),
-    // [330] ITEM_TM_FACADE
-    i(330, 3000, 0, 0, 3, 1, 0, 0, 0, 0),
-    // [331] ITEM_TM_SECRET_POWER
-    i(331, 3000, 0, 0, 3, 1, 0, 0, 0, 0),
-    // [332] ITEM_TM_REST
-    i(332, 3000, 0, 0, 3, 1, 0, 0, 0, 0),
-    // [333] ITEM_TM_ATTRACT
-    i(333, 3000, 0, 0, 3, 1, 0, 0, 0, 0),
-    // [334] ITEM_TM_THIEF
-    i(334, 3000, 0, 0, 3, 1, 0, 0, 0, 0),
-    // [335] ITEM_TM_STEEL_WING
-    i(335, 3000, 0, 0, 3, 1, 0, 0, 0, 0),
-    // [336] ITEM_TM_SKILL_SWAP
-    i(336, 3000, 0, 0, 3, 1, 0, 0, 0, 0),
-    // [337] ITEM_TM_SNATCH
-    i(337, 3000, 0, 0, 3, 1, 0, 0, 0, 0),
-    // [338] ITEM_TM_OVERHEAT
-    i(338, 3000, 0, 0, 3, 1, 0, 0, 0, 0),
-    // [339] ITEM_HM_CUT
-    i(339, 0, 0, 0, 3, 1, 0, 1, 0, 0),
-    // [340] ITEM_HM_FLY
-    i(340, 0, 0, 0, 3, 1, 0, 1, 0, 0),
-    // [341] ITEM_HM_SURF
-    i(341, 0, 0, 0, 3, 1, 0, 1, 0, 0),
-    // [342] ITEM_HM_STRENGTH
-    i(342, 0, 0, 0, 3, 1, 0, 1, 0, 0),
-    // [343] ITEM_HM_FLASH
-    i(343, 0, 0, 0, 3, 1, 0, 1, 0, 0),
-    // [344] ITEM_HM_ROCK_SMASH
-    i(344, 0, 0, 0, 3, 1, 0, 1, 0, 0),
-    // [345] ITEM_HM_WATERFALL
-    i(345, 0, 0, 0, 3, 1, 0, 1, 0, 0),
-    // [346] ITEM_HM_DIVE
-    i(346, 0, 0, 0, 3, 1, 0, 1, 0, 0),
-    // [347] ITEM_15B
-    i(0, 0, 0, 0, 1, 4, 0, 0, 0, 0),
-    // [348] ITEM_15C
-    i(0, 0, 0, 0, 1, 4, 0, 0, 0, 0),
-    // [349] ITEM_OAKS_PARCEL
-    i(349, 0, 0, 0, 5, 4, 0, 2, 0, 0),
-    // [350] ITEM_POKE_FLUTE
-    i(350, 0, 0, 0, 5, 4, 0, 1, 0, 0),
-    // [351] ITEM_SECRET_KEY
-    i(351, 0, 0, 0, 5, 4, 0, 1, 0, 0),
-    // [352] ITEM_BIKE_VOUCHER
-    i(352, 0, 0, 0, 5, 4, 0, 1, 0, 0),
-    // [353] ITEM_GOLD_TEETH
-    i(353, 0, 0, 0, 5, 4, 0, 1, 0, 0),
-    // [354] ITEM_OLD_AMBER
-    i(354, 0, 0, 0, 5, 4, 0, 1, 0, 0),
-    // [355] ITEM_CARD_KEY
-    i(355, 0, 0, 0, 5, 4, 0, 1, 0, 0),
-    // [356] ITEM_LIFT_KEY
-    i(356, 0, 0, 0, 5, 4, 0, 1, 0, 0),
-    // [357] ITEM_HELIX_FOSSIL
-    i(357, 0, 0, 0, 5, 4, 0, 1, 0, 0),
-    // [358] ITEM_DOME_FOSSIL
-    i(358, 0, 0, 0, 5, 4, 0, 1, 0, 0),
-    // [359] ITEM_SILPH_SCOPE
-    i(359, 0, 0, 0, 5, 4, 0, 1, 0, 0),
-    // [360] ITEM_BICYCLE
-    i(360, 0, 0, 0, 5, 2, 0, 1, 1, 0),
-    // [361] ITEM_TOWN_MAP
-    i(361, 0, 0, 0, 5, 4, 0, 1, 1, 0),
-    // [362] ITEM_VS_SEEKER
-    i(362, 0, 0, 0, 5, 2, 0, 1, 1, 0),
-    // [363] ITEM_FAME_CHECKER
-    i(363, 0, 0, 0, 5, 4, 0, 1, 1, 0),
-    // [364] ITEM_TM_CASE
-    i(364, 0, 0, 0, 5, 4, 0, 1, 1, 0),
-    // [365] ITEM_BERRY_POUCH
-    i(365, 0, 0, 0, 5, 4, 0, 1, 1, 0),
-    // [366] ITEM_TEACHY_TV
-    i(366, 0, 0, 0, 5, 2, 0, 1, 1, 0),
-    // [367] ITEM_TRI_PASS
-    i(367, 0, 0, 0, 5, 4, 0, 1, 1, 0),
-    // [368] ITEM_RAINBOW_PASS
-    i(368, 0, 0, 0, 5, 4, 0, 1, 1, 0),
-    // [369] ITEM_TEA
-    i(369, 0, 0, 0, 5, 4, 0, 1, 1, 0),
-    // [370] ITEM_MYSTIC_TICKET
-    i(370, 0, 0, 0, 5, 4, 0, 1, 1, 0),
-    // [371] ITEM_AURORA_TICKET
-    i(371, 0, 0, 0, 5, 4, 0, 1, 1, 0),
-    // [372] ITEM_POWDER_JAR
-    i(372, 0, 0, 0, 5, 4, 0, 1, 1, 0),
-    // [373] ITEM_RUBY
-    i(373, 0, 0, 0, 5, 4, 0, 1, 1, 0),
-    // [374] ITEM_SAPPHIRE
-    i(374, 0, 0, 0, 5, 4, 0, 1, 1, 0),
-    // [375] ITEM_MAGMA_EMBLEM
-    i(375, 0, 0, 0, 5, 4, 0, 1, 1, 0),
-    // [376] ITEM_OLD_SEA_MAP
-    i(376, 0, 0, 0, 5, 4, 0, 1, 1, 0),
-];
+#[derive(Clone, Copy)]
+#[repr(u8)]
+enum Importance {
+    Ordinary = 0,
+    Key = 1,
+    Plot = 2,
+}
 
-/// The owned item table — an idiomatic view over the transcribed `gItems`
-/// `(oop-boundaries)`.
+#[derive(Clone, Copy)]
+struct CanRegister(bool);
+
+#[derive(Clone, Copy)]
+enum SecondaryId {
+    None,
+    Ball,
+    Mail,
+    MachBike,
+    AcroBike,
+    OldRod,
+    GoodRod,
+    SuperRod,
+    Raw(u8),
+}
+
+impl SecondaryId {
+    const fn raw(self, item_id: ItemId) -> u8 {
+        match self {
+            SecondaryId::None | SecondaryId::MachBike | SecondaryId::OldRod => 0,
+            SecondaryId::AcroBike | SecondaryId::GoodRod => 1,
+            SecondaryId::SuperRod => 2,
+            SecondaryId::Ball => item_id.offset_from(ItemId::MASTER_BALL),
+            SecondaryId::Mail => item_id.offset_from(ItemId::ORANGE_MAIL),
+            SecondaryId::Raw(value) => value,
+        }
+    }
+}
+
+impl ItemData {
+    const EMPTY: ItemData = ItemData {
+        item_id: ItemId::NONE,
+        price: 0,
+        hold_effect: HoldEffect::NONE,
+        hold_effect_param: 0,
+        pocket: Pocket::Items,
+        item_type: ItemType::USE_BAG_MENU,
+        battle_usage: BattleUsage::None,
+        importance: Importance::Ordinary as u8,
+        registrable: false,
+        secondary_id: 0,
+    };
+
+    const fn empty_at(_index: ItemId) -> ItemData {
+        ItemData::EMPTY
+    }
+
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "one typed argument per stored attribute keeps every data row literal"
+    )]
+    const fn new(
+        item_id: ItemId,
+        Price(price): Price,
+        Effect(hold_effect, hold_effect_param): Effect,
+        pocket: Pocket,
+        item_use: ItemUse,
+        battle_usage: BattleUsage,
+        importance: Importance,
+        CanRegister(registrable): CanRegister,
+        secondary_id: SecondaryId,
+    ) -> ItemData {
+        ItemData {
+            item_id,
+            price,
+            hold_effect,
+            hold_effect_param,
+            pocket,
+            item_type: item_use.item_type(item_id),
+            battle_usage,
+            importance: importance as u8,
+            registrable,
+            secondary_id: secondary_id.raw(item_id),
+        }
+    }
+}
+
+macro_rules! item_data {
+    ($name:ident, empty()) => { ItemData::empty_at(ItemId::$name) };
+    ($name:ident, item($($attribute:expr),+ $(,)?)) => {
+        ItemData::new(ItemId::$name, $($attribute),+)
+    };
+}
+
+#[cfg(test)]
+macro_rules! item_is_empty {
+    (empty) => {
+        true
+    };
+    (item) => {
+        false
+    };
+}
+
+macro_rules! define_items {
+    (
+        NONE = 0 => $none_kind:ident $none_attributes:tt,
+        $($name:ident = $index:literal => $kind:ident $attributes:tt),+ $(,)?
+    ) => {
+        impl ItemId {
+            $(pub(crate) const $name: ItemId = ItemId($index);)+
+        }
+
+        const ITEMS: [ItemData; ITEMS_COUNT] = [
+            item_data!(NONE, $none_kind $none_attributes),
+            $(item_data!($name, $kind $attributes),)+
+        ];
+
+        #[cfg(test)]
+        const ITEM_IDENTITIES: [ItemId; ITEMS_COUNT] = [ItemId::NONE, $(ItemId::$name,)+];
+
+        #[cfg(test)]
+        const ITEM_IS_EMPTY: [bool; ITEMS_COUNT] = [
+            item_is_empty!($none_kind),
+            $(item_is_empty!($kind),)+
+        ];
+    };
+}
+
+#[rustfmt::skip]
+define_items! {
+    NONE = 0 => item(Price(0), Effect(HoldEffect::NONE, 0), Pocket::Items, ItemUse::BagMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    MASTER_BALL = 1 => item(Price(0), Effect(HoldEffect::NONE, 0), Pocket::PokeBalls, ItemUse::Ball, BattleUsage::Other, Importance::Ordinary, CanRegister(false), SecondaryId::Ball),
+    ULTRA_BALL = 2 => item(Price(1200), Effect(HoldEffect::NONE, 0), Pocket::PokeBalls, ItemUse::Ball, BattleUsage::Other, Importance::Ordinary, CanRegister(false), SecondaryId::Ball),
+    GREAT_BALL = 3 => item(Price(600), Effect(HoldEffect::NONE, 0), Pocket::PokeBalls, ItemUse::Ball, BattleUsage::Other, Importance::Ordinary, CanRegister(false), SecondaryId::Ball),
+    POKE_BALL = 4 => item(Price(200), Effect(HoldEffect::NONE, 0), Pocket::PokeBalls, ItemUse::Ball, BattleUsage::Other, Importance::Ordinary, CanRegister(false), SecondaryId::Ball),
+    SAFARI_BALL = 5 => item(Price(0), Effect(HoldEffect::NONE, 0), Pocket::PokeBalls, ItemUse::Ball, BattleUsage::Other, Importance::Ordinary, CanRegister(false), SecondaryId::Ball),
+    NET_BALL = 6 => item(Price(1000), Effect(HoldEffect::NONE, 0), Pocket::PokeBalls, ItemUse::Ball, BattleUsage::Other, Importance::Ordinary, CanRegister(false), SecondaryId::Ball),
+    DIVE_BALL = 7 => item(Price(1000), Effect(HoldEffect::NONE, 0), Pocket::PokeBalls, ItemUse::Ball, BattleUsage::Other, Importance::Ordinary, CanRegister(false), SecondaryId::Ball),
+    NEST_BALL = 8 => item(Price(1000), Effect(HoldEffect::NONE, 0), Pocket::PokeBalls, ItemUse::Ball, BattleUsage::Other, Importance::Ordinary, CanRegister(false), SecondaryId::Ball),
+    REPEAT_BALL = 9 => item(Price(1000), Effect(HoldEffect::NONE, 0), Pocket::PokeBalls, ItemUse::Ball, BattleUsage::Other, Importance::Ordinary, CanRegister(false), SecondaryId::Ball),
+    TIMER_BALL = 10 => item(Price(1000), Effect(HoldEffect::NONE, 0), Pocket::PokeBalls, ItemUse::Ball, BattleUsage::Other, Importance::Ordinary, CanRegister(false), SecondaryId::Ball),
+    LUXURY_BALL = 11 => item(Price(1000), Effect(HoldEffect::NONE, 0), Pocket::PokeBalls, ItemUse::Ball, BattleUsage::Other, Importance::Ordinary, CanRegister(false), SecondaryId::Ball),
+    PREMIER_BALL = 12 => item(Price(200), Effect(HoldEffect::NONE, 0), Pocket::PokeBalls, ItemUse::Ball, BattleUsage::Other, Importance::Ordinary, CanRegister(false), SecondaryId::Ball),
+    POTION = 13 => item(Price(300), Effect(HoldEffect::NONE, 20), Pocket::Items, ItemUse::PartyMenu, BattleUsage::Medicine, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    ANTIDOTE = 14 => item(Price(100), Effect(HoldEffect::NONE, 0), Pocket::Items, ItemUse::PartyMenu, BattleUsage::Medicine, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    BURN_HEAL = 15 => item(Price(250), Effect(HoldEffect::NONE, 0), Pocket::Items, ItemUse::PartyMenu, BattleUsage::Medicine, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    ICE_HEAL = 16 => item(Price(250), Effect(HoldEffect::NONE, 0), Pocket::Items, ItemUse::PartyMenu, BattleUsage::Medicine, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    AWAKENING = 17 => item(Price(250), Effect(HoldEffect::NONE, 0), Pocket::Items, ItemUse::PartyMenu, BattleUsage::Medicine, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    PARALYZE_HEAL = 18 => item(Price(200), Effect(HoldEffect::NONE, 0), Pocket::Items, ItemUse::PartyMenu, BattleUsage::Medicine, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    FULL_RESTORE = 19 => item(Price(3000), Effect(HoldEffect::NONE, 255), Pocket::Items, ItemUse::PartyMenu, BattleUsage::Medicine, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    MAX_POTION = 20 => item(Price(2500), Effect(HoldEffect::NONE, 255), Pocket::Items, ItemUse::PartyMenu, BattleUsage::Medicine, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    HYPER_POTION = 21 => item(Price(1200), Effect(HoldEffect::NONE, 200), Pocket::Items, ItemUse::PartyMenu, BattleUsage::Medicine, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    SUPER_POTION = 22 => item(Price(700), Effect(HoldEffect::NONE, 50), Pocket::Items, ItemUse::PartyMenu, BattleUsage::Medicine, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    FULL_HEAL = 23 => item(Price(600), Effect(HoldEffect::NONE, 0), Pocket::Items, ItemUse::PartyMenu, BattleUsage::Medicine, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    REVIVE = 24 => item(Price(1500), Effect(HoldEffect::NONE, 0), Pocket::Items, ItemUse::PartyMenu, BattleUsage::Medicine, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    MAX_REVIVE = 25 => item(Price(4000), Effect(HoldEffect::NONE, 0), Pocket::Items, ItemUse::PartyMenu, BattleUsage::Medicine, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    FRESH_WATER = 26 => item(Price(200), Effect(HoldEffect::NONE, 50), Pocket::Items, ItemUse::PartyMenu, BattleUsage::Medicine, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    SODA_POP = 27 => item(Price(300), Effect(HoldEffect::NONE, 60), Pocket::Items, ItemUse::PartyMenu, BattleUsage::Medicine, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    LEMONADE = 28 => item(Price(350), Effect(HoldEffect::NONE, 80), Pocket::Items, ItemUse::PartyMenu, BattleUsage::Medicine, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    MOOMOO_MILK = 29 => item(Price(500), Effect(HoldEffect::NONE, 100), Pocket::Items, ItemUse::PartyMenu, BattleUsage::Medicine, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    ENERGY_POWDER = 30 => item(Price(500), Effect(HoldEffect::NONE, 0), Pocket::Items, ItemUse::PartyMenu, BattleUsage::Medicine, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    ENERGY_ROOT = 31 => item(Price(800), Effect(HoldEffect::NONE, 0), Pocket::Items, ItemUse::PartyMenu, BattleUsage::Medicine, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    HEAL_POWDER = 32 => item(Price(450), Effect(HoldEffect::NONE, 0), Pocket::Items, ItemUse::PartyMenu, BattleUsage::Medicine, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    REVIVAL_HERB = 33 => item(Price(2800), Effect(HoldEffect::NONE, 0), Pocket::Items, ItemUse::PartyMenu, BattleUsage::Medicine, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    ETHER = 34 => item(Price(1200), Effect(HoldEffect::NONE, 10), Pocket::Items, ItemUse::PartyMenu, BattleUsage::Medicine, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    MAX_ETHER = 35 => item(Price(2000), Effect(HoldEffect::NONE, 255), Pocket::Items, ItemUse::PartyMenu, BattleUsage::Medicine, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    ELIXIR = 36 => item(Price(3000), Effect(HoldEffect::NONE, 10), Pocket::Items, ItemUse::PartyMenu, BattleUsage::Medicine, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    MAX_ELIXIR = 37 => item(Price(4500), Effect(HoldEffect::NONE, 255), Pocket::Items, ItemUse::PartyMenu, BattleUsage::Medicine, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    LAVA_COOKIE = 38 => item(Price(200), Effect(HoldEffect::NONE, 0), Pocket::Items, ItemUse::PartyMenu, BattleUsage::Medicine, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    BLUE_FLUTE = 39 => item(Price(100), Effect(HoldEffect::NONE, 0), Pocket::Items, ItemUse::PartyMenu, BattleUsage::Medicine, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    YELLOW_FLUTE = 40 => item(Price(200), Effect(HoldEffect::NONE, 0), Pocket::Items, ItemUse::PartyMenu, BattleUsage::Medicine, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    RED_FLUTE = 41 => item(Price(300), Effect(HoldEffect::NONE, 0), Pocket::Items, ItemUse::PartyMenu, BattleUsage::Medicine, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    BLACK_FLUTE = 42 => item(Price(400), Effect(HoldEffect::NONE, 50), Pocket::Items, ItemUse::PartyMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    WHITE_FLUTE = 43 => item(Price(500), Effect(HoldEffect::NONE, 150), Pocket::Items, ItemUse::PartyMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    BERRY_JUICE = 44 => item(Price(100), Effect(HoldEffect::RESTORE_HP, 20), Pocket::Items, ItemUse::PartyMenu, BattleUsage::Medicine, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    SACRED_ASH = 45 => item(Price(200), Effect(HoldEffect::NONE, 0), Pocket::Items, ItemUse::PartyMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    SHOAL_SALT = 46 => item(Price(20), Effect(HoldEffect::NONE, 0), Pocket::Items, ItemUse::BagMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    SHOAL_SHELL = 47 => item(Price(20), Effect(HoldEffect::NONE, 0), Pocket::Items, ItemUse::BagMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    RED_SHARD = 48 => item(Price(200), Effect(HoldEffect::NONE, 0), Pocket::Items, ItemUse::BagMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    BLUE_SHARD = 49 => item(Price(200), Effect(HoldEffect::NONE, 0), Pocket::Items, ItemUse::BagMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    YELLOW_SHARD = 50 => item(Price(200), Effect(HoldEffect::NONE, 0), Pocket::Items, ItemUse::BagMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    GREEN_SHARD = 51 => item(Price(200), Effect(HoldEffect::NONE, 0), Pocket::Items, ItemUse::BagMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    RESERVED_034 = 52 => empty(),
+    RESERVED_035 = 53 => empty(),
+    RESERVED_036 = 54 => empty(),
+    RESERVED_037 = 55 => empty(),
+    RESERVED_038 = 56 => empty(),
+    RESERVED_039 = 57 => empty(),
+    RESERVED_03A = 58 => empty(),
+    RESERVED_03B = 59 => empty(),
+    RESERVED_03C = 60 => empty(),
+    RESERVED_03D = 61 => empty(),
+    RESERVED_03E = 62 => empty(),
+    HP_UP = 63 => item(Price(9800), Effect(HoldEffect::NONE, 0), Pocket::Items, ItemUse::PartyMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    PROTEIN = 64 => item(Price(9800), Effect(HoldEffect::NONE, 0), Pocket::Items, ItemUse::PartyMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    IRON = 65 => item(Price(9800), Effect(HoldEffect::NONE, 0), Pocket::Items, ItemUse::PartyMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    CARBOS = 66 => item(Price(9800), Effect(HoldEffect::NONE, 0), Pocket::Items, ItemUse::PartyMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    CALCIUM = 67 => item(Price(9800), Effect(HoldEffect::NONE, 0), Pocket::Items, ItemUse::PartyMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    RARE_CANDY = 68 => item(Price(4800), Effect(HoldEffect::NONE, 0), Pocket::Items, ItemUse::PartyMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    PP_UP = 69 => item(Price(9800), Effect(HoldEffect::NONE, 0), Pocket::Items, ItemUse::PartyMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    ZINC = 70 => item(Price(9800), Effect(HoldEffect::NONE, 0), Pocket::Items, ItemUse::PartyMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    PP_MAX = 71 => item(Price(9800), Effect(HoldEffect::NONE, 0), Pocket::Items, ItemUse::PartyMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    RESERVED_048 = 72 => empty(),
+    GUARD_SPEC = 73 => item(Price(700), Effect(HoldEffect::NONE, 0), Pocket::Items, ItemUse::BagMenu, BattleUsage::Other, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    DIRE_HIT = 74 => item(Price(650), Effect(HoldEffect::NONE, 0), Pocket::Items, ItemUse::BagMenu, BattleUsage::Other, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    X_ATTACK = 75 => item(Price(500), Effect(HoldEffect::NONE, 0), Pocket::Items, ItemUse::BagMenu, BattleUsage::Other, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    X_DEFEND = 76 => item(Price(550), Effect(HoldEffect::NONE, 0), Pocket::Items, ItemUse::BagMenu, BattleUsage::Other, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    X_SPEED = 77 => item(Price(350), Effect(HoldEffect::NONE, 0), Pocket::Items, ItemUse::BagMenu, BattleUsage::Other, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    X_ACCURACY = 78 => item(Price(950), Effect(HoldEffect::NONE, 0), Pocket::Items, ItemUse::BagMenu, BattleUsage::Other, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    X_SPECIAL = 79 => item(Price(350), Effect(HoldEffect::NONE, 0), Pocket::Items, ItemUse::BagMenu, BattleUsage::Other, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    POKE_DOLL = 80 => item(Price(1000), Effect(HoldEffect::NONE, 0), Pocket::Items, ItemUse::BagMenu, BattleUsage::Other, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    FLUFFY_TAIL = 81 => item(Price(1000), Effect(HoldEffect::NONE, 0), Pocket::Items, ItemUse::BagMenu, BattleUsage::Other, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    RESERVED_052 = 82 => empty(),
+    SUPER_REPEL = 83 => item(Price(500), Effect(HoldEffect::NONE, 200), Pocket::Items, ItemUse::BagMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    MAX_REPEL = 84 => item(Price(700), Effect(HoldEffect::NONE, 250), Pocket::Items, ItemUse::BagMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    ESCAPE_ROPE = 85 => item(Price(550), Effect(HoldEffect::NONE, 0), Pocket::Items, ItemUse::Field, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    REPEL = 86 => item(Price(350), Effect(HoldEffect::NONE, 100), Pocket::Items, ItemUse::BagMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    RESERVED_057 = 87 => empty(),
+    RESERVED_058 = 88 => empty(),
+    RESERVED_059 = 89 => empty(),
+    RESERVED_05A = 90 => empty(),
+    RESERVED_05B = 91 => empty(),
+    RESERVED_05C = 92 => empty(),
+    SUN_STONE = 93 => item(Price(2100), Effect(HoldEffect::NONE, 0), Pocket::Items, ItemUse::PartyMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    MOON_STONE = 94 => item(Price(0), Effect(HoldEffect::NONE, 0), Pocket::Items, ItemUse::PartyMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    FIRE_STONE = 95 => item(Price(2100), Effect(HoldEffect::NONE, 0), Pocket::Items, ItemUse::PartyMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    THUNDER_STONE = 96 => item(Price(2100), Effect(HoldEffect::NONE, 0), Pocket::Items, ItemUse::PartyMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    WATER_STONE = 97 => item(Price(2100), Effect(HoldEffect::NONE, 0), Pocket::Items, ItemUse::PartyMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    LEAF_STONE = 98 => item(Price(2100), Effect(HoldEffect::NONE, 0), Pocket::Items, ItemUse::PartyMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    RESERVED_063 = 99 => empty(),
+    RESERVED_064 = 100 => empty(),
+    RESERVED_065 = 101 => empty(),
+    RESERVED_066 = 102 => empty(),
+    TINY_MUSHROOM = 103 => item(Price(500), Effect(HoldEffect::NONE, 0), Pocket::Items, ItemUse::BagMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    BIG_MUSHROOM = 104 => item(Price(5000), Effect(HoldEffect::NONE, 0), Pocket::Items, ItemUse::BagMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    RESERVED_069 = 105 => empty(),
+    PEARL = 106 => item(Price(1400), Effect(HoldEffect::NONE, 0), Pocket::Items, ItemUse::BagMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    BIG_PEARL = 107 => item(Price(7500), Effect(HoldEffect::NONE, 0), Pocket::Items, ItemUse::BagMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    STARDUST = 108 => item(Price(2000), Effect(HoldEffect::NONE, 0), Pocket::Items, ItemUse::BagMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    STAR_PIECE = 109 => item(Price(9800), Effect(HoldEffect::NONE, 0), Pocket::Items, ItemUse::BagMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    NUGGET = 110 => item(Price(10000), Effect(HoldEffect::NONE, 0), Pocket::Items, ItemUse::BagMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    HEART_SCALE = 111 => item(Price(100), Effect(HoldEffect::NONE, 0), Pocket::Items, ItemUse::BagMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    RESERVED_070 = 112 => empty(),
+    RESERVED_071 = 113 => empty(),
+    RESERVED_072 = 114 => empty(),
+    RESERVED_073 = 115 => empty(),
+    RESERVED_074 = 116 => empty(),
+    RESERVED_075 = 117 => empty(),
+    RESERVED_076 = 118 => empty(),
+    RESERVED_077 = 119 => empty(),
+    RESERVED_078 = 120 => empty(),
+    ORANGE_MAIL = 121 => item(Price(50), Effect(HoldEffect::NONE, 0), Pocket::Items, ItemUse::Mail, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::Mail),
+    HARBOR_MAIL = 122 => item(Price(50), Effect(HoldEffect::NONE, 0), Pocket::Items, ItemUse::Mail, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::Mail),
+    GLITTER_MAIL = 123 => item(Price(50), Effect(HoldEffect::NONE, 0), Pocket::Items, ItemUse::Mail, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::Mail),
+    MECH_MAIL = 124 => item(Price(50), Effect(HoldEffect::NONE, 0), Pocket::Items, ItemUse::Mail, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::Mail),
+    WOOD_MAIL = 125 => item(Price(50), Effect(HoldEffect::NONE, 0), Pocket::Items, ItemUse::Mail, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::Mail),
+    WAVE_MAIL = 126 => item(Price(50), Effect(HoldEffect::NONE, 0), Pocket::Items, ItemUse::Mail, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::Mail),
+    BEAD_MAIL = 127 => item(Price(50), Effect(HoldEffect::NONE, 0), Pocket::Items, ItemUse::Mail, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::Mail),
+    SHADOW_MAIL = 128 => item(Price(50), Effect(HoldEffect::NONE, 0), Pocket::Items, ItemUse::Mail, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::Mail),
+    TROPIC_MAIL = 129 => item(Price(50), Effect(HoldEffect::NONE, 0), Pocket::Items, ItemUse::Mail, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::Mail),
+    DREAM_MAIL = 130 => item(Price(50), Effect(HoldEffect::NONE, 0), Pocket::Items, ItemUse::Mail, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::Mail),
+    FAB_MAIL = 131 => item(Price(50), Effect(HoldEffect::NONE, 0), Pocket::Items, ItemUse::Mail, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::Mail),
+    RETRO_MAIL = 132 => item(Price(0), Effect(HoldEffect::NONE, 0), Pocket::Items, ItemUse::Mail, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::Mail),
+    CHERI_BERRY = 133 => item(Price(20), Effect(HoldEffect::CURE_PARALYSIS, 0), Pocket::Berries, ItemUse::PartyMenu, BattleUsage::Medicine, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    CHESTO_BERRY = 134 => item(Price(20), Effect(HoldEffect::CURE_SLEEP, 0), Pocket::Berries, ItemUse::PartyMenu, BattleUsage::Medicine, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    PECHA_BERRY = 135 => item(Price(20), Effect(HoldEffect::CURE_POISON, 0), Pocket::Berries, ItemUse::PartyMenu, BattleUsage::Medicine, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    RAWST_BERRY = 136 => item(Price(20), Effect(HoldEffect::CURE_BURN, 0), Pocket::Berries, ItemUse::PartyMenu, BattleUsage::Medicine, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    ASPEAR_BERRY = 137 => item(Price(20), Effect(HoldEffect::CURE_FREEZE, 0), Pocket::Berries, ItemUse::PartyMenu, BattleUsage::Medicine, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    LEPPA_BERRY = 138 => item(Price(20), Effect(HoldEffect::RESTORE_PP, 10), Pocket::Berries, ItemUse::PartyMenu, BattleUsage::Medicine, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    ORAN_BERRY = 139 => item(Price(20), Effect(HoldEffect::RESTORE_HP, 10), Pocket::Berries, ItemUse::PartyMenu, BattleUsage::Medicine, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    PERSIM_BERRY = 140 => item(Price(20), Effect(HoldEffect::CURE_CONFUSION, 0), Pocket::Berries, ItemUse::BagMenu, BattleUsage::Medicine, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    LUM_BERRY = 141 => item(Price(20), Effect(HoldEffect::CURE_STATUS, 0), Pocket::Berries, ItemUse::PartyMenu, BattleUsage::Medicine, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    SITRUS_BERRY = 142 => item(Price(20), Effect(HoldEffect::RESTORE_HP, 30), Pocket::Berries, ItemUse::PartyMenu, BattleUsage::Medicine, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    FIGY_BERRY = 143 => item(Price(20), Effect(HoldEffect::CONFUSE_SPICY, 8), Pocket::Berries, ItemUse::BagMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    WIKI_BERRY = 144 => item(Price(20), Effect(HoldEffect::CONFUSE_DRY, 8), Pocket::Berries, ItemUse::BagMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    MAGO_BERRY = 145 => item(Price(20), Effect(HoldEffect::CONFUSE_SWEET, 8), Pocket::Berries, ItemUse::BagMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    AGUAV_BERRY = 146 => item(Price(20), Effect(HoldEffect::CONFUSE_BITTER, 8), Pocket::Berries, ItemUse::BagMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    IAPAPA_BERRY = 147 => item(Price(20), Effect(HoldEffect::CONFUSE_SOUR, 8), Pocket::Berries, ItemUse::BagMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    RAZZ_BERRY = 148 => item(Price(20), Effect(HoldEffect::NONE, 0), Pocket::Berries, ItemUse::BagMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    BLUK_BERRY = 149 => item(Price(20), Effect(HoldEffect::NONE, 0), Pocket::Berries, ItemUse::BagMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    NANAB_BERRY = 150 => item(Price(20), Effect(HoldEffect::NONE, 0), Pocket::Berries, ItemUse::BagMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    WEPEAR_BERRY = 151 => item(Price(20), Effect(HoldEffect::NONE, 0), Pocket::Berries, ItemUse::BagMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    PINAP_BERRY = 152 => item(Price(20), Effect(HoldEffect::NONE, 0), Pocket::Berries, ItemUse::BagMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    POMEG_BERRY = 153 => item(Price(20), Effect(HoldEffect::NONE, 0), Pocket::Berries, ItemUse::PartyMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    KELPSY_BERRY = 154 => item(Price(20), Effect(HoldEffect::NONE, 0), Pocket::Berries, ItemUse::PartyMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    QUALOT_BERRY = 155 => item(Price(20), Effect(HoldEffect::NONE, 0), Pocket::Berries, ItemUse::PartyMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    HONDEW_BERRY = 156 => item(Price(20), Effect(HoldEffect::NONE, 0), Pocket::Berries, ItemUse::PartyMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    GREPA_BERRY = 157 => item(Price(20), Effect(HoldEffect::NONE, 0), Pocket::Berries, ItemUse::PartyMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    TAMATO_BERRY = 158 => item(Price(20), Effect(HoldEffect::NONE, 0), Pocket::Berries, ItemUse::PartyMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    CORNN_BERRY = 159 => item(Price(20), Effect(HoldEffect::NONE, 0), Pocket::Berries, ItemUse::BagMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    MAGOST_BERRY = 160 => item(Price(20), Effect(HoldEffect::NONE, 0), Pocket::Berries, ItemUse::BagMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    RABUTA_BERRY = 161 => item(Price(20), Effect(HoldEffect::NONE, 0), Pocket::Berries, ItemUse::BagMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    NOMEL_BERRY = 162 => item(Price(20), Effect(HoldEffect::NONE, 0), Pocket::Berries, ItemUse::BagMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    SPELON_BERRY = 163 => item(Price(20), Effect(HoldEffect::NONE, 0), Pocket::Berries, ItemUse::BagMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    PAMTRE_BERRY = 164 => item(Price(20), Effect(HoldEffect::NONE, 0), Pocket::Berries, ItemUse::BagMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    WATMEL_BERRY = 165 => item(Price(20), Effect(HoldEffect::NONE, 0), Pocket::Berries, ItemUse::BagMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    DURIN_BERRY = 166 => item(Price(20), Effect(HoldEffect::NONE, 0), Pocket::Berries, ItemUse::BagMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    BELUE_BERRY = 167 => item(Price(20), Effect(HoldEffect::NONE, 0), Pocket::Berries, ItemUse::BagMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    LIECHI_BERRY = 168 => item(Price(20), Effect(HoldEffect::ATTACK_UP, 4), Pocket::Berries, ItemUse::BagMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    GANLON_BERRY = 169 => item(Price(20), Effect(HoldEffect::DEFENSE_UP, 4), Pocket::Berries, ItemUse::BagMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    SALAC_BERRY = 170 => item(Price(20), Effect(HoldEffect::SPEED_UP, 4), Pocket::Berries, ItemUse::BagMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    PETAYA_BERRY = 171 => item(Price(20), Effect(HoldEffect::SPECIAL_ATTACK_UP, 4), Pocket::Berries, ItemUse::BagMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    APICOT_BERRY = 172 => item(Price(20), Effect(HoldEffect::SPECIAL_DEFENSE_UP, 4), Pocket::Berries, ItemUse::BagMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    LANSAT_BERRY = 173 => item(Price(20), Effect(HoldEffect::CRITICAL_UP, 4), Pocket::Berries, ItemUse::BagMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    STARF_BERRY = 174 => item(Price(20), Effect(HoldEffect::RANDOM_STAT_UP, 4), Pocket::Berries, ItemUse::BagMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    ENIGMA_BERRY = 175 => item(Price(20), Effect(HoldEffect::NONE, 0), Pocket::Berries, ItemUse::BagMenu, BattleUsage::Medicine, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    UNUSED_BERRY_1 = 176 => empty(),
+    UNUSED_BERRY_2 = 177 => empty(),
+    UNUSED_BERRY_3 = 178 => empty(),
+    BRIGHT_POWDER = 179 => item(Price(10), Effect(HoldEffect::EVASION_UP, 10), Pocket::Items, ItemUse::BagMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    WHITE_HERB = 180 => item(Price(100), Effect(HoldEffect::RESTORE_STATS, 0), Pocket::Items, ItemUse::BagMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    MACHO_BRACE = 181 => item(Price(3000), Effect(HoldEffect::MACHO_BRACE, 0), Pocket::Items, ItemUse::BagMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    EXP_SHARE = 182 => item(Price(3000), Effect(HoldEffect::EXP_SHARE, 0), Pocket::Items, ItemUse::BagMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    QUICK_CLAW = 183 => item(Price(100), Effect(HoldEffect::QUICK_CLAW, 20), Pocket::Items, ItemUse::BagMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    SOOTHE_BELL = 184 => item(Price(100), Effect(HoldEffect::FRIENDSHIP_UP, 0), Pocket::Items, ItemUse::BagMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    MENTAL_HERB = 185 => item(Price(100), Effect(HoldEffect::CURE_ATTRACT, 0), Pocket::Items, ItemUse::BagMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    CHOICE_BAND = 186 => item(Price(100), Effect(HoldEffect::CHOICE_BAND, 0), Pocket::Items, ItemUse::BagMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    KINGS_ROCK = 187 => item(Price(100), Effect(HoldEffect::FLINCH, 10), Pocket::Items, ItemUse::BagMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    SILVER_POWDER = 188 => item(Price(100), Effect(HoldEffect::BUG_POWER, 10), Pocket::Items, ItemUse::BagMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    AMULET_COIN = 189 => item(Price(100), Effect(HoldEffect::DOUBLE_PRIZE, 10), Pocket::Items, ItemUse::BagMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    CLEANSE_TAG = 190 => item(Price(200), Effect(HoldEffect::REPEL, 0), Pocket::Items, ItemUse::BagMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    SOUL_DEW = 191 => item(Price(200), Effect(HoldEffect::SOUL_DEW, 0), Pocket::Items, ItemUse::BagMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    DEEP_SEA_TOOTH = 192 => item(Price(200), Effect(HoldEffect::DEEP_SEA_TOOTH, 0), Pocket::Items, ItemUse::BagMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    DEEP_SEA_SCALE = 193 => item(Price(200), Effect(HoldEffect::DEEP_SEA_SCALE, 0), Pocket::Items, ItemUse::BagMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    SMOKE_BALL = 194 => item(Price(200), Effect(HoldEffect::CAN_ALWAYS_RUN, 0), Pocket::Items, ItemUse::BagMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    EVERSTONE = 195 => item(Price(200), Effect(HoldEffect::PREVENT_EVOLUTION, 0), Pocket::Items, ItemUse::BagMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    FOCUS_BAND = 196 => item(Price(200), Effect(HoldEffect::FOCUS_BAND, 10), Pocket::Items, ItemUse::BagMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    LUCKY_EGG = 197 => item(Price(200), Effect(HoldEffect::LUCKY_EGG, 0), Pocket::Items, ItemUse::BagMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    SCOPE_LENS = 198 => item(Price(200), Effect(HoldEffect::SCOPE_LENS, 0), Pocket::Items, ItemUse::BagMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    METAL_COAT = 199 => item(Price(100), Effect(HoldEffect::STEEL_POWER, 10), Pocket::Items, ItemUse::BagMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    LEFTOVERS = 200 => item(Price(200), Effect(HoldEffect::LEFTOVERS, 10), Pocket::Items, ItemUse::BagMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    DRAGON_SCALE = 201 => item(Price(2100), Effect(HoldEffect::DRAGON_SCALE, 10), Pocket::Items, ItemUse::BagMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    LIGHT_BALL = 202 => item(Price(100), Effect(HoldEffect::LIGHT_BALL, 0), Pocket::Items, ItemUse::BagMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    SOFT_SAND = 203 => item(Price(100), Effect(HoldEffect::GROUND_POWER, 10), Pocket::Items, ItemUse::BagMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    HARD_STONE = 204 => item(Price(100), Effect(HoldEffect::ROCK_POWER, 10), Pocket::Items, ItemUse::BagMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    MIRACLE_SEED = 205 => item(Price(100), Effect(HoldEffect::GRASS_POWER, 10), Pocket::Items, ItemUse::BagMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    BLACK_GLASSES = 206 => item(Price(100), Effect(HoldEffect::DARK_POWER, 10), Pocket::Items, ItemUse::BagMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    BLACK_BELT = 207 => item(Price(100), Effect(HoldEffect::FIGHTING_POWER, 10), Pocket::Items, ItemUse::BagMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    MAGNET = 208 => item(Price(100), Effect(HoldEffect::ELECTRIC_POWER, 10), Pocket::Items, ItemUse::BagMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    MYSTIC_WATER = 209 => item(Price(100), Effect(HoldEffect::WATER_POWER, 10), Pocket::Items, ItemUse::BagMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    SHARP_BEAK = 210 => item(Price(100), Effect(HoldEffect::FLYING_POWER, 10), Pocket::Items, ItemUse::BagMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    POISON_BARB = 211 => item(Price(100), Effect(HoldEffect::POISON_POWER, 10), Pocket::Items, ItemUse::BagMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    NEVER_MELT_ICE = 212 => item(Price(100), Effect(HoldEffect::ICE_POWER, 10), Pocket::Items, ItemUse::BagMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    SPELL_TAG = 213 => item(Price(100), Effect(HoldEffect::GHOST_POWER, 10), Pocket::Items, ItemUse::BagMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    TWISTED_SPOON = 214 => item(Price(100), Effect(HoldEffect::PSYCHIC_POWER, 10), Pocket::Items, ItemUse::BagMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    CHARCOAL = 215 => item(Price(9800), Effect(HoldEffect::FIRE_POWER, 10), Pocket::Items, ItemUse::BagMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    DRAGON_FANG = 216 => item(Price(100), Effect(HoldEffect::DRAGON_POWER, 10), Pocket::Items, ItemUse::BagMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    SILK_SCARF = 217 => item(Price(100), Effect(HoldEffect::NORMAL_POWER, 10), Pocket::Items, ItemUse::BagMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    UP_GRADE = 218 => item(Price(2100), Effect(HoldEffect::UP_GRADE, 0), Pocket::Items, ItemUse::BagMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    SHELL_BELL = 219 => item(Price(200), Effect(HoldEffect::SHELL_BELL, 8), Pocket::Items, ItemUse::BagMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    SEA_INCENSE = 220 => item(Price(9600), Effect(HoldEffect::WATER_POWER, 5), Pocket::Items, ItemUse::BagMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    LAX_INCENSE = 221 => item(Price(9600), Effect(HoldEffect::EVASION_UP, 5), Pocket::Items, ItemUse::BagMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    LUCKY_PUNCH = 222 => item(Price(10), Effect(HoldEffect::LUCKY_PUNCH, 0), Pocket::Items, ItemUse::BagMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    METAL_POWDER = 223 => item(Price(10), Effect(HoldEffect::METAL_POWDER, 0), Pocket::Items, ItemUse::BagMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    THICK_CLUB = 224 => item(Price(500), Effect(HoldEffect::THICK_CLUB, 0), Pocket::Items, ItemUse::BagMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    STICK = 225 => item(Price(200), Effect(HoldEffect::STICK, 0), Pocket::Items, ItemUse::BagMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    RESERVED_0E2 = 226 => empty(),
+    RESERVED_0E3 = 227 => empty(),
+    RESERVED_0E4 = 228 => empty(),
+    RESERVED_0E5 = 229 => empty(),
+    RESERVED_0E6 = 230 => empty(),
+    RESERVED_0E7 = 231 => empty(),
+    RESERVED_0E8 = 232 => empty(),
+    RESERVED_0E9 = 233 => empty(),
+    RESERVED_0EA = 234 => empty(),
+    RESERVED_0EB = 235 => empty(),
+    RESERVED_0EC = 236 => empty(),
+    RESERVED_0ED = 237 => empty(),
+    RESERVED_0EE = 238 => empty(),
+    RESERVED_0EF = 239 => empty(),
+    RESERVED_0F0 = 240 => empty(),
+    RESERVED_0F1 = 241 => empty(),
+    RESERVED_0F2 = 242 => empty(),
+    RESERVED_0F3 = 243 => empty(),
+    RESERVED_0F4 = 244 => empty(),
+    RESERVED_0F5 = 245 => empty(),
+    RESERVED_0F6 = 246 => empty(),
+    RESERVED_0F7 = 247 => empty(),
+    RESERVED_0F8 = 248 => empty(),
+    RESERVED_0F9 = 249 => empty(),
+    RESERVED_0FA = 250 => empty(),
+    RESERVED_0FB = 251 => empty(),
+    RESERVED_0FC = 252 => empty(),
+    RESERVED_0FD = 253 => empty(),
+    RED_SCARF = 254 => item(Price(100), Effect(HoldEffect::NONE, 0), Pocket::Items, ItemUse::BagMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    BLUE_SCARF = 255 => item(Price(100), Effect(HoldEffect::NONE, 0), Pocket::Items, ItemUse::BagMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    PINK_SCARF = 256 => item(Price(100), Effect(HoldEffect::NONE, 0), Pocket::Items, ItemUse::BagMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    GREEN_SCARF = 257 => item(Price(100), Effect(HoldEffect::NONE, 0), Pocket::Items, ItemUse::BagMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    YELLOW_SCARF = 258 => item(Price(100), Effect(HoldEffect::NONE, 0), Pocket::Items, ItemUse::BagMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    MACH_BIKE = 259 => item(Price(0), Effect(HoldEffect::NONE, 0), Pocket::KeyItems, ItemUse::Field, BattleUsage::None, Importance::Key, CanRegister(true), SecondaryId::MachBike),
+    COIN_CASE = 260 => item(Price(0), Effect(HoldEffect::NONE, 0), Pocket::KeyItems, ItemUse::BagMenu, BattleUsage::None, Importance::Key, CanRegister(false), SecondaryId::None),
+    ITEMFINDER = 261 => item(Price(0), Effect(HoldEffect::NONE, 0), Pocket::KeyItems, ItemUse::Field, BattleUsage::None, Importance::Key, CanRegister(true), SecondaryId::None),
+    OLD_ROD = 262 => item(Price(0), Effect(HoldEffect::NONE, 0), Pocket::KeyItems, ItemUse::Field, BattleUsage::None, Importance::Key, CanRegister(true), SecondaryId::OldRod),
+    GOOD_ROD = 263 => item(Price(0), Effect(HoldEffect::NONE, 0), Pocket::KeyItems, ItemUse::Field, BattleUsage::None, Importance::Key, CanRegister(true), SecondaryId::GoodRod),
+    SUPER_ROD = 264 => item(Price(0), Effect(HoldEffect::NONE, 0), Pocket::KeyItems, ItemUse::Field, BattleUsage::None, Importance::Key, CanRegister(true), SecondaryId::SuperRod),
+    SS_TICKET = 265 => item(Price(0), Effect(HoldEffect::NONE, 0), Pocket::KeyItems, ItemUse::BagMenu, BattleUsage::None, Importance::Key, CanRegister(false), SecondaryId::None),
+    CONTEST_PASS = 266 => item(Price(0), Effect(HoldEffect::NONE, 0), Pocket::KeyItems, ItemUse::BagMenu, BattleUsage::None, Importance::Key, CanRegister(false), SecondaryId::None),
+    RESERVED_10B = 267 => empty(),
+    WAILMER_PAIL = 268 => item(Price(0), Effect(HoldEffect::NONE, 0), Pocket::KeyItems, ItemUse::Field, BattleUsage::None, Importance::Key, CanRegister(false), SecondaryId::None),
+    DEVON_GOODS = 269 => item(Price(0), Effect(HoldEffect::NONE, 0), Pocket::KeyItems, ItemUse::BagMenu, BattleUsage::None, Importance::Plot, CanRegister(false), SecondaryId::None),
+    SOOT_SACK = 270 => item(Price(0), Effect(HoldEffect::NONE, 0), Pocket::KeyItems, ItemUse::BagMenu, BattleUsage::None, Importance::Key, CanRegister(false), SecondaryId::None),
+    BASEMENT_KEY = 271 => item(Price(0), Effect(HoldEffect::NONE, 0), Pocket::KeyItems, ItemUse::BagMenu, BattleUsage::None, Importance::Key, CanRegister(false), SecondaryId::None),
+    ACRO_BIKE = 272 => item(Price(0), Effect(HoldEffect::NONE, 0), Pocket::KeyItems, ItemUse::Field, BattleUsage::None, Importance::Key, CanRegister(true), SecondaryId::AcroBike),
+    POKEBLOCK_CASE = 273 => item(Price(0), Effect(HoldEffect::NONE, 0), Pocket::KeyItems, ItemUse::PokeblockCase, BattleUsage::None, Importance::Key, CanRegister(true), SecondaryId::None),
+    LETTER = 274 => item(Price(0), Effect(HoldEffect::NONE, 0), Pocket::KeyItems, ItemUse::BagMenu, BattleUsage::None, Importance::Plot, CanRegister(false), SecondaryId::None),
+    EON_TICKET = 275 => item(Price(0), Effect(HoldEffect::NONE, 0), Pocket::KeyItems, ItemUse::BagMenu, BattleUsage::None, Importance::Key, CanRegister(false), SecondaryId::Raw(1)),
+    RED_ORB = 276 => item(Price(0), Effect(HoldEffect::NONE, 0), Pocket::KeyItems, ItemUse::BagMenu, BattleUsage::None, Importance::Plot, CanRegister(false), SecondaryId::None),
+    BLUE_ORB = 277 => item(Price(0), Effect(HoldEffect::NONE, 0), Pocket::KeyItems, ItemUse::BagMenu, BattleUsage::None, Importance::Plot, CanRegister(false), SecondaryId::None),
+    SCANNER = 278 => item(Price(0), Effect(HoldEffect::NONE, 0), Pocket::KeyItems, ItemUse::BagMenu, BattleUsage::None, Importance::Key, CanRegister(false), SecondaryId::None),
+    GO_GOGGLES = 279 => item(Price(0), Effect(HoldEffect::NONE, 0), Pocket::KeyItems, ItemUse::BagMenu, BattleUsage::None, Importance::Key, CanRegister(false), SecondaryId::None),
+    METEORITE = 280 => item(Price(0), Effect(HoldEffect::NONE, 0), Pocket::KeyItems, ItemUse::BagMenu, BattleUsage::None, Importance::Key, CanRegister(false), SecondaryId::None),
+    ROOM_1_KEY = 281 => item(Price(0), Effect(HoldEffect::NONE, 0), Pocket::KeyItems, ItemUse::BagMenu, BattleUsage::None, Importance::Key, CanRegister(false), SecondaryId::None),
+    ROOM_2_KEY = 282 => item(Price(0), Effect(HoldEffect::NONE, 0), Pocket::KeyItems, ItemUse::BagMenu, BattleUsage::None, Importance::Key, CanRegister(false), SecondaryId::None),
+    ROOM_4_KEY = 283 => item(Price(0), Effect(HoldEffect::NONE, 0), Pocket::KeyItems, ItemUse::BagMenu, BattleUsage::None, Importance::Key, CanRegister(false), SecondaryId::None),
+    ROOM_6_KEY = 284 => item(Price(0), Effect(HoldEffect::NONE, 0), Pocket::KeyItems, ItemUse::BagMenu, BattleUsage::None, Importance::Key, CanRegister(false), SecondaryId::None),
+    STORAGE_KEY = 285 => item(Price(0), Effect(HoldEffect::NONE, 0), Pocket::KeyItems, ItemUse::BagMenu, BattleUsage::None, Importance::Key, CanRegister(false), SecondaryId::None),
+    ROOT_FOSSIL = 286 => item(Price(0), Effect(HoldEffect::NONE, 0), Pocket::KeyItems, ItemUse::BagMenu, BattleUsage::None, Importance::Key, CanRegister(false), SecondaryId::None),
+    CLAW_FOSSIL = 287 => item(Price(0), Effect(HoldEffect::NONE, 0), Pocket::KeyItems, ItemUse::BagMenu, BattleUsage::None, Importance::Key, CanRegister(false), SecondaryId::None),
+    DEVON_SCOPE = 288 => item(Price(0), Effect(HoldEffect::NONE, 0), Pocket::KeyItems, ItemUse::BagMenu, BattleUsage::None, Importance::Key, CanRegister(false), SecondaryId::None),
+    TM_FOCUS_PUNCH = 289 => item(Price(3000), Effect(HoldEffect::NONE, 0), Pocket::TmHm, ItemUse::PartyMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    TM_DRAGON_CLAW = 290 => item(Price(3000), Effect(HoldEffect::NONE, 0), Pocket::TmHm, ItemUse::PartyMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    TM_WATER_PULSE = 291 => item(Price(3000), Effect(HoldEffect::NONE, 0), Pocket::TmHm, ItemUse::PartyMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    TM_CALM_MIND = 292 => item(Price(3000), Effect(HoldEffect::NONE, 0), Pocket::TmHm, ItemUse::PartyMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    TM_ROAR = 293 => item(Price(1000), Effect(HoldEffect::NONE, 0), Pocket::TmHm, ItemUse::PartyMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    TM_TOXIC = 294 => item(Price(3000), Effect(HoldEffect::NONE, 0), Pocket::TmHm, ItemUse::PartyMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    TM_HAIL = 295 => item(Price(3000), Effect(HoldEffect::NONE, 0), Pocket::TmHm, ItemUse::PartyMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    TM_BULK_UP = 296 => item(Price(3000), Effect(HoldEffect::NONE, 0), Pocket::TmHm, ItemUse::PartyMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    TM_BULLET_SEED = 297 => item(Price(3000), Effect(HoldEffect::NONE, 0), Pocket::TmHm, ItemUse::PartyMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    TM_HIDDEN_POWER = 298 => item(Price(3000), Effect(HoldEffect::NONE, 0), Pocket::TmHm, ItemUse::PartyMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    TM_SUNNY_DAY = 299 => item(Price(2000), Effect(HoldEffect::NONE, 0), Pocket::TmHm, ItemUse::PartyMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    TM_TAUNT = 300 => item(Price(3000), Effect(HoldEffect::NONE, 0), Pocket::TmHm, ItemUse::PartyMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    TM_ICE_BEAM = 301 => item(Price(3000), Effect(HoldEffect::NONE, 0), Pocket::TmHm, ItemUse::PartyMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    TM_BLIZZARD = 302 => item(Price(5500), Effect(HoldEffect::NONE, 0), Pocket::TmHm, ItemUse::PartyMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    TM_HYPER_BEAM = 303 => item(Price(7500), Effect(HoldEffect::NONE, 0), Pocket::TmHm, ItemUse::PartyMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    TM_LIGHT_SCREEN = 304 => item(Price(3000), Effect(HoldEffect::NONE, 0), Pocket::TmHm, ItemUse::PartyMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    TM_PROTECT = 305 => item(Price(3000), Effect(HoldEffect::NONE, 0), Pocket::TmHm, ItemUse::PartyMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    TM_RAIN_DANCE = 306 => item(Price(2000), Effect(HoldEffect::NONE, 0), Pocket::TmHm, ItemUse::PartyMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    TM_GIGA_DRAIN = 307 => item(Price(3000), Effect(HoldEffect::NONE, 0), Pocket::TmHm, ItemUse::PartyMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    TM_SAFEGUARD = 308 => item(Price(3000), Effect(HoldEffect::NONE, 0), Pocket::TmHm, ItemUse::PartyMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    TM_FRUSTRATION = 309 => item(Price(1000), Effect(HoldEffect::NONE, 0), Pocket::TmHm, ItemUse::PartyMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    TM_SOLAR_BEAM = 310 => item(Price(3000), Effect(HoldEffect::NONE, 0), Pocket::TmHm, ItemUse::PartyMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    TM_IRON_TAIL = 311 => item(Price(3000), Effect(HoldEffect::NONE, 0), Pocket::TmHm, ItemUse::PartyMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    TM_THUNDERBOLT = 312 => item(Price(3000), Effect(HoldEffect::NONE, 0), Pocket::TmHm, ItemUse::PartyMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    TM_THUNDER = 313 => item(Price(5500), Effect(HoldEffect::NONE, 0), Pocket::TmHm, ItemUse::PartyMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    TM_EARTHQUAKE = 314 => item(Price(3000), Effect(HoldEffect::NONE, 0), Pocket::TmHm, ItemUse::PartyMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    TM_RETURN = 315 => item(Price(1000), Effect(HoldEffect::NONE, 0), Pocket::TmHm, ItemUse::PartyMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    TM_DIG = 316 => item(Price(2000), Effect(HoldEffect::NONE, 0), Pocket::TmHm, ItemUse::PartyMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    TM_PSYCHIC = 317 => item(Price(2000), Effect(HoldEffect::NONE, 0), Pocket::TmHm, ItemUse::PartyMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    TM_SHADOW_BALL = 318 => item(Price(3000), Effect(HoldEffect::NONE, 0), Pocket::TmHm, ItemUse::PartyMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    TM_BRICK_BREAK = 319 => item(Price(3000), Effect(HoldEffect::NONE, 0), Pocket::TmHm, ItemUse::PartyMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    TM_DOUBLE_TEAM = 320 => item(Price(2000), Effect(HoldEffect::NONE, 0), Pocket::TmHm, ItemUse::PartyMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    TM_REFLECT = 321 => item(Price(3000), Effect(HoldEffect::NONE, 0), Pocket::TmHm, ItemUse::PartyMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    TM_SHOCK_WAVE = 322 => item(Price(3000), Effect(HoldEffect::NONE, 0), Pocket::TmHm, ItemUse::PartyMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    TM_FLAMETHROWER = 323 => item(Price(3000), Effect(HoldEffect::NONE, 0), Pocket::TmHm, ItemUse::PartyMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    TM_SLUDGE_BOMB = 324 => item(Price(1000), Effect(HoldEffect::NONE, 0), Pocket::TmHm, ItemUse::PartyMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    TM_SANDSTORM = 325 => item(Price(2000), Effect(HoldEffect::NONE, 0), Pocket::TmHm, ItemUse::PartyMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    TM_FIRE_BLAST = 326 => item(Price(5500), Effect(HoldEffect::NONE, 0), Pocket::TmHm, ItemUse::PartyMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    TM_ROCK_TOMB = 327 => item(Price(3000), Effect(HoldEffect::NONE, 0), Pocket::TmHm, ItemUse::PartyMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    TM_AERIAL_ACE = 328 => item(Price(3000), Effect(HoldEffect::NONE, 0), Pocket::TmHm, ItemUse::PartyMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    TM_TORMENT = 329 => item(Price(3000), Effect(HoldEffect::NONE, 0), Pocket::TmHm, ItemUse::PartyMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    TM_FACADE = 330 => item(Price(3000), Effect(HoldEffect::NONE, 0), Pocket::TmHm, ItemUse::PartyMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    TM_SECRET_POWER = 331 => item(Price(3000), Effect(HoldEffect::NONE, 0), Pocket::TmHm, ItemUse::PartyMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    TM_REST = 332 => item(Price(3000), Effect(HoldEffect::NONE, 0), Pocket::TmHm, ItemUse::PartyMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    TM_ATTRACT = 333 => item(Price(3000), Effect(HoldEffect::NONE, 0), Pocket::TmHm, ItemUse::PartyMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    TM_THIEF = 334 => item(Price(3000), Effect(HoldEffect::NONE, 0), Pocket::TmHm, ItemUse::PartyMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    TM_STEEL_WING = 335 => item(Price(3000), Effect(HoldEffect::NONE, 0), Pocket::TmHm, ItemUse::PartyMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    TM_SKILL_SWAP = 336 => item(Price(3000), Effect(HoldEffect::NONE, 0), Pocket::TmHm, ItemUse::PartyMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    TM_SNATCH = 337 => item(Price(3000), Effect(HoldEffect::NONE, 0), Pocket::TmHm, ItemUse::PartyMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    TM_OVERHEAT = 338 => item(Price(3000), Effect(HoldEffect::NONE, 0), Pocket::TmHm, ItemUse::PartyMenu, BattleUsage::None, Importance::Ordinary, CanRegister(false), SecondaryId::None),
+    HM_CUT = 339 => item(Price(0), Effect(HoldEffect::NONE, 0), Pocket::TmHm, ItemUse::PartyMenu, BattleUsage::None, Importance::Key, CanRegister(false), SecondaryId::None),
+    HM_FLY = 340 => item(Price(0), Effect(HoldEffect::NONE, 0), Pocket::TmHm, ItemUse::PartyMenu, BattleUsage::None, Importance::Key, CanRegister(false), SecondaryId::None),
+    HM_SURF = 341 => item(Price(0), Effect(HoldEffect::NONE, 0), Pocket::TmHm, ItemUse::PartyMenu, BattleUsage::None, Importance::Key, CanRegister(false), SecondaryId::None),
+    HM_STRENGTH = 342 => item(Price(0), Effect(HoldEffect::NONE, 0), Pocket::TmHm, ItemUse::PartyMenu, BattleUsage::None, Importance::Key, CanRegister(false), SecondaryId::None),
+    HM_FLASH = 343 => item(Price(0), Effect(HoldEffect::NONE, 0), Pocket::TmHm, ItemUse::PartyMenu, BattleUsage::None, Importance::Key, CanRegister(false), SecondaryId::None),
+    HM_ROCK_SMASH = 344 => item(Price(0), Effect(HoldEffect::NONE, 0), Pocket::TmHm, ItemUse::PartyMenu, BattleUsage::None, Importance::Key, CanRegister(false), SecondaryId::None),
+    HM_WATERFALL = 345 => item(Price(0), Effect(HoldEffect::NONE, 0), Pocket::TmHm, ItemUse::PartyMenu, BattleUsage::None, Importance::Key, CanRegister(false), SecondaryId::None),
+    HM_DIVE = 346 => item(Price(0), Effect(HoldEffect::NONE, 0), Pocket::TmHm, ItemUse::PartyMenu, BattleUsage::None, Importance::Key, CanRegister(false), SecondaryId::None),
+    RESERVED_15B = 347 => empty(),
+    RESERVED_15C = 348 => empty(),
+    OAKS_PARCEL = 349 => item(Price(0), Effect(HoldEffect::NONE, 0), Pocket::KeyItems, ItemUse::BagMenu, BattleUsage::None, Importance::Plot, CanRegister(false), SecondaryId::None),
+    POKE_FLUTE = 350 => item(Price(0), Effect(HoldEffect::NONE, 0), Pocket::KeyItems, ItemUse::BagMenu, BattleUsage::None, Importance::Key, CanRegister(false), SecondaryId::None),
+    SECRET_KEY = 351 => item(Price(0), Effect(HoldEffect::NONE, 0), Pocket::KeyItems, ItemUse::BagMenu, BattleUsage::None, Importance::Key, CanRegister(false), SecondaryId::None),
+    BIKE_VOUCHER = 352 => item(Price(0), Effect(HoldEffect::NONE, 0), Pocket::KeyItems, ItemUse::BagMenu, BattleUsage::None, Importance::Key, CanRegister(false), SecondaryId::None),
+    GOLD_TEETH = 353 => item(Price(0), Effect(HoldEffect::NONE, 0), Pocket::KeyItems, ItemUse::BagMenu, BattleUsage::None, Importance::Key, CanRegister(false), SecondaryId::None),
+    OLD_AMBER = 354 => item(Price(0), Effect(HoldEffect::NONE, 0), Pocket::KeyItems, ItemUse::BagMenu, BattleUsage::None, Importance::Key, CanRegister(false), SecondaryId::None),
+    CARD_KEY = 355 => item(Price(0), Effect(HoldEffect::NONE, 0), Pocket::KeyItems, ItemUse::BagMenu, BattleUsage::None, Importance::Key, CanRegister(false), SecondaryId::None),
+    LIFT_KEY = 356 => item(Price(0), Effect(HoldEffect::NONE, 0), Pocket::KeyItems, ItemUse::BagMenu, BattleUsage::None, Importance::Key, CanRegister(false), SecondaryId::None),
+    HELIX_FOSSIL = 357 => item(Price(0), Effect(HoldEffect::NONE, 0), Pocket::KeyItems, ItemUse::BagMenu, BattleUsage::None, Importance::Key, CanRegister(false), SecondaryId::None),
+    DOME_FOSSIL = 358 => item(Price(0), Effect(HoldEffect::NONE, 0), Pocket::KeyItems, ItemUse::BagMenu, BattleUsage::None, Importance::Key, CanRegister(false), SecondaryId::None),
+    SILPH_SCOPE = 359 => item(Price(0), Effect(HoldEffect::NONE, 0), Pocket::KeyItems, ItemUse::BagMenu, BattleUsage::None, Importance::Key, CanRegister(false), SecondaryId::None),
+    BICYCLE = 360 => item(Price(0), Effect(HoldEffect::NONE, 0), Pocket::KeyItems, ItemUse::Field, BattleUsage::None, Importance::Key, CanRegister(true), SecondaryId::None),
+    TOWN_MAP = 361 => item(Price(0), Effect(HoldEffect::NONE, 0), Pocket::KeyItems, ItemUse::BagMenu, BattleUsage::None, Importance::Key, CanRegister(true), SecondaryId::None),
+    VS_SEEKER = 362 => item(Price(0), Effect(HoldEffect::NONE, 0), Pocket::KeyItems, ItemUse::Field, BattleUsage::None, Importance::Key, CanRegister(true), SecondaryId::None),
+    FAME_CHECKER = 363 => item(Price(0), Effect(HoldEffect::NONE, 0), Pocket::KeyItems, ItemUse::BagMenu, BattleUsage::None, Importance::Key, CanRegister(true), SecondaryId::None),
+    TM_CASE = 364 => item(Price(0), Effect(HoldEffect::NONE, 0), Pocket::KeyItems, ItemUse::BagMenu, BattleUsage::None, Importance::Key, CanRegister(true), SecondaryId::None),
+    BERRY_POUCH = 365 => item(Price(0), Effect(HoldEffect::NONE, 0), Pocket::KeyItems, ItemUse::BagMenu, BattleUsage::None, Importance::Key, CanRegister(true), SecondaryId::None),
+    TEACHY_TV = 366 => item(Price(0), Effect(HoldEffect::NONE, 0), Pocket::KeyItems, ItemUse::Field, BattleUsage::None, Importance::Key, CanRegister(true), SecondaryId::None),
+    TRI_PASS = 367 => item(Price(0), Effect(HoldEffect::NONE, 0), Pocket::KeyItems, ItemUse::BagMenu, BattleUsage::None, Importance::Key, CanRegister(true), SecondaryId::None),
+    RAINBOW_PASS = 368 => item(Price(0), Effect(HoldEffect::NONE, 0), Pocket::KeyItems, ItemUse::BagMenu, BattleUsage::None, Importance::Key, CanRegister(true), SecondaryId::None),
+    TEA = 369 => item(Price(0), Effect(HoldEffect::NONE, 0), Pocket::KeyItems, ItemUse::BagMenu, BattleUsage::None, Importance::Key, CanRegister(true), SecondaryId::None),
+    MYSTIC_TICKET = 370 => item(Price(0), Effect(HoldEffect::NONE, 0), Pocket::KeyItems, ItemUse::BagMenu, BattleUsage::None, Importance::Key, CanRegister(true), SecondaryId::None),
+    AURORA_TICKET = 371 => item(Price(0), Effect(HoldEffect::NONE, 0), Pocket::KeyItems, ItemUse::BagMenu, BattleUsage::None, Importance::Key, CanRegister(true), SecondaryId::None),
+    POWDER_JAR = 372 => item(Price(0), Effect(HoldEffect::NONE, 0), Pocket::KeyItems, ItemUse::BagMenu, BattleUsage::None, Importance::Key, CanRegister(true), SecondaryId::None),
+    RUBY = 373 => item(Price(0), Effect(HoldEffect::NONE, 0), Pocket::KeyItems, ItemUse::BagMenu, BattleUsage::None, Importance::Key, CanRegister(true), SecondaryId::None),
+    SAPPHIRE = 374 => item(Price(0), Effect(HoldEffect::NONE, 0), Pocket::KeyItems, ItemUse::BagMenu, BattleUsage::None, Importance::Key, CanRegister(true), SecondaryId::None),
+    MAGMA_EMBLEM = 375 => item(Price(0), Effect(HoldEffect::NONE, 0), Pocket::KeyItems, ItemUse::BagMenu, BattleUsage::None, Importance::Key, CanRegister(true), SecondaryId::None),
+    OLD_SEA_MAP = 376 => item(Price(0), Effect(HoldEffect::NONE, 0), Pocket::KeyItems, ItemUse::BagMenu, BattleUsage::None, Importance::Key, CanRegister(true), SecondaryId::None),
+}
+
+/// Provides indexed access to the complete item table.
 #[derive(Debug, Clone, Copy)]
 pub struct ItemTable {
     items: &'static [ItemData; ITEMS_COUNT],
 }
 
 impl ItemTable {
-    /// Construct the table (a thin handle over the embedded static data).
+    /// Creates an item-table handle.
     #[must_use]
     pub const fn new() -> Self {
         Self { items: &ITEMS }
     }
 
-    /// The number of item entries (`ITEMS_COUNT`).
+    /// Returns the number of item entries.
     #[must_use]
     pub const fn len(&self) -> usize {
         ITEMS_COUNT
     }
 
-    /// Always `false`: the table is never empty. Present to satisfy the
-    /// `len`/`is_empty` convention.
+    /// Returns `false`; the canonical item table is never empty.
     #[must_use]
     pub const fn is_empty(&self) -> bool {
         false
     }
 
-    /// The data for item `id`.
+    /// Returns the data stored at `id`.
     ///
     /// # Errors
     ///
-    /// Returns [`AssetError::UnknownItem`] if `id` is outside `0..ITEMS_COUNT`.
+    /// Returns [`AssetError::UnknownItem`] when `id` is outside the table.
     pub fn get(&self, id: ItemId) -> Result<&ItemData, AssetError> {
         self.items
-            .get(id.0 as usize)
-            .ok_or(AssetError::UnknownItem(id.0))
+            .get(id.index() as usize)
+            .ok_or(AssetError::UnknownItem(id.index()))
     }
 
-    /// Iterate over every item's data in `ITEM_*` id order.
+    /// Iterates in ascending [`ItemId`] order.
     pub fn iter(&self) -> impl Iterator<Item = &ItemData> {
         self.items.iter()
     }
@@ -1068,41 +839,46 @@ impl Default for ItemTable {
 mod tests {
     use super::{
         BattleUsage, HoldEffect, ItemData, ItemId, ItemTable, ItemType, Pocket, ITEMS_COUNT,
+        ITEM_IDENTITIES, ITEM_IS_EMPTY,
     };
     use crate::error::AssetError;
 
     #[test]
-    fn table_length_matches_items_count() {
-        // Structural anchor: upstream `gItems[ITEMS_COUNT]`, ITEMS_COUNT == 377.
+    fn table_length_matches_item_identity_space() {
         let table = ItemTable::new();
         assert_eq!(table.len(), 377);
         assert_eq!(ITEMS_COUNT, 377);
-        assert_eq!(table.iter().count(), 377);
+        assert_eq!(table.iter().count(), ITEMS_COUNT);
         assert!(!table.is_empty());
     }
 
     #[test]
-    fn out_of_range_id_is_rejected() {
+    fn out_of_range_ids_are_rejected() {
         let table = ItemTable::new();
-        assert_eq!(table.get(ItemId(377)), Err(AssetError::UnknownItem(377)));
+        let first_invalid_id = ItemId(u16::try_from(ITEMS_COUNT).unwrap());
         assert_eq!(
-            table.get(ItemId(0xFFFF)),
-            Err(AssetError::UnknownItem(0xFFFF))
+            table.get(first_invalid_id),
+            Err(AssetError::UnknownItem(first_invalid_id.index()))
+        );
+        assert_eq!(
+            table.get(ItemId(u16::MAX)),
+            Err(AssetError::UnknownItem(u16::MAX))
         );
     }
 
     #[test]
-    fn item_none_is_the_empty_slot() {
-        // ITEM_NONE (id 0): the reserved dummy, Items pocket, bag-menu use.
+    fn every_row_has_its_declared_identity() {
         let table = ItemTable::new();
-        let none = table.get(ItemId(0)).unwrap();
-        assert_eq!(none.item_id, ItemId::NONE);
-        assert_eq!(none.price, 0);
-        assert_eq!(none.hold_effect, HoldEffect::NONE);
-        assert_eq!(none.pocket, Pocket::Items);
-        assert_eq!(none.item_type, ItemType::USE_BAG_MENU);
-        assert_eq!(none.battle_usage, BattleUsage::None);
-        assert!(!none.registrable);
+        for (index, ((identity, item), is_empty)) in ITEM_IDENTITIES
+            .iter()
+            .zip(table.iter())
+            .zip(ITEM_IS_EMPTY)
+            .enumerate()
+        {
+            assert_eq!(usize::from(identity.index()), index);
+            let expected_item_id = if is_empty { ItemId::NONE } else { *identity };
+            assert_eq!(item.item_id, expected_item_id, "{identity:?}");
+        }
     }
 
     #[test]
@@ -1111,6 +887,7 @@ mod tests {
             assert_eq!(Pocket::from_id(raw).unwrap().id(), raw);
         }
         assert_eq!(Pocket::from_id(6), Err(AssetError::UnknownItemPocket(6)));
+
         for raw in 0u8..=2 {
             assert_eq!(BattleUsage::from_id(raw).unwrap().id(), raw);
         }
@@ -1124,34 +901,24 @@ mod tests {
     }
 
     #[test]
-    fn upstream_tie_named_items() {
-        // Pins a hand-picked sample back to their exact `items.h` values
-        // (hardcoded here — CI has no `pokeemerald/`). Covers each pocket and
-        // the overloaded fields: a ball (type == ball index, secondaryId set),
-        // a medicine, a held item, a berry, a mail (secondaryId == mail index),
-        // a TM, an HM (importance == 1), a key item (importance/registrable),
-        // and a dummy slot (itemId == NONE at a non-zero table index).
+    fn representative_items_preserve_attribute_values() {
         let table = ItemTable::new();
-        let get = |id: u16| *table.get(ItemId(id)).unwrap();
+        let get = |id| *table.get(id).unwrap();
 
-        // ITEM_MASTER_BALL (1): Balls pocket, `type` = ball index 0, free,
-        // battleUsage OTHER, secondaryId = ball index 0.
-        let master = get(1);
-        assert_eq!(master.item_id, ItemId(1));
+        let master = get(ItemId::MASTER_BALL);
+        assert_eq!(master.item_id, ItemId::MASTER_BALL);
         assert_eq!(master.price, 0);
         assert_eq!(master.pocket, Pocket::PokeBalls);
-        assert_eq!(master.item_type, ItemType(0)); // ball index, NOT ITEM_USE_*
+        assert_eq!(master.item_type, ItemType::for_ball(ItemId::MASTER_BALL));
         assert_eq!(master.battle_usage, BattleUsage::Other);
         assert_eq!(master.secondary_id, 0);
 
-        // ITEM_POKE_BALL (4): ball index 3 in both `type` and secondaryId.
-        let poke = get(4);
-        assert_eq!(poke.price, 200);
-        assert_eq!(poke.item_type, ItemType(3));
-        assert_eq!(poke.secondary_id, 3);
+        let poke_ball = get(ItemId::POKE_BALL);
+        assert_eq!(poke_ball.price, 200);
+        assert_eq!(poke_ball.item_type, ItemType(3));
+        assert_eq!(poke_ball.secondary_id, 3);
 
-        // ITEM_POTION (13): Items pocket, party-menu use, medicine, param 20.
-        let potion = get(13);
+        let potion = get(ItemId::POTION);
         assert_eq!(potion.price, 300);
         assert_eq!(potion.hold_effect, HoldEffect::NONE);
         assert_eq!(potion.hold_effect_param, 20);
@@ -1159,95 +926,73 @@ mod tests {
         assert_eq!(potion.item_type, ItemType::USE_PARTY_MENU);
         assert_eq!(potion.battle_usage, BattleUsage::Medicine);
 
-        // ITEM_KINGS_ROCK (187): a held item, HOLD_EFFECT_FLINCH (30), param 10,
-        // Items pocket, bag-menu use, not battle-usable.
-        let kings = get(187);
-        assert_eq!(kings.price, 100);
-        assert_eq!(kings.hold_effect, HoldEffect(30));
-        assert_eq!(kings.hold_effect_param, 10);
-        assert_eq!(kings.pocket, Pocket::Items);
-        assert_eq!(kings.item_type, ItemType::USE_BAG_MENU);
-        assert_eq!(kings.battle_usage, BattleUsage::None);
+        let kings_rock = get(ItemId::KINGS_ROCK);
+        assert_eq!(kings_rock.price, 100);
+        assert_eq!(kings_rock.hold_effect, HoldEffect::FLINCH);
+        assert_eq!(kings_rock.hold_effect_param, 10);
+        assert_eq!(kings_rock.pocket, Pocket::Items);
+        assert_eq!(kings_rock.item_type, ItemType::USE_BAG_MENU);
+        assert_eq!(kings_rock.battle_usage, BattleUsage::None);
 
-        // ITEM_LEFTOVERS (200): HOLD_EFFECT_LEFTOVERS (43), param 10.
-        let leftovers = get(200);
-        assert_eq!(leftovers.hold_effect, HoldEffect(43));
+        let leftovers = get(ItemId::LEFTOVERS);
+        assert_eq!(leftovers.hold_effect, HoldEffect::LEFTOVERS);
         assert_eq!(leftovers.hold_effect_param, 10);
 
-        // ITEM_CHERI_BERRY (133): Berries pocket, HOLD_EFFECT_CURE_PAR (2),
-        // party-menu use, medicine battle usage, price 20.
-        let cheri = get(133);
+        let cheri = get(ItemId::CHERI_BERRY);
         assert_eq!(cheri.price, 20);
-        assert_eq!(cheri.hold_effect, HoldEffect(2));
+        assert_eq!(cheri.hold_effect, HoldEffect::CURE_PARALYSIS);
         assert_eq!(cheri.pocket, Pocket::Berries);
         assert_eq!(cheri.item_type, ItemType::USE_PARTY_MENU);
         assert_eq!(cheri.battle_usage, BattleUsage::Medicine);
 
-        // ITEM_ORANGE_MAIL (121): first mail, mail-use, secondaryId == 0 (mail
-        // index of the first mail via ITEM_TO_MAIL).
-        let orange = get(121);
-        assert_eq!(orange.price, 50);
-        assert_eq!(orange.pocket, Pocket::Items);
-        assert_eq!(orange.item_type, ItemType::USE_MAIL);
-        assert_eq!(orange.secondary_id, 0);
+        let orange_mail = get(ItemId::ORANGE_MAIL);
+        assert_eq!(orange_mail.price, 50);
+        assert_eq!(orange_mail.pocket, Pocket::Items);
+        assert_eq!(orange_mail.item_type, ItemType::USE_MAIL);
+        assert_eq!(orange_mail.secondary_id, 0);
 
-        // ITEM_TM_FOCUS_PUNCH (289 == ITEM_TM01): TM/HM pocket, party-menu use,
-        // price 3000, not important.
-        let tm01 = get(289);
-        assert_eq!(tm01.item_id, ItemId(289));
+        let tm01 = get(ItemId::TM_FOCUS_PUNCH);
+        assert_eq!(tm01.item_id, ItemId::TM_FOCUS_PUNCH);
         assert_eq!(tm01.price, 3000);
         assert_eq!(tm01.pocket, Pocket::TmHm);
         assert_eq!(tm01.item_type, ItemType::USE_PARTY_MENU);
         assert_eq!(tm01.importance, 0);
 
-        // ITEM_HM_CUT (339 == ITEM_HM01): TM/HM pocket, price 0, importance 1
-        // (HMs cannot be tossed), registrability unset.
-        let hm01 = get(339);
-        assert_eq!(hm01.item_id, ItemId(339));
+        let hm01 = get(ItemId::HM_CUT);
+        assert_eq!(hm01.item_id, ItemId::HM_CUT);
         assert_eq!(hm01.price, 0);
         assert_eq!(hm01.pocket, Pocket::TmHm);
         assert_eq!(hm01.importance, 1);
         assert!(!hm01.registrable);
 
-        // ITEM_MACH_BIKE (259): Key Items pocket, importance 1, registrable,
-        // field use, secondaryId 0 (MACH_BIKE).
-        let bike = get(259);
+        let bike = get(ItemId::MACH_BIKE);
         assert_eq!(bike.pocket, Pocket::KeyItems);
         assert_eq!(bike.importance, 1);
         assert!(bike.registrable);
         assert_eq!(bike.item_type, ItemType::USE_FIELD);
         assert_eq!(bike.secondary_id, 0);
 
-        // ITEM_034 (52): a reserved dummy slot — a real table index whose data
-        // points at ITEM_NONE, exactly as upstream.
-        let dummy = get(52);
-        assert_eq!(dummy.item_id, ItemId::NONE);
-        assert_eq!(dummy.price, 0);
-        assert_eq!(dummy.pocket, Pocket::Items);
-        assert_eq!(dummy.item_type, ItemType::USE_BAG_MENU);
+        let reserved = get(ItemId::RESERVED_034);
+        assert_eq!(reserved.item_id, ItemId::NONE);
+        assert_eq!(reserved.price, 0);
+        assert_eq!(reserved.pocket, Pocket::Items);
+        assert_eq!(reserved.item_type, ItemType::USE_BAG_MENU);
 
-        // ITEM_OLD_SEA_MAP (376): the last entry, an Emerald key item.
-        let last = get(376);
-        assert_eq!(last.item_id, ItemId(376));
+        let last = get(ItemId::OLD_SEA_MAP);
+        assert_eq!(last.item_id, ItemId::OLD_SEA_MAP);
         assert_eq!(last.pocket, Pocket::KeyItems);
         assert_eq!(last.importance, 1);
         assert!(last.registrable);
     }
 
     #[test]
-    fn ball_pocket_type_is_the_ball_index() {
-        // Aggregate guard on the `type` overload: every item in the Balls pocket
-        // stores its ball index (itemId - FIRST_BALL, FIRST_BALL == 1) in both
-        // `type` and `secondaryId`, and no non-ball item does so out of range.
+    fn ball_pocket_uses_contiguous_ball_indices() {
         let table = ItemTable::new();
         for item in table.iter() {
             if item.pocket == Pocket::PokeBalls {
-                let ball_index =
-                    u8::try_from(item.item_id.index() - 1).expect("ball index fits in u8");
-                assert_eq!(item.item_type, ItemType(ball_index));
-                assert_eq!(item.secondary_id, ball_index);
+                assert_eq!(item.item_type, ItemType::for_ball(item.item_id));
+                assert_eq!(item.secondary_id, item.item_type.raw());
             } else {
-                // Non-ball items use ITEM_USE_* (0..=4) in `type`.
                 assert!(
                     item.item_type.raw() <= ItemType::USE_BAG_MENU.raw(),
                     "item {} has out-of-range type {}",
@@ -1259,11 +1004,7 @@ mod tests {
     }
 
     #[test]
-    fn every_pocket_and_battle_usage_is_valid() {
-        // No transcribed enum byte escaped its modelled set: the `i` helper
-        // decodes both, so any bad byte would surface as the wrong variant.
-        // Re-validate here that the decoders accept every stored value and that
-        // the two key-item flags never carry a stray high value.
+    fn every_stored_attribute_has_a_valid_representation() {
         let table = ItemTable::new();
         for item in table.iter() {
             assert_eq!(Pocket::from_id(item.pocket.id()), Ok(item.pocket));
@@ -1271,18 +1012,12 @@ mod tests {
                 BattleUsage::from_id(item.battle_usage.id()),
                 Ok(item.battle_usage)
             );
-            assert!(
-                item.importance <= 2,
-                "importance {} too high",
-                item.importance
-            );
+            assert!(item.importance <= 2, "{:?}", item.item_id);
         }
     }
 
     #[test]
-    fn item_data_is_pod_sized() {
-        // Cheap regression guard on the field set: keeps ItemData small and
-        // flags an accidental field addition (e.g. a stray pointer) in review.
+    fn item_data_remains_compact() {
         assert!(core::mem::size_of::<ItemData>() <= 16);
     }
 }
