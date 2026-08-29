@@ -1,9 +1,9 @@
-use super::{read_header, split_tracks, MidiReader};
+use super::{read_header, split_tracks, MidiReader, MIDI_HEADER_BODY_LEN};
 use crate::extract::midi::error::MidiError;
 
 fn mthd(format: u16, track_count: u16, division: u16) -> Vec<u8> {
     let mut out = b"MThd".to_vec();
-    out.extend(6u32.to_be_bytes());
+    out.extend(MIDI_HEADER_BODY_LEN.to_be_bytes());
     out.extend(format.to_be_bytes());
     out.extend(track_count.to_be_bytes());
     out.extend(division.to_be_bytes());
@@ -20,7 +20,6 @@ fn mtrk(body: &[u8]) -> Vec<u8> {
 
 #[test]
 fn vlq_decodes_multi_byte_values() {
-    // 0x81 0x00 encodes 128 (7-bit groups, top bit = continuation).
     let mut r = MidiReader::new(&[0x81, 0x00]);
     assert_eq!(r.vlq().unwrap(), 128);
 }
@@ -31,29 +30,18 @@ fn vlq_reads_a_single_byte_value() {
     assert_eq!(r.vlq().unwrap(), 0x40);
 }
 
-/// The largest quantity a standard MIDI file can legally encode: four
-/// bytes, 28 bits, all ones.
 #[test]
 fn vlq_reads_the_largest_legal_four_byte_value() {
     let mut r = MidiReader::new(&[0xFF, 0xFF, 0xFF, 0x7F]);
     assert_eq!(r.vlq().unwrap(), 0x0FFF_FFFF);
 }
 
-/// Pins `MidiReader::vlq`'s documented decision to reproduce
-/// `tools/mid2agb/midi.cpp:124`'s `val <<= 7` rather than reject an
-/// over-long quantity. Five 7-bit groups is 35 bits; the top three fall off
-/// a `u32` exactly as they do in upstream's C++, leaving `0x7F` shifted up
-/// by 28 and truncated, i.e. `0xF000_0000`. Neither side errors, and
-/// neither side panics — a debug-build `<<` traps only on an out-of-range
-/// *shift amount*, never on discarded bits.
 #[test]
-fn over_long_vlq_wraps_like_upstreams_shift() {
+fn over_long_vlq_discards_high_bits_like_mid2agb() {
     let mut r = MidiReader::new(&[0xFF, 0x80, 0x80, 0x80, 0x00]);
     assert_eq!(r.vlq().unwrap(), 0xF000_0000);
 }
 
-/// A quantity whose continuation bit never clears before the chunk ends is
-/// the reader's *only* VLQ failure mode (`MidiReader::vlq`'s docs).
 #[test]
 fn unterminated_vlq_runs_out_of_bytes() {
     let mut r = MidiReader::new(&[0x80, 0x80, 0x80]);
@@ -123,8 +111,10 @@ fn bad_track_magic_is_rejected() {
 
 #[test]
 fn truncated_track_body_is_rejected() {
+    const DECLARED_BODY_LEN: u32 = 100;
+
     let mut file = mthd(0, 1, 24);
     file.extend(b"MTrk");
-    file.extend(100u32.to_be_bytes()); // declares far more than is present
+    file.extend(DECLARED_BODY_LEN.to_be_bytes());
     assert_eq!(split_tracks(&file, 1).unwrap_err(), MidiError::Truncated);
 }

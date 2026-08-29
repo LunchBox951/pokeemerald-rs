@@ -1,140 +1,61 @@
-//! [`MidiError`]: every way parsing `mus_title.mid` (or its
-//! `sound/songs/midi/midi.cfg` compile-flag entry) can fail. Split out of
-//! [`super`] to keep that file under this crate's ~600-line-per-file
-//! guideline (`oop-boundaries`), mirroring `super::super::voicegroups::error`'s
-//! own split.
+//! MIDI configuration, parsing, compilation, and encoding errors.
 
 use std::fmt;
 
-/// An error compiling a `.mid` source into the normalized [`super::event::SongEvent`]
-/// stream, or reading its `midi.cfg` compile-flag entry. The outer
-/// `ExtractError::Midi`/`ExtractError::MidiCfg` wrap a value of this type
-/// with the offending path (see `super`'s module docs).
+/// An error produced while extracting a MIDI song.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum MidiError {
-    /// The file ran out of bytes where a fixed-size field or declared
-    /// chunk/event body was expected.
+    /// A fixed-size field or declared body is incomplete.
     Truncated,
-    /// Scaling a raw MIDI tick onto this compiler's 24-clocks-per-beat
-    /// timebase (`24 * raw / division` — `tools/mid2agb/midi.cpp:635`/`:641`'s
-    /// `ConvertTimes`) produced a value a `u32` cannot hold. Upstream runs
-    /// that multiply in a `std::uint32_t` and silently wraps; this compiler
-    /// evaluates it in `u64` and fails closed instead
-    /// ([`super::translate::convert_ticks`]'s docs). Only reachable for a
-    /// tick count no real `.mid` file carries (`raw > u32::MAX / 24` at a
-    /// small `division`). Carries the offending raw tick.
+    /// A raw tick cannot be scaled into a `u32`.
     TickOverflow(u32),
-    /// The compiled song had more playable tracks than the song schema's
-    /// `u8` track-count field can describe — this side's mirror of
-    /// `crates/assets::audio::AudioError::TooManyTracks`, duplicated the
-    /// same way the encoder itself is (`super::encode`'s module docs).
-    /// Carries the track count found.
+    /// The compiled track count does not fit the song schema.
     TooManyTracks(usize),
-    /// The file did not start with the 4-byte `MThd` signature.
+    /// The file does not start with an `MThd` chunk.
     BadHeaderMagic,
-    /// `MThd`'s declared header length was not the fixed value `6` every
-    /// standard MIDI file uses.
+    /// The `MThd` chunk does not declare the standard body length.
     HeaderLengthMismatch(u32),
-    /// `MThd`'s format field was `2` or greater (`tools/mid2agb/midi.cpp:145-146`
-    /// only accepts format `0`/`1`, and `mus_title.mid` is format `1` — see
-    /// `super`'s module docs).
+    /// The MIDI format is not 0 or 1.
     UnsupportedFormat(u16),
-    /// `MThd`'s division field had its top bit set (SMPTE frame-rate
-    /// division), which `tools/mid2agb/midi.cpp:152-153` also rejects. This
-    /// compiler only understands ticks-per-quarter-note division.
+    /// The time division uses unsupported SMPTE framing.
     NegativeDivision(i16),
-    /// A chunk this parser expected to be `MTrk` was not.
+    /// An expected track chunk does not start with `MTrk`.
     BadTrackMagic,
-    /// A channel-voice status byte (running or explicit) was not a
-    /// recognized MIDI status — either a bare data byte with no running
-    /// status in effect, or a channel-voice nibble outside `0x8`..`0xE`
-    /// (unreachable in practice: every nibble in that range is a defined
-    /// message type).
+    /// A status byte is not valid in the current parser state.
     InvalidStatusByte(u8),
-    /// A channel-voice operand had its status bit set. Standard MIDI data
-    /// bytes are restricted to 7 bits (`0..=127`); carries the offending
-    /// byte.
+    /// A channel-voice operand is not a seven-bit data byte.
     InvalidDataByte(u8),
-    /// A tempo (`0xFF 0x51`) meta event's declared length was not the fixed
-    /// `3` bytes every tempo event carries
-    /// (`tools/mid2agb/midi.cpp:309-310`).
+    /// A tempo event does not contain three bytes.
     BadTempoLength(u32),
-    /// A tempo (`0xFF 0x51`) meta event declared zero microseconds per
-    /// quarter note, which would make the BPM conversion divide by zero.
+    /// A tempo event declares zero microseconds per quarter note.
     ZeroTempo,
-    /// A tempo (`0xFF 0x51`) meta event's `round(60_000_000.0f32 /
-    /// microseconds)` BPM (`tools/mid2agb/agb.cpp:505-507`) does not fit a
-    /// `u16`. Upstream computes it into a 32-bit `int` and never
-    /// range-checks it before formatting; this compiler's
-    /// [`super::event::SongEvent::Tempo`] field is a `u16`, and a Rust
-    /// `as u16` cast on an out-of-range `f32` would saturate to
-    /// `u16::MAX` instead of erroring, silently turning every microseconds
-    /// value in `1..=915` into the same wrong tempo
-    /// ([`super::translate::bpm_from_microseconds`]'s docs). Carries the
-    /// offending microseconds-per-quarter-note value.
+    /// Tempo conversion produces a BPM that does not fit a `u16`.
     TempoOverflow(u32),
-    /// A time-signature (`0xFF 0x58`) meta event's declared length was not
-    /// the fixed `4` bytes every time-signature event carries
-    /// (`tools/mid2agb/midi.cpp:318-319`'s `RaiseError("invalid time
-    /// signature size")`).
+    /// A time-signature event does not contain four bytes.
     BadTimeSignatureLength(u32),
-    /// A time-signature (`0xFF 0x58`) meta event's denominator exponent was
-    /// `16` or more (`tools/mid2agb/midi.cpp:324-325`'s `RaiseError("invalid
-    /// time signature denominator")`). Carries the offending exponent.
+    /// A time-signature denominator exponent is 16 or greater.
     BadTimeSignatureDenominator(u8),
-    /// A time-signature meta event's whole-note grid period
-    /// (`96 * numerator * clocks_per_beat / denominator` —
-    /// `tools/mid2agb/midi.cpp:329-334`) worked out to zero ticks, which
-    /// would stall the timing-mark walk (`super::compile`'s `emit_track`).
-    /// Upstream's own `timeSig <= 0` guard, reachable via e.g. a `1/128`
-    /// signature.
+    /// A time signature produces a zero-tick whole-note grid.
     ZeroTimeSignature,
-    /// A `NoteOn` (velocity != 0) on this channel had no later matching
-    /// `NoteOff`/`NoteOn`-velocity-`0` for the same key before the track's
-    /// `EndOfTrack` — `tools/mid2agb/midi.cpp:425-426`'s own
-    /// `RaiseError("note doesn't end")`, translated to a recoverable error
-    /// here rather than a process abort. Carries the channel and key.
+    /// A note has no matching note-off before the track ends.
     UnterminatedNote { channel: u8, key: u8 },
-    /// A `LoopEnd`/`LoopEndBegin` text marker (`]`/`][`) appeared with no
-    /// preceding `LoopBegin`/`LoopEndBegin` (`[`/`][`) open on this track —
-    /// `tools/mid2agb` has no such guard (`s_blockNum`/`loopEndBlockNum`
-    /// start at `0`, so a stray `]` would emit `GOTO <label>_<n>_B0`, a
-    /// dangling reference the assembler itself would then reject); this
-    /// compiler fails closed at compile time instead.
+    /// A loop end has no matching open marker.
     DanglingLoopEnd,
-    /// A `MEMACC`-family controller (CC `0x0C`/`0x0D`/`0x0E`/`0x0F`/`0x10`/`0x11`
-    /// — `tools/mid2agb/agb.cpp:349-415`'s `PrintMemAcc` family and its
-    /// `_L<n>:` branch-target label) appeared. Deliberately unimplemented —
-    /// see `super`'s module docs, "Deliberately out of scope: `MEMACC`".
-    /// Carries the raw controller number.
+    /// A controller belongs to the unsupported `MEMACC` family.
     UnsupportedMemAccController(u8),
-    /// `midi.cfg` requested something other than the default 24
-    /// clocks-per-beat (`tools/mid2agb`'s `-X` flag, 48 clocks/beat).
-    /// Deliberately unimplemented — see `super`'s module docs, "Pinned to
-    /// `mus_title`'s own compile flags". Carries the requested value.
+    /// The configuration requests unsupported clocks per beat.
     UnsupportedClocksPerBeat(u8),
-    /// `midi.cfg` did not request exact gate time (`tools/mid2agb`'s `-E`
-    /// flag). Deliberately unimplemented — see `super`'s module docs,
-    /// "Pinned to `mus_title`'s own compile flags".
+    /// The configuration does not request exact gate time.
     NonExactGateTime,
-    /// No `MTrk` chunk was present at all.
+    /// The file declares no track chunks.
     NoTracks,
-    /// `MThd`'s division field was `0` (zero ticks per quarter note), which
-    /// would make every tick-scaling division in [`super::compile`]
-    /// undefined. Not a case `tools/mid2agb` itself guards explicitly, but
-    /// nonsensical for any real file — a fail-closed check rather than a
-    /// silent divide-by-zero.
+    /// The time division is zero.
     ZeroTimeDivision,
-    /// `midi.cfg` had no entry for the requested filename. Carries the
-    /// filename.
+    /// The requested filename has no `midi.cfg` entry.
     CfgEntryMissing(String),
-    /// `midi.cfg`'s entry for the requested filename carried a flag this
-    /// parser does not recognize, or a recognized flag with a malformed
-    /// operand. Carries the offending token.
+    /// A `midi.cfg` flag is unknown or has a malformed operand.
     CfgMalformedFlag(String),
-    /// `midi.cfg`'s entry for the requested filename had no `-G` (voice
-    /// group) flag — every real entry does, but a hand-edited or corrupt
-    /// checkout could omit it.
+    /// A `midi.cfg` entry has no voicegroup flag.
     CfgMissingVoiceGroup,
 }
 
