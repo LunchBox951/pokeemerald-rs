@@ -5,8 +5,6 @@ use pokeemerald_rs::{AppButtons, AppState};
 
 use super::{expand_segments, ScenarioFrame, Segment, WALK_FRAMES_PER_TILE};
 
-#[cfg(test)]
-const TITLE_AND_MENU_FRAMES: usize = 2;
 const INTRO_HANDOFF_FRAMES: usize = 1;
 const BUTTON_EDGE_FRAMES: usize = 1;
 const WELCOME_FIRST_PROMPT_RUN_INDEX: usize = 0;
@@ -28,18 +26,6 @@ const FIRST_BATTLE_DRIVER_BUTTONS: AppButtons = AppButtons::RIGHT;
 const REAL_PACK_FIRST_BATTLE_FRAMES_AFTER_LANDING: usize = 2;
 const FIRST_BATTLE_CONCLUDING_FRAMES: usize = 1;
 const FINAL_RELEASE_FRAMES: usize = 1;
-
-#[cfg(test)]
-const ROUTE_WALK_TILES: usize = STEP_OFF_BEDROOM_STAIR_WARP_TILES
-    + REENTER_BEDROOM_STAIR_WARP_TILES
-    + HOUSE_HALL_TO_FRONT_DOOR_TILES
-    + CLEAR_TOWN_DOOR_LANDING_TILES
-    + TOWN_EAST_TO_ROUTE_COLUMN_TILES
-    + TOWN_NORTH_TO_ROUTE_EDGE_TILES
-    + CROSS_ROUTE_EDGE_TO_RESCUE_TRIGGER_TILES;
-#[cfg(test)]
-const FIRST_BATTLE_STATE_FRAMES: usize =
-    ROUTE_TRIGGER_LANDING_FRAMES + REAL_PACK_FIRST_BATTLE_FRAMES_AFTER_LANDING;
 
 #[derive(Debug, Clone, Copy)]
 enum ScenarioBlock {
@@ -191,22 +177,24 @@ mod tests {
     use pokeemerald_rs::main_menu::MainMenuItem;
     use pokeemerald_rs::{AppButtons, AppState};
 
-    use super::{
-        B_CONFIRM_RUN_INDICES, FINAL_RELEASE_FRAMES, FIRST_BATTLE_CONCLUDING_FRAMES,
-        FIRST_BATTLE_STATE_FRAMES, REAL_PACK_FIRST_BATTLE_FRAMES_AFTER_LANDING, ROUTE_WALK_TILES,
-        TITLE_AND_MENU_FRAMES,
-    };
+    const EXPECTED_TITLE_AND_MENU_FRAMES: usize = 2;
+    const EXPECTED_ROUTE_WALK_TILES: usize = 25;
+    const EXPECTED_FRAMES_AFTER_TRIGGER_LANDING: usize = 2;
+    const EXPECTED_BATTLE_CONCLUSION_FRAMES: usize = 1;
+    const EXPECTED_FINAL_RELEASE_FRAMES: usize = 1;
+    const EXPECTED_B_CONFIRM_COUNT: usize = 2;
+    const EXPECTED_FIRST_BATTLE_STATE_FRAMES: usize = 3;
 
     #[test]
     fn script_has_the_expected_route_and_state_shape() {
         let frames = spec(ScenarioName::BootToFirstFight).frames;
 
-        let expected_total = TITLE_AND_MENU_FRAMES
+        let expected_total = EXPECTED_TITLE_AND_MENU_FRAMES
             + pokeemerald_rs::intro::TRAVERSAL_FRAMES
-            + WALK_FRAMES_PER_TILE * ROUTE_WALK_TILES
-            + REAL_PACK_FIRST_BATTLE_FRAMES_AFTER_LANDING
-            + FIRST_BATTLE_CONCLUDING_FRAMES
-            + FINAL_RELEASE_FRAMES;
+            + WALK_FRAMES_PER_TILE * EXPECTED_ROUTE_WALK_TILES
+            + EXPECTED_FRAMES_AFTER_TRIGGER_LANDING
+            + EXPECTED_BATTLE_CONCLUSION_FRAMES
+            + EXPECTED_FINAL_RELEASE_FRAMES;
         assert_eq!(frames.len(), expected_total);
 
         assert_eq!(frames[0].buttons, AppButtons::START);
@@ -217,7 +205,7 @@ mod tests {
         assert_eq!(frames[1].buttons, AppButtons::A);
         assert_eq!(frames[1].expected, AppState::Intro);
 
-        let intro_start = TITLE_AND_MENU_FRAMES;
+        let intro_start = EXPECTED_TITLE_AND_MENU_FRAMES;
         let intro_end = intro_start + pokeemerald_rs::intro::TRAVERSAL_FRAMES;
         for (offset, frame) in frames[intro_start..intro_end - 1].iter().enumerate() {
             assert_eq!(
@@ -237,8 +225,7 @@ mod tests {
             .filter(|frame| frame.buttons == AppButtons::B)
             .count();
         assert_eq!(
-            b_presses_in_intro,
-            B_CONFIRM_RUN_INDICES.len(),
+            b_presses_in_intro, EXPECTED_B_CONFIRM_COUNT,
             "both B confirmations must reach the app"
         );
 
@@ -246,7 +233,7 @@ mod tests {
             .iter()
             .filter(|frame| frame.expected == AppState::FirstBattle)
             .count();
-        assert_eq!(first_battle_frames, FIRST_BATTLE_STATE_FRAMES);
+        assert_eq!(first_battle_frames, EXPECTED_FIRST_BATTLE_STATE_FRAMES);
 
         let last = frames.last().expect("the script is non-empty");
         assert_eq!(last.expected, AppState::Overworld);
@@ -256,7 +243,7 @@ mod tests {
     #[test]
     fn intro_segments_follow_the_engine_traversal_runs() {
         let frames = spec(ScenarioName::BootToFirstFight).frames;
-        let mut frame_index = TITLE_AND_MENU_FRAMES;
+        let mut frame_index = EXPECTED_TITLE_AND_MENU_FRAMES;
 
         for (run_index, run) in pokeemerald_rs::intro::TRAVERSAL_RUNS.iter().enumerate() {
             for frame_in_run in 0..run.frames as usize {
@@ -288,7 +275,7 @@ mod tests {
 
         assert_eq!(
             frame_index,
-            TITLE_AND_MENU_FRAMES + pokeemerald_rs::intro::TRAVERSAL_FRAMES
+            EXPECTED_TITLE_AND_MENU_FRAMES + pokeemerald_rs::intro::TRAVERSAL_FRAMES
         );
     }
 
