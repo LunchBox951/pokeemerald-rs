@@ -1,30 +1,7 @@
-//! The note-velocity quantization table `tools/mid2agb` applies to every
-//! note's raw MIDI velocity.
+//! MIDI note-velocity quantization.
 //!
-//! # Why a table, not a formula
-//!
-//! `no-verbatim` blesses translating a table of constants (it is data, not
-//! control flow), so [`NOTE_VELOCITY_LUT`] is transcribed directly from
-//! `tools/mid2agb/tables.cpp:124-254`'s `g_noteVelocityLUT` rather than
-//! reverse-engineered into a formula: the table is *almost* "round up to the
-//! next multiple of 4", but the top three entries (indices `125..=127`) clamp
-//! to `127` instead of the formula's `128`, since a MIDI velocity byte only
-//! goes up to `127`. Keeping the literal table sidesteps having to
-//! special-case that clamp.
-//!
-//! # Where this applies, and where it doesn't
-//!
-//! `tools/mid2agb/midi.cpp:639`'s `ConvertTimes` applies this table once,
-//! unconditionally, to every note's velocity — regardless of `-E`/`-X`/`-N`.
-//! `agb.cpp:149`'s `PrintNote` applies it *again* to that already-quantized
-//! value, but this is a no-op in practice: every value this table ever
-//! *produces* is already one of its own fixed points (each output value's
-//! own index re-maps to itself — e.g. `NOTE_VELOCITY_LUT[4] == 4`,
-//! `NOTE_VELOCITY_LUT[124] == 124`, `NOTE_VELOCITY_LUT[127] == 127`), so a
-//! second application changes nothing. This compiler therefore applies the
-//! table exactly once (in [`super::compile`]'s note handling), matching the
-//! *effective* upstream behaviour without reproducing the redundant second
-//! lookup.
+//! The top bucket clamps to 127; all other nonzero values round up to a
+//! multiple of four, matching `tools/mid2agb/tables.cpp:124-254`.
 pub(super) const NOTE_VELOCITY_LUT: [u8; 128] = [
     0, 4, 4, 4, 4, 8, 8, 8, 8, 12, 12, 12, 12, 16, 16, 16, 16, 20, 20, 20, 20, 24, 24, 24, 24, 28,
     28, 28, 28, 32, 32, 32, 32, 36, 36, 36, 36, 40, 40, 40, 40, 44, 44, 44, 44, 48, 48, 48, 48, 52,
@@ -39,9 +16,7 @@ mod tests {
     use super::NOTE_VELOCITY_LUT;
 
     #[test]
-    fn every_entry_is_its_own_fixed_point() {
-        // Pins the module docs' "apply once, not twice" claim: re-indexing
-        // by any table *output* must return that same output.
+    fn quantizing_an_already_quantized_velocity_is_idempotent() {
         for &v in &NOTE_VELOCITY_LUT {
             assert_eq!(NOTE_VELOCITY_LUT[usize::from(v)], v);
         }
