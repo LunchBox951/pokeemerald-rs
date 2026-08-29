@@ -11,6 +11,10 @@ use crate::Scene;
 const WINDOW_FRAME_GREEN_BGR555: u16 = 0x03E0;
 const MAIN_MENU_BACKGROUND_BGR555: u16 = 0x4104;
 const REPLACEMENT_BACKGROUND_BGR555: u16 = 0x001F;
+/// [`MAIN_MENU_BACKGROUND_BGR555`] expanded by hand, independent of
+/// `rendering`: `0x4104` holds 5-bit channels r=4, g=8, b=16, and
+/// `to_rgb888`'s `(c << 3) | (c >> 2)` gives 33, 66, 132. Kept as literals
+/// so a channel-order regression cannot be pasted over from observed output.
 const MAIN_MENU_BACKGROUND_RGB888: [u8; 3] = [33, 66, 132];
 
 #[derive(Clone, Copy)]
