@@ -3,8 +3,8 @@
 //! The flow starts directly in Brendan's bedroom with a fixed name, gender, and
 //! starter. It applies the skipped truck exit's gender-specific heal location,
 //! flags, and variables so the houses match a normal playthrough.
-//! Berry-tree initialization and other save fields without typed owners remain
-//! represented by [`SaveBlock1::default`] and [`SaveBlock2::default`].
+//! Berry-tree initialization remains unmodeled because the save blocks have no
+//! typed berry-tree state. Other unmodeled save fields retain their defaults.
 
 use engine::overworld::{Direction, TilePos};
 use engine::rng::Rng;
@@ -131,7 +131,7 @@ pub fn init_save_blocks(rng: &mut Rng) -> (SaveBlock1, SaveBlock2) {
     let block2 = SaveBlock2 {
         player_name: encode_default_player_name(),
         player_gender: DEFAULT_PLAYER_GENDER,
-        player_trainer_id: trainer_id_from_pre_draw_state(trainer_id_low, rng),
+        player_trainer_id: trainer_id_bytes(trainer_id_low, rng),
         encryption_key: 0,
     };
 
@@ -160,12 +160,12 @@ pub fn init_save_blocks(rng: &mut Rng) -> (SaveBlock1, SaveBlock2) {
             .expect("RESET_MAP_FLAGS ids are all ordinary flag ids");
     }
 
-    apply_skipped_truck_exit_state(&mut block1, block2.player_gender);
+    apply_truck_intro_flags(&mut block1, block2.player_gender);
 
     (block1, block2)
 }
 
-fn apply_skipped_truck_exit_state(block1: &mut SaveBlock1, gender: PlayerGender) {
+fn apply_truck_intro_flags(block1: &mut SaveBlock1, gender: PlayerGender) {
     let (flags, vars) = match gender {
         PlayerGender::Male => (
             assets::TRUCK_INTRO_FLAGS_MALE,
@@ -215,7 +215,7 @@ fn encode_default_player_name() -> [u8; engine::save::block::PLAYER_NAME_BUF_LEN
     buf
 }
 
-fn trainer_id_from_pre_draw_state(
+fn trainer_id_bytes(
     pre_draw_state: u32,
     rng: &mut Rng,
 ) -> [u8; engine::save::block::TRAINER_ID_LENGTH] {
@@ -513,7 +513,7 @@ mod tests {
             ),
         ] {
             let mut block1 = SaveBlock1::default();
-            apply_skipped_truck_exit_state(&mut block1, gender);
+            apply_truck_intro_flags(&mut block1, gender);
 
             for &flag in mine {
                 assert!(
@@ -540,7 +540,7 @@ mod tests {
     #[test]
     fn unrecognized_gender_applies_no_truck_exit_branch() {
         let mut block1 = SaveBlock1::default();
-        apply_skipped_truck_exit_state(&mut block1, PlayerGender::Other(UNRECOGNIZED_GENDER_BYTE));
+        apply_truck_intro_flags(&mut block1, PlayerGender::Other(UNRECOGNIZED_GENDER_BYTE));
         let set_bits: u32 = block1
             .event_data
             .flag_bytes()
@@ -587,7 +587,7 @@ mod tests {
             for &flag in assets::RESET_MAP_FLAGS {
                 block1.event_data.flag_set(flag).unwrap();
             }
-            apply_skipped_truck_exit_state(&mut block1, gender);
+            apply_truck_intro_flags(&mut block1, gender);
             let data = &block1.event_data;
             let is_visible = |object| engine::overworld::object_event_is_visible(object, data);
 
