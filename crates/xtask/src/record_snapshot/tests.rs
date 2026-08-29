@@ -4,7 +4,7 @@ use assets::pack::AssetPack;
 
 use super::{
     capture_loaded, default_paths, fnv1a64, git_sha, render_meta, run_with_paths,
-    RecordSnapshotError, TITLE_FRAME_WITH_PRESS_START,
+    RecordSnapshotError, TITLE_FRAME_INDEX,
 };
 use crate::Scene;
 
@@ -299,8 +299,8 @@ fn title_scene_against_a_main_menu_only_pack_fails_closed_with_scene_error() {
 #[test]
 fn the_title_capture_frame_has_press_start_visible() {
     assert!(
-        pokeemerald_rs::title::press_start_visible(TITLE_FRAME_WITH_PRESS_START),
-        "TITLE_FRAME_WITH_PRESS_START must witness the Press Start banner"
+        pokeemerald_rs::title::press_start_visible(TITLE_FRAME_INDEX),
+        "TITLE_FRAME_INDEX must witness the Press Start banner"
     );
 }
 

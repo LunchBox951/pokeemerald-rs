@@ -21,7 +21,11 @@ use crate::Scene;
 const SCREEN_WIDTH: usize = 240;
 const SCREEN_HEIGHT: usize = 160;
 
-const TITLE_FRAME_WITH_PRESS_START: u32 = 16;
+/// Fixed title frame with the "Press Start" banner visible.
+///
+/// Any fixed frame is deterministic. A visible banner also makes the capture
+/// sensitive to banner regressions.
+const TITLE_FRAME_INDEX: u32 = 16;
 
 const RED_SHIFT: u32 = 16;
 const GREEN_SHIFT: u32 = 8;
@@ -232,7 +236,7 @@ fn compose(
     match scene {
         Scene::Title => {
             let title = TitleScene::from_pack(pack)?;
-            let frame = title.compose_frame(TITLE_FRAME_WITH_PRESS_START);
+            let frame = title.compose_frame(TITLE_FRAME_INDEX);
             Ok((frame_to_rgb_bytes(frame.as_slice()), Vec::new()))
         }
         Scene::MainMenuNewGame => {
