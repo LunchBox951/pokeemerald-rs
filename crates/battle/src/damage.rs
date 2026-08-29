@@ -103,7 +103,6 @@ fn nonzero_stage_adjusted_stat(stat: u32, stage: StatStage) -> u32 {
 
 fn apply_weather(damage: u32, move_type: Type, weather: Weather, is_solar_beam: bool) -> u32 {
     match weather {
-        Weather::None => damage,
         Weather::Rain => {
             let damage = match move_type {
                 Type::Fire => damage / 2,
@@ -122,7 +121,7 @@ fn apply_weather(damage: u32, move_type: Type, weather: Weather, is_solar_beam: 
             _ => damage,
         },
         Weather::Sandstorm | Weather::Hail if is_solar_beam => damage / 2,
-        Weather::Sandstorm | Weather::Hail => damage,
+        Weather::None | Weather::Sandstorm | Weather::Hail => damage,
     }
 }
 
