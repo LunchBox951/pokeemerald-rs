@@ -414,25 +414,9 @@ mod tests {
 
     #[test]
     fn priority_for_elevation_matches_the_upstream_selevationtopriority_table() {
-        const EXPECTED_BY_ELEVATION: [u8; 16] = [
-            PLAYER_OBJ_PRIORITY,
-            PLAYER_OBJ_PRIORITY,
-            PLAYER_OBJ_PRIORITY,
-            PLAYER_OBJ_PRIORITY,
-            RAISED_OBJ_PRIORITY,
-            PLAYER_OBJ_PRIORITY,
-            RAISED_OBJ_PRIORITY,
-            PLAYER_OBJ_PRIORITY,
-            RAISED_OBJ_PRIORITY,
-            PLAYER_OBJ_PRIORITY,
-            RAISED_OBJ_PRIORITY,
-            PLAYER_OBJ_PRIORITY,
-            RAISED_OBJ_PRIORITY,
-            FRONTMOST_OBJ_PRIORITY,
-            FRONTMOST_OBJ_PRIORITY,
-            PLAYER_OBJ_PRIORITY,
-        ];
-        for (elevation, &expected) in EXPECTED_BY_ELEVATION.iter().enumerate() {
+        const UPSTREAM_PRIORITY_BY_ELEVATION: [u8; 16] =
+            [2, 2, 2, 2, 1, 2, 1, 2, 1, 2, 1, 2, 1, 0, 0, 2];
+        for (elevation, &expected) in UPSTREAM_PRIORITY_BY_ELEVATION.iter().enumerate() {
             assert_eq!(
                 priority_for_elevation(u8::try_from(elevation).unwrap()),
                 expected,
