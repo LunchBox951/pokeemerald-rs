@@ -113,7 +113,6 @@ impl<'a> BitReader<'a> {
     }
 }
 
-/// Canonical Huffman decoder from RFC 1951 section 3.2.2.
 struct HuffmanTable {
     symbol_counts_by_length: [u16; 16],
     symbols_by_length: Vec<u16>,
