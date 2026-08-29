@@ -1,147 +1,145 @@
-//! Message-box compositor: window-frame tile layout (S-5, issue #124).
+//! Extracts window-frame tiles and places generic or standard dialogue borders.
 //!
-//! Behavioural re-implementation `(behavioral-fidelity)` of the tile-level
-//! chrome around a text box. This module owns *where each frame tile goes*,
-//! not the tile pixels or their palette (colour resolution is out of this
-//! slice's scope, per the issue) — it reads a frame's raw tile bitmap
-//! (`assets::pack::ImageRef`, from `assets::AssetPack::message_box`
-//! /`text_window_frame`) and produces tile placements a real renderer
-//! composes onto a tilemap/framebuffer, mirroring how
-//! `assets::pack::WindowFrameHandle`'s own docs describe interpreting the
-//! border layout as "rendering behaviour, out of scope" for that crate.
-//!
-//! Two upstream layouts are modelled:
-//!
-//! * [`border_tiles`] — the generic 3x3 selectable-frame border ring
-//!   (upstream `DrawTextBorderOuter`, `pokeemerald/src/text_window.c`), used
-//!   with `assets::AssetPack::text_window_frame`'s 24x24 (3x3-tile) sheets.
-//! * [`MessageBoxLayout`] — the *specific* standard overworld/battle dialogue
-//!   box (upstream `WindowFunc_DrawDialogueFrame`, `pokeemerald/src/menu.c`,
-//!   as drawn by `DrawDialogueFrame`/`ShowFieldMessage`,
-//!   `pokeemerald/src/field_message_box.c` — the v1 NPC-interaction path
-//!   this issue targets), used with `assets::AssetPack::message_box`'s 56x16
-//!   (7x2-tile) sheet.
-//!
-//! [`tile_pixels`] slices one 8x8 tile's pixels out of either kind of sheet,
-//! the same "read a fixed-size cell out of a grid bitmap" shape
-//! `assets::fonts::FontGlyphSheet::glyph` uses for font glyphs.
+//! Pixel extraction accepts any whole-tile image grid. Border placement returns
+//! source-tile assignments in the order a tilemap compositor must apply them.
 
 use assets::pack::ImageRef;
 
-/// A frame/message-box tile bitmap's cell size (every tile is 8x8, GBA's
-/// native tile size).
+/// The width and height of one frame tile, in pixels.
 pub const TILE_SIZE: u32 = 8;
 
-/// Pixels in one decoded tile (`TILE_SIZE * TILE_SIZE`).
+/// The number of pixels in one frame tile.
 pub const TILE_PIXELS: usize = (TILE_SIZE * TILE_SIZE) as usize;
 
-/// Slice one tile's pixels out of a frame sheet, optionally vertically
-/// flipped (upstream `BG_TILE_V_FLIP`, reused by
-/// [`MessageBoxLayout::frame_tiles`] for the bottom border instead of
-/// storing a separate mirrored copy of the top border's tiles).
-///
-/// `sheet` must be an exact whole-tile grid (`width`/`height` both multiples
-/// of [`TILE_SIZE`]); `tile` is a 0-based index, row-major
-/// (`row * columns + col`, `columns = sheet.width / TILE_SIZE`), matching
-/// both `assets::AssetPack::message_box`'s 7x2 layout and
-/// `assets::AssetPack::text_window_frame`'s 3x3 layout. Returns `None` if
-/// `sheet` isn't a whole-tile grid or `tile` is out of range.
-#[must_use]
-pub fn tile_pixels(sheet: ImageRef<'_>, tile: u8) -> Option<[u8; TILE_PIXELS]> {
-    tile_pixels_flipped(sheet, tile, false)
+mod border_frame {
+    pub const TOP_LEFT: u8 = 0;
+    pub const TOP_EDGE: u8 = 1;
+    pub const TOP_RIGHT: u8 = 2;
+    pub const LEFT_EDGE: u8 = 3;
+    #[cfg(test)]
+    pub const UNUSED_CENTER: u8 = 4;
+    pub const RIGHT_EDGE: u8 = 5;
+    pub const BOTTOM_LEFT: u8 = 6;
+    pub const BOTTOM_EDGE: u8 = 7;
+    pub const BOTTOM_RIGHT: u8 = 8;
 }
 
-/// [`tile_pixels`], with an optional vertical flip.
+mod dialogue_frame {
+    pub const WING_CAP: u8 = 1;
+    pub const LEFT_CORNER: u8 = 3;
+    pub const HORIZONTAL_EDGE: u8 = 4;
+    pub const RIGHT_CORNER: u8 = 5;
+    pub const RIGHT_CAP: u8 = 6;
+    pub const WING_COLUMN: u8 = 7;
+    pub const INTERIOR: u8 = 9;
+    pub const RIGHT_COLUMN: u8 = 10;
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TileOrientation {
+    Normal,
+    VerticallyFlipped,
+}
+
+impl TileOrientation {
+    const fn is_vertically_flipped(self) -> bool {
+        matches!(self, Self::VerticallyFlipped)
+    }
+}
+
+/// Extracts a tile by its zero-based, row-major index.
+///
+/// Returns `None` unless `sheet` is a complete grid of [`TILE_SIZE`] cells and
+/// `tile_index` selects a cell in that grid.
+#[must_use]
+pub fn tile_pixels(sheet: ImageRef<'_>, tile_index: u8) -> Option<[u8; TILE_PIXELS]> {
+    tile_pixels_flipped(sheet, tile_index, false)
+}
+
+/// Extracts a tile by its zero-based, row-major index and optionally flips it
+/// vertically.
+///
+/// Returns `None` unless `sheet` is a complete grid of [`TILE_SIZE`] cells and
+/// `tile_index` selects a cell in that grid.
 #[must_use]
 pub fn tile_pixels_flipped(
     sheet: ImageRef<'_>,
-    tile: u8,
-    v_flip: bool,
+    tile_index: u8,
+    vertically_flipped: bool,
 ) -> Option<[u8; TILE_PIXELS]> {
     if !sheet.width.is_multiple_of(TILE_SIZE) || !sheet.height.is_multiple_of(TILE_SIZE) {
         return None;
     }
     let columns = sheet.width / TILE_SIZE;
     let rows = sheet.height / TILE_SIZE;
-    let tile = u32::from(tile);
-    if tile >= columns * rows {
+    let tile_index = u32::from(tile_index);
+    if tile_index >= columns * rows {
         return None;
     }
     if sheet.pixels.len() != (sheet.width * sheet.height) as usize {
         return None;
     }
 
-    let col = tile % columns;
-    let row = tile / columns;
-    let origin_x = (col * TILE_SIZE) as usize;
-    let origin_y = (row * TILE_SIZE) as usize;
-    let stride = sheet.width as usize;
-    let side = TILE_SIZE as usize;
+    let tile_column = tile_index % columns;
+    let tile_row = tile_index / columns;
+    let origin_x = (tile_column * TILE_SIZE) as usize;
+    let origin_y = (tile_row * TILE_SIZE) as usize;
+    let sheet_stride = sheet.width as usize;
+    let tile_side = TILE_SIZE as usize;
 
     let mut pixels = [0u8; TILE_PIXELS];
-    for local_y in 0..side {
-        let src_y = if v_flip { side - 1 - local_y } else { local_y };
-        let src_start = (origin_y + src_y) * stride + origin_x;
-        let dst_start = local_y * side;
-        pixels[dst_start..dst_start + side]
-            .copy_from_slice(&sheet.pixels[src_start..src_start + side]);
+    for destination_y in 0..tile_side {
+        let source_y = if vertically_flipped {
+            tile_side - destination_y - 1
+        } else {
+            destination_y
+        };
+        let source_start = (origin_y + source_y) * sheet_stride + origin_x;
+        let destination_start = destination_y * tile_side;
+        pixels[destination_start..destination_start + tile_side]
+            .copy_from_slice(&sheet.pixels[source_start..source_start + tile_side]);
     }
     Some(pixels)
 }
 
-/// One frame tile placed on the destination tilemap: which source tile
-/// (0-based, into a frame sheet — see [`tile_pixels`]) goes at which
-/// `(col, row)` tilemap cell, and whether it's vertically flipped.
+/// A source frame tile assigned to a destination tilemap cell.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FrameTile {
     /// Destination tilemap column.
     pub col: i32,
     /// Destination tilemap row.
     pub row: i32,
-    /// 0-based source tile index into the frame sheet.
+    /// Zero-based source-tile index in the frame sheet.
     pub tile: u8,
-    /// Whether the source tile is vertically flipped (upstream
-    /// `BG_TILE_V_FLIP`).
+    /// Whether to flip the source tile vertically.
     pub v_flip: bool,
 }
 
-/// Push one axis-aligned rectangle of tilemap cells, all citing the same
-/// source `tile`/`v_flip` (upstream's `FillBgTilemapBufferRect`, which fills
-/// a rect with one repeated tile — not a run of consecutive source tiles).
-fn push_rect(
-    out: &mut Vec<FrameTile>,
-    tile: u8,
-    v_flip: bool,
-    col0: i32,
-    row0: i32,
+fn fill_rect(
+    tiles: &mut Vec<FrameTile>,
+    source_tile: u8,
+    orientation: TileOrientation,
+    first_column: i32,
+    first_row: i32,
     width: i32,
     height: i32,
 ) {
-    for row in row0..row0 + height {
-        for col in col0..col0 + width {
-            out.push(FrameTile {
+    for row in first_row..first_row + height {
+        for col in first_column..first_column + width {
+            tiles.push(FrameTile {
                 col,
                 row,
-                tile,
-                v_flip,
+                tile: source_tile,
+                v_flip: orientation.is_vertically_flipped(),
             });
         }
     }
 }
 
-/// The generic 3x3 selectable-frame border ring around a window's content
-/// rect (upstream `DrawTextBorderOuter`, `pokeemerald/src/text_window.c`;
-/// also `WindowFunc_DrawStandardFrame`, `pokeemerald/src/menu.c`, which
-/// draws the identical shape for the non-selectable `STD_WINDOW` frame).
-/// Pairs with a 3x3-tile source sheet
-/// (`assets::AssetPack::text_window_frame`, 9 tiles: corners, edges, and an
-/// unused centre tile 4 — the content rect's own fill is a separate concern,
-/// left to the caller).
+/// Places a one-tile-thick frame outside a window's content rectangle.
 ///
-/// `tilemap_left`/`tilemap_top` are the content rect's top-left tilemap
-/// cell; `width`/`height` are its size in tiles. The border is drawn
-/// *outside* that rect, from `(left-1, top-1)` to `(left+width, top+height)`
-/// inclusive.
+/// The source sheet is a 3-by-3 grid whose center tile is unused. `width` and
+/// `height` describe the content rectangle in tiles.
 #[must_use]
 pub fn border_tiles(
     tilemap_left: i32,
@@ -149,46 +147,58 @@ pub fn border_tiles(
     width: i32,
     height: i32,
 ) -> Vec<FrameTile> {
-    let mut out = Vec::with_capacity(8);
-    let left = tilemap_left;
-    let top = tilemap_top;
+    use border_frame as tile;
+    use TileOrientation::Normal;
 
-    push_rect(&mut out, 0, false, left - 1, top - 1, 1, 1);
-    push_rect(&mut out, 1, false, left, top - 1, width, 1);
-    push_rect(&mut out, 2, false, left + width, top - 1, 1, 1);
-    push_rect(&mut out, 3, false, left - 1, top, 1, height);
-    push_rect(&mut out, 5, false, left + width, top, 1, height);
-    push_rect(&mut out, 6, false, left - 1, top + height, 1, 1);
-    push_rect(&mut out, 7, false, left, top + height, width, 1);
-    push_rect(&mut out, 8, false, left + width, top + height, 1, 1);
+    let mut tiles = Vec::new();
+    let content_right = tilemap_left + width;
+    let content_bottom = tilemap_top + height;
+    let border_left = tilemap_left - 1;
+    let border_top = tilemap_top - 1;
 
-    out
+    let rectangles = [
+        (tile::TOP_LEFT, border_left, border_top, 1, 1),
+        (tile::TOP_EDGE, tilemap_left, border_top, width, 1),
+        (tile::TOP_RIGHT, content_right, border_top, 1, 1),
+        (tile::LEFT_EDGE, border_left, tilemap_top, 1, height),
+        (tile::RIGHT_EDGE, content_right, tilemap_top, 1, height),
+        (tile::BOTTOM_LEFT, border_left, content_bottom, 1, 1),
+        (tile::BOTTOM_EDGE, tilemap_left, content_bottom, width, 1),
+        (tile::BOTTOM_RIGHT, content_right, content_bottom, 1, 1),
+    ];
+    for (source_tile, column, row, rect_width, rect_height) in rectangles {
+        fill_rect(
+            &mut tiles,
+            source_tile,
+            Normal,
+            column,
+            row,
+            rect_width,
+            rect_height,
+        );
+    }
+
+    tiles
 }
 
-/// Standard field-message dialogue box tilemap position (upstream
-/// `sStandardTextBox_WindowTemplates[0]`, `pokeemerald/src/menu.c`) — window
-/// 0, the box `ShowFieldMessage`/`DrawDialogueFrame`
-/// (`pokeemerald/src/field_message_box.c`, `src/menu.c`) draws NPC dialogue
-/// into.
+/// Standard field-message content rectangle's left tilemap column.
 pub const STANDARD_TILEMAP_LEFT: i32 = 2;
-/// See [`STANDARD_TILEMAP_LEFT`].
+/// Standard field-message content rectangle's top tilemap row.
 pub const STANDARD_TILEMAP_TOP: i32 = 15;
-/// Standard field-message dialogue box content width, in tiles (upstream
-/// `sStandardTextBox_WindowTemplates[0].width`).
+/// Standard field-message content width, in tiles.
 pub const STANDARD_CONTENT_WIDTH: i32 = 27;
-/// Standard field-message dialogue box content height, in tiles (upstream
-/// `sStandardTextBox_WindowTemplates[0].height`).
+/// Standard field-message content height, in tiles.
 pub const STANDARD_CONTENT_HEIGHT: i32 = 4;
 
-/// The standard overworld/battle dialogue box's tilemap geometry (upstream
-/// `struct WindowTemplate`, sized here just to `tilemap_left`/`tilemap_top`/
-/// `content_width`/`content_height` — the fields [`MessageBoxLayout::frame_tiles`]
-/// needs).
+const DIALOGUE_WING_WIDTH: i32 = 2;
+type TileRect = (u8, TileOrientation, i32, i32, i32, i32);
+
+/// Tilemap geometry for a dialogue box's content rectangle.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MessageBoxLayout {
-    /// Content rect's top-left tilemap column.
+    /// Content rectangle's left tilemap column.
     pub tilemap_left: i32,
-    /// Content rect's top-left tilemap row.
+    /// Content rectangle's top tilemap row.
     pub tilemap_top: i32,
     /// Content width, in tiles.
     pub content_width: i32,
@@ -197,9 +207,7 @@ pub struct MessageBoxLayout {
 }
 
 impl MessageBoxLayout {
-    /// The standard field-message dialogue box (see [`STANDARD_TILEMAP_LEFT`]
-    /// and its siblings) — the box `ShowFieldMessage` draws NPC dialogue
-    /// into on the v1 path.
+    /// The standard field-message dialogue box.
     pub const STANDARD: Self = Self {
         tilemap_left: STANDARD_TILEMAP_LEFT,
         tilemap_top: STANDARD_TILEMAP_TOP,
@@ -207,52 +215,79 @@ impl MessageBoxLayout {
         content_height: STANDARD_CONTENT_HEIGHT,
     };
 
-    /// Every frame tile this layout's border-and-fill draws (upstream
-    /// `WindowFunc_DrawDialogueFrame`, `pokeemerald/src/menu.c`), against a
-    /// 7x2-tile message-box sheet (`assets::AssetPack::message_box`, 14
-    /// tiles: 0-based, matching that function's `DLG_WINDOW_BASE_TILE_NUM +
-    /// n` tile ids taken relative to their own load offset).
+    /// Places the standard dialogue frame and interior in tilemap write order.
     ///
-    /// Returned in upstream's literal draw order: the bottom border row and
-    /// the interior/wing fill *share* tilemap row `tilemap_top +
-    /// content_height` (upstream hardcodes a `height + 1`-tall span — `5`
-    /// rows for the only shape it's ever called with, `content_height == 4`
-    /// — for the wings/fill, one row taller than the content rect, so its
-    /// last row lands exactly on the bottom border row). Preserve this
-    /// order if resolving overlapping cells last-write-wins, as upstream's
-    /// sequential `FillBgTilemapBufferRect` calls do.
+    /// The fill extends through the bottom-border row. The vertically flipped
+    /// bottom border must therefore remain later in the returned sequence so a
+    /// last-write-wins compositor matches `WindowFunc_DrawDialogueFrame` in
+    /// `pokeemerald/src/menu.c`.
     #[must_use]
     pub fn frame_tiles(&self) -> Vec<FrameTile> {
-        let mut out = Vec::with_capacity(5 + 3 + 5);
+        let rectangles = self
+            .top_and_fill_rectangles()
+            .into_iter()
+            .chain(self.bottom_border_rectangles());
+        let mut tiles = Vec::new();
+        for (source_tile, orientation, column, row, width, height) in rectangles {
+            fill_rect(
+                &mut tiles,
+                source_tile,
+                orientation,
+                column,
+                row,
+                width,
+                height,
+            );
+        }
+        tiles
+    }
+
+    fn top_and_fill_rectangles(&self) -> [TileRect; 8] {
+        use dialogue_frame as tile;
+        use TileOrientation::Normal;
+
         let left = self.tilemap_left;
         let top = self.tilemap_top;
-        let width = self.content_width;
-        let height = self.content_height;
+        let right = left + self.content_width;
+        let wing = left - DIALOGUE_WING_WIDTH;
+        let inside = left - 1;
+        let corner = right - 1;
+        let top_row = top - 1;
+        let edge_width = self.content_width - 1;
+        let fill_width = self.content_width + 1;
+        let fill_height = self.content_height + 1;
 
-        // Top border row, one cell above the content rect. The left side
-        // extends 2 tiles further left than the content rect (the
-        // dialogue box's distinctive "wing" notch).
-        push_rect(&mut out, 1, false, left - 2, top - 1, 1, 1);
-        push_rect(&mut out, 3, false, left - 1, top - 1, 1, 1);
-        push_rect(&mut out, 4, false, left, top - 1, width - 1, 1);
-        push_rect(&mut out, 5, false, left + width - 1, top - 1, 1, 1);
-        push_rect(&mut out, 6, false, left + width, top - 1, 1, 1);
+        [
+            (tile::WING_CAP, Normal, wing, top_row, 1, 1),
+            (tile::LEFT_CORNER, Normal, inside, top_row, 1, 1),
+            (tile::HORIZONTAL_EDGE, Normal, left, top_row, edge_width, 1),
+            (tile::RIGHT_CORNER, Normal, corner, top_row, 1, 1),
+            (tile::RIGHT_CAP, Normal, right, top_row, 1, 1),
+            (tile::WING_COLUMN, Normal, wing, top, 1, fill_height),
+            (tile::INTERIOR, Normal, inside, top, fill_width, fill_height),
+            (tile::RIGHT_COLUMN, Normal, right, top, 1, fill_height),
+        ]
+    }
 
-        // Left wing column, interior fill, and right border column, all
-        // `height + 1` tiles tall (see the doc comment above).
-        push_rect(&mut out, 7, false, left - 2, top, 1, height + 1);
-        push_rect(&mut out, 9, false, left - 1, top, width + 1, height + 1);
-        push_rect(&mut out, 10, false, left + width, top, 1, height + 1);
+    fn bottom_border_rectangles(&self) -> [TileRect; 5] {
+        use dialogue_frame as tile;
+        use TileOrientation::VerticallyFlipped as Flipped;
 
-        // Bottom border row: the top row's tiles, vertically flipped,
-        // overwriting the fill's last row.
-        push_rect(&mut out, 1, true, left - 2, top + height, 1, 1);
-        push_rect(&mut out, 3, true, left - 1, top + height, 1, 1);
-        push_rect(&mut out, 4, true, left, top + height, width - 1, 1);
-        push_rect(&mut out, 5, true, left + width - 1, top + height, 1, 1);
-        push_rect(&mut out, 6, true, left + width, top + height, 1, 1);
+        let left = self.tilemap_left;
+        let right = left + self.content_width;
+        let bottom = self.tilemap_top + self.content_height;
+        let wing = left - DIALOGUE_WING_WIDTH;
+        let inside = left - 1;
+        let corner = right - 1;
+        let edge_width = self.content_width - 1;
 
-        out
+        [
+            (tile::WING_CAP, Flipped, wing, bottom, 1, 1),
+            (tile::LEFT_CORNER, Flipped, inside, bottom, 1, 1),
+            (tile::HORIZONTAL_EDGE, Flipped, left, bottom, edge_width, 1),
+            (tile::RIGHT_CORNER, Flipped, corner, bottom, 1, 1),
+            (tile::RIGHT_CAP, Flipped, right, bottom, 1, 1),
+        ]
     }
 }
 
@@ -260,22 +295,22 @@ impl MessageBoxLayout {
 mod tests {
     use super::*;
 
-    /// A synthetic message-box-shaped sheet (7x2 tiles = 56x16 px, the exact
-    /// shape `assets::AssetPack::message_box` returns), pixel value =
-    /// `tile index` broadcast across that tile's cell, cheap to hand-verify.
+    const MESSAGE_BOX_TILE_COLUMNS: u32 = 7;
+    const MESSAGE_BOX_TILE_ROWS: u32 = 2;
+    const MESSAGE_BOX_TILE_COUNT: u8 = 14;
+    const TEST_PALETTE_INDEX_COUNT: u32 = 4;
+
     fn synthetic_message_box_pixels() -> Vec<u8> {
-        let width = 7 * TILE_SIZE;
-        let height = 2 * TILE_SIZE;
+        let width = MESSAGE_BOX_TILE_COLUMNS * TILE_SIZE;
+        let height = MESSAGE_BOX_TILE_ROWS * TILE_SIZE;
         let mut pixels = vec![0u8; (width * height) as usize];
         for y in 0..height {
             for x in 0..width {
-                let col = x / TILE_SIZE;
-                let row = y / TILE_SIZE;
-                let tile = row * 7 + col;
-                // Keep values in a plausible 2-bit-ish range; only used to
-                // distinguish tiles/orientation in these tests, not as a
-                // real palette index.
-                pixels[(y * width + x) as usize] = u8::try_from(tile % 4).unwrap();
+                let tile_column = x / TILE_SIZE;
+                let tile_row = y / TILE_SIZE;
+                let tile_index = tile_row * MESSAGE_BOX_TILE_COLUMNS + tile_column;
+                pixels[(y * width + x) as usize] =
+                    u8::try_from(tile_index % TEST_PALETTE_INDEX_COUNT).unwrap();
             }
         }
         pixels
@@ -290,56 +325,74 @@ mod tests {
         }
     }
 
+    const fn frame_tile(col: i32, row: i32, tile: u8, orientation: TileOrientation) -> FrameTile {
+        FrameTile {
+            col,
+            row,
+            tile,
+            v_flip: orientation.is_vertically_flipped(),
+        }
+    }
+
+    const fn normal_tile(col: i32, row: i32, tile: u8) -> FrameTile {
+        frame_tile(col, row, tile, TileOrientation::Normal)
+    }
+
+    const fn vertically_flipped_tile(col: i32, row: i32, tile: u8) -> FrameTile {
+        frame_tile(col, row, tile, TileOrientation::VerticallyFlipped)
+    }
+
     #[test]
     fn every_message_box_tile_is_addressable_on_a_full_synthetic_sheet() {
-        // Exercises tile_pixels against a full 14-tile synthetic sheet (the
-        // real assets::AssetPack::message_box shape), the way
-        // assets::fonts's own tests exercise a full synthetic glyph sheet.
-        let width = 7 * TILE_SIZE;
-        let height = 2 * TILE_SIZE;
+        let width = MESSAGE_BOX_TILE_COLUMNS * TILE_SIZE;
+        let height = MESSAGE_BOX_TILE_ROWS * TILE_SIZE;
         let pixels = synthetic_message_box_pixels();
         let sheet = image(&pixels, width, height);
 
-        for tile in 0u8..14 {
-            let cell = tile_pixels(sheet, tile).unwrap();
-            let expected = tile % 4;
+        for tile_index in 0..MESSAGE_BOX_TILE_COUNT {
+            let cell = tile_pixels(sheet, tile_index).unwrap();
+            let expected = tile_index % u8::try_from(TEST_PALETTE_INDEX_COUNT).unwrap();
             assert!(
-                cell.iter().all(|&p| p == expected),
-                "tile {tile} was not uniformly {expected}"
+                cell.iter().all(|&pixel| pixel == expected),
+                "tile {tile_index} was not uniformly {expected}"
             );
         }
-        assert!(tile_pixels(sheet, 14).is_none());
+        assert!(tile_pixels(sheet, MESSAGE_BOX_TILE_COUNT).is_none());
     }
 
     #[test]
     fn tile_pixels_slices_the_right_cell() {
-        // Tile 9 of a 7-wide sheet is column 2, row 1 -> pixel rect
-        // x in 16..24, y in 8..16.
-        let width = 7 * TILE_SIZE;
-        let height = 2 * TILE_SIZE;
+        const TILE_INDEX: u8 = 9;
+        const EXPECTED_TILE_COLUMN: u32 = 2;
+        const EXPECTED_TILE_ROW: u32 = 1;
+        const EXPECTED_PIXEL: u8 = 3;
+
+        let width = MESSAGE_BOX_TILE_COLUMNS * TILE_SIZE;
+        let height = MESSAGE_BOX_TILE_ROWS * TILE_SIZE;
         let mut pixels = vec![0u8; (width * height) as usize];
-        for y in 8..16u32 {
-            for x in 16..24u32 {
-                pixels[(y * width + x) as usize] = 3;
+        let expected_x = EXPECTED_TILE_COLUMN * TILE_SIZE..(EXPECTED_TILE_COLUMN + 1) * TILE_SIZE;
+        let expected_y = EXPECTED_TILE_ROW * TILE_SIZE..(EXPECTED_TILE_ROW + 1) * TILE_SIZE;
+        for y in expected_y {
+            for x in expected_x.clone() {
+                pixels[(y * width + x) as usize] = EXPECTED_PIXEL;
             }
         }
         let sheet = image(&pixels, width, height);
 
-        let tile = tile_pixels(sheet, 9).unwrap();
-        assert!(tile.iter().all(|&p| p == 3));
+        let tile = tile_pixels(sheet, TILE_INDEX).unwrap();
+        assert!(tile.iter().all(|&pixel| pixel == EXPECTED_PIXEL));
 
-        // A neighbouring tile is untouched.
-        let neighbor = tile_pixels(sheet, 10).unwrap();
-        assert!(neighbor.iter().all(|&p| p == 0));
+        let neighbor = tile_pixels(sheet, TILE_INDEX + 1).unwrap();
+        assert!(neighbor.iter().all(|&pixel| pixel == 0));
     }
 
     #[test]
     fn tile_pixels_out_of_range_or_malshaped_is_none() {
-        let width = 7 * TILE_SIZE;
-        let height = 2 * TILE_SIZE;
+        let width = MESSAGE_BOX_TILE_COLUMNS * TILE_SIZE;
+        let height = MESSAGE_BOX_TILE_ROWS * TILE_SIZE;
         let pixels = vec![0u8; (width * height) as usize];
         let sheet = image(&pixels, width, height);
-        assert!(tile_pixels(sheet, 14).is_none()); // only 0..=13 valid
+        assert!(tile_pixels(sheet, MESSAGE_BOX_TILE_COUNT).is_none());
         assert!(tile_pixels(sheet, u8::MAX).is_none());
 
         let malshaped = image(&pixels[..pixels.len() - 1], width, height);
@@ -347,95 +400,68 @@ mod tests {
     }
 
     #[test]
-    fn v_flip_mirrors_rows() {
-        // A tile whose top row is all 1s and bottom row all 2s, flipped,
-        // should read bottom-first.
+    fn vertical_flip_mirrors_rows() {
+        const TOP_PIXEL: u8 = 1;
+        const BOTTOM_PIXEL: u8 = 2;
+
         let width = TILE_SIZE;
         let height = TILE_SIZE;
-        let mut pixels = vec![0u8; (width * height) as usize];
-        for x in 0..TILE_SIZE {
-            pixels[x as usize] = 1; // row 0
-            pixels[((TILE_SIZE - 1) * width + x) as usize] = 2; // last row
+        let tile_side = TILE_SIZE as usize;
+        let last_row_start = TILE_PIXELS - tile_side;
+        let mut pixels = vec![0u8; TILE_PIXELS];
+        for x in 0..tile_side {
+            pixels[x] = TOP_PIXEL;
+            pixels[last_row_start + x] = BOTTOM_PIXEL;
         }
         let sheet = image(&pixels, width, height);
 
         let normal = tile_pixels(sheet, 0).unwrap();
-        assert_eq!(&normal[0..8], &[1; 8]);
-        assert_eq!(&normal[56..64], &[2; 8]);
+        assert_eq!(&normal[..tile_side], &[TOP_PIXEL; TILE_SIZE as usize]);
+        assert_eq!(
+            &normal[last_row_start..],
+            &[BOTTOM_PIXEL; TILE_SIZE as usize]
+        );
 
         let flipped = tile_pixels_flipped(sheet, 0, true).unwrap();
-        assert_eq!(&flipped[0..8], &[2; 8]);
-        assert_eq!(&flipped[56..64], &[1; 8]);
+        assert_eq!(&flipped[..tile_side], &[BOTTOM_PIXEL; TILE_SIZE as usize]);
+        assert_eq!(&flipped[last_row_start..], &[TOP_PIXEL; TILE_SIZE as usize]);
     }
 
     #[test]
     fn border_tiles_ring_a_small_window() {
-        // A 3x2 content rect at (5, 5): the border sits at columns 4..=8,
-        // rows 4..=7 (a 5x4 ring around it), matching DrawTextBorderOuter.
-        let tiles = border_tiles(5, 5, 3, 2);
+        const CONTENT_LEFT: i32 = 5;
+        const CONTENT_TOP: i32 = 5;
+        const CONTENT_WIDTH: i32 = 3;
+        const CONTENT_HEIGHT: i32 = 2;
 
-        // Corners.
-        assert!(tiles.contains(&FrameTile {
-            col: 4,
-            row: 4,
-            tile: 0,
-            v_flip: false
-        }));
-        assert!(tiles.contains(&FrameTile {
-            col: 8,
-            row: 4,
-            tile: 2,
-            v_flip: false
-        }));
-        assert!(tiles.contains(&FrameTile {
-            col: 4,
-            row: 7,
-            tile: 6,
-            v_flip: false
-        }));
-        assert!(tiles.contains(&FrameTile {
-            col: 8,
-            row: 7,
-            tile: 8,
-            v_flip: false
-        }));
-        // Top edge spans the content width (3 cells), tile 1.
-        for col in 5..8 {
-            assert!(tiles.contains(&FrameTile {
-                col,
-                row: 4,
-                tile: 1,
-                v_flip: false
-            }));
+        let tiles = border_tiles(CONTENT_LEFT, CONTENT_TOP, CONTENT_WIDTH, CONTENT_HEIGHT);
+        let border_left = CONTENT_LEFT - 1;
+        let border_top = CONTENT_TOP - 1;
+        let border_right = CONTENT_LEFT + CONTENT_WIDTH;
+        let border_bottom = CONTENT_TOP + CONTENT_HEIGHT;
+
+        for expected in [
+            normal_tile(border_left, border_top, border_frame::TOP_LEFT),
+            normal_tile(border_right, border_top, border_frame::TOP_RIGHT),
+            normal_tile(border_left, border_bottom, border_frame::BOTTOM_LEFT),
+            normal_tile(border_right, border_bottom, border_frame::BOTTOM_RIGHT),
+        ] {
+            assert!(tiles.contains(&expected));
         }
-        // Bottom edge, tile 7.
-        for col in 5..8 {
-            assert!(tiles.contains(&FrameTile {
-                col,
-                row: 7,
-                tile: 7,
-                v_flip: false
-            }));
+        for col in CONTENT_LEFT..border_right {
+            assert!(tiles.contains(&normal_tile(col, border_top, border_frame::TOP_EDGE)));
+            assert!(tiles.contains(&normal_tile(col, border_bottom, border_frame::BOTTOM_EDGE)));
         }
-        // Left/right edges span the content height (2 cells), tiles 3/5.
-        for row in 5..7 {
-            assert!(tiles.contains(&FrameTile {
-                col: 4,
-                row,
-                tile: 3,
-                v_flip: false
-            }));
-            assert!(tiles.contains(&FrameTile {
-                col: 8,
-                row,
-                tile: 5,
-                v_flip: false
-            }));
+        for row in CONTENT_TOP..border_bottom {
+            assert!(tiles.contains(&normal_tile(border_left, row, border_frame::LEFT_EDGE)));
+            assert!(tiles.contains(&normal_tile(border_right, row, border_frame::RIGHT_EDGE)));
         }
-        // No centre fill tile (4) -- that's the caller's concern.
-        assert!(!tiles.iter().any(|t| t.tile == 4));
-        // 4 corners + 3 top + 3 bottom + 2 left + 2 right = 14.
-        assert_eq!(tiles.len(), 14);
+        assert!(!tiles
+            .iter()
+            .any(|tile| tile.tile == border_frame::UNUSED_CENTER));
+        let expected_tile_count =
+            usize::try_from(4 + 2 * CONTENT_WIDTH + 2 * CONTENT_HEIGHT).unwrap();
+        assert_eq!(tiles.len(), expected_tile_count);
     }
 
     #[test]
@@ -446,79 +472,124 @@ mod tests {
         assert_eq!(MessageBoxLayout::STANDARD.content_height, 4);
     }
 
-    /// Shorthand constructor so these placement assertions stay one line
-    /// each (kept short deliberately -- `clippy::too_many_lines` caps a test
-    /// function's length, and a struct-literal-per-assertion form blows
-    /// through that once `rustfmt` expands each one to four lines).
-    const fn ft(col: i32, row: i32, tile: u8, v_flip: bool) -> FrameTile {
-        FrameTile {
-            col,
-            row,
-            tile,
-            v_flip,
-        }
-    }
-
     #[test]
     fn dialogue_frame_top_row_matches_upstream_wing_notch_and_corners() {
         let tiles = MessageBoxLayout::STANDARD.frame_tiles();
+        let content_left = STANDARD_TILEMAP_LEFT;
+        let content_right = content_left + STANDARD_CONTENT_WIDTH;
+        let top_border_row = STANDARD_TILEMAP_TOP - 1;
+        let wing_column = content_left - DIALOGUE_WING_WIDTH;
+        let interior_left = content_left - 1;
+        let inner_right_corner = content_right - 1;
 
-        // Top-left wing notch, 2 tiles left of the content rect's own
-        // top-left corner tile.
-        assert!(tiles.contains(&ft(0, 14, 1, false)));
-        assert!(tiles.contains(&ft(1, 14, 3, false)));
-        // Top edge spans content_width - 1 = 26 cells of tile 4, starting
-        // at the content rect's own left column.
-        assert!(tiles.contains(&ft(2, 14, 4, false)));
-        assert!(tiles.contains(&ft(27, 14, 4, false)));
-        assert!(!tiles.contains(&ft(28, 14, 4, false)));
-        // Top-right corners.
-        assert!(tiles.contains(&ft(28, 14, 5, false)));
-        assert!(tiles.contains(&ft(29, 14, 6, false)));
+        assert!(tiles.contains(&normal_tile(
+            wing_column,
+            top_border_row,
+            dialogue_frame::WING_CAP,
+        )));
+        assert!(tiles.contains(&normal_tile(
+            interior_left,
+            top_border_row,
+            dialogue_frame::LEFT_CORNER,
+        )));
+        assert!(tiles.contains(&normal_tile(
+            content_left,
+            top_border_row,
+            dialogue_frame::HORIZONTAL_EDGE,
+        )));
+        assert!(tiles.contains(&normal_tile(
+            inner_right_corner - 1,
+            top_border_row,
+            dialogue_frame::HORIZONTAL_EDGE,
+        )));
+        assert!(!tiles.contains(&normal_tile(
+            inner_right_corner,
+            top_border_row,
+            dialogue_frame::HORIZONTAL_EDGE,
+        )));
+        assert!(tiles.contains(&normal_tile(
+            inner_right_corner,
+            top_border_row,
+            dialogue_frame::RIGHT_CORNER,
+        )));
+        assert!(tiles.contains(&normal_tile(
+            content_right,
+            top_border_row,
+            dialogue_frame::RIGHT_CAP,
+        )));
     }
 
     #[test]
     fn dialogue_frame_wings_fill_and_bottom_row_match_upstream_placement() {
         let tiles = MessageBoxLayout::STANDARD.frame_tiles();
+        let content_left = STANDARD_TILEMAP_LEFT;
+        let content_right = content_left + STANDARD_CONTENT_WIDTH;
+        let content_top = STANDARD_TILEMAP_TOP;
+        let bottom_border_row = content_top + STANDARD_CONTENT_HEIGHT;
+        let wing_column = content_left - DIALOGUE_WING_WIDTH;
+        let interior_left = content_left - 1;
 
-        // Left wing column spans rows 15..=19 (height + 1 = 5 rows).
-        for row in 15..=19 {
-            assert!(tiles.contains(&ft(0, row, 7, false)));
+        for row in content_top..=bottom_border_row {
+            assert!(tiles.contains(&normal_tile(wing_column, row, dialogue_frame::WING_COLUMN,)));
+            assert!(tiles.contains(&normal_tile(
+                content_right,
+                row,
+                dialogue_frame::RIGHT_COLUMN,
+            )));
         }
-        // Interior fill spans cols 1..=28, rows 15..=19.
-        assert!(tiles.contains(&ft(1, 15, 9, false)));
-        assert!(tiles.contains(&ft(28, 19, 9, false)));
-        // Right border column, same rows.
-        for row in 15..=19 {
-            assert!(tiles.contains(&ft(29, row, 10, false)));
-        }
+        assert!(tiles.contains(&normal_tile(
+            interior_left,
+            content_top,
+            dialogue_frame::INTERIOR,
+        )));
+        assert!(tiles.contains(&normal_tile(
+            content_right - 1,
+            bottom_border_row,
+            dialogue_frame::INTERIOR,
+        )));
 
-        // Bottom border row (row 19) v-flip-overwrites the fill's last row
-        // at the wing/corner columns.
-        assert!(tiles.contains(&ft(0, 19, 1, true)));
-        assert!(tiles.contains(&ft(1, 19, 3, true)));
-        assert!(tiles.contains(&ft(2, 19, 4, true)));
-        assert!(tiles.contains(&ft(28, 19, 5, true)));
-        assert!(tiles.contains(&ft(29, 19, 6, true)));
+        for (column, source_tile) in [
+            (wing_column, dialogue_frame::WING_CAP),
+            (interior_left, dialogue_frame::LEFT_CORNER),
+            (content_left, dialogue_frame::HORIZONTAL_EDGE),
+            (content_right - 1, dialogue_frame::RIGHT_CORNER),
+            (content_right, dialogue_frame::RIGHT_CAP),
+        ] {
+            assert!(tiles.contains(&vertically_flipped_tile(
+                column,
+                bottom_border_row,
+                source_tile,
+            )));
+        }
     }
 
     #[test]
     fn frame_tiles_last_write_wins_bottom_row_is_listed_after_the_fill() {
-        // Confirms the documented draw order: any cell the bottom border
-        // and the right border column both touch (row 19, col 29) has the
-        // bottom border's tile appear strictly after the column's tile 10
-        // in the returned Vec, so a last-write-wins compositor renders the
-        // (correct) bottom-border corner on top instead of a plain column
-        // segment.
         let tiles = MessageBoxLayout::STANDARD.frame_tiles();
-        let column_at_29_19 = tiles
+        let right_column = STANDARD_TILEMAP_LEFT + STANDARD_CONTENT_WIDTH;
+        let bottom_border_row = STANDARD_TILEMAP_TOP + STANDARD_CONTENT_HEIGHT;
+        let fill_position = tiles
             .iter()
-            .position(|t| t.col == 29 && t.row == 19 && t.tile == 10)
+            .position(|tile| {
+                *tile
+                    == normal_tile(
+                        right_column,
+                        bottom_border_row,
+                        dialogue_frame::RIGHT_COLUMN,
+                    )
+            })
             .expect("right border column reaches the shared row");
-        let bottom_border_at_29_19 = tiles
+        let bottom_border_position = tiles
             .iter()
-            .position(|t| t.col == 29 && t.row == 19 && t.tile == 6 && t.v_flip)
-            .expect("bottom border corner at the shared row");
-        assert!(bottom_border_at_29_19 > column_at_29_19);
+            .position(|tile| {
+                *tile
+                    == vertically_flipped_tile(
+                        right_column,
+                        bottom_border_row,
+                        dialogue_frame::RIGHT_CAP,
+                    )
+            })
+            .expect("bottom border corner reaches the shared row");
+        assert!(bottom_border_position > fill_position);
     }
 }
