@@ -246,7 +246,7 @@ pub struct ItemData {
     pub importance: u8,
     /// Preserved registration flag; Emerald does not read it.
     pub registrable: bool,
-    /// Item-family-specific ball, mail, rod, bike, or event discriminator.
+    /// Ball/mail index or rod/bike selector; otherwise preserved raw data.
     pub secondary_id: u8,
 }
 
@@ -295,18 +295,17 @@ enum SecondaryId {
     OldRod,
     GoodRod,
     SuperRod,
-    Raw(u8),
+    UnusedEonTicket,
 }
 
 impl SecondaryId {
     const fn raw(self, item_id: ItemId) -> u8 {
         match self {
             SecondaryId::None | SecondaryId::MachBike | SecondaryId::OldRod => 0,
-            SecondaryId::AcroBike | SecondaryId::GoodRod => 1,
+            SecondaryId::AcroBike | SecondaryId::GoodRod | SecondaryId::UnusedEonTicket => 1,
             SecondaryId::SuperRod => 2,
             SecondaryId::Ball => item_id.offset_from(ItemId::MASTER_BALL),
             SecondaryId::Mail => item_id.offset_from(ItemId::ORANGE_MAIL),
-            SecondaryId::Raw(value) => value,
         }
     }
 }
@@ -678,7 +677,7 @@ define_items! {
     ACRO_BIKE = 272 => item(Price(0), Effect(HoldEffect::NONE, 0), Pocket::KeyItems, ItemUse::Field, BattleUsage::None, Importance(1), CanRegister(true), SecondaryId::AcroBike),
     POKEBLOCK_CASE = 273 => item(Price(0), Effect(HoldEffect::NONE, 0), Pocket::KeyItems, ItemUse::PokeblockCase, BattleUsage::None, Importance(1), CanRegister(true), SecondaryId::None),
     LETTER = 274 => item(Price(0), Effect(HoldEffect::NONE, 0), Pocket::KeyItems, ItemUse::BagMenu, BattleUsage::None, Importance(2), CanRegister(false), SecondaryId::None),
-    EON_TICKET = 275 => item(Price(0), Effect(HoldEffect::NONE, 0), Pocket::KeyItems, ItemUse::BagMenu, BattleUsage::None, Importance(1), CanRegister(false), SecondaryId::Raw(1)),
+    EON_TICKET = 275 => item(Price(0), Effect(HoldEffect::NONE, 0), Pocket::KeyItems, ItemUse::BagMenu, BattleUsage::None, Importance(1), CanRegister(false), SecondaryId::UnusedEonTicket),
     RED_ORB = 276 => item(Price(0), Effect(HoldEffect::NONE, 0), Pocket::KeyItems, ItemUse::BagMenu, BattleUsage::None, Importance(2), CanRegister(false), SecondaryId::None),
     BLUE_ORB = 277 => item(Price(0), Effect(HoldEffect::NONE, 0), Pocket::KeyItems, ItemUse::BagMenu, BattleUsage::None, Importance(2), CanRegister(false), SecondaryId::None),
     SCANNER = 278 => item(Price(0), Effect(HoldEffect::NONE, 0), Pocket::KeyItems, ItemUse::BagMenu, BattleUsage::None, Importance(1), CanRegister(false), SecondaryId::None),
@@ -966,6 +965,9 @@ mod tests {
         assert!(bike.registrable);
         assert_eq!(bike.item_type, ItemType::USE_FIELD);
         assert_eq!(bike.secondary_id, 0);
+
+        let eon_ticket = get(ItemId::EON_TICKET);
+        assert_eq!(eon_ticket.secondary_id, 1);
 
         let reserved = get(ItemId::RESERVED_034);
         assert_eq!(reserved.item_id, ItemId::NONE);
