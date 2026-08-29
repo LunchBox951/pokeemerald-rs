@@ -1,114 +1,46 @@
-//! The asset pack container format `cargo xtask extract` writes and
-//! `crates/assets` reads (issue #81 / Discussion #71 policy A).
+//! Deterministic serializer for the asset-pack format consumed by `crates/assets`.
 //!
-//! # Format (version 1)
-//!
-//! All multi-byte integers are little-endian. Layout, in order:
-//!
-//! ```text
-//! Header:
-//!   magic:        [u8; 8]   = b"PKMRPACK"
-//!   format_version: u32     = 1
-//!   entry_count:  u32
-//!
-//! Directory (entry_count entries, sorted ascending by `id` as raw bytes):
-//!   for each entry:
-//!     id_len:  u16
-//!     id:      [u8; id_len]      UTF-8, normalized asset id (see below)
-//!     kind:    u8                0 = Image, 1 = Palette, 2 = Raw
-//!     offset:  u64                absolute byte offset of the payload
-//!     length:  u64                payload length in bytes
-//!     -- kind-specific fixed metadata --
-//!     Image:   width: u32, height: u32, bit_depth: u8
-//!     Palette: color_count: u16
-//!     Raw:     (none)
-//!
-//! Payload region:
-//!   the concatenation of every entry's payload bytes, in directory order,
-//!   starting immediately after the last directory entry (so the first
-//!   entry's `offset` equals the header+directory size).
-//! ```
-//!
-//! Payload shapes:
-//! - **Image**: `width * height` bytes, one palette-index byte per pixel,
-//!   row-major (see [`crate::extract::png`]).
-//! - **Palette**: `color_count * 2` bytes, one GBA-native packed BGR555
-//!   `u16` (little-endian) per colour (see [`crate::extract::jasc_pal`]).
-//! - **Raw**: opaque bytes, copied verbatim from the upstream source file
-//!   (used for content this pipeline doesn't decode, e.g. `metatiles.bin`
-//!   — see `crate::extract`'s module docs for the exact list).
-//!
-//! # Determinism
-//!
-//! Byte-for-byte reproducibility across runs (on the same upstream ref) is
-//! a hard requirement (issue #81's Definition of Done). This format and its
-//! writer avoid every common source of nondeterminism:
-//! - **No timestamps, no host/filesystem metadata** anywhere in the format.
-//! - **Directory entries are sorted by id** ([`PackWriter::finish`]) rather
-//!   than written in insertion order, so callers walking directories with
-//!   `std::fs::read_dir` (whose iteration order is *not* guaranteed by std)
-//!   can't perturb the output — see `crate::extract`'s directory-walk
-//!   helpers, which additionally sort every `read_dir` listing before use
-//!   as defence in depth.
-//! - **No hashmap iteration**: the writer collects entries into a `Vec` and
-//!   sorts it; nothing here is ever iterated from a `HashMap`.
-//!
-//! # Asset ids: normalized, not decomp-shaped
-//!
-//! Per the owner's Discussion #71 decision, ids are chosen by this pipeline
-//! to name *what the asset is* (e.g. `"tileset/general/tiles"`,
-//! `"sprite/brendan/walking"`), not upstream's linker symbols
-//! (`gTilesetTiles_General`) or raw source paths
-//! (`data/tilesets/primary/general/tiles.png`). The intent (spelled out in
-//! the discussion) is that a future ROM-backed extractor can produce the
-//! exact same ids from a completely different input, so
-//! `crates/assets`'s pack consumer never has to change when policy A (this
-//! decomp-checkout backend) is eventually joined or replaced by policy C
-//! (a ROM-backed `--import-rom` backend). See `crate::extract`'s module
-//! docs for the concrete id scheme this pipeline uses.
+//! A pack contains a fixed header, an asset-id-sorted directory, and payloads
+//! in the same order. Directory rows store the UTF-8 id, content kind, absolute
+//! payload offset, payload length, and kind-specific metadata. All integers are
+//! little-endian.
 
 use std::fmt;
+use std::mem::size_of;
 
-/// The 8-byte magic at the start of every pack file.
+const ID_LENGTH_SIZE: usize = size_of::<u16>();
+const KIND_TAG_SIZE: usize = size_of::<u8>();
+const PAYLOAD_OFFSET_SIZE: usize = size_of::<u64>();
+const PAYLOAD_LENGTH_SIZE: usize = size_of::<u64>();
+const DIRECTORY_ENTRY_FIXED_SIZE: usize =
+    ID_LENGTH_SIZE + KIND_TAG_SIZE + PAYLOAD_OFFSET_SIZE + PAYLOAD_LENGTH_SIZE;
+
+/// Serialization identity at the start of every pack.
 pub const MAGIC: [u8; 8] = *b"PKMRPACK";
 
-/// The format version this writer emits (and the only version
-/// `crates/assets`'s reader accepts).
-///
-/// History: `1` was the original layout; `2` added the NPC sprite-sheet and
-/// palette entries issue #161 needs; `3` added the `audio/sample/*` entries
-/// issue #183 needs (S-4, `#115` child 4) — see `crate::extract::audio_samples`'s
-/// module docs; `4` added the `audio/voicegroup/*` entries those samples
-/// back (issue #182, `#115` child 3); `5` added the `audio/song/mus_title`
-/// entry (issue #181, `#115` child 2) — see `crates/assets/src/audio.rs`'s
-/// module docs, "Versioning"; `6` added the `interface/palette/main_menu_bg`
-/// entry the no-save main menu requires (issue #216, I-3). Each bump is a
-/// pure content addition under the existing [`PackKind`] tags
-/// (`audio/sample/*`, `audio/voicegroup/*`, and `audio/song/*` entries are
-/// all [`PackKind::Raw`]; `interface/palette/*` is [`PackKind::Palette`]);
-/// the wire layout above hasn't changed since `1`.
+/// Pack revision emitted by this writer and accepted by `crates/assets`.
 pub const FORMAT_VERSION: u32 = 6;
 
-/// What kind of content an entry's payload holds.
+const PACK_HEADER_SIZE: usize = MAGIC.len() + size_of::<u32>() + size_of::<u32>();
+
+/// Content kind and directory metadata for an asset.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PackKind {
-    /// A row-major, one-byte-per-pixel indexed bitmap (see the module docs).
+    /// A row-major indexed bitmap with one palette index per byte.
     Image {
         /// Width in pixels.
         width: u32,
         /// Height in pixels.
         height: u32,
-        /// The source PNG's bit depth (2, 4, or 8; 2 is the Latin font
-        /// sheets' `gbagfx` shape — see `xtask::extract::png`'s docs) —
-        /// informational.
+        /// Informational source PNG bit depth: 2, 4, or 8.
         bit_depth: u8,
     },
-    /// A packed GBA BGR555 colour array.
+    /// Little-endian GBA BGR555 colours.
     Palette {
         /// Number of colours.
         color_count: u16,
     },
-    /// Opaque bytes, copied verbatim from an upstream source file.
+    /// Opaque bytes.
     Raw,
 }
 
@@ -120,25 +52,69 @@ impl PackKind {
             Self::Raw => 2,
         }
     }
+
+    const fn metadata_size(self) -> usize {
+        match self {
+            Self::Image { .. } => 2 * size_of::<u32>() + size_of::<u8>(),
+            Self::Palette { .. } => size_of::<u16>(),
+            Self::Raw => 0,
+        }
+    }
+
+    fn write_metadata(self, output: &mut Vec<u8>) {
+        match self {
+            Self::Image {
+                width,
+                height,
+                bit_depth,
+            } => {
+                output.extend_from_slice(&width.to_le_bytes());
+                output.extend_from_slice(&height.to_le_bytes());
+                output.push(bit_depth);
+            }
+            Self::Palette { color_count } => {
+                output.extend_from_slice(&color_count.to_le_bytes());
+            }
+            Self::Raw => {}
+        }
+    }
 }
 
-/// One asset queued for the pack, before its final on-disk offset is known.
+/// An asset waiting to be serialized.
 pub struct PackEntry {
-    /// The normalized asset id (see the module docs).
+    /// Stable lookup id.
     pub id: String,
-    /// The entry's content kind and its fixed metadata.
+    /// Content kind and metadata.
     pub kind: PackKind,
     /// The payload bytes.
     pub payload: Vec<u8>,
 }
 
-/// An error building a pack.
+impl PackEntry {
+    fn directory_size(&self) -> usize {
+        DIRECTORY_ENTRY_FIXED_SIZE + self.id.len() + self.kind.metadata_size()
+    }
+
+    fn write_directory_entry(&self, output: &mut Vec<u8>, payload_offset: u64) {
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "finish rejects ids longer than the serialized u16 length field"
+        )]
+        output.extend_from_slice(&(self.id.len() as u16).to_le_bytes());
+        output.extend_from_slice(self.id.as_bytes());
+        output.push(self.kind.tag());
+        output.extend_from_slice(&payload_offset.to_le_bytes());
+        output.extend_from_slice(&(self.payload.len() as u64).to_le_bytes());
+        self.kind.write_metadata(output);
+    }
+}
+
+/// Failure to serialize an asset pack.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PackWriteError {
-    /// Two entries were queued with the same id. Carries the offending id.
+    /// Multiple entries use the same id.
     DuplicateId(String),
-    /// An id was empty, or longer than `u16::MAX` bytes (the directory's
-    /// `id_len` field cannot represent it).
+    /// An id is empty or cannot fit in the directory's `u16` length field.
     InvalidId(String),
 }
 
@@ -153,38 +129,31 @@ impl fmt::Display for PackWriteError {
 
 impl std::error::Error for PackWriteError {}
 
-/// Accumulates [`PackEntry`] values and serializes them into the pack
-/// format described in the module docs.
+/// Collects assets and serializes a deterministic pack.
 #[derive(Default)]
 pub struct PackWriter {
     entries: Vec<PackEntry>,
 }
 
 impl PackWriter {
-    /// Create an empty writer.
+    /// Creates an empty writer.
     #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Queue one entry. Order of calls does not matter — [`finish`](Self::finish)
-    /// sorts by id before serializing.
+    /// Queues an asset. Serialization order is independent of insertion order.
     pub fn push(&mut self, entry: PackEntry) {
         self.entries.push(entry);
     }
 
-    /// The number of entries queued so far.
-    // `extract`'s manifest always pushes a fixed, nonzero set of entries
-    // before checking this, so an `is_empty` companion (clippy's usual
-    // `len_without_is_empty` ask) would be genuinely dead code here rather
-    // than real API surface.
+    /// Returns the number of queued assets.
     #[must_use]
-    #[allow(clippy::len_without_is_empty)]
     pub fn len(&self) -> usize {
         self.entries.len()
     }
 
-    /// Sort entries by id and serialize the whole pack to bytes.
+    /// Sorts queued assets by id and serializes the pack.
     ///
     /// # Errors
     ///
@@ -194,9 +163,9 @@ impl PackWriter {
     pub fn finish(mut self) -> Result<Vec<u8>, PackWriteError> {
         self.entries.sort_by(|a, b| a.id.cmp(&b.id));
 
-        for pair in self.entries.windows(2) {
-            if pair[0].id == pair[1].id {
-                return Err(PackWriteError::DuplicateId(pair[0].id.clone()));
+        for adjacent_entries in self.entries.windows(2) {
+            if adjacent_entries[0].id == adjacent_entries[1].id {
+                return Err(PackWriteError::DuplicateId(adjacent_entries[0].id.clone()));
             }
         }
         for entry in &self.entries {
@@ -205,70 +174,41 @@ impl PackWriter {
             }
         }
 
-        // Pass 1: compute the directory's total size so payload offsets are
-        // known up front (each entry needs its *final* absolute offset
-        // written into the directory before the payload region is
-        // serialized).
-        let header_size = MAGIC.len() + 4 + 4;
-        let mut directory_size = 0usize;
+        let directory_size: usize = self.entries.iter().map(PackEntry::directory_size).sum();
+        let first_payload_offset = PACK_HEADER_SIZE + directory_size;
+        let payload_size: usize = self.entries.iter().map(|entry| entry.payload.len()).sum();
+
+        let mut output = Vec::with_capacity(first_payload_offset + payload_size);
+        output.extend_from_slice(&MAGIC);
+        output.extend_from_slice(&FORMAT_VERSION.to_le_bytes());
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "a Vec cannot hold more than u32::MAX PackEntry values on supported targets"
+        )]
+        output.extend_from_slice(&(self.entries.len() as u32).to_le_bytes());
+
+        let mut payload_offset = first_payload_offset;
         for entry in &self.entries {
-            directory_size += 2 + entry.id.len() + 1 + 8 + 8;
-            directory_size += match entry.kind {
-                PackKind::Image { .. } => 4 + 4 + 1,
-                PackKind::Palette { .. } => 2,
-                PackKind::Raw => 0,
-            };
-        }
-
-        let mut offset = header_size + directory_size;
-        let mut offsets = Vec::with_capacity(self.entries.len());
-        for entry in &self.entries {
-            offsets.push(offset as u64);
-            offset += entry.payload.len();
-        }
-
-        let mut out = Vec::with_capacity(offset);
-        out.extend_from_slice(&MAGIC);
-        out.extend_from_slice(&FORMAT_VERSION.to_le_bytes());
-        #[allow(clippy::cast_possible_truncation)]
-        out.extend_from_slice(&(self.entries.len() as u32).to_le_bytes());
-
-        for (entry, &entry_offset) in self.entries.iter().zip(&offsets) {
-            #[allow(clippy::cast_possible_truncation)]
-            out.extend_from_slice(&(entry.id.len() as u16).to_le_bytes());
-            out.extend_from_slice(entry.id.as_bytes());
-            out.push(entry.kind.tag());
-            out.extend_from_slice(&entry_offset.to_le_bytes());
-            #[allow(clippy::cast_possible_truncation)]
-            out.extend_from_slice(&(entry.payload.len() as u64).to_le_bytes());
-            match entry.kind {
-                PackKind::Image {
-                    width,
-                    height,
-                    bit_depth,
-                } => {
-                    out.extend_from_slice(&width.to_le_bytes());
-                    out.extend_from_slice(&height.to_le_bytes());
-                    out.push(bit_depth);
-                }
-                PackKind::Palette { color_count } => {
-                    out.extend_from_slice(&color_count.to_le_bytes());
-                }
-                PackKind::Raw => {}
-            }
+            entry.write_directory_entry(&mut output, payload_offset as u64);
+            payload_offset += entry.payload.len();
         }
 
         for entry in &self.entries {
-            out.extend_from_slice(&entry.payload);
+            output.extend_from_slice(&entry.payload);
         }
 
-        Ok(out)
+        Ok(output)
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{PackEntry, PackKind, PackWriteError, PackWriter, FORMAT_VERSION, MAGIC};
+    use std::mem::size_of;
+
+    use super::{
+        PackEntry, PackKind, PackWriteError, PackWriter, FORMAT_VERSION, ID_LENGTH_SIZE,
+        KIND_TAG_SIZE, MAGIC, PACK_HEADER_SIZE,
+    };
 
     #[test]
     fn len_reflects_pushed_entries() {
@@ -285,13 +225,18 @@ mod tests {
     #[test]
     fn empty_pack_has_header_only() {
         let bytes = PackWriter::new().finish().unwrap();
-        assert_eq!(&bytes[0..8], &MAGIC);
+        assert_eq!(&bytes[..MAGIC.len()], &MAGIC);
+        let version_start = MAGIC.len();
+        let version_end = version_start + size_of::<u32>();
         assert_eq!(
-            u32::from_le_bytes(bytes[8..12].try_into().unwrap()),
+            u32::from_le_bytes(bytes[version_start..version_end].try_into().unwrap()),
             FORMAT_VERSION
         );
-        assert_eq!(u32::from_le_bytes(bytes[12..16].try_into().unwrap()), 0);
-        assert_eq!(bytes.len(), 16);
+        assert_eq!(
+            u32::from_le_bytes(bytes[version_end..PACK_HEADER_SIZE].try_into().unwrap()),
+            0
+        );
+        assert_eq!(bytes.len(), PACK_HEADER_SIZE);
     }
 
     #[test]
@@ -309,10 +254,14 @@ mod tests {
         });
         let bytes = writer.finish().unwrap();
 
-        // First directory entry's id_len=3, id="aaa".
-        let id_len = u16::from_le_bytes(bytes[16..18].try_into().unwrap());
-        assert_eq!(id_len, 3);
-        assert_eq!(&bytes[18..21], b"aaa");
+        let first_id_length_end = PACK_HEADER_SIZE + ID_LENGTH_SIZE;
+        let first_id_length = u16::from_le_bytes(
+            bytes[PACK_HEADER_SIZE..first_id_length_end]
+                .try_into()
+                .unwrap(),
+        );
+        let first_id_end = first_id_length_end + usize::from(first_id_length);
+        assert_eq!(&bytes[first_id_length_end..first_id_end], b"aaa");
     }
 
     #[test]
@@ -332,6 +281,22 @@ mod tests {
             writer.finish().unwrap_err(),
             PackWriteError::DuplicateId("dup".into())
         );
+    }
+
+    #[test]
+    fn invalid_ids_are_rejected() {
+        for invalid_id in [String::new(), "x".repeat(usize::from(u16::MAX) + 1)] {
+            let mut writer = PackWriter::new();
+            writer.push(PackEntry {
+                id: invalid_id.clone(),
+                kind: PackKind::Raw,
+                payload: vec![],
+            });
+            assert_eq!(
+                writer.finish().unwrap_err(),
+                PackWriteError::InvalidId(invalid_id)
+            );
+        }
     }
 
     #[test]
@@ -359,17 +324,24 @@ mod tests {
 
     #[test]
     fn offsets_point_past_the_directory() {
-        let mut writer = PackWriter::new();
-        writer.push(PackEntry {
-            id: "a".into(),
+        let id = "a";
+        let entry = PackEntry {
+            id: id.into(),
             kind: PackKind::Raw,
             payload: vec![0xAB],
-        });
+        };
+        let expected_payload_offset = PACK_HEADER_SIZE + entry.directory_size();
+        let mut writer = PackWriter::new();
+        writer.push(entry);
         let bytes = writer.finish().unwrap();
-        // header(16) + directory(id_len:2 + id:1 + kind:1 + offset:8 + length:8 = 20) = 36.
-        // offset field sits at [16+2+1+1 .. +8] = [20..28].
-        let offset = u64::from_le_bytes(bytes[20..28].try_into().unwrap());
-        assert_eq!(offset, 36);
-        assert_eq!(bytes[36], 0xAB);
+        let offset_start = PACK_HEADER_SIZE + ID_LENGTH_SIZE + id.len() + KIND_TAG_SIZE;
+        let offset_end = offset_start + size_of::<u64>();
+        let payload_offset =
+            u64::from_le_bytes(bytes[offset_start..offset_end].try_into().unwrap());
+        assert_eq!(
+            usize::try_from(payload_offset).unwrap(),
+            expected_payload_offset
+        );
+        assert_eq!(bytes[expected_payload_offset], 0xAB);
     }
 }
