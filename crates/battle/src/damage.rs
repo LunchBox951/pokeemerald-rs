@@ -472,6 +472,7 @@ mod tests {
         base_damage, calculate_damage, has_stab, BattleRng, DamageInput, MoveCategory, Weather,
         STRUGGLE,
     };
+    use crate::script_rng::SequenceRng;
     use crate::stat_stage::StatStage;
     use assets::{Effectiveness, MoveId, Type};
 
@@ -499,20 +500,6 @@ mod tests {
         fn next_u16(&mut self) -> u16 {
             self.draws += 1;
             self.value
-        }
-    }
-
-    /// A `BattleRng` that yields a fixed sequence of draws, for pinning
-    /// multi-draw composition order (e.g. [`BattleRng::next_u32`]).
-    struct SequenceRng(std::vec::IntoIter<u16>);
-    impl SequenceRng {
-        fn new(values: impl IntoIterator<Item = u16>) -> Self {
-            Self(values.into_iter().collect::<Vec<_>>().into_iter())
-        }
-    }
-    impl BattleRng for SequenceRng {
-        fn next_u16(&mut self) -> u16 {
-            self.0.next().expect("SequenceRng exhausted")
         }
     }
 
