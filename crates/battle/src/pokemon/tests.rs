@@ -39,6 +39,16 @@ const MAX_EFFECTIVE_EVS: Evs = Evs {
     sp_attack: MAX_EFFECTIVE_EV,
     sp_defense: MAX_EFFECTIVE_EV,
 };
+/// Upstream's level range (`pokeemerald/include/constants/pokemon.h:145`-`:146`)
+/// and move-slot count (`include/constants/global.h:82`), pinned as literals
+/// for the same reason as [`PINNED_MAX_IV`]: derived from production's
+/// [`MIN_LEVEL`]/[`MAX_LEVEL`]/[`MAX_MON_MOVES`], a drift would carry the
+/// rejected input and the accepted boundary along with it and leave the tests
+/// green. Each is cross-checked against its constant exactly once, at the test
+/// that uses it.
+const PINNED_MIN_LEVEL: u8 = 1;
+const PINNED_MAX_LEVEL: u8 = 100;
+const PINNED_MAX_MON_MOVES: usize = 4;
 const BULBASAUR: SpeciesId = SpeciesId(1);
 const BULBASAUR_BASE_HP: u8 = 45;
 const BULBASAUR_BASE_ATTACK: u8 = 49;
@@ -48,8 +58,24 @@ const SCRATCH: MoveId = MoveId(10);
 const TENTACOOL: SpeciesId = SpeciesId(72);
 const ZIGZAGOON: SpeciesId = SpeciesId(288);
 const PICKUP: AbilityId = AbilityId(53);
+/// The old-Unown compatibility hole (`src/data/pokemon/species_info.h:5`) and
+/// the real species on either side of it. Pinned as literals rather than
+/// derived from [`SPECIES_OLD_UNOWN_B`] and [`SPECIES_OLD_UNOWN_Z`]: a reserved
+/// range that grew to swallow Celebi or Treecko would otherwise drag these
+/// fixtures along with it and leave the test green.
+const PINNED_OLD_UNOWN_B: u16 = 252;
+const PINNED_OLD_UNOWN_Z: u16 = 276;
+const OLD_UNOWN_INTERIOR: SpeciesId = SpeciesId(260);
+const CELEBI: SpeciesId = SpeciesId(251);
+const TREECKO: SpeciesId = SpeciesId(277);
 const HARDY_PERSONALITY: u32 = 0x1234_5663;
-const ADAMANT_PERSONALITY: u32 = Nature::Adamant.id() as u32;
+/// `GetNatureFromPersonality` (`pokeemerald/src/pokemon.c:5498`) is
+/// `personality % 25`, and nature id 3 is Adamant. Pinned as literals rather
+/// than read back from [`Nature::id`], which would reduce the assertions below
+/// to a round-trip through the same table they mean to pin.
+const ADAMANT_NATURE_ID: u32 = 3;
+const HARDY_NATURE_ID: u32 = 0;
+const ADAMANT_PERSONALITY: u32 = ADAMANT_NATURE_ID;
 const PERSONALITY_NATURE_CYCLE: u32 = 25;
 const WRAPPED_ADAMANT_PERSONALITY: u32 = ADAMANT_PERSONALITY + PERSONALITY_NATURE_CYCLE;
 const THREE_PP_UPS_ON_FIRST_SLOT: PpBonuses = PpBonuses::from_bits(0b0000_0011);
@@ -276,10 +302,33 @@ fn new_rejects_empty_and_overfull_movesets() {
         BattlePokemon::new(&dex, BULBASAUR, 5, Ivs::default(), 0, vec![]),
         Err(BattleError::InvalidMoveCount(0))
     );
-    let overfull_moves = vec![TACKLE; MAX_MON_MOVES + 1];
+    // The one deliberate cross-check: the literal slot count against
+    // production's constant, so a capacity that shrank fails here rather than
+    // shrinking the "overfull" fixture to match.
+    assert_eq!(MAX_MON_MOVES, PINNED_MAX_MON_MOVES);
+    let overfull_count = PINNED_MAX_MON_MOVES + 1;
     assert_eq!(
-        BattlePokemon::new(&dex, BULBASAUR, 5, Ivs::default(), 0, overfull_moves),
-        Err(BattleError::InvalidMoveCount(MAX_MON_MOVES + 1))
+        BattlePokemon::new(
+            &dex,
+            BULBASAUR,
+            5,
+            Ivs::default(),
+            0,
+            vec![TACKLE; overfull_count]
+        ),
+        Err(BattleError::InvalidMoveCount(overfull_count))
+    );
+    assert!(
+        BattlePokemon::new(
+            &dex,
+            BULBASAUR,
+            5,
+            Ivs::default(),
+            0,
+            vec![TACKLE; PINNED_MAX_MON_MOVES]
+        )
+        .is_ok(),
+        "a full four-slot moveset is legal"
     );
 }
 
@@ -307,8 +356,12 @@ fn new_rejects_move_none_placeholder_slots() {
 fn new_rejects_levels_outside_the_upstream_range() {
     let dex = Dex::new();
     let build = |level| BattlePokemon::new(&dex, BULBASAUR, level, Ivs::default(), 0, vec![TACKLE]);
-    let below_minimum = MIN_LEVEL - 1;
-    let above_maximum = MAX_LEVEL + 1;
+    // The one deliberate cross-check: literal boundaries against production's
+    // constants, so a range that moved fails here rather than moving the
+    // rejected inputs and the accepted boundaries with it.
+    assert_eq!((MIN_LEVEL, MAX_LEVEL), (PINNED_MIN_LEVEL, PINNED_MAX_LEVEL));
+    let below_minimum = 0;
+    let above_maximum = 101;
     assert_eq!(
         build(below_minimum),
         Err(BattleError::InvalidLevel(below_minimum))
@@ -318,8 +371,8 @@ fn new_rejects_levels_outside_the_upstream_range() {
         Err(BattleError::InvalidLevel(above_maximum))
     );
     assert_eq!(build(u8::MAX), Err(BattleError::InvalidLevel(u8::MAX)));
-    assert!(build(MIN_LEVEL).is_ok());
-    assert!(build(MAX_LEVEL).is_ok());
+    assert!(build(PINNED_MIN_LEVEL).is_ok());
+    assert!(build(PINNED_MAX_LEVEL).is_ok());
 }
 
 #[test]
@@ -376,8 +429,18 @@ fn new_rejects_the_species_none_placeholder() {
 #[test]
 fn new_rejects_the_old_unown_reserved_range_but_not_its_neighbours() {
     let dex = Dex::new();
-    let reserved_midpoint = SpeciesId(u16::midpoint(SPECIES_OLD_UNOWN_B.0, SPECIES_OLD_UNOWN_Z.0));
-    for species in [SPECIES_OLD_UNOWN_B, reserved_midpoint, SPECIES_OLD_UNOWN_Z] {
+    // The one deliberate cross-check: the literal fixtures against production's
+    // constants, so a reserved range that moved fails here rather than moving
+    // the neighbours below along with it.
+    assert_eq!(
+        (SPECIES_OLD_UNOWN_B.0, SPECIES_OLD_UNOWN_Z.0),
+        (PINNED_OLD_UNOWN_B, PINNED_OLD_UNOWN_Z)
+    );
+    for species in [
+        SpeciesId(PINNED_OLD_UNOWN_B),
+        OLD_UNOWN_INTERIOR,
+        SpeciesId(PINNED_OLD_UNOWN_Z),
+    ] {
         assert_eq!(
             BattlePokemon::new(&dex, species, 5, Ivs::default(), 0, vec![TACKLE]),
             Err(BattleError::PlaceholderSpecies),
@@ -385,9 +448,7 @@ fn new_rejects_the_old_unown_reserved_range_but_not_its_neighbours() {
             species.0
         );
     }
-    let before_reserved_range = SpeciesId(SPECIES_OLD_UNOWN_B.0 - 1);
-    let after_reserved_range = SpeciesId(SPECIES_OLD_UNOWN_Z.0 + 1);
-    for species in [before_reserved_range, after_reserved_range] {
+    for species in [CELEBI, TREECKO] {
         assert!(
             BattlePokemon::new(&dex, species, 5, Ivs::default(), 0, vec![TACKLE]).is_ok(),
             "real neighbour id {} must construct",
@@ -410,7 +471,7 @@ fn nature_is_derived_from_the_personality_value() {
         compute_stats(BULBASAUR, bulbasaur, 5, Nature::Adamant, MAX_IVS)
     );
     assert_eq!(build(WRAPPED_ADAMANT_PERSONALITY).nature(), Nature::Adamant);
-    assert_eq!(build(Nature::Hardy.id().into()).nature(), Nature::Hardy);
+    assert_eq!(build(HARDY_NATURE_ID).nature(), Nature::Hardy);
 }
 
 #[test]
