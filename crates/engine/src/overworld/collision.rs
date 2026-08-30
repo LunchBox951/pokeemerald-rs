@@ -35,6 +35,9 @@ pub const fn elevations_compatible(
 }
 
 /// Returns whether the standing tile blocks exit or the target tile blocks entry.
+///
+/// The asymmetric edge pairing follows upstream `IsMetatileDirectionallyImpassable`
+/// (`src/event_object_movement.c:4715-4722`).
 #[must_use]
 pub const fn directionally_impassable(
     standing_behavior: u8,
