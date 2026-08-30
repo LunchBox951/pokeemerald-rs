@@ -20,24 +20,15 @@
 //!
 //! ## Configured regions
 //!
-//! | primary tileset | asset | start tile | tiles | phase | interval | sequence |
-//! |---|---|---:|---:|---:|---:|---|
-//! | General | `flower` | 508 | 4 | 0 | 16 | `[0, 1, 0, 2]` |
-//! | General | `water` | 432 | 30 | 1 | 16 | `[0, 1, 2, 3, 4, 5, 6, 7]` |
-//! | General | `sand_water_edge` | 464 | 10 | 2 | 16 | `[0, 1, 2, 3, 4, 5, 6, 0]` |
-//! | General | `waterfall` | 496 | 6 | 3 | 16 | `[0, 1, 2, 3]` |
-//! | General | `land_water_edge` | 480 | 10 | 4 | 16 | `[0, 1, 2, 3]` |
-//! | Building | `tv_turned_on` | 496 | 4 | 0 | 8 | `[0, 1]` |
-//!
-//! `start tile` is a combined-tileset tile index and `tiles` is the exact
-//! packed frame length that [`AnimatedTileset::load`] validates. A region fires
-//! when the counter modulo `interval` equals `phase`; `sequence` lists the
-//! numbered assets in configured array order, which the dispatch index then
-//! walks cyclically. Array order is not dispatch order for a phase-zero region:
-//! its first fire lands at tick `interval`, which selects index 1 rather than
-//! index 0, so `flower` dispatches asset 1 at tick 16 and `tv_turned_on`
-//! dispatches asset 1 at tick 8 (`latched_frame`). A region with a non-zero
-//! `phase` first fires at tick `phase` and does start at index 0.
+//! The per-region assets, tile ranges, cadences, and frame sequences are
+//! owned by `GENERAL_REGIONS` and `BUILDING_REGIONS` below. A region
+//! fires when the counter modulo `fire_interval` equals `fire_phase`;
+//! `frame_sequence` lists the numbered assets in configured array order,
+//! which the dispatch index then walks cyclically. Array order is not
+//! dispatch order for a phase-zero region: its first fire lands at tick
+//! `fire_interval`, which selects index 1 rather than index 0
+//! (`latched_frame`). A region with a non-zero `fire_phase` first fires at
+//! tick `fire_phase` and does start at index 0.
 
 use assets::AssetPack;
 use rendering::BitDepth;
@@ -386,6 +377,43 @@ mod tests {
             latched_frame(8 + 5 * counter_period, phase, interval, frames),
             latched_frame(8, phase, interval, frames)
         );
+    }
+
+    /// Upstream's primary tileset animation counter wraps after 256 ticks
+    /// (`pokeemerald/src/tileset_anims.c:564-569`), a fact about upstream
+    /// rather than about this module, so the oracle here is the literal and
+    /// never [`UPSTREAM_COUNTER_PERIOD`]. Shrinking that constant would
+    /// silently relax the cycle invariant `AnimatedTileset::load` enforces,
+    /// because every configured cycle also divides 128.
+    #[test]
+    fn every_configured_cycle_divides_the_literal_256_tick_upstream_period() {
+        const UPSTREAM_PERIOD_TICKS: u16 = 256;
+
+        assert_eq!(UPSTREAM_COUNTER_PERIOD, UPSTREAM_PERIOD_TICKS);
+        for spec in GENERAL_REGIONS.iter().chain(BUILDING_REGIONS.iter()) {
+            let cycle = spec.fire_interval
+                * u16::try_from(spec.frame_sequence.len()).expect("small static table");
+            assert_eq!(
+                UPSTREAM_PERIOD_TICKS % cycle,
+                0,
+                "{}: cycle {cycle} must divide 256",
+                spec.asset_name
+            );
+
+            let (phase, interval, frames) = cadence(spec);
+            let first_fire = if phase == 0 { interval } else { phase };
+            assert_eq!(
+                latched_frame(
+                    first_fire + u64::from(UPSTREAM_PERIOD_TICKS),
+                    phase,
+                    interval,
+                    frames
+                ),
+                latched_frame(first_fire, phase, interval, frames),
+                "{}: must latch the same frame after a 256-tick wrap",
+                spec.asset_name
+            );
+        }
     }
 
     fn empty_pack() -> AssetPack {
