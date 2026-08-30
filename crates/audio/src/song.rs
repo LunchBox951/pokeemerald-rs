@@ -153,7 +153,8 @@ pub struct Song {
 }
 
 impl Song {
-    /// Creates a song that inherits the current reverb level.
+    /// Creates a song whose reverb override is unset (see
+    /// [`Self::with_reverb`]).
     ///
     /// `initial_tempo` is clamped to the sequence tempo command's BPM domain.
     #[must_use]
@@ -182,22 +183,25 @@ impl Song {
 
     /// Sets the master reverb level, clamped to `0..=127`.
     ///
-    /// Zero explicitly disables reverb; a song without this override inherits
-    /// the current session level (`m4a.c:658`..`:662`).
+    /// Zero explicitly disables reverb. An unset override carries no level of
+    /// its own: [`crate::Sequencer::with_config`] renders it as zero, and only
+    /// a caller that resolves [`Self::reverb_override`] against a session level
+    /// and passes it to [`crate::Sequencer::with_resolved_reverb`] inherits the
+    /// current one (`m4a.c:658`..`:662`).
     #[must_use]
     pub fn with_reverb(mut self, level: u8) -> Self {
         self.reverb_override = Some(level.min(MAX_REVERB_LEVEL));
         self
     }
 
-    /// Returns the overridden reverb level, or zero when the song inherits it.
+    /// Returns the overridden reverb level, or zero when the override is unset.
     #[must_use]
     pub fn reverb(&self) -> u8 {
         self.reverb_override.unwrap_or(0)
     }
 
-    /// Returns `Some(level)` for an explicit override and `None` for inherited
-    /// reverb.
+    /// Returns `Some(level)` for an explicit override and `None` when the
+    /// header left the level to the caller.
     #[must_use]
     pub fn reverb_override(&self) -> Option<u8> {
         self.reverb_override
