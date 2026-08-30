@@ -1,4 +1,12 @@
 //! Affine background tilemaps and texture-space sampling.
+//!
+//! [`AffineBgLayer`] accepts one reference point for the whole frame. Pokémon
+//! Emerald writes the affine parameters once per frame
+//! (`pokeemerald/src/bg.c:244-282`), while mGBA reloads the latched reference
+//! once per frame and advances it per scanline
+//! (`mgba/src/gba/renderers/video-software.c:680-686,742-745`). The static
+//! per-pixel transform matches that usage; mid-frame reference writes are not
+//! modeled.
 
 use crate::affine::AffineMatrix;
 use crate::error::RenderError;
