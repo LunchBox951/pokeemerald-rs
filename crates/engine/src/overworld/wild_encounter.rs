@@ -97,7 +97,7 @@ pub fn level_for_roll(min_level: u8, max_level: u8, roll: u16) -> u8 {
     };
     let level_count = u16::from(max - min) + 1;
     let level = u16::from(min) + (roll % level_count);
-    u8::try_from(level).expect("selected level remains within the ordered u8 bounds")
+    u8::try_from(level).unwrap_or(max)
 }
 
 /// Draws one level from a wild Pokémon slot's inclusive level band.
