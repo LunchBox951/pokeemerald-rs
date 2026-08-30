@@ -1,13 +1,4 @@
-//! A loaded song: its instrument voicegroup plus the decoded tracks the
-//! sequencer plays.
-//!
-//! Behavioural model of `struct SongHeader` + its `ToneData` voicegroup
-//! (`m4a_internal.h:57`, `:223`). [`Instrument`] mirrors `ToneData`'s `type`
-//! field: a DirectSound sample, one of the four CGB PSG channel kinds
-//! (`m4a.c:946`'s `ch` loop), or one of the two indirection kinds —
-//! [`KeySplit`] (`TONEDATA_TYPE_SPL`) and [`Rhythm`] (`TONEDATA_TYPE_RHY`) —
-//! that resolve to a concrete leaf instrument at note-on (`ply_note`,
-//! `m4a_1.s:1580`..`:1609`).
+//! Typed instruments and decoded tracks ready for sequencing.
 
 use std::sync::Arc;
 
@@ -16,33 +7,25 @@ use crate::envelope::Adsr;
 use crate::sample::WaveData;
 use crate::sequence::{clamp_tempo, Event};
 
-/// Every addressable key-split/rhythm slot spans exactly `0..=127`: both are
-/// indexed directly by a raw command key byte, which the decoder guarantees
-/// is always `< 0x80` ([`crate::sequence::decode_track`]'s argument-byte
-/// convention).
+/// Number of MIDI keys addressable by key-split and rhythm instruments.
 pub const KEY_SLOTS: usize = 128;
 
-/// The `pan_sweep` bit marking a rhythm child's own pan override
-/// (`TONEDATA_P_S_PAN`, `m4a_internal.h:60`).
-const PAN_SWEEP_OVERRIDE_BIT: u8 = 0x80;
-/// The `pan_sweep` value subtracted before doubling to derive the rhythm pan
-/// (`TONEDATA_P_S_PAN`, `m4a_internal.h:60`).
-const PAN_SWEEP_BASE: i32 = 0xC0;
+const RHYTHM_PAN_OVERRIDE_BIT: u8 = 0x80;
+const RHYTHM_PAN_CENTER: u8 = 0xC0;
+const MAX_REVERB_LEVEL: u8 = 127;
 
 /// One DirectSound instrument from a voicegroup.
 #[derive(Clone, Debug)]
 pub struct ToneData {
     /// The wave this instrument plays.
     pub wave: Arc<WaveData>,
-    /// The instrument's attack/decay/sustain/release.
+    /// The instrument's volume envelope.
     pub adsr: Adsr,
-    /// `TONEDATA_TYPE_FIX`: play `wave` at its recorded rate, ignoring the
-    /// played note's pitch entirely (see [`Self::fixed`]).
     fixed_rate: bool,
 }
 
 impl ToneData {
-    /// A DirectSound instrument wrapping `wave` with the given envelope.
+    /// Creates a pitched DirectSound instrument.
     #[must_use]
     pub fn new(wave: Arc<WaveData>, adsr: Adsr) -> Self {
         Self {
@@ -52,11 +35,8 @@ impl ToneData {
         }
     }
 
-    /// Mark this instrument fixed-rate (`TONEDATA_TYPE_FIX`): the mixer plays
-    /// `wave` at exactly one source sample per output sample, bypassing
-    /// `MidiKeyToFreq`'s pitch scaling regardless of note key, `BEND`, or
-    /// `KEYSH` (`m4a_1.s`'s `type & TONEDATA_TYPE_FIX` branch, `_081DD07C`..
-    /// `_081DD134`; see [`crate::pitch::FRAC_ONE`]).
+    /// Makes the mixer play one source sample per output sample, independent
+    /// of key, bend, and key shift (`m4a_1.s:498`..`:521`).
     #[must_use]
     pub fn fixed(mut self) -> Self {
         self.fixed_rate = true;
@@ -73,50 +53,38 @@ impl ToneData {
 /// A CGB square-channel instrument (hardware channel 1 or 2).
 #[derive(Clone, Copy, Debug)]
 pub struct SquareTone {
-    /// Duty cycle selector, `0..=3` (12.5%/25%/50%/75%).
+    /// Duty cycle selector: 12.5%, 25%, 50%, or 75%.
     pub duty: u8,
-    /// Raw `NR10`-style sweep byte. Only meaningful on channel 1 — channel 2
-    /// has no hardware sweep register, so a square-2 instrument's sweep is
-    /// simply never read.
+    /// Raw `NR10` sweep byte, ignored by square channel 2.
     pub sweep: u8,
+    /// The instrument's volume envelope.
     pub adsr: CgbAdsr,
-    /// `TONEDATA_TYPE_FIX`: play at Emerald's 8-bit-DAC-corrected frequency
-    /// register rather than the note's plain one (`m4a.c:1184`..`:1202`).
+    /// Whether to use Emerald's fixed-rate CGB tuning.
     pub fixed_rate: bool,
 }
 
 /// A CGB programmable-wave instrument (hardware channel 3).
 #[derive(Clone, Debug)]
 pub struct WaveTone {
-    /// Packed wave RAM: 16 bytes, two 4-bit samples each
-    /// (see [`crate::psg::WaveChannel::decode_wave_ram`]).
-    ///
-    /// A programmable-wave instrument has no output-level field: upstream's
-    /// `voice_programmable_wave` carries only key/pan/wave-pointer and the ADSR
-    /// (`music_voice.inc`; `ToneData`, `m4a_internal.h:57`). Channel-3
-    /// amplitude comes solely from the envelope (`m4a.c:1211`).
+    /// Packed wave RAM: two 4-bit samples per byte.
     pub table: [u8; 16],
+    /// The instrument's volume envelope.
     pub adsr: CgbAdsr,
-    /// `TONEDATA_TYPE_FIX` — see [`SquareTone::fixed_rate`].
+    /// Whether to use Emerald's fixed-rate CGB tuning.
     pub fixed_rate: bool,
 }
 
 /// A CGB noise instrument (hardware channel 4).
 #[derive(Clone, Copy, Debug)]
 pub struct NoiseTone {
-    /// LFSR width selector (`voice_noise`'s `period & 1`,
-    /// `music_voice.inc:105`). Its low bit becomes `NR43` bit 3 (`0x08`),
-    /// selecting the LFSR's narrow (7-bit periodic) mode; `0` leaves it in
-    /// wide 15-bit mode. The `gNoiseTable` control bytes never set this bit
-    /// themselves, so it comes only from the instrument (`m4a.c:1022`).
+    /// Selects the narrow 7-bit LFSR when its low bit is set; otherwise the
+    /// noise channel uses the wide 15-bit LFSR.
     pub lfsr_width_selector: u8,
+    /// The instrument's volume envelope.
     pub adsr: CgbAdsr,
 }
 
-/// One instrument from a voicegroup: a DirectSound sample, one of the four
-/// CGB PSG channel kinds, or an indirection that resolves to one of those
-/// leaf kinds at note-on. Selected uniformly by `VOICE` regardless of which
-/// underlying kind it is (`ToneData::type`, `m4a_internal.h:59`).
+/// A playable voice or a key-based indirection to a playable voice.
 #[derive(Clone, Debug)]
 pub enum Instrument {
     DirectSound(ToneData),
@@ -124,175 +92,113 @@ pub enum Instrument {
     CgbSquare2(SquareTone),
     CgbWave(WaveTone),
     CgbNoise(NoiseTone),
-    /// `TONEDATA_TYPE_SPL`: resolve a child leaf instrument via
-    /// [`KeySplit::table`], keyed by the *played* note key. Pitch keeps using
-    /// the played key — only the child sample/instrument changes at split
-    /// boundaries (`ply_note`, `m4a_1.s:1586`..`:1589`, `:1598`).
+    /// Selects a child through a key-split table.
     KeySplit(KeySplit),
-    /// `TONEDATA_TYPE_RHY`: resolve a child directly by the played note key,
-    /// substituting the child's own base key (and, when set, its own pan)
-    /// for the played note's (`ply_note`, `m4a_1.s:1580`..`:1609`).
+    /// Selects a rhythm child directly by played key.
     Rhythm(Rhythm),
 }
 
-/// A key-split (`TONEDATA_TYPE_SPL`) indirection: `table[key]` selects which
-/// of `children` plays, but pitch/pan resolution continues to use the played
-/// note untouched (`ply_note`, `m4a_1.s:1589`, `:1598`).
-///
-/// A child that is itself a [`Instrument::KeySplit`] or [`Instrument::Rhythm`]
-/// is unsupported (nested indirection): upstream aborts the note rather than
-/// recursing (`_081DDB80`..`b _081DDCEA`, `m4a_1.s:1604`..`:1609`).
+/// Maps each played key to a child instrument without changing that key's
+/// pitch or pan. Nested indirections produce no note (`m4a_1.s:1582`..`:1609`).
 #[derive(Clone, Debug)]
 pub struct KeySplit {
-    /// `keySplitTable[key]` → index into [`Self::children`]
-    /// (`o_MusicPlayerTrack_ToneData_keySplitTable`, `m4a_constants.inc:190`).
-    /// Fixed at [`KEY_SLOTS`] entries: every raw command key (`0..=127`) is
-    /// addressable, so there is never an unchecked read into an adjacent
-    /// table.
+    /// Child index for each played key.
     pub table: [u8; KEY_SLOTS],
-    /// The concrete leaf instruments `table`'s entries index into.
+    /// Leaf instruments indexed by [`Self::table`].
     pub children: Vec<Instrument>,
 }
 
-/// A rhythm (`TONEDATA_TYPE_RHY`) indirection: the played note key indexes
-/// directly into [`Self::children`] (no split table) — a drum-kit-style
-/// mapping where each key triggers a distinct, independently-pitched hit
-/// (`ply_note`, `m4a_1.s:1580`..`:1609`).
+/// Maps each played key directly to a rhythm child.
 #[derive(Clone, Debug)]
 pub struct Rhythm {
-    /// One slot per raw command key (`0..=127`); `None` plays no note.
-    /// Intended to hold exactly [`KEY_SLOTS`] entries so every addressable
-    /// key — including the highest, `127` — is a deliberate, explicit choice
-    /// by whoever builds the voicegroup rather than an unchecked read past
-    /// the table (a shorter `Vec` simply resolves any higher key to `None`,
-    /// same as an empty slot). A `Vec` rather than a fixed array so
-    /// [`Instrument`] can embed [`Rhythm`] without an unconditional `Box`
-    /// indirection on every leaf instrument.
+    /// One optional child per played key. Missing and out-of-range slots are
+    /// silent.
     pub children: Vec<Option<RhythmChild>>,
 }
 
-/// One rhythm slot: a concrete leaf instrument plus the base key (and
-/// optional pan override) that stand in for the played note's own
-/// (`ply_note`, `m4a_1.s:1594`..`:1602`).
+/// A rhythm voice with its own pitch key and optional pan.
 #[derive(Clone, Debug)]
 pub struct RhythmChild {
-    /// The concrete leaf instrument this key triggers.
+    /// The leaf instrument this key triggers.
     pub instrument: Instrument,
-    /// The child's own base key (`ToneData::key`), substituted for the
-    /// played key when resolving pitch (`m4a_1.s:1594`, `o_SoundChannel_type`
-    /// aliasing `o_ToneData_key`'s offset).
+    /// The key used to pitch the child instead of the played key.
     pub base_key: u8,
-    /// Rhythm-pan override, already resolved from `pan_sweep`'s `0x80` bit —
-    /// see [`rhythm_pan_from_pan_sweep`] — or `None` when the bit is unset
-    /// (`m4a_1.s:1587`..`:1593`).
+    /// Pan used instead of the track pan, or `None` to inherit it.
     pub pan: Option<i8>,
 }
 
-/// Resolve a rhythm child's pan override from its raw `ToneData::pan_sweep`
-/// byte: `Some((pan_sweep - 0xC0) * 2)` when the `0x80` override bit is set,
-/// `None` otherwise (`ply_note`, `m4a_1.s:1587`..`:1593`).
+/// Decodes the rhythm pan override stored in a voice's `pan_sweep` byte.
 ///
-/// `pan_sweep` is `0x80..=0xFF` whenever the bit is set, so `pan_sweep -
-/// 0xC0` always lands in `-64..=63`; doubled, `-128..=126` — always
-/// representable in `i8` (upstream reaches the same values via a wrapping
-/// byte subtract + shift; plain `i32` arithmetic reproduces the result
-/// without that indirection `(no-verbatim)`).
+/// The high bit enables `(pan_sweep - 0xC0) * 2`; an unset bit inherits track
+/// pan (`m4a_1.s:1587`..`:1593`).
 #[must_use]
 pub fn rhythm_pan_from_pan_sweep(pan_sweep: u8) -> Option<i8> {
-    if pan_sweep & PAN_SWEEP_OVERRIDE_BIT == 0 {
+    if pan_sweep & RHYTHM_PAN_OVERRIDE_BIT == 0 {
         return None;
     }
-    let doubled = (i32::from(pan_sweep) - PAN_SWEEP_BASE) * 2;
-    Some(i8::try_from(doubled).unwrap_or(0))
+    let doubled = (i32::from(pan_sweep) - i32::from(RHYTHM_PAN_CENTER)) * 2;
+    i8::try_from(doubled).ok()
 }
 
 /// A decoded, ready-to-play song.
 #[derive(Clone, Debug)]
 pub struct Song {
-    /// Instruments, indexed by `VOICE` command.
     voices: Vec<Instrument>,
-    /// Decoded event streams, one per track.
     tracks: Vec<Vec<Event>>,
-    /// Initial tempo in BPM, clamped to [`crate::sequence::MAX_TEMPO_BPM`]
-    /// by [`Self::new`].
-    initial_tempo: u16,
-    /// `SongHeader::priority`, mirrored onto `MusicPlayerInfo::priority` when
-    /// the song starts. It is the base half of every note's effective
-    /// note-on priority: `ply_note` adds the sounding track's own `PRIO` to
-    /// it and saturates the sum at `0xFF` (`m4a_1.s:1628`..`:1633`). Set via
-    /// [`Self::with_priority`].
+    initial_tempo_bpm: u16,
     priority: u8,
-    /// `SongHeader::reverb`, decomposed around its SET bit
-    /// (`m4a_internal.h:12`..`:13`): `None` when the header left the
-    /// session's previously configured master reverb level untouched,
-    /// `Some(level)` (`0..=127`, clamped) when it explicitly set one — `0`
-    /// included, an explicit disable rather than "no reverb specified"
-    /// (`m4a.c:661`..`:662`). Set via [`Self::with_reverb`].
-    reverb: Option<u8>,
+    reverb_override: Option<u8>,
 }
 
 impl Song {
-    /// Assemble a song from a voicegroup, decoded tracks, and an initial
-    /// tempo (BPM). Reverb defaults to `None` (inherit) — see
-    /// [`Self::with_reverb`].
+    /// Creates a song that inherits the current reverb level.
     ///
-    /// `initial_tempo` is clamped to [`crate::sequence::MAX_TEMPO_BPM`], the
-    /// same bound a `TEMPO` command's single doubled operand byte can ever
-    /// carry (`clamp_tempo`) — so a directly constructed `Song` can't hand
-    /// [`crate::sequencer::Sequencer`]'s `u16` tempo accumulator a value
-    /// wide enough to overflow it.
+    /// `initial_tempo` is clamped to the sequence tempo command's BPM domain.
     #[must_use]
     pub fn new(voices: Vec<Instrument>, tracks: Vec<Vec<Event>>, initial_tempo: u16) -> Self {
         Self {
             voices,
             tracks,
-            initial_tempo: clamp_tempo(initial_tempo),
+            initial_tempo_bpm: clamp_tempo(initial_tempo),
             priority: 0,
-            reverb: None,
+            reverb_override: None,
         }
     }
 
-    /// Set this song's header priority (`SongHeader::priority`) -- see
-    /// [`Self::priority`]. Chainable onto [`Self::new`], mirroring
-    /// [`Self::with_reverb`].
+    /// Sets the song priority added to each track's note priority.
     #[must_use]
     pub fn with_priority(mut self, priority: u8) -> Self {
         self.priority = priority;
         self
     }
 
-    /// This song's header priority, the base term of every note's effective
-    /// note-on priority (`m4a_1.s:1628`..`:1633`).
+    /// Returns the song priority.
     #[must_use]
     pub fn priority(&self) -> u8 {
         self.priority
     }
 
-    /// Set this song's master-mix reverb level (`SongHeader::reverb`,
-    /// `0..=127`; `0` explicitly disables it — see [`Self::reverb_override`]
-    /// and [`crate::reverb::Reverb`]). Chainable onto [`Self::new`],
-    /// mirroring [`ToneData::fixed`]'s builder shape.
+    /// Sets the master reverb level, clamped to `0..=127`.
+    ///
+    /// Zero explicitly disables reverb; a song without this override inherits
+    /// the current session level (`m4a.c:658`..`:662`).
     #[must_use]
     pub fn with_reverb(mut self, level: u8) -> Self {
-        self.reverb = Some(level.min(127));
+        self.reverb_override = Some(level.min(MAX_REVERB_LEVEL));
         self
     }
 
-    /// This song's master-mix reverb level, `0` when [`Self::reverb_override`]
-    /// is `None` — a plain numeric accessor for callers that don't need to
-    /// distinguish "inherit the previous level" from an explicit `0`.
+    /// Returns the overridden reverb level, or zero when the song inherits it.
     #[must_use]
     pub fn reverb(&self) -> u8 {
-        self.reverb.unwrap_or(0)
+        self.reverb_override.unwrap_or(0)
     }
 
-    /// `SongHeader::reverb`'s SET bit, decomposed: `Some(level)` when this
-    /// song's header explicitly set a master reverb level (`0` included),
-    /// `None` when it left the session's previously configured level as-is
-    /// (`m4a_internal.h:12`..`:13`; `m4a.c:661`..`:662`).
+    /// Returns `Some(level)` for an explicit override and `None` for inherited
+    /// reverb.
     #[must_use]
     pub fn reverb_override(&self) -> Option<u8> {
-        self.reverb
+        self.reverb_override
     }
 
     /// The instrument at `index`, if the voicegroup has one.
@@ -316,31 +222,28 @@ impl Song {
     /// The song's starting tempo in BPM.
     #[must_use]
     pub fn initial_tempo(&self) -> u16 {
-        self.initial_tempo
+        self.initial_tempo_bpm
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::rhythm_pan_from_pan_sweep;
-    use super::Song;
+    use super::{
+        rhythm_pan_from_pan_sweep, Song, MAX_REVERB_LEVEL, RHYTHM_PAN_CENTER,
+        RHYTHM_PAN_OVERRIDE_BIT,
+    };
     use crate::sequence::MAX_TEMPO_BPM;
 
     #[test]
     fn reverb_level_is_clamped_to_supported_range() {
         let song = || Song::new(Vec::new(), Vec::new(), 150);
 
-        assert_eq!(song().with_reverb(127).reverb(), 127);
-        assert_eq!(song().with_reverb(128).reverb(), 127);
+        assert_eq!(song().with_reverb(MAX_REVERB_LEVEL).reverb(), 127);
+        assert_eq!(song().with_reverb(MAX_REVERB_LEVEL + 1).reverb(), 127);
     }
 
     #[test]
     fn initial_tempo_is_clamped_to_the_tempo_command_domain() {
-        // `TEMPO`'s one operand byte, doubled, can never exceed
-        // `MAX_TEMPO_BPM` (510) -- see `clamp_tempo`'s docs. `Song::new` must
-        // hold a directly constructed song to that same bound so it can
-        // never hand `Sequencer`'s `u16` tempo accumulator a value wide
-        // enough to overflow it (#404).
         assert_eq!(
             Song::new(Vec::new(), Vec::new(), MAX_TEMPO_BPM).initial_tempo(),
             MAX_TEMPO_BPM
@@ -357,11 +260,6 @@ mod tests {
 
     #[test]
     fn no_override_reverb_is_distinct_from_an_explicit_zero() {
-        // `Song::new` alone (no header SET bit) must inherit whatever the
-        // session's reverb was already set to, not force it off -- while
-        // `with_reverb(0)` is a genuine explicit disable. Both read `0`
-        // through the plain numeric accessor, so `reverb_override` is the
-        // only way to tell them apart.
         let inherited = Song::new(Vec::new(), Vec::new(), 150);
         assert_eq!(inherited.reverb_override(), None);
         assert_eq!(inherited.reverb(), 0);
@@ -376,13 +274,13 @@ mod tests {
     }
 
     #[test]
-    fn rhythm_pan_pins_the_upstream_pan_sweep_mapping() {
-        // ply_note (pokeemerald/src/m4a_1.s): only when pan_sweep's bit 7 is
-        // set, rhythm pan = (pan_sweep - 0xC0) << 1. Pin the endpoints and
-        // the unset-bit case so the formula can't drift.
-        assert_eq!(rhythm_pan_from_pan_sweep(0x80), Some(-128));
-        assert_eq!(rhythm_pan_from_pan_sweep(0xC0), Some(0));
-        assert_eq!(rhythm_pan_from_pan_sweep(0xFF), Some(126));
-        assert_eq!(rhythm_pan_from_pan_sweep(0x40), None);
+    fn rhythm_pan_maps_the_enabled_byte_domain() {
+        assert_eq!(
+            rhythm_pan_from_pan_sweep(RHYTHM_PAN_OVERRIDE_BIT),
+            Some(-128)
+        );
+        assert_eq!(rhythm_pan_from_pan_sweep(RHYTHM_PAN_CENTER), Some(0));
+        assert_eq!(rhythm_pan_from_pan_sweep(u8::MAX), Some(126));
+        assert_eq!(rhythm_pan_from_pan_sweep(RHYTHM_PAN_OVERRIDE_BIT / 2), None);
     }
 }
