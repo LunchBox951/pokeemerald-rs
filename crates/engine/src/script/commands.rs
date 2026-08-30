@@ -818,6 +818,31 @@ mod tests {
         };
     }
 
+    /// The six condition bytes `sScriptConditionTable` orders
+    /// (`pokeemerald/src/scrcmd.c`) and the three `comparisonResult` values
+    /// `ScriptCompare` stores. Pinned as literals for the same reason as
+    /// [`opcode!`], rather than read back from [`ScriptCondition`] and
+    /// [`CompareResult`] through `as u8`: a discriminant moved in step with
+    /// `from_byte` and the matcher would otherwise move the tests' inputs
+    /// along with it and leave them green on the wrong mapping.
+    const COND_LESS_THAN: u8 = 0;
+    const COND_EQUAL: u8 = 1;
+    const COND_GREATER_THAN: u8 = 2;
+    const COND_LESS_THAN_OR_EQUAL: u8 = 3;
+    const COND_GREATER_THAN_OR_EQUAL: u8 = 4;
+    const COND_NOT_EQUAL: u8 = 5;
+    const RESULT_LESS: u8 = 0;
+    const RESULT_EQUAL: u8 = 1;
+    const RESULT_GREATER: u8 = 2;
+
+    /// `VAR_RESULT`'s encoded identifier (`include/constants/vars.h:296`,
+    /// `SPECIAL_VARS_START + 0xD`), pinned here instead of read back from
+    /// production's [`VAR_RESULT`] so that renumbering that constant to
+    /// another valid special-variable slot fails
+    /// [`setvar_writes_a_special_var`] rather than moving the operand and the
+    /// assertion together. That test is the one place the two meet.
+    const PINNED_VAR_RESULT: u16 = SPECIAL_VARS_START + 0xD;
+
     fn setup() -> (ScriptContext<'static, 'static, ScriptHost>, ScriptHost) {
         (ScriptContext::new(&COMMAND_TABLE), ScriptHost::default())
     }
@@ -919,26 +944,28 @@ mod tests {
 
     #[test]
     fn goto_if_truth_table_matches_upstream_condition_table() {
+        // (condition byte, comparisonResult byte, expect jump?), both bytes
+        // pinned above rather than read out of the production enums.
         #[rustfmt::skip]
-        let cases = [
-            (ScriptCondition::LessThan, CompareResult::Less, true),
-            (ScriptCondition::LessThan, CompareResult::Equal, false),
-            (ScriptCondition::LessThan, CompareResult::Greater, false),
-            (ScriptCondition::Equal, CompareResult::Less, false),
-            (ScriptCondition::Equal, CompareResult::Equal, true),
-            (ScriptCondition::Equal, CompareResult::Greater, false),
-            (ScriptCondition::GreaterThan, CompareResult::Less, false),
-            (ScriptCondition::GreaterThan, CompareResult::Equal, false),
-            (ScriptCondition::GreaterThan, CompareResult::Greater, true),
-            (ScriptCondition::LessThanOrEqual, CompareResult::Less, true),
-            (ScriptCondition::LessThanOrEqual, CompareResult::Equal, true),
-            (ScriptCondition::LessThanOrEqual, CompareResult::Greater, false),
-            (ScriptCondition::GreaterThanOrEqual, CompareResult::Less, false),
-            (ScriptCondition::GreaterThanOrEqual, CompareResult::Equal, true),
-            (ScriptCondition::GreaterThanOrEqual, CompareResult::Greater, true),
-            (ScriptCondition::NotEqual, CompareResult::Less, true),
-            (ScriptCondition::NotEqual, CompareResult::Equal, false),
-            (ScriptCondition::NotEqual, CompareResult::Greater, true),
+        let cases: [(u8, u8, bool); 18] = [
+            (COND_LESS_THAN,              RESULT_LESS,    true),
+            (COND_LESS_THAN,              RESULT_EQUAL,   false),
+            (COND_LESS_THAN,              RESULT_GREATER, false),
+            (COND_EQUAL,                  RESULT_LESS,    false),
+            (COND_EQUAL,                  RESULT_EQUAL,   true),
+            (COND_EQUAL,                  RESULT_GREATER, false),
+            (COND_GREATER_THAN,           RESULT_LESS,    false),
+            (COND_GREATER_THAN,           RESULT_EQUAL,   false),
+            (COND_GREATER_THAN,           RESULT_GREATER, true),
+            (COND_LESS_THAN_OR_EQUAL,     RESULT_LESS,    true),
+            (COND_LESS_THAN_OR_EQUAL,     RESULT_EQUAL,   true),
+            (COND_LESS_THAN_OR_EQUAL,     RESULT_GREATER, false),
+            (COND_GREATER_THAN_OR_EQUAL,  RESULT_LESS,    false),
+            (COND_GREATER_THAN_OR_EQUAL,  RESULT_EQUAL,   true),
+            (COND_GREATER_THAN_OR_EQUAL,  RESULT_GREATER, true),
+            (COND_NOT_EQUAL,              RESULT_LESS,    true),
+            (COND_NOT_EQUAL,              RESULT_EQUAL,   false),
+            (COND_NOT_EQUAL,              RESULT_GREATER, true),
         ];
 
         for (condition, comparison_result, expect_jump) in cases {
@@ -946,7 +973,7 @@ mod tests {
             let linear_flag = 1u16;
             let target_flag = 2u16;
             let target_offset = 10u32;
-            let mut bytes = vec![opcode!(GOTO_IF), condition as u8];
+            let mut bytes = vec![opcode!(GOTO_IF), condition];
             bytes.extend_from_slice(&target_offset.to_le_bytes());
             bytes.push(opcode!(SET_FLAG));
             bytes.extend_from_slice(&linear_flag.to_le_bytes());
@@ -955,17 +982,17 @@ mod tests {
             bytes.extend_from_slice(&target_flag.to_le_bytes());
             bytes.push(opcode!(END));
             ctx.setup_bytecode(&bytes);
-            ctx.set_comparison_result(comparison_result as u8);
+            ctx.set_comparison_result(comparison_result);
 
             assert!(!ctx.run(&mut host));
             assert_eq!(
                 host.trap, None,
-                "condition {condition:?} result {comparison_result:?}"
+                "condition {condition} result {comparison_result}"
             );
             assert_eq!(
                 host.event_data.flag_get(target_flag),
                 Ok(expect_jump),
-                "condition {condition:?}, comparison result {comparison_result:?}: expected jump = {expect_jump}"
+                "condition {condition}, comparison result {comparison_result}: expected jump = {expect_jump}"
             );
             assert_eq!(host.event_data.flag_get(linear_flag), Ok(!expect_jump));
         }
@@ -981,7 +1008,7 @@ mod tests {
         bytes.extend_from_slice(&VARS_START.to_le_bytes());
         bytes.extend_from_slice(&5u16.to_le_bytes());
         bytes.push(opcode!(CALL_IF));
-        bytes.push(ScriptCondition::Equal as u8);
+        bytes.push(COND_EQUAL);
         bytes.extend_from_slice(&subroutine_offset.to_le_bytes());
         bytes.push(opcode!(SET_FLAG));
         bytes.extend_from_slice(&after_call_flag.to_le_bytes());
@@ -1040,13 +1067,17 @@ mod tests {
     fn setvar_writes_a_special_var() {
         let (mut ctx, mut host) = setup();
         let mut bytes = vec![opcode!(SET_VAR)];
-        bytes.extend_from_slice(&VAR_RESULT.to_le_bytes());
+        bytes.extend_from_slice(&PINNED_VAR_RESULT.to_le_bytes());
         bytes.extend_from_slice(&7u16.to_le_bytes());
         ctx.setup_bytecode(&bytes);
 
         assert!(!ctx.run(&mut host));
         assert_eq!(host.trap, None, "setvar on a special var must not trap");
-        assert_eq!(host.event_data.var_get(VAR_RESULT), Ok(7));
+        assert_eq!(
+            host.event_data.var_get(VAR_RESULT),
+            Ok(7),
+            "the identifier a field script encodes is the slot production's VAR_RESULT names"
+        );
     }
 
     #[test]
@@ -1143,9 +1174,9 @@ mod tests {
     #[test]
     fn compare_var_to_value_sets_comparison_result() {
         for (stored, literal, expected) in [
-            (5u16, 10u16, CompareResult::Less),
-            (5, 5, CompareResult::Equal),
-            (10, 5, CompareResult::Greater),
+            (5u16, 10u16, RESULT_LESS),
+            (5, 5, RESULT_EQUAL),
+            (10, 5, RESULT_GREATER),
         ] {
             let (mut ctx, mut host) = setup();
             host.event_data.var_set(VARS_START, stored).unwrap();
@@ -1157,7 +1188,7 @@ mod tests {
             ctx.run(&mut host);
             assert_eq!(
                 ctx.comparison_result(),
-                expected as u8,
+                expected,
                 "stored={stored} literal={literal}"
             );
         }
@@ -1174,7 +1205,7 @@ mod tests {
         ctx.setup_bytecode(&bytes);
 
         ctx.run(&mut host);
-        assert_eq!(ctx.comparison_result(), 0, "3 < 9");
+        assert_eq!(ctx.comparison_result(), RESULT_LESS, "3 < 9");
     }
 
     #[test]
@@ -1294,7 +1325,7 @@ mod tests {
         bytes.extend_from_slice(&VARS_START.to_le_bytes());
         bytes.extend_from_slice(&5u16.to_le_bytes());
         bytes.push(opcode!(GOTO_STD_IF));
-        bytes.push(ScriptCondition::NotEqual as u8);
+        bytes.push(COND_NOT_EQUAL);
         bytes.push(StdScript::MsgboxSign.index());
         bytes.push(opcode!(END));
         ctx.setup_bytecode(&bytes);
@@ -1312,11 +1343,11 @@ mod tests {
         let (mut ctx, mut host) = setup();
         let bytes = [
             opcode!(GOTO_STD_IF),
-            ScriptCondition::Equal as u8,
+            COND_EQUAL,
             StdScript::MsgboxSign.index(),
         ];
         ctx.setup_bytecode(&bytes);
-        ctx.set_comparison_result(CompareResult::Equal as u8);
+        ctx.set_comparison_result(RESULT_EQUAL);
 
         assert!(!ctx.run(&mut host));
         assert_eq!(
@@ -1330,11 +1361,11 @@ mod tests {
         let (mut ctx, mut host) = setup();
         let bytes = [
             opcode!(CALL_STD_IF),
-            ScriptCondition::Equal as u8,
+            COND_EQUAL,
             StdScript::ObtainDecoration.index(),
         ];
         ctx.setup_bytecode(&bytes);
-        ctx.set_comparison_result(CompareResult::Equal as u8);
+        ctx.set_comparison_result(RESULT_EQUAL);
 
         assert!(!ctx.run(&mut host));
         assert_eq!(
