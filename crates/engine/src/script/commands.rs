@@ -562,11 +562,6 @@ fn unimplemented<const OP: u8>(
 
 macro_rules! define_command_table {
     ($($name:ident = $opcode:literal $(=> $handler:expr)?),+ $(,)?) => {
-        #[cfg(test)]
-        macro_rules! opcode {
-            $(($name) => { $opcode };)+
-        }
-
         /// Handlers indexed by Emerald field-script opcode.
         ///
         /// The table covers `NOP` through `RANDOM`. Entries without an explicit
@@ -736,6 +731,92 @@ define_command_table! {
 mod tests {
     use super::*;
     use crate::event_data::{SPECIAL_FLAGS_START, VARS_START};
+
+    // Keep the bytecode oracle independent from `define_command_table!` so a
+    // coordinated opcode-and-handler mistake still fails the behavior tests.
+    macro_rules! opcode {
+        (NOP) => {
+            0x00
+        };
+        (NOP1) => {
+            0x01
+        };
+        (END) => {
+            0x02
+        };
+        (RETURN) => {
+            0x03
+        };
+        (CALL) => {
+            0x04
+        };
+        (GOTO) => {
+            0x05
+        };
+        (GOTO_IF) => {
+            0x06
+        };
+        (CALL_IF) => {
+            0x07
+        };
+        (GOTO_STD) => {
+            0x08
+        };
+        (CALL_STD) => {
+            0x09
+        };
+        (GOTO_STD_IF) => {
+            0x0a
+        };
+        (CALL_STD_IF) => {
+            0x0b
+        };
+        (RETURN_RAM) => {
+            0x0c
+        };
+        (SET_VAR) => {
+            0x16
+        };
+        (ADD_VAR) => {
+            0x17
+        };
+        (SUB_VAR) => {
+            0x18
+        };
+        (COPY_VAR) => {
+            0x19
+        };
+        (SET_OR_COPY_VAR) => {
+            0x1a
+        };
+        (COMPARE_VAR_TO_VALUE) => {
+            0x21
+        };
+        (COMPARE_VAR_TO_VAR) => {
+            0x22
+        };
+        (SPECIAL) => {
+            0x25
+        };
+        (SPECIAL_VAR) => {
+            0x26
+        };
+        (WAIT_STATE) => {
+            0x27
+        };
+        (SET_FLAG) => {
+            0x29
+        };
+        (CLEAR_FLAG) => {
+            0x2a
+        };
+        (CHECK_FLAG) => {
+            0x2b
+        };
+        (RANDOM) => {
+            0x8f
+        };
+    }
 
     fn setup() -> (ScriptContext<'static, 'static, ScriptHost>, ScriptHost) {
         (ScriptContext::new(&COMMAND_TABLE), ScriptHost::default())
