@@ -14,13 +14,21 @@ use crate::stat_change::CLEAR_BODY;
 use crate::stat_stage::StatStage;
 use assets::{AbilityId, MoveId, SpeciesId, SpeciesTable};
 
+/// Upstream stores each IV in five bits (`MAX_IV_MASK` = 31,
+/// `pokeemerald/include/constants/pokemon.h:201`), so 32 is the first
+/// unrepresentable value. Both are pinned here as literals rather than read
+/// back from production's [`MAX_IV`], so that moving that constant fails these
+/// tests instead of moving the fixture, the accepted boundary, and the
+/// rejected input together.
+const PINNED_MAX_IV: u8 = 31;
+const FIRST_UNREPRESENTABLE_IV: u8 = 32;
 const MAX_IVS: Ivs = Ivs {
-    hp: MAX_IV,
-    attack: MAX_IV,
-    defense: MAX_IV,
-    speed: MAX_IV,
-    sp_attack: MAX_IV,
-    sp_defense: MAX_IV,
+    hp: PINNED_MAX_IV,
+    attack: PINNED_MAX_IV,
+    defense: PINNED_MAX_IV,
+    speed: PINNED_MAX_IV,
+    sp_attack: PINNED_MAX_IV,
+    sp_defense: PINNED_MAX_IV,
 };
 const MAX_EFFECTIVE_EV: u8 = 252;
 const MAX_EFFECTIVE_EVS: Evs = Evs {
@@ -50,24 +58,33 @@ const TACKLE_MAX_PP_WITH_THREE_UPS: u8 = 56;
 
 #[test]
 fn calc_max_hp_matches_hand_computed_bulbasaur_at_level_5() {
-    assert_eq!(calc_max_hp(BULBASAUR, BULBASAUR_BASE_HP, MAX_IV, 0, 5), 21);
+    assert_eq!(
+        calc_max_hp(BULBASAUR, BULBASAUR_BASE_HP, PINNED_MAX_IV, 0, 5),
+        21
+    );
 }
 
 #[test]
 fn calc_max_hp_applies_ev_contribution_before_level_scaling() {
     assert_eq!(
-        calc_max_hp(BULBASAUR, BULBASAUR_BASE_HP, MAX_IV, MAX_EFFECTIVE_EV, 5),
+        calc_max_hp(
+            BULBASAUR,
+            BULBASAUR_BASE_HP,
+            PINNED_MAX_IV,
+            MAX_EFFECTIVE_EV,
+            5
+        ),
         24
     );
-    let no_evs = calc_max_hp(BULBASAUR, BULBASAUR_BASE_HP, MAX_IV, 0, 5);
+    let no_evs = calc_max_hp(BULBASAUR, BULBASAUR_BASE_HP, PINNED_MAX_IV, 0, 5);
     assert_eq!(
         no_evs,
-        calc_max_hp(BULBASAUR, BULBASAUR_BASE_HP, MAX_IV, 3, 5),
+        calc_max_hp(BULBASAUR, BULBASAUR_BASE_HP, PINNED_MAX_IV, 3, 5),
         "EV division truncates before level scaling"
     );
     assert_eq!(
         no_evs,
-        calc_max_hp(BULBASAUR, BULBASAUR_BASE_HP, MAX_IV, 7, 5),
+        calc_max_hp(BULBASAUR, BULBASAUR_BASE_HP, PINNED_MAX_IV, 7, 5),
         "level scaling can truncate an EV contribution"
     );
 }
@@ -78,7 +95,7 @@ fn calc_max_hp_forces_shedinja_to_one_regardless_of_inputs() {
         calc_max_hp(
             SPECIES_SHEDINJA,
             u8::MAX,
-            MAX_IV,
+            PINNED_MAX_IV,
             MAX_EFFECTIVE_EV,
             MAX_LEVEL
         ),
@@ -90,7 +107,7 @@ fn calc_max_hp_forces_shedinja_to_one_regardless_of_inputs() {
 fn calc_stat_applies_nature_after_the_base_offset() {
     let adamant_attack = calc_stat(
         BULBASAUR_BASE_ATTACK,
-        MAX_IV,
+        PINNED_MAX_IV,
         0,
         5,
         Nature::Adamant,
@@ -100,7 +117,7 @@ fn calc_stat_applies_nature_after_the_base_offset() {
     assert_eq!(
         calc_stat(
             BULBASAUR_BASE_ATTACK,
-            MAX_IV,
+            PINNED_MAX_IV,
             0,
             5,
             Nature::Hardy,
@@ -115,7 +132,7 @@ fn calc_stat_applies_ev_contribution_before_level_scaling() {
     assert_eq!(
         calc_stat(
             BULBASAUR_BASE_ATTACK,
-            MAX_IV,
+            PINNED_MAX_IV,
             MAX_EFFECTIVE_EV,
             5,
             Nature::Hardy,
@@ -132,15 +149,29 @@ fn compute_stats_bundles_all_six_stats() {
     let stats = compute_stats(BULBASAUR, bulbasaur, 5, Nature::Hardy, MAX_IVS);
     assert_eq!(
         stats.max_hp,
-        calc_max_hp(BULBASAUR, bulbasaur.hp, MAX_IV, 0, 5)
+        calc_max_hp(BULBASAUR, bulbasaur.hp, PINNED_MAX_IV, 0, 5)
     );
     assert_eq!(
         stats.attack,
-        calc_stat(bulbasaur.attack, MAX_IV, 0, 5, Nature::Hardy, Stat::Attack)
+        calc_stat(
+            bulbasaur.attack,
+            PINNED_MAX_IV,
+            0,
+            5,
+            Nature::Hardy,
+            Stat::Attack
+        )
     );
     assert_eq!(
         stats.speed,
-        calc_stat(bulbasaur.speed, MAX_IV, 0, 5, Nature::Hardy, Stat::Speed)
+        calc_stat(
+            bulbasaur.speed,
+            PINNED_MAX_IV,
+            0,
+            5,
+            Nature::Hardy,
+            Stat::Speed
+        )
     );
 }
 
@@ -297,7 +328,7 @@ fn new_rejects_ivs_above_the_five_bit_maximum() {
     let build = |ivs| BattlePokemon::new(&dex, BULBASAUR, 5, ivs, 0, vec![TACKLE]);
     for over in [
         Ivs {
-            hp: MAX_IV + 1,
+            hp: FIRST_UNREPRESENTABLE_IV,
             ..Ivs::default()
         },
         Ivs {
@@ -309,12 +340,12 @@ fn new_rejects_ivs_above_the_five_bit_maximum() {
     }
     assert_eq!(
         build(Ivs {
-            speed: MAX_IV + 1,
+            speed: FIRST_UNREPRESENTABLE_IV,
             ..Ivs::default()
         }),
-        Err(BattleError::InvalidIv(MAX_IV + 1))
+        Err(BattleError::InvalidIv(FIRST_UNREPRESENTABLE_IV))
     );
-    assert!(build(MAX_IVS).is_ok());
+    assert!(build(MAX_IVS).is_ok(), "31 across the board is legal");
 }
 
 #[test]
@@ -517,9 +548,11 @@ fn heal_is_a_no_op_on_an_already_full_mon() {
 fn ivs_validate_zero_through_max_iv() {
     assert!(Ivs::default().is_valid());
     assert!(MAX_IVS.is_valid());
+    // The one deliberate cross-check: the literal fixture against production's
+    // constant, so `MAX_IV` moving off 31 fails here.
     assert_eq!(MAX_IVS.as_array(), [MAX_IV; 6]);
     assert!(!Ivs {
-        attack: MAX_IV + 1,
+        attack: FIRST_UNREPRESENTABLE_IV,
         ..Ivs::default()
     }
     .is_valid());
