@@ -1,21 +1,3 @@
-//! Named scripted headless runs through the real [`pokeemerald_rs::App`]
-//! (F-3, issue #233).
-//!
-//! A [`ScenarioSpec`] is plain Rust data: an expected initial
-//! [`AppState`](pokeemerald_rs::AppState), followed by per-frame held-button
-//! sets and expected states. [`run`] constructs the same real game flow as
-//! the windowed binary via [`App::new_headless_real`], injects each held set
-//! into the null platform backend, and advances only through [`App::step`].
-//! The runner never calls `flow` directly, sleeps, reads wall time, or owns a
-//! second transition implementation.
-//!
-//! The driver trait is private test infrastructure. Pack-free tests use it
-//! to pin script ordering and failure behavior under CI's existing
-//! `--features smoke` leg; the production implementation is [`App`] itself.
-//! The ignored proving test holds `extract::REAL_PACK_LOCK` while reading the
-//! one developer-local pack, composing safely with every other real-pack
-//! xtask test.
-
 use std::fmt;
 
 use pokeemerald_rs::main_menu::MainMenuItem;
@@ -25,17 +7,12 @@ use crate::ScenarioName;
 
 mod boot_to_first_fight;
 
-/// One exact frame of a scenario: which buttons are held while the app
-/// pumps input, and which state must be active after that frame.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct ScenarioFrame {
     buttons: AppButtons,
     expected: AppState,
 }
 
-/// An in-repository scripted run. All slices are static so adding a
-/// scenario requires no parser, data-file format, or dependency
-/// (`minimal-deps`).
 #[derive(Debug, Clone, Copy)]
 struct ScenarioSpec {
     initial: AppState,
@@ -48,40 +25,15 @@ const BOOT_TO_MAIN_MENU: [ScenarioFrame; 2] = [
         buttons: AppButtons::START,
         expected: AppState::MainMenu(MainMenuItem::NewGame),
     },
-    // Release Start on the next frame and prove the menu remains stable;
-    // otherwise a later scenario could inherit a held key and miss the next
-    // newly-pressed edge.
     ScenarioFrame {
         buttons: AppButtons::NONE,
         expected: AppState::MainMenu(MainMenuItem::NewGame),
     },
 ];
 
-/// `engine::overworld::WALK_FRAMES_PER_TILE`, restated rather than
-/// imported: `xtask` only pulls in `pokeemerald-rs` (behind the `scenes`
-/// feature, `crate` root docs' "asymmetric" note), not `engine` directly --
-/// adding that edge just for one constant would widen the dependency seam
-/// this crate deliberately keeps narrow. Sixteen rendered frames per tile
-/// crossing, matching every citation of the same constant in
-/// `pokeemerald_rs::flow::overworld_phase`'s own real-pack tests.
+// Mirrors `engine::overworld::WALK_FRAMES_PER_TILE` without adding a direct dependency.
 const WALK_FRAMES_PER_TILE: usize = 16;
 
-/// One run of `count` consecutive frames holding `buttons`, all expecting
-/// `expected` -- [`expand_segments`]'s compact authoring unit, so a
-/// multi-hundred-frame walk doesn't need one literal [`ScenarioFrame`] per
-/// frame in this file (`oop-boundaries`).
-///
-/// A held direction only pays a facing-turn frame when the player is at
-/// rest facing a different way
-/// (`engine::overworld::player::PlayerState::step`'s own `running !=
-/// RunningState::Moving` guard on its turn branch): as long as input never
-/// lets go of a direction between two tiles, changing direction costs
-/// nothing extra -- the new direction just steers the very next tile.
-/// [`boot_to_first_fight`]'s own script never releases a direction
-/// mid-walk, so every one of its walking segments runs at exactly
-/// [`WALK_FRAMES_PER_TILE`] frames per tile, turn included, verified
-/// empirically against the real pack while authoring that scenario (see
-/// that constant's own doc comment).
 #[derive(Debug, Clone, Copy)]
 struct Segment {
     buttons: AppButtons,
@@ -89,8 +41,6 @@ struct Segment {
     expected: AppState,
 }
 
-/// Flatten [`Segment`]s into the frame-per-frame script [`ScenarioSpec`]
-/// needs.
 fn expand_segments(segments: &[Segment]) -> Vec<ScenarioFrame> {
     let mut frames = Vec::with_capacity(segments.iter().map(|segment| segment.count).sum());
     for segment in segments {
@@ -105,8 +55,6 @@ fn expand_segments(segments: &[Segment]) -> Vec<ScenarioFrame> {
     frames
 }
 
-/// Look up a parsed scenario's definition. Exhaustive over
-/// [`ScenarioName`], so a new public name cannot silently lack a script.
 fn spec(name: ScenarioName) -> ScenarioSpec {
     match name {
         ScenarioName::BootToMainMenu => ScenarioSpec {
@@ -122,53 +70,32 @@ fn spec(name: ScenarioName) -> ScenarioSpec {
     }
 }
 
-/// Why a named scenario did not complete exactly as specified.
+/// A scenario setup or execution failure. Every `frame` field below is a
+/// zero-based index into the scenario's frames, not a one-based frame number.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ScenarioError {
-    /// Loading the real app/pack failed before the first milestone.
+    /// App creation failed.
     #[cfg(feature = "scenario")]
     Start(String),
-    /// The app did not begin in the scenario's required state.
+    /// The initial app state did not match the scenario.
     InitialState {
-        /// Required state.
         expected: AppState,
-        /// State the app actually reported.
         actual: AppState,
     },
-    /// Supplying one frame's held-button set failed.
-    Input {
-        /// Zero-based frame within the scenario.
-        frame: usize,
-        /// Underlying app/platform diagnostic.
-        reason: String,
-    },
-    /// Advancing the production frame loop failed.
-    Step {
-        /// Zero-based frame within the scenario.
-        frame: usize,
-        /// Underlying app/platform diagnostic.
-        reason: String,
-    },
-    /// A headless app unexpectedly reported a window-style stop.
-    UnexpectedStop {
-        /// Zero-based frame within the scenario.
-        frame: usize,
-    },
-    /// A frame completed but reached the wrong flow state.
+    /// Applying a frame's held buttons failed.
+    Input { frame: usize, reason: String },
+    /// Advancing one app frame failed.
+    Step { frame: usize, reason: String },
+    /// The app stopped before all scenario frames ran.
+    UnexpectedStop { frame: usize },
+    /// A frame ended in an unexpected app state.
     Milestone {
-        /// Zero-based frame within the scenario.
         frame: usize,
-        /// Required post-frame state.
         expected: AppState,
-        /// Actual post-frame state.
         actual: AppState,
     },
-    /// A required scripted first battle left its active state without the
-    /// app retaining a terminal battle outcome.
-    FirstBattleEndedWithoutOutcome {
-        /// Zero-based frame on which the active battle slot emptied.
-        frame: usize,
-    },
+    /// The first battle ended without a terminal outcome.
+    FirstBattleEndedWithoutOutcome { frame: usize },
 }
 
 impl fmt::Display for ScenarioError {
@@ -207,22 +134,17 @@ impl fmt::Display for ScenarioError {
 
 impl std::error::Error for ScenarioError {}
 
-/// A successful scenario summary, returned for CLI output and test
-/// assertions without re-running the app.
+/// Results of a completed scenario.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Report {
-    /// Number of [`App::step`] calls completed.
+    /// Completed frames.
     pub frames_run: usize,
-    /// Distinct expected states reached in order, including the initial
-    /// state and suppressing consecutive duplicates.
+    /// Visited states in order, including the initial state and excluding consecutive duplicates.
     pub milestones: Vec<AppState>,
-    /// The terminal result retained by the app's scripted first-battle
-    /// channel, if this run completed one.
+    /// Retained terminal outcome of the scripted first battle, if one completed.
     pub first_battle_outcome: Option<BattleOutcome>,
 }
 
-/// The minimal owned-driver boundary the runner needs. [`App`] is the only
-/// production implementation; fakes exist only in this module's tests.
 trait ScenarioDriver {
     fn state(&self) -> AppState;
     fn first_battle_outcome(&self) -> Option<BattleOutcome>;
@@ -249,12 +171,11 @@ impl ScenarioDriver for App {
     }
 }
 
-/// Run `name` against the default local pack through the real headless app.
+/// Runs a named scenario against the default pack through the production headless app.
 ///
 /// # Errors
 ///
-/// Returns [`ScenarioError`] if app construction, input injection, a frame
-/// step, or any expected state milestone fails.
+/// Returns [`ScenarioError`] if app creation or a scripted frame fails.
 #[cfg(feature = "scenario")]
 pub fn run(name: ScenarioName) -> Result<Report, ScenarioError> {
     let mut app =
@@ -262,52 +183,49 @@ pub fn run(name: ScenarioName) -> Result<Report, ScenarioError> {
     run_with_driver(spec(name), &mut app)
 }
 
-/// Execute one definition against an owned driver. Kept separate from
-/// [`run`] so pack-free tests can cover the state assertions themselves.
 fn run_with_driver(
     spec: ScenarioSpec,
     driver: &mut impl ScenarioDriver,
 ) -> Result<Report, ScenarioError> {
-    let initial = driver.state();
-    if initial != spec.initial {
+    let actual_initial_state = driver.state();
+    if actual_initial_state != spec.initial {
         return Err(ScenarioError::InitialState {
             expected: spec.initial,
-            actual: initial,
+            actual: actual_initial_state,
         });
     }
 
-    let mut milestones = vec![initial];
-    let mut previous = initial;
-    for (frame, scripted) in spec.frames.iter().enumerate() {
+    let mut milestones = vec![actual_initial_state];
+    let mut previous_state = actual_initial_state;
+    for (frame, expected_frame) in spec.frames.iter().enumerate() {
         driver
-            .set_buttons(scripted.buttons)
+            .set_buttons(expected_frame.buttons)
             .map_err(|reason| ScenarioError::Input { frame, reason })?;
-        let keep_going = driver
+        let should_continue = driver
             .step()
             .map_err(|reason| ScenarioError::Step { frame, reason })?;
-        if !keep_going {
+        if !should_continue {
             return Err(ScenarioError::UnexpectedStop { frame });
         }
 
-        let actual = driver.state();
-        if actual != scripted.expected {
+        let actual_state = driver.state();
+        if actual_state != expected_frame.expected {
             return Err(ScenarioError::Milestone {
                 frame,
-                expected: scripted.expected,
-                actual,
+                expected: expected_frame.expected,
+                actual: actual_state,
             });
         }
-        if spec.requires_first_battle_outcome
-            && previous == AppState::FirstBattle
-            && actual != AppState::FirstBattle
-            && driver.first_battle_outcome().is_none()
-        {
+        let first_battle_ended = spec.requires_first_battle_outcome
+            && previous_state == AppState::FirstBattle
+            && actual_state != AppState::FirstBattle;
+        if first_battle_ended && driver.first_battle_outcome().is_none() {
             return Err(ScenarioError::FirstBattleEndedWithoutOutcome { frame });
         }
-        if milestones.last() != Some(&actual) {
-            milestones.push(actual);
+        if milestones.last() != Some(&actual_state) {
+            milestones.push(actual_state);
         }
-        previous = actual;
+        previous_state = actual_state;
     }
 
     Ok(Report {
@@ -328,30 +246,36 @@ mod tests {
     use pokeemerald_rs::main_menu::MainMenuItem;
     use pokeemerald_rs::{AppButtons, AppState, BattleOutcome};
 
+    struct FakeFrame {
+        expected_buttons: AppButtons,
+        next_state: AppState,
+        should_continue: bool,
+    }
+
     struct FakeDriver {
-        state: AppState,
-        pending: AppButtons,
-        frames: VecDeque<(AppButtons, AppState, bool)>,
+        current_state: AppState,
+        held_buttons: AppButtons,
+        frames: VecDeque<FakeFrame>,
         first_battle_outcome: Option<BattleOutcome>,
     }
 
     impl FakeDriver {
-        fn healthy() -> Self {
+        fn boot_to_main_menu() -> Self {
             Self {
-                state: AppState::Title,
-                pending: AppButtons::NONE,
+                current_state: AppState::Title,
+                held_buttons: AppButtons::NONE,
                 first_battle_outcome: None,
                 frames: VecDeque::from([
-                    (
-                        AppButtons::START,
-                        AppState::MainMenu(MainMenuItem::NewGame),
-                        true,
-                    ),
-                    (
-                        AppButtons::NONE,
-                        AppState::MainMenu(MainMenuItem::NewGame),
-                        true,
-                    ),
+                    FakeFrame {
+                        expected_buttons: AppButtons::START,
+                        next_state: AppState::MainMenu(MainMenuItem::NewGame),
+                        should_continue: true,
+                    },
+                    FakeFrame {
+                        expected_buttons: AppButtons::NONE,
+                        next_state: AppState::MainMenu(MainMenuItem::NewGame),
+                        should_continue: true,
+                    },
                 ]),
             }
         }
@@ -359,7 +283,7 @@ mod tests {
 
     impl ScenarioDriver for FakeDriver {
         fn state(&self) -> AppState {
-            self.state
+            self.current_state
         }
 
         fn first_battle_outcome(&self) -> Option<BattleOutcome> {
@@ -367,29 +291,29 @@ mod tests {
         }
 
         fn set_buttons(&mut self, buttons: AppButtons) -> Result<(), String> {
-            self.pending = buttons;
+            self.held_buttons = buttons;
             Ok(())
         }
 
         fn step(&mut self) -> Result<bool, String> {
-            let Some((expected_buttons, next, keep_going)) = self.frames.pop_front() else {
+            let Some(frame) = self.frames.pop_front() else {
                 return Err("script advanced beyond the fake's frames".to_owned());
             };
-            if self.pending != expected_buttons {
+            if self.held_buttons != frame.expected_buttons {
                 return Err(format!(
                     "expected held bits {:04x}, got {:04x}",
-                    expected_buttons.bits(),
-                    self.pending.bits()
+                    frame.expected_buttons.bits(),
+                    self.held_buttons.bits()
                 ));
             }
-            self.state = next;
-            Ok(keep_going)
+            self.current_state = frame.next_state;
+            Ok(frame.should_continue)
         }
     }
 
     #[test]
     fn boot_to_main_menu_drives_press_release_and_ordered_milestones() {
-        let mut driver = FakeDriver::healthy();
+        let mut driver = FakeDriver::boot_to_main_menu();
         let report = run_with_driver(spec(ScenarioName::BootToMainMenu), &mut driver)
             .expect("the proving scenario should pass");
 
@@ -404,8 +328,8 @@ mod tests {
 
     #[test]
     fn a_wrong_initial_state_fails_before_input() {
-        let mut driver = FakeDriver::healthy();
-        driver.state = AppState::SyntheticBoot;
+        let mut driver = FakeDriver::boot_to_main_menu();
+        driver.current_state = AppState::SyntheticBoot;
         let error = run_with_driver(spec(ScenarioName::BootToMainMenu), &mut driver)
             .expect_err("the title milestone is required");
         assert!(matches!(
@@ -424,8 +348,8 @@ mod tests {
 
     #[test]
     fn a_wrong_post_frame_milestone_fails_closed() {
-        let mut driver = FakeDriver::healthy();
-        driver.frames[0].1 = AppState::Title;
+        let mut driver = FakeDriver::boot_to_main_menu();
+        driver.frames[0].next_state = AppState::Title;
         let error = run_with_driver(spec(ScenarioName::BootToMainMenu), &mut driver)
             .expect_err("the menu milestone is required");
         assert!(matches!(
@@ -440,8 +364,8 @@ mod tests {
 
     #[test]
     fn an_unexpected_stop_fails_before_accepting_the_milestone() {
-        let mut driver = FakeDriver::healthy();
-        driver.frames[0].2 = false;
+        let mut driver = FakeDriver::boot_to_main_menu();
+        driver.frames[0].should_continue = false;
         let error = run_with_driver(spec(ScenarioName::BootToMainMenu), &mut driver)
             .expect_err("a null backend must never stop");
         assert_eq!(error, ScenarioError::UnexpectedStop { frame: 0 });
@@ -450,9 +374,13 @@ mod tests {
     #[test]
     fn a_required_first_battle_rejects_an_aborted_transition() {
         let mut driver = FakeDriver {
-            state: AppState::FirstBattle,
-            pending: AppButtons::NONE,
-            frames: VecDeque::from([(AppButtons::NONE, AppState::Overworld, true)]),
+            current_state: AppState::FirstBattle,
+            held_buttons: AppButtons::NONE,
+            frames: VecDeque::from([FakeFrame {
+                expected_buttons: AppButtons::NONE,
+                next_state: AppState::Overworld,
+                should_continue: true,
+            }]),
             first_battle_outcome: None,
         };
         let scenario = ScenarioSpec {

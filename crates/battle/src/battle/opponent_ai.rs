@@ -191,36 +191,9 @@ mod tests {
     use super::{
         choose_enemy_action_first_battle, choose_enemy_move, selectable_slot, EnemyAction,
     };
-    use crate::damage::BattleRng;
     use crate::pokemon::{BattlePokemon, Ivs, MOVE_NONE};
+    use crate::script_rng::SequenceRng;
     use assets::{MoveId, SpeciesId};
-
-    struct SequenceRng {
-        values: Vec<u16>,
-        index: usize,
-    }
-    impl SequenceRng {
-        fn new(values: impl IntoIterator<Item = u16>) -> Self {
-            Self {
-                values: values.into_iter().collect(),
-                index: 0,
-            }
-        }
-        fn draws(&self) -> usize {
-            self.index
-        }
-    }
-    impl BattleRng for SequenceRng {
-        fn next_u16(&mut self) -> u16 {
-            let v = self
-                .values
-                .get(self.index)
-                .copied()
-                .expect("SequenceRng exhausted");
-            self.index += 1;
-            v
-        }
-    }
 
     const MAX_IVS: Ivs = Ivs {
         hp: 31,
