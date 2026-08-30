@@ -863,6 +863,9 @@ mod tests {
         assert_eq!(ext_ctrl_code_len(EXT_CTRL_CODE_PLAY_BGM), 3);
         assert_eq!(ext_ctrl_code_len(EXT_CTRL_CODE_PLAY_SE), 3);
         assert_eq!(ext_ctrl_code_len(EXT_CTRL_CODE_JPN), 1);
+        // RESUME_MUSIC (0x18) pinned by raw byte: it must stay zero-argument,
+        // and no argument-bearing match arm may absorb it.
+        assert_eq!(ext_ctrl_code_len(0x18), 1);
         assert_eq!(ext_ctrl_code_len(UNKNOWN_EXT_CTRL_CODE), 1);
     }
 
