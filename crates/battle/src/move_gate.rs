@@ -1,39 +1,27 @@
-//! The shared validation shape behind `drain`, `fixed_damage`, and
-//! `multi_hit`'s `ensure_resolvable` (issue #406): each of those pipelines
-//! documents the same contract — checked before any state or RNG is touched
-//! — and until this module existed, each also hand-rolled the same
-//! three-step sequence to enforce it, differing only in which effect
-//! predicate rejected the move.
-//!
-//! [`crate::hit::ensure_resolvable`] is deliberately *not* folded in here:
-//! its own doc comment covers its different checks and ordering (power,
-//! then type, then effect, with a `STRUGGLE` exception), so sharing this
-//! helper with it would force one of the two orderings to bend to fit the
-//! other for no real gain.
+//! Shared move admission for effect-specific execution pipelines.
 
 use assets::{MoveEffect, MoveId};
 
 use crate::dex::Dex;
 use crate::error::BattleError;
 
-/// The lookup → effect-predicate rejection → untyped-move rejection
-/// sequence every `ensure_resolvable` in this crate (bar [`crate::hit`]'s)
-/// follows, parameterised over which effect the caller's pipeline accepts.
+/// Validates move lookup, supported effect, and combat type in that order.
+/// The order determines which failure is reported before execution can
+/// mutate state or consume randomness.
 ///
 /// # Errors
 ///
 /// - [`BattleError::UnknownMove`] if `move_id` is not in `dex`.
-/// - [`BattleError::UnsupportedMoveEffect`] if `is_effect` rejects the
+/// - [`BattleError::UnsupportedMoveEffect`] if `supports_effect` rejects the
 ///   move's `EFFECT_*`.
-/// - [`BattleError::UnsupportedMoveType`] for a `???`-typed move, which
-///   `Cmd_typecalc` could not classify.
+/// - [`BattleError::UnsupportedMoveType`] if the move has no combat type.
 pub(crate) fn ensure_resolvable_effect(
     dex: &Dex,
     move_id: MoveId,
-    is_effect: impl Fn(MoveEffect) -> bool,
+    supports_effect: impl Fn(MoveEffect) -> bool,
 ) -> Result<(), BattleError> {
     let mv = dex.move_data(move_id)?;
-    if !is_effect(mv.effect) {
+    if !supports_effect(mv.effect) {
         return Err(BattleError::UnsupportedMoveEffect(move_id));
     }
     if mv.move_type.battle_type().is_none() {
@@ -49,14 +37,8 @@ mod tests {
     use crate::error::BattleError;
     use assets::MoveId;
 
-    /// `MOVE_CURSE`, the sole `???`-typed move (see
-    /// [`BattleError::UnsupportedMoveType`]'s doc comment) — and, because no
-    /// move both carries an accepted effect and is `???`-typed, the only
-    /// fixture that can reach the type check at all. A predicate that always
-    /// accepts proves the sequence continues past the effect check to reject
-    /// the type; a predicate that always rejects proves the effect check
-    /// still wins first, exactly as every wrapper's doc comment claims.
     const CURSE: MoveId = MoveId(174);
+    const UNKNOWN_MOVE: MoveId = MoveId(60_000);
 
     #[test]
     fn effect_rejection_takes_precedence_over_type_rejection() {
@@ -73,17 +55,14 @@ mod tests {
         );
     }
 
-    /// An unknown move never reaches the predicate at all: `dex.move_data`
-    /// fails first, via `?`, before `is_effect` is ever called.
     #[test]
     fn unknown_move_propagates_before_the_predicate_runs() {
         let dex = Dex::new();
-        let unknown = MoveId(60_000);
         assert_eq!(
-            ensure_resolvable_effect(&dex, unknown, |_| panic!(
+            ensure_resolvable_effect(&dex, UNKNOWN_MOVE, |_| panic!(
                 "the predicate must not be called for an unknown move"
             )),
-            Err(BattleError::UnknownMove(unknown))
+            Err(BattleError::UnknownMove(UNKNOWN_MOVE))
         );
     }
 }
