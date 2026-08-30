@@ -1,25 +1,20 @@
-//! Software waveform generators for the four CGB PSG channels the M4A driver
-//! drives through `NRxx` hardware sound registers in `CgbSound`
-//! (`m4a.c:925`).
-//!
-//! There is no real Game Boy APU underneath this crate, so each channel type
-//! is reimplemented from register semantics as its own sample generator:
-//! [`SquareChannel`] (duty cycle plus channel-1 frequency sweep),
-//! [`WaveChannel`] (32 four-bit samples read from wave RAM), and
-//! [`NoiseChannel`] (the 15-bit/7-bit Galois LFSR). Register formulas are
-//! cross-checked against `mgba/src/gb/audio.c` for clarification only — the
-//! generators here are a from-scratch, unbatched reimplementation
-//! `(no-verbatim)`, stepped once per output sample at
-//! [`crate::pitch::MIXER_RATE`] rather than at the hardware's own clock.
+//! Sample-rate waveform generators for the four CGB programmable sound channels.
 
 use crate::pitch::MIXER_RATE;
 
-/// `.16` fixed-point one, used by every channel's phase accumulator.
 const PHASE_ONE: u32 = 1 << 16;
+const FREQUENCY_REGISTER_RANGE: u16 = 1 << 11;
+const MAX_FREQUENCY_REGISTER: u16 = FREQUENCY_REGISTER_RANGE - 1;
+const SQUARE_CLOCK_HZ: f64 = 131_072.0;
+const SQUARE_STEPS_PER_CYCLE: f64 = 8.0;
+const WAVE_CLOCK_HZ: f64 = 65_536.0;
+const WAVE_STEPS_PER_CYCLE: f64 = 32.0;
+const NOISE_CLOCK_HZ: f64 = 524_288.0;
+const WAVE_RAM_BYTES: usize = 16;
+const WAVE_SAMPLES: usize = WAVE_RAM_BYTES * 2;
+const NIBBLE_ZERO: i8 = 8;
 
-/// The four Game Boy square-wave duty patterns (12.5%, 25%, 50%, 75%), one
-/// high/low flag per of 8 steps. Matches the hardware's `_squareChannelDuty`
-/// table (cross-checked against `mgba/src/gb/audio.c`).
+// CGB duty patterns in register order (mgba/src/gb/audio.c:47-52).
 const DUTY_TABLE: [[bool; 8]; 4] = [
     [false, false, false, false, false, false, false, true],
     [true, false, false, false, false, false, false, true],
@@ -27,82 +22,74 @@ const DUTY_TABLE: [[bool; 8]; 4] = [
     [false, true, true, true, true, true, true, false],
 ];
 
-/// Convert an 11-bit `NRx3`/`NRx4` register value into the channel's real
-/// frequency in Hz. `period_hz` is `131072` for the square channels or
-/// `65536` for the wave channel (the wave channel reads twice as many
-/// samples per cycle).
-fn register_freq_hz(freq_reg: u16, period_hz: f64) -> f64 {
-    let reg = f64::from(freq_reg.min(0x7FF));
-    period_hz / (2048.0 - reg)
+#[derive(Clone, Copy, Debug)]
+#[repr(usize)]
+enum SquareDuty {
+    OneEighth,
+    OneQuarter,
+    OneHalf,
+    ThreeQuarters,
 }
 
-/// `.16` fixed-point per-output-sample phase advance for a generator that
-/// repeats `steps_per_cycle` internal steps at `hz`.
-fn phase_delta(hz: f64, steps_per_cycle: f64) -> u32 {
-    let delta = (hz * steps_per_cycle * f64::from(PHASE_ONE)) / f64::from(MIXER_RATE);
-    // Frequencies in the supported range keep this well within `u32`; a
-    // negative or absurd input (which the register clamp above prevents)
-    // would saturate rather than panic.
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    {
-        delta.max(0.0) as u32
+impl SquareDuty {
+    const REGISTER_MASK: u8 = 0b11;
+
+    fn from_register(value: u8) -> Self {
+        match value & Self::REGISTER_MASK {
+            0 => Self::OneEighth,
+            1 => Self::OneQuarter,
+            2 => Self::OneHalf,
+            3 => Self::ThreeQuarters,
+            _ => unreachable!(),
+        }
+    }
+
+    fn pattern(self) -> &'static [bool; 8] {
+        &DUTY_TABLE[self as usize]
     }
 }
 
-/// Sample-accurate 128 Hz clock for the channel-1 sweep, firing at the exact
-/// sample offset a tick falls on rather than once per whole render buffer.
-///
-/// This is the sweep's tick rate alone, not hardware's general frame
-/// sequencer. The real sequencer runs at 512 Hz and derives each unit from
-/// which of its eight phases just elapsed — length at 256 Hz (phases
-/// `0`/`2`/`4`/`6`), sweep at 128 Hz (phases `2`/`6`), envelope at 64 Hz
-/// (phase `7`) — in `GBAudioUpdateFrame` (`mgba/src/gb/audio.c:659`..`:739`).
-/// Nothing here tracks that eight-phase counter, so a future length or
-/// envelope unit needs the 512 Hz phase itself rather than another consumer
-/// of this type.
-///
-/// [`crate::pitch::MIXER_RATE`] (13,379) is not an integer multiple of 128,
-/// so a fixed samples-per-tick count would drift. This instead keeps an
-/// exact-rational Bresenham accumulator in units of `MIXER_RATE`: every
-/// output sample advances it by 128, and whenever it reaches or passes
-/// `MIXER_RATE` a tick fires and `MIXER_RATE` is subtracted. Because the
-/// accumulator persists in `self` across calls to [`Self::advance`], the
-/// tick offsets produced are identical whether a stream is rendered as one
-/// buffer or split into several smaller ones — see the
-/// `frame_sequencer_128hz` tests in this module and the
-/// `chunk_boundary_invariance` tests in `cgb_voice.rs`.
+fn register_frequency_hz(frequency_register: u16, clock_hz: f64) -> f64 {
+    let frequency_register = f64::from(frequency_register.min(MAX_FREQUENCY_REGISTER));
+    clock_hz / (f64::from(FREQUENCY_REGISTER_RANGE) - frequency_register)
+}
+
+fn phase_delta(hz: f64, steps_per_cycle: f64) -> u32 {
+    let delta = (hz * steps_per_cycle * f64::from(PHASE_ONE)) / f64::from(MIXER_RATE);
+    #[expect(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "register frequencies produce positive deltas within u32"
+    )]
+    {
+        delta as u32
+    }
+}
+
+/// Schedules channel-1 sweep ticks without quantizing them to render buffers.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct FrameSequencer128Hz {
-    /// Accumulated phase, in units of [`crate::pitch::MIXER_RATE`].
-    acc: u32,
+    tick_accumulator: u32,
 }
 
 impl FrameSequencer128Hz {
-    /// The sweep tick rate, in Hz.
+    // A 512 Hz CGB frame sequencer clocks sweep on phases 2 and 6
+    // (mgba/src/gb/audio.c:659-668).
     const TICK_HZ: u32 = 128;
 
-    /// Advance by `samples` output samples, replacing `ticks` with the
-    /// ascending 0-based offsets within `0..samples` at which a 128 Hz tick
-    /// fires.
-    ///
-    /// Writing into a caller-owned buffer is what keeps a steady-state
-    /// render loop allocation-free: [`crate::mixer::Mixer`] keeps one
-    /// buffer sized for a frame's worth of ticks and reuses it every
-    /// [`crate::mixer::Mixer::mix_frame`] (that type's `sweep_ticks` field).
+    /// Replaces `ticks` with the ascending sample offsets where sweep ticks occur.
     pub fn advance_into(&mut self, samples: usize, ticks: &mut Vec<usize>) {
         ticks.clear();
-        for i in 0..samples {
-            self.acc += Self::TICK_HZ;
-            if self.acc >= MIXER_RATE {
-                self.acc -= MIXER_RATE;
-                ticks.push(i);
+        for sample_offset in 0..samples {
+            self.tick_accumulator += Self::TICK_HZ;
+            if self.tick_accumulator >= MIXER_RATE {
+                self.tick_accumulator -= MIXER_RATE;
+                ticks.push(sample_offset);
             }
         }
     }
 
-    /// As [`Self::advance_into`], into a freshly allocated `Vec`. For
-    /// one-shot callers and tests; a per-frame render loop should own its
-    /// buffer and call [`Self::advance_into`] instead.
+    /// Returns the sweep-tick offsets for `samples` output samples.
     #[must_use]
     pub fn advance(&mut self, samples: usize) -> Vec<usize> {
         let mut ticks = Vec::new();
@@ -111,201 +98,158 @@ impl FrameSequencer128Hz {
     }
 }
 
-/// Channel-1 frequency sweep: periodically nudges the playing frequency up
-/// or down, disabling the channel outright on overflow.
-///
-/// Behavioural port of the sweep unit `CgbSound` configures via `NR10`
-/// (`ply_note`'s CGB branch, `m4a_1.s:1773`..`:1783`, and the sweep math
-/// itself is hardware, cross-checked against `mgba/src/gb/audio.c`'s
-/// `_updateSweep` — with one pre-existing divergence on a zero shift, noted
-/// at [`Self::tick`]'s `shift == 0` arm). The real unit ticks from two of
-/// the eight phases of a 512 Hz frame sequencer, i.e. 128 Hz exactly
-/// (`GBAudioUpdateFrame`'s `case 2:`/`case 6:` arm,
-/// `mgba/src/gb/audio.c:663`..`:668`; the 512 Hz base
-/// itself is `FRAME_CYCLES` = `DMG_SM83_FREQUENCY >> 9`,
-/// `mgba/src/gb/audio.c:18`). [`Self::tick`] is driven at that same 128 Hz
-/// cadence by [`FrameSequencer128Hz`], which lands each tick at its correct
-/// sample offset within a render buffer instead of snapping to the buffer
-/// boundary (issue #381) — see [`crate::cgb_voice::CgbVoice::render`]. Before
-/// that fix this type counted whole ~59.73 Hz render frames per step
-/// instead, running sweeping notes roughly 2.14x too slowly.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SweepDirection {
+    Increase,
+    Decrease,
+}
+
+/// Channel-1 frequency sweep state.
 #[derive(Clone, Copy, Debug)]
 pub struct Sweep {
     shift: u8,
-    subtract: bool,
-    /// 128 Hz sequencer ticks between steps; `0` disables the sweep
-    /// entirely (matches hardware: a zero sweep *time* never fires).
-    period: u8,
-    counter: u8,
-    /// The sweep unit's own shadow frequency register, mutated in place.
-    frequency: u16,
+    direction: SweepDirection,
+    period_ticks: u8,
+    ticks_until_step: u8,
+    shadow_frequency: u16,
 }
 
-/// What a [`Sweep::tick`] did on this 128 Hz tick.
+/// Result of advancing a [`Sweep`] by one 128 Hz tick.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SweepResult {
-    /// No step fired, or the step fired but `shift == 0` so it changed
-    /// nothing.
+    /// No frequency change.
     Unchanged,
-    /// The frequency changed; the channel should retune to it.
+    /// Retune the channel to this frequency register value.
     Changed(u16),
-    /// The frequency overflowed past `2047`; the channel must be silenced.
+    /// Silence the channel after a frequency overflow.
     Disable,
 }
 
 impl Sweep {
-    /// Decode a raw `NR10`-style sweep byte: bits `6..=4` are the period,
-    /// bit `3` the direction (set = subtract), bits `2..=0` the shift.
+    const SHIFT_MASK: u8 = 0b111;
+    const DIRECTION_BIT: u8 = 1 << 3;
+    const PERIOD_SHIFT: u32 = 4;
+
+    /// Decodes an `NR10` byte: shift in bits 0..=2, direction in bit 3, and
+    /// period in bits 4..=6.
     #[must_use]
     pub fn from_byte(byte: u8, initial_freq_reg: u16) -> Self {
+        let direction = if byte & Self::DIRECTION_BIT == 0 {
+            SweepDirection::Increase
+        } else {
+            SweepDirection::Decrease
+        };
+        let period_ticks = (byte >> Self::PERIOD_SHIFT) & Self::SHIFT_MASK;
         Self {
-            shift: byte & 0x07,
-            subtract: byte & 0x08 != 0,
-            period: (byte >> 4) & 0x07,
-            counter: (byte >> 4) & 0x07,
-            frequency: initial_freq_reg.min(0x7FF),
+            shift: byte & Self::SHIFT_MASK,
+            direction,
+            period_ticks,
+            ticks_until_step: period_ticks,
+            shadow_frequency: initial_freq_reg.min(MAX_FREQUENCY_REGISTER),
         }
     }
 
-    /// Whether the overflow calc hardware runs *immediately at trigger* would
-    /// disable the channel. On note-on, if the sweep shift is non-zero the
-    /// unit runs one upward overflow check right away — regardless of the sweep
-    /// period, period `0` included (`mgba audio.c:184`, `_updateSweep(ch,
-    /// true)`; the upward branch disables when `frequency + (frequency >>
-    /// shift) >= 2048`, `audio.c:975`..`:986`). A subtract-direction sweep
-    /// never disables at trigger (its result can only fall, `audio.c:969`), so
-    /// this reports `true` only for an additive sweep with non-zero shift whose
-    /// first step would overflow `0x7FF`.
+    fn next_frequency(self) -> Option<u16> {
+        let delta = self.shadow_frequency >> self.shift;
+        match self.direction {
+            SweepDirection::Increase => self
+                .shadow_frequency
+                .checked_add(delta)
+                .filter(|&frequency| frequency <= MAX_FREQUENCY_REGISTER),
+            SweepDirection::Decrease => Some(self.shadow_frequency - delta),
+        }
+    }
+
+    /// Reports whether the hardware's trigger-time sweep calculation overflows.
+    ///
+    /// The check runs for an upward nonzero shift even when the period is zero
+    /// (`mgba/src/gb/audio.c:180-186`).
     #[must_use]
     pub fn overflows_at_trigger(&self) -> bool {
-        if self.subtract || self.shift == 0 {
-            return false;
-        }
-        let delta = self.frequency >> self.shift;
-        self.frequency + delta > 0x7FF
+        self.direction == SweepDirection::Increase
+            && self.shift != 0
+            && self.next_frequency().is_none()
     }
 
-    /// Advance the sweep unit by one 128 Hz sequencer tick (see the type
-    /// doc). Call sites drive this from [`FrameSequencer128Hz`], not once
-    /// per render buffer.
+    /// Advances the sweep by one 128 Hz tick.
     pub fn tick(&mut self) -> SweepResult {
-        if self.period == 0 {
+        if self.period_ticks == 0 {
             return SweepResult::Unchanged;
         }
-        if self.counter == 0 {
-            self.counter = self.period;
+        if self.ticks_until_step == 0 {
+            self.ticks_until_step = self.period_ticks;
         }
-        self.counter -= 1;
-        if self.counter != 0 {
+        self.ticks_until_step -= 1;
+        if self.ticks_until_step != 0 {
             return SweepResult::Unchanged;
         }
-        self.counter = self.period;
+        self.ticks_until_step = self.period_ticks;
         if self.shift == 0 {
-            // Divergence from mGBA, pre-existing and deliberately left alone
-            // here (issue #381 only moved *when* this runs): mGBA still
-            // computes `frequency += frequency >> shift` with `shift == 0`,
-            // i.e. a doubling, and disables the channel when that reaches
-            // `2048` — only the write-back is gated on a non-zero shift
-            // (`mgba/src/gb/audio.c:975`..`:986`). This returns early
-            // instead, so a shift-0 sweep never disables a high-frequency
-            // channel-1 note. Changing that is out of scope for #381.
+            // This API keeps zero shift as a no-op. mGBA still performs its
+            // overflow calculation without writing the result (audio.c:965-987).
             return SweepResult::Unchanged;
         }
 
-        let delta = self.frequency >> self.shift;
-        let new_freq = if self.subtract {
-            i32::from(self.frequency) - i32::from(delta)
-        } else {
-            i32::from(self.frequency) + i32::from(delta)
+        let Some(frequency) = self.next_frequency() else {
+            return SweepResult::Disable;
         };
-        if !(0..=0x7FF).contains(&new_freq) {
+        self.shadow_frequency = frequency;
+
+        // Hardware checks the next upward calculation before playing this one
+        // (mgba/src/gb/audio.c:975-985).
+        if self.direction == SweepDirection::Increase && self.next_frequency().is_none() {
             return SweepResult::Disable;
         }
-        // `new_freq` was just range-checked into `0..=0x7FF`.
-        #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
-        {
-            self.frequency = new_freq as u16;
-        }
 
-        // Hardware immediately re-runs the overflow calc from the
-        // just-updated shadow frequency for an additive sweep
-        // (`_updateSweep(ch, true)`, `mgba/src/gb/audio.c:980`..`:981`): if
-        // that second result would overflow `0x7FF`, the channel disables in
-        // this same step instead of ever emitting the first result. A
-        // subtract-direction sweep never runs this look-ahead — its result
-        // can only fall further from `0x7FF` (`audio.c:965`..`:972`).
-        if !self.subtract {
-            let lookahead_delta = self.frequency >> self.shift;
-            let lookahead = i32::from(self.frequency) + i32::from(lookahead_delta);
-            if lookahead > 0x7FF {
-                return SweepResult::Disable;
-            }
-        }
-
-        SweepResult::Changed(self.frequency)
+        SweepResult::Changed(self.shadow_frequency)
     }
 }
 
-/// A square-wave channel (CGB hardware channels 1 and 2): an 8-step duty
-/// pattern read at a frequency-derived rate, with an optional sweep on
-/// channel 1.
+/// CGB channel 1 or 2 square-wave generator.
 #[derive(Clone, Debug)]
 pub struct SquareChannel {
-    duty: u8,
+    duty: SquareDuty,
     phase: u32,
     step_delta: u32,
     sweep: Option<Sweep>,
-    /// Set when the channel-1 sweep's trigger-time overflow check already fired
-    /// (see [`Sweep::overflows_at_trigger`]): the channel is born dead and the
-    /// voice layer must treat it as immediately inactive, exactly as a sweep
-    /// overflow on a later tick retires it.
-    disabled: bool,
+    disabled_at_trigger: bool,
 }
 
 impl SquareChannel {
-    /// A square channel at `freq_reg` with duty pattern `duty` (`0..=3`,
-    /// wrapped). `sweep` is `Some` only for channel 1 — channel 2 has no
-    /// hardware `NR20` sweep register to drive (`CgbSound`'s `switch(ch)`
-    /// only writes the sweep register in the channel-1 arm before falling
-    /// through, `m4a.c:998`).
+    /// Creates a square channel from its duty and frequency register values.
+    /// The low two duty bits select the pattern; `sweep` is present only for channel 1.
     #[must_use]
     pub fn new(duty: u8, freq_reg: u16, sweep: Option<Sweep>) -> Self {
-        let disabled = sweep.as_ref().is_some_and(Sweep::overflows_at_trigger);
+        let disabled_at_trigger = sweep.as_ref().is_some_and(Sweep::overflows_at_trigger);
         let mut chan = Self {
-            duty: duty & 0x03,
+            duty: SquareDuty::from_register(duty),
             phase: 0,
             step_delta: 0,
             sweep,
-            disabled,
+            disabled_at_trigger,
         };
         chan.set_frequency(freq_reg);
         chan
     }
 
-    /// Whether this channel was born dead because its sweep's trigger-time
-    /// overflow check already fired (see [`Sweep::overflows_at_trigger`]).
+    /// Reports whether the trigger-time sweep check disabled the channel.
     #[must_use]
     pub fn is_disabled(&self) -> bool {
-        self.disabled
+        self.disabled_at_trigger
     }
 
-    /// The sweep unit's current shadow frequency register, or `None` if
-    /// this channel has no sweep configured. Test-only introspection for
-    /// pinning sweep tick cadence (issue #381).
     #[cfg(test)]
     pub(crate) fn sweep_frequency(&self) -> Option<u16> {
-        self.sweep.as_ref().map(|s| s.frequency)
+        self.sweep.as_ref().map(|s| s.shadow_frequency)
     }
 
-    /// Retune to a new 11-bit frequency register value.
+    /// Retunes the channel from an 11-bit frequency register value.
     pub fn set_frequency(&mut self, freq_reg: u16) {
-        let hz = register_freq_hz(freq_reg, 131_072.0);
-        self.step_delta = phase_delta(hz, 8.0);
+        let hz = register_frequency_hz(freq_reg, SQUARE_CLOCK_HZ);
+        self.step_delta = phase_delta(hz, SQUARE_STEPS_PER_CYCLE);
     }
 
-    /// Advance the sweep unit (channel 1 only) by one 128 Hz sequencer tick,
-    /// retuning this channel's rate on a frequency change. Returns `false`
-    /// once the sweep has overflowed and the channel must be silenced.
+    /// Advances channel 1's sweep, returning `false` when it disables the channel.
     pub fn step_sweep_tick(&mut self) -> bool {
         let Some(sweep) = self.sweep.as_mut() else {
             return true;
@@ -320,11 +264,12 @@ impl SquareChannel {
         }
     }
 
-    /// Produce the next bipolar unit sample (`-1` or `1`).
+    /// Produces the next bipolar unit sample.
     pub fn sample(&mut self) -> i8 {
-        let step = (self.phase / PHASE_ONE) as usize & 0x07;
+        let pattern = self.duty.pattern();
+        let step = (self.phase / PHASE_ONE) as usize % pattern.len();
         self.phase = self.phase.wrapping_add(self.step_delta);
-        if DUTY_TABLE[self.duty as usize][step] {
+        if pattern[step] {
             1
         } else {
             -1
@@ -332,44 +277,36 @@ impl SquareChannel {
     }
 }
 
-/// The programmable wave channel (CGB hardware channel 3): 32 four-bit
-/// samples read cyclically at a frequency-derived rate.
+/// CGB channel 3 generator over 32 decoded wave-RAM samples.
 ///
-/// The channel carries no output-level byte of its own: upstream's
-/// `voice_programmable_wave` instrument has no level field (`music_voice.inc`;
-/// `ToneData`, `m4a_internal.h:57`), and channel-3 amplitude comes *solely*
-/// from the envelope, which the driver quantises through `gCgb3Vol` when
-/// writing `NR32` (`*nrx2ptr = gCgb3Vol[envelopeVolume]`, `m4a.c:1211`). That
-/// stepped level is applied in the voice's render path
-/// ([`crate::cgb_voice`]); this generator emits the raw decoded nibble.
+/// Samples remain unscaled because M4A applies `gCgb3Vol` through `NR32`
+/// (`pokeemerald/src/m4a.c:1205-1212`).
 #[derive(Clone, Debug)]
 pub struct WaveChannel {
-    samples: [i8; 32],
+    samples: [i8; WAVE_SAMPLES],
     phase: u32,
     step_delta: u32,
 }
 
 impl WaveChannel {
-    /// Unpack 16 wave-RAM bytes (two 4-bit samples each, high nibble first)
-    /// into 32 signed samples centred on zero (`nibble - 8`).
+    /// Decodes two high-nibble-first samples per wave-RAM byte, centered on zero.
     #[must_use]
-    pub fn decode_wave_ram(bytes: &[u8; 16]) -> [i8; 32] {
-        let mut out = [0i8; 32];
+    pub fn decode_wave_ram(bytes: &[u8; WAVE_RAM_BYTES]) -> [i8; WAVE_SAMPLES] {
+        let mut samples = [0i8; WAVE_SAMPLES];
         for (i, &byte) in bytes.iter().enumerate() {
-            // `nibble` is `0..=15`; the cast to `i8` never truncates.
-            #[allow(clippy::cast_possible_wrap)]
-            let hi = (byte >> 4) as i8 - 8;
-            #[allow(clippy::cast_possible_wrap)]
-            let lo = (byte & 0x0F) as i8 - 8;
-            out[i * 2] = hi;
-            out[i * 2 + 1] = lo;
+            #[expect(clippy::cast_possible_wrap, reason = "a nibble fits in i8")]
+            let high = (byte >> 4) as i8 - NIBBLE_ZERO;
+            #[expect(clippy::cast_possible_wrap, reason = "a nibble fits in i8")]
+            let low = (byte & 0x0F) as i8 - NIBBLE_ZERO;
+            samples[i * 2] = high;
+            samples[i * 2 + 1] = low;
         }
-        out
+        samples
     }
 
-    /// A wave channel over already-decoded `samples` at `freq_reg`.
+    /// Creates a wave channel from decoded samples and a frequency register value.
     #[must_use]
-    pub fn new(samples: [i8; 32], freq_reg: u16) -> Self {
+    pub fn new(samples: [i8; WAVE_SAMPLES], freq_reg: u16) -> Self {
         let mut chan = Self {
             samples,
             phase: 0,
@@ -379,107 +316,121 @@ impl WaveChannel {
         chan
     }
 
-    /// Retune to a new 11-bit frequency register value.
+    /// Retunes the channel from an 11-bit frequency register value.
     pub fn set_frequency(&mut self, freq_reg: u16) {
-        let hz = register_freq_hz(freq_reg, 65_536.0);
-        self.step_delta = phase_delta(hz, 32.0);
+        let hz = register_frequency_hz(freq_reg, WAVE_CLOCK_HZ);
+        self.step_delta = phase_delta(hz, WAVE_STEPS_PER_CYCLE);
     }
 
-    /// Produce the next decoded nibble sample, in `-8..=7`. Channel-3 output
-    /// level is applied later from the envelope (see the type's doc comment),
-    /// not here.
+    /// Produces the next unscaled decoded sample in `-8..=7`.
     pub fn sample(&mut self) -> i8 {
-        let step = (self.phase / PHASE_ONE) as usize & 0x1F;
+        let step = (self.phase / PHASE_ONE) as usize % self.samples.len();
         self.phase = self.phase.wrapping_add(self.step_delta);
         self.samples[step]
     }
 }
 
-/// The noise channel (CGB hardware channel 4): a Galois LFSR clocked at a
-/// rate derived from an `NR43`-style control byte, in either 15-bit (normal)
-/// or 7-bit (narrow) width mode.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum LfsrWidth {
+    FifteenBit,
+    SevenBit,
+}
+
+impl LfsrWidth {
+    const WIDE_FEEDBACK_BIT: u16 = 1 << 14;
+    const NARROW_FEEDBACK_BIT: u16 = 1 << 6;
+
+    fn feedback_bits(self) -> u16 {
+        Self::WIDE_FEEDBACK_BIT
+            | match self {
+                Self::FifteenBit => 0,
+                Self::SevenBit => Self::NARROW_FEEDBACK_BIT,
+            }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct NoiseControl {
+    step_delta: u32,
+    width: LfsrWidth,
+}
+
+impl NoiseControl {
+    const DIVISOR_MASK: u8 = 0b111;
+    const WIDTH_BIT: u8 = 1 << 3;
+    const CLOCK_SHIFT: u32 = 4;
+
+    fn from_byte(byte: u8) -> Self {
+        let clock_shift = byte >> Self::CLOCK_SHIFT;
+        let divisor_code = byte & Self::DIVISOR_MASK;
+        let divisor = if divisor_code == 0 {
+            0.5
+        } else {
+            f64::from(divisor_code)
+        };
+        let hz = NOISE_CLOCK_HZ / divisor / f64::from(1u32 << (clock_shift + 1));
+        let width = if byte & Self::WIDTH_BIT == 0 {
+            LfsrWidth::FifteenBit
+        } else {
+            LfsrWidth::SevenBit
+        };
+        Self {
+            step_delta: phase_delta(hz, 1.0),
+            width,
+        }
+    }
+}
+
+/// CGB channel 4 noise generator.
 #[derive(Clone, Debug)]
 pub struct NoiseChannel {
     lfsr: u16,
-    narrow: bool,
+    width: LfsrWidth,
     phase: u32,
     step_delta: u32,
     output: i8,
 }
 
-/// Decode an `NR43`-style control byte (clock shift in bits `7..=4`, width
-/// mode in bit `3`, divisor ratio in bits `2..=0`) into `(step_delta,
-/// narrow)`. Divisor formula from the Game Boy noise channel: ratio `0` acts
-/// as `0.5`, so its base rate is double every other ratio's.
-fn noise_control(byte: u8) -> (u32, bool) {
-    let shift = byte >> 4;
-    let narrow = byte & 0x08 != 0;
-    let ratio = byte & 0x07;
-    let base_hz = if ratio == 0 {
-        524_288.0 * 2.0
-    } else {
-        524_288.0 / f64::from(ratio)
-    };
-    let hz = base_hz / f64::from(1u32 << (shift + 1));
-    (phase_delta(hz, 1.0), narrow)
-}
-
 impl NoiseChannel {
-    /// Decode an `NR43`-style control byte into a noise channel. The LFSR
-    /// resets to `0`, matching a real channel retrigger.
+    /// Creates a retriggered noise channel from an `NR43` control byte.
     #[must_use]
     pub fn from_control_byte(byte: u8) -> Self {
-        let (step_delta, narrow) = noise_control(byte);
+        let control = NoiseControl::from_byte(byte);
         let mut chan = Self {
             lfsr: 0,
-            narrow,
+            width: control.width,
             phase: 0,
-            step_delta,
+            step_delta: control.step_delta,
             output: -1,
         };
         chan.shift_lfsr();
         chan
     }
 
-    /// Retune to a new control byte without resetting the LFSR, matching a
-    /// live `NR43` rewrite on real hardware (only a channel *trigger*, not a
-    /// frequency change, resets the shift register). The width selector (bit 3)
-    /// is preserved from the note-on control byte, not taken from `byte`,
-    /// mirroring `CgbSound`'s `*nrx3ptr = (*nrx3ptr & 0x08) | frequency`
-    /// (`m4a.c:1200`) — the retune frequency (a `gNoiseTable` entry) never
-    /// carries a width bit of its own.
+    /// Retunes the clock without resetting the LFSR or its trigger-time width.
+    ///
+    /// M4A preserves the `NR43` width bit during pitch writes
+    /// (`pokeemerald/src/m4a.c:1197-1201`).
     pub fn retune(&mut self, byte: u8) {
-        let (step_delta, _narrow) = noise_control(byte);
-        self.step_delta = step_delta;
+        self.step_delta = NoiseControl::from_byte(byte).step_delta;
     }
 
-    /// One Galois LFSR clock: feed back `!(bit0 ^ bit1)` into the top bit
-    /// (and, in narrow mode, into bit 6 as well), then shift right.
     fn shift_lfsr(&mut self) {
-        let feedback = !(self.lfsr ^ (self.lfsr >> 1)) & 1;
-        self.lfsr >>= 1;
-        if feedback == 1 {
-            self.lfsr |= 0x4000;
-            if self.narrow {
-                self.lfsr |= 0x0040;
-            }
-        } else {
-            self.lfsr &= !0x4000;
-            if self.narrow {
-                self.lfsr &= !0x0040;
-            }
+        let feedback_is_high = (self.lfsr ^ (self.lfsr >> 1)) & 1 == 0;
+        let feedback_bits = self.width.feedback_bits();
+        self.lfsr = (self.lfsr >> 1) & !feedback_bits;
+        if feedback_is_high {
+            self.lfsr |= feedback_bits;
         }
-        self.output = if feedback == 1 { 1 } else { -1 };
+        self.output = if feedback_is_high { 1 } else { -1 };
     }
 
-    /// Whether the channel is in narrow (7-bit periodic) mode.
     #[cfg(test)]
     pub(crate) fn is_narrow(&self) -> bool {
-        self.narrow
+        self.width == LfsrWidth::SevenBit
     }
 
-    /// Produce the next bipolar unit sample (`-1` or `1`), clocking the LFSR
-    /// whenever the phase accumulator completes a step.
+    /// Produces the next bipolar sample, clocking the LFSR when its phase advances.
     pub fn sample(&mut self) -> i8 {
         self.phase = self.phase.wrapping_add(self.step_delta);
         while self.phase >= PHASE_ONE {
@@ -494,14 +445,41 @@ impl NoiseChannel {
 mod tests {
     use super::*;
 
+    const HALF_DUTY_REGISTER: u8 = 2;
+    const HIGH_FREQUENCY_REGISTER: u16 = 0x700;
+    const LOOKAHEAD_OVERFLOW_FREQUENCY: u16 = 1046;
+    const SEVEN_BIT_LFSR_PERIOD: usize = 127;
+
+    fn sweep(
+        period_ticks: u8,
+        direction: SweepDirection,
+        shift: u8,
+        initial_frequency: u16,
+    ) -> Sweep {
+        let direction_bit = match direction {
+            SweepDirection::Increase => 0,
+            SweepDirection::Decrease => Sweep::DIRECTION_BIT,
+        };
+        let byte = (period_ticks << Sweep::PERIOD_SHIFT) | direction_bit | shift;
+        Sweep::from_byte(byte, initial_frequency)
+    }
+
+    fn lfsr_repeats_within(mut noise: NoiseChannel, steps: usize) -> bool {
+        noise.step_delta = PHASE_ONE;
+        let initial_state = noise.lfsr;
+        (0..steps).any(|_| {
+            noise.sample();
+            noise.lfsr == initial_state
+        })
+    }
+
     #[test]
     fn duty_pattern_matches_the_hardware_table() {
-        // Duty 2 (50%) is high for steps 0 and 5..=7 (four of eight).
-        let mut chan = SquareChannel::new(2, 0, None);
-        // Force one full 8-step cycle by advancing the phase directly rather
-        // than depending on a specific frequency/sample-rate ratio.
-        chan.step_delta = PHASE_ONE; // one internal step per sample() call
-        let steps: Vec<bool> = (0..8).map(|_| chan.sample() > 0).collect();
+        let mut square = SquareChannel::new(HALF_DUTY_REGISTER, 0, None);
+        square.step_delta = PHASE_ONE;
+        let steps: Vec<bool> = (0..DUTY_TABLE[0].len())
+            .map(|_| square.sample() > 0)
+            .collect();
         assert_eq!(
             steps,
             vec![true, false, false, false, false, true, true, true]
@@ -510,63 +488,52 @@ mod tests {
 
     #[test]
     fn higher_frequency_register_raises_pitch() {
-        let low = SquareChannel::new(2, 0, None);
-        let high = SquareChannel::new(2, 1900, None);
+        let low = SquareChannel::new(HALF_DUTY_REGISTER, 0, None);
+        let high = SquareChannel::new(HALF_DUTY_REGISTER, 1900, None);
         assert!(high.step_delta > low.step_delta);
     }
 
     #[test]
     fn sweep_up_raises_frequency_by_the_shift_formula() {
-        // shift=1, add direction (bit3 clear), period=1: freq += freq>>1.
-        let mut sweep = Sweep::from_byte(0b0001_0001, 100);
-        assert_eq!(sweep.tick(), SweepResult::Changed(150)); // 100 + 50
-        assert_eq!(sweep.tick(), SweepResult::Changed(225)); // 150 + 75
+        let mut sweep = sweep(1, SweepDirection::Increase, 1, 100);
+        assert_eq!(sweep.tick(), SweepResult::Changed(150));
+        assert_eq!(sweep.tick(), SweepResult::Changed(225));
     }
 
     #[test]
     fn sweep_down_lowers_frequency() {
-        // shift=1, subtract direction (bit3 set), period=1.
-        let mut sweep = Sweep::from_byte(0b0001_1001, 100);
-        assert_eq!(sweep.tick(), SweepResult::Changed(50)); // 100 - 50
+        let mut sweep = sweep(1, SweepDirection::Decrease, 1, 100);
+        assert_eq!(sweep.tick(), SweepResult::Changed(50));
     }
 
     #[test]
     fn sweep_overflow_disables_the_channel() {
-        // A large starting frequency plus an aggressive shift overflows 0x7FF.
-        let mut sweep = Sweep::from_byte(0b0001_0001, 0x700); // add, shift 1
+        let mut sweep = sweep(1, SweepDirection::Increase, 1, HIGH_FREQUENCY_REGISTER);
         assert_eq!(sweep.tick(), SweepResult::Disable);
     }
 
     #[test]
     fn sweep_disables_on_post_update_lookahead_overflow() {
-        // Frequency 1046, sweep 0x11 (period 1, add, shift 1): the first
-        // scheduled result (1046 + 523 = 1569) is in range, but hardware
-        // immediately re-runs the overflow calc from that updated shadow
-        // frequency (`_updateSweep(ch, true)`, `mgba/src/gb/audio.c:980`..
-        // `:981`); the look-ahead (1569 + 784 = 2353) overflows `0x7FF`, so
-        // channel 1 must disable in this same sweep step rather than ever
-        // emitting 1569 (issue #134).
-        let mut sweep = Sweep::from_byte(0x11, 1046);
+        let mut sweep = sweep(1, SweepDirection::Increase, 1, LOOKAHEAD_OVERFLOW_FREQUENCY);
         assert_eq!(sweep.tick(), SweepResult::Disable);
     }
 
     #[test]
-    fn sweep_square_channel_and_voice_retire_on_lookahead_overflow() {
-        // The public path from the issue's repro: a channel-1 voice at key
-        // 48 (frequency register 1046) with sweep byte 0x11 stays active
-        // through construction (the *trigger*-time check alone doesn't
-        // overflow), but the very first scheduled `step_sweep_tick` must
-        // retire it once the post-update look-ahead overflows.
-        let sweep = Sweep::from_byte(0x11, 1046);
+    fn square_channel_retires_on_lookahead_overflow() {
+        let sweep = sweep(1, SweepDirection::Increase, 1, LOOKAHEAD_OVERFLOW_FREQUENCY);
         assert!(!sweep.overflows_at_trigger());
-        let mut chan = SquareChannel::new(2, 1046, Some(sweep));
-        assert!(!chan.is_disabled());
-        assert!(!chan.step_sweep_tick());
+        let mut square = SquareChannel::new(
+            HALF_DUTY_REGISTER,
+            LOOKAHEAD_OVERFLOW_FREQUENCY,
+            Some(sweep),
+        );
+        assert!(!square.is_disabled());
+        assert!(!square.step_sweep_tick());
     }
 
     #[test]
     fn zero_period_sweep_never_fires() {
-        let mut sweep = Sweep::from_byte(0b0000_0001, 100); // period 0
+        let mut sweep = sweep(0, SweepDirection::Increase, 1, 100);
         for _ in 0..10 {
             assert_eq!(sweep.tick(), SweepResult::Unchanged);
         }
@@ -574,38 +541,38 @@ mod tests {
 
     #[test]
     fn zero_shift_sweep_ticks_without_changing_frequency() {
-        let mut sweep = Sweep::from_byte(0b0001_0000, 100); // period 1, shift 0
+        let mut sweep = sweep(1, SweepDirection::Increase, 0, 100);
         assert_eq!(sweep.tick(), SweepResult::Unchanged);
     }
 
     #[test]
     fn upward_sweep_overflow_disables_the_channel_at_trigger() {
-        // Hardware runs the overflow calc immediately on trigger when the sweep
-        // shift is non-zero, regardless of the sweep period — period 0 included
-        // (`mgba audio.c:184`). A high starting frequency with an upward shift
-        // overflows 0x7FF and the channel is born dead.
-        let period_zero = Sweep::from_byte(0b0000_0001, 0x700); // period 0, add, shift 1
+        let period_zero = sweep(0, SweepDirection::Increase, 1, HIGH_FREQUENCY_REGISTER);
         assert!(period_zero.overflows_at_trigger());
-        assert!(SquareChannel::new(2, 0x700, Some(period_zero)).is_disabled());
+        assert!(SquareChannel::new(
+            HALF_DUTY_REGISTER,
+            HIGH_FREQUENCY_REGISTER,
+            Some(period_zero)
+        )
+        .is_disabled());
 
-        let with_period = Sweep::from_byte(0b0011_0001, 0x700); // period 3, add, shift 1
+        let with_period = sweep(3, SweepDirection::Increase, 1, HIGH_FREQUENCY_REGISTER);
         assert!(with_period.overflows_at_trigger());
     }
 
     #[test]
     fn trigger_overflow_spares_normal_and_downward_sweeps() {
-        // A frequency whose first upward step stays within 0x7FF is untouched.
-        let normal = Sweep::from_byte(0b0000_0001, 0x100); // add, shift 1: 0x100 + 0x80
+        let normal_frequency = 0x100;
+        let normal = sweep(0, SweepDirection::Increase, 1, normal_frequency);
         assert!(!normal.overflows_at_trigger());
-        assert!(!SquareChannel::new(2, 0x100, Some(normal)).is_disabled());
+        assert!(
+            !SquareChannel::new(HALF_DUTY_REGISTER, normal_frequency, Some(normal)).is_disabled()
+        );
 
-        // A subtract-direction sweep never disables at trigger (its result can
-        // only fall), even from a high frequency.
-        let down = Sweep::from_byte(0b0000_1001, 0x700); // subtract, shift 1
-        assert!(!down.overflows_at_trigger());
+        let downward = sweep(0, SweepDirection::Decrease, 1, HIGH_FREQUENCY_REGISTER);
+        assert!(!downward.overflows_at_trigger());
 
-        // Shift 0 never runs the trigger check at all.
-        let no_shift = Sweep::from_byte(0b0000_0000, 0x7FF); // add, shift 0
+        let no_shift = sweep(0, SweepDirection::Increase, 0, MAX_FREQUENCY_REGISTER);
         assert!(!no_shift.overflows_at_trigger());
     }
 
@@ -613,60 +580,24 @@ mod tests {
     fn wave_ram_decodes_high_nibble_first() {
         let bytes = [0xF0, 0x08, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
         let samples = WaveChannel::decode_wave_ram(&bytes);
-        // 0xF0: hi=0xF(15)-8=7, lo=0x0(0)-8=-8.
-        assert_eq!(samples[0], 7);
-        assert_eq!(samples[1], -8);
-        // 0x08: hi=0x0(0)-8=-8, lo=0x8(8)-8=0.
-        assert_eq!(samples[2], -8);
-        assert_eq!(samples[3], 0);
+        assert_eq!(&samples[..4], &[7, -8, -8, 0]);
     }
 
     #[test]
     fn wave_channel_emits_raw_decoded_nibbles() {
-        // The wave generator carries no output-level of its own — that comes
-        // solely from the envelope via `gCgb3Vol` in the voice render path
-        // (`m4a.c:1211`). `sample()` returns the decoded nibble unattenuated,
-        // so a full-swing entry reads back as its raw `-8..=7` value.
-        let bytes = [0xF0; 16]; // every decoded sample[0] is 0xF - 8 = 7
-        let full = WaveChannel::decode_wave_ram(&bytes);
-        let mut chan = WaveChannel::new(full, 0);
-        chan.step_delta = 0; // stay on sample 0
-        assert_eq!(chan.sample(), 7);
+        let full_amplitude_wave = WaveChannel::decode_wave_ram(&[0xF0; WAVE_RAM_BYTES]);
+        let mut wave = WaveChannel::new(full_amplitude_wave, 0);
+        wave.step_delta = 0;
+        assert_eq!(wave.sample(), 7);
     }
 
     #[test]
     fn noise_narrow_mode_repeats_much_sooner_than_wide_mode() {
-        // 7-bit (narrow) mode has at most 127 distinct LFSR states, so the
-        // output sequence must repeat within that many steps; 15-bit (wide)
-        // mode's period is far longer and must not repeat that quickly.
-        let mut narrow = NoiseChannel::from_control_byte(0x08); // width bit set
-        narrow.step_delta = PHASE_ONE;
-        let first = narrow.lfsr;
-        let mut repeated = false;
-        for _ in 0..127 {
-            narrow.sample();
-            if narrow.lfsr == first {
-                repeated = true;
-                break;
-            }
-        }
-        assert!(repeated, "narrow-mode LFSR should repeat within 127 steps");
+        let narrow = NoiseChannel::from_control_byte(NoiseControl::WIDTH_BIT);
+        assert!(lfsr_repeats_within(narrow, SEVEN_BIT_LFSR_PERIOD));
 
-        let mut wide = NoiseChannel::from_control_byte(0x00); // width bit clear
-        wide.step_delta = PHASE_ONE;
-        let first_wide = wide.lfsr;
-        let mut repeated_wide = false;
-        for _ in 0..127 {
-            wide.sample();
-            if wide.lfsr == first_wide {
-                repeated_wide = true;
-                break;
-            }
-        }
-        assert!(
-            !repeated_wide,
-            "wide-mode LFSR should not repeat within 127 steps"
-        );
+        let wide = NoiseChannel::from_control_byte(0);
+        assert!(!lfsr_repeats_within(wide, SEVEN_BIT_LFSR_PERIOD));
     }
 
     #[test]
@@ -682,49 +613,39 @@ mod tests {
 
     #[test]
     fn frame_sequencer_128hz_pins_the_hardware_tick_offsets() {
-        // 128 Hz against MIXER_RATE=13,379 is not an integer ratio
-        // (13379/128 ~= 104.52); the Bresenham accumulator must land ticks
-        // 104 or 105 samples apart so the average holds at exactly 128 Hz,
-        // matching hardware's sweep cadence (`GBAudioUpdateFrame`'s `case
-        // 2:`/`case 6:` arm, `mgba/src/gb/audio.c:663`..`:668`) rather than
-        // the old ~59.73 Hz once-per-render-buffer cadence this replaced
-        // (issue #381).
-        let mut seq = FrameSequencer128Hz::default();
-        let ticks = seq.advance(1200);
+        let mut clock = FrameSequencer128Hz::default();
+        let ticks = clock.advance(1200);
         assert_eq!(
             ticks,
             vec![104, 209, 313, 418, 522, 627, 731, 836, 940, 1045, 1149]
         );
-        let spacings: Vec<usize> = ticks.windows(2).map(|w| w[1] - w[0]).collect();
+        let spacings: Vec<usize> = ticks
+            .windows(2)
+            .map(|window| window[1] - window[0])
+            .collect();
+        let floor_spacing = usize::try_from(MIXER_RATE / FrameSequencer128Hz::TICK_HZ)
+            .expect("sample spacing fits usize");
         assert!(
-            spacings.iter().all(|&d| d == 104 || d == 105),
-            "every tick spacing must be 104 or 105 samples, got {spacings:?}"
+            spacings
+                .iter()
+                .all(|&spacing| spacing == floor_spacing || spacing == floor_spacing + 1),
+            "unexpected tick spacing: {spacings:?}"
         );
     }
 
     #[test]
     fn frame_sequencer_128hz_does_not_drift_over_long_runs() {
-        // The rate is exactly 128 Hz, not 128-ish: one second of output
-        // (`MIXER_RATE` samples) must contain exactly 128 ticks, and ten
-        // seconds exactly 1280, with no accumulated rounding either way. A
-        // fixed 104- or 105-samples-per-tick stride would land on 128.6 or
-        // 127.4 ticks per second and drift a whole tick every few seconds
-        // (issue #381).
         let one_second = usize::try_from(MIXER_RATE).expect("MIXER_RATE fits a usize");
 
-        let mut seq = FrameSequencer128Hz::default();
-        assert_eq!(seq.advance(one_second).len(), 128);
+        let mut one_second_clock = FrameSequencer128Hz::default();
+        assert_eq!(one_second_clock.advance(one_second).len(), 128);
 
-        let mut ten_seconds = FrameSequencer128Hz::default();
-        assert_eq!(ten_seconds.advance(10 * one_second).len(), 1280);
+        let mut ten_second_clock = FrameSequencer128Hz::default();
+        assert_eq!(ten_second_clock.advance(10 * one_second).len(), 1280);
     }
 
     #[test]
     fn frame_sequencer_128hz_chunk_boundary_invariance() {
-        // The same persistent accumulator must produce identical absolute
-        // tick offsets whether a stream renders as one buffer or as several
-        // smaller ones back to back (issue #381's chunk-boundary-invariance
-        // requirement).
         let mut whole = FrameSequencer128Hz::default();
         let whole_ticks = whole.advance(600);
 
