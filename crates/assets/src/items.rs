@@ -837,6 +837,30 @@ mod tests {
     };
     use crate::error::AssetError;
 
+    /// Upstream `HOLD_EFFECT_*` ids, spelled as literals so the item checks
+    /// stay independent of the [`HoldEffect`] constants and still fail if a
+    /// hold effect is renumbered.
+    const EXPECTED_HOLD_EFFECT_NONE: HoldEffect = HoldEffect(0);
+    const EXPECTED_HOLD_EFFECT_CURE_PARALYSIS: HoldEffect = HoldEffect(2);
+    const EXPECTED_HOLD_EFFECT_FLINCH: HoldEffect = HoldEffect(30);
+    const EXPECTED_HOLD_EFFECT_LEFTOVERS: HoldEffect = HoldEffect(43);
+
+    /// Upstream `ITEM_MASTER_BALL`, the first id in the contiguous ball range.
+    /// Spelled as a literal so the ball-index checks stay independent of
+    /// [`ItemType::for_ball`] and still fail if that range moves.
+    const EXPECTED_FIRST_BALL_ITEM_ID: u16 = 1;
+
+    #[test]
+    fn hold_effect_constants_keep_their_upstream_ids() {
+        assert_eq!(HoldEffect::NONE, EXPECTED_HOLD_EFFECT_NONE);
+        assert_eq!(
+            HoldEffect::CURE_PARALYSIS,
+            EXPECTED_HOLD_EFFECT_CURE_PARALYSIS
+        );
+        assert_eq!(HoldEffect::FLINCH, EXPECTED_HOLD_EFFECT_FLINCH);
+        assert_eq!(HoldEffect::LEFTOVERS, EXPECTED_HOLD_EFFECT_LEFTOVERS);
+    }
+
     #[test]
     fn table_length_matches_item_identity_space() {
         let table = ItemTable::new();
@@ -903,7 +927,7 @@ mod tests {
         assert_eq!(master.item_id, ItemId::MASTER_BALL);
         assert_eq!(master.price, 0);
         assert_eq!(master.pocket, Pocket::PokeBalls);
-        assert_eq!(master.item_type, ItemType::for_ball(ItemId::MASTER_BALL));
+        assert_eq!(master.item_type, ItemType(0));
         assert_eq!(master.battle_usage, BattleUsage::Other);
         assert_eq!(master.secondary_id, 0);
 
@@ -914,7 +938,7 @@ mod tests {
 
         let potion = get(ItemId::POTION);
         assert_eq!(potion.price, 300);
-        assert_eq!(potion.hold_effect, HoldEffect::NONE);
+        assert_eq!(potion.hold_effect, EXPECTED_HOLD_EFFECT_NONE);
         assert_eq!(potion.hold_effect_param, 20);
         assert_eq!(potion.pocket, Pocket::Items);
         assert_eq!(potion.item_type, ItemType::USE_PARTY_MENU);
@@ -922,19 +946,19 @@ mod tests {
 
         let kings_rock = get(ItemId::KINGS_ROCK);
         assert_eq!(kings_rock.price, 100);
-        assert_eq!(kings_rock.hold_effect, HoldEffect::FLINCH);
+        assert_eq!(kings_rock.hold_effect, EXPECTED_HOLD_EFFECT_FLINCH);
         assert_eq!(kings_rock.hold_effect_param, 10);
         assert_eq!(kings_rock.pocket, Pocket::Items);
         assert_eq!(kings_rock.item_type, ItemType::USE_BAG_MENU);
         assert_eq!(kings_rock.battle_usage, BattleUsage::None);
 
         let leftovers = get(ItemId::LEFTOVERS);
-        assert_eq!(leftovers.hold_effect, HoldEffect::LEFTOVERS);
+        assert_eq!(leftovers.hold_effect, EXPECTED_HOLD_EFFECT_LEFTOVERS);
         assert_eq!(leftovers.hold_effect_param, 10);
 
         let cheri = get(ItemId::CHERI_BERRY);
         assert_eq!(cheri.price, 20);
-        assert_eq!(cheri.hold_effect, HoldEffect::CURE_PARALYSIS);
+        assert_eq!(cheri.hold_effect, EXPECTED_HOLD_EFFECT_CURE_PARALYSIS);
         assert_eq!(cheri.pocket, Pocket::Berries);
         assert_eq!(cheri.item_type, ItemType::USE_PARTY_MENU);
         assert_eq!(cheri.battle_usage, BattleUsage::Medicine);
@@ -987,8 +1011,10 @@ mod tests {
         let table = ItemTable::new();
         for item in table.iter() {
             if item.pocket == Pocket::PokeBalls {
-                assert_eq!(item.item_type, ItemType::for_ball(item.item_id));
-                assert_eq!(item.secondary_id, item.item_type.raw());
+                let ball_index = u8::try_from(item.item_id.index() - EXPECTED_FIRST_BALL_ITEM_ID)
+                    .expect("ball index fits in u8");
+                assert_eq!(item.item_type, ItemType(ball_index));
+                assert_eq!(item.secondary_id, ball_index);
             } else {
                 assert!(
                     item.item_type.raw() <= ItemType::USE_BAG_MENU.raw(),
