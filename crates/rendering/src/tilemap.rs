@@ -156,7 +156,8 @@ impl Tilemap {
         self.height_tiles
     }
 
-    /// Returns the entry at logical tile coordinates `(col, row)`.
+    /// Returns the entry at logical tile coordinates `(col, row)`, or `None`
+    /// when either coordinate is out of bounds.
     #[must_use]
     pub fn entry(&self, col: usize, row: usize) -> Option<ScreenEntry> {
         let index = self.entry_index(col, row)?;
@@ -223,10 +224,12 @@ mod tests {
     }
 
     #[test]
-    fn screen_entry_new_masks_out_of_range_fields() {
+    fn screen_entry_new_masks_to_the_hardware_field_widths() {
         let entry = ScreenEntry::new(u16::MAX, true, false, u8::MAX);
-        assert_eq!(entry.tile_index(), ScreenEntry::TILE_INDEX_MASK);
-        assert_eq!(entry.palette_bank(), ScreenEntry::PALETTE_BANK_MASK);
+        let ten_bit_tile_index = (1_u16 << 10) - 1;
+        let four_bit_palette_bank = (1_u8 << 4) - 1;
+        assert_eq!(entry.tile_index(), ten_bit_tile_index);
+        assert_eq!(entry.palette_bank(), four_bit_palette_bank);
     }
 
     #[test]

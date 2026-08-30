@@ -77,6 +77,9 @@ impl<'a> BgLayer<'a> {
     }
 
     /// Samples a scrolled framebuffer coordinate, wrapping within the tilemap.
+    ///
+    /// Returns `None` for an empty tilemap, a missing entry or tile, or palette
+    /// index zero. Index zero is transparent in every 4bpp bank and in 8bpp.
     #[must_use]
     pub(crate) fn sample_scrolled(
         &self,
