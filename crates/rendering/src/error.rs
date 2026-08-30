@@ -1,57 +1,45 @@
-//! Error types for the `rendering` crate.
-//!
-//! A concrete per-crate enum `(oop-boundaries)` — no `anyhow` in library
-//! crates.
+//! Rendering data validation errors.
 
 use std::error::Error;
 use std::fmt;
 
 use crate::tile::BitDepth;
 
-/// An error produced while building rendering-crate types from raw data.
+/// Invalid data supplied to a rendering type.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RenderError {
-    /// Raw tile pixel data was not an exact multiple of the tile byte size
-    /// for the requested [`BitDepth`] (32 bytes/tile for 4bpp, 64 for 8bpp).
-    ///
-    /// Carries the bit depth and the offending byte length.
+    /// Packed pixel data does not contain a whole number of tiles.
     InvalidTileDataLen {
-        /// The bit depth the data was decoded against.
+        /// Requested tile bit depth.
         bit_depth: BitDepth,
-        /// The offending byte length.
+        /// Supplied byte length.
         len: usize,
     },
 
-    /// A [`Tilemap`](crate::tilemap::Tilemap)'s screen-entry count did not
-    /// match `width_tiles * height_tiles`.
+    /// A regular tilemap's entry count does not match its area.
     TilemapSizeMismatch {
-        /// The expected entry count (`width_tiles * height_tiles`).
+        /// Entry count required by the dimensions.
         expected: usize,
-        /// The actual number of entries supplied.
+        /// Supplied entry count.
         actual: usize,
     },
 
-    /// A [`Tilemap`](crate::tilemap::Tilemap) was constructed with a nonzero
-    /// area whose `width_tiles`/`height_tiles` are not a shape
-    /// [`Tilemap::entry`](crate::tilemap::Tilemap::entry)'s screenblock
-    /// addressing accepts: either at most 32x32 (a single screenblock,
-    /// stored flat row-major) or exactly one of the three regular-BG sizes
-    /// real hardware can express (64x32, 32x64, 64x64) -- hardware
-    /// fidelity, not merely whole blocks, is the rule. This also covers
-    /// `width_tiles * height_tiles` overflowing `usize`.
+    /// A nonempty regular tilemap has unsupported dimensions or an area that
+    /// overflows `usize`.
+    ///
+    /// Valid dimensions are at most 32x32 or exactly 64x32, 32x64, or 64x64.
     TilemapDimensionsInvalid {
-        /// The offending width, in tiles.
+        /// Supplied width in tiles.
         width_tiles: usize,
-        /// The offending height, in tiles.
+        /// Supplied height in tiles.
         height_tiles: usize,
     },
 
-    /// An [`AffineTilemap`](crate::bg_affine::AffineTilemap)'s raw tile-index
-    /// count did not match `width_tiles * height_tiles`.
+    /// An affine tilemap's tile-index count does not match its area.
     AffineTilemapSizeMismatch {
-        /// The expected tile-index count (`width_tiles * height_tiles`).
+        /// Tile-index count required by the dimensions.
         expected: usize,
-        /// The actual number of tile indices supplied.
+        /// Supplied tile-index count.
         actual: usize,
     },
 }
