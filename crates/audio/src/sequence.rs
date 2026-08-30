@@ -60,7 +60,8 @@ pub enum Event {
     },
     /// Carries an extended command and its little-endian payload.
     Xcmd { kind: u8, value: u32 },
-    /// Writes `value` to a CGB sound control selected by `control`.
+    /// Writes `value` to a CGB sound control selected by `control`. Decoded
+    /// for stream fidelity; the sequencer does not perform the write.
     Port { control: u8, value: u8 },
 }
 
@@ -499,15 +500,20 @@ fn as_signed(value: u8) -> i8 {
 mod tests {
     use super::*;
 
-    const NOTE_1: u8 = TIE + 1;
-    const NOTE_4: u8 = TIE + 4;
-    const NOTE_24: u8 = TIE + 24;
-    const NOTE_96: u8 = u8::MAX;
-    const WAIT_0: u8 = WAIT_LO;
-    const WAIT_24: u8 = WAIT_LO + 24;
+    // Canonical MP2K wire bytes, spelled as literals rather than derived from
+    // the decoder's own TIE/WAIT_LO/XCMD constants: a drift in a production
+    // boundary must fail these tests, not move the fixtures with it.
+    const NOTE_1: u8 = 0xD0;
+    const NOTE_4: u8 = 0xD3;
+    const NOTE_24: u8 = 0xE7;
+    const NOTE_96: u8 = 0xFF;
+    const WAIT_0: u8 = 0x80;
+    const WAIT_24: u8 = 0x98;
     const MEMACC_ADD: u8 = 1;
     const MEMACC_EQUAL_IMMEDIATE: u8 = 6;
-    const XCMD_RELEASE: u8 = 0x07;
+    const XCMD_WAVE_KIND: u8 = 0x01;
+    const XCMD_WAIT_KIND: u8 = 0x0C;
+    const XCMD_RELEASE_KIND: u8 = 0x07;
 
     #[test]
     fn decodes_voice_note_wait_fine() {
@@ -754,25 +760,25 @@ mod tests {
         let wave_pointer = 0x0800_0C0D_u32;
         let wait_length = 60_u16;
         let release = 5_u8;
-        let mut bytes = vec![XCMD, XCMD_WAVE];
+        let mut bytes = vec![XCMD, XCMD_WAVE_KIND];
         bytes.extend_from_slice(&wave_pointer.to_le_bytes());
-        bytes.extend_from_slice(&[XCMD, XCMD_WAIT]);
+        bytes.extend_from_slice(&[XCMD, XCMD_WAIT_KIND]);
         bytes.extend_from_slice(&wait_length.to_le_bytes());
-        bytes.extend_from_slice(&[XCMD, XCMD_RELEASE, release, FINE]);
+        bytes.extend_from_slice(&[XCMD, XCMD_RELEASE_KIND, release, FINE]);
         let events = decode_track(&bytes).unwrap();
         assert_eq!(
             events,
             vec![
                 Event::Xcmd {
-                    kind: XCMD_WAVE,
+                    kind: XCMD_WAVE_KIND,
                     value: wave_pointer,
                 },
                 Event::Xcmd {
-                    kind: XCMD_WAIT,
+                    kind: XCMD_WAIT_KIND,
                     value: u32::from(wait_length),
                 },
                 Event::Xcmd {
-                    kind: XCMD_RELEASE,
+                    kind: XCMD_RELEASE_KIND,
                     value: u32::from(release),
                 },
                 Event::Fine,

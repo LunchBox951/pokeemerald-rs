@@ -123,7 +123,9 @@ pub struct RhythmChild {
     pub instrument: Instrument,
     /// The key used to pitch the child instead of the played key.
     pub base_key: u8,
-    /// Pan used instead of the track pan, or `None` to inherit it.
+    /// Rhythm pan folded into the note's already-resolved track volumes as a
+    /// further channel-volume factor, not a replacement for the track pan.
+    /// `None` leaves those volumes untouched.
     pub pan: Option<i8>,
 }
 
