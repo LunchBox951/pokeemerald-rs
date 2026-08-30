@@ -72,17 +72,27 @@ impl AffineMatrix {
 mod tests {
     use super::AffineMatrix;
 
+    /// Fixed-point `1.0`, spelled as a literal so these tests stay independent
+    /// of [`AffineMatrix::ONE`] and still fail if the 8.8 scale moves.
+    const EXPECTED_ONE: i16 = 256;
+
+    #[test]
+    fn coefficients_are_8_8_fixed_point() {
+        assert_eq!(AffineMatrix::FRAC_BITS, 8);
+        assert_eq!(AffineMatrix::ONE, EXPECTED_ONE);
+    }
+
     #[test]
     fn identity_passes_deltas_through_unscaled() {
         let matrix = AffineMatrix::IDENTITY;
-        let one = i32::from(AffineMatrix::ONE);
+        let one = i32::from(EXPECTED_ONE);
         assert_eq!(matrix.apply(5, -3), (5 * one, -3 * one));
         assert_eq!(matrix.apply(0, 0), (0, 0));
     }
 
     #[test]
     fn apply_multiplies_in_the_hardware_order() {
-        let one = AffineMatrix::ONE;
+        let one = EXPECTED_ONE;
         let matrix = AffineMatrix::new(2 * one, one / 2, -one, one);
         let expected_scale = i32::from(one);
         assert_eq!(
