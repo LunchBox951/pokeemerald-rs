@@ -5,10 +5,15 @@
 //! tilesets have no active animation callback. Animations and palette-only
 //! effects for unbundled tilesets remain outside this module with their assets.
 //!
-//! `tick` is the number of rendered frames since the current room loaded. It
-//! resets to zero on fresh loads and warps, matching the upstream
+//! `tick` is the elapsed primary-animation counter, not the number of frames
+//! since the current room loaded. Only a fresh load and a warp reset it to zero
+//! (`flow/overworld_phase/connections.rs:307,439`), matching the upstream
 //! `InitTilesetAnimations` call sites (`pokeemerald/src/overworld.c:529,1867,
-//! 1942,2039`). No region fires at tick zero, so the base tiles remain unchanged.
+//! 1942,2039`). Crossing a seamless map connection replaces the scene and map
+//! but deliberately leaves the counter running
+//! (`flow/overworld_phase/connections.rs:570-579`), so the primary animation
+//! continues uninterrupted; callers must not reset it on a crossing. No region
+//! fires at tick zero, so the base tiles remain unchanged.
 //! After the first dispatch, each frame stays latched until that region fires
 //! again. General's complete cadence repeats every 128 ticks once every region
 //! has fired; the last first dispatch occurs at tick 16.
@@ -26,8 +31,13 @@
 //!
 //! `start tile` is a combined-tileset tile index and `tiles` is the exact
 //! packed frame length that [`AnimatedTileset::load`] validates. A region fires
-//! when the counter modulo `interval` equals `phase`; `sequence` selects the
-//! numbered assets in dispatch order.
+//! when the counter modulo `interval` equals `phase`; `sequence` lists the
+//! numbered assets in configured array order, which the dispatch index then
+//! walks cyclically. Array order is not dispatch order for a phase-zero region:
+//! its first fire lands at tick `interval`, which selects index 1 rather than
+//! index 0, so `flower` dispatches asset 1 at tick 16 and `tv_turned_on`
+//! dispatches asset 1 at tick 8 (`latched_frame`). A region with a non-zero
+//! `phase` first fires at tick `phase` and does start at index 0.
 
 use assets::AssetPack;
 use rendering::BitDepth;
