@@ -1,42 +1,14 @@
 use super::{ensure_resolvable, is_ordinary_hit_effect, resolve_hit, HitOutcome};
 use crate::ability::{suppresses_critical_hits, HUGE_POWER, PURE_POWER};
 use crate::accuracy::always_hits;
-use crate::damage::{BattleRng, STRUGGLE};
+use crate::damage::STRUGGLE;
 use crate::dex::Dex;
 use crate::error::BattleError;
 use crate::pokemon::{BattlePokemon, Ivs};
+use crate::script_rng::SequenceRng;
 use crate::stat_stage::StatStage;
 use assets::species::AbilityId;
 use assets::{MoveId, SpeciesId};
-
-/// A `BattleRng` fed from a fixed sequence, for pinning exact draw
-/// order/count in a multi-draw pipeline.
-struct SequenceRng {
-    values: Vec<u16>,
-    index: usize,
-}
-impl SequenceRng {
-    fn new(values: impl IntoIterator<Item = u16>) -> Self {
-        Self {
-            values: values.into_iter().collect(),
-            index: 0,
-        }
-    }
-    fn draws(&self) -> usize {
-        self.index
-    }
-}
-impl BattleRng for SequenceRng {
-    fn next_u16(&mut self) -> u16 {
-        let v = self
-            .values
-            .get(self.index)
-            .copied()
-            .expect("SequenceRng exhausted");
-        self.index += 1;
-        v
-    }
-}
 
 /// Max Gen-3 individual values (per-stat rolls, `MAX_IV_MASK` = 31 --
 /// *not* a cryptographic initialization vector; see [`Ivs`]).

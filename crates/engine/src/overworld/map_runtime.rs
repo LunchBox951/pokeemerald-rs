@@ -1,31 +1,7 @@
-//! [`MapRuntime`]: the current map's data, bound together for movement and
-//! collision queries (S-5, issue #108).
+//! Runtime queries over one map's decoded layout and events.
 //!
-//! Ported behaviour:
-//! - Metatile grid/behavior lookup: `pokeemerald/src/fieldmap.c`'s
-//!   `MapGridGetMetatileIdAt` / `MapGridGetCollisionAt` /
-//!   `MapGridGetElevationAt` / `GetMetatileAttributesById` /
-//!   `MapGridGetMetatileBehaviorAt`.
-//! - Connection-edge crossing: `fieldmap.c`'s `IsPosInConnectingMap` /
-//!   `IsCoordInConnectingMap` / `SetPositionFromConnection` family (see
-//!   [`MapRuntime::resolve_connection`] for the exact correspondence and the
-//!   one deliberate simplification against that family).
-//! - Object/warp/coord event lookup by position:
-//!   `src/event_object_movement.c`'s `GetObjectEventIdByPosition` /
-//!   `ObjectEventDoesElevationMatch` (object or query elevation `0` is a
-//!   wildcard), and `src/field_control_avatar.c`'s
-//!   `GetWarpEventAtPosition` / `GetCoordEventScriptAtPosition` (only the
-//!   stored event elevation `0` is a wildcard).
-//!
-//! **What this type does *not* own.** Per the issue #108 scope, `MapRuntime`
-//! binds to exactly one map's already-decoded data; it never loads a pack
-//! itself (that's the integration lane's job — see the crate-level
-//! `crate::overworld` docs) and it never holds every map in the game at
-//! once. Both the current map's [`LayoutGrid`]/[`MetatileAttributeTable`]
-//! bytes and a connection target's dimensions/landing cells are supplied by
-//! the caller — the latter through the small [`ConnectedMapData`] trait
-//! rather than a crate-owned table of every map, so tests can supply a
-//! two-entry synthetic map graph instead of the real 518-map table.
+//! [`MapRuntime`] borrows one map at a time. Callers replace it when entering
+//! another map and supply connected-map data through [`ConnectedMapData`].
 
 use assets::{
     CoordEvent, LayoutGrid, MapConnection, MapEvents, MapHeader, MapId, MetatileAttributeTable,
@@ -34,14 +10,10 @@ use assets::{
 
 use super::direction::Direction;
 
-/// Upstream `NUM_METATILES_IN_PRIMARY` (`include/fieldmap.h`): metatile ids
-/// below this come from the primary tileset's attribute table; ids at or
-/// above it come from the secondary tileset's, re-based by subtracting this
-/// constant (mirrors `GetMetatileAttributesById`, `fieldmap.c`).
+/// Number of metatiles whose attributes belong to the primary tileset.
 pub const NUM_METATILES_IN_PRIMARY: u16 = 512;
 
-/// Where a connection-edge crossing lands, resolved by
-/// [`MapRuntime::resolve_connection`].
+/// A resolved transition into a connected map.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ConnectionCrossing {
     /// The neighbouring map the crossing enters.
@@ -50,31 +22,16 @@ pub struct ConnectionCrossing {
     pub position: (i32, i32),
 }
 
-/// Supplies the connected-map data needed to resolve and validate an edge
-/// crossing without making [`MapRuntime`] own every map.
+/// Provides geometry and cells for maps connected to the current runtime.
 ///
-/// The integration lane implements this by wrapping the real
-/// `assets::MapHeaderTable` (to go from a [`MapId`] to its `layout` id) and
-/// `assets::LayoutTable` (to go from a layout id to its width/height), plus
-/// the destination layout's decoded grid cell. These are caller-owned
-/// tables/pack data, so wrapping them here does not violate the "don't load
-/// the pack yourself" rule. Tests implement this over a small hand-written
-/// map graph (see `crate::overworld::map_runtime::tests`).
-///
-/// A blanket implementation over `Fn(MapId) -> Option<(u16, u16)>` is
-/// provided below for geometry-only users such as
-/// [`MapRuntime::resolve_connection`]. Its cell lookup deliberately returns
-/// `None`, so [`crate::overworld::player::PlayerState::step`] fails closed
-/// rather than entering a connected map whose landing tile was not supplied.
+/// A dimensions-only implementation may leave [`Self::metatile_cell`] at its
+/// default. Player movement then refuses the crossing because it cannot
+/// validate the landing cell.
 pub trait ConnectedMapData {
-    /// `map`'s `(width, height)` in metatiles, or `None` if `map` is not
-    /// known to this dimension source.
+    /// Returns `map`'s dimensions in metatiles.
     fn dimensions(&self, map: MapId) -> Option<(u16, u16)>;
 
-    /// The decoded cell at `(x, y)` in `map`, or `None` if the map/cell data
-    /// is unavailable. Player movement requires this to validate collision
-    /// and elevation before committing a connection crossing, mirroring the
-    /// neighbouring cells in upstream's padded map grid.
+    /// Returns the decoded cell at `(x, y)` in `map` when available.
     fn metatile_cell(&self, _map: MapId, _x: i32, _y: i32) -> Option<MetatileCell> {
         None
     }
@@ -89,15 +46,7 @@ where
     }
 }
 
-/// The current map's data, bound together for movement/collision queries.
-///
-/// Holds exactly one map's already-decoded [`LayoutGrid`] and per-tileset
-/// [`MetatileAttributeTable`]s, plus that map's static [`MapHeader`] (for
-/// connections) and [`MapEvents`] (for object/warp/coord event lookup).
-/// Crossing into a neighbouring map (via [`ConnectionCrossing`] or a warp;
-/// see `crate::overworld::warp`) does not mutate a `MapRuntime` in place —
-/// the caller builds a new one over the destination map's own data and
-/// starts using that instead, exactly the "re-bind" the issue describes.
+/// Borrowed decoded data and events for one map.
 #[derive(Debug, Clone, Copy)]
 pub struct MapRuntime<'a> {
     id: MapId,
@@ -109,18 +58,7 @@ pub struct MapRuntime<'a> {
 }
 
 impl<'a> MapRuntime<'a> {
-    /// Bind a `MapRuntime` to `id`'s already-decoded data.
-    ///
-    /// `header`/`events` are typically `&'static` in real use (the
-    /// integration lane's `assets::MapHeaderTable`/`assets::MapEventsTable`
-    /// hand out `&'static` entries), but this only requires them to outlive
-    /// the grid/attribute bytes, so synthetic tests can supply plain local
-    /// values without leaking them.
-    ///
-    /// `primary_attrs`/`secondary_attrs` are `id`'s layout's primary and
-    /// secondary tileset attribute tables respectively (see
-    /// [`MapRuntime::metatile_behavior`] for how a metatile id picks between
-    /// them).
+    /// Binds decoded data and event tables to `id`.
     #[must_use]
     pub const fn new(
         id: MapId,
@@ -140,29 +78,25 @@ impl<'a> MapRuntime<'a> {
         }
     }
 
-    /// This runtime's bound map id.
+    /// Returns the bound map id.
     #[must_use]
     pub const fn id(&self) -> MapId {
         self.id
     }
 
-    /// This runtime's bound map header (connections, layout id, ...).
+    /// Returns the bound map header.
     #[must_use]
     pub const fn header(&self) -> &'a MapHeader {
         self.header
     }
 
-    /// This runtime's bound map's object/warp/coord/bg events.
+    /// Returns the bound map events.
     #[must_use]
     pub const fn events(&self) -> &'a MapEvents {
         self.events
     }
 
-    /// The decoded grid cell at `(x, y)`, or `None` if that position is
-    /// outside this map's own grid (mirrors `MapGridGetMetatileIdAt`'s
-    /// bounds check, minus the border-block fallback — an out-of-bounds
-    /// position is `crate::overworld::map_runtime::MapRuntime::resolve_connection`'s
-    /// job to interpret, not a border texture's).
+    /// Returns the decoded grid cell at `(x, y)` when it is inside this map.
     #[must_use]
     pub fn metatile_cell(&self, x: i32, y: i32) -> Option<MetatileCell> {
         let x = u16::try_from(x).ok()?;
@@ -170,58 +104,14 @@ impl<'a> MapRuntime<'a> {
         self.grid.cell_at(x, y)
     }
 
-    /// The elevation an object event arrives at when placed on the metatile
-    /// at `(x, y)` — the landing-tile read inside upstream
-    /// `ObjectEventUpdateElevation`
-    /// (`pokeemerald/src/event_object_movement.c:7759-7771`), reached via
-    /// `UpdateObjectEventElevationAndPriority` on the very first
-    /// `DoGroundEffects_OnSpawn` after a warp lands (`:8088-8090`), before
-    /// input ever unlocks.
+    /// Returns the elevation assigned to a newly placed player at `(x, y)`.
     ///
-    /// Returns `None` under the same bound [`MapRuntime::metatile_cell`]
-    /// does: `(x, y)` outside this map's own grid.
-    ///
-    /// **The multi-level rule, folded to a substitution.** Upstream's
-    /// `ObjectEventUpdateElevation` reads `curElevation` off the grid
-    /// (`:7761`) and returns immediately -- touching neither
-    /// `currentElevation` nor `previousElevation` -- when that read comes
-    /// back [`super::collision::ELEVATION_MULTI_LEVEL`] (the guard and its
-    /// early return, `:7764-7765`), so a multi-level landing tile leaves an
-    /// already-live object event's elevation exactly where it was. Every
-    /// caller of this method places a *fresh*
-    /// [`super::player::PlayerState`], though, whose elevation
-    /// upstream's own spawn-time initialization already set to
-    /// [`super::collision::ELEVATION_TRANSITION`] before this read would
-    /// ever run -- so "leave it alone" and "return
-    /// [`super::collision::ELEVATION_TRANSITION`]" are the same outcome here,
-    /// and this method returns the latter directly rather than modelling a
-    /// no-op against state that was never live.
-    ///
-    /// **Why one coordinate pair models a two-read guard.** Upstream's
-    /// guard tests `previousCoords`' elevation as well as `currentCoords`'
-    /// (`prevElevation`, read at `:7762`), and this method takes a single
-    /// `(x, y)`. On an *arrival* those two coordinate pairs name the same
-    /// cell: a spawning object event seeds `previousCoords` equal to
-    /// `currentCoords` (`InitObjectEventStateFromTemplate`,
-    /// `event_object_movement.c:1309-1312`), and this read runs on the spawn
-    /// frame itself, before any step has moved one of them apart. So the
-    /// `prevElevation` half of the guard collapses into the `curElevation`
-    /// half here rather than being dropped.
-    ///
-    /// **The arrival half of the rule, not the whole of it.** This models
-    /// `ObjectEventUpdateElevation` where the player is *placed*;
-    /// `PlayerState::adopt_elevation`, described in
-    /// [`super::player::PlayerState::step`]'s "# Elevation adoption"
-    /// section, models the same upstream function per *step*, where the two
-    /// coordinate pairs really do differ and both fields are adopted
-    /// separately. Between them they cover the calls this port models on the
-    /// player; this one is the read shared by
-    /// [`super::warp::warp_destination_position`] (a resolved warp event),
-    /// `pokeemerald_rs`'s `OverworldPhase::warp_to_position` (an
-    /// explicit-coordinate warp, e.g. white-out/first-battle relocation), and
-    /// `pokeemerald_rs`'s `saved_tile_placement` (a continued save) -- so the
-    /// three cannot drift apart on the same upstream rule again (issue
-    /// #379).
+    /// A multi-level cell becomes [`super::collision::ELEVATION_TRANSITION`].
+    /// Upstream leaves a live object's elevation unchanged if either its
+    /// current or previous cell is multi-level. A newly spawned player's two
+    /// positions are equal and its initial elevation is the transition value,
+    /// so this substitution preserves that result
+    /// (`event_object_movement.c:1309-1312,7759-7771`).
     #[must_use]
     pub fn arrival_elevation(&self, x: i32, y: i32) -> Option<u8> {
         let cell = self.metatile_cell(x, y)?;
@@ -234,18 +124,11 @@ impl<'a> MapRuntime<'a> {
         )
     }
 
-    /// The decoded behavior id (upstream `MB_*`) of the metatile at
-    /// `(x, y)`, or `None` if `(x, y)` is out of bounds or its metatile
-    /// attribute entry fails to decode (see
-    /// `crate::overworld::metatile_behavior`'s module docs for what a
-    /// `None` here means downstream: ordinary ground, not a recognized
-    /// door/warp).
+    /// Returns the metatile behavior at `(x, y)` when its cell and attribute
+    /// decode successfully.
     ///
-    /// Mirrors `GetMetatileAttributesById` + `MapGridGetMetatileBehaviorAt`
-    /// (`fieldmap.c`): a metatile id below [`NUM_METATILES_IN_PRIMARY`]
-    /// reads the primary tileset's attribute table; at or above it reads
-    /// the secondary tileset's, re-based by subtracting
-    /// [`NUM_METATILES_IN_PRIMARY`].
+    /// Metatile ids below [`NUM_METATILES_IN_PRIMARY`] use the primary
+    /// attribute table. Higher ids use the secondary table after rebasing.
     #[must_use]
     pub fn metatile_behavior(&self, x: i32, y: i32) -> Option<u8> {
         let cell = self.metatile_cell(x, y)?;
@@ -258,28 +141,13 @@ impl<'a> MapRuntime<'a> {
         attribute.and_then(Result::ok).map(|a| a.behavior)
     }
 
-    /// Every object event whose static position is `(x, y, elevation)`, in
-    /// map.json declaration order — mirroring the *scan* upstream
-    /// `GetObjectEventIdByPosition` / `DoesObjectCollideWithObjectAt`
-    /// perform over `gObjectEvents` (`event_object_movement.c:2192-2215`,
-    /// `:4724-4742`), with `ObjectEventDoesElevationMatch` /
-    /// `AreElevationsCompatible` (`:7789-7797`, the same predicate spelled
-    /// twice upstream) as the elevation test: position must match exactly;
-    /// elevation must match unless either the query or the object uses
-    /// [`super::collision::ELEVATION_TRANSITION`] as a wildcard.
+    /// Returns static object events at `(x, y, elevation)` in declaration
+    /// order.
     ///
-    /// **An iterator, not a single hit, on purpose.** Templates may stack on
-    /// one tile with independent hide flags — the Birch lab's three starter
-    /// balls all sit at `(6, 8)` — and upstream only ever scans object
-    /// events that were actually *spawned*, which a set hide flag prevents
-    /// (`TrySpawnObjectEvents`' `!FlagGet(template->flagId)` gate,
-    /// `event_object_movement.c:1670-1672`). This port has no spawn step, so
-    /// the hide-flag filter has to be applied *inside* the scan rather than
-    /// to its first hit; that composition lives one layer up, in
-    /// [`super::object_event::visible_object_event_at`], which is what
-    /// callers wanting "the object event upstream would find here" should
-    /// use. This method deliberately knows nothing about flags: it is the
-    /// pure map-data half.
+    /// Either the event or query elevation may be
+    /// [`super::collision::ELEVATION_TRANSITION`]. This query does not filter
+    /// hidden templates; [`super::object_event::visible_object_event_at`]
+    /// composes visibility with the ordered scan.
     pub fn object_events_at(
         &self,
         x: i32,
@@ -294,12 +162,10 @@ impl<'a> MapRuntime<'a> {
         })
     }
 
-    /// The warp event at `(x, y, elevation)`, mirroring `GetWarpEventAtPosition`
-    /// (`field_control_avatar.c`): position must match exactly, and
-    /// `elevation` must equal the warp's own elevation or the warp's
-    /// elevation must be [`super::collision::ELEVATION_TRANSITION`] (a
-    /// wildcard upstream uses so a warp on a transition tile fires
-    /// regardless of which level the player arrived from).
+    /// Returns the first warp at `(x, y, elevation)`.
+    ///
+    /// A stored [`super::collision::ELEVATION_TRANSITION`] matches any query
+    /// elevation; a transition query does not match an ordinary stored value.
     #[must_use]
     pub fn warp_event_at(&self, x: i32, y: i32, elevation: u8) -> Option<&'static WarpEvent> {
         self.events.warp_events.iter().find(|w| {
@@ -310,39 +176,13 @@ impl<'a> MapRuntime<'a> {
         })
     }
 
-    /// Every coord (trigger/weather) event at `(x, y, elevation)`, in
-    /// `map.json` declaration order — mirroring the *scan* upstream
-    /// `GetCoordEventScriptAtPosition` (`field_control_avatar.c:897-916`)
-    /// performs over `mapHeader->events->coordEvents`, same
-    /// position-plus-elevation-wildcard matching as
-    /// [`MapRuntime::warp_event_at`] (only the stored event's own elevation
-    /// `0` is a wildcard, not the query's).
+    /// Returns coordinate events at `(x, y, elevation)` in declaration order.
     ///
-    /// **An iterator, not a single hit, on purpose — the same shape
-    /// [`MapRuntime::object_events_at`] uses for its own stacked case.**
-    /// Upstream's loop (`:903-914`) calls `TryRunCoordEventScript`
-    /// (`:877-895`) on every positional match in turn, **ends the scan at
-    /// the first candidate that yields a script** (`:909-911`), and keeps
-    /// going past every candidate that yields `NULL` instead — of which
-    /// there are exactly three: a weather event
-    /// (`coordEvent->script == NULL`) dispatches `DoCoordEventWeather` and
-    /// falls through (`:881-884`); a `TRIGGER_RUN_IMMEDIATELY` event
-    /// (`trigger == 0`, `include/constants/vars.h:312`) has its script run
-    /// on the spot and *still* returns `NULL` (`:886-889`) — 36 bundled
-    /// coord events across five maps are of that kind, 24 of them on Route
-    /// 111 alone; and a trigger whose `VarGet(trigger) == (u8)index` check
-    /// fails (`:891`) is skipped rather than ending the search — so a later
-    /// event stacked on the same tile can still run (Littleroot Town stacks
-    /// `LittlerootTown_EventScript_NeedPokemonTriggerRight` and
-    /// `LittlerootTown_EventScript_GoSaveBirchTrigger` at `(11, 1)`; Jagged
-    /// Pass stacks a `Sunny` weather event under
-    /// `JaggedPass_EventScript_OpenMagmaHideout` at `(14, 15)`). This method
-    /// returns every positional match in order and leaves candidate
-    /// evaluation to its caller — skipping a weather event (no coord-event
-    /// weather consumer exists in this port yet) and running the var check
-    /// are the caller's — see `pokeemerald_rs`'s
-    /// `flow::overworld_phase::first_battle_trigger` for the caller-side
-    /// scan this replaced a first-match `Option` with (issue #343).
+    /// A stored [`super::collision::ELEVATION_TRANSITION`] matches any query
+    /// elevation; a transition query does not match an ordinary stored value.
+    /// The iterator exposes every candidate because event evaluation may
+    /// continue past weather, immediate, or state-mismatched events before a
+    /// later event supplies a script (`field_control_avatar.c:877-916`).
     pub fn coord_events_at(
         &self,
         x: i32,
@@ -358,23 +198,13 @@ impl<'a> MapRuntime<'a> {
         })
     }
 
-    /// Resolve a step in `direction` that lands on `(x, y)` — already
-    /// outside this map's own grid — against this map's connections.
+    /// Resolves an off-grid step against this map's connections.
     ///
-    /// Mirrors the offset math of upstream `IsPosInConnectingMap` /
-    /// `IsCoordInConnectingMap` (perpendicular-axis bounds check) and
-    /// `SetPositionFromConnection` (landing position), **simplified**: this
-    /// port has no camera and no pixel-precision backing-buffer preload
-    /// (`InitBackupMapLayoutConnections`'s border-padding scheme,
-    /// `MAP_OFFSET` = 7 tiles), so a connection is resolved the instant a
-    /// step would land outside the current grid, rather than upstream's
-    /// "still within the padding, camera hasn't swapped yet" window. The
-    /// landing tile itself is exact: crossing this map's south edge lands
-    /// at the neighbour's `y = 0` (its north edge); crossing north lands at
-    /// the neighbour's `y = height - 1`; crossing west lands at the
-    /// neighbour's `x = width - 1`; crossing east lands at `x = 0`. The
-    /// perpendicular coordinate carries across via `coord - connection.offset`
-    /// in both directions, matching `IsPosInConnectingMap` exactly.
+    /// Connection offsets translate the perpendicular axis, and the crossed
+    /// axis lands at the target's opposite edge. Upstream delays the map swap
+    /// within its camera's padded backing grid; this runtime has neither, so
+    /// it resolves as soon as a step leaves the decoded grid
+    /// (`fieldmap.c:578-622,691-742`).
     #[must_use]
     pub fn resolve_connection(
         &self,
@@ -405,10 +235,6 @@ impl<'a> MapRuntime<'a> {
     }
 }
 
-/// The landing tile in a connection's target map for a step in `direction`
-/// that left the source map through `connection`, or `None` if `(x, y)`'s
-/// perpendicular coordinate falls outside the target's bounds once
-/// `connection.offset` is applied (upstream `IsCoordInConnectingMap`).
 fn landing_position(
     direction: Direction,
     connection: &MapConnection,
@@ -447,9 +273,9 @@ fn landing_position(
 
 #[cfg(test)]
 mod tests {
+    use super::super::collision::{ELEVATION_MULTI_LEVEL, ELEVATION_TRANSITION};
     use super::*;
-    use assets::{BattleScene, MapType, RegionMapSectionId, Weather};
-    use assets::{CoordEventKind, CoordWeather};
+    use assets::{BattleScene, CoordEventKind, CoordWeather, MapType, RegionMapSectionId, Weather};
 
     fn cell(metatile_id: u16, collision: u8, elevation: u8) -> u16 {
         MetatileCell {
@@ -533,20 +359,11 @@ mod tests {
         assert!(runtime.metatile_cell(0, 4).is_none());
     }
 
-    /// [`MapRuntime::arrival_elevation`]'s own substitution (issue #379): an
-    /// ordinary cell's elevation passes straight through, an
-    /// [`super::super::collision::ELEVATION_MULTI_LEVEL`] (`15`) cell
-    /// substitutes [`super::super::collision::ELEVATION_TRANSITION`] (`0`),
-    /// and an out-of-bounds position is `None` under the same bound
-    /// [`MapRuntime::metatile_cell`] uses -- the one read
-    /// [`super::super::warp::warp_destination_position`],
-    /// `pokeemerald_rs::flow::overworld_phase::OverworldPhase::warp_to_position`,
-    /// and `pokeemerald_rs`'s `saved_tile_placement` all now share.
     #[test]
     fn arrival_elevation_substitutes_transition_for_multi_level() {
-        use super::super::collision::{ELEVATION_MULTI_LEVEL, ELEVATION_TRANSITION};
+        const ORDINARY_ELEVATION: u8 = 3;
 
-        let mut bytes = grid_bytes(2, 1, cell(0, 0, 3));
+        let mut bytes = grid_bytes(2, 1, cell(0, 0, ORDINARY_ELEVATION));
         bytes[2..4].copy_from_slice(&cell(1, 0, ELEVATION_MULTI_LEVEL).to_le_bytes());
         let hdr = header("MAP_C", &[]);
         let events = empty_events("MAP_C");
@@ -570,7 +387,7 @@ mod tests {
 
         assert_eq!(
             runtime.arrival_elevation(0, 0),
-            Some(3),
+            Some(ORDINARY_ELEVATION),
             "an ordinary cell's own elevation passes straight through"
         );
         assert_eq!(
@@ -587,11 +404,13 @@ mod tests {
 
     #[test]
     fn metatile_behavior_picks_primary_or_secondary_table_by_id() {
+        const PRIMARY_BEHAVIOR: u8 = 5;
+        const SECONDARY_BEHAVIOR: u8 = 9;
+
         let bytes = {
-            let mut b = Vec::new();
-            b.extend_from_slice(&cell(0, 0, 0).to_le_bytes()); // primary id 0
-            b.extend_from_slice(&cell(NUM_METATILES_IN_PRIMARY, 0, 0).to_le_bytes()); // secondary id 0
-            b
+            let primary_cell = cell(0, 0, ELEVATION_TRANSITION);
+            let secondary_cell = cell(NUM_METATILES_IN_PRIMARY, 0, ELEVATION_TRANSITION);
+            [primary_cell.to_le_bytes(), secondary_cell.to_le_bytes()].concat()
         };
         let layout = assets::MapLayout {
             id: assets::LayoutId("MAP_B"),
@@ -605,10 +424,8 @@ mod tests {
         let hdr = header("MAP_B", &[]);
         let events = empty_events("MAP_B");
 
-        // Primary attribute id 0 -> behavior 5. Secondary attribute id 0
-        // (metatile id NUM_METATILES_IN_PRIMARY) -> behavior 9.
-        let primary_attr_bytes = 5u16.to_le_bytes();
-        let secondary_attr_bytes = 9u16.to_le_bytes();
+        let primary_attr_bytes = u16::from(PRIMARY_BEHAVIOR).to_le_bytes();
+        let secondary_attr_bytes = u16::from(SECONDARY_BEHAVIOR).to_le_bytes();
         let runtime = MapRuntime::new(
             MapId("MAP_B"),
             Box::leak(Box::new(hdr)),
@@ -618,25 +435,26 @@ mod tests {
             MetatileAttributeTable::new(&secondary_attr_bytes),
         );
 
-        assert_eq!(runtime.metatile_behavior(0, 0), Some(5));
-        assert_eq!(runtime.metatile_behavior(1, 0), Some(9));
+        assert_eq!(runtime.metatile_behavior(0, 0), Some(PRIMARY_BEHAVIOR));
+        assert_eq!(runtime.metatile_behavior(1, 0), Some(SECONDARY_BEHAVIOR));
     }
 
     #[test]
     fn warp_event_at_matches_position_and_elevation_wildcard() {
+        const ORDINARY_ELEVATION: u8 = 2;
         let hdr = header("MAP_C", &[]);
         let warps: &'static [WarpEvent] = Box::leak(Box::new([
             WarpEvent {
                 x: 3,
                 y: 4,
-                elevation: 0, // ELEVATION_TRANSITION: matches any elevation.
+                elevation: ELEVATION_TRANSITION,
                 dest_map: assets::WarpDestination::Map(MapId("MAP_D")),
                 dest_warp_id: assets::WarpId::Fixed(0),
             },
             WarpEvent {
                 x: 5,
                 y: 5,
-                elevation: 2,
+                elevation: ORDINARY_ELEVATION,
                 dest_map: assets::WarpDestination::Map(MapId("MAP_D")),
                 dest_warp_id: assets::WarpId::Fixed(1),
             },
@@ -657,7 +475,7 @@ mod tests {
             primary_tileset: "gTileset_General",
             secondary_tileset: "gTileset_General",
         };
-        let bytes = grid_bytes(8, 8, cell(0, 0, 0));
+        let bytes = grid_bytes(8, 8, cell(0, 0, ELEVATION_TRANSITION));
         let grid = layout.grid(&bytes).unwrap();
         let runtime = MapRuntime::new(
             MapId("MAP_C"),
@@ -668,34 +486,36 @@ mod tests {
             MetatileAttributeTable::new(&[]),
         );
 
-        // Transition-elevation warp fires regardless of the traveller's elevation.
         assert_eq!(
             runtime.warp_event_at(3, 4, 7).map(|w| w.dest_warp_id),
             Some(assets::WarpId::Fixed(0))
         );
-        // Elevation-specific warp only fires at its own elevation.
         assert_eq!(runtime.warp_event_at(5, 5, 3), None);
         assert_eq!(
-            runtime.warp_event_at(5, 5, 2).map(|w| w.dest_warp_id),
+            runtime
+                .warp_event_at(5, 5, ORDINARY_ELEVATION)
+                .map(|w| w.dest_warp_id),
             Some(assets::WarpId::Fixed(1))
         );
-        assert_eq!(runtime.warp_event_at(0, 0, 0), None);
+        assert_eq!(runtime.warp_event_at(0, 0, ELEVATION_TRANSITION), None);
     }
 
     #[test]
-    fn coord_events_at_matches_position_and_elevation_wildcard() {
+    fn coord_events_at_uses_only_stored_transition_as_elevation_wildcard() {
+        const DIFFERENT_ELEVATION: u8 = 9;
+        const ORDINARY_ELEVATION: u8 = 3;
         let hdr = header("MAP_E", &[]);
         let coords: &'static [CoordEvent] = Box::leak(Box::new([
             CoordEvent {
                 x: 2,
                 y: 2,
-                elevation: 0, // ELEVATION_TRANSITION: matches any query elevation.
+                elevation: ELEVATION_TRANSITION,
                 kind: CoordEventKind::Weather(CoordWeather::Rain),
             },
             CoordEvent {
                 x: 3,
                 y: 3,
-                elevation: 3, // An ordinary elevation: no wildcard of its own.
+                elevation: ORDINARY_ELEVATION,
                 kind: CoordEventKind::Weather(CoordWeather::Rain),
             },
         ]));
@@ -715,7 +535,7 @@ mod tests {
             primary_tileset: "gTileset_General",
             secondary_tileset: "gTileset_General",
         };
-        let bytes = grid_bytes(4, 4, cell(0, 0, 0));
+        let bytes = grid_bytes(4, 4, cell(0, 0, ELEVATION_TRANSITION));
         let grid = layout.grid(&bytes).unwrap();
         let runtime = MapRuntime::new(
             MapId("MAP_E"),
@@ -726,37 +546,35 @@ mod tests {
             MetatileAttributeTable::new(&[]),
         );
 
-        // ELEVATION_TRANSITION wildcard: the stored event's elevation `0`
-        // matches a query at any other elevation.
-        assert!(runtime.coord_events_at(2, 2, 9).next().is_some());
-        assert!(runtime.coord_events_at(2, 3, 0).next().is_none());
-
-        // ...and the wildcard is asymmetric. Upstream's test is
-        // `coordEvents[i].elevation == elevation || coordEvents[i].elevation
-        // == ELEVATION_TRANSITION` (`field_control_avatar.c:907`): only the
-        // *stored* elevation has a wildcard arm, never the query's. A step
-        // arriving at elevation 0 therefore does not see an elevation-3
-        // coord event, which is the half of the rule an implementation could
-        // silently symmetrize without any other assertion here noticing.
+        assert!(runtime
+            .coord_events_at(2, 2, DIFFERENT_ELEVATION)
+            .next()
+            .is_some());
+        assert!(runtime
+            .coord_events_at(2, 3, ELEVATION_TRANSITION)
+            .next()
+            .is_none());
         assert!(
-            runtime.coord_events_at(3, 3, 3).next().is_some(),
-            "the stored elevation-3 event must match a query at its own elevation"
+            runtime
+                .coord_events_at(3, 3, ORDINARY_ELEVATION)
+                .next()
+                .is_some(),
+            "an ordinary stored elevation must match the same query elevation"
         );
         assert!(
-            runtime.coord_events_at(3, 3, 0).next().is_none(),
-            "a query elevation of 0 is not a wildcard -- only a stored 0 is"
+            runtime
+                .coord_events_at(3, 3, ELEVATION_TRANSITION)
+                .next()
+                .is_none(),
+            "a transition query is not a wildcard"
         );
     }
 
-    /// A [`MapRuntime`] over `map`'s real, compiled-in header and events
-    /// (`assets::MapHeaderTable`/`assets::MapEventsTable`, no local pack
-    /// needed — same premise as `pokeemerald_rs`'s own
-    /// `overworld_phase::test_support::runtime_for`) but a synthetic, fully
-    /// open `width`x`height` grid: real map layouts are pack-loaded binary
-    /// data this crate does not compile in, and
-    /// [`MapRuntime::coord_events_at`] never touches the grid, only
-    /// `events.coord_events`.
-    fn real_events_runtime(map: MapId, width: u16, height: u16) -> MapRuntime<'static> {
+    fn runtime_with_real_events_and_open_grid(
+        map: MapId,
+        width: u16,
+        height: u16,
+    ) -> MapRuntime<'static> {
         let header = assets::MapHeaderTable::new().header(map).unwrap();
         let events = assets::MapEventsTable::new().resolve(map).unwrap();
         let layout: &'static assets::MapLayout = Box::leak(Box::new(assets::MapLayout {
@@ -780,21 +598,10 @@ mod tests {
         )
     }
 
-    /// Littleroot Town stacks two triggers on the same tile
-    /// (`crates/assets/src/map_events.rs`'s `MAP_LITTLEROOT_TOWN`
-    /// `coord_events`): `NeedPokemonTriggerRight`
-    /// (`VAR_LITTLEROOT_TOWN_STATE == 0`) declared first, then
-    /// `GoSaveBirchTrigger` (`== 1`), both at `(11, 1, 3)`. Upstream's
-    /// `GetCoordEventScriptAtPosition` (`field_control_avatar.c:897-916`)
-    /// would visit both in that order and let
-    /// `TryRunCoordEventScript`'s var check pick whichever one currently
-    /// matches; [`MapRuntime::coord_events_at`] must hand a caller the same
-    /// two candidates, in the same order, so that scan is possible at all
-    /// (issue #343 — the regression this port's own first-match shortcut
-    /// used to prevent).
     #[test]
-    fn coord_events_at_yields_the_littleroot_town_trigger_stack_in_declaration_order() {
-        let runtime = real_events_runtime(MapId("MAP_LITTLEROOT_TOWN"), 20, 20);
+    fn littleroot_trigger_stack_is_ordered_and_allows_state_selection() {
+        const LITTLEROOT_STATE_AFTER_FIRST_TRIGGER: u16 = 1;
+        let runtime = runtime_with_real_events_and_open_grid(MapId("MAP_LITTLEROOT_TOWN"), 20, 20);
 
         let candidates: Vec<&CoordEvent> = runtime.coord_events_at(11, 1, 3).collect();
         let scripts: Vec<&str> = candidates
@@ -815,9 +622,7 @@ mod tests {
              GoSaveBirchTrigger, mirroring TryRunCoordEventScript's own keep-scanning loop"
         );
 
-        // A caller reproducing TryRunCoordEventScript's var check picks the
-        // second candidate once the state var reads `1`.
-        let state = 1u16;
+        let state = LITTLEROOT_STATE_AFTER_FIRST_TRIGGER;
         let picked = candidates.into_iter().find(|c| match c.kind {
             CoordEventKind::Trigger { var_value, .. } => var_value == state,
             CoordEventKind::Weather(_) => false,
@@ -831,20 +636,9 @@ mod tests {
         ));
     }
 
-    /// Jagged Pass stacks a weather event under a trigger on the same tile
-    /// (`crates/assets/src/map_events.rs`'s `MAP_JAGGED_PASS`
-    /// `coord_events`): a `Sunny` weather event declared first, then
-    /// `JaggedPass_EventScript_OpenMagmaHideout`
-    /// (`VAR_JAGGED_PASS_STATE == 1`), both at `(14, 15, 3)`. Upstream's
-    /// `TryRunCoordEventScript` never yields a script for the weather event
-    /// (`coordEvent->script == NULL` dispatches `DoCoordEventWeather` and
-    /// returns `NULL`, `field_control_avatar.c:881-884`) so the scan falls
-    /// through to the trigger behind it — the same "weather never blocks a
-    /// trigger stacked on top of it" case
-    /// [`MapRuntime::coord_events_at`]'s own doc comment cites.
     #[test]
-    fn coord_events_at_yields_the_jagged_pass_weather_then_trigger_stack_in_order() {
-        let runtime = real_events_runtime(MapId("MAP_JAGGED_PASS"), 32, 32);
+    fn jagged_pass_weather_precedes_the_trigger_without_hiding_it() {
+        let runtime = runtime_with_real_events_and_open_grid(MapId("MAP_JAGGED_PASS"), 32, 32);
 
         let candidates: Vec<&CoordEvent> = runtime.coord_events_at(14, 15, 3).collect();
         assert_eq!(
@@ -908,7 +702,7 @@ mod tests {
                 graphics_id: "OBJ_EVENT_GFX_MOM",
                 x: 7,
                 y: 7,
-                elevation: 0,
+                elevation: ELEVATION_TRANSITION,
                 movement_type: assets::MovementType::FaceDown,
                 movement_range_x: 0,
                 movement_range_y: 0,
@@ -954,19 +748,11 @@ mod tests {
 
         assert_eq!(ids_at(6, 6, 4), vec![1]);
         assert_eq!(ids_at(6, 6, 3), vec![2]);
-        // The wildcard query matches *both* stacked objects at (6, 6), in
-        // declaration order -- the whole reason this returns an iterator
-        // (see the method's own docs).
-        assert_eq!(ids_at(6, 6, 0), vec![1, 2]);
+        assert_eq!(ids_at(6, 6, ELEVATION_TRANSITION), vec![1, 2]);
         assert_eq!(ids_at(7, 7, 9), vec![3]);
-        assert!(ids_at(0, 0, 0).is_empty());
+        assert!(ids_at(0, 0, ELEVATION_TRANSITION).is_empty());
     }
 
-    /// Crossing south, matching Route 101 -> Littleroot Town's real
-    /// connection shape (`data/maps/Route101/map.json`: a south connection
-    /// to Littleroot Town at `offset: 0`), verified against a small
-    /// synthetic two-map graph rather than the real 518-map table (per the
-    /// "engine tests use synthetic data" convention).
     #[test]
     fn resolve_connection_lands_at_neighbours_opposite_edge() {
         let connections: &'static [MapConnection] = Box::leak(Box::new([MapConnection {
@@ -1003,15 +789,18 @@ mod tests {
             }
         };
 
-        // Stepping south off row 10 (one past height-1=9) at x=3 lands at
-        // the neighbour's north edge (y=0), same x (offset 0).
+        let step_beyond_south_edge = (3, 10);
         let crossing = runtime
-            .resolve_connection(Direction::South, 3, 10, &dims)
+            .resolve_connection(
+                Direction::South,
+                step_beyond_south_edge.0,
+                step_beyond_south_edge.1,
+                &dims,
+            )
             .expect("south connection should resolve");
         assert_eq!(crossing.target, MapId("MAP_SOUTH_NEIGHBOR"));
         assert_eq!(crossing.position, (3, 0));
 
-        // No connection covers north/west/east from this header.
         assert!(runtime
             .resolve_connection(Direction::North, 3, -1, &dims)
             .is_none());
@@ -1053,10 +842,14 @@ mod tests {
             }
         };
 
-        // Stepping east off x=6 (width) at y=5: target_y = y - offset = 5 -
-        // (-2) = 7, landing at the neighbour's west edge (x=0).
+        let step_beyond_east_edge = (6, 5);
         let crossing = runtime
-            .resolve_connection(Direction::East, 6, 5, &dims)
+            .resolve_connection(
+                Direction::East,
+                step_beyond_east_edge.0,
+                step_beyond_east_edge.1,
+                &dims,
+            )
             .expect("east connection should resolve");
         assert_eq!(crossing.position, (0, 7));
     }
@@ -1089,13 +882,14 @@ mod tests {
             MetatileAttributeTable::new(&[]),
         );
 
-        // Neighbour is much narrower than this map: only x in 0..5 lands.
         let dims = |_: MapId| Some((5, 5));
+        let in_bounds_target_x = 0;
+        let out_of_bounds_target_x = 15;
         assert!(runtime
-            .resolve_connection(Direction::South, 0, 5, &dims)
+            .resolve_connection(Direction::South, in_bounds_target_x, 5, &dims)
             .is_some());
         assert!(runtime
-            .resolve_connection(Direction::South, 15, 5, &dims)
+            .resolve_connection(Direction::South, out_of_bounds_target_x, 5, &dims)
             .is_none());
     }
 
