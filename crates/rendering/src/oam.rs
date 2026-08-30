@@ -321,11 +321,23 @@ impl OamEntry {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        obj_dimensions, AffineMode, OamEntry, ObjMode, ObjShape, AFFINE_MATRIX_INDEX_MASK,
-        OBJ_PRIORITY_MASK, OBJ_SIZE_MASK, PALETTE_BANK_MASK, TILE_INDEX_MASK,
-    };
+    use super::{obj_dimensions, AffineMode, OamEntry, ObjMode, ObjShape};
     use crate::tile::BitDepth;
+
+    // The packed field widths the hardware requires, pinned here instead of
+    // read back from the production masks so that widening a mask fails these
+    // tests rather than moving with them.
+    const TILE_INDEX_FIELD_BITS: u16 = 10;
+    const PALETTE_BANK_FIELD_BITS: u8 = 4;
+    const OBJ_SIZE_FIELD_BITS: u8 = 2;
+    const OBJ_PRIORITY_FIELD_BITS: u8 = 2;
+    const AFFINE_MATRIX_INDEX_FIELD_BITS: u8 = 5;
+
+    const MAX_TILE_INDEX: u16 = (1 << TILE_INDEX_FIELD_BITS) - 1;
+    const MAX_PALETTE_BANK: u8 = (1 << PALETTE_BANK_FIELD_BITS) - 1;
+    const MAX_OBJ_SIZE: u8 = (1 << OBJ_SIZE_FIELD_BITS) - 1;
+    const MAX_OBJ_PRIORITY: u8 = (1 << OBJ_PRIORITY_FIELD_BITS) - 1;
+    const MAX_AFFINE_MATRIX_INDEX: u8 = (1 << AFFINE_MATRIX_INDEX_FIELD_BITS) - 1;
 
     #[test]
     fn obj_dimensions_matches_the_shape_size_table() {
@@ -339,13 +351,17 @@ mod tests {
 
     #[test]
     fn obj_dimensions_masks_size_to_2_bits() {
-        let first_bit_outside_size_field = OBJ_SIZE_MASK + 1;
+        let first_bit_outside_size_field = MAX_OBJ_SIZE + 1;
         assert_eq!(
             obj_dimensions(
                 ObjShape::Square,
-                OBJ_SIZE_MASK | first_bit_outside_size_field
+                MAX_OBJ_SIZE | first_bit_outside_size_field
             ),
-            obj_dimensions(ObjShape::Square, OBJ_SIZE_MASK)
+            (64, 64)
+        );
+        assert_eq!(
+            obj_dimensions(ObjShape::Square, first_bit_outside_size_field),
+            (8, 8)
         );
     }
 
@@ -395,13 +411,10 @@ mod tests {
             0xFF,
             true,
         );
-        assert_eq!(e.tile_index(), TILE_INDEX_MASK);
-        assert_eq!(e.palette_bank(), PALETTE_BANK_MASK);
-        assert_eq!(e.priority(), OBJ_PRIORITY_MASK);
-        assert_eq!(
-            e.dimensions(),
-            obj_dimensions(ObjShape::Square, OBJ_SIZE_MASK)
-        );
+        assert_eq!(e.tile_index(), MAX_TILE_INDEX);
+        assert_eq!(e.palette_bank(), MAX_PALETTE_BANK);
+        assert_eq!(e.priority(), MAX_OBJ_PRIORITY);
+        assert_eq!(e.dimensions(), (64, 64));
     }
 
     #[test]
@@ -415,7 +428,7 @@ mod tests {
         assert_eq!(
             e.affine(),
             AffineMode::Affine {
-                matrix_num: AFFINE_MATRIX_INDEX_MASK
+                matrix_num: MAX_AFFINE_MATRIX_INDEX
             }
         );
 
@@ -423,7 +436,7 @@ mod tests {
         assert_eq!(
             e.affine(),
             AffineMode::AffineDoubleSize {
-                matrix_num: AFFINE_MATRIX_INDEX_MASK
+                matrix_num: MAX_AFFINE_MATRIX_INDEX
             }
         );
     }
