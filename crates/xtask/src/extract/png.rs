@@ -1,49 +1,10 @@
-//! A minimal PNG decoder for exactly the subset of the format upstream's
-//! own graphics sources use.
+//! Indexed PNG decoding for extracted graphics.
 //!
-//! `pokeemerald/graphics/**/*.png` and `pokeemerald/data/tilesets/**/*.png`
-//! are the *sources* the decomp's build compiles into GBA `.4bpp`/`.gbapal`
-//! data (via `gbagfx`); no compiled `.4bpp`/`.gbapal` output is checked into
-//! the tree (confirmed by scanning the checkout: zero `.4bpp` files, zero
-//! `.gbapal` files under `pokeemerald/graphics` or `pokeemerald/data`). So
-//! `extract` decodes the PNGs directly.
-//!
-//! A survey of every PNG this pack draws from (`find … -iname '*.png'` under
-//! `data/tilesets/{primary,secondary}/*`, `graphics/title_screen`, and
-//! `graphics/object_events/pics/people`, IHDR-parsed) found exactly one
-//! shape: **colour type 3 (palette/indexed), bit depth 4 or 8, compression
-//! method 0, filter method 0 (per-scanline adaptive), non-interlaced**.
-//! `graphics/fonts/latin_*.png` (S-4, issue #114) add a second, narrower bit
-//! depth to that same shape: **bit depth 2** (`gbagfx`'s Latin-font
-//! round-trip always emits a 4-colour, 2-bit-per-pixel indexed PNG — see
-//! `pokeemerald/tools/gbagfx/font.c`'s `SetFontPalette`/`ReadLatinFont`).
-//! Anything outside colour type 3 / bit depth 2, 4, or 8 / compression 0 /
-//! filter method 0 / non-interlaced is a hard, typed [`PngError::Unsupported`]
-//! rather than a best-effort guess.
-//!
-//! Ancillary chunks (`gAMA`, `sRGB`, `cHRM`, seen in the survey; no `tRNS`
-//! was present anywhere in scope) are skipped unread — GBA tile art carries
-//! no alpha channel, so nothing of value would come from them even if
-//! present.
-//!
-//! Decoded output is a row-major, one-byte-per-pixel palette-index bitmap
-//! ([`IndexedImage`]) — *not* GBA's packed tile format. The pack stores
-//! this simpler, lossless shape rather than pre-packing into 8x8 nibble
-//! tiles: no rendering pipeline exists yet to consume a hardware tile
-//! layout, and [`decode`]'s own [`PLTE`](https://www.w3.org/TR/png/#11PLTE)
-//! is deliberately *not* carried through (upstream tilesets' and fonts' real
-//! in-game colours come from the sibling JASC `.pal` files, decoded by
-//! [`crate::extract::jasc_pal`], not from the PNG's own preview palette).
-//!
-//! `graphics/text_window/*.png` (S-4, issue #114) are the one exception:
-//! upstream's `INCGFX_U16(..., ".gbapal")` rule for these files reads the
-//! palette *from the PNG's own `PLTE` chunk* (no sibling `.pal` file exists
-//! for the per-frame border graphics — only the four `text_pal*.pal` extras
-//! do). [`decode_palette`] reads exactly that chunk, separately from
-//! [`decode`]'s pixel path, so the common tileset/sprite/font case (`PLTE`
-//! ignored) stays exactly as it was. Every PNG chunk's CRC-32 is verified
-//! before either path consumes its contents, so corrupt palette or image
-//! bytes fail extraction rather than entering the pack.
+//! [`decode`] accepts non-interlaced, indexed images with 2-, 4-, or 8-bit
+//! pixels and PNG's standard compression and filter methods. It verifies each
+//! parsed chunk's CRC, ignores ancillary chunks, and returns unpacked
+//! palette-index pixels in scanline order. [`decode_palette`] reads an embedded
+//! `PLTE` chunk for assets whose in-game palette comes from the PNG itself.
 
 use std::fmt;
 
@@ -53,32 +14,24 @@ use super::jasc_pal::Rgb888;
 /// An error produced while decoding a PNG.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PngError {
-    /// The 8-byte PNG signature didn't match.
+    /// The PNG signature is missing or invalid.
     BadSignature,
-    /// A chunk's declared length ran past the end of the file, or a
-    /// required chunk (`IHDR`, `IDAT`, or `IEND`) was missing.
+    /// A chunk is incomplete or a required `IHDR`, `IDAT`, or `IEND` chunk is
+    /// missing.
     Truncated,
-    /// `IHDR` described a combination of colour type / bit depth /
-    /// compression / filter / interlace method this decoder does not
-    /// implement. Carries a short description of what was found.
+    /// The `IHDR` describes an unsupported image shape.
     Unsupported(&'static str),
-    /// The concatenated `IDAT` stream failed to inflate.
+    /// The `IDAT` stream could not be inflated.
     Inflate(InflateError),
-    /// A scanline used a filter-type byte outside `0..=4` (RFC 2083 §6.2 /
-    /// the PNG spec's five defined filter types).
+    /// A scanline has an unknown filter type.
     BadFilterType(u8),
-    /// The inflated pixel data was shorter than `IHDR`'s width/height/depth
-    /// require.
+    /// The inflated data does not contain every declared scanline.
     PixelDataTooShort,
-    /// A chunk's stored CRC-32 did not match its type and data bytes. Carries
-    /// the offending four-byte PNG chunk type.
+    /// A chunk's CRC does not match its type and data.
     ChunkCrcMismatch([u8; 4]),
-    /// [`decode_palette`] was asked to read a `PLTE` chunk that is absent,
-    /// empty, or whose length isn't a whole number of 3-byte RGB entries.
+    /// The `PLTE` chunk is missing, empty, or contains a partial RGB entry.
     MissingOrBadPalette,
-    /// A `PLTE` chunk declared more entries than the PNG spec allows: RFC
-    /// 2083 §11.2.3 caps it at 256 (a colour-type-3 pixel index is at most
-    /// 8 bits wide). Carries the declared entry count.
+    /// The `PLTE` chunk exceeds PNG's 256-entry limit.
     TooManyPaletteEntries(usize),
 }
 
@@ -120,79 +73,89 @@ impl From<InflateError> for PngError {
     }
 }
 
-/// A decoded indexed-colour bitmap: one palette-index byte per pixel,
-/// row-major, top row first (matching PNG's own scanline order).
+/// A decoded indexed-colour bitmap in PNG scanline order.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IndexedImage {
     /// Width in pixels.
     pub width: u32,
     /// Height in pixels.
     pub height: u32,
-    /// The source PNG's bit depth (2, 4, or 8) — informational only;
-    /// `pixels` is always unpacked to one byte per index regardless.
+    /// The source PNG's bit depth; each pixel is unpacked to one byte.
     pub bit_depth: u8,
-    /// `width * height` palette-index bytes, row-major.
+    /// Palette indices in row-major order.
     pub pixels: Vec<u8>,
-    /// The PNG's own embedded `PLTE` chunk, as `[r, g, b]` triples in index
-    /// order — empty if the file had no `PLTE` chunk (every real source
-    /// this decoder reads is colour type 3, which requires one, but nothing
-    /// here treats a missing chunk as an error; see the module docs on why
-    /// this exists at all: this preview palette is normally *not* the
-    /// in-game one (a sibling JASC `.pal` file is), except for the couple
-    /// of `graphics/title_screen/*.png` sprite sheets upstream's own build
-    /// derives their `.gbapal` directly from the PNG for
-    /// (`crate::extract::extract_title_screen`).
+    /// Embedded `PLTE` entries in index order, or empty when `PLTE` is absent.
     pub palette: Vec<[u8; 3]>,
 }
 
 const SIGNATURE: [u8; 8] = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
+const CHUNK_LENGTH_SIZE: usize = size_of::<u32>();
+const CHUNK_KIND_SIZE: usize = 4;
+const CHUNK_HEADER_SIZE: usize = CHUNK_LENGTH_SIZE + CHUNK_KIND_SIZE;
+const CHUNK_CRC_SIZE: usize = size_of::<u32>();
+const IHDR_SIZE: usize = 13;
+const IHDR: [u8; CHUNK_KIND_SIZE] = *b"IHDR";
+const PLTE: [u8; CHUNK_KIND_SIZE] = *b"PLTE";
+const IDAT: [u8; CHUNK_KIND_SIZE] = *b"IDAT";
+const IEND: [u8; CHUNK_KIND_SIZE] = *b"IEND";
+const INDEXED_COLOR_TYPE: u8 = 3;
+const DEFLATE_COMPRESSION_METHOD: u8 = 0;
+const ADAPTIVE_FILTER_METHOD: u8 = 0;
+const NO_INTERLACE: u8 = 0;
+const TWO_BIT_DEPTH: u8 = 2;
+const FOUR_BIT_DEPTH: u8 = 4;
+const EIGHT_BIT_DEPTH: u8 = 8;
+const RGB_CHANNEL_COUNT: usize = 3;
+const MAX_PALETTE_ENTRIES: usize = 256;
+const CRC32_REFLECTED_ISO_3309_POLYNOMIAL: u32 = 0xEDB8_8320;
 
-/// One raw chunk: its 4-byte type tag and its CRC-verified data.
 struct Chunk<'a> {
-    kind: [u8; 4],
+    kind: [u8; CHUNK_KIND_SIZE],
     data: &'a [u8],
 }
 
-/// PNG's CRC-32 over a chunk's type and data bytes (ISO 3309 polynomial,
-/// reflected representation), initialized and finalized with all bits set.
 fn crc32(bytes: &[u8]) -> u32 {
     let mut crc = u32::MAX;
     for &byte in bytes {
         crc ^= u32::from(byte);
-        for _ in 0..8 {
+        for _ in 0..u8::BITS {
             let low_bit_mask = (crc & 1).wrapping_neg();
-            crc = (crc >> 1) ^ (0xEDB8_8320 & low_bit_mask);
+            crc = (crc >> 1) ^ (CRC32_REFLECTED_ISO_3309_POLYNOMIAL & low_bit_mask);
         }
     }
     !crc
+}
+
+fn read_u32(bytes: &[u8]) -> u32 {
+    u32::from_be_bytes(bytes.try_into().expect("caller supplies four bytes"))
 }
 
 fn read_chunks(mut rest: &[u8]) -> Result<Vec<Chunk<'_>>, PngError> {
     let mut chunks = Vec::new();
     let mut saw_iend = false;
     while !rest.is_empty() {
-        if rest.len() < 8 {
-            return Err(PngError::Truncated);
-        }
-        let len = u32::from_be_bytes([rest[0], rest[1], rest[2], rest[3]]) as usize;
-        let kind = [rest[4], rest[5], rest[6], rest[7]];
-        let body_start: usize = 8;
-        let body_end = body_start.checked_add(len).ok_or(PngError::Truncated)?;
-        let crc_end = body_end.checked_add(4).ok_or(PngError::Truncated)?;
+        let header = rest.get(..CHUNK_HEADER_SIZE).ok_or(PngError::Truncated)?;
+        let data_len = read_u32(&header[..CHUNK_LENGTH_SIZE]) as usize;
+        let kind = header[CHUNK_LENGTH_SIZE..]
+            .try_into()
+            .expect("chunk header contains a four-byte type");
+        let data_start = CHUNK_HEADER_SIZE;
+        let data_end = data_start
+            .checked_add(data_len)
+            .ok_or(PngError::Truncated)?;
+        let crc_end = data_end
+            .checked_add(CHUNK_CRC_SIZE)
+            .ok_or(PngError::Truncated)?;
         if rest.len() < crc_end {
             return Err(PngError::Truncated);
         }
-        let stored_crc = u32::from_be_bytes([
-            rest[body_end],
-            rest[body_end + 1],
-            rest[body_end + 2],
-            rest[body_end + 3],
-        ]);
-        if crc32(&rest[4..body_end]) != stored_crc {
+        let stored_crc = read_u32(&rest[data_end..crc_end]);
+        let crc_input = &rest[CHUNK_LENGTH_SIZE..data_end];
+        if crc32(crc_input) != stored_crc {
             return Err(PngError::ChunkCrcMismatch(kind));
         }
-        let data = &rest[body_start..body_end];
-        let is_end = &kind == b"IEND";
+        let data = &rest[data_start..data_end];
+        let is_end = kind == IEND;
         chunks.push(Chunk { kind, data });
         rest = &rest[crc_end..];
         if is_end {
@@ -206,54 +169,78 @@ fn read_chunks(mut rest: &[u8]) -> Result<Vec<Chunk<'_>>, PngError> {
     Ok(chunks)
 }
 
+struct Header {
+    width: u32,
+    height: u32,
+    bit_depth: u8,
+    color_type: u8,
+    compression_method: u8,
+    filter_method: u8,
+    interlace_method: u8,
+}
+
+impl Header {
+    fn parse(data: &[u8]) -> Result<Self, PngError> {
+        let data: &[u8; IHDR_SIZE] = data.try_into().map_err(|_| PngError::Truncated)?;
+        let &[width_0, width_1, width_2, width_3, height_0, height_1, height_2, height_3, bit_depth, color_type, compression_method, filter_method, interlace_method] =
+            data;
+
+        Ok(Self {
+            width: u32::from_be_bytes([width_0, width_1, width_2, width_3]),
+            height: u32::from_be_bytes([height_0, height_1, height_2, height_3]),
+            bit_depth,
+            color_type,
+            compression_method,
+            filter_method,
+            interlace_method,
+        })
+    }
+
+    fn validate(&self) -> Result<(), PngError> {
+        if self.color_type != INDEXED_COLOR_TYPE {
+            return Err(PngError::Unsupported("colour type is not 3 (indexed)"));
+        }
+        if !matches!(
+            self.bit_depth,
+            TWO_BIT_DEPTH | FOUR_BIT_DEPTH | EIGHT_BIT_DEPTH
+        ) {
+            return Err(PngError::Unsupported("bit depth is not 2, 4, or 8"));
+        }
+        if self.compression_method != DEFLATE_COMPRESSION_METHOD {
+            return Err(PngError::Unsupported("compression method is not 0"));
+        }
+        if self.filter_method != ADAPTIVE_FILTER_METHOD {
+            return Err(PngError::Unsupported("filter method is not 0"));
+        }
+        if self.interlace_method != NO_INTERLACE {
+            return Err(PngError::Unsupported("image is interlaced"));
+        }
+        Ok(())
+    }
+}
+
 /// Decode a PNG file's bytes into an [`IndexedImage`].
 ///
 /// # Errors
 ///
-/// See [`PngError`]'s variants. In particular, [`PngError::Unsupported`]
-/// covers every colour type other than indexed (3), every bit depth other
-/// than 2, 4, or 8, any interlaced image, and any non-zero compression/filter
-/// method — see the module docs for why that subset was chosen.
+/// Returns [`PngError`] when framing, the supported image shape, compressed
+/// data, scanline filters, or an optional palette is invalid.
 pub fn decode(data: &[u8]) -> Result<IndexedImage, PngError> {
-    if data.len() < 8 || data[..8] != SIGNATURE {
-        return Err(PngError::BadSignature);
-    }
-    let chunks = read_chunks(&data[8..])?;
+    let rest = data
+        .strip_prefix(&SIGNATURE)
+        .ok_or(PngError::BadSignature)?;
+    let chunks = read_chunks(rest)?;
 
     let ihdr = chunks
         .iter()
-        .find(|c| &c.kind == b"IHDR")
+        .find(|chunk| chunk.kind == IHDR)
         .ok_or(PngError::Truncated)?;
-    if ihdr.data.len() != 13 {
-        return Err(PngError::Truncated);
-    }
-    let width = u32::from_be_bytes([ihdr.data[0], ihdr.data[1], ihdr.data[2], ihdr.data[3]]);
-    let height = u32::from_be_bytes([ihdr.data[4], ihdr.data[5], ihdr.data[6], ihdr.data[7]]);
-    let bit_depth = ihdr.data[8];
-    let color_type = ihdr.data[9];
-    let compression = ihdr.data[10];
-    let filter_method = ihdr.data[11];
-    let interlace = ihdr.data[12];
-
-    if color_type != 3 {
-        return Err(PngError::Unsupported("colour type is not 3 (indexed)"));
-    }
-    if bit_depth != 2 && bit_depth != 4 && bit_depth != 8 {
-        return Err(PngError::Unsupported("bit depth is not 2, 4, or 8"));
-    }
-    if compression != 0 {
-        return Err(PngError::Unsupported("compression method is not 0"));
-    }
-    if filter_method != 0 {
-        return Err(PngError::Unsupported("filter method is not 0"));
-    }
-    if interlace != 0 {
-        return Err(PngError::Unsupported("image is interlaced"));
-    }
+    let header = Header::parse(ihdr.data)?;
+    header.validate()?;
 
     let mut idat = Vec::new();
     for chunk in &chunks {
-        if &chunk.kind == b"IDAT" {
+        if chunk.kind == IDAT {
             idat.extend_from_slice(chunk.data);
         }
     }
@@ -262,46 +249,48 @@ pub fn decode(data: &[u8]) -> Result<IndexedImage, PngError> {
     }
 
     let raw = inflate::inflate_zlib(&idat)?;
-    let pixels = defilter_and_unpack(&raw, width, height, bit_depth)?;
-    let palette = match chunks.iter().find(|c| &c.kind == b"PLTE") {
-        Some(c) => parse_plte(c.data)?,
+    let pixels = defilter_and_unpack(&raw, header.width, header.height, header.bit_depth)?;
+    let palette = match chunks.iter().find(|chunk| chunk.kind == PLTE) {
+        Some(chunk) => parse_plte(chunk.data)?,
         None => Vec::new(),
     };
 
     Ok(IndexedImage {
-        width,
-        height,
-        bit_depth,
+        width: header.width,
+        height: header.height,
+        bit_depth: header.bit_depth,
         pixels,
         palette,
     })
 }
 
-/// Parse a `PLTE` chunk's body into `[r, g, b]` triples (RFC 2083 §11.2.3:
-/// three one-byte samples per entry, no separate length field — the chunk
-/// length itself, divided by 3, gives the entry count — and at most 256
-/// entries; see [`PngError::TooManyPaletteEntries`]).
-///
-/// # Errors
-///
-/// [`PngError::MissingOrBadPalette`] if the chunk is empty or its length
-/// is not a multiple of three — the same fail-closed treatment
-/// [`decode_palette`] applies, so a malformed source PNG fails extraction
-/// instead of silently producing a truncated palette in the pack.
-/// [`PngError::TooManyPaletteEntries`] if it declares more than 256 entries.
 fn parse_plte(data: &[u8]) -> Result<Vec<[u8; 3]>, PngError> {
-    if data.is_empty() || !data.len().is_multiple_of(3) {
+    if data.is_empty() || !data.len().is_multiple_of(RGB_CHANNEL_COUNT) {
         return Err(PngError::MissingOrBadPalette);
     }
-    let count = data.len() / 3;
-    if count > 256 {
+    let count = data.len() / RGB_CHANNEL_COUNT;
+    if count > MAX_PALETTE_ENTRIES {
         return Err(PngError::TooManyPaletteEntries(count));
     }
-    Ok(data.chunks_exact(3).map(|c| [c[0], c[1], c[2]]).collect())
+    Ok(data
+        .chunks_exact(RGB_CHANNEL_COUNT)
+        .map(|channels| [channels[0], channels[1], channels[2]])
+        .collect())
 }
 
-/// Undo PNG's per-scanline filtering (RFC 2083 §6) and unpack sub-byte
-/// pixel indices (bit depths 2 and 4) into one byte per pixel.
+const FILTER_PREFIX_SIZE: usize = 1;
+const INDEXED_FILTER_PIXEL_STRIDE: usize = 1;
+const FILTER_NONE: u8 = 0;
+const FILTER_SUB: u8 = 1;
+const FILTER_UP: u8 = 2;
+const FILTER_AVERAGE: u8 = 3;
+const FILTER_PAETH: u8 = 4;
+const NIBBLES_PER_BYTE: usize = 2;
+const HIGH_NIBBLE_SHIFT: u32 = 4;
+const NIBBLE_MASK: u8 = 0x0F;
+const TWO_BIT_INDICES_PER_BYTE: usize = 4;
+const TWO_BIT_INDEX_MASK: u8 = 0b11;
+
 fn defilter_and_unpack(
     raw: &[u8],
     width: u32,
@@ -310,92 +299,93 @@ fn defilter_and_unpack(
 ) -> Result<Vec<u8>, PngError> {
     let width = width as usize;
     let height = height as usize;
-    // Bytes-per-pixel for filtering purposes: PNG defines the filter's
-    // "corresponding byte" step as ceil(bit_depth * channels / 8). Indexed
-    // colour has exactly one channel, so at both bit depths this decoder
-    // supports (2, 4, and 8) that step is always 1 whole byte.
-    let bpp_for_filter: usize = 1;
     let packed_row_bytes = (width * usize::from(bit_depth)).div_ceil(8);
-    let stride = packed_row_bytes + 1; // +1 for the filter-type byte prefix
+    let scanline_size = FILTER_PREFIX_SIZE + packed_row_bytes;
 
-    if raw.len() < stride * height {
+    if raw.len() < scanline_size * height {
         return Err(PngError::PixelDataTooShort);
     }
 
-    let mut prev_row = vec![0u8; packed_row_bytes];
+    let mut previous_row = vec![0u8; packed_row_bytes];
     let mut pixels = Vec::with_capacity(width * height);
 
     for row in 0..height {
-        let row_start = row * stride;
+        let row_start = row * scanline_size;
         let filter_type = raw[row_start];
-        let packed = &raw[row_start + 1..row_start + 1 + packed_row_bytes];
+        let filtered_row = &raw[row_start + FILTER_PREFIX_SIZE..row_start + scanline_size];
 
-        let mut cur_row = vec![0u8; packed_row_bytes];
-        for i in 0..packed_row_bytes {
-            let x = i32::from(packed[i]);
-            let a = if i >= bpp_for_filter {
-                i32::from(cur_row[i - bpp_for_filter])
+        let mut current_row = vec![0u8; packed_row_bytes];
+        for column in 0..packed_row_bytes {
+            let filtered_byte = i32::from(filtered_row[column]);
+            // PNG filters sub-byte indexed pixels by packed byte, so every
+            // supported depth uses the same one-byte left-neighbor stride.
+            let left = if column >= INDEXED_FILTER_PIXEL_STRIDE {
+                i32::from(current_row[column - INDEXED_FILTER_PIXEL_STRIDE])
             } else {
                 0
             };
-            let b = i32::from(prev_row[i]);
-            let c = if i >= bpp_for_filter {
-                i32::from(prev_row[i - bpp_for_filter])
+            let above = i32::from(previous_row[column]);
+            let upper_left = if column >= INDEXED_FILTER_PIXEL_STRIDE {
+                i32::from(previous_row[column - INDEXED_FILTER_PIXEL_STRIDE])
             } else {
                 0
             };
-            let value = match filter_type {
-                0 => x,
-                1 => x + a,
-                2 => x + b,
-                3 => x + i32::midpoint(a, b),
-                4 => x + paeth_predictor(a, b, c),
+            let reconstructed = match filter_type {
+                FILTER_NONE => filtered_byte,
+                FILTER_SUB => filtered_byte + left,
+                FILTER_UP => filtered_byte + above,
+                FILTER_AVERAGE => filtered_byte + i32::midpoint(left, above),
+                FILTER_PAETH => filtered_byte + paeth_predictor(left, above, upper_left),
                 other => return Err(PngError::BadFilterType(other)),
             };
-            #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
-            let byte = (value & 0xFF) as u8;
-            cur_row[i] = byte;
+            let byte = u8::try_from(reconstructed & i32::from(u8::MAX))
+                .expect("reconstructed byte is masked to eight bits");
+            current_row[column] = byte;
         }
 
-        unpack_row(&cur_row, width, bit_depth, &mut pixels);
-        prev_row = cur_row;
+        unpack_row(&current_row, width, bit_depth, &mut pixels);
+        previous_row = current_row;
     }
 
     Ok(pixels)
 }
 
-/// The PNG Paeth predictor (RFC 2083 §6.6), used by filter type 4.
-fn paeth_predictor(a: i32, b: i32, c: i32) -> i32 {
-    let p = a + b - c;
-    let pa = (p - a).abs();
-    let pb = (p - b).abs();
-    let pc = (p - c).abs();
-    if pa <= pb && pa <= pc {
-        a
-    } else if pb <= pc {
-        b
+fn paeth_predictor(left: i32, above: i32, upper_left: i32) -> i32 {
+    let estimate = left + above - upper_left;
+    let left_distance = (estimate - left).abs();
+    let above_distance = (estimate - above).abs();
+    let upper_left_distance = (estimate - upper_left).abs();
+    if left_distance <= above_distance && left_distance <= upper_left_distance {
+        left
+    } else if above_distance <= upper_left_distance {
+        above
     } else {
-        c
+        upper_left
     }
 }
 
-/// Unpack one defiltered, byte-packed scanline into one palette-index byte
-/// per pixel, appended to `out`.
 fn unpack_row(packed: &[u8], width: usize, bit_depth: u8, out: &mut Vec<u8>) {
     match bit_depth {
-        8 => out.extend_from_slice(&packed[..width]),
-        4 => {
-            for x in 0..width {
-                let byte = packed[x / 2];
-                let index = if x % 2 == 0 { byte >> 4 } else { byte & 0x0F };
+        EIGHT_BIT_DEPTH => out.extend_from_slice(&packed[..width]),
+        FOUR_BIT_DEPTH => {
+            for column in 0..width {
+                let byte = packed[column / NIBBLES_PER_BYTE];
+                let index = if column.is_multiple_of(NIBBLES_PER_BYTE) {
+                    byte >> HIGH_NIBBLE_SHIFT
+                } else {
+                    byte & NIBBLE_MASK
+                };
                 out.push(index);
             }
         }
-        2 => {
-            for x in 0..width {
-                let byte = packed[x / 4];
-                let shift = 6 - 2 * (x % 4);
-                let index = (byte >> shift) & 0x03;
+        TWO_BIT_DEPTH => {
+            for column in 0..width {
+                let byte = packed[column / TWO_BIT_INDICES_PER_BYTE];
+                let index_in_byte = column % TWO_BIT_INDICES_PER_BYTE;
+                let shift = u8::BITS
+                    - u32::from(TWO_BIT_DEPTH)
+                        * u32::try_from(index_in_byte + 1).expect("index fits in u32");
+                let index = (byte >> shift) & TWO_BIT_INDEX_MASK;
                 out.push(index);
             }
         }
@@ -403,30 +393,21 @@ fn unpack_row(packed: &[u8], width: usize, bit_depth: u8, out: &mut Vec<u8>) {
     }
 }
 
-/// Read a PNG's `PLTE` chunk as decoded 8-bit-per-channel colours, in
-/// on-disk order (index 0 first).
-///
-/// This is deliberately separate from [`decode`] (which never reads `PLTE`
-/// — see the module docs): only `graphics/text_window/*.png`'s border-frame
-/// graphics need their embedded palette, since (unlike tilesets/sprites)
-/// they have no sibling `.pal` file of their own.
+/// Reads a PNG's embedded palette in index order.
 ///
 /// # Errors
 ///
-/// [`PngError::BadSignature`] / [`PngError::Truncated`] for a malformed
-/// file (same as [`decode`]); [`PngError::MissingOrBadPalette`] if no `PLTE`
-/// chunk is present, is empty, or its length is not a multiple of 3 bytes;
-/// [`PngError::TooManyPaletteEntries`] if it declares more than 256 entries
-/// (see [`parse_plte`], which this shares with [`decode`]'s own `PLTE` read).
+/// Returns [`PngError`] when framing, a parsed chunk's CRC, or the `PLTE`
+/// shape is invalid.
 pub fn decode_palette(data: &[u8]) -> Result<Vec<Rgb888>, PngError> {
-    if data.len() < 8 || data[..8] != SIGNATURE {
-        return Err(PngError::BadSignature);
-    }
-    let chunks = read_chunks(&data[8..])?;
+    let rest = data
+        .strip_prefix(&SIGNATURE)
+        .ok_or(PngError::BadSignature)?;
+    let chunks = read_chunks(rest)?;
 
     let plte = chunks
         .iter()
-        .find(|c| &c.kind == b"PLTE")
+        .find(|chunk| chunk.kind == PLTE)
         .ok_or(PngError::MissingOrBadPalette)?;
 
     Ok(parse_plte(plte.data)?
@@ -440,76 +421,99 @@ mod tests {
     use super::{decode, decode_palette, paeth_predictor, PngError};
     use crate::extract::jasc_pal::Rgb888;
 
-    /// A local Adler-32 (test-only): mirrors `inflate`'s private
-    /// implementation just enough to hand-build a well-formed zlib stream
-    /// for these fixtures, without exposing that helper outside its module.
+    const ADLER_MODULUS: u32 = 65_521;
+    const ZLIB_STORED_HEADER: [u8; 2] = [0x78, 0x01];
+    const FINAL_STORED_BLOCK_HEADER: u8 = 0b0000_0001;
+
     fn adler32(data: &[u8]) -> u32 {
-        const MOD_ADLER: u32 = 65521;
         let mut a: u32 = 1;
         let mut b: u32 = 0;
         for &byte in data {
-            a = (a + u32::from(byte)) % MOD_ADLER;
-            b = (b + a) % MOD_ADLER;
+            a = (a + u32::from(byte)) % ADLER_MODULUS;
+            b = (b + a) % ADLER_MODULUS;
         }
         (b << 16) | a
     }
 
     #[test]
     fn crc32_matches_standard_check_value() {
-        // ISO CRC-32's canonical independent check vector.
-        assert_eq!(super::crc32(b"123456789"), 0xCBF4_3926);
+        const ISO_3309_CHECK_VALUE: u32 = 0xCBF4_3926;
+
+        assert_eq!(super::crc32(b"123456789"), ISO_3309_CHECK_VALUE);
     }
 
-    /// Build one raw PNG chunk (length + type + data + CRC-32), shared by
-    /// every hand-built test fixture below.
     fn chunk(kind: [u8; 4], data: &[u8]) -> Vec<u8> {
         let mut out = Vec::new();
         out.extend_from_slice(&u32::try_from(data.len()).unwrap().to_be_bytes());
         out.extend_from_slice(&kind);
         out.extend_from_slice(data);
-        out.extend_from_slice(&super::crc32(&out[4..]).to_be_bytes());
+        out.extend_from_slice(&super::crc32(&out[super::CHUNK_LENGTH_SIZE..]).to_be_bytes());
         out
     }
 
-    /// Assemble a well-formed indexed PNG around an already-built stream of
-    /// raw scanlines (each `[filter_type, ...packed bytes]`, the exact bytes
-    /// [`decode`] inflates and defilters). The `IDAT` is a single stored
-    /// DEFLATE block, zlib-wrapped by hand (mirrors `inflate::tests`, just in
-    /// the compress direction) -- no dependency on any real upstream file.
-    fn indexed_png_from_raw(bit_depth: u8, width: u32, height: u32, raw: &[u8]) -> Vec<u8> {
+    fn ihdr(bit_depth: u8, color_type: u8, width: u32, height: u32) -> Vec<u8> {
         let mut ihdr = Vec::new();
         ihdr.extend_from_slice(&width.to_be_bytes());
         ihdr.extend_from_slice(&height.to_be_bytes());
         ihdr.push(bit_depth);
-        ihdr.push(3); // colour type: indexed
-        ihdr.push(0); // compression
-        ihdr.push(0); // filter method
-        ihdr.push(0); // interlace
+        ihdr.push(color_type);
+        ihdr.push(super::DEFLATE_COMPRESSION_METHOD);
+        ihdr.push(super::ADAPTIVE_FILTER_METHOD);
+        ihdr.push(super::NO_INTERLACE);
+        ihdr
+    }
 
-        let mut zlib_body = vec![0x78, 0x01]; // CMF/FLG: method 8, no dict, valid checksum
+    fn stored_zlib(raw: &[u8]) -> Vec<u8> {
+        let mut zlib_body = ZLIB_STORED_HEADER.to_vec();
         let len = u16::try_from(raw.len()).unwrap();
-        zlib_body.push(0b0000_0001); // BFINAL=1, BTYPE=00 stored
+        zlib_body.push(FINAL_STORED_BLOCK_HEADER);
         zlib_body.extend_from_slice(&len.to_le_bytes());
         zlib_body.extend_from_slice(&(!len).to_le_bytes());
         zlib_body.extend_from_slice(raw);
         zlib_body.extend_from_slice(&adler32(raw).to_be_bytes());
+        zlib_body
+    }
 
+    fn indexed_png(
+        bit_depth: u8,
+        width: u32,
+        height: u32,
+        raw: &[u8],
+        palette: Option<&[u8]>,
+    ) -> Vec<u8> {
         let mut png = Vec::new();
         png.extend_from_slice(&super::SIGNATURE);
-        png.extend_from_slice(&chunk(*b"IHDR", &ihdr));
-        png.extend_from_slice(&chunk(*b"IDAT", &zlib_body));
-        png.extend_from_slice(&chunk(*b"IEND", &[]));
+        png.extend_from_slice(&chunk(
+            super::IHDR,
+            &ihdr(bit_depth, super::INDEXED_COLOR_TYPE, width, height),
+        ));
+        if let Some(palette) = palette {
+            png.extend_from_slice(&chunk(super::PLTE, palette));
+        }
+        png.extend_from_slice(&chunk(super::IDAT, &stored_zlib(raw)));
+        png.extend_from_slice(&chunk(super::IEND, &[]));
         png
     }
 
-    /// Build a minimal, well-formed indexed PNG (filter type 0 on every row)
-    /// entirely by hand, to test the decoder without depending on any real
-    /// upstream file.
+    fn indexed_png_from_raw(bit_depth: u8, width: u32, height: u32, raw: &[u8]) -> Vec<u8> {
+        indexed_png(bit_depth, width, height, raw, None)
+    }
+
+    fn indexed_png_from_raw_with_plte(
+        bit_depth: u8,
+        width: u32,
+        height: u32,
+        raw: &[u8],
+        plte: &[u8],
+    ) -> Vec<u8> {
+        indexed_png(bit_depth, width, height, raw, Some(plte))
+    }
+
     fn tiny_indexed_png(bit_depth: u8, width: u32, height: u32, packed_rows: &[u8]) -> Vec<u8> {
         let packed_row_bytes = packed_rows.len() / usize::try_from(height).unwrap();
         let mut raw = Vec::new();
         for row in 0..height as usize {
-            raw.push(0u8); // filter type: None
+            raw.push(super::FILTER_NONE);
             raw.extend_from_slice(
                 &packed_rows[row * packed_row_bytes..(row + 1) * packed_row_bytes],
             );
@@ -517,10 +521,6 @@ mod tests {
         indexed_png_from_raw(bit_depth, width, height, &raw)
     }
 
-    /// Build an indexed PNG from per-row `(filter_type, packed filtered
-    /// bytes)` pairs, taken verbatim as the raw scanlines -- so a test can
-    /// exercise filter types other than 0 (Sub/Up/Average/Paeth) and assert
-    /// the decoder reconstructs the originals.
     fn filtered_indexed_png(
         bit_depth: u8,
         width: u32,
@@ -537,39 +537,33 @@ mod tests {
 
     #[test]
     fn decodes_8bit_indexed_2x2() {
-        // 2x2 image, 8bpp: row0 = [1, 2], row1 = [3, 0].
-        let png = tiny_indexed_png(8, 2, 2, &[1, 2, 3, 0]);
+        let png = tiny_indexed_png(super::EIGHT_BIT_DEPTH, 2, 2, &[1, 2, 3, 0]);
         let image = decode(&png).unwrap();
         assert_eq!(image.width, 2);
         assert_eq!(image.height, 2);
-        assert_eq!(image.bit_depth, 8);
+        assert_eq!(image.bit_depth, super::EIGHT_BIT_DEPTH);
         assert_eq!(image.pixels, vec![1, 2, 3, 0]);
     }
 
     #[test]
     fn decodes_4bit_indexed_row() {
-        // 2x1 image, 4bpp: one packed byte 0xAB -> pixels [0xA, 0xB].
-        let png = tiny_indexed_png(4, 2, 1, &[0xAB]);
+        let png = tiny_indexed_png(super::FOUR_BIT_DEPTH, 2, 1, &[0xAB]);
         let image = decode(&png).unwrap();
         assert_eq!(image.pixels, vec![0x0A, 0x0B]);
     }
 
     #[test]
     fn decodes_2bit_indexed_row() {
-        // 4x1 image, 2bpp: one packed byte 0b01_10_11_00 -> pixels [1,2,3,0]
-        // (matching `graphics/fonts/latin_*.png`'s bit depth -- see the
-        // module docs).
-        let png = tiny_indexed_png(2, 4, 1, &[0b0110_1100]);
+        let png = tiny_indexed_png(super::TWO_BIT_DEPTH, 4, 1, &[0b01_10_11_00]);
         let image = decode(&png).unwrap();
-        assert_eq!(image.bit_depth, 2);
+        assert_eq!(image.bit_depth, super::TWO_BIT_DEPTH);
         assert_eq!(image.pixels, vec![1, 2, 3, 0]);
     }
 
     #[test]
     fn decodes_2bit_indexed_two_rows() {
-        // 8x2 image, 2bpp: exercises a full byte-per-row boundary (8 px = 2
-        // packed bytes) rather than the single-byte case above.
-        let png = tiny_indexed_png(2, 8, 2, &[0b00_01_10_11, 0b11_10_01_00, 0xFF, 0x00]);
+        let packed_rows = [0b00_01_10_11, 0b11_10_01_00, 0xFF, 0x00];
+        let png = tiny_indexed_png(super::TWO_BIT_DEPTH, 8, 2, &packed_rows);
         let image = decode(&png).unwrap();
         assert_eq!(
             image.pixels,
@@ -579,14 +573,13 @@ mod tests {
 
     #[test]
     fn rejects_bit_depth_1() {
-        let mut ihdr = Vec::new();
-        ihdr.extend_from_slice(&1u32.to_be_bytes());
-        ihdr.extend_from_slice(&1u32.to_be_bytes());
-        ihdr.extend_from_slice(&[1, 3, 0, 0, 0]); // bit depth 1, colour type 3
         let mut png = Vec::new();
         png.extend_from_slice(&super::SIGNATURE);
-        png.extend_from_slice(&chunk(*b"IHDR", &ihdr));
-        png.extend_from_slice(&chunk(*b"IEND", &[]));
+        png.extend_from_slice(&chunk(
+            super::IHDR,
+            &ihdr(1, super::INDEXED_COLOR_TYPE, 1, 1),
+        ));
+        png.extend_from_slice(&chunk(super::IEND, &[]));
         let err = decode(&png).unwrap_err();
         assert_eq!(err, PngError::Unsupported("bit depth is not 2, 4, or 8"));
     }
@@ -599,13 +592,9 @@ mod tests {
 
     #[test]
     fn rejects_missing_iend() {
-        // IEND is mandatory (RFC 2083 §11.2.5) but has empty data, so it's
-        // always the trailing 12 bytes (4-byte length + 4-byte type + 4-byte
-        // CRC) `indexed_png_from_raw` appends -- strip exactly those to
-        // simulate a stream truncated right after the last IDAT's CRC
-        // (issue #450).
-        let mut png = tiny_indexed_png(8, 1, 1, &[0]);
-        png.truncate(png.len() - 12);
+        let mut png = tiny_indexed_png(super::EIGHT_BIT_DEPTH, 1, 1, &[0]);
+        let iend_size = chunk(super::IEND, &[]).len();
+        png.truncate(png.len() - iend_size);
 
         let err = decode(&png).unwrap_err();
         assert_eq!(err, PngError::Truncated);
@@ -613,139 +602,81 @@ mod tests {
 
     #[test]
     fn rejects_truecolor() {
-        let mut ihdr = Vec::new();
-        ihdr.extend_from_slice(&1u32.to_be_bytes());
-        ihdr.extend_from_slice(&1u32.to_be_bytes());
-        ihdr.extend_from_slice(&[8, 2, 0, 0, 0]); // colour type 2 = truecolor
+        const TRUECOLOR_TYPE: u8 = 2;
+
         let mut png = Vec::new();
         png.extend_from_slice(&super::SIGNATURE);
-        png.extend_from_slice(&chunk(*b"IHDR", &ihdr));
-        png.extend_from_slice(&chunk(*b"IEND", &[]));
+        png.extend_from_slice(&chunk(
+            super::IHDR,
+            &ihdr(super::EIGHT_BIT_DEPTH, TRUECOLOR_TYPE, 1, 1),
+        ));
+        png.extend_from_slice(&chunk(super::IEND, &[]));
         let err = decode(&png).unwrap_err();
         assert_eq!(err, PngError::Unsupported("colour type is not 3 (indexed)"));
     }
 
-    // The per-row filter reconstructions (RFC 2083 §6). Every real upstream
-    // PNG and the fixtures above use filter type 0 (None); these exercise the
-    // other four types on hand-built 8-bit rows (bytes-per-pixel = 1), with
-    // every expected pixel hand-computed from the reconstruction formula.
-
     #[test]
-    fn filter_type_1_sub_reconstructs() {
-        // Sub: recon(x) = filt(x) + recon(x-1), first byte's left = 0.
-        // Row [10, 5, 3, 250] -> 10, 15, 18, (250+18)&0xFF = 12.
-        let png = filtered_indexed_png(8, 4, 1, &[(1, &[10, 5, 3, 250])]);
+    fn sub_filter_reconstructs_from_left_bytes() {
+        let rows = [(super::FILTER_SUB, &[10, 5, 3, 250][..])];
+        let png = filtered_indexed_png(super::EIGHT_BIT_DEPTH, 4, 1, &rows);
         let image = decode(&png).unwrap();
         assert_eq!(image.pixels, vec![10, 15, 18, 12]);
     }
 
     #[test]
-    fn filter_type_2_up_reconstructs() {
-        // Up: recon(x) = filt(x) + recon_above(x); first row's "above" = 0.
-        // Row0 (None) -> [1, 2, 3, 4]; Row1 (Up) [10,20,30,40] -> add above.
-        let png = filtered_indexed_png(8, 4, 2, &[(0, &[1, 2, 3, 4]), (2, &[10, 20, 30, 40])]);
+    fn up_filter_reconstructs_from_previous_row() {
+        let rows = [
+            (super::FILTER_NONE, &[1, 2, 3, 4][..]),
+            (super::FILTER_UP, &[10, 20, 30, 40][..]),
+        ];
+        let png = filtered_indexed_png(super::EIGHT_BIT_DEPTH, 4, 2, &rows);
         let image = decode(&png).unwrap();
         assert_eq!(image.pixels, vec![1, 2, 3, 4, 11, 22, 33, 44]);
     }
 
     #[test]
-    fn filter_type_3_average_reconstructs() {
-        // Average: recon(x) = filt(x) + floor((left + above) / 2).
-        // Row0 (None) -> [4, 8, 10, 20]; Row1 (Average) [2, 3, 4, 5]:
-        //   i0: left 0, above 4  -> avg 2  -> 2+2  = 4
-        //   i1: left 4, above 8  -> avg 6  -> 3+6  = 9
-        //   i2: left 9, above 10 -> avg 9  -> 4+9  = 13
-        //   i3: left 13, above 20 -> avg 16 -> 5+16 = 21
-        let png = filtered_indexed_png(8, 4, 2, &[(0, &[4, 8, 10, 20]), (3, &[2, 3, 4, 5])]);
+    fn average_filter_reconstructs_from_left_and_previous_row() {
+        let rows = [
+            (super::FILTER_NONE, &[4, 8, 10, 20][..]),
+            (super::FILTER_AVERAGE, &[2, 3, 4, 5][..]),
+        ];
+        let png = filtered_indexed_png(super::EIGHT_BIT_DEPTH, 4, 2, &rows);
         let image = decode(&png).unwrap();
         assert_eq!(image.pixels, vec![4, 8, 10, 20, 4, 9, 13, 21]);
     }
 
     #[test]
-    fn filter_type_4_paeth_reconstructs() {
-        // Paeth: recon(x) = filt(x) + Paeth(left, above, above-left).
-        // Row0 (None) -> [8, 3, 10, 200]; Row1 (Paeth) [5, 0, 250, 1]:
-        //   i0: a0 b8 c0   -> Paeth = 8  -> 5+8       = 13
-        //   i1: a13 b3 c8  -> Paeth = 8  -> 0+8       = 8   (above-left wins)
-        //   i2: a8 b10 c3  -> Paeth = 10 -> (250+10)&0xFF = 4
-        //   i3: a4 b200 c10 -> Paeth = 200 -> 1+200   = 201
-        let png = filtered_indexed_png(8, 4, 2, &[(0, &[8, 3, 10, 200]), (4, &[5, 0, 250, 1])]);
+    fn paeth_filter_reconstructs_from_nearest_neighbor() {
+        let rows = [
+            (super::FILTER_NONE, &[8, 3, 10, 200][..]),
+            (super::FILTER_PAETH, &[5, 0, 250, 1][..]),
+        ];
+        let png = filtered_indexed_png(super::EIGHT_BIT_DEPTH, 4, 2, &rows);
         let image = decode(&png).unwrap();
         assert_eq!(image.pixels, vec![8, 3, 10, 200, 13, 8, 4, 201]);
     }
 
     #[test]
     fn paeth_predictor_selects_each_neighbor() {
-        // One case for each branch of the predictor (RFC 2083 §6.6).
-        assert_eq!(paeth_predictor(5, 20, 18), 5, "left (a) wins");
-        assert_eq!(paeth_predictor(20, 5, 18), 5, "above (b) wins");
-        assert_eq!(paeth_predictor(13, 3, 8), 8, "above-left (c) wins");
+        assert_eq!(paeth_predictor(5, 20, 18), 5, "left wins");
+        assert_eq!(paeth_predictor(20, 5, 18), 5, "above wins");
+        assert_eq!(paeth_predictor(13, 3, 8), 8, "upper-left wins");
     }
 
-    /// Like [`indexed_png_from_raw`], but with a `PLTE` chunk inserted
-    /// between `IHDR` and `IDAT` (RFC 2083 §11.2.3's required ordering) --
-    /// exercises [`super::parse_plte`] end to end through [`decode`].
-    fn indexed_png_from_raw_with_plte(
-        bit_depth: u8,
-        width: u32,
-        height: u32,
-        raw: &[u8],
-        plte: &[u8],
-    ) -> Vec<u8> {
-        let mut ihdr = Vec::new();
-        ihdr.extend_from_slice(&width.to_be_bytes());
-        ihdr.extend_from_slice(&height.to_be_bytes());
-        ihdr.push(bit_depth);
-        ihdr.push(3);
-        ihdr.push(0);
-        ihdr.push(0);
-        ihdr.push(0);
-
-        let mut zlib_body = vec![0x78, 0x01];
-        let len = u16::try_from(raw.len()).unwrap();
-        zlib_body.push(0b0000_0001);
-        zlib_body.extend_from_slice(&len.to_le_bytes());
-        zlib_body.extend_from_slice(&(!len).to_le_bytes());
-        zlib_body.extend_from_slice(raw);
-        zlib_body.extend_from_slice(&adler32(raw).to_be_bytes());
-
-        let mut png = Vec::new();
-        png.extend_from_slice(&super::SIGNATURE);
-        png.extend_from_slice(&chunk(*b"IHDR", &ihdr));
-        png.extend_from_slice(&chunk(*b"PLTE", plte));
-        png.extend_from_slice(&chunk(*b"IDAT", &zlib_body));
-        png.extend_from_slice(&chunk(*b"IEND", &[]));
-        png
-    }
-
-    /// Build a minimal indexed PNG (bit depth 4, one pixel) with a `PLTE`
-    /// chunk of `colors` spliced in right after `IHDR` (PNG's required
-    /// chunk order) -- for [`decode_palette`] tests, which never look past
-    /// `PLTE`. Reuses [`tiny_indexed_png`] for the rest of the file (a
-    /// well-formed `IHDR`/`IDAT`/`IEND` with no `PLTE` of its own) rather
-    /// than hand-building another zlib stream.
     fn indexed_png_with_palette(colors: &[(u8, u8, u8)]) -> Vec<u8> {
-        let base = tiny_indexed_png(4, 1, 1, &[0x00]);
-        // `SIGNATURE` (8 bytes) + one whole `IHDR` chunk
-        // (4 length + 4 type + 13 data + 4 CRC = 25 bytes) = 33.
-        let ihdr_end = 8 + 25;
-
         let mut plte = Vec::new();
         for &(r, g, b) in colors {
             plte.extend_from_slice(&[r, g, b]);
         }
-
-        let mut png = base[..ihdr_end].to_vec();
-        png.extend_from_slice(&chunk(*b"PLTE", &plte));
-        png.extend_from_slice(&base[ihdr_end..]);
-        png
+        indexed_png_from_raw_with_plte(super::FOUR_BIT_DEPTH, 1, 1, &[super::FILTER_NONE, 0], &plte)
     }
 
     #[test]
     fn decode_reads_an_embedded_plte_chunk() {
-        let raw = vec![0u8, 0, 1, 2]; // one row, filter type 0, pixels [1, 2]
-        let plte = [0xFFu8, 0x00, 0x00, 0x00, 0xFF, 0x00, 0x00, 0x00, 0xFF]; // red, green, blue
-        let png = indexed_png_from_raw_with_plte(8, 2, 1, &raw, &plte);
+        const RGB_PALETTE: [u8; 9] = [u8::MAX, 0, 0, 0, u8::MAX, 0, 0, 0, u8::MAX];
+
+        let raw = [super::FILTER_NONE, 1, 2];
+        let png = indexed_png_from_raw_with_plte(super::EIGHT_BIT_DEPTH, 2, 1, &raw, &RGB_PALETTE);
         let image = decode(&png).unwrap();
         assert_eq!(
             image.palette,
@@ -778,19 +709,13 @@ mod tests {
 
     #[test]
     fn decode_without_a_plte_chunk_leaves_the_palette_empty() {
-        // Every other fixture in this module has no PLTE chunk -- this is
-        // just an explicit assertion of that default (see IndexedImage's
-        // docs: a missing PLTE is not an error here).
-        let png = tiny_indexed_png(8, 2, 2, &[1, 2, 3, 0]);
+        let png = tiny_indexed_png(super::EIGHT_BIT_DEPTH, 2, 2, &[1, 2, 3, 0]);
         let image = decode(&png).unwrap();
         assert!(image.palette.is_empty());
     }
 
     #[test]
     fn parse_plte_rejects_a_trailing_partial_entry() {
-        // 3 full colours (9 bytes) plus 2 leftover bytes -- not divisible
-        // by 3, so the chunk is malformed and must fail closed (same
-        // treatment as `decode_palette`), never silently truncate.
         let plte = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11];
         assert_eq!(
             super::parse_plte(&plte).unwrap_err(),
@@ -808,24 +733,23 @@ mod tests {
 
     #[test]
     fn parse_plte_accepts_exactly_256_entries_but_rejects_257() {
-        // PNG's hard cap (RFC 2083 §11.2.3: "1 to 256 palette entries") --
-        // 256*3 bytes is still a multiple of 3, so only the dedicated
-        // entry-count check (not the multiple-of-3 guard above) catches
-        // going one entry over (issue #301).
-        let at_cap = vec![0u8; 256 * 3];
-        assert_eq!(super::parse_plte(&at_cap).unwrap().len(), 256);
+        let at_cap = vec![0u8; super::MAX_PALETTE_ENTRIES * super::RGB_CHANNEL_COUNT];
+        assert_eq!(
+            super::parse_plte(&at_cap).unwrap().len(),
+            super::MAX_PALETTE_ENTRIES
+        );
 
-        let over_cap = vec![0u8; 257 * 3];
+        let over_cap_entries = super::MAX_PALETTE_ENTRIES + 1;
+        let over_cap = vec![0u8; over_cap_entries * super::RGB_CHANNEL_COUNT];
         assert_eq!(
             super::parse_plte(&over_cap).unwrap_err(),
-            PngError::TooManyPaletteEntries(257)
+            PngError::TooManyPaletteEntries(over_cap_entries)
         );
     }
 
     #[test]
     fn decode_palette_rejects_missing_plte() {
-        // A well-formed indexed PNG with no PLTE chunk at all.
-        let png = tiny_indexed_png(8, 2, 1, &[1, 2]);
+        let png = tiny_indexed_png(super::EIGHT_BIT_DEPTH, 2, 1, &[1, 2]);
         let err = decode_palette(&png).unwrap_err();
         assert_eq!(err, PngError::MissingOrBadPalette);
     }
@@ -840,27 +764,25 @@ mod tests {
     #[test]
     fn decode_palette_rejects_corrupt_plte_crc() {
         let mut png = indexed_png_with_palette(&[(115, 205, 164)]);
-        // Signature (8) + IHDR chunk (25) + PLTE length/type (8) reaches
-        // the first palette byte. Corrupt the data without updating CRC.
-        png[8 + 25 + 8] ^= 0xFF;
+        let plte_kind_offset = png
+            .windows(super::PLTE.len())
+            .position(|window| window == super::PLTE)
+            .unwrap();
+        let plte_data_offset = plte_kind_offset + super::PLTE.len();
+        png[plte_data_offset] ^= u8::MAX;
         let err = decode_palette(&png).unwrap_err();
         assert_eq!(err, PngError::ChunkCrcMismatch(*b"PLTE"));
     }
 
     #[test]
     fn decode_palette_rejects_a_plte_length_not_a_multiple_of_three() {
-        // A `PLTE` chunk with a dangling partial RGB triple (2 bytes) -- a
-        // corrupt-file case no real upstream PNG produces, but the parser
-        // must fail closed rather than panic on an uneven `chunks_exact(3)`.
-        let mut ihdr = Vec::new();
-        ihdr.extend_from_slice(&1u32.to_be_bytes());
-        ihdr.extend_from_slice(&1u32.to_be_bytes());
-        ihdr.extend_from_slice(&[4, 3, 0, 0, 0]); // bit depth 4, colour type 3
-        let mut png = Vec::new();
-        png.extend_from_slice(&super::SIGNATURE);
-        png.extend_from_slice(&chunk(*b"IHDR", &ihdr));
-        png.extend_from_slice(&chunk(*b"PLTE", &[1, 2]));
-        png.extend_from_slice(&chunk(*b"IEND", &[]));
+        let png = indexed_png_from_raw_with_plte(
+            super::FOUR_BIT_DEPTH,
+            1,
+            1,
+            &[super::FILTER_NONE, 0],
+            &[1, 2],
+        );
         let err = decode_palette(&png).unwrap_err();
         assert_eq!(err, PngError::MissingOrBadPalette);
     }
