@@ -1,53 +1,29 @@
-//! The `gSpecials` name table (S-5, slice 2, issue #93).
+//! Script-special metadata and callbacks.
 //!
-//! Behavioural re-implementation `(behavioral-fidelity)` of the *shape* of
-//! upstream's `gSpecials` (`pokeemerald/data/specials.inc` +
-//! `pokeemerald/data/event_scripts.s:92-94`'s `ALLOCATE_SPECIAL_TABLE`
-//! inclusion that materializes it): a flat, order-significant table of C
-//! function names `special`/`specialvar` (`pokeemerald/src/scrcmd.c`'s
-//! `ScrCmd_special`/`ScrCmd_specialvar`) index into by a `SPECIAL_<name>`
-//! constant the assembler resolves to that name's position in the table
-//! (`asm/macros/event.inc:279-297`'s `special`/`specialvar` macros). Only the
-//! *names* (plus each one's `waitstate` flag) are transcribed here, in
-//! upstream's exact table order, as data — every [`SPECIAL_TABLE`] slot
-//! is `None` in this slice `(no-verbatim)`: none of the ~30 subsystems those
-//! 527 C functions reach into (secret bases, link-cable trading, the Pokédex,
-//! contests, the Battle Frontier, …) exist in this port yet. A later slice
-//! fills in a slot at a time as its subsystem lands, exactly like
-//! [`crate::script::commands::COMMAND_TABLE`]'s `unimplemented::<OP>`
-//! placeholders get replaced one opcode at a time.
-//!
-//! Three names appear at two different [`SPECIALS`] indices each —
-//! `ShowGlassWorkshopMenu` (277, 348), `ShowMapNamePopup` (409, 410), and
-//! `Script_DoRayquazaScene` (470, 508, the latter upstream-commented `@
-//! Listed twice`) — transcribed faithfully rather than deduplicated, since
-//! each reflects two distinct `def_special` lines upstream itself repeats
-//! (`.set SPECIAL_<name>` simply ends up bound to the *second* occurrence's
-//! index for those three names, an upstream quirk this table preserves
-//! positionally without trying to resolve).
+//! Script bytecode addresses specials by their position in `gSpecials`, so
+//! [`SPECIALS`] and [`SPECIAL_TABLE`] share the exact order defined by
+//! `data/specials.inc`. Order preservation includes its duplicate definitions
+//! (`data/specials.inc:293,364,425-426,486,524`): `ShowGlassWorkshopMenu` at
+//! indices 277 and 348, `ShowMapNamePopup` at 409 and 410, and
+//! `Script_DoRayquazaScene` at 470 and 508.
 
-/// One `data/specials.inc` `def_special` entry: the upstream C function's
-/// name, and whether calling it through `special`/`specialvar` implicitly
-/// appends a `waitstate` (upstream `SPECIAL_WAITSTATE_<name>`,
-/// `asm/macros/event.inc:283-284,294-295`) — i.e. whether the *caller* (a
-/// compiled script, out of scope here) blocks until the special completes
-/// asynchronously. Recorded for when script *compilation* exists to consume
-/// it; [`SPECIAL_TABLE`] dispatch itself does not consult it.
+/// Metadata encoded by one `def_special` entry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SpecialSpec {
-    /// The upstream C function name, e.g. `"HealPlayerParty"`.
+    /// The upstream function name.
     pub name: &'static str,
-    /// `SPECIAL_WAITSTATE_<name>` upstream: `true` if calling this special
-    /// implicitly generates a `waitstate`.
+    /// Whether script assembly appends an implicit `waitstate`.
     pub waitstate: bool,
 }
 
-/// The number of entries in upstream's `gSpecials` (`data/specials.inc`).
+/// Number of valid special indices.
 pub const SPECIAL_COUNT: usize = 527;
 
-/// Transcribed 1:1 from `data/specials.inc`, in table order — ground truth,
-/// not derived from any logic. See the module docs for the three
-/// upstream-duplicated names.
+/// Special metadata in encoded-index order.
+///
+/// The order matches `data/specials.inc` because its `def_special` macro
+/// assigns each `SPECIAL_*` constant from the entry's table position
+/// (`data/specials.inc:1-9`).
 #[rustfmt::skip]
 pub const SPECIALS: [SpecialSpec; SPECIAL_COUNT] = [
     SpecialSpec { name: "HealPlayerParty", waitstate: false },
@@ -579,21 +555,16 @@ pub const SPECIALS: [SpecialSpec; SPECIAL_COUNT] = [
     SpecialSpec { name: "TrySetBattleTowerLinkType", waitstate: false },
 ];
 
-/// A validated index into [`SPECIALS`]/[`SPECIAL_TABLE`] — the Rust
-/// equivalent of a resolved `SPECIAL_<name>` constant
-/// (`asm/macros/event.inc`'s `def_special` macro numbers them in table
-/// order, `0..SPECIAL_COUNT`).
+/// A range-checked index shared by [`SPECIALS`] and [`SPECIAL_TABLE`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct SpecialId(u16);
 
 impl SpecialId {
-    /// Classify a raw `special`/`specialvar` index operand, mirroring the
-    /// bounds a valid `SPECIAL_<name>` constant is always within. Upstream's
-    /// `ScrCmd_special`/`ScrCmd_specialvar` (`src/scrcmd.c`) never check this
-    /// — `gSpecials[index]()` on an out-of-range `index` is an out-of-bounds
-    /// function-pointer call (undefined behaviour); this port refuses it
-    /// instead, see `CommandTrap::InvalidSpecial`
-    /// (`crate::script::commands`).
+    /// Validates a special index read from bytecode.
+    ///
+    /// Upstream dispatches through `gSpecials` without a bounds check
+    /// (`src/scrcmd.c:119-132`); returning `None` rejects malformed bytecode
+    /// before callback dispatch.
     #[must_use]
     pub const fn from_index(index: u16) -> Option<Self> {
         if (index as usize) < SPECIAL_COUNT {
@@ -603,33 +574,27 @@ impl SpecialId {
         }
     }
 
-    /// This id's index into [`SPECIALS`]/[`SPECIAL_TABLE`] — the inverse of
-    /// [`from_index`](Self::from_index).
+    /// Returns this special's encoded table index.
     #[must_use]
     pub const fn index(self) -> u16 {
         self.0
     }
 
-    /// This id's [`SpecialSpec`] (name + `waitstate` flag).
+    /// Returns this special's metadata.
     #[must_use]
     pub fn spec(self) -> SpecialSpec {
         SPECIALS[usize::from(self.0)]
     }
 }
 
-/// A `gSpecials` slot's behavior once implemented: the special's `u16`
-/// return value. `ScrCmd_specialvar` writes it to the output var;
-/// `ScrCmd_special` calls the same shape of function and discards the
-/// result, matching upstream exactly (both opcodes share one `gSpecials`
-/// table upstream, so one Rust fn type serves both call sites here too).
+/// Callback shared by `special` and `specialvar` command dispatch.
+///
+/// `specialvar` stores the return value; `special` discards it.
 pub type SpecialFn = fn(&mut crate::script::commands::ScriptHost) -> u16;
 
-/// Mirrors `gSpecials`: one dispatch slot per [`SpecialId`]. `None` in every
-/// slot in this slice — see the module docs for why — so `special`/
-/// `specialvar` (`crate::script::commands`) trap
-/// `CommandTrap::UnimplementedSpecial` for every currently-valid id. A later
-/// slice replaces specific slots with `Some(fn)` as each special's subsystem
-/// lands, the same way `COMMAND_TABLE` grows opcode by opcode.
+/// Callback slots in encoded [`SpecialId`] order.
+///
+/// `None` marks a recognized special whose callback is unavailable.
 pub const SPECIAL_TABLE: [Option<SpecialFn>; SPECIAL_COUNT] = [None; SPECIAL_COUNT];
 
 #[cfg(test)]
@@ -637,15 +602,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn specials_table_has_upstreams_exact_entry_count() {
+    fn special_registry_has_upstream_entry_count() {
         assert_eq!(SPECIALS.len(), 527);
         assert_eq!(SPECIAL_TABLE.len(), 527);
     }
 
-    // Ground-truth spot checks, transcribed independently from
-    // `data/specials.inc`, not derived from this module's own array.
     #[test]
-    fn first_and_last_entries_match_upstream_order() {
+    fn edge_entries_preserve_upstream_order() {
         assert_eq!(
             SPECIALS[0],
             SpecialSpec {
@@ -677,13 +640,12 @@ mod tests {
     }
 
     #[test]
-    fn waitstate_flag_count_matches_upstream() {
-        // `grep -c waitstate=1 data/specials.inc` == 99.
+    fn waitstate_metadata_matches_upstream_count() {
         assert_eq!(SPECIALS.iter().filter(|s| s.waitstate).count(), 99);
     }
 
     #[test]
-    fn from_index_round_trips_within_range() {
+    fn special_ids_round_trip_within_range() {
         let id = SpecialId::from_index(0).unwrap();
         assert_eq!(id.index(), 0);
         assert_eq!(id.spec().name, "HealPlayerParty");
@@ -693,7 +655,7 @@ mod tests {
     }
 
     #[test]
-    fn from_index_rejects_out_of_range_indices() {
+    fn special_ids_reject_out_of_range_indices() {
         assert_eq!(
             SpecialId::from_index(u16::try_from(SPECIAL_COUNT).unwrap()),
             None
@@ -702,10 +664,7 @@ mod tests {
     }
 
     #[test]
-    fn every_special_table_slot_is_unimplemented_in_this_slice() {
-        assert!(
-            SPECIAL_TABLE.iter().all(Option::is_none),
-            "no gSpecials subsystem is wired yet"
-        );
+    fn special_callbacks_are_unimplemented() {
+        assert!(SPECIAL_TABLE.iter().all(Option::is_none));
     }
 }
