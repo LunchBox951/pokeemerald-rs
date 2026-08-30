@@ -1,3 +1,21 @@
+//! Resolves parsed voicegroup references and normalizes each emitted group to
+//! [`super::VOICE_SLOT_COUNT`] slots.
+//!
+//! # Sample id scheme
+//!
+//! `DirectSoundWaveData_<name>` maps to
+//! `audio/sample/direct-sound/<name>`. `ProgrammableWaveData_<n>` maps to
+//! `audio/sample/programmable-wave/<nn>`, with the numeric suffix padded to
+//! two digits. A resolved group label maps to `audio/voicegroup/<label>`.
+//!
+//! # Link adjacency
+//!
+//! The top-level group's undeclared trailing slots are filled in order from
+//! the linked successor groups supplied by `super::link_order_successors`.
+//! Borrowed entries use their source group's label for diagnostics and may
+//! resolve an indirection child. Indirection-target groups never borrow
+//! adjacent entries; any unfilled position remains [`VoiceSlot::Empty`].
+
 use std::collections::HashMap;
 
 use super::parser::{
@@ -99,7 +117,7 @@ pub(super) fn voice_group_pack_id(label: &str) -> String {
     format!("audio/voicegroup/{label}")
 }
 
-fn normalize_to_128_slots(
+fn pad_to_128(
     group: &str,
     starting_note: u8,
     mut slots: Vec<VoiceSlot>,
@@ -220,7 +238,14 @@ fn convert_leaf_slot(raw_slot: &RawSlot, group_label: &str) -> Result<VoiceSlot,
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum GroupRole {
-    TopLevelWithLinkAdjacency,
+    TopLevel,
+    IndirectionTarget,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SlotOrigin {
+    TopLevelGroup,
+    BorrowedLinkSuccessor,
     IndirectionTarget,
 }
 
@@ -250,7 +275,7 @@ impl<'a> Resolver<'a> {
     }
 
     fn resolve(mut self, top_label: &str) -> Result<Vec<ResolvedVoiceGroup>, VoiceGroupError> {
-        self.resolve_group(top_label, GroupRole::TopLevelWithLinkAdjacency)?;
+        self.resolve_group(top_label, GroupRole::TopLevel)?;
         Ok(self
             .emission_order
             .into_iter()
@@ -284,12 +309,16 @@ impl<'a> Resolver<'a> {
         })?;
 
         self.resolution_path.push(label.to_owned());
+        let declared_slot_origin = match role {
+            GroupRole::TopLevel => SlotOrigin::TopLevelGroup,
+            GroupRole::IndirectionTarget => SlotOrigin::IndirectionTarget,
+        };
         let mut slots = Vec::with_capacity(raw_group.slots.len());
         for raw_slot in &raw_group.slots {
-            slots.push(self.resolve_slot(&raw_group.label, role, raw_slot)?);
+            slots.push(self.resolve_slot(&raw_group.label, declared_slot_origin, raw_slot)?);
         }
 
-        if role == GroupRole::TopLevelWithLinkAdjacency {
+        if role == GroupRole::TopLevel {
             let declared_slot_end = usize::from(raw_group.starting_note) + slots.len();
             let missing_trailing_slot_count = VOICE_SLOT_COUNT.saturating_sub(declared_slot_end);
             slots.extend(
@@ -300,8 +329,7 @@ impl<'a> Resolver<'a> {
             );
         }
 
-        let normalized_slots =
-            normalize_to_128_slots(&raw_group.label, raw_group.starting_note, slots)?;
+        let normalized_slots = pad_to_128(&raw_group.label, raw_group.starting_note, slots)?;
         self.resolution_path.pop();
         self.resolved_groups.insert(
             raw_group.label.clone(),
@@ -317,7 +345,7 @@ impl<'a> Resolver<'a> {
     fn resolve_slot(
         &mut self,
         group_label: &str,
-        group_role: GroupRole,
+        slot_origin: SlotOrigin,
         raw_slot: &RawSlot,
     ) -> Result<VoiceSlot, VoiceGroupError> {
         match raw_slot {
@@ -326,12 +354,12 @@ impl<'a> Resolver<'a> {
                 table_label,
             } => self.resolve_indirection_slot(
                 group_label,
-                group_role,
+                slot_origin,
                 child_label,
                 Some(table_label),
             ),
             RawSlot::Rhythm { child_label } => {
-                self.resolve_indirection_slot(group_label, group_role, child_label, None)
+                self.resolve_indirection_slot(group_label, slot_origin, child_label, None)
             }
             leaf => convert_leaf_slot(leaf, group_label),
         }
@@ -340,11 +368,11 @@ impl<'a> Resolver<'a> {
     fn resolve_indirection_slot(
         &mut self,
         parent_label: &str,
-        parent_role: GroupRole,
+        parent_slot_origin: SlotOrigin,
         child_label: &str,
         table_label: Option<&str>,
     ) -> Result<VoiceSlot, VoiceGroupError> {
-        if parent_role == GroupRole::IndirectionTarget {
+        if parent_slot_origin == SlotOrigin::IndirectionTarget {
             return Err(VoiceGroupError::NestedIndirection {
                 parent: parent_label.to_owned(),
                 child: child_label.to_owned(),
@@ -399,7 +427,7 @@ impl<'a> Resolver<'a> {
                 }
                 borrowed_slots.push(self.resolve_slot(
                     &successor.label,
-                    GroupRole::TopLevelWithLinkAdjacency,
+                    SlotOrigin::BorrowedLinkSuccessor,
                     raw_slot,
                 )?);
             }
