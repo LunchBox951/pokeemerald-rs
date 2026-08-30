@@ -1,59 +1,15 @@
-//! Gen-3 text codec (S-5).
+//! Codec for Emerald's Latin/English text encoding.
 //!
-//! Behavioural re-implementation `(behavioral-fidelity)` of Emerald's custom
-//! single-byte text encoding. Every dialog line, menu label, name and save
-//! string upstream is stored in this encoding, mapping one byte to one glyph
-//! with a handful of multi-byte *control codes*. The byte↔glyph table is
-//! transcribed from `pokeemerald/charmap.txt` and the control-code semantics
-//! from `pokeemerald/include/constants/characters.h` +
-//! `pokeemerald/src/string_util.c` (`GetExtCtrlCodeLength`).
+//! [`decode`] converts printable glyphs, named font tiles, and control codes
+//! into typed [`Token`]s. [`encode`] reverses that representation without
+//! discarding control-code arguments.
 //!
-//! # Scope
+//! # Font support
 //!
-//! This slice implements the **Latin/English font** only — the byte→glyph
-//! assignments used by the English build. Two kinds of Latin-font byte are not
-//! plain Unicode scalars and so cannot live in [`GLYPHS`]:
-//!
-//! * *Control codes* (`0xF7`–`0xFF`, and the Bard delimiter `0x37`) decode to
-//!   their own typed [`Token`] variant.
-//! * *Named font tiles* (`{LV}`, the `PKMN`/`POKEBLOCK` word tiles, the
-//!   directional arrows, the French superscripts, …) decode to a typed
-//!   [`Token::Symbol`] — they are glyph *tiles*, not text characters, so they
-//!   are carried as [`Symbol`] rather than being flattened to lookalike chars.
-//!
-//! The **Japanese hiragana/katakana and Japanese-only punctuation font sections
-//! of `charmap.txt` (its `@ Hiragana` block onward) are out of scope for this
-//! slice and remain unimplemented.** Those byte values collide with the Latin
-//! font (the encoding is font-relative), so this codec never guesses at them:
-//! any byte that is neither an assigned Latin glyph, a named Latin tile, nor a
-//! control code surfaces as [`TextError::UnknownByte`] — nothing is silently
-//! lost or mis-rendered.
-//!
-//! Because the font is selectable at runtime, [`decode`] tracks the active font
-//! the way the upstream renderer does (`textPrinter->japanese`, `text.c`): an
-//! `EXT_CTRL_CODE_JPN` (`0xFC 0x15`) switches subsequent glyph bytes to the
-//! Japanese font and `EXT_CTRL_CODE_ENG` (`0xFC 0x16`) switches back. While the
-//! Japanese font is active, glyph bytes belong to the out-of-scope JP table, so
-//! they surface as [`TextError::UnsupportedJapanese`] rather than being decoded
-//! as their Latin lookalikes — the font-independent control codes still decode
-//! normally. This keeps the "never silently mis-render" guarantee honest across
-//! a font switch.
-//!
-//! The codec owns no global state `(oop-boundaries)`: [`decode`] turns bytes
-//! into a [`Vec`] of typed [`Token`]s and [`encode`] performs the inverse for
-//! the representable subset. Control codes are *typed*, never silently dropped
-//! or rendered as mojibake: a terminator is [`Token::End`], a newline is
-//! [`Token::Newline`], a name/buffer placeholder is [`Token::Placeholder`], and
-//! so on. Unknown or truncated input surfaces as a concrete [`TextError`]
-//! rather than being guessed at.
-//!
-//! Two further modules build on this codec (S-5, issue #124):
-//! [`render`] is the frame-driven glyph renderer ([`render::Printer`]) that
-//! turns a decoded token stream into per-frame glyph blits against an
-//! `assets::fonts::FontGlyphSheet`, with upstream's character-at-a-time
-//! reveal cadence and `\n`/`\l`/`\p` line-break/scroll/page semantics; and
-//! [`window`] is the message-box compositor that lays out a text window's
-//! frame tiles ([`window::MessageBoxLayout`], [`window::border_tiles`]).
+//! Japanese glyphs are not implemented. Latin and Japanese glyph bytes overlap,
+//! so [`decode`] returns [`TextError::UnsupportedJapanese`] for a glyph after a
+//! Japanese-font switch. Font-independent control codes continue to decode, and
+//! an English-font switch restores Latin glyph decoding.
 
 use std::fmt;
 
@@ -61,204 +17,162 @@ pub mod format;
 pub mod render;
 pub mod window;
 
-/// End-of-string terminator byte (`EOS`, upstream `0xFF`).
+/// End-of-string terminator byte.
 ///
-/// Note: `charmap.txt` also lists `'$' = FF`, but `0xFF` is unambiguously the
-/// string terminator everywhere it is *read* in-engine; the `$` alias is only a
-/// build-time convenience. We honour the terminator semantics.
+/// Although `$` aliases this byte in authored text, the runtime always reads it
+/// as a terminator.
 pub const EOS: u8 = 0xFF;
 
-/// Newline byte — advance to the next text line (upstream `CHAR_NEWLINE`).
+/// Newline byte.
 pub const CHAR_NEWLINE: u8 = 0xFE;
 
-/// Placeholder lead byte: the next byte selects a buffered string such as the
-/// player's name (upstream `PLACEHOLDER_BEGIN`).
+/// Lead byte for a buffered-string placeholder; followed by one selector byte.
 pub const PLACEHOLDER_BEGIN: u8 = 0xFD;
 
-/// Extended control-code lead byte (upstream `EXT_CTRL_CODE_BEGIN`). The next
-/// byte is a sub-code whose length is given by [`ext_ctrl_code_len`].
+/// Lead byte for an extended control code; followed by its subcode and arguments.
 pub const EXT_CTRL_CODE_BEGIN: u8 = 0xFC;
 
-/// "Dynamic" placeholder lead byte (upstream `CHAR_DYNAMIC`). Followed by one
-/// index byte selecting a runtime-registered dynamic string, so it is a
-/// **two-byte** sequence, not a bare token: the `{DYNAMIC N}` macro in upstream
-/// text (e.g. `src/strings.c`) emits `0xF7 <N>`, and the renderer reads that
-/// trailing byte (`text.c`, `case CHAR_DYNAMIC: … GetPlaceholderPtr(*++str)`;
-/// `GetStringWidth` advances past it exactly as it does for `PLACEHOLDER_BEGIN`).
-/// The `DYNAMIC = F7` line in `charmap.txt` only defines the macro's lead byte,
-/// not its arity.
+/// Lead byte for a runtime-registered dynamic string; followed by one index byte.
 pub const CHAR_DYNAMIC: u8 = 0xF7;
 
-/// Keypad-icon lead byte (upstream `CHAR_KEYPAD_ICON`). Followed by one index
-/// byte selecting a button/keypad icon tile; the renderer reads that trailing
-/// byte (`text.c`, `case CHAR_KEYPAD_ICON: … *currentChar++`). A two-byte
-/// sequence, font-independent.
+/// Lead byte for a keypad icon; followed by one icon index byte.
 pub const CHAR_KEYPAD_ICON: u8 = 0xF8;
 
-/// Extra-symbol lead byte (upstream `CHAR_EXTRA_SYMBOL`). Followed by one index
-/// byte selecting a glyph from the extended symbol page (`currChar | 0x100` in
-/// `text.c`). A two-byte sequence, font-independent.
+/// Lead byte for an extra-page symbol; followed by one glyph index byte.
 pub const CHAR_EXTRA_SYMBOL: u8 = 0xF9;
 
-/// Word-delimiter control byte used by the Bard's song (upstream
-/// `CHAR_BARD_WORD_DELIMIT`). An "empty space" that separates easy-chat words:
-/// the Bard code swaps `CHAR_SPACE`⇄this byte while shuffling the song and
-/// substitutes it back to `CHAR_SPACE` before printing (`mauville_old_man.c`).
-/// It is a Latin-font control constant, not a `charmap.txt` glyph (byte `0x37`
-/// is unassigned in the Latin font — it is `が` only in the JP font), so it
-/// decodes to its own [`Token::BardWordDelimit`] and round-trips losslessly.
+/// In-word space marker used while preparing the Bard's song.
+///
+/// It is distinct from an ordinary space so word boundaries survive song
+/// shuffling, then becomes a space before display.
 pub const CHAR_BARD_WORD_DELIMIT: u8 = 0x37;
 
-/// Extended control sub-code that pauses printing for a fixed number of
-/// frames before resuming (upstream `EXT_CTRL_CODE_PAUSE`); emitted as
-/// `0xFC 0x08 <frames>`, one argument byte -- the frame count
-/// [`render::Printer`]'s `RENDER_STATE_PAUSE`-mirroring state counts down
-/// before returning to normal character handling (`text.c:1013-1017`,
-/// `text.c:1215-1220`).
-///
-/// [`render::Printer`]: crate::text::render::Printer
+/// Extended-control subcode for a one-byte frame delay.
 pub const EXT_CTRL_CODE_PAUSE: u8 = 0x08;
 
-/// Extended control sub-code that switches the active font to Japanese
-/// (upstream `EXT_CTRL_CODE_JPN`); emitted as `0xFC 0x15`, zero arguments.
+/// Extended-control subcode that selects the Japanese font.
 pub const EXT_CTRL_CODE_JPN: u8 = 0x15;
 
-/// Extended control sub-code that switches the active font back to
-/// Latin/English (upstream `EXT_CTRL_CODE_ENG`); emitted as `0xFC 0x16`, zero
-/// arguments.
+/// Extended-control subcode that selects the Latin/English font.
 pub const EXT_CTRL_CODE_ENG: u8 = 0x16;
 
-/// Prompt-then-scroll byte: wait for a button press, then scroll the dialog box
-/// up one line (upstream `CHAR_PROMPT_SCROLL`).
+/// Wait-for-input byte that then scrolls the dialog by one line.
 pub const CHAR_PROMPT_SCROLL: u8 = 0xFA;
 
-/// Prompt-then-clear byte: wait for a button press, then clear the dialog box
-/// (upstream `CHAR_PROMPT_CLEAR`).
+/// Wait-for-input byte that then clears the dialog.
 pub const CHAR_PROMPT_CLEAR: u8 = 0xFB;
 
-/// The placeholder index for the player's name (`PLAYER = FD 01` in
-/// `charmap.txt`). Exposed so callers can build `Token::Placeholder(PLAYER)`
-/// without memorising the raw index.
+/// Buffered-string selector for the player's name.
 pub const PLACEHOLDER_PLAYER: u8 = 0x01;
 
-/// A named single-byte *font tile* from the Latin/English font that is not a
-/// plain Unicode scalar and so cannot live in [`GLYPHS`].
+const EXT_CTRL_CODE_COLOR: u8 = 0x01;
+const EXT_CTRL_CODE_HIGHLIGHT: u8 = 0x02;
+const EXT_CTRL_CODE_SHADOW: u8 = 0x03;
+const EXT_CTRL_CODE_COLOR_HIGHLIGHT_SHADOW: u8 = 0x04;
+const EXT_CTRL_CODE_PALETTE: u8 = 0x05;
+const EXT_CTRL_CODE_FONT: u8 = 0x06;
+const EXT_CTRL_CODE_PLAY_BGM: u8 = 0x0B;
+const EXT_CTRL_CODE_ESCAPE: u8 = 0x0C;
+const EXT_CTRL_CODE_SHIFT_RIGHT: u8 = 0x0D;
+const EXT_CTRL_CODE_SHIFT_DOWN: u8 = 0x0E;
+const EXT_CTRL_CODE_PLAY_SE: u8 = 0x10;
+const EXT_CTRL_CODE_CLEAR: u8 = 0x11;
+const EXT_CTRL_CODE_SKIP: u8 = 0x12;
+const EXT_CTRL_CODE_CLEAR_TO: u8 = 0x13;
+const EXT_CTRL_CODE_MIN_LETTER_SPACING: u8 = 0x14;
+
+/// A named Latin/English font tile with no single-character representation.
 ///
-/// These are stylised glyph tiles (abbreviations, the letters of the
-/// `POKéMON`/`POKéBLOCK` logo words, directional arrows, French superscripts),
-/// transcribed from `pokeemerald/charmap.txt`. Each maps to exactly one byte —
-/// decoding is byte-faithful, one byte to one [`Symbol`], with no lookahead or
-/// composite detection. Note that some of these bytes also appear standalone
-/// (e.g. `PK` = `0x53` is both the first tile of `PKMN` and a tile in its own
-/// right).
+/// Each variant occupies one byte, including tiles that form part of a larger
+/// stylised word.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Symbol {
-    /// `LV` — the stylised "Lv" level tile (`0x34`).
+    /// Stylised level abbreviation.
     Lv,
-    /// `PK` — first tile of the stylised `POKé` abbreviation (`0x53`); also the
-    /// leading tile of the `PKMN` word.
+    /// First tile of the stylised `PKMN` word.
     Pk,
-    /// `MN` — second tile of the stylised `PKMN` word (`0x54`).
+    /// Second tile of the stylised `PKMN` word.
     Mn,
-    /// First tile of the stylised `POKéBLOCK` word (`0x55`).
+    /// First tile of the stylised `POKEBLOCK` word.
     Pokeblock1,
-    /// Second tile of the stylised `POKéBLOCK` word (`0x56`).
+    /// Second tile of the stylised `POKEBLOCK` word.
     Pokeblock2,
-    /// Third tile of the stylised `POKéBLOCK` word (`0x57`).
+    /// Third tile of the stylised `POKEBLOCK` word.
     Pokeblock3,
-    /// Fourth tile of the stylised `POKéBLOCK` word (`0x58`).
+    /// Fourth tile of the stylised `POKEBLOCK` word.
     Pokeblock4,
-    /// Fifth tile of the stylised `POKéBLOCK` word (`0x59`).
+    /// Fifth tile of the stylised `POKEBLOCK` word.
     Pokeblock5,
-    /// `UNK_SPACER` — an unnamed spacer tile (`0x77`).
+    /// Empty spacer tile.
     Spacer,
-    /// `UP_ARROW` — the up directional arrow tile (`0x79`).
+    /// Up arrow tile.
     UpArrow,
-    /// `DOWN_ARROW` — the down directional arrow tile (`0x7A`).
+    /// Down arrow tile.
     DownArrow,
-    /// `LEFT_ARROW` — the left directional arrow tile (`0x7B`).
+    /// Left arrow tile.
     LeftArrow,
-    /// `RIGHT_ARROW` — the right directional arrow tile (`0x7C`).
+    /// Right arrow tile.
     RightArrow,
-    /// `SUPER_ER` — superscript "er" tile, used by the French build (`0x2C`).
+    /// French superscript `er` tile.
     SuperEr,
-    /// `SUPER_E` — superscript "e" tile, used by the French build (`0x84`).
+    /// French superscript `e` tile.
     SuperE,
-    /// `SUPER_RE` — superscript "re" tile, used by the French build (`0xA0`).
+    /// French superscript `re` tile.
     SuperRe,
 }
 
 /// A decoded unit of Gen-3 text.
-///
-/// Printable glyphs decode to [`Token::Char`]; named non-text font tiles decode
-/// to [`Token::Symbol`]; every control code decodes to its own typed variant so
-/// nothing is lost or misrendered.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Token {
-    /// A printable glyph (letter, digit, punctuation, space, …).
+    /// A printable glyph.
     Char(char),
-    /// A named non-text font tile (arrow, `LV`/`PKMN`/`POKEBLOCK` word tile,
-    /// French superscript, …) — see [`Symbol`].
+    /// A named non-text font tile.
     Symbol(Symbol),
-    /// Line break (`0xFE`).
+    /// Line break.
     Newline,
-    /// The Bard's-song word delimiter (`0x37`, `CHAR_BARD_WORD_DELIMIT`) — an
-    /// empty word-separator space that upstream substitutes for `CHAR_SPACE`
-    /// before printing. Carried as its own token so it round-trips to `0x37`
-    /// rather than collapsing to the space glyph (`0x00`).
+    /// In-word space marker used by the Bard's song.
     BardWordDelimit,
-    /// Wait for input, then scroll the dialog window (`0xFA`).
+    /// Wait for input, then scroll the dialog window.
     PromptScroll,
-    /// Wait for input, then clear the dialog window (`0xFB`).
+    /// Wait for input, then clear the dialog window.
     PromptClear,
-    /// A buffered-string placeholder (`0xFD <index>`), e.g. the player's name.
-    /// The index is the raw selector byte (see [`PLACEHOLDER_PLAYER`]).
+    /// A buffered-string selector.
     Placeholder(u8),
-    /// A runtime dynamic-string reference (`0xF7 <index>`).
+    /// A runtime dynamic-string selector.
     Dynamic(u8),
-    /// A keypad/button icon tile (`0xF8 <index>`). The index selects which icon.
+    /// A keypad-icon selector.
     KeypadIcon(u8),
-    /// An extended-symbol-page glyph (`0xF9 <index>`). The index selects the
-    /// glyph within the extra-symbol page.
+    /// An extra-page symbol selector.
     ExtraSymbol(u8),
-    /// An extended control code (`0xFC <sub> <args…>`), e.g. colour or font
-    /// changes. `sub` is the sub-code byte; `args` are its trailing argument
-    /// bytes (may be empty). Preserved verbatim so re-encoding is lossless.
+    /// An extended control subcode and its trailing arguments.
     ExtCtrl {
-        /// The sub-code byte immediately following `0xFC`.
+        /// Subcode byte.
         sub: u8,
-        /// Argument bytes trailing the sub-code (length per [`ext_ctrl_code_len`]).
+        /// Trailing argument bytes.
         args: Vec<u8>,
     },
-    /// The end-of-string terminator (`0xFF`).
+    /// End-of-string terminator.
     End,
 }
 
 /// Errors from encoding or decoding Gen-3 text.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TextError {
-    /// A byte encountered during decode has no known glyph and is not a
-    /// recognised control code.
+    /// A byte has no known Latin glyph or control meaning.
     UnknownByte(u8),
-    /// A glyph byte was encountered while the Japanese font was active (after an
-    /// `EXT_CTRL_CODE_JPN` switch). The Japanese font is out of scope for this
-    /// slice, so the byte is reported rather than decoded as its Latin
-    /// lookalike. Carries the offending byte.
+    /// A glyph was encountered while the unsupported Japanese font was active.
     UnsupportedJapanese(u8),
-    /// A control code was cut off by the end of input (e.g. `0xFD` with no index
-    /// byte, or an extended code missing its arguments). Carries the lead byte.
+    /// A control sequence ended before all required bytes were present.
     Truncated(u8),
-    /// A `char` was requested for encoding but has no byte in the Gen-3 table.
+    /// A character has no Gen-3 encoding.
     UnencodableChar(char),
-    /// A [`Token::ExtCtrl`] was given an `args` count that does not match the
-    /// canonical arity for its sub-code (per [`ext_ctrl_code_len`]). Carries the
-    /// sub-code, the expected argument count, and the number actually given.
+    /// An extended control has the wrong number of arguments.
     ExtCtrlArity {
-        /// The sub-code byte whose arity was violated.
+        /// Subcode whose arity was violated.
         sub: u8,
-        /// The canonical argument count for `sub`, per [`ext_ctrl_code_len`].
+        /// Required argument count.
         expected: u8,
-        /// The argument count actually supplied.
+        /// Supplied argument count.
         got: usize,
     },
 }
@@ -282,34 +196,40 @@ impl fmt::Display for TextError {
 
 impl std::error::Error for TextError {}
 
-/// Length in bytes of an extended control code *including its sub-code byte*,
-/// given that sub-code. Mirrors upstream `GetExtCtrlCodeLength` in
-/// `string_util.c`. A return of `1` means the sub-code takes no arguments; `2`
-/// means one argument byte follows, etc. Unknown sub-codes return `1`
-/// (upstream treats them as zero-argument), matching the hardware's behaviour
-/// of only advancing past the sub-code byte.
+const fn ext_ctrl_code_arg_count(sub: u8) -> u8 {
+    match sub {
+        EXT_CTRL_CODE_COLOR
+        | EXT_CTRL_CODE_HIGHLIGHT
+        | EXT_CTRL_CODE_SHADOW
+        | EXT_CTRL_CODE_PALETTE
+        | EXT_CTRL_CODE_FONT
+        | EXT_CTRL_CODE_PAUSE
+        | EXT_CTRL_CODE_ESCAPE
+        | EXT_CTRL_CODE_SHIFT_RIGHT
+        | EXT_CTRL_CODE_SHIFT_DOWN
+        | EXT_CTRL_CODE_CLEAR
+        | EXT_CTRL_CODE_SKIP
+        | EXT_CTRL_CODE_CLEAR_TO
+        | EXT_CTRL_CODE_MIN_LETTER_SPACING => 1,
+        EXT_CTRL_CODE_COLOR_HIGHLIGHT_SHADOW => 3,
+        EXT_CTRL_CODE_PLAY_BGM | EXT_CTRL_CODE_PLAY_SE => 2,
+        _ => 0,
+    }
+}
+
+/// Number of bytes from an extended-control subcode through its final argument.
 ///
-/// ```
-/// use engine::text::ext_ctrl_code_len;
-/// assert_eq!(ext_ctrl_code_len(0x01), 2); // COLOR: 1 arg
-/// assert_eq!(ext_ctrl_code_len(0x04), 4); // COLOR_HIGHLIGHT_SHADOW: 3 args
-/// assert_eq!(ext_ctrl_code_len(0x07), 1); // RESET_FONT: 0 args
-/// ```
+/// The extended-control lead byte is excluded. Unrecognized subcodes consume no
+/// argument bytes.
 #[must_use]
 pub const fn ext_ctrl_code_len(sub: u8) -> u8 {
-    match sub {
-        // COLOR, HIGHLIGHT, SHADOW, PALETTE, FONT, PAUSE, ESCAPE, SHIFT_RIGHT,
-        // SHIFT_DOWN, CLEAR, SKIP, CLEAR_TO, MIN_LETTER_SPACING — one arg byte.
-        0x01 | 0x02 | 0x03 | 0x05 | 0x06 | 0x08 | 0x0C | 0x0D | 0x0E | 0x11 | 0x12 | 0x13
-        | 0x14 => 2,
-        // COLOR_HIGHLIGHT_SHADOW — three arg bytes.
-        0x04 => 4,
-        // PLAY_BGM, PLAY_SE — two arg bytes.
-        0x0B | 0x10 => 3,
-        // Everything else (RESET_FONT, PAUSE_UNTIL_PRESS, WAIT_SE, FILL_WINDOW,
-        // JPN, ENG, PAUSE_MUSIC, RESUME_MUSIC, and any unknown sub-code) — none.
-        _ => 1,
-    }
+    1 + ext_ctrl_code_arg_count(sub)
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Font {
+    Latin,
+    Japanese,
 }
 
 /// Decode a Gen-3 encoded byte slice into a sequence of typed [`Token`]s.
@@ -319,15 +239,14 @@ pub const fn ext_ctrl_code_len(sub: u8) -> u8 {
 /// terminator, every byte is decoded and no `End` token is produced.
 ///
 /// # Errors
-/// Returns [`TextError::UnknownByte`] for a byte with no glyph/control meaning,
-/// or [`TextError::Truncated`] if a multi-byte control code runs off the end of
-/// the slice.
+///
+/// Returns [`TextError::UnknownByte`] for an unassigned Latin byte,
+/// [`TextError::UnsupportedJapanese`] for a Japanese glyph, or
+/// [`TextError::Truncated`] for an incomplete control sequence.
 pub fn decode(bytes: &[u8]) -> Result<Vec<Token>, TextError> {
     let mut out = Vec::new();
     let mut i = 0;
-    // Active font, mirroring `textPrinter->japanese` upstream. Glyph bytes are
-    // font-relative; control codes are not. Toggled by EXT_CTRL_CODE_JPN/ENG.
-    let mut japanese = false;
+    let mut active_font = Font::Latin;
     while i < bytes.len() {
         let b = bytes[i];
         match b {
@@ -369,8 +288,7 @@ pub fn decode(bytes: &[u8]) -> Result<Vec<Token>, TextError> {
             }
             EXT_CTRL_CODE_BEGIN => {
                 let sub = *bytes.get(i + 1).ok_or(TextError::Truncated(b))?;
-                let total = ext_ctrl_code_len(sub) as usize; // includes sub byte
-                let arg_count = total - 1;
+                let arg_count = ext_ctrl_code_arg_count(sub) as usize;
                 let args_start = i + 2;
                 let args_end = args_start + arg_count;
                 if args_end > bytes.len() {
@@ -378,18 +296,15 @@ pub fn decode(bytes: &[u8]) -> Result<Vec<Token>, TextError> {
                 }
                 let args = bytes[args_start..args_end].to_vec();
                 match sub {
-                    EXT_CTRL_CODE_JPN => japanese = true,
-                    EXT_CTRL_CODE_ENG => japanese = false,
+                    EXT_CTRL_CODE_JPN => active_font = Font::Japanese,
+                    EXT_CTRL_CODE_ENG => active_font = Font::Latin,
                     _ => {}
                 }
                 out.push(Token::ExtCtrl { sub, args });
                 i = args_end;
             }
             other => {
-                // Glyph bytes are font-relative. While the Japanese font is
-                // active, this out-of-scope byte must not be decoded as its
-                // Latin lookalike — report it honestly instead.
-                if japanese {
+                if active_font == Font::Japanese {
                     return Err(TextError::UnsupportedJapanese(other));
                 }
                 if other == CHAR_BARD_WORD_DELIMIT {
@@ -408,14 +323,14 @@ pub fn decode(bytes: &[u8]) -> Result<Vec<Token>, TextError> {
     Ok(out)
 }
 
-/// Decode into a plain [`String`], rendering control codes as human-readable
-/// placeholders (e.g. `{PLAYER}`, `\n`).
+/// Decode into a plain [`String`] with readable placeholders for control codes.
 ///
-/// This is a lossy convenience for logging/inspection; use [`decode`] when the
-/// exact token stream matters. The terminator ends the string.
+/// This representation is intended for logging and inspection. Use [`decode`]
+/// to preserve the exact token stream.
 ///
 /// # Errors
-/// Same conditions as [`decode`].
+///
+/// Returns the same errors as [`decode`].
 pub fn decode_to_string(bytes: &[u8]) -> Result<String, TextError> {
     use std::fmt::Write as _;
     let mut s = String::new();
@@ -427,21 +342,20 @@ pub fn decode_to_string(bytes: &[u8]) -> Result<String, TextError> {
             Token::BardWordDelimit => s.push_str("{BARD_DELIM}"),
             Token::PromptScroll => s.push_str("{SCROLL}"),
             Token::PromptClear => s.push_str("{CLEAR}"),
-            // Writes to a String are infallible, so the Result is discarded.
             Token::Placeholder(idx) => {
-                let _ = write!(s, "{{PLACEHOLDER:{idx:#04x}}}");
+                write!(s, "{{PLACEHOLDER:{idx:#04x}}}").expect("writing to a String cannot fail");
             }
             Token::Dynamic(idx) => {
-                let _ = write!(s, "{{DYNAMIC:{idx:#04x}}}");
+                write!(s, "{{DYNAMIC:{idx:#04x}}}").expect("writing to a String cannot fail");
             }
             Token::KeypadIcon(idx) => {
-                let _ = write!(s, "{{KEYPAD:{idx:#04x}}}");
+                write!(s, "{{KEYPAD:{idx:#04x}}}").expect("writing to a String cannot fail");
             }
             Token::ExtraSymbol(idx) => {
-                let _ = write!(s, "{{EXTRA:{idx:#04x}}}");
+                write!(s, "{{EXTRA:{idx:#04x}}}").expect("writing to a String cannot fail");
             }
             Token::ExtCtrl { sub, .. } => {
-                let _ = write!(s, "{{CTRL:{sub:#04x}}}");
+                write!(s, "{{CTRL:{sub:#04x}}}").expect("writing to a String cannot fail");
             }
             Token::End => break,
         }
@@ -449,18 +363,14 @@ pub fn decode_to_string(bytes: &[u8]) -> Result<String, TextError> {
     Ok(s)
 }
 
-/// Encode a token sequence back into Gen-3 bytes.
+/// Encode a token sequence into Gen-3 bytes.
 ///
-/// The inverse of [`decode`] over the representable subset. [`Token::End`]
-/// emits the `0xFF` terminator; callers append it explicitly if they want a
-/// terminated string.
+/// [`Token::End`] emits the terminator; no terminator is added implicitly.
 ///
 /// # Errors
-/// Returns [`TextError::UnencodableChar`] if a [`Token::Char`] holds a glyph
-/// with no byte in the Gen-3 table, or [`TextError::ExtCtrlArity`] if a
-/// [`Token::ExtCtrl`]'s `args` count does not match the sub-code's canonical
-/// arity (per [`ext_ctrl_code_len`]) — the encoder must never emit a control
-/// code its own [`decode`] would reject or misparse.
+///
+/// Returns [`TextError::UnencodableChar`] for an unsupported character or
+/// [`TextError::ExtCtrlArity`] for the wrong number of control arguments.
 pub fn encode(tokens: &[Token]) -> Result<Vec<u8>, TextError> {
     let mut out = Vec::new();
     for tok in tokens {
@@ -488,11 +398,7 @@ pub fn encode(tokens: &[Token]) -> Result<Vec<u8>, TextError> {
                 out.push(*idx);
             }
             Token::ExtCtrl { sub, args } => {
-                // ext_ctrl_code_len includes the sub-code byte itself, so the
-                // canonical argument count is one less. Reject any mismatch
-                // rather than emit bytes decode() would reject (Truncated) or
-                // misparse (excess bytes reinterpreted as glyphs/controls).
-                let expected = ext_ctrl_code_len(*sub) - 1;
+                let expected = ext_ctrl_code_arg_count(*sub);
                 if args.len() != expected as usize {
                     return Err(TextError::ExtCtrlArity {
                         sub: *sub,
@@ -510,13 +416,12 @@ pub fn encode(tokens: &[Token]) -> Result<Vec<u8>, TextError> {
     Ok(out)
 }
 
-/// Encode a plain UTF-8 string of printable glyphs into Gen-3 bytes, appending
-/// the `0xFF` terminator.
+/// Encode printable UTF-8 glyphs and append the Gen-3 terminator.
 ///
-/// Only glyphs in the Gen-3 table are accepted; control codes cannot be
-/// expressed this way — build [`Token`]s and call [`encode`] for those.
+/// Use [`encode`] for control codes and named font tiles.
 ///
 /// # Errors
+///
 /// Returns [`TextError::UnencodableChar`] for the first glyph with no encoding.
 pub fn encode_str(s: &str) -> Result<Vec<u8>, TextError> {
     let mut out = Vec::with_capacity(s.len() + 1);
@@ -527,18 +432,8 @@ pub fn encode_str(s: &str) -> Result<Vec<u8>, TextError> {
     Ok(out)
 }
 
-/// The Gen-3 Latin glyph table: `(char, byte)` pairs transcribed from the
-/// English default font in `pokeemerald/charmap.txt`.
-///
-/// This is the single source of truth for both [`byte_to_char`] and
-/// [`char_to_byte`]. Only plain Unicode-scalar glyphs are listed here; the
-/// named non-text tiles that `charmap.txt` also assigns in the Latin font
-/// (`LV`, the `PKMN`/`POKEBLOCK` word tiles, the arrows, the French
-/// superscripts) are structurally not `char`s and live in [`SYMBOLS`], and
-/// control codes are handled by [`decode`]/[`encode`] directly.
-/// Byte `0xB4` maps to `’` here (both `’` and `'` share `0xB4` upstream; the
-/// typographic apostrophe is chosen as canonical for round-tripping, and the
-/// ASCII apostrophe is accepted on encode only via [`char_to_byte`]).
+const TYPOGRAPHIC_APOSTROPHE_BYTE: u8 = 0xB4;
+
 const GLYPHS: &[(char, u8)] = &[
     (' ', 0x00),
     ('À', 0x01),
@@ -615,7 +510,7 @@ const GLYPHS: &[(char, u8)] = &[
     ('“', 0xB1),
     ('”', 0xB2),
     ('‘', 0xB3),
-    ('’', 0xB4),
+    ('’', TYPOGRAPHIC_APOSTROPHE_BYTE),
     ('♂', 0xB5),
     ('♀', 0xB6),
     ('¥', 0xB7),
@@ -683,74 +578,75 @@ const GLYPHS: &[(char, u8)] = &[
     ('ü', 0xF6),
 ];
 
-/// Map a single Gen-3 byte to its glyph, or `None` if the byte is not a
-/// printable glyph (it may be a control code, spacer, or unassigned).
+/// Return the Latin glyph assigned to `byte`.
 #[must_use]
 pub fn byte_to_char(byte: u8) -> Option<char> {
     GLYPHS.iter().find(|&&(_, b)| b == byte).map(|&(c, _)| c)
 }
 
-/// Map a glyph to its canonical Gen-3 byte, or `None` if unrepresentable.
+/// Return the canonical Gen-3 byte assigned to a Latin glyph.
 ///
-/// The ASCII apostrophe `'` is accepted as an alias for `’` (`0xB4`), matching
-/// upstream where both share that byte.
+/// ASCII and typographic apostrophes share an encoding; decoding selects the
+/// typographic form.
 #[must_use]
 pub fn char_to_byte(c: char) -> Option<u8> {
     if c == '\'' {
-        return Some(0xB4);
+        return Some(TYPOGRAPHIC_APOSTROPHE_BYTE);
     }
     GLYPHS.iter().find(|&&(g, _)| g == c).map(|&(_, b)| b)
 }
 
-/// The named non-text tiles of the Latin/English font: `(Symbol, byte)` pairs
-/// transcribed from `pokeemerald/charmap.txt`.
-///
-/// This is the single source of truth for both [`symbol_from_byte`] and
-/// [`byte_from_symbol`], the [`Symbol`] analogue of [`GLYPHS`]. Every byte here
-/// is disjoint from the bytes in [`GLYPHS`] (the two tables partition the
-/// assigned single-byte Latin space between plain glyphs and named tiles).
-const SYMBOLS: &[(Symbol, u8)] = &[
-    (Symbol::SuperEr, 0x2C),
-    (Symbol::Lv, 0x34),
-    (Symbol::Pk, 0x53),
-    (Symbol::Mn, 0x54),
-    (Symbol::Pokeblock1, 0x55),
-    (Symbol::Pokeblock2, 0x56),
-    (Symbol::Pokeblock3, 0x57),
-    (Symbol::Pokeblock4, 0x58),
-    (Symbol::Pokeblock5, 0x59),
-    (Symbol::Spacer, 0x77),
-    (Symbol::UpArrow, 0x79),
-    (Symbol::DownArrow, 0x7A),
-    (Symbol::LeftArrow, 0x7B),
-    (Symbol::RightArrow, 0x7C),
-    (Symbol::SuperE, 0x84),
-    (Symbol::SuperRe, 0xA0),
+const SYMBOLS: &[Symbol] = &[
+    Symbol::SuperEr,
+    Symbol::Lv,
+    Symbol::Pk,
+    Symbol::Mn,
+    Symbol::Pokeblock1,
+    Symbol::Pokeblock2,
+    Symbol::Pokeblock3,
+    Symbol::Pokeblock4,
+    Symbol::Pokeblock5,
+    Symbol::Spacer,
+    Symbol::UpArrow,
+    Symbol::DownArrow,
+    Symbol::LeftArrow,
+    Symbol::RightArrow,
+    Symbol::SuperE,
+    Symbol::SuperRe,
 ];
 
-/// Map a single Gen-3 byte to its named font tile, or `None` if the byte is not
-/// an assigned Latin-font tile (it may be a plain glyph, a control code, or
-/// unassigned).
+/// Return the named Latin font tile assigned to `byte`.
 #[must_use]
 pub fn symbol_from_byte(byte: u8) -> Option<Symbol> {
-    SYMBOLS.iter().find(|&&(_, b)| b == byte).map(|&(s, _)| s)
+    SYMBOLS
+        .iter()
+        .copied()
+        .find(|&symbol| byte_from_symbol(symbol) == byte)
 }
 
-/// Map a named font tile to its Gen-3 byte. Total: every [`Symbol`] has a byte.
-///
-/// The lookup is over [`SYMBOLS`], which is exhaustive over [`Symbol`]; the
-/// `unreachable!` therefore cannot fire and this function never panics.
+/// Return the Gen-3 byte assigned to a named font tile.
 #[must_use]
 pub fn byte_from_symbol(sym: Symbol) -> u8 {
-    match SYMBOLS.iter().find(|&&(s, _)| s == sym) {
-        Some(&(_, b)) => b,
-        // SYMBOLS lists every Symbol variant, so no match is impossible.
-        None => unreachable!("SYMBOLS table is exhaustive over Symbol"),
+    match sym {
+        Symbol::SuperEr => 0x2C,
+        Symbol::Lv => 0x34,
+        Symbol::Pk => 0x53,
+        Symbol::Mn => 0x54,
+        Symbol::Pokeblock1 => 0x55,
+        Symbol::Pokeblock2 => 0x56,
+        Symbol::Pokeblock3 => 0x57,
+        Symbol::Pokeblock4 => 0x58,
+        Symbol::Pokeblock5 => 0x59,
+        Symbol::Spacer => 0x77,
+        Symbol::UpArrow => 0x79,
+        Symbol::DownArrow => 0x7A,
+        Symbol::LeftArrow => 0x7B,
+        Symbol::RightArrow => 0x7C,
+        Symbol::SuperE => 0x84,
+        Symbol::SuperRe => 0xA0,
     }
 }
 
-/// A readable brace placeholder for a [`Symbol`], for lossy logging via
-/// [`decode_to_string`]. Uses the tile's `charmap.txt` name.
 fn symbol_placeholder(sym: Symbol) -> &'static str {
     match sym {
         Symbol::Lv => "{LV}",
@@ -776,9 +672,12 @@ fn symbol_placeholder(sym: Symbol) -> &'static str {
 mod tests {
     use super::*;
 
+    const EXT_CTRL_CODE_RESET_FONT: u8 = 0x07;
+    const UNASSIGNED_LATIN_BYTE: u8 = 0x60;
+    const UNKNOWN_EXT_CTRL_CODE: u8 = 0xFF;
+
     #[test]
     fn round_trip_printable_string() {
-        // decode∘encode over the representable subset.
         let s = "Hello, TRAINER! (99%) go/go.";
         let bytes = encode_str(s).unwrap();
         assert_eq!(*bytes.last().unwrap(), EOS);
@@ -788,7 +687,6 @@ mod tests {
 
     #[test]
     fn round_trip_tokens_including_control_codes() {
-        // encode∘decode round-trips every token variant, including args.
         let tokens = vec![
             Token::Char('H'),
             Token::Char('i'),
@@ -798,17 +696,17 @@ mod tests {
             Token::PromptScroll,
             Token::PromptClear,
             Token::ExtCtrl {
-                sub: 0x01,
+                sub: EXT_CTRL_CODE_COLOR,
                 args: vec![0x02],
-            }, // COLOR red
+            },
             Token::ExtCtrl {
-                sub: 0x04,
+                sub: EXT_CTRL_CODE_COLOR_HIGHLIGHT_SHADOW,
                 args: vec![0x01, 0x02, 0x03],
-            }, // COLOR_HIGHLIGHT_SHADOW
+            },
             Token::ExtCtrl {
-                sub: 0x07,
+                sub: EXT_CTRL_CODE_RESET_FONT,
                 args: vec![],
-            }, // RESET_FONT
+            },
             Token::End,
         ];
         let bytes = encode(&tokens).unwrap();
@@ -817,10 +715,7 @@ mod tests {
     }
 
     #[test]
-    fn charmap_ground_truth_bytes() {
-        // Ties the mapping to specific charmap.txt values so it can't silently
-        // drift (behavioral-fidelity). Values read directly from
-        // pokeemerald/charmap.txt, not from this module.
+    fn latin_glyph_bytes_match_encoding() {
         assert_eq!(char_to_byte(' '), Some(0x00));
         assert_eq!(char_to_byte('A'), Some(0xBB));
         assert_eq!(char_to_byte('Z'), Some(0xD4));
@@ -842,19 +737,18 @@ mod tests {
         assert_eq!(char_to_byte('>'), Some(0x86));
         assert_eq!(char_to_byte('À'), Some(0x01));
         assert_eq!(char_to_byte('ü'), Some(0xF6));
-        // Reverse direction on a representative sample.
+        // Both apostrophes share 0xB4 upstream; decode canonicalises to '’'.
+        assert_eq!(char_to_byte('’'), Some(0xB4));
+        assert_eq!(char_to_byte('\''), Some(0xB4));
         assert_eq!(byte_to_char(0xBB), Some('A'));
         assert_eq!(byte_to_char(0xD5), Some('a'));
         assert_eq!(byte_to_char(0xA1), Some('0'));
+        assert_eq!(byte_to_char(0xB4), Some('’'));
         assert_eq!(byte_to_char(0x00), Some(' '));
     }
 
     #[test]
     fn contiguous_runs_match_charmap_layout() {
-        // charmap.txt lays A-Z, a-z and 0-9 out as contiguous byte runs. Pin the
-        // whole run structurally so a single mis-transcribed entry is caught, not
-        // just the sampled endpoints. Base bytes are from charmap.txt: A=0xBB,
-        // a=0xD5, '0'=0xA1.
         let check_run = |start: char, end: char, base: u8| {
             let last = base + (end as u8 - start as u8);
             for (c, byte) in (start..=end).zip(base..=last) {
@@ -866,29 +760,75 @@ mod tests {
         check_run('0', '9', 0xA1);
     }
 
+    /// Pins each control byte to its upstream `characters.h` value.
+    ///
+    /// Tests that build byte sequences out of these constants cannot catch a
+    /// drifted constant, because their input and their expectation move
+    /// together. These literals are the independent anchor.
     #[test]
     fn control_code_constants_match_upstream() {
-        // characters.h values.
         assert_eq!(EOS, 0xFF);
         assert_eq!(CHAR_NEWLINE, 0xFE);
         assert_eq!(PLACEHOLDER_BEGIN, 0xFD);
         assert_eq!(EXT_CTRL_CODE_BEGIN, 0xFC);
         assert_eq!(CHAR_PROMPT_CLEAR, 0xFB);
         assert_eq!(CHAR_PROMPT_SCROLL, 0xFA);
+        assert_eq!(CHAR_EXTRA_SYMBOL, 0xF9);
+        assert_eq!(CHAR_KEYPAD_ICON, 0xF8);
         assert_eq!(CHAR_DYNAMIC, 0xF7);
+        assert_eq!(CHAR_BARD_WORD_DELIMIT, 0x37);
+        // charmap.txt spells the player's name as `PLAYER = FD 01`.
+        assert_eq!(PLACEHOLDER_PLAYER, 0x01);
+    }
+
+    /// Pins each extended-control subcode to its upstream `characters.h` value.
+    ///
+    /// [`ext_ctrl_code_arg_lengths_match_upstream`] asks these same constants
+    /// for an argument count, so it agrees with itself whichever number a
+    /// constant holds. These literals pin the numbers themselves.
+    #[test]
+    fn ext_ctrl_code_subcodes_match_upstream() {
+        assert_eq!(EXT_CTRL_CODE_COLOR, 0x01);
+        assert_eq!(EXT_CTRL_CODE_HIGHLIGHT, 0x02);
+        assert_eq!(EXT_CTRL_CODE_SHADOW, 0x03);
+        assert_eq!(EXT_CTRL_CODE_COLOR_HIGHLIGHT_SHADOW, 0x04);
+        assert_eq!(EXT_CTRL_CODE_PALETTE, 0x05);
+        assert_eq!(EXT_CTRL_CODE_FONT, 0x06);
+        assert_eq!(EXT_CTRL_CODE_RESET_FONT, 0x07);
+        assert_eq!(EXT_CTRL_CODE_PAUSE, 0x08);
+        assert_eq!(EXT_CTRL_CODE_PLAY_BGM, 0x0B);
+        assert_eq!(EXT_CTRL_CODE_ESCAPE, 0x0C);
+        assert_eq!(EXT_CTRL_CODE_SHIFT_RIGHT, 0x0D);
+        assert_eq!(EXT_CTRL_CODE_SHIFT_DOWN, 0x0E);
+        assert_eq!(EXT_CTRL_CODE_PLAY_SE, 0x10);
+        assert_eq!(EXT_CTRL_CODE_CLEAR, 0x11);
+        assert_eq!(EXT_CTRL_CODE_SKIP, 0x12);
+        assert_eq!(EXT_CTRL_CODE_CLEAR_TO, 0x13);
+        assert_eq!(EXT_CTRL_CODE_MIN_LETTER_SPACING, 0x14);
+        assert_eq!(EXT_CTRL_CODE_JPN, 0x15);
+        assert_eq!(EXT_CTRL_CODE_ENG, 0x16);
     }
 
     #[test]
     fn terminator_ends_decode_and_ignores_trailing_bytes() {
-        // 'H','i',EOS,then junk: junk after EOS must not be decoded.
-        let bytes = [0xC2, 0xDD, EOS, 0xFF, 0xFF];
+        let bytes = [
+            char_to_byte('H').unwrap(),
+            char_to_byte('i').unwrap(),
+            EOS,
+            UNASSIGNED_LATIN_BYTE,
+        ];
         let toks = decode(&bytes).unwrap();
         assert_eq!(toks, vec![Token::Char('H'), Token::Char('i'), Token::End]);
     }
 
     #[test]
     fn newline_is_preserved_not_dropped() {
-        let bytes = [0xC2, CHAR_NEWLINE, 0xDD, EOS];
+        let bytes = [
+            char_to_byte('H').unwrap(),
+            CHAR_NEWLINE,
+            char_to_byte('i').unwrap(),
+            EOS,
+        ];
         let toks = decode(&bytes).unwrap();
         assert_eq!(
             toks,
@@ -903,38 +843,49 @@ mod tests {
 
     #[test]
     fn player_placeholder_is_preserved() {
-        // "PLAYER = FD 01" decodes to a typed placeholder, not two stray bytes.
         let bytes = [PLACEHOLDER_BEGIN, PLACEHOLDER_PLAYER, EOS];
         let toks = decode(&bytes).unwrap();
-        assert_eq!(toks, vec![Token::Placeholder(0x01), Token::End]);
+        assert_eq!(
+            toks,
+            vec![Token::Placeholder(PLACEHOLDER_PLAYER), Token::End]
+        );
     }
 
     #[test]
     fn ext_ctrl_code_arg_lengths_match_upstream() {
-        // GetExtCtrlCodeLength ground truth (string_util.c).
-        assert_eq!(ext_ctrl_code_len(0x01), 2); // COLOR
-        assert_eq!(ext_ctrl_code_len(0x02), 2); // HIGHLIGHT
-        assert_eq!(ext_ctrl_code_len(0x03), 2); // SHADOW
-        assert_eq!(ext_ctrl_code_len(0x04), 4); // COLOR_HIGHLIGHT_SHADOW
-        assert_eq!(ext_ctrl_code_len(0x05), 2); // PALETTE
-        assert_eq!(ext_ctrl_code_len(0x06), 2); // FONT
-        assert_eq!(ext_ctrl_code_len(0x07), 1); // RESET_FONT
-        assert_eq!(ext_ctrl_code_len(0x0B), 3); // PLAY_BGM
-        assert_eq!(ext_ctrl_code_len(0x10), 3); // PLAY_SE
-        assert_eq!(ext_ctrl_code_len(0x18), 1); // RESUME_MUSIC
-        assert_eq!(ext_ctrl_code_len(0xFF), 1); // unknown → treated as 0 args
+        assert_eq!(ext_ctrl_code_len(EXT_CTRL_CODE_COLOR), 2);
+        assert_eq!(ext_ctrl_code_len(EXT_CTRL_CODE_HIGHLIGHT), 2);
+        assert_eq!(ext_ctrl_code_len(EXT_CTRL_CODE_SHADOW), 2);
+        assert_eq!(ext_ctrl_code_len(EXT_CTRL_CODE_COLOR_HIGHLIGHT_SHADOW), 4);
+        assert_eq!(ext_ctrl_code_len(EXT_CTRL_CODE_PALETTE), 2);
+        assert_eq!(ext_ctrl_code_len(EXT_CTRL_CODE_FONT), 2);
+        assert_eq!(ext_ctrl_code_len(EXT_CTRL_CODE_RESET_FONT), 1);
+        assert_eq!(ext_ctrl_code_len(EXT_CTRL_CODE_PLAY_BGM), 3);
+        assert_eq!(ext_ctrl_code_len(EXT_CTRL_CODE_PLAY_SE), 3);
+        assert_eq!(ext_ctrl_code_len(EXT_CTRL_CODE_JPN), 1);
+        // RESUME_MUSIC (0x18) pinned by raw byte: it must stay zero-argument,
+        // and no argument-bearing match arm may absorb it.
+        assert_eq!(ext_ctrl_code_len(0x18), 1);
+        assert_eq!(ext_ctrl_code_len(UNKNOWN_EXT_CTRL_CODE), 1);
     }
 
     #[test]
     fn ext_ctrl_code_consumes_correct_bytes() {
-        // 0xFC 0x04 (COLOR_HIGHLIGHT_SHADOW) has 3 arg bytes, then 'A'.
-        let bytes = [EXT_CTRL_CODE_BEGIN, 0x04, 0x01, 0x02, 0x03, 0xBB, EOS];
+        let bytes = [
+            EXT_CTRL_CODE_BEGIN,
+            EXT_CTRL_CODE_COLOR_HIGHLIGHT_SHADOW,
+            0x01,
+            0x02,
+            0x03,
+            char_to_byte('A').unwrap(),
+            EOS,
+        ];
         let toks = decode(&bytes).unwrap();
         assert_eq!(
             toks,
             vec![
                 Token::ExtCtrl {
-                    sub: 0x04,
+                    sub: EXT_CTRL_CODE_COLOR_HIGHLIGHT_SHADOW,
                     args: vec![0x01, 0x02, 0x03],
                 },
                 Token::Char('A'),
@@ -945,9 +896,8 @@ mod tests {
 
     #[test]
     fn unknown_byte_is_an_error_not_garbage() {
-        // 0x60 has no glyph in the Latin table and is not a control code.
-        let err = decode(&[0x60]).unwrap_err();
-        assert_eq!(err, TextError::UnknownByte(0x60));
+        let err = decode(&[UNASSIGNED_LATIN_BYTE]).unwrap_err();
+        assert_eq!(err, TextError::UnknownByte(UNASSIGNED_LATIN_BYTE));
     }
 
     #[test]
@@ -958,8 +908,12 @@ mod tests {
 
     #[test]
     fn truncated_ext_ctrl_args_is_an_error() {
-        // 0xFC 0x04 needs 3 arg bytes; only 1 provided.
-        let err = decode(&[EXT_CTRL_CODE_BEGIN, 0x04, 0x01]).unwrap_err();
+        let err = decode(&[
+            EXT_CTRL_CODE_BEGIN,
+            EXT_CTRL_CODE_COLOR_HIGHLIGHT_SHADOW,
+            0x01,
+        ])
+        .unwrap_err();
         assert_eq!(err, TextError::Truncated(EXT_CTRL_CODE_BEGIN));
     }
 
@@ -971,17 +925,15 @@ mod tests {
 
     #[test]
     fn encode_rejects_ext_ctrl_missing_args() {
-        // COLOR (0x01) requires exactly one arg byte; encode must not emit a
-        // truncated `[0xFC, 0x01]` that its own decode() rejects.
         let tok = Token::ExtCtrl {
-            sub: 0x01,
+            sub: EXT_CTRL_CODE_COLOR,
             args: vec![],
         };
         let err = encode(&[tok]).unwrap_err();
         assert_eq!(
             err,
             TextError::ExtCtrlArity {
-                sub: 0x01,
+                sub: EXT_CTRL_CODE_COLOR,
                 expected: 1,
                 got: 0,
             }
@@ -990,17 +942,15 @@ mod tests {
 
     #[test]
     fn encode_rejects_ext_ctrl_excess_args() {
-        // RESET_FONT (0x07) takes no arguments; encode must not accept an
-        // excess byte that would decode back as unrelated text.
         let tok = Token::ExtCtrl {
-            sub: 0x07,
+            sub: EXT_CTRL_CODE_RESET_FONT,
             args: vec![0xBB],
         };
         let err = encode(&[tok]).unwrap_err();
         assert_eq!(
             err,
             TextError::ExtCtrlArity {
-                sub: 0x07,
+                sub: EXT_CTRL_CODE_RESET_FONT,
                 expected: 0,
                 got: 1,
             }
@@ -1009,28 +959,27 @@ mod tests {
 
     #[test]
     fn encode_rejects_ext_ctrl_wrong_multi_arg_count() {
-        // COLOR_HIGHLIGHT_SHADOW (0x04) takes exactly three arg bytes.
         let too_few = Token::ExtCtrl {
-            sub: 0x04,
+            sub: EXT_CTRL_CODE_COLOR_HIGHLIGHT_SHADOW,
             args: vec![0x01, 0x02],
         };
         assert_eq!(
             encode(&[too_few]).unwrap_err(),
             TextError::ExtCtrlArity {
-                sub: 0x04,
+                sub: EXT_CTRL_CODE_COLOR_HIGHLIGHT_SHADOW,
                 expected: 3,
                 got: 2,
             }
         );
 
         let too_many = Token::ExtCtrl {
-            sub: 0x04,
+            sub: EXT_CTRL_CODE_COLOR_HIGHLIGHT_SHADOW,
             args: vec![0x01, 0x02, 0x03, 0x04],
         };
         assert_eq!(
             encode(&[too_many]).unwrap_err(),
             TextError::ExtCtrlArity {
-                sub: 0x04,
+                sub: EXT_CTRL_CODE_COLOR_HIGHLIGHT_SHADOW,
                 expected: 3,
                 got: 4,
             }
@@ -1039,19 +988,17 @@ mod tests {
 
     #[test]
     fn encode_accepts_correct_ext_ctrl_arity_and_round_trips() {
-        // Valid extended controls at each arity (0, 1, 3 args) still encode
-        // and decode losslessly.
         for tok in [
             Token::ExtCtrl {
-                sub: 0x07, // RESET_FONT, 0 args
+                sub: EXT_CTRL_CODE_RESET_FONT,
                 args: vec![],
             },
             Token::ExtCtrl {
-                sub: 0x01, // COLOR, 1 arg
+                sub: EXT_CTRL_CODE_COLOR,
                 args: vec![0x02],
             },
             Token::ExtCtrl {
-                sub: 0x04, // COLOR_HIGHLIGHT_SHADOW, 3 args
+                sub: EXT_CTRL_CODE_COLOR_HIGHLIGHT_SHADOW,
                 args: vec![0x01, 0x02, 0x03],
             },
         ] {
@@ -1063,23 +1010,20 @@ mod tests {
 
     #[test]
     fn ascii_apostrophe_aliases_typographic() {
-        // Both '\'' and '’' encode to 0xB4; decode canonicalises to '’'.
-        assert_eq!(char_to_byte('\''), Some(0xB4));
-        assert_eq!(char_to_byte('’'), Some(0xB4));
-        assert_eq!(byte_to_char(0xB4), Some('’'));
+        assert_eq!(char_to_byte('\''), Some(TYPOGRAPHIC_APOSTROPHE_BYTE));
+        assert_eq!(char_to_byte('’'), Some(TYPOGRAPHIC_APOSTROPHE_BYTE));
+        assert_eq!(byte_to_char(TYPOGRAPHIC_APOSTROPHE_BYTE), Some('’'));
     }
 
     #[test]
     fn no_terminator_decodes_all_bytes_without_end() {
-        let bytes = [0xC2, 0xDD]; // "Hi", no EOS
+        let bytes = [char_to_byte('H').unwrap(), char_to_byte('i').unwrap()];
         let toks = decode(&bytes).unwrap();
         assert_eq!(toks, vec![Token::Char('H'), Token::Char('i')]);
     }
 
     #[test]
     fn glyph_table_has_no_duplicate_bytes() {
-        // Guards the ground-truth table against a transcription slip that would
-        // make byte_to_char ambiguous.
         let mut bytes: Vec<u8> = GLYPHS.iter().map(|&(_, b)| b).collect();
         bytes.sort_unstable();
         let before = bytes.len();
@@ -1088,10 +1032,7 @@ mod tests {
     }
 
     #[test]
-    fn charmap_ground_truth_symbol_bytes() {
-        // Ground-truth pins for every named Latin-font tile, quoted directly
-        // from pokeemerald/charmap.txt (not read from this module). MN is the
-        // second tile of `PKMN = 53 54`.
+    fn named_symbol_bytes_match_encoding() {
         assert_eq!(byte_from_symbol(Symbol::SuperEr), 0x2C);
         assert_eq!(byte_from_symbol(Symbol::Lv), 0x34);
         assert_eq!(byte_from_symbol(Symbol::Pk), 0x53);
@@ -1110,11 +1051,51 @@ mod tests {
         assert_eq!(byte_from_symbol(Symbol::SuperRe), 0xA0);
     }
 
+    /// Requires [`SYMBOLS`] to list every [`Symbol`] variant.
+    ///
+    /// `byte_from_symbol` matches on the variant, so the compiler assigns every
+    /// new tile a byte; `symbol_from_byte` instead searches [`SYMBOLS`], which
+    /// nothing forces a new tile to join. A tile in one and not the other
+    /// encodes to a byte that decodes back as [`TextError::UnknownByte`].
+    ///
+    /// The match below is exhaustive over [`Symbol`], so a new variant stops
+    /// this test compiling. Counting it in `SYMBOL_VARIANT_COUNT` then fails
+    /// the assertion until the variant also joins [`SYMBOLS`].
+    #[test]
+    fn symbols_list_covers_every_symbol_variant() {
+        const SYMBOL_VARIANT_COUNT: usize = 16;
+
+        for &sym in SYMBOLS {
+            match sym {
+                Symbol::Lv
+                | Symbol::Pk
+                | Symbol::Mn
+                | Symbol::Pokeblock1
+                | Symbol::Pokeblock2
+                | Symbol::Pokeblock3
+                | Symbol::Pokeblock4
+                | Symbol::Pokeblock5
+                | Symbol::Spacer
+                | Symbol::UpArrow
+                | Symbol::DownArrow
+                | Symbol::LeftArrow
+                | Symbol::RightArrow
+                | Symbol::SuperEr
+                | Symbol::SuperE
+                | Symbol::SuperRe => {}
+            }
+        }
+        assert_eq!(
+            SYMBOLS.len(),
+            SYMBOL_VARIANT_COUNT,
+            "every Symbol variant must be listed in SYMBOLS so that it decodes"
+        );
+    }
+
     #[test]
     fn every_symbol_byte_decodes_and_round_trips() {
-        // Each assigned Latin symbol byte decodes to the matching typed Symbol
-        // and re-encodes back to the same byte.
-        for &(sym, byte) in SYMBOLS {
+        for &sym in SYMBOLS {
+            let byte = byte_from_symbol(sym);
             assert_eq!(symbol_from_byte(byte), Some(sym), "byte {byte:#04x}");
             let toks = decode(&[byte]).unwrap();
             assert_eq!(toks, vec![Token::Symbol(sym)], "decode {byte:#04x}");
@@ -1125,13 +1106,16 @@ mod tests {
 
     #[test]
     fn realistic_symbol_sequence_decodes_and_round_trips() {
-        // A realistic mix: "Lv", the PKMN word (53 54), a POKEBLOCK word
-        // (55 56 57 58 59), and an arrow — none should error as UnknownByte.
         let bytes = [
-            0x34, // LV
-            0x53, 0x54, // PKMN
-            0x79, // UP_ARROW
-            0x55, 0x56, 0x57, 0x58, 0x59, // POKEBLOCK
+            byte_from_symbol(Symbol::Lv),
+            byte_from_symbol(Symbol::Pk),
+            byte_from_symbol(Symbol::Mn),
+            byte_from_symbol(Symbol::UpArrow),
+            byte_from_symbol(Symbol::Pokeblock1),
+            byte_from_symbol(Symbol::Pokeblock2),
+            byte_from_symbol(Symbol::Pokeblock3),
+            byte_from_symbol(Symbol::Pokeblock4),
+            byte_from_symbol(Symbol::Pokeblock5),
             EOS,
         ];
         let toks = decode(&bytes).unwrap();
@@ -1150,13 +1134,12 @@ mod tests {
                 Token::End,
             ]
         );
-        // Round-trips through encode (End emits EOS, so the byte stream matches).
         assert_eq!(encode(&toks).unwrap(), bytes);
     }
 
     #[test]
     fn symbol_table_has_no_duplicate_bytes() {
-        let mut bytes: Vec<u8> = SYMBOLS.iter().map(|&(_, b)| b).collect();
+        let mut bytes: Vec<u8> = SYMBOLS.iter().copied().map(byte_from_symbol).collect();
         bytes.sort_unstable();
         let before = bytes.len();
         bytes.dedup();
@@ -1165,8 +1148,6 @@ mod tests {
 
     #[test]
     fn glyphs_and_symbols_are_disjoint() {
-        // No byte may be both a plain glyph and a named tile — decode must have
-        // an unambiguous target for every assigned byte.
         for &(_, gb) in GLYPHS {
             assert!(
                 symbol_from_byte(gb).is_none(),
@@ -1177,20 +1158,19 @@ mod tests {
 
     #[test]
     fn unassigned_latin_byte_is_still_unknown() {
-        // Guards the still-valid unknown_byte test: 0x60 must be in neither
-        // table so it genuinely errors.
-        assert_eq!(byte_to_char(0x60), None);
-        assert_eq!(symbol_from_byte(0x60), None);
+        assert_eq!(byte_to_char(UNASSIGNED_LATIN_BYTE), None);
+        assert_eq!(symbol_from_byte(UNASSIGNED_LATIN_BYTE), None);
     }
 
     #[test]
     fn bard_word_delimiter_decodes_and_round_trips() {
-        // CHAR_BARD_WORD_DELIMIT (0x37) is a Latin-font control byte the Bard's
-        // song uses as an empty word separator (characters.h:55,
-        // mauville_old_man.c). It must decode to its own token and round-trip to
-        // 0x37 — never surface as UnknownByte nor collapse to the space glyph.
         assert_eq!(CHAR_BARD_WORD_DELIMIT, 0x37);
-        let bytes = [0xC2, CHAR_BARD_WORD_DELIMIT, 0xDD, EOS]; // 'H' <delim> 'i'
+        let bytes = [
+            char_to_byte('H').unwrap(),
+            CHAR_BARD_WORD_DELIMIT,
+            char_to_byte('i').unwrap(),
+            EOS,
+        ];
         let toks = decode(&bytes).unwrap();
         assert_eq!(
             toks,
@@ -1201,26 +1181,22 @@ mod tests {
                 Token::End,
             ]
         );
-        // Round-trips: the delimiter re-encodes to 0x37, not to the space byte.
         assert_eq!(encode(&toks).unwrap(), bytes);
-        assert_ne!(encode(&[Token::BardWordDelimit]).unwrap(), vec![0x00]);
+        assert_ne!(
+            encode(&[Token::BardWordDelimit]).unwrap(),
+            vec![char_to_byte(' ').unwrap()]
+        );
     }
 
     #[test]
     fn dynamic_is_a_two_byte_sequence_not_a_bare_token() {
-        // Ground truth: `{DYNAMIC N}` emits 0xF7 <N> (src/strings.c), and the
-        // renderer reads the trailing index byte (text.c, GetPlaceholderPtr(*++str);
-        // GetStringWidth advances past it like PLACEHOLDER_BEGIN). So 0xF7 must
-        // consume the following byte as its index — decoding 0xF7 0x03 0xBB must
-        // yield Dynamic(3) then 'A', not Dynamic-with-no-arg then a stray byte.
-        let bytes = [CHAR_DYNAMIC, 0x03, 0xBB, EOS];
+        let bytes = [CHAR_DYNAMIC, 0x03, char_to_byte('A').unwrap(), EOS];
         let toks = decode(&bytes).unwrap();
         assert_eq!(
             toks,
             vec![Token::Dynamic(0x03), Token::Char('A'), Token::End]
         );
         assert_eq!(encode(&toks).unwrap(), bytes);
-        // Truncated (lead byte with no index) is an error, like PLACEHOLDER_BEGIN.
         assert_eq!(
             decode(&[CHAR_DYNAMIC]).unwrap_err(),
             TextError::Truncated(CHAR_DYNAMIC)
@@ -1229,14 +1205,16 @@ mod tests {
 
     #[test]
     fn keypad_icon_and_extra_symbol_are_two_byte_codes() {
-        // CHAR_KEYPAD_ICON (0xF8) and CHAR_EXTRA_SYMBOL (0xF9) each take one
-        // trailing index byte (text.c groups them with DYNAMIC/PLACEHOLDER at
-        // GetStringWidth; the renderer reads *currentChar++). They are
-        // font-independent control codes, so they must not surface as
-        // UnknownByte.
         assert_eq!(CHAR_KEYPAD_ICON, 0xF8);
         assert_eq!(CHAR_EXTRA_SYMBOL, 0xF9);
-        let bytes = [CHAR_KEYPAD_ICON, 0x02, CHAR_EXTRA_SYMBOL, 0x05, 0xBB, EOS];
+        let bytes = [
+            CHAR_KEYPAD_ICON,
+            0x02,
+            CHAR_EXTRA_SYMBOL,
+            0x05,
+            char_to_byte('A').unwrap(),
+            EOS,
+        ];
         let toks = decode(&bytes).unwrap();
         assert_eq!(
             toks,
@@ -1248,7 +1226,6 @@ mod tests {
             ]
         );
         assert_eq!(encode(&toks).unwrap(), bytes);
-        // Missing index byte is a truncation error, like the other lead bytes.
         assert_eq!(
             decode(&[CHAR_KEYPAD_ICON]).unwrap_err(),
             TextError::Truncated(CHAR_KEYPAD_ICON)
@@ -1261,21 +1238,18 @@ mod tests {
 
     #[test]
     fn japanese_font_switch_errors_rather_than_misdecoding() {
-        // After EXT_CTRL_CODE_JPN (0xFC 0x15) the font is Japanese; glyph byte
-        // 0xBB is a JP-font glyph, NOT Latin 'A'. It must surface as
-        // UnsupportedJapanese, never be silently decoded as 'A'.
-        let bytes = [EXT_CTRL_CODE_BEGIN, EXT_CTRL_CODE_JPN, 0xBB, EOS];
+        let latin_a = char_to_byte('A').unwrap();
+        let bytes = [EXT_CTRL_CODE_BEGIN, EXT_CTRL_CODE_JPN, latin_a, EOS];
         assert_eq!(
             decode(&bytes).unwrap_err(),
-            TextError::UnsupportedJapanese(0xBB)
+            TextError::UnsupportedJapanese(latin_a)
         );
-        // EXT_CTRL_CODE_ENG (0xFC 0x16) switches back: the same byte is Latin 'A'.
         let bytes = [
             EXT_CTRL_CODE_BEGIN,
             EXT_CTRL_CODE_JPN,
             EXT_CTRL_CODE_BEGIN,
             EXT_CTRL_CODE_ENG,
-            0xBB,
+            latin_a,
             EOS,
         ];
         let toks = decode(&bytes).unwrap();
@@ -1294,14 +1268,11 @@ mod tests {
                 Token::End,
             ]
         );
-        // The switch tokens themselves round-trip.
         assert_eq!(encode(&toks).unwrap(), bytes);
     }
 
     #[test]
     fn control_codes_still_decode_under_japanese_font() {
-        // Font-independent control codes (newline, placeholder, terminator) must
-        // keep decoding after a JPN switch; only glyph bytes are gated.
         let bytes = [
             EXT_CTRL_CODE_BEGIN,
             EXT_CTRL_CODE_JPN,

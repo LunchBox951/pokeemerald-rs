@@ -1,26 +1,18 @@
-//! GBA indexed tile pixel decoding (S-2 slice 1).
-//!
-//! A GBA tile is an 8x8 block of palette indices, packed either 4 bits/pixel
-//! (16-color tile, 32 bytes) or 8 bits/pixel (256-color tile, 64 bytes), as
-//! loaded by `pokeemerald/src/bg.c`'s tileset loaders. Decode order is
-//! verified against `mgba`'s `DRAW_BACKGROUND_MODE_0_TILE_*` macros
-//! (`mgba/src/gba/renderers/software-mode0.c`): pixels are stored row-major,
-//! and within a 4bpp byte the low nibble is the left pixel of the pair, the
-//! high nibble the right one `(behavioral-fidelity)`.
+//! Decodes packed GBA tiles into row-major palette indices.
 
 use crate::error::RenderError;
 
-/// GBA tile pixel-data bit depth.
+/// Packed tile bit depth.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum BitDepth {
-    /// 16 colors/tile, 4 bits/pixel, 32 bytes/tile.
+    /// 4 bits per pixel and 16 colors per tile.
     Bpp4,
-    /// 256 colors/tile, 8 bits/pixel, 64 bytes/tile.
+    /// 8 bits per pixel and 256 colors per tile.
     Bpp8,
 }
 
 impl BitDepth {
-    /// Tile width/height in pixels — always 8 on GBA hardware.
+    /// Width and height of every tile in pixels.
     pub const TILE_DIM: usize = 8;
 
     /// Raw byte length of one tile's pixel data at this bit depth.
@@ -32,40 +24,38 @@ impl BitDepth {
         }
     }
 
-    /// Wrap mask for a derived OBJ (sprite) tile index of this bit depth.
+    /// Mask for wrapping a derived OBJ tile index within character VRAM.
     ///
-    /// The GBA's OBJ character VRAM is a fixed `0x8000`-byte (32 KiB) window,
-    /// so a multi-tile sprite whose derived tile address runs off the end
-    /// wraps back to the start rather than reading past it. mgba applies this
-    /// as a byte-address mask (`(xBase + charBase) & maskLo`, `maskLo =
-    /// 0x7FFE` for 1D mapping, in `software-obj.c`); expressed as a *native
-    /// tile* index mask it is `mod 1024` for 4bpp (32-byte) tiles and `mod
-    /// 512` for 8bpp (64-byte) tiles, both powers of two `(behavioral-fidelity)`.
+    /// Derived addresses wrap inside the 32 KiB hardware window. mGBA applies
+    /// the equivalent `(xBase + charBase) & maskLo` byte-address mask in
+    /// `mgba/src/gba/renderers/software-obj.c` `(behavioral-fidelity)`.
     #[must_use]
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "OBJ character VRAM contains at most 1024 tiles"
+    )]
     pub const fn obj_tile_index_mask(self) -> u16 {
-        match self {
-            Self::Bpp4 => 0x03FF, // 1024 tiles * 32 bytes = 0x8000
-            Self::Bpp8 => 0x01FF, // 512 tiles * 64 bytes = 0x8000
-        }
+        const OBJ_CHARACTER_VRAM_BYTES: usize = 32 * 1024;
+        let tile_count = OBJ_CHARACTER_VRAM_BYTES / self.tile_byte_len();
+        (tile_count - 1) as u16
     }
 }
 
-/// One decoded 8x8 tile: palette indices in row-major order.
+/// One decoded tile containing row-major palette indices.
 ///
-/// Indices are `0..16` for [`BitDepth::Bpp4`] tiles (a local index within a
-/// palette bank) or `0..=255` for [`BitDepth::Bpp8`] tiles (a flat palette
-/// index) — see [`Palette`](crate::palette::Palette).
+/// Indices are `0..=15` for [`BitDepth::Bpp4`] and `0..=255` for
+/// [`BitDepth::Bpp8`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Tile {
     indices: [u8; BitDepth::TILE_DIM * BitDepth::TILE_DIM],
 }
 
 impl Tile {
-    /// The palette index at pixel `(x, y)` within the tile (`0..8` each).
+    /// The palette index at `(x, y)`.
     ///
     /// # Panics
     ///
-    /// Panics if `x` or `y` is outside the `0..8` tile range.
+    /// Panics unless both coordinates are in `0..8`.
     #[must_use]
     pub fn index(&self, x: usize, y: usize) -> u8 {
         assert!(
@@ -75,24 +65,23 @@ impl Tile {
         self.indices[y * BitDepth::TILE_DIM + x]
     }
 
-    /// Decode one 4bpp tile from its packed 32-byte pixel data.
     fn decode_4bpp(bytes: &[u8]) -> Self {
+        const BITS_PER_PIXEL: u32 = 4;
+        const PIXELS_PER_BYTE: usize = 2;
+        const LOW_NIBBLE_MASK: u8 = 0x0F;
         debug_assert_eq!(bytes.len(), BitDepth::Bpp4.tile_byte_len());
         let mut indices = [0u8; BitDepth::TILE_DIM * BitDepth::TILE_DIM];
-        // 4 bytes/row (8 pixels at 4 bits each); low nibble is the left
-        // pixel of each byte's pair, high nibble the right.
-        for (row, chunk) in bytes.chunks_exact(4).enumerate() {
+        let bytes_per_row = BitDepth::TILE_DIM / PIXELS_PER_BYTE;
+        for (row, chunk) in bytes.chunks_exact(bytes_per_row).enumerate() {
             for (byte_in_row, &byte) in chunk.iter().enumerate() {
-                let base = row * BitDepth::TILE_DIM + byte_in_row * 2;
-                indices[base] = byte & 0x0F;
-                indices[base + 1] = byte >> 4;
+                let first_pixel = row * BitDepth::TILE_DIM + byte_in_row * PIXELS_PER_BYTE;
+                indices[first_pixel] = byte & LOW_NIBBLE_MASK;
+                indices[first_pixel + 1] = byte >> BITS_PER_PIXEL;
             }
         }
         Self { indices }
     }
 
-    /// Decode one 8bpp tile from its packed 64-byte pixel data: one byte
-    /// per pixel, row-major, so this is a direct copy.
     fn decode_8bpp(bytes: &[u8]) -> Self {
         debug_assert_eq!(bytes.len(), BitDepth::Bpp8.tile_byte_len());
         let mut indices = [0u8; BitDepth::TILE_DIM * BitDepth::TILE_DIM];
@@ -101,8 +90,7 @@ impl Tile {
     }
 }
 
-/// An owned collection of decoded tiles at a single bit depth, indexable by
-/// the raw tile number used in a [`ScreenEntry`](crate::tilemap::ScreenEntry).
+/// Decoded tiles sharing one bit depth.
 #[derive(Debug, Clone)]
 pub struct Tileset {
     bit_depth: BitDepth,
@@ -110,8 +98,7 @@ pub struct Tileset {
 }
 
 impl Tileset {
-    /// Decode a tileset from packed raw tile pixel data at the given bit
-    /// depth. `data` is a flat concatenation of consecutive tiles.
+    /// Decode consecutive packed tiles at the given bit depth.
     ///
     /// # Errors
     ///
@@ -133,7 +120,7 @@ impl Tileset {
         Ok(Self { bit_depth, tiles })
     }
 
-    /// The bit depth every tile in this set was decoded at.
+    /// The bit depth shared by every tile.
     #[must_use]
     pub const fn bit_depth(&self) -> BitDepth {
         self.bit_depth
@@ -171,9 +158,7 @@ mod tests {
 
     #[test]
     fn decode_4bpp_reads_low_nibble_as_left_pixel() {
-        // Row 0: byte 0x21 -> pixel(0,0)=1 (low nibble), pixel(1,0)=2 (high
-        // nibble). Remaining 31 bytes are 0 (an all-index-0 tile).
-        let mut bytes = [0u8; 32];
+        let mut bytes = [0u8; BitDepth::Bpp4.tile_byte_len()];
         bytes[0] = 0x21;
         let tileset = Tileset::decode(BitDepth::Bpp4, &bytes).unwrap();
         let tile = tileset.tile(0).unwrap();
@@ -185,10 +170,8 @@ mod tests {
 
     #[test]
     fn decode_4bpp_rows_use_4_bytes_each() {
-        // Second row starts at byte offset 4: byte 0x0F there -> pixel(0,1)
-        // = 15 (max 4bpp index), pixel(1,1) = 0.
-        let mut bytes = [0u8; 32];
-        bytes[4] = 0x0F;
+        let mut bytes = [0u8; BitDepth::Bpp4.tile_byte_len()];
+        bytes[BitDepth::TILE_DIM / 2] = 0x0F;
         let tileset = Tileset::decode(BitDepth::Bpp4, &bytes).unwrap();
         let tile = tileset.tile(0).unwrap();
         assert_eq!(tile.index(0, 1), 15);
@@ -198,10 +181,10 @@ mod tests {
 
     #[test]
     fn decode_8bpp_is_a_direct_row_major_copy() {
-        let mut bytes = [0u8; 64];
+        let mut bytes = [0u8; BitDepth::Bpp8.tile_byte_len()];
         bytes[0] = 200;
         bytes[7] = 255;
-        bytes[8] = 1; // row 1, x=0
+        bytes[BitDepth::TILE_DIM] = 1;
         let tileset = Tileset::decode(BitDepth::Bpp8, &bytes).unwrap();
         let tile = tileset.tile(0).unwrap();
         assert_eq!(tile.index(0, 0), 200);
@@ -211,9 +194,9 @@ mod tests {
 
     #[test]
     fn decode_multiple_tiles_in_sequence() {
-        let mut bytes = [0u8; 64]; // two 4bpp tiles
-        bytes[0] = 0x21; // tile 0, pixel(0,0)=1, pixel(1,0)=2
-        bytes[32] = 0x43; // tile 1, pixel(0,0)=3, pixel(1,0)=4
+        let mut bytes = [0u8; BitDepth::Bpp4.tile_byte_len() * 2];
+        bytes[0] = 0x21;
+        bytes[BitDepth::Bpp4.tile_byte_len()] = 0x43;
         let tileset = Tileset::decode(BitDepth::Bpp4, &bytes).unwrap();
         assert_eq!(tileset.len(), 2);
         assert!(!tileset.is_empty());
@@ -224,21 +207,24 @@ mod tests {
 
     #[test]
     fn decode_rejects_length_not_a_multiple_of_tile_size() {
-        let bytes = [0u8; 31];
+        const INVALID_4BPP_LEN: usize = BitDepth::Bpp4.tile_byte_len() - 1;
+        const INVALID_8BPP_LEN: usize = BitDepth::Bpp8.tile_byte_len() - 1;
+
+        let bytes = [0u8; INVALID_4BPP_LEN];
         assert_eq!(
             Tileset::decode(BitDepth::Bpp4, &bytes).unwrap_err(),
             RenderError::InvalidTileDataLen {
                 bit_depth: BitDepth::Bpp4,
-                len: 31,
+                len: INVALID_4BPP_LEN,
             }
         );
 
-        let bytes = [0u8; 63];
+        let bytes = [0u8; INVALID_8BPP_LEN];
         assert_eq!(
             Tileset::decode(BitDepth::Bpp8, &bytes).unwrap_err(),
             RenderError::InvalidTileDataLen {
                 bit_depth: BitDepth::Bpp8,
-                len: 63,
+                len: INVALID_8BPP_LEN,
             }
         );
     }

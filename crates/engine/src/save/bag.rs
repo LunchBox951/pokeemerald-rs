@@ -1,21 +1,15 @@
-//! Fixed-size Emerald bag pockets and encrypted quantity serialization (S-5).
-//!
-//! Item ids are stored as plain little-endian `u16` values. Quantities are
-//! XOR-encrypted with the low 16 bits of `SaveBlock2::encryptionKey`; the
-//! Rust model keeps quantities plaintext.
-
-/// Number of ordinary item slots.
+//! Fixed-capacity bag serialization with encrypted quantities.
+/// Capacity of the ordinary-items pocket.
 pub const ITEMS_COUNT: usize = 30;
-/// Number of key-item slots.
+/// Capacity of the key-items pocket.
 pub const KEY_ITEMS_COUNT: usize = 30;
-/// Number of Poké Ball slots.
+/// Capacity of the Poké Balls pocket.
 pub const POKE_BALLS_COUNT: usize = 16;
-/// Number of TM/HM slots.
+/// Capacity of the TM/HM pocket.
 pub const TMS_HMS_COUNT: usize = 64;
-/// Number of berry slots.
+/// Capacity of the berries pocket.
 pub const BERRIES_COUNT: usize = 46;
-
-/// The exact serialized size of all five contiguous bag pockets.
+/// Serialized byte length of all five contiguous pockets.
 pub const BAG_LEN: usize =
     (ITEMS_COUNT + KEY_ITEMS_COUNT + POKE_BALLS_COUNT + TMS_HMS_COUNT + BERRIES_COUNT)
         * ItemSlot::LEN;
@@ -24,9 +18,9 @@ pub const BAG_LEN: usize =
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct ItemSlot {
-    /// Upstream item id.
+    /// The item identifier.
     pub item_id: u16,
-    /// Plaintext quantity.
+    /// The plaintext quantity.
     pub quantity: u16,
 }
 
@@ -49,15 +43,15 @@ impl ItemSlot {
 /// Emerald's five fixed-capacity bag pockets.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Bag {
-    /// Ordinary items pocket.
+    /// Ordinary items.
     pub items: [ItemSlot; ITEMS_COUNT],
-    /// Key items pocket.
+    /// Key items.
     pub key_items: [ItemSlot; KEY_ITEMS_COUNT],
-    /// Poké Balls pocket.
+    /// Poké Balls.
     pub poke_balls: [ItemSlot; POKE_BALLS_COUNT],
-    /// TMs and HMs pocket.
+    /// TMs and HMs.
     pub tms_hms: [ItemSlot; TMS_HMS_COUNT],
-    /// Berries pocket.
+    /// Berries.
     pub berries: [ItemSlot; BERRIES_COUNT],
 }
 
@@ -74,14 +68,12 @@ impl Default for Bag {
 }
 
 impl Bag {
-    /// Serialize all pockets contiguously, encrypting quantities with the
-    /// encryption key's low 16 bits.
+    /// Serializes all pockets, XOR-encrypting quantities with the key's low 16 bits.
     #[must_use]
     pub fn to_bytes(&self, encryption_key: u32) -> [u8; BAG_LEN] {
         let mut out = [0u8; BAG_LEN];
         let mut offset = 0;
-        let quantity_key = encryption_key.to_le_bytes();
-        let quantity_key = u16::from_le_bytes([quantity_key[0], quantity_key[1]]);
+        let quantity_key = quantity_encryption_key(encryption_key);
 
         offset += write_pocket(&mut out[offset..], &self.items, quantity_key);
         offset += write_pocket(&mut out[offset..], &self.key_items, quantity_key);
@@ -92,12 +84,10 @@ impl Bag {
         out
     }
 
-    /// Deserialize all pockets, decrypting quantities with the encryption
-    /// key's low 16 bits.
+    /// Deserializes all pockets, XOR-decrypting quantities with the key's low 16 bits.
     #[must_use]
     pub fn from_bytes(bytes: [u8; BAG_LEN], encryption_key: u32) -> Self {
-        let quantity_key = encryption_key.to_le_bytes();
-        let quantity_key = u16::from_le_bytes([quantity_key[0], quantity_key[1]]);
+        let quantity_key = quantity_encryption_key(encryption_key);
         let mut offset = 0;
 
         let items = read_pocket(&bytes[offset..], quantity_key);
@@ -118,6 +108,11 @@ impl Bag {
             berries,
         }
     }
+}
+
+fn quantity_encryption_key(encryption_key: u32) -> u16 {
+    u16::try_from(encryption_key & u32::from(u16::MAX))
+        .expect("masked bag quantity key always fits u16")
 }
 
 fn write_pocket<const N: usize>(
@@ -196,22 +191,22 @@ mod tests {
         let bytes = bag.to_bytes(key);
         let pocket_starts = [
             0,
-            ITEMS_COUNT * 4,
-            (ITEMS_COUNT + KEY_ITEMS_COUNT) * 4,
-            (ITEMS_COUNT + KEY_ITEMS_COUNT + POKE_BALLS_COUNT) * 4,
-            (ITEMS_COUNT + KEY_ITEMS_COUNT + POKE_BALLS_COUNT + TMS_HMS_COUNT) * 4,
+            ITEMS_COUNT * ItemSlot::LEN,
+            (ITEMS_COUNT + KEY_ITEMS_COUNT) * ItemSlot::LEN,
+            (ITEMS_COUNT + KEY_ITEMS_COUNT + POKE_BALLS_COUNT) * ItemSlot::LEN,
+            (ITEMS_COUNT + KEY_ITEMS_COUNT + POKE_BALLS_COUNT + TMS_HMS_COUNT) * ItemSlot::LEN,
         ];
         let checks = [
             (pocket_starts[0], 1u16, 11u16),
-            (pocket_starts[1] - 4, 2, 12),
+            (pocket_starts[1] - ItemSlot::LEN, 2, 12),
             (pocket_starts[1], 3, 13),
-            (pocket_starts[2] - 4, 4, 14),
+            (pocket_starts[2] - ItemSlot::LEN, 4, 14),
             (pocket_starts[2], 5, 15),
-            (pocket_starts[3] - 4, 6, 16),
+            (pocket_starts[3] - ItemSlot::LEN, 6, 16),
             (pocket_starts[3], 7, 17),
-            (pocket_starts[4] - 4, 8, 18),
+            (pocket_starts[4] - ItemSlot::LEN, 8, 18),
             (pocket_starts[4], 9, 19),
-            (BAG_LEN - 4, 10, 20),
+            (BAG_LEN - ItemSlot::LEN, 10, 20),
         ];
         for (offset, item_id, quantity) in checks {
             assert_eq!(
@@ -235,7 +230,10 @@ mod tests {
         };
         let offset = BAG_LEN - BERRIES_COUNT * ItemSlot::LEN;
         let bytes = bag.to_bytes(0);
-        assert_eq!(&bytes[offset..offset + 4], &[0x34, 0x12, 0x78, 0x56]);
+        assert_eq!(
+            &bytes[offset..offset + ItemSlot::LEN],
+            &[0x34, 0x12, 0x78, 0x56]
+        );
         assert_eq!(Bag::from_bytes(bytes, 0), bag);
     }
 }

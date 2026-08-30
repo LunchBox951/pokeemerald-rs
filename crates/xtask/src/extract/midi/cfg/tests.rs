@@ -9,7 +9,7 @@ mus_b_dome_lobby.mid:          -E -R50 -G_b_dome -V056\n\
 ";
 
 #[test]
-fn mus_title_entry_matches_the_real_checkout_line() {
+fn parses_title_configuration() {
     let entry = parse_entry_for(SAMPLE_CFG, "mus_title.mid").unwrap();
     assert_eq!(
         entry,
@@ -32,10 +32,7 @@ fn priority_flag_is_parsed() {
 }
 
 #[test]
-fn leading_zeros_parse_as_decimal_not_octal() {
-    // `-V056` must be 56, not octal 46, matching `std::stoi`'s base-10 default (mid2agb
-    // never passes an explicit base, so no `0`-prefix octal interpretation
-    // applies) -- see the module docs.
+fn numeric_flags_with_leading_zeros_are_decimal() {
     let entry = parse_entry_for(SAMPLE_CFG, "mus_b_dome_lobby.mid").unwrap();
     assert_eq!(entry.master_volume, 56);
 }
