@@ -1,34 +1,16 @@
-//! A single regular (non-affine) BG tile layer compositor, with wrapping
-//! scroll offsets (S-2 slices 1 and 2).
+//! Regular-background tile sampling and composition.
 //!
-//! [`BgLayer`] composites a [`Tilemap`](crate::tilemap::Tilemap) — see that
-//! module for the tilemap/screen-entry data model this draws from.
-//!
-//! [`BgLayer::composite_scrolled`] ports `ChangeBgX`/`ChangeBgY`'s 9-bit
-//! wrapping regular-BG scroll offsets (`pokeemerald/src/bg.c`): the visible
-//! 240x160 window wraps within the tilemap's own pixel size (256 or 512 px
-//! per axis for a hardware-sized regular BG), so scrolling off one edge
-//! reveals the opposite edge `(behavioral-fidelity)`.
-//!
-//! Affine transforms and multi-layer priority ordering are out of scope for
-//! this type — see [`compositor`](crate::compositor). Likewise, windows,
-//! color effects, and mosaic (S-2 slice 4, issue #99) are applied by
-//! [`compositor::BgSlot`](crate::compositor::BgSlot) around this type's
-//! sampled output, not by [`BgLayer`] itself.
+//! [`BgLayer`] resolves screen entries through a tileset and palette. Scrolled
+//! samples mask offsets to the GBA's nine-bit regular-background scroll
+//! registers, then wrap within the tilemap's pixel dimensions. The
+//! [`crate::compositor`] owns ordering, windows, color effects, and mosaic.
 
 use crate::framebuffer::Framebuffer;
 use crate::palette::{Palette, Rgb888};
 use crate::tile::{BitDepth, Tileset};
 use crate::tilemap::Tilemap;
 
-/// A single regular (non-affine) BG tile layer: a [`Tileset`], a
-/// [`Palette`], and a [`Tilemap`], ready to composite into a
-/// [`Framebuffer`].
-///
-/// No priority-vs-other-layers ordering (see
-/// [`compositor`](crate::compositor)) and no affine transform. Windows,
-/// color effects, and mosaic (issue #99) are handled around this type by
-/// [`compositor::BgSlot`](crate::compositor::BgSlot), not here.
+/// A regular-background tile layer backed by a tileset, palette, and tilemap.
 #[derive(Debug, Clone, Copy)]
 pub struct BgLayer<'a> {
     tileset: &'a Tileset,
@@ -37,13 +19,9 @@ pub struct BgLayer<'a> {
 }
 
 impl<'a> BgLayer<'a> {
-    /// A regular BG's hardware scroll registers (`BGxHOFS`/`BGxVOFS`) are
-    /// each 9 bits wide, giving a 0..=511 wrapping coordinate space
-    /// (`pokeemerald/src/bg.c`'s `ChangeBgX`/`ChangeBgY`).
-    const SCROLL_MASK: u16 = 0x01FF;
+    const SCROLL_REGISTER_MASK: u16 = (1 << 9) - 1;
 
-    /// Borrow a tileset, palette, and tilemap together as one composable
-    /// layer.
+    /// Borrows the resources for one composable regular-background layer.
     #[must_use]
     pub const fn new(tileset: &'a Tileset, palette: &'a Palette, tilemap: &'a Tilemap) -> Self {
         Self {
@@ -53,17 +31,11 @@ impl<'a> BgLayer<'a> {
         }
     }
 
-    /// Composite this layer into `framebuffer`, starting at tilemap origin
-    /// `(0, 0)`, with no scrolling and no wraparound.
+    /// Composites from tilemap origin without scrolling or wraparound.
     ///
-    /// A tilemap larger than the framebuffer is clipped to the visible
-    /// 240x160 area; a tilemap smaller than the framebuffer leaves the
-    /// uncovered area untouched. This is the slice-1 (#50) behaviour, kept
-    /// unchanged for callers that don't need scrolling — see
-    /// [`composite_scrolled`](Self::composite_scrolled) for the wrapping
-    /// regular-BG behaviour added in slice 2 (#64). A screen entry whose
-    /// tile index has no matching tile in the tileset is skipped (left
-    /// untouched) rather than treated as an error.
+    /// Content outside the framebuffer is clipped. Pixels outside a smaller
+    /// tilemap and entries without a matching tile leave the framebuffer
+    /// untouched.
     pub fn composite(&self, framebuffer: &mut Framebuffer) {
         const DIM: usize = BitDepth::TILE_DIM;
         for row in 0..self.tilemap.height_tiles() {
@@ -78,7 +50,7 @@ impl<'a> BgLayer<'a> {
                 }
                 for local_y in 0..DIM {
                     for local_x in 0..DIM {
-                        let Some(color) = self.sample_pixel(col, row, local_x, local_y) else {
+                        let Some(color) = self.sample_tile_pixel(col, row, local_x, local_y) else {
                             continue;
                         };
                         framebuffer.set_pixel(origin_x + local_x, origin_y + local_y, color);
@@ -88,17 +60,11 @@ impl<'a> BgLayer<'a> {
         }
     }
 
-    /// Composite this layer into `framebuffer`, offset by a regular-BG
-    /// scroll position that wraps within this layer's tilemap.
+    /// Composites a scrolled view that wraps within the tilemap.
     ///
-    /// `scroll_x`/`scroll_y` are masked to 9 bits, matching the GBA's
-    /// `BGxHOFS`/`BGxVOFS` scroll registers. The visible window then wraps
-    /// within the tilemap's own pixel size (`width_tiles * 8` by
-    /// `height_tiles * 8` — 256 or 512 px per axis for a hardware-sized
-    /// regular BG), so scrolling off one edge reveals the opposite edge,
-    /// exactly like the GBA's regular (non-affine) BG scroll behaviour. A
-    /// screen entry whose tile index has no matching tile in the tileset is
-    /// skipped (left untouched) rather than treated as an error.
+    /// Scroll offsets are masked to the nine-bit `BGxHOFS` and `BGxVOFS`
+    /// register widths. Transparent pixels and entries without a matching
+    /// tile leave the framebuffer untouched.
     pub fn composite_scrolled(&self, framebuffer: &mut Framebuffer, scroll_x: u16, scroll_y: u16) {
         for fb_y in 0..framebuffer.height() {
             for fb_x in 0..framebuffer.width() {
@@ -110,15 +76,7 @@ impl<'a> BgLayer<'a> {
         }
     }
 
-    /// Sample this layer's resolved color at framebuffer coordinate
-    /// `(x, y)`, offset by a wrapping regular-BG scroll position — the
-    /// per-pixel primitive behind
-    /// [`composite_scrolled`](Self::composite_scrolled), shared with the
-    /// cross-layer [priority compositor](crate::compositor) so both apply
-    /// the identical 9-bit-masked, tilemap-wrapped scroll math.
-    ///
-    /// Returns `None` if this layer has an empty tilemap or the sampled
-    /// pixel is transparent (see [`sample_pixel`](Self::sample_pixel)).
+    /// Samples a scrolled framebuffer coordinate, wrapping within the tilemap.
     #[must_use]
     pub(crate) fn sample_scrolled(
         &self,
@@ -135,26 +93,20 @@ impl<'a> BgLayer<'a> {
         }
         let bg_width_px = width_tiles.checked_mul(DIM)?;
         let bg_height_px = height_tiles.checked_mul(DIM)?;
-        let scroll_x = usize::from(scroll_x & Self::SCROLL_MASK);
-        let scroll_y = usize::from(scroll_y & Self::SCROLL_MASK);
+        let scroll_x = usize::from(scroll_x & Self::SCROLL_REGISTER_MASK);
+        let scroll_y = usize::from(scroll_y & Self::SCROLL_REGISTER_MASK);
         let src_x = (x + scroll_x) % bg_width_px;
         let src_y = (y + scroll_y) % bg_height_px;
-        self.sample_pixel(src_x / DIM, src_y / DIM, src_x % DIM, src_y % DIM)
+        self.sample_tile_pixel(src_x / DIM, src_y / DIM, src_x % DIM, src_y % DIM)
     }
 
-    /// Sample this layer's resolved color at tilemap tile `(col, row)`,
-    /// within-tile pixel `(tile_x, tile_y)` (pre-flip, `0..8` each), or
-    /// `None` if there is no screen entry, no matching tile, or the pixel is
-    /// transparent (palette index 0).
-    ///
-    /// Used by [`composite`](Self::composite) directly (no scrolling) and by
-    /// [`sample_scrolled`](Self::sample_scrolled) (wrapping scroll math).
-    ///
-    /// Palette index 0 is transparent on a regular BG — in every 4bpp bank
-    /// and for 8bpp — so index-0 pixels resolve to `None`, letting the
-    /// backdrop or a lower layer show through, matching mgba's software
-    /// mode-0 renderer.
-    fn sample_pixel(&self, col: usize, row: usize, tile_x: usize, tile_y: usize) -> Option<Rgb888> {
+    fn sample_tile_pixel(
+        &self,
+        col: usize,
+        row: usize,
+        tile_x: usize,
+        tile_y: usize,
+    ) -> Option<Rgb888> {
         const DIM: usize = BitDepth::TILE_DIM;
         let entry = self.tilemap.entry(col, row)?;
         let tile = self.tileset.tile(entry.tile_index())?;
@@ -168,13 +120,13 @@ impl<'a> BgLayer<'a> {
         } else {
             tile_y
         };
-        let index = tile.index(flipped_x, flipped_y);
-        if index == 0 {
+        let palette_index = tile.index(flipped_x, flipped_y);
+        if palette_index == 0 {
             return None;
         }
         let color = match self.tileset.bit_depth() {
-            BitDepth::Bpp4 => self.palette.bank_color(entry.palette_bank(), index),
-            BitDepth::Bpp8 => self.palette.color(index),
+            BitDepth::Bpp4 => self.palette.bank_color(entry.palette_bank(), palette_index),
+            BitDepth::Bpp8 => self.palette.color(palette_index),
         };
         Some(color.to_rgb888())
     }
@@ -188,47 +140,50 @@ mod tests {
     use crate::tile::{BitDepth, Tileset};
     use crate::tilemap::{ScreenEntry, Tilemap};
 
-    /// A hand-built 4bpp fixture: one tile whose two-row pattern repeats
-    /// every other row, so pixel(x, y) has palette index `((y % 2) * 8 +
-    /// x) % 16` — asymmetric across both axes, so flip bits are observable.
-    /// Row 0 (and every even row): indices 0..7. Row 1 (and every odd row):
-    /// indices 8..15.
-    fn checkerboard_4bpp_tile() -> [u8; 32] {
-        let even_row = [0x10, 0x32, 0x54, 0x76]; // pixel(0,0)=0 .. pixel(7,0)=7
-        let odd_row = [0x98, 0xBA, 0xDC, 0xFE]; // pixel(0,1)=8 .. pixel(7,1)=15
-        let mut bytes = [0u8; 32];
-        for row in 0..8 {
-            let src = if row % 2 == 0 { &even_row } else { &odd_row };
-            bytes[row * 4..row * 4 + 4].copy_from_slice(src);
+    const MAX_CHANNEL: u8 = 0x1F;
+    const BITS_PER_4BPP_PIXEL: u32 = 4;
+
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "the generated palette indices are at most 15"
+    )]
+    fn asymmetric_4bpp_tile() -> [u8; 32] {
+        const PIXELS_PER_BYTE: usize = 2;
+        const BYTES_PER_ROW: usize = BitDepth::TILE_DIM / PIXELS_PER_BYTE;
+        let mut bytes = [0u8; BitDepth::TILE_DIM * BYTES_PER_ROW];
+        for (row, packed_row) in bytes.chunks_exact_mut(BYTES_PER_ROW).enumerate() {
+            for (packed_x, packed_pixels) in packed_row.iter_mut().enumerate() {
+                let first_index =
+                    ((row % 2) * BitDepth::TILE_DIM + packed_x * PIXELS_PER_BYTE) as u8;
+                *packed_pixels = first_index | ((first_index + 1) << BITS_PER_4BPP_PIXEL);
+            }
         }
         bytes
     }
 
     #[test]
     fn composite_resolves_flip_bits_and_palette_banks() {
-        let tile_bytes = checkerboard_4bpp_tile();
+        let tile_bytes = asymmetric_4bpp_tile();
         let tileset = Tileset::decode(BitDepth::Bpp4, &tile_bytes).unwrap();
 
-        let red = Bgr555::from_channels(0x1F, 0, 0);
-        let green = Bgr555::from_channels(0, 0x1F, 0);
-        let blue = Bgr555::from_channels(0, 0, 0x1F);
-        let yellow = Bgr555::from_channels(0x1F, 0x1F, 0);
+        let red = Bgr555::from_channels(MAX_CHANNEL, 0, 0);
+        let green = Bgr555::from_channels(0, MAX_CHANNEL, 0);
+        let blue = Bgr555::from_channels(0, 0, MAX_CHANNEL);
+        let yellow = Bgr555::from_channels(MAX_CHANNEL, MAX_CHANNEL, 0);
 
         let mut colors = [Bgr555::default(); Palette::LEN];
-        // Bank 0: index 1 -> red, index 7 -> green, index 8 -> blue
-        // (index 0 stays default/black).
-        colors[1] = red;
-        colors[7] = green;
-        colors[8] = blue;
-        // Bank 1 (flat offset 16): indices 1, 7, and 8 all -> yellow, so
-        // any non-zero pixel drawn through bank 1 is unambiguously yellow.
-        colors[16 + 1] = yellow;
-        colors[16 + 7] = yellow;
-        colors[16 + 8] = yellow;
+        let red_index = 1;
+        let green_index = BitDepth::TILE_DIM - 1;
+        let blue_index = BitDepth::TILE_DIM;
+        colors[red_index] = red;
+        colors[green_index] = green;
+        colors[blue_index] = blue;
+        let second_bank = Palette::BANK_LEN;
+        colors[second_bank + red_index] = yellow;
+        colors[second_bank + green_index] = yellow;
+        colors[second_bank + blue_index] = yellow;
         let palette = Palette::new(colors);
 
-        // Entry 0: tile 0, no flip, bank 0.
-        // Entry 1: tile 0, both flips, bank 1.
         let entries = vec![
             ScreenEntry::new(0, false, false, 0),
             ScreenEntry::new(0, true, true, 1),
@@ -237,55 +192,55 @@ mod tests {
 
         let layer = BgLayer::new(&tileset, &palette, &tilemap);
         let mut fb = Framebuffer::new();
-        // Sentinel fill distinguishes "left untouched" from "composited to
-        // black" (palette index 0 is genuinely black in this fixture).
         let sentinel = Rgb888 { r: 9, g: 9, b: 9 };
         fb.fill(sentinel);
 
         layer.composite(&mut fb);
 
-        // Entry 0 (unflipped, bank 0): pixel(x,y) = tile pixel(x,y) through
-        // bank 0.
-        // (test-ratchet) This used to assert `Some(Rgb888::BLACK)`, pinning
-        // the pre-fix defect where index 0 was painted as colors[0]. Index 0
-        // is transparent on a regular BG, so the sentinel backdrop must show
-        // through untouched here.
-        assert_eq!(fb.pixel(0, 0), Some(sentinel)); // index 0 -> transparent
-        assert_eq!(fb.pixel(1, 0), Some(red.to_rgb888())); // index 1
-        assert_eq!(fb.pixel(7, 0), Some(green.to_rgb888())); // index 7
-        assert_eq!(fb.pixel(0, 1), Some(blue.to_rgb888())); // index 8
+        let tile_side = BitDepth::TILE_DIM;
+        let second_tile_origin_x = tile_side;
+        assert_eq!(fb.pixel(0, 0), Some(sentinel));
+        assert_eq!(fb.pixel(1, 0), Some(red.to_rgb888()));
+        assert_eq!(fb.pixel(tile_side - 1, 0), Some(green.to_rgb888()));
+        assert_eq!(fb.pixel(0, 1), Some(blue.to_rgb888()));
+        assert_eq!(
+            fb.pixel(second_tile_origin_x + tile_side - 1, 0),
+            Some(yellow.to_rgb888())
+        );
+        assert_eq!(
+            fb.pixel(second_tile_origin_x, tile_side - 1),
+            Some(yellow.to_rgb888())
+        );
+        assert_eq!(fb.pixel(second_tile_origin_x, 0), Some(Rgb888::BLACK));
 
-        // Entry 1 (both flips, bank 1) occupies framebuffer x in 8..16.
-        // Output local (lx, ly) reads tile pixel (7-lx, 7-ly).
-        // local (7,0) -> tile (0,7) -> odd-row pattern x=0 -> index 8 -> yellow.
-        assert_eq!(fb.pixel(8 + 7, 0), Some(yellow.to_rgb888()));
-        // local (0,7) -> tile (7,0) -> even-row pattern x=7 -> index 7 -> yellow.
-        assert_eq!(fb.pixel(8, 7), Some(yellow.to_rgb888()));
-        // local (0,0) -> tile (7,7) -> odd-row pattern x=7 -> index 15,
-        // unassigned in either bank -> stays default black.
-        assert_eq!(fb.pixel(8, 0), Some(Rgb888::BLACK));
-
-        // Outside the 16x8 tilemap footprint the sentinel fill survives
-        // untouched.
-        assert_eq!(fb.pixel(20, 0), Some(sentinel));
-        assert_eq!(fb.pixel(0, 8), Some(sentinel));
-        assert_eq!(fb.pixel(239, 159), Some(sentinel));
+        assert_eq!(
+            fb.pixel(second_tile_origin_x + tile_side, 0),
+            Some(sentinel)
+        );
+        assert_eq!(
+            fb.pixel(second_tile_origin_x + tile_side + 4, 0),
+            Some(sentinel)
+        );
+        assert_eq!(fb.pixel(0, tile_side), Some(sentinel));
+        assert_eq!(fb.pixel(fb.width() - 1, fb.height() - 1), Some(sentinel));
     }
 
     #[test]
     fn composite_8bpp_uses_the_flat_palette_directly() {
-        let mut tile_bytes = [0u8; 64];
-        tile_bytes[0] = 200; // pixel(0,0)
-        tile_bytes[1] = 5; // pixel(1,0)
+        let mut tile_bytes = [0u8; BitDepth::TILE_DIM * BitDepth::TILE_DIM];
+        let orange_index = 200;
+        let unassigned_index = 5;
+        tile_bytes[0] = orange_index;
+        tile_bytes[1] = unassigned_index;
         let tileset = Tileset::decode(BitDepth::Bpp8, &tile_bytes).unwrap();
 
         let mut colors = [Bgr555::default(); Palette::LEN];
-        let orange = Bgr555::from_channels(0x1F, 0x10, 0);
-        colors[200] = orange;
+        let orange = Bgr555::from_channels(MAX_CHANNEL, 0x10, 0);
+        colors[usize::from(orange_index)] = orange;
         let palette = Palette::new(colors);
 
-        // Palette bank bits are set but must be ignored for 8bpp tiles.
-        let entries = vec![ScreenEntry::new(0, false, false, 3)];
+        let ignored_palette_bank = 3;
+        let entries = vec![ScreenEntry::new(0, false, false, ignored_palette_bank)];
         let tilemap = Tilemap::new(1, 1, entries).unwrap();
 
         let layer = BgLayer::new(&tileset, &palette, &tilemap);
@@ -293,14 +248,16 @@ mod tests {
         layer.composite(&mut fb);
 
         assert_eq!(fb.pixel(0, 0), Some(orange.to_rgb888()));
-        assert_eq!(fb.pixel(1, 0), Some(Rgb888::BLACK)); // index 5, unassigned
+        assert_eq!(fb.pixel(1, 0), Some(Rgb888::BLACK));
     }
 
     #[test]
     fn composite_skips_screen_entries_with_no_matching_tile() {
-        let tileset = Tileset::decode(BitDepth::Bpp4, &[0u8; 32]).unwrap(); // 1 tile
+        let tile_bytes = vec![0; BitDepth::Bpp4.tile_byte_len()];
+        let tileset = Tileset::decode(BitDepth::Bpp4, &tile_bytes).unwrap();
         let palette = Palette::new([Bgr555::default(); Palette::LEN]);
-        let entries = vec![ScreenEntry::new(5, false, false, 0)]; // no tile 5
+        let missing_tile_index = 5;
+        let entries = vec![ScreenEntry::new(missing_tile_index, false, false, 0)];
         let tilemap = Tilemap::new(1, 1, entries).unwrap();
 
         let layer = BgLayer::new(&tileset, &palette, &tilemap);
@@ -315,34 +272,38 @@ mod tests {
 
     #[test]
     fn composite_clips_a_tilemap_larger_than_the_framebuffer() {
-        // A 31x21-tile tilemap (248x168 px) is one tile wider/taller than
-        // the 240x160 framebuffer in both axes; the extra row/column must
-        // not panic and must be dropped.
-        let tileset = Tileset::decode(BitDepth::Bpp4, &[0xFFu8; 32]).unwrap();
+        let tile_bytes = vec![u8::MAX; BitDepth::Bpp4.tile_byte_len()];
+        let tileset = Tileset::decode(BitDepth::Bpp4, &tile_bytes).unwrap();
         let mut colors = [Bgr555::default(); Palette::LEN];
-        colors[15] = Bgr555::from_channels(0x1F, 0x1F, 0x1F);
+        let opaque_index = Palette::BANK_LEN - 1;
+        colors[opaque_index] = Bgr555::from_channels(MAX_CHANNEL, MAX_CHANNEL, MAX_CHANNEL);
         let palette = Palette::new(colors);
-        let entries = vec![ScreenEntry::new(0, false, false, 0); 31 * 21];
-        let tilemap = Tilemap::new(31, 21, entries).unwrap();
+        let width_tiles = Framebuffer::WIDTH / BitDepth::TILE_DIM + 1;
+        let height_tiles = Framebuffer::HEIGHT / BitDepth::TILE_DIM + 1;
+        let entries = vec![ScreenEntry::new(0, false, false, 0); width_tiles * height_tiles];
+        let tilemap = Tilemap::new(width_tiles, height_tiles, entries).unwrap();
 
         let layer = BgLayer::new(&tileset, &palette, &tilemap);
         let mut fb = Framebuffer::new();
-        layer.composite(&mut fb); // must not panic
+        layer.composite(&mut fb);
 
-        assert_eq!(fb.pixel(239, 159), Some(colors[15].to_rgb888()));
+        assert_eq!(
+            fb.pixel(Framebuffer::WIDTH - 1, Framebuffer::HEIGHT - 1),
+            Some(colors[opaque_index].to_rgb888())
+        );
     }
 
     #[test]
     fn composite_leaves_index_0_pixels_transparent_over_a_backdrop() {
-        // A tile whose top-left pixel is palette index 0 and whose next pixel
-        // is index 1; index 0 must let the backdrop show through.
-        let mut tile_bytes = [0u8; 32];
-        tile_bytes[0] = 0x10; // pixel(0,0)=0, pixel(1,0)=1
+        let transparent_index = 0;
+        let red_index = 1;
+        let mut tile_bytes = vec![0; BitDepth::Bpp4.tile_byte_len()];
+        tile_bytes[0] = transparent_index | (red_index << BITS_PER_4BPP_PIXEL);
         let tileset = Tileset::decode(BitDepth::Bpp4, &tile_bytes).unwrap();
 
         let mut colors = [Bgr555::default(); Palette::LEN];
-        let red = Bgr555::from_channels(0x1F, 0, 0);
-        colors[1] = red;
+        let red = Bgr555::from_channels(MAX_CHANNEL, 0, 0);
+        colors[usize::from(red_index)] = red;
         let palette = Palette::new(colors);
 
         let entries = vec![ScreenEntry::new(0, false, false, 0)];
@@ -355,25 +316,18 @@ mod tests {
 
         layer.composite(&mut fb);
 
-        // Index-0 pixel: backdrop shows through untouched.
         assert_eq!(fb.pixel(0, 0), Some(backdrop));
-        // Index-1 pixel: painted red over the backdrop.
         assert_eq!(fb.pixel(1, 0), Some(red.to_rgb888()));
     }
 
     #[test]
     fn composite_does_not_paint_bank_color_for_index_0_in_a_nonzero_bank() {
-        // Regression: a 4bpp tile drawn through bank>0 must NOT paint
-        // colors[bank*16] for its index-0 pixels — index 0 is transparent in
-        // every bank, so the backdrop must survive.
-        let mut tile_bytes = [0u8; 32];
-        tile_bytes[0] = 0x00; // pixel(0,0)=0, pixel(1,0)=0
+        let tile_bytes = vec![0; BitDepth::Bpp4.tile_byte_len()];
         let tileset = Tileset::decode(BitDepth::Bpp4, &tile_bytes).unwrap();
 
         let mut colors = [Bgr555::default(); Palette::LEN];
-        // Bank 1 index 0 is a vivid colour we must never see on screen.
         let bank1_index0 = Bgr555::from_channels(0x1F, 0, 0x1F);
-        colors[16] = bank1_index0;
+        colors[Palette::BANK_LEN] = bank1_index0;
         let palette = Palette::new(colors);
 
         let entries = vec![ScreenEntry::new(0, false, false, 1)];
@@ -386,43 +340,41 @@ mod tests {
 
         layer.composite(&mut fb);
 
-        // Backdrop survives; the bank-1 index-0 colour never appears.
         assert_eq!(fb.pixel(0, 0), Some(backdrop));
         assert_ne!(fb.pixel(0, 0), Some(bank1_index0.to_rgb888()));
     }
 
-    /// Build a 32x32-tile (256x256px, the smallest hardware regular-BG size)
-    /// tilemap where tile `n` (at tilemap col `n`, row 0) is opaque index 1
-    /// through a distinct palette bank `n`, so reading back which bank
-    /// painted a framebuffer pixel identifies which source tile it came
-    /// from.
     fn marked_256px_tilemap() -> (Tileset, Palette, Tilemap) {
-        let mut tile_bytes = [0u8; 32];
-        tile_bytes[0] = 0x01; // pixel(0,0) = index 1, opaque
+        const TILEMAP_SIDE_TILES: usize = 32;
+        let opaque_index = 1u8;
+        let mut tile_bytes = vec![0; BitDepth::Bpp4.tile_byte_len()];
+        tile_bytes[0] = opaque_index;
         let tileset = Tileset::decode(BitDepth::Bpp4, &tile_bytes).unwrap();
 
         let mut colors = [Bgr555::default(); Palette::LEN];
-        for bank in 0..16u8 {
-            colors[usize::from(bank) * 16 + 1] = Bgr555::from_channels(bank, 0x1F - bank, 0);
+        let palette_bank_count = u8::try_from(Palette::BANK_LEN).unwrap();
+        for bank in 0..palette_bank_count {
+            colors[usize::from(bank) * Palette::BANK_LEN + usize::from(opaque_index)] =
+                marker_color(bank);
         }
         let palette = Palette::new(colors);
 
-        let mut entries = vec![ScreenEntry::new(0, false, false, 0); 32 * 32];
-        // Mark tilemap column 0 of every row with a bank equal to (row % 16),
-        // and row 0 with a bank equal to (col % 16), so both axes carry an
-        // identifiable signal for wrap tests.
-        for (col, entry) in entries.iter_mut().take(32).enumerate() {
-            #[allow(clippy::cast_possible_truncation)]
-            let bank = (col % 16) as u8;
+        let mut entries =
+            vec![ScreenEntry::new(0, false, false, 0); TILEMAP_SIDE_TILES * TILEMAP_SIDE_TILES];
+        for (col, entry) in entries.iter_mut().take(TILEMAP_SIDE_TILES).enumerate() {
+            let bank = u8::try_from(col % Palette::BANK_LEN).unwrap();
             *entry = ScreenEntry::new(0, false, false, bank);
         }
-        for (row, entry) in entries.iter_mut().step_by(32).enumerate() {
-            #[allow(clippy::cast_possible_truncation)]
-            let bank = (row % 16) as u8;
+        for (row, entry) in entries.iter_mut().step_by(TILEMAP_SIDE_TILES).enumerate() {
+            let bank = u8::try_from(row % Palette::BANK_LEN).unwrap();
             *entry = ScreenEntry::new(0, false, false, bank);
         }
-        let tilemap = Tilemap::new(32, 32, entries).unwrap();
+        let tilemap = Tilemap::new(TILEMAP_SIDE_TILES, TILEMAP_SIDE_TILES, entries).unwrap();
         (tileset, palette, tilemap)
+    }
+
+    fn marker_color(bank: u8) -> Bgr555 {
+        Bgr555::from_channels(bank, MAX_CHANNEL - bank, 0)
     }
 
     #[test]
@@ -443,17 +395,17 @@ mod tests {
         let (tileset, palette, tilemap) = marked_256px_tilemap();
         let layer = BgLayer::new(&tileset, &palette, &tilemap);
 
-        // scroll_x=248 (31 tiles in): framebuffer col 0 samples source col
-        // 248, i.e. tilemap col 31 (248/8=31) -> bank (31 % 16) = 15.
-        // Framebuffer col 8 samples source col 256, which wraps modulo 256
-        // back to tilemap col 0 -> bank 0.
+        let tilemap_width_pixels = tilemap.width_tiles() * BitDepth::TILE_DIM;
+        let last_tile_scroll = tilemap_width_pixels - BitDepth::TILE_DIM;
         let mut fb = Framebuffer::new();
-        layer.composite_scrolled(&mut fb, 248, 0);
+        layer.composite_scrolled(&mut fb, u16::try_from(last_tile_scroll).unwrap(), 0);
 
-        let bank15 = Bgr555::from_channels(15, 0x1F - 15, 0).to_rgb888();
-        let bank0 = Bgr555::from_channels(0, 0x1F, 0).to_rgb888();
-        assert_eq!(fb.pixel(0, 0), Some(bank15));
-        assert_eq!(fb.pixel(8, 0), Some(bank0));
+        let last_bank = u8::try_from(Palette::BANK_LEN - 1).unwrap();
+        assert_eq!(fb.pixel(0, 0), Some(marker_color(last_bank).to_rgb888()));
+        assert_eq!(
+            fb.pixel(BitDepth::TILE_DIM, 0),
+            Some(marker_color(0).to_rgb888())
+        );
     }
 
     #[test]
@@ -461,16 +413,17 @@ mod tests {
         let (tileset, palette, tilemap) = marked_256px_tilemap();
         let layer = BgLayer::new(&tileset, &palette, &tilemap);
 
-        // scroll_y=248: framebuffer row 0 samples source row 248 -> tilemap
-        // row 31 -> bank 15. Framebuffer row 8 samples source row 256,
-        // wraps to tilemap row 0 -> bank 0.
+        let tilemap_height_pixels = tilemap.height_tiles() * BitDepth::TILE_DIM;
+        let last_tile_scroll = tilemap_height_pixels - BitDepth::TILE_DIM;
         let mut fb = Framebuffer::new();
-        layer.composite_scrolled(&mut fb, 0, 248);
+        layer.composite_scrolled(&mut fb, 0, u16::try_from(last_tile_scroll).unwrap());
 
-        let bank15 = Bgr555::from_channels(15, 0x1F - 15, 0).to_rgb888();
-        let bank0 = Bgr555::from_channels(0, 0x1F, 0).to_rgb888();
-        assert_eq!(fb.pixel(0, 0), Some(bank15));
-        assert_eq!(fb.pixel(0, 8), Some(bank0));
+        let last_bank = u8::try_from(Palette::BANK_LEN - 1).unwrap();
+        assert_eq!(fb.pixel(0, 0), Some(marker_color(last_bank).to_rgb888()));
+        assert_eq!(
+            fb.pixel(0, BitDepth::TILE_DIM),
+            Some(marker_color(0).to_rgb888())
+        );
     }
 
     #[test]
@@ -478,10 +431,11 @@ mod tests {
         let (tileset, palette, tilemap) = marked_256px_tilemap();
         let layer = BgLayer::new(&tileset, &palette, &tilemap);
 
-        // 768 (0x300) & 0x1FF == 256, and 256 % 256 == 0, so this must be
-        // pixel-identical to an explicit scroll of 0.
+        let first_value_outside_scroll_register = BgLayer::SCROLL_REGISTER_MASK + 1;
+        let tilemap_width = u16::try_from(tilemap.width_tiles() * BitDepth::TILE_DIM).unwrap();
+        let out_of_range_scroll = first_value_outside_scroll_register + tilemap_width;
         let mut masked = Framebuffer::new();
-        layer.composite_scrolled(&mut masked, 768, 0);
+        layer.composite_scrolled(&mut masked, out_of_range_scroll, 0);
         let mut zero = Framebuffer::new();
         layer.composite_scrolled(&mut zero, 0, 0);
 
@@ -490,27 +444,26 @@ mod tests {
 
     #[test]
     fn composite_scrolled_applies_flip_bits_the_same_as_composite() {
-        // Scrolling must not disturb per-entry flip resolution: reuse the
-        // flip fixture from composite_resolves_flip_bits_and_palette_banks,
-        // scrolled by exactly one tilemap width so it's pixel-identical to
-        // the unscrolled result once wrapped.
-        let tile_bytes = checkerboard_4bpp_tile();
+        let tile_bytes = asymmetric_4bpp_tile();
         let tileset = Tileset::decode(BitDepth::Bpp4, &tile_bytes).unwrap();
         let mut colors = [Bgr555::default(); Palette::LEN];
-        colors[1] = Bgr555::from_channels(0x1F, 0, 0);
+        colors[1] = Bgr555::from_channels(MAX_CHANNEL, 0, 0);
         let palette = Palette::new(colors);
-        let entries = vec![ScreenEntry::new(0, true, false, 0)]; // h-flipped
+        let entries = vec![ScreenEntry::new(0, true, false, 0)];
         let tilemap = Tilemap::new(1, 1, entries).unwrap();
         let layer = BgLayer::new(&tileset, &palette, &tilemap);
 
         let mut unscrolled = Framebuffer::new();
         layer.composite(&mut unscrolled);
-        // A full-width (8px) scroll wraps back to the same content.
         let mut scrolled = Framebuffer::new();
-        layer.composite_scrolled(&mut scrolled, 8, 0);
+        let tilemap_width = u16::try_from(tilemap.width_tiles() * BitDepth::TILE_DIM).unwrap();
+        layer.composite_scrolled(&mut scrolled, tilemap_width, 0);
 
         assert_eq!(unscrolled.pixel(0, 0), scrolled.pixel(0, 0));
-        assert_eq!(unscrolled.pixel(7, 0), scrolled.pixel(7, 0));
+        assert_eq!(
+            unscrolled.pixel(BitDepth::TILE_DIM - 1, 0),
+            scrolled.pixel(BitDepth::TILE_DIM - 1, 0)
+        );
     }
 
     #[test]
