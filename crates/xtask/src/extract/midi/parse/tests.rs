@@ -1,9 +1,13 @@
 use super::{parse_track, MidiError, RawEvent};
 
-/// Encode a variable-length quantity the same way a real `.mid` file would
-/// (big-endian 7-bit groups, continuation bit set on every group but the
-/// last) — the inverse of `MidiReader::vlq`, used only by these tests to
-/// build crafted track bytes by hand.
+const META_EVENT: u8 = 0xFF;
+const END_OF_TRACK_META_EVENT: u8 = 0x2F;
+const TEXT_META_EVENT: u8 = 0x01;
+const TRACK_NAME_META_EVENT: u8 = 0x03;
+const TEMPO_META_EVENT: u8 = 0x51;
+const TIME_SIGNATURE_META_EVENT: u8 = 0x58;
+const KEY_SIGNATURE_META_EVENT: u8 = 0x59;
+
 fn vlq(mut value: u32) -> Vec<u8> {
     let mut groups = vec![(value & 0x7F) as u8];
     value >>= 7;
@@ -15,24 +19,80 @@ fn vlq(mut value: u32) -> Vec<u8> {
     groups
 }
 
-/// A minimal well-formed `MTrk` body: a caller-supplied delta-time-prefixed
-/// event stream, terminated with a standard `0x00 0xFF 0x2F 0x00`
-/// end-of-track meta event.
-fn track(mut body: Vec<u8>) -> Vec<u8> {
-    body.extend_from_slice(&[0x00, 0xFF, 0x2F, 0x00]);
+fn meta_event(meta_type: u8, payload: &[u8]) -> Vec<u8> {
+    let mut event = vec![META_EVENT, meta_type];
+    event.extend(vlq(
+        u32::try_from(payload.len()).expect("test meta payload length fits in u32")
+    ));
+    event.extend(payload);
+    event
+}
+
+fn meta_event_with_declared_len(meta_type: u8, declared_len: u32, payload: &[u8]) -> Vec<u8> {
+    let mut event = vec![META_EVENT, meta_type];
+    event.extend(vlq(declared_len));
+    event.extend(payload);
+    event
+}
+
+fn note_on(channel: u8, key: u8, velocity: u8) -> [u8; 3] {
+    [0x90 | channel, key, velocity]
+}
+
+fn running_note_on(key: u8, velocity: u8) -> [u8; 2] {
+    [key, velocity]
+}
+
+fn note_off(channel: u8, key: u8, release_velocity: u8) -> [u8; 3] {
+    [0x80 | channel, key, release_velocity]
+}
+
+fn control_change(channel: u8, controller: u8, value: u8) -> [u8; 3] {
+    [0xB0 | channel, controller, value]
+}
+
+fn program_change(channel: u8, program: u8) -> [u8; 2] {
+    [0xC0 | channel, program]
+}
+
+fn polyphonic_key_pressure(channel: u8, key: u8, pressure: u8) -> [u8; 3] {
+    [0xA0 | channel, key, pressure]
+}
+
+fn channel_pressure(channel: u8, pressure: u8) -> [u8; 2] {
+    [0xD0 | channel, pressure]
+}
+
+fn pitch_bend(channel: u8, lsb: u8, msb: u8) -> [u8; 3] {
+    [0xE0 | channel, lsb, msb]
+}
+
+fn system_exclusive(payload: &[u8]) -> Vec<u8> {
+    let mut event = vec![0xF0];
+    event.extend(vlq(
+        u32::try_from(payload.len()).expect("test system-exclusive payload length fits in u32")
+    ));
+    event.extend(payload);
+    event
+}
+
+fn push_timed(body: &mut Vec<u8>, delta: u32, event: impl IntoIterator<Item = u8>) {
+    body.extend(vlq(delta));
+    body.extend(event);
+}
+
+fn terminated_track(mut body: Vec<u8>) -> Vec<u8> {
+    push_timed(&mut body, 0, meta_event(END_OF_TRACK_META_EVENT, &[]));
     body
 }
 
 #[test]
 fn note_on_and_off_with_running_status() {
-    // delta 0, note-on ch0 key60 vel100; delta 24 (running status, no
-    // status byte repeated), note-off key60 vel0.
     let mut body = Vec::new();
-    body.extend(vlq(0));
-    body.extend([0x90, 60, 100]);
-    body.extend(vlq(24));
-    body.extend([60, 0]); // running status 0x90, velocity 0 -> NoteOff
-    let parsed = parse_track(&track(body)).unwrap();
+    push_timed(&mut body, 0, note_on(0, 60, 100));
+    push_timed(&mut body, 24, running_note_on(60, 0));
+
+    let parsed = parse_track(&terminated_track(body)).unwrap();
     assert_eq!(
         parsed.events,
         vec![
@@ -59,11 +119,10 @@ fn note_on_and_off_with_running_status() {
 #[test]
 fn explicit_note_off_status_is_recognized() {
     let mut body = Vec::new();
-    body.extend(vlq(0));
-    body.extend([0x91, 64, 80]); // note-on channel 1
-    body.extend(vlq(10));
-    body.extend([0x81, 64, 0]); // explicit note-off, channel 1
-    let parsed = parse_track(&track(body)).unwrap();
+    push_timed(&mut body, 0, note_on(1, 64, 80));
+    push_timed(&mut body, 10, note_off(1, 64, 0));
+
+    let parsed = parse_track(&terminated_track(body)).unwrap();
     assert_eq!(
         parsed.events,
         vec![
@@ -88,36 +147,44 @@ fn explicit_note_off_status_is_recognized() {
 
 #[test]
 fn tempo_meta_event_reads_the_24_bit_microseconds_value() {
+    let tempo_payload = 500_000u32.to_be_bytes();
     let mut body = Vec::new();
-    body.extend(vlq(0));
-    body.extend([0xFF, 0x51, 0x03, 0x07, 0xA1, 0x20]); // 500000 us/qn
-    let parsed = parse_track(&track(body)).unwrap();
+    push_timed(
+        &mut body,
+        0,
+        meta_event(TEMPO_META_EVENT, &tempo_payload[1..]),
+    );
+
+    let parsed = parse_track(&terminated_track(body)).unwrap();
     assert_eq!(parsed.events, vec![(0, RawEvent::Tempo(500_000))]);
 }
 
 #[test]
 fn zero_tempo_is_rejected() {
-    let err = parse_track(&track(vec![0x00, 0xFF, 0x51, 0x03, 0x00, 0x00, 0x00])).unwrap_err();
-    assert_eq!(err, super::super::error::MidiError::ZeroTempo);
+    let mut body = Vec::new();
+    push_timed(&mut body, 0, meta_event(TEMPO_META_EVENT, &[0, 0, 0]));
+
+    let error = parse_track(&terminated_track(body)).unwrap_err();
+    assert_eq!(error, MidiError::ZeroTempo);
 }
 
 #[test]
 fn channel_voice_data_bytes_must_be_seven_bit() {
-    let err = parse_track(&track(vec![0x00, 0x90, 60, 128])).unwrap_err();
-    assert_eq!(err, super::super::error::MidiError::InvalidDataByte(128));
+    let mut body = Vec::new();
+    push_timed(&mut body, 0, note_on(0, 60, 128));
+
+    let error = parse_track(&terminated_track(body)).unwrap_err();
+    assert_eq!(error, MidiError::InvalidDataByte(128));
 }
 
 #[test]
 fn all_four_loop_marker_texts_are_recognized() {
     let mut body = Vec::new();
-    for (delta, text) in [(0u32, "["), (1, "]["), (1, "]"), (1, ":")] {
-        body.extend(vlq(delta));
-        body.push(0xFF);
-        body.push(0x01); // text meta type
-        body.push(u8::try_from(text.len()).expect("test marker text is tiny"));
-        body.extend(text.as_bytes());
+    for (delta, text) in [(0u32, b"[".as_slice()), (1, b"]["), (1, b"]"), (1, b":")] {
+        push_timed(&mut body, delta, meta_event(TEXT_META_EVENT, text));
     }
-    let parsed = parse_track(&track(body)).unwrap();
+
+    let parsed = parse_track(&terminated_track(body)).unwrap();
     assert_eq!(
         parsed.events,
         vec![
@@ -132,26 +199,24 @@ fn all_four_loop_marker_texts_are_recognized() {
 #[test]
 fn unrecognized_text_meta_yields_no_event() {
     let mut body = Vec::new();
-    body.extend(vlq(0));
-    body.extend([0xFF, 0x03, 0x04]); // track-name meta, length 4
-    body.extend(b"MUS1");
-    let parsed = parse_track(&track(body)).unwrap();
+    push_timed(&mut body, 0, meta_event(TRACK_NAME_META_EVENT, b"MUS1"));
+
+    let parsed = parse_track(&terminated_track(body)).unwrap();
     assert!(parsed.events.is_empty());
 }
 
-/// A time-signature meta parses into [`RawEvent::TimeSignature`] -- it
-/// re-phases the whole-note grid bounding the CC `0x1E` drop (module docs)
-/// -- while genuinely unhandled metas still skip cleanly past.
 #[test]
 fn time_signature_parses_and_other_unhandled_meta_events_are_skipped() {
     let mut body = Vec::new();
-    body.extend(vlq(0));
-    body.extend([0xFF, 0x58, 0x04, 4, 2, 24, 8]); // 4/4 time signature
-    body.extend(vlq(3));
-    body.extend([0xFF, 0x59, 0x02, 0, 0]); // key signature, skipped
-    body.extend(vlq(2));
-    body.extend([0x90, 60, 100]); // a real note-on should still parse after both
-    let parsed = parse_track(&track(body)).unwrap();
+    push_timed(
+        &mut body,
+        0,
+        meta_event(TIME_SIGNATURE_META_EVENT, &[4, 2, 24, 8]),
+    );
+    push_timed(&mut body, 3, meta_event(KEY_SIGNATURE_META_EVENT, &[0, 0]));
+    push_timed(&mut body, 2, note_on(0, 60, 100));
+
+    let parsed = parse_track(&terminated_track(body)).unwrap();
     assert_eq!(
         parsed.events,
         vec![
@@ -174,26 +239,27 @@ fn time_signature_parses_and_other_unhandled_meta_events_are_skipped() {
     );
 }
 
-/// The three fail-closed guards on a time-signature meta, mirroring
-/// `midi.cpp:318-334`'s `RaiseError`s: a length other than 4 and a
-/// denominator exponent of 16+ fail at parse; a signature whose whole-note
-/// grid period works out to zero ticks (e.g. `1/128`) fails at compile,
-/// where `clocks_per_beat` is known (`super::super::compile`).
 #[test]
 fn a_malformed_time_signature_fails_closed() {
     let mut body = Vec::new();
-    body.extend(vlq(0));
-    body.extend([0xFF, 0x58, 0x03, 4, 2, 24]); // declared length 3, not 4
+    push_timed(
+        &mut body,
+        0,
+        meta_event_with_declared_len(TIME_SIGNATURE_META_EVENT, 3, &[4, 2, 24]),
+    );
     assert_eq!(
-        parse_track(&track(body)).unwrap_err(),
+        parse_track(&terminated_track(body)).unwrap_err(),
         MidiError::BadTimeSignatureLength(3)
     );
 
     let mut body = Vec::new();
-    body.extend(vlq(0));
-    body.extend([0xFF, 0x58, 0x04, 4, 16, 24, 8]); // denominator 2^16
+    push_timed(
+        &mut body,
+        0,
+        meta_event(TIME_SIGNATURE_META_EVENT, &[4, 16, 24, 8]),
+    );
     assert_eq!(
-        parse_track(&track(body)).unwrap_err(),
+        parse_track(&terminated_track(body)).unwrap_err(),
         MidiError::BadTimeSignatureDenominator(16)
     );
 }
@@ -201,9 +267,9 @@ fn a_malformed_time_signature_fails_closed() {
 #[test]
 fn pitch_bend_keeps_only_the_msb() {
     let mut body = Vec::new();
-    body.extend(vlq(0));
-    body.extend([0xE2, 0x00, 0x50]); // channel 2, lsb=0, msb=0x50
-    let parsed = parse_track(&track(body)).unwrap();
+    push_timed(&mut body, 0, pitch_bend(2, 0, 0x50));
+
+    let parsed = parse_track(&terminated_track(body)).unwrap();
     assert_eq!(
         parsed.events,
         vec![(
@@ -219,11 +285,10 @@ fn pitch_bend_keeps_only_the_msb() {
 #[test]
 fn controller_and_program_change_are_recognized() {
     let mut body = Vec::new();
-    body.extend(vlq(0));
-    body.extend([0xB3, 7, 100]); // channel 3, controller 7 (volume) = 100
-    body.extend(vlq(0));
-    body.extend([0xC3, 46]); // program change, channel 3
-    let parsed = parse_track(&track(body)).unwrap();
+    push_timed(&mut body, 0, control_change(3, 7, 100));
+    push_timed(&mut body, 0, program_change(3, 46));
+
+    let parsed = parse_track(&terminated_track(body)).unwrap();
     assert_eq!(
         parsed.events,
         vec![
@@ -249,35 +314,29 @@ fn controller_and_program_change_are_recognized() {
 #[test]
 fn sysex_and_aftertouch_are_skipped() {
     let mut body = Vec::new();
-    body.extend(vlq(0));
-    body.extend([0xF0, 0x02, 0xAA, 0xBB]); // sysex, 2 data bytes
-    body.extend(vlq(0));
-    body.extend([0xA0, 60, 100]); // poly aftertouch, channel 0
-    body.extend(vlq(0));
-    body.extend([0xD0, 50]); // channel aftertouch
-    let parsed = parse_track(&track(body)).unwrap();
+    push_timed(&mut body, 0, system_exclusive(&[0xAA, 0xBB]));
+    push_timed(&mut body, 0, polyphonic_key_pressure(0, 60, 100));
+    push_timed(&mut body, 0, channel_pressure(0, 50));
+
+    let parsed = parse_track(&terminated_track(body)).unwrap();
     assert!(parsed.events.is_empty());
 }
 
 #[test]
 fn a_bare_data_byte_with_no_prior_status_is_an_error() {
     let mut body = Vec::new();
-    body.extend(vlq(0));
-    body.push(0x10); // data byte, but no running status has been set yet
-    let err = parse_track(&track(body)).unwrap_err();
-    assert!(matches!(
-        err,
-        super::super::error::MidiError::InvalidStatusByte(0x10)
-    ));
+    push_timed(&mut body, 0, [0x10]);
+
+    let error = parse_track(&terminated_track(body)).unwrap_err();
+    assert_eq!(error, MidiError::InvalidStatusByte(0x10));
 }
 
 #[test]
 fn end_of_track_stops_parsing_and_reports_its_own_tick() {
     let mut body = Vec::new();
-    body.extend(vlq(0));
-    body.extend([0x90, 60, 100]);
-    let bytes = track(body);
-    let parsed = parse_track(&bytes).unwrap();
+    push_timed(&mut body, 0, note_on(0, 60, 100));
+
+    let parsed = parse_track(&terminated_track(body)).unwrap();
     assert_eq!(parsed.end_of_track, 0);
     assert_eq!(parsed.events.len(), 1);
 }
