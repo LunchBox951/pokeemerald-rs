@@ -433,7 +433,9 @@ mod tests {
     #[test]
     fn composite_scrolled_masks_scroll_registers_to_9_bits() {
         const TEST_TILEMAP_WIDTH_TILES: usize = 25;
-        const FIRST_VALUE_OUTSIDE_NINE_BITS: u16 = 1 << 9;
+        const HIGHEST_NINE_BIT_REGISTER_BIT: u16 = 1 << 8;
+        const FIRST_BIT_OUTSIDE_NINE_BIT_REGISTER: u16 = 1 << 9;
+        const EXPECTED_BANK_AT_MASKED_ORIGIN: u8 = 7;
 
         let (tileset, palette, _) = marked_256px_tilemap();
         let entries = (0..TEST_TILEMAP_WIDTH_TILES)
@@ -445,14 +447,14 @@ mod tests {
         let tilemap = Tilemap::new(TEST_TILEMAP_WIDTH_TILES, 1, entries).unwrap();
         let layer = BgLayer::new(&tileset, &palette, &tilemap);
 
-        let tilemap_width = u16::try_from(tilemap.width_tiles() * BitDepth::TILE_DIM).unwrap();
-        let out_of_range_scroll = FIRST_VALUE_OUTSIDE_NINE_BITS + tilemap_width;
-        let mut masked = Framebuffer::new();
-        layer.composite_scrolled(&mut masked, out_of_range_scroll, 0);
-        let mut zero = Framebuffer::new();
-        layer.composite_scrolled(&mut zero, 0, 0);
+        let scroll = FIRST_BIT_OUTSIDE_NINE_BIT_REGISTER | HIGHEST_NINE_BIT_REGISTER_BIT;
+        let mut framebuffer = Framebuffer::new();
+        layer.composite_scrolled(&mut framebuffer, scroll, 0);
 
-        assert_eq!(masked.pixels(), zero.pixels());
+        assert_eq!(
+            framebuffer.pixel(0, 0),
+            Some(marker_color(EXPECTED_BANK_AT_MASKED_ORIGIN).to_rgb888())
+        );
     }
 
     #[test]
