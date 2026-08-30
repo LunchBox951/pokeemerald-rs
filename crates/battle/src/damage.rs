@@ -1,253 +1,152 @@
-//! The Gen-3 damage formula (S-6): `CalculateBaseDamage` and the
-//! battle-script steps around it.
-//!
-//! Upstream splits a single hit's damage across several places in
-//! `pokeemerald/src/battle_script_commands.c` and `src/pokemon.c`, run in
-//! this order:
-//!
-//! 1. `Cmd_damagecalc` calls `CalculateBaseDamage` (`src/pokemon.c`): the
-//!    level/power/stat core, plus burn, Reflect/Light Screen, and weather —
-//!    modelled here by [`base_damage`].
-//! 2. `Cmd_typecalc`: STAB (`x1.5` if the move's type matches one of the
-//!    attacker's types) — [`apply_stab`] / [`has_stab`] — then type
-//!    effectiveness via `ModulateDmgByType` — [`apply_type_effectiveness`].
-//! 3. `ApplyRandomDmgMultiplier`: the `85..=100%` random roll —
-//!    [`apply_damage_roll`].
-//!
-//! [`calculate_damage`] chains all three in that exact order. Each step is
-//! also exposed standalone so callers (and this module's tests) can pin
-//! intermediate values against hand-computed upstream cases.
-//!
-//! Out of scope for this slice (`pokeemerald-rs` issue #125): critical hits
-//! (which also change *which* stat-stage changes `CalculateBaseDamage`
-//! ignores — a battle-state-machine concern), item/ability modifiers, double
-//! battles (the "hits both targets" halving and Reflect/Light Screen's
-//! double-battle `2/3` variant), and move effects beyond this slice (not
-//! modelled yet — deferred, still in v1 scope).
-//!
-//! Critical hits are added on top of this module, without changing it, by
-//! issue #159 (`S-6`)'s [`crate::critical`]: it derives the
-//! crit-adjusted `attack_stage`/`defense_stage`/`reflect`/`light_screen`
-//! [`DamageInput`] fields this module already accepts, and doubles
-//! [`base_damage`]'s result before [`apply_stab`] runs — see
-//! [`crate::hit::resolve_hit`] for the full assembled pipeline.
+//! Generation III single-hit damage arithmetic and random-roll ordering.
 
 use assets::{Effectiveness, MoveId, Type, TypeChart};
 
 use crate::stat_stage::StatStage;
 
-/// Upstream `MOVE_STRUGGLE` (`pokeemerald/include/constants/moves.h`).
-///
-/// Struggle is special-cased by `TypeCalc`/`Cmd_typecalc`
-/// (`pokeemerald/src/battle_script_commands.c`): the function returns before
-/// both the STAB multiply and every `ModulateDmgByType` call, so Struggle
-/// never receives STAB (despite being stored as a Normal-type move) and
-/// ignores type effectiveness entirely `(behavioral-fidelity)`.
+/// Struggle, which bypasses STAB and type effectiveness.
 pub const STRUGGLE: MoveId = MoveId(165);
 
-/// Whether a move's type makes it physical or special — Gen 3 derives this
-/// from the type itself (`IS_TYPE_PHYSICAL`/`IS_TYPE_SPECIAL`,
-/// `pokeemerald/include/battle.h`), not a per-move category field (that split
-/// arrives in Gen 4).
+/// A move's type-based damage category.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum MoveCategory {
-    /// `IS_TYPE_PHYSICAL(moveType)`: `moveType < TYPE_MYSTERY` — Normal
-    /// through Steel.
+    /// Uses Attack and Defense.
     Physical,
-    /// `IS_TYPE_SPECIAL(moveType)`: `moveType > TYPE_MYSTERY` — Fire through
-    /// Dark.
+    /// Uses Special Attack and Special Defense.
     Special,
 }
 
-/// Upstream `TYPE_MYSTERY` (`pokeemerald/include/constants/pokemon.h`): the
-/// id `IS_TYPE_PHYSICAL`/`IS_TYPE_SPECIAL` compare against. Not a [`Type`]
-/// variant (see the `type_chart` module docs), so it is named here only to
-/// document [`MoveCategory::for_type`]'s threshold — no real [`Type`] id
-/// ever equals it.
-const TYPE_MYSTERY_ID: u8 = 9;
-
 impl MoveCategory {
-    /// The category a move of `move_type` falls into.
+    /// Returns the Generation III category for `move_type`.
     ///
-    /// Every real [`Type`] is either physical or special: `TYPE_MYSTERY`
-    /// (the non-combat "???" type, id `9`) is the only upstream id in
-    /// neither `IS_TYPE_PHYSICAL` nor `IS_TYPE_SPECIAL`, and it is
-    /// deliberately not a [`Type`] variant (see the `type_chart` module
-    /// docs) — every move that carries it (`MOVE_CURSE`) has `0` base power,
-    /// so it never reaches the damage formula.
+    /// [`Type`] rejects the non-combat Mystery type, which belongs to neither
+    /// category upstream.
     #[must_use]
     pub const fn for_type(move_type: Type) -> Self {
-        if move_type.id() < TYPE_MYSTERY_ID {
-            Self::Physical
-        } else {
-            Self::Special
+        match move_type {
+            Type::Normal
+            | Type::Fighting
+            | Type::Flying
+            | Type::Poison
+            | Type::Ground
+            | Type::Rock
+            | Type::Bug
+            | Type::Ghost
+            | Type::Steel => Self::Physical,
+            Type::Fire
+            | Type::Water
+            | Type::Grass
+            | Type::Electric
+            | Type::Psychic
+            | Type::Ice
+            | Type::Dragon
+            | Type::Dark => Self::Special,
         }
     }
 }
 
-/// The battle-wide weather condition, as it affects the damage formula.
-///
-/// A parameterized hook, not a weather *system*: this crate does not track
-/// weather duration or which ability negates it (`WEATHER_HAS_EFFECT2`
-/// upstream) — the caller resolves that and passes the effective state in.
+/// Effective weather for damage calculation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum Weather {
-    /// No weather in effect (or its effect is negated, e.g. Cloud Nine).
+    /// No effective weather.
     #[default]
     None,
-    /// `B_WEATHER_RAIN`: weakens Fire, boosts Water.
+    /// Weakens Fire, boosts Water, and weakens Solar Beam.
     Rain,
-    /// `B_WEATHER_SUN`: boosts Fire, weakens Water.
+    /// Boosts Fire and weakens Water.
     Sun,
-    /// `B_WEATHER_SANDSTORM`: no direct type modifier, but still weakens
-    /// Solar Beam like every non-sun weather.
+    /// Weakens Solar Beam.
     Sandstorm,
-    /// `B_WEATHER_HAIL`: same role as [`Weather::Sandstorm`].
+    /// Weakens Solar Beam.
     Hail,
 }
 
-/// Inputs to [`base_damage`] — the parts of `CalculateBaseDamage` this slice
-/// models.
+/// Inputs to [`base_damage`].
 ///
-/// `attack_stat`/`defense_stat` are the attacker's/defender's already-final
-/// battle stat (post nature, EVs, IVs — that computation is out of this
-/// slice's scope) for *whichever* pair [`MoveCategory::for_type`] selects:
-/// Attack/Defense for a physical move, Sp. Attack/Sp. Defense for a special
-/// one. Item and ability modifiers upstream applies to those stats before
-/// `CalculateBaseDamage`'s core (Choice Band, Thick Club, Guts, badge boosts,
-/// ...) are out of scope; pass the raw stat and let a later slice layer them
-/// on.
-// Four independent flags (`attacker_burned`/`reflect`/`light_screen`/
-// `is_solar_beam`), matching upstream's own independent conditions inside
-// `CalculateBaseDamage` (a burn check, a side-status bit test, and a move-id
-// comparison) — they don't share enough structure to collapse into a state
-// machine or enum.
+/// The attack and defense fields must match [`MoveCategory::for_type`] and
+/// include modifiers that the caller resolves before base damage. Screen
+/// flags use the single-battle halving rules.
 #[allow(clippy::struct_excessive_bools)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct DamageInput {
-    /// The attacker's level (`1..=100`).
+    /// The attacker's level.
     pub attacker_level: u8,
-    /// The move's base power (`gBattleMoves[move].power`, or a caller-
-    /// supplied override — `powerOverride` upstream).
+    /// The move's base or overridden power.
     pub power: u32,
-    /// The move's type (`typeOverride` upstream, when set; otherwise
-    /// `gBattleMoves[move].type`) — also selects [`MoveCategory`].
+    /// The move's effective type, which also selects its category.
     pub move_type: Type,
-    /// The attacker's Attack or Sp. Attack stat, matching `move_type`'s
-    /// category.
+    /// Attack or Special Attack, matching the move category.
     pub attack_stat: u32,
-    /// The attacker's stat-stage offset for that same stat.
+    /// The stage for `attack_stat`.
     pub attack_stage: StatStage,
-    /// The defender's Defense or Sp. Defense stat, matching `move_type`'s
-    /// category.
+    /// Defense or Special Defense, matching the move category.
     pub defense_stat: u32,
-    /// The defender's stat-stage offset for that same stat.
+    /// The stage for `defense_stat`.
     pub defense_stage: StatStage,
-    /// Physical only: the attacker has `STATUS1_BURN` (and not Ability
-    /// Guts — upstream's exemption is an ability check, out of scope here;
-    /// pass `false` if Guts applies).
+    /// Whether burn halves this physical attack.
     pub attacker_burned: bool,
-    /// The defender's side has Reflect up (`SIDE_STATUS_REFLECT`); halves
-    /// physical damage. Single-battle only.
+    /// Whether Reflect halves this physical attack.
     pub reflect: bool,
-    /// The defender's side has Light Screen up (`SIDE_STATUS_LIGHTSCREEN`);
-    /// halves special damage. Single-battle only.
+    /// Whether Light Screen halves this special attack.
     pub light_screen: bool,
-    /// The active weather, if any.
+    /// Weather after callers resolve effect-negating abilities.
     pub weather: Weather,
-    /// The move being calculated is Solar Beam (`MOVE_SOLAR_BEAM`): every
-    /// non-sun weather halves it.
+    /// Whether the move is Solar Beam.
     pub is_solar_beam: bool,
-    /// The attacker's pinch ability matches `move_type` and its HP is at or
-    /// below a third of its maximum — `CalculateBaseDamage`'s
-    /// `gBattleMovePower = (150 * gBattleMovePower) / 100`
-    /// (`pokeemerald/src/pokemon.c:3219`-`:3226`), i.e. Overgrow and its
-    /// three siblings. Callers pass
-    /// [`crate::ability::pinch_boosts_power`]'s verdict rather than a
-    /// pre-multiplied [`DamageInput::power`], because the `/ 100` truncation
-    /// has to happen at upstream's position — before the `attack * power`
-    /// multiply, not after it.
+    /// Whether a matching low-HP ability boosts power before core arithmetic.
     pub attacker_pinch_boost: bool,
 }
 
-/// `gStatStageRatios` applied via `APPLY_STAT_MOD`, guarding against a `0`
-/// divisor. Upstream never sees a `0` result here (every real base stat and
-/// stage combination yields a positive value: the smallest stage ratio is
-/// `10/40`, i.e. a quarter, and no upstream base stat is `0` outside the
-/// unused `SPECIES_NONE` slot), but a `0` defense would make the following
-/// integer division panic rather than silently misbehave, so it is clamped
-/// defensively to `1`.
-fn stage_adjusted(stat: u32, stage: StatStage) -> u32 {
+fn nonzero_stage_adjusted_stat(stat: u32, stage: StatStage) -> u32 {
     stage.apply(stat).max(1)
 }
 
-/// Rain/Sun's Fire/Water type modifiers, and every weather's Solar Beam
-/// penalty — the `WEATHER_HAS_EFFECT2` block inside `CalculateBaseDamage`'s
-/// special-move branch. Order matches upstream exactly: the rain type
-/// switch, then the solar-beam check (which also covers rain), then the sun
-/// type switch.
-fn apply_weather(mut damage: u32, move_type: Type, weather: Weather, is_solar_beam: bool) -> u32 {
-    if weather == Weather::None {
-        return damage;
-    }
-    if weather == Weather::Rain {
-        match move_type {
-            Type::Fire => damage /= 2,
-            Type::Water => damage = 15 * damage / 10,
-            _ => {}
+fn apply_weather(damage: u32, move_type: Type, weather: Weather, is_solar_beam: bool) -> u32 {
+    match weather {
+        Weather::Rain => {
+            let damage = match move_type {
+                Type::Fire => damage / 2,
+                Type::Water => 15 * damage / 10,
+                _ => damage,
+            };
+            if is_solar_beam {
+                damage / 2
+            } else {
+                damage
+            }
         }
+        Weather::Sun => match move_type {
+            Type::Fire => 15 * damage / 10,
+            Type::Water => damage / 2,
+            _ => damage,
+        },
+        Weather::Sandstorm | Weather::Hail if is_solar_beam => damage / 2,
+        Weather::None | Weather::Sandstorm | Weather::Hail => damage,
     }
-    if is_solar_beam && matches!(weather, Weather::Rain | Weather::Sandstorm | Weather::Hail) {
-        damage /= 2;
-    }
-    if weather == Weather::Sun {
-        match move_type {
-            Type::Fire => damage = 15 * damage / 10,
-            Type::Water => damage /= 2,
-            _ => {}
-        }
-    }
-    damage
 }
 
-/// The `CalculateBaseDamage` core: level/power/stat, plus the burn,
-/// Reflect/Light Screen, and weather hooks that live *inside* upstream's
-/// function. STAB, type effectiveness, and the random roll are separate
-/// battle-script steps — see [`apply_stab`], [`apply_type_effectiveness`],
-/// [`apply_damage_roll`], or [`calculate_damage`] for the full pipeline.
+/// Calculates level, power, stat, burn, screen, and weather damage.
 ///
-/// Mirrors this arithmetic exactly, division order included
-/// `(behavioral-fidelity)`:
-///
-/// ```text
-/// damage = stage_adjusted(attack_stat)
-/// damage *= power
-/// damage *= (2 * level / 5 + 2)
-/// damage /= stage_adjusted(defense_stat)
-/// damage /= 50
-/// // physical: halve for burn, halve for Reflect, floor to 1 if the move has power
-/// // special: halve for Light Screen, then apply weather
-/// return damage + 2
-/// ```
+/// STAB, type effectiveness, and the random roll are later stages; use
+/// [`calculate_damage`] for the complete single-effectiveness pipeline.
+/// Stage-adjusted zero stats are clamped to one before division.
 #[must_use]
 pub fn base_damage(input: &DamageInput) -> u32 {
     let category = MoveCategory::for_type(input.move_type);
-    let attack = stage_adjusted(input.attack_stat, input.attack_stage);
-    let defense = stage_adjusted(input.defense_stat, input.defense_stage);
+    let attack = nonzero_stage_adjusted_stat(input.attack_stat, input.attack_stage);
+    let defense = nonzero_stage_adjusted_stat(input.defense_stat, input.defense_stage);
 
-    // The pinch boost is a `gBattleMovePower` rewrite that happens *before*
-    // the formula reads the power (`src/pokemon.c:3219`), so it truncates on
-    // its own: a 35-power move becomes 52, not 52.5 rounded later.
-    let power = if input.attacker_pinch_boost {
+    let effective_power = if input.attacker_pinch_boost {
         150 * input.power / 100
     } else {
         input.power
     };
 
-    let mut damage = attack * power;
-    damage *= 2 * u32::from(input.attacker_level) / 5 + 2;
-    damage /= defense;
-    damage /= 50;
+    let level_multiplier = 2 * u32::from(input.attacker_level) / 5 + 2;
+    let attack_power = attack * effective_power;
+    let level_scaled_damage = attack_power * level_multiplier;
+    let defense_scaled_damage = level_scaled_damage / defense;
+    let mut damage = defense_scaled_damage / 50;
 
     match category {
         MoveCategory::Physical => {
@@ -257,14 +156,7 @@ pub fn base_damage(input: &DamageInput) -> u32 {
             if input.reflect {
                 damage /= 2;
             }
-            // Upstream's inline floor: "Moves always do at least 1 damage."
-            // Only reached in the physical branch inside
-            // `CalculateBaseDamage` itself; the special branch's floor
-            // happens later, in `ModulateDmgByType` (see
-            // `apply_type_effectiveness`).
-            if damage == 0 {
-                damage = 1;
-            }
+            damage = damage.max(1);
         }
         MoveCategory::Special => {
             if input.light_screen {
@@ -277,10 +169,7 @@ pub fn base_damage(input: &DamageInput) -> u32 {
     damage + 2
 }
 
-/// STAB (`Cmd_typecalc`'s "check stab" step): `x1.5` when the move's type
-/// matches one of the attacker's types, computed as `damage * 15 / 10` (not
-/// a single floating-point `1.5`) to match upstream's truncating integer
-/// arithmetic exactly `(behavioral-fidelity)`.
+/// Applies STAB with truncating integer arithmetic.
 #[must_use]
 pub fn apply_stab(damage: u32, has_stab: bool) -> u32 {
     if has_stab {
@@ -290,14 +179,10 @@ pub fn apply_stab(damage: u32, has_stab: bool) -> u32 {
     }
 }
 
-/// Whether `mv` grants STAB against `attacker_types` (a single-type
-/// species repeats its type in both slots, matching [`assets::BaseStats`]).
+/// Returns whether `mv` receives same-type attack bonus.
 ///
-/// [`STRUGGLE`] never gets STAB: upstream's `TypeCalc` returns before the
-/// STAB multiply for `MOVE_STRUGGLE`, even though the move is stored as
-/// Normal-type — a Normal-type attacker using Struggle deals unboosted
-/// damage. Callers must likewise skip type effectiveness for Struggle (pass
-/// [`Effectiveness::Normal`], or bypass the type step entirely).
+/// [`STRUGGLE`] never receives STAB. Callers must also bypass type
+/// effectiveness for Struggle.
 #[must_use]
 pub fn has_stab(attacker_types: [Type; 2], mv: MoveId, move_type: Type) -> bool {
     if mv == STRUGGLE {
@@ -306,162 +191,95 @@ pub fn has_stab(attacker_types: [Type; 2], mv: MoveId, move_type: Type) -> bool 
     attacker_types[0] == move_type || attacker_types[1] == move_type
 }
 
-/// Type effectiveness (`ModulateDmgByType`): `damage * multiplier_x10 / 10`,
-/// floored to `1` whenever the multiplier is nonzero but truncation would
-/// otherwise round the result to `0` (upstream: `if (gBattleMoveDamage == 0
-/// && multiplier != 0) gBattleMoveDamage = 1;`).
+/// Applies one type-effectiveness multiplier, flooring nonzero hits to one.
 #[must_use]
 pub fn apply_type_effectiveness(damage: u32, effectiveness: Effectiveness) -> u32 {
-    let multiplier = u32::from(effectiveness.multiplier_x10());
-    let damage = damage * multiplier / 10;
-    if damage == 0 && multiplier != 0 {
+    let multiplier_x10 = u32::from(effectiveness.multiplier_x10());
+    let scaled_damage = damage * multiplier_x10 / 10;
+    if scaled_damage == 0 && multiplier_x10 != 0 {
         1
     } else {
-        damage
+        scaled_damage
     }
 }
 
-/// The minimal PRNG surface the damage roll needs: one 16-bit draw per call.
-///
-/// Mirrors `engine::rng::Rng::next_u16`'s exact name and signature (`fn
-/// next_u16(&mut self) -> u16`, `crates/engine/src/rng.rs`) so any
-/// implementation of that shape can be dropped in. `battle` does not (yet)
-/// depend on `engine` — this slice is data/formula only, and issue #125
-/// scopes battle-state-machine wiring to a later slice — so rather than add
-/// that dependency edge for a single method, this crate defines its own
-/// trait `(oop-boundaries, minimal-deps)`. Once a later slice wires the two
-/// crates together, whichever crate ends up depending on both `battle` and
-/// `engine` can add `impl BattleRng for engine::rng::Rng` (or a thin
-/// newtype) without needing to touch either crate's existing code — the
-/// signature match makes that a one-line adapter.
+/// Random draws consumed by battle mechanics.
 pub trait BattleRng {
-    /// Draw the next 16-bit value from the generator's sequence.
+    /// Draws the next 16-bit value.
     fn next_u16(&mut self) -> u16;
 
-    /// Draw the next 32-bit value — upstream `Random32()`, `Random() |
-    /// (Random() << 16)`.
+    /// Draws a 32-bit value, consuming its low half before its high half.
     ///
-    /// A default method built on two [`BattleRng::next_u16`] draws, low half
-    /// first, matching `engine::rng::Rng::next_u32`'s documented draw order
-    /// exactly (`crates/engine/src/rng.rs`) so a `BattleRng` implementation
-    /// backed by that generator agrees with it call-for-call. Used by
-    /// [`crate::wild`]'s personality generation
-    /// (`CreateBoxMon`/`CreateMonWithNature`, `pokeemerald/src/pokemon.c`).
+    /// This order matches `Random32` in `pokeemerald/include/random.h`.
     fn next_u32(&mut self) -> u32 {
-        let low = u32::from(self.next_u16());
-        let high = u32::from(self.next_u16());
-        low | (high << 16)
+        let low_half = u32::from(self.next_u16());
+        let high_half = u32::from(self.next_u16());
+        low_half | (high_half << 16)
     }
 }
 
-/// The `85..=100%` random damage roll (`ApplyRandomDmgMultiplier`):
-/// `100 - (Random() % 16)` gives a percentage in `85..=100`, then `damage =
-/// damage * percent / 100`, floored to `1` if `damage` was nonzero
-/// beforehand.
+/// Applies the uniformly distributed 85–100% damage roll.
 ///
-/// The RNG is drawn *unconditionally*, before the zero-damage guard, to match
-/// upstream's consumption count exactly: `ApplyRandomDmgMultiplier`
-/// (`pokeemerald/src/battle_script_commands.c:1639`) calls `Random()` on its
-/// first line, *then* checks `if (gBattleMoveDamage != 0)`. A 0-damage
-/// (immunity) hit therefore still advances the shared battle RNG by one draw,
-/// so downstream draws in the same turn stay in lockstep with upstream
-/// `(behavioral-fidelity)`.
+/// The draw precedes the zero-damage guard, so immune hits still consume one
+/// value (`pokeemerald/src/battle_script_commands.c:1639`).
 #[must_use]
 pub fn apply_damage_roll(damage: u32, rng: &mut impl BattleRng) -> u32 {
-    let percent = 100 - u32::from(rng.next_u16()) % 16;
+    let roll_reduction = u32::from(rng.next_u16()) % 16;
+    let percent = 100 - roll_reduction;
     if damage == 0 {
         return 0;
     }
-    let rolled = damage * percent / 100;
-    if rolled == 0 {
-        1
-    } else {
-        rolled
-    }
+    (damage * percent / 100).max(1)
 }
 
-/// Type effectiveness against a (possibly dual-type) defender, applied in
-/// upstream **table order** with immunity kept **terminal**.
+/// Applies dual-type effectiveness in [`TypeChart`] table order.
 ///
-/// Upstream `Cmd_typecalc` (`pokeemerald/src/battle_script_commands.c:1386`)
-/// scans `gTypeEffectiveness` linearly and calls `ModulateDmgByType` at each
-/// row matching the move's type and one of the defender's type slots (the
-/// second slot only when `types[0] != types[1]`). Two consequences are
-/// observable and reproduced here `(behavioral-fidelity)`:
-///
-/// - **Application order is the table's, not the defender's slot order.**
-///   Each modulation truncates then floors, so `x0.5`-then-`x2` can differ
-///   by one from `x2`-then-`x0.5` (a Grass move into Rock/Grass applies the
-///   `Grass→Grass x0.5` row *before* `Grass→Rock x2`, giving `d-1` for odd
-///   `d` — slot-order application would give `d`). [`TypeChart::rows`]
-///   preserves that order, including the post-Foresight Ghost immunities a
-///   Foresight-less scan still processes.
-/// - **Immunity is terminal.** A `x0` row raises
-///   `MOVE_RESULT_DOESNT_AFFECT_FOE`, which ends the hit regardless of the
-///   other slot's multiplier (Electric vs Ground/Flying deals no damage even
-///   though the Flying slot alone would double it). This crate models no
-///   result-flag, so that terminality lives here: any matching `NoEffect`
-///   row forces the final result to `0`, while the intermediate damage still
-///   evolves through [`apply_type_effectiveness`] exactly as upstream's
-///   `gBattleMoveDamage` does.
-///
-/// The `types[0] != types[1]` guard is on the defender's *types*, not their
-/// multipliers, so two distinct types sharing an effectiveness still both
-/// apply (Fighting vs Rock/Steel stacks to `x4`), while a single-type
-/// defender (both slots equal, matching [`assets::BaseStats`]) modulates
-/// once per matching row.
+/// Repeated type slots apply once. Distinct slots each apply, including the
+/// intermediate truncation and floor. Any matching immunity remains terminal,
+/// as required by `Cmd_typecalc` in
+/// `pokeemerald/src/battle_script_commands.c:1386`.
 #[must_use]
 pub fn apply_dual_type_effectiveness(
     damage: u32,
     move_type: Type,
     defender_types: [Type; 2],
 ) -> u32 {
-    let distinct = defender_types[1] != defender_types[0];
+    let second_type_is_distinct = defender_types[1] != defender_types[0];
     let mut damage = damage;
-    let mut immune = false;
-    for &(attacker, defender, effectiveness) in TypeChart::rows() {
-        if attacker != move_type {
+    let mut has_immunity = false;
+    for &(attacking_type, defending_type, effectiveness) in TypeChart::rows() {
+        if attacking_type != move_type {
             continue;
         }
-        if defender != defender_types[0] && !(distinct && defender == defender_types[1]) {
+        let matches_first_type = defending_type == defender_types[0];
+        let matches_second_type = second_type_is_distinct && defending_type == defender_types[1];
+        if !matches_first_type && !matches_second_type {
             continue;
         }
-        if effectiveness == Effectiveness::NoEffect {
-            immune = true;
-        }
+        has_immunity |= effectiveness == Effectiveness::NoEffect;
         damage = apply_type_effectiveness(damage, effectiveness);
     }
-    if immune {
+    if has_immunity {
         0
     } else {
         damage
     }
 }
 
-/// The full single-hit damage pipeline, in upstream's exact order:
-/// [`base_damage`], then [`apply_stab`], then [`apply_type_effectiveness`],
-/// then [`apply_damage_roll`].
+/// Calculates one hit in base, STAB, single-effectiveness, and roll order.
 ///
-/// `effectiveness` is applied exactly **once**: this models a single
-/// `ModulateDmgByType` step, which is exact for a single-type defender (or a
-/// dual-type defender whose second slot repeats the first). A caller
-/// modelling a dual-type defender with two *distinct* slots must instead run
-/// [`base_damage`] → [`apply_stab`] → [`apply_dual_type_effectiveness`] →
-/// [`apply_damage_roll`]: that helper modulates in upstream's
-/// `gTypeEffectiveness` table order (with its observable intermediate
-/// floors) **and** keeps a `NoEffect` row terminal (a naive fold of
-/// [`apply_type_effectiveness`] would revive a `0x` immunity to `1` damage
-/// via the floor).
+/// Use [`apply_dual_type_effectiveness`] instead of the single-effectiveness
+/// stage when the defender has two distinct types.
 #[must_use]
 pub fn calculate_damage(
     input: &DamageInput,
     attacker_has_stab: bool,
-    effectiveness: Effectiveness,
+    single_type_effectiveness: Effectiveness,
     rng: &mut impl BattleRng,
 ) -> u32 {
     let damage = base_damage(input);
     let damage = apply_stab(damage, attacker_has_stab);
-    let damage = apply_type_effectiveness(damage, effectiveness);
+    let damage = apply_type_effectiveness(damage, single_type_effectiveness);
     apply_damage_roll(damage, rng)
 }
 
@@ -476,8 +294,8 @@ mod tests {
     use crate::stat_stage::StatStage;
     use assets::{Effectiveness, MoveId, Type};
 
-    /// A `BattleRng` that always returns a fixed draw, for deterministic
-    /// tests of the random roll and full pipeline.
+    const TACKLE: MoveId = MoveId(33);
+
     struct FixedRng(u16);
     impl BattleRng for FixedRng {
         fn next_u16(&mut self) -> u16 {
@@ -485,8 +303,6 @@ mod tests {
         }
     }
 
-    /// A `BattleRng` that counts how many times it is drawn, for asserting the
-    /// roll's RNG-consumption count matches upstream regardless of the damage.
     struct CountingRng {
         value: u16,
         draws: u32,
@@ -505,7 +321,6 @@ mod tests {
 
     #[test]
     fn next_u32_default_method_composes_low_then_high_half() {
-        // Random32() = Random() | (Random() << 16): first draw is the low half.
         let mut rng = SequenceRng::new([0x1234, 0xABCD]);
         assert_eq!(rng.next_u32(), 0xABCD_1234);
     }
@@ -534,21 +349,6 @@ mod tests {
         }
     }
 
-    /// The pinch boost rewrites `gBattleMovePower` **before** the formula
-    /// reads it (`src/pokemon.c:3219` runs above the `damage = attack *
-    /// gBattleMovePower` line), so the `150 * power / 100` truncation lands
-    /// on the *power*, not on the finished damage.
-    ///
-    /// Hand computation, attack 20 / defense 20 / level 10, a Grass
-    /// (special) move, no screens or weather:
-    ///
-    /// - power 20, unboosted: `20*20 = 400`, `*6 = 2400`, `/20 = 120`,
-    ///   `/50 = 2`, `+2` = **4**.
-    /// - power 20, boosted: power becomes `150*20/100 = 30`; `20*30 = 600`,
-    ///   `*6 = 3600`, `/20 = 180`, `/50 = 3`, `+2` = **5**.
-    /// - boosting the *result* instead would give `150 * 4 / 100 = 6`, then
-    ///   `+2` handling aside, a visibly different number — which is what
-    ///   makes this fixture discriminate the order.
     #[test]
     fn the_pinch_boost_scales_the_power_before_the_formula_reads_it() {
         let boosted = |power| {
@@ -560,7 +360,6 @@ mod tests {
 
         assert_eq!(plain(20), 4);
         assert_eq!(boosted(20), 5);
-        // power 35 -> 52 (truncated from 52.5): 20*52*6/20/50 + 2 = 8.
         assert_eq!(plain(35), 6);
         assert_eq!(boosted(35), 8);
         assert_eq!(150 * 35 / 100, 52, "the truncation is on the power");
@@ -568,7 +367,6 @@ mod tests {
 
     #[test]
     fn move_category_matches_is_type_physical_and_special_macros() {
-        // IS_TYPE_PHYSICAL: moveType < TYPE_MYSTERY (id 9) -- Normal..Steel.
         for t in [
             Type::Normal,
             Type::Fighting,
@@ -582,7 +380,6 @@ mod tests {
         ] {
             assert_eq!(MoveCategory::for_type(t), MoveCategory::Physical, "{t:?}");
         }
-        // IS_TYPE_SPECIAL: moveType > TYPE_MYSTERY -- Fire..Dark.
         for t in [
             Type::Fire,
             Type::Water,
@@ -599,24 +396,12 @@ mod tests {
 
     #[test]
     fn base_damage_matches_a_hand_computed_physical_case() {
-        // Attack 50, power 40, level 50, Defense 50, all stages neutral,
-        // Normal type (physical), no burn/screens/weather.
-        //
-        // damage = 50 (stage-adjusted attack, x1 at neutral)
-        // damage *= 40 (power)          -> 2000
-        // damage *= (2*50/5 + 2) = 22   -> 44000
-        // damage /= 50 (defense)        -> 880
-        // damage /= 50                  -> 17  (880/50 = 17.6, truncated)
-        // no burn/reflect; damage != 0
-        // return damage + 2             -> 19
         let input = neutral_input(Type::Normal, 50, 50, 40, 50);
         assert_eq!(base_damage(&input), 19);
     }
 
     #[test]
     fn base_damage_applies_burn_before_the_floor_and_the_plus_two() {
-        // Same case as above but burned: 17 / 2 = 8 (integer division),
-        // then +2 = 10.
         let mut input = neutral_input(Type::Normal, 50, 50, 40, 50);
         input.attacker_burned = true;
         assert_eq!(base_damage(&input), 10);
@@ -626,16 +411,11 @@ mod tests {
     fn base_damage_reflect_halves_physical_damage() {
         let mut input = neutral_input(Type::Normal, 50, 50, 40, 50);
         input.reflect = true;
-        // 17 / 2 = 8, + 2 = 10 (same arithmetic as the burn case above,
-        // since only one halving applies here).
         assert_eq!(base_damage(&input), 10);
     }
 
     #[test]
     fn base_damage_light_screen_halves_special_damage() {
-        // A special (Water-type) version of the hand-computed case: same
-        // numbers, so the pre-screen core is again 17, then Light Screen
-        // halves it to 8, +2 = 10. Weather is None so it does not interfere.
         let mut input = neutral_input(Type::Water, 50, 50, 40, 50);
         input.light_screen = true;
         assert_eq!(base_damage(&input), 10);
@@ -643,34 +423,21 @@ mod tests {
 
     #[test]
     fn base_damage_floors_a_zero_result_to_one_for_physical_moves_only() {
-        // Power 1, huge defense: the pre-floor physical core truncates to 0.
         let physical = neutral_input(Type::Normal, 1, 100_000, 1, 1);
-        // damage = 1*1*(2*1/5+2=2) = 2; /100000 = 0; /50 = 0 -> floored to 1
-        // for the physical branch -> +2 = 3.
         assert_eq!(base_damage(&physical), 3);
 
-        // The identical numbers on a special move do NOT get the inline
-        // floor (upstream only applies it in the physical branch) -- the
-        // special branch's floor happens in `apply_type_effectiveness`, not
-        // `base_damage`.
         let special = neutral_input(Type::Water, 1, 100_000, 1, 1);
-        assert_eq!(base_damage(&special), 2); // 0 + 2, no floor applied here
+        assert_eq!(base_damage(&special), 2);
     }
 
     #[test]
     fn base_damage_stat_stages_shift_attack_and_defense_independently() {
-        // +2 Attack (x2 per gStatStageRatios) doubles the pre-division
-        // attack term; -2 Defense (x0.5) doubles the divisor's effect.
         let mut boosted = neutral_input(Type::Normal, 50, 50, 40, 50);
         boosted.attack_stage = StatStage::new(2).unwrap();
-        // attack = 50*20/10 = 100; damage = 100*40*22 = 88000; /50(defense
-        // unchanged) = 1760; /50 = 35; +2 = 37.
         assert_eq!(base_damage(&boosted), 37);
 
         let mut lowered_defense = neutral_input(Type::Normal, 50, 50, 40, 50);
         lowered_defense.defense_stage = StatStage::new(-2).unwrap();
-        // defense = 50*10/20 = 25; damage = 50*40*22 = 44000; /25 = 1760;
-        // /50 = 35; +2 = 37 (matches the attack-boost case by symmetry).
         assert_eq!(base_damage(&lowered_defense), 37);
     }
 
@@ -678,13 +445,10 @@ mod tests {
     fn weather_rain_weakens_fire_and_boosts_water() {
         let mut fire = neutral_input(Type::Fire, 50, 50, 40, 50);
         fire.weather = Weather::Rain;
-        // Base special core is 17 (same arithmetic as the physical hand
-        // case); rain halves Fire: 17/2 = 8; +2 = 10.
         assert_eq!(base_damage(&fire), 10);
 
         let mut water = neutral_input(Type::Water, 50, 50, 40, 50);
         water.weather = Weather::Rain;
-        // Rain boosts Water by x1.5: 17*15/10 = 25 (255/10 truncated); +2 = 27.
         assert_eq!(base_damage(&water), 27);
     }
 
@@ -692,11 +456,11 @@ mod tests {
     fn weather_sun_boosts_fire_and_weakens_water() {
         let mut fire = neutral_input(Type::Fire, 50, 50, 40, 50);
         fire.weather = Weather::Sun;
-        assert_eq!(base_damage(&fire), 27); // mirror of the rain/water case
+        assert_eq!(base_damage(&fire), 27);
 
         let mut water = neutral_input(Type::Water, 50, 50, 40, 50);
         water.weather = Weather::Sun;
-        assert_eq!(base_damage(&water), 10); // mirror of the rain/fire case
+        assert_eq!(base_damage(&water), 10);
     }
 
     #[test]
@@ -705,52 +469,37 @@ mod tests {
             let mut input = neutral_input(Type::Grass, 50, 50, 40, 50);
             input.weather = weather;
             input.is_solar_beam = true;
-            // Grass is unaffected by the rain/sun Fire/Water switches, so
-            // only the solar-beam halving applies: 17/2 = 8; +2 = 10.
             assert_eq!(base_damage(&input), 10, "{weather:?}");
         }
 
         let mut sunny = neutral_input(Type::Grass, 50, 50, 40, 50);
         sunny.weather = Weather::Sun;
         sunny.is_solar_beam = true;
-        // Sun does NOT weaken Solar Beam.
         assert_eq!(base_damage(&sunny), 19);
     }
 
     #[test]
     fn has_stab_checks_both_type_slots() {
-        // MOVE_TACKLE (33) as a representative ordinary move.
-        let tackle = MoveId(33);
-        assert!(has_stab([Type::Fire, Type::Flying], tackle, Type::Fire));
-        assert!(has_stab([Type::Fire, Type::Flying], tackle, Type::Flying));
-        assert!(!has_stab([Type::Fire, Type::Flying], tackle, Type::Water));
-        // Single-type species repeat their type in both slots.
-        assert!(has_stab([Type::Water, Type::Water], tackle, Type::Water));
+        assert!(has_stab([Type::Fire, Type::Flying], TACKLE, Type::Fire));
+        assert!(has_stab([Type::Fire, Type::Flying], TACKLE, Type::Flying));
+        assert!(!has_stab([Type::Fire, Type::Flying], TACKLE, Type::Water));
+        assert!(has_stab([Type::Water, Type::Water], TACKLE, Type::Water));
     }
 
     #[test]
     fn has_stab_never_applies_to_struggle() {
-        // Upstream TypeCalc returns before the STAB multiply for
-        // MOVE_STRUGGLE, so even a Normal-type attacker gets no STAB from
-        // the Normal-typed Struggle.
         assert!(!has_stab(
             [Type::Normal, Type::Normal],
             STRUGGLE,
             Type::Normal
         ));
-        // The same attacker DOES get STAB from an ordinary Normal move.
-        assert!(has_stab(
-            [Type::Normal, Type::Normal],
-            MoveId(33),
-            Type::Normal
-        ));
+        assert!(has_stab([Type::Normal, Type::Normal], TACKLE, Type::Normal));
     }
 
     #[test]
     fn apply_stab_multiplies_by_fifteen_over_ten() {
         assert_eq!(apply_stab(100, true), 150);
         assert_eq!(apply_stab(100, false), 100);
-        // Truncating: 19 * 15 / 10 = 28 (285/10 = 28.5).
         assert_eq!(apply_stab(19, true), 28);
     }
 
@@ -766,26 +515,19 @@ mod tests {
             14
         );
         assert_eq!(apply_type_effectiveness(0, Effectiveness::NoEffect), 0);
-        // A nonzero multiplier that would truncate to 0 floors to 1.
         assert_eq!(
             apply_type_effectiveness(1, Effectiveness::NotVeryEffective),
             1
         );
-        // A zero multiplier never floors, even from nonzero input.
         assert_eq!(apply_type_effectiveness(100, Effectiveness::NoEffect), 0);
     }
 
     #[test]
     fn dual_type_immunity_is_terminal() {
-        // Electric vs Ground/Flying: the Ground row is NoEffect, and the
-        // Flying row's x2 must NOT revive the hit — upstream raises
-        // MOVE_RESULT_DOESNT_AFFECT_FOE and deals no damage. A naive
-        // per-slot fold would floor 0 -> 1 on the Flying row.
         assert_eq!(
             apply_dual_type_effectiveness(56, Type::Electric, [Type::Ground, Type::Flying]),
             0
         );
-        // Defender slot order must not matter.
         assert_eq!(
             apply_dual_type_effectiveness(56, Type::Electric, [Type::Flying, Type::Ground]),
             0
@@ -794,16 +536,10 @@ mod tests {
 
     #[test]
     fn dual_type_distinct_slots_stack_and_keep_the_intermediate_floor() {
-        // Fighting vs Rock/Steel: two DISTINCT types sharing x2 each — both
-        // apply (the upstream guard is type1 != type2, not on multipliers):
-        // 10 * 2 * 2 = 40.
         assert_eq!(
             apply_dual_type_effectiveness(10, Type::Fighting, [Type::Rock, Type::Steel]),
             40
         );
-        // Electric vs Grass/Dragon (x0.5 twice): 3 -> 1 (15/10, no floor
-        // needed) -> 1 (5/10 truncates to 0, floored back to 1) —
-        // upstream's per-row intermediate floor is observable.
         assert_eq!(
             apply_dual_type_effectiveness(3, Type::Electric, [Type::Grass, Type::Dragon]),
             1
@@ -812,17 +548,10 @@ mod tests {
 
     #[test]
     fn dual_type_applies_in_table_order_not_slot_order() {
-        // Grass move into Rock/Grass (Lileep/Cradily): gTypeEffectiveness
-        // lists Grass->Grass (x0.5) BEFORE Grass->Rock (x2)
-        // (pokeemerald/src/battle_main.c), so upstream halves first:
-        // 7 -> 7*5/10 = 3 -> 3*20/10 = 6. Applying in defender-slot order
-        // (Rock first) would give 7 -> 14 -> 7 — an observable off-by-one
-        // for odd damage.
         assert_eq!(
             apply_dual_type_effectiveness(7, Type::Grass, [Type::Rock, Type::Grass]),
             6
         );
-        // Same result regardless of which slot carries which type.
         assert_eq!(
             apply_dual_type_effectiveness(7, Type::Grass, [Type::Grass, Type::Rock]),
             6
@@ -831,9 +560,6 @@ mod tests {
 
     #[test]
     fn dual_type_repeated_slot_applies_only_once() {
-        // A single-type species repeats its type in both slots; upstream's
-        // `type1 != type2` guard modulates once: Water vs Fire/Fire is x2,
-        // not x4.
         assert_eq!(
             apply_dual_type_effectiveness(10, Type::Water, [Type::Fire, Type::Fire]),
             20
@@ -842,35 +568,23 @@ mod tests {
 
     #[test]
     fn apply_damage_roll_covers_the_full_eighty_five_to_one_hundred_percent_range() {
-        // rand % 16 == 0 -> percent 100 (no reduction).
         assert_eq!(apply_damage_roll(56, &mut FixedRng(0)), 56);
-        assert_eq!(apply_damage_roll(56, &mut FixedRng(16)), 56); // 16 % 16 == 0
-                                                                  // rand % 16 == 15 -> percent 85, the maximum reduction.
-                                                                  // 56 * 85 / 100 = 47 (4760/100 = 47.6, truncated).
+        assert_eq!(apply_damage_roll(56, &mut FixedRng(16)), 56);
         assert_eq!(apply_damage_roll(56, &mut FixedRng(15)), 47);
-        // Zero input damage stays zero regardless of the roll.
         assert_eq!(apply_damage_roll(0, &mut FixedRng(0)), 0);
     }
 
     #[test]
     fn apply_damage_roll_floors_a_nonzero_damage_to_one() {
-        // damage=1 at the worst roll (85%): 1*85/100 = 0, floored to 1.
         assert_eq!(apply_damage_roll(1, &mut FixedRng(15)), 1);
     }
 
     #[test]
     fn apply_damage_roll_draws_the_rng_even_for_zero_damage() {
-        // Upstream `ApplyRandomDmgMultiplier` calls `Random()` unconditionally,
-        // *before* the `if (gBattleMoveDamage != 0)` guard
-        // (`battle_script_commands.c:1641`), so a 0-damage (immunity) hit still
-        // advances the shared battle RNG by exactly one draw. Assert both the
-        // returned 0 and the single draw.
         let mut rng = CountingRng::new(0);
         assert_eq!(apply_damage_roll(0, &mut rng), 0);
         assert_eq!(rng.draws, 1, "zero-damage roll must still draw once");
 
-        // A nonzero-damage roll also draws exactly once -- same count either
-        // way, which is the whole point of drawing before the guard.
         let mut rng = CountingRng::new(0);
         assert_eq!(apply_damage_roll(56, &mut rng), 56);
         assert_eq!(rng.draws, 1);
@@ -878,29 +592,31 @@ mod tests {
 
     #[test]
     fn calculate_damage_chains_every_step_in_upstream_order() {
-        // Physical Fire-type STAB hit, super effective, at the worst roll.
-        let mut input = neutral_input(Type::Fire, 50, 50, 40, 50);
-        input.move_type = Type::Fire; // special category
-                                      // base_damage (special, no screens/weather) = 17 + 2 = 19.
-                                      // STAB: 19*15/10 = 28.
-                                      // SuperEffective: 28*20/10 = 56.
-                                      // Worst roll (85%): 56*85/100 = 47.
-        let got = calculate_damage(
+        let input = neutral_input(Type::Fire, 50, 50, 40, 50);
+        let base = base_damage(&input);
+        assert_eq!(base, 19);
+        let with_stab = apply_stab(base, true);
+        assert_eq!(with_stab, 28);
+        let super_effective = apply_type_effectiveness(with_stab, Effectiveness::SuperEffective);
+        assert_eq!(super_effective, 56);
+        let worst_roll = apply_damage_roll(super_effective, &mut FixedRng(15));
+        assert_eq!(worst_roll, 47);
+
+        let calculated = calculate_damage(
             &input,
             true,
             Effectiveness::SuperEffective,
             &mut FixedRng(15),
         );
-        assert_eq!(got, 47);
+        assert_eq!(calculated, worst_roll);
 
-        // Best roll (100%, rand % 16 == 0) instead:
-        let got_best = calculate_damage(
+        let best_roll = calculate_damage(
             &input,
             true,
             Effectiveness::SuperEffective,
             &mut FixedRng(0),
         );
-        assert_eq!(got_best, 56);
+        assert_eq!(best_roll, 56);
     }
 
     #[test]
