@@ -196,6 +196,7 @@ mod tests {
     const TILEMAP_WIDTH_TILES: usize = 2;
     const TILEMAP_HEIGHT_TILES: usize = 2;
     const TILE_COUNT: usize = TILEMAP_WIDTH_TILES * TILEMAP_HEIGHT_TILES;
+    const DISTANT_REFERENCE_PIXELS: usize = 1_000;
     const CHANNEL_MAX: u8 = 0b1_1111;
     const RED: Bgr555 = Bgr555::from_channels(CHANNEL_MAX, 0, 0);
     const GREEN: Bgr555 = Bgr555::from_channels(0, CHANNEL_MAX, 0);
@@ -314,7 +315,7 @@ mod tests {
         layer.composite(
             &mut fb,
             AffineMatrix::IDENTITY,
-            tilemap_width_fixed(),
+            pixels_to_fixed(DISTANT_REFERENCE_PIXELS),
             0,
             Overflow::Transparent,
         );
