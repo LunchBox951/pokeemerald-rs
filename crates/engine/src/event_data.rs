@@ -1,152 +1,74 @@
-//! Event flags and vars — the boolean/16-bit state scripts and the overworld
-//! read and write (S-5).
+//! Script-visible boolean flags and 16-bit variables.
 //!
-//! Behavioural re-implementation `(behavioral-fidelity)` of
-//! `pokeemerald/src/event_data.c` + `include/event_data.h`'s `FlagGet`/
-//! `FlagSet`/`FlagClear`, `VarGet`/`VarSet`, and `ClearTempFieldEventData`,
-//! plus the id-space layout constants from `include/constants/flags.h` and
-//! `include/constants/vars.h`. The backing storage is an owned [`EventData`]
-//! value — upstream's `gSaveBlock1Ptr->flags`/`vars` indirection and the
-//! static `sSpecialFlags` array become plain fields `(oop-boundaries)`; no
-//! global mutable state.
+//! Ordinary values persist in saves; special values last only for the running
+//! session. Flag id zero always reads false and ignores writes. Variable ids
+//! below [`VARS_START`] are immediate values: reads return the id and writes do
+//! nothing.
 //!
-//! # Scope
-//!
-//! Per issue #65: the store, its accessors, and the id-space semantics only.
-//! The special-var range (`SPECIAL_VARS_START..=SPECIAL_VARS_END`) is backed
-//! by a flat array here: upstream serves it via `gSpecialVars`, a pointer
-//! table over 22 standalone `u16` EWRAM globals (`gSpecialVar_0x8000` …
-//! `gTrainerBattleOpponent_A`), which are pure storage — `GetVarPointer`
-//! reads and writes them exactly like ordinary vars, so a flat array is the
-//! faithful shape. What *is* deferred is the `special`/`specialvar` command
-//! dispatch that gives some of those ids subsystem meaning (a later slice's
-//! job), `VarGetObjectEventGraphicsId` (no object events yet), save-block
-//! persistence, `ClearDailyFlags` (RTC-tied, explicitly out of scope —
-//! `DAILY_FLAGS_START`/`DAILY_FLAGS_END` still appear below, private,
-//! because `FLAGS_COUNT` is defined in terms of them upstream), and any
-//! script command (this module only provides the primitives a later slice
-//! wires into the command table).
-//!
-//! # Id spaces
-//!
-//! Flag ids and var ids are separate namespaces, each with an "ordinary"
-//! range plus special sub-ranges — see [`classify_flag`] and
-//! [`EventData::var_get`]/[`EventData::var_set`] for the exact branches, and
-//! [`EventDataError`] for what happens off the end of each. Confusingly,
-//! upstream numbers flags' [`SPECIAL_FLAGS_START`] and vars'
-//! [`VARS_START`]/[`TEMP_VARS_START`] identically at `0x4000`; the overlap is
-//! coincidental (the two id spaces are read by entirely different functions)
-//! and never a collision in practice.
-//!
-//! Both spaces share one shape upstream leaves unchecked: `GetFlagPointer`/
-//! `GetVarPointer` have no bounds check between the ordinary range and the
-//! special range, or past the special range's end — an id there reads or
-//! corrupts memory adjacent to the underlying fixed-size C arrays (undefined
-//! behaviour, not deliberate design; no real `FLAG_*`/`VAR_*` constant ever
-//! falls there). This port has no unsafe pointer arithmetic to reproduce that
-//! with, so it refuses those ids as [`EventDataError::OutOfRange`] instead.
+//! Invalid ids return [`EventDataError::OutOfRange`]. The original game used
+//! unchecked fixed-array offsets for these ids; this safe implementation fails
+//! closed instead of reproducing an out-of-bounds access.
 
-// ---------------------------------------------------------------------------
-// Flag id space (`include/constants/flags.h`).
-// ---------------------------------------------------------------------------
-
-/// `TEMP_FLAGS_START`. Temporary flags are cleared every map load.
+/// First temporary flag id.
 pub const TEMP_FLAGS_START: u16 = 0x0;
-/// `TEMP_FLAGS_END` (`FLAG_TEMP_1F`).
+/// Last temporary flag id.
 pub const TEMP_FLAGS_END: u16 = 0x1F;
-/// `NUM_TEMP_FLAGS`.
+/// Number of temporary flag ids.
 pub const NUM_TEMP_FLAGS: u16 = TEMP_FLAGS_END - TEMP_FLAGS_START + 1;
 
-/// `DAILY_FLAGS_START`. Private: only used to derive [`FLAGS_COUNT`].
-/// `ClearDailyFlags` itself (RTC-tied daily-flag clearing) is out of scope
-/// for this slice.
+const FLAGS_PER_BYTE: usize = u8::BITS as usize;
 const DAILY_FLAGS_START: u16 = 0x920;
-/// `DAILY_FLAGS_END`.
 const DAILY_FLAGS_END: u16 = 0x95F;
 
-/// `FLAGS_COUNT` (`DAILY_FLAGS_END + 1`) — the number of ordinary flag ids,
-/// `0..FLAGS_COUNT`.
+/// Number of ids in ordinary flag storage.
 pub const FLAGS_COUNT: u16 = DAILY_FLAGS_END + 1;
 
-// Ground-truth check that `NUM_DAILY_FLAGS` (`DAILY_FLAGS_END -
-// DAILY_FLAGS_START + 1`) matches upstream, keeping `DAILY_FLAGS_START` a
-// meaningful part of the derivation rather than dead weight.
 const _: () = assert!(DAILY_FLAGS_END - DAILY_FLAGS_START + 1 == 64);
 
-/// `NUM_FLAG_BYTES` (`ROUND_BITS_TO_BYTES(FLAGS_COUNT)`) — the size of the
-/// ordinary flag byte array. Public: the save system (`crate::save`) needs
-/// it to size the serialized flag payload.
-pub const NUM_FLAG_BYTES: usize = (FLAGS_COUNT as usize).div_ceil(8);
+/// Byte length of packed ordinary flag storage.
+pub const NUM_FLAG_BYTES: usize = (FLAGS_COUNT as usize).div_ceil(FLAGS_PER_BYTE);
 
-/// `SPECIAL_FLAGS_START`.
+/// First session-only flag id.
 pub const SPECIAL_FLAGS_START: u16 = 0x4000;
-/// `SPECIAL_FLAGS_END` (`SPECIAL_FLAGS_START + 0x7F`).
+/// Last session-only flag id.
 pub const SPECIAL_FLAGS_END: u16 = SPECIAL_FLAGS_START + 0x7F;
-/// `NUM_SPECIAL_FLAGS`.
+/// Number of session-only flag ids.
 pub const NUM_SPECIAL_FLAGS: u16 = SPECIAL_FLAGS_END - SPECIAL_FLAGS_START + 1;
 
-/// `SPECIAL_FLAGS_SIZE` (`NUM_SPECIAL_FLAGS / 8`).
-const SPECIAL_FLAGS_BYTES: usize = (NUM_SPECIAL_FLAGS as usize).div_ceil(8);
+const SPECIAL_FLAGS_BYTES: usize = (NUM_SPECIAL_FLAGS as usize).div_ceil(FLAGS_PER_BYTE);
 
-// Five named system flags `ClearTempFieldEventData` clears outside the temp
-// range (`src/event_data.c`). All resolve well under `FLAGS_COUNT`, so
-// they're ordinary flags; kept as private literals (with derivations
-// documented) rather than pulling in the full `flags.h` constant table,
-// which is out of scope for this slice.
-/// `SYSTEM_FLAGS` (`TRAINER_FLAGS_END + 1`).
 const SYSTEM_FLAGS: u16 = 0x860;
-/// `FLAG_NURSE_UNION_ROOM_REMINDER` (`SYSTEM_FLAGS + 0x20`).
 const FLAG_NURSE_UNION_ROOM_REMINDER: u16 = SYSTEM_FLAGS + 0x20;
-/// `FLAG_SYS_USE_STRENGTH` (`SYSTEM_FLAGS + 0x29`).
 const FLAG_SYS_USE_STRENGTH: u16 = SYSTEM_FLAGS + 0x29;
-/// `FLAG_SYS_ENC_UP_ITEM` (`SYSTEM_FLAGS + 0x4D`).
 const FLAG_SYS_ENC_UP_ITEM: u16 = SYSTEM_FLAGS + 0x4D;
-/// `FLAG_SYS_ENC_DOWN_ITEM` (`SYSTEM_FLAGS + 0x4E`).
 const FLAG_SYS_ENC_DOWN_ITEM: u16 = SYSTEM_FLAGS + 0x4E;
-/// `FLAG_SYS_CTRL_OBJ_DELETE` (`SYSTEM_FLAGS + 0x61`).
 const FLAG_SYS_CTRL_OBJ_DELETE: u16 = SYSTEM_FLAGS + 0x61;
 
-// ---------------------------------------------------------------------------
-// Var id space (`include/constants/vars.h`).
-// ---------------------------------------------------------------------------
-
-/// `VARS_START` — the offset subtracted from a var id to index the vars
-/// array.
+/// First ordinary variable id.
 pub const VARS_START: u16 = 0x4000;
-/// `VARS_END`.
+/// Last ordinary variable id.
 pub const VARS_END: u16 = 0x40FF;
-/// `VARS_COUNT` (`VARS_END - VARS_START + 1`).
+/// Number of ordinary variable ids.
 pub const VARS_COUNT: usize = (VARS_END - VARS_START + 1) as usize;
 
-/// `TEMP_VARS_START` (`== VARS_START`). Temporary vars are cleared every map
-/// load.
+/// First temporary variable id.
 pub const TEMP_VARS_START: u16 = VARS_START;
-/// `TEMP_VARS_END`.
+/// Last temporary variable id.
 pub const TEMP_VARS_END: u16 = TEMP_VARS_START + 0xF;
-/// `NUM_TEMP_VARS`.
+/// Number of temporary variable ids.
 pub const NUM_TEMP_VARS: u16 = TEMP_VARS_END - TEMP_VARS_START + 1;
 
-/// `SPECIAL_VARS_START`.
+/// First session-only variable id.
 pub const SPECIAL_VARS_START: u16 = 0x8000;
-/// `SPECIAL_VARS_END` (`VAR_TRAINER_BATTLE_OPPONENT_A`).
+/// Last session-only variable id.
 pub const SPECIAL_VARS_END: u16 = 0x8015;
-/// The number of special vars (the length of upstream's `gSpecialVars`
-/// pointer table).
+/// Number of session-only variable ids.
 pub const NUM_SPECIAL_VARS: u16 = SPECIAL_VARS_END - SPECIAL_VARS_START + 1;
 
-/// Errors surfaced by [`EventData`]'s flag and var accessors.
-///
-/// Upstream leaves the equivalent condition silently unreachable (no
-/// `FLAG_*`/`VAR_*` constant is ever defined in the gap `OutOfRange`
-/// describes). Not a panic path.
+/// Errors from flag and variable access.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EventDataError {
-    /// `id` falls in a gap no real `FLAG_*`/`VAR_*` constant ever
-    /// occupies, which upstream's `GetFlagPointer`/`GetVarPointer` leave
-    /// completely unchecked (an id here reads or corrupts memory adjacent to
-    /// the underlying C arrays — undefined behaviour, not a deliberate
-    /// design). This port has no unsafe pointer arithmetic to reproduce
-    /// that with, so it refuses the id instead.
+    /// The id is outside the ordinary and session-only ranges.
     OutOfRange(u16),
 }
 
@@ -160,65 +82,38 @@ impl std::fmt::Display for EventDataError {
 
 impl std::error::Error for EventDataError {}
 
-/// Where a flag id resolves to, mirroring upstream `GetFlagPointer`'s
-/// branches.
 enum FlagLocation {
-    /// `id == 0`: deliberately tolerated dead space (see the module docs).
     Null,
-    /// An ordinary flag: byte/bit offset into [`EventData::flags`].
-    Ordinary { byte: usize, bit: u8 },
-    /// A special flag: byte/bit offset into [`EventData::special_flags`].
-    Special { byte: usize, bit: u8 },
+    Ordinary { byte: usize, bit: usize },
+    Special { byte: usize, bit: usize },
 }
 
-/// Classify a flag id the way upstream's `GetFlagPointer` does, but with an
-/// explicit bounds check standing in for its unchecked pointer arithmetic
-/// (see the module docs).
-// `idx % 8` is always `0..8`, so the `u8` casts below never truncate.
-#[allow(clippy::cast_possible_truncation)]
 fn classify_flag(id: u16) -> Result<FlagLocation, EventDataError> {
     if id == 0 {
         Ok(FlagLocation::Null)
     } else if id < FLAGS_COUNT {
         let idx = usize::from(id);
         Ok(FlagLocation::Ordinary {
-            byte: idx / 8,
-            bit: (idx % 8) as u8,
+            byte: idx / FLAGS_PER_BYTE,
+            bit: idx % FLAGS_PER_BYTE,
         })
     } else if (SPECIAL_FLAGS_START..=SPECIAL_FLAGS_END).contains(&id) {
         let idx = usize::from(id - SPECIAL_FLAGS_START);
         Ok(FlagLocation::Special {
-            byte: idx / 8,
-            bit: (idx % 8) as u8,
+            byte: idx / FLAGS_PER_BYTE,
+            bit: idx % FLAGS_PER_BYTE,
         })
     } else {
         Err(EventDataError::OutOfRange(id))
     }
 }
 
-/// The event-data store: Emerald's boolean flags and 16-bit vars.
-///
-/// Mirrors `gSaveBlock1Ptr->flags`/`vars` plus the static `sSpecialFlags`
-/// array as plain owned fields — no global mutable state
-/// `(oop-boundaries)`. A save system (out of scope here) would own an
-/// `EventData` and (de)serialize `flags`/`vars`; `special_flags` mirrors
-/// upstream's `sSpecialFlags`, which is session-only and was never part of
-/// the save block to begin with.
+/// Owned ordinary and session-only event flags and variables.
 #[derive(Debug, Clone)]
 pub struct EventData {
-    /// Ordinary flags, `0..FLAGS_COUNT`, packed 8 per byte. Upstream
-    /// `gSaveBlock1Ptr->flags`.
     flags: [u8; NUM_FLAG_BYTES],
-    /// Special flags, `SPECIAL_FLAGS_START..=SPECIAL_FLAGS_END`, packed 8 per
-    /// byte. Upstream's static `sSpecialFlags`.
     special_flags: [u8; SPECIAL_FLAGS_BYTES],
-    /// Ordinary vars, `VARS_START..=VARS_END`, indexed by `id - VARS_START`.
-    /// Upstream `gSaveBlock1Ptr->vars`.
     vars: [u16; VARS_COUNT],
-    /// Special vars, `SPECIAL_VARS_START..=SPECIAL_VARS_END`, indexed by
-    /// `id - SPECIAL_VARS_START`. Upstream's 22 standalone `u16` EWRAM
-    /// globals reached through the `gSpecialVars` pointer table; like
-    /// `special_flags`, session-only and never part of the save block.
     special_vars: [u16; NUM_SPECIAL_VARS as usize],
 }
 
@@ -229,10 +124,7 @@ impl Default for EventData {
 }
 
 impl EventData {
-    /// A freshly initialized store: every flag clear, every var zero.
-    /// Mirrors `InitEventData` (`memset` over `flags`, `vars`, and the
-    /// static `sSpecialFlags`) plus the zero-initialization the special-var
-    /// EWRAM globals get at load.
+    /// Creates event data with every flag clear and every variable zero.
     #[must_use]
     pub const fn new() -> Self {
         Self {
@@ -243,31 +135,19 @@ impl EventData {
         }
     }
 
-    /// The ordinary flag bytes, for save serialization
-    /// (`crate::save::block::SaveBlock1`). Mirrors the byte layout upstream
-    /// stores at `SaveBlock1::flags`. `special_flags` is deliberately not
-    /// exposed here: it is session-only (see the module docs) and was never
-    /// part of the save block upstream serializes either.
+    /// Returns ordinary flags in their save-file byte layout.
     #[must_use]
     pub const fn flag_bytes(&self) -> &[u8; NUM_FLAG_BYTES] {
         &self.flags
     }
 
-    /// The ordinary var words, for save serialization
-    /// (`crate::save::block::SaveBlock1`). Mirrors the layout upstream
-    /// stores at `SaveBlock1::vars`. `special_vars` is deliberately not
-    /// exposed here, for the same session-only reason as `special_flags`
-    /// (see [`EventData::flag_bytes`]).
+    /// Returns ordinary variables in their save-file word layout.
     #[must_use]
     pub const fn vars_raw(&self) -> &[u16; VARS_COUNT] {
         &self.vars
     }
 
-    /// Reconstruct a store from previously-saved ordinary flag bytes and var
-    /// words (the inverse of [`EventData::flag_bytes`] /
-    /// [`EventData::vars_raw`]). `special_flags`/`special_vars` are
-    /// session-only and always start cleared, exactly as a fresh
-    /// [`EventData::new`] leaves them.
+    /// Restores saved ordinary values with session-only values cleared.
     #[must_use]
     pub const fn from_saved_state(flags: [u8; NUM_FLAG_BYTES], vars: [u16; VARS_COUNT]) -> Self {
         Self {
@@ -278,15 +158,11 @@ impl EventData {
         }
     }
 
-    /// Read a flag. Mirrors `FlagGet`.
-    ///
-    /// `id == 0` reports `false` (see the module docs); this is not an
-    /// error.
+    /// Reads a flag. Id zero always returns `false`.
     ///
     /// # Errors
     ///
-    /// Returns [`EventDataError::OutOfRange`] if `id` falls in the
-    /// unchecked-in-C gap described in the module docs.
+    /// Returns [`EventDataError::OutOfRange`] for an unsupported id.
     pub fn flag_get(&self, id: u16) -> Result<bool, EventDataError> {
         Ok(match classify_flag(id)? {
             FlagLocation::Null => false,
@@ -295,14 +171,11 @@ impl EventData {
         })
     }
 
-    /// Set a flag. Mirrors `FlagSet`.
-    ///
-    /// `id == 0` is a no-op (see the module docs); this is not an error.
+    /// Sets a flag. Id zero is ignored.
     ///
     /// # Errors
     ///
-    /// Returns [`EventDataError::OutOfRange`] if `id` falls in the
-    /// unchecked-in-C gap described in the module docs.
+    /// Returns [`EventDataError::OutOfRange`] for an unsupported id.
     pub fn flag_set(&mut self, id: u16) -> Result<(), EventDataError> {
         match classify_flag(id)? {
             FlagLocation::Null => {}
@@ -312,14 +185,11 @@ impl EventData {
         Ok(())
     }
 
-    /// Clear a flag. Mirrors `FlagClear`.
-    ///
-    /// `id == 0` is a no-op (see the module docs); this is not an error.
+    /// Clears a flag. Id zero is ignored.
     ///
     /// # Errors
     ///
-    /// Returns [`EventDataError::OutOfRange`] if `id` falls in the
-    /// unchecked-in-C gap described in the module docs.
+    /// Returns [`EventDataError::OutOfRange`] for an unsupported id.
     pub fn flag_clear(&mut self, id: u16) -> Result<(), EventDataError> {
         match classify_flag(id)? {
             FlagLocation::Null => {}
@@ -329,30 +199,20 @@ impl EventData {
         Ok(())
     }
 
-    /// Clear an ordinary flag known (by the caller, at compile time) to be
-    /// in `1..FLAGS_COUNT`. Used internally so
-    /// [`clear_temp_field_event_data`](Self::clear_temp_field_event_data)
-    /// doesn't have to thread a [`Result`] through calls that can never
-    /// actually fail.
-    fn clear_ordinary_flag(&mut self, id: u16) {
+    fn clear_known_ordinary_flag(&mut self, id: u16) {
         debug_assert!(
             id != 0 && id < FLAGS_COUNT,
             "id {id} must be an ordinary flag id"
         );
         let idx = usize::from(id);
-        self.flags[idx / 8] &= !(1 << (idx % 8));
+        self.flags[idx / FLAGS_PER_BYTE] &= !(1 << (idx % FLAGS_PER_BYTE));
     }
 
-    /// Read a var. Mirrors `VarGet` (via `GetVarPointer`).
-    ///
-    /// `id < VARS_START` returns `id` itself unchanged — upstream's
-    /// intentional immediate-passthrough (see the module docs); this is not
-    /// an error.
+    /// Reads a variable, or returns an immediate id below [`VARS_START`].
     ///
     /// # Errors
     ///
-    /// Returns [`EventDataError::OutOfRange`] if `id` falls in the
-    /// unchecked-in-C gap described in the module docs.
+    /// Returns [`EventDataError::OutOfRange`] for an unsupported id.
     pub fn var_get(&self, id: u16) -> Result<u16, EventDataError> {
         if id < VARS_START {
             Ok(id)
@@ -365,16 +225,11 @@ impl EventData {
         }
     }
 
-    /// Write a var. Mirrors `VarSet` (via `GetVarPointer`).
-    ///
-    /// `id < VARS_START` is a no-op — upstream's `VarSet` returns `FALSE`
-    /// without writing anywhere (see the module docs); this is not an
-    /// error.
+    /// Writes a variable. Immediate ids below [`VARS_START`] are ignored.
     ///
     /// # Errors
     ///
-    /// Returns [`EventDataError::OutOfRange`] if `id` falls in the
-    /// unchecked-in-C gap described in the module docs.
+    /// Returns [`EventDataError::OutOfRange`] for an unsupported id.
     pub fn var_set(&mut self, id: u16, value: u16) -> Result<(), EventDataError> {
         if id < VARS_START {
             Ok(())
@@ -389,27 +244,23 @@ impl EventData {
         }
     }
 
-    /// Clear per-map-load temporary state. Mirrors `ClearTempFieldEventData`:
-    /// the temp flag range (`TEMP_FLAGS_START..=TEMP_FLAGS_END`), the temp
-    /// var range (`TEMP_VARS_START..=TEMP_VARS_END`), and five named system
-    /// flags upstream clears alongside them (`FLAG_SYS_ENC_UP_ITEM`,
-    /// `FLAG_SYS_ENC_DOWN_ITEM`, `FLAG_SYS_USE_STRENGTH`,
-    /// `FLAG_SYS_CTRL_OBJ_DELETE`, `FLAG_NURSE_UNION_ROOM_REMINDER`).
-    /// Nothing outside these ranges is touched.
+    /// Clears per-map temporary values and related system flags.
+    ///
+    /// All other values remain unchanged.
     pub fn clear_temp_field_event_data(&mut self) {
-        // `TEMP_FLAGS_SIZE` bytes at `TEMP_FLAGS_START / 8` (== byte 0).
-        let temp_flag_bytes = usize::from(NUM_TEMP_FLAGS) / 8;
-        self.flags[..temp_flag_bytes].fill(0);
+        let first_temp_flag_byte = usize::from(TEMP_FLAGS_START) / FLAGS_PER_BYTE;
+        let last_temp_flag_byte = usize::from(TEMP_FLAGS_END) / FLAGS_PER_BYTE;
+        self.flags[first_temp_flag_byte..=last_temp_flag_byte].fill(0);
 
-        // `NUM_TEMP_VARS` vars at `TEMP_VARS_START - VARS_START` (== index 0).
-        let temp_var_count = usize::from(NUM_TEMP_VARS);
-        self.vars[..temp_var_count].fill(0);
+        let first_temp_var = usize::from(TEMP_VARS_START - VARS_START);
+        let last_temp_var = usize::from(TEMP_VARS_END - VARS_START);
+        self.vars[first_temp_var..=last_temp_var].fill(0);
 
-        self.clear_ordinary_flag(FLAG_SYS_ENC_UP_ITEM);
-        self.clear_ordinary_flag(FLAG_SYS_ENC_DOWN_ITEM);
-        self.clear_ordinary_flag(FLAG_SYS_USE_STRENGTH);
-        self.clear_ordinary_flag(FLAG_SYS_CTRL_OBJ_DELETE);
-        self.clear_ordinary_flag(FLAG_NURSE_UNION_ROOM_REMINDER);
+        self.clear_known_ordinary_flag(FLAG_SYS_ENC_UP_ITEM);
+        self.clear_known_ordinary_flag(FLAG_SYS_ENC_DOWN_ITEM);
+        self.clear_known_ordinary_flag(FLAG_SYS_USE_STRENGTH);
+        self.clear_known_ordinary_flag(FLAG_SYS_CTRL_OBJ_DELETE);
+        self.clear_known_ordinary_flag(FLAG_NURSE_UNION_ROOM_REMINDER);
     }
 }
 
@@ -417,15 +268,10 @@ impl EventData {
 mod tests {
     use super::*;
 
-    // Ground-truth values transcribed independently from
-    // `include/constants/flags.h` / `include/constants/vars.h`, not derived
-    // from this module's code, so they pin the id-space layout rather than
-    // restate it.
     #[test]
     fn id_space_constants_match_upstream_headers() {
         assert_eq!(FLAGS_COUNT, 0x0960);
         assert_eq!(NUM_FLAG_BYTES, 300);
-        // NUM_DAILY_FLAGS, the span FLAGS_COUNT is derived from.
         assert_eq!(DAILY_FLAGS_END - DAILY_FLAGS_START + 1, 64);
         assert_eq!(SPECIAL_FLAGS_START, 0x4000);
         assert_eq!(SPECIAL_FLAGS_END, 0x407F);
@@ -440,7 +286,6 @@ mod tests {
         assert_eq!(NUM_TEMP_VARS, 16);
         assert_eq!(SPECIAL_VARS_START, 0x8000);
         assert_eq!(SPECIAL_VARS_END, 0x8015);
-        // The 22 entries of upstream's `gSpecialVars` pointer table.
         assert_eq!(NUM_SPECIAL_VARS, 22);
     }
 
@@ -475,28 +320,29 @@ mod tests {
 
     #[test]
     fn flag_bit_packing_does_not_disturb_neighboring_bits() {
-        // Byte-boundary-crossing pair: id 7 is the top bit of byte 0, id 8 is
-        // the bottom bit of byte 1.
+        let first_flag_in_second_byte = 8;
+        let last_flag_in_first_byte = first_flag_in_second_byte - 1;
+        let preceding_flag = last_flag_in_first_byte - 1;
         let mut data = EventData::new();
-        data.flag_set(7).unwrap();
-        assert_eq!(data.flag_get(7), Ok(true));
-        assert_eq!(data.flag_get(8), Ok(false));
-        assert_eq!(data.flag_get(6), Ok(false));
+        data.flag_set(last_flag_in_first_byte).unwrap();
+        assert_eq!(data.flag_get(last_flag_in_first_byte), Ok(true));
+        assert_eq!(data.flag_get(first_flag_in_second_byte), Ok(false));
+        assert_eq!(data.flag_get(preceding_flag), Ok(false));
 
-        data.flag_set(8).unwrap();
+        data.flag_set(first_flag_in_second_byte).unwrap();
         assert_eq!(
-            data.flag_get(7),
+            data.flag_get(last_flag_in_first_byte),
             Ok(true),
-            "setting id 8 must not clear id 7"
+            "setting the next byte must not clear the previous byte"
         );
-        assert_eq!(data.flag_get(8), Ok(true));
+        assert_eq!(data.flag_get(first_flag_in_second_byte), Ok(true));
 
-        data.flag_clear(7).unwrap();
-        assert_eq!(data.flag_get(7), Ok(false));
+        data.flag_clear(last_flag_in_first_byte).unwrap();
+        assert_eq!(data.flag_get(last_flag_in_first_byte), Ok(false));
         assert_eq!(
-            data.flag_get(8),
+            data.flag_get(first_flag_in_second_byte),
             Ok(true),
-            "clearing id 7 must not clear id 8"
+            "clearing the previous byte must not clear the next byte"
         );
     }
 
@@ -514,7 +360,6 @@ mod tests {
         let mut data = EventData::new();
         assert_eq!(data.flag_get(0), Ok(false));
         assert_eq!(data.flag_set(0), Ok(()));
-        // Still false: id 0 is never actually stored anywhere.
         assert_eq!(data.flag_get(0), Ok(false));
         assert_eq!(data.flag_clear(0), Ok(()));
     }
@@ -526,7 +371,6 @@ mod tests {
         data.flag_set(SPECIAL_FLAGS_END).unwrap();
         assert_eq!(data.flag_get(SPECIAL_FLAGS_START), Ok(true));
         assert_eq!(data.flag_get(SPECIAL_FLAGS_END), Ok(true));
-        // A special flag and an ordinary flag never alias.
         assert_eq!(data.flag_get(1), Ok(false));
     }
 
@@ -563,7 +407,6 @@ mod tests {
         assert_eq!(data.var_get(VARS_START), Ok(42));
         data.var_set(VARS_END, 0xBEEF).unwrap();
         assert_eq!(data.var_get(VARS_END), Ok(0xBEEF));
-        // Distinct vars don't alias.
         assert_eq!(data.var_get(VARS_START), Ok(42));
     }
 
@@ -572,8 +415,6 @@ mod tests {
         let mut data = EventData::new();
         assert_eq!(data.var_get(0), Ok(0));
         assert_eq!(data.var_get(0x1234), Ok(0x1234));
-        // VarSet is a no-op here: the "value" argument is discarded, and the
-        // id keeps reading back as itself.
         assert_eq!(data.var_set(0x1234, 0xFFFF), Ok(()));
         assert_eq!(data.var_get(0x1234), Ok(0x1234));
     }
@@ -587,7 +428,6 @@ mod tests {
         data.var_set(SPECIAL_VARS_END, 0xBEEF).unwrap();
         assert_eq!(data.var_get(SPECIAL_VARS_START), Ok(42));
         assert_eq!(data.var_get(SPECIAL_VARS_END), Ok(0xBEEF));
-        // A special var and an ordinary var never alias.
         assert_eq!(data.var_get(VARS_START), Ok(0));
     }
 
@@ -621,22 +461,18 @@ mod tests {
     fn clear_temp_field_event_data_clears_only_temp_state_and_named_system_flags() {
         let mut data = EventData::new();
 
-        // Temp flags/vars, at both ends of each range.
-        data.flag_set(TEMP_FLAGS_START + 1).unwrap(); // id 0 is the tolerated null flag
+        let first_stored_temp_flag = TEMP_FLAGS_START + 1;
+        data.flag_set(first_stored_temp_flag).unwrap();
         data.flag_set(TEMP_FLAGS_END).unwrap();
         data.var_set(TEMP_VARS_START, 7).unwrap();
         data.var_set(TEMP_VARS_END, 9).unwrap();
 
-        // The five named system flags upstream clears alongside the temp
-        // ranges.
         data.flag_set(FLAG_SYS_ENC_UP_ITEM).unwrap();
         data.flag_set(FLAG_SYS_ENC_DOWN_ITEM).unwrap();
         data.flag_set(FLAG_SYS_USE_STRENGTH).unwrap();
         data.flag_set(FLAG_SYS_CTRL_OBJ_DELETE).unwrap();
         data.flag_set(FLAG_NURSE_UNION_ROOM_REMINDER).unwrap();
 
-        // Untouched state just outside every cleared range, to prove the
-        // clear is selective rather than a global wipe.
         let outside_flag = TEMP_FLAGS_END + 1;
         let outside_var = TEMP_VARS_END + 1;
         data.flag_set(outside_flag).unwrap();
@@ -644,7 +480,7 @@ mod tests {
 
         data.clear_temp_field_event_data();
 
-        assert_eq!(data.flag_get(TEMP_FLAGS_START + 1), Ok(false));
+        assert_eq!(data.flag_get(first_stored_temp_flag), Ok(false));
         assert_eq!(data.flag_get(TEMP_FLAGS_END), Ok(false));
         assert_eq!(data.var_get(TEMP_VARS_START), Ok(0));
         assert_eq!(data.var_get(TEMP_VARS_END), Ok(0));
@@ -671,7 +507,6 @@ mod tests {
         let mut data = EventData::new();
         data.flag_set(100).unwrap();
         data.var_set(VARS_START, 0xBEEF).unwrap();
-        // Session-only state that must NOT survive the round trip.
         data.flag_set(SPECIAL_FLAGS_START).unwrap();
         data.var_set(SPECIAL_VARS_START, 999).unwrap();
 

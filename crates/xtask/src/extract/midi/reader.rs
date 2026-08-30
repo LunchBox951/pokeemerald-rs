@@ -1,18 +1,16 @@
-//! A hand-rolled standard-MIDI-file byte reader: big-endian fixed-width
-//! integers, variable-length quantities, and the `MThd`/`MTrk` chunk framing
-//! (Standard MIDI File 1.0 — the same shape `tools/mid2agb/midi.cpp`'s
-//! `ReadInt8`/`ReadInt16`/`ReadInt24`/`ReadInt32`/`ReadVLQ`/
-//! `ReadMidiFileHeader`/`ReadMidiTrackHeader` read, re-expressed
-//! idiomatically over an in-memory byte slice rather than a C `FILE*`
-//! (`no-verbatim`) — this pipeline reads the whole `.mid` file into memory
-//! up front (like every other extractor in this crate — see e.g.
-//! `super::wav`), so there is no streaming/seeking concern to replicate.
+//! Standard MIDI file byte reads and chunk framing.
 
 use super::error::MidiError;
 
-/// A cursor over `&[u8]`, erroring (never panicking) on truncation —
-/// mirrors `super::super::wav`'s hand-rolled chunk reader and
-/// `crates/assets/src/audio/cursor.rs`'s `Reader`.
+const MIDI_HEADER_MAGIC: &[u8; 4] = b"MThd";
+const MIDI_TRACK_MAGIC: &[u8; 4] = b"MTrk";
+const MIDI_HEADER_BODY_LEN: u32 = 6;
+const MIDI_FILE_HEADER_LEN: usize = 14;
+const MAX_SUPPORTED_FORMAT: u16 = 1;
+const VLQ_DATA_BITS: u32 = 7;
+const VLQ_DATA_MASK: u8 = 0x7F;
+const VLQ_CONTINUATION_BIT: u8 = 0x80;
+
 pub(super) struct MidiReader<'a> {
     bytes: &'a [u8],
     pos: usize,
@@ -34,11 +32,6 @@ impl<'a> MidiReader<'a> {
         Ok(self.take(1)?[0])
     }
 
-    /// The next byte without consuming it — used to peek a channel-voice
-    /// status byte before deciding whether it's a real status byte or a
-    /// data byte implying running status (`tools/mid2agb/midi.cpp:184-190`'s
-    /// `ungetc`, re-expressed as a non-consuming peek since this reader is
-    /// over an in-memory slice rather than a `FILE*`).
     pub(super) fn peek_u8(&self) -> Result<u8, MidiError> {
         self.bytes
             .get(self.pos)
@@ -51,8 +44,6 @@ impl<'a> MidiReader<'a> {
         Ok(u16::from_be_bytes([b[0], b[1]]))
     }
 
-    /// A big-endian 24-bit integer (the tempo meta event's microseconds-per-
-    /// quarter-note field — `tools/mid2agb/midi.cpp:97-104`'s `ReadInt24`).
     pub(super) fn u24_be(&mut self) -> Result<u32, MidiError> {
         let b = self.take(3)?;
         Ok(u32::from_be_bytes([0, b[0], b[1], b[2]]))
@@ -63,48 +54,20 @@ impl<'a> MidiReader<'a> {
         Ok(u32::from_be_bytes([b[0], b[1], b[2], b[3]]))
     }
 
-    /// A standard-MIDI-file variable-length quantity: 7 bits per byte,
-    /// continuation signalled by the top bit, big-endian bit order
-    /// (`tools/mid2agb/midi.cpp:116-129`'s `ReadVLQ`).
+    /// Reads a big-endian, seven-bit-group MIDI variable-length quantity.
     ///
-    /// # Over-long quantities: upstream's tolerance, on purpose
-    ///
-    /// A standard MIDI file's VLQs are at most 4 bytes (28 bits) by
-    /// construction, but nothing in the byte stream enforces that, and
-    /// `ReadVLQ` carries no malformed-VLQ diagnostic at all: it accumulates
-    /// with a plain `val <<= 7` (`midi.cpp:124`) into a `std::uint32_t`, so
-    /// a fifth-or-later continuation byte silently pushes the high bits off
-    /// the top. This reader does the same — Rust's shift-overflow check is
-    /// on the shift *amount* (`7` is always in range for a `u32`), not on
-    /// discarded bits, so `<<` drops them in debug and release alike, byte
-    /// for byte as the C++ does.
-    ///
-    /// An earlier revision claimed to reject ">5 continuation bytes" via
-    /// [`u32::checked_shl`]. That guard never existed (`checked_shl` only
-    /// fails for a shift `>= 32`, never for lost bits), so rather than
-    /// inventing a rejection upstream does not perform — behavioural
-    /// fidelity is the tie-breaker for the real pipeline — the claim is
-    /// gone and upstream's tolerance is pinned by test
-    /// (`over_long_vlq_wraps_like_upstreams_shift`).
-    ///
-    /// The *reader* mirrors upstream's tolerance, including timing that has
-    /// already wrapped before downstream code sees it: for example,
-    /// `90 80 80 80 00` decodes to zero and therefore preserves the prior
-    /// absolute tick. [`super::translate::convert_ticks`] only prevents a
-    /// second silent wrap while scaling the decoded `u32`; it cannot recover
-    /// high bits discarded here. The end-to-end compiler behavior is pinned
-    /// by `an_over_long_zero_delta_preserves_the_prior_absolute_tick`.
+    /// Over-long values discard high bits like `mid2agb`'s unsigned
+    /// accumulator (`tools/mid2agb/midi.cpp:116-129`).
     ///
     /// # Errors
     ///
-    /// [`MidiError::Truncated`] if the chunk's bytes run out before a byte
-    /// with its continuation bit clear — the only way this can fail.
+    /// Returns [`MidiError::Truncated`] when no terminating byte remains.
     pub(super) fn vlq(&mut self) -> Result<u32, MidiError> {
         let mut val: u32 = 0;
         loop {
             let c = self.u8()?;
-            val = (val << 7) | u32::from(c & 0x7F); // midi.cpp:124's `val <<= 7`
-            if c & 0x80 == 0 {
+            val = val.wrapping_shl(VLQ_DATA_BITS) | u32::from(c & VLQ_DATA_MASK);
+            if c & VLQ_CONTINUATION_BIT == 0 {
                 return Ok(val);
             }
         }
@@ -120,74 +83,61 @@ impl<'a> MidiReader<'a> {
     }
 }
 
-/// `MThd`'s content fields this compiler needs, after the fixed 6-byte-length
-/// and format checks (`tools/mid2agb/midi.cpp:131-154`'s
-/// `ReadMidiFileHeader`). The format field itself (`0`/`1` — checked but not
-/// carried forward: nothing downstream branches on it, since
-/// [`super::compile`]'s nested `MTrk`-chunk/channel scan handles both
-/// uniformly — see `super::parse`'s module docs, "One pass, not sixteen").
+/// Validated MIDI header fields used by compilation.
 #[derive(Debug)]
 pub(super) struct MidiHeader {
     pub(super) track_count: u16,
-    /// Ticks per quarter note. Always non-negative — a negative division
-    /// (SMPTE frame-rate division, top bit set when read as `i16`) is
-    /// [`MidiError::NegativeDivision`] before this struct is built.
+    /// Ticks per quarter note; SMPTE division is rejected during parsing.
     pub(super) division: u16,
 }
 
-/// Parse the fixed 14-byte `MThd` chunk at the start of `bytes`.
+/// Parses the fixed MIDI file header.
 ///
 /// # Errors
 ///
-/// [`MidiError::BadHeaderMagic`], [`MidiError::HeaderLengthMismatch`],
-/// [`MidiError::UnsupportedFormat`] (format `2` or greater —
-/// `tools/mid2agb/midi.cpp:145-146` only accepts `0`/`1`),
-/// [`MidiError::NegativeDivision`] (SMPTE division).
+/// Returns [`MidiError::Truncated`], [`MidiError::BadHeaderMagic`],
+/// [`MidiError::HeaderLengthMismatch`], [`MidiError::UnsupportedFormat`], or
+/// [`MidiError::NegativeDivision`].
 pub(super) fn read_header(bytes: &[u8]) -> Result<MidiHeader, MidiError> {
     let mut r = MidiReader::new(bytes);
-    if r.bytes(4)? != b"MThd" {
+    if r.bytes(MIDI_HEADER_MAGIC.len())? != MIDI_HEADER_MAGIC {
         return Err(MidiError::BadHeaderMagic);
     }
     let header_len = r.u32_be()?;
-    if header_len != 6 {
+    if header_len != MIDI_HEADER_BODY_LEN {
         return Err(MidiError::HeaderLengthMismatch(header_len));
     }
     let format = r.u16_be()?;
-    if format >= 2 {
+    if format > MAX_SUPPORTED_FORMAT {
         return Err(MidiError::UnsupportedFormat(format));
     }
     let track_count = r.u16_be()?;
-    let division_raw = r.u16_be()?;
-    #[allow(clippy::cast_possible_wrap)]
-    let division_signed = division_raw as i16;
+    let division = r.u16_be()?;
+    let division_signed = i16::from_be_bytes(division.to_be_bytes());
     if division_signed < 0 {
         return Err(MidiError::NegativeDivision(division_signed));
     }
     Ok(MidiHeader {
         track_count,
-        division: division_raw,
+        division,
     })
 }
 
-/// Split `bytes` (the whole `.mid` file) into `track_count` `MTrk` chunk
-/// bodies, in file order, starting right after the 14-byte `MThd` chunk.
-/// Mirrors `tools/mid2agb/midi.cpp:156-168`'s `ReadMidiTrackHeader`, called
-/// in sequence by `ReadMidiTracks` (`:916-927`).
+/// Returns the declared track bodies in file order.
 ///
 /// # Errors
 ///
-/// [`MidiError::NoTracks`] if `track_count` is `0`; [`MidiError::BadTrackMagic`]
-/// if a chunk's signature is not `MTrk`; [`MidiError::Truncated`] if a
-/// chunk's declared length runs past the end of `bytes`.
+/// Returns [`MidiError::NoTracks`], [`MidiError::BadTrackMagic`], or
+/// [`MidiError::Truncated`].
 pub(super) fn split_tracks(bytes: &[u8], track_count: u16) -> Result<Vec<&[u8]>, MidiError> {
     if track_count == 0 {
         return Err(MidiError::NoTracks);
     }
     let mut r = MidiReader::new(bytes);
-    r.skip(14)?; // the fixed MThd chunk this function's caller already validated
+    r.skip(MIDI_FILE_HEADER_LEN)?;
     let mut tracks = Vec::with_capacity(usize::from(track_count));
     for _ in 0..track_count {
-        if r.bytes(4)? != b"MTrk" {
+        if r.bytes(MIDI_TRACK_MAGIC.len())? != MIDI_TRACK_MAGIC {
             return Err(MidiError::BadTrackMagic);
         }
         let len = r.u32_be()?;
