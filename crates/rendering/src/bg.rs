@@ -145,6 +145,7 @@ mod tests {
 
     const MAX_CHANNEL: u8 = 0x1F;
     const BITS_PER_4BPP_PIXEL: u32 = 4;
+    const PALETTE_BANK_COUNT: usize = Palette::LEN / Palette::BANK_LEN;
 
     #[expect(
         clippy::cast_possible_truncation,
@@ -355,7 +356,7 @@ mod tests {
         let tileset = Tileset::decode(BitDepth::Bpp4, &tile_bytes).unwrap();
 
         let mut colors = [Bgr555::default(); Palette::LEN];
-        let palette_bank_count = u8::try_from(Palette::BANK_LEN).unwrap();
+        let palette_bank_count = u8::try_from(PALETTE_BANK_COUNT).unwrap();
         for bank in 0..palette_bank_count {
             colors[usize::from(bank) * Palette::BANK_LEN + usize::from(opaque_index)] =
                 marker_color(bank);
@@ -365,11 +366,11 @@ mod tests {
         let mut entries =
             vec![ScreenEntry::new(0, false, false, 0); TILEMAP_SIDE_TILES * TILEMAP_SIDE_TILES];
         for (col, entry) in entries.iter_mut().take(TILEMAP_SIDE_TILES).enumerate() {
-            let bank = u8::try_from(col % Palette::BANK_LEN).unwrap();
+            let bank = u8::try_from(col % PALETTE_BANK_COUNT).unwrap();
             *entry = ScreenEntry::new(0, false, false, bank);
         }
         for (row, entry) in entries.iter_mut().step_by(TILEMAP_SIDE_TILES).enumerate() {
-            let bank = u8::try_from(row % Palette::BANK_LEN).unwrap();
+            let bank = u8::try_from(row % PALETTE_BANK_COUNT).unwrap();
             *entry = ScreenEntry::new(0, false, false, bank);
         }
         let tilemap = Tilemap::new(TILEMAP_SIDE_TILES, TILEMAP_SIDE_TILES, entries).unwrap();
@@ -403,7 +404,7 @@ mod tests {
         let mut fb = Framebuffer::new();
         layer.composite_scrolled(&mut fb, u16::try_from(last_tile_scroll).unwrap(), 0);
 
-        let last_bank = u8::try_from(Palette::BANK_LEN - 1).unwrap();
+        let last_bank = u8::try_from(PALETTE_BANK_COUNT - 1).unwrap();
         assert_eq!(fb.pixel(0, 0), Some(marker_color(last_bank).to_rgb888()));
         assert_eq!(
             fb.pixel(BitDepth::TILE_DIM, 0),
@@ -421,7 +422,7 @@ mod tests {
         let mut fb = Framebuffer::new();
         layer.composite_scrolled(&mut fb, 0, u16::try_from(last_tile_scroll).unwrap());
 
-        let last_bank = u8::try_from(Palette::BANK_LEN - 1).unwrap();
+        let last_bank = u8::try_from(PALETTE_BANK_COUNT - 1).unwrap();
         assert_eq!(fb.pixel(0, 0), Some(marker_color(last_bank).to_rgb888()));
         assert_eq!(
             fb.pixel(0, BitDepth::TILE_DIM),

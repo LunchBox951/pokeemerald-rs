@@ -192,6 +192,10 @@ mod tests {
     use crate::error::RenderError;
 
     const EMPTY_ENTRY: ScreenEntry = ScreenEntry::new(0, false, false, 0);
+    const EXPECTED_SCREENBLOCK_SIDE_TILES: usize = 32;
+    const EXPECTED_DOUBLE_SCREENBLOCK_SIDE_TILES: usize = EXPECTED_SCREENBLOCK_SIDE_TILES * 2;
+    const EXPECTED_ENTRIES_PER_SCREENBLOCK: usize =
+        EXPECTED_SCREENBLOCK_SIDE_TILES * EXPECTED_SCREENBLOCK_SIDE_TILES;
 
     fn empty_entries(width_tiles: usize, height_tiles: usize) -> Vec<ScreenEntry> {
         vec![EMPTY_ENTRY; width_tiles * height_tiles]
@@ -290,7 +294,7 @@ mod tests {
 
     #[test]
     fn tilemap_new_accepts_a_full_single_screenblock() {
-        let side = Tilemap::SCREENBLOCK_SIDE_TILES;
+        let side = EXPECTED_SCREENBLOCK_SIDE_TILES;
         let mut entries = empty_entries(side, side);
         entries[side] = marked_entry(9);
         let tilemap = Tilemap::new(side, side, entries).unwrap();
@@ -299,8 +303,8 @@ mod tests {
 
     #[test]
     fn tilemap_new_accepts_all_hardware_regular_background_sizes() {
-        let side = Tilemap::SCREENBLOCK_SIDE_TILES;
-        let double_side = Tilemap::DOUBLE_SCREENBLOCK_SIDE_TILES;
+        let side = EXPECTED_SCREENBLOCK_SIDE_TILES;
+        let double_side = EXPECTED_DOUBLE_SCREENBLOCK_SIDE_TILES;
         for (width_tiles, height_tiles) in [
             (side, side),
             (double_side, side),
@@ -325,11 +329,11 @@ mod tests {
 
     #[test]
     fn entry_addresses_two_horizontal_screenblocks() {
-        let side = Tilemap::SCREENBLOCK_SIDE_TILES;
-        let double_side = Tilemap::DOUBLE_SCREENBLOCK_SIDE_TILES;
+        let side = EXPECTED_SCREENBLOCK_SIDE_TILES;
+        let double_side = EXPECTED_DOUBLE_SCREENBLOCK_SIDE_TILES;
         let mut entries = empty_entries(double_side, side);
         entries[side] = marked_entry(111);
-        entries[Tilemap::ENTRIES_PER_SCREENBLOCK] = marked_entry(222);
+        entries[EXPECTED_ENTRIES_PER_SCREENBLOCK] = marked_entry(222);
         let tilemap = Tilemap::new(double_side, side, entries).unwrap();
 
         assert_eq!(tilemap.entry(0, 1).unwrap().tile_index(), 111);
@@ -339,11 +343,11 @@ mod tests {
 
     #[test]
     fn entry_addresses_two_vertical_screenblocks() {
-        let side = Tilemap::SCREENBLOCK_SIDE_TILES;
-        let double_side = Tilemap::DOUBLE_SCREENBLOCK_SIDE_TILES;
+        let side = EXPECTED_SCREENBLOCK_SIDE_TILES;
+        let double_side = EXPECTED_DOUBLE_SCREENBLOCK_SIDE_TILES;
         let mut entries = empty_entries(side, double_side);
         entries[side] = marked_entry(111);
-        entries[Tilemap::ENTRIES_PER_SCREENBLOCK] = marked_entry(222);
+        entries[EXPECTED_ENTRIES_PER_SCREENBLOCK] = marked_entry(222);
         let tilemap = Tilemap::new(side, double_side, entries).unwrap();
 
         assert_eq!(tilemap.entry(0, 1).unwrap().tile_index(), 111);
@@ -353,12 +357,12 @@ mod tests {
 
     #[test]
     fn entry_addresses_four_screenblocks() {
-        let side = Tilemap::SCREENBLOCK_SIDE_TILES;
-        let double_side = Tilemap::DOUBLE_SCREENBLOCK_SIDE_TILES;
+        let side = EXPECTED_SCREENBLOCK_SIDE_TILES;
+        let double_side = EXPECTED_DOUBLE_SCREENBLOCK_SIDE_TILES;
         let mut entries = empty_entries(double_side, double_side);
-        entries[Tilemap::ENTRIES_PER_SCREENBLOCK] = marked_entry(1);
-        entries[Tilemap::ENTRIES_PER_SCREENBLOCK * 2] = marked_entry(2);
-        entries[Tilemap::ENTRIES_PER_SCREENBLOCK * 3] = marked_entry(3);
+        entries[EXPECTED_ENTRIES_PER_SCREENBLOCK] = marked_entry(1);
+        entries[EXPECTED_ENTRIES_PER_SCREENBLOCK * 2] = marked_entry(2);
+        entries[EXPECTED_ENTRIES_PER_SCREENBLOCK * 3] = marked_entry(3);
         let tilemap = Tilemap::new(double_side, double_side, entries).unwrap();
 
         assert_eq!(tilemap.entry(side, 0).unwrap().tile_index(), 1);
