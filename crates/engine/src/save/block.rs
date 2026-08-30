@@ -470,6 +470,7 @@ mod tests {
     const UNMODELED_POKEDEX_OFFSET: usize = 0x20;
     const DIRECTION_WEST: u8 = 3;
     const DIRECTION_EAST: u8 = 4;
+    const PLAINTEXT_MONEY: u32 = 123_456;
 
     fn sample_warp(seed: i8) -> WarpData {
         WarpData {
@@ -552,21 +553,12 @@ mod tests {
             encryption_key: 0x89AB_CDEF,
         };
         let bytes = block.to_bytes();
-        assert_eq!(bytes.len(), SaveBlock2::PAYLOAD_LEN);
-        assert_eq!(
-            &bytes[PLAYER_NAME_OFFSET..PLAYER_NAME_OFFSET + PLAYER_NAME_BUF_LEN],
-            b"RUSTY\xFF\0\0"
-        );
-        assert_eq!(bytes[PLAYER_GENDER_OFFSET], PlayerGender::FEMALE_VALUE);
+        assert_eq!(bytes.len(), 0xF2C);
+        assert_eq!(&bytes[0x00..0x08], b"RUSTY\xFF\0\0");
+        assert_eq!(bytes[0x08], 1);
         assert_eq!(bytes[UNMODELED_SPECIAL_SAVE_WARP_FLAGS_OFFSET], 0);
-        assert_eq!(
-            &bytes[PLAYER_TRAINER_ID_OFFSET..PLAYER_TRAINER_ID_OFFSET + TRAINER_ID_LENGTH],
-            &[0x12, 0x34, 0x56, 0x78]
-        );
-        assert_eq!(
-            &bytes[ENCRYPTION_KEY_OFFSET..ENCRYPTION_KEY_OFFSET + SERIALIZED_U32_LEN],
-            &[0xEF, 0xCD, 0xAB, 0x89]
-        );
+        assert_eq!(&bytes[0x0A..0x0E], &[0x12, 0x34, 0x56, 0x78]);
+        assert_eq!(&bytes[0xAC..0xB0], &[0xEF, 0xCD, 0xAB, 0x89]);
         assert_eq!(SaveBlock2::from_bytes(&bytes).unwrap(), block);
     }
 
@@ -647,51 +639,29 @@ mod tests {
             .unwrap();
 
         let bytes = block.to_bytes(key);
-        assert_eq!(bytes.len(), SaveBlock1::PAYLOAD_LEN);
-        assert_eq!(
-            &bytes[POSITION_OFFSET..POSITION_OFFSET + Coords16::LEN],
-            &block.pos.to_bytes()
-        );
-        assert_eq!(
-            &bytes[LOCATION_OFFSET..LOCATION_OFFSET + WarpData::LEN],
-            &block.location.to_bytes()
-        );
-        assert_eq!(
-            &bytes[CONTINUE_GAME_WARP_OFFSET..CONTINUE_GAME_WARP_OFFSET + WarpData::LEN],
-            &block.continue_game_warp.to_bytes()
-        );
-        assert_eq!(
-            &bytes[LAST_HEAL_LOCATION_OFFSET..LAST_HEAL_LOCATION_OFFSET + WarpData::LEN],
-            &block.last_heal_location.to_bytes()
-        );
-        assert_eq!(bytes[PARTY_COUNT_OFFSET], 0xFE);
+        assert_eq!(bytes.len(), 0x3D88);
+        assert_eq!(&bytes[0x00..0x04], &block.pos.to_bytes());
+        assert_eq!(&bytes[0x04..0x0C], &block.location.to_bytes());
+        assert_eq!(&bytes[0x0C..0x14], &block.continue_game_warp.to_bytes());
+        assert_eq!(&bytes[0x1C..0x24], &block.last_heal_location.to_bytes());
+        assert_eq!(bytes[0x234], 0xFE);
         for index in 0..PARTY_SIZE {
-            let offset = PARTY_OFFSET + index * POKEMON_LEN;
+            let offset = 0x238 + index * POKEMON_LEN;
             assert_eq!(
                 &bytes[offset..offset + POKEMON_LEN],
                 &block.player_party[index].to_bytes()
             );
         }
         assert_eq!(
-            read_u32(&bytes, MONEY_OFFSET),
+            read_u32(&bytes, 0x490),
             block.money ^ key,
             "money uses the full 32-bit key"
         );
-        assert_eq!(
-            &bytes[BAG_ITEMS_OFFSET..BAG_ITEMS_OFFSET + SERIALIZED_U32_LEN],
-            &[0x34, 0x12, 0xAC, 0x95]
-        );
-        assert_eq!(
-            &bytes[POKEBLOCKS_OFFSET - SERIALIZED_U32_LEN..POKEBLOCKS_OFFSET],
-            &[0xCD, 0xAB, 0xD5, 0x2C]
-        );
-        assert_eq!(bytes[FLAGS_OFFSET + event_data::NUM_FLAG_BYTES - 1], 0x80);
-        assert_eq!(
-            &bytes[VARS_OFFSET + (event_data::VARS_COUNT - 1) * SERIALIZED_U16_LEN
-                ..VARS_OFFSET + event_data::VARS_COUNT * SERIALIZED_U16_LEN],
-            &[0xEF, 0xBE]
-        );
-        assert_eq!(bytes[PLAYER_OBJECT_EVENT_DIRECTIONS_OFFSET], 0x43);
+        assert_eq!(&bytes[0x560..0x564], &[0x34, 0x12, 0xAC, 0x95]);
+        assert_eq!(&bytes[0x844..0x848], &[0xCD, 0xAB, 0xD5, 0x2C]);
+        assert_eq!(bytes[0x1270 + event_data::NUM_FLAG_BYTES - 1], 0x80);
+        assert_eq!(&bytes[0x159A..0x159C], &[0xEF, 0xBE]);
+        assert_eq!(bytes[0xA48], 0x43);
 
         let restored = SaveBlock1::from_bytes(&bytes, key).unwrap();
         assert_eq!(restored.pos, block.pos);
@@ -733,16 +703,13 @@ mod tests {
     fn hand_built_block1_bytes_decode_signed_warps_money_and_bag() {
         let key = u32::MAX;
         let mut bytes = [0u8; SaveBlock1::PAYLOAD_LEN];
-        bytes[POSITION_OFFSET..POSITION_OFFSET + Coords16::LEN]
-            .copy_from_slice(&Coords16 { x: -1, y: i16::MIN }.to_bytes());
-        write_warp(&mut bytes, LOCATION_OFFSET, sample_warp(-8));
-        write_warp(&mut bytes, CONTINUE_GAME_WARP_OFFSET, sample_warp(9));
-        write_warp(&mut bytes, LAST_HEAL_LOCATION_OFFSET, sample_warp(-10));
-        bytes[PARTY_COUNT_OFFSET] = 7;
-        bytes[MONEY_OFFSET..MONEY_OFFSET + SERIALIZED_U32_LEN]
-            .copy_from_slice(&(123_456u32 ^ key).to_le_bytes());
-        bytes[BAG_ITEMS_OFFSET..BAG_ITEMS_OFFSET + SERIALIZED_U32_LEN]
-            .copy_from_slice(&[2, 0, 0xFC, 0xFF]);
+        bytes[0x00..0x04].copy_from_slice(&Coords16 { x: -1, y: i16::MIN }.to_bytes());
+        bytes[0x04..0x0C].copy_from_slice(&sample_warp(-8).to_bytes());
+        bytes[0x0C..0x14].copy_from_slice(&sample_warp(9).to_bytes());
+        bytes[0x1C..0x24].copy_from_slice(&sample_warp(-10).to_bytes());
+        bytes[0x234] = 7;
+        bytes[0x490..0x494].copy_from_slice(&(PLAINTEXT_MONEY ^ key).to_le_bytes());
+        bytes[0x560..0x564].copy_from_slice(&[2, 0, 0xFC, 0xFF]);
 
         let block = SaveBlock1::from_bytes(&bytes, key).unwrap();
         assert_eq!(block.pos, Coords16 { x: -1, y: i16::MIN });
@@ -750,7 +717,7 @@ mod tests {
         assert_eq!(block.continue_game_warp, sample_warp(9));
         assert_eq!(block.last_heal_location, sample_warp(-10));
         assert_eq!(block.player_party_count, 7);
-        assert_eq!(block.money, 123_456);
+        assert_eq!(block.money, PLAINTEXT_MONEY);
         assert_eq!(
             block.bag.items[0],
             ItemSlot {
