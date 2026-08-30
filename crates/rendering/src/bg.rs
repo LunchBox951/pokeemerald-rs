@@ -432,12 +432,21 @@ mod tests {
 
     #[test]
     fn composite_scrolled_masks_scroll_registers_to_9_bits() {
-        let (tileset, palette, tilemap) = marked_256px_tilemap();
+        const TEST_TILEMAP_WIDTH_TILES: usize = 25;
+        const FIRST_VALUE_OUTSIDE_NINE_BITS: u16 = 1 << 9;
+
+        let (tileset, palette, _) = marked_256px_tilemap();
+        let entries = (0..TEST_TILEMAP_WIDTH_TILES)
+            .map(|col| {
+                let bank = u8::try_from(col % PALETTE_BANK_COUNT).unwrap();
+                ScreenEntry::new(0, false, false, bank)
+            })
+            .collect();
+        let tilemap = Tilemap::new(TEST_TILEMAP_WIDTH_TILES, 1, entries).unwrap();
         let layer = BgLayer::new(&tileset, &palette, &tilemap);
 
-        let first_value_outside_scroll_register = BgLayer::SCROLL_REGISTER_MASK + 1;
         let tilemap_width = u16::try_from(tilemap.width_tiles() * BitDepth::TILE_DIM).unwrap();
-        let out_of_range_scroll = first_value_outside_scroll_register + tilemap_width;
+        let out_of_range_scroll = FIRST_VALUE_OUTSIDE_NINE_BITS + tilemap_width;
         let mut masked = Framebuffer::new();
         layer.composite_scrolled(&mut masked, out_of_range_scroll, 0);
         let mut zero = Framebuffer::new();
