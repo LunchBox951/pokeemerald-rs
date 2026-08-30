@@ -1,23 +1,18 @@
-//! An owned 240x160 RGB888 pixel buffer (S-2 slice 1).
-//!
-//! Pure `std`, headless-testable, with no dependency on `platform` or any
-//! windowing crate `(minimal-deps)`. Sized and laid out for `platform`'s
-//! `softbuffer` presentation surface; the `pokeemerald_rs` crate's `frame`
-//! module owns the per-pixel repack that bridges the two.
+//! Headless pixel storage for the GBA display.
 
 use crate::palette::Rgb888;
 
-/// An owned 240x160 RGB888 pixel buffer — the GBA's visible display area.
+/// An owned RGB888 buffer for the 240x160 visible display.
 #[derive(Debug, Clone)]
 pub struct Framebuffer {
     pixels: Vec<Rgb888>,
 }
 
 impl Framebuffer {
-    /// Visible display width in pixels — fixed GBA hardware resolution.
+    /// Visible width in pixels.
     pub const WIDTH: usize = 240;
 
-    /// Visible display height in pixels — fixed GBA hardware resolution.
+    /// Visible height in pixels.
     pub const HEIGHT: usize = 160;
 
     /// Create a framebuffer filled with [`Rgb888::BLACK`].
@@ -28,13 +23,13 @@ impl Framebuffer {
         }
     }
 
-    /// Framebuffer width in pixels (always [`Self::WIDTH`]).
+    /// The framebuffer width.
     #[must_use]
     pub const fn width(&self) -> usize {
         Self::WIDTH
     }
 
-    /// Framebuffer height in pixels (always [`Self::HEIGHT`]).
+    /// The framebuffer height.
     #[must_use]
     pub const fn height(&self) -> usize {
         Self::HEIGHT
@@ -94,7 +89,10 @@ mod tests {
         let fb = Framebuffer::new();
         assert!(fb.pixels().iter().all(|&p| p == Rgb888::BLACK));
         assert_eq!(fb.pixel(0, 0), Some(Rgb888::BLACK));
-        assert_eq!(fb.pixel(239, 159), Some(Rgb888::BLACK));
+        assert_eq!(
+            fb.pixel(Framebuffer::WIDTH - 1, Framebuffer::HEIGHT - 1),
+            Some(Rgb888::BLACK)
+        );
     }
 
     #[test]
@@ -108,7 +106,6 @@ mod tests {
         let red = Rgb888 { r: 255, g: 0, b: 0 };
         fb.set_pixel(10, 20, red);
         assert_eq!(fb.pixel(10, 20), Some(red));
-        // Neighboring pixels untouched.
         assert_eq!(fb.pixel(9, 20), Some(Rgb888::BLACK));
         assert_eq!(fb.pixel(10, 19), Some(Rgb888::BLACK));
     }
@@ -116,11 +113,10 @@ mod tests {
     #[test]
     fn out_of_bounds_access_is_none_and_set_is_a_no_op() {
         let mut fb = Framebuffer::new();
-        assert_eq!(fb.pixel(240, 0), None);
-        assert_eq!(fb.pixel(0, 160), None);
-        // Must not panic, and must not corrupt any in-bounds pixel.
-        fb.set_pixel(240, 0, Rgb888 { r: 1, g: 2, b: 3 });
-        fb.set_pixel(0, 160, Rgb888 { r: 1, g: 2, b: 3 });
+        assert_eq!(fb.pixel(Framebuffer::WIDTH, 0), None);
+        assert_eq!(fb.pixel(0, Framebuffer::HEIGHT), None);
+        fb.set_pixel(Framebuffer::WIDTH, 0, Rgb888 { r: 1, g: 2, b: 3 });
+        fb.set_pixel(0, Framebuffer::HEIGHT, Rgb888 { r: 1, g: 2, b: 3 });
         assert!(fb.pixels().iter().all(|&p| p == Rgb888::BLACK));
     }
 
