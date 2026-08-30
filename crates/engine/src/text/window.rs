@@ -325,21 +325,58 @@ mod tests {
         }
     }
 
-    const fn frame_tile(col: i32, row: i32, tile: u8, orientation: TileOrientation) -> FrameTile {
+    // Expectation helpers spell `v_flip` as a literal rather than routing through
+    // `TileOrientation`, so a change to the production orientation mapping cannot
+    // move an expectation with it.
+    const fn normal_tile(col: i32, row: i32, tile: u8) -> FrameTile {
         FrameTile {
             col,
             row,
             tile,
-            v_flip: orientation.is_vertically_flipped(),
+            v_flip: false,
         }
     }
 
-    const fn normal_tile(col: i32, row: i32, tile: u8) -> FrameTile {
-        frame_tile(col, row, tile, TileOrientation::Normal)
+    const fn vertically_flipped_tile(col: i32, row: i32, tile: u8) -> FrameTile {
+        FrameTile {
+            col,
+            row,
+            tile,
+            v_flip: true,
+        }
     }
 
-    const fn vertically_flipped_tile(col: i32, row: i32, tile: u8) -> FrameTile {
-        frame_tile(col, row, tile, TileOrientation::VerticallyFlipped)
+    /// Pins every frame source-tile index and the wing width to the upstream
+    /// layout numbers, independently of the production constants' own values.
+    ///
+    /// Source: the 3-by-3 selectable frame of `DrawTextBorderOuter`
+    /// (`pokeemerald/src/text_window.c`) is row-major with an unused center; the
+    /// dialogue sheet indices and the two-tile wing are those
+    /// `WindowFunc_DrawDialogueFrame` (`pokeemerald/src/menu.c`) writes. Without
+    /// this test the placement assertions below read the same constants the
+    /// implementation does, so a mistyped index would move both sides together.
+    #[test]
+    fn frame_source_tile_indices_match_upstream() {
+        assert_eq!(border_frame::TOP_LEFT, 0);
+        assert_eq!(border_frame::TOP_EDGE, 1);
+        assert_eq!(border_frame::TOP_RIGHT, 2);
+        assert_eq!(border_frame::LEFT_EDGE, 3);
+        assert_eq!(border_frame::UNUSED_CENTER, 4);
+        assert_eq!(border_frame::RIGHT_EDGE, 5);
+        assert_eq!(border_frame::BOTTOM_LEFT, 6);
+        assert_eq!(border_frame::BOTTOM_EDGE, 7);
+        assert_eq!(border_frame::BOTTOM_RIGHT, 8);
+
+        assert_eq!(dialogue_frame::WING_CAP, 1);
+        assert_eq!(dialogue_frame::LEFT_CORNER, 3);
+        assert_eq!(dialogue_frame::HORIZONTAL_EDGE, 4);
+        assert_eq!(dialogue_frame::RIGHT_CORNER, 5);
+        assert_eq!(dialogue_frame::RIGHT_CAP, 6);
+        assert_eq!(dialogue_frame::WING_COLUMN, 7);
+        assert_eq!(dialogue_frame::INTERIOR, 9);
+        assert_eq!(dialogue_frame::RIGHT_COLUMN, 10);
+
+        assert_eq!(DIALOGUE_WING_WIDTH, 2);
     }
 
     #[test]
@@ -435,33 +472,30 @@ mod tests {
         const CONTENT_HEIGHT: i32 = 2;
 
         let tiles = border_tiles(CONTENT_LEFT, CONTENT_TOP, CONTENT_WIDTH, CONTENT_HEIGHT);
-        let border_left = CONTENT_LEFT - 1;
-        let border_top = CONTENT_TOP - 1;
-        let border_right = CONTENT_LEFT + CONTENT_WIDTH;
-        let border_bottom = CONTENT_TOP + CONTENT_HEIGHT;
 
-        for expected in [
-            normal_tile(border_left, border_top, border_frame::TOP_LEFT),
-            normal_tile(border_right, border_top, border_frame::TOP_RIGHT),
-            normal_tile(border_left, border_bottom, border_frame::BOTTOM_LEFT),
-            normal_tile(border_right, border_bottom, border_frame::BOTTOM_RIGHT),
-        ] {
-            assert!(tiles.contains(&expected));
-        }
-        for col in CONTENT_LEFT..border_right {
-            assert!(tiles.contains(&normal_tile(col, border_top, border_frame::TOP_EDGE)));
-            assert!(tiles.contains(&normal_tile(col, border_bottom, border_frame::BOTTOM_EDGE)));
-        }
-        for row in CONTENT_TOP..border_bottom {
-            assert!(tiles.contains(&normal_tile(border_left, row, border_frame::LEFT_EDGE)));
-            assert!(tiles.contains(&normal_tile(border_right, row, border_frame::RIGHT_EDGE)));
-        }
-        assert!(!tiles
-            .iter()
-            .any(|tile| tile.tile == border_frame::UNUSED_CENTER));
-        let expected_tile_count =
-            usize::try_from(4 + 2 * CONTENT_WIDTH + 2 * CONTENT_HEIGHT).unwrap();
-        assert_eq!(tiles.len(), expected_tile_count);
+        // A 3x2 content rect at (5, 5) rings columns 4..=8 and rows 4..=7. The
+        // expectation is spelled out in full, in write order, with literal source
+        // indices from the 3x3 sheet, so it stays fixed if a production mapping
+        // moves. Center tile 4 never appears: the content fill is the caller's.
+        assert_eq!(
+            tiles,
+            vec![
+                normal_tile(4, 4, 0),
+                normal_tile(5, 4, 1),
+                normal_tile(6, 4, 1),
+                normal_tile(7, 4, 1),
+                normal_tile(8, 4, 2),
+                normal_tile(4, 5, 3),
+                normal_tile(4, 6, 3),
+                normal_tile(8, 5, 5),
+                normal_tile(8, 6, 5),
+                normal_tile(4, 7, 6),
+                normal_tile(5, 7, 7),
+                normal_tile(6, 7, 7),
+                normal_tile(7, 7, 7),
+                normal_tile(8, 7, 8),
+            ]
+        );
     }
 
     #[test]
